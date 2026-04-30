@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   format, 
   addMonths, 
@@ -64,8 +64,26 @@ const getKeywordColor = (keyword: string) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'kisi' | 'veri' | 'takvim'>('veri');
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [sorumlular, setSorumlular] = useState<string[]>(initialSorumlular);
+  
+  const [tasks, setTasks] = useState<Task[]>(() => {
+    const saved = localStorage.getItem('macroplan-tasks');
+    if (saved) return JSON.parse(saved);
+    return initialTasks;
+  });
+
+  const [sorumlular, setSorumlular] = useState<string[]>(() => {
+    const saved = localStorage.getItem('macroplan-sorumlular');
+    if (saved) return JSON.parse(saved);
+    return initialSorumlular;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('macroplan-tasks', JSON.stringify(tasks));
+  }, [tasks]);
+
+  useEffect(() => {
+    localStorage.setItem('macroplan-sorumlular', JSON.stringify(sorumlular));
+  }, [sorumlular]);
   
   const [currentMonth, setCurrentMonth] = useState(new Date(2026, 3, 1));
 
