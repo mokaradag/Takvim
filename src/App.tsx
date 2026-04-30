@@ -465,10 +465,10 @@ export default function App() {
               </div>
             </div>
             
-            <nav className="flex items-center p-1 bg-gray-950/50 rounded-xl border border-gray-800/80 backdrop-blur-sm self-stretch max-w-full overflow-x-auto hide-scrollbar">
+            <nav className="flex items-center p-1 bg-gray-950/50 rounded-xl border border-gray-800/80 backdrop-blur-sm sm:w-auto">
               <button
                 onClick={() => setActiveTab('veri')}
-                className={`flex items-center justify-center gap-2 px-3 lg:px-5 py-2 rounded-lg text-sm font-medium transition-all shrink-0 ${
+                className={`flex items-center justify-center gap-2 px-3 lg:px-5 py-2 rounded-lg text-sm font-medium transition-all flex-1 sm:flex-none ${
                   activeTab === 'veri' 
                     ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' 
                     : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
@@ -479,7 +479,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveTab('takvim')}
-                className={`flex items-center justify-center gap-2 px-3 lg:px-5 py-2 rounded-lg text-sm font-medium transition-all shrink-0 ${
+                className={`flex items-center justify-center gap-2 px-3 lg:px-5 py-2 rounded-lg text-sm font-medium transition-all flex-1 sm:flex-none ${
                   activeTab === 'takvim' 
                     ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' 
                     : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
@@ -490,7 +490,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveTab('kisi')}
-                className={`flex items-center justify-center gap-2 px-3 lg:px-5 py-2 rounded-lg text-sm font-medium transition-all shrink-0 ${
+                className={`flex items-center justify-center gap-2 px-3 lg:px-5 py-2 rounded-lg text-sm font-medium transition-all flex-1 sm:flex-none ${
                   activeTab === 'kisi' 
                     ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' 
                     : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
