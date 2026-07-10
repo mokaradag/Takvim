@@ -1,0 +1,652 @@
+'use client';
+/* ============================================================
+   Extra UI primitives — Tooltip, InfoButton, AnimatedNumber,
+   ColumnFilter, AnimatedBar, ChartTooltip
+   ============================================================ */
+import React, { useState as useSx, useEffect as useEx, useRef as useRx } from 'react';
+import ReactDOM from 'react-dom';
+import { Icons } from './icons';
+import { appZoom } from '../lib/zoom';
+import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../lib/data';
+
+// ── Rich tooltip (portal, cursor-following, always on top) ─────
+export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent }) {
+  const [show, setShow] = useSx(false);
+  const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
+  const tipRef = useRx(null);
+  const timer = useRx(null);
+  const lastMouse = useRx({ x: 0, y: 0 });
+
+  const place = (x, y) => {
+    const el = tipRef.current;
+    const OFF = 16; // distance from cursor
+    // The whole app is scaled with body { zoom } for the font-size control.
+    // zoom multiplies the coordinate frame of position:fixed children, so we
+    // convert the (physical) cursor + rect coords into the pre-zoom layout
+    // frame the fixed tooltip actually lives in. Without this the tip drifts
+    // away from the cursor as zoom grows.
+    const Z = appZoom();
+    const vw = window.innerWidth / Z;
+    const vh = window.innerHeight / Z;
+    const mx = x / Z, my = y / Z;
+    if (!el) { setPos({ x: mx + OFF, y: my + OFF, ready: false }); return; }
+    const r = el.getBoundingClientRect();
+    const w = r.width / Z, h = r.height / Z;
+    let nx = mx + OFF;
+    let ny = my + OFF;
+    // flip horizontally if would overflow right
+    if (nx + w > vw - 10) nx = mx - OFF - w;
+    // flip vertically if would overflow bottom
+    if (ny + h > vh - 10) ny = my - OFF - h;
+    // clamp
+    if (nx < 8) nx = 8;
+    if (ny < 8) ny = 8;
+    if (nx + w > vw - 8) nx = vw - w - 8;
+    if (ny + h > vh - 8) ny = vh - h - 8;
+    setPos({ x: nx, y: ny, ready: true });
+  };
+
+  const enter = (e) => {
+    clearTimeout(timer.current);
+    const x = e.clientX, y = e.clientY;
+    lastMouse.current = { x, y };
+    timer.current = setTimeout(() => {
+      setShow(true);
+    }, delay);
+  };
+  const move = (e) => {
+    lastMouse.current = { x: e.clientX, y: e.clientY };
+    if (show) place(e.clientX, e.clientY);
+  };
+  const leave = () => { clearTimeout(timer.current); setShow(false); setPos(p => ({ ...p, ready: false })); };
+
+  useEx(() => {
+    if (show && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
+  }, [show]);
+
+  // Cleanup on unmount
+  useEx(() => () => { clearTimeout(timer.current); }, []);
+
+  const handlers = {
+    onMouseEnter: enter,
+    onMouseLeave: leave,
+    onMouseMove: move,
+    onFocus: (e) => {
+      const r = e.currentTarget.getBoundingClientRect ? e.currentTarget.getBoundingClientRect() : null;
+      if (r) { lastMouse.current = { x: r.left + r.width / 2, y: r.bottom }; }
+      enter({ clientX: lastMouse.current.x, clientY: lastMouse.current.y });
+    },
+    onBlur: leave
+  };
+
+  const tip = show && ReactDOM.createPortal(
+    (
+      <div
+        ref={tipRef}
+        className="rich-tip"
+        style={{
+          position: 'fixed',
+          left: pos.x,
+          top: pos.y,
+          zIndex: 9999,
+          visibility: pos.ready ? 'visible' : 'hidden',
+          pointerEvents: 'none',
+          ...(accent ? { '--tip-accent': accent } : {})
+        }}
+      >
+        {(title || icon) && (
+          <div className="rich-tip-head">
+            {icon && <span className="rich-tip-icon">{icon}</span>}
+            {title && <span className="rich-tip-title">{title}</span>}
+          </div>
+        )}
+        <div className="rich-tip-body">{content}</div>
+      </div>
+    ),
+    document.body
+  );
+
+  if (asChild && React.isValidElement(children)) {
+    // attach handlers to the existing child element (no extra wrapper)
+    return (
+      <>
+        {React.cloneElement(children, {
+          ...handlers,
+          onMouseEnter: (e) => { handlers.onMouseEnter(e); if (children.props.onMouseEnter) children.props.onMouseEnter(e); },
+          onMouseLeave: (e) => { handlers.onMouseLeave(e); if (children.props.onMouseLeave) children.props.onMouseLeave(e); },
+          onMouseMove: (e) => { handlers.onMouseMove(e); if (children.props.onMouseMove) children.props.onMouseMove(e); }
+        })}
+        {tip}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <span {...handlers} style={{ display: 'inline-flex', alignItems: 'center', ...wrapperStyle }}>
+        {children}
+      </span>
+      {tip}
+    </>
+  );
+}
+
+// ── Info button (i) — opens rich tooltip on hover/click ──
+export function InfoButton({ title, children, icon, size = 13, corner = false, accent }) {
+  return (
+    <Tooltip title={title} content={children} icon={icon || <Icons.Info size={12} />} accent={accent}>
+      <button className={`info-btn${corner ? ' corner' : ''}`} type="button" aria-label="Bilgi">
+        <Icons.Info size={size - 1} />
+      </button>
+    </Tooltip>
+  );
+}
+
+// ── CardHead — card title + corner info button (top-right) ─
+export function CardHead({ icon, title, subtitle, info, infoTitle, infoAccent, infoIcon, right, children }) {
+  return (
+    <div className="card-head-wrap" style={{ marginBottom: 14 }}>
+      <div className="row" style={{ alignItems: 'flex-start', gap: 10, justifyContent: 'space-between' }}>
+        <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
+          <div className="card-title" style={{ margin: 0 }}>
+            {icon}
+            <span>{title}</span>
+            {children}
+          </div>
+          {subtitle && <div className="muted" style={{ fontSize: 12 }}>{subtitle}</div>}
+        </div>
+        {right && <div className="row" style={{ gap: 6 }}>{right}</div>}
+      </div>
+      {info && (
+        <div className="card-info-corner">
+          <InfoButton title={infoTitle || title} icon={infoIcon} accent={infoAccent} corner>{info}</InfoButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── AnimatedNumber — counts up on mount/value change ─────
+export function AnimatedNumber({ value, duration = 700, format, suffix = '' }) {
+  const [v, setV] = useSx(0);
+  const startRef = useRx(0);
+  const fromRef = useRx(0);
+  const rafRef = useRx();
+
+  useEx(() => {
+    cancelAnimationFrame(rafRef.current);
+    fromRef.current = v;
+    startRef.current = performance.now();
+    const tick = (t) => {
+      const e = Math.min(1, (t - startRef.current) / duration);
+      const eased = 1 - Math.pow(1 - e, 3);
+      const cur = fromRef.current + (value - fromRef.current) * eased;
+      setV(cur);
+      if (e < 1) rafRef.current = requestAnimationFrame(tick);
+      else setV(value);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const shown = format ? format(v) : (Number.isInteger(value) ? Math.round(v) : v.toFixed(1));
+  return <span className="tabular">{shown}{suffix}</span>;
+}
+
+// ── ColumnFilter — popover on column header ─────────────
+export function ColumnFilter({ label, anchor, type = 'text', options = [], value, onChange, onClose, sort, onSort, numericMin, numericMax, numericUnit }) {
+  const [q, setQ] = useSx(typeof value === 'string' ? value : '');
+  const [sel, setSel] = useSx(Array.isArray(value) ? new Set(value) : new Set());
+  // For dates: { preset, from, to, mode } — mode = 'range' | 'preset' | 'before' | 'after'
+  const initialDate = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+  const [dateMode, setDateMode] = useSx(initialDate.mode || 'preset');
+  const [datePreset, setDatePreset] = useSx(initialDate.preset || '');
+  const [dateFrom, setDateFrom] = useSx(initialDate.from || '');
+  const [dateTo, setDateTo] = useSx(initialDate.to || '');
+  // For numbers: { mode: 'between'|'before'|'after'|'equals', from, to, eq }
+  const initialNum = (value && typeof value === 'object' && !Array.isArray(value) && (value.mode === 'between' || value.mode === 'before' || value.mode === 'after' || value.mode === 'equals')) ? value : {};
+  const [numMode, setNumMode] = useSx(initialNum.mode || 'between');
+  const [numFrom, setNumFrom] = useSx(initialNum.from != null ? String(initialNum.from) : '');
+  const [numTo, setNumTo] = useSx(initialNum.to != null ? String(initialNum.to) : '');
+  const [numEq, setNumEq] = useSx(initialNum.eq != null ? String(initialNum.eq) : '');
+  const ref = useRx(null);
+
+  useEx(() => {
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) onClose();
+    };
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // position near anchor
+  const [pos, setPos] = useSx({ left: 0, top: 0 });
+  useEx(() => {
+    if (!anchor) return;
+    const Z = appZoom();
+    const r = anchor.getBoundingClientRect();
+    setPos({ left: Math.min(window.innerWidth / Z - 300, r.left / Z), top: r.bottom / Z + 4 });
+  }, [anchor]);
+
+  const apply = () => {
+    if (type === 'text') onChange(q);
+    else if (type === 'multi') onChange([...sel]);
+    else if (type === 'date') {
+      if (dateMode === 'preset' && datePreset) onChange({ mode: 'preset', preset: datePreset });
+      else if (dateMode === 'range' && (dateFrom || dateTo)) onChange({ mode: 'range', from: dateFrom, to: dateTo });
+      else if (dateMode === 'before' && dateTo) onChange({ mode: 'before', to: dateTo });
+      else if (dateMode === 'after' && dateFrom) onChange({ mode: 'after', from: dateFrom });
+      else onChange(null);
+    }
+    else if (type === 'number') {
+      const f = numFrom !== '' ? parseFloat(numFrom) : null;
+      const t = numTo !== '' ? parseFloat(numTo) : null;
+      const e = numEq !== '' ? parseFloat(numEq) : null;
+      if (numMode === 'between' && (f != null || t != null)) onChange({ mode: 'between', from: f, to: t });
+      else if (numMode === 'before' && t != null) onChange({ mode: 'before', to: t });
+      else if (numMode === 'after' && f != null) onChange({ mode: 'after', from: f });
+      else if (numMode === 'equals' && e != null) onChange({ mode: 'equals', eq: e });
+      else onChange(null);
+    }
+    onClose();
+  };
+  const clear = () => {
+    if (type === 'text') { setQ(''); onChange(''); }
+    else if (type === 'multi') { setSel(new Set()); onChange([]); }
+    else if (type === 'date') {
+      setDatePreset(''); setDateFrom(''); setDateTo('');
+      onChange(null);
+    }
+    else if (type === 'number') {
+      setNumFrom(''); setNumTo(''); setNumEq('');
+      onChange(null);
+    }
+    onClose();
+  };
+
+  // Sorted options for multi
+  const sortedOptions = type === 'multi'
+    ? [...options].sort((a, b) => (a.label || '').localeCompare(b.label || '', 'tr'))
+    : options;
+
+  return (
+    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 150 }}>
+      <div className="col-filter-head">
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>{label}</span>
+      </div>
+      {onSort && (
+        <div className="col-filter-sort">
+          <button className={sort === 'asc' ? 'active' : ''} onClick={() => { onSort('asc'); onClose(); }}>
+            <Icons.ChevronUp size={12} /> {type === 'date' ? 'Eskiden yeniye' : type === 'number' ? 'Küçükten büyüğe' : 'Artan'}
+          </button>
+          <button className={sort === 'desc' ? 'active' : ''} onClick={() => { onSort('desc'); onClose(); }}>
+            <Icons.ChevronDown size={12} /> {type === 'date' ? 'Yeniden eskiye' : type === 'number' ? 'Büyükten küçüğe' : 'Azalan'}
+          </button>
+        </div>
+      )}
+      <div className="col-filter-body">
+        {type === 'text' && (
+          <div className="row" style={{ gap: 6 }}>
+            <Icons.Search size={13} className="muted" />
+            <input
+              autoFocus
+              className="input"
+              placeholder={`${label} ara...`}
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') apply(); }}
+              style={{ padding: '5px 8px', fontSize: 12.5 }}
+            />
+          </div>
+        )}
+        {type === 'multi' && (
+          <div className="col" style={{ gap: 2, maxHeight: 220, overflowY: 'auto' }}>
+            {sortedOptions.map(o => {
+              const checked = sel.has(o.value);
+              return (
+                <label key={o.value} className="col-filter-opt">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      const next = new Set(sel);
+                      if (checked) next.delete(o.value); else next.add(o.value);
+                      setSel(next);
+                    }}
+                  />
+                  {o.icon && <span style={{ display: 'inline-flex' }}>{o.icon}</span>}
+                  <span>{o.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        {type === 'date' && (
+          <div className="col" style={{ gap: 8, minWidth: 280 }}>
+            <div className="date-filter-mode">
+              <button className={dateMode === 'preset' ? 'active' : ''} onClick={() => setDateMode('preset')}>Hızlı</button>
+              <button className={dateMode === 'before' ? 'active' : ''} onClick={() => setDateMode('before')}>Önce</button>
+              <button className={dateMode === 'after' ? 'active' : ''} onClick={() => setDateMode('after')}>Sonra</button>
+              <button className={dateMode === 'range' ? 'active' : ''} onClick={() => setDateMode('range')}>Arası</button>
+            </div>
+            {dateMode === 'preset' && (
+              <div className="date-filter-preset">
+                {[
+                  ['overdue', 'Geciken'],
+                  ['today', 'Bugün'],
+                  ['tomorrow', 'Yarın'],
+                  ['thisWeek', 'Bu hafta'],
+                  ['nextWeek', 'Gelecek hafta'],
+                  ['thisMonth', 'Bu ay'],
+                  ['nextMonth', 'Gelecek ay'],
+                  ['last7', 'Son 7 gün'],
+                  ['last30', 'Son 30 gün'],
+                  ['next30', 'Sonraki 30 gün']
+                ].map(([k, l]) => (
+                  <button key={k} className={datePreset === k ? 'active' : ''} onClick={() => setDatePreset(datePreset === k ? '' : k)}>{l}</button>
+                ))}
+              </div>
+            )}
+            {dateMode === 'before' && (
+              <div className="col" style={{ gap: 4 }}>
+                <span className="dff-label">Bu tarihten önce</span>
+                <input type="date" className="input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                <span className="dff-hint">"{dateTo || 'tarih'}" tarihinden öncesi listelenir.</span>
+              </div>
+            )}
+            {dateMode === 'after' && (
+              <div className="col" style={{ gap: 4 }}>
+                <span className="dff-label">Bu tarihten sonra</span>
+                <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                <span className="dff-hint">"{dateFrom || 'tarih'}" tarihinden sonrası listelenir.</span>
+              </div>
+            )}
+            {dateMode === 'range' && (
+              <div className="col" style={{ gap: 6 }}>
+                <div className="col" style={{ gap: 4 }}>
+                  <span className="dff-label">Başlangıç (dahil)</span>
+                  <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                </div>
+                <div className="col" style={{ gap: 4 }}>
+                  <span className="dff-label">Bitiş (dahil)</span>
+                  <input type="date" className="input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {type === 'number' && (
+          <div className="col" style={{ gap: 8, minWidth: 240 }}>
+            <div className="date-filter-mode">
+              <button className={numMode === 'between' ? 'active' : ''} onClick={() => setNumMode('between')}>Arası</button>
+              <button className={numMode === 'before' ? 'active' : ''} onClick={() => setNumMode('before')}>Az</button>
+              <button className={numMode === 'after' ? 'active' : ''} onClick={() => setNumMode('after')}>Çok</button>
+              <button className={numMode === 'equals' ? 'active' : ''} onClick={() => setNumMode('equals')}>Eşit</button>
+            </div>
+            {(numericMin != null && numericMax != null) && (
+              <div className="dff-hint" style={{ textAlign: 'center' }}>Aralık: {numericMin} – {numericMax}{numericUnit || ''}</div>
+            )}
+            {numMode === 'between' && (
+              <div className="row" style={{ gap: 6 }}>
+                <div className="col" style={{ gap: 3, flex: 1 }}>
+                  <span className="dff-label">En az</span>
+                  <input type="number" className="input" value={numFrom} onChange={(e) => setNumFrom(e.target.value)} placeholder={numericMin != null ? String(numericMin) : 'min'} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                </div>
+                <div className="col" style={{ gap: 3, flex: 1 }}>
+                  <span className="dff-label">En çok</span>
+                  <input type="number" className="input" value={numTo} onChange={(e) => setNumTo(e.target.value)} placeholder={numericMax != null ? String(numericMax) : 'max'} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                </div>
+              </div>
+            )}
+            {numMode === 'before' && (
+              <div className="col" style={{ gap: 4 }}>
+                <span className="dff-label">Şu değerden az</span>
+                <input type="number" className="input" value={numTo} onChange={(e) => setNumTo(e.target.value)} placeholder="ör. 50" style={{ padding: '5px 8px', fontSize: 12.5 }} />
+              </div>
+            )}
+            {numMode === 'after' && (
+              <div className="col" style={{ gap: 4 }}>
+                <span className="dff-label">Şu değerden çok</span>
+                <input type="number" className="input" value={numFrom} onChange={(e) => setNumFrom(e.target.value)} placeholder="ör. 50" style={{ padding: '5px 8px', fontSize: 12.5 }} />
+              </div>
+            )}
+            {numMode === 'equals' && (
+              <div className="col" style={{ gap: 4 }}>
+                <span className="dff-label">Tam olarak eşit</span>
+                <input type="number" className="input" value={numEq} onChange={(e) => setNumEq(e.target.value)} placeholder="ör. 100" style={{ padding: '5px 8px', fontSize: 12.5 }} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="col-filter-foot">
+        <button className="btn ghost sm" onClick={clear}>Temizle</button>
+        <div style={{ flex: 1 }} />
+        <button className="btn primary sm" onClick={apply}>Uygula</button>
+      </div>
+    </div>
+  );
+}
+
+// Helper for VeriView: check if a date matches a date-filter spec
+export function dateMatchesFilter(iso, spec) {
+  if (!spec) return true;
+  const t = today();
+  const d = parseDate(iso);
+  if (spec.mode === 'range') {
+    if (spec.from && d < parseDate(spec.from)) return false;
+    if (spec.to && d > parseDate(spec.to)) return false;
+    return true;
+  }
+  if (spec.mode === 'before') {
+    if (spec.to && d > parseDate(spec.to)) return false;
+    return true;
+  }
+  if (spec.mode === 'after') {
+    if (spec.from && d < parseDate(spec.from)) return false;
+    return true;
+  }
+  if (spec.mode === 'preset') {
+    const days = diffDays(d, t);
+    switch (spec.preset) {
+      case 'overdue': return days < 0;
+      case 'today': return days === 0;
+      case 'tomorrow': return days === 1;
+      case 'thisWeek': {
+        const ws = startOfWeek(t);
+        const we = endOfWeek(t);
+        return d >= ws && d <= we;
+      }
+      case 'nextWeek': {
+        const ws = addDays(startOfWeek(t), 7);
+        const we = addDays(endOfWeek(t), 7);
+        return d >= ws && d <= we;
+      }
+      case 'thisMonth': {
+        return d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear();
+      }
+      case 'nextMonth': {
+        const next = new Date(t.getFullYear(), t.getMonth() + 1, 1);
+        return d.getMonth() === next.getMonth() && d.getFullYear() === next.getFullYear();
+      }
+      case 'last7': return days >= -7 && days <= 0;
+      case 'last30': return days >= -30 && days <= 0;
+      case 'next30': return days >= 0 && days <= 30;
+      default: return true;
+    }
+  }
+  return true;
+}
+
+// Helper: numeric filter match
+export function numericMatchesFilter(val, spec) {
+  if (!spec) return true;
+  const v = (val == null || val === '') ? null : Number(val);
+  if (v == null || isNaN(v)) return false;
+  if (spec.mode === 'between') {
+    if (spec.from != null && v < spec.from) return false;
+    if (spec.to != null && v > spec.to) return false;
+    return true;
+  }
+  if (spec.mode === 'before') return spec.to == null || v < spec.to;
+  if (spec.mode === 'after') return spec.from == null || v > spec.from;
+  if (spec.mode === 'equals') return v === spec.eq;
+  return true;
+}
+
+// ── Sortable + filterable column header ──────────────────
+export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter, filterType = 'text', filterOptions, style, numericMin, numericMax, numericUnit }) {
+  const [open, setOpen] = useSx(false);
+  const anchorRef = useRx(null);
+  const active = filterType === 'text' ? !!filter : Array.isArray(filter) ? filter.length > 0 : !!filter;
+  return (
+    <th style={{ ...style, position: 'relative' }}>
+      <button
+        ref={anchorRef}
+        className={`col-th-btn${active ? ' has-filter' : ''}${sortKey ? ' is-sorted' : ''}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>{label}</span>
+        {sortKey === 'asc' && <Icons.ChevronUp size={11} />}
+        {sortKey === 'desc' && <Icons.ChevronDown size={11} />}
+        {active && <span className="col-th-dot" />}
+        <Icons.Filter size={10} className="col-th-filter-ico" />
+      </button>
+      {open && (
+        <ColumnFilter
+          label={label}
+          anchor={anchorRef.current}
+          type={filterType}
+          options={filterOptions || []}
+          value={filter}
+          onChange={onFilter}
+          onClose={() => setOpen(false)}
+          sort={sortKey}
+          onSort={onSort}
+          numericMin={numericMin}
+          numericMax={numericMax}
+          numericUnit={numericUnit}
+        />
+      )}
+    </th>
+  );
+}
+
+// ── Animated bar (for BarRows / progress) ────────────────
+export function useReveal() {
+  const ref = useRx(null);
+  const [visible, setVisible] = useSx(false);
+  useEx(() => {
+    if (!ref.current || visible) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) { setVisible(true); obs.disconnect(); }
+    }, { threshold: 0.15 });
+    obs.observe(ref.current);
+    return () => obs.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return [ref, visible];
+}
+
+// ── HoverListCard — interactive, anchored hover card with a
+//    scrollable list. Unlike Tooltip it does NOT follow the cursor
+//    and accepts pointer events, so a long list can be scrolled. ──
+export function HoverListCard({
+  children, title, icon, accent, summary, items = [], renderItem,
+  listLabel = 'Görevler', listHint, emptyText = 'Kayıt yok.',
+  wrapperStyle, wrapperClass = 'hovercard-trigger'
+}) {
+  const [show, setShow] = useSx(false);
+  const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
+  const wrapRef = useRx(null);
+  const cardRef = useRx(null);
+  const openT = useRx(null);
+  const closeT = useRx(null);
+
+  const place = () => {
+    const trg = wrapRef.current, el = cardRef.current;
+    if (!trg) return;
+    const Z = appZoom();
+    const vw = window.innerWidth / Z;
+    const vh = window.innerHeight / Z;
+    const r = trg.getBoundingClientRect();
+    const rx = r.left / Z, ry = r.top / Z, rw = r.width / Z, rh = r.height / Z;
+    const cr = el ? el.getBoundingClientRect() : null;
+    const w = cr ? cr.width / Z : 300;
+    const h = cr ? cr.height / Z : 220;
+    const GAP = 8;
+    let x = rx;
+    let y = ry + rh + GAP;
+    if (y + h > vh - 8) y = ry - h - GAP;       // flip above
+    if (y < 8) y = 8;
+    if (x + w > vw - 8) x = vw - w - 8;
+    if (x < 8) x = 8;
+    setPos({ x, y, ready: !!el });
+  };
+
+  const open = () => {
+    clearTimeout(closeT.current);
+    if (show) return;
+    openT.current = setTimeout(() => setShow(true), 90);
+  };
+  const scheduleClose = () => {
+    clearTimeout(openT.current);
+    closeT.current = setTimeout(() => setShow(false), 160);
+  };
+
+  useEx(() => { if (show) place(); }, [show]);
+  useEx(() => () => { clearTimeout(openT.current); clearTimeout(closeT.current); }, []);
+
+  const card = show && ReactDOM.createPortal(
+    <div
+      ref={cardRef}
+      className="rich-tip interactive"
+      style={{
+        position: 'fixed', left: pos.x, top: pos.y,
+        visibility: pos.ready ? 'visible' : 'hidden',
+        ...(accent ? { '--tip-accent': accent } : {})
+      }}
+      onMouseEnter={() => clearTimeout(closeT.current)}
+      onMouseLeave={scheduleClose}
+    >
+      {(title || icon) && (
+        <div className="rich-tip-head">
+          {icon && <span className="rich-tip-icon">{icon}</span>}
+          {title && <span className="rich-tip-title">{title}</span>}
+        </div>
+      )}
+      <div className="rich-tip-body">
+        {summary}
+        <div className="rt-list-head">
+          <span>{listLabel} · {items.length}</span>
+          {listHint && <span className="rt-list-hint">{listHint}</span>}
+        </div>
+        <div className="rt-list">
+          {items.length === 0
+            ? <div className="rt-list-empty">{emptyText}</div>
+            : items.map((it, i) => renderItem(it, i))}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+
+  return (
+    <>
+      <span
+        ref={wrapRef}
+        className={wrapperClass}
+        style={{ display: 'block', ...wrapperStyle }}
+        onMouseEnter={open}
+        onMouseLeave={scheduleClose}
+      >
+        {children}
+      </span>
+      {card}
+    </>
+  );
+}
