@@ -18,11 +18,11 @@ npm run dev
 - `npm run build` — üretim derlemesi
 - `npm run start` — üretim sunucusunu başlatır (önce `build` gerekir)
 - `npm run lint` — Next.js/ESLint kod kalite kontrolü
-- `npm test` — Node.js yerleşik test çalıştırıcısıyla domain ve scheduling saf fonksiyon testleri
+- `npm test` — Node.js yerleşik test çalıştırıcısıyla domain, scheduling ve saf state-selector testleri
 
 ### Test kapsamı
 
-Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. Kapsam; domain selector ve ilişki normalizasyonu, tarih ve çalışma günü aritmetiği, proje takvimleri, bağımlılık ilişkileri, Gantt zamanlama yardımcıları ve saf CPM/critical-path hesaplarını doğrular.
+Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. Kapsam; domain selector ve ilişki normalizasyonu, tarih ve çalışma günü aritmetiği, proje takvimleri, bağımlılık ilişkileri, Gantt zamanlama yardımcıları, saf CPM/critical-path hesapları ve proje bazlı uygulama schedule projection davranışını doğrular.
 
 ## On-prem / internet erişimi olmayan ortam
 
@@ -58,14 +58,22 @@ npx next telemetry disable
 - `src/domain` — Project, Task/Activity, Dependency, Person, WBS ve scheduling calendar iş kavramları
 - `src/scheduling` — tarih, proje takvimi, çalışma günü, bağımlılık, Gantt yardımcıları ve saf CPM/critical-path hesapları
 - `src/data` — veri erişim sözleşmesi ve mevcut mock/in-memory adapter
-- `src/state` — uygulama düzeyi state, task işlemleri ve odaklı hook'lar
+- `src/state` — uygulama düzeyi state, task işlemleri, proje bazlı türetilmiş CPM projection ve odaklı hook'lar
 - `src/features` — Özet, Görevler, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
 - `src/components/shell` — sidebar, topbar, navigasyon, komut paleti ve global overlay bileşenleri
 - `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
 - `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
 
-Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki ve çıktı sözleşmeleri için `docs/CPM.md` dosyasına bakın.
+Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki, çıktı ve uygulama entegrasyonu sözleşmeleri için `docs/CPM.md` dosyasına bakın.
+
+## CPM / Gantt entegrasyonu
+
+CPM sonuçları artık uygulama state sınırında proje bazında hesaplanır ve Gantt tarafından türetilmiş veri olarak tüketilir. Gantt; kritik görev ve kritik ilişki vurguları, Erken/Geç Başlangıç-Bitiş, Toplam/Serbest Bolluk sütunları, kritik görev filtresi, proje bazlı hesaplanan bitiş bilgisi, CPM tooltip alanları ve proje düzeyi doğrulama uyarıları sunar.
+
+Kayıtlı görev tarihleri değişmez ve CPM erken/geç tarihleri canonical task nesnelerine yazılmaz. Geçersiz bir proje ağı diğer projelerin CPM sonuçlarını engellemez. Projeler arası bağımlılıklar bu aşamada açık bir `CROSS_PROJECT_DEPENDENCY` uyarısıyla reddedilir.
 
 ## Sonraki adım
 
-Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli. Scheduling tarafındaki sıradaki adım, saf CPM sonuçlarını state/feature sınırından tüketerek kritik yol ve float bilgilerini Gantt görünümüne taşımaktır; CPM hesapları React bileşenlerine kopyalanmamalıdır.
+Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli.
+
+Scheduling tarafındaki sıradaki odak, baseline, current plan, actual ve calculated schedule tarihlerini açıkça ayıran veri modelini tanımlamaktır. Bu ayrım yapılmadan CPM-calculated tarihler canonical görev tarihleri olarak kullanılmamalıdır.
