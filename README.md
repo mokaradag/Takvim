@@ -1,6 +1,6 @@
 # MERGEN Rota — Proje Yönetimi
 
-Endüstriyel/kontrol paneli tarzında bir proje yönetimi uygulaması: Özet, Görevler, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js (App Router) ile derlenmiş bir React uygulaması; şu an için veriler istemci tarafında örnek (mock) veri olarak tutuluyor.
+Endüstriyel/kontrol paneli tarzında bir proje yönetimi uygulaması: Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js (App Router) ile derlenmiş bir React uygulaması; şu an için veriler istemci tarafında örnek (mock) veri olarak tutuluyor.
 
 ## Yerel geliştirme
 
@@ -22,7 +22,7 @@ npm run dev
 
 ### Test kapsamı
 
-Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. Kapsam; domain selector ve ilişki normalizasyonu, tarih ve çalışma günü aritmetiği, proje takvimleri, bağımlılık ilişkileri, Gantt zamanlama yardımcıları, saf CPM/critical-path hesapları ve proje bazlı uygulama schedule projection davranışını doğrular.
+Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. Kapsam; domain selector ve ilişki normalizasyonu, WBS hiyerarşisi ve doğrulaması, workspace scoping, tarih ve çalışma günü aritmetiği, proje takvimleri, bağımlılık ilişkileri, Gantt zamanlama yardımcıları, profesyonel scheduling veri modeli, saf CPM/critical-path hesapları ve proje bazlı uygulama schedule projection davranışını doğrular.
 
 ## On-prem / internet erişimi olmayan ortam
 
@@ -55,33 +55,52 @@ npx next telemetry disable
 
 ## Yapı
 
-- `src/domain` — Project, Task/Activity, Dependency, Person, WBS, Baseline ve scheduling calendar iş kavramları
+- `src/domain` — Project, Task/Activity, Dependency, Person, WBS, Baseline ve scheduling calendar iş kavramları; WBS hiyerarşi/validasyon kuralları
 - `src/scheduling` — tarih, proje takvimi, çalışma günü, bağımlılık, Gantt yardımcıları ve saf CPM/critical-path hesapları
 - `src/data` — veri erişim sözleşmesi, legacy migration sınırı ve mevcut mock/in-memory adapter
-- `src/state` — uygulama düzeyi state, task işlemleri, proje bazlı türetilmiş CPM projection ve odaklı hook'lar
-- `src/features` — Özet, Görevler, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
-- `src/components/shell` — sidebar, topbar, navigasyon, komut paleti ve global overlay bileşenleri
+- `src/state` — uygulama düzeyi state, Portfolio/Project Workspace seçimi, task/WBS işlemleri, workspace selector'ları ve proje bazlı türetilmiş CPM projection
+- `src/features` — Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
+- `src/components/shell` — sidebar, workspace switcher, topbar, navigasyon, komut paleti ve global overlay bileşenleri
 - `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
 - `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
 
-Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; profesyonel scheduling veri modeli için `docs/SCHEDULING-DATA-MODEL.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki, çıktı ve uygulama entegrasyonu sözleşmeleri için `docs/CPM.md` dosyasına bakın.
+Ayrıntılı bağımlılık kuralları için `docs/ARCHITECTURE.md`; Portfolio/Project Workspace ve WBS kuralları için `docs/WBS-AND-WORKSPACES.md`; profesyonel scheduling veri modeli için `docs/SCHEDULING-DATA-MODEL.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki, çıktı ve uygulama entegrasyonu sözleşmeleri için `docs/CPM.md` dosyasına bakın.
+
+## Portfolio ve Project Workspace
+
+MERGEN Rota artık iki açık çalışma bağlamına sahiptir:
+
+- **Portföy · Tüm Projeler**: mevcut bütün-proje davranışını korur.
+- **Proje Workspace**: seçili Project ID'sine göre Özet, Görevler, Takvim, Gantt, Kanban, Raporlar ve Ekip verilerini sınırlar.
+
+Sidebar'daki workspace switcher kararlı `projectId` değerlerini kullanır. Son seçim `mergen-rota.workspace.v1` anahtarıyla yalnızca yerel bir UI tercihi olarak saklanır; geçersiz veya artık bulunmayan bir Project ID güvenli biçimde Portfolio moduna döner.
+
+Project Workspace üst çubuğunda proje adıyla birlikte Data Date, proje takvimi ve mevcut CPM projection'dan hesaplanan proje bitişi gösterilir. Settings global kalır.
+
+## WBS / İş Kırılım Yapısı
+
+WBS artık gerçek, çok seviyeli ve keyfi derinliği destekleyen bir proje hiyerarşisidir. WBS düğümleri Project'e `projectId`, birbirlerine `parentId` ile bağlanır; Task ilişkisi `wbsId` üzerinden kurulur. Bir Task başka bir Project'e bağlı WBS düğümünü taşıyamaz.
+
+WBS feature'ı hiyerarşiyi aç/kapat, alt WBS ekleme, yeniden adlandırma ve yalnızca güvenli boş düğümleri silme davranışlarını sunar. Alt düğümü veya doğrudan atanmış görevi bulunan WBS sessizce silinmez; görevler ya da alt hiyerarşi cascade-delete edilmez.
+
+Project-mode Gantt'ın varsayılan görünümü WBS hiyerarşisidir. WBS özet satırları canonical Task değildir; descendant aktivitelerden türetilir ve summary bar'ları `plannedStart` ile `plannedFinish` güncel plan aralığını özetler. CPM ayrı bir proje-ağı projection'ı olarak kalır.
 
 ## Profesyonel scheduling veri modeli
 
-Canonical görev modeli artık güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`), gerçekleşen tarihleri (`actualStart`, `actualFinish`) ve bağımsız kalan süreyi (`remainingDurationDays`) birbirinden ayırır. Projeler ayrıca durum kesim tarihi olarak `dataDate` taşır.
+Canonical görev modeli güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`), gerçekleşen tarihleri (`actualStart`, `actualFinish`) ve bağımsız kalan süreyi (`remainingDurationDays`) birbirinden ayırır. Projeler ayrıca durum kesim tarihi olarak `dataDate` taşır.
 
-Baz plan, mutable görev alanı değildir. `Baseline` ve `TaskBaselineSnapshot` nesneleriyle ayrı tarihsel snapshot verisi olarak tutulur; normal görev güncellemeleri bu snapshot'ları değiştirmez ve sonradan oluşturulan görevler mevcut tarihsel baz plana otomatik eklenmez.
+Baz plan, mutable görev alanı değildir. `Baseline` ve `TaskBaselineSnapshot` nesneleriyle ayrı tarihsel snapshot verisi olarak tutulur; normal görev veya WBS güncellemeleri bu snapshot'ları değiştirmez ve sonradan oluşturulan görevler mevcut tarihsel baz plana otomatik eklenmez.
 
 Eski `baslangicTarihi`, `bitisTarihi` ve `hedefTarih` alanları yalnızca tek bir veri migration sınırında canonical alanlara dönüştürülür. Feature ve scheduling kodu canonical alanları kullanır.
 
 ## CPM / Gantt entegrasyonu
 
-CPM sonuçları uygulama state sınırında proje bazında hesaplanır ve Gantt tarafından türetilmiş veri olarak tüketilir. Gantt; kritik görev ve kritik ilişki vurguları, Erken/Geç Başlangıç-Bitiş, Toplam/Serbest Bolluk sütunları, kritik görev filtresi, proje bazlı hesaplanan bitiş bilgisi, CPM tooltip alanları ve proje düzeyi doğrulama uyarıları sunar.
+CPM sonuçları uygulama state sınırında proje bazında hesaplanır ve Gantt tarafından türetilmiş veri olarak tüketilir. Birincil Gantt aktivite çubukları güncel planı (`plannedStart` -> `plannedFinish`) gösterir. CPM erken/geç tarihleri canonical Task nesnelerine yazılmaz.
 
-Birincil Gantt çubukları güncel planı (`plannedStart` -> `plannedFinish`) gösterir. CPM erken/geç tarihleri canonical Task nesnelerine yazılmaz. Geçersiz bir proje ağı diğer projelerin CPM sonuçlarını engellemez. Projeler arası bağımlılıklar bu aşamada açık bir `CROSS_PROJECT_DEPENDENCY` uyarısıyla reddedilir.
+Project Workspace, seçili projenin aynı CPM sonucunu tüketir; WBS başına ayrı CPM ağı hesaplanmaz. Geçersiz bir proje ağı diğer projelerin CPM sonuçlarını engellemez. Projeler arası bağımlılıklar bu aşamada açık bir `CROSS_PROJECT_DEPENDENCY` uyarısıyla reddedilir.
 
 ## Sonraki adım
 
 Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenebilir.
 
-Scheduling tarafındaki önerilen sonraki adım, bu veri modelinin üzerine progress-aware scheduling kurmaktır: `dataDate`, açık actual tarihleri ve bağımsız `remainingDurationDays` kullanılarak durum güncelleme/rescheduling kuralları tanımlanmalıdır. Bu çalışma ayrı bir odakta yapılmalı; mevcut saf current-plan CPM motorunun anlamı bu PR'da değiştirilmemelidir.
+WBS ve Project Workspace temelinden sonra önerilen sonraki odak, Task'ların WBS içinde taşınmasını ve büyük proje yapılarının yönetimini kolaylaştıran kontrollü reparent/bulk-move işlemlerini ayrı bir değişiklik olarak ele almaktır. Scheduling tarafındaki progress-aware çalışma da ayrı kalmalı; `dataDate`, actual tarihler ve `remainingDurationDays` kullanılarak durum güncelleme/rescheduling kuralları tanımlanırken mevcut saf current-plan CPM motorunun anlamı korunmalıdır.
