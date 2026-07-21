@@ -4,7 +4,8 @@
    ============================================================ */
 import React from 'react';
 import { Icons } from './icons';
-import { COLOR_MAP, getStatus, personColorVar, personInitials, projectColorVar } from '../lib/data';
+import { COLOR_MAP, personColorVar, personInitials, projectColorVar } from '../lib/colors';
+import { getStatus } from '../scheduling/metrics';
 import { Tooltip } from './ui-extras';
 
 // ── Avatar ─────────────────────────────────────────────────

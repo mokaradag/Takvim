@@ -50,11 +50,17 @@ npx next telemetry disable
 
 ## Yapı
 
-- `src/app` — Next.js App Router giriş noktaları (`layout.js`, `page.js`, `globals.css`)
-- `src/components` — UI bileşenleri ve sayfa görünümleri (`AppShell`, `views-a`, `views-b`, `settings`, `ui`, `ui-extras`, `icons`)
-- `src/lib` — örnek veri, tarih yardımcıları, sabitler (`data.js`, `tweaks-defaults.js`, `zoom.js`)
-- `src/hooks` — `useTweaks` (tema/yoğunluk/aksan/yazı boyutu tercihlerini `localStorage`'da saklar)
+- `src/domain` — Project, Task/Activity, Dependency, Person ve WBS iş kavramları
+- `src/scheduling` — tarih, takvim, bağımlılık ve Gantt zamanlama hesapları
+- `src/data` — veri erişim sözleşmesi ve mevcut mock/in-memory adapter
+- `src/state` — uygulama düzeyi state, task işlemleri ve odaklı hook'lar
+- `src/features` — Özet, Görevler, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
+- `src/components/shell` — sidebar, topbar, navigasyon, komut paleti ve global overlay bileşenleri
+- `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
+- `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
+
+Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md` dosyasına bakın.
 
 ## Sonraki adım
 
-Veriler şu an `src/lib/data.js` içinde statik örnek veri olarak tanımlı. Kalıcı depolama için bir veritabanı/API entegrasyonu planlanıyor.
+Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli; bu PR gerçek bir veritabanı bağlantısı kurmaz.

@@ -7,7 +7,7 @@ import React, { useState as useSx, useEffect as useEx, useRef as useRx } from 'r
 import ReactDOM from 'react-dom';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
-import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../lib/data';
+import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../scheduling/dates';
 
 // ── Rich tooltip (portal, cursor-following, always on top) ─────
 export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent }) {

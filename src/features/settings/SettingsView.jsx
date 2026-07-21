@@ -2,9 +2,9 @@
 /* ── Ayarlar (Settings) ──────────────────────────────────
    Görünüm ve okunabilirlik tercihleri. Tüm değerler Tweaks
    state'i üzerinden yönetilir (kalıcı). ===================== */
-import { Icons } from './icons';
-import { HeroHeader } from './ui';
-import { TWEAK_DEFAULTS } from '../lib/tweaks-defaults';
+import { Icons } from '../../components/icons';
+import { HeroHeader } from '../../components/ui';
+import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 
 function SettingsRow({ title, desc, children }) {
   return (
