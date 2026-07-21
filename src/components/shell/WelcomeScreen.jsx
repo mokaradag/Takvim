@@ -76,7 +76,7 @@ export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgai
             <span className="ws-item"><kbd>Ctrl</kbd><kbd>K</kbd> Komut paleti</span>
             <span className="ws-item"><kbd>Esc</kbd> Paneli kapat</span>
             <span className="ws-item"><kbd>←</kbd> <kbd>→</kbd> Ay değiştir (takvimde)</span>
-            <span className="ws-item"><Icons.Info size={12} /> Her yerde "i" ipuçları</span>
+            <span className="ws-item"><Icons.Info size={12} /> Her yerde ‘i’ ipuçları</span>
           </div>
         </div>
 

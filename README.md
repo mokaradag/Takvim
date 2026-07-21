@@ -17,7 +17,12 @@ npm run dev
 
 - `npm run build` — üretim derlemesi
 - `npm run start` — üretim sunucusunu başlatır (önce `build` gerekir)
-- `npm run lint` — Next.js lint kontrolü
+- `npm run lint` — Next.js/ESLint kod kalite kontrolü
+- `npm test` — Node.js yerleşik test çalıştırıcısıyla domain ve scheduling saf fonksiyon testleri
+
+### Test kapsamı
+
+Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. İlk kapsam; domain selector ve ilişki normalizasyonu ile tarih, takvim, bağımlılık ve Gantt zamanlama hesaplarının temel davranışlarını doğrular.
 
 ## On-prem / internet erişimi olmayan ortam
 

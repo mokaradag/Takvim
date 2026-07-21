@@ -216,6 +216,8 @@ export function BarRows({ data, maxLabel = 110, animated = false, tipFormat }) {
 
 // ── Area / line chart (small) ──────────────────────────────
 export function AreaChart({ data, width = 600, height = 160, color = 'var(--accent)', labels = [], animated = false }) {
+  const [hover, setHover] = React.useState(null);
+  const svgRef = React.useRef(null);
   if (!data || !data.length) return null;
   const min = Math.min(...data, 0);
   const max = Math.max(...data, 1);
@@ -238,10 +240,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
     const dy = pts[i][1] - pts[i - 1][1];
     len += Math.sqrt(dx * dx + dy * dy);
   }
-  // tooltip state
-  const [hover, setHover] = React.useState(null);
-  const svgRef = React.useRef(null);
-
+  // tooltip state is initialized before the empty-data guard to preserve Hook order.
   const onMove = (e) => {
     const svg = svgRef.current;
     if (!svg) return;

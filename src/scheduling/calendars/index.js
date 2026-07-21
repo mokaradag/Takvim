@@ -1,4 +1,4 @@
-import { isWeekend, parseDate } from '../dates';
+import { isWeekend, parseDate } from '../dates/index.js';
 
 export const HOLIDAYS = [
   { date: '01-01', name: 'Yılbaşı', short: 'Yılbaşı' },

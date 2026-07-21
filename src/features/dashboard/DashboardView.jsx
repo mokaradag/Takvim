@@ -191,7 +191,7 @@ export function DashboardView({ onNavigate }) {
             infoAccent="var(--accent)"
             infoIcon={<Icons.Layers size={12} />}
             info={<>
-              <p>Görevlerin durumlarına göre yüzdesel dağılımı. Halka grafiğinin merkezindeki yüzde, "Tamamlandı" oranıdır.</p>
+              <p>Görevlerin durumlarına göre yüzdesel dağılımı. Halka grafiğinin merkezindeki yüzde, ‘Tamamlandı’ oranıdır.</p>
               <div className="rt-sep" />
               {statusDonut.map(s => (
                 <div key={s.label} className="rt-row">

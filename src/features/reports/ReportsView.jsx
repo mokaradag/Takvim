@@ -192,7 +192,7 @@ export function ReportsView() {
                 <div className="rt-row"><span className="rt-label">Eğri dik</span><span className="rt-val">Hızlanma</span></div>
               </InfoButton>
             </div>
-            <div className="muted" style={{ fontSize: 12 }}>Birikimli "Tamamlandı" sayısı</div>
+            <div className="muted" style={{ fontSize: 12 }}>Birikimli ‘Tamamlandı’ sayısı</div>
           </div>
         </div>
         <AreaChart data={trend.values} labels={trend.labels} width={1100} height={200} color="var(--status-done)" animated />
@@ -508,6 +508,8 @@ function Big({ label, value, suffix, sub, accent, tip }) {
 }
 
 function CFDChart({ data, height = 200 }) {
+  const [hover, setHover] = React.useState(null);
+  const svgRef = React.useRef(null);
   if (!data || !data.length) return null;
   const width = 600;
   const pad = { l: 30, r: 14, t: 8, b: 24 };
@@ -532,8 +534,6 @@ function CFDChart({ data, height = 200 }) {
     return [...top, ...bot].map(([X, Y]) => `${X.toFixed(1)},${Y.toFixed(1)}`).join(' ');
   };
 
-  const [hover, setHover] = React.useState(null);
-  const svgRef = React.useRef(null);
   const onMove = (e) => {
     const svg = svgRef.current;
     if (!svg) return;

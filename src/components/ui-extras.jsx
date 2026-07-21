@@ -355,14 +355,14 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
               <div className="col" style={{ gap: 4 }}>
                 <span className="dff-label">Bu tarihten önce</span>
                 <input type="date" className="input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
-                <span className="dff-hint">"{dateTo || 'tarih'}" tarihinden öncesi listelenir.</span>
+                <span className="dff-hint">‘{dateTo || 'tarih'}’ tarihinden öncesi listelenir.</span>
               </div>
             )}
             {dateMode === 'after' && (
               <div className="col" style={{ gap: 4 }}>
                 <span className="dff-label">Bu tarihten sonra</span>
                 <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
-                <span className="dff-hint">"{dateFrom || 'tarih'}" tarihinden sonrası listelenir.</span>
+                <span className="dff-hint">‘{dateFrom || 'tarih'}’ tarihinden sonrası listelenir.</span>
               </div>
             )}
             {dateMode === 'range' && (
