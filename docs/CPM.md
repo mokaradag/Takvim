@@ -132,15 +132,31 @@ Current validation codes include:
 
 Invalid networks fail before partial CPM results are returned.
 
-## Scope of this engine PR
+## Application integration
 
-This layer provides the scheduling engine and regression tests only. It intentionally does not yet:
+The CPM engine remains a scheduling service. Application integration is owned by `src/state/selectors/scheduleSelectors.js` and memoized by `AppStateProvider`.
 
-- modify task baseline dates automatically;
+The state projection:
+
+- partitions tasks by `projectId`;
+- calls `calculateCpm()` independently for each project;
+- combines successful task results into a portfolio-level derived lookup;
+- preserves project-level `criticalTaskIds`, `criticalPaths` and calculated finish dates;
+- isolates validation failures so one malformed project does not prevent other projects from rendering;
+- reports cross-project dependencies explicitly as `CROSS_PROJECT_DEPENDENCY` instead of silently producing an invalid project-scoped calculation.
+
+Feature components consume the derived projection through state hooks. They do not call `calculateCpm()` directly and do not copy CPM mathematics into React.
+
+The Gantt integration keeps existing stored task bars as the primary visual schedule. CPM results are presented as derived overlays: critical task/relationship styling, optional early/late/float columns, critical-only filtering, project calculated finish information, CPM tooltips and validation warnings.
+
+Calculated CPM fields are not persisted or merged into canonical task objects. A future scheduling-data-model PR is expected to formalize baseline, current-plan, actual and calculated schedule semantics before calculated dates can become an editable canonical source.
+
+## Remaining engine scope
+
+The engine and current application projection still intentionally do not:
+
+- modify task baseline/stored dates automatically;
 - persist CPM results;
-- display critical paths in the Gantt view;
-- add schedule-warning UI;
+- model cross-project dependency networks;
 - model working hours or partial-day calendars;
 - resource-level activities.
-
-The next integration step should consume `calculateCpm()` from the state/feature boundary and add Gantt visualization without moving CPM calculations into React components.

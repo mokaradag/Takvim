@@ -9,7 +9,7 @@ import { getTaskDateRange, getGroupScheduleSummaries, taskDurationDays, getStatu
 import { projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
 import { Tooltip, InfoButton, ColumnFilter, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
-import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
+import { useTasks, useProjects, usePeople, usePortfolioSchedule, useTaskActions } from '../../state/hooks';
 
 /* ── Gantt ──────────────────────────────────────────────── */
 const GANTT_DEFAULT_COLS = {
@@ -17,6 +17,12 @@ const GANTT_DEFAULT_COLS = {
   end: true,
   hedef: false,
   duration: false,
+  earlyStart: false,
+  earlyFinish: false,
+  lateStart: false,
+  lateFinish: false,
+  totalFloat: false,
+  freeFloat: false,
   hours: false,
   progress: false,
   status: false,
@@ -34,6 +40,16 @@ const GANTT_COL_DEFS = [
       const d = taskDurationDays(t);
       return <span className="tabular">{d}g</span>;
   } },
+  { key: 'earlyStart', label: 'Erken Başlangıç', width: 96, align: 'right', render: (t, today_, schedule) => schedule ? fmt(schedule.earlyStart, 'dd MMM') : <span className="muted">—</span> },
+  { key: 'earlyFinish', label: 'Erken Bitiş', width: 86, align: 'right', render: (t, today_, schedule) => schedule ? fmt(schedule.earlyFinish, 'dd MMM') : <span className="muted">—</span> },
+  { key: 'lateStart', label: 'Geç Başlangıç', width: 92, align: 'right', render: (t, today_, schedule) => schedule ? fmt(schedule.lateStart, 'dd MMM') : <span className="muted">—</span> },
+  { key: 'lateFinish', label: 'Geç Bitiş', width: 82, align: 'right', render: (t, today_, schedule) => schedule ? fmt(schedule.lateFinish, 'dd MMM') : <span className="muted">—</span> },
+  { key: 'totalFloat', label: 'Toplam Bolluk', width: 88, align: 'right', render: (t, today_, schedule) => {
+      if (!schedule) return <span className="muted">—</span>;
+      const critical = schedule.totalFloatDays <= 0;
+      return <span className="tabular" style={{ color: critical ? 'var(--status-overdue)' : 'inherit', fontWeight: critical ? 700 : 500 }}>{schedule.totalFloatDays}g</span>;
+  } },
+  { key: 'freeFloat', label: 'Serbest Bolluk', width: 88, align: 'right', render: (t, today_, schedule) => schedule ? <span className="tabular">{schedule.freeFloatDays}g</span> : <span className="muted">—</span> },
   { key: 'hours', label: 'Saat', width: 64, align: 'right', render: (t) => {
       if (t.milestone) return <span className="muted">—</span>;
       return <span className="tabular" style={{ fontSize: 11 }}>{t.actualHours || 0}/{t.plannedHours || 0}</span>;
@@ -50,12 +66,50 @@ const GANTT_COL_DEFS = [
   } }
 ];
 
+const CPM_WARNING_LABELS = {
+  CROSS_PROJECT_DEPENDENCY: 'Projeler arası bağımlılık bu CPM görünümünde desteklenmiyor.',
+  DEPENDENCY_CYCLE: 'Bağımlılık döngüsü algılandı.',
+  MISSING_PREDECESSOR: 'Eksik bir öncül görev referansı var.',
+  SELF_DEPENDENCY: 'Bir görev kendisine bağımlı olamaz.',
+  MISSING_TASK_DATE: 'CPM için gerekli görev tarihi eksik.',
+  INVALID_TASK_DATE: 'Geçersiz bir görev tarihi var.',
+  INVALID_TASK_DATES: 'Görev başlangıç ve bitiş tarihleri geçersiz.',
+  MISSING_PROJECT_START: 'Proje başlangıcı belirlenemedi.',
+  INVALID_PROJECT_START: 'Proje başlangıcı geçersiz.',
+  UNKNOWN_PROJECT: 'Görevin geçerli bir proje ilişkisi yok.'
+};
+
+function warningText(warning, projectById) {
+  const project = warning.projectId ? projectById.get(warning.projectId) : null;
+  const scope = project?.name || (warning.taskId ? `Görev ${warning.taskId}` : 'Zamanlama');
+  return `${scope}: ${CPM_WARNING_LABELS[warning.code] || warning.message} [${warning.code}]`;
+}
+
+function CpmTooltipRows({ schedule }) {
+  if (!schedule) return null;
+  return (
+    <>
+      <div className="rt-sep" />
+      <div className="rt-row"><span className="rt-label">Erken Başlangıç</span><span className="rt-val">{fmt(schedule.earlyStart, 'dd MMM yyyy')}</span></div>
+      <div className="rt-row"><span className="rt-label">Erken Bitiş</span><span className="rt-val">{fmt(schedule.earlyFinish, 'dd MMM yyyy')}</span></div>
+      <div className="rt-row"><span className="rt-label">Geç Başlangıç</span><span className="rt-val">{fmt(schedule.lateStart, 'dd MMM yyyy')}</span></div>
+      <div className="rt-row"><span className="rt-label">Geç Bitiş</span><span className="rt-val">{fmt(schedule.lateFinish, 'dd MMM yyyy')}</span></div>
+      <div className="rt-row"><span className="rt-label">Toplam Bolluk</span><span className="rt-val" style={schedule.totalFloatDays <= 0 ? { color: 'var(--status-overdue)', fontWeight: 700 } : null}>{schedule.totalFloatDays}g</span></div>
+      <div className="rt-row"><span className="rt-label">Serbest Bolluk</span><span className="rt-val">{schedule.freeFloatDays}g</span></div>
+      <div className="rt-row"><span className="rt-label">CPM Durumu</span><span className="rt-val" style={schedule.isCritical ? { color: 'var(--status-overdue)', fontWeight: 700 } : null}>{schedule.isCritical ? 'Kritik' : 'Kritik değil'}</span></div>
+    </>
+  );
+}
+
 export function GanttView() {
   const tasks = useTasks();
+  const projects = useProjects();
   const people = usePeople();
+  const schedule = usePortfolioSchedule();
   const { openTask: onOpenTask } = useTaskActions();
   const today_ = today();
   const [groupBy, setGroupBy] = useState2('proje');
+  const [criticalOnly, setCriticalOnly] = useState2(false);
   const [zoom, setZoom] = useState2(28); // px per day
   const [hotTaskId, setHotTaskId] = useState2(null);
   const [cols, setCols] = useState2(GANTT_DEFAULT_COLS);
@@ -77,6 +131,9 @@ export function GanttView() {
   const [sort, setSort] = useState2({ key: null, dir: 'asc' });
   const rightRef = useRef2(null);
   const leftRef = useRef2(null);
+
+  const projectById = useMemo2(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+  const projectByName = useMemo2(() => new Map(projects.map((project) => [project.name, project])), [projects]);
 
   // Apply global search + per-column filters to tasks
   const filteredTasks = useMemo2(() => {
@@ -111,11 +168,13 @@ export function GanttView() {
     ['progress', 'plannedHours'].forEach(k => {
       if (colFilters[k]) out = out.filter(t => numericMatchesFilter(t[k] != null ? t[k] : 0, colFilters[k]));
     });
+    if (criticalOnly) out = out.filter(t => schedule.tasks[t.id]?.isCritical);
     return out;
-  }, [tasks, globalSearch, colFilters, today_]);
+  }, [tasks, globalSearch, colFilters, today_, criticalOnly, schedule]);
 
-  const hasFilters = !!(globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedHours || colFilters.baslangicTarihi || colFilters.bitisTarihi || colFilters.hedefTarih);
+  const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedHours || colFilters.baslangicTarihi || colFilters.bitisTarihi || colFilters.hedefTarih);
   const clearAllFilters = () => {
+    setCriticalOnly(false);
     setGlobalSearch('');
     setColFilters({ task: '', proje: [], sorumlu: [], priority: [], status: [], progress: null, plannedHours: null, baslangicTarihi: null, bitisTarihi: null, hedefTarih: null });
   };
@@ -140,7 +199,7 @@ export function GanttView() {
     '--gantt-left-cols': gridTemplate
   };
 
-  // Stable task range calculation lives in the scheduling layer.
+  // Stable task range calculation lives in the scheduling layer. Stored task dates remain the visible bar dates.
   const range = useMemo2(() => getTaskDateRange(tasks, { paddingDays: 3, fallbackStart: today_ }), [tasks]);
   const days = useMemo2(() => eachDay(range.start, range.end), [range]);
   const totalWidth = days.length * zoom;
@@ -181,7 +240,15 @@ export function GanttView() {
   const rows = [];
   groups.forEach(([groupName, items]) => {
     const isCollapsed = collapsed.has(groupName);
-    rows.push({ type: 'group', name: groupName, summary: groupSummaries[groupName], collapsed: isCollapsed, itemCount: items.length });
+    const project = groupBy === 'proje' ? projectByName.get(groupName) : null;
+    rows.push({
+      type: 'group',
+      name: groupName,
+      summary: groupSummaries[groupName],
+      projectSchedule: project ? schedule.projects[project.id] || null : null,
+      collapsed: isCollapsed,
+      itemCount: items.length
+    });
     if (!isCollapsed) items.forEach(t => rows.push({ type: 'task', task: t, groupName }));
   });
 
@@ -307,17 +374,20 @@ export function GanttView() {
         else if (type === 'FF') { fromX = predEnd; toX = succEnd; fromSide = 'R'; toSide = 'R'; }
         else { fromX = predStart; toX = succEnd; fromSide = 'L'; toSide = 'R'; }
 
+        const projectSchedule = schedule.projects[r.task.projectId];
+        const critical = !!projectSchedule?.criticalDependencyKeys?.includes(`${dId}::${r.task.id}`);
         arrows.push({
           id: `${dId}-${r.task.id}-${type}`,
           type, fromX, fromY, toX, toY, fromSide, toSide,
           fromTaskId: dId, toTaskId: r.task.id,
+          critical,
           hot: hotTaskId === dId || hotTaskId === r.task.id
         });
       });
     });
     return arrows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, range, zoom, hotTaskId, rowTops]);
+  }, [rows, range, zoom, hotTaskId, rowTops, schedule]);
 
   function buildArrowPath(a) {
     const { fromX, fromY, toX, toY, fromSide, toSide } = a;
@@ -370,6 +440,10 @@ export function GanttView() {
           <button className={groupBy === 'proje' ? 'active' : ''} onClick={() => setGroupBy('proje')}>Projeye göre</button>
           <button className={groupBy === 'sorumlu' ? 'active' : ''} onClick={() => setGroupBy('sorumlu')}>Sorumluya göre</button>
         </div>
+        <div className="seg">
+          <button className={!criticalOnly ? 'active' : ''} onClick={() => setCriticalOnly(false)}>Tümü</button>
+          <button className={criticalOnly ? 'active' : ''} onClick={() => setCriticalOnly(true)}>Kritik</button>
+        </div>
         <span className="muted tabular" style={{ fontSize: 12 }}>{filteredTasks.length} / {tasks.length} görev</span>
         {hasFilters && (
           <button className="btn ghost sm" onClick={clearAllFilters}>
@@ -384,12 +458,13 @@ export function GanttView() {
             <button className={zoom === 40 ? 'active' : ''} onClick={() => setZoom(40)}>L</button>
           </div>
           <InfoButton title="Gantt görünümü" icon={<Icons.Gantt size={12} />} corner accent="var(--c-purple)">
-            <p>Görev çubukları zaman çizelgesinde başlangıç ve bitiş tarihlerine göre konumlanır. Bağımlılık okları görevler arasındaki ilişkiyi gösterir.</p>
+            <p>Görev çubukları kayıtlı başlangıç ve bitiş tarihlerine göre konumlanır. CPM sonuçları kritik görevleri ve ilişkileri vurgular; hesaplanan tarihler ayrı sütun ve bilgi alanlarında gösterilir.</p>
             <div className="rt-sep" />
             <p><strong>Çubuk tipleri:</strong></p>
             <div className="rt-row"><span style={{ width: 16, height: 6, background: 'var(--accent)', borderRadius: 2 }} /><span>Normal görev</span></div>
             <div className="rt-row"><span style={{ width: 16, height: 6, background: 'linear-gradient(180deg, var(--text) 0%, color-mix(in oklab, var(--text) 80%, black) 100%)', borderRadius: 1 }} /><span>Özet (rollup)</span></div>
             <div className="rt-row"><span style={{ width: 12, height: 12, background: 'var(--status-overdue)', transform: 'rotate(45deg)' }} /><span>Kilometre taşı</span></div>
+            <div className="rt-row"><span style={{ width: 16, height: 6, border: '2px solid var(--status-overdue)', borderRadius: 2 }} /><span>Kritik CPM görevi</span></div>
             <div className="rt-sep" />
             <div className="rt-row"><Icons.Filter size={12} className="rt-ico" /><span>Sütun başlığına tıkla: filtre & sıralama</span></div>
             <div className="rt-row"><Icons.ChevronDown size={12} className="rt-ico" /><span>Grup başlığına tıkla: daralt/genişlet</span></div>
@@ -398,6 +473,26 @@ export function GanttView() {
           </InfoButton>
         </div>
       </div>
+
+      {schedule.warnings.length > 0 && (
+        <div
+          style={{
+            padding: '9px 12px',
+            borderRadius: 8,
+            border: '1px solid color-mix(in oklab, var(--status-overdue) 38%, var(--border))',
+            background: 'color-mix(in oklab, var(--status-overdue) 7%, var(--bg-elev))',
+            fontSize: 11.5
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>CPM zamanlama uyarıları</div>
+          {schedule.warnings.slice(0, 3).map((warning, index) => (
+            <div key={`${warning.projectId || warning.taskId || 'schedule'}-${warning.code}-${index}`} className="muted">
+              {warningText(warning, projectById)}
+            </div>
+          ))}
+          {schedule.warnings.length > 3 && <div className="muted">+{schedule.warnings.length - 3} ek uyarı</div>}
+        </div>
+      )}
 
       {/* Legend */}
       <div className="row" style={{ gap: 14, fontSize: 11.5, color: 'var(--text-dim)', flexWrap: 'wrap' }}>
@@ -415,6 +510,12 @@ export function GanttView() {
         </span>
         <span className="row" style={{ gap: 6 }}>
           <span style={{ width: 10, height: 10, background: 'var(--status-overdue)', transform: 'rotate(45deg)' }} /> Kilometre taşı
+        </span>
+        <span className="row" style={{ gap: 6 }}>
+          <span style={{ width: 12, height: 7, border: '2px solid var(--status-overdue)', borderRadius: 2 }} /> Kritik görev
+        </span>
+        <span className="row" style={{ gap: 6 }}>
+          <span style={{ width: 16, height: 2, background: 'var(--status-overdue)' }} /> Kritik ilişki
         </span>
         <span className="row" style={{ gap: 6 }}>
           <Icons.Link size={11} /> FS / SS / FF / SF
@@ -504,6 +605,7 @@ export function GanttView() {
           {rows.map((r, i) => {
             if (r.type === 'group') {
               const s = r.summary;
+              const projectSchedule = r.projectSchedule;
               return (
                 <div
                   key={`g-${r.name}-${i}`}
@@ -515,11 +617,19 @@ export function GanttView() {
                   <Icons.ChevronDown size={11} className="gh-chevron" style={{ transform: r.collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.18s', flexShrink: 0 }} />
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: groupBy === 'proje' ? projectColorVar(r.name) : personColorVar(r.name) }} />
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-                  {s && <span className="muted tabular" style={{ fontSize: 10, fontWeight: 600 }}>{s.done}/{s.items} · {s.progress}%</span>}
+                  {s && (
+                    <span className="muted tabular" style={{ fontSize: 10, fontWeight: 600 }}>
+                      {s.done}/{s.items} · {s.progress}%
+                      {projectSchedule?.status === 'valid' && ` · ${projectSchedule.criticalTaskIds.length} kritik · CPM ${fmt(projectSchedule.projectFinish, 'dd MMM')}`}
+                      {projectSchedule?.status === 'invalid' && ' · CPM uyarısı'}
+                    </span>
+                  )}
                 </div>
               );
             }
             const t = r.task;
+            const taskSchedule = schedule.tasks[t.id];
+            const isCritical = !!taskSchedule?.isCritical;
             return (
               <div
                 key={t.id}
@@ -531,14 +641,15 @@ export function GanttView() {
               >
                 <div className="tr-name">
                   {t.milestone
-                    ? <Icons.Diamond size={11} style={{ color: projectColorVar(t.proje), flexShrink: 0 }} />
+                    ? <Icons.Diamond size={11} style={{ color: isCritical ? 'var(--status-overdue)' : projectColorVar(t.proje), flexShrink: 0 }} />
                     : <span style={{ width: 3, height: 18, borderRadius: 2, background: projectColorVar(t.proje), flexShrink: 0 }} />
                   }
                   <span>{t.task}</span>
+                  {isCritical && <span title="Kritik CPM görevi" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--status-overdue)', flexShrink: 0 }} />}
                 </div>
                 {visibleCols.map(c => (
                   <div key={c.key} className="tr-date" style={{ textAlign: c.align === 'right' ? 'right' : 'left' }}>
-                    {c.render(t, today_)}
+                    {c.render(t, today_, taskSchedule)}
                   </div>
                 ))}
                 <div />
@@ -593,6 +704,7 @@ export function GanttView() {
               const top = HEAD_H + rowTops.tops[i];
               if (r.type === 'group') {
                 const s = r.summary;
+                const projectSchedule = r.projectSchedule;
                 return (
                   <React.Fragment key={`gr-${i}`}>
                     <div
@@ -617,6 +729,19 @@ export function GanttView() {
                             <div className="rt-row"><span className="rt-label">Görev</span><span className="rt-val">{s.items}</span></div>
                             <div className="rt-row"><span className="rt-label">Tamamlanan</span><span className="rt-val" style={{ color: 'var(--status-done)' }}>{s.done}</span></div>
                             <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{s.progress}%</span></div>
+                            {projectSchedule?.status === 'valid' && (
+                              <>
+                                <div className="rt-sep" />
+                                <div className="rt-row"><span className="rt-label">CPM Bitiş</span><span className="rt-val">{fmt(projectSchedule.projectFinish, 'dd MMM yyyy')}</span></div>
+                                <div className="rt-row"><span className="rt-label">Kritik Görev</span><span className="rt-val" style={{ color: 'var(--status-overdue)', fontWeight: 700 }}>{projectSchedule.criticalTaskIds.length}</span></div>
+                              </>
+                            )}
+                            {projectSchedule?.status === 'invalid' && (
+                              <>
+                                <div className="rt-sep" />
+                                <div className="rt-row"><span className="rt-label">CPM</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>{projectSchedule.error.code}</span></div>
+                              </>
+                            )}
                           </>
                         }
                       >
@@ -637,6 +762,8 @@ export function GanttView() {
                 );
               }
               const t = r.task;
+              const taskSchedule = schedule.tasks[t.id];
+              const isCritical = !!taskSchedule?.isCritical;
               if (t.milestone) {
                 const x = xForDate(parseDate(t.baslangicTarihi)) + zoom / 2 - 8;
                 const status = getStatus(t);
@@ -652,12 +779,13 @@ export function GanttView() {
                           <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(t.hedefTarih, 'dd MMM yyyy')}</span></div>
                           <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
                           <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
+                          <CpmTooltipRows schedule={taskSchedule} />
                         </>
                       }
                     >
                       <div
                         className="gantt-milestone"
-                        style={{ '--milestone-color': projectColorVar(t.proje), top: top + 11, left: x }}
+                        style={{ '--milestone-color': isCritical ? 'var(--status-overdue)' : projectColorVar(t.proje), top: top + 11, left: x }}
                         onClick={() => onOpenTask(t)}
                         onMouseEnter={() => setHotTaskId(t.id)}
                         onMouseLeave={() => setHotTaskId(null)}
@@ -692,12 +820,20 @@ export function GanttView() {
                           <div className="rt-row"><span className="rt-label">Saat</span><span className="rt-val">{t.actualHours || 0}/{t.plannedHours} sa</span></div>
                         )}
                         <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
+                        <CpmTooltipRows schedule={taskSchedule} />
                       </>
                     }
                   >
                     <div
                       className={`gantt-bar${done ? ' done' : ''}`}
-                      style={{ '--bar-color': color, position: 'absolute', left: x + 2, width: Math.max(20, w - 4), top: top + 8 }}
+                      style={{
+                        '--bar-color': color,
+                        position: 'absolute',
+                        left: x + 2,
+                        width: Math.max(20, w - 4),
+                        top: top + 8,
+                        boxShadow: isCritical ? '0 0 0 2px var(--status-overdue)' : undefined
+                      }}
                       onClick={() => onOpenTask(t)}
                       onMouseEnter={() => setHotTaskId(t.id)}
                       onMouseLeave={() => setHotTaskId(null)}
@@ -724,20 +860,26 @@ export function GanttView() {
                 <marker id="arrowhead-hot" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
                   <path d="M0,0 L0,6 L6,3 z" fill="var(--accent)" />
                 </marker>
+                <marker id="arrowhead-critical" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L6,3 z" fill="var(--status-overdue)" />
+                </marker>
               </defs>
               {depArrows.map((a) => {
                 const d = buildArrowPath(a);
                 const midX = (a.fromX + a.toX) / 2;
                 const midY = (a.fromY + a.toY) / 2;
+                const markerId = a.hot ? 'arrowhead-hot' : a.critical ? 'arrowhead-critical' : 'arrowhead';
                 return (
                   <g key={a.id} className={`dep-arrow${a.hot ? ' hot' : ''}`}>
                     <path
                       d={d}
-                      strokeDasharray={a.hot ? '0' : '3 3'}
-                      markerEnd={`url(#${a.hot ? 'arrowhead-hot' : 'arrowhead'})`}
+                      stroke={a.hot ? 'var(--accent)' : a.critical ? 'var(--status-overdue)' : undefined}
+                      strokeWidth={a.critical ? 1.8 : undefined}
+                      strokeDasharray={a.hot || a.critical ? '0' : '3 3'}
+                      markerEnd={`url(#${markerId})`}
                     />
                     <rect className="lbl-bg" x={midX - 11} y={midY - 7} width="22" height="13" rx="3" />
-                    <text className="lbl" x={midX} y={midY + 3} textAnchor="middle">{a.type}</text>
+                    <text className="lbl" x={midX} y={midY + 3} textAnchor="middle" style={a.critical && !a.hot ? { fill: 'var(--status-overdue)', fontWeight: 700 } : undefined}>{a.type}</text>
                   </g>
                 );
               })}
