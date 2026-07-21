@@ -6,41 +6,41 @@ MERGEN Rota separates stored schedule facts from calculated schedule results. Th
 
 ```text
 Project
-└── dataDate
-
-Task
-│
-├── Current Plan
-│     ├── plannedStart
-│     ├── plannedFinish
-│     └── plannedDurationDays
-│
-├── Target
-│     └── targetFinish
-│
-├── Actuals
-│     ├── actualStart
-│     └── actualFinish
-│
-├── Progress Planning
-│     └── remainingDurationDays
-│
-├── Baseline Snapshot (separate entity)
-│     ├── plannedStart
-│     ├── plannedFinish
-│     ├── plannedDurationDays
-│     └── calendarId
-│
-└── Calculated CPM Schedule (derived projection)
-      ├── earlyStart
-      ├── earlyFinish
-      ├── lateStart
-      ├── lateFinish
-      ├── totalFloatDays
-      └── freeFloatDays
+├── dataDate
+└── WBS hierarchy
+      └── Task / Activity
+            │
+            ├── Current Plan
+            │     ├── plannedStart
+            │     ├── plannedFinish
+            │     └── plannedDurationDays
+            │
+            ├── Target
+            │     └── targetFinish
+            │
+            ├── Actuals
+            │     ├── actualStart
+            │     └── actualFinish
+            │
+            ├── Progress Planning
+            │     └── remainingDurationDays
+            │
+            ├── Baseline Snapshot (separate entity)
+            │     ├── plannedStart
+            │     ├── plannedFinish
+            │     ├── plannedDurationDays
+            │     └── calendarId
+            │
+            └── Calculated CPM Schedule (derived projection)
+                  ├── earlyStart
+                  ├── earlyFinish
+                  ├── lateStart
+                  ├── lateFinish
+                  ├── totalFloatDays
+                  └── freeFloatDays
 ```
 
-The baseline branch in this diagram is conceptual: baseline values are not embedded in the mutable `Task` object. They are stored as separate `Baseline` and `TaskBaselineSnapshot` records.
+The baseline branch in this diagram is conceptual: baseline values are not embedded in the mutable `Task` object. They are stored as separate `Baseline` and `TaskBaselineSnapshot` records. WBS is also a separate structural entity; WBS summary schedule values are derived from descendant Tasks and are not stored on WBS nodes.
 
 ## 1. Current Plan
 
@@ -50,7 +50,7 @@ The current plan is the editable schedule currently used by the application:
 - `plannedFinish`
 - `plannedDurationDays`
 
-`plannedStart` and `plannedFinish` are the authoritative editable current-plan dates. The primary Gantt bars, Calendar task ranges and current-plan date columns use these fields.
+`plannedStart` and `plannedFinish` are the authoritative editable current-plan dates. The primary Gantt activity bars, Calendar task ranges and current-plan date columns use these fields.
 
 `plannedDurationDays` is the inclusive working-day duration of the current plan under the task's effective scheduling calendar. The normalization boundary recalculates it from `plannedStart` and `plannedFinish` whenever a task is loaded or updated so the stored duration does not become stale. Milestones always have a planned duration of zero.
 
@@ -105,7 +105,23 @@ It is distinct from:
 
 The field is stored on the project now so future progress-aware scheduling has the correct domain foundation. The mock projects use an explicit fixed sample data date rather than deriving this field automatically from the browser clock. The current CPM engine remains a pure current-plan network calculation and does not yet use `dataDate`, actual dates or remaining duration for status updating or rescheduling.
 
-## 6. Baseline
+## 6. Project, WBS and Task ownership
+
+WBS establishes structural project ownership without changing scheduling semantics:
+
+```text
+Project.id
+  └── WbsNode.projectId
+        └── Task.wbsId
+```
+
+A canonical WBS node stores `id`, `projectId`, `parentId`, `code`, `name` and optionally `sortOrder`. Its parent, when present, must belong to the same Project. `Task.wbsId`, when present, must reference a WBS node whose `projectId` equals the Task's `projectId`.
+
+When a Task changes Project, normalization cannot retain an old-project WBS. It uses the new Project's unique root when one unambiguous root exists; otherwise it leaves `wbsId` null for explicit assignment.
+
+WBS hierarchy depth, paths, descendants, activity counts, progress and schedule ranges are derived. WBS nodes do not store Current Plan dates, CPM dates, float or progress rollups.
+
+## 7. Baseline
 
 A baseline is immutable historical snapshot data, not another mutable pair of fields on `Task`.
 
@@ -126,11 +142,11 @@ A baseline is immutable historical snapshot data, not another mutable pair of fi
 - `plannedDurationDays`
 - `calendarId`
 
-The mock repository supplies one primary baseline for each existing project and snapshots for tasks present in the initial dataset. Normal task CRUD never modifies these records. A task created after that baseline exists is not automatically added to the historical snapshot.
+The mock repository supplies one primary baseline for each existing project and snapshots for tasks present in the initial dataset. Normal Task CRUD and WBS edits never modify these records. A task created after that baseline exists is not automatically added to the historical snapshot.
 
-Baseline values are not CPM results and are not recalculated when the current plan changes. Baseline capture, re-baselining, deletion and multi-baseline comparison are intentionally outside this PR.
+Baseline values are not CPM results and are not recalculated when the current plan changes. Changing a Task's current WBS, renaming a WBS node or adding/removing a safe empty WBS node does not rewrite historical schedule snapshots. Historical WBS structure versioning is intentionally outside the current model.
 
-## 7. Calculated CPM Schedule
+## 8. Calculated CPM Schedule
 
 CPM output remains derived application schedule state. `CpmTaskResult` can contain:
 
@@ -155,21 +171,38 @@ Canonical Task Current Plan
 Derived Schedule Projection
 ```
 
-The state schedule projection still calculates each project independently. Cross-project dependency relationships remain explicitly unsupported by project-scoped CPM and produce deterministic project-level validation warnings.
+The state schedule projection still calculates each Project independently. Project Workspace consumes the existing selected Project result; it does not calculate CPM per WBS. Cross-project dependency relationships remain explicitly unsupported by project-scoped CPM and produce deterministic project-level validation warnings.
 
-## 8. Stored versus derived data
+## 9. WBS Gantt summaries
+
+A Project-mode WBS summary row is derived presentation data, not a Task. When a WBS subtree contains scheduled activities, its Current Plan summary range is:
+
+```text
+earliest descendant plannedStart
+        →
+latest descendant plannedFinish
+```
+
+The same rollup may derive descendant activity count, completion progress and critical-activity count. These values are recomputed from canonical Tasks and the existing CPM projection and are never persisted on `WbsNode`.
+
+A WBS summary bar must not be interpreted as CPM Early/Late schedule output. Current Plan, WBS rollup and CPM projection remain separate concepts.
+
+## 10. Stored versus derived data
 
 | Concept | Data | Storage semantics |
 | --- | --- | --- |
+| Project structure | WBS `id`, `projectId`, `parentId`, `code`, `name`, optional `sortOrder` | Stored, mutable structure |
+| Task WBS assignment | `Task.wbsId` | Stored, mutable, same-project relationship |
 | Current plan | `plannedStart`, `plannedFinish`, `plannedDurationDays` | Stored, mutable |
 | Management target | `targetFinish` | Stored, mutable |
 | Actuals | `actualStart`, `actualFinish` | Stored, mutable only through explicit user/data actions |
 | Remaining duration | `remainingDurationDays` | Stored, mutable, independent of progress percentage |
 | Project status cutoff | `dataDate` | Stored on Project, mutable |
-| Baseline | `Baseline`, `TaskBaselineSnapshot` | Stored immutable snapshot data under normal task CRUD |
+| Baseline | `Baseline`, `TaskBaselineSnapshot` | Stored immutable snapshot data under normal Task/WBS CRUD |
+| WBS schedule summary | descendant date range, progress and counts | Derived, not written to WBS |
 | CPM schedule | early/late dates, float, critical status | Derived, recomputed, not written back to Task |
 
-## 9. Working-day duration semantics
+## 11. Working-day duration semantics
 
 All scheduling durations are working-day values unless explicitly documented otherwise.
 
@@ -180,7 +213,7 @@ All scheduling durations are working-day values unless explicitly documented oth
 
 Ordinary calendar-day subtraction must not be used as the canonical planned-duration calculation.
 
-## 10. Legacy date-field migration
+## 12. Legacy date-field migration
 
 Legacy task input is accepted only at the dedicated data migration boundary:
 
@@ -192,20 +225,26 @@ hedefTarih      -> targetFinish
 
 After migration, the legacy properties are deleted from the normalized task. Application state, scheduling code and feature components consume only canonical fields. The application does not maintain mirrored legacy and canonical date sources.
 
-## 11. Validation contract
+## 13. Validation contract
 
-The domain validation layer reports meaningful schedule inconsistencies without silently rewriting user intent. Important checks include:
+The domain validation layer reports meaningful schedule and hierarchy inconsistencies without silently rewriting user intent. Important checks include:
 
 - planned finish before planned start;
 - actual finish without actual start;
 - actual finish before actual start;
 - invalid or negative duration values;
 - non-zero milestone planned duration;
-- baseline finish before baseline start.
+- baseline finish before baseline start;
+- duplicate WBS IDs;
+- missing WBS parent;
+- self-parenting WBS nodes;
+- cross-project WBS parents;
+- WBS cycles;
+- Task-to-WBS project mismatch.
 
-Normalization establishes structural defaults and calendar-normalized planned duration; validation reports semantic inconsistencies that should be surfaced or handled explicitly.
+Normalization establishes structural defaults, same-project Task/WBS consistency and calendar-normalized planned duration; validation reports semantic inconsistencies that should be surfaced or handled explicitly.
 
-## 12. Current limitations
+## 14. Current limitations
 
 This model intentionally does not yet implement:
 
@@ -215,9 +254,11 @@ This model intentionally does not yet implement:
 - formal scheduling constraints;
 - baseline capture or re-baselining workflows;
 - baseline version comparison;
+- historical WBS versioning;
+- WBS drag-and-drop/reparent history;
 - cross-project CPM networks;
 - resource leveling;
 - earned value management;
 - database or API persistence.
 
-Those capabilities can now build on distinct current-plan, target, actual, remaining-duration, baseline, data-date and calculated-schedule semantics without redefining the core Task schedule model.
+Those capabilities can now build on distinct Project/WBS/Activity relationships and separate current-plan, target, actual, remaining-duration, baseline, data-date, WBS-rollup and calculated-schedule semantics without redefining the core Task schedule model.

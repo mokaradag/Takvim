@@ -17,3 +17,19 @@ export function selectProjectById(projects, projectId) {
 export function selectPersonById(people, personId) {
   return people.find((person) => person.id === personId) || null;
 }
+
+export {
+  buildWbsTree,
+  compareWbsNodes,
+  flattenWbsTree,
+  formatWbsPath,
+  selectDefaultProjectWbs,
+  selectProjectWbs,
+  selectTasksForWbs,
+  selectWbsAncestors,
+  selectWbsChildren,
+  selectWbsDescendantIds,
+  selectWbsPath,
+  selectWbsRoots,
+  selectWbsTaskRollup
+} from './wbsSelectors.js';

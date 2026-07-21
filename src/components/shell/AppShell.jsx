@@ -5,14 +5,25 @@ import { Avatar, Heptagon } from '../ui';
 import { InfoButton } from '../ui-extras';
 import { DashboardView } from '../../features/dashboard/DashboardView';
 import { TasksView } from '../../features/tasks/TasksView';
+import { WbsView } from '../../features/wbs/WbsView';
 import { CalendarView } from '../../features/calendar/CalendarView';
-import { GanttView } from '../../features/gantt/GanttView';
+import { WorkspaceGanttView } from '../../features/gantt/WorkspaceGanttView';
 import { KanbanView } from '../../features/kanban/KanbanView';
 import { ReportsView } from '../../features/reports/ReportsView';
 import { TeamView } from '../../features/team/TeamView';
 import { SettingsView } from '../../features/settings/SettingsView';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
-import { usePeople, useTaskActions, useTasks, useTaskStats } from '../../state/hooks';
+import {
+  useAllProjects,
+  useCalendars,
+  usePeople,
+  useProjectSchedule,
+  useTaskActions,
+  useTasks,
+  useTaskStats,
+  useWbs,
+  useWorkspace
+} from '../../state/hooks';
 import { useTweaks } from '../../hooks/useTweaks';
 import { useApplyTweaks } from '../../hooks/useApplyTweaks';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
@@ -26,6 +37,11 @@ export default function AppShell() {
   useApplyTweaks(t);
   const tasks = useTasks();
   const people = usePeople();
+  const wbs = useWbs();
+  const projects = useAllProjects();
+  const calendars = useCalendars();
+  const workspace = useWorkspace();
+  const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
   const stats = useTaskStats();
   const { openTask } = useTaskActions();
 
@@ -63,20 +79,22 @@ export default function AppShell() {
   const totalsByView = useMemo(() => ({
     ozet: tasks.length,
     veri: tasks.length,
+    wbs: wbs.length,
     takvim: null,
     gantt: tasks.length,
     kanban: tasks.length,
     rapor: null,
     kisi: people.length,
     ayarlar: null
-  }), [tasks.length, people.length]);
+  }), [tasks.length, wbs.length, people.length]);
 
   const renderView = () => {
     switch (view) {
       case 'ozet': return <DashboardView onNavigate={setView} />;
       case 'veri': return <TasksView />;
+      case 'wbs': return <WbsView />;
       case 'takvim': return <CalendarView t={t} setTweak={setTweak} />;
-      case 'gantt': return <GanttView />;
+      case 'gantt': return <WorkspaceGanttView />;
       case 'kanban': return <KanbanView />;
       case 'rapor': return <ReportsView />;
       case 'kisi': return <TeamView />;
@@ -86,6 +104,8 @@ export default function AppShell() {
   };
 
   const meta = PAGE_META[view] || PAGE_META.ozet;
+  const selectedCalendar = calendars.find((calendar) => calendar.id === workspace.selectedProject?.calendarId) || null;
+  const workspaceKey = `${workspace.mode}:${workspace.selectedProjectId || 'all'}`;
 
   return (
     <div className="app">
@@ -98,6 +118,24 @@ export default function AppShell() {
             <div className="brand-sub">Proje Yönetimi</div>
           </div>
         </div>
+
+        <div className="col" style={{ gap: 6, padding: '0 12px 10px' }}>
+          <div className="sidebar-section-title" style={{ margin: 0 }}>Aktif çalışma alanı</div>
+          <select
+            className="input"
+            value={workspace.selectedProjectId || ''}
+            onChange={(event) => workspace.selectWorkspace(event.target.value || null)}
+            style={{ width: '100%', fontSize: 12.5 }}
+            aria-label="Portföy veya proje çalışma alanı seç"
+          >
+            <option value="">Portföy · Tüm Projeler</option>
+            {projects.map((project) => <option key={project.id} value={project.id}>Proje · {project.name}</option>)}
+          </select>
+          <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
+            {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} WBS düğümü` : `${projects.length} proje · ${tasks.length} görev`}
+          </div>
+        </div>
+
         <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
           <Icons.Search size={13} />
           <span>Ara veya komut çalıştır...</span>
@@ -138,16 +176,26 @@ export default function AppShell() {
           <Heptagon variant="hept-topbar" />
           <div className="col" style={{ gap: 2 }}>
             <h1 className="hero-title">{meta.title}</h1>
-            <div className="sub">{meta.sub}</div>
+            <div className="sub">
+              {meta.sub}
+              {workspace.selectedProject && <span> · {workspace.selectedProject.name}</span>}
+            </div>
           </div>
           <div className="topbar-spacer" />
+          {workspace.selectedProject && (
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <span className="badge">Data Date · {workspace.selectedProject.dataDate || '—'}</span>
+              <span className="badge">{selectedCalendar?.name || 'Takvim yok'}</span>
+              <span className="badge">CPM · {projectSchedule?.projectFinish || '—'}</span>
+            </div>
+          )}
           {view === 'veri' && (
             <InfoButton title="Görevler" icon={<Icons.Table size={12} />}>
-              <p>Tüm görevleri listele, filtrele ve düzenle. Sütun başlığına tıklayarak o sütuna özel sıralama ve filtre uygulayabilirsiniz.</p>
+              <p>Görevleri listele, filtrele ve düzenle. Proje çalışma alanında liste seçili proje ile otomatik olarak sınırlandırılır.</p>
             </InfoButton>
           )}
         </header>
-        <main className="content">{renderView()}</main>
+        <main key={workspaceKey} className="content">{renderView()}</main>
       </div>
 
       <TaskDetailOverlay />

@@ -69,15 +69,71 @@ const RAW_TASKS = [
 export { CALENDARS };
 export const PEOPLE = RAW_PEOPLE.map((person) => ({ ...person }));
 export const PROJECTS = RAW_PROJECTS.map((project) => normalizeProjectReferences(project, PEOPLE));
-export const WBS = PROJECTS.map((project, index) => ({
-  id: `wbs-${project.id}-root`,
-  projectId: project.id,
-  parentId: null,
-  code: String(index + 1),
-  name: project.name
-}));
+
+export const WBS = [
+  { id: 'wbs-p-web-root', projectId: 'p-web', parentId: null, code: '1', name: 'Web Sitesi Yenileme', sortOrder: 1 },
+  { id: 'wbs-p-web-management', projectId: 'p-web', parentId: 'wbs-p-web-root', code: '1.1', name: 'Yönetim', sortOrder: 1 },
+  { id: 'wbs-p-web-design', projectId: 'p-web', parentId: 'wbs-p-web-root', code: '1.2', name: 'Tasarım', sortOrder: 2 },
+  { id: 'wbs-p-web-development', projectId: 'p-web', parentId: 'wbs-p-web-root', code: '1.3', name: 'Geliştirme', sortOrder: 3 },
+  { id: 'wbs-p-web-frontend', projectId: 'p-web', parentId: 'wbs-p-web-development', code: '1.3.1', name: 'Frontend', sortOrder: 1 },
+  { id: 'wbs-p-web-cms', projectId: 'p-web', parentId: 'wbs-p-web-development', code: '1.3.2', name: 'CMS ve İçerik', sortOrder: 2 },
+  { id: 'wbs-p-web-launch', projectId: 'p-web', parentId: 'wbs-p-web-root', code: '1.4', name: 'Yayına Alma', sortOrder: 4 },
+
+  { id: 'wbs-p-mobile-root', projectId: 'p-mobile', parentId: null, code: '2', name: 'Mobil Uygulama', sortOrder: 1 },
+  { id: 'wbs-p-mobile-backend', projectId: 'p-mobile', parentId: 'wbs-p-mobile-root', code: '2.1', name: 'Backend', sortOrder: 1 },
+  { id: 'wbs-p-mobile-development', projectId: 'p-mobile', parentId: 'wbs-p-mobile-root', code: '2.2', name: 'Mobil Geliştirme', sortOrder: 2 },
+  { id: 'wbs-p-mobile-test', projectId: 'p-mobile', parentId: 'wbs-p-mobile-root', code: '2.3', name: 'Test', sortOrder: 3 },
+  { id: 'wbs-p-mobile-release', projectId: 'p-mobile', parentId: 'wbs-p-mobile-root', code: '2.4', name: 'Yayın', sortOrder: 4 },
+
+  { id: 'wbs-p-social-root', projectId: 'p-social', parentId: null, code: '3', name: 'Sosyal Medya', sortOrder: 1 },
+  { id: 'wbs-p-social-planning', projectId: 'p-social', parentId: 'wbs-p-social-root', code: '3.1', name: 'Kampanya Planlama', sortOrder: 1 },
+  { id: 'wbs-p-social-creative', projectId: 'p-social', parentId: 'wbs-p-social-root', code: '3.2', name: 'İçerik ve Görsel', sortOrder: 2 },
+  { id: 'wbs-p-social-reporting', projectId: 'p-social', parentId: 'wbs-p-social-root', code: '3.3', name: 'Raporlama', sortOrder: 3 },
+
+  { id: 'wbs-p-db-root', projectId: 'p-db', parentId: null, code: '4', name: 'Veritabanı Göçü', sortOrder: 1 },
+  { id: 'wbs-p-db-planning', projectId: 'p-db', parentId: 'wbs-p-db-root', code: '4.1', name: 'Hazırlık ve Planlama', sortOrder: 1 },
+  { id: 'wbs-p-db-migration', projectId: 'p-db', parentId: 'wbs-p-db-root', code: '4.2', name: 'Veri Taşıma', sortOrder: 2 },
+  { id: 'wbs-p-db-optimization', projectId: 'p-db', parentId: 'wbs-p-db-root', code: '4.3', name: 'Optimizasyon', sortOrder: 3 },
+  { id: 'wbs-p-db-cutover', projectId: 'p-db', parentId: 'wbs-p-db-root', code: '4.4', name: 'Geçiş ve Kapatma', sortOrder: 4 },
+
+  { id: 'wbs-p-infra-root', projectId: 'p-infra', parentId: null, code: '5', name: 'Altyapı', sortOrder: 1 },
+  { id: 'wbs-p-infra-delivery', projectId: 'p-infra', parentId: 'wbs-p-infra-root', code: '5.1', name: 'Teslimat Altyapısı', sortOrder: 1 },
+  { id: 'wbs-p-infra-platform', projectId: 'p-infra', parentId: 'wbs-p-infra-root', code: '5.2', name: 'Platform Bakımı', sortOrder: 2 },
+  { id: 'wbs-p-infra-continuity', projectId: 'p-infra', parentId: 'wbs-p-infra-root', code: '5.3', name: 'İş Sürekliliği', sortOrder: 3 },
+
+  { id: 'wbs-p-brand-root', projectId: 'p-brand', parentId: null, code: '6', name: 'Marka Kimliği', sortOrder: 1 },
+  { id: 'wbs-p-brand-visual', projectId: 'p-brand', parentId: 'wbs-p-brand-root', code: '6.1', name: 'Görsel Kimlik', sortOrder: 1 },
+  { id: 'wbs-p-brand-typography', projectId: 'p-brand', parentId: 'wbs-p-brand-root', code: '6.2', name: 'Tipografi', sortOrder: 2 },
+  { id: 'wbs-p-brand-guide', projectId: 'p-brand', parentId: 'wbs-p-brand-root', code: '6.3', name: 'Marka Rehberi', sortOrder: 3 }
+];
+
+const TASK_WBS_BY_ID = {
+  t1: 'wbs-p-web-design',
+  t2: 'wbs-p-web-frontend',
+  t3: 'wbs-p-web-cms',
+  t4: 'wbs-p-web-frontend',
+  t4m: 'wbs-p-web-launch',
+  t5: 'wbs-p-mobile-backend',
+  t6: 'wbs-p-mobile-backend',
+  t7: 'wbs-p-mobile-test',
+  t8: 'wbs-p-mobile-release',
+  t8m: 'wbs-p-mobile-release',
+  t9: 'wbs-p-social-creative',
+  t10: 'wbs-p-social-planning',
+  t11: 'wbs-p-db-migration',
+  t12: 'wbs-p-db-optimization',
+  t12m: 'wbs-p-db-cutover',
+  t13: 'wbs-p-infra-delivery',
+  t14: 'wbs-p-infra-platform',
+  t15: 'wbs-p-infra-continuity',
+  t16: 'wbs-p-brand-visual',
+  t17: 'wbs-p-brand-typography',
+  t18: 'wbs-p-brand-guide',
+  t19: 'wbs-p-social-reporting'
+};
+
 const taskContext = { projects: PROJECTS, people: PEOPLE, wbs: WBS, calendars: CALENDARS };
-export const TASKS = RAW_TASKS.map((task) => normalizeTaskRecord(task, taskContext));
+export const TASKS = RAW_TASKS.map((task) => normalizeTaskRecord({ ...task, wbsId: TASK_WBS_BY_ID[task.id] || null }, taskContext));
 
 export const BASELINES = PROJECTS.map((project) => ({
   id: `baseline-${project.id}-initial`,

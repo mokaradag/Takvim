@@ -19,12 +19,14 @@
  */
 
 /**
+ * Structural Work Breakdown Structure node. Schedule rollups are derived from descendant Tasks and are not stored here.
  * @typedef {Object} WbsNode
- * @property {string} id
- * @property {string} projectId
- * @property {string|null} parentId
- * @property {string} code
+ * @property {string} id Globally stable relationship key.
+ * @property {string} projectId Owning Project ID.
+ * @property {string|null} parentId Parent WBS ID in the same Project, or null for a root.
+ * @property {string} code Deterministic project-local display code.
  * @property {string} name
+ * @property {number} [sortOrder] Deterministic sibling order before code/name fallback ordering.
  */
 
 /**
@@ -57,7 +59,7 @@
  * @property {string} id
  * @property {string|null} projectId
  * @property {string[]} assigneeIds
- * @property {string|null} wbsId
+ * @property {string|null} wbsId Stable WBS relationship. When present it must reference a node owned by projectId.
  * @property {string|null} [calendarId] Optional task-level override of the project calendar.
  * @property {Dependency[]} deps
  * @property {string} task
@@ -108,4 +110,4 @@
  * @property {boolean} isCritical
  */
 
-export const DOMAIN_MODEL_VERSION = 4;
+export const DOMAIN_MODEL_VERSION = 5;

@@ -1,3 +1,5 @@
+import { selectDefaultProjectWbs } from '../selectors/wbsSelectors.js';
+
 function indexByName(items) {
   return new Map(items.map((item) => [item.name, item]));
 }
@@ -33,26 +35,34 @@ export function normalizeTaskScheduleFields(task) {
   };
 }
 
-export function normalizeTaskReferences(task, { projects, people, wbs }) {
-  const project = projects.find((item) => item.id === task.projectId || item.name === task.proje) || null;
+export function normalizeTaskReferences(task, { projects = [], people = [], wbs = [] }) {
+  const projectsById = new Map(projects.map((item) => [item.id, item]));
+  const projectsByName = indexByName(projects);
+  const project = (task.projectId ? projectsById.get(task.projectId) : null)
+    || projectsByName.get(task.proje)
+    || null;
   const peopleByName = indexByName(people);
   const peopleById = new Map(people.map((item) => [item.id, item]));
+  const wbsById = new Map(wbs.map((node) => [node.id, node]));
 
   const assigneeIds = task.assigneeIds?.length
     ? task.assigneeIds.filter((id) => peopleById.has(id))
     : (task.sorumlu || []).map((name) => peopleByName.get(name)?.id).filter(Boolean);
   const assigneeNames = task.sorumlu?.length
-    ? task.sorumlu
+    ? task.sorumlu.filter((name) => peopleByName.has(name))
     : assigneeIds.map((id) => peopleById.get(id)?.name).filter(Boolean);
-  const projectWbs = wbs.find((node) => node.projectId === project?.id && node.parentId == null) || null;
+
+  const requestedWbs = task.wbsId ? wbsById.get(task.wbsId) : null;
+  const validRequestedWbs = requestedWbs && requestedWbs.projectId === project?.id ? requestedWbs : null;
+  const defaultWbs = project ? selectDefaultProjectWbs(wbs, project.id) : null;
 
   return {
     ...task,
     projectId: project?.id || task.projectId || null,
-    proje: task.proje || project?.name || '',
+    proje: project?.name || task.proje || '',
     assigneeIds,
     sorumlu: assigneeNames,
-    wbsId: task.wbsId || projectWbs?.id || null,
+    wbsId: validRequestedWbs?.id || defaultWbs?.id || null,
     deps: task.deps || []
   };
 }
@@ -116,3 +126,9 @@ export function validateTaskBaselineSnapshot(snapshot) {
 
   return issues;
 }
+
+export {
+  validateTaskWbsAssignment,
+  validateWbsDeletion,
+  validateWbsStructure
+} from './wbsValidation.js';
