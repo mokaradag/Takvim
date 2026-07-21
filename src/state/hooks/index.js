@@ -37,6 +37,7 @@ export function useWbsActions() {
   return {
     addWbsChild: state.actions.addWbsChild,
     renameWbs: state.actions.renameWbs,
+    reparentWbs: state.actions.reparentWbs,
     deleteWbs: state.actions.deleteWbs,
     clearWbsError: state.actions.clearWbsError,
     error: state.wbsActionError
