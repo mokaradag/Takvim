@@ -5,6 +5,7 @@ import { fmtISO } from '../src/scheduling/dates/index.js';
 import {
   DEFAULT_CALENDAR,
   addWorkingDays,
+  countWorkingDays,
   diffWorkingDays,
   holidayFor,
   isWorkingDay,
@@ -52,6 +53,12 @@ test('working-day difference is the inverse of working-day addition', () => {
     const shifted = addWorkingDays('2026-07-14', amount, DEFAULT_CALENDAR);
     assert.equal(diffWorkingDays(shifted, '2026-07-14', DEFAULT_CALENDAR), amount);
   }
+});
+
+test('inclusive working-day counts respect the selected calendar', () => {
+  assert.equal(countWorkingDays('2026-07-13', '2026-07-17', DEFAULT_CALENDAR), 4);
+  assert.equal(countWorkingDays('2026-07-13', '2026-07-18', operationsCalendar), 5);
+  assert.equal(countWorkingDays('2026-07-17', '2026-07-13', DEFAULT_CALENDAR), -4);
 });
 
 test('non-working dates can be aligned to the nearest working date in either direction', () => {
