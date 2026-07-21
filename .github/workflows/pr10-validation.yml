@@ -1,0 +1,62 @@
+name: PR10 WBS Workspace Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 24.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Runtime version
+        run: node --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Static architecture and offline checks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R -nE "from ['\"][^'\"]*data/mock|from ['\"][^'\"]*mock/seed|require\([^)]*data/mock" src/features; then
+            echo "Feature code imports mock data directly."
+            exit 1
+          fi
+
+          if grep -R -n "calculateCpm" src/features; then
+            echo "Feature code calls calculateCpm directly."
+            exit 1
+          fi
+
+          if grep -R -nE "baslangicTarihi|bitisTarihi|hedefTarih" src --exclude=legacyTaskSchedule.js; then
+            echo "Legacy scheduling fields escaped the migration boundary."
+            exit 1
+          fi
+
+          if grep -R -nE "fonts\.googleapis\.com|fonts\.gstatic\.com|unpkg\.com|cdn\.jsdelivr\.net" src; then
+            echo "External runtime dependency detected."
+            exit 1
+          fi
+
+          echo "Static architecture and offline checks passed."
