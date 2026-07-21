@@ -1,9 +1,9 @@
 name: PR10 WBS Workspace Validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/wbs-project-workspace
+      - main
 
 jobs:
   validate:
