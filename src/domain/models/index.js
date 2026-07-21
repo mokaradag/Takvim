@@ -4,6 +4,7 @@
  * @property {string} name
  * @property {string} color
  * @property {string|null} [leadId]
+ * @property {string|null} [calendarId]
  * @property {string} [lead] Legacy display field retained for the current UI.
  */
 
@@ -26,8 +27,21 @@
  */
 
 /**
+ * Project/task scheduling calendar. JavaScript weekday numbers are used:
+ * Sunday=0 through Saturday=6. Holidays are explicit ISO dates so movable
+ * holidays do not silently repeat in later years.
+ * @typedef {Object} SchedulingCalendar
+ * @property {string} id
+ * @property {string} name
+ * @property {string} timezone
+ * @property {number[]} workingDays
+ * @property {{date:string,name:string,short?:string}[]} holidays
+ */
+
+/**
  * Canonical dependency shape. The legacy id field is retained by the mock adapter
  * while the UI transition is in progress; predecessorId is the stable relationship key.
+ * lagDays is interpreted as working days by the scheduling engine.
  * @typedef {Object} Dependency
  * @property {string} predecessorId
  * @property {'FS'|'SS'|'FF'|'SF'} type
@@ -41,6 +55,7 @@
  * @property {string|null} projectId
  * @property {string[]} assigneeIds
  * @property {string|null} wbsId
+ * @property {string|null} [calendarId] Optional task-level override of the project calendar.
  * @property {Dependency[]} deps
  * @property {string} task
  * @property {string} status
@@ -51,4 +66,4 @@
  * @property {string[]} [sorumlu] Legacy display field retained for the current UI.
  */
 
-export const DOMAIN_MODEL_VERSION = 1;
+export const DOMAIN_MODEL_VERSION = 2;
