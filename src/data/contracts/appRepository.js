@@ -1,5 +1,6 @@
 /**
  * @typedef {Object} AppDataSnapshot
+ * @property {import('../../domain/models').SchedulingCalendar[]} calendars
  * @property {import('../../domain/models').Project[]} projects
  * @property {import('../../domain/models').Person[]} people
  * @property {import('../../domain/models').WbsNode[]} wbs
