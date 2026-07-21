@@ -1,20 +1,28 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../../components/icons';
+import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
 import { REL_TYPES, depId, relTypeOf } from '../../scheduling/dependencies';
 import { diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { Avatar, Kw, StatusIcon, statusColorVar } from '../../components/ui';
 import { InfoButton } from '../../components/ui-extras';
-import { usePeople, useTaskPrimaryBaseline } from '../../state/hooks';
+import { useAllPeople, useAllProjects, useAllWbs, useTaskPrimaryBaseline } from '../../state/hooks';
 
 /* ── Detail drawer ───────────────────────────────────── */
 export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
-  const people = usePeople();
+  const people = useAllPeople();
+  const projects = useAllProjects();
+  const allWbs = useAllWbs();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
   const [local, setLocal] = useState({ ...task });
 
   useEffect(() => { setLocal({ ...task }); }, [task]);
+
+  const projectWbsRows = useMemo(() => {
+    const projectWbs = allWbs.filter((node) => node.projectId === local.projectId);
+    return flattenWbsTree(buildWbsTree(projectWbs));
+  }, [allWbs, local.projectId]);
 
   const save = (patch) => {
     const next = { ...local, ...patch };
@@ -62,7 +70,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                   ['todo', 'Yapılacak', statusColorVar('todo'), 'todo'],
                   ['in_progress', 'Devam ediyor', statusColorVar('in_progress'), 'in_progress'],
                   ['done', 'Tamamlandı', statusColorVar('done'), 'done']
-                ].map(([id, label, color, iconId]) => {
+                ].map(([id, label, statusColor, iconId]) => {
                   const isActive = (local.status || 'todo') === id;
                   return (
                     <button
@@ -72,8 +80,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                       style={{
                         flex: 1,
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        color: isActive ? color : 'var(--text-muted)',
-                        background: isActive ? `color-mix(in oklab, ${color} 14%, transparent)` : 'transparent',
+                        color: isActive ? statusColor : 'var(--text-muted)',
+                        background: isActive ? `color-mix(in oklab, ${statusColor} 14%, transparent)` : 'transparent',
                         fontWeight: 600
                       }}
                     >
@@ -84,9 +92,44 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </div>
             </Section>
 
+            <Section title="Proje & WBS">
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.45fr)', gap: 12 }}>
+                <div className="col" style={{ gap: 6 }}>
+                  <div className="label">Proje</div>
+                  <select
+                    className="input"
+                    value={local.projectId || ''}
+                    onChange={(e) => save({ projectId: e.target.value || null })}
+                  >
+                    <option value="">Proje seçilmedi</option>
+                    {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                  </select>
+                </div>
+                <div className="col" style={{ gap: 6 }}>
+                  <div className="label">WBS</div>
+                  <select
+                    className="input"
+                    value={local.wbsId || ''}
+                    onChange={(e) => save({ wbsId: e.target.value || null })}
+                    disabled={!local.projectId || projectWbsRows.length === 0}
+                  >
+                    <option value="">WBS seçilmedi</option>
+                    {projectWbsRows.map(({ node, depth }) => (
+                      <option key={node.id} value={node.id}>
+                        {`${'— '.repeat(depth)}${formatWbsPath(allWbs, node.id)}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="muted" style={{ fontSize: 11.5 }}>
+                Proje değişirse önceki projeye bağlı WBS korunmaz; yeni projenin tek kök WBS düğümü varsa otomatik atanır.
+              </div>
+            </Section>
+
             <Section title="Sorumlular">
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
-                {local.sorumlu.map((s) =>
+                {(local.sorumlu || []).map((s) =>
                   <span key={s} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
                     <Avatar name={s} size="sm" />
                     <span style={{ fontSize: 12 }}>{s}</span>
