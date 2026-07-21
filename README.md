@@ -22,7 +22,7 @@ npm run dev
 
 ### Test kapsamı
 
-Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. İlk kapsam; domain selector ve ilişki normalizasyonu ile tarih, takvim, bağımlılık ve Gantt zamanlama hesaplarının temel davranışlarını doğrular.
+Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. İlk kapsam; domain selector ve ilişki normalizasyonu ile tarih, proje takvimi, çalışma günü, bağımlılık ve Gantt zamanlama hesaplarının temel davranışlarını doğrular.
 
 ## On-prem / internet erişimi olmayan ortam
 
@@ -55,8 +55,8 @@ npx next telemetry disable
 
 ## Yapı
 
-- `src/domain` — Project, Task/Activity, Dependency, Person ve WBS iş kavramları
-- `src/scheduling` — tarih, takvim, bağımlılık ve Gantt zamanlama hesapları
+- `src/domain` — Project, Task/Activity, Dependency, Person, WBS ve scheduling calendar iş kavramları
+- `src/scheduling` — tarih, proje takvimi, çalışma günü, bağımlılık ve Gantt zamanlama hesapları
 - `src/data` — veri erişim sözleşmesi ve mevcut mock/in-memory adapter
 - `src/state` — uygulama düzeyi state, task işlemleri ve odaklı hook'lar
 - `src/features` — Özet, Görevler, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
@@ -64,8 +64,8 @@ npx next telemetry disable
 - `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
 - `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
 
-Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md` dosyasına bakın.
+Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md` dosyasına bakın.
 
 ## Sonraki adım
 
-Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli; bu PR gerçek bir veritabanı bağlantısı kurmaz.
+Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli. Scheduling tarafında bir sonraki adım, `docs/SCHEDULING.md` sözleşmelerini kullanan saf CPM/critical-path motorudur.
