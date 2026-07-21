@@ -1,6 +1,6 @@
 # Scheduling Calendar Semantics
 
-MERGEN Rota keeps calendar and dependency arithmetic in `src/scheduling` so future CPM/critical-path calculations can remain pure and independent of React, Next.js and the data adapter.
+MERGEN Rota keeps calendar, dependency and CPM arithmetic in `src/scheduling` so scheduling calculations remain pure and independent of React, Next.js and the data adapter.
 
 ## Calendar model
 
@@ -39,7 +39,8 @@ The calendar layer exposes pure helpers for:
 - `holidayFor()`;
 - `moveToWorkingDay()`;
 - `addWorkingDays()`;
-- `diffWorkingDays()`.
+- `diffWorkingDays()`;
+- `countWorkingDays()`.
 
 `addWorkingDays(date, amount, calendar)` moves by working-day steps. Positive values move forward and negative values move backward. Weekends or explicit holidays are skipped according to the selected calendar.
 
@@ -49,7 +50,9 @@ The calendar layer exposes pure helpers for:
 diffWorkingDays(addWorkingDays(start, n, calendar), start, calendar) === n
 ```
 
-This invariant is covered by unit tests and is the arithmetic contract the CPM layer should use.
+`countWorkingDays(start, end, calendar)` counts working dates inclusively and is used when CPM derives an activity duration from existing baseline dates.
+
+These contracts are covered by unit tests and are the arithmetic foundation used by the CPM layer.
 
 ## Dependency lag and lead
 
@@ -58,7 +61,7 @@ The existing canonical dependency field remains `lagDays`, but scheduling interp
 - positive `lagDays` = lag;
 - negative `lagDays` = lead.
 
-Use `applyDependencyLag()` instead of adding calendar days directly. The helper applies the selected task/project calendar and skips non-working dates.
+Use `applyDependencyLag()` instead of adding calendar days directly. The helper applies the selected scheduling calendar and skips non-working dates.
 
 ## Data and state boundary
 
@@ -66,18 +69,20 @@ Scheduling calendars are part of the repository snapshot alongside projects, peo
 
 The mock adapter is only one provider of this data. A future API/database adapter should return the same calendar objects and stable IDs so feature-facing state hooks remain unchanged.
 
-## CPM follow-up
+## CPM engine
 
-The CPM engine should build on these calendar contracts rather than introducing separate date arithmetic. Forward/backward passes should resolve each activity's effective calendar and use working-day helpers for durations and dependency lag/lead.
-
-The CPM layer should add explicit handling and tests for:
+The pure CPM implementation lives under `src/scheduling/cpm` and consumes the calendar contracts above. It provides:
 
 - dependency graph validation and cycle detection;
 - FS, SS, FF and SF constraints;
-- positive lag and negative lead;
-- project/task calendar overrides;
+- positive lag and negative lead in working days;
+- project/task calendar resolution;
 - forward and backward passes;
-- early/late dates;
+- early and late dates;
 - total and free float;
 - one or multiple critical paths;
-- milestones and zero-duration activities.
+- milestone and zero-duration activity handling.
+
+Detailed input, relationship and output semantics are documented in `docs/CPM.md`.
+
+CPM results are not yet wired into the Gantt UI. Feature integration should call the scheduling layer rather than reproducing scheduling logic inside React components.
