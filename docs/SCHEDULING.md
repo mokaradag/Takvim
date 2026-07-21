@@ -85,4 +85,12 @@ The pure CPM implementation lives under `src/scheduling/cpm` and consumes the ca
 
 Detailed input, relationship and output semantics are documented in `docs/CPM.md`.
 
-CPM results are not yet wired into the Gantt UI. Feature integration should call the scheduling layer rather than reproducing scheduling logic inside React components.
+## Application schedule projection
+
+The application consumes CPM through `src/state/selectors/scheduleSelectors.js` rather than calling `calculateCpm()` from feature components.
+
+The projection calculates each project independently and then combines successful results for portfolio-level lookup. This prevents one project's finish date from affecting another project's float. CPM validation failures are captured per project, while unrelated projects remain usable.
+
+Cross-project dependencies are currently reported as `CROSS_PROJECT_DEPENDENCY` and the affected project is excluded from CPM until a future portfolio-network model defines those semantics.
+
+CPM output remains derived data. Early/late dates, float and critical status are not written into canonical task objects. The Gantt continues to position its primary bars from stored task dates and overlays CPM information separately.
