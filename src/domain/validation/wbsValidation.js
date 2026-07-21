@@ -2,6 +2,31 @@ function issue(code, nodeId, details = {}) {
   return { code, nodeId: nodeId || null, details };
 }
 
+function indexWbs(wbs) {
+  return new Map((wbs || []).filter((node) => node?.id).map((node) => [node.id, node]));
+}
+
+function descendantIds(wbs, wbsId) {
+  const childrenByParent = new Map();
+  for (const node of wbs || []) {
+    const children = childrenByParent.get(node.parentId) || [];
+    children.push(node);
+    childrenByParent.set(node.parentId, children);
+  }
+
+  const descendants = [];
+  const visited = new Set([wbsId]);
+  const stack = [...(childrenByParent.get(wbsId) || [])];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node?.id || visited.has(node.id)) continue;
+    visited.add(node.id);
+    descendants.push(node.id);
+    stack.push(...(childrenByParent.get(node.id) || []));
+  }
+  return descendants;
+}
+
 export function validateWbsStructure(wbs) {
   const nodes = wbs || [];
   const issues = [];
@@ -81,6 +106,54 @@ export function validateTaskWbsAssignment(task, wbs) {
       wbsId: node.id,
       wbsProjectId: node.projectId
     })];
+  }
+  return [];
+}
+
+export function validateTaskWbsMove(tasks, wbs, taskIds, targetWbsId) {
+  const ids = [...new Set((taskIds || []).filter(Boolean))];
+  if (!ids.length) return [issue('TASK_MOVE_SELECTION_EMPTY', null)];
+
+  const target = indexWbs(wbs).get(targetWbsId) || null;
+  if (!target) return [issue('WBS_TARGET_NOT_FOUND', targetWbsId)];
+
+  const tasksById = new Map((tasks || []).filter((task) => task?.id).map((task) => [task.id, task]));
+  const issues = [];
+  for (const taskId of ids) {
+    const task = tasksById.get(taskId) || null;
+    if (!task) {
+      issues.push(issue('TASK_NOT_FOUND', taskId));
+      continue;
+    }
+    if (task.projectId !== target.projectId) {
+      issues.push(issue('CROSS_PROJECT_TASK_WBS_MOVE', task.id, {
+        taskProjectId: task.projectId || null,
+        targetWbsId: target.id,
+        targetProjectId: target.projectId
+      }));
+    }
+  }
+  return issues;
+}
+
+export function validateWbsReparent(wbs, nodeId, targetParentId) {
+  const byId = indexWbs(wbs);
+  const node = byId.get(nodeId) || null;
+  const target = byId.get(targetParentId) || null;
+
+  if (!node) return [issue('WBS_NODE_NOT_FOUND', nodeId)];
+  if (!target) return [issue('WBS_PARENT_NOT_FOUND', targetParentId)];
+  if (node.parentId == null) return [issue('WBS_ROOT_REPARENT_FORBIDDEN', node.id)];
+  if (node.id === target.id) return [issue('WBS_SELF_PARENT', node.id, { parentId: target.id })];
+  if (node.projectId !== target.projectId) {
+    return [issue('CROSS_PROJECT_WBS_PARENT', node.id, {
+      parentId: target.id,
+      projectId: node.projectId,
+      parentProjectId: target.projectId
+    })];
+  }
+  if (descendantIds(wbs, node.id).includes(target.id)) {
+    return [issue('WBS_REPARENT_TO_DESCENDANT', node.id, { targetParentId: target.id })];
   }
   return [];
 }
