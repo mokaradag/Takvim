@@ -108,3 +108,23 @@ export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
 
   return difference;
 }
+
+export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR) {
+  let first = localDate(start);
+  let last = localDate(end);
+  let sign = 1;
+
+  if (first > last) {
+    [first, last] = [last, first];
+    sign = -1;
+  }
+
+  let count = 0;
+  let current = first;
+  while (current <= last) {
+    if (isWorkingDay(current, calendar)) count += 1;
+    current = addDays(current, 1);
+  }
+
+  return count * sign;
+}
