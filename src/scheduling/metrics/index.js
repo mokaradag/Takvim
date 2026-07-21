@@ -1,4 +1,4 @@
-import { addDays, diffDays, parseDate, today } from '../dates';
+import { addDays, diffDays, parseDate, today } from '../dates/index.js';
 
 export function taskDurationDays(task) {
   return diffDays(task.bitisTarihi, task.baslangicTarihi) + 1;
