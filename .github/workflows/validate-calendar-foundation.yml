@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/project-calendars-working-days
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
