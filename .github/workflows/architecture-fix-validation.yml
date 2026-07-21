@@ -1,0 +1,99 @@
+name: Architecture fix validation
+
+on:
+  push:
+    branches:
+      - agent/architecture-foundation-refactor
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out refactor branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/architecture-foundation-refactor
+          fetch-depth: 0
+
+      - name: Use production Node version
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Apply fixes and validate
+        shell: bash
+        run: |
+          set +e
+          LOG=/tmp/architecture-validation.log
+          : > "$LOG"
+
+          echo '=== apply architecture fixes ===' | tee -a "$LOG"
+          node scripts/fix-architecture.mjs >>"$LOG" 2>&1
+          FIX_STATUS=$?
+
+          echo '=== npm ci ===' | tee -a "$LOG"
+          npm ci >>"$LOG" 2>&1
+          INSTALL_STATUS=$?
+
+          echo '=== npm run lint ===' | tee -a "$LOG"
+          CI=true npm run lint >>"$LOG" 2>&1
+          LINT_STATUS=$?
+
+          echo '=== npm run build ===' | tee -a "$LOG"
+          npm run build >>"$LOG" 2>&1
+          BUILD_STATUS=$?
+
+          echo '=== architecture checks ===' | tee -a "$LOG"
+          (
+            set -e
+            test ! -e src/components/views-a.jsx
+            test ! -e src/components/views-b.jsx
+            test ! -e src/components/AppShell.jsx
+            test ! -e src/components/settings.jsx
+            test -e src/components/shell/AppShell.jsx
+            test -e src/state/AppStateProvider.jsx
+            test -e src/data/contracts/appRepository.js
+            test -e src/data/mock/createMockRepository.js
+            test -e docs/ARCHITECTURE.md
+            ! grep -R -E '\b(PROJECTS|PEOPLE|TASKS)\b' src/features
+            ! grep -R 'data/mock/seed' src/features
+            ! grep -R 'lib/data' src/features
+          ) >>"$LOG" 2>&1
+          ARCH_STATUS=$?
+
+          echo '=== offline checks ===' | tee -a "$LOG"
+          (
+            set -e
+            ! grep -R -E 'fonts\.googleapis\.com|fonts\.gstatic\.com' src
+            ! grep -R -E '<script[^>]+https?://|<link[^>]+https?://' src
+          ) >>"$LOG" 2>&1
+          OFFLINE_STATUS=$?
+
+          printf 'RESULT fix=%s install=%s lint=%s build=%s architecture=%s offline=%s\n' \
+            "$FIX_STATUS" "$INSTALL_STATUS" "$LINT_STATUS" "$BUILD_STATUS" "$ARCH_STATUS" "$OFFLINE_STATUS" | tee -a "$LOG"
+          cat "$LOG"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/architecture-fix-validation.yml
+          rm -f scripts/fix-architecture.mjs
+          rmdir scripts 2>/dev/null || true
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+
+          if [ "$FIX_STATUS" -ne 0 ] || [ "$INSTALL_STATUS" -ne 0 ] || [ "$LINT_STATUS" -ne 0 ] || [ "$BUILD_STATUS" -ne 0 ] || [ "$ARCH_STATUS" -ne 0 ] || [ "$OFFLINE_STATUS" -ne 0 ]; then
+            cp "$LOG" docs/architecture-validation-failure.log
+            git add -A
+            git commit -m 'Apply architecture fixes and record validation failure'
+            git push origin HEAD:agent/architecture-foundation-refactor
+            exit 1
+          fi
+
+          rm -f docs/architecture-validation-failure.log
+          git add -A
+          git commit -m 'Fix feature state references and validate architecture'
+          git push origin HEAD:agent/architecture-foundation-refactor
