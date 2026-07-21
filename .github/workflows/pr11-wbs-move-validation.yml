@@ -52,7 +52,7 @@ jobs:
             echo 'Feature code must not import mock data directly.'
             exit 1
           fi
-          if grep -R -E "baslangicTarihi|bitisTarihi" src --include='*.js' --include='*.jsx' | grep -v "src/data/legacy"; then
+          if grep -R -E "baslangicTarihi|bitisTarihi" src --include='*.js' --include='*.jsx' | grep -v "src/data/migrations/legacyTaskSchedule.js"; then
             echo 'Legacy schedule fields leaked outside the compatibility boundary.'
             exit 1
           fi
