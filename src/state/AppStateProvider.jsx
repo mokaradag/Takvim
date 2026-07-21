@@ -6,6 +6,7 @@ import { fmtISO, today } from '../scheduling/dates';
 import { addWorkingDays, moveToWorkingDay, resolveProjectCalendar } from '../scheduling/calendars';
 import { normalizeDependency } from '../scheduling/dependencies';
 import { selectTaskStats } from '../scheduling/metrics';
+import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 
 const AppStateContext = createContext(null);
 
@@ -90,8 +91,12 @@ export function AppStateProvider({ children, repository = appRepository }) {
     [state.tasks, state.selectedTaskId]
   );
   const taskStats = useMemo(() => selectTaskStats(state.tasks), [state.tasks]);
+  const schedule = useMemo(
+    () => buildPortfolioSchedule({ tasks: state.tasks, projects: state.projects, calendars: state.calendars }),
+    [state.tasks, state.projects, state.calendars]
+  );
   const actions = useMemo(() => ({ openTask, closeTask, updateTask, deleteTask, addTask }), [openTask, closeTask, updateTask, deleteTask, addTask]);
-  const value = useMemo(() => ({ ...state, selectedTask, taskStats, actions }), [state, selectedTask, taskStats, actions]);
+  const value = useMemo(() => ({ ...state, selectedTask, taskStats, schedule, actions }), [state, selectedTask, taskStats, schedule, actions]);
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }
