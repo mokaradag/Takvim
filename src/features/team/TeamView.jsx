@@ -15,7 +15,7 @@ export function TeamView() {
   const today_ = today();
 
   const stats = useMemo1(() => {
-    return PEOPLE.map(p => {
+    return people.map(p => {
       const mine = tasks.filter(t => t.sorumlu.includes(p.name));
       const done = mine.filter(t => t.status === 'done').length;
       const active = mine.filter(t => t.status === 'in_progress').length;

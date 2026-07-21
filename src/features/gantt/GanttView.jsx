@@ -465,7 +465,7 @@ export function GanttView() {
                 filterType = 'multi';
                 filterValue = colFilters.sorumlu;
                 onFilter = (v) => setCF('sorumlu', v);
-                filterOptions = PEOPLE.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+                filterOptions = people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr'))
                   .map(p => ({ value: p.name, label: p.name, icon: <Avatar name={p.name} size="sm" /> }));
               }
               else if (c.key === 'priority') {

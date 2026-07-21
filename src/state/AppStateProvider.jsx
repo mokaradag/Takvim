@@ -27,7 +27,16 @@ function reducer(state, action) {
     case 'task/update':
       return {
         ...state,
-        tasks: state.tasks.map((task) => task.id === action.id ? normalizeTask({ ...task, ...action.patch }, state) : task)
+        tasks: state.tasks.map((task) => {
+          if (task.id !== action.id) return task;
+          const next = { ...task, ...action.patch };
+          if (Object.prototype.hasOwnProperty.call(action.patch, 'sorumlu')) delete next.assigneeIds;
+          if (Object.prototype.hasOwnProperty.call(action.patch, 'proje')) {
+            delete next.projectId;
+            delete next.wbsId;
+          }
+          return normalizeTask(next, state);
+        })
       };
     case 'task/delete':
       return {

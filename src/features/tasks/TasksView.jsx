@@ -34,14 +34,14 @@ export function TasksView() {
   const setCF = (key, value) => setColFilter(f => ({ ...f, [key]: value }));
 
   // distinct value helpers — all SORTED alphabetically (TR locale)
-  const projOpts = useMemo1(() => PROJECTS
+  const projOpts = useMemo1(() => projects
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
     .map(p => ({ value: p.name, label: p.name, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} /> })), []);
   const kwOpts = useMemo1(() => Array.from(new Set(tasks.map(t => t.keyword)))
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [tasks]);
-  const sorumluOpts = useMemo1(() => PEOPLE
+  const sorumluOpts = useMemo1(() => people
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
     .map(p => ({ value: p.name, label: p.name, icon: <Avatar name={p.name} size="sm" /> })), []);
