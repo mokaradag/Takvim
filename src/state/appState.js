@@ -1,6 +1,11 @@
 import { normalizeTaskRecord } from '../data/normalizeTaskRecord.js';
-import { selectDefaultProjectWbs } from '../domain/selectors/index.js';
-import { validateWbsDeletion, validateWbsStructure } from '../domain/validation/index.js';
+import { selectDefaultProjectWbs, selectWbsDescendantIds } from '../domain/selectors/index.js';
+import {
+  validateTaskWbsMove,
+  validateWbsDeletion,
+  validateWbsReparent,
+  validateWbsStructure
+} from '../domain/validation/index.js';
 import { fmtISO, today } from '../scheduling/dates/index.js';
 import { addWorkingDays, moveToWorkingDay, resolveProjectCalendar } from '../scheduling/calendars/index.js';
 import {
@@ -33,9 +38,18 @@ function workspaceState(state, selection) {
 function wbsMessage(code) {
   const messages = {
     WBS_PARENT_NOT_FOUND: 'Üst WBS düğümü bulunamadı.',
+    WBS_NODE_NOT_FOUND: 'Taşınacak WBS düğümü bulunamadı.',
     WBS_NAME_REQUIRED: 'WBS adı boş bırakılamaz.',
     WBS_HAS_CHILDREN: 'Alt WBS düğümleri bulunan bir WBS silinemez.',
-    WBS_HAS_TASKS: 'Doğrudan görev atanmış bir WBS silinemez.'
+    WBS_HAS_TASKS: 'Doğrudan görev atanmış bir WBS silinemez.',
+    WBS_ROOT_REPARENT_FORBIDDEN: 'Proje kök WBS düğümü başka bir WBS altına taşınamaz.',
+    WBS_REPARENT_TO_DESCENDANT: 'Bir WBS kendi alt düğümlerinden birinin altına taşınamaz.',
+    WBS_SELF_PARENT: 'Bir WBS kendi üst düğümü olamaz.',
+    CROSS_PROJECT_WBS_PARENT: 'WBS düğümleri farklı projeler arasında taşınamaz.',
+    TASK_MOVE_SELECTION_EMPTY: 'Taşınacak en az bir görev seçilmelidir.',
+    WBS_TARGET_NOT_FOUND: 'Hedef WBS düğümü bulunamadı.',
+    TASK_NOT_FOUND: 'Taşınacak görevlerden biri bulunamadı.',
+    CROSS_PROJECT_TASK_WBS_MOVE: 'Görevler yalnızca kendi projelerindeki WBS düğümlerine taşınabilir.'
   };
   return messages[code] || 'WBS işlemi doğrulama nedeniyle tamamlanamadı.';
 }
@@ -56,6 +70,71 @@ function nextChildDefinition(state, parent) {
   }, 0);
   const next = Math.max(maxOrder, maxSegment, siblings.length) + 1;
   return { code: `${parent.code}.${next}`, sortOrder: next };
+}
+
+function moveTasksToWbs(state, taskIds, targetWbsId) {
+  const issues = validateTaskWbsMove(state.tasks, state.wbs, taskIds, targetWbsId);
+  if (issues.length) {
+    const first = issues[0];
+    return withWbsError(state, first.code, first.nodeId, first.details);
+  }
+
+  const selectedIds = new Set(taskIds);
+  return {
+    ...state,
+    tasks: state.tasks.map((task) => (selectedIds.has(task.id) ? { ...task, wbsId: targetWbsId } : task)),
+    wbsActionError: null
+  };
+}
+
+function rebaseWbsCode(code, oldPrefix, newPrefix) {
+  const value = String(code || '');
+  const previous = String(oldPrefix || '');
+  if (!previous) return value;
+  if (value === previous) return newPrefix;
+  if (value.startsWith(`${previous}.`)) return `${newPrefix}${value.slice(previous.length)}`;
+  return value;
+}
+
+function reparentWbs(state, nodeId, targetParentId) {
+  const issues = validateWbsReparent(state.wbs, nodeId, targetParentId);
+  if (issues.length) {
+    const first = issues[0];
+    return withWbsError(state, first.code, first.nodeId, first.details);
+  }
+
+  const node = state.wbs.find((item) => item.id === nodeId);
+  const target = state.wbs.find((item) => item.id === targetParentId);
+  if (node.parentId === target.id) return { ...state, wbsActionError: null };
+
+  const stateWithoutSourceSibling = {
+    ...state,
+    wbs: state.wbs.filter((item) => item.id !== node.id)
+  };
+  const ordering = nextChildDefinition(stateWithoutSourceSibling, target);
+  const descendants = new Set(selectWbsDescendantIds(state.wbs, node.id));
+  const nextWbs = state.wbs.map((item) => {
+    if (item.id === node.id) {
+      return {
+        ...item,
+        parentId: target.id,
+        code: ordering.code,
+        sortOrder: ordering.sortOrder
+      };
+    }
+    if (descendants.has(item.id)) {
+      return { ...item, code: rebaseWbsCode(item.code, node.code, ordering.code) };
+    }
+    return item;
+  });
+
+  const structureIssues = validateWbsStructure(nextWbs);
+  if (structureIssues.length) {
+    const first = structureIssues[0];
+    return withWbsError(state, first.code, first.nodeId, first.details);
+  }
+
+  return { ...state, wbs: nextWbs, wbsActionError: null };
 }
 
 export function createInitialState(repository) {
@@ -109,6 +188,10 @@ export function appStateReducer(state, action) {
         : state.selectedTaskId;
       return { ...state, tasks, selectedTaskId };
     }
+    case 'task/move-wbs':
+      return moveTasksToWbs(state, [action.id], action.wbsId);
+    case 'task/bulk-move-wbs':
+      return moveTasksToWbs(state, action.ids || [], action.wbsId);
     case 'task/delete':
       return {
         ...state,
@@ -151,6 +234,8 @@ export function appStateReducer(state, action) {
         wbsActionError: null
       };
     }
+    case 'wbs/reparent':
+      return reparentWbs(state, action.id, action.parentId);
     case 'wbs/delete': {
       const issues = validateWbsDeletion(state.wbs, state.tasks, action.id);
       if (issues.length) {
