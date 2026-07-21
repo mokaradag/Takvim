@@ -26,15 +26,15 @@ function dependency(predecessorId, type = 'FS', lagDays = 0) {
   return { predecessorId, type, lagDays };
 }
 
-function task(projectId, id, durationDays, deps = [], start = '2026-06-01') {
+function task(projectId, id, plannedDurationDays, deps = [], start = '2026-06-01') {
   return {
     id,
     projectId,
     task: id,
-    durationDays,
+    plannedDurationDays,
     deps,
-    baslangicTarihi: start,
-    bitisTarihi: start
+    plannedStart: start,
+    plannedFinish: start
   };
 }
 

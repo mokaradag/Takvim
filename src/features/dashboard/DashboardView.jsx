@@ -19,14 +19,14 @@ export function DashboardView({ onNavigate }) {
   const done = tasks.filter(t => t.status === 'done').length;
   const progress = tasks.filter(t => t.status === 'in_progress').length;
   const todo = tasks.filter(t => !t.status || t.status === 'todo').length;
-  const overdue = tasks.filter(t => t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0).length;
+  const overdue = tasks.filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0).length;
   const compRate = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
 
   // Task lists behind each summary metric (for hover cards)
   const doneTasks = tasks.filter(t => t.status === 'done');
   const progressTasks = tasks.filter(t => t.status === 'in_progress');
   const todoTasks = tasks.filter(t => !t.status || t.status === 'todo');
-  const overdueTasks = tasks.filter(t => t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0);
+  const overdueTasks = tasks.filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0);
 
   const byProject = useMemo1(() => {
     const map = {};
@@ -47,7 +47,7 @@ export function DashboardView({ onNavigate }) {
         map[s] = map[s] || { total: 0, done: 0, late: 0 };
         map[s].total++;
         if (t.status === 'done') map[s].done++;
-        if (t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0) map[s].late++;
+        if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) map[s].late++;
       });
     });
     return Object.entries(map)
@@ -61,7 +61,7 @@ export function DashboardView({ onNavigate }) {
     const labels = [];
     for (let i = 13; i >= 0; i--) {
       const d = addDays(today_, -i);
-      const c = tasks.filter(t => t.status === 'done' && parseDate(t.bitisTarihi) <= d).length;
+      const c = tasks.filter(t => t.status === 'done' && parseDate(t.plannedFinish) <= d).length;
       out.push(c);
       labels.push(i % 3 === 0 ? fmt(d, 'd') : '');
     }
@@ -69,8 +69,8 @@ export function DashboardView({ onNavigate }) {
   }, [tasks]);
 
   const upcoming = useMemo1(() => tasks
-    .filter(t => t.status !== 'done' && diffDays(t.hedefTarih, today_) >= 0)
-    .sort((a, b) => parseDate(a.hedefTarih) - parseDate(b.hedefTarih))
+    .filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) >= 0)
+    .sort((a, b) => parseDate(a.targetFinish) - parseDate(b.targetFinish))
     .slice(0, 5),
     [tasks]);
 
@@ -94,7 +94,7 @@ export function DashboardView({ onNavigate }) {
     // Project RAG (red/amber/green) health: based on % overdue
     const projHealth = {};
     tasks.forEach(t => {
-      const overdue = t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0;
+      const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
       projHealth[t.proje] = projHealth[t.proje] || { total: 0, done: 0, overdue: 0 };
       projHealth[t.proje].total++;
       if (t.status === 'done') projHealth[t.proje].done++;
@@ -117,12 +117,12 @@ export function DashboardView({ onNavigate }) {
   const weeklyDelta = useMemo1(() => {
     const thisWeekDone = tasks.filter(t => {
       if (t.status !== 'done') return false;
-      const e = parseDate(t.bitisTarihi);
+      const e = parseDate(t.plannedFinish);
       return diffDays(e, today_) >= -7 && diffDays(e, today_) <= 0;
     }).length;
     const lastWeekDone = tasks.filter(t => {
       if (t.status !== 'done') return false;
-      const e = parseDate(t.bitisTarihi);
+      const e = parseDate(t.plannedFinish);
       return diffDays(e, today_) >= -14 && diffDays(e, today_) < -7;
     }).length;
     return { thisWeekDone, lastWeekDone, delta: thisWeekDone - lastWeekDone };
@@ -254,7 +254,7 @@ export function DashboardView({ onNavigate }) {
                       <span className="rli-bar" style={{ background: projectColorVar(t.proje) }} />
                       <span className="rli-main">
                         <span className="rli-name">{t.task}</span>
-                        <span className="rli-meta">{t.proje} · {fmt(t.hedefTarih)}</span>
+                        <span className="rli-meta">{t.proje} · {fmt(t.targetFinish)}</span>
                       </span>
                       <StatusPill task={t} size={10} />
                     </button>
@@ -365,7 +365,7 @@ export function DashboardView({ onNavigate }) {
           <div className="col" style={{ gap: 6 }}>
             {upcoming.length === 0 ? <div className="empty">Yaklaşan teslim yok.</div> :
               upcoming.map(t => {
-                const days = diffDays(t.hedefTarih, today_);
+                const days = diffDays(t.targetFinish, today_);
                 const urgent = days <= 3;
                 return (
                   <button key={t.id} onClick={() => onOpenTask(t)}
@@ -570,7 +570,7 @@ function Stat({ icon, label, value, accent, trend, trendUp, trendDown, tip, item
           <span className="rli-bar" style={{ background: projectColorVar(t.proje) }} />
           <span className="rli-main">
             <span className="rli-name">{t.task}</span>
-            <span className="rli-meta">{t.proje} · {fmt(t.hedefTarih)}</span>
+            <span className="rli-meta">{t.proje} · {fmt(t.targetFinish)}</span>
           </span>
           <StatusPill task={t} size={10} />
         </button>

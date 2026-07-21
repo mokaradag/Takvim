@@ -1,6 +1,8 @@
 # Scheduling Calendar Semantics
 
-MERGEN Rota keeps calendar, dependency and CPM arithmetic in `src/scheduling` so scheduling calculations remain pure and independent of React, Next.js and the data adapter.
+MERGEN Rota keeps calendar, current-plan normalization, dependency and CPM arithmetic in `src/scheduling` so scheduling calculations remain pure and independent of React, Next.js and the data adapter.
+
+The professional stored/derived scheduling model is documented in `docs/SCHEDULING-DATA-MODEL.md`.
 
 ## Calendar model
 
@@ -50,28 +52,55 @@ The calendar layer exposes pure helpers for:
 diffWorkingDays(addWorkingDays(start, n, calendar), start, calendar) === n
 ```
 
-`countWorkingDays(start, end, calendar)` counts working dates inclusively and is used when CPM derives an activity duration from existing baseline dates.
+`countWorkingDays(start, end, calendar)` counts working dates inclusively. Current-plan normalization uses it to calculate `plannedDurationDays` from `plannedStart` and `plannedFinish` under the task's effective calendar. CPM can use the same current-plan dates as a duration fallback when an explicit canonical planned duration is not supplied.
 
-These contracts are covered by unit tests and are the arithmetic foundation used by the CPM layer.
+These contracts are covered by unit tests and are the arithmetic foundation used by the current-plan and CPM layers.
+
+## Duration semantics
+
+All scheduling durations are working-day values unless explicitly documented otherwise.
+
+- `Task.plannedDurationDays` is the normalized duration of the mutable current plan.
+- `Task.remainingDurationDays` is an independent explicit planning input and is not calculated from `progress`.
+- `CpmTaskResult.durationDays` is the working-day duration used by that particular CPM calculation.
+- `Dependency.lagDays` is a working-day lag/lead value.
+
+Canonical planned duration must not be calculated with ordinary calendar-day subtraction. Milestones have zero planned duration.
 
 ## Dependency lag and lead
 
-The existing canonical dependency field remains `lagDays`, but scheduling interprets it as working days:
+The canonical dependency field remains `lagDays`, but scheduling interprets it as working days:
 
 - positive `lagDays` = lag;
 - negative `lagDays` = lead.
 
 Use `applyDependencyLag()` instead of adding calendar days directly. The helper applies the selected scheduling calendar and skips non-working dates.
 
+## Professional schedule concepts
+
+The current scheduling model distinguishes:
+
+- current plan: `plannedStart`, `plannedFinish`, `plannedDurationDays`;
+- management target: `targetFinish`;
+- actuals: `actualStart`, `actualFinish`;
+- remaining planning input: `remainingDurationDays`;
+- project status cutoff: `Project.dataDate`;
+- immutable historical baseline snapshots;
+- derived CPM results.
+
+`targetFinish` is not a scheduling constraint. Actual dates are not inferred from status. Remaining duration is not inferred from percentage complete.
+
 ## Data and state boundary
 
-Scheduling calendars are part of the repository snapshot alongside projects, people, WBS and tasks. Projects carry a `calendarId`; tasks may optionally override it with their own `calendarId`.
+Scheduling calendars, projects, canonical tasks, baselines and task baseline snapshots are part of the repository snapshot. Projects carry `calendarId` and `dataDate`; tasks may optionally override the project calendar with their own `calendarId`.
 
-The mock adapter is only one provider of this data. A future API/database adapter should return the same calendar objects and stable IDs so feature-facing state hooks remain unchanged.
+The mock adapter is only one provider of this data. A future API/database adapter should return the same stable semantic shapes so feature-facing state hooks remain unchanged.
+
+Legacy schedule property names are normalized once at the data boundary and do not propagate into state, scheduling calculations or features.
 
 ## CPM engine
 
-The pure CPM implementation lives under `src/scheduling/cpm` and consumes the calendar contracts above. It provides:
+The pure CPM implementation lives under `src/scheduling/cpm` and consumes canonical current-plan data plus the calendar contracts above. It provides:
 
 - dependency graph validation and cycle detection;
 - FS, SS, FF and SF constraints;
@@ -83,7 +112,7 @@ The pure CPM implementation lives under `src/scheduling/cpm` and consumes the ca
 - one or multiple critical paths;
 - milestone and zero-duration activity handling.
 
-Detailed input, relationship and output semantics are documented in `docs/CPM.md`.
+The engine does not currently apply `actualStart`, `actualFinish`, `remainingDurationDays` or `Project.dataDate` to progress-aware rescheduling. Detailed input, relationship and output semantics are documented in `docs/CPM.md`.
 
 ## Application schedule projection
 
@@ -93,4 +122,4 @@ The projection calculates each project independently and then combines successfu
 
 Cross-project dependencies are currently reported as `CROSS_PROJECT_DEPENDENCY` and the affected project is excluded from CPM until a future portfolio-network model defines those semantics.
 
-CPM output remains derived data. Early/late dates, float and critical status are not written into canonical task objects. The Gantt continues to position its primary bars from stored task dates and overlays CPM information separately.
+CPM output remains derived data. Early/late dates, float and critical status are not written into canonical task objects. The Gantt continues to position its primary bars from the mutable current plan and overlays CPM information separately.

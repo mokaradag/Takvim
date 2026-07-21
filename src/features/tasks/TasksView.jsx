@@ -15,7 +15,7 @@ export function TasksView() {
   const people = usePeople();
   const { openTask: onOpenTask, updateTask: onUpdateTask, addTask: onAddTask, deleteTask: onDeleteTask } = useTaskActions();
   const [search, setSearch] = useState1('');
-  const [sort, setSort] = useState1({ key: 'baslangicTarihi', dir: 'asc' });
+  const [sort, setSort] = useState1({ key: 'plannedStart', dir: 'asc' });
   // per-column filters
   const [colFilter, setColFilter] = useState1({
     proje: [],
@@ -24,9 +24,9 @@ export function TasksView() {
     sorumlu: [],
     status: [],
     priority: [],
-    baslangicTarihi: null,
-    bitisTarihi: null,
-    hedefTarih: null,
+    plannedStart: null,
+    plannedFinish: null,
+    targetFinish: null,
     progress: null,
     plannedHours: null
   });
@@ -83,12 +83,12 @@ export function TasksView() {
     if (colFilter.priority && colFilter.priority.length) out = out.filter(t => colFilter.priority.includes(t.priority || 'medium'));
     if (colFilter.status.length) {
       out = out.filter(t => {
-        const overdue = t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0;
+        const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
         if (colFilter.status.includes('overdue') && overdue) return true;
         return colFilter.status.includes(t.status || 'todo');
       });
     }
-    ['baslangicTarihi', 'bitisTarihi', 'hedefTarih'].forEach(k => {
+    ['plannedStart', 'plannedFinish', 'targetFinish'].forEach(k => {
       const spec = colFilter[k];
       if (spec) out = out.filter(t => dateMatchesFilter(t[k], spec));
     });
@@ -113,7 +113,7 @@ export function TasksView() {
 
   const clearAll = () => {
     setSearch('');
-    setColFilter({ proje: [], task: '', keyword: [], sorumlu: [], status: [], priority: [], baslangicTarihi: null, bitisTarihi: null, hedefTarih: null, progress: null, plannedHours: null });
+    setColFilter({ proje: [], task: '', keyword: [], sorumlu: [], status: [], priority: [], plannedStart: null, plannedFinish: null, targetFinish: null, progress: null, plannedHours: null });
   };
   const hasAnyFilter = search || Object.values(colFilter).some(v => {
     if (Array.isArray(v)) return v.length > 0;
@@ -192,18 +192,18 @@ export function TasksView() {
                   filterType="number" numericMin={numStats.plannedHours.min} numericMax={numStats.plannedHours.max} numericUnit=" sa"
                 />
                 <FilterableTH label="Başlangıç" style={{ minWidth: 130 }}
-                  sortKey={sortDirFor('baslangicTarihi')} onSort={setSortFor('baslangicTarihi')}
-                  filter={colFilter.baslangicTarihi} onFilter={v => setCF('baslangicTarihi', v)}
+                  sortKey={sortDirFor('plannedStart')} onSort={setSortFor('plannedStart')}
+                  filter={colFilter.plannedStart} onFilter={v => setCF('plannedStart', v)}
                   filterType="date"
                 />
                 <FilterableTH label="Bitiş" style={{ minWidth: 130 }}
-                  sortKey={sortDirFor('bitisTarihi')} onSort={setSortFor('bitisTarihi')}
-                  filter={colFilter.bitisTarihi} onFilter={v => setCF('bitisTarihi', v)}
+                  sortKey={sortDirFor('plannedFinish')} onSort={setSortFor('plannedFinish')}
+                  filter={colFilter.plannedFinish} onFilter={v => setCF('plannedFinish', v)}
                   filterType="date"
                 />
                 <FilterableTH label="Hedef" style={{ minWidth: 130 }}
-                  sortKey={sortDirFor('hedefTarih')} onSort={setSortFor('hedefTarih')}
-                  filter={colFilter.hedefTarih} onFilter={v => setCF('hedefTarih', v)}
+                  sortKey={sortDirFor('targetFinish')} onSort={setSortFor('targetFinish')}
+                  filter={colFilter.targetFinish} onFilter={v => setCF('targetFinish', v)}
                   filterType="date"
                 />
                 <th style={{ width: 60 }} />
@@ -215,7 +215,7 @@ export function TasksView() {
               )}
               {filtered.map((t, idx) => {
                 const today_ = today();
-                const overdue = t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0;
+                const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
                 const prio = PRIORITIES[t.priority || 'medium'];
                 const prog = t.progress != null ? t.progress : (t.status === 'done' ? 100 : 0);
                 return (
@@ -246,9 +246,9 @@ export function TasksView() {
                       </div>
                     </td>
                     <td className="tabular" style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{t.plannedHours || 0} sa</td>
-                    <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.baslangicTarihi)}</td>
-                    <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.bitisTarihi)}</td>
-                    <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.hedefTarih)}</td>
+                    <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedStart)}</td>
+                    <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedFinish)}</td>
+                    <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{t.targetFinish ? fmt(t.targetFinish) : '—'}</td>
                     <td>
                       <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}>
                         <Icons.Trash size={13} />

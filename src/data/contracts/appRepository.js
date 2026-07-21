@@ -5,6 +5,8 @@
  * @property {import('../../domain/models').Person[]} people
  * @property {import('../../domain/models').WbsNode[]} wbs
  * @property {import('../../domain/models').Task[]} tasks
+ * @property {import('../../domain/models').Baseline[]} baselines
+ * @property {import('../../domain/models').TaskBaselineSnapshot[]} taskBaselineSnapshots
  */
 
 /**

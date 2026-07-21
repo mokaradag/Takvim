@@ -6,11 +6,12 @@ import { diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { Avatar, Kw, StatusIcon, statusColorVar } from '../../components/ui';
 import { InfoButton } from '../../components/ui-extras';
-import { usePeople } from '../../state/hooks';
+import { usePeople, useTaskPrimaryBaseline } from '../../state/hooks';
 
 /* ── Detail drawer ───────────────────────────────────── */
 export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const people = usePeople();
+  const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
   const [local, setLocal] = useState({ ...task });
 
   useEffect(() => { setLocal({ ...task }); }, [task]);
@@ -22,7 +23,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   };
 
   const today_ = today();
-  const overdue = local.status !== 'done' && diffDays(local.hedefTarih, today_) < 0;
+  const overdue = local.status !== 'done' && local.targetFinish && diffDays(local.targetFinish, today_) < 0;
   const color = projectColorVar(local.proje);
 
   return (
@@ -106,11 +107,34 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </div>
             </Section>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-              <DateField label="Başlangıç" value={local.baslangicTarihi} onChange={(v) => save({ baslangicTarihi: v })} />
-              <DateField label="Bitiş" value={local.bitisTarihi} onChange={(v) => save({ bitisTarihi: v })} />
-              <DateField label="Hedef" value={local.hedefTarih} onChange={(v) => save({ hedefTarih: v })} accent={overdue ? 'var(--status-overdue)' : null} />
-            </div>
+            <Section title="Güncel Plan">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                <DateField label="Planlanan Başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} />
+                <DateField label="Planlanan Bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} />
+                <DateField label="Hedef Bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} />
+              </div>
+              <div className="muted" style={{ fontSize: 11.5 }}>
+                Planlanan süre: <span className="tabular">{local.plannedDurationDays ?? '—'}</span> çalışma günü
+              </div>
+            </Section>
+
+            <Section title="Gerçekleşen & Kalan">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                <DateField label="Gerçekleşen Başlangıç" value={local.actualStart} onChange={(v) => save({ actualStart: v })} nullable />
+                <DateField label="Gerçekleşen Bitiş" value={local.actualFinish} onChange={(v) => save({ actualFinish: v })} nullable />
+                <NumberField label="Kalan Süre" value={local.remainingDurationDays} onChange={(v) => save({ remainingDurationDays: v })} suffix="gün" />
+              </div>
+            </Section>
+
+            {baselineSnapshot && (
+              <Section title={`Baz Plan · ${baseline?.name || 'Birincil Baz Plan'}`}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                  <ReadOnlyField label="Başlangıç" value={baselineSnapshot.plannedStart || '—'} />
+                  <ReadOnlyField label="Bitiş" value={baselineSnapshot.plannedFinish || '—'} />
+                  <ReadOnlyField label="Süre" value={baselineSnapshot.plannedDurationDays == null ? '—' : `${baselineSnapshot.plannedDurationDays} gün`} />
+                </div>
+              </Section>
+            )}
 
             <Section title="İlerleme">
               <div className="row" style={{ gap: 12 }}>
@@ -270,11 +294,45 @@ function RelEditor({ task, tasks, onChange }) {
     </div>
   );
 }
-function DateField({ label, value, onChange, accent }) {
+function DateField({ label, value, onChange, accent, nullable = false }) {
   return (
     <div className="col" style={{ gap: 6 }}>
       <div className="label">{label}</div>
-      <input type="date" className="input" value={value} onChange={(e) => onChange(e.target.value)} style={accent ? { borderColor: accent, color: accent } : null} />
+      <input
+        type="date"
+        className="input"
+        value={value || ''}
+        onChange={(e) => onChange(nullable && !e.target.value ? null : e.target.value)}
+        style={accent ? { borderColor: accent, color: accent } : null}
+      />
+    </div>
+  );
+}
+
+function NumberField({ label, value, onChange, suffix }) {
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      <div className="label">{label}</div>
+      <div className="row" style={{ gap: 6 }}>
+        <input
+          type="number"
+          min={0}
+          step={1}
+          className="input"
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value === '' ? null : Math.max(0, Number(e.target.value)))}
+        />
+        {suffix && <span className="muted" style={{ fontSize: 12 }}>{suffix}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ReadOnlyField({ label, value }) {
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      <div className="label">{label}</div>
+      <div className="input tabular" style={{ background: 'var(--bg-elev-2)', color: 'var(--text-muted)' }}>{value}</div>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 # CPM and Critical-Path Engine
 
-The CPM implementation lives under `src/scheduling/cpm` and is intentionally pure. It does not import React, Next.js, application state, the mock repository, or feature UI.
+The CPM implementation lives under `src/scheduling/cpm` and is intentionally pure. It does not import React, Next.js, application state, the mock repository, baseline data or feature UI.
+
+The distinction between stored scheduling data and calculated schedule results is defined in `docs/SCHEDULING-DATA-MODEL.md`.
 
 ## Public API
 
@@ -10,23 +12,37 @@ import { calculateCpm, buildDependencyGraph, CpmValidationError } from './src/sc
 
 `calculateCpm(tasks, options)` accepts:
 
-- `tasks`: activities with stable IDs and canonical dependencies;
+- `tasks`: activities with stable IDs, canonical current-plan fields and dependencies;
 - `projects`: project records used to resolve project calendars;
 - `calendars`: scheduling calendars;
 - `projectStart`: optional schedule anchor date;
 - `fallbackCalendar`: optional fallback calendar.
 
-If `projectStart` is omitted, the engine uses the earliest available task baseline start date.
+If `projectStart` is omitted, the engine uses the earliest available task `plannedStart` as the current-plan schedule anchor.
 
 ## Activity duration
 
 The engine determines working-day duration in this order:
 
-1. explicit numeric `task.durationDays`;
+1. explicit numeric `task.plannedDurationDays`;
 2. zero for `task.milestone === true`;
-3. inclusive working-day count between `baslangicTarihi` and `bitisTarihi` using the activity's effective calendar.
+3. inclusive working-day count between `plannedStart` and `plannedFinish` using the activity's effective calendar.
 
-An explicit `durationDays` value is useful for CPM scenarios that are independent from the current baseline dates. Existing application tasks can continue to derive their duration from baseline dates.
+Canonical application tasks normally arrive with `plannedDurationDays` normalized from their current-plan date range. The date fallback keeps the pure engine usable for focused scheduling scenarios while preserving the same canonical current-plan semantics.
+
+The CPM result field `durationDays` means the working-day duration used by that calculation. It is a derived result property and is not an alternative canonical Task duration field.
+
+## Inputs intentionally not used as constraints
+
+The current CPM engine remains a pure current-plan network calculation.
+
+- `targetFinish` is a management target, not an automatic CPM constraint.
+- `actualStart` and `actualFinish` do not currently drive rescheduling.
+- `remainingDurationDays` is not currently used for progress-aware CPM.
+- `Project.dataDate` is not currently used to status or reschedule the network.
+- baseline snapshots are historical comparison data, not CPM input dates.
+
+Progress updating, data-date scheduling and formal scheduling constraints are future engine work.
 
 ## Calendar resolution
 
@@ -113,6 +129,8 @@ tasks
 
 Dates are returned as local `YYYY-MM-DD` strings.
 
+The result is derived schedule state. It is not merged into the canonical Task object.
+
 ## Graph validation
 
 The dependency graph is validated before scheduling. `CpmValidationError` includes a stable `code` and optional `details`.
@@ -147,16 +165,20 @@ The state projection:
 
 Feature components consume the derived projection through state hooks. They do not call `calculateCpm()` directly and do not copy CPM mathematics into React.
 
-The Gantt integration keeps existing stored task bars as the primary visual schedule. CPM results are presented as derived overlays: critical task/relationship styling, optional early/late/float columns, critical-only filtering, project calculated finish information, CPM tooltips and validation warnings.
+The Gantt integration keeps `plannedStart` -> `plannedFinish` as the primary current-plan bars. CPM results are presented as derived overlays: critical task/relationship styling, optional early/late/float columns, critical-only filtering, project calculated finish information, CPM tooltips and validation warnings.
 
-Calculated CPM fields are not persisted or merged into canonical task objects. A future scheduling-data-model PR is expected to formalize baseline, current-plan, actual and calculated schedule semantics before calculated dates can become an editable canonical source.
+Calculated CPM fields are not persisted or merged into canonical task objects. Editing the current plan naturally recomputes the derived projection while leaving baseline snapshots and actual dates unchanged.
 
 ## Remaining engine scope
 
 The engine and current application projection still intentionally do not:
 
-- modify task baseline/stored dates automatically;
+- perform progress-aware or data-date-driven rescheduling;
+- use actual dates as scheduling drivers;
+- use management targets as hard constraints;
 - persist CPM results;
+- modify baseline snapshots;
+- model formal scheduling constraints;
 - model cross-project dependency networks;
 - model working hours or partial-day calendars;
 - resource-level activities.

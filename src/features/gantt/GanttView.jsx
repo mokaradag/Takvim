@@ -30,12 +30,12 @@ const GANTT_DEFAULT_COLS = {
   priority: false
 };
 const GANTT_COL_DEFS = [
-  { key: 'start', label: 'Başlangıç', width: 78, align: 'right', render: (t) => fmt(t.baslangicTarihi, 'dd MMM') },
+  { key: 'start', label: 'Başlangıç', width: 78, align: 'right', render: (t) => fmt(t.plannedStart, 'dd MMM') },
   { key: 'end', label: 'Bitiş', width: 78, align: 'right', render: (t, today_) => {
-      const overdue = t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0;
-      return <span style={{ color: overdue ? 'var(--status-overdue)' : 'inherit', fontWeight: overdue ? 600 : 500 }}>{fmt(t.bitisTarihi, 'dd MMM')}</span>;
+      const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
+      return <span style={{ color: overdue ? 'var(--status-overdue)' : 'inherit', fontWeight: overdue ? 600 : 500 }}>{fmt(t.plannedFinish, 'dd MMM')}</span>;
   } },
-  { key: 'hedef', label: 'Hedef', width: 78, align: 'right', render: (t) => fmt(t.hedefTarih, 'dd MMM') },
+  { key: 'hedef', label: 'Hedef', width: 78, align: 'right', render: (t) => t.targetFinish ? fmt(t.targetFinish, 'dd MMM') : '—' },
   { key: 'duration', label: 'Süre', width: 56, align: 'right', render: (t) => {
       const d = taskDurationDays(t);
       return <span className="tabular">{d}g</span>;
@@ -124,9 +124,9 @@ export function GanttView() {
     status: [],
     progress: null,
     plannedHours: null,
-    baslangicTarihi: null,
-    bitisTarihi: null,
-    hedefTarih: null
+    plannedStart: null,
+    plannedFinish: null,
+    targetFinish: null
   });
   const [sort, setSort] = useState2({ key: null, dir: 'asc' });
   const rightRef = useRef2(null);
@@ -157,12 +157,12 @@ export function GanttView() {
     if (colFilters.priority.length) out = out.filter(t => colFilters.priority.includes(t.priority || 'medium'));
     if (colFilters.status.length) {
       out = out.filter(t => {
-        const overdue = t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0;
+        const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
         if (colFilters.status.includes('overdue') && overdue) return true;
         return colFilters.status.includes(t.status || 'todo');
       });
     }
-    ['baslangicTarihi', 'bitisTarihi', 'hedefTarih'].forEach(k => {
+    ['plannedStart', 'plannedFinish', 'targetFinish'].forEach(k => {
       if (colFilters[k]) out = out.filter(t => dateMatchesFilter(t[k], colFilters[k]));
     });
     ['progress', 'plannedHours'].forEach(k => {
@@ -172,11 +172,11 @@ export function GanttView() {
     return out;
   }, [tasks, globalSearch, colFilters, today_, criticalOnly, schedule]);
 
-  const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedHours || colFilters.baslangicTarihi || colFilters.bitisTarihi || colFilters.hedefTarih);
+  const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedHours || colFilters.plannedStart || colFilters.plannedFinish || colFilters.targetFinish);
   const clearAllFilters = () => {
     setCriticalOnly(false);
     setGlobalSearch('');
-    setColFilters({ task: '', proje: [], sorumlu: [], priority: [], status: [], progress: null, plannedHours: null, baslangicTarihi: null, bitisTarihi: null, hedefTarih: null });
+    setColFilters({ task: '', proje: [], sorumlu: [], priority: [], status: [], progress: null, plannedHours: null, plannedStart: null, plannedFinish: null, targetFinish: null });
   };
 
   // Setters for per-column filters
@@ -225,7 +225,7 @@ export function GanttView() {
           if (va > vb) return sort.dir === 'asc' ? 1 : -1;
           return 0;
         }
-        return parseDate(a.baslangicTarihi) - parseDate(b.baslangicTarihi);
+        return parseDate(a.plannedStart) - parseDate(b.plannedStart);
       });
     });
     return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0], 'tr'));
@@ -363,10 +363,10 @@ export function GanttView() {
         const fromY = rowTops.tops[j] + 19;
         const toY = rowTops.tops[i] + 19;
 
-        const predStart = xForDate(parseDate(depTask.baslangicTarihi));
-        const predEnd = xForDate(parseDate(depTask.bitisTarihi)) + zoom;
-        const succStart = xForDate(parseDate(r.task.baslangicTarihi));
-        const succEnd = xForDate(parseDate(r.task.bitisTarihi)) + zoom;
+        const predStart = xForDate(parseDate(depTask.plannedStart));
+        const predEnd = xForDate(parseDate(depTask.plannedFinish)) + zoom;
+        const succStart = xForDate(parseDate(r.task.plannedStart));
+        const succEnd = xForDate(parseDate(r.task.plannedFinish)) + zoom;
 
         let fromX, toX, fromSide, toSide;
         if (type === 'FS') { fromX = predEnd; toX = succStart; fromSide = 'R'; toSide = 'L'; }
@@ -543,12 +543,12 @@ export function GanttView() {
               let filterOptions = null;
               let filterValue = null;
               let onFilter = null;
-              let onSort = sortFor(c.key === 'start' ? 'baslangicTarihi' : c.key === 'end' ? 'bitisTarihi' : c.key === 'hedef' ? 'hedefTarih' : c.key);
-              let sortKey = sortDirFor(c.key === 'start' ? 'baslangicTarihi' : c.key === 'end' ? 'bitisTarihi' : c.key === 'hedef' ? 'hedefTarih' : c.key);
+              let onSort = sortFor(c.key === 'start' ? 'plannedStart' : c.key === 'end' ? 'plannedFinish' : c.key === 'hedef' ? 'targetFinish' : c.key);
+              let sortKey = sortDirFor(c.key === 'start' ? 'plannedStart' : c.key === 'end' ? 'plannedFinish' : c.key === 'hedef' ? 'targetFinish' : c.key);
               let numMin = null, numMax = null, numUnit = '';
-              if (c.key === 'start') { filterType = 'date'; filterValue = colFilters.baslangicTarihi; onFilter = (v) => setCF('baslangicTarihi', v); }
-              else if (c.key === 'end') { filterType = 'date'; filterValue = colFilters.bitisTarihi; onFilter = (v) => setCF('bitisTarihi', v); }
-              else if (c.key === 'hedef') { filterType = 'date'; filterValue = colFilters.hedefTarih; onFilter = (v) => setCF('hedefTarih', v); }
+              if (c.key === 'start') { filterType = 'date'; filterValue = colFilters.plannedStart; onFilter = (v) => setCF('plannedStart', v); }
+              else if (c.key === 'end') { filterType = 'date'; filterValue = colFilters.plannedFinish; onFilter = (v) => setCF('plannedFinish', v); }
+              else if (c.key === 'hedef') { filterType = 'date'; filterValue = colFilters.targetFinish; onFilter = (v) => setCF('targetFinish', v); }
               else if (c.key === 'progress') { filterType = 'number'; filterValue = colFilters.progress; onFilter = (v) => setCF('progress', v); numMin = 0; numMax = 100; numUnit = '%'; }
               else if (c.key === 'hours') { filterType = 'number'; filterValue = colFilters.plannedHours; onFilter = (v) => setCF('plannedHours', v); numMin = 0; numMax = 200; numUnit = ' sa'; }
               else if (c.key === 'status') {
@@ -765,7 +765,7 @@ export function GanttView() {
               const taskSchedule = schedule.tasks[t.id];
               const isCritical = !!taskSchedule?.isCritical;
               if (t.milestone) {
-                const x = xForDate(parseDate(t.baslangicTarihi)) + zoom / 2 - 8;
+                const x = xForDate(parseDate(t.plannedStart)) + zoom / 2 - 8;
                 const status = getStatus(t);
                 return (
                   <React.Fragment key={t.id}>
@@ -776,7 +776,7 @@ export function GanttView() {
                       content={
                         <>
                           <div className="rt-row"><span className="rt-label">Proje</span><span className="rt-val">{t.proje}</span></div>
-                          <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(t.hedefTarih, 'dd MMM yyyy')}</span></div>
+                          <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{t.targetFinish ? fmt(t.targetFinish, 'dd MMM yyyy') : '—'}</span></div>
                           <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
                           <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
                           <CpmTooltipRows schedule={taskSchedule} />
@@ -794,12 +794,12 @@ export function GanttView() {
                   </React.Fragment>
                 );
               }
-              const x = xForDate(parseDate(t.baslangicTarihi));
-              const w = (diffDays(t.bitisTarihi, t.baslangicTarihi) + 1) * zoom;
+              const x = xForDate(parseDate(t.plannedStart));
+              const w = (diffDays(t.plannedFinish, t.plannedStart) + 1) * zoom;
               const color = projectColorVar(t.proje);
               const done = t.status === 'done';
               const pct = t.progress != null ? t.progress : (done ? 100 : 0);
-              const overdue = t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0;
+              const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
               const status = getStatus(t);
               return (
                 <React.Fragment key={t.id}>
@@ -810,9 +810,9 @@ export function GanttView() {
                     content={
                       <>
                         <div className="rt-row"><span className="rt-label">Proje</span><span className="rt-val">{t.proje}</span></div>
-                        <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">{fmt(t.baslangicTarihi, 'dd MMM yyyy')}</span></div>
-                        <div className="rt-row"><span className="rt-label">Bitiş</span><span className="rt-val">{fmt(t.bitisTarihi, 'dd MMM yyyy')}</span></div>
-                        <div className="rt-row"><span className="rt-label">Hedef</span><span className="rt-val" style={overdue ? { color: 'var(--status-overdue)' } : null}>{fmt(t.hedefTarih, 'dd MMM yyyy')}</span></div>
+                        <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">{fmt(t.plannedStart, 'dd MMM yyyy')}</span></div>
+                        <div className="rt-row"><span className="rt-label">Bitiş</span><span className="rt-val">{fmt(t.plannedFinish, 'dd MMM yyyy')}</span></div>
+                        <div className="rt-row"><span className="rt-label">Hedef</span><span className="rt-val" style={overdue ? { color: 'var(--status-overdue)' } : null}>{t.targetFinish ? fmt(t.targetFinish, 'dd MMM yyyy') : '—'}</span></div>
                         <div className="rt-sep" />
                         <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
                         <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{pct}%</span></div>
