@@ -2,7 +2,8 @@
 import { createContext, useCallback, useContext, useMemo, useReducer } from 'react';
 import { appRepository } from '../data';
 import { normalizeTaskReferences } from '../domain/validation';
-import { addDays, fmtISO, today } from '../scheduling/dates';
+import { fmtISO, today } from '../scheduling/dates';
+import { addWorkingDays, moveToWorkingDay, resolveProjectCalendar } from '../scheduling/calendars';
 import { normalizeDependency } from '../scheduling/dependencies';
 import { selectTaskStats } from '../scheduling/metrics';
 
@@ -63,7 +64,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
   const addTask = useCallback(() => {
     const project = state.projects[0];
     const person = state.people[0];
-    const start = today();
+    const calendar = resolveProjectCalendar(project, state.calendars);
+    const start = moveToWorkingDay(today(), calendar, 1);
     const task = normalizeTask({
       id: `n-${Date.now()}`,
       projectId: project?.id || null,
@@ -74,8 +76,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
       sorumlu: person ? [person.name] : [],
       status: 'todo',
       baslangicTarihi: fmtISO(start),
-      bitisTarihi: fmtISO(addDays(start, 5)),
-      hedefTarih: fmtISO(addDays(start, 7)),
+      bitisTarihi: fmtISO(addWorkingDays(start, 5, calendar)),
+      hedefTarih: fmtISO(addWorkingDays(start, 7, calendar)),
       color: project?.color || 'blue',
       deps: []
     }, state);
