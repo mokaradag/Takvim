@@ -27,6 +27,11 @@ export const DEFAULT_CALENDAR = Object.freeze({
   holidays: TURKEY_HOLIDAYS_2026
 });
 
+function localDate(value) {
+  const date = parseDate(value);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
 export function normalizeCalendar(calendar = DEFAULT_CALENDAR) {
   return {
     id: calendar.id || DEFAULT_CALENDAR.id,
@@ -48,35 +53,35 @@ export function resolveProjectCalendar(project, calendars, fallback = DEFAULT_CA
 export function resolveTaskCalendar(task, projects, calendars, fallback = DEFAULT_CALENDAR) {
   const taskCalendar = calendarById(calendars, task?.calendarId);
   if (taskCalendar) return taskCalendar;
-  const project = (projects || []).find((item) => item.id === task?.projectId) || null;
+  const project = (projects || []).find((item) => item.id === task?.projectId || item.name === task?.proje) || null;
   return resolveProjectCalendar(project, calendars, fallback);
 }
 
 export function holidayFor(value, calendar = DEFAULT_CALENDAR) {
-  const key = fmtISO(value);
+  const key = fmtISO(localDate(value));
   return (calendar?.holidays || []).find((holiday) => holiday.date === key) || null;
 }
 
 export function isWorkingDay(value, calendar = DEFAULT_CALENDAR) {
-  const date = parseDate(value);
+  const date = localDate(value);
   const workingDays = calendar?.workingDays || DEFAULT_WORKING_DAYS;
   return workingDays.includes(date.getDay()) && !holidayFor(date, calendar);
 }
 
 export function moveToWorkingDay(value, calendar = DEFAULT_CALENDAR, direction = 1) {
   const step = direction < 0 ? -1 : 1;
-  let current = parseDate(value);
+  let current = localDate(value);
   while (!isWorkingDay(current, calendar)) current = addDays(current, step);
   return current;
 }
 
 export function addWorkingDays(value, amount, calendar = DEFAULT_CALENDAR) {
   const numericAmount = Number.isFinite(amount) ? Math.trunc(amount) : 0;
-  if (numericAmount === 0) return parseDate(value);
+  if (numericAmount === 0) return localDate(value);
 
   const direction = numericAmount < 0 ? -1 : 1;
   let remaining = Math.abs(numericAmount);
-  let current = parseDate(value);
+  let current = localDate(value);
 
   while (remaining > 0) {
     current = addDays(current, direction);
@@ -87,8 +92,8 @@ export function addWorkingDays(value, amount, calendar = DEFAULT_CALENDAR) {
 }
 
 export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
-  const target = parseDate(a);
-  let current = parseDate(b);
+  const target = localDate(a);
+  let current = localDate(b);
   const targetTime = target.getTime();
   const currentTime = current.getTime();
   if (targetTime === currentTime) return 0;
