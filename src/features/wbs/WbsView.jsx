@@ -3,11 +3,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../../components/icons';
 import {
   buildWbsTree,
+  flattenWbsTree,
+  formatWbsPath,
+  selectWbsDescendantIds,
   selectWbsTaskRollup
 } from '../../domain/selectors/index.js';
 import { validateWbsStructure } from '../../domain/validation/index.js';
 import {
   useProjectSchedule,
+  useTaskActions,
   useWbsActions,
   useWorkspace,
   useWorkspaceTasks,
@@ -33,13 +37,23 @@ export function WbsView() {
   const tasks = useWorkspaceTasks();
   const wbs = useWorkspaceWbs();
   const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
-  const { addWbsChild, renameWbs, deleteWbs, clearWbsError, error } = useWbsActions();
+  const { moveTasksToWbs } = useTaskActions();
+  const { addWbsChild, renameWbs, reparentWbs, deleteWbs, clearWbsError, error } = useWbsActions();
   const tree = useMemo(() => buildWbsTree(wbs), [wbs]);
+  const orderedRows = useMemo(() => flattenWbsTree(tree), [tree]);
   const [expanded, setExpanded] = useState(() => new Set());
+  const [moveSourceWbsId, setMoveSourceWbsId] = useState('');
+  const [moveTargetWbsId, setMoveTargetWbsId] = useState('');
+  const [selectedTaskIds, setSelectedTaskIds] = useState(() => new Set());
+  const [reparenting, setReparenting] = useState(null);
   const validationIssues = useMemo(() => validateWbsStructure(wbs), [wbs]);
 
   useEffect(() => {
     setExpanded(new Set(wbs.map((node) => node.id)));
+    setMoveSourceWbsId('');
+    setMoveTargetWbsId('');
+    setSelectedTaskIds(new Set());
+    setReparenting(null);
   }, [workspace.selectedProjectId, wbs]);
 
   if (workspace.mode === 'portfolio') {
@@ -67,6 +81,8 @@ export function WbsView() {
 
   const rows = visibleRows(tree, expanded);
   const scheduleTasks = projectSchedule?.tasks || {};
+  const sourceTasks = moveSourceWbsId ? tasks.filter((task) => task.wbsId === moveSourceWbsId) : [];
+  const selectedCount = selectedTaskIds.size;
 
   const toggle = (id) => {
     setExpanded((current) => {
@@ -89,6 +105,40 @@ export function WbsView() {
 
   const onDelete = (node) => {
     if (confirm(`${node.code} ${node.name} silinsin mi? Yalnızca boş WBS düğümleri silinebilir.`)) deleteWbs(node.id);
+  };
+
+  const onSourceChange = (wbsId) => {
+    setMoveSourceWbsId(wbsId);
+    setMoveTargetWbsId('');
+    setSelectedTaskIds(new Set());
+  };
+
+  const toggleTaskSelection = (taskId) => {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
+  const moveSelectedTasks = () => {
+    if (!selectedCount || !moveTargetWbsId) return;
+    moveTasksToWbs([...selectedTaskIds], moveTargetWbsId);
+    setSelectedTaskIds(new Set());
+  };
+
+  const startReparent = (node) => {
+    const blocked = new Set([node.id, ...selectWbsDescendantIds(wbs, node.id)]);
+    const candidates = orderedRows.map((row) => row.node).filter((candidate) => !blocked.has(candidate.id));
+    const preferred = candidates.find((candidate) => candidate.id !== node.parentId) || candidates[0] || null;
+    setReparenting({ nodeId: node.id, parentId: preferred?.id || '' });
+  };
+
+  const applyReparent = () => {
+    if (!reparenting?.nodeId || !reparenting?.parentId) return;
+    reparentWbs(reparenting.nodeId, reparenting.parentId);
+    setReparenting(null);
   };
 
   return (
@@ -123,18 +173,77 @@ export function WbsView() {
         </div>
       )}
 
+      {wbs.length > 0 && (
+        <div className="card">
+          <div className="col" style={{ gap: 12 }}>
+            <div className="col" style={{ gap: 4 }}>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>Görevleri WBS düğümleri arasında taşı</div>
+              <div className="muted" style={{ fontSize: 12.5 }}>
+                Kaynak WBS'deki doğrudan görevlerden birini veya birden çoğunu seçin. Taşıma yalnızca bu proje içindeki geçerli bir hedef WBS'ye uygulanır.
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(220px, 1fr)', gap: 12 }}>
+              <label className="col" style={{ gap: 6 }}>
+                <span className="label">Kaynak WBS</span>
+                <select className="input" value={moveSourceWbsId} onChange={(event) => onSourceChange(event.target.value)}>
+                  <option value="">Kaynak seçin...</option>
+                  {orderedRows.map(({ node, depth }) => (
+                    <option key={node.id} value={node.id}>{`${'— '.repeat(depth)}${formatWbsPath(wbs, node.id)}`}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="col" style={{ gap: 6 }}>
+                <span className="label">Hedef WBS</span>
+                <select className="input" value={moveTargetWbsId} onChange={(event) => setMoveTargetWbsId(event.target.value)} disabled={!moveSourceWbsId}>
+                  <option value="">Hedef seçin...</option>
+                  {orderedRows.filter(({ node }) => node.id !== moveSourceWbsId).map(({ node, depth }) => (
+                    <option key={node.id} value={node.id}>{`${'— '.repeat(depth)}${formatWbsPath(wbs, node.id)}`}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {moveSourceWbsId && (
+              <div className="col" style={{ gap: 8 }}>
+                <div className="row" style={{ justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                  <span className="muted" style={{ fontSize: 12.5 }}>{sourceTasks.length} doğrudan görev · {selectedCount} seçili</span>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button className="btn" disabled={!sourceTasks.length} onClick={() => setSelectedTaskIds(new Set(sourceTasks.map((task) => task.id)))}>Tümünü seç</button>
+                    <button className="btn" disabled={!selectedCount} onClick={() => setSelectedTaskIds(new Set())}>Temizle</button>
+                    <button className="btn primary" disabled={!selectedCount || !moveTargetWbsId} onClick={moveSelectedTasks}>Seçilenleri taşı</button>
+                  </div>
+                </div>
+                <div className="col" style={{ gap: 4, maxHeight: 190, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 8 }}>
+                  {!sourceTasks.length && <div className="muted" style={{ padding: 8, fontSize: 12 }}>Bu WBS düğümüne doğrudan atanmış görev yok.</div>}
+                  {sourceTasks.map((task) => (
+                    <label key={task.id} className="row" style={{ gap: 8, padding: '7px 8px', borderRadius: 'var(--r-sm)', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={selectedTaskIds.has(task.id)} onChange={() => toggleTaskSelection(task.id)} />
+                      {task.milestone && <Icons.Diamond size={10} />}
+                      <span style={{ fontSize: 12.5 }}>{task.task}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {!wbs.length ? (
         <div className="card muted">Bu proje için WBS tanımlı değil.</div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) 110px 110px 190px 160px', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) 100px 100px 190px 260px', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             <span>WBS</span><span>Aktivite</span><span>İlerleme</span><span>Plan Aralığı</span><span>İşlemler</span>
           </div>
           {rows.map(({ node, depth }) => {
             const rollup = selectWbsTaskRollup(wbs, tasks, node.id, scheduleTasks);
             const hasChildren = (node.children || []).length > 0;
+            const isReparenting = reparenting?.nodeId === node.id;
+            const blockedTargets = new Set([node.id, ...selectWbsDescendantIds(wbs, node.id)]);
+            const parentCandidates = orderedRows.filter(({ node: candidate }) => !blockedTargets.has(candidate.id));
             return (
-              <div key={node.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) 110px 110px 190px 160px', alignItems: 'center', minHeight: 54, padding: '8px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div key={node.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) 100px 100px 190px 260px', alignItems: 'center', minHeight: 54, padding: '8px 14px', borderBottom: '1px solid var(--border)' }}>
                 <div className="row" style={{ gap: 8, minWidth: 0, paddingLeft: depth * 22 }}>
                   <button className="icon-btn" style={{ width: 24, height: 24, visibility: hasChildren ? 'visible' : 'hidden' }} onClick={() => toggle(node.id)}>
                     {expanded.has(node.id) ? <Icons.ChevronDown size={12} /> : <Icons.ChevronRight size={12} />}
@@ -159,9 +268,23 @@ export function WbsView() {
                   {rollup.criticalTaskCount > 0 && <div style={{ color: 'var(--status-overdue)', marginTop: 2 }}>{rollup.criticalTaskCount} kritik</div>}
                 </div>
                 <div className="row" style={{ gap: 5, flexWrap: 'wrap' }}>
-                  <button className="btn" onClick={() => onAddChild(node)}>Alt ekle</button>
-                  <button className="btn" onClick={() => onRename(node)}>Ad</button>
-                  <button className="btn" onClick={() => onDelete(node)}>Sil</button>
+                  {isReparenting ? (
+                    <>
+                      <select className="input" style={{ minWidth: 145, maxWidth: 175 }} value={reparenting.parentId} onChange={(event) => setReparenting({ ...reparenting, parentId: event.target.value })}>
+                        <option value="">Üst WBS seçin...</option>
+                        {parentCandidates.map(({ node: candidate }) => <option key={candidate.id} value={candidate.id}>{candidate.code} {candidate.name}</option>)}
+                      </select>
+                      <button className="btn" disabled={!reparenting.parentId || reparenting.parentId === node.parentId} onClick={applyReparent}>Uygula</button>
+                      <button className="btn" onClick={() => setReparenting(null)}>Vazgeç</button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="btn" onClick={() => onAddChild(node)}>Alt ekle</button>
+                      <button className="btn" onClick={() => onRename(node)}>Ad</button>
+                      {node.parentId != null && <button className="btn" onClick={() => startReparent(node)}>Taşı</button>}
+                      <button className="btn" onClick={() => onDelete(node)}>Sil</button>
+                    </>
+                  )}
                 </div>
               </div>
             );
