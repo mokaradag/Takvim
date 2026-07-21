@@ -2,7 +2,7 @@
 import { useState as useState2, useMemo as useMemo2, useEffect as useEffect2, useRef as useRef2 } from 'react';
 import { Icons } from '../../components/icons';
 import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, addDays, startOfMonth, endOfMonth, startOfWeek, endOfWeek, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
-import { HOLIDAYS, holidayFor } from '../../scheduling/calendars';
+import { DEFAULT_CALENDAR, holidayFor } from '../../scheduling/calendars';
 import { projectColorVar } from '../../lib/colors';
 import { AvatarStack, Kw, StatusPill } from '../../components/ui';
 import { Tooltip, InfoButton } from '../../components/ui-extras';
@@ -95,9 +95,10 @@ export function CalendarView({ t, setTweak }) {
           </div>
           <span className="muted tabular" style={{ fontSize: 12.5 }}>
             <Icons.Gift size={11} style={{ verticalAlign: 'middle', marginRight: 4, color: 'var(--status-overdue)' }} />
-            {HOLIDAYS.filter(h => {
-              const [m] = h.date.split('-');
-              return parseInt(m) === month.getMonth() + 1;
+            {DEFAULT_CALENDAR.holidays.filter((holiday) => {
+              const holidayDate = parseDate(holiday.date);
+              return holidayDate.getFullYear() === month.getFullYear()
+                && holidayDate.getMonth() === month.getMonth();
             }).length} resmi tatil
           </span>
           <button className="btn sm" onClick={goToday}>Bugün</button>
