@@ -98,7 +98,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                   onChange={(e) => { if (e.target.value && !local.sorumlu.includes(e.target.value)) save({ sorumlu: [...local.sorumlu, e.target.value] }); }}
                 >
                   <option value="">+ Ekle</option>
-                  {PEOPLE.filter((p) => !local.sorumlu.includes(p.name))
+                  {people.filter((p) => !local.sorumlu.includes(p.name))
                     .slice()
                     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
                     .map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
