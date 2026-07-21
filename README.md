@@ -22,7 +22,7 @@ npm run dev
 
 ### Test kapsamı
 
-Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. İlk kapsam; domain selector ve ilişki normalizasyonu ile tarih, proje takvimi, çalışma günü, bağımlılık ve Gantt zamanlama hesaplarının temel davranışlarını doğrular.
+Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. Kapsam; domain selector ve ilişki normalizasyonu, tarih ve çalışma günü aritmetiği, proje takvimleri, bağımlılık ilişkileri, Gantt zamanlama yardımcıları ve saf CPM/critical-path hesaplarını doğrular.
 
 ## On-prem / internet erişimi olmayan ortam
 
@@ -56,7 +56,7 @@ npx next telemetry disable
 ## Yapı
 
 - `src/domain` — Project, Task/Activity, Dependency, Person, WBS ve scheduling calendar iş kavramları
-- `src/scheduling` — tarih, proje takvimi, çalışma günü, bağımlılık ve Gantt zamanlama hesapları
+- `src/scheduling` — tarih, proje takvimi, çalışma günü, bağımlılık, Gantt yardımcıları ve saf CPM/critical-path hesapları
 - `src/data` — veri erişim sözleşmesi ve mevcut mock/in-memory adapter
 - `src/state` — uygulama düzeyi state, task işlemleri ve odaklı hook'lar
 - `src/features` — Özet, Görevler, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
@@ -64,8 +64,8 @@ npx next telemetry disable
 - `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
 - `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
 
-Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md` dosyasına bakın.
+Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki ve çıktı sözleşmeleri için `docs/CPM.md` dosyasına bakın.
 
 ## Sonraki adım
 
-Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli. Scheduling tarafında bir sonraki adım, `docs/SCHEDULING.md` sözleşmelerini kullanan saf CPM/critical-path motorudur.
+Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli. Scheduling tarafındaki sıradaki adım, saf CPM sonuçlarını state/feature sınırından tüketerek kritik yol ve float bilgilerini Gantt görünümüne taşımaktır; CPM hesapları React bileşenlerine kopyalanmamalıdır.
