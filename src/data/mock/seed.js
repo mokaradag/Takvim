@@ -1,14 +1,15 @@
 import { normalizeProjectReferences, normalizeTaskReferences } from '../../domain/validation';
 import { normalizeDependency } from '../../scheduling/dependencies';
 import { addDays, fmtISO, today } from '../../scheduling/dates';
+import { CALENDARS } from './calendars';
 
 const RAW_PROJECTS = [
-  { id: 'p-web', name: 'Web Sitesi Yenileme', color: 'blue', lead: 'Ahmet Yılmaz' },
-  { id: 'p-mobile', name: 'Mobil Uygulama', color: 'purple', lead: 'Mehmet Demir' },
-  { id: 'p-social', name: 'Sosyal Medya', color: 'rose', lead: 'Ayşe Kaya' },
-  { id: 'p-db', name: 'Veritabanı Göçü', color: 'amber', lead: 'Can Özkan' },
-  { id: 'p-infra', name: 'Altyapı', color: 'cyan', lead: 'Can Özkan' },
-  { id: 'p-brand', name: 'Marka Kimliği', color: 'emerald', lead: 'Elif Yıldız' }
+  { id: 'p-web', name: 'Web Sitesi Yenileme', color: 'blue', lead: 'Ahmet Yılmaz', calendarId: 'cal-tr-standard-2026' },
+  { id: 'p-mobile', name: 'Mobil Uygulama', color: 'purple', lead: 'Mehmet Demir', calendarId: 'cal-tr-standard-2026' },
+  { id: 'p-social', name: 'Sosyal Medya', color: 'rose', lead: 'Ayşe Kaya', calendarId: 'cal-tr-standard-2026' },
+  { id: 'p-db', name: 'Veritabanı Göçü', color: 'amber', lead: 'Can Özkan', calendarId: 'cal-tr-standard-2026' },
+  { id: 'p-infra', name: 'Altyapı', color: 'cyan', lead: 'Can Özkan', calendarId: 'cal-tr-operations-2026' },
+  { id: 'p-brand', name: 'Marka Kimliği', color: 'emerald', lead: 'Elif Yıldız', calendarId: 'cal-tr-standard-2026' }
 ];
 
 const RAW_PEOPLE = [
@@ -63,6 +64,7 @@ const RAW_TASKS = [
   { id: 't19', proje: 'Sosyal Medya', task: 'Q1 kampanya raporunun yöneticilere sunulması', keyword: 'Rapor', sorumlu: ['Zeynep Aydın'], status: 'in_progress', priority: 'high', baslangicTarihi: rel(-14), bitisTarihi: rel(-2), hedefTarih: rel(-3), color: 'rose', progress: 90, plannedHours: 24, actualHours: 26, budget: 12000, spent: 13000 }
 ];
 
+export { CALENDARS };
 export const PEOPLE = RAW_PEOPLE.map((person) => ({ ...person }));
 export const PROJECTS = RAW_PROJECTS.map((project) => normalizeProjectReferences(project, PEOPLE));
 export const WBS = PROJECTS.map((project, index) => ({
