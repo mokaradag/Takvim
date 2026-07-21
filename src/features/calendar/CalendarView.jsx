@@ -29,8 +29,8 @@ export function CalendarView({ t, setTweak }) {
   const eventsByDay = useMemo2(() => {
     const map = {};
     tasks.forEach(t => {
-      const start = parseDate(t.baslangicTarihi);
-      const end = parseDate(t.bitisTarihi);
+      const start = parseDate(t.plannedStart);
+      const end = parseDate(t.plannedFinish);
       eachDay(start, end).forEach(d => {
         const k = fmtISO(d);
         map[k] = map[k] || [];
@@ -171,7 +171,7 @@ export function CalendarView({ t, setTweak }) {
                           <div className="rt-row"><span className="rt-label">Proje</span><span className="rt-val">{t.proje}</span></div>
                           <div className="rt-row"><span className="rt-label">Etiket</span><span className="rt-val">{t.keyword}</span></div>
                           <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
-                          <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(t.baslangicTarihi)} – {fmt(t.bitisTarihi)}</span></div>
+                          <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(t.plannedStart)} – {fmt(t.plannedFinish)}</span></div>
                           <div className="rt-sep" />
                           <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val"><StatusPill task={t} size={10.5} /></span></div>
                         </>
@@ -272,7 +272,7 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
                     </div>
                     <div className="col" style={{ alignItems: 'flex-end', gap: 4 }}>
                       <AvatarStack names={t.sorumlu} max={2} size="sm" />
-                      <span className="muted tabular" style={{ fontSize: 10.5 }}>{fmt(t.baslangicTarihi)} → {fmt(t.bitisTarihi)}</span>
+                      <span className="muted tabular" style={{ fontSize: 10.5 }}>{fmt(t.plannedStart)} → {fmt(t.plannedFinish)}</span>
                     </div>
                   </button>
                 );

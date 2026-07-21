@@ -19,7 +19,7 @@ export function TeamView() {
       const mine = tasks.filter(t => t.sorumlu.includes(p.name));
       const done = mine.filter(t => t.status === 'done').length;
       const active = mine.filter(t => t.status === 'in_progress').length;
-      const late = mine.filter(t => t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0).length;
+      const late = mine.filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0).length;
       return { person: p, total: mine.length, done, active, late, tasks: mine };
     });
   }, [tasks, people]);

@@ -31,12 +31,12 @@ const holidayCalendar = normalizeCalendar({
 const projects = [{ id: 'p1', name: 'Project', calendarId: standardCalendar.id }];
 const calendars = [standardCalendar, sixDayCalendar, holidayCalendar];
 
-function activity(id, durationDays, deps = [], extra = {}) {
+function activity(id, plannedDurationDays, deps = [], extra = {}) {
   return {
     id,
     projectId: 'p1',
     task: id,
-    durationDays,
+    plannedDurationDays,
     deps,
     ...extra
   };
@@ -170,15 +170,15 @@ test('task-level calendar overrides affect successor scheduling', () => {
   assert.equal(result.projectFinish, '2026-06-06');
 });
 
-test('duration can be derived from baseline working dates and milestones stay zero-duration', () => {
+test('duration can be derived from current-plan working dates and milestones stay zero-duration', () => {
   const result = calculateCpm([
     {
       id: 'A', projectId: 'p1', task: 'A', deps: [],
-      baslangicTarihi: '2026-06-01', bitisTarihi: '2026-06-05'
+      plannedStart: '2026-06-01', plannedFinish: '2026-06-05'
     },
     {
       id: 'M', projectId: 'p1', task: 'M', milestone: true,
-      deps: [dep('A')], baslangicTarihi: '2026-06-08', bitisTarihi: '2026-06-08'
+      deps: [dep('A')], plannedStart: '2026-06-08', plannedFinish: '2026-06-08'
     }
   ], {
     projects,
@@ -214,11 +214,11 @@ test('graph validation rejects missing predecessors, self-dependencies, duplicat
   );
 });
 
-test('invalid baseline dates are rejected when durationDays is not supplied', () => {
+test('invalid current-plan dates are rejected when plannedDurationDays is not supplied', () => {
   assert.throws(
     () => calculateCpm([{
       id: 'A', projectId: 'p1', task: 'A', deps: [],
-      baslangicTarihi: '2026-06-05', bitisTarihi: '2026-06-01'
+      plannedStart: '2026-06-05', plannedFinish: '2026-06-01'
     }], {
       projects,
       calendars,

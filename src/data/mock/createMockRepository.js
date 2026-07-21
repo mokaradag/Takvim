@@ -1,4 +1,12 @@
-import { CALENDARS, PEOPLE, PROJECTS, TASKS, WBS } from './seed';
+import {
+  BASELINES,
+  CALENDARS,
+  PEOPLE,
+  PROJECTS,
+  TASK_BASELINE_SNAPSHOTS,
+  TASKS,
+  WBS
+} from './seed.js';
 
 function clone(value) {
   if (typeof structuredClone === 'function') return structuredClone(value);
@@ -10,7 +18,9 @@ export function createMockRepository(seed = {
   projects: PROJECTS,
   people: PEOPLE,
   wbs: WBS,
-  tasks: TASKS
+  tasks: TASKS,
+  baselines: BASELINES,
+  taskBaselineSnapshots: TASK_BASELINE_SNAPSHOTS
 }) {
   const snapshot = clone(seed);
   return {

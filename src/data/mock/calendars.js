@@ -1,4 +1,4 @@
-import { DEFAULT_CALENDAR } from '../../scheduling/calendars';
+import { DEFAULT_CALENDAR } from '../../scheduling/calendars/index.js';
 
 export const CALENDARS = [
   {

@@ -36,13 +36,13 @@ function requireValidDate(value, taskId, field) {
 
 function inferProjectStart(tasks) {
   const starts = (tasks || [])
-    .filter((task) => task.baslangicTarihi)
-    .map((task) => requireValidDate(task.baslangicTarihi, task.id, 'baslangicTarihi'));
+    .filter((task) => task.plannedStart)
+    .map((task) => requireValidDate(task.plannedStart, task.id, 'plannedStart'));
 
   if (!starts.length) {
     throw new CpmValidationError(
       'MISSING_PROJECT_START',
-      'CPM requires projectStart or at least one task baslangicTarihi.'
+      'CPM requires projectStart or at least one task plannedStart.'
     );
   }
 
@@ -50,11 +50,11 @@ function inferProjectStart(tasks) {
 }
 
 function activityDuration(task, calendar) {
-  if (Number.isFinite(task.durationDays)) return Math.max(0, Math.trunc(task.durationDays));
+  if (Number.isFinite(task.plannedDurationDays)) return Math.max(0, Math.trunc(task.plannedDurationDays));
   if (task.milestone) return 0;
 
-  const start = requireValidDate(task.baslangicTarihi, task.id, 'baslangicTarihi');
-  const end = requireValidDate(task.bitisTarihi, task.id, 'bitisTarihi');
+  const start = requireValidDate(task.plannedStart, task.id, 'plannedStart');
+  const end = requireValidDate(task.plannedFinish, task.id, 'plannedFinish');
   if (end < start) {
     throw new CpmValidationError(
       'INVALID_TASK_DATES',

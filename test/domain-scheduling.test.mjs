@@ -40,7 +40,7 @@ import {
   getStatus,
   getTaskDateRange,
   selectTaskStats,
-  taskDurationDays
+  taskPlannedDurationDays
 } from '../src/scheduling/metrics/index.js';
 
 const people = [
@@ -147,11 +147,11 @@ test('dependency helpers normalize legacy and canonical relationships', () => {
 
 test('schedule metrics calculate inclusive duration and padded task ranges', () => {
   const tasks = [
-    { baslangicTarihi: '2026-07-10', bitisTarihi: '2026-07-12' },
-    { baslangicTarihi: '2026-07-05', bitisTarihi: '2026-07-20' }
+    { plannedStart: '2026-07-10', plannedFinish: '2026-07-12', plannedDurationDays: 3 },
+    { plannedStart: '2026-07-05', plannedFinish: '2026-07-20', plannedDurationDays: 12 }
   ];
 
-  assert.equal(taskDurationDays(tasks[0]), 3);
+  assert.equal(taskPlannedDurationDays(tasks[0]), 3);
   const range = getTaskDateRange(tasks, { paddingDays: 2 });
   assert.equal(fmtISO(range.start), '2026-07-03');
   assert.equal(fmtISO(range.end), '2026-07-22');
@@ -169,21 +169,24 @@ test('Gantt group summaries exclude milestones from weighted schedule progress',
     ['Alpha', [
       {
         id: 'task-1',
-        baslangicTarihi: '2026-07-01',
-        bitisTarihi: '2026-07-02',
+        plannedStart: '2026-07-01',
+        plannedFinish: '2026-07-02',
+        plannedDurationDays: 2,
         progress: 50,
         status: 'in_progress'
       },
       {
         id: 'task-2',
-        baslangicTarihi: '2026-07-03',
-        bitisTarihi: '2026-07-06',
+        plannedStart: '2026-07-03',
+        plannedFinish: '2026-07-06',
+        plannedDurationDays: 4,
         status: 'done'
       },
       {
         id: 'milestone-1',
-        baslangicTarihi: '2026-07-07',
-        bitisTarihi: '2026-07-07',
+        plannedStart: '2026-07-07',
+        plannedFinish: '2026-07-07',
+        plannedDurationDays: 0,
         milestone: true,
         status: 'done'
       }
@@ -191,8 +194,9 @@ test('Gantt group summaries exclude milestones from weighted schedule progress',
     ['Milestones only', [
       {
         id: 'milestone-2',
-        baslangicTarihi: '2026-08-01',
-        bitisTarihi: '2026-08-01',
+        plannedStart: '2026-08-01',
+        plannedFinish: '2026-08-01',
+        plannedDurationDays: 0,
         milestone: true,
         status: 'todo'
       }
@@ -210,9 +214,9 @@ test('Gantt group summaries exclude milestones from weighted schedule progress',
 test('status and aggregate task statistics are deterministic for a supplied reference date', () => {
   const referenceDate = parseDate('2026-07-21');
   const tasks = [
-    { id: 'done', status: 'done', hedefTarih: '2026-07-01' },
-    { id: 'progress', status: 'in_progress', hedefTarih: '2026-07-25' },
-    { id: 'late', status: 'todo', hedefTarih: '2026-07-20' }
+    { id: 'done', status: 'done', targetFinish: '2026-07-01' },
+    { id: 'progress', status: 'in_progress', targetFinish: '2026-07-25' },
+    { id: 'late', status: 'todo', targetFinish: '2026-07-20' }
   ];
 
   assert.equal(getStatus(tasks[0], referenceDate).id, 'done');

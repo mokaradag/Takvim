@@ -70,8 +70,8 @@ export function KanbanView() {
             >
               {items.map((t, i) => {
                 const today_ = today();
-                const days = diffDays(t.hedefTarih, today_);
-                const overdue = t.status !== 'done' && days < 0;
+                const days = t.targetFinish ? diffDays(t.targetFinish, today_) : null;
+                const overdue = t.status !== 'done' && days != null && days < 0;
                 const color = projectColorVar(t.proje);
                 const prio = PRIORITIES[t.priority || 'medium'];
                 return (
@@ -86,9 +86,9 @@ export function KanbanView() {
                       <div className="rt-row"><span className="rt-label">Öncelik</span><span className="rt-val" style={{ color: prio.color }}>{prio.label}</span></div>
                       <div className="rt-sep" />
                       <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
-                      <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">{fmt(t.baslangicTarihi, 'dd MMM yyyy')}</span></div>
-                      <div className="rt-row"><span className="rt-label">Bitiş</span><span className="rt-val">{fmt(t.bitisTarihi, 'dd MMM yyyy')}</span></div>
-                      <div className="rt-row"><span className="rt-label">Hedef</span><span className="rt-val" style={overdue ? { color: 'var(--status-overdue)' } : null}>{fmt(t.hedefTarih, 'dd MMM yyyy')}</span></div>
+                      <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">{fmt(t.plannedStart, 'dd MMM yyyy')}</span></div>
+                      <div className="rt-row"><span className="rt-label">Bitiş</span><span className="rt-val">{fmt(t.plannedFinish, 'dd MMM yyyy')}</span></div>
+                      <div className="rt-row"><span className="rt-label">Hedef</span><span className="rt-val" style={overdue ? { color: 'var(--status-overdue)' } : null}>{t.targetFinish ? fmt(t.targetFinish, 'dd MMM yyyy') : '—'}</span></div>
                       {t.plannedHours != null && (
                         <div className="rt-row"><span className="rt-label">Saat</span><span className="rt-val">{t.actualHours || 0} / {t.plannedHours} sa</span></div>
                       )}
@@ -118,7 +118,7 @@ export function KanbanView() {
                     <div className="k-bottom">
                       <span className={`k-date${overdue ? ' late' : ''}`}>
                         <Icons.Clock size={11} />
-                        {overdue ? `${Math.abs(days)} gün geçti` : days === 0 ? 'Bugün' : days <= 7 ? `${days} gün` : fmt(t.hedefTarih)}
+                        {days == null ? 'Hedef yok' : overdue ? `${Math.abs(days)} gün geçti` : days === 0 ? 'Bugün' : days <= 7 ? `${days} gün` : fmt(t.targetFinish)}
                       </span>
                       <AvatarStack names={t.sorumlu} max={3} size="sm" />
                     </div>

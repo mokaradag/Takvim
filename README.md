@@ -55,25 +55,33 @@ npx next telemetry disable
 
 ## Yapı
 
-- `src/domain` — Project, Task/Activity, Dependency, Person, WBS ve scheduling calendar iş kavramları
+- `src/domain` — Project, Task/Activity, Dependency, Person, WBS, Baseline ve scheduling calendar iş kavramları
 - `src/scheduling` — tarih, proje takvimi, çalışma günü, bağımlılık, Gantt yardımcıları ve saf CPM/critical-path hesapları
-- `src/data` — veri erişim sözleşmesi ve mevcut mock/in-memory adapter
+- `src/data` — veri erişim sözleşmesi, legacy migration sınırı ve mevcut mock/in-memory adapter
 - `src/state` — uygulama düzeyi state, task işlemleri, proje bazlı türetilmiş CPM projection ve odaklı hook'lar
 - `src/features` — Özet, Görevler, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
 - `src/components/shell` — sidebar, topbar, navigasyon, komut paleti ve global overlay bileşenleri
 - `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
 - `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
 
-Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki, çıktı ve uygulama entegrasyonu sözleşmeleri için `docs/CPM.md` dosyasına bakın.
+Ayrıntılı bağımlılık kuralları ve yeni kodun nereye eklenmesi gerektiği için `docs/ARCHITECTURE.md`; profesyonel scheduling veri modeli için `docs/SCHEDULING-DATA-MODEL.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki, çıktı ve uygulama entegrasyonu sözleşmeleri için `docs/CPM.md` dosyasına bakın.
+
+## Profesyonel scheduling veri modeli
+
+Canonical görev modeli artık güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`), gerçekleşen tarihleri (`actualStart`, `actualFinish`) ve bağımsız kalan süreyi (`remainingDurationDays`) birbirinden ayırır. Projeler ayrıca durum kesim tarihi olarak `dataDate` taşır.
+
+Baz plan, mutable görev alanı değildir. `Baseline` ve `TaskBaselineSnapshot` nesneleriyle ayrı tarihsel snapshot verisi olarak tutulur; normal görev güncellemeleri bu snapshot'ları değiştirmez ve sonradan oluşturulan görevler mevcut tarihsel baz plana otomatik eklenmez.
+
+Eski `baslangicTarihi`, `bitisTarihi` ve `hedefTarih` alanları yalnızca tek bir veri migration sınırında canonical alanlara dönüştürülür. Feature ve scheduling kodu canonical alanları kullanır.
 
 ## CPM / Gantt entegrasyonu
 
-CPM sonuçları artık uygulama state sınırında proje bazında hesaplanır ve Gantt tarafından türetilmiş veri olarak tüketilir. Gantt; kritik görev ve kritik ilişki vurguları, Erken/Geç Başlangıç-Bitiş, Toplam/Serbest Bolluk sütunları, kritik görev filtresi, proje bazlı hesaplanan bitiş bilgisi, CPM tooltip alanları ve proje düzeyi doğrulama uyarıları sunar.
+CPM sonuçları uygulama state sınırında proje bazında hesaplanır ve Gantt tarafından türetilmiş veri olarak tüketilir. Gantt; kritik görev ve kritik ilişki vurguları, Erken/Geç Başlangıç-Bitiş, Toplam/Serbest Bolluk sütunları, kritik görev filtresi, proje bazlı hesaplanan bitiş bilgisi, CPM tooltip alanları ve proje düzeyi doğrulama uyarıları sunar.
 
-Kayıtlı görev tarihleri değişmez ve CPM erken/geç tarihleri canonical task nesnelerine yazılmaz. Geçersiz bir proje ağı diğer projelerin CPM sonuçlarını engellemez. Projeler arası bağımlılıklar bu aşamada açık bir `CROSS_PROJECT_DEPENDENCY` uyarısıyla reddedilir.
+Birincil Gantt çubukları güncel planı (`plannedStart` -> `plannedFinish`) gösterir. CPM erken/geç tarihleri canonical Task nesnelerine yazılmaz. Geçersiz bir proje ağı diğer projelerin CPM sonuçlarını engellemez. Projeler arası bağımlılıklar bu aşamada açık bir `CROSS_PROJECT_DEPENDENCY` uyarısıyla reddedilir.
 
 ## Sonraki adım
 
-Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenmeli.
+Veriler şu an `src/data/mock` altındaki in-memory adapter üzerinden sağlanıyor. Kalıcı depolama için gerçek veritabanı/API adapter'ı daha sonra `src/data` sınırında eklenebilir.
 
-Scheduling tarafındaki sıradaki odak, baseline, current plan, actual ve calculated schedule tarihlerini açıkça ayıran veri modelini tanımlamaktır. Bu ayrım yapılmadan CPM-calculated tarihler canonical görev tarihleri olarak kullanılmamalıdır.
+Scheduling tarafındaki önerilen sonraki adım, bu veri modelinin üzerine progress-aware scheduling kurmaktır: `dataDate`, açık actual tarihleri ve bağımsız `remainingDurationDays` kullanılarak durum güncelleme/rescheduling kuralları tanımlanmalıdır. Bu çalışma ayrı bir odakta yapılmalı; mevcut saf current-plan CPM motorunun anlamı bu PR'da değiştirilmemelidir.

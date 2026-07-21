@@ -18,7 +18,7 @@ export function ReportsView() {
     const labels = [];
     for (let i = 29; i >= 0; i--) {
       const d = addDays(today_, -i);
-      const c = tasks.filter(t => t.status === 'done' && parseDate(t.bitisTarihi) <= d).length;
+      const c = tasks.filter(t => t.status === 'done' && parseDate(t.plannedFinish) <= d).length;
       out.push(c);
       labels.push(i % 5 === 0 ? fmt(d, 'd') : '');
     }
@@ -34,8 +34,8 @@ export function ReportsView() {
       const d = addDays(today_, -i);
       let todo = 0, prog = 0, done = 0;
       tasks.forEach(t => {
-        const s = parseDate(t.baslangicTarihi);
-        const e = parseDate(t.bitisTarihi);
+        const s = parseDate(t.plannedStart);
+        const e = parseDate(t.plannedFinish);
         if (s > d) return; // hasn't started yet
         if (t.status === 'done' && e <= d) done++;
         else if (t.status === 'in_progress' || (t.status === 'done' && e > d)) prog++;
@@ -55,7 +55,7 @@ export function ReportsView() {
       const weekStart = startOfWeek(weekEnd);
       const count = tasks.filter(t => {
         if (t.status !== 'done') return false;
-        const e = parseDate(t.bitisTarihi);
+        const e = parseDate(t.plannedFinish);
         return e >= weekStart && e <= weekEnd;
       }).length;
       out.push({ label: `${fmt(weekStart, 'd')}–${fmt(weekEnd, 'd')}`, value: count });
@@ -96,7 +96,7 @@ export function ReportsView() {
     tasks.forEach(t => {
       if (t.status === 'done') return;
       const p = t.priority || 'medium';
-      const overdue = diffDays(t.hedefTarih, today_) < 0;
+      const overdue = t.targetFinish && diffDays(t.targetFinish, today_) < 0;
       if (overdue) matrix[p].overdue.push(t);
       else if (t.status === 'in_progress') matrix[p].in_progress.push(t);
       else matrix[p].todo.push(t);
@@ -111,7 +111,7 @@ export function ReportsView() {
       map[t.proje] = map[t.proje] || { total: 0, done: 0, late: 0 };
       map[t.proje].total++;
       if (t.status === 'done') map[t.proje].done++;
-      if (t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0) map[t.proje].late++;
+      if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) map[t.proje].late++;
     });
     return Object.entries(map).map(([name, v]) => ({ name, ...v, color: projectColorVar(name) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -120,7 +120,7 @@ export function ReportsView() {
   const cycle = useMemo2(() => {
     const completed = tasks.filter(t => t.status === 'done');
     if (!completed.length) return { avg: 0, min: 0, max: 0 };
-    const durations = completed.map(t => diffDays(t.bitisTarihi, t.baslangicTarihi));
+    const durations = completed.map(t => t.plannedDurationDays || 0);
     return {
       avg: Math.round(durations.reduce((a, b) => a + b, 0) / durations.length),
       min: Math.min(...durations),
@@ -131,8 +131,10 @@ export function ReportsView() {
   const onTime = useMemo2(() => {
     const completed = tasks.filter(t => t.status === 'done');
     if (!completed.length) return 0;
-    const ot = completed.filter(t => diffDays(t.bitisTarihi, t.hedefTarih) <= 0).length;
-    return Math.round((ot / completed.length) * 100);
+    const targeted = completed.filter(t => t.targetFinish);
+    if (!targeted.length) return 0;
+    const ot = targeted.filter(t => diffDays(t.plannedFinish, t.targetFinish) <= 0).length;
+    return Math.round((ot / targeted.length) * 100);
   }, [tasks]);
 
   const tagDist = useMemo2(() => {
@@ -143,7 +145,7 @@ export function ReportsView() {
       taskMap[t.keyword] = taskMap[t.keyword] || { done: 0, total: 0, late: 0, color: t.color };
       taskMap[t.keyword].total++;
       if (t.status === 'done') taskMap[t.keyword].done++;
-      if (t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0) taskMap[t.keyword].late++;
+      if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) taskMap[t.keyword].late++;
     });
     return Object.entries(map).map(([k, v]) => ({
       label: k, value: v, color: COLOR_MAP[taskMap[k].color] || 'var(--accent)',
