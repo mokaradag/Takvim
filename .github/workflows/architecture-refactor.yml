@@ -1,0 +1,75 @@
+name: Architecture refactor validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out refactor branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Use production Node version
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Generate architecture refactor
+        run: node scripts/refactor-architecture.mjs
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Lint
+        env:
+          CI: true
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify architectural boundaries
+        shell: bash
+        run: |
+          test ! -e src/components/views-a.jsx
+          test ! -e src/components/views-b.jsx
+          test ! -e src/components/AppShell.jsx
+          test ! -e src/components/settings.jsx
+          test -e src/components/shell/AppShell.jsx
+          test -e src/state/AppStateProvider.jsx
+          test -e src/data/contracts/appRepository.js
+          test -e src/data/mock/createMockRepository.js
+          test -e docs/ARCHITECTURE.md
+          ! grep -R "data/mock/seed" src/features
+          ! grep -R "lib/data" src/features
+
+      - name: Verify offline-safe application sources
+        shell: bash
+        run: |
+          ! grep -R -E "fonts\.googleapis\.com|fonts\.gstatic\.com" src
+          ! grep -R -E "<script[^>]+https?://|<link[^>]+https?://" src
+
+      - name: Commit validated refactor
+        shell: bash
+        run: |
+          rm -f scripts/refactor-architecture.mjs
+          rm -f .github/workflows/architecture-refactor.yml
+          rmdir scripts 2>/dev/null || true
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Refactor architecture foundation"
+          git push origin HEAD:${{ github.head_ref }}
