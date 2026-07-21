@@ -1,0 +1,71 @@
+name: Validate ESLint and pure-function tests
+
+on:
+  push:
+    branches:
+      - agent/eslint-domain-scheduling-tests
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/eslint-domain-scheduling-tests
+          fetch-depth: 0
+
+      - name: Use production Node version
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Validate lint, tests, and production build
+        shell: bash
+        run: |
+          set +e
+          LOG=/tmp/eslint-tests-validation.txt
+          : > "$LOG"
+
+          echo '=== npm ci ===' | tee -a "$LOG"
+          npm ci >>"$LOG" 2>&1
+          INSTALL_STATUS=$?
+
+          echo '=== npm run lint ===' | tee -a "$LOG"
+          CI=true npm run lint >>"$LOG" 2>&1
+          LINT_STATUS=$?
+
+          echo '=== npm test ===' | tee -a "$LOG"
+          npm test >>"$LOG" 2>&1
+          TEST_STATUS=$?
+
+          echo '=== npm run build ===' | tee -a "$LOG"
+          npm run build >>"$LOG" 2>&1
+          BUILD_STATUS=$?
+
+          printf 'RESULT install=%s lint=%s test=%s build=%s\n' \
+            "$INSTALL_STATUS" "$LINT_STATUS" "$TEST_STATUS" "$BUILD_STATUS" | tee -a "$LOG"
+          cat "$LOG"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/validate-eslint-tests.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+
+          if [ "$INSTALL_STATUS" -ne 0 ] || [ "$LINT_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$BUILD_STATUS" -ne 0 ]; then
+            cp "$LOG" docs/eslint-tests-validation-failure.txt
+            git add -A
+            git commit -m 'Record ESLint and test validation failure'
+            git push origin HEAD:agent/eslint-domain-scheduling-tests
+            exit 1
+          fi
+
+          rm -f docs/eslint-tests-validation-failure.txt
+          git add -A
+          git commit -m 'Validate ESLint and pure-function tests'
+          git push origin HEAD:agent/eslint-domain-scheduling-tests
