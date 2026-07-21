@@ -179,7 +179,7 @@ export function WbsView() {
             <div className="col" style={{ gap: 4 }}>
               <div style={{ fontSize: 15, fontWeight: 700 }}>Görevleri WBS düğümleri arasında taşı</div>
               <div className="muted" style={{ fontSize: 12.5 }}>
-                Kaynak WBS'deki doğrudan görevlerden birini veya birden çoğunu seçin. Taşıma yalnızca bu proje içindeki geçerli bir hedef WBS'ye uygulanır.
+                Kaynak WBS düğümüne doğrudan atanmış görevlerden birini veya birden çoğunu seçin. Taşıma yalnızca bu proje içindeki geçerli bir hedef WBS düğümüne uygulanır.
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(220px, 1fr)', gap: 12 }}>
