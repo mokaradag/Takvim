@@ -56,6 +56,7 @@
  * @property {string[]} assigneeIds
  * @property {string|null} wbsId
  * @property {string|null} [calendarId] Optional task-level override of the project calendar.
+ * @property {number} [durationDays] Optional explicit working-day duration used by CPM. If omitted, CPM derives duration from baseline dates.
  * @property {Dependency[]} deps
  * @property {string} task
  * @property {string} status
@@ -66,4 +67,18 @@
  * @property {string[]} [sorumlu] Legacy display field retained for the current UI.
  */
 
-export const DOMAIN_MODEL_VERSION = 2;
+/**
+ * @typedef {Object} CpmTaskResult
+ * @property {string} id
+ * @property {string} calendarId
+ * @property {number} durationDays
+ * @property {string} earlyStart
+ * @property {string} earlyFinish
+ * @property {string} lateStart
+ * @property {string} lateFinish
+ * @property {number} totalFloatDays
+ * @property {number} freeFloatDays
+ * @property {boolean} isCritical
+ */
+
+export const DOMAIN_MODEL_VERSION = 3;
