@@ -37,14 +37,14 @@ export function TasksView() {
   const projOpts = useMemo1(() => projects
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-    .map(p => ({ value: p.name, label: p.name, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} /> })), []);
+    .map(p => ({ value: p.name, label: p.name, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} /> })), [projects]);
   const kwOpts = useMemo1(() => Array.from(new Set(tasks.map(t => t.keyword)))
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [tasks]);
   const sorumluOpts = useMemo1(() => people
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-    .map(p => ({ value: p.name, label: p.name, icon: <Avatar name={p.name} size="sm" /> })), []);
+    .map(p => ({ value: p.name, label: p.name, icon: <Avatar name={p.name} size="sm" /> })), [people]);
   const statusOpts = [
     { value: 'todo', label: 'Yapılacak', icon: <StatusIcon id="todo" size={11} /> },
     { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },

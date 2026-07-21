@@ -22,7 +22,7 @@ export function TeamView() {
       const late = mine.filter(t => t.status !== 'done' && diffDays(t.hedefTarih, today_) < 0).length;
       return { person: p, total: mine.length, done, active, late, tasks: mine };
     });
-  }, [tasks]);
+  }, [tasks, people]);
 
   const byTeam = useMemo1(() => {
     const map = {};
