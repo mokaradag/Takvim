@@ -13,7 +13,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const people = usePeople();
   const [local, setLocal] = useState({ ...task });
 
-  useEffect(() => { setLocal({ ...task }); }, [task && task.id]);
+  useEffect(() => { setLocal({ ...task }); }, [task]);
 
   const save = (patch) => {
     const next = { ...local, ...patch };
