@@ -1,3 +1,5 @@
+import { addWorkingDays, DEFAULT_CALENDAR } from '../calendars/index.js';
+
 export const REL_TYPES = Object.freeze({
   FS: {
     code: 'FS', name: 'Bitiş → Başlangıç', short: 'Finish-to-Start',
@@ -37,4 +39,8 @@ export function normalizeDependency(dependency) {
   const type = relTypeOf(dependency);
   const lagDays = typeof dependency === 'object' && Number.isFinite(dependency?.lagDays) ? dependency.lagDays : 0;
   return { id: predecessorId, predecessorId, type, lagDays };
+}
+
+export function applyDependencyLag(value, dependency, calendar = DEFAULT_CALENDAR) {
+  return addWorkingDays(value, normalizeDependency(dependency).lagDays, calendar);
 }
