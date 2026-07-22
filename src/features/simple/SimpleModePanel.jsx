@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { Avatar } from '../../components/ui';
 import { fmtISO, today } from '../../scheduling/dates';
@@ -193,7 +194,7 @@ export function SimpleModePanel() {
         </label>
         <label className="simple-field">
           <span>Termin tarihi</span>
-          <input className="input" type="date" lang="en-GB" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+          <DateInput value={dueDate} onChange={(value) => { setDueDate(value); setMessage(null); }} />
         </label>
       </div>
 
