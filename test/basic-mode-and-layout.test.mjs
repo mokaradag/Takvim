@@ -12,6 +12,7 @@ import {
   prepareProjectCreation,
   validateProjectCreationInput
 } from '../src/state/projectCreation.js';
+import { fmt, fmtDisplayDate } from '../src/scheduling/dates/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -84,6 +85,28 @@ test('simple mode uses the existing task/project infrastructure and exposes the 
   assert.match(simple, /addProject/);
   assert.match(simple, /addTask/);
   assert.match(simple, /updateTask/);
+  assert.match(simple, /DateInput/);
+});
+
+test('user-facing dates use day/month/year and missing dates do not render as today', () => {
+  assert.equal(fmtDisplayDate('2026-07-22'), '22/07/2026');
+  assert.equal(fmt('2026-07-22'), '22/07/2026');
+  assert.equal(fmt(null), '—');
+
+  const project = read('src/features/project/ProjectWorkspaceView.jsx');
+  const createProject = read('src/components/shell/ProjectCreateDialog.jsx');
+  const wbs = read('src/features/wbs/WbsView.jsx');
+  const taskDrawer = read('src/features/task-detail/TaskDrawer.jsx');
+  const tasks = read('src/features/tasks/TasksView.jsx');
+  const gantt = read('src/features/gantt/WorkspaceGanttView.jsx');
+
+  assert.match(project, /<DateInput value=\{form\.dataDate\}/);
+  assert.match(createProject, /<DateInput value=\{form\.dataDate\}/);
+  assert.match(wbs, /fmtDisplayDate\(rollup\.plannedStart\)/);
+  assert.match(wbs, /fmtDisplayDate\(rollup\.plannedFinish\)/);
+  assert.match(taskDrawer, /<DateInput/);
+  assert.match(tasks, /DateFilterableTH/);
+  assert.match(gantt, /<DateInput value=\{rangeStart\}/);
 });
 
 test('topbar project context is truly centered, larger, and the heptagon is clipped by its own header wrapper', () => {
@@ -98,8 +121,22 @@ test('topbar project context is truly centered, larger, and the heptagon is clip
   assert.match(css, /\.topbar\s*\{[^}]*overflow:\s*visible;/s);
 });
 
+test('welcome and initial mode selection render without the underlying application shell', () => {
+  const shell = read('src/components/shell/AppShell.jsx');
+  const modeReturn = shell.indexOf('if (modePickerOpen) return <ModeChooser');
+  const welcomeReturn = shell.indexOf('if (welcomeOpen && !simpleMode)');
+  const appReturn = shell.indexOf('return (\n    <div className={`app app-mode-');
+
+  assert.ok(modeReturn > 0);
+  assert.ok(welcomeReturn > modeReturn);
+  assert.ok(appReturn > welcomeReturn);
+  assert.doesNotMatch(shell.slice(appReturn), /<WelcomeScreen/);
+  assert.doesNotMatch(shell.slice(appReturn), /<ModeChooser/);
+});
+
 test('layout regression fixes reserve card info space and keep task/Gantt scrolling inside their content areas', () => {
   const css = read('src/app/enhancements.css');
+  const fixes = read('src/app/fixes.css');
   const gantt = read('src/features/gantt/WorkspaceGanttView.jsx');
 
   assert.match(css, /\.card-head-wrap\s*\{[^}]*padding:[^;]*38px/s);
@@ -108,6 +145,7 @@ test('layout regression fixes reserve card info space and keep task/Gantt scroll
   assert.match(css, /\.content-gantt\s*\{[^}]*overflow:\s*hidden/s);
   assert.match(css, /\.gantt-holiday-stripe\s*\{[^}]*z-index:\s*12/s);
   assert.match(css, /\.drawer\s*\{[^}]*z-index:\s*310/s);
-  assert.match(css, /\.drawer \.rel-item > div:nth-child\(2\)/);
+  assert.match(fixes, /\.rel-fields-grid/);
+  assert.match(fixes, /\.wbs-tree-table/);
   assert.match(gantt, /gantt-chart-host/);
 });
