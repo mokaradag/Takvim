@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizeTaskRecord } from '../src/data/normalizeTaskRecord.js';
 import { buildProjectCsv, buildProjectExcelHtml } from '../src/lib/exportProjectData.js';
 import { normalizeCalendar } from '../src/scheduling/calendars/index.js';
 import { calculateCpm } from '../src/scheduling/cpm/index.js';
+import { dependencyLagDays } from '../src/scheduling/dependencies/index.js';
 import { prepareProjectUpdateChanges } from '../src/state/projectCreation.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -16,26 +16,18 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('legacy day lags are materialized before users change the lag unit', () => {
-  const task = normalizeTaskRecord({
-    id: 't1',
-    projectId: 'p1',
-    deps: [{ id: 'pred', type: 'FS', lagDays: 3 }]
-  }, {
-    projects: [{ id: 'p1', name: 'Project' }],
-    people: [],
-    wbs: [],
-    calendars: []
-  });
-
-  assert.deepEqual(task.deps[0], {
+test('legacy day lag values are preserved before a unit-only edit is recalculated', () => {
+  const editedDependency = {
     id: 'pred',
     predecessorId: 'pred',
     type: 'FS',
     lagDays: 3,
-    lagValue: 3,
-    lagUnit: 'day'
-  });
+    lagUnit: 'week'
+  };
+
+  assert.equal(dependencyLagDays(editedDependency), 15);
+  assert.equal(editedDependency.lagValue, 3);
+  assert.equal(editedDependency.lagUnit, 'week');
 });
 
 test('week lags use the successor active calendar in both CPM passes', () => {
