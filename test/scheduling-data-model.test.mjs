@@ -31,6 +31,11 @@ const context = {
   wbs: [{ id: 'wbs-p1', projectId: 'p1', parentId: null, code: '1', name: 'Project' }]
 };
 
+const MOCK_SNAPSHOT = await createMockRepository().loadSnapshot();
+function createMockState() {
+  return createInitialState(structuredClone(MOCK_SNAPSHOT));
+}
+
 test('legacy task dates migrate once to canonical schedule fields', () => {
   const migrated = migrateLegacyTaskSchedule({
     id: 'legacy',
@@ -95,8 +100,6 @@ test('task schedule validation supports explicit actuals and reports invalid dat
   }).some((issue) => issue.code === 'ACTUAL_FINISH_WITHOUT_START'));
 });
 
-
-
 test('baseline snapshot validation reports invalid historical date order', () => {
   assert.ok(validateTaskBaselineSnapshot({
     baselineId: 'b1',
@@ -139,7 +142,7 @@ test('target finish drives overdue status independently of planned finish', () =
 });
 
 test('current-plan edits and new tasks do not mutate historical baseline snapshots', () => {
-  const initial = createInitialState(createMockRepository());
+  const initial = createMockState();
   const originalSnapshots = structuredClone(initial.taskBaselineSnapshots);
   const task = initial.tasks[0];
 
@@ -158,10 +161,8 @@ test('current-plan edits and new tasks do not mutate historical baseline snapsho
   assert.equal(newTask.remainingDurationDays, newTask.plannedDurationDays);
 });
 
-
-
 test('mock projects expose a primary baseline and initial task snapshots', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   assert.equal(state.baselines.length, state.projects.length);
   assert.equal(state.taskBaselineSnapshots.length, state.tasks.length);
   for (const project of state.projects) {
@@ -170,7 +171,7 @@ test('mock projects expose a primary baseline and initial task snapshots', () =>
 });
 
 test('primary baseline selectors return separate immutable snapshot data', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const task = state.tasks[0];
   const baseline = selectPrimaryBaselineForProject(state.baselines, task.projectId);
   const snapshot = selectTaskBaselineSnapshot(state.taskBaselineSnapshots, task.id, baseline.id);
@@ -182,12 +183,12 @@ test('primary baseline selectors return separate immutable snapshot data', () =>
 });
 
 test('project dataDate survives repository and state normalization', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   assert.ok(state.projects.every((project) => /^\d{4}-\d{2}-\d{2}$/.test(project.dataDate)));
 });
 
 test('CPM results remain derived and are not written back into canonical tasks', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const schedule = buildPortfolioSchedule({
     tasks: state.tasks,
     projects: state.projects,

@@ -34,6 +34,11 @@ const SAMPLE_WBS = [
   { id: 'a1', projectId: 'p1', parentId: 'a', code: '1.1.1', name: 'A1', sortOrder: 1 }
 ];
 
+const MOCK_SNAPSHOT = await createMockRepository().loadSnapshot();
+function createMockState() {
+  return createInitialState(structuredClone(MOCK_SNAPSHOT));
+}
+
 test('WBS tree construction supports multiple hierarchy levels', () => {
   const tree = buildWbsTree(SAMPLE_WBS);
   assert.equal(tree.length, 1);
@@ -88,14 +93,14 @@ test('WBS validation reports missing parents explicitly', () => {
 });
 
 test('Task WBS move validation allows same-project moves and rejects cross-project targets', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   assert.deepEqual(validateTaskWbsMove(state.tasks, state.wbs, ['t1'], 'wbs-p-web-frontend'), []);
   const issues = validateTaskWbsMove(state.tasks, state.wbs, ['t1'], 'wbs-p-mobile-backend');
   assert.equal(issues[0].code, 'CROSS_PROJECT_TASK_WBS_MOVE');
 });
 
 test('WBS reparent validation blocks roots and descendant targets', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   assert.equal(
     validateWbsReparent(state.wbs, 'wbs-p-web-root', 'wbs-p-web-design')[0].code,
     'WBS_ROOT_REPARENT_FORBIDDEN'
@@ -118,7 +123,7 @@ test('Task normalization never retains a WBS from another project', () => {
 });
 
 test('Changing a Task project safely reassigns the unique root WBS', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const original = state.tasks.find((task) => task.id === 't1');
   const next = appStateReducer(state, { type: 'task/update', id: original.id, patch: { projectId: 'p-mobile' } });
   const updated = next.tasks.find((task) => task.id === original.id);
@@ -128,7 +133,7 @@ test('Changing a Task project safely reassigns the unique root WBS', () => {
 });
 
 test('Portfolio workspace exposes all project, task and WBS data', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const workspace = selectWorkspaceContext(state);
   assert.equal(workspace.mode, 'portfolio');
   assert.equal(workspace.projects.length, state.projects.length);
@@ -137,7 +142,7 @@ test('Portfolio workspace exposes all project, task and WBS data', () => {
 });
 
 test('Project workspace scopes tasks, WBS and participating people', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const workspace = selectWorkspaceContext({ ...state, workspaceMode: 'project', selectedProjectId: 'p-web' });
   assert.equal(workspace.mode, 'project');
   assert.equal(workspace.selectedProject?.id, 'p-web');
@@ -147,7 +152,7 @@ test('Project workspace scopes tasks, WBS and participating people', () => {
 });
 
 test('Invalid selected project safely falls back to Portfolio workspace', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   assert.deepEqual(
     normalizeWorkspaceSelection({ workspaceMode: 'project', selectedProjectId: 'missing' }, state.projects),
     { workspaceMode: 'portfolio', selectedProjectId: null }
@@ -155,7 +160,7 @@ test('Invalid selected project safely falls back to Portfolio workspace', () => 
 });
 
 test('New Task in Project Workspace uses selected project, root WBS and project calendar', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const projectState = { ...state, workspaceMode: 'project', selectedProjectId: 'p-infra' };
   const task = createNewTask(projectState, '2026-07-21', 'new-project-task');
   const effectiveCalendar = resolveTaskCalendar(task, state.projects, state.calendars);
@@ -165,7 +170,7 @@ test('New Task in Project Workspace uses selected project, root WBS and project 
 });
 
 test('Changing Task WBS assignment leaves historical baseline snapshots unchanged', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const before = structuredClone(state.taskBaselineSnapshots);
   const next = appStateReducer(state, { type: 'task/update', id: 't1', patch: { wbsId: 'wbs-p-web-development' } });
   assert.equal(next.tasks.find((task) => task.id === 't1').wbsId, 'wbs-p-web-development');
@@ -173,7 +178,7 @@ test('Changing Task WBS assignment leaves historical baseline snapshots unchange
 });
 
 test('Controlled single Task move changes only the WBS assignment', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const beforeTask = state.tasks.find((task) => task.id === 't1');
   const beforeSnapshots = structuredClone(state.taskBaselineSnapshots);
   const next = appStateReducer(state, { type: 'task/move-wbs', id: 't1', wbsId: 'wbs-p-web-frontend' });
@@ -184,7 +189,7 @@ test('Controlled single Task move changes only the WBS assignment', () => {
 });
 
 test('Bulk Task move is atomic and changes only selected same-project Tasks', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const next = appStateReducer(state, {
     type: 'task/bulk-move-wbs',
     ids: ['t2', 't4'],
@@ -197,7 +202,7 @@ test('Bulk Task move is atomic and changes only selected same-project Tasks', ()
 });
 
 test('Bulk Task move rejects mixed-project selections without partial updates', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const next = appStateReducer(state, {
     type: 'task/bulk-move-wbs',
     ids: ['t1', 't5'],
@@ -208,7 +213,7 @@ test('Bulk Task move rejects mixed-project selections without partial updates', 
 });
 
 test('Safe WBS reparenting preserves IDs and Task assignments while rebasing subtree codes', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const beforeAssignments = new Map(state.tasks.map((task) => [task.id, task.wbsId]));
   const next = appStateReducer(state, {
     type: 'wbs/reparent',
@@ -227,7 +232,7 @@ test('Safe WBS reparenting preserves IDs and Task assignments while rebasing sub
 });
 
 test('Unsafe WBS reparenting is rejected without changing the hierarchy', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const next = appStateReducer(state, {
     type: 'wbs/reparent',
     id: 'wbs-p-web-development',
@@ -267,7 +272,7 @@ test('Empty WBS nodes produce safe empty rollups', () => {
 });
 
 test('WBS changes do not alter existing project-scoped CPM output', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const before = buildPortfolioSchedule({ tasks: state.tasks, projects: state.projects, calendars: state.calendars });
   const updatedState = appStateReducer(state, { type: 'task/update', id: 't1', patch: { wbsId: 'wbs-p-web-development' } });
   const after = buildPortfolioSchedule({ tasks: updatedState.tasks, projects: updatedState.projects, calendars: updatedState.calendars });
@@ -275,7 +280,7 @@ test('WBS changes do not alter existing project-scoped CPM output', () => {
 });
 
 test('Bulk Task moves and WBS reparenting remain outside CPM calculations', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const before = buildPortfolioSchedule({ tasks: state.tasks, projects: state.projects, calendars: state.calendars });
   const movedTasks = appStateReducer(state, {
     type: 'task/bulk-move-wbs',
@@ -292,7 +297,7 @@ test('Bulk Task moves and WBS reparenting remain outside CPM calculations', () =
 });
 
 test('Intentional cross-project CPM dependency remains explicit and unchanged', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const schedule = buildPortfolioSchedule({ tasks: state.tasks, projects: state.projects, calendars: state.calendars });
   assert.equal(schedule.projects['p-infra'].status, 'invalid');
   assert.equal(schedule.projects['p-infra'].error.code, 'CROSS_PROJECT_DEPENDENCY');
@@ -300,7 +305,7 @@ test('Intentional cross-project CPM dependency remains explicit and unchanged', 
 });
 
 test('Safe WBS deletion blocks nodes with children or directly assigned Tasks', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const withChildren = appStateReducer(state, { type: 'wbs/delete', id: 'wbs-p-web-root' });
   assert.equal(withChildren.wbs.length, state.wbs.length);
   assert.equal(withChildren.wbsActionError.code, 'WBS_HAS_CHILDREN');
@@ -311,7 +316,7 @@ test('Safe WBS deletion blocks nodes with children or directly assigned Tasks', 
 });
 
 test('Professional scheduling fields remain canonical after WBS normalization', () => {
-  const state = createInitialState(createMockRepository());
+  const state = createMockState();
   const task = state.tasks.find((item) => item.id === 't2');
   assert.equal(typeof task.plannedStart, 'string');
   assert.equal(typeof task.plannedFinish, 'string');

@@ -137,10 +137,35 @@ function reparentWbs(state, nodeId, targetParentId) {
   return { ...state, wbs: nextWbs, wbsActionError: null };
 }
 
-export function createInitialState(repository) {
-  const snapshot = repository.getSnapshot();
+function emptyApplicationData() {
+  return {
+    calendars: [],
+    projects: [],
+    people: [],
+    wbs: [],
+    tasks: [],
+    baselines: [],
+    taskBaselineSnapshots: []
+  };
+}
+
+export function createLoadingState() {
+  return {
+    ...emptyApplicationData(),
+    selectedTaskId: null,
+    workspaceMode: WORKSPACE_MODE_PORTFOLIO,
+    selectedProjectId: null,
+    wbsActionError: null,
+    dataStatus: 'loading',
+    loadError: null,
+    pendingMutationCount: 0,
+    saveError: null,
+    lastSavedAt: null
+  };
+}
+
+function createStateFromSnapshot(snapshot = {}, previous = createLoadingState()) {
   const base = {
-    ...snapshot,
     calendars: snapshot.calendars || [],
     projects: snapshot.projects || [],
     people: snapshot.people || [],
@@ -148,23 +173,97 @@ export function createInitialState(repository) {
     baselines: snapshot.baselines || [],
     taskBaselineSnapshots: snapshot.taskBaselineSnapshots || []
   };
+  const tasks = (snapshot.tasks || []).map((task) => normalizeTaskRecord(task, taskContext(base)));
+  const nextBase = { ...previous, ...base, tasks };
+  const selection = workspaceState(nextBase, previous);
+  const selectedTaskId = tasks.some((task) => task.id === selection.selectedTaskId)
+    ? selection.selectedTaskId
+    : null;
 
   return {
-    ...base,
-    tasks: (snapshot.tasks || []).map((task) => normalizeTaskRecord(task, taskContext(base))),
-    selectedTaskId: null,
-    workspaceMode: WORKSPACE_MODE_PORTFOLIO,
-    selectedProjectId: null,
-    wbsActionError: null
+    ...nextBase,
+    ...selection,
+    selectedTaskId,
+    wbsActionError: null,
+    dataStatus: 'ready',
+    loadError: null,
+    pendingMutationCount: previous.pendingMutationCount || 0,
+    saveError: null,
+    lastSavedAt: previous.lastSavedAt || null
   };
+}
+
+export function createInitialState(snapshot = {}) {
+  return createStateFromSnapshot(snapshot, createLoadingState());
 }
 
 export function normalizeStateTask(task, state) {
   return normalizeTaskRecord(task, taskContext(state));
 }
 
+function applyUpserts(items, upserts, deletes, normalize, { prependNew = false } = {}) {
+  const deleted = new Set(deletes || []);
+  const currentIds = new Set(items.map((item) => item.id));
+  const byId = new Map((upserts || []).map((item) => [item.id, item]));
+  const updated = items
+    .filter((item) => !deleted.has(item.id))
+    .map((item) => (byId.has(item.id) ? normalize(byId.get(item.id)) : item));
+  const additions = (upserts || [])
+    .filter((item) => !currentIds.has(item.id) && !deleted.has(item.id))
+    .map(normalize);
+  return prependNew ? [...additions, ...updated] : [...updated, ...additions];
+}
+
+function applyCommittedChanges(state, changes = {}) {
+  const wbs = applyUpserts(
+    state.wbs,
+    changes.wbsUpserts || [],
+    changes.wbsDeletes || [],
+    (node) => ({ ...node })
+  );
+  const taskState = { ...state, wbs };
+  const tasks = applyUpserts(
+    state.tasks,
+    changes.taskUpserts || [],
+    changes.taskDeletes || [],
+    (task) => normalizeStateTask(task, taskState),
+    { prependNew: true }
+  );
+  const next = { ...state, wbs, tasks };
+  return { ...next, ...workspaceState(next, next) };
+}
+
 export function appStateReducer(state, action) {
   switch (action.type) {
+    case 'data/load-start':
+      return { ...state, dataStatus: 'loading', loadError: null };
+    case 'data/load-success':
+      return createStateFromSnapshot(action.snapshot, state);
+    case 'data/load-error':
+      return { ...state, dataStatus: 'error', loadError: action.error };
+    case 'persistence/start':
+      return {
+        ...state,
+        pendingMutationCount: state.pendingMutationCount + 1
+      };
+    case 'persistence/success': {
+      const committed = applyCommittedChanges(state, action.changes);
+      return {
+        ...committed,
+        pendingMutationCount: Math.max(0, state.pendingMutationCount - 1),
+        saveError: state.saveError,
+        lastSavedAt: action.savedAt || state.lastSavedAt,
+        wbsActionError: action.clearWbsError ? null : committed.wbsActionError
+      };
+    }
+    case 'persistence/failure':
+      return {
+        ...state,
+        pendingMutationCount: Math.max(0, state.pendingMutationCount - 1),
+        saveError: action.error
+      };
+    case 'persistence/clear-error':
+      return { ...state, saveError: null };
     case 'task/add':
       return { ...state, tasks: [action.task, ...state.tasks], selectedTaskId: action.task.id };
     case 'task/update': {

@@ -10,17 +10,58 @@
  */
 
 /**
- * Current repository contract. The mock implementation is synchronous because it
- * is an in-memory seed adapter. A future API/database adapter can replace this at
- * the state boundary without changing feature components.
+ * Atomic canonical persistence change set.
  *
- * @typedef {Object} AppRepository
- * @property {() => AppDataSnapshot} getSnapshot
+ * @typedef {Object} AppChangeSet
+ * @property {import('../../domain/models').Task[]} [taskUpserts]
+ * @property {string[]} [taskDeletes]
+ * @property {import('../../domain/models').WbsNode[]} [wbsUpserts]
+ * @property {string[]} [wbsDeletes]
  */
 
+/**
+ * @typedef {Object} AppRepository
+ * @property {() => Promise<AppDataSnapshot>} loadSnapshot
+ * @property {(changes: AppChangeSet) => Promise<AppChangeSet>} commitChanges
+ */
+
+export const REPOSITORY_ERROR_CODES = Object.freeze({
+  LOAD_FAILED: 'LOAD_FAILED',
+  MUTATION_FAILED: 'MUTATION_FAILED'
+});
+
+export class AppRepositoryError extends Error {
+  constructor({ code, message, operation, details = null, cause = null }) {
+    super(message);
+    this.name = 'AppRepositoryError';
+    this.code = code;
+    this.operation = operation;
+    this.details = details;
+    if (cause) this.cause = cause;
+  }
+}
+
+export function normalizeRepositoryError(error, fallback = {}) {
+  if (error instanceof AppRepositoryError) {
+    return {
+      code: error.code,
+      message: error.message,
+      operation: error.operation,
+      details: error.details || null
+    };
+  }
+
+  return {
+    code: fallback.code || REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+    message: fallback.message || 'Değişiklik kaydedilemedi.',
+    operation: fallback.operation || 'unknown',
+    details: fallback.details || null
+  };
+}
+
 export function assertAppRepository(repository) {
-  if (!repository || typeof repository.getSnapshot !== 'function') {
-    throw new Error('App repository must implement getSnapshot().');
+  if (!repository || typeof repository.loadSnapshot !== 'function' || typeof repository.commitChanges !== 'function') {
+    throw new Error('App repository must implement loadSnapshot() and commitChanges().');
   }
   return repository;
 }

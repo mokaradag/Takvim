@@ -31,6 +31,19 @@ export function useTaskPrimaryBaseline(taskId) {
   const snapshot = selectTaskBaselineSnapshot(state.taskBaselineSnapshots, taskId, baseline?.id);
   return { baseline, snapshot };
 }
+export function useDataLifecycle() {
+  const state = useAppState();
+  return {
+    dataStatus: state.dataStatus,
+    loadError: state.loadError,
+    pendingMutationCount: state.pendingMutationCount,
+    isSaving: state.pendingMutationCount > 0,
+    saveError: state.saveError,
+    lastSavedAt: state.lastSavedAt,
+    reloadData: state.actions.reloadData,
+    clearPersistenceError: state.actions.clearPersistenceError
+  };
+}
 export function useTaskActions() { return useAppState().actions; }
 export function useWbsActions() {
   const state = useAppState();
