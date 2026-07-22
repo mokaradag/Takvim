@@ -13,7 +13,7 @@ import { appRepository } from '../data';
 import { selectTaskStats } from '../scheduling/metrics';
 import { appStateReducer, createLoadingState, createNewTask } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
-import { prepareProjectCreation } from './projectCreation';
+import { prepareProjectCreation, prepareProjectUpdate } from './projectCreation';
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
@@ -29,6 +29,15 @@ function uniqueId(prefix) {
 
 function firstFailedResult(results = []) {
   return results.find((result) => result && !result.ok) || null;
+}
+
+function mergeUpserts(items = [], upserts = []) {
+  const byId = new Map(upserts.map((item) => [item.id, item]));
+  const currentIds = new Set(items.map((item) => item.id));
+  return [
+    ...items.map((item) => byId.get(item.id) || item),
+    ...upserts.filter((item) => !currentIds.has(item.id))
+  ];
 }
 
 export function AppStateProvider({ children, repository = appRepository }) {
@@ -199,6 +208,59 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return { ok: true, value: committedProject, changes: result.value };
   }, [applyStateAction, persistence]);
 
+  const updateProject = useCallback(async (projectId, input) => {
+    const failedFlush = firstFailedResult(await persistence.flushAllTaskUpdates());
+    if (failedFlush) return failedFlush;
+
+    const current = stateRef.current;
+    const prepared = prepareProjectUpdate(projectId, input, {
+      projects: current.projects,
+      people: current.people,
+      calendars: current.calendars
+    });
+    if (!prepared.ok) return prepared;
+
+    const taskUpserts = current.tasks
+      .filter((task) => task.projectId === projectId)
+      .map((task) => ({ ...task, proje: prepared.project.name, color: prepared.project.color }));
+    const rootWbs = current.wbs.find((node) => node.projectId === projectId && node.parentId == null) || null;
+    const wbsUpserts = rootWbs ? [{ ...rootWbs, name: prepared.project.name }] : [];
+    const changes = {
+      projectUpserts: [prepared.project],
+      taskUpserts,
+      wbsUpserts
+    };
+
+    const result = await persistence.commitChanges('project/update', changes);
+    if (!result.ok) return result;
+
+    const committed = result.value || {};
+    const latest = stateRef.current;
+    const projectUpserts = committed.projectUpserts?.length ? committed.projectUpserts : changes.projectUpserts;
+    const committedTaskUpserts = committed.taskUpserts?.length ? committed.taskUpserts : taskUpserts;
+    const committedWbsUpserts = committed.wbsUpserts?.length ? committed.wbsUpserts : wbsUpserts;
+    const projects = mergeUpserts(latest.projects, projectUpserts);
+
+    applyStateAction({
+      type: 'data/load-success',
+      snapshot: {
+        calendars: latest.calendars,
+        projects,
+        people: latest.people,
+        wbs: mergeUpserts(latest.wbs, committedWbsUpserts),
+        tasks: mergeUpserts(latest.tasks, committedTaskUpserts),
+        baselines: latest.baselines,
+        taskBaselineSnapshots: latest.taskBaselineSnapshots
+      }
+    });
+
+    return {
+      ok: true,
+      value: projects.find((project) => project.id === projectId) || prepared.project,
+      changes: committed
+    };
+  }, [applyStateAction, persistence]);
+
   const selectWorkspace = useCallback((projectId) => {
     applyStateAction({
       type: 'workspace/select',
@@ -242,6 +304,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     deleteTask,
     addTask,
     addProject,
+    updateProject,
     selectWorkspace,
     addWbsChild,
     renameWbs,
@@ -259,6 +322,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     deleteTask,
     addTask,
     addProject,
+    updateProject,
     selectWorkspace,
     addWbsChild,
     renameWbs,
