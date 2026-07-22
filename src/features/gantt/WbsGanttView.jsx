@@ -112,13 +112,16 @@ export function WbsGanttView() {
   const leftRef = useRef(null);
   const rightRef = useRef(null);
   const today_ = useMemo(() => today(), []);
+  const hasWbs = wbs.length > 0;
+  const scheduleAvailable = projectSchedule?.status === 'valid';
+  const criticalPathUnavailable = projectSchedule?.status === 'invalid';
 
   useEffect(() => {
     setExpanded(new Set(wbs.map((node) => node.id)));
   }, [workspace.selectedProjectId, wbs]);
 
   const tree = useMemo(() => buildWbsTree(wbs), [wbs]);
-  const scheduleTasks = projectSchedule?.tasks || EMPTY_SCHEDULE_TASKS;
+  const scheduleTasks = scheduleAvailable ? projectSchedule.tasks : EMPTY_SCHEDULE_TASKS;
   const rows = useMemo(
     () => buildRows(tree, tasks, wbs, expanded, scheduleTasks),
     [tree, tasks, wbs, expanded, scheduleTasks]
@@ -201,14 +204,15 @@ export function WbsGanttView() {
           fromY: rowTops.tops[predecessorIndex] + ROW_H / 2,
           toY: rowTops.tops[rowIndex] + ROW_H / 2,
           hot: hotTaskId === predecessorId || hotTaskId === row.task.id,
-          critical: Boolean(projectSchedule?.criticalDependencyKeys?.includes(`${predecessorId}::${row.task.id}`))
+          critical: scheduleAvailable && Boolean(projectSchedule?.criticalDependencyKeys?.includes(`${predecessorId}::${row.task.id}`))
         });
       }
     });
     return result;
-  }, [visibleRows, taskRowIndex, rowTops, xForDate, zoom, hotTaskId, projectSchedule]);
+  }, [visibleRows, taskRowIndex, rowTops, xForDate, zoom, hotTaskId, scheduleAvailable, projectSchedule]);
 
   useEffect(() => {
+    if (!hasWbs) return undefined;
     const left = leftRef.current;
     const right = rightRef.current;
     if (!left || !right) return undefined;
@@ -231,9 +235,10 @@ export function WbsGanttView() {
       left.removeEventListener('scroll', syncFromLeft);
       right.removeEventListener('scroll', syncFromRight);
     };
-  }, []);
+  }, [hasWbs]);
 
   useEffect(() => {
+    if (!hasWbs) return undefined;
     const element = rightRef.current;
     if (!element) return undefined;
     let dragging = false;
@@ -262,13 +267,14 @@ export function WbsGanttView() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, []);
+  }, [hasWbs]);
 
   useEffect(() => {
+    if (!hasWbs) return;
     const element = rightRef.current;
     if (!element) return;
     element.scrollLeft = Math.max(0, xForDate(today_) + zoom / 2 - element.clientWidth / 3);
-  }, [today_, xForDate, zoom]);
+  }, [hasWbs, today_, xForDate, zoom]);
 
   const toggle = (id) => {
     setExpanded((current) => {
@@ -279,7 +285,7 @@ export function WbsGanttView() {
     });
   };
 
-  if (!wbs.length) {
+  if (!hasWbs) {
     return <div className="card muted">Bu projede WBS bulunmadığı için hiyerarşik Gantt oluşturulamıyor.</div>;
   }
 
@@ -295,7 +301,7 @@ export function WbsGanttView() {
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <div className="col" style={{ gap: 2 }}>
           <div style={{ fontWeight: 700 }}>{workspace.selectedProject?.name} · WBS Gantt</div>
-          <div className="muted" style={{ fontSize: 11.5 }}>WBS hiyerarşisi, görevler, kritik yol ve bağımlılıklar aynı zaman ekseninde gösterilir.</div>
+          <div className="muted" style={{ fontSize: 11.5 }}>WBS hiyerarşisi ve görevler aynı zaman ekseninde gösterilir. Kullanılabilir olduğunda kritik yol ve bağımlılık vurguları da eklenir.</div>
         </div>
         <div className="row" style={{ marginLeft: 'auto', gap: 6 }}>
           <span className="muted" style={{ fontSize: 12 }}>Zoom</span>
@@ -314,10 +320,17 @@ export function WbsGanttView() {
         </div>
       </div>
 
+      {criticalPathUnavailable && (
+        <div className="card" style={{ padding: '10px 12px', borderColor: 'color-mix(in oklab, var(--status-overdue) 28%, var(--border))' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700 }}>Kritik yol bilgisi şu anda kullanılamıyor</div>
+          <div className="muted" style={{ marginTop: 3, fontSize: 11.5 }}>Görev tarihleri veya bağımlılık ilişkileri gözden geçirilmeli. WBS ve planlanan zaman çizelgesi gösterilmeye devam ediyor.</div>
+        </div>
+      )}
+
       <div className="row" style={{ gap: 14, fontSize: 11.5, color: 'var(--text-dim)', flexWrap: 'wrap' }}>
         <span className="row" style={{ gap: 6 }}><span style={{ width: 10, height: 6, background: 'linear-gradient(180deg, var(--text) 0%, color-mix(in oklab, var(--text) 80%, black) 100%)', borderRadius: 1 }} /> WBS özeti</span>
-        <span className="row" style={{ gap: 6 }}><span style={{ width: 12, height: 7, border: '2px solid var(--status-overdue)', borderRadius: 2 }} /> Kritik görev</span>
-        <span className="row" style={{ gap: 6 }}><span style={{ width: 16, height: 2, background: 'var(--status-overdue)' }} /> Kritik ilişki</span>
+        {scheduleAvailable && <span className="row" style={{ gap: 6 }}><span style={{ width: 12, height: 7, border: '2px solid var(--status-overdue)', borderRadius: 2 }} /> Kritik görev</span>}
+        {scheduleAvailable && <span className="row" style={{ gap: 6 }}><span style={{ width: 16, height: 2, background: 'var(--status-overdue)' }} /> Kritik ilişki</span>}
         <span className="row" style={{ gap: 6 }}><span style={{ width: 1, height: 12, background: 'var(--accent)' }} /> Bugün</span>
       </div>
 
@@ -339,14 +352,16 @@ export function WbsGanttView() {
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: unassigned ? 'var(--status-overdue)' : projectColor }} />
                   <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{unassigned ? row.label : `${row.node.code} ${row.node.name}`}</span>
                   {!unassigned && row.rollup && (
-                    <span className="muted tabular" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600 }}>{row.rollup.taskCount} görev · {row.rollup.progress}% · {row.rollup.criticalTaskCount} kritik</span>
+                    <span className="muted tabular" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600 }}>
+                      {row.rollup.taskCount} görev · {row.rollup.progress}%{scheduleAvailable ? ` · ${row.rollup.criticalTaskCount} kritik` : ''}
+                    </span>
                   )}
                 </div>
               );
             }
 
             const taskSchedule = scheduleTasks[row.task.id];
-            const critical = Boolean(taskSchedule?.isCritical);
+            const critical = scheduleAvailable && Boolean(taskSchedule?.isCritical);
             return (
               <div
                 key={row.id}
@@ -414,7 +429,7 @@ export function WbsGanttView() {
                           <div className="rt-row"><span className="rt-label">Bitiş</span><span className="rt-val">{fmt(rollup.plannedFinish, 'dd MMM yyyy')}</span></div>
                           <div className="rt-row"><span className="rt-label">Görev</span><span className="rt-val">{rollup.taskCount}</span></div>
                           <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{rollup.progress}%</span></div>
-                          <div className="rt-row"><span className="rt-label">Kritik görev</span><span className="rt-val">{rollup.criticalTaskCount}</span></div>
+                          {scheduleAvailable && <div className="rt-row"><span className="rt-label">Kritik görev</span><span className="rt-val">{rollup.criticalTaskCount}</span></div>}
                         </>}
                       >
                         <div className="gantt-summary-bar" style={{ top: top + 9, left: xForDate(parseDate(rollup.plannedStart)), width: Math.max(8, (diffDays(rollup.plannedFinish, rollup.plannedStart) + 1) * zoom), pointerEvents: 'auto' }}>
@@ -428,7 +443,7 @@ export function WbsGanttView() {
 
               const task = row.task;
               const taskSchedule = scheduleTasks[task.id];
-              const critical = Boolean(taskSchedule?.isCritical);
+              const critical = scheduleAvailable && Boolean(taskSchedule?.isCritical);
               const status = getStatus(task, today_);
               const overdue = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, today_) < 0;
               const progress = task.progress != null ? task.progress : (task.status === 'done' ? 100 : 0);
