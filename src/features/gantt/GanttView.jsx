@@ -30,10 +30,10 @@ const GANTT_DEFAULT_COLS = {
   priority: false
 };
 const GANTT_COL_DEFS = [
-  { key: 'start', label: 'Başlangıç', width: 78, align: 'right', render: (t) => fmt(t.plannedStart, 'dd MMM') },
+  { key: 'start', label: 'Başlangıç', width: 78, align: 'right', render: (t) => fmtMaybe(t.plannedStart, 'dd MMM') },
   { key: 'end', label: 'Bitiş', width: 78, align: 'right', render: (t, today_) => {
       const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
-      return <span style={{ color: overdue ? 'var(--status-overdue)' : 'inherit', fontWeight: overdue ? 600 : 500 }}>{fmt(t.plannedFinish, 'dd MMM')}</span>;
+      return <span style={{ color: overdue ? 'var(--status-overdue)' : 'inherit', fontWeight: overdue ? 600 : 500 }}>{fmtMaybe(t.plannedFinish, 'dd MMM')}</span>;
   } },
   { key: 'hedef', label: 'Hedef', width: 78, align: 'right', render: (t) => t.targetFinish ? fmt(t.targetFinish, 'dd MMM') : '—' },
   { key: 'duration', label: 'Süre', width: 56, align: 'right', render: (t) => {
@@ -83,6 +83,14 @@ function warningText(warning, projectById) {
   const project = warning.projectId ? projectById.get(warning.projectId) : null;
   const scope = project?.name || (warning.taskId ? `Görev ${warning.taskId}` : 'Zamanlama');
   return `${scope}: ${CPM_WARNING_LABELS[warning.code] || warning.message} [${warning.code}]`;
+}
+
+function hasPlannedRange(task) {
+  return Boolean(task?.plannedStart && task?.plannedFinish);
+}
+
+function fmtMaybe(value, pattern) {
+  return value ? fmt(value, pattern) : <span className="muted">—</span>;
 }
 
 function CpmTooltipRows({ schedule }) {
@@ -359,6 +367,7 @@ export function GanttView() {
         const j = taskRowIdx[dId];
         if (j === undefined) return;
         const depTask = rows[j].task;
+        if (!hasPlannedRange(depTask) || !hasPlannedRange(r.task)) return;
 
         const fromY = rowTops.tops[j] + 19;
         const toY = rowTops.tops[i] + 19;
@@ -764,6 +773,13 @@ export function GanttView() {
               const t = r.task;
               const taskSchedule = schedule.tasks[t.id];
               const isCritical = !!taskSchedule?.isCritical;
+              if (!hasPlannedRange(t)) {
+                return (
+                  <React.Fragment key={t.id}>
+                    <div style={{ position: 'absolute', top, left: 0, right: 0, height: ROW_H, borderBottom: '1px solid var(--border)' }} />
+                  </React.Fragment>
+                );
+              }
               if (t.milestone) {
                 const x = xForDate(parseDate(t.plannedStart)) + zoom / 2 - 8;
                 const status = getStatus(t);
