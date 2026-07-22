@@ -1,8 +1,13 @@
 const MS_DAY = 86400000;
+let appDateDisplayFormat = 'pattern';
 
 export const TR_MONTHS = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 export const TR_MONTHS_LONG = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 export const TR_DAYS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+
+export function setAppDateDisplayFormat(format = 'pattern') {
+  appDateDisplayFormat = format === 'dd/mm/yyyy' ? 'dd/mm/yyyy' : 'pattern';
+}
 
 export function parseDate(value) {
   if (value instanceof Date) return value;
@@ -27,14 +32,18 @@ export function fmtDisplayDate(value) {
   return `${day}/${month}/${date.getFullYear()}`;
 }
 
-export function fmt(value, pattern = 'dd/mm/yyyy') {
+export function fmt(value, pattern = 'dd MMM') {
   const date = parseDate(value);
+  const day = String(date.getDate()).padStart(2, '0');
   const dayShort = date.getDate();
   if (pattern === 'd') return String(dayShort);
   if (pattern === 'EEE d') return `${TR_DAYS[(date.getDay() + 6) % 7]} ${dayShort}`;
   if (pattern === 'MMM yyyy') return `${TR_MONTHS_LONG[date.getMonth()]} ${date.getFullYear()}`;
-  if (pattern === 'dd MMM' || pattern === 'dd MMM yyyy' || pattern === 'dd/mm/yyyy') return fmtDisplayDate(date);
-  return fmtDisplayDate(date);
+  if (pattern === 'dd/mm/yyyy') return fmtDisplayDate(date);
+  if (appDateDisplayFormat === 'dd/mm/yyyy' && (pattern === 'dd MMM' || pattern === 'dd MMM yyyy')) return fmtDisplayDate(date);
+  if (pattern === 'dd MMM') return `${day} ${TR_MONTHS[date.getMonth()]}`;
+  if (pattern === 'dd MMM yyyy') return `${day} ${TR_MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+  return appDateDisplayFormat === 'dd/mm/yyyy' ? fmtDisplayDate(date) : date.toLocaleDateString('tr-TR');
 }
 
 export function addDays(value, amount) {
