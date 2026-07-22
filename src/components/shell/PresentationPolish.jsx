@@ -1,6 +1,27 @@
 'use client';
 import { useEffect } from 'react';
 
+const TEXT_REPLACEMENTS = [
+  ['Kritik CPM görevi', 'Kritik yol görevi'],
+  ['CPM Bitiş', 'Kritik Yol Bitişi'],
+  ['CPM Durumu', 'Kritik Yol Durumu'],
+  ['CPM uyarısı', 'Zamanlama uyarısı'],
+  ['CPM ·', 'Kritik Yol ·']
+];
+
+function polishTerminology(root) {
+  const content = root.querySelector?.('.content') || (root.classList?.contains('content') ? root : null);
+  if (!content) return;
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    let value = node.nodeValue;
+    for (const [from, to] of TEXT_REPLACEMENTS) value = value.replaceAll(from, to);
+    if (value !== node.nodeValue) node.nodeValue = value;
+    node = walker.nextNode();
+  }
+}
+
 function applyPresentationPolish(root = document) {
   root.querySelectorAll('svg[preserveAspectRatio="none"]').forEach((svg) => {
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
@@ -18,13 +39,15 @@ function applyPresentationPolish(root = document) {
       candidate.setAttribute('aria-hidden', 'true');
     }
   });
+
+  polishTerminology(root);
 }
 
 export function PresentationPolish() {
   useEffect(() => {
     applyPresentationPolish();
     const observer = new MutationObserver(() => applyPresentationPolish());
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
     return () => observer.disconnect();
   }, []);
 
