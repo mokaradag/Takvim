@@ -6,6 +6,7 @@
  * @property {string|null} [leadId]
  * @property {string|null} [calendarId]
  * @property {string|null} dataDate Project status/cutoff date. Stored project-control data; not browser today or calculated finish.
+ * @property {string[]} [tags] Controlled project-level tag catalog. Tasks explicitly select a value from this list.
  * @property {string} [lead] Legacy display field retained for the current UI.
  */
 
@@ -44,11 +45,14 @@
 /**
  * Canonical dependency shape. The legacy id field is retained by the mock adapter
  * while the UI transition is in progress; predecessorId is the stable relationship key.
- * lagDays is interpreted as working days by the scheduling engine.
+ * lagDays is the normalized working-day value consumed by the scheduling engine.
+ * lagValue and lagUnit retain the user's selected lead/lag representation.
  * @typedef {Object} Dependency
  * @property {string} predecessorId
  * @property {'FS'|'SS'|'FF'|'SF'} type
  * @property {number} lagDays
+ * @property {number} [lagValue]
+ * @property {'day'|'week'|'month'} [lagUnit]
  * @property {string} [id]
  */
 
@@ -110,4 +114,4 @@
  * @property {boolean} isCritical
  */
 
-export const DOMAIN_MODEL_VERSION = 5;
+export const DOMAIN_MODEL_VERSION = 6;
