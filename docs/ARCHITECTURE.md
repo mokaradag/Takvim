@@ -1,6 +1,6 @@
 # MERGEN Rota Architecture
 
-MERGEN Rota is organized so feature UI does not own the global dataset and does not care whether data comes from mock JavaScript, an API, or a future SQL-backed service.
+MERGEN Rota is organized so feature UI does not own the global dataset and does not care whether data comes from the current asynchronous in-memory adapter, a future API, or a SQL-backed server-side service.
 
 ## Dependency direction
 
@@ -30,17 +30,32 @@ WBS does not create independent scheduling networks. CPM remains project-scoped.
 
 ### `src/data`
 
-The data-access boundary. `contracts/appRepository.js` documents the repository snapshot contract. The snapshot includes calendars, projects, people, WBS, canonical tasks, baselines and task baseline snapshots.
+The data-access and persistence boundary. `contracts/appRepository.js` documents the asynchronous repository contract:
 
-`mock/createMockRepository.js` is the current in-memory adapter and `mock/seed.js` contains the sample dataset. Legacy scheduling property names are accepted only by the dedicated migration adapter before a record becomes a canonical Task. No database is implemented in this work.
+```text
+loadSnapshot(): Promise<AppDataSnapshot>
+commitChanges(changeSet): Promise<AppChangeSet>
+```
 
-The mock adapter now supplies meaningful multi-level WBS hierarchies and valid Task-to-WBS relationships. The intentional cross-project dependency used to validate project-scoped CPM remains part of the data scenario.
+The snapshot includes calendars, projects, people, WBS, canonical tasks, baselines and task baseline snapshots. The mutation change set contains only current Task/WBS upserts and deletes and provides one atomic boundary for multi-entity operations.
 
-A future API or SQL Server integration should add another adapter under `src/data` and supply it to `AppStateProvider`. Feature modules should not change when the backing source changes.
+`mock/createMockRepository.js` is the current asynchronous mutable in-memory adapter and `mock/seed.js` contains the sample dataset. Successful mutations remain available to later `loadSnapshot()` calls for the lifetime of that repository instance. A new repository instance starts from its supplied seed; browser/process/VM restart durability is not provided.
+
+The adapter deep-clones external inputs and outputs and supports focused test-only latency/load/mutation failure configuration. Legacy scheduling property names are accepted only by the dedicated migration adapter before a record becomes a canonical Task. No database or fake HTTP API is implemented in this work.
+
+The mock adapter supplies meaningful multi-level WBS hierarchies and valid Task-to-WBS relationships. The intentional cross-project dependency used to validate project-scoped CPM remains part of the data scenario.
+
+A future browser-side API repository adapter should implement the same application-facing contract and be supplied to `AppStateProvider`. Feature modules should not change when the backing source changes.
 
 ### `src/state`
 
-`AppStateProvider` owns application-level project/task/person/WBS/baseline state, Task and safe in-memory WBS operations, workspace selection, selected-task synchronization and aggregate workspace task statistics. Pure state initialization and mutation normalization live in `src/state/appState.js`, keeping business normalization out of React feature components.
+`AppStateProvider` owns React application state and composes focused feature-facing actions. Pure state initialization, canonical snapshot normalization and reducer transitions live in `src/state/appState.js`. Asynchronous persistence orchestration lives outside the reducer in `src/state/persistence.js`.
+
+The application-data lifecycle is explicit through `dataStatus: loading | ready | error`, `loadError`, `pendingMutationCount`, `saveError` and `lastSavedAt`. Initial loading and reload use the same `repository.loadSnapshot()` path. The shell does not render normal features against incomplete loading data and exposes retry after load failure.
+
+Current Task/WBS mutations use pessimistic canonical-state semantics: the state layer calculates and validates the intended pure transition, derives the smallest Task/WBS change set, persists it, then reconciles application state with the repository's authoritative returned entities. Persistence failures therefore do not require optimistic rollback.
+
+All repository mutations pass through one ordered queue so delayed responses cannot overwrite newer edits and structural operations cannot complete out of order. High-frequency Task Detail patches are coalesced per Task before persistence; discrete and destructive operations flush dependent pending patches first.
 
 Workspace orchestration has one source of truth:
 
@@ -51,13 +66,13 @@ selectedProjectId: null | Project.id
 
 Pure workspace selectors expose the active Project, Projects, Tasks, WBS and participating People. Feature-facing hooks consume these scoped selectors. The same feature implementation therefore serves Portfolio and Project mode without importing raw mock data or repeating `projectId` filters in every view.
 
-The last workspace is stored only as the UI preference `mergen-rota.workspace.v1`. Invalid persisted Project IDs normalize to Portfolio mode. Workspace switching also prevents a selected Task from remaining open when it belongs to another Project.
+The last workspace is stored only as the UI preference `mergen-rota.workspace.v1`. It is restored only after repository data becomes ready so the Project ID can be validated. Invalid persisted Project IDs normalize to Portfolio mode. Workspace switching also prevents a selected Task from remaining open when it belongs to another Project. The preference is not part of `AppRepository`.
 
 Normal Task CRUD changes only mutable Task data. Project changes are normalized centrally so an old Project's WBS assignment cannot survive. When one unambiguous root exists for the new Project it becomes the safe default; otherwise `wbsId` becomes `null`.
 
 Baseline records and task baseline snapshots are carried separately and are not rewritten by current-plan edits, WBS edits, Task deletion or new-task creation. Focused selectors expose primary baseline/snapshot lookup where a feature needs it.
 
-Safe WBS mutations remain in-memory and are dispatched through the state boundary. Deletion is prevented when a node has child WBS nodes or directly assigned Tasks; the application does not silently cascade-delete or reassign data.
+WBS mutations remain validated at the domain/state boundary. Deletion is prevented when a node has child WBS nodes or directly assigned Tasks; the application does not silently cascade-delete or reassign data. Bulk Task WBS movement and WBS subtree reparenting are persisted as single atomic change sets after existing validation succeeds.
 
 CPM is exposed through a derived application schedule projection in `src/state/selectors/scheduleSelectors.js`. The projection:
 
@@ -67,31 +82,31 @@ CPM is exposed through a derived application schedule projection in `src/state/s
 - isolates validation failures so one invalid project does not block unrelated projects;
 - rejects cross-project dependencies explicitly because portfolio dependency networks are outside the current scheduling scope.
 
-`AppStateProvider` memoizes this projection from all canonical tasks, projects and calendars even while a feature is in Project Workspace. Project features select the appropriate existing project result; they do not trigger a second CPM calculation.
+`AppStateProvider` memoizes this projection from all canonical tasks, projects and calendars even while a feature is in Project Workspace. Project features select the appropriate existing project result; they do not trigger a second CPM calculation. A successful persisted scheduling change naturally recomputes this projection because canonical Task state changes; CPM output itself is never persisted.
 
 ### `src/features`
 
-Feature-oriented modules: dashboard, tasks, WBS, calendar, Gantt, Kanban, reports, team, settings and task detail. Feature components consume state hooks and shared pure logic; they do not import raw mock arrays.
+Feature-oriented modules: dashboard, tasks, WBS, calendar, Gantt, Kanban, reports, team, settings and task detail. Feature components consume state hooks and shared pure logic; they do not import raw mock arrays or repository implementations.
 
 Dashboard, Tasks, Calendar, Kanban, Reports and Team consume workspace-scoped hooks. Settings remains global. The WBS feature is primarily project-oriented and consumes the shared domain hierarchy selectors.
 
 Portfolio Gantt preserves the existing portfolio-oriented implementation. Project Workspace defaults to a WBS hierarchy whose WBS summary rows and bars are derived view data, not fake Tasks. The existing Gantt remains available for responsible-person/CPM detail. Neither Gantt path calls `calculateCpm()` directly.
 
-Task Detail edits current-plan, target, actual, remaining-duration, Project and WBS data. Its WBS selector only exposes nodes from the Task's current Project. The primary baseline snapshot remains read-only.
+Task Detail edits current-plan, target, actual, remaining-duration, Project and WBS data. Its WBS selector only exposes nodes from the Task's current Project. The primary baseline snapshot remains read-only. Local field edits stay responsive while the state persistence layer coalesces high-frequency patches before repository writes.
 
 ### `src/components`
 
-`components/shell` contains the application frame, stable-ID workspace switcher, navigation, command palette, welcome screen and logo. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
+`components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen and logo. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
 
 ## Adding new work
 
 - Project/Task/WBS/Baseline business rules: `src/domain`
 - Date, dependency, calendar, current-plan duration or CPM calculations: `src/scheduling`
-- Mock/API/database adapters and migration boundaries: `src/data`
-- Global client orchestration, workspace selection and derived application projections: `src/state`
+- Repository contracts, memory/API/database adapters and migration boundaries: `src/data`
+- Global client orchestration, async persistence commands, workspace selection and derived application projections: `src/state`
 - Feature UI and feature-only helpers: the relevant `src/features/<feature>` folder
 - Generic visual primitives: `src/components/ui*`
-- Sidebar/topbar/global overlays: `src/components/shell`
+- Sidebar/topbar/global overlays and application lifecycle surfaces: `src/components/shell`
 
 ## Scheduling data ownership
 
@@ -106,10 +121,30 @@ Stored schedule data and calculated schedule data have deliberately different se
 - CPM schedule: derived state only;
 - WBS schedule summaries: derived from descendant current-plan Tasks, never persisted on WBS nodes.
 
-See `docs/SCHEDULING-DATA-MODEL.md` for the scheduling contract and `docs/WBS-AND-WORKSPACES.md` for workspace and hierarchy rules.
+See `docs/PERSISTENCE-BOUNDARY.md` for asynchronous loading/mutation semantics, `docs/SCHEDULING-DATA-MODEL.md` for the scheduling contract and `docs/WBS-AND-WORKSPACES.md` for workspace and hierarchy rules.
 
 ## Database/API migration path
 
-The application starts from `appRepository`, which is currently the mock adapter. A database-backed implementation should not be imported by feature components. Introduce an adapter in `src/data`, perform asynchronous loading/persistence in the state layer, and keep the hooks exposed to features stable.
+The application starts through `appRepository`, which currently resolves to the asynchronous in-memory adapter. A durable implementation should keep the feature-facing hooks unchanged and replace the data-side adapter behind the state orchestration boundary.
+
+The intended direction is:
+
+```text
+Browser / MERGEN Rota UI
+        │
+        ▼
+Client-side API repository adapter
+        │
+        ▼
+Next.js server route/service
+        │
+        ▼
+Server-side SQL repository/service
+        │
+        ▼
+SQL Server
+```
+
+The browser must never connect directly to SQL Server. The server/database implementation should preserve atomic `commitChanges()` semantics and return authoritative canonical entities.
 
 A future persistence schema should preserve Project → WBS → Activity as separate stable-ID relationships and retain the semantic separation between current plan, actuals, baseline snapshots and calculated CPM output. SQL Server, Next.js route handlers, REST clients, Primavera/SAP integration, authorization and audit history remain outside the current implementation.
