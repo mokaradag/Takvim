@@ -1,5 +1,5 @@
 import { depId, formatDependencyLag, relTypeOf } from '../scheduling/dependencies/index.js';
-import { fmt } from '../scheduling/dates/index.js';
+import { fmtDisplayDate } from '../scheduling/dates/index.js';
 
 const STATUS_LABELS = {
   todo: 'Yapılacak',
@@ -33,7 +33,7 @@ function escapeHtml(value) {
 }
 
 function displayDate(value) {
-  return value ? fmt(value, 'dd MMM yyyy') : '';
+  return value ? fmtDisplayDate(value) : '';
 }
 
 function dependencyText(dependency, taskById) {
