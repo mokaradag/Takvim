@@ -2,22 +2,55 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../../components/icons';
 import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
-import { REL_TYPES, depId, relTypeOf } from '../../scheduling/dependencies';
-import { diffDays, today } from '../../scheduling/dates';
+import {
+  LAG_UNITS,
+  REL_TYPES,
+  depId,
+  dependencyLagDays,
+  formatDependencyLag,
+  lagUnitOf,
+  lagValueOf,
+  relTypeOf
+} from '../../scheduling/dependencies';
+import { diffDays, fmt, today } from '../../scheduling/dates';
+import { getTaskCalendarWarnings } from '../../scheduling/calendarWarnings';
 import { projectColorVar } from '../../lib/colors';
 import { Avatar, Kw, StatusIcon, statusColorVar } from '../../components/ui';
 import { InfoButton } from '../../components/ui-extras';
-import { useAllPeople, useAllProjects, useAllWbs, useTaskPrimaryBaseline } from '../../state/hooks';
+import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskPrimaryBaseline } from '../../state/hooks';
 
-/* ── Detail drawer ───────────────────────────────────── */
+function legacyProjectTags(projectId, tasks) {
+  return Array.from(new Set(
+    tasks
+      .filter((item) => item.projectId === projectId && String(item.keyword || '').trim())
+      .map((item) => String(item.keyword).trim())
+  )).sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
+function tagsForProject(project, tasks) {
+  if (!project) return [];
+  return Array.isArray(project.tags) ? project.tags : legacyProjectTags(project.id, tasks);
+}
+
 export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const people = useAllPeople();
   const projects = useAllProjects();
+  const calendars = useCalendars();
   const allWbs = useAllWbs();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
   const [local, setLocal] = useState({ ...task });
 
   useEffect(() => { setLocal({ ...task }); }, [task]);
+
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === local.projectId) || null,
+    [projects, local.projectId]
+  );
+  const projectTags = useMemo(() => tagsForProject(selectedProject, tasks), [selectedProject, tasks]);
+  const calendarWarnings = useMemo(
+    () => getTaskCalendarWarnings(local, { projects, calendars }),
+    [local, projects, calendars]
+  );
 
   const projectWbsRows = useMemo(() => {
     const projectWbs = allWbs.filter((node) => node.projectId === local.projectId);
@@ -28,6 +61,19 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     const next = { ...local, ...patch };
     setLocal(next);
     onUpdate(task.id, patch);
+  };
+
+  const changeProject = (projectId) => {
+    const project = projects.find((item) => item.id === projectId) || null;
+    const tags = tagsForProject(project, tasks);
+    const roots = allWbs.filter((node) => node.projectId === projectId && node.parentId == null);
+    save({
+      projectId: projectId || null,
+      proje: project?.name || '',
+      color: project?.color || local.color,
+      wbsId: roots.length === 1 ? roots[0].id : null,
+      keyword: tags.includes(local.keyword) ? local.keyword : (tags[0] || '')
+    });
   };
 
   const today_ = today();
@@ -43,8 +89,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
             <div className="row" style={{ gap: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: color }} />
               <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{local.proje}</span>
-              <span className="muted">·</span>
-              <Kw color={local.color}>{local.keyword}</Kw>
+              {local.keyword && <><span className="muted">·</span><Kw color={local.color}>{local.keyword}</Kw></>}
             </div>
             <textarea
               value={local.task}
@@ -63,7 +108,6 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
 
         <div className="drawer-body">
           <div className="col" style={{ gap: 18 }}>
-            {/* Status + dates row */}
             <Section title="Durum">
               <div className="seg" style={{ width: '100%' }}>
                 {[
@@ -92,14 +136,14 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </div>
             </Section>
 
-            <Section title="Proje & WBS">
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.45fr)', gap: 12 }}>
+            <Section title="Proje, WBS & Etiket">
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, .9fr) minmax(0, 1.3fr)', gap: 12 }}>
                 <div className="col" style={{ gap: 6 }}>
                   <div className="label">Proje</div>
                   <select
                     className="input"
                     value={local.projectId || ''}
-                    onChange={(e) => save({ projectId: e.target.value || null })}
+                    onChange={(e) => changeProject(e.target.value)}
                   >
                     <option value="">Proje seçilmedi</option>
                     {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -122,8 +166,20 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                   </select>
                 </div>
               </div>
-              <div className="muted" style={{ fontSize: 11.5 }}>
-                Proje değişirse önceki projeye bağlı WBS korunmaz; yeni projenin tek kök WBS düğümü varsa otomatik atanır.
+              <div className="col" style={{ gap: 6 }}>
+                <div className="label">Etiket</div>
+                <select
+                  className="input"
+                  value={local.keyword || ''}
+                  onChange={(e) => save({ keyword: e.target.value })}
+                  disabled={!local.projectId || projectTags.length === 0}
+                >
+                  <option value="">{projectTags.length ? 'Etiket seçin' : 'Önce Proje Yapısı sayfasında etiket tanımlayın'}</option>
+                  {projectTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
+                </select>
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  Görev etiketi serbest metin değildir; seçili projenin kontrollü etiket kataloğundan açıkça seçilir.
+                </div>
               </div>
             </Section>
 
@@ -159,6 +215,14 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               <div className="muted" style={{ fontSize: 11.5 }}>
                 Planlanan süre: <span className="tabular">{local.plannedDurationDays ?? '—'}</span> çalışma günü
               </div>
+              {calendarWarnings.length > 0 && (
+                <div className="calendar-warning">
+                  <strong>Çalışma takvimi uyarısı</strong>
+                  {calendarWarnings.map((warning) => (
+                    <div key={warning.field}>{warning.label}: {fmt(warning.date, 'dd MMM yyyy')} · {warning.reason}</div>
+                  ))}
+                </div>
+              )}
             </Section>
 
             <Section title="Gerçekleşen & Kalan">
@@ -172,8 +236,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
             {baselineSnapshot && (
               <Section title={`Baz Plan · ${baseline?.name || 'Birincil Baz Plan'}`}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-                  <ReadOnlyField label="Başlangıç" value={baselineSnapshot.plannedStart || '—'} />
-                  <ReadOnlyField label="Bitiş" value={baselineSnapshot.plannedFinish || '—'} />
+                  <ReadOnlyField label="Başlangıç" value={baselineSnapshot.plannedStart ? fmt(baselineSnapshot.plannedStart, 'dd MMM yyyy') : '—'} />
+                  <ReadOnlyField label="Bitiş" value={baselineSnapshot.plannedFinish ? fmt(baselineSnapshot.plannedFinish, 'dd MMM yyyy') : '—'} />
                   <ReadOnlyField label="Süre" value={baselineSnapshot.plannedDurationDays == null ? '—' : `${baselineSnapshot.plannedDurationDays} gün`} />
                 </div>
               </Section>
@@ -195,7 +259,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               title="İlişkiler & Bağımlılıklar"
               info={
                 <InfoButton title="Görev ilişkileri" icon={<Icons.Link size={12} />}>
-                  <p><strong>Bağımlılık tipleri:</strong></p>
+                  <p><strong>Bağımlılık tipleri ve lead/lag:</strong></p>
                   <div className="rt-sep" />
                   {Object.values(REL_TYPES).map((rt) =>
                     <div key={rt.code} style={{ marginBottom: 6 }}>
@@ -206,6 +270,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                       <div style={{ fontSize: 11.5, color: 'var(--text-muted)', paddingLeft: 36, lineHeight: 1.45 }}>{rt.description}</div>
                     </div>
                   )}
+                  <div className="rt-sep" />
+                  <p>Pozitif değer gecikme (lag), negatif değer öne çekme (lead) oluşturur. Gün, hafta veya ay birimi seçilebilir.</p>
                 </InfoButton>
               }
             >
@@ -235,6 +301,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     </>
   );
 }
+
 function Section({ title, info, children }) {
   return (
     <div className="col" style={{ gap: 8 }}>
@@ -249,21 +316,22 @@ function Section({ title, info, children }) {
 
 function RelEditor({ task, tasks, onChange }) {
   const deps = task.deps || [];
-  const others = tasks.filter((t) => t.id !== task.id);
+  const others = tasks.filter((t) => t.id !== task.id && (!task.projectId || t.projectId === task.projectId));
   const [selectedType, setSelectedType] = useState('FS');
 
   const updateDep = (idx, patch) => {
     const next = deps.map((d, i) => {
       if (i !== idx) return d;
-      const cur = typeof d === 'string' ? { id: d, type: 'FS' } : { ...d };
-      return { ...cur, ...patch };
+      const cur = typeof d === 'string' ? { id: d, type: 'FS', lagValue: 0, lagUnit: 'day', lagDays: 0 } : { ...d };
+      const updated = { ...cur, ...patch };
+      return { ...updated, lagDays: dependencyLagDays(updated) };
     });
     onChange(next);
   };
   const removeDep = (idx) => onChange(deps.filter((_, i) => i !== idx));
   const addDep = (depTaskId, type) => {
     if (!depTaskId) return;
-    onChange([...deps, { id: depTaskId, type: type || 'FS' }]);
+    onChange([...deps, { id: depTaskId, predecessorId: depTaskId, type: type || 'FS', lagValue: 0, lagUnit: 'day', lagDays: 0 }]);
   };
 
   return (
@@ -278,6 +346,8 @@ function RelEditor({ task, tasks, onChange }) {
         const type = relTypeOf(d);
         const dep = tasks.find((x) => x.id === id);
         const rt = REL_TYPES[type];
+        const lagValue = lagValueOf(d);
+        const lagUnit = lagUnitOf(d);
         if (!dep) return null;
         return (
           <div key={`${id}-${idx}`} className="rel-item">
@@ -285,24 +355,45 @@ function RelEditor({ task, tasks, onChange }) {
               <div className="row" style={{ gap: 8, minWidth: 0 }}>
                 <span style={{ width: 6, height: 6, borderRadius: 99, background: projectColorVar(dep.proje), flexShrink: 0 }} />
                 <span style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.task}</span>
+                {lagValue !== 0 && <span className="badge">{formatDependencyLag(d)}</span>}
               </div>
               <button className="icon-btn" style={{ width: 24, height: 24, flexShrink: 0 }} onClick={() => removeDep(idx)}><Icons.Close size={11} /></button>
             </div>
-            <label className="rel-type-field">
-              <span className="rel-type-field-label">İlişki türü</span>
-              <select
-                className="input rel-type-select"
-                value={type}
-                onChange={(e) => updateDep(idx, { type: e.target.value })}
-              >
-                {Object.values(REL_TYPES).map((rt) =>
-                  <option key={rt.code} value={rt.code}>{rt.code} — {rt.name}</option>
-                )}
-              </select>
-            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr .7fr .8fr', gap: 8 }}>
+              <label className="rel-type-field">
+                <span className="rel-type-field-label">İlişki türü</span>
+                <select
+                  className="input rel-type-select"
+                  value={type}
+                  onChange={(e) => updateDep(idx, { type: e.target.value })}
+                >
+                  {Object.values(REL_TYPES).map((item) =>
+                    <option key={item.code} value={item.code}>{item.code} — {item.name}</option>
+                  )}
+                </select>
+              </label>
+              <label className="rel-type-field">
+                <span className="rel-type-field-label">Lead / Lag</span>
+                <input
+                  type="number"
+                  step="1"
+                  className="input"
+                  value={lagValue}
+                  onChange={(e) => updateDep(idx, { lagValue: e.target.value === '' ? 0 : Number(e.target.value) })}
+                />
+              </label>
+              <label className="rel-type-field">
+                <span className="rel-type-field-label">Birim</span>
+                <select className="input" value={lagUnit} onChange={(e) => updateDep(idx, { lagUnit: e.target.value })}>
+                  {Object.values(LAG_UNITS).map((unit) => <option key={unit.id} value={unit.id}>{unit.label}</option>)}
+                </select>
+              </label>
+            </div>
             <div className="rel-type-help">
               <strong>{rt.code} · {rt.name}:</strong> {rt.description}
-              <div style={{ marginTop: 4, color: 'var(--text-dim)', fontStyle: 'italic' }}>Örn: {rt.example}</div>
+              <div style={{ marginTop: 4, color: 'var(--text-dim)' }}>
+                {lagValue > 0 ? `+${lagValue} ${LAG_UNITS[lagUnit].short} gecikme` : lagValue < 0 ? `${Math.abs(lagValue)} ${LAG_UNITS[lagUnit].short} öne çekme` : 'Ek lead/lag yok'}
+              </div>
             </div>
           </div>
         );
@@ -325,7 +416,7 @@ function RelEditor({ task, tasks, onChange }) {
           onChange={(e) => { addDep(e.target.value, selectedType); e.target.value = ''; }}
           style={{ flex: 1 }}
         >
-          <option value="">+ Görev seçin...</option>
+          <option value="">+ Öncül görev seçin...</option>
           {others.filter((t) => !deps.some((d) => depId(d) === t.id))
             .slice()
             .sort((a, b) => a.task.localeCompare(b.task, 'tr'))
@@ -337,12 +428,14 @@ function RelEditor({ task, tasks, onChange }) {
     </div>
   );
 }
+
 function DateField({ label, value, onChange, accent, nullable = false }) {
   return (
     <div className="col" style={{ gap: 6 }}>
       <div className="label">{label}</div>
       <input
         type="date"
+        lang="tr"
         className="input"
         value={value || ''}
         onChange={(e) => onChange(nullable && !e.target.value ? null : e.target.value)}
