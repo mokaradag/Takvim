@@ -114,4 +114,4 @@
  * @property {boolean} isCritical
  */
 
-export const DOMAIN_MODEL_VERSION = 6;
+export const DOMAIN_MODEL_VERSION = 5;
