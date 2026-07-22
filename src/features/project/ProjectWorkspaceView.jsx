@@ -9,7 +9,7 @@ import { WbsView } from '../wbs/WbsView';
 function legacyTags(project, tasks) {
   return Array.from(new Set(
     tasks
-      .filter((task) => task.projectId === project?.id && String(task.keyword || '').trim())
+      .filter((task) => task.projectId === project?.id && String(task.keyword || '').trim() && String(task.keyword).trim() !== 'Yeni')
       .map((task) => String(task.keyword).trim())
   )).sort((a, b) => a.localeCompare(b, 'tr'));
 }
@@ -98,7 +98,7 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
   const usage = useMemo(() => {
     const counts = new Map();
     tasks.filter((task) => task.projectId === project.id).forEach((task) => {
-      if (!task.keyword) return;
+      if (!task.keyword || task.keyword === 'Yeni') return;
       counts.set(task.keyword, (counts.get(task.keyword) || 0) + 1);
     });
     return counts;
