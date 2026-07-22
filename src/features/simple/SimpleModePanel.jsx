@@ -19,7 +19,7 @@ function personNumber(person) {
 export function SimpleModePanel() {
   const projects = useAllProjects();
   const people = useAllPeople();
-  const { addProject, updateProject, addTask, updateTask, closeTask, selectWorkspace } = useTaskActions();
+  const { addProject, updateProject, addTask, closeTask, selectWorkspace } = useTaskActions();
   const sortedProjects = useMemo(() => projects.slice().sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr')), [projects]);
   const sortedPeople = useMemo(() => people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr')), [people]);
 
@@ -54,15 +54,7 @@ export function SimpleModePanel() {
     if (tags.some((tag) => tag.toLocaleLowerCase('tr-TR') === keyword.trim().toLocaleLowerCase('tr-TR'))) {
       return { ok: true, value: project };
     }
-    return updateProject(project.id, {
-      name: project.name,
-      code: project.code || '',
-      leadId: project.leadId || people[0]?.id || '',
-      dataDate: project.dataDate || fmtISO(today()),
-      color: project.color || 'blue',
-      tags: [...tags, keyword.trim()],
-      source: project.source || 'manual'
-    });
+    return updateProject(project.id, { tags: [...tags, keyword.trim()] });
   };
 
   const submit = async (event) => {
@@ -110,20 +102,17 @@ export function SimpleModePanel() {
       project = tagged.value || project;
     }
 
-    selectWorkspace(null);
-    const createdTask = await addTask();
-    if (!createdTask?.ok || !createdTask.value) {
-      setSaving(false);
-      setMessage({ type: 'error', text: createdTask?.error?.message || 'Görev oluşturulamadı.' });
-      return;
-    }
-
     const selectedPeople = assigneeIds.map((id) => people.find((person) => person.id === id)).filter(Boolean);
-    const saved = await updateTask(createdTask.value.id, {
-      proje: project.name,
+    selectWorkspace(null);
+    const createdTask = await addTask({
+      projectId: project.id,
       projectCode: project.code || '',
+      proje: project.name,
+      color: project.color || 'blue',
+      wbsId: null,
       task: task.trim(),
       keyword: keyword.trim(),
+      assigneeIds: [...assigneeIds],
       sorumlu: selectedPeople.map((person) => person.name),
       status: 'todo',
       priority: 'medium',
@@ -131,14 +120,18 @@ export function SimpleModePanel() {
       plannedStart: dueDate,
       plannedFinish: dueDate,
       targetFinish: dueDate,
+      actualStart: null,
+      actualFinish: null,
+      plannedDurationDays: null,
+      remainingDurationDays: null,
       plannedHours: 0,
       actualHours: 0,
       deps: []
     });
 
-    if (!saved?.ok) {
+    if (!createdTask?.ok || !createdTask.value) {
       setSaving(false);
-      setMessage({ type: 'error', text: saved?.error?.message || 'Görev kaydedilemedi.' });
+      setMessage({ type: 'error', text: createdTask?.error?.message || 'Görev oluşturulamadı.' });
       return;
     }
 
