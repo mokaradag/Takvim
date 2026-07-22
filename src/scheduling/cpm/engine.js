@@ -7,7 +7,7 @@ import {
   moveToWorkingDay,
   resolveTaskCalendar
 } from '../calendars/index.js';
-import { applyDependencyLag } from '../dependencies/index.js';
+import { applyDependencyLag, dependencyLagDays } from '../dependencies/index.js';
 import { buildDependencyGraph, CpmValidationError } from './graph.js';
 
 function dateOnly(value) {
@@ -109,24 +109,26 @@ function forwardConstraint(predecessorSchedule, dependency, successorDuration, s
 }
 
 function backwardStartBound(taskSchedule, successorSchedule, dependency, taskCalendar, successorCalendar) {
+  const lagDays = dependencyLagDays(dependency, successorCalendar);
+
   switch (dependency.type) {
     case 'SS': {
-      const bound = addWorkingDays(successorSchedule.lateStart, -dependency.lagDays, successorCalendar);
+      const bound = addWorkingDays(successorSchedule.lateStart, -lagDays, successorCalendar);
       return moveToWorkingDay(bound, taskCalendar, -1);
     }
     case 'FF': {
-      const finishBound = addWorkingDays(successorSchedule.lateFinish, -dependency.lagDays, successorCalendar);
+      const finishBound = addWorkingDays(successorSchedule.lateFinish, -lagDays, successorCalendar);
       return startFromFinish(moveToWorkingDay(finishBound, taskCalendar, -1), taskSchedule.durationDays, taskCalendar);
     }
     case 'SF': {
-      const bound = addWorkingDays(successorSchedule.lateFinish, -dependency.lagDays, successorCalendar);
+      const bound = addWorkingDays(successorSchedule.lateFinish, -lagDays, successorCalendar);
       return moveToWorkingDay(bound, taskCalendar, -1);
     }
     case 'FS':
     default: {
       const finishBound = addWorkingDays(
         successorSchedule.lateStart,
-        -(dependency.lagDays + 1),
+        -(lagDays + 1),
         successorCalendar
       );
       return startFromFinish(moveToWorkingDay(finishBound, taskCalendar, -1), taskSchedule.durationDays, taskCalendar);

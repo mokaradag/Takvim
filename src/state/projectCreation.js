@@ -8,6 +8,20 @@ function comparableName(value) {
   return normalizedName(value).toLocaleLowerCase('tr-TR');
 }
 
+export function normalizeProjectTags(values = []) {
+  const seen = new Set();
+  return (Array.isArray(values) ? values : [])
+    .map(normalizedName)
+    .filter(Boolean)
+    .filter((value) => {
+      const key = comparableName(value);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
 function isValidIsoDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -100,7 +114,8 @@ export function prepareProjectCreation(input, context = {}, ids = {}) {
     leadId: normalizedInput.leadId,
     lead: lead?.name || '',
     calendarId,
-    dataDate: normalizedInput.dataDate
+    dataDate: normalizedInput.dataDate,
+    tags: normalizeProjectTags(normalizedInput.tags)
   };
   const rootWbs = {
     id: ids.rootWbsId,
@@ -152,7 +167,8 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
       leadId: normalizedInput.leadId,
       lead: lead?.name || '',
       calendarId,
-      dataDate: normalizedInput.dataDate
+      dataDate: normalizedInput.dataDate,
+      tags: normalizeProjectTags(normalizedInput.tags === undefined ? existing.tags : normalizedInput.tags)
     }
   };
 }
@@ -165,15 +181,27 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
   const tasks = context.tasks || [];
   const wbs = context.wbs || [];
   const existing = projects.find((project) => project.id === projectId);
+  const canonicalTags = new Map(
+    (prepared.project.tags || []).map((tag) => [comparableName(tag), tag])
+  );
 
   const taskUpserts = tasks
     .filter((task) => task.projectId === projectId)
     .map((task) => {
       const nameChanged = task.proje !== prepared.project.name;
       const colorChanged = task.color !== prepared.project.color;
-      return nameChanged || colorChanged
-        ? { ...task, proje: prepared.project.name, color: prepared.project.color }
-        : null;
+      const canonicalKeyword = canonicalTags.get(comparableName(task.keyword));
+      const keywordChanged = Boolean(canonicalKeyword) && task.keyword !== canonicalKeyword;
+
+      if (!nameChanged && !colorChanged && !keywordChanged) return null;
+
+      const nextTask = {
+        ...task,
+        proje: prepared.project.name,
+        color: prepared.project.color
+      };
+      if (keywordChanged) nextTask.keyword = canonicalKeyword;
+      return nextTask;
     })
     .filter(Boolean);
 

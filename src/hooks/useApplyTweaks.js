@@ -29,7 +29,10 @@ export function useApplyTweaks(tweaks) {
   }, [tweaks.density]);
 
   useEffect(() => {
-    document.body.style.zoom = String(tweaks.fontScale || 1);
+    const scale = Number(tweaks.fontScale) || 1;
+    document.body.style.zoom = String(scale);
+    document.documentElement.style.setProperty('--app-viewport-h', `calc(100vh / ${scale})`);
+    return () => document.documentElement.style.removeProperty('--app-viewport-h');
   }, [tweaks.fontScale]);
 
   useEffect(() => {

@@ -23,6 +23,12 @@ export const REL_TYPES = Object.freeze({
   }
 });
 
+export const LAG_UNITS = Object.freeze({
+  day: { id: 'day', label: 'Gün', short: 'gün' },
+  week: { id: 'week', label: 'Hafta', short: 'hafta' },
+  month: { id: 'month', label: 'Ay', short: 'ay' }
+});
+
 export function depId(dependency) {
   if (typeof dependency === 'string') return dependency;
   return dependency?.predecessorId || dependency?.id || null;
@@ -34,13 +40,63 @@ export function relTypeOf(dependency) {
   return REL_TYPES[type] ? type : 'FS';
 }
 
+export function lagUnitOf(dependency) {
+  if (typeof dependency !== 'object') return 'day';
+  const unit = dependency?.lagUnit || 'day';
+  return LAG_UNITS[unit] ? unit : 'day';
+}
+
+export function lagValueOf(dependency) {
+  if (typeof dependency !== 'object') return 0;
+  if (Number.isFinite(dependency?.lagValue)) return dependency.lagValue;
+  if (Number.isFinite(dependency?.lagDays)) return dependency.lagDays;
+  return 0;
+}
+
+function canWriteOwnProperty(target, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  return descriptor ? descriptor.writable === true : Object.isExtensible(target);
+}
+
+function materializeLegacyLagValueForUnitEdit(dependency) {
+  if (typeof dependency !== 'object' || dependency === null) return;
+  if (dependency.lagValue != null || dependency.lagUnit == null || !Number.isFinite(dependency.lagDays)) return;
+  if (!canWriteOwnProperty(dependency, 'lagValue') || !canWriteOwnProperty(dependency, 'lagUnit')) return;
+  dependency.lagValue = dependency.lagDays;
+  dependency.lagUnit = lagUnitOf(dependency);
+}
+
+export function dependencyLagDays(dependency, calendar = DEFAULT_CALENDAR) {
+  materializeLegacyLagValueForUnitEdit(dependency);
+  const value = lagValueOf(dependency);
+  const unit = lagUnitOf(dependency);
+  const workdaysPerWeek = Math.max(1, calendar?.workingDays?.length || 5);
+  if (unit === 'week') return Math.trunc(value * workdaysPerWeek);
+  if (unit === 'month') return Math.trunc(value * workdaysPerWeek * 4);
+  return Math.trunc(value);
+}
+
 export function normalizeDependency(dependency) {
   const predecessorId = depId(dependency);
   const type = relTypeOf(dependency);
-  const lagDays = typeof dependency === 'object' && Number.isFinite(dependency?.lagDays) ? dependency.lagDays : 0;
-  return { id: predecessorId, predecessorId, type, lagDays };
+  const hasExplicitUnit = typeof dependency === 'object' && (dependency?.lagValue != null || dependency?.lagUnit != null);
+  if (!hasExplicitUnit) {
+    const lagDays = typeof dependency === 'object' && Number.isFinite(dependency?.lagDays) ? dependency.lagDays : 0;
+    return { id: predecessorId, predecessorId, type, lagDays };
+  }
+  const lagUnit = lagUnitOf(dependency);
+  const lagValue = lagValueOf(dependency);
+  const lagDays = dependencyLagDays({ lagValue, lagUnit });
+  return { id: predecessorId, predecessorId, type, lagValue, lagUnit, lagDays };
+}
+
+export function formatDependencyLag(dependency) {
+  const value = lagValueOf(dependency);
+  if (!value) return '';
+  const unit = LAG_UNITS[lagUnitOf(dependency)]?.short || 'gün';
+  return `${value > 0 ? '+' : ''}${value} ${unit}`;
 }
 
 export function applyDependencyLag(value, dependency, calendar = DEFAULT_CALENDAR) {
-  return addWorkingDays(value, normalizeDependency(dependency).lagDays, calendar);
+  return addWorkingDays(value, dependencyLagDays(dependency, calendar), calendar);
 }

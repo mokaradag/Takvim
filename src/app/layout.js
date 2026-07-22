@@ -1,8 +1,9 @@
 import './globals.css';
+import './enhancements.css';
 
 export const metadata = {
   title: 'MERGEN Rota — Proje Yönetimi',
-  description: 'MERGEN Rota — endüstriyel proje yönetimi paneli: Özet, Görevler, Takvim, Gantt, Kanban, Raporlar.',
+  description: 'MERGEN Rota — Sürüm 1.0 endüstriyel proje yönetimi paneli: Özet, Görevler, Proje Yapısı, Takvim, Gantt, Kanban ve Raporlar.',
 };
 
 const FAVICON =

@@ -11,13 +11,12 @@ import { WorkspaceGanttView } from '../../features/gantt/WorkspaceGanttView';
 import { KanbanView } from '../../features/kanban/KanbanView';
 import { ReportsView } from '../../features/reports/ReportsView';
 import { TeamView } from '../../features/team/TeamView';
+import { HelpView } from '../../features/help/HelpView';
 import { SettingsView } from '../../features/settings/SettingsView';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
 import {
-  useAllPeople,
   useAllProjects,
   usePeople,
-  useProjectSchedule,
   useTaskActions,
   useTasks,
   useTaskStats,
@@ -30,7 +29,7 @@ import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
 import { NAV_ITEMS, PAGE_META } from './navigation';
-import { ProjectCreateDialog } from './ProjectCreateDialog';
+import { ProjectExportMenu } from './ProjectExportMenu';
 import { WelcomeScreen } from './WelcomeScreen';
 
 export default function AppShell() {
@@ -38,20 +37,17 @@ export default function AppShell() {
   useApplyTweaks(t);
   const tasks = useTasks();
   const people = usePeople();
-  const allPeople = useAllPeople();
   const wbs = useWbs();
   const projects = useAllProjects();
   const workspace = useWorkspace();
-  const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
   const stats = useTaskStats();
-  const { openTask, addProject } = useTaskActions();
+  const { openTask } = useTaskActions();
 
   const [view, setView] = useState(() => {
     const landing = TWEAK_DEFAULTS.landingView || 'ozet';
     return NAV_ITEMS.some((item) => item.id === landing) ? landing : 'ozet';
   });
   const [cmdOpen, setCmdOpen] = useState(false);
-  const [projectCreateOpen, setProjectCreateOpen] = useState(false);
   const [welcomeOpen, setWelcomeOpen] = useState(() => {
     try { return localStorage.getItem('mp_seen_welcome_v2') !== '1'; }
     catch { return true; }
@@ -87,14 +83,9 @@ export default function AppShell() {
     kanban: tasks.length,
     rapor: null,
     kisi: people.length,
+    yardim: null,
     ayarlar: null
   }), [tasks.length, wbs.length, projects.length, people.length, workspace.mode]);
-
-  const createProject = async (input) => {
-    const result = await addProject(input);
-    if (result?.ok) setView('wbs');
-    return result;
-  };
 
   const renderView = () => {
     switch (view) {
@@ -106,6 +97,7 @@ export default function AppShell() {
       case 'kanban': return <KanbanView />;
       case 'rapor': return <ReportsView />;
       case 'kisi': return <TeamView />;
+      case 'yardim': return <HelpView />;
       case 'ayarlar': return <SettingsView t={t} setTweak={setTweak} />;
       default: return null;
     }
@@ -113,6 +105,8 @@ export default function AppShell() {
 
   const meta = PAGE_META[view] || PAGE_META.ozet;
   const workspaceKey = `${workspace.mode}:${workspace.selectedProjectId || 'all'}`;
+  const projectContextVisible = workspace.selectedProject && view !== 'ayarlar' && view !== 'yardim';
+  const exportVisible = view !== 'ayarlar' && view !== 'yardim';
 
   return (
     <div className="app">
@@ -138,13 +132,6 @@ export default function AppShell() {
             <option value="">Portföy · Tüm Projeler</option>
             {projects.map((project) => <option key={project.id} value={project.id}>Proje · {project.name}</option>)}
           </select>
-          <button
-            className="btn ghost sm"
-            style={{ width: '100%', justifyContent: 'center' }}
-            onClick={() => setProjectCreateOpen(true)}
-          >
-            <Icons.Plus size={13} /> Yeni proje
-          </button>
           <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
             {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
           </div>
@@ -171,17 +158,20 @@ export default function AppShell() {
         </nav>
 
         <div className="sidebar-footer">
-          <div className="user-chip">
-            <Avatar name="Zeynep Aydın" size="md" />
-            <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-              <div className="name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Zeynep Aydın</div>
-              <div className="role">Product Manager</div>
+          <div className="sidebar-footer-row">
+            <div className="user-chip">
+              <Avatar name="Zeynep Aydın" size="md" />
+              <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                <div className="name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Zeynep Aydın</div>
+                <div className="role">Product Manager</div>
+              </div>
             </div>
+            <button className="icon-btn" onClick={() => setView('yardim')} title="Kullanım rehberi"><Icons.Help size={15} /></button>
+            <button className="icon-btn" onClick={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')} title="Tema">
+              {t.theme === 'light' ? <Icons.Moon size={15} /> : <Icons.Sun size={15} />}
+            </button>
           </div>
-          <button className="icon-btn" onClick={() => setWelcomeOpen(true)} title="Yardım ve özet"><Icons.Help size={15} /></button>
-          <button className="icon-btn" onClick={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')} title="Tema">
-            {t.theme === 'light' ? <Icons.Moon size={15} /> : <Icons.Sun size={15} />}
-          </button>
+          <div className="sidebar-version">MERGEN Rota · Sürüm 1.0</div>
         </div>
       </aside>
 
@@ -190,34 +180,35 @@ export default function AppShell() {
           <Heptagon variant="hept-topbar" />
           <div className="col" style={{ gap: 2 }}>
             <h1 className="hero-title">{meta.title}</h1>
-            <div className="sub">
-              {meta.sub}
-              {workspace.selectedProject && <span> · {workspace.selectedProject.name}</span>}
-            </div>
+            <div className="sub">{meta.sub}</div>
           </div>
-          <div className="topbar-spacer" />
-          {workspace.selectedProject && (
-            <div className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <span className="badge">Data Date · {workspace.selectedProject.dataDate || '—'}</span>
-              <span className="badge">CPM · {projectSchedule?.projectFinish || '—'}</span>
+          {projectContextVisible && (
+            <div className="topbar-project-context" aria-label={`Aktif proje: ${workspace.selectedProject.name}`}>
+              <span>Aktif Proje</span>
+              <strong>{workspace.selectedProject.name}</strong>
             </div>
           )}
-          {view === 'veri' && (
-            <InfoButton title="Görevler" icon={<Icons.Table size={12} />}>
-              <p>Görevleri listele, filtrele ve düzenle. Proje çalışma alanında liste seçili proje ile otomatik olarak sınırlandırılır.</p>
-            </InfoButton>
-          )}
+          <div className="topbar-spacer" />
+          <div className="topbar-actions">
+            {exportVisible && (
+              <ProjectExportMenu
+                project={workspace.selectedProject}
+                projects={projects}
+                tasks={tasks}
+                wbs={wbs}
+              />
+            )}
+            {view === 'veri' && (
+              <InfoButton title="Görevler" icon={<Icons.Table size={12} />}>
+                <p>Görevleri listele, filtrele ve düzenle. Proje çalışma alanında liste seçili proje ile otomatik olarak sınırlandırılır.</p>
+              </InfoButton>
+            )}
+          </div>
         </header>
         <main key={workspaceKey} className="content">{renderView()}</main>
       </div>
 
       <TaskDetailOverlay />
-      <ProjectCreateDialog
-        open={projectCreateOpen}
-        people={allPeople}
-        onCreate={createProject}
-        onClose={() => setProjectCreateOpen(false)}
-      />
       {cmdOpen && (
         <CommandPalette
           onClose={() => setCmdOpen(false)}
