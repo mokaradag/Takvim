@@ -10,10 +10,11 @@ import {
   useState
 } from 'react';
 import { appRepository } from '../data';
+import { setProjectColorOverrides } from '../lib/colors';
 import { selectTaskStats } from '../scheduling/metrics';
 import { appStateReducer, createLoadingState, createNewTask } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
-import { prepareProjectCreation, prepareProjectUpdate } from './projectCreation';
+import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
@@ -51,6 +52,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
   const [workspaceWriteReady, setWorkspaceWriteReady] = useState(false);
 
   stateRef.current = state;
+  setProjectColorOverrides(state.projects);
 
   const applyStateAction = useCallback((action) => {
     stateRef.current = appStateReducer(stateRef.current, action);
@@ -213,32 +215,24 @@ export function AppStateProvider({ children, repository = appRepository }) {
     if (failedFlush) return failedFlush;
 
     const current = stateRef.current;
-    const prepared = prepareProjectUpdate(projectId, input, {
+    const prepared = prepareProjectUpdateChanges(projectId, input, {
       projects: current.projects,
       people: current.people,
-      calendars: current.calendars
+      calendars: current.calendars,
+      tasks: current.tasks,
+      wbs: current.wbs
     });
     if (!prepared.ok) return prepared;
 
-    const taskUpserts = current.tasks
-      .filter((task) => task.projectId === projectId)
-      .map((task) => ({ ...task, proje: prepared.project.name, color: prepared.project.color }));
-    const rootWbs = current.wbs.find((node) => node.projectId === projectId && node.parentId == null) || null;
-    const wbsUpserts = rootWbs ? [{ ...rootWbs, name: prepared.project.name }] : [];
-    const changes = {
-      projectUpserts: [prepared.project],
-      taskUpserts,
-      wbsUpserts
-    };
-
+    const changes = prepared.changes;
     const result = await persistence.commitChanges('project/update', changes);
     if (!result.ok) return result;
 
     const committed = result.value || {};
     const latest = stateRef.current;
     const projectUpserts = committed.projectUpserts?.length ? committed.projectUpserts : changes.projectUpserts;
-    const committedTaskUpserts = committed.taskUpserts?.length ? committed.taskUpserts : taskUpserts;
-    const committedWbsUpserts = committed.wbsUpserts?.length ? committed.wbsUpserts : wbsUpserts;
+    const taskUpserts = committed.taskUpserts?.length ? committed.taskUpserts : changes.taskUpserts;
+    const wbsUpserts = committed.wbsUpserts?.length ? committed.wbsUpserts : changes.wbsUpserts;
     const projects = mergeUpserts(latest.projects, projectUpserts);
 
     applyStateAction({
@@ -247,8 +241,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
         calendars: latest.calendars,
         projects,
         people: latest.people,
-        wbs: mergeUpserts(latest.wbs, committedWbsUpserts),
-        tasks: mergeUpserts(latest.tasks, committedTaskUpserts),
+        wbs: mergeUpserts(latest.wbs, wbsUpserts),
+        tasks: mergeUpserts(latest.tasks, taskUpserts),
         baselines: latest.baselines,
         taskBaselineSnapshots: latest.taskBaselineSnapshots
       }
