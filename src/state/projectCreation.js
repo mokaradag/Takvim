@@ -168,7 +168,7 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
       lead: lead?.name || '',
       calendarId,
       dataDate: normalizedInput.dataDate,
-      tags: normalizeProjectTags(normalizedInput.tags)
+      tags: normalizeProjectTags(normalizedInput.tags === undefined ? existing.tags : normalizedInput.tags)
     }
   };
 }
