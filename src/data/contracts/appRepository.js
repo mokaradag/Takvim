@@ -13,6 +13,8 @@
  * Atomic canonical persistence change set.
  *
  * @typedef {Object} AppChangeSet
+ * @property {import('../../domain/models').Project[]} [projectUpserts]
+ * @property {string[]} [projectDeletes]
  * @property {import('../../domain/models').Task[]} [taskUpserts]
  * @property {string[]} [taskDeletes]
  * @property {import('../../domain/models').WbsNode[]} [wbsUpserts]
