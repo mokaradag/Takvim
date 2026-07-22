@@ -87,11 +87,11 @@ test('selectProjectWbs returns an empty list when projectId is missing', () => {
   assert.deepEqual(selectProjectWbs(wbs, null), []);
 });
 
-test('selectProjectWbs filters and sorts without mutating the source array', () => {
+test('selectProjectWbs keeps parents before descendants and sibling order without mutating the source array', () => {
   const reversed = [...wbs].reverse();
   const before = reversed.map((node) => node.id);
   const result = selectProjectWbs(reversed, 'p1');
-  assert.deepEqual(result.map((node) => node.id), ['p1-root', 'p1-2-a', 'p1-2', 'p1-10']);
+  assert.deepEqual(result.map((node) => node.id), ['p1-root', 'p1-2', 'p1-2-a', 'p1-10']);
   assert.deepEqual(reversed.map((node) => node.id), before);
 });
 
@@ -365,5 +365,5 @@ test('workspace context returns sorted project WBS data in project mode', () => 
     selectedProjectId: 'p1',
     wbs: [...wbs].reverse()
   }));
-  assert.deepEqual(context.wbs.map((node) => node.id), ['p1-root', 'p1-2-a', 'p1-2', 'p1-10']);
+  assert.deepEqual(context.wbs.map((node) => node.id), ['p1-root', 'p1-2', 'p1-2-a', 'p1-10']);
 });
