@@ -65,6 +65,11 @@ export function dependencyLagDays(dependency, calendar = DEFAULT_CALENDAR) {
 export function normalizeDependency(dependency) {
   const predecessorId = depId(dependency);
   const type = relTypeOf(dependency);
+  const hasExplicitUnit = typeof dependency === 'object' && (dependency?.lagValue != null || dependency?.lagUnit != null);
+  if (!hasExplicitUnit) {
+    const lagDays = typeof dependency === 'object' && Number.isFinite(dependency?.lagDays) ? dependency.lagDays : 0;
+    return { id: predecessorId, predecessorId, type, lagDays };
+  }
   const lagUnit = lagUnitOf(dependency);
   const lagValue = lagValueOf(dependency);
   const lagDays = dependencyLagDays({ lagValue, lagUnit });
