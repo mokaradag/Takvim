@@ -18,13 +18,18 @@ function clean(value) {
   return value == null ? '' : String(value);
 }
 
+function neutralizeSpreadsheetFormula(value) {
+  const text = clean(value);
+  return /^[\t\r\n ]*[=+\-@]/.test(text) ? `'${text}` : text;
+}
+
 function escapeCsv(value) {
-  const text = clean(value).replace(/"/g, '""');
+  const text = neutralizeSpreadsheetFormula(value).replace(/"/g, '""');
   return /[;"\n\r]/.test(text) ? `"${text}"` : text;
 }
 
 function escapeHtml(value) {
-  return clean(value)
+  return neutralizeSpreadsheetFormula(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
