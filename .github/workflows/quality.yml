@@ -25,49 +25,7 @@ jobs:
         run: npm ci
       - name: Test PR22 regressions
         run: node --test --test-reporter=dot test/pr22-codex-regressions.test.mjs
-      - name: Test architecture and UI contracts
-        if: always()
-        run: >-
-          node --test --test-reporter=dot
-          test/architecture-boundaries.test.mjs
-          test/public-contracts-runtime-smoke.test.mjs
-          test/project-management.test.mjs
-          test/pr19-regressions.test.mjs
-          test/mergen-rota-v1.test.mjs
-      - name: Test scheduling and CPM
-        if: always()
-        run: >-
-          node --test --test-reporter=dot
-          test/cpm.test.mjs
-          test/working-calendars.test.mjs
-          test/domain-scheduling.test.mjs
-          test/cpm-validation-edge-cases.test.mjs
-          test/schedule-projection.test.mjs
-          test/scheduling-edge-cases.test.mjs
-          test/normalization-schedule-fallbacks.test.mjs
-          test/scheduling-data-model.test.mjs
-          test/seed-integrity.test.mjs
-      - name: Test workspace and application state
-        if: always()
-        run: >-
-          node --test --test-reporter=dot
-          test/wbs-workspace.test.mjs
-          test/wbs-workspace-edge-cases.test.mjs
-          test/app-state-edge-cases.test.mjs
-          test/domain-validation-edge-cases.test.mjs
-          test/application-integration.test.mjs
-          test/repository-draft-navigation-edge-cases.test.mjs
-          test/utility-preferences-edge-cases.test.mjs
-      - name: Test persistence
-        if: always()
-        run: >-
-          node --test --test-reporter=dot
-          test/persistence-boundary.test.mjs
-          test/persistence-primitives-edge-cases.test.mjs
-          test/persistence-task-wbs-move.test.mjs
-          test/persistence-regressions.test.mjs
       - name: Run automated tests
-        if: always()
         run: npm test -- --test-reporter=dot
       - name: Build production application
         run: npm run build
