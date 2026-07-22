@@ -1,4 +1,8 @@
 import {
+  AppRepositoryError,
+  REPOSITORY_ERROR_CODES
+} from '../contracts/appRepository.js';
+import {
   BASELINES,
   CALENDARS,
   PEOPLE,
@@ -8,12 +12,7 @@ import {
   WBS
 } from './seed.js';
 
-function clone(value) {
-  if (typeof structuredClone === 'function') return structuredClone(value);
-  return JSON.parse(JSON.stringify(value));
-}
-
-export function createMockRepository(seed = {
+const DEFAULT_SEED = {
   calendars: CALENDARS,
   projects: PROJECTS,
   people: PEOPLE,
@@ -21,12 +20,112 @@ export function createMockRepository(seed = {
   tasks: TASKS,
   baselines: BASELINES,
   taskBaselineSnapshots: TASK_BASELINE_SNAPSHOTS
-}) {
-  const snapshot = clone(seed);
+};
+
+function clone(value) {
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function wait(ms) {
+  if (!ms) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldFail(setting, context) {
+  return typeof setting === 'function' ? Boolean(setting(context)) : Boolean(setting);
+}
+
+function normalizeChanges(changes = {}) {
   return {
-    kind: 'mock',
-    getSnapshot() {
+    taskUpserts: clone(changes.taskUpserts || []),
+    taskDeletes: [...new Set(changes.taskDeletes || [])],
+    wbsUpserts: clone(changes.wbsUpserts || []),
+    wbsDeletes: [...new Set(changes.wbsDeletes || [])]
+  };
+}
+
+function applyCollectionChanges(items, upserts, deletes, { prependNew = false } = {}) {
+  const deleted = new Set(deletes);
+  const upsertsById = new Map(upserts.map((item) => [item.id, item]));
+  const existingIds = new Set(items.map((item) => item.id));
+  const updated = items
+    .filter((item) => !deleted.has(item.id))
+    .map((item) => upsertsById.get(item.id) || item);
+  const additions = upserts.filter((item) => !existingIds.has(item.id) && !deleted.has(item.id));
+  return prependNew ? [...additions, ...updated] : [...updated, ...additions];
+}
+
+/**
+ * Asynchronous mutable in-memory adapter.
+ *
+ * Successful writes survive later loadSnapshot() calls for this repository
+ * instance only. A fresh instance starts again from its supplied seed.
+ */
+export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
+  let snapshot = clone(seed || DEFAULT_SEED);
+  let failNextMutation = Boolean(options.failNextMutation);
+  let loadAttempt = 0;
+  let mutationAttempt = 0;
+
+  const latencyMs = Number.isFinite(options.latencyMs) ? Math.max(0, options.latencyMs) : 0;
+
+  return {
+    kind: 'async-memory',
+
+    async loadSnapshot() {
+      loadAttempt += 1;
+      await wait(latencyMs);
+      if (shouldFail(options.failLoad, { attempt: loadAttempt })) {
+        throw new AppRepositoryError({
+          code: REPOSITORY_ERROR_CODES.LOAD_FAILED,
+          message: 'Veriler yüklenemedi.',
+          operation: 'loadSnapshot'
+        });
+      }
       return clone(snapshot);
+    },
+
+    async commitChanges(changes) {
+      mutationAttempt += 1;
+      await wait(latencyMs);
+
+      const shouldFailMutation = failNextMutation
+        || shouldFail(options.failMutation, { attempt: mutationAttempt, changes: clone(changes) });
+      failNextMutation = false;
+
+      if (shouldFailMutation) {
+        throw new AppRepositoryError({
+          code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+          message: 'Değişiklik kaydedilemedi.',
+          operation: 'commitChanges'
+        });
+      }
+
+      const normalized = normalizeChanges(changes);
+      const candidate = clone(snapshot);
+      candidate.tasks = applyCollectionChanges(
+        candidate.tasks || [],
+        normalized.taskUpserts,
+        normalized.taskDeletes,
+        { prependNew: true }
+      );
+      candidate.wbs = applyCollectionChanges(
+        candidate.wbs || [],
+        normalized.wbsUpserts,
+        normalized.wbsDeletes
+      );
+
+      snapshot = candidate;
+
+      const taskIds = new Set(normalized.taskUpserts.map((task) => task.id));
+      const wbsIds = new Set(normalized.wbsUpserts.map((node) => node.id));
+      return clone({
+        taskUpserts: (snapshot.tasks || []).filter((task) => taskIds.has(task.id)),
+        taskDeletes: normalized.taskDeletes,
+        wbsUpserts: (snapshot.wbs || []).filter((node) => wbsIds.has(node.id)),
+        wbsDeletes: normalized.wbsDeletes
+      });
     }
   };
 }
