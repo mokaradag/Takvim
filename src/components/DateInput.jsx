@@ -52,12 +52,9 @@ export function DateInput({
 
   const commit = () => {
     if (!draft.trim()) {
-      if (allowEmpty) {
-        setInvalid(false);
-        onChange?.('');
-      } else {
-        setDraft(fmtDisplayDate(value));
-      }
+      setInvalid(false);
+      if (onChange) onChange('');
+      else if (!allowEmpty) setDraft(fmtDisplayDate(value));
       return;
     }
 
