@@ -181,14 +181,25 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
   const tasks = context.tasks || [];
   const wbs = context.wbs || [];
   const existing = projects.find((project) => project.id === projectId);
+  const canonicalTags = new Map(
+    (prepared.project.tags || []).map((tag) => [comparableName(tag), tag])
+  );
 
   const taskUpserts = tasks
     .filter((task) => task.projectId === projectId)
     .map((task) => {
       const nameChanged = task.proje !== prepared.project.name;
       const colorChanged = task.color !== prepared.project.color;
-      return nameChanged || colorChanged
-        ? { ...task, proje: prepared.project.name, color: prepared.project.color }
+      const canonicalKeyword = canonicalTags.get(comparableName(task.keyword));
+      const keywordChanged = Boolean(canonicalKeyword) && task.keyword !== canonicalKeyword;
+
+      return nameChanged || colorChanged || keywordChanged
+        ? {
+            ...task,
+            proje: prepared.project.name,
+            color: prepared.project.color,
+            keyword: keywordChanged ? canonicalKeyword : task.keyword
+          }
         : null;
     })
     .filter(Boolean);
