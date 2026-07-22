@@ -17,7 +17,11 @@ export function compareWbsNodes(left, right) {
 
 export function selectProjectWbs(wbs, projectId) {
   if (!projectId) return [];
-  return (wbs || []).filter((node) => node.projectId === projectId).slice().sort(compareWbsNodes);
+  const projectNodes = (wbs || []).filter((node) => node.projectId === projectId);
+  const nodesById = new Map(projectNodes.map((node) => [node.id, node]));
+  return flattenWbsTree(buildWbsTree(projectNodes))
+    .map(({ node }) => nodesById.get(node.id))
+    .filter(Boolean);
 }
 
 export function selectWbsRoots(wbs, projectId = null) {
