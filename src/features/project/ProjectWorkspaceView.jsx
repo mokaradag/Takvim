@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { ProjectColorPicker } from '../../components/project/ProjectColorPicker';
 import { ProjectCreateDialog } from '../../components/shell/ProjectCreateDialog';
@@ -115,6 +116,10 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
     setMessage(null);
     setForm((current) => ({ ...current, [field]: event.target.value }));
   };
+  const setValue = (field, value) => {
+    setMessage(null);
+    setForm((current) => ({ ...current, [field]: value }));
+  };
 
   const submit = async (event) => {
     event.preventDefault();
@@ -165,7 +170,7 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
 
           <label className="col" style={{ gap: 6 }}>
             <span className="label">Veri tarihi</span>
-            <input className="input" type="date" lang="en-GB" value={form.dataDate} onChange={setField('dataDate')} disabled={saving} />
+            <DateInput value={form.dataDate} onChange={(value) => setValue('dataDate', value)} allowEmpty={false} disabled={saving} />
           </label>
         </div>
 
