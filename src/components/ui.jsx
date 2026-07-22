@@ -226,27 +226,19 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
   const innerW = width - pad * 2;
   const innerH = height - pad * 2;
   const pts = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * innerW;
+    const x = pad + (i / Math.max(1, data.length - 1)) * innerW;
     const y = pad + innerH - ((v - min) / range) * innerH;
     return [x, y];
   });
   const polyline = pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const area = `${pts[0][0]},${pad + innerH} ${polyline} ${pts[pts.length - 1][0]},${pad + innerH}`;
   const gridLines = [0, 0.5, 1];
-  // approximate length for stroke-dasharray
-  let len = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const dx = pts[i][0] - pts[i - 1][0];
-    const dy = pts[i][1] - pts[i - 1][1];
-    len += Math.sqrt(dx * dx + dy * dy);
-  }
-  // tooltip state is initialized before the empty-data guard to preserve Hook order.
+
   const onMove = (e) => {
     const svg = svgRef.current;
     if (!svg) return;
     const r = svg.getBoundingClientRect();
     const x = ((e.clientX - r.left) / r.width) * width;
-    // find nearest point index
     let bestI = 0; let bestD = Infinity;
     pts.forEach(([px], i) => {
       const dd = Math.abs(px - x);
@@ -257,13 +249,14 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
   const onLeave = () => setHover(null);
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative', width: '100%', overflow: 'hidden' }}>
       <svg
         ref={svgRef}
-        width="100%" height={height}
+        width={width}
+        height={height}
         viewBox={`0 0 ${width} ${height}`}
-        preserveAspectRatio="none"
-        style={{ display: 'block', cursor: 'crosshair' }}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ display: 'block', width: '100%', height: 'auto', cursor: 'crosshair', overflow: 'visible' }}
         onMouseMove={onMove}
         onMouseLeave={onLeave}
       >
@@ -284,8 +277,6 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
           strokeWidth="2"
           strokeLinejoin="round"
           strokeLinecap="round"
-          className={animated ? 'chart-line' : ''}
-          style={animated ? { '--len': len } : null}
         />
         {pts.map(([x, y], i) => (
           <circle
@@ -295,7 +286,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
             stroke={color}
             strokeWidth="2"
             className={animated ? 'chart-dot' : ''}
-            style={animated ? { animationDelay: `${0.4 + i * 0.02}s` } : null}
+            style={animated ? { animationDelay: `${0.25 + i * 0.02}s` } : null}
           />
         ))}
         {hover != null && (
