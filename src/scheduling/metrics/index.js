@@ -4,6 +4,9 @@ export function taskPlannedDurationDays(task) {
   return Number.isFinite(task?.plannedDurationDays) ? Math.max(0, task.plannedDurationDays) : 0;
 }
 
+// Gantt görünümündeki eski adlandırma için geriye dönük uyum.
+export const taskDurationDays = taskPlannedDurationDays;
+
 export function getTaskDateRange(tasks, { paddingDays = 3, fallbackStart = today(), fallbackDays = 30 } = {}) {
   if (!tasks.length) return { start: fallbackStart, end: addDays(fallbackStart, fallbackDays) };
   let min = parseDate(tasks[0].plannedStart);

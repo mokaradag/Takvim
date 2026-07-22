@@ -38,6 +38,8 @@ function shouldFail(setting, context) {
 
 function normalizeChanges(changes = {}) {
   return {
+    projectUpserts: clone(changes.projectUpserts || []),
+    projectDeletes: [...new Set(changes.projectDeletes || [])],
     taskUpserts: clone(changes.taskUpserts || []),
     taskDeletes: [...new Set(changes.taskDeletes || [])],
     wbsUpserts: clone(changes.wbsUpserts || []),
@@ -104,6 +106,11 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
 
       const normalized = normalizeChanges(changes);
       const candidate = clone(snapshot);
+      candidate.projects = applyCollectionChanges(
+        candidate.projects || [],
+        normalized.projectUpserts,
+        normalized.projectDeletes
+      );
       candidate.tasks = applyCollectionChanges(
         candidate.tasks || [],
         normalized.taskUpserts,
@@ -118,14 +125,22 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
 
       snapshot = candidate;
 
+      const projectIds = new Set(normalized.projectUpserts.map((project) => project.id));
       const taskIds = new Set(normalized.taskUpserts.map((task) => task.id));
       const wbsIds = new Set(normalized.wbsUpserts.map((node) => node.id));
-      return clone({
+      const committed = {
         taskUpserts: (snapshot.tasks || []).filter((task) => taskIds.has(task.id)),
         taskDeletes: normalized.taskDeletes,
         wbsUpserts: (snapshot.wbs || []).filter((node) => wbsIds.has(node.id)),
         wbsDeletes: normalized.wbsDeletes
-      });
+      };
+
+      if (normalized.projectUpserts.length || normalized.projectDeletes.length) {
+        committed.projectUpserts = (snapshot.projects || []).filter((project) => projectIds.has(project.id));
+        committed.projectDeletes = normalized.projectDeletes;
+      }
+
+      return clone(committed);
     }
   };
 }
