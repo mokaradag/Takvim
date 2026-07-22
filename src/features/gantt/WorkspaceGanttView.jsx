@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import { DateInput } from '../../components/DateInput';
 import { fmt, fmtISO, today } from '../../scheduling/dates';
 import {
   calculateTaskDateRange,
@@ -75,9 +76,9 @@ export function WorkspaceGanttView() {
         )}
         <div className="gantt-range-controls">
           <span className="muted" style={{ fontSize: 11.5 }}>Görüntü aralığı</span>
-          <input type="date" lang="en-GB" className="input" value={rangeStart} onChange={(event) => setRangeStart(event.target.value)} />
+          <DateInput value={rangeStart} onChange={setRangeStart} allowEmpty={false} ariaLabel="Gantt görüntü başlangıç tarihi" />
           <span className="muted">—</span>
-          <input type="date" lang="en-GB" className="input" value={rangeEnd} onChange={(event) => setRangeEnd(event.target.value)} />
+          <DateInput value={rangeEnd} onChange={setRangeEnd} allowEmpty={false} ariaLabel="Gantt görüntü bitiş tarihi" />
           <button type="button" className="btn primary sm" onClick={applyRange}>Uygula</button>
           <button type="button" className={`btn sm${rangeMode === 'auto' ? ' ghost' : ''}`} onClick={resetRange}>Otomatik</button>
         </div>
