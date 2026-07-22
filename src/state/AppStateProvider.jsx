@@ -13,6 +13,7 @@ import { appRepository } from '../data';
 import { selectTaskStats } from '../scheduling/metrics';
 import { appStateReducer, createLoadingState, createNewTask } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
+import { prepareProjectCreation } from './projectCreation';
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
@@ -152,6 +153,52 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return result.ok ? { ...result, value: created } : result;
   }, [applyStateAction, persistence]);
 
+  const addProject = useCallback(async (input) => {
+    const failedFlush = firstFailedResult(await persistence.flushAllTaskUpdates());
+    if (failedFlush) return failedFlush;
+
+    const current = stateRef.current;
+    const prepared = prepareProjectCreation(input, {
+      projects: current.projects,
+      people: current.people,
+      calendars: current.calendars,
+      wbs: current.wbs
+    }, {
+      projectId: uniqueId('project'),
+      rootWbsId: uniqueId('wbs')
+    });
+    if (!prepared.ok) return prepared;
+
+    const result = await persistence.commitChanges('project/create', prepared.changes);
+    if (!result.ok) return result;
+
+    const committedProject = result.value?.projectUpserts?.find((project) => project.id === prepared.project.id)
+      || prepared.project;
+    const committedRoot = result.value?.wbsUpserts?.find((node) => node.id === prepared.rootWbs.id)
+      || prepared.rootWbs;
+    const latest = stateRef.current;
+
+    applyStateAction({
+      type: 'data/load-success',
+      snapshot: {
+        calendars: latest.calendars,
+        projects: [...latest.projects, committedProject],
+        people: latest.people,
+        wbs: [...latest.wbs, committedRoot],
+        tasks: latest.tasks,
+        baselines: latest.baselines,
+        taskBaselineSnapshots: latest.taskBaselineSnapshots
+      }
+    });
+    applyStateAction({
+      type: 'workspace/select',
+      workspaceMode: WORKSPACE_MODE_PROJECT,
+      selectedProjectId: committedProject.id
+    });
+
+    return { ok: true, value: committedProject, changes: result.value };
+  }, [applyStateAction, persistence]);
+
   const selectWorkspace = useCallback((projectId) => {
     applyStateAction({
       type: 'workspace/select',
@@ -194,6 +241,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     moveTasksToWbs,
     deleteTask,
     addTask,
+    addProject,
     selectWorkspace,
     addWbsChild,
     renameWbs,
@@ -210,6 +258,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     moveTasksToWbs,
     deleteTask,
     addTask,
+    addProject,
     selectWorkspace,
     addWbsChild,
     renameWbs,
