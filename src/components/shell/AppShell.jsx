@@ -5,7 +5,7 @@ import { Avatar, Heptagon } from '../ui';
 import { InfoButton } from '../ui-extras';
 import { DashboardView } from '../../features/dashboard/DashboardView';
 import { TasksView } from '../../features/tasks/TasksView';
-import { WbsView } from '../../features/wbs/WbsView';
+import { ProjectWorkspaceView } from '../../features/project/ProjectWorkspaceView';
 import { CalendarView } from '../../features/calendar/CalendarView';
 import { WorkspaceGanttView } from '../../features/gantt/WorkspaceGanttView';
 import { KanbanView } from '../../features/kanban/KanbanView';
@@ -16,7 +16,6 @@ import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay'
 import {
   useAllPeople,
   useAllProjects,
-  useCalendars,
   usePeople,
   useProjectSchedule,
   useTaskActions,
@@ -42,7 +41,6 @@ export default function AppShell() {
   const allPeople = useAllPeople();
   const wbs = useWbs();
   const projects = useAllProjects();
-  const calendars = useCalendars();
   const workspace = useWorkspace();
   const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
   const stats = useTaskStats();
@@ -83,20 +81,26 @@ export default function AppShell() {
   const totalsByView = useMemo(() => ({
     ozet: tasks.length,
     veri: tasks.length,
-    wbs: wbs.length,
+    wbs: workspace.mode === 'project' ? wbs.length : projects.length,
     takvim: null,
     gantt: tasks.length,
     kanban: tasks.length,
     rapor: null,
     kisi: people.length,
     ayarlar: null
-  }), [tasks.length, wbs.length, people.length]);
+  }), [tasks.length, wbs.length, projects.length, people.length, workspace.mode]);
+
+  const createProject = async (input) => {
+    const result = await addProject(input);
+    if (result?.ok) setView('wbs');
+    return result;
+  };
 
   const renderView = () => {
     switch (view) {
       case 'ozet': return <DashboardView onNavigate={setView} />;
       case 'veri': return <TasksView />;
-      case 'wbs': return <WbsView />;
+      case 'wbs': return <ProjectWorkspaceView />;
       case 'takvim': return <CalendarView t={t} setTweak={setTweak} />;
       case 'gantt': return <WorkspaceGanttView />;
       case 'kanban': return <KanbanView />;
@@ -108,7 +112,6 @@ export default function AppShell() {
   };
 
   const meta = PAGE_META[view] || PAGE_META.ozet;
-  const selectedCalendar = calendars.find((calendar) => calendar.id === workspace.selectedProject?.calendarId) || null;
   const workspaceKey = `${workspace.mode}:${workspace.selectedProjectId || 'all'}`;
 
   return (
@@ -143,7 +146,7 @@ export default function AppShell() {
             <Icons.Plus size={13} /> Yeni proje
           </button>
           <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
-            {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} WBS düğümü` : `${projects.length} proje · ${tasks.length} görev`}
+            {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
           </div>
         </div>
 
@@ -196,7 +199,6 @@ export default function AppShell() {
           {workspace.selectedProject && (
             <div className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <span className="badge">Data Date · {workspace.selectedProject.dataDate || '—'}</span>
-              <span className="badge">{selectedCalendar?.name || 'Takvim yok'}</span>
               <span className="badge">CPM · {projectSchedule?.projectFinish || '—'}</span>
             </div>
           )}
@@ -213,8 +215,7 @@ export default function AppShell() {
       <ProjectCreateDialog
         open={projectCreateOpen}
         people={allPeople}
-        calendars={calendars}
-        onCreate={addProject}
+        onCreate={createProject}
         onClose={() => setProjectCreateOpen(false)}
       />
       {cmdOpen && (
