@@ -10,6 +10,8 @@ import {
 } from '../src/domain/selectors/index.js';
 import {
   normalizeTaskReferences,
+  validateTaskWbsMove,
+  validateWbsReparent,
   validateWbsStructure
 } from '../src/domain/validation/index.js';
 import { createMockRepository } from '../src/data/mock/createMockRepository.js';
@@ -85,6 +87,25 @@ test('WBS validation reports missing parents explicitly', () => {
   assert.equal(issues[0].code, 'MISSING_WBS_PARENT');
 });
 
+test('Task WBS move validation allows same-project moves and rejects cross-project targets', () => {
+  const state = createInitialState(createMockRepository());
+  assert.deepEqual(validateTaskWbsMove(state.tasks, state.wbs, ['t1'], 'wbs-p-web-frontend'), []);
+  const issues = validateTaskWbsMove(state.tasks, state.wbs, ['t1'], 'wbs-p-mobile-backend');
+  assert.equal(issues[0].code, 'CROSS_PROJECT_TASK_WBS_MOVE');
+});
+
+test('WBS reparent validation blocks roots and descendant targets', () => {
+  const state = createInitialState(createMockRepository());
+  assert.equal(
+    validateWbsReparent(state.wbs, 'wbs-p-web-root', 'wbs-p-web-design')[0].code,
+    'WBS_ROOT_REPARENT_FORBIDDEN'
+  );
+  assert.equal(
+    validateWbsReparent(state.wbs, 'wbs-p-web-development', 'wbs-p-web-frontend')[0].code,
+    'WBS_REPARENT_TO_DESCENDANT'
+  );
+});
+
 test('Task normalization never retains a WBS from another project', () => {
   const projects = [{ id: 'p1', name: 'One' }, { id: 'p2', name: 'Two' }];
   const wbs = [
@@ -151,6 +172,71 @@ test('Changing Task WBS assignment leaves historical baseline snapshots unchange
   assert.deepEqual(next.taskBaselineSnapshots, before);
 });
 
+test('Controlled single Task move changes only the WBS assignment', () => {
+  const state = createInitialState(createMockRepository());
+  const beforeTask = state.tasks.find((task) => task.id === 't1');
+  const beforeSnapshots = structuredClone(state.taskBaselineSnapshots);
+  const next = appStateReducer(state, { type: 'task/move-wbs', id: 't1', wbsId: 'wbs-p-web-frontend' });
+  const moved = next.tasks.find((task) => task.id === 't1');
+  assert.equal(moved.wbsId, 'wbs-p-web-frontend');
+  assert.deepEqual({ ...moved, wbsId: beforeTask.wbsId }, beforeTask);
+  assert.deepEqual(next.taskBaselineSnapshots, beforeSnapshots);
+});
+
+test('Bulk Task move is atomic and changes only selected same-project Tasks', () => {
+  const state = createInitialState(createMockRepository());
+  const next = appStateReducer(state, {
+    type: 'task/bulk-move-wbs',
+    ids: ['t2', 't4'],
+    wbsId: 'wbs-p-web-design'
+  });
+  assert.equal(next.tasks.find((task) => task.id === 't2').wbsId, 'wbs-p-web-design');
+  assert.equal(next.tasks.find((task) => task.id === 't4').wbsId, 'wbs-p-web-design');
+  assert.equal(next.tasks.find((task) => task.id === 't1').wbsId, state.tasks.find((task) => task.id === 't1').wbsId);
+  assert.equal(next.wbsActionError, null);
+});
+
+test('Bulk Task move rejects mixed-project selections without partial updates', () => {
+  const state = createInitialState(createMockRepository());
+  const next = appStateReducer(state, {
+    type: 'task/bulk-move-wbs',
+    ids: ['t1', 't5'],
+    wbsId: 'wbs-p-web-design'
+  });
+  assert.deepEqual(next.tasks, state.tasks);
+  assert.equal(next.wbsActionError.code, 'CROSS_PROJECT_TASK_WBS_MOVE');
+});
+
+test('Safe WBS reparenting preserves IDs and Task assignments while rebasing subtree codes', () => {
+  const state = createInitialState(createMockRepository());
+  const beforeAssignments = new Map(state.tasks.map((task) => [task.id, task.wbsId]));
+  const next = appStateReducer(state, {
+    type: 'wbs/reparent',
+    id: 'wbs-p-web-development',
+    parentId: 'wbs-p-web-design'
+  });
+  const moved = next.wbs.find((node) => node.id === 'wbs-p-web-development');
+  const frontend = next.wbs.find((node) => node.id === 'wbs-p-web-frontend');
+  const cms = next.wbs.find((node) => node.id === 'wbs-p-web-cms');
+  assert.equal(moved.parentId, 'wbs-p-web-design');
+  assert.equal(moved.code, '1.2.1');
+  assert.equal(frontend.code, '1.2.1.1');
+  assert.equal(cms.code, '1.2.1.2');
+  assert.deepEqual(validateWbsStructure(next.wbs), []);
+  assert.deepEqual(new Map(next.tasks.map((task) => [task.id, task.wbsId])), beforeAssignments);
+});
+
+test('Unsafe WBS reparenting is rejected without changing the hierarchy', () => {
+  const state = createInitialState(createMockRepository());
+  const next = appStateReducer(state, {
+    type: 'wbs/reparent',
+    id: 'wbs-p-web-development',
+    parentId: 'wbs-p-web-frontend'
+  });
+  assert.deepEqual(next.wbs, state.wbs);
+  assert.equal(next.wbsActionError.code, 'WBS_REPARENT_TO_DESCENDANT');
+});
+
 test('WBS rollup derives descendant current-plan range, counts and progress', () => {
   const tasks = [
     { id: 't1', wbsId: 'a', plannedStart: '2026-01-10', plannedFinish: '2026-01-12', plannedDurationDays: 3, progress: 50, status: 'in_progress' },
@@ -185,6 +271,23 @@ test('WBS changes do not alter existing project-scoped CPM output', () => {
   const before = buildPortfolioSchedule({ tasks: state.tasks, projects: state.projects, calendars: state.calendars });
   const updatedState = appStateReducer(state, { type: 'task/update', id: 't1', patch: { wbsId: 'wbs-p-web-development' } });
   const after = buildPortfolioSchedule({ tasks: updatedState.tasks, projects: updatedState.projects, calendars: updatedState.calendars });
+  assert.deepEqual(after.projects['p-web'], before.projects['p-web']);
+});
+
+test('Bulk Task moves and WBS reparenting remain outside CPM calculations', () => {
+  const state = createInitialState(createMockRepository());
+  const before = buildPortfolioSchedule({ tasks: state.tasks, projects: state.projects, calendars: state.calendars });
+  const movedTasks = appStateReducer(state, {
+    type: 'task/bulk-move-wbs',
+    ids: ['t2', 't4'],
+    wbsId: 'wbs-p-web-design'
+  });
+  const reparented = appStateReducer(movedTasks, {
+    type: 'wbs/reparent',
+    id: 'wbs-p-web-development',
+    parentId: 'wbs-p-web-design'
+  });
+  const after = buildPortfolioSchedule({ tasks: reparented.tasks, projects: reparented.projects, calendars: reparented.calendars });
   assert.deepEqual(after.projects['p-web'], before.projects['p-web']);
 });
 

@@ -186,21 +186,52 @@ Existing behavior is preserved for:
 - validation warnings;
 - deterministic `CROSS_PROJECT_DEPENDENCY` rejection.
 
+Task moves between WBS nodes and WBS hierarchy reparenting change structural classification only. They do not modify Task dates, durations, dependencies or calendars and therefore do not change CPM output by themselves.
+
 ## 12. Interaction with Baselines
 
 Baseline schedule snapshots remain separate immutable historical entities under normal Task and WBS operations.
 
-Changing a Task's WBS, renaming a WBS node, adding a WBS node or deleting an empty WBS node does not alter `Baseline` or `TaskBaselineSnapshot` records.
+Changing a Task's WBS, moving multiple Tasks between WBS nodes, reparenting a WBS subtree, renaming a WBS node, adding a WBS node or deleting an empty WBS node does not alter `Baseline` or `TaskBaselineSnapshot` records.
 
 Historical WBS structure versioning is not implemented. A baseline schedule snapshot therefore describes schedule facts captured at baseline time while the current WBS describes the current project structure.
 
-## 13. Current limitations
+## 13. Controlled move workflows
+
+### Task movement
+
+The WBS feature provides a project-scoped movement workspace. A source WBS is selected first, then one or more Tasks directly assigned to that source can be selected and moved to another WBS in the same Project.
+
+The state boundary validates the entire selection before changing any Task. Bulk movement is atomic:
+
+- the target WBS must exist;
+- every selected Task must exist;
+- every selected Task must belong to the target WBS Project;
+- if any selected Task fails validation, none of the selected Tasks are moved.
+
+Only `Task.wbsId` changes during a successful move. Schedule fields, dependencies, assignments, Project ownership and baseline snapshots remain unchanged.
+
+### WBS reparenting
+
+A non-root WBS node can be moved under another valid WBS node in the same Project. The operation is rejected when:
+
+- the source or target does not exist;
+- the source is a Project root;
+- the source is moved under itself;
+- the target belongs to another Project;
+- the target is already a descendant of the source and would create a cycle.
+
+A successful reparent keeps every WBS stable ID unchanged. The moved node receives the next deterministic child code under its new parent, and descendant display codes are rebased to the new prefix. Existing Task assignments continue to reference the same stable WBS IDs and therefore move with the subtree structurally without rewriting Task records.
+
+These rules are implemented at the state/domain boundary rather than only in the UI, so imported or future persistence adapters can reuse the same safety contract.
+
+## 14. Current limitations
 
 This increment intentionally does not implement:
 
 - database or API persistence;
-- WBS drag-and-drop or arbitrary reparenting;
-- bulk Task movement;
+- drag-and-drop WBS editing;
+- cross-project Task or WBS movement;
 - cascade deletion;
 - historical WBS versioning;
 - cross-project CPM networks;
@@ -209,7 +240,7 @@ This increment intentionally does not implement:
 
 WBS editing is in-memory. Deletion is blocked when a node has children or directly assigned Tasks; no Task or descendant is silently deleted or moved.
 
-## 14. Future Primavera P6 mapping considerations
+## 15. Future Primavera P6 mapping considerations
 
 The model is deliberately compatible with a future import boundary based on:
 

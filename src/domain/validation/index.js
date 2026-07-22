@@ -129,6 +129,8 @@ export function validateTaskBaselineSnapshot(snapshot) {
 
 export {
   validateTaskWbsAssignment,
+  validateTaskWbsMove,
   validateWbsDeletion,
+  validateWbsReparent,
   validateWbsStructure
 } from './wbsValidation.js';

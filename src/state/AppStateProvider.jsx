@@ -43,6 +43,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, []);
   const closeTask = useCallback(() => dispatch({ type: 'task/select', id: null }), []);
   const updateTask = useCallback((id, patch) => dispatch({ type: 'task/update', id, patch }), []);
+  const moveTaskToWbs = useCallback((id, wbsId) => dispatch({ type: 'task/move-wbs', id, wbsId }), []);
+  const moveTasksToWbs = useCallback((ids, wbsId) => dispatch({ type: 'task/bulk-move-wbs', ids, wbsId }), []);
   const deleteTask = useCallback((id) => dispatch({ type: 'task/delete', id }), []);
   const selectWorkspace = useCallback((projectId) => {
     dispatch({
@@ -57,6 +59,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return id;
   }, []);
   const renameWbs = useCallback((id, name) => dispatch({ type: 'wbs/rename', id, name }), []);
+  const reparentWbs = useCallback((id, parentId) => dispatch({ type: 'wbs/reparent', id, parentId }), []);
   const deleteWbs = useCallback((id) => dispatch({ type: 'wbs/delete', id }), []);
   const clearWbsError = useCallback(() => dispatch({ type: 'wbs/clear-error' }), []);
   const addTask = useCallback(() => {
@@ -79,14 +82,31 @@ export function AppStateProvider({ children, repository = appRepository }) {
     openTask,
     closeTask,
     updateTask,
+    moveTaskToWbs,
+    moveTasksToWbs,
     deleteTask,
     addTask,
     selectWorkspace,
     addWbsChild,
     renameWbs,
+    reparentWbs,
     deleteWbs,
     clearWbsError
-  }), [openTask, closeTask, updateTask, deleteTask, addTask, selectWorkspace, addWbsChild, renameWbs, deleteWbs, clearWbsError]);
+  }), [
+    openTask,
+    closeTask,
+    updateTask,
+    moveTaskToWbs,
+    moveTasksToWbs,
+    deleteTask,
+    addTask,
+    selectWorkspace,
+    addWbsChild,
+    renameWbs,
+    reparentWbs,
+    deleteWbs,
+    clearWbsError
+  ]);
   const value = useMemo(
     () => ({ ...state, selectedTask, taskStats, schedule, workspace, actions }),
     [state, selectedTask, taskStats, schedule, workspace, actions]
