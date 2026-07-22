@@ -31,7 +31,7 @@ export function ProjectExportMenu({ project, projects = [], tasks = [], wbs = []
   return (
     <details className="export-menu">
       <summary className="btn sm" title="Dışa aktar">
-        <Icons.Download size={13} /> Dışa aktar
+        <Icons.Table size={13} /> Dışa aktar
       </summary>
       <div className="export-menu-pop">
         <button type="button" onClick={exportExcel}>
@@ -39,7 +39,7 @@ export function ProjectExportMenu({ project, projects = [], tasks = [], wbs = []
           <span><strong>Excel raporu</strong><small>Biçimlendirilmiş görev ve WBS tabloları</small></span>
         </button>
         <button type="button" onClick={exportCsv}>
-          <Icons.Download size={14} />
+          <Icons.ArrowRight size={14} />
           <span><strong>CSV görev listesi</strong><small>Filtreleme ve veri aktarımı için</small></span>
         </button>
       </div>
