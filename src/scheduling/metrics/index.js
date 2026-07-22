@@ -1,5 +1,23 @@
 import { addDays, diffDays, parseDate, today } from '../dates/index.js';
 
+let ganttDateRangeOverride = null;
+
+export function setGanttDateRangeOverride(range) {
+  if (!range?.start || !range?.end) {
+    ganttDateRangeOverride = null;
+    return null;
+  }
+  const start = parseDate(range.start);
+  const end = parseDate(range.end);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return ganttDateRangeOverride;
+  ganttDateRangeOverride = { start, end };
+  return ganttDateRangeOverride;
+}
+
+export function clearGanttDateRangeOverride() {
+  ganttDateRangeOverride = null;
+}
+
 export function taskPlannedDurationDays(task) {
   return Number.isFinite(task?.plannedDurationDays) ? Math.max(0, task.plannedDurationDays) : 0;
 }
@@ -7,11 +25,12 @@ export function taskPlannedDurationDays(task) {
 // Gantt görünümündeki eski adlandırma için geriye dönük uyum.
 export const taskDurationDays = taskPlannedDurationDays;
 
-export function getTaskDateRange(tasks, { paddingDays = 3, fallbackStart = today(), fallbackDays = 30 } = {}) {
-  if (!tasks.length) return { start: fallbackStart, end: addDays(fallbackStart, fallbackDays) };
-  let min = parseDate(tasks[0].plannedStart);
-  let max = parseDate(tasks[0].plannedFinish);
-  tasks.forEach((task) => {
+export function calculateTaskDateRange(tasks, { paddingDays = 3, fallbackStart = today(), fallbackDays = 30 } = {}) {
+  const scheduled = (tasks || []).filter((task) => task?.plannedStart && task?.plannedFinish);
+  if (!scheduled.length) return { start: fallbackStart, end: addDays(fallbackStart, fallbackDays) };
+  let min = parseDate(scheduled[0].plannedStart);
+  let max = parseDate(scheduled[0].plannedFinish);
+  scheduled.forEach((task) => {
     const start = parseDate(task.plannedStart);
     const end = parseDate(task.plannedFinish);
     if (start < min) min = start;
@@ -20,10 +39,15 @@ export function getTaskDateRange(tasks, { paddingDays = 3, fallbackStart = today
   return { start: addDays(min, -paddingDays), end: addDays(max, paddingDays) };
 }
 
+export function getTaskDateRange(tasks, options = {}) {
+  if (ganttDateRangeOverride) return { ...ganttDateRangeOverride };
+  return calculateTaskDateRange(tasks, options);
+}
+
 export function getGroupScheduleSummaries(groups) {
   const summaries = {};
   groups.forEach(([groupName, items]) => {
-    const scheduled = items.filter((task) => !task.milestone);
+    const scheduled = items.filter((task) => !task.milestone && task.plannedStart && task.plannedFinish);
     if (!scheduled.length) {
       summaries[groupName] = null;
       return;
