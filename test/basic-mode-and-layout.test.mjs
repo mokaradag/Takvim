@@ -84,7 +84,8 @@ test('simple mode uses the existing task/project infrastructure and exposes the 
   }
   assert.match(simple, /addProject/);
   assert.match(simple, /addTask/);
-  assert.match(simple, /updateTask/);
+  assert.doesNotMatch(simple, /updateTask/);
+  assert.match(simple, /assigneeIds/);
   assert.match(simple, /DateInput/);
 });
 
