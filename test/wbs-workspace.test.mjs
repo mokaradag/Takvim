@@ -260,6 +260,7 @@ test('WBS rollup derives descendant current-plan range, counts and progress', ()
 test('Empty WBS nodes produce safe empty rollups', () => {
   const rollup = selectWbsTaskRollup(SAMPLE_WBS, [], 'b');
   assert.deepEqual(rollup, {
+    wbsId: 'b',
     taskCount: 0,
     directTaskCount: 0,
     completedTaskCount: 0,
