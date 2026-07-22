@@ -259,8 +259,8 @@ test('project creation and editing UI use one corporate calendar and the combine
   const provider = fs.readFileSync(path.join(ROOT, 'src/state/AppStateProvider.jsx'), 'utf8');
   const navigation = fs.readFileSync(path.join(ROOT, 'src/components/shell/navigation.js'), 'utf8');
 
-  assert.match(shell, /Yeni proje/);
-  assert.match(shell, /onCreate=\{createProject\}/);
+  assert.doesNotMatch(shell, /ProjectCreateDialog/);
+  assert.doesNotMatch(shell, /setProjectCreateOpen/);
   assert.doesNotMatch(shell, /useCalendars/);
   assert.match(dialog, /ProjectColorPicker/);
   assert.doesNotMatch(dialog, /Proje takvimi/);
@@ -269,6 +269,9 @@ test('project creation and editing UI use one corporate calendar and the combine
   assert.match(provider, /commitChanges\('project\/update'/);
   assert.match(projectView, /Proje Tanımı/);
   assert.match(projectView, /İş Dağılım Ağacı/);
+  assert.match(projectView, /ProjectCreateDialog/);
+  assert.match(projectView, /Yeni Proje/);
+  assert.match(projectView, /Etiket kataloğu/);
   assert.match(navigation, /Proje Yapısı/);
 });
 
