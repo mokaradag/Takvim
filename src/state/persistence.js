@@ -87,7 +87,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     let result;
     try {
       result = await flushPatch(taskId, entry.patch);
-    } catch (error) {
+    } catch {
       result = {
         ok: false,
         error: {
@@ -188,7 +188,8 @@ export function createStateMutationOrchestrator({
     const canCoalesce = keys.length > 0 && keys.every((key) => COALESCED_TASK_FIELDS.has(key));
     if (canCoalesce) return taskPatches.schedule(id, patch);
 
-    await taskPatches.flush(id);
+    const pendingResult = await taskPatches.flush(id);
+    if (!pendingResult.ok) return pendingResult;
     return persistAction('task/update', { type: 'task/update', id, patch });
   }
 
