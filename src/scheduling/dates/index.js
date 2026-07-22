@@ -1,11 +1,11 @@
 const MS_DAY = 86400000;
-let appDateDisplayFormat = 'pattern';
+let appDateDisplayFormat = 'dd/mm/yyyy';
 
 export const TR_MONTHS = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 export const TR_MONTHS_LONG = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 export const TR_DAYS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 
-export function setAppDateDisplayFormat(format = 'pattern') {
+export function setAppDateDisplayFormat(format = 'dd/mm/yyyy') {
   appDateDisplayFormat = format === 'dd/mm/yyyy' ? 'dd/mm/yyyy' : 'pattern';
 }
 
