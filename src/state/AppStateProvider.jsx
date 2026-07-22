@@ -106,7 +106,16 @@ export function AppStateProvider({ children, repository = appRepository }) {
   const openTask = useCallback((taskOrId) => {
     applyStateAction({ type: 'task/select', id: typeof taskOrId === 'string' ? taskOrId : taskOrId?.id });
   }, [applyStateAction]);
-  const closeTask = useCallback(() => applyStateAction({ type: 'task/select', id: null }), [applyStateAction]);
+
+  const closeTask = useCallback(async () => {
+    const selectedTaskId = stateRef.current.selectedTaskId;
+    if (selectedTaskId) {
+      const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([selectedTaskId]));
+      if (failedFlush) return failedFlush;
+    }
+    applyStateAction({ type: 'task/select', id: null });
+    return { ok: true, value: null };
+  }, [applyStateAction, persistence]);
 
   const updateTask = useCallback((id, patch) => persistence.updateTask(id, patch), [persistence]);
 
@@ -138,7 +147,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
       type: 'task/add',
       task: createNewTask(current, undefined, id)
     }));
-    const created = result.ok ? result.value?.taskUpserts?.find((task) => task.id === id) || null : null;
+    const created = result.ok ? result.value?.taskUpserts?.[0] || null : null;
     if (created) applyStateAction({ type: 'task/select', id: created.id });
     return result.ok ? { ...result, value: created } : result;
   }, [applyStateAction, persistence]);
