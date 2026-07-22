@@ -6,10 +6,12 @@ import { fmtISO, today } from '../../scheduling/dates';
 
 function initialForm(people) {
   return {
+    code: '',
     name: '',
     leadId: people[0]?.id || '',
     dataDate: fmtISO(today()),
-    color: 'blue'
+    color: 'blue',
+    source: 'manual'
   };
 }
 
@@ -84,7 +86,7 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
           <div className="col" style={{ gap: 3, flex: 1 }}>
             <div id="new-project-title" style={{ fontSize: 18, fontWeight: 750 }}>Yeni proje</div>
             <div className="muted" style={{ fontSize: 12 }}>
-              Proje bilgilerini tanımlayın. Kök iş dağılım ağacı düğümü otomatik oluşturulur.
+              Kurumsal proje kodunu girebilir veya serbest çalışma için kod alanını boş bırakabilirsiniz. Kök iş dağılım ağacı düğümü otomatik oluşturulur.
             </div>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} disabled={saving} aria-label="Pencereyi kapat">
@@ -93,30 +95,42 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
         </div>
 
         <div className="col" style={{ gap: 16, marginTop: 20 }}>
-          <label className="col" style={{ gap: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 650 }}>Proje adı</span>
-            <input
-              className="input"
-              value={form.name}
-              onChange={setField('name')}
-              placeholder="Örn. Radar Modernizasyonu"
-              autoFocus
-              disabled={saving}
-            />
-          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, .7fr) minmax(260px, 1.3fr)', gap: 12 }}>
+            <label className="col" style={{ gap: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 650 }}>Proje kodu <span className="muted">(isteğe bağlı)</span></span>
+              <input
+                className="input"
+                value={form.code}
+                onChange={setField('code')}
+                placeholder="Örn. PRJ-2026-041"
+                autoFocus
+                disabled={saving}
+              />
+            </label>
+            <label className="col" style={{ gap: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 650 }}>Proje adı</span>
+              <input
+                className="input"
+                value={form.name}
+                onChange={setField('name')}
+                placeholder="Örn. Radar Modernizasyonu"
+                disabled={saving}
+              />
+            </label>
+          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
             <label className="col" style={{ gap: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 650 }}>Proje sorumlusu</span>
               <select className="input" value={form.leadId} onChange={setField('leadId')} disabled={saving || !people.length}>
                 {!people.length && <option value="">Kişi bulunamadı</option>}
-                {people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+                {people.map((person) => <option key={person.id} value={person.id}>{person.employeeNo ? `${person.employeeNo} · ` : ''}{person.name}</option>)}
               </select>
             </label>
 
             <label className="col" style={{ gap: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 650 }}>Veri tarihi</span>
-              <input className="input" type="date" value={form.dataDate} onChange={setField('dataDate')} disabled={saving} />
+              <input className="input" type="date" lang="en-GB" value={form.dataDate} onChange={setField('dataDate')} disabled={saving} />
             </label>
           </div>
 
@@ -130,7 +144,7 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
           />
 
           <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
-            Tüm projeler kurumun ortak çalışma takvimini kullanır; proje bazında ayrı takvim seçimi yapılmaz.
+            Veritabanı entegrasyonunda kurumsal proje listesi <strong>ProjeKodu</strong> ve <strong>ProjeAdi</strong> alanlarından beslenebilir. Kullanıcı tarafından oluşturulan serbest projeler aynı modelde <strong>source: manual</strong> bilgisiyle tutulur.
           </div>
 
           {error && (
