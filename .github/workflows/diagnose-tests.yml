@@ -1,0 +1,59 @@
+name: Diagnose Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: New feature and UI contract tests
+        continue-on-error: true
+        run: |
+          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(basic-mode-and-layout|mergen-rota-v1|project-management|architecture-boundaries)\.test\.mjs$' || true)
+          test -z "$files" || node --test $files
+
+      - name: Scheduling and CPM tests
+        continue-on-error: true
+        run: |
+          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(cpm|cpm-validation-edge-cases|domain-scheduling|scheduling-edge-cases|scheduling-data-model|schedule-projection|normalization-schedule-fallbacks|domain-validation-edge-cases)\.test\.mjs$' || true)
+          test -z "$files" || node --test $files
+
+      - name: State and persistence tests
+        continue-on-error: true
+        run: |
+          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(application-integration|app-state-edge-cases|persistence-boundary|seed-integrity)\.test\.mjs$' || true)
+          test -z "$files" || node --test $files
+
+      - name: WBS and workspace tests
+        continue-on-error: true
+        run: |
+          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(wbs-workspace|wbs-workspace-edge-cases)\.test\.mjs$' || true)
+          test -z "$files" || node --test $files
+
+      - name: Regression and utility tests
+        continue-on-error: true
+        run: |
+          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(pr19-regressions|pr22-codex-regressions|utility-preferences-edge-cases|public-contracts-runtime-smoke)\.test\.mjs$' || true)
+          test -z "$files" || node --test $files
+
+      - name: Other tests
+        continue-on-error: true
+        run: |
+          files=$(find test -maxdepth 1 -name '*.test.mjs' \
+            | grep -Ev '/(basic-mode-and-layout|mergen-rota-v1|project-management|architecture-boundaries|cpm|cpm-validation-edge-cases|domain-scheduling|scheduling-edge-cases|scheduling-data-model|schedule-projection|normalization-schedule-fallbacks|domain-validation-edge-cases|application-integration|app-state-edge-cases|persistence-boundary|seed-integrity|wbs-workspace|wbs-workspace-edge-cases|pr19-regressions|pr22-codex-regressions|utility-preferences-edge-cases|public-contracts-runtime-smoke)\.test\.mjs$' || true)
+          test -z "$files" || node --test $files
