@@ -21,54 +21,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: New feature and UI contract tests
+      - name: Exact npm test command
         continue-on-error: true
-        run: |
-          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(basic-mode-and-layout|mergen-rota-v1|project-management|architecture-boundaries)\.test\.mjs$' || true)
-          test -z "$files" || node --test $files
+        run: npm test -- --test-reporter=dot
 
-      - name: Scheduling and CPM tests
+      - name: Exact production build
         continue-on-error: true
-        run: |
-          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(cpm|cpm-validation-edge-cases|domain-scheduling|scheduling-edge-cases|scheduling-data-model|schedule-projection|normalization-schedule-fallbacks|domain-validation-edge-cases)\.test\.mjs$' || true)
-          test -z "$files" || node --test $files
-
-      - name: State and persistence tests
-        continue-on-error: true
-        run: |
-          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(application-integration|app-state-edge-cases|persistence-boundary|seed-integrity)\.test\.mjs$' || true)
-          test -z "$files" || node --test $files
-
-      - name: WBS and workspace tests
-        continue-on-error: true
-        run: |
-          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(wbs-workspace|wbs-workspace-edge-cases)\.test\.mjs$' || true)
-          test -z "$files" || node --test $files
-
-      - name: Regression and utility tests
-        continue-on-error: true
-        run: |
-          files=$(find test -maxdepth 1 -name '*.test.mjs' | grep -E '/(pr19-regressions|pr22-codex-regressions|utility-preferences-edge-cases|public-contracts-runtime-smoke)\.test\.mjs$' || true)
-          test -z "$files" || node --test $files
-
-      - name: Other top-level test files
-        continue-on-error: true
-        run: |
-          files=$(find test -maxdepth 1 -name '*.test.mjs' \
-            | grep -Ev '/(basic-mode-and-layout|mergen-rota-v1|project-management|architecture-boundaries|cpm|cpm-validation-edge-cases|domain-scheduling|scheduling-edge-cases|scheduling-data-model|schedule-projection|normalization-schedule-fallbacks|domain-validation-edge-cases|application-integration|app-state-edge-cases|persistence-boundary|seed-integrity|wbs-workspace|wbs-workspace-edge-cases|pr19-regressions|pr22-codex-regressions|utility-preferences-edge-cases|public-contracts-runtime-smoke)\.test\.mjs$' || true)
-          test -z "$files" || node --test $files
-
-      - name: Nested test files
-        continue-on-error: true
-        run: |
-          files=$(find test -mindepth 2 -type f -name '*.test.mjs' || true)
-          test -z "$files" || node --test $files
-
-      - name: Nonstandard discovered JavaScript files
-        continue-on-error: true
-        run: |
-          files=$(find test -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) ! -name '*.test.mjs' || true)
-          test -z "$files" || node --test $files
+        run: npm run build
 
       - name: Default Node test discovery
         continue-on-error: true
