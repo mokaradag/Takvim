@@ -8,6 +8,7 @@ on:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,14 +22,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Exact npm test command
+      - name: PR22 first pass
+        continue-on-error: true
+        run: node --test --test-reporter=dot test/pr22-codex-regressions.test.mjs
+
+      - name: Exact npm test first pass
+        continue-on-error: true
+        run: npm test -- --test-reporter=dot
+
+      - name: Exact npm test second pass
         continue-on-error: true
         run: npm test -- --test-reporter=dot
 
       - name: Exact production build
         continue-on-error: true
         run: npm run build
-
-      - name: Default Node test discovery
-        continue-on-error: true
-        run: node --test
