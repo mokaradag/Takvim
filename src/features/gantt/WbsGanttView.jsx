@@ -1,7 +1,7 @@
 'use client';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icons } from '../../components/icons';
-import { Tooltip, InfoButton } from '../../components/ui-extras';
+import { InfoButton, Tooltip } from '../../components/ui-extras';
 import { buildWbsTree, selectWbsTaskRollup } from '../../domain/selectors/index.js';
 import { projectColorVar } from '../../lib/colors';
 import { holidayFor } from '../../scheduling/calendars';
@@ -32,19 +32,19 @@ const GROUP_H = 32;
 const HEAD_H = 56;
 
 function buildRows(tree, tasks, wbs, expanded, scheduleTasks) {
-  const directByWbsId = new Map();
+  const directTasks = new Map();
   for (const task of tasks) {
-    const bucket = directByWbsId.get(task.wbsId) || [];
+    const bucket = directTasks.get(task.wbsId) || [];
     bucket.push(task);
-    directByWbsId.set(task.wbsId, bucket);
+    directTasks.set(task.wbsId, bucket);
   }
-  for (const bucket of directByWbsId.values()) {
-    bucket.sort((left, right) => (left.plannedStart || '').localeCompare(right.plannedStart || '') || left.task.localeCompare(right.task, 'tr'));
+  for (const bucket of directTasks.values()) {
+    bucket.sort((a, b) => (a.plannedStart || '').localeCompare(b.plannedStart || '') || a.task.localeCompare(b.task, 'tr'));
   }
 
   const rows = [];
   const visited = new Set();
-  function visit(node, depth) {
+  const visit = (node, depth) => {
     if (!node || visited.has(node.id)) return;
     visited.add(node.id);
     rows.push({
@@ -55,16 +55,16 @@ function buildRows(tree, tasks, wbs, expanded, scheduleTasks) {
       rollup: selectWbsTaskRollup(wbs, tasks, node.id, scheduleTasks)
     });
     if (!expanded.has(node.id)) return;
-    for (const task of directByWbsId.get(node.id) || []) {
+    for (const task of directTasks.get(node.id) || []) {
       rows.push({ type: 'task', id: `task:${task.id}`, task, depth: depth + 1 });
     }
     for (const child of node.children || []) visit(child, depth + 1);
-  }
+  };
   for (const root of tree) visit(root, 0);
   return rows;
 }
 
-function criticalPathRows(schedule) {
+function CriticalPathDetails({ schedule }) {
   if (!schedule) return null;
   return (
     <>
@@ -79,8 +79,7 @@ function criticalPathRows(schedule) {
   );
 }
 
-function buildArrowPath(arrow) {
-  const { fromX, fromY, toX, toY, fromSide, toSide } = arrow;
+function arrowPath({ fromX, fromY, toX, toY, fromSide, toSide }) {
   const stub = 10;
   if (fromSide === 'R' && toSide === 'L') {
     if (toX <= fromX) {
@@ -148,7 +147,7 @@ export function WbsGanttView() {
   );
   const days = useMemo(() => eachDay(range.start, range.end), [range]);
   const totalWidth = days.length * zoom;
-  const xForDate = (date) => diffDays(date, range.start) * zoom;
+  const xForDate = useCallback((date) => diffDays(date, range.start) * zoom, [range.start, zoom]);
 
   const rowTops = useMemo(() => {
     const tops = [];
@@ -161,16 +160,16 @@ export function WbsGanttView() {
   }, [visibleRows]);
 
   const taskRowIndex = useMemo(() => {
-    const map = new Map();
-    visibleRows.forEach((row, index) => {
-      if (row.type === 'task') map.set(row.task.id, index);
+    const index = new Map();
+    visibleRows.forEach((row, rowIndex) => {
+      if (row.type === 'task') index.set(row.task.id, rowIndex);
     });
-    return map;
+    return index;
   }, [visibleRows]);
 
   const arrows = useMemo(() => {
     const result = [];
-    visibleRows.forEach((row, index) => {
+    visibleRows.forEach((row, rowIndex) => {
       if (row.type !== 'task') return;
       for (const dependency of row.task.deps || []) {
         const predecessorId = depId(dependency);
@@ -178,6 +177,7 @@ export function WbsGanttView() {
         if (predecessorIndex == null) continue;
         const predecessor = visibleRows[predecessorIndex].task;
         if (!predecessor?.plannedStart || !predecessor?.plannedFinish || !row.task.plannedStart || !row.task.plannedFinish) continue;
+
         const type = relTypeOf(dependency);
         const predStart = xForDate(parseDate(predecessor.plannedStart));
         const predEnd = xForDate(parseDate(predecessor.plannedFinish)) + zoom;
@@ -191,45 +191,45 @@ export function WbsGanttView() {
         else if (type === 'SS') { fromX = predStart; toX = succStart; fromSide = 'L'; toSide = 'L'; }
         else if (type === 'FF') { fromX = predEnd; toX = succEnd; fromSide = 'R'; toSide = 'R'; }
         else { fromX = predStart; toX = succEnd; fromSide = 'L'; toSide = 'R'; }
+
         result.push({
           id: `${predecessorId}-${row.task.id}-${type}`,
-          type,
           fromX,
           toX,
           fromSide,
           toSide,
           fromY: rowTops.tops[predecessorIndex] + ROW_H / 2,
-          toY: rowTops.tops[index] + ROW_H / 2,
+          toY: rowTops.tops[rowIndex] + ROW_H / 2,
           hot: hotTaskId === predecessorId || hotTaskId === row.task.id,
           critical: Boolean(projectSchedule?.criticalDependencyKeys?.includes(`${predecessorId}::${row.task.id}`))
         });
       }
     });
     return result;
-  }, [visibleRows, taskRowIndex, rowTops, range, zoom, hotTaskId, projectSchedule]);
+  }, [visibleRows, taskRowIndex, rowTops, xForDate, zoom, hotTaskId, projectSchedule]);
 
   useEffect(() => {
     const left = leftRef.current;
     const right = rightRef.current;
     if (!left || !right) return undefined;
     let syncing = false;
-    const onLeft = () => {
+    const syncFromLeft = () => {
       if (syncing) return;
       syncing = true;
       right.scrollTop = left.scrollTop;
       syncing = false;
     };
-    const onRight = () => {
+    const syncFromRight = () => {
       if (syncing) return;
       syncing = true;
       left.scrollTop = right.scrollTop;
       syncing = false;
     };
-    left.addEventListener('scroll', onLeft);
-    right.addEventListener('scroll', onRight);
+    left.addEventListener('scroll', syncFromLeft);
+    right.addEventListener('scroll', syncFromRight);
     return () => {
-      left.removeEventListener('scroll', onLeft);
-      right.removeEventListener('scroll', onRight);
+      left.removeEventListener('scroll', syncFromLeft);
+      right.removeEventListener('scroll', syncFromRight);
     };
   }, []);
 
@@ -267,9 +267,8 @@ export function WbsGanttView() {
   useEffect(() => {
     const element = rightRef.current;
     if (!element) return;
-    const todayX = xForDate(today_) + zoom / 2;
-    element.scrollLeft = Math.max(0, todayX - element.clientWidth / 3);
-  }, [range, zoom, today_]);
+    element.scrollLeft = Math.max(0, xForDate(today_) + zoom / 2 - element.clientWidth / 3);
+  }, [today_, xForDate, zoom]);
 
   const toggle = (id) => {
     setExpanded((current) => {
@@ -280,16 +279,16 @@ export function WbsGanttView() {
     });
   };
 
+  if (!wbs.length) {
+    return <div className="card muted">Bu projede WBS bulunmadığı için hiyerarşik Gantt oluşturulamıyor.</div>;
+  }
+
   const projectColor = projectColorVar(workspace.selectedProject?.name || '');
   const wrapStyle = {
     height: 'calc(100vh - 240px)',
     '--gantt-left-w': '360px',
     '--gantt-left-cols': 'minmax(320px, 1fr)'
   };
-
-  if (!wbs.length) {
-    return <div className="card muted">Bu projede WBS bulunmadığı için hiyerarşik Gantt oluşturulamıyor.</div>;
-  }
 
   return (
     <div className="col" style={{ gap: 12 }}>
@@ -324,33 +323,28 @@ export function WbsGanttView() {
 
       <div className="gantt-wrap" style={wrapStyle}>
         <div className="gantt-left" ref={leftRef}>
-          <div className="gantt-left-head" style={{ display: 'flex', alignItems: 'center', padding: '0 12px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
-            WBS / GÖREV
-          </div>
+          <div className="gantt-left-head" style={{ display: 'flex', alignItems: 'center', padding: '0 12px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>WBS / GÖREV</div>
           {visibleRows.map((row) => {
             if (row.type !== 'task') {
-              const isUnassigned = row.type === 'wbs-unassigned';
-              const collapsed = !isUnassigned && !expanded.has(row.node.id);
+              const unassigned = row.type === 'wbs-unassigned';
+              const collapsed = !unassigned && !expanded.has(row.node.id);
               return (
                 <div
                   key={row.id}
                   className={`gantt-group-header${collapsed ? ' collapsed' : ''}`}
-                  onClick={() => !isUnassigned && toggle(row.node.id)}
-                  style={{ cursor: isUnassigned ? 'default' : 'pointer', paddingLeft: 10 + row.depth * 18 }}
+                  onClick={() => !unassigned && toggle(row.node.id)}
+                  style={{ cursor: unassigned ? 'default' : 'pointer', paddingLeft: 10 + row.depth * 18 }}
                 >
-                  {!isUnassigned && <Icons.ChevronDown size={11} style={{ transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.18s' }} />}
-                  <span style={{ width: 8, height: 8, borderRadius: 2, background: isUnassigned ? 'var(--status-overdue)' : projectColor }} />
-                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {isUnassigned ? row.label : `${row.node.code} ${row.node.name}`}
-                  </span>
-                  {!isUnassigned && row.rollup && (
-                    <span className="muted tabular" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600 }}>
-                      {row.rollup.taskCount} görev · {row.rollup.progress}% · {row.rollup.criticalTaskCount} kritik
-                    </span>
+                  {!unassigned && <Icons.ChevronDown size={11} style={{ transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.18s' }} />}
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: unassigned ? 'var(--status-overdue)' : projectColor }} />
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{unassigned ? row.label : `${row.node.code} ${row.node.name}`}</span>
+                  {!unassigned && row.rollup && (
+                    <span className="muted tabular" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600 }}>{row.rollup.taskCount} görev · {row.rollup.progress}% · {row.rollup.criticalTaskCount} kritik</span>
                   )}
                 </div>
               );
             }
+
             const taskSchedule = scheduleTasks[row.task.id];
             const critical = Boolean(taskSchedule?.isCritical);
             return (
@@ -363,7 +357,9 @@ export function WbsGanttView() {
                 style={{ cursor: 'pointer' }}
               >
                 <div className="tr-name" style={{ paddingLeft: 12 + row.depth * 18 }}>
-                  {row.task.milestone ? <Icons.Diamond size={11} style={{ color: critical ? 'var(--status-overdue)' : projectColor }} /> : <span style={{ width: 3, height: 18, borderRadius: 2, background: projectColor }} />}
+                  {row.task.milestone
+                    ? <Icons.Diamond size={11} style={{ color: critical ? 'var(--status-overdue)' : projectColor }} />
+                    : <span style={{ width: 3, height: 18, borderRadius: 2, background: projectColor }} />}
                   <span>{row.task.task}</span>
                   {critical && <span title="Kritik yol görevi" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--status-overdue)', flexShrink: 0 }} />}
                 </div>
@@ -390,10 +386,7 @@ export function WbsGanttView() {
               })}
             </div>
 
-            {days.map((day, index) => {
-              if (!isWeekend(day) || holidayFor(day)) return null;
-              return <div key={`weekend-${index}`} className="gantt-weekend-stripe" style={{ left: index * zoom, width: zoom }} />;
-            })}
+            {days.map((day, index) => (!isWeekend(day) || holidayFor(day)) ? null : <div key={`weekend-${index}`} className="gantt-weekend-stripe" style={{ left: index * zoom, width: zoom }} />)}
 
             {days.map((day, index) => {
               const holiday = holidayFor(day);
@@ -438,7 +431,7 @@ export function WbsGanttView() {
               const critical = Boolean(taskSchedule?.isCritical);
               const status = getStatus(task, today_);
               const overdue = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, today_) < 0;
-              const pct = task.progress != null ? task.progress : (task.status === 'done' ? 100 : 0);
+              const progress = task.progress != null ? task.progress : (task.status === 'done' ? 100 : 0);
               const rowLine = <div style={{ position: 'absolute', top, left: 0, right: 0, height: ROW_H, borderBottom: '1px solid var(--border)' }} />;
               if (!task.plannedStart || !task.plannedFinish) return <React.Fragment key={`canvas-${row.id}`}>{rowLine}</React.Fragment>;
 
@@ -451,7 +444,7 @@ export function WbsGanttView() {
                       <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(task.plannedStart, 'dd MMM yyyy')}</span></div>
                       <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
                       <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{task.sorumlu?.join(', ') || '—'}</span></div>
-                      {criticalPathRows(taskSchedule)}
+                      <CriticalPathDetails schedule={taskSchedule} />
                     </>}>
                       <div className="gantt-milestone" style={{ '--milestone-color': critical ? 'var(--status-overdue)' : projectColor, top: top + 11, left }} onClick={() => openTask(task)} onMouseEnter={() => setHotTaskId(task.id)} onMouseLeave={() => setHotTaskId(null)} />
                     </Tooltip>
@@ -470,12 +463,12 @@ export function WbsGanttView() {
                     <div className="rt-row"><span className="rt-label">Hedef</span><span className="rt-val" style={overdue ? { color: 'var(--status-overdue)' } : null}>{task.targetFinish ? fmt(task.targetFinish, 'dd MMM yyyy') : '—'}</span></div>
                     <div className="rt-sep" />
                     <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
-                    <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{pct}%</span></div>
+                    <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{progress}%</span></div>
                     <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{task.sorumlu?.join(', ') || '—'}</span></div>
-                    {criticalPathRows(taskSchedule)}
+                    <CriticalPathDetails schedule={taskSchedule} />
                   </>}>
                     <div className={`gantt-bar${task.status === 'done' ? ' done' : ''}`} style={{ '--bar-color': projectColor, position: 'absolute', left: left + 2, width: Math.max(20, width - 4), top: top + 8, boxShadow: critical ? '0 0 0 2px var(--status-overdue)' : undefined }} onClick={() => openTask(task)} onMouseEnter={() => setHotTaskId(task.id)} onMouseLeave={() => setHotTaskId(null)}>
-                      {pct > 0 && pct < 100 && <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(to right, color-mix(in oklab, ${projectColor} 100%, black 18%) ${pct}%, transparent ${pct}%)`, borderRadius: 'inherit' }} />}
+                      {progress > 0 && progress < 100 && <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(to right, color-mix(in oklab, ${projectColor} 100%, black 18%) ${progress}%, transparent ${progress}%)`, borderRadius: 'inherit' }} />}
                       <span style={{ position: 'relative', zIndex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.keyword || task.task}</span>
                     </div>
                   </Tooltip>
@@ -492,7 +485,7 @@ export function WbsGanttView() {
               {arrows.map((arrow) => (
                 <path
                   key={arrow.id}
-                  d={buildArrowPath(arrow)}
+                  d={arrowPath(arrow)}
                   fill="none"
                   stroke={arrow.critical ? 'var(--status-overdue)' : arrow.hot ? 'var(--accent)' : 'var(--text-muted)'}
                   strokeWidth={arrow.critical || arrow.hot ? 1.8 : 1.1}
