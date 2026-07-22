@@ -1,0 +1,100 @@
+/* Ortak gg/aa/yyyy tarih alanı */
+.date-input-shell {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.date-input-shell > .input {
+  width: 100%;
+  padding-right: 34px;
+  font-variant-numeric: tabular-nums;
+}
+
+.date-input-button {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  z-index: 2;
+}
+
+.date-input-button:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.date-input-button:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+.date-input-native {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.date-input-shell.invalid > .input {
+  border-color: var(--status-overdue) !important;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--status-overdue) 12%, transparent);
+}
+
+/* İş dağılım ağacı tablo yapısı küçük ekranlarda içeride yatay kayar. */
+.wbs-tree-table {
+  max-width: 100%;
+}
+
+.wbs-tree-grid {
+  min-width: 970px;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) 100px 100px 190px 260px;
+  align-items: center;
+  padding: 8px 14px;
+  column-gap: 0;
+}
+
+.wbs-tree-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 42px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome-bg-soft);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.wbs-tree-row {
+  min-height: 54px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wbs-tree-row:last-child {
+  border-bottom: 0;
+}
+
+@media (max-width: 760px) {
+  .date-input-button {
+    right: 5px;
+  }
+}
