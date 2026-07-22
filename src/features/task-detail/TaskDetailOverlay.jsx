@@ -10,8 +10,10 @@ export function TaskDetailOverlay() {
   const { closeTask, updateTask, moveTaskToWbs, deleteTask } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
   const taskIdRef = useRef(task?.id || null);
+  const canonicalTaskRef = useRef(task);
   const dirtyFieldsRef = useRef(new Set());
   const updateTrackerRef = useRef(createTaskUpdateTracker());
+  canonicalTaskRef.current = task;
 
   useEffect(() => {
     if (!task) {
@@ -48,7 +50,22 @@ export function TaskDetailOverlay() {
     const result = keys.length === 1 && keys[0] === 'wbsId' && patch.wbsId
       ? moveTaskToWbs(taskId, patch.wbsId)
       : updateTask(taskId, patch);
-    return updateTrackerRef.current.track(result);
+    const tracker = updateTrackerRef.current;
+    const tracked = tracker.track(result);
+
+    tracked.then((saveResult) => {
+      if (!saveResult?.ok || canonicalTaskRef.current?.id !== taskId) return;
+      const committedTask = saveResult.value?.taskUpserts?.find((item) => item.id === taskId)
+        || canonicalTaskRef.current;
+      setDisplayTask((current) => {
+        const reconciled = reconcileTaskDraft(committedTask, current || committedTask, dirtyFieldsRef.current);
+        dirtyFieldsRef.current = reconciled.dirtyFields;
+        if (reconciled.dirtyFields.size === 0) tracker.clearFailure();
+        return reconciled.task;
+      });
+    });
+
+    return tracked;
   };
 
   const onClose = async () => {
