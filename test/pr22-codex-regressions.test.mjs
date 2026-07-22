@@ -30,6 +30,19 @@ test('legacy day lag values are preserved before a unit-only edit is recalculate
   assert.equal(editedDependency.lagUnit, 'week');
 });
 
+test('legacy lag calculations tolerate immutable dependency snapshots', () => {
+  const frozenDependency = Object.freeze({
+    id: 'pred',
+    predecessorId: 'pred',
+    type: 'FS',
+    lagDays: 3,
+    lagUnit: 'week'
+  });
+
+  assert.equal(dependencyLagDays(frozenDependency), 15);
+  assert.equal(frozenDependency.lagValue, undefined);
+});
+
 test('week lags use the successor active calendar in both CPM passes', () => {
   const sixDayCalendar = normalizeCalendar({
     id: 'cal-six-day',

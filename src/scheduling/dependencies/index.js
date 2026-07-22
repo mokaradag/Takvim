@@ -53,9 +53,15 @@ export function lagValueOf(dependency) {
   return 0;
 }
 
+function canWriteOwnProperty(target, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  return descriptor ? descriptor.writable === true : Object.isExtensible(target);
+}
+
 function materializeLegacyLagValueForUnitEdit(dependency) {
   if (typeof dependency !== 'object' || dependency === null) return;
   if (dependency.lagValue != null || dependency.lagUnit == null || !Number.isFinite(dependency.lagDays)) return;
+  if (!canWriteOwnProperty(dependency, 'lagValue') || !canWriteOwnProperty(dependency, 'lagUnit')) return;
   dependency.lagValue = dependency.lagDays;
   dependency.lagUnit = lagUnitOf(dependency);
 }
