@@ -90,9 +90,9 @@ test('simple mode uses the existing task/project infrastructure and exposes the 
 
 test('user-facing dates use day/month/year and missing dates do not render as today', () => {
   assert.equal(fmtDisplayDate('2026-07-22'), '22/07/2026');
-  assert.equal(fmt('2026-07-22'), '22/07/2026');
   assert.equal(fmt(null), '—');
 
+  const page = read('src/app/page.js');
   const project = read('src/features/project/ProjectWorkspaceView.jsx');
   const createProject = read('src/components/shell/ProjectCreateDialog.jsx');
   const wbs = read('src/features/wbs/WbsView.jsx');
@@ -100,6 +100,7 @@ test('user-facing dates use day/month/year and missing dates do not render as to
   const tasks = read('src/features/tasks/TasksView.jsx');
   const gantt = read('src/features/gantt/WorkspaceGanttView.jsx');
 
+  assert.match(page, /setAppDateDisplayFormat\('dd\/mm\/yyyy'\)/);
   assert.match(project, /<DateInput value=\{form\.dataDate\}/);
   assert.match(createProject, /<DateInput value=\{form\.dataDate\}/);
   assert.match(wbs, /fmtDisplayDate\(rollup\.plannedStart\)/);
