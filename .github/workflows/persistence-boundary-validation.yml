@@ -1,0 +1,54 @@
+name: Persistence boundary validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 24.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Static architecture checks
+        shell: bash
+        run: |
+          if grep -R "getSnapshot(" src; then
+            echo "Synchronous getSnapshot usage remains under src."
+            exit 1
+          fi
+          if grep -R -E "createMockRepository|/data/mock/|repository\." src/features; then
+            echo "A feature imports or calls repository implementation details."
+            exit 1
+          fi
+          if grep -R "localStorage" src/data; then
+            echo "Business-data repository code references localStorage."
+            exit 1
+          fi
+          if grep -R -E "https?://" src --include='*.js' --include='*.jsx' --include='*.css'; then
+            echo "External runtime URL found under src."
+            exit 1
+          fi
