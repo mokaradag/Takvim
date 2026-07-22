@@ -26,6 +26,6 @@ jobs:
       - name: Test PR22 regressions
         run: node --test test/pr22-codex-regressions.test.mjs
       - name: Run automated tests
-        run: npm test
+        run: node --test --test-concurrency=1
       - name: Build production application
         run: npm run build
