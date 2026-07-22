@@ -6,7 +6,8 @@ const TEXT_REPLACEMENTS = [
   ['CPM Bitiş', 'Kritik Yol Bitişi'],
   ['CPM Durumu', 'Kritik Yol Durumu'],
   ['CPM uyarısı', 'Zamanlama uyarısı'],
-  ['CPM ·', 'Kritik Yol ·']
+  ['CPM ·', 'Kritik Yol ·'],
+  ['CPM ', 'Kritik Yol ']
 ];
 
 function polishTerminology(root) {
