@@ -244,15 +244,14 @@ export function appStateReducer(state, action) {
     case 'persistence/start':
       return {
         ...state,
-        pendingMutationCount: state.pendingMutationCount + 1,
-        saveError: null
+        pendingMutationCount: state.pendingMutationCount + 1
       };
     case 'persistence/success': {
       const committed = applyCommittedChanges(state, action.changes);
       return {
         ...committed,
         pendingMutationCount: Math.max(0, state.pendingMutationCount - 1),
-        saveError: null,
+        saveError: state.saveError,
         lastSavedAt: action.savedAt || state.lastSavedAt,
         wbsActionError: action.clearWbsError ? null : committed.wbsActionError
       };
