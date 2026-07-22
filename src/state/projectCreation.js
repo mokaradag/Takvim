@@ -156,3 +156,40 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
     }
   };
 }
+
+export function prepareProjectUpdateChanges(projectId, input, context = {}) {
+  const prepared = prepareProjectUpdate(projectId, input, context);
+  if (!prepared.ok) return prepared;
+
+  const projects = context.projects || [];
+  const tasks = context.tasks || [];
+  const wbs = context.wbs || [];
+  const existing = projects.find((project) => project.id === projectId);
+
+  const taskUpserts = tasks
+    .filter((task) => task.projectId === projectId)
+    .map((task) => {
+      const nameChanged = task.proje !== prepared.project.name;
+      const colorChanged = task.color !== prepared.project.color;
+      return nameChanged || colorChanged
+        ? { ...task, proje: prepared.project.name, color: prepared.project.color }
+        : null;
+    })
+    .filter(Boolean);
+
+  const rootWbs = wbs.find((node) => node.projectId === projectId && node.parentId == null) || null;
+  const projectNameChanged = existing.name !== prepared.project.name;
+  const rootTracksProjectName = rootWbs?.name === existing.name;
+  const wbsUpserts = projectNameChanged && rootTracksProjectName
+    ? [{ ...rootWbs, name: prepared.project.name }]
+    : [];
+
+  return {
+    ...prepared,
+    changes: {
+      projectUpserts: [prepared.project],
+      taskUpserts,
+      wbsUpserts
+    }
+  };
+}
