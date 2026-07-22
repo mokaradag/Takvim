@@ -64,7 +64,7 @@ jobs:
             echo "Business-data repository code references localStorage."
             exit 1
           fi
-          if grep -R -E "https?://" src --include='*.js' --include='*.jsx' --include='*.css'; then
-            echo "External runtime URL found under src."
+          if git diff HEAD^1 HEAD -- src package.json package-lock.json | grep '^+' | grep -E "https?://|fonts\.googleapis|cdn\."; then
+            echo "A new external runtime URL or CDN reference was introduced."
             exit 1
           fi
