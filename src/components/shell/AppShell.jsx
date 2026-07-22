@@ -13,6 +13,7 @@ import { ReportsView } from '../../features/reports/ReportsView';
 import { TeamView } from '../../features/team/TeamView';
 import { HelpView } from '../../features/help/HelpView';
 import { SettingsView } from '../../features/settings/SettingsView';
+import { SimpleModePanel } from '../../features/simple/SimpleModePanel';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
 import {
   useAllProjects,
@@ -28,9 +29,18 @@ import { useApplyTweaks } from '../../hooks/useApplyTweaks';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
+import { ModeChooser } from './ModeChooser';
 import { NAV_ITEMS, PAGE_META } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
 import { WelcomeScreen } from './WelcomeScreen';
+
+const SIMPLE_NAV_IDS = new Set(['takvim', 'yardim', 'ayarlar']);
+const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
+
+function projectDisplayName(project) {
+  if (!project) return '';
+  return project.code ? `${project.code} · ${project.name}` : project.name;
+}
 
 export default function AppShell() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -42,12 +52,17 @@ export default function AppShell() {
   const workspace = useWorkspace();
   const stats = useTaskStats();
   const { openTask } = useTaskActions();
+  const simpleMode = t.appMode === 'simple';
 
   const [view, setView] = useState(() => {
     const landing = TWEAK_DEFAULTS.landingView || 'ozet';
     return NAV_ITEMS.some((item) => item.id === landing) ? landing : 'ozet';
   });
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [modePickerOpen, setModePickerOpen] = useState(() => {
+    try { return localStorage.getItem(MODE_STORAGE_KEY) !== '1'; }
+    catch { return false; }
+  });
   const [welcomeOpen, setWelcomeOpen] = useState(() => {
     try { return localStorage.getItem('mp_seen_welcome_v2') !== '1'; }
     catch { return true; }
@@ -62,6 +77,22 @@ export default function AppShell() {
     try { if (hideWelcome) localStorage.setItem('mp_seen_welcome_v2', '1'); }
     catch {}
   };
+
+  const chooseMode = (mode) => {
+    setTweak('appMode', mode);
+    try { localStorage.setItem(MODE_STORAGE_KEY, '1'); } catch {}
+    setModePickerOpen(false);
+    if (mode === 'simple') {
+      workspace.selectWorkspace(null);
+      setView('takvim');
+    }
+  };
+
+  useEffect(() => {
+    if (!simpleMode) return;
+    if (workspace.mode !== 'portfolio') workspace.selectWorkspace(null);
+    if (!SIMPLE_NAV_IDS.has(view)) setView('takvim');
+  }, [simpleMode, view, workspace.mode, workspace.selectWorkspace]);
 
   useEffect(() => {
     const onKey = (event) => {
@@ -87,12 +118,16 @@ export default function AppShell() {
     ayarlar: null
   }), [tasks.length, wbs.length, projects.length, people.length, workspace.mode]);
 
+  const visibleNavItems = simpleMode
+    ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id))
+    : NAV_ITEMS;
+
   const renderView = () => {
     switch (view) {
       case 'ozet': return <DashboardView onNavigate={setView} />;
       case 'veri': return <TasksView />;
       case 'wbs': return <ProjectWorkspaceView />;
-      case 'takvim': return <CalendarView t={t} setTweak={setTweak} />;
+      case 'takvim': return <div className="calendar-page-stack">{simpleMode && <SimpleModePanel />}<CalendarView t={t} setTweak={setTweak} /></div>;
       case 'gantt': return <WorkspaceGanttView />;
       case 'kanban': return <KanbanView />;
       case 'rapor': return <ReportsView />;
@@ -104,12 +139,12 @@ export default function AppShell() {
   };
 
   const meta = PAGE_META[view] || PAGE_META.ozet;
-  const workspaceKey = `${workspace.mode}:${workspace.selectedProjectId || 'all'}`;
-  const projectContextVisible = workspace.selectedProject && view !== 'ayarlar' && view !== 'yardim';
-  const exportVisible = view !== 'ayarlar' && view !== 'yardim';
+  const workspaceKey = `${workspace.mode}:${workspace.selectedProjectId || 'all'}:${simpleMode ? 'simple' : 'advanced'}`;
+  const projectContextVisible = !simpleMode && workspace.selectedProject && view !== 'ayarlar' && view !== 'yardim';
+  const exportVisible = !simpleMode && view !== 'ayarlar' && view !== 'yardim';
 
   return (
-    <div className="app">
+    <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'}`}>
       <aside className="sidebar">
         <Heptagon variant="hept-sidebar" />
         <div className="sidebar-header">
@@ -120,32 +155,41 @@ export default function AppShell() {
           </div>
         </div>
 
-        <div className="col" style={{ gap: 6, padding: '0 12px 10px' }}>
-          <div className="sidebar-section-title" style={{ margin: 0 }}>Aktif çalışma alanı</div>
-          <select
-            className="input"
-            value={workspace.selectedProjectId || ''}
-            onChange={(event) => workspace.selectWorkspace(event.target.value || null)}
-            style={{ width: '100%', fontSize: 12.5 }}
-            aria-label="Portföy veya proje çalışma alanı seç"
-          >
-            <option value="">Portföy · Tüm Projeler</option>
-            {projects.map((project) => <option key={project.id} value={project.id}>Proje · {project.name}</option>)}
-          </select>
-          <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
-            {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
+        {!simpleMode ? (
+          <div className="col" style={{ gap: 6, padding: '0 12px 10px' }}>
+            <div className="sidebar-section-title" style={{ margin: 0 }}>Aktif çalışma alanı</div>
+            <select
+              className="input"
+              value={workspace.selectedProjectId || ''}
+              onChange={(event) => workspace.selectWorkspace(event.target.value || null)}
+              style={{ width: '100%', fontSize: 12.5 }}
+              aria-label="Portföy veya proje çalışma alanı seç"
+            >
+              <option value="">Portföy · Tüm Projeler</option>
+              {projects.map((project) => <option key={project.id} value={project.id}>Proje · {projectDisplayName(project)}</option>)}
+            </select>
+            <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
+              {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="sidebar-simple-mode">
+            <span><Icons.Calendar size={13} /> Basit Mod</span>
+            <small>Hızlı tanım ve Takvim takibi</small>
+          </div>
+        )}
 
-        <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
-          <Icons.Search size={13} />
-          <span>Ara veya komut çalıştır...</span>
-          <span className="kbd">Ctrl K</span>
-        </button>
+        {!simpleMode && (
+          <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
+            <Icons.Search size={13} />
+            <span>Ara veya komut çalıştır...</span>
+            <span className="kbd">Ctrl K</span>
+          </button>
+        )}
 
         <div className="sidebar-section-title">Çalışma alanı</div>
         <nav className="nav">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = Icons[item.icon];
             return (
               <button key={item.id} className={`nav-item${view === item.id ? ' active' : ''}`} onClick={() => setView(item.id)}>
@@ -171,21 +215,20 @@ export default function AppShell() {
               {t.theme === 'light' ? <Icons.Moon size={15} /> : <Icons.Sun size={15} />}
             </button>
           </div>
-          <div className="sidebar-version">MERGEN Rota · Sürüm 1.0</div>
+          <div className="sidebar-version">MERGEN Rota · Sürüm 1.0 · {simpleMode ? 'Basit' : 'Gelişmiş'} Mod</div>
         </div>
       </aside>
 
       <div className="main">
         <header className="topbar">
-          <Heptagon variant="hept-topbar" />
-          <div className="col" style={{ gap: 2 }}>
+          <div className="topbar-emblem-clip"><Heptagon variant="hept-topbar" /></div>
+          <div className="topbar-page-copy col" style={{ gap: 2 }}>
             <h1 className="hero-title">{meta.title}</h1>
             <div className="sub">{meta.sub}</div>
           </div>
           {projectContextVisible && (
-            <div className="topbar-project-context" aria-label={`Aktif proje: ${workspace.selectedProject.name}`}>
-              <span>Aktif Proje</span>
-              <strong>{workspace.selectedProject.name}</strong>
+            <div className="topbar-project-context" aria-label={`Seçili proje: ${projectDisplayName(workspace.selectedProject)}`}>
+              <strong>{projectDisplayName(workspace.selectedProject)}</strong>
             </div>
           )}
           <div className="topbar-spacer" />
@@ -205,11 +248,11 @@ export default function AppShell() {
             )}
           </div>
         </header>
-        <main key={workspaceKey} className="content">{renderView()}</main>
+        <main key={workspaceKey} className={`content content-${view}`}>{renderView()}</main>
       </div>
 
       <TaskDetailOverlay />
-      {cmdOpen && (
+      {cmdOpen && !simpleMode && (
         <CommandPalette
           onClose={() => setCmdOpen(false)}
           onNavigate={setView}
@@ -218,7 +261,7 @@ export default function AppShell() {
           tasks={tasks}
         />
       )}
-      {welcomeOpen && (
+      {welcomeOpen && !modePickerOpen && !simpleMode && (
         <WelcomeScreen
           stats={stats}
           onClose={closeWelcome}
@@ -227,6 +270,7 @@ export default function AppShell() {
           onShowAgainChange={(show) => setHideWelcome(!show)}
         />
       )}
+      {modePickerOpen && <ModeChooser onChoose={chooseMode} />}
     </div>
   );
 }
