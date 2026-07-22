@@ -43,12 +43,15 @@ export function createTaskUpdateTracker() {
   let failure = null;
 
   function track(resultOrPromise) {
-    const tracked = Promise.resolve(resultOrPromise).then(
+    let tracked;
+    tracked = Promise.resolve(resultOrPromise).then(
       (result) => {
+        pending.delete(tracked);
         if (result && result.ok === false && !failure) failure = result;
         return result;
       },
       (error) => {
+        pending.delete(tracked);
         const result = { ok: false, error };
         if (!failure) failure = result;
         return result;
@@ -56,10 +59,6 @@ export function createTaskUpdateTracker() {
     );
 
     pending.add(tracked);
-    tracked.then(
-      () => pending.delete(tracked),
-      () => pending.delete(tracked)
-    );
     return tracked;
   }
 
