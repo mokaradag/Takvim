@@ -51,9 +51,11 @@ selectedProjectId: null | Project.id
 
 A Project is always selected by stable ID, never by display name. An invalid or deleted stored Project ID normalizes safely to Portfolio Workspace.
 
-The last selection is stored under the local UI-preference key `mergen-rota.workspace.v1`. This localStorage value is only a workspace preference; it is not project data or application persistence.
+The last selection is stored under the local UI-preference key `mergen-rota.workspace.v1`. This localStorage value is only a workspace preference; it is not project data or application persistence. Repository loading therefore remains independent from this preference, which is restored only after Project data is ready and can be validated.
 
 Switching projects clears a selected Task when that Task belongs to a different Project. The shell also remounts feature-local view state for the new workspace so stale cross-project filters do not survive a workspace switch.
+
+Repository reload uses the same reconciliation rules: a missing selected Project falls back to Portfolio mode and a selected Task that no longer exists or no longer belongs to the active Project is cleared.
 
 ## 4. WBS domain model
 
@@ -170,7 +172,7 @@ Derived WBS data:
 - critical-task count;
 - Gantt summary rows and bars.
 
-Derived values are never written back into WBS records.
+Derived values are never written back into WBS records or persisted through the repository.
 
 ## 11. Interaction with CPM
 
@@ -186,7 +188,7 @@ Existing behavior is preserved for:
 - validation warnings;
 - deterministic `CROSS_PROJECT_DEPENDENCY` rejection.
 
-Task moves between WBS nodes and WBS hierarchy reparenting change structural classification only. They do not modify Task dates, durations, dependencies or calendars and therefore do not change CPM output by themselves.
+Task moves between WBS nodes and WBS hierarchy reparenting change structural classification only. They do not modify Task dates, durations, dependencies or calendars and therefore do not change CPM output by themselves. CPM output remains derived and is never included in WBS persistence change sets.
 
 ## 12. Interaction with Baselines
 
@@ -202,14 +204,16 @@ Historical WBS structure versioning is not implemented. A baseline schedule snap
 
 The WBS feature provides a project-scoped movement workspace. A source WBS is selected first, then one or more Tasks directly assigned to that source can be selected and moved to another WBS in the same Project.
 
-The state boundary validates the entire selection before changing any Task. Bulk movement is atomic:
+The state/domain boundary validates the entire selection before persistence:
 
 - the target WBS must exist;
 - every selected Task must exist;
 - every selected Task must belong to the target WBS Project;
-- if any selected Task fails validation, none of the selected Tasks are moved.
+- if any selected Task fails validation, no repository mutation is attempted.
 
 Only `Task.wbsId` changes during a successful move. Schedule fields, dependencies, assignments, Project ownership and baseline snapshots remain unchanged.
+
+A single Task move persists one canonical Task update. A bulk move persists every changed Task assignment in one `commitChanges()` call, which is the explicit atomic transaction boundary for a future API/SQL implementation. The current async memory adapter applies that change set all-or-nothing as well.
 
 ### WBS reparenting
 
@@ -223,13 +227,19 @@ A non-root WBS node can be moved under another valid WBS node in the same Projec
 
 A successful reparent keeps every WBS stable ID unchanged. The moved node receives the next deterministic child code under its new parent, and descendant display codes are rebased to the new prefix. Existing Task assignments continue to reference the same stable WBS IDs and therefore move with the subtree structurally without rewriting Task records.
 
-These rules are implemented at the state/domain boundary rather than only in the UI, so imported or future persistence adapters can reuse the same safety contract.
+All WBS nodes changed by the reparent/code-rebase operation are persisted in one atomic repository change set. A persistence failure therefore leaves both canonical application state and the repository hierarchy unchanged rather than exposing a partially rebased subtree.
 
-## 14. Current limitations
+Business validity remains implemented at the domain/state boundary. The repository owns persistence and atomic commit semantics, not WBS business rules.
+
+## 14. Persistence semantics and current limitations
+
+Task/WBS mutations now pass through the asynchronous state/data persistence boundary. Successful changes survive `loadSnapshot()` calls made against the same active async in-memory repository instance.
+
+The current adapter is not durable storage. A browser refresh that creates a new repository instance, process restart or VM restart starts again from the supplied seed. Real API/database persistence remains future work.
 
 This increment intentionally does not implement:
 
-- database or API persistence;
+- durable database or API persistence;
 - drag-and-drop WBS editing;
 - cross-project Task or WBS movement;
 - cascade deletion;
@@ -238,7 +248,7 @@ This increment intentionally does not implement:
 - progress-aware CPM or Data Date rescheduling;
 - a full project-administration screen.
 
-WBS editing is in-memory. Deletion is blocked when a node has children or directly assigned Tasks; no Task or descendant is silently deleted or moved.
+Deletion remains blocked when a node has children or directly assigned Tasks; no Task or descendant is silently deleted or moved. Persistence failures are reported separately from WBS validation failures.
 
 ## 15. Future Primavera P6 mapping considerations
 
@@ -250,4 +260,4 @@ Project → WBS hierarchy → Activities
 
 Future adapters can map external Project, WBS and Activity identifiers to MERGEN Rota stable IDs without changing feature hierarchy semantics. The current design already preserves explicit Project ownership, parent relationships, arbitrary WBS depth and a separate Activity entity.
 
-Primavera-specific database identifiers, persistence rules, import conflict handling and synchronization metadata are intentionally deferred until a focused integration contract is designed.
+Primavera-specific database identifiers, persistence rules, import conflict handling and synchronization metadata are intentionally deferred until a focused integration contract is designed. The async repository boundary can later sit in front of such server-side integration without exposing persistence implementation details to WBS feature components.
