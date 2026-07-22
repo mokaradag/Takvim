@@ -51,6 +51,15 @@ test('WBS Gantt gates critical-path data behind a valid project schedule', () =>
   assert.match(source, /Görev tarihleri veya bağımlılık ilişkileri gözden geçirilmeli/);
 });
 
+test('portfolio Gantt does not render missing planned dates as today', () => {
+  const source = read('src/features/gantt/GanttView.jsx');
+
+  assert.match(source, /function hasPlannedRange\(task\)/);
+  assert.match(source, /return value \? fmt\(value, pattern\) : <span className="muted">—<\/span>/);
+  assert.match(source, /if \(!hasPlannedRange\(depTask\) \|\| !hasPlannedRange\(r\.task\)\) return/);
+  assert.match(source, /if \(!hasPlannedRange\(t\)\) \{/);
+});
+
 test('cross-project dependencies produce an invalid project schedule for the UI unavailable state', () => {
   const schedule = buildPortfolioSchedule({
     projects: [
