@@ -372,10 +372,10 @@ test('calculatePlannedDurationDays rejects malformed and impossible dates', () =
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-07-22', plannedFinish: '2026-07-21' }), null);
 });
 
-test('calculatePlannedDurationDays keeps a valid weekend-only span at minimum one day', () => {
+test('calculatePlannedDurationDays returns zero when a valid span has no working days', () => {
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-07-25', plannedFinish: '2026-07-26' }, {
     projects, calendars
-  }), 1);
+  }), 0);
 });
 
 test('calculatePlannedDurationDays resolves project calendars', () => {
