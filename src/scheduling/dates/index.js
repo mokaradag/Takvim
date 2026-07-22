@@ -19,16 +19,22 @@ export function fmtISO(value) {
   return `${year}-${month}-${day}`;
 }
 
-export function fmt(value, pattern = 'dd MMM') {
-  const date = parseDate(value);
+export function fmtDisplayDate(value) {
+  if (!value) return '';
+  const date = value instanceof Date ? value : parseDate(value);
   const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${day}/${month}/${date.getFullYear()}`;
+}
+
+export function fmt(value, pattern = 'dd/mm/yyyy') {
+  const date = parseDate(value);
   const dayShort = date.getDate();
-  if (pattern === 'dd MMM') return `${day} ${TR_MONTHS[date.getMonth()]}`;
-  if (pattern === 'dd MMM yyyy') return `${day} ${TR_MONTHS[date.getMonth()]} ${date.getFullYear()}`;
-  if (pattern === 'MMM yyyy') return `${TR_MONTHS_LONG[date.getMonth()]} ${date.getFullYear()}`;
   if (pattern === 'd') return String(dayShort);
   if (pattern === 'EEE d') return `${TR_DAYS[(date.getDay() + 6) % 7]} ${dayShort}`;
-  return date.toLocaleDateString('tr-TR');
+  if (pattern === 'MMM yyyy') return `${TR_MONTHS_LONG[date.getMonth()]} ${date.getFullYear()}`;
+  if (pattern === 'dd MMM' || pattern === 'dd MMM yyyy' || pattern === 'dd/mm/yyyy') return fmtDisplayDate(date);
+  return fmtDisplayDate(date);
 }
 
 export function addDays(value, amount) {
