@@ -8,6 +8,10 @@ function comparableName(value) {
   return normalizedName(value).toLocaleLowerCase('tr-TR');
 }
 
+function normalizedProjectCode(value) {
+  return normalizedName(value).toLocaleUpperCase('tr-TR');
+}
+
 export function normalizeProjectTags(values = []) {
   const seen = new Set();
   return (Array.isArray(values) ? values : [])
@@ -53,13 +57,18 @@ function validationError(issues) {
 
 export function validateProjectCreationInput(input = {}, { projects = [], people = [], calendars = [] } = {}) {
   const issues = [];
-  const name = normalizedName(input.name);
+  const name = normalizedName(input.name || input.ProjeAdi);
+  const code = normalizedProjectCode(input.code || input.ProjeKodu);
   const calendarId = resolveCalendarId(input, calendars);
 
   if (!name) {
     issues.push({ code: 'PROJECT_NAME_REQUIRED', field: 'name', message: 'Proje adı boş bırakılamaz.' });
   } else if (projects.some((project) => comparableName(project.name) === comparableName(name))) {
     issues.push({ code: 'PROJECT_NAME_DUPLICATE', field: 'name', message: 'Bu adda bir proje zaten bulunuyor.' });
+  }
+
+  if (code && projects.some((project) => normalizedProjectCode(project.code || project.ProjeKodu) === code)) {
+    issues.push({ code: 'PROJECT_CODE_DUPLICATE', field: 'code', message: 'Bu proje kodu zaten kullanılıyor.' });
   }
 
   if (!input.leadId) {
@@ -89,7 +98,7 @@ function nextRootCode(wbs = []) {
   const max = wbs
     .filter((node) => node.parentId == null)
     .reduce((current, node) => {
-      const numeric = Number.parseInt(String(node.code || ''), 10);
+      const numeric = Number.parseInt(String(node.code || '').split('.').at(0), 10);
       return Number.isFinite(numeric) ? Math.max(current, numeric) : current;
     }, 0);
   return String(max + 1);
@@ -101,7 +110,12 @@ export function prepareProjectCreation(input, context = {}, ids = {}) {
   const calendars = context.calendars || [];
   const wbs = context.wbs || [];
   const calendarId = resolveCalendarId(input, calendars);
-  const normalizedInput = { ...input, calendarId };
+  const normalizedInput = {
+    ...input,
+    name: normalizedName(input.name || input.ProjeAdi),
+    code: normalizedProjectCode(input.code || input.ProjeKodu),
+    calendarId
+  };
   const issues = validateProjectCreationInput(normalizedInput, { projects, people, calendars });
 
   if (issues.length) return validationError(issues);
@@ -109,7 +123,9 @@ export function prepareProjectCreation(input, context = {}, ids = {}) {
   const lead = people.find((person) => person.id === normalizedInput.leadId) || null;
   const project = {
     id: ids.projectId,
-    name: normalizedName(normalizedInput.name),
+    code: normalizedInput.code,
+    name: normalizedInput.name,
+    source: normalizedInput.source || 'manual',
     color: normalizedInput.color,
     leadId: normalizedInput.leadId,
     lead: lead?.name || '',
@@ -148,7 +164,13 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
   }
 
   const calendarId = existing.calendarId || resolveCalendarId(input, calendars);
-  const normalizedInput = { ...input, calendarId };
+  const normalizedInput = {
+    ...input,
+    name: normalizedName(input.name === undefined ? existing.name : input.name),
+    code: normalizedProjectCode(input.code === undefined ? existing.code : input.code),
+    source: input.source === undefined ? existing.source : input.source,
+    calendarId
+  };
   const issues = validateProjectCreationInput(normalizedInput, {
     projects: projects.filter((project) => project.id !== projectId),
     people,
@@ -162,7 +184,9 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
     ok: true,
     project: {
       ...existing,
-      name: normalizedName(normalizedInput.name),
+      code: normalizedInput.code,
+      name: normalizedInput.name,
+      source: normalizedInput.source || existing.source || 'manual',
       color: normalizedInput.color,
       leadId: normalizedInput.leadId,
       lead: lead?.name || '',
@@ -189,15 +213,17 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
     .filter((task) => task.projectId === projectId)
     .map((task) => {
       const nameChanged = task.proje !== prepared.project.name;
+      const codeChanged = (task.projectCode || '') !== (prepared.project.code || '');
       const colorChanged = task.color !== prepared.project.color;
       const canonicalKeyword = canonicalTags.get(comparableName(task.keyword));
       const keywordChanged = Boolean(canonicalKeyword) && task.keyword !== canonicalKeyword;
 
-      if (!nameChanged && !colorChanged && !keywordChanged) return null;
+      if (!nameChanged && !codeChanged && !colorChanged && !keywordChanged) return null;
 
       const nextTask = {
         ...task,
         proje: prepared.project.name,
+        projectCode: prepared.project.code || '',
         color: prepared.project.color
       };
       if (keywordChanged) nextTask.keyword = canonicalKeyword;
