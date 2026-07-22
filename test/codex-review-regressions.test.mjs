@@ -149,7 +149,7 @@ test('simple mode creates the final task in one mutation and keeps project metad
 
 test('clearing a date propagates an empty value that task normalization stores as null', () => {
   const dateInput = read('src/components/DateInput.jsx');
-  assert.match(dateInput, /if \(onChange\) onChange\(''\)/);
+  assert.match(dateInput, /else onChange\?\.\(''\)/);
 
   const normalized = normalizeTaskScheduleFields({
     plannedStart: '',
@@ -159,4 +159,9 @@ test('clearing a date propagates an empty value that task normalization stores a
   assert.equal(normalized.plannedStart, null);
   assert.equal(normalized.plannedFinish, null);
   assert.equal(normalized.targetFinish, null);
+});
+
+test('required date inputs restore their previous value instead of clearing form state', () => {
+  const dateInput = read('src/components/DateInput.jsx');
+  assert.match(dateInput, /if \(!allowEmpty\) setDraft\(fmtDisplayDate\(value\)\);\n\s+else onChange\?\.\(''\);/);
 });
