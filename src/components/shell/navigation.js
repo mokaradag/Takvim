@@ -1,7 +1,7 @@
 export const NAV_ITEMS = [
   { id: 'ozet', label: 'Özet', icon: 'Dashboard' },
   { id: 'veri', label: 'Görevler', icon: 'Table' },
-  { id: 'wbs', label: 'İş Kırılım Yapısı', icon: 'Layers' },
+  { id: 'wbs', label: 'Proje Yapısı', icon: 'Layers' },
   { id: 'takvim', label: 'Takvim', icon: 'Calendar' },
   { id: 'gantt', label: 'Gantt', icon: 'Gantt' },
   { id: 'kanban', label: 'Kanban', icon: 'Kanban' },
@@ -13,7 +13,7 @@ export const NAV_ITEMS = [
 export const PAGE_META = {
   ozet: { title: 'Özet', sub: 'Genel görünüm ve metrikler' },
   veri: { title: 'Görevler', sub: 'Görevleri listele ve düzenle' },
-  wbs: { title: 'İş Kırılım Yapısı', sub: 'Proje hiyerarşisi ve aktivite kapsamı' },
+  wbs: { title: 'Proje Yapısı', sub: 'Proje tanımları ve iş dağılım ağacı' },
   takvim: { title: 'Takvim', sub: 'Aylık görünüm' },
   gantt: { title: 'Gantt', sub: 'Zaman çizelgesi ve bağımlılıklar' },
   kanban: { title: 'Kanban', sub: 'Durum panosu' },
