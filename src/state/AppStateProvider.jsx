@@ -153,12 +153,15 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return result;
   }, [applyStateAction, persistence]);
 
-  const addTask = useCallback(async () => {
+  const addTask = useCallback(async (input = null) => {
     const id = uniqueId('task');
-    const result = await persistence.mutate('task/create', (current) => ({
-      type: 'task/add',
-      task: createNewTask(current, undefined, id)
-    }));
+    const result = await persistence.mutate('task/create', (current) => {
+      const baseTask = createNewTask(current, undefined, id);
+      return {
+        type: 'task/add',
+        task: input ? { ...baseTask, ...input, id } : baseTask
+      };
+    });
     const created = result.ok ? result.value?.taskUpserts?.[0] || null : null;
     if (created) applyStateAction({ type: 'task/select', id: created.id });
     return result.ok ? { ...result, value: created } : result;
