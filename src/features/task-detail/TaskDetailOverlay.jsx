@@ -16,20 +16,6 @@ export function TaskDetailOverlay() {
   canonicalTaskRef.current = task;
 
   useEffect(() => {
-    if (!task) return undefined;
-    const applyDateLocale = () => {
-      document.querySelectorAll('.drawer input[type="date"]').forEach((input) => {
-        input.setAttribute('lang', 'en-GB');
-        input.setAttribute('data-date-format', 'dd/mm/yyyy');
-      });
-    };
-    applyDateLocale();
-    const observer = new MutationObserver(applyDateLocale);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [task?.id]);
-
-  useEffect(() => {
     if (!task) {
       taskIdRef.current = null;
       dirtyFieldsRef.current = new Set();
