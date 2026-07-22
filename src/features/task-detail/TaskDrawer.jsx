@@ -22,7 +22,7 @@ import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskPrimaryBa
 function legacyProjectTags(projectId, tasks) {
   return Array.from(new Set(
     tasks
-      .filter((item) => item.projectId === projectId && String(item.keyword || '').trim())
+      .filter((item) => item.projectId === projectId && String(item.keyword || '').trim() && String(item.keyword).trim() !== 'Yeni')
       .map((item) => String(item.keyword).trim())
   )).sort((a, b) => a.localeCompare(b, 'tr'));
 }
@@ -62,6 +62,12 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     setLocal(next);
     onUpdate(task.id, patch);
   };
+
+  useEffect(() => {
+    if (local.keyword !== 'Yeni' || projectTags.includes('Yeni')) return;
+    setLocal((current) => ({ ...current, keyword: '' }));
+    onUpdate(task.id, { keyword: '' });
+  }, [local.keyword, projectTags, task.id, onUpdate]);
 
   const changeProject = (projectId) => {
     const project = projects.find((item) => item.id === projectId) || null;
