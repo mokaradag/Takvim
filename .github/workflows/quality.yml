@@ -23,14 +23,20 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Test architecture and UI contracts
-        run: >-
-          node --test --test-reporter=dot
-          test/architecture-boundaries.test.mjs
-          test/public-contracts-runtime-smoke.test.mjs
-          test/project-management.test.mjs
-          test/pr19-regressions.test.mjs
-          test/mergen-rota-v1.test.mjs
+      - name: Test architecture boundaries
+        run: node --test --test-reporter=dot test/architecture-boundaries.test.mjs
+      - name: Test public contracts
+        if: always()
+        run: node --test --test-reporter=dot test/public-contracts-runtime-smoke.test.mjs
+      - name: Test project management
+        if: always()
+        run: node --test --test-reporter=dot test/project-management.test.mjs
+      - name: Test PR19 regressions
+        if: always()
+        run: node --test --test-reporter=dot test/pr19-regressions.test.mjs
+      - name: Test Sürüm 1.0 changes
+        if: always()
+        run: node --test --test-reporter=dot test/mergen-rota-v1.test.mjs
       - name: Test scheduling and CPM
         if: always()
         run: >-
