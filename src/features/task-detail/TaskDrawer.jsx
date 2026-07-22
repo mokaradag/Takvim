@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
 import {
@@ -30,6 +31,16 @@ function legacyProjectTags(projectId, tasks) {
 function tagsForProject(project, tasks) {
   if (!project) return [];
   return Array.isArray(project.tags) ? project.tags : legacyProjectTags(project.id, tasks);
+}
+
+function projectLabel(project) {
+  if (!project) return '';
+  return project.code ? `${project.code} · ${project.name}` : project.name;
+}
+
+function personLabel(person) {
+  const employeeNo = person.employeeNo || person.SicilNo || person.PersonelNo || person.CalisanNo;
+  return employeeNo ? `${employeeNo} · ${person.name}` : person.name;
 }
 
 export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
@@ -75,6 +86,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     const roots = allWbs.filter((node) => node.projectId === projectId && node.parentId == null);
     save({
       projectId: projectId || null,
+      projectCode: project?.code || '',
       proje: project?.name || '',
       color: project?.color || local.color,
       wbsId: roots.length === 1 ? roots[0].id : null,
@@ -94,7 +106,9 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
           <div className="col" style={{ gap: 8, flex: 1 }}>
             <div className="row" style={{ gap: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: color }} />
-              <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{local.proje}</span>
+              <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                {projectLabel(selectedProject) || local.proje}
+              </span>
               {local.keyword && <><span className="muted">·</span><Kw color={local.color}>{local.keyword}</Kw></>}
             </div>
             <textarea
@@ -143,7 +157,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
             </Section>
 
             <Section title="Proje, WBS & Etiket">
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, .9fr) minmax(0, 1.3fr)', gap: 12 }}>
+              <div className="task-project-wbs-grid">
                 <div className="col" style={{ gap: 6 }}>
                   <div className="label">Proje</div>
                   <select
@@ -152,7 +166,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                     onChange={(e) => changeProject(e.target.value)}
                   >
                     <option value="">Proje seçilmedi</option>
-                    {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                    {projects.map((project) => <option key={project.id} value={project.id}>{projectLabel(project)}</option>)}
                   </select>
                 </div>
                 <div className="col" style={{ gap: 6 }}>
@@ -207,13 +221,13 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                   {people.filter((p) => !local.sorumlu.includes(p.name))
                     .slice()
                     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-                    .map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                    .map((p) => <option key={p.id} value={p.name}>{personLabel(p)}</option>)}
                 </select>
               </div>
             </Section>
 
             <Section title="Güncel Plan">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              <div className="task-date-grid">
                 <DateField label="Planlanan Başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} />
                 <DateField label="Planlanan Bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} />
                 <DateField label="Hedef Bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} />
@@ -232,7 +246,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
             </Section>
 
             <Section title="Gerçekleşen & Kalan">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              <div className="task-date-grid">
                 <DateField label="Gerçekleşen Başlangıç" value={local.actualStart} onChange={(v) => save({ actualStart: v })} nullable />
                 <DateField label="Gerçekleşen Bitiş" value={local.actualFinish} onChange={(v) => save({ actualFinish: v })} nullable />
                 <NumberField label="Kalan Süre" value={local.remainingDurationDays} onChange={(v) => save({ remainingDurationDays: v })} suffix="gün" />
@@ -241,7 +255,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
 
             {baselineSnapshot && (
               <Section title={`Baz Plan · ${baseline?.name || 'Birincil Baz Plan'}`}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                <div className="task-date-grid">
                   <ReadOnlyField label="Başlangıç" value={baselineSnapshot.plannedStart ? fmt(baselineSnapshot.plannedStart, 'dd MMM yyyy') : '—'} />
                   <ReadOnlyField label="Bitiş" value={baselineSnapshot.plannedFinish ? fmt(baselineSnapshot.plannedFinish, 'dd MMM yyyy') : '—'} />
                   <ReadOnlyField label="Süre" value={baselineSnapshot.plannedDurationDays == null ? '—' : `${baselineSnapshot.plannedDurationDays} gün`} />
@@ -365,7 +379,7 @@ function RelEditor({ task, tasks, onChange }) {
               </div>
               <button className="icon-btn" style={{ width: 24, height: 24, flexShrink: 0 }} onClick={() => removeDep(idx)}><Icons.Close size={11} /></button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr .7fr .8fr', gap: 8 }}>
+            <div className="rel-fields-grid">
               <label className="rel-type-field">
                 <span className="rel-type-field-label">İlişki türü</span>
                 <select
@@ -405,12 +419,11 @@ function RelEditor({ task, tasks, onChange }) {
         );
       })}
 
-      <div className="row" style={{ gap: 6, marginTop: 4 }}>
+      <div className="rel-add-row">
         <select
           className="input"
           value={selectedType}
           onChange={(e) => setSelectedType(e.target.value)}
-          style={{ width: 100, flexShrink: 0, fontSize: 12 }}
         >
           {Object.values(REL_TYPES).map((rt) =>
             <option key={rt.code} value={rt.code}>{rt.code}</option>
@@ -420,7 +433,6 @@ function RelEditor({ task, tasks, onChange }) {
           className="input"
           value=""
           onChange={(e) => { addDep(e.target.value, selectedType); e.target.value = ''; }}
-          style={{ flex: 1 }}
         >
           <option value="">+ Öncül görev seçin...</option>
           {others.filter((t) => !deps.some((d) => depId(d) === t.id))
@@ -439,13 +451,11 @@ function DateField({ label, value, onChange, accent, nullable = false }) {
   return (
     <div className="col" style={{ gap: 6 }}>
       <div className="label">{label}</div>
-      <input
-        type="date"
-        lang="tr"
-        className="input"
+      <DateInput
         value={value || ''}
-        onChange={(e) => onChange(nullable && !e.target.value ? null : e.target.value)}
-        style={accent ? { borderColor: accent, color: accent } : null}
+        onChange={(next) => onChange(nullable && !next ? null : next)}
+        allowEmpty={nullable}
+        style={accent ? { '--date-field-accent': accent } : undefined}
       />
     </div>
   );
