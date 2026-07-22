@@ -143,6 +143,22 @@ export default function AppShell() {
   const projectContextVisible = !simpleMode && workspace.selectedProject && view !== 'ayarlar' && view !== 'yardim';
   const exportVisible = !simpleMode && view !== 'ayarlar' && view !== 'yardim';
 
+  // İlk açılış akışlarında ana uygulama hiç render edilmez. Böylece Özet üst çubuğu,
+  // sidebar veya başka bir sayfa parçası karşılama/mod seçim ekranının arkasından görünmez.
+  if (modePickerOpen) return <ModeChooser onChoose={chooseMode} />;
+
+  if (welcomeOpen && !simpleMode) {
+    return (
+      <WelcomeScreen
+        stats={stats}
+        onClose={closeWelcome}
+        onNavigate={setView}
+        showAgain={!hideWelcome}
+        onShowAgainChange={(show) => setHideWelcome(!show)}
+      />
+    );
+  }
+
   return (
     <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'}`}>
       <aside className="sidebar">
@@ -261,16 +277,6 @@ export default function AppShell() {
           tasks={tasks}
         />
       )}
-      {welcomeOpen && !modePickerOpen && !simpleMode && (
-        <WelcomeScreen
-          stats={stats}
-          onClose={closeWelcome}
-          onNavigate={setView}
-          showAgain={!hideWelcome}
-          onShowAgainChange={(show) => setHideWelcome(!show)}
-        />
-      )}
-      {modePickerOpen && <ModeChooser onChoose={chooseMode} />}
     </div>
   );
 }
