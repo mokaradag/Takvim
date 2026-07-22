@@ -9,6 +9,8 @@
   width: 100%;
   padding-right: 34px;
   font-variant-numeric: tabular-nums;
+  border-color: var(--date-field-accent, var(--border));
+  color: var(--date-field-accent, var(--text));
 }
 
 .date-input-button {
@@ -54,6 +56,15 @@
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--status-overdue) 12%, transparent);
 }
 
+.gantt-range-controls .date-input-shell {
+  width: 145px;
+  flex: 0 0 145px;
+}
+
+.date-column-filter-pop {
+  width: min(300px, calc(100vw - 16px));
+}
+
 /* İş dağılım ağacı tablo yapısı küçük ekranlarda içeride yatay kayar. */
 .wbs-tree-table {
   max-width: 100%;
@@ -93,8 +104,61 @@
   border-bottom: 0;
 }
 
+/* Görev detay paneli: alanlar genişliği daha dengeli kullanır. */
+.task-project-wbs-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.35fr);
+  gap: 12px;
+}
+
+.task-date-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rel-fields-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.55fr) minmax(110px, .65fr) minmax(110px, .7fr);
+  gap: 8px;
+  align-items: end;
+}
+
+.rel-add-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tasks-table-scroll {
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 900px) {
+  .task-date-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rel-fields-grid {
+    grid-template-columns: minmax(180px, 1.35fr) minmax(100px, .65fr) minmax(100px, .7fr);
+  }
+}
+
 @media (max-width: 760px) {
   .date-input-button {
     right: 5px;
+  }
+
+  .gantt-range-controls .date-input-shell {
+    width: 132px;
+    flex-basis: 132px;
+  }
+
+  .task-project-wbs-grid,
+  .task-date-grid,
+  .rel-fields-grid,
+  .rel-add-row {
+    grid-template-columns: 1fr;
   }
 }
