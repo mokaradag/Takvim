@@ -26,6 +26,19 @@ jobs:
       - name: Test PR22 regressions
         run: node --test test/pr22-codex-regressions.test.mjs
       - name: Run automated tests
-        run: npm test -- --test-concurrency=1
+        id: automated-tests
+        continue-on-error: true
+        run: npm test -- --test-concurrency=1 > automated-tests.log 2>&1
+      - name: Upload automated test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automated-test-log
+          path: automated-tests.log
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Fail when automated tests fail
+        if: steps.automated-tests.outcome == 'failure'
+        run: exit 1
       - name: Build production application
         run: npm run build
