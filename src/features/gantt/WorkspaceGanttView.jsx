@@ -66,8 +66,8 @@ export function WorkspaceGanttView() {
   const chartKey = `${workspace.selectedProjectId || 'portfolio'}:${mode}:${rangeRevision}`;
 
   return (
-    <div className="col" style={{ gap: 12 }}>
-      <div className="row" style={{ justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+    <div className="gantt-page col" style={{ gap: 12 }}>
+      <div className="row gantt-page-controls" style={{ justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         {workspace.mode === 'project' ? (
           <ProjectGanttModeSwitch mode={mode} setMode={setMode} />
         ) : (
@@ -75,9 +75,9 @@ export function WorkspaceGanttView() {
         )}
         <div className="gantt-range-controls">
           <span className="muted" style={{ fontSize: 11.5 }}>Görüntü aralığı</span>
-          <input type="date" lang="tr" className="input" value={rangeStart} onChange={(event) => setRangeStart(event.target.value)} />
+          <input type="date" lang="en-GB" className="input" value={rangeStart} onChange={(event) => setRangeStart(event.target.value)} />
           <span className="muted">—</span>
-          <input type="date" lang="tr" className="input" value={rangeEnd} onChange={(event) => setRangeEnd(event.target.value)} />
+          <input type="date" lang="en-GB" className="input" value={rangeEnd} onChange={(event) => setRangeEnd(event.target.value)} />
           <button type="button" className="btn primary sm" onClick={applyRange}>Uygula</button>
           <button type="button" className={`btn sm${rangeMode === 'auto' ? ' ghost' : ''}`} onClick={resetRange}>Otomatik</button>
         </div>
@@ -89,11 +89,13 @@ export function WorkspaceGanttView() {
         {rangeError && <span style={{ marginLeft: 10, color: 'var(--status-overdue)', fontWeight: 600 }}>{rangeError}</span>}
       </div>
 
-      {workspace.mode === 'portfolio'
-        ? <GanttView key={chartKey} />
-        : mode === 'wbs'
-          ? <WbsGanttView key={chartKey} />
-          : <GanttView key={chartKey} />}
+      <div className="gantt-chart-host">
+        {workspace.mode === 'portfolio'
+          ? <GanttView key={chartKey} />
+          : mode === 'wbs'
+            ? <WbsGanttView key={chartKey} />
+            : <GanttView key={chartKey} />}
+      </div>
     </div>
   );
 }
