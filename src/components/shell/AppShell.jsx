@@ -14,6 +14,7 @@ import { TeamView } from '../../features/team/TeamView';
 import { SettingsView } from '../../features/settings/SettingsView';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
 import {
+  useAllPeople,
   useAllProjects,
   useCalendars,
   usePeople,
@@ -30,6 +31,7 @@ import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
 import { NAV_ITEMS, PAGE_META } from './navigation';
+import { ProjectCreateDialog } from './ProjectCreateDialog';
 import { WelcomeScreen } from './WelcomeScreen';
 
 export default function AppShell() {
@@ -37,19 +39,21 @@ export default function AppShell() {
   useApplyTweaks(t);
   const tasks = useTasks();
   const people = usePeople();
+  const allPeople = useAllPeople();
   const wbs = useWbs();
   const projects = useAllProjects();
   const calendars = useCalendars();
   const workspace = useWorkspace();
   const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
   const stats = useTaskStats();
-  const { openTask } = useTaskActions();
+  const { openTask, addProject } = useTaskActions();
 
   const [view, setView] = useState(() => {
     const landing = TWEAK_DEFAULTS.landingView || 'ozet';
     return NAV_ITEMS.some((item) => item.id === landing) ? landing : 'ozet';
   });
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [projectCreateOpen, setProjectCreateOpen] = useState(false);
   const [welcomeOpen, setWelcomeOpen] = useState(() => {
     try { return localStorage.getItem('mp_seen_welcome_v2') !== '1'; }
     catch { return true; }
@@ -131,6 +135,13 @@ export default function AppShell() {
             <option value="">Portföy · Tüm Projeler</option>
             {projects.map((project) => <option key={project.id} value={project.id}>Proje · {project.name}</option>)}
           </select>
+          <button
+            className="btn ghost sm"
+            style={{ width: '100%', justifyContent: 'center' }}
+            onClick={() => setProjectCreateOpen(true)}
+          >
+            <Icons.Plus size={13} /> Yeni proje
+          </button>
           <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
             {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} WBS düğümü` : `${projects.length} proje · ${tasks.length} görev`}
           </div>
@@ -199,6 +210,13 @@ export default function AppShell() {
       </div>
 
       <TaskDetailOverlay />
+      <ProjectCreateDialog
+        open={projectCreateOpen}
+        people={allPeople}
+        calendars={calendars}
+        onCreate={addProject}
+        onClose={() => setProjectCreateOpen(false)}
+      />
       {cmdOpen && (
         <CommandPalette
           onClose={() => setCmdOpen(false)}
