@@ -18,9 +18,29 @@ function isValidIsoDate(value) {
     && date.getDate() === day;
 }
 
+function resolveCalendarId(input = {}, calendars = []) {
+  const requested = String(input.calendarId || '').trim();
+  return requested || calendars[0]?.id || '';
+}
+
+function validationError(issues) {
+  const first = issues[0];
+  return {
+    ok: false,
+    error: {
+      kind: 'domain',
+      code: first.code,
+      field: first.field,
+      message: first.message,
+      issues
+    }
+  };
+}
+
 export function validateProjectCreationInput(input = {}, { projects = [], people = [], calendars = [] } = {}) {
   const issues = [];
   const name = normalizedName(input.name);
+  const calendarId = resolveCalendarId(input, calendars);
 
   if (!name) {
     issues.push({ code: 'PROJECT_NAME_REQUIRED', field: 'name', message: 'Proje adı boş bırakılamaz.' });
@@ -34,10 +54,8 @@ export function validateProjectCreationInput(input = {}, { projects = [], people
     issues.push({ code: 'PROJECT_LEAD_NOT_FOUND', field: 'leadId', message: 'Seçilen proje sorumlusu bulunamadı.' });
   }
 
-  if (!input.calendarId) {
-    issues.push({ code: 'PROJECT_CALENDAR_REQUIRED', field: 'calendarId', message: 'Proje takvimi seçilmelidir.' });
-  } else if (!calendars.some((calendar) => calendar.id === input.calendarId)) {
-    issues.push({ code: 'PROJECT_CALENDAR_NOT_FOUND', field: 'calendarId', message: 'Seçilen proje takvimi bulunamadı.' });
+  if (!calendarId || !calendars.some((calendar) => calendar.id === calendarId)) {
+    issues.push({ code: 'PROJECT_CALENDAR_NOT_FOUND', field: 'calendarId', message: 'Kurumsal çalışma takvimi bulunamadı.' });
   }
 
   if (!input.dataDate) {
@@ -68,31 +86,21 @@ export function prepareProjectCreation(input, context = {}, ids = {}) {
   const people = context.people || [];
   const calendars = context.calendars || [];
   const wbs = context.wbs || [];
-  const issues = validateProjectCreationInput(input, { projects, people, calendars });
+  const calendarId = resolveCalendarId(input, calendars);
+  const normalizedInput = { ...input, calendarId };
+  const issues = validateProjectCreationInput(normalizedInput, { projects, people, calendars });
 
-  if (issues.length) {
-    const first = issues[0];
-    return {
-      ok: false,
-      error: {
-        kind: 'domain',
-        code: first.code,
-        field: first.field,
-        message: first.message,
-        issues
-      }
-    };
-  }
+  if (issues.length) return validationError(issues);
 
-  const lead = people.find((person) => person.id === input.leadId) || null;
+  const lead = people.find((person) => person.id === normalizedInput.leadId) || null;
   const project = {
     id: ids.projectId,
-    name: normalizedName(input.name),
-    color: input.color,
-    leadId: input.leadId,
+    name: normalizedName(normalizedInput.name),
+    color: normalizedInput.color,
+    leadId: normalizedInput.leadId,
     lead: lead?.name || '',
-    calendarId: input.calendarId,
-    dataDate: input.dataDate
+    calendarId,
+    dataDate: normalizedInput.dataDate
   };
   const rootWbs = {
     id: ids.rootWbsId,
@@ -110,6 +118,78 @@ export function prepareProjectCreation(input, context = {}, ids = {}) {
     changes: {
       projectUpserts: [project],
       wbsUpserts: [rootWbs]
+    }
+  };
+}
+
+export function prepareProjectUpdate(projectId, input, context = {}) {
+  const projects = context.projects || [];
+  const people = context.people || [];
+  const calendars = context.calendars || [];
+  const existing = projects.find((project) => project.id === projectId) || null;
+
+  if (!existing) {
+    return validationError([{ code: 'PROJECT_NOT_FOUND', field: 'projectId', message: 'Güncellenecek proje bulunamadı.' }]);
+  }
+
+  const calendarId = existing.calendarId || resolveCalendarId(input, calendars);
+  const normalizedInput = { ...input, calendarId };
+  const issues = validateProjectCreationInput(normalizedInput, {
+    projects: projects.filter((project) => project.id !== projectId),
+    people,
+    calendars
+  });
+
+  if (issues.length) return validationError(issues);
+
+  const lead = people.find((person) => person.id === normalizedInput.leadId) || null;
+  return {
+    ok: true,
+    project: {
+      ...existing,
+      name: normalizedName(normalizedInput.name),
+      color: normalizedInput.color,
+      leadId: normalizedInput.leadId,
+      lead: lead?.name || '',
+      calendarId,
+      dataDate: normalizedInput.dataDate
+    }
+  };
+}
+
+export function prepareProjectUpdateChanges(projectId, input, context = {}) {
+  const prepared = prepareProjectUpdate(projectId, input, context);
+  if (!prepared.ok) return prepared;
+
+  const projects = context.projects || [];
+  const tasks = context.tasks || [];
+  const wbs = context.wbs || [];
+  const existing = projects.find((project) => project.id === projectId);
+
+  const taskUpserts = tasks
+    .filter((task) => task.projectId === projectId)
+    .map((task) => {
+      const nameChanged = task.proje !== prepared.project.name;
+      const colorChanged = task.color !== prepared.project.color;
+      return nameChanged || colorChanged
+        ? { ...task, proje: prepared.project.name, color: prepared.project.color }
+        : null;
+    })
+    .filter(Boolean);
+
+  const rootWbs = wbs.find((node) => node.projectId === projectId && node.parentId == null) || null;
+  const projectNameChanged = existing.name !== prepared.project.name;
+  const rootTracksProjectName = rootWbs?.name === existing.name;
+  const wbsUpserts = projectNameChanged && rootTracksProjectName
+    ? [{ ...rootWbs, name: prepared.project.name }]
+    : [];
+
+  return {
+    ...prepared,
+    changes: {
+      projectUpserts: [prepared.project],
+      taskUpserts,
+      wbsUpserts
     }
   };
 }

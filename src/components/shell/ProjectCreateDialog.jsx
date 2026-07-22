@@ -1,30 +1,20 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../icons';
-import { COLOR_MAP } from '../../lib/colors';
+import { ProjectColorPicker } from '../project/ProjectColorPicker';
 import { fmtISO, today } from '../../scheduling/dates';
 
-const COLOR_LABELS = {
-  blue: 'Mavi',
-  emerald: 'Yeşil',
-  purple: 'Mor',
-  amber: 'Kehribar',
-  rose: 'Gül',
-  cyan: 'Camgöbeği'
-};
-
-function initialForm(people, calendars) {
+function initialForm(people) {
   return {
     name: '',
     leadId: people[0]?.id || '',
-    calendarId: calendars[0]?.id || '',
     dataDate: fmtISO(today()),
     color: 'blue'
   };
 }
 
-export function ProjectCreateDialog({ open, people = [], calendars = [], onClose, onCreate }) {
-  const defaults = useMemo(() => initialForm(people, calendars), [people, calendars]);
+export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
+  const defaults = useMemo(() => initialForm(people), [people]);
   const [form, setForm] = useState(defaults);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -88,19 +78,21 @@ export function ProjectCreateDialog({ open, people = [], calendars = [], onClose
         aria-labelledby="new-project-title"
         onSubmit={submit}
         className="card"
-        style={{ width: 'min(560px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: 22 }}
+        style={{ width: 'min(620px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: 22 }}
       >
         <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
           <div className="col" style={{ gap: 3, flex: 1 }}>
             <div id="new-project-title" style={{ fontSize: 18, fontWeight: 750 }}>Yeni proje</div>
-            <div className="muted" style={{ fontSize: 12 }}>Proje bilgilerini tanımlayın. Kök WBS düğümü otomatik oluşturulur.</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Proje bilgilerini tanımlayın. Kök iş dağılım ağacı düğümü otomatik oluşturulur.
+            </div>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} disabled={saving} aria-label="Pencereyi kapat">
             <Icons.Close size={14} />
           </button>
         </div>
 
-        <div className="col" style={{ gap: 14, marginTop: 20 }}>
+        <div className="col" style={{ gap: 16, marginTop: 20 }}>
           <label className="col" style={{ gap: 6 }}>
             <span style={{ fontSize: 12, fontWeight: 650 }}>Proje adı</span>
             <input
@@ -123,50 +115,22 @@ export function ProjectCreateDialog({ open, people = [], calendars = [], onClose
             </label>
 
             <label className="col" style={{ gap: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 650 }}>Proje takvimi</span>
-              <select className="input" value={form.calendarId} onChange={setField('calendarId')} disabled={saving || !calendars.length}>
-                {!calendars.length && <option value="">Takvim bulunamadı</option>}
-                {calendars.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.name}</option>)}
-              </select>
-            </label>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
-            <label className="col" style={{ gap: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 650 }}>Veri tarihi</span>
               <input className="input" type="date" value={form.dataDate} onChange={setField('dataDate')} disabled={saving} />
             </label>
-
-            <label className="col" style={{ gap: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 650 }}>Proje rengi</span>
-              <select className="input" value={form.color} onChange={setField('color')} disabled={saving}>
-                {Object.entries(COLOR_MAP).map(([key, value]) => (
-                  <option key={key} value={key}>{COLOR_LABELS[key] || key} · {value.replace('var(', '').replace(')', '')}</option>
-                ))}
-              </select>
-            </label>
           </div>
 
-          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            {Object.entries(COLOR_MAP).map(([key, value]) => (
-              <button
-                key={key}
-                type="button"
-                aria-label={`${COLOR_LABELS[key] || key} rengini seç`}
-                title={COLOR_LABELS[key] || key}
-                onClick={() => setForm((current) => ({ ...current, color: key }))}
-                disabled={saving}
-                style={{
-                  width: 24,
-                  height: 24,
-                  borderRadius: 99,
-                  border: form.color === key ? '2px solid var(--text)' : '2px solid transparent',
-                  outline: '1px solid var(--border-strong)',
-                  background: value,
-                  cursor: 'pointer'
-                }}
-              />
-            ))}
+          <ProjectColorPicker
+            value={form.color}
+            onChange={(color) => {
+              setError(null);
+              setForm((current) => ({ ...current, color }));
+            }}
+            disabled={saving}
+          />
+
+          <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+            Tüm projeler kurumun ortak çalışma takvimini kullanır; proje bazında ayrı takvim seçimi yapılmaz.
           </div>
 
           {error && (
@@ -178,7 +142,7 @@ export function ProjectCreateDialog({ open, people = [], calendars = [], onClose
 
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 22 }}>
           <button type="button" className="btn ghost" onClick={onClose} disabled={saving}>Vazgeç</button>
-          <button type="submit" className="btn primary" disabled={saving || !people.length || !calendars.length}>
+          <button type="submit" className="btn primary" disabled={saving || !people.length}>
             <Icons.Plus size={14} /> {saving ? 'Oluşturuluyor...' : 'Projeyi oluştur'}
           </button>
         </div>

@@ -26,7 +26,9 @@ const PERSON_COLOR_KEYS = Object.freeze({
   'Burak Şahin': 'purple'
 });
 
+const projectColorOverrides = new Map();
 const FALLBACK_KEYS = Object.keys(COLOR_MAP);
+
 function deterministicColorKey(value) {
   const text = String(value || '');
   let hash = 0;
@@ -34,8 +36,15 @@ function deterministicColorKey(value) {
   return FALLBACK_KEYS[Math.abs(hash) % FALLBACK_KEYS.length] || 'blue';
 }
 
+export function setProjectColorOverrides(projects = []) {
+  projectColorOverrides.clear();
+  projects.forEach((project) => {
+    if (project?.name && COLOR_MAP[project.color]) projectColorOverrides.set(project.name, project.color);
+  });
+}
+
 export function projectColorKey(name) {
-  return PROJECT_COLOR_KEYS[name] || deterministicColorKey(name);
+  return projectColorOverrides.get(name) || PROJECT_COLOR_KEYS[name] || deterministicColorKey(name);
 }
 
 export function projectColorVar(name) {
