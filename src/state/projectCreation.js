@@ -9,7 +9,7 @@ function comparableName(value) {
 }
 
 function normalizedProjectCode(value) {
-  return normalizedName(value).toLocaleUpperCase('tr-TR');
+  return normalizedName(value).toUpperCase();
 }
 
 export function normalizeProjectTags(values = []) {
@@ -169,12 +169,19 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
     name: normalizedName(input.name === undefined ? existing.name : input.name),
     code: normalizedProjectCode(input.code === undefined ? existing.code : input.code),
     source: input.source === undefined ? existing.source : input.source,
+    leadId: input.leadId === undefined ? existing.leadId : input.leadId,
+    dataDate: input.dataDate === undefined ? existing.dataDate : input.dataDate,
+    color: input.color === undefined ? existing.color : input.color,
     calendarId
   };
   const issues = validateProjectCreationInput(normalizedInput, {
     projects: projects.filter((project) => project.id !== projectId),
     people,
     calendars
+  }).filter((issue) => {
+    if (input.dataDate === undefined && !existing.dataDate && issue.code === 'PROJECT_DATA_DATE_REQUIRED') return false;
+    if (input.leadId === undefined && !existing.leadId && issue.code === 'PROJECT_LEAD_REQUIRED') return false;
+    return true;
   });
 
   if (issues.length) return validationError(issues);
@@ -189,7 +196,7 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
       source: normalizedInput.source || existing.source || 'manual',
       color: normalizedInput.color,
       leadId: normalizedInput.leadId,
-      lead: lead?.name || '',
+      lead: lead?.name || (input.leadId === undefined ? existing.lead || '' : ''),
       calendarId,
       dataDate: normalizedInput.dataDate,
       tags: normalizeProjectTags(normalizedInput.tags === undefined ? existing.tags : normalizedInput.tags)
