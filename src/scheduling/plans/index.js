@@ -18,7 +18,7 @@ export function calculatePlannedDurationDays(task, { projects = [], calendars = 
   if (!start || !finish || finish < start) return null;
 
   const calendar = resolveTaskCalendar(task, projects, calendars);
-  return Math.max(1, countWorkingDays(start, finish, calendar));
+  return countWorkingDays(start, finish, calendar);
 }
 
 export function normalizeTaskPlan(task, context = {}) {
