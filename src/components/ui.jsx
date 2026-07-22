@@ -249,7 +249,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
   const onLeave = () => setHover(null);
 
   return (
-    <div style={{ position: 'relative', width: '100%', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', overflow: 'visible' }}>
       <svg
         ref={svgRef}
         width={width}
