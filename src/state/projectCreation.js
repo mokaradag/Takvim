@@ -8,6 +8,20 @@ function comparableName(value) {
   return normalizedName(value).toLocaleLowerCase('tr-TR');
 }
 
+export function normalizeProjectTags(values = []) {
+  const seen = new Set();
+  return (Array.isArray(values) ? values : [])
+    .map(normalizedName)
+    .filter(Boolean)
+    .filter((value) => {
+      const key = comparableName(value);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
 function isValidIsoDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -100,7 +114,8 @@ export function prepareProjectCreation(input, context = {}, ids = {}) {
     leadId: normalizedInput.leadId,
     lead: lead?.name || '',
     calendarId,
-    dataDate: normalizedInput.dataDate
+    dataDate: normalizedInput.dataDate,
+    tags: normalizeProjectTags(normalizedInput.tags)
   };
   const rootWbs = {
     id: ids.rootWbsId,
@@ -152,7 +167,8 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
       leadId: normalizedInput.leadId,
       lead: lead?.name || '',
       calendarId,
-      dataDate: normalizedInput.dataDate
+      dataDate: normalizedInput.dataDate,
+      tags: normalizeProjectTags(normalizedInput.tags)
     }
   };
 }
