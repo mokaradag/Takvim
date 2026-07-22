@@ -1,10 +1,9 @@
 'use client';
-/* ── Ayarlar (Settings) ──────────────────────────────────
-   Görünüm ve okunabilirlik tercihleri. Tüm değerler Tweaks
-   state'i üzerinden yönetilir (kalıcı). ===================== */
 import { Icons } from '../../components/icons';
 import { HeroHeader } from '../../components/ui';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
+
+const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 
 function SettingsRow({ title, desc, children }) {
   return (
@@ -35,7 +34,6 @@ function Segmented({ value, options, onChange }) {
   );
 }
 
-// Boolean on/off segmented control
 function ToggleSeg({ value, onChange, on = 'Açık', off = 'Kapalı' }) {
   return (
     <div className="seg">
@@ -45,8 +43,26 @@ function ToggleSeg({ value, onChange, on = 'Açık', off = 'Kapalı' }) {
   );
 }
 
+function ModeCard({ id, active, icon: Icon, title, kicker, description, points, onSelect }) {
+  return (
+    <button type="button" className={`settings-mode-card${active ? ' active' : ''}`} onClick={() => onSelect(id)}>
+      <span className="settings-mode-icon"><Icon size={20} /></span>
+      <span className="settings-mode-main">
+        <small>{kicker}</small>
+        <strong>{title}</strong>
+        <span>{description}</span>
+      </span>
+      <span className="settings-mode-points">
+        {points.map((point) => <span key={point}><Icons.Check size={11} /> {point}</span>)}
+      </span>
+      <span className="settings-mode-state">{active ? <><Icons.Check size={13} /> Kullanılıyor</> : 'Bu moda geç'}</span>
+    </button>
+  );
+}
+
 export function SettingsView({ t, setTweak }) {
   const fontScale = t.fontScale || 1;
+  const appMode = t.appMode || 'advanced';
   const accents = [
     ['#3b82f6', 'Mavi'], ['#8b5cf6', 'Mor'], ['#f43f5e', 'Gül'],
     ['#10b981', 'Zümrüt'], ['#f59e0b', 'Amber'], ['#0ea5e9', 'Camgöbeği']
@@ -58,8 +74,18 @@ export function SettingsView({ t, setTweak }) {
   ];
   const pct = Math.round(fontScale * 100);
 
+  const setMode = (mode) => {
+    setTweak('appMode', mode);
+    try { localStorage.setItem(MODE_STORAGE_KEY, '1'); } catch {}
+  };
+
   const resetWelcome = () => {
     try { localStorage.removeItem('mp_seen_welcome_v2'); } catch (e) {}
+    window.location.reload();
+  };
+
+  const resetModeChoice = () => {
+    try { localStorage.removeItem(MODE_STORAGE_KEY); } catch (e) {}
     window.location.reload();
   };
 
@@ -71,11 +97,43 @@ export function SettingsView({ t, setTweak }) {
   return (
     <div className="col stagger" style={{ gap: 20 }}>
       <HeroHeader title="Ayarlar">
-        <div className="muted" style={{ fontSize: 13.5 }}>Görünüm, okunabilirlik ve uygulama tercihleri.</div>
+        <div className="muted" style={{ fontSize: 13.5 }}>Çalışma modu, görünüm, okunabilirlik ve uygulama tercihleri.</div>
       </HeroHeader>
 
+      <section className="settings-mode-section">
+        <div className="settings-mode-heading">
+          <div>
+            <span className="help-kicker">Çalışma biçimi</span>
+            <h2>MERGEN Rota modunu seçin</h2>
+            <p>İki mod aynı proje ve görev altyapısını kullanır. Basit modda oluşturduğunuz kayıtları daha sonra gelişmiş modda ayrıntılandırabilirsiniz.</p>
+          </div>
+          <span className="settings-mode-current">Aktif: {appMode === 'simple' ? 'Basit Mod' : 'Gelişmiş Mod'}</span>
+        </div>
+        <div className="settings-mode-grid">
+          <ModeCard
+            id="simple"
+            active={appMode === 'simple'}
+            icon={Icons.Calendar}
+            title="Basit Mod"
+            kicker="Hızlı takip"
+            description="Proje, görev, kısa açıklama, sorumlu ve termin tarihi ile çalışın; kayıtları Takvim üzerinde izleyin."
+            points={['Tek ekranlı hızlı giriş', 'Takvim odaklı takip', 'Aynı veri modeli']}
+            onSelect={setMode}
+          />
+          <ModeCard
+            id="advanced"
+            active={appMode === 'advanced'}
+            icon={Icons.Gantt}
+            title="Gelişmiş Mod"
+            kicker="Tam proje yönetimi"
+            description="WBS, Gantt, bağımlılıklar, Kanban, raporlar ve portföy araçlarının tümünü kullanın."
+            points={['WBS ve kritik yol', 'Bağımlılık yönetimi', 'Raporlama ve portföy']}
+            onSelect={setMode}
+          />
+        </div>
+      </section>
+
       <div className="settings-grid">
-        {/* Görünüm */}
         <div className="card">
           <div className="card-title" style={{ marginBottom: 4 }}>
             <Icons.Sun size={14} /><span>Görünüm</span>
@@ -84,14 +142,14 @@ export function SettingsView({ t, setTweak }) {
 
           <SettingsRow title="Tema" desc="Açık veya koyu arayüz.">
             <Segmented value={t.theme} onChange={(v) => setTweak('theme', v)}
-              options={[['dark', 'Koyu'], ['light', 'Açık']]} />
+              options={[["dark", 'Koyu'], ['light', 'Açık']]} />
           </SettingsRow>
 
           <div className="set-sep" />
 
           <SettingsRow title="Yoğunluk" desc="Satır ve kart boşluklarının sıklığı.">
             <Segmented value={t.density} onChange={(v) => setTweak('density', v)}
-              options={[['compact', 'Sıkışık'], ['balanced', 'Dengeli'], ['spacious', 'Ferah']]} />
+              options={[["compact", 'Sıkışık'], ['balanced', 'Dengeli'], ['spacious', 'Ferah']]} />
           </SettingsRow>
 
           <div className="set-sep" />
@@ -101,7 +159,6 @@ export function SettingsView({ t, setTweak }) {
           </SettingsRow>
         </div>
 
-        {/* Yazı tipi boyutu */}
         <div className="card">
           <div className="card-title" style={{ marginBottom: 4 }}>
             <Icons.Table size={14} /><span>Yazı tipi boyutu</span>
@@ -134,7 +191,6 @@ export function SettingsView({ t, setTweak }) {
           </div>
         </div>
 
-        {/* Vurgu rengi */}
         <div className="card">
           <div className="card-title" style={{ marginBottom: 4 }}>
             <Icons.Sparkle size={14} /><span>Vurgu rengi</span>
@@ -154,14 +210,13 @@ export function SettingsView({ t, setTweak }) {
           </div>
         </div>
 
-        {/* Çalışma alanı */}
         <div className="card">
           <div className="card-title" style={{ marginBottom: 4 }}>
             <Icons.Dashboard size={14} /><span>Çalışma alanı</span>
           </div>
           <div className="card-sub">Başlangıç ve görünüm davranışı.</div>
 
-          <SettingsRow title="Açılış sayfası" desc="Uygulama açıldığında gösterilecek sayfa.">
+          <SettingsRow title="Açılış sayfası" desc="Gelişmiş mod açıldığında gösterilecek sayfa.">
             <select className="set-select" value={t.landingView || 'ozet'} onChange={(e) => setTweak('landingView', e.target.value)}>
               {landingOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
@@ -180,14 +235,21 @@ export function SettingsView({ t, setTweak }) {
           </SettingsRow>
         </div>
 
-        {/* Uygulama */}
         <div className="card">
           <div className="card-title" style={{ marginBottom: 4 }}>
             <Icons.Help size={14} /><span>Uygulama</span>
           </div>
           <div className="card-sub">Yardım, kısayollar ve sıfırlama.</div>
 
-          <SettingsRow title="Karşılama ekranı" desc="Tanıtım turunu yeniden gösterir.">
+          <SettingsRow title="Mod seçim ekranı" desc="Bir sonraki açılışta Basit / Gelişmiş Mod seçimini yeniden gösterir.">
+            <button className="btn sm" type="button" onClick={resetModeChoice}>
+              <Icons.Sparkle size={13} /> Tekrar göster
+            </button>
+          </SettingsRow>
+
+          <div className="set-sep" />
+
+          <SettingsRow title="Karşılama ekranı" desc="Gelişmiş mod tanıtım turunu yeniden gösterir.">
             <button className="btn sm" type="button" onClick={resetWelcome}>
               <Icons.Help size={13} /> Tekrar göster
             </button>
@@ -195,13 +257,13 @@ export function SettingsView({ t, setTweak }) {
 
           <div className="set-sep" />
 
-          <SettingsRow title="Komut paleti" desc="Hızlı gezinme ve eylemler (Windows).">
+          <SettingsRow title="Komut paleti" desc="Gelişmiş modda hızlı gezinme ve eylemler (Windows).">
             <span className="kbd-hint"><kbd>Ctrl</kbd><kbd>K</kbd></span>
           </SettingsRow>
 
           <div className="set-sep" />
 
-          <SettingsRow title="Varsayılanlara dön" desc="Tema, yoğunluk, yazı boyutu, renk ve tüm tercihleri sıfırlar.">
+          <SettingsRow title="Varsayılanlara dön" desc="Tema, mod, yoğunluk, yazı boyutu, renk ve tüm tercihleri sıfırlar.">
             <button className="btn sm" type="button" onClick={resetDefaults}>
               <Icons.Sparkle size={13} /> Sıfırla
             </button>
