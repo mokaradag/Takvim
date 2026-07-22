@@ -5,9 +5,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMockRepository } from '../src/data/mock/createMockRepository.js';
+import { projectColorVar, setProjectColorOverrides } from '../src/lib/colors.js';
 import { createInitialState, appStateReducer } from '../src/state/appState.js';
 import { createPersistenceChangeSet, createStateMutationOrchestrator } from '../src/state/persistence.js';
-import { prepareProjectCreation, prepareProjectUpdate, validateProjectCreationInput } from '../src/state/projectCreation.js';
+import {
+  prepareProjectCreation,
+  prepareProjectUpdate,
+  prepareProjectUpdateChanges,
+  validateProjectCreationInput
+} from '../src/state/projectCreation.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -126,6 +132,63 @@ test('prepareProjectUpdate edits the selected project while preserving the corpo
   assert.equal(duplicate.error.code, 'PROJECT_NAME_DUPLICATE');
 });
 
+test('project update changes propagate project colors without overwriting custom root names', () => {
+  const context = {
+    ...seed(),
+    tasks: [
+      { id: 't-1', projectId: 'p-1', proje: 'Mevcut Proje', color: 'blue' },
+      { id: 't-2', projectId: 'p-2', proje: 'İkinci Proje', color: 'emerald' }
+    ]
+  };
+
+  const colorOnly = prepareProjectUpdateChanges('p-1', {
+    name: 'Mevcut Proje',
+    leadId: 'u-1',
+    dataDate: '2026-07-22',
+    color: 'cyan'
+  }, context);
+  assert.equal(colorOnly.ok, true);
+  assert.equal(colorOnly.changes.taskUpserts.length, 1);
+  assert.equal(colorOnly.changes.taskUpserts[0].color, 'cyan');
+  assert.deepEqual(colorOnly.changes.wbsUpserts, []);
+
+  const customRootContext = {
+    ...context,
+    wbs: [{ ...context.wbs[0], name: 'Özel Kök' }]
+  };
+  const renamedWithCustomRoot = prepareProjectUpdateChanges('p-1', {
+    name: 'Mevcut Proje Güncel',
+    leadId: 'u-1',
+    dataDate: '2026-07-22',
+    color: 'blue'
+  }, customRootContext);
+  assert.equal(renamedWithCustomRoot.ok, true);
+  assert.equal(renamedWithCustomRoot.changes.taskUpserts[0].proje, 'Mevcut Proje Güncel');
+  assert.deepEqual(renamedWithCustomRoot.changes.wbsUpserts, []);
+
+  const renamedWithDefaultRoot = prepareProjectUpdateChanges('p-1', {
+    name: 'Mevcut Proje Güncel',
+    leadId: 'u-1',
+    dataDate: '2026-07-22',
+    color: 'blue'
+  }, context);
+  assert.equal(renamedWithDefaultRoot.ok, true);
+  assert.equal(renamedWithDefaultRoot.changes.wbsUpserts.length, 1);
+  assert.equal(renamedWithDefaultRoot.changes.wbsUpserts[0].name, 'Mevcut Proje Güncel');
+});
+
+test('project color resolver follows persisted project color choices', () => {
+  try {
+    setProjectColorOverrides([{ id: 'p-new', name: 'Serbest Proje', color: 'rose' }]);
+    assert.equal(projectColorVar('Serbest Proje'), 'var(--c-rose)');
+
+    setProjectColorOverrides([{ id: 'p-new', name: 'Serbest Proje', color: 'cyan' }]);
+    assert.equal(projectColorVar('Serbest Proje'), 'var(--c-cyan)');
+  } finally {
+    setProjectColorOverrides([]);
+  }
+});
+
 test('persistence diff includes project upserts without changing legacy empty change-set shape', () => {
   const before = seed();
   const newProject = { id: 'p-new', name: 'Yeni Proje' };
@@ -201,14 +264,15 @@ test('project creation and editing UI use one corporate calendar and the combine
   assert.doesNotMatch(shell, /useCalendars/);
   assert.match(dialog, /ProjectColorPicker/);
   assert.doesNotMatch(dialog, /Proje takvimi/);
-  assert.match(provider, /prepareProjectUpdate/);
+  assert.match(provider, /prepareProjectUpdateChanges/);
+  assert.match(provider, /setProjectColorOverrides\(state\.projects\)/);
   assert.match(provider, /commitChanges\('project\/update'/);
   assert.match(projectView, /Proje Tanımı/);
   assert.match(projectView, /İş Dağılım Ağacı/);
   assert.match(navigation, /Proje Yapısı/);
 });
 
-test('shared line chart keeps a stable aspect ratio and always connects its points', () => {
+test('shared line chart stays crisp, connects every point, and keeps hover tooltips visible', () => {
   const ui = fs.readFileSync(path.join(ROOT, 'src/components/ui.jsx'), 'utf8');
   const areaChart = ui.slice(ui.indexOf('export function AreaChart'), ui.indexOf('// ── Heptagon emblem'));
 
@@ -217,4 +281,6 @@ test('shared line chart keeps a stable aspect ratio and always connects its poin
   assert.doesNotMatch(areaChart, /strokeDasharray: var\(--len/);
   assert.doesNotMatch(areaChart, /className=\{animated \? 'chart-line'/);
   assert.match(areaChart, /<polyline/);
+  assert.match(areaChart, /position: 'relative', width: '100%', overflow: 'visible'/);
+  assert.doesNotMatch(areaChart, /position: 'relative', width: '100%', overflow: 'hidden'/);
 });
