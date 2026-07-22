@@ -61,9 +61,9 @@ export function WbsView() {
       <div className="col" style={{ gap: 16 }}>
         <div className="card">
           <div className="col" style={{ gap: 10 }}>
-            <div style={{ fontSize: 17, fontWeight: 700 }}>İş Kırılım Yapısı</div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>İş Dağılım Ağacı</div>
             <div className="muted" style={{ maxWidth: 760, lineHeight: 1.6 }}>
-              WBS bir proje yapısıdır. Hiyerarşiyi ve proje aktivitelerini görmek ya da düzenlemek için bir proje çalışma alanına geçin.
+              İş dağılım ağacı bir proje yapısıdır. Hiyerarşiyi ve proje aktivitelerini görmek ya da düzenlemek için bir proje çalışma alanına geçin.
             </div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               {workspace.projects.map((project) => (
@@ -94,17 +94,17 @@ export function WbsView() {
   };
 
   const onAddChild = (node) => {
-    const name = prompt(`${node.code} ${node.name} altında yeni WBS adı:`);
+    const name = prompt(`${node.code} ${node.name} altında yeni dağılım düğümü adı:`);
     if (name?.trim()) addWbsChild(node.id, name.trim());
   };
 
   const onRename = (node) => {
-    const name = prompt('Yeni WBS adı:', node.name);
+    const name = prompt('Yeni dağılım düğümü adı:', node.name);
     if (name?.trim() && name.trim() !== node.name) renameWbs(node.id, name.trim());
   };
 
   const onDelete = (node) => {
-    if (confirm(`${node.code} ${node.name} silinsin mi? Yalnızca boş WBS düğümleri silinebilir.`)) deleteWbs(node.id);
+    if (confirm(`${node.code} ${node.name} silinsin mi? Yalnızca boş dağılım düğümleri silinebilir.`)) deleteWbs(node.id);
   };
 
   const onSourceChange = (wbsId) => {
@@ -148,7 +148,7 @@ export function WbsView() {
           <div className="col" style={{ gap: 4 }}>
             <div style={{ fontSize: 17, fontWeight: 700 }}>{workspace.selectedProject?.name}</div>
             <div className="muted" style={{ fontSize: 12.5 }}>
-              {wbs.length} WBS düğümü · {tasks.length} aktivite · hiyerarşi proje düzeyinde yönetilir
+              {wbs.length} dağılım düğümü · {tasks.length} aktivite · hiyerarşi proje düzeyinde yönetilir
             </div>
           </div>
           <button className="btn" onClick={() => setExpanded(new Set(wbs.map((node) => node.id)))}>Tümünü aç</button>
@@ -166,7 +166,7 @@ export function WbsView() {
             )}
             {validationIssues.map((item, index) => (
               <div key={`${item.code}-${item.nodeId}-${index}`} className="muted" style={{ fontSize: 12 }}>
-                {item.code} · {item.nodeId || 'WBS'}
+                {item.code} · {item.nodeId || 'Dağılım ağacı'}
               </div>
             ))}
           </div>
@@ -177,14 +177,14 @@ export function WbsView() {
         <div className="card">
           <div className="col" style={{ gap: 12 }}>
             <div className="col" style={{ gap: 4 }}>
-              <div style={{ fontSize: 15, fontWeight: 700 }}>Görevleri WBS düğümleri arasında taşı</div>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>Görevleri dağılım düğümleri arasında taşı</div>
               <div className="muted" style={{ fontSize: 12.5 }}>
-                Kaynak WBS düğümüne doğrudan atanmış görevlerden birini veya birden çoğunu seçin. Taşıma yalnızca bu proje içindeki geçerli bir hedef WBS düğümüne uygulanır.
+                Kaynak düğüme doğrudan atanmış görevlerden birini veya birden çoğunu seçin. Taşıma yalnızca bu proje içindeki geçerli bir hedef düğüme uygulanır.
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(220px, 1fr)', gap: 12 }}>
               <label className="col" style={{ gap: 6 }}>
-                <span className="label">Kaynak WBS</span>
+                <span className="label">Kaynak düğüm</span>
                 <select className="input" value={moveSourceWbsId} onChange={(event) => onSourceChange(event.target.value)}>
                   <option value="">Kaynak seçin...</option>
                   {orderedRows.map(({ node, depth }) => (
@@ -193,7 +193,7 @@ export function WbsView() {
                 </select>
               </label>
               <label className="col" style={{ gap: 6 }}>
-                <span className="label">Hedef WBS</span>
+                <span className="label">Hedef düğüm</span>
                 <select className="input" value={moveTargetWbsId} onChange={(event) => setMoveTargetWbsId(event.target.value)} disabled={!moveSourceWbsId}>
                   <option value="">Hedef seçin...</option>
                   {orderedRows.filter(({ node }) => node.id !== moveSourceWbsId).map(({ node, depth }) => (
@@ -214,7 +214,7 @@ export function WbsView() {
                   </div>
                 </div>
                 <div className="col" style={{ gap: 4, maxHeight: 190, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 8 }}>
-                  {!sourceTasks.length && <div className="muted" style={{ padding: 8, fontSize: 12 }}>Bu WBS düğümüne doğrudan atanmış görev yok.</div>}
+                  {!sourceTasks.length && <div className="muted" style={{ padding: 8, fontSize: 12 }}>Bu düğüme doğrudan atanmış görev yok.</div>}
                   {sourceTasks.map((task) => (
                     <label key={task.id} className="row" style={{ gap: 8, padding: '7px 8px', borderRadius: 'var(--r-sm)', cursor: 'pointer' }}>
                       <input type="checkbox" checked={selectedTaskIds.has(task.id)} onChange={() => toggleTaskSelection(task.id)} />
@@ -230,11 +230,11 @@ export function WbsView() {
       )}
 
       {!wbs.length ? (
-        <div className="card muted">Bu proje için WBS tanımlı değil.</div>
+        <div className="card muted">Bu proje için iş dağılım ağacı tanımlı değil.</div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) 100px 100px 190px 260px', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            <span>WBS</span><span>Aktivite</span><span>İlerleme</span><span>Plan Aralığı</span><span>İşlemler</span>
+            <span>Dağılım ağacı</span><span>Aktivite</span><span>İlerleme</span><span>Plan Aralığı</span><span>İşlemler</span>
           </div>
           {rows.map(({ node, depth }) => {
             const rollup = selectWbsTaskRollup(wbs, tasks, node.id, scheduleTasks);
@@ -271,7 +271,7 @@ export function WbsView() {
                   {isReparenting ? (
                     <>
                       <select className="input" style={{ minWidth: 145, maxWidth: 175 }} value={reparenting.parentId} onChange={(event) => setReparenting({ ...reparenting, parentId: event.target.value })}>
-                        <option value="">Üst WBS seçin...</option>
+                        <option value="">Üst düğüm seçin...</option>
                         {parentCandidates.map(({ node: candidate }) => <option key={candidate.id} value={candidate.id}>{candidate.code} {candidate.name}</option>)}
                       </select>
                       <button className="btn" disabled={!reparenting.parentId || reparenting.parentId === node.parentId} onClick={applyReparent}>Uygula</button>
