@@ -108,11 +108,11 @@ test('appZoom parses numeric body zoom values', () => {
   }
 });
 
-test('appZoom accepts percentage-like parseFloat prefixes', () => {
+test('appZoom converts CSS percentage zoom values to scale factors', () => {
   const previous = globalThis.document;
   try {
     globalThis.document = { body: { style: { zoom: '125%' } } };
-    assert.equal(appZoom(), 125);
+    assert.equal(appZoom(), 1.25);
   } finally {
     if (previous === undefined) delete globalThis.document;
     else globalThis.document = previous;
