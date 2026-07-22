@@ -12,7 +12,9 @@ const ACCENT_PRESETS = {
 
 export function useApplyTweaks(tweaks) {
   useEffect(() => {
-    document.body.className = tweaks.theme === 'light' ? 'theme-light' : 'theme-dark';
+    const body = document.body;
+    body.classList.toggle('theme-light', tweaks.theme === 'light');
+    body.classList.toggle('theme-dark', tweaks.theme !== 'light');
   }, [tweaks.theme]);
 
   useEffect(() => {
