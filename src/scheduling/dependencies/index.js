@@ -53,7 +53,15 @@ export function lagValueOf(dependency) {
   return 0;
 }
 
+function materializeLegacyLagValueForUnitEdit(dependency) {
+  if (typeof dependency !== 'object' || dependency === null) return;
+  if (dependency.lagValue != null || dependency.lagUnit == null || !Number.isFinite(dependency.lagDays)) return;
+  dependency.lagValue = dependency.lagDays;
+  dependency.lagUnit = lagUnitOf(dependency);
+}
+
 export function dependencyLagDays(dependency, calendar = DEFAULT_CALENDAR) {
+  materializeLegacyLagValueForUnitEdit(dependency);
   const value = lagValueOf(dependency);
   const unit = lagUnitOf(dependency);
   const workdaysPerWeek = Math.max(1, calendar?.workingDays?.length || 5);
