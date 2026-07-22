@@ -1,5 +1,6 @@
 'use client';
 import { useState as useState1, useMemo as useMemo1 } from 'react';
+import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
 import { PRIORITIES } from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
@@ -8,15 +9,19 @@ import { Avatar, AvatarStack, Kw, StatusPill, StatusIcon } from '../../component
 import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, useTaskActions } from '../../state/hooks';
 
+function projectLabel(project) {
+  if (!project) return '';
+  return project.code ? `${project.code} · ${project.name}` : project.name;
+}
+
 /* ── Veri (Data table) ─────────────────────────────────── */
 export function TasksView() {
   const tasks = useTasks();
   const projects = useProjects();
   const people = usePeople();
-  const { openTask: onOpenTask, updateTask: onUpdateTask, addTask: onAddTask, deleteTask: onDeleteTask } = useTaskActions();
+  const { openTask: onOpenTask, addTask: onAddTask, deleteTask: onDeleteTask } = useTaskActions();
   const [search, setSearch] = useState1('');
   const [sort, setSort] = useState1({ key: 'plannedStart', dir: 'asc' });
-  // per-column filters
   const [colFilter, setColFilter] = useState1({
     proje: [],
     task: '',
@@ -33,18 +38,17 @@ export function TasksView() {
 
   const setCF = (key, value) => setColFilter(f => ({ ...f, [key]: value }));
 
-  // distinct value helpers — all SORTED alphabetically (TR locale)
   const projOpts = useMemo1(() => projects
     .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-    .map(p => ({ value: p.name, label: p.name, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} /> })), [projects]);
-  const kwOpts = useMemo1(() => Array.from(new Set(tasks.map(t => t.keyword)))
+    .sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr'))
+    .map(p => ({ value: p.name, label: projectLabel(p), icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} /> })), [projects]);
+  const kwOpts = useMemo1(() => Array.from(new Set(tasks.map(t => String(t.keyword || '').trim()).filter(Boolean)))
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [tasks]);
   const sorumluOpts = useMemo1(() => people
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-    .map(p => ({ value: p.name, label: p.name, icon: <Avatar name={p.name} size="sm" /> })), [people]);
+    .map(p => ({ value: p.name, label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name, icon: <Avatar name={p.name} size="sm" /> })), [people]);
   const statusOpts = [
     { value: 'todo', label: 'Yapılacak', icon: <StatusIcon id="todo" size={11} /> },
     { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },
@@ -55,12 +59,13 @@ export function TasksView() {
     value: p.id, label: p.label, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} />
   }));
 
-  // Numeric stats for filter hints
   const numStats = useMemo1(() => {
     const stats = {};
     ['progress', 'plannedHours', 'actualHours'].forEach(k => {
-      const vals = tasks.map(t => t[k] || 0);
-      stats[k] = { min: Math.min(...vals), max: Math.max(...vals) };
+      const vals = tasks.map(t => Number(t[k]) || 0);
+      stats[k] = vals.length
+        ? { min: Math.min(...vals), max: Math.max(...vals) }
+        : { min: 0, max: 0 };
     });
     return stats;
   }, [tasks]);
@@ -69,18 +74,21 @@ export function TasksView() {
     const today_ = today();
     let out = [...tasks];
     if (search) {
-      const q = search.toLowerCase();
-      out = out.filter(t => t.task.toLowerCase().includes(q) || t.proje.toLowerCase().includes(q) || t.keyword.toLowerCase().includes(q) || t.sorumlu.some(s => s.toLowerCase().includes(q)));
+      const q = search.toLocaleLowerCase('tr-TR');
+      out = out.filter(t => {
+        const haystack = [t.task, t.proje, t.projectCode, t.keyword, ...(t.sorumlu || [])]
+          .map((value) => String(value || '').toLocaleLowerCase('tr-TR'));
+        return haystack.some((value) => value.includes(q));
+      });
     }
-    // per-column
     if (colFilter.proje.length) out = out.filter(t => colFilter.proje.includes(t.proje));
     if (colFilter.task) {
-      const q = colFilter.task.toLowerCase();
-      out = out.filter(t => t.task.toLowerCase().includes(q));
+      const q = colFilter.task.toLocaleLowerCase('tr-TR');
+      out = out.filter(t => String(t.task || '').toLocaleLowerCase('tr-TR').includes(q));
     }
     if (colFilter.keyword.length) out = out.filter(t => colFilter.keyword.includes(t.keyword));
-    if (colFilter.sorumlu.length) out = out.filter(t => t.sorumlu.some(s => colFilter.sorumlu.includes(s)));
-    if (colFilter.priority && colFilter.priority.length) out = out.filter(t => colFilter.priority.includes(t.priority || 'medium'));
+    if (colFilter.sorumlu.length) out = out.filter(t => (t.sorumlu || []).some(s => colFilter.sorumlu.includes(s)));
+    if (colFilter.priority?.length) out = out.filter(t => colFilter.priority.includes(t.priority || 'medium'));
     if (colFilter.status.length) {
       out = out.filter(t => {
         const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
@@ -90,7 +98,7 @@ export function TasksView() {
     }
     ['plannedStart', 'plannedFinish', 'targetFinish'].forEach(k => {
       const spec = colFilter[k];
-      if (spec) out = out.filter(t => dateMatchesFilter(t[k], spec));
+      if (spec) out = out.filter(t => !!t[k] && dateMatchesFilter(t[k], spec));
     });
     ['progress', 'plannedHours'].forEach(k => {
       const spec = colFilter[k];
@@ -99,8 +107,13 @@ export function TasksView() {
 
     out.sort((a, b) => {
       let va = a[sort.key], vb = b[sort.key];
-      if (sort.key === 'sorumlu') { va = (a.sorumlu[0] || ''); vb = (b.sorumlu[0] || ''); }
+      if (sort.key === 'sorumlu') { va = (a.sorumlu?.[0] || ''); vb = (b.sorumlu?.[0] || ''); }
       if (sort.key === 'priority') { va = (PRIORITIES[a.priority || 'medium'] || {}).order ?? 9; vb = (PRIORITIES[b.priority || 'medium'] || {}).order ?? 9; }
+      const aMissing = va == null || va === '';
+      const bMissing = vb == null || vb === '';
+      if (aMissing && bMissing) return 0;
+      if (aMissing) return 1;
+      if (bMissing) return -1;
       if (va < vb) return sort.dir === 'asc' ? -1 : 1;
       if (va > vb) return sort.dir === 'asc' ? 1 : -1;
       return 0;
@@ -126,7 +139,7 @@ export function TasksView() {
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <div className="topbar-search" style={{ flex: 1, minWidth: 240, maxWidth: 360 }}>
           <Icons.Search size={14} />
-          <input placeholder="Görev, proje, sorumlu, keyword..." value={search} onChange={e => setSearch(e.target.value)} />
+          <input placeholder="Görev, proje, sorumlu, etiket..." value={search} onChange={e => setSearch(e.target.value)} />
           {search && <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setSearch('')}><Icons.Close size={12} /></button>}
         </div>
         <InfoButton title="Görevler tablosu" icon={<Icons.Table size={12} />}>
@@ -146,13 +159,13 @@ export function TasksView() {
         <button className="btn primary" onClick={onAddTask}><Icons.Plus size={14} /> Yeni görev</button>
       </div>
 
-      <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', background: 'var(--bg-elev)', overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 240px)' }}>
+      <div className="tasks-table-card" style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', background: 'var(--bg-elev)', overflow: 'hidden' }}>
+        <div className="tasks-table-scroll" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 240px)' }}>
           <table className="tbl">
             <thead>
               <tr>
                 <th style={{ width: 36, textAlign: 'center' }}>#</th>
-                <FilterableTH label="Proje" style={{ minWidth: 160 }}
+                <FilterableTH label="Proje" style={{ minWidth: 180 }}
                   sortKey={sortDirFor('proje')} onSort={setSortFor('proje')}
                   filter={colFilter.proje} onFilter={v => setCF('proje', v)}
                   filterType="multi" filterOptions={projOpts}
@@ -166,7 +179,7 @@ export function TasksView() {
                   filter={colFilter.keyword} onFilter={v => setCF('keyword', v)}
                   filterType="multi" filterOptions={kwOpts}
                 />
-                <FilterableTH label="Sorumlu" style={{ minWidth: 130 }}
+                <FilterableTH label="Sorumlu" style={{ minWidth: 150 }}
                   sortKey={sortDirFor('sorumlu')} onSort={setSortFor('sorumlu')}
                   filter={colFilter.sorumlu} onFilter={v => setCF('sorumlu', v)}
                   filterType="multi" filterOptions={sorumluOpts}
@@ -191,27 +204,24 @@ export function TasksView() {
                   filter={colFilter.plannedHours} onFilter={v => setCF('plannedHours', v)}
                   filterType="number" numericMin={numStats.plannedHours.min} numericMax={numStats.plannedHours.max} numericUnit=" sa"
                 />
-                <FilterableTH label="Başlangıç" style={{ minWidth: 130 }}
+                <DateFilterableTH label="Başlangıç" style={{ minWidth: 130 }}
                   sortKey={sortDirFor('plannedStart')} onSort={setSortFor('plannedStart')}
                   filter={colFilter.plannedStart} onFilter={v => setCF('plannedStart', v)}
-                  filterType="date"
                 />
-                <FilterableTH label="Bitiş" style={{ minWidth: 130 }}
+                <DateFilterableTH label="Bitiş" style={{ minWidth: 130 }}
                   sortKey={sortDirFor('plannedFinish')} onSort={setSortFor('plannedFinish')}
                   filter={colFilter.plannedFinish} onFilter={v => setCF('plannedFinish', v)}
-                  filterType="date"
                 />
-                <FilterableTH label="Hedef" style={{ minWidth: 130 }}
+                <DateFilterableTH label="Hedef" style={{ minWidth: 130 }}
                   sortKey={sortDirFor('targetFinish')} onSort={setSortFor('targetFinish')}
                   filter={colFilter.targetFinish} onFilter={v => setCF('targetFinish', v)}
-                  filterType="date"
                 />
                 <th style={{ width: 60 }} />
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={14} className="empty">Eşleşen görev bulunamadı.</td></tr>
+                <tr><td colSpan={13} className="empty">Eşleşen görev bulunamadı.</td></tr>
               )}
               {filtered.map((t, idx) => {
                 const today_ = today();
@@ -224,7 +234,7 @@ export function TasksView() {
                     <td>
                       <div className="row" style={{ gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: projectColorVar(t.proje) }} />
-                        <span style={{ fontWeight: 500 }}>{t.proje}</span>
+                        <span style={{ fontWeight: 500 }}>{t.projectCode ? `${t.projectCode} · ${t.proje}` : t.proje}</span>
                       </div>
                     </td>
                     <td>
@@ -234,7 +244,7 @@ export function TasksView() {
                       </div>
                     </td>
                     <td><Kw color={t.color}>{t.keyword}</Kw></td>
-                    <td><AvatarStack names={t.sorumlu} max={3} size="sm" /></td>
+                    <td><AvatarStack names={t.sorumlu || []} max={3} size="sm" /></td>
                     <td><StatusPill task={t} /></td>
                     <td><span style={{ fontSize: 11.5, fontWeight: 600, color: prio.color }}>{prio.label}</span></td>
                     <td>
@@ -248,7 +258,7 @@ export function TasksView() {
                     <td className="tabular" style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{t.plannedHours || 0} sa</td>
                     <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedStart)}</td>
                     <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedFinish)}</td>
-                    <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{t.targetFinish ? fmt(t.targetFinish) : '—'}</td>
+                    <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
                     <td>
                       <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}>
                         <Icons.Trash size={13} />
