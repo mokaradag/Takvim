@@ -193,14 +193,15 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
       const canonicalKeyword = canonicalTags.get(comparableName(task.keyword));
       const keywordChanged = Boolean(canonicalKeyword) && task.keyword !== canonicalKeyword;
 
-      return nameChanged || colorChanged || keywordChanged
-        ? {
-            ...task,
-            proje: prepared.project.name,
-            color: prepared.project.color,
-            keyword: keywordChanged ? canonicalKeyword : task.keyword
-          }
-        : null;
+      if (!nameChanged && !colorChanged && !keywordChanged) return null;
+
+      const nextTask = {
+        ...task,
+        proje: prepared.project.name,
+        color: prepared.project.color
+      };
+      if (keywordChanged) nextTask.keyword = canonicalKeyword;
+      return nextTask;
     })
     .filter(Boolean);
 
