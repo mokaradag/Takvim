@@ -16,12 +16,18 @@ function legacyTags(project, tasks) {
 
 function projectForm(project, people, tasks) {
   return {
+    code: project?.code || '',
     name: project?.name || '',
+    source: project?.source || 'manual',
     leadId: project?.leadId || people.find((person) => person.name === project?.lead)?.id || '',
     dataDate: project?.dataDate || '',
     color: project?.color || 'blue',
     tags: Array.isArray(project?.tags) ? [...project.tags] : legacyTags(project, tasks)
   };
+}
+
+function projectLabel(project) {
+  return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
 function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
@@ -78,7 +84,7 @@ function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
         {!values.length && <span className="muted" style={{ fontSize: 11.5 }}>Henüz etiket tanımlanmadı.</span>}
       </div>
       <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.55 }}>
-        Etiketler proje düzeyinde kontrollü bir katalog olarak yönetilir. Görev oluştururken veya düzenlerken kullanıcı bu katalogdan açıkça seçim yapar; böylece yazım farklılıkları ve yinelenen değerler önlenir.
+        Etiketler proje düzeyinde kontrollü bir katalog olarak yönetilir. Basit Modda girilen yeni kısa açıklamalar da proje kataloğuna eklenir; böylece Gelişmiş Moda geçildiğinde kayıtlar aynı yapı içinde kullanılabilir.
       </div>
     </div>
   );
@@ -130,30 +136,36 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
         <div className="col" style={{ gap: 4 }}>
           <div style={{ fontSize: 17, fontWeight: 700 }}>Proje tanımı</div>
           <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-            Seçili projenin temel bilgilerini ve görevlerde kullanılabilecek kontrollü etiket listesini buradan yönetin.
+            Seçili projenin kodunu, temel bilgilerini ve görevlerde kullanılabilecek kontrollü etiket listesini buradan yönetin.
           </div>
         </div>
-        <span className="badge">{project.id}</span>
+        <span className="badge">{project.code || project.id}</span>
       </div>
 
       <div className="col" style={{ gap: 18, marginTop: 20 }}>
-        <label className="col" style={{ gap: 6 }}>
-          <span className="label">Proje adı</span>
-          <input className="input" value={form.name} onChange={setField('name')} disabled={saving} />
-        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, .7fr) minmax(280px, 1.3fr)', gap: 12 }}>
+          <label className="col" style={{ gap: 6 }}>
+            <span className="label">Proje kodu</span>
+            <input className="input" value={form.code} onChange={setField('code')} disabled={saving} placeholder="Serbest projelerde isteğe bağlı" />
+          </label>
+          <label className="col" style={{ gap: 6 }}>
+            <span className="label">Proje adı</span>
+            <input className="input" value={form.name} onChange={setField('name')} disabled={saving} />
+          </label>
+        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
           <label className="col" style={{ gap: 6 }}>
             <span className="label">Proje sorumlusu</span>
             <select className="input" value={form.leadId} onChange={setField('leadId')} disabled={saving || !people.length}>
               {!people.length && <option value="">Kişi bulunamadı</option>}
-              {people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+              {people.map((person) => <option key={person.id} value={person.id}>{person.employeeNo ? `${person.employeeNo} · ` : ''}{person.name}</option>)}
             </select>
           </label>
 
           <label className="col" style={{ gap: 6 }}>
             <span className="label">Veri tarihi</span>
-            <input className="input" type="date" value={form.dataDate} onChange={setField('dataDate')} disabled={saving} />
+            <input className="input" type="date" lang="en-GB" value={form.dataDate} onChange={setField('dataDate')} disabled={saving} />
           </label>
         </div>
 
@@ -181,6 +193,11 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
               text: `“${tag}” etiketi ${count} görevde kullanılıyor. Katalogdan kaldırmadan önce bu görevleri başka bir etikete taşıyın.`
             })}
           />
+        </div>
+
+        <div className="project-source-note">
+          <Icons.Database size={14} />
+          <span>{project.source === 'corporate' ? 'Kurumsal proje kaydı' : 'Kullanıcı tarafından tanımlanan serbest proje'} · Veritabanı entegrasyonunda <strong>ProjeKodu</strong> ve <strong>ProjeAdi</strong> alanları bu modele eşlenebilir.</span>
         </div>
 
         {message && (
@@ -260,12 +277,12 @@ export function ProjectWorkspaceView() {
           <div className="col" style={{ gap: 12 }}>
             <div style={{ fontSize: 17, fontWeight: 700 }}>Proje seçin veya yeni proje oluşturun</div>
             <div className="muted" style={{ maxWidth: 760, lineHeight: 1.6 }}>
-              Proje bilgilerini ve kontrollü etiket kataloğunu yönetmek için bir proje çalışma alanı seçin. Yeni proje tanımı da yalnızca bu sayfadan yapılır.
+              Proje bilgilerini ve kontrollü etiket kataloğunu yönetmek için bir proje çalışma alanı seçin. Kurumsal projeler kodla gösterilebilir; serbest projeler de aynı altyapıda oluşturulur.
             </div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               {workspace.projects.map((item) => (
                 <button key={item.id} type="button" className="btn" onClick={() => workspace.selectWorkspace(item.id)}>
-                  {item.name}
+                  {projectLabel(item)}
                 </button>
               ))}
               {!workspace.projects.length && <span className="muted">Henüz proje yok.</span>}
