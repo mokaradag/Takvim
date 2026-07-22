@@ -38,6 +38,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
   const workspacePreferenceRef = useRef(null);
   const workspaceRestoredRef = useRef(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [workspaceWriteReady, setWorkspaceWriteReady] = useState(false);
 
   stateRef.current = state;
 
@@ -91,15 +92,16 @@ export function AppStateProvider({ children, repository = appRepository }) {
       selectedProjectId: preference?.selectedProjectId
     });
     workspaceRestoredRef.current = true;
+    setWorkspaceWriteReady(true);
   }, [applyStateAction, state.dataStatus, workspaceReady]);
 
   useEffect(() => {
-    if (!workspaceReady || !workspaceRestoredRef.current || state.dataStatus !== 'ready') return;
+    if (!workspaceReady || !workspaceWriteReady || state.dataStatus !== 'ready') return;
     writeWorkspacePreference({
       workspaceMode: state.workspaceMode,
       selectedProjectId: state.selectedProjectId
     });
-  }, [workspaceReady, state.dataStatus, state.workspaceMode, state.selectedProjectId]);
+  }, [workspaceReady, workspaceWriteReady, state.dataStatus, state.workspaceMode, state.selectedProjectId]);
 
   const openTask = useCallback((taskOrId) => {
     applyStateAction({ type: 'task/select', id: typeof taskOrId === 'string' ? taskOrId : taskOrId?.id });
