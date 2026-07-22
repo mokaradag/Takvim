@@ -97,6 +97,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .gantt-mode-switch .seg { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 10%, transparent); }
 
 .gantt-left { z-index: 30; }
+.gantt-left-head { z-index: 31; }
 .gantt-right { position: relative; z-index: 1; }
 .col-filter-pop, .gantt-cols-pop {
   z-index: 9999 !important;
@@ -174,13 +175,20 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .help-checks > div { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border-radius: var(--r-md); background: var(--bg-elev-2); }
 .help-checks p { margin: 2px 0 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.55; }
 
-/* Grafik hareketlerini yeniden etkinleştir. */
+/* Grafik hareketlerini yalnızca veri görsellerinde yeniden etkinleştir. */
 .chart-area + polyline { stroke-dasharray: 2400; stroke-dashoffset: 2400; animation: drawLine 1s .05s cubic-bezier(.2,.8,.2,1) forwards; }
-.card svg > g { transform-box: fill-box; transform-origin: center; animation: chartGroupIn .55s cubic-bezier(.2,.8,.2,1) both; }
-.card svg rect { transform-box: fill-box; transform-origin: center bottom; animation: chartBarIn .55s cubic-bezier(.2,.8,.2,1) both; }
-@keyframes chartGroupIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
-@keyframes chartBarIn { from { opacity: .2; transform: scaleY(.08); } to { opacity: 1; transform: scaleY(1); } }
-.reduce-motion .chart-area + polyline, .reduce-motion .card svg > g, .reduce-motion .card svg rect { animation: none !important; }
+.card svg[viewBox^='0 0 600 '] polygon { opacity: 0; animation: chartDataFade .65s cubic-bezier(.2,.8,.2,1) forwards; }
+.card svg[viewBox^='-10 -10'] circle[stroke-dasharray] { opacity: 0; animation: chartDataFade .55s cubic-bezier(.2,.8,.2,1) forwards; }
+.bar-row > div:nth-child(2) > div { transform-origin: left center; animation: chartGrowX .7s cubic-bezier(.2,.8,.2,1) both; }
+.velocity-bars .vel-bar { transform-origin: center bottom; animation: chartGrowY .7s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes chartDataFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes chartGrowX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes chartGrowY { from { transform: scaleY(.05); } to { transform: scaleY(1); } }
+.reduce-motion .chart-area + polyline,
+.reduce-motion .card svg[viewBox^='0 0 600 '] polygon,
+.reduce-motion .card svg[viewBox^='-10 -10'] circle[stroke-dasharray],
+.reduce-motion .bar-row > div:nth-child(2) > div,
+.reduce-motion .velocity-bars .vel-bar { animation: none !important; }
 
 @media (max-width: 980px) {
   .topbar-project-context { display: none; }
