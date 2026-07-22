@@ -26,12 +26,12 @@ export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgai
           <AppLogo size={48} />
           <div className="col" style={{ flex: 1, gap: 0 }}>
             <div className="row" style={{ gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--accent)' }}>MERGEN Rota · v2.4</span>
+              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--accent)' }}>MERGEN Rota · Sürüm 1.0</span>
             </div>
             <h2>Hoş geldiniz</h2>
             <div className="welcome-sub">
               MERGEN Rota, projenizin planlamasından raporlamasına kadar her şeyi tek bir yerden yönetmenizi sağlar.
-              Aşağıda hızlı bir özet; istediğiniz zaman sol alttaki <strong>Yardım</strong> düğmesinden tekrar açabilirsiniz.
+              Aşağıda hızlı bir özet; istediğiniz zaman <strong>Kullanım Rehberi</strong> sayfasından ayrıntılı açıklamalara yeniden ulaşabilirsiniz.
             </div>
           </div>
           <button className="icon-btn" onClick={onClose}><Icons.Close size={16} /></button>

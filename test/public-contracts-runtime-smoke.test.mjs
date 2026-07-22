@@ -176,6 +176,7 @@ test('mock calendars clone default calendar collections instead of aliasing them
 test('tweak defaults expose exactly the settings consumed by the application', () => {
   assert.deepEqual(Object.keys(TWEAK_DEFAULTS).sort(), [
     'accent',
+    'appMode',
     'calLarge',
     'density',
     'fontScale',

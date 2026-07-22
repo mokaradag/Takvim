@@ -50,141 +50,61 @@ export const Icons = {
   ArrowRight: (p) => <Icon {...p} d='<path d="M5 12h14M13 5l7 7-7 7"/>' />,
   Menu: (p) => <Icon {...p} d='<path d="M3 6h18M3 12h18M3 18h18"/>' />,
   Compass: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><polygon points="15.6 8.4 13.3 13.3 8.4 15.6 10.7 10.7 15.6 8.4"/>' />,
+  Database: (p) => <Icon {...p} d='<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>' />,
 
-  // ── extra icons (originally added onto window.Icons from ui-extras.jsx) ──
   Info: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 11v5" />
-      <circle cx="12" cy="8" r="0.6" fill="currentColor" />
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><circle cx="12" cy="8" r="0.6" fill="currentColor" />
     </svg>
   ),
   Grip: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="currentColor"
-      className={p.className || ''} style={p.style}
-    >
-      <circle cx="9" cy="6" r="1.4" /><circle cx="15" cy="6" r="1.4" />
-      <circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" />
-      <circle cx="9" cy="18" r="1.4" /><circle cx="15" cy="18" r="1.4" />
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="currentColor" className={p.className || ''} style={p.style}>
+      <circle cx="9" cy="6" r="1.4" /><circle cx="15" cy="6" r="1.4" /><circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" /><circle cx="9" cy="18" r="1.4" /><circle cx="15" cy="18" r="1.4" />
     </svg>
   ),
   Gift: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <rect x="3" y="8" width="18" height="4" rx="1" />
-      <path d="M12 8v13M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8" />
-      <path d="M7.5 8a2.5 2.5 0 0 1 0-5C10 3 12 8 12 8s2-5 4.5-5a2.5 2.5 0 0 1 0 5" />
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <rect x="3" y="8" width="18" height="4" rx="1" /><path d="M12 8v13M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8" /><path d="M7.5 8a2.5 2.5 0 0 1 0-5C10 3 12 8 12 8s2-5 4.5-5a2.5 2.5 0 0 1 0 5" />
     </svg>
   ),
   Columns: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <rect x="3" y="3" width="18" height="18" rx="2"/>
-      <path d="M9 3v18M15 3v18"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/>
     </svg>
   ),
   Diamond: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="currentColor" stroke="currentColor"
-      strokeWidth="1" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" className={p.className || ''} style={p.style}>
       <path d="M12 2 22 12 12 22 2 12z"/>
     </svg>
   ),
   Sparkles: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/>
-      <path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/>
     </svg>
   ),
   Wand: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
       <path d="M3 21l12-12"/><path d="M14 4v3M19 4v3M21 6h-3M16 6h-3"/><path d="m13 11 3 3"/>
     </svg>
   ),
   Keyboard: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <rect x="2" y="5" width="20" height="14" rx="2"/>
-      <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 17h10"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 17h10"/>
     </svg>
   ),
   Help: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <circle cx="12" cy="12" r="9"/>
-      <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5"/>
-      <circle cx="12" cy="17" r="0.6" fill="currentColor"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5"/><circle cx="12" cy="17" r="0.6" fill="currentColor"/>
     </svg>
   ),
   Coin: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <circle cx="12" cy="12" r="9"/>
-      <path d="M15 9.5a3 3 0 0 0-2.5-1.5h-1a2 2 0 0 0 0 4h1a2 2 0 0 1 0 4h-1A3 3 0 0 1 9 14.5"/>
-      <path d="M12 6v2M12 16v2"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <circle cx="12" cy="12" r="9"/><path d="M15 9.5a3 3 0 0 0-2.5-1.5h-1a2 2 0 0 0 0 4h1a2 2 0 0 1 0 4h-1A3 3 0 0 1 9 14.5"/><path d="M12 6v2M12 16v2"/>
     </svg>
   ),
   Hours: (p) => (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
-      className={p.className || ''} style={p.style}
-    >
-      <circle cx="12" cy="12" r="9"/>
-      <path d="M12 6v6l4 2"/>
-      <path d="M8 2.5 6 4M16 2.5 18 4"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
+      <circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/><path d="M8 2.5 6 4M16 2.5 18 4"/>
     </svg>
   ),
 };

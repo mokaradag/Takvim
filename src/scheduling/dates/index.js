@@ -33,6 +33,7 @@ export function fmtDisplayDate(value) {
 }
 
 export function fmt(value, pattern = 'dd MMM') {
+  if (!value) return '—';
   const date = parseDate(value);
   const day = String(date.getDate()).padStart(2, '0');
   const dayShort = date.getDate();

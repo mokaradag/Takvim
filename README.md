@@ -1,6 +1,6 @@
 # MERGEN Rota — Proje Yönetimi
 
-Endüstriyel/kontrol paneli tarzında bir proje yönetimi uygulaması: Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js (App Router) ile derlenmiş bir React uygulaması; uygulama verileri artık asenkron repository sözleşmesi üzerinden yükleniyor ve mevcut çalışma zamanı adapter'ı başarılı Task/WBS değişikliklerini aktif repository örneği boyunca bellekte saklıyor.
+Endüstriyel/kontrol paneli tarzında bir proje yönetimi uygulaması: Basit Modda hızlı görev/termin takibi; Gelişmiş Modda Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js (App Router) ile derlenmiş bir React uygulaması; uygulama verileri asenkron repository sözleşmesi üzerinden yüklenir ve mevcut çalışma zamanı adapter'ı başarılı Task/WBS değişikliklerini aktif repository örneği boyunca bellekte saklar.
 
 ## Yerel geliştirme
 
@@ -22,7 +22,29 @@ npm run dev
 
 ### Test kapsamı
 
-Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. Kapsam; domain selector ve ilişki normalizasyonu, WBS hiyerarşisi ve doğrulaması, workspace scoping, tarih ve çalışma günü aritmetiği, proje takvimleri, bağımlılık ilişkileri, Gantt zamanlama yardımcıları, profesyonel scheduling veri modeli, saf CPM/critical-path hesapları, proje bazlı uygulama schedule projection davranışı ve asenkron repository yükleme/mutasyon/hata/atomicity sözleşmesini doğrular.
+Mevcut testler yeni bir test framework'ü eklemeden Node.js'in yerleşik test çalıştırıcısını kullanır. Kapsam; domain selector ve ilişki normalizasyonu, WBS hiyerarşisi ve doğrulaması, workspace scoping, tarih ve çalışma günü aritmetiği, proje takvimleri, bağımlılık ilişkileri, Gantt zamanlama yardımcıları, profesyonel scheduling veri modeli, saf CPM/critical-path hesapları, proje bazlı uygulama schedule projection davranışı, Basit/Gelişmiş Mod sözleşmesi, proje kodu/çalışan numarası normalizasyonu ve asenkron repository yükleme/mutasyon/hata/atomicity sözleşmesini doğrular.
+
+## Çalışma modları
+
+MERGEN Rota aynı veri altyapısını kullanan iki arayüz modu sunar:
+
+- **Basit Mod**: Kullanıcı proje, görev, anahtar sözcük/kısa açıklama, bir veya daha çok sorumlu ve termin tarihi tanımlar. Kayıt tek günlük plan aralığıyla mevcut Task modeline yazılır ve doğrudan mevcut **Takvim** sayfasında görünür.
+- **Gelişmiş Mod**: Mevcut tam proje yönetimi deneyimidir. WBS, plan/gerçekleşen tarihler, iş gücü, bağımlılıklar, CPM/kritik yol, Kanban, raporlar ve portföy araçları kullanılabilir.
+
+İlk açılışta kullanıcıdan çalışma modu seçmesi istenir. Seçim yerel bir arayüz tercihidir ve **Ayarlar** sayfasındaki modern mod kartlarından daha sonra değiştirilebilir. Mod değişikliği görev veya proje verisini silmez ya da ayrı bir kopyaya taşımaz. Basit Modda oluşturulan kayıtlar Gelişmiş Modda açılarak ayrıntılandırılabilir.
+
+Basit Modda yeni bir anahtar sözcük girildiğinde, seçili projenin etiket kataloğunda yoksa proje kataloğuna eklenir. Böylece Gelişmiş Moda geçildiğinde görev, mevcut kontrollü etiket yaklaşımıyla uyumlu kalır.
+
+## Proje kodu ve kurumsal veri hazırlığı
+
+Canonical proje modeli artık isteğe bağlı `code` ve `source` alanlarını taşır. Kurumsal veritabanı entegrasyonunda aşağıdaki alanlar doğrudan normalize edilebilir:
+
+- `ProjeKodu` → `Project.code`
+- `ProjeAdi` → `Project.name`
+
+Kurumsal listeden gelen projeler `source: "corporate"`, kullanıcı tarafından uygulama içinde tanımlanan serbest projeler `source: "manual"` olarak tutulabilir. Proje kodu kurumsal projeler için doğal anahtar olarak gösterilebilir; serbest proje tanımında boş bırakılabilir. Aynı dolu proje kodunun iki projede kullanılması domain doğrulamasında engellenir.
+
+Kişi modeli `employeeNo` alanını destekler. Normalizasyon sınırı ayrıca `SicilNo`, `PersonelNo` ve `CalisanNo` gibi yaygın alan adlarını `employeeNo` alanına eşleyebilir. Basit Mod sorumlu seçiminde çalışan adı ile çalışan numarası birlikte gösterilir. Task kayıtları mevcut `assigneeIds` ve `sorumlu` alanlarını koruduğu için veritabanı entegrasyonunda kararlı çalışan kimliği ile kullanıcıya gösterilen ad birbirinden ayrılabilir.
 
 ## On-prem / internet erişimi olmayan ortam
 
@@ -59,8 +81,9 @@ npx next telemetry disable
 - `src/scheduling` — tarih, proje takvimi, çalışma günü, bağımlılık, Gantt yardımcıları ve saf CPM/critical-path hesapları
 - `src/data` — asenkron veri erişim sözleşmesi, legacy migration sınırı ve mevcut mutable async in-memory adapter
 - `src/state` — uygulama düzeyi state, asenkron yükleme/reload yaşam döngüsü, sıralı persistence orchestration, Portfolio/Project Workspace seçimi, Task/WBS işlemleri ve proje bazlı türetilmiş CPM projection
+- `src/features/simple` — Basit Mod hızlı proje/görev/termin giriş akışı
 - `src/features` — Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
-- `src/components/shell` — sidebar, workspace switcher, topbar, navigasyon, komut paleti, loading/error sınırı, persistence durumu ve global overlay bileşenleri
+- `src/components/shell` — sidebar, workspace switcher, çalışma modu seçicisi, topbar, navigasyon, komut paleti, loading/error sınırı, persistence durumu ve global overlay bileşenleri
 - `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
 - `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
 
@@ -68,20 +91,20 @@ Ayrıntılı bağımlılık kuralları için `docs/ARCHITECTURE.md`; asenkron y�
 
 ## Portfolio ve Project Workspace
 
-MERGEN Rota artık iki açık çalışma bağlamına sahiptir:
+MERGEN Rota iki açık çalışma bağlamına sahiptir:
 
 - **Portföy · Tüm Projeler**: mevcut bütün-proje davranışını korur.
 - **Proje Workspace**: seçili Project ID'sine göre Özet, Görevler, Takvim, Gantt, Kanban, Raporlar ve Ekip verilerini sınırlar.
 
 Sidebar'daki workspace switcher kararlı `projectId` değerlerini kullanır. Son seçim `mergen-rota.workspace.v1` anahtarıyla yalnızca yerel bir UI tercihi olarak saklanır; geçersiz veya artık bulunmayan bir Project ID güvenli biçimde Portfolio moduna döner. Bu localStorage tercihi business-data repository'sinin parçası değildir.
 
-Project Workspace üst çubuğunda proje adıyla birlikte Data Date, proje takvimi ve mevcut CPM projection'dan hesaplanan proje bitişi gösterilir. Settings global kalır.
+Proje Workspace üst çubuğunda `Aktif Proje` gibi ek bir etiket kullanılmaz; proje kodu varsa **kod · proje adı**, yoksa yalnızca proje adı yatay ve dikey olarak üst çubuğun tam merkezinde gösterilir.
 
 ## WBS / İş Kırılım Yapısı
 
-WBS artık gerçek, çok seviyeli ve keyfi derinliği destekleyen bir proje hiyerarşisidir. WBS düğümleri Project'e `projectId`, birbirlerine `parentId` ile bağlanır; Task ilişkisi `wbsId` üzerinden kurulur. Bir Task başka bir Project'e bağlı WBS düğümünü taşıyamaz.
+WBS gerçek, çok seviyeli ve keyfi derinliği destekleyen bir proje hiyerarşisidir. WBS düğümleri Project'e `projectId`, birbirlerine `parentId` ile bağlanır; Task ilişkisi `wbsId` üzerinden kurulur. Bir Task başka bir Project'e bağlı WBS düğümünü taşıyamaz.
 
-WBS feature'ı hiyerarşiyi aç/kapat, alt WBS ekleme, yeniden adlandırma, kontrollü Task taşıma, güvenli subtree reparent ve yalnızca güvenli boş düğümleri silme davranışlarını sunar. Alt düğümü veya doğrudan atanmış görevi bulunan WBS sessizce silinmez; görevler ya da alt hiyerarşi cascade-delete edilmez. Bulk Task move ve WBS reparent değişiklikleri repository sınırına tek atomic change set olarak gider.
+WBS feature'ı hiyerarşiyi aç/kapat, alt WBS ekleme, yeniden adlandırma, kontrollü Task taşıma, güvenli subtree reparent ve yalnızca güvenli boş düğümleri silme davranışlarını sunar. Alt düğümü veya doğrudan atanmış görevi bulunan bir WBS sessizce silinmez; görevler ya da alt hiyerarşi cascade-delete edilmez. Bulk Task move ve WBS reparent değişiklikleri repository sınırına tek atomic change set olarak gider.
 
 Project-mode Gantt'ın varsayılan görünümü WBS hiyerarşisidir. WBS özet satırları canonical Task değildir; descendant aktivitelerden türetilir ve summary bar'ları `plannedStart` ile `plannedFinish` güncel plan aralığını özetler. CPM ayrı bir proje-ağı projection'ı olarak kalır.
 
@@ -99,9 +122,11 @@ CPM sonuçları uygulama state sınırında proje bazında hesaplanır ve Gantt 
 
 Project Workspace, seçili projenin aynı CPM sonucunu tüketir; WBS başına ayrı CPM ağı hesaplanmaz. Geçersiz bir proje ağı diğer projelerin CPM sonuçlarını engellemez. Projeler arası bağımlılıklar bu aşamada açık bir `CROSS_PROJECT_DEPENDENCY` uyarısıyla reddedilir.
 
+Gantt sayfası mevcut viewport yüksekliğini kullanır. Sayfanın kendisi yerine Gantt içeriği kendi `gantt-wrap` alanında dikey ve yatay kaydırılır. WBS satırlarında resmi tatil şeritleri özet satır arka planlarının üzerinde kalacak şekilde katmanlanır.
+
 ## Asenkron veri ve persistence sınırı
 
-Uygulama state'i artık `loadSnapshot()` üzerinden asenkron olarak başlatılır. Task ve WBS mutasyonları feature katmanından repository implementation'ına doğrudan gitmez; state orchestration önce mevcut domain kurallarını uygular, mutasyonu sıralı olarak persist eder ve başarılı repository sonucuyla canonical state'i uzlaştırır.
+Uygulama state'i `loadSnapshot()` üzerinden asenkron olarak başlatılır. Task ve WBS mutasyonları feature katmanından repository implementation'ına doğrudan gitmez; state orchestration önce mevcut domain kurallarını uygular, mutasyonu sıralı olarak persist eder ve başarılı repository sonucuyla canonical state'i uzlaştırır.
 
 Mevcut `src/data/mock` adapter'ı asenkron ve mutable bir in-memory adapter'dır. Başarılı değişiklikler aynı aktif repository örneğinde sonraki `loadSnapshot()` çağrılarında görülür. Bu davranış browser refresh, process/VM restart veya yeni repository örneği boyunca kalıcı değildir; gerçek veritabanı persistence'ı henüz uygulanmamıştır.
 
@@ -109,6 +134,8 @@ Task Detail'daki hızlı metin değişiklikleri kısa bir per-Task pencere için
 
 ## Sonraki adım
 
-Persistence-ready state/data boundary artık uygulamadadır. Önerilen sonraki büyük persistence adımı, aynı `AppRepository` sözleşmesini uygulayan gerçek client API adapter'ı ile Next.js server-side service ve SQL Server persistence katmanını eklemektir; tarayıcı SQL Server'a doğrudan bağlanmamalıdır.
+Persistence-ready state/data boundary uygulamadadır. Önerilen sonraki büyük persistence adımı, aynı `AppRepository` sözleşmesini uygulayan gerçek client API adapter'ı ile Next.js server-side service ve SQL Server persistence katmanını eklemektir; tarayıcı SQL Server'a doğrudan bağlanmamalıdır.
+
+İlk kurumsal adapter; proje tablosundaki `ProjeKodu`/`ProjeAdi` alanlarını canonical `code`/`name`, personel tablosundaki çalışan numarası/ad alanlarını `employeeNo`/`name` alanlarına eşlemelidir. Kullanıcı tarafından oluşturulan serbest projeler aynı repository sözleşmesi içinde farklı `source` değeriyle saklanabilir.
 
 Progress-aware scheduling ayrı bir scheduling hattı olarak kalmalıdır. `dataDate`, actual tarihler ve `remainingDurationDays` kullanılarak durum güncelleme/rescheduling kuralları tanımlanırken mevcut saf current-plan CPM motorunun anlamı korunmalıdır.

@@ -4,6 +4,7 @@ import { Icons } from '../../components/icons';
 
 const SECTIONS = [
   { id: 'summary', label: 'Başlangıç', icon: 'Dashboard' },
+  { id: 'modes', label: 'Çalışma Modları', icon: 'Sparkle' },
   { id: 'ozet', label: 'Özet', icon: 'Dashboard' },
   { id: 'veri', label: 'Görevler', icon: 'Table' },
   { id: 'wbs', label: 'Proje Yapısı', icon: 'Layers' },
@@ -19,7 +20,7 @@ const CONTENT = {
   ozet: {
     title: 'Özet',
     intro: 'Seçili çalışma alanının genel durumunu tek bakışta izlemek için kullanılır. Proje seçildiğinde göstergeler yalnızca o projeyi, portföy seçildiğinde tüm projeleri temel alır.',
-    points: ['Görev, gecikme ve ilerleme göstergelerini izleyin.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki aktif proje bilgisini doğrulayın.']
+    points: ['Görev, gecikme ve ilerleme göstergelerini izleyin.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
   },
   veri: {
     title: 'Görevler',
@@ -29,17 +30,17 @@ const CONTENT = {
   wbs: {
     title: 'Proje Yapısı',
     intro: 'Projelerin oluşturulduğu, temel bilgilerinin ve kullanılabilir etiketlerin yönetildiği, iş dağılım ağacının düzenlendiği ana tanım alanıdır.',
-    points: ['Yeni Proje ile proje kaydı oluşturun; yeni proje otomatik olarak aktif çalışma alanı olur.', 'Proje Tanımı bölümünde ad, sorumlu, veri tarihi, renk ve etiketleri yönetin.', 'Etiketler görevlerde seçilebilir değerler olarak kullanılır.', 'İş Dağılım Ağacı sekmesinde WBS düğümlerini ekleyin, yeniden adlandırın ve hiyerarşiyi düzenleyin.']
+    points: ['Yeni Proje ile proje kaydı oluşturun; proje kodu kurumsal projelerde kullanılabilir, serbest projelerde isteğe bağlıdır.', 'Proje Tanımı bölümünde kod, ad, sorumlu, veri tarihi, renk ve etiketleri yönetin.', 'Etiketler görevlerde seçilebilir değerler olarak kullanılır.', 'İş Dağılım Ağacı sekmesinde WBS düğümlerini ekleyin, yeniden adlandırın ve hiyerarşiyi düzenleyin.']
   },
   takvim: {
     title: 'Takvim',
-    intro: 'Görevleri aylık takvim üzerinde görsel olarak izlemek için kullanılır. Hafta sonları ve resmi tatiller çalışma takvimine göre ayırt edilir.',
-    points: ['Ay ve yıl seçerek dönemler arasında ilerleyin.', 'Görev kartına tıklayarak ayrıntı panelini açın.', 'Planlama yaparken çalışma günü dışı uyarılarını dikkate alın.']
+    intro: 'Görevleri aylık takvim üzerinde görsel olarak izlemek için kullanılır. Basit Modda hızlı kayıt formu bu sayfanın üstünde bulunur; hafta sonları ve resmi tatiller çalışma takvimine göre ayırt edilir.',
+    points: ['Basit Modda proje, görev, kısa açıklama, sorumlu ve termin tarihini girerek doğrudan Takvime kayıt ekleyin.', 'Ay ve yıl seçerek dönemler arasında ilerleyin.', 'Görev kartına tıklayarak ayrıntı panelini açın.', 'Planlama yaparken çalışma günü dışı uyarılarını dikkate alın.']
   },
   gantt: {
     title: 'Gantt',
     intro: 'Zaman çizelgesini, WBS yapısını, sorumluları, bağımlılıkları ve kritik yolu birlikte incelemek için kullanılır.',
-    points: ['Tarih aralığını elle seçebilir veya Otomatik seçeneğiyle görevlerin kapsadığı döneme dönebilirsiniz.', 'Proje görünümünde WBS ile Sorumlu / Kritik Yol görünümleri arasında geçiş yapın.', 'FS, SS, FF ve SF ilişkileri ile pozitif gecikme (lag) veya negatif öne çekme (lead) tanımlanabilir.', 'Sütun filtreleri açıldığında pencere Gantt zaman hücrelerinin üzerinde kalır.']
+    points: ['Tarih aralığını elle seçebilir veya Otomatik seçeneğiyle görevlerin kapsadığı döneme dönebilirsiniz.', 'Proje görünümünde WBS ile Sorumlu / Kritik Yol görünümleri arasında geçiş yapın.', 'FS, SS, FF ve SF ilişkileri ile pozitif gecikme (lag) veya negatif öne çekme (lead) tanımlanabilir.', 'Gantt içeriği kendi alanında yatay ve dikey kaydırılır; sayfanın bütünü gereksiz yere kaymaz.']
   },
   kanban: {
     title: 'Kanban',
@@ -53,13 +54,13 @@ const CONTENT = {
   },
   kisi: {
     title: 'Ekip',
-    intro: 'Ekip üyelerinin görev dağılımını ve iş yükünü incelemek için kullanılır.',
+    intro: 'Ekip üyelerinin görev dağılımını ve iş yükünü incelemek için kullanılır. Veritabanı entegrasyonunda kişi adıyla birlikte çalışan numarası da saklanabilir.',
     points: ['Proje çalışma alanında yalnızca ilgili kişiler ve görevler gösterilir.', 'İş yükü dengesini raporlarla birlikte değerlendirin.', 'Görev sorumlularını görev ayrıntı panelinden güncelleyin.']
   },
   ayarlar: {
     title: 'Ayarlar',
-    intro: 'Tema, vurgu rengi, yoğunluk, yazı boyutu ve hareket tercihlerini yönetir. Bu sayfa proje seçiminden bağımsızdır.',
-    points: ['Açık ve koyu temalarda başlık alanları vurgu rengiyle ayırt edilir.', 'Yazı boyutunu büyüttüğünüzde kenar çubuğu alt alanı görünür kalır.', 'Hareketi azalt seçeneği açıkken grafik ve arayüz animasyonları sınırlandırılır.']
+    intro: 'Basit / Gelişmiş Mod seçimi ile tema, vurgu rengi, yoğunluk, yazı boyutu ve hareket tercihlerini yönetir. Bu sayfa proje seçiminden bağımsızdır.',
+    points: ['Çalışma Modu kartlarından Basit veya Gelişmiş Modu seçin.', 'Mod değiştirmek veriyi dönüştürmez veya silmez; aynı kayıtlar kullanılmaya devam eder.', 'Yazı boyutunu büyüttüğünüzde kenar çubuğu alt alanı görünür kalır.', 'Hareketi azalt seçeneği açıkken grafik ve arayüz animasyonları sınırlandırılır.']
   }
 };
 
@@ -79,37 +80,78 @@ function Flow({ steps }) {
   );
 }
 
+function ModeGuide() {
+  return (
+    <div className="help-content-grid">
+      <section className="help-hero-card">
+        <div className="help-kicker">İki deneyim · tek veri altyapısı</div>
+        <h2>İhtiyacınıza göre başlayın, istediğiniz zaman derinleşin</h2>
+        <p>Basit Mod ve Gelişmiş Mod ayrı uygulamalar değildir. İkisi de aynı proje, görev ve kişi kayıtlarını kullanır. Basit Modda girilen bir kayıt daha sonra Gelişmiş Modda WBS, plan tarihleri, iş gücü, ilişkiler ve diğer alanlarla zenginleştirilebilir.</p>
+      </section>
+      <div className="help-mode-grid">
+        <section className="card help-mode-card simple">
+          <div className="help-mode-card-head"><Icons.Calendar size={20} /><div><small>Hızlı takip</small><h3>Basit Mod</h3></div></div>
+          <Flow steps={[
+            { title: 'Projeyi seç', text: 'Kurumsal listeden seçin veya serbest proje tanımlayın.' },
+            { title: 'Görevi yaz', text: 'Görev ve kısa açıklamayı girin.' },
+            { title: 'Sorumluyu seç', text: 'Çalışan listesinden bir veya daha çok kişi seçin.' },
+            { title: 'Termini ver', text: 'Termin tarihini belirleyip Takvime ekleyin.' }
+          ]} />
+        </section>
+        <section className="card help-mode-card advanced">
+          <div className="help-mode-card-head"><Icons.Gantt size={20} /><div><small>Tam proje yönetimi</small><h3>Gelişmiş Mod</h3></div></div>
+          <Flow steps={[
+            { title: 'Projeyi yapılandır', text: 'Kod, tanımlar, etiket ve WBS yapısını yönetin.' },
+            { title: 'Planı ayrıntılandır', text: 'Tarih, süre, iş gücü ve sorumluları tamamlayın.' },
+            { title: 'İlişkileri kur', text: 'FS/SS/FF/SF ile lead/lag değerlerini tanımlayın.' },
+            { title: 'İzle ve raporla', text: 'Gantt, Kanban, Takvim ve raporlarla yönetin.' }
+          ]} />
+        </section>
+      </div>
+      <section className="card help-section-card">
+        <h3>Modlar arasında geçiş</h3>
+        <div className="help-checks">
+          <div><span>1</span><p><strong>Ayarlar</strong> sayfasını açın.</p></div>
+          <div><span>2</span><p>Üstteki çalışma modu kartlarından istediğiniz modu seçin.</p></div>
+          <div><span>3</span><p>Basit Mod seçildiğinde uygulama Takvim odaklı sade görünüme geçer; Gelişmiş Mod seçildiğinde tüm proje yönetimi sayfaları yeniden açılır.</p></div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function Summary() {
   return (
     <div className="help-content-grid">
       <section className="help-hero-card">
         <div className="help-kicker">MERGEN Rota · Sürüm 1.0</div>
-        <h2>Proje yönetimine hızlı başlangıç</h2>
-        <p>Uygulamanın temel çalışma sırası; önce proje yapısını tanımlamak, sonra görevleri ve ilişkileri oluşturmak, ardından planı Gantt ve Takvim üzerinde izleyerek ilerlemeyi Kanban ve Raporlar üzerinden yönetmektir.</p>
+        <h2>İki çalışma biçimiyle hızlı başlangıç</h2>
+        <p>Yalnızca proje, görev, kısa açıklama, sorumlu ve termin takibi gerekiyorsa Basit Modu; WBS, bağımlılık, kritik yol, Kanban ve raporlama gerekiyorsa Gelişmiş Modu kullanın. Ayarlar sayfasından iki mod arasında veri kaybı olmadan geçiş yapabilirsiniz.</p>
       </section>
       <section className="card help-section-card">
-        <h3>Temel kurulum akışı</h3>
+        <h3>Basit Mod akışı</h3>
         <Flow steps={[
-          { title: 'Proje oluştur', text: 'Proje Yapısı sayfasında temel bilgileri girin.' },
+          { title: 'Proje', text: 'Kurumsal veya serbest projeyi belirleyin.' },
+          { title: 'Görev', text: 'Görevi ve kısa açıklamayı yazın.' },
+          { title: 'Sorumlu', text: 'Çalışan listesinden kişileri seçin.' },
+          { title: 'Termin', text: 'Termin tarihini girin.' },
+          { title: 'Takvim', text: 'Kaydı aylık Takvim üzerinde izleyin.' }
+        ]} />
+      </section>
+      <section className="card help-section-card">
+        <h3>Gelişmiş Mod akışı</h3>
+        <Flow steps={[
+          { title: 'Proje oluştur', text: 'Proje Yapısı sayfasında kod ve temel bilgileri girin.' },
           { title: 'Etiket ve WBS', text: 'Etiketleri tanımlayın, iş dağılım ağacını kurun.' },
           { title: 'Görevleri girin', text: 'Tarih, sorumlu ve etiket bilgilerini tamamlayın.' },
           { title: 'İlişkileri kurun', text: 'FS/SS/FF/SF ve lead/lag değerlerini tanımlayın.' },
           { title: 'Planı izleyin', text: 'Gantt, Takvim ve Raporlar ile kontrol edin.' }
         ]} />
       </section>
-      <section className="card help-section-card">
-        <h3>Günlük kullanım akışı</h3>
-        <Flow steps={[
-          { title: 'Aktif projeyi seç', text: 'Kenar çubuğundaki çalışma alanını doğrulayın.' },
-          { title: 'Görevleri güncelle', text: 'Gerçekleşen tarih, ilerleme ve kalan süreyi girin.' },
-          { title: 'Plan etkisini gör', text: 'Gantt üzerinde kritik yol ve bağımlılıkları inceleyin.' },
-          { title: 'Raporla', text: 'Raporları inceleyin veya Excel/CSV dışa aktarın.' }
-        ]} />
-      </section>
       <section className="help-tip-grid">
-        <div><Icons.Layers size={18} /><strong>Tanımların merkezi</strong><span>Proje, etiket ve WBS yönetimi Proje Yapısı sayfasındadır.</span></div>
-        <div><Icons.Calendar size={18} /><strong>Çalışma takvimi</strong><span>Hafta sonu ve resmi tatil tarihleri planlama sırasında uyarılır.</span></div>
-        <div><Icons.Gantt size={18} /><strong>Plan denetimi</strong><span>Lead/lag ve kritik yol etkisini Gantt üzerinden izleyin.</span></div>
+        <div><Icons.Sparkle size={18} /><strong>Tek veri altyapısı</strong><span>Basit Mod kayıtları Gelişmiş Modda yeniden kullanılabilir ve zenginleştirilebilir.</span></div>
+        <div><Icons.Calendar size={18} /><strong>Hızlı takip</strong><span>Basit Modda tanım ve takip aynı Takvim sayfasında yapılır.</span></div>
+        <div><Icons.Gantt size={18} /><strong>Derinleşen plan</strong><span>Gerektiğinde WBS, bağımlılık ve kritik yol araçlarına geçin.</span></div>
       </section>
     </div>
   );
@@ -131,7 +173,7 @@ export function HelpView() {
           );
         })}
       </div>
-      {section === 'summary' ? <Summary /> : (
+      {section === 'summary' ? <Summary /> : section === 'modes' ? <ModeGuide /> : (
         <div className="help-content-grid">
           <section className="help-hero-card">
             <div className="help-kicker">Sayfa rehberi</div>

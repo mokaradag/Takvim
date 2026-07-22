@@ -9,6 +9,7 @@ import {
   selectWbsTaskRollup
 } from '../../domain/selectors/index.js';
 import { validateWbsStructure } from '../../domain/validation/index.js';
+import { fmtDisplayDate } from '../../scheduling/dates';
 import {
   useProjectSchedule,
   useTaskActions,
@@ -30,6 +31,11 @@ function visibleRows(tree, expanded) {
   }
   for (const root of tree) visit(root, 0);
   return rows;
+}
+
+function projectLabel(project) {
+  if (!project) return '';
+  return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
 export function WbsView() {
@@ -68,7 +74,7 @@ export function WbsView() {
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               {workspace.projects.map((project) => (
                 <button key={project.id} className="btn" onClick={() => workspace.selectWorkspace(project.id)}>
-                  {project.name}
+                  {projectLabel(project)}
                 </button>
               ))}
               {!workspace.projects.length && <span className="muted">Henüz proje yok.</span>}
@@ -146,7 +152,7 @@ export function WbsView() {
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
           <div className="col" style={{ gap: 4 }}>
-            <div style={{ fontSize: 17, fontWeight: 700 }}>{workspace.selectedProject?.name}</div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{projectLabel(workspace.selectedProject)}</div>
             <div className="muted" style={{ fontSize: 12.5 }}>
               {wbs.length} dağılım düğümü · {tasks.length} aktivite · hiyerarşi proje düzeyinde yönetilir
             </div>
@@ -232,8 +238,8 @@ export function WbsView() {
       {!wbs.length ? (
         <div className="card muted">Bu proje için iş dağılım ağacı tanımlı değil.</div>
       ) : (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) 100px 100px 190px 260px', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <div className="card wbs-tree-table" style={{ padding: 0, overflow: 'auto' }}>
+          <div className="wbs-tree-grid wbs-tree-head">
             <span>Dağılım ağacı</span><span>Aktivite</span><span>İlerleme</span><span>Plan Aralığı</span><span>İşlemler</span>
           </div>
           {rows.map(({ node, depth }) => {
@@ -243,7 +249,7 @@ export function WbsView() {
             const blockedTargets = new Set([node.id, ...selectWbsDescendantIds(wbs, node.id)]);
             const parentCandidates = orderedRows.filter(({ node: candidate }) => !blockedTargets.has(candidate.id));
             return (
-              <div key={node.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) 100px 100px 190px 260px', alignItems: 'center', minHeight: 54, padding: '8px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div key={node.id} className="wbs-tree-grid wbs-tree-row">
                 <div className="row" style={{ gap: 8, minWidth: 0, paddingLeft: depth * 22 }}>
                   <button className="icon-btn" style={{ width: 24, height: 24, visibility: hasChildren ? 'visible' : 'hidden' }} onClick={() => toggle(node.id)}>
                     {expanded.has(node.id) ? <Icons.ChevronDown size={12} /> : <Icons.ChevronRight size={12} />}
@@ -264,7 +270,9 @@ export function WbsView() {
                   </div>
                 </div>
                 <div className="muted tabular" style={{ fontSize: 11.5 }}>
-                  {rollup.plannedStart && rollup.plannedFinish ? `${rollup.plannedStart} → ${rollup.plannedFinish}` : 'Planlanmış aktivite yok'}
+                  {rollup.plannedStart && rollup.plannedFinish
+                    ? `${fmtDisplayDate(rollup.plannedStart)} → ${fmtDisplayDate(rollup.plannedFinish)}`
+                    : 'Planlanmış aktivite yok'}
                   {rollup.criticalTaskCount > 0 && <div style={{ color: 'var(--status-overdue)', marginTop: 2 }}>{rollup.criticalTaskCount} kritik</div>}
                 </div>
                 <div className="row" style={{ gap: 5, flexWrap: 'wrap' }}>

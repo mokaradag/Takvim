@@ -1,7 +1,7 @@
 import { selectDefaultProjectWbs } from '../selectors/wbsSelectors.js';
 
 function indexByName(items) {
-  return new Map(items.map((item) => [item.name, item]));
+  return new Map(items.filter((item) => item?.name).map((item) => [item.name, item]));
 }
 
 function validDate(value) {
@@ -13,10 +13,28 @@ function validDate(value) {
   return date;
 }
 
-export function normalizeProjectReferences(project, people) {
-  const peopleByName = indexByName(people);
+export function normalizePersonReferences(person = {}) {
+  const employeeNo = String(person.employeeNo || person.SicilNo || person.PersonelNo || person.CalisanNo || '').trim();
+  const name = String(person.name || person.AdSoyad || person.CalisanAdi || person.Ad || '').trim();
+  return {
+    ...person,
+    id: person.id || employeeNo || name,
+    employeeNo,
+    name
+  };
+}
+
+export function normalizeProjectReferences(project = {}, people = []) {
+  const normalizedPeople = people.map(normalizePersonReferences);
+  const peopleByName = indexByName(normalizedPeople);
+  const code = String(project.code || project.ProjeKodu || '').trim();
+  const name = String(project.name || project.ProjeAdi || '').trim();
   return {
     ...project,
+    id: project.id || code || name,
+    code,
+    name,
+    source: project.source || ((project.ProjeKodu || project.ProjeAdi) ? 'corporate' : 'manual'),
     leadId: project.leadId || peopleByName.get(project.lead)?.id || null,
     dataDate: project.dataDate || null
   };
@@ -36,13 +54,17 @@ export function normalizeTaskScheduleFields(task) {
 }
 
 export function normalizeTaskReferences(task, { projects = [], people = [], wbs = [] }) {
-  const projectsById = new Map(projects.map((item) => [item.id, item]));
-  const projectsByName = indexByName(projects);
+  const normalizedProjects = projects.map((project) => normalizeProjectReferences(project, people));
+  const normalizedPeople = people.map(normalizePersonReferences);
+  const projectsById = new Map(normalizedProjects.map((item) => [item.id, item]));
+  const projectsByName = indexByName(normalizedProjects);
+  const projectsByCode = new Map(normalizedProjects.filter((item) => item.code).map((item) => [item.code, item]));
   const project = (task.projectId ? projectsById.get(task.projectId) : null)
+    || (task.projectCode ? projectsByCode.get(task.projectCode) : null)
     || projectsByName.get(task.proje)
     || null;
-  const peopleByName = indexByName(people);
-  const peopleById = new Map(people.map((item) => [item.id, item]));
+  const peopleByName = indexByName(normalizedPeople);
+  const peopleById = new Map(normalizedPeople.map((item) => [item.id, item]));
   const wbsById = new Map(wbs.map((node) => [node.id, node]));
 
   const assigneeIds = task.assigneeIds?.length
@@ -59,6 +81,7 @@ export function normalizeTaskReferences(task, { projects = [], people = [], wbs 
   return {
     ...task,
     projectId: project?.id || task.projectId || null,
+    projectCode: project?.code || task.projectCode || '',
     proje: project?.name || task.proje || '',
     assigneeIds,
     sorumlu: assigneeNames,

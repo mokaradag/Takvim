@@ -1,5 +1,6 @@
 'use client';
 import { useState as useState2, useMemo as useMemo2, useEffect as useEffect2, useRef as useRef2 } from 'react';
+import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, addDays, startOfMonth, endOfMonth, startOfWeek, endOfWeek, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
 import { DEFAULT_CALENDAR, holidayFor } from '../../scheduling/calendars';
@@ -28,13 +29,16 @@ export function CalendarView({ t, setTweak }) {
 
   const eventsByDay = useMemo2(() => {
     const map = {};
-    tasks.forEach(t => {
-      const start = parseDate(t.plannedStart);
-      const end = parseDate(t.plannedFinish);
-      eachDay(start, end).forEach(d => {
-        const k = fmtISO(d);
-        map[k] = map[k] || [];
-        map[k].push(t);
+    tasks.forEach((task) => {
+      const startValue = task.plannedStart || task.plannedFinish || task.targetFinish;
+      const endValue = task.plannedFinish || task.plannedStart || task.targetFinish;
+      if (!startValue || !endValue) return;
+      const start = parseDate(startValue);
+      const end = parseDate(endValue);
+      eachDay(start <= end ? start : end, start <= end ? end : start).forEach((date) => {
+        const key = fmtISO(date);
+        map[key] = map[key] || [];
+        map[key].push(task);
       });
     });
     return map;
@@ -44,10 +48,9 @@ export function CalendarView({ t, setTweak }) {
   const goNext = () => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1));
   const goToday = () => setMonth(new Date(today_.getFullYear(), today_.getMonth(), 1));
 
-  // Arrow-key month navigation
   useEffect2(() => {
     const onKey = (e) => {
-      if (dayOpen) return; // when modal open, esc handled elsewhere
+      if (dayOpen) return;
       if (document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
       if (e.key === 'ArrowLeft') goPrev();
       else if (e.key === 'ArrowRight') goNext();
@@ -142,7 +145,6 @@ export function CalendarView({ t, setTweak }) {
                 key={k}
                 className={`cal-cell${inMonth ? '' : ' other'}${isToday_ ? ' today' : ''}${weekend ? ' weekend' : ''}${hol ? ' holiday' : ''}`}
                 onClick={(e) => {
-                  // open if clicked on empty area (not on event)
                   if (e.target.closest('.cal-event') || e.target.closest('.info-btn') || e.target.closest('.rich-tip')) return;
                   if (events.length > 0) setDayOpen(k);
                 }}
@@ -171,7 +173,7 @@ export function CalendarView({ t, setTweak }) {
                           <div className="rt-row"><span className="rt-label">Proje</span><span className="rt-val">{t.proje}</span></div>
                           <div className="rt-row"><span className="rt-label">Etiket</span><span className="rt-val">{t.keyword}</span></div>
                           <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
-                          <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(t.plannedStart)} – {fmt(t.plannedFinish)}</span></div>
+                          <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(t.plannedStart || t.targetFinish)} – {fmt(t.plannedFinish || t.targetFinish)}</span></div>
                           <div className="rt-sep" />
                           <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val"><StatusPill task={t} size={10.5} /></span></div>
                         </>
@@ -229,7 +231,6 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // group by project
   const byProj = useMemo2(() => {
     const m = {};
     events.forEach(e => { m[e.proje] = m[e.proje] || []; m[e.proje].push(e); });
@@ -259,24 +260,22 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(proj) }} />
                 {proj} · {list.length}
               </div>
-              {list.map(t => {
-                return (
-                  <button key={t.id} className="day-event-row" onClick={() => onOpenTask(t)}>
-                    <span className="de-bar" style={{ background: projectColorVar(t.proje) }} />
-                    <div className="col" style={{ gap: 3, flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>{t.task}</div>
-                      <div className="row" style={{ gap: 6 }}>
-                        <Kw color={t.color}>{t.keyword}</Kw>
-                        <StatusPill task={t} size={10.5} />
-                      </div>
+              {list.map(t => (
+                <button key={t.id} className="day-event-row" onClick={() => onOpenTask(t)}>
+                  <span className="de-bar" style={{ background: projectColorVar(t.proje) }} />
+                  <div className="col" style={{ gap: 3, flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>{t.task}</div>
+                    <div className="row" style={{ gap: 6 }}>
+                      <Kw color={t.color}>{t.keyword}</Kw>
+                      <StatusPill task={t} size={10.5} />
                     </div>
-                    <div className="col" style={{ alignItems: 'flex-end', gap: 4 }}>
-                      <AvatarStack names={t.sorumlu} max={2} size="sm" />
-                      <span className="muted tabular" style={{ fontSize: 10.5 }}>{fmt(t.plannedStart)} → {fmt(t.plannedFinish)}</span>
-                    </div>
-                  </button>
-                );
-              })}
+                  </div>
+                  <div className="col" style={{ alignItems: 'flex-end', gap: 4 }}>
+                    <AvatarStack names={t.sorumlu} max={2} size="sm" />
+                    <span className="muted tabular" style={{ fontSize: 10.5 }}>{fmt(t.plannedStart || t.targetFinish)} → {fmt(t.plannedFinish || t.targetFinish)}</span>
+                  </div>
+                </button>
+              ))}
             </div>
           ))}
         </div>
@@ -320,7 +319,7 @@ function DateJumpPopover({ anchor, onClose, onJump }) {
     <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 150, padding: 12, minWidth: 260 }}>
       <div className="col" style={{ gap: 8 }}>
         <span className="dff-label">Bir tarihe atla</span>
-        <input type="date" className="input" value={val} onChange={(e) => setVal(e.target.value)} autoFocus />
+        <DateInput value={val} onChange={setVal} allowEmpty={false} autoFocus />
         <div className="row" style={{ gap: 6 }}>
           <button className="btn ghost sm" onClick={onClose}>İptal</button>
           <div style={{ flex: 1 }} />

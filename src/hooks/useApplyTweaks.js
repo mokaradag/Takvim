@@ -12,7 +12,9 @@ const ACCENT_PRESETS = {
 
 export function useApplyTweaks(tweaks) {
   useEffect(() => {
-    document.body.className = tweaks.theme === 'light' ? 'theme-light' : 'theme-dark';
+    const body = document.body;
+    body.classList.toggle('theme-light', tweaks.theme === 'light');
+    body.classList.toggle('theme-dark', tweaks.theme !== 'light');
   }, [tweaks.theme]);
 
   useEffect(() => {
@@ -42,4 +44,24 @@ export function useApplyTweaks(tweaks) {
   useEffect(() => {
     document.body.classList.toggle('no-emblem', !tweaks.showEmblem);
   }, [tweaks.showEmblem]);
+
+  // Yeni ekranlarda DateInput kullanılıyor. Eski/ikincil bileşenlerde kalan native
+  // tarih alanları için de Edge/Chromium tarih sırasını gün-ay-yıl olarak tutar.
+  useEffect(() => {
+    const applyDateLocale = (root = document) => {
+      if (root.matches?.('input[type="date"]')) root.setAttribute('lang', 'en-GB');
+      root.querySelectorAll?.('input[type="date"]').forEach((input) => input.setAttribute('lang', 'en-GB'));
+    };
+
+    applyDateLocale();
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) applyDateLocale(node);
+        });
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
 }
