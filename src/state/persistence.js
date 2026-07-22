@@ -21,18 +21,24 @@ function changedEntities(before = [], after = []) {
 }
 
 export function createPersistenceChangeSet(before, after) {
+  const projects = changedEntities(before.projects || [], after.projects || []);
   const tasks = changedEntities(before.tasks || [], after.tasks || []);
   const wbs = changedEntities(before.wbs || [], after.wbs || []);
-  return {
+  const changes = {
     taskUpserts: tasks.upserts,
     taskDeletes: tasks.deletes,
     wbsUpserts: wbs.upserts,
     wbsDeletes: wbs.deletes
   };
+  if (projects.upserts.length) changes.projectUpserts = projects.upserts;
+  if (projects.deletes.length) changes.projectDeletes = projects.deletes;
+  return changes;
 }
 
 export function isEmptyChangeSet(changes) {
-  return !(changes.taskUpserts.length
+  return !((changes.projectUpserts?.length || 0)
+    || (changes.projectDeletes?.length || 0)
+    || changes.taskUpserts.length
     || changes.taskDeletes.length
     || changes.wbsUpserts.length
     || changes.wbsDeletes.length);
@@ -178,6 +184,28 @@ export function createStateMutationOrchestrator({
     }
   });
 
+  const commitChanges = (operation, changes) => queue.enqueue(async () => {
+    applyStateAction({ type: 'persistence/start', operation });
+    try {
+      const committed = await repository.commitChanges(changes);
+      applyStateAction({
+        type: 'persistence/success',
+        changes: {},
+        savedAt: now(),
+        clearWbsError: true
+      });
+      return { ok: true, value: committed };
+    } catch (error) {
+      const normalized = normalizeRepositoryError(error, {
+        code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+        message: 'Değişiklik kaydedilemedi.',
+        operation
+      });
+      applyStateAction({ type: 'persistence/failure', error: normalized });
+      return { ok: false, error: { kind: 'persistence', ...normalized } };
+    }
+  });
+
   const taskPatches = createTaskPatchCoalescer(
     (id, patch) => persistAction('task/update', { type: 'task/update', id, patch }),
     { delayMs: taskPatchDelayMs }
@@ -196,6 +224,7 @@ export function createStateMutationOrchestrator({
   return {
     updateTask,
     mutate: persistAction,
+    commitChanges,
     flushTaskUpdates(ids = []) {
       return Promise.all([...new Set(ids)].map((id) => taskPatches.flush(id)));
     },
