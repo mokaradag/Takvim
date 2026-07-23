@@ -1,5 +1,3 @@
-import 'server-only';
-
 export class ServerPersistenceError extends Error {
   constructor(code, message, { status, details = null, cause = null } = {}) {
     super(message);
