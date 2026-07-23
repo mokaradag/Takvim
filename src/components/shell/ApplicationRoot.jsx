@@ -1,10 +1,11 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { AppStateProvider } from '../../state/AppStateProvider';
-import { DATA_MODES, DATA_MODE_STORAGE_KEY, DataModeContext, createRepositoryForDataMode } from '../../data/dataMode';
+import { DATA_MODES, DATA_MODE_STORAGE_KEY, createRepositoryForDataMode } from '../../data/dataMode';
 import AppShell from './AppShell';
 import { AppDataBoundary } from './AppDataBoundary';
 import { DataModeChooser } from './DataModeChooser';
+import { DataModeContext } from './DataModeContext';
 import { DataModeIndicator } from './DataModeIndicator';
 import { PersistenceStatus } from './PersistenceStatus';
 import { PresentationPolish } from './PresentationPolish';
