@@ -2,3 +2,4 @@ Temporary diagnostic trigger. This branch and PR are not part of the durable per
 Regression repair trigger: 2026-07-23.
 Persistence diagnostic trigger: 2026-07-23.
 Remaining regression repair trigger: 2026-07-23.
+Codex P2 patch trigger: 2026-07-23.
