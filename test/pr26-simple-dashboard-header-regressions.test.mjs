@@ -46,7 +46,7 @@ test('sorumlu aramasında Enter tuşu hızlı görev formunu yanlışlıkla gön
 
   assert.match(
     simple,
-    /aria-label="Sorumlu ara"[\s\S]*?onKeyDown=\{\(event\) => \{ if \(event\.key === 'Enter'\) event\.preventDefault\(\); \}\}/
+    /onKeyDown=\{\(event\) => \{ if \(event\.key === 'Enter'\) event\.preventDefault\(\); \}\}[\s\S]*?aria-label="Sorumlu ara"/
   );
 });
 
