@@ -124,23 +124,23 @@
   white-space: nowrap;
 }
 
-/* Özet: üst ve alt kartlar aynı üç kolon izini kullanır; sınırlar birebir hizalanır. */
-.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'],
+/* Özet: yalnızca trend + durum satırı ve alt üçlü kart satırı ortak kolon izini kullanır. */
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row),
 .content-ozet .stagger > div[style*='grid-template-columns: 1.1fr 0.9fr 1fr'] {
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1fr) !important;
 }
 
-.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'] > .card:first-child {
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:first-child {
   grid-column: 1 / 3;
 }
 
-.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'] > .card:nth-child(2) {
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) {
   grid-column: 3;
   display: flex;
   flex-direction: column;
 }
 
-.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'] > .card:nth-child(2) > .row:last-child {
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
   flex: 1 1 auto;
   min-height: 190px;
   align-items: center !important;
@@ -152,15 +152,13 @@
 }
 
 @media (max-width: 1080px) {
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'],
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row),
   .content-ozet .stagger > div[style*='grid-template-columns: 1.1fr 0.9fr 1fr'] {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'] > .card:first-child {
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:first-child,
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) {
     grid-column: 1 / -1;
-  }
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'] > .card:nth-child(2) {
-    grid-column: auto;
   }
 }
 
@@ -172,12 +170,12 @@
   .simple-entry-grid { grid-template-columns: 1fr; }
   .simple-project-field,
   .simple-task-field { grid-column: auto; }
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'],
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row),
   .content-ozet .stagger > div[style*='grid-template-columns: 1.1fr 0.9fr 1fr'] {
     grid-template-columns: 1fr !important;
   }
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'] > .card:first-child,
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr'] > .card:nth-child(2) {
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:first-child,
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) {
     grid-column: auto;
   }
   .topbar-project-context { max-width: 42vw; gap: 5px; }
