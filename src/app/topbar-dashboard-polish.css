@@ -121,39 +121,30 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 }
 
 /* ── Özet · Durum dağılımı ─────────────────────────────────────
-   Scale the donut and its containing box together. The segment groups are kept
-   anchored to the ring: the component's selected-state translation can split a
-   dash that crosses the SVG seam into two apparently detached pieces. Selection
-   is still communicated by stroke emphasis, opacity and the legend highlight. */
+   Restored exactly to the layout that existed at the start of PR #28. */
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
   display: grid !important;
-  grid-template-columns: minmax(214px, 1fr) minmax(126px, 150px);
+  grid-template-columns: minmax(168px, 1fr) minmax(132px, 188px);
   justify-content: center !important;
   align-items: center !important;
-  gap: 12px !important;
-  min-height: 236px;
+  gap: clamp(8px, 1vw, 16px) !important;
+  min-height: 214px;
 }
 
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > div:first-child {
-  position: relative !important;
-  width: 214px !important;
-  height: 214px !important;
+  width: clamp(174px, 13vw, 190px);
+  height: clamp(174px, 13vw, 190px);
   justify-self: center;
 }
 
-.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > div:first-child > svg {
-  display: block;
-  width: 214px !important;
-  height: 214px !important;
-}
-
-.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > div:first-child > svg > g {
-  transform: none !important;
+.content-ozet svg[viewBox='-10 -10 170 170'] {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
   width: 100%;
-  max-width: 150px;
+  max-width: 188px;
   justify-self: end;
   gap: 7px !important;
 }
@@ -162,15 +153,14 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px !important;
+  gap: 12px !important;
   width: 100%;
   max-width: none;
-  padding: 5px 4px !important;
+  padding: 5px 6px !important;
 }
 
 .content-ozet .donut-leg-row > .row {
   min-width: 0;
-  gap: 7px !important;
 }
 
 .content-ozet .donut-leg-row > .tabular {
@@ -178,29 +168,20 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   text-align: right;
 }
 
-/* At tablet / compact-desktop widths the status card is too narrow to hold a
-   genuine 214px donut plus its legend in the third dashboard column. Stack the
-   trend and status cards before that squeeze happens rather than shrinking the
-   chart back to its old size. */
-@media (max-width: 1500px) {
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) {
-    grid-template-columns: 1fr !important;
-  }
-
+@media (max-width: 1280px) {
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:first-child,
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) {
-    grid-column: 1 / -1 !important;
+    grid-column: 1 / -1;
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
-    grid-template-columns: minmax(214px, 230px) minmax(150px, 190px);
+    grid-template-columns: minmax(184px, 220px) minmax(160px, 220px);
     justify-content: center !important;
-    gap: 24px !important;
+    gap: 28px !important;
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
-    max-width: 190px;
-    justify-self: start;
+    max-width: 220px;
   }
 }
 
@@ -234,7 +215,7 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
-    max-width: 220px;
+    max-width: 240px;
     justify-self: center;
   }
 }
