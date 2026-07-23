@@ -37,6 +37,12 @@ jobs:
         run: npm ci
       - name: Run lint
         run: npm run lint
+      - name: Run fourth Codex regression tests
+        run: node --test test/codex-p2-regressions.test.mjs
+      - name: Run durable SQL contract tests
+        run: node --test test/durable-persistence-sql.test.mjs
+      - name: Run durable architecture tests
+        run: node --test test/durable-persistence-architecture.test.mjs
       - name: Run automated tests
         run: npm test -- --test-concurrency=1
       - name: Build production application
