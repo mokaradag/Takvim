@@ -1,57 +1,63 @@
 from pathlib import Path
+import re
 
 
-def replace_once(path, old, new):
-    file_path = Path(path)
-    text = file_path.read_text()
+def read(path):
+    return Path(path).read_text()
+
+
+def write(path, text):
+    Path(path).write_text(text)
+
+
+def replace_once(path, old, new, label):
+    text = read(path)
     if old not in text:
-        raise SystemExit(f'Expected block not found in {path}: {old[:140]!r}')
-    file_path.write_text(text.replace(old, new, 1))
+        raise SystemExit(f'{label}: expected block not found in {path}')
+    write(path, text.replace(old, new, 1))
+    print(f'patched: {label}')
+
+
+def sub_once(path, pattern, replacement, label, flags=0):
+    text = read(path)
+    updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=flags)
+    if count != 1:
+        raise SystemExit(f'{label}: expected one match in {path}, found {count}')
+    write(path, updated)
+    print(f'patched: {label}')
 
 
 # P2: require the complete development Sicil environment value to be a positive integer.
-identity_parser = Path('src/server/identity/parseDevelopmentSicil.js')
-identity_parser.write_text("""export function parseDevelopmentSicil(value) {
+Path('src/server/identity/parseDevelopmentSicil.js').write_text("""export function parseDevelopmentSicil(value) {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\\d*$/.test(raw)) return null;
   const sicil = Number(raw);
   return Number.isSafeInteger(sicil) ? sicil : null;
 }
 """)
+print('patched: development Sicil parser')
 
 replace_once(
     'src/server/identity/currentUserProvider.js',
-    """import 'server-only';
-import { ServerPersistenceError } from '../errors.js';
-""",
-    """import 'server-only';
-import { ServerPersistenceError } from '../errors.js';
-import { parseDevelopmentSicil } from './parseDevelopmentSicil.js';
-"""
+    "import { ServerPersistenceError } from '../errors.js';\n",
+    "import { ServerPersistenceError } from '../errors.js';\nimport { parseDevelopmentSicil } from './parseDevelopmentSicil.js';\n",
+    'development identity import'
 )
-replace_once(
+sub_once(
     'src/server/identity/currentUserProvider.js',
-    """    const sicil = Number.parseInt(process.env.MERGEN_ROTA_DEV_SICIL || '', 10);
-    if (!Number.isInteger(sicil) || sicil <= 0) {
-      throw new ServerPersistenceError('UNAUTHORIZED', 'Geçerli bir sunucu tarafı geliştirme Sicil değeri yapılandırılmamış.');
-    }
-    return sicil;
-""",
+    r"    const sicil = Number\.parseInt\(process\.env\.MERGEN_ROTA_DEV_SICIL \|\| '', 10\);\n    if \(!Number\.isInteger\(sicil\) \|\| sicil <= 0\) \{\n      throw new ServerPersistenceError\('UNAUTHORIZED', 'Geçerli bir sunucu tarafı geliştirme Sicil değeri yapılandırılmamış\.'\);\n    \}\n    return sicil;",
     """    const sicil = parseDevelopmentSicil(process.env.MERGEN_ROTA_DEV_SICIL);
     if (sicil == null) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Geçerli bir sunucu tarafı geliştirme Sicil değeri yapılandırılmamış.');
     }
-    return sicil;
-"""
+    return sicil;""",
+    'strict development identity parsing'
 )
 
 # P2: detect manual/corporate ProjectCode collisions and count only corporate rows as synchronized.
 replace_once(
     'src/server/repository/corporateQueries.js',
-    """  THROW 51001, 'Corporate project source contains conflicting rows for the same ProjeKodu.', 1;
-
-UPDATE target
-""",
+    "  THROW 51001, 'Corporate project source contains conflicting rows for the same ProjeKodu.', 1;\n\nUPDATE target\n",
     """  THROW 51001, 'Corporate project source contains conflicting rows for the same ProjeKodu.', 1;
 
 IF EXISTS (
@@ -63,48 +69,36 @@ IF EXISTS (
   THROW 51002, 'A manual project code conflicts with the corporate project source.', 1;
 
 UPDATE target
-"""
-)
-replace_once(
-    'src/server/repository/corporateQueries.js',
-    """WHERE NOT EXISTS (SELECT 1 FROM dbo.MR_Projects p WITH (UPDLOCK, HOLDLOCK) WHERE p.ProjectCode = source.ProjectCode);
 """,
+    'corporate sync manual collision guard'
+)
+sub_once(
+    'src/server/repository/corporateQueries.js',
+    r"WHERE NOT EXISTS \(SELECT 1 FROM dbo\.MR_Projects p WITH \(UPDLOCK, HOLDLOCK\) WHERE p\.ProjectCode = source\.ProjectCode\);",
     """WHERE NOT EXISTS (
   SELECT 1
   FROM dbo.MR_Projects p WITH (UPDLOCK, HOLDLOCK)
   WHERE p.SourceType = 'CORPORATE' AND p.ProjectCode = source.ProjectCode
-);
-"""
+);""",
+    'corporate-only synchronized existence check'
 )
 
-# P2: keep corporate ProjectName non-null by falling back to the normalized ProjectCode.
-replace_once(
+# P2: keep corporate ProjectName non-null by falling back to normalized ProjectCode.
+sub_once(
     'database/MR_Create_Durable_Persistence.sql',
-    """            NULLIF(LTRIM(RTRIM(ProjeAdi)), N'''') AS ProjectName
-""",
-    """            COALESCE(NULLIF(LTRIM(RTRIM(ProjeAdi)), N''''), NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectName
-"""
+    r"            NULLIF\(LTRIM\(RTRIM\(ProjeAdi\)\), N''''\) AS ProjectName",
+    "            COALESCE(NULLIF(LTRIM(RTRIM(ProjeAdi)), N''''), NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectName",
+    'corporate ProjectName fallback'
 )
 
-repo = Path('src/server/repository/sqlAppRepository.js')
-text = repo.read_text()
+repo_path = 'src/server/repository/sqlAppRepository.js'
+repo = read(repo_path)
 
 # Reserve current and previously synchronized corporate codes from manual projects.
-ensure_people_block = """async function ensurePeople(executor, sicils) {
-  const normalized = normalizeSicils(sicils);
-  for (const sicil of normalized) {
-    const req = request(executor);
-    req.input('sicil', sql.Int, sicil);
-    const result = await req.query('SELECT TOP (1) Sicil FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil;');
-    if (!result.recordset.length) {
-      throw new ServerPersistenceError('MUTATION_FAILED', `Geçersiz çalışan Sicil: ${sicil}`);
-    }
-  }
-  return normalized;
-}
-
-"""
-manual_code_helper = ensure_people_block + """async function assertManualProjectCodeAvailable(executor, projectCode) {
+ensure_match = re.search(r"async function ensurePeople\(executor, sicils\) \{[\s\S]*?\n\}\n\n", repo)
+if not ensure_match:
+    raise SystemExit('manual code helper: ensurePeople function not found')
+helper = """async function assertManualProjectCodeAvailable(executor, projectCode) {
   if (!projectCode) return;
   const req = request(executor);
   req.input('projectCode', sql.NVarChar(255), projectCode);
@@ -123,32 +117,29 @@ manual_code_helper = ensure_people_block + """async function assertManualProject
 }
 
 """
-if ensure_people_block not in text:
-    raise SystemExit('ensurePeople block not found')
-text = text.replace(ensure_people_block, manual_code_helper, 1)
+repo = repo[:ensure_match.end()] + helper + repo[ensure_match.end():]
+print('patched: manual ProjectCode reservation helper')
 
 # Track whether the caller has any FULL/admin scope so partial-only users receive a constrained people directory.
-visible_tail = """      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = t.ProjectId);
-
-    SELECT p.*, v.AccessLevel
-"""
-visible_replacement = """      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = t.ProjectId);
+needle = "      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = t.ProjectId);\n\n    SELECT p.*, v.AccessLevel"
+replacement = """      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = t.ProjectId);
 
     DECLARE @HasFullScope bit = CASE
       WHEN @isAdmin = 1 OR EXISTS (SELECT 1 FROM @VisibleProjects WHERE AccessLevel = 'FULL') THEN 1
       ELSE 0
     END;
 
-    SELECT p.*, v.AccessLevel
-"""
-if visible_tail not in text:
-    raise SystemExit('visible project tail not found')
-text = text.replace(visible_tail, visible_replacement, 1)
+    SELECT p.*, v.AccessLevel"""
+if needle not in repo:
+    raise SystemExit('partial people filter: visible-project tail not found')
+repo = repo.replace(needle, replacement, 1)
+print('patched: full-scope marker')
 
-people_query = """    SELECT Sicil, DisplayName, Username, JobTitle, Team, Sector, Directorate, Department, Unit
-    FROM dbo.MR_V_PeopleDirectory
-    ORDER BY DisplayName, Sicil;
-"""
+people_pattern = re.compile(
+    r"    SELECT Sicil, DisplayName, Username, JobTitle, Team, Sector, Directorate, Department, Unit\n"
+    r"    FROM dbo\.MR_V_PeopleDirectory\n"
+    r"    ORDER BY DisplayName, Sicil;"
+)
 people_replacement = """    SELECT pd.Sicil, pd.DisplayName, pd.Username, pd.JobTitle, pd.Team, pd.Sector, pd.Directorate, pd.Department, pd.Unit
     FROM dbo.MR_V_PeopleDirectory pd
     WHERE @HasFullScope = 1
@@ -178,64 +169,59 @@ people_replacement = """    SELECT pd.Sicil, pd.DisplayName, pd.Username, pd.Job
                )
            )
        )
-    ORDER BY pd.DisplayName, pd.Sicil;
-"""
-if people_query not in text:
-    raise SystemExit('people directory query not found')
-text = text.replace(people_query, people_replacement, 1)
+    ORDER BY pd.DisplayName, pd.Sicil;"""
+repo, count = people_pattern.subn(people_replacement, repo, count=1)
+if count != 1:
+    raise SystemExit(f'partial people filter: expected one directory query, found {count}')
+print('patched: partial people directory filter')
 
 # Normalize manual codes before validation/persistence and reject codes reserved by corporate data.
-project_start = """async function commitProject(executor, actor, project, rootWbs, correlationId) {
-  const projectId = uuid(project.id);
-  const before = await projectRow(executor, projectId);
-"""
-project_start_replacement = """async function commitProject(executor, actor, project, rootWbs, correlationId) {
-  const projectId = uuid(project.id);
-  const projectCode = project.code == null ? null : (String(project.code).trim() || null);
-  const before = await projectRow(executor, projectId);
-"""
-if project_start not in text:
-    raise SystemExit('commitProject start not found')
-text = text.replace(project_start, project_start_replacement, 1)
+project_start = "async function commitProject(executor, actor, project, rootWbs, correlationId) {\n  const projectId = uuid(project.id);\n"
+if project_start not in repo:
+    raise SystemExit('manual code validation: commitProject start not found')
+repo = repo.replace(
+    project_start,
+    project_start + "  const projectCode = project.code == null ? null : (String(project.code).trim() || null);\n",
+    1
+)
+print('patched: normalized manual ProjectCode')
 
-create_validation = """    assertCanCreateManualProject(actor);
-    await ensurePeople(executor, project.leadId ? [project.leadId] : []);
-"""
-create_validation_replacement = """    assertCanCreateManualProject(actor);
-    await assertManualProjectCodeAvailable(executor, projectCode);
-    await ensurePeople(executor, project.leadId ? [project.leadId] : []);
-"""
-if create_validation not in text:
-    raise SystemExit('manual create validation block not found')
-text = text.replace(create_validation, create_validation_replacement, 1)
+create_validation = "    assertCanCreateManualProject(actor);\n    await ensurePeople(executor, project.leadId ? [project.leadId] : []);"
+if create_validation not in repo:
+    raise SystemExit('manual code validation: create path not found')
+repo = repo.replace(
+    create_validation,
+    "    assertCanCreateManualProject(actor);\n    await assertManualProjectCodeAvailable(executor, projectCode);\n    await ensurePeople(executor, project.leadId ? [project.leadId] : []);",
+    1
+)
+print('patched: manual create code validation')
 
-update_validation = """  assertProjectWriteAccess(actor.effective, projectId);
-  await ensurePeople(executor, project.leadId ? [project.leadId] : []);
-"""
-update_validation_replacement = """  assertProjectWriteAccess(actor.effective, projectId);
-  if (before.SourceType === 'MANUAL') {
-    await assertManualProjectCodeAvailable(executor, projectCode);
-  }
-  await ensurePeople(executor, project.leadId ? [project.leadId] : []);
-"""
-if update_validation not in text:
-    raise SystemExit('manual update validation block not found')
-text = text.replace(update_validation, update_validation_replacement, 1)
+update_validation = "  assertProjectWriteAccess(actor.effective, projectId);\n  await ensurePeople(executor, project.leadId ? [project.leadId] : []);"
+if update_validation not in repo:
+    raise SystemExit('manual code validation: update path not found')
+repo = repo.replace(
+    update_validation,
+    "  assertProjectWriteAccess(actor.effective, projectId);\n  if (before.SourceType === 'MANUAL') {\n    await assertManualProjectCodeAvailable(executor, projectCode);\n  }\n  await ensurePeople(executor, project.leadId ? [project.leadId] : []);",
+    1
+)
+print('patched: manual update code validation')
 
-if text.count("req.input('projectCode', sql.NVarChar(255), project.code || null);") != 2:
-    raise SystemExit('unexpected projectCode bind count')
-text = text.replace("req.input('projectCode', sql.NVarChar(255), project.code || null);", "req.input('projectCode', sql.NVarChar(255), projectCode);")
-repo.write_text(text)
+bind = "req.input('projectCode', sql.NVarChar(255), project.code || null);"
+if repo.count(bind) != 2:
+    raise SystemExit(f'manual code validation: expected two projectCode bindings, found {repo.count(bind)}')
+repo = repo.replace(bind, "req.input('projectCode', sql.NVarChar(255), projectCode);")
+print('patched: normalized projectCode bindings')
+write(repo_path, repo)
 
 # Regression tests for all four new findings.
-tests = Path('test/codex-p2-regressions.test.mjs')
-test_text = tests.read_text()
-if "parseDevelopmentSicil" not in test_text.split('\n', 20)[0:20].__str__():
-    test_text = test_text.replace(
-        "import { createApiRepository, toActualUuid } from '../src/data/api/createApiRepository.js';\n",
-        "import { createApiRepository, toActualUuid } from '../src/data/api/createApiRepository.js';\nimport { parseDevelopmentSicil } from '../src/server/identity/parseDevelopmentSicil.js';\n",
-        1
-    )
+tests_path = 'test/codex-p2-regressions.test.mjs'
+tests = read(tests_path)
+import_line = "import { createApiRepository, toActualUuid } from '../src/data/api/createApiRepository.js';\n"
+parser_import = "import { parseDevelopmentSicil } from '../src/server/identity/parseDevelopmentSicil.js';\n"
+if parser_import not in tests:
+    if import_line not in tests:
+        raise SystemExit('test import anchor not found')
+    tests = tests.replace(import_line, import_line + parser_import, 1)
 
 additions = r'''
 
@@ -277,8 +263,7 @@ test('corporate project view always supplies a usable ProjectName', () => {
   assert.match(source, /WHERE NULLIF\(LTRIM\(RTRIM\(ProjeKodu\)\), N''''\) IS NOT NULL/);
 });
 '''
-
-if "development identity rejects partial, decimal" not in test_text:
-    test_text += additions
-
-tests.write_text(test_text)
+if "development identity rejects partial, decimal" not in tests:
+    tests += additions
+write(tests_path, tests)
+print('patched: fourth Codex regression tests')
