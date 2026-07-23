@@ -34,8 +34,8 @@ const CONTENT = {
   },
   takvim: {
     title: 'Takvim',
-    intro: 'Görevleri aylık takvim üzerinde görsel olarak izlemek için kullanılır. Basit Modda hızlı kayıt formu bu sayfanın üstünde bulunur; hafta sonları ve resmi tatiller çalışma takvimine göre ayırt edilir.',
-    points: ['Basit Modda proje, görev, kısa açıklama, sorumlu ve termin tarihini girerek doğrudan Takvime kayıt ekleyin.', 'Ay ve yıl seçerek dönemler arasında ilerleyin.', 'Görev kartına tıklayarak ayrıntı panelini açın.', 'Planlama yaparken çalışma günü dışı uyarılarını dikkate alın.']
+    intro: 'Görevleri aylık takvim üzerinde görsel olarak izlemek için kullanılır. Basit Modda Takvim varsayılan sekmedir; Hızlı Görev Tanımı ayrı bir sekmede açılır. Hafta sonları ve resmi tatiller çalışma takvimine göre ayırt edilir.',
+    points: ['Basit Modda önce Takvim görünür; yeni kayıt için Hızlı Görev Tanımı sekmesine geçin.', 'Sorumluları ad veya personel numarasıyla arayın ve bir ya da daha çok kişiyi seçin.', 'Ay ve yıl seçerek dönemler arasında ilerleyin.', 'Görev kartına tıklayarak ayrıntı panelini açın.', 'Planlama yaparken çalışma günü dışı uyarılarını dikkate alın.']
   },
   gantt: {
     title: 'Gantt',
@@ -92,9 +92,9 @@ function ModeGuide() {
         <section className="card help-mode-card simple">
           <div className="help-mode-card-head"><Icons.Calendar size={20} /><div><small>Hızlı takip</small><h3>Basit Mod</h3></div></div>
           <Flow steps={[
-            { title: 'Projeyi seç', text: 'Kurumsal listeden seçin veya serbest proje tanımlayın.' },
-            { title: 'Görevi yaz', text: 'Görev ve kısa açıklamayı girin.' },
-            { title: 'Sorumluyu seç', text: 'Çalışan listesinden bir veya daha çok kişi seçin.' },
+            { title: 'Takvimi izle', text: 'Takvim sayfası varsayılan olarak aylık görünümle açılır.' },
+            { title: 'Hızlı tanıma geç', text: 'Yeni kayıt için Hızlı Görev Tanımı sekmesini açın.' },
+            { title: 'Sorumluyu ara', text: 'Ad veya personel numarasıyla bir ya da daha çok kişi seçin.' },
             { title: 'Termini ver', text: 'Termin tarihini belirleyip Takvime ekleyin.' }
           ]} />
         </section>
@@ -131,11 +131,11 @@ function Summary() {
       <section className="card help-section-card">
         <h3>Basit Mod akışı</h3>
         <Flow steps={[
-          { title: 'Proje', text: 'Kurumsal veya serbest projeyi belirleyin.' },
-          { title: 'Görev', text: 'Görevi ve kısa açıklamayı yazın.' },
-          { title: 'Sorumlu', text: 'Çalışan listesinden kişileri seçin.' },
-          { title: 'Termin', text: 'Termin tarihini girin.' },
-          { title: 'Takvim', text: 'Kaydı aylık Takvim üzerinde izleyin.' }
+          { title: 'Takvim', text: 'Basit Mod Takvim sayfasında aylık görünümle başlar.' },
+          { title: 'Hızlı Görev Tanımı', text: 'Yeni kayıt için ayrı sekmeye geçin.' },
+          { title: 'Proje ve görev', text: 'Projeyi belirleyip görevi ve kısa açıklamayı yazın.' },
+          { title: 'Sorumlu', text: 'Ad veya personel numarasıyla kişileri arayıp seçin.' },
+          { title: 'Termin', text: 'Termin tarihini girip kaydı Takvime ekleyin.' }
         ]} />
       </section>
       <section className="card help-section-card">
@@ -150,7 +150,7 @@ function Summary() {
       </section>
       <section className="help-tip-grid">
         <div><Icons.Sparkle size={18} /><strong>Tek veri altyapısı</strong><span>Basit Mod kayıtları Gelişmiş Modda yeniden kullanılabilir ve zenginleştirilebilir.</span></div>
-        <div><Icons.Calendar size={18} /><strong>Hızlı takip</strong><span>Basit Modda tanım ve takip aynı Takvim sayfasında yapılır.</span></div>
+        <div><Icons.Calendar size={18} /><strong>Hızlı takip</strong><span>Takvim varsayılan görünüm, hızlı görev tanımı ise aynı sayfadaki ayrı sekmedir.</span></div>
         <div><Icons.Gantt size={18} /><strong>Derinleşen plan</strong><span>Gerektiğinde WBS, bağımlılık ve kritik yol araçlarına geçin.</span></div>
       </section>
     </div>
