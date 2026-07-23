@@ -1,4 +1,3 @@
-import 'server-only';
 import { ServerPersistenceError } from '../errors.js';
 
 export const ACCESS_REASONS = Object.freeze({
