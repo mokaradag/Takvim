@@ -1,39 +1,26 @@
-name: Repair repository regression test
+name: Capture persistence diagnostics
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair:
+  diagnostic:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/durable-lint-diagnostic'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/durable-sqlserver-persistence
-          fetch-depth: 0
-      - name: Restore regression test and update error-code expectation
-        run: |
-          git fetch origin main --depth=1
-          git show origin/main:test/repository-draft-navigation-edge-cases.test.mjs > test/repository-draft-navigation-edge-cases.test.mjs
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('test/repository-draft-navigation-edge-cases.test.mjs')
-          text = path.read_text()
-          old = """    LOAD_FAILED: 'LOAD_FAILED',\n    MUTATION_FAILED: 'MUTATION_FAILED'\n"""
-          new = """    LOAD_FAILED: 'LOAD_FAILED',\n    MUTATION_FAILED: 'MUTATION_FAILED',\n    UNAUTHORIZED: 'UNAUTHORIZED',\n    FORBIDDEN: 'FORBIDDEN',\n    CONFLICT: 'CONFLICT',\n    DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE'\n"""
-          if old not in text:
-              raise SystemExit('Expected legacy error-code assertion was not found.')
-          path.write_text(text.replace(old, new, 1))
-          PY
-      - name: Commit repair when needed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add test/repository-draft-navigation-edge-cases.test.mjs
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "Fix repository error-code regression expectation"
-          git push origin HEAD:agent/durable-sqlserver-persistence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --test-concurrency=1 > test-diagnostic.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-diagnostic
+          path: test-diagnostic.txt
