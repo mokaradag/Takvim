@@ -7,6 +7,7 @@ import { fmtISO, today } from '../../scheduling/dates';
 import { useAllPeople, useAllProjects, useTaskActions } from '../../state/hooks';
 
 const MANUAL_PROJECT = '__manual_project__';
+const MAX_VISIBLE_PEOPLE = 8;
 
 function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
@@ -14,6 +15,16 @@ function projectLabel(project) {
 
 function personNumber(person) {
   return person.employeeNo || person.SicilNo || person.PersonelNo || person.id;
+}
+
+function PersonChoice({ person, active, onToggle }) {
+  return (
+    <button type="button" className={`simple-person${active ? ' active' : ''}`} onClick={() => onToggle(person.id)}>
+      <Avatar name={person.name} size="sm" />
+      <span><strong>{person.name}</strong><small>{personNumber(person)}</small></span>
+      {active ? <Icons.Check size={13} /> : <Icons.Plus size={13} />}
+    </button>
+  );
 }
 
 export function SimpleModePanel() {
@@ -30,10 +41,24 @@ export function SimpleModePanel() {
   const [keyword, setKeyword] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [assigneeIds, setAssigneeIds] = useState([]);
+  const [peopleQuery, setPeopleQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
 
   const selectedProject = projects.find((project) => project.id === projectChoice) || null;
+  const selectedPeople = useMemo(
+    () => sortedPeople.filter((person) => assigneeIds.includes(person.id)),
+    [sortedPeople, assigneeIds]
+  );
+  const peopleMatches = useMemo(() => {
+    const query = peopleQuery.trim().toLocaleLowerCase('tr-TR');
+    return sortedPeople.filter((person) => {
+      if (assigneeIds.includes(person.id)) return false;
+      if (!query) return true;
+      return `${person.name} ${personNumber(person)}`.toLocaleLowerCase('tr-TR').includes(query);
+    });
+  }, [sortedPeople, peopleQuery, assigneeIds]);
+  const visiblePeople = peopleMatches.slice(0, MAX_VISIBLE_PEOPLE);
 
   const togglePerson = (personId) => {
     setAssigneeIds((current) => current.includes(personId)
@@ -46,6 +71,7 @@ export function SimpleModePanel() {
     setKeyword('');
     setDueDate('');
     setAssigneeIds([]);
+    setPeopleQuery('');
   };
 
   const ensureTag = async (project) => {
@@ -102,7 +128,7 @@ export function SimpleModePanel() {
       project = tagged.value || project;
     }
 
-    const selectedPeople = assigneeIds.map((id) => people.find((person) => person.id === id)).filter(Boolean);
+    const selectedPeopleForTask = assigneeIds.map((id) => people.find((person) => person.id === id)).filter(Boolean);
     selectWorkspace(null);
     const createdTask = await addTask({
       projectId: project.id,
@@ -113,7 +139,7 @@ export function SimpleModePanel() {
       task: task.trim(),
       keyword: keyword.trim(),
       assigneeIds: [...assigneeIds],
-      sorumlu: selectedPeople.map((person) => person.name),
+      sorumlu: selectedPeopleForTask.map((person) => person.name),
       status: 'todo',
       priority: 'medium',
       progress: 0,
@@ -192,19 +218,46 @@ export function SimpleModePanel() {
       </div>
 
       <div className="simple-people-block">
-        <div className="simple-people-title"><span>Sorumlular</span><small>{assigneeIds.length} kişi seçili</small></div>
-        <div className="simple-people-grid">
-          {sortedPeople.map((person) => {
-            const active = assigneeIds.includes(person.id);
-            return (
-              <button key={person.id} type="button" className={`simple-person${active ? ' active' : ''}`} onClick={() => togglePerson(person.id)}>
-                <Avatar name={person.name} size="sm" />
-                <span><strong>{person.name}</strong><small>{personNumber(person)}</small></span>
-                {active && <Icons.Check size={13} />}
-              </button>
-            );
-          })}
+        <div className="simple-people-title">
+          <span>Sorumlular</span>
+          <small>{assigneeIds.length} kişi seçili · {people.length} kişi</small>
         </div>
+        <label className="simple-people-search">
+          <Icons.Search size={14} />
+          <input
+            value={peopleQuery}
+            onChange={(event) => setPeopleQuery(event.target.value)}
+            placeholder="Ad veya personel numarasıyla ara"
+            aria-label="Sorumlu ara"
+          />
+        </label>
+
+        {selectedPeople.length > 0 && (
+          <div className="simple-people-selection">
+            <div className="simple-people-results-title">Seçilenler</div>
+            <div className="simple-people-grid">
+              {selectedPeople.map((person) => (
+                <PersonChoice key={person.id} person={person} active onToggle={togglePerson} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="simple-people-results-title">
+          <span>{peopleQuery.trim() ? 'Arama sonuçları' : 'Hızlı seçim'}</span>
+          <small>{peopleMatches.length} eşleşme</small>
+        </div>
+        <div className="simple-people-grid">
+          {visiblePeople.map((person) => (
+            <PersonChoice key={person.id} person={person} active={false} onToggle={togglePerson} />
+          ))}
+        </div>
+        {visiblePeople.length === 0 && <div className="simple-people-empty">Eşleşen başka kişi yok.</div>}
+        {peopleMatches.length > MAX_VISIBLE_PEOPLE && (
+          <div className="simple-people-hint">
+            İlk {MAX_VISIBLE_PEOPLE} sonuç gösteriliyor. Arama alanını kullanarak listeyi daraltın.
+          </div>
+        )}
       </div>
 
       <div className="simple-entry-foot">
