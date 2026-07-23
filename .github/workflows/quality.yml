@@ -28,6 +28,30 @@ jobs:
         run: python .github/scripts/apply-fourth-codex-review-fixes.py repository
       - name: Add regression tests
         run: python .github/scripts/apply-fourth-codex-review-fixes.py tests
+      - name: Refresh prior corporate sync regression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('test/codex-p2-regressions.test.mjs')
+          text = path.read_text()
+          old = """test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
+            const source = read('src/server/repository/corporateQueries.js');
+            assert.match(
+              source,
+              /NOT EXISTS \\(SELECT 1 FROM dbo\\.MR_Projects p WITH \\(UPDLOCK, HOLDLOCK\\) WHERE p\\.ProjectCode = source\\.ProjectCode\\)/
+            );
+          });"""
+          new = """test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
+            const source = read('src/server/repository/corporateQueries.js');
+            assert.match(
+              source,
+              /NOT EXISTS \\(\\s*SELECT 1\\s*FROM dbo\\.MR_Projects p WITH \\(UPDLOCK, HOLDLOCK\\)\\s*WHERE p\\.SourceType = 'CORPORATE' AND p\\.ProjectCode = source\\.ProjectCode\\s*\\)/s
+            );
+          });"""
+          if old not in text:
+              raise SystemExit('prior corporate sync regression block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
