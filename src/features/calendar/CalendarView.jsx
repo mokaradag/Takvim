@@ -316,7 +316,7 @@ function DateJumpPopover({ anchor, onClose, onJump }) {
   ];
 
   return (
-    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 150, padding: 12, minWidth: 260 }}>
+    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, padding: 12, minWidth: 260 }}>
       <div className="col" style={{ gap: 8 }}>
         <span className="dff-label">Bir tarihe atla</span>
         <DateInput value={val} onChange={setVal} allowEmpty={false} autoFocus />

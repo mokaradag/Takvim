@@ -134,9 +134,9 @@ test('project tag deduplication remaps legacy task variants to the retained tag'
 });
 
 test('topbar popovers can escape the header and every task-table header stays sticky', () => {
-  const css = read('src/app/enhancements.css');
+  const shellCss = read('src/app/styles/shell.css');
+  const componentCss = read('src/app/styles/components.css');
 
-  assert.match(css, /\.topbar\s*\{[^}]*overflow:\s*visible;/s);
-  assert.match(css, /\.topbar\s*\{[^}]*z-index:\s*100;/s);
-  assert.match(css, /\.tbl thead th\s*\{[^}]*position:\s*sticky\s*!important;[^}]*top:\s*0;/s);
+  assert.match(shellCss, /\.topbar\s*\{[^}]*z-index:\s*var\(--z-chrome\);[^}]*overflow:\s*visible;/s);
+  assert.match(componentCss, /\.tbl thead th\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;[^}]*z-index:\s*var\(--z-sticky\);/s);
 });

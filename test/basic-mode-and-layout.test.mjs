@@ -111,14 +111,14 @@ test('user-facing dates use day/month/year and missing dates do not render as to
   assert.match(gantt, /<DateInput value=\{rangeStart\}/);
 });
 
-test('topbar project context is truly centered, larger, and the heptagon is clipped by its own header wrapper', () => {
+test('topbar project context is truly centered and the heptagon is clipped by its own header wrapper', () => {
   const shell = read('src/components/shell/AppShell.jsx');
-  const css = read('src/app/enhancements.css');
+  const css = read('src/app/styles/shell.css');
 
   assert.doesNotMatch(shell, />Aktif Proje</);
   assert.match(shell, /topbar-emblem-clip/);
-  assert.match(css, /\.topbar-project-context\s*\{[^}]*left:\s*50%;[^}]*top:\s*50%;[^}]*translate\(-50%,\s*-50%\)/s);
-  assert.match(css, /\.topbar-project-context strong\s*\{[^}]*font-size:\s*17px;/s);
+  assert.match(css, /\.topbar-project-context\s*\{[^}]*top:\s*50%;[^}]*left:\s*50%;[^}]*transform:\s*translate\(-50%,\s*-50%\)/s);
+  assert.match(css, /\.topbar-project-context strong\.topbar-project-name\s*\{[^}]*font-size:\s*14\.5px;/s);
   assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*overflow:\s*hidden;/s);
   assert.match(css, /\.topbar\s*\{[^}]*overflow:\s*visible;/s);
 });
@@ -136,18 +136,18 @@ test('welcome and initial mode selection render without the underlying applicati
   assert.doesNotMatch(shell.slice(appReturn), /<ModeChooser/);
 });
 
-test('layout regression fixes reserve card info space and keep task/Gantt scrolling inside their content areas', () => {
-  const css = read('src/app/enhancements.css');
-  const fixes = read('src/app/fixes.css');
+test('owned layout styles reserve card info space and keep task/Gantt scrolling inside their content areas', () => {
+  const components = read('src/app/styles/components.css');
+  const features = read('src/app/styles/features.css');
   const gantt = read('src/features/gantt/WorkspaceGanttView.jsx');
 
-  assert.match(css, /\.card-head-wrap\s*\{[^}]*padding:[^;]*38px/s);
-  assert.match(css, /\.card-head-wrap \.card-info-corner\s*\{[^}]*top:\s*50%/s);
-  assert.match(css, /\.content-veri\s*\{[^}]*overflow:\s*hidden/s);
-  assert.match(css, /\.content-gantt\s*\{[^}]*overflow:\s*hidden/s);
-  assert.match(css, /\.gantt-holiday-stripe\s*\{[^}]*z-index:\s*12/s);
-  assert.match(css, /\.drawer\s*\{[^}]*z-index:\s*310/s);
-  assert.match(fixes, /\.rel-fields-grid/);
-  assert.match(fixes, /\.wbs-tree-table/);
+  assert.match(components, /\.card-head-wrap\s*\{[^}]*padding:[^;]*38px/s);
+  assert.match(components, /\.card-head-wrap \.card-info-corner\s*\{[^}]*top:\s*50%/s);
+  assert.match(components, /\.content-veri\s*\{[^}]*overflow:\s*hidden/s);
+  assert.match(features, /\.content-gantt\s*\{[^}]*overflow:\s*hidden/s);
+  assert.match(features, /\.gantt-holiday-stripe\s*\{[^}]*z-index:\s*12/s);
+  assert.match(features, /\.drawer\s*\{[^}]*z-index:\s*var\(--z-drawer\)/s);
+  assert.match(features, /\.rel-fields-grid/);
+  assert.match(features, /\.wbs-tree-table/);
   assert.match(gantt, /gantt-chart-host/);
 });

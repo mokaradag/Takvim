@@ -88,7 +88,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
           position: 'fixed',
           left: pos.x,
           top: pos.y,
-          zIndex: 9999,
+          zIndex: 'var(--z-tooltip)',
           visibility: pos.ready ? 'visible' : 'hidden',
           pointerEvents: 'none',
           ...(accent ? { '--tip-accent': accent } : {})
@@ -146,7 +146,7 @@ export function InfoButton({ title, children, icon, size = 13, corner = false, a
 export function CardHead({ icon, title, subtitle, info, infoTitle, infoAccent, infoIcon, right, children }) {
   return (
     <div className="card-head-wrap" style={{ marginBottom: 14 }}>
-      <div className="row" style={{ alignItems: 'flex-start', gap: 10, justifyContent: 'space-between' }}>
+      <div className="row card-head-row">
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           <div className="card-title" style={{ margin: 0 }}>
             {icon}
@@ -274,7 +274,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     : options;
 
   return (
-    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 150 }}>
+    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top }}>
       <div className="col-filter-head">
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>{label}</span>
       </div>

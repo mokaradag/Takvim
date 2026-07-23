@@ -72,7 +72,7 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 120,
+        zIndex: 'var(--z-modal)',
         display: 'grid',
         placeItems: 'center',
         padding: 20,

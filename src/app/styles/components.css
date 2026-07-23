@@ -1,0 +1,153 @@
+/* MERGEN Rota · shared visual component ownership */
+
+.card-head-wrap {
+  position: relative;
+  margin-top: calc(var(--pad-card) * -1);
+  margin-left: calc(var(--pad-card) * -1);
+  margin-right: calc(var(--pad-card) * -1);
+  padding: 9px calc(var(--pad-card) + 38px) 8px var(--pad-card);
+  background: var(--chrome-bg-soft);
+  border-bottom: 1px solid var(--chrome-border);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.card-head-row { min-height: 31px; align-items: center; gap: 10px; justify-content: space-between; }
+.card-head-wrap .card-info-corner {
+  position: absolute;
+  right: var(--pad-card);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  z-index: 3;
+}
+.card-head-wrap .card-info-corner .info-btn { margin: 0; }
+.card > .row:first-child:has(.card-title) {
+  margin: calc(var(--pad-card) * -1) calc(var(--pad-card) * -1) 14px;
+  padding: 9px calc(var(--pad-card) + 38px) 8px var(--pad-card);
+  min-height: 48px;
+  background: var(--chrome-bg-soft);
+  border-bottom: 1px solid var(--chrome-border);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+
+.tbl thead th, .gantt-left-head, .kanban-col-head {
+  background: var(--chrome-bg-soft);
+  border-color: var(--chrome-border);
+}
+
+.seg { border-color: var(--chrome-border); background: color-mix(in oklab, var(--accent) 7%, var(--bg-elev-2)); }
+.seg button { color: var(--text-muted); }
+.seg button:hover { color: var(--accent); background: color-mix(in oklab, var(--accent) 8%, transparent); }
+.seg button.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 2px 8px color-mix(in oklab, var(--accent) 25%, transparent);
+}
+input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color: var(--accent); }
+
+.calendar-warning {
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid color-mix(in oklab, var(--c-amber) 48%, var(--border));
+  background: color-mix(in oklab, var(--c-amber) 10%, var(--bg-elev));
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.calendar-warning strong { color: color-mix(in oklab, var(--c-amber) 72%, var(--text)); }
+
+.project-label-editor { display: flex; flex-wrap: wrap; gap: 7px; }
+.project-label-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px 4px 9px; border: 1px solid var(--chrome-border); background: var(--accent-soft); border-radius: var(--r-pill); font-size: 11.5px; }
+.project-label-chip button { width: 18px; height: 18px; border: 0; background: transparent; color: var(--text-dim); padding: 0; }
+.project-source-note { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-elev-2); color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
+.project-source-note svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+
+/* Grafik hareketlerini yalnızca veri görsellerinde yeniden etkinleştir. */
+.chart-area + polyline { stroke-dasharray: 2400; stroke-dashoffset: 2400; animation: drawLine 1s .05s cubic-bezier(.2,.8,.2,1) forwards; }
+.card svg[viewBox^='0 0 600 '] polygon { opacity: 0; animation: chartDataFade .65s cubic-bezier(.2,.8,.2,1) forwards; }
+.card svg[viewBox^='-10 -10'] circle[stroke-dasharray] { opacity: 0; animation: chartDataFade .55s cubic-bezier(.2,.8,.2,1) forwards; }
+.bar-row > div:nth-child(2) > div { transform-origin: left center; animation: chartGrowX .7s cubic-bezier(.2,.8,.2,1) both; }
+.velocity-bars .vel-bar { transform-origin: center bottom; animation: chartGrowY .7s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes chartDataFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes chartGrowX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes chartGrowY { from { transform: scaleY(.05); } to { transform: scaleY(1); } }
+.reduce-motion .chart-area + polyline,
+.reduce-motion .card svg[viewBox^='0 0 600 '] polygon,
+.reduce-motion .card svg[viewBox^='-10 -10'] circle[stroke-dasharray],
+.reduce-motion .bar-row > div:nth-child(2) > div,
+.reduce-motion .velocity-bars .vel-bar { animation: none !important; }
+
+/* ── Forms and DateInput ───────────────────────────────────── */
+.date-input-shell {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+.date-input-shell > .input {
+  width: 100%;
+  padding-right: 34px;
+  font-variant-numeric: tabular-nums;
+  border-color: var(--date-field-accent, var(--border));
+  color: var(--date-field-accent, var(--text));
+}
+.date-input-button {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  z-index: 2;
+}
+.date-input-button:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+.date-input-button:disabled { cursor: default; opacity: .45; }
+.date-input-native {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.date-input-shell.invalid > .input {
+  border-color: var(--status-overdue);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--status-overdue) 12%, transparent);
+}
+.gantt-range-controls .date-input-shell { width: 145px; flex: 0 0 145px; }
+.date-column-filter-pop { width: min(300px, calc(100vw - 16px)); }
+
+/* ── Tables and shared filter popovers ────────────────────── */
+.tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+}
+.col-filter-pop,
+.gantt-cols-pop {
+  z-index: var(--z-popover);
+  background: color-mix(in oklab, var(--accent) 5%, var(--bg-elev));
+  border-color: var(--chrome-border);
+  box-shadow: 0 20px 48px rgb(0 0 0 / .32), 0 0 0 1px color-mix(in oklab, var(--accent) 10%, transparent);
+  isolation: isolate;
+}
+.col-filter-head,
+.col-filter-foot { background: color-mix(in oklab, var(--accent) 7%, var(--bg-elev-2)); }
+.content-veri { overflow: hidden; padding-bottom: 16px; }
+.content-veri > .col { height: 100%; min-height: 0; }
+.content-veri > .col > div:last-child { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+.content-veri > .col > div:last-child > div { flex: 1 1 0; min-height: 0; max-height: none; overflow: auto; }
+.tasks-table-scroll { scrollbar-gutter: stable; }
+
+@media (max-width: 760px) {
+  .date-input-button { right: 5px; }
+  .gantt-range-controls .date-input-shell { width: 132px; flex-basis: 132px; }
+}

@@ -98,6 +98,14 @@ Task Detail edits current-plan, target, actual, remaining-duration, Project and 
 
 `components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen and logo. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
 
+### Presentation and styling ownership
+
+Presentation follows the same ownership rule as domain, scheduling, data and state architecture: current behavior is defined by the component or feature that owns it, not by a chronological override chain. `src/app/globals.css` owns global tokens/base primitives; `src/app/styles/shell.css` owns application chrome; `dashboard.css` owns Dashboard structure; `components.css` owns shared visual/component, form and table contracts; `features.css` owns Gantt, WBS and Task Detail layout sections; `simple-mode.css` owns Basit Mod; and `experience.css` owns mode/settings/help presentation.
+
+Generic visual primitives belong under `src/components`; shell presentation belongs to shell ownership; feature-specific layout belongs to the relevant feature style owner. Root global styles must not become a sequence of `fixes`/`followup`/`polish` layers. Static application structure should be exposed through semantic classes rather than inferred from inline style text or child position. Dynamic runtime values such as colors and computed widths may remain inline.
+
+Shared layer tokens define sticky, chrome, popover, drawer, modal and tooltip ordering. Feature code should use those layers instead of escalating unexplained z-index values. See `docs/UI-STYLING-ARCHITECTURE.md` for the full contract and `docs/VISUAL-SMOKE-TESTS.md` for the manual visual validation checklist.
+
 ## Adding new work
 
 - Project/Task/WBS/Baseline business rules: `src/domain`

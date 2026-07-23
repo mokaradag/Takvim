@@ -103,7 +103,7 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
   };
 
   return ReactDOM.createPortal(
-    <div ref={ref} className="col-filter-pop date-column-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 10050 }}>
+    <div ref={ref} className="col-filter-pop date-column-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top }}>
       <div className="col-filter-head">
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>{label}</span>
       </div>

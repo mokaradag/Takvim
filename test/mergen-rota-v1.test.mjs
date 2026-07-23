@@ -128,7 +128,7 @@ test('Sürüm 1.0 UI contracts place project creation and tag governance in Proj
   const taskDrawer = fs.readFileSync(path.join(ROOT, 'src/features/task-detail/TaskDrawer.jsx'), 'utf8');
   const navigation = fs.readFileSync(path.join(ROOT, 'src/components/shell/navigation.js'), 'utf8');
   const help = fs.readFileSync(path.join(ROOT, 'src/features/help/HelpView.jsx'), 'utf8');
-  const css = fs.readFileSync(path.join(ROOT, 'src/app/enhancements.css'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src/app/styles/features.css'), 'utf8');
 
   assert.doesNotMatch(shell, /onClick=\{\(\) => setProjectCreateOpen\(true\)\}/);
   assert.doesNotMatch(shell, /Data Date ·/);
@@ -142,5 +142,5 @@ test('Sürüm 1.0 UI contracts place project creation and tag governance in Proj
   assert.match(navigation, /Kullanım Rehberi/);
   assert.match(help, /Gelişmiş Mod akışı/);
   assert.match(css, /\.gantt-left \{ z-index: 30; \}/);
-  assert.match(css, /\.col-filter-pop, \.gantt-cols-pop/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'src/app/styles/components.css'), 'utf8'), /\.col-filter-pop,\s*\n\.gantt-cols-pop/);
 });
