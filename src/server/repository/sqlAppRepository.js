@@ -114,7 +114,7 @@ async function assertManualProjectCodeAvailable(executor, projectCode) {
       UNION
       SELECT ProjectCode FROM dbo.MR_Projects WHERE SourceType = 'CORPORATE'
     ) reserved
-    WHERE reserved.ProjectCode = @projectCode;
+    WHERE UPPER(reserved.ProjectCode) = @projectCode;
   `);
   if (result.recordset.length) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Kurumsal proje kodu manuel proje için kullanılamaz.');
@@ -136,7 +136,7 @@ async function loadSnapshotFrom(executor, auth) {
     INSERT @VisibleProjects(ProjectId, AccessLevel)
     SELECT DISTINCT p.ProjectId, 'FULL'
     FROM dbo.MR_Projects p
-    JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = p.ProjectCode
+    JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = UPPER(p.ProjectCode)
     WHERE @isAdmin = 0 AND p.SourceType = 'CORPORATE' AND p.IsActive = 1 AND a.Sicil = @sicil
       AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = p.ProjectId);
 
@@ -434,7 +434,7 @@ async function reconcileProjectTags(executor, actorSicil, projectId, values) {
 
 async function commitProject(executor, actor, project, rootWbs, correlationId) {
   const projectId = uuid(project.id);
-  const projectCode = project.code == null ? null : (String(project.code).trim() || null);
+  const projectCode = project.code == null ? null : (String(project.code).trim().toUpperCase() || null);
   const before = await projectRow(executor, projectId);
   if (!before) {
     if ((project.source || project.sourceType || 'manual').toUpperCase() !== 'MANUAL') {

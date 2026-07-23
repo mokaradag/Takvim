@@ -275,7 +275,7 @@ BEGIN TRY
         SELECT
             NULLIF(LTRIM(RTRIM(Tur)), N'''') AS ProjectTypeCode,
             NULLIF(LTRIM(RTRIM(Tur_Aciklama)), N'''') AS ProjectTypeName,
-            NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''') AS ProjectCode,
+            UPPER(NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectCode,
             COALESCE(NULLIF(LTRIM(RTRIM(ProjeAdi)), N''''), NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectName
         FROM dbo.A01_ProjeUrunFaaliyetRaporu
         WHERE NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''') IS NOT NULL
@@ -295,21 +295,31 @@ BEGIN TRY
         WHERE birim_yonetici_sicil IS NOT NULL AND sicil IS NOT NULL;');
 
     EXEC(N'CREATE VIEW dbo.MR_V_CorporateProjectAccess AS
-        SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N'''') AS ProjectCode, projeYoneticisiSicil AS Sicil, CAST(''PROJECT_MANAGER'' AS varchar(50)) AS RoleCode, programMd AS ProgramMd FROM dbo.HR09_projeSorumlu WHERE projeYoneticisiSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), teknikYoneticiSicil, ''TECHNICAL_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE teknikYoneticiSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), kaliteYoneticiSicil, ''QUALITY_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE kaliteYoneticiSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), tedarikSorumlusuSicil, ''PROCUREMENT_RESPONSIBLE'', programMd FROM dbo.HR09_projeSorumlu WHERE tedarikSorumlusuSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), TRY_CONVERT(int, LTRIM(RTRIM(value))), ''PPTC'', programMd FROM dbo.HR09_projeSorumlu CROSS APPLY STRING_SPLIT(pptcSicil, '','') WHERE TRY_CONVERT(int, LTRIM(RTRIM(value))) IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), uretimPlanlamaSorumlusuSicil, ''PRODUCTION_PLANNING_RESPONSIBLE'', programMd FROM dbo.HR09_projeSorumlu WHERE uretimPlanlamaSorumlusuSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), teslimatYoneticiSicil, ''DELIVERY_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE teslimatYoneticiSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), riskYoneticiSicil, ''RISK_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE riskYoneticiSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), konfigYoneticiSicil, ''CONFIGURATION_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE konfigYoneticiSicil IS NOT NULL
-        UNION ALL SELECT NULLIF(LTRIM(RTRIM(projeKodu)), N''''), eldYoneticisiSicil, ''LOGISTICS_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE eldYoneticisiSicil IS NOT NULL;');
+        SELECT UPPER(UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N''''))) AS ProjectCode, projeYoneticisiSicil AS Sicil, CAST(''PROJECT_MANAGER'' AS varchar(50)) AS RoleCode, programMd AS ProgramMd FROM dbo.HR09_projeSorumlu WHERE projeYoneticisiSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), teknikYoneticiSicil, ''TECHNICAL_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE teknikYoneticiSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), kaliteYoneticiSicil, ''QUALITY_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE kaliteYoneticiSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), tedarikSorumlusuSicil, ''PROCUREMENT_RESPONSIBLE'', programMd FROM dbo.HR09_projeSorumlu WHERE tedarikSorumlusuSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), TRY_CONVERT(int, LTRIM(RTRIM(value))), ''PPTC'', programMd FROM dbo.HR09_projeSorumlu CROSS APPLY STRING_SPLIT(pptcSicil, '','') WHERE TRY_CONVERT(int, LTRIM(RTRIM(value))) IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), uretimPlanlamaSorumlusuSicil, ''PRODUCTION_PLANNING_RESPONSIBLE'', programMd FROM dbo.HR09_projeSorumlu WHERE uretimPlanlamaSorumlusuSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), teslimatYoneticiSicil, ''DELIVERY_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE teslimatYoneticiSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), riskYoneticiSicil, ''RISK_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE riskYoneticiSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), konfigYoneticiSicil, ''CONFIGURATION_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE konfigYoneticiSicil IS NOT NULL
+        UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), eldYoneticisiSicil, ''LOGISTICS_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE eldYoneticisiSicil IS NOT NULL;');
 
     EXEC(N'CREATE VIEW dbo.MR_V_PeopleDirectory AS
         WITH Ranked AS (
             SELECT sicil, ad_soyad, kullanici_adi, unvan, sektor, direktorluk, mudurluk, birim,
-                   ROW_NUMBER() OVER (PARTITION BY sicil ORDER BY CASE WHEN NULLIF(LTRIM(RTRIM(birim)), N'''') IS NULL THEN 1 ELSE 0 END, kullanici_adi, ad_soyad) AS rn
+                   ROW_NUMBER() OVER (
+                       PARTITION BY sicil
+                       ORDER BY CASE WHEN NULLIF(LTRIM(RTRIM(birim)), N'''') IS NULL THEN 1 ELSE 0 END,
+                                COALESCE(LTRIM(RTRIM(kullanici_adi)), N''''),
+                                COALESCE(LTRIM(RTRIM(ad_soyad)), N''''),
+                                COALESCE(LTRIM(RTRIM(unvan)), N''''),
+                                COALESCE(LTRIM(RTRIM(sektor)), N''''),
+                                COALESCE(LTRIM(RTRIM(direktorluk)), N''''),
+                                COALESCE(LTRIM(RTRIM(mudurluk)), N''''),
+                                COALESCE(LTRIM(RTRIM(birim)), N'''')
+                   ) AS rn
             FROM dbo.HR02_rehisRehberwithMasrafYeri
             WHERE sicil IS NOT NULL
         )

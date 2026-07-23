@@ -34,20 +34,38 @@ IF EXISTS (
 IF EXISTS (
   SELECT 1
   FROM dbo.MR_Projects manual WITH (UPDLOCK, HOLDLOCK)
-  JOIN dbo.MR_V_CorporateProjects source ON source.ProjectCode = manual.ProjectCode
+  JOIN dbo.MR_V_CorporateProjects source ON source.ProjectCode = UPPER(manual.ProjectCode)
   WHERE manual.SourceType = 'MANUAL'
 )
   THROW 51002, 'A manual project code conflicts with the corporate project source.', 1;
 
+
+UPDATE root
+SET Name = source.ProjectName,
+    UpdatedAt = SYSUTCDATETIME(),
+    UpdatedBySicil = @actorSicil
+FROM dbo.MR_WBS root
+JOIN dbo.MR_Projects target ON target.ProjectId = root.ProjectId
+JOIN dbo.MR_V_CorporateProjects source ON source.ProjectCode = UPPER(target.ProjectCode)
+WHERE target.SourceType = 'CORPORATE'
+  AND root.ParentWbsId IS NULL
+  AND root.Name <> source.ProjectName
+  AND (root.Name = target.ProjectName OR root.Name = target.ProjectCode)
+  AND 1 = (
+    SELECT COUNT(*) FROM dbo.MR_WBS roots
+    WHERE roots.ProjectId = target.ProjectId AND roots.ParentWbsId IS NULL
+  );
+
 UPDATE target
-SET ProjectName = source.ProjectName,
+SET ProjectCode = source.ProjectCode,
+    ProjectName = source.ProjectName,
     ProjectTypeCode = source.ProjectTypeCode,
     ProjectTypeName = source.ProjectTypeName,
     IsActive = 1,
     UpdatedAt = SYSUTCDATETIME(),
     UpdatedBySicil = @actorSicil
 FROM dbo.MR_Projects target
-JOIN dbo.MR_V_CorporateProjects source ON source.ProjectCode = target.ProjectCode
+JOIN dbo.MR_V_CorporateProjects source ON source.ProjectCode = UPPER(target.ProjectCode)
 WHERE target.SourceType = 'CORPORATE'
   AND (
     ISNULL(target.ProjectName, N'') <> ISNULL(source.ProjectName, N'') OR
@@ -65,7 +83,7 @@ CROSS APPLY (SELECT TOP (1) CalendarId FROM dbo.MR_Calendars WHERE IsDefault = 1
 WHERE NOT EXISTS (
   SELECT 1
   FROM dbo.MR_Projects p WITH (UPDLOCK, HOLDLOCK)
-  WHERE p.SourceType = 'CORPORATE' AND p.ProjectCode = source.ProjectCode
+  WHERE p.SourceType = 'CORPORATE' AND UPPER(p.ProjectCode) = source.ProjectCode
 );
 
 INSERT dbo.MR_WBS(ProjectId, ParentWbsId, Code, Name, SortOrder, CreatedBySicil, UpdatedBySicil)
@@ -77,5 +95,5 @@ SET IsActive = 0, UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
 FROM dbo.MR_Projects p
 WHERE p.SourceType = 'CORPORATE'
   AND p.IsActive = 1
-  AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_CorporateProjects source WHERE source.ProjectCode = p.ProjectCode);
+  AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_CorporateProjects source WHERE source.ProjectCode = UPPER(p.ProjectCode));
 `;

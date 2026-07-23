@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createApiRepository, toActualUuid } from '../src/data/api/createApiRepository.js';
 import { parseDevelopmentSicil } from '../src/server/identity/parseDevelopmentSicil.js';
+import { ACCESS_REASONS, deriveEffectiveAccess } from '../src/server/authorization/authorization.js';
 import { createInitialState, appStateReducer } from '../src/state/appState.js';
 import { createStateMutationOrchestrator, loadApplicationData } from '../src/state/persistence.js';
 
@@ -193,7 +194,7 @@ test('manual FULL grants are ignored when their project is inactive', () => {
   const source = read('src/server/authorization/loadAuthorizationContext.js');
   assert.match(
     source,
-    /FROM dbo\.MR_ProjectAccess pa\s+JOIN dbo\.MR_Projects p ON p\.ProjectId = pa\.ProjectId\s+WHERE p\.IsActive = 1 AND pa\.Sicil = @sicil AND pa\.IsActive = 1 AND pa\.AccessLevel = 'FULL'/s
+    /FROM dbo\.MR_ProjectAccess pa\s+JOIN dbo\.MR_Projects p ON p\.ProjectId = pa\.ProjectId\s+WHERE p\.IsActive = 1 AND pa\.Sicil = @sicil AND pa\.IsActive = 1 AND pa\.AccessLevel IN \('FULL', 'READ'\)/s
   );
 });
 
@@ -287,7 +288,7 @@ test('corporate project sync serializes concurrent first inserts by ProjectCode'
   const source = read('src/server/repository/corporateQueries.js');
   assert.match(
     source,
-    /NOT EXISTS \(\s*SELECT 1\s*FROM dbo\.MR_Projects p WITH \(UPDLOCK, HOLDLOCK\)\s*WHERE p\.SourceType = 'CORPORATE' AND p\.ProjectCode = source\.ProjectCode\s*\)/s
+    /NOT EXISTS \(\s*SELECT 1\s*FROM dbo\.MR_Projects p WITH \(UPDLOCK, HOLDLOCK\)\s*WHERE p\.SourceType = 'CORPORATE' AND UPPER\(p\.ProjectCode\) = source\.ProjectCode\s*\)/s
   );
 });
 
@@ -303,7 +304,7 @@ test('snapshot HR09 FULL visibility applies only to corporate projects', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(
     source,
-    /JOIN dbo\.MR_V_CorporateProjectAccess a ON a\.ProjectCode = p\.ProjectCode\s+WHERE @isAdmin = 0 AND p\.SourceType = 'CORPORATE' AND p\.IsActive = 1 AND a\.Sicil = @sicil/s
+    /JOIN dbo\.MR_V_CorporateProjectAccess a ON a\.ProjectCode = UPPER\(p\.ProjectCode\)\s+WHERE @isAdmin = 0 AND p\.SourceType = 'CORPORATE' AND p\.IsActive = 1 AND a\.Sicil = @sicil/s
   );
 });
 
@@ -337,6 +338,8 @@ test('project updates validate LeadSicil before binding and writing it', () => {
 test('development identity rejects partial, decimal, non-positive, blank, and unsafe Sicil strings', () => {
   assert.equal(parseDevelopmentSicil('18068'), 18068);
   assert.equal(parseDevelopmentSicil(' 18068 '), 18068);
+  assert.equal(parseDevelopmentSicil('2147483647'), 2147483647);
+  assert.equal(parseDevelopmentSicil('2147483648'), null);
   for (const invalid of ['18068abc', '18068.5', '0', '-1', '', '   ', '9007199254740992']) {
     assert.equal(parseDevelopmentSicil(invalid), null, `expected ${JSON.stringify(invalid)} to be rejected`);
   }
@@ -349,7 +352,7 @@ test('manual project codes cannot silently suppress or collide with corporate sy
   const sync = read('src/server/repository/corporateQueries.js');
   assert.match(sync, /FROM dbo\.MR_Projects manual WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*manual\.SourceType = 'MANUAL'/);
   assert.match(sync, /THROW 51002, 'A manual project code conflicts with the corporate project source\.'/);
-  assert.match(sync, /WHERE p\.SourceType = 'CORPORATE' AND p\.ProjectCode = source\.ProjectCode/);
+  assert.match(sync, /WHERE p\.SourceType = 'CORPORATE' AND UPPER\(p\.ProjectCode\) = source\.ProjectCode/);
   const repository = read('src/server/repository/sqlAppRepository.js');
   assert.match(repository, /async function assertManualProjectCodeAvailable\(executor, projectCode\)/);
   assert.ok((repository.match(/await assertManualProjectCodeAvailable\(executor, projectCode\);/g) || []).length >= 2);
@@ -370,4 +373,59 @@ test('corporate project view always supplies a usable ProjectName', () => {
     view,
     /COALESCE\s*\(\s*NULLIF\(LTRIM\(RTRIM\(ProjeAdi\)\)[\s\S]*NULLIF\(LTRIM\(RTRIM\(ProjeKodu\)\)[\s\S]*AS ProjectName/i
   );
+});
+
+
+test('ProjectCode is canonicalized across manual writes, corporate sources, sync, and access joins', () => {
+  const repository = read('src/server/repository/sqlAppRepository.js');
+  assert.match(repository, /String\(project\.code\)\.trim\(\)\.toUpperCase\(\)/);
+  assert.match(repository, /WHERE UPPER\(reserved\.ProjectCode\) = @projectCode/);
+  assert.match(repository, /a\.ProjectCode = UPPER\(p\.ProjectCode\)/);
+
+  const sync = read('src/server/repository/corporateQueries.js');
+  assert.match(sync, /source\.ProjectCode = UPPER\(manual\.ProjectCode\)/);
+  assert.match(sync, /SET ProjectCode = source\.ProjectCode/);
+  assert.match(sync, /UPPER\(p\.ProjectCode\) = source\.ProjectCode/);
+
+  const createSql = read('database/MR_Create_Durable_Persistence.sql');
+  assert.match(createSql, /UPPER\(NULLIF\(LTRIM\(RTRIM\(ProjeKodu\)\)/i);
+  const accessView = createSql.match(/CREATE VIEW dbo\.MR_V_CorporateProjectAccess AS([\s\S]*?);'\);/i)?.[0] || '';
+  assert.match(accessView, /UPPER\(NULLIF\(LTRIM\(RTRIM\(projeKodu\)\)/i);
+});
+
+test('corporate sync updates the single default root WBS only while it tracks the prior project name or code', () => {
+  const sync = read('src/server/repository/corporateQueries.js');
+  const rootUpdate = sync.slice(sync.indexOf('UPDATE root'), sync.indexOf('UPDATE target'));
+  assert.match(rootUpdate, /root\.ParentWbsId IS NULL/);
+  assert.match(rootUpdate, /root\.Name = target\.ProjectName OR root\.Name = target\.ProjectCode/);
+  assert.match(rootUpdate, /SELECT COUNT\(\*\) FROM dbo\.MR_WBS roots/);
+  assert.match(rootUpdate, /SET Name = source\.ProjectName/);
+});
+
+test('project-level READ grants appear as PARTIAL session access while FULL access still wins', () => {
+  const effective = deriveEffectiveAccess({
+    isSystemAdmin: false,
+    fullProjectIds: ['full-project'],
+    partialProjectRows: [
+      { projectId: 'read-project', reason: ACCESS_REASONS.MANUAL_GRANT },
+      { projectId: 'full-project', reason: ACCESS_REASONS.MANUAL_GRANT }
+    ],
+    partialTaskRows: []
+  });
+  assert.equal(effective.access.get('read-project')?.accessLevel, 'PARTIAL');
+  assert.equal(effective.access.get('full-project')?.accessLevel, 'FULL');
+
+  const context = read('src/server/authorization/loadAuthorizationContext.js');
+  assert.match(context, /pa\.AccessLevel IN \('FULL', 'READ'\)/);
+  assert.match(context, /partialProjectRows/);
+  assert.match(context, /row\.AccessLevel === 'READ'/);
+});
+
+test('HR02 people directory duplicate ranking has deterministic projected-field tie breakers', () => {
+  const source = read('database/MR_Create_Durable_Persistence.sql');
+  const view = source.match(/CREATE VIEW dbo\.MR_V_PeopleDirectory AS([\s\S]*?);'\);/i)?.[0] || '';
+  const order = view.match(/ROW_NUMBER\(\) OVER \([\s\S]*?\) AS rn/i)?.[0] || '';
+  for (const field of ['kullanici_adi', 'ad_soyad', 'unvan', 'sektor', 'direktorluk', 'mudurluk', 'birim']) {
+    assert.match(order, new RegExp(field, 'i'));
+  }
 });

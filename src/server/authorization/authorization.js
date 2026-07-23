@@ -9,13 +9,20 @@ export const ACCESS_REASONS = Object.freeze({
   ASSIGNEE: 'ASSIGNEE'
 });
 
-export function deriveEffectiveAccess({ isSystemAdmin, fullProjectIds = [], partialTaskRows = [] }) {
+export function deriveEffectiveAccess({ isSystemAdmin, fullProjectIds = [], partialProjectRows = [], partialTaskRows = [] }) {
   const access = new Map();
   if (isSystemAdmin) {
     return { isSystemAdmin: true, access, partialTaskIds: new Set(), fullProjectIds: new Set(fullProjectIds) };
   }
   for (const projectId of fullProjectIds) {
     access.set(projectId, { projectId, accessLevel: 'FULL', reasons: [ACCESS_REASONS.CORPORATE_PROJECT_ROLE] });
+  }
+  for (const row of partialProjectRows) {
+    if (!access.has(row.projectId)) {
+      access.set(row.projectId, { projectId: row.projectId, accessLevel: 'PARTIAL', reasons: [row.reason] });
+    } else if (access.get(row.projectId).accessLevel === 'PARTIAL') {
+      access.get(row.projectId).reasons = [...new Set([...access.get(row.projectId).reasons, row.reason])];
+    }
   }
   const partialTaskIds = new Set();
   for (const row of partialTaskRows) {
