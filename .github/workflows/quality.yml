@@ -20,8 +20,14 @@ jobs:
         with:
           ref: agent/durable-sqlserver-persistence
           fetch-depth: 0
-      - name: Apply fixes
-        run: python .github/scripts/apply-fourth-codex-review-fixes.py
+      - name: Apply identity fix
+        run: python .github/scripts/apply-fourth-codex-review-fixes.py identity
+      - name: Apply sync and schema fixes
+        run: python .github/scripts/apply-fourth-codex-review-fixes.py sync
+      - name: Apply repository fixes
+        run: python .github/scripts/apply-fourth-codex-review-fixes.py repository
+      - name: Add regression tests
+        run: python .github/scripts/apply-fourth-codex-review-fixes.py tests
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
