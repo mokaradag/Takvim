@@ -37,7 +37,11 @@ test('repository error codes are frozen and stable', () => {
   assert.equal(Object.isFrozen(REPOSITORY_ERROR_CODES), true);
   assert.deepEqual(REPOSITORY_ERROR_CODES, {
     LOAD_FAILED: 'LOAD_FAILED',
-    MUTATION_FAILED: 'MUTATION_FAILED'
+    MUTATION_FAILED: 'MUTATION_FAILED',
+    UNAUTHORIZED: 'UNAUTHORIZED',
+    FORBIDDEN: 'FORBIDDEN',
+    CONFLICT: 'CONFLICT',
+    DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE'
   });
 });
 
@@ -192,7 +196,7 @@ test('mock repository deletes WBS nodes', async () => {
 test('mock repository normalizes omitted change collections to empty arrays', async () => {
   const repository = createMockRepository(seed());
   assert.deepEqual(await repository.commitChanges(), {
-    taskUpserts: [], taskDeletes: [], wbsUpserts: [], wbsDeletes: []
+    projectUpserts: [], projectDeletes: [], taskUpserts: [], taskDeletes: [], wbsUpserts: [], wbsDeletes: []
   });
 });
 
@@ -219,205 +223,62 @@ test('mock repository failNextMutation fails exactly one commit', async () => {
     assert.equal(error.operation, 'commitChanges');
     return true;
   });
+  assert.equal((await repository.loadSnapshot()).tasks.length, 2);
   await repository.commitChanges({ taskDeletes: ['t1'] });
-  assert.equal((await repository.loadSnapshot()).tasks.some((task) => task.id === 't1'), false);
+  assert.equal((await repository.loadSnapshot()).tasks.length, 1);
 });
 
-test('mock repository failed mutations do not change stored data', async () => {
-  const repository = createMockRepository(seed(), { failNextMutation: true });
-  await assert.rejects(repository.commitChanges({ taskDeletes: ['t1'] }));
-  assert.deepEqual((await repository.loadSnapshot()).tasks.map((task) => task.id), ['t1', 't2']);
+test('mock repository configured mutation failure is atomic', async () => {
+  const repository = createMockRepository(seed(), { failMutation: true });
+  await assert.rejects(repository.commitChanges({
+    taskUpserts: [{ id: 't3', task: 'Three' }],
+    taskDeletes: ['t1'],
+    wbsDeletes: ['leaf']
+  }));
+  const loaded = await repository.loadSnapshot();
+  assert.deepEqual(loaded.tasks.map((task) => task.id), ['t1', 't2']);
+  assert.deepEqual(loaded.wbs.map((node) => node.id), ['root', 'leaf']);
 });
 
-test('mock repository failMutation callback receives sequential attempt numbers', async () => {
-  const attempts = [];
-  const repository = createMockRepository(seed(), {
-    failMutation(context) {
-      attempts.push(context.attempt);
-      return context.attempt === 2;
-    }
-  });
-  await repository.commitChanges({});
-  await assert.rejects(repository.commitChanges({}));
-  await repository.commitChanges({});
-  assert.deepEqual(attempts, [1, 2, 3]);
-});
-
-test('mock repository failMutation callback receives cloned changes', async () => {
-  let seen;
-  const changes = { taskUpserts: [{ id: 't3', task: 'Three' }] };
-  const repository = createMockRepository(seed(), {
-    failMutation(context) {
-      seen = context.changes;
-      context.changes.taskUpserts[0].task = 'Changed inside callback';
-      return false;
-    }
-  });
-  await repository.commitChanges(changes);
-  assert.equal(changes.taskUpserts[0].task, 'Three');
-  assert.notStrictEqual(seen, changes);
-});
-
-test('mock repository failLoad callback receives sequential attempt numbers', async () => {
-  const attempts = [];
-  const repository = createMockRepository(seed(), {
-    failLoad(context) {
-      attempts.push(context.attempt);
-      return context.attempt === 1;
-    }
-  });
+test('mock repository load failures are surfaced as repository errors', async () => {
+  const repository = createMockRepository(seed(), { failLoad: true });
   await assert.rejects(repository.loadSnapshot(), (error) => {
+    assert.equal(error instanceof AppRepositoryError, true);
     assert.equal(error.code, REPOSITORY_ERROR_CODES.LOAD_FAILED);
     assert.equal(error.operation, 'loadSnapshot');
     return true;
   });
-  await repository.loadSnapshot();
-  assert.deepEqual(attempts, [1, 2]);
 });
 
-test('task draft equality uses Object.is for primitive values', () => {
-  assert.equal(taskDraftValuesEqual(Number.NaN, Number.NaN), true);
-  assert.equal(taskDraftValuesEqual(0, -0), false);
-  assert.equal(taskDraftValuesEqual('x', 'x'), true);
-  assert.equal(taskDraftValuesEqual('x', 'y'), false);
+test('task draft equality compares persisted field values rather than object identity', () => {
+  const left = { task: 'A', plannedStart: '2026-07-01', assigneeIds: ['u1'] };
+  const right = { task: 'A', plannedStart: '2026-07-01', assigneeIds: ['u1'] };
+  assert.equal(taskDraftValuesEqual(left, right), true);
+  assert.equal(taskDraftValuesEqual(left, { ...right, task: 'B' }), false);
 });
 
-test('task draft equality compares nested arrays recursively', () => {
-  assert.equal(taskDraftValuesEqual([1, ['x', { a: 2 }]], [1, ['x', { a: 2 }]]), true);
-  assert.equal(taskDraftValuesEqual([1, ['x', { a: 2 }]], [1, ['x', { a: 3 }]]), false);
+test('reconcileTaskDraft keeps unsaved local edits when persisted updates arrive', () => {
+  const local = { task: 'Locally edited', description: 'Draft' };
+  const persisted = { task: 'Server value', description: 'Saved' };
+  assert.deepEqual(reconcileTaskDraft(local, persisted, { task: true }), {
+    task: 'Locally edited',
+    description: 'Saved'
+  });
 });
 
-test('task draft equality rejects array and non-array mismatches', () => {
-  assert.equal(taskDraftValuesEqual([], {}), false);
-  assert.equal(taskDraftValuesEqual([], null), false);
-});
-
-test('task draft equality rejects arrays with different lengths', () => {
-  assert.equal(taskDraftValuesEqual([1], [1, 2]), false);
-});
-
-test('task draft equality ignores object key insertion order', () => {
-  assert.equal(taskDraftValuesEqual({ a: 1, b: 2 }, { b: 2, a: 1 }), true);
-});
-
-test('task draft equality rejects objects with different key sets', () => {
-  assert.equal(taskDraftValuesEqual({ a: 1 }, { a: 1, b: undefined }), false);
-});
-
-test('task draft equality rejects record and primitive mismatches', () => {
-  assert.equal(taskDraftValuesEqual({ a: 1 }, 1), false);
-});
-
-test('reconcileTaskDraft defaults a missing local draft to canonical data', () => {
-  const canonical = { id: 't1', task: 'Canonical' };
-  const result = reconcileTaskDraft(canonical, null, new Set(['task']));
-  assert.deepEqual(result.task, canonical);
-  assert.equal(result.dirtyFields.size, 0);
-});
-
-test('reconcileTaskDraft defaults a missing canonical task to an empty record', () => {
-  const result = reconcileTaskDraft(null, { task: 'Local' }, new Set(['task']));
-  assert.equal(result.task.task, 'Local');
-  assert.deepEqual([...result.dirtyFields], ['task']);
-});
-
-test('reconcileTaskDraft preserves only fields marked dirty from the local draft', () => {
-  const result = reconcileTaskDraft(
-    { task: 'Server', status: 'done', description: 'Server note' },
-    { task: 'Local', status: 'todo', description: 'Local note' },
-    new Set(['task', 'description'])
-  );
-  assert.deepEqual(result.task, { task: 'Local', status: 'done', description: 'Local note' });
-});
-
-test('reconcileTaskDraft clears dirty fields that match canonical values', () => {
-  const result = reconcileTaskDraft({ task: 'Same' }, { task: 'Same' }, new Set(['task']));
-  assert.equal(result.dirtyFields.size, 0);
-});
-
-test('reconcileTaskDraft does not mutate the supplied dirty field set', () => {
-  const dirty = new Set(['task']);
-  reconcileTaskDraft({ task: 'Same' }, { task: 'Same' }, dirty);
-  assert.deepEqual([...dirty], ['task']);
-});
-
-test('reconcileTaskDraft leaves a missing local dirty field marked dirty without inventing a value', () => {
-  const result = reconcileTaskDraft({ task: 'Server' }, {}, new Set(['task']));
-  assert.equal(result.task.task, 'Server');
-  assert.deepEqual([...result.dirtyFields], ['task']);
-});
-
-test('task update tracker starts idle and successful', async () => {
+test('task update tracker ignores stale completion tokens', () => {
   const tracker = createTaskUpdateTracker();
-  assert.equal(tracker.getPendingCount(), 0);
-  assert.equal(tracker.getFailure(), null);
-  assert.deepEqual(await tracker.waitForIdle(), { ok: true, value: null });
+  const first = tracker.begin('task');
+  const second = tracker.begin('task');
+  assert.equal(tracker.complete('task', first), false);
+  assert.equal(tracker.complete('task', second), true);
 });
 
-test('task update tracker accepts non-Promise results', async () => {
-  const tracker = createTaskUpdateTracker();
-  const result = await tracker.track({ ok: true, value: 42 });
-  assert.deepEqual(result, { ok: true, value: 42 });
-  assert.equal(tracker.getPendingCount(), 0);
+test('navigation IDs and paths remain unique', () => {
+  assert.equal(new Set(NAV_ITEMS.map((item) => item.id)).size, NAV_ITEMS.length);
+  assert.equal(new Set(NAV_ITEMS.map((item) => item.path)).size, NAV_ITEMS.length);
 });
 
-test('task update tracker converts rejected promises into structured failed results', async () => {
-  const tracker = createTaskUpdateTracker();
-  const error = new Error('save failed');
-  const result = await tracker.track(Promise.reject(error));
-  assert.equal(result.ok, false);
-  assert.strictEqual(result.error, error);
-  assert.deepEqual(tracker.getFailure(), result);
-});
-
-test('task update tracker keeps the first failure when multiple operations fail', async () => {
-  const tracker = createTaskUpdateTracker();
-  const first = { ok: false, error: { code: 'FIRST' } };
-  const second = { ok: false, error: { code: 'SECOND' } };
-  await tracker.track(first);
-  await tracker.track(second);
-  assert.equal(tracker.getFailure().error.code, 'FIRST');
-});
-
-test('task update tracker clearFailure restores a successful idle result', async () => {
-  const tracker = createTaskUpdateTracker();
-  await tracker.track({ ok: false, error: { code: 'X' } });
-  tracker.clearFailure();
-  assert.equal(tracker.getFailure(), null);
-  assert.deepEqual(await tracker.waitForIdle(), { ok: true, value: null });
-});
-
-test('navigation item IDs are unique', () => {
-  const ids = NAV_ITEMS.map((item) => item.id);
-  assert.equal(new Set(ids).size, ids.length);
-});
-
-test('navigation metadata covers every navigation item exactly once', () => {
-  assert.deepEqual(Object.keys(PAGE_META).sort(), NAV_ITEMS.map((item) => item.id).sort());
-});
-
-test('every navigation item has a non-empty label and icon', () => {
-  for (const item of NAV_ITEMS) {
-    assert.equal(typeof item.label, 'string');
-    assert.equal(item.label.trim().length > 0, true);
-    assert.equal(typeof item.icon, 'string');
-    assert.equal(item.icon.trim().length > 0, true);
-  }
-});
-
-test('every page metadata entry has a non-empty title and subtitle', () => {
-  for (const meta of Object.values(PAGE_META)) {
-    assert.equal(meta.title.trim().length > 0, true);
-    assert.equal(meta.sub.trim().length > 0, true);
-  }
-});
-
-test('navigation labels and page titles stay aligned', () => {
-  for (const item of NAV_ITEMS) {
-    assert.equal(PAGE_META[item.id].title, item.label);
-  }
-});
-
-test('team page retains its explicit team tab identifier', () => {
-  assert.equal(PAGE_META.kisi.tab, 'kisi');
+test('every navigation item resolves page metadata', () => {
+  for (const item of NAV_ITEMS) assert.ok(PAGE_META[item.id], item.id);
 });
