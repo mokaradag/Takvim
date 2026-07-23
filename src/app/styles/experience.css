@@ -49,6 +49,26 @@
 .mode-picker-points > span { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 12px; }
 .mode-picker-points svg { color: var(--status-done); }
 .mode-picker-action { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--accent); font-size: 12.5px; font-weight: 750; }
+.data-mode-picker { width: min(900px, 96vw); }
+.data-mode-indicator {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: var(--z-chrome);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--bg-elev) 94%, transparent);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(8px);
+}
+.data-mode-indicator strong { font-size: 10px; letter-spacing: .1em; color: var(--text-muted); }
+.data-mode-indicator.data-mode-demo strong { color: #f59e0b; }
+.data-mode-indicator button { border: 0; border-radius: var(--r-pill); padding: 4px 8px; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 750; }
+.data-mode-indicator button:disabled { opacity: .6; cursor: wait; }
 
 /* Ayarlar çalışma modu kartları. */
 .settings-mode-section { padding: 22px; border: 1px solid var(--chrome-border); border-radius: var(--r-xl); background: linear-gradient(135deg, var(--chrome-bg-soft), var(--bg-elev)); }
@@ -116,4 +136,5 @@
   .help-tip-grid { grid-template-columns: 1fr; }
   .mode-picker-grid { grid-template-columns: 1fr; }
   .settings-mode-heading { flex-direction: column; }
+  .data-mode-indicator { right: 10px; bottom: 10px; }
 }
