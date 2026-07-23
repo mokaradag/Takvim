@@ -2,22 +2,17 @@
    Loaded after followup-fixes.css so these rules are the final visual contract. */
 
 /* ── Topbar emblem ─────────────────────────────────────────────
-   Keep the decorative heptagon in a dedicated viewport near the top-right
-   actions. Explicit left/right values are important: older .hept-topbar rules
-   set a left offset, which previously won over the new right offset and pushed
-   the emblem beside the page title. */
+   The emblem is clipped by the complete topbar, while the 320px rotating SVG
+   is pushed beyond both the top and right edges. Its geometric center therefore
+   sits outside the visible application chrome and only a small lower-left slice
+   of the heptagon can enter the top-right corner while it rotates. */
 .topbar {
   overflow: hidden;
 }
 
 .topbar-emblem-clip {
   position: absolute !important;
-  top: 0 !important;
-  right: 96px !important;
-  bottom: auto !important;
-  left: auto !important;
-  width: 186px !important;
-  height: 56px !important;
+  inset: 0 !important;
   overflow: hidden !important;
   pointer-events: none;
   z-index: 1;
@@ -27,20 +22,20 @@
   position: absolute !important;
   display: block !important;
   visibility: visible !important;
-  top: 50% !important;
-  right: -30px !important;
+  top: -205px !important;
+  right: -205px !important;
   bottom: auto !important;
   left: auto !important;
-  width: 172px !important;
-  height: 172px !important;
-  transform: translateY(-50%) !important;
-  opacity: 0.50 !important;
-  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 28%, transparent));
+  width: 320px !important;
+  height: 320px !important;
+  transform: none !important;
+  opacity: 0.42 !important;
+  filter: drop-shadow(0 0 7px color-mix(in oklab, var(--accent) 24%, transparent));
 }
 
 .theme-light .topbar-emblem-clip .hept-topbar {
-  opacity: 0.30 !important;
-  filter: drop-shadow(0 0 7px color-mix(in oklab, var(--accent) 20%, transparent));
+  opacity: 0.24 !important;
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 18%, transparent));
 }
 
 /* ── Selected project identity ─────────────────────────────────
@@ -172,17 +167,6 @@
 }
 
 @media (max-width: 1080px) {
-  .topbar-emblem-clip {
-    right: 88px !important;
-    width: 160px !important;
-  }
-
-  .topbar-emblem-clip .hept-topbar {
-    right: -34px !important;
-    width: 154px !important;
-    height: 154px !important;
-  }
-
   .topbar-project-context {
     max-width: 44vw;
   }
@@ -214,17 +198,6 @@
   .topbar-project-context strong.topbar-project-name {
     padding: 0 7px 0 5px;
     font-size: 12.5px;
-  }
-
-  .topbar-emblem-clip {
-    right: 72px !important;
-    width: 128px !important;
-  }
-
-  .topbar-emblem-clip .hept-topbar {
-    right: -38px !important;
-    width: 132px !important;
-    height: 132px !important;
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
