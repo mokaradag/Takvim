@@ -20,17 +20,17 @@ test('final topbar and dashboard polish stylesheet is loaded after earlier fix l
   assert.ok(polishIndex > followupIndex, 'final polish layer must load after followup-fixes.css');
 });
 
-test('topbar keeps the rotating heptagon in a visible clipped viewport on every application page', () => {
+test('topbar heptagon explicitly clears legacy left offsets and stays near the right actions', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/topbar-dashboard-polish.css');
 
   assert.match(shell, /<header className="topbar">[\s\S]*?<div className="topbar-emblem-clip"><Heptagon variant="hept-topbar" \/><\/div>/);
-  assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*width:\s*214px;[^}]*height:\s*100%;[^}]*overflow:\s*hidden;[^}]*z-index:\s*1;/s);
-  assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*display:\s*block !important;[^}]*visibility:\s*visible !important;[^}]*top:\s*50% !important;[^}]*right:\s*-34px !important;[^}]*width:\s*176px !important;[^}]*height:\s*176px !important;/s);
-  assert.match(css, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*opacity:\s*0\.34 !important;/s);
+  assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*position:\s*absolute !important;[^}]*right:\s*96px !important;[^}]*left:\s*auto !important;[^}]*width:\s*186px !important;[^}]*height:\s*56px !important;/s);
+  assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*right:\s*-30px !important;[^}]*left:\s*auto !important;[^}]*width:\s*172px !important;[^}]*height:\s*172px !important;[^}]*transform:\s*translateY\(-50%\) !important;/s);
+  assert.match(css, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*opacity:\s*0\.30 !important;/s);
 });
 
-test('selected project code and name form one aligned theme-safe identity capsule', () => {
+test('selected project identity is forced to the true horizontal center instead of the flex spacer', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/topbar-dashboard-polish.css');
 
@@ -38,19 +38,19 @@ test('selected project code and name form one aligned theme-safe identity capsul
   assert.match(shell, /topbar-project-separator/);
   assert.match(shell, /topbar-project-name/);
 
-  assert.match(css, /\.topbar-project-context\s*\{[^}]*height:\s*34px;[^}]*gap:\s*0;[^}]*border-radius:\s*var\(--r-pill\);[^}]*backdrop-filter:\s*blur\(10px\);/s);
-  assert.match(css, /\.topbar-project-code\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*color:\s*color-mix\(in oklab, var\(--text-muted\) 88%, var\(--text\)\);/s);
-  assert.match(css, /\.topbar-project-separator\s*\{[^}]*width:\s*1px;[^}]*height:\s*16px;[^}]*font-size:\s*0;/s);
-  assert.match(css, /\.topbar-project-context strong\.topbar-project-name\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 82%, var\(--text\)\);[^}]*line-height:\s*1;/s);
-  assert.match(css, /\.theme-light \.topbar-project-context strong\.topbar-project-name\s*\{[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 72%, var\(--text\)\);/s);
+  assert.match(css, /\.topbar-project-context\s*\{[^}]*position:\s*absolute !important;[^}]*right:\s*auto !important;[^}]*left:\s*50% !important;[^}]*transform:\s*translate\(-50%, -50%\) !important;[^}]*height:\s*32px;/s);
+  assert.match(css, /\.topbar-project-code\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*color:\s*var\(--text-muted\);/s);
+  assert.match(css, /\.topbar-project-separator\s*\{[^}]*width:\s*1px;[^}]*height:\s*15px;[^}]*font-size:\s*0;/s);
+  assert.match(css, /\.topbar-project-context strong\.topbar-project-name\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 78%, var\(--text\)\);[^}]*line-height:\s*1;/s);
+  assert.match(css, /\.theme-light \.topbar-project-context strong\.topbar-project-name\s*\{[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 68%, var\(--text\)\);/s);
 });
 
-test('Durum dağılımı uses vertical space for a larger donut and a compact label-count legend', () => {
+test('Durum dağılımı enlarges the actual donut SVG to 214px and keeps counts close to labels', () => {
   const css = read('src/app/topbar-dashboard-polish.css');
 
-  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*display:\s*grid !important;[^}]*grid-template-columns:\s*minmax\(168px, 1fr\) minmax\(132px, 188px\);[^}]*min-height:\s*214px;/s);
-  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child\s*\{[^}]*width:\s*clamp\(174px, 13vw, 190px\);[^}]*height:\s*clamp\(174px, 13vw, 190px\);/s);
-  assert.match(css, /svg\[viewBox='-10 -10 170 170'\]\s*\{[^}]*width:\s*100% !important;[^}]*height:\s*100% !important;/s);
-  assert.match(css, /\.content-ozet \.donut-leg-row\s*\{[^}]*display:\s*grid !important;[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*12px !important;[^}]*max-width:\s*none;/s);
-  assert.match(css, /@media \(max-width: 1280px\)[\s\S]*?> \.card:first-child,[\s\S]*?> \.card:nth-child\(2\) \{\s*grid-column:\s*1 \/ -1;/s);
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*display:\s*grid !important;[^}]*grid-template-columns:\s*minmax\(214px, 1fr\) minmax\(126px, 150px\);[^}]*min-height:\s*236px;/s);
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child\s*\{[^}]*width:\s*214px !important;[^}]*height:\s*214px !important;/s);
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child > svg\s*\{[^}]*width:\s*214px !important;[^}]*height:\s*214px !important;/s);
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > \.col\s*\{[^}]*max-width:\s*150px;/s);
+  assert.match(css, /\.content-ozet \.donut-leg-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*8px !important;/s);
 });
