@@ -68,7 +68,7 @@ jobs:
       - name: Run durable SQL contract tests
         run: node --test test/durable-persistence-sql.test.mjs
       - name: Run authorization tests
-        run: node --test test/authorization.test.mjs
+        run: node --test test/durable-authorization.test.mjs
       - name: Run automated tests
         run: npm test -- --test-concurrency=1
       - name: Build production application
