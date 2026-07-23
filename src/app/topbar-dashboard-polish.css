@@ -1,57 +1,74 @@
-/* MERGEN Rota · screenshot-driven topbar and Özet polish
+/* MERGEN Rota · topbar and Özet visual corrections
    Loaded after followup-fixes.css so these rules are the final visual contract. */
 
 /* ── Topbar emblem ─────────────────────────────────────────────
-   Keep a dedicated, clipped viewport at the far-right edge. The previous
-   220px motif was positioned so far outside the 56px bar that the visible
-   polygon strokes could disappear depending on the generated geometry. */
+   The emblem is clipped by its own complete-topbar overlay, while the 320px
+   rotating SVG is pushed beyond both the top and right edges. The topbar itself
+   must keep visible overflow so menus such as Dışa aktar can open below it. */
+.topbar {
+  overflow: visible;
+}
+
 .topbar-emblem-clip {
-  inset: 0 0 0 auto;
-  width: 214px;
-  height: 100%;
-  overflow: hidden;
+  position: absolute !important;
+  inset: 0 !important;
+  overflow: hidden !important;
   pointer-events: none;
   z-index: 1;
-  -webkit-mask-image: linear-gradient(to left, #000 0%, #000 72%, transparent 100%);
-  mask-image: linear-gradient(to left, #000 0%, #000 72%, transparent 100%);
 }
 
 .topbar-emblem-clip .hept-topbar {
   position: absolute !important;
   display: block !important;
   visibility: visible !important;
-  top: 50% !important;
-  right: -34px !important;
-  width: 176px !important;
-  height: 176px !important;
-  transform: translateY(-50%);
-  opacity: 0.56 !important;
-  filter: drop-shadow(0 0 10px color-mix(in oklab, var(--accent) 34%, transparent));
+  top: -190px !important;
+  right: -205px !important;
+  bottom: auto !important;
+  left: auto !important;
+  width: 320px !important;
+  height: 320px !important;
+  transform: none !important;
+  opacity: 0.42 !important;
+  filter: drop-shadow(0 0 7px color-mix(in oklab, var(--accent) 24%, transparent));
 }
 
 .theme-light .topbar-emblem-clip .hept-topbar {
-  opacity: 0.34 !important;
-  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 24%, transparent));
+  opacity: 0.24 !important;
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 18%, transparent));
+}
+
+/* The settings preference already toggles body.no-emblem. The explicit
+   !important rule is required here because this final polish layer forces the
+   topbar emblem visible with display:block !important above. */
+body.no-emblem .topbar-emblem-clip .hept-topbar {
+  display: none !important;
+  visibility: hidden !important;
 }
 
 /* ── Selected project identity ─────────────────────────────────
-   Present code and name as one compact, centered identity capsule. This
-   keeps the two text layers on the same visual axis and preserves contrast
-   in both themes without competing with the page title or actions. */
+   Force the project identity to the true horizontal center of the topbar.
+   The explicit positioning below avoids it participating in the flex row and
+   being pushed toward the export action by the spacer. */
 .topbar-project-context {
-  min-height: 34px;
-  height: 34px;
-  max-width: min(46vw, 720px);
+  position: absolute !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 4 !important;
+  min-height: 32px;
+  height: 32px;
+  max-width: min(42vw, 620px);
   gap: 0;
   padding: 3px;
-  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--border));
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, var(--border));
   border-radius: var(--r-pill);
-  background: color-mix(in oklab, var(--bg-elev) 88%, transparent);
-  box-shadow:
-    0 1px 0 color-mix(in oklab, white 8%, transparent) inset,
-    0 6px 18px rgb(0 0 0 / 0.10);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: color-mix(in oklab, var(--bg-elev) 92%, transparent);
+  box-shadow: 0 1px 0 color-mix(in oklab, white 7%, transparent) inset;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
 }
 
 .topbar-project-code {
@@ -59,24 +76,24 @@
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  padding: 0 9px;
+  padding: 0 8px;
   border-radius: calc(var(--r-pill) - 3px);
-  background: color-mix(in oklab, var(--text) 6%, transparent);
-  color: color-mix(in oklab, var(--text-muted) 88%, var(--text));
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 720;
   line-height: 1;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.03em;
   white-space: nowrap;
 }
 
 .topbar-project-separator {
   width: 1px;
-  height: 16px;
+  height: 15px;
   margin: 0 3px;
   overflow: hidden;
-  background: color-mix(in oklab, var(--accent) 26%, var(--border));
+  background: color-mix(in oklab, var(--accent) 24%, var(--border));
   color: transparent;
   font-size: 0;
   flex: 0 0 1px;
@@ -88,25 +105,23 @@
   align-items: center;
   min-width: 0;
   max-width: 100%;
-  padding: 0 10px 0 7px;
-  color: color-mix(in oklab, var(--accent) 82%, var(--text));
-  font-size: 15.5px;
-  font-weight: 780;
+  padding: 0 9px 0 6px;
+  color: color-mix(in oklab, var(--accent) 78%, var(--text));
+  font-size: 14.5px;
+  font-weight: 760;
   line-height: 1;
-  letter-spacing: -0.012em;
+  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .theme-light .topbar-project-context strong.topbar-project-name {
-  color: color-mix(in oklab, var(--accent) 72%, var(--text));
+  color: color-mix(in oklab, var(--accent) 68%, var(--text));
 }
 
 /* ── Özet · Durum dağılımı ─────────────────────────────────────
-   Use the card's vertical room instead of stretching the legend horizontally.
-   The donut gets a real layout size (not only a visual SVG override), while
-   the legend is deliberately narrower so labels and counts read as one unit. */
+   Restored exactly to the layout that existed at the start of PR #28. */
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
   display: grid !important;
   grid-template-columns: minmax(168px, 1fr) minmax(132px, 188px);
@@ -170,31 +185,27 @@
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1080px) {
   .topbar-project-context {
     max-width: 44vw;
-    height: 32px;
-    min-height: 32px;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar-project-context {
+    max-width: 46vw;
+    height: 30px;
+    min-height: 30px;
   }
 
   .topbar-project-code {
-    padding: 0 7px;
-    font-size: 10px;
+    padding: 0 6px;
+    font-size: 9.5px;
   }
 
   .topbar-project-context strong.topbar-project-name {
-    padding: 0 8px 0 5px;
-    font-size: 13.5px;
-  }
-
-  .topbar-emblem-clip {
-    width: 150px;
-  }
-
-  .topbar-emblem-clip .hept-topbar {
-    right: -42px !important;
-    width: 148px !important;
-    height: 148px !important;
+    padding: 0 7px 0 5px;
+    font-size: 12.5px;
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
