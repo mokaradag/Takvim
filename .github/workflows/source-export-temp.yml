@@ -1,0 +1,23 @@
+name: Temporary source export
+
+on:
+  push:
+    branches:
+      - agent/source-export-temp
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Upload source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: takvim-source
+          path: .
+          include-hidden-files: true
+          retention-days: 1
