@@ -41,6 +41,15 @@ test('Basit Mod sorumlu seçimi büyük kişi listeleri için arama ve sınırl�
   assert.match(simple, /İlk \{MAX_VISIBLE_PEOPLE\} sonuç gösteriliyor/);
 });
 
+test('sorumlu aramasında Enter tuşu hızlı görev formunu yanlışlıkla göndermez', () => {
+  const simple = read('src/features/simple/SimpleModePanel.jsx');
+
+  assert.match(
+    simple,
+    /aria-label="Sorumlu ara"[\s\S]*?onKeyDown=\{\(event\) => \{ if \(event\.key === 'Enter'\) event\.preventDefault\(\); \}\}/
+  );
+});
+
 test('üst çubukta dönen yedigen görünür alana taşınır ve proje kodu ile adı ayrıştırılır', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/followup-fixes.css');
@@ -54,14 +63,27 @@ test('üst çubukta dönen yedigen görünür alana taşınır ve proje kodu ile
   assert.match(css, /\.topbar-project-context strong\.topbar-project-name\s*\{[^}]*color:\s*var\(--text\)/s);
 });
 
-test('Özet kartları ortak üç kolon izinde hizalanır ve durum grafiği büyüyüp dikey ortalanır', () => {
+test('Özet hizalama stilleri yalnızca trend ve durum satırını hedefler', () => {
   const css = read('src/app/followup-fixes.css');
+  const dashboard = read('src/features/dashboard/DashboardView.jsx');
 
+  assert.match(css, /grid-template-columns: 1fr 1fr'\]:has\(\.donut-leg-row\)/);
+  assert.doesNotMatch(css, /grid-template-columns: 1fr 1fr'\]\s*> \.card:first-child/);
+  assert.match(dashboard, /Weekly snapshot \+ effort mini[\s\S]*?gridTemplateColumns: '1fr 1fr'/);
   assert.match(css, /grid-template-columns:\s*minmax\(0, 1\.1fr\) minmax\(0, 0\.9fr\) minmax\(0, 1fr\) !important;/);
   assert.match(css, /> \.card:first-child\s*\{\s*grid-column:\s*1 \/ 3;/s);
   assert.match(css, /> \.card:nth-child\(2\)\s*\{[^}]*grid-column:\s*3;/s);
   assert.match(css, /svg\[viewBox='-10 -10 170 170'\]\s*\{[^}]*width:\s*180px;[^}]*height:\s*180px;/s);
   assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*align-items:\s*center !important;/s);
+});
+
+test('orta genişlikte trend ve durum kartlarının ikisi de tam satıra yayılır', () => {
+  const css = read('src/app/followup-fixes.css');
+
+  assert.match(
+    css,
+    /@media \(max-width: 1080px\)[\s\S]*?:has\(\.donut-leg-row\) > \.card:first-child,[\s\S]*?:has\(\.donut-leg-row\) > \.card:nth-child\(2\) \{\s*grid-column: 1 \/ -1;/
+  );
 });
 
 test('son katman düzeltme stilleri temel stillerden sonra yüklenir ve rehber yeni Basit Mod akışını açıklar', () => {
