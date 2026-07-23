@@ -63,6 +63,75 @@ function normalizeActualChanges(changes = {}) {
   };
 }
 
+function collectClientIds(changes = {}) {
+  const map = new Map();
+  for (const collection of [changes.projectUpserts, changes.wbsUpserts, changes.taskUpserts]) {
+    for (const entity of collection || []) {
+      const original = entity?.id == null ? null : String(entity.id);
+      const actual = toActualUuid(original);
+      if (original && actual && original !== actual) map.set(actual, original);
+    }
+  }
+  return map;
+}
+
+function restoreClientId(value, map) {
+  if (value == null || value === '') return value;
+  return map.get(toActualUuid(value)) || value;
+}
+
+function restoreDeleteId(entry, map) {
+  return typeof entry === 'string'
+    ? restoreClientId(entry, map)
+    : { ...entry, id: restoreClientId(entry?.id, map) };
+}
+
+export function restoreActualCommitIds(body, changes = {}) {
+  if (!body || typeof body !== 'object') return body;
+  const map = collectClientIds(changes);
+  if (!map.size) return body;
+
+  const restored = { ...body };
+  if (Array.isArray(body.projectUpserts)) {
+    restored.projectUpserts = body.projectUpserts.map((project) => ({
+      ...project,
+      id: restoreClientId(project.id, map),
+      calendarId: restoreClientId(project.calendarId, map)
+    }));
+  }
+  if (Array.isArray(body.projectDeletes)) {
+    restored.projectDeletes = body.projectDeletes.map((entry) => restoreDeleteId(entry, map));
+  }
+  if (Array.isArray(body.wbsUpserts)) {
+    restored.wbsUpserts = body.wbsUpserts.map((node) => ({
+      ...node,
+      id: restoreClientId(node.id, map),
+      projectId: restoreClientId(node.projectId, map),
+      parentId: restoreClientId(node.parentId, map)
+    }));
+  }
+  if (Array.isArray(body.wbsDeletes)) {
+    restored.wbsDeletes = body.wbsDeletes.map((entry) => restoreDeleteId(entry, map));
+  }
+  if (Array.isArray(body.taskUpserts)) {
+    restored.taskUpserts = body.taskUpserts.map((task) => ({
+      ...task,
+      id: restoreClientId(task.id, map),
+      projectId: restoreClientId(task.projectId, map),
+      wbsId: restoreClientId(task.wbsId, map),
+      calendarId: restoreClientId(task.calendarId, map),
+      deps: (task.deps || []).map((dependency) => ({
+        ...dependency,
+        predecessorId: restoreClientId(dependency.predecessorId, map)
+      }))
+    }));
+  }
+  if (Array.isArray(body.taskDeletes)) {
+    restored.taskDeletes = body.taskDeletes.map((entry) => restoreDeleteId(entry, map));
+  }
+  return restored;
+}
+
 function normalizeActualResponse(body) {
   if (!body || typeof body !== 'object') return body;
   if (Array.isArray(body.tasks)) {
@@ -102,11 +171,12 @@ export function createApiRepository({ basePath = '/api/mergen-rota' } = {}) {
     loadSnapshot() {
       return requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
     },
-    commitChanges(changes) {
-      return requestJson(`${basePath}/commit`, {
+    async commitChanges(changes) {
+      const committed = await requestJson(`${basePath}/commit`, {
         method: 'POST',
         body: JSON.stringify({ changes: normalizeActualChanges(changes) })
       }, 'commitChanges');
+      return restoreActualCommitIds(committed, changes);
     },
     async flush() {}
   };
