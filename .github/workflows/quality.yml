@@ -28,29 +28,43 @@ jobs:
         run: python .github/scripts/apply-fourth-codex-review-fixes.py repository
       - name: Add regression tests
         run: python .github/scripts/apply-fourth-codex-review-fixes.py tests
-      - name: Refresh prior corporate sync regression
+      - name: Refresh prior regression assertions
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('test/codex-p2-regressions.test.mjs')
           text = path.read_text()
-          old = """test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
+
+          old_sync = """test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
             const source = read('src/server/repository/corporateQueries.js');
             assert.match(
               source,
               /NOT EXISTS \\(SELECT 1 FROM dbo\\.MR_Projects p WITH \\(UPDLOCK, HOLDLOCK\\) WHERE p\\.ProjectCode = source\\.ProjectCode\\)/
             );
           });"""
-          new = """test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
+          new_sync = """test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
             const source = read('src/server/repository/corporateQueries.js');
             assert.match(
               source,
               /NOT EXISTS \\(\\s*SELECT 1\\s*FROM dbo\\.MR_Projects p WITH \\(UPDLOCK, HOLDLOCK\\)\\s*WHERE p\\.SourceType = 'CORPORATE' AND p\\.ProjectCode = source\\.ProjectCode\\s*\\)/s
             );
           });"""
-          if old not in text:
+          if old_sync not in text:
               raise SystemExit('prior corporate sync regression block not found')
-          path.write_text(text.replace(old, new, 1))
+          text = text.replace(old_sync, new_sync, 1)
+
+          old_name = """test('corporate project view always supplies a usable ProjectName', () => {
+            const source = read('database/MR_Create_Durable_Persistence.sql');
+            assert.ok(source.includes(\"COALESCE(NULLIF(LTRIM(RTRIM(ProjeAdi)), N''''), NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectName\"));
+          });"""
+          new_name = """test('corporate project view always supplies a usable ProjectName', () => {
+            const source = read('database/MR_Create_Durable_Persistence.sql');
+            const view = source.match(/CREATE VIEW dbo\\.MR_V_CorporateProjects AS([\\s\\S]*?)GROUP BY/i)?.[0] || '';
+            assert.match(view, /COALESCE\\s*\\(\\s*NULLIF\\(LTRIM\\(RTRIM\\(ProjeAdi\\)\\)[\\s\\S]*NULLIF\\(LTRIM\\(RTRIM\\(ProjeKodu\\)\\)[\\s\\S]*AS ProjectName/i);
+          });"""
+          if old_name not in text:
+              raise SystemExit('corporate ProjectName regression block not found')
+          path.write_text(text.replace(old_name, new_name, 1))
           PY
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
