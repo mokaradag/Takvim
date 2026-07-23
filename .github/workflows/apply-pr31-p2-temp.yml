@@ -1,0 +1,63 @@
+name: Apply PR31 Codex P2 fixes
+
+on:
+  push:
+    branches:
+      - agent/pr31-p2-fix-temp
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout helper branch
+        uses: actions/checkout@v4
+
+      - name: Preserve patch and switch to PR branch
+        shell: bash
+        run: |
+          cp pr31-p2-fixes.patch /tmp/pr31-p2-fixes.patch
+          git fetch origin agent/ui-style-consolidation-hardening
+          git switch -C agent/ui-style-consolidation-hardening origin/agent/ui-style-consolidation-hardening
+          git apply --check /tmp/pr31-p2-fixes.patch
+          git apply /tmp/pr31-p2-fixes.patch
+          git diff --check
+
+      - name: Set up Node.js 24.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run focused P2 regression tests
+        run: node --test test/pr31-codex-p2-regressions.test.mjs
+
+      - name: Run full test suite
+        run: npm test -- --test-concurrency=1
+
+      - name: Build production application
+        run: npm run build
+
+      - name: Commit fixes to PR31 branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/app/styles/components.css \
+                  src/components/DateFilterableTH.jsx \
+                  src/components/ui-extras.jsx \
+                  src/features/gantt/GanttView.jsx \
+                  src/features/gantt/WbsGanttView.jsx \
+                  src/features/tasks/TasksView.jsx \
+                  test/pr31-codex-p2-regressions.test.mjs
+          git commit -m "Fix Codex P2 UI regressions"
+          git push origin HEAD:agent/ui-style-consolidation-hardening
