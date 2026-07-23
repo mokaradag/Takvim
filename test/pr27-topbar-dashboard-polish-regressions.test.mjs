@@ -20,7 +20,7 @@ test('final topbar and dashboard polish stylesheet is loaded after earlier fix l
   assert.ok(polishIndex > followupIndex, 'final polish layer must load after followup-fixes.css');
 });
 
-test('topbar shows only a small heptagon slice without clipping header popovers', () => {
+test('topbar shows only a small lower heptagon slice without clipping header popovers', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/topbar-dashboard-polish.css');
 
@@ -32,12 +32,22 @@ test('topbar shows only a small heptagon slice without clipping header popovers'
   assert.doesNotMatch(css, /\.topbar\s*\{[^}]*overflow:\s*hidden;/s);
   assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*position:\s*absolute !important;[^}]*inset:\s*0 !important;[^}]*overflow:\s*hidden !important;/s);
 
-  assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*top:\s*-205px !important;[^}]*right:\s*-205px !important;[^}]*left:\s*auto !important;[^}]*width:\s*320px !important;[^}]*height:\s*320px !important;[^}]*transform:\s*none !important;/s);
+  // The vertical center is moved 15px south while the horizontal center stays put.
+  assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*top:\s*-190px !important;[^}]*right:\s*-205px !important;[^}]*left:\s*auto !important;[^}]*width:\s*320px !important;[^}]*height:\s*320px !important;[^}]*transform:\s*none !important;/s);
   assert.match(css, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*opacity:\s*0\.24 !important;/s);
 
-  // With a 320px square placed at -205px from both edges, its center is
-  // 45px outside the visible top and right edges: -205 + 320 / 2 = -45.
+  // The rotation center remains outside the visible header, but is now closer
+  // to the top edge: -190 + 320 / 2 = -30px; right remains -45px.
+  assert.ok(-190 + 320 / 2 < 0);
   assert.ok(-205 + 320 / 2 < 0);
+});
+
+test('marka amblemi preference hides the topbar emblem as well as the sidebar emblem', () => {
+  const tweaks = read('src/hooks/useApplyTweaks.js');
+  const css = read('src/app/topbar-dashboard-polish.css');
+
+  assert.match(tweaks, /classList\.toggle\('no-emblem',\s*!tweaks\.showEmblem\)/);
+  assert.match(css, /body\.no-emblem \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*display:\s*none !important;[^}]*visibility:\s*hidden !important;/s);
 });
 
 test('selected project identity is forced to the true horizontal center instead of the flex spacer', () => {
@@ -55,12 +65,18 @@ test('selected project identity is forced to the true horizontal center instead 
   assert.match(css, /\.theme-light \.topbar-project-context strong\.topbar-project-name\s*\{[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 68%, var\(--text\)\);/s);
 });
 
-test('Durum dağılımı enlarges the actual donut SVG to 214px and keeps counts close to labels', () => {
+test('Durum dağılımı keeps the enlarged donut intact when a segment is selected', () => {
   const css = read('src/app/topbar-dashboard-polish.css');
 
   assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*display:\s*grid !important;[^}]*grid-template-columns:\s*minmax\(214px, 1fr\) minmax\(126px, 150px\);[^}]*min-height:\s*236px;/s);
   assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child\s*\{[^}]*width:\s*214px !important;[^}]*height:\s*214px !important;/s);
   assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child > svg\s*\{[^}]*width:\s*214px !important;[^}]*height:\s*214px !important;/s);
+
+  // Dashboard Donut translates selected SVG groups inline. At the dash seam this
+  // can visually split a single selected arc into detached pieces, so the final
+  // dashboard layer pins those segment groups to the ring.
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child > svg > g\s*\{[^}]*transform:\s*none !important;/s);
+
   assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > \.col\s*\{[^}]*max-width:\s*150px;/s);
   assert.match(css, /\.content-ozet \.donut-leg-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*8px !important;/s);
 });
