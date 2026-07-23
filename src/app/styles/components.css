@@ -131,6 +131,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   top: 0;
   z-index: var(--z-sticky);
 }
+.tbl thead th.filterable-th.is-filter-open { z-index: var(--z-popover); }
 .col-filter-pop,
 .gantt-cols-pop {
   z-index: var(--z-popover);
@@ -142,10 +143,24 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .col-filter-head,
 .col-filter-foot { background: color-mix(in oklab, var(--accent) 7%, var(--bg-elev-2)); }
 .content-veri { overflow: hidden; padding-bottom: 16px; }
-.content-veri > .col { height: 100%; min-height: 0; }
-.content-veri > .col > div:last-child { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
-.content-veri > .col > div:last-child > div { flex: 1 1 0; min-height: 0; max-height: none; overflow: auto; }
-.tasks-table-scroll { scrollbar-gutter: stable; }
+.tasks-page { height: 100%; min-height: 0; gap: 16px; }
+.tasks-table-card {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.tasks-table-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
 
 @media (max-width: 760px) {
   .date-input-button { right: 5px; }

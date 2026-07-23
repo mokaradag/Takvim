@@ -504,9 +504,11 @@ export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter
   const anchorRef = useRx(null);
   const active = filterType === 'text' ? !!filter : Array.isArray(filter) ? filter.length > 0 : !!filter;
   return (
-    <th style={{ ...style, position: 'relative' }}>
+    <th className={`filterable-th${open ? ' is-filter-open' : ''}`} style={style}>
       <button
+        type="button"
         ref={anchorRef}
+        aria-expanded={open}
         className={`col-th-btn${active ? ' has-filter' : ''}${sortKey ? ' is-sorted' : ''}`}
         onClick={() => setOpen(o => !o)}
       >

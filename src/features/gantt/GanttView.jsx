@@ -202,7 +202,6 @@ export function GanttView() {
 
   // Set CSS vars
   const wrapStyle = {
-    height: 'calc(100vh - 240px)',
     '--gantt-left-w': `${totalLeftW}px`,
     '--gantt-left-cols': gridTemplate
   };

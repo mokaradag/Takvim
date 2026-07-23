@@ -24,9 +24,11 @@ export function DateFilterableTH({ label, sortKey, onSort, filter, onFilter, sty
   const active = !!filter;
 
   return (
-    <th style={{ ...style, position: 'relative' }}>
+    <th className={`filterable-th${open ? ' is-filter-open' : ''}`} style={style}>
       <button
+        type="button"
         ref={anchorRef}
+        aria-expanded={open}
         className={`col-th-btn${active ? ' has-filter' : ''}${sortKey ? ' is-sorted' : ''}`}
         onClick={() => setOpen((value) => !value)}
       >

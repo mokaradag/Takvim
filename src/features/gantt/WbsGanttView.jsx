@@ -291,7 +291,6 @@ export function WbsGanttView() {
 
   const projectColor = projectColorVar(workspace.selectedProject?.name || '');
   const wrapStyle = {
-    height: 'calc(100vh - 240px)',
     '--gantt-left-w': '360px',
     '--gantt-left-cols': 'minmax(320px, 1fr)'
   };
