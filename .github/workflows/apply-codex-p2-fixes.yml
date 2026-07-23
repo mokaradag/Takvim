@@ -1,14 +1,15 @@
 name: Apply Codex P2 fixes
 
 on:
-  pull_request:
+  push:
+    branches:
+      - agent/durable-sqlserver-persistence
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/durable-lint-diagnostic'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,24 +21,25 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
+          def replace_if_needed(path, old, new):
               p = Path(path)
               text = p.read_text()
+              if new in text:
+                  return
               if old not in text:
-                  raise SystemExit(f'Expected block not found in {path}')
+                  raise SystemExit(f'Expected old or new block not found in {path}')
               p.write_text(text.replace(old, new, 1))
 
           provider = Path('src/state/AppStateProvider.jsx')
           text = provider.read_text()
-          marker = "  const updateTask = useCallback((id, patch) => persistence.updateTask(id, patch), [persistence]);\n\n"
-          if marker not in text:
-              raise SystemExit('updateTask marker not found')
-          text = text.replace(
-              marker,
-              "  const updateTask = useCallback((id, patch) => persistence.updateTask(id, patch), [persistence]);\n  const flushPendingChanges = useCallback(() => persistence.flush(), [persistence]);\n\n",
-              1
-          )
-          old = """    const committedProject = result.value?.projectUpserts?.find((project) => project.id === prepared.project.id)
+          old_update = "  const updateTask = useCallback((id, patch) => persistence.updateTask(id, patch), [persistence]);\n\n"
+          new_update = "  const updateTask = useCallback((id, patch) => persistence.updateTask(id, patch), [persistence]);\n  const flushPendingChanges = useCallback(() => persistence.flush(), [persistence]);\n\n"
+          if new_update not in text:
+              if old_update not in text:
+                  raise SystemExit('updateTask marker not found')
+              text = text.replace(old_update, new_update, 1)
+
+          old_project = """    const committedProject = result.value?.projectUpserts?.find((project) => project.id === prepared.project.id)
       || prepared.project;
     const committedRoot = result.value?.wbsUpserts?.find((node) => node.id === prepared.rootWbs.id)
       || prepared.rootWbs;
@@ -56,7 +58,7 @@ jobs:
       }
     });
 """
-          new = """    const committedProject = result.value?.projectUpserts?.find((project) => project.id === prepared.project.id)
+          new_project = """    const committedProject = result.value?.projectUpserts?.find((project) => project.id === prepared.project.id)
       || prepared.project;
     const latest = stateRef.current;
 
@@ -73,21 +75,25 @@ jobs:
       }
     });
 """
-          if old not in text:
-              raise SystemExit('Project create reconciliation block not found')
-          text = text.replace(old, new, 1)
-          actions_marker = """    updateTask,
+          if new_project not in text:
+              if old_project not in text:
+                  raise SystemExit('Project create reconciliation block not found')
+              text = text.replace(old_project, new_project, 1)
+
+          old_actions = """    updateTask,
     moveTaskToWbs,
 """
-          if text.count(actions_marker) != 2:
-              raise SystemExit(f'Expected two action markers, found {text.count(actions_marker)}')
-          text = text.replace(actions_marker, """    updateTask,
+          new_actions = """    updateTask,
     flushPendingChanges,
     moveTaskToWbs,
-""", 2)
+"""
+          while old_actions in text:
+              text = text.replace(old_actions, new_actions, 1)
+          if text.count(new_actions) != 2:
+              raise SystemExit(f'Expected two flushPendingChanges action entries, found {text.count(new_actions)}')
           provider.write_text(text)
 
-          replace_once(
+          replace_if_needed(
               'src/server/repository/sqlAppRepository.js',
               """    FROM dbo.MR_Tasks t
     JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = t.TaskId
@@ -99,14 +105,14 @@ jobs:
     WHERE @isAdmin = 0 AND p.IsActive = 1
 """
           )
-          replace_once(
+          replace_if_needed(
               'src/server/repository/sqlAppRepository.js',
               """       SET WbsId = @wbsId, CalendarId = @calendarId, Title = @title,
 """,
               """       SET ProjectId = @projectId, WbsId = @wbsId, CalendarId = @calendarId, Title = @title,
 """
           )
-          replace_once(
+          replace_if_needed(
               'src/server/repository/sqlAppRepository.js',
               """    dep.input('dependencyId', sql.UniqueIdentifier, uuid(dependency.id || randomUUID()));
 """,
@@ -114,7 +120,7 @@ jobs:
 """
           )
           PY
-      - name: Commit patches
+      - name: Commit patches when needed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
