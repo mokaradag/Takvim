@@ -30,16 +30,19 @@ function wait(ms) { return ms ? new Promise((resolve) => setTimeout(resolve, ms)
 function shouldFail(setting, context) { return typeof setting === 'function' ? Boolean(setting(context)) : Boolean(setting); }
 function normalizeDelete(value) { return typeof value === 'string' ? value : value?.id; }
 function normalizeChanges(changes = {}) {
-  return {
-    projectUpserts: clone(changes.projectUpserts || []),
-    projectDeletes: [...new Set((changes.projectDeletes || []).map(normalizeDelete).filter(Boolean))],
+  const normalized = {
     taskUpserts: clone(changes.taskUpserts || []),
     taskDeletes: [...new Set((changes.taskDeletes || []).map(normalizeDelete).filter(Boolean))],
     wbsUpserts: clone(changes.wbsUpserts || []),
     wbsDeletes: [...new Set((changes.wbsDeletes || []).map(normalizeDelete).filter(Boolean))]
   };
+  if ('projectUpserts' in changes) normalized.projectUpserts = clone(changes.projectUpserts || []);
+  if ('projectDeletes' in changes) {
+    normalized.projectDeletes = [...new Set((changes.projectDeletes || []).map(normalizeDelete).filter(Boolean))];
+  }
+  return normalized;
 }
-function applyCollectionChanges(items, upserts, deletes, { prependNew = false } = {}) {
+function applyCollectionChanges(items, upserts = [], deletes = [], { prependNew = false } = {}) {
   const deleted = new Set(deletes);
   const upsertsById = new Map(upserts.map((item) => [item.id, item]));
   const existingIds = new Set(items.map((item) => item.id));
@@ -56,7 +59,8 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
   const latencyMs = Number.isFinite(options.latencyMs) ? Math.max(0, options.latencyMs) : 0;
 
   return {
-    kind: 'demo',
+    kind: 'async-memory',
+    dataMode: 'demo',
     async loadSessionContext() {
       return {
         dataMode: 'demo',
