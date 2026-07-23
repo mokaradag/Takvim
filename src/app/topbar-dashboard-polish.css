@@ -1,19 +1,26 @@
-/* MERGEN Rota · screenshot-driven topbar and Özet polish
+/* MERGEN Rota · topbar and Özet visual corrections
    Loaded after followup-fixes.css so these rules are the final visual contract. */
 
 /* ── Topbar emblem ─────────────────────────────────────────────
-   Keep a dedicated, clipped viewport at the far-right edge. The previous
-   220px motif was positioned so far outside the 56px bar that the visible
-   polygon strokes could disappear depending on the generated geometry. */
-.topbar-emblem-clip {
-  inset: 0 0 0 auto;
-  width: 214px;
-  height: 100%;
+   Keep the decorative heptagon in a dedicated viewport near the top-right
+   actions. Explicit left/right values are important: older .hept-topbar rules
+   set a left offset, which previously won over the new right offset and pushed
+   the emblem beside the page title. */
+.topbar {
   overflow: hidden;
+}
+
+.topbar-emblem-clip {
+  position: absolute !important;
+  top: 0 !important;
+  right: 96px !important;
+  bottom: auto !important;
+  left: auto !important;
+  width: 186px !important;
+  height: 56px !important;
+  overflow: hidden !important;
   pointer-events: none;
   z-index: 1;
-  -webkit-mask-image: linear-gradient(to left, #000 0%, #000 72%, transparent 100%);
-  mask-image: linear-gradient(to left, #000 0%, #000 72%, transparent 100%);
 }
 
 .topbar-emblem-clip .hept-topbar {
@@ -21,37 +28,45 @@
   display: block !important;
   visibility: visible !important;
   top: 50% !important;
-  right: -34px !important;
-  width: 176px !important;
-  height: 176px !important;
-  transform: translateY(-50%);
-  opacity: 0.56 !important;
-  filter: drop-shadow(0 0 10px color-mix(in oklab, var(--accent) 34%, transparent));
+  right: -30px !important;
+  bottom: auto !important;
+  left: auto !important;
+  width: 172px !important;
+  height: 172px !important;
+  transform: translateY(-50%) !important;
+  opacity: 0.50 !important;
+  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 28%, transparent));
 }
 
 .theme-light .topbar-emblem-clip .hept-topbar {
-  opacity: 0.34 !important;
-  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 24%, transparent));
+  opacity: 0.30 !important;
+  filter: drop-shadow(0 0 7px color-mix(in oklab, var(--accent) 20%, transparent));
 }
 
 /* ── Selected project identity ─────────────────────────────────
-   Present code and name as one compact, centered identity capsule. This
-   keeps the two text layers on the same visual axis and preserves contrast
-   in both themes without competing with the page title or actions. */
+   Force the project identity to the true horizontal center of the topbar.
+   The explicit positioning below avoids it participating in the flex row and
+   being pushed toward the export action by the spacer. */
 .topbar-project-context {
-  min-height: 34px;
-  height: 34px;
-  max-width: min(46vw, 720px);
+  position: absolute !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 4 !important;
+  min-height: 32px;
+  height: 32px;
+  max-width: min(42vw, 620px);
   gap: 0;
   padding: 3px;
-  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--border));
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, var(--border));
   border-radius: var(--r-pill);
-  background: color-mix(in oklab, var(--bg-elev) 88%, transparent);
-  box-shadow:
-    0 1px 0 color-mix(in oklab, white 8%, transparent) inset,
-    0 6px 18px rgb(0 0 0 / 0.10);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: color-mix(in oklab, var(--bg-elev) 92%, transparent);
+  box-shadow: 0 1px 0 color-mix(in oklab, white 7%, transparent) inset;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
 }
 
 .topbar-project-code {
@@ -59,24 +74,24 @@
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  padding: 0 9px;
+  padding: 0 8px;
   border-radius: calc(var(--r-pill) - 3px);
-  background: color-mix(in oklab, var(--text) 6%, transparent);
-  color: color-mix(in oklab, var(--text-muted) 88%, var(--text));
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 720;
   line-height: 1;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.03em;
   white-space: nowrap;
 }
 
 .topbar-project-separator {
   width: 1px;
-  height: 16px;
+  height: 15px;
   margin: 0 3px;
   overflow: hidden;
-  background: color-mix(in oklab, var(--accent) 26%, var(--border));
+  background: color-mix(in oklab, var(--accent) 24%, var(--border));
   color: transparent;
   font-size: 0;
   flex: 0 0 1px;
@@ -88,48 +103,50 @@
   align-items: center;
   min-width: 0;
   max-width: 100%;
-  padding: 0 10px 0 7px;
-  color: color-mix(in oklab, var(--accent) 82%, var(--text));
-  font-size: 15.5px;
-  font-weight: 780;
+  padding: 0 9px 0 6px;
+  color: color-mix(in oklab, var(--accent) 78%, var(--text));
+  font-size: 14.5px;
+  font-weight: 760;
   line-height: 1;
-  letter-spacing: -0.012em;
+  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .theme-light .topbar-project-context strong.topbar-project-name {
-  color: color-mix(in oklab, var(--accent) 72%, var(--text));
+  color: color-mix(in oklab, var(--accent) 68%, var(--text));
 }
 
 /* ── Özet · Durum dağılımı ─────────────────────────────────────
-   Use the card's vertical room instead of stretching the legend horizontally.
-   The donut gets a real layout size (not only a visual SVG override), while
-   the legend is deliberately narrower so labels and counts read as one unit. */
+   Scale the actual donut SVG and its containing box, not only a generic SVG
+   selector. This makes the visual increase unambiguous while keeping the
+   status/count column compact. */
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
   display: grid !important;
-  grid-template-columns: minmax(168px, 1fr) minmax(132px, 188px);
+  grid-template-columns: minmax(214px, 1fr) minmax(126px, 150px);
   justify-content: center !important;
   align-items: center !important;
-  gap: clamp(8px, 1vw, 16px) !important;
-  min-height: 214px;
+  gap: 12px !important;
+  min-height: 236px;
 }
 
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > div:first-child {
-  width: clamp(174px, 13vw, 190px);
-  height: clamp(174px, 13vw, 190px);
+  position: relative !important;
+  width: 214px !important;
+  height: 214px !important;
   justify-self: center;
 }
 
-.content-ozet svg[viewBox='-10 -10 170 170'] {
-  width: 100% !important;
-  height: 100% !important;
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > div:first-child > svg {
+  display: block;
+  width: 214px !important;
+  height: 214px !important;
 }
 
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
   width: 100%;
-  max-width: 188px;
+  max-width: 150px;
   justify-self: end;
   gap: 7px !important;
 }
@@ -138,14 +155,15 @@
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px !important;
+  gap: 8px !important;
   width: 100%;
   max-width: none;
-  padding: 5px 6px !important;
+  padding: 5px 4px !important;
 }
 
 .content-ozet .donut-leg-row > .row {
   min-width: 0;
+  gap: 7px !important;
 }
 
 .content-ozet .donut-leg-row > .tabular {
@@ -153,48 +171,60 @@
   text-align: right;
 }
 
-@media (max-width: 1280px) {
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:first-child,
-  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) {
-    grid-column: 1 / -1;
+@media (max-width: 1080px) {
+  .topbar-emblem-clip {
+    right: 88px !important;
+    width: 160px !important;
+  }
+
+  .topbar-emblem-clip .hept-topbar {
+    right: -34px !important;
+    width: 154px !important;
+    height: 154px !important;
+  }
+
+  .topbar-project-context {
+    max-width: 44vw;
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
-    grid-template-columns: minmax(184px, 220px) minmax(160px, 220px);
+    grid-template-columns: minmax(214px, 230px) minmax(150px, 190px);
     justify-content: center !important;
-    gap: 28px !important;
+    gap: 24px !important;
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
-    max-width: 220px;
+    max-width: 190px;
+    justify-self: start;
   }
 }
 
 @media (max-width: 760px) {
   .topbar-project-context {
-    max-width: 44vw;
-    height: 32px;
-    min-height: 32px;
+    max-width: 46vw;
+    height: 30px;
+    min-height: 30px;
   }
 
   .topbar-project-code {
-    padding: 0 7px;
-    font-size: 10px;
+    padding: 0 6px;
+    font-size: 9.5px;
   }
 
   .topbar-project-context strong.topbar-project-name {
-    padding: 0 8px 0 5px;
-    font-size: 13.5px;
+    padding: 0 7px 0 5px;
+    font-size: 12.5px;
   }
 
   .topbar-emblem-clip {
-    width: 150px;
+    right: 72px !important;
+    width: 128px !important;
   }
 
   .topbar-emblem-clip .hept-topbar {
-    right: -42px !important;
-    width: 148px !important;
-    height: 148px !important;
+    right: -38px !important;
+    width: 132px !important;
+    height: 132px !important;
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
@@ -204,7 +234,7 @@
   }
 
   .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
-    max-width: 240px;
+    max-width: 220px;
     justify-self: center;
   }
 }
