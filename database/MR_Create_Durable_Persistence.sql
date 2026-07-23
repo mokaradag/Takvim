@@ -276,7 +276,7 @@ BEGIN TRY
             NULLIF(LTRIM(RTRIM(Tur)), N'''') AS ProjectTypeCode,
             NULLIF(LTRIM(RTRIM(Tur_Aciklama)), N'''') AS ProjectTypeName,
             NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''') AS ProjectCode,
-            NULLIF(LTRIM(RTRIM(ProjeAdi)), N'''') AS ProjectName
+            COALESCE(NULLIF(LTRIM(RTRIM(ProjeAdi)), N''''), NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectName
         FROM dbo.A01_ProjeUrunFaaliyetRaporu
         WHERE NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''') IS NOT NULL
         GROUP BY Tur, Tur_Aciklama, ProjeKodu, ProjeAdi;');

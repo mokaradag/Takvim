@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { createApiRepository, toActualUuid } from '../src/data/api/createApiRepository.js';
+import { parseDevelopmentSicil } from '../src/server/identity/parseDevelopmentSicil.js';
 import { createInitialState, appStateReducer } from '../src/state/appState.js';
 import { createStateMutationOrchestrator, loadApplicationData } from '../src/state/persistence.js';
 
@@ -286,7 +287,7 @@ test('corporate project sync serializes concurrent first inserts by ProjectCode'
   const source = read('src/server/repository/corporateQueries.js');
   assert.match(
     source,
-    /NOT EXISTS \(SELECT 1 FROM dbo\.MR_Projects p WITH \(UPDLOCK, HOLDLOCK\) WHERE p\.ProjectCode = source\.ProjectCode\)/
+    /NOT EXISTS \(\s*SELECT 1\s*FROM dbo\.MR_Projects p WITH \(UPDLOCK, HOLDLOCK\)\s*WHERE p\.SourceType = 'CORPORATE' AND p\.ProjectCode = source\.ProjectCode\s*\)/s
   );
 });
 
@@ -330,4 +331,43 @@ test('project updates validate LeadSicil before binding and writing it', () => {
   const validationIndex = body.indexOf("await ensurePeople(executor, project.leadId ? [project.leadId] : []);", updateStart);
   const bindIndex = body.indexOf("req.input('leadSicil', sql.Int", updateStart);
   assert.ok(updateStart >= 0 && validationIndex > updateStart && validationIndex < bindIndex);
+});
+
+
+test('development identity rejects partial, decimal, non-positive, blank, and unsafe Sicil strings', () => {
+  assert.equal(parseDevelopmentSicil('18068'), 18068);
+  assert.equal(parseDevelopmentSicil(' 18068 '), 18068);
+  for (const invalid of ['18068abc', '18068.5', '0', '-1', '', '   ', '9007199254740992']) {
+    assert.equal(parseDevelopmentSicil(invalid), null, `expected ${JSON.stringify(invalid)} to be rejected`);
+  }
+  const providerSource = read('src/server/identity/currentUserProvider.js');
+  assert.doesNotMatch(providerSource, /Number\.parseInt/);
+  assert.match(providerSource, /parseDevelopmentSicil\(process\.env\.MERGEN_ROTA_DEV_SICIL\)/);
+});
+
+test('manual project codes cannot silently suppress or collide with corporate synchronization', () => {
+  const sync = read('src/server/repository/corporateQueries.js');
+  assert.match(sync, /FROM dbo\.MR_Projects manual WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*manual\.SourceType = 'MANUAL'/);
+  assert.match(sync, /THROW 51002, 'A manual project code conflicts with the corporate project source\.'/);
+  assert.match(sync, /WHERE p\.SourceType = 'CORPORATE' AND p\.ProjectCode = source\.ProjectCode/);
+  const repository = read('src/server/repository/sqlAppRepository.js');
+  assert.match(repository, /async function assertManualProjectCodeAvailable\(executor, projectCode\)/);
+  assert.ok((repository.match(/await assertManualProjectCodeAvailable\(executor, projectCode\);/g) || []).length >= 2);
+});
+
+test('partial-only snapshots constrain the people directory to authorized project context', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(source, /DECLARE @HasFullScope bit = CASE[\s\S]*AccessLevel = 'FULL'/);
+  assert.match(source, /FROM dbo\.MR_V_PeopleDirectory pd\s+WHERE @HasFullScope = 1\s+OR pd\.Sicil = @sicil/s);
+  assert.match(source, /WHERE p\.LeadSicil = pd\.Sicil/);
+  assert.match(source, /WHERE visibleAssignee\.Sicil = pd\.Sicil[\s\S]*visibilityGate\.Sicil = @sicil/s);
+});
+
+test('corporate project view always supplies a usable ProjectName', () => {
+  const source = read('database/MR_Create_Durable_Persistence.sql');
+  const view = source.match(/CREATE VIEW dbo\.MR_V_CorporateProjects AS([\s\S]*?)GROUP BY/i)?.[0] || '';
+  assert.match(
+    view,
+    /COALESCE\s*\(\s*NULLIF\(LTRIM\(RTRIM\(ProjeAdi\)\)[\s\S]*NULLIF\(LTRIM\(RTRIM\(ProjeKodu\)\)[\s\S]*AS ProjectName/i
+  );
 });

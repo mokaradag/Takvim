@@ -103,6 +103,24 @@ async function ensurePeople(executor, sicils) {
   return normalized;
 }
 
+async function assertManualProjectCodeAvailable(executor, projectCode) {
+  if (!projectCode) return;
+  const req = request(executor);
+  req.input('projectCode', sql.NVarChar(255), projectCode);
+  const result = await req.query(`
+    SELECT TOP (1) reserved.ProjectCode
+    FROM (
+      SELECT ProjectCode FROM dbo.MR_V_CorporateProjects
+      UNION
+      SELECT ProjectCode FROM dbo.MR_Projects WHERE SourceType = 'CORPORATE'
+    ) reserved
+    WHERE reserved.ProjectCode = @projectCode;
+  `);
+  if (result.recordset.length) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'Kurumsal proje kodu manuel proje için kullanılamaz.');
+  }
+}
+
 async function loadSnapshotFrom(executor, auth) {
   const req = request(executor);
   req.input('sicil', sql.Int, auth.sicil);
@@ -143,6 +161,11 @@ async function loadSnapshotFrom(executor, auth) {
         )
       )
       AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = t.ProjectId);
+
+    DECLARE @HasFullScope bit = CASE
+      WHEN @isAdmin = 1 OR EXISTS (SELECT 1 FROM @VisibleProjects WHERE AccessLevel = 'FULL') THEN 1
+      ELSE 0
+    END;
 
     SELECT p.*, v.AccessLevel
     FROM dbo.MR_Projects p
@@ -239,9 +262,36 @@ async function loadSnapshotFrom(executor, auth) {
     WHERE c.IsActive = 1
     ORDER BY c.Name, wd.Weekday, h.HolidayDate;
 
-    SELECT Sicil, DisplayName, Username, JobTitle, Team, Sector, Directorate, Department, Unit
-    FROM dbo.MR_V_PeopleDirectory
-    ORDER BY DisplayName, Sicil;
+    SELECT pd.Sicil, pd.DisplayName, pd.Username, pd.JobTitle, pd.Team, pd.Sector, pd.Directorate, pd.Department, pd.Unit
+    FROM dbo.MR_V_PeopleDirectory pd
+    WHERE @HasFullScope = 1
+       OR pd.Sicil = @sicil
+       OR EXISTS (
+         SELECT 1
+         FROM dbo.MR_Projects p
+         JOIN @VisibleProjects v ON v.ProjectId = p.ProjectId
+         WHERE p.LeadSicil = pd.Sicil
+       )
+       OR EXISTS (
+         SELECT 1
+         FROM dbo.MR_TaskAssignees visibleAssignee
+         JOIN dbo.MR_Tasks visibleTask ON visibleTask.TaskId = visibleAssignee.TaskId
+         JOIN @VisibleProjects visibleProject ON visibleProject.ProjectId = visibleTask.ProjectId
+         WHERE visibleAssignee.Sicil = pd.Sicil
+           AND EXISTS (
+             SELECT 1
+             FROM dbo.MR_TaskAssignees visibilityGate
+             WHERE visibilityGate.TaskId = visibleTask.TaskId
+               AND (
+                 visibilityGate.Sicil = @sicil
+                 OR EXISTS (
+                   SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+                   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibilityGate.Sicil
+                 )
+               )
+           )
+       )
+    ORDER BY pd.DisplayName, pd.Sicil;
   `);
 
   const [projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows, baselineRows, snapshotRows, calendarRows, peopleRows] = result.recordsets;
@@ -384,12 +434,14 @@ async function reconcileProjectTags(executor, actorSicil, projectId, values) {
 
 async function commitProject(executor, actor, project, rootWbs, correlationId) {
   const projectId = uuid(project.id);
+  const projectCode = project.code == null ? null : (String(project.code).trim() || null);
   const before = await projectRow(executor, projectId);
   if (!before) {
     if ((project.source || project.sourceType || 'manual').toUpperCase() !== 'MANUAL') {
       throw new ServerPersistenceError('FORBIDDEN', 'Kurumsal projeler istemci tarafından oluşturulamaz.');
     }
     assertCanCreateManualProject(actor);
+    await assertManualProjectCodeAvailable(executor, projectCode);
     await ensurePeople(executor, project.leadId ? [project.leadId] : []);
     const authoritativeRoot = {
       id: uuid(rootWbs?.id || randomUUID()),
@@ -401,7 +453,7 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
     };
     const req = request(executor);
     req.input('projectId', sql.UniqueIdentifier, projectId);
-    req.input('projectCode', sql.NVarChar(255), project.code || null);
+    req.input('projectCode', sql.NVarChar(255), projectCode);
     req.input('projectName', sql.NVarChar(1000), project.name);
     req.input('leadSicil', sql.Int, project.leadId ? Number(project.leadId) : null);
     req.input('dataDate', sql.Date, project.dataDate || null);
@@ -443,11 +495,14 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
   }
 
   assertProjectWriteAccess(actor.effective, projectId);
+  if (before.SourceType === 'MANUAL') {
+    await assertManualProjectCodeAvailable(executor, projectCode);
+  }
   await ensurePeople(executor, project.leadId ? [project.leadId] : []);
   const req = request(executor);
   req.input('projectId', sql.UniqueIdentifier, projectId);
   req.input('version', sql.Binary(8), decodeVersion(project.version));
-  req.input('projectCode', sql.NVarChar(255), project.code || null);
+  req.input('projectCode', sql.NVarChar(255), projectCode);
   req.input('projectName', sql.NVarChar(1000), project.name);
   req.input('leadSicil', sql.Int, project.leadId ? Number(project.leadId) : null);
   req.input('dataDate', sql.Date, project.dataDate || null);
