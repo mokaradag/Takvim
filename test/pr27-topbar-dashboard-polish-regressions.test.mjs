@@ -20,14 +20,18 @@ test('final topbar and dashboard polish stylesheet is loaded after earlier fix l
   assert.ok(polishIndex > followupIndex, 'final polish layer must load after followup-fixes.css');
 });
 
-test('topbar heptagon explicitly clears legacy left offsets and stays near the right actions', () => {
+test('topbar shows only a small heptagon slice with the rotation center outside the top-right corner', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/topbar-dashboard-polish.css');
 
   assert.match(shell, /<header className="topbar">[\s\S]*?<div className="topbar-emblem-clip"><Heptagon variant="hept-topbar" \/><\/div>/);
-  assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*position:\s*absolute !important;[^}]*right:\s*96px !important;[^}]*left:\s*auto !important;[^}]*width:\s*186px !important;[^}]*height:\s*56px !important;/s);
-  assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*right:\s*-30px !important;[^}]*left:\s*auto !important;[^}]*width:\s*172px !important;[^}]*height:\s*172px !important;[^}]*transform:\s*translateY\(-50%\) !important;/s);
-  assert.match(css, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*opacity:\s*0\.30 !important;/s);
+  assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*position:\s*absolute !important;[^}]*inset:\s*0 !important;[^}]*overflow:\s*hidden !important;/s);
+  assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*top:\s*-205px !important;[^}]*right:\s*-205px !important;[^}]*left:\s*auto !important;[^}]*width:\s*320px !important;[^}]*height:\s*320px !important;[^}]*transform:\s*none !important;/s);
+  assert.match(css, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*opacity:\s*0\.24 !important;/s);
+
+  // With a 320px square placed at -205px from both edges, its center is
+  // 45px outside the visible top and right edges: -205 + 320 / 2 = -45.
+  assert.ok(-205 + 320 / 2 < 0);
 });
 
 test('selected project identity is forced to the true horizontal center instead of the flex spacer', () => {
