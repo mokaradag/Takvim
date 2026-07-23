@@ -20,12 +20,18 @@ test('final topbar and dashboard polish stylesheet is loaded after earlier fix l
   assert.ok(polishIndex > followupIndex, 'final polish layer must load after followup-fixes.css');
 });
 
-test('topbar shows only a small heptagon slice with the rotation center outside the top-right corner', () => {
+test('topbar shows only a small heptagon slice without clipping header popovers', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/topbar-dashboard-polish.css');
 
   assert.match(shell, /<header className="topbar">[\s\S]*?<div className="topbar-emblem-clip"><Heptagon variant="hept-topbar" \/><\/div>/);
+
+  // P1 regression: the header itself must not clip Dışa aktar or other popovers.
+  // Only the decorative overlay is allowed to clip the rotating emblem.
+  assert.match(css, /\.topbar\s*\{[^}]*overflow:\s*visible;/s);
+  assert.doesNotMatch(css, /\.topbar\s*\{[^}]*overflow:\s*hidden;/s);
   assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*position:\s*absolute !important;[^}]*inset:\s*0 !important;[^}]*overflow:\s*hidden !important;/s);
+
   assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*top:\s*-205px !important;[^}]*right:\s*-205px !important;[^}]*left:\s*auto !important;[^}]*width:\s*320px !important;[^}]*height:\s*320px !important;[^}]*transform:\s*none !important;/s);
   assert.match(css, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*opacity:\s*0\.24 !important;/s);
 
@@ -57,4 +63,23 @@ test('Durum dağılımı enlarges the actual donut SVG to 214px and keeps counts
   assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child > svg\s*\{[^}]*width:\s*214px !important;[^}]*height:\s*214px !important;/s);
   assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > \.col\s*\{[^}]*max-width:\s*150px;/s);
   assert.match(css, /\.content-ozet \.donut-leg-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*8px !important;/s);
+});
+
+test('compact desktop widths stack trend and status cards before the 214px donut can overflow', () => {
+  const css = read('src/app/topbar-dashboard-polish.css');
+
+  // P2 regression: around 1280px viewport the status card used to remain in a
+  // narrow third column, while its 214px donut + legend needed much more width.
+  assert.match(
+    css,
+    /@media \(max-width: 1500px\)[\s\S]*?div\[style\*='grid-template-columns: 1fr 1fr'\]:has\(\.donut-leg-row\)\s*\{[^}]*grid-template-columns:\s*1fr !important;/s
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 1500px\)[\s\S]*?> \.card:first-child,[\s\S]*?> \.card:nth-child\(2\)\s*\{[^}]*grid-column:\s*1 \/ -1 !important;/s
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 1500px\)[\s\S]*?> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*grid-template-columns:\s*minmax\(214px, 230px\) minmax\(150px, 190px\);/s
+  );
 });
