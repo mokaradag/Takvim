@@ -136,14 +136,14 @@ export function DashboardView({ onNavigate }) {
   ].filter(d => d.value > 0);
 
   return (
-    <div className="col stagger" style={{ gap: 20 }}>
+    <div className="col stagger dashboard">
       <HeroHeader title="Genel bakış">
         <div className="muted" style={{ fontSize: 13.5 }}>
           {fmt(today_, 'dd MMM yyyy')} · {tasks.length} görev · {progress} aktif · <span style={{ color: overdue > 0 ? 'var(--status-overdue)' : 'var(--text-dim)' }}>{overdue} geciken</span>
         </div>
       </HeroHeader>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+      <div className="dashboard-kpi-grid">
         <Stat icon={<Icons.Briefcase size={16} />} label="Toplam görev" value={tasks.length} accent="var(--text)" trend={`${compRate}% tamamlandı`} items={tasks} onOpenTask={onOpenTask}
           tip="Sistemdeki tüm aktif ve kapanmış görevlerin sayısı. Projeler, sorumlular ve tarih aralıklarına göre filtrelenebilir." />
         <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${Math.max(0, done - 4)} bu hafta`} trendUp items={doneTasks} onOpenTask={onOpenTask}
@@ -158,9 +158,9 @@ export function DashboardView({ onNavigate }) {
           </>} />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div className="dashboard-main-grid">
         {/* Burndown */}
-        <div className="card">
+        <div className="card dashboard-trend-card">
           <CardHead
             icon={<Icons.TrendUp size={14} />}
             title="Tamamlama trendi"
@@ -183,7 +183,7 @@ export function DashboardView({ onNavigate }) {
         </div>
 
         {/* Status donut */}
-        <div className="card">
+        <div className="card dashboard-status-card">
           <CardHead
             icon={<Icons.Layers size={14} />}
             title="Durum dağılımı"
@@ -203,8 +203,8 @@ export function DashboardView({ onNavigate }) {
               <div className="rt-foot"><Icons.Sparkle size={11} /> Bir dilime tıklayarak seçilebilir.</div>
             </>}
           />
-          <div className="row" style={{ gap: 24, justifyContent: 'space-between' }}>
-            <div style={{ position: 'relative' }}>
+          <div className="dashboard-status-body">
+            <div className="dashboard-status-chart">
               <Donut
                 data={statusDonut}
                 size={150}
@@ -212,7 +212,7 @@ export function DashboardView({ onNavigate }) {
                 selected={donutSel}
                 onSegmentClick={(i) => setDonutSel(donutSel === i ? null : i)}
               />
-              <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', textAlign: 'center', pointerEvents: 'none' }}>
+              <div className="dashboard-status-center">
                 <div>
                   {donutSel == null ? (
                     <>
@@ -232,7 +232,7 @@ export function DashboardView({ onNavigate }) {
                 </div>
               </div>
             </div>
-            <div className="col" style={{ gap: 10, flex: 1 }}>
+            <div className="col dashboard-status-legend">
               {statusDonut.map((s, i) => (
                 <HoverListCard
                   key={s.label}
@@ -260,9 +260,10 @@ export function DashboardView({ onNavigate }) {
                     </button>
                   )}
                 >
-                  <div
+                  <button
+                    type="button"
                     className="row donut-leg-row"
-                    style={{ justifyContent: 'space-between', cursor: 'pointer', padding: '4px 8px', borderRadius: 6, background: donutSel === i ? 'color-mix(in oklab, ' + s.color + ' 12%, transparent)' : 'transparent', border: donutSel === i ? `1px solid ${s.color}40` : '1px solid transparent', transition: 'background 0.18s, border-color 0.18s' }}
+                    style={{ background: donutSel === i ? 'color-mix(in oklab, ' + s.color + ' 12%, transparent)' : 'transparent', border: donutSel === i ? `1px solid ${s.color}40` : '1px solid transparent' }}
                     onClick={() => setDonutSel(donutSel === i ? null : i)}
                   >
                     <div className="row" style={{ gap: 8 }}>
@@ -272,7 +273,7 @@ export function DashboardView({ onNavigate }) {
                     <span className="tabular" style={{ fontWeight: 600, fontSize: 13 }}>
                       <AnimatedNumber value={s.value} />
                     </span>
-                  </div>
+                  </button>
                 </HoverListCard>
               ))}
             </div>
@@ -281,7 +282,7 @@ export function DashboardView({ onNavigate }) {
       </div>
 
       {/* Bottom rows */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr 1fr', gap: 16 }}>
+      <div className="dashboard-bottom-grid">
         <div className="card">
           <CardHead
             icon={<Icons.Briefcase size={14} />}
@@ -458,7 +459,7 @@ export function DashboardView({ onNavigate }) {
       </div>
 
       {/* Weekly snapshot + effort mini */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div className="dashboard-insights-grid">
         <div className="card mini-kpi">
           <CardHead
             icon={<Icons.Check size={14} />}

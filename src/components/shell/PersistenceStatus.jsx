@@ -26,7 +26,7 @@ export function PersistenceStatus() {
         position: 'fixed',
         right: 18,
         bottom: 18,
-        zIndex: 130,
+        zIndex: 'var(--z-popover)',
         maxWidth: 360,
         padding: '9px 12px',
         border: '1px solid var(--border)',

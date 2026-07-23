@@ -135,7 +135,7 @@ export function TasksView() {
   });
 
   return (
-    <div className="col" style={{ gap: 16 }}>
+    <div className="tasks-page col">
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <div className="topbar-search" style={{ flex: 1, minWidth: 240, maxWidth: 360 }}>
           <Icons.Search size={14} />
@@ -159,8 +159,8 @@ export function TasksView() {
         <button className="btn primary" onClick={onAddTask}><Icons.Plus size={14} /> Yeni görev</button>
       </div>
 
-      <div className="tasks-table-card" style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', background: 'var(--bg-elev)', overflow: 'hidden' }}>
-        <div className="tasks-table-scroll" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 240px)' }}>
+      <div className="tasks-table-card">
+        <div className="tasks-table-scroll">
           <table className="tbl">
             <thead>
               <tr>

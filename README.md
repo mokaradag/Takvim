@@ -4,7 +4,7 @@ Endüstriyel/kontrol paneli tarzında bir proje yönetimi uygulaması: Basit Mod
 
 ## Yerel geliştirme
 
-Gereksinim: Node.js 18+
+Gereksinim: Node.js 24 (üretim ve Quality CI: 24.14.0)
 
 ```bash
 npm install
@@ -85,9 +85,10 @@ npx next telemetry disable
 - `src/features` — Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip, Ayarlar ve görev detayı
 - `src/components/shell` — sidebar, workspace switcher, çalışma modu seçicisi, topbar, navigasyon, komut paleti, loading/error sınırı, persistence durumu ve global overlay bileşenleri
 - `src/components/ui.jsx`, `src/components/ui-extras.jsx` — yeniden kullanılabilir görsel bileşenler
+- `src/app/styles` — kronolojik düzeltme katmanları yerine shell, Dashboard, shared components, feature layout, Basit Mod ve deneyim yüzeyleri için sorumluluk tabanlı stil sahipliği
 - `src/hooks` — görünüm tercihleri ve bunları DOM'a uygulayan hook'lar
 
-Ayrıntılı bağımlılık kuralları için `docs/ARCHITECTURE.md`; asenkron yükleme ve persistence semantics için `docs/PERSISTENCE-BOUNDARY.md`; Portfolio/Project Workspace ve WBS kuralları için `docs/WBS-AND-WORKSPACES.md`; profesyonel scheduling veri modeli için `docs/SCHEDULING-DATA-MODEL.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki, çıktı ve uygulama entegrasyonu sözleşmeleri için `docs/CPM.md` dosyasına bakın.
+Ayrıntılı bağımlılık kuralları için `docs/ARCHITECTURE.md`; UI/stil sahipliği için `docs/UI-STYLING-ARCHITECTURE.md`; tekrarlanabilir elle görsel doğrulama için `docs/VISUAL-SMOKE-TESTS.md`; asenkron yükleme ve persistence semantics için `docs/PERSISTENCE-BOUNDARY.md`; Portfolio/Project Workspace ve WBS kuralları için `docs/WBS-AND-WORKSPACES.md`; profesyonel scheduling veri modeli için `docs/SCHEDULING-DATA-MODEL.md`; proje takvimi ve çalışma günü aritmetiği için `docs/SCHEDULING.md`; CPM motorunun giriş, ilişki, çıktı ve uygulama entegrasyonu sözleşmeleri için `docs/CPM.md` dosyasına bakın.
 
 ## Portfolio ve Project Workspace
 
@@ -134,7 +135,7 @@ Task Detail'daki hızlı metin değişiklikleri kısa bir per-Task pencere için
 
 ## Sonraki adım
 
-Persistence-ready state/data boundary uygulamadadır. Önerilen sonraki büyük persistence adımı, aynı `AppRepository` sözleşmesini uygulayan gerçek client API adapter'ı ile Next.js server-side service ve SQL Server persistence katmanını eklemektir; tarayıcı SQL Server'a doğrudan bağlanmamalıdır.
+UI/stil mimarisi, kronolojik patch katmanlarından sorumluluk tabanlı sahipliğe geçirilmiştir. Persistence-ready state/data boundary uygulamadadır. Önerilen sonraki büyük persistence adımı, aynı `AppRepository` sözleşmesini uygulayan gerçek client API adapter'ı ile Next.js server-side service ve SQL Server persistence katmanını eklemektir; tarayıcı SQL Server'a doğrudan bağlanmamalıdır.
 
 İlk kurumsal adapter; proje tablosundaki `ProjeKodu`/`ProjeAdi` alanlarını canonical `code`/`name`, personel tablosundaki çalışan numarası/ad alanlarını `employeeNo`/`name` alanlarına eşlemelidir. Kullanıcı tarafından oluşturulan serbest projeler aynı repository sözleşmesi içinde farklı `source` değeriyle saklanabilir.
 

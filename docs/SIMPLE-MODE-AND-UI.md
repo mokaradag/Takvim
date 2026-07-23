@@ -28,10 +28,10 @@ Bu yaklaşım, kişi sayısı büyüdüğünde yüzlerce kartın aynı anda rend
 Proje çalışma alanında proje bağlamı üst çubuğun gerçek yatay ve dikey merkezinde gösterilir:
 
 - proje kodu varsa daha geri planda, gri tonlu ve monospace tipografiyle;
-- proje adı ana metin rengiyle ve daha güçlü ağırlıkta;
+- proje adı vurgu rengi ile ana metin arasında belirgin bir tonla ve daha güçlü ağırlıkta;
 - açık ve koyu temalarda `--text-muted` ve `--text` tema değişkenleriyle yeterli ayrım sağlanacak biçimde.
 
-Üst sağ köşedeki dönen MERGEN yedigeni, üst çubuğun kendi kırpma katmanı içinde görünür kalacak konum ve boyutta gösterilir.
+Üst sağ köşedeki dönen MERGEN yedigeni yalnızca `.topbar-emblem-clip` dekoratif katmanı tarafından kırpılır; topbarın kendisi dışa taşan menü ve popoverlar için `overflow: visible` kalır. Bu sözleşmenin sahibi `src/app/styles/shell.css` dosyasıdır.
 
 ## Özet yerleşimi
 
@@ -42,7 +42,7 @@ Proje çalışma alanında proje bağlamı üst çubuğun gerçek yatay ve dikey
 
 hizalanır.
 
-Durum dağılımı halka grafiği önceki görünüme göre biraz büyütülür ve kart gövdesinde dikey olarak ortalanır.
+Durum dağılımı halka grafiği ve legend yerleşimi, PR #28 ile kabul edilen boyut ve 1280 px davranışını korur. Dashboard yapısı `dashboard-main-grid`, `dashboard-status-card`, `dashboard-status-body`, `dashboard-status-chart` ve `dashboard-status-legend` gibi semantik sınıflarla tanımlanır; inline stil metni veya kart sırası üzerinden çıkarım yapılmaz. Bu sözleşmenin sahibi `src/app/styles/dashboard.css` dosyasıdır.
 
 ## Windows VM üzerindeki `npm run build` uyarıları
 
@@ -78,3 +78,8 @@ Kurum içi npm registry/proxy yapılandırması kullanılıyorsa ayarı silmeden
 ### `deprecated` paket bildirimleri
 
 `npm install` sırasında görülen `deprecated` satırları da tek başına build hatası değildir. Bunlar doğrudan veya geçişli bağımlılıkların eski sürümlerine ilişkin bildirimlerdir. Uygulamanın çalışan sürümünü bozma riski nedeniyle, paket güncellemeleri bu arayüz düzeltmesinden ayrı bir bakım çalışmasında `npm test` ve `npm run build` ile doğrulanarak yapılmalıdır.
+
+
+## Stil sahipliği
+
+Basit Mod arayüz stilleri `src/app/styles/simple-mode.css` içinde sahiplenilir. Üst çubuk `shell.css`, Özet/Dashboard `dashboard.css` tarafından yönetilir. Yerel bir görsel sorun için yeni bir global `fixes` veya `polish` katmanı eklenmemelidir; ilgili yetkili stil sahibi düzeltilmelidir. Ayrıntılar için `UI-STYLING-ARCHITECTURE.md` dosyasına bakın.
