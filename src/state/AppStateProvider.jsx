@@ -130,6 +130,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const updateTask = useCallback((id, patch) => persistence.updateTask(id, patch), [persistence]);
+  const flushPendingChanges = useCallback(() => persistence.flush(), [persistence]);
 
   const moveTaskToWbs = useCallback(async (id, wbsId) => {
     const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([id]));
@@ -188,17 +189,15 @@ export function AppStateProvider({ children, repository = appRepository }) {
 
     const committedProject = result.value?.projectUpserts?.find((project) => project.id === prepared.project.id)
       || prepared.project;
-    const committedRoot = result.value?.wbsUpserts?.find((node) => node.id === prepared.rootWbs.id)
-      || prepared.rootWbs;
     const latest = stateRef.current;
 
     applyStateAction({
       type: 'data/load-success',
       snapshot: {
         calendars: latest.calendars,
-        projects: [...latest.projects, committedProject],
+        projects: mergeUpserts(latest.projects, [committedProject]),
         people: latest.people,
-        wbs: [...latest.wbs, committedRoot],
+        wbs: latest.wbs,
         tasks: latest.tasks,
         baselines: latest.baselines,
         taskBaselineSnapshots: latest.taskBaselineSnapshots
@@ -296,6 +295,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     openTask,
     closeTask,
     updateTask,
+    flushPendingChanges,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
@@ -314,6 +314,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     openTask,
     closeTask,
     updateTask,
+    flushPendingChanges,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
