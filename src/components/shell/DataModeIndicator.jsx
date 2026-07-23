@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { useDataMode } from '../../data/dataMode';
+import { useDataMode } from './DataModeContext';
 
 export function DataModeIndicator() {
   const { dataMode, setDataMode } = useDataMode();
