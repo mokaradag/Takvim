@@ -63,15 +63,42 @@ function normalizeActualChanges(changes = {}) {
   };
 }
 
-function collectClientIds(changes = {}) {
-  const map = new Map();
-  for (const collection of [changes.projectUpserts, changes.wbsUpserts, changes.taskUpserts]) {
-    for (const entity of collection || []) {
-      const original = entity?.id == null ? null : String(entity.id);
-      const actual = toActualUuid(original);
-      if (original && actual && original !== actual) map.set(actual, original);
+function rememberClientId(map, value) {
+  if (value == null || value === '') return;
+  const original = String(value);
+  const actual = toActualUuid(original);
+  if (actual && original !== actual) map.set(actual, original);
+}
+
+function rememberDeleteId(map, entry) {
+  rememberClientId(map, typeof entry === 'string' ? entry : entry?.id);
+}
+
+function collectClientIds(changes = {}, map = new Map()) {
+  for (const project of changes.projectUpserts || []) {
+    rememberClientId(map, project?.id);
+    rememberClientId(map, project?.calendarId);
+  }
+  for (const entry of changes.projectDeletes || []) rememberDeleteId(map, entry);
+
+  for (const node of changes.wbsUpserts || []) {
+    rememberClientId(map, node?.id);
+    rememberClientId(map, node?.projectId);
+    rememberClientId(map, node?.parentId);
+  }
+  for (const entry of changes.wbsDeletes || []) rememberDeleteId(map, entry);
+
+  for (const task of changes.taskUpserts || []) {
+    rememberClientId(map, task?.id);
+    rememberClientId(map, task?.projectId);
+    rememberClientId(map, task?.wbsId);
+    rememberClientId(map, task?.calendarId);
+    for (const dependency of task?.deps || []) {
+      rememberClientId(map, dependency?.id);
+      rememberClientId(map, dependency?.predecessorId);
     }
   }
+  for (const entry of changes.taskDeletes || []) rememberDeleteId(map, entry);
   return map;
 }
 
@@ -86,9 +113,9 @@ function restoreDeleteId(entry, map) {
     : { ...entry, id: restoreClientId(entry?.id, map) };
 }
 
-export function restoreActualCommitIds(body, changes = {}) {
+export function restoreActualCommitIds(body, changes = {}, aliases = null) {
   if (!body || typeof body !== 'object') return body;
-  const map = collectClientIds(changes);
+  const map = collectClientIds(changes, aliases || new Map());
   if (!map.size) return body;
 
   const restored = { ...body };
@@ -132,6 +159,35 @@ export function restoreActualCommitIds(body, changes = {}) {
   return restored;
 }
 
+function restoreActualSnapshotIds(body, map) {
+  if (!body || typeof body !== 'object' || !map?.size) return body;
+  return {
+    ...body,
+    projects: Array.isArray(body.projects) ? body.projects.map((project) => ({
+      ...project,
+      id: restoreClientId(project.id, map),
+      calendarId: restoreClientId(project.calendarId, map)
+    })) : body.projects,
+    wbs: Array.isArray(body.wbs) ? body.wbs.map((node) => ({
+      ...node,
+      id: restoreClientId(node.id, map),
+      projectId: restoreClientId(node.projectId, map),
+      parentId: restoreClientId(node.parentId, map)
+    })) : body.wbs,
+    tasks: Array.isArray(body.tasks) ? body.tasks.map((task) => ({
+      ...task,
+      id: restoreClientId(task.id, map),
+      projectId: restoreClientId(task.projectId, map),
+      wbsId: restoreClientId(task.wbsId, map),
+      calendarId: restoreClientId(task.calendarId, map),
+      deps: (task.deps || []).map((dependency) => ({
+        ...dependency,
+        predecessorId: restoreClientId(dependency.predecessorId, map)
+      }))
+    })) : body.tasks
+  };
+}
+
 function normalizeActualResponse(body) {
   if (!body || typeof body !== 'object') return body;
   if (Array.isArray(body.tasks)) {
@@ -163,20 +219,22 @@ async function requestJson(url, init, operation) {
 }
 
 export function createApiRepository({ basePath = '/api/mergen-rota' } = {}) {
+  const clientIdAliases = new Map();
   return {
     kind: 'actual-api',
     loadSessionContext() {
       return requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
     },
-    loadSnapshot() {
-      return requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
+    async loadSnapshot() {
+      const snapshot = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
+      return restoreActualSnapshotIds(snapshot, clientIdAliases);
     },
     async commitChanges(changes) {
       const committed = await requestJson(`${basePath}/commit`, {
         method: 'POST',
         body: JSON.stringify({ changes: normalizeActualChanges(changes) })
       }, 'commitChanges');
-      return restoreActualCommitIds(committed, changes);
+      return restoreActualCommitIds(committed, changes, clientIdAliases);
     },
     async flush() {}
   };

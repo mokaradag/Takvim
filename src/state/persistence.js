@@ -119,11 +119,25 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   return { schedule, flush, flushAll, dispose };
 }
 
+function defaultSessionContext(repository) {
+  return {
+    dataMode: repository?.kind === 'actual-api' || repository?.kind === 'sql-server' ? 'actual' : 'demo',
+    currentUser: null,
+    isSystemAdmin: false,
+    isExecutive: false,
+    canCreateProjects: false,
+    projectAccess: []
+  };
+}
+
 export async function loadApplicationData(repository) {
   try {
+    const sessionPromise = typeof repository.loadSessionContext === 'function'
+      ? repository.loadSessionContext()
+      : Promise.resolve(defaultSessionContext(repository));
     const [snapshot, session] = await Promise.all([
       repository.loadSnapshot(),
-      repository.loadSessionContext()
+      sessionPromise
     ]);
     return { ok: true, snapshot: { ...snapshot, session } };
   } catch (error) {

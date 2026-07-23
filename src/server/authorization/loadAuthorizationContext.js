@@ -47,7 +47,8 @@ export async function loadAuthorizationContext(executor = null) {
     UNION
     SELECT pa.ProjectId, CASE WHEN pa.GrantSource = 'OWNER' THEN 'MANUAL_OWNER' ELSE 'MANUAL_GRANT' END
     FROM dbo.MR_ProjectAccess pa
-    WHERE pa.Sicil = @sicil AND pa.IsActive = 1 AND pa.AccessLevel = 'FULL';
+    JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
+    WHERE p.IsActive = 1 AND pa.Sicil = @sicil AND pa.IsActive = 1 AND pa.AccessLevel = 'FULL';
 
     SELECT DISTINCT t.ProjectId, t.TaskId,
       CASE WHEN ta.Sicil = @sicil THEN 'ASSIGNEE' ELSE 'EXECUTIVE_SCOPE' END AS Reason

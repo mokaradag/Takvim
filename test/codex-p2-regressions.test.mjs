@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createApiRepository, toActualUuid } from '../src/data/api/createApiRepository.js';
 import { createInitialState, appStateReducer } from '../src/state/appState.js';
-import { createStateMutationOrchestrator } from '../src/state/persistence.js';
+import { createStateMutationOrchestrator, loadApplicationData } from '../src/state/persistence.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -158,4 +158,124 @@ test('partial task visibility cannot add inactive projects to the visible projec
 test('Actual UUID normalization still strips only local creation prefixes', () => {
   assert.equal(toActualUuid(`task-${TASK_ID}`), TASK_ID);
   assert.equal(toActualUuid(TASK_ID), TASK_ID);
+});
+
+
+test('existing WBS updates authorize the stored project and reject forged project reassignment', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
+  assert.ok(body.indexOf('const before = await wbsRow(executor, wbsId)') < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
+  assert.match(body, /const storedProjectId = id\(before\.ProjectId\);/);
+  assert.match(body, /if \(storedProjectId !== projectId\)/);
+});
+
+test('existing task updates authorize both stored source and requested destination projects', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
+  const loadIndex = body.indexOf('const before = await taskRow(executor, taskId)');
+  const sourceAuthIndex = body.indexOf('if (before) assertProjectWriteAccess(actor.effective, id(before.ProjectId))');
+  const destinationAuthIndex = body.indexOf('assertProjectWriteAccess(actor.effective, projectId)');
+  assert.ok(loadIndex >= 0 && loadIndex < sourceAuthIndex);
+  assert.ok(sourceAuthIndex < destinationAuthIndex);
+});
+
+test('cross-project task moves clear incoming and outgoing dependency rows before changing ProjectId', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
+  const cleanupIndex = body.indexOf('WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;');
+  const updateIndex = body.indexOf('UPDATE dbo.MR_Tasks');
+  assert.match(body, /const projectChanged = before && id\(before\.ProjectId\) !== projectId;/);
+  assert.ok(cleanupIndex >= 0 && cleanupIndex < updateIndex);
+});
+
+test('manual FULL grants are ignored when their project is inactive', () => {
+  const source = read('src/server/authorization/loadAuthorizationContext.js');
+  assert.match(
+    source,
+    /FROM dbo\.MR_ProjectAccess pa\s+JOIN dbo\.MR_Projects p ON p\.ProjectId = pa\.ProjectId\s+WHERE p\.IsActive = 1 AND pa\.Sicil = @sicil AND pa\.IsActive = 1 AND pa\.AccessLevel = 'FULL'/s
+  );
+});
+
+test('repositories without loadSessionContext still load with a conservative default session', async () => {
+  const result = await loadApplicationData({
+    kind: 'legacy-test',
+    async loadSnapshot() {
+      return { calendars: [], projects: [], people: [], wbs: [], tasks: [], baselines: [], taskBaselineSnapshots: [] };
+    },
+    async commitChanges(changes) { return changes; }
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.snapshot.session, {
+    dataMode: 'demo',
+    currentUser: null,
+    isSystemAdmin: false,
+    isExecutive: false,
+    canCreateProjects: false,
+    projectAccess: []
+  });
+});
+
+test('Actual repository keeps client ID aliases across later snapshot loads and delete-only responses', async () => {
+  const projectClientId = `project-${PROJECT_ID}`;
+  const wbsClientId = `wbs-${WBS_ID}`;
+  const taskClientId = `task-${TASK_ID}`;
+  const originalFetch = globalThis.fetch;
+  let step = 0;
+
+  globalThis.fetch = async (url) => {
+    step += 1;
+    if (String(url).endsWith('/commit') && step === 1) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            projectUpserts: [{ id: PROJECT_ID, name: 'Persistent Alias', version: 'pv' }],
+            wbsUpserts: [{ id: WBS_ID, projectId: PROJECT_ID, parentId: null, code: '1', name: 'Root', version: 'wv' }],
+            taskUpserts: [{ id: TASK_ID, projectId: PROJECT_ID, wbsId: WBS_ID, status: 'planned', deps: [], version: 'tv' }]
+          };
+        }
+      };
+    }
+    if (String(url).endsWith('/snapshot')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            projects: [{ id: PROJECT_ID, name: 'Persistent Alias' }],
+            wbs: [{ id: WBS_ID, projectId: PROJECT_ID, parentId: null, code: '1', name: 'Root' }],
+            tasks: [{ id: TASK_ID, projectId: PROJECT_ID, wbsId: WBS_ID, status: 'planned', deps: [] }]
+          };
+        }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() { return { taskDeletes: [TASK_ID] }; }
+    };
+  };
+
+  try {
+    const repository = createApiRepository({ basePath: '/alias-api' });
+    await repository.commitChanges({
+      projectUpserts: [{ id: projectClientId, name: 'Persistent Alias' }],
+      wbsUpserts: [{ id: wbsClientId, projectId: projectClientId, parentId: null, code: '1', name: 'Root' }],
+      taskUpserts: [{ id: taskClientId, projectId: projectClientId, wbsId: wbsClientId, status: 'todo', deps: [] }]
+    });
+
+    const snapshot = await repository.loadSnapshot();
+    assert.equal(snapshot.projects[0].id, projectClientId);
+    assert.equal(snapshot.wbs[0].id, wbsClientId);
+    assert.equal(snapshot.wbs[0].projectId, projectClientId);
+    assert.equal(snapshot.tasks[0].id, taskClientId);
+    assert.equal(snapshot.tasks[0].projectId, projectClientId);
+    assert.equal(snapshot.tasks[0].wbsId, wbsClientId);
+
+    const deleted = await repository.commitChanges({ taskDeletes: [taskClientId] });
+    assert.equal(deleted.taskDeletes[0], taskClientId);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

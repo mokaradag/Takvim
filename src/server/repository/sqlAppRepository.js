@@ -433,8 +433,16 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
 async function commitWbs(executor, actor, node, correlationId) {
   const wbsId = uuid(node.id);
   const projectId = uuid(node.projectId);
-  assertProjectWriteAccess(actor.effective, projectId);
   const before = await wbsRow(executor, wbsId);
+  if (before) {
+    const storedProjectId = id(before.ProjectId);
+    assertProjectWriteAccess(actor.effective, storedProjectId);
+    if (storedProjectId !== projectId) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'WBS kaydı farklı bir projeye taşınamaz.');
+    }
+  } else {
+    assertProjectWriteAccess(actor.effective, projectId);
+  }
   if (node.parentId) {
     let parent = await wbsRow(executor, node.parentId);
     if (!parent || id(parent.ProjectId) !== projectId) {
@@ -479,6 +487,8 @@ async function commitWbs(executor, actor, node, correlationId) {
 async function commitTask(executor, actor, task, correlationId) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
+  const before = await taskRow(executor, taskId);
+  if (before) assertProjectWriteAccess(actor.effective, id(before.ProjectId));
   assertProjectWriteAccess(actor.effective, projectId);
   if (!await projectRow(executor, projectId)) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Görev projesi bulunamadı.');
@@ -499,7 +509,15 @@ async function commitTask(executor, actor, task, correlationId) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Kilometre taşı süresi sıfır olmalıdır.');
   }
   await ensurePeople(executor, task.assigneeIds || []);
-  const before = await taskRow(executor, taskId);
+  const projectChanged = before && id(before.ProjectId) !== projectId;
+  if (projectChanged) {
+    const dependencyCleanup = request(executor);
+    dependencyCleanup.input('taskId', sql.UniqueIdentifier, taskId);
+    await dependencyCleanup.query(`
+      DELETE dbo.MR_TaskDependencies
+      WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;
+    `);
+  }
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   req.input('projectId', sql.UniqueIdentifier, projectId);
