@@ -1,9 +1,9 @@
 name: Temporary source export
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/source-export-temp
+      - main
 
 permissions:
   contents: read
