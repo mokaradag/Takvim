@@ -18,7 +18,7 @@ function changedEntities(before = [], after = []) {
     upserts: after.filter((item) => beforeById.get(item.id) !== item),
     deletes: before
       .filter((item) => !afterById.has(item.id))
-      .map((item) => ({ id: item.id, version: item.version || null }))
+      .map((item) => (item.version ? { id: item.id, version: item.version } : item.id))
   };
 }
 

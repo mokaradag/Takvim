@@ -90,6 +90,6 @@ test('Actual repository does not persist CPM output fields', () => {
 test('one commit maps to one SQL transaction and one correlation id', () => {
   const repository = source(join(root, 'src/server/repository/sqlAppRepository.js'));
   assert.match(repository, /commitChanges\(input\).*withSqlTransaction/s);
-  assert.match(repository, /const correlationId=randomUUID\(\)/);
+  assert.match(repository, /const\s+correlationId\s*=\s*randomUUID\(\)/);
   assert.match(repository, /MR_AuditLog/);
 });

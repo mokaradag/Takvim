@@ -207,7 +207,7 @@ test('navigation definitions contain no duplicate labels or icons', () => {
 test('application root composes provider, data boundary, shell, and persistence status', () => {
   const source = read('src/components/shell/ApplicationRoot.jsx');
   assert.match(source, /^['"]use client['"];?/m);
-  assert.match(source, /<AppStateProvider>/);
+  assert.match(source, /<AppStateProvider\b/);
   assert.match(source, /<AppDataBoundary>/);
   assert.match(source, /<AppShell\s*\/>/);
   assert.match(source, /<PersistenceStatus\s*\/>/);
