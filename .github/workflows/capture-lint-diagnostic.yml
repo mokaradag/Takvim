@@ -1,4 +1,4 @@
-name: Capture lint diagnostic
+name: Capture persistence diagnostics
 
 on:
   pull_request:
@@ -16,8 +16,8 @@ jobs:
           node-version: 24.14.0
           cache: npm
       - run: npm ci
-      - run: npm run lint > lint-diagnostic.txt 2>&1 || true
+      - run: npm test -- --test-concurrency=1 > test-diagnostic.txt 2>&1 || true
       - uses: actions/upload-artifact@v4
         with:
-          name: lint-diagnostic
-          path: lint-diagnostic.txt
+          name: test-diagnostic
+          path: test-diagnostic.txt
