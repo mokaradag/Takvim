@@ -46,9 +46,12 @@
  */
 
 /**
+ * `loadSessionContext` is optional for legacy/test repositories. The state loader
+ * supplies a conservative default session when it is absent.
+ *
  * @typedef {Object} AppRepository
  * @property {() => Promise<AppDataSnapshot>} loadSnapshot
- * @property {() => Promise<AppSessionContext>} loadSessionContext
+ * @property {() => Promise<AppSessionContext>} [loadSessionContext]
  * @property {(changes: AppChangeSet) => Promise<AppChangeSet>} commitChanges
  * @property {() => Promise<void>} [flush]
  */
@@ -95,10 +98,12 @@ export function assertAppRepository(repository) {
   if (
     !repository
     || typeof repository.loadSnapshot !== 'function'
-    || typeof repository.loadSessionContext !== 'function'
     || typeof repository.commitChanges !== 'function'
   ) {
-    throw new Error('App repository must implement loadSnapshot(), loadSessionContext() and commitChanges().');
+    throw new Error('App repository must implement loadSnapshot() and commitChanges().');
+  }
+  if (repository.loadSessionContext != null && typeof repository.loadSessionContext !== 'function') {
+    throw new Error('App repository loadSessionContext must be a function when provided.');
   }
   return repository;
 }
