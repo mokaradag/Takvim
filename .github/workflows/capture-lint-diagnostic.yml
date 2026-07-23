@@ -1,9 +1,7 @@
 name: Capture lint diagnostic
 
 on:
-  push:
-    branches:
-      - agent/durable-sqlserver-persistence
+  pull_request:
 
 permissions:
   contents: read
