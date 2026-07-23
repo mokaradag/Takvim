@@ -31,6 +31,16 @@ jobs:
         run: npm ci
       - name: Run lint
         run: npm run lint
+      - name: Check ProjectCode canonicalization regression
+        run: node --test --test-name-pattern="ProjectCode is canonicalized" test/codex-p2-regressions.test.mjs
+      - name: Check root WBS synchronization regression
+        run: node --test --test-name-pattern="corporate sync updates the single default root WBS" test/codex-p2-regressions.test.mjs
+      - name: Check READ grant regression
+        run: node --test --test-name-pattern="project-level READ grants appear as PARTIAL" test/codex-p2-regressions.test.mjs
+      - name: Check HR02 deterministic ranking regression
+        run: node --test --test-name-pattern="HR02 people directory duplicate ranking" test/codex-p2-regressions.test.mjs
+      - name: Check SQL int Sicil regression
+        run: node --test --test-name-pattern="development identity rejects partial" test/codex-p2-regressions.test.mjs
       - name: Run fifth Codex regression tests
         run: node --test test/codex-p2-regressions.test.mjs
       - name: Run durable SQL contract tests
