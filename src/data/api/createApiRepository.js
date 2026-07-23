@@ -7,11 +7,21 @@ const CODE_BY_STATUS = {
   503: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE
 };
 const UUID_SUFFIX = /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+const STATUS_TO_SQL = Object.freeze({ todo: 'planned', in_progress: 'in-progress' });
+const STATUS_FROM_SQL = Object.freeze({ planned: 'todo', 'in-progress': 'in_progress' });
 
 export function toActualUuid(value) {
   if (value == null || value === '') return null;
   const match = String(value).match(UUID_SUFFIX);
   return match ? match[1] : String(value);
+}
+
+export function toPersistenceStatus(value) {
+  return STATUS_TO_SQL[value] || value;
+}
+
+export function fromPersistenceStatus(value) {
+  return STATUS_FROM_SQL[value] || value;
 }
 
 function normalizeDelete(entry) {
@@ -42,6 +52,7 @@ function normalizeActualChanges(changes = {}) {
       projectId: toActualUuid(task.projectId),
       wbsId: toActualUuid(task.wbsId),
       calendarId: toActualUuid(task.calendarId),
+      status: toPersistenceStatus(task.status),
       deps: (task.deps || []).map((dependency) => ({
         ...dependency,
         id: dependency.id ? toActualUuid(dependency.id) : dependency.id,
@@ -50,6 +61,17 @@ function normalizeActualChanges(changes = {}) {
     })),
     taskDeletes: (changes.taskDeletes || []).map(normalizeDelete)
   };
+}
+
+function normalizeActualResponse(body) {
+  if (!body || typeof body !== 'object') return body;
+  if (Array.isArray(body.tasks)) {
+    return { ...body, tasks: body.tasks.map((task) => ({ ...task, status: fromPersistenceStatus(task.status) })) };
+  }
+  if (Array.isArray(body.taskUpserts)) {
+    return { ...body, taskUpserts: body.taskUpserts.map((task) => ({ ...task, status: fromPersistenceStatus(task.status) })) };
+  }
+  return body;
 }
 
 async function requestJson(url, init, operation) {
@@ -68,7 +90,7 @@ async function requestJson(url, init, operation) {
       details: body?.error?.details || null
     });
   }
-  return body;
+  return normalizeActualResponse(body);
 }
 
 export function createApiRepository({ basePath = '/api/mergen-rota' } = {}) {
