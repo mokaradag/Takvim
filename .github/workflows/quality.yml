@@ -61,6 +61,16 @@ jobs:
         run: npm ci
       - name: Run lint
         run: npm run lint
+      - name: Check development identity regression
+        run: node --test --test-name-pattern="development identity rejects partial" test/codex-p2-regressions.test.mjs
+      - name: Check manual corporate code regression
+        run: node --test --test-name-pattern="manual project codes cannot silently suppress" test/codex-p2-regressions.test.mjs
+      - name: Check partial people regression
+        run: node --test --test-name-pattern="partial-only snapshots constrain the people directory" test/codex-p2-regressions.test.mjs
+      - name: Check corporate project name regression
+        run: node --test --test-name-pattern="corporate project view always supplies" test/codex-p2-regressions.test.mjs
+      - name: Check prior corporate sync regression
+        run: node --test --test-name-pattern="corporate project sync serializes concurrent first inserts" test/codex-p2-regressions.test.mjs
       - name: Run fourth Codex regression tests
         run: node --test test/codex-p2-regressions.test.mjs
       - name: Run durable SQL contract tests
