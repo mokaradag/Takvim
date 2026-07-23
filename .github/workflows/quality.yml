@@ -22,6 +22,18 @@ jobs:
           fetch-depth: 0
       - name: Apply fifth Codex fixes
         run: python .github/scripts/apply-fifth-codex-review-fixes.py
+      - name: Refresh snapshot ProjectCode regression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('test/codex-p2-regressions.test.mjs')
+          text = path.read_text()
+          old = "/JOIN dbo\\.MR_V_CorporateProjectAccess a ON a\\.ProjectCode = p\\.ProjectCode\\s+WHERE @isAdmin = 0 AND p\\.SourceType = 'CORPORATE' AND p\\.IsActive = 1 AND a\\.Sicil = @sicil/s"
+          new = "/JOIN dbo\\.MR_V_CorporateProjectAccess a ON a\\.ProjectCode = UPPER\\(p\\.ProjectCode\\)\\s+WHERE @isAdmin = 0 AND p\\.SourceType = 'CORPORATE' AND p\\.IsActive = 1 AND a\\.Sicil = @sicil/s"
+          if old not in text:
+              raise SystemExit('snapshot HR09 ProjectCode regression not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
