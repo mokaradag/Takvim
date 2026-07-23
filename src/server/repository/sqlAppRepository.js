@@ -115,8 +115,9 @@ async function loadSnapshotFrom(executor, auth) {
     INSERT @VisibleProjects(ProjectId, AccessLevel)
     SELECT DISTINCT t.ProjectId, 'PARTIAL'
     FROM dbo.MR_Tasks t
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
     JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = t.TaskId
-    WHERE @isAdmin = 0
+    WHERE @isAdmin = 0 AND p.IsActive = 1
       AND (
         ta.Sicil = @sicil
         OR EXISTS (
@@ -543,7 +544,7 @@ async function commitTask(executor, actor, task, correlationId) {
     req.input('version', sql.Binary(8), decodeVersion(task.version));
     const updated = await req.query(`
       UPDATE dbo.MR_Tasks
-      SET WbsId = @wbsId, CalendarId = @calendarId, Title = @title,
+      SET ProjectId = @projectId, WbsId = @wbsId, CalendarId = @calendarId, Title = @title,
           Description = @description, Keyword = @keyword, Status = @status, Priority = @priority,
           IsMilestone = @isMilestone, PlannedStart = @plannedStart, PlannedFinish = @plannedFinish,
           PlannedDurationDays = @plannedDuration, TargetFinish = @targetFinish,
@@ -585,7 +586,7 @@ async function commitTask(executor, actor, task, correlationId) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Bağımlılık görevleri aynı projede ve birbirinden farklı olmalıdır.');
     }
     const dep = request(executor);
-    dep.input('dependencyId', sql.UniqueIdentifier, uuid(dependency.id || randomUUID()));
+    dep.input('dependencyId', sql.UniqueIdentifier, randomUUID());
     dep.input('projectId', sql.UniqueIdentifier, projectId);
     dep.input('taskId', sql.UniqueIdentifier, taskId);
     dep.input('predecessorId', sql.UniqueIdentifier, predecessorId);
