@@ -26,18 +26,12 @@ test('topbar shows only a small lower heptagon slice without clipping header pop
 
   assert.match(shell, /<header className="topbar">[\s\S]*?<div className="topbar-emblem-clip"><Heptagon variant="hept-topbar" \/><\/div>/);
 
-  // P1 regression: the header itself must not clip Dışa aktar or other popovers.
-  // Only the decorative overlay is allowed to clip the rotating emblem.
   assert.match(css, /\.topbar\s*\{[^}]*overflow:\s*visible;/s);
   assert.doesNotMatch(css, /\.topbar\s*\{[^}]*overflow:\s*hidden;/s);
   assert.match(css, /\.topbar-emblem-clip\s*\{[^}]*position:\s*absolute !important;[^}]*inset:\s*0 !important;[^}]*overflow:\s*hidden !important;/s);
-
-  // The vertical center is moved 15px south while the horizontal center stays put.
   assert.match(css, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*top:\s*-190px !important;[^}]*right:\s*-205px !important;[^}]*left:\s*auto !important;[^}]*width:\s*320px !important;[^}]*height:\s*320px !important;[^}]*transform:\s*none !important;/s);
   assert.match(css, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*opacity:\s*0\.24 !important;/s);
 
-  // The rotation center remains outside the visible header, but is now closer
-  // to the top edge: -190 + 320 / 2 = -30px; right remains -45px.
   assert.ok(-190 + 320 / 2 < 0);
   assert.ok(-205 + 320 / 2 < 0);
 });
@@ -65,37 +59,39 @@ test('selected project identity is forced to the true horizontal center instead 
   assert.match(css, /\.theme-light \.topbar-project-context strong\.topbar-project-name\s*\{[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 68%, var\(--text\)\);/s);
 });
 
-test('Durum dağılımı keeps the enlarged donut intact when a segment is selected', () => {
+test('Durum dağılımı is restored to the exact layout and interaction state from the start of PR28', () => {
   const css = read('src/app/topbar-dashboard-polish.css');
+  const ui = read('src/components/ui.jsx');
 
-  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*display:\s*grid !important;[^}]*grid-template-columns:\s*minmax\(214px, 1fr\) minmax\(126px, 150px\);[^}]*min-height:\s*236px;/s);
-  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child\s*\{[^}]*width:\s*214px !important;[^}]*height:\s*214px !important;/s);
-  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child > svg\s*\{[^}]*width:\s*214px !important;[^}]*height:\s*214px !important;/s);
+  // Layout values are the PR28 starting values, before the later 214px experiments.
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*display:\s*grid !important;[^}]*grid-template-columns:\s*minmax\(168px, 1fr\) minmax\(132px, 188px\);[^}]*min-height:\s*214px;/s);
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child\s*\{[^}]*width:\s*clamp\(174px, 13vw, 190px\);[^}]*height:\s*clamp\(174px, 13vw, 190px\);/s);
+  assert.match(css, /\.content-ozet svg\[viewBox='-10 -10 170 170'\]\s*\{[^}]*width:\s*100% !important;[^}]*height:\s*100% !important;/s);
+  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > \.col\s*\{[^}]*max-width:\s*188px;/s);
+  assert.match(css, /\.content-ozet \.donut-leg-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*12px !important;[^}]*padding:\s*5px 6px !important;/s);
 
-  // Dashboard Donut translates selected SVG groups inline. At the dash seam this
-  // can visually split a single selected arc into detached pieces, so the final
-  // dashboard layer pins those segment groups to the ring.
-  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > div:first-child > svg > g\s*\{[^}]*transform:\s*none !important;/s);
+  // The generic Donut component is also restored exactly: selected slices use
+  // the original translate/bounce interaction rather than PR28 source edits.
+  assert.match(ui, /Donut chart \(SVG\) — with click-to-select \+ bounce animation/);
+  assert.match(ui, /const tx = isSelected \? Math\.cos\(rad\) \* 10 : 0;/);
+  assert.match(ui, /const ty = isSelected \? Math\.sin\(rad\) \* 10 : 0;/);
+  assert.match(ui, /translate\(\$\{tx\}px, \$\{ty\}px\)/);
 
-  assert.match(css, /> \.card:nth-child\(2\) > \.row:last-child > \.col\s*\{[^}]*max-width:\s*150px;/s);
-  assert.match(css, /\.content-ozet \.donut-leg-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*8px !important;/s);
+  // No PR28-only forced segment pinning or 214px SVG override may remain.
+  assert.doesNotMatch(css, /> svg > g\s*\{[^}]*transform:\s*none !important;/s);
+  assert.doesNotMatch(css, /> div:first-child > svg\s*\{[^}]*width:\s*214px !important;/s);
 });
 
-test('compact desktop widths stack trend and status cards before the 214px donut can overflow', () => {
+test('compact dashboard uses the same 1280px status-card breakpoint as at the start of PR28', () => {
   const css = read('src/app/topbar-dashboard-polish.css');
 
-  // P2 regression: around 1280px viewport the status card used to remain in a
-  // narrow third column, while its 214px donut + legend needed much more width.
   assert.match(
     css,
-    /@media \(max-width: 1500px\)[\s\S]*?div\[style\*='grid-template-columns: 1fr 1fr'\]:has\(\.donut-leg-row\)\s*\{[^}]*grid-template-columns:\s*1fr !important;/s
+    /@media \(max-width: 1280px\)[\s\S]*?> \.card:first-child,[\s\S]*?> \.card:nth-child\(2\)\s*\{[^}]*grid-column:\s*1 \/ -1;/s
   );
   assert.match(
     css,
-    /@media \(max-width: 1500px\)[\s\S]*?> \.card:first-child,[\s\S]*?> \.card:nth-child\(2\)\s*\{[^}]*grid-column:\s*1 \/ -1 !important;/s
+    /@media \(max-width: 1280px\)[\s\S]*?> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*grid-template-columns:\s*minmax\(184px, 220px\) minmax\(160px, 220px\);[^}]*gap:\s*28px !important;/s
   );
-  assert.match(
-    css,
-    /@media \(max-width: 1500px\)[\s\S]*?> \.card:nth-child\(2\) > \.row:last-child\s*\{[^}]*grid-template-columns:\s*minmax\(214px, 230px\) minmax\(150px, 190px\);/s
-  );
+  assert.doesNotMatch(css, /@media \(max-width: 1500px\)[\s\S]*?donut-leg-row/s);
 });
