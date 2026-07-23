@@ -25,7 +25,6 @@ export default function ApplicationRoot() {
 
   const setDataMode = async (nextMode) => {
     if (nextMode !== DATA_MODES.DEMO && nextMode !== DATA_MODES.ACTUAL) return;
-    if (repository?.flush) await repository.flush();
     try { localStorage.setItem(DATA_MODE_STORAGE_KEY, nextMode); } catch {}
     setDataModeState(nextMode);
   };
@@ -35,10 +34,10 @@ export default function ApplicationRoot() {
   return (
     <DataModeContext.Provider value={{ dataMode, setDataMode }}>
       <AppStateProvider key={dataMode} repository={repository}>
+        <DataModeIndicator />
         <AppDataBoundary>
           <PresentationPolish />
           <AppShell />
-          <DataModeIndicator />
           <PersistenceStatus />
         </AppDataBoundary>
       </AppStateProvider>
