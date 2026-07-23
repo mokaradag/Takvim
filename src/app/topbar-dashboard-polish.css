@@ -1,0 +1,210 @@
+/* MERGEN Rota · screenshot-driven topbar and Özet polish
+   Loaded after followup-fixes.css so these rules are the final visual contract. */
+
+/* ── Topbar emblem ─────────────────────────────────────────────
+   Keep a dedicated, clipped viewport at the far-right edge. The previous
+   220px motif was positioned so far outside the 56px bar that the visible
+   polygon strokes could disappear depending on the generated geometry. */
+.topbar-emblem-clip {
+  inset: 0 0 0 auto;
+  width: 214px;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+  -webkit-mask-image: linear-gradient(to left, #000 0%, #000 72%, transparent 100%);
+  mask-image: linear-gradient(to left, #000 0%, #000 72%, transparent 100%);
+}
+
+.topbar-emblem-clip .hept-topbar {
+  position: absolute !important;
+  display: block !important;
+  visibility: visible !important;
+  top: 50% !important;
+  right: -34px !important;
+  width: 176px !important;
+  height: 176px !important;
+  transform: translateY(-50%);
+  opacity: 0.56 !important;
+  filter: drop-shadow(0 0 10px color-mix(in oklab, var(--accent) 34%, transparent));
+}
+
+.theme-light .topbar-emblem-clip .hept-topbar {
+  opacity: 0.34 !important;
+  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 24%, transparent));
+}
+
+/* ── Selected project identity ─────────────────────────────────
+   Present code and name as one compact, centered identity capsule. This
+   keeps the two text layers on the same visual axis and preserves contrast
+   in both themes without competing with the page title or actions. */
+.topbar-project-context {
+  min-height: 34px;
+  height: 34px;
+  max-width: min(46vw, 720px);
+  gap: 0;
+  padding: 3px;
+  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--border));
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--bg-elev) 88%, transparent);
+  box-shadow:
+    0 1px 0 color-mix(in oklab, white 8%, transparent) inset,
+    0 6px 18px rgb(0 0 0 / 0.10);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.topbar-project-code {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border-radius: calc(var(--r-pill) - 3px);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
+  color: color-mix(in oklab, var(--text-muted) 88%, var(--text));
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 720;
+  line-height: 1;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
+
+.topbar-project-separator {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--accent) 26%, var(--border));
+  color: transparent;
+  font-size: 0;
+  flex: 0 0 1px;
+}
+
+.topbar-project-context strong.topbar-project-name {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 10px 0 7px;
+  color: color-mix(in oklab, var(--accent) 82%, var(--text));
+  font-size: 15.5px;
+  font-weight: 780;
+  line-height: 1;
+  letter-spacing: -0.012em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-light .topbar-project-context strong.topbar-project-name {
+  color: color-mix(in oklab, var(--accent) 72%, var(--text));
+}
+
+/* ── Özet · Durum dağılımı ─────────────────────────────────────
+   Use the card's vertical room instead of stretching the legend horizontally.
+   The donut gets a real layout size (not only a visual SVG override), while
+   the legend is deliberately narrower so labels and counts read as one unit. */
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
+  display: grid !important;
+  grid-template-columns: minmax(168px, 1fr) minmax(132px, 188px);
+  justify-content: center !important;
+  align-items: center !important;
+  gap: clamp(8px, 1vw, 16px) !important;
+  min-height: 214px;
+}
+
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > div:first-child {
+  width: clamp(174px, 13vw, 190px);
+  height: clamp(174px, 13vw, 190px);
+  justify-self: center;
+}
+
+.content-ozet svg[viewBox='-10 -10 170 170'] {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
+  width: 100%;
+  max-width: 188px;
+  justify-self: end;
+  gap: 7px !important;
+}
+
+.content-ozet .donut-leg-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px !important;
+  width: 100%;
+  max-width: none;
+  padding: 5px 6px !important;
+}
+
+.content-ozet .donut-leg-row > .row {
+  min-width: 0;
+}
+
+.content-ozet .donut-leg-row > .tabular {
+  min-width: 2ch;
+  text-align: right;
+}
+
+@media (max-width: 1280px) {
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:first-child,
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
+    grid-template-columns: minmax(184px, 220px) minmax(160px, 220px);
+    justify-content: center !important;
+    gap: 28px !important;
+  }
+
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
+    max-width: 220px;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar-project-context {
+    max-width: 44vw;
+    height: 32px;
+    min-height: 32px;
+  }
+
+  .topbar-project-code {
+    padding: 0 7px;
+    font-size: 10px;
+  }
+
+  .topbar-project-context strong.topbar-project-name {
+    padding: 0 8px 0 5px;
+    font-size: 13.5px;
+  }
+
+  .topbar-emblem-clip {
+    width: 150px;
+  }
+
+  .topbar-emblem-clip .hept-topbar {
+    right: -42px !important;
+    width: 148px !important;
+    height: 148px !important;
+  }
+
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 14px !important;
+  }
+
+  .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
+    max-width: 240px;
+    justify-self: center;
+  }
+}
