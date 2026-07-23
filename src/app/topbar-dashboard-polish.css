@@ -21,7 +21,7 @@
   position: absolute !important;
   display: block !important;
   visibility: visible !important;
-  top: -205px !important;
+  top: -190px !important;
   right: -205px !important;
   bottom: auto !important;
   left: auto !important;
@@ -35,6 +35,14 @@
 .theme-light .topbar-emblem-clip .hept-topbar {
   opacity: 0.24 !important;
   filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 18%, transparent));
+}
+
+/* The settings preference already toggles body.no-emblem. The explicit
+   !important rule is required here because this final polish layer forces the
+   topbar emblem visible with display:block !important above. */
+body.no-emblem .topbar-emblem-clip .hept-topbar {
+  display: none !important;
+  visibility: hidden !important;
 }
 
 /* ── Selected project identity ─────────────────────────────────
@@ -113,9 +121,10 @@
 }
 
 /* ── Özet · Durum dağılımı ─────────────────────────────────────
-   Scale the actual donut SVG and its containing box, not only a generic SVG
-   selector. This makes the visual increase unambiguous while keeping the
-   status/count column compact. */
+   Scale the donut and its containing box together. The segment groups are kept
+   anchored to the ring: the component's selected-state translation can split a
+   dash that crosses the SVG seam into two apparently detached pieces. Selection
+   is still communicated by stroke emphasis, opacity and the legend highlight. */
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child {
   display: grid !important;
   grid-template-columns: minmax(214px, 1fr) minmax(126px, 150px);
@@ -136,6 +145,10 @@
   display: block;
   width: 214px !important;
   height: 214px !important;
+}
+
+.content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > div:first-child > svg > g {
+  transform: none !important;
 }
 
 .content-ozet .stagger > div[style*='grid-template-columns: 1fr 1fr']:has(.donut-leg-row) > .card:nth-child(2) > .row:last-child > .col {
