@@ -5,6 +5,7 @@ import { DATA_MODES, DATA_MODE_STORAGE_KEY, DataModeContext, createRepositoryFor
 import AppShell from './AppShell';
 import { AppDataBoundary } from './AppDataBoundary';
 import { DataModeChooser } from './DataModeChooser';
+import { DataModeIndicator } from './DataModeIndicator';
 import { PersistenceStatus } from './PersistenceStatus';
 import { PresentationPolish } from './PresentationPolish';
 
@@ -36,6 +37,7 @@ export default function ApplicationRoot() {
         <AppDataBoundary>
           <PresentationPolish />
           <AppShell />
+          <DataModeIndicator />
           <PersistenceStatus />
         </AppDataBoundary>
       </AppStateProvider>
