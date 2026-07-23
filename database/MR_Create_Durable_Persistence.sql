@@ -295,7 +295,7 @@ BEGIN TRY
         WHERE birim_yonetici_sicil IS NOT NULL AND sicil IS NOT NULL;');
 
     EXEC(N'CREATE VIEW dbo.MR_V_CorporateProjectAccess AS
-        SELECT UPPER(UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N''''))) AS ProjectCode, projeYoneticisiSicil AS Sicil, CAST(''PROJECT_MANAGER'' AS varchar(50)) AS RoleCode, programMd AS ProgramMd FROM dbo.HR09_projeSorumlu WHERE projeYoneticisiSicil IS NOT NULL
+        SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')) AS ProjectCode, projeYoneticisiSicil AS Sicil, CAST(''PROJECT_MANAGER'' AS varchar(50)) AS RoleCode, programMd AS ProgramMd FROM dbo.HR09_projeSorumlu WHERE projeYoneticisiSicil IS NOT NULL
         UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), teknikYoneticiSicil, ''TECHNICAL_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE teknikYoneticiSicil IS NOT NULL
         UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), kaliteYoneticiSicil, ''QUALITY_MANAGER'', programMd FROM dbo.HR09_projeSorumlu WHERE kaliteYoneticiSicil IS NOT NULL
         UNION ALL SELECT UPPER(NULLIF(LTRIM(RTRIM(projeKodu)), N'''')), tedarikSorumlusuSicil, ''PROCUREMENT_RESPONSIBLE'', programMd FROM dbo.HR09_projeSorumlu WHERE tedarikSorumlusuSicil IS NOT NULL
