@@ -227,6 +227,7 @@ export function SimpleModePanel() {
           <input
             value={peopleQuery}
             onChange={(event) => setPeopleQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }}
             placeholder="Ad veya personel numarasıyla ara"
             aria-label="Sorumlu ara"
           />
