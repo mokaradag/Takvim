@@ -164,7 +164,7 @@ test('Actual UUID normalization still strips only local creation prefixes', () =
 test('existing WBS updates authorize the stored project and reject forged project reassignment', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
-  assert.ok(body.indexOf('const before = await wbsRow(executor, wbsId)') < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
+  assert.ok(body.indexOf('const before = await wbsRowForUpdate(executor, wbsId)') < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
   assert.match(body, /const storedProjectId = id\(before\.ProjectId\);/);
   assert.match(body, /if \(storedProjectId !== projectId\)/);
 });
@@ -278,4 +278,56 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+
+
+test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
+  const source = read('src/server/repository/corporateQueries.js');
+  assert.match(
+    source,
+    /NOT EXISTS \(SELECT 1 FROM dbo\.MR_Projects p WITH \(UPDLOCK, HOLDLOCK\) WHERE p\.ProjectCode = source\.ProjectCode\)/
+  );
+});
+
+test('task assignees persist only the Sicil list that passed normalization and directory validation', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(source, /function normalizeSicils\(sicils\)/);
+  assert.match(source, /const assigneeSicils = await ensurePeople\(executor, task\.assigneeIds \|\| \[\]\);/);
+  assert.match(source, /for \(const sicil of assigneeSicils\)/);
+  assert.doesNotMatch(source, /\(sicils \|\| \[\]\)\.filter\(Boolean\)\.map\(Number\)/);
+});
+
+test('snapshot HR09 FULL visibility applies only to corporate projects', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(
+    source,
+    /JOIN dbo\.MR_V_CorporateProjectAccess a ON a\.ProjectCode = p\.ProjectCode\s+WHERE @isAdmin = 0 AND p\.SourceType = 'CORPORATE' AND p\.IsActive = 1 AND a\.Sicil = @sicil/s
+  );
+});
+
+test('partial snapshots return only visible-task WBS context and its ancestor chain', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(source, /;WITH RequiredPartialWbs AS \(/);
+  assert.match(source, /WHERE v\.AccessLevel = 'PARTIAL'[\s\S]*JOIN RequiredPartialWbs child ON child\.ParentWbsId = parent\.WbsId/);
+  assert.match(source, /WHERE v\.AccessLevel = 'FULL'\s+OR EXISTS \(SELECT 1 FROM RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
+  assert.match(source, /OPTION \(MAXRECURSION 1000\)/);
+});
+
+test('WBS reparent validation holds update and serializable locks across the ancestry walk', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
+  assert.match(source, /FROM dbo\.MR_WBS WITH \(UPDLOCK, HOLDLOCK\) WHERE WbsId = @id/);
+  assert.match(body, /const before = await wbsRowForUpdate\(executor, wbsId\)/);
+  assert.match(body, /let parent = await wbsRowForUpdate\(executor, node\.parentId\)/);
+  assert.match(body, /await wbsRowForUpdate\(executor, parent\.ParentWbsId\)/);
+});
+
+test('project updates validate LeadSicil before binding and writing it', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function commitProject'), source.indexOf('async function commitWbs'));
+  const updateStart = body.lastIndexOf('assertProjectWriteAccess(actor.effective, projectId)');
+  const validationIndex = body.indexOf("await ensurePeople(executor, project.leadId ? [project.leadId] : []);", updateStart);
+  const bindIndex = body.indexOf("req.input('leadSicil', sql.Int", updateStart);
+  assert.ok(updateStart >= 0 && validationIndex > updateStart && validationIndex < bindIndex);
 });

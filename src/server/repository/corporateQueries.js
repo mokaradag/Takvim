@@ -54,7 +54,7 @@ OUTPUT inserted.ProjectId, inserted.ProjectCode, inserted.ProjectName INTO @Inse
 SELECT 'CORPORATE', source.ProjectCode, source.ProjectName, source.ProjectTypeCode, source.ProjectTypeName, calendar.CalendarId, @actorSicil, @actorSicil
 FROM dbo.MR_V_CorporateProjects source
 CROSS APPLY (SELECT TOP (1) CalendarId FROM dbo.MR_Calendars WHERE IsDefault = 1 AND IsActive = 1 ORDER BY CreatedAt) calendar
-WHERE NOT EXISTS (SELECT 1 FROM dbo.MR_Projects p WHERE p.ProjectCode = source.ProjectCode);
+WHERE NOT EXISTS (SELECT 1 FROM dbo.MR_Projects p WITH (UPDLOCK, HOLDLOCK) WHERE p.ProjectCode = source.ProjectCode);
 
 INSERT dbo.MR_WBS(ProjectId, ParentWbsId, Code, Name, SortOrder, CreatedBySicil, UpdatedBySicil)
 SELECT ProjectId, NULL, N'1', ProjectName, 0, @actorSicil, @actorSicil

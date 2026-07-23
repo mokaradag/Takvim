@@ -47,6 +47,11 @@ async function rowById(executor, table, column, value) {
 }
 function projectRow(executor, value) { return rowById(executor, 'MR_Projects', 'ProjectId', value); }
 function wbsRow(executor, value) { return rowById(executor, 'MR_WBS', 'WbsId', value); }
+async function wbsRowForUpdate(executor, value) {
+  const req = request(executor);
+  req.input('id', sql.UniqueIdentifier, uuid(value));
+  return (await req.query('SELECT TOP (1) * FROM dbo.MR_WBS WITH (UPDLOCK, HOLDLOCK) WHERE WbsId = @id;')).recordset[0] || null;
+}
 function taskRow(executor, value) { return rowById(executor, 'MR_Tasks', 'TaskId', value); }
 
 async function audit(executor, actor, correlationId, actionCode, entityType, entityId, projectId, before, after) {
@@ -72,11 +77,22 @@ async function audit(executor, actor, correlationId, actionCode, entityType, ent
   `);
 }
 
-async function ensurePeople(executor, sicils) {
-  for (const sicil of [...new Set((sicils || []).filter(Boolean).map(Number))]) {
-    if (!Number.isInteger(sicil) || sicil <= 0) {
-      throw new ServerPersistenceError('MUTATION_FAILED', `Geçersiz çalışan Sicil: ${sicil}`);
+function normalizeSicils(sicils) {
+  const normalized = [];
+  for (const value of sicils || []) {
+    const text = value == null ? '' : String(value).trim();
+    const sicil = Number(text);
+    if (!/^\d+$/.test(text) || !Number.isSafeInteger(sicil) || sicil <= 0) {
+      throw new ServerPersistenceError('MUTATION_FAILED', `Geçersiz çalışan Sicil: ${text || value}`);
     }
+    if (!normalized.includes(sicil)) normalized.push(sicil);
+  }
+  return normalized;
+}
+
+async function ensurePeople(executor, sicils) {
+  const normalized = normalizeSicils(sicils);
+  for (const sicil of normalized) {
     const req = request(executor);
     req.input('sicil', sql.Int, sicil);
     const result = await req.query('SELECT TOP (1) Sicil FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil;');
@@ -84,6 +100,7 @@ async function ensurePeople(executor, sicils) {
       throw new ServerPersistenceError('MUTATION_FAILED', `Geçersiz çalışan Sicil: ${sicil}`);
     }
   }
+  return normalized;
 }
 
 async function loadSnapshotFrom(executor, auth) {
@@ -102,7 +119,7 @@ async function loadSnapshotFrom(executor, auth) {
     SELECT DISTINCT p.ProjectId, 'FULL'
     FROM dbo.MR_Projects p
     JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = p.ProjectCode
-    WHERE @isAdmin = 0 AND p.IsActive = 1 AND a.Sicil = @sicil
+    WHERE @isAdmin = 0 AND p.SourceType = 'CORPORATE' AND p.IsActive = 1 AND a.Sicil = @sicil
       AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = p.ProjectId);
 
     INSERT @VisibleProjects(ProjectId, AccessLevel)
@@ -138,10 +155,37 @@ async function loadSnapshotFrom(executor, auth) {
     JOIN @VisibleProjects v ON v.ProjectId = pt.ProjectId
     ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
 
+    ;WITH RequiredPartialWbs AS (
+      SELECT DISTINCT w.WbsId, w.ParentWbsId, w.ProjectId
+      FROM dbo.MR_WBS w
+      JOIN dbo.MR_Tasks t ON t.WbsId = w.WbsId
+      JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
+      WHERE v.AccessLevel = 'PARTIAL'
+        AND EXISTS (
+          SELECT 1
+          FROM dbo.MR_TaskAssignees ta
+          WHERE ta.TaskId = t.TaskId
+            AND (
+              ta.Sicil = @sicil
+              OR EXISTS (
+                SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+                WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+              )
+            )
+        )
+      UNION ALL
+      SELECT parent.WbsId, parent.ParentWbsId, parent.ProjectId
+      FROM dbo.MR_WBS parent
+      JOIN RequiredPartialWbs child ON child.ParentWbsId = parent.WbsId
+      WHERE parent.ProjectId = child.ProjectId
+    )
     SELECT w.*
     FROM dbo.MR_WBS w
     JOIN @VisibleProjects v ON v.ProjectId = w.ProjectId
-    ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code;
+    WHERE v.AccessLevel = 'FULL'
+       OR EXISTS (SELECT 1 FROM RequiredPartialWbs r WHERE r.WbsId = w.WbsId)
+    ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code
+    OPTION (MAXRECURSION 1000);
 
     SELECT t.*, v.AccessLevel
     FROM dbo.MR_Tasks t
@@ -399,6 +443,7 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
   }
 
   assertProjectWriteAccess(actor.effective, projectId);
+  await ensurePeople(executor, project.leadId ? [project.leadId] : []);
   const req = request(executor);
   req.input('projectId', sql.UniqueIdentifier, projectId);
   req.input('version', sql.Binary(8), decodeVersion(project.version));
@@ -433,7 +478,7 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
 async function commitWbs(executor, actor, node, correlationId) {
   const wbsId = uuid(node.id);
   const projectId = uuid(node.projectId);
-  const before = await wbsRow(executor, wbsId);
+  const before = await wbsRowForUpdate(executor, wbsId);
   if (before) {
     const storedProjectId = id(before.ProjectId);
     assertProjectWriteAccess(actor.effective, storedProjectId);
@@ -444,7 +489,7 @@ async function commitWbs(executor, actor, node, correlationId) {
     assertProjectWriteAccess(actor.effective, projectId);
   }
   if (node.parentId) {
-    let parent = await wbsRow(executor, node.parentId);
+    let parent = await wbsRowForUpdate(executor, node.parentId);
     if (!parent || id(parent.ProjectId) !== projectId) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Üst WBS aynı projede bulunmalıdır.');
     }
@@ -452,7 +497,7 @@ async function commitWbs(executor, actor, node, correlationId) {
       if (id(parent.WbsId) === wbsId) {
         throw new ServerPersistenceError('MUTATION_FAILED', 'WBS döngüsü oluşturulamaz.');
       }
-      parent = parent.ParentWbsId ? await wbsRow(executor, parent.ParentWbsId) : null;
+      parent = parent.ParentWbsId ? await wbsRowForUpdate(executor, parent.ParentWbsId) : null;
     }
   }
   const req = request(executor);
@@ -508,7 +553,7 @@ async function commitTask(executor, actor, task, correlationId) {
   if ((task.isMilestone || task.milestone) && Number(task.plannedDurationDays || 0) !== 0) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Kilometre taşı süresi sıfır olmalıdır.');
   }
-  await ensurePeople(executor, task.assigneeIds || []);
+  const assigneeSicils = await ensurePeople(executor, task.assigneeIds || []);
   const projectChanged = before && id(before.ProjectId) !== projectId;
   if (projectChanged) {
     const dependencyCleanup = request(executor);
@@ -586,7 +631,7 @@ async function commitTask(executor, actor, task, correlationId) {
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
   `);
 
-  for (const sicil of task.assigneeIds || []) {
+  for (const sicil of assigneeSicils) {
     const assignment = request(executor);
     assignment.input('taskId', sql.UniqueIdentifier, taskId);
     assignment.input('sicil', sql.Int, Number(sicil));
