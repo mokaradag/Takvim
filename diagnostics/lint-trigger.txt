@@ -1,1 +1,2 @@
 Temporary diagnostic trigger. This branch and PR are not part of the durable persistence change.
+Regression repair trigger: 2026-07-23.
