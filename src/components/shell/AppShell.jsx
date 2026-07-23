@@ -50,6 +50,12 @@ export default function AppShell() {
   const wbs = useWbs();
   const projects = useAllProjects();
   const workspace = useWorkspace();
+  const {
+    mode: workspaceMode,
+    selectedProjectId,
+    selectedProject,
+    selectWorkspace
+  } = workspace;
   const stats = useTaskStats();
   const { openTask } = useTaskActions();
   const simpleMode = t.appMode === 'simple';
@@ -58,6 +64,7 @@ export default function AppShell() {
     const landing = TWEAK_DEFAULTS.landingView || 'ozet';
     return NAV_ITEMS.some((item) => item.id === landing) ? landing : 'ozet';
   });
+  const [simpleCalendarTab, setSimpleCalendarTab] = useState('calendar');
   const [cmdOpen, setCmdOpen] = useState(false);
   const [modePickerOpen, setModePickerOpen] = useState(() => {
     try { return localStorage.getItem(MODE_STORAGE_KEY) !== '1'; }
@@ -83,16 +90,21 @@ export default function AppShell() {
     try { localStorage.setItem(MODE_STORAGE_KEY, '1'); } catch {}
     setModePickerOpen(false);
     if (mode === 'simple') {
-      workspace.selectWorkspace(null);
+      selectWorkspace(null);
+      setSimpleCalendarTab('calendar');
       setView('takvim');
     }
   };
 
   useEffect(() => {
     if (!simpleMode) return;
-    if (workspace.mode !== 'portfolio') workspace.selectWorkspace(null);
+    if (workspaceMode !== 'portfolio') selectWorkspace(null);
     if (!SIMPLE_NAV_IDS.has(view)) setView('takvim');
-  }, [simpleMode, view, workspace.mode, workspace.selectWorkspace]);
+  }, [simpleMode, view, workspaceMode, selectWorkspace]);
+
+  useEffect(() => {
+    if (simpleMode && view === 'takvim') setSimpleCalendarTab('calendar');
+  }, [simpleMode, view]);
 
   useEffect(() => {
     const onKey = (event) => {
@@ -108,7 +120,7 @@ export default function AppShell() {
   const totalsByView = useMemo(() => ({
     ozet: tasks.length,
     veri: tasks.length,
-    wbs: workspace.mode === 'project' ? wbs.length : projects.length,
+    wbs: workspaceMode === 'project' ? wbs.length : projects.length,
     takvim: null,
     gantt: tasks.length,
     kanban: tasks.length,
@@ -116,7 +128,7 @@ export default function AppShell() {
     kisi: people.length,
     yardim: null,
     ayarlar: null
-  }), [tasks.length, wbs.length, projects.length, people.length, workspace.mode]);
+  }), [tasks.length, wbs.length, projects.length, people.length, workspaceMode]);
 
   const visibleNavItems = simpleMode
     ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id))
@@ -127,7 +139,35 @@ export default function AppShell() {
       case 'ozet': return <DashboardView onNavigate={setView} />;
       case 'veri': return <TasksView />;
       case 'wbs': return <ProjectWorkspaceView />;
-      case 'takvim': return <div className="calendar-page-stack">{simpleMode && <SimpleModePanel />}<CalendarView t={t} setTweak={setTweak} /></div>;
+      case 'takvim': return simpleMode ? (
+        <div className="simple-calendar-workspace">
+          <div className="simple-calendar-tabs seg" role="tablist" aria-label="Basit Mod Takvim görünümü">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={simpleCalendarTab === 'calendar'}
+              className={simpleCalendarTab === 'calendar' ? 'active' : ''}
+              onClick={() => setSimpleCalendarTab('calendar')}
+            >
+              <Icons.Calendar size={13} /> Takvim
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={simpleCalendarTab === 'entry'}
+              className={simpleCalendarTab === 'entry' ? 'active' : ''}
+              onClick={() => setSimpleCalendarTab('entry')}
+            >
+              <Icons.Plus size={13} /> Hızlı Görev Tanımı
+            </button>
+          </div>
+          <div className="simple-calendar-tab-panel" role="tabpanel">
+            {simpleCalendarTab === 'calendar'
+              ? <CalendarView t={t} setTweak={setTweak} />
+              : <SimpleModePanel />}
+          </div>
+        </div>
+      ) : <CalendarView t={t} setTweak={setTweak} />;
       case 'gantt': return <WorkspaceGanttView />;
       case 'kanban': return <KanbanView />;
       case 'rapor': return <ReportsView />;
@@ -139,8 +179,8 @@ export default function AppShell() {
   };
 
   const meta = PAGE_META[view] || PAGE_META.ozet;
-  const workspaceKey = `${workspace.mode}:${workspace.selectedProjectId || 'all'}:${simpleMode ? 'simple' : 'advanced'}`;
-  const projectContextVisible = !simpleMode && workspace.selectedProject && view !== 'ayarlar' && view !== 'yardim';
+  const workspaceKey = `${workspaceMode}:${selectedProjectId || 'all'}:${simpleMode ? 'simple' : 'advanced'}`;
+  const projectContextVisible = !simpleMode && selectedProject && view !== 'ayarlar' && view !== 'yardim';
   const exportVisible = !simpleMode && view !== 'ayarlar' && view !== 'yardim';
 
   // İlk açılış akışlarında ana uygulama hiç render edilmez. Böylece Özet üst çubuğu,
@@ -176,8 +216,8 @@ export default function AppShell() {
             <div className="sidebar-section-title" style={{ margin: 0 }}>Aktif çalışma alanı</div>
             <select
               className="input"
-              value={workspace.selectedProjectId || ''}
-              onChange={(event) => workspace.selectWorkspace(event.target.value || null)}
+              value={selectedProjectId || ''}
+              onChange={(event) => selectWorkspace(event.target.value || null)}
               style={{ width: '100%', fontSize: 12.5 }}
               aria-label="Portföy veya proje çalışma alanı seç"
             >
@@ -185,7 +225,7 @@ export default function AppShell() {
               {projects.map((project) => <option key={project.id} value={project.id}>Proje · {projectDisplayName(project)}</option>)}
             </select>
             <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
-              {workspace.mode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
+              {workspaceMode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
             </div>
           </div>
         ) : (
@@ -208,7 +248,14 @@ export default function AppShell() {
           {visibleNavItems.map((item) => {
             const Icon = Icons[item.icon];
             return (
-              <button key={item.id} className={`nav-item${view === item.id ? ' active' : ''}`} onClick={() => setView(item.id)}>
+              <button
+                key={item.id}
+                className={`nav-item${view === item.id ? ' active' : ''}`}
+                onClick={() => {
+                  if (simpleMode && item.id === 'takvim') setSimpleCalendarTab('calendar');
+                  setView(item.id);
+                }}
+              >
                 <Icon className="nav-icon" size={15} />
                 <span>{item.label}</span>
                 {totalsByView[item.id] != null && <span className="nav-count">{totalsByView[item.id]}</span>}
@@ -243,15 +290,17 @@ export default function AppShell() {
             <div className="sub">{meta.sub}</div>
           </div>
           {projectContextVisible && (
-            <div className="topbar-project-context" aria-label={`Seçili proje: ${projectDisplayName(workspace.selectedProject)}`}>
-              <strong>{projectDisplayName(workspace.selectedProject)}</strong>
+            <div className="topbar-project-context" aria-label={`Seçili proje: ${projectDisplayName(selectedProject)}`}>
+              {selectedProject.code && <span className="topbar-project-code">{selectedProject.code}</span>}
+              {selectedProject.code && <span className="topbar-project-separator">·</span>}
+              <strong className="topbar-project-name">{selectedProject.name}</strong>
             </div>
           )}
           <div className="topbar-spacer" />
           <div className="topbar-actions">
             {exportVisible && (
               <ProjectExportMenu
-                project={workspace.selectedProject}
+                project={selectedProject}
                 projects={projects}
                 tasks={tasks}
                 wbs={wbs}
