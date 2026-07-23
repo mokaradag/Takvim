@@ -1,6 +1,7 @@
 import './globals.css';
 import './enhancements.css';
 import './fixes.css';
+import './followup-fixes.css';
 
 export const metadata = {
   title: 'MERGEN Rota — Proje Yönetimi',
