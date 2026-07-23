@@ -224,7 +224,6 @@ sql = sql.replace(
     "UPPER(NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectCode,",
     1,
 )
-# Canonicalize all HR09 project-code projections inside the corporate access view.
 start = sql.index("EXEC(N'CREATE VIEW dbo.MR_V_CorporateProjectAccess AS")
 end = sql.index("EXEC(N'CREATE VIEW dbo.MR_V_PeopleDirectory AS", start)
 access_view = sql[start:end]
@@ -267,10 +266,20 @@ if "deriveEffectiveAccess" not in tests:
         import_anchor + "import { ACCESS_REASONS, deriveEffectiveAccess } from '../src/server/authorization/authorization.js';\n",
         1,
     )
-# Strengthen the existing identity regression with SQL int boundaries.
 tests = tests.replace(
     "  assert.equal(parseDevelopmentSicil(' 18068 '), 18068);\n",
     "  assert.equal(parseDevelopmentSicil(' 18068 '), 18068);\n  assert.equal(parseDevelopmentSicil('2147483647'), 2147483647);\n  assert.equal(parseDevelopmentSicil('2147483648'), null);\n",
+    1,
+)
+# Refresh prior ProjectCode regressions so they enforce the new canonical comparison.
+tests = tests.replace(
+    "/NOT EXISTS \\(\\s*SELECT 1\\s*FROM dbo\\.MR_Projects p WITH \\(UPDLOCK, HOLDLOCK\\)\\s*WHERE p\\.SourceType = 'CORPORATE' AND p\\.ProjectCode = source\\.ProjectCode\\s*\\)/s",
+    "/NOT EXISTS \\(\\s*SELECT 1\\s*FROM dbo\\.MR_Projects p WITH \\(UPDLOCK, HOLDLOCK\\)\\s*WHERE p\\.SourceType = 'CORPORATE' AND UPPER\\(p\\.ProjectCode\\) = source\\.ProjectCode\\s*\\)/s",
+    1,
+)
+tests = tests.replace(
+    "/WHERE p\\.SourceType = 'CORPORATE' AND p\\.ProjectCode = source\\.ProjectCode/",
+    "/WHERE p\\.SourceType = 'CORPORATE' AND UPPER\\(p\\.ProjectCode\\) = source\\.ProjectCode/",
     1,
 )
 additions = r'''
