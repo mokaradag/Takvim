@@ -12,7 +12,7 @@ export function DataModeChooser({ onChoose }) {
         </div>
         <div className="mode-picker-grid">
           <button type="button" className="mode-picker-card mode-simple" onClick={() => onChoose('demo')}>
-            <span className="mode-picker-icon"><Icons.Play size={22} /></span>
+            <span className="mode-picker-icon"><Icons.Sparkle size={22} /></span>
             <span className="mode-picker-copy"><small>İzole örnek veri</small><strong>Demo Modunu Aç</strong><span>Örnek verilerle uygulamanın tüm özelliklerini inceleyin. Demo kayıtları SQL Server'a gönderilmez.</span></span>
             <span className="mode-picker-action">Demo ile başla <Icons.ArrowRight size={14} /></span>
           </button>
