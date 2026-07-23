@@ -4,3 +4,4 @@ Persistence diagnostic trigger: 2026-07-23.
 Remaining regression repair trigger: 2026-07-23.
 Codex P2 patch trigger: 2026-07-23.
 Codex P2 patch retrigger: 2026-07-23.
+Updated Quality patch trigger: 2026-07-23.
