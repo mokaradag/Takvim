@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { canonicalizeCommitScalars } from '../src/server/repository/commitScalarCanonicalization.js';
 import { findCommitScalarIssue } from '../src/server/repository/commitScalarValidation.js';
 
 const PROJECT_ID = '11111111-1111-4111-8111-111111111111';
@@ -34,8 +35,12 @@ function validTask(overrides = {}) {
   };
 }
 
+function canonicalTask(overrides = {}) {
+  return canonicalizeCommitScalars({ taskUpserts: [validTask(overrides)] }).taskUpserts[0];
+}
+
 function taskIssue(overrides = {}) {
-  return findCommitScalarIssue({ taskUpserts: [validTask(overrides)] });
+  return findCommitScalarIssue({ taskUpserts: [canonicalTask(overrides)] });
 }
 
 test('milestone flags must be booleans instead of truthy strings', () => {
@@ -45,11 +50,12 @@ test('milestone flags must be booleans instead of truthy strings', () => {
   assert.equal(issue?.path, 'taskUpserts[0].isMilestone');
 });
 
-test('milestone aliases cannot express conflicting persistence intent', () => {
-  const issue = taskIssue({ isMilestone: false, milestone: true, plannedDurationDays: 0 });
+test('canonical UI milestone intent wins over a stale SQL alias', () => {
+  const task = canonicalTask({ isMilestone: true, milestone: false, plannedDurationDays: 0 });
 
-  assert.equal(issue?.code, 'TASK_MILESTONE_FLAG_CONFLICT');
-  assert.equal(issue?.path, 'taskUpserts[0].milestone');
+  assert.equal(task.milestone, false);
+  assert.equal(task.isMilestone, false);
+  assert.equal(findCommitScalarIssue({ taskUpserts: [task] }), null);
 });
 
 test('numeric task fields reject booleans, collections, and whitespace-only strings', () => {
