@@ -10,18 +10,25 @@ import { DataModeIndicator } from './DataModeIndicator';
 import { PersistenceStatus } from './PersistenceStatus';
 import { PresentationPolish } from './PresentationPolish';
 
-function readInitialDataMode() {
+function browserStorage() {
   try {
-    const value = localStorage.getItem(DATA_MODE_STORAGE_KEY);
-    return value === DATA_MODES.DEMO || value === DATA_MODES.ACTUAL ? value : null;
+    return typeof window !== 'undefined' ? window.localStorage : null;
   } catch {
     return null;
   }
 }
 
+function readInitialDataMode() {
+  const storage = browserStorage();
+  const value = storage?.getItem(DATA_MODE_STORAGE_KEY);
+  return value === DATA_MODES.DEMO || value === DATA_MODES.ACTUAL ? value : null;
+}
+
 export default function ApplicationRoot() {
   const [dataMode, setDataModeState] = useState(null);
-  const repository = useMemo(() => dataMode ? createRepositoryForDataMode(dataMode) : null, [dataMode]);
+  const repository = useMemo(() => dataMode
+    ? createRepositoryForDataMode(dataMode, { aliasStorage: browserStorage() })
+    : null, [dataMode]);
 
   useEffect(() => {
     setDataModeState(readInitialDataMode());
@@ -29,7 +36,7 @@ export default function ApplicationRoot() {
 
   const setDataMode = async (nextMode) => {
     if (nextMode !== DATA_MODES.DEMO && nextMode !== DATA_MODES.ACTUAL) return;
-    try { localStorage.setItem(DATA_MODE_STORAGE_KEY, nextMode); } catch {}
+    try { browserStorage()?.setItem(DATA_MODE_STORAGE_KEY, nextMode); } catch {}
     setDataModeState(nextMode);
   };
 
