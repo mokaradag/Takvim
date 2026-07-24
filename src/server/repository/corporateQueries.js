@@ -39,6 +39,12 @@ IF EXISTS (
 )
   THROW 51002, 'A manual project code conflicts with the corporate project source.', 1;
 
+IF NOT EXISTS (
+  SELECT 1
+  FROM dbo.MR_Calendars WITH (UPDLOCK, HOLDLOCK)
+  WHERE IsDefault = 1 AND IsActive = 1
+)
+  THROW 51003, 'An active default calendar is required before corporate project synchronization.', 1;
 
 UPDATE root
 SET Name = source.ProjectName,
