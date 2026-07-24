@@ -18,9 +18,7 @@ export async function POST(request) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
     }
     const changes = canonicalizeCommitChanges(body.changes);
-    const issue = findCommitChangeIssue(changes)
-      || findNestedCommitCollectionIssue(changes)
-      || findCommitScalarIssue(changes);
+    const issue = findCommitChangeIssue(changes) || findNestedCommitCollectionIssue(changes) || findCommitScalarIssue(changes);
     if (issue) {
       throw new ServerPersistenceError('MUTATION_FAILED', issue.message, {
         status: 400,
