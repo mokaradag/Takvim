@@ -3,7 +3,7 @@ function normalizedId(value) {
 }
 
 function normalizedIds(values = []) {
-  return new Set((values || []).map(normalizedId).filter(Boolean));
+  return new Set([...(values || [])].map(normalizedId).filter(Boolean));
 }
 
 function incomingIds(incomingTaskIdsByPredecessor, predecessorId) {
