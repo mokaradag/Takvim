@@ -181,7 +181,7 @@ BEGIN TRY
         CONSTRAINT CK_MR_Tasks_PlannedDates CHECK (PlannedStart IS NULL OR PlannedFinish IS NULL OR PlannedFinish >= PlannedStart),
         CONSTRAINT CK_MR_Tasks_ActualDates CHECK ((ActualFinish IS NULL OR ActualStart IS NOT NULL) AND (ActualStart IS NULL OR ActualFinish IS NULL OR ActualFinish >= ActualStart)),
         CONSTRAINT CK_MR_Tasks_MilestoneDuration CHECK (IsMilestone = 0 OR ISNULL(PlannedDurationDays, 0) = 0),
-        CONSTRAINT CK_MR_Tasks_Status CHECK (Status IN ('planned','in-progress','blocked','done','cancelled','not-started','completed')),
+        CONSTRAINT CK_MR_Tasks_Status CHECK (Status IN ('planned','in-progress','done')),
         CONSTRAINT CK_MR_Tasks_Priority CHECK (Priority IN ('low','medium','high','critical','normal'))
     );
     CREATE INDEX IX_MR_Tasks_Project_Status ON dbo.MR_Tasks(ProjectId, Status, SortOrder);
