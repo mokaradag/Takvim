@@ -1,5 +1,8 @@
 import { createOrderedSqlAppRepository } from '../../../../server/repository/orderedSqlAppRepository.js';
-import { findCommitChangeIssue } from '../../../../server/repository/commitChangeValidation.js';
+import {
+  canonicalizeCommitChanges,
+  findCommitChangeIssue
+} from '../../../../server/repository/commitChangeValidation.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
 
 export const runtime = 'nodejs';
@@ -12,14 +15,15 @@ export async function POST(request) {
     if (!body || typeof body !== 'object' || !body.changes || typeof body.changes !== 'object') {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
     }
-    const issue = findCommitChangeIssue(body.changes);
+    const changes = canonicalizeCommitChanges(body.changes);
+    const issue = findCommitChangeIssue(changes);
     if (issue) {
       throw new ServerPersistenceError('MUTATION_FAILED', issue.message, {
         status: 400,
         details: { code: issue.code, path: issue.path, ...(issue.details || {}) }
       });
     }
-    return Response.json(await createOrderedSqlAppRepository().commitChanges(body.changes), {
+    return Response.json(await createOrderedSqlAppRepository().commitChanges(changes), {
       headers: { 'cache-control': 'no-store' }
     });
   } catch (error) {
