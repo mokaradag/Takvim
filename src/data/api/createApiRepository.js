@@ -159,7 +159,18 @@ export function restoreActualCommitIds(body, changes = {}, aliases = null) {
   return restored;
 }
 
-function restoreActualSnapshotIds(body, map) {
+export function restoreActualSessionIds(body, map) {
+  if (!body || typeof body !== 'object' || !map?.size) return body;
+  return {
+    ...body,
+    projectAccess: Array.isArray(body.projectAccess) ? body.projectAccess.map((entry) => ({
+      ...entry,
+      projectId: restoreClientId(entry.projectId, map)
+    })) : body.projectAccess
+  };
+}
+
+export function restoreActualSnapshotIds(body, map) {
   if (!body || typeof body !== 'object' || !map?.size) return body;
   return {
     ...body,
@@ -184,7 +195,16 @@ function restoreActualSnapshotIds(body, map) {
         ...dependency,
         predecessorId: restoreClientId(dependency.predecessorId, map)
       }))
-    })) : body.tasks
+    })) : body.tasks,
+    baselines: Array.isArray(body.baselines) ? body.baselines.map((baseline) => ({
+      ...baseline,
+      projectId: restoreClientId(baseline.projectId, map)
+    })) : body.baselines,
+    taskBaselineSnapshots: Array.isArray(body.taskBaselineSnapshots) ? body.taskBaselineSnapshots.map((snapshot) => ({
+      ...snapshot,
+      taskId: restoreClientId(snapshot.taskId, map),
+      calendarId: restoreClientId(snapshot.calendarId, map)
+    })) : body.taskBaselineSnapshots
   };
 }
 
@@ -222,8 +242,9 @@ export function createApiRepository({ basePath = '/api/mergen-rota' } = {}) {
   const clientIdAliases = new Map();
   return {
     kind: 'actual-api',
-    loadSessionContext() {
-      return requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
+    async loadSessionContext() {
+      const session = await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
+      return restoreActualSessionIds(session, clientIdAliases);
     },
     async loadSnapshot() {
       const snapshot = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
