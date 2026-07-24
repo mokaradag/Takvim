@@ -6,6 +6,11 @@ function required(name) {
   return value;
 }
 
+function stringValue(name, fallback) {
+  const value = process.env[name]?.trim();
+  return value || fallback;
+}
+
 function booleanValue(name, fallback) {
   const value = process.env[name];
   if (value == null || value === '') return fallback;
@@ -31,15 +36,15 @@ export function getSqlServerConfig() {
     server: required('MERGEN_ROTA_DB_SERVER'),
     port: integerValue('MERGEN_ROTA_DB_PORT', 1433, { max: 65535 }),
     database: required('MERGEN_ROTA_DB_DATABASE'),
-    user: required('MERGEN_ROTA_DB_USER'),
-    password: required('MERGEN_ROTA_DB_PASSWORD'),
+    driver: stringValue('MERGEN_ROTA_DB_ODBC_DRIVER', 'ODBC Driver 18 for SQL Server'),
     connectionTimeout: integerValue('MERGEN_ROTA_DB_CONNECTION_TIMEOUT_MS', 15000),
     requestTimeout: integerValue('MERGEN_ROTA_DB_REQUEST_TIMEOUT_MS', 30000),
     pool: { min: 0, max: 10, idleTimeoutMillis: 30000 },
     options: {
+      trustedConnection: true,
       encrypt: booleanValue('MERGEN_ROTA_DB_ENCRYPT', true),
       trustServerCertificate: booleanValue('MERGEN_ROTA_DB_TRUST_SERVER_CERTIFICATE', false),
-      enableArithAbort: true
+      useUTC: true
     }
   });
 }

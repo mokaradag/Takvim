@@ -1,6 +1,6 @@
 import 'server-only';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import sql from 'mssql';
+import sql from 'mssql/msnodesqlv8.js';
 import { getSqlServerConfig } from './config.js';
 import { ServerPersistenceError } from '../errors.js';
 
