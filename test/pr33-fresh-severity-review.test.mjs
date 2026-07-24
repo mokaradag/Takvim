@@ -45,13 +45,15 @@ test('default calendar projection marks and places the SQL default first', () =>
   assert.deepEqual(projected.tasks, []);
 });
 
-test('commit route applies WBS ordering before the hardened SQL repository', () => {
+test('commit route canonicalizes IDs before WBS ordering and hardened SQL planning', () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const wrapper = read('src/server/repository/orderedSqlAppRepository.js');
 
+  assert.match(route, /canonicalizeCommitChanges\(body\.changes\)/);
   assert.match(route, /createOrderedSqlAppRepository/);
   assert.match(wrapper, /createHardenedSqlAppRepository/);
-  assert.match(wrapper, /wbsUpserts: orderWbsUpsertsByParents\(changes\.wbsUpserts \|\| \[\]\)/);
+  assert.match(wrapper, /const canonicalChanges = canonicalizeCommitChanges\(changes\);/);
+  assert.match(wrapper, /wbsUpserts: orderWbsUpsertsByParents\(canonicalChanges\.wbsUpserts \|\| \[\]\)/);
 });
 
 test('Actual snapshots resolve the active SQL default calendar in the same transaction', () => {
