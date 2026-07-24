@@ -35,7 +35,7 @@ test('nested SQL repository work reuses the outer transaction', () => {
   assert.match(source, /const transactionContext = new AsyncLocalStorage\(\);/);
   assert.match(source, /const activeTransaction = transactionContext\.getStore\(\);/);
   assert.match(source, /if \(activeTransaction\) return work\(activeTransaction, sql\);/);
-  assert.match(source, /return transactionContext\.run\(transaction, async \(\) => \{/);
+  assert.match(source, /return await transactionContext\.run\(transaction, async \(\) => \{/);
 });
 
 test('Actual commits lock and preserve the single-root WBS invariant', () => {
