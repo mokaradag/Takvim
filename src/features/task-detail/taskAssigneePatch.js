@@ -44,7 +44,7 @@ export function normalizeTaskAssigneePatch(patch = {}, people = []) {
     if (!assigneeIds.includes(id)) assigneeIds.push(id);
   }
 
-  const normalizedPatch = { ...patch, assigneeIds };
+  const normalizedPatch = { ...patch, assigneeIds, assigneeIdsCanonical: true };
   delete normalizedPatch.sorumlu;
   return { ok: true, patch: normalizedPatch };
 }
