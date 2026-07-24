@@ -83,6 +83,7 @@ export function normalizeTaskReferences(task, { projects = [], people = [], wbs 
     projectId: project?.id || task.projectId || null,
     projectCode: project?.code || task.projectCode || '',
     proje: project?.name || task.proje || '',
+    color: project?.color || task.color || 'blue',
     assigneeIds,
     sorumlu: assigneeNames,
     wbsId: validRequestedWbs?.id || defaultWbs?.id || null,
