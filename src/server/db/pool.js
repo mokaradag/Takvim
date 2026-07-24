@@ -8,6 +8,9 @@ let poolPromise;
 const transactionContext = new AsyncLocalStorage();
 
 export async function getSqlPool() {
+  const activeTransaction = transactionContext.getStore();
+  if (activeTransaction) return activeTransaction;
+
   if (!poolPromise) {
     const pool = new sql.ConnectionPool(getSqlServerConfig());
     pool.on('error', () => {
