@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AppStateProvider } from '../../state/AppStateProvider';
 import { DATA_MODES, DATA_MODE_STORAGE_KEY, createRepositoryForDataMode } from '../../data/dataMode';
 import AppShell from './AppShell';
@@ -20,8 +20,12 @@ function readInitialDataMode() {
 }
 
 export default function ApplicationRoot() {
-  const [dataMode, setDataModeState] = useState(readInitialDataMode);
+  const [dataMode, setDataModeState] = useState(null);
   const repository = useMemo(() => dataMode ? createRepositoryForDataMode(dataMode) : null, [dataMode]);
+
+  useEffect(() => {
+    setDataModeState(readInitialDataMode());
+  }, []);
 
   const setDataMode = async (nextMode) => {
     if (nextMode !== DATA_MODES.DEMO && nextMode !== DATA_MODES.ACTUAL) return;
