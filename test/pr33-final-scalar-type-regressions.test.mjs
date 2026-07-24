@@ -66,6 +66,7 @@ test('numeric task fields reject booleans, collections, and whitespace-only stri
   }
 
   assert.equal(taskIssue({ progress: '12.5' }), null);
+  assert.equal(canonicalTask({ progress: '' }).progress, null);
   assert.equal(taskIssue({ progress: '' }), null);
 });
 
@@ -75,10 +76,12 @@ test('task text fields reject objects before mssql binding', () => {
   assert.equal(taskIssue({ keyword: { value: 'unexpected' } })?.code, 'TASK_TEXT_INVALID');
 });
 
-test('date and enum scalars reject non-string values deterministically', () => {
+test('date and enum scalars reject non-string and explicit blank values deterministically', () => {
   assert.equal(taskIssue({ plannedStart: 20260724 })?.code, 'TASK_TEXT_INVALID');
   assert.equal(taskIssue({ status: null })?.code, 'TASK_STATUS_INVALID');
+  assert.equal(taskIssue({ status: '   ' })?.code, 'TASK_STATUS_INVALID');
   assert.equal(taskIssue({ priority: false })?.code, 'TASK_PRIORITY_INVALID');
+  assert.equal(taskIssue({ priority: '' })?.code, 'TASK_PRIORITY_INVALID');
 });
 
 test('dependency lag scalars reject coercible malformed values', () => {
