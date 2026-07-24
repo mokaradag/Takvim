@@ -72,8 +72,12 @@ test('Project and Task writes accept only active calendar references', () => {
   assert.match(source, /for \(const entity of \[\.\.\.changes\.projectUpserts, \.\.\.changes\.taskUpserts\]\)/);
 });
 
-test('the commit API uses the hardened SQL repository boundary', () => {
-  const source = read('src/app/api/mergen-rota/commit/route.js');
-  assert.match(source, /createHardenedSqlAppRepository/);
-  assert.doesNotMatch(source, /createSqlAppRepository/);
+test('the commit API preserves WBS ordering before the hardened SQL boundary', () => {
+  const route = read('src/app/api/mergen-rota/commit/route.js');
+  const wrapper = read('src/server/repository/orderedSqlAppRepository.js');
+
+  assert.match(route, /createOrderedSqlAppRepository/);
+  assert.doesNotMatch(route, /createSqlAppRepository/);
+  assert.match(wrapper, /createHardenedSqlAppRepository/);
+  assert.match(wrapper, /orderWbsUpsertsByParents/);
 });
