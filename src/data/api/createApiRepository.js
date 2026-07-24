@@ -43,7 +43,7 @@ function normalizeDelete(entry) {
     : { ...entry, id: toActualUuid(entry?.id) };
 }
 
-function normalizeActualChanges(changes = {}) {
+export function normalizeActualChanges(changes = {}) {
   return {
     ...changes,
     projectUpserts: (changes.projectUpserts || []).map((project) => ({
@@ -66,11 +66,11 @@ function normalizeActualChanges(changes = {}) {
       wbsId: toActualUuid(task.wbsId),
       calendarId: toActualUuid(task.calendarId),
       status: toPersistenceStatus(task.status),
-      deps: (task.deps || []).map((dependency) => ({
+      deps: Array.isArray(task.deps) ? task.deps.map((dependency) => ({
         ...dependency,
         id: dependency.id ? toActualUuid(dependency.id) : dependency.id,
         predecessorId: toActualUuid(dependency.predecessorId)
-      }))
+      })) : task.deps
     })),
     taskDeletes: (changes.taskDeletes || []).map(normalizeDelete)
   };
