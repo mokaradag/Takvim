@@ -3,6 +3,7 @@ import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
+import { assertTaskDependencyReconciliationCovered } from './dependencyReconciliationValidation.js';
 import { createHardenedSqlAppRepository } from './hardenedSqlAppRepository.js';
 import {
   assertDeleteIntentMatchesPersistence,
@@ -78,6 +79,7 @@ export function createOrderedSqlAppRepository() {
         await assertUpsertIntentMatchesPersistence(transaction, orderedChanges);
         await assertManualProjectCodesAvailable(transaction, orderedChanges);
         await assertDeleteIntentMatchesPersistence(transaction, orderedChanges);
+        await assertTaskDependencyReconciliationCovered(transaction, orderedChanges);
         return repository.commitChanges(orderedChanges);
       }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
     }
