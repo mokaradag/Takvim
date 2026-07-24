@@ -37,7 +37,10 @@ async function targetExistsForUpdate(executor, target, id) {
 
 export async function assertUpsertIntentMatchesPersistence(executor, changes = {}) {
   for (const target of UPSERT_TARGETS) {
-    for (const entry of changes[target.collection] || []) {
+    const entries = [...(changes[target.collection] || [])]
+      .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+
+    for (const entry of entries) {
       const id = String(entry.id);
       const exists = await targetExistsForUpdate(executor, target, id);
       const issue = findUpsertIntentIssue({
