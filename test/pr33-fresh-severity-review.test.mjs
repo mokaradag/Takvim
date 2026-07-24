@@ -45,15 +45,23 @@ test('default calendar projection marks and places the SQL default first', () =>
   assert.deepEqual(projected.tasks, []);
 });
 
-test('commit route canonicalizes IDs before WBS ordering and hardened SQL planning', () => {
+test('commit route canonicalizes IDs and scalars before WBS ordering and hardened SQL planning', () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const wrapper = read('src/server/repository/orderedSqlAppRepository.js');
 
-  assert.match(route, /canonicalizeCommitChanges\(body\.changes\)/);
+  assert.match(route, /canonicalizeCommitScalars\(canonicalizeCommitChanges\(body\.changes\)\)/);
   assert.match(route, /createOrderedSqlAppRepository/);
   assert.match(wrapper, /createHardenedSqlAppRepository/);
-  assert.match(wrapper, /const canonicalChanges = canonicalizeCommitChanges\(changes\);/);
-  assert.match(wrapper, /wbsUpserts: orderWbsUpsertsByParents\(canonicalChanges\.wbsUpserts \|\| \[\]\)/);
+
+  const idPosition = wrapper.indexOf('canonicalizeCommitChanges(changes)');
+  const scalarPosition = wrapper.indexOf('canonicalizeCommitScalars(');
+  const orderingPosition = wrapper.indexOf('orderWbsUpsertsByParents(canonicalChanges.wbsUpserts || [])');
+  const commitPosition = wrapper.indexOf('repository.commitChanges(orderedChanges)');
+
+  assert.ok(idPosition >= 0, 'UUID canonicalization must run');
+  assert.ok(scalarPosition >= 0, 'scalar canonicalization must run');
+  assert.ok(orderingPosition > scalarPosition, 'WBS ordering must use fully canonicalized changes');
+  assert.ok(commitPosition > orderingPosition, 'hardened persistence must receive ordered changes');
 });
 
 test('Actual snapshots resolve the active SQL default calendar in the same transaction', () => {
