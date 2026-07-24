@@ -2,7 +2,10 @@ import 'server-only';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { createHardenedSqlAppRepository } from './hardenedSqlAppRepository.js';
-import { assertUpsertIntentMatchesPersistence } from './upsertIntentValidation.js';
+import {
+  assertDeleteIntentMatchesPersistence,
+  assertUpsertIntentMatchesPersistence
+} from './upsertIntentValidation.js';
 import { orderWbsUpsertsByParents } from './wbsCommitPlanning.js';
 
 export function createOrderedSqlAppRepository() {
@@ -18,6 +21,7 @@ export function createOrderedSqlAppRepository() {
 
       return withSqlTransaction(async (transaction) => {
         await assertUpsertIntentMatchesPersistence(transaction, orderedChanges);
+        await assertDeleteIntentMatchesPersistence(transaction, orderedChanges);
         return repository.commitChanges(orderedChanges);
       }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
     }
