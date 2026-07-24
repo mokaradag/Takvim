@@ -59,5 +59,6 @@ test('Actual snapshots resolve the active SQL default calendar in the same trans
 
   assert.match(source, /WHERE IsDefault = 1 AND IsActive = 1/);
   assert.match(source, /const defaultCalendarId = await loadDefaultCalendarId\(transaction\);/);
-  assert.match(source, /applyDefaultCalendarProjection\(withAssignees, defaultCalendarId\)/);
+  assert.match(source, /snapshot = applyDefaultCalendarProjection\(snapshot, defaultCalendarId\);/);
+  assert.match(source, /return applyTaskAssigneeProjection\(snapshot, assigneeRows\);/);
 });
