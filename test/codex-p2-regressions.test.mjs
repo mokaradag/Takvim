@@ -312,7 +312,7 @@ test('partial snapshots return only visible-task WBS context and its ancestor ch
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /;WITH RequiredPartialWbs AS \(/);
   assert.match(source, /WHERE v\.AccessLevel = 'PARTIAL'[\s\S]*JOIN RequiredPartialWbs child ON child\.ParentWbsId = parent\.WbsId/);
-  assert.match(source, /WHERE v\.AccessLevel = 'FULL'\s+OR EXISTS \(SELECT 1 FROM RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
+  assert.match(source, /WHERE v\.AccessLevel = 'FULL'\s+OR EXISTS \(SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject\.ProjectId = w\.ProjectId\)\s+OR EXISTS \(SELECT 1 FROM RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
   assert.match(source, /OPTION \(MAXRECURSION 1000\)/);
 });
 
@@ -428,4 +428,66 @@ test('HR02 people directory duplicate ranking has deterministic projected-field 
   for (const field of ['kullanici_adi', 'ad_soyad', 'unvan', 'sektor', 'direktorluk', 'mudurluk', 'birim']) {
     assert.match(order, new RegExp(field, 'i'));
   }
+});
+
+
+test('server-generated fallback project roots are included in commit WBS responses', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(source, /const wbsIds = new Set\(\[\.\.\.changes\.wbsUpserts\.map\(\(value\) => value\.id\), \.\.\.consumedRootIds\]\)/);
+  assert.match(source, /return \{ created: true, consumedRootId: authoritativeRoot\.id \}/);
+});
+
+test('persisted Sicil validation rejects values above SQL Server int maximum', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(source, /sicil <= 0 \|\| sicil > 2147483647/);
+  assert.ok(source.indexOf('sicil > 2147483647') < source.indexOf("req.input('sicil', sql.Int, sicil)"));
+});
+
+test('project-level READ grants expose project tasks, WBS, assignees, and required people without enabling complete scheduling data', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(source, /DECLARE @ReadGrantedProjects TABLE\(ProjectId uniqueidentifier PRIMARY KEY\)/);
+  assert.match(source, /pa\.AccessLevel = 'READ'/);
+  assert.match(source, /@ReadGrantedProjects readProject WHERE readProject\.ProjectId = w\.ProjectId/);
+  assert.match(source, /@ReadGrantedProjects readProject WHERE readProject\.ProjectId = t\.ProjectId/);
+  assert.match(source, /readProject\.ProjectId = visibleTask\.ProjectId/);
+  assert.match(source, /SELECT d\.\*[\s\S]*WHERE v\.AccessLevel = 'FULL';/);
+});
+
+test('root WBS deletion is rejected in both domain state and SQL persistence', () => {
+  const snapshot = {
+    projects: [{ id: 'p1', name: 'Project' }], people: [], calendars: [],
+    wbs: [{ id: 'root', projectId: 'p1', parentId: null, code: '1', name: 'Root', sortOrder: 1 }],
+    tasks: [], baselines: [], taskBaselineSnapshots: []
+  };
+  const state = appStateReducer(createInitialState(snapshot), { type: 'wbs/delete', id: 'root' });
+  assert.equal(state.wbs.length, 1);
+  assert.equal(state.wbsActionError?.code, 'WBS_ROOT_DELETE_FORBIDDEN');
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function deleteWbs'), source.indexOf('export function createSqlAppRepository'));
+  assert.match(body, /if \(before\.ParentWbsId == null\)/);
+});
+
+test('loaded session capabilities survive state normalization and collection-only reloads', () => {
+  const session = {
+    dataMode: 'actual', currentUser: { id: '18068', name: 'User' },
+    isSystemAdmin: false, isExecutive: true, canCreateProjects: true,
+    projectAccess: [{ projectId: 'p1', accessLevel: 'PARTIAL', reasons: ['MANUAL_GRANT'] }]
+  };
+  const snapshot = {
+    session, projects: [{ id: 'p1', name: 'Project' }], people: [], calendars: [],
+    wbs: [], tasks: [], baselines: [], taskBaselineSnapshots: []
+  };
+  let state = createInitialState(snapshot);
+  assert.deepEqual(state.session, session);
+  assert.equal(state.currentUser.id, '18068');
+  assert.equal(state.canCreateProjects, true);
+  assert.deepEqual(state.projectAccess, session.projectAccess);
+  state = appStateReducer(state, {
+    type: 'data/load-success',
+    snapshot: { projects: snapshot.projects, people: [], calendars: [], wbs: [], tasks: [], baselines: [], taskBaselineSnapshots: [] }
+  });
+  assert.deepEqual(state.session, session);
+  assert.equal(state.currentUser.id, '18068');
+  assert.equal(state.canCreateProjects, true);
+  assert.deepEqual(state.projectAccess, session.projectAccess);
 });

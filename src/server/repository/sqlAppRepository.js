@@ -82,7 +82,7 @@ function normalizeSicils(sicils) {
   for (const value of sicils || []) {
     const text = value == null ? '' : String(value).trim();
     const sicil = Number(text);
-    if (!/^\d+$/.test(text) || !Number.isSafeInteger(sicil) || sicil <= 0) {
+    if (!/^\d+$/.test(text) || !Number.isSafeInteger(sicil) || sicil <= 0 || sicil > 2147483647) {
       throw new ServerPersistenceError('MUTATION_FAILED', `Geçersiz çalışan Sicil: ${text || value}`);
     }
     if (!normalized.includes(sicil)) normalized.push(sicil);
@@ -127,6 +127,7 @@ async function loadSnapshotFrom(executor, auth) {
   req.input('isAdmin', sql.Bit, auth.isSystemAdmin);
   const result = await req.query(`
     DECLARE @VisibleProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY, AccessLevel varchar(10));
+    DECLARE @ReadGrantedProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY);
 
     INSERT @VisibleProjects(ProjectId, AccessLevel)
     SELECT ProjectId, 'FULL'
@@ -139,6 +140,13 @@ async function loadSnapshotFrom(executor, auth) {
     JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = UPPER(p.ProjectCode)
     WHERE @isAdmin = 0 AND p.SourceType = 'CORPORATE' AND p.IsActive = 1 AND a.Sicil = @sicil
       AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = p.ProjectId);
+
+    INSERT @ReadGrantedProjects(ProjectId)
+    SELECT pa.ProjectId
+    FROM dbo.MR_ProjectAccess pa
+    JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
+    WHERE @isAdmin = 0 AND pa.Sicil = @sicil AND pa.IsActive = 1
+      AND pa.AccessLevel = 'READ' AND p.IsActive = 1;
 
     INSERT @VisibleProjects(ProjectId, AccessLevel)
     SELECT pa.ProjectId, CASE WHEN pa.AccessLevel = 'FULL' THEN 'FULL' ELSE 'PARTIAL' END
@@ -206,6 +214,7 @@ async function loadSnapshotFrom(executor, auth) {
     FROM dbo.MR_WBS w
     JOIN @VisibleProjects v ON v.ProjectId = w.ProjectId
     WHERE v.AccessLevel = 'FULL'
+       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = w.ProjectId)
        OR EXISTS (SELECT 1 FROM RequiredPartialWbs r WHERE r.WbsId = w.WbsId)
     ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code
     OPTION (MAXRECURSION 1000);
@@ -214,6 +223,7 @@ async function loadSnapshotFrom(executor, auth) {
     FROM dbo.MR_Tasks t
     JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
     WHERE v.AccessLevel = 'FULL'
+       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
        OR EXISTS (
          SELECT 1
          FROM dbo.MR_TaskAssignees ta
@@ -233,6 +243,7 @@ async function loadSnapshotFrom(executor, auth) {
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
     JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
     WHERE v.AccessLevel = 'FULL'
+       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
        OR ta.Sicil = @sicil
        OR EXISTS (
          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
@@ -277,19 +288,26 @@ async function loadSnapshotFrom(executor, auth) {
          FROM dbo.MR_TaskAssignees visibleAssignee
          JOIN dbo.MR_Tasks visibleTask ON visibleTask.TaskId = visibleAssignee.TaskId
          JOIN @VisibleProjects visibleProject ON visibleProject.ProjectId = visibleTask.ProjectId
-         WHERE visibleAssignee.Sicil = pd.Sicil
-           AND EXISTS (
-             SELECT 1
-             FROM dbo.MR_TaskAssignees visibilityGate
-             WHERE visibilityGate.TaskId = visibleTask.TaskId
-               AND (
-                 visibilityGate.Sicil = @sicil
-                 OR EXISTS (
-                   SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-                   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibilityGate.Sicil
-                 )
-               )
-           )
+          WHERE visibleAssignee.Sicil = pd.Sicil
+            AND (
+              EXISTS (
+                SELECT 1 FROM @ReadGrantedProjects readProject
+                WHERE readProject.ProjectId = visibleTask.ProjectId
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM dbo.MR_TaskAssignees visibilityGate
+                WHERE visibilityGate.TaskId = visibleTask.TaskId
+                  AND (
+                    visibilityGate.Sicil = @sicil
+                    OR EXISTS (
+                      SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+                      WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibilityGate.Sicil
+                    )
+                  )
+              )
+            )
+        )
        )
     ORDER BY pd.DisplayName, pd.Sicil;
   `);
@@ -760,6 +778,9 @@ async function deleteWbs(executor, actor, entry, correlationId) {
   if (!before) return;
   const projectId = id(before.ProjectId);
   assertProjectWriteAccess(actor.effective, projectId);
+  if (before.ParentWbsId == null) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'Proje kök WBS düğümü silinemez.');
+  }
   const refs = request(executor);
   refs.input('wbsId', sql.UniqueIdentifier, wbsId);
   const referenced = await refs.query(`
@@ -831,7 +852,7 @@ export function createSqlAppRepository() {
 
         const authoritative = await loadSnapshotFrom(transaction, actor);
         const projectIds = new Set(changes.projectUpserts.map((value) => value.id));
-        const wbsIds = new Set(changes.wbsUpserts.map((value) => value.id));
+        const wbsIds = new Set([...changes.wbsUpserts.map((value) => value.id), ...consumedRootIds]);
         const taskIds = new Set(changes.taskUpserts.map((value) => value.id));
         return {
           projectUpserts: authoritative.projects.filter((value) => projectIds.has(value.id)),

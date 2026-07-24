@@ -160,10 +160,12 @@ export function validateWbsReparent(wbs, nodeId, targetParentId) {
 
 export function validateWbsDeletion(wbs, tasks, wbsId) {
   const issues = [];
-  const childIds = (wbs || []).filter((node) => node.parentId === wbsId).map((node) => node.id);
+  const node = indexWbs(wbs).get(wbsId) || null;
+  const childIds = (wbs || []).filter((item) => item.parentId === wbsId).map((item) => item.id);
   const taskIds = (tasks || []).filter((task) => task.wbsId === wbsId).map((task) => task.id);
 
   if (childIds.length) issues.push(issue('WBS_HAS_CHILDREN', wbsId, { childIds }));
   if (taskIds.length) issues.push(issue('WBS_HAS_TASKS', wbsId, { taskIds }));
+  if (node && node.parentId == null) issues.push(issue('WBS_ROOT_DELETE_FORBIDDEN', wbsId));
   return issues;
 }

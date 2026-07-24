@@ -42,6 +42,7 @@ function wbsMessage(code) {
     WBS_NAME_REQUIRED: 'WBS adı boş bırakılamaz.',
     WBS_HAS_CHILDREN: 'Alt WBS düğümleri bulunan bir WBS silinemez.',
     WBS_HAS_TASKS: 'Doğrudan görev atanmış bir WBS silinemez.',
+    WBS_ROOT_DELETE_FORBIDDEN: 'Proje kök WBS düğümü silinemez.',
     WBS_ROOT_REPARENT_FORBIDDEN: 'Proje kök WBS düğümü başka bir WBS altına taşınamaz.',
     WBS_REPARENT_TO_DESCENDANT: 'Bir WBS kendi alt düğümlerinden birinin altına taşınamaz.',
     WBS_SELF_PARENT: 'Bir WBS kendi üst düğümü olamaz.',
@@ -145,7 +146,13 @@ function emptyApplicationData() {
     wbs: [],
     tasks: [],
     baselines: [],
-    taskBaselineSnapshots: []
+    taskBaselineSnapshots: [],
+    session: null,
+    currentUser: null,
+    isSystemAdmin: false,
+    isExecutive: false,
+    canCreateProjects: false,
+    projectAccess: []
   };
 }
 
@@ -165,7 +172,27 @@ export function createLoadingState() {
 }
 
 function createStateFromSnapshot(snapshot = {}, previous = createLoadingState()) {
+  const hasSession = Object.prototype.hasOwnProperty.call(snapshot, 'session');
+  const session = hasSession ? snapshot.session : previous.session;
+  const sessionState = hasSession
+    ? {
+        session: session || null,
+        currentUser: session?.currentUser || null,
+        isSystemAdmin: Boolean(session?.isSystemAdmin),
+        isExecutive: Boolean(session?.isExecutive),
+        canCreateProjects: Boolean(session?.canCreateProjects),
+        projectAccess: session?.projectAccess || []
+      }
+    : {
+        session: previous.session || null,
+        currentUser: previous.currentUser || null,
+        isSystemAdmin: Boolean(previous.isSystemAdmin),
+        isExecutive: Boolean(previous.isExecutive),
+        canCreateProjects: Boolean(previous.canCreateProjects),
+        projectAccess: previous.projectAccess || []
+      };
   const base = {
+    ...sessionState,
     calendars: snapshot.calendars || [],
     projects: snapshot.projects || [],
     people: snapshot.people || [],
