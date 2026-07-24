@@ -5,6 +5,7 @@ import {
 } from '../../../../server/repository/commitChangeValidation.js';
 import { findNestedCommitCollectionIssue } from '../../../../server/repository/commitNestedCollectionValidation.js';
 import { findCommitProjectWbsIssue } from '../../../../server/repository/commitProjectWbsValidation.js';
+import { canonicalizeCommitScalars } from '../../../../server/repository/commitScalarCanonicalization.js';
 import { findCommitScalarIssue } from '../../../../server/repository/commitScalarValidation.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
 
@@ -18,7 +19,7 @@ export async function POST(request) {
     if (!body || typeof body !== 'object' || !body.changes || typeof body.changes !== 'object') {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
     }
-    const changes = canonicalizeCommitChanges(body.changes);
+    const changes = canonicalizeCommitScalars(canonicalizeCommitChanges(body.changes));
     const issue = findCommitChangeIssue(changes)
       || findNestedCommitCollectionIssue(changes)
       || findCommitProjectWbsIssue(changes)
