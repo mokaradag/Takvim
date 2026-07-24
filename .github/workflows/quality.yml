@@ -21,7 +21,7 @@ jobs:
           ref: agent/durable-sqlserver-persistence
           fetch-depth: 0
       - name: Apply sixth Codex fixes
-        run: python .github/scripts/apply-sixth-codex-review-fixes-v5.py
+        run: python .github/scripts/apply-sixth-codex-review-fixes-v6.py
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
@@ -47,7 +47,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/server/repository/sqlAppRepository.js src/domain/validation/wbsValidation.js src/state/appState.js test/codex-p2-regressions.test.mjs test/domain-validation-edge-cases.test.mjs
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "Fix sixth Codex review findings"
+          git commit -m "Clean sixth Codex review fixes"
           git push origin HEAD:agent/durable-sqlserver-persistence
 
   test-and-build:
