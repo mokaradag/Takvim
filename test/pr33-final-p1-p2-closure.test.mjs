@@ -96,6 +96,7 @@ test('Actual normalization still canonicalizes valid dependency references', () 
   });
 
   assert.deepEqual(changes.taskUpserts[0].deps, [{
+    id: undefined,
     predecessorId: PREDECESSOR_ID,
     type: 'FS',
     lagDays: 0
