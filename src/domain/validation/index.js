@@ -4,6 +4,19 @@ function indexByName(items) {
   return new Map(items.filter((item) => item?.name).map((item) => [item.name, item]));
 }
 
+function indexByUniqueName(items) {
+  const values = new Map();
+  const duplicates = new Set();
+  for (const item of items || []) {
+    const name = item?.name;
+    if (!name) continue;
+    if (values.has(name)) duplicates.add(name);
+    else values.set(name, item);
+  }
+  for (const name of duplicates) values.delete(name);
+  return values;
+}
+
 function validDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const [year, month, day] = value.split('-').map(Number);
@@ -26,7 +39,7 @@ export function normalizePersonReferences(person = {}) {
 
 export function normalizeProjectReferences(project = {}, people = []) {
   const normalizedPeople = people.map(normalizePersonReferences);
-  const peopleByName = indexByName(normalizedPeople);
+  const peopleByName = indexByUniqueName(normalizedPeople);
   const code = String(project.code || project.ProjeKodu || '').trim();
   const name = String(project.name || project.ProjeAdi || '').trim();
   return {
@@ -63,16 +76,17 @@ export function normalizeTaskReferences(task, { projects = [], people = [], wbs 
     || (task.projectCode ? projectsByCode.get(task.projectCode) : null)
     || projectsByName.get(task.proje)
     || null;
-  const peopleByName = indexByName(normalizedPeople);
+  const peopleByName = indexByUniqueName(normalizedPeople);
   const peopleById = new Map(normalizedPeople.map((item) => [item.id, item]));
   const wbsById = new Map(wbs.map((node) => [node.id, node]));
 
-  const assigneeIds = task.assigneeIds?.length
-    ? task.assigneeIds.filter((id) => peopleById.has(id))
-    : (task.sorumlu || []).map((name) => peopleByName.get(name)?.id).filter(Boolean);
-  const assigneeNames = task.sorumlu?.length
-    ? task.sorumlu.filter((name) => peopleByName.has(name))
-    : assigneeIds.map((id) => peopleById.get(id)?.name).filter(Boolean);
+  const hasCanonicalAssigneeIds = Array.isArray(task.assigneeIds);
+  const assigneeIds = hasCanonicalAssigneeIds
+    ? [...new Set(task.assigneeIds.filter((id) => peopleById.has(id)))]
+    : [...new Set((task.sorumlu || []).map((name) => peopleByName.get(name)?.id).filter(Boolean))];
+  const assigneeNames = hasCanonicalAssigneeIds
+    ? assigneeIds.map((id) => peopleById.get(id)?.name).filter(Boolean)
+    : (task.sorumlu || []).filter((name) => peopleByName.has(name));
 
   const requestedWbs = task.wbsId ? wbsById.get(task.wbsId) : null;
   const validRequestedWbs = requestedWbs && requestedWbs.projectId === project?.id ? requestedWbs : null;
@@ -143,6 +157,7 @@ export function validateTaskBaselineSnapshot(snapshot) {
   if (start && finish && finish < start) {
     issues.push({ code: 'BASELINE_FINISH_BEFORE_START', field: 'plannedFinish' });
   }
+
   if (snapshot.plannedDurationDays != null
     && (!Number.isFinite(snapshot.plannedDurationDays) || snapshot.plannedDurationDays < 0)) {
     issues.push({ code: 'NEGATIVE_OR_INVALID_BASELINE_DURATION', field: 'plannedDurationDays' });
