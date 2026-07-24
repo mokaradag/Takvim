@@ -55,11 +55,12 @@ export async function loadAuthorizationContext(executor = null) {
     SELECT DISTINCT t.ProjectId, t.TaskId,
       CASE WHEN ta.Sicil = @sicil THEN 'ASSIGNEE' ELSE 'EXECUTIVE_SCOPE' END AS Reason
     FROM dbo.MR_Tasks t
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = t.TaskId
     WHERE ta.Sicil = @sicil
        OR EXISTS (
-         SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
        );
   `);
 
