@@ -63,13 +63,17 @@ test('Actual commits validate the final dependency graph under transaction locks
   );
 });
 
-test('Project and Task writes accept only active calendar references', () => {
+test('Project writes require a calendar and all supplied calendar references must be active', () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(
     source,
     /FROM dbo\.MR_Calendars WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE CalendarId = @calendarId AND IsActive = 1/s
   );
-  assert.match(source, /for \(const entity of \[\.\.\.changes\.projectUpserts, \.\.\.changes\.taskUpserts\]\)/);
+  assert.match(source, /for \(const project of changes\.projectUpserts\) \{/);
+  assert.match(source, /if \(!project\.calendarId\) \{/);
+  assert.match(source, /calendarIds\.add\(uuid\(project\.calendarId, 'Takvim kimliği'\)\);/);
+  assert.match(source, /for \(const task of changes\.taskUpserts\) \{/);
+  assert.match(source, /if \(task\.calendarId\) calendarIds\.add\(uuid\(task\.calendarId, 'Takvim kimliği'\)\);/);
 });
 
 test('the commit API preserves WBS ordering before the hardened SQL boundary', () => {
