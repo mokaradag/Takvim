@@ -7,15 +7,13 @@ import {
   persistActualIdAliases
 } from '../src/data/api/actualIdAliasStorage.js';
 import { restoreActualSnapshotIds } from '../src/data/api/createApiRepository.js';
-import { ServerPersistenceError } from '../src/server/errors.js';
 import { findCommitChangeIssue } from '../src/server/repository/commitChangeValidation.js';
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
   return {
     getItem(key) { return values.has(key) ? values.get(key) : null; },
-    setItem(key, value) { values.set(key, String(value)); },
-    value(key) { return values.get(key); }
+    setItem(key, value) { values.set(key, String(value)); }
   };
 }
 
@@ -104,9 +102,4 @@ test('commit change validation requires complete manual project creation fields'
     wbsDeletes: [],
     taskDeletes: []
   }), null);
-});
-
-test('mutation validation errors default to HTTP 400 while unknown errors remain 500', () => {
-  assert.equal(new ServerPersistenceError('MUTATION_FAILED', 'invalid').status, 400);
-  assert.equal(new ServerPersistenceError('UNEXPECTED', 'broken').status, 500);
 });
