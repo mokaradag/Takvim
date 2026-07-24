@@ -21,18 +21,7 @@ jobs:
           ref: agent/durable-sqlserver-persistence
           fetch-depth: 0
       - name: Apply sixth Codex fixes
-        id: patch
-        continue-on-error: true
-        run: python .github/scripts/apply-sixth-codex-review-fixes-v2.py > sixth-patch.log 2>&1
-      - name: Upload patch diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sixth-codex-patch-log
-          path: sixth-patch.log
-      - name: Stop on patch failure
-        if: steps.patch.outcome == 'failure'
-        run: exit 1
+        run: python .github/scripts/apply-sixth-codex-review-fixes-v3.py
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
