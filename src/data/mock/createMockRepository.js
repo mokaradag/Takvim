@@ -50,6 +50,23 @@ function applyCollectionChanges(items, upserts = [], deletes = [], { prependNew 
   const additions = upserts.filter((item) => !existingIds.has(item.id) && !deleted.has(item.id));
   return prependNew ? [...additions, ...updated] : [...updated, ...additions];
 }
+function invalidatedPredecessorIds(beforeTasks, upserts, deletes) {
+  const invalidated = new Set(deletes || []);
+  const beforeById = new Map((beforeTasks || []).map((task) => [task.id, task]));
+  for (const task of upserts || []) {
+    const before = beforeById.get(task.id);
+    if (before && before.projectId !== task.projectId) invalidated.add(task.id);
+  }
+  return invalidated;
+}
+function removePredecessorReferences(tasks, predecessorIds) {
+  if (!predecessorIds.size) return tasks;
+  return tasks.map((task) => {
+    const dependencies = task.deps || [];
+    const filtered = dependencies.filter((dependency) => !predecessorIds.has(dependency.predecessorId));
+    return filtered.length === dependencies.length ? task : { ...task, deps: filtered };
+  });
+}
 
 export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
   let snapshot = clone(seed || DEFAULT_SEED);
@@ -88,10 +105,18 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
       const normalized = normalizeChanges(changes);
       const candidate = clone(snapshot);
       candidate.projects = applyCollectionChanges(candidate.projects || [], normalized.projectUpserts, normalized.projectDeletes);
-      candidate.tasks = applyCollectionChanges(candidate.tasks || [], normalized.taskUpserts, normalized.taskDeletes, { prependNew: true });
+      const invalidated = invalidatedPredecessorIds(snapshot.tasks || [], normalized.taskUpserts, normalized.taskDeletes);
+      const appliedTasks = applyCollectionChanges(candidate.tasks || [], normalized.taskUpserts, normalized.taskDeletes, { prependNew: true });
+      candidate.tasks = removePredecessorReferences(appliedTasks, invalidated);
       candidate.wbs = applyCollectionChanges(candidate.wbs || [], normalized.wbsUpserts, normalized.wbsDeletes);
       snapshot = candidate;
-      return clone(normalized);
+      return clone({
+        ...normalized,
+        taskUpserts: candidate.tasks.filter((task) => (
+          normalized.taskUpserts.some((upsert) => upsert.id === task.id)
+          || (task.deps || []).length !== (seed.tasks || []).find((before) => before.id === task.id)?.deps?.length
+        ))
+      });
     },
     async flush() {}
   };
