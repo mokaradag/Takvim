@@ -27,7 +27,7 @@ test('client and feature modules never import mssql or server database modules',
   for (const area of clientAreas) {
     for (const file of filesUnder(area)) {
       const text = source(file);
-      assert.doesNotMatch(text, /from\s+['"]mssql['"]|require\(['"]mssql['"]\)/, relative(root, file));
+      assert.doesNotMatch(text, /from\s+['"]mssql(?:\/[^'"]+)?['"]|require\(['"]mssql(?:\/[^'"]+)?['"]\)/, relative(root, file));
       assert.doesNotMatch(text, /server\/db|server\/repository\/sqlAppRepository/, relative(root, file));
     }
   }
@@ -43,6 +43,20 @@ test('SQL connection and repository implementation are server-only', () => {
   }
 });
 
+test('Actual SQL pool uses Windows Integrated Authentication', () => {
+  const config = source(join(root, 'src/server/db/config.js'));
+  const pool = source(join(root, 'src/server/db/pool.js'));
+  const nextConfig = source(join(root, 'next.config.mjs'));
+  const packageJson = JSON.parse(source(join(root, 'package.json')));
+
+  assert.match(pool, /mssql\/msnodesqlv8\.js/);
+  assert.match(config, /trustedConnection:\s*true/);
+  assert.match(config, /MERGEN_ROTA_DB_ODBC_DRIVER/);
+  assert.doesNotMatch(config, /MERGEN_ROTA_DB_(?:USER|PASSWORD)/);
+  assert.equal(packageJson.dependencies.msnodesqlv8, '5.2.3');
+  assert.match(nextConfig, /serverComponentsExternalPackages:\s*\[[^\]]*['"]msnodesqlv8['"]/s);
+});
+
 test('Actual API repository talks only to HTTP API and never imports Demo seed or SQL', () => {
   const text = source(join(root, 'src/data/api/createApiRepository.js'));
   assert.match(text, /fetch\(/);
@@ -55,12 +69,13 @@ test('Demo repository never calls SQL or Actual API', () => {
   assert.match(text, /\.\/seed\.js/);
 });
 
-test('database secrets are never NEXT_PUBLIC variables', () => {
+test('database configuration stays server-only and contains no SQL password', () => {
   const env = source(join(root, '.env.example'));
   assert.doesNotMatch(env, /NEXT_PUBLIC_MERGEN_ROTA_DB/);
-  for (const name of ['SERVER', 'DATABASE', 'USER', 'PASSWORD']) {
+  for (const name of ['SERVER', 'DATABASE', 'ODBC_DRIVER']) {
     assert.match(env, new RegExp(`MERGEN_ROTA_DB_${name}=`));
   }
+  assert.doesNotMatch(env, /MERGEN_ROTA_DB_(?:USER|PASSWORD)=/);
 });
 
 test('trusted current Sicil comes only from server environment provider', () => {
