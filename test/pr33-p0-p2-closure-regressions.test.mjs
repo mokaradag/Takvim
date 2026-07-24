@@ -43,6 +43,8 @@ test('manual project code collisions are locked and rejected before SQL writes',
   const guardPosition = source.indexOf('assertManualProjectCodesAvailable(transaction, orderedChanges)');
   const commitPosition = source.indexOf('repository.commitChanges(orderedChanges)');
 
+  assert.match(source, /const pendingProjectCodes = new Map\(\)/);
+  assert.match(source, /pendingProjectCodes\.get\(projectCode\)/);
   assert.match(source, /FROM dbo\.MR_Projects WITH \(UPDLOCK, HOLDLOCK\)/);
   assert.match(source, /WHERE ProjectId <> @projectId AND ProjectCode = @projectCode/);
   assert.match(source, /PROJECT_CODE_RESERVED/);
