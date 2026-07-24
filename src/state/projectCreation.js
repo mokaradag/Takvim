@@ -99,6 +99,14 @@ export function validateProjectCreationInput(input = {}, { projects = [], people
 }
 
 export function prepareProjectCreation(input, context = {}, ids = {}) {
+  if (context.canCreateProjects === false) {
+    return validationError([{
+      code: 'PROJECT_CREATE_FORBIDDEN',
+      field: 'project',
+      message: 'Bu oturumda manuel proje oluşturma yetkiniz bulunmuyor.'
+    }]);
+  }
+
   const projects = context.projects || [];
   const people = context.people || [];
   const calendars = context.calendars || [];
