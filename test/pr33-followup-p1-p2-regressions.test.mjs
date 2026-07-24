@@ -6,6 +6,50 @@ import { prepareProjectCreation } from '../src/state/projectCreation.js';
 
 const VERSION = 'AQIDBA==';
 
+function completeProjectUpdate(overrides = {}) {
+  return {
+    id: 'project-1',
+    version: VERSION,
+    name: 'Project',
+    code: null,
+    leadId: null,
+    dataDate: null,
+    color: 'blue',
+    calendarId: 'calendar-1',
+    ...overrides
+  };
+}
+
+function completeTaskUpdate(overrides = {}) {
+  return {
+    id: 'task-1',
+    version: VERSION,
+    projectId: 'project-1',
+    wbsId: null,
+    calendarId: null,
+    task: 'Task',
+    description: '',
+    keyword: '',
+    status: 'planned',
+    priority: 'normal',
+    isMilestone: false,
+    plannedStart: null,
+    plannedFinish: null,
+    plannedDurationDays: null,
+    targetFinish: null,
+    actualStart: null,
+    actualFinish: null,
+    remainingDurationDays: null,
+    progress: null,
+    plannedHours: null,
+    actualHours: null,
+    budget: null,
+    spent: null,
+    sortOrder: null,
+    ...overrides
+  };
+}
+
 function validProjectContext(overrides = {}) {
   return {
     canCreateProjects: true,
@@ -28,7 +72,7 @@ function validProjectInput(overrides = {}) {
 
 test('versioned project updates must carry the complete tag replacement', () => {
   assert.deepEqual(findNestedCommitCollectionIssue({
-    projectUpserts: [{ id: 'project-1', version: VERSION }]
+    projectUpserts: [completeProjectUpdate()]
   }), {
     code: 'PROJECT_TAGS_REQUIRED_FOR_UPDATE',
     path: 'projectUpserts[0].tags',
@@ -36,26 +80,21 @@ test('versioned project updates must carry the complete tag replacement', () => 
   });
 
   assert.equal(findNestedCommitCollectionIssue({
-    projectUpserts: [{ id: 'project-1', version: VERSION, tags: [] }]
+    projectUpserts: [completeProjectUpdate({ tags: [] })]
   }), null);
 });
 
 test('versioned task updates must carry complete assignee and dependency replacements', () => {
   assert.equal(findNestedCommitCollectionIssue({
-    taskUpserts: [{ id: 'task-1', version: VERSION, deps: [] }]
+    taskUpserts: [completeTaskUpdate({ deps: [] })]
   })?.code, 'TASK_ASSIGNEES_REQUIRED_FOR_UPDATE');
 
   assert.equal(findNestedCommitCollectionIssue({
-    taskUpserts: [{ id: 'task-1', version: VERSION, assigneeIds: [] }]
+    taskUpserts: [completeTaskUpdate({ assigneeIds: [] })]
   })?.code, 'TASK_DEPENDENCIES_REQUIRED_FOR_UPDATE');
 
   assert.equal(findNestedCommitCollectionIssue({
-    taskUpserts: [{
-      id: 'task-1',
-      version: VERSION,
-      assigneeIds: [],
-      deps: []
-    }]
+    taskUpserts: [completeTaskUpdate({ assigneeIds: [], deps: [] })]
   }), null);
 });
 
