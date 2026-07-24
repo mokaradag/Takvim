@@ -308,7 +308,6 @@ async function loadSnapshotFrom(executor, auth) {
               )
             )
         )
-       )
     ORDER BY pd.DisplayName, pd.Sicil;
   `);
 

@@ -450,6 +450,7 @@ test('project-level READ grants expose project tasks, WBS, assignees, and requir
   assert.match(source, /@ReadGrantedProjects readProject WHERE readProject\.ProjectId = w\.ProjectId/);
   assert.match(source, /@ReadGrantedProjects readProject WHERE readProject\.ProjectId = t\.ProjectId/);
   assert.match(source, /readProject\.ProjectId = visibleTask\.ProjectId/);
+  assert.doesNotMatch(source, /\n {7}\)\n {4}ORDER BY pd\.DisplayName, pd\.Sicil/);
   assert.match(source, /SELECT d\.\*[\s\S]*WHERE v\.AccessLevel = 'FULL';/);
 });
 
