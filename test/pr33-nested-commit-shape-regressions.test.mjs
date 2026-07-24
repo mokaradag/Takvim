@@ -53,13 +53,20 @@ test('valid nested commit collections remain accepted', () => {
   }), null);
 });
 
-test('commit route applies nested collection validation before SQL persistence', () => {
+test('commit route applies every validation layer before SQL persistence', () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
-  const validationPosition = route.indexOf('findNestedCommitCollectionIssue(changes)');
+  const nestedPosition = route.indexOf('findNestedCommitCollectionIssue(changes)');
+  const projectWbsPosition = route.indexOf('findCommitProjectWbsIssue(changes)');
+  const scalarPosition = route.indexOf('findCommitScalarIssue(changes)');
   const commitPosition = route.indexOf('createOrderedSqlAppRepository().commitChanges(changes)');
 
-  assert.match(route, /findCommitChangeIssue\(changes\) \|\| findNestedCommitCollectionIssue\(changes\)/);
-  assert.ok(validationPosition >= 0);
-  assert.ok(commitPosition > validationPosition);
+  assert.match(
+    route,
+    /findCommitChangeIssue\(changes\)[\s\S]*findNestedCommitCollectionIssue\(changes\)[\s\S]*findCommitProjectWbsIssue\(changes\)[\s\S]*findCommitScalarIssue\(changes\)/
+  );
+  assert.ok(nestedPosition >= 0);
+  assert.ok(projectWbsPosition > nestedPosition);
+  assert.ok(scalarPosition > projectWbsPosition);
+  assert.ok(commitPosition > scalarPosition);
   assert.match(route, /status: 400/);
 });
