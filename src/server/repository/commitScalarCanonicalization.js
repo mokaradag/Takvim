@@ -2,6 +2,10 @@ function trimString(value) {
   return typeof value === 'string' ? value.trim() : value;
 }
 
+function emptyStringToNull(value) {
+  return value === '' ? null : value;
+}
+
 function mapArray(value, mapper) {
   return Array.isArray(value) ? value.map(mapper) : value;
 }
@@ -50,13 +54,23 @@ export function canonicalizeCommitScalars(changes) {
       priority: trimString(task?.priority),
       plannedStart: trimString(task?.plannedStart),
       plannedFinish: trimString(task?.plannedFinish),
+      plannedDurationDays: emptyStringToNull(task?.plannedDurationDays),
       targetFinish: trimString(task?.targetFinish),
       actualStart: trimString(task?.actualStart),
       actualFinish: trimString(task?.actualFinish),
+      remainingDurationDays: emptyStringToNull(task?.remainingDurationDays),
+      progress: emptyStringToNull(task?.progress),
+      plannedHours: emptyStringToNull(task?.plannedHours),
+      actualHours: emptyStringToNull(task?.actualHours),
+      budget: emptyStringToNull(task?.budget),
+      spent: emptyStringToNull(task?.spent),
+      sortOrder: emptyStringToNull(task?.sortOrder),
       assigneeIds: mapArray(task?.assigneeIds, trimString),
       deps: mapArray(task?.deps, (dependency) => ({
         ...dependency,
         type: trimString(dependency?.type),
+        lagDays: emptyStringToNull(dependency?.lagDays),
+        lagValue: emptyStringToNull(dependency?.lagValue),
         lagUnit: trimString(dependency?.lagUnit)
       }))
     }))
