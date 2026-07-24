@@ -61,8 +61,12 @@ repo = replace_required(
     "    WHERE v.AccessLevel = 'FULL'\n       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)\n       OR ta.Sicil = @sicil",
     'READ assignee visibility',
 )
-people_start = repo.index("          WHERE visibleAssignee.Sicil = pd.Sicil")
-people_end = repo.index("        )\n    ORDER BY pd.DisplayName, pd.Sicil;", people_start)
+people_marker = repo.index("WHERE visibleAssignee.Sicil = pd.Sicil")
+people_start = repo.rfind("\n", 0, people_marker) + 1
+order_start = repo.index("    ORDER BY pd.DisplayName, pd.Sicil;", people_marker)
+people_end = repo.rfind("        )\n", people_marker, order_start)
+if people_end < people_start:
+    raise SystemExit('people visibility outer close not found')
 new_people_gate = """          WHERE visibleAssignee.Sicil = pd.Sicil
             AND (
               EXISTS (
