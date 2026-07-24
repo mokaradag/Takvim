@@ -36,7 +36,7 @@ async function assertManualProjectCodesAvailable(transaction, changes) {
 
       SELECT TOP (1) ProjectId
       FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
-      WHERE ProjectId <> @projectId AND ProjectCode = @projectCode;
+      WHERE ProjectId <> @projectId AND UPPER(ProjectCode) = @projectCode;
     `);
 
     const storedSourceType = result.recordsets?.[0]?.[0]?.SourceType || null;
