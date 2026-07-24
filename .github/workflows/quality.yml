@@ -36,5 +36,11 @@ jobs:
             exit "$status"
           fi
           cat test-output.log
+      - name: Upload failing test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failing-test-output
+          path: test-output.log
       - name: Build production application
         run: npm run build
