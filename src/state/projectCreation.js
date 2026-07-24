@@ -94,21 +94,10 @@ export function validateProjectCreationInput(input = {}, { projects = [], people
   return issues;
 }
 
-function nextRootCode(wbs = []) {
-  const max = wbs
-    .filter((node) => node.parentId == null)
-    .reduce((current, node) => {
-      const numeric = Number.parseInt(String(node.code || '').split('.').at(0), 10);
-      return Number.isFinite(numeric) ? Math.max(current, numeric) : current;
-    }, 0);
-  return String(max + 1);
-}
-
 export function prepareProjectCreation(input, context = {}, ids = {}) {
   const projects = context.projects || [];
   const people = context.people || [];
   const calendars = context.calendars || [];
-  const wbs = context.wbs || [];
   const calendarId = resolveCalendarId(input, calendars);
   const normalizedInput = {
     ...input,
@@ -137,7 +126,7 @@ export function prepareProjectCreation(input, context = {}, ids = {}) {
     id: ids.rootWbsId,
     projectId: project.id,
     parentId: null,
-    code: nextRootCode(wbs),
+    code: '1',
     name: project.name,
     sortOrder: 1
   };
@@ -221,22 +210,9 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
   const taskUpserts = tasks
     .filter((task) => task.projectId === projectId)
     .map((task) => {
-      const nameChanged = task.proje !== prepared.project.name;
-      const codeChanged = (task.projectCode || '') !== (prepared.project.code || '');
-      const colorChanged = task.color !== prepared.project.color;
       const canonicalKeyword = canonicalTags.get(comparableName(task.keyword));
       const keywordChanged = Boolean(canonicalKeyword) && task.keyword !== canonicalKeyword;
-
-      if (!nameChanged && !codeChanged && !colorChanged && !keywordChanged) return null;
-
-      const nextTask = {
-        ...task,
-        proje: prepared.project.name,
-        projectCode: prepared.project.code || '',
-        color: prepared.project.color
-      };
-      if (keywordChanged) nextTask.keyword = canonicalKeyword;
-      return nextTask;
+      return keywordChanged ? { ...task, keyword: canonicalKeyword } : null;
     })
     .filter(Boolean);
 
