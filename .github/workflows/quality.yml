@@ -20,8 +20,8 @@ jobs:
         with:
           ref: agent/durable-sqlserver-persistence
           fetch-depth: 0
-      - name: Apply sixth Codex fixes
-        run: python .github/scripts/apply-sixth-codex-review-fixes-v6.py
+      - name: Clean sixth Codex people SQL
+        run: python .github/scripts/clean-sixth-codex-people-sql.py
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
@@ -33,21 +33,17 @@ jobs:
         run: npm run lint
       - name: Run sixth Codex regression tests
         run: node --test test/codex-p2-regressions.test.mjs
-      - name: Run WBS domain validation tests
-        run: node --test test/domain-validation-edge-cases.test.mjs
-      - name: Run authorization tests
-        run: node --test test/durable-authorization.test.mjs
       - name: Run automated tests
         run: npm test -- --test-concurrency=1
       - name: Build production application
         run: npm run build
-      - name: Commit fixes to PR 33 branch
+      - name: Commit cleanup to PR 33 branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/server/repository/sqlAppRepository.js src/domain/validation/wbsValidation.js src/state/appState.js test/codex-p2-regressions.test.mjs test/domain-validation-edge-cases.test.mjs
+          git add src/server/repository/sqlAppRepository.js test/codex-p2-regressions.test.mjs
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "Clean sixth Codex review fixes"
+          git commit -m "Clean sixth Codex people visibility SQL"
           git push origin HEAD:agent/durable-sqlserver-persistence
 
   test-and-build:
