@@ -1,12 +1,19 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useAllTasks, useSelectedTask, useTaskActions } from '../../state/hooks';
+import { useAllProjects, useAllTasks, useSelectedTask, useTaskActions } from '../../state/hooks';
+import {
+  canWriteProject,
+  projectWriteFailure,
+  resolveTaskMutationAccess
+} from '../../state/projectWritePolicy.js';
+import { ReadOnlyTaskDrawer } from './ReadOnlyTaskDrawer';
 import { TaskDrawer } from './TaskDrawer';
 import { createTaskUpdateTracker, reconcileTaskDraft } from './taskDraft';
 
 export function TaskDetailOverlay() {
   const task = useSelectedTask();
   const tasks = useAllTasks();
+  const projects = useAllProjects();
   const { closeTask, updateTask, moveTaskToWbs, deleteTask } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
   const taskIdRef = useRef(task?.id || null);
@@ -42,7 +49,15 @@ export function TaskDetailOverlay() {
 
   if (!task) return null;
 
+  const project = projects.find((item) => item.id === task.projectId) || null;
+  if (!canWriteProject(project)) {
+    return <ReadOnlyTaskDrawer task={task} onClose={closeTask} />;
+  }
+
   const onUpdate = (taskId, patch) => {
+    const access = resolveTaskMutationAccess({ projects, tasks }, taskId, patch);
+    if (!access.ok) return Promise.resolve(projectWriteFailure('task/update', access));
+
     const keys = Object.keys(patch || {});
     for (const key of keys) dirtyFieldsRef.current.add(key);
     setDisplayTask((current) => ({ ...(current || task), ...patch }));
