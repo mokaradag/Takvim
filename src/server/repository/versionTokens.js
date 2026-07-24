@@ -1,5 +1,6 @@
 import 'server-only';
 import { ServerPersistenceError } from '../errors.js';
+import { decodeCanonicalRowVersion } from './rowVersionTokenValidation.js';
 
 export function encodeVersion(value) {
   if (!value) return null;
@@ -11,9 +12,7 @@ export function decodeVersion(value) {
     throw new ServerPersistenceError('CONFLICT', 'Kayıt sürümü eksik. Verileri yeniden yükleyin.');
   }
   try {
-    const buffer = Buffer.from(value, 'base64');
-    if (buffer.length !== 8) throw new Error('invalid rowversion');
-    return buffer;
+    return decodeCanonicalRowVersion(value);
   } catch (cause) {
     throw new ServerPersistenceError('CONFLICT', 'Kayıt sürümü geçersiz. Verileri yeniden yükleyin.', { cause });
   }
