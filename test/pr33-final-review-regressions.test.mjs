@@ -128,7 +128,13 @@ test('moving a task across projects clears both outgoing and incoming dependenci
   const after = appStateReducer(before, {
     type: 'task/update',
     id: 'task-1',
-    patch: { projectId: 'p-2', wbsId: 'w-2' }
+    patch: {
+      projectId: 'p-2',
+      projectCode: 'P-2',
+      proje: 'Project Two',
+      wbsId: 'w-2',
+      color: 'blue'
+    }
   });
   const moved = after.tasks.find((item) => item.id === 'task-1');
   const successor = after.tasks.find((item) => item.id === 'task-2');
