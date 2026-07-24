@@ -31,16 +31,6 @@ jobs:
         run: npm ci
       - name: Run lint
         run: npm run lint
-      - name: Check fallback root response regression
-        run: node --test --test-name-pattern="server-generated fallback project roots" test/codex-p2-regressions.test.mjs
-      - name: Check SQL int Sicil regression
-        run: node --test --test-name-pattern="persisted Sicil validation rejects values above" test/codex-p2-regressions.test.mjs
-      - name: Check project READ visibility regression
-        run: node --test --test-name-pattern="project-level READ grants expose project tasks" test/codex-p2-regressions.test.mjs
-      - name: Check root WBS deletion regression
-        run: node --test --test-name-pattern="root WBS deletion is rejected" test/codex-p2-regressions.test.mjs
-      - name: Check session capability regression
-        run: node --test --test-name-pattern="loaded session capabilities survive" test/codex-p2-regressions.test.mjs
       - name: Run sixth Codex regression tests
         run: node --test test/codex-p2-regressions.test.mjs
       - name: Run WBS domain validation tests
@@ -48,7 +38,18 @@ jobs:
       - name: Run authorization tests
         run: node --test test/durable-authorization.test.mjs
       - name: Run automated tests
-        run: npm test -- --test-concurrency=1
+        id: fulltests
+        continue-on-error: true
+        run: npm test -- --test-concurrency=1 > sixth-full-tests.log 2>&1
+      - name: Upload full-suite diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sixth-codex-full-test-log
+          path: sixth-full-tests.log
+      - name: Stop on full-suite failure
+        if: steps.fulltests.outcome == 'failure'
+        run: exit 1
       - name: Build production application
         run: npm run build
       - name: Commit fixes to PR 33 branch
