@@ -12,6 +12,10 @@ function normalizedProjectCode(value) {
   return normalizedName(value).toUpperCase();
 }
 
+function isCorporateProject(project) {
+  return String(project?.source || '').toLowerCase() === 'corporate';
+}
+
 export function normalizeProjectTags(values = []) {
   const seen = new Set();
   return (Array.isArray(values) ? values : [])
@@ -151,15 +155,23 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
   if (!existing) {
     return validationError([{ code: 'PROJECT_NOT_FOUND', field: 'projectId', message: 'Güncellenecek proje bulunamadı.' }]);
   }
+  if (existing.accessLevel && existing.accessLevel !== 'FULL') {
+    return validationError([{ code: 'PROJECT_WRITE_FORBIDDEN', field: 'projectId', message: 'Bu proje salt okunur görünürlükle açıldı ve değiştirilemez.' }]);
+  }
 
+  const sourceControlled = isCorporateProject(existing);
   const calendarId = input.calendarId === undefined
     ? existing.calendarId || resolveCalendarId(input, calendars)
     : String(input.calendarId || '').trim();
   const normalizedInput = {
     ...input,
-    name: normalizedName(input.name === undefined ? existing.name : input.name),
-    code: normalizedProjectCode(input.code === undefined ? existing.code : input.code),
-    source: input.source === undefined ? existing.source : input.source,
+    name: sourceControlled
+      ? existing.name
+      : normalizedName(input.name === undefined ? existing.name : input.name),
+    code: sourceControlled
+      ? normalizedProjectCode(existing.code)
+      : normalizedProjectCode(input.code === undefined ? existing.code : input.code),
+    source: sourceControlled ? existing.source : (input.source === undefined ? existing.source : input.source),
     leadId: input.leadId === undefined ? existing.leadId : input.leadId,
     dataDate: input.dataDate === undefined ? existing.dataDate : input.dataDate,
     color: input.color === undefined ? existing.color : input.color,
