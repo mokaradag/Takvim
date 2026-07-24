@@ -4,15 +4,6 @@ const UUID_SUFFIX = /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 export const ACTUAL_ID_ALIAS_STORAGE_KEY = 'mergen-rota.actual-id-aliases.v1';
 export const MAX_ACTUAL_ID_ALIASES = 5000;
 
-function resolveStorage(storage) {
-  if (storage !== undefined) return storage;
-  try {
-    return typeof window !== 'undefined' ? window.localStorage : null;
-  } catch {
-    return null;
-  }
-}
-
 function actualUuid(value) {
   if (value == null || value === '') return null;
   const normalized = String(value).trim();
@@ -31,11 +22,10 @@ function validAlias(actual, clientId) {
 
 export function loadActualIdAliases(storage, storageKey = ACTUAL_ID_ALIAS_STORAGE_KEY) {
   const aliases = new Map();
-  const target = resolveStorage(storage);
-  if (!target) return aliases;
+  if (!storage) return aliases;
 
   try {
-    const raw = target.getItem(storageKey);
+    const raw = storage.getItem(storageKey);
     if (!raw) return aliases;
     const values = JSON.parse(raw);
     if (!Array.isArray(values)) return aliases;
@@ -53,8 +43,7 @@ export function loadActualIdAliases(storage, storageKey = ACTUAL_ID_ALIAS_STORAG
 }
 
 export function persistActualIdAliases(aliases, storage, storageKey = ACTUAL_ID_ALIAS_STORAGE_KEY) {
-  const target = resolveStorage(storage);
-  if (!target) return false;
+  if (!storage) return false;
 
   const values = [];
   for (const [actual, clientId] of aliases instanceof Map ? aliases : []) {
@@ -63,7 +52,7 @@ export function persistActualIdAliases(aliases, storage, storageKey = ACTUAL_ID_
   }
 
   try {
-    target.setItem(storageKey, JSON.stringify(values.slice(-MAX_ACTUAL_ID_ALIASES)));
+    storage.setItem(storageKey, JSON.stringify(values.slice(-MAX_ACTUAL_ID_ALIASES)));
     return true;
   } catch {
     return false;
