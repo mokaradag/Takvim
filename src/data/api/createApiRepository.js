@@ -29,8 +29,16 @@ export function toActualUuid(value) {
   return (match ? match[1] : normalized).toLowerCase();
 }
 
+function toOptionalActualUuid(value) {
+  return value === undefined ? undefined : toActualUuid(value);
+}
+
 export function toPersistenceStatus(value) {
   return STATUS_TO_SQL[value] || value;
+}
+
+function toOptionalPersistenceStatus(value) {
+  return value === undefined ? undefined : toPersistenceStatus(value);
 }
 
 export function fromPersistenceStatus(value) {
@@ -49,23 +57,23 @@ export function normalizeActualChanges(changes = {}) {
     projectUpserts: (changes.projectUpserts || []).map((project) => ({
       ...project,
       id: toActualUuid(project.id),
-      calendarId: toActualUuid(project.calendarId)
+      calendarId: toOptionalActualUuid(project.calendarId)
     })),
     projectDeletes: (changes.projectDeletes || []).map(normalizeDelete),
     wbsUpserts: (changes.wbsUpserts || []).map((node) => ({
       ...node,
       id: toActualUuid(node.id),
       projectId: toActualUuid(node.projectId),
-      parentId: toActualUuid(node.parentId)
+      parentId: toOptionalActualUuid(node.parentId)
     })),
     wbsDeletes: (changes.wbsDeletes || []).map(normalizeDelete),
     taskUpserts: (changes.taskUpserts || []).map((task) => ({
       ...task,
       id: toActualUuid(task.id),
       projectId: toActualUuid(task.projectId),
-      wbsId: toActualUuid(task.wbsId),
-      calendarId: toActualUuid(task.calendarId),
-      status: toPersistenceStatus(task.status),
+      wbsId: toOptionalActualUuid(task.wbsId),
+      calendarId: toOptionalActualUuid(task.calendarId),
+      status: toOptionalPersistenceStatus(task.status),
       deps: Array.isArray(task.deps) ? task.deps.map((dependency) => ({
         ...dependency,
         id: dependency.id ? toActualUuid(dependency.id) : dependency.id,
