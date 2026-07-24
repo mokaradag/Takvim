@@ -1,6 +1,7 @@
 import 'server-only';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
+import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
 import { createHardenedSqlAppRepository } from './hardenedSqlAppRepository.js';
 import {
   assertDeleteIntentMatchesPersistence,
@@ -13,7 +14,7 @@ export function createOrderedSqlAppRepository() {
   return {
     ...repository,
     commitChanges(changes = {}) {
-      const canonicalChanges = canonicalizeCommitChanges(changes);
+      const canonicalChanges = canonicalizeCommitScalars(canonicalizeCommitChanges(changes));
       const orderedChanges = {
         ...canonicalChanges,
         wbsUpserts: orderWbsUpsertsByParents(canonicalChanges.wbsUpserts || [])
