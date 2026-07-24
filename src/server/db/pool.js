@@ -27,22 +27,21 @@ export async function withSqlTransaction(work) {
 
   const pool = await getSqlPool();
   const transaction = new sql.Transaction(pool);
-  await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
-
-  return transactionContext.run(transaction, async () => {
-    try {
+  try {
+    await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
+    return await transactionContext.run(transaction, async () => {
       const result = await work(transaction, sql);
       await transaction.commit();
       return result;
-    } catch (error) {
-      try {
-        if (transaction._aborted !== true) await transaction.rollback();
-      } catch {
-        // Preserve the original failure; rollback errors are server-log concerns.
-      }
-      throw error;
+    });
+  } catch (error) {
+    try {
+      if (transaction._aborted !== true) await transaction.rollback();
+    } catch {
+      // Preserve the original failure; rollback errors are server-log concerns.
     }
-  });
+    throw error;
+  }
 }
 
 export { sql };
