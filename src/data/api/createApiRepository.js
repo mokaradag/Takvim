@@ -106,7 +106,7 @@ function collectClientIds(changes = {}, map = new Map()) {
     rememberClientId(map, task?.projectId);
     rememberClientId(map, task?.wbsId);
     rememberClientId(map, task?.calendarId);
-    for (const dependency of task?.deps || []) {
+    for (const dependency of Array.isArray(task?.deps) ? task.deps : []) {
       rememberClientId(map, dependency?.id);
       rememberClientId(map, dependency?.predecessorId);
     }
