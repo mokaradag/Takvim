@@ -27,6 +27,7 @@ test('task assignee patches convert unambiguous display names to stable Sicil id
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.patch.assigneeIds, ['300']);
+  assert.equal(result.patch.assigneeIdsCanonical, true);
   assert.equal(Object.prototype.hasOwnProperty.call(result.patch, 'sorumlu'), false);
 });
 
@@ -38,20 +39,23 @@ test('duplicate display names fail closed instead of assigning an arbitrary Sici
   assert.match(result.error.message, /Sicil/);
 });
 
-test('canonical assigneeIds override stale display names and allow clearing all assignees', () => {
+test('authoritative assignee patches override stale display names and allow clearing all assignees', () => {
   const reassigned = normalizeTaskReferences({
     id: 'task-1',
     projectId: 'project-1',
     assigneeIds: ['300'],
+    assigneeIdsCanonical: true,
     sorumlu: ['Aynı Ad']
   }, context);
   assert.deepEqual(reassigned.assigneeIds, ['300']);
   assert.deepEqual(reassigned.sorumlu, ['Tekil Ad']);
+  assert.equal(Object.prototype.hasOwnProperty.call(reassigned, 'assigneeIdsCanonical'), false);
 
   const cleared = normalizeTaskReferences({
     id: 'task-1',
     projectId: 'project-1',
     assigneeIds: [],
+    assigneeIdsCanonical: true,
     sorumlu: ['Tekil Ad']
   }, context);
   assert.deepEqual(cleared.assigneeIds, []);
