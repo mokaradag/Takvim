@@ -11,8 +11,16 @@ const CODE_BY_STATUS = {
   503: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE
 };
 const UUID_SUFFIX = /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
-const STATUS_TO_SQL = Object.freeze({ todo: 'planned', in_progress: 'in-progress' });
-const STATUS_FROM_SQL = Object.freeze({ planned: 'todo', 'in-progress': 'in_progress' });
+const STATUS_TO_SQL = Object.freeze({ todo: 'planned', in_progress: 'in-progress', done: 'done' });
+const STATUS_FROM_SQL = Object.freeze({
+  planned: 'todo',
+  'not-started': 'todo',
+  'in-progress': 'in_progress',
+  blocked: 'in_progress',
+  done: 'done',
+  completed: 'done',
+  cancelled: 'done'
+});
 
 export function toActualUuid(value) {
   if (value == null || value === '') return null;
