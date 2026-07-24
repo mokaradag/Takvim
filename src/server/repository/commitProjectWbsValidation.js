@@ -18,6 +18,19 @@ function validSicil(value) {
   return Number.isSafeInteger(sicil) && sicil > 0 && sicil <= SQL_SICIL_MAX;
 }
 
+function sqlIntValue(value) {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    if (!/^[+-]?\d+$/.test(normalized)) return null;
+    const parsed = Number(normalized);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function validateText(value, path, label, maxLength, { required = false } = {}) {
   if (value == null || value === '') {
     return required ? issue('COMMIT_TEXT_REQUIRED', path, `${label} gereklidir.`) : null;
@@ -82,8 +95,8 @@ function validateWbs(changes) {
     if (nameIssue) return nameIssue;
 
     if (node.sortOrder != null && node.sortOrder !== '') {
-      const sortOrder = Number(node.sortOrder);
-      if (!Number.isInteger(sortOrder) || sortOrder < SQL_INT_MIN || sortOrder > SQL_INT_MAX) {
+      const sortOrder = sqlIntValue(node.sortOrder);
+      if (sortOrder == null || sortOrder < SQL_INT_MIN || sortOrder > SQL_INT_MAX) {
         return issue('WBS_SORT_ORDER_INVALID', `${basePath}.sortOrder`, 'WBS sırası geçerli bir SQL Server int olmalıdır.');
       }
     }
