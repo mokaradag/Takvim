@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMockRepository } from '../src/data/mock/createMockRepository.js';
+import { normalizeTaskReferences } from '../src/domain/validation/index.js';
 import { projectColorVar, setProjectColorOverrides } from '../src/lib/colors.js';
 import { createInitialState, appStateReducer } from '../src/state/appState.js';
 import { createPersistenceChangeSet, createStateMutationOrchestrator } from '../src/state/persistence.js';
@@ -96,7 +97,7 @@ test('prepareProjectCreation creates an atomic project and root work distributio
   assert.equal(prepared.rootWbs.projectId, 'p-new');
   assert.equal(prepared.rootWbs.parentId, null);
   assert.equal(prepared.rootWbs.name, 'Yeni Proje');
-  assert.equal(prepared.rootWbs.code, '2');
+  assert.equal(prepared.rootWbs.code, '1');
 });
 
 test('prepareProjectUpdate edits the selected project while preserving the corporate calendar', () => {
@@ -132,12 +133,12 @@ test('prepareProjectUpdate edits the selected project while preserving the corpo
   assert.equal(duplicate.error.code, 'PROJECT_NAME_DUPLICATE');
 });
 
-test('project update changes propagate project colors without overwriting custom root names', () => {
+test('project metadata updates avoid task persistence fan-out and preserve custom root names', () => {
   const context = {
     ...seed(),
     tasks: [
-      { id: 't-1', projectId: 'p-1', proje: 'Mevcut Proje', color: 'blue' },
-      { id: 't-2', projectId: 'p-2', proje: 'İkinci Proje', color: 'emerald' }
+      { id: 't-1', projectId: 'p-1', projectCode: 'P-1', proje: 'Mevcut Proje', color: 'blue' },
+      { id: 't-2', projectId: 'p-2', projectCode: 'P-2', proje: 'İkinci Proje', color: 'emerald' }
     ]
   };
 
@@ -148,9 +149,16 @@ test('project update changes propagate project colors without overwriting custom
     color: 'cyan'
   }, context);
   assert.equal(colorOnly.ok, true);
-  assert.equal(colorOnly.changes.taskUpserts.length, 1);
-  assert.equal(colorOnly.changes.taskUpserts[0].color, 'cyan');
+  assert.deepEqual(colorOnly.changes.taskUpserts, []);
+  assert.equal(colorOnly.changes.projectUpserts[0].color, 'cyan');
   assert.deepEqual(colorOnly.changes.wbsUpserts, []);
+
+  const normalizedTask = normalizeTaskReferences(context.tasks[0], {
+    projects: [colorOnly.project],
+    people: context.people,
+    wbs: context.wbs
+  });
+  assert.equal(normalizedTask.color, 'cyan');
 
   const customRootContext = {
     ...context,
@@ -163,8 +171,15 @@ test('project update changes propagate project colors without overwriting custom
     color: 'blue'
   }, customRootContext);
   assert.equal(renamedWithCustomRoot.ok, true);
-  assert.equal(renamedWithCustomRoot.changes.taskUpserts[0].proje, 'Mevcut Proje Güncel');
+  assert.deepEqual(renamedWithCustomRoot.changes.taskUpserts, []);
   assert.deepEqual(renamedWithCustomRoot.changes.wbsUpserts, []);
+
+  const normalizedRenamedTask = normalizeTaskReferences(context.tasks[0], {
+    projects: [renamedWithCustomRoot.project],
+    people: context.people,
+    wbs: customRootContext.wbs
+  });
+  assert.equal(normalizedRenamedTask.proje, 'Mevcut Proje Güncel');
 
   const renamedWithDefaultRoot = prepareProjectUpdateChanges('p-1', {
     name: 'Mevcut Proje Güncel',
