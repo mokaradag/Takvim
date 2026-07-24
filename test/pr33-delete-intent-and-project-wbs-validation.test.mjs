@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { findCommitProjectWbsIssue } from '../src/server/repository/commitProjectWbsValidation.js';
+import { canonicalizeCommitScalars } from '../src/server/repository/commitScalarCanonicalization.js';
 import { findDeleteIntentIssue } from '../src/server/repository/deleteIntentPolicy.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -104,12 +105,48 @@ test('project and WBS SQL scalar limits are enforced before repository execution
   assert.equal(findCommitProjectWbsIssue(validChanges()), null);
 });
 
-test('commit route and ordered repository enforce both new boundaries', () => {
+test('commit scalar canonicalization trims values before validation and SQL binding', () => {
+  const canonical = canonicalizeCommitScalars({
+    projectUpserts: [{
+      name: '  Proje  ',
+      source: ' manual ',
+      color: ' blue ',
+      dataDate: ' 2026-07-24 ',
+      tags: [' Planlama ']
+    }],
+    wbsUpserts: [{ code: ' 1 ', name: ' Kök ' }],
+    taskUpserts: [{
+      task: ' Görev ',
+      status: ' planned ',
+      priority: ' high ',
+      plannedStart: ' 2026-07-24 ',
+      assigneeIds: [' 18068 '],
+      deps: [{ type: ' FS ', lagUnit: ' day ' }]
+    }]
+  });
+
+  assert.equal(canonical.projectUpserts[0].name, 'Proje');
+  assert.equal(canonical.projectUpserts[0].source, 'manual');
+  assert.equal(canonical.projectUpserts[0].color, 'blue');
+  assert.equal(canonical.projectUpserts[0].dataDate, '2026-07-24');
+  assert.deepEqual(canonical.projectUpserts[0].tags, ['Planlama']);
+  assert.deepEqual(canonical.wbsUpserts[0], { code: '1', name: 'Kök' });
+  assert.equal(canonical.taskUpserts[0].status, 'planned');
+  assert.equal(canonical.taskUpserts[0].priority, 'high');
+  assert.equal(canonical.taskUpserts[0].plannedStart, '2026-07-24');
+  assert.deepEqual(canonical.taskUpserts[0].assigneeIds, ['18068']);
+  assert.equal(canonical.taskUpserts[0].deps[0].type, 'FS');
+  assert.equal(canonical.taskUpserts[0].deps[0].lagUnit, 'day');
+});
+
+test('commit route and ordered repository enforce all new boundaries', () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const ordered = read('src/server/repository/orderedSqlAppRepository.js');
   const intent = read('src/server/repository/upsertIntentValidation.js');
 
+  assert.match(route, /canonicalizeCommitScalars\(canonicalizeCommitChanges\(body\.changes\)\)/);
   assert.match(route, /findCommitProjectWbsIssue\(changes\)/);
+  assert.match(ordered, /canonicalizeCommitScalars\(canonicalizeCommitChanges\(changes\)\)/);
   assert.match(ordered, /await assertDeleteIntentMatchesPersistence\(transaction, orderedChanges\);/);
   assert.match(intent, /collection: 'wbsDeletes'/);
   assert.match(intent, /collection: 'taskDeletes'/);
