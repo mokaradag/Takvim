@@ -110,8 +110,14 @@ async function assertActiveProjectMutationTargets(executor, changes) {
 
 async function assertActiveCalendarReferences(executor, changes) {
   const calendarIds = new Set();
-  for (const entity of [...changes.projectUpserts, ...changes.taskUpserts]) {
-    if (entity.calendarId) calendarIds.add(uuid(entity.calendarId, 'Takvim kimliği'));
+  for (const project of changes.projectUpserts) {
+    if (!project.calendarId) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Proje için etkin bir çalışma takvimi seçilmelidir.');
+    }
+    calendarIds.add(uuid(project.calendarId, 'Takvim kimliği'));
+  }
+  for (const task of changes.taskUpserts) {
+    if (task.calendarId) calendarIds.add(uuid(task.calendarId, 'Takvim kimliği'));
   }
 
   for (const calendarId of [...calendarIds].sort()) {
