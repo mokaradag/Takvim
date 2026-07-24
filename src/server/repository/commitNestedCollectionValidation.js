@@ -4,6 +4,10 @@ function issue(code, path, message) {
   return { code, path, message };
 }
 
+function hasPersistenceVersion(value) {
+  return value != null && String(value).trim() !== '';
+}
+
 function validSicil(value) {
   const normalized = value == null ? '' : String(value).trim();
   if (!/^\d+$/.test(normalized)) return false;
@@ -13,12 +17,20 @@ function validSicil(value) {
 
 export function findNestedCommitCollectionIssue(changes = {}) {
   for (let index = 0; index < (changes.projectUpserts || []).length; index += 1) {
-    const tags = changes.projectUpserts[index]?.tags;
+    const project = changes.projectUpserts[index];
+    const tags = project?.tags;
     if (tags !== undefined && !Array.isArray(tags)) {
       return issue(
         'PROJECT_TAGS_NOT_ARRAY',
         `projectUpserts[${index}].tags`,
         'Proje etiketleri dizi olmalıdır.'
+      );
+    }
+    if (hasPersistenceVersion(project?.version) && tags === undefined) {
+      return issue(
+        'PROJECT_TAGS_REQUIRED_FOR_UPDATE',
+        `projectUpserts[${index}].tags`,
+        'Güncellenen proje için etiketlerin tümü gönderilmelidir.'
       );
     }
     for (let tagIndex = 0; tagIndex < (tags || []).length; tagIndex += 1) {
@@ -33,12 +45,20 @@ export function findNestedCommitCollectionIssue(changes = {}) {
   }
 
   for (let index = 0; index < (changes.taskUpserts || []).length; index += 1) {
-    const assigneeIds = changes.taskUpserts[index]?.assigneeIds;
+    const task = changes.taskUpserts[index];
+    const assigneeIds = task?.assigneeIds;
     if (assigneeIds !== undefined && !Array.isArray(assigneeIds)) {
       return issue(
         'TASK_ASSIGNEES_NOT_ARRAY',
         `taskUpserts[${index}].assigneeIds`,
         'Görev sorumluları dizi olmalıdır.'
+      );
+    }
+    if (hasPersistenceVersion(task?.version) && assigneeIds === undefined) {
+      return issue(
+        'TASK_ASSIGNEES_REQUIRED_FOR_UPDATE',
+        `taskUpserts[${index}].assigneeIds`,
+        'Güncellenen görev için sorumluların tümü gönderilmelidir.'
       );
     }
     for (let assigneeIndex = 0; assigneeIndex < (assigneeIds || []).length; assigneeIndex += 1) {
@@ -49,6 +69,22 @@ export function findNestedCommitCollectionIssue(changes = {}) {
           'Görev sorumlusu Sicil değeri pozitif ve geçerli bir SQL Server int olmalıdır.'
         );
       }
+    }
+
+    const dependencies = task?.deps;
+    if (dependencies !== undefined && !Array.isArray(dependencies)) {
+      return issue(
+        'TASK_DEPENDENCIES_NOT_ARRAY',
+        `taskUpserts[${index}].deps`,
+        'Görev bağımlılıkları dizi olmalıdır.'
+      );
+    }
+    if (hasPersistenceVersion(task?.version) && dependencies === undefined) {
+      return issue(
+        'TASK_DEPENDENCIES_REQUIRED_FOR_UPDATE',
+        `taskUpserts[${index}].deps`,
+        'Güncellenen görev için bağımlılıkların tümü gönderilmelidir.'
+      );
     }
   }
 
