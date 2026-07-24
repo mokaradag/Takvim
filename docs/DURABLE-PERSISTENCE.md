@@ -24,23 +24,28 @@ Feature modules continue to use state actions. They do not import SQL Server pac
 - `GET /api/mergen-rota/snapshot`
 - `POST /api/mergen-rota/commit`
 
-All routes force the Next.js Node.js runtime, disable caching, derive identity on the server, and return normalized safe errors. SQL stacks, connection strings, credentials, and raw query text are not returned to the browser.
+All routes force the Next.js Node.js runtime, disable caching, derive identity on the server, and return normalized safe errors. SQL stacks, connection settings, and raw query text are not returned to the browser.
 
 ## SQL Server connection
 
-The `mssql` driver is used only under `src/server`. One reusable connection pool is initialized lazily. Queries use typed parameters. Connection and request timeouts are configurable. Credentials must be supplied through server-only environment variables and must never use the `NEXT_PUBLIC_` prefix.
+The `mssql` package uses the `msnodesqlv8` driver only under `src/server`. The driver connects with Windows Integrated Authentication (`trustedConnection: true`); MERGEN Rota does not store or accept a SQL username or password. One reusable connection pool is initialized lazily. Queries use typed parameters. Connection and request timeouts are configurable.
+
+SQL Server authenticates the Windows account that runs the Node.js process. During local development this is normally the signed-in Windows account that starts `npm run dev`. In production it should be a dedicated domain service account. IT must grant that account access to the target database, read access to the three corporate sources, and the required read/write permissions on `MR_*` objects.
+
+The host must have Microsoft ODBC Driver 18 for SQL Server installed. Driver 17 may also be selected explicitly when required. The native `msnodesqlv8` dependency normally uses a prebuilt binary; when the approved npm mirror cannot provide that binary, installation falls back to compilation and requires Visual Studio 2022 Build Tools with the **Desktop development with C++** workload.
 
 Required deployment variables are listed in `.env.example`:
 
 - `MERGEN_ROTA_DB_SERVER`
 - `MERGEN_ROTA_DB_PORT`
 - `MERGEN_ROTA_DB_DATABASE`
-- `MERGEN_ROTA_DB_USER`
-- `MERGEN_ROTA_DB_PASSWORD`
+- `MERGEN_ROTA_DB_ODBC_DRIVER`
 - `MERGEN_ROTA_DB_ENCRYPT`
 - `MERGEN_ROTA_DB_TRUST_SERVER_CERTIFICATE`
 - `MERGEN_ROTA_DB_CONNECTION_TIMEOUT_MS`
 - `MERGEN_ROTA_DB_REQUEST_TIMEOUT_MS`
+
+Do not add `MERGEN_ROTA_DB_USER` or `MERGEN_ROTA_DB_PASSWORD`; they are not used by the Windows-authenticated adapter. All database variables are server-only and must never use the `NEXT_PUBLIC_` prefix.
 
 ## Transaction semantics
 
@@ -96,18 +101,29 @@ Domain validation errors remain separate from persistence and authorization fail
 
 1. Back up the target database.
 2. Run `database/MR_Create_Durable_Persistence.sql`.
-3. Configure the server-only database variables.
-4. Enable and configure the temporary development identity only in the pre-Keycloak integration environment.
-5. Run `npm ci`.
-6. Run `npm run build`.
-7. Start with `npm run start -- -H 0.0.0.0 -p 3000`.
-8. Select **Gerçek Sistem** and verify authorization and persistence.
+3. Install Microsoft ODBC Driver 18 for SQL Server on the MERGEN Rota host.
+4. Make sure the Windows account that will run Node.js has the required SQL Server permissions.
+5. Create `.env.local` from `.env.example` and configure the server-only database variables.
+6. Enable and configure the temporary development identity only in the pre-Keycloak integration environment.
+7. Run `npm ci`.
+8. Run `npm run build`.
+9. Start with `npm run start -- -H 0.0.0.0 -p 3000` under the approved Windows/domain account.
+10. Select **Gerçek Sistem** and verify authorization and persistence.
 
 To remove the build-phase schema, run `database/MR_Rollback_Durable_Persistence.sql`. **Rollback permanently deletes all MR_* application data.** It never modifies the three corporate source tables.
 
+## Native-driver installation troubleshooting
+
+If `npm install` or `npm ci` reports `Could not find any Visual Studio installation to use`, the prebuilt `msnodesqlv8` binary was not available through the configured npm registry or proxy and npm attempted a local native build. Use one of these approved remedies:
+
+1. Ask IT to mirror/provide the matching prebuilt `msnodesqlv8` binary for the approved Node.js x64 version; or
+2. Ask IT to install Visual Studio 2022 Build Tools with **Desktop development with C++**, the MSVC toolset and a Windows SDK on the build host.
+
+Installing the full Visual Studio IDE is not necessary. Do not work around the error by adding a Windows password or SQL login to `.env.local`.
+
 ## Offline/on-premise operation
 
-Runtime remains fully on-premise. No CDN, remote font, public API, remote JavaScript, or remote CSS dependency is introduced. The SQL driver is a local npm dependency installed through the approved registry or internal proxy.
+Runtime remains fully on-premise. No CDN, remote font, public API, remote JavaScript, or remote CSS dependency is introduced. `mssql` and `msnodesqlv8` are local npm dependencies installed through the approved registry or internal proxy. Native binaries and the Microsoft ODBC driver must be available inside the on-premise software-distribution boundary.
 
 ## Validation boundary
 
