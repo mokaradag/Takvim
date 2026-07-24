@@ -163,7 +163,9 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
     return validationError([{ code: 'PROJECT_NOT_FOUND', field: 'projectId', message: 'Güncellenecek proje bulunamadı.' }]);
   }
 
-  const calendarId = existing.calendarId || resolveCalendarId(input, calendars);
+  const calendarId = input.calendarId === undefined
+    ? existing.calendarId || resolveCalendarId(input, calendars)
+    : String(input.calendarId || '').trim();
   const normalizedInput = {
     ...input,
     name: normalizedName(input.name === undefined ? existing.name : input.name),
