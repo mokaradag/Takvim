@@ -422,12 +422,21 @@ export function appStateReducer(state, action) {
   }
 }
 
+function defaultTaskAssignee(state) {
+  if (state.session?.dataMode === 'actual') {
+    const currentUserId = state.currentUser?.id == null ? null : String(state.currentUser.id);
+    if (!currentUserId) return null;
+    return (state.people || []).find((person) => String(person.id) === currentUserId) || state.currentUser;
+  }
+  return state.people?.[0] || null;
+}
+
 export function createNewTask(state, referenceDate = today(), id = `n-${Date.now()}`) {
   const selectedProject = state.workspaceMode === WORKSPACE_MODE_PROJECT
     ? state.projects.find((project) => project.id === state.selectedProjectId) || null
     : null;
   const project = selectedProject || state.projects[0] || null;
-  const person = state.people[0];
+  const person = defaultTaskAssignee(state);
   const calendar = resolveProjectCalendar(project, state.calendars);
   const start = moveToWorkingDay(referenceDate, calendar, 1);
   const defaultWbs = project ? selectDefaultProjectWbs(state.wbs, project.id) : null;
