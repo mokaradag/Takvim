@@ -1,4 +1,8 @@
 import { AppRepositoryError, REPOSITORY_ERROR_CODES } from '../contracts/appRepository.js';
+import {
+  loadActualIdAliases,
+  persistActualIdAliases
+} from './actualIdAliasStorage.js';
 
 const CODE_BY_STATUS = {
   401: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
@@ -239,8 +243,12 @@ async function requestJson(url, init, operation) {
   return normalizeActualResponse(body);
 }
 
-export function createApiRepository({ basePath = '/api/mergen-rota' } = {}) {
-  const clientIdAliases = new Map();
+export function createApiRepository({
+  basePath = '/api/mergen-rota',
+  aliasStorage,
+  aliasStorageKey
+} = {}) {
+  const clientIdAliases = loadActualIdAliases(aliasStorage, aliasStorageKey);
   return {
     kind: 'actual-api',
     async loadSessionContext() {
@@ -252,6 +260,8 @@ export function createApiRepository({ basePath = '/api/mergen-rota' } = {}) {
       return restoreActualSnapshotIds(snapshot, clientIdAliases);
     },
     async commitChanges(changes) {
+      collectClientIds(changes, clientIdAliases);
+      persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey);
       const committed = await requestJson(`${basePath}/commit`, {
         method: 'POST',
         body: JSON.stringify({ changes: normalizeActualChanges(changes) })
