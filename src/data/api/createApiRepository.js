@@ -12,8 +12,9 @@ const STATUS_FROM_SQL = Object.freeze({ planned: 'todo', 'in-progress': 'in_prog
 
 export function toActualUuid(value) {
   if (value == null || value === '') return null;
-  const match = String(value).match(UUID_SUFFIX);
-  return match ? match[1] : String(value);
+  const normalized = String(value).trim();
+  const match = normalized.match(UUID_SUFFIX);
+  return (match ? match[1] : normalized).toLowerCase();
 }
 
 export function toPersistenceStatus(value) {
