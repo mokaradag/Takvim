@@ -10,6 +10,7 @@ import {
   useState
 } from 'react';
 import { appRepository } from '../data';
+import { createClientEntityId } from '../data/clientEntityId.js';
 import { setProjectColorOverrides } from '../lib/colors';
 import { selectTaskStats } from '../scheduling/metrics';
 import { appStateReducer, createLoadingState, createNewTask } from './appState';
@@ -20,13 +21,6 @@ import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/work
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
 
 const AppStateContext = createContext(null);
-
-function uniqueId(prefix) {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
 
 function firstFailedResult(results = []) {
   return results.find((result) => result && !result.ok) || null;
@@ -69,11 +63,9 @@ export function AppStateProvider({ children, repository = appRepository }) {
   useEffect(() => () => persistence.dispose(), [persistence]);
 
   const reloadData = useCallback(async () => {
-    const flushResults = await persistence.flushAllTaskUpdates();
-    const failedFlush = firstFailedResult(flushResults);
-    if (failedFlush) return failedFlush;
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
 
-    await persistence.whenIdle();
     const requestId = ++loadRequestRef.current;
     applyStateAction({ type: 'data/load-start' });
     const result = await loadApplicationData(repository);
@@ -155,7 +147,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const addTask = useCallback(async (input = null) => {
-    const id = uniqueId('task');
+    const id = createClientEntityId('task');
     const result = await persistence.mutate('task/create', (current) => {
       const baseTask = createNewTask(current, undefined, id);
       return {
@@ -169,8 +161,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const addProject = useCallback(async (input) => {
-    const failedFlush = firstFailedResult(await persistence.flushAllTaskUpdates());
-    if (failedFlush) return failedFlush;
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
 
     const current = stateRef.current;
     const prepared = prepareProjectCreation(input, {
@@ -179,8 +171,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
       calendars: current.calendars,
       wbs: current.wbs
     }, {
-      projectId: uniqueId('project'),
-      rootWbsId: uniqueId('wbs')
+      projectId: createClientEntityId('project'),
+      rootWbsId: createClientEntityId('wbs')
     });
     if (!prepared.ok) return prepared;
 
@@ -213,8 +205,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const updateProject = useCallback(async (projectId, input) => {
-    const failedFlush = firstFailedResult(await persistence.flushAllTaskUpdates());
-    if (failedFlush) return failedFlush;
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
 
     const current = stateRef.current;
     const prepared = prepareProjectUpdateChanges(projectId, input, {
@@ -266,7 +258,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction]);
 
   const addWbsChild = useCallback((parentId, name) => {
-    const id = uniqueId('wbs');
+    const id = createClientEntityId('wbs');
     return persistence.mutate('wbs/create', { type: 'wbs/add-child', id, parentId, name });
   }, [persistence]);
   const renameWbs = useCallback((id, name) => (
