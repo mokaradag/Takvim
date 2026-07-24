@@ -1,0 +1,50 @@
+function trimString(value) {
+  return typeof value === 'string' ? value.trim() : value;
+}
+
+function mapArray(value, mapper) {
+  return Array.isArray(value) ? value.map(mapper) : value;
+}
+
+export function canonicalizeCommitScalars(changes) {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return changes;
+
+  return {
+    ...changes,
+    projectUpserts: mapArray(changes.projectUpserts, (project) => ({
+      ...project,
+      name: trimString(project?.name),
+      code: trimString(project?.code),
+      source: trimString(project?.source),
+      sourceType: trimString(project?.sourceType),
+      leadId: trimString(project?.leadId),
+      dataDate: trimString(project?.dataDate),
+      color: trimString(project?.color),
+      tags: mapArray(project?.tags, trimString)
+    })),
+    wbsUpserts: mapArray(changes.wbsUpserts, (node) => ({
+      ...node,
+      code: trimString(node?.code),
+      name: trimString(node?.name)
+    })),
+    taskUpserts: mapArray(changes.taskUpserts, (task) => ({
+      ...task,
+      task: trimString(task?.task),
+      title: trimString(task?.title),
+      keyword: trimString(task?.keyword),
+      status: trimString(task?.status),
+      priority: trimString(task?.priority),
+      plannedStart: trimString(task?.plannedStart),
+      plannedFinish: trimString(task?.plannedFinish),
+      targetFinish: trimString(task?.targetFinish),
+      actualStart: trimString(task?.actualStart),
+      actualFinish: trimString(task?.actualFinish),
+      assigneeIds: mapArray(task?.assigneeIds, trimString),
+      deps: mapArray(task?.deps, (dependency) => ({
+        ...dependency,
+        type: trimString(dependency?.type),
+        lagUnit: trimString(dependency?.lagUnit)
+      }))
+    }))
+  };
+}
