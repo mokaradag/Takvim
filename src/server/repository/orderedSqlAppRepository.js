@@ -16,6 +16,8 @@ function normalizedProjectCode(value) {
 }
 
 async function assertManualProjectCodesAvailable(transaction, changes) {
+  const pendingProjectCodes = new Map();
+
   for (const project of changes.projectUpserts || []) {
     const projectCode = normalizedProjectCode(project.code);
     if (!projectCode) continue;
@@ -39,6 +41,14 @@ async function assertManualProjectCodesAvailable(transaction, changes) {
 
     const storedSourceType = result.recordsets?.[0]?.[0]?.SourceType || null;
     if (storedSourceType && storedSourceType !== 'MANUAL') continue;
+
+    const pendingProjectId = pendingProjectCodes.get(projectCode);
+    if (pendingProjectId && pendingProjectId !== project.id) {
+      throw new ServerPersistenceError('CONFLICT', 'Proje kodu değişiklik kümesinde birden fazla proje için kullanılıyor.', {
+        details: { code: 'PROJECT_CODE_CONFLICT', projectCode }
+      });
+    }
+    pendingProjectCodes.set(projectCode, project.id);
 
     if (result.recordsets?.[1]?.length) {
       throw new ServerPersistenceError('CONFLICT', 'Kurumsal proje kodu manuel proje için kullanılamaz.', {
