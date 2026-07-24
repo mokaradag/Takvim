@@ -6,6 +6,7 @@ const SQL_INT_MAX = 2147483647;
 const DECIMAL_10_2_MAX = 99999999.99;
 const DECIMAL_12_2_MAX = 9999999999.99;
 const DECIMAL_19_4_MAX = 999999999999999.9999;
+const DECIMAL_TEXT_PATTERN = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
 function issue(code, path, message, details = null) {
   return { code, path, message, details };
@@ -13,6 +14,10 @@ function issue(code, path, message, details = null) {
 
 function text(value) {
   return value == null ? '' : String(value).trim();
+}
+
+function hasOwn(value, field) {
+  return Boolean(value) && Object.prototype.hasOwnProperty.call(value, field);
 }
 
 function isValidIsoDate(value) {
@@ -24,10 +29,21 @@ function isValidIsoDate(value) {
 }
 
 function numericValue(value) {
-  if (value == null || (typeof value === 'string' && !value.trim())) {
-    return { present: false, value: null };
+  if (value == null || value === '') {
+    return { present: false, valid: true, value: null };
   }
-  return { present: true, value: Number(value) };
+  if (typeof value === 'number') {
+    return { present: true, valid: Number.isFinite(value), value };
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    if (!normalized || !DECIMAL_TEXT_PATTERN.test(normalized)) {
+      return { present: true, valid: false, value: null };
+    }
+    const parsed = Number(normalized);
+    return { present: true, valid: Number.isFinite(parsed), value: parsed };
+  }
+  return { present: true, valid: false, value: null };
 }
 
 function validateNumber(value, path, label, {
@@ -39,7 +55,7 @@ function validateNumber(value, path, label, {
 } = {}) {
   const numeric = numericValue(value);
   if (!numeric.present) return null;
-  if (!Number.isFinite(numeric.value) || (integer && !Number.isInteger(numeric.value))) {
+  if (!numeric.valid || (integer && !Number.isInteger(numeric.value))) {
     return issue(invalidCode, path, `${label} geçerli bir sayı olmalıdır.`);
   }
   if (numeric.value < min || numeric.value > max) {
@@ -48,9 +64,24 @@ function validateNumber(value, path, label, {
   return null;
 }
 
+function validateOptionalString(value, path, label, { allowNull = true } = {}) {
+  if (value === undefined || (allowNull && value === null)) return null;
+  if (typeof value !== 'string') {
+    return issue('TASK_TEXT_INVALID', path, `${label} metin olmalıdır.`);
+  }
+  return null;
+}
+
 function validateProjectDates(changes) {
   for (let index = 0; index < (changes.projectUpserts || []).length; index += 1) {
     const value = changes.projectUpserts[index]?.dataDate;
+    if (value != null && value !== '' && typeof value !== 'string') {
+      return issue(
+        'PROJECT_DATA_DATE_INVALID',
+        `projectUpserts[${index}].dataDate`,
+        'Proje veri tarihi geçerli bir YYYY-MM-DD tarihi olmalıdır.'
+      );
+    }
     if (text(value) && !isValidIsoDate(value)) {
       return issue(
         'PROJECT_DATA_DATE_INVALID',
@@ -82,25 +113,58 @@ function validateTaskScalars(changes) {
   for (let index = 0; index < (changes.taskUpserts || []).length; index += 1) {
     const task = changes.taskUpserts[index];
     const basePath = `taskUpserts[${index}]`;
+
+    if (task?.task != null && typeof task.task !== 'string') {
+      return issue('TASK_TITLE_INVALID', `${basePath}.task`, 'Görev başlığı metin olmalıdır.');
+    }
+    if (task?.title != null && typeof task.title !== 'string') {
+      return issue('TASK_TITLE_INVALID', `${basePath}.title`, 'Görev başlığı metin olmalıdır.');
+    }
     const title = text(task?.task || task?.title);
     if (!title) return issue('TASK_TITLE_REQUIRED', `${basePath}.task`, 'Görev başlığı gereklidir.');
     if (title.length > 1000) {
       return issue('TASK_TITLE_TOO_LONG', `${basePath}.task`, 'Görev başlığı en fazla 1000 karakter olabilir.');
     }
-    if (task.keyword != null && String(task.keyword).length > 255) {
+
+    const descriptionIssue = validateOptionalString(task?.description, `${basePath}.description`, 'Görev açıklaması');
+    if (descriptionIssue) return descriptionIssue;
+    const keywordIssue = validateOptionalString(task?.keyword, `${basePath}.keyword`, 'Görev anahtar sözcüğü');
+    if (keywordIssue) return keywordIssue;
+    if (task.keyword != null && task.keyword.length > 255) {
       return issue('TASK_KEYWORD_TOO_LONG', `${basePath}.keyword`, 'Görev anahtar sözcüğü en fazla 255 karakter olabilir.');
     }
 
+    if (task.status !== undefined && typeof task.status !== 'string') {
+      return issue('TASK_STATUS_INVALID', `${basePath}.status`, 'Görev durumu desteklenen değerlerden biri olmalıdır.');
+    }
     const status = text(task.status || 'planned');
     if (!TASK_STATUSES.has(status)) {
       return issue('TASK_STATUS_INVALID', `${basePath}.status`, 'Görev durumu desteklenen değerlerden biri olmalıdır.');
+    }
+    if (task.priority !== undefined && typeof task.priority !== 'string') {
+      return issue('TASK_PRIORITY_INVALID', `${basePath}.priority`, 'Görev önceliği desteklenen değerlerden biri olmalıdır.');
     }
     const priority = text(task.priority || 'normal');
     if (!TASK_PRIORITIES.has(priority)) {
       return issue('TASK_PRIORITY_INVALID', `${basePath}.priority`, 'Görev önceliği desteklenen değerlerden biri olmalıdır.');
     }
 
+    const hasIsMilestone = hasOwn(task, 'isMilestone');
+    const hasMilestone = hasOwn(task, 'milestone');
+    if (hasIsMilestone && typeof task.isMilestone !== 'boolean') {
+      return issue('TASK_MILESTONE_FLAG_INVALID', `${basePath}.isMilestone`, 'Kilometre taşı göstergesi doğru/yanlış değeri olmalıdır.');
+    }
+    if (hasMilestone && typeof task.milestone !== 'boolean') {
+      return issue('TASK_MILESTONE_FLAG_INVALID', `${basePath}.milestone`, 'Kilometre taşı göstergesi doğru/yanlış değeri olmalıdır.');
+    }
+    if (hasIsMilestone && hasMilestone && task.isMilestone !== task.milestone) {
+      return issue('TASK_MILESTONE_FLAG_CONFLICT', `${basePath}.milestone`, 'Kilometre taşı göstergeleri birbiriyle çelişemez.');
+    }
+    const isMilestone = hasIsMilestone ? task.isMilestone : (hasMilestone ? task.milestone : false);
+
     for (const [field, label] of dateFields) {
+      const dateTypeIssue = validateOptionalString(task[field], `${basePath}.${field}`, label);
+      if (dateTypeIssue) return dateTypeIssue;
       if (text(task[field]) && !isValidIsoDate(task[field])) {
         return issue('TASK_DATE_INVALID', `${basePath}.${field}`, `${label} geçerli bir YYYY-MM-DD tarihi olmalıdır.`, { field });
       }
@@ -139,7 +203,7 @@ function validateTaskScalars(changes) {
     if (sortIssue) return sortIssue;
 
     const duration = numericValue(task.plannedDurationDays);
-    if ((task.isMilestone || task.milestone) && duration.present && duration.value !== 0) {
+    if (isMilestone && duration.present && duration.valid && duration.value !== 0) {
       return issue('TASK_MILESTONE_DURATION_INVALID', `${basePath}.plannedDurationDays`, 'Kilometre taşı süresi sıfır olmalıdır.');
     }
   }
@@ -178,6 +242,9 @@ function validateDependencyScalars(changes) {
         rangeCode: 'DEPENDENCY_LAG_INVALID'
       });
       if (lagValueIssue) return lagValueIssue;
+      if (dependency.lagUnit != null && dependency.lagUnit !== '' && typeof dependency.lagUnit !== 'string') {
+        return issue('DEPENDENCY_LAG_UNIT_INVALID', `${path}.lagUnit`, 'Bağımlılık gecikme birimi day, week veya month olmalıdır.');
+      }
       if (text(dependency.lagUnit) && !DEPENDENCY_LAG_UNITS.has(text(dependency.lagUnit))) {
         return issue('DEPENDENCY_LAG_UNIT_INVALID', `${path}.lagUnit`, 'Bağımlılık gecikme birimi day, week veya month olmalıdır.');
       }
