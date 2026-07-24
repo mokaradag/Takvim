@@ -7,7 +7,7 @@ export const MAX_ACTUAL_ID_ALIASES = 5000;
 function resolveStorage(storage) {
   if (storage !== undefined) return storage;
   try {
-    return globalThis.localStorage || null;
+    return typeof window !== 'undefined' ? window.localStorage : null;
   } catch {
     return null;
   }
