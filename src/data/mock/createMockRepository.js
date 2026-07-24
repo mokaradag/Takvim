@@ -67,6 +67,9 @@ function removePredecessorReferences(tasks, predecessorIds) {
     return filtered.length === dependencies.length ? task : { ...task, deps: filtered };
   });
 }
+function dependenciesChanged(before, after) {
+  return JSON.stringify(before?.deps || []) !== JSON.stringify(after?.deps || []);
+}
 
 export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
   let snapshot = clone(seed || DEFAULT_SEED);
@@ -103,20 +106,20 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
       failNextMutation = false;
       if (fail) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED, message: 'Değişiklik kaydedilemedi.', operation: 'commitChanges' });
       const normalized = normalizeChanges(changes);
+      const beforeTasks = snapshot.tasks || [];
+      const beforeTasksById = new Map(beforeTasks.map((task) => [task.id, task]));
       const candidate = clone(snapshot);
       candidate.projects = applyCollectionChanges(candidate.projects || [], normalized.projectUpserts, normalized.projectDeletes);
-      const invalidated = invalidatedPredecessorIds(snapshot.tasks || [], normalized.taskUpserts, normalized.taskDeletes);
+      const invalidated = invalidatedPredecessorIds(beforeTasks, normalized.taskUpserts, normalized.taskDeletes);
       const appliedTasks = applyCollectionChanges(candidate.tasks || [], normalized.taskUpserts, normalized.taskDeletes, { prependNew: true });
       candidate.tasks = removePredecessorReferences(appliedTasks, invalidated);
       candidate.wbs = applyCollectionChanges(candidate.wbs || [], normalized.wbsUpserts, normalized.wbsDeletes);
+      const requestedTaskIds = new Set(normalized.taskUpserts.map((task) => task.id));
+      const committedTaskUpserts = candidate.tasks.filter((task) => (
+        requestedTaskIds.has(task.id) || dependenciesChanged(beforeTasksById.get(task.id), task)
+      ));
       snapshot = candidate;
-      return clone({
-        ...normalized,
-        taskUpserts: candidate.tasks.filter((task) => (
-          normalized.taskUpserts.some((upsert) => upsert.id === task.id)
-          || (task.deps || []).length !== (seed.tasks || []).find((before) => before.id === task.id)?.deps?.length
-        ))
-      });
+      return clone({ ...normalized, taskUpserts: committedTaskUpserts });
     },
     async flush() {}
   };
