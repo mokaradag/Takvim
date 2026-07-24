@@ -21,7 +21,7 @@ jobs:
           ref: agent/durable-sqlserver-persistence
           fetch-depth: 0
       - name: Apply sixth Codex fixes
-        run: python .github/scripts/apply-sixth-codex-review-fixes-v4.py
+        run: python .github/scripts/apply-sixth-codex-review-fixes-v5.py
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
@@ -38,18 +38,7 @@ jobs:
       - name: Run authorization tests
         run: node --test test/durable-authorization.test.mjs
       - name: Run automated tests
-        id: fulltests
-        continue-on-error: true
-        run: npm test -- --test-concurrency=1 > sixth-full-tests.log 2>&1
-      - name: Upload full-suite diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sixth-codex-full-test-log
-          path: sixth-full-tests.log
-      - name: Stop on full-suite failure
-        if: steps.fulltests.outcome == 'failure'
-        run: exit 1
+        run: npm test -- --test-concurrency=1
       - name: Build production application
         run: npm run build
       - name: Commit fixes to PR 33 branch
