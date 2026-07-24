@@ -6,6 +6,19 @@ function mapArray(value, mapper) {
   return Array.isArray(value) ? value.map(mapper) : value;
 }
 
+function hasOwn(value, field) {
+  return Boolean(value) && Object.prototype.hasOwnProperty.call(value, field);
+}
+
+function canonicalMilestoneFields(task) {
+  const hasMilestone = hasOwn(task, 'milestone');
+  const hasIsMilestone = hasOwn(task, 'isMilestone');
+  if (!hasMilestone && !hasIsMilestone) return {};
+
+  const value = hasMilestone ? task.milestone : task.isMilestone;
+  return { milestone: value, isMilestone: value };
+}
+
 export function canonicalizeCommitScalars(changes) {
   if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return changes;
 
@@ -29,6 +42,7 @@ export function canonicalizeCommitScalars(changes) {
     })),
     taskUpserts: mapArray(changes.taskUpserts, (task) => ({
       ...task,
+      ...canonicalMilestoneFields(task),
       task: trimString(task?.task),
       title: trimString(task?.title),
       keyword: trimString(task?.keyword),
