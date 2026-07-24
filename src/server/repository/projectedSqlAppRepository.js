@@ -37,12 +37,12 @@ export function createProjectedSqlAppRepository() {
     ...baseRepository,
     async loadSnapshot() {
       return withSqlTransaction(async (transaction) => {
-        const snapshot = await baseRepository.loadSnapshot();
+        let snapshot = await baseRepository.loadSnapshot();
         const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
         const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
         const defaultCalendarId = await loadDefaultCalendarId(transaction);
-        const withAssignees = applyTaskAssigneeProjection(snapshot, assigneeRows);
-        return applyDefaultCalendarProjection(withAssignees, defaultCalendarId);
+        snapshot = applyDefaultCalendarProjection(snapshot, defaultCalendarId);
+        return applyTaskAssigneeProjection(snapshot, assigneeRows);
       }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
     }
   };
