@@ -3,6 +3,7 @@ import {
   canonicalizeCommitChanges,
   findCommitChangeIssue
 } from '../../../../server/repository/commitChangeValidation.js';
+import { findNestedCommitCollectionIssue } from '../../../../server/repository/commitNestedCollectionValidation.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
 
 export const runtime = 'nodejs';
@@ -16,7 +17,7 @@ export async function POST(request) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
     }
     const changes = canonicalizeCommitChanges(body.changes);
-    const issue = findCommitChangeIssue(changes);
+    const issue = findCommitChangeIssue(changes) || findNestedCommitCollectionIssue(changes);
     if (issue) {
       throw new ServerPersistenceError('MUTATION_FAILED', issue.message, {
         status: 400,
