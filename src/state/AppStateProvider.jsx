@@ -214,6 +214,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
       projects: current.projects,
       people: current.people,
       calendars: current.calendars,
+      canCreateProjects: current.canCreateProjects,
       wbs: current.wbs
     }, {
       projectId: createClientEntityId('project'),
