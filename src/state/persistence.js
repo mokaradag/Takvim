@@ -65,6 +65,20 @@ export function createOrderedMutationQueue() {
 
 export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   const pending = new Map();
+  let disposed = false;
+
+  function disposalResult() {
+    return {
+      ok: false,
+      error: {
+        kind: 'persistence',
+        code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+        message: 'Bekleyen değişiklik kaydedilmeden işlem sonlandırıldı.',
+        operation: 'task/update',
+        details: null
+      }
+    };
+  }
 
   function scheduleFlush(taskId) {
     const entry = pending.get(taskId);
@@ -74,6 +88,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   }
 
   function schedule(taskId, patch) {
+    if (disposed) return Promise.resolve(disposalResult());
     return new Promise((resolve) => {
       const current = pending.get(taskId) || { patch: {}, waiters: [], timer: null };
       current.patch = { ...current.patch, ...patch };
@@ -108,20 +123,17 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   }
 
   async function flushAll() {
-    return Promise.all([...pending.keys()].map((taskId) => flush(taskId)));
+    const results = [];
+    while (pending.size) {
+      const batch = await Promise.all([...pending.keys()].map((taskId) => flush(taskId)));
+      results.push(...batch);
+    }
+    return results;
   }
 
   function dispose() {
-    const result = {
-      ok: false,
-      error: {
-        kind: 'persistence',
-        code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
-        message: 'Bekleyen değişiklik kaydedilmeden işlem sonlandırıldı.',
-        operation: 'task/update',
-        details: null
-      }
-    };
+    disposed = true;
+    const result = disposalResult();
     for (const entry of pending.values()) {
       clearTimeout(entry.timer);
       for (const resolve of entry.waiters) resolve(result);
