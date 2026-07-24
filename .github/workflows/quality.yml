@@ -26,6 +26,15 @@ jobs:
       - name: Run lint
         run: npm run lint
       - name: Run automated tests
-        run: npm test -- --test-concurrency=1
+        shell: bash
+        run: |
+          set +e
+          npm test -- --test-concurrency=1 > test-output.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            tail -n 250 test-output.log
+            exit "$status"
+          fi
+          cat test-output.log
       - name: Build production application
         run: npm run build
