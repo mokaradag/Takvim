@@ -1,13 +1,12 @@
 import 'server-only';
-import { getSqlPool, sql } from '../db/pool.js';
+import { sql, withSqlTransaction } from '../db/pool.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 
-async function loadVisibleTaskAssignees(taskIds) {
+async function loadVisibleTaskAssignees(executor, taskIds) {
   if (!taskIds.length) return [];
 
-  const pool = await getSqlPool();
-  const request = pool.request();
+  const request = executor.request();
   request.input('taskIds', sql.NVarChar(sql.MAX), taskIds.join(','));
   const result = await request.query(`
     SELECT ta.TaskId, ta.Sicil
@@ -24,10 +23,12 @@ export function createProjectedSqlAppRepository() {
   return {
     ...baseRepository,
     async loadSnapshot() {
-      const snapshot = await baseRepository.loadSnapshot();
-      const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
-      const assigneeRows = await loadVisibleTaskAssignees(taskIds);
-      return applyTaskAssigneeProjection(snapshot, assigneeRows);
+      return withSqlTransaction(async (transaction) => {
+        const snapshot = await baseRepository.loadSnapshot();
+        const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
+        const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
+        return applyTaskAssigneeProjection(snapshot, assigneeRows);
+      });
     }
   };
 }
