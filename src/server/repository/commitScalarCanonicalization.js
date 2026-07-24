@@ -23,6 +23,9 @@ function canonicalMilestoneFields(task) {
   const hasMilestone = hasOwn(task, 'milestone');
   const hasIsMilestone = hasOwn(task, 'isMilestone');
   if (!hasMilestone && !hasIsMilestone) return {};
+  if (hasMilestone && hasIsMilestone) {
+    return { milestone: task.milestone, isMilestone: task.isMilestone };
+  }
 
   const value = hasMilestone ? task.milestone : task.isMilestone;
   return { milestone: value, isMilestone: value };
