@@ -20,6 +20,39 @@ jobs:
         with:
           ref: agent/durable-sqlserver-persistence
           fetch-depth: 0
+      - name: Preflight repository anchors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('src/server/repository/sqlAppRepository.js').read_text()
+          checks = [
+            "if (!/^\\d+$/.test(text) || !Number.isSafeInteger(sicil) || sicil <= 0) {",
+            "DECLARE @VisibleProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY, AccessLevel varchar(10));",
+            "SELECT pa.ProjectId, CASE WHEN pa.AccessLevel = 'FULL' THEN 'FULL' ELSE 'PARTIAL' END",
+            "WHERE visibleAssignee.Sicil = pd.Sicil",
+            "const refs = request(executor);",
+            "const wbsIds = new Set(changes.wbsUpserts.map((value) => value.id));"
+          ]
+          for value in checks:
+            assert value in source, value
+          PY
+      - name: Preflight domain anchors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('src/domain/validation/wbsValidation.js').read_text()
+          assert "export function validateWbsDeletion(wbs, tasks, wbsId)" in source
+          assert "const childIds = (wbs || []).filter((node) => node.parentId === wbsId)" in source
+          PY
+      - name: Preflight state anchors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('src/state/appState.js').read_text()
+          assert "function emptyApplicationData()" in source
+          assert "function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())" in source
+          assert "WBS_HAS_TASKS: 'Doğrudan görev atanmış bir WBS silinemez.'" in source
+          PY
       - name: Apply sixth Codex fixes
         run: python .github/scripts/apply-sixth-codex-review-fixes.py
       - name: Set up Node.js 24.14.0
