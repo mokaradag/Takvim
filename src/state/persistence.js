@@ -59,7 +59,13 @@ export function createOrderedMutationQueue() {
       tail = result.then(() => undefined, () => undefined);
       return result;
     },
-    whenIdle() { return tail; }
+    async whenIdle() {
+      let observed;
+      do {
+        observed = tail;
+        await observed;
+      } while (observed !== tail);
+    }
   };
 }
 
@@ -131,6 +137,10 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     return results;
   }
 
+  function hasPending() {
+    return pending.size > 0;
+  }
+
   function dispose() {
     disposed = true;
     const result = disposalResult();
@@ -141,7 +151,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     pending.clear();
   }
 
-  return { schedule, flush, flushAll, dispose };
+  return { schedule, flush, flushAll, hasPending, dispose };
 }
 
 function defaultSessionContext(repository) {
@@ -263,11 +273,13 @@ export function createStateMutationOrchestrator({
     flushAllTaskUpdates() { return taskPatches.flushAll(); },
     whenIdle() { return queue.whenIdle(); },
     async flush() {
-      const results = await taskPatches.flushAll();
-      const failed = results.find((result) => result && !result.ok);
-      if (failed) return failed;
-      await queue.whenIdle();
-      return { ok: true };
+      while (true) {
+        const results = await taskPatches.flushAll();
+        const failed = results.find((result) => result && !result.ok);
+        if (failed) return failed;
+        await queue.whenIdle();
+        if (!taskPatches.hasPending()) return { ok: true };
+      }
     },
     dispose() { taskPatches.dispose(); }
   };
