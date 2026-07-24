@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useAllProjects, useAllTasks, useSelectedTask, useTaskActions } from '../../state/hooks';
+import { useAllPeople, useAllProjects, useAllTasks, useSelectedTask, useTaskActions } from '../../state/hooks';
 import {
   canWriteProject,
   projectWriteFailure,
@@ -8,12 +8,14 @@ import {
 } from '../../state/projectWritePolicy.js';
 import { ReadOnlyTaskDrawer } from './ReadOnlyTaskDrawer';
 import { TaskDrawer } from './TaskDrawer';
+import { normalizeTaskAssigneePatch } from './taskAssigneePatch.js';
 import { createTaskUpdateTracker, reconcileTaskDraft } from './taskDraft';
 
 export function TaskDetailOverlay() {
   const task = useSelectedTask();
   const tasks = useAllTasks();
   const projects = useAllProjects();
+  const people = useAllPeople();
   const { closeTask, updateTask, moveTaskToWbs, deleteTask } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
   const taskIdRef = useRef(task?.id || null);
@@ -54,17 +56,28 @@ export function TaskDetailOverlay() {
     return <ReadOnlyTaskDrawer task={task} onClose={closeTask} />;
   }
 
+  const rejectedUpdate = (issue) => {
+    setDisplayTask({ ...task });
+    return Promise.resolve(projectWriteFailure('task/update', issue));
+  };
+
   const onUpdate = (taskId, patch) => {
-    const access = resolveTaskMutationAccess({ projects, tasks }, taskId, patch);
-    if (!access.ok) return Promise.resolve(projectWriteFailure('task/update', access));
+    const assigneePatch = normalizeTaskAssigneePatch(patch, people);
+    if (!assigneePatch.ok) return rejectedUpdate(assigneePatch.error);
+    const persistedPatch = assigneePatch.patch;
 
-    const keys = Object.keys(patch || {});
+    const access = resolveTaskMutationAccess({ projects, tasks }, taskId, persistedPatch);
+    if (!access.ok) return rejectedUpdate(access);
+
+    const keys = [...new Set([...Object.keys(patch || {}), ...Object.keys(persistedPatch || {})])];
     for (const key of keys) dirtyFieldsRef.current.add(key);
-    setDisplayTask((current) => ({ ...(current || task), ...patch }));
+    setDisplayTask((current) => ({ ...(current || task), ...patch, ...persistedPatch }));
 
-    const result = keys.length === 1 && keys[0] === 'wbsId' && patch.wbsId
-      ? moveTaskToWbs(taskId, patch.wbsId)
-      : updateTask(taskId, patch);
+    const result = Object.keys(persistedPatch).length === 1
+      && Object.prototype.hasOwnProperty.call(persistedPatch, 'wbsId')
+      && persistedPatch.wbsId
+      ? moveTaskToWbs(taskId, persistedPatch.wbsId)
+      : updateTask(taskId, persistedPatch);
     const tracker = updateTrackerRef.current;
     const tracked = tracker.track(result);
 
