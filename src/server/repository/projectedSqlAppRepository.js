@@ -1,6 +1,7 @@
 import 'server-only';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
+import { applyDefaultCalendarProjection } from './calendarProjection.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 
 async function loadVisibleTaskAssignees(executor, taskIds) {
@@ -18,6 +19,18 @@ async function loadVisibleTaskAssignees(executor, taskIds) {
   return result.recordset || [];
 }
 
+async function loadDefaultCalendarId(executor) {
+  const result = await executor.request().query(`
+    SELECT TOP (1) CalendarId
+    FROM dbo.MR_Calendars
+    WHERE IsDefault = 1 AND IsActive = 1
+    ORDER BY CreatedAt, CalendarId;
+  `);
+  return result.recordset?.[0]?.CalendarId == null
+    ? null
+    : String(result.recordset[0].CalendarId);
+}
+
 export function createProjectedSqlAppRepository() {
   const baseRepository = createBaseSqlAppRepository();
   return {
@@ -27,7 +40,9 @@ export function createProjectedSqlAppRepository() {
         const snapshot = await baseRepository.loadSnapshot();
         const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
         const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
-        return applyTaskAssigneeProjection(snapshot, assigneeRows);
+        const defaultCalendarId = await loadDefaultCalendarId(transaction);
+        const withAssignees = applyTaskAssigneeProjection(snapshot, assigneeRows);
+        return applyDefaultCalendarProjection(withAssignees, defaultCalendarId);
       }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
     }
   };
