@@ -1,4 +1,4 @@
-const TASK_STATUSES = new Set(['planned', 'in-progress', 'blocked', 'done', 'cancelled', 'not-started', 'completed']);
+const TASK_STATUSES = new Set(['planned', 'in-progress', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical', 'normal']);
 const DEPENDENCY_LAG_UNITS = new Set(['day', 'week', 'month']);
 const SQL_INT_MIN = -2147483648;
