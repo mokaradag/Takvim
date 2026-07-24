@@ -14,8 +14,8 @@ print('cleaned stale people-query closing parenthesis')
 
 test_path = Path('test/codex-p2-regressions.test.mjs')
 tests = test_path.read_text()
-needle = "  assert.match(source, /readProject\\.ProjectId = visibleTask\\.ProjectId/);\n"
-addition = "  assert.doesNotMatch(source, /\\n\\s+\\)\\n\\s+\\)\\n\\s+\\)\\n\\s+ORDER BY pd\\.DisplayName, pd\\.Sicil/);\n"
+needle = "  assert.match(source, /readProject\.ProjectId = visibleTask\.ProjectId/);\n"
+addition = "  assert.doesNotMatch(source, /\n\s+\)\n\s+\)\n\s+\)\n\s+\)\n\s+ORDER BY pd\.DisplayName, pd\.Sicil/);\n"
 if addition not in tests:
     if needle not in tests:
         raise SystemExit('READ visibility regression insertion point not found')
