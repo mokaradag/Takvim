@@ -80,20 +80,24 @@ export function normalizeTaskReferences(task, { projects = [], people = [], wbs 
   const peopleById = new Map(normalizedPeople.map((item) => [item.id, item]));
   const wbsById = new Map(wbs.map((node) => [node.id, node]));
 
-  const hasCanonicalAssigneeIds = Array.isArray(task.assigneeIds);
+  const explicitAssigneeNames = Array.isArray(task.sorumlu) ? task.sorumlu : [];
+  const canonicalAssigneePatch = task.assigneeIdsCanonical === true;
+  const hasCanonicalAssigneeIds = Array.isArray(task.assigneeIds)
+    && (task.assigneeIds.length > 0 || canonicalAssigneePatch || explicitAssigneeNames.length === 0);
   const assigneeIds = hasCanonicalAssigneeIds
     ? [...new Set(task.assigneeIds.filter((id) => peopleById.has(id)))]
-    : [...new Set((task.sorumlu || []).map((name) => peopleByName.get(name)?.id).filter(Boolean))];
-  const assigneeNames = hasCanonicalAssigneeIds
+    : [...new Set(explicitAssigneeNames.map((name) => peopleByName.get(name)?.id).filter(Boolean))];
+  const assigneeNames = canonicalAssigneePatch || explicitAssigneeNames.length === 0
     ? assigneeIds.map((id) => peopleById.get(id)?.name).filter(Boolean)
-    : (task.sorumlu || []).filter((name) => peopleByName.has(name));
+    : explicitAssigneeNames.filter((name) => peopleByName.has(name));
 
   const requestedWbs = task.wbsId ? wbsById.get(task.wbsId) : null;
   const validRequestedWbs = requestedWbs && requestedWbs.projectId === project?.id ? requestedWbs : null;
   const defaultWbs = project ? selectDefaultProjectWbs(wbs, project.id) : null;
+  const { assigneeIdsCanonical: _assigneeIdsCanonical, ...canonicalTask } = task;
 
   return {
-    ...task,
+    ...canonicalTask,
     projectId: project?.id || task.projectId || null,
     projectCode: project?.code || task.projectCode || '',
     proje: project?.name || task.proje || '',
