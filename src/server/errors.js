@@ -3,13 +3,7 @@ export class ServerPersistenceError extends Error {
     super(message);
     this.name = 'ServerPersistenceError';
     this.code = code;
-    this.status = status || ({
-      UNAUTHORIZED: 401,
-      FORBIDDEN: 403,
-      CONFLICT: 409,
-      MUTATION_FAILED: 400,
-      DATABASE_UNAVAILABLE: 503
-    }[code] ?? 500);
+    this.status = status || ({ UNAUTHORIZED: 401, FORBIDDEN: 403, CONFLICT: 409, DATABASE_UNAVAILABLE: 503 }[code] ?? 500);
     this.details = details;
     if (cause) this.cause = cause;
   }
