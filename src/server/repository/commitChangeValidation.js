@@ -13,6 +13,7 @@ const UPSERTS = Object.freeze([
 ]);
 const PROJECT_COLORS = new Set(['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan']);
 const DEPENDENCY_TYPES = new Set(['FS', 'SS', 'FF', 'SF']);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function issue(code, path, message, details = null) {
   return { code, path, message, details };
@@ -22,8 +23,58 @@ function text(value) {
   return value == null ? '' : String(value).trim();
 }
 
+function canonicalUuid(value) {
+  if (value == null || value === '') return value;
+  const normalized = text(value);
+  return UUID_PATTERN.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function mapCollection(value, mapper) {
+  if (value === undefined) return value;
+  return Array.isArray(value) ? value.map(mapper) : value;
+}
+
+function canonicalDelete(value) {
+  return typeof value === 'string'
+    ? canonicalUuid(value)
+    : { ...value, id: canonicalUuid(value?.id) };
+}
+
+export function canonicalizeCommitChanges(changes) {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return changes;
+  return {
+    ...changes,
+    projectUpserts: mapCollection(changes.projectUpserts, (project) => ({
+      ...project,
+      id: canonicalUuid(project?.id),
+      calendarId: canonicalUuid(project?.calendarId)
+    })),
+    projectDeletes: mapCollection(changes.projectDeletes, canonicalDelete),
+    wbsUpserts: mapCollection(changes.wbsUpserts, (node) => ({
+      ...node,
+      id: canonicalUuid(node?.id),
+      projectId: canonicalUuid(node?.projectId),
+      parentId: canonicalUuid(node?.parentId)
+    })),
+    wbsDeletes: mapCollection(changes.wbsDeletes, canonicalDelete),
+    taskUpserts: mapCollection(changes.taskUpserts, (task) => ({
+      ...task,
+      id: canonicalUuid(task?.id),
+      projectId: canonicalUuid(task?.projectId),
+      wbsId: canonicalUuid(task?.wbsId),
+      calendarId: canonicalUuid(task?.calendarId),
+      deps: Array.isArray(task?.deps) ? task.deps.map((dependency) => ({
+        ...dependency,
+        id: canonicalUuid(dependency?.id),
+        predecessorId: canonicalUuid(dependency?.predecessorId)
+      })) : task?.deps
+    })),
+    taskDeletes: mapCollection(changes.taskDeletes, canonicalDelete)
+  };
+}
+
 function entryId(value) {
-  return text(typeof value === 'string' ? value : value?.id);
+  return canonicalUuid(text(typeof value === 'string' ? value : value?.id));
 }
 
 function validateEntries(changes, collection) {
@@ -64,6 +115,64 @@ function validateIdentitySets(changes, upsertCollection, deleteCollection, entit
       return issue('UPSERT_DELETE_CONFLICT', `${deleteCollection}[${index}].id`, `Aynı ${entityName} tek değişiklik kümesinde hem güncellenip hem silinemez.`, { id });
     }
     deleteIds.add(id);
+  }
+  return null;
+}
+
+function validateUuid(value, path, label, { required = false, entity = false } = {}) {
+  const normalized = text(value);
+  if (!normalized) {
+    return required
+      ? issue(entity ? 'CHANGE_ID_REQUIRED' : 'CHANGE_REFERENCE_REQUIRED', path, `${label} gereklidir.`)
+      : null;
+  }
+  if (!UUID_PATTERN.test(normalized)) {
+    return issue(entity ? 'CHANGE_ID_INVALID' : 'CHANGE_REFERENCE_INVALID', path, `${label} geçerli UUID olmalıdır.`);
+  }
+  return null;
+}
+
+function validateUuidReferences(changes) {
+  for (const collection of COLLECTIONS) {
+    for (let index = 0; index < (changes[collection] || []).length; index += 1) {
+      const value = changes[collection][index];
+      const idIssue = validateUuid(entryId(value), `${collection}[${index}].id`, 'Değişiklik kimliği', { required: true, entity: true });
+      if (idIssue) return idIssue;
+    }
+  }
+
+  for (let index = 0; index < (changes.projectUpserts || []).length; index += 1) {
+    const project = changes.projectUpserts[index];
+    const calendarIssue = validateUuid(project.calendarId, `projectUpserts[${index}].calendarId`, 'Proje takvim kimliği', { required: true });
+    if (calendarIssue) return calendarIssue;
+  }
+
+  for (let index = 0; index < (changes.wbsUpserts || []).length; index += 1) {
+    const node = changes.wbsUpserts[index];
+    const projectIssue = validateUuid(node.projectId, `wbsUpserts[${index}].projectId`, 'WBS proje kimliği', { required: true });
+    if (projectIssue) return projectIssue;
+    const parentIssue = validateUuid(node.parentId, `wbsUpserts[${index}].parentId`, 'Üst WBS kimliği');
+    if (parentIssue) return parentIssue;
+  }
+
+  for (let taskIndex = 0; taskIndex < (changes.taskUpserts || []).length; taskIndex += 1) {
+    const task = changes.taskUpserts[taskIndex];
+    const projectIssue = validateUuid(task.projectId, `taskUpserts[${taskIndex}].projectId`, 'Görev proje kimliği', { required: true });
+    if (projectIssue) return projectIssue;
+    const wbsIssue = validateUuid(task.wbsId, `taskUpserts[${taskIndex}].wbsId`, 'Görev WBS kimliği');
+    if (wbsIssue) return wbsIssue;
+    const calendarIssue = validateUuid(task.calendarId, `taskUpserts[${taskIndex}].calendarId`, 'Görev takvim kimliği');
+    if (calendarIssue) return calendarIssue;
+    if (!Array.isArray(task.deps)) continue;
+    for (let dependencyIndex = 0; dependencyIndex < task.deps.length; dependencyIndex += 1) {
+      const dependencyIssue = validateUuid(
+        task.deps[dependencyIndex]?.predecessorId,
+        `taskUpserts[${taskIndex}].deps[${dependencyIndex}].predecessorId`,
+        'Öncül görev kimliği',
+        { required: true }
+      );
+      if (dependencyIssue) return dependencyIssue;
+    }
   }
   return null;
 }
@@ -136,5 +245,7 @@ export function findCommitChangeIssue(changes) {
     if (identityIssue) return identityIssue;
   }
 
-  return validateProjectCreates(changes) || validateTaskDependencies(changes);
+  return validateUuidReferences(changes)
+    || validateProjectCreates(changes)
+    || validateTaskDependencies(changes);
 }
