@@ -131,12 +131,14 @@ test('persisted data mode is restored only after hydration', () => {
   assert.doesNotMatch(source, /useState\(readInitialDataMode\)/);
 });
 
-test('snapshot and co-assignee projection reuse one active SQL transaction', () => {
+test('snapshot and co-assignee projection reuse one serializable SQL transaction', () => {
   const poolSource = read('src/server/db/pool.js');
   const projectionSource = read('src/server/repository/projectedSqlAppRepository.js');
 
   assert.match(poolSource, /const activeTransaction = transactionContext\.getStore\(\);\s*if \(activeTransaction\) return activeTransaction;/s);
+  assert.match(poolSource, /withSqlTransaction\(work, \{ isolationLevel = sql\.ISOLATION_LEVEL\.READ_COMMITTED \} = \{\}\)/);
   assert.match(projectionSource, /return withSqlTransaction\(async \(transaction\) => \{/);
   assert.match(projectionSource, /const snapshot = await baseRepository\.loadSnapshot\(\);/);
   assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds\)/);
+  assert.match(projectionSource, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });
