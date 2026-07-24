@@ -31,8 +31,29 @@ jobs:
         run: npm ci
       - name: Run lint
         run: npm run lint
+      - name: Check fallback root response regression
+        run: node --test --test-name-pattern="server-generated fallback project roots" test/codex-p2-regressions.test.mjs
+      - name: Check SQL int Sicil regression
+        run: node --test --test-name-pattern="persisted Sicil validation rejects values above" test/codex-p2-regressions.test.mjs
+      - name: Check project READ visibility regression
+        run: node --test --test-name-pattern="project-level READ grants expose project tasks" test/codex-p2-regressions.test.mjs
+      - name: Check root WBS deletion regression
+        run: node --test --test-name-pattern="root WBS deletion is rejected" test/codex-p2-regressions.test.mjs
+      - name: Check session capability regression
+        run: node --test --test-name-pattern="loaded session capabilities survive" test/codex-p2-regressions.test.mjs
       - name: Run sixth Codex regression tests
-        run: node --test test/codex-p2-regressions.test.mjs
+        id: aggregate
+        continue-on-error: true
+        run: node --test test/codex-p2-regressions.test.mjs > sixth-regressions.log 2>&1
+      - name: Upload regression diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sixth-codex-regression-log
+          path: sixth-regressions.log
+      - name: Stop on regression failure
+        if: steps.aggregate.outcome == 'failure'
+        run: exit 1
       - name: Run WBS domain validation tests
         run: node --test test/domain-validation-edge-cases.test.mjs
       - name: Run authorization tests
