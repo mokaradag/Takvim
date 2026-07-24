@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { normalizeActualChanges } from '../src/data/api/createApiRepository.js';
 import { findNestedCommitCollectionIssue } from '../src/server/repository/commitNestedCollectionValidation.js';
 
 const VERSION = 'AAAAAAAAAAA=';
@@ -71,6 +72,10 @@ function without(value, field) {
   return copy;
 }
 
+function postedActualChanges(changes) {
+  return JSON.parse(JSON.stringify({ changes: normalizeActualChanges(changes) })).changes;
+}
+
 test('versioned project replacements reject omitted stored metadata instead of clearing it', () => {
   const issue = findNestedCommitCollectionIssue({
     projectUpserts: [without(completeProjectUpdate(), 'leadId')]
@@ -115,6 +120,33 @@ test('versioned task replacements require title and milestone intent explicitly'
   assert.equal(findNestedCommitCollectionIssue({
     taskUpserts: [without(completeTaskUpdate(), 'isMilestone')]
   })?.path, 'taskUpserts[0].isMilestone');
+});
+
+test('Actual normalization preserves omitted nullable references for API validation', () => {
+  const changes = postedActualChanges({
+    projectUpserts: [without(completeProjectUpdate(), 'calendarId')],
+    wbsUpserts: [without(completeWbsUpdate(), 'parentId')],
+    taskUpserts: [without(completeTaskUpdate(), 'wbsId')]
+  });
+
+  assert.equal(Object.hasOwn(changes.projectUpserts[0], 'calendarId'), false);
+  assert.equal(Object.hasOwn(changes.wbsUpserts[0], 'parentId'), false);
+  assert.equal(Object.hasOwn(changes.taskUpserts[0], 'wbsId'), false);
+  assert.equal(findNestedCommitCollectionIssue(changes)?.path, 'projectUpserts[0].calendarId');
+});
+
+test('Actual normalization preserves explicit null replacement intent', () => {
+  const changes = postedActualChanges({
+    projectUpserts: [completeProjectUpdate()],
+    wbsUpserts: [completeWbsUpdate()],
+    taskUpserts: [completeTaskUpdate()]
+  });
+
+  assert.equal(changes.projectUpserts[0].code, null);
+  assert.equal(changes.wbsUpserts[0].parentId, null);
+  assert.equal(changes.taskUpserts[0].wbsId, null);
+  assert.equal(changes.taskUpserts[0].calendarId, null);
+  assert.equal(findNestedCommitCollectionIssue(changes), null);
 });
 
 test('complete versioned replacements accept explicit null values', () => {
