@@ -14,18 +14,22 @@ function booleanValue(name, fallback) {
   throw new Error(`${name} must be true or false.`);
 }
 
-function integerValue(name, fallback) {
+function integerValue(name, fallback, { max = Number.MAX_SAFE_INTEGER } = {}) {
   const raw = process.env[name];
-  if (!raw) return fallback;
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer.`);
+  if (raw == null || raw.trim() === '') return fallback;
+  const normalized = raw.trim();
+  const value = Number(normalized);
+  if (!/^\d+$/.test(normalized) || !Number.isSafeInteger(value) || value <= 0 || value > max) {
+    const upperBound = max < Number.MAX_SAFE_INTEGER ? ` no greater than ${max}` : '';
+    throw new Error(`${name} must be a positive integer${upperBound}.`);
+  }
   return value;
 }
 
 export function getSqlServerConfig() {
   return Object.freeze({
     server: required('MERGEN_ROTA_DB_SERVER'),
-    port: integerValue('MERGEN_ROTA_DB_PORT', 1433),
+    port: integerValue('MERGEN_ROTA_DB_PORT', 1433, { max: 65535 }),
     database: required('MERGEN_ROTA_DB_DATABASE'),
     user: required('MERGEN_ROTA_DB_USER'),
     password: required('MERGEN_ROTA_DB_PASSWORD'),
