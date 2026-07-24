@@ -1,4 +1,4 @@
-import { createHardenedSqlAppRepository } from '../../../../server/repository/hardenedSqlAppRepository.js';
+import { createOrderedSqlAppRepository } from '../../../../server/repository/orderedSqlAppRepository.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
 
 export const runtime = 'nodejs';
@@ -11,7 +11,7 @@ export async function POST(request) {
     if (!body || typeof body !== 'object' || !body.changes || typeof body.changes !== 'object') {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
     }
-    return Response.json(await createHardenedSqlAppRepository().commitChanges(body.changes), {
+    return Response.json(await createOrderedSqlAppRepository().commitChanges(body.changes), {
       headers: { 'cache-control': 'no-store' }
     });
   } catch (error) {
