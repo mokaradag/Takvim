@@ -28,7 +28,7 @@ export function createProjectedSqlAppRepository() {
         const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
         const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
         return applyTaskAssigneeProjection(snapshot, assigneeRows);
-      });
+      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
     }
   };
 }
