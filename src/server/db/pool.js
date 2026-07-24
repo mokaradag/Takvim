@@ -1,9 +1,11 @@
 import 'server-only';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import sql from 'mssql';
 import { getSqlServerConfig } from './config.js';
 import { ServerPersistenceError } from '../errors.js';
 
 let poolPromise;
+const transactionContext = new AsyncLocalStorage();
 
 export async function getSqlPool() {
   if (!poolPromise) {
@@ -20,21 +22,27 @@ export async function getSqlPool() {
 }
 
 export async function withSqlTransaction(work) {
+  const activeTransaction = transactionContext.getStore();
+  if (activeTransaction) return work(activeTransaction, sql);
+
   const pool = await getSqlPool();
   const transaction = new sql.Transaction(pool);
-  try {
-    await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
-    const result = await work(transaction, sql);
-    await transaction.commit();
-    return result;
-  } catch (error) {
+  await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
+
+  return transactionContext.run(transaction, async () => {
     try {
-      if (transaction._aborted !== true) await transaction.rollback();
-    } catch {
-      // Preserve the original failure; rollback errors are server-log concerns.
+      const result = await work(transaction, sql);
+      await transaction.commit();
+      return result;
+    } catch (error) {
+      try {
+        if (transaction._aborted !== true) await transaction.rollback();
+      } catch {
+        // Preserve the original failure; rollback errors are server-log concerns.
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }
 
 export { sql };
