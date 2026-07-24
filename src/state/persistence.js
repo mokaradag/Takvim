@@ -112,7 +112,20 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   }
 
   function dispose() {
-    for (const entry of pending.values()) clearTimeout(entry.timer);
+    const result = {
+      ok: false,
+      error: {
+        kind: 'persistence',
+        code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+        message: 'Bekleyen değişiklik kaydedilmeden işlem sonlandırıldı.',
+        operation: 'task/update',
+        details: null
+      }
+    };
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer);
+      for (const resolve of entry.waiters) resolve(result);
+    }
     pending.clear();
   }
 
@@ -132,13 +145,10 @@ function defaultSessionContext(repository) {
 
 export async function loadApplicationData(repository) {
   try {
-    const sessionPromise = typeof repository.loadSessionContext === 'function'
-      ? repository.loadSessionContext()
-      : Promise.resolve(defaultSessionContext(repository));
-    const [snapshot, session] = await Promise.all([
-      repository.loadSnapshot(),
-      sessionPromise
-    ]);
+    const snapshot = await repository.loadSnapshot();
+    const session = typeof repository.loadSessionContext === 'function'
+      ? await repository.loadSessionContext()
+      : defaultSessionContext(repository);
     return { ok: true, snapshot: { ...snapshot, session } };
   } catch (error) {
     return {
