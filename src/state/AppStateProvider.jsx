@@ -10,23 +10,24 @@ import {
   useState
 } from 'react';
 import { appRepository } from '../data';
+import { createClientEntityId } from '../data/clientEntityId.js';
 import { setProjectColorOverrides } from '../lib/colors';
 import { selectTaskStats } from '../scheduling/metrics';
 import { appStateReducer, createLoadingState, createNewTask } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
+import {
+  projectWriteFailure,
+  resolveTaskCreationProject,
+  resolveTaskMutationAccess,
+  resolveTaskWbsMoveAccess,
+  resolveWbsMutationAccess
+} from './projectWritePolicy.js';
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
 
 const AppStateContext = createContext(null);
-
-function uniqueId(prefix) {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
 
 function firstFailedResult(results = []) {
   return results.find((result) => result && !result.ok) || null;
@@ -39,6 +40,10 @@ function mergeUpserts(items = [], upserts = []) {
     ...items.map((item) => byId.get(item.id) || item),
     ...upserts.filter((item) => !currentIds.has(item.id))
   ];
+}
+
+function rejectedWrite(operation, issue) {
+  return Promise.resolve(projectWriteFailure(operation, issue));
 }
 
 export function AppStateProvider({ children, repository = appRepository }) {
@@ -69,11 +74,9 @@ export function AppStateProvider({ children, repository = appRepository }) {
   useEffect(() => () => persistence.dispose(), [persistence]);
 
   const reloadData = useCallback(async () => {
-    const flushResults = await persistence.flushAllTaskUpdates();
-    const failedFlush = firstFailedResult(flushResults);
-    if (failedFlush) return failedFlush;
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
 
-    await persistence.whenIdle();
     const requestId = ++loadRequestRef.current;
     applyStateAction({ type: 'data/load-start' });
     const result = await loadApplicationData(repository);
@@ -129,21 +132,32 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return { ok: true, value: null };
   }, [applyStateAction, persistence]);
 
-  const updateTask = useCallback((id, patch) => persistence.updateTask(id, patch), [persistence]);
+  const updateTask = useCallback((id, patch) => {
+    const access = resolveTaskMutationAccess(stateRef.current, id, patch);
+    if (!access.ok) return rejectedWrite('task/update', access);
+    return persistence.updateTask(id, patch);
+  }, [persistence]);
+  const flushPendingChanges = useCallback(() => persistence.flush(), [persistence]);
 
   const moveTaskToWbs = useCallback(async (id, wbsId) => {
+    const access = resolveTaskWbsMoveAccess(stateRef.current, [id], wbsId);
+    if (!access.ok) return projectWriteFailure('task/move-wbs', access);
     const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([id]));
     if (failedFlush) return failedFlush;
     return persistence.mutate('task/move-wbs', { type: 'task/move-wbs', id, wbsId });
   }, [persistence]);
 
   const moveTasksToWbs = useCallback(async (ids, wbsId) => {
+    const access = resolveTaskWbsMoveAccess(stateRef.current, ids, wbsId);
+    if (!access.ok) return projectWriteFailure('task/bulk-move-wbs', access);
     const failedFlush = firstFailedResult(await persistence.flushTaskUpdates(ids));
     if (failedFlush) return failedFlush;
     return persistence.mutate('task/bulk-move-wbs', { type: 'task/bulk-move-wbs', ids, wbsId });
   }, [persistence]);
 
   const deleteTask = useCallback(async (id) => {
+    const access = resolveTaskMutationAccess(stateRef.current, id);
+    if (!access.ok) return projectWriteFailure('task/delete', access);
     const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([id]));
     if (failedFlush) return failedFlush;
     const result = await persistence.mutate('task/delete', { type: 'task/delete', id });
@@ -154,12 +168,36 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const addTask = useCallback(async (input = null) => {
-    const id = uniqueId('task');
-    const result = await persistence.mutate('task/create', (current) => {
-      const baseTask = createNewTask(current, undefined, id);
+    const current = stateRef.current;
+    const project = resolveTaskCreationProject(current, input?.projectId);
+    if (!project) {
+      return projectWriteFailure('task/create', {
+        code: 'PROJECT_WRITE_FORBIDDEN',
+        field: 'projectId',
+        message: 'Görev eklemek için tam yazma yetkiniz bulunan bir proje gerekir.'
+      });
+    }
+
+    const id = createClientEntityId('task');
+    const scopedState = {
+      ...current,
+      workspaceMode: WORKSPACE_MODE_PROJECT,
+      selectedProjectId: project.id
+    };
+    const taskInput = input || {};
+    const result = await persistence.mutate('task/create', () => {
+      const baseTask = createNewTask(scopedState, undefined, id);
       return {
         type: 'task/add',
-        task: input ? { ...baseTask, ...input, id } : baseTask
+        task: {
+          ...baseTask,
+          ...taskInput,
+          id,
+          projectId: project.id,
+          projectCode: taskInput.projectCode ?? project.code ?? '',
+          proje: taskInput.proje ?? project.name ?? '',
+          color: taskInput.color ?? project.color ?? baseTask.color
+        }
       };
     });
     const created = result.ok ? result.value?.taskUpserts?.[0] || null : null;
@@ -168,37 +206,36 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const addProject = useCallback(async (input) => {
-    const failedFlush = firstFailedResult(await persistence.flushAllTaskUpdates());
-    if (failedFlush) return failedFlush;
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
 
     const current = stateRef.current;
     const prepared = prepareProjectCreation(input, {
       projects: current.projects,
       people: current.people,
       calendars: current.calendars,
+      canCreateProjects: current.canCreateProjects,
       wbs: current.wbs
     }, {
-      projectId: uniqueId('project'),
-      rootWbsId: uniqueId('wbs')
+      projectId: createClientEntityId('project'),
+      rootWbsId: createClientEntityId('wbs')
     });
     if (!prepared.ok) return prepared;
 
     const result = await persistence.commitChanges('project/create', prepared.changes);
     if (!result.ok) return result;
 
-    const committedProject = result.value?.projectUpserts?.find((project) => project.id === prepared.project.id)
+    const committedProject = result.value?.projectUpserts?.find((projectValue) => projectValue.id === prepared.project.id)
       || prepared.project;
-    const committedRoot = result.value?.wbsUpserts?.find((node) => node.id === prepared.rootWbs.id)
-      || prepared.rootWbs;
     const latest = stateRef.current;
 
     applyStateAction({
       type: 'data/load-success',
       snapshot: {
         calendars: latest.calendars,
-        projects: [...latest.projects, committedProject],
+        projects: mergeUpserts(latest.projects, [committedProject]),
         people: latest.people,
-        wbs: [...latest.wbs, committedRoot],
+        wbs: latest.wbs,
         tasks: latest.tasks,
         baselines: latest.baselines,
         taskBaselineSnapshots: latest.taskBaselineSnapshots
@@ -214,8 +251,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const updateProject = useCallback(async (projectId, input) => {
-    const failedFlush = firstFailedResult(await persistence.flushAllTaskUpdates());
-    if (failedFlush) return failedFlush;
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
 
     const current = stateRef.current;
     const prepared = prepareProjectUpdateChanges(projectId, input, {
@@ -253,7 +290,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
 
     return {
       ok: true,
-      value: projects.find((project) => project.id === projectId) || prepared.project,
+      value: projects.find((projectValue) => projectValue.id === projectId) || prepared.project,
       changes: committed
     };
   }, [applyStateAction, persistence]);
@@ -267,18 +304,26 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction]);
 
   const addWbsChild = useCallback((parentId, name) => {
-    const id = uniqueId('wbs');
+    const access = resolveWbsMutationAccess(stateRef.current, parentId);
+    if (!access.ok) return rejectedWrite('wbs/create', access);
+    const id = createClientEntityId('wbs');
     return persistence.mutate('wbs/create', { type: 'wbs/add-child', id, parentId, name });
   }, [persistence]);
-  const renameWbs = useCallback((id, name) => (
-    persistence.mutate('wbs/update', { type: 'wbs/rename', id, name })
-  ), [persistence]);
-  const reparentWbs = useCallback((id, parentId) => (
-    persistence.mutate('wbs/reparent', { type: 'wbs/reparent', id, parentId })
-  ), [persistence]);
-  const deleteWbs = useCallback((id) => (
-    persistence.mutate('wbs/delete', { type: 'wbs/delete', id })
-  ), [persistence]);
+  const renameWbs = useCallback((id, name) => {
+    const access = resolveWbsMutationAccess(stateRef.current, id);
+    if (!access.ok) return rejectedWrite('wbs/update', access);
+    return persistence.mutate('wbs/update', { type: 'wbs/rename', id, name });
+  }, [persistence]);
+  const reparentWbs = useCallback((id, parentId) => {
+    const access = resolveWbsMutationAccess(stateRef.current, id, parentId);
+    if (!access.ok) return rejectedWrite('wbs/reparent', access);
+    return persistence.mutate('wbs/reparent', { type: 'wbs/reparent', id, parentId });
+  }, [persistence]);
+  const deleteWbs = useCallback((id) => {
+    const access = resolveWbsMutationAccess(stateRef.current, id);
+    if (!access.ok) return rejectedWrite('wbs/delete', access);
+    return persistence.mutate('wbs/delete', { type: 'wbs/delete', id });
+  }, [persistence]);
   const clearWbsError = useCallback(() => applyStateAction({ type: 'wbs/clear-error' }), [applyStateAction]);
   const clearPersistenceError = useCallback(() => applyStateAction({ type: 'persistence/clear-error' }), [applyStateAction]);
 
@@ -296,6 +341,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     openTask,
     closeTask,
     updateTask,
+    flushPendingChanges,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
@@ -314,6 +360,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     openTask,
     closeTask,
     updateTask,
+    flushPendingChanges,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,

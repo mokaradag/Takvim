@@ -375,3 +375,9 @@ test('WBS deletion validation reports children before tasks when both block dele
   const result = validateWbsDeletion(wbs, [{ id: 't1', wbsId: 'p1-a' }], 'p1-a');
   assert.deepEqual(codes(result), ['WBS_HAS_CHILDREN', 'WBS_HAS_TASKS']);
 });
+
+
+test('WBS deletion validation rejects a project root even when it is empty', () => {
+  const result = validateWbsDeletion(wbs, [], 'p2-root');
+  assert.equal(result[0].code, 'WBS_ROOT_DELETE_FORBIDDEN');
+});

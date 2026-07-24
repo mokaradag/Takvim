@@ -11,13 +11,11 @@ function serializeScheduleError(error) {
 
 function findCrossProjectDependencies(project, projectTasks, tasksById) {
   const unsupported = [];
-
   for (const task of projectTasks) {
     for (const rawDependency of task.deps || []) {
       const dependency = normalizeDependency(rawDependency);
       const predecessor = tasksById.get(dependency.predecessorId);
       if (!predecessor || predecessor.projectId === project.id) continue;
-
       unsupported.push({
         taskId: task.id,
         predecessorId: dependency.predecessorId,
@@ -27,21 +25,18 @@ function findCrossProjectDependencies(project, projectTasks, tasksById) {
       });
     }
   }
-
   return unsupported;
 }
 
 function criticalDependencyKeys(criticalPaths) {
   const keys = new Set();
   for (const path of criticalPaths || []) {
-    for (let index = 1; index < path.length; index += 1) {
-      keys.add(`${path[index - 1]}::${path[index]}`);
-    }
+    for (let index = 1; index < path.length; index += 1) keys.add(`${path[index - 1]}::${path[index]}`);
   }
   return [...keys];
 }
 
-function emptyProjectSchedule(projectId) {
+function scheduleShape(projectId, status, error = null) {
   return {
     projectId,
     projectStart: null,
@@ -50,23 +45,21 @@ function emptyProjectSchedule(projectId) {
     criticalPaths: [],
     criticalDependencyKeys: [],
     tasks: {},
-    status: 'empty',
-    error: null
-  };
-}
-
-function invalidProjectSchedule(projectId, error) {
-  return {
-    projectId,
-    projectStart: null,
-    projectFinish: null,
-    criticalTaskIds: [],
-    criticalPaths: [],
-    criticalDependencyKeys: [],
-    tasks: {},
-    status: 'invalid',
+    status,
     error
   };
+}
+function emptyProjectSchedule(projectId) { return scheduleShape(projectId, 'empty'); }
+function invalidProjectSchedule(projectId, error) { return scheduleShape(projectId, 'invalid', error); }
+function suppressedProjectSchedule(projectId) {
+  return scheduleShape(projectId, 'suppressed-partial', {
+    code: 'PARTIAL_PROJECT_NETWORK',
+    message: 'Complete-project CPM is unavailable because this user can see only an authorized subset of the Project network.',
+    details: { projectId }
+  });
+}
+function isPartialProject(project) {
+  return project?.accessLevel === 'PARTIAL' || project?.schedulingCapability === 'SUPPRESSED_PARTIAL';
 }
 
 export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = [] } = {}) {
@@ -96,6 +89,12 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
 
   for (const project of projects) {
     const projectTasks = tasksByProjectId.get(project.id) || [];
+    if (isPartialProject(project)) {
+      const suppressed = suppressedProjectSchedule(project.id);
+      projectSchedules[project.id] = suppressed;
+      warnings.push({ scope: 'project', projectId: project.id, ...suppressed.error });
+      continue;
+    }
     if (!projectTasks.length) {
       projectSchedules[project.id] = emptyProjectSchedule(project.id);
       continue;
@@ -114,17 +113,10 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
     }
 
     try {
-      const cpm = calculateCpm(projectTasks, {
-        projects: [project],
-        calendars
-      });
+      const cpm = calculateCpm(projectTasks, { projects: [project], calendars });
       const projectedTasks = Object.fromEntries(
-        Object.entries(cpm.tasks).map(([taskId, taskSchedule]) => [taskId, {
-          ...taskSchedule,
-          projectId: project.id
-        }])
+        Object.entries(cpm.tasks).map(([taskId, taskSchedule]) => [taskId, { ...taskSchedule, projectId: project.id }])
       );
-
       projectSchedules[project.id] = {
         projectId: project.id,
         projectStart: cpm.projectStart,
@@ -157,7 +149,6 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
 export function selectProjectSchedule(schedule, projectId) {
   return schedule?.projects?.[projectId] || null;
 }
-
 export function selectTaskSchedule(schedule, taskId) {
   return schedule?.tasks?.[taskId] || null;
 }

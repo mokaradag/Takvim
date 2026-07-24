@@ -133,7 +133,7 @@ test('simple-mode task input preserves selected IDs and the selected project col
   assert.equal(normalized.wbsId, 'w-2');
 });
 
-test('simple mode creates the final task in one mutation and keeps project metadata intact', () => {
+test('simple mode creates the final task in one guarded mutation and keeps project metadata intact', () => {
   const simple = read('src/features/simple/SimpleModePanel.jsx');
   const provider = read('src/state/AppStateProvider.jsx');
 
@@ -144,7 +144,9 @@ test('simple mode creates the final task in one mutation and keeps project metad
   assert.match(simple, /color: project\.color \|\| 'blue'/);
   assert.match(simple, /assigneeIds: \[\.\.\.assigneeIds\]/);
   assert.match(provider, /const addTask = useCallback\(async \(input = null\)/);
-  assert.match(provider, /task: input \? \{ \.\.\.baseTask, \.\.\.input, id \} : baseTask/);
+  assert.match(provider, /const project = resolveTaskCreationProject\(current, input\?\.projectId\)/);
+  assert.match(provider, /const result = await persistence\.mutate\('task\/create', \(\) => \{/);
+  assert.match(provider, /task:\s*\{\s*\.\.\.baseTask,\s*\.\.\.taskInput,\s*id,\s*projectId: project\.id/s);
 });
 
 test('clearing a date propagates an empty value that task normalization stores as null', () => {

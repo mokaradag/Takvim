@@ -42,6 +42,7 @@ function wbsMessage(code) {
     WBS_NAME_REQUIRED: 'WBS adı boş bırakılamaz.',
     WBS_HAS_CHILDREN: 'Alt WBS düğümleri bulunan bir WBS silinemez.',
     WBS_HAS_TASKS: 'Doğrudan görev atanmış bir WBS silinemez.',
+    WBS_ROOT_DELETE_FORBIDDEN: 'Proje kök WBS düğümü silinemez.',
     WBS_ROOT_REPARENT_FORBIDDEN: 'Proje kök WBS düğümü başka bir WBS altına taşınamaz.',
     WBS_REPARENT_TO_DESCENDANT: 'Bir WBS kendi alt düğümlerinden birinin altına taşınamaz.',
     WBS_SELF_PARENT: 'Bir WBS kendi üst düğümü olamaz.',
@@ -145,7 +146,13 @@ function emptyApplicationData() {
     wbs: [],
     tasks: [],
     baselines: [],
-    taskBaselineSnapshots: []
+    taskBaselineSnapshots: [],
+    session: null,
+    currentUser: null,
+    isSystemAdmin: false,
+    isExecutive: false,
+    canCreateProjects: false,
+    projectAccess: []
   };
 }
 
@@ -165,7 +172,27 @@ export function createLoadingState() {
 }
 
 function createStateFromSnapshot(snapshot = {}, previous = createLoadingState()) {
+  const hasSession = Object.prototype.hasOwnProperty.call(snapshot, 'session');
+  const session = hasSession ? snapshot.session : previous.session;
+  const sessionState = hasSession
+    ? {
+        session: session || null,
+        currentUser: session?.currentUser || null,
+        isSystemAdmin: Boolean(session?.isSystemAdmin),
+        isExecutive: Boolean(session?.isExecutive),
+        canCreateProjects: Boolean(session?.canCreateProjects),
+        projectAccess: session?.projectAccess || []
+      }
+    : {
+        session: previous.session || null,
+        currentUser: previous.currentUser || null,
+        isSystemAdmin: Boolean(previous.isSystemAdmin),
+        isExecutive: Boolean(previous.isExecutive),
+        canCreateProjects: Boolean(previous.canCreateProjects),
+        projectAccess: previous.projectAccess || []
+      };
   const base = {
+    ...sessionState,
     calendars: snapshot.calendars || [],
     projects: snapshot.projects || [],
     people: snapshot.people || [],
@@ -201,8 +228,31 @@ export function normalizeStateTask(task, state) {
   return normalizeTaskRecord(task, taskContext(state));
 }
 
+function deleteId(value) {
+  return typeof value === 'string' ? value : value?.id;
+}
+
+function removePredecessorReferences(tasks, predecessorIds) {
+  if (!predecessorIds.size) return tasks;
+  return tasks.map((task) => {
+    const dependencies = task.deps || [];
+    const filtered = dependencies.filter((dependency) => !predecessorIds.has(dependency.predecessorId));
+    return filtered.length === dependencies.length ? task : { ...task, deps: filtered };
+  });
+}
+
+function invalidatedPredecessorIds(beforeTasks, upserts, deletes) {
+  const invalidated = new Set((deletes || []).map(deleteId).filter(Boolean));
+  const beforeById = new Map((beforeTasks || []).map((task) => [task.id, task]));
+  for (const task of upserts || []) {
+    const before = beforeById.get(task.id);
+    if (before && before.projectId !== task.projectId) invalidated.add(task.id);
+  }
+  return invalidated;
+}
+
 function applyUpserts(items, upserts, deletes, normalize, { prependNew = false } = {}) {
-  const deleted = new Set(deletes || []);
+  const deleted = new Set((deletes || []).map(deleteId).filter(Boolean));
   const currentIds = new Set(items.map((item) => item.id));
   const byId = new Map((upserts || []).map((item) => [item.id, item]));
   const updated = items
@@ -222,13 +272,19 @@ function applyCommittedChanges(state, changes = {}) {
     (node) => ({ ...node })
   );
   const taskState = { ...state, wbs };
-  const tasks = applyUpserts(
+  const invalidated = invalidatedPredecessorIds(
+    state.tasks,
+    changes.taskUpserts || [],
+    changes.taskDeletes || []
+  );
+  const appliedTasks = applyUpserts(
     state.tasks,
     changes.taskUpserts || [],
     changes.taskDeletes || [],
     (task) => normalizeStateTask(task, taskState),
     { prependNew: true }
   );
+  const tasks = removePredecessorReferences(appliedTasks, invalidated);
   const next = { ...state, wbs, tasks };
   return { ...next, ...workspaceState(next, next) };
 }
@@ -267,8 +323,9 @@ export function appStateReducer(state, action) {
     case 'task/add':
       return { ...state, tasks: [action.task, ...state.tasks], selectedTaskId: action.task.id };
     case 'task/update': {
+      const previousTask = state.tasks.find((task) => task.id === action.id) || null;
       let updatedTask = null;
-      const tasks = state.tasks.map((task) => {
+      let tasks = state.tasks.map((task) => {
         if (task.id !== action.id) return task;
         const next = { ...task, ...action.patch };
         if (Object.prototype.hasOwnProperty.call(action.patch, 'sorumlu')) delete next.assigneeIds;
@@ -279,6 +336,12 @@ export function appStateReducer(state, action) {
         updatedTask = normalizeStateTask(next, state);
         return updatedTask;
       });
+      const projectChanged = Boolean(updatedTask && previousTask && updatedTask.projectId !== previousTask.projectId);
+      if (projectChanged) {
+        tasks = tasks.map((task) => (task.id === action.id ? { ...task, deps: [] } : task));
+        tasks = removePredecessorReferences(tasks, new Set([action.id]));
+        updatedTask = tasks.find((task) => task.id === action.id) || updatedTask;
+      }
       const selectedTaskId = state.workspaceMode === WORKSPACE_MODE_PROJECT
         && state.selectedTaskId === action.id
         && updatedTask
@@ -291,12 +354,17 @@ export function appStateReducer(state, action) {
       return moveTasksToWbs(state, [action.id], action.wbsId);
     case 'task/bulk-move-wbs':
       return moveTasksToWbs(state, action.ids || [], action.wbsId);
-    case 'task/delete':
+    case 'task/delete': {
+      const tasks = removePredecessorReferences(
+        state.tasks.filter((task) => task.id !== action.id),
+        new Set([action.id])
+      );
       return {
         ...state,
-        tasks: state.tasks.filter((task) => task.id !== action.id),
+        tasks,
         selectedTaskId: state.selectedTaskId === action.id ? null : state.selectedTaskId
       };
+    }
     case 'task/select':
       return { ...state, selectedTaskId: action.id || null };
     case 'workspace/select':
@@ -354,12 +422,21 @@ export function appStateReducer(state, action) {
   }
 }
 
+function defaultTaskAssignee(state) {
+  if (state.session?.dataMode === 'actual') {
+    const currentUserId = state.currentUser?.id == null ? null : String(state.currentUser.id);
+    if (!currentUserId) return null;
+    return (state.people || []).find((person) => String(person.id) === currentUserId) || state.currentUser;
+  }
+  return state.people?.[0] || null;
+}
+
 export function createNewTask(state, referenceDate = today(), id = `n-${Date.now()}`) {
   const selectedProject = state.workspaceMode === WORKSPACE_MODE_PROJECT
     ? state.projects.find((project) => project.id === state.selectedProjectId) || null
     : null;
   const project = selectedProject || state.projects[0] || null;
-  const person = state.people[0];
+  const person = defaultTaskAssignee(state);
   const calendar = resolveProjectCalendar(project, state.calendars);
   const start = moveToWorkingDay(referenceDate, calendar, 1);
   const defaultWbs = project ? selectDefaultProjectWbs(state.wbs, project.id) : null;

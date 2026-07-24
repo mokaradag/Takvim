@@ -16,7 +16,9 @@ function changedEntities(before = [], after = []) {
   const afterById = new Map(after.map((item) => [item.id, item]));
   return {
     upserts: after.filter((item) => beforeById.get(item.id) !== item),
-    deletes: before.filter((item) => !afterById.has(item.id)).map((item) => item.id)
+    deletes: before
+      .filter((item) => !afterById.has(item.id))
+      .map((item) => (item.version ? { id: item.id, version: item.version } : item.id))
   };
 }
 
@@ -51,21 +53,38 @@ function domainErrorFromTransition(before, after) {
 
 export function createOrderedMutationQueue() {
   let tail = Promise.resolve();
-
   return {
     enqueue(job) {
       const result = tail.then(job, job);
       tail = result.then(() => undefined, () => undefined);
       return result;
     },
-    whenIdle() {
-      return tail;
+    async whenIdle() {
+      let observed;
+      do {
+        observed = tail;
+        await observed;
+      } while (observed !== tail);
     }
   };
 }
 
 export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   const pending = new Map();
+  let disposed = false;
+
+  function disposalResult() {
+    return {
+      ok: false,
+      error: {
+        kind: 'persistence',
+        code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+        message: 'Bekleyen değişiklik kaydedilmeden işlem sonlandırıldı.',
+        operation: 'task/update',
+        details: null
+      }
+    };
+  }
 
   function scheduleFlush(taskId) {
     const entry = pending.get(taskId);
@@ -75,6 +94,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   }
 
   function schedule(taskId, patch) {
+    if (disposed) return Promise.resolve(disposalResult());
     return new Promise((resolve) => {
       const current = pending.get(taskId) || { patch: {}, waiters: [], timer: null };
       current.patch = { ...current.patch, ...patch };
@@ -89,7 +109,6 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     if (!entry) return { ok: true, value: null };
     pending.delete(taskId);
     clearTimeout(entry.timer);
-
     let result;
     try {
       result = await flushPatch(taskId, entry.patch);
@@ -110,20 +129,49 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   }
 
   async function flushAll() {
-    return Promise.all([...pending.keys()].map((taskId) => flush(taskId)));
+    const results = [];
+    while (pending.size) {
+      const batch = await Promise.all([...pending.keys()].map((taskId) => flush(taskId)));
+      results.push(...batch);
+    }
+    return results;
+  }
+
+  function hasPending() {
+    return pending.size > 0;
   }
 
   function dispose() {
-    for (const entry of pending.values()) clearTimeout(entry.timer);
+    disposed = true;
+    const result = disposalResult();
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer);
+      for (const resolve of entry.waiters) resolve(result);
+    }
     pending.clear();
   }
 
-  return { schedule, flush, flushAll, dispose };
+  return { schedule, flush, flushAll, hasPending, dispose };
+}
+
+function defaultSessionContext(repository) {
+  return {
+    dataMode: repository?.kind === 'actual-api' || repository?.kind === 'sql-server' ? 'actual' : 'demo',
+    currentUser: null,
+    isSystemAdmin: false,
+    isExecutive: false,
+    canCreateProjects: false,
+    projectAccess: []
+  };
 }
 
 export async function loadApplicationData(repository) {
   try {
-    return { ok: true, snapshot: await repository.loadSnapshot() };
+    const snapshot = await repository.loadSnapshot();
+    const session = typeof repository.loadSessionContext === 'function'
+      ? await repository.loadSessionContext()
+      : defaultSessionContext(repository);
+    return { ok: true, snapshot: { ...snapshot, session } };
   } catch (error) {
     return {
       ok: false,
@@ -149,20 +197,17 @@ export function createStateMutationOrchestrator({
     const before = getState();
     const action = typeof actionOrFactory === 'function' ? actionOrFactory(before) : actionOrFactory;
     if (!action) return { ok: true, value: null };
-
     const planned = appStateReducer(before, action);
     const domainError = domainErrorFromTransition(before, planned);
     if (domainError) {
       applyStateAction(action);
       return { ok: false, error: domainError };
     }
-
     const changes = createPersistenceChangeSet(before, planned);
     if (isEmptyChangeSet(changes)) {
       applyStateAction(action);
       return { ok: true, value: null };
     }
-
     applyStateAction({ type: 'persistence/start', operation });
     try {
       const committed = await repository.commitChanges(changes);
@@ -190,7 +235,7 @@ export function createStateMutationOrchestrator({
       const committed = await repository.commitChanges(changes);
       applyStateAction({
         type: 'persistence/success',
-        changes: {},
+        changes: committed,
         savedAt: now(),
         clearWbsError: true
       });
@@ -215,7 +260,6 @@ export function createStateMutationOrchestrator({
     const keys = Object.keys(patch);
     const canCoalesce = keys.length > 0 && keys.every((key) => COALESCED_TASK_FIELDS.has(key));
     if (canCoalesce) return taskPatches.schedule(id, patch);
-
     const pendingResult = await taskPatches.flush(id);
     if (!pendingResult.ok) return pendingResult;
     return persistAction('task/update', { type: 'task/update', id, patch });
@@ -225,17 +269,18 @@ export function createStateMutationOrchestrator({
     updateTask,
     mutate: persistAction,
     commitChanges,
-    flushTaskUpdates(ids = []) {
-      return Promise.all([...new Set(ids)].map((id) => taskPatches.flush(id)));
+    flushTaskUpdates(ids = []) { return Promise.all([...new Set(ids)].map((id) => taskPatches.flush(id))); },
+    flushAllTaskUpdates() { return taskPatches.flushAll(); },
+    whenIdle() { return queue.whenIdle(); },
+    async flush() {
+      while (true) {
+        const results = await taskPatches.flushAll();
+        const failed = results.find((result) => result && !result.ok);
+        if (failed) return failed;
+        await queue.whenIdle();
+        if (!taskPatches.hasPending()) return { ok: true };
+      }
     },
-    flushAllTaskUpdates() {
-      return taskPatches.flushAll();
-    },
-    whenIdle() {
-      return queue.whenIdle();
-    },
-    dispose() {
-      taskPatches.dispose();
-    }
+    dispose() { taskPatches.dispose(); }
   };
 }

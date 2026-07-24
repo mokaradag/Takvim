@@ -37,7 +37,11 @@ test('repository error codes are frozen and stable', () => {
   assert.equal(Object.isFrozen(REPOSITORY_ERROR_CODES), true);
   assert.deepEqual(REPOSITORY_ERROR_CODES, {
     LOAD_FAILED: 'LOAD_FAILED',
-    MUTATION_FAILED: 'MUTATION_FAILED'
+    MUTATION_FAILED: 'MUTATION_FAILED',
+    UNAUTHORIZED: 'UNAUTHORIZED',
+    FORBIDDEN: 'FORBIDDEN',
+    CONFLICT: 'CONFLICT',
+    DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE'
   });
 });
 

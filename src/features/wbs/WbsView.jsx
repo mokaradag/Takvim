@@ -18,6 +18,7 @@ import {
   useWorkspaceTasks,
   useWorkspaceWbs
 } from '../../state/hooks';
+import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 function visibleRows(tree, expanded) {
   const rows = [];
@@ -85,6 +86,7 @@ export function WbsView() {
     );
   }
 
+  const canEdit = canWriteProject(workspace.selectedProject);
   const rows = visibleRows(tree, expanded);
   const scheduleTasks = projectSchedule?.tasks || {};
   const sourceTasks = moveSourceWbsId ? tasks.filter((task) => task.wbsId === moveSourceWbsId) : [];
@@ -161,6 +163,14 @@ export function WbsView() {
         </div>
       </div>
 
+      {!canEdit && (
+        <div className="card" style={{ borderColor: 'color-mix(in oklab, var(--accent) 35%, var(--border))' }}>
+          <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+            Bu projenin iş dağılım ağacı salt okunur görünürlükle açıldı. Hiyerarşiyi ve görev dağılımını görüntüleyebilirsiniz; düzenleme için tam proje yazma yetkisi gerekir.
+          </div>
+        </div>
+      )}
+
       {(validationIssues.length > 0 || error) && (
         <div className="card" style={{ borderColor: 'color-mix(in oklab, var(--status-overdue) 45%, var(--border))' }}>
           <div className="col" style={{ gap: 6 }}>
@@ -179,7 +189,7 @@ export function WbsView() {
         </div>
       )}
 
-      {wbs.length > 0 && (
+      {canEdit && wbs.length > 0 && (
         <div className="card">
           <div className="col" style={{ gap: 12 }}>
             <div className="col" style={{ gap: 4 }}>
@@ -276,7 +286,7 @@ export function WbsView() {
                   {rollup.criticalTaskCount > 0 && <div style={{ color: 'var(--status-overdue)', marginTop: 2 }}>{rollup.criticalTaskCount} kritik</div>}
                 </div>
                 <div className="row" style={{ gap: 5, flexWrap: 'wrap' }}>
-                  {isReparenting ? (
+                  {canEdit && (isReparenting ? (
                     <>
                       <select className="input" style={{ minWidth: 145, maxWidth: 175 }} value={reparenting.parentId} onChange={(event) => setReparenting({ ...reparenting, parentId: event.target.value })}>
                         <option value="">Üst düğüm seçin...</option>
@@ -292,7 +302,8 @@ export function WbsView() {
                       {node.parentId != null && <button className="btn" onClick={() => startReparent(node)}>Taşı</button>}
                       <button className="btn" onClick={() => onDelete(node)}>Sil</button>
                     </>
-                  )}
+                  ))}
+                  {!canEdit && <span className="muted" style={{ fontSize: 11.5 }}>Salt okunur</span>}
                 </div>
               </div>
             );
