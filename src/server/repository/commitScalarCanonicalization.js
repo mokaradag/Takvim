@@ -2,6 +2,11 @@ function trimString(value) {
   return typeof value === 'string' ? value.trim() : value;
 }
 
+function trimRequiredEnum(value) {
+  const normalized = trimString(value);
+  return typeof normalized === 'string' && !normalized ? null : normalized;
+}
+
 function emptyStringToNull(value) {
   return value === '' ? null : value;
 }
@@ -50,8 +55,8 @@ export function canonicalizeCommitScalars(changes) {
       task: trimString(task?.task),
       title: trimString(task?.title),
       keyword: trimString(task?.keyword),
-      status: trimString(task?.status),
-      priority: trimString(task?.priority),
+      status: trimRequiredEnum(task?.status),
+      priority: trimRequiredEnum(task?.priority),
       plannedStart: trimString(task?.plannedStart),
       plannedFinish: trimString(task?.plannedFinish),
       plannedDurationDays: emptyStringToNull(task?.plannedDurationDays),
