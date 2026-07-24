@@ -1,11 +1,66 @@
 const SQL_INT_MAX = 2147483647;
 
+const VERSIONED_PROJECT_FIELDS = Object.freeze([
+  'name',
+  'code',
+  'leadId',
+  'dataDate',
+  'color',
+  'calendarId'
+]);
+
+const VERSIONED_WBS_FIELDS = Object.freeze([
+  'projectId',
+  'parentId',
+  'code',
+  'name',
+  'sortOrder'
+]);
+
+const VERSIONED_TASK_FIELDS = Object.freeze([
+  'projectId',
+  'wbsId',
+  'calendarId',
+  'description',
+  'keyword',
+  'status',
+  'priority',
+  'plannedStart',
+  'plannedFinish',
+  'plannedDurationDays',
+  'targetFinish',
+  'actualStart',
+  'actualFinish',
+  'remainingDurationDays',
+  'progress',
+  'plannedHours',
+  'actualHours',
+  'budget',
+  'spent',
+  'sortOrder'
+]);
+
 function issue(code, path, message) {
   return { code, path, message };
 }
 
 function hasPersistenceVersion(value) {
   return value != null && String(value).trim() !== '';
+}
+
+function hasOwn(value, field) {
+  return Boolean(value) && Object.prototype.hasOwnProperty.call(value, field);
+}
+
+function firstMissingField(value, fields) {
+  return fields.find((field) => !hasOwn(value, field)) || null;
+}
+
+function versionedFieldIssue(value, fields, basePath, entityLabel, code) {
+  const field = firstMissingField(value, fields);
+  return field
+    ? issue(code, `${basePath}.${field}`, `Güncellenen ${entityLabel} için ${field} alanı gönderilmelidir.`)
+    : null;
 }
 
 function validSicil(value) {
@@ -18,18 +73,19 @@ function validSicil(value) {
 export function findNestedCommitCollectionIssue(changes = {}) {
   for (let index = 0; index < (changes.projectUpserts || []).length; index += 1) {
     const project = changes.projectUpserts[index];
+    const basePath = `projectUpserts[${index}]`;
     const tags = project?.tags;
     if (tags !== undefined && !Array.isArray(tags)) {
       return issue(
         'PROJECT_TAGS_NOT_ARRAY',
-        `projectUpserts[${index}].tags`,
+        `${basePath}.tags`,
         'Proje etiketleri dizi olmalıdır.'
       );
     }
     if (hasPersistenceVersion(project?.version) && tags === undefined) {
       return issue(
         'PROJECT_TAGS_REQUIRED_FOR_UPDATE',
-        `projectUpserts[${index}].tags`,
+        `${basePath}.tags`,
         'Güncellenen proje için etiketlerin tümü gönderilmelidir.'
       );
     }
@@ -37,27 +93,52 @@ export function findNestedCommitCollectionIssue(changes = {}) {
       if (typeof tags[tagIndex] !== 'string' || !tags[tagIndex].trim()) {
         return issue(
           'PROJECT_TAG_INVALID',
-          `projectUpserts[${index}].tags[${tagIndex}]`,
+          `${basePath}.tags[${tagIndex}]`,
           'Proje etiketi boş olmayan bir metin olmalıdır.'
         );
       }
     }
+
+    if (hasPersistenceVersion(project?.version)) {
+      const fieldIssue = versionedFieldIssue(
+        project,
+        VERSIONED_PROJECT_FIELDS,
+        basePath,
+        'proje',
+        'PROJECT_UPDATE_FIELD_REQUIRED'
+      );
+      if (fieldIssue) return fieldIssue;
+    }
+  }
+
+  for (let index = 0; index < (changes.wbsUpserts || []).length; index += 1) {
+    const node = changes.wbsUpserts[index];
+    if (!hasPersistenceVersion(node?.version)) continue;
+    const fieldIssue = versionedFieldIssue(
+      node,
+      VERSIONED_WBS_FIELDS,
+      `wbsUpserts[${index}]`,
+      'WBS kaydı',
+      'WBS_UPDATE_FIELD_REQUIRED'
+    );
+    if (fieldIssue) return fieldIssue;
   }
 
   for (let index = 0; index < (changes.taskUpserts || []).length; index += 1) {
     const task = changes.taskUpserts[index];
+    const basePath = `taskUpserts[${index}]`;
     const assigneeIds = task?.assigneeIds;
     if (assigneeIds !== undefined && !Array.isArray(assigneeIds)) {
       return issue(
         'TASK_ASSIGNEES_NOT_ARRAY',
-        `taskUpserts[${index}].assigneeIds`,
+        `${basePath}.assigneeIds`,
         'Görev sorumluları dizi olmalıdır.'
       );
     }
     if (hasPersistenceVersion(task?.version) && assigneeIds === undefined) {
       return issue(
         'TASK_ASSIGNEES_REQUIRED_FOR_UPDATE',
-        `taskUpserts[${index}].assigneeIds`,
+        `${basePath}.assigneeIds`,
         'Güncellenen görev için sorumluların tümü gönderilmelidir.'
       );
     }
@@ -65,7 +146,7 @@ export function findNestedCommitCollectionIssue(changes = {}) {
       if (!validSicil(assigneeIds[assigneeIndex])) {
         return issue(
           'TASK_ASSIGNEE_INVALID',
-          `taskUpserts[${index}].assigneeIds[${assigneeIndex}]`,
+          `${basePath}.assigneeIds[${assigneeIndex}]`,
           'Görev sorumlusu Sicil değeri pozitif ve geçerli bir SQL Server int olmalıdır.'
         );
       }
@@ -75,16 +156,41 @@ export function findNestedCommitCollectionIssue(changes = {}) {
     if (dependencies !== undefined && !Array.isArray(dependencies)) {
       return issue(
         'TASK_DEPENDENCIES_NOT_ARRAY',
-        `taskUpserts[${index}].deps`,
+        `${basePath}.deps`,
         'Görev bağımlılıkları dizi olmalıdır.'
       );
     }
     if (hasPersistenceVersion(task?.version) && dependencies === undefined) {
       return issue(
         'TASK_DEPENDENCIES_REQUIRED_FOR_UPDATE',
-        `taskUpserts[${index}].deps`,
+        `${basePath}.deps`,
         'Güncellenen görev için bağımlılıkların tümü gönderilmelidir.'
       );
+    }
+
+    if (hasPersistenceVersion(task?.version)) {
+      if (!hasOwn(task, 'task') && !hasOwn(task, 'title')) {
+        return issue(
+          'TASK_UPDATE_FIELD_REQUIRED',
+          `${basePath}.task`,
+          'Güncellenen görev için task veya title alanı gönderilmelidir.'
+        );
+      }
+      if (!hasOwn(task, 'isMilestone') && !hasOwn(task, 'milestone')) {
+        return issue(
+          'TASK_UPDATE_FIELD_REQUIRED',
+          `${basePath}.isMilestone`,
+          'Güncellenen görev için isMilestone veya milestone alanı gönderilmelidir.'
+        );
+      }
+      const fieldIssue = versionedFieldIssue(
+        task,
+        VERSIONED_TASK_FIELDS,
+        basePath,
+        'görev',
+        'TASK_UPDATE_FIELD_REQUIRED'
+      );
+      if (fieldIssue) return fieldIssue;
     }
   }
 
