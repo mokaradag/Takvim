@@ -8,6 +8,7 @@ import { projectColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, Kw, StatusPill, StatusIcon } from '../../components/ui';
 import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, useTaskActions } from '../../state/hooks';
+import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 function projectLabel(project) {
   if (!project) return '';
@@ -37,6 +38,8 @@ export function TasksView() {
   });
 
   const setCF = (key, value) => setColFilter(f => ({ ...f, [key]: value }));
+  const projectById = useMemo1(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+  const canAddTask = projects.some(canWriteProject);
 
   const projOpts = useMemo1(() => projects
     .slice()
@@ -156,7 +159,14 @@ export function TasksView() {
           </button>
         )}
         <span className="muted tabular" style={{ marginLeft: 'auto', fontSize: 12.5 }}>{filtered.length} / {tasks.length} görev</span>
-        <button className="btn primary" onClick={onAddTask}><Icons.Plus size={14} /> Yeni görev</button>
+        <button
+          className="btn primary"
+          onClick={onAddTask}
+          disabled={!canAddTask}
+          title={canAddTask ? 'Yeni görev' : 'Görev eklemek için tam proje yazma yetkisi gerekir.'}
+        >
+          <Icons.Plus size={14} /> Yeni görev
+        </button>
       </div>
 
       <div className="tasks-table-card">
@@ -228,6 +238,7 @@ export function TasksView() {
                 const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
                 const prio = PRIORITIES[t.priority || 'medium'];
                 const prog = t.progress != null ? t.progress : (t.status === 'done' ? 100 : 0);
+                const canEditTask = canWriteProject(projectById.get(t.projectId));
                 return (
                   <tr key={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
                     <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{idx + 1}</td>
@@ -260,7 +271,13 @@ export function TasksView() {
                     <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedFinish)}</td>
                     <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
                     <td>
-                      <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}>
+                      <button
+                        className="icon-btn"
+                        style={{ width: 26, height: 26 }}
+                        disabled={!canEditTask}
+                        title={canEditTask ? 'Görevi sil' : 'Salt okunur görev'}
+                        onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}
+                      >
                         <Icons.Trash size={13} />
                       </button>
                     </td>
