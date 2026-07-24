@@ -57,7 +57,10 @@ test('Actual commits validate the final dependency graph under transaction locks
   assert.match(source, /projectEdges\.set\(previousProjectId, removeTaskEdges/);
   assert.match(source, /projectEdges\.set\(projectId, removeTaskEdges/);
   assert.match(source, /const cycleTaskIds = findDependencyCycle\(projectEdges\.get\(projectId\) \|\| \[\]\);/);
-  assert.match(source, /return withSqlTransaction\(async \(transaction\) => \{\s+await assertIntegrity\(transaction, changes\);\s+return baseRepository\.commitChanges\(input\);/s);
+  assert.match(
+    source,
+    /return withSqlTransaction\(async \(transaction\) => \{\s+const plannedChanges = await planIntegrity\(transaction, changes\);\s+return baseRepository\.commitChanges\(plannedChanges\);/s
+  );
 });
 
 test('Project and Task writes accept only active calendar references', () => {
