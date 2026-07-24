@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-import { normalizeActualChanges } from '../src/data/api/createApiRepository.js';
+import {
+  createApiRepository,
+  normalizeActualChanges
+} from '../src/data/api/createApiRepository.js';
 import { findNestedCommitCollectionIssue } from '../src/server/repository/commitNestedCollectionValidation.js';
 
 const TASK_ID = '11111111-1111-4111-8111-111111111111';
@@ -43,6 +46,42 @@ test('Actual normalization preserves malformed dependency collections for determ
   assert.equal(changes.taskUpserts[0].deps, null);
   const issue = findNestedCommitCollectionIssue(changes);
   assert.equal(issue?.code, 'TASK_DEPENDENCIES_NOT_ARRAY');
+});
+
+test('Actual repository forwards malformed dependency shapes to the server boundary instead of failing locally', async () => {
+  const originalFetch = globalThis.fetch;
+  let postedBody = null;
+  globalThis.fetch = async (_url, init) => {
+    postedBody = JSON.parse(init.body);
+    return {
+      ok: false,
+      status: 400,
+      async json() {
+        return {
+          error: {
+            code: 'MUTATION_FAILED',
+            message: 'Görev bağımlılıkları dizi olmalıdır.',
+            details: { code: 'TASK_DEPENDENCIES_NOT_ARRAY' }
+          }
+        };
+      }
+    };
+  };
+
+  try {
+    const repository = createApiRepository();
+    await assert.rejects(
+      repository.commitChanges({
+        taskUpserts: [versionedTask({ deps: { predecessorId: PREDECESSOR_ID } })]
+      }),
+      (error) => error?.details?.code === 'TASK_DEPENDENCIES_NOT_ARRAY'
+    );
+    assert.deepEqual(postedBody?.changes?.taskUpserts?.[0]?.deps, {
+      predecessorId: PREDECESSOR_ID
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Actual normalization still canonicalizes valid dependency references', () => {
