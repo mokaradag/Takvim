@@ -40,6 +40,16 @@ export async function loadAuthorizationContext(executor = null) {
       SELECT 1 FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil
     ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsExecutive;
 
+    SELECT p.ProjectId, CAST('FULL' AS varchar(20)) AS AccessLevel,
+      CAST('SYSTEM_ADMIN' AS varchar(30)) AS Reason
+    FROM dbo.MR_Projects p
+    WHERE p.IsActive = 1
+      AND EXISTS (
+        SELECT 1
+        FROM dbo.MR_UserRoles ur
+        WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1
+      )
+    UNION
     SELECT DISTINCT p.ProjectId, CAST('FULL' AS varchar(20)) AS AccessLevel,
       CAST('CORPORATE_PROJECT_ROLE' AS varchar(30)) AS Reason
     FROM dbo.MR_Projects p
@@ -85,12 +95,17 @@ export async function loadAuthorizationContext(executor = null) {
     partialTaskRows: partialRows
   });
 
+  const fullReasonsByProject = new Map();
   for (const row of fullRows) {
     const projectId = String(row.ProjectId);
+    if (!fullReasonsByProject.has(projectId)) fullReasonsByProject.set(projectId, new Set());
+    fullReasonsByProject.get(projectId).add(row.Reason);
+  }
+  for (const [projectId, reasons] of fullReasonsByProject) {
     effective.access.set(projectId, {
       projectId,
       accessLevel: 'FULL',
-      reasons: [row.Reason]
+      reasons: [...reasons].sort()
     });
     effective.fullProjectIds.add(projectId);
   }
