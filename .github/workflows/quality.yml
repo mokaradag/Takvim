@@ -21,7 +21,7 @@ jobs:
           ref: agent/durable-sqlserver-persistence
           fetch-depth: 0
       - name: Apply sixth Codex fixes
-        run: python .github/scripts/apply-sixth-codex-review-fixes-v3.py
+        run: python .github/scripts/apply-sixth-codex-review-fixes-v4.py
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
@@ -42,18 +42,7 @@ jobs:
       - name: Check session capability regression
         run: node --test --test-name-pattern="loaded session capabilities survive" test/codex-p2-regressions.test.mjs
       - name: Run sixth Codex regression tests
-        id: aggregate
-        continue-on-error: true
-        run: node --test test/codex-p2-regressions.test.mjs > sixth-regressions.log 2>&1
-      - name: Upload regression diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sixth-codex-regression-log
-          path: sixth-regressions.log
-      - name: Stop on regression failure
-        if: steps.aggregate.outcome == 'failure'
-        run: exit 1
+        run: node --test test/codex-p2-regressions.test.mjs
       - name: Run WBS domain validation tests
         run: node --test test/domain-validation-edge-cases.test.mjs
       - name: Run authorization tests
