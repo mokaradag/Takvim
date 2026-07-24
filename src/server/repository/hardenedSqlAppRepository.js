@@ -2,6 +2,10 @@ import 'server-only';
 import { ServerPersistenceError } from '../errors.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { findDependencyCycle } from './dependencyGraphValidation.js';
+import {
+  findFinalTaskReferenceIssue,
+  orderTaskUpsertsByDependencies
+} from './taskCommitPlanning.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -43,6 +47,65 @@ async function rowForUpdate(executor, table, idColumn, value, label) {
     WHERE ${idColumn} = @entityId;
   `);
   return result.recordset[0] || null;
+}
+
+async function assertActiveProjectMutationTargets(executor, changes) {
+  const projectRows = new Map();
+  const newProjectIds = new Set();
+
+  async function loadProject(projectId) {
+    if (!projectRows.has(projectId)) {
+      projectRows.set(
+        projectId,
+        await rowForUpdate(executor, 'MR_Projects', 'ProjectId', projectId, 'Proje kimliği')
+      );
+    }
+    return projectRows.get(projectId);
+  }
+
+  async function requireActiveProject(value) {
+    const projectId = uuid(value, 'Proje kimliği');
+    if (newProjectIds.has(projectId)) return projectId;
+    const row = await loadProject(projectId);
+    if (!row || !Boolean(row.IsActive)) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Hedef proje bulunamadı veya etkin değil.', {
+        details: { projectId }
+      });
+    }
+    return projectId;
+  }
+
+  for (const project of changes.projectUpserts) {
+    const projectId = uuid(project.id, 'Proje kimliği');
+    const row = await loadProject(projectId);
+    if (!row) {
+      newProjectIds.add(projectId);
+    } else if (!Boolean(row.IsActive)) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Etkin olmayan proje değiştirilemez.', {
+        details: { projectId }
+      });
+    }
+  }
+
+  for (const node of changes.wbsUpserts) {
+    await requireActiveProject(node.projectId);
+    const before = await rowForUpdate(executor, 'MR_WBS', 'WbsId', node.id, 'WBS kimliği');
+    if (before) await requireActiveProject(String(before.ProjectId));
+  }
+  for (const entry of changes.wbsDeletes) {
+    const before = await rowForUpdate(executor, 'MR_WBS', 'WbsId', entry.id, 'WBS kimliği');
+    if (before) await requireActiveProject(String(before.ProjectId));
+  }
+
+  for (const task of changes.taskUpserts) {
+    await requireActiveProject(task.projectId);
+    const before = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', task.id, 'Görev kimliği');
+    if (before) await requireActiveProject(String(before.ProjectId));
+  }
+  for (const entry of changes.taskDeletes) {
+    const before = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', entry.id, 'Görev kimliği');
+    if (before) await requireActiveProject(String(before.ProjectId));
+  }
 }
 
 async function assertActiveCalendarReferences(executor, changes) {
@@ -161,6 +224,63 @@ async function loadProjectDependencyEdgesForUpdate(executor, projectId) {
   }));
 }
 
+function taskReferenceMessage(issue) {
+  const messages = {
+    TASK_IDENTITY_REQUIRED: 'Görev ve proje kimlikleri zorunludur.',
+    DUPLICATE_TASK_UPSERT: 'Aynı görev bir değişiklik kümesinde birden fazla kez güncellenemez.',
+    TASK_UPSERT_DELETE_CONFLICT: 'Aynı görev tek değişiklik kümesinde hem güncellenip hem silinemez.',
+    DEPENDENCY_PREDECESSOR_REQUIRED: 'Bağımlılık için öncül görev seçilmelidir.',
+    DUPLICATE_DEPENDENCY: 'Aynı öncül görev bağımlılığı birden fazla kez eklenemez.',
+    SELF_DEPENDENCY: 'Bir görev kendisine bağımlı olamaz.',
+    DEPENDENCY_TARGET_DELETED: 'Silinen görev aynı değişiklik kümesinde öncül olarak kullanılamaz.',
+    DEPENDENCY_TARGET_NOT_FOUND: 'Öncül görev bulunamadı.',
+    CROSS_PROJECT_DEPENDENCY: 'Bağımlılık görevleri son durumda aynı projede olmalıdır.'
+  };
+  return messages[issue.code] || 'Görev bağımlılıkları geçerli değildir.';
+}
+
+async function planTaskCommits(executor, changes) {
+  const taskUpserts = changes.taskUpserts.map((task) => ({
+    ...task,
+    id: uuid(task.id, 'Görev kimliği'),
+    projectId: uuid(task.projectId, 'Proje kimliği'),
+    deps: (task.deps || []).map((dependency) => ({
+      ...dependency,
+      predecessorId: uuid(dependency?.predecessorId, 'Öncül görev kimliği')
+    }))
+  }));
+  const taskDeletes = changes.taskDeletes.map((entry) => ({
+    ...entry,
+    id: uuid(entry.id, 'Görev kimliği')
+  }));
+  const referencedTaskIds = new Set([
+    ...taskUpserts.map((task) => task.id),
+    ...taskDeletes.map((entry) => entry.id),
+    ...taskUpserts.flatMap((task) => task.deps.map((dependency) => dependency.predecessorId))
+  ]);
+  const existingTaskProjects = new Map();
+
+  for (const taskId of [...referencedTaskIds].sort()) {
+    const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', taskId, 'Görev kimliği');
+    if (row) existingTaskProjects.set(taskId, String(row.ProjectId));
+  }
+
+  const issue = findFinalTaskReferenceIssue({
+    existingTaskProjects,
+    taskUpserts,
+    taskDeletes
+  });
+  if (issue) {
+    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details: issue });
+  }
+
+  return {
+    ...changes,
+    taskUpserts: orderTaskUpsertsByDependencies(taskUpserts),
+    taskDeletes
+  };
+}
+
 async function assertAcyclicTaskDependencies(executor, changes) {
   const changedTaskRows = new Map();
   const affectedProjectIds = new Set();
@@ -192,17 +312,12 @@ async function assertAcyclicTaskDependencies(executor, changes) {
       projectEdges.set(previousProjectId, removeTaskEdges(projectEdges.get(previousProjectId) || [], taskId));
       projectEdges.set(nextProjectId, removeTaskEdges(projectEdges.get(nextProjectId) || [], taskId));
     } else {
-      projectEdges.set(nextProjectId, removeTaskEdges(projectEdges.get(nextProjectId) || [], taskId, { incoming: false }));
-    }
-
-    const nextEdges = projectEdges.get(nextProjectId) || [];
-    for (const dependency of task.deps || []) {
-      nextEdges.push({
+      projectEdges.set(nextProjectId, removeTaskEdges(
+        projectEdges.get(nextProjectId) || [],
         taskId,
-        predecessorId: uuid(dependency.predecessorId, 'Öncül görev kimliği')
-      });
+        { incoming: false }
+      ));
     }
-    projectEdges.set(nextProjectId, nextEdges);
   }
 
   for (const entry of changes.taskDeletes) {
@@ -211,6 +326,19 @@ async function assertAcyclicTaskDependencies(executor, changes) {
     if (!row) continue;
     const projectId = String(row.ProjectId);
     projectEdges.set(projectId, removeTaskEdges(projectEdges.get(projectId) || [], taskId));
+  }
+
+  for (const task of changes.taskUpserts) {
+    const taskId = uuid(task.id, 'Görev kimliği');
+    const projectId = uuid(task.projectId, 'Proje kimliği');
+    const nextEdges = projectEdges.get(projectId) || [];
+    for (const dependency of task.deps || []) {
+      nextEdges.push({
+        taskId,
+        predecessorId: uuid(dependency.predecessorId, 'Öncül görev kimliği')
+      });
+    }
+    projectEdges.set(projectId, nextEdges);
   }
 
   for (const projectId of [...affectedProjectIds].sort()) {
@@ -223,10 +351,13 @@ async function assertAcyclicTaskDependencies(executor, changes) {
   }
 }
 
-async function assertIntegrity(executor, changes) {
+async function planIntegrity(executor, changes) {
+  await assertActiveProjectMutationTargets(executor, changes);
   await assertActiveCalendarReferences(executor, changes);
   await assertSingleRootWbs(executor, changes);
-  await assertAcyclicTaskDependencies(executor, changes);
+  const plannedChanges = await planTaskCommits(executor, changes);
+  await assertAcyclicTaskDependencies(executor, plannedChanges);
+  return plannedChanges;
 }
 
 export function createHardenedSqlAppRepository() {
@@ -236,8 +367,8 @@ export function createHardenedSqlAppRepository() {
     async commitChanges(input) {
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        await assertIntegrity(transaction, changes);
-        return baseRepository.commitChanges(input);
+        const plannedChanges = await planIntegrity(transaction, changes);
+        return baseRepository.commitChanges(plannedChanges);
       });
     }
   };
