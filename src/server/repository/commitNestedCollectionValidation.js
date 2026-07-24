@@ -1,5 +1,14 @@
+const SQL_INT_MAX = 2147483647;
+
 function issue(code, path, message) {
   return { code, path, message };
+}
+
+function validSicil(value) {
+  const normalized = value == null ? '' : String(value).trim();
+  if (!/^\d+$/.test(normalized)) return false;
+  const sicil = Number(normalized);
+  return Number.isSafeInteger(sicil) && sicil > 0 && sicil <= SQL_INT_MAX;
 }
 
 export function findNestedCommitCollectionIssue(changes = {}) {
@@ -31,6 +40,15 @@ export function findNestedCommitCollectionIssue(changes = {}) {
         `taskUpserts[${index}].assigneeIds`,
         'Görev sorumluları dizi olmalıdır.'
       );
+    }
+    for (let assigneeIndex = 0; assigneeIndex < (assigneeIds || []).length; assigneeIndex += 1) {
+      if (!validSicil(assigneeIds[assigneeIndex])) {
+        return issue(
+          'TASK_ASSIGNEE_INVALID',
+          `taskUpserts[${index}].assigneeIds[${assigneeIndex}]`,
+          'Görev sorumlusu Sicil değeri pozitif ve geçerli bir SQL Server int olmalıdır.'
+        );
+      }
     }
   }
 
