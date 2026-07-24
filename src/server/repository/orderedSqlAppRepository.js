@@ -10,7 +10,7 @@ export function createOrderedSqlAppRepository() {
   return {
     ...repository,
     commitChanges(changes = {}) {
-      const canonicalChanges = canonicalizeCommitChanges(changes) || {};
+      const canonicalChanges = canonicalizeCommitChanges(changes);
       const orderedChanges = {
         ...canonicalChanges,
         wbsUpserts: orderWbsUpsertsByParents(canonicalChanges.wbsUpserts || [])
