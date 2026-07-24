@@ -1,6 +1,8 @@
 import 'server-only';
+import { sql, withSqlTransaction } from '../db/pool.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { createHardenedSqlAppRepository } from './hardenedSqlAppRepository.js';
+import { assertUpsertIntentMatchesPersistence } from './upsertIntentValidation.js';
 import { orderWbsUpsertsByParents } from './wbsCommitPlanning.js';
 
 export function createOrderedSqlAppRepository() {
@@ -8,11 +10,16 @@ export function createOrderedSqlAppRepository() {
   return {
     ...repository,
     commitChanges(changes = {}) {
-      const canonicalChanges = canonicalizeCommitChanges(changes);
-      return repository.commitChanges({
+      const canonicalChanges = canonicalizeCommitChanges(changes) || {};
+      const orderedChanges = {
         ...canonicalChanges,
         wbsUpserts: orderWbsUpsertsByParents(canonicalChanges.wbsUpserts || [])
-      });
+      };
+
+      return withSqlTransaction(async (transaction) => {
+        await assertUpsertIntentMatchesPersistence(transaction, orderedChanges);
+        return repository.commitChanges(orderedChanges);
+      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
     }
   };
 }
