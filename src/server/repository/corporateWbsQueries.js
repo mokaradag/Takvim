@@ -77,7 +77,7 @@ IF @RootWbsId IS NULL
 BEGIN
   SET @RootWbsId = NEWID();
   INSERT dbo.MR_WBS(WbsId, ProjectId, ParentWbsId, Code, Name, SortOrder, SourceType, CreatedBySicil, UpdatedBySicil)
-  VALUES(@RootWbsId, @projectId, NULL, @projectCode, @projectName, 0, 'CORPORATE', @actorSicil, @actorSicil);
+  VALUES(@RootWbsId, @projectId, NULL, LEFT(@projectCode, 100), @projectName, 0, 'CORPORATE', @actorSicil, @actorSicil);
 END;
 
 UPDATE target

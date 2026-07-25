@@ -1,6 +1,6 @@
-import { supportsManualWbsEditing } from '../domain/projectTypes.js';
+import { CORPORATE_WBS_READ_ONLY_MESSAGE, supportsManualWbsEditing } from '../domain/projectTypes.js';
 
-export const CORPORATE_WBS_READ_ONLY_MESSAGE = 'Kurumsal projelerin iş dağılım ağacı MERGEN Rota üzerinden değiştirilemez; yapı CN43N kaynağından beslenir.';
+export { CORPORATE_WBS_READ_ONLY_MESSAGE };
 
 function isActualDataMode(state = {}) {
   return String(state.session?.dataMode || '').toLowerCase() === 'actual';

@@ -172,7 +172,9 @@ export function WbsView() {
           <div className="col" style={{ gap: 4 }}>
             <div style={{ fontSize: 17, fontWeight: 700 }}>{projectLabel(workspace.selectedProject)}</div>
             <div className="muted" style={{ fontSize: 12.5 }}>
-              {wbs.length} dağılım düğümü · {tasks.length} aktivite · hiyerarşi proje düzeyinde yönetilir
+              {wbs.length} dağılım düğümü · {tasks.length} aktivite · {isCorporate
+                ? 'hiyerarşi kurumsal CN43N kaynağından beslenir'
+                : 'hiyerarşi proje düzeyinde yönetilir'}
             </div>
           </div>
           <button className="btn" onClick={() => setExpanded(new Set(wbs.map((node) => node.id)))}>Tümünü aç</button>

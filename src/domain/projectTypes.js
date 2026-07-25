@@ -52,6 +52,12 @@ export function isCorporateProject(project) {
   return String(project?.source || project?.sourceType || '').toLowerCase() === 'corporate';
 }
 
+/**
+ * Kurumsal iş dağılım ağacının salt okunur olduğunu bildiren tek ileti.
+ * Hem istemci yazma ilkesi hem sunucu deposu aynı metni kullanır.
+ */
+export const CORPORATE_WBS_READ_ONLY_MESSAGE = 'Kurumsal projelerin iş dağılım ağacı MERGEN Rota üzerinden değiştirilemez; yapı CN43N kaynağından beslenir.';
+
 /** İş dağılım ağacı MERGEN Rota içinde düzenlenebilen proje mi? */
 export function supportsManualWbsEditing(project) {
   return Boolean(project) && !isCorporateProject(project);

@@ -279,7 +279,7 @@ export function SimpleModePanel() {
             <h2>Hızlı görev tanımı</h2>
             <p>Yalnızca gerekli bilgileri girin. Kayıt aynı proje ve görev altyapısında tutulur ve gelişmiş modda da kullanılabilir.</p>
           </div>
-          <div className="col" style={{ gap: 9, alignItems: 'flex-end' }}>
+          <div className="simple-entry-actions">
             <div className="simple-entry-flow" aria-label="Basit mod akışı">
               <span>Tanımla</span><i>→</i><span>Takvimde izle</span><i>→</i><span>Gerekirse geliştir</span>
             </div>

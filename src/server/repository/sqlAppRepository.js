@@ -1,6 +1,7 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
+import { CORPORATE_WBS_READ_ONLY_MESSAGE } from '../../domain/projectTypes.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
@@ -27,7 +28,6 @@ function isCorporateSource(value) {
   return String(value || '').toUpperCase() === 'CORPORATE';
 }
 
-export const CORPORATE_WBS_READ_ONLY_MESSAGE = 'Kurumsal projelerin iş dağılım ağacı MERGEN Rota üzerinden değiştirilemez; yapı CN43N kaynağından beslenir.';
 function normalizeDelete(value) {
   return typeof value === 'string' ? { id: value, version: null } : value;
 }

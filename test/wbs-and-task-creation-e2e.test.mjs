@@ -130,6 +130,13 @@ test('serbest proje oluşturulur ve kök düğümün altına alt düğüm eklene
       wbsUpserts: [{ id: rootWbsId, projectId, parentId: null, code: '1', name: 'Deneme gelişmiş proje 1', sortOrder: 1 }]
     });
     assert.equal(created.ok, true, created.error?.message);
+    // Proje oluşturma anlık görüntüyü yeniden yüklemez: kabuk sökülmediği için
+    // karşılama ekranı geri gelmez ve kullanıcı bulunduğu yerde kalır.
+    assert.equal(stack.requests.filter((entry) => entry.path.endsWith('/snapshot')).length, 1);
+
+    const storedProject = stack.state.projects.find((entry) => entry.id === projectId);
+    assert.ok(storedProject, 'yeni proje istemci kimliğiyle duruma yazılmalıdır');
+    assert.ok(storedProject.version, 'sunucunun sürüm anahtarı yerel kayda uygulanmalıdır');
 
     const storedRoot = stack.state.wbs.find((node) => node.id === rootWbsId);
     assert.ok(storedRoot, 'kök düğüm istemci kimliğiyle duruma yazılmalıdır');

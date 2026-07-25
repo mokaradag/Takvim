@@ -122,7 +122,7 @@ WHERE NOT EXISTS (
 -- altına gerçek WBS elemanlarını (WBS element kodlarıyla) ekler; kök kodun proje
 -- kodu olması, kaynaktan gelen eleman kodlarıyla çakışmasını da engeller.
 INSERT dbo.MR_WBS(ProjectId, ParentWbsId, Code, Name, SortOrder, SourceType, CreatedBySicil, UpdatedBySicil)
-SELECT ProjectId, NULL, ProjectCode, ProjectName, 0, 'CORPORATE', @actorSicil, @actorSicil
+SELECT ProjectId, NULL, LEFT(ProjectCode, 100), ProjectName, 0, 'CORPORATE', @actorSicil, @actorSicil
 FROM @Inserted;
 
 UPDATE p

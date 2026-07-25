@@ -220,7 +220,9 @@ test('kurumsal projelerin WBS ekranı düzenleme eylemlerini kapatır ve kaynağ
 
 test('sunucu kurumsal WBS yazma girişimlerini bağımsız olarak reddeder', () => {
   const repository = read('src/server/repository/sqlAppRepository.js');
-  assert.match(repository, /export const CORPORATE_WBS_READ_ONLY_MESSAGE/);
+  // İleti tek kaynakta (domain katmanı) tanımlanır; istemci ve sunucu aynı metni kullanır.
+  assert.match(repository, /import \{ CORPORATE_WBS_READ_ONLY_MESSAGE \} from '\.\.\/\.\.\/domain\/projectTypes\.js';/);
+  assert.match(read('src/domain/projectTypes.js'), /export const CORPORATE_WBS_READ_ONLY_MESSAGE/);
   assert.match(repository, /async function assertWbsProjectIsWritableStructure/);
   assert.match(repository, /await assertWbsProjectIsWritableStructure\(executor, projectId\);/);
   assert.match(repository, /if \(isCorporateSource\(before\.SourceType\)\) \{\s*throw new ServerPersistenceError\('FORBIDDEN', CORPORATE_WBS_READ_ONLY_MESSAGE\);/s);
@@ -274,6 +276,8 @@ test('Basit Mod görev tanımlamadan proje oluşturma yolu sunar', () => {
   assert.match(panel, /addProject\(input, \{ focusWorkspace: false \}\)/);
   assert.match(panel, /<ProjectCreateDialog/);
   assert.match(panel, /Yeni proje/);
+  assert.match(panel, /className="simple-entry-actions"/);
+  assert.match(read('src/app/styles/simple-mode.css'), /\.simple-entry-actions \{/);
   // Pencere form ağacının dışında durur: iç içe <form> geçersizdir.
   assert.ok(panel.indexOf('</form>') < panel.indexOf('<ProjectCreateDialog'));
 });
