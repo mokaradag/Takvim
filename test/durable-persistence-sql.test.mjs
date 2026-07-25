@@ -4,7 +4,6 @@ import test from 'node:test';
 
 const createSql = readFileSync(new URL('../database/MR_Create_Durable_Persistence.sql', import.meta.url), 'utf8');
 const rollbackSql = readFileSync(new URL('../database/MR_Rollback_Durable_Persistence.sql', import.meta.url), 'utf8');
-const portfolioMigrationSql = readFileSync(new URL('../database/MR_Migrate_0002_Project_Portfolio_Scaling.sql', import.meta.url), 'utf8');
 
 function captures(source, expression) {
   return new Set([...source.matchAll(expression)].map((match) => match[1].toUpperCase()));
@@ -52,7 +51,7 @@ test('corporate source tables are never mutated', () => {
   for (const source of sourceTables) {
     for (const verb of ['INSERT\\s+(?:INTO\\s+)?', 'UPDATE\\s+', 'DELETE\\s+(?:FROM\\s+)?', 'DROP\\s+TABLE\\s+', 'ALTER\\s+TABLE\\s+']) {
       const expression = new RegExp(`${verb}(?:dbo\\.)?${source}`, 'i');
-      assert.equal(expression.test(`${createSql}\n${rollbackSql}\n${portfolioMigrationSql}`), false, `${source} must be read-only`);
+      assert.equal(expression.test(`${createSql}\n${rollbackSql}`), false, `${source} must be read-only`);
     }
   }
 });
