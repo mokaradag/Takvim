@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -117,11 +117,12 @@ test('kurumsal proje sorumlusu PROJECT_MANAGER rolünden eşitlenir ve arayüzde
   assert.match(source('src/features/project/ProjectWorkspaceView.jsx'), /PROJECT_MANAGER rolünden otomatik alınır/);
 });
 
-test('PPTS geçiş betiği görünümü doğru rol koduyla yeniden oluşturur', () => {
-  const migration = source('database/MR_Migrate_0002_Project_Portfolio_Scaling.sql');
-  assert.match(migration, /''PPTS''/);
-  assert.match(migration, /STRING_SPLIT\(pptsSicil,\s*'',''\)/i);
-  assert.doesNotMatch(migration, /''PPTC''/);
+test('temiz kurulum betiği PPTS rolünü doğrudan doğru görünümle oluşturur', () => {
+  const createSql = source('database/MR_Create_Durable_Persistence.sql');
+  assert.match(createSql, /''PPTS''/);
+  assert.match(createSql, /STRING_SPLIT\(pptsSicil,\s*'',''\)/i);
+  assert.doesNotMatch(createSql, /''PPTC''/);
+  assert.equal(existsSync(new URL('../database/MR_Migrate_0002_Project_Portfolio_Scaling.sql', import.meta.url)), false);
 });
 
 test('görev eylem kancası tarayıcı tıklama olayını kayıt yükünden ayırır', () => {
