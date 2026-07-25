@@ -2,7 +2,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
+import { SearchableSelect } from '../../components/SearchableSelect';
 import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
+import { isArchivedProject, projectTypeMeta, visibleProjects } from '../../domain/projectTypes';
 import {
   LAG_UNITS,
   REL_TYPES,
@@ -68,6 +70,61 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     return flattenWbsTree(buildWbsTree(projectWbs));
   }, [allWbs, local.projectId]);
 
+  const projectOptions = useMemo(() => {
+    const listed = visibleProjects(projects);
+    if (selectedProject && !listed.some((project) => project.id === selectedProject.id)) listed.unshift(selectedProject);
+    return [
+      { value: '', label: 'Proje seçilmedi', icon: <Icons.Layers size={13} /> },
+      ...listed.map((project) => {
+        const type = projectTypeMeta(project.projectTypeCode, project.projectTypeName);
+        const ProjectIcon = Icons[type.icon] || Icons.Layers;
+        return {
+          value: project.id,
+          label: projectLabel(project),
+          group: `${type.code} · ${type.name}`,
+          description: isArchivedProject(project) ? 'Tamamlanan / kapatılan' : null,
+          keywords: [project.code, project.name, type.code, type.name],
+          icon: <ProjectIcon size={13} />
+        };
+      })
+    ];
+  }, [projects, selectedProject]);
+
+  const selectedAssignees = useMemo(() => {
+    const records = [];
+    const usedNames = new Set();
+    for (const id of local.assigneeIds || []) {
+      const person = people.find((item) => String(item.id) === String(id));
+      if (!person) continue;
+      records.push({ id: person.id, name: person.name, person });
+      usedNames.add(person.name);
+    }
+    for (const name of local.sorumlu || []) {
+      if (usedNames.has(name)) continue;
+      const person = people.find((item) => item.name === name) || null;
+      records.push({ id: person?.id || name, name, person });
+      usedNames.add(name);
+    }
+    return records;
+  }, [people, local.assigneeIds, local.sorumlu]);
+
+  const personOptions = useMemo(() => {
+    const selectedIds = new Set(selectedAssignees.map((record) => String(record.id)));
+    const selectedNames = new Set(selectedAssignees.map((record) => record.name));
+    return people
+      .filter((person) => !selectedIds.has(String(person.id)) && !selectedNames.has(person.name))
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
+      .map((person) => ({
+        value: person.id,
+        label: personLabel(person),
+        description: person.role || null,
+        group: [person.organization?.directorate, person.organization?.department, person.organization?.unit].filter(Boolean).join(' / '),
+        keywords: [person.name, person.employeeNo, person.username, person.role, person.team],
+        icon: <Avatar name={person.name} size="sm" />
+      }));
+  }, [people, selectedAssignees]);
+
   const save = (patch) => {
     const next = { ...local, ...patch };
     setLocal(next);
@@ -91,6 +148,21 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
       color: project?.color || local.color,
       wbsId: roots.length === 1 ? roots[0].id : null,
       keyword: tags.includes(local.keyword) ? local.keyword : (tags[0] || '')
+    });
+  };
+
+  const addAssignee = (personId) => {
+    const person = people.find((item) => String(item.id) === String(personId));
+    if (!person) return;
+    const assigneeIds = [...new Set([...(local.assigneeIds || []).map(String), String(person.id)])];
+    const sorumlu = [...new Set([...(local.sorumlu || []), person.name])];
+    save({ assigneeIds, sorumlu });
+  };
+
+  const removeAssignee = (record) => {
+    save({
+      assigneeIds: (local.assigneeIds || []).filter((id) => String(id) !== String(record.id)),
+      sorumlu: (local.sorumlu || []).filter((name) => name !== record.name)
     });
   };
 
@@ -160,14 +232,14 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               <div className="task-project-wbs-grid">
                 <div className="col" style={{ gap: 6 }}>
                   <div className="label">Proje</div>
-                  <select
-                    className="input"
+                  <SearchableSelect
                     value={local.projectId || ''}
-                    onChange={(e) => changeProject(e.target.value)}
-                  >
-                    <option value="">Proje seçilmedi</option>
-                    {projects.map((project) => <option key={project.id} value={project.id}>{projectLabel(project)}</option>)}
-                  </select>
+                    options={projectOptions}
+                    onChange={changeProject}
+                    placeholder="Proje seçilmedi"
+                    searchPlaceholder="Proje kodu, adı veya türüyle ara"
+                    maxVisible={60}
+                  />
                 </div>
                 <div className="col" style={{ gap: 6 }}>
                   <div className="label">WBS</div>
@@ -205,25 +277,24 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
 
             <Section title="Sorumlular">
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
-                {(local.sorumlu || []).map((s) =>
-                  <span key={s} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
-                    <Avatar name={s} size="sm" />
-                    <span style={{ fontSize: 12 }}>{s}</span>
-                    <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => save({ sorumlu: local.sorumlu.filter((x) => x !== s) })}><Icons.Close size={10} /></button>
+                {selectedAssignees.map((record) => (
+                  <span key={`${record.id}:${record.name}`} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
+                    <Avatar name={record.name} size="sm" />
+                    <span style={{ fontSize: 12 }}>{record.name}</span>
+                    <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>
                   </span>
-                )}
-                <select
-                  className="input" style={{ width: 'auto', padding: '4px 8px' }}
-                  value=""
-                  onChange={(e) => { if (e.target.value && !local.sorumlu.includes(e.target.value)) save({ sorumlu: [...local.sorumlu, e.target.value] }); }}
-                >
-                  <option value="">+ Ekle</option>
-                  {people.filter((p) => !local.sorumlu.includes(p.name))
-                    .slice()
-                    .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-                    .map((p) => <option key={p.id} value={p.name}>{personLabel(p)}</option>)}
-                </select>
+                ))}
               </div>
+              <SearchableSelect
+                value=""
+                options={personOptions}
+                onChange={addAssignee}
+                placeholder="+ Sorumlu ekle"
+                searchPlaceholder="Ad, sicil, unvan veya birimle ara"
+                emptyText="Eklenebilecek başka personel bulunamadı."
+                maxVisible={60}
+                compact
+              />
             </Section>
 
             <Section title="Güncel Plan">
