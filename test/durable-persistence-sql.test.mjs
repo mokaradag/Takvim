@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const createSql = readFileSync(new URL('../database/MR_Create_Durable_Persistence.sql', import.meta.url), 'utf8');
 const rollbackSql = readFileSync(new URL('../database/MR_Rollback_Durable_Persistence.sql', import.meta.url), 'utf8');
+const portfolioMigrationSql = readFileSync(new URL('../database/MR_Migrate_0002_Project_Portfolio_Scaling.sql', import.meta.url), 'utf8');
 
 function captures(source, expression) {
   return new Set([...source.matchAll(expression)].map((match) => match[1].toUpperCase()));
@@ -51,7 +52,7 @@ test('corporate source tables are never mutated', () => {
   for (const source of sourceTables) {
     for (const verb of ['INSERT\\s+(?:INTO\\s+)?', 'UPDATE\\s+', 'DELETE\\s+(?:FROM\\s+)?', 'DROP\\s+TABLE\\s+', 'ALTER\\s+TABLE\\s+']) {
       const expression = new RegExp(`${verb}(?:dbo\\.)?${source}`, 'i');
-      assert.equal(expression.test(`${createSql}\n${rollbackSql}`), false, `${source} must be read-only`);
+      assert.equal(expression.test(`${createSql}\n${rollbackSql}\n${portfolioMigrationSql}`), false, `${source} must be read-only`);
     }
   }
 });
@@ -68,9 +69,11 @@ test('corporate Project view uses only approved A01 columns and GROUP BY', () =>
   for (const forbidden of ['Masraf', 'Butce', 'Tarih', 'Aciklama2']) assert.equal(identifiers.includes(forbidden), false);
 });
 
-test('PPTC access uses exact STRING_SPLIT tokenization and never LIKE', () => {
+test('PPTS access uses exact STRING_SPLIT tokenization and never LIKE', () => {
   const view = createSql.match(/CREATE VIEW dbo\.MR_V_CorporateProjectAccess AS([\s\S]*?);'\);/i)?.[0] || '';
-  assert.match(view, /STRING_SPLIT\(pptcSicil,\s*'',''\)/i);
+  assert.match(view, /STRING_SPLIT\(pptsSicil,\s*'',''\)/i);
+  assert.match(view, /''PPTS''/);
+  assert.doesNotMatch(view, /''PPTC''/);
   assert.match(view, /TRY_CONVERT\(int,\s*LTRIM\(RTRIM\(value\)\)\)/i);
   assert.doesNotMatch(view, /LIKE\s+['"]%/i);
 });
