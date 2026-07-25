@@ -63,7 +63,10 @@ function hydrateDeletes(entries = [], knownVersions) {
 
 // Sunucu, sürümü bulunan kayıtları güncelleme; sürümsüz kayıtları oluşturma niyeti olarak yorumlar.
 // Arayüzdeki kısmi nesneler sürüm alanını düşürse bile mevcut kayıtların oluşturma sanılmasını önleriz.
-export function hydrateKnownVersions(changes = {}, state = {}) {
+export function hydrateKnownVersions(changes, state = {}) {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    throw new TypeError('Kalıcılaştırma değişiklik kümesi geçerli bir nesne olmalıdır.');
+  }
   const projectVersions = versionMap(state.projects);
   const taskVersions = versionMap(state.tasks);
   const wbsVersions = versionMap(state.wbs);
