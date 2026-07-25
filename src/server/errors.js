@@ -16,6 +16,7 @@ export class ServerPersistenceError extends Error {
 }
 
 export function safeErrorResponse(error) {
+  console.error('MERGEN ROTA SERVER ERROR:', error);
   const known = error instanceof ServerPersistenceError;
   return Response.json({
     error: {
