@@ -41,4 +41,13 @@ jobs:
           name: test-results
           path: test-results.xml
       - name: Build production application
-        run: npm run build
+        id: production-build
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build-output.log
+      - name: Upload production build log
+        if: failure() && steps.production-build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-build-log
+          path: build-output.log
