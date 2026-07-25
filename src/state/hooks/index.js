@@ -44,7 +44,22 @@ export function useDataLifecycle() {
     clearPersistenceError: state.actions.clearPersistenceError
   };
 }
-export function useTaskActions() { return useAppState().actions; }
+
+export function normalizeTaskCreationInput(input) {
+  if (!input || typeof input !== 'object') return input;
+  const browserEvent = Boolean(input.nativeEvent)
+    || (typeof input.preventDefault === 'function' && input.currentTarget && input.target);
+  return browserEvent ? undefined : input;
+}
+
+export function useTaskActions() {
+  const actions = useAppState().actions;
+  return {
+    ...actions,
+    // Düğmenin tıklama olayı yanlışlıkla görev verisi olarak iletilse bile kayıt yüküne girmez.
+    addTask: (input) => actions.addTask(normalizeTaskCreationInput(input))
+  };
+}
 export function useWbsActions() {
   const state = useAppState();
   return {
