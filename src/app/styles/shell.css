@@ -42,6 +42,8 @@
   gap: 6px;
 }
 .sidebar-footer-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Portföye dönüş, proje çalışma alanı seçiliyken kenar çubuğunda görünür. */
+.workspace-back-btn { width: 100%; justify-content: center; gap: 6px; }
 .sidebar-version { padding: 0 4px; font-size: 9.5px; color: var(--text-dim); letter-spacing: .04em; }
 .sidebar-simple-mode {
   margin: 0 12px 12px;
@@ -243,4 +245,44 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   }
   .topbar-project-code { padding: 0 6px; font-size: 9.5px; }
   .topbar-project-context strong.topbar-project-name { padding: 0 7px 0 5px; font-size: 12.5px; }
+}
+
+/* Kalıcılaştırma bildirimi: sağ alt köşenin tek sahibi. */
+.persistence-status {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: var(--z-popover);
+  width: min(400px, calc(100vw - 32px));
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+}
+.persistence-status.is-error {
+  border-color: color-mix(in oklab, var(--status-overdue) 55%, var(--border));
+  background: color-mix(in oklab, var(--status-overdue) 7%, var(--bg-elev));
+}
+.persistence-status-line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+.persistence-status-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--status-overdue);
+  font-size: 12.5px;
+}
+.persistence-status-head strong { flex: 1; }
+.persistence-status-message {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.persistence-status-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+.persistence-status-meta .badge { font-size: 9.5px; letter-spacing: .04em; }
+
+@media (max-width: 760px) {
+  .persistence-status { right: 10px; bottom: 10px; }
 }

@@ -95,7 +95,26 @@ test('Gerçek Sistem istemcisi geçersiz değişiklik kimliğini API çağrısı
     wbsDeletes: [],
     taskUpserts: [{ id: 'task-invalid', projectId: `project-${UUID}`, deps: [] }],
     taskDeletes: []
-  }), /Görev kimliği geçerli UUID olmalıdır/);
+  }), /Görev kimliği geçerli bir Gerçek Sistem kimliği \(UUID\) değil/);
+});
+
+test('Gerçek Sistem kimlik hatası hangi kaydın hatalı olduğunu iletide açıklar', () => {
+  try {
+    normalizeActualChanges({
+      projectUpserts: [{ id: 'PRJ-WEB-001', calendarId: null }],
+      projectDeletes: [],
+      wbsUpserts: [],
+      wbsDeletes: [],
+      taskUpserts: [],
+      taskDeletes: []
+    });
+    assert.fail('geçersiz proje kimliği reddedilmeliydi');
+  } catch (error) {
+    assert.match(error.message, /Proje kimliği/);
+    assert.match(error.message, /"PRJ-WEB-001"/, 'hatalı değer iletide görünmelidir');
+    assert.equal(error.details.code, 'ACTUAL_ID_INVALID');
+    assert.equal(error.details.value, 'PRJ-WEB-001');
+  }
 });
 
 test('uzun proje ve personel seçim noktaları canlı arama bileşenini kullanır', () => {

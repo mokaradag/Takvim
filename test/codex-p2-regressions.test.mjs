@@ -87,11 +87,32 @@ test('dependency persistence generates a fresh relationship row ID instead of re
 });
 
 test('data mode switch remains visible when the data boundary renders a load error', () => {
-  const source = read('src/components/shell/ApplicationRoot.jsx');
-  const indicatorIndex = source.indexOf('<DataModeIndicator />');
-  const boundaryIndex = source.indexOf('<AppDataBoundary>');
-  assert.ok(indicatorIndex > 0, 'DataModeIndicator must be rendered');
-  assert.ok(boundaryIndex > indicatorIndex, 'DataModeIndicator must be outside and before AppDataBoundary');
+  // Anahtar sağ alt köşeden kenar çubuğu altbilgisine taşındı; kabuk render
+  // edilemediğinde veri sınırı ekranı kendi kopyasını göstermek zorundadır.
+  const boundary = read('src/components/shell/AppDataBoundary.jsx');
+  const shell = read('src/components/shell/AppShell.jsx');
+  const root = read('src/components/shell/ApplicationRoot.jsx');
+
+  assert.match(boundary, /<DataModeIndicator variant="boundary" \/>/);
+  assert.match(shell, /<DataModeIndicator variant="sidebar" \/>/);
+  assert.ok(
+    shell.indexOf('<DataModeIndicator variant="sidebar" />') > shell.indexOf('className="sidebar-footer"'),
+    'sidebar switch must live in the sidebar footer'
+  );
+  assert.doesNotMatch(root, /<DataModeIndicator/);
+});
+
+test('data mode switch no longer occupies the persistence toast corner', () => {
+  const experience = read('src/app/styles/experience.css');
+  const shellCss = read('src/app/styles/shell.css');
+  const indicatorBlock = experience.slice(
+    experience.indexOf('.data-mode-indicator {'),
+    experience.indexOf('.data-mode-current {')
+  );
+
+  assert.doesNotMatch(indicatorBlock, /position:\s*fixed/);
+  assert.doesNotMatch(indicatorBlock, /bottom:/);
+  assert.match(shellCss, /\.persistence-status \{[^}]*position:\s*fixed/s);
 });
 
 test('persisted task updates include ProjectId so project reassignment is not silently lost', () => {
@@ -142,9 +163,30 @@ test('mode switching flushes pending coalesced edits and waits for the ordered m
 });
 
 test('project creation does not append the committed root WBS a second time', () => {
+  // Yetkili değişiklik kümesi indirgeyicide kimlik üzerinden uygulanır; aynı kök
+  // düğüm iki kez işlense bile durumda tek kayıt kalır.
+  const state = createInitialState({
+    calendars: [],
+    projects: [{ id: PROJECT_ID, name: 'Proje', color: 'blue', version: 'v1' }],
+    people: [],
+    wbs: [{ id: WBS_ID, projectId: PROJECT_ID, parentId: null, code: '1', name: 'Proje', version: 'v1' }],
+    tasks: [],
+    baselines: [],
+    taskBaselineSnapshots: []
+  });
+  const committed = {
+    projectUpserts: [{ id: PROJECT_ID, name: 'Proje', color: 'blue', version: 'v2' }],
+    wbsUpserts: [{ id: WBS_ID, projectId: PROJECT_ID, parentId: null, code: '1', name: 'Proje', version: 'v2' }]
+  };
+
+  const once = appStateReducer(state, { type: 'data/apply-changes', changes: committed });
+  const twice = appStateReducer(once, { type: 'data/apply-changes', changes: committed });
+
+  assert.equal(twice.wbs.filter((node) => node.id === WBS_ID).length, 1);
+  assert.equal(twice.projects.filter((project) => project.id === PROJECT_ID).length, 1);
+  assert.equal(twice.projects[0].version, 'v2', 'authoritative project version must replace the stale one');
+
   const source = read('src/state/AppStateProvider.jsx');
-  assert.match(source, /projects: mergeUpserts\(latest\.projects, \[committedProject\]\)/);
-  assert.match(source, /wbs: latest\.wbs/);
   assert.doesNotMatch(source, /const committedRoot/);
   assert.doesNotMatch(source, /wbs: \[\.\.\.latest\.wbs, committedRoot\]/);
 });

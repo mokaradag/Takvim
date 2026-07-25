@@ -6,7 +6,11 @@ Bu belge, MERGEN Rota'nın yüzlerce proje ve binlerce personel bulunan Gerçek 
 
 Proje veya personel seçen uzun listeler yerel HTML `select` alanları yerine canlı arama destekli `SearchableSelect` bileşenini kullanır. Arama Türkçe yerel ayarına göre çalışır ve proje kodu, proje adı, proje türü; personelde ise ad, sicil, unvan ve organizasyon alanlarını tarar. Sonuç listesi sınırlı sayıda kayıt oluşturur; daha ayrıntılı arama yapıldıkça liste daralır.
 
-`Aktif çalışma alanı`, Basit Mod proje seçimi, Yeni Proje sorumlusu ve Proje Tanımı içindeki manuel proje sorumlusu bu ortak davranışı kullanır.
+`Aktif çalışma alanı`, Basit Mod proje seçimi, Yeni Proje sorumlusu, Proje Tanımı içindeki manuel proje sorumlusu, görev çekmecesindeki proje/sorumlu/WBS/etiket/öncül görev seçimleri ve iş dağılım ağacındaki taşıma/üst düğüm seçimleri bu ortak davranışı kullanır.
+
+Ham `<select>` yalnızca sabit ve kısa numaralandırmalar için kalır: ilişki türü (FS/SS/FF/SF), gecikme birimi ve takvimdeki ay/yıl seçimi.
+
+Açılır panelin yerleşim ve katman sözleşmesi `SIMPLE-MODE-AND-UI.md` içinde tanımlanır. Panel `document.body` altına taşınır; bu sayede kenar çubuğunun `overflow: hidden` kırpması ve yığın bağlamı listeyi etkilemez.
 
 ## Proje türleri
 
@@ -59,11 +63,21 @@ Ekip görünümü tüm personel için büyük kartlar oluşturmaz. Başlangıç 
 
 Görev sayıları tek geçişte personel kimliğine göre dizinlenir. Böylece eski `personel × görev` taraması yerine yaklaşık `personel + atama` maliyetli hesaplama kullanılır. Personel sonuçları artımlı yüklenir.
 
+## Görev sorumlusu ataması
+
+Görev sorumluları **Sicil kimliğiyle** tutulur; ad yalnızca görüntüleme amaçlıdır. Bir güncelleme yaması açık `assigneeIds` alanı taşıdığında bu kimlikler kesin kaynaktır ve adlardan yeniden türetilmez.
+
+Bu ayrım binlerce çalışanın bulunduğu dizinde zorunludur: ad eşlemesi (`indexByUniqueName`) aynı ada sahip kişileri belirsizlik nedeniyle **eler**. Yama yalnızca ad listesi taşıdığında, aynı adı paylaşan bir çalışana yapılan atama sessizce kayboluyordu. Aynı nedenle görev çekmecesindeki sorumlu listesi de seçili kişileri yalnızca Sicil kimliğine göre eler; ad eşlemesi sadece kimliği çözülemeyen eski kayıtlar için kullanılır.
+
+Yalnızca `sorumlu` (ad listesi) gönderen eski çağrılarda kimlik türetme davranışı korunur.
+
 ## Kayıt güvenilirliği
 
-Gerçek Sistem kayıtları için iki koruma uygulanır:
+Gerçek Sistem kayıtları için şu korumalar uygulanır:
 
 - Var olan proje, WBS ve görev nesnelerinde arayüzün düşürdüğü `version` alanı, commit öncesinde mevcut durumdan geri yüklenir. Böylece güncelleme işlemi yanlışlıkla oluşturma olarak yorumlanmaz ve “Kayıt kimliği zaten kullanılıyor” çatışması oluşmaz.
-- Gerçek Sistem istemcisi proje, WBS, görev, takvim ve bağımlılık kimliklerini API isteğinden önce UUID olarak doğrular. İstemci ön ekli kimliklerin sonundaki UUID güvenli biçimde ayrıştırılır.
+- Commit yanıtındaki yetkili satırlar **proje kayıtları dâhil** duruma uygulanır. Aksi hâlde proje sürüm anahtarı eskir ve aynı projenin ikinci güncellemesi (örneğin `Proje rengi` değişikliği) oluşturma çakışması olarak reddedilir. Depo projeyi hiç yankılamazsa sürümsüz yerel kopya saklanmaz; yetkili anlık görüntü yeniden yüklenir.
+- Gerçek Sistem istemcisi proje, WBS, görev, takvim ve bağımlılık kimliklerini API isteğinden önce UUID olarak doğrular. İstemci ön ekli kimliklerin sonundaki UUID güvenli biçimde ayrıştırılır. Doğrulama başarısız olduğunda ileti hangi alanın hatalı olduğunu ve **alınan değeri** açıkça belirtir; genel bir “geçerli UUID olmalıdır” uyarısı sorunlu kaydın bulunmasını imkânsız kılıyordu.
+- İkincil yazmalar asıl işlemi engellemez. Basit Modda etiket kataloğuna ekleme başarısız olsa bile görev kaydı oluşturulur ve kullanıcıya uyarı gösterilir.
 
 Görev oluşturma eylemine yanlışlıkla React tıklama olayı geçirilmesi de eylem kancasında ayıklanır.

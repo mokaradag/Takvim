@@ -33,15 +33,6 @@ function firstFailedResult(results = []) {
   return results.find((result) => result && !result.ok) || null;
 }
 
-function mergeUpserts(items = [], upserts = []) {
-  const byId = new Map(upserts.map((item) => [item.id, item]));
-  const currentIds = new Set(items.map((item) => item.id));
-  return [
-    ...items.map((item) => byId.get(item.id) || item),
-    ...upserts.filter((item) => !currentIds.has(item.id))
-  ];
-}
-
 function rejectedWrite(operation, issue) {
   return Promise.resolve(projectWriteFailure(operation, issue));
 }
@@ -205,7 +196,11 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return result.ok ? { ...result, value: created } : result;
   }, [applyStateAction, persistence]);
 
-  const addProject = useCallback(async (input) => {
+  // `focusWorkspace` yeni projeyi etkin çalışma alanı yapar. Basit Mod bunu kapatır:
+  // çalışma alanı değişimi uygulama kabuğunda içerik alanını yeniden monte ettiği
+  // için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu
+  // ne de hatayı görebiliyordu.
+  const addProject = useCallback(async (input, { focusWorkspace = true } = {}) => {
     const flushResult = await persistence.flush();
     if (!flushResult.ok) return flushResult;
 
@@ -225,30 +220,36 @@ export function AppStateProvider({ children, repository = appRepository }) {
     const result = await persistence.commitChanges('project/create', prepared.changes);
     if (!result.ok) return result;
 
-    const committedProject = result.value?.projectUpserts?.find((projectValue) => projectValue.id === prepared.project.id)
-      || prepared.project;
+    const committedProject = result.value?.projectUpserts?.find((projectValue) => projectValue.id === prepared.project.id) || null;
+    if (!committedProject) {
+      // Depo yeni projeyi yankılamadıysa yerel kayıtta sürüm anahtarı bulunmaz.
+      // Sürümsüz bir kaydı durumda tutmak, sonraki her güncellemenin sunucu
+      // tarafında "oluşturma" sanılmasına ve çakışmayla reddedilmesine yol açar.
+      await reloadData();
+    } else if (!stateRef.current.projects.some((projectValue) => projectValue.id === committedProject.id)) {
+      applyStateAction({ type: 'data/apply-changes', changes: { projectUpserts: [committedProject] } });
+    }
+
     const latest = stateRef.current;
+    const storedProject = latest.projects.find((projectValue) => projectValue.id === prepared.project.id)
+      || committedProject
+      || prepared.project;
+    const rootWbs = latest.wbs.find(
+      (node) => node.projectId === storedProject.id && node.parentId == null
+    ) || result.value?.wbsUpserts?.find(
+      (node) => node.projectId === storedProject.id && node.parentId == null
+    ) || null;
 
-    applyStateAction({
-      type: 'data/load-success',
-      snapshot: {
-        calendars: latest.calendars,
-        projects: mergeUpserts(latest.projects, [committedProject]),
-        people: latest.people,
-        wbs: latest.wbs,
-        tasks: latest.tasks,
-        baselines: latest.baselines,
-        taskBaselineSnapshots: latest.taskBaselineSnapshots
-      }
-    });
-    applyStateAction({
-      type: 'workspace/select',
-      workspaceMode: WORKSPACE_MODE_PROJECT,
-      selectedProjectId: committedProject.id
-    });
+    if (focusWorkspace) {
+      applyStateAction({
+        type: 'workspace/select',
+        workspaceMode: WORKSPACE_MODE_PROJECT,
+        selectedProjectId: storedProject.id
+      });
+    }
 
-    return { ok: true, value: committedProject, changes: result.value };
-  }, [applyStateAction, persistence]);
+    return { ok: true, value: storedProject, rootWbs, changes: result.value };
+  }, [applyStateAction, persistence, reloadData]);
 
   const updateProject = useCallback(async (projectId, input) => {
     const flushResult = await persistence.flush();
@@ -269,31 +270,22 @@ export function AppStateProvider({ children, repository = appRepository }) {
     if (!result.ok) return result;
 
     const committed = result.value || {};
+    if (!committed.projectUpserts?.length) {
+      // Sunucu güncellenen projeyi yankılamadıysa elimizdeki sürüm anahtarı artık
+      // eskimiştir; yerel kopyayı yazmak yerine yetkili anlık görüntü yeniden yüklenir.
+      await reloadData();
+    } else if (!committed.taskUpserts?.length && changes.taskUpserts?.length) {
+      // Etiket kataloğu yeniden adlandırıldığında görev kayıtları da yerel olarak hizalanır.
+      applyStateAction({ type: 'data/apply-changes', changes: { taskUpserts: changes.taskUpserts } });
+    }
+
     const latest = stateRef.current;
-    const projectUpserts = committed.projectUpserts?.length ? committed.projectUpserts : changes.projectUpserts;
-    const taskUpserts = committed.taskUpserts?.length ? committed.taskUpserts : changes.taskUpserts;
-    const wbsUpserts = committed.wbsUpserts?.length ? committed.wbsUpserts : changes.wbsUpserts;
-    const projects = mergeUpserts(latest.projects, projectUpserts);
-
-    applyStateAction({
-      type: 'data/load-success',
-      snapshot: {
-        calendars: latest.calendars,
-        projects,
-        people: latest.people,
-        wbs: mergeUpserts(latest.wbs, wbsUpserts),
-        tasks: mergeUpserts(latest.tasks, taskUpserts),
-        baselines: latest.baselines,
-        taskBaselineSnapshots: latest.taskBaselineSnapshots
-      }
-    });
-
     return {
       ok: true,
-      value: projects.find((projectValue) => projectValue.id === projectId) || prepared.project,
+      value: latest.projects.find((projectValue) => projectValue.id === projectId) || prepared.project,
       changes: committed
     };
-  }, [applyStateAction, persistence]);
+  }, [applyStateAction, persistence, reloadData]);
 
   const selectWorkspace = useCallback((projectId) => {
     applyStateAction({

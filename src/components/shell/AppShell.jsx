@@ -31,6 +31,7 @@ import { useApplyTweaks } from '../../hooks/useApplyTweaks';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
+import { DataModeIndicator } from './DataModeIndicator';
 import { ModeChooser } from './ModeChooser';
 import { NAV_ITEMS, PAGE_META } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
@@ -253,8 +254,16 @@ export default function AppShell() {
               ariaLabel="Portföy veya proje çalışma alanı seç"
               maxVisible={70}
               compact
+              allowClear
+              clearLabel="Portföye dön (tüm projeler)"
               style={{ width: '100%', fontSize: 12.5 }}
             />
+            {/* Proje çalışma alanından portföye tek tıkla dönüş. */}
+            {workspaceMode === 'project' && (
+              <button type="button" className="btn ghost sm workspace-back-btn" onClick={() => selectWorkspace(null)}>
+                <Icons.ArrowLeft size={12} /> Portföye dön
+              </button>
+            )}
             {archivedProjectCount > 0 && (
               <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, cursor: 'pointer' }}>
                 <input
@@ -306,6 +315,7 @@ export default function AppShell() {
         </nav>
 
         <div className="sidebar-footer">
+          <DataModeIndicator variant="sidebar" />
           <div className="sidebar-footer-row">
             <div className="user-chip">
               <Avatar name="Zeynep Aydın" size="md" />

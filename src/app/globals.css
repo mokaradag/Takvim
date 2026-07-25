@@ -42,7 +42,7 @@
   --pad-cell-y: calc(10px * var(--density));
   --pad-cell-x: 14px;
 
-  /* Layering contract: base < sticky < chrome < popover < drawer < modal < tooltip. */
+  /* Katman sözleşmesi: base < sticky < chrome < popover < drawer < modal < select < tooltip. */
   --z-base: 0;
   --z-sticky: 20;
   --z-chrome: 100;
@@ -51,6 +51,8 @@
   --z-drawer: 310;
   --z-command: 400;
   --z-modal: 500;
+  /* Aranabilir seçim panelleri gövdeye taşınır; kip pencerelerinin de üstünde kalmalıdır. */
+  --z-select-popover: 550;
   --z-tooltip: 600;
 }
 

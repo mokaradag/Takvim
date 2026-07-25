@@ -48,6 +48,7 @@ export const Icons = {
   Sparkle: (p) => <Icon {...p} d='<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>' />,
   Layers: (p) => <Icon {...p} d='<path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m21 12-9 5-9-5"/><path d="m21 17-9 5-9-5"/>' />,
   ArrowRight: (p) => <Icon {...p} d='<path d="M5 12h14M13 5l7 7-7 7"/>' />,
+  ArrowLeft: (p) => <Icon {...p} d='<path d="M19 12H5M11 19l-7-7 7-7"/>' />,
   Menu: (p) => <Icon {...p} d='<path d="M3 6h18M3 12h18M3 18h18"/>' />,
   Compass: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><polygon points="15.6 8.4 13.3 13.3 8.4 15.6 10.7 10.7 15.6 8.4"/>' />,
   Database: (p) => <Icon {...p} d='<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>' />,

@@ -6,7 +6,6 @@ import AppShell from './AppShell';
 import { AppDataBoundary } from './AppDataBoundary';
 import { DataModeChooser } from './DataModeChooser';
 import { DataModeContext } from './DataModeContext';
-import { DataModeIndicator } from './DataModeIndicator';
 import { PersistenceStatus } from './PersistenceStatus';
 import { PresentationPolish } from './PresentationPolish';
 
@@ -45,7 +44,8 @@ export default function ApplicationRoot() {
   return (
     <DataModeContext.Provider value={{ dataMode, setDataMode }}>
       <AppStateProvider key={dataMode} repository={repository}>
-        <DataModeIndicator />
+        {/* Veri modu anahtarı kenar çubuğu altbilgisinde yaşar; yalnızca kabuk
+            render edilemediğinde AppDataBoundary geçici bir anahtar gösterir. */}
         <AppDataBoundary>
           <PresentationPolish />
           <AppShell />

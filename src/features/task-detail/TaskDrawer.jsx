@@ -69,6 +69,13 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     const projectWbs = allWbs.filter((node) => node.projectId === local.projectId);
     return flattenWbsTree(buildWbsTree(projectWbs));
   }, [allWbs, local.projectId]);
+  // Büyük projelerde dağılım ağacı yüzlerce düğüm içerebilir; liste canlı aramayla sunulur.
+  const wbsOptions = useMemo(() => projectWbsRows.map(({ node, depth }) => ({
+    value: node.id,
+    label: `${'— '.repeat(depth)}${node.code} · ${node.name}`,
+    description: formatWbsPath(allWbs, node.id),
+    keywords: [node.code, node.name]
+  })), [projectWbsRows, allWbs]);
 
   const projectOptions = useMemo(() => {
     const listed = visibleProjects(projects);
@@ -110,9 +117,12 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
 
   const personOptions = useMemo(() => {
     const selectedIds = new Set(selectedAssignees.map((record) => String(record.id)));
-    const selectedNames = new Set(selectedAssignees.map((record) => record.name));
+    // Yalnızca Sicil kimliğiyle eşleşmeyen (eski ad tabanlı) kayıtlar için ad
+    // eşlemesi kullanılır. Aksi hâlde aynı ada sahip ikinci bir çalışan listeden
+    // düşer ve göreve hiçbir zaman atanamazdı.
+    const legacyNames = new Set(selectedAssignees.filter((record) => !record.person).map((record) => record.name));
     return people
-      .filter((person) => !selectedIds.has(String(person.id)) && !selectedNames.has(person.name))
+      .filter((person) => !selectedIds.has(String(person.id)) && !legacyNames.has(person.name))
       .slice()
       .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
       .map((person) => ({
@@ -243,32 +253,31 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                 </div>
                 <div className="col" style={{ gap: 6 }}>
                   <div className="label">WBS</div>
-                  <select
-                    className="input"
+                  <SearchableSelect
                     value={local.wbsId || ''}
-                    onChange={(e) => save({ wbsId: e.target.value || null })}
+                    options={wbsOptions}
+                    onChange={(wbsId) => save({ wbsId: wbsId || null })}
+                    placeholder="WBS seçilmedi"
+                    searchPlaceholder="WBS kodu veya adıyla ara"
+                    emptyText="Bu projede dağılım düğümü bulunamadı."
                     disabled={!local.projectId || projectWbsRows.length === 0}
-                  >
-                    <option value="">WBS seçilmedi</option>
-                    {projectWbsRows.map(({ node, depth }) => (
-                      <option key={node.id} value={node.id}>
-                        {`${'— '.repeat(depth)}${formatWbsPath(allWbs, node.id)}`}
-                      </option>
-                    ))}
-                  </select>
+                    maxVisible={60}
+                  />
                 </div>
               </div>
               <div className="col" style={{ gap: 6 }}>
                 <div className="label">Etiket</div>
-                <select
-                  className="input"
+                <SearchableSelect
                   value={local.keyword || ''}
-                  onChange={(e) => save({ keyword: e.target.value })}
+                  options={projectTags.map((tag) => ({ value: tag, label: tag, keywords: [tag] }))}
+                  onChange={(keyword) => save({ keyword })}
+                  placeholder={projectTags.length ? 'Etiket seçin' : 'Önce Proje Yapısı sayfasında etiket tanımlayın'}
+                  searchPlaceholder="Etiket adıyla ara"
+                  emptyText="Eşleşen etiket bulunamadı."
                   disabled={!local.projectId || projectTags.length === 0}
-                >
-                  <option value="">{projectTags.length ? 'Etiket seçin' : 'Önce Proje Yapısı sayfasında etiket tanımlayın'}</option>
-                  {projectTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
-                </select>
+                  allowClear
+                  clearLabel="Etiketi kaldır"
+                />
                 <div className="muted" style={{ fontSize: 11.5 }}>
                   Görev etiketi serbest metin değildir; seçili projenin kontrollü etiket kataloğundan açıkça seçilir.
                 </div>
@@ -406,9 +415,20 @@ function Section({ title, info, children }) {
 }
 
 function RelEditor({ task, tasks, onChange }) {
-  const deps = task.deps || [];
+  const deps = useMemo(() => task.deps || [], [task.deps]);
   const others = tasks.filter((t) => t.id !== task.id && (!task.projectId || t.projectId === task.projectId));
   const [selectedType, setSelectedType] = useState('FS');
+  // Öncül görev listesi de büyük projelerde canlı arama gerektirir.
+  const predecessorOptions = useMemo(() => others
+    .filter((candidate) => !deps.some((dependency) => depId(dependency) === candidate.id))
+    .slice()
+    .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
+    .map((candidate) => ({
+      value: candidate.id,
+      label: candidate.task,
+      description: candidate.keyword || null,
+      keywords: [candidate.task, candidate.keyword, candidate.projectCode]
+    })), [others, deps]);
 
   const updateDep = (idx, patch) => {
     const next = deps.map((d, i) => {
@@ -500,19 +520,16 @@ function RelEditor({ task, tasks, onChange }) {
             <option key={rt.code} value={rt.code}>{rt.code}</option>
           )}
         </select>
-        <select
-          className="input"
+        <SearchableSelect
           value=""
-          onChange={(e) => { addDep(e.target.value, selectedType); e.target.value = ''; }}
-        >
-          <option value="">+ Öncül görev seçin...</option>
-          {others.filter((t) => !deps.some((d) => depId(d) === t.id))
-            .slice()
-            .sort((a, b) => a.task.localeCompare(b.task, 'tr'))
-            .map((t) =>
-              <option key={t.id} value={t.id}>{t.task}</option>
-            )}
-        </select>
+          options={predecessorOptions}
+          onChange={(taskId) => addDep(taskId, selectedType)}
+          placeholder="+ Öncül görev seçin..."
+          searchPlaceholder="Görev adı veya etiketiyle ara"
+          emptyText="Eklenebilecek başka öncül görev yok."
+          maxVisible={60}
+          compact
+        />
       </div>
     </div>
   );

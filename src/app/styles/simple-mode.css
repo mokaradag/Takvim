@@ -30,6 +30,9 @@
 .simple-message { flex: 1; padding: 8px 10px; border-radius: var(--r-md); font-size: 11.5px; }
 .simple-message.success { color: var(--status-done); background: color-mix(in oklab, var(--status-done) 10%, transparent); }
 .simple-message.error { color: var(--status-overdue); background: color-mix(in oklab, var(--status-overdue) 10%, transparent); }
+/* Kayıt başarılı ancak ikincil bir yazma (etiket kataloğu) tamamlanamadı. */
+.simple-message.warning { color: var(--c-amber); background: color-mix(in oklab, var(--c-amber) 12%, transparent); }
+.simple-project-back { grid-column: 1 / -1; justify-self: start; }
 .simple-save { min-width: 130px; justify-content: center; }
 
 /* Basit Mod Takvim sayfası: Takvim varsayılan, hızlı giriş ayrı sekmede. */
