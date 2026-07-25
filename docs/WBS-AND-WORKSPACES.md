@@ -67,7 +67,13 @@ projectId
 parentId
 code
 name
-sortOrder?    // optional deterministic sibling-order hint
+sortOrder?         // optional deterministic sibling-order hint
+source             // "manual" | "corporate"
+sourceKey?         // corporate WBS element code (CN43N "WBS element")
+outlineCode?       // corporate outline code (CN43N "PYP kodu", e.g. 1.3.2.5)
+level?             // corporate hierarchy level (CN43N "Level")
+statusCode?        // corporate element status (CN43N "Status")
+elementTypeCode?   // corporate element type (CN43N "Proj.type")
 ```
 
 `id` is the stable relationship key. `projectId` owns the node. `parentId` references another WBS node in the same Project or is `null` for a root.
@@ -75,6 +81,37 @@ sortOrder?    // optional deterministic sibling-order hint
 `sortOrder` is optional. Display ordering falls back deterministically to WBS code, name and stable ID.
 
 WBS nodes are structural entities. They are not Tasks and do not persist schedule rollups.
+
+`source` records who owns the structure. `manual` nodes are authored in MERGEN Rota. `corporate` nodes are mirrored from the corporate CN43N source and are read-only in the application; the remaining corporate fields carry the source attributes used for display.
+
+## 4.1 Corporate WBS source (CN43N)
+
+Corporate projects do not have an application-authored WBS. Their structure is fed from the corporate `CN43N` table, which lives in a **different database** than `MERGEN_Rota` and therefore has its own connection block in `.env.example` (`MERGEN_ROTA_WBS_DB_*`). Leaving `MERGEN_ROTA_WBS_DB_SERVER` / `..._DATABASE` empty disables the synchronization; corporate projects then show only their root node.
+
+Source columns and their mapping:
+
+| CN43N column | Meaning | MERGEN Rota target |
+| --- | --- | --- |
+| `Proje tanımı` | project code (same value as `projeKodu`) | join key to `MR_Projects.ProjectCode` |
+| `WBS element` | corporate WBS element code | `MR_WBS.SourceKey` and `MR_WBS.Code` |
+| `Name` | element name | `MR_WBS.Name` |
+| `Level` | hierarchy level (1 is directly below the project) | `MR_WBS.WbsLevel` |
+| `Kontrol kodu` | not used | — |
+| `Planlanan bşl.tarihi` | not used | — |
+| `Planlanan bitiş trm.` | not used | — |
+| `Status` | element status | `MR_WBS.StatusCode` |
+| `PYP kodu` | outline code, levels separated by full stops | `MR_WBS.OutlineCode` |
+| `Proj.type` | element type (two capital letters) | `MR_WBS.ElementTypeCode` |
+
+Synchronization rules:
+
+1. The project's root node stays MERGEN Rota-generated (`SourceKey` is `NULL`, `Code` is the project code) so the single-root invariant and existing Task references survive. CN43N level-1 elements attach to it.
+2. Parents are resolved from `PYP kodu` by dropping the last outline segment. Elements whose parent cannot be resolved — missing, malformed or cyclic outline codes — attach to the project root instead of being dropped.
+3. If the source lists the project itself as a WBS element, that row is not inserted as a node; its children fall back to the project root.
+4. New elements are inserted, changed elements are updated, and elements that disappear from the source are deleted **only** when no child node and no Task reference them. A corporate node that carries Tasks is therefore never removed silently.
+5. Synchronization runs on snapshot load, batched by project code. When the source database is unreachable the snapshot still loads: the failure is logged and corporate WBS is left as-is, because a second-database outage must not take the application down.
+
+Corporate WBS structure is read-only end to end: `resolveWbsMutationAccess` blocks the UI actions in Gerçek Sistem mode, and `commitWbs` / `deleteWbs` reject the mutation independently on the server. Assigning Tasks to corporate WBS nodes and moving Tasks between them stays allowed — the Task-to-WBS link is MERGEN Rota data, not corporate structure. In Demo mode there is no corporate source, so sample projects keep an editable tree.
 
 ## 5. WBS hierarchy rules
 
@@ -113,6 +150,8 @@ Project
 ```
 
 A WBS parent must belong to the same Project. A Task and its WBS must belong to the same Project. WBS names and Project names are display values, not relationship keys.
+
+Ownership comparisons use canonical Actual System identities (`src/domain/identity/actualId.js`). SQL Server returns `uniqueidentifier` values as upper-case text while the client sends lower-case, so raw string comparison used to reject valid writes with "Üst WBS aynı projede bulunmalıdır" or "Görev WBS kaydı aynı projede olmalıdır". Every layer now canonicalizes before comparing.
 
 The current mock data assigns every existing Task to a meaningful same-project WBS node while preserving the intentional cross-project dependency used to validate the CPM boundary.
 

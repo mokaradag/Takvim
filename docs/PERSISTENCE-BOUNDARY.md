@@ -242,11 +242,22 @@ LOAD_FAILED                   → data loading failure
 
 `wbsActionError` remains a WBS/domain error channel and is not reused for repository failures.
 
+## 11.1 Actual System identity canonicalization
+
+Actual mode identities are SQL Server `uniqueidentifier` values. Two rules are owned by `src/domain/identity/actualId.js` and used by every layer (client repository, commit validation, SQL repositories, authorization):
+
+1. **Any valid GUID is accepted.** RFC 4122 version and variant bits are not enforced, because corporate source systems emit GUIDs such as `D5D70AEC-0A88-F111-9136-00505699BACD`. A version-constrained pattern rejected every corporate project, WBS node and Task with `ACTUAL_ID_INVALID`.
+2. **The canonical form is lower case.** SQL Server returns identities as upper-case text while the client sends lower case, so raw `!==` comparisons on the server treated the same row as a different one. Snapshots emit canonical identities and server-side comparisons use `sameActualId()`.
+
+Client-generated identities keep their `task-`/`wbs-`/`project-` prefix locally; the API repository extracts and canonicalizes the GUID for the wire and restores the prefixed form from the alias map on the way back.
+
 ## 12. Reload and reconciliation
 
 `reloadData()` is the single application reload mechanism and is also used for initial-load retry.
 
 Before reload, pending Task patches are flushed and the ordered mutation queue is allowed to settle. The repository snapshot is then loaded and normalized.
+
+A reload does **not** tear down the application shell. `dataStatus` returns to `loading`, but `hasLoadedOnce` stays true after the first successful load, and `AppDataBoundary` therefore keeps the shell mounted and shows the blocking screen only for the initial load. Before this rule, every post-save refresh remounted `AppShell`, discarding view state and re-showing the welcome screen as if the application had just started. A failed refresh with data already present is reported in the persistence status area instead of replacing the application.
 
 After reload:
 

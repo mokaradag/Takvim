@@ -20,7 +20,11 @@ Canonical Task scheduling data uses `plannedStart`, `plannedFinish`, `plannedDur
 
 Stable relationships use IDs such as `projectId`, `assigneeIds`, `predecessorId`, `wbsId`, `baselineId` and `taskId`. The current mock adapter still retains non-scheduling legacy display fields such as `proje` and `sorumlu` where the UI uses them.
 
-WBS is a separate structural domain entity. Shared pure selectors own hierarchy construction, deterministic ordering, descendants, ancestors, paths, flattening and Task subtree rollups. Domain validation owns duplicate-ID, missing-parent, self-parent, cross-project-parent and cycle rules. A Task's `wbsId`, when present, must resolve to a WBS node owned by the same `projectId`.
+WBS is a separate structural domain entity. Shared pure selectors own hierarchy construction, deterministic ordering, descendants, ancestors, paths, flattening and Task subtree rollups. Domain validation owns duplicate-ID, missing-parent, self-parent, cross-project-parent and cycle rules. A Task's `wbsId`, when present, must resolve to a WBS node owned by the same `projectId`. A WBS node also records whether its structure is application-authored (`source: 'manual'`) or mirrored from the corporate CN43N source (`source: 'corporate'`, read-only).
+
+`identity/actualId.js` owns Actual System identity rules for every layer: which strings are valid SQL Server `uniqueidentifier` values (any GUID, without RFC 4122 version/variant constraints) and their canonical lower-case comparison form. Client, server and validation layers must not define private UUID patterns.
+
+`projectTypes.js` additionally owns the corporate/manual project distinction (`isCorporateProject`, `supportsManualWbsEditing`) used by write policies and the WBS UI.
 
 ### `src/scheduling`
 
@@ -98,6 +102,12 @@ Task Detail edits current-plan, target, actual, remaining-duration, Project and 
 
 `components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen and logo. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
 
+### Server layer (`src/server`)
+
+Server-only identity, authorization, SQL configuration and durable repositories. Two connection pools exist: `db/pool.js` for the MERGEN Rota database and `db/corporateWbsPool.js` for the separate corporate WBS (CN43N) database. Both resolve the native driver through `db/driver.js`, which also exposes the test-only injection seam used by end-to-end persistence tests.
+
+Corporate WBS synchronization is split into a pure projection module (`repository/corporateWbsProjection.js`, CN43N rows → hierarchy plan), the SQL text (`repository/corporateWbsQueries.js`) and the orchestration (`repository/corporateWbsSync.js`). Hierarchy resolution is therefore testable without a database.
+
 ### Presentation and styling ownership
 
 Presentation follows the same ownership rule as domain, scheduling, data and state architecture: current behavior is defined by the component or feature that owns it, not by a chronological override chain. `src/app/globals.css` owns global tokens/base primitives; `src/app/styles/shell.css` owns application chrome; `dashboard.css` owns Dashboard structure; `components.css` owns shared visual/component, form and table contracts; `features.css` owns Gantt, WBS and Task Detail layout sections; `simple-mode.css` owns Basit Mod; and `experience.css` owns mode/settings/help presentation.
@@ -108,7 +118,7 @@ Shared layer tokens define sticky, chrome, popover, drawer, modal and tooltip or
 
 ## Adding new work
 
-- Project/Task/WBS/Baseline business rules: `src/domain`
+- Project/Task/WBS/Baseline business rules and Actual System identity rules: `src/domain`
 - Date, dependency, calendar, current-plan duration or CPM calculations: `src/scheduling`
 - Repository contracts, memory/API/database adapters and migration boundaries: `src/data`
 - Global client orchestration, async persistence commands, workspace selection and derived application projections: `src/state`
@@ -124,7 +134,7 @@ Stored schedule data and calculated schedule data have deliberately different se
 - management target: mutable `targetFinish`, not a CPM constraint;
 - actuals: explicit observed dates, never inferred from status;
 - remaining duration: explicit working-day planning input, independent of progress percentage;
-- project data date: stored project status cutoff;
+- project data date: stored, optional project status cutoff — not a row timestamp;
 - baseline: separate immutable snapshot entities under normal Task/WBS CRUD;
 - CPM schedule: derived state only;
 - WBS schedule summaries: derived from descendant current-plan Tasks, never persisted on WBS nodes.

@@ -103,6 +103,10 @@ It is distinct from:
 - the current-plan finish;
 - the CPM-calculated project finish.
 
+It is also **not** a row timestamp. Creation and modification times live in separate audit columns (`CreatedAt`, `UpdatedAt`, `MR_AuditLog`); `dataDate` answers a project-control question instead: through which day are the reported progress and actuals considered valid. It is what reporting and future progress-aware rescheduling status against.
+
+Because that decision often comes later than the project record itself, `dataDate` is **optional**. Project creation and project updates succeed with an empty value, the UI labels the field as optional and explains the cut-off meaning, and the server only validates the format when a value is supplied. Corporate projects imported without a data date can therefore have their MERGEN-owned fields (colour, tag catalog, calendar) edited without first inventing a cut-off date.
+
 The field is stored on the project now so future progress-aware scheduling has the correct domain foundation. The mock projects use an explicit fixed sample data date rather than deriving this field automatically from the browser clock. The current CPM engine remains a pure current-plan network calculation and does not yet use `dataDate`, actual dates or remaining duration for status updating or rescheduling.
 
 ## 6. Project, WBS and Task ownership
@@ -197,7 +201,7 @@ A WBS summary bar must not be interpreted as CPM Early/Late schedule output. Cur
 | Management target | `targetFinish` | Stored, mutable |
 | Actuals | `actualStart`, `actualFinish` | Stored, mutable only through explicit user/data actions |
 | Remaining duration | `remainingDurationDays` | Stored, mutable, independent of progress percentage |
-| Project status cutoff | `dataDate` | Stored on Project, mutable |
+| Project status cutoff | `dataDate` | Stored on Project, mutable, optional |
 | Baseline | `Baseline`, `TaskBaselineSnapshot` | Stored immutable snapshot data under normal Task/WBS CRUD |
 | WBS schedule summary | descendant date range, progress and counts | Derived, not written to WBS |
 | CPM schedule | early/late dates, float, critical status | Derived, recomputed, not written back to Task |

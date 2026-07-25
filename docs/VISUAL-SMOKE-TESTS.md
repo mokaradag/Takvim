@@ -19,6 +19,7 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Initial mode chooser appears without the underlying application shell bleeding through.
 - Basit Mod opens successfully.
 - Basit Mod Takvim opens on the **Takvim** tab; **Hızlı Görev Tanımı** remains a separate tab.
+- Basit Mod **Yeni proje** button creates a project without any task and selects it in the project field.
 - Gelişmiş Mod opens successfully and mode switching does not alter project/task data.
 
 ## Shell, workspace and topbar
@@ -68,11 +69,20 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Weekend/holiday presentation remains readable.
 - Basit Mod quick-entry tasks appear in the existing calendar flow.
 
+## Project structure (Proje Yapısı)
+
+- Project selector header, search field and project-type quick-select buttons stay frozen while only the project list scrolls.
+- The **Daha fazla göster** button scrolls with the list, not with the frozen header.
+- **Yeni Proje** opens the dialog; creating a project closes the dialog and keeps the application shell mounted — no welcome screen, no apparent restart.
+- Saving **Değişiklikleri kaydet** on an existing project keeps the current page and shows the success message in place.
+
 ## WBS
 
 - WBS tree remains horizontally scrollable on constrained widths.
 - Sticky WBS header remains aligned with rows.
 - Expand/collapse and row actions remain reachable.
+- Corporate project (Gerçek Sistem): the CN43N information card is visible, row actions are hidden, rows show level/PYP/type/status, and the Task move panel still works.
+- Manual project: Alt ekle / Ad / Taşı / Sil all work and the new node appears with the expected code.
 
 ## Gantt
 
@@ -88,6 +98,7 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Reports render without layout regression.
 - Settings controls remain readable in both themes.
 - Appearance/emblem/mode settings visibly apply as expected.
+- The Gerçek Sistem / Demo switch is present in the Settings **Veri kaynağı** card and absent from the sidebar.
 - Persistence status indicator appears above normal content when saving/error/saved state is simulated by existing test/dev mechanisms.
 
 ## Result record
