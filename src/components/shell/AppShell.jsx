@@ -31,7 +31,6 @@ import { useApplyTweaks } from '../../hooks/useApplyTweaks';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
-import { DataModeIndicator } from './DataModeIndicator';
 import { ModeChooser } from './ModeChooser';
 import { NAV_ITEMS, PAGE_META } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
@@ -314,8 +313,8 @@ export default function AppShell() {
           })}
         </nav>
 
+        {/* Veri modu anahtarı kenar çubuğunda değil, Ayarlar sayfasında yaşar. */}
         <div className="sidebar-footer">
-          <DataModeIndicator variant="sidebar" />
           <div className="sidebar-footer-row">
             <div className="user-chip">
               <Avatar name="Zeynep Aydın" size="md" />

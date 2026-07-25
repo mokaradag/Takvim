@@ -1,3 +1,5 @@
+import { isCorporateProject } from '../domain/projectTypes.js';
+
 const PROJECT_COLOR_KEYS = new Set(['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan']);
 
 function normalizedName(value) {
@@ -10,10 +12,6 @@ function comparableName(value) {
 
 function normalizedProjectCode(value) {
   return normalizedName(value).toUpperCase();
-}
-
-function isCorporateProject(project) {
-  return String(project?.source || '').toLowerCase() === 'corporate';
 }
 
 export function normalizeProjectTags(values = []) {
@@ -85,9 +83,10 @@ export function validateProjectCreationInput(input = {}, { projects = [], people
     issues.push({ code: 'PROJECT_CALENDAR_NOT_FOUND', field: 'calendarId', message: 'Kurumsal çalışma takvimi bulunamadı.' });
   }
 
-  if (!input.dataDate) {
-    issues.push({ code: 'PROJECT_DATA_DATE_REQUIRED', field: 'dataDate', message: 'Veri tarihi seçilmelidir.' });
-  } else if (!isValidIsoDate(input.dataDate)) {
+  // Veri tarihi (ilerleme kesim tarihi) isteğe bağlıdır: proje, kesim tarihi
+  // belirlenmeden de açılabilir ve daha sonra Proje Tanımı ekranından girilebilir.
+  // Verildiğinde geçerli bir takvim tarihi olması beklenir.
+  if (input.dataDate && !isValidIsoDate(input.dataDate)) {
     issues.push({ code: 'PROJECT_DATA_DATE_INVALID', field: 'dataDate', message: 'Veri tarihi geçerli bir tarih olmalıdır.' });
   }
 
@@ -180,7 +179,11 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
       ? normalizedProjectCode(existing.code)
       : normalizedProjectCode(input.code === undefined ? existing.code : input.code),
     source: sourceControlled ? existing.source : (input.source === undefined ? existing.source : input.source),
-    leadId: input.leadId === undefined ? existing.leadId : input.leadId,
+    // Kurumsal projenin sorumlusu kaynak sistemden (PROJECT_MANAGER rolü) gelir;
+    // arayüzden gönderilen değer yok sayılır, sunucu da bu alanı korur.
+    leadId: sourceControlled
+      ? existing.leadId
+      : (input.leadId === undefined ? existing.leadId : input.leadId),
     dataDate: input.dataDate === undefined ? existing.dataDate : input.dataDate,
     color: input.color === undefined ? existing.color : input.color,
     calendarId
@@ -190,7 +193,9 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
     people,
     calendars
   }).filter((issue) => {
-    if (input.dataDate === undefined && !existing.dataDate && issue.code === 'PROJECT_DATA_DATE_REQUIRED') return false;
+    // Kurumsal projelerde sorumlu bilgisi kaynak sistemin sorumluluğundadır:
+    // sorumlu tanımlı olmasa bile renk/etiket gibi MERGEN Rota alanları güncellenebilir.
+    if (sourceControlled && (issue.code === 'PROJECT_LEAD_REQUIRED' || issue.code === 'PROJECT_LEAD_NOT_FOUND')) return false;
     if (input.leadId === undefined && !existing.leadId && issue.code === 'PROJECT_LEAD_REQUIRED') return false;
     return true;
   });

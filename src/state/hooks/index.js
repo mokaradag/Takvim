@@ -35,6 +35,7 @@ export function useDataLifecycle() {
   const state = useAppState();
   return {
     dataStatus: state.dataStatus,
+    hasLoadedOnce: Boolean(state.hasLoadedOnce),
     loadError: state.loadError,
     pendingMutationCount: state.pendingMutationCount,
     isSaving: state.pendingMutationCount > 0,

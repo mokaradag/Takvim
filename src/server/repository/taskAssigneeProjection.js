@@ -1,8 +1,16 @@
+import { canonicalActualId } from '../../domain/identity/actualId.js';
+
+// Satır kimlikleri kanonikleştirilir: SQL Server büyük harfli GUID döndürür,
+// anlık görüntüdeki görev kimlikleri ise kanonik küçük harftir.
+function rowId(value) {
+  return value == null ? '' : (canonicalActualId(value) ?? String(value));
+}
+
 export function applyTaskAssigneeProjection(snapshot = {}, rows = []) {
   const assigneesByTask = new Map();
 
   for (const row of rows || []) {
-    const taskId = row?.TaskId == null ? '' : String(row.TaskId);
+    const taskId = rowId(row?.TaskId);
     const sicil = row?.Sicil == null ? '' : String(row.Sicil);
     if (!taskId || !sicil) continue;
     if (!assigneesByTask.has(taskId)) assigneesByTask.set(taskId, []);
@@ -14,7 +22,7 @@ export function applyTaskAssigneeProjection(snapshot = {}, rows = []) {
     ...snapshot,
     tasks: (snapshot.tasks || []).map((task) => ({
       ...task,
-      assigneeIds: assigneesByTask.get(String(task.id)) || []
+      assigneeIds: assigneesByTask.get(rowId(task.id)) || []
     }))
   };
 }

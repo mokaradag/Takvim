@@ -10,12 +10,10 @@ const MODE_COPY = Object.freeze({
 });
 
 /**
- * Veri modu anahtarı. `variant="sidebar"` kenar çubuğu altbilgisine gömülür;
- * `variant="floating"` yalnızca uygulama kabuğu render edilemediğinde
- * (yükleme/hata ekranları) kullanılır. Böylece anahtar, kaydetme bildirimlerinin
- * bulunduğu sağ alt köşeyi artık işgal etmez.
+ * Veri modu anahtarı. Kenar çubuğunu sade tutmak için anahtar artık yalnızca
+ * Ayarlar sayfasında (`variant="settings"`) yaşar.
  */
-export function DataModeIndicator({ variant = 'sidebar' }) {
+export function DataModeIndicator({ variant = 'settings' }) {
   const { dataMode, setDataMode } = useDataMode();
   const { actions } = useAppState();
   const [switching, setSwitching] = useState(false);

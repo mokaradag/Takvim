@@ -9,6 +9,8 @@ export function PersistenceStatus() {
     isSaving,
     saveError,
     lastSavedAt,
+    dataStatus,
+    hasLoadedOnce,
     clearPersistenceError,
     reloadData
   } = useDataLifecycle();
@@ -23,8 +25,11 @@ export function PersistenceStatus() {
   }, [lastSavedAt]);
 
   const details = describeSaveError(saveError);
+  // Veri zaten yüklüyse başarısız bir tazeleme uygulamayı kapatmaz; kullanıcı
+  // mevcut verilerle çalışmayı sürdürür ve yenilemeyi buradan tekrar dener.
+  const refreshFailed = dataStatus === 'error' && hasLoadedOnce;
 
-  if (!isSaving && !details && !showSaved) return null;
+  if (!isSaving && !details && !showSaved && !refreshFailed) return null;
 
   const reload = async () => {
     setReloading(true);
@@ -37,7 +42,7 @@ export function PersistenceStatus() {
   };
 
   return (
-    <div className={`persistence-status${details && !isSaving ? ' is-error' : ''}`} role="status" aria-live="polite">
+    <div className={`persistence-status${(details || refreshFailed) && !isSaving ? ' is-error' : ''}`} role="status" aria-live="polite">
       {isSaving && <span className="persistence-status-line"><Icons.Clock size={13} /> Kaydediliyor...</span>}
 
       {!isSaving && details && (
@@ -70,7 +75,24 @@ export function PersistenceStatus() {
         </div>
       )}
 
-      {!isSaving && !details && showSaved && (
+      {!isSaving && !details && refreshFailed && (
+        <div className="col" style={{ gap: 9 }}>
+          <div className="persistence-status-head">
+            <Icons.Alert size={14} />
+            <strong>Veriler yenilenemedi</strong>
+          </div>
+          <p className="persistence-status-message">
+            Görüntülenen veriler son başarılı yüklemeden geliyor. Bağlantı kurulduğunda yeniden deneyin.
+          </p>
+          <div className="row" style={{ gap: 7, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn primary sm" onClick={reload} disabled={reloading}>
+              {reloading ? 'Yükleniyor...' : 'Yeniden dene'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!isSaving && !details && !refreshFailed && showSaved && (
         <span className="persistence-status-line"><Icons.Check size={13} /> Kaydedildi</span>
       )}
     </div>

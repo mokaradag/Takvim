@@ -157,8 +157,13 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
             </label>
 
             <label className="col" style={{ gap: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 650 }}>Veri tarihi</span>
-              <DateInput value={form.dataDate} onChange={(value) => setValue('dataDate', value)} allowEmpty={false} disabled={saving} />
+              <span style={{ fontSize: 12, fontWeight: 650 }}>Veri tarihi <span className="muted">(isteğe bağlı)</span></span>
+              <DateInput value={form.dataDate} onChange={(value) => setValue('dataDate', value)} allowEmpty disabled={saving} />
+              {/* "Veri tarihi" bir kayıt zaman damgası DEĞİLDİR; ilerleme kesim tarihidir. */}
+              <span className="muted" style={{ fontSize: 10.5, lineHeight: 1.45 }}>
+                İlerleme kesim tarihi: raporlanan gerçekleşmelerin hangi güne kadar geçerli olduğunu belirtir.
+                Kaydın oluşturulma zamanı ayrı olarak tutulur.
+              </span>
             </label>
           </div>
 

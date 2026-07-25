@@ -20,6 +20,34 @@
 .gantt-chart-host .gantt-right { min-height: 0; }
 .gantt-holiday-stripe { z-index: 12; top: 56px; bottom: 0; height: auto; pointer-events: none; }
 
+/* ── Proje Yapısı · proje seçici ────────────────────────────── */
+/* Başlık, arama alanı ve tür hızlı seçim düğmeleri donuk kalır; yalnızca
+   listelenen proje düğmeleri dikey olarak kaydırılır. Kurumsal katalog yüzlerce
+   proje içerdiği için süzgeçler listeyle birlikte yukarı kayıyordu. */
+.project-browser {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100vh - 210px);
+}
+.project-browser-head { flex: 0 0 auto; }
+.project-browser-types {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 9px;
+  margin-top: 16px;
+}
+.project-browser-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  margin-top: 16px;
+  padding-top: 12px;
+  padding-right: 4px;
+  border-top: 1px solid var(--border);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* ── WBS ───────────────────────────────────────────────────── */
 .wbs-tree-table { max-width: 100%; }
 .wbs-tree-grid {

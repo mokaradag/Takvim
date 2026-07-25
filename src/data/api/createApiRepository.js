@@ -1,3 +1,4 @@
+import { extractActualId, isActualId } from '../../domain/identity/actualId.js';
 import { AppRepositoryError, REPOSITORY_ERROR_CODES } from '../contracts/appRepository.js';
 import {
   loadActualIdAliases,
@@ -10,8 +11,6 @@ const CODE_BY_STATUS = {
   409: REPOSITORY_ERROR_CODES.CONFLICT,
   503: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE
 };
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const UUID_SUFFIX = /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 const STATUS_TO_SQL = Object.freeze({ todo: 'planned', in_progress: 'in-progress', done: 'done' });
 const STATUS_FROM_SQL = Object.freeze({
   planned: 'todo',
@@ -25,14 +24,15 @@ const STATUS_FROM_SQL = Object.freeze({
 
 export function toActualUuid(value) {
   if (value == null || value === '') return null;
-  const normalized = String(value).trim();
-  const match = normalized.match(UUID_SUFFIX);
-  return (match ? match[1] : normalized).toLowerCase();
+  // Önekli istemci kimliğinden Gerçek Sistem kimliğini ayıklayamazsak değer
+  // olduğu gibi (yalnızca küçük harfe indirilerek) geri verilir; doğrulama
+  // hatası `requiredActualUuid` içinde kullanıcıya anlaşılır şekilde raporlanır.
+  return extractActualId(value) || String(value).trim().toLowerCase();
 }
 
 function requiredActualUuid(value, label) {
   const normalized = toActualUuid(value);
-  if (!normalized || !UUID_PATTERN.test(normalized)) {
+  if (!normalized || !isActualId(normalized)) {
     // Hangi kaydın Gerçek Sistem kimliği taşımadığı iletide açıkça belirtilir;
     // aksi hâlde kullanıcı yalnızca genel bir "geçerli UUID olmalıdır" uyarısı görür
     // ve sorunlu kaydı bulmasının hiçbir yolu kalmaz.

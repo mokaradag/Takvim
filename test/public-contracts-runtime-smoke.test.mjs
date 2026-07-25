@@ -321,9 +321,19 @@ test('all test files use strict assertions', () => {
 });
 
 test('all test files are discoverable by the configured Node test runner naming convention', () => {
+  // `test/helpers/` yalnızca paylaşılan test altyapısını barındırır (uçtan uca
+  // yığın kurulumu, bellek içi SQL Server ikizi). Bu dosyalar test tanımlamaz;
+  // aşağıdaki ikinci kontrol bunu güvence altına alır.
   const nonConforming = walk(path.join(ROOT, 'test'))
     .filter((file) => path.extname(file) === '.mjs')
     .filter((file) => !file.endsWith('.test.mjs'))
+    .filter((file) => !relative(file).startsWith('test/helpers/'))
     .map(relative);
   assert.deepEqual(nonConforming, []);
+
+  const helpersWithTests = walk(path.join(ROOT, 'test', 'helpers'))
+    .filter((file) => path.extname(file) === '.mjs')
+    .filter((file) => /^\s*test\(/m.test(fs.readFileSync(file, 'utf8')))
+    .map(relative);
+  assert.deepEqual(helpersWithTests, []);
 });

@@ -1,7 +1,6 @@
 'use client';
 import { useDataLifecycle } from '../../state/hooks';
 import { AppLogo } from './AppLogo';
-import { DataModeIndicator } from './DataModeIndicator';
 
 function DataMessage({ children }) {
   return (
@@ -10,8 +9,8 @@ function DataMessage({ children }) {
         <main className="content" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
           <div className="col" style={{ gap: 14, width: 'min(460px, calc(100vw - 32px))' }}>
             <div className="card">{children}</div>
-            {/* Kabuk render edilemediğinde bile kullanıcı Demo moduna dönebilmelidir. */}
-            <DataModeIndicator variant="boundary" />
+            {/* Veri modu anahtarı Ayarlar sayfasında yaşar; kabuk render edilemediğinde
+                kullanıcıya yalnızca yeniden deneme yolu gösterilir. */}
           </div>
         </main>
       </div>
@@ -19,10 +18,19 @@ function DataMessage({ children }) {
   );
 }
 
+/**
+ * Yükleme/hata perdesi YALNIZCA ilk veri yüklemesinde gösterilir.
+ *
+ * Daha önce veri yüklendiyse yeniden yükleme (proje oluşturma, kaydetme sonrası
+ * tazeleme, veri modu değişikliği dışındaki her akış) kabuğu söktürmez: aksi
+ * hâlde AppShell yeniden monte olur, yerel durumu (açık sayfa, karşılama ekranı
+ * tercihi, seçili sekme) sıfırlanır ve kullanıcı "Projeyi oluştur" düğmesine
+ * bastığında uygulama baştan açılmış gibi davranıyordu.
+ */
 export function AppDataBoundary({ children }) {
-  const { dataStatus, reloadData } = useDataLifecycle();
+  const { dataStatus, hasLoadedOnce, reloadData } = useDataLifecycle();
 
-  if (dataStatus === 'loading') {
+  if (dataStatus === 'loading' && !hasLoadedOnce) {
     return (
       <DataMessage>
         <div className="col" style={{ gap: 12, alignItems: 'center', textAlign: 'center', padding: 18 }}>
@@ -34,7 +42,7 @@ export function AppDataBoundary({ children }) {
     );
   }
 
-  if (dataStatus === 'error') {
+  if (dataStatus === 'error' && !hasLoadedOnce) {
     return (
       <DataMessage>
         <div className="col" style={{ gap: 12, alignItems: 'flex-start', padding: 8 }}>

@@ -1,8 +1,16 @@
 import 'server-only';
+import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { getSqlPool, sql } from '../db/pool.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
 import { ServerPersistenceError } from '../errors.js';
 import { ACCESS_REASONS, deriveEffectiveAccess } from './authorization.js';
+
+// Yetki haritası kanonik (küçük harf) proje kimlikleriyle kurulur. Aksi hâlde
+// SQL Server'ın büyük harfli GUID metni ile istemciden gelen kanonik kimlik
+// eşleşmez ve yazma yetkisi olan kullanıcı "tam yazma yetkiniz yok" hatası alır.
+function rowId(value) {
+  return value == null ? null : (canonicalActualId(value) ?? String(value));
+}
 
 function personFromRow(row) {
   return {
@@ -82,22 +90,22 @@ export async function loadAuthorizationContext(executor = null) {
   const fullRows = grantRows.filter((row) => row.AccessLevel === 'FULL');
   const partialProjectRows = grantRows
     .filter((row) => row.AccessLevel === 'READ')
-    .map((row) => ({ projectId: String(row.ProjectId), reason: ACCESS_REASONS.MANUAL_GRANT }));
+    .map((row) => ({ projectId: rowId(row.ProjectId), reason: ACCESS_REASONS.MANUAL_GRANT }));
   const partialRows = (result.recordsets[4] || []).map((row) => ({
-    projectId: String(row.ProjectId),
-    taskId: String(row.TaskId),
+    projectId: rowId(row.ProjectId),
+    taskId: rowId(row.TaskId),
     reason: row.Reason === ACCESS_REASONS.ASSIGNEE ? ACCESS_REASONS.ASSIGNEE : ACCESS_REASONS.EXECUTIVE_SCOPE
   }));
   const effective = deriveEffectiveAccess({
     isSystemAdmin,
-    fullProjectIds: fullRows.map((row) => String(row.ProjectId)),
+    fullProjectIds: fullRows.map((row) => rowId(row.ProjectId)),
     partialProjectRows,
     partialTaskRows: partialRows
   });
 
   const fullReasonsByProject = new Map();
   for (const row of fullRows) {
-    const projectId = String(row.ProjectId);
+    const projectId = rowId(row.ProjectId);
     if (!fullReasonsByProject.has(projectId)) fullReasonsByProject.set(projectId, new Set());
     fullReasonsByProject.get(projectId).add(row.Reason);
   }

@@ -4,6 +4,7 @@ import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar } from '../../components/ui';
+import { ProjectCreateDialog } from '../../components/shell/ProjectCreateDialog';
 import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domain/projectTypes';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
@@ -57,6 +58,7 @@ export function SimpleModePanel() {
   const [peopleQuery, setPeopleQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
+  const [projectCreateOpen, setProjectCreateOpen] = useState(false);
 
   const selectableProjects = useMemo(
     () => visibleProjects(writableProjects, { showArchived: showArchivedProjects }),
@@ -109,6 +111,23 @@ export function SimpleModePanel() {
   }, [sortedPeople, peopleQuery, assigneeIds]);
   const visiblePeople = peopleMatches.slice(0, MAX_VISIBLE_PEOPLE);
   const hasWritableDestination = writableProjects.length > 0 || canCreateProjects;
+
+  // Basit Modda proje oluşturmak, görev tanımlamaktan bağımsız bir yetenektir:
+  // kullanıcı görevleri sonra eklemek üzere yalnızca projeyi açabilir.
+  const createProjectOnly = async (input) => {
+    setMessage(null);
+    const created = await addProject(input, { focusWorkspace: false });
+    if (created?.ok) {
+      setProjectChoice(created.value.id);
+      setManualProjectName('');
+      setManualProjectCode('');
+      setMessage({
+        type: 'success',
+        text: `“${created.value.name}” projesi oluşturuldu. Görevleri şimdi ya da daha sonra ekleyebilirsiniz.`
+      });
+    }
+    return created;
+  };
 
   const togglePerson = (personId) => {
     setAssigneeIds((current) => current.includes(personId)
@@ -250,126 +269,152 @@ export function SimpleModePanel() {
   };
 
   return (
-    <form className="simple-entry-card" onSubmit={submit}>
-      <div className="simple-entry-head">
-        <div>
-          <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Basit Mod</span>
-          <h2>Hızlı görev tanımı</h2>
-          <p>Yalnızca gerekli bilgileri girin. Kayıt aynı proje ve görev altyapısında tutulur ve gelişmiş modda da kullanılabilir.</p>
+    // Proje oluşturma penceresi form ağacının DIŞINDA durur: iç içe <form>
+    // öğeleri geçersizdir ve tarayıcı iç formu yok sayar.
+    <>
+      <form className="simple-entry-card" onSubmit={submit}>
+        <div className="simple-entry-head">
+          <div>
+            <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Basit Mod</span>
+            <h2>Hızlı görev tanımı</h2>
+            <p>Yalnızca gerekli bilgileri girin. Kayıt aynı proje ve görev altyapısında tutulur ve gelişmiş modda da kullanılabilir.</p>
+          </div>
+          <div className="col" style={{ gap: 9, alignItems: 'flex-end' }}>
+            <div className="simple-entry-flow" aria-label="Basit mod akışı">
+              <span>Tanımla</span><i>→</i><span>Takvimde izle</span><i>→</i><span>Gerekirse geliştir</span>
+            </div>
+            {/* Görev tanımlamadan yalnızca proje açma yolu. */}
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setProjectCreateOpen(true)}
+              disabled={!canCreateProjects || saving}
+              title={canCreateProjects
+                ? 'Görev eklemeden yalnızca yeni bir proje oluşturun'
+                : 'Bu oturumda proje oluşturma yetkiniz bulunmuyor.'}
+            >
+              <Icons.Plus size={13} /> Yeni proje
+            </button>
+          </div>
         </div>
-        <div className="simple-entry-flow" aria-label="Basit mod akışı">
-          <span>Tanımla</span><i>→</i><span>Takvimde izle</span><i>→</i><span>Gerekirse geliştir</span>
-        </div>
-      </div>
 
-      <div className="simple-entry-grid">
-        <div className="simple-field simple-project-field">
-          <span>Proje</span>
-          <SearchableSelect
-            value={projectChoice}
-            options={projectOptions}
-            onChange={(value) => { setProjectChoice(value); setMessage(null); }}
-            placeholder={hasWritableDestination ? 'Proje seçin' : 'Yazılabilir proje yok'}
-            searchPlaceholder="Proje kodu, adı veya türüyle ara"
-            disabled={!hasWritableDestination}
-            maxVisible={70}
-          />
-          {archivedProjectCount > 0 && (
-            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, fontSize: 10.5, cursor: 'pointer' }}>
-              <input type="checkbox" checked={showArchivedProjects} onChange={(event) => setShowArchivedProjects(event.target.checked)} />
-              Tamamlanan ve kapatılanları göster ({archivedProjectCount})
-            </label>
+        <div className="simple-entry-grid">
+          <div className="simple-field simple-project-field">
+            <span>Proje</span>
+            <SearchableSelect
+              value={projectChoice}
+              options={projectOptions}
+              onChange={(value) => { setProjectChoice(value); setMessage(null); }}
+              placeholder={hasWritableDestination ? 'Proje seçin' : 'Yazılabilir proje yok'}
+              searchPlaceholder="Proje kodu, adı veya türüyle ara"
+              disabled={!hasWritableDestination}
+              maxVisible={70}
+            />
+            {archivedProjectCount > 0 && (
+              <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, fontSize: 10.5, cursor: 'pointer' }}>
+                <input type="checkbox" checked={showArchivedProjects} onChange={(event) => setShowArchivedProjects(event.target.checked)} />
+                Tamamlanan ve kapatılanları göster ({archivedProjectCount})
+              </label>
+            )}
+          </div>
+
+          {projectChoice === MANUAL_PROJECT && canCreateProjects && (
+            <>
+              <label className="simple-field">
+                <span>Proje kodu <small>isteğe bağlı</small></span>
+                <input className="input" value={manualProjectCode} onChange={(event) => setManualProjectCode(event.target.value)} placeholder="Örn. PRJ-2026-041" />
+              </label>
+              <label className="simple-field">
+                <span>Proje adı</span>
+                <input className="input" value={manualProjectName} onChange={(event) => setManualProjectName(event.target.value)} placeholder="Proje veya çalışma adı" />
+              </label>
+              {/* Serbest proje tanımından kurumsal listeye tek tıkla dönüş. */}
+              <div className="simple-field simple-project-back">
+                <button type="button" className="btn ghost sm" onClick={returnToProjectList} disabled={!selectableProjects.length}>
+                  <Icons.ArrowLeft size={13} /> Kurumsal proje listesine dön
+                </button>
+              </div>
+            </>
+          )}
+
+          <label className="simple-field simple-task-field">
+            <span>Görev</span>
+            <input className="input" value={task} onChange={(event) => setTask(event.target.value)} placeholder="Yapılacak işi yazın" disabled={!hasWritableDestination} />
+          </label>
+          <label className="simple-field">
+            <span>Anahtar sözcük / kısa açıklama</span>
+            <input className="input" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Örn. Teklif, Onay, Teslim" disabled={!hasWritableDestination} />
+          </label>
+          <label className="simple-field">
+            <span>Termin tarihi</span>
+            <DateInput value={dueDate} onChange={(value) => { setDueDate(value); setMessage(null); }} disabled={!hasWritableDestination} />
+          </label>
+        </div>
+
+        {!hasWritableDestination && (
+          <div className="simple-message error">Bu oturumda yalnızca salt okunur projeler görünür. Görev eklemek için tam proje yetkisi gerekir.</div>
+        )}
+
+        <div className="simple-people-block">
+          <div className="simple-people-title">
+            <span>Sorumlular</span>
+            <small>{assigneeIds.length} kişi seçili · {people.length} kişi</small>
+          </div>
+          <label className="simple-people-search">
+            <Icons.Search size={14} />
+            <input
+              value={peopleQuery}
+              onChange={(event) => setPeopleQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }}
+              placeholder="Ad, sicil, unvan veya birimle ara"
+              aria-label="Sorumlu ara"
+              disabled={!hasWritableDestination}
+            />
+          </label>
+
+          {selectedPeople.length > 0 && (
+            <div className="simple-people-selection">
+              <div className="simple-people-results-title">Seçilenler</div>
+              <div className="simple-people-grid">
+                {selectedPeople.map((person) => (
+                  <PersonChoice key={person.id} person={person} active onToggle={togglePerson} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="simple-people-results-title">
+            <span>{peopleQuery.trim() ? 'Arama sonuçları' : 'Hızlı seçim'}</span>
+            <small>{peopleMatches.length} eşleşme</small>
+          </div>
+          <div className="simple-people-grid">
+            {visiblePeople.map((person) => (
+              <PersonChoice key={person.id} person={person} active={false} onToggle={togglePerson} />
+            ))}
+          </div>
+          {visiblePeople.length === 0 && <div className="simple-people-empty">Eşleşen başka kişi yok.</div>}
+          {peopleMatches.length > MAX_VISIBLE_PEOPLE && (
+            <div className="simple-people-hint">
+              İlk {MAX_VISIBLE_PEOPLE} sonuç gösteriliyor. Arama alanını kullanarak listeyi daraltın.
+            </div>
           )}
         </div>
 
-        {projectChoice === MANUAL_PROJECT && canCreateProjects && (
-          <>
-            <label className="simple-field">
-              <span>Proje kodu <small>isteğe bağlı</small></span>
-              <input className="input" value={manualProjectCode} onChange={(event) => setManualProjectCode(event.target.value)} placeholder="Örn. PRJ-2026-041" />
-            </label>
-            <label className="simple-field">
-              <span>Proje adı</span>
-              <input className="input" value={manualProjectName} onChange={(event) => setManualProjectName(event.target.value)} placeholder="Proje veya çalışma adı" />
-            </label>
-            {/* Serbest proje tanımından kurumsal listeye tek tıkla dönüş. */}
-            <div className="simple-field simple-project-back">
-              <button type="button" className="btn ghost sm" onClick={returnToProjectList} disabled={!selectableProjects.length}>
-                <Icons.ArrowLeft size={13} /> Kurumsal proje listesine dön
-              </button>
-            </div>
-          </>
-        )}
-
-        <label className="simple-field simple-task-field">
-          <span>Görev</span>
-          <input className="input" value={task} onChange={(event) => setTask(event.target.value)} placeholder="Yapılacak işi yazın" disabled={!hasWritableDestination} />
-        </label>
-        <label className="simple-field">
-          <span>Anahtar sözcük / kısa açıklama</span>
-          <input className="input" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Örn. Teklif, Onay, Teslim" disabled={!hasWritableDestination} />
-        </label>
-        <label className="simple-field">
-          <span>Termin tarihi</span>
-          <DateInput value={dueDate} onChange={(value) => { setDueDate(value); setMessage(null); }} disabled={!hasWritableDestination} />
-        </label>
-      </div>
-
-      {!hasWritableDestination && (
-        <div className="simple-message error">Bu oturumda yalnızca salt okunur projeler görünür. Görev eklemek için tam proje yetkisi gerekir.</div>
-      )}
-
-      <div className="simple-people-block">
-        <div className="simple-people-title">
-          <span>Sorumlular</span>
-          <small>{assigneeIds.length} kişi seçili · {people.length} kişi</small>
+        <div className="simple-entry-foot">
+          {message && <div className={`simple-message ${message.type}`}>{message.text}</div>}
+          <button className="btn primary simple-save" type="submit" disabled={saving || people.length === 0 || !hasWritableDestination}>
+            <Icons.Plus size={14} /> {saving ? 'Kaydediliyor...' : 'Takvime ekle'}
+          </button>
         </div>
-        <label className="simple-people-search">
-          <Icons.Search size={14} />
-          <input
-            value={peopleQuery}
-            onChange={(event) => setPeopleQuery(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }}
-            placeholder="Ad, sicil, unvan veya birimle ara"
-            aria-label="Sorumlu ara"
-            disabled={!hasWritableDestination}
-          />
-        </label>
 
-        {selectedPeople.length > 0 && (
-          <div className="simple-people-selection">
-            <div className="simple-people-results-title">Seçilenler</div>
-            <div className="simple-people-grid">
-              {selectedPeople.map((person) => (
-                <PersonChoice key={person.id} person={person} active onToggle={togglePerson} />
-              ))}
-            </div>
-          </div>
-        )}
+      </form>
 
-        <div className="simple-people-results-title">
-          <span>{peopleQuery.trim() ? 'Arama sonuçları' : 'Hızlı seçim'}</span>
-          <small>{peopleMatches.length} eşleşme</small>
-        </div>
-        <div className="simple-people-grid">
-          {visiblePeople.map((person) => (
-            <PersonChoice key={person.id} person={person} active={false} onToggle={togglePerson} />
-          ))}
-        </div>
-        {visiblePeople.length === 0 && <div className="simple-people-empty">Eşleşen başka kişi yok.</div>}
-        {peopleMatches.length > MAX_VISIBLE_PEOPLE && (
-          <div className="simple-people-hint">
-            İlk {MAX_VISIBLE_PEOPLE} sonuç gösteriliyor. Arama alanını kullanarak listeyi daraltın.
-          </div>
-        )}
-      </div>
-
-      <div className="simple-entry-foot">
-        {message && <div className={`simple-message ${message.type}`}>{message.text}</div>}
-        <button className="btn primary simple-save" type="submit" disabled={saving || people.length === 0 || !hasWritableDestination}>
-          <Icons.Plus size={14} /> {saving ? 'Kaydediliyor...' : 'Takvime ekle'}
-        </button>
-      </div>
-    </form>
+      <ProjectCreateDialog
+        open={projectCreateOpen}
+        people={people}
+        onCreate={createProjectOnly}
+        onClose={() => setProjectCreateOpen(false)}
+      />
+    </>
   );
 }

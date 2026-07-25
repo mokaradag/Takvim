@@ -76,7 +76,8 @@ test('hardened commits require active stored and destination projects', () => {
   assert.match(source, /async function assertActiveProjectMutationTargets/);
   assert.match(source, /if \(!row \|\| !Boolean\(row\.IsActive\)\)/);
   assert.match(source, /await requireActiveProject\(task\.projectId\);/);
-  assert.match(source, /if \(before\) await requireActiveProject\(String\(before\.ProjectId\)\);/);
+  // Satır kimlikleri kanonikleştirilerek okunur (SQL Server büyük harf döndürür).
+  assert.match(source, /if \(before\) await requireActiveProject\(rowId\(before\.ProjectId\)\);/);
   assert.match(source, /await assertActiveProjectMutationTargets\(executor, changes\);/);
 });
 

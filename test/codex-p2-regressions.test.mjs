@@ -86,18 +86,19 @@ test('dependency persistence generates a fresh relationship row ID instead of re
   assert.doesNotMatch(source, /dependencyId[^\n]*dependency\.id/);
 });
 
-test('data mode switch remains visible when the data boundary renders a load error', () => {
-  // Anahtar sağ alt köşeden kenar çubuğu altbilgisine taşındı; kabuk render
-  // edilemediğinde veri sınırı ekranı kendi kopyasını göstermek zorundadır.
+test('data mode switch lives on the settings page and never in the sidebar', () => {
+  // Anahtar kenar çubuğunu sade tutmak için Ayarlar sayfasına taşındı.
   const boundary = read('src/components/shell/AppDataBoundary.jsx');
   const shell = read('src/components/shell/AppShell.jsx');
+  const settings = read('src/features/settings/SettingsView.jsx');
   const root = read('src/components/shell/ApplicationRoot.jsx');
 
-  assert.match(boundary, /<DataModeIndicator variant="boundary" \/>/);
-  assert.match(shell, /<DataModeIndicator variant="sidebar" \/>/);
+  assert.doesNotMatch(boundary, /DataModeIndicator/);
+  assert.doesNotMatch(shell, /DataModeIndicator/);
+  assert.match(settings, /<DataModeIndicator variant="settings" \/>/);
   assert.ok(
-    shell.indexOf('<DataModeIndicator variant="sidebar" />') > shell.indexOf('className="sidebar-footer"'),
-    'sidebar switch must live in the sidebar footer'
+    settings.indexOf('<DataModeIndicator variant="settings" />') > settings.indexOf('Veri kaynağı'),
+    'settings switch must live in the data source card'
   );
   assert.doesNotMatch(root, /<DataModeIndicator/);
 });
@@ -210,7 +211,9 @@ test('existing WBS updates authorize the stored project and reject forged projec
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
   assert.ok(body.indexOf('const before = await wbsRowForUpdate(executor, wbsId)') < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
   assert.match(body, /const storedProjectId = id\(before\.ProjectId\);/);
-  assert.match(body, /if \(storedProjectId !== projectId\)/);
+  // Karşılaştırma kanoniktir: SQL Server büyük harfli GUID döndürdüğü için
+  // düz `!==` aynı projeyi farklı sanıp yazmayı reddediyordu.
+  assert.match(body, /if \(!sameActualId\(storedProjectId, projectId\)\)/);
 });
 
 test('existing task updates authorize both stored source and requested destination projects', () => {
@@ -228,7 +231,7 @@ test('cross-project task moves clear incoming and outgoing dependency rows befor
   const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
   const cleanupIndex = body.indexOf('WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;');
   const updateIndex = body.indexOf('UPDATE dbo.MR_Tasks');
-  assert.match(body, /const projectChanged = before && id\(before\.ProjectId\) !== projectId;/);
+  assert.match(body, /const projectChanged = before && !sameActualId\(before\.ProjectId, projectId\);/);
   assert.ok(cleanupIndex >= 0 && cleanupIndex < updateIndex);
 });
 
@@ -475,7 +478,7 @@ test('HR02 people directory duplicate ranking has deterministic projected-field 
 
 test('server-generated fallback project roots are included in commit WBS responses', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
-  assert.match(source, /const wbsIds = new Set\(\[\.\.\.changes\.wbsUpserts\.map\(\(value\) => value\.id\), \.\.\.consumedRootIds\]\)/);
+  assert.match(source, /const wbsIds = new Set\(\[\.\.\.changes\.wbsUpserts\.map\(\(value\) => id\(value\.id\)\), \.\.\.consumedRootIds\]\)/);
   assert.match(source, /return \{ created: true, consumedRootId: authoritativeRoot\.id \}/);
 });
 

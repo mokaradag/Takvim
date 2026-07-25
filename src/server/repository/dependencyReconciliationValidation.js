@@ -1,10 +1,13 @@
 import 'server-only';
+import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { sql } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { findTaskDependencyReconciliationIssue } from './dependencyReconciliationPolicy.js';
 
 function id(value) {
-  return value == null || value === '' ? null : String(value);
+  if (value == null || value === '') return null;
+  // Kimlikler kanonik biçimde karşılaştırılır; SQL Server büyük, istemci küçük harf üretir.
+  return canonicalActualId(value) ?? String(value);
 }
 
 function deleteId(value) {
@@ -21,7 +24,7 @@ async function loadStoredProjectId(executor, taskId) {
   `);
   return result.recordset?.[0]?.ProjectId == null
     ? null
-    : String(result.recordset[0].ProjectId);
+    : id(result.recordset[0].ProjectId);
 }
 
 async function loadIncomingTaskIds(executor, predecessorId) {
@@ -36,7 +39,7 @@ async function loadIncomingTaskIds(executor, predecessorId) {
     WHERE dependency.PredecessorTaskId = @predecessorId
     ORDER BY dependency.TaskId;
   `);
-  return (result.recordset || []).map((row) => String(row.TaskId));
+  return (result.recordset || []).map((row) => id(row.TaskId));
 }
 
 export async function assertTaskDependencyReconciliationCovered(executor, changes = {}) {
