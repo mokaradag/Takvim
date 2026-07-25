@@ -87,6 +87,8 @@ Her seçim yapılabilen yüzeyin geri dönüş yolu bulunmalıdır:
 
 Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı **Ayarlar** sayfasındaki *Veri kaynağı* kartında yaşar (`DataModeIndicator variant="settings"`). Kenar çubuğu ve veri sınırı ekranı anahtarı hiç göstermez; kenar çubuğu yalnızca çalışma alanı, gezinme ve kullanıcı bilgisini taşır.
 
+Ayarlar sayfasına yalnızca uygulama kabuğu üzerinden ulaşıldığı için **ilk** veri yüklemesi başarısız olduğunda hata ekranı ayrıca bir **Demo moduna geç** çıkışı sunar (`DemoModeEscape`). Bu tek düğme olmadan Gerçek Sistem erişilemediğinde uygulama tamamen kilitlenirdi.
+
 ## Uygulama kabuğu yeniden yüklemede sökülmez
 
 `AppDataBoundary` yükleme/hata perdesini **yalnızca ilk veri yüklemesinde** gösterir (`dataStatus === 'loading' && !hasLoadedOnce`). Daha önce her yeniden yükleme kabuğu söküyordu: proje oluşturduktan veya değişiklik kaydettikten sonra `AppShell` yeniden monte oluyor, açık sayfa ve karşılama ekranı tercihi sıfırlanıyor ve uygulama ilk kez açılmış gibi davranıyordu.

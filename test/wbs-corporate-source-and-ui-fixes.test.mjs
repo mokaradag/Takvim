@@ -303,6 +303,10 @@ test('veri sınırı perdesi yalnızca ilk yüklemede gösterilir', () => {
   const boundary = read('src/components/shell/AppDataBoundary.jsx');
   assert.match(boundary, /if \(dataStatus === 'loading' && !hasLoadedOnce\)/);
   assert.match(boundary, /if \(dataStatus === 'error' && !hasLoadedOnce\)/);
+  // Anahtar Ayarlar'da yaşadığı için ilk yükleme hatasında Demo çıkışı sunulmalıdır;
+  // aksi hâlde Gerçek Sistem erişilemediğinde uygulama tamamen kilitlenir.
+  assert.match(boundary, /function DemoModeEscape\(\)/);
+  assert.match(boundary, /Demo moduna geç/);
   const status = read('src/components/shell/PersistenceStatus.jsx');
   // Başarısız tazeleme, kabuk açık kalırken bildirim alanında görünür.
   assert.match(status, /const refreshFailed = dataStatus === 'error' && hasLoadedOnce;/);
