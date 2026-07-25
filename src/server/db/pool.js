@@ -12,13 +12,25 @@ export async function getSqlPool() {
   if (activeTransaction) return activeTransaction;
 
   if (!poolPromise) {
-    const pool = new sql.ConnectionPool(getSqlServerConfig());
+    const config = getSqlServerConfig();
+  
+    const pool = new sql.ConnectionPool({
+      ...config,
+      pool: { ...config.pool },
+      options: { ...config.options },
+    });
+  
     pool.on('error', () => {
       poolPromise = undefined;
     });
+  
     poolPromise = pool.connect().catch((cause) => {
       poolPromise = undefined;
-      throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'SQL Server bağlantısı kurulamadı.', { cause });
+      throw new ServerPersistenceError(
+        'DATABASE_UNAVAILABLE',
+        'SQL Server bağlantısı kurulamadı.',
+        { cause }
+      );
     });
   }
   return poolPromise;
