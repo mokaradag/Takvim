@@ -265,13 +265,22 @@ function applyUpserts(items, upserts, deletes, normalize, { prependNew = false }
 }
 
 function applyCommittedChanges(state, changes = {}) {
+  // Sunucunun yetkili yanıtı projelere de uygulanır. Aksi hâlde proje kayıtları
+  // eski (veya eksik) sürüm anahtarıyla kalır ve bir sonraki güncelleme
+  // "Kayıt kimliği zaten kullanılıyor" çakışmasıyla reddedilir.
+  const projects = applyUpserts(
+    state.projects,
+    changes.projectUpserts || [],
+    changes.projectDeletes || [],
+    (project) => ({ ...project })
+  );
   const wbs = applyUpserts(
     state.wbs,
     changes.wbsUpserts || [],
     changes.wbsDeletes || [],
     (node) => ({ ...node })
   );
-  const taskState = { ...state, wbs };
+  const taskState = { ...state, projects, wbs };
   const invalidated = invalidatedPredecessorIds(
     state.tasks,
     changes.taskUpserts || [],
@@ -285,7 +294,7 @@ function applyCommittedChanges(state, changes = {}) {
     { prependNew: true }
   );
   const tasks = removePredecessorReferences(appliedTasks, invalidated);
-  const next = { ...state, wbs, tasks };
+  const next = { ...state, projects, wbs, tasks };
   return { ...next, ...workspaceState(next, next) };
 }
 
@@ -302,6 +311,9 @@ export function appStateReducer(state, action) {
         ...state,
         pendingMutationCount: state.pendingMutationCount + 1
       };
+    // Sayaçlara dokunmadan yetkili değişiklik kümesini duruma uygular.
+    case 'data/apply-changes':
+      return applyCommittedChanges(state, action.changes || {});
     case 'persistence/success': {
       const committed = applyCommittedChanges(state, action.changes);
       return {
@@ -328,7 +340,16 @@ export function appStateReducer(state, action) {
       let tasks = state.tasks.map((task) => {
         if (task.id !== action.id) return task;
         const next = { ...task, ...action.patch };
-        if (Object.prototype.hasOwnProperty.call(action.patch, 'sorumlu')) delete next.assigneeIds;
+        const patchHasAssigneeIds = Object.prototype.hasOwnProperty.call(action.patch, 'assigneeIds');
+        // Yalnızca ad listesi gönderildiğinde kimlikler adlardan yeniden türetilir.
+        // Yama açıkça Sicil kimliklerini taşıyorsa bunlar kesin kaynaktır: binlerce
+        // çalışan arasında aynı ada sahip kişiler ad eşlemesinde eleniyor ve görev
+        // ataması sessizce kayboluyordu.
+        if (Object.prototype.hasOwnProperty.call(action.patch, 'sorumlu') && !patchHasAssigneeIds) {
+          delete next.assigneeIds;
+        } else if (patchHasAssigneeIds) {
+          next.assigneeIdsCanonical = true;
+        }
         if (Object.prototype.hasOwnProperty.call(action.patch, 'proje')) {
           delete next.projectId;
           delete next.wbsId;

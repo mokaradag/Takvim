@@ -44,6 +44,46 @@ hizalanır.
 
 Durum dağılımı halka grafiği ve legend yerleşimi, PR #28 ile kabul edilen boyut ve 1280 px davranışını korur. Dashboard yapısı `dashboard-main-grid`, `dashboard-status-card`, `dashboard-status-body`, `dashboard-status-chart` ve `dashboard-status-legend` gibi semantik sınıflarla tanımlanır; inline stil metni veya kart sırası üzerinden çıkarım yapılmaz. Bu sözleşmenin sahibi `src/app/styles/dashboard.css` dosyasıdır.
 
+## Uzun listeler için aranabilir seçim bileşeni
+
+Proje, personel, iş dağılım düğümü ve öncül görev gibi binlerce kayda ulaşabilen tüm seçim noktaları `SearchableSelect` bileşenini kullanır. Bileşenin sözleşmesi:
+
+- açılır panel **React portalı ile `document.body` altına** taşınır. Panel `position: fixed` ile tetikleyiciye göre konumlanır ve `computePopoverPlacement` (bkz. `src/components/searchableSelectPlacement.js`) tarafından görünüm alanı içinde tutulur; alt kenara sıkışan liste yukarı açılır, yan kenardan taşan liste içeri çekilir;
+- panel gövdeye taşındığı için kenar çubuğunun `overflow: hidden` kırpması ve `.sidebar > *` yığın bağlamı listeyi artık etkilemez. Daha önce liste kenar çubuğunun içinde kalıyor, gezinme bağlantıları listenin üzerine boyanıyor ve liste arka planla karışmış görünüyordu;
+- panel `--z-select-popover` katmanını kullanır. Bu katman kip pencerelerinin (`--z-modal`) üzerindedir; böylece bileşen bir kip pencere içinde de kullanılabilir;
+- liste her zaman opak `--bg-elev` zeminine sahiptir;
+- `allowClear` verildiğinde panelin üstünde bir **temizleme satırı** çıkar. Portföy/proje seçimi bu sayede geri alınabilir;
+- klavye ile gezinme (`↑ ↓ Home End Enter Esc`) desteklenir ve etkin satır görünür alanda tutulur.
+
+Yeni bir uzun liste eklenirken ham `<select>` kullanılmamalıdır. Ham `<select>` yalnızca sabit ve kısa numaralandırmalar (ilişki türü, gecikme birimi, ay/yıl) için uygundur.
+
+## Basit Modda serbest proje tanımlama
+
+Kurumsal proje kataloğu binlerce kayıt içerebildiği ve açılır liste yalnızca ilk N sonucu gösterdiği için **Serbest proje tanımla** seçeneği listenin başına sabitlenir (`withManualProjectOption`). Seçenek yalnızca oturumun `canCreateProjects` yetkisi varsa eklenir.
+
+Serbest proje tanımı ekranından kurumsal listeye **Kurumsal proje listesine dön** düğmesiyle geri dönülür.
+
+Basit Modda proje oluşturmak etkin çalışma alanını **değiştirmez** (`addProject(input, { focusWorkspace: false })`). Çalışma alanı değiştiğinde uygulama kabuğu içerik alanını yeniden monte ettiği için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu ne de hatayı görebiliyordu.
+
+Etiket kataloğuna yazma, görev kaydından **bağımsız ikincil bir işlemdir**. Proje satırı yazılamıyorsa görev yine oluşturulur ve kullanıcıya uyarı gösterilir; asıl işlem ikincil bir yazma yüzünden engellenmez.
+
+## Geri dönüş yolları
+
+Her seçim yapılabilen yüzeyin geri dönüş yolu bulunmalıdır:
+
+| Yüzey | Geri dönüş |
+| --- | --- |
+| Kenar çubuğu · Aktif çalışma alanı | Açılır listedeki **Portföye dön (tüm projeler)** satırı ve seçicinin altındaki **Portföye dön** düğmesi |
+| Proje Yapısı sayfası | Sekme çubuğundaki **Proje listesi** düğmesi (proje seçili olduğunda görünür) |
+| Basit Mod · Serbest proje tanımı | **Kurumsal proje listesine dön** düğmesi |
+
+## Veri modu anahtarı ve kaydetme bildirimi
+
+Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı kenar çubuğu altbilgisinde yaşar (`DataModeIndicator variant="sidebar"`); uygulama kabuğu render edilemediğinde (veri yükleme/hata ekranı) `AppDataBoundary` kendi kopyasını gösterir (`variant="boundary"`). Daha önce iki yüzey aynı köşede üst üste biniyordu.
+
+Kaydetme bildirimi artık sabit "Kaydetme hatası" metni yerine sunucunun gerçek iletisini, hata kodunu ve varsa alan/yol bilgisini gösterir. Sürüm/eşzamanlılık hatalarında (`CONFLICT`, `UPSERT_CREATE_COLLISION`, `UPSERT_TARGET_MISSING`) **Verileri yeniden yükle** eylemi sunulur.
+
+
 ## Windows VM üzerindeki `npm run build` uyarıları
 
 ### React Hook bağımlılık uyarısı

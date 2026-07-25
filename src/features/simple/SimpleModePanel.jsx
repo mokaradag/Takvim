@@ -11,6 +11,7 @@ import { useAllPeople, useAllProjects, useAllWbs, useTaskActions } from '../../s
 import {
   findProjectRootWbsId,
   resolveSimpleProjectChoice,
+  withManualProjectOption,
   writableSimpleModeProjects
 } from './simpleModePolicy.js';
 
@@ -40,7 +41,7 @@ export function SimpleModePanel() {
   const people = useAllPeople();
   const wbs = useAllWbs();
   const { canCreateProjects } = useAppState();
-  const { addProject, updateProject, addTask, closeTask, selectWorkspace } = useTaskActions();
+  const { addProject, updateProject, addTask, closeTask } = useTaskActions();
   const sortedProjects = useMemo(() => projects.slice().sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr')), [projects]);
   const writableProjects = useMemo(() => writableSimpleModeProjects(sortedProjects), [sortedProjects]);
   const sortedPeople = useMemo(() => people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr')), [people]);
@@ -75,16 +76,14 @@ export function SimpleModePanel() {
         icon: <ProjectIcon size={13} />
       };
     });
-    if (canCreateProjects) {
-      options.push({
-        value: MANUAL_PROJECT,
-        label: 'Serbest proje tanımla',
-        description: 'Yeni bir manuel proje oluştur',
-        icon: <Icons.Plus size={13} />,
-        keywords: ['yeni', 'serbest', 'manuel proje']
-      });
-    }
-    return options;
+    // Serbest proje seçeneği listenin BAŞINDA durur.
+    return withManualProjectOption(options, canCreateProjects, {
+      value: MANUAL_PROJECT,
+      label: 'Serbest proje tanımla',
+      description: 'Kurumsal listede olmayan yeni bir çalışma açın',
+      icon: <Icons.Plus size={13} />,
+      keywords: ['yeni', 'serbest', 'manuel proje', 'kurumsal olmayan']
+    });
   }, [selectableProjects, canCreateProjects]);
 
   useEffect(() => {
@@ -115,6 +114,14 @@ export function SimpleModePanel() {
     setAssigneeIds((current) => current.includes(personId)
       ? current.filter((id) => id !== personId)
       : [...current, personId]);
+  };
+
+  // Serbest proje tanımından vazgeçildiğinde kurumsal listeye geri dönülür.
+  const returnToProjectList = () => {
+    setMessage(null);
+    setManualProjectName('');
+    setManualProjectCode('');
+    setProjectChoice(resolveSimpleProjectChoice('', selectableProjects, false));
   };
 
   const resetTaskFields = () => {
@@ -154,8 +161,11 @@ export function SimpleModePanel() {
     setSaving(true);
     let project = selectedProject;
     let targetWbsId = selectedRootWbsId;
+    let tagWarning = null;
 
     if (!project) {
+      // Basit Mod portföy görünümünde kalır: çalışma alanı değiştirilirse bu form
+      // kayıt tamamlanmadan yeniden monte edilir ve sonuç mesajı kaybolur.
       const created = await addProject({
         name: manualProjectName.trim(),
         code: manualProjectCode.trim(),
@@ -164,37 +174,42 @@ export function SimpleModePanel() {
         color: 'blue',
         tags: [keyword.trim()],
         source: 'manual'
-      });
+      }, { focusWorkspace: false });
       if (!created?.ok) {
         setSaving(false);
         setMessage({ type: 'error', text: created?.error?.message || 'Proje oluşturulamadı.' });
         return;
       }
       project = created.value;
-      targetWbsId = created.changes?.wbsUpserts?.find(
-        (node) => node.projectId === project.id && node.parentId == null
-      )?.id || null;
+      // Kök düğüm önce sunucunun döndürdüğü değişiklik kümesinden, bulunamazsa
+      // güncel uygulama durumundan çözülür. Böylece tek bir kaynağa bağımlı kalmayız.
+      targetWbsId = created.rootWbs?.id
+        || created.changes?.wbsUpserts?.find(
+          (node) => node.projectId === project.id && node.parentId == null
+        )?.id
+        || findProjectRootWbsId(wbs, project.id);
       setProjectChoice(project.id);
       setManualProjectName('');
       setManualProjectCode('');
     } else {
+      // Etiket kataloğuna ekleme, görev kaydından bağımsız ikincil bir yazmadır.
+      // Proje satırı yazılamıyorsa (salt okunur kurumsal alan, sürüm çakışması vb.)
+      // asıl işlem olan görev oluşturma engellenmez; yalnızca uyarı gösterilir.
       const tagged = await ensureTag(project);
-      if (!tagged?.ok) {
-        setSaving(false);
-        setMessage({ type: 'error', text: tagged?.error?.message || 'Proje etiketi güncellenemedi.' });
-        return;
+      if (tagged?.ok) {
+        project = tagged.value || project;
+      } else {
+        tagWarning = tagged?.error?.message || 'Etiket proje kataloğuna eklenemedi.';
       }
-      project = tagged.value || project;
     }
 
     if (!targetWbsId) {
       setSaving(false);
-      setMessage({ type: 'error', text: 'Projenin kök iş dağılım düğümü bulunamadı.' });
+      setMessage({ type: 'error', text: 'Projenin kök iş dağılım düğümü bulunamadı. Proje Yapısı sayfasından kök düğümü oluşturun.' });
       return;
     }
 
     const selectedPeopleForTask = assigneeIds.map((id) => people.find((person) => person.id === id)).filter(Boolean);
-    selectWorkspace(null);
     const createdTask = await addTask({
       projectId: project.id,
       projectCode: project.code || '',
@@ -227,10 +242,11 @@ export function SimpleModePanel() {
     }
 
     await closeTask();
-    selectWorkspace(null);
     resetTaskFields();
     setSaving(false);
-    setMessage({ type: 'success', text: 'Kayıt Takvim görünümüne eklendi.' });
+    setMessage(tagWarning
+      ? { type: 'warning', text: `Kayıt Takvim görünümüne eklendi. Etiket kataloğu güncellenemedi: ${tagWarning}` }
+      : { type: 'success', text: 'Kayıt Takvim görünümüne eklendi.' });
   };
 
   return (
@@ -276,6 +292,12 @@ export function SimpleModePanel() {
               <span>Proje adı</span>
               <input className="input" value={manualProjectName} onChange={(event) => setManualProjectName(event.target.value)} placeholder="Proje veya çalışma adı" />
             </label>
+            {/* Serbest proje tanımından kurumsal listeye tek tıkla dönüş. */}
+            <div className="simple-field simple-project-back">
+              <button type="button" className="btn ghost sm" onClick={returnToProjectList} disabled={!selectableProjects.length}>
+                <Icons.ArrowLeft size={13} /> Kurumsal proje listesine dön
+              </button>
+            </div>
           </>
         )}
 

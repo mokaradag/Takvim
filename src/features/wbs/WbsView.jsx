@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../../components/icons';
+import { SearchableSelect } from '../../components/SearchableSelect';
 import {
   buildWbsTree,
   flattenWbsTree,
@@ -48,6 +49,13 @@ export function WbsView() {
   const { addWbsChild, renameWbs, reparentWbs, deleteWbs, clearWbsError, error } = useWbsActions();
   const tree = useMemo(() => buildWbsTree(wbs), [wbs]);
   const orderedRows = useMemo(() => flattenWbsTree(tree), [tree]);
+  // Dağılım ağacı büyüdüğünde açılır listeler canlı arama ile kullanılabilir kalır.
+  const wbsOptions = useMemo(() => orderedRows.map(({ node, depth }) => ({
+    value: node.id,
+    label: `${'— '.repeat(depth)}${node.code} · ${node.name}`,
+    description: formatWbsPath(wbs, node.id),
+    keywords: [node.code, node.name]
+  })), [orderedRows, wbs]);
   const [expanded, setExpanded] = useState(() => new Set());
   const [moveSourceWbsId, setMoveSourceWbsId] = useState('');
   const [moveTargetWbsId, setMoveTargetWbsId] = useState('');
@@ -201,21 +209,30 @@ export function WbsView() {
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(220px, 1fr)', gap: 12 }}>
               <label className="col" style={{ gap: 6 }}>
                 <span className="label">Kaynak düğüm</span>
-                <select className="input" value={moveSourceWbsId} onChange={(event) => onSourceChange(event.target.value)}>
-                  <option value="">Kaynak seçin...</option>
-                  {orderedRows.map(({ node, depth }) => (
-                    <option key={node.id} value={node.id}>{`${'— '.repeat(depth)}${formatWbsPath(wbs, node.id)}`}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  value={moveSourceWbsId}
+                  options={wbsOptions}
+                  onChange={onSourceChange}
+                  placeholder="Kaynak seçin..."
+                  searchPlaceholder="WBS kodu veya adıyla ara"
+                  emptyText="Eşleşen dağılım düğümü bulunamadı."
+                  allowClear
+                  clearLabel="Kaynak seçimini temizle"
+                />
               </label>
               <label className="col" style={{ gap: 6 }}>
                 <span className="label">Hedef düğüm</span>
-                <select className="input" value={moveTargetWbsId} onChange={(event) => setMoveTargetWbsId(event.target.value)} disabled={!moveSourceWbsId}>
-                  <option value="">Hedef seçin...</option>
-                  {orderedRows.filter(({ node }) => node.id !== moveSourceWbsId).map(({ node, depth }) => (
-                    <option key={node.id} value={node.id}>{`${'— '.repeat(depth)}${formatWbsPath(wbs, node.id)}`}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  value={moveTargetWbsId}
+                  options={wbsOptions.filter((option) => option.value !== moveSourceWbsId)}
+                  onChange={setMoveTargetWbsId}
+                  placeholder="Hedef seçin..."
+                  searchPlaceholder="WBS kodu veya adıyla ara"
+                  emptyText="Eşleşen dağılım düğümü bulunamadı."
+                  disabled={!moveSourceWbsId}
+                  allowClear
+                  clearLabel="Hedef seçimini temizle"
+                />
               </label>
             </div>
 
@@ -288,10 +305,20 @@ export function WbsView() {
                 <div className="row" style={{ gap: 5, flexWrap: 'wrap' }}>
                   {canEdit && (isReparenting ? (
                     <>
-                      <select className="input" style={{ minWidth: 145, maxWidth: 175 }} value={reparenting.parentId} onChange={(event) => setReparenting({ ...reparenting, parentId: event.target.value })}>
-                        <option value="">Üst düğüm seçin...</option>
-                        {parentCandidates.map(({ node: candidate }) => <option key={candidate.id} value={candidate.id}>{candidate.code} {candidate.name}</option>)}
-                      </select>
+                      <SearchableSelect
+                        value={reparenting.parentId}
+                        options={parentCandidates.map(({ node: candidate }) => ({
+                          value: candidate.id,
+                          label: `${candidate.code} · ${candidate.name}`,
+                          keywords: [candidate.code, candidate.name]
+                        }))}
+                        onChange={(parentId) => setReparenting({ ...reparenting, parentId })}
+                        placeholder="Üst düğüm seçin..."
+                        searchPlaceholder="WBS kodu veya adıyla ara"
+                        emptyText="Taşınabilecek uygun üst düğüm yok."
+                        compact
+                        style={{ minWidth: 170 }}
+                      />
                       <button className="btn" disabled={!reparenting.parentId || reparenting.parentId === node.parentId} onClick={applyReparent}>Uygula</button>
                       <button className="btn" onClick={() => setReparenting(null)}>Vazgeç</button>
                     </>

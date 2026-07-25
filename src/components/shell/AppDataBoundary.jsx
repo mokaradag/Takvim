@@ -1,14 +1,17 @@
 'use client';
 import { useDataLifecycle } from '../../state/hooks';
 import { AppLogo } from './AppLogo';
+import { DataModeIndicator } from './DataModeIndicator';
 
 function DataMessage({ children }) {
   return (
     <div className="app">
       <div className="main" style={{ width: '100%' }}>
         <main className="content" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
-          <div className="card" style={{ width: 'min(460px, calc(100vw - 32px))' }}>
-            {children}
+          <div className="col" style={{ gap: 14, width: 'min(460px, calc(100vw - 32px))' }}>
+            <div className="card">{children}</div>
+            {/* Kabuk render edilemediğinde bile kullanıcı Demo moduna dönebilmelidir. */}
+            <DataModeIndicator variant="boundary" />
           </div>
         </main>
       </div>

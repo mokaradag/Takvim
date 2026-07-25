@@ -33,11 +33,15 @@ export function toActualUuid(value) {
 function requiredActualUuid(value, label) {
   const normalized = toActualUuid(value);
   if (!normalized || !UUID_PATTERN.test(normalized)) {
+    // Hangi kaydın Gerçek Sistem kimliği taşımadığı iletide açıkça belirtilir;
+    // aksi hâlde kullanıcı yalnızca genel bir "geçerli UUID olmalıdır" uyarısı görür
+    // ve sorunlu kaydı bulmasının hiçbir yolu kalmaz.
+    const received = value == null || value === '' ? 'boş' : `"${String(value)}"`;
     throw new AppRepositoryError({
       code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
-      message: `${label} geçerli UUID olmalıdır.`,
+      message: `${label} geçerli bir Gerçek Sistem kimliği (UUID) değil. Alınan değer: ${received}. Verileri yeniden yükleyip işlemi tekrarlayın.`,
       operation: 'commitChanges',
-      details: { field: label, value: value == null ? null : String(value) }
+      details: { code: 'ACTUAL_ID_INVALID', field: label, value: value == null ? null : String(value) }
     });
   }
   return normalized;

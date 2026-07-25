@@ -57,6 +57,10 @@ Atomic operations include Project creation with root WBS and owner access, Task 
 
 Mutable SQL entities use SQL Server `rowversion`. The API exposes rowversion as an opaque Base64 `version` token. Update and delete commands must provide the expected token. A zero-row update/delete is returned as `CONFLICT` / HTTP 409 rather than silently applying last-write-wins behavior.
 
+A change-set entry **without** a version token is an explicit create intent. `assertUpsertIntentMatchesPersistence` rejects a version-less upsert whose row already exists with `UPSERT_CREATE_COLLISION` ("Kayıt kimliği zaten kullanılıyor").
+
+This makes version freshness a client-side correctness requirement: after every commit the state layer must adopt the authoritative rows the server echoes back. `appStateReducer` therefore applies `projectUpserts`/`projectDeletes` as well as WBS and Task changes when handling `persistence/success`. Previously project rows kept their pre-commit version, so the second edit of the same project (for example changing `Proje rengi` right after saving it) was rejected as a create collision. When a repository does not echo a project row at all, `AppStateProvider` reloads the authoritative snapshot instead of storing a version-less local copy.
+
 ## Corporate sources
 
 The three corporate sources remain read-only:
@@ -97,6 +101,8 @@ Repository errors remain compact:
 
 Domain validation errors remain separate from persistence and authorization failures.
 
+Persistence errors are surfaced to the user verbatim. `PersistenceStatus` renders the server message, the error/detail code and, where present, the offending field or change-set path. `CONFLICT`, `UPSERT_CREATE_COLLISION` and `UPSERT_TARGET_MISSING` additionally offer a **Verileri yeniden yükle** action, because those are stale-state failures the user can resolve. A generic "Kaydetme hatası" label without the underlying reason is not acceptable: it leaves the user with no path to recovery.
+
 ## Deployment
 
 1. Back up the target database.
@@ -111,6 +117,14 @@ Domain validation errors remain separate from persistence and authorization fail
 10. Select **Gerçek Sistem** and verify authorization and persistence.
 
 To remove the build-phase schema, run `database/MR_Rollback_Durable_Persistence.sql`. **Rollback permanently deletes all MR_* application data.** It never modifies the three corporate source tables.
+
+## Native-driver loading
+
+`src/server/db/pool.js` imports the pure-JavaScript `mssql` core statically (type constants, `ISOLATION_LEVEL`) and loads the native `mssql/msnodesqlv8.js` driver **lazily**, on first connection. Both packages re-export the same `lib/base` definitions, so the type constants are identical.
+
+The lazy load is required, not cosmetic. A module-level `import` of `mssql/msnodesqlv8.js` makes `next build` fail while collecting API-route page data on any host where the native binding has not been compiled (Linux CI, a workstation installing with `--ignore-scripts`). With the lazy load, the build succeeds everywhere and a missing driver degrades to a runtime `DATABASE_UNAVAILABLE` (503) with an explicit Turkish message instead of a build crash.
+
+`package-lock.json` must resolve `msnodesqlv8`. When it is absent from the lock file, `npm ci` fails outright and the host has no SQL driver at all. `test/mergen-rota-critical-fixes.test.mjs` guards both invariants.
 
 ## Native-driver installation troubleshooting
 

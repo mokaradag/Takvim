@@ -13,6 +13,7 @@ import {
   projectTypeMeta,
   visibleProjects
 } from '../../domain/projectTypes';
+import { useAppState } from '../../state/AppStateProvider';
 import { useAllPeople, useAllTasks, useTaskActions, useWorkspace } from '../../state/hooks';
 import { WbsView } from '../wbs/WbsView';
 
@@ -411,6 +412,7 @@ export function ProjectWorkspaceView() {
   const workspace = useWorkspace();
   const people = useAllPeople();
   const tasks = useAllTasks();
+  const { canCreateProjects } = useAppState();
   const { addProject, updateProject } = useTaskActions();
   const [tab, setTab] = useState('definition');
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
@@ -423,10 +425,27 @@ export function ProjectWorkspaceView() {
     return result;
   };
 
+  const backToProjectList = () => {
+    setTab('definition');
+    workspace.selectWorkspace(null);
+  };
+
   return (
     <div className="col" style={{ gap: 16 }}>
       <div className="card" style={{ padding: 8 }}>
         <div className="row" role="tablist" aria-label="Proje yapısı sekmeleri" style={{ gap: 6, flexWrap: 'wrap' }}>
+          {/* Seçili projeden proje listesine dönüş. Bu düğüm olmadan kullanıcı
+              proje seçtikten sonra karşılama/proje seçim ekranına hiç dönemiyordu. */}
+          {project && (
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={backToProjectList}
+              title="Proje seçim ekranına dön"
+            >
+              <Icons.ArrowLeft size={14} /> Proje listesi
+            </button>
+          )}
           <button
             type="button"
             role="tab"
@@ -447,7 +466,15 @@ export function ProjectWorkspaceView() {
             <Icons.Layers size={14} /> İş Dağılım Ağacı
           </button>
           <div style={{ flex: 1 }} />
-          <button type="button" className="btn primary" onClick={() => setProjectCreateOpen(true)}>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => setProjectCreateOpen(true)}
+            disabled={!canCreateProjects}
+            title={canCreateProjects
+              ? 'Kurumsal listede olmayan serbest bir proje tanımlayın'
+              : 'Bu oturumda manuel proje oluşturma yetkiniz bulunmuyor.'}
+          >
             <Icons.Plus size={14} /> Yeni Proje
           </button>
         </div>
