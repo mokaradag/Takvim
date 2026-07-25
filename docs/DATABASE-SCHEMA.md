@@ -87,20 +87,16 @@ Indexes are limited to demonstrated repository and UI query patterns rather than
 
 ## Creation and rollback
 
-Create with:
+Remove existing MERGEN-owned objects with:
+
+`database/MR_Rollback_Durable_Persistence.sql`
+
+Then create the complete current schema with:
 
 `database/MR_Create_Durable_Persistence.sql`
 
-The script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, seeds the default calendar, seeds SYSTEM_ADMIN roles for 10276, 18068, and 23977, and records migration `0001_durable_persistence`.
+The creation script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, creates `MR_V_CorporateProjectAccess` directly with the `PPTS` role code, seeds the default calendar, seeds SYSTEM_ADMIN roles for 10276, 18068, and 23977, and records `0001_durable_persistence`.
 
-For an existing durable-persistence installation, apply:
-
-`database/MR_Migrate_0002_Project_Portfolio_Scaling.sql`
-
-Migration `0002_project_portfolio_scaling` corrects the HR09 `pptsSicil` role code to `PPTS`, recreates the corporate access view, and synchronizes corporate Project leads from `PROJECT_MANAGER`.
-
-Remove with:
-
-`database/MR_Rollback_Durable_Persistence.sql`
+During the first corporate project synchronization, the repository fills `MR_Projects.LeadSicil` from the `PROJECT_MANAGER` role. No separate `0002` migration script is required while the application is being tested through clean database recreation.
 
 The rollback is intentionally destructive to MERGEN-owned data, drops views before tables in dependency-safe reverse order, is rerunnable, and never drops or alters HR02, A01, or HR09.
