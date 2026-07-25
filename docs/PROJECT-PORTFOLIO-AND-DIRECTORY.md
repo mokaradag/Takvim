@@ -41,19 +41,17 @@ Kurumsal bir projenin `Proje Sorumlusu`, `MR_V_CorporateProjectAccess` görünü
 
 `src/server/repository/corporateQueries.js`, kurumsal proje eşitlemesi sırasında `MR_Projects.LeadSicil` alanını bu rolün siciliyle yeniler.
 
-## PPTS rol düzeltmesi
+## PPTS rol düzeltmesi ve temiz kurulum
 
-`HR09_projeSorumlu.pptsSicil` alanından üretilen rol kodu `PPTS` olmalıdır. Var olan kurulumlarda aşağıdaki geçiş betiği çalıştırılır:
+`HR09_projeSorumlu.pptsSicil` alanından üretilen rol kodu `PPTS` olmalıdır. Uygulama henüz temiz kurulumla sınandığı için ayrı bir artımlı geçiş betiği kullanılmaz.
+
+Tüm MERGEN Rota tabloları ve görünümleri kaldırıldıktan sonra şu temiz kurulum betiği çalıştırılır:
 
 ```text
-database/MR_Migrate_0002_Project_Portfolio_Scaling.sql
+database/MR_Create_Durable_Persistence.sql
 ```
 
-Betiğin yaptığı işlemler:
-
-- `MR_V_CorporateProjectAccess` görünümünü `PPTS` rol koduyla yeniden oluşturur.
-- Kurumsal proje sorumlularını `PROJECT_MANAGER` rolünden yeniden eşitler.
-- `MR_SchemaMigrations` tablosuna `0002_project_portfolio_scaling` kaydını ekler.
+Bu betik `MR_V_CorporateProjectAccess` görünümünü baştan `PPTS` rol koduyla oluşturur. Uygulama ilk kurumsal proje eşitlemesinde `MR_Projects.LeadSicil` alanını `PROJECT_MANAGER` rolünden doldurur. Dolayısıyla `MR_Migrate_0002_Project_Portfolio_Scaling.sql` adlı ayrı bir betik bulunmaz ve çalıştırılmaz.
 
 ## Ekip sayfası
 
