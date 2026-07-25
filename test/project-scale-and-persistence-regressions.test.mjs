@@ -104,6 +104,7 @@ test('uzun proje ve personel seçim noktaları canlı arama bileşenini kullanı
     'src/components/shell/ProjectCreateDialog.jsx',
     'src/features/project/ProjectWorkspaceView.jsx',
     'src/features/simple/SimpleModePanel.jsx',
+    'src/features/task-detail/TaskDrawer.jsx',
     'src/features/team/TeamView.jsx'
   ]) {
     assert.match(source(path), /SearchableSelect/, `${path} canlı arama seçicisini kullanmalıdır`);
