@@ -69,6 +69,12 @@ MERGEN Rota şu kurumsal tabloları yalnızca okur:
 
 Kurumsal Project kodu/adı/türü sunucu tarafından yönetilir. Senkronizasyon eksik kayıtları `MR_Projects` içine ekler, kök WBS oluşturur, kaynak alanları değiştiğinde günceller, uygulama metadata'sını korur ve kaynakta geçici olarak kaybolan kaydı silmek yerine pasif yapar.
 
+### Kurumsal iş dağılım ağacı: `CN43N`
+
+Kurumsal projelerin İş Dağılım Ağacı MERGEN Rota içinde tanımlanmaz; **farklı bir veritabanında** bulunan `CN43N` tablosundan eşitlenir. Bu nedenle ikinci bir bağlantı tanımı gerekir (`.env.example` içindeki `MERGEN_ROTA_WBS_DB_*` bloğu). Eşleştirme `Proje tanımı` kolonu ile proje kodu üzerinden yapılır; `WBS element`, `Name`, `Level`, `Status`, `PYP kodu` ve `Proj.type` kolonları kullanılır, `Kontrol kodu` ile planlanan tarih kolonları kullanılmaz.
+
+Yapı uygulama üzerinden değiştirilemez: hem arayüz hem sunucu kurumsal WBS yazma girişimlerini reddeder. Görevlerin bu düğümlere atanması ve düğümler arasında taşınması mümkündür. Bağlantı tanımlanmazsa eşitleme atlanır ve kurumsal projeler yalnızca kök düğümle görünür; kaynak erişilemezse veri yüklemesi kurumsal WBS olmadan sürer. Ayrıntılar: `docs/WBS-AND-WORKSPACES.md`.
+
 ## Yetkilendirme
 
 Öncelik sırası:
@@ -96,7 +102,7 @@ Destek varsayılan olarak kapalıdır. Sicil request body, query string, browser
 
 1. Hedef veritabanının yedeğini alın.
 2. `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın.
-3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın.
+3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Yalnızca pre-Keycloak entegrasyon ortamında geçici geliştirme Sicil'ini etkinleştirin.
 5. `npm ci`
 6. `npm run build`
@@ -119,10 +125,10 @@ npm run start -- -H 0.0.0.0 -p 3000
 
 ## Yapı
 
-- `src/domain` — Project, Task, Dependency, Person, WBS, Baseline ve calendar kavramları
+- `src/domain` — Project, Task, Dependency, Person, WBS, Baseline, calendar kavramları ve Gerçek Sistem kimlik kuralları
 - `src/scheduling` — tarih, çalışma günü, dependency ve saf CPM hesapları
 - `src/data` — AppRepository sözleşmesi, Demo adapter ve Actual API adapter
-- `src/server` — server-only identity, authorization, SQL config/pool ve durable repository
+- `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı) ve durable repository
 - `src/state` — yükleme, sıralı mutation queue, Task patch coalescing ve access-aware scheduling selector'ları
 - `src/features` — uygulama özellikleri; SQL veya API route import etmez
 - `src/components/shell` — application shell, Veri Modu/Kullanım Modu seçimleri ve persistence durumları

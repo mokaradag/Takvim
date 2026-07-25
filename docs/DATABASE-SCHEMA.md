@@ -2,6 +2,8 @@
 
 All application-owned SQL Server objects use the `dbo.MR_` prefix. Corporate source tables are read-only and have no foreign keys from MERGEN tables. Employee references are logical Sicil references because HR02 owns employee lifecycle.
 
+Identity values in `uniqueidentifier` columns are only required to be valid GUIDs. Corporate systems emit GUIDs without RFC 4122 version and variant bits (for example `D5D70AEC-0A88-F111-9136-00505699BACD`), so the application must never validate them against a version-constrained UUID pattern. All layers canonicalize identities to lower case before comparing them, because SQL Server returns them as upper-case text.
+
 ## Tables
 
 | Table | Purpose | Important keys and indexes |
@@ -14,7 +16,7 @@ All application-owned SQL Server objects use the `dbo.MR_` prefix. Corporate sou
 | `MR_Projects` | Corporate registry and manual Projects | PK `ProjectId`; filtered unique `ProjectCode`; source/active and calendar indexes; rowversion |
 | `MR_ProjectTags` | Controlled Project tag catalog | PK `ProjectTagId`; unique `(ProjectId, TagName)` |
 | `MR_ProjectAccess` | MERGEN-owned full/read grants | PK `(ProjectId, Sicil)`; Sicil/access index; rowversion |
-| `MR_WBS` | Structural WBS hierarchy | PK `WbsId`; unique `(WbsId, ProjectId)` and `(ProjectId, Code)`; same-Project composite parent FK; project/parent/sort index; rowversion |
+| `MR_WBS` | Structural WBS hierarchy (manual and CN43N-sourced) | PK `WbsId`; unique `(WbsId, ProjectId)` and `(ProjectId, Code)`; filtered unique `(ProjectId, SourceKey)`; same-Project composite parent FK; project/parent/sort and project/source indexes; rowversion |
 | `MR_Tasks` | Canonical mutable activity data | PK `TaskId`; unique `(TaskId, ProjectId)`; same-Project WBS FK; project/status, target, planned-range and WBS indexes; rowversion |
 | `MR_TaskAssignees` | Normalized Task-to-Sicil assignments | PK `(TaskId, Sicil)`; critical `IX_MR_TaskAssignees_Sicil_Task` |
 | `MR_TaskDependencies` | Normalized FS/SS/FF/SF relationships | PK `TaskDependencyId`; same-Project composite Task FKs; unique relationship; predecessor index |
@@ -28,7 +30,13 @@ All application-owned SQL Server objects use the `dbo.MR_` prefix. Corporate sou
 
 ## Project schema
 
-`SourceType` is `CORPORATE` or `MANUAL`. Corporate code, name, type fields, and `LeadSicil` are synchronized from A01/HR09 and are server-authoritative. The corporate lead comes from `MR_V_CorporateProjectAccess.RoleCode = 'PROJECT_MANAGER'`. Application metadata such as Data Date, color token, calendar, and tags remains MERGEN-owned. Manual Project leads remain selectable. A filtered unique index protects non-null Project codes without preventing multiple manual Projects whose code is null.
+`SourceType` is `CORPORATE` or `MANUAL`. Corporate code, name, type fields, and `LeadSicil` are synchronized from A01/HR09 and are server-authoritative. The corporate lead comes from `MR_V_CorporateProjectAccess.RoleCode = 'PROJECT_MANAGER'`. Application metadata such as Data Date, color token, calendar, and tags remains MERGEN-owned. `DataDate` is nullable: it is the progress cut-off date, not a row timestamp, and a project can be created before that cut-off is decided. Corporate project updates preserve `LeadSicil` server-side (`CASE WHEN SourceType = 'MANUAL'`), so editing MERGEN-owned fields cannot clear the corporate lead. Manual Project leads remain selectable. A filtered unique index protects non-null Project codes without preventing multiple manual Projects whose code is null.
+
+## WBS schema and corporate source
+
+`SourceType` is `CORPORATE` or `MANUAL`. Manual rows are authored in the application. Corporate rows are mirrored from the corporate `CN43N` table, which lives in a different database and is reached through the dedicated `MERGEN_ROTA_WBS_DB_*` connection. Corporate rows carry the source attributes: `SourceKey` (`WBS element`), `OutlineCode` (`PYP kodu`), `WbsLevel` (`Level`), `StatusCode` (`Status`) and `ElementTypeCode` (`Proj.type`). `CK_MR_WBS_SourceKey` keeps `SourceKey` exclusive to corporate rows and the filtered unique index makes `(ProjectId, SourceKey)` the stable identity used by synchronization.
+
+The project root node is always MERGEN-generated: its `SourceKey` is `NULL` and its `Code` is the project code for corporate projects. Synchronization never deletes it, never touches manual rows, and deletes a vanished corporate element only when no child row and no Task reference it. Column mapping and synchronization rules are documented in `docs/WBS-AND-WORKSPACES.md`.
 
 ## WBS and Task consistency
 

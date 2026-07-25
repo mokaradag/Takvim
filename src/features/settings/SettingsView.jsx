@@ -1,5 +1,6 @@
 'use client';
 import { Icons } from '../../components/icons';
+import { DataModeIndicator } from '../../components/shell/DataModeIndicator';
 import { HeroHeader } from '../../components/ui';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 
@@ -134,6 +135,21 @@ export function SettingsView({ t, setTweak }) {
       </section>
 
       <div className="settings-grid">
+        {/* Gerçek Sistem / Demo anahtarı kenar çubuğundan buraya taşındı. */}
+        <div className="card">
+          <div className="card-title" style={{ marginBottom: 4 }}>
+            <Icons.Database size={14} /><span>Veri kaynağı</span>
+          </div>
+          <div className="card-sub">Uygulamanın hangi veri kaynağıyla çalıştığını belirler.</div>
+
+          <SettingsRow
+            title="Çalışma verisi"
+            desc="Gerçek Sistem kurumsal SQL Server üzerinde çalışır; Demo modu örnek veriyle güvenle denemenizi sağlar. Mod değiştirilmeden önce bekleyen kayıtlar tamamlanır."
+          >
+            <DataModeIndicator variant="settings" />
+          </SettingsRow>
+        </div>
+
         <div className="card">
           <div className="card-title" style={{ marginBottom: 4 }}>
             <Icons.Sun size={14} /><span>Görünüm</span>

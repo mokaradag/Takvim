@@ -7,6 +7,8 @@
 .simple-entry-head h2 { margin: 7px 0 4px; font-size: 19px; letter-spacing: -.025em; }
 .simple-entry-head p { margin: 0; max-width: 760px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
 .simple-mode-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 800; }
+/* Akış göstergesi ve "Yeni proje" düğmesi başlığın sağ kolonunda alt alta durur. */
+.simple-entry-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; flex: 0 0 auto; }
 .simple-entry-flow { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--bg-elev-2); color: var(--text-muted); font-size: 10.5px; }
 .simple-entry-flow i { color: var(--accent); font-style: normal; }
 .simple-entry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
@@ -123,6 +125,7 @@
   .simple-calendar-tabs { width: 100%; }
   .simple-calendar-tabs button { flex: 1; }
   .simple-entry-head { flex-direction: column; }
+  .simple-entry-actions { align-items: flex-start; }
   .simple-entry-flow { display: none; max-width: 100%; overflow-x: auto; }
   .simple-entry-grid { grid-template-columns: 1fr; }
   .simple-project-field, .simple-task-field { grid-column: auto; }

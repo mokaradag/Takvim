@@ -1,4 +1,5 @@
 import 'server-only';
+import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 import { applyDefaultCalendarProjection } from './calendarProjection.js';
@@ -28,7 +29,7 @@ async function loadDefaultCalendarId(executor) {
   `);
   return result.recordset?.[0]?.CalendarId == null
     ? null
-    : String(result.recordset[0].CalendarId);
+    : (canonicalActualId(result.recordset[0].CalendarId) ?? String(result.recordset[0].CalendarId));
 }
 
 export function createProjectedSqlAppRepository() {

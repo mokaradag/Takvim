@@ -50,8 +50,7 @@
 .mode-picker-points svg { color: var(--status-done); }
 .mode-picker-action { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--accent); font-size: 12.5px; font-weight: 750; }
 .data-mode-picker { width: min(900px, 96vw); }
-/* Veri modu anahtarı: sağ alt köşe kaydetme bildirimlerine ayrıldığı için
-   anahtar kenar çubuğu altbilgisinde ya da veri sınırı ekranında yaşar. */
+/* Veri modu anahtarı: kenar çubuğunu sade tutmak için Ayarlar sayfasında yaşar. */
 .data-mode-indicator {
   display: flex;
   align-items: center;
@@ -88,10 +87,10 @@
 }
 .data-mode-indicator button:hover { background: color-mix(in oklab, var(--accent) 22%, transparent); }
 .data-mode-indicator button:disabled { opacity: .6; cursor: wait; }
-/* Kenar çubuğu 240px geniştir: etiket ve düğme alt alta yerleşir. */
-.data-mode-variant-sidebar { width: 100%; flex-direction: column; align-items: stretch; gap: 7px; }
-.data-mode-variant-sidebar button { margin-left: 0; width: 100%; padding: 5px 8px; }
-.data-mode-variant-boundary { justify-content: space-between; background: var(--bg-elev); }
+/* Ayarlar satırında anahtar tek satırda, kendi genişliğinde durur. */
+.data-mode-variant-settings { justify-content: space-between; gap: 12px; background: var(--bg-elev); min-width: min(320px, 100%); }
+.data-mode-variant-settings strong { font-size: 11.5px; }
+.data-mode-variant-settings small { font-size: 10px; }
 
 /* Ayarlar çalışma modu kartları. */
 .settings-mode-section { padding: 22px; border: 1px solid var(--chrome-border); border-radius: var(--r-xl); background: linear-gradient(135deg, var(--chrome-bg-soft), var(--bg-elev)); }

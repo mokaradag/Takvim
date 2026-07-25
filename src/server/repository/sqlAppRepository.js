@@ -1,25 +1,33 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
+import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
+import { CORPORATE_WBS_READ_ONLY_MESSAGE } from '../../domain/projectTypes.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
+import { synchronizeCorporateWbs } from './corporateWbsSync.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function id(value) { return value == null ? null : String(value); }
+// SQL Server GUID değerlerini büyük harf döndürür; istemci küçük harf gönderir.
+// Tüm kimlikler bu iki yardımcı üzerinden kanonikleştirilir, böylece sunucudaki
+// karşılaştırmalar yalnızca harf büyüklüğü farkı nedeniyle başarısız olamaz.
+function id(value) { return value == null ? null : (canonicalActualId(value) ?? String(value)); }
 function isoDate(value) { return value ? new Date(value).toISOString().slice(0, 10) : null; }
 function nullableNumber(value) { return value == null || value === '' ? null : Number(value); }
 function request(executor) { return executor.request(); }
 function uuid(value = randomUUID()) {
-  const normalized = String(value);
-  if (!UUID_PATTERN.test(normalized)) {
+  const normalized = canonicalActualId(value);
+  if (!normalized) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Gerçek Sistem kimlikleri geçerli UUID olmalıdır.');
   }
   return normalized;
 }
+function isCorporateSource(value) {
+  return String(value || '').toUpperCase() === 'CORPORATE';
+}
+
 function normalizeDelete(value) {
   return typeof value === 'string' ? { id: value, version: null } : value;
 }
@@ -381,6 +389,14 @@ async function loadSnapshotFrom(executor, auth) {
       code: row.Code,
       name: row.Name,
       sortOrder: row.SortOrder,
+      // Kurumsal projelerin dağılım ağacı CN43N kaynağından beslenir; arayüz bu
+      // alanlara bakarak düzenleme eylemlerini kapatır ve kaynak bilgisini gösterir.
+      source: String(row.SourceType || 'MANUAL').toLowerCase(),
+      sourceKey: row.SourceKey || null,
+      outlineCode: row.OutlineCode || null,
+      level: row.WbsLevel == null ? null : Number(row.WbsLevel),
+      statusCode: row.StatusCode || null,
+      elementTypeCode: row.ElementTypeCode || null,
       version: encodeVersion(row.RowVersion)
     })),
     tasks: (taskRows || []).map((row) => ({
@@ -530,7 +546,7 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
     UPDATE dbo.MR_Projects
     SET ProjectName = CASE WHEN SourceType = 'MANUAL' THEN @projectName ELSE ProjectName END,
         ProjectCode = CASE WHEN SourceType = 'MANUAL' THEN @projectCode ELSE ProjectCode END,
-        LeadSicil = @leadSicil,
+        LeadSicil = CASE WHEN SourceType = 'MANUAL' THEN @leadSicil ELSE LeadSicil END,
         DataDate = @dataDate,
         ColorToken = @colorToken,
         CalendarId = @calendarId,
@@ -547,6 +563,17 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
   return { created: false, consumedRootId: null };
 }
 
+async function assertWbsProjectIsWritableStructure(executor, projectId) {
+  const project = await projectRow(executor, projectId);
+  if (!project) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'WBS projesi bulunamadı.');
+  }
+  if (isCorporateSource(project.SourceType)) {
+    throw new ServerPersistenceError('FORBIDDEN', CORPORATE_WBS_READ_ONLY_MESSAGE);
+  }
+  return project;
+}
+
 async function commitWbs(executor, actor, node, correlationId) {
   const wbsId = uuid(node.id);
   const projectId = uuid(node.projectId);
@@ -554,19 +581,24 @@ async function commitWbs(executor, actor, node, correlationId) {
   if (before) {
     const storedProjectId = id(before.ProjectId);
     assertProjectWriteAccess(actor.effective, storedProjectId);
-    if (storedProjectId !== projectId) {
+    if (!sameActualId(storedProjectId, projectId)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'WBS kaydı farklı bir projeye taşınamaz.');
+    }
+    if (isCorporateSource(before.SourceType)) {
+      throw new ServerPersistenceError('FORBIDDEN', CORPORATE_WBS_READ_ONLY_MESSAGE);
     }
   } else {
     assertProjectWriteAccess(actor.effective, projectId);
   }
+  // Kurumsal projelerin iş dağılım ağacı yalnızca CN43N eşitlemesiyle yazılır.
+  await assertWbsProjectIsWritableStructure(executor, projectId);
   if (node.parentId) {
     let parent = await wbsRowForUpdate(executor, node.parentId);
-    if (!parent || id(parent.ProjectId) !== projectId) {
+    if (!parent || !sameActualId(parent.ProjectId, projectId)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Üst WBS aynı projede bulunmalıdır.');
     }
     while (parent) {
-      if (id(parent.WbsId) === wbsId) {
+      if (sameActualId(parent.WbsId, wbsId)) {
         throw new ServerPersistenceError('MUTATION_FAILED', 'WBS döngüsü oluşturulamaz.');
       }
       parent = parent.ParentWbsId ? await wbsRowForUpdate(executor, parent.ParentWbsId) : null;
@@ -612,7 +644,7 @@ async function commitTask(executor, actor, task, correlationId) {
   }
   if (task.wbsId) {
     const wbs = await wbsRow(executor, task.wbsId);
-    if (!wbs || id(wbs.ProjectId) !== projectId) {
+    if (!wbs || !sameActualId(wbs.ProjectId, projectId)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Görev WBS kaydı aynı projede olmalıdır.');
     }
   }
@@ -626,7 +658,7 @@ async function commitTask(executor, actor, task, correlationId) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Kilometre taşı süresi sıfır olmalıdır.');
   }
   const assigneeSicils = await ensurePeople(executor, task.assigneeIds || []);
-  const projectChanged = before && id(before.ProjectId) !== projectId;
+  const projectChanged = before && !sameActualId(before.ProjectId, projectId);
   if (projectChanged) {
     const dependencyCleanup = request(executor);
     dependencyCleanup.input('taskId', sql.UniqueIdentifier, taskId);
@@ -717,7 +749,7 @@ async function commitTask(executor, actor, task, correlationId) {
   for (const dependency of task.deps || []) {
     const predecessorId = uuid(dependency.predecessorId);
     const predecessor = await taskRow(executor, predecessorId);
-    if (!predecessor || id(predecessor.ProjectId) !== projectId || predecessorId === taskId) {
+    if (!predecessor || !sameActualId(predecessor.ProjectId, projectId) || sameActualId(predecessorId, taskId)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Bağımlılık görevleri aynı projede ve birbirinden farklı olmalıdır.');
     }
     const dep = request(executor);
@@ -777,6 +809,9 @@ async function deleteWbs(executor, actor, entry, correlationId) {
   if (!before) return;
   const projectId = id(before.ProjectId);
   assertProjectWriteAccess(actor.effective, projectId);
+  if (isCorporateSource(before.SourceType)) {
+    throw new ServerPersistenceError('FORBIDDEN', CORPORATE_WBS_READ_ONLY_MESSAGE);
+  }
   if (before.ParentWbsId == null) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Proje kök WBS düğümü silinemez.');
   }
@@ -823,6 +858,9 @@ export function createSqlAppRepository() {
       const pool = await getSqlPool();
       const auth = await loadAuthorizationContext(pool);
       await withSqlTransaction((transaction) => synchronizeCorporateProjects(transaction, auth.sicil));
+      // Kurumsal iş dağılım ağacı ikinci veritabanındaki CN43N tablosundan eşitlenir.
+      // Kaynak yapılandırılmadıysa veya erişilemiyorsa anlık görüntü yüklenmeye devam eder.
+      await synchronizeCorporateWbs(pool, auth.sicil);
       const refreshedAuth = await loadAuthorizationContext(pool);
       return loadSnapshotFrom(pool, refreshedAuth);
     },
@@ -835,12 +873,12 @@ export function createSqlAppRepository() {
         const consumedRootIds = new Set();
 
         for (const project of changes.projectUpserts) {
-          const root = changes.wbsUpserts.find((node) => node.projectId === project.id && node.parentId == null) || null;
+          const root = changes.wbsUpserts.find((node) => sameActualId(node.projectId, project.id) && node.parentId == null) || null;
           const result = await commitProject(transaction, actor, project, root, correlationId);
           if (result.consumedRootId) consumedRootIds.add(result.consumedRootId);
         }
         for (const node of changes.wbsUpserts) {
-          if (!consumedRootIds.has(node.id)) await commitWbs(transaction, actor, node, correlationId);
+          if (!consumedRootIds.has(id(node.id))) await commitWbs(transaction, actor, node, correlationId);
         }
         for (const task of changes.taskUpserts) await commitTask(transaction, actor, task, correlationId);
         for (const entry of changes.taskDeletes) await deleteTask(transaction, actor, entry, correlationId);
@@ -850,16 +888,16 @@ export function createSqlAppRepository() {
         }
 
         const authoritative = await loadSnapshotFrom(transaction, actor);
-        const projectIds = new Set(changes.projectUpserts.map((value) => value.id));
-        const wbsIds = new Set([...changes.wbsUpserts.map((value) => value.id), ...consumedRootIds]);
-        const taskIds = new Set(changes.taskUpserts.map((value) => value.id));
+        const projectIds = new Set(changes.projectUpserts.map((value) => id(value.id)));
+        const wbsIds = new Set([...changes.wbsUpserts.map((value) => id(value.id)), ...consumedRootIds]);
+        const taskIds = new Set(changes.taskUpserts.map((value) => id(value.id)));
         return {
           projectUpserts: authoritative.projects.filter((value) => projectIds.has(value.id)),
           projectDeletes: [],
           wbsUpserts: authoritative.wbs.filter((value) => wbsIds.has(value.id)),
-          wbsDeletes: changes.wbsDeletes.map((value) => value.id),
+          wbsDeletes: changes.wbsDeletes.map((value) => id(value.id)),
           taskUpserts: authoritative.tasks.filter((value) => taskIds.has(value.id)),
-          taskDeletes: changes.taskDeletes.map((value) => value.id)
+          taskDeletes: changes.taskDeletes.map((value) => id(value.id))
         };
       });
     }

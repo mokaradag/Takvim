@@ -74,7 +74,11 @@ FULL Project users may create/edit/delete Tasks, assign employees, manage depend
 
 PARTIAL users cannot mutate Project, WBS, Task, assignment, dependency, baseline, tag, or access records. The client may disable controls, but the server independently returns FORBIDDEN for unauthorized writes.
 
-Corporate identity fields are source-controlled. Even FULL users cannot change corporate SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName, or LeadSicil. They may change supported application metadata such as Data Date, color, calendar, and tags. Manual Project owners may change the manual Project lead.
+Corporate identity fields are source-controlled. Even FULL users cannot change corporate SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName, or LeadSicil; the update statement preserves the corporate lead explicitly, so editing MERGEN-owned fields can never clear it. They may change supported application metadata such as Data Date, color, calendar, and tags. Manual Project owners may change the manual Project lead.
+
+The corporate WBS structure is source-controlled in the same sense: FULL access on a corporate Project permits Task work and Task-to-WBS assignment, but never WBS create/rename/move/delete. That structure comes from the CN43N synchronization only, and the server rejects client attempts with FORBIDDEN.
+
+Access maps are keyed by canonical Actual System identities (lower-case GUIDs). SQL Server returns `uniqueidentifier` values as upper-case text, so an un-canonicalized key made the effective-access lookup miss and denied writes to users who were in fact FULL on the project.
 
 ## Authorization-filtered snapshots
 

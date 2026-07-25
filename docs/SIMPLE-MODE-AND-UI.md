@@ -65,6 +65,12 @@ Serbest proje tanımı ekranından kurumsal listeye **Kurumsal proje listesine d
 
 Basit Modda proje oluşturmak etkin çalışma alanını **değiştirmez** (`addProject(input, { focusWorkspace: false })`). Çalışma alanı değiştiğinde uygulama kabuğu içerik alanını yeniden monte ettiği için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu ne de hatayı görebiliyordu.
 
+### Görev tanımlamadan yalnızca proje oluşturma
+
+Kullanıcı bir projeyi açıp görevleri **sonra** tanımlamak isteyebilir. Bu nedenle Basit Modda, hızlı görev formundan bağımsız bir **Yeni proje** düğmesi bulunur; düğme Gelişmiş Moddaki `ProjectCreateDialog` penceresini açar ve yalnızca projeyi (ve kök iş dağılım düğümünü) oluşturur. Oluşturulan proje form üzerindeki proje seçiminde etkin hâle gelir, çalışma alanı değişmez ve hiçbir görev kaydı üretilmez. Düğme oturumun `canCreateProjects` yetkisi yoksa devre dışıdır.
+
+Pencere, hızlı görev formunun **dışında** render edilir: iç içe `<form>` öğeleri geçersiz HTML'dir ve tarayıcı iç formu yok sayar.
+
 Etiket kataloğuna yazma, görev kaydından **bağımsız ikincil bir işlemdir**. Proje satırı yazılamıyorsa görev yine oluşturulur ve kullanıcıya uyarı gösterilir; asıl işlem ikincil bir yazma yüzünden engellenmez.
 
 ## Geri dönüş yolları
@@ -79,7 +85,23 @@ Her seçim yapılabilen yüzeyin geri dönüş yolu bulunmalıdır:
 
 ## Veri modu anahtarı ve kaydetme bildirimi
 
-Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı kenar çubuğu altbilgisinde yaşar (`DataModeIndicator variant="sidebar"`); uygulama kabuğu render edilemediğinde (veri yükleme/hata ekranı) `AppDataBoundary` kendi kopyasını gösterir (`variant="boundary"`). Daha önce iki yüzey aynı köşede üst üste biniyordu.
+Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı **Ayarlar** sayfasındaki *Veri kaynağı* kartında yaşar (`DataModeIndicator variant="settings"`). Kenar çubuğu ve veri sınırı ekranı anahtarı hiç göstermez; kenar çubuğu yalnızca çalışma alanı, gezinme ve kullanıcı bilgisini taşır.
+
+Ayarlar sayfasına yalnızca uygulama kabuğu üzerinden ulaşıldığı için **ilk** veri yüklemesi başarısız olduğunda hata ekranı ayrıca bir **Demo moduna geç** çıkışı sunar (`DemoModeEscape`). Bu tek düğme olmadan Gerçek Sistem erişilemediğinde uygulama tamamen kilitlenirdi.
+
+## Uygulama kabuğu yeniden yüklemede sökülmez
+
+`AppDataBoundary` yükleme/hata perdesini **yalnızca ilk veri yüklemesinde** gösterir (`dataStatus === 'loading' && !hasLoadedOnce`). Daha önce her yeniden yükleme kabuğu söküyordu: proje oluşturduktan veya değişiklik kaydettikten sonra `AppShell` yeniden monte oluyor, açık sayfa ve karşılama ekranı tercihi sıfırlanıyor ve uygulama ilk kez açılmış gibi davranıyordu.
+
+Veri zaten yüklüyken başarısız olan bir tazeleme kabuğu kapatmaz; kullanıcı son başarılı veriyle çalışmayı sürdürür ve kaydetme bildirimi alanında **Veriler yenilenemedi** uyarısı ile yeniden deneme düğmesi gösterilir.
+
+## Proje Yapısı · yalnızca proje listesi kaydırılır
+
+Proje seçici kartında başlık, arama alanı, tamamlananları gösterme kutusu ve proje türü hızlı seçim düğmeleri donuk (`.project-browser-head`) kalır; yalnızca listelenen proje düğmeleri (`.project-browser-list`) dikey olarak kaydırılır. Kurumsal katalog yüzlerce proje içerdiği için süzgeçler daha önce listeyle birlikte görünüm alanının dışına kayıyordu. **Daha fazla göster** düğmesi de kaydırılan bölümün içindedir.
+
+## Kurumsal iş dağılım ağacı salt okunurdur
+
+Gerçek Sistem modunda kurumsal projelerin İş Dağılım Ağacı sekmesi düzenleme eylemlerini (Alt ekle / Ad / Taşı / Sil) hiç göstermez ve yapının CN43N kaynağından beslendiğini açıklayan bir bilgi kartı sunar. Satırlarda kaynaktan gelen seviye, PYP kodu, eleman türü ve durum bilgisi gösterilir. Görevleri bu düğümlere atamak ve düğümler arasında taşımak yine mümkündür; görev-WBS bağı MERGEN Rota verisidir. Demo modunda kurumsal kaynak bulunmadığı için örnek projelerin ağacı düzenlenebilir kalır.
 
 Kaydetme bildirimi artık sabit "Kaydetme hatası" metni yerine sunucunun gerçek iletisini, hata kodunu ve varsa alan/yol bilgisini gösterir. Sürüm/eşzamanlılık hatalarında (`CONFLICT`, `UPSERT_CREATE_COLLISION`, `UPSERT_TARGET_MISSING`) **Verileri yeniden yükle** eylemi sunulur.
 

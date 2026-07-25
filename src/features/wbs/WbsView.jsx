@@ -9,6 +9,7 @@ import {
   selectWbsDescendantIds,
   selectWbsTaskRollup
 } from '../../domain/selectors/index.js';
+import { isCorporateProject } from '../../domain/projectTypes';
 import { validateWbsStructure } from '../../domain/validation/index.js';
 import { fmtDisplayDate } from '../../scheduling/dates';
 import {
@@ -19,6 +20,7 @@ import {
   useWorkspaceTasks,
   useWorkspaceWbs
 } from '../../state/hooks';
+import { useAppState } from '../../state/AppStateProvider';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 function visibleRows(tree, expanded) {
@@ -42,6 +44,8 @@ function projectLabel(project) {
 
 export function WbsView() {
   const workspace = useWorkspace();
+  const { session } = useAppState();
+  const isActualDataMode = String(session?.dataMode || '').toLowerCase() === 'actual';
   const tasks = useWorkspaceTasks();
   const wbs = useWorkspaceWbs();
   const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
@@ -94,9 +98,13 @@ export function WbsView() {
     );
   }
 
-  const canEdit = canWriteProject(workspace.selectedProject);
+  // Kurumsal kaynak (CN43N) yalnızca Gerçek Sistem modunda vardır.
+  const isCorporate = isActualDataMode && isCorporateProject(workspace.selectedProject);
+  // Kurumsal projelerde yapı CN43N kaynağından gelir; düzenleme eylemleri kapatılır.
+  const canEdit = canWriteProject(workspace.selectedProject) && !isCorporate;
   const rows = visibleRows(tree, expanded);
   const scheduleTasks = projectSchedule?.tasks || {};
+  const canMoveTasks = canWriteProject(workspace.selectedProject);
   const sourceTasks = moveSourceWbsId ? tasks.filter((task) => task.wbsId === moveSourceWbsId) : [];
   const selectedCount = selectedTaskIds.size;
 
@@ -164,14 +172,30 @@ export function WbsView() {
           <div className="col" style={{ gap: 4 }}>
             <div style={{ fontSize: 17, fontWeight: 700 }}>{projectLabel(workspace.selectedProject)}</div>
             <div className="muted" style={{ fontSize: 12.5 }}>
-              {wbs.length} dağılım düğümü · {tasks.length} aktivite · hiyerarşi proje düzeyinde yönetilir
+              {wbs.length} dağılım düğümü · {tasks.length} aktivite · {isCorporate
+                ? 'hiyerarşi kurumsal CN43N kaynağından beslenir'
+                : 'hiyerarşi proje düzeyinde yönetilir'}
             </div>
           </div>
           <button className="btn" onClick={() => setExpanded(new Set(wbs.map((node) => node.id)))}>Tümünü aç</button>
         </div>
       </div>
 
-      {!canEdit && (
+      {isCorporate && (
+        <div className="card" style={{ borderColor: 'color-mix(in oklab, var(--accent) 35%, var(--border))' }}>
+          <div className="row" style={{ gap: 9, alignItems: 'flex-start' }}>
+            <Icons.Database size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+              Kurumsal projelerin iş dağılım ağacı kurumsal <strong>CN43N</strong> kaynağından eşitlenir ve MERGEN Rota
+              üzerinden değiştirilemez. Yapı, proje kodu ile eşleştirilerek her veri yüklemesinde güncellenir; WBS kodu,
+              adı, seviyesi ve durumu kaynaktaki değerleri gösterir. Görevleri bu düğümlere atamak ve düğümler arasında
+              taşımak yine mümkündür.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!canEdit && !isCorporate && (
         <div className="card" style={{ borderColor: 'color-mix(in oklab, var(--accent) 35%, var(--border))' }}>
           <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
             Bu projenin iş dağılım ağacı salt okunur görünürlükle açıldı. Hiyerarşiyi ve görev dağılımını görüntüleyebilirsiniz; düzenleme için tam proje yazma yetkisi gerekir.
@@ -197,7 +221,7 @@ export function WbsView() {
         </div>
       )}
 
-      {canEdit && wbs.length > 0 && (
+      {canMoveTasks && wbs.length > 0 && (
         <div className="card">
           <div className="col" style={{ gap: 12 }}>
             <div className="col" style={{ gap: 4 }}>
@@ -286,7 +310,12 @@ export function WbsView() {
                       <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>{node.code}</span>
                       <span style={{ fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
                     </div>
-                    <span className="muted" style={{ fontSize: 11 }}>Seviye {depth + 1} · {rollup.directTaskCount} doğrudan</span>
+                    <span className="muted" style={{ fontSize: 11 }}>
+                      Seviye {node.level ?? depth + 1} · {rollup.directTaskCount} doğrudan
+                      {node.outlineCode ? ` · PYP ${node.outlineCode}` : ''}
+                      {node.elementTypeCode ? ` · ${node.elementTypeCode}` : ''}
+                      {node.statusCode ? ` · ${node.statusCode}` : ''}
+                    </span>
                   </div>
                 </div>
                 <div className="tabular">{rollup.taskCount}</div>
@@ -330,7 +359,11 @@ export function WbsView() {
                       <button className="btn" onClick={() => onDelete(node)}>Sil</button>
                     </>
                   ))}
-                  {!canEdit && <span className="muted" style={{ fontSize: 11.5 }}>Salt okunur</span>}
+                  {!canEdit && (
+                    <span className="muted" style={{ fontSize: 11.5 }}>
+                      {isCorporate ? 'CN43N kaynaklı · salt okunur' : 'Salt okunur'}
+                    </span>
+                  )}
                 </div>
               </div>
             );

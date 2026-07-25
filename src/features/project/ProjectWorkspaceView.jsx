@@ -223,8 +223,13 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
           </div>
 
           <label className="col" style={{ gap: 6 }}>
-            <span className="label">Veri tarihi</span>
-            <DateInput value={form.dataDate} onChange={(value) => setValue('dataDate', value)} allowEmpty={false} disabled={saving} />
+            <span className="label">Veri tarihi <span className="muted">(isteğe bağlı)</span></span>
+            <DateInput value={form.dataDate} onChange={(value) => setValue('dataDate', value)} allowEmpty disabled={saving} />
+            {/* "Veri tarihi" ilerleme kesim tarihidir; satırın oluşturulma zamanı değildir. */}
+            <span className="muted" style={{ fontSize: 10.5, lineHeight: 1.45 }}>
+              İlerleme kesim tarihi: gerçekleşme ve ilerleme bilgilerinin hangi güne kadar geçerli sayıldığını gösterir.
+              Kayıt oluşturma/güncelleme zamanları ayrı alanlarda tutulur.
+            </span>
           </label>
         </div>
 
@@ -308,70 +313,73 @@ function PortfolioProjectBrowser({ projects, onSelect }) {
   useEffect(() => setLimit(INITIAL_PROJECT_LIMIT), [query, selectedTypeCode, showArchived]);
 
   return (
-    <div className="card">
-      <div className="row" style={{ justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <div className="col" style={{ gap: 4 }}>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>Proje seçin</div>
-          <div className="muted" style={{ maxWidth: 760, lineHeight: 1.6 }}>
-            Projeler türlerine göre gruplanır. Arama alanı proje kodu, adı ve türü üzerinde canlı çalışır; tamamlanan ve kapatılan projeler başlangıçta gizlidir.
+    /* Arama, tür süzgeçleri ve başlık donuk kalır; yalnızca proje listesi kaydırılır. */
+    <div className="card project-browser">
+      <div className="project-browser-head">
+        <div className="row" style={{ justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div className="col" style={{ gap: 4 }}>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>Proje seçin</div>
+            <div className="muted" style={{ maxWidth: 760, lineHeight: 1.6 }}>
+              Projeler türlerine göre gruplanır. Arama alanı proje kodu, adı ve türü üzerinde canlı çalışır; tamamlanan ve kapatılan projeler başlangıçta gizlidir.
+            </div>
           </div>
+          <span className="badge">{filtered.length} / {projects.length} proje</span>
         </div>
-        <span className="badge">{filtered.length} / {projects.length} proje</span>
-      </div>
 
-      <div className="row" style={{ gap: 10, marginTop: 18, flexWrap: 'wrap', alignItems: 'center' }}>
-        <label className="topbar-search" style={{ flex: '1 1 320px', maxWidth: 520 }}>
-          <Icons.Search size={14} />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Proje kodu, adı veya türüyle ara"
-            aria-label="Proje ara"
-          />
-          {query && <button type="button" className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setQuery('')}><Icons.Close size={11} /></button>}
-        </label>
-        {archivedCount > 0 && (
-          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, cursor: 'pointer' }}>
-            <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
-            Tamamlanan ve kapatılanları göster ({archivedCount})
+        <div className="row" style={{ gap: 10, marginTop: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+          <label className="topbar-search" style={{ flex: '1 1 320px', maxWidth: 520 }}>
+            <Icons.Search size={14} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Proje kodu, adı veya türüyle ara"
+              aria-label="Proje ara"
+            />
+            {query && <button type="button" className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setQuery('')}><Icons.Close size={11} /></button>}
           </label>
-        )}
+          {archivedCount > 0 && (
+            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+              Tamamlanan ve kapatılanları göster ({archivedCount})
+            </label>
+          )}
+        </div>
+
+        <div className="project-browser-types">
+          <button
+            type="button"
+            className={`btn${selectedTypeCode === '' ? ' primary' : ''}`}
+            onClick={() => setSelectedTypeCode('')}
+            style={{ minHeight: 48, justifyContent: 'flex-start' }}
+          >
+            <Icons.Layers size={15} />
+            <span style={{ flex: 1, textAlign: 'left' }}>Tüm etkin türler</span>
+            <span className="badge">{activeProjects.length}</span>
+          </button>
+          {groups.map((group) => {
+            const GroupIcon = Icons[group.icon] || Icons.Layers;
+            return (
+              <button
+                key={group.code}
+                type="button"
+                className={`btn${selectedTypeCode === group.code ? ' primary' : ''}`}
+                onClick={() => setSelectedTypeCode((current) => current === group.code ? '' : group.code)}
+                style={{ minHeight: 48, justifyContent: 'flex-start' }}
+                title={group.name}
+              >
+                <GroupIcon size={15} />
+                <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+                  <strong style={{ display: 'block', fontSize: 11.5 }}>{group.code}</strong>
+                  <small style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{group.name}</small>
+                </span>
+                <span className="badge">{group.projects.length}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 9, marginTop: 16 }}>
-        <button
-          type="button"
-          className={`btn${selectedTypeCode === '' ? ' primary' : ''}`}
-          onClick={() => setSelectedTypeCode('')}
-          style={{ minHeight: 48, justifyContent: 'flex-start' }}
-        >
-          <Icons.Layers size={15} />
-          <span style={{ flex: 1, textAlign: 'left' }}>Tüm etkin türler</span>
-          <span className="badge">{activeProjects.length}</span>
-        </button>
-        {groups.map((group) => {
-          const GroupIcon = Icons[group.icon] || Icons.Layers;
-          return (
-            <button
-              key={group.code}
-              type="button"
-              className={`btn${selectedTypeCode === group.code ? ' primary' : ''}`}
-              onClick={() => setSelectedTypeCode((current) => current === group.code ? '' : group.code)}
-              style={{ minHeight: 48, justifyContent: 'flex-start' }}
-              title={group.name}
-            >
-              <GroupIcon size={15} />
-              <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
-                <strong style={{ display: 'block', fontSize: 11.5 }}>{group.code}</strong>
-                <small style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{group.name}</small>
-              </span>
-              <span className="badge">{group.projects.length}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="col" style={{ gap: 7, marginTop: 18 }}>
+      <div className="col project-browser-list" style={{ gap: 7 }}>
         {visibleRows.map((item) => {
           const type = projectTypeMeta(item.projectTypeCode, item.projectTypeName);
           const ProjectIcon = Icons[type.icon] || Icons.Layers;
@@ -395,15 +403,15 @@ function PortfolioProjectBrowser({ projects, onSelect }) {
           );
         })}
         {!visibleRows.length && <div className="muted" style={{ padding: 22, textAlign: 'center' }}>Arama ve tür ölçütleriyle eşleşen proje bulunamadı.</div>}
-      </div>
 
-      {filtered.length > limit && (
-        <div className="row" style={{ justifyContent: 'center', marginTop: 14 }}>
-          <button type="button" className="btn" onClick={() => setLimit((current) => current + INITIAL_PROJECT_LIMIT)}>
-            <Icons.Plus size={13} /> Daha fazla göster ({Math.min(INITIAL_PROJECT_LIMIT, filtered.length - limit)})
-          </button>
-        </div>
-      )}
+        {filtered.length > limit && (
+          <div className="row" style={{ justifyContent: 'center', marginTop: 7 }}>
+            <button type="button" className="btn" onClick={() => setLimit((current) => current + INITIAL_PROJECT_LIMIT)}>
+              <Icons.Plus size={13} /> Daha fazla göster ({Math.min(INITIAL_PROJECT_LIMIT, filtered.length - limit)})
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

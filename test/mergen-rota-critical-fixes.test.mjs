@@ -279,10 +279,15 @@ test('Gerçek Sistem kimlik hatası hangi kaydın hatalı olduğunu söyler', ()
 
 /* ── #9 · Veri modu anahtarının konumu ───────────────────── */
 
-test('veri modu anahtarı sağ alt köşeyi kaydetme bildirimine bırakır', () => {
+test('veri modu anahtarı Ayarlar sayfasında yaşar', () => {
   const indicator = read('src/components/shell/DataModeIndicator.jsx');
-  assert.match(indicator, /variant = 'sidebar'/);
+  const shell = read('src/components/shell/AppShell.jsx');
+  const settings = read('src/features/settings/SettingsView.jsx');
+  assert.match(indicator, /variant = 'settings'/);
   assert.match(indicator, /data-mode-variant-\$\{variant\}/);
+  // Kenar çubuğu sade kalır: anahtar yalnızca Ayarlar sayfasından erişilir.
+  assert.doesNotMatch(shell, /DataModeIndicator/);
+  assert.match(settings, /DataModeIndicator/);
 });
 
 /* ── #10 · Proje yapısı sayfasında geri dönüş ────────────── */
@@ -318,10 +323,12 @@ test('proje, personel, WBS ve öncül görev seçimleri canlı arama kullanır',
 /* ── Üretim derlemesi ────────────────────────────────────── */
 
 test('yerel SQL sürücüsü yalnızca çalışma zamanında yüklenir', () => {
-  const source = read('src/server/db/pool.js');
+  const source = read('src/server/db/driver.js');
+  const pool = read('src/server/db/pool.js');
   // Modül düzeyindeki `mssql/msnodesqlv8.js` içe aktarımı, yerel ikili dosya
   // derlenmemiş ortamlarda `next build` sırasında rota toplamayı çökertiyordu.
   assert.doesNotMatch(source, /^import .*mssql\/msnodesqlv8\.js.*$/m);
+  assert.doesNotMatch(pool, /^import .*mssql\/msnodesqlv8\.js.*$/m);
   assert.match(source, /import\('mssql\/msnodesqlv8\.js'\)/);
   assert.match(source, /import sql from 'mssql';/);
   assert.match(source, /DATABASE_UNAVAILABLE/);

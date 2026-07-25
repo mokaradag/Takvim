@@ -122,6 +122,13 @@ BEGIN TRY
     );
     CREATE INDEX IX_MR_ProjectAccess_Sicil_Active_Level ON dbo.MR_ProjectAccess(Sicil, IsActive, AccessLevel, ProjectId);
 
+    -- İş dağılım ağacı iki kaynaktan beslenir:
+    --   SourceType = 'MANUAL'    → MERGEN Rota kullanıcılarının tanımladığı serbest yapı
+    --   SourceType = 'CORPORATE' → kurumsal CN43N tablosundan eşitlenen, salt okunur yapı
+    -- Kurumsal satırlar CN43N kolonlarını taşır: SourceKey = "WBS element",
+    -- OutlineCode = "PYP kodu", WbsLevel = "Level", StatusCode = "Status",
+    -- ElementTypeCode = "Proj.type". Proje kök düğümü MERGEN Rota tarafından
+    -- üretilir; SourceKey değeri NULL kalır ve eşitleme onu asla silmez.
     CREATE TABLE dbo.MR_WBS (
         WbsId uniqueidentifier NOT NULL CONSTRAINT DF_MR_WBS_Id DEFAULT NEWSEQUENTIALID(),
         ProjectId uniqueidentifier NOT NULL,
@@ -129,6 +136,12 @@ BEGIN TRY
         Code nvarchar(100) NOT NULL,
         Name nvarchar(1000) NOT NULL,
         SortOrder int NULL,
+        SourceType varchar(20) NOT NULL CONSTRAINT DF_MR_WBS_SourceType DEFAULT ('MANUAL'),
+        SourceKey nvarchar(255) NULL,
+        OutlineCode nvarchar(255) NULL,
+        WbsLevel int NULL,
+        StatusCode nvarchar(100) NULL,
+        ElementTypeCode nvarchar(10) NULL,
         CreatedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_WBS_CreatedAt DEFAULT SYSUTCDATETIME(),
         CreatedBySicil int NULL,
         UpdatedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_WBS_UpdatedAt DEFAULT SYSUTCDATETIME(),
@@ -138,9 +151,14 @@ BEGIN TRY
         CONSTRAINT FK_MR_WBS_Projects FOREIGN KEY (ProjectId) REFERENCES dbo.MR_Projects(ProjectId),
         CONSTRAINT UX_MR_WBS_Id_Project UNIQUE (WbsId, ProjectId),
         CONSTRAINT UX_MR_WBS_Project_Code UNIQUE (ProjectId, Code),
-        CONSTRAINT FK_MR_WBS_Parent_SameProject FOREIGN KEY (ParentWbsId, ProjectId) REFERENCES dbo.MR_WBS(WbsId, ProjectId)
+        CONSTRAINT FK_MR_WBS_Parent_SameProject FOREIGN KEY (ParentWbsId, ProjectId) REFERENCES dbo.MR_WBS(WbsId, ProjectId),
+        CONSTRAINT CK_MR_WBS_SourceType CHECK (SourceType IN ('CORPORATE','MANUAL')),
+        CONSTRAINT CK_MR_WBS_SourceKey CHECK (SourceKey IS NULL OR SourceType = 'CORPORATE'),
+        CONSTRAINT CK_MR_WBS_Level CHECK (WbsLevel IS NULL OR WbsLevel >= 0)
     );
     CREATE INDEX IX_MR_WBS_Project_Parent_Sort ON dbo.MR_WBS(ProjectId, ParentWbsId, SortOrder);
+    CREATE UNIQUE INDEX UX_MR_WBS_Project_SourceKey ON dbo.MR_WBS(ProjectId, SourceKey) WHERE SourceKey IS NOT NULL;
+    CREATE INDEX IX_MR_WBS_Project_Source ON dbo.MR_WBS(ProjectId, SourceType, OutlineCode);
 
     CREATE TABLE dbo.MR_Tasks (
         TaskId uniqueidentifier NOT NULL CONSTRAINT DF_MR_Tasks_Id DEFAULT NEWSEQUENTIALID(),

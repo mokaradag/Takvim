@@ -118,8 +118,11 @@ WHERE NOT EXISTS (
   WHERE p.SourceType = 'CORPORATE' AND UPPER(p.ProjectCode) = source.ProjectCode
 );
 
-INSERT dbo.MR_WBS(ProjectId, ParentWbsId, Code, Name, SortOrder, CreatedBySicil, UpdatedBySicil)
-SELECT ProjectId, NULL, N'1', ProjectName, 0, @actorSicil, @actorSicil
+-- Kurumsal projenin kök düğümü proje kodunu taşır. CN43N eşitlemesi kök düğümün
+-- altına gerçek WBS elemanlarını (WBS element kodlarıyla) ekler; kök kodun proje
+-- kodu olması, kaynaktan gelen eleman kodlarıyla çakışmasını da engeller.
+INSERT dbo.MR_WBS(ProjectId, ParentWbsId, Code, Name, SortOrder, SourceType, CreatedBySicil, UpdatedBySicil)
+SELECT ProjectId, NULL, LEFT(ProjectCode, 100), ProjectName, 0, 'CORPORATE', @actorSicil, @actorSicil
 FROM @Inserted;
 
 UPDATE p

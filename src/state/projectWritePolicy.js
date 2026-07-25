@@ -1,3 +1,11 @@
+import { CORPORATE_WBS_READ_ONLY_MESSAGE, supportsManualWbsEditing } from '../domain/projectTypes.js';
+
+export { CORPORATE_WBS_READ_ONLY_MESSAGE };
+
+function isActualDataMode(state = {}) {
+  return String(state.session?.dataMode || '').toLowerCase() === 'actual';
+}
+
 function projectId(value) {
   return value == null || value === '' ? null : String(value);
 }
@@ -86,6 +94,19 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
       field: 'projectId',
       projectId: node.projectId,
       message: 'Bu projenin iş dağılım ağacı salt okunur görünürlükle açıldı.'
+    };
+  }
+
+  // Kurumsal projelerin dağılım ağacı yalnızca CN43N eşitlemesiyle yazılır.
+  // Kural Gerçek Sistem'e özgüdür: Demo modunda kurumsal kaynak bulunmadığı için
+  // örnek projelerin ağacı serbestçe denenebilir.
+  if (isActualDataMode(state) && !supportsManualWbsEditing(sourceProject)) {
+    return {
+      ok: false,
+      code: 'CORPORATE_WBS_READ_ONLY',
+      field: 'projectId',
+      projectId: node.projectId,
+      message: CORPORATE_WBS_READ_ONLY_MESSAGE
     };
   }
 

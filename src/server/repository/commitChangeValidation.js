@@ -1,3 +1,5 @@
+import { canonicalActualIdOrValue, isActualId } from '../../domain/identity/actualId.js';
+
 const COLLECTIONS = Object.freeze([
   'projectUpserts',
   'projectDeletes',
@@ -13,7 +15,6 @@ const UPSERTS = Object.freeze([
 ]);
 const PROJECT_COLORS = new Set(['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan']);
 const DEPENDENCY_TYPES = new Set(['FS', 'SS', 'FF', 'SF']);
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function issue(code, path, message, details = null) {
   return { code, path, message, details };
@@ -24,9 +25,7 @@ function text(value) {
 }
 
 function canonicalUuid(value) {
-  if (value == null || value === '') return value;
-  const normalized = text(value);
-  return UUID_PATTERN.test(normalized) ? normalized.toLowerCase() : normalized;
+  return canonicalActualIdOrValue(value == null || value === '' ? value : text(value));
 }
 
 function mapCollection(value, mapper) {
@@ -126,7 +125,7 @@ function validateUuid(value, path, label, { required = false, entity = false } =
       ? issue(entity ? 'CHANGE_ID_REQUIRED' : 'CHANGE_REFERENCE_REQUIRED', path, `${label} gereklidir.`)
       : null;
   }
-  if (!UUID_PATTERN.test(normalized)) {
+  if (!isActualId(normalized)) {
     return issue(entity ? 'CHANGE_ID_INVALID' : 'CHANGE_REFERENCE_INVALID', path, `${label} geçerli UUID olmalıdır.`);
   }
   return null;
@@ -188,13 +187,14 @@ function validateProjectCreates(changes) {
       ['name', project.name, 'Proje adı gereklidir.'],
       ['leadId', project.leadId, 'Proje sorumlusu gereklidir.'],
       ['calendarId', project.calendarId, 'Etkin çalışma takvimi gereklidir.'],
-      ['dataDate', project.dataDate, 'Proje veri tarihi gereklidir.'],
       ['color', project.color, 'Proje rengi gereklidir.']
     ];
     for (const [field, value, message] of required) {
       if (!text(value)) return issue('PROJECT_CREATE_FIELD_REQUIRED', `projectUpserts[${index}].${field}`, message, { field });
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(text(project.dataDate))) {
+    // Veri tarihi (ilerleme kesim tarihi) isteğe bağlıdır: proje planlama kesimi
+    // tanımlanmadan da açılabilir. Verildiğinde biçimi doğrulanır.
+    if (text(project.dataDate) && !/^\d{4}-\d{2}-\d{2}$/.test(text(project.dataDate))) {
       return issue('PROJECT_DATA_DATE_INVALID', `projectUpserts[${index}].dataDate`, 'Proje veri tarihi YYYY-MM-DD biçiminde olmalıdır.');
     }
     if (!PROJECT_COLORS.has(text(project.color))) {

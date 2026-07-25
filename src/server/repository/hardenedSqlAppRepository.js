@@ -1,4 +1,5 @@
 import 'server-only';
+import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ServerPersistenceError } from '../errors.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { findDependencyCycle } from './dependencyGraphValidation.js';
@@ -8,14 +9,18 @@ import {
 } from './taskCommitPlanning.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
+// Kimlikler kanonik (küçük harf) biçime indirilir: SQL Server satırlarından okunan
+// büyük harfli GUID'ler ile istemciden gelen değerler aynı anahtar uzayında karşılaştırılır.
 function uuid(value, label = 'Kimlik') {
-  const normalized = String(value || '');
-  if (!UUID_PATTERN.test(normalized)) {
+  const normalized = canonicalActualId(value);
+  if (!normalized) {
     throw new ServerPersistenceError('MUTATION_FAILED', `${label} geçerli UUID olmalıdır.`);
   }
   return normalized;
+}
+
+function rowId(value) {
+  return value == null ? null : (canonicalActualId(value) ?? String(value));
 }
 
 function normalizeDelete(value) {
@@ -90,21 +95,21 @@ async function assertActiveProjectMutationTargets(executor, changes) {
   for (const node of changes.wbsUpserts) {
     await requireActiveProject(node.projectId);
     const before = await rowForUpdate(executor, 'MR_WBS', 'WbsId', node.id, 'WBS kimliği');
-    if (before) await requireActiveProject(String(before.ProjectId));
+    if (before) await requireActiveProject(rowId(before.ProjectId));
   }
   for (const entry of changes.wbsDeletes) {
     const before = await rowForUpdate(executor, 'MR_WBS', 'WbsId', entry.id, 'WBS kimliği');
-    if (before) await requireActiveProject(String(before.ProjectId));
+    if (before) await requireActiveProject(rowId(before.ProjectId));
   }
 
   for (const task of changes.taskUpserts) {
     await requireActiveProject(task.projectId);
     const before = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', task.id, 'Görev kimliği');
-    if (before) await requireActiveProject(String(before.ProjectId));
+    if (before) await requireActiveProject(rowId(before.ProjectId));
   }
   for (const entry of changes.taskDeletes) {
     const before = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', entry.id, 'Görev kimliği');
-    if (before) await requireActiveProject(String(before.ProjectId));
+    if (before) await requireActiveProject(rowId(before.ProjectId));
   }
 }
 
@@ -158,7 +163,7 @@ async function assertSingleRootWbs(executor, changes) {
 
   for (const entry of changes.wbsDeletes) {
     const row = await rowForUpdate(executor, 'MR_WBS', 'WbsId', entry.id, 'WBS kimliği');
-    if (row) affectedProjectIds.add(String(row.ProjectId));
+    if (row) affectedProjectIds.add(rowId(row.ProjectId));
   }
 
   const newProjectIds = new Set();
@@ -170,18 +175,18 @@ async function assertSingleRootWbs(executor, changes) {
 
   for (const projectId of [...affectedProjectIds].sort()) {
     const rows = await loadWbsRowsForUpdate(executor, projectId);
-    const existingRoots = rows.filter((row) => row.ParentWbsId == null).map((row) => String(row.WbsId));
+    const existingRoots = rows.filter((row) => row.ParentWbsId == null).map((row) => rowId(row.WbsId));
     if (existingRoots.length > 1) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Projede birden fazla kök WBS düğümü bulundu.');
     }
 
-    const candidate = new Map(rows.map((row) => [String(row.WbsId), {
-      id: String(row.WbsId),
-      projectId: String(row.ProjectId),
-      parentId: row.ParentWbsId == null ? null : String(row.ParentWbsId)
+    const candidate = new Map(rows.map((row) => [rowId(row.WbsId), {
+      id: rowId(row.WbsId),
+      projectId: rowId(row.ProjectId),
+      parentId: row.ParentWbsId == null ? null : rowId(row.ParentWbsId)
     }]));
 
-    for (const entry of changes.wbsDeletes) candidate.delete(String(entry.id));
+    for (const entry of changes.wbsDeletes) candidate.delete(uuid(entry.id, 'WBS kimliği'));
     for (const node of changedWbsRows.values()) {
       if (node.projectId !== projectId) continue;
       const before = candidate.get(node.id);
@@ -225,8 +230,8 @@ async function loadProjectDependencyEdgesForUpdate(executor, projectId) {
     ORDER BY TaskId, PredecessorTaskId;
   `);
   return (result.recordset || []).map((row) => ({
-    taskId: String(row.TaskId),
-    predecessorId: String(row.PredecessorTaskId)
+    taskId: rowId(row.TaskId),
+    predecessorId: rowId(row.PredecessorTaskId)
   }));
 }
 
@@ -268,7 +273,7 @@ async function planTaskCommits(executor, changes) {
 
   for (const taskId of [...referencedTaskIds].sort()) {
     const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', taskId, 'Görev kimliği');
-    if (row) existingTaskProjects.set(taskId, String(row.ProjectId));
+    if (row) existingTaskProjects.set(taskId, rowId(row.ProjectId));
   }
 
   const issue = findFinalTaskReferenceIssue({
@@ -299,7 +304,7 @@ async function assertAcyclicTaskDependencies(executor, changes) {
     const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', taskId, 'Görev kimliği');
     if (row) {
       changedTaskRows.set(taskId, row);
-      affectedProjectIds.add(String(row.ProjectId));
+      affectedProjectIds.add(rowId(row.ProjectId));
     }
   }
   for (const task of changes.taskUpserts) affectedProjectIds.add(uuid(task.projectId, 'Proje kimliği'));
@@ -312,7 +317,7 @@ async function assertAcyclicTaskDependencies(executor, changes) {
   for (const task of changes.taskUpserts) {
     const taskId = uuid(task.id, 'Görev kimliği');
     const nextProjectId = uuid(task.projectId, 'Proje kimliği');
-    const previousProjectId = changedTaskRows.has(taskId) ? String(changedTaskRows.get(taskId).ProjectId) : null;
+    const previousProjectId = changedTaskRows.has(taskId) ? rowId(changedTaskRows.get(taskId).ProjectId) : null;
 
     if (previousProjectId && previousProjectId !== nextProjectId) {
       projectEdges.set(previousProjectId, removeTaskEdges(projectEdges.get(previousProjectId) || [], taskId));
@@ -330,7 +335,7 @@ async function assertAcyclicTaskDependencies(executor, changes) {
     const taskId = uuid(entry.id, 'Görev kimliği');
     const row = changedTaskRows.get(taskId);
     if (!row) continue;
-    const projectId = String(row.ProjectId);
+    const projectId = rowId(row.ProjectId);
     projectEdges.set(projectId, removeTaskEdges(projectEdges.get(projectId) || [], taskId));
   }
 

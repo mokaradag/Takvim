@@ -164,6 +164,10 @@ export function createLoadingState() {
     selectedProjectId: null,
     wbsActionError: null,
     dataStatus: 'loading',
+    // İlk yükleme tamamlandıktan sonra yeniden yüklemeler uygulama kabuğunu
+    // söktürmez; aksi hâlde her kayıttan sonra karşılama ekranı yeniden açılıyor
+    // ve kullanıcı uygulamayı ilk kez açmış gibi baştan başlıyordu.
+    hasLoadedOnce: false,
     loadError: null,
     pendingMutationCount: 0,
     saveError: null,
@@ -213,6 +217,7 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
     selectedTaskId,
     wbsActionError: null,
     dataStatus: 'ready',
+    hasLoadedOnce: true,
     loadError: null,
     pendingMutationCount: previous.pendingMutationCount || 0,
     saveError: null,

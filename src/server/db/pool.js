@@ -1,33 +1,11 @@
 import 'server-only';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import sql from 'mssql';
+import { getSqlDriver, setSqlDriverForTests, sql } from './driver.js';
 import { getSqlServerConfig } from './config.js';
 import { ServerPersistenceError } from '../errors.js';
 
 let poolPromise;
-let driverPromise;
 const transactionContext = new AsyncLocalStorage();
-
-// Yerel `msnodesqlv8` sürücüsü yalnızca gerçek bir bağlantı kurulurken yüklenir.
-// Modül düzeyinde içe aktarıldığında Windows dışı derleme ortamlarında (CI, Linux)
-// üretim derlemesi rota modüllerini toplarken çöküyordu. Tip sabitleri ve
-// ISOLATION_LEVEL saf JavaScript `mssql` çekirdeğinden gelir; iki modül de
-// aynı `lib/base` tanımlarını paylaştığı için değerler birebir aynıdır.
-async function getSqlDriver() {
-  if (!driverPromise) {
-    driverPromise = import('mssql/msnodesqlv8.js')
-      .then((module) => module.default || module)
-      .catch((cause) => {
-        driverPromise = undefined;
-        throw new ServerPersistenceError(
-          'DATABASE_UNAVAILABLE',
-          'SQL Server sürücüsü (msnodesqlv8) yüklenemedi. Yerel sürücü ve ODBC bileşenleri kurulmalıdır.',
-          { cause }
-        );
-      });
-  }
-  return driverPromise;
-}
 
 export async function getSqlPool() {
   const activeTransaction = transactionContext.getStore();
@@ -83,4 +61,9 @@ export async function withSqlTransaction(work, { isolationLevel = sql.ISOLATION_
   }
 }
 
-export { sql };
+/** Testlerde bağlantı havuzunu sıfırlar; enjekte edilen sürücüye yeniden bağlanılır. */
+export function resetSqlPoolForTests() {
+  poolPromise = undefined;
+}
+
+export { sql, setSqlDriverForTests };

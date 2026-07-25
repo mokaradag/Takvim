@@ -1,15 +1,10 @@
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const UUID_SUFFIX = /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+import { extractActualId } from '../../domain/identity/actualId.js';
 
 export const ACTUAL_ID_ALIAS_STORAGE_KEY = 'mergen-rota.actual-id-aliases.v1';
 export const MAX_ACTUAL_ID_ALIASES = 5000;
 
 function actualUuid(value) {
-  if (value == null || value === '') return null;
-  const normalized = String(value).trim();
-  const match = normalized.match(UUID_SUFFIX);
-  const candidate = (match ? match[1] : normalized).toLowerCase();
-  return UUID_PATTERN.test(candidate) ? candidate : null;
+  return extractActualId(value);
 }
 
 function validAlias(actual, clientId) {

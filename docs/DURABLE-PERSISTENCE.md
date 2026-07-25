@@ -47,6 +47,24 @@ Required deployment variables are listed in `.env.example`:
 
 Do not add `MERGEN_ROTA_DB_USER` or `MERGEN_ROTA_DB_PASSWORD`; they are not used by the Windows-authenticated adapter. All database variables are server-only and must never use the `NEXT_PUBLIC_` prefix.
 
+### Second connection: corporate WBS source (CN43N)
+
+The corporate WBS table `CN43N` is **not** in the `MERGEN_Rota` database, so it has its own connection block and its own lazily initialized pool (`src/server/db/corporateWbsPool.js`), also using Windows Integrated Authentication:
+
+- `MERGEN_ROTA_WBS_DB_SERVER`
+- `MERGEN_ROTA_WBS_DB_PORT`
+- `MERGEN_ROTA_WBS_DB_DATABASE`
+- `MERGEN_ROTA_WBS_DB_SCHEMA` (default `dbo`)
+- `MERGEN_ROTA_WBS_DB_TABLE` (default `CN43N`)
+- `MERGEN_ROTA_WBS_DB_ODBC_DRIVER`
+- `MERGEN_ROTA_WBS_DB_ENCRYPT`
+- `MERGEN_ROTA_WBS_DB_TRUST_SERVER_CERTIFICATE`
+- `MERGEN_ROTA_WBS_DB_CONNECTION_TIMEOUT_MS`
+- `MERGEN_ROTA_WBS_DB_REQUEST_TIMEOUT_MS`
+- `MERGEN_ROTA_WBS_SYNC_PROJECT_BATCH` (project codes per source round trip)
+
+The Windows account that runs Node.js needs **read** access to that database. Schema and table names are validated as plain SQL Server identifiers because they are embedded in the query text; project codes are always passed as parameters. Leaving `..._SERVER`/`..._DATABASE` empty disables the synchronization instead of failing: corporate projects then show only their root WBS node. When the source is configured but unreachable, snapshot loading still succeeds and the failure is logged — a second-database outage must not take the application down. Column mapping and merge rules live in `docs/WBS-AND-WORKSPACES.md`.
+
 ## Transaction semantics
 
 One `commitChanges()` call maps to one SQL transaction. The server performs trusted identity resolution, authorization, relationship validation, optimistic-concurrency checks, normalized child reconciliation, audit insertion, and the final commit in the same transaction. Any failure rolls back the complete change set.
@@ -69,7 +87,9 @@ The three corporate sources remain read-only:
 - `A01_ProjeUrunFaaliyetRaporu`: corporate Project catalog. Only `Tur`, `Tur_Aciklama`, `ProjeKodu`, and `ProjeAdi` are selected and the source view uses `GROUP BY` across those four fields.
 - `HR09_projeSorumlu`: corporate full-Project responsibility. `pptcSicil` uses `STRING_SPLIT`, trimming, and `TRY_CONVERT(int, value)` for exact token matching; no `LIKE '%sicil%'` authorization is permitted.
 
-Corporate synchronization updates only source-owned Project identity fields, preserves application metadata, inserts missing registry rows and root WBS records, marks disappeared source records inactive, never converts manual Projects, and never writes to A01.
+Corporate synchronization updates only source-owned Project identity fields, preserves application metadata, inserts missing registry rows and root WBS records, marks disappeared source records inactive, never converts manual Projects, and never writes to A01. Corporate Project updates from the client also preserve `LeadSicil` server-side, so editing MERGEN-owned fields cannot clear the source-owned lead.
+
+Corporate WBS synchronization is a separate step reading `CN43N` through the second connection. It writes only `SourceType = 'CORPORATE'` rows of corporate projects, never manual rows, never the MERGEN-generated project root, and never the source table. Client attempts to write corporate WBS structure are rejected with `FORBIDDEN`.
 
 ## Demo versus Actual mode
 
@@ -120,7 +140,7 @@ To remove the build-phase schema, run `database/MR_Rollback_Durable_Persistence.
 
 ## Native-driver loading
 
-`src/server/db/pool.js` imports the pure-JavaScript `mssql` core statically (type constants, `ISOLATION_LEVEL`) and loads the native `mssql/msnodesqlv8.js` driver **lazily**, on first connection. Both packages re-export the same `lib/base` definitions, so the type constants are identical.
+`src/server/db/driver.js` imports the pure-JavaScript `mssql` core statically (type constants, `ISOLATION_LEVEL`) and loads the native `mssql/msnodesqlv8.js` driver **lazily**, on first connection. Both pools (`pool.js` and `corporateWbsPool.js`) share that single driver resolution. Both packages re-export the same `lib/base` definitions, so the type constants are identical.
 
 The lazy load is required, not cosmetic. A module-level `import` of `mssql/msnodesqlv8.js` makes `next build` fail while collecting API-route page data on any host where the native binding has not been compiled (Linux CI, a workstation installing with `--ignore-scripts`). With the lazy load, the build succeeds everywhere and a missing driver degrades to a runtime `DATABASE_UNAVAILABLE` (503) with an explicit Turkish message instead of a build crash.
 
@@ -142,3 +162,11 @@ Runtime remains fully on-premise. No CDN, remote font, public API, remote JavaSc
 ## Validation boundary
 
 The normal test suite uses pure/static and injected boundaries and does not require the private corporate SQL Server. Optional live validation may be enabled separately with `MERGEN_ROTA_DB_INTEGRATION=1` and valid server configuration. A successful build or simulated transaction test must not be represented as live database validation.
+
+### End-to-end persistence tests
+
+`test/wbs-and-task-creation-e2e.test.mjs` drives the complete Actual-mode chain — application state → mutation orchestrator → client API repository → the real route handlers → ordered/hardened/base SQL repositories — against an in-memory SQL Server double (`test/helpers/fakeSqlServer.mjs`). Only the driver is substituted, through the `setSqlDriverForTests` seam in `src/server/db/driver.js`; every validation, authorization and SQL-building module under test is the real one.
+
+The double behaves like SQL Server where it matters for correctness: `uniqueidentifier` values come back as upper-case text, comparisons are case-insensitive, corporate GUIDs without RFC 4122 version bits are stored verbatim, and `rowversion` tokens must match for an update or delete to affect a row. `test/helpers/actualStack.mjs` wires the stack and routes `fetch` to the route handlers; `server-only` is redirected to an empty module through a resolve hook, since that package throws in plain Node.
+
+This is still not a substitute for live database validation: T-SQL text itself (merge statements, snapshot query) is exercised only by its contract, not by SQL Server's parser.

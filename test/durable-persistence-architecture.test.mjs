@@ -45,11 +45,14 @@ test('SQL connection and repository implementation are server-only', () => {
 
 test('Actual SQL pool uses Windows Integrated Authentication', () => {
   const config = source(join(root, 'src/server/db/config.js'));
+  // Sürücü yükleme sorumluluğu `driver.js` modülüne taşındı; havuz onu kullanır.
+  const driver = source(join(root, 'src/server/db/driver.js'));
   const pool = source(join(root, 'src/server/db/pool.js'));
   const nextConfig = source(join(root, 'next.config.mjs'));
   const packageJson = JSON.parse(source(join(root, 'package.json')));
 
-  assert.match(pool, /mssql\/msnodesqlv8\.js/);
+  assert.match(driver, /mssql\/msnodesqlv8\.js/);
+  assert.match(pool, /getSqlDriver/);
   assert.match(config, /trustedConnection:\s*true/);
   assert.match(config, /MERGEN_ROTA_DB_ODBC_DRIVER/);
   assert.doesNotMatch(config, /MERGEN_ROTA_DB_(?:USER|PASSWORD)/);
