@@ -111,6 +111,8 @@ Synchronization rules:
 4. New elements are inserted, changed elements are updated, and elements that disappear from the source are deleted **only** when no child node and no Task reference them. A corporate node that carries Tasks is therefore never removed silently.
 5. Synchronization runs on snapshot load, batched by project code. When the source database is unreachable the snapshot still loads: the failure is logged and corporate WBS is left as-is, because a second-database outage must not take the application down.
 
+Cost characteristic: CN43N is read with one query per `MERGEN_ROTA_WBS_SYNC_PROJECT_BATCH` project codes (default 50) on the source connection, and the merge is one statement per project that actually has source rows. The merge statements are conditional, so an unchanged tree performs no writes, but a portfolio with several hundred corporate projects still costs one round trip each per snapshot load. If that becomes visible on the real dataset, the next step is a multi-project merge payload rather than per-project statements.
+
 Corporate WBS structure is read-only end to end: `resolveWbsMutationAccess` blocks the UI actions in Gerçek Sistem mode, and `commitWbs` / `deleteWbs` reject the mutation independently on the server. Assigning Tasks to corporate WBS nodes and moving Tasks between them stays allowed — the Task-to-WBS link is MERGEN Rota data, not corporate structure. In Demo mode there is no corporate source, so sample projects keep an editable tree.
 
 ## 5. WBS hierarchy rules
