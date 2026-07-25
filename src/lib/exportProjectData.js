@@ -1,3 +1,4 @@
+import { normalizePriorityId } from '../domain/constants/index.js';
 import { depId, formatDependencyLag, relTypeOf } from '../scheduling/dependencies/index.js';
 import { fmtDisplayDate } from '../scheduling/dates/index.js';
 
@@ -58,7 +59,7 @@ export function buildExportRows({ tasks = [], wbs = [] } = {}) {
     etiket: task.keyword || '',
     sorumlu: (task.sorumlu || []).join(', '),
     durum: STATUS_LABELS[task.status] || task.status || 'Yapılacak',
-    oncelik: PRIORITY_LABELS[task.priority] || task.priority || 'Orta',
+    oncelik: PRIORITY_LABELS[normalizePriorityId(task.priority)] || 'Orta',
     baslangic: displayDate(task.plannedStart),
     bitis: displayDate(task.plannedFinish),
     hedef: displayDate(task.targetFinish),

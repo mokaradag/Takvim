@@ -13,6 +13,16 @@ Takvim sayfasında iki sekme bulunur:
 
 Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Basit Modda oluşturulan kayıtlar mevcut Project/Task veri altyapısını kullanmaya devam eder ve Gelişmiş Modda ayrıntılandırılabilir.
 
+## Basit Modda Gantt
+
+Basit Mod gezinmesi `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+
+## Açılış perdesi
+
+İlk veri yüklemesi ve yükleme hatası perdesi (`AppDataBoundary`) uygulama kabuğunun `.app` ızgarasını **kullanmaz**. O ızgaranın ilk sütunu 240 piksellik kenar çubuğuna ayrılmıştır; perde tek çocuk olarak yerleştirildiğinde o dar sütuna düşüyor ve kart ekranın solunda kırpılmış görünüyordu.
+
+Perde artık `.app-boot` sınıfıyla tam ekran, ortalanmış kendi düzenini kurar: marka satırı, başlık, açıklama, belirsiz ilerleme çubuğu ve yükleme adımı rozetleri. Stil sahibi `src/app/styles/shell.css` dosyasıdır.
+
 ## Sorumlu seçimi ve büyük kullanıcı listeleri
 
 Sorumlu seçiminin görsel kart tasarımı korunur; ancak tüm kullanıcılar aynı anda gösterilmez. Kullanıcı:
@@ -98,6 +108,22 @@ Veri zaten yüklüyken başarısız olan bir tazeleme kabuğu kapatmaz; kullanı
 ## Proje Yapısı · yalnızca proje listesi kaydırılır
 
 Proje seçici kartında başlık, arama alanı, tamamlananları gösterme kutusu ve proje türü hızlı seçim düğmeleri donuk (`.project-browser-head`) kalır; yalnızca listelenen proje düğmeleri (`.project-browser-list`) dikey olarak kaydırılır. Kurumsal katalog yüzlerce proje içerdiği için süzgeçler daha önce listeyle birlikte görünüm alanının dışına kayıyordu. **Daha fazla göster** düğmesi de kaydırılan bölümün içindedir.
+
+## Ekip sayfası · donuk başlıklar ve tanımsız direktörlük
+
+Ekip sayfası kendi yüksekliğini yönetir: "Kurumsal ekip dizini" kartı sabit kalır ve yalnızca personel tablosu kayar, böylece tablo başlığı ile süzgeçler aşağı kaydırırken de görünür durur.
+
+Kurumsal rehberde herkesin direktörlüğü tanımlı değildir; bir bölüm çalışanın yalnızca yöneticisi bilinir. Bu kişiler önceki sürümde hiçbir grupta görünmüyordu. Artık "Direktörlük tanımsız" hem özet kartı hem de süzgeç seçeneği olarak listelenir; süzgeç mantığı `src/features/team/teamDirectoryPolicy.js` içindeki `matchesDirectorateFilter` işlevindedir.
+
+## Proje Yapısı · İş Dağılım Ağacı denetimleri
+
+Dağılım ağacı sekmesinde dikey alan tabloya ayrılır: üst bilgi tek satırlık bir başlık çubuğuna (`.wbs-toolbar`) indirgenir, uyarılar ince notlara dönüşür, görev taşıma paneli varsayılan olarak kapalıdır ve tablo kalan yüksekliğin tamamını alarak kendi kaydırma kabuğunda kayar. Başlık satırı donuktur.
+
+Ağaç denetimleri `Tümünü aç`, `Tümünü kapat` ve `Hiyerarşi` (1–5 arası seviye ya da tüm seviyeler) düğmeleridir. Açılış derinliği ikidir; kurumsal projelerde ağacın tamamını açık başlatmak on binlerce satırın ilk çizimde oluşturulması demekti.
+
+## Vurgu rengi adları
+
+Ayarlar sayfasındaki vurgu rengi kataloğu Türkçedir. `Amber` yerine proje renk kataloğuyla aynı sözcük olan `Kehribar` kullanılır.
 
 ## Kurumsal iş dağılım ağacı salt okunurdur
 

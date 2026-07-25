@@ -31,6 +31,10 @@ function applyEnvironment({ corporateWbsSource = true } = {}) {
   process.env.MERGEN_ROTA_DB_DATABASE = 'MERGEN_Rota';
   process.env.MERGEN_ROTA_DEV_IDENTITY_ENABLED = 'true';
   process.env.MERGEN_ROTA_DEV_SICIL = '10276';
+  // Kurumsal katalog tazeleme penceresi süreç düzeyindedir. Testlerin
+  // birbirinin penceresini devralmaması için varsayılan olarak kapatılır;
+  // pencereyi sınayan testler bu değişkeni kendisi ayarlar.
+  if (process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS == null) process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS = '0';
   if (corporateWbsSource) {
     process.env.MERGEN_ROTA_WBS_DB_SERVER = 'sqlserver-wbs.test.internal';
     process.env.MERGEN_ROTA_WBS_DB_DATABASE = 'KURUMSAL_WBS';
@@ -57,9 +61,11 @@ export async function createActualStack(seed = {}, options = {}) {
 
   const { setSqlDriverForTests, resetSqlPoolForTests } = await import('../../src/server/db/pool.js');
   const { resetCorporateWbsPoolForTests } = await import('../../src/server/db/corporateWbsPool.js');
+  const { resetCorporateWbsSyncScheduleForTests } = await import('../../src/server/repository/corporateWbsSyncSchedule.js');
   setSqlDriverForTests(driver);
   resetSqlPoolForTests();
   resetCorporateWbsPoolForTests();
+  resetCorporateWbsSyncScheduleForTests();
 
   const commitRoute = await import('../../src/app/api/mergen-rota/commit/route.js');
   const snapshotRoute = await import('../../src/app/api/mergen-rota/snapshot/route.js');
@@ -130,6 +136,7 @@ export async function createActualStack(seed = {}, options = {}) {
       setSqlDriverForTests(null);
       resetSqlPoolForTests();
       resetCorporateWbsPoolForTests();
+      resetCorporateWbsSyncScheduleForTests();
     }
   };
 }

@@ -111,9 +111,40 @@ Synchronization rules:
 4. New elements are inserted, changed elements are updated, and elements that disappear from the source are deleted **only** when no child node and no Task reference them. A corporate node that carries Tasks is therefore never removed silently.
 5. Synchronization runs on snapshot load, batched by project code. When the source database is unreachable the snapshot still loads: the failure is logged and corporate WBS is left as-is, because a second-database outage must not take the application down.
 
-Cost characteristic: CN43N is read with one query per `MERGEN_ROTA_WBS_SYNC_PROJECT_BATCH` project codes (default 50) on the source connection, and the merge is one statement per project that actually has source rows. The merge statements are conditional, so an unchanged tree performs no writes, but a portfolio with several hundred corporate projects still costs one round trip each per snapshot load. If that becomes visible on the real dataset, the next step is a multi-project merge payload rather than per-project statements.
+### 4.1.1 Synchronization cost and skip rules
+
+CN43N is read with one query per `MERGEN_ROTA_WBS_SYNC_PROJECT_BATCH` project codes (default 50) on the source connection, and the merge is one statement per project that actually needs writing. On a 38 000-row installation the earlier unconditional version rewrote the whole corporate tree on *every* snapshot request and a single application start took over 30 seconds. Three layers now bound that cost:
+
+1. **Fingerprint skip.** `corporateWbsSyncState.js` hashes each project's planned node set (SHA-256 over the ordered `sourceKey/name/level/outlineCode/statusCode/elementTypeCode/parentSourceKey/sortOrder` tuples). The hash and node count are stored in `MR_CorporateWbsSyncState`. When the freshly planned hash, the stored node count **and** the number of corporate nodes actually present in `MR_WBS` all agree, the merge statement is not issued at all. The stored-count check is what makes the skip self-healing: if `MR_WBS` is cleared out of band, the fingerprint alone would wrongly claim the tree is current.
+2. **Freshness window.** `corporateWbsSyncSchedule.js` keeps a process-level timestamp of the last successful catalog refresh. Within `MERGEN_ROTA_WBS_SYNC_TTL_MS` (default 5 minutes, `0` disables the window) the source database is not queried at all, and concurrent requests share one in-flight refresh instead of stacking. Failed refreshes never advance the window, so an unreachable source is retried on the next request.
+3. **Isolation separation.** The refresh runs *outside* the serializable snapshot-read transaction (`projectedSqlAppRepository`). Previously the merge inherited `SERIALIZABLE` from the enclosing read and accumulated range locks over the whole `MR_WBS` table; each project merge now takes its own short `READ COMMITTED` transaction together with its fingerprint write.
+
+Steady state is therefore one authorization read, one corporate-project sync, one fingerprint read, one CN43N read per batch, and zero merges — or, inside the freshness window, no corporate work at all.
+
+`test/corporate-wbs-snapshot-performance-e2e.test.mjs` covers this end to end by counting the SQL statements the real chain issues.
 
 Corporate WBS structure is read-only end to end: `resolveWbsMutationAccess` blocks the UI actions in Gerçek Sistem mode, and `commitWbs` / `deleteWbs` reject the mutation independently on the server. Assigning Tasks to corporate WBS nodes and moving Tasks between them stays allowed — the Task-to-WBS link is MERGEN Rota data, not corporate structure. In Demo mode there is no corporate source, so sample projects keep an editable tree.
+
+## 4.2 İş Dağılım Ağacı page layout
+
+Vertical space is the scarce resource on this page, and the tree table is what the page is for. The layout therefore is:
+
+- one thin toolbar row carrying the project label, the source chip (`CN43N kaynaklı` / `Proje düzeyinde yönetilir`), node/activity/visible-row metrics and the tree controls;
+- notices (corporate read-only, read-only visibility, validation issues, mutation errors) as single-line notes rather than full cards;
+- the task-move workflow behind a `Görev taşı` toggle, collapsed by default;
+- the tree table filling the remaining height with its own scroll container, so the header row and everything above it stay visible while rows scroll.
+
+Three controls govern how much of the hierarchy is shown:
+
+| Control | Effect |
+| --- | --- |
+| `Tümünü aç` | expands every node |
+| `Tümünü kapat` | collapses to roots only |
+| `Hiyerarşi` | expands down to a chosen level (1–5 or all) |
+
+The default is `DEFAULT_WBS_DEPTH` (2 — roots plus their children). Expanding the entire tree by default was the previous behavior and is not viable on corporate projects: it forced tens of thousands of rows into the first paint. `expandedIdsForDepth` in `src/features/wbs/wbsTreeViewPolicy.js` is the pure function behind all three controls, and only nodes that actually have children enter the expansion set.
+
+Row rollups come from `selectWbsRollupIndex`, which computes every node's aggregate in one reverse-DFS pass. The per-node `selectWbsTaskRollup` remains available for single lookups, but calling it per rendered row was quadratic in the node count.
 
 ## 5. WBS hierarchy rules
 

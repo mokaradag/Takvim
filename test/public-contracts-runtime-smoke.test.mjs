@@ -223,7 +223,7 @@ test('data boundary has explicit loading, error, retry, and ready branches', () 
 
 test('data boundary presents user-facing Turkish status messages', () => {
   const source = read('src/components/shell/AppDataBoundary.jsx');
-  for (const message of ['Veriler yükleniyor...', 'Veriler yüklenemedi.', 'Yeniden Dene']) {
+  for (const message of ['Veriler yükleniyor', 'Veriler yüklenemedi', 'Yeniden Dene']) {
     assert.ok(source.includes(message), message);
   }
 });

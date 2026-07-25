@@ -1,7 +1,7 @@
 'use client';
 import { useState as useState2, useMemo as useMemo2 } from 'react';
 import { Icons } from '../../components/icons';
-import { PRIORITIES } from '../../domain/constants';
+import { resolvePriority } from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { AvatarStack, Kw } from '../../components/ui';
@@ -73,7 +73,7 @@ export function KanbanView() {
                 const days = t.targetFinish ? diffDays(t.targetFinish, today_) : null;
                 const overdue = t.status !== 'done' && days != null && days < 0;
                 const color = projectColorVar(t.proje);
-                const prio = PRIORITIES[t.priority || 'medium'];
+                const prio = resolvePriority(t.priority);
                 return (
                   <Tooltip
                     key={t.id}

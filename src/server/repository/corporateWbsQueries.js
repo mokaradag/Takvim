@@ -29,6 +29,39 @@ WHERE SourceType = 'CORPORATE' AND IsActive = 1 AND NULLIF(LTRIM(RTRIM(ProjectCo
 ORDER BY ProjectCode;`;
 
 /**
+ * Proje başına son eşitlemenin parmak izini ve depodaki gerçek düğüm sayısını
+ * okur. İki değer de aynı kaldığında CN43N birleştirmesi tümüyle atlanır;
+ * `StoredNodeCount` sayesinde MR_WBS elle temizlense bile eşitleme kendini
+ * onarır.
+ */
+export const CORPORATE_WBS_SYNC_STATE_SQL = `
+SELECT s.ProjectCode, s.ContentHash, s.NodeCount,
+  (
+    SELECT COUNT_BIG(*)
+    FROM dbo.MR_WBS w
+    JOIN dbo.MR_Projects p ON p.ProjectId = w.ProjectId
+    WHERE p.SourceType = 'CORPORATE'
+      AND p.IsActive = 1
+      AND UPPER(p.ProjectCode) = s.ProjectCode
+      AND w.SourceType = 'CORPORATE'
+      AND w.SourceKey IS NOT NULL
+  ) AS StoredNodeCount
+FROM dbo.MR_CorporateWbsSyncState s;`;
+
+/** Bir projenin eşitleme parmak izini günceller (yoksa ekler). */
+export const CORPORATE_WBS_SYNC_STATE_UPSERT_SQL = `
+UPDATE dbo.MR_CorporateWbsSyncState
+SET ContentHash = @contentHash,
+    NodeCount = @nodeCount,
+    SyncedAt = SYSUTCDATETIME(),
+    SyncedBySicil = @actorSicil
+WHERE ProjectCode = @projectCode;
+
+IF @@ROWCOUNT = 0
+  INSERT dbo.MR_CorporateWbsSyncState(ProjectCode, ContentHash, NodeCount, SyncedBySicil)
+  VALUES(@projectCode, @contentHash, @nodeCount, @actorSicil);`;
+
+/**
  * Tek bir kurumsal projenin CN43N kaynaklı düğümlerini MR_WBS ile eşitler.
  *
  * Eşitleme yalnızca `SourceType = 'CORPORATE'` satırlarına dokunur:

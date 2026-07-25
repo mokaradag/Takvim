@@ -37,8 +37,14 @@ export function createProjectedSqlAppRepository() {
   return {
     ...baseRepository,
     async loadSnapshot() {
+      // Kurumsal katalog tazelemesi bilinçli olarak işlemin DIŞINDA çalışır.
+      // Aynı işlemin içinde çalıştığında CN43N birleştirmesi SERIALIZABLE
+      // yalıtımını devralıyor, 38 bin satırlık MR_WBS üzerinde aralık kilitleri
+      // biriktiriyor ve tek bir anlık görüntü isteğini otuz saniyenin üzerine
+      // çıkarıyordu. İşlemin içinde yalnızca okumalar kalır.
+      await baseRepository.refreshCorporateCatalog();
       return withSqlTransaction(async (transaction) => {
-        const snapshot = await baseRepository.loadSnapshot();
+        const snapshot = await baseRepository.readSnapshot();
         const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
         const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
         const defaultCalendarId = await loadDefaultCalendarId(transaction);

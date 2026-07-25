@@ -22,17 +22,33 @@ Current root sequence:
 | --- | --- |
 | Global tokens/base/reset | `src/app/globals.css` |
 | Application shell/topbar/sidebar/export | `src/app/styles/shell.css` |
+| Boot/data-loading curtain (`.app-boot*`) | `src/app/styles/shell.css` |
 | Dashboard/Özet | `src/app/styles/dashboard.css` |
 | Forms/inputs/DateInput | `src/app/styles/components.css` |
 | Tables/shared filter popovers | `src/app/styles/components.css` |
 | Gantt | `src/app/styles/features.css` (`Gantt` section) |
-| WBS | `src/app/styles/features.css` (`WBS` section) |
+| WBS (toolbar, tree controls, tree table) | `src/app/styles/features.css` (`Proje Yapısı` section) |
+| Team directory (`.team-*`) | `src/app/styles/features.css` (`Ekip` section) |
 | Task Detail drawer | `src/app/styles/features.css` (`Task Detail` section) |
 | Simple Mode | `src/app/styles/simple-mode.css` |
 | Shared component chrome | `src/app/styles/components.css` |
 | Mode chooser/settings/help presentation | `src/app/styles/experience.css` |
 
 A feature may use shared tokens and primitives, but its structural layout remains owned by the feature's stylesheet section.
+
+### 2.1 Full-height pages with sticky headers
+
+Pages whose table "runs the show" (Görevler, Ekip, Proje Yapısı → İş Dağılım Ağacı) do not scroll `.content`. They fill its height and delegate scrolling to the table shell:
+
+```text
+.content (fixed height, overflow auto)
+└── <feature>-page          height: 100%; min-height: 0; display: flex/column
+    ├── header card/toolbar  flex: 0 0 auto
+    └── <feature>-table-card flex: 1 1 0; min-height: 0; overflow: hidden
+        └── <feature>-table-scroll  flex: 1 1 0; min-height: 0; overflow: auto
+```
+
+`position: sticky` resolves against the nearest scroll container, so the header row must live inside the element that actually scrolls — an `overflow-x: auto` wrapper without a height constraint silently breaks sticky headers. Sticky header cells also need an opaque background, otherwise rows show through during horizontal scrolling.
 
 ## 3. Rules for adding styles
 

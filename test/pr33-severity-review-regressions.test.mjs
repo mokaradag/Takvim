@@ -138,7 +138,9 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   assert.match(poolSource, /const activeTransaction = transactionContext\.getStore\(\);\s*if \(activeTransaction\) return activeTransaction;/s);
   assert.match(poolSource, /withSqlTransaction\(work, \{ isolationLevel = sql\.ISOLATION_LEVEL\.READ_COMMITTED \} = \{\}\)/);
   assert.match(projectionSource, /return withSqlTransaction\(async \(transaction\) => \{/);
-  assert.match(projectionSource, /const snapshot = await baseRepository\.loadSnapshot\(\);/);
+  assert.match(projectionSource, /const snapshot = await baseRepository\.readSnapshot\(\);/);
+  // Kurumsal katalog tazelemesi bilinçli olarak serileştirilebilir işlemin dışındadır.
+  assert.match(projectionSource, /await baseRepository\.refreshCorporateCatalog\(\);\s*return withSqlTransaction\(/s);
   assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds\)/);
   assert.match(projectionSource, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });

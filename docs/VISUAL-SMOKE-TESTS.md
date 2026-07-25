@@ -79,9 +79,11 @@ Record browser, OS, build commit and viewport dimensions with the result.
 ## WBS
 
 - WBS tree remains horizontally scrollable on constrained widths.
-- Sticky WBS header remains aligned with rows.
-- Expand/collapse and row actions remain reachable.
-- Corporate project (Gerçek Sistem): the CN43N information card is visible, row actions are hidden, rows show level/PYP/type/status, and the Task move panel still works.
+- Sticky WBS header remains aligned with rows **and stays visible while rows scroll**; the toolbar above it does not scroll away.
+- The tree opens at level 2 by default, not fully expanded.
+- `Tümünü aç`, `Tümünü kapat` and `Hiyerarşi` are visible as one control group in the toolbar; the hierarchy menu closes on outside click and on `Esc`.
+- `Görev taşı` toggles the move panel; the panel is closed on entry and on project switch.
+- Corporate project (Gerçek Sistem): the CN43N note is visible as a single-line note, row actions are hidden, rows show level/PYP/type/status, and the Task move panel still works.
 - Manual project: Alt ekle / Ad / Taşı / Sil all work and the new node appears with the expected code.
 
 ## Gantt
@@ -92,11 +94,29 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Holiday stripes and dependency overlays retain their intended local paint order.
 - WBS Gantt and responsible-person/CPM views remain usable.
 
+## Boot curtain (first data load)
+
+- While the first snapshot loads, the card is centered horizontally and vertically — not clipped into a narrow left column.
+- Brand row, title, description, progress sweep and step chips all render in both themes.
+- The load-failure state shows `Yeniden Dene` and, outside Demo mode, the Demo escape button.
+
+## Team (Ekip)
+
+- The `Kurumsal ekip dizini` card and the table header stay visible while the person list scrolls.
+- The default summary view includes a `Direktörlük tanımsız` card when such people exist; clicking it filters to exactly those people.
+- The directorate dropdown offers `Direktörlük tanımsız` alongside the named directorates.
+
+## Basit Mod
+
+- The sidebar exposes Takvim, Gantt, Kullanım Rehberi and Ayarlar.
+- Gantt renders the portfolio timeline, identical to Gelişmiş Mod's portfolio Gantt.
+
 ## Kanban, Reports, Settings and persistence status
 
 - Kanban columns/cards render and remain scrollable.
 - Reports render without layout regression.
 - Settings controls remain readable in both themes.
+- The accent-colour catalog reads `Kehribar` (not `Amber`).
 - Appearance/emblem/mode settings visibly apply as expected.
 - The Gerçek Sistem / Demo switch is present in the Settings **Veri kaynağı** card and absent from the sidebar.
 - Persistence status indicator appears above normal content when saving/error/saved state is simulated by existing test/dev mechanisms.

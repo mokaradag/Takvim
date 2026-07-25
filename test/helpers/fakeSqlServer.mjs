@@ -150,7 +150,17 @@ export function createFakeDatabase(seed = {}) {
     corporateProjects: seed.corporateProjects || [],
     corporateProjectAccess: seed.corporateProjectAccess || [],
     executiveScope: seed.executiveScope || [],
-    corporateWbsRows: seed.corporateWbsRows || []
+    corporateWbsRows: seed.corporateWbsRows || [],
+    // Uçtan uca başarım savlarının kanıtı: her deyim ve her işlem yalıtım
+    // düzeyi kaydedilir; testler kaç kez birleştirme yapıldığını sayabilir.
+    statements: [],
+    transactions: [],
+    corporateWbsSyncState: (seed.corporateWbsSyncState || []).map((entry) => ({
+      ProjectCode: String(entry.ProjectCode || '').toUpperCase(),
+      ContentHash: entry.ContentHash,
+      NodeCount: entry.NodeCount ?? 0,
+      SyncedBySicil: entry.SyncedBySicil ?? null
+    }))
   };
 }
 
@@ -420,6 +430,30 @@ function runQuery(db, statement, params, { database }) {
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (/FROM \[\w+\]\.\[\w+\]/.test(sqlText) && sqlText.includes('WBS element')) {
     return result([corporateWbsSourceRows(db, params)]);
+  }
+
+  if (sqlText.includes('FROM dbo.MR_CorporateWbsSyncState s')) {
+    return result([db.corporateWbsSyncState.map((entry) => ({
+      ProjectCode: entry.ProjectCode,
+      ContentHash: entry.ContentHash,
+      NodeCount: entry.NodeCount,
+      StoredNodeCount: db.wbs.filter((node) => {
+        const project = db.projects.find((row) => sameGuid(row.ProjectId, node.ProjectId));
+        return project?.SourceType === 'CORPORATE'
+          && project.IsActive
+          && String(project.ProjectCode || '').toUpperCase() === entry.ProjectCode
+          && node.SourceType === 'CORPORATE'
+          && node.SourceKey != null;
+      }).length
+    }))]);
+  }
+
+  if (sqlText.includes('dbo.MR_CorporateWbsSyncState')) {
+    const code = String(params.projectCode || '').toUpperCase();
+    const existing = db.corporateWbsSyncState.find((entry) => entry.ProjectCode === code);
+    if (existing) Object.assign(existing, { ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null });
+    else db.corporateWbsSyncState.push({ ProjectCode: code, ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null });
+    return result([[]]);
   }
 
   if (sqlText.includes('OPENJSON(@payload)')) {
@@ -758,7 +792,9 @@ export function createFakeSqlServerDriver(db) {
     }
 
     async query(statement) {
-      return runQuery(db, statement, this.params, { database: this.pool.config?.database || 'MERGEN_Rota' });
+      const database = this.pool.config?.database || 'MERGEN_Rota';
+      db.statements.push({ sql: String(statement), database });
+      return runQuery(db, statement, this.params, { database });
     }
   }
 
@@ -790,7 +826,10 @@ export function createFakeSqlServerDriver(db) {
       this._aborted = false;
     }
 
-    async begin() { this.began = true; }
+    async begin(isolationLevel) {
+      this.began = true;
+      db.transactions.push({ isolationLevel, statementIndex: db.statements.length });
+    }
     async commit() { this.committed = true; }
     async rollback() { this.rolledBack = true; }
 

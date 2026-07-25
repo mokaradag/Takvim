@@ -21,6 +21,7 @@ export function selectPersonById(people, personId) {
 export {
   buildWbsTree,
   compareWbsNodes,
+  emptyWbsRollup,
   flattenWbsTree,
   formatWbsPath,
   selectDefaultProjectWbs,
@@ -30,6 +31,7 @@ export {
   selectWbsChildren,
   selectWbsDescendantIds,
   selectWbsPath,
+  selectWbsRollupIndex,
   selectWbsRoots,
   selectWbsTaskRollup
 } from './wbsSelectors.js';
