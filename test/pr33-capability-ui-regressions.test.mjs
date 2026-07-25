@@ -105,6 +105,7 @@ test('Simple Mode task creation resolves the project root WBS', () => {
   const source = fs.readFileSync(new URL('../src/features/simple/SimpleModePanel.jsx', import.meta.url), 'utf8');
   assert.match(source, /wbsId:\s*targetWbsId/);
   assert.match(source, /created\.changes\?\.wbsUpserts/);
-  assert.match(source, /canCreateProjects\s*&&\s*<option value=\{MANUAL_PROJECT\}>/);
+  assert.match(source, /if \(canCreateProjects\) \{[\s\S]*?value: MANUAL_PROJECT/);
+  assert.match(source, /<SearchableSelect[\s\S]*?options=\{projectOptions\}/);
   assert.doesNotMatch(source, /wbsId:\s*null/);
 });
