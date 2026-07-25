@@ -67,25 +67,51 @@ SET ProjectCode = source.ProjectCode,
     ProjectName = source.ProjectName,
     ProjectTypeCode = source.ProjectTypeCode,
     ProjectTypeName = source.ProjectTypeName,
+    LeadSicil = manager.Sicil,
     IsActive = 1,
     UpdatedAt = SYSUTCDATETIME(),
     UpdatedBySicil = @actorSicil
 FROM dbo.MR_Projects target
 JOIN dbo.MR_V_CorporateProjects source ON source.ProjectCode = UPPER(target.ProjectCode)
+OUTER APPLY (
+  SELECT TOP (1) access.Sicil
+  FROM dbo.MR_V_CorporateProjectAccess access
+  WHERE access.ProjectCode = source.ProjectCode
+    AND access.RoleCode = 'PROJECT_MANAGER'
+  ORDER BY access.Sicil
+) manager
 WHERE target.SourceType = 'CORPORATE'
   AND (
     ISNULL(target.ProjectName, N'') <> ISNULL(source.ProjectName, N'') OR
     ISNULL(target.ProjectTypeCode, N'') <> ISNULL(source.ProjectTypeCode, N'') OR
     ISNULL(target.ProjectTypeName, N'') <> ISNULL(source.ProjectTypeName, N'') OR
+    ISNULL(target.LeadSicil, -1) <> ISNULL(manager.Sicil, -1) OR
     target.IsActive = 0
   );
 
 DECLARE @Inserted TABLE(ProjectId uniqueidentifier, ProjectCode nvarchar(255), ProjectName nvarchar(1000));
-INSERT dbo.MR_Projects(SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName, CalendarId, CreatedBySicil, UpdatedBySicil)
+INSERT dbo.MR_Projects(
+  SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName,
+  LeadSicil, CalendarId, CreatedBySicil, UpdatedBySicil
+)
 OUTPUT inserted.ProjectId, inserted.ProjectCode, inserted.ProjectName INTO @Inserted
-SELECT 'CORPORATE', source.ProjectCode, source.ProjectName, source.ProjectTypeCode, source.ProjectTypeName, calendar.CalendarId, @actorSicil, @actorSicil
+SELECT
+  'CORPORATE', source.ProjectCode, source.ProjectName, source.ProjectTypeCode, source.ProjectTypeName,
+  manager.Sicil, calendar.CalendarId, @actorSicil, @actorSicil
 FROM dbo.MR_V_CorporateProjects source
-CROSS APPLY (SELECT TOP (1) CalendarId FROM dbo.MR_Calendars WHERE IsDefault = 1 AND IsActive = 1 ORDER BY CreatedAt) calendar
+CROSS APPLY (
+  SELECT TOP (1) CalendarId
+  FROM dbo.MR_Calendars
+  WHERE IsDefault = 1 AND IsActive = 1
+  ORDER BY CreatedAt
+) calendar
+OUTER APPLY (
+  SELECT TOP (1) access.Sicil
+  FROM dbo.MR_V_CorporateProjectAccess access
+  WHERE access.ProjectCode = source.ProjectCode
+    AND access.RoleCode = 'PROJECT_MANAGER'
+  ORDER BY access.Sicil
+) manager
 WHERE NOT EXISTS (
   SELECT 1
   FROM dbo.MR_Projects p WITH (UPDLOCK, HOLDLOCK)

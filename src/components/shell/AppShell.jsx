@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../icons';
 import { Avatar, Heptagon } from '../ui';
 import { InfoButton } from '../ui-extras';
+import { SearchableSelect } from '../SearchableSelect';
 import { DashboardView } from '../../features/dashboard/DashboardView';
 import { TasksView } from '../../features/tasks/TasksView';
 import { ProjectWorkspaceView } from '../../features/project/ProjectWorkspaceView';
@@ -24,6 +25,7 @@ import {
   useWbs,
   useWorkspace
 } from '../../state/hooks';
+import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domain/projectTypes';
 import { useTweaks } from '../../hooks/useTweaks';
 import { useApplyTweaks } from '../../hooks/useApplyTweaks';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
@@ -66,6 +68,7 @@ export default function AppShell() {
   });
   const [simpleCalendarTab, setSimpleCalendarTab] = useState('calendar');
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
   const [modePickerOpen, setModePickerOpen] = useState(() => {
     try { return localStorage.getItem(MODE_STORAGE_KEY) !== '1'; }
     catch { return false; }
@@ -116,6 +119,33 @@ export default function AppShell() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  const archivedProjectCount = useMemo(() => projects.filter(isArchivedProject).length, [projects]);
+  const workspaceProjectOptions = useMemo(() => {
+    const listed = visibleProjects(projects, { showArchived: showArchivedProjects });
+    if (selectedProject && !listed.some((project) => project.id === selectedProject.id)) listed.unshift(selectedProject);
+    return [
+      {
+        value: '',
+        label: 'Portföy · Tüm Projeler',
+        description: `${projects.length} proje`,
+        icon: <Icons.Layers size={13} />,
+        keywords: ['portföy', 'tüm projeler']
+      },
+      ...listed.map((project) => {
+        const type = projectTypeMeta(project.projectTypeCode, project.projectTypeName);
+        const ProjectIcon = Icons[type.icon] || Icons.Layers;
+        return {
+          value: project.id,
+          label: projectDisplayName(project),
+          group: `${type.code} · ${type.name}`,
+          description: isArchivedProject(project) ? 'Tamamlanan / kapatılan' : null,
+          icon: <ProjectIcon size={13} />,
+          keywords: [project.code, project.name, type.code, type.name]
+        };
+      })
+    ];
+  }, [projects, selectedProject, showArchivedProjects]);
 
   const totalsByView = useMemo(() => ({
     ozet: tasks.length,
@@ -214,16 +244,27 @@ export default function AppShell() {
         {!simpleMode ? (
           <div className="col" style={{ gap: 6, padding: '0 12px 10px' }}>
             <div className="sidebar-section-title" style={{ margin: 0 }}>Aktif çalışma alanı</div>
-            <select
-              className="input"
+            <SearchableSelect
               value={selectedProjectId || ''}
-              onChange={(event) => selectWorkspace(event.target.value || null)}
+              options={workspaceProjectOptions}
+              onChange={(projectId) => selectWorkspace(projectId || null)}
+              placeholder="Portföy veya proje seçin"
+              searchPlaceholder="Proje kodu, adı veya türüyle ara"
+              ariaLabel="Portföy veya proje çalışma alanı seç"
+              maxVisible={70}
+              compact
               style={{ width: '100%', fontSize: 12.5 }}
-              aria-label="Portföy veya proje çalışma alanı seç"
-            >
-              <option value="">Portföy · Tüm Projeler</option>
-              {projects.map((project) => <option key={project.id} value={project.id}>Proje · {projectDisplayName(project)}</option>)}
-            </select>
+            />
+            {archivedProjectCount > 0 && (
+              <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showArchivedProjects}
+                  onChange={(event) => setShowArchivedProjects(event.target.checked)}
+                />
+                Tamamlanan ve kapatılanları göster ({archivedProjectCount})
+              </label>
+            )}
             <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
               {workspaceMode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
             </div>

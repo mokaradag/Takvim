@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../DateInput';
 import { Icons } from '../icons';
+import { SearchableSelect } from '../SearchableSelect';
+import { Avatar } from '../ui';
 import { ProjectColorPicker } from '../project/ProjectColorPicker';
 import { fmtISO, today } from '../../scheduling/dates';
 
@@ -16,8 +18,23 @@ function initialForm(people) {
   };
 }
 
+function personLabel(person) {
+  return person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name;
+}
+
 export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
   const defaults = useMemo(() => initialForm(people), [people]);
+  const personOptions = useMemo(() => people
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
+    .map((person) => ({
+      value: person.id,
+      label: personLabel(person),
+      description: person.role || null,
+      group: [person.organization?.directorate, person.organization?.department, person.organization?.unit].filter(Boolean).join(' / '),
+      keywords: [person.name, person.employeeNo, person.username, person.role, person.team],
+      icon: <Avatar name={person.name} size="sm" />
+    })), [people]);
   const [form, setForm] = useState(defaults);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -127,10 +144,16 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
             <label className="col" style={{ gap: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 650 }}>Proje sorumlusu</span>
-              <select className="input" value={form.leadId} onChange={setField('leadId')} disabled={saving || !people.length}>
-                {!people.length && <option value="">Kişi bulunamadı</option>}
-                {people.map((person) => <option key={person.id} value={person.id}>{person.employeeNo ? `${person.employeeNo} · ` : ''}{person.name}</option>)}
-              </select>
+              <SearchableSelect
+                value={form.leadId}
+                options={personOptions}
+                onChange={(leadId) => setValue('leadId', leadId)}
+                placeholder={people.length ? 'Proje sorumlusu seçin' : 'Kişi bulunamadı'}
+                searchPlaceholder="Ad, sicil, unvan veya birimle ara"
+                emptyText="Eşleşen personel bulunamadı."
+                disabled={saving || !people.length}
+                maxVisible={60}
+              />
             </label>
 
             <label className="col" style={{ gap: 6 }}>

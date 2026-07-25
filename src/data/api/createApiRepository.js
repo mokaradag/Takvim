@@ -10,6 +10,7 @@ const CODE_BY_STATUS = {
   409: REPOSITORY_ERROR_CODES.CONFLICT,
   503: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE
 };
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UUID_SUFFIX = /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 const STATUS_TO_SQL = Object.freeze({ todo: 'planned', in_progress: 'in-progress', done: 'done' });
 const STATUS_FROM_SQL = Object.freeze({
@@ -29,8 +30,23 @@ export function toActualUuid(value) {
   return (match ? match[1] : normalized).toLowerCase();
 }
 
-function toOptionalActualUuid(value) {
-  return value === undefined ? undefined : toActualUuid(value);
+function requiredActualUuid(value, label) {
+  const normalized = toActualUuid(value);
+  if (!normalized || !UUID_PATTERN.test(normalized)) {
+    throw new AppRepositoryError({
+      code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+      message: `${label} geçerli UUID olmalıdır.`,
+      operation: 'commitChanges',
+      details: { field: label, value: value == null ? null : String(value) }
+    });
+  }
+  return normalized;
+}
+
+function toOptionalActualUuid(value, label) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  return requiredActualUuid(value, label);
 }
 
 export function toPersistenceStatus(value) {
@@ -45,10 +61,10 @@ export function fromPersistenceStatus(value) {
   return STATUS_FROM_SQL[value] || value;
 }
 
-function normalizeDelete(entry) {
+function normalizeDelete(entry, label) {
   return typeof entry === 'string'
-    ? { id: toActualUuid(entry), version: null }
-    : { ...entry, id: toActualUuid(entry?.id) };
+    ? { id: requiredActualUuid(entry, label), version: null }
+    : { ...entry, id: requiredActualUuid(entry?.id, label) };
 }
 
 export function normalizeActualChanges(changes = {}) {
@@ -56,31 +72,31 @@ export function normalizeActualChanges(changes = {}) {
     ...changes,
     projectUpserts: (changes.projectUpserts || []).map((project) => ({
       ...project,
-      id: toActualUuid(project.id),
-      calendarId: toOptionalActualUuid(project.calendarId)
+      id: requiredActualUuid(project.id, 'Proje kimliği'),
+      calendarId: toOptionalActualUuid(project.calendarId, 'Proje takvim kimliği')
     })),
-    projectDeletes: (changes.projectDeletes || []).map(normalizeDelete),
+    projectDeletes: (changes.projectDeletes || []).map((entry) => normalizeDelete(entry, 'Proje kimliği')),
     wbsUpserts: (changes.wbsUpserts || []).map((node) => ({
       ...node,
-      id: toActualUuid(node.id),
-      projectId: toActualUuid(node.projectId),
-      parentId: toOptionalActualUuid(node.parentId)
+      id: requiredActualUuid(node.id, 'WBS kimliği'),
+      projectId: requiredActualUuid(node.projectId, 'WBS proje kimliği'),
+      parentId: toOptionalActualUuid(node.parentId, 'Üst WBS kimliği')
     })),
-    wbsDeletes: (changes.wbsDeletes || []).map(normalizeDelete),
+    wbsDeletes: (changes.wbsDeletes || []).map((entry) => normalizeDelete(entry, 'WBS kimliği')),
     taskUpserts: (changes.taskUpserts || []).map((task) => ({
       ...task,
-      id: toActualUuid(task.id),
-      projectId: toActualUuid(task.projectId),
-      wbsId: toOptionalActualUuid(task.wbsId),
-      calendarId: toOptionalActualUuid(task.calendarId),
+      id: requiredActualUuid(task.id, 'Görev kimliği'),
+      projectId: requiredActualUuid(task.projectId, 'Görev proje kimliği'),
+      wbsId: toOptionalActualUuid(task.wbsId, 'Görev WBS kimliği'),
+      calendarId: toOptionalActualUuid(task.calendarId, 'Görev takvim kimliği'),
       status: toOptionalPersistenceStatus(task.status),
       deps: Array.isArray(task.deps) ? task.deps.map((dependency) => ({
         ...dependency,
-        id: dependency.id ? toActualUuid(dependency.id) : dependency.id,
-        predecessorId: toActualUuid(dependency.predecessorId)
+        id: dependency.id ? requiredActualUuid(dependency.id, 'Bağımlılık kimliği') : dependency.id,
+        predecessorId: requiredActualUuid(dependency.predecessorId, 'Öncül görev kimliği')
       })) : task.deps
     })),
-    taskDeletes: (changes.taskDeletes || []).map(normalizeDelete)
+    taskDeletes: (changes.taskDeletes || []).map((entry) => normalizeDelete(entry, 'Görev kimliği'))
   };
 }
 

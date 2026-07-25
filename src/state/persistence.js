@@ -37,6 +37,50 @@ export function createPersistenceChangeSet(before, after) {
   return changes;
 }
 
+function versionMap(items = []) {
+  return new Map(items
+    .filter((item) => item?.id && item?.version)
+    .map((item) => [String(item.id), item.version]));
+}
+
+function hydrateUpserts(entries = [], knownVersions) {
+  return entries.map((entry) => {
+    if (!entry?.id || entry.version) return entry;
+    const version = knownVersions.get(String(entry.id));
+    return version ? { ...entry, version } : entry;
+  });
+}
+
+function hydrateDeletes(entries = [], knownVersions) {
+  return entries.map((entry) => {
+    const id = typeof entry === 'string' ? entry : entry?.id;
+    if (!id) return entry;
+    if (typeof entry !== 'string' && entry.version) return entry;
+    const version = knownVersions.get(String(id));
+    return version ? { ...(typeof entry === 'string' ? { id } : entry), version } : entry;
+  });
+}
+
+// Sunucu, sürümü bulunan kayıtları güncelleme; sürümsüz kayıtları oluşturma niyeti olarak yorumlar.
+// Arayüzdeki kısmi nesneler sürüm alanını düşürse bile mevcut kayıtların oluşturma sanılmasını önleriz.
+export function hydrateKnownVersions(changes, state = {}) {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    throw new TypeError('Kalıcılaştırma değişiklik kümesi geçerli bir nesne olmalıdır.');
+  }
+  const projectVersions = versionMap(state.projects);
+  const taskVersions = versionMap(state.tasks);
+  const wbsVersions = versionMap(state.wbs);
+  return {
+    ...changes,
+    projectUpserts: hydrateUpserts(changes.projectUpserts || [], projectVersions),
+    projectDeletes: hydrateDeletes(changes.projectDeletes || [], projectVersions),
+    taskUpserts: hydrateUpserts(changes.taskUpserts || [], taskVersions),
+    taskDeletes: hydrateDeletes(changes.taskDeletes || [], taskVersions),
+    wbsUpserts: hydrateUpserts(changes.wbsUpserts || [], wbsVersions),
+    wbsDeletes: hydrateDeletes(changes.wbsDeletes || [], wbsVersions)
+  };
+}
+
 export function isEmptyChangeSet(changes) {
   return !((changes.projectUpserts?.length || 0)
     || (changes.projectDeletes?.length || 0)
@@ -203,7 +247,7 @@ export function createStateMutationOrchestrator({
       applyStateAction(action);
       return { ok: false, error: domainError };
     }
-    const changes = createPersistenceChangeSet(before, planned);
+    const changes = hydrateKnownVersions(createPersistenceChangeSet(before, planned), before);
     if (isEmptyChangeSet(changes)) {
       applyStateAction(action);
       return { ok: true, value: null };
@@ -232,7 +276,8 @@ export function createStateMutationOrchestrator({
   const commitChanges = (operation, changes) => queue.enqueue(async () => {
     applyStateAction({ type: 'persistence/start', operation });
     try {
-      const committed = await repository.commitChanges(changes);
+      const preparedChanges = hydrateKnownVersions(changes, getState());
+      const committed = await repository.commitChanges(preparedChanges);
       applyStateAction({
         type: 'persistence/success',
         changes: committed,

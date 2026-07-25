@@ -34,7 +34,7 @@ test('Basit Mod sorumlu seçimi büyük kişi listeleri için arama ve sınırl�
   const simple = read('src/features/simple/SimpleModePanel.jsx');
 
   assert.match(simple, /const MAX_VISIBLE_PEOPLE = 8;/);
-  assert.match(simple, /placeholder="Ad veya personel numarasıyla ara"/);
+  assert.match(simple, /placeholder="Ad, sicil, unvan veya birimle ara"/);
   assert.match(simple, /peopleMatches\.slice\(0, MAX_VISIBLE_PEOPLE\)/);
   assert.match(simple, /personNumber\(person\)/);
   assert.match(simple, />Seçilenler</);

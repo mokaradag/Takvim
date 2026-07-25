@@ -2,7 +2,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
+import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar } from '../../components/ui';
+import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domain/projectTypes';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
 import { useAllPeople, useAllProjects, useAllWbs, useTaskActions } from '../../state/hooks';
@@ -44,6 +46,7 @@ export function SimpleModePanel() {
   const sortedPeople = useMemo(() => people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr')), [people]);
 
   const [projectChoice, setProjectChoice] = useState('');
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
   const [manualProjectName, setManualProjectName] = useState('');
   const [manualProjectCode, setManualProjectCode] = useState('');
   const [task, setTask] = useState('');
@@ -54,9 +57,39 @@ export function SimpleModePanel() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
 
+  const selectableProjects = useMemo(
+    () => visibleProjects(writableProjects, { showArchived: showArchivedProjects }),
+    [writableProjects, showArchivedProjects]
+  );
+  const archivedProjectCount = useMemo(() => writableProjects.filter(isArchivedProject).length, [writableProjects]);
+  const projectOptions = useMemo(() => {
+    const options = selectableProjects.map((project) => {
+      const type = projectTypeMeta(project.projectTypeCode, project.projectTypeName);
+      const ProjectIcon = Icons[type.icon] || Icons.Layers;
+      return {
+        value: project.id,
+        label: projectLabel(project),
+        group: `${type.code} · ${type.name}`,
+        description: isArchivedProject(project) ? 'Tamamlanan / kapatılan' : null,
+        keywords: [project.code, project.name, type.code, type.name],
+        icon: <ProjectIcon size={13} />
+      };
+    });
+    if (canCreateProjects) {
+      options.push({
+        value: MANUAL_PROJECT,
+        label: 'Serbest proje tanımla',
+        description: 'Yeni bir manuel proje oluştur',
+        icon: <Icons.Plus size={13} />,
+        keywords: ['yeni', 'serbest', 'manuel proje']
+      });
+    }
+    return options;
+  }, [selectableProjects, canCreateProjects]);
+
   useEffect(() => {
-    setProjectChoice((current) => resolveSimpleProjectChoice(current, writableProjects, canCreateProjects));
-  }, [writableProjects, canCreateProjects]);
+    setProjectChoice((current) => resolveSimpleProjectChoice(current, selectableProjects, canCreateProjects));
+  }, [selectableProjects, canCreateProjects]);
 
   const selectedProject = writableProjects.find((project) => project.id === projectChoice) || null;
   const selectedRootWbsId = useMemo(
@@ -72,7 +105,7 @@ export function SimpleModePanel() {
     return sortedPeople.filter((person) => {
       if (assigneeIds.includes(person.id)) return false;
       if (!query) return true;
-      return `${person.name} ${personNumber(person)}`.toLocaleLowerCase('tr-TR').includes(query);
+      return `${person.name} ${personNumber(person)} ${person.role || ''} ${person.team || ''}`.toLocaleLowerCase('tr-TR').includes(query);
     });
   }, [sortedPeople, peopleQuery, assigneeIds]);
   const visiblePeople = peopleMatches.slice(0, MAX_VISIBLE_PEOPLE);
@@ -214,14 +247,24 @@ export function SimpleModePanel() {
       </div>
 
       <div className="simple-entry-grid">
-        <label className="simple-field simple-project-field">
+        <div className="simple-field simple-project-field">
           <span>Proje</span>
-          <select className="input" value={projectChoice} onChange={(event) => { setProjectChoice(event.target.value); setMessage(null); }} disabled={!hasWritableDestination}>
-            {writableProjects.map((project) => <option key={project.id} value={project.id}>{projectLabel(project)}</option>)}
-            {canCreateProjects && <option value={MANUAL_PROJECT}>+ Serbest proje tanımla</option>}
-            {!hasWritableDestination && <option value="">Yazılabilir proje yok</option>}
-          </select>
-        </label>
+          <SearchableSelect
+            value={projectChoice}
+            options={projectOptions}
+            onChange={(value) => { setProjectChoice(value); setMessage(null); }}
+            placeholder={hasWritableDestination ? 'Proje seçin' : 'Yazılabilir proje yok'}
+            searchPlaceholder="Proje kodu, adı veya türüyle ara"
+            disabled={!hasWritableDestination}
+            maxVisible={70}
+          />
+          {archivedProjectCount > 0 && (
+            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, fontSize: 10.5, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showArchivedProjects} onChange={(event) => setShowArchivedProjects(event.target.checked)} />
+              Tamamlanan ve kapatılanları göster ({archivedProjectCount})
+            </label>
+          )}
+        </div>
 
         {projectChoice === MANUAL_PROJECT && canCreateProjects && (
           <>
@@ -265,7 +308,7 @@ export function SimpleModePanel() {
             value={peopleQuery}
             onChange={(event) => setPeopleQuery(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }}
-            placeholder="Ad veya personel numarasıyla ara"
+            placeholder="Ad, sicil, unvan veya birimle ara"
             aria-label="Sorumlu ara"
             disabled={!hasWritableDestination}
           />

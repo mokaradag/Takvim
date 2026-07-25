@@ -68,9 +68,11 @@ test('corporate Project view uses only approved A01 columns and GROUP BY', () =>
   for (const forbidden of ['Masraf', 'Butce', 'Tarih', 'Aciklama2']) assert.equal(identifiers.includes(forbidden), false);
 });
 
-test('PPTC access uses exact STRING_SPLIT tokenization and never LIKE', () => {
+test('PPTS access uses exact STRING_SPLIT tokenization and never LIKE', () => {
   const view = createSql.match(/CREATE VIEW dbo\.MR_V_CorporateProjectAccess AS([\s\S]*?);'\);/i)?.[0] || '';
-  assert.match(view, /STRING_SPLIT\(pptcSicil,\s*'',''\)/i);
+  assert.match(view, /STRING_SPLIT\(pptsSicil,\s*'',''\)/i);
+  assert.match(view, /''PPTS''/);
+  assert.doesNotMatch(view, /''PPTC''/);
   assert.match(view, /TRY_CONVERT\(int,\s*LTRIM\(RTRIM\(value\)\)\)/i);
   assert.doesNotMatch(view, /LIKE\s+['"]%/i);
 });

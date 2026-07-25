@@ -26,7 +26,7 @@ SYSTEM_ADMIN may view and mutate all Projects and may create manual Projects.
 - TECHNICAL_MANAGER
 - QUALITY_MANAGER
 - PROCUREMENT_RESPONSIBLE
-- PPTC
+- PPTS
 - PRODUCTION_PLANNING_RESPONSIBLE
 - DELIVERY_MANAGER
 - RISK_MANAGER
@@ -35,7 +35,9 @@ SYSTEM_ADMIN may view and mutate all Projects and may create manual Projects.
 
 Every valid Sicil in these role columns receives FULL access to the matching corporate Project. `programMd` is descriptive and never treated as employee identity.
 
-PPTC authorization uses exact comma tokenization with `STRING_SPLIT`, whitespace trimming, and `TRY_CONVERT(int, value)`. Malformed tokens grant nothing. Substring or `LIKE '%10000%'` matching is prohibited.
+PPTS authorization uses exact comma tokenization of `pptsSicil` with `STRING_SPLIT`, whitespace trimming, and `TRY_CONVERT(int, value)`. Malformed tokens grant nothing. Substring or `LIKE '%10000%'` matching is prohibited.
+
+The corporate Project owner is authoritative: `MR_Projects.LeadSicil` is synchronized from the `PROJECT_MANAGER` role. It is displayed read-only for corporate Projects and remains selectable only for manual Projects.
 
 ## Manual access
 
@@ -72,7 +74,7 @@ FULL Project users may create/edit/delete Tasks, assign employees, manage depend
 
 PARTIAL users cannot mutate Project, WBS, Task, assignment, dependency, baseline, tag, or access records. The client may disable controls, but the server independently returns FORBIDDEN for unauthorized writes.
 
-Corporate identity fields are source-controlled. Even FULL users cannot change corporate SourceType, ProjectCode, ProjectName, ProjectTypeCode, or ProjectTypeName. They may change supported application metadata such as Data Date, color, calendar, lead, and tags.
+Corporate identity fields are source-controlled. Even FULL users cannot change corporate SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName, or LeadSicil. They may change supported application metadata such as Data Date, color, calendar, and tags. Manual Project owners may change the manual Project lead.
 
 ## Authorization-filtered snapshots
 

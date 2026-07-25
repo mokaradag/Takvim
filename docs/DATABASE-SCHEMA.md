@@ -28,7 +28,7 @@ All application-owned SQL Server objects use the `dbo.MR_` prefix. Corporate sou
 
 ## Project schema
 
-`SourceType` is `CORPORATE` or `MANUAL`. Corporate code, name, and type fields are synchronized from A01 and are server-authoritative. Application metadata such as Data Date, color token, calendar, tags, and lead remains MERGEN-owned. A filtered unique index protects non-null Project codes without preventing multiple manual Projects whose code is null.
+`SourceType` is `CORPORATE` or `MANUAL`. Corporate code, name, type fields, and `LeadSicil` are synchronized from A01/HR09 and are server-authoritative. The corporate lead comes from `MR_V_CorporateProjectAccess.RoleCode = 'PROJECT_MANAGER'`. Application metadata such as Data Date, color token, calendar, and tags remains MERGEN-owned. Manual Project leads remain selectable. A filtered unique index protects non-null Project codes without preventing multiple manual Projects whose code is null.
 
 ## WBS and Task consistency
 
@@ -63,7 +63,7 @@ from `A01_ProjeUrunFaaliyetRaporu`, filters blank codes, and uses `GROUP BY Tur,
 
 ### `MR_V_CorporateProjectAccess`
 
-Normalizes each HR09 responsibility column into `(ProjectCode, Sicil, RoleCode, ProgramMd)`. PPTC values use `STRING_SPLIT`, trimming, and `TRY_CONVERT(int, value)`. Exact tokenization prevents partial-number authorization.
+Normalizes each HR09 responsibility column into `(ProjectCode, Sicil, RoleCode, ProgramMd)`. `pptsSicil` values use the `PPTS` role code together with `STRING_SPLIT`, trimming, and `TRY_CONVERT(int, value)`. Exact tokenization prevents partial-number authorization.
 
 ### `MR_V_ExecutiveScope`
 
@@ -87,14 +87,16 @@ Indexes are limited to demonstrated repository and UI query patterns rather than
 
 ## Creation and rollback
 
-Create with:
+Remove existing MERGEN-owned objects with:
+
+`database/MR_Rollback_Durable_Persistence.sql`
+
+Then create the complete current schema with:
 
 `database/MR_Create_Durable_Persistence.sql`
 
-The script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, seeds the default calendar, seeds SYSTEM_ADMIN roles for 10276, 18068, and 23977, and records migration `0001_durable_persistence`.
+The creation script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, creates `MR_V_CorporateProjectAccess` directly with the `PPTS` role code, seeds the default calendar, seeds SYSTEM_ADMIN roles for 10276, 18068, and 23977, and records `0001_durable_persistence`.
 
-Remove with:
-
-`database/MR_Rollback_Durable_Persistence.sql`
+During the first corporate project synchronization, the repository fills `MR_Projects.LeadSicil` from the `PROJECT_MANAGER` role. No separate `0002` migration script is required while the application is being tested through clean database recreation.
 
 The rollback is intentionally destructive to MERGEN-owned data, drops views before tables in dependency-safe reverse order, is rerunnable, and never drops or alters HR02, A01, or HR09.

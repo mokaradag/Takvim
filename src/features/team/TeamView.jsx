@@ -1,110 +1,302 @@
 'use client';
-import { useMemo as useMemo1 } from 'react';
+
+import { useMemo, useState } from 'react';
 import { Icons } from '../../components/icons';
+import { SearchableSelect } from '../../components/SearchableSelect';
+import { Avatar } from '../../components/ui';
+import { AnimatedNumber } from '../../components/ui-extras';
 import { diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
-import { Avatar } from '../../components/ui';
-import { InfoButton, AnimatedNumber } from '../../components/ui-extras';
 import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
 
-/* ── Kişi (People) view ──────────────────────────────── */
+const PERSON_PAGE_SIZE = 80;
+
+function organizationValue(person, field) {
+  return String(person.organization?.[field] || '').trim();
+}
+
+function personSearchText(person) {
+  return [
+    person.name,
+    person.employeeNo,
+    person.username,
+    person.role,
+    person.team,
+    organizationValue(person, 'sector'),
+    organizationValue(person, 'directorate'),
+    organizationValue(person, 'department'),
+    organizationValue(person, 'unit')
+  ].filter(Boolean).join(' ').toLocaleLowerCase('tr-TR');
+}
+
+function optionList(values, allLabel) {
+  return [
+    { value: '', label: allLabel, icon: <Icons.Layers size={13} /> },
+    ...values.map((value) => ({ value, label: value, icon: <Icons.Briefcase size={13} /> }))
+  ];
+}
+
+function addTaskToPerson(map, personId, task) {
+  if (!personId) return;
+  if (!map.has(personId)) map.set(personId, []);
+  const current = map.get(personId);
+  if (!current.some((item) => item.id === task.id)) current.push(task);
+}
+
 export function TeamView() {
   const tasks = useTasks();
   const people = usePeople();
   const { openTask: onOpenTask } = useTaskActions();
+  const [query, setQuery] = useState('');
+  const [directorate, setDirectorate] = useState('');
+  const [department, setDepartment] = useState('');
+  const [unit, setUnit] = useState('');
+  const [limit, setLimit] = useState(PERSON_PAGE_SIZE);
   const today_ = today();
 
-  const stats = useMemo1(() => {
-    return people.map(p => {
-      const mine = tasks.filter(t => t.sorumlu.includes(p.name));
-      const done = mine.filter(t => t.status === 'done').length;
-      const active = mine.filter(t => t.status === 'in_progress').length;
-      const late = mine.filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0).length;
-      return { person: p, total: mine.length, done, active, late, tasks: mine };
-    });
-  }, [tasks, people]);
-
-  const byTeam = useMemo1(() => {
-    const map = {};
-    stats.forEach(s => {
-      map[s.person.team] = map[s.person.team] || [];
-      map[s.person.team].push(s);
-    });
+  const peopleByName = useMemo(() => new Map(people.map((person) => [person.name, person.id])), [people]);
+  const tasksByPersonId = useMemo(() => {
+    const map = new Map();
+    for (const task of tasks) {
+      for (const personId of task.assigneeIds || []) addTaskToPerson(map, String(personId), task);
+      if (!(task.assigneeIds || []).length) {
+        for (const name of task.sorumlu || []) addTaskToPerson(map, peopleByName.get(name), task);
+      }
+    }
     return map;
-  }, [stats]);
+  }, [tasks, peopleByName]);
+
+  const stats = useMemo(() => people.map((person) => {
+    const personTasks = tasksByPersonId.get(String(person.id)) || [];
+    const done = personTasks.filter((task) => task.status === 'done').length;
+    const active = personTasks.filter((task) => task.status === 'in_progress').length;
+    const late = personTasks.filter((task) => task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, today_) < 0).length;
+    return { person, total: personTasks.length, done, active, late, tasks: personTasks };
+  }), [people, tasksByPersonId, today_]);
+
+  const directorates = useMemo(() => [...new Set(people.map((person) => organizationValue(person, 'directorate')).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, 'tr')), [people]);
+  const departments = useMemo(() => [...new Set(people
+    .filter((person) => !directorate || organizationValue(person, 'directorate') === directorate)
+    .map((person) => organizationValue(person, 'department'))
+    .filter(Boolean))].sort((left, right) => left.localeCompare(right, 'tr')), [people, directorate]);
+  const units = useMemo(() => [...new Set(people
+    .filter((person) => !directorate || organizationValue(person, 'directorate') === directorate)
+    .filter((person) => !department || organizationValue(person, 'department') === department)
+    .map((person) => organizationValue(person, 'unit'))
+    .filter(Boolean))].sort((left, right) => left.localeCompare(right, 'tr')), [people, directorate, department]);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase('tr-TR');
+    return stats
+      .filter(({ person }) => !directorate || organizationValue(person, 'directorate') === directorate)
+      .filter(({ person }) => !department || organizationValue(person, 'department') === department)
+      .filter(({ person }) => !unit || organizationValue(person, 'unit') === unit)
+      .filter(({ person }) => !needle || personSearchText(person).includes(needle))
+      .sort((left, right) => (
+        organizationValue(left.person, 'directorate').localeCompare(organizationValue(right.person, 'directorate'), 'tr')
+        || organizationValue(left.person, 'department').localeCompare(organizationValue(right.person, 'department'), 'tr')
+        || organizationValue(left.person, 'unit').localeCompare(organizationValue(right.person, 'unit'), 'tr')
+        || left.person.name.localeCompare(right.person.name, 'tr')
+      ));
+  }, [stats, query, directorate, department, unit]);
+
+  const directorateSummaries = useMemo(() => directorates.map((name) => {
+    const members = stats.filter(({ person }) => organizationValue(person, 'directorate') === name);
+    return {
+      name,
+      people: members.length,
+      departments: new Set(members.map(({ person }) => organizationValue(person, 'department')).filter(Boolean)).size,
+      units: new Set(members.map(({ person }) => organizationValue(person, 'unit')).filter(Boolean)).size,
+      active: members.reduce((sum, member) => sum + member.active, 0),
+      late: members.reduce((sum, member) => sum + member.late, 0)
+    };
+  }), [directorates, stats]);
+
+  const visiblePeople = filtered.slice(0, limit);
+  const showingDirectorySummary = !query.trim() && !directorate && !department && !unit;
+
+  const resetDependentFilters = (nextDirectorate) => {
+    setDirectorate(nextDirectorate);
+    setDepartment('');
+    setUnit('');
+    setLimit(PERSON_PAGE_SIZE);
+  };
 
   return (
-    <div className="col" style={{ gap: 20 }}>
-      {Object.entries(byTeam).map(([team, members]) => (
-        <div key={team} className="col" style={{ gap: 12 }}>
-          <div className="row" style={{ gap: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>{team}</div>
-            <div style={{ height: 1, flex: 1, background: 'var(--border)' }} />
-            <div className="muted tabular" style={{ fontSize: 11 }}>{members.length} üye</div>
+    <div className="col" style={{ gap: 18 }}>
+      <div className="card">
+        <div className="row" style={{ justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div className="col" style={{ gap: 4 }}>
+            <div style={{ fontSize: 18, fontWeight: 750 }}>Kurumsal ekip dizini</div>
+            <div className="muted" style={{ maxWidth: 820, lineHeight: 1.55 }}>
+              Personel, direktörlük → müdürlük → birim düzeninde gezilir. Büyük dizinlerde tüm çalışan kartları bir kerede oluşturulmaz; arama ve kurumsal süzgeçler sonucu daraltır.
+            </div>
           </div>
-          <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-            {members.map(m => (
-              <div key={m.person.id} className="card" style={{ padding: 18 }}>
-                <div className="row" style={{ alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
-                  <Avatar name={m.person.name} size="lg" />
-                  <div className="col" style={{ flex: 1, gap: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{m.person.name}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>{m.person.role}</div>
-                  </div>
-                  <InfoButton title={m.person.name} icon={<Avatar name={m.person.name} size="sm" />}>
-                    <div className="rt-row"><span className="rt-label">Rol</span><span className="rt-val">{m.person.role}</span></div>
-                    <div className="rt-row"><span className="rt-label">Ekip</span><span className="rt-val">{m.person.team}</span></div>
-                    <div className="rt-sep" />
-                    <div className="rt-row"><span className="rt-label">Toplam görev</span><span className="rt-val">{m.total}</span></div>
-                    <div className="rt-row"><span className="rt-label">Devam eden</span><span className="rt-val">{m.active}</span></div>
-                    <div className="rt-row"><span className="rt-label">Tamamlanan</span><span className="rt-val" style={{ color: 'var(--status-done)' }}>{m.done}</span></div>
-                    <div className="rt-row"><span className="rt-label">Geciken</span><span className="rt-val" style={m.late > 0 ? { color: 'var(--status-overdue)' } : null}>{m.late}</span></div>
-                  </InfoButton>
-                  {m.late > 0 && (
-                    <span className="badge" style={{ color: 'var(--status-overdue)', borderColor: 'color-mix(in oklab, var(--status-overdue) 35%, var(--border))', background: 'color-mix(in oklab, var(--status-overdue) 14%, transparent)' }}>
-                      <Icons.Alert size={10} /> {m.late} geciken
-                    </span>
-                  )}
-                </div>
-                <div className="row" style={{ gap: 16, marginBottom: 12 }}>
-                  <Mini label="Toplam" value={m.total} />
-                  <Mini label="Devam" value={m.active} color="var(--status-progress)" />
-                  <Mini label="Bitti" value={m.done} color="var(--status-done)" />
-                </div>
-                <div className="bar-track" style={{ marginBottom: 12 }}>
-                  <div className="bar-fill done" style={{ width: m.total ? `${(m.done / m.total) * 100}%` : 0 }} />
-                </div>
-                <div className="col" style={{ gap: 4 }}>
-                  {m.tasks.slice(0, 3).map(t => (
-                    <button key={t.id} onClick={() => onOpenTask(t)} style={{
-                      display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
-                      borderRadius: 5, background: 'transparent', border: 0,
-                      width: '100%', textAlign: 'left', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 12
-                    }}
-                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
-                    >
-                      <span style={{ width: 5, height: 5, borderRadius: 99, background: projectColorVar(t.proje), flexShrink: 0 }} />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{t.task}</span>
-                    </button>
-                  ))}
-                  {m.tasks.length > 3 && <div className="muted" style={{ fontSize: 11, padding: '2px 8px' }}>+{m.tasks.length - 3} daha</div>}
-                  {m.tasks.length === 0 && <div className="muted" style={{ fontSize: 12, padding: '6px 8px' }}>Atanmış görev yok.</div>}
-                </div>
-              </div>
-            ))}
+          <div className="row" style={{ gap: 9, flexWrap: 'wrap' }}>
+            <span className="badge"><Icons.Users size={12} /> {people.length} personel</span>
+            <span className="badge"><Icons.Briefcase size={12} /> {directorates.length} direktörlük</span>
           </div>
         </div>
-      ))}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1.4fr) repeat(3, minmax(180px, 1fr))', gap: 10, marginTop: 18 }}>
+          <label className="topbar-search" style={{ width: '100%', maxWidth: 'none' }}>
+            <Icons.Search size={14} />
+            <input
+              value={query}
+              onChange={(event) => { setQuery(event.target.value); setLimit(PERSON_PAGE_SIZE); }}
+              placeholder="Ad, sicil, unvan veya birimle ara"
+              aria-label="Personel ara"
+            />
+            {query && <button type="button" className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setQuery('')}><Icons.Close size={11} /></button>}
+          </label>
+          <SearchableSelect
+            value={directorate}
+            options={optionList(directorates, 'Tüm direktörlükler')}
+            onChange={resetDependentFilters}
+            searchPlaceholder="Direktörlük ara"
+            compact
+          />
+          <SearchableSelect
+            value={department}
+            options={optionList(departments, 'Tüm müdürlükler')}
+            onChange={(value) => { setDepartment(value); setUnit(''); setLimit(PERSON_PAGE_SIZE); }}
+            searchPlaceholder="Müdürlük ara"
+            disabled={!directorate && departments.length === 0}
+            compact
+          />
+          <SearchableSelect
+            value={unit}
+            options={optionList(units, 'Tüm birimler')}
+            onChange={(value) => { setUnit(value); setLimit(PERSON_PAGE_SIZE); }}
+            searchPlaceholder="Birim ara"
+            disabled={!department && units.length === 0}
+            compact
+          />
+        </div>
+
+        <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
+          {(directorate || department || unit || query) && (
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => { setQuery(''); setDirectorate(''); setDepartment(''); setUnit(''); setLimit(PERSON_PAGE_SIZE); }}
+            >
+              <Icons.Close size={12} /> Süzgeçleri temizle
+            </button>
+          )}
+          <span className="muted tabular" style={{ marginLeft: 'auto', fontSize: 12 }}>{filtered.length} / {people.length} personel</span>
+        </div>
+      </div>
+
+      {showingDirectorySummary ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: 12 }}>
+          {directorateSummaries.map((summary) => (
+            <button
+              type="button"
+              key={summary.name}
+              className="card"
+              onClick={() => resetDependentFilters(summary.name)}
+              style={{ padding: 17, textAlign: 'left', cursor: 'pointer', color: 'var(--text)' }}
+            >
+              <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+                <span style={{ width: 34, height: 34, borderRadius: 'var(--r-md)', display: 'grid', placeItems: 'center', background: 'var(--bg-elev-2)', border: '1px solid var(--border)' }}>
+                  <Icons.Briefcase size={16} />
+                </span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <strong style={{ display: 'block', lineHeight: 1.35 }}>{summary.name}</strong>
+                  <small className="muted" style={{ display: 'block', marginTop: 3 }}>{summary.departments} müdürlük · {summary.units} birim</small>
+                </span>
+                <Icons.ChevronRight size={14} />
+              </div>
+              <div className="row" style={{ gap: 18, marginTop: 16 }}>
+                <Mini label="Personel" value={summary.people} />
+                <Mini label="Devam" value={summary.active} />
+                <Mini label="Geciken" value={summary.late} attention={summary.late > 0} />
+              </div>
+            </button>
+          ))}
+          {!directorateSummaries.length && <div className="card muted">Kurumsal organizasyon bilgisi bulunamadı.</div>}
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl" style={{ minWidth: 980 }}>
+              <thead>
+                <tr>
+                  <th>Personel</th>
+                  <th>Unvan</th>
+                  <th>Direktörlük</th>
+                  <th>Müdürlük / Birim</th>
+                  <th style={{ width: 90 }}>Toplam</th>
+                  <th style={{ width: 90 }}>Devam</th>
+                  <th style={{ width: 90 }}>Geciken</th>
+                  <th style={{ minWidth: 240 }}>Yakın görevler</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visiblePeople.map((member) => (
+                  <tr key={member.person.id}>
+                    <td>
+                      <div className="row" style={{ gap: 9 }}>
+                        <Avatar name={member.person.name} size="md" />
+                        <span style={{ minWidth: 0 }}>
+                          <strong style={{ display: 'block', whiteSpace: 'nowrap' }}>{member.person.name}</strong>
+                          <small className="muted">{member.person.employeeNo || member.person.id}</small>
+                        </span>
+                      </div>
+                    </td>
+                    <td className="muted">{member.person.role || '—'}</td>
+                    <td>{organizationValue(member.person, 'directorate') || '—'}</td>
+                    <td>
+                      <span style={{ display: 'block' }}>{organizationValue(member.person, 'department') || '—'}</span>
+                      <small className="muted">{organizationValue(member.person, 'unit') || member.person.team || '—'}</small>
+                    </td>
+                    <td className="tabular">{member.total}</td>
+                    <td className="tabular">{member.active}</td>
+                    <td className="tabular" style={member.late > 0 ? { color: 'var(--status-overdue)', fontWeight: 700 } : null}>{member.late}</td>
+                    <td>
+                      <div className="col" style={{ gap: 3 }}>
+                        {member.tasks.slice(0, 2).map((task) => (
+                          <button
+                            type="button"
+                            key={task.id}
+                            onClick={() => onOpenTask(task)}
+                            style={{ display: 'flex', alignItems: 'center', gap: 7, padding: 0, border: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', textAlign: 'left' }}
+                          >
+                            <span style={{ width: 6, height: 6, borderRadius: 99, background: projectColorVar(task.proje), flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>{task.task}</span>
+                          </button>
+                        ))}
+                        {member.tasks.length > 2 && <small className="muted">+{member.tasks.length - 2} görev daha</small>}
+                        {!member.tasks.length && <small className="muted">Atanmış görev yok</small>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!visiblePeople.length && <tr><td colSpan={8} className="empty">Eşleşen personel bulunamadı.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          {filtered.length > limit && (
+            <div className="row" style={{ justifyContent: 'center', padding: 14, borderTop: '1px solid var(--border)' }}>
+              <button type="button" className="btn" onClick={() => setLimit((current) => current + PERSON_PAGE_SIZE)}>
+                <Icons.Plus size={13} /> Daha fazla göster ({Math.min(PERSON_PAGE_SIZE, filtered.length - limit)})
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
-function Mini({ label, value, color }) {
+
+function Mini({ label, value, attention = false }) {
   return (
-    <div className="col" style={{ gap: 0, flex: 1 }}>
-      <div className="muted" style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{label}</div>
-      <div className="tabular" style={{ fontSize: 18, fontWeight: 700, color: color || 'var(--text)', letterSpacing: '-0.02em', lineHeight: 1.2 }}>
-        <AnimatedNumber value={value} duration={700} />
+    <div className="col" style={{ gap: 1, flex: 1 }}>
+      <div className="muted" style={{ fontSize: 10.5, fontWeight: 650, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{label}</div>
+      <div className="tabular" style={{ fontSize: 19, fontWeight: 750, color: attention ? 'var(--status-overdue)' : 'var(--text)', lineHeight: 1.2 }}>
+        <AnimatedNumber value={value} duration={500} />
       </div>
     </div>
   );

@@ -2,10 +2,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
+import { SearchableSelect } from '../../components/SearchableSelect';
+import { Avatar } from '../../components/ui';
 import { ProjectColorPicker } from '../../components/project/ProjectColorPicker';
 import { ProjectCreateDialog } from '../../components/shell/ProjectCreateDialog';
+import {
+  groupProjectsByType,
+  isArchivedProject,
+  projectSearchText,
+  projectTypeMeta,
+  visibleProjects
+} from '../../domain/projectTypes';
 import { useAllPeople, useAllTasks, useTaskActions, useWorkspace } from '../../state/hooks';
 import { WbsView } from '../wbs/WbsView';
+
+const INITIAL_PROJECT_LIMIT = 60;
 
 function legacyTags(project, tasks) {
   return Array.from(new Set(
@@ -29,6 +40,10 @@ function projectForm(project, people, tasks) {
 
 function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
+}
+
+function personLabel(person) {
+  return person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name;
 }
 
 function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
@@ -93,9 +108,24 @@ function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
 
 function ProjectDefinition({ project, people, tasks, onSave }) {
   const defaults = useMemo(() => projectForm(project, people, tasks), [project, people, tasks]);
+  const personOptions = useMemo(() => people
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
+    .map((person) => ({
+      value: person.id,
+      label: personLabel(person),
+      description: person.role || null,
+      group: [person.organization?.directorate, person.organization?.department, person.organization?.unit].filter(Boolean).join(' / '),
+      keywords: [person.name, person.employeeNo, person.username, person.role, person.team],
+      icon: <Avatar name={person.name} size="sm" />
+    })), [people]);
   const [form, setForm] = useState(defaults);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
+  const isCorporate = String(project?.source || '').toLowerCase() === 'corporate';
+  const manager = people.find((person) => String(person.id) === String(form.leadId)) || null;
+  const type = projectTypeMeta(project.projectTypeCode, project.projectTypeName);
+  const TypeIcon = Icons[type.icon] || Icons.Layers;
 
   useEffect(() => {
     setForm(defaults);
@@ -136,37 +166,60 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
   };
 
   return (
-    <form className="card" onSubmit={submit} style={{ maxWidth: 920 }}>
+    <form className="card" onSubmit={submit} style={{ maxWidth: 980 }}>
       <div className="row" style={{ justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' }}>
         <div className="col" style={{ gap: 4 }}>
           <div style={{ fontSize: 17, fontWeight: 700 }}>Proje tanımı</div>
           <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-            Seçili projenin kodunu, temel bilgilerini ve görevlerde kullanılabilecek kontrollü etiket listesini buradan yönetin.
+            Seçili projenin temel bilgilerini, rengini ve görevlerde kullanılabilecek kontrollü etiket listesini yönetin.
           </div>
         </div>
-        <span className="badge">{project.code || project.id}</span>
+        <div className="row" style={{ gap: 7, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <span className="badge"><TypeIcon size={12} /> {type.code}</span>
+          <span className="badge">{project.code || project.id}</span>
+        </div>
       </div>
 
       <div className="col" style={{ gap: 18, marginTop: 20 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, .7fr) minmax(280px, 1.3fr)', gap: 12 }}>
           <label className="col" style={{ gap: 6 }}>
             <span className="label">Proje kodu</span>
-            <input className="input" value={form.code} onChange={setField('code')} disabled={saving} placeholder="Serbest projelerde isteğe bağlı" />
+            <input className="input" value={form.code} onChange={setField('code')} disabled={saving || isCorporate} placeholder="Serbest projelerde isteğe bağlı" />
           </label>
           <label className="col" style={{ gap: 6 }}>
             <span className="label">Proje adı</span>
-            <input className="input" value={form.name} onChange={setField('name')} disabled={saving} />
+            <input className="input" value={form.name} onChange={setField('name')} disabled={saving || isCorporate} />
           </label>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
-          <label className="col" style={{ gap: 6 }}>
+          <div className="col" style={{ gap: 6 }}>
             <span className="label">Proje sorumlusu</span>
-            <select className="input" value={form.leadId} onChange={setField('leadId')} disabled={saving || !people.length}>
-              {!people.length && <option value="">Kişi bulunamadı</option>}
-              {people.map((person) => <option key={person.id} value={person.id}>{person.employeeNo ? `${person.employeeNo} · ` : ''}{person.name}</option>)}
-            </select>
-          </label>
+            {isCorporate ? (
+              <div className="input" style={{ minHeight: 38, display: 'flex', alignItems: 'center', gap: 9 }}>
+                {manager && <Avatar name={manager.name} size="sm" />}
+                <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {manager ? personLabel(manager) : 'PROJECT_MANAGER rolü tanımlanmamış'}
+                </span>
+                <Icons.Database size={13} style={{ color: 'var(--text-dim)' }} />
+              </div>
+            ) : (
+              <SearchableSelect
+                value={form.leadId}
+                options={personOptions}
+                onChange={(leadId) => setValue('leadId', leadId)}
+                placeholder={people.length ? 'Proje sorumlusu seçin' : 'Kişi bulunamadı'}
+                searchPlaceholder="Ad, sicil, unvan veya birimle ara"
+                disabled={saving || !people.length}
+                maxVisible={60}
+              />
+            )}
+            {isCorporate && (
+              <span className="muted" style={{ fontSize: 10.5, lineHeight: 1.45 }}>
+                Kurumsal proje sorumlusu MR_V_CorporateProjectAccess içindeki PROJECT_MANAGER rolünden otomatik alınır ve bu ekrandan değiştirilemez.
+              </span>
+            )}
+          </div>
 
           <label className="col" style={{ gap: 6 }}>
             <span className="label">Veri tarihi</span>
@@ -202,7 +255,9 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
 
         <div className="project-source-note">
           <Icons.Database size={14} />
-          <span>{project.source === 'corporate' ? 'Kurumsal proje kaydı' : 'Kullanıcı tarafından tanımlanan serbest proje'} · Veritabanı entegrasyonunda <strong>ProjeKodu</strong> ve <strong>ProjeAdi</strong> alanları bu modele eşlenebilir.</span>
+          <span>
+            {isCorporate ? 'Kurumsal proje kaydı' : 'Kullanıcı tarafından tanımlanan serbest proje'} · {type.code} · {type.name}
+          </span>
         </div>
 
         {message && (
@@ -223,11 +278,132 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
 
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
         <button type="button" className="btn" disabled={!dirty || saving} onClick={() => setForm(defaults)}>Değişiklikleri geri al</button>
-        <button type="submit" className="btn primary" disabled={!dirty || saving || !people.length}>
+        <button type="submit" className="btn primary" disabled={!dirty || saving || (!isCorporate && !people.length)}>
           <Icons.Check size={14} /> {saving ? 'Kaydediliyor...' : 'Değişiklikleri kaydet'}
         </button>
       </div>
     </form>
+  );
+}
+
+function PortfolioProjectBrowser({ projects, onSelect }) {
+  const [query, setQuery] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [selectedTypeCode, setSelectedTypeCode] = useState('');
+  const [limit, setLimit] = useState(INITIAL_PROJECT_LIMIT);
+
+  const activeProjects = useMemo(() => visibleProjects(projects, { showArchived }), [projects, showArchived]);
+  const groups = useMemo(() => groupProjectsByType(activeProjects), [activeProjects]);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase('tr-TR');
+    return activeProjects.filter((project) => {
+      const typeMatches = !selectedTypeCode || projectTypeMeta(project.projectTypeCode, project.projectTypeName).code === selectedTypeCode;
+      return typeMatches && (!needle || projectSearchText(project).includes(needle));
+    });
+  }, [activeProjects, query, selectedTypeCode]);
+  const archivedCount = useMemo(() => projects.filter(isArchivedProject).length, [projects]);
+  const visibleRows = filtered.slice(0, limit);
+
+  useEffect(() => setLimit(INITIAL_PROJECT_LIMIT), [query, selectedTypeCode, showArchived]);
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div className="col" style={{ gap: 4 }}>
+          <div style={{ fontSize: 17, fontWeight: 700 }}>Proje seçin</div>
+          <div className="muted" style={{ maxWidth: 760, lineHeight: 1.6 }}>
+            Projeler türlerine göre gruplanır. Arama alanı proje kodu, adı ve türü üzerinde canlı çalışır; tamamlanan ve kapatılan projeler başlangıçta gizlidir.
+          </div>
+        </div>
+        <span className="badge">{filtered.length} / {projects.length} proje</span>
+      </div>
+
+      <div className="row" style={{ gap: 10, marginTop: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label className="topbar-search" style={{ flex: '1 1 320px', maxWidth: 520 }}>
+          <Icons.Search size={14} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Proje kodu, adı veya türüyle ara"
+            aria-label="Proje ara"
+          />
+          {query && <button type="button" className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setQuery('')}><Icons.Close size={11} /></button>}
+        </label>
+        {archivedCount > 0 && (
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, cursor: 'pointer' }}>
+            <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+            Tamamlanan ve kapatılanları göster ({archivedCount})
+          </label>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 9, marginTop: 16 }}>
+        <button
+          type="button"
+          className={`btn${selectedTypeCode === '' ? ' primary' : ''}`}
+          onClick={() => setSelectedTypeCode('')}
+          style={{ minHeight: 48, justifyContent: 'flex-start' }}
+        >
+          <Icons.Layers size={15} />
+          <span style={{ flex: 1, textAlign: 'left' }}>Tüm etkin türler</span>
+          <span className="badge">{activeProjects.length}</span>
+        </button>
+        {groups.map((group) => {
+          const GroupIcon = Icons[group.icon] || Icons.Layers;
+          return (
+            <button
+              key={group.code}
+              type="button"
+              className={`btn${selectedTypeCode === group.code ? ' primary' : ''}`}
+              onClick={() => setSelectedTypeCode((current) => current === group.code ? '' : group.code)}
+              style={{ minHeight: 48, justifyContent: 'flex-start' }}
+              title={group.name}
+            >
+              <GroupIcon size={15} />
+              <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+                <strong style={{ display: 'block', fontSize: 11.5 }}>{group.code}</strong>
+                <small style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{group.name}</small>
+              </span>
+              <span className="badge">{group.projects.length}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="col" style={{ gap: 7, marginTop: 18 }}>
+        {visibleRows.map((item) => {
+          const type = projectTypeMeta(item.projectTypeCode, item.projectTypeName);
+          const ProjectIcon = Icons[type.icon] || Icons.Layers;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className="btn"
+              onClick={() => onSelect(item.id)}
+              style={{ width: '100%', minHeight: 45, justifyContent: 'flex-start', padding: '8px 11px' }}
+            >
+              <ProjectIcon size={15} style={{ flexShrink: 0 }} />
+              <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+                <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{projectLabel(item)}</strong>
+                <small className="muted" style={{ display: 'block', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {type.code} · {type.name}{isArchivedProject(item) ? ' · tamamlanan/kapatılan' : ''}
+                </small>
+              </span>
+              <Icons.ChevronRight size={14} />
+            </button>
+          );
+        })}
+        {!visibleRows.length && <div className="muted" style={{ padding: 22, textAlign: 'center' }}>Arama ve tür ölçütleriyle eşleşen proje bulunamadı.</div>}
+      </div>
+
+      {filtered.length > limit && (
+        <div className="row" style={{ justifyContent: 'center', marginTop: 14 }}>
+          <button type="button" className="btn" onClick={() => setLimit((current) => current + INITIAL_PROJECT_LIMIT)}>
+            <Icons.Plus size={13} /> Daha fazla göster ({Math.min(INITIAL_PROJECT_LIMIT, filtered.length - limit)})
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -278,22 +454,7 @@ export function ProjectWorkspaceView() {
       </div>
 
       {tab === 'definition' && !project && (
-        <div className="card">
-          <div className="col" style={{ gap: 12 }}>
-            <div style={{ fontSize: 17, fontWeight: 700 }}>Proje seçin veya yeni proje oluşturun</div>
-            <div className="muted" style={{ maxWidth: 760, lineHeight: 1.6 }}>
-              Proje bilgilerini ve kontrollü etiket kataloğunu yönetmek için bir proje çalışma alanı seçin. Kurumsal projeler kodla gösterilebilir; serbest projeler de aynı altyapıda oluşturulur.
-            </div>
-            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              {workspace.projects.map((item) => (
-                <button key={item.id} type="button" className="btn" onClick={() => workspace.selectWorkspace(item.id)}>
-                  {projectLabel(item)}
-                </button>
-              ))}
-              {!workspace.projects.length && <span className="muted">Henüz proje yok.</span>}
-            </div>
-          </div>
-        </div>
+        <PortfolioProjectBrowser projects={workspace.projects} onSelect={workspace.selectWorkspace} />
       )}
 
       {tab === 'definition' && project && (
