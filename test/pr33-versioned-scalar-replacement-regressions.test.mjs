@@ -5,17 +5,21 @@ import { normalizeActualChanges } from '../src/data/api/createApiRepository.js';
 import { findNestedCommitCollectionIssue } from '../src/server/repository/commitNestedCollectionValidation.js';
 
 const VERSION = 'AAAAAAAAAAA=';
+const PROJECT_ID = '11111111-1111-4111-8111-111111111111';
+const CALENDAR_ID = '22222222-2222-4222-8222-222222222222';
+const WBS_ID = '33333333-3333-4333-8333-333333333333';
+const TASK_ID = '44444444-4444-4444-8444-444444444444';
 
 function completeProjectUpdate(overrides = {}) {
   return {
-    id: 'project-id',
+    id: PROJECT_ID,
     version: VERSION,
     name: 'Project',
     code: null,
     leadId: null,
     dataDate: null,
     color: 'blue',
-    calendarId: 'calendar-id',
+    calendarId: CALENDAR_ID,
     tags: [],
     ...overrides
   };
@@ -23,9 +27,9 @@ function completeProjectUpdate(overrides = {}) {
 
 function completeWbsUpdate(overrides = {}) {
   return {
-    id: 'wbs-id',
+    id: WBS_ID,
     version: VERSION,
-    projectId: 'project-id',
+    projectId: PROJECT_ID,
     parentId: null,
     code: '1',
     name: 'Project',
@@ -36,9 +40,9 @@ function completeWbsUpdate(overrides = {}) {
 
 function completeTaskUpdate(overrides = {}) {
   return {
-    id: 'task-id',
+    id: TASK_ID,
     version: VERSION,
-    projectId: 'project-id',
+    projectId: PROJECT_ID,
     wbsId: null,
     calendarId: null,
     task: 'Task',
