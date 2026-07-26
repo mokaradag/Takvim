@@ -1,5 +1,6 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
+import { normalizePriorityId } from '../../domain/constants/index.js';
 import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
 import { CORPORATE_WBS_READ_ONLY_MESSAGE } from '../../domain/projectTypes.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
@@ -8,6 +9,7 @@ import { loadAuthorizationContext } from '../authorization/loadAuthorizationCont
 import { assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
 import { synchronizeCorporateWbs } from './corporateWbsSync.js';
+import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
 
 // SQL Server GUID değerlerini büyük harf döndürür; istemci küçük harf gönderir.
@@ -408,7 +410,7 @@ async function loadSnapshotFrom(executor, auth) {
       description: row.Description || '',
       keyword: row.Keyword || '',
       status: row.Status,
-      priority: row.Priority,
+      priority: normalizePriorityId(row.Priority),
       isMilestone: Boolean(row.IsMilestone),
       milestone: Boolean(row.IsMilestone),
       plannedStart: isoDate(row.PlannedStart),
@@ -676,7 +678,10 @@ async function commitTask(executor, actor, task, correlationId) {
   req.input('description', sql.NVarChar(sql.MAX), task.description || null);
   req.input('keyword', sql.NVarChar(255), task.keyword || null);
   req.input('status', sql.VarChar(30), task.status || 'planned');
-  req.input('priority', sql.VarChar(30), task.priority || 'normal');
+  // Arayüz kataloğunda `normal` diye bir öncelik yoktur; varsayılan olarak
+  // yazıldığında Görevler/Kanban/Raporlar sayfaları çöküyordu. Kalıcı kayıt da
+  // kanonik kimliği tutar.
+  req.input('priority', sql.VarChar(30), normalizePriorityId(task.priority));
   req.input('isMilestone', sql.Bit, Boolean(task.isMilestone || task.milestone));
   req.input('plannedStart', sql.Date, task.plannedStart || null);
   req.input('plannedFinish', sql.Date, task.plannedFinish || null);
@@ -838,6 +843,40 @@ async function deleteWbs(executor, actor, entry, correlationId) {
   await audit(executor, actor, correlationId, 'DELETE', 'WBS', wbsId, projectId, before, null);
 }
 
+/**
+ * Kurumsal katalog (projeler + CN43N iş dağılım ağacı) tazelenir.
+ *
+ * Anlık görüntü okumasından ayrı bir adımdır. Böylece 38 bin satırlık CN43N
+ * birleştirmesi okuma işleminin yalıtım düzeyini ve kilitlerini paylaşmaz;
+ * ayrıca tazelik penceresi sayesinde art arda gelen isteklerde hiç çalışmaz.
+ * Eşitleme başarısız olsa bile anlık görüntü yüklenmeye devam eder: kurumsal
+ * kaynak geçici olarak erişilemez olduğunda uygulamanın tümüyle kilitlenmesi
+ * kabul edilebilir değildir.
+ */
+async function refreshCorporateCatalog() {
+  // Yetki bağlamı bilinçli olarak pencerenin İÇİNDE yüklenir: tazelik penceresi
+  // açıkken istek başına tek bir fazladan sorgu bile çalışmaz.
+  return runCorporateWbsSync(async () => {
+    const pool = await getSqlPool();
+    const auth = await loadAuthorizationContext(pool);
+    await withSqlTransaction((transaction) => synchronizeCorporateProjects(transaction, auth.sicil));
+    const wbs = await synchronizeCorporateWbs(pool, auth.sicil);
+    // Kurumsal WBS kaynağı yapılandırılmamışsa katalog yine de tazelenmiş
+    // sayılır; aksi hâlde proje eşitlemesi her istekte yeniden çalışırdı.
+    // Kaynak yapılandırılmış ama erişilemiyorsa tazelik penceresi
+    // İLERLETİLMEZ: aksi hâlde geçici bir kesinti, kurumsal ağacın TTL boyunca
+    // (varsayılan beş dakika) hiç denenmemesine yol açardı.
+    const synchronized = Boolean(wbs.synchronized) || wbs.reason === 'NOT_CONFIGURED';
+    return { synchronized, refreshed: synchronized, wbs };
+  });
+}
+
+/** Kurumsal katalog tazelemeden yalnızca yetkili anlık görüntüyü okur. */
+async function readSnapshot() {
+  const pool = await getSqlPool();
+  return loadSnapshotFrom(pool, await loadAuthorizationContext(pool));
+}
+
 export function createSqlAppRepository() {
   return {
     kind: 'sql-server',
@@ -854,15 +893,12 @@ export function createSqlAppRepository() {
       };
     },
 
+    refreshCorporateCatalog,
+    readSnapshot,
+
     async loadSnapshot() {
-      const pool = await getSqlPool();
-      const auth = await loadAuthorizationContext(pool);
-      await withSqlTransaction((transaction) => synchronizeCorporateProjects(transaction, auth.sicil));
-      // Kurumsal iş dağılım ağacı ikinci veritabanındaki CN43N tablosundan eşitlenir.
-      // Kaynak yapılandırılmadıysa veya erişilemiyorsa anlık görüntü yüklenmeye devam eder.
-      await synchronizeCorporateWbs(pool, auth.sicil);
-      const refreshedAuth = await loadAuthorizationContext(pool);
-      return loadSnapshotFrom(pool, refreshedAuth);
+      await refreshCorporateCatalog();
+      return readSnapshot();
     },
 
     async commitChanges(input) {

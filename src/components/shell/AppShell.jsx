@@ -36,7 +36,9 @@ import { NAV_ITEMS, PAGE_META } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
 import { WelcomeScreen } from './WelcomeScreen';
 
-const SIMPLE_NAV_IDS = new Set(['takvim', 'yardim', 'ayarlar']);
+// Basit Mod, Gelişmiş Mod ile aynı Gantt görünümünü paylaşır: hızlı görev
+// tanımı yapan kullanıcı da planı zaman çizelgesinde görebilmelidir.
+const SIMPLE_NAV_IDS = new Set(['takvim', 'gantt', 'yardim', 'ayarlar']);
 const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 
 function projectDisplayName(project) {

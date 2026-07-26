@@ -8,12 +8,14 @@ import { AnimatedNumber } from '../../components/ui-extras';
 import { diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
+import {
+  UNASSIGNED_DIRECTORATE,
+  UNASSIGNED_DIRECTORATE_LABEL,
+  matchesDirectorateFilter,
+  organizationValue
+} from './teamDirectoryPolicy.js';
 
 const PERSON_PAGE_SIZE = 80;
-
-function organizationValue(person, field) {
-  return String(person.organization?.[field] || '').trim();
-}
 
 function personSearchText(person) {
   return [
@@ -29,9 +31,10 @@ function personSearchText(person) {
   ].filter(Boolean).join(' ').toLocaleLowerCase('tr-TR');
 }
 
-function optionList(values, allLabel) {
+function optionList(values, allLabel, extras = []) {
   return [
     { value: '', label: allLabel, icon: <Icons.Layers size={13} /> },
+    ...extras,
     ...values.map((value) => ({ value, label: value, icon: <Icons.Briefcase size={13} /> }))
   ];
 }
@@ -76,12 +79,23 @@ export function TeamView() {
 
   const directorates = useMemo(() => [...new Set(people.map((person) => organizationValue(person, 'directorate')).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right, 'tr')), [people]);
+  const unassignedPeopleCount = useMemo(
+    () => people.filter((person) => !organizationValue(person, 'directorate')).length,
+    [people]
+  );
+  const directorateOptions = useMemo(() => optionList(
+    directorates,
+    'Tüm direktörlükler',
+    unassignedPeopleCount
+      ? [{ value: UNASSIGNED_DIRECTORATE, label: UNASSIGNED_DIRECTORATE_LABEL, icon: <Icons.Users size={13} /> }]
+      : []
+  ), [directorates, unassignedPeopleCount]);
   const departments = useMemo(() => [...new Set(people
-    .filter((person) => !directorate || organizationValue(person, 'directorate') === directorate)
+    .filter((person) => matchesDirectorateFilter(person, directorate))
     .map((person) => organizationValue(person, 'department'))
     .filter(Boolean))].sort((left, right) => left.localeCompare(right, 'tr')), [people, directorate]);
   const units = useMemo(() => [...new Set(people
-    .filter((person) => !directorate || organizationValue(person, 'directorate') === directorate)
+    .filter((person) => matchesDirectorateFilter(person, directorate))
     .filter((person) => !department || organizationValue(person, 'department') === department)
     .map((person) => organizationValue(person, 'unit'))
     .filter(Boolean))].sort((left, right) => left.localeCompare(right, 'tr')), [people, directorate, department]);
@@ -89,7 +103,7 @@ export function TeamView() {
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('tr-TR');
     return stats
-      .filter(({ person }) => !directorate || organizationValue(person, 'directorate') === directorate)
+      .filter(({ person }) => matchesDirectorateFilter(person, directorate))
       .filter(({ person }) => !department || organizationValue(person, 'department') === department)
       .filter(({ person }) => !unit || organizationValue(person, 'unit') === unit)
       .filter(({ person }) => !needle || personSearchText(person).includes(needle))
@@ -101,17 +115,31 @@ export function TeamView() {
       ));
   }, [stats, query, directorate, department, unit]);
 
-  const directorateSummaries = useMemo(() => directorates.map((name) => {
-    const members = stats.filter(({ person }) => organizationValue(person, 'directorate') === name);
-    return {
+  const directorateSummaries = useMemo(() => {
+    const summarize = (key, name, members) => ({
+      key,
       name,
       people: members.length,
       departments: new Set(members.map(({ person }) => organizationValue(person, 'department')).filter(Boolean)).size,
       units: new Set(members.map(({ person }) => organizationValue(person, 'unit')).filter(Boolean)).size,
       active: members.reduce((sum, member) => sum + member.active, 0),
       late: members.reduce((sum, member) => sum + member.late, 0)
-    };
-  }), [directorates, stats]);
+    });
+
+    const summaries = directorates.map((name) => summarize(
+      name,
+      name,
+      stats.filter(({ person }) => organizationValue(person, 'directorate') === name)
+    ));
+
+    // Direktörlüğü olmayan çalışanlar da kendi kartıyla listelenir; aksi hâlde
+    // dizinin varsayılan görünümünde hiç görünmüyorlardı.
+    const unassigned = stats.filter(({ person }) => !organizationValue(person, 'directorate'));
+    if (unassigned.length) {
+      summaries.push(summarize(UNASSIGNED_DIRECTORATE, UNASSIGNED_DIRECTORATE_LABEL, unassigned));
+    }
+    return summaries;
+  }, [directorates, stats]);
 
   const visiblePeople = filtered.slice(0, limit);
   const showingDirectorySummary = !query.trim() && !directorate && !department && !unit;
@@ -124,8 +152,11 @@ export function TeamView() {
   };
 
   return (
-    <div className="col" style={{ gap: 18 }}>
-      <div className="card">
+    /* Sayfa kendi yüksekliğini yönetir: dizin kartı sabit kalır, yalnızca
+       personel tablosu kayar. Böylece "Kurumsal ekip dizini" kartı ve tablo
+       başlığı aşağı kaydırırken de görünür kalır. */
+    <div className="team-page col">
+      <div className="card team-directory-card">
         <div className="row" style={{ justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div className="col" style={{ gap: 4 }}>
             <div style={{ fontSize: 18, fontWeight: 750 }}>Kurumsal ekip dizini</div>
@@ -152,7 +183,7 @@ export function TeamView() {
           </label>
           <SearchableSelect
             value={directorate}
-            options={optionList(directorates, 'Tüm direktörlükler')}
+            options={directorateOptions}
             onChange={resetDependentFilters}
             searchPlaceholder="Direktörlük ara"
             compact
@@ -190,22 +221,26 @@ export function TeamView() {
       </div>
 
       {showingDirectorySummary ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: 12 }}>
+        <div className="team-summary-grid">
           {directorateSummaries.map((summary) => (
             <button
               type="button"
-              key={summary.name}
+              key={summary.key}
               className="card"
-              onClick={() => resetDependentFilters(summary.name)}
+              onClick={() => resetDependentFilters(summary.key)}
               style={{ padding: 17, textAlign: 'left', cursor: 'pointer', color: 'var(--text)' }}
             >
               <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
                 <span style={{ width: 34, height: 34, borderRadius: 'var(--r-md)', display: 'grid', placeItems: 'center', background: 'var(--bg-elev-2)', border: '1px solid var(--border)' }}>
-                  <Icons.Briefcase size={16} />
+                  {summary.key === UNASSIGNED_DIRECTORATE ? <Icons.Users size={16} /> : <Icons.Briefcase size={16} />}
                 </span>
                 <span style={{ minWidth: 0, flex: 1 }}>
                   <strong style={{ display: 'block', lineHeight: 1.35 }}>{summary.name}</strong>
-                  <small className="muted" style={{ display: 'block', marginTop: 3 }}>{summary.departments} müdürlük · {summary.units} birim</small>
+                  <small className="muted" style={{ display: 'block', marginTop: 3 }}>
+                    {summary.key === UNASSIGNED_DIRECTORATE
+                      ? 'Yalnızca yönetici bilgisi tanımlı personel'
+                      : `${summary.departments} müdürlük · ${summary.units} birim`}
+                  </small>
                 </span>
                 <Icons.ChevronRight size={14} />
               </div>
@@ -219,8 +254,8 @@ export function TeamView() {
           {!directorateSummaries.length && <div className="card muted">Kurumsal organizasyon bilgisi bulunamadı.</div>}
         </div>
       ) : (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
+        <div className="card team-table-card">
+          <div className="team-table-scroll">
             <table className="tbl" style={{ minWidth: 980 }}>
               <thead>
                 <tr>
@@ -247,7 +282,7 @@ export function TeamView() {
                       </div>
                     </td>
                     <td className="muted">{member.person.role || '—'}</td>
-                    <td>{organizationValue(member.person, 'directorate') || '—'}</td>
+                    <td>{organizationValue(member.person, 'directorate') || <span className="muted">Tanımsız</span>}</td>
                     <td>
                       <span style={{ display: 'block' }}>{organizationValue(member.person, 'department') || '—'}</span>
                       <small className="muted">{organizationValue(member.person, 'unit') || member.person.team || '—'}</small>

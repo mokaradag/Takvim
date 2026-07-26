@@ -2,7 +2,7 @@
 import { useState as useState1, useMemo as useMemo1 } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
-import { PRIORITIES } from '../../domain/constants';
+import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, Kw, StatusPill, StatusIcon } from '../../components/ui';
@@ -91,7 +91,7 @@ export function TasksView() {
     }
     if (colFilter.keyword.length) out = out.filter(t => colFilter.keyword.includes(t.keyword));
     if (colFilter.sorumlu.length) out = out.filter(t => (t.sorumlu || []).some(s => colFilter.sorumlu.includes(s)));
-    if (colFilter.priority?.length) out = out.filter(t => colFilter.priority.includes(t.priority || 'medium'));
+    if (colFilter.priority?.length) out = out.filter(t => colFilter.priority.includes(normalizePriorityId(t.priority)));
     if (colFilter.status.length) {
       out = out.filter(t => {
         const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
@@ -111,7 +111,7 @@ export function TasksView() {
     out.sort((a, b) => {
       let va = a[sort.key], vb = b[sort.key];
       if (sort.key === 'sorumlu') { va = (a.sorumlu?.[0] || ''); vb = (b.sorumlu?.[0] || ''); }
-      if (sort.key === 'priority') { va = (PRIORITIES[a.priority || 'medium'] || {}).order ?? 9; vb = (PRIORITIES[b.priority || 'medium'] || {}).order ?? 9; }
+      if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
       const aMissing = va == null || va === '';
       const bMissing = vb == null || vb === '';
       if (aMissing && bMissing) return 0;
@@ -236,7 +236,7 @@ export function TasksView() {
               {filtered.map((t, idx) => {
                 const today_ = today();
                 const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
-                const prio = PRIORITIES[t.priority || 'medium'];
+                const prio = resolvePriority(t.priority);
                 const prog = t.progress != null ? t.progress : (t.status === 'done' ? 100 : 0);
                 const canEditTask = canWriteProject(projectById.get(t.projectId));
                 return (

@@ -23,6 +23,7 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_Baselines` | Immutable baseline headers | PK `BaselineId`; Project lookup; one primary baseline per Project |
 | `MR_TaskBaselineSnapshots` | Immutable planned Task snapshots | PK `(BaselineId, TaskId)`; Task lookup; deliberately no FK to current Task |
 | `MR_AuditLog` | Append-only committed business audit | identity PK; Project/time, actor/time, entity/time and correlation indexes |
+| `MR_CorporateWbsSyncState` | CN43N synchronization fingerprints per corporate project | PK `ProjectCode` (`nvarchar(255)`, same width as `MR_Projects.ProjectCode`); `ContentHash` (SHA-256 hex), `NodeCount`, `SyncedAt` |
 
 ## Rowversion
 
@@ -37,6 +38,14 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 `SourceType` is `CORPORATE` or `MANUAL`. Manual rows are authored in the application. Corporate rows are mirrored from the corporate `CN43N` table, which lives in a different database and is reached through the dedicated `MERGEN_ROTA_WBS_DB_*` connection. Corporate rows carry the source attributes: `SourceKey` (`WBS element`), `OutlineCode` (`PYP kodu`), `WbsLevel` (`Level`), `StatusCode` (`Status`) and `ElementTypeCode` (`Proj.type`). `CK_MR_WBS_SourceKey` keeps `SourceKey` exclusive to corporate rows and the filtered unique index makes `(ProjectId, SourceKey)` the stable identity used by synchronization.
 
 The project root node is always MERGEN-generated: its `SourceKey` is `NULL` and its `Code` is the project code for corporate projects. Synchronization never deletes it, never touches manual rows, and deletes a vanished corporate element only when no child row and no Task reference it. Column mapping and synchronization rules are documented in `docs/WBS-AND-WORKSPACES.md`.
+
+## Corporate WBS synchronization state
+
+`MR_CorporateWbsSyncState` stores one row per corporate project code: the SHA-256 fingerprint of the planned CN43N node set and the node count that fingerprint represents. The key holds the full project code — truncating it would make the lookup miss (the fingerprint could never suppress a merge) and would let two codes sharing a prefix overwrite one another's row. Snapshot loading skips the `MR_WBS` merge for a project when the recomputed fingerprint, the stored node count and the corporate node count actually present in `MR_WBS` all match. The table holds no business data — dropping it only costs one full resynchronization.
+
+## Task priority values
+
+`MR_Tasks.Priority` accepts `low`, `medium`, `high`, `critical` and the legacy `normal`, and defaults to `medium`. The application writes only catalog identifiers: `normal` had no counterpart in the UI priority catalog, so a task stored with it made the Tasks, Kanban and Reports pages read `undefined.color` and crash the client. Legacy `normal` rows are still readable and are canonicalized to `medium` in the snapshot projection.
 
 ## WBS and Task consistency
 

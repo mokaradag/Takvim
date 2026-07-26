@@ -1,7 +1,7 @@
 'use client';
 import React, { useState as useState2, useMemo as useMemo2, useEffect as useEffect2, useRef as useRef2 } from 'react';
 import { Icons } from '../../components/icons';
-import { PRIORITIES } from '../../domain/constants';
+import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
 import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, diffDays, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
 import { holidayFor } from '../../scheduling/calendars';
 import { depId, relTypeOf } from '../../scheduling/dependencies';
@@ -61,7 +61,7 @@ const GANTT_COL_DEFS = [
   { key: 'status', label: 'Durum', width: 110, align: 'left', render: (t) => <StatusPill task={t} size={10.5} /> },
   { key: 'sorumlu', label: 'Sorumlu', width: 80, align: 'right', render: (t) => <AvatarStack names={t.sorumlu} max={2} size="sm" /> },
   { key: 'priority', label: 'Öncelik', width: 76, align: 'left', render: (t) => {
-      const p = PRIORITIES[t.priority || 'medium'];
+      const p = resolvePriority(t.priority);
       return <span style={{ fontSize: 11, fontWeight: 600, color: p.color }}>{p.label}</span>;
   } }
 ];
@@ -225,7 +225,7 @@ export function GanttView() {
         if (sort.key) {
           let va = a[sort.key], vb = b[sort.key];
           if (sort.key === 'sorumlu') { va = (a.sorumlu[0] || ''); vb = (b.sorumlu[0] || ''); }
-          if (sort.key === 'priority') { va = (PRIORITIES[a.priority || 'medium'] || {}).order ?? 9; vb = (PRIORITIES[b.priority || 'medium'] || {}).order ?? 9; }
+          if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
           if (vb == null) vb = '';
           if (va < vb) return sort.dir === 'asc' ? -1 : 1;

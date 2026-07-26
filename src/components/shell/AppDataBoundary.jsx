@@ -6,16 +6,20 @@ import { AppLogo } from './AppLogo';
 import { DATA_MODES } from '../../data/dataMode';
 import { useDataMode } from './DataModeContext';
 
+/**
+ * Açılış perdesi kendi tam ekran düzenini kurar.
+ *
+ * Daha önce uygulama kabuğunun `.app` ızgarası kullanılıyordu. O ızgaranın ilk
+ * sütunu 240 pikselle kenar çubuğuna ayrılmıştır; perde tek çocuk olduğu için
+ * o dar sütuna düşüyor ve kart ekranın solunda kırpılmış görünüyordu. Buradaki
+ * `.app-boot` düzeni ızgaradan bağımsızdır ve kartı her zaman ekranın ortasına
+ * yerleştirir.
+ */
 function DataMessage({ children }) {
   return (
-    <div className="app">
-      <div className="main" style={{ width: '100%' }}>
-        <main className="content" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
-          <div className="col" style={{ gap: 14, width: 'min(460px, calc(100vw - 32px))' }}>
-            <div className="card">{children}</div>
-          </div>
-        </main>
-      </div>
+    <div className="app-boot">
+      <div className="app-boot-aura" aria-hidden="true" />
+      <div className="app-boot-card">{children}</div>
     </div>
   );
 }
@@ -62,10 +66,23 @@ export function AppDataBoundary({ children }) {
   if (dataStatus === 'loading' && !hasLoadedOnce) {
     return (
       <DataMessage>
-        <div className="col" style={{ gap: 12, alignItems: 'center', textAlign: 'center', padding: 18 }}>
-          <AppLogo size={42} />
-          <div style={{ fontSize: 16, fontWeight: 700 }}>Veriler yükleniyor...</div>
-          <div className="muted" style={{ fontSize: 12.5 }}>Proje verileri hazırlanıyor.</div>
+        <div className="app-boot-brand">
+          <AppLogo size={46} />
+          <div className="app-boot-wordmark">
+            <span>MERGEN</span><strong>Rota</strong>
+          </div>
+        </div>
+        <h1 className="app-boot-title">Veriler yükleniyor</h1>
+        <p className="app-boot-sub">
+          Projeler, iş dağılım ağacı ve görevler hazırlanıyor. Kurumsal kaynak ilk açılışta eşitlenir.
+        </p>
+        <div className="app-boot-progress" role="progressbar" aria-label="Veriler yükleniyor" aria-busy="true">
+          <span />
+        </div>
+        <div className="app-boot-steps">
+          <span className="app-boot-step"><Icons.Database size={12} /> Kurumsal katalog</span>
+          <span className="app-boot-step"><Icons.Layers size={12} /> Dağılım ağacı</span>
+          <span className="app-boot-step"><Icons.Table size={12} /> Görevler</span>
         </div>
       </DataMessage>
     );
@@ -74,15 +91,19 @@ export function AppDataBoundary({ children }) {
   if (dataStatus === 'error' && !hasLoadedOnce) {
     return (
       <DataMessage>
-        <div className="col" style={{ gap: 12, alignItems: 'flex-start', padding: 8 }}>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>Veriler yüklenemedi.</div>
-          <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-            Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.
+        <div className="app-boot-brand">
+          <AppLogo size={46} />
+          <div className="app-boot-wordmark">
+            <span>MERGEN</span><strong>Rota</strong>
           </div>
-          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>
-            <DemoModeEscape />
-          </div>
+        </div>
+        <h1 className="app-boot-title">Veriler yüklenemedi</h1>
+        <p className="app-boot-sub">
+          Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.
+        </p>
+        <div className="app-boot-actions">
+          <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>
+          <DemoModeEscape />
         </div>
       </DataMessage>
     );

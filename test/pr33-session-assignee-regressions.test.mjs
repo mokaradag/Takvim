@@ -36,7 +36,7 @@ test('snapshot API completes assignees only for already-authorized visible task 
   const repositorySource = read('src/server/repository/projectedSqlAppRepository.js');
   const routeSource = read('src/app/api/mergen-rota/snapshot/route.js');
 
-  assert.match(repositorySource, /const snapshot = await baseRepository\.loadSnapshot\(\);/);
+  assert.match(repositorySource, /const snapshot = await baseRepository\.readSnapshot\(\);/);
   assert.match(repositorySource, /taskIds = \[\.\.\.new Set\(\(snapshot\.tasks \|\| \[\]\)/);
   assert.match(repositorySource, /request\.input\('taskIds', sql\.NVarChar\(sql\.MAX\), taskIds\.join\(','\)\);/);
   assert.match(repositorySource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);

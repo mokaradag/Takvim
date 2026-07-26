@@ -91,6 +91,16 @@ Corporate synchronization updates only source-owned Project identity fields, pre
 
 Corporate WBS synchronization is a separate step reading `CN43N` through the second connection. It writes only `SourceType = 'CORPORATE'` rows of corporate projects, never manual rows, never the MERGEN-generated project root, and never the source table. Client attempts to write corporate WBS structure are rejected with `FORBIDDEN`.
 
+### Catalog refresh scheduling
+
+Corporate project synchronization and corporate WBS synchronization together form the *catalog refresh*, exposed as `refreshCorporateCatalog()` on the SQL repository and kept separate from `readSnapshot()`. Three properties matter operationally:
+
+- the refresh runs **before and outside** the serializable snapshot-read transaction, so a large CN43N merge no longer inherits serializable isolation or holds range locks on `MR_WBS` for the duration of a read;
+- it is **throttled** by `MERGEN_ROTA_WBS_SYNC_TTL_MS` (default 300000; `0` refreshes on every request) and **deduplicated** — concurrent requests share one in-flight refresh;
+- it is **fingerprint-gated** per project through `MR_CorporateWbsSyncState`, so an unchanged corporate tree issues no merge statements.
+
+A failed refresh does not advance the freshness window and does not fail the request: the snapshot is served from whatever is already persisted, and the next request retries immediately. An unconfigured CN43N source is not a failure — there is nothing to synchronize, so the window advances normally and corporate project synchronization is not repeated on every request.
+
 ## Demo versus Actual mode
 
 Demo mode remains non-durable and uses the existing rich sample dataset. It never calls SQL Server or the Actual API. Actual mode never imports or merges Demo seed records. Repository switching remounts the application state boundary; a persistent `DEMO` indicator prevents sample data from being mistaken for live data. Basit/Gelişmiş is a separate usage-mode choice.

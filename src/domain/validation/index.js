@@ -1,3 +1,4 @@
+import { normalizePriorityId } from '../constants/index.js';
 import { selectDefaultProjectWbs } from '../selectors/wbsSelectors.js';
 
 function indexByName(items) {
@@ -102,6 +103,9 @@ export function normalizeTaskReferences(task, { projects = [], people = [], wbs 
     projectCode: project?.code || task.projectCode || '',
     proje: project?.name || task.proje || '',
     color: project?.color || task.color || 'blue',
+    // Öncelik veri sınırında kanonikleştirilir; kaynak ne gönderirse göndersin
+    // arayüz katalogda karşılığı olan bir kimlik görür.
+    priority: normalizePriorityId(task.priority),
     assigneeIds,
     sorumlu: assigneeNames,
     wbsId: validRequestedWbs?.id || defaultWbs?.id || null,

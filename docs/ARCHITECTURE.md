@@ -26,6 +26,10 @@ WBS is a separate structural domain entity. Shared pure selectors own hierarchy 
 
 `projectTypes.js` additionally owns the corporate/manual project distinction (`isCorporateProject`, `supportsManualWbsEditing`) used by write policies and the WBS UI.
 
+`constants/index.js` owns the Task status and priority catalogs. Priority also has canonicalization rules: `normalizePriorityId` maps unknown and legacy values (notably the persisted `normal`) onto a catalog identifier, and `resolvePriority` always returns a definition. Views must use these instead of indexing `PRIORITIES` directly — a missing entry previously produced `undefined.color` and took down the whole client render tree.
+
+WBS rollups exist in two shapes: `selectWbsTaskRollup` for a single node, and `selectWbsRollupIndex` for every node in one pass. Anything that renders many rows uses the index; per-row calls to the single-node selector are quadratic in the node count.
+
 ### `src/scheduling`
 
 Pure scheduling logic. `dates` owns parsing, formatting and date-range helpers; `calendars` owns holiday/working-day rules; `dependencies` owns FS/SS/FF/SF metadata and normalization; `plans` owns canonical current-plan duration normalization; `metrics` owns schedule-derived calculations used by Gantt and task status summaries; `cpm` owns the calendar-aware critical-path engine, forward/backward passes, early/late dates, float and critical paths. Scheduling remains independent from React and application state.
@@ -94,6 +98,8 @@ Feature-oriented modules: dashboard, tasks, WBS, calendar, Gantt, Kanban, report
 
 Dashboard, Tasks, Calendar, Kanban, Reports and Team consume workspace-scoped hooks. Settings remains global. The WBS feature is primarily project-oriented and consumes the shared domain hierarchy selectors.
 
+Feature-local pure rules live in sibling `*Policy.js` modules rather than inside `.jsx` components, so they can be imported by plain Node tests: `features/wbs/wbsTreeViewPolicy.js` (hierarchy expansion depth), `features/team/teamDirectoryPolicy.js` (directorate filtering including the unassigned bucket) and the existing `features/simple/simpleModePolicy.js`.
+
 Portfolio Gantt preserves the existing portfolio-oriented implementation. Project Workspace defaults to a WBS hierarchy whose WBS summary rows and bars are derived view data, not fake Tasks. The existing Gantt remains available for responsible-person/CPM detail. Neither Gantt path calls `calculateCpm()` directly.
 
 Task Detail edits current-plan, target, actual, remaining-duration, Project and WBS data. Its WBS selector only exposes nodes from the Task's current Project. The primary baseline snapshot remains read-only. Local field edits stay responsive while the state persistence layer coalesces high-frequency patches before repository writes.
@@ -106,7 +112,9 @@ Task Detail edits current-plan, target, actual, remaining-duration, Project and 
 
 Server-only identity, authorization, SQL configuration and durable repositories. Two connection pools exist: `db/pool.js` for the MERGEN Rota database and `db/corporateWbsPool.js` for the separate corporate WBS (CN43N) database. Both resolve the native driver through `db/driver.js`, which also exposes the test-only injection seam used by end-to-end persistence tests.
 
-Corporate WBS synchronization is split into a pure projection module (`repository/corporateWbsProjection.js`, CN43N rows → hierarchy plan), the SQL text (`repository/corporateWbsQueries.js`) and the orchestration (`repository/corporateWbsSync.js`). Hierarchy resolution is therefore testable without a database.
+Corporate WBS synchronization is split into a pure projection module (`repository/corporateWbsProjection.js`, CN43N rows → hierarchy plan), a pure skip-decision module (`repository/corporateWbsSyncState.js`, content fingerprints), the process-level schedule (`repository/corporateWbsSyncSchedule.js`, freshness window plus single-flight), the SQL text (`repository/corporateWbsQueries.js`) and the orchestration (`repository/corporateWbsSync.js`). Hierarchy resolution and skip decisions are therefore testable without a database.
+
+Snapshot loading is deliberately two steps: `refreshCorporateCatalog()` brings the corporate catalog up to date and `readSnapshot()` reads the authorized snapshot. `projectedSqlAppRepository` calls the refresh *before* opening its serializable read transaction, so a large CN43N merge never inherits serializable isolation or holds range locks across the read. `loadSnapshot()` remains the composition of the two for callers that want both.
 
 ### Presentation and styling ownership
 

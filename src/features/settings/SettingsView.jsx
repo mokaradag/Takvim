@@ -66,7 +66,8 @@ export function SettingsView({ t, setTweak }) {
   const appMode = t.appMode || 'advanced';
   const accents = [
     ['#3b82f6', 'Mavi'], ['#8b5cf6', 'Mor'], ['#f43f5e', 'Gül'],
-    ['#10b981', 'Zümrüt'], ['#f59e0b', 'Amber'], ['#0ea5e9', 'Camgöbeği']
+    // Vurgu rengi adları Türkçedir; proje renk kataloğuyla aynı sözcük kullanılır.
+    ['#10b981', 'Zümrüt'], ['#f59e0b', 'Kehribar'], ['#0ea5e9', 'Camgöbeği']
   ];
   const fontPresets = [['0.9', 'Küçük'], ['1', 'Normal'], ['1.1', 'Büyük'], ['1.25', 'Çok büyük']];
   const landingOpts = [

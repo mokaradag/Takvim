@@ -49,7 +49,187 @@
 }
 
 /* ── WBS ───────────────────────────────────────────────────── */
-.wbs-tree-table { max-width: 100%; }
+/* Proje Yapısı sayfası: yalnızca ağaç sekmesinde yüksekliği devreder. */
+.project-workspace-page { gap: 16px; }
+.project-workspace-page.tree { height: 100%; min-height: 0; }
+.project-workspace-page.tree > .project-workspace-tabs { flex: 0 0 auto; }
+.project-workspace-page.tree > .wbs-page { flex: 1 1 0; min-height: 0; height: auto; }
+
+/* ── Proje Yapısı · iş dağılım ağacı ──────────────────────────────
+   Bu sayfada dikey alan en değerli kaynaktır: proje bilgisi, ölçümler ve ağaç
+   denetimleri tek bir ince başlık çubuğunda toplanır, tablo kalan yüksekliğin
+   tamamını alır ve yalnızca satırlar kayar. */
+.wbs-page {
+  height: 100%;
+  min-height: 0;
+  gap: 12px;
+}
+.wbs-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--chrome-bg-soft), var(--bg-elev));
+  box-shadow: 0 1px 0 color-mix(in oklab, white 6%, transparent) inset;
+}
+.wbs-toolbar-identity { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1 1 260px; }
+.wbs-toolbar-title {
+  font-size: 14.5px;
+  font-weight: 750;
+  letter-spacing: -.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbs-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.wbs-source-chip.corporate {
+  border-color: var(--chrome-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.wbs-toolbar-metrics { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wbs-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.wbs-metric strong { color: var(--text); font-weight: 700; font-size: 12px; }
+
+/* Ağaç denetimleri: tek bir bütün olarak okunan, ince kabartmalı düğme grubu. */
+.wbs-tree-controls { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.wbs-tree-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-elev), var(--bg-elev-2));
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: .01em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .16s ease, border-color .16s ease, transform .12s ease, box-shadow .16s ease;
+  box-shadow: 0 1px 0 color-mix(in oklab, white 8%, transparent) inset;
+}
+.wbs-tree-btn:hover {
+  border-color: var(--chrome-border);
+  background: linear-gradient(180deg, var(--accent-soft), var(--bg-elev-2));
+  color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -10px var(--accent);
+}
+.wbs-tree-btn:active { transform: none; }
+.wbs-tree-btn.active {
+  border-color: var(--chrome-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.wbs-tree-btn em {
+  font-style: normal;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.wbs-hierarchy-menu { position: relative; }
+.wbs-hierarchy-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 208px;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  box-shadow: 0 18px 40px -18px oklch(0% 0 0 / .6);
+}
+.wbs-hierarchy-pop button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.wbs-hierarchy-pop button:hover { background: var(--bg-hover); }
+.wbs-hierarchy-pop button.active { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+
+.wbs-notices { flex: 0 0 auto; display: grid; gap: 6px; }
+.wbs-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--chrome-border);
+  background: var(--chrome-bg-soft);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.wbs-note > span { flex: 1; min-width: 0; }
+.wbs-note.danger {
+  border-color: color-mix(in oklab, var(--status-overdue) 45%, var(--border));
+  background: color-mix(in oklab, var(--status-overdue) 8%, var(--bg-elev));
+  color: var(--text);
+}
+.wbs-move-panel { flex: 0 0 auto; }
+
+.wbs-tree-table {
+  flex: 1 1 0;
+  min-height: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+/* Kaydırma tablo kabuğuna aittir; başlık satırı sticky olarak üstte kalır. */
+.wbs-tree-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
 .wbs-tree-grid {
   min-width: 970px;
   display: grid;
@@ -61,7 +241,7 @@
 .wbs-tree-head {
   position: sticky;
   top: 0;
-  z-index: 3;
+  z-index: 4;
   min-height: 42px;
   padding-top: 10px;
   padding-bottom: 10px;
@@ -126,3 +306,40 @@
   .rel-fields-grid,
   .rel-add-row { grid-template-columns: 1fr; }
 }
+
+/* ── Ekip · kurumsal dizin ────────────────────────────────────────
+   Dizin kartı ve tablo başlığı sabit kalır; yalnızca personel satırları kayar.
+   Bu yüzden sayfa `.content` yüksekliğini doldurur ve kaydırma tablo kabuğuna
+   devredilir. */
+.team-page {
+  height: 100%;
+  min-height: 0;
+  gap: 16px;
+}
+.team-directory-card { flex: 0 0 auto; }
+.team-summary-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 12px;
+  padding-bottom: 4px;
+}
+.team-table-card {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.team-table-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+/* Yatay kaydırmada başlık hücrelerinin arkası saydam kalmamalıdır. */
+.team-table-scroll .tbl thead th { background: var(--bg-elev); z-index: 2; }

@@ -169,7 +169,7 @@ BEGIN TRY
         Description nvarchar(max) NULL,
         Keyword nvarchar(255) NULL,
         Status varchar(30) NOT NULL,
-        Priority varchar(30) NOT NULL,
+        Priority varchar(30) NOT NULL CONSTRAINT DF_MR_Tasks_Priority DEFAULT ('medium'),
         IsMilestone bit NOT NULL CONSTRAINT DF_MR_Tasks_IsMilestone DEFAULT (0),
         PlannedStart date NULL,
         PlannedFinish date NULL,
@@ -289,6 +289,21 @@ BEGIN TRY
     CREATE INDEX IX_MR_AuditLog_Entity_Occurred ON dbo.MR_AuditLog(EntityType, EntityId, OccurredAt DESC);
     CREATE INDEX IX_MR_AuditLog_Correlation ON dbo.MR_AuditLog(CorrelationId);
 
+    -- Kurumsal iş dağılım ağacı eşitlemesinin parmak izi defteri.
+    -- CN43N kaynağı proje başına binlerce satır döndürür ve gün içinde nadiren
+    -- değişir. Proje başına saklanan içerik özeti (SHA-256) aynı kaldığı sürece
+    -- MR_WBS birleştirmesi tümüyle atlanır; anlık görüntü isteği kurumsal
+    -- kaynağı yeniden yazmak zorunda kalmaz.
+    CREATE TABLE dbo.MR_CorporateWbsSyncState (
+        ProjectCode nvarchar(255) NOT NULL,
+        ContentHash char(64) NOT NULL,
+        NodeCount int NOT NULL,
+        SyncedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_CorporateWbsSyncState_SyncedAt DEFAULT SYSUTCDATETIME(),
+        SyncedBySicil int NULL,
+        CONSTRAINT PK_MR_CorporateWbsSyncState PRIMARY KEY (ProjectCode),
+        CONSTRAINT CK_MR_CorporateWbsSyncState_NodeCount CHECK (NodeCount >= 0)
+    );
+
     EXEC(N'CREATE VIEW dbo.MR_V_CorporateProjects AS
         SELECT
             NULLIF(LTRIM(RTRIM(Tur)), N'''') AS ProjectTypeCode,
@@ -356,7 +371,8 @@ BEGIN TRY
     VALUES (10276, 'SYSTEM_ADMIN', 1), (18068, 'SYSTEM_ADMIN', 1), (23977, 'SYSTEM_ADMIN', 1);
 
     INSERT dbo.MR_SchemaMigrations(MigrationId, Description)
-    VALUES (N'0001_durable_persistence', N'Initial MERGEN Rota durable SQL Server persistence schema');
+    VALUES (N'0001_durable_persistence', N'Initial MERGEN Rota durable SQL Server persistence schema'),
+           (N'0002_corporate_wbs_sync_state', N'Corporate WBS synchronization fingerprints and canonical task priority default');
 
     COMMIT TRANSACTION;
 END TRY

@@ -63,6 +63,10 @@ Ekip görünümü tüm personel için büyük kartlar oluşturmaz. Başlangıç 
 
 Görev sayıları tek geçişte personel kimliğine göre dizinlenir. Böylece eski `personel × görev` taraması yerine yaklaşık `personel + atama` maliyetli hesaplama kullanılır. Personel sonuçları artımlı yüklenir.
 
+Direktörlüğü tanımlı olmayan personel de dizinde yer alır. Kurumsal rehberde bazı çalışanların yalnızca yöneticisi bilinir; önceki sürümde başlangıç görünümü yalnızca direktörlük değeri dolu olanları grupladığı için bu kişiler hiçbir kartta görünmüyordu. Artık "Direktörlük tanımsız" ayrı bir özet kartı ve ayrı bir süzgeç seçeneğidir. Eşleşme kuralı `src/features/team/teamDirectoryPolicy.js` içindeki `matchesDirectorateFilter` işlevinde tanımlıdır ve tek başına sınanır.
+
+Dizin kartı ile tablo başlığı sayfa kaydırılırken sabit kalır: sayfa `.content` yüksekliğini doldurur, kaydırma yalnızca personel tablosuna aittir.
+
 ## Görev sorumlusu ataması
 
 Görev sorumluları **Sicil kimliğiyle** tutulur; ad yalnızca görüntüleme amaçlıdır. Bir güncelleme yaması açık `assigneeIds` alanı taşıdığında bu kimlikler kesin kaynaktır ve adlardan yeniden türetilmez.

@@ -1,7 +1,7 @@
 'use client';
 import React, { useMemo as useMemo2 } from 'react';
 import { Icons } from '../../components/icons';
-import { PRIORITIES } from '../../domain/constants';
+import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
 import { parseDate, fmt, addDays, diffDays, startOfWeek, endOfWeek, today } from '../../scheduling/dates';
 import { COLOR_MAP, projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, HeroHeader, AreaChart } from '../../components/ui';
@@ -95,7 +95,7 @@ export function ReportsView() {
     });
     tasks.forEach(t => {
       if (t.status === 'done') return;
-      const p = t.priority || 'medium';
+      const p = normalizePriorityId(t.priority);
       const overdue = t.targetFinish && diffDays(t.targetFinish, today_) < 0;
       if (overdue) matrix[p].overdue.push(t);
       else if (t.status === 'in_progress') matrix[p].in_progress.push(t);
