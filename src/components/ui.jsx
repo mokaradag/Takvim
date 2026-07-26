@@ -6,27 +6,91 @@ import React from 'react';
 import { Icons } from './icons';
 import { COLOR_MAP, personColorVar, personInitials, projectColorVar } from '../lib/colors';
 import { getStatus } from '../scheduling/metrics';
+import { personPhotoUrl } from '../lib/userPhoto';
+import { resolveAvatarEntries } from './avatarIdentity.js';
+import { usePersonLookup } from './PeopleDirectoryContext.jsx';
 import { Tooltip } from './ui-extras';
 
 // ── Avatar ─────────────────────────────────────────────────
-export function Avatar({ name, size = 'md' }) {
-  if (!name) return null;
-  const cls = size === 'lg' ? 'avatar lg' : size === 'sm' ? 'avatar sm' : 'avatar';
+const AVATAR_SIZE_CLASS = { lg: 'avatar lg', sm: 'avatar sm', md: 'avatar' };
+
+/**
+ * Kurumsal fotoğraf + baş harf yedeği.
+ *
+ * `person` veya `employeeNo` verildiğinde ve fotoğraf taban adresi
+ * yapılandırılmışsa kurumsal fotoğraf gösterilir. Fotoğraf yüklenemezse
+ * (404, ağ hatası, adres yok) kırık görsel simgesi ÇIKMAZ: bileşen sessizce
+ * baş harflere döner. Kişi kimliği çözülemediğinde de davranış eski hâliyle
+ * aynıdır.
+ */
+export function Avatar({ name, size = 'md', person = null, personId = null, employeeNo = null, lookupPerson = true }) {
+  const lookup = usePersonLookup();
+  const [photoFailed, setPhotoFailed] = React.useState(false);
+
+  // Çözüm sırası: doğrudan kişi → kanonik kimlik/Sicil → (son çare) ad.
+  // Ad eşleşmesi belirsizse (aynı adlı iki çalışan) kişi çözülmez.
+  const resolved = person
+    || (personId == null ? null : lookup.byId(personId))
+    || (lookupPerson && !employeeNo ? lookup.byName(name) : null);
+  const displayName = String(person?.name || name || '').trim();
+  const photoKey = String(employeeNo ?? resolved?.employeeNo ?? resolved?.sicil ?? '').trim();
+  const photoSrc = photoFailed ? null : personPhotoUrl(photoKey ? { employeeNo: photoKey } : null);
+
+  // Yedek durumu YALNIZCA kişi değiştiğinde sıfırlanır; aksi hâlde hatalı
+  // görsel her denemede yeniden istenip döngü oluşur.
+  React.useEffect(() => { setPhotoFailed(false); }, [photoKey]);
+
+  if (!displayName && !photoSrc) return null;
+  const cls = AVATAR_SIZE_CLASS[size] || AVATAR_SIZE_CLASS.md;
+  const label = displayName || 'Kullanıcı';
+
+  if (photoSrc) {
+    return (
+      // next/image kullanılmaz: kurum içi fotoğraf sunucusu uzak optimizasyon
+      // gerektirmez ve çevrimdışı kurulumda ek yapılandırma istemez.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className={`${cls} avatar-photo`}
+        src={photoSrc}
+        alt={label}
+        title={label}
+        loading="lazy"
+        decoding="async"
+        // Fotoğraf yoksa baş harf yedeğine geçilir; hata günlüğe yazılmaz.
+        onError={() => setPhotoFailed(true)}
+      />
+    );
+  }
+
   return (
-    <div className={cls} style={{ background: personColorVar(name) }} title={name}>
-      {personInitials(name)}
+    <div className={cls} style={{ background: personColorVar(label) }} title={label} aria-label={label} role="img">
+      {personInitials(label)}
     </div>
   );
 }
 
-export function AvatarStack({ names = [], max = 3, size = 'md' }) {
-  const visible = names.slice(0, max);
-  const extra = names.length - visible.length;
+/**
+ * Avatar yığını. Fotoğraf gösterebilmek için kanonik `personIds` (Sicil)
+ * tercih edilir; `names` yalnızca görüntüleme yedeğidir.
+ */
+export function AvatarStack({ names = [], personIds = null, people = null, max = 3, size = 'md' }) {
+  const lookup = usePersonLookup();
+  const entries = resolveAvatarEntries({ people, personIds, names, lookup });
+  const visible = entries.slice(0, max);
+  const extra = entries.length - visible.length;
   return (
     <div className="avatar-stack">
-      {visible.map(n => <Avatar key={n} name={n} size={size} />)}
+      {visible.map((entry) => (
+        <Avatar key={entry.key} name={entry.name} person={entry.person} size={size} />
+      ))}
       {extra > 0 && (
-        <div className={size === 'sm' ? 'avatar sm' : 'avatar'} style={{ background: 'var(--bg-elev-2)', color: 'var(--text-muted)' }}>+{extra}</div>
+        <div
+          className={AVATAR_SIZE_CLASS[size] || AVATAR_SIZE_CLASS.md}
+          style={{ background: 'var(--bg-elev-2)', color: 'var(--text-muted)' }}
+          title={entries.slice(max).map((entry) => entry.name).filter(Boolean).join(', ')}
+        >
+          +{extra}
+        </div>
       )}
     </div>
   );

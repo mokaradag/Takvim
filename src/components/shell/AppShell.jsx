@@ -1,8 +1,9 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../icons';
-import { Avatar, Heptagon } from '../ui';
+import { Heptagon } from '../ui';
 import { InfoButton } from '../ui-extras';
+import { PeopleDirectoryProvider } from '../PeopleDirectoryContext.jsx';
 import { SearchableSelect } from '../SearchableSelect';
 import { DashboardView } from '../../features/dashboard/DashboardView';
 import { TasksView } from '../../features/tasks/TasksView';
@@ -17,6 +18,7 @@ import { SettingsView } from '../../features/settings/SettingsView';
 import { SimpleModePanel } from '../../features/simple/SimpleModePanel';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
 import {
+  useAllPeople,
   useAllProjects,
   usePeople,
   useTaskActions,
@@ -34,6 +36,7 @@ import { CommandPalette } from './CommandPalette';
 import { ModeChooser } from './ModeChooser';
 import { NAV_ITEMS, PAGE_META } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
+import { SidebarUserPanel } from './SidebarUserPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 
 // Basit Mod, Gelişmiş Mod ile aynı Gantt görünümünü paylaşır: hızlı görev
@@ -51,6 +54,9 @@ export default function AppShell() {
   useApplyTweaks(t);
   const tasks = useTasks();
   const people = usePeople();
+  // Avatar fotoğrafı çözümü çalışma alanı kapsamına değil, tüm kişi dizinine
+  // bakar: başka projede görünen bir sorumlunun fotoğrafı da bulunabilmelidir.
+  const directoryPeople = useAllPeople();
   const wbs = useWbs();
   const projects = useAllProjects();
   const workspace = useWorkspace();
@@ -233,6 +239,8 @@ export default function AppShell() {
 
   return (
     <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'}`}>
+      {/* Kişi dizini bağlamı DOM düğümü üretmez: ızgara çocukları değişmez. */}
+      <PeopleDirectoryProvider people={directoryPeople}>
       <aside className="sidebar">
         <Heptagon variant="hept-sidebar" />
         <div className="sidebar-header">
@@ -315,21 +323,13 @@ export default function AppShell() {
           })}
         </nav>
 
-        {/* Veri modu anahtarı kenar çubuğunda değil, Ayarlar sayfasında yaşar. */}
+        {/* Veri modu anahtarı kenar çubuğunda değil, Ayarlar sayfasında yaşar.
+            Kullanıcı bloğu artık sabit örnek kişi değil, doğrulanmış oturumdur. */}
         <div className="sidebar-footer">
-          <div className="sidebar-footer-row">
-            <div className="user-chip">
-              <Avatar name="Zeynep Aydın" size="md" />
-              <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                <div className="name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Zeynep Aydın</div>
-                <div className="role">Product Manager</div>
-              </div>
-            </div>
-            <button className="icon-btn" onClick={() => setView('yardim')} title="Kullanım rehberi"><Icons.Help size={15} /></button>
-            <button className="icon-btn" onClick={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')} title="Tema">
-              {t.theme === 'light' ? <Icons.Moon size={15} /> : <Icons.Sun size={15} />}
-            </button>
-          </div>
+          <SidebarUserPanel
+            theme={t.theme}
+            onToggleTheme={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')}
+          />
           <div className="sidebar-version">MERGEN Rota · Sürüm 1.0 · {simpleMode ? 'Basit' : 'Gelişmiş'} Mod</div>
         </div>
       </aside>
@@ -378,6 +378,7 @@ export default function AppShell() {
           tasks={tasks}
         />
       )}
+      </PeopleDirectoryProvider>
     </div>
   );
 }

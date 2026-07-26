@@ -23,7 +23,7 @@ test('commit validation rejects project tags supplied as an iterable string', ()
 
 test('commit validation rejects task assignees supplied as an iterable string', () => {
   const issue = findNestedCommitCollectionIssue({
-    taskUpserts: [{ id: 'task-id', assigneeIds: '18068' }]
+    taskUpserts: [{ id: 'task-id', assigneeIds: '900002' }]
   });
 
   assert.deepEqual(issue, {
@@ -45,7 +45,7 @@ test('commit validation rejects blank or non-text project tags', () => {
 test('valid nested commit collections remain accepted', () => {
   assert.equal(findNestedCommitCollectionIssue({
     projectUpserts: [{ tags: ['Alpha', 'Beta'] }],
-    taskUpserts: [{ assigneeIds: ['18068', 23977] }]
+    taskUpserts: [{ assigneeIds: ['900002', 900003] }]
   }), null);
   assert.equal(findNestedCommitCollectionIssue({
     projectUpserts: [{}],

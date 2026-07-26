@@ -46,7 +46,7 @@ test('application loading waits for snapshot synchronization before reading sess
   const events = [];
   const session = {
     dataMode: 'actual',
-    currentUser: { id: '18068', name: 'Test User' },
+    currentUser: { id: '900002', name: 'Test User' },
     isSystemAdmin: false,
     isExecutive: false,
     canCreateProjects: false,
@@ -149,7 +149,7 @@ test('Actual repository restores persistent aliases in session and baseline refe
     },
     {
       dataMode: 'actual',
-      currentUser: { id: '18068' },
+      currentUser: { id: '900002' },
       projectAccess: [{ projectId: projectUuid, accessLevel: 'FULL' }]
     },
     {

@@ -247,10 +247,10 @@ test('MR_WBS şeması CN43N kolonlarını ve kaynak türünü taşır', () => {
 test('veri tarihi zorunlu değildir ama geçersiz tarih reddedilir', () => {
   const context = {
     projects: [],
-    people: [{ id: '10276', name: 'Zeynep Aydın' }],
+    people: [{ id: '900001', name: 'Test Kullanıcı' }],
     calendars: [{ id: 'c1' }]
   };
-  const base = { name: 'Proje', leadId: '10276', calendarId: 'c1', color: 'blue' };
+  const base = { name: 'Proje', leadId: '900001', calendarId: 'c1', color: 'blue' };
   assert.deepEqual(validateProjectCreationInput({ ...base, dataDate: '' }, context), []);
   assert.deepEqual(validateProjectCreationInput({ ...base }, context), []);
   const invalid = validateProjectCreationInput({ ...base, dataDate: '2026-02-31' }, context);

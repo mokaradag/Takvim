@@ -229,8 +229,10 @@ test('package scripts keep test and production build commands available', () => 
   const pkg = JSON.parse(read('package.json'));
   assert.equal(pkg.scripts?.test, 'node --test');
   assert.equal(pkg.scripts?.build, 'next build');
-  assert.equal(pkg.scripts?.dev, 'next dev');
+  // MERGEN Rota 8008 portunda çalışır; 8009 MERGEN Bilge'ye aittir.
+  assert.equal(pkg.scripts?.dev, 'next dev -p 8008');
   assert.equal(pkg.scripts?.start, 'next start');
+  assert.equal(pkg.scripts?.['start:prod'], 'next start -H 0.0.0.0 -p 8008');
 });
 
 test('quality workflow continuously runs install, tests, and production build', () => {

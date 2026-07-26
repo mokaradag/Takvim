@@ -31,7 +31,7 @@ function completeProject(id = PROJECT_UUID) {
     id,
     source: 'manual',
     name: 'New Project',
-    leadId: '18068',
+    leadId: '900002',
     calendarId: CALENDAR_UUID,
     dataDate: '2026-07-24',
     color: 'blue'

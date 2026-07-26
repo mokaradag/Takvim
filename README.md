@@ -18,12 +18,13 @@ npm install
 npm run dev
 ```
 
-`http://localhost:3000` adresinde açılır.
+`http://localhost:8008` adresinde açılır. MERGEN Rota **8008** portunu kullanır; **8009** portu ayrı bir uygulama olan MERGEN Bilge'ye aittir.
 
 ### Diğer komutlar
 
 - `npm run build` — üretim derlemesi
-- `npm run start` — üretim sunucusunu başlatır
+- `npm run start:prod` — üretim sunucusunu `0.0.0.0:8008` üzerinde başlatır
+- `npm run start` — üretim sunucusunu varsayılan ayarlarla başlatır (`npm run start -- -H 0.0.0.0 -p 8008`)
 - `npm run lint` — Next.js/ESLint kod kalite kontrolü
 - `npm test` — domain, scheduling, state, persistence, SQL şeması ve yetkilendirme regresyon testleri
 
@@ -87,28 +88,42 @@ Eşitleme her istekte baştan çalışmaz. Proje başına içerik parmak izi `MR
 4. Kendi atandığı görevler (`PARTIAL`, salt okunur)
 5. Varsayılan ret
 
-`MR_UserRoles` oluşturma betiği 10276, 18068 ve 23977 Sicil değerlerini aktif `SYSTEM_ADMIN` olarak başlatır. HR09 sorumlulukları kurumsal FULL erişim sağlar. Manuel erişimler `MR_ProjectAccess` içinde tutulur. Sistem yöneticileri ile HR02'de dinamik olarak yönetici görünen kullanıcılar manuel Project oluşturabilir; Project, kök WBS, FULL OWNER erişimi ve audit kayıtları aynı transaction içinde oluşturulur.
+`MR_UserRoles` oluşturma betiği sistem yöneticilerini parametreli tohumlar: kurulumdan önce `@SystemAdminSicils` değişkenine virgülle ayrılmış Sicil listesi yazılır. Gerçek Sicil değerleri kişisel veridir ve depoya işlenmez. HR09 sorumlulukları kurumsal FULL erişim sağlar. Manuel erişimler `MR_ProjectAccess` içinde tutulur. Sistem yöneticileri ile HR02'de dinamik olarak yönetici görünen kullanıcılar manuel Project oluşturabilir; Project, kök WBS, FULL OWNER erişimi ve audit kayıtları aynı transaction içinde oluşturulur.
 
 PARTIAL görünürlük tam Project yönetim yetkisi vermez. Kısmi Task ağı üzerinde yanıltıcı CPM/critical-path hesaplanmaz; Project scheduling sonucu `suppressed-partial` olarak işaretlenir.
 
-## Pre-Keycloak kimlik
+## Kimlik doğrulama (Keycloak)
 
-Keycloak bu aşamada uygulanmamıştır. Geçici `DevelopmentIdentityProvider` yalnızca sunucu environment değerlerini kullanır:
+Kimlik doğrulama **Keycloak** ile yapılır ve varsayılan kiptir (`MERGEN_ROTA_AUTH_MODE=keycloak`). Akış Authorization Code + PKCE'dir; erişim jetonu tarayıcıda saklanmaz, sunucuda doğrulanır ve yalnızca doğrulanmış **Sicil** HttpOnly bir oturum çerezine yazılır.
 
-- `MERGEN_ROTA_DEV_IDENTITY_ENABLED`
-- `MERGEN_ROTA_DEV_SICIL`
+- `GET /api/mergen-rota/auth/login` — PKCE ile Keycloak'a yönlendirir
+- `GET /api/mergen-rota/auth/callback` — kodu sunucuda jetonla takas eder, doğrular, oturum çerezini yazar
+- `POST /api/mergen-rota/auth/session` — uyumluluk ucu: `Authorization: Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
+- `POST|GET /api/mergen-rota/auth/logout` — MERGEN Rota oturumunu kapatır ve Keycloak `end_session` adresine yönlendirir
 
-Destek varsayılan olarak kapalıdır. Sicil request body, query string, browser header veya localStorage üzerinden kabul edilmez; yapılandırma yoksa admin'e sessiz dönüş yapılmaz. Sonraki aşamada bu provider Keycloak Sicil claim'i veya Keycloak username → HR02 username → Sicil çözümüyle değiştirilebilir.
+Güvenilen kimlik yalnızca doğrulanmış `sicil` claim'idir. Claim yoksa isteğe bağlı olarak `preferred_username → HR02 kurumsal kullanıcı adı → Sicil` çözümü yapılır; sonuç tekil değilse **UNAUTHORIZED** döner. Keycloak `resource_access` rollerinden MERGEN Rota SYSTEM_ADMIN yetkisi **türetilmez**.
+
+Sicil; istek gövdesi, sorgu dizesi, tarayıcı başlığı, localStorage veya görüntüleme alanlarından kabul edilmez. Kimlik yoksa yönetici, Demo veya geliştirme kimliğine sessizce düşülmez.
+
+Yerel geliştirme kimliği yalnızca `MERGEN_ROTA_AUTH_MODE=development` **ve** `MERGEN_ROTA_DEV_IDENTITY_ENABLED=true` birlikte verildiğinde çalışır; varsayılan olarak kapalıdır.
+
+Ayrıntılar, ortam değişkenleri, IT'nin kaydetmesi gereken adresler ve sorun giderme: [`docs/KEYCLOAK-SSO.md`](docs/KEYCLOAK-SSO.md).
+
+## Kullanıcı fotoğrafları
+
+Kurumsal fotoğraflar `<TABAN_URL>/<SICIL>.jpg` biçiminde üretilir. Taban adres `NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL` değişkeninden okunur; tarayıcı tarafından istendiği için **sır değildir** ve istemci paketine gömülür. Gerçek adres yalnızca `.env.local` içinde tutulur ve depoya işlenmez.
+
+Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar baş harflere döner. Üretilen adres hiçbir tabloda saklanmaz; fotoğraf tamamen sunum verisidir ve başarısız bir görsel isteği kimlik doğrulamayı veya veri yüklemeyi engellemez.
 
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
 2. `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
-4. Yalnızca pre-Keycloak entegrasyon ortamında geçici geliştirme Sicil'ini etkinleştirin.
+4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
 5. `npm ci`
 6. `npm run build`
-7. `npm run start -- -H 0.0.0.0 -p 3000`
+7. `npm run start -- -H 0.0.0.0 -p 8008`
 8. **Gerçek Sistem** seçerek yetki ve kalıcılığı doğrulayın.
 
 Build aşamasında tüm MERGEN Rota nesnelerini kaldırmak için `database/MR_Rollback_Durable_Persistence.sql` çalıştırılabilir. **Bu işlem tüm MR_* uygulama verisini kalıcı olarak siler.** HR02, A01 ve HR09 tablolarına dokunmaz.
@@ -122,7 +137,7 @@ Windows UNC örneği:
 ```cmd
 pushd "\\rehisds\uygulamalar\Primavera\PYB\08 - MERGEN Rota"
 npm run build
-npm run start -- -H 0.0.0.0 -p 3000
+npm run start -- -H 0.0.0.0 -p 8008
 ```
 
 ## Yapı
@@ -138,6 +153,7 @@ npm run start -- -H 0.0.0.0 -p 3000
 
 Ayrıntılar:
 
+- `docs/KEYCLOAK-SSO.md`
 - `docs/DURABLE-PERSISTENCE.md`
 - `docs/DATABASE-SCHEMA.md`
 - `docs/AUTHORIZATION-MODEL.md`
@@ -158,4 +174,4 @@ CPM erken/geç tarihler, float, kritik bayraklar, WBS rollup'ları ve Dashboard 
 
 ## Sonraki aşama
 
-Durable persistence, kurumsal kaynak entegrasyonu ve Sicil tabanlı yetkilendirme sınırı tamamlandıktan sonraki authentication aşaması Keycloak entegrasyonudur. Keycloak yalnızca `CurrentUserProvider` uygulamasını değiştirmeli; SQL şeması, authorization precedence ve repository transaction modeli korunmalıdır.
+Keycloak entegrasyonu tamamlanmıştır: kimlik doğrulama yalnızca `CurrentUserProvider` katmanını değiştirmiş; SQL şeması, yetkilendirme önceliği ve repository transaction modeli korunmuştur. Bundan sonraki iş kalemleri kimlik doğrulamayla ilgili değildir.

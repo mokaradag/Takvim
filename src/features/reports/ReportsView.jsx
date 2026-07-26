@@ -6,11 +6,12 @@ import { parseDate, fmt, addDays, diffDays, startOfWeek, endOfWeek, today } from
 import { COLOR_MAP, projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, HeroHeader, AreaChart } from '../../components/ui';
 import { Tooltip, InfoButton, CardHead, AnimatedNumber } from '../../components/ui-extras';
-import { useTasks } from '../../state/hooks';
+import { usePeople, useTasks } from '../../state/hooks';
 
 /* ── Rapor (Reports) ──────────────────────────────────── */
 export function ReportsView() {
   const tasks = useTasks();
+  const people = usePeople();
   const today_ = today();
 
   const trend = useMemo2(() => {
@@ -66,6 +67,17 @@ export function ReportsView() {
 
   // Resource utilization (planned hours vs capacity)
   const CAPACITY_PER_PERSON = 40 * 6; // ~6-week horizon × 40h
+  // Kaynak kullanımı satırları yalnızca ada göre toplanır; fotoğraf için
+  // kanonik kişi kaydı ayrıca çözülür (aynı adlı iki çalışanda tahmin yapılmaz).
+  const personByName = useMemo2(() => {
+    const index = new Map();
+    for (const person of people) {
+      if (!person?.name) continue;
+      index.set(person.name, index.has(person.name) ? null : person);
+    }
+    return index;
+  }, [people]);
+
   const resourceUtilization = useMemo2(() => {
     const map = {};
     tasks.forEach(t => {
@@ -79,12 +91,13 @@ export function ReportsView() {
     });
     return Object.entries(map).map(([name, v]) => ({
       name,
+      person: personByName.get(name) || null,
       hours: Math.round(v.hours),
       tasks: v.tasks,
       pct: Math.round((v.hours / CAPACITY_PER_PERSON) * 100),
       color: personColorVar(name)
     })).sort((a, b) => b.pct - a.pct);
-  }, [tasks]);
+  }, [tasks, personByName]);
 
 
   // Risk matrix — by priority × status (in-progress + todo)
@@ -262,7 +275,7 @@ export function ReportsView() {
                   key={r.name}
                   title={r.name}
                   accent={r.color}
-                  icon={<Avatar name={r.name} size="sm" />}
+                  icon={<Avatar name={r.name} person={r.person} size="sm" />}
                   content={<>
                     <div className="rt-row"><span className="rt-label">Kalan saat</span><span className="rt-val">{r.hours} sa</span></div>
                     <div className="rt-row"><span className="rt-label">Aktif görev</span><span className="rt-val">{r.tasks}</span></div>
@@ -273,7 +286,7 @@ export function ReportsView() {
                   </>}
                 >
                   <div className="row" style={{ gap: 10, cursor: 'help', padding: '4px 0' }}>
-                    <Avatar name={r.name} size="sm" />
+                    <Avatar name={r.name} person={r.person} size="sm" />
                     <div className="col" style={{ gap: 3, flex: 1, minWidth: 0 }}>
                       <div className="row" style={{ gap: 6 }}>
                         <span style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>

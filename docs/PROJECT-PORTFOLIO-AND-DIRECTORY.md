@@ -67,6 +67,44 @@ Direktörlüğü tanımlı olmayan personel de dizinde yer alır. Kurumsal rehbe
 
 Dizin kartı ile tablo başlığı sayfa kaydırılırken sabit kalır: sayfa `.content` yüksekliğini doldurur, kaydırma yalnızca personel tablosuna aittir.
 
+### Süzgeç ve sıralama · tek durum
+
+"Kurumsal ekip dizini" açılır listeleri ile tablo başlığı süzgeçleri **tek bir
+kurumsal süzgeç durumunu** paylaşır:
+
+```text
+{ directorate: '', department: '', unit: '' }
+```
+
+- Her düzey **tek seçimlidir**: aynı anda birden çok direktörlük, müdürlük veya
+  birim etkin olamaz.
+- İki yön de aynı duruma yazar: üstteki açılır listeden yapılan seçim tablo
+  başlığında, tablo başlığından yapılan seçim açılır listede anında görünür.
+- Seçim etiketle değil **kararlı yol anahtarıyla** tutulur
+  (`direktörlük > müdürlük > birim`). Farklı direktörlüklerdeki aynı adlı
+  müdürlükler bu sayede birbirine karışmaz.
+- Hiyerarşi korunur: direktörlük değişince geçersiz kalan müdürlük ve birim,
+  müdürlük değişince geçersiz kalan birim temizlenir. Bir üst düzey
+  temizlendiğinde alt düzey de temizlenir; gizli kalmış süzgeç bırakılmaz.
+- Tablo başlığından müdürlük seçmek üst direktörlüğü, birim seçmek hem müdürlüğü
+  hem direktörlüğü otomatik doldurur.
+
+Sütunların tamamı Görevler sayfasıyla aynı `FilterableTH` bileşenini kullanır:
+Personel (metin), Unvan (çoklu), Direktörlük/Müdürlük/Birim (tek seçimli),
+Toplam/Devam/Geciken (sayısal) ve Yakın görevler (metin). Sıralama `tr-TR`
+yerel ayarıyla yapılır, sayısal sütunlar sayısal karşılaştırılır, eksik değerler
+her iki yönde de sona gider ve eşitlikte ad + Sicil ile kararlı ikincil sıralama
+uygulanır. Süzgeçleme ve sıralama **sayfalamadan önce** çalışır; süzgeç
+değiştiğinde görünür satır sınırı sıfırlanır.
+
+Eski "Müdürlük / Birim" birleşik sütunu, her düzeye bağımsız başlık süzgeci
+verebilmek için **Müdürlük** ve **Birim** olarak ayrılmıştır. Temizleme
+düğmesinin metni **"Filtreleri temizle"** olup her iki konumdaki tüm süzgeçleri
+ve genel aramayı sıfırlar.
+
+Saf kurallar `src/features/team/teamFilterPolicy.js` içindedir ve
+`test/team-directory-filtering-e2e.test.mjs` ile tek başına sınanır.
+
 ## Görev sorumlusu ataması
 
 Görev sorumluları **Sicil kimliğiyle** tutulur; ad yalnızca görüntüleme amaçlıdır. Bir güncelleme yaması açık `assigneeIds` alanı taşıdığında bu kimlikler kesin kaynaktır ve adlardan yeniden türetilmez.

@@ -115,6 +115,32 @@ Ekip sayfası kendi yüksekliğini yönetir: "Kurumsal ekip dizini" kartı sabit
 
 Kurumsal rehberde herkesin direktörlüğü tanımlı değildir; bir bölüm çalışanın yalnızca yöneticisi bilinir. Bu kişiler önceki sürümde hiçbir grupta görünmüyordu. Artık "Direktörlük tanımsız" hem özet kartı hem de süzgeç seçeneği olarak listelenir; süzgeç mantığı `src/features/team/teamDirectoryPolicy.js` içindeki `matchesDirectorateFilter` işlevindedir.
 
+Tablo sütunları Görevler sayfasıyla aynı süzgeç/sıralama bileşenini kullanır ve
+kurumsal düzey süzgeçleri üstteki dizin açılır listeleriyle tek durumu paylaşır.
+Ayrıntı: `docs/PROJECT-PORTFOLIO-AND-DIRECTORY.md`.
+
+## Kenar çubuğu kullanıcı bloğu
+
+Kenar çubuğunun altındaki kullanıcı bloğu artık sabit bir örnek kişi değil,
+**doğrulanmış oturum kullanıcısıdır** (`session.currentUser`):
+
+- kurumsal fotoğraf, Sicil'den `<TABAN_URL>/<SICIL>.jpg` biçiminde üretilir;
+  adres yoksa ya da görsel yüklenemezse baş harflere dönülür;
+- ad satırının altında **Keycloak `department` claim'i** gösterilir; uydurma bir
+  "rol" metni yoktur. Değer yoksa nötr `Departman bilgisi yok` yazılır;
+- departman adları uzun olabildiği için satır tek satıra zorlanmaz: küçük yazı
+  tipi, sıkı satır yüksekliği ve çok satıra sarma kullanılır, taşma engellenir.
+
+Eski **Kullanım rehberi** kısayol düğmesi bu satırdan kaldırılmıştır; boşalan
+yatay alan kimlik bloğuna verilmiştir. Yardım sayfası ve gezinme öğesi
+yerindedir. Tema düğmesi korunur; Gerçek Sistem'de kompakt bir **Oturumu kapat**
+düğmesi eklenir.
+
+Avatar boyutları fotoğrafın okunabilir olması için ölçülü biçimde büyütülmüştür:
+satır içi (`sm`) 26 px, tablo/kart (varsayılan) 32 px, kenar çubuğu (`lg`) 40 px.
+Boyutlar `src/app/globals.css` içindeki `--avatar-size` değişkeniyle tek yerden
+yönetilir.
+
 ## Proje Yapısı · İş Dağılım Ağacı denetimleri
 
 Dağılım ağacı sekmesinde dikey alan tabloya ayrılır: üst bilgi tek satırlık bir başlık çubuğuna (`.wbs-toolbar`) indirgenir, uyarılar ince notlara dönüşür, görev taşıma paneli varsayılan olarak kapalıdır ve tablo kalan yüksekliğin tamamını alarak kendi kaydırma kabuğunda kayar. Başlık satırı donuktur.

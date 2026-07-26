@@ -384,11 +384,11 @@ test('project updates validate LeadSicil before binding and writing it', () => {
 
 
 test('development identity rejects partial, decimal, non-positive, blank, and unsafe Sicil strings', () => {
-  assert.equal(parseDevelopmentSicil('18068'), 18068);
-  assert.equal(parseDevelopmentSicil(' 18068 '), 18068);
+  assert.equal(parseDevelopmentSicil('900002'), 900002);
+  assert.equal(parseDevelopmentSicil(' 900002 '), 900002);
   assert.equal(parseDevelopmentSicil('2147483647'), 2147483647);
   assert.equal(parseDevelopmentSicil('2147483648'), null);
-  for (const invalid of ['18068abc', '18068.5', '0', '-1', '', '   ', '9007199254740992']) {
+  for (const invalid of ['900002abc', '900002.5', '0', '-1', '', '   ', '9007199254740992']) {
     assert.equal(parseDevelopmentSicil(invalid), null, `expected ${JSON.stringify(invalid)} to be rejected`);
   }
   const providerSource = read('src/server/identity/currentUserProvider.js');
@@ -518,7 +518,7 @@ test('root WBS deletion is rejected in both domain state and SQL persistence', (
 
 test('loaded session capabilities survive state normalization and collection-only reloads', () => {
   const session = {
-    dataMode: 'actual', currentUser: { id: '18068', name: 'User' },
+    dataMode: 'actual', currentUser: { id: '900002', name: 'User' },
     isSystemAdmin: false, isExecutive: true, canCreateProjects: true,
     projectAccess: [{ projectId: 'p1', accessLevel: 'PARTIAL', reasons: ['MANUAL_GRANT'] }]
   };
@@ -528,7 +528,7 @@ test('loaded session capabilities survive state normalization and collection-onl
   };
   let state = createInitialState(snapshot);
   assert.deepEqual(state.session, session);
-  assert.equal(state.currentUser.id, '18068');
+  assert.equal(state.currentUser.id, '900002');
   assert.equal(state.canCreateProjects, true);
   assert.deepEqual(state.projectAccess, session.projectAccess);
   state = appStateReducer(state, {
@@ -536,7 +536,7 @@ test('loaded session capabilities survive state normalization and collection-onl
     snapshot: { projects: snapshot.projects, people: [], calendars: [], wbs: [], tasks: [], baselines: [], taskBaselineSnapshots: [] }
   });
   assert.deepEqual(state.session, session);
-  assert.equal(state.currentUser.id, '18068');
+  assert.equal(state.currentUser.id, '900002');
   assert.equal(state.canCreateProjects, true);
   assert.deepEqual(state.projectAccess, session.projectAccess);
 });

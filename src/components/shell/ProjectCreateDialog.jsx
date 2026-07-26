@@ -33,7 +33,7 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
       description: person.role || null,
       group: [person.organization?.directorate, person.organization?.department, person.organization?.unit].filter(Boolean).join(' / '),
       keywords: [person.name, person.employeeNo, person.username, person.role, person.team],
-      icon: <Avatar name={person.name} size="sm" />
+      icon: <Avatar name={person.name} person={person} size="sm" />
     })), [people]);
   const [form, setForm] = useState(defaults);
   const [saving, setSaving] = useState(false);

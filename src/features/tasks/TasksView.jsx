@@ -51,7 +51,7 @@ export function TasksView() {
   const sorumluOpts = useMemo1(() => people
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-    .map(p => ({ value: p.name, label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name, icon: <Avatar name={p.name} size="sm" /> })), [people]);
+    .map(p => ({ value: p.name, label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name, icon: <Avatar name={p.name} person={p} size="sm" /> })), [people]);
   const statusOpts = [
     { value: 'todo', label: 'Yapılacak', icon: <StatusIcon id="todo" size={11} /> },
     { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },
@@ -255,7 +255,7 @@ export function TasksView() {
                       </div>
                     </td>
                     <td><Kw color={t.color}>{t.keyword}</Kw></td>
-                    <td><AvatarStack names={t.sorumlu || []} max={3} size="sm" /></td>
+                    <td><AvatarStack names={t.sorumlu || []} personIds={t.assigneeIds} max={3} size="sm" /></td>
                     <td><StatusPill task={t} /></td>
                     <td><span style={{ fontSize: 11.5, fontWeight: 600, color: prio.color }}>{prio.label}</span></td>
                     <td>

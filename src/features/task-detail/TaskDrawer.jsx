@@ -131,7 +131,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
         description: person.role || null,
         group: [person.organization?.directorate, person.organization?.department, person.organization?.unit].filter(Boolean).join(' / '),
         keywords: [person.name, person.employeeNo, person.username, person.role, person.team],
-        icon: <Avatar name={person.name} size="sm" />
+        icon: <Avatar name={person.name} person={person} size="sm" />
       }));
   }, [people, selectedAssignees]);
 
@@ -288,7 +288,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 {selectedAssignees.map((record) => (
                   <span key={`${record.id}:${record.name}`} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
-                    <Avatar name={record.name} size="sm" />
+                    <Avatar name={record.name} person={record.person} size="sm" />
                     <span style={{ fontSize: 12 }}>{record.name}</span>
                     <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>
                   </span>

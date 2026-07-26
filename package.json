@@ -4,9 +4,10 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 8008",
     "build": "next build",
     "start": "next start",
+    "start:prod": "next start -H 0.0.0.0 -p 8008",
     "lint": "next lint",
     "test": "node --test"
   },

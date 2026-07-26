@@ -118,7 +118,7 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
       description: person.role || null,
       group: [person.organization?.directorate, person.organization?.department, person.organization?.unit].filter(Boolean).join(' / '),
       keywords: [person.name, person.employeeNo, person.username, person.role, person.team],
-      icon: <Avatar name={person.name} size="sm" />
+      icon: <Avatar name={person.name} person={person} size="sm" />
     })), [people]);
   const [form, setForm] = useState(defaults);
   const [saving, setSaving] = useState(false);
@@ -198,7 +198,7 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
             <span className="label">Proje sorumlusu</span>
             {isCorporate ? (
               <div className="input" style={{ minHeight: 38, display: 'flex', alignItems: 'center', gap: 9 }}>
-                {manager && <Avatar name={manager.name} size="sm" />}
+                {manager && <Avatar name={manager.name} person={manager} size="sm" />}
                 <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {manager ? personLabel(manager) : 'PROJECT_MANAGER rolü tanımlanmamış'}
                 </span>

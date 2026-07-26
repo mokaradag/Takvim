@@ -20,7 +20,7 @@ function validChanges() {
       id: PROJECT_ID,
       name: 'Geçerli Proje',
       code: 'PRJ-1',
-      leadId: '18068',
+      leadId: '900002',
       color: 'blue',
       tags: ['Planlama']
     }],
@@ -65,7 +65,7 @@ test('delete intent rejects missing targets and unversioned deletes', () => {
 
 test('project metadata validation rejects malformed leads and duplicate or oversized tags', () => {
   const malformedLead = validChanges();
-  malformedLead.projectUpserts[0].leadId = '18068abc';
+  malformedLead.projectUpserts[0].leadId = '900002abc';
   assert.equal(findCommitProjectWbsIssue(malformedLead)?.code, 'PROJECT_LEAD_INVALID');
 
   const outOfRangeLead = validChanges();
@@ -120,7 +120,7 @@ test('commit scalar canonicalization trims values before validation and SQL bind
       status: ' planned ',
       priority: ' high ',
       plannedStart: ' 2026-07-24 ',
-      assigneeIds: [' 18068 '],
+      assigneeIds: [' 900002 '],
       deps: [{ type: ' FS ', lagUnit: ' day ' }]
     }]
   });
@@ -134,7 +134,7 @@ test('commit scalar canonicalization trims values before validation and SQL bind
   assert.equal(canonical.taskUpserts[0].status, 'planned');
   assert.equal(canonical.taskUpserts[0].priority, 'high');
   assert.equal(canonical.taskUpserts[0].plannedStart, '2026-07-24');
-  assert.deepEqual(canonical.taskUpserts[0].assigneeIds, ['18068']);
+  assert.deepEqual(canonical.taskUpserts[0].assigneeIds, ['900002']);
   assert.equal(canonical.taskUpserts[0].deps[0].type, 'FS');
   assert.equal(canonical.taskUpserts[0].deps[0].lagUnit, 'day');
 });

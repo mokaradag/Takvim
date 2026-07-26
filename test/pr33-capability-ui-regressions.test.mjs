@@ -10,7 +10,7 @@ import {
 } from '../src/features/simple/simpleModePolicy.js';
 
 const calendar = { id: 'calendar-1', name: 'Default' };
-const lead = { id: '18068', name: 'Project Lead' };
+const lead = { id: '900002', name: 'Project Lead' };
 const corporateProject = {
   id: 'project-corporate',
   source: 'corporate',

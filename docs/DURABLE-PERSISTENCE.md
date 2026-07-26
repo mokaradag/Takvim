@@ -107,16 +107,15 @@ Demo mode remains non-durable and uses the existing rich sample dataset. It neve
 
 Actual-mode failures do not silently fall back to Demo. The user sees the Actual-system error and may deliberately switch back to Demo.
 
-## Identity before Keycloak
+## Identity
 
-`CurrentUserProvider` is the replaceable server identity boundary. This phase supplies only `DevelopmentIdentityProvider`, controlled by:
+`CurrentUserProvider` is the server identity boundary, and it is now backed by **Keycloak**. `KeycloakIdentityProvider` returns the Sicil carried by the server-signed HttpOnly session cookie, which is written only after a Keycloak token is verified on the server (signature against realm JWKS, plus `iss`/`exp`/`aud`/`azp`). See `docs/KEYCLOAK-SSO.md`.
 
-- `MERGEN_ROTA_DEV_IDENTITY_ENABLED`
-- `MERGEN_ROTA_DEV_SICIL`
+Replacing the provider required **no** change to the authorization service, the repository transaction model, or the SQL schema.
 
-It is disabled by default. Sicil is read only from server environment configuration; request bodies, query parameters, browser headers, and local storage are never trusted as current identity. There is no automatic SYSTEM_ADMIN fallback.
+`DevelopmentIdentityProvider` survives only as an explicitly enabled local-development option and requires both `MERGEN_ROTA_AUTH_MODE=development` and `MERGEN_ROTA_DEV_IDENTITY_ENABLED=true`. It is disabled by default.
 
-The next phase can replace this provider with Keycloak identity resolution using a Sicil claim or username-to-HR02 lookup without redesigning authorization, repository, or SQL schema.
+Request bodies, query parameters, browser headers, and local storage are never trusted as current identity. There is no automatic SYSTEM_ADMIN fallback and no silent fallback to development identity or Demo mode.
 
 ## Errors
 
@@ -140,10 +139,10 @@ Persistence errors are surfaced to the user verbatim. `PersistenceStatus` render
 3. Install Microsoft ODBC Driver 18 for SQL Server on the MERGEN Rota host.
 4. Make sure the Windows account that will run Node.js has the required SQL Server permissions.
 5. Create `.env.local` from `.env.example` and configure the server-only database variables.
-6. Enable and configure the temporary development identity only in the pre-Keycloak integration environment.
+6. Configure the Keycloak variables in `.env.local` and register the redirect URIs listed in `docs/KEYCLOAK-SSO.md`. Enable the development identity only in a local development environment.
 7. Run `npm ci`.
 8. Run `npm run build`.
-9. Start with `npm run start -- -H 0.0.0.0 -p 3000` under the approved Windows/domain account.
+9. Start with `npm run start -- -H 0.0.0.0 -p 8008` (or `npm run start:prod`) under the approved Windows/domain account. MERGEN Rota uses port 8008; 8009 belongs to MERGEN Bilge.
 10. Select **Gerçek Sistem** and verify authorization and persistence.
 
 To remove the build-phase schema, run `database/MR_Rollback_Durable_Persistence.sql`. **Rollback permanently deletes all MR_* application data.** It never modifies the three corporate source tables.

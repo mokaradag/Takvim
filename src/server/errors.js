@@ -5,6 +5,7 @@ export class ServerPersistenceError extends Error {
     this.code = code;
     this.status = status || ({
       UNAUTHORIZED: 401,
+      SESSION_REQUIRED: 401,
       FORBIDDEN: 403,
       CONFLICT: 409,
       MUTATION_FAILED: 400,

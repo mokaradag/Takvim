@@ -271,7 +271,7 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
                     </div>
                   </div>
                   <div className="col" style={{ alignItems: 'flex-end', gap: 4 }}>
-                    <AvatarStack names={t.sorumlu} max={2} size="sm" />
+                    <AvatarStack names={t.sorumlu} personIds={t.assigneeIds} max={2} size="sm" />
                     <span className="muted tabular" style={{ fontSize: 10.5 }}>{fmt(t.plannedStart || t.targetFinish)} → {fmt(t.plannedFinish || t.targetFinish)}</span>
                   </div>
                 </button>

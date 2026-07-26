@@ -106,11 +106,19 @@ Task Detail edits current-plan, target, actual, remaining-duration, Project and 
 
 ### `src/components`
 
-`components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen and logo. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
+`components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen, logo and the authenticated sidebar user panel. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
+
+`Avatar`/`AvatarStack` show corporate photographs with a reliable initials fallback. They must not import application state, so the shell supplies the person directory through `components/PeopleDirectoryContext.jsx`; the pure resolution rules live in `components/avatarIdentity.js` and the single URL builder in `lib/userPhoto.js`. Identity resolution prefers a supplied person, then a canonical id/Sicil, and only then a display name — an ambiguous name never guesses between two employees.
 
 ### Server layer (`src/server`)
 
-Server-only identity, authorization, SQL configuration and durable repositories. Two connection pools exist: `db/pool.js` for the MERGEN Rota database and `db/corporateWbsPool.js` for the separate corporate WBS (CN43N) database. Both resolve the native driver through `db/driver.js`, which also exposes the test-only injection seam used by end-to-end persistence tests.
+Server-only identity, authentication, authorization, SQL configuration and durable repositories.
+
+`identity/` owns the authentication boundary. `currentUserProvider.js` selects the provider from server configuration alone (`MERGEN_ROTA_AUTH_MODE`): `KeycloakIdentityProvider` by default, `DevelopmentIdentityProvider` only when local development explicitly asks for it. The Keycloak modules are deliberately small and single-purpose: `keycloakConfig.js` (env → config), `keycloakJwks.js` (JWKS fetch/cache/rotation), `keycloakToken.js` (pure JWT decode + RSA signature + standard claim validation via `node:crypto`), `keycloakClaims.js` (pure claim → identity mapping and log masking), `keycloakSessionCookie.js` (HMAC-signed HttpOnly session payload), `keycloakPkce.js` (PKCE + signed state transaction), `keycloakAuthentication.js` (orchestration), `resolveSicilFromUsername.js` (optional HR02 lookup) and `authRouteSupport.js` (shared route helpers). No third-party authentication framework is used, so the runtime stays offline-capable.
+
+`sicil.js` is the single rule for parsing a Sicil; both the Keycloak claim and the development identity use it. `src/domain/identity/sessionUser.js` is pure and shared by server and client: it merges the corporate directory record with verified claims and resolves the sidebar display labels.
+
+Two connection pools exist: `db/pool.js` for the MERGEN Rota database and `db/corporateWbsPool.js` for the separate corporate WBS (CN43N) database. Both resolve the native driver through `db/driver.js`, which also exposes the test-only injection seam used by end-to-end persistence tests.
 
 Corporate WBS synchronization is split into a pure projection module (`repository/corporateWbsProjection.js`, CN43N rows → hierarchy plan), a pure skip-decision module (`repository/corporateWbsSyncState.js`, content fingerprints), the process-level schedule (`repository/corporateWbsSyncSchedule.js`, freshness window plus single-flight), the SQL text (`repository/corporateWbsQueries.js`) and the orchestration (`repository/corporateWbsSync.js`). Hierarchy resolution and skip decisions are therefore testable without a database.
 
@@ -126,6 +134,7 @@ Shared layer tokens define sticky, chrome, popover, drawer, modal and tooltip or
 
 ## Adding new work
 
+- Authentication, token verification, session cookies and identity resolution: `src/server/identity`
 - Project/Task/WBS/Baseline business rules and Actual System identity rules: `src/domain`
 - Date, dependency, calendar, current-plan duration or CPM calculations: `src/scheduling`
 - Repository contracts, memory/API/database adapters and migration boundaries: `src/data`

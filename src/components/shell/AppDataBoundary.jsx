@@ -61,7 +61,12 @@ function DemoModeEscape() {
  * bastığında uygulama baştan açılmış gibi davranıyordu.
  */
 export function AppDataBoundary({ children }) {
-  const { dataStatus, hasLoadedOnce, reloadData } = useDataLifecycle();
+  const { dataStatus, hasLoadedOnce, loadError, reloadData } = useDataLifecycle();
+  // Kimlik doğrulanmadıysa yarım yüklenmiş Gerçek Sistem verisi gösterilmez;
+  // kullanıcıya açık bir oturum açma yolu sunulur. Demo moduna SESSİZCE
+  // düşülmez: Demo yalnızca kullanıcının bilinçli seçimidir.
+  const sessionRequired = loadError?.code === 'SESSION_REQUIRED';
+  const authenticationRejected = loadError?.code === 'UNAUTHORIZED';
 
   if (dataStatus === 'loading' && !hasLoadedOnce) {
     return (
@@ -97,12 +102,24 @@ export function AppDataBoundary({ children }) {
             <span>MERGEN</span><strong>Rota</strong>
           </div>
         </div>
-        <h1 className="app-boot-title">Veriler yüklenemedi</h1>
+        <h1 className="app-boot-title">
+          {sessionRequired ? 'Oturum açmanız gerekiyor' : authenticationRejected ? 'Kimlik doğrulanamadı' : 'Veriler yüklenemedi'}
+        </h1>
         <p className="app-boot-sub">
-          Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.
+          {sessionRequired
+            ? 'Gerçek Sistem verileri yalnızca kurumsal kimlikle görüntülenebilir. Kurumsal hesabınızla oturum açın.'
+            : authenticationRejected
+              ? (loadError?.message || 'Kurumsal kimliğiniz doğrulanamadı. Sistem yöneticinizle görüşün.')
+            : 'Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.'}
         </p>
         <div className="app-boot-actions">
-          <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>
+          {sessionRequired
+            ? (
+              <a className="btn primary" href="/api/mergen-rota/auth/login">
+                <Icons.LogIn size={13} /> Kurumsal oturum aç
+              </a>
+            )
+            : <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>}
           <DemoModeEscape />
         </div>
       </DataMessage>

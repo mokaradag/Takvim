@@ -1,6 +1,9 @@
+import { parseSicil } from './sicil.js';
+
+/**
+ * Geçici geliştirme kimliği, Keycloak Sicil claim'iyle birebir aynı ayrıştırma
+ * kuralını kullanır. Kural `sicil.js` içinde tek kaynaktan yönetilir.
+ */
 export function parseDevelopmentSicil(value) {
-  const raw = String(value ?? '').trim();
-  if (!/^[1-9]\d*$/.test(raw)) return null;
-  const sicil = Number(raw);
-  return Number.isSafeInteger(sicil) && sicil <= 2147483647 ? sicil : null;
+  return parseSicil(value);
 }
