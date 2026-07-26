@@ -295,7 +295,7 @@ BEGIN TRY
     -- MR_WBS birleştirmesi tümüyle atlanır; anlık görüntü isteği kurumsal
     -- kaynağı yeniden yazmak zorunda kalmaz.
     CREATE TABLE dbo.MR_CorporateWbsSyncState (
-        ProjectCode nvarchar(100) NOT NULL,
+        ProjectCode nvarchar(255) NOT NULL,
         ContentHash char(64) NOT NULL,
         NodeCount int NOT NULL,
         SyncedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_CorporateWbsSyncState_SyncedAt DEFAULT SYSUTCDATETIME(),

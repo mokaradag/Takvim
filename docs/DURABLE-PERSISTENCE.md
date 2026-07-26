@@ -99,7 +99,7 @@ Corporate project synchronization and corporate WBS synchronization together for
 - it is **throttled** by `MERGEN_ROTA_WBS_SYNC_TTL_MS` (default 300000; `0` refreshes on every request) and **deduplicated** — concurrent requests share one in-flight refresh;
 - it is **fingerprint-gated** per project through `MR_CorporateWbsSyncState`, so an unchanged corporate tree issues no merge statements.
 
-A failed refresh does not advance the freshness window and does not fail the request: the snapshot is served from whatever is already persisted.
+A failed refresh does not advance the freshness window and does not fail the request: the snapshot is served from whatever is already persisted, and the next request retries immediately. An unconfigured CN43N source is not a failure — there is nothing to synchronize, so the window advances normally and corporate project synchronization is not repeated on every request.
 
 ## Demo versus Actual mode
 

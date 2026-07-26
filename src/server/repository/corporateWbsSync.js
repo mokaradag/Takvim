@@ -67,7 +67,12 @@ async function mergeProjectNodes(executor, actorSicil, project, nodes) {
 
 async function recordSyncState(executor, actorSicil, projectCode, contentHash, nodeCount) {
   const request = executor.request();
-  request.input('projectCode', sql.NVarChar(100), projectCode.slice(0, 100));
+  // Proje kodu KIRPILMADAN yazılır. `MR_Projects.ProjectCode` 255 karaktere
+  // kadar izin verir; kısaltılmış bir anahtar `planCorporateWbsSyncBatch`
+  // tarafından tam kodla aranınca hiç bulunamaz (parmak izi hiçbir zaman
+  // birleştirmeyi bastıramaz) ve ilk 100 karakteri aynı olan iki kod aynı
+  // satırın üzerine yazardı.
+  request.input('projectCode', sql.NVarChar(255), projectCode);
   request.input('contentHash', sql.Char(64), contentHash);
   request.input('nodeCount', sql.Int, nodeCount);
   request.input('actorSicil', sql.Int, actorSicil);

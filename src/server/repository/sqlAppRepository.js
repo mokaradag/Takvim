@@ -861,9 +861,13 @@ async function refreshCorporateCatalog() {
     const auth = await loadAuthorizationContext(pool);
     await withSqlTransaction((transaction) => synchronizeCorporateProjects(transaction, auth.sicil));
     const wbs = await synchronizeCorporateWbs(pool, auth.sicil);
-    // Kurumsal WBS kaynağı yapılandırılmamışsa da katalog tazelenmiş sayılır;
-    // aksi hâlde proje eşitlemesi her istekte yeniden çalışırdı.
-    return { synchronized: true, refreshed: true, wbs };
+    // Kurumsal WBS kaynağı yapılandırılmamışsa katalog yine de tazelenmiş
+    // sayılır; aksi hâlde proje eşitlemesi her istekte yeniden çalışırdı.
+    // Kaynak yapılandırılmış ama erişilemiyorsa tazelik penceresi
+    // İLERLETİLMEZ: aksi hâlde geçici bir kesinti, kurumsal ağacın TTL boyunca
+    // (varsayılan beş dakika) hiç denenmemesine yol açardı.
+    const synchronized = Boolean(wbs.synchronized) || wbs.reason === 'NOT_CONFIGURED';
+    return { synchronized, refreshed: synchronized, wbs };
   });
 }
 

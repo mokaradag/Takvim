@@ -23,7 +23,7 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_Baselines` | Immutable baseline headers | PK `BaselineId`; Project lookup; one primary baseline per Project |
 | `MR_TaskBaselineSnapshots` | Immutable planned Task snapshots | PK `(BaselineId, TaskId)`; Task lookup; deliberately no FK to current Task |
 | `MR_AuditLog` | Append-only committed business audit | identity PK; Project/time, actor/time, entity/time and correlation indexes |
-| `MR_CorporateWbsSyncState` | CN43N synchronization fingerprints per corporate project | PK `ProjectCode`; `ContentHash` (SHA-256 hex), `NodeCount`, `SyncedAt` |
+| `MR_CorporateWbsSyncState` | CN43N synchronization fingerprints per corporate project | PK `ProjectCode` (`nvarchar(255)`, same width as `MR_Projects.ProjectCode`); `ContentHash` (SHA-256 hex), `NodeCount`, `SyncedAt` |
 
 ## Rowversion
 
@@ -41,7 +41,7 @@ The project root node is always MERGEN-generated: its `SourceKey` is `NULL` and 
 
 ## Corporate WBS synchronization state
 
-`MR_CorporateWbsSyncState` stores one row per corporate project code: the SHA-256 fingerprint of the planned CN43N node set and the node count that fingerprint represents. Snapshot loading skips the `MR_WBS` merge for a project when the recomputed fingerprint, the stored node count and the corporate node count actually present in `MR_WBS` all match. The table holds no business data — dropping it only costs one full resynchronization.
+`MR_CorporateWbsSyncState` stores one row per corporate project code: the SHA-256 fingerprint of the planned CN43N node set and the node count that fingerprint represents. The key holds the full project code — truncating it would make the lookup miss (the fingerprint could never suppress a merge) and would let two codes sharing a prefix overwrite one another's row. Snapshot loading skips the `MR_WBS` merge for a project when the recomputed fingerprint, the stored node count and the corporate node count actually present in `MR_WBS` all match. The table holds no business data — dropping it only costs one full resynchronization.
 
 ## Task priority values
 

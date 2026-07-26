@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import sql from 'mssql';
 
 import { createActualStack, corporateSeed } from './helpers/actualStack.mjs';
+import { resetCorporateWbsSyncScheduleForTests } from '../src/server/repository/corporateWbsSyncSchedule.js';
 
 const MERGE_STATEMENT = 'OPENJSON(@payload)';
 const SOURCE_STATEMENT = 'WBS element';
@@ -185,6 +186,92 @@ test('kurumsal katalog tazelemesi serileştirilebilir okuma işleminin dışınd
         'CN43N birleştirmesi serileştirilebilir işlem başlamadan önce bitmelidir'
       );
     }
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('kaynak erişilemediğinde tazelik penceresi ilerletilmez', async () => {
+  // Pencere açık olsa bile başarısız bir tazeleme onu ilerletmemelidir; aksi
+  // hâlde kurumsal kaynaktaki geçici bir kesinti, ağacın TTL boyunca hiç
+  // denenmemesine yol açar.
+  const stack = await createActualStack(corporateSeed({ corporateWbsRows: cn43nRows() }));
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    // Kurulum yüklemesi başarılıydı; pencere buradan itibaren ölçülür.
+    process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS = '600000';
+    resetCorporateWbsSyncScheduleForTests();
+
+    stack.db.corporateWbsRows = null; // kaynak düşer
+    resetStatements(stack);
+    await stack.reload();
+    assert.ok(countStatements(stack, SOURCE_STATEMENT) >= 1, 'başarısız tur kaynağı denemelidir');
+
+    // Kaynak geri gelir: pencere ilerletilmediği için bir sonraki istek dener.
+    const rows = cn43nRows();
+    rows.find((row) => row['WBS element'] === 'P4417041.02.03').Name = 'Aktivite 2.3 (revize)';
+    stack.db.corporateWbsRows = rows;
+
+    resetStatements(stack);
+    await stack.reload();
+    assert.ok(countStatements(stack, SOURCE_STATEMENT) >= 1, 'başarısızlık sonrası kaynak yeniden okunmalıdır');
+    assert.equal(countStatements(stack, MERGE_STATEMENT), 1, 'kaynak döndüğünde birleştirme yapılmalıdır');
+
+    const renamed = stack.projectWbs(stack.project('P4417041').id).find((node) => node.code === 'P4417041.02.03');
+    assert.equal(renamed.name, 'Aktivite 2.3 (revize)');
+
+    // Başarılı tur penceresi ilerletir: sonraki istek kaynağa hiç gitmez.
+    resetStatements(stack);
+    await stack.reload();
+    assert.equal(countStatements(stack, SOURCE_STATEMENT), 0);
+  } finally {
+    console.warn = originalWarn;
+    await stack.dispose();
+    delete process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS;
+  }
+});
+
+test('kurumsal kaynak yapılandırılmadığında pencere yine de ilerler', async () => {
+  // Kaynak hiç tanımlı değilse yapılacak iş yoktur; proje eşitlemesinin her
+  // istekte yeniden çalışmaması için tazeleme başarılı sayılır.
+  process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS = '600000';
+  const stack = await createActualStack(corporateSeed({ corporateWbsRows: cn43nRows() }), { corporateWbsSource: false });
+  try {
+    resetStatements(stack);
+    await stack.reload();
+    assert.equal(
+      countStatements(stack, 'FROM dbo.MR_V_CorporateProjects'),
+      0,
+      'pencere içindeki yükleme kurumsal proje eşitlemesini yeniden çalıştırmamalıdır'
+    );
+  } finally {
+    await stack.dispose();
+    delete process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS;
+  }
+});
+
+test('uzun proje kodları eşitleme durumu anahtarında kırpılmaz', async () => {
+  // MR_Projects.ProjectCode 255 karaktere kadar izin verir. Anahtar kırpılırsa
+  // parmak izi tam kodla hiç bulunamaz ve birleştirme her istekte tekrarlanır.
+  const longCode = `P${'4'.repeat(150)}`;
+  const seed = corporateSeed({ corporateWbsRows: cn43nRows(longCode) });
+  seed.corporateProjects = [{ ProjectCode: longCode, ProjectName: 'Uzun kodlu proje', ProjectTypeCode: 'GD', ProjectTypeName: 'Garanti dışı faaliyetler' }];
+  seed.projects = [{ ...seed.projects[0], ProjectCode: longCode, ProjectName: 'Uzun kodlu proje' }];
+  seed.wbs = [{ ...seed.wbs[0], Code: longCode.slice(0, 100), Name: 'Uzun kodlu proje' }];
+
+  const stack = await createActualStack(seed);
+  try {
+    const project = stack.project(longCode);
+    assert.ok(project, 'uzun kodlu proje yüklenmelidir');
+    assert.equal(stack.projectWbs(project.id).length, TOTAL_WITH_ROOT);
+
+    const stateKeys = stack.db.corporateWbsSyncState.map((entry) => entry.ProjectCode);
+    assert.deepEqual(stateKeys, [longCode.toUpperCase()], 'anahtar tam proje kodu olmalıdır');
+
+    resetStatements(stack);
+    await stack.reload();
+    assert.equal(countStatements(stack, MERGE_STATEMENT), 0, 'uzun kodlu projede de parmak izi birleştirmeyi bastırmalıdır');
   } finally {
     await stack.dispose();
   }
