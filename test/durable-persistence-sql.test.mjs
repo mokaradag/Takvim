@@ -78,7 +78,11 @@ test('PPTS access uses exact STRING_SPLIT tokenization and never LIKE', () => {
 });
 
 test('admin bootstrap and UTC/concurrency requirements are present', () => {
-  for (const sicil of ['10276', '18068', '23977']) assert.match(createSql, new RegExp(`\\b${sicil}\\b`));
+  // Gerçek Sicil değerleri kişisel veridir: betik parametreli tohumlama yapar
+  // ve depoya hiçbir gerçek sicil işlenmez.
+  assert.match(createSql, /DECLARE @SystemAdminSicils nvarchar\(400\) = N'';/);
+  assert.match(createSql, /FROM STRING_SPLIT\(@SystemAdminSicils, ','\)/);
+  assert.doesNotMatch(createSql, /VALUES \(\d{4,},\s*'SYSTEM_ADMIN'/);
   assert.match(createSql, /SYSUTCDATETIME\(\)/i);
   assert.ok((createSql.match(/rowversion/gi) || []).length >= 5);
   assert.match(createSql, /NEWSEQUENTIALID\(\)/i);

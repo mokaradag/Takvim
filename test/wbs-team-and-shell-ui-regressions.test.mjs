@@ -11,7 +11,11 @@ import { readFileSync } from 'node:fs';
 
 import { buildWbsTree, flattenWbsTree, selectWbsRollupIndex, selectWbsTaskRollup } from '../src/domain/selectors/index.js';
 import { DEFAULT_WBS_DEPTH, WBS_DEPTH_OPTIONS, expandedIdsForDepth } from '../src/features/wbs/wbsTreeViewPolicy.js';
-import { UNASSIGNED_DIRECTORATE, matchesDirectorateFilter } from '../src/features/team/teamDirectoryPolicy.js';
+import {
+  UNASSIGNED_DIRECTORATE,
+  UNASSIGNED_DIRECTORATE_LABEL,
+  matchesDirectorateFilter
+} from '../src/features/team/teamDirectoryPolicy.js';
 
 function read(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -139,13 +143,30 @@ test('direktörlüğü olmayan personel kendi süzgeç kümesinde görünür', (
   assert.equal(matchesDirectorateFilter(withoutDirectorate, 'Yazılım Direktörlüğü'), false);
 });
 
-test('Ekip dizini tanımsız direktörlük için özet kartı ve süzgeç seçeneği üretir', () => {
+test('Ekip dizini tanımsız direktörlük için özet kartı ve süzgeç seçeneği üretir', async () => {
   const policy = read('src/features/team/teamDirectoryPolicy.js');
   assert.match(policy, /export const UNASSIGNED_DIRECTORATE_LABEL = 'Direktörlük tanımsız';/);
 
+  // Tanımsız direktörlük kümesi artık paylaşılan süzgeç ilkesinden üretilir:
+  // hem üstteki dizin açılır listesi hem de tablo başlığı aynı seçeneği görür.
+  const { orgLevelOptions, matchesOrgFilter, createEmptyOrgFilter } =
+    await import('../src/features/team/teamFilterPolicy.js');
+  const people = [
+    { id: '900001', name: 'Ada Yılmaz', organization: { directorate: 'Yazılım Direktörlüğü' } },
+    { id: '900002', name: 'Bora Demir', organization: {} }
+  ];
+  const options = orgLevelOptions(people, 'directorate', createEmptyOrgFilter());
+  const unassigned = options.find((option) => option.value === UNASSIGNED_DIRECTORATE);
+  assert.ok(unassigned, 'tanımsız direktörlük seçeneği üretilmelidir');
+  assert.equal(unassigned.label, UNASSIGNED_DIRECTORATE_LABEL);
+
+  const selection = { ...createEmptyOrgFilter(), directorate: UNASSIGNED_DIRECTORATE };
+  assert.equal(matchesOrgFilter(people[1], selection), true);
+  assert.equal(matchesOrgFilter(people[0], selection), false);
+
   const source = read('src/features/team/TeamView.jsx');
-  assert.match(source, /summaries\.push\(summarize\(UNASSIGNED_DIRECTORATE, UNASSIGNED_DIRECTORATE_LABEL, unassigned\)\)/);
-  assert.match(source, /value: UNASSIGNED_DIRECTORATE, label: UNASSIGNED_DIRECTORATE_LABEL/);
+  assert.match(source, /directorateSummaries\.map/);
+  assert.match(source, /summary\.key === UNASSIGNED_DIRECTORATE/);
 });
 
 test('Ekip tablosunun başlığı ve dizin kartı kaydırmada görünür kalır', () => {

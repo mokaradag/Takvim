@@ -30,7 +30,7 @@ function personNumber(person) {
 function PersonChoice({ person, active, onToggle }) {
   return (
     <button type="button" className={`simple-person${active ? ' active' : ''}`} onClick={() => onToggle(person.id)}>
-      <Avatar name={person.name} size="sm" />
+      <Avatar name={person.name} person={person} size="sm" />
       <span><strong>{person.name}</strong><small>{personNumber(person)}</small></span>
       {active ? <Icons.Check size={13} /> : <Icons.Plus size={13} />}
     </button>

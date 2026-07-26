@@ -61,7 +61,11 @@ function DemoModeEscape() {
  * bastığında uygulama baştan açılmış gibi davranıyordu.
  */
 export function AppDataBoundary({ children }) {
-  const { dataStatus, hasLoadedOnce, reloadData } = useDataLifecycle();
+  const { dataStatus, hasLoadedOnce, loadError, reloadData } = useDataLifecycle();
+  // Kimlik doğrulanmadıysa yarım yüklenmiş Gerçek Sistem verisi gösterilmez;
+  // kullanıcıya açık bir oturum açma yolu sunulur. Demo moduna SESSİZCE
+  // düşülmez: Demo yalnızca kullanıcının bilinçli seçimidir.
+  const unauthorized = loadError?.code === 'UNAUTHORIZED';
 
   if (dataStatus === 'loading' && !hasLoadedOnce) {
     return (
@@ -97,12 +101,20 @@ export function AppDataBoundary({ children }) {
             <span>MERGEN</span><strong>Rota</strong>
           </div>
         </div>
-        <h1 className="app-boot-title">Veriler yüklenemedi</h1>
+        <h1 className="app-boot-title">{unauthorized ? 'Oturum açmanız gerekiyor' : 'Veriler yüklenemedi'}</h1>
         <p className="app-boot-sub">
-          Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.
+          {unauthorized
+            ? 'Gerçek Sistem verileri yalnızca kurumsal kimlikle görüntülenebilir. Kurumsal hesabınızla oturum açın.'
+            : 'Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.'}
         </p>
         <div className="app-boot-actions">
-          <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>
+          {unauthorized
+            ? (
+              <a className="btn primary" href="/api/mergen-rota/auth/login">
+                <Icons.LogIn size={13} /> Kurumsal oturum aç
+              </a>
+            )
+            : <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>}
           <DemoModeEscape />
         </div>
       </DataMessage>

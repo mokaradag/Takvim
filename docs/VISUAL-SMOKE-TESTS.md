@@ -105,6 +105,20 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - The `Kurumsal ekip dizini` card and the table header stay visible while the person list scrolls.
 - The default summary view includes a `Direktörlük tanımsız` card when such people exist; clicking it filters to exactly those people.
 - The directorate dropdown offers `Direktörlük tanımsız` alongside the named directorates.
+- Selecting a directorate in the top card immediately marks the `Direktörlük` column header as filtered, and vice versa. The same holds for `Müdürlük` and `Birim`.
+- Only one value can be active per organizational level; choosing a different directorate replaces the previous one and clears a now-invalid müdürlük/birim.
+- Every column header opens a sort/filter popover: Personel, Unvan, Direktörlük, Müdürlük, Birim, Toplam, Devam, Geciken, Yakın görevler.
+- The clear action reads **Filtreleri temizle** (never `Süzgeçleri temizle`) and resets the search box, the dropdowns and the header filters together.
+- Person rows show the corporate photograph, falling back to initials when no photo exists; the table stays readable at narrower desktop widths.
+
+## Authentication and sidebar identity
+
+- With no session in Gerçek Sistem the boot screen shows **Kurumsal oturum aç** instead of partially loaded data; Demo mode remains a deliberate separate choice.
+- After signing in, the sidebar shows the authenticated user's photograph, full name and Keycloak department — not a hard-coded example user or role.
+- A long department name wraps onto multiple lines in a small font and never overflows the sidebar.
+- The sidebar footer has no `Kullanım rehberi` shortcut, while the Yardım navigation item still opens the help page.
+- The theme button still works and, in Gerçek Sistem, a compact logout button is present; logging out returns to an unauthenticated state.
+- Avatars render photographs across Görevler, Takvim, Kanban, Ekip, task drawers, dashboard, Gantt, reports, project workspace and simple mode, with initials as the fallback.
 
 ## Basit Mod
 

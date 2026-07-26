@@ -42,7 +42,7 @@ function versionedTask(overrides = {}) {
     budget: null,
     spent: null,
     sortOrder: null,
-    assigneeIds: ['18068'],
+    assigneeIds: ['900002'],
     ...overrides
   };
 }

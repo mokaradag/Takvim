@@ -367,12 +367,26 @@ BEGIN TRY
     INSERT dbo.MR_CalendarWorkingDays(CalendarId, Weekday)
     VALUES (@DefaultCalendarId, 1), (@DefaultCalendarId, 2), (@DefaultCalendarId, 3), (@DefaultCalendarId, 4), (@DefaultCalendarId, 5);
 
+    /* Sistem yöneticileri.
+
+       Gerçek Sicil değerleri kişisel veridir ve depoya İŞLENMEZ. Kurulumu yapan
+       yönetici aşağıdaki listeyi çalıştırmadan önce doldurur; liste boş
+       bırakılırsa hiçbir SYSTEM_ADMIN oluşturulmaz ve yetki yalnızca HR09
+       kurumsal rollerinden ve MR_ProjectAccess kayıtlarından gelir.
+
+       Örnek: DECLARE @SystemAdminSicils nvarchar(400) = N'900001,900002'; */
+    DECLARE @SystemAdminSicils nvarchar(400) = N'';
+
     INSERT dbo.MR_UserRoles(Sicil, RoleCode, IsActive)
-    VALUES (10276, 'SYSTEM_ADMIN', 1), (18068, 'SYSTEM_ADMIN', 1), (23977, 'SYSTEM_ADMIN', 1);
+    SELECT DISTINCT TRY_CONVERT(int, LTRIM(RTRIM(value))), 'SYSTEM_ADMIN', 1
+    FROM STRING_SPLIT(@SystemAdminSicils, ',')
+    WHERE TRY_CONVERT(int, LTRIM(RTRIM(value))) IS NOT NULL
+      AND TRY_CONVERT(int, LTRIM(RTRIM(value))) > 0;
 
     INSERT dbo.MR_SchemaMigrations(MigrationId, Description)
     VALUES (N'0001_durable_persistence', N'Initial MERGEN Rota durable SQL Server persistence schema'),
-           (N'0002_corporate_wbs_sync_state', N'Corporate WBS synchronization fingerprints and canonical task priority default');
+           (N'0002_corporate_wbs_sync_state', N'Corporate WBS synchronization fingerprints and canonical task priority default'),
+           (N'0003_keycloak_identity', N'Keycloak authentication: identity provider only, no schema change; SYSTEM_ADMIN seed parameterized');
 
     COMMIT TRANSACTION;
 END TRY

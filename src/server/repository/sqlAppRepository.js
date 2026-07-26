@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { normalizePriorityId } from '../../domain/constants/index.js';
 import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
 import { CORPORATE_WBS_READ_ONLY_MESSAGE } from '../../domain/projectTypes.js';
+import { buildSessionCurrentUser } from '../../domain/identity/sessionUser.js';
+import { getTrustedSessionIdentity } from '../identity/currentUserProvider.js';
+import { resolveAuthMode } from '../identity/keycloakConfig.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
@@ -883,9 +886,15 @@ export function createSqlAppRepository() {
 
     async loadSessionContext() {
       const auth = await loadAuthorizationContext();
+      // Kimlik doğrulamasından gelen GÖRÜNTÜLEME alanları (ad, e-posta,
+      // Keycloak departmanı) kurumsal rehber kaydının üzerine eklenir. Yetki
+      // kararları buradan DEĞİL, yalnızca Sicil üzerinden türetilmeye devam eder.
+      const identity = await getTrustedSessionIdentity().catch(() => null);
       return {
         dataMode: 'actual',
-        currentUser: auth.currentUser,
+        authMode: resolveAuthMode(),
+        authenticated: true,
+        currentUser: buildSessionCurrentUser(auth.currentUser, identity),
         isSystemAdmin: auth.isSystemAdmin,
         isExecutive: auth.isExecutive,
         canCreateProjects: auth.canCreateProjects,

@@ -120,7 +120,7 @@ export function KanbanView() {
                         <Icons.Clock size={11} />
                         {days == null ? 'Hedef yok' : overdue ? `${Math.abs(days)} gün geçti` : days === 0 ? 'Bugün' : days <= 7 ? `${days} gün` : fmt(t.targetFinish)}
                       </span>
-                      <AvatarStack names={t.sorumlu} max={3} size="sm" />
+                      <AvatarStack names={t.sorumlu} personIds={t.assigneeIds} max={3} size="sm" />
                     </div>
                   </div>
                   </Tooltip>

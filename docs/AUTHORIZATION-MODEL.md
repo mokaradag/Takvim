@@ -14,7 +14,9 @@ FULL always wins when the same Project is also visible through a partial source.
 
 ## SYSTEM_ADMIN
 
-System administrators are stored in `MR_UserRoles`, not frontend code. The creation script seeds active SYSTEM_ADMIN roles for Sicil 10276, 18068, and 23977. Inactive role rows grant nothing.
+System administrators are stored in `MR_UserRoles`, not frontend code. The creation script seeds them from the `@SystemAdminSicils` parameter, which the installing administrator fills in before running it; real Sicil values are personal data and are never committed. An empty list seeds no administrator. Inactive role rows grant nothing.
+
+SYSTEM_ADMIN is never derived from Keycloak `resource_access` roles. A token may carry any realm or client role; MERGEN Rota still reads administration rights only from `MR_UserRoles`.
 
 SYSTEM_ADMIN may view and mutate all Projects and may create manual Projects.
 
@@ -110,25 +112,33 @@ The browser cannot invent these values.
 
 ## Current identity provider
 
-Keycloak is intentionally not implemented in this phase. `DevelopmentIdentityProvider` reads a temporary Sicil only from server environment configuration when `MERGEN_ROTA_DEV_IDENTITY_ENABLED=true`. It is disabled by default and is not acceptable as final multi-user production authentication.
+Authentication is provided by **Keycloak** (`MERGEN_ROTA_AUTH_MODE=keycloak`, the default). `KeycloakIdentityProvider` reads the trusted Sicil only from the server-signed, HttpOnly application session cookie that the server writes after verifying a Keycloak token. Full flow, environment variables, and operational steps: `docs/KEYCLOAK-SSO.md`.
 
-No request body, query parameter, browser-controlled header, local storage value, display name, or client capability is trusted as current identity. Missing or unresolved identity returns UNAUTHORIZED and never falls back to admin or Demo data.
+`DevelopmentIdentityProvider` remains only as an explicitly enabled local-development option. It requires **both** `MERGEN_ROTA_AUTH_MODE=development` and `MERGEN_ROTA_DEV_IDENTITY_ENABLED=true`, and is disabled by default.
 
-## Keycloak extension point
+No request body, query parameter, browser-controlled header, local storage value, display name, or client capability is trusted as current identity. Missing or unresolved identity returns UNAUTHORIZED and never falls back to admin, development identity, or Demo data.
 
-The next phase replaces only `CurrentUserProvider`:
+## Identity mapping
+
+`CurrentUserProvider` is the only layer authentication replaced:
 
 ```text
 Keycloak authenticated user
-→ Sicil claim
+→ verified `sicil` claim
 ```
 
-or:
+or, when the claim is absent and the fallback is enabled:
 
 ```text
-Keycloak username
-→ HR02.kullanici_adi
+Keycloak `preferred_username`
+→ HR02.kullanici_adi   (parameterized server-side query, must match exactly one row)
 → HR02.sicil
 ```
 
-All business authorization continues to operate on Sicil. Authorization precedence, SQL schema, repository transactions, and corporate read models remain largely unchanged.
+Ambiguous or unresolved lookups return UNAUTHORIZED. All business authorization continues to operate on Sicil. Authorization precedence, SQL schema, repository transactions, and corporate read models are unchanged.
+
+## Session display fields
+
+The session response carries safe display fields alongside the authorization data: `sicil`, `employeeNo`, `name`, `username`, `givenName`, `familyName`, `email`, `department` (Keycloak claim), `sector`, `managementUnit`, `subject`, plus the corporate directory `role`, `team`, and `organization`. Raw access tokens are never exposed.
+
+`currentUser.department` is the Keycloak `department` claim and is what the sidebar displays. `currentUser.organization.department` is the corporate directory value derived from HR02 `mudurluk`. These are different sources and must not be conflated. None of these fields participates in an authorization decision.

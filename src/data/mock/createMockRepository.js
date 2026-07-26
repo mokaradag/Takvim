@@ -84,7 +84,18 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
     async loadSessionContext() {
       return {
         dataMode: 'demo',
-        currentUser: { id: 'demo-user', employeeNo: 'demo-user', name: 'Demo Kullanıcı', role: 'Demo', team: 'Demo', color: '#64748b' },
+        authMode: 'demo',
+        authenticated: false,
+        // Demo kimliği kurumsal Sicil taşımaz: fotoğraf üretilmez, baş harf gösterilir.
+        currentUser: {
+          id: 'demo-user',
+          employeeNo: 'demo-user',
+          name: 'Demo Kullanıcı',
+          role: 'Demo',
+          team: 'Demo',
+          department: 'Demo Ortamı',
+          color: '#64748b'
+        },
         isSystemAdmin: true,
         isExecutive: true,
         canCreateProjects: true,

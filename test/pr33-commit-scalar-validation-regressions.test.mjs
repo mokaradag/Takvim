@@ -58,14 +58,14 @@ function taskIssue(overrides) {
 }
 
 test('nested validation rejects malformed assignee Sicils before SQL work', () => {
-  for (const value of [null, {}, 0, '18068abc', 2147483648]) {
+  for (const value of [null, {}, 0, '900002abc', 2147483648]) {
     const issue = apiIssue({ taskUpserts: [validTask({ assigneeIds: [value] })] });
     assert.equal(issue?.code, 'TASK_ASSIGNEE_INVALID');
     assert.equal(issue?.path, 'taskUpserts[0].assigneeIds[0]');
   }
 
   assert.equal(apiIssue({
-    taskUpserts: [validTask({ assigneeIds: [' 18068 ', 23977] })]
+    taskUpserts: [validTask({ assigneeIds: [' 900002 ', 900003] })]
   }), null);
 });
 
@@ -104,7 +104,7 @@ test('strict project dates and valid task scalar values remain deterministic', (
       id: PROJECT_ID,
       source: 'manual',
       name: 'Project',
-      leadId: '18068',
+      leadId: '900002',
       calendarId: CALENDAR_ID,
       dataDate: '2026-02-30',
       color: 'blue'

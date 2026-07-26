@@ -26,11 +26,14 @@ function memoryStorage() {
   };
 }
 
-function applyEnvironment({ corporateWbsSource = true } = {}) {
+function applyEnvironment({ corporateWbsSource = true, authMode = 'development' } = {}) {
   process.env.MERGEN_ROTA_DB_SERVER = 'sqlserver.test.internal';
   process.env.MERGEN_ROTA_DB_DATABASE = 'MERGEN_Rota';
+  // Varsayılan yığın geçici geliştirme kimliğini kullanır; Keycloak uçtan uca
+  // testleri bu kipi açıkça 'keycloak' olarak seçer.
+  process.env.MERGEN_ROTA_AUTH_MODE = authMode;
   process.env.MERGEN_ROTA_DEV_IDENTITY_ENABLED = 'true';
-  process.env.MERGEN_ROTA_DEV_SICIL = '10276';
+  process.env.MERGEN_ROTA_DEV_SICIL = '900001';
   // Kurumsal katalog tazeleme penceresi süreç düzeyindedir. Testlerin
   // birbirinin penceresini devralmaması için varsayılan olarak kapatılır;
   // pencereyi sınayan testler bu değişkeni kendisi ayarlar.
@@ -66,6 +69,11 @@ export async function createActualStack(seed = {}, options = {}) {
   resetSqlPoolForTests();
   resetCorporateWbsPoolForTests();
   resetCorporateWbsSyncScheduleForTests();
+
+  // Kimlik sağlayıcısı yığın kurulmadan ÖNCE yerleştirilir: ilk anlık görüntü
+  // isteği zaten doğrulanmış kimlikle çalışmalıdır.
+  const { setCurrentUserProvider } = await import('../../src/server/identity/currentUserProvider.js');
+  setCurrentUserProvider(options.currentUserProvider || null);
 
   const commitRoute = await import('../../src/app/api/mergen-rota/commit/route.js');
   const snapshotRoute = await import('../../src/app/api/mergen-rota/snapshot/route.js');
@@ -153,15 +161,15 @@ export function corporateSeed(overrides = {}) {
   return {
     calendars: [{ CalendarId: DEFAULT_CALENDAR_ID, Name: 'Kurumsal Çalışma Takvimi', IsDefault: 1, IsActive: 1 }],
     people: [
-      { Sicil: 10276, DisplayName: 'Zeynep Aydın', Username: 'zaydin', JobTitle: 'Product Manager', Team: 'PYO', Sector: null, Directorate: null, Department: null, Unit: null },
-      { Sicil: 17205, DisplayName: 'Abdurrahman Alptuğ Açıkgöz', Username: 'aacikgoz', JobTitle: 'Proje Yöneticisi', Team: 'PYO', Sector: null, Directorate: null, Department: null, Unit: null }
+      { Sicil: 900001, DisplayName: 'Test Kullanıcı', Username: 'tkullanici', JobTitle: 'Product Manager', Team: 'PYO', Sector: null, Directorate: null, Department: null, Unit: null },
+      { Sicil: 900010, DisplayName: 'Sentetik Proje Yöneticisi', Username: 'sproje', JobTitle: 'Proje Yöneticisi', Team: 'PYO', Sector: null, Directorate: null, Department: null, Unit: null }
     ],
-    systemAdminSicils: [10276],
+    systemAdminSicils: [900001],
     corporateProjects: [
       { ProjectCode: 'P4417041', ProjectName: 'İHA Hava Savunma Sistemi ELDD Projesi', ProjectTypeCode: 'GD', ProjectTypeName: 'Garanti dışı faaliyetler' }
     ],
     corporateProjectAccess: [
-      { ProjectCode: 'P4417041', Sicil: 17205, RoleCode: 'PROJECT_MANAGER' }
+      { ProjectCode: 'P4417041', Sicil: 900010, RoleCode: 'PROJECT_MANAGER' }
     ],
     projects: [{
       ProjectId: CORPORATE_PROJECT_ID,
@@ -170,7 +178,7 @@ export function corporateSeed(overrides = {}) {
       ProjectName: 'İHA Hava Savunma Sistemi ELDD Projesi',
       ProjectTypeCode: 'GD',
       ProjectTypeName: 'Garanti dışı faaliyetler',
-      LeadSicil: 17205,
+      LeadSicil: 900010,
       DataDate: null,
       ColorToken: 'blue',
       CalendarId: DEFAULT_CALENDAR_ID

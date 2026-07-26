@@ -233,7 +233,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   }, [anchor]);
 
   const apply = () => {
-    if (type === 'text') onChange(q);
+    if (type === 'text' || type === 'single') onChange(q);
     else if (type === 'multi') onChange([...sel]);
     else if (type === 'date') {
       if (dateMode === 'preset' && datePreset) onChange({ mode: 'preset', preset: datePreset });
@@ -255,7 +255,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     onClose();
   };
   const clear = () => {
-    if (type === 'text') { setQ(''); onChange(''); }
+    if (type === 'text' || type === 'single') { setQ(''); onChange(''); }
     else if (type === 'multi') { setSel(new Set()); onChange([]); }
     else if (type === 'date') {
       setDatePreset(''); setDateFrom(''); setDateTo('');
@@ -320,6 +320,31 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
                   />
                   {o.icon && <span style={{ display: 'inline-flex' }}>{o.icon}</span>}
                   <span>{o.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        {type === 'single' && (
+          /* Tek seçimli (radyo) süzgeç: kurumsal kırılım düzeyleri aynı anda
+             yalnızca BİR değer taşıyabilir. Seçim anında uygulanır; böylece
+             tablo başlığı ile üstteki dizin açılır listeleri eşzamanlı kalır. */
+          <div className="col" role="radiogroup" aria-label={label} style={{ gap: 2, maxHeight: 240, overflowY: 'auto', minWidth: 220 }}>
+            {options.map((o) => {
+              const checked = String(o.value) === String(q ?? '');
+              return (
+                <label key={o.value || '__all__'} className="col-filter-opt">
+                  <input
+                    type="radio"
+                    name={`col-filter-single-${label}`}
+                    checked={checked}
+                    onChange={() => { setQ(o.value); onChange(o.value); onClose(); }}
+                  />
+                  {o.icon && <span style={{ display: 'inline-flex' }}>{o.icon}</span>}
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block' }}>{o.label}</span>
+                    {o.description && <small className="muted" style={{ display: 'block' }}>{o.description}</small>}
+                  </span>
                 </label>
               );
             })}
@@ -502,7 +527,9 @@ export function numericMatchesFilter(val, spec) {
 export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter, filterType = 'text', filterOptions, style, numericMin, numericMax, numericUnit }) {
   const [open, setOpen] = useSx(false);
   const anchorRef = useRx(null);
-  const active = filterType === 'text' ? !!filter : Array.isArray(filter) ? filter.length > 0 : !!filter;
+  const active = (filterType === 'text' || filterType === 'single')
+    ? !!filter
+    : Array.isArray(filter) ? filter.length > 0 : !!filter;
   return (
     <th className={`filterable-th${open ? ' is-filter-open' : ''}`} style={style}>
       <button

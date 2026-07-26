@@ -112,8 +112,24 @@ Then create the complete current schema with:
 
 `database/MR_Create_Durable_Persistence.sql`
 
-The creation script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, creates `MR_V_CorporateProjectAccess` directly with the `PPTS` role code, seeds the default calendar, seeds SYSTEM_ADMIN roles for 10276, 18068, and 23977, and records `0001_durable_persistence`.
+The creation script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, creates `MR_V_CorporateProjectAccess` directly with the `PPTS` role code, seeds the default calendar, seeds SYSTEM_ADMIN roles from the `@SystemAdminSicils` parameter (empty by default; real Sicil values are personal data and are not committed), and records `0001_durable_persistence`.
 
 During the first corporate project synchronization, the repository fills `MR_Projects.LeadSicil` from the `PROJECT_MANAGER` role. No separate `0002` migration script is required while the application is being tested through clean database recreation.
 
 The rollback is intentionally destructive to MERGEN-owned data, drops views before tables in dependency-safe reverse order, is rerunnable, and never drops or alters HR02, A01, or HR09.
+
+## Authentication and the schema
+
+Keycloak authentication required **no schema change**. It replaces the identity
+provider only: the verified `sicil` claim (or the optional
+`preferred_username → MR_V_PeopleDirectory.Username → Sicil` lookup) feeds the
+same `loadAuthorizationContext()` query that already existed.
+
+`MR_V_PeopleDirectory` is read for the username fallback with a parameterized
+query that must return exactly one Sicil; ambiguous results grant nothing. The
+`0003_keycloak_identity` migration row records this phase and the parameterized
+SYSTEM_ADMIN seed.
+
+Generated user photograph URLs are presentation data and are **not persisted**
+in any table. They are derived at render time from the configured base URL and
+the employee number.

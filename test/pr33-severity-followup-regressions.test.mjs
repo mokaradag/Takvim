@@ -9,7 +9,7 @@ function read(path) {
 }
 
 const calendar = { id: 'calendar-1', name: 'Default' };
-const lead = { id: '18068', name: 'Project Lead' };
+const lead = { id: '900002', name: 'Project Lead' };
 const validProjectInput = {
   name: 'Manual Project',
   code: 'MANUAL-001',

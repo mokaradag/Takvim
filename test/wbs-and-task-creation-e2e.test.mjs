@@ -43,7 +43,7 @@ test('kurumsal projenin rengi Gerçek Sistem kimliğiyle güncellenebilir', asyn
     assert.equal(result.value.projectUpserts[0].color, 'rose');
     assert.equal(stack.db.projects[0].ColorToken, 'rose');
     // Kurumsal proje sorumlusu kaynak sistemin sorumluluğundadır ve korunur.
-    assert.equal(stack.db.projects[0].LeadSicil, 17205);
+    assert.equal(stack.db.projects[0].LeadSicil, 900010);
   } finally {
     await stack.dispose();
   }
@@ -122,7 +122,7 @@ test('serbest proje oluşturulur ve kök düğümün altına alt düğüm eklene
         name: 'Deneme gelişmiş proje 1',
         source: 'manual',
         color: 'blue',
-        leadId: '10276',
+        leadId: '900001',
         calendarId: DEFAULT_CALENDAR_ID,
         dataDate: '2026-07-25',
         tags: []
@@ -179,7 +179,7 @@ test('serbest projede görev, oluşturulan alt düğüme atanabilir', async () =
         name: 'Basit mod projesi',
         source: 'manual',
         color: 'emerald',
-        leadId: '10276',
+        leadId: '900001',
         calendarId: DEFAULT_CALENDAR_ID,
         dataDate: '2026-07-25',
         tags: ['Teklif']
@@ -198,8 +198,8 @@ test('serbest projede görev, oluşturulan alt düğüme atanabilir', async () =
         wbsId: root.id,
         task: 'Teklif hazırla',
         keyword: 'Teklif',
-        assigneeIds: ['10276'],
-        sorumlu: ['Zeynep Aydın']
+        assigneeIds: ['900001'],
+        sorumlu: ['Test Kullanıcı']
       }
     }));
     assert.equal(result.ok, true, result.error?.message);
