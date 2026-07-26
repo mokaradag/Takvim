@@ -71,6 +71,15 @@ export async function authenticateAccessToken(token, {
   const identity = extractKeycloakIdentity(claims, { clientId: config.clientId });
   if (identity.sicil != null) return identity;
 
+  // Kullanıcı adı yedeği yalnızca claim gerçekten yokken kullanılabilir.
+  // İmzalı olsa bile mevcut fakat bozuk bir Sicil değeri kimlik kaynağını
+  // sessizce değiştirmemeli; aksi hâlde `0` gibi değerler dizin eşleşmesiyle
+  // geçerli bir oturuma dönüşebilir.
+  if (Object.hasOwn(claims, 'sicil')) {
+    logger?.warn?.('MERGEN ROTA AUTH: Sicil claim biçimi geçersiz', maskIdentityForLog(identity));
+    throw unauthorized('Kurumsal Sicil bilgisi geçersiz. Sistem yöneticinizle görüşün.');
+  }
+
   if (!config.usernameSicilFallbackEnabled || !identity.username) {
     logger?.warn?.('MERGEN ROTA AUTH: Sicil çözülemedi', maskIdentityForLog(identity));
     throw unauthorized('Kurumsal Sicil bilgisi çözülemedi. Sistem yöneticinizle görüşün.');
@@ -98,14 +107,16 @@ export async function authenticateAccessToken(token, {
 export async function exchangeAuthorizationCode({
   code,
   codeVerifier,
+  redirectUri = null,
   config = readKeycloakConfig(),
-  fetchImpl = (...args) => globalThis.fetch(...args)
+  fetchImpl = (...args) => globalThis.fetch(...args),
+  timeoutMs = 5000
 }) {
   assertKeycloakConfigured(config);
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
-    redirect_uri: config.redirectUri,
+    redirect_uri: redirectUri || config.redirectUri,
     client_id: config.clientId,
     code_verifier: codeVerifier
   });
@@ -117,7 +128,8 @@ export async function exchangeAuthorizationCode({
       method: 'POST',
       cache: 'no-store',
       headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-      body: body.toString()
+      body: body.toString(),
+      signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(timeoutMs) : undefined
     });
   } catch (cause) {
     throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Kimlik sağlayıcısına ulaşılamadı.', { cause });

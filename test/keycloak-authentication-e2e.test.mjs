@@ -248,6 +248,22 @@ test('Sicil claim yoksa kurumsal kullanıcı adı tekil eşleşmeyle çözülür
   });
 });
 
+for (const malformedSicil of [0, '900001abc']) {
+  test(`bozuk Sicil claim kullanıcı adı yedeğine düşmez: ${malformedSicil}`, async () => {
+    await withKeycloak(async (modules) => {
+      let lookupCalled = false;
+      const token = signJwt(accessTokenClaims({ sicil: malformedSicil }), { key: signingKey });
+      await assert.rejects(
+        modules.authentication.authenticateAccessToken(token, {
+          resolveSicil: async () => { lookupCalled = true; return 900042; }
+        }),
+        (error) => error.code === 'UNAUTHORIZED'
+      );
+      assert.equal(lookupCalled, false);
+    }, { env: { MERGEN_ROTA_KEYCLOAK_USERNAME_SICIL_FALLBACK: 'true' } });
+  });
+}
+
 test('kullanıcı adı kurumsal rehberde bulunamazsa UNAUTHORIZED döner', async () => {
   await withUsernameFallback(async (pending) => {
     await assert.rejects(pending, (error) => error.code === 'UNAUTHORIZED');
@@ -332,7 +348,7 @@ test('imzası kurcalanmış oturum çerezi kimlik üretmez', async () => {
 
     for (const tampered of [`${forgedPayload}.${cookie.value.split('.')[1]}`, `${payload}.AAAA`, 'bozuk']) {
       installProviderWithCookie(modules, tampered);
-      await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'UNAUTHORIZED');
+      await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'SESSION_REQUIRED');
     }
   });
 });
@@ -345,14 +361,14 @@ test('süresi dolmuş oturum çerezi reddedilir', async () => {
       TEST_KEYCLOAK.sessionSecret
     );
     installProviderWithCookie(modules, expired);
-    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'UNAUTHORIZED');
+    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'SESSION_REQUIRED');
   });
 });
 
 test('oturum çerezi yokken kimlik doğrulanmamıştır', async () => {
   await withKeycloak(async (modules) => {
     installProviderWithCookie(modules, null);
-    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'UNAUTHORIZED');
+    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'SESSION_REQUIRED');
   });
 });
 
@@ -374,7 +390,7 @@ test('kısa oturum sırrıyla imzalanan çerez kimlik üretmez', async () => {
 test('Keycloak kipinde geçici geliştirme kimliğine sessizce düşülmez', async () => {
   await withKeycloak(async (modules) => {
     installProviderWithCookie(modules, null);
-    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'UNAUTHORIZED');
+    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'SESSION_REQUIRED');
 
     // Geliştirme sağlayıcısı doğrudan çağrılsa bile Keycloak kipinde reddeder.
     const development = new modules.currentUser.DevelopmentIdentityProvider();
@@ -430,6 +446,47 @@ test('oturum açma yalnızca uygulama içi adrese döner (açık yönlendirme en
   });
 });
 
+test('türetilen callback adresi işlem boyunca token takasına taşınır', async () => {
+  await withKeycloak(async (modules) => {
+    const { verifySignedValue } = await import('../src/server/identity/keycloakSessionCookie.js');
+    const request = new Request('https://dinamik-rota.test.internal/api/mergen-rota/auth/login');
+    const response = await modules.loginRoute.GET(request);
+    const transaction = readSetCookie(response, 'mergen_rota_auth_tx');
+    const payload = verifySignedValue(transaction.value, TEST_KEYCLOAK.sessionSecret);
+    const expected = 'https://dinamik-rota.test.internal/api/mergen-rota/auth/callback';
+    assert.equal(new URL(response.headers.get('location')).searchParams.get('redirect_uri'), expected);
+    assert.equal(payload.redirectUri, expected);
+
+    let submitted;
+    await modules.authentication.exchangeAuthorizationCode({
+      code: 'kod',
+      codeVerifier: 'dogrulayici',
+      redirectUri: payload.redirectUri,
+      fetchImpl: async (_url, init) => {
+        submitted = new URLSearchParams(init.body);
+        return new Response(JSON.stringify({ access_token: 'jeton' }), { status: 200 });
+      }
+    });
+    assert.equal(submitted.get('redirect_uri'), expected);
+  }, { env: { MERGEN_ROTA_KEYCLOAK_REDIRECT_URI: null } });
+});
+
+test('yetkilendirme kodu takası zaman aşımı sinyaliyle sınırlandırılır', async () => {
+  await withKeycloak(async (modules) => {
+    let signal;
+    await modules.authentication.exchangeAuthorizationCode({
+      code: 'kod',
+      codeVerifier: 'dogrulayici',
+      timeoutMs: 25,
+      fetchImpl: async (_url, init) => {
+        signal = init.signal;
+        return new Response(JSON.stringify({ access_token: 'jeton' }), { status: 200 });
+      }
+    });
+    assert.ok(signal instanceof AbortSignal);
+  });
+});
+
 test('geri dönüş ucu state doğrulanmadan oturum açmaz', async () => {
   await withKeycloak(async (modules) => {
     const request = new Request('https://rota.test.internal:8008/api/mergen-rota/auth/callback?code=abc&state=sahte');
@@ -458,7 +515,7 @@ test('oturum kapatma çerezi temizler ve Keycloak end-session adresini verir', a
 
     // Temizlenen çerezle kimlik çözülemez.
     installProviderWithCookie(modules, cookie.value);
-    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'UNAUTHORIZED');
+    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'SESSION_REQUIRED');
   });
 });
 

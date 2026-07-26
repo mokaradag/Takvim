@@ -45,7 +45,7 @@ export class KeycloakIdentityProvider {
     }
     const payload = readSessionPayload(cookieValue, config.sessionSecret, { now: this.now() });
     if (!payload) {
-      throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum bulunamadı veya süresi doldu. Lütfen yeniden oturum açın.');
+      throw new ServerPersistenceError('SESSION_REQUIRED', 'Oturum bulunamadı veya süresi doldu. Lütfen yeniden oturum açın.');
     }
     return payload;
   }
