@@ -4,7 +4,7 @@ import { Icons } from '../icons';
 import { Avatar } from '../ui';
 import { DATA_MODES } from '../../data/dataMode';
 import { resolveUserDepartmentLabel, resolveUserDisplayName } from '../../domain/identity/sessionUser.js';
-import { useCurrentUser } from '../../state/hooks';
+import { useCurrentUser, useSessionContext } from '../../state/hooks';
 import { useDataMode } from './DataModeContext';
 
 /**
@@ -23,13 +23,14 @@ import { useDataMode } from './DataModeContext';
  */
 export function SidebarUserPanel({ theme, onToggleTheme }) {
   const currentUser = useCurrentUser();
+  const session = useSessionContext();
   const { dataMode } = useDataMode();
   const [signingOut, setSigningOut] = useState(false);
 
   const name = resolveUserDisplayName(currentUser);
   const department = resolveUserDepartmentLabel(currentUser);
   const employeeNo = currentUser?.employeeNo || currentUser?.sicil || null;
-  const canSignOut = dataMode === DATA_MODES.ACTUAL;
+  const canSignOut = dataMode === DATA_MODES.ACTUAL && session?.authMode === 'keycloak';
 
   const signOut = async () => {
     setSigningOut(true);

@@ -136,7 +136,7 @@ export function validateKeycloakClaims(claims, {
     if (!audienceAccepted) fail('AUDIENCE_MISMATCH', 'Token bu uygulama için düzenlenmemiş.');
   }
 
-  if (expectedAuthorizedParty && typeof claims.azp === 'string' && claims.azp && claims.azp !== expectedAuthorizedParty) {
+  if (expectedAuthorizedParty && claims.azp !== expectedAuthorizedParty) {
     fail('AUTHORIZED_PARTY_MISMATCH', 'Token başka bir istemci için düzenlenmiş.');
   }
   return claims;

@@ -144,15 +144,15 @@ async function dropIdentity() {
   setCurrentUserProvider(await keycloakProviderFor(null));
 }
 
-test('kimliği doğrulanmamış istek korunan veriye erişemez (UNAUTHORIZED)', async () => {
+test('oturumsuz istek korunan veriye erişemez (SESSION_REQUIRED)', async () => {
   const stack = await createKeycloakStack(corporateSeed());
   try {
     assert.equal((await stack.repository.loadSessionContext()).currentUser.sicil, TEST_SICIL);
 
     await dropIdentity();
-    await assert.rejects(stack.repository.loadSessionContext(), (error) => error.code === 'UNAUTHORIZED');
+    await assert.rejects(stack.repository.loadSessionContext(), (error) => error.code === 'SESSION_REQUIRED');
     // Yarım yüklenmiş veri değil, açık kimlik hatası dönmelidir.
-    await assert.rejects(stack.repository.loadSnapshot(), (error) => error.code === 'UNAUTHORIZED');
+    await assert.rejects(stack.repository.loadSnapshot(), (error) => error.code === 'SESSION_REQUIRED');
   } finally {
     await stack.dispose();
   }
@@ -172,7 +172,7 @@ test('kimliği doğrulanmamış yazma isteği de reddedilir', async () => {
           priority: 'medium'
         }]
       }),
-      (error) => error.code === 'UNAUTHORIZED'
+      (error) => error.code === 'SESSION_REQUIRED'
     );
   } finally {
     await stack.dispose();
@@ -222,7 +222,7 @@ test('oturum kapatıldıktan sonra aynı yığın korunan veriyi döndürmez', a
     assert.equal(cleared.value, '');
 
     modules.currentUser.setCurrentUserProvider(await keycloakProviderFor(cleared.value));
-    await assert.rejects(stack.repository.loadSessionContext(), (error) => error.code === 'UNAUTHORIZED');
+    await assert.rejects(stack.repository.loadSessionContext(), (error) => error.code === 'SESSION_REQUIRED');
   } finally {
     await stack.dispose();
   }

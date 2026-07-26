@@ -265,6 +265,7 @@ test('kenar çubuğu footer kısayolu kaldırıldı, Yardım sayfası ve gezinme
   assert.match(panel, /title="Tema"/);
   assert.match(panel, /title="Oturumu kapat"/);
   assert.match(panel, /auth\/logout/);
+  assert.match(panel, /session\?\.authMode === 'keycloak'/);
 });
 
 test('departman satırı uzun metin için sarmalanır ve küçük yazı tipi kullanır', () => {

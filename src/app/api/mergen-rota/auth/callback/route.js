@@ -48,7 +48,12 @@ export async function GET(request) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum açma isteği doğrulanamadı. Lütfen yeniden deneyin.');
     }
 
-    const { accessToken } = await exchangeAuthorizationCode({ code, codeVerifier: transaction.codeVerifier, config });
+    const { accessToken } = await exchangeAuthorizationCode({
+      code,
+      codeVerifier: transaction.codeVerifier,
+      redirectUri: transaction.redirectUri,
+      config
+    });
     const identity = await authenticateAccessToken(accessToken, { config });
     debugLogIdentity('callback', identity);
 

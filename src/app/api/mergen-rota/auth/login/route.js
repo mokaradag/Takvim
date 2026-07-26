@@ -43,6 +43,7 @@ export async function GET(request) {
     const cookie = transactionCookieHeader(signSessionValue({
       state: transaction.state,
       codeVerifier: transaction.codeVerifier,
+      redirectUri,
       returnTo: transaction.returnTo,
       exp: transaction.exp
     }, config.sessionSecret), { secure });

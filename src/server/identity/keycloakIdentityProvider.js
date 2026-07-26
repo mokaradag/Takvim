@@ -34,7 +34,7 @@ export class KeycloakIdentityProvider {
 
   async getSessionIdentity() {
     const config = this.config();
-    if (!config.sessionSecret) {
+    if (typeof config.sessionSecret !== 'string' || config.sessionSecret.length < 32) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum doğrulaması yapılandırılmamış. Sistem yöneticinizle görüşün.');
     }
     let cookieValue = null;
@@ -45,7 +45,7 @@ export class KeycloakIdentityProvider {
     }
     const payload = readSessionPayload(cookieValue, config.sessionSecret, { now: this.now() });
     if (!payload) {
-      throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum bulunamadı veya süresi doldu. Lütfen yeniden oturum açın.');
+      throw new ServerPersistenceError('SESSION_REQUIRED', 'Oturum bulunamadı veya süresi doldu. Lütfen yeniden oturum açın.');
     }
     return payload;
   }
