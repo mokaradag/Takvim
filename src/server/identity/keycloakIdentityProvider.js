@@ -34,7 +34,7 @@ export class KeycloakIdentityProvider {
 
   async getSessionIdentity() {
     const config = this.config();
-    if (!config.sessionSecret) {
+    if (typeof config.sessionSecret !== 'string' || config.sessionSecret.length < 32) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum doğrulaması yapılandırılmamış. Sistem yöneticinizle görüşün.');
     }
     let cookieValue = null;

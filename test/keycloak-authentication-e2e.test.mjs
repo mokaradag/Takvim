@@ -142,6 +142,14 @@ const rejectionCases = [
     token: () => signJwt(accessTokenClaims({ aud: [TEST_KEYCLOAK.clientId], azp: 'baska_istemci' }), { key: signingKey })
   },
   {
+    name: 'eksik yetkili istemci (azp)',
+    token: () => signJwt(accessTokenClaims({ aud: [TEST_KEYCLOAK.clientId], azp: undefined }), { key: signingKey })
+  },
+  {
+    name: 'metin olmayan yetkili istemci (azp)',
+    token: () => signJwt(accessTokenClaims({ aud: [TEST_KEYCLOAK.clientId], azp: { client: TEST_KEYCLOAK.clientId } }), { key: signingKey })
+  },
+  {
     name: 'geçersiz imza (başka anahtar)',
     token: () => signJwt(accessTokenClaims(), { key: createSigningKey('test-key-1') })
   },
@@ -346,6 +354,19 @@ test('oturum çerezi yokken kimlik doğrulanmamıştır', async () => {
     installProviderWithCookie(modules, null);
     await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'UNAUTHORIZED');
   });
+});
+
+test('kısa oturum sırrıyla imzalanan çerez kimlik üretmez', async () => {
+  const weakSecret = 'kisa';
+  await withKeycloak(async (modules) => {
+    const { signSessionValue } = await import('../src/server/identity/keycloakSessionCookie.js');
+    const forged = signSessionValue(
+      { v: 1, sicil: TEST_SICIL, exp: Math.floor(Date.now() / 1000) + 600 },
+      weakSecret
+    );
+    installProviderWithCookie(modules, forged);
+    await assert.rejects(modules.currentUser.getTrustedCurrentSicil(), (error) => error.code === 'UNAUTHORIZED');
+  }, { env: { MERGEN_ROTA_SESSION_SECRET: weakSecret } });
 });
 
 /* ── Geliştirme kimliğine sessiz düşüş yok ──────────────── */
