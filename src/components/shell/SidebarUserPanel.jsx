@@ -4,6 +4,7 @@ import { Icons } from '../icons';
 import { Avatar } from '../ui';
 import { DATA_MODES } from '../../data/dataMode';
 import { resolveUserDepartmentLabel, resolveUserDisplayName } from '../../domain/identity/sessionUser.js';
+import { publicRotaPath } from '../../lib/publicPath.js';
 import { useCurrentUser, useSessionContext } from '../../state/hooks';
 import { useDataMode } from './DataModeContext';
 
@@ -31,17 +32,18 @@ export function SidebarUserPanel({ theme, onToggleTheme }) {
   const department = resolveUserDepartmentLabel(currentUser);
   const employeeNo = currentUser?.employeeNo || currentUser?.sicil || null;
   const canSignOut = dataMode === DATA_MODES.ACTUAL && session?.authMode === 'keycloak';
+  const appRoot = publicRotaPath('/');
 
   const signOut = async () => {
     setSigningOut(true);
     try {
-      const response = await fetch('/api/mergen-rota/auth/logout', { method: 'POST', cache: 'no-store' });
+      const response = await fetch(publicRotaPath('/api/mergen-rota/auth/logout'), { method: 'POST', cache: 'no-store' });
       const body = await response.json().catch(() => ({}));
       // Yönlendirmeyi istemci yapar: sunucu 302 döndürseydi fetch akışında
       // yönlendirme döngüsü oluşabilirdi.
-      window.location.assign(body?.endSessionUrl || '/');
+      window.location.assign(body?.endSessionUrl || appRoot);
     } catch {
-      window.location.assign('/');
+      window.location.assign(appRoot);
     }
   };
 
