@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icons } from '../icons';
 import { useDataLifecycle } from '../../state/hooks';
 import { AppLogo } from './AppLogo';
@@ -63,13 +63,14 @@ function DemoModeEscape() {
  */
 export function AppDataBoundary({ children }) {
   const { dataStatus, hasLoadedOnce, loadError, reloadData } = useDataLifecycle();
-  // Kimlik doğrulanmadıysa yarım yüklenmiş Gerçek Sistem verisi gösterilmez;
-  // kullanıcıya açık bir oturum açma yolu sunulur. Demo moduna SESSİZCE
-  // düşülmez: Demo yalnızca kullanıcının bilinçli seçimidir.
   const sessionRequired = loadError?.code === 'SESSION_REQUIRED';
   const authenticationRejected = loadError?.code === 'UNAUTHORIZED';
   const appRoot = publicRotaPath('/');
   const loginHref = `${publicRotaPath('/api/mergen-rota/auth/login')}?returnTo=${encodeURIComponent(appRoot)}`;
+
+  useEffect(() => {
+    if (sessionRequired) window.location.replace(loginHref);
+  }, [loginHref, sessionRequired]);
 
   if (dataStatus === 'loading' && !hasLoadedOnce) {
     return (
@@ -96,6 +97,24 @@ export function AppDataBoundary({ children }) {
     );
   }
 
+  if (dataStatus === 'error' && !hasLoadedOnce && sessionRequired) {
+    return (
+      <DataMessage>
+        <div className="app-boot-brand">
+          <AppLogo size={46} />
+          <div className="app-boot-wordmark">
+            <span>MERGEN</span><strong>Rota</strong>
+          </div>
+        </div>
+        <h1 className="app-boot-title">Kurumsal oturum yenileniyor</h1>
+        <p className="app-boot-sub">Oturum açma sayfasına yönlendiriliyorsunuz.</p>
+        <div className="app-boot-progress" role="progressbar" aria-label="Kurumsal oturum yenileniyor" aria-busy="true">
+          <span />
+        </div>
+      </DataMessage>
+    );
+  }
+
   if (dataStatus === 'error' && !hasLoadedOnce) {
     return (
       <DataMessage>
@@ -106,23 +125,15 @@ export function AppDataBoundary({ children }) {
           </div>
         </div>
         <h1 className="app-boot-title">
-          {sessionRequired ? 'Oturum açmanız gerekiyor' : authenticationRejected ? 'Kimlik doğrulanamadı' : 'Veriler yüklenemedi'}
+          {authenticationRejected ? 'Kimlik doğrulanamadı' : 'Veriler yüklenemedi'}
         </h1>
         <p className="app-boot-sub">
-          {sessionRequired
-            ? 'Gerçek Sistem verileri yalnızca kurumsal kimlikle görüntülenebilir. Kurumsal hesabınızla oturum açın.'
-            : authenticationRejected
-              ? (loadError?.message || 'Kurumsal kimliğiniz doğrulanamadı. Sistem yöneticinizle görüşün.')
-              : 'Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.'}
+          {authenticationRejected
+            ? (loadError?.message || 'Kurumsal kimliğiniz doğrulanamadı. Sistem yöneticinizle görüşün.')
+            : 'Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.'}
         </p>
         <div className="app-boot-actions">
-          {sessionRequired
-            ? (
-              <a className="btn primary" href={loginHref}>
-                <Icons.LogIn size={13} /> Kurumsal oturum aç
-              </a>
-            )
-            : <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>}
+          <button className="btn primary" onClick={reloadData}>Yeniden Dene</button>
           <DemoModeEscape />
         </div>
       </DataMessage>
