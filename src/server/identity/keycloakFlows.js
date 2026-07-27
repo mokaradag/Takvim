@@ -17,8 +17,8 @@ import { publicRotaPath } from '../../lib/publicPath.js';
  *     oturum çerezine çevrilir.
  *
  * Akış sabitleri ile tarayıcıya görünen yollar aynı modülde tutulur; yol öneki
- * yalnızca açık `NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH` yapılandırmasından
- * gelir ve hiçbir gizli kimlik ayarı istemciye açılmaz.
+ * yalnızca tarayıcıya açık ortak yol öneki yapılandırmasından gelir ve hiçbir
+ * gizli kimlik ayarı istemciye açılmaz.
  */
 
 export const KEYCLOAK_FLOWS = Object.freeze({
