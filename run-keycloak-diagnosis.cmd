@@ -1,24 +1,25 @@
 @echo off
 setlocal
 
-set "PROJECT_DIR=M:\Primavera\PYB\08 - MERGEN Rota"
+rem Runs the Keycloak diagnostic from THIS repository, wherever it is checked
+rem out. No deployment path, network share, drive letter, host name or
+rem certificate location is stored in this file.
+cd /d "%~dp0"
 
-rem IMPORTANT:
-rem NODE_EXTRA_CA_CERTS must exist before node.exe starts.
-rem Replace the path below only if your current certificate path is different.
+rem NODE_EXTRA_CA_CERTS must already exist before node.exe starts: Node reads it
+rem once at process start. Set it in the shell (or the service environment)
+rem before running this script. The value itself is never printed.
 if not defined NODE_EXTRA_CA_CERTS (
-  set "NODE_EXTRA_CA_CERTS=\\rehisds\uygulamalar\Primavera\PYB\02 - Modelleme\IscilikTahmini\ShinyApp\Sertifikalar\cert.pem"
-)
-
-cd /d "%PROJECT_DIR%" || (
-  echo ERROR: Cannot open project directory: %PROJECT_DIR%
+  echo NODE_EXTRA_CA_CERTS is not set.
+  echo Set it before running this diagnostic.
   pause
   exit /b 1
 )
 
-echo Project directory: %CD%
-echo NODE_EXTRA_CA_CERTS: %NODE_EXTRA_CA_CERTS%
+echo Repository directory: %CD%
+echo NODE_EXTRA_CA_CERTS: set
 echo.
-node "%~dp0diagnose-keycloak.cjs"
+
+node diagnose-keycloak.cjs
 echo.
 pause

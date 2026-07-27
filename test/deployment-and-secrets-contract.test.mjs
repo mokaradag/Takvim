@@ -75,6 +75,8 @@ test('.env.example tüm Keycloak anahtarlarını yer tutucularla içerir', () =>
   const env = read('.env.example');
   const required = [
     'MERGEN_ROTA_AUTH_MODE',
+    'MERGEN_ROTA_KEYCLOAK_FLOW',
+    'MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI',
     'MERGEN_ROTA_KEYCLOAK_BASE_URL',
     'MERGEN_ROTA_KEYCLOAK_REALM',
     'MERGEN_ROTA_KEYCLOAK_CLIENT_ID',
@@ -175,11 +177,17 @@ test('SQL kurulum betiği sistem yöneticilerini parametreli tohumlar', () => {
 /* ── Rota yüzeyi ────────────────────────────────────────── */
 
 test('kimlik doğrulama uçları beklenen yolda ve Node çalışma zamanındadır', () => {
-  for (const name of ['login', 'callback', 'session', 'logout']) {
-    const source = read(`src/app/api/mergen-rota/auth/${name}/route.js`);
-    assert.match(source, /export const runtime = 'nodejs';/);
-    assert.match(source, /export const dynamic = 'force-dynamic';/);
-    assert.match(source, /force-no-store/);
+  const routes = [
+    ...['login', 'callback', 'session', 'logout', 'implicit-session']
+      .map((name) => `src/app/api/mergen-rota/auth/${name}/route.js`),
+    // Implicit köprünün tarayıcı geri dönüşü de bir route handler'dır.
+    'src/app/auth/implicit-callback/route.js'
+  ];
+  for (const relativePath of routes) {
+    const source = read(relativePath);
+    assert.match(source, /export const runtime = 'nodejs';/, relativePath);
+    assert.match(source, /export const dynamic = 'force-dynamic';/, relativePath);
+    assert.match(source, /force-no-store/, relativePath);
   }
 });
 

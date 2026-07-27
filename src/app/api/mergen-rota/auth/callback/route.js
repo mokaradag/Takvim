@@ -1,5 +1,5 @@
 import { ServerPersistenceError } from '../../../../../server/errors.js';
-import { assertKeycloakConfigured, readKeycloakConfig } from '../../../../../server/identity/keycloakConfig.js';
+import { KEYCLOAK_FLOWS, assertKeycloakConfigured, readKeycloakConfig } from '../../../../../server/identity/keycloakConfig.js';
 import { authenticateAccessToken, exchangeAuthorizationCode } from '../../../../../server/identity/keycloakAuthentication.js';
 import { isTransactionValid, safeReturnTo } from '../../../../../server/identity/keycloakPkce.js';
 import { AUTH_TRANSACTION_COOKIE_NAME, verifySignedValue } from '../../../../../server/identity/keycloakSessionCookie.js';
@@ -44,7 +44,8 @@ export async function GET(request) {
     if (!code) throw new ServerPersistenceError('UNAUTHORIZED', 'Yetkilendirme kodu alınamadı.');
 
     const transaction = verifySignedValue(readRequestCookie(request, AUTH_TRANSACTION_COOKIE_NAME), config.sessionSecret);
-    if (!isTransactionValid(transaction, state)) {
+    // Akış işareti zorunludur: implicit köprü işlemi bu uçta kabul EDİLMEZ.
+    if (!isTransactionValid(transaction, state, { flow: KEYCLOAK_FLOWS.AUTHORIZATION_CODE })) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum açma isteği doğrulanamadı. Lütfen yeniden deneyin.');
     }
 

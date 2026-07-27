@@ -56,6 +56,22 @@ export function transactionCookieHeader(signedValue, { secure }) {
   });
 }
 
+const BEARER_PATTERN = /^Bearer\s+([A-Za-z0-9._~+/-]+=*)$/;
+
+export const BEARER_REJECTIONS = Object.freeze({ MISSING: 'BEARER_MISSING', MALFORMED: 'BEARER_MALFORMED' });
+
+/**
+ * `Authorization: Bearer <jeton>` başlığını okur. Eksik olmakla bozuk olmak
+ * AYRILIR: çağıran taraf bunları farklı iletilere çevirebilir. Jeton yalnızca
+ * döndürülür; hiçbir koşulda günlüğe yazılmaz.
+ */
+export function readBearerToken(request) {
+  const header = String(request?.headers?.get?.('authorization') || '').trim();
+  if (!header) return { token: null, rejection: BEARER_REJECTIONS.MISSING };
+  const match = BEARER_PATTERN.exec(header);
+  return match ? { token: match[1], rejection: null } : { token: null, rejection: BEARER_REJECTIONS.MALFORMED };
+}
+
 export function readRequestCookie(request, name) {
   const header = request?.headers?.get?.('cookie') || '';
   for (const part of header.split(';')) {

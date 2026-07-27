@@ -22,6 +22,7 @@ export const TEST_KEYCLOAK = Object.freeze({
   get issuer() { return `${this.baseUrl}/realms/${this.realm}`; },
   get jwksUri() { return `${this.baseUrl}/realms/${this.realm}/protocol/openid-connect/certs`; },
   redirectUri: 'https://rota.test.internal:8008/api/mergen-rota/auth/callback',
+  implicitRedirectUri: 'https://rota.test.internal:8008/auth/implicit-callback',
   postLogoutRedirectUri: 'https://rota.test.internal:8008/',
   // Sentetik, yalnızca test amaçlı imza anahtarı (gerçek bir sır değildir).
   sessionSecret: 'test-only-session-secret-0123456789abcdef0123456789abcdef'
@@ -147,9 +148,33 @@ export async function loadAuthModules() {
   const logoutRoute = await import('../../src/app/api/mergen-rota/auth/logout/route.js');
   const loginRoute = await import('../../src/app/api/mergen-rota/auth/login/route.js');
   const callbackRoute = await import('../../src/app/api/mergen-rota/auth/callback/route.js');
+  const implicitSessionRoute = await import('../../src/app/api/mergen-rota/auth/implicit-session/route.js');
+  const implicitCallbackRoute = await import('../../src/app/auth/implicit-callback/route.js');
   authentication.resetKeycloakJwksClients();
   currentUser.setCurrentUserProvider(null);
-  return { authentication, provider, currentUser, sessionRoute, logoutRoute, loginRoute, callbackRoute };
+  return {
+    authentication,
+    provider,
+    currentUser,
+    sessionRoute,
+    logoutRoute,
+    loginRoute,
+    callbackRoute,
+    implicitSessionRoute,
+    implicitCallbackRoute
+  };
+}
+
+/** Implicit köprü ucuna gerçek bir istek kurar (jeton + state + işlem çerezi). */
+export function implicitBridgeRequest({ token = null, state = null, transactionCookie = null, body } = {}) {
+  const headers = { 'content-type': 'application/json' };
+  if (token) headers.authorization = `Bearer ${token}`;
+  if (transactionCookie != null) headers.cookie = `mergen_rota_auth_tx=${transactionCookie}`;
+  return new Request('https://rota.test.internal:8008/api/mergen-rota/auth/implicit-session', {
+    method: 'POST',
+    headers,
+    body: body !== undefined ? body : JSON.stringify(state == null ? {} : { state })
+  });
 }
 
 /** Bearer jetonuyla gerçek oturum takas ucunu çağırır. */

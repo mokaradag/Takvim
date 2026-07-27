@@ -7,6 +7,7 @@ import {
   authErrorResponse,
   debugLogIdentity,
   jsonResponse,
+  readBearerToken,
   sessionCookieHeader
 } from '../../../../../server/identity/authRouteSupport.js';
 
@@ -16,11 +17,13 @@ export const revalidate = 0;
 // Kimlik akışı hiçbir katmanda önbelleklenmez.
 export const fetchCache = 'force-no-store';
 
-const BEARER_PATTERN = /^Bearer\s+([A-Za-z0-9._~+/-]+=*)$/;
-
 /**
  * Uyumluluk ucu: implicit akıştan gelen bir erişim jetonunu HttpOnly MERGEN
  * Rota oturumuna ÇEVİRİR.
+ *
+ * Bu genel uç DEĞİŞMEDİ ve zayıflatılmadı. Implicit köprü akışı kendi adanmış
+ * ucunu kullanır (`POST /api/mergen-rota/auth/implicit-session`); orada ayrıca
+ * imzalı işlem çerezi ve `state` eşleşmesi de aranır.
  *
  * Jeton yalnızca `Authorization: Bearer` başlığından okunur, SUNUCUDA
  * doğrulanır ve yanıtta geri verilmez. Tarayıcı jetonu localStorage'da
@@ -33,12 +36,12 @@ const BEARER_PATTERN = /^Bearer\s+([A-Za-z0-9._~+/-]+=*)$/;
 export async function POST(request) {
   try {
     const config = assertKeycloakConfigured(readKeycloakConfig());
-    const match = BEARER_PATTERN.exec(request.headers.get('authorization') || '');
-    if (!match) {
+    const { token } = readBearerToken(request);
+    if (!token) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Geçerli bir erişim jetonu gönderilmedi.');
     }
 
-    const identity = await authenticateAccessToken(match[1], { config });
+    const identity = await authenticateAccessToken(token, { config });
     debugLogIdentity('session-exchange', identity);
 
     return jsonResponse(

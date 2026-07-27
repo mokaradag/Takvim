@@ -1,5 +1,11 @@
 import 'server-only';
 import { ServerPersistenceError } from '../errors.js';
+import {
+  DEFAULT_KEYCLOAK_FLOW,
+  KEYCLOAK_FLOWS,
+  SUPPORTED_KEYCLOAK_FLOWS,
+  parseKeycloakFlow
+} from './keycloakFlows.js';
 
 /**
  * Keycloak yapılandırması YALNIZCA sunucu tarafı environment değerlerinden
@@ -8,6 +14,9 @@ import { ServerPersistenceError } from '../errors.js';
  */
 
 export const AUTH_MODES = Object.freeze({ KEYCLOAK: 'keycloak', DEVELOPMENT: 'development' });
+
+// Akış sabitleri yapılandırma modülü üzerinden de sunulur; tüketiciler tek yerden okur.
+export { DEFAULT_KEYCLOAK_FLOW, KEYCLOAK_FLOWS, SUPPORTED_KEYCLOAK_FLOWS, parseKeycloakFlow };
 
 const DEFAULT_ALLOWED_ALGORITHMS = Object.freeze(['RS256']);
 const SUPPORTED_ALGORITHMS = new Set(['RS256', 'RS384', 'RS512']);
@@ -85,13 +94,23 @@ export function readKeycloakConfig(env = process.env) {
     realm,
     clientId,
     clientSecret: text(env.MERGEN_ROTA_KEYCLOAK_CLIENT_SECRET) || null,
+    // Seçili akış. Tanınmayan bir değer `null` kalır ve doğrulamada AÇIK bir
+    // hataya dönüşür; sessizce başka bir akışa düşülmez.
+    flow: parseKeycloakFlow(env.MERGEN_ROTA_KEYCLOAK_FLOW),
+    // Ham değer yalnızca teşhis içindir (hangi değerin reddedildiğini görmek için).
+    flowRequested: text(env.MERGEN_ROTA_KEYCLOAK_FLOW),
     issuerUrl,
     authorizationEndpoint: issuerUrl ? `${issuerUrl}/protocol/openid-connect/auth` : '',
     tokenEndpoint: issuerUrl ? `${issuerUrl}/protocol/openid-connect/token` : '',
     endSessionEndpoint: issuerUrl ? `${issuerUrl}/protocol/openid-connect/logout` : '',
     jwksUri: text(env.MERGEN_ROTA_KEYCLOAK_JWKS_URL)
       || (issuerUrl ? `${issuerUrl}/protocol/openid-connect/certs` : ''),
+    // Authorization Code + PKCE geri dönüş adresi. Implicit köprü bu değeri
+    // ASLA kullanmaz; iki akışın adresleri birbirine karışmaz.
     redirectUri: text(env.MERGEN_ROTA_KEYCLOAK_REDIRECT_URI),
+    // Implicit köprünün tarayıcı geri dönüş adresi. Boşsa istek kökünden
+    // türetilir; üretimde Keycloak kaydıyla birebir aynı değer verilmelidir.
+    implicitRedirectUri: text(env.MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI),
     postLogoutRedirectUri: text(env.MERGEN_ROTA_KEYCLOAK_POST_LOGOUT_REDIRECT_URI),
     scope: text(env.MERGEN_ROTA_KEYCLOAK_SCOPE) || 'openid profile email',
     // Beklenen kitle açıkça verilmediyse client id'nin kendisi beklenir.
@@ -110,7 +129,18 @@ export function readKeycloakConfig(env = process.env) {
   };
 }
 
-/** Yapılandırma eksikse Keycloak hiç denenmez; sessizce başka kimliğe düşülmez. */
+/**
+ * Yapılandırma eksikse Keycloak hiç denenmez; sessizce başka kimliğe düşülmez.
+ *
+ * Doğrulama AKIŞA DUYARLIDIR:
+ *   • Her iki akış da issuer, istemci kimliği, JWKS adresi ve oturum imza
+ *     anahtarını zorunlu kılar (jeton her hâlükârda sunucuda doğrulanır).
+ *   • Hiçbir akış istemci secret'ını ZORUNLU KILMAZ. Authorization Code'da
+ *     secret yalnızca gizli istemci için gerekir; implicit köprüde jeton
+ *     endpoint'i hiç kullanılmadığı için secret hiç istenmez.
+ *   • Implicit köprünün geri dönüş adresi açıkça verilebilir ya da istek
+ *     kökünden türetilir; bu yüzden burada zorunlu değildir.
+ */
 export function keycloakConfigurationIssues(config) {
   const issues = [];
   if (!config.baseUrl) issues.push('MERGEN_ROTA_KEYCLOAK_BASE_URL');
@@ -118,6 +148,8 @@ export function keycloakConfigurationIssues(config) {
   if (!config.clientId) issues.push('MERGEN_ROTA_KEYCLOAK_CLIENT_ID');
   if (!config.jwksUri) issues.push('MERGEN_ROTA_KEYCLOAK_JWKS_URL');
   if (!config.sessionSecret || config.sessionSecret.length < 32) issues.push('MERGEN_ROTA_SESSION_SECRET');
+  // Tanınmayan akış değeri sessizce yok sayılmaz; yapılandırma hatasıdır.
+  if (!config.flow) issues.push('MERGEN_ROTA_KEYCLOAK_FLOW');
   return issues;
 }
 
