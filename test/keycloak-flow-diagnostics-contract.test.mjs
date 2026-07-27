@@ -8,11 +8,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => readFileSync(path.join(ROOT, relativePath), 'utf8');
+
+// Betik doğrudan çalıştırılmadığında yalnızca saf yardımcıları verir; teşhis
+// akışı başlamaz ve hiçbir ağ isteği yapılmaz.
+const diagnostics = createRequire(import.meta.url)('../diagnose-keycloak.cjs');
 
 const CMD = read('run-keycloak-diagnosis.cmd');
 const SCRIPT = read('diagnose-keycloak.cjs');
@@ -76,6 +81,60 @@ test('implicit-bridge teşhisi jeton ucunu kullanmaz ve gerçek jeton yakalamaz'
   // Parçanın yalnızca VARLIĞI raporlanır; içeriği okunmaz veya yazdırılmaz.
   assert.match(SCRIPT, /fragmentPresent/);
   assert.doesNotMatch(SCRIPT, /console\.log\([^)]*\.hash/);
+});
+
+test('yönlendirme çözümlemesi implicit akışta hatayı URL PARÇASINDAN okur', () => {
+  const { describeRedirect } = diagnostics;
+  const callback = 'https://rota.test.internal:8008/auth/implicit-callback';
+  const requestUrl = 'https://keycloak.test.internal/realms/r/protocol/openid-connect/auth';
+
+  // `response_mode=fragment`: sağlıklı etkileşimsiz sonda parçada döner.
+  const healthy = describeRedirect(
+    `${callback}#error=login_required&error_description=Giris%20gerekli&state=abc`,
+    requestUrl,
+    callback
+  );
+  assert.equal(healthy.returnsToConfiguredCallback, true);
+  assert.equal(healthy.error, 'login_required');
+  assert.equal(healthy.errorLocation, 'fragment');
+  assert.equal(healthy.errorDescription, 'Giris gerekli');
+  assert.equal(healthy.accessTokenReturned, false);
+
+  // İstemci reddi de parçadan tanınır.
+  const rejected = describeRedirect(`${callback}#error=unauthorized_client`, requestUrl, callback);
+  assert.equal(rejected.error, 'unauthorized_client');
+  assert.equal(rejected.errorLocation, 'fragment');
+
+  // Authorization Code akışı sorgu dizesinden okunmayı sürdürür.
+  const codeFlow = describeRedirect(
+    'https://rota.test.internal:8008/api/mergen-rota/auth/callback?error=login_required',
+    requestUrl,
+    'https://rota.test.internal:8008/api/mergen-rota/auth/callback'
+  );
+  assert.equal(codeFlow.error, 'login_required');
+  assert.equal(codeFlow.errorLocation, 'query');
+});
+
+test('yönlendirme çözümlemesi jeton değerini okumaz, yalnızca varlığını bildirir', () => {
+  const callback = 'https://rota.test.internal:8008/auth/implicit-callback';
+  const described = diagnostics.describeRedirect(
+    `${callback}#access_token=sentetik.jeton.degeri&token_type=bearer&state=abc`,
+    'https://keycloak.test.internal/realms/r/protocol/openid-connect/auth',
+    callback
+  );
+
+  assert.equal(described.accessTokenReturned, true);
+  assert.equal(described.fragmentPresent, true);
+  assert.equal(described.error, null);
+  // Jeton DEĞERİ hiçbir alanda bulunmaz.
+  assert.equal(JSON.stringify(described).includes('sentetik.jeton.degeri'), false);
+});
+
+test('akış ayrıştırıcısı betikte de katıdır', () => {
+  assert.equal(diagnostics.parseFlow(''), 'authorization-code');
+  assert.equal(diagnostics.parseFlow('implicit-bridge'), 'implicit-bridge');
+  assert.equal(diagnostics.parseFlow('implicit'), null);
+  assert.deepEqual(diagnostics.SUPPORTED_FLOWS, ['authorization-code', 'implicit-bridge']);
 });
 
 test('canlı oturum açma rotası denetimi seçili akışı tanır', () => {

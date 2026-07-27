@@ -135,13 +135,33 @@ function callbackScript({ sessionEndpoint }) {
   var providerErrorDescription = fragment.get('error_description') || '';
 
   // Parça DERHÂL silinir: ağ isteğinden, günlükten ve geçmişten önce.
+  var fragmentCleared = false;
   try {
     history.replaceState(null, document.title, window.location.pathname + window.location.search);
+    fragmentCleared = !window.location.hash;
   } catch (ignored) {
-    // Geçmiş yazılamıyorsa da jeton yalnızca bellekte kalır.
+    fragmentCleared = false;
+  }
+  if (!fragmentCleared) {
+    // Son çare: parçayı doğrudan adres çubuğundan düşür.
+    try {
+      window.location.hash = '';
+      fragmentCleared = !window.location.hash || window.location.hash === '#';
+    } catch (alsoIgnored) {
+      fragmentCleared = false;
+    }
   }
   fragment = null;
   hash = '';
+
+  // KAPALI BAŞARISIZLIK: parça silinemiyorsa jeton adres çubuğunda ve geçmişte
+  // kalır. Bu durumda jeton ağa HİÇ verilmez ve akış burada durur.
+  if (!fragmentCleared) {
+    accessToken = '';
+    state = '';
+    showFailure('Kimlik bilgisi adres çubuğundan temizlenemedi. Güvenlik nedeniyle oturum açma durduruldu.');
+    return;
+  }
 
   if (providerError) {
     var detail = String(providerErrorDescription).slice(0, 200);

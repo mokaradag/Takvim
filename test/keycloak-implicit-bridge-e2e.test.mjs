@@ -646,8 +646,13 @@ function extractScript(html) {
   return { nonce: match[1], source: match[2] };
 }
 
-/** Betiği küçük bir sahte tarayıcıda çalıştırır; DOM/ağ etkileri kaydedilir. */
-async function runCallbackScript(source, { hash, fetchImpl }) {
+/**
+ * Betiği küçük bir sahte tarayıcıda çalıştırır; DOM/ağ etkileri kaydedilir.
+ *
+ * `historyBroken` ve `hashSetterBroken` ile parçanın silinemediği durumlar
+ * canlandırılır: betik bu durumda ağa çıkmadan durmalıdır.
+ */
+async function runCallbackScript(source, { hash, fetchImpl, historyBroken = false, hashSetterBroken = false }) {
   const events = { order: [], replaceStateUrls: [], replaced: [], requests: [], logs: [], messages: [] };
   const elements = {
     'rota-yukleniyor': { hidden: false, textContent: '' },
@@ -660,10 +665,16 @@ async function runCallbackScript(source, { hash, fetchImpl }) {
     }
   };
 
+  let currentHash = hash;
   const location = {
-    hash,
     pathname: '/auth/implicit-callback',
     search: '',
+    // Gerçek tarayıcıda olduğu gibi adres çubuğunu temsil eden canlı değer.
+    get hash() { return currentHash; },
+    set hash(value) {
+      // Bozuk kurulumda atama adres çubuğunu DEĞİŞTİRMEZ: jeton görünür kalır.
+      if (!hashSetterBroken) currentHash = value;
+    },
     replace(target) {
       events.order.push('replace');
       events.replaced.push(target);
@@ -681,7 +692,8 @@ async function runCallbackScript(source, { hash, fetchImpl }) {
       replaceState(state, title, url) {
         events.order.push('replaceState');
         events.replaceStateUrls.push(url);
-        location.hash = '';
+        if (historyBroken) throw new Error('History API kullanılamıyor');
+        currentHash = '';
       }
     },
     URLSearchParams,
@@ -834,6 +846,41 @@ test('geri dönüş betiği Keycloak hatasında, eksik jetonda ve eksik state de
       assert.equal(elements['rota-hata'].hidden, false, hash);
       assert.match(events.messages.join(' '), expected, hash);
     }
+  }, { env: IMPLICIT_ENV });
+});
+
+test('History API çalışmazsa parça yedek yolla silinir ve akış sürer', async () => {
+  await withKeycloak(async (modules) => {
+    const { source } = extractScript(await callbackHtml(await modules.implicitCallbackRoute.GET()));
+    const { events } = await runCallbackScript(source, {
+      hash: '#access_token=sentetik.jeton.degeri&state=durum-degeri-0001',
+      historyBroken: true,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ authenticated: true, returnTo: '/ekip' }) })
+    });
+
+    // replaceState hata verse de parça adres çubuğundan düşer; ancak ondan
+    // SONRA ağ isteği yapılır.
+    assert.deepEqual(events.order, ['replaceState', 'fetch', 'replace']);
+    assert.deepEqual(events.replaced, ['/ekip']);
+  }, { env: IMPLICIT_ENV });
+});
+
+test('parça hiçbir yolla silinemiyorsa jeton ağa VERİLMEZ (kapalı başarısızlık)', async () => {
+  await withKeycloak(async (modules) => {
+    const { source } = extractScript(await callbackHtml(await modules.implicitCallbackRoute.GET()));
+    const { events, elements } = await runCallbackScript(source, {
+      hash: '#access_token=sentetik.jeton.degeri&state=durum-degeri-0001',
+      historyBroken: true,
+      hashSetterBroken: true,
+      fetchImpl: async () => { throw new Error('parça silinemedi, ağ isteği yapılmamalıdır'); }
+    });
+
+    assert.deepEqual(events.requests, [], 'jeton adres çubuğunda kalırken ağa gönderilmemelidir');
+    assert.deepEqual(events.replaced, [], 'uygulamaya geçilmemelidir');
+    assert.equal(elements['rota-hata'].hidden, false);
+    assert.equal(elements['rota-yukleniyor'].hidden, true);
+    assert.match(events.messages.join(' '), /adres çubuğundan temizlenemedi/);
+    assert.deepEqual(events.logs, []);
   }, { env: IMPLICIT_ENV });
 });
 

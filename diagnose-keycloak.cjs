@@ -62,19 +62,33 @@ function printResult(obj) {
   console.log(JSON.stringify(obj, null, 2));
 }
 
-/** Only the shape of a redirect target is reported — never its fragment. */
+/**
+ * Describes a redirect target without ever exposing token material.
+ *
+ * With `response_mode=fragment` Keycloak returns authorization errors in the
+ * URL fragment rather than the query string, so both are inspected. Only the
+ * non-sensitive `error` / `error_description` fields are read from the
+ * fragment; `access_token` and friends are reported as a boolean at most and
+ * their values are never read, stored or printed.
+ */
 function describeRedirect(location, requestUrl, expectedCallback) {
   if (!location) return null;
   const target = new URL(location, requestUrl);
   const callback = new URL(expectedCallback);
+  const rawFragment = target.hash.startsWith('#') ? target.hash.slice(1) : target.hash;
+  const fragment = new URLSearchParams(rawFragment);
+
   return {
     target: `${target.origin}${target.pathname}`,
     returnsToConfiguredCallback: `${target.origin}${target.pathname}` === `${callback.origin}${callback.pathname}`,
-    error: target.searchParams.get('error'),
-    errorDescription: truncate(target.searchParams.get('error_description')),
+    // Query string first (code flow), then fragment (implicit flow).
+    error: target.searchParams.get('error') || fragment.get('error') || null,
+    errorDescription: truncate(target.searchParams.get('error_description') || fragment.get('error_description')),
+    errorLocation: target.searchParams.has('error') ? 'query' : (fragment.has('error') ? 'fragment' : null),
     authorizationCodeReturned: target.searchParams.has('code'),
-    // The fragment may carry a real token. Only its PRESENCE is reported.
-    fragmentPresent: Boolean(target.hash && target.hash !== '#')
+    // Never read: only the PRESENCE of token material is reported.
+    accessTokenReturned: fragment.has('access_token'),
+    fragmentPresent: Boolean(rawFragment)
   };
 }
 
@@ -259,11 +273,13 @@ async function diagnoseImplicitBridge({ authorizationEndpoint, clientId, implici
   printResult({
     httpStatus: authorizationResponse.status,
     location: locationInfo,
-    note: 'Only the PRESENCE of a URL fragment is reported. The diagnostic never reads, prints or stores fragment values.',
+    note: 'With response_mode=fragment the authorization error arrives in the URL fragment, so only the error fields are read from it. Token material is reported as a boolean at most; its value is never read, stored or printed.',
     interpretation:
-      locationInfo?.returnsToConfiguredCallback && locationInfo?.error === 'login_required'
-        ? 'GOOD: Keycloak accepted the client ID, the implicit callback redirect URI and the implicit (response_type=token) request. login_required is expected because this Node request has no browser SSO cookie.'
-        : locationInfo?.error === 'unauthorized_client'
+      locationInfo?.accessTokenReturned
+        ? 'UNEXPECTED: Keycloak returned token material to this noninteractive probe. The diagnostic did not read or store it. Re-run from a session without a Keycloak SSO cookie.'
+        : locationInfo?.returnsToConfiguredCallback && locationInfo?.error === 'login_required'
+          ? 'GOOD: Keycloak accepted the client ID, the implicit callback redirect URI and the implicit (response_type=token) request. login_required is expected because this Node request has no browser SSO cookie.'
+          : locationInfo?.error === 'unauthorized_client'
           ? 'ROOT CAUSE LIKELY: this client is not allowed to use the implicit flow.'
           : locationInfo?.error === 'invalid_request'
             ? 'CHECK: the implicit redirect URI is probably not registered for this client, or the implicit flow is disabled.'
@@ -400,7 +416,13 @@ async function main() {
     ].join('\n'));
 }
 
-main().catch((error) => {
-  console.error('\nDIAGNOSTIC FAILED:', error.message);
-  process.exitCode = 1;
-});
+// Doğrudan çalıştırıldığında teşhis akar; içe aktarıldığında yalnızca saf
+// yardımcılar açığa çıkar (testler bunları çevrimdışı doğrular).
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('\nDIAGNOSTIC FAILED:', error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { describeRedirect, parseFlow, deriveIssuer, SUPPORTED_FLOWS };
