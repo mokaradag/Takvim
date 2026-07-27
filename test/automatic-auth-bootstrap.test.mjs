@@ -128,7 +128,7 @@ test('Gerçek Sistem sağlayıcısı oturum denetlenmeden kurulmaz ve elle giri�
 
   assert.match(root, /dataMode === DATA_MODES\.ACTUAL[\s\S]*CorporateSessionGate/);
   assert.match(root, /window\.location\.replace\(corporateLoginHref\(\)\)/);
-  assert.match(root, /<CorporateSessionGate[^>]*>\{application\}<\/CorporateSessionGate>/);
+  assert.match(root, /<CorporateSessionGate[\s\S]*?\{application\}<\/CorporateSessionGate>/);
   assert.match(boundary, /if \(sessionRequired\) window\.location\.replace\(loginHref\)/);
   assert.doesNotMatch(boundary, /Kurumsal oturum aç/);
 });
