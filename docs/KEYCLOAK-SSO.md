@@ -36,14 +36,57 @@ süzülmüş anlık görüntüler ve kısmi proje CPM bastırması **değişmemi
 
 | Uç | Yöntem | Görev |
 | --- | --- | --- |
-| `/api/mergen-rota/auth/login` | GET | PKCE üretir, Keycloak yetkilendirme adresine yönlendirir |
-| `/api/mergen-rota/auth/callback` | GET | Kodu sunucuda jetonla takas eder, doğrular, oturum çerezini yazar |
-| `/api/mergen-rota/auth/session` | POST | Uyumluluk: `Authorization: Bearer` jetonunu HttpOnly oturuma çevirir |
+| `/api/mergen-rota/auth/login` | GET | Seçili akışa göre Keycloak yetkilendirme adresine yönlendirir |
+| `/api/mergen-rota/auth/callback` | GET | **(Authorization Code)** Kodu sunucuda jetonla takas eder, doğrular, oturum çerezini yazar |
+| `/auth/implicit-callback` | GET | **(Implicit köprü)** URL parçasını okuyup hemen silen küçük geri dönüş sayfası |
+| `/api/mergen-rota/auth/implicit-session` | POST | **(Implicit köprü)** İşlem çerezi + `state` + `Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir |
+| `/api/mergen-rota/auth/session` | POST | Genel uyumluluk: `Authorization: Bearer` jetonunu HttpOnly oturuma çevirir |
 | `/api/mergen-rota/auth/logout` | POST/GET | MERGEN Rota oturumunu kapatır, Keycloak `end_session` adresini verir |
 
 Korunan veri uçları değişmedi: `GET /api/mergen-rota/session`,
 `GET /api/mergen-rota/snapshot`, `POST /api/mergen-rota/commit`. Her mutasyon
 mevcut sunucu/transaction sınırı içinde yeniden yetkilendirilir.
+
+### Akış seçimi
+
+Oturum açma akışı yalnızca sunucu yapılandırmasından, `MERGEN_ROTA_KEYCLOAK_FLOW`
+ile seçilir. Tarayıcı akışı değiştiremez. Kabul edilen değerler **tam olarak**:
+
+```ini
+MERGEN_ROTA_KEYCLOAK_FLOW=authorization-code
+MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge
+```
+
+Değer boşsa `authorization-code` varsayılır. **Tanınmayan veya bozuk bir değer
+yapılandırma hatasıdır**: uygulama açık bir hata döndürür, sessizce başka bir
+akışa düşmez.
+
+| | `authorization-code` | `implicit-bridge` |
+| --- | --- | --- |
+| Durum | **Tercih edilen, varsayılan** | Uyumluluk kipi |
+| `response_type` | `code` | `token` |
+| `response_mode` | (varsayılan) | `fragment` |
+| PKCE | `S256`, zorunlu | Yok (kullanılmaz) |
+| Jeton endpoint'i | Kullanılır | **Kullanılmaz** |
+| İstemci secret'ı | Gizli istemcide gerekir | **Gerekmez** |
+| Jeton tarayıcıya ulaşır mı? | Hayır | Kısa süreliğine, URL parçasında |
+| Sunucu tarafı JWT + Sicil doğrulaması | Evet | Evet, **aynı kod** |
+| Oturum çerezi | `mergen_rota_session` | `mergen_rota_session` (aynı) |
+
+Authorization Code + PKCE tercih edilen akış olmayı sürdürür. Yalnızca, mevcut
+Keycloak istemcisi gizli (confidential) olduğunda, jeton takasının **geçerli bir
+istemci kimlik doğrulaması** gerektirdiğini bilmek gerekir.
+
+> **Gözlenen dağıtım:** Yetkilendirme isteği kabul edilmiş (istemci kimliği,
+> geri dönüş adresi, Standard Flow ve PKCE S256 doğrulanmış; etkileşimsiz
+> `prompt=none` sondası beklendiği gibi `login_required` dönmüş), ancak jeton
+> takası reddedilmiştir: `HTTP 401`, `error=unauthorized_client`,
+> `error_description=Invalid client or Invalid client credentials` ve gönderilen
+> bir istemci secret'ı yok. Bu, Standard Flow'un kapalı olduğu anlamına gelmez;
+> jeton ucunun geçerli bir gizli istemci kimlik doğrulaması beklediği anlamına
+> gelir. Secret elde edilemediği sürece Authorization Code takası tamamlanamaz.
+> Implicit köprü, hâlihazırda `response_type=token` ile çalışan mevcut istemci
+> için bu nedenle açık bir uyumluluk kipi olarak eklenmiştir.
 
 ### Oturum açma akışı (Authorization Code + PKCE)
 
@@ -62,12 +105,53 @@ mevcut sunucu/transaction sınırı içinde yeniden yetkilendirilir.
 redirect) engellenir. `state` doğrulanamazsa akış reddedilir ve yönlendirme
 döngüsü yerine açık bir hata yanıtı döner.
 
-### Implicit jeton uyumluluğu
+### Oturum açma akışı (implicit köprü)
 
-Bir istemci elinde yalnızca erişim jetonu varsa `POST /api/mergen-rota/auth/session`
-ucuna `Authorization: Bearer <jeton>` başlığıyla başvurur. Jeton **sunucuda**
-doğrulanır, yanıtta geri verilmez ve HttpOnly oturuma çevrilir. Erişim jetonu
-`localStorage`'da saklanmaz.
+`MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge` seçiliyken:
+
+1. Kullanıcı **aynı** kurumsal oturum açma eylemine tıklar
+   (`GET /api/mergen-rota/auth/login`).
+2. Sunucu kriptografik rastgele bir `state` üretir. **PKCE üretilmez.**
+3. Sunucu imzalı, HttpOnly ve kısa ömürlü işlem çerezini yazar:
+   `{ flow: 'implicit-bridge', state, returnTo, exp }`.
+4. Tarayıcı Keycloak'a yönlendirilir: `response_type=token`,
+   `response_mode=fragment`, `client_id`, implicit geri dönüş adresi, kapsam,
+   `state`. İstemci secret'ı bu adrese **hiçbir koşulda** yazılmaz.
+5. Keycloak jetonu ve `state`'i **URL parçasında** döndürür.
+6. `GET /auth/implicit-callback` küçük bir HTML yanıtıdır (hidratlanan uygulama
+   sayfası değil): parçayı okur, `history.replaceState` ile **derhâl siler** ve
+   jetonu tek bir POST isteğiyle köprü ucuna gönderir.
+7. `POST /api/mergen-rota/auth/implicit-session` işlem çerezinin imzasını,
+   süresini ve `flow === 'implicit-bridge'` işaretini doğrular; `state`
+   değerlerini sabit zamanlı karşılaştırır; jetonu **mevcut kanonik**
+   `authenticateAccessToken()` sınırında doğrular; Sicil'i mevcut güvenilen
+   mantıkla çözer; `mergen_rota_session` çerezini yazar; işlem çerezini temizler
+   ve yalnızca `{ authenticated: true, returnTo }` döndürür.
+8. Sayfa `window.location.replace(returnTo)` ile uygulamaya döner.
+
+Erişim jetonunun yaşam alanı **yalnızca** şunlardır: Keycloak URL parçası (hemen
+silinir), geri dönüş betiğinin yerel değişkeni ve tek bir kimlikli POST isteği.
+Jeton `localStorage`, `sessionStorage`, `IndexedDB`, çerez, sorgu dizesi, React
+durumu veya uygulama durumunda **saklanmaz** ve hiçbir günlük çağrısına verilmez.
+
+Geri dönüş sayfası yanıtı `Cache-Control: no-store, max-age=0`, `Pragma:
+no-cache`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY` ve yanıt başına üretilen rastgele bir nonce ile katı bir
+`Content-Security-Policy` taşır (`default-src 'none'`, `script-src 'nonce-…'`,
+`style-src 'nonce-…'`, `connect-src 'self'`, `base-uri 'none'`,
+`frame-ancestors 'none'`, `form-action 'none'`). Üçüncü taraf betik, stil, yazı
+tipi, görsel veya ölçümleme yüklenmez.
+
+**Akış ayrımı:** İşlem çerezi her zaman bir `flow` işareti taşır. Authorization
+Code geri dönüşü bir implicit işlemi, implicit köprü ucu da bir Authorization
+Code işlemini **kabul etmez**.
+
+### Genel implicit jeton uyumluluğu
+
+Bu uç **değişmedi**. Elinde yalnızca erişim jetonu olan bir istemci
+`POST /api/mergen-rota/auth/session` ucuna `Authorization: Bearer <jeton>`
+başlığıyla başvurur. Jeton **sunucuda** doğrulanır, yanıtta geri verilmez ve
+HttpOnly oturuma çevrilir. Erişim jetonu `localStorage`'da saklanmaz.
 
 ---
 
@@ -167,13 +251,15 @@ işlenmez.
 | Değişken | Açıklama |
 | --- | --- |
 | `MERGEN_ROTA_AUTH_MODE` | `keycloak` (varsayılan) veya `development` |
+| `MERGEN_ROTA_KEYCLOAK_FLOW` | `authorization-code` (varsayılan) veya `implicit-bridge`; başka değer hata verir |
 | `MERGEN_ROTA_KEYCLOAK_BASE_URL` | `https://<KEYCLOAK_HOST>` ya da doğrudan realm issuer adresi |
 | `MERGEN_ROTA_KEYCLOAK_REALM` | Realm adı |
 | `MERGEN_ROTA_KEYCLOAK_CLIENT_ID` | MERGEN Rota istemci kimliği (MERGEN Bilge'ninkiyle aynı olmak zorunda değildir) |
-| `MERGEN_ROTA_KEYCLOAK_CLIENT_SECRET` | Yalnızca gizli istemcide; public istemcide boş |
+| `MERGEN_ROTA_KEYCLOAK_CLIENT_SECRET` | Yalnızca gizli istemci kimlik doğrulaması gerektiğinde; public istemcide ve implicit köprüde boş |
 | `MERGEN_ROTA_KEYCLOAK_AUDIENCE` | Beklenen `aud`; boşsa istemci kimliği |
 | `MERGEN_ROTA_KEYCLOAK_AUTHORIZED_PARTY` | Beklenen `azp`; boşsa istemci kimliği |
-| `MERGEN_ROTA_KEYCLOAK_REDIRECT_URI` | `https://<MERGEN_ROTA_HOST>:8008/api/mergen-rota/auth/callback` |
+| `MERGEN_ROTA_KEYCLOAK_REDIRECT_URI` | **Yalnızca Authorization Code**: `https://<MERGEN_ROTA_HOST>:8008/api/mergen-rota/auth/callback` |
+| `MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI` | **Yalnızca implicit köprü**: `https://<MERGEN_ROTA_HOST>:8008/auth/implicit-callback`; boşsa istek kökünden türetilir |
 | `MERGEN_ROTA_KEYCLOAK_POST_LOGOUT_REDIRECT_URI` | `https://<MERGEN_ROTA_HOST>:8008/` |
 | `MERGEN_ROTA_KEYCLOAK_SCOPE` | Varsayılan `openid profile email` |
 | `MERGEN_ROTA_KEYCLOAK_JWKS_URL` | İsteğe bağlı JWKS geçersiz kılma |
@@ -211,16 +297,31 @@ baş harflere döner.
 
 ## 8. IT'nin Keycloak'ta kaydetmesi gerekenler
 
-MERGEN Rota istemcisi için:
+MERGEN Rota istemcisi için (tercih edilen `authorization-code` akışı):
 
 - **Valid redirect URI:** `https://<MERGEN_ROTA_HOST>:8008/api/mergen-rota/auth/callback`
 - **Valid post logout redirect URI:** `https://<MERGEN_ROTA_HOST>:8008/`
 - **Web origin:** `https://<MERGEN_ROTA_HOST>:8008`
 - **Standard flow (Authorization Code):** açık
 - **PKCE (S256):** zorunlu
-- **Implicit flow:** gerekli değildir
+- **İstemci türü:** public tercih edilir. Gizli (confidential) istemcide jeton
+  takası geçerli bir istemci kimlik doğrulaması ister; secret elde edilemiyorsa
+  bu akış tamamlanamaz.
 - **Claim'ler:** `sicil`, `sektor`, `department`, `mudurluk` erişim jetonuna
   eklenmelidir (diğerleri standart `profile`/`email` kapsamlarından gelir)
+
+`implicit-bridge` kipi kullanılacaksa, hâlihazırda implicit akışla çalışan
+istemci için ek olarak:
+
+- **Implicit flow:** açık (bu istemcide zaten açıktır)
+- **Valid redirect URI:** `https://<MERGEN_ROTA_HOST>:8008/auth/implicit-callback`
+  — `.env.local` içindeki `MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI` ile
+  **birebir aynı** olmalıdır
+- **Web origin:** `https://<MERGEN_ROTA_HOST>:8008`
+- **İstemci secret'ı:** gerekmez (jeton endpoint'i kullanılmaz)
+
+Bu belge Keycloak'ta herhangi bir değişikliğin **yapıldığını** iddia etmez;
+yalnızca ilgili akışın çalışması için hangi kaydın gerektiğini listeler.
 
 MERGEN Bilge'nin istemci kimliği **varsayılmaz**; MERGEN Rota kendi istemci
 kimliğini yapılandırmadan okur.
@@ -238,7 +339,41 @@ MERGEN_ROTA_DEV_SICIL=<yerel test sicili>
 ```
 
 Her iki anahtar birlikte verilmelidir. Varsayılan yapılandırmada bu yol
-kapalıdır ve üretimde kullanılmaz.
+kapalıdır ve üretimde kullanılmaz. Geliştirme kimliği **bir üretim yedeği
+değildir**: Keycloak akışı çalışmıyorsa çözüm, akışı ve yapılandırmayı
+düzeltmektir.
+
+Üretimde HTTPS zorunludur ve `MERGEN_ROTA_SESSION_COOKIE_SECURE=true` kalmalıdır.
+`false` değeri yalnızca düz HTTP üzerinde yapılan doğrudan port 8008 testi
+içindir (tarayıcı `http://` üzerinde `Secure` çerez yazmaz).
+
+### Doğrudan port 8008 testi (implicit köprü)
+
+Yalnızca yer tutuculu örnek; gerçek değerler yalnızca işlenmeyen `.env.local`
+dosyasındadır:
+
+```ini
+MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge
+MERGEN_ROTA_KEYCLOAK_CLIENT_SECRET=
+MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI=http://<TEST_HOST>:8008/auth/implicit-callback
+MERGEN_ROTA_SESSION_COOKIE_SECURE=false
+```
+
+`NODE_EXTRA_CA_CERTS` implicit köprüde de gerekebilir: sunucu jeton imzasını
+doğrulamak için realm JWKS ucunu çekmeye devam eder. Değer Node başlatılmadan
+önce ortamda bulunmalıdır; sertifika yolu depoya işlenmez.
+
+### Teşhis betiği
+
+`diagnose-keycloak.cjs` seçili akışa duyarlıdır ve `run-keycloak-diagnosis.cmd`
+ile kendi depo dizininden çalışır (`cd /d "%~dp0"`); dosyada dağıtım yolu, ağ
+paylaşımı, konak adı veya sertifika konumu tutulmaz. Betik `authorization-code`
+kipinde keşif/TLS, yetkilendirme isteği ve jeton ucu sondasını çalıştırır;
+`implicit-bridge` kipinde jeton ucunu **hiç kullanmaz**, `response_type=token` +
+`response_mode=fragment` isteğini `prompt=none` ile sınar ve çalışan uygulamanın
+gerçekten bu parametreleri (ve PKCE'siz olduğunu) yayıp yaymadığını denetler.
+Hiçbir gerçek jeton yakalanmaz; sır, jeton, URL parçası veya sertifika içeriği
+yazdırılmaz.
 
 ---
 
@@ -270,6 +405,12 @@ yalnızca maskelenmiş alanları günlüğe yazar.
 | Oturum açma döngüsü | `redirect_uri` Keycloak kaydıyla birebir aynı değil (port 8008 dâhil) |
 | Anahtar rotasyonu sonrası kısa süreli hata | JWKS yenileme hız sınırı; `MERGEN_ROTA_KEYCLOAK_JWKS_MIN_REFRESH_MS` ile ayarlanır |
 | Avatarlar baş harf gösteriyor | `NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL` boş, ya da fotoğraf sunucusuna erişilemiyor |
+| Jeton takasında `HTTP 401` + `unauthorized_client` + `Invalid client or Invalid client credentials` | Gizli istemci kimlik doğrulaması eksik/yanlış. Standard Flow kapalı **değildir**; yetkilendirme isteği kabul edilmektedir. Secret sağlanamıyorsa `MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge` kullanılabilir |
+| "Implicit köprü kipi etkin değil" | `MERGEN_ROTA_KEYCLOAK_FLOW` `implicit-bridge` değil; köprü ucu yalnızca o kipte çalışır |
+| "Oturum açma işlemi bulunamadı / süresi doldu" | İşlem çerezi yok veya 10 dakikayı aştı. Eski bir geri dönüş adresini yeniden kullanmayın; oturum açmayı baştan başlatın |
+| "Oturum açma işlemi bu akışa ait değil" | Çerez öteki akışa ait. Sunucu yeniden başlatıldıysa veya akış değiştirildiyse tek çözüm taze oturum açmadır |
+| "Oturum açma durumu eşleşmedi" | Geri dönen `state` çerezdekiyle aynı değil (CSRF koruması); taze oturum açın |
+| `MERGEN_ROTA_KEYCLOAK_FLOW` hatası | Değer `authorization-code` veya `implicit-bridge` dışında bir şey; sessiz yedek yoktur |
 
 ---
 
@@ -278,6 +419,13 @@ yalnızca maskelenmiş alanları günlüğe yazar.
 - `test/keycloak-authentication-e2e.test.mjs` — imza, issuer, kitle, `azp`,
   algoritma, süre, bozuk jeton, Sicil biçimi, kullanıcı adı yedeği, PKCE,
   oturum açma/kapatma, çerez kurcalama, günlük gizliliği
+- `test/keycloak-implicit-bridge-e2e.test.mjs` — akış seçimi ve doğrulaması,
+  Authorization Code gerilemesi, implicit oturum açma isteği, geri dönüş
+  sayfası ve başlıkları, köprü ucunun tüm ret yolları, başarılı köprü, akış
+  ayrımı
+- `test/keycloak-flow-diagnostics-contract.test.mjs` — teşhis betiklerinde
+  dağıtım yolu/sır bulunmaması, akışa duyarlı sondalar, düzeltilmiş
+  `unauthorized_client` yorumu
 - `test/keycloak-authorization-boundary-e2e.test.mjs` — kimlik doğrulaması
   değişse de yetkilendirme önceliğinin korunması, UNAUTHORIZED/FORBIDDEN ayrımı
 - `test/user-photo-and-sidebar-e2e.test.mjs` — fotoğraf URL'si, baş harf yedeği,

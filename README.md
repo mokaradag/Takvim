@@ -94,18 +94,31 @@ PARTIAL görünürlük tam Project yönetim yetkisi vermez. Kısmi Task ağı ü
 
 ## Kimlik doğrulama (Keycloak)
 
-Kimlik doğrulama **Keycloak** ile yapılır ve varsayılan kiptir (`MERGEN_ROTA_AUTH_MODE=keycloak`). Akış Authorization Code + PKCE'dir; erişim jetonu tarayıcıda saklanmaz, sunucuda doğrulanır ve yalnızca doğrulanmış **Sicil** HttpOnly bir oturum çerezine yazılır.
+Kimlik doğrulama **Keycloak** ile yapılır ve varsayılan kiptir (`MERGEN_ROTA_AUTH_MODE=keycloak`). Erişim jetonu tarayıcıda **saklanmaz**, sunucuda doğrulanır ve yalnızca doğrulanmış **Sicil** HttpOnly bir oturum çerezine yazılır.
 
-- `GET /api/mergen-rota/auth/login` — PKCE ile Keycloak'a yönlendirir
-- `GET /api/mergen-rota/auth/callback` — kodu sunucuda jetonla takas eder, doğrular, oturum çerezini yazar
-- `POST /api/mergen-rota/auth/session` — uyumluluk ucu: `Authorization: Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
+Oturum açma akışı `MERGEN_ROTA_KEYCLOAK_FLOW` ile **açıkça** seçilir; tanınmayan bir değer yapılandırma hatasıdır ve sessizce başka akışa düşülmez:
+
+| Değer | Açıklama |
+| --- | --- |
+| `authorization-code` | **Varsayılan ve tercih edilen.** Authorization Code + PKCE. Kod → jeton takası sunucuda yapılır; jeton tarayıcıya hiç ulaşmaz. Keycloak istemcisi gizli (confidential) ise bu takas geçerli bir istemci kimlik doğrulaması gerektirir. |
+| `implicit-bridge` | **Uyumluluk kipi.** Hâlihazırda implicit akışla çalışan bir Keycloak istemcisi için. Jeton endpoint'i kullanılmaz, istemci secret'ı gerekmez; jeton yine sunucuda tam olarak doğrulanır. |
+
+- `GET /api/mergen-rota/auth/login` — seçili akışa göre Keycloak'a yönlendirir
+- `GET /api/mergen-rota/auth/callback` — (yalnızca Authorization Code) kodu sunucuda jetonla takas eder, doğrular, oturum çerezini yazar
+- `GET /auth/implicit-callback` — (yalnızca implicit köprü) URL parçasını okuyup **hemen silen** küçük geri dönüş sayfası
+- `POST /api/mergen-rota/auth/implicit-session` — (yalnızca implicit köprü) imzalı işlem çerezi + `state` + `Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
+- `POST /api/mergen-rota/auth/session` — genel uyumluluk ucu: `Authorization: Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
 - `POST|GET /api/mergen-rota/auth/logout` — MERGEN Rota oturumunu kapatır ve Keycloak `end_session` adresine yönlendirir
+
+Implicit köprüde erişim jetonu tarayıcıya kısa süreliğine URL parçasında ulaşır; parça `history.replaceState` ile derhâl silinir, jeton `localStorage`/`sessionStorage`/`IndexedDB`/çerez veya sorgu dizesinde **saklanmaz** ve yalnızca tek bir POST isteğiyle sunucuya gönderilir. Sunucu tarafındaki JWT ve Sicil doğrulaması her iki akışta da **aynıdır**.
 
 Güvenilen kimlik yalnızca doğrulanmış `sicil` claim'idir. Claim yoksa isteğe bağlı olarak `preferred_username → HR02 kurumsal kullanıcı adı → Sicil` çözümü yapılır; sonuç tekil değilse **UNAUTHORIZED** döner. Keycloak `resource_access` rollerinden MERGEN Rota SYSTEM_ADMIN yetkisi **türetilmez**.
 
 Sicil; istek gövdesi, sorgu dizesi, tarayıcı başlığı, localStorage veya görüntüleme alanlarından kabul edilmez. Kimlik yoksa yönetici, Demo veya geliştirme kimliğine sessizce düşülmez.
 
-Yerel geliştirme kimliği yalnızca `MERGEN_ROTA_AUTH_MODE=development` **ve** `MERGEN_ROTA_DEV_IDENTITY_ENABLED=true` birlikte verildiğinde çalışır; varsayılan olarak kapalıdır.
+Yerel geliştirme kimliği yalnızca `MERGEN_ROTA_AUTH_MODE=development` **ve** `MERGEN_ROTA_DEV_IDENTITY_ENABLED=true` birlikte verildiğinde çalışır; varsayılan olarak kapalıdır. Geliştirme kimliği bir üretim yedeği **değildir**: Keycloak akışı çalışmıyorsa çözüm yapılandırmayı düzeltmektir. Üretim HTTPS kullanmalı ve `MERGEN_ROTA_SESSION_COOKIE_SECURE=true` kalmalıdır.
+
+Her iki akışta da sunucu realm JWKS ucundan imza anahtarlarını çeker; kurumsal kök sertifika gerekiyorsa Node başlatılmadan önce `NODE_EXTRA_CA_CERTS` ayarlanmalıdır.
 
 Ayrıntılar, ortam değişkenleri, IT'nin kaydetmesi gereken adresler ve sorun giderme: [`docs/KEYCLOAK-SSO.md`](docs/KEYCLOAK-SSO.md).
 
