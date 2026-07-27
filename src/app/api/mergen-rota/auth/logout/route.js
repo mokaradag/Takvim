@@ -1,4 +1,5 @@
 import { readKeycloakConfig } from '../../../../../server/identity/keycloakConfig.js';
+import { APP_ROOT_PATH } from '../../../../../server/identity/keycloakFlows.js';
 import { buildEndSessionUrl } from '../../../../../server/identity/keycloakPkce.js';
 import { AUTH_TRANSACTION_COOKIE_NAME, SESSION_COOKIE_NAME } from '../../../../../server/identity/keycloakSessionCookie.js';
 import {
@@ -29,17 +30,19 @@ function logoutCookies(config, requestUrl) {
   ];
 }
 
+function fallbackPostLogoutRedirect(config, requestUrl) {
+  if (config.postLogoutRedirectUri) return config.postLogoutRedirectUri;
+  return new URL(APP_ROOT_PATH, new URL(requestUrl).origin).toString();
+}
+
 export async function POST(request) {
   const config = readKeycloakConfig();
-  const url = new URL(request.url);
-  const postLogoutRedirectUri = config.postLogoutRedirectUri || new URL('/', url.origin).toString();
+  const postLogoutRedirectUri = fallbackPostLogoutRedirect(config, request.url);
   const endSessionUrl = buildEndSessionUrl({
     endSessionEndpoint: config.endSessionEndpoint,
     clientId: config.clientId,
     postLogoutRedirectUri
   });
-  // İstemci yönlendirmeyi kendisi yapar; böylece fetch tabanlı çıkış akışında
-  // yönlendirme döngüsü oluşmaz.
   return jsonResponse(
     { signedOut: true, endSessionUrl: endSessionUrl || postLogoutRedirectUri },
     { cookieHeaders: logoutCookies(config, request.url) }
@@ -48,8 +51,7 @@ export async function POST(request) {
 
 export async function GET(request) {
   const config = readKeycloakConfig();
-  const url = new URL(request.url);
-  const postLogoutRedirectUri = config.postLogoutRedirectUri || new URL('/', url.origin).toString();
+  const postLogoutRedirectUri = fallbackPostLogoutRedirect(config, request.url);
   const endSessionUrl = buildEndSessionUrl({
     endSessionEndpoint: config.endSessionEndpoint,
     clientId: config.clientId,
