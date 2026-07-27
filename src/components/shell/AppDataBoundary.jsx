@@ -4,6 +4,7 @@ import { Icons } from '../icons';
 import { useDataLifecycle } from '../../state/hooks';
 import { AppLogo } from './AppLogo';
 import { DATA_MODES } from '../../data/dataMode';
+import { publicRotaPath } from '../../lib/publicPath.js';
 import { useDataMode } from './DataModeContext';
 
 /**
@@ -67,6 +68,8 @@ export function AppDataBoundary({ children }) {
   // düşülmez: Demo yalnızca kullanıcının bilinçli seçimidir.
   const sessionRequired = loadError?.code === 'SESSION_REQUIRED';
   const authenticationRejected = loadError?.code === 'UNAUTHORIZED';
+  const appRoot = publicRotaPath('/');
+  const loginHref = `${publicRotaPath('/api/mergen-rota/auth/login')}?returnTo=${encodeURIComponent(appRoot)}`;
 
   if (dataStatus === 'loading' && !hasLoadedOnce) {
     return (
@@ -110,12 +113,12 @@ export function AppDataBoundary({ children }) {
             ? 'Gerçek Sistem verileri yalnızca kurumsal kimlikle görüntülenebilir. Kurumsal hesabınızla oturum açın.'
             : authenticationRejected
               ? (loadError?.message || 'Kurumsal kimliğiniz doğrulanamadı. Sistem yöneticinizle görüşün.')
-            : 'Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.'}
+              : 'Proje verilerine şu anda erişilemiyor. Bağlantı yeniden kullanılabilir olduğunda tekrar deneyin.'}
         </p>
         <div className="app-boot-actions">
           {sessionRequired
             ? (
-              <a className="btn primary" href="/api/mergen-rota/auth/login">
+              <a className="btn primary" href={loginHref}>
                 <Icons.LogIn size={13} /> Kurumsal oturum aç
               </a>
             )
