@@ -16,6 +16,8 @@ export async function GET() {
     if (error instanceof ServerPersistenceError && error.code === 'SESSION_REQUIRED') {
       return Response.json({ authenticated: false }, { headers: NO_STORE_HEADERS });
     }
-    return safeErrorResponse(error);
+    const response = safeErrorResponse(error);
+    response.headers.set('cache-control', NO_STORE_HEADERS['cache-control']);
+    return response;
   }
 }
