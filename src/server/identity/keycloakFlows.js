@@ -16,8 +16,9 @@ import { publicRotaPath } from '../../lib/publicPath.js';
  *     secret'ı GEREKMEZ; jeton yine sunucuda doğrulanır ve aynı imzalı HttpOnly
  *     oturum çerezine çevrilir.
  *
- * Bu modül SAFTIR: ortam okumaz, ağa çıkmaz. Böylece hem sunucu yapılandırması
- * hem de saf yardımcılar aynı akış sabitlerini paylaşır.
+ * Akış sabitleri ile tarayıcıya görünen yollar aynı modülde tutulur; yol öneki
+ * yalnızca açık `NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH` yapılandırmasından
+ * gelir ve hiçbir gizli kimlik ayarı istemciye açılmaz.
  */
 
 export const KEYCLOAK_FLOWS = Object.freeze({
