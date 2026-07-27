@@ -170,16 +170,16 @@ test('teşhis dosyaları gerçek konak, IP veya kurumsal adres taşımaz', () =>
 
 /* ── Ortam şablonu ──────────────────────────────────────── */
 
-test('.env.example akış anahtarlarını yer tutucularla belgeler', () => {
-  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_FLOW=authorization-code$/m);
-  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI=https:\/\/<MERGEN_ROTA_HOST>:8008\/auth\/implicit-callback$/m);
-  // Authorization Code adresi implicit köprüye devredilmez.
-  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_REDIRECT_URI=https:\/\/<MERGEN_ROTA_HOST>:8008\/api\/mergen-rota\/auth\/callback$/m);
+test('.env.example etkin implicit köprü dağıtımını yer tutucularla belgeler', () => {
+  assert.match(ENV_EXAMPLE, /^NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH=\/rota$/m);
+  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge$/m);
   assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_CLIENT_SECRET=$/m);
+  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI=https:\/\/<MERGEN_HOST>\/rota\/auth\/implicit-callback$/m);
+  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_SESSION_COOKIE_SECURE=true$/m);
 
-  // Doğrudan test örneği yalnızca yer tutucu kullanır.
-  assert.match(ENV_EXAMPLE, /http:\/\/<TEST_HOST>:8008\/auth\/implicit-callback/);
-  assert.match(ENV_EXAMPLE, /MERGEN_ROTA_SESSION_COOKIE_SECURE=false/);
+  // Authorization Code adresi implicit köprü adresine devredilmez.
+  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_REDIRECT_URI=$/m);
+  assert.match(ENV_EXAMPLE, /MERGEN_ROTA_KEYCLOAK_FLOW=authorization-code/);
   assert.match(ENV_EXAMPLE, /NODE_EXTRA_CA_CERTS/);
 });
 

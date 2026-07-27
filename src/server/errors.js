@@ -17,8 +17,11 @@ export class ServerPersistenceError extends Error {
 }
 
 export function safeErrorResponse(error) {
-  console.error('MERGEN ROTA SERVER ERROR:', error);
   const known = error instanceof ServerPersistenceError;
+  // Oturum yokluğu yönlendirme akışının beklenen durumudur.
+  if (!known || error.code !== 'SESSION_REQUIRED') {
+    console.error('MERGEN ROTA SERVER ERROR:', error);
+  }
   return Response.json({
     error: {
       code: known ? error.code : 'MUTATION_FAILED',

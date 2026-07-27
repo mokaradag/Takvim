@@ -63,10 +63,12 @@ test('eski 3000 portu MERGEN Rota dağıtım talimatlarında kalmadı', () => {
   assert.doesNotMatch(readme, /localhost:3000/);
 });
 
-test('Keycloak yönlendirme örnekleri 8008 portunu ve maskeli konak adını kullanır', () => {
+test('Keycloak yönlendirme örnekleri maskeli konak ve rota önekini kullanır', () => {
   const env = read('.env.example');
-  assert.match(env, /MERGEN_ROTA_KEYCLOAK_REDIRECT_URI=https:\/\/<MERGEN_ROTA_HOST>:8008\/api\/mergen-rota\/auth\/callback/);
-  assert.match(env, /MERGEN_ROTA_KEYCLOAK_POST_LOGOUT_REDIRECT_URI=https:\/\/<MERGEN_ROTA_HOST>:8008\//);
+  assert.match(env, /^NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH=\/rota$/m);
+  assert.match(env, /^MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI=https:\/\/<MERGEN_HOST>\/rota\/auth\/implicit-callback$/m);
+  assert.match(env, /^MERGEN_ROTA_KEYCLOAK_POST_LOGOUT_REDIRECT_URI=https:\/\/<MERGEN_HOST>\/rota\/$/m);
+  assert.match(env, /^MERGEN_ROTA_KEYCLOAK_REDIRECT_URI=$/m);
 });
 
 /* ── Ortam şablonu ──────────────────────────────────────── */
@@ -74,6 +76,7 @@ test('Keycloak yönlendirme örnekleri 8008 portunu ve maskeli konak adını kul
 test('.env.example tüm Keycloak anahtarlarını yer tutucularla içerir', () => {
   const env = read('.env.example');
   const required = [
+    'NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH',
     'MERGEN_ROTA_AUTH_MODE',
     'MERGEN_ROTA_KEYCLOAK_FLOW',
     'MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI',
@@ -98,11 +101,14 @@ test('.env.example tüm Keycloak anahtarlarını yer tutucularla içerir', () =>
   assert.match(env, /NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL=https:\/\/<INTERNAL_PHOTO_HOST>\/<PHOTO_PATH>/);
 });
 
-test('yalnızca fotoğraf taban adresi NEXT_PUBLIC ile açığa çıkar ve bu belgelenmiştir', () => {
+test('yalnızca güvenli tarayıcı ayarları NEXT_PUBLIC ile açığa çıkar', () => {
   const env = read('.env.example');
   const publicKeys = [...env.matchAll(/^(NEXT_PUBLIC_[A-Z0-9_]+)=/gm)].map((match) => match[1]);
-  assert.deepEqual(publicKeys, ['NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL']);
-  // Tarayıcıya açık olduğu açıkça yazılmıştır.
+  assert.deepEqual(publicKeys, [
+    'NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH',
+    'NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL'
+  ]);
+  // Fotoğraf adresinin gizli olmadığı açıkça yazılmıştır.
   assert.match(env, /NOT A SECRET/);
   assert.match(env, /inlined into the client\s*\n#\s*bundle/);
 
@@ -178,7 +184,7 @@ test('SQL kurulum betiği sistem yöneticilerini parametreli tohumlar', () => {
 
 test('kimlik doğrulama uçları beklenen yolda ve Node çalışma zamanındadır', () => {
   const routes = [
-    ...['login', 'callback', 'session', 'logout', 'implicit-session']
+    ...['login', 'callback', 'session', 'status', 'logout', 'implicit-session']
       .map((name) => `src/app/api/mergen-rota/auth/${name}/route.js`),
     // Implicit köprünün tarayıcı geri dönüşü de bir route handler'dır.
     'src/app/auth/implicit-callback/route.js'

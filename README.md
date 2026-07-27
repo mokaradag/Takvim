@@ -32,6 +32,8 @@ npm run dev
 
 İlk Veri Modu seçiminde kullanıcı **Demo Modunu Aç** veya **Gerçek Sisteme Geç** seçeneklerinden birini seçer. Gerçek Sistem yüklenemezse Demo'ya sessiz dönüş yapılmaz; veritabanı, kimlik veya yetki hatası açıkça gösterilir ve Demo'ya dönüş kullanıcı kararıyla gerçekleşir.
 
+Gerçek Sistem seçildiğinde application-state provider kurulmadan önce kurumsal oturum denetlenir. Oturum yoksa kullanıcı doğrudan seçili Keycloak akışına yönlendirilir; uygulama içinde ayrıca `Oturum açmanız gerekiyor` kutusu gösterilmez.
+
 Kullanım modları aynı seçili veri kaynağı üzerinde çalışır:
 
 - **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu ve termin tarihiyle hızlı giriş ve Takvim takibi.
@@ -54,6 +56,7 @@ SQL bağlantısı yalnızca `src/server` altında bulunur. Feature, client compo
 
 Actual-mode API uçları:
 
+- `GET /api/mergen-rota/auth/status` — SQL'e gitmeden kurumsal oturumun varlığını denetler
 - `GET /api/mergen-rota/session`
 - `GET /api/mergen-rota/snapshot`
 - `POST /api/mergen-rota/commit`
@@ -103,12 +106,15 @@ Oturum açma akışı `MERGEN_ROTA_KEYCLOAK_FLOW` ile **açıkça** seçilir; ta
 | `authorization-code` | **Varsayılan ve tercih edilen.** Authorization Code + PKCE. Kod → jeton takası sunucuda yapılır; jeton tarayıcıya hiç ulaşmaz. Keycloak istemcisi gizli (confidential) ise bu takas geçerli bir istemci kimlik doğrulaması gerektirir. |
 | `implicit-bridge` | **Uyumluluk kipi.** Hâlihazırda implicit akışla çalışan bir Keycloak istemcisi için. Jeton endpoint'i kullanılmaz, istemci secret'ı gerekmez; jeton yine sunucuda tam olarak doğrulanır. |
 
+- `GET /api/mergen-rota/auth/status` — HttpOnly MERGEN Rota oturumunu kişisel alanları açmadan denetler
 - `GET /api/mergen-rota/auth/login` — seçili akışa göre Keycloak'a yönlendirir
 - `GET /api/mergen-rota/auth/callback` — (yalnızca Authorization Code) kodu sunucuda jetonla takas eder, doğrular, oturum çerezini yazar
 - `GET /auth/implicit-callback` — (yalnızca implicit köprü) URL parçasını okuyup **hemen silen** küçük geri dönüş sayfası
 - `POST /api/mergen-rota/auth/implicit-session` — (yalnızca implicit köprü) imzalı işlem çerezi + `state` + `Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
 - `POST /api/mergen-rota/auth/session` — genel uyumluluk ucu: `Authorization: Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
 - `POST|GET /api/mergen-rota/auth/logout` — MERGEN Rota oturumunu kapatır ve Keycloak `end_session` adresine yönlendirir
+
+Gerçek Sistem açılışında tarayıcı önce `auth/status` ucunu çağırır. Yanıt `authenticated: false` ise `auth/login?returnTo=<uygulama-kökü>` adresine `location.replace` ile geçilir. Böylece korunan `session` ve `snapshot` uçları oturum oluşmadan çağrılmaz; geri düğmesi de eski oturumsuz sayfaya yönlendirme döngüsü oluşturmaz.
 
 Implicit köprüde erişim jetonu tarayıcıya kısa süreliğine URL parçasında ulaşır; parça `history.replaceState` ile derhâl silinir, jeton `localStorage`/`sessionStorage`/`IndexedDB`/çerez veya sorgu dizesinde **saklanmaz** ve yalnızca tek bir POST isteğiyle sunucuya gönderilir. Sunucu tarafındaki JWT ve Sicil doğrulaması her iki akışta da **aynıdır**.
 
@@ -120,7 +126,7 @@ Yerel geliştirme kimliği yalnızca `MERGEN_ROTA_AUTH_MODE=development` **ve** 
 
 Her iki akışta da sunucu realm JWKS ucundan imza anahtarlarını çeker; kurumsal kök sertifika gerekiyorsa Node başlatılmadan önce `NODE_EXTRA_CA_CERTS` ayarlanmalıdır.
 
-Ayrıntılar, ortam değişkenleri, IT'nin kaydetmesi gereken adresler ve sorun giderme: [`docs/KEYCLOAK-SSO.md`](docs/KEYCLOAK-SSO.md).
+Ayrıntılar, ortam değişkenleri, IT'nin kaydetmesi gereken adresler ve sorun giderme: [`docs/KEYCLOAK-SSO.md`](docs/KEYCLOAK-SSO.md). Otomatik açılış sınırı: [`docs/AUTOMATIC-AUTH-BOOTSTRAP.md`](docs/AUTOMATIC-AUTH-BOOTSTRAP.md).
 
 ## Kullanıcı fotoğrafları
 
@@ -167,6 +173,7 @@ npm run start -- -H 0.0.0.0 -p 8008
 Ayrıntılar:
 
 - `docs/KEYCLOAK-SSO.md`
+- `docs/AUTOMATIC-AUTH-BOOTSTRAP.md`
 - `docs/DURABLE-PERSISTENCE.md`
 - `docs/DATABASE-SCHEMA.md`
 - `docs/AUTHORIZATION-MODEL.md`
