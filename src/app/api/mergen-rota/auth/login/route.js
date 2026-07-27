@@ -3,7 +3,11 @@ import {
   assertKeycloakConfigured,
   readKeycloakConfig
 } from '../../../../../server/identity/keycloakConfig.js';
-import { IMPLICIT_CALLBACK_PATH } from '../../../../../server/identity/keycloakFlows.js';
+import {
+  APP_ROOT_PATH,
+  AUTHORIZATION_CALLBACK_PATH,
+  IMPLICIT_CALLBACK_PATH
+} from '../../../../../server/identity/keycloakFlows.js';
 import {
   buildAuthorizationUrl,
   buildImplicitAuthorizationUrl,
@@ -30,22 +34,11 @@ export const fetchCache = 'force-no-store';
  *
  * Etkin akış YALNIZCA sunucu yapılandırmasından (`MERGEN_ROTA_KEYCLOAK_FLOW`)
  * seçilir; tarayıcı akışı değiştiremez.
- *
- *   • `authorization-code` (varsayılan): PKCE üretilir, `response_type=code`
- *     gönderilir, `code_verifier` yalnızca imzalı HttpOnly işlem çerezinde
- *     taşınır.
- *   • `implicit-bridge`: PKCE ÜRETİLMEZ, `response_type=token` ve
- *     `response_mode=fragment` gönderilir; işlem çerezi yalnızca `state`,
- *     `returnTo` ve süre taşır.
- *
- * Her iki akışta da `returnTo` yalnızca uygulama içi bir yol olabilir; açık
- * yönlendirme (open redirect) engellenir. İstemci secret'ı yetkilendirme
- * adresine HİÇBİR koşulda yazılmaz.
  */
 function authorizationCodeRedirect({ config, requestUrl, returnTo, secure }) {
   const transaction = createAuthTransaction({ returnTo });
   const redirectUri = config.redirectUri
-    || new URL('/api/mergen-rota/auth/callback', requestUrl.origin).toString();
+    || new URL(AUTHORIZATION_CALLBACK_PATH, requestUrl.origin).toString();
 
   const authorizationUrl = buildAuthorizationUrl({
     authorizationEndpoint: config.authorizationEndpoint,
@@ -71,8 +64,6 @@ function authorizationCodeRedirect({ config, requestUrl, returnTo, secure }) {
 
 function implicitBridgeRedirect({ config, requestUrl, returnTo, secure }) {
   const transaction = createImplicitAuthTransaction({ returnTo });
-  // Açık adres tercih edilir; boşsa istek kökünden türetilir. Üretimde Keycloak
-  // kaydıyla birebir aynı adres yapılandırılmalıdır.
   const redirectUri = config.implicitRedirectUri
     || new URL(IMPLICIT_CALLBACK_PATH, requestUrl.origin).toString();
 
@@ -84,7 +75,6 @@ function implicitBridgeRedirect({ config, requestUrl, returnTo, secure }) {
     state: transaction.state
   });
 
-  // İşlem yükünde `codeVerifier` YOKTUR: bu akışta PKCE üretilmez.
   const cookie = transactionCookieHeader(signSessionValue({
     flow: transaction.flow,
     state: transaction.state,
@@ -99,7 +89,7 @@ export async function GET(request) {
   try {
     const config = assertKeycloakConfigured(readKeycloakConfig());
     const url = new URL(request.url);
-    const returnTo = safeReturnTo(url.searchParams.get('returnTo') || '/');
+    const returnTo = safeReturnTo(url.searchParams.get('returnTo') || APP_ROOT_PATH);
     const secure = authCookieSecurity(config, request.url);
 
     return config.flow === KEYCLOAK_FLOWS.IMPLICIT_BRIDGE
