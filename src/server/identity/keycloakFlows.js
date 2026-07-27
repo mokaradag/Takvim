@@ -1,3 +1,5 @@
+import { publicRotaPath } from '../../lib/publicPath.js';
+
 /**
  * Keycloak oturum açma akışının SEÇİMİ.
  *
@@ -30,14 +32,20 @@ export const SUPPORTED_KEYCLOAK_FLOWS = Object.freeze([
 
 export const DEFAULT_KEYCLOAK_FLOW = KEYCLOAK_FLOWS.AUTHORIZATION_CODE;
 
+/** Browser-visible application root. */
+export const APP_ROOT_PATH = publicRotaPath('/');
+
+/** Authorization Code callback exposed to the browser. */
+export const AUTHORIZATION_CALLBACK_PATH = publicRotaPath('/api/mergen-rota/auth/callback');
+
 /** Implicit köprünün tarayıcı tarafı geri dönüş yolu (uygulama içi). */
-export const IMPLICIT_CALLBACK_PATH = '/auth/implicit-callback';
+export const IMPLICIT_CALLBACK_PATH = publicRotaPath('/auth/implicit-callback');
 
 /** Doğrulanmış jetonu HttpOnly oturuma çeviren adanmış uç. */
-export const IMPLICIT_SESSION_ENDPOINT = '/api/mergen-rota/auth/implicit-session';
+export const IMPLICIT_SESSION_ENDPOINT = publicRotaPath('/api/mergen-rota/auth/implicit-session');
 
 /** Başarısız köprüden sonra kullanılan güvenli yeniden deneme adresi. */
-export const LOGIN_ENDPOINT = '/api/mergen-rota/auth/login';
+export const LOGIN_ENDPOINT = publicRotaPath('/api/mergen-rota/auth/login');
 
 /**
  * Boş değer varsayılan akışa (Authorization Code) düşer. Tanınmayan veya bozuk
