@@ -93,6 +93,8 @@ export function normalizeActualChanges(changes = {}) {
       projectId: requiredActualUuid(task.projectId, 'Görev proje kimliği'),
       wbsId: toOptionalActualUuid(task.wbsId, 'Görev WBS kimliği'),
       calendarId: toOptionalActualUuid(task.calendarId, 'Görev takvim kimliği'),
+      // Yineleme, seri şablonuna Gerçek Sistem kimliğiyle bağlanır.
+      recurrenceParentId: toOptionalActualUuid(task.recurrenceParentId, 'Tekrar şablonu kimliği'),
       status: toOptionalPersistenceStatus(task.status),
       deps: Array.isArray(task.deps) ? task.deps.map((dependency) => ({
         ...dependency,
@@ -134,6 +136,7 @@ function collectClientIds(changes = {}, map = new Map()) {
     rememberClientId(map, task?.projectId);
     rememberClientId(map, task?.wbsId);
     rememberClientId(map, task?.calendarId);
+    rememberClientId(map, task?.recurrenceParentId);
     for (const dependency of Array.isArray(task?.deps) ? task.deps : []) {
       rememberClientId(map, dependency?.id);
       rememberClientId(map, dependency?.predecessorId);
@@ -188,6 +191,7 @@ export function restoreActualCommitIds(body, changes = {}, aliases = null) {
       projectId: restoreClientId(task.projectId, map),
       wbsId: restoreClientId(task.wbsId, map),
       calendarId: restoreClientId(task.calendarId, map),
+      recurrenceParentId: restoreClientId(task.recurrenceParentId, map),
       deps: (task.deps || []).map((dependency) => ({
         ...dependency,
         predecessorId: restoreClientId(dependency.predecessorId, map)
@@ -232,6 +236,7 @@ export function restoreActualSnapshotIds(body, map) {
       projectId: restoreClientId(task.projectId, map),
       wbsId: restoreClientId(task.wbsId, map),
       calendarId: restoreClientId(task.calendarId, map),
+      recurrenceParentId: restoreClientId(task.recurrenceParentId, map),
       deps: (task.deps || []).map((dependency) => ({
         ...dependency,
         predecessorId: restoreClientId(dependency.predecessorId, map)

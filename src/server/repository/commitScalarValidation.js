@@ -1,3 +1,5 @@
+import { normalizeRecurrenceRule } from '../../scheduling/recurrence/index.js';
+
 const TASK_STATUSES = new Set(['planned', 'in-progress', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical', 'normal']);
 const DEPENDENCY_LAG_UNITS = new Set(['day', 'week', 'month']);
@@ -132,6 +134,26 @@ function validateTaskScalars(changes) {
     if (keywordIssue) return keywordIssue;
     if (task.keyword != null && task.keyword.length > 255) {
       return issue('TASK_KEYWORD_TOO_LONG', `${basePath}.keyword`, 'Görev anahtar sözcüğü en fazla 255 karakter olabilir.');
+    }
+
+    // Tekrar kuralı RFC 5545 altkümesidir: ayrıştırılamayan bir metin kalıcı
+    // kayda düşerse arayüz seriyi hiç açamaz ve kural sessizce yok sayılırdı.
+    const recurrenceIssue = validateOptionalString(task?.recurrence, `${basePath}.recurrence`, 'Görev tekrar kuralı');
+    if (recurrenceIssue) return recurrenceIssue;
+    if (text(task.recurrence)) {
+      if (text(task.recurrence).length > 400) {
+        return issue('TASK_RECURRENCE_TOO_LONG', `${basePath}.recurrence`, 'Görev tekrar kuralı en fazla 400 karakter olabilir.');
+      }
+      if (!normalizeRecurrenceRule(task.recurrence)) {
+        return issue('TASK_RECURRENCE_INVALID', `${basePath}.recurrence`, 'Görev tekrar kuralı geçerli bir RFC 5545 RRULE olmalıdır.');
+      }
+      if (text(task.recurrenceParentId)) {
+        return issue(
+          'TASK_RECURRENCE_CONFLICT',
+          `${basePath}.recurrence`,
+          'Bir yineleme kendi tekrar kuralını taşıyamaz; kural yalnızca seri şablonunda bulunur.'
+        );
+      }
     }
 
     if (task.status !== undefined && typeof task.status !== 'string') {

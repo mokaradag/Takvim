@@ -4,6 +4,7 @@ import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
+import { describeRecurrenceRule } from '../../scheduling/recurrence';
 import { projectColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, Kw, StatusPill, StatusIcon } from '../../components/ui';
 import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
@@ -252,6 +253,17 @@ export function TasksView() {
                       <div className="row" style={{ gap: 6 }}>
                         {t.milestone && <Icons.Diamond size={10} style={{ color: projectColorVar(t.proje) }} />}
                         <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.task}</div>
+                        {/* Seri şablonu kuralı taşır; yinelemeler şablona bağlıdır. */}
+                        {t.recurrence && (
+                          <span className="recurrence-badge" title={describeRecurrenceRule(t.recurrence)}>
+                            <Icons.Clock size={9} /> Seri
+                          </span>
+                        )}
+                        {t.recurrenceParentId && (
+                          <span className="recurrence-badge" title="Tekrar serisinden üretilmiş yineleme">
+                            <Icons.Clock size={9} /> Tekrar
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td><Kw color={t.color}>{t.keyword}</Kw></td>

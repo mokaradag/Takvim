@@ -70,7 +70,7 @@ test('tag-only project updates preserve a missing data date instead of inventing
   assert.equal(updated.project.dataDate, null);
   assert.equal(updated.project.leadId, 'u-1');
   assert.equal(updated.project.color, 'blue');
-  assert.deepEqual(updated.project.tags, ['Analiz', 'Teslim']);
+  assert.deepEqual(updated.project.tags.map((tag) => tag.name), ['Analiz', 'Teslim']);
 });
 
 test('a failed one-step task creation does not leave a placeholder task behind', async () => {
@@ -138,7 +138,8 @@ test('simple mode creates the final task in one guarded mutation and keeps proje
   const provider = read('src/state/AppStateProvider.jsx');
 
   assert.doesNotMatch(simple, /updateTask/);
-  assert.match(simple, /updateProject\(project\.id, \{ tags: \[\.\.\.tags, keyword\.trim\(\)\] \}\)/);
+  // Hızlı giriş etiketi kataloğa kanonik üçlü olarak ekler (ad + varsayılan renk/simge).
+  assert.match(simple, /updateProject\(project\.id, \{ tags: \[\.\.\.tags, \{ name: keyword\.trim\(\) \}\] \}\)/);
   assert.match(simple, /const createdTask = await addTask\(\{/);
   assert.match(simple, /projectId: project\.id/);
   assert.match(simple, /color: project\.color \|\| 'blue'/);

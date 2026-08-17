@@ -312,6 +312,70 @@
 }
 .wbs-inline-add { margin-top: 4px; color: var(--text-dim); }
 
+/* ── Tekrarlayan görev düzenleyicisi ───────────────────────────
+   Kural formu ve RFC 5545 karşılığı yan yana gösterilir: kullanıcı ne
+   tanımladığını, dışa aktarımda ne taşındığını aynı anda görür. */
+.recurrence-days { display: flex; flex-wrap: wrap; gap: 5px; }
+.recurrence-day {
+  min-width: 40px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.recurrence-day:hover { border-color: var(--border-strong); color: var(--text); }
+.recurrence-day.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.recurrence-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+}
+.recurrence-rule { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.recurrence-code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+.recurrence-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.recurrence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* ── Task Detail drawer ────────────────────────────────────── */
 .drawer-backdrop { z-index: var(--z-drawer-backdrop); }
 .drawer {

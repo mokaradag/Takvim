@@ -126,7 +126,7 @@ test('project tag deduplication remaps legacy task variants to the retained tag'
   }, context);
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.project.tags, ['Test']);
+  assert.deepEqual(result.project.tags.map((tag) => tag.name), ['Test']);
   assert.deepEqual(
     result.changes.taskUpserts.map((task) => [task.id, task.keyword]),
     [['t1', 'Test'], ['t2', 'Test']]

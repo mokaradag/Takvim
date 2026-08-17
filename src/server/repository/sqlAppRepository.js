@@ -10,6 +10,8 @@ import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
+import { normalizeProjectTags } from '../../domain/tags/index.js';
+import { formatRecurrenceRule } from '../../scheduling/recurrence/index.js';
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
 import { synchronizeCorporateWbs } from './corporateWbsSync.js';
 import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
@@ -194,7 +196,7 @@ async function loadSnapshotFrom(executor, auth) {
     WHERE p.IsActive = 1
     ORDER BY p.ProjectName;
 
-    SELECT pt.ProjectId, pt.TagName, pt.SortOrder
+    SELECT pt.ProjectId, pt.TagName, pt.ColorToken, pt.IconKey, pt.SortOrder
     FROM dbo.MR_ProjectTags pt
     JOIN @VisibleProjects v ON v.ProjectId = pt.ProjectId
     ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
@@ -333,7 +335,9 @@ async function loadSnapshotFrom(executor, auth) {
   for (const row of tagRows || []) {
     const key = id(row.ProjectId);
     if (!tags.has(key)) tags.set(key, []);
-    tags.get(key).push(row.TagName);
+    // Renk/simge boş olabilir (eski kayıtlar); alan modeli ada göre kararlı bir
+    // varsayılan türetir, bu yüzden burada uydurma bir değer yazılmaz.
+    tags.get(key).push({ name: row.TagName, color: row.ColorToken || null, icon: row.IconKey || null });
   }
   for (const row of assigneeRows || []) {
     const key = id(row.TaskId);
@@ -428,6 +432,9 @@ async function loadSnapshotFrom(executor, auth) {
       actualHours: nullableNumber(row.ActualHours),
       budget: nullableNumber(row.Budget),
       spent: nullableNumber(row.Spent),
+      // Tekrar kuralı yalnızca seri şablonunda dolu; yinelemeler üst göreve bağlıdır.
+      recurrence: row.RecurrenceRule || null,
+      recurrenceParentId: id(row.RecurrenceParentTaskId),
       sortOrder: row.SortOrder,
       assigneeIds: assignees.get(id(row.TaskId)) || [],
       deps: dependencies.get(id(row.TaskId)) || [],
@@ -457,15 +464,21 @@ async function reconcileProjectTags(executor, actorSicil, projectId, values) {
   const clear = request(executor);
   clear.input('projectId', sql.UniqueIdentifier, projectId);
   await clear.query('DELETE dbo.MR_ProjectTags WHERE ProjectId = @projectId;');
-  for (let index = 0; index < (values || []).length; index += 1) {
+  // Etiket kataloğu alan modelinde kanonikleştirilir: düz metinler de kabul
+  // edilir ve renk/simge anahtarları kapalı kümeye göre doğrulanır.
+  const canonical = normalizeProjectTags(values);
+  for (let index = 0; index < canonical.length; index += 1) {
+    const tag = canonical[index];
     const req = request(executor);
     req.input('projectId', sql.UniqueIdentifier, projectId);
-    req.input('tagName', sql.NVarChar(255), values[index]);
+    req.input('tagName', sql.NVarChar(255), tag.name);
+    req.input('colorToken', sql.VarChar(20), tag.color);
+    req.input('iconKey', sql.VarChar(40), tag.icon);
     req.input('sortOrder', sql.Int, index);
     req.input('actorSicil', sql.Int, actorSicil);
     await req.query(`
-      INSERT dbo.MR_ProjectTags(ProjectId, TagName, SortOrder, CreatedBySicil)
-      VALUES(@projectId, @tagName, @sortOrder, @actorSicil);
+      INSERT dbo.MR_ProjectTags(ProjectId, TagName, ColorToken, IconKey, SortOrder, CreatedBySicil)
+      VALUES(@projectId, @tagName, @colorToken, @iconKey, @sortOrder, @actorSicil);
     `);
   }
 }
@@ -699,6 +712,9 @@ async function commitTask(executor, actor, task, correlationId) {
   req.input('budget', sql.Decimal(19, 4), nullableNumber(task.budget));
   req.input('spent', sql.Decimal(19, 4), nullableNumber(task.spent));
   req.input('sortOrder', sql.Int, task.sortOrder ?? null);
+  // Kural kanonikleştirilerek yazılır: geçersiz bir RRULE metni kalıcı kayda düşmez.
+  req.input('recurrenceRule', sql.NVarChar(400), formatRecurrenceRule(task.recurrence) || null);
+  req.input('recurrenceParentId', sql.UniqueIdentifier, task.recurrenceParentId ? uuid(task.recurrenceParentId) : null);
   req.input('actorSicil', sql.Int, actor.sicil);
 
   if (!before) {
@@ -707,12 +723,12 @@ async function commitTask(executor, actor, task, correlationId) {
         TaskId, ProjectId, WbsId, CalendarId, Title, Description, Keyword, Status, Priority,
         IsMilestone, PlannedStart, PlannedFinish, PlannedDurationDays, TargetFinish,
         ActualStart, ActualFinish, RemainingDurationDays, Progress, PlannedHours, ActualHours,
-        Budget, Spent, SortOrder, CreatedBySicil, UpdatedBySicil
+        Budget, Spent, RecurrenceRule, RecurrenceParentTaskId, SortOrder, CreatedBySicil, UpdatedBySicil
       ) VALUES(
         @taskId, @projectId, @wbsId, @calendarId, @title, @description, @keyword, @status, @priority,
         @isMilestone, @plannedStart, @plannedFinish, @plannedDuration, @targetFinish,
         @actualStart, @actualFinish, @remainingDuration, @progress, @plannedHours, @actualHours,
-        @budget, @spent, @sortOrder, @actorSicil, @actorSicil
+        @budget, @spent, @recurrenceRule, @recurrenceParentId, @sortOrder, @actorSicil, @actorSicil
       );
     `);
   } else {
@@ -726,7 +742,9 @@ async function commitTask(executor, actor, task, correlationId) {
           ActualStart = @actualStart, ActualFinish = @actualFinish,
           RemainingDurationDays = @remainingDuration, Progress = @progress,
           PlannedHours = @plannedHours, ActualHours = @actualHours,
-          Budget = @budget, Spent = @spent, SortOrder = @sortOrder,
+          Budget = @budget, Spent = @spent,
+          RecurrenceRule = @recurrenceRule, RecurrenceParentTaskId = @recurrenceParentId,
+          SortOrder = @sortOrder,
           UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
       WHERE TaskId = @taskId AND RowVersion = @version;
       SELECT @@ROWCOUNT AS Affected;

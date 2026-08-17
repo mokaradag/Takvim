@@ -617,7 +617,13 @@ function runQuery(db, statement, params, { database }) {
     return result([[]]);
   }
   if (sqlText.includes('INSERT dbo.MR_ProjectTags(')) {
-    db.projectTags.push({ ProjectId: guid(params.projectId), TagName: params.tagName, SortOrder: params.sortOrder });
+    db.projectTags.push({
+      ProjectId: guid(params.projectId),
+      TagName: params.tagName,
+      ColorToken: params.colorToken ?? null,
+      IconKey: params.iconKey ?? null,
+      SortOrder: params.sortOrder
+    });
     return result([[]]);
   }
   if (sqlText.includes('INSERT dbo.MR_WBS(WbsId, ProjectId, ParentWbsId, Code, Name, SortOrder,')) {
@@ -678,6 +684,8 @@ function runQuery(db, statement, params, { database }) {
       ActualHours: params.actualHours ?? null,
       Budget: params.budget ?? null,
       Spent: params.spent ?? null,
+      RecurrenceRule: params.recurrenceRule ?? null,
+      RecurrenceParentTaskId: guid(params.recurrenceParentId),
       SortOrder: params.sortOrder ?? null,
       RowVersion: nextVersion()
     });
@@ -708,6 +716,8 @@ function runQuery(db, statement, params, { database }) {
       ActualHours: params.actualHours ?? null,
       Budget: params.budget ?? null,
       Spent: params.spent ?? null,
+      RecurrenceRule: params.recurrenceRule ?? null,
+      RecurrenceParentTaskId: guid(params.recurrenceParentId),
       SortOrder: params.sortOrder ?? null,
       RowVersion: nextVersion()
     });

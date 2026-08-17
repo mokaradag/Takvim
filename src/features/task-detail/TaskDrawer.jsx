@@ -5,6 +5,7 @@ import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
 import { isArchivedProject, projectTypeMeta, visibleProjects } from '../../domain/projectTypes';
+import { normalizeProjectTags } from '../../domain/tags';
 import {
   LAG_UNITS,
   REL_TYPES,
@@ -15,12 +16,19 @@ import {
   lagValueOf,
   relTypeOf
 } from '../../scheduling/dependencies';
-import { diffDays, fmt, today } from '../../scheduling/dates';
+import { TR_DAYS, diffDays, fmt, today } from '../../scheduling/dates';
+import {
+  RECURRENCE_WEEKDAYS,
+  describeRecurrenceRule,
+  expandRecurrence,
+  formatRecurrenceRule,
+  normalizeRecurrenceRule
+} from '../../scheduling/recurrence';
 import { getTaskCalendarWarnings } from '../../scheduling/calendarWarnings';
-import { projectColorVar } from '../../lib/colors';
+import { COLOR_MAP, projectColorVar } from '../../lib/colors';
 import { Avatar, Kw, StatusIcon, statusColorVar } from '../../components/ui';
 import { InfoButton } from '../../components/ui-extras';
-import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskPrimaryBaseline } from '../../state/hooks';
+import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskActions, useTaskPrimaryBaseline } from '../../state/hooks';
 
 function legacyProjectTags(projectId, tasks) {
   return Array.from(new Set(
@@ -30,9 +38,12 @@ function legacyProjectTags(projectId, tasks) {
   )).sort((a, b) => a.localeCompare(b, 'tr'));
 }
 
+/** Kanonik etiket kataloğu: `{name, color, icon}` üçlüleri. */
 function tagsForProject(project, tasks) {
   if (!project) return [];
-  return Array.isArray(project.tags) ? project.tags : legacyProjectTags(project.id, tasks);
+  return normalizeProjectTags(Array.isArray(project.tags) && project.tags.length
+    ? project.tags
+    : legacyProjectTags(project.id, tasks));
 }
 
 function projectLabel(project) {
@@ -51,6 +62,11 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const calendars = useCalendars();
   const allWbs = useAllWbs();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
+  const { generateTaskSeries } = useTaskActions();
+  const occurrenceCount = useMemo(
+    () => tasks.filter((item) => item.recurrenceParentId === task.id).length,
+    [tasks, task.id]
+  );
   const [local, setLocal] = useState({ ...task });
 
   useEffect(() => { setLocal({ ...task }); }, [task]);
@@ -142,7 +158,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   };
 
   useEffect(() => {
-    if (local.keyword !== 'Yeni' || projectTags.includes('Yeni')) return;
+    if (local.keyword !== 'Yeni' || projectTags.some((tag) => tag.name === 'Yeni')) return;
     setLocal((current) => ({ ...current, keyword: '' }));
     onUpdate(task.id, { keyword: '' });
   }, [local.keyword, projectTags, task.id, onUpdate]);
@@ -157,7 +173,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
       proje: project?.name || '',
       color: project?.color || local.color,
       wbsId: roots.length === 1 ? roots[0].id : null,
-      keyword: tags.includes(local.keyword) ? local.keyword : (tags[0] || '')
+      keyword: tags.some((tag) => tag.name === local.keyword) ? local.keyword : (tags[0]?.name || '')
     });
   };
 
@@ -269,7 +285,15 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                 <div className="label">Etiket</div>
                 <SearchableSelect
                   value={local.keyword || ''}
-                  options={projectTags.map((tag) => ({ value: tag, label: tag, keywords: [tag] }))}
+                  options={projectTags.map((tag) => {
+                    const TagIcon = Icons[tag.icon] || Icons.Flag;
+                    return {
+                      value: tag.name,
+                      label: tag.name,
+                      keywords: [tag.name],
+                      icon: <TagIcon size={13} style={{ color: COLOR_MAP[tag.color] || 'var(--c-blue)' }} />
+                    };
+                  })}
                   onChange={(keyword) => save({ keyword })}
                   placeholder={projectTags.length ? 'Etiket seçin' : 'Önce Proje Yapısı sayfasında etiket tanımlayın'}
                   searchPlaceholder="Etiket adıyla ara"
@@ -323,6 +347,29 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                   ))}
                 </div>
               )}
+            </Section>
+
+            <Section
+              title="Tekrar"
+              info={
+                <InfoButton title="Tekrarlayan görev" icon={<Icons.Clock size={12} />}>
+                  <p>Uzun süre boyunca aynı işin düzenli olarak yinelendiği durumlar için tekrar kuralı tanımlayın.</p>
+                  <div className="rt-sep" />
+                  <p>Kural, takvim uygulamalarının ortak standardı olan <strong>RFC 5545 RRULE</strong> biçiminde saklanır;
+                    dışa aktarıldığında başka bir sisteme olduğu gibi taşınabilir.</p>
+                  <div className="rt-sep" />
+                  <div className="rt-row"><span className="rt-label">Şablon</span><span className="rt-val">Kuralı taşıyan görev</span></div>
+                  <div className="rt-row"><span className="rt-label">Yineleme</span><span className="rt-val">Üretilen sıradan görev</span></div>
+                  <div className="rt-foot"><Icons.Sparkle size={11} /> Yinelemeler tek tek ilerletilebilir ve düzenlenebilir.</div>
+                </InfoButton>
+              }
+            >
+              <RecurrenceEditor
+                task={local}
+                occurrenceCount={occurrenceCount}
+                onChange={(recurrence) => save({ recurrence })}
+                onGenerate={() => generateTaskSeries(task.id)}
+              />
             </Section>
 
             <Section title="Gerçekleşen & Kalan">
@@ -399,6 +446,197 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Tekrar kuralı düzenleyicisi.
+ *
+ * Kural içeride RFC 5545 `RRULE` metni olarak tutulur; form alanları yalnızca
+ * bu metnin okunabilir bir yüzüdür. Böylece kural dışa aktarımda ve başka
+ * sistemlerle alışverişte standart kalır.
+ */
+function RecurrenceEditor({ task, occurrenceCount, onChange, onGenerate }) {
+  const rule = normalizeRecurrenceRule(task.recurrence);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const patch = (changes) => {
+    const next = normalizeRecurrenceRule({ ...(rule || { freq: 'WEEKLY', interval: 1 }), ...changes });
+    setMessage(null);
+    onChange(next ? formatRecurrenceRule(next) : null);
+  };
+
+  const preview = rule
+    ? expandRecurrence(rule, { start: task.plannedStart, limit: 4 })
+    : [];
+
+  const generate = async () => {
+    setBusy(true);
+    setMessage(null);
+    const result = await onGenerate();
+    setBusy(false);
+    if (!result?.ok) {
+      setMessage({ type: 'error', text: result?.error?.message || 'Tekrarlar oluşturulamadı.' });
+      return;
+    }
+    const created = Array.isArray(result.value?.taskUpserts) ? result.value.taskUpserts.length : 0;
+    setMessage({
+      type: 'success',
+      text: created ? `${created} yineleme oluşturuldu.` : 'Oluşturulacak yeni yineleme yok.'
+    });
+  };
+
+  if (task.recurrenceParentId) {
+    return (
+      <div className="recurrence-note">
+        <Icons.Clock size={13} />
+        <span>Bu görev bir tekrar serisinin yinelemesidir. Kural, serinin şablon görevinde tanımlıdır.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <select
+          className="input"
+          aria-label="Tekrar sıklığı"
+          value={rule?.freq || ''}
+          onChange={(event) => (event.target.value
+            ? patch({ freq: event.target.value })
+            : onChange(null))}
+          style={{ maxWidth: 170 }}
+        >
+          <option value="">Tekrar yok</option>
+          <option value="DAILY">Günlük</option>
+          <option value="WEEKLY">Haftalık</option>
+          <option value="MONTHLY">Aylık</option>
+          <option value="YEARLY">Yıllık</option>
+        </select>
+        {rule && (
+          <label className="row" style={{ gap: 6, fontSize: 12 }}>
+            <span className="muted">Aralık</span>
+            <input
+              className="input tabular"
+              type="number"
+              min={1}
+              max={99}
+              aria-label="Tekrar aralığı"
+              value={rule.interval}
+              onChange={(event) => patch({ interval: event.target.value })}
+              style={{ width: 68 }}
+            />
+          </label>
+        )}
+      </div>
+
+      {rule?.freq === 'WEEKLY' && (
+        <div className="recurrence-days" role="group" aria-label="Tekrar günleri">
+          {RECURRENCE_WEEKDAYS.map((day, index) => (
+            <button
+              key={day}
+              type="button"
+              className={`recurrence-day${rule.byWeekday.includes(day) ? ' active' : ''}`}
+              aria-pressed={rule.byWeekday.includes(day)}
+              onClick={() => patch({
+                byWeekday: rule.byWeekday.includes(day)
+                  ? rule.byWeekday.filter((value) => value !== day)
+                  : [...rule.byWeekday, day]
+              })}
+            >
+              {TR_DAYS[index]}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {rule?.freq === 'MONTHLY' && (
+        <label className="row" style={{ gap: 6, fontSize: 12 }}>
+          <span className="muted">Ayın günü</span>
+          <input
+            className="input tabular"
+            type="number"
+            min={1}
+            max={31}
+            aria-label="Ayın günü"
+            value={rule.byMonthDay || ''}
+            placeholder="Başlangıç günü"
+            onChange={(event) => patch({ byMonthDay: event.target.value })}
+            style={{ width: 90 }}
+          />
+        </label>
+      )}
+
+      {rule && (
+        <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+          <label className="row" style={{ gap: 6, fontSize: 12 }}>
+            <span className="muted">Yineleme sayısı</span>
+            <input
+              className="input tabular"
+              type="number"
+              min={1}
+              max={400}
+              aria-label="Yineleme sayısı"
+              value={rule.count || ''}
+              placeholder="—"
+              onChange={(event) => patch({ count: event.target.value, until: null })}
+              style={{ width: 80 }}
+            />
+          </label>
+          <label className="row" style={{ gap: 6, fontSize: 12 }}>
+            <span className="muted">Bitiş tarihi</span>
+            <DateInput
+              value={rule.until || ''}
+              onChange={(value) => patch({ until: value, count: null })}
+              allowEmpty
+            />
+          </label>
+        </div>
+      )}
+
+      {rule && (
+        <div className="recurrence-summary">
+          <div className="row" style={{ gap: 8, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <span className="recurrence-rule">{describeRecurrenceRule(rule)}</span>
+            <code className="recurrence-code">RRULE:{formatRecurrenceRule(rule)}</code>
+          </div>
+          {preview.length > 0 && (
+            <div className="muted" style={{ fontSize: 11.5 }}>
+              İlk yinelemeler: {preview.map((date) => fmt(date, 'dd MMM')).join(' · ')}
+              {!rule.count && !rule.until ? ' · …' : ''}
+            </div>
+          )}
+          {!task.plannedStart && (
+            <div className="muted" style={{ fontSize: 11.5, color: 'var(--status-overdue)' }}>
+              Yinelemeleri üretmek için önce planlanan başlangıç tarihi girilmelidir.
+            </div>
+          )}
+        </div>
+      )}
+
+      {rule && (
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={busy || !task.plannedStart}
+            onClick={generate}
+          >
+            <Icons.Plus size={13} /> {busy ? 'Oluşturuluyor…' : 'Tekrarları oluştur'}
+          </button>
+          <span className="muted" style={{ fontSize: 11.5, alignSelf: 'center' }}>
+            {occurrenceCount} yineleme bu seriden üretildi.
+          </span>
+        </div>
+      )}
+
+      {message && (
+        <div className="muted" style={{ fontSize: 11.5, color: message.type === 'error' ? 'var(--status-overdue)' : 'var(--status-done)' }}>
+          {message.text}
+        </div>
+      )}
+    </div>
   );
 }
 

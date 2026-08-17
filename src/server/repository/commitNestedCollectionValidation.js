@@ -90,11 +90,15 @@ export function findNestedCommitCollectionIssue(changes = {}) {
       );
     }
     for (let tagIndex = 0; tagIndex < (tags || []).length; tagIndex += 1) {
-      if (typeof tags[tagIndex] !== 'string' || !tags[tagIndex].trim()) {
+      // Etiket ya düz metindir (eski istemciler) ya da `{ name, color, icon }`
+      // nesnesidir; her iki durumda da adın dolu olması beklenir.
+      const tag = tags[tagIndex];
+      const name = typeof tag === 'string' ? tag : (tag && typeof tag === 'object' ? tag.name : null);
+      if (typeof name !== 'string' || !name.trim()) {
         return issue(
           'PROJECT_TAG_INVALID',
           `${basePath}.tags[${tagIndex}]`,
-          'Proje etiketi boş olmayan bir metin olmalıdır.'
+          'Proje etiketi boş olmayan bir metin adı taşımalıdır.'
         );
       }
     }

@@ -6,6 +6,7 @@ import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar } from '../../components/ui';
 import { ProjectCreateDialog } from '../../components/shell/ProjectCreateDialog';
 import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domain/projectTypes';
+import { findProjectTag, normalizeProjectTags } from '../../domain/tags';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
 import { useAllPeople, useAllProjects, useAllWbs, useTaskActions } from '../../state/hooks';
@@ -153,11 +154,11 @@ export function SimpleModePanel() {
 
   const ensureTag = async (project) => {
     if (!keyword.trim()) return { ok: true, value: project };
-    const tags = Array.isArray(project.tags) ? project.tags : [];
-    if (tags.some((tag) => tag.toLocaleLowerCase('tr-TR') === keyword.trim().toLocaleLowerCase('tr-TR'))) {
-      return { ok: true, value: project };
-    }
-    return updateProject(project.id, { tags: [...tags, keyword.trim()] });
+    // Katalog kanonik üçlülerden oluşur; hızlı girişte verilen ad varsa
+    // yeniden eklenmez, yoksa varsayılan renk/simge ile kataloğa alınır.
+    const tags = normalizeProjectTags(project.tags);
+    if (findProjectTag(tags, keyword)) return { ok: true, value: project };
+    return updateProject(project.id, { tags: [...tags, { name: keyword.trim() }] });
   };
 
   const submit = async (event) => {

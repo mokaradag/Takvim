@@ -12,8 +12,10 @@ import {
 import { appRepository } from '../data';
 import { createClientEntityId } from '../data/clientEntityId.js';
 import { setProjectColorOverrides } from '../lib/colors';
+import { resolveProjectCalendar } from '../scheduling/calendars';
 import { selectTaskStats } from '../scheduling/metrics';
-import { appStateReducer, createLoadingState, createNewTask } from './appState';
+import { normalizeRecurrenceRule, planRecurringOccurrences } from '../scheduling/recurrence';
+import { appStateReducer, createLoadingState, createNewTask, normalizeStateTask } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
 import {
@@ -196,6 +198,68 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return result.ok ? { ...result, value: created } : result;
   }, [applyStateAction, persistence]);
 
+  /**
+   * Tekrarlayan görev serisini somut görevlere açar.
+   *
+   * Şablon görev kuralı taşır (`recurrence`); burada üretilen her yineleme
+   * gerçek bir görevdir ve `recurrenceParentId` ile şablona bağlanır. Böylece
+   * yinelemeler Gantt, Kanban ve Takvim'de sıradan görevler gibi görünür,
+   * tek tek ilerletilebilir ve gerektiğinde ayrı ayrı düzenlenebilir.
+   *
+   * Zaten üretilmiş yinelemelerin tarihleri tekrar üretilmez: düğmeye ikinci
+   * kez basmak kopya görev oluşturmaz, yalnızca eksik kalan günleri tamamlar.
+   */
+  const generateTaskSeries = useCallback(async (taskId, { limit = 60 } = {}) => {
+    const current = stateRef.current;
+    const template = current.tasks.find((task) => task.id === taskId) || null;
+    if (!template) {
+      return projectWriteFailure('task/series', {
+        code: 'TASK_NOT_FOUND', field: 'taskId', message: 'Tekrar şablonu bulunamadı.'
+      });
+    }
+    const access = resolveTaskMutationAccess(current, taskId);
+    if (!access.ok) return projectWriteFailure('task/series', access);
+    const rule = normalizeRecurrenceRule(template.recurrence);
+    if (!rule) {
+      return projectWriteFailure('task/series', {
+        code: 'RECURRENCE_RULE_INVALID', field: 'recurrence', message: 'Geçerli bir tekrar kuralı tanımlanmalıdır.'
+      });
+    }
+
+    const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([taskId]));
+    if (failedFlush) return failedFlush;
+
+    const project = current.projects.find((item) => item.id === template.projectId) || null;
+    const calendar = resolveProjectCalendar(project, current.calendars);
+    const existingStarts = new Set(current.tasks
+      .filter((task) => task.recurrenceParentId === taskId || task.id === taskId)
+      .map((task) => task.plannedStart));
+
+    const plan = planRecurringOccurrences(template, rule, { calendar, limit })
+      .filter((occurrence) => !existingStarts.has(occurrence.plannedStart));
+    if (!plan.length) return { ok: true, value: [] };
+
+    const tasks = plan.map((occurrence) => normalizeStateTask({
+      ...template,
+      id: createClientEntityId('task'),
+      version: undefined,
+      recurrence: null,
+      recurrenceParentId: taskId,
+      status: 'todo',
+      progress: 0,
+      actualStart: null,
+      actualFinish: null,
+      plannedStart: occurrence.plannedStart,
+      plannedFinish: occurrence.plannedFinish,
+      targetFinish: occurrence.targetFinish,
+      // Yineleme başka bir göreve bağımlı değildir: şablonun bağımlılıkları
+      // kopyalanırsa aynı öncül onlarca kez tekrarlanır ve CPM ağı bozulur.
+      deps: []
+    }, current));
+
+    return persistence.mutate('task/series', { type: 'task/add-many', tasks });
+  }, [persistence]);
+
   // `focusWorkspace` yeni projeyi etkin çalışma alanı yapar. Basit Mod bunu kapatır:
   // çalışma alanı değişimi uygulama kabuğunda içerik alanını yeniden monte ettiği
   // için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu
@@ -344,6 +408,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     moveTasksToWbs,
     deleteTask,
     addTask,
+    generateTaskSeries,
     addProject,
     updateProject,
     selectWorkspace,
@@ -364,6 +429,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     moveTasksToWbs,
     deleteTask,
     addTask,
+    generateTaskSeries,
     addProject,
     updateProject,
     selectWorkspace,

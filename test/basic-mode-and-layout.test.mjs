@@ -62,7 +62,7 @@ test('project creation stores optional project code and rejects duplicate non-em
   assert.equal(created.ok, true);
   assert.equal(created.project.code, 'PRJ-99');
   assert.equal(created.project.source, 'manual');
-  assert.deepEqual(created.project.tags, ['Teslim']);
+  assert.deepEqual(created.project.tags.map((tag) => tag.name), ['Teslim']);
 });
 
 test('simple mode uses the existing task/project infrastructure and exposes the requested quick-entry fields', () => {

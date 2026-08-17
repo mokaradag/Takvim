@@ -45,7 +45,11 @@ export function canonicalizeCommitScalars(changes) {
       leadId: trimString(project?.leadId),
       dataDate: trimString(project?.dataDate),
       color: trimString(project?.color),
-      tags: mapArray(project?.tags, trimString)
+      // Etiket düz metin (eski istemci) ya da `{ name, color, icon }` olabilir;
+      // her iki biçimde de yalnızca metin alanları kırpılır.
+      tags: mapArray(project?.tags, (tag) => (typeof tag === 'string' || tag == null
+        ? trimString(tag)
+        : { ...tag, name: trimString(tag.name), color: trimString(tag.color), icon: trimString(tag.icon) }))
     })),
     wbsUpserts: mapArray(changes.wbsUpserts, (node) => ({
       ...node,

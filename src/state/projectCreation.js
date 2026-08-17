@@ -1,4 +1,5 @@
 import { isCorporateProject } from '../domain/projectTypes.js';
+import { comparableTagName, normalizeProjectTags } from '../domain/tags/index.js';
 
 const PROJECT_COLOR_KEYS = new Set(['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan']);
 
@@ -14,19 +15,9 @@ function normalizedProjectCode(value) {
   return normalizedName(value).toUpperCase();
 }
 
-export function normalizeProjectTags(values = []) {
-  const seen = new Set();
-  return (Array.isArray(values) ? values : [])
-    .map(normalizedName)
-    .filter(Boolean)
-    .filter((value) => {
-      const key = comparableName(value);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .sort((a, b) => a.localeCompare(b, 'tr'));
-}
+// Etiket kataloğu artık alan modelinde yaşar: renk ve simge de etiketin
+// parçasıdır. Eski çağrı yerleri için yeniden dışa aktarılır.
+export { normalizeProjectTags };
 
 function isValidIsoDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -229,15 +220,25 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
   const wbs = context.wbs || [];
   const existing = projects.find((project) => project.id === projectId);
   const canonicalTags = new Map(
-    (prepared.project.tags || []).map((tag) => [comparableName(tag), tag])
+    (prepared.project.tags || []).map((tag) => [comparableTagName(tag.name), tag.name])
   );
+  // Yeniden adlandırma çıkarımla bulunamaz (etiketin kalıcı bir kimliği yoktur);
+  // arayüz eski→yeni eşlemesini açıkça gönderir ve görev etiketleri buna göre
+  // taşınır. Aksi hâlde ad değiştirmek görevleri katalog dışında bırakırdı.
+  const renames = new Map();
+  for (const entry of Array.isArray(input.tagRenames) ? input.tagRenames : []) {
+    const from = comparableTagName(entry?.from);
+    const to = canonicalTags.get(comparableTagName(entry?.to));
+    if (from && to && from !== comparableTagName(to)) renames.set(from, to);
+  }
 
   const taskUpserts = tasks
     .filter((task) => task.projectId === projectId)
     .map((task) => {
-      const canonicalKeyword = canonicalTags.get(comparableName(task.keyword));
-      const keywordChanged = Boolean(canonicalKeyword) && task.keyword !== canonicalKeyword;
-      return keywordChanged ? { ...task, keyword: canonicalKeyword } : null;
+      const key = comparableTagName(task.keyword);
+      const nextKeyword = renames.get(key) || canonicalTags.get(key);
+      const keywordChanged = Boolean(nextKeyword) && task.keyword !== nextKeyword;
+      return keywordChanged ? { ...task, keyword: nextKeyword } : null;
     })
     .filter(Boolean);
 

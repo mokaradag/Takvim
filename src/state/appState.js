@@ -384,6 +384,9 @@ export function appStateReducer(state, action) {
       return { ...state, saveError: null };
     case 'task/add':
       return { ...state, tasks: [action.task, ...state.tasks], selectedTaskId: action.task.id };
+    case 'task/add-many':
+      // Seri yinelemeleri tek işlemde eklenir; seçili görev şablonda kalır.
+      return { ...state, tasks: [...(action.tasks || []), ...state.tasks] };
     case 'task/update': {
       const previousTask = state.tasks.find((task) => task.id === action.id) || null;
       let updatedTask = null;
