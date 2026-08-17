@@ -45,14 +45,27 @@ export function TasksView() {
   const projOpts = useMemo1(() => projects
     .slice()
     .sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr'))
-    .map(p => ({ value: p.name, label: projectLabel(p), icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} /> })), [projects]);
+    // Süzgeç listesindeki canlı arama proje kodunu ve türünü de tarar.
+    .map(p => ({
+      value: p.name,
+      label: projectLabel(p),
+      keywords: [p.code, p.name, p.projectTypeCode, p.projectTypeName],
+      icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} />
+    })), [projects]);
   const kwOpts = useMemo1(() => Array.from(new Set(tasks.map(t => String(t.keyword || '').trim()).filter(Boolean)))
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [tasks]);
   const sorumluOpts = useMemo1(() => people
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-    .map(p => ({ value: p.name, label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name, icon: <Avatar name={p.name} person={p} size="sm" /> })), [people]);
+    // Sicil, unvan ve birim de aranabilir: binlerce kişilik dizinde ad tek
+    // başına yeterli bir arama anahtarı değildir.
+    .map(p => ({
+      value: p.name,
+      label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
+      keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
+      icon: <Avatar name={p.name} person={p} size="sm" />
+    })), [people]);
   const statusOpts = [
     { value: 'todo', label: 'Yapılacak', icon: <StatusIcon id="todo" size={11} /> },
     { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },

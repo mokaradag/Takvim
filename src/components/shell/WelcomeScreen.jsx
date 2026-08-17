@@ -4,6 +4,7 @@ import { Icons } from '../icons';
 import { Avatar } from '../ui';
 import { resolveUserDepartmentLabel, resolveUserDisplayName } from '../../domain/identity/sessionUser.js';
 import { AppLogo } from './AppLogo';
+import { greetingForHour, welcomeFirstName } from './welcomeGreeting.js';
 
 /**
  * Karşılama ekranı.
@@ -12,21 +13,6 @@ import { AppLogo } from './AppLogo';
  * kurumsal fotoğrafı (yoksa baş harf yedeği), adı ve departmanı ile selamlanır.
  * Kimlik yalnızca GÖSTERİM amaçlıdır; hiçbir yetki kararı buradan türetilmez.
  */
-
-/** Saate göre Türkçe selamlama. */
-export function greetingForHour(hour) {
-  if (!Number.isFinite(hour)) return 'Hoş geldiniz';
-  if (hour < 6) return 'İyi geceler';
-  if (hour < 12) return 'Günaydın';
-  if (hour < 18) return 'İyi günler';
-  return 'İyi akşamlar';
-}
-
-/** Selamlamada tam ad yerine yalnızca ilk ad kullanılır. */
-export function welcomeFirstName(displayName) {
-  const first = String(displayName || '').trim().split(/\s+/)[0] || '';
-  return first;
-}
 
 const FEATURES = [
   { ico: 'Dashboard', color: 'var(--accent)', view: 'ozet', title: 'Yönetici özet panosu',

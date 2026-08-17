@@ -28,8 +28,11 @@ export function KanbanView() {
   const grouped = useMemo2(() => {
     const map = { todo: [], in_progress: [], done: [] };
     tasks.forEach(t => {
-      const s = t.status || 'todo';
-      map[s].push(t);
+      // Panoda yalnızca üç sütun vardır. Kalıcı kayıttan gelen tanınmayan bir
+      // durum (eski şema, dış aktarım) doğrudan indekslenirse `map[s]` tanımsız
+      // olur ve sayfa tümüyle çökerdi; bilinmeyen durum "Yapılacak" sayılır.
+      const status = Object.prototype.hasOwnProperty.call(map, t.status) ? t.status : 'todo';
+      map[status].push(t);
     });
     return map;
   }, [tasks]);

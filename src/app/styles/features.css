@@ -377,6 +377,14 @@
 }
 
 /* ── Task Detail drawer ────────────────────────────────────── */
+.drawer-title-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--status-overdue);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
 .drawer-backdrop { z-index: var(--z-drawer-backdrop); }
 .drawer {
   z-index: var(--z-drawer);

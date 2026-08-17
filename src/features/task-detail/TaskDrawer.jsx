@@ -157,6 +157,19 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     onUpdate(task.id, patch);
   };
 
+  /**
+   * Başlık yazımı.
+   *
+   * Kullanıcı başlığı silip yeniden yazabilmelidir; bu yüzden yerel değer her
+   * tuş vuruşunda güncellenir. Ancak BOŞ başlık kalıcılaştırmaya GÖNDERİLMEZ:
+   * sunucu `TASK_TITLE_REQUIRED` ile tüm yamayı reddediyor, aynı yamada
+   * birleştirilen ilerleme ve tarih düzenlemeleri de birlikte düşüyordu.
+   */
+  const saveTitle = (value) => {
+    setLocal((current) => ({ ...current, task: value }));
+    if (String(value).trim()) onUpdate(task.id, { task: value });
+  };
+
   useEffect(() => {
     if (local.keyword !== 'Yeni' || projectTags.some((tag) => tag.name === 'Yeni')) return;
     setLocal((current) => ({ ...current, keyword: '' }));
@@ -209,9 +222,14 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </span>
               {local.keyword && <><span className="muted">·</span><Kw color={local.color}>{local.keyword}</Kw></>}
             </div>
+            {/* Başlık boşken KAYDEDİLMEZ. Boş başlık sunucuda
+                TASK_TITLE_REQUIRED ile reddediliyor; aynı yamada birleştirilen
+                ilerleme/tarih düzenlemeleri de o istekle birlikte kaybediliyordu. */}
             <textarea
               value={local.task}
-              onChange={(e) => save({ task: e.target.value })}
+              onChange={(e) => saveTitle(e.target.value)}
+              aria-label="Görev başlığı"
+              aria-invalid={!String(local.task || '').trim()}
               rows={2}
               style={{
                 border: 0, background: 'transparent', resize: 'none',
@@ -220,6 +238,11 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                 padding: 0, width: '100%'
               }}
             />
+            {!String(local.task || '').trim() && (
+              <span className="drawer-title-warning">
+                <Icons.Alert size={12} /> Görev başlığı boş bırakılamaz; başlık girilene kadar değişiklikler kaydedilmez.
+              </span>
+            )}
           </div>
           <button className="icon-btn" onClick={onClose} title="Kapat (Esc)"><Icons.Close size={16} /></button>
         </div>

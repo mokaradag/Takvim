@@ -304,6 +304,10 @@ export function BarRows({ data, maxLabel = 110, animated = false, tipFormat }) {
 export function AreaChart({ data, width = 600, height = 160, color = 'var(--accent)', labels = [], animated = false }) {
   const [hover, setHover] = React.useState(null);
   const svgRef = React.useRef(null);
+  // Degrade kimliği belge genelinde benzersizdir. Sabit bir kimlikle aynı
+  // sayfadaki ikinci grafik, `url(#...)` ilk tanımı çözdüğü için birincinin
+  // rengiyle boyanıyordu.
+  const gradientId = `areagrad-${React.useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   if (!data || !data.length) return null;
   const min = Math.min(...data, 0);
   const max = Math.max(...data, 1);
@@ -347,7 +351,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
         onMouseLeave={onLeave}
       >
         <defs>
-          <linearGradient id="areagrad" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity="0.22" />
             <stop offset="100%" stopColor={color} stopOpacity="0" />
           </linearGradient>
@@ -355,7 +359,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
         {gridLines.map((g, i) => (
           <line key={i} x1={pad} x2={width - pad} y1={pad + g * innerH} y2={pad + g * innerH} stroke="var(--border)" strokeDasharray="3 3" />
         ))}
-        <polygon points={area} fill="url(#areagrad)" className={animated ? 'chart-area' : ''} />
+        <polygon points={area} fill={`url(#${gradientId})`} className={animated ? 'chart-area' : ''} />
         <polyline
           points={polyline}
           fill="none"

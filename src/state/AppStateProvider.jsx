@@ -115,14 +115,22 @@ export function AppStateProvider({ children, repository = appRepository }) {
     applyStateAction({ type: 'task/select', id: typeof taskOrId === 'string' ? taskOrId : taskOrId?.id });
   }, [applyStateAction]);
 
+  /**
+   * Görev panelini kapatır.
+   *
+   * Bekleyen düzenlemeler önce sunucuya yazılır. Yazma BAŞARISIZ olsa bile
+   * panel kapanır: daha önce başarısız kayıt paneli açık tutuyordu ve
+   * kullanıcı hiçbir düğmeyle çıkamıyordu (uygulama donmuş görünüyordu).
+   * Hata kaybolmaz; kalıcılaştırma durumu şeridinde nedeni, alanı ve
+   * "Verileri yeniden yükle" eylemiyle birlikte görünmeye devam eder.
+   */
   const closeTask = useCallback(async () => {
     const selectedTaskId = stateRef.current.selectedTaskId;
-    if (selectedTaskId) {
-      const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([selectedTaskId]));
-      if (failedFlush) return failedFlush;
-    }
+    const failedFlush = selectedTaskId
+      ? firstFailedResult(await persistence.flushTaskUpdates([selectedTaskId]))
+      : null;
     applyStateAction({ type: 'task/select', id: null });
-    return { ok: true, value: null };
+    return failedFlush || { ok: true, value: null };
   }, [applyStateAction, persistence]);
 
   const updateTask = useCallback((id, patch) => {
@@ -131,6 +139,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return persistence.updateTask(id, patch);
   }, [persistence]);
   const flushPendingChanges = useCallback(() => persistence.flush(), [persistence]);
+  const hasPendingChanges = useCallback(() => persistence.hasPendingChanges(), [persistence]);
 
   const moveTaskToWbs = useCallback(async (id, wbsId) => {
     const access = resolveTaskWbsMoveAccess(stateRef.current, [id], wbsId);
@@ -404,6 +413,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     closeTask,
     updateTask,
     flushPendingChanges,
+    hasPendingChanges,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
@@ -425,6 +435,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     closeTask,
     updateTask,
     flushPendingChanges,
+    hasPendingChanges,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,

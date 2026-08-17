@@ -96,10 +96,19 @@ export function TaskDetailOverlay() {
     return tracked;
   };
 
+  /**
+   * Panel her koşulda kapanabilir.
+   *
+   * Önceden başarısız bir kayıt `waitForIdle()` üzerinden geri döndürülüyor ve
+   * `closeTask()` hiç çağrılmıyordu: sunucu bir alanı reddettiğinde (örneğin
+   * boş görev başlığı) panel kilitleniyor, kullanıcı ne "Tamam" ne de kapatma
+   * düğmesiyle çıkabiliyordu. Hata artık paneli rehin almaz; kalıcılaştırma
+   * durumu şeridinde görünür kalır ve oradan yeniden denenebilir.
+   */
   const onClose = async () => {
     const pendingResult = await updateTrackerRef.current.waitForIdle();
-    if (!pendingResult.ok) return pendingResult;
-    return closeTask();
+    const closeResult = await closeTask();
+    return pendingResult.ok ? closeResult : pendingResult;
   };
 
   return (

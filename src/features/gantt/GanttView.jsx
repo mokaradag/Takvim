@@ -574,8 +574,14 @@ export function GanttView() {
                 filterType = 'multi';
                 filterValue = colFilters.sorumlu;
                 onFilter = (v) => setCF('sorumlu', v);
+                // Canlı arama sicil, unvan ve birim üzerinde de çalışır.
                 filterOptions = people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-                  .map(p => ({ value: p.name, label: p.name, icon: <Avatar name={p.name} person={p} size="sm" /> }));
+                  .map(p => ({
+                    value: p.name,
+                    label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
+                    keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
+                    icon: <Avatar name={p.name} person={p} size="sm" />
+                  }));
               }
               else if (c.key === 'priority') {
                 filterType = 'multi';

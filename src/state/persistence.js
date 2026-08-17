@@ -329,6 +329,9 @@ export function createStateMutationOrchestrator({
     commitChanges,
     flushTaskUpdates(ids = []) { return Promise.all([...new Set(ids)].map((id) => taskPatches.flush(id))); },
     flushAllTaskUpdates() { return taskPatches.flushAll(); },
+    // Henüz sunucuya gitmemiş, gecikmeli birleştirme kuyruğunda bekleyen
+    // düzenleme var mı? Sekme kapatılırken uyarmak için kullanılır.
+    hasPendingChanges() { return taskPatches.hasPending(); },
     whenIdle() { return queue.whenIdle(); },
     async flush() {
       while (true) {

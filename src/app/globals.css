@@ -1291,6 +1291,44 @@ img.avatar-photo {
 }
 .col-filter-opt:hover { background: var(--bg-hover); }
 .col-filter-opt input { accent-color: var(--accent); }
+/* Süzgeç listesinde canlı arama: sorumlu/proje gibi uzun listelerde seçeneği
+   kaydırarak aramak yerine yazarak daraltmayı sağlar. */
+.col-filter-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text-dim);
+}
+.col-filter-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+.col-filter-search button {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.col-filter-search button:hover { background: var(--bg-hover); color: var(--text); }
+.col-filter-empty { padding: 8px 6px; font-size: 12px; color: var(--text-dim); }
 .col-filter-foot {
   display: flex; align-items: center; gap: 6px;
   padding: 8px;

@@ -82,6 +82,22 @@ While loading, normal features are not rendered against empty placeholder busine
 
 A loaded snapshot is normalized at the established data/state boundary. Legacy Task scheduling properties, dependencies, professional scheduling fields and Project/WBS relationships therefore pass through the same canonical rules whether the source is the current memory adapter or a future external source.
 
+### 4.1 Snapshot and session ordering
+
+`loadApplicationData()` reads the snapshot first and the session context second. **This order is deliberate and must not be parallelized.** The snapshot request triggers the corporate catalog synchronization, which can create new corporate Project rows. A session context read before that synchronization would report an access list that does not yet contain those projects.
+
+The round-trip cost is removed without breaking the order: the Actual snapshot endpoint performs both reads inside the same request and returns the session context embedded in the snapshot body. `createApiRepository.loadSnapshot()` separates the embedded session into a one-shot slot that the following `loadSessionContext()` call consumes without a second network request. Later session reads (session refresh) still go to `/api/mergen-rota/session`, which remains unchanged for other callers.
+
+### 4.2 Corporate catalog freshness
+
+The corporate WBS synchronization keeps its process-level freshness window, and adds stale-while-revalidate behaviour:
+
+- **First run in a process** blocks. The tree may not exist in `MR_WBS` yet and showing an empty structure would be wrong.
+- **Later window expiries do not block.** The request is answered immediately from stored `MR_WBS` data (at most one TTL old) and the refresh continues in the background. Startup therefore stops depending on how fast the CN43N source responds.
+- Setting `MERGEN_ROTA_WBS_SYNC_TTL_MS=0` disables the freshness window entirely; in that mode every request synchronizes synchronously, as before.
+
+Background refresh failures are logged and never surface as a load error, and the freshness window is not advanced when a synchronization fails.
+
 ## 5. Application data versus UI/session state
 
 Repository application data consists of:
@@ -194,6 +210,17 @@ The latest values are merged into one canonical Task patch and persisted through
 Discrete controls such as dates, status, Project, WBS and relationship changes persist immediately. Before a discrete mutation, destructive operation, Task WBS move or application reload proceeds, any pending coalesced patch for the affected Task is flushed first. If that pending save fails, the dependent operation does not silently continue past the failed write.
 
 This provides a future API-safe commit boundary without redesigning Task Detail around an explicit Save button.
+
+### 9.1 Losing a coalesced edit must not be silent
+
+Two guards protect the coalescing window:
+
+- **Tab close / hide.** `UnsavedChangesGuard` flushes the pending queue on `visibilitychange` and raises the browser's own confirmation on `beforeunload` while a write is pending or in flight. Previously an edit made less than 250 ms before the tab closed never reached the server, and the "Kaydedildi" indicator never appeared, so the loss was invisible.
+- **Invalid values never enter the queue.** An empty Task title is rejected in the drawer before it is scheduled. The server rejects an empty title with `TASK_TITLE_REQUIRED`, and because coalescing merges fields, that rejection took the batched progress and date edits down with it.
+
+### 9.2 A failed write never traps the Task panel
+
+Closing the Task panel flushes pending writes, but the close itself is **unconditional**. Earlier, both `closeTask()` and the overlay's `onClose` returned the failed flush result without clearing the selection, so a server-rejected field left the panel open with no working close button — the application appeared frozen. The failure is still reported: it stays in the persistence status strip with its message, code and field path, along with the `Verileri yeniden yükle` action.
 
 ## 10. Atomic structural operations
 

@@ -26,6 +26,8 @@ WBS is a separate structural domain entity. Shared pure selectors own hierarchy 
 
 `projectTypes.js` additionally owns the corporate/manual project distinction (`isCorporateProject`, `supportsManualWbsEditing`) used by write policies and the WBS UI.
 
+`tags/index.js` owns the project tag catalog: the canonical `{ name, color, icon }` shape, the closed colour/icon key sets, deterministic default colour derivation and Turkish case-insensitive de-duplication. Client forms and server commit validation must both use these lists rather than defining private copies.
+
 `constants/index.js` owns the Task status and priority catalogs. Priority also has canonicalization rules: `normalizePriorityId` maps unknown and legacy values (notably the persisted `normal`) onto a catalog identifier, and `resolvePriority` always returns a definition. Views must use these instead of indexing `PRIORITIES` directly — a missing entry previously produced `undefined.color` and took down the whole client render tree.
 
 WBS rollups exist in two shapes: `selectWbsTaskRollup` for a single node, and `selectWbsRollupIndex` for every node in one pass. Anything that renders many rows uses the index; per-row calls to the single-node selector are quadratic in the node count.
@@ -33,6 +35,8 @@ WBS rollups exist in two shapes: `selectWbsTaskRollup` for a single node, and `s
 ### `src/scheduling`
 
 Pure scheduling logic. `dates` owns parsing, formatting and date-range helpers; `calendars` owns holiday/working-day rules; `dependencies` owns FS/SS/FF/SF metadata and normalization; `plans` owns canonical current-plan duration normalization; `metrics` owns schedule-derived calculations used by Gantt and task status summaries; `cpm` owns the calendar-aware critical-path engine, forward/backward passes, early/late dates, float and critical paths. Scheduling remains independent from React and application state.
+
+`recurrence` owns recurring-task rules as an RFC 5545 (iCalendar) `RRULE` subset: normalization, `RRULE` text round-tripping, Turkish description, calendar-aware expansion into concrete dates and occurrence planning. It is pure date arithmetic and carries no application state; the rule text is the interchange format, so an exported plan stays readable by other calendar systems.
 
 WBS does not create independent scheduling networks. CPM remains project-scoped. WBS summary dates and bars are derived from descendant Current Plan values and do not replace CPM output.
 
