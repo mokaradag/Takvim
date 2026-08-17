@@ -285,14 +285,25 @@ export function createApiRepository({
   aliasStorageKey
 } = {}) {
   const clientIdAliases = loadActualIdAliases(aliasStorage, aliasStorageKey);
+  // Anlık görüntü yanıtı oturum bağlamını da taşır. Açılışta ikinci bir ağ
+  // isteği yapılmaması için buraya bırakılır ve İLK okumada tüketilir; sonraki
+  // `loadSessionContext` çağrıları (oturum tazeleme) yine sunucuya gider.
+  let sessionFromSnapshot = null;
   return {
     kind: 'actual-api',
     async loadSessionContext() {
+      if (sessionFromSnapshot) {
+        const session = sessionFromSnapshot;
+        sessionFromSnapshot = null;
+        return session;
+      }
       const session = await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
       return restoreActualSessionIds(session, clientIdAliases);
     },
     async loadSnapshot() {
-      const snapshot = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
+      const body = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
+      const { session, ...snapshot } = body || {};
+      sessionFromSnapshot = session ? restoreActualSessionIds(session, clientIdAliases) : null;
       return restoreActualSnapshotIds(snapshot, clientIdAliases);
     },
     async commitChanges(changes) {

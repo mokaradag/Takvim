@@ -4,8 +4,9 @@ import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
 import { parseDate, fmt, addDays, diffDays, startOfWeek, endOfWeek, today } from '../../scheduling/dates';
 import { COLOR_MAP, projectColorVar, personColorVar } from '../../lib/colors';
-import { Avatar, HeroHeader, AreaChart } from '../../components/ui';
+import { HeroHeader, AreaChart } from '../../components/ui';
 import { Tooltip, InfoButton, CardHead, AnimatedNumber } from '../../components/ui-extras';
+import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetricTable';
 import { usePeople, useTasks } from '../../state/hooks';
 
 /* ── Rapor (Reports) ──────────────────────────────────── */
@@ -266,42 +267,48 @@ export function ReportsView() {
               <div className="rt-row"><span className="rt-label">&gt; %100</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>Aşırı yük</span></div>
             </>}
           />
-          <div className="col" style={{ gap: 8 }}>
-            {resourceUtilization.map(r => {
+          {/* Kart geniştir: ad kırpılmadan okunur, kalan alan sayısal
+              sütunlara ayrılır (boş yatay alan bırakmak yerine bilgi verilir). */}
+          <PeopleMetricTable
+            barLabel="Kullanım"
+            columns={[
+              { key: 'hours', label: 'Kalan', title: 'Kalan planlanan saat' },
+              { key: 'tasks', label: 'Görev', title: 'Açık görev sayısı' },
+              { key: 'free', label: 'Boşta', title: 'Kapasiteden artan saat' },
+              { key: 'weekly', label: 'Haftalık', title: 'Altı haftaya yayılmış haftalık ortalama yük' },
+              { key: 'pct', label: 'Doluluk', title: 'Kalan işin kapasiteye oranı' }
+            ]}
+            emptyText="Açık görevi olan ekip üyesi yok."
+            rows={resourceUtilization.map((r) => {
               const danger = r.pct > 100;
               const warn = r.pct > 85;
-              return (
-                <Tooltip
-                  key={r.name}
-                  title={r.name}
-                  accent={r.color}
-                  icon={<Avatar name={r.name} person={r.person} size="sm" />}
-                  content={<>
-                    <div className="rt-row"><span className="rt-label">Kalan saat</span><span className="rt-val">{r.hours} sa</span></div>
-                    <div className="rt-row"><span className="rt-label">Aktif görev</span><span className="rt-val">{r.tasks}</span></div>
-                    <div className="rt-row"><span className="rt-label">Kapasite</span><span className="rt-val">{CAPACITY_PER_PERSON} sa</span></div>
-                    <div className="rt-sep" />
-                    <div className="rt-row"><span className="rt-label">Kullanım</span><span className="rt-val" style={{ color: danger ? 'var(--status-overdue)' : warn ? 'var(--c-amber)' : 'var(--status-done)' }}>%{r.pct}</span></div>
-                    <div className="rt-bar"><div style={{ width: `${Math.min(100, r.pct)}%`, background: danger ? 'var(--status-overdue)' : r.color }} /></div>
-                  </>}
-                >
-                  <div className="row" style={{ gap: 10, cursor: 'help', padding: '4px 0' }}>
-                    <Avatar name={r.name} person={r.person} size="sm" />
-                    <div className="col" style={{ gap: 3, flex: 1, minWidth: 0 }}>
-                      <div className="row" style={{ gap: 6 }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-                        <span className="muted tabular" style={{ fontSize: 10.5, marginLeft: 'auto' }}>{r.hours}sa</span>
-                        <span className="tabular" style={{ fontSize: 11, fontWeight: 700, color: danger ? 'var(--status-overdue)' : warn ? 'var(--c-amber)' : 'var(--text)', minWidth: 36, textAlign: 'right' }}>%{r.pct}</span>
-                      </div>
-                      <div className="bar-track" style={{ height: 4 }}>
-                        <div className="bar-fill" style={{ width: `${Math.min(100, r.pct)}%`, background: danger ? 'var(--status-overdue)' : r.color }} />
-                      </div>
-                    </div>
-                  </div>
-                </Tooltip>
-              );
+              const free = Math.max(0, CAPACITY_PER_PERSON - r.hours);
+              return {
+                id: r.name,
+                name: r.name,
+                person: r.person,
+                subtitle: personUnitLabel(r.person),
+                share: Math.min(1, r.pct / 100),
+                barColor: danger ? 'var(--status-overdue)' : warn ? 'var(--c-amber)' : r.color,
+                values: {
+                  hours: `${r.hours} sa`,
+                  tasks: { value: r.tasks, tone: 'muted' },
+                  free: { value: `${free} sa`, tone: free === 0 ? 'overdue' : 'muted' },
+                  weekly: { value: `${Math.round(r.hours / 6)} sa`, tone: 'muted' },
+                  pct: { value: `%${r.pct}`, tone: danger ? 'overdue' : warn ? 'warn' : 'done' }
+                },
+                tooltip: <>
+                  <div className="rt-row"><span className="rt-label">Kalan saat</span><span className="rt-val">{r.hours} sa</span></div>
+                  <div className="rt-row"><span className="rt-label">Aktif görev</span><span className="rt-val">{r.tasks}</span></div>
+                  <div className="rt-row"><span className="rt-label">Kapasite</span><span className="rt-val">{CAPACITY_PER_PERSON} sa</span></div>
+                  <div className="rt-row"><span className="rt-label">Boşta kapasite</span><span className="rt-val">{free} sa</span></div>
+                  <div className="rt-sep" />
+                  <div className="rt-row"><span className="rt-label">Kullanım</span><span className="rt-val" style={{ color: danger ? 'var(--status-overdue)' : warn ? 'var(--c-amber)' : 'var(--status-done)' }}>%{r.pct}</span></div>
+                  <div className="rt-bar"><div style={{ width: `${Math.min(100, r.pct)}%`, background: danger ? 'var(--status-overdue)' : r.color }} /></div>
+                </>
+              };
             })}
-          </div>
+          />
         </div>
 
       {/* Risk matrix */}

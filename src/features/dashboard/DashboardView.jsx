@@ -4,29 +4,30 @@ import { Icons } from '../../components/icons';
 import { parseDate, fmt, addDays, diffDays, today } from '../../scheduling/dates';
 import { depId } from '../../scheduling/dependencies';
 import { projectColorVar, personColorVar } from '../../lib/colors';
-import { AvatarStack, Kw, StatusPill, HeroHeader, Donut, BarRows, AreaChart } from '../../components/ui';
+import { AvatarStack, Kw, StatusPill, HeroHeader, Donut, AreaChart } from '../../components/ui';
 import { Tooltip, CardHead, AnimatedNumber, HoverListCard } from '../../components/ui-extras';
-import { useTasks, useTaskActions } from '../../state/hooks';
+import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetricTable';
+import { useAllPeople, useTasks, useTaskActions } from '../../state/hooks';
+import { selectStatusDistribution } from './statusDistribution.js';
 
 /* ── Özet (Dashboard) ──────────────────────────────────── */
 export function DashboardView({ onNavigate }) {
   const tasks = useTasks();
+  const people = useAllPeople();
   const { openTask: onOpenTask } = useTaskActions();
   const today_ = today();
   const [donutSel, setDonutSel] = useState1(null);
 
-  // Stats
-  const done = tasks.filter(t => t.status === 'done').length;
-  const progress = tasks.filter(t => t.status === 'in_progress').length;
-  const todo = tasks.filter(t => !t.status || t.status === 'todo').length;
-  const overdue = tasks.filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0).length;
-  const compRate = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
-
-  // Task lists behind each summary metric (for hover cards)
+  // Üst rozetler: kartlar durum alanını doğrudan okur (bir görev hem "devam
+  // eden" hem "geciken" sayılabilir), halka grafiği ise ayrıştırılmış kovaları
+  // kullanır. İki okuma bilinçli olarak farklıdır ve karıştırılmamalıdır.
   const doneTasks = tasks.filter(t => t.status === 'done');
   const progressTasks = tasks.filter(t => t.status === 'in_progress');
-  const todoTasks = tasks.filter(t => !t.status || t.status === 'todo');
   const overdueTasks = tasks.filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0);
+  const done = doneTasks.length;
+  const progress = progressTasks.length;
+  const overdue = overdueTasks.length;
+  const compRate = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
 
   const byProject = useMemo1(() => {
     const map = {};
@@ -40,21 +41,35 @@ export function DashboardView({ onNavigate }) {
       .sort((a, b) => b.value - a.value);
   }, [tasks]);
 
+  // Aynı adlı iki çalışan olduğunda kişi kaydı çözülmez; fotoğraf yerine baş
+  // harf yedeği gösterilir (yanlış kişiyi göstermektense belirsiz bırakılır).
+  const personByName = useMemo1(() => {
+    const index = new Map();
+    for (const person of people) {
+      if (!person?.name) continue;
+      index.set(person.name, index.has(person.name) ? null : person);
+    }
+    return index;
+  }, [people]);
+
   const workload = useMemo1(() => {
     const map = {};
     tasks.forEach(t => {
       t.sorumlu.forEach(s => {
-        map[s] = map[s] || { total: 0, done: 0, late: 0 };
+        map[s] = map[s] || { total: 0, done: 0, late: 0, active: 0 };
         map[s].total++;
         if (t.status === 'done') map[s].done++;
+        else map[s].active++;
         if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) map[s].late++;
       });
     });
-    return Object.entries(map)
-      .map(([name, v]) => ({ label: name, value: v.total, color: personColorVar(name), done: v.done, late: v.late }))
-      .sort((a, b) => b.value - a.value)
+    const rows = Object.entries(map)
+      .map(([name, v]) => ({ name, ...v, color: personColorVar(name) }))
+      .sort((a, b) => b.total - a.total)
       .slice(0, 5);
-  }, [tasks]);
+    const max = rows.reduce((peak, row) => Math.max(peak, row.total), 1);
+    return rows.map((row) => ({ ...row, share: row.total / max, person: personByName.get(row.name) || null }));
+  }, [tasks, personByName]);
 
   const burndown = useMemo1(() => {
     const out = [];
@@ -128,12 +143,17 @@ export function DashboardView({ onNavigate }) {
     return { thisWeekDone, lastWeekDone, delta: thisWeekDone - lastWeekDone };
   }, [tasks]);
 
-  const statusDonut = [
-    { label: 'Tamamlanan', value: done, color: 'var(--status-done)', items: doneTasks, explain: 'Bitirilmiş görevler.' },
-    { label: 'Devam Eden', value: progress, color: 'var(--status-progress)', items: progressTasks, explain: 'Aktif olarak üzerinde çalışılan görevler.' },
-    { label: 'Yapılacak', value: todo, color: 'var(--status-todo)', items: todoTasks, explain: 'Henüz başlanmamış görevler.' },
-    { label: 'Geciken', value: overdue, color: 'var(--status-overdue)', items: overdueTasks, explain: 'Hedef tarihi geçmiş, tamamlanmamış görevler.' }
-  ].filter(d => d.value > 0);
+  // Halka grafiği birbirini dışlayan kovalarla beslenir: dilimlerin toplamı
+  // her zaman görev sayısına eşittir (bkz. statusDistribution.js).
+  const distribution = useMemo1(() => selectStatusDistribution(tasks, today_), [tasks]);
+  const statusDonut = distribution.segments;
+  // Seçim dilim SIRASI değil, kova KİMLİĞİ ile tutulur: görevler değiştiğinde
+  // dilim listesi kısalabilir ve saklanan sıra numarası boşa düşerek çizimi
+  // çökertirdi.
+  const selectedSegmentIndex = statusDonut.findIndex((segment) => segment.id === donutSel);
+  const selectedSegment = selectedSegmentIndex < 0 ? null : statusDonut[selectedSegmentIndex];
+  const toggleSegment = (id) => setDonutSel((current) => (!id || current === id ? null : id));
+  const segmentShare = (value) => (distribution.total ? Math.round((value / distribution.total) * 100) : 0);
 
   return (
     <div className="col stagger dashboard">
@@ -146,7 +166,8 @@ export function DashboardView({ onNavigate }) {
       <div className="dashboard-kpi-grid">
         <Stat icon={<Icons.Briefcase size={16} />} label="Toplam görev" value={tasks.length} accent="var(--text)" trend={`${compRate}% tamamlandı`} items={tasks} onOpenTask={onOpenTask}
           tip="Sistemdeki tüm aktif ve kapanmış görevlerin sayısı. Projeler, sorumlular ve tarih aralıklarına göre filtrelenebilir." />
-        <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${Math.max(0, done - 4)} bu hafta`} trendUp items={doneTasks} onOpenTask={onOpenTask}
+        {/* Haftalık değer uydurulmaz: son 7 günde tamamlananların gerçek sayısıdır. */}
+        <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${weeklyDelta.thisWeekDone} bu hafta`} trendUp={weeklyDelta.thisWeekDone > 0} items={doneTasks} onOpenTask={onOpenTask}
           tip="Durumu 'Tamamlandı' olarak işaretlenmiş görev sayısı. Bu sayı tamamlama oranını ve hız metriklerini besler." />
         <Stat icon={<Icons.Clock size={16} />} label="Devam eden" value={progress} accent="var(--status-progress)" trend="aktif" items={progressTasks} onOpenTask={onOpenTask}
           tip="Şu anda üzerinde çalışılan görev sayısı. Eşzamanlı iş (devam eden) limitiniz için referans olabilir." />
@@ -209,12 +230,13 @@ export function DashboardView({ onNavigate }) {
                 data={statusDonut}
                 size={150}
                 thickness={20}
-                selected={donutSel}
-                onSegmentClick={(i) => setDonutSel(donutSel === i ? null : i)}
+                label="Görev durumu dağılımı"
+                selected={selectedSegmentIndex < 0 ? null : selectedSegmentIndex}
+                onSegmentClick={(i) => toggleSegment(statusDonut[i]?.id)}
               />
               <div className="dashboard-status-center">
                 <div>
-                  {donutSel == null ? (
+                  {!selectedSegment ? (
                     <>
                       <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em' }}>
                         <AnimatedNumber value={compRate} />%
@@ -223,19 +245,19 @@ export function DashboardView({ onNavigate }) {
                     </>
                   ) : (
                     <>
-                      <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', color: statusDonut[donutSel].color }}>
-                        <AnimatedNumber value={statusDonut[donutSel].value} />
+                      <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', color: selectedSegment.color }}>
+                        <AnimatedNumber value={selectedSegment.value} />
                       </div>
-                      <div className="muted" style={{ fontSize: 10.5, maxWidth: 80, lineHeight: 1.3 }}>{statusDonut[donutSel].label}</div>
+                      <div className="muted" style={{ fontSize: 10.5, maxWidth: 80, lineHeight: 1.3 }}>{selectedSegment.label}</div>
                     </>
                   )}
                 </div>
               </div>
             </div>
             <div className="col dashboard-status-legend">
-              {statusDonut.map((s, i) => (
+              {statusDonut.map((s) => (
                 <HoverListCard
-                  key={s.label}
+                  key={s.id}
                   title={s.label}
                   icon={<span style={{ width: 9, height: 9, borderRadius: 99, background: s.color, display: 'inline-block' }} />}
                   accent={s.color}
@@ -244,8 +266,8 @@ export function DashboardView({ onNavigate }) {
                   emptyText="Bu durumda görev yok."
                   summary={<>
                     <div className="rt-row"><span className="rt-label">Görev</span><span className="rt-val">{s.value}</span></div>
-                    <div className="rt-row"><span className="rt-label">Oran</span><span className="rt-val">{Math.round(s.value / tasks.length * 100)}%</span></div>
-                    <div className="rt-bar"><div style={{ width: `${(s.value / tasks.length) * 100}%`, background: s.color }} /></div>
+                    <div className="rt-row"><span className="rt-label">Oran</span><span className="rt-val">{segmentShare(s.value)}%</span></div>
+                    <div className="rt-bar"><div style={{ width: `${segmentShare(s.value)}%`, background: s.color }} /></div>
                     <div className="rt-sep" />
                     <p>{s.explain}</p>
                   </>}
@@ -263,8 +285,9 @@ export function DashboardView({ onNavigate }) {
                   <button
                     type="button"
                     className="row donut-leg-row"
-                    style={{ background: donutSel === i ? 'color-mix(in oklab, ' + s.color + ' 12%, transparent)' : 'transparent', border: donutSel === i ? `1px solid ${s.color}40` : '1px solid transparent' }}
-                    onClick={() => setDonutSel(donutSel === i ? null : i)}
+                    aria-pressed={donutSel === s.id}
+                    style={{ background: donutSel === s.id ? 'color-mix(in oklab, ' + s.color + ' 12%, transparent)' : 'transparent', border: donutSel === s.id ? `1px solid ${s.color}40` : '1px solid transparent' }}
+                    onClick={() => toggleSegment(s.id)}
                   >
                     <div className="row" style={{ gap: 8 }}>
                       <span style={{ width: 9, height: 9, borderRadius: 99, background: s.color, display: 'inline-block' }} />
@@ -336,17 +359,49 @@ export function DashboardView({ onNavigate }) {
           <CardHead
             icon={<Icons.Users size={14} />}
             title="Ekip iş yükü"
-            subtitle="En yüklü 5 üye"
+            subtitle="En yüklü 5 üye · görev kırılımı"
             infoAccent="var(--c-cyan)"
             infoIcon={<Icons.Users size={12} />}
             info={<>
               <p>Görev sayısına göre en yüklü 5 ekip üyesi. Aşırı yüklenmiş bir kişiyi tespit etmek için bakın.</p>
               <div className="rt-sep" />
-              <div className="rt-row"><Icons.Alert size={12} className="rt-ico" /><span>5+ aktif görev: yük dengelemeyi düşünün</span></div>
-              <div className="rt-row"><Icons.Check size={12} className="rt-ico" /><span>Sağlıklı bir takım dağılımı: ±%30 standart sapma</span></div>
+              <div className="rt-row"><span className="rt-label">Toplam</span><span className="rt-val">Kişiye atanmış tüm görevler</span></div>
+              <div className="rt-row"><span className="rt-label">Açık</span><span className="rt-val">Tamamlanmamış görevler</span></div>
+              <div className="rt-row"><span className="rt-label">Geciken</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>Hedef tarihi geçmiş görevler</span></div>
+              <div className="rt-sep" />
+              <div className="rt-row"><Icons.Alert size={12} className="rt-ico" /><span>5+ açık görev: yük dengelemeyi düşünün</span></div>
             </>}
           />
-          <BarRows data={workload} maxLabel={110} animated />
+          <PeopleMetricTable
+            barLabel="Yük"
+            columns={[
+              { key: 'total', label: 'Toplam', title: 'Kişiye atanmış tüm görevler' },
+              { key: 'active', label: 'Açık', title: 'Tamamlanmamış görevler' },
+              { key: 'done', label: 'Biten', title: 'Tamamlanan görevler' },
+              { key: 'late', label: 'Geciken', title: 'Hedef tarihi geçmiş görevler' }
+            ]}
+            emptyText="Görev atanmış ekip üyesi yok."
+            rows={workload.map((row) => ({
+              id: row.name,
+              name: row.name,
+              person: row.person,
+              subtitle: personUnitLabel(row.person),
+              share: row.share,
+              barColor: row.late > 0 ? 'var(--status-overdue)' : row.color,
+              values: {
+                total: row.total,
+                active: { value: row.active, tone: 'muted' },
+                done: { value: row.done, tone: row.done > 0 ? 'done' : 'muted' },
+                late: { value: row.late, tone: row.late > 0 ? 'overdue' : 'muted' }
+              },
+              tooltip: <>
+                <div className="rt-row"><span className="rt-label">Toplam görev</span><span className="rt-val">{row.total}</span></div>
+                <div className="rt-row"><span className="rt-label">Açık</span><span className="rt-val">{row.active}</span></div>
+                <div className="rt-row"><span className="rt-label">Tamamlanan</span><span className="rt-val" style={{ color: 'var(--status-done)' }}>{row.done}</span></div>
+                {row.late > 0 && <div className="rt-row"><span className="rt-label">Geciken</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>{row.late}</span></div>}
+              </>
+            }))}
+          />
         </div>
 
         <div className="card">

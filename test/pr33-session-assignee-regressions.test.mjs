@@ -41,7 +41,8 @@ test('snapshot API completes assignees only for already-authorized visible task 
   assert.match(repositorySource, /request\.input\('taskIds', sql\.NVarChar\(sql\.MAX\), taskIds\.join\(','\)\);/);
   assert.match(repositorySource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
   assert.match(repositorySource, /return applyTaskAssigneeProjection\(snapshot, assigneeRows\);/);
-  assert.match(routeSource, /createProjectedSqlAppRepository\(\)\.loadSnapshot\(\)/);
+  assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
+  assert.match(routeSource, /await repository\.loadSnapshot\(\);/);
 });
 
 test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reason', () => {

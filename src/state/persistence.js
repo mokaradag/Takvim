@@ -209,6 +209,19 @@ function defaultSessionContext(repository) {
   };
 }
 
+/**
+ * Açılış verisi yüklenir.
+ *
+ * SIRA BİLİNÇLİDİR ve paralelleştirilemez: anlık görüntü isteği kurumsal
+ * katalog eşitlemesini tetikler ve yeni kurumsal proje kayıtları oluşturabilir.
+ * Oturum bağlamı (yetkiler, proje erişimi) bu eşitlemeden ÖNCE okunursa yeni
+ * projeler erişim listesinde görünmez. Bu yüzden oturum her zaman anlık
+ * görüntüden sonra okunur.
+ *
+ * Gidiş-dönüş maliyeti sıralamayı bozmadan düşürülür: Gerçek Sistem deposu
+ * oturum bağlamını anlık görüntü yanıtının içinde taşır ve `loadSessionContext`
+ * ikinci bir ağ isteği yapmadan bunu döndürür (bkz. createApiRepository).
+ */
 export async function loadApplicationData(repository) {
   try {
     const snapshot = await repository.loadSnapshot();

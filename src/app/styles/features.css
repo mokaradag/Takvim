@@ -256,6 +256,62 @@
 .wbs-tree-row { min-height: 54px; border-bottom: 1px solid var(--border); }
 .wbs-tree-row:last-child { border-bottom: 0; }
 
+/* ── Dağılım ağacı · sürükle-bırak ─────────────────────────────
+   Bırakma niyeti üç ayrı işaretle gösterilir: üst/alt kenar çizgisi kardeş
+   sırasını, dolgulu çerçeve ise alt düğüm yapmayı anlatır. */
+.wbs-tree-row { position: relative; }
+.wbs-tree-row.draggable { cursor: grab; }
+.wbs-tree-row.draggable:active { cursor: grabbing; }
+.wbs-tree-row.dragging { opacity: .45; }
+.wbs-drag-handle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  opacity: .45;
+  transition: opacity .15s ease, color .15s ease;
+}
+.wbs-tree-row:hover .wbs-drag-handle { opacity: 1; color: var(--accent); }
+.wbs-drag-handle[data-disabled='true'] { opacity: .18; }
+.wbs-tree-row:hover .wbs-drag-handle[data-disabled='true'] { opacity: .18; color: var(--text-dim); }
+.wbs-tree-row.drop-inside {
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 55%, transparent);
+  border-radius: var(--r-sm);
+}
+.wbs-tree-row.drop-before::before,
+.wbs-tree-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent);
+}
+.wbs-tree-row.drop-before::before { top: -1px; }
+.wbs-tree-row.drop-after::after { bottom: -1px; }
+.wbs-tree-row.drop-blocked.drop-inside {
+  background: color-mix(in oklab, var(--status-overdue) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--status-overdue) 55%, transparent);
+}
+.wbs-tree-row.drop-blocked.drop-before::before,
+.wbs-tree-row.drop-blocked.drop-after::after {
+  background: var(--status-overdue);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--status-overdue) 22%, transparent);
+}
+.wbs-inline-input {
+  min-width: 0;
+  flex: 1 1 180px;
+  height: 26px;
+  padding: 2px 8px;
+  font-size: 12.5px;
+}
+.wbs-inline-add { margin-top: 4px; color: var(--text-dim); }
+
 /* ── Task Detail drawer ────────────────────────────────────── */
 .drawer-backdrop { z-index: var(--z-drawer-backdrop); }
 .drawer {

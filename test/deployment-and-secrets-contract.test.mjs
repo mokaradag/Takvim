@@ -199,7 +199,11 @@ test('kimlik doğrulama uçları beklenen yolda ve Node çalışma zamanındadı
 
 test('korunan veri uçları sunucu tarafı yetkilendirmeyi korur', () => {
   assert.match(read('src/app/api/mergen-rota/session/route.js'), /loadSessionContext\(\)/);
-  assert.match(read('src/app/api/mergen-rota/snapshot/route.js'), /createProjectedSqlAppRepository\(\)\.loadSnapshot\(\)/);
+  // Anlık görüntü ucu yetkilendirmeyi izdüşümlü depo üzerinden uygular ve aynı
+  // istek içinde oturum bağlamını da (eşitlemeden SONRA) döndürür.
+  const snapshotRoute = read('src/app/api/mergen-rota/snapshot/route.js');
+  assert.match(snapshotRoute, /const repository = createProjectedSqlAppRepository\(\);/);
+  assert.match(snapshotRoute, /await repository\.loadSnapshot\(\);[\s\S]*await repository\.loadSessionContext\(\);/);
   assert.match(read('src/app/api/mergen-rota/commit/route.js'), /createOrderedSqlAppRepository\(\)\.commitChanges\(changes\)/);
 
   // Yetki kararı React bileşenlerine taşınmadı.

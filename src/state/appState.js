@@ -1,5 +1,5 @@
 import { normalizeTaskRecord } from '../data/normalizeTaskRecord.js';
-import { selectDefaultProjectWbs, selectWbsDescendantIds } from '../domain/selectors/index.js';
+import { compareWbsNodes, selectDefaultProjectWbs, selectWbsDescendantIds } from '../domain/selectors/index.js';
 import {
   validateTaskWbsMove,
   validateWbsDeletion,
@@ -95,6 +95,51 @@ function rebaseWbsCode(code, oldPrefix, newPrefix) {
   if (value === previous) return newPrefix;
   if (value.startsWith(`${previous}.`)) return `${newPrefix}${value.slice(previous.length)}`;
   return value;
+}
+
+/**
+ * Kardeşleri verilen sıraya göre yeniden numaralandırır.
+ *
+ * Yalnızca `sortOrder` değeri gerçekten değişen düğümler yeni nesneye
+ * dönüştürülür; değişmeyenler aynı referansta kalır. Kalıcılaştırma katmanı
+ * değişiklik kümesini referans karşılaştırmasıyla ürettiği için bu, gereksiz
+ * kayıt güncellemelerini (ve sürüm çakışması riskini) engeller.
+ */
+function withSiblingOrder(wbs, orderedIds) {
+  const orderById = new Map(orderedIds.map((id, index) => [id, index + 1]));
+  return wbs.map((node) => {
+    const sortOrder = orderById.get(node.id);
+    if (sortOrder == null || node.sortOrder === sortOrder) return node;
+    return { ...node, sortOrder };
+  });
+}
+
+/**
+ * Sürükle-bırak taşıması: üst düğüm değişikliği ve kardeşler arası sıralama.
+ *
+ * Üst düğüm değişiyorsa mevcut `wbs/reparent` davranışı aynen uygulanır (kod
+ * yeniden türetilir, alt ağaç kodları yeniden temellendirilir). Ardından düğüm
+ * hedef sıraya yerleştirilir. Kodlar sıralamayla birlikte yeniden yazılmaz:
+ * ağaç önce `sortOrder` ile sıralandığı için görüntü doğru kalır ve tek bir
+ * sürükleme yüzlerce kaydı güncellemez.
+ */
+function moveWbsNode(state, nodeId, targetParentId, index) {
+  const node = (state.wbs || []).find((item) => item.id === nodeId) || null;
+  if (!node) return withWbsError(state, 'WBS_NODE_NOT_FOUND', nodeId);
+  const target = (state.wbs || []).find((item) => item.id === targetParentId) || null;
+  if (!target) return withWbsError(state, 'WBS_PARENT_NOT_FOUND', targetParentId);
+
+  const reparented = node.parentId === target.id ? state : reparentWbs(state, nodeId, targetParentId);
+  if (reparented.wbsActionError) return reparented;
+
+  const siblings = (reparented.wbs || [])
+    .filter((item) => item.parentId === target.id && item.id !== nodeId)
+    .sort(compareWbsNodes)
+    .map((item) => item.id);
+  const position = Math.max(0, Math.min(Number.isFinite(index) ? index : siblings.length, siblings.length));
+  siblings.splice(position, 0, nodeId);
+
+  return { ...reparented, wbs: withSiblingOrder(reparented.wbs, siblings), wbsActionError: null };
 }
 
 function reparentWbs(state, nodeId, targetParentId) {
@@ -429,6 +474,8 @@ export function appStateReducer(state, action) {
     }
     case 'wbs/reparent':
       return reparentWbs(state, action.id, action.parentId);
+    case 'wbs/move':
+      return moveWbsNode(state, action.id, action.parentId, action.index);
     case 'wbs/delete': {
       const issues = validateWbsDeletion(state.wbs, state.tasks, action.id);
       if (issues.length) {

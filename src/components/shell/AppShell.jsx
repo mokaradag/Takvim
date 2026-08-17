@@ -20,6 +20,7 @@ import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay'
 import {
   useAllPeople,
   useAllProjects,
+  useCurrentUser,
   usePeople,
   useTaskActions,
   useTasks,
@@ -67,6 +68,7 @@ export default function AppShell() {
     selectWorkspace
   } = workspace;
   const stats = useTaskStats();
+  const currentUser = useCurrentUser();
   const { openTask } = useTaskActions();
   const simpleMode = t.appMode === 'simple';
 
@@ -229,6 +231,7 @@ export default function AppShell() {
     return (
       <WelcomeScreen
         stats={stats}
+        currentUser={currentUser}
         onClose={closeWelcome}
         onNavigate={setView}
         showAgain={!hideWelcome}

@@ -311,6 +311,12 @@ export function AppStateProvider({ children, repository = appRepository }) {
     if (!access.ok) return rejectedWrite('wbs/reparent', access);
     return persistence.mutate('wbs/reparent', { type: 'wbs/reparent', id, parentId });
   }, [persistence]);
+  // Sürükle-bırak taşıması: üst düğüm değişimi + kardeşler arası sıralama.
+  const moveWbsNode = useCallback((id, parentId, index) => {
+    const access = resolveWbsMutationAccess(stateRef.current, id, parentId);
+    if (!access.ok) return rejectedWrite('wbs/move', access);
+    return persistence.mutate('wbs/move', { type: 'wbs/move', id, parentId, index });
+  }, [persistence]);
   const deleteWbs = useCallback((id) => {
     const access = resolveWbsMutationAccess(stateRef.current, id);
     if (!access.ok) return rejectedWrite('wbs/delete', access);
@@ -344,6 +350,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     addWbsChild,
     renameWbs,
     reparentWbs,
+    moveWbsNode,
     deleteWbs,
     clearWbsError,
     clearPersistenceError,
@@ -363,6 +370,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     addWbsChild,
     renameWbs,
     reparentWbs,
+    moveWbsNode,
     deleteWbs,
     clearWbsError,
     clearPersistenceError,

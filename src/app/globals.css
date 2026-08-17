@@ -346,6 +346,18 @@ input, textarea, select { font-family: inherit; }
 .btn.ghost { background: transparent; border-color: transparent; }
 .btn.ghost:hover { background: var(--bg-hover); border-color: transparent; }
 .btn.sm { padding: 4px 9px; font-size: 12px; }
+/* Yıkıcı eylem onayı: silme gibi geri alınamayan işlemler için. */
+.btn.danger {
+  border-color: color-mix(in oklab, var(--status-overdue) 55%, var(--border));
+  background: color-mix(in oklab, var(--status-overdue) 12%, var(--bg-elev));
+  color: var(--status-overdue);
+  font-weight: 600;
+}
+.btn.danger:hover {
+  background: var(--status-overdue);
+  border-color: var(--status-overdue);
+  color: var(--accent-fg);
+}
 
 .card {
   background: var(--bg-elev);
@@ -1701,10 +1713,12 @@ img.avatar-photo {
 }
 
 /* ─── Welcome / Onboarding modal ─────────────── */
+/* Karşılama ekranı: kimlik başlığı, tıklanabilir ölçüm kartları ve
+   gezinmeye açılan özellik kartları. */
 .welcome-backdrop {
   position: fixed; inset: 0;
-  background: color-mix(in oklab, var(--bg) 70%, black);
-  backdrop-filter: blur(8px);
+  background: color-mix(in oklab, var(--bg) 62%, black);
+  backdrop-filter: blur(10px);
   z-index: var(--z-modal);
   display: grid;
   place-items: center;
@@ -1712,8 +1726,8 @@ img.avatar-photo {
   animation: fadein 0.18s ease;
 }
 .welcome-panel {
-  width: min(820px, 100%);
-  max-height: 90vh;
+  width: min(880px, 100%);
+  max-height: 92vh;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
@@ -1724,52 +1738,121 @@ img.avatar-photo {
   animation: scaleIn 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .welcome-head {
-  padding: 28px 32px 22px;
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  background:
-    radial-gradient(800px 200px at 0% 0%, var(--accent-soft), transparent 60%),
-    var(--bg-elev);
-  border-bottom: 1px solid var(--border);
   position: relative;
+  padding: 22px 26px 20px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--chrome-bg-soft), var(--bg-elev));
+  overflow: hidden;
 }
-.welcome-head h2 {
-  margin: 0;
-  font-size: 22px;
+.welcome-head-glow {
+  position: absolute;
+  inset: -60% 40% auto -20%;
+  height: 260px;
+  background: radial-gradient(closest-side, var(--accent-soft), transparent 72%);
+  pointer-events: none;
+}
+.welcome-identity {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+.welcome-avatar { position: relative; flex-shrink: 0; display: grid; place-items: center; }
+.welcome-avatar .avatar.lg { width: 58px; height: 58px; font-size: 19px; }
+.welcome-avatar-ring {
+  position: absolute;
+  inset: -5px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  box-shadow: 0 0 22px -6px var(--accent);
+  pointer-events: none;
+}
+.welcome-identity-text { gap: 2px; min-width: 0; }
+.welcome-greeting {
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.welcome-user-name {
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.welcome-head .welcome-sub {
-  margin-top: 6px;
-  font-size: 13.5px;
+.welcome-user-meta {
+  font-size: 12px;
   color: var(--text-muted);
-  line-height: 1.55;
-  max-width: 540px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.welcome-brand {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 14px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+}
+.welcome-brand-name { font-size: 13px; font-weight: 500; letter-spacing: -0.01em; color: var(--text-muted); }
+.welcome-brand-name strong { color: var(--accent); font-weight: 750; }
+.welcome-brand-sub { font-size: 10.5px; color: var(--text-dim); }
+.welcome-close { position: relative; flex-shrink: 0; }
+
 .welcome-body {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 32px 8px;
+  padding: 22px 26px 10px;
+}
+.welcome-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  color: var(--text);
+}
+.welcome-body .welcome-sub {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-width: 640px;
 }
 .welcome-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
 }
 .welcome-card {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  padding: 14px 14px 14px 14px;
+  padding: 13px 14px;
   background: var(--bg);
   display: flex;
   gap: 11px;
-  align-items: flex-start;
-  transition: border-color 0.15s, transform 0.15s;
+  align-items: center;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, transform 0.15s, background 0.15s;
 }
 .welcome-card:hover {
-  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
+  border-color: color-mix(in oklab, var(--wc-color, var(--accent)) 45%, var(--border));
+  background: color-mix(in oklab, var(--wc-color, var(--accent)) 6%, var(--bg));
   transform: translateY(-1px);
 }
 .welcome-card .wc-ico {
@@ -1784,6 +1867,7 @@ img.avatar-photo {
   font-weight: 600;
   font-size: 13.5px;
   letter-spacing: -0.01em;
+  color: var(--text);
 }
 .welcome-card .wc-desc {
   margin-top: 3px;
@@ -1791,11 +1875,14 @@ img.avatar-photo {
   color: var(--text-muted);
   line-height: 1.5;
 }
+.welcome-card .wc-go { flex-shrink: 0; color: var(--text-dim); opacity: 0; transition: opacity .15s ease; }
+.welcome-card:hover .wc-go { opacity: 1; color: var(--wc-color, var(--accent)); }
+
 .welcome-callouts {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin: 16px 0 4px;
+  margin: 18px 0 4px;
 }
 .welcome-callout {
   display: flex;
@@ -1805,8 +1892,16 @@ img.avatar-photo {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--bg-elev-2);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s ease, transform .15s ease;
 }
+.welcome-callout:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.welcome-callout.alert { border-color: color-mix(in oklab, var(--status-overdue) 40%, var(--border)); }
 .welcome-callout .wc-k {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -1814,15 +1909,26 @@ img.avatar-photo {
   color: var(--text-dim);
 }
 .welcome-callout .wc-v {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: -0.025em;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
-.welcome-callout .wc-s {
-  font-size: 11.5px;
-  color: var(--text-muted);
+.welcome-callout .wc-s { font-size: 11.5px; color: var(--text-muted); }
+.welcome-callout .wc-bar {
+  display: block;
+  height: 3px;
+  margin-top: 2px;
+  border-radius: 99px;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.welcome-callout .wc-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--status-done);
+  border-radius: inherit;
 }
 .welcome-shortcuts {
   display: flex;
@@ -1853,7 +1959,7 @@ img.avatar-photo {
   font-weight: 600;
 }
 .welcome-foot {
-  padding: 16px 32px;
+  padding: 14px 26px;
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -1865,6 +1971,11 @@ img.avatar-photo {
   font-size: 12.5px; color: var(--text-muted); cursor: pointer;
 }
 .welcome-foot label input { accent-color: var(--accent); }
+
+@media (max-width: 720px) {
+  .welcome-grid, .welcome-callouts { grid-template-columns: minmax(0, 1fr); }
+}
+
 .welcome-help-btn {
   position: fixed;
   bottom: 22px; left: 256px;
