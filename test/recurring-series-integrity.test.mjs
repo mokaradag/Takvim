@@ -212,6 +212,10 @@ test('aynı seri günü için ikinci bir yineleme kalıcılaştırılamaz', asyn
     });
     assert.equal(template.ok, true, template.error?.message);
 
+    // Arayüz durumu (`todo`) depo sınırında kanonik kalıcı duruma çevrilir;
+    // seri üretimi de sıradan görev oluşturmayla aynı yoldan geçer.
+    assert.equal(stack.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('1aaaaaaa')).Status, 'planned');
+
     const first = await stack.persistence.commitChanges('task/series', {
       taskUpserts: [seriesTask({
         id: CHILD_ID,
