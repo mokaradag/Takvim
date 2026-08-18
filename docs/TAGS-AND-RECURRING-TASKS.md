@@ -172,9 +172,27 @@ takvim uygulamasıyla aynı seriyi vermelidir; ayın son gününe çekmek saklan
 `RRULE`'ün anlamını sessizce değiştirirdi.
 
 Haftalık kuralda `BYDAY` verilmediğinde RFC 5545 serinin başlangıç gününü
-varsayar. Arayüz de başlangıç gününü kümeden çıkarmaya izin vermez: `BYDAY`
-`DTSTART` gününü dışlarsa kural üç yineleme derken şablonla birlikte dört görev
-oluşur ve dışa aktarılan `RRULE`'ün `DTSTART`'ı kendi kuralını sağlamazdı.
+varsayar; arayüz de gün seçilmediğinde bunu açıkça yazar.
+
+**Gün seçimi tümüyle kullanıcınındır.** Arayüz daha önce `DTSTART` gününü zorla
+seçili tutuyordu: Salı başlayan bir seride kullanıcı yalnızca Pazartesi ve
+Perşembe tanımlamak istediğinde Salı'yı listeden çıkaramıyordu. Bu kısıt
+kaldırıldı; planlanan başlangıcın günü yalnızca ince bir çizgiyle *işaretlenir*,
+seçimi zorunlu değildir.
+
+Kısıtın gerekçesi olan belirsizlik ise ARAYÜZDE çözülür: `COUNT` RFC 5545'te
+serinin **toplam** yineleme sayısıdır ve `DTSTART` kurala uyuyorsa serinin ilk
+yinelemesi şablonun kendisidir. Bu durumda "3 yineleme" yalnızca **2 yeni görev**
+demektir. `summarizeRecurrencePlan` bu ayrımı hesaplar ve panel açıkça yazar:
+
+> Seri toplam **6** yinelemeden oluşur. İlki bu görevin kendisidir; **5** yeni
+> görev oluşturulur.
+
+Aynı özet yineleme takvimini de üretir: ilk sekiz gün, haftanın günüyle birlikte
+listelenir, şablonun kendi günü vurgulanır ve kalan yineleme sayısı
+"+N daha" olarak gösterilir. Önizleme üretimle **aynı** planlayıcıyı kullanır
+(`planRecurringOccurrences`); hafta sonuna denk gelen günler iş gününe kaydırılıp
+tekilleştirildikten sonra gösterilir.
 
 Sonsuz kurallar `MAX_RECURRENCE_OCCURRENCES` (400) ile sınırlıdır. Bu tavanı
 aşan sonlu bir `COUNT` hiçbir zaman tamamlanamayacağı için hem arayüzde hem de
@@ -218,10 +236,15 @@ Seri bütünlüğü kalıcı katmanda korunur:
 ### 2.4 Arayüz
 
 Görev detayında **Tekrar** bölümü sıklık, aralık, haftalık günler / ayın günü ve
-seri sonu (yineleme sayısı veya bitiş tarihi) alanlarını sunar. Kuralın hem
+seri sonu (toplam yineleme veya bitiş tarihi) alanlarını sunar. Kuralın hem
 Türkçe özeti hem RFC 5545 karşılığı gösterilir; kullanıcı ne tanımladığını ve
-dışa aktarımda ne taşınacağını aynı anda görür. "Tekrarları oluştur" düğmesi
-yinelemeleri gerçek görev olarak üretir.
+dışa aktarımda ne taşınacağını aynı anda görür. Bunlara ek olarak:
+
+- **kaç yeni görev oluşacağı** açıkça yazılır (yukarıdaki `COUNT` ayrımı),
+- **yineleme takvimi** ilk sekiz günü haftanın günüyle birlikte gösterir,
+- haftanın günleri serbestçe seçilip **kaldırılabilir**.
+
+"Tekrarları oluştur" düğmesi yinelemeleri gerçek görev olarak üretir.
 
 Görev listesinde seri şablonu **Seri**, üretilen yinelemeler **Tekrar** rozetiyle
 işaretlenir.

@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { selectStatusDistribution } from '../src/features/dashboard/statusDistribution.js';
+import { donutSegments, donutSlicePath } from '../src/components/charts/donutGeometry.js';
 import { resolveWbsDrop, wbsSiblings } from '../src/features/wbs/wbsDragPolicy.js';
 import { appStateReducer } from '../src/state/appState.js';
 import {
@@ -96,11 +97,75 @@ test('her dilim kimlik taşır: seçim dilim sırasına göre saklanmaz', () => 
   assert.doesNotMatch(dashboard, /statusDonut\[donutSel\]/);
 });
 
-test('halka çizimi dilim toplamını çevre ile sınırlar ve seçim payını viewBox\'a yansıtır', () => {
-  const ui = read('src/components/ui.jsx');
-  assert.match(ui, /const pad = DONUT_LIFT \+ DONUT_EMPHASIS \+ 2;/);
-  assert.match(ui, /const len = total > 0 \? \(values\[i\] \/ total\) \* c : 0;/);
-  assert.match(ui, /Number\.isFinite\(d\?\.value\) && d\.value > 0 \? d\.value : 0/);
+test('halka dilimleri tam 360 dereceyi paylaşır ve hiçbiri halkayı aşamaz', () => {
+  // Kesik-desenli çizimde yuvarlama artığı deseni başa sardırıyor, aynı dilim
+  // halkanın iki ayrı yerinde parça parça görünüyordu.
+  const segments = donutSegments([
+    { label: 'Tamamlanan', value: 1 },
+    { label: 'Devam eden', value: 3 },
+    { label: 'Yapılacak', value: 31 },
+    { label: 'Geciken', value: 9 }
+  ], { gapDegrees: 0 });
+
+  assert.equal(segments.length, 4);
+  assert.equal(segments[0].startAngle, -90);
+  assert.equal(segments.at(-1).endAngle, 270);
+  for (const segment of segments) {
+    assert.ok(segment.endAngle > segment.startAngle, 'her dilimin açısı pozitiftir');
+    assert.ok(segment.endAngle <= 270 + 1e-9, 'hiçbir dilim halkanın sonunu aşamaz');
+  }
+  // Ardışık dilimler boşluksuz zincirlenir: toplam tam 360 derecedir.
+  for (let index = 1; index < segments.length; index += 1) {
+    assert.ok(Math.abs(segments[index].startAngle - segments[index - 1].endAngle) < 1e-9);
+  }
+});
+
+test('halka dilimleri sayı olmayan, negatif ve sıfır değerleri çizime sokmaz', () => {
+  const segments = donutSegments([
+    { label: 'A', value: 5 },
+    { label: 'B', value: -3 },
+    { label: 'C', value: 0 },
+    { label: 'D', value: Number.NaN },
+    { label: 'E', value: 5 }
+  ], { gapDegrees: 0 });
+
+  assert.deepEqual(segments.map((segment) => segment.index), [0, 4]);
+  assert.equal(segments[0].endAngle - segments[0].startAngle, 180);
+});
+
+test('dilimler arası boşluk küçük dilimi yutmaz', () => {
+  const segments = donutSegments([{ label: 'A', value: 1 }, { label: 'B', value: 999 }], { gapDegrees: 30 });
+  for (const segment of segments) {
+    assert.ok(segment.endAngle > segment.startAngle, 'boşluk uygulandıktan sonra da dilim çizilebilir kalır');
+  }
+});
+
+test('tek dilim halkayı boşluksuz kapatır ve tam tur yolu üretir', () => {
+  const segments = donutSegments([{ label: 'Tek', value: 7 }]);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].startAngle, -90);
+  assert.equal(segments[0].endAngle, 270);
+
+  const path = donutSlicePath(90, 90, 90, 70, segments[0].startAngle, segments[0].endAngle);
+  // Tam tur tek yayla ifade edilemez: iki yarım turla kapatılır ve iç halka
+  // ters yönde çizilerek delik oluşur.
+  assert.equal((path.match(/A /g) || []).length, 4);
+  assert.ok(path.endsWith('Z'));
+});
+
+test('halka dilimi yolu ÇİZGİ kalınlığına değil, kapalı alana dayanır', () => {
+  // `stroke-dasharray` yerine kapalı yol kullanmak dilimin halkayı aşmasını
+  // geometrik olarak imkânsız kılar; vurgu da yalnızca iç yarıçapı değiştirir.
+  const path = donutSlicePath(90, 90, 90, 70, -90, 0);
+  assert.match(path, /^M /);
+  assert.ok(path.endsWith('Z'));
+  assert.equal((path.match(/A /g) || []).length, 2);
+});
+
+test('boş veri kümesi hiç dilim üretmez', () => {
+  assert.deepEqual(donutSegments([]), []);
+  assert.deepEqual(donutSegments(null), []);
+  assert.deepEqual(donutSegments([{ label: 'A', value: 0 }]), []);
 });
 
 test('tamamlanan görev rozetindeki haftalık değer uydurulmaz', () => {

@@ -7,6 +7,7 @@ import React, { useState as useSx, useEffect as useEx, useRef as useRx } from 'r
 import ReactDOM from 'react-dom';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
+import { clampOverlayToViewport } from './overlayPlacement.js';
 import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../scheduling/dates';
 import { OPTION_SEARCH_THRESHOLD, matchesOptionQuery } from './columnFilterSearch.js';
 
@@ -230,14 +231,28 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // position near anchor
-  const [pos, setPos] = useSx({ left: 0, top: 0 });
+  // Çapaya göre yerleşim; kutu her zaman görünüm alanının içinde kalır.
+  const [pos, setPos] = useSx({ left: 0, top: 0, maxHeight: null });
   useEx(() => {
-    if (!anchor) return;
-    const Z = appZoom();
-    const r = anchor.getBoundingClientRect();
-    setPos({ left: Math.min(window.innerWidth / Z - 300, r.left / Z), top: r.bottom / Z + 4 });
-  }, [anchor]);
+    if (!anchor) return undefined;
+    const place = () => {
+      const Z = appZoom();
+      const r = anchor.getBoundingClientRect();
+      const box = ref.current?.getBoundingClientRect();
+      setPos(clampOverlayToViewport(
+        { left: r.left / Z, top: r.top / Z, bottom: r.bottom / Z, width: r.width / Z },
+        { width: box ? box.width / Z : 300, height: box ? box.height / Z : 320 },
+        { width: window.innerWidth / Z, height: window.innerHeight / Z }
+      ));
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchor, type]);
 
   const apply = () => {
     if (type === 'text' || type === 'single') onChange(q);
@@ -289,9 +304,9 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   const searchable = (type === 'multi' || type === 'single') && options.length > OPTION_SEARCH_THRESHOLD;
 
   return (
-    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top }}>
+    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, maxHeight: pos.maxHeight || undefined }}>
       <div className="col-filter-head">
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>{label}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.01em', color: 'var(--text-dim)' }}>{label}</span>
       </div>
       {onSort && (
         <div className="col-filter-sort">

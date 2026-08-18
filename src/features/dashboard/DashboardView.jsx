@@ -9,7 +9,8 @@ import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, CardHead, AnimatedNumber, HoverListCard } from '../../components/ui-extras';
 import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetricTable';
 import { useAllPeople, useTasks, useTaskActions } from '../../state/hooks';
-import { selectStatusDistribution } from './statusDistribution.js';
+import { STATUS_DISTRIBUTION_BUCKETS, selectStatusDistribution } from './statusDistribution.js';
+import { selectOverdueAging, selectPlanHygiene } from './planHealth.js';
 
 /* ── Özet (Dashboard) ──────────────────────────────────── */
 export function DashboardView({ onNavigate }) {
@@ -24,16 +25,23 @@ export function DashboardView({ onNavigate }) {
   const today_ = useMemo1(() => parseDate(todayKey), [todayKey]);
   const [donutSel, setDonutSel] = useState1(null);
 
-  // Üst rozetler: kartlar durum alanını doğrudan okur (bir görev hem "devam
-  // eden" hem "geciken" sayılabilir), halka grafiği ise ayrıştırılmış kovaları
-  // kullanır. İki okuma bilinçli olarak farklıdır ve karıştırılmamalıdır.
-  const doneTasks = tasks.filter(t => t.status === 'done');
-  const progressTasks = tasks.filter(t => t.status === 'in_progress');
-  const overdueTasks = tasks.filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0);
+  // Üst rozetler ve halka grafiği TEK kaynaktan beslenir: birbirini dışlayan
+  // durum kovaları (bkz. statusDistribution.js). Daha önce kartlar durum
+  // alanını doğrudan okuyordu; hem "devam eden" hem "geciken" sayılan bir görev
+  // yüzünden kart "6 devam eden" derken halka aynı anda "3" gösteriyordu.
+  const distribution = useMemo1(() => selectStatusDistribution(tasks, today_), [tasks, today_]);
+  const bucketItems = useMemo1(() => {
+    const index = new Map(STATUS_DISTRIBUTION_BUCKETS.map((bucket) => [bucket.id, []]));
+    for (const segment of distribution.segments) index.set(segment.id, segment.items || []);
+    return index;
+  }, [distribution]);
+  const doneTasks = bucketItems.get('done') || [];
+  const progressTasks = bucketItems.get('in_progress') || [];
+  const overdueTasks = bucketItems.get('overdue') || [];
   const done = doneTasks.length;
   const progress = progressTasks.length;
   const overdue = overdueTasks.length;
-  const compRate = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+  const compRate = distribution.completionRate;
 
   const byProject = useMemo1(() => {
     const map = {};
@@ -75,37 +83,53 @@ export function DashboardView({ onNavigate }) {
       .slice(0, 5);
     const max = rows.reduce((peak, row) => Math.max(peak, row.total), 1);
     return rows.map((row) => ({ ...row, share: row.total / max, person: personByName.get(row.name) || null }));
-  }, [tasks, personByName]);
+  }, [tasks, personByName, today_]);
 
-  const burndown = useMemo1(() => {
-    const out = [];
+  // Birikimli tamamlanma: bir görevin tamamlandığı gün GERÇEKLEŞEN bitiştir.
+  // Planlanan bitişe bakmak, planı ileri bir tarihte olan ama bugün bitirilen
+  // görevi eğriye hiç sokmuyordu.
+  const completionTrend = useMemo1(() => {
+    const values = [];
     const labels = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = addDays(today_, -i);
-      const c = tasks.filter(t => t.status === 'done' && parseDate(t.plannedFinish) <= d).length;
-      out.push(c);
-      labels.push(i % 3 === 0 ? fmt(d, 'd') : '');
+    const completions = tasks
+      .filter((t) => t.status === 'done')
+      .map((t) => t.actualFinish || t.plannedFinish)
+      .filter(Boolean)
+      .map((value) => parseDate(value));
+    for (let offset = 13; offset >= 0; offset -= 1) {
+      const day = addDays(today_, -offset);
+      values.push(completions.filter((finish) => finish <= day).length);
+      labels.push(offset % 3 === 0 ? fmt(day, 'dd MMM') : '');
     }
-    return { values: out, labels };
-  }, [tasks]);
+    return { values, labels };
+  }, [tasks, today_]);
 
   const upcoming = useMemo1(() => tasks
     .filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) >= 0)
     .sort((a, b) => parseDate(a.targetFinish) - parseDate(b.targetFinish))
     .slice(0, 5),
-    [tasks]);
+    [tasks, today_]);
 
+  // Bağımlılık riski: bekleyen öncül SAYISI da burada hesaplanır. Kart daha
+  // önce `deps.length` yazıyordu; bu, tamamlanmış öncülleri de sayan yanlış bir
+  // rakamdı ("3 bekleyen bağımlılık" derken yalnızca biri bekliyor olabiliyordu).
   const risks = useMemo1(() => {
-    return tasks.filter(t => {
-      if (t.status === 'done' || !t.deps) return false;
-      return t.deps.some(d => {
-        const dep = tasks.find(x => x.id === depId(d));
-        return dep && dep.status !== 'done';
-      });
-    }).slice(0, 4);
+    const byId = new Map(tasks.map((task) => [task.id, task]));
+    return tasks
+      .map((task) => {
+        if (task.status === 'done') return null;
+        const blocking = (task.deps || []).filter((dependency) => {
+          const predecessor = byId.get(depId(dependency));
+          return predecessor && predecessor.status !== 'done';
+        });
+        return blocking.length ? { task, blockingCount: blocking.length } : null;
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.blockingCount - left.blockingCount)
+      .slice(0, 4);
   }, [tasks]);
 
-  // Industry KPI: effort & weekly delta
+  // Sektör göstergeleri: efor kullanımı ve haftalık değişim
   const portfolioHealth = useMemo1(() => {
     let totalPlanned = 0, totalActual = 0;
     tasks.forEach(t => {
@@ -133,7 +157,7 @@ export function DashboardView({ onNavigate }) {
       hoursUsage: totalPlanned ? totalActual / totalPlanned : 0,
       portfolio
     };
-  }, [tasks]);
+  }, [tasks, today_]);
 
   // "Bu hafta tamamlanan" GERÇEKLEŞEN bitiş tarihinden sayılır. Planlanan bitişe
   // bakmak, bugün biten ama planı daha eskiye düşen görevi saymıyor; buna
@@ -150,12 +174,11 @@ export function DashboardView({ onNavigate }) {
     return { thisWeekDone, lastWeekDone, delta: thisWeekDone - lastWeekDone };
   }, [tasks, today_]);
 
-  // Halka grafiği birbirini dışlayan kovalarla beslenir: dilimlerin toplamı
-  // her zaman görev sayısına eşittir (bkz. statusDistribution.js).
-  // `today_` bağımlılıktadır: pano gece yarısını açık geçtiğinde, yeniden çizim
-  // olsa bile halka dünün gecikme sınıflandırmasında kalır ve üstteki
-  // "Geciken" kartıyla çelişirdi.
-  const distribution = useMemo1(() => selectStatusDistribution(tasks, today_), [tasks, today_]);
+  // Gecikme yaşlandırması ve plan bütünlüğü: tek bir "9 geciken" sayısı, dün
+  // gecikmiş işle aylardır bekleyen işi aynı kefeye koyar.
+  const aging = useMemo1(() => selectOverdueAging(tasks, today_), [tasks, today_]);
+  const hygiene = useMemo1(() => selectPlanHygiene(tasks), [tasks]);
+
   const statusDonut = distribution.segments;
   // Seçim dilim SIRASI değil, kova KİMLİĞİ ile tutulur: görevler değiştiğinde
   // dilim listesi kısalabilir ve saklanan sıra numarası boşa düşerek çizimi
@@ -178,9 +201,9 @@ export function DashboardView({ onNavigate }) {
           tip="Sistemdeki tüm aktif ve kapanmış görevlerin sayısı. Projeler, sorumlular ve tarih aralıklarına göre filtrelenebilir." />
         {/* Haftalık değer uydurulmaz: son 7 günde tamamlananların gerçek sayısıdır. */}
         <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${weeklyDelta.thisWeekDone} bu hafta`} trendUp={weeklyDelta.thisWeekDone > 0} items={doneTasks} onOpenTask={onOpenTask}
-          tip="Durumu 'Tamamlandı' olarak işaretlenmiş görev sayısı. Bu sayı tamamlama oranını ve hız metriklerini besler." />
+          tip="Durumu 'Tamamlandı' olarak işaretlenmiş görev sayısı. Bu sayı tamamlanma oranını ve hız göstergelerini besler." />
         <Stat icon={<Icons.Clock size={16} />} label="Devam eden" value={progress} accent="var(--status-progress)" trend="aktif" items={progressTasks} onOpenTask={onOpenTask}
-          tip="Şu anda üzerinde çalışılan görev sayısı. Eşzamanlı iş (devam eden) limitiniz için referans olabilir." />
+          tip="Üzerinde çalışılan ve hedef tarihi henüz geçmemiş görevler. Hedefi geçmiş olanlar “Geciken” kartında sayılır; böylece dört kartın toplamı her zaman toplam görev sayısına eşittir." />
         <Stat icon={<Icons.Alert size={16} />} label="Geciken" value={overdue} accent="var(--status-overdue)" trend={overdue > 0 ? 'müdahale gerekli' : 'tertip'} trendDown={overdue > 0} items={overdueTasks} onOpenTask={onOpenTask}
           tip={<>
             <p>Hedef tarihi geçmiş ve hâlâ tamamlanmamış görevler.</p>
@@ -190,16 +213,16 @@ export function DashboardView({ onNavigate }) {
       </div>
 
       <div className="dashboard-main-grid">
-        {/* Burndown */}
+        {/* Tamamlanma eğilimi */}
         <div className="card dashboard-trend-card">
           <CardHead
             icon={<Icons.TrendUp size={14} />}
-            title="Tamamlama trendi"
+            title="Tamamlanma eğilimi"
             subtitle="Son 14 gün · birikimli"
             infoAccent="var(--status-done)"
             infoIcon={<Icons.TrendUp size={12} />}
             info={<>
-              <p>Son 14 gün içinde tamamlanan görev sayısının birikimli değişimi.</p>
+              <p>Son 14 gün içinde tamamlanan görev sayısının birikimli değişimi. Bir görev, gerçekleşen bitiş tarihinde sayılır.</p>
               <div className="rt-sep" />
               <div className="rt-row"><span className="rt-label">Eğri dik</span><span className="rt-val" style={{ color: 'var(--status-done)' }}>İvmelenme</span></div>
               <div className="rt-row"><span className="rt-label">Eğri yatay</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>Duraklama</span></div>
@@ -210,10 +233,10 @@ export function DashboardView({ onNavigate }) {
             </>}
             right={<div className="badge" style={{ color: 'var(--status-done)' }}>+{done} toplam</div>}
           />
-          <AreaChart data={burndown.values} labels={burndown.labels} width={500} height={150} color="var(--status-done)" animated />
+          <AreaChart data={completionTrend.values} labels={completionTrend.labels} width={500} height={150} color="var(--status-done)" animated />
         </div>
 
-        {/* Status donut */}
+        {/* Durum halkası */}
         <div className="card dashboard-status-card">
           <CardHead
             icon={<Icons.Layers size={14} />}
@@ -314,7 +337,7 @@ export function DashboardView({ onNavigate }) {
         </div>
       </div>
 
-      {/* Bottom rows */}
+      {/* Alt satırlar */}
       <div className="dashboard-bottom-grid">
         <div className="card">
           <CardHead
@@ -461,7 +484,7 @@ export function DashboardView({ onNavigate }) {
         </div>
       </div>
 
-      {/* Portfolio health (RAG) — industry-standard summary */}
+      {/* Portföy sağlığı (RAG) — PMO standardı özet */}
       <div className="card">
         <CardHead
           icon={<Icons.Briefcase size={14} />}
@@ -523,7 +546,7 @@ export function DashboardView({ onNavigate }) {
         </div>
       </div>
 
-      {/* Weekly snapshot + effort mini */}
+      {/* Haftalık kesit ve efor göstergesi */}
       <div className="dashboard-insights-grid">
         <div className="card mini-kpi">
           <CardHead
@@ -572,6 +595,131 @@ export function DashboardView({ onNavigate }) {
         </div>
       </div>
 
+      <div className="dashboard-health-grid">
+        {/* Gecikme yaşlandırması — PMO raporlamasının standart görünümü. */}
+        <div className="card">
+          <CardHead
+            icon={<Icons.Alert size={14} />}
+            title="Gecikme yaşlandırması"
+            subtitle={aging.total ? `${aging.total} geciken görev · en eskisi ${aging.worstDays} gün` : 'Geciken görev yok'}
+            infoAccent="var(--status-overdue)"
+            infoIcon={<Icons.Alert size={12} />}
+            info={<>
+              <p>Geciken görevler, hedef tarihinin ÜZERİNDEN geçen gün sayısına göre gruplanır.</p>
+              <div className="rt-sep" />
+              <p>Tek bir gecikme sayısı, dün gecikmiş bir işle aylardır bekleyen bir işi aynı kefeye koyar. Yaşlandırma, önce hangi işe dönüleceğini gösterir.</p>
+              <div className="rt-foot"><Icons.Sparkle size={11} /> Bir kovaya gelin: içindeki görevler listelenir.</div>
+            </>}
+          />
+          {aging.total === 0 ? (
+            <div className="empty">Hedef tarihi geçmiş görev yok.</div>
+          ) : (
+            <div className="col" style={{ gap: 8 }}>
+              {aging.buckets.map((bucket) => (
+                <HoverListCard
+                  key={bucket.id}
+                  title={`${bucket.label} geciken`}
+                  accent={bucket.color}
+                  icon={<span style={{ width: 9, height: 9, borderRadius: 2, background: bucket.color, display: 'inline-block' }} />}
+                  items={bucket.items}
+                  listHint="Açmak için tıklayın"
+                  emptyText="Bu aralıkta geciken görev yok."
+                  summary={<>
+                    <div className="rt-row"><span className="rt-label">Görev</span><span className="rt-val">{bucket.value}</span></div>
+                    <div className="rt-row"><span className="rt-label">Pay</span><span className="rt-val">{aging.total ? Math.round((bucket.value / aging.total) * 100) : 0}%</span></div>
+                  </>}
+                  renderItem={(t) => (
+                    <button key={t.id} className="rt-list-item" onClick={() => onOpenTask(t)}>
+                      <span className="rli-bar" style={{ background: projectColorVar(t.proje) }} />
+                      <span className="rli-main">
+                        <span className="rli-name">{t.task}</span>
+                        <span className="rli-meta">{t.proje} · {t.lateBy} gün gecikti</span>
+                      </span>
+                      <StatusPill task={t} size={10} />
+                    </button>
+                  )}
+                >
+                  <div className="aging-row">
+                    <span className="aging-label">{bucket.label}</span>
+                    <div className="bar-track" style={{ flex: 1 }}>
+                      <div
+                        className="bar-fill"
+                        style={{ width: `${aging.total ? (bucket.value / aging.total) * 100 : 0}%`, background: bucket.color }}
+                      />
+                    </div>
+                    <span className="tabular aging-value" style={{ color: bucket.value ? bucket.color : 'var(--text-dim)' }}>{bucket.value}</span>
+                  </div>
+                </HoverListCard>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Plan bütünlüğü — eksik alan taşıyan görev hiçbir ölçüme girmez. */}
+        <div className="card">
+          <CardHead
+            icon={<Icons.Check size={14} />}
+            title="Plan bütünlüğü"
+            subtitle={`${hygiene.cleanCount} / ${hygiene.openCount} açık görev eksiksiz`}
+            infoAccent="var(--c-emerald)"
+            infoIcon={<Icons.Check size={12} />}
+            info={<>
+              <p>Açık görevlerde eksik kalan planlama alanları. Yalnızca tamamlanmamış görevler denetlenir.</p>
+              <div className="rt-sep" />
+              <p>Sorumlusu, termini veya planlanan tarihi olmayan bir görev iş yükü, gecikme ve kritik yol hesaplarının hiçbirine girmez; sessizce kaybolur.</p>
+            </>}
+            right={
+              <span
+                className="badge"
+                style={{ color: hygiene.cleanCount === hygiene.openCount ? 'var(--status-done)' : 'var(--c-amber)' }}
+              >
+                {hygiene.openCount ? Math.round((hygiene.cleanCount / hygiene.openCount) * 100) : 100}% eksiksiz
+              </span>
+            }
+          />
+          {hygiene.openCount === 0 ? (
+            <div className="empty">Açık görev yok.</div>
+          ) : (
+            <div className="col" style={{ gap: 6 }}>
+              {hygiene.checks.map((check) => (
+                <HoverListCard
+                  key={check.id}
+                  title={check.label}
+                  accent={check.value ? 'var(--c-amber)' : 'var(--status-done)'}
+                  icon={check.value ? <Icons.Alert size={12} /> : <Icons.Check size={12} />}
+                  items={check.items}
+                  listHint="Açmak için tıklayın"
+                  emptyText="Bu denetimde eksik görev yok."
+                  summary={<>
+                    <div className="rt-row"><span className="rt-label">Eksik</span><span className="rt-val">{check.value}</span></div>
+                    <div className="rt-sep" />
+                    <p>{check.explain}</p>
+                  </>}
+                  renderItem={(t) => (
+                    <button key={t.id} className="rt-list-item" onClick={() => onOpenTask(t)}>
+                      <span className="rli-bar" style={{ background: projectColorVar(t.proje) }} />
+                      <span className="rli-main">
+                        <span className="rli-name">{t.task}</span>
+                        <span className="rli-meta">{t.proje}</span>
+                      </span>
+                      <StatusPill task={t} size={10} />
+                    </button>
+                  )}
+                >
+                  <div className={`hygiene-row${check.value ? ' has-gap' : ''}`}>
+                    <span className="hygiene-icon">
+                      {check.value ? <Icons.Alert size={12} /> : <Icons.Check size={12} />}
+                    </span>
+                    <span className="hygiene-label">{check.label}</span>
+                    <span className="tabular hygiene-value">{check.value}</span>
+                  </div>
+                </HoverListCard>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       {risks.length > 0 && (
         <div className="card" style={{ borderColor: 'color-mix(in oklab, var(--status-overdue) 35%, var(--border))' }}>
           <CardHead
@@ -589,15 +737,15 @@ export function DashboardView({ onNavigate }) {
             right={<span className="badge" style={{ color: 'var(--status-overdue)', borderColor: 'color-mix(in oklab, var(--status-overdue) 35%, var(--border))' }}>{risks.length} görev</span>}
           />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
-            {risks.map(t => (
-              <button key={t.id} onClick={() => onOpenTask(t)} className="col" style={{
+            {risks.map(({ task, blockingCount }) => (
+              <button key={task.id} onClick={() => onOpenTask(task)} className="col" style={{
                 gap: 6, padding: 12, borderRadius: 'var(--r-md)', border: '1px solid var(--border)',
                 background: 'var(--bg)', cursor: 'pointer', textAlign: 'left', alignItems: 'stretch'
               }}>
-                <div style={{ fontSize: 12.5, fontWeight: 500 }}>{t.task}</div>
+                <div style={{ fontSize: 12.5, fontWeight: 500 }}>{task.task}</div>
                 <div className="row" style={{ gap: 8 }}>
-                  <TaskKeyword task={t} />
-                  <span className="muted" style={{ fontSize: 11 }}>{t.deps.length} bekleyen bağımlılık</span>
+                  <TaskKeyword task={task} />
+                  <span className="muted" style={{ fontSize: 11 }}>{blockingCount} bekleyen bağımlılık</span>
                 </div>
               </button>
             ))}

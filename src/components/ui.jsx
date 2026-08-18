@@ -10,9 +10,10 @@ import { personPhotoUrl } from '../lib/userPhoto';
 import { resolveAvatarEntries } from './avatarIdentity.js';
 import { usePersonLookup } from './PeopleDirectoryContext.jsx';
 import { Tooltip } from './ui-extras';
+import { DONUT_EMPHASIS, donutSegments, donutSlicePath } from './charts/donutGeometry.js';
 
 // ── Avatar ─────────────────────────────────────────────────
-const AVATAR_SIZE_CLASS = { lg: 'avatar lg', sm: 'avatar sm', md: 'avatar' };
+const AVATAR_SIZE_CLASS = { xl: 'avatar xl', lg: 'avatar lg', sm: 'avatar sm', md: 'avatar' };
 
 /**
  * Kurumsal fotoğraf + baş harf yedeği.
@@ -183,81 +184,77 @@ export function Sparkline({ values, color = 'var(--accent)', width = 100, height
   );
 }
 
-// ── Donut chart (SVG) — with click-to-select + bounce animation ───
+// ── Donut chart (SVG) ─────────────────────────────────────
 /**
  * Halka grafiği.
  *
- * Dilimler `strokeDasharray` ile çizilir; bu yüzden veri kümesindeki değerler
- * toplamı halkanın 360 derecesini temsil eder. Çağıran tarafın kovaları
- * birbirini dışlamıyorsa (aynı görev iki kovada) dilimler halkayı aşıp
- * birbirinin üzerine binerdi. Buna karşı üç koruma vardır:
- *  - Negatif ve sayı olmayan değerler sıfıra çekilir.
- *  - Toplam uzunluk çevre ile sınırlanır; hiçbir dilim halkayı aşamaz.
- *  - Vurgu/seçim kalınlaşması sabit bir tavana bağlıdır ve `viewBox` payı bu
- *    tavana göre hesaplanır; böylece dilimler kırpılmaz.
+ * Her dilim kendi yay YOLU olarak çizilir (bkz. charts/donutGeometry.js).
+ * Kesik-desenli (`stroke-dasharray`) çizimde desen çevre boyunca tekrarlandığı
+ * için yuvarlama artığı aynı dilimi halkanın iki yerinde parça parça
+ * gösterebiliyordu; seçili dilimi dışarı ötelemek de dilimi halkadan kopararak
+ * aynı bölünmüş görüntüyü üretiyordu. Yol tabanlı çizimde dilimler birbirinden
+ * bağımsızdır, aradaki boşluk eşit ve bilinçlidir.
  */
-const DONUT_EMPHASIS = 4;
-const DONUT_LIFT = 9;
-
 export function Donut({ data, size = 180, thickness = 22, onSegmentClick, selected = null, label = 'Dağılım grafiği' }) {
   const [hover, setHover] = React.useState(null);
-  const values = (data || []).map((d) => (Number.isFinite(d?.value) && d.value > 0 ? d.value : 0));
-  const total = values.reduce((sum, value) => sum + value, 0);
-  const r = size / 2 - thickness / 2;
-  const c = 2 * Math.PI * r;
-  const pad = DONUT_LIFT + DONUT_EMPHASIS + 2;
-
-  let acc = 0;
-  const segs = (data || []).map((d, i) => {
-    // Oran her zaman toplam üzerinden alınır: dilimlerin toplamı çevreyi aşamaz.
-    const len = total > 0 ? (values[i] / total) * c : 0;
-    const dash = `${len} ${Math.max(0, c - len)}`;
-    const midAngle = ((acc + len / 2) / c) * 360 - 90;
-    const seg = { d, dash, offset: -acc, i, midAngle, len };
-    acc += len;
-    return seg;
-  });
+  const center = size / 2;
+  const outer = center;
+  const inner = Math.max(2, center - thickness);
+  const segments = donutSegments(data);
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
 
   return (
     <svg
       width={size}
       height={size}
-      viewBox={`${-pad} ${-pad} ${size + pad * 2} ${size + pad * 2}`}
+      viewBox={`0 0 ${size} ${size}`}
       style={{ display: 'block' }}
       role="img"
       aria-label={label}
     >
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg-elev-2)" strokeWidth={thickness} />
-      {segs.map(({ d, dash, offset, i, midAngle, len }) => {
-        if (len <= 0) return null;
-        const isSelected = selected === i;
-        const emphasised = hover === i || isSelected;
-        const rad = midAngle * Math.PI / 180;
-        const tx = isSelected ? Math.cos(rad) * DONUT_LIFT : 0;
-        const ty = isSelected ? Math.sin(rad) * DONUT_LIFT : 0;
+      {/* Zemin halkası: hiç veri yokken de grafiğin çerçevesi durur. */}
+      <path
+        d={donutSlicePath(center, center, outer, inner, -90, 270)}
+        fill="var(--bg-elev-2)"
+        fillRule="evenodd"
+      />
+      {/* Giriş animasyonu SARMALAYICIDA durur: dilimin kendi `opacity`
+          değeri seçim sönümlemesini taşır, animasyon onu ezmemelidir. */}
+      <g className="donut-slices">
+      {segments.map((segment) => {
+        const item = data[segment.index];
+        const isSelected = selected === segment.index;
+        const emphasised = hover === segment.index || isSelected;
+        // Vurgu YALNIZCA kalınlığı içe doğru büyütür: dilim dış çapı aşmadığı
+        // için ne kırpılır ne de komşusunun üstüne biner.
+        const emphasisedInner = Math.max(2, inner - DONUT_EMPHASIS);
         return (
-          <g key={d.label ?? i} style={{ transform: `translate(${tx}px, ${ty}px)`, transition: 'transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
-            <circle
-              cx={size / 2} cy={size / 2} r={r}
-              fill="none" stroke={d.color}
-              strokeWidth={emphasised ? thickness + DONUT_EMPHASIS : thickness}
-              strokeDasharray={dash}
-              strokeDashoffset={offset}
-              transform={`rotate(-90 ${size / 2} ${size / 2})`}
-              strokeLinecap="butt"
-              style={{ cursor: 'pointer', transition: 'stroke-width 0.32s cubic-bezier(0.2, 0.8, 0.2, 1)', opacity: (selected != null && !isSelected) ? 0.4 : 1 }}
-              onMouseEnter={() => setHover(i)}
-              onMouseLeave={() => setHover(null)}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onSegmentClick) onSegmentClick(i, d);
-              }}
-            >
-              <title>{`${d.label}: ${d.value} (${total > 0 ? Math.round(values[i] / total * 100) : 0}%)`}</title>
-            </circle>
-          </g>
+          <path
+            key={item?.id ?? item?.label ?? segment.index}
+            d={donutSlicePath(center, center, outer, emphasised ? emphasisedInner : inner, segment.startAngle, segment.endAngle)}
+            fill={item?.color}
+            className="donut-slice"
+            style={{
+              cursor: onSegmentClick ? 'pointer' : 'default',
+              opacity: selected != null && !isSelected ? 0.42 : 1
+            }}
+            onMouseEnter={() => setHover(segment.index)}
+            onMouseLeave={() => setHover(null)}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (onSegmentClick) onSegmentClick(segment.index, item);
+            }}
+          >
+            <title>{`${item?.label}: ${segment.value} (${Math.round(segment.share * 100)}%)`}</title>
+          </path>
         );
       })}
+      </g>
+      {total === 0 && (
+        <text x={center} y={center} textAnchor="middle" dominantBaseline="middle" fontSize="11" fill="var(--text-dim)">
+          Veri yok
+        </text>
+      )}
     </svg>
   );
 }
@@ -382,10 +379,20 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
         {hover != null && (
           <line x1={pts[hover][0]} x2={pts[hover][0]} y1={pad} y2={pad + innerH} stroke={color} strokeWidth="1" strokeDasharray="2 2" opacity="0.5" />
         )}
-        {labels.length === data.length && labels.map((l, i) => (
-          <text key={i} x={pts[i][0]} y={height - 6} textAnchor="middle" fontSize="10.5" fill="var(--text-dim)">{l}</text>
-        ))}
       </svg>
+      {/* Eksen etiketleri SVG DIŞINDA, gerçek HTML metni olarak çizilir. SVG
+          kart genişliğine göre ölçeklendiği için içerideki `font-size`
+          değeri de ölçekleniyor ve geniş kartlarda etiketler devasa
+          görünüyordu. HTML metni ölçekten etkilenmez. */}
+      {labels.length === data.length && (
+        <div className="chart-axis-labels" aria-hidden="true">
+          {labels.map((text, index) => (
+            text
+              ? <span key={index} style={{ left: `${(pts[index][0] / width) * 100}%` }}>{text}</span>
+              : null
+          ))}
+        </div>
+      )}
       {hover != null && (
         <div className="rich-tip" style={{
           position: 'absolute',

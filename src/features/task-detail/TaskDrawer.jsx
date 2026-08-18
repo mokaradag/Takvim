@@ -16,6 +16,7 @@ import {
   lagValueOf,
   relTypeOf
 } from '../../scheduling/dependencies';
+import { PRIORITIES, resolvePriority } from '../../domain/constants/index.js';
 import { TR_DAYS, diffDays, fmt, today } from '../../scheduling/dates';
 import {
   MAX_RECURRENCE_OCCURRENCES,
@@ -23,7 +24,7 @@ import {
   describeRecurrenceRule,
   formatRecurrenceRule,
   normalizeRecurrenceRule,
-  planRecurringOccurrences
+  summarizeRecurrencePlan
 } from '../../scheduling/recurrence';
 import { getTaskCalendarWarnings } from '../../scheduling/calendarWarnings';
 import { resolveTaskCalendar } from '../../scheduling/calendars';
@@ -32,6 +33,13 @@ import { Avatar, StatusIcon, statusColorVar } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton } from '../../components/ui-extras';
 import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskActions, useTaskPrimaryBaseline } from '../../state/hooks';
+import {
+  collectPredecessorClosure,
+  planSuccessorLink,
+  planSuccessorUnlink,
+  planSuccessorUpdate,
+  selectSuccessors
+} from './taskSuccessorPolicy.js';
 
 function legacyProjectTags(projectId, tasks) {
   return Array.from(new Set(
@@ -70,7 +78,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const calendars = useCalendars();
   const allWbs = useAllWbs();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
-  const { generateTaskSeries, cancelTaskFieldUpdates } = useTaskActions();
+  const { generateTaskSeries, cancelTaskFieldUpdates, updateTask } = useTaskActions();
   const occurrenceCount = useMemo(
     () => tasks.filter((item) => item.recurrenceParentId === task.id).length,
     [tasks, task.id]
@@ -245,6 +253,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   };
 
   const today_ = today();
+  const activePriority = resolvePriority(local.priority);
   const overdue = local.status !== 'done' && local.targetFinish && diffDays(local.targetFinish, today_) < 0;
   const color = projectColorVar(local.proje);
 
@@ -256,7 +265,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
           <div className="col" style={{ gap: 8, flex: 1 }}>
             <div className="row" style={{ gap: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: color }} />
-              <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+              <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.01em' }}>
                 {projectLabel(selectedProject) || local.proje}
               </span>
               {local.keyword && <><span className="muted">·</span><TaskKeyword task={local} /></>}
@@ -287,8 +296,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
         </div>
 
         <div className="drawer-body">
-          <div className="col" style={{ gap: 18 }}>
-            <Section title="Durum">
+          <div className="col" style={{ gap: 12 }}>
+            <Section title="Durum" icon={<Icons.Check size={13} />} tone="var(--status-progress)">
               <div className="seg" style={{ width: '100%' }}>
                 {[
                   ['todo', 'Yapılacak', statusColorVar('todo'), 'todo'],
@@ -316,7 +325,31 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </div>
             </Section>
 
-            <Section title="Proje, WBS & Etiket">
+            {/* Öncelik daha önce YALNIZCA listelerde gösteriliyor, hiçbir
+                ekrandan tanımlanamıyordu: Görevler, Gantt, Kanban ve Raporlar
+                sayfaları alanı okuyor ama değeri her zaman varsayılan kalıyordu. */}
+            <Section title="Öncelik" icon={<Icons.Flag size={13} />} tone={activePriority.color}>
+              <div className="task-priority-picker" role="group" aria-label="Görev önceliği">
+                {Object.values(PRIORITIES).map((priority) => {
+                  const isActive = activePriority.id === priority.id;
+                  return (
+                    <button
+                      key={priority.id}
+                      type="button"
+                      className={`task-priority-option${isActive ? ' active' : ''}`}
+                      aria-pressed={isActive}
+                      style={{ '--priority-color': priority.color }}
+                      onClick={() => save({ priority: priority.id })}
+                    >
+                      <Icons.Flag size={12} />
+                      <span>{priority.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Section>
+
+            <Section title="Proje, dağılım ağacı ve etiket" icon={<Icons.Layers size={13} />} tone="var(--c-purple)">
               <div className="task-project-wbs-grid">
                 <div className="col" style={{ gap: 6 }}>
                   <div className="label">Proje</div>
@@ -370,7 +403,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </div>
             </Section>
 
-            <Section title="Sorumlular">
+            <Section title="Sorumlular" icon={<Icons.Users size={13} />} tone="var(--c-cyan)">
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 {selectedAssignees.map((record) => (
                   <span key={`${record.id}:${record.name}`} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
@@ -392,11 +425,11 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               />
             </Section>
 
-            <Section title="Güncel Plan">
+            <Section title="Güncel plan" icon={<Icons.Calendar size={13} />} tone="var(--accent)">
               <div className="task-date-grid">
-                <DateField label="Planlanan Başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} />
-                <DateField label="Planlanan Bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} />
-                <DateField label="Hedef Bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} />
+                <DateField label="Planlanan başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} />
+                <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} />
+                <DateField label="Hedef bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} />
               </div>
               <div className="muted" style={{ fontSize: 11.5 }}>
                 Planlanan süre: <span className="tabular">{local.plannedDurationDays ?? '—'}</span> çalışma günü
@@ -413,6 +446,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
 
             <Section
               title="Tekrar"
+              icon={<Icons.Clock size={13} />}
+              tone="var(--c-amber)"
               info={
                 <InfoButton title="Tekrarlayan görev" icon={<Icons.Clock size={12} />}>
                   <p>Uzun süre boyunca aynı işin düzenli olarak yinelendiği durumlar için tekrar kuralı tanımlayın.</p>
@@ -435,16 +470,16 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               />
             </Section>
 
-            <Section title="Gerçekleşen & Kalan">
+            <Section title="Gerçekleşen ve kalan" icon={<Icons.Clock size={13} />} tone="var(--c-emerald)">
               <div className="task-date-grid">
-                <DateField label="Gerçekleşen Başlangıç" value={local.actualStart} onChange={(v) => save({ actualStart: v })} nullable />
-                <DateField label="Gerçekleşen Bitiş" value={local.actualFinish} onChange={(v) => save({ actualFinish: v })} nullable />
-                <NumberField label="Kalan Süre" value={local.remainingDurationDays} onChange={(v) => save({ remainingDurationDays: v })} suffix="gün" />
+                <DateField label="Gerçekleşen başlangıç" value={local.actualStart} onChange={(v) => save({ actualStart: v })} nullable />
+                <DateField label="Gerçekleşen bitiş" value={local.actualFinish} onChange={(v) => save({ actualFinish: v })} nullable />
+                <NumberField label="Kalan süre" value={local.remainingDurationDays} onChange={(v) => save({ remainingDurationDays: v })} suffix="gün" />
               </div>
             </Section>
 
             {baselineSnapshot && (
-              <Section title={`Baz Plan · ${baseline?.name || 'Birincil Baz Plan'}`}>
+              <Section title={`Baz plan · ${baseline?.name || 'Birincil baz plan'}`} icon={<Icons.Table size={13} />} tone="var(--text-dim)">
                 <div className="task-date-grid">
                   <ReadOnlyField label="Başlangıç" value={baselineSnapshot.plannedStart ? fmt(baselineSnapshot.plannedStart, 'dd MMM yyyy') : '—'} />
                   <ReadOnlyField label="Bitiş" value={baselineSnapshot.plannedFinish ? fmt(baselineSnapshot.plannedFinish, 'dd MMM yyyy') : '—'} />
@@ -453,7 +488,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </Section>
             )}
 
-            <Section title="İlerleme">
+            <Section title="İlerleme" icon={<Icons.TrendUp size={13} />} tone="var(--status-done)">
               <div className="row" style={{ gap: 12 }}>
                 <input
                   type="range" min={0} max={100} step={5}
@@ -466,7 +501,9 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
             </Section>
 
             <Section
-              title="İlişkiler & Bağımlılıklar"
+              title="İlişkiler ve bağımlılıklar"
+              icon={<Icons.Link size={13} />}
+              tone="var(--status-overdue)"
               info={
                 <InfoButton title="Görev ilişkileri" icon={<Icons.Link size={12} />}>
                   <p><strong>Bağımlılık tipleri ve lead/lag:</strong></p>
@@ -485,10 +522,15 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                 </InfoButton>
               }
             >
-              <RelEditor task={local} tasks={tasks} onChange={(deps) => save({ deps })} />
+              <RelEditor
+                task={local}
+                tasks={tasks}
+                onChange={(deps) => save({ deps })}
+                onUpdateTask={updateTask}
+              />
             </Section>
 
-            <Section title="Notlar">
+            <Section title="Notlar" icon={<Icons.Info size={13} />} tone="var(--text-dim)">
               <textarea
                 className="input" rows={4}
                 value={local.description || ''}
@@ -524,20 +566,16 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
 
-  // Serinin başlangıç günü (RFC 5545 DTSTART). Haftalık kuralda bu gün her zaman
-  // seçili kalır: BYDAY başlangıç gününü dışlarsa kural üç yineleme derken
-  // şablonla birlikte dört görev oluşur ve dışa aktarılan RRULE'ün DTSTART'ı
-  // kendi kuralını sağlamaz.
+  // Serinin başlangıç günü (RFC 5545 DTSTART). Yalnızca BİLGİ amaçlıdır: gün
+  // seçimi kullanıcınındır, bu gün de serbestçe kaldırılabilir. Daha önce bu
+  // gün zorla seçili tutuluyordu ve kullanıcı haftanın başka günlerini
+  // tanımlamak istediğinde bulunduğu günü listeden çıkaramıyordu.
   const startWeekday = task.plannedStart
     ? RECURRENCE_WEEKDAYS[(new Date(`${task.plannedStart}T00:00:00`).getDay() + 6) % 7]
     : null;
 
   const patch = (changes) => {
     const merged = { ...(rule || { freq: 'WEEKLY', interval: 1 }), ...changes };
-    if (merged.freq === 'WEEKLY' && startWeekday) {
-      const days = Array.isArray(merged.byWeekday) ? merged.byWeekday : [];
-      merged.byWeekday = days.includes(startWeekday) ? days : [...days, startWeekday];
-    }
     const next = normalizeRecurrenceRule(merged);
     setMessage(null);
     onChange(next ? formatRecurrenceRule(next) : null);
@@ -561,9 +599,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
   // Önizleme üretimle AYNI planlayıcıyı kullanır: ham açılım hafta sonuna denk
   // gelen günleri gösterir, üretim ise onları iş gününe kaydırıp tekilleştirir;
   // ikisi ayrıştığında onay ekranı oluşacak görevlerle çelişirdi.
-  const preview = rule
-    ? planRecurringOccurrences(task, rule, { calendar, limit: 4 }).map((occurrence) => occurrence.plannedStart)
-    : [];
+  const plan = summarizeRecurrencePlan(task, rule, { calendar, previewLimit: 8 });
 
   const generate = async () => {
     setBusy(true);
@@ -626,27 +662,35 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
       </div>
 
       {rule?.freq === 'WEEKLY' && (
-        <div className="recurrence-days" role="group" aria-label="Tekrar günleri">
-          {RECURRENCE_WEEKDAYS.map((day, index) => {
-            const locked = day === startWeekday;
-            return (
-              <button
-                key={day}
-                type="button"
-                className={`recurrence-day${rule.byWeekday.includes(day) ? ' active' : ''}`}
-                aria-pressed={rule.byWeekday.includes(day)}
-                disabled={locked}
-                title={locked ? 'Serinin başlangıç günü her zaman seriye dahildir.' : undefined}
-                onClick={() => patch({
-                  byWeekday: rule.byWeekday.includes(day)
-                    ? rule.byWeekday.filter((value) => value !== day)
-                    : [...rule.byWeekday, day]
-                })}
-              >
-                {TR_DAYS[index]}
-              </button>
-            );
-          })}
+        <div className="col" style={{ gap: 6 }}>
+          <div className="recurrence-days" role="group" aria-label="Tekrar günleri">
+            {RECURRENCE_WEEKDAYS.map((day, index) => {
+              const active = rule.byWeekday.includes(day);
+              const isStart = day === startWeekday;
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  className={`recurrence-day${active ? ' active' : ''}${isStart ? ' is-start' : ''}`}
+                  aria-pressed={active}
+                  title={isStart ? 'Planlanan başlangıç bu güne denk geliyor.' : undefined}
+                  onClick={() => patch({
+                    byWeekday: active
+                      ? rule.byWeekday.filter((value) => value !== day)
+                      : [...rule.byWeekday, day]
+                  })}
+                >
+                  {TR_DAYS[index]}
+                </button>
+              );
+            })}
+          </div>
+          {!rule.byWeekday.length && (
+            <span className="muted" style={{ fontSize: 11.5 }}>
+              Gün seçilmedi: seri planlanan başlangıcın haftanın gününü kullanır
+              {startWeekday ? ` (${TR_DAYS[RECURRENCE_WEEKDAYS.indexOf(startWeekday)]})` : ''}.
+            </span>
+          )}
         </div>
       )}
 
@@ -670,22 +714,22 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
       {rule && (
         <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
           <label className="row" style={{ gap: 6, fontSize: 12 }}>
-            <span className="muted">Yineleme sayısı</span>
+            <span className="muted">Toplam yineleme</span>
             <input
               className="input tabular"
               type="number"
               min={1}
               max={MAX_RECURRENCE_OCCURRENCES}
-              aria-label="Yineleme sayısı"
+              aria-label="Toplam yineleme sayısı"
               value={rule.count || ''}
-              placeholder="—"
+              placeholder="Sınırsız"
               // Açılım güvenlik tavanında durur; tavanı aşan bir sayı hiçbir
               // zaman tamamlanamayacağı için girildiği anda sınırlanır.
               onChange={(event) => patch({
                 count: Math.min(Number(event.target.value) || 0, MAX_RECURRENCE_OCCURRENCES) || '',
                 until: null
               })}
-              style={{ width: 80 }}
+              style={{ width: 92 }}
             />
           </label>
           <label className="row" style={{ gap: 6, fontSize: 12 }}>
@@ -713,12 +757,43 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
             <span className="recurrence-rule">{describeRecurrenceRule(rule)}</span>
             <code className="recurrence-code">RRULE:{formatRecurrenceRule(rule)}</code>
           </div>
-          {preview.length > 0 && (
-            <div className="muted" style={{ fontSize: 11.5 }}>
-              İlk yinelemeler: {preview.map((date) => fmt(date, 'dd MMM')).join(' · ')}
-              {!rule.count && !rule.until ? ' · …' : ''}
+
+          {/* "3 yineleme" tek başına belirsizdir: RFC 5545'te COUNT serinin
+              TOPLAM yineleme sayısıdır ve planlanan başlangıç kurala uyuyorsa
+              ilk yineleme şablonun kendisidir. Kaç yeni görev oluşacağı bu
+              yüzden açıkça yazılır. */}
+          {!plan.unbounded && plan.totalCount > 0 && (
+            <div className="recurrence-count-note">
+              <Icons.Info size={12} />
+              <span>
+                Seri toplam <strong>{plan.totalCount}</strong> yinelemeden oluşur.
+                {plan.includesTemplate
+                  ? <> İlki bu görevin kendisidir; <strong>{plan.generatedCount}</strong> yeni görev oluşturulur.</>
+                  : <> Tümü yeni görev olarak oluşturulur.</>}
+              </span>
             </div>
           )}
+
+          {plan.preview.length > 0 && (
+            <div className="col" style={{ gap: 5 }}>
+              <span className="muted" style={{ fontSize: 11.5 }}>Yineleme takvimi</span>
+              <div className="recurrence-preview">
+                {plan.preview.map((date) => (
+                  <span
+                    key={date}
+                    className={`recurrence-preview-chip${date === task.plannedStart ? ' is-template' : ''}`}
+                    title={date === task.plannedStart ? 'Şablon görevin kendi günü' : undefined}
+                  >
+                    <span className="recurrence-preview-day">{fmt(date, 'dd MMM')}</span>
+                    <span className="recurrence-preview-dow">{TR_DAYS[(new Date(`${date}T00:00:00`).getDay() + 6) % 7]}</span>
+                  </span>
+                ))}
+                {plan.hiddenCount > 0 && <span className="recurrence-preview-more">+{plan.hiddenCount} daha</span>}
+                {plan.unbounded && <span className="recurrence-preview-more">süresiz</span>}
+              </div>
+            </div>
+          )}
+
           {!task.plannedStart && (
             <div className="muted" style={{ fontSize: 11.5, color: 'var(--status-overdue)' }}>
               Yinelemeleri üretmek için önce planlanan başlangıç tarihi girilmelidir.
@@ -752,33 +827,76 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
   );
 }
 
-function Section({ title, info, children }) {
+/**
+ * Görev panelindeki bölüm başlığı.
+ *
+ * Başlıklar daha önce hepsi aynı gri, aynı büyük harfli `.label` biçimiydi;
+ * panel tek bir metin bloğu gibi okunuyor ve bölümler birbirinden ayırt
+ * edilemiyordu. Her bölüm artık kendi simgesini ve kendi vurgu rengini taşır,
+ * başlıklar cümle düzeninde yazılır.
+ *
+ * `tone` bir CSS renk değişkenidir; bölüm şeridi, simge kutusu ve alt çizgi
+ * bu renkten türetilir.
+ */
+function Section({ title, icon, tone = 'var(--accent)', hint, info, children }) {
   return (
-    <div className="col" style={{ gap: 8 }}>
-      <div className="row" style={{ gap: 4, alignItems: 'center' }}>
-        <div className="label" style={{ margin: 0 }}>{title}</div>
+    <section className="task-section" style={{ '--section-tone': tone }}>
+      <header className="task-section-head">
+        {icon && <span className="task-section-icon">{icon}</span>}
+        <span className="task-section-title">{title}</span>
         {info}
-      </div>
-      {children}
-    </div>
+        {hint && <span className="task-section-hint">{hint}</span>}
+      </header>
+      <div className="task-section-body">{children}</div>
+    </section>
   );
 }
 
-function RelEditor({ task, tasks, onChange }) {
+/**
+ * İlişki düzenleyicisi — öncüller VE ardıllar.
+ *
+ * Bağımlılık verisi yalnızca öncül yönünde saklanır; ardıl sekmesi aynı kenarı
+ * ters yönden düzenler ve ARDIL görevi yamalar (bkz. taskSuccessorPolicy.js).
+ * Böylece tek bir kenar iki yerde saklanmaz.
+ */
+function RelEditor({ task, tasks, onChange, onUpdateTask }) {
   const deps = useMemo(() => task.deps || [], [task.deps]);
-  const others = tasks.filter((t) => t.id !== task.id && (!task.projectId || t.projectId === task.projectId));
+  const others = useMemo(
+    () => tasks.filter((item) => item.id !== task.id && (!task.projectId || item.projectId === task.projectId)),
+    [tasks, task.id, task.projectId]
+  );
+  const [tab, setTab] = useState('predecessors');
   const [selectedType, setSelectedType] = useState('FS');
+  const [successorType, setSuccessorType] = useState('FS');
+  const [linkError, setLinkError] = useState(null);
+
+  const successors = useMemo(() => selectSuccessors(task.id, tasks), [task.id, tasks]);
+
   // Öncül görev listesi de büyük projelerde canlı arama gerektirir.
+  const taskOption = (candidate) => ({
+    value: candidate.id,
+    label: candidate.task,
+    description: candidate.keyword || null,
+    keywords: [candidate.task, candidate.keyword, candidate.projectCode]
+  });
+
   const predecessorOptions = useMemo(() => others
     .filter((candidate) => !deps.some((dependency) => depId(dependency) === candidate.id))
     .slice()
     .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
-    .map((candidate) => ({
-      value: candidate.id,
-      label: candidate.task,
-      description: candidate.keyword || null,
-      keywords: [candidate.task, candidate.keyword, candidate.projectCode]
-    })), [others, deps]);
+    .map(taskOption), [others, deps]);
+
+  const successorOptions = useMemo(() => {
+    const linked = new Set(successors.map((entry) => entry.task.id));
+    // Döngü yaratacak adaylar listeye HİÇ girmez: kullanıcı reddedilecek bir
+    // seçimi yapmak zorunda kalmasın.
+    const blocked = collectPredecessorClosure(task.id, tasks);
+    return others
+      .filter((candidate) => !linked.has(candidate.id) && !blocked.has(candidate.id))
+      .slice()
+      .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
+      .map(taskOption);
+  }, [others, successors, task.id, tasks]);
 
   const updateDep = (idx, patch) => {
     const next = deps.map((d, i) => {
@@ -795,92 +913,175 @@ function RelEditor({ task, tasks, onChange }) {
     onChange([...deps, { id: depTaskId, predecessorId: depTaskId, type: type || 'FS', lagValue: 0, lagUnit: 'day', lagDays: 0 }]);
   };
 
-  return (
-    <div className="col" style={{ gap: 8 }}>
-      {deps.length === 0 &&
-        <div className="muted" style={{ fontSize: 12, padding: '8px 10px', background: 'var(--bg-elev-2)', borderRadius: 'var(--r-md)', textAlign: 'center' }}>
-          Bu görevin henüz bir ilişkisi yok. Aşağıdan ekleyebilirsiniz.
-        </div>
-      }
-      {deps.map((d, idx) => {
-        const id = depId(d);
-        const type = relTypeOf(d);
-        const dep = tasks.find((x) => x.id === id);
-        const rt = REL_TYPES[type];
-        const lagValue = lagValueOf(d);
-        const lagUnit = lagUnitOf(d);
-        if (!dep) return null;
-        return (
-          <div key={`${id}-${idx}`} className="rel-item">
-            <div className="rel-row">
-              <div className="row" style={{ gap: 8, minWidth: 0 }}>
-                <span style={{ width: 6, height: 6, borderRadius: 99, background: projectColorVar(dep.proje), flexShrink: 0 }} />
-                <span style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.task}</span>
-                {lagValue !== 0 && <span className="badge">{formatDependencyLag(d)}</span>}
-              </div>
-              <button className="icon-btn" style={{ width: 24, height: 24, flexShrink: 0 }} onClick={() => removeDep(idx)}><Icons.Close size={11} /></button>
-            </div>
-            <div className="rel-fields-grid">
-              <label className="rel-type-field">
-                <span className="rel-type-field-label">İlişki türü</span>
-                <select
-                  className="input rel-type-select"
-                  value={type}
-                  onChange={(e) => updateDep(idx, { type: e.target.value })}
-                >
-                  {Object.values(REL_TYPES).map((item) =>
-                    <option key={item.code} value={item.code}>{item.code} — {item.name}</option>
-                  )}
-                </select>
-              </label>
-              <label className="rel-type-field">
-                <span className="rel-type-field-label">Lead / Lag</span>
-                <input
-                  type="number"
-                  step="1"
-                  className="input"
-                  value={lagValue}
-                  onChange={(e) => updateDep(idx, { lagValue: e.target.value === '' ? 0 : Number(e.target.value) })}
-                />
-              </label>
-              <label className="rel-type-field">
-                <span className="rel-type-field-label">Birim</span>
-                <select className="input" value={lagUnit} onChange={(e) => updateDep(idx, { lagUnit: e.target.value })}>
-                  {Object.values(LAG_UNITS).map((unit) => <option key={unit.id} value={unit.id}>{unit.label}</option>)}
-                </select>
-              </label>
-            </div>
-            <div className="rel-type-help">
-              <strong>{rt.code} · {rt.name}:</strong> {rt.description}
-              <div style={{ marginTop: 4, color: 'var(--text-dim)' }}>
-                {lagValue > 0 ? `+${lagValue} ${LAG_UNITS[lagUnit].short} gecikme` : lagValue < 0 ? `${Math.abs(lagValue)} ${LAG_UNITS[lagUnit].short} öne çekme` : 'Ek lead/lag yok'}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+  const applySuccessorPlan = (plan) => {
+    if (!plan.ok) {
+      setLinkError(plan.message);
+      return;
+    }
+    setLinkError(null);
+    onUpdateTask?.(plan.successorId, plan.patch);
+  };
 
-      <div className="rel-add-row">
-        <select
-          className="input"
-          value={selectedType}
-          onChange={(e) => setSelectedType(e.target.value)}
+  const addSuccessor = (successorId) => applySuccessorPlan(planSuccessorLink(task, successorId, tasks, { type: successorType }));
+  const removeSuccessor = (successorId) => applySuccessorPlan(planSuccessorUnlink(task, successorId, tasks));
+  const updateSuccessor = (successorId, changes) => applySuccessorPlan(planSuccessorUpdate(task, successorId, changes, tasks));
+
+  const renderRelationFields = (relation, onPatch, onRemove, titleText) => {
+    const type = relTypeOf(relation);
+    const rt = REL_TYPES[type];
+    const lagValue = lagValueOf(relation);
+    const lagUnit = lagUnitOf(relation);
+    return (
+      <>
+        <div className="rel-row">
+          <div className="row" style={{ gap: 8, minWidth: 0 }}>
+            <span style={{ width: 6, height: 6, borderRadius: 99, background: titleText.color, flexShrink: 0 }} />
+            <span style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{titleText.label}</span>
+            {lagValue !== 0 && <span className="badge">{formatDependencyLag(relation)}</span>}
+          </div>
+          <button className="icon-btn" style={{ width: 24, height: 24, flexShrink: 0 }} onClick={onRemove} aria-label="İlişkiyi kaldır">
+            <Icons.Close size={11} />
+          </button>
+        </div>
+        <div className="rel-fields-grid">
+          <label className="rel-type-field">
+            <span className="rel-type-field-label">İlişki türü</span>
+            <select className="input rel-type-select" value={type} onChange={(e) => onPatch({ type: e.target.value })}>
+              {Object.values(REL_TYPES).map((item) =>
+                <option key={item.code} value={item.code}>{item.code} — {item.name}</option>
+              )}
+            </select>
+          </label>
+          <label className="rel-type-field">
+            <span className="rel-type-field-label">Lead / Lag</span>
+            <input
+              type="number"
+              step="1"
+              className="input"
+              value={lagValue}
+              onChange={(e) => onPatch({ lagValue: e.target.value === '' ? 0 : Number(e.target.value) })}
+            />
+          </label>
+          <label className="rel-type-field">
+            <span className="rel-type-field-label">Birim</span>
+            <select className="input" value={lagUnit} onChange={(e) => onPatch({ lagUnit: e.target.value })}>
+              {Object.values(LAG_UNITS).map((unit) => <option key={unit.id} value={unit.id}>{unit.label}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="rel-type-help">
+          <strong>{rt.code} · {rt.name}:</strong> {rt.description}
+          <div style={{ marginTop: 4, color: 'var(--text-dim)' }}>
+            {lagValue > 0 ? `+${lagValue} ${LAG_UNITS[lagUnit].short} gecikme` : lagValue < 0 ? `${Math.abs(lagValue)} ${LAG_UNITS[lagUnit].short} öne çekme` : 'Ek lead/lag yok'}
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      <div className="seg rel-tabs" role="tablist" aria-label="İlişki yönü">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'predecessors'}
+          className={tab === 'predecessors' ? 'active' : ''}
+          onClick={() => { setTab('predecessors'); setLinkError(null); }}
         >
-          {Object.values(REL_TYPES).map((rt) =>
-            <option key={rt.code} value={rt.code}>{rt.code}</option>
-          )}
-        </select>
-        <SearchableSelect
-          value=""
-          options={predecessorOptions}
-          onChange={(taskId) => addDep(taskId, selectedType)}
-          placeholder="+ Öncül görev seçin..."
-          searchPlaceholder="Görev adı veya etiketiyle ara"
-          emptyText="Eklenebilecek başka öncül görev yok."
-          maxVisible={60}
-          compact
-        />
+          <Icons.ArrowLeft size={12} /> Öncüller <span className="rel-tab-count">{deps.length}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'successors'}
+          className={tab === 'successors' ? 'active' : ''}
+          onClick={() => { setTab('successors'); setLinkError(null); }}
+        >
+          <Icons.ArrowRight size={12} /> Ardıllar <span className="rel-tab-count">{successors.length}</span>
+        </button>
       </div>
+
+      {tab === 'predecessors' ? (
+        <div className="col" style={{ gap: 8 }}>
+          {deps.length === 0 && (
+            <div className="rel-empty">Bu görevin öncülü yok. Aşağıdan ekleyebilirsiniz.</div>
+          )}
+          {deps.map((d, idx) => {
+            const dep = tasks.find((x) => x.id === depId(d));
+            if (!dep) return null;
+            return (
+              <div key={`${depId(d)}-${idx}`} className="rel-item">
+                {renderRelationFields(
+                  d,
+                  (patch) => updateDep(idx, patch),
+                  () => removeDep(idx),
+                  { label: dep.task, color: projectColorVar(dep.proje) }
+                )}
+              </div>
+            );
+          })}
+
+          <div className="rel-add-row">
+            <select className="input" value={selectedType} onChange={(e) => setSelectedType(e.target.value)} aria-label="Eklenecek öncül ilişki türü">
+              {Object.values(REL_TYPES).map((rt) => <option key={rt.code} value={rt.code}>{rt.code}</option>)}
+            </select>
+            <SearchableSelect
+              value=""
+              options={predecessorOptions}
+              onChange={(taskId) => addDep(taskId, selectedType)}
+              placeholder="+ Öncül görev seçin..."
+              searchPlaceholder="Görev adı veya etiketiyle ara"
+              emptyText="Eklenebilecek başka öncül görev yok."
+              maxVisible={60}
+              compact
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="col" style={{ gap: 8 }}>
+          <div className="rel-direction-note">
+            <Icons.Info size={12} />
+            <span>
+              Ardıl ilişkisi ARDIL görevin öncül listesinde saklanır; buradan yapılan
+              değişiklik doğrudan o görevin kaydına işlenir.
+            </span>
+          </div>
+          {successors.length === 0 && (
+            <div className="rel-empty">Bu görevin ardılı yok. Aşağıdan ekleyebilirsiniz.</div>
+          )}
+          {successors.map(({ task: successor, dependency }) => (
+            <div key={successor.id} className="rel-item">
+              {renderRelationFields(
+                dependency,
+                (patch) => updateSuccessor(successor.id, patch),
+                () => removeSuccessor(successor.id),
+                { label: successor.task, color: projectColorVar(successor.proje) }
+              )}
+            </div>
+          ))}
+
+          <div className="rel-add-row">
+            <select className="input" value={successorType} onChange={(e) => setSuccessorType(e.target.value)} aria-label="Eklenecek ardıl ilişki türü">
+              {Object.values(REL_TYPES).map((rt) => <option key={rt.code} value={rt.code}>{rt.code}</option>)}
+            </select>
+            <SearchableSelect
+              value=""
+              options={successorOptions}
+              onChange={addSuccessor}
+              placeholder="+ Ardıl görev seçin..."
+              searchPlaceholder="Görev adı veya etiketiyle ara"
+              emptyText="Eklenebilecek başka ardıl görev yok."
+              maxVisible={60}
+              compact
+            />
+          </div>
+        </div>
+      )}
+
+      {linkError && (
+        <div className="muted" style={{ fontSize: 11.5, color: 'var(--status-overdue)' }}>{linkError}</div>
+      )}
     </div>
   );
 }

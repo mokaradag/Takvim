@@ -2,31 +2,42 @@
 import React, { useMemo as useMemo2 } from 'react';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
-import { parseDate, fmt, addDays, diffDays, startOfWeek, endOfWeek, today } from '../../scheduling/dates';
+import { parseDate, fmt, fmtISO, addDays, diffDays, startOfWeek, endOfWeek, today } from '../../scheduling/dates';
 import { COLOR_MAP, projectColorVar, personColorVar } from '../../lib/colors';
 import { HeroHeader, AreaChart } from '../../components/ui';
 import { Tooltip, InfoButton, CardHead, AnimatedNumber } from '../../components/ui-extras';
 import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetricTable';
 import { usePeople, useTasks } from '../../state/hooks';
+import { selectOverdueAging } from '../dashboard/planHealth.js';
 
 /* ── Rapor (Reports) ──────────────────────────────────── */
 export function ReportsView() {
   const tasks = useTasks();
   const people = usePeople();
-  const today_ = today();
+  // Referans gün KARARLI bir değerdir: `today()` her çizimde yeni bir `Date`
+  // döndürdüğü için doğrudan bağımlılık olamaz, bağımlılıktan çıkarıldığında da
+  // sayfa gece yarısını açık geçtiğinde dünün sınıflandırmasında kalırdı.
+  const todayKey = fmtISO(today());
+  const today_ = useMemo2(() => parseDate(todayKey), [todayKey]);
 
+  // Bir görev GERÇEKLEŞEN bitiş tarihinde tamamlanmış sayılır; planlanan bitişe
+  // bakmak, planı ileri bir tarihte olan ama bugün bitirilen görevi eğriye
+  // hiç sokmuyordu.
   const trend = useMemo2(() => {
-    const out = [];
+    const values = [];
     const labels = [];
-    for (let i = 29; i >= 0; i--) {
-      const d = addDays(today_, -i);
-      const c = tasks.filter(t => t.status === 'done' && parseDate(t.plannedFinish) <= d).length;
-      out.push(c);
-      labels.push(i % 5 === 0 ? fmt(d, 'd') : '');
+    const completions = tasks
+      .filter((t) => t.status === 'done')
+      .map((t) => t.actualFinish || t.plannedFinish)
+      .filter(Boolean)
+      .map((value) => parseDate(value));
+    for (let offset = 29; offset >= 0; offset -= 1) {
+      const day = addDays(today_, -offset);
+      values.push(completions.filter((finish) => finish <= day).length);
+      labels.push(offset % 5 === 0 ? fmt(day, 'dd MMM') : '');
     }
-    return { values: out, labels };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+    return { values, labels };
+  }, [tasks, today_]);
 
 
   // Cumulative Flow Diagram — last 14 days
@@ -43,11 +54,10 @@ export function ReportsView() {
         else if (t.status === 'in_progress' || (t.status === 'done' && e > d)) prog++;
         else todo++;
       });
-      days.push({ d, todo, prog, done, label: i % 3 === 0 ? fmt(d, 'd') : '' });
+      days.push({ d, todo, prog, done, label: i % 3 === 0 ? fmt(d, 'dd MMM') : '' });
     }
     return days;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, [tasks, today_]);
 
   // Weekly velocity — tasks completed each of last 6 weeks
   const velocity = useMemo2(() => {
@@ -63,8 +73,7 @@ export function ReportsView() {
       out.push({ label: `${fmt(weekStart, 'd')}–${fmt(weekEnd, 'd')}`, value: count });
     }
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, [tasks, today_]);
 
   // Resource utilization (planned hours vs capacity)
   const REPORT_HORIZON_WEEKS = 6;
@@ -148,8 +157,7 @@ export function ReportsView() {
       else matrix[p].todo.push(t);
     });
     return matrix;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, [tasks, today_]);
 
   const projThroughput = useMemo2(() => {
     const map = {};
@@ -160,8 +168,7 @@ export function ReportsView() {
       if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) map[t.proje].late++;
     });
     return Object.entries(map).map(([name, v]) => ({ name, ...v, color: projectColorVar(name) }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, [tasks, today_]);
 
   const cycle = useMemo2(() => {
     const completed = tasks.filter(t => t.status === 'done');
@@ -197,8 +204,13 @@ export function ReportsView() {
       label: k, value: v, color: COLOR_MAP[taskMap[k].color] || 'var(--accent)',
       colorKey: taskMap[k].color, done: taskMap[k].done, total: taskMap[k].total, late: taskMap[k].late
     })).sort((a, b) => b.value - a.value).slice(0, 10);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, [tasks, today_]);
+
+  const aging = useMemo2(() => selectOverdueAging(tasks, today_), [tasks, today_]);
+  const agingAverage = useMemo2(() => {
+    const late = aging.buckets.flatMap((bucket) => bucket.items).map((task) => task.lateBy);
+    return late.length ? Math.round(late.reduce((sum, days) => sum + days, 0) / late.length) : 0;
+  }, [aging]);
 
   const compRate = tasks.length ? Math.round(tasks.filter(t => t.status === 'done').length / tasks.length * 100) : 0;
   const doneCount = tasks.filter(t => t.status === 'done').length;
@@ -227,7 +239,7 @@ export function ReportsView() {
           tip="Henüz tamamlanmamış (yapılacak + devam eden) görev sayısı. Bekleyen iş listesinin büyüklüğünü ve önümüzdeki yükü gösterir." />
       </div>
 
-      {/* Trend chart */}
+      {/* Tamamlanma eğilimi grafiği */}
       <div className="card">
         <div className="row" style={{ marginBottom: 14 }}>
           <div className="col">
@@ -342,6 +354,59 @@ export function ReportsView() {
             })}
           />
         </div>
+
+      {/* Gecikme yaşlandırması — PMO raporlamasının standart görünümü. */}
+      <div className="card">
+        <CardHead
+          icon={<Icons.Clock size={14} />}
+          title="Gecikme yaşlandırması"
+          subtitle={aging.total
+            ? `${aging.total} geciken görev · en eskisi ${aging.worstDays} gün · ortalama ${agingAverage} gün`
+            : 'Geciken görev yok'}
+          infoAccent="var(--status-overdue)"
+          infoIcon={<Icons.Clock size={12} />}
+          info={<>
+            <p>Geciken görevler, hedef tarihinin üzerinden geçen gün sayısına göre gruplanır.</p>
+            <div className="rt-sep" />
+            <p>Kronikleşen gecikmeler (90+ gün) genellikle plan hatasına ya da terk edilmiş işe işaret eder; kapatılmaları ya da yeniden planlanmaları gerekir.</p>
+          </>}
+          right={<span className="badge" style={{ color: aging.total ? 'var(--status-overdue)' : 'var(--status-done)' }}>{aging.total} görev</span>}
+        />
+        {aging.total === 0 ? (
+          <div className="empty">Hedef tarihi geçmiş görev yok.</div>
+        ) : (
+          <div className="aging-report-grid">
+            {aging.buckets.map((bucket) => (
+              <Tooltip
+                key={bucket.id}
+                title={`${bucket.label} geciken`}
+                accent={bucket.color}
+                icon={<span style={{ width: 10, height: 10, borderRadius: 2, background: bucket.color, display: 'inline-block' }} />}
+                content={<>
+                  <div className="rt-row"><span className="rt-label">Görev</span><span className="rt-val">{bucket.value}</span></div>
+                  <div className="rt-row"><span className="rt-label">Pay</span><span className="rt-val">{Math.round((bucket.value / aging.total) * 100)}%</span></div>
+                  {bucket.items.slice(0, 4).map((task) => (
+                    <div key={task.id} className="rt-row">
+                      <span className="rt-label">{task.lateBy} gün</span>
+                      <span className="rt-val">{task.task}</span>
+                    </div>
+                  ))}
+                </>}
+              >
+                <div className="aging-report-cell" style={{ '--aging-color': bucket.color }}>
+                  <span className="aging-report-value">
+                    <AnimatedNumber value={bucket.value} duration={600} />
+                  </span>
+                  <span className="aging-report-label">{bucket.label}</span>
+                  <div className="bar-track" style={{ height: 4, marginTop: 8 }}>
+                    <div className="bar-fill" style={{ width: `${(bucket.value / aging.total) * 100}%`, background: bucket.color }} />
+                  </div>
+                </div>
+              </Tooltip>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Risk matrix */}
       <div className="card">
@@ -552,7 +617,7 @@ function Big({ label, value, suffix, sub, accent, tip }) {
           <InfoButton title={label} corner accent={accent}>{tip}</InfoButton>
         </div>
       )}
-      <div className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
+      <div className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.01em', marginBottom: 8 }}>{label}</div>
       <div className="tabular" style={{ fontSize: 32, fontWeight: 700, letterSpacing: '-0.025em', color: accent || 'var(--text)', lineHeight: 1.05 }}>
         <AnimatedNumber value={typeof value === 'number' ? value : parseInt(value) || 0} duration={900} />{suffix || ''}
       </div>
@@ -604,6 +669,9 @@ function CFDChart({ data, height = 200 }) {
 
   return (
     <div style={{ position: 'relative' }}>
+      {/* Eksen etiketleri YALNIZCA çizim alanına göre konumlanır; sarmalayıcı
+          açıklama satırını da kapsasaydı etiketler onun üzerine düşerdi. */}
+      <div style={{ position: 'relative' }}>
       <svg
         ref={svgRef}
         width="100%" height={height} viewBox={`0 0 ${width} ${height}`}
@@ -622,12 +690,17 @@ function CFDChart({ data, height = 200 }) {
         {hover != null && (
           <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={pad.t + innerH} stroke="var(--accent)" strokeWidth="1" strokeDasharray="2 2" opacity="0.6" />
         )}
-        {/* axis labels */}
-        {data.map((d, i) => d.label ? (
-          <text key={i} x={x(i)} y={height - 6} textAnchor="middle" fontSize="10.5" fill="var(--text-dim)">{d.label}</text>
-        ) : null)}
       </svg>
-      {/* legend */}
+      {/* Eksen etiketleri SVG DIŞINDA çizilir: `preserveAspectRatio="none"`
+          yatayda esnediği için SVG içine yazılan metin kart genişledikçe
+          orantısız biçimde yayılıyordu. */}
+      <div className="chart-axis-labels" aria-hidden="true">
+        {data.map((d, i) => (d.label
+          ? <span key={i} style={{ left: `${(x(i) / width) * 100}%` }}>{d.label}</span>
+          : null))}
+      </div>
+      </div>
+      {/* Açıklama */}
       <div className="row" style={{ gap: 14, padding: '8px 12px 0', fontSize: 11.5, color: 'var(--text-dim)' }}>
         <span className="row" style={{ gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--status-done)', opacity: 0.7 }} /> Tamamlanan</span>
         <span className="row" style={{ gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--status-progress)', opacity: 0.7 }} /> Devam</span>

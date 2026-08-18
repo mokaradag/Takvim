@@ -76,6 +76,38 @@ The canonical dependency field remains `lagDays`, but scheduling interprets it a
 
 Use `applyDependencyLag()` instead of adding calendar days directly. The helper applies the selected scheduling calendar and skips non-working dates.
 
+## Predecessors and successors
+
+A dependency edge is stored **once**, on the successor: `B.deps` containing `A`
+means "A is a predecessor of B". There is no `successors` field, and there must
+not be one — the same edge held in two places will eventually disagree.
+
+"Successor" is therefore a **reading direction**, not a second data shape. The
+Task Detail relations editor exposes both directions:
+
+- the *Öncüller* tab edits `task.deps` directly;
+- the *Ardıllar* tab edits the **other** task's `deps` and is patched through
+  `updateTask(successorId, …)`.
+
+`src/features/task-detail/taskSuccessorPolicy.js` owns that translation as a pure
+module: it derives successors by scanning for the reverse reference, produces the
+patch for link/unlink/type-and-lag changes, and rejects an edge that would create
+a cycle. The cycle check walks the transitive predecessor closure of the current
+task; candidates already in that closure are filtered out of the picker, so the
+user cannot make a selection that would be refused. The traversal marks visited
+nodes, so it terminates even against already-cyclic stored data.
+
+## Task priority
+
+`Task.priority` is canonicalized at the data boundary (`normalizePriorityId`) to
+one of `critical` / `high` / `medium` / `low`; unknown and legacy values map to
+`medium`. Priority is **not** a scheduling constraint — it does not influence CPM
+or dates — but it drives the Görevler, Gantt, Kanban and Raporlar risk views.
+
+The field was previously read-only everywhere: every list rendered and filtered
+it, but no screen could set it, so every task kept the default. It is now edited
+in the Task Detail **Öncelik** section.
+
 ## Professional schedule concepts
 
 The current scheduling model distinguishes:

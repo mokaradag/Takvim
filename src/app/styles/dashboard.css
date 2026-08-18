@@ -87,8 +87,8 @@
   color: var(--text-dim);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
 }
 .pm-head .pm-metric-head { text-align: right; }
 .pm-person { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
@@ -141,8 +141,54 @@
   .dashboard-status-legend { max-width: 220px; }
 }
 
+/* ── Plan sağlığı: gecikme yaşlandırması + plan bütünlüğü ───────── */
+.dashboard-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.aging-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: default;
+}
+.aging-row:hover { border-color: var(--border); background: var(--bg-hover); }
+.aging-label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.aging-value { min-width: 2ch; text-align: right; font-weight: 700; font-size: 13px; }
+
+.hygiene-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: default;
+}
+.hygiene-row:hover { border-color: var(--border); background: var(--bg-hover); }
+.hygiene-icon { display: inline-grid; place-items: center; color: var(--status-done); }
+.hygiene-row.has-gap .hygiene-icon { color: var(--c-amber); }
+.hygiene-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hygiene-value { font-weight: 700; font-size: 13px; min-width: 2ch; text-align: right; }
+.hygiene-row.has-gap .hygiene-value { color: var(--c-amber); }
+
 @media (max-width: 1100px) {
   .dashboard-insights-grid { grid-template-columns: 1fr; }
+  .dashboard-health-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 1080px) {
@@ -160,3 +206,29 @@
   }
   .dashboard-status-legend { max-width: 240px; justify-self: center; }
 }
+
+/* Raporlar · gecikme yaşlandırması kartı */
+.aging-report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.aging-report-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--aging-color);
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--aging-color) 7%, var(--bg-elev-2)), var(--bg-elev-2));
+  cursor: help;
+}
+.aging-report-value {
+  font-size: 26px;
+  font-weight: 750;
+  line-height: 1.1;
+  color: var(--aging-color);
+  font-variant-numeric: tabular-nums;
+}
+.aging-report-label { font-size: 11.5px; color: var(--text-muted); }

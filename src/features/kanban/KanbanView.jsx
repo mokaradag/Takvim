@@ -1,5 +1,5 @@
 'use client';
-import { useState as useState2, useMemo as useMemo2 } from 'react';
+import { useEffect as useEffect2, useMemo as useMemo2, useRef as useRef2, useState as useState2 } from 'react';
 import { Icons } from '../../components/icons';
 import { resolvePriority } from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
@@ -25,6 +25,10 @@ export function KanbanView() {
   const [dragId, setDragId] = useState2(null);
   const [dragOver, setDragOver] = useState2(null);
   const [flashId, setFlashId] = useState2(null);
+  // Vurgu zamanlayıcısı tek bir referansta tutulur: art arda bırakmalarda
+  // önceki zamanlayıcı iptal edilir ve bileşen sökülürse boşta kalmaz.
+  const flashTimer = useRef2(null);
+  useEffect2(() => () => clearTimeout(flashTimer.current), []);
 
   const grouped = useMemo2(() => {
     const map = { todo: [], in_progress: [], done: [] };
@@ -43,10 +47,17 @@ export function KanbanView() {
   const onDropTo = (colId) => {
     if (!dragId) return;
     const id = dragId;
+    // Aynı sütuna bırakmak bir DEĞİŞİKLİK değildir: yama gönderilirse sunucuya
+    // boşuna yazma isteği gider ve kayıt sürümü sebepsiz ilerler.
+    const current = tasks.find((task) => task.id === id);
+    const unchanged = current && (current.status || 'todo') === colId;
+    setDragId(null);
+    setDragOver(null);
+    if (unchanged) return;
     onUpdateTask(id, { status: colId });
     setFlashId(id);
-    setTimeout(() => setFlashId(null), 700);
-    setDragId(null); setDragOver(null);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId(null), 700);
   };
 
   return (

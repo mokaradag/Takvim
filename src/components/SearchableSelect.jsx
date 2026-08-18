@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icons } from './icons';
+import { appZoom } from '../lib/zoom';
 import { computePopoverPlacement } from './searchableSelectPlacement.js';
 
 function normalized(value) {
@@ -60,10 +61,21 @@ export function SearchableSelect({
   const measure = useCallback(() => {
     const trigger = triggerRef.current;
     if (!trigger || typeof window === 'undefined') return;
-    setPlacement(computePopoverPlacement(trigger.getBoundingClientRect(), {
-      width: window.innerWidth,
-      height: window.innerHeight
-    }));
+    // Yazı boyutu ölçeği gövdeye `zoom` uygular; `position: fixed` çocukların
+    // koordinat çerçevesi de bu oranda büyür. Ölçülen (fiziksel) dikdörtgen ve
+    // görünüm alanı ölçeğe bölünmezse panel, yazı büyütüldükçe tetikleyiciden
+    // kayar ve ekranın dışına taşardı.
+    const scale = appZoom();
+    const rect = trigger.getBoundingClientRect();
+    setPlacement(computePopoverPlacement(
+      {
+        top: rect.top / scale,
+        bottom: rect.bottom / scale,
+        left: rect.left / scale,
+        width: rect.width / scale
+      },
+      { width: window.innerWidth / scale, height: window.innerHeight / scale }
+    ));
   }, []);
 
   useLayoutEffect(() => {
@@ -175,6 +187,8 @@ export function SearchableSelect({
         position: 'fixed',
         left: placement.left,
         width: placement.width,
+        // Panelin tamamı görünüm alanına sığar; taşan içerik liste içinde kayar.
+        maxHeight: placement.panelMaxHeight,
         ...(placement.openUp ? { bottom: placement.bottom } : { top: placement.top })
       }}
     >

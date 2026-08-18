@@ -13,7 +13,8 @@
 }
 .mode-picker {
   width: min(980px, 96vw);
-  max-height: 92vh;
+  animation: modePickerIn .28s cubic-bezier(.2, .8, .2, 1) both;
+  max-height: calc(var(--app-viewport-h, 100vh) - 56px);
   overflow: auto;
   padding: 28px;
   border: 1px solid var(--chrome-border);
@@ -22,7 +23,32 @@
   box-shadow: 0 36px 90px rgb(0 0 0 / .42);
 }
 .mode-picker-head { max-width: 720px; margin: 0 auto 22px; text-align: center; }
-.mode-picker-kicker { color: var(--accent); font-size: 10.5px; font-weight: 850; letter-spacing: .13em; text-transform: uppercase; }
+.mode-picker-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 14px;
+  text-align: left;
+}
+.mode-picker-wordmark {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  column-gap: 7px;
+  font-size: 24px;
+  line-height: 1.05;
+  letter-spacing: -.025em;
+}
+.mode-picker-wordmark span { font-weight: 750; color: var(--text); }
+.mode-picker-wordmark strong { font-weight: 750; color: var(--accent); }
+.mode-picker-wordmark small {
+  grid-column: 1 / -1;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.mode-picker-kicker { color: var(--accent); font-size: 12.5px; font-weight: 850; letter-spacing: 0.02em; text-transform: none; }
 .mode-picker-head h2 { margin: 6px 0 8px; font-size: clamp(25px, 3vw, 36px); letter-spacing: -.045em; }
 .mode-picker-head p { margin: 0; color: var(--text-muted); line-height: 1.65; }
 .mode-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -42,7 +68,7 @@
 .mode-picker-card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 20px 44px rgb(0 0 0 / .18); }
 .mode-picker-icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent); }
 .mode-picker-copy { display: grid; gap: 4px; }
-.mode-picker-copy small { color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.mode-picker-copy small { color: var(--accent); font-size: 11.5px; font-weight: 800; letter-spacing: 0.02em; text-transform: none; }
 .mode-picker-copy strong { font-size: 20px; letter-spacing: -.025em; }
 .mode-picker-copy > span { color: var(--text-muted); font-size: 12.5px; line-height: 1.55; }
 .mode-picker-points { grid-column: 1 / -1; display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--border); }
@@ -64,7 +90,7 @@
 .data-mode-current-copy { display: flex; flex-direction: column; gap: 0; min-width: 0; }
 .data-mode-indicator strong {
   font-size: 10.5px;
-  letter-spacing: .06em;
+  letter-spacing: 0.02em;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -104,7 +130,7 @@
 .settings-mode-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); background: color-mix(in oklab, var(--accent) 7%, var(--bg-elev-2)); }
 .settings-mode-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; color: var(--accent); background: var(--accent-soft); }
 .settings-mode-main { display: grid; gap: 3px; }
-.settings-mode-main small { color: var(--accent); font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.settings-mode-main small { color: var(--accent); font-size: 11.5px; font-weight: 800; letter-spacing: 0.02em; text-transform: none; }
 .settings-mode-main strong { font-size: 16px; }
 .settings-mode-main > span { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
 .settings-mode-points { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px 12px; }
@@ -122,7 +148,7 @@
 .help-hero-card { padding: 24px 26px; border: 1px solid var(--chrome-border); border-radius: var(--r-xl); background: linear-gradient(135deg, var(--chrome-bg), var(--bg-elev)); box-shadow: var(--shadow-sm); }
 .help-hero-card h2 { margin: 4px 0 8px; font-size: 24px; letter-spacing: -.03em; }
 .help-hero-card p { max-width: 900px; margin: 0; color: var(--text-muted); line-height: 1.7; }
-.help-kicker { color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.help-kicker { color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: 0.02em; text-transform: none; }
 .help-section-card h3 { margin: 0 0 15px; font-size: 14px; }
 .help-flow { display: flex; align-items: stretch; gap: 7px; overflow-x: auto; padding-bottom: 4px; }
 .help-flow-part { display: flex; align-items: center; gap: 7px; flex: 1 0 180px; }
@@ -144,7 +170,7 @@
 .help-mode-card { overflow: hidden; }
 .help-mode-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .help-mode-card-head > svg { color: var(--accent); }
-.help-mode-card-head small { color: var(--text-dim); font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; font-weight: 750; }
+.help-mode-card-head small { color: var(--text-dim); font-size: 11px; text-transform: none; letter-spacing: 0.02em; font-weight: 750; }
 .help-mode-card-head h3 { margin: 1px 0 0; font-size: 16px; }
 .help-mode-card .help-flow { flex-direction: column; overflow: visible; }
 .help-mode-card .help-flow-part { flex: 0 0 auto; }
@@ -159,3 +185,42 @@
   .mode-picker-grid { grid-template-columns: 1fr; }
   .settings-mode-heading { flex-direction: column; }
 }
+
+@keyframes modePickerIn {
+  from { opacity: 0; transform: translateY(14px) scale(.99); }
+  to { opacity: 1; transform: none; }
+}
+/* Kartlar sırayla belirir; süsleme değil, okuma sırasını taşıyan bir ipucu. */
+.mode-picker-card { animation: modePickerCardIn .34s cubic-bezier(.2, .8, .2, 1) both; }
+.mode-picker-grid > .mode-picker-card:nth-child(1) { animation-delay: .1s; }
+.mode-picker-grid > .mode-picker-card:nth-child(2) { animation-delay: .18s; }
+@keyframes modePickerCardIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.reduce-motion .mode-picker,
+.reduce-motion .mode-picker-card { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .mode-picker,
+  .mode-picker-card { animation: none; }
+}
+
+/* ── Yüksek karşıtlık ──────────────────────────────────────────────
+   Sınırlar ve ikincil metin koyulaştırılır. Renk değişkenleri üzerinden
+   çalıştığı için bileşenlerin hiçbirinin ayrıca ele alınması gerekmez. */
+body.high-contrast.theme-light {
+  --border: oklch(74% 0.018 270);
+  --border-strong: oklch(58% 0.026 270);
+  --text-muted: oklch(30% 0.02 270);
+  --text-dim: oklch(41% 0.018 270);
+  --bg-elev-2: oklch(95% 0.008 270);
+  --bg-hover: oklch(90% 0.014 270);
+}
+body.high-contrast.theme-dark {
+  --border: oklch(45% 0.02 270);
+  --border-strong: oklch(58% 0.024 270);
+  --text-muted: oklch(88% 0.008 270);
+  --text-dim: oklch(78% 0.01 270);
+}
+body.high-contrast .muted { color: var(--text-muted); }
+body.high-contrast .card { border-width: 1px; box-shadow: var(--shadow-sm); }

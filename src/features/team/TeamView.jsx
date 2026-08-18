@@ -8,6 +8,7 @@ import { AnimatedNumber, FilterableTH, InfoButton, numericMatchesFilter } from '
 import { diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
+import { PersonDetailDialog } from './PersonDetailDialog.jsx';
 import { UNASSIGNED_DIRECTORATE, organizationValue } from './teamDirectoryPolicy.js';
 import {
   applyOrgSelection,
@@ -84,6 +85,9 @@ export function TeamView() {
   const [colFilter, setColFilter] = useState(createEmptyColumnFilter);
   const [sort, setSort] = useState({ key: 'name', dir: 'asc' });
   const [limit, setLimit] = useState(PERSON_PAGE_SIZE);
+  // Açık personel penceresi KİMLİKLE tutulur: süzgeç değişince satır listeden
+  // düşse bile saklanan bir satır nesnesi eski verilerle ekranda kalırdı.
+  const [openPersonId, setOpenPersonId] = useState(null);
   const today_ = today();
 
   const peopleByName = useMemo(() => new Map(people.map((person) => [person.name, person.id])), [people]);
@@ -167,6 +171,7 @@ export function TeamView() {
   }, [directorateOptions, stats]);
 
   const visiblePeople = filtered.slice(0, limit);
+  const openMember = openPersonId ? stats.find((row) => row.person.id === openPersonId) || null : null;
   const columnFilterActive = Boolean(colFilter.name || colFilter.role.length || colFilter.total || colFilter.active || colFilter.late || colFilter.upcoming);
   const anyFilterActive = Boolean(query.trim()) || hasOrgSelection(orgFilter) || columnFilterActive;
   const showingDirectorySummary = !anyFilterActive;
@@ -355,13 +360,20 @@ export function TeamView() {
                 {visiblePeople.map((member) => (
                   <tr key={member.person.id}>
                     <td>
-                      <div className="row" style={{ gap: 9 }}>
+                      {/* Personel adı tıklanabilir: ayrıntı penceresi kişinin
+                          yakın görevlerini tam liste hâlinde açar. */}
+                      <button
+                        type="button"
+                        className="team-person-button"
+                        onClick={() => setOpenPersonId(member.person.id)}
+                        aria-label={`${member.person.name} ayrıntılarını aç`}
+                      >
                         <Avatar name={member.person.name} person={member.person} size="md" />
                         <span style={{ minWidth: 0 }}>
-                          <strong style={{ display: 'block', whiteSpace: 'nowrap' }}>{member.person.name}</strong>
+                          <strong>{member.person.name}</strong>
                           <small className="muted">{member.person.employeeNo || member.person.id}</small>
                         </span>
-                      </div>
+                      </button>
                     </td>
                     <td className="muted">{member.person.role || '—'}</td>
                     <td>{organizationValue(member.person, 'directorate') || <span className="muted">Tanımsız</span>}</td>
@@ -402,6 +414,14 @@ export function TeamView() {
           )}
         </div>
       )}
+
+      {openMember && (
+        <PersonDetailDialog
+          member={openMember}
+          onClose={() => setOpenPersonId(null)}
+          onOpenTask={(task) => { setOpenPersonId(null); onOpenTask(task); }}
+        />
+      )}
     </div>
   );
 }
@@ -409,7 +429,7 @@ export function TeamView() {
 function Mini({ label, value, attention = false }) {
   return (
     <div className="col" style={{ gap: 1, flex: 1 }}>
-      <div className="muted" style={{ fontSize: 10.5, fontWeight: 650, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{label}</div>
+      <div className="muted" style={{ fontSize: 10.5, fontWeight: 650, letterSpacing: '0.01em' }}>{label}</div>
       <div className="tabular" style={{ fontSize: 19, fontWeight: 750, color: attention ? 'var(--status-overdue)' : 'var(--text)', lineHeight: 1.2 }}>
         <AnimatedNumber value={value} duration={500} />
       </div>

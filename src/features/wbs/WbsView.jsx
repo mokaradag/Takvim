@@ -24,7 +24,7 @@ import {
 import { useAppState } from '../../state/AppStateProvider';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 import { DEFAULT_WBS_DEPTH, WBS_DEPTH_OPTIONS, expandedIdsForDepth } from './wbsTreeViewPolicy.js';
-import { resolveWbsDrop } from './wbsDragPolicy.js';
+import { createWbsDropIndex, resolveWbsDrop, wbsSiblings } from './wbsDragPolicy.js';
 
 // Satır içinde imlecin dikey konumu bırakma niyetini belirler: üst/alt şeritler
 // kardeş sırası, orta bölge ise alt düğüm yapar.
@@ -238,6 +238,19 @@ export function WbsView() {
 
   // Sürükleme sırasında açılan zamanlayıcı bileşen sökülürse boşta kalmasın.
   useEffect(() => () => clearTimeout(hoverExpandRef.current.timer), []);
+
+  // Tutamağa basıp sürüklemeden BAŞKA bir yerde bırakmak `dragHandleNodeId`
+  // değerini asılı bırakıyordu: satır sürükleme başlatmadan `draggable` kalıyor
+  // ve içindeki metin seçilemiyordu. Bırakma her yerde dinlenir.
+  useEffect(() => {
+    const releaseHandle = () => setDragHandleNodeId(null);
+    window.addEventListener('pointerup', releaseHandle);
+    window.addEventListener('pointercancel', releaseHandle);
+    return () => {
+      window.removeEventListener('pointerup', releaseHandle);
+      window.removeEventListener('pointercancel', releaseHandle);
+    };
+  }, []);
 
   if (workspace.mode === 'portfolio') {
     return (

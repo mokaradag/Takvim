@@ -18,7 +18,7 @@ export const PAGE_META = {
   takvim: { title: 'Takvim', sub: 'Aylık görünüm' },
   gantt: { title: 'Gantt', sub: 'Zaman çizelgesi ve bağımlılıklar' },
   kanban: { title: 'Kanban', sub: 'Durum panosu' },
-  rapor: { title: 'Raporlar', sub: 'Çevrim süresi, performans ve trendler' },
+  rapor: { title: 'Raporlar', sub: 'Çevrim süresi, performans ve eğilimler' },
   kisi: { title: 'Ekip', tab: 'kisi', sub: 'Ekip üyeleri ve iş yükü' },
   yardim: { title: 'Kullanım Rehberi', sub: 'MERGEN Rota kullanım adımları ve sayfa açıklamaları' },
   ayarlar: { title: 'Ayarlar', sub: 'Görünüm ve tercihler' }

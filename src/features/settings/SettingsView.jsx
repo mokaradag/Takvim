@@ -250,6 +250,27 @@ export function SettingsView({ t, setTweak }) {
           <SettingsRow title="Hareketi azalt" desc="Süslemeli ve sürekli animasyonları kapatır.">
             <ToggleSeg value={!!t.reduceMotion} onChange={(v) => setTweak('reduceMotion', v)} />
           </SettingsRow>
+
+          <div className="set-sep" />
+
+          {/* Tarih biçimi daha önce koda gömülüydü; kurumsal alışkanlığa göre
+              seçilebilmesi gerekir. */}
+          <SettingsRow title="Tarih biçimi" desc="Tüm ekranlarda tarihlerin nasıl yazılacağını belirler.">
+            <Segmented
+              value={t.dateFormat || 'dd/mm/yyyy'}
+              onChange={(v) => setTweak('dateFormat', v)}
+              options={[['dd/mm/yyyy', 'gg/aa/yyyy'], ['pattern', '18 Ağu 2026']]}
+            />
+          </SettingsRow>
+
+          <div className="set-sep" />
+
+          <SettingsRow
+            title="Yüksek karşıtlık"
+            desc="Sınırları ve ikincil metni koyulaştırır; parlak ortamda ve açık temada okunabilirliği artırır."
+          >
+            <ToggleSeg value={!!t.highContrast} onChange={(v) => setTweak('highContrast', v)} />
+          </SettingsRow>
         </div>
 
         <div className="card">

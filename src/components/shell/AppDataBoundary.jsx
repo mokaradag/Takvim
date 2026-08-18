@@ -25,6 +25,54 @@ function DataMessage({ children }) {
   );
 }
 
+/** Perdenin marka bloğu; ürün adı her perdede aynı ağırlıkta görünür. */
+function BootBrand() {
+  return (
+    <div className="app-boot-brand">
+      <AppLogo size={54} />
+      <div className="app-boot-wordmark">
+        <span>MERGEN</span><strong>Rota</strong>
+        <small>Proje Yönetimi</small>
+      </div>
+    </div>
+  );
+}
+
+const BOOT_STEPS = [
+  { id: 'catalog', label: 'Kurumsal katalog', Icon: Icons.Database },
+  { id: 'wbs', label: 'İş dağılım ağacı', Icon: Icons.Layers },
+  { id: 'tasks', label: 'Görevler', Icon: Icons.Table }
+];
+
+/**
+ * Yükleme adımları sırayla vurgulanır.
+ *
+ * Gerçek ilerleme sunucudan akmadığı için yüzde UYDURULMAZ; vurgu yalnızca
+ * hangi aşamaların hazırlandığını anlatan sakin bir göstergedir.
+ */
+function BootSteps() {
+  const [activeStep, setActiveStep] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => setActiveStep((current) => (current + 1) % BOOT_STEPS.length), 900);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="app-boot-steps">
+      {BOOT_STEPS.map((step, index) => (
+        <span
+          key={step.id}
+          className={`app-boot-step${index === activeStep ? ' is-active' : ''}`}
+          style={{ '--step-delay': `${index * 110}ms` }}
+        >
+          <step.Icon size={12} /> {step.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /**
  * Veri modu anahtarı Ayarlar sayfasında yaşar; Ayarlar'a ise yalnızca uygulama
  * kabuğu üzerinden ulaşılır. İlk yükleme başarısız olduğunda kabuk hiç render
@@ -75,12 +123,7 @@ export function AppDataBoundary({ children }) {
   if (dataStatus === 'loading' && !hasLoadedOnce) {
     return (
       <DataMessage>
-        <div className="app-boot-brand">
-          <AppLogo size={46} />
-          <div className="app-boot-wordmark">
-            <span>MERGEN</span><strong>Rota</strong>
-          </div>
-        </div>
+        <BootBrand />
         <h1 className="app-boot-title">Veriler yükleniyor</h1>
         <p className="app-boot-sub">
           Projeler, iş dağılım ağacı ve görevler hazırlanıyor. Kurumsal kaynak ilk açılışta eşitlenir.
@@ -88,11 +131,7 @@ export function AppDataBoundary({ children }) {
         <div className="app-boot-progress" role="progressbar" aria-label="Veriler yükleniyor" aria-busy="true">
           <span />
         </div>
-        <div className="app-boot-steps">
-          <span className="app-boot-step"><Icons.Database size={12} /> Kurumsal katalog</span>
-          <span className="app-boot-step"><Icons.Layers size={12} /> Dağılım ağacı</span>
-          <span className="app-boot-step"><Icons.Table size={12} /> Görevler</span>
-        </div>
+        <BootSteps />
       </DataMessage>
     );
   }
@@ -100,12 +139,7 @@ export function AppDataBoundary({ children }) {
   if (dataStatus === 'error' && !hasLoadedOnce && sessionRequired) {
     return (
       <DataMessage>
-        <div className="app-boot-brand">
-          <AppLogo size={46} />
-          <div className="app-boot-wordmark">
-            <span>MERGEN</span><strong>Rota</strong>
-          </div>
-        </div>
+        <BootBrand />
         <h1 className="app-boot-title">Kurumsal oturum yenileniyor</h1>
         <p className="app-boot-sub">Oturum açma sayfasına yönlendiriliyorsunuz.</p>
         <div className="app-boot-progress" role="progressbar" aria-label="Kurumsal oturum yenileniyor" aria-busy="true">
@@ -118,12 +152,7 @@ export function AppDataBoundary({ children }) {
   if (dataStatus === 'error' && !hasLoadedOnce) {
     return (
       <DataMessage>
-        <div className="app-boot-brand">
-          <AppLogo size={46} />
-          <div className="app-boot-wordmark">
-            <span>MERGEN</span><strong>Rota</strong>
-          </div>
-        </div>
+        <BootBrand />
         <h1 className="app-boot-title">
           {authenticationRejected ? 'Kimlik doğrulanamadı' : 'Veriler yüklenemedi'}
         </h1>

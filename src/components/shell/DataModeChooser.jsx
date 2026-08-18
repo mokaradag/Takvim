@@ -1,12 +1,20 @@
 'use client';
 import { Icons } from '../icons';
+import { AppLogo } from './AppLogo';
 
 export function DataModeChooser({ onChoose }) {
   return (
     <div className="mode-picker-backdrop" role="presentation">
       <section className="mode-picker data-mode-picker" role="dialog" aria-modal="true" aria-labelledby="data-mode-picker-title">
         <div className="mode-picker-head">
-          <div className="mode-picker-kicker">MERGEN Rota</div>
+          {/* Ürün adı küçük bir üst etiket değil, pencerenin kimliğidir. */}
+          <div className="mode-picker-brand">
+            <AppLogo size={46} />
+            <div className="mode-picker-wordmark">
+              <span>MERGEN</span><strong>Rota</strong>
+              <small>Proje Yönetimi</small>
+            </div>
+          </div>
           <h2 id="data-mode-picker-title">Veri Modu</h2>
           <p>Örnek verileri veya kurumsal SQL Server üzerinde kalıcı Gerçek Sistem verilerini seçin. Bu seçim Basit/Gelişmiş kullanım modundan bağımsızdır.</p>
         </div>

@@ -429,3 +429,51 @@ export function planRecurringOccurrences(template, rule, {
   }
   return plan;
 }
+
+/**
+ * Serinin ne üreteceğini ARAYÜZ İÇİN özetler.
+ *
+ * "3 yineleme" ifadesi tek başına belirsizdir: RFC 5545'te `COUNT` serinin
+ * TOPLAM yineleme sayısıdır ve `DTSTART` (şablonun planlanan başlangıcı) kurala
+ * uyuyorsa serinin ilk yinelemesi şablonun kendisidir. Bu durumda "3 yineleme"
+ * yalnızca 2 YENİ görev demektir. Kullanıcıya hangi sayının ne anlama geldiğini
+ * göstermeden bu davranış hatalı görünür.
+ *
+ * @param {object} template şablon görev (`plannedStart` zorunlu)
+ * @param {object|string} rule kanonik kural ya da RRULE metni
+ * @param {{calendar?: object, previewLimit?: number}} [options]
+ * @returns {{occurrences: Array<object>, dates: string[], preview: string[],
+ *   hiddenCount: number, includesTemplate: boolean, totalCount: number,
+ *   generatedCount: number, unbounded: boolean}}
+ */
+export function summarizeRecurrencePlan(template, rule, { calendar = null, previewLimit = 8 } = {}) {
+  const normalized = normalizeRecurrenceRule(rule);
+  const empty = {
+    occurrences: [], dates: [], preview: [], hiddenCount: 0,
+    includesTemplate: false, totalCount: 0, generatedCount: 0, unbounded: false
+  };
+  if (!normalized || !template?.plannedStart) return empty;
+
+  // Sınırsız kuralda tüm seri açılamaz; önizleme için bir pencere yeter.
+  const unbounded = !normalized.count && !normalized.until;
+  const limit = unbounded
+    ? previewLimit + 1
+    : Math.min(MAX_RECURRENCE_OCCURRENCES, normalized.count || MAX_RECURRENCE_OCCURRENCES);
+  const occurrences = planRecurringOccurrences(template, normalized, { calendar, limit });
+  const dates = occurrences.map((occurrence) => occurrence.plannedStart);
+  // Şablonun kendi günü seride yer alıyorsa o gün için YENİ görev üretilmez
+  // (bkz. AppStateProvider · generateTaskSeries).
+  const includesTemplate = dates.includes(template.plannedStart);
+  const totalCount = unbounded ? 0 : dates.length;
+
+  return {
+    occurrences,
+    dates,
+    preview: dates.slice(0, previewLimit),
+    hiddenCount: unbounded ? 0 : Math.max(0, dates.length - previewLimit),
+    includesTemplate,
+    totalCount,
+    generatedCount: unbounded ? 0 : Math.max(0, totalCount - (includesTemplate ? 1 : 0)),
+    unbounded
+  };
+}

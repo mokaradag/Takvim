@@ -28,7 +28,7 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
           <div className="col" style={{ gap: 8, flex: 1 }}>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: color }} />
-              <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+              <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.01em' }}>
                 {task.projectCode ? `${task.projectCode} · ${task.proje}` : task.proje}
               </span>
               {task.keyword && <TaskKeyword task={task} />}

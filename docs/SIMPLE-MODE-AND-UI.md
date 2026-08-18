@@ -66,13 +66,46 @@ kovasını hedef tarihinden türetiyordu. Geciken bir görev aynı anda iki kova
 birden düştüğü için dilimlerin toplamı görev sayısını aşıyor (44 görev için 54
 birim), halka 360 dereceyi geçip kendi üzerine biniyordu.
 
-Üst rozetler (KPI kartları) bilinçli olarak farklı okur: orada bir görev hem
-"devam eden" hem "geciken" sayılabilir, çünkü kartlar `selectTaskStats`
-çıktısını yansıtır. İki okuma karıştırılmamalıdır.
+Üst rozetler (KPI kartları) **aynı kovaları** okur. Daha önce kartlar durum
+alanını doğrudan okuyordu ve iki okuma bilinçli olarak farklıydı; sonuç, aynı
+ekranda çelişen iki sayı oldu: kart "6 devam eden" derken halka aynı anda "3"
+gösteriyordu. Kartlar artık `selectStatusDistribution` kovalarından beslenir,
+dolayısıyla dört kartın toplamı her zaman toplam görev sayısına eşittir. Hedefi
+geçmiş bir "devam eden" görev yalnızca **Geciken** kartında sayılır ve kartın
+ipucu bunu açıkça söyler.
 
 Dilim seçimi sıra numarasıyla değil **kova kimliğiyle** saklanır: görev listesi
 kısaldığında saklanan sıra numarası boşa düşüyor ve merkez etiket
 `undefined.color` okumasıyla çöküyordu.
+
+### Halka dilimleri kapalı yol olarak çizilir
+
+Dilimler `stroke-dasharray` yerine kapalı yay YOLU olarak çizilir
+(`src/components/charts/donutGeometry.js`). Kesik desen çevre boyunca
+tekrarlandığı için yuvarlama artığı deseni başa sardırıyor, aynı dilim halkanın
+iki ayrı yerinde parça parça görünüyordu; seçili dilimi dışarı öteleyen
+"patlatma" da dilimi halkadan kopararak aynı bölünmüş izlenimi veriyordu. Vurgu
+artık yalnızca iç yarıçapı değiştirir. Ayrıntı için bkz.
+`docs/UI-STYLING-ARCHITECTURE.md` § 10.
+
+### Plan sağlığı kartları
+
+Özet iki eyleme dönük kart daha taşır (ikisi de
+`src/features/dashboard/planHealth.js` üzerinden beslenir, Raporlar sayfası
+yaşlandırmayı yeniden kullanır):
+
+- **Gecikme yaşlandırması** — geciken görevleri hedef tarihinin üzerinden geçen
+  güne göre 1–7 / 8–30 / 31–90 / 90+ kovalarına ayırır. Tek bir "9 geciken"
+  sayısı, dün gecikmiş bir işle aylardır bekleyen bir işi aynı kefeye koyar.
+- **Plan bütünlüğü** — açık görevlerde eksik kalan planlama alanlarını
+  (sorumlu, termin, planlanan tarih, dağılım düğümü) sayar. Eksik alanı olan bir
+  görev iş yükü, gecikme ve kritik yol hesaplarının hiçbirine girmez.
+
+### Grafik eksen etiketleri
+
+Eksen etiketleri SVG'nin **dışında**, gerçek HTML metni olarak çizilir. SVG kart
+genişliğine göre ölçeklendiği için içine yazılan `font-size` de ölçekleniyordu ve
+geniş kartlarda etiketler neredeyse iki katı boyutta görünüyordu.
 
 ### Kişi ölçüm tabloları
 
@@ -215,6 +248,19 @@ Tablo sütunları Görevler sayfasıyla aynı süzgeç/sıralama bileşenini kul
 kurumsal düzey süzgeçleri üstteki dizin açılır listeleriyle tek durumu paylaşır.
 Ayrıntı: `docs/PROJECT-PORTFOLIO-AND-DIRECTORY.md`.
 
+## Ekip · personel ayrıntı penceresi
+
+Ekip tablosunda personel adı bir düğmedir; tıklandığında kişinin kurumsal
+kimliğini, yük özetini, öncelik kırılımını ve **yakın görevlerinin tam
+listesini** gösteren bir pencere açılır (`PersonDetailDialog`). Tablo satırı
+yalnızca ilk iki görevi gösterebiliyordu.
+
+Liste yalnızca **açık** görevleri taşır: kapanmış bir iş "yaklaşan" değildir.
+Aciliyet tonlaması saf bir ilkedir (`upcomingTaskPolicy.js`) ve ayrıca sınanır;
+hedef bitiş yoksa planlanan bitişe düşülür, ikisi de yoksa görev tarihsiz
+sayılır — uydurma bir tarihle listeye sokulmaz. Pencere kimlikle açılır, bu
+sayede süzgeç değişip satır listeden düştüğünde ekranda eski veri kalmaz.
+
 ## Kenar çubuğu kullanıcı bloğu
 
 Kenar çubuğunun altındaki kullanıcı bloğu artık sabit bir örnek kişi değil,
@@ -254,6 +300,19 @@ beklemek alt ağacı kendiliğinden açar.
 Kural mantığı görünümden ayrıdır (`src/features/wbs/wbsDragPolicy.js`) ve tek
 başına sınanır. Fare kullanmadan taşımak için satırdaki **Taşı** düğmesi
 korunmuştur.
+
+> **Gerileme kaydı.** Görünüm bu ilke modülünden `wbsSiblings` ve
+> `createWbsDropIndex` işlevlerini kullanıyor ama **içe aktarmıyordu**. Sekme
+> açılır açılmaz `ReferenceError: wbsSiblings is not defined` fırlıyor ve sayfa
+> "Application error: a client-side exception has occurred" ile çöküyordu; hata
+> yalnızca satır çizimi sırasında oluştuğu için ne birim testleri ne de
+> `next build` yakalıyordu. `test/module-binding-and-recurrence-editing.test.mjs`
+> artık kaynak ağacının tamamını tarar: bir modülün dışa aktardığı bir işlev,
+> başka bir dosyada içe aktarılmadan çağrılıyorsa test düşer.
+
+Sürükleme tutamağı `pointerup`/`pointercancel` olaylarını **pencere düzeyinde**
+dinler. Tutamağa basıp sürüklemeden başka bir yerde bırakmak satırı
+`draggable` durumda bırakıyor ve içindeki metin seçilemiyordu.
 
 Alt düğüm ekleme, ad değiştirme ve silme artık engelleyici `prompt()`/`confirm()`
 pencereleri kullanmaz: ekleme ve ad değişikliği satır içi bir alanda (Enter

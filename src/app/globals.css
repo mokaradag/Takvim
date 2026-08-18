@@ -78,22 +78,26 @@
 }
 
 /* ── Light theme ──────────────────────────────────── */
+/* Açık tema soluk duruyordu: zemin ile kart neredeyse aynı beyazdı, sınırlar
+   ve ikincil metin arka planla kaynaşıyordu. Zeminler birbirinden ayrıştırıldı,
+   sınırlar ve metin tonları koyulaştırıldı; gölgeler de görünür hâle getirildi.
+   Koyu temanın basamak farkları örnek alındı. */
 .theme-light {
-  --bg: oklch(98.5% 0.002 270);
+  --bg: oklch(96.4% 0.004 270);
   --bg-elev: oklch(100% 0 0);
-  --bg-elev-2: oklch(97% 0.003 270);
-  --bg-hover: oklch(95% 0.004 270);
-  --bg-input: oklch(99% 0.001 270);
-  --border: oklch(91% 0.005 270);
-  --border-strong: oklch(83% 0.008 270);
-  --text: oklch(20% 0.01 270);
-  --text-muted: oklch(45% 0.012 270);
-  --text-dim: oklch(60% 0.01 270);
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.08);
-  --shadow-lg: 0 24px 48px -12px rgb(0 0 0 / 0.18);
-  --cal-weekend-bg: oklch(95% 0.025 256);
-  --cal-holiday-bg: oklch(94% 0.05 22);
+  --bg-elev-2: oklch(97.6% 0.005 270);
+  --bg-hover: oklch(94% 0.008 270);
+  --bg-input: oklch(100% 0 0);
+  --border: oklch(87% 0.009 270);
+  --border-strong: oklch(76% 0.014 270);
+  --text: oklch(17% 0.014 270);
+  --text-muted: oklch(40% 0.016 270);
+  --text-dim: oklch(53% 0.014 270);
+  --shadow-sm: 0 1px 2px 0 rgb(16 20 34 / 0.07);
+  --shadow-md: 0 6px 16px -4px rgb(16 20 34 / 0.13);
+  --shadow-lg: 0 26px 52px -14px rgb(16 20 34 / 0.26);
+  --cal-weekend-bg: oklch(93.5% 0.03 256);
+  --cal-holiday-bg: oklch(92% 0.06 22);
   color-scheme: light;
 }
 
@@ -118,10 +122,14 @@ input, textarea, select { font-family: inherit; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
 /* ── Layout shell ─────────────────────────────────── */
+/* Yazı boyutu ölçeği gövdeye `zoom` uygular; `100vh` ölçekle birlikte
+   büyüyeceği için tam ekran kaplar hiçbir yerde doğrudan kullanılmaz.
+   `--app-viewport-h` ölçeğe bölünmüş gerçek görünüm yüksekliğidir
+   (bkz. hooks/useApplyTweaks.js). */
 .app {
   display: grid;
   grid-template-columns: 240px 1fr;
-  height: 100vh;
+  height: var(--app-viewport-h, 100vh);
   overflow: hidden;
 }
 .sidebar {
@@ -184,7 +192,7 @@ input, textarea, select { font-family: inherit; }
   font-size: 10.5px;
   color: var(--text-dim);
   letter-spacing: 0.05em;
-  text-transform: uppercase;
+  text-transform: none;
   font-weight: 600;
 }
 
@@ -220,8 +228,8 @@ input, textarea, select { font-family: inherit; }
   padding: 14px 20px 6px;
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-dim);
 }
 
@@ -275,13 +283,20 @@ input, textarea, select { font-family: inherit; }
   flex: 1 1 auto;
   min-width: 0;
 }
+/* Kurumsal adlar üç dört sözcük olabiliyor; 240 piksellik kenar çubuğunda tek
+   satıra sıkıştırıldığında "MEHMET O…" gibi kırpılıyordu. Ad en fazla iki
+   satıra sarar, taşarsa oradan kırpılır. */
 .user-chip .name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.28;
   color: var(--text);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* Departman adları uzun olabilir: tek satıra zorlanmaz, küçük yazı tipiyle
    birden çok satıra sarılır ve kenar çubuğunun dışına taşmaz. */
@@ -437,6 +452,7 @@ input, textarea, select { font-family: inherit; }
   background: var(--c-blue);
 }
 .avatar.lg { --avatar-size: 40px; font-size: 14px; }
+.avatar.xl { --avatar-size: 58px; font-size: 19px; }
 .avatar.sm { --avatar-size: 26px; font-size: 10px; border-width: 1.5px; }
 /* Fotoğraflı avatar: kırpma merkezli, baş harf avatarıyla aynı ölçüde. */
 img.avatar-photo {
@@ -483,7 +499,7 @@ img.avatar-photo {
   letter-spacing: 0.04em;
   color: var(--text-dim);
   padding: 10px var(--pad-cell-x);
-  text-transform: uppercase;
+  text-transform: none;
   z-index: 1;
 }
 .tbl tbody td {
@@ -669,8 +685,8 @@ img.avatar-photo {
   padding: 10px 12px;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-dim);
   border-right: 1px solid var(--border);
 }
@@ -769,7 +785,7 @@ img.avatar-photo {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.05em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--text);
   background: color-mix(in oklab, var(--text) 4%, var(--bg-elev));
   box-sizing: border-box;
@@ -797,7 +813,7 @@ img.avatar-photo {
   position: fixed;
   top: 0; right: 0;
   width: min(520px, 100vw);
-  height: 100vh;
+  height: var(--app-viewport-h, 100vh);
   background: var(--bg-elev);
   border-left: 1px solid var(--border);
   z-index: var(--z-drawer);
@@ -813,15 +829,25 @@ img.avatar-photo {
   gap: 12px;
 }
 .drawer-body {
-  flex: 1;
+  flex: 1 1 auto;
+  /* Esnek kutuda taşma yalnızca `min-height: 0` ile gövdeye hapsolur; aksi
+     hâlde gövde içeriği kadar uzar ve alt çubuk ekranın dışına iter. */
+  min-height: 0;
   overflow-y: auto;
   padding: 20px 24px;
 }
+.drawer-head { flex: 0 0 auto; }
+/* Alt çubuk hiçbir yazı boyutunda ekranın dışına çıkmaz: küçülmez, gerekirse
+   düğmeler alt satıra sarar. */
 .drawer-foot {
+  flex: 0 0 auto;
   padding: 14px 24px;
   border-top: 1px solid var(--border);
   display: flex;
+  align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  background: var(--bg-elev);
 }
 
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
@@ -835,7 +861,7 @@ img.avatar-photo {
   z-index: var(--z-command);
   display: grid;
   place-items: start center;
-  padding-top: 12vh;
+  padding-top: calc(var(--app-viewport-h, 100vh) * 0.12);
   animation: fadein 0.12s ease;
 }
 .cmd-panel {
@@ -859,13 +885,13 @@ img.avatar-photo {
   border-bottom: 1px solid var(--border);
 }
 .cmd-input::placeholder { color: var(--text-dim); }
-.cmd-results { max-height: 50vh; overflow-y: auto; padding: 6px; }
+.cmd-results { max-height: calc(var(--app-viewport-h, 100vh) * 0.5); overflow-y: auto; padding: 6px; }
 .cmd-group-title {
   padding: 8px 14px 4px;
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-dim);
 }
 .cmd-row {
@@ -954,13 +980,13 @@ img.avatar-photo {
 }
 .input:focus { border-color: var(--accent); }
 .label {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-dim);
   margin-bottom: 4px;
   display: block;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .empty {
@@ -1223,7 +1249,7 @@ img.avatar-photo {
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.05em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--text-dim);
 }
 .rt-list-hint {
@@ -1256,8 +1282,14 @@ img.avatar-photo {
   border-radius: var(--r-md);
   box-shadow: var(--shadow-lg);
   animation: tipIn 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Kutu görünüm alanına sığdırılır (bkz. overlayPlacement.js); taşan içerik
+     kutunun İÇİNDE kayar, ekranın dışına çıkmaz. */
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
+.col-filter-head, .col-filter-sort, .col-filter-foot { flex: 0 0 auto; }
+.col-filter-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .col-filter-head {
   padding: 8px 12px 4px;
   border-bottom: 1px solid var(--border);
@@ -1402,8 +1434,12 @@ img.avatar-photo {
 @keyframes fadeIn { to { opacity: 1; } }
 .chart-dot { opacity: 0; animation: fadeIn 0.3s ease forwards; }
 
-/* donut path animation */
-.donut-seg { transition: stroke-dasharray 0.8s cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* Halka dilimi: yol tabanlı çizim; vurgu yalnızca yolu değiştirir. */
+.donut-slice {
+  transition: d 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s ease;
+  outline: none;
+}
+.donut-slice:focus-visible { stroke: var(--text); stroke-width: 1.5; }
 
 /* Kanban animations */
 .kanban-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1455,8 +1491,8 @@ img.avatar-photo {
   padding: 6px 12px;
   font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-dim);
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
@@ -1526,7 +1562,7 @@ img.avatar-photo {
   color: var(--text-dim);
   font-weight: 700;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  text-transform: none;
   white-space: nowrap;
 }
 .gantt-day-cell .ddow {
@@ -1699,7 +1735,7 @@ img.avatar-photo {
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-dim);
-  text-transform: uppercase;
+  text-transform: none;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -1729,7 +1765,7 @@ img.avatar-photo {
 .rel-type-help strong { color: var(--accent); }
 
 /* Per-column filter dot in TH */
-.tbl thead th .col-th-btn { color: var(--text-dim); text-transform: uppercase; }
+.tbl thead th .col-th-btn { color: var(--text-dim); text-transform: none; }
 
 /* Animated count value */
 .counter { font-variant-numeric: tabular-nums; }
@@ -1765,7 +1801,7 @@ img.avatar-photo {
 }
 .welcome-panel {
   width: min(880px, 100%);
-  max-height: 92vh;
+  max-height: calc(var(--app-viewport-h, 100vh) - 40px);
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
@@ -1815,8 +1851,8 @@ img.avatar-photo {
 .welcome-greeting {
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--accent);
 }
 .welcome-user-name {
@@ -1942,8 +1978,8 @@ img.avatar-photo {
   gap: 5px;
   font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-dim);
 }
 .welcome-callout .wc-v {
@@ -2042,7 +2078,7 @@ img.avatar-photo {
 }
 .day-expand-panel {
   width: min(520px, 92vw);
-  max-height: 78vh;
+  max-height: calc(var(--app-viewport-h, 100vh) - 60px);
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -2124,7 +2160,7 @@ img.avatar-photo {
 .gantt-summary-row .summary-label {
   font-weight: 700;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  text-transform: none;
   font-size: 11px;
   color: var(--text);
   display: flex; align-items: center; gap: 8px;
@@ -2155,8 +2191,8 @@ img.avatar-photo {
 }
 .gantt-cols-pop .gp-head {
   padding: 6px 10px 4px;
-  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--text-dim);
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em;
+  text-transform: none; color: var(--text-dim);
 }
 .gantt-cols-pop label {
   display: flex; align-items: center; gap: 8px;
@@ -2261,8 +2297,8 @@ img.avatar-photo {
 .eva-label {
   font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-dim);
 }
 .eva-value {
@@ -2332,8 +2368,8 @@ img.avatar-photo {
 .rm-th {
   font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-dim);
   padding: 6px 10px;
   text-align: center;
@@ -2484,7 +2520,7 @@ img.avatar-photo {
 
 .dff-label {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
-  text-transform: uppercase; color: var(--text-dim);
+  text-transform: none; color: var(--text-dim);
 }
 .dff-hint {
   font-size: 11px; color: var(--text-dim); font-style: italic;
@@ -2639,36 +2675,37 @@ body.reduce-motion .brand-mark .logo-compass-needle { animation: none; }
 .brand-name .brand-accent {
   font-weight: 700;
   letter-spacing: -0.01em;
-  background: linear-gradient(90deg, var(--mb-cyan), var(--mb-blue));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  color: var(--mb-blue);
 }
-.theme-light .brand-name .brand-accent {
-  background: linear-gradient(90deg, var(--mb-blue), var(--mb-navy));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+.theme-light .brand-name .brand-accent { color: var(--mb-navy); }
 
-/* ── Hero titles: theme + accent aware gradient text ────── */
+/* ── Sayfa başlıkları ─────────────────────────────────────
+   Degrade doldurulmuş başlık metni bırakıldı: küçük puntoda kontrastı
+   düşürüyor, açık temada soluk görünüyor ve `-webkit-text-fill-color`
+   yüzünden seçim/vurgu renklerini bozuyordu. Başlık artık düz metin
+   rengiyle çizilir; vurgu, altındaki ince şeritle verilir. */
 .hero-title {
-  background: linear-gradient(95deg,
-    color-mix(in oklab, var(--accent) 32%, var(--text)) 0%,
-    color-mix(in oklab, var(--accent) 88%, var(--text)) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  position: relative;
   width: fit-content;
   max-width: 100%;
+  color: var(--text);
 }
 .hero-head .hero-title {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 23px;
+  font-weight: 750;
+  letter-spacing: -0.025em;
   line-height: 1.15;
+  padding-bottom: 6px;
+}
+.hero-head .hero-title::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 34px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--accent);
 }
 
 /* ── Hero header wrapper (clips decorative emblem) ───────── */

@@ -195,6 +195,33 @@ değişikliği o etiketi kullanan görevlere taşınır. Tekrarlayan görevler R
 üretilen yinelemeler `recurrenceParentId` ile şablona bağlı sıradan görevlerdir.
 Ayrıntılar: `docs/TAGS-AND-RECURRING-TASKS.md`.
 
+## Görev ilişkileri ve öncelik
+
+Bağımlılık kenarı **tek yerde** saklanır: ardılın `deps` listesinde. Görev
+panelindeki *İlişkiler ve bağımlılıklar* bölümü aynı kenarı iki yönden düzenler —
+*Öncüller* sekmesi görevin kendi listesini, *Ardıllar* sekmesi ise karşı görevin
+listesini yamalar. Döngü oluşturacak seçimler listeye hiç girmez.
+
+Görev önceliği (`Kritik` / `Yüksek` / `Orta` / `Düşük`) görev panelindeki
+**Öncelik** bölümünden tanımlanır ve Görevler, Gantt, Kanban ile Raporlar risk
+matrisini besler. Öncelik bir planlama kısıtı değildir; CPM sonuçlarını
+etkilemez. Ayrıntılar: `docs/SCHEDULING.md`.
+
+## Görünüm tercihleri
+
+Ayarlar sayfası tema, yoğunluk, vurgu rengi ve yazı boyutunun yanında şunları da
+taşır:
+
+- **Tarih biçimi** — `gg/aa/yyyy` veya `18 Ağu 2026`. Daha önce koda gömülüydü.
+- **Yüksek karşıtlık** — sınırları ve ikincil metni koyulaştırır; parlak ortamda
+  ve açık temada okunabilirliği artırır.
+
+Yazı boyutu ölçeği gövdeye `zoom` uygular. Tam ekran kaplayan her yükseklik bu
+ölçeğe bölünmüş `--app-viewport-h` değişkenini kullanır; aksi hâlde yazı
+büyütüldüğünde panel alt çubuğu ekranın dışına itiliyordu. Açılır listeler,
+ipuçları ve süzgeç kutuları da ölçeği hesaba katıp görünüm alanına sığdırılır.
+Ayrıntılar: `docs/UI-STYLING-ARCHITECTURE.md`.
+
 ## Scheduling ve baseline ilkeleri
 
 Canonical Task; güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`), gerçekleşen tarihleri (`actualStart`, `actualFinish`) ve kalan süreyi (`remainingDurationDays`) ayrı tutar. Project `dataDate` taşır. Baseline verisi ayrı immutable `Baseline` ve `TaskBaselineSnapshot` kayıtlarıdır; normal Task/WBS değişiklikleri eski baseline'ları değiştirmez.

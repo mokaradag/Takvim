@@ -348,11 +348,14 @@ test('dışa aktarım tekrar kuralını ve seri ilişkisini taşır', () => {
 test('tekrar önizlemesi üretimle aynı planlayıcıyı kullanır', () => {
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
   // Ham açılım hafta sonunu gösterirken üretim iş gününe kaydırıp
-  // tekilleştiriyordu: onay ekranı oluşacak görevlerle çelişiyordu.
-  assert.match(drawer, /planRecurringOccurrences\(task, rule, \{ calendar, limit: 4 \}\)/);
+  // tekilleştiriyordu: onay ekranı oluşacak görevlerle çelişiyordu. Özet de
+  // aynı planlayıcıyı çağırır (bkz. summarizeRecurrencePlan).
+  assert.match(drawer, /summarizeRecurrencePlan\(task, rule, \{ calendar, previewLimit: 8 \}\)/);
   assert.doesNotMatch(drawer, /expandRecurrence\(/);
-  // Başlangıç günü haftalık kümeden çıkarılamaz.
-  assert.match(drawer, /merged\.byWeekday = days\.includes\(startWeekday\) \? days : \[\.\.\.days, startWeekday\];/);
+  // Başlangıç günü artık ZORLA seçili tutulmaz: kullanıcı haftanın başka
+  // günlerini tanımlamak istediğinde bulunduğu günü listeden çıkarabilmelidir.
+  assert.doesNotMatch(drawer, /days\.includes\(startWeekday\) \? days :/);
+  assert.doesNotMatch(drawer, /disabled=\{locked\}/);
   // Üretilmiş yinelemeler dururken kural kaldırılamaz.
   assert.match(drawer, /if \(occurrenceCount > 0\) \{/);
 });

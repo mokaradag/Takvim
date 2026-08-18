@@ -1,5 +1,6 @@
 'use client';
 import { useEffect } from 'react';
+import { setAppDateDisplayFormat } from '../scheduling/dates';
 
 const ACCENT_PRESETS = {
   '#3b82f6': { fg: 'white' },
@@ -11,6 +12,11 @@ const ACCENT_PRESETS = {
 };
 
 export function useApplyTweaks(tweaks) {
+  // Tarih biçimi modül düzeyinde tutulur ve ÇİZİM SIRASINDA uygulanır: etki
+  // olarak uygulansaydı seçim değiştikten sonraki ilk çizim boyunca eski biçim
+  // görünür, tarihler bir kare geriden gelirdi. İşlem etkisizdir (idempotent).
+  setAppDateDisplayFormat(tweaks.dateFormat || 'dd/mm/yyyy');
+
   useEffect(() => {
     const body = document.body;
     body.classList.toggle('theme-light', tweaks.theme === 'light');
@@ -40,6 +46,10 @@ export function useApplyTweaks(tweaks) {
   useEffect(() => {
     document.body.classList.toggle('reduce-motion', !!tweaks.reduceMotion);
   }, [tweaks.reduceMotion]);
+
+  useEffect(() => {
+    document.body.classList.toggle('high-contrast', !!tweaks.highContrast);
+  }, [tweaks.highContrast]);
 
   useEffect(() => {
     document.body.classList.toggle('no-emblem', !tweaks.showEmblem);

@@ -1,0 +1,288 @@
+/**
+ * Modül bağlama bütünlüğü ve tekrar kuralı düzenleme davranışı.
+ *
+ * Kapsanan konular:
+ *   1. Kaynak ağacında BAĞLANMAMIŞ tanımlayıcı kalmaz.
+ *      `İş Dağılım Ağacı` sayfası, `wbsSiblings` ve `createWbsDropIndex`
+ *      kullanılıp içe aktarılmadığı için açılır açılmaz
+ *      `ReferenceError: wbsSiblings is not defined` ile çöküyordu. Tarayıcıda
+ *      görülene kadar hiçbir denetim bunu yakalamıyordu.
+ *   2. Tekrar kuralı: gün seçimi serbesttir ve "N yineleme" ifadesinin ne
+ *      anlama geldiği ölçülebilir biçimde tanımlıdır.
+ *   3. Öncelik alanı arayüzden tanımlanabilir.
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import {
+  formatRecurrenceRule,
+  normalizeRecurrenceRule,
+  summarizeRecurrencePlan
+} from '../src/scheduling/recurrence/index.js';
+import { PRIORITIES } from '../src/domain/constants/index.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SRC = path.join(ROOT, 'src');
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
+}
+
+/* ── 1. Bağlanmamış tanımlayıcı taraması ────────────────────────── */
+
+function sourceFiles(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) sourceFiles(full, out);
+    else if (/\.(js|jsx|mjs)$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+/** Yorumları ve dizgi gövdelerini düşürür: içlerindeki metin kod sayılmaz. */
+function stripNonCode(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/`(?:\\.|[^`\\])*`/g, '``');
+}
+
+/** Dosyada bir ada değer bağlayan her sözdizimi. */
+function boundNames(code) {
+  const bound = new Set();
+  for (const match of code.matchAll(/import\s+([\s\S]*?)\s+from\s+/g)) {
+    for (const identifier of match[1].matchAll(/[A-Za-z_$][\w$]*/g)) bound.add(identifier[0]);
+  }
+  for (const match of code.matchAll(/(?:function|class)\s+([A-Za-z_$][\w$]*)/g)) bound.add(match[1]);
+  for (const match of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) bound.add(match[1]);
+  for (const match of code.matchAll(/(?:const|let|var)\s*[{[]([^}\]]*)[}\]]/g)) {
+    for (const identifier of match[1].matchAll(/[A-Za-z_$][\w$]*/g)) bound.add(identifier[0]);
+  }
+  // İşlev parametreleri: `(a, b) =>`, `(a, b) {` ve `a =>` biçimleri.
+  for (const match of code.matchAll(/\(([^()]*)\)\s*(?:=>|\{)/g)) {
+    for (const identifier of match[1].matchAll(/[A-Za-z_$][\w$]*/g)) bound.add(identifier[0]);
+  }
+  for (const match of code.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) bound.add(match[1]);
+  return bound;
+}
+
+const LANGUAGE_AND_HOST_NAMES = new Set([
+  'require', 'fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
+  'requestAnimationFrame', 'cancelAnimationFrame', 'Number', 'String', 'Boolean', 'Array',
+  'Object', 'Math', 'Date', 'JSON', 'Map', 'Set', 'WeakMap', 'Promise', 'Error', 'TypeError',
+  'RangeError', 'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent',
+  'decodeURIComponent', 'alert', 'confirm', 'prompt', 'structuredClone', 'queueMicrotask',
+  'Intl', 'RegExp', 'Symbol', 'BigInt', 'URL', 'URLSearchParams', 'Response', 'Request',
+  'Headers', 'AbortController', 'TextEncoder', 'TextDecoder', 'Buffer', 'process', 'console',
+  'crypto', 'btoa', 'atob', 'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof',
+  'function', 'await', 'super', 'of', 'do', 'with', 'import'
+]);
+
+test('kaynak ağacında içe aktarılmamış modül işlevi çağrılmaz', () => {
+  const files = sourceFiles(SRC);
+
+  // Önce tüm modüllerin dışa aktardığı adlar toplanır.
+  const exportedBy = new Map();
+  for (const file of files) {
+    const code = stripNonCode(fs.readFileSync(file, 'utf8'));
+    for (const match of code.matchAll(/export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g)) exportedBy.set(match[1], file);
+    for (const match of code.matchAll(/export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) exportedBy.set(match[1], file);
+  }
+
+  const unbound = [];
+  for (const file of files) {
+    const code = stripNonCode(fs.readFileSync(file, 'utf8'));
+    const bound = boundNames(code);
+    for (const match of code.matchAll(/(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const name = match[2];
+      if (LANGUAGE_AND_HOST_NAMES.has(name) || bound.has(name)) continue;
+      if (!exportedBy.has(name) || exportedBy.get(name) === file) continue;
+      unbound.push(`${path.relative(ROOT, file)} → ${name}() (${path.relative(ROOT, exportedBy.get(name))} içinde tanımlı, içe aktarılmamış)`);
+    }
+  }
+
+  assert.deepEqual([...new Set(unbound)], []);
+});
+
+test('İş Dağılım Ağacı görünümü sürükle-bırak ilkelerini içe aktarır', () => {
+  // Doğrudan gerileme koruması: bu içe aktarma eksikken sayfa açılır açılmaz
+  // "Application error: a client-side exception has occurred" ile çöküyordu.
+  const view = read('src/features/wbs/WbsView.jsx');
+  assert.match(view, /import \{[^}]*createWbsDropIndex[^}]*\} from '\.\/wbsDragPolicy\.js'/s);
+  assert.match(view, /import \{[^}]*wbsSiblings[^}]*\} from '\.\/wbsDragPolicy\.js'/s);
+  assert.match(view, /wbsSiblings\(wbs, node\.parentId\)/);
+  assert.match(view, /createWbsDropIndex\(wbs\)/);
+});
+
+test('testlerden içe aktarılan ilke modülleri dizin yolu kullanmaz', () => {
+  // Düz Node (`node --test`) uzantısız dizin içe aktarmasını çözemez; bir
+  // ilke modülü `../../scheduling/dependencies` yazarsa test dosyası
+  // ERR_UNSUPPORTED_DIR_IMPORT ile hiç başlamadan düşer.
+  const policyModules = [
+    'src/features/task-detail/taskSuccessorPolicy.js',
+    'src/features/dashboard/planHealth.js',
+    'src/features/dashboard/statusDistribution.js',
+    'src/components/charts/donutGeometry.js'
+  ];
+  for (const file of policyModules) {
+    const imports = [...read(file).matchAll(/from\s+'(\.[^']+)'/g)].map((match) => match[1]);
+    for (const specifier of imports) {
+      assert.match(specifier, /\.(js|jsx|mjs)$/, `${file} → ${specifier} uzantılı yol olmalı`);
+    }
+  }
+});
+
+/* ── 2. Tekrar kuralı düzenleme ─────────────────────────────────── */
+
+const TEMPLATE = Object.freeze({
+  // 18/08/2026 bir Salı günüdür.
+  plannedStart: '2026-08-18',
+  plannedFinish: '2026-08-25',
+  plannedDurationDays: 6,
+  targetFinish: '2026-08-27'
+});
+
+test('haftalık kuralda başlangıç günü seçimden çıkarılabilir', () => {
+  // Salı başlayan bir seride kullanıcı yalnızca Pazartesi ve Perşembe
+  // isteyebilmelidir; Salı zorla eklenmez.
+  const rule = normalizeRecurrenceRule({ freq: 'WEEKLY', interval: 1, byWeekday: ['MO', 'TH'] });
+  assert.deepEqual(rule.byWeekday, ['MO', 'TH']);
+  assert.equal(formatRecurrenceRule(rule), 'FREQ=WEEKLY;BYDAY=MO,TH');
+
+  const plan = summarizeRecurrencePlan(TEMPLATE, { ...rule, count: 3 }, { previewLimit: 8 });
+  assert.equal(plan.includesTemplate, false);
+  assert.equal(plan.totalCount, 3);
+  // Şablonun günü seride yer almadığı için üç yinelemenin ÜÇÜ de yeni görevdir.
+  assert.equal(plan.generatedCount, 3);
+  assert.equal(plan.dates[0], '2026-08-20');
+});
+
+test('gün seçilmezse seri planlanan başlangıcın gününü kullanır', () => {
+  const rule = normalizeRecurrenceRule({ freq: 'WEEKLY', interval: 1, byWeekday: [], count: 3 });
+  assert.deepEqual(rule.byWeekday, []);
+  const plan = summarizeRecurrencePlan(TEMPLATE, rule);
+  assert.deepEqual(plan.dates, ['2026-08-18', '2026-08-25', '2026-09-01']);
+  assert.equal(plan.includesTemplate, true);
+});
+
+test('"N yineleme" TOPLAM yineleme sayısıdır; şablonun kendisi de sayılır', () => {
+  // Kullanıcının "3 yineleme mantıklı gelmiyor" dediği durum: kural
+  // Pzt–Cum arası her günü kapsıyor ve seri Salı başlıyorsa üç yineleme aynı
+  // haftanın Salı/Çarşamba/Perşembe günleridir; bunlardan biri şablondur.
+  const rule = { freq: 'WEEKLY', interval: 2, byWeekday: ['MO', 'TU', 'WE', 'TH', 'FR'], count: 3 };
+  const plan = summarizeRecurrencePlan(TEMPLATE, rule);
+
+  assert.deepEqual(plan.dates, ['2026-08-18', '2026-08-19', '2026-08-20']);
+  assert.equal(plan.totalCount, 3);
+  assert.equal(plan.includesTemplate, true);
+  assert.equal(plan.generatedCount, 2, 'şablon dışında yalnızca iki yeni görev oluşur');
+});
+
+test('önizleme sekiz yinelemeye kadar listelenir ve kalan sayı bildirilir', () => {
+  const rule = { freq: 'DAILY', interval: 1, count: 12 };
+  const plan = summarizeRecurrencePlan(TEMPLATE, rule, { previewLimit: 8 });
+  assert.equal(plan.preview.length, 8);
+  assert.equal(plan.hiddenCount, 4);
+  assert.equal(plan.totalCount, 12);
+});
+
+test('sınırsız kural toplam sayı uydurmaz', () => {
+  const plan = summarizeRecurrencePlan(TEMPLATE, { freq: 'WEEKLY', interval: 1 }, { previewLimit: 4 });
+  assert.equal(plan.unbounded, true);
+  assert.equal(plan.totalCount, 0);
+  assert.equal(plan.generatedCount, 0);
+  assert.equal(plan.preview.length, 4);
+});
+
+test('geçersiz kural ya da başlangıçsız şablon boş özet verir', () => {
+  assert.deepEqual(summarizeRecurrencePlan(TEMPLATE, null).dates, []);
+  assert.deepEqual(summarizeRecurrencePlan({}, { freq: 'DAILY' }).dates, []);
+  assert.deepEqual(summarizeRecurrencePlan(TEMPLATE, { freq: 'SAATLIK' }).dates, []);
+});
+
+test('UNTIL sınırı özetteki toplam sayıyı belirler', () => {
+  const plan = summarizeRecurrencePlan(TEMPLATE, { freq: 'DAILY', interval: 7, until: '2026-09-15' });
+  assert.equal(plan.unbounded, false);
+  assert.deepEqual(plan.dates, ['2026-08-18', '2026-08-25', '2026-09-01', '2026-09-08', '2026-09-15']);
+  assert.equal(plan.totalCount, 5);
+  assert.equal(plan.generatedCount, 4);
+});
+
+test('tekrar düzenleyicisi gün düğmelerini devre dışı bırakmaz', () => {
+  const drawer = read('src/features/task-detail/TaskDrawer.jsx');
+  assert.doesNotMatch(drawer, /disabled=\{locked\}/);
+  assert.match(drawer, /className=\{`recurrence-day\$\{active \? ' active' : ''\}/);
+  // Kaç YENİ görev oluşacağı açıkça yazılır.
+  assert.match(drawer, /recurrence-count-note/);
+  assert.match(drawer, /plan\.generatedCount/);
+});
+
+/* ── 3. Öncelik alanı ───────────────────────────────────────────── */
+
+test('görev paneli öncelik seçimi sunar', () => {
+  // Öncelik Görevler, Gantt, Kanban ve Raporlar sayfalarında GÖSTERİLİYOR ama
+  // hiçbir ekrandan TANIMLANAMIYORDU; değer her görevde varsayılan kalıyordu.
+  const drawer = read('src/features/task-detail/TaskDrawer.jsx');
+  assert.match(drawer, /import \{ PRIORITIES, resolvePriority \} from '\.\.\/\.\.\/domain\/constants\/index\.js'/);
+  assert.match(drawer, /save\(\{ priority: priority\.id \}\)/);
+  assert.match(drawer, /aria-label="Görev önceliği"/);
+  for (const priority of Object.values(PRIORITIES)) {
+    assert.ok(priority.label.length > 0);
+  }
+});
+
+/* ── 4. Başlıklar ve arayüz dili ────────────────────────────────── */
+
+test('arayüz başlıkları büyük harfe zorlanmaz', () => {
+  const files = ['src/app/globals.css', 'src/app/styles/features.css', 'src/app/styles/dashboard.css',
+    'src/app/styles/shell.css', 'src/app/styles/experience.css', 'src/app/styles/components.css'];
+  for (const file of files) {
+    assert.doesNotMatch(read(file), /text-transform:\s*uppercase/, `${file} büyük harfe zorlamamalı`);
+  }
+  for (const file of ['src/features/team/TeamView.jsx', 'src/features/reports/ReportsView.jsx',
+    'src/features/task-detail/TaskDrawer.jsx', 'src/components/ui-extras.jsx']) {
+    assert.doesNotMatch(read(file), /textTransform: 'uppercase'/, `${file} büyük harfe zorlamamalı`);
+  }
+});
+
+test('sayfa başlıkları degrade doldurulmuş metin kullanmaz', () => {
+  // Degrade metin küçük puntoda kontrastı düşürüyor ve açık temada soluk
+  // görünüyordu; ayrıca `-webkit-text-fill-color` seçim rengini bozuyordu.
+  const css = read('src/app/globals.css');
+  assert.doesNotMatch(css, /-webkit-text-fill-color:\s*transparent/);
+  assert.match(css, /\.hero-title\s*\{[^}]*color:\s*var\(--text\);/s);
+});
+
+test('arayüz metinlerinde yabancı sözcük kullanılmaz', () => {
+  const views = ['src/features/dashboard/DashboardView.jsx', 'src/features/reports/ReportsView.jsx',
+    'src/components/shell/WelcomeScreen.jsx'];
+  for (const file of views) {
+    const source = read(file);
+    // Kullanıcıya görünen metinler: `title`, `subtitle`, `label`, `desc`.
+    const visible = [...source.matchAll(/(?:title|subtitle|label|desc)[=:]\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
+    for (const text of visible) {
+      assert.doesNotMatch(text, /\btrend\w*/i, `${file}: "${text}" Türkçe karşılığını kullanmalı (eğilim)`);
+    }
+  }
+});
+
+test('grafik eksen etiketleri SVG dışında, sabit boyutlu metin olarak çizilir', () => {
+  // SVG kart genişliğine göre ölçeklendiği için içerideki `font-size` de
+  // ölçekleniyor, geniş kartlarda etiketler devasa görünüyordu.
+  const ui = read('src/components/ui.jsx');
+  const reports = read('src/features/reports/ReportsView.jsx');
+  assert.match(ui, /className="chart-axis-labels"/);
+  assert.match(reports, /className="chart-axis-labels"/);
+  assert.doesNotMatch(ui, /<text key=\{i\} x=\{pts\[i\]\[0\]\}/);
+  assert.match(read('src/app/styles/components.css'), /\.chart-axis-labels > span\s*\{[^}]*font-size:\s*11px;/s);
+});
+
+test('kenar çubuğundaki kullanıcı adı tek satıra sıkıştırılıp kırpılmaz', () => {
+  const css = read('src/app/globals.css');
+  assert.match(css, /\.user-chip \.name\s*\{[^}]*white-space:\s*normal;[^}]*-webkit-line-clamp:\s*2;/s);
+});
