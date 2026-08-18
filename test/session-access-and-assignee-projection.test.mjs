@@ -36,12 +36,13 @@ test('snapshot API completes assignees only for already-authorized visible task 
   const repositorySource = read('src/server/repository/projectedSqlAppRepository.js');
   const routeSource = read('src/app/api/mergen-rota/snapshot/route.js');
 
-  assert.match(repositorySource, /const snapshot = await baseRepository\.readSnapshot\(\);/);
+  assert.match(repositorySource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(\);/);
   assert.match(repositorySource, /taskIds = \[\.\.\.new Set\(\(snapshot\.tasks \|\| \[\]\)/);
   assert.match(repositorySource, /request\.input\('taskIds', sql\.NVarChar\(sql\.MAX\), taskIds\.join\(','\)\);/);
   assert.match(repositorySource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
-  assert.match(repositorySource, /return applyTaskAssigneeProjection\(snapshot, assigneeRows\);/);
-  assert.match(routeSource, /createProjectedSqlAppRepository\(\)\.loadSnapshot\(\)/);
+  assert.match(repositorySource, /return \{ snapshot: applyTaskAssigneeProjection\(snapshot, assigneeRows\), auth \};/);
+  assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
+  assert.match(routeSource, /await repository\.loadSnapshotWithSession\(\);/);
 });
 
 test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reason', () => {

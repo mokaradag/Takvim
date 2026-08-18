@@ -50,7 +50,7 @@ test('sorumlu aramasında Enter tuşu hızlı görev formunu yanlışlıkla gön
   );
 });
 
-test('üst çubuk yedigeni ve proje kimliği tek shell sahibi altında PR28 son durumunu korur', () => {
+test('üst çubuk yedigeni ve proje kimliği tek shell sahibi altında kabul edilen son durumu korur', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/styles/shell.css');
   const globalCss = read('src/app/globals.css');

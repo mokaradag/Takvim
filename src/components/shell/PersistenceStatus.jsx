@@ -12,10 +12,13 @@ export function PersistenceStatus() {
     dataStatus,
     hasLoadedOnce,
     clearPersistenceError,
+    hasPendingChanges,
+    retryFailedChanges,
     reloadData
   } = useDataLifecycle();
   const [showSaved, setShowSaved] = useState(false);
   const [reloading, setReloading] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     if (!lastSavedAt) return undefined;
@@ -38,6 +41,18 @@ export function PersistenceStatus() {
       clearPersistenceError();
     } finally {
       setReloading(false);
+    }
+  };
+
+  // Reddedilen yama saklandı: kullanıcı düzenlemesini yeniden yazmak zorunda
+  // kalmadan gönderebilir. "Verileri yeniden yükle" ise açık bir vazgeçmedir.
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      const results = await retryFailedChanges();
+      if ((results || []).every((result) => result?.ok)) clearPersistenceError();
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -65,8 +80,13 @@ export function PersistenceStatus() {
             </div>
           )}
           <div className="row" style={{ gap: 7, justifyContent: 'flex-end' }}>
+            {hasPendingChanges() && (
+              <button type="button" className="btn primary sm" onClick={retry} disabled={retrying || reloading}>
+                {retrying ? 'Gönderiliyor...' : 'Yeniden dene'}
+              </button>
+            )}
             {details.canReload && (
-              <button type="button" className="btn primary sm" onClick={reload} disabled={reloading}>
+              <button type="button" className="btn sm" onClick={reload} disabled={reloading || retrying}>
                 {reloading ? 'Yükleniyor...' : 'Verileri yeniden yükle'}
               </button>
             )}

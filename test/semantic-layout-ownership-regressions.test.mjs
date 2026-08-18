@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Focused guards for the four Codex P2 review findings addressed on PR #31.
+// Focused guards for semantic layout ownership: feature CSS owns sizing and
+// stacking instead of inline style overrides.
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function read(relativePath) {

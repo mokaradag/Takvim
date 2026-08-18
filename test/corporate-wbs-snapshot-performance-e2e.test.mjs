@@ -18,7 +18,10 @@ import assert from 'node:assert/strict';
 import sql from 'mssql';
 
 import { createActualStack, corporateSeed } from './helpers/actualStack.mjs';
-import { resetCorporateWbsSyncScheduleForTests } from '../src/server/repository/corporateWbsSyncSchedule.js';
+import {
+  resetCorporateWbsSyncScheduleForTests,
+  whenCorporateWbsSyncSettled
+} from '../src/server/repository/corporateWbsSyncSchedule.js';
 
 const MERGE_STATEMENT = 'OPENJSON(@payload)';
 const SOURCE_STATEMENT = 'WBS element';
@@ -206,25 +209,35 @@ test('kaynak erişilemediğinde tazelik penceresi ilerletilmez', async () => {
     stack.db.corporateWbsRows = null; // kaynak düşer
     resetStatements(stack);
     await stack.reload();
+    // Depoda kullanılabilir bir ağaç olduğu için tazeleme arka planda yürür;
+    // istek bekletilmez (bkz. corporateWbsSyncSchedule kural 3).
+    await whenCorporateWbsSyncSettled();
     assert.ok(countStatements(stack, SOURCE_STATEMENT) >= 1, 'başarısız tur kaynağı denemelidir');
 
     // Kaynak geri gelir: pencere ilerletilmediği için bir sonraki istek dener.
+    // Başarısızlık sonrası üstel bekleme uygulanır; zamanlayıcı sıfırlanarak
+    // bekleme süresinin dolduğu an benzetilir.
+    resetCorporateWbsSyncScheduleForTests();
     const rows = cn43nRows();
     rows.find((row) => row['WBS element'] === 'P4417041.02.03').Name = 'Aktivite 2.3 (revize)';
     stack.db.corporateWbsRows = rows;
 
     resetStatements(stack);
     await stack.reload();
+    await whenCorporateWbsSyncSettled();
     assert.ok(countStatements(stack, SOURCE_STATEMENT) >= 1, 'başarısızlık sonrası kaynak yeniden okunmalıdır');
     assert.equal(countStatements(stack, MERGE_STATEMENT), 1, 'kaynak döndüğünde birleştirme yapılmalıdır');
 
-    const renamed = stack.projectWbs(stack.project('P4417041').id).find((node) => node.code === 'P4417041.02.03');
-    assert.equal(renamed.name, 'Aktivite 2.3 (revize)');
-
-    // Başarılı tur penceresi ilerletir: sonraki istek kaynağa hiç gitmez.
+    // Tazeleme arka planda yürüdüğü için o isteğin anlık görüntüsü henüz eski
+    // ağacı taşır; yeni ad bir sonraki istekte görünür. Aynı istek başarılı turun
+    // pencereyi ilerlettiğini de doğrular: kaynağa hiç gidilmez.
     resetStatements(stack);
     await stack.reload();
+    await whenCorporateWbsSyncSettled();
     assert.equal(countStatements(stack, SOURCE_STATEMENT), 0);
+
+    const renamed = stack.projectWbs(stack.project('P4417041').id).find((node) => node.code === 'P4417041.02.03');
+    assert.equal(renamed.name, 'Aktivite 2.3 (revize)');
   } finally {
     console.warn = originalWarn;
     await stack.dispose();

@@ -184,39 +184,63 @@ export function Sparkline({ values, color = 'var(--accent)', width = 100, height
 }
 
 // ── Donut chart (SVG) — with click-to-select + bounce animation ───
-export function Donut({ data, size = 180, thickness = 22, onSegmentClick, selected = null }) {
-  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+/**
+ * Halka grafiği.
+ *
+ * Dilimler `strokeDasharray` ile çizilir; bu yüzden veri kümesindeki değerler
+ * toplamı halkanın 360 derecesini temsil eder. Çağıran tarafın kovaları
+ * birbirini dışlamıyorsa (aynı görev iki kovada) dilimler halkayı aşıp
+ * birbirinin üzerine binerdi. Buna karşı üç koruma vardır:
+ *  - Negatif ve sayı olmayan değerler sıfıra çekilir.
+ *  - Toplam uzunluk çevre ile sınırlanır; hiçbir dilim halkayı aşamaz.
+ *  - Vurgu/seçim kalınlaşması sabit bir tavana bağlıdır ve `viewBox` payı bu
+ *    tavana göre hesaplanır; böylece dilimler kırpılmaz.
+ */
+const DONUT_EMPHASIS = 4;
+const DONUT_LIFT = 9;
+
+export function Donut({ data, size = 180, thickness = 22, onSegmentClick, selected = null, label = 'Dağılım grafiği' }) {
+  const [hover, setHover] = React.useState(null);
+  const values = (data || []).map((d) => (Number.isFinite(d?.value) && d.value > 0 ? d.value : 0));
+  const total = values.reduce((sum, value) => sum + value, 0);
   const r = size / 2 - thickness / 2;
   const c = 2 * Math.PI * r;
-  const [hover, setHover] = React.useState(null);
-  const [pulseI, setPulseI] = React.useState(null);
+  const pad = DONUT_LIFT + DONUT_EMPHASIS + 2;
+
   let acc = 0;
-  const segs = data.map((d, i) => {
-    const len = (d.value / total) * c;
-    const dash = `${len} ${c - len}`;
-    const offset = -acc;
-    const midDist = acc + len / 2;
-    const midAngle = (midDist / c) * 360 - 90;
+  const segs = (data || []).map((d, i) => {
+    // Oran her zaman toplam üzerinden alınır: dilimlerin toplamı çevreyi aşamaz.
+    const len = total > 0 ? (values[i] / total) * c : 0;
+    const dash = `${len} ${Math.max(0, c - len)}`;
+    const midAngle = ((acc + len / 2) / c) * 360 - 90;
+    const seg = { d, dash, offset: -acc, i, midAngle, len };
     acc += len;
-    return { d, dash, offset, i, midAngle };
+    return seg;
   });
+
   return (
-    <svg width={size} height={size} viewBox={`-10 -10 ${size + 20} ${size + 20}`} style={{ display: 'block', overflow: 'visible' }}>
+    <svg
+      width={size}
+      height={size}
+      viewBox={`${-pad} ${-pad} ${size + pad * 2} ${size + pad * 2}`}
+      style={{ display: 'block' }}
+      role="img"
+      aria-label={label}
+    >
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg-elev-2)" strokeWidth={thickness} />
-      {segs.map(({ d, dash, offset, i, midAngle }) => {
-        const grow = hover === i;
+      {segs.map(({ d, dash, offset, i, midAngle, len }) => {
+        if (len <= 0) return null;
         const isSelected = selected === i;
+        const emphasised = hover === i || isSelected;
         const rad = midAngle * Math.PI / 180;
-        const tx = isSelected ? Math.cos(rad) * 10 : 0;
-        const ty = isSelected ? Math.sin(rad) * 10 : 0;
-        const pulse = pulseI === i;
-        const strokeW = (grow || isSelected ? thickness + 4 : thickness) + (pulse ? 8 : 0);
+        const tx = isSelected ? Math.cos(rad) * DONUT_LIFT : 0;
+        const ty = isSelected ? Math.sin(rad) * DONUT_LIFT : 0;
         return (
-          <g key={i} style={{ transform: `translate(${tx}px, ${ty}px)`, transition: 'transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
+          <g key={d.label ?? i} style={{ transform: `translate(${tx}px, ${ty}px)`, transition: 'transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
             <circle
               cx={size / 2} cy={size / 2} r={r}
               fill="none" stroke={d.color}
-              strokeWidth={strokeW}
+              strokeWidth={emphasised ? thickness + DONUT_EMPHASIS : thickness}
               strokeDasharray={dash}
               strokeDashoffset={offset}
               transform={`rotate(-90 ${size / 2} ${size / 2})`}
@@ -226,12 +250,10 @@ export function Donut({ data, size = 180, thickness = 22, onSegmentClick, select
               onMouseLeave={() => setHover(null)}
               onClick={(e) => {
                 e.stopPropagation();
-                setPulseI(i);
-                setTimeout(() => setPulseI(null), 460);
                 if (onSegmentClick) onSegmentClick(i, d);
               }}
             >
-              <title>{`${d.label}: ${d.value} (${Math.round(d.value / total * 100)}%)`}</title>
+              <title>{`${d.label}: ${d.value} (${total > 0 ? Math.round(values[i] / total * 100) : 0}%)`}</title>
             </circle>
           </g>
         );
@@ -282,6 +304,10 @@ export function BarRows({ data, maxLabel = 110, animated = false, tipFormat }) {
 export function AreaChart({ data, width = 600, height = 160, color = 'var(--accent)', labels = [], animated = false }) {
   const [hover, setHover] = React.useState(null);
   const svgRef = React.useRef(null);
+  // Degrade kimliği belge genelinde benzersizdir. Sabit bir kimlikle aynı
+  // sayfadaki ikinci grafik, `url(#...)` ilk tanımı çözdüğü için birincinin
+  // rengiyle boyanıyordu.
+  const gradientId = `areagrad-${React.useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   if (!data || !data.length) return null;
   const min = Math.min(...data, 0);
   const max = Math.max(...data, 1);
@@ -325,7 +351,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
         onMouseLeave={onLeave}
       >
         <defs>
-          <linearGradient id="areagrad" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity="0.22" />
             <stop offset="100%" stopColor={color} stopOpacity="0" />
           </linearGradient>
@@ -333,7 +359,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
         {gridLines.map((g, i) => (
           <line key={i} x1={pad} x2={width - pad} y1={pad + g * innerH} y2={pad + g * innerH} stroke="var(--border)" strokeDasharray="3 3" />
         ))}
-        <polygon points={area} fill="url(#areagrad)" className={animated ? 'chart-area' : ''} />
+        <polygon points={area} fill={`url(#${gradientId})`} className={animated ? 'chart-area' : ''} />
         <polyline
           points={polyline}
           fill="none"

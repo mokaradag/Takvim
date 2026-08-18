@@ -134,4 +134,4 @@ When replacing an old rule, remove the superseded rule rather than leaving both 
 5. Add or update a regression test for the behavior/semantic contract.
 6. Run the automated quality suite and the relevant checks in `docs/VISUAL-SMOKE-TESTS.md`.
 
-Exact CSS values may be tested when they intentionally define an accepted visual regression contract, such as the PR #28 topbar emblem position and Dashboard status-card dimensions.
+Exact CSS values may be tested when they intentionally define an accepted visual regression contract, such as the topbar emblem position and Dashboard status-card dimensions.

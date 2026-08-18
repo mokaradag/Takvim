@@ -2,6 +2,7 @@ import {
   AppRepositoryError,
   REPOSITORY_ERROR_CODES
 } from '../contracts/appRepository.js';
+import { applyProjectTagPropagation, planProjectTagPropagation } from '../../domain/tags/index.js';
 import {
   BASELINES,
   CALENDARS,
@@ -119,13 +120,30 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
       const normalized = normalizeChanges(changes);
       const beforeTasks = snapshot.tasks || [];
       const beforeTasksById = new Map(beforeTasks.map((task) => [task.id, task]));
+      const beforeProjectsById = new Map((snapshot.projects || []).map((project) => [project.id, project]));
       const candidate = clone(snapshot);
       candidate.projects = applyCollectionChanges(candidate.projects || [], normalized.projectUpserts, normalized.projectDeletes);
       const invalidated = invalidatedPredecessorIds(beforeTasks, normalized.taskUpserts, normalized.taskDeletes);
       const appliedTasks = applyCollectionChanges(candidate.tasks || [], normalized.taskUpserts, normalized.taskDeletes, { prependNew: true });
       candidate.tasks = removePredecessorReferences(appliedTasks, invalidated);
       candidate.wbs = applyCollectionChanges(candidate.wbs || [], normalized.wbsUpserts, normalized.wbsDeletes);
-      const requestedTaskIds = new Set(normalized.taskUpserts.map((task) => task.id));
+      // Etiket kataloğu değiştiğinde görev anahtar sözcükleri Gerçek Sistem'de
+      // olduğu gibi DEPO sınırında hizalanır; iki veri modu aynı planı uygular.
+      const propagatedTaskIds = new Set();
+      for (const project of normalized.projectUpserts || []) {
+        const before = beforeProjectsById.get(project.id);
+        const plan = planProjectTagPropagation({
+          storedTags: before?.tagCatalog ?? before?.tags ?? [],
+          nextTags: project.tags,
+          renames: project.tagRenames
+        });
+        const nextTasks = applyProjectTagPropagation(candidate.tasks, project.id, plan);
+        for (let index = 0; index < nextTasks.length; index += 1) {
+          if (nextTasks[index] !== candidate.tasks[index]) propagatedTaskIds.add(nextTasks[index].id);
+        }
+        candidate.tasks = nextTasks;
+      }
+      const requestedTaskIds = new Set([...normalized.taskUpserts.map((task) => task.id), ...propagatedTaskIds]);
       const committedTaskUpserts = candidate.tasks.filter((task) => (
         requestedTaskIds.has(task.id) || dependenciesChanged(beforeTasksById.get(task.id), task)
       ));

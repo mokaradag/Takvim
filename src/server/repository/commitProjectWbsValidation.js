@@ -1,4 +1,8 @@
+import { TAG_COLOR_KEYS, TAG_ICON_KEYS } from '../../domain/tags/index.js';
+
 const PROJECT_COLORS = new Set(['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan']);
+const TAG_COLORS = new Set(TAG_COLOR_KEYS);
+const TAG_ICONS = new Set(TAG_ICON_KEYS);
 const SQL_INT_MIN = -2147483648;
 const SQL_INT_MAX = 2147483647;
 const SQL_SICIL_MAX = 2147483647;
@@ -73,9 +77,20 @@ function validateProjects(changes) {
     for (let tagIndex = 0; tagIndex < (project.tags || []).length; tagIndex += 1) {
       const tag = project.tags[tagIndex];
       const path = `${basePath}.tags[${tagIndex}]`;
-      const tagIssue = validateText(tag, path, 'Proje etiketi', 255, { required: true });
+      const name = typeof tag === 'string' ? tag : tag?.name;
+      const tagIssue = validateText(name, path, 'Proje etiketi', 255, { required: true });
       if (tagIssue) return tagIssue;
-      const key = tag.trim().normalize('NFKC').toLocaleLowerCase('tr-TR');
+      // Renk ve simge kapalı kümelerdir: bilinmeyen bir anahtar arayüzde boş
+      // kutu bırakır ve kalıcı kayıtta anlamsız bir değer olarak kalırdı.
+      if (typeof tag === 'object' && tag !== null) {
+        if (text(tag.color) && !TAG_COLORS.has(text(tag.color))) {
+          return issue('PROJECT_TAG_COLOR_INVALID', `${path}.color`, 'Geçerli bir etiket rengi seçilmelidir.');
+        }
+        if (text(tag.icon) && !TAG_ICONS.has(text(tag.icon))) {
+          return issue('PROJECT_TAG_ICON_INVALID', `${path}.icon`, 'Geçerli bir etiket simgesi seçilmelidir.');
+        }
+      }
+      const key = name.trim().normalize('NFKC').toLocaleLowerCase('tr-TR');
       if (seenTags.has(key)) {
         return issue('PROJECT_TAG_DUPLICATE', path, 'Aynı proje etiketi birden fazla kez kullanılamaz.');
       }

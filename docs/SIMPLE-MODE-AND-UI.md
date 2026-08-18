@@ -52,7 +52,103 @@ Proje çalışma alanında proje bağlamı üst çubuğun gerçek yatay ve dikey
 
 hizalanır.
 
-Durum dağılımı halka grafiği ve legend yerleşimi, PR #28 ile kabul edilen boyut ve 1280 px davranışını korur. Dashboard yapısı `dashboard-main-grid`, `dashboard-status-card`, `dashboard-status-body`, `dashboard-status-chart` ve `dashboard-status-legend` gibi semantik sınıflarla tanımlanır; inline stil metni veya kart sırası üzerinden çıkarım yapılmaz. Bu sözleşmenin sahibi `src/app/styles/dashboard.css` dosyasıdır.
+Durum dağılımı halka grafiği ve legend yerleşimi, kabul edilen boyut ve 1280 px davranışını korur. Dashboard yapısı `dashboard-main-grid`, `dashboard-status-card`, `dashboard-status-body`, `dashboard-status-chart` ve `dashboard-status-legend` gibi semantik sınıflarla tanımlanır; inline stil metni veya kart sırası üzerinden çıkarım yapılmaz. Bu sözleşmenin sahibi `src/app/styles/dashboard.css` dosyasıdır.
+
+### Durum dağılımı kovaları birbirini dışlar
+
+Halka grafiği yalnızca birbirini dışlayan kovalarla doğru çizilir. Kovalar
+`src/features/dashboard/statusDistribution.js` içinde, uygulamanın her yerinde
+kullanılan `getStatus` üzerinden türetilir: bir görev **tam olarak bir** kovaya
+girer ve dilimlerin toplamı her zaman görev sayısına eşittir.
+
+Önceki hesap "Yapılacak" ve "Devam eden" kovalarını durum alanından, "Geciken"
+kovasını hedef tarihinden türetiyordu. Geciken bir görev aynı anda iki kovaya
+birden düştüğü için dilimlerin toplamı görev sayısını aşıyor (44 görev için 54
+birim), halka 360 dereceyi geçip kendi üzerine biniyordu.
+
+Üst rozetler (KPI kartları) bilinçli olarak farklı okur: orada bir görev hem
+"devam eden" hem "geciken" sayılabilir, çünkü kartlar `selectTaskStats`
+çıktısını yansıtır. İki okuma karıştırılmamalıdır.
+
+Dilim seçimi sıra numarasıyla değil **kova kimliğiyle** saklanır: görev listesi
+kısaldığında saklanan sıra numarası boşa düşüyor ve merkez etiket
+`undefined.color` okumasıyla çöküyordu.
+
+### Kişi ölçüm tabloları
+
+Özet **Ekip iş yükü** ve Raporlar **Kaynak kullanımı** kartları ortak
+`PeopleMetricTable` bileşenini kullanır. Ad esnek sütunu alır ve altında birim
+bilgisi gösterilir; kartın kalan yatay alanı boş bırakılmak yerine sayısal
+sütunlara ayrılır (iş yükünde toplam/açık/biten/geciken, kaynak kullanımında
+kalan saat/görev/boşta kapasite/haftalık ortalama/doluluk). Önceki tek çubuklu
+düzen adı sabit 110 pikselik bir sütuna sıkıştırıyor, uzun kurumsal adlar üç
+noktaya kırpılıyordu.
+
+Ad **kırpılmaz**: gerekirse satıra sarar ve satır yüksekliği büyür. Tablonun
+varlık nedeni uzun kurumsal adların okunabilir olmasıdır; üç noktalı kırpma
+korunsaydı ilk sütun daraldığı anda aynı sorun geri gelirdi. Satır ipuçları
+`asChild` ile doğrudan satıra bağlanır: varsayılan sarmalayıcı satırı bir
+`inline-flex` `span` içine alıyor, `.pm-row` artık `.pm-table`'ın doğrudan
+çocuğu olmadığı için ızgara sütunları satırdan satıra kayıyordu.
+
+Kaynak kullanımındaki **haftalık ortalama** ve boşta kapasite yalnızca altı
+haftalık rapor ufkuna düşen işi sayar: kalan işin tamamı kapasiteyle
+karşılaştırılırsa, önümüzdeki bir yıla yayılmış 240 saatlik yük de "haftada 40
+saat" gibi görünüyordu. İş, planlanan aralığın ufukla kesişimi oranında
+sayılır; planlanmamış ve gecikmiş işin kalanı bugünün yüküdür.
+
+## Karşılama ekranı
+
+Ekran, doğrulanmış oturumdan gelen kullanıcı fotoğrafı (yoksa baş harf yedeği),
+adı ve departmanıyla kişiselleştirilmiştir. Kimlik yalnızca **gösterim**
+amaçlıdır; hiçbir yetki kararı buradan türetilmez.
+
+Saate göre selamlama **yalnızca tarayıcıda** hesaplanır. Bu istemci bileşeni
+sunucuda da ön-render edilebilir; `new Date()` orada sunucu saat diliminde
+okunur ve iki taraf farklı dilime düşerse hidrasyon uyuşmazlığı ve yanlış
+selamlama oluşurdu. Bağlanana kadar dilimden bağımsız bir metin gösterilir.
+
+Ölçüm kartları **portföyün tamamını** özetler (`usePortfolioTaskStats`), çalışma
+alanı seçimini değil: başlık portföy özeti dediği hâlde, son çalışma alanı tek
+bir proje olan kullanıcıya o projenin sayıları gösteriliyordu.
+
+Özellik kartları bir **gezinme niyeti** taşıyabilir. "Sürükle-bırak iş dağılım
+ağacı" kartı `wbs` sayfasını `tree` sekmesiyle açar; niyet olmasaydı kart adını
+taşıdığı ağaca değil, Proje Tanımı sekmesine düşerdi.
+
+## Sütun süzgeçlerinde canlı arama
+
+Çoklu (`multi`) ve tekli (`single`) sütun süzgeçleri, seçenek sayısı
+`OPTION_SEARCH_THRESHOLD` değerini (7) aştığında listenin üstünde bir arama
+alanı gösterir. Görevler sayfasındaki **Proje**, **Sorumlu**, **Etiket**,
+**Durum**, **Öncelik**; Ekip sayfasındaki kırılım süzgeçleri ve Gantt
+sayfasındaki **Sorumlu** süzgeci aynı bileşeni kullandığı için davranış her
+yerde aynıdır.
+
+Eşleştirme kuralı `src/components/columnFilterSearch.js` içinde saf bir işlev
+olarak yaşar ve seçeneğin etiketi, değeri, açıklaması ve `keywords` alanı
+üzerinde çalışır. Kişi süzgeçleri sicil, kullanıcı adı, unvan ve birimi;
+proje süzgeci proje kodu ve türünü anahtar sözcük olarak taşır — binlerce
+kayıtlık bir dizinde ad tek başına yeterli bir arama anahtarı değildir.
+
+Karşılaştırma **iki katlamayla** yapılır. Türkçe katlama insan adları için
+doğrudur: `toLowerCase()` "İ/ı" ayrımı yüzünden kurumsal adlarda yanlış sonuç
+verir. Ancak aynı yardımcı proje kodu, Sicil ve kullanıcı adı gibi ASCII
+tanımlayıcıları da arar; `MIR` kodu Türkçe katlamada `mır` olur ve kullanıcı
+`mir` yazdığında hiç eşleşmezdi. Bu yüzden her iki katlama da denenir.
+
+Süzgeç **değeri** görünen ad değil, kararlı kimliktir (proje kimliği, Sicil).
+Ada göre süzülseydi aynı ada sahip iki proje ya da iki çalışan tek seçenekte
+birleşir; kullanıcı benzersiz kodu arayıp birini seçse bile sonuçta ikisi de
+listelenirdi.
+
+Tek seçimli süzgeçte **Enter**, arama tek bir seçeneğe indiyse onu uygular.
+Genel `apply()` çağrısı aranan değeri değil, önceden seçili radyo değerini
+uyguluyordu: kullanıcı arayıp Enter'a bastığında süzgeç eskisi gibi kalıyordu.
+
+**Seçili değerler aramada elense bile listede kalır.** Aksi hâlde kullanıcı
+arama yazdığında neyi seçtiğini göremez ve farkında olmadan seçimini
+kaldırabilirdi.
 
 ## Uzun listeler için aranabilir seçim bileşeni
 
@@ -147,13 +243,33 @@ Dağılım ağacı sekmesinde dikey alan tabloya ayrılır: üst bilgi tek satı
 
 Ağaç denetimleri `Tümünü aç`, `Tümünü kapat` ve `Hiyerarşi` (1–5 arası seviye ya da tüm seviyeler) düğmeleridir. Açılış derinliği ikidir; kurumsal projelerde ağacın tamamını açık başlatmak on binlerce satırın ilk çizimde oluşturulması demekti.
 
+### Sürükle-bırak hiyerarşi düzenleme
+
+Düzenlenebilir projelerde satırlar sürüklenebilir. İmlecin satır içindeki dikey
+konumu bırakma niyetini belirler: üst/alt kenar şeridi (%28) kardeş sırası,
+orta bölge alt düğüm yapar. Kural ihlali olan bir bırakma kırmızı vurgu ve
+gerekçe ipucuyla gösterilir, uygulanmaz. Kapalı bir düğümün üzerinde kısa süre
+beklemek alt ağacı kendiliğinden açar.
+
+Kural mantığı görünümden ayrıdır (`src/features/wbs/wbsDragPolicy.js`) ve tek
+başına sınanır. Fare kullanmadan taşımak için satırdaki **Taşı** düğmesi
+korunmuştur.
+
+Alt düğüm ekleme, ad değiştirme ve silme artık engelleyici `prompt()`/`confirm()`
+pencereleri kullanmaz: ekleme ve ad değişikliği satır içi bir alanda (Enter
+kaydeder, Esc vazgeçer), silme ise satır üzerinde onay ister.
+
+Ağaç görünüm durumu (açık düğümler, paneller, seçimler) yalnızca **proje
+değiştiğinde** sıfırlanır. Önceden her düzenleme yeni bir satır dizisi ürettiği
+için ağaç varsayılan derinliğe kapanıyordu.
+
 ## Vurgu rengi adları
 
 Ayarlar sayfasındaki vurgu rengi kataloğu Türkçedir. `Amber` yerine proje renk kataloğuyla aynı sözcük olan `Kehribar` kullanılır.
 
 ## Kurumsal iş dağılım ağacı salt okunurdur
 
-Gerçek Sistem modunda kurumsal projelerin İş Dağılım Ağacı sekmesi düzenleme eylemlerini (Alt ekle / Ad / Taşı / Sil) hiç göstermez ve yapının CN43N kaynağından beslendiğini açıklayan bir bilgi kartı sunar. Satırlarda kaynaktan gelen seviye, PYP kodu, eleman türü ve durum bilgisi gösterilir. Görevleri bu düğümlere atamak ve düğümler arasında taşımak yine mümkündür; görev-WBS bağı MERGEN Rota verisidir. Demo modunda kurumsal kaynak bulunmadığı için örnek projelerin ağacı düzenlenebilir kalır.
+Gerçek Sistem modunda kurumsal projelerin İş Dağılım Ağacı sekmesi düzenleme eylemlerini (Alt ekle / Ad / Taşı / Sil) hiç göstermez, satırlar sürüklenemez ve yapının CN43N kaynağından beslendiğini açıklayan bir bilgi kartı sunar. Satırlarda kaynaktan gelen seviye, PYP kodu, eleman türü ve durum bilgisi gösterilir. Görevleri bu düğümlere atamak ve düğümler arasında taşımak yine mümkündür; görev-WBS bağı MERGEN Rota verisidir. Demo modunda kurumsal kaynak bulunmadığı için örnek projelerin ağacı düzenlenebilir kalır.
 
 Kaydetme bildirimi artık sabit "Kaydetme hatası" metni yerine sunucunun gerçek iletisini, hata kodunu ve varsa alan/yol bilgisini gösterir. Sürüm/eşzamanlılık hatalarında (`CONFLICT`, `UPSERT_CREATE_COLLISION`, `UPSERT_TARGET_MISSING`) **Verileri yeniden yükle** eylemi sunulur.
 

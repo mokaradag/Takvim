@@ -4,7 +4,8 @@ import { Icons } from '../../components/icons';
 import { resolvePriority } from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
-import { AvatarStack, Kw } from '../../components/ui';
+import { AvatarStack } from '../../components/ui';
+import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton, AnimatedNumber } from '../../components/ui-extras';
 import { useTasks, useTaskActions } from '../../state/hooks';
 
@@ -28,8 +29,11 @@ export function KanbanView() {
   const grouped = useMemo2(() => {
     const map = { todo: [], in_progress: [], done: [] };
     tasks.forEach(t => {
-      const s = t.status || 'todo';
-      map[s].push(t);
+      // Panoda yalnızca üç sütun vardır. Kalıcı kayıttan gelen tanınmayan bir
+      // durum (eski şema, dış aktarım) doğrudan indekslenirse `map[s]` tanımsız
+      // olur ve sayfa tümüyle çökerdi; bilinmeyen durum "Yapılacak" sayılır.
+      const status = Object.prototype.hasOwnProperty.call(map, t.status) ? t.status : 'todo';
+      map[status].push(t);
     });
     return map;
   }, [tasks]);
@@ -112,7 +116,7 @@ export function KanbanView() {
                   >
                     <div className="k-title">{t.task}</div>
                     <div className="k-meta">
-                      <Kw color={t.color}>{t.keyword}</Kw>
+                      <TaskKeyword task={t} />
                       <span className="k-project">{t.proje}</span>
                     </div>
                     <div className="k-bottom">

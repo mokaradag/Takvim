@@ -161,8 +161,8 @@ npm run start -- -H 0.0.0.0 -p 8008
 
 ## Yapı
 
-- `src/domain` — Project, Task, Dependency, Person, WBS, Baseline, calendar kavramları ve Gerçek Sistem kimlik kuralları
-- `src/scheduling` — tarih, çalışma günü, dependency ve saf CPM hesapları
+- `src/domain` — Project, Task, Dependency, Person, WBS, Baseline, etiket kataloğu, calendar kavramları ve Gerçek Sistem kimlik kuralları
+- `src/scheduling` — tarih, çalışma günü, dependency, tekrar kuralları (RFC 5545) ve saf CPM hesapları
 - `src/data` — AppRepository sözleşmesi, Demo adapter ve Actual API adapter
 - `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı) ve durable repository
 - `src/state` — yükleme, sıralı mutation queue, Task patch coalescing ve access-aware scheduling selector'ları
@@ -182,9 +182,18 @@ Ayrıntılar:
 - `docs/WBS-AND-WORKSPACES.md`
 - `docs/SCHEDULING-DATA-MODEL.md`
 - `docs/CPM.md`
+- `docs/TAGS-AND-RECURRING-TASKS.md`
 - `docs/SIMPLE-MODE-AND-UI.md`
 - `docs/UI-STYLING-ARCHITECTURE.md`
 - `docs/VISUAL-SMOKE-TESTS.md`
+
+## Etiketler ve tekrarlayan görevler
+
+Proje etiketleri ad, renk ve simge taşıyan kontrollü bir katalogdur; ad
+değişikliği o etiketi kullanan görevlere taşınır. Tekrarlayan görevler RFC 5545
+(iCalendar) `RRULE` altkümesiyle tanımlanır: kural seri şablonunda yaşar,
+üretilen yinelemeler `recurrenceParentId` ile şablona bağlı sıradan görevlerdir.
+Ayrıntılar: `docs/TAGS-AND-RECURRING-TASKS.md`.
 
 ## Scheduling ve baseline ilkeleri
 

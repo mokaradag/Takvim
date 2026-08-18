@@ -305,7 +305,9 @@ test('tüm üretim Avatar/AvatarStack çağrıları kişi veya kanonik kimlik ta
     'src/features/gantt/GanttView.jsx',
     'src/features/simple/SimpleModePanel.jsx',
     'src/features/project/ProjectWorkspaceView.jsx',
-    'src/features/reports/ReportsView.jsx',
+    // Raporlar "Kaynak kullanımı" ve Özet "Ekip iş yükü" kartları avatarı artık
+    // ortak kişi ölçüm tablosu üzerinden çizer; kimlik güvencesi orada aranır.
+    'src/components/PeopleMetricTable.jsx',
     'src/features/kanban/KanbanView.jsx',
     'src/features/dashboard/DashboardView.jsx',
     'src/features/task-detail/TaskDrawer.jsx',

@@ -93,6 +93,8 @@ export function normalizeActualChanges(changes = {}) {
       projectId: requiredActualUuid(task.projectId, 'Görev proje kimliği'),
       wbsId: toOptionalActualUuid(task.wbsId, 'Görev WBS kimliği'),
       calendarId: toOptionalActualUuid(task.calendarId, 'Görev takvim kimliği'),
+      // Yineleme, seri şablonuna Gerçek Sistem kimliğiyle bağlanır.
+      recurrenceParentId: toOptionalActualUuid(task.recurrenceParentId, 'Tekrar şablonu kimliği'),
       status: toOptionalPersistenceStatus(task.status),
       deps: Array.isArray(task.deps) ? task.deps.map((dependency) => ({
         ...dependency,
@@ -134,6 +136,7 @@ function collectClientIds(changes = {}, map = new Map()) {
     rememberClientId(map, task?.projectId);
     rememberClientId(map, task?.wbsId);
     rememberClientId(map, task?.calendarId);
+    rememberClientId(map, task?.recurrenceParentId);
     for (const dependency of Array.isArray(task?.deps) ? task.deps : []) {
       rememberClientId(map, dependency?.id);
       rememberClientId(map, dependency?.predecessorId);
@@ -188,6 +191,7 @@ export function restoreActualCommitIds(body, changes = {}, aliases = null) {
       projectId: restoreClientId(task.projectId, map),
       wbsId: restoreClientId(task.wbsId, map),
       calendarId: restoreClientId(task.calendarId, map),
+      recurrenceParentId: restoreClientId(task.recurrenceParentId, map),
       deps: (task.deps || []).map((dependency) => ({
         ...dependency,
         predecessorId: restoreClientId(dependency.predecessorId, map)
@@ -232,6 +236,7 @@ export function restoreActualSnapshotIds(body, map) {
       projectId: restoreClientId(task.projectId, map),
       wbsId: restoreClientId(task.wbsId, map),
       calendarId: restoreClientId(task.calendarId, map),
+      recurrenceParentId: restoreClientId(task.recurrenceParentId, map),
       deps: (task.deps || []).map((dependency) => ({
         ...dependency,
         predecessorId: restoreClientId(dependency.predecessorId, map)
@@ -291,15 +296,29 @@ export function createApiRepository({
       const session = await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
       return restoreActualSessionIds(session, clientIdAliases);
     },
+    /**
+     * Anlık görüntü yanıtı oturum bağlamını da taşır ve bağlam anlık görüntüyle
+     * BİRLİKTE döndürülür. Paylaşılan tek yuvada saklansaydı, üst üste binen iki
+     * yükleme birbirinin oturumunu tüketebilir ve A anlık görüntüsü B'nin proje
+     * erişimiyle eşleşebilirdi.
+     */
     async loadSnapshot() {
-      const snapshot = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
-      return restoreActualSnapshotIds(snapshot, clientIdAliases);
+      const body = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
+      const { session, ...snapshot } = body || {};
+      const restored = restoreActualSnapshotIds(snapshot, clientIdAliases);
+      return session ? { ...restored, session: restoreActualSessionIds(session, clientIdAliases) } : restored;
     },
-    async commitChanges(changes) {
+    /**
+     * `keepalive`, sekme kapanırken yapılan son yazma içindir: tarayıcı sayfayı
+     * boşaltırken sıradan bir `fetch` iptal edilebilir, bu bayrakla isteğin
+     * tamamlanması garanti altına alınır.
+     */
+    async commitChanges(changes, { keepalive = false } = {}) {
       collectClientIds(changes, clientIdAliases);
       persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey);
       const committed = await requestJson(`${basePath}/commit`, {
         method: 'POST',
+        keepalive,
         body: JSON.stringify({ changes: normalizeActualChanges(changes) })
       }, 'commitChanges');
       return restoreActualCommitIds(committed, changes, clientIdAliases);

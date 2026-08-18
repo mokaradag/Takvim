@@ -24,6 +24,22 @@ import {
 import { useAppState } from '../../state/AppStateProvider';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 import { DEFAULT_WBS_DEPTH, WBS_DEPTH_OPTIONS, expandedIdsForDepth } from './wbsTreeViewPolicy.js';
+import { resolveWbsDrop } from './wbsDragPolicy.js';
+
+// Satır içinde imlecin dikey konumu bırakma niyetini belirler: üst/alt şeritler
+// kardeş sırası, orta bölge ise alt düğüm yapar.
+const DROP_EDGE_RATIO = 0.28;
+// Kapalı bir düğümün üzerinde beklerken alt ağacın kendiliğinden açılma süresi.
+const HOVER_EXPAND_MS = 650;
+
+function dropPositionFromPointer(event, element) {
+  const rect = element.getBoundingClientRect();
+  if (!rect.height) return 'inside';
+  const ratio = (event.clientY - rect.top) / rect.height;
+  if (ratio <= DROP_EDGE_RATIO) return 'before';
+  if (ratio >= 1 - DROP_EDGE_RATIO) return 'after';
+  return 'inside';
+}
 
 function visibleRows(tree, expanded) {
   const rows = [];
@@ -42,6 +58,34 @@ function visibleRows(tree, expanded) {
 function projectLabel(project) {
   if (!project) return '';
   return project.code ? `${project.code} · ${project.name}` : project.name;
+}
+
+/**
+ * Satır içi ad girişi.
+ *
+ * Enter kaydeder, Esc vazgeçer. Alan açıldığı anda odaklanır: kullanıcı
+ * `prompt()` penceresinde olduğu gibi doğrudan yazmaya başlayabilir, ancak
+ * sayfa bağlamını kaybetmez.
+ */
+function WbsNameInput({ value, onChange, onSubmit, onCancel, placeholder, ariaLabel }) {
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+  return (
+    <input
+      ref={inputRef}
+      className="input wbs-inline-input"
+      value={value}
+      aria-label={ariaLabel}
+      placeholder={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') { event.preventDefault(); onSubmit(); }
+        if (event.key === 'Escape') { event.preventDefault(); onCancel(); }
+      }}
+      // Odak kaybında boş ad kaydedilmez; düzenleme sessizce kapanır.
+      onBlur={() => (value.trim() ? onSubmit() : onCancel())}
+    />
+  );
 }
 
 /** Üstteki ölçüm rozetleri; dikey alanı tüketmeden bağlamı korur. */
@@ -125,7 +169,7 @@ export function WbsView() {
   const wbs = useWorkspaceWbs();
   const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
   const { moveTasksToWbs } = useTaskActions();
-  const { addWbsChild, renameWbs, reparentWbs, deleteWbs, clearWbsError, error } = useWbsActions();
+  const { addWbsChild, renameWbs, reparentWbs, moveWbsNode, deleteWbs, clearWbsError, error } = useWbsActions();
   const tree = useMemo(() => buildWbsTree(wbs), [wbs]);
   const orderedRows = useMemo(() => flattenWbsTree(tree), [tree]);
   // Dağılım ağacı büyüdüğünde açılır listeler canlı arama ile kullanılabilir kalır.
@@ -142,6 +186,26 @@ export function WbsView() {
   const [moveTargetWbsId, setMoveTargetWbsId] = useState('');
   const [selectedTaskIds, setSelectedTaskIds] = useState(() => new Set());
   const [reparenting, setReparenting] = useState(null);
+  // Satır içi düzenleme: `prompt()`/`confirm()` yerine sayfanın içinde kalan,
+  // iptal edilebilir ve sınanabilir bir akış.
+  const [editing, setEditing] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [drag, setDrag] = useState(null);
+  const [dropHint, setDropHint] = useState(null);
+  // Taşıma kötümser olarak kalıcılaştırılır: yanıt gelene kadar görünen ağaç
+  // eskidir. Bu aralıkta yeni bir sürüklemeye izin verilirse, mutlak kardeş
+  // sırası eski ağaçtan hesaplanıp güncel ağaca uygulanır ve sonuç kullanıcının
+  // gördüğünden başka olur.
+  const [movePending, setMovePending] = useState(false);
+  // Satırın tamamı `draggable` olsaydı ad alanında metin seçmek ya da eylem
+  // düğmelerinde işaretçiyi kaydırmak sürüklemeyi başlatabilir ve istenmeyen bir
+  // hiyerarşi değişikliği kalıcılaşabilirdi; sürükleme yalnızca tutamaktan başlar.
+  const [dragHandleNodeId, setDragHandleNodeId] = useState(null);
+  const hoverExpandRef = useRef({ nodeId: null, timer: null });
+  // Sürükleme oturumu boyunca paylaşılan arama dizini: `dragover` her işaretçi
+  // hareketinde tetiklenir, ağaç indeksinin her olayda yeniden kurulması
+  // kurumsal ölçekte sürüklemeyi kilitler.
+  const dropIndexRef = useRef(null);
   const validationIssues = useMemo(() => validateWbsStructure(wbs), [wbs]);
   // Toplulaştırmalar satır başına değil, ağacın tamamı için tek geçişte
   // hesaplanır; 38 bin düğümlü kurumsal ağaçta satır çizimi böylece ucuz kalır.
@@ -150,7 +214,17 @@ export function WbsView() {
     [wbs, tasks, projectSchedule]
   );
 
+  // Görünüm durumu YALNIZCA proje değiştiğinde sıfırlanır. Daha önce etki
+  // `orderedRows` bağımlılığıyla çalışıyordu; ağaca düğüm eklemek/taşımak yeni
+  // bir satır dizisi ürettiği için her düzenlemeden sonra ağaç varsayılan
+  // derinliğe kapanıyor, açık paneller ve seçimler kayboluyordu.
+  const initialisedRef = useRef({ projectId: undefined, rows: 0 });
   useEffect(() => {
+    const projectId = workspace.selectedProjectId || null;
+    const initialised = initialisedRef.current;
+    // Aynı projede kalıyorsak ve ağaç zaten bir kez kurulduysa dokunulmaz.
+    if (initialised.projectId === projectId && (initialised.rows > 0 || !orderedRows.length)) return;
+    initialisedRef.current = { projectId, rows: orderedRows.length };
     setExpanded(expandedIdsForDepth(orderedRows, DEFAULT_WBS_DEPTH));
     setDepth(DEFAULT_WBS_DEPTH);
     setMoveOpen(false);
@@ -158,7 +232,12 @@ export function WbsView() {
     setMoveTargetWbsId('');
     setSelectedTaskIds(new Set());
     setReparenting(null);
+    setEditing(null);
+    setPendingDelete(null);
   }, [workspace.selectedProjectId, orderedRows]);
+
+  // Sürükleme sırasında açılan zamanlayıcı bileşen sökülürse boşta kalmasın.
+  useEffect(() => () => clearTimeout(hoverExpandRef.current.timer), []);
 
   if (workspace.mode === 'portfolio') {
     return (
@@ -218,18 +297,140 @@ export function WbsView() {
       : expandedIdsForDepth(orderedRows, value));
   };
 
-  const onAddChild = (node) => {
-    const name = prompt(`${node.code} ${node.name} altında yeni dağılım düğümü adı:`);
-    if (name?.trim()) addWbsChild(node.id, name.trim());
+  const startAddChild = (node) => {
+    setPendingDelete(null);
+    setReparenting(null);
+    setExpanded((current) => new Set(current).add(node.id));
+    setEditing({ mode: 'add', nodeId: node.id, value: '' });
   };
 
-  const onRename = (node) => {
-    const name = prompt('Yeni dağılım düğümü adı:', node.name);
-    if (name?.trim() && name.trim() !== node.name) renameWbs(node.id, name.trim());
+  const startRename = (node) => {
+    setPendingDelete(null);
+    setReparenting(null);
+    setEditing({ mode: 'rename', nodeId: node.id, value: node.name });
   };
 
-  const onDelete = (node) => {
-    if (confirm(`${node.code} ${node.name} silinsin mi? Yalnızca boş dağılım düğümleri silinebilir.`)) deleteWbs(node.id);
+  // Satır içi taslak yalnızca kayıt BAŞARILI olduğunda kapanır: sürüm çakışması
+  // ya da geçici bir depo hatasında alan kapatılsaydı kullanıcının yazdığı ad
+  // kaybolur ve yeniden yazmaktan başka yolu kalmazdı.
+  const submitEditing = async () => {
+    if (!editing || editing.busy) return;
+    const name = editing.value.trim();
+    if (!name) return;
+    const current = editing;
+    setEditing({ ...current, busy: true });
+    const result = current.mode === 'add'
+      ? await addWbsChild(current.nodeId, name)
+      : await renameWbs(current.nodeId, name);
+    if (result && result.ok === false) {
+      setEditing({ ...current, busy: false });
+      return;
+    }
+    setEditing(null);
+  };
+
+  const confirmDelete = (node) => {
+    deleteWbs(node.id);
+    setPendingDelete(null);
+  };
+
+  // ── Sürükle-bırak ───────────────────────────────────────────────
+  const cancelHoverExpand = () => {
+    clearTimeout(hoverExpandRef.current.timer);
+    hoverExpandRef.current = { nodeId: null, timer: null };
+  };
+
+  const scheduleHoverExpand = (node) => {
+    if (hoverExpandRef.current.nodeId === node.id) return;
+    cancelHoverExpand();
+    if (!(node.children || []).length || expanded.has(node.id)) return;
+    hoverExpandRef.current = {
+      nodeId: node.id,
+      timer: setTimeout(() => setExpanded((current) => new Set(current).add(node.id)), HOVER_EXPAND_MS)
+    };
+  };
+
+  const endDrag = () => {
+    cancelHoverExpand();
+    setDrag(null);
+    setDropHint(null);
+    setDragHandleNodeId(null);
+    dropIndexRef.current = null;
+  };
+
+  const onRowDragStart = (node) => (event) => {
+    if (!canEdit || node.parentId == null || movePending || dragHandleNodeId !== node.id) {
+      event.preventDefault();
+      return;
+    }
+    setDrag({ id: node.id });
+    setPendingDelete(null);
+    setEditing(null);
+    dropIndexRef.current = createWbsDropIndex(wbs);
+    event.dataTransfer.effectAllowed = 'move';
+    // Bazı tarayıcılar veri taşımayan sürüklemeyi başlatmaz.
+    try { event.dataTransfer.setData('text/plain', node.id); } catch {}
+  };
+
+  const resolveDrop = (dragId, targetId, position) => resolveWbsDrop(
+    wbs,
+    { dragId, targetId, position },
+    { index: dropIndexRef.current || (dropIndexRef.current = createWbsDropIndex(wbs)) }
+  );
+
+  const onRowDragOver = (node) => (event) => {
+    if (!drag || !canEdit) return;
+    const position = dropPositionFromPointer(event, event.currentTarget);
+    const resolution = resolveDrop(drag.id, node.id, position);
+    event.preventDefault();
+    event.dataTransfer.dropEffect = resolution.ok ? 'move' : 'none';
+    if (position === 'inside' && resolution.ok) scheduleHoverExpand(node);
+    else cancelHoverExpand();
+    // İpucu yalnızca gerçekten değiştiğinde yazılır; aksi hâlde her işaretçi
+    // hareketi bütün ağacı yeniden çizerdi.
+    setDropHint((current) => (current
+      && current.nodeId === node.id
+      && current.position === position
+      && current.ok === resolution.ok
+      ? current
+      : { nodeId: node.id, position, ok: resolution.ok, message: resolution.ok ? null : resolution.message }));
+  };
+
+  const onRowDragLeave = (node) => (event) => {
+    // Satır içindeki bir alt öğeye geçiş "ayrılma" değildir; yalnızca gerçekten
+    // satırdan çıkıldığında bekleyen açma zamanlayıcısı da iptal edilir, aksi
+    // hâlde artık hedef olmayan satır sürükleme sürerken kendiliğinden açılır.
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    if (hoverExpandRef.current.nodeId === node.id) cancelHoverExpand();
+    setDropHint((current) => (current?.nodeId === node.id ? null : current));
+  };
+
+  const onRowDrop = (node) => (event) => {
+    event.preventDefault();
+    if (!drag || !canEdit) return endDrag();
+    const position = dropPositionFromPointer(event, event.currentTarget);
+    const resolution = resolveDrop(drag.id, node.id, position);
+    endDrag();
+    if (!resolution.ok) return;
+    // Hedefin altına alınan düğüm görünür kalmalıdır: hedef kapalıysa (ya da
+    // taşımadan önce yaprak olduğu için hiç açılamıyorsa) düğüm bırakıldığı anda
+    // ağaçtan kayboluyor, taşıma başarısız olmuş gibi görünüyordu.
+    if (position === 'inside') setExpanded((current) => new Set(current).add(node.id));
+    setMovePending(true);
+    Promise.resolve(moveWbsNode(resolution.move.id, resolution.move.parentId, resolution.move.index))
+      .finally(() => setMovePending(false));
+  };
+
+  /** Klavye/işaretçi ayrımı olmadan kardeş sırası: sürükleme tek yol değildir. */
+  const moveSibling = (node, offset) => {
+    if (!canEdit || movePending || node.parentId == null) return;
+    const siblings = wbsSiblings(wbs, node.parentId);
+    const currentIndex = siblings.findIndex((sibling) => sibling.id === node.id);
+    const nextIndex = currentIndex + offset;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= siblings.length) return;
+    setMovePending(true);
+    Promise.resolve(moveWbsNode(node.id, node.parentId, nextIndex))
+      .finally(() => setMovePending(false));
   };
 
   const onSourceChange = (wbsId) => {
@@ -309,8 +510,18 @@ export function WbsView() {
         </div>
       </div>
 
-      {(isCorporate || (!canEdit && !isCorporate) || validationIssues.length > 0 || error) && (
+      {(canEdit || isCorporate || (!canEdit && !isCorporate) || validationIssues.length > 0 || error) && (
         <div className="wbs-notices">
+          {canEdit && wbs.length > 1 && (
+            <div className="wbs-note">
+              <Icons.Grip size={13} />
+              <span>
+                Satırları <strong>sürükleyip bırakarak</strong> hiyerarşiyi düzenleyin: bir satırın
+                <strong> ortasına</strong> bırakmak onu alt düğüm yapar, <strong>üst/alt kenarına</strong> bırakmak
+                kardeş sırasına yerleştirir. Fare kullanmadan taşımak için satırdaki <strong>Taşı</strong> düğmesini kullanın.
+              </span>
+            </div>
+          )}
           {isCorporate && (
             <div className="wbs-note">
               <Icons.Database size={13} />
@@ -426,16 +637,60 @@ export function WbsView() {
               const isReparenting = reparenting?.nodeId === node.id;
               const blockedTargets = new Set([node.id, ...selectWbsDescendantIds(wbs, node.id)]);
               const parentCandidates = orderedRows.filter(({ node: candidate }) => !blockedTargets.has(candidate.id));
+              const draggable = canEdit && node.parentId != null && !movePending;
+              const siblingIndex = draggable ? wbsSiblings(wbs, node.parentId).findIndex((sibling) => sibling.id === node.id) : -1;
+              const siblingCount = draggable ? wbsSiblings(wbs, node.parentId).length : 0;
+              const hint = dropHint?.nodeId === node.id ? dropHint : null;
+              const rowClass = [
+                'wbs-tree-grid',
+                'wbs-tree-row',
+                draggable ? 'draggable' : '',
+                drag?.id === node.id ? 'dragging' : '',
+                hint ? `drop-${hint.position}` : '',
+                hint && !hint.ok ? 'drop-blocked' : ''
+              ].filter(Boolean).join(' ');
               return (
-                <div key={node.id} className="wbs-tree-grid wbs-tree-row">
+                <div
+                  key={node.id}
+                  className={rowClass}
+                  draggable={draggable && dragHandleNodeId === node.id}
+                  onDragStart={onRowDragStart(node)}
+                  onDragEnd={endDrag}
+                  onDragOver={onRowDragOver(node)}
+                  onDragLeave={onRowDragLeave(node)}
+                  onDrop={onRowDrop(node)}
+                  title={hint && !hint.ok ? hint.message : undefined}
+                >
                   <div className="row" style={{ gap: 8, minWidth: 0, paddingLeft: rowDepth * 22 }}>
+                    {canEdit && (
+                      <span
+                        className="wbs-drag-handle"
+                        aria-hidden="true"
+                        title={draggable ? 'Sürükleyerek taşıyın' : 'Kök düğüm taşınamaz'}
+                        data-disabled={draggable ? undefined : 'true'}
+                        onPointerDown={() => draggable && setDragHandleNodeId(node.id)}
+                        onPointerUp={() => setDragHandleNodeId(null)}
+                      >
+                        <Icons.Grip size={13} />
+                      </span>
+                    )}
                     <button className="icon-btn" style={{ width: 24, height: 24, visibility: hasChildren ? 'visible' : 'hidden' }} onClick={() => toggle(node.id)}>
                       {expanded.has(node.id) ? <Icons.ChevronDown size={12} /> : <Icons.ChevronRight size={12} />}
                     </button>
                     <div className="col" style={{ gap: 2, minWidth: 0 }}>
                       <div className="row" style={{ gap: 7, minWidth: 0 }}>
                         <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>{node.code}</span>
-                        <span style={{ fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+                        {editing?.mode === 'rename' && editing.nodeId === node.id ? (
+                          <WbsNameInput
+                            value={editing.value}
+                            ariaLabel="Dağılım düğümü adı"
+                            onChange={(value) => setEditing({ ...editing, value })}
+                            onSubmit={submitEditing}
+                            onCancel={() => setEditing(null)}
+                          />
+                        ) : (
+                          <span style={{ fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+                        )}
                       </div>
                       <span className="muted" style={{ fontSize: 11 }}>
                         Seviye {node.level ?? rowDepth + 1} · {rollup.directTaskCount} doğrudan
@@ -443,6 +698,19 @@ export function WbsView() {
                         {node.elementTypeCode ? ` · ${node.elementTypeCode}` : ''}
                         {node.statusCode ? ` · ${node.statusCode}` : ''}
                       </span>
+                      {editing?.mode === 'add' && editing.nodeId === node.id && (
+                        <div className="row wbs-inline-add" style={{ gap: 6 }}>
+                          <Icons.ChevronRight size={11} />
+                          <WbsNameInput
+                            value={editing.value}
+                            ariaLabel="Yeni alt düğüm adı"
+                            placeholder="Yeni alt düğüm adı"
+                            onChange={(value) => setEditing({ ...editing, value })}
+                            onSubmit={submitEditing}
+                            onCancel={() => setEditing(null)}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="tabular">{rollup.taskCount}</div>
@@ -478,12 +746,42 @@ export function WbsView() {
                         <button className="btn" disabled={!reparenting.parentId || reparenting.parentId === node.parentId} onClick={applyReparent}>Uygula</button>
                         <button className="btn" onClick={() => setReparenting(null)}>Vazgeç</button>
                       </>
+                    ) : pendingDelete === node.id ? (
+                      <>
+                        <span className="muted" style={{ fontSize: 11.5 }}>Silinsin mi?</span>
+                        <button className="btn danger" onClick={() => confirmDelete(node)}>Evet, sil</button>
+                        <button className="btn" onClick={() => setPendingDelete(null)}>Vazgeç</button>
+                      </>
                     ) : (
                       <>
-                        <button className="btn" onClick={() => onAddChild(node)}>Alt ekle</button>
-                        <button className="btn" onClick={() => onRename(node)}>Ad</button>
+                        <button className="btn" onClick={() => startAddChild(node)}>Alt ekle</button>
+                        <button className="btn" onClick={() => startRename(node)}>Ad</button>
                         {node.parentId != null && <button className="btn" onClick={() => startReparent(node)}>Taşı</button>}
-                        <button className="btn" onClick={() => onDelete(node)}>Sil</button>
+                        {/* Kardeş sırası sürüklemeye bağlı bırakılamaz: fare
+                            kullanmayan bir kullanıcı için bu düğmeler tek yoldur. */}
+                        {node.parentId != null && (
+                          <>
+                            <button
+                              className="icon-btn"
+                              aria-label="Bir sıra yukarı taşı"
+                              title="Bir sıra yukarı taşı"
+                              disabled={!draggable || siblingIndex <= 0}
+                              onClick={() => moveSibling(node, -1)}
+                            >
+                              <Icons.ChevronUp size={12} />
+                            </button>
+                            <button
+                              className="icon-btn"
+                              aria-label="Bir sıra aşağı taşı"
+                              title="Bir sıra aşağı taşı"
+                              disabled={!draggable || siblingIndex < 0 || siblingIndex >= siblingCount - 1}
+                              onClick={() => moveSibling(node, 1)}
+                            >
+                              <Icons.ChevronDown size={12} />
+                            </button>
+                          </>
+                        )}
+                        <button className="btn" onClick={() => { setEditing(null); setPendingDelete(node.id); }}>Sil</button>
                       </>
                     ))}
                     {!canEdit && (

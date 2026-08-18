@@ -5,7 +5,8 @@ import { Icons } from '../../components/icons';
 import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, addDays, startOfMonth, endOfMonth, startOfWeek, endOfWeek, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
 import { DEFAULT_CALENDAR, holidayFor } from '../../scheduling/calendars';
 import { projectColorVar } from '../../lib/colors';
-import { AvatarStack, Kw, StatusPill } from '../../components/ui';
+import { AvatarStack, StatusPill } from '../../components/ui';
+import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton } from '../../components/ui-extras';
 import { appZoom } from '../../lib/zoom';
 import { useTasks, useTaskActions } from '../../state/hooks';
@@ -266,7 +267,7 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
                   <div className="col" style={{ gap: 3, flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
                     <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>{t.task}</div>
                     <div className="row" style={{ gap: 6 }}>
-                      <Kw color={t.color}>{t.keyword}</Kw>
+                      <TaskKeyword task={t} />
                       <StatusPill task={t} size={10.5} />
                     </div>
                   </div>

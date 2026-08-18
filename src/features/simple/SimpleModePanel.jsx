@@ -6,6 +6,7 @@ import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar } from '../../components/ui';
 import { ProjectCreateDialog } from '../../components/shell/ProjectCreateDialog';
 import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domain/projectTypes';
+import { findProjectTag, projectTagCatalog } from '../../domain/tags';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
 import { useAllPeople, useAllProjects, useAllWbs, useTaskActions } from '../../state/hooks';
@@ -151,13 +152,27 @@ export function SimpleModePanel() {
     setPeopleQuery('');
   };
 
+  /**
+   * Hızlı girişte verilen anahtar sözcüğü kontrollü katalogla uyumlu hâle getirir.
+   *
+   * İki incelik vardır:
+   *  - Katalogda harf farkıyla eşleşen bir etiket varsa KANONİK adı kullanılır;
+   *    aksi hâlde `Analiz` katalogdayken `analiz` yazmak, katalogla birebir
+   *    eşleşmeyen bir anahtar sözcük kalıcılaştırır ve görev panelinde
+   *    seçeneği bulunmayan bir etiket olarak görünürdü.
+   *  - Kataloğa ekleme başarısız olursa anahtar sözcük GÖREVE DE yazılmaz:
+   *    görev kaydı katalog üyeliğini zorlamadığı için sonuç, katalogda
+   *    karşılığı olmayan kalıcı bir etiket olurdu.
+   */
   const ensureTag = async (project) => {
-    if (!keyword.trim()) return { ok: true, value: project };
-    const tags = Array.isArray(project.tags) ? project.tags : [];
-    if (tags.some((tag) => tag.toLocaleLowerCase('tr-TR') === keyword.trim().toLocaleLowerCase('tr-TR'))) {
-      return { ok: true, value: project };
-    }
-    return updateProject(project.id, { tags: [...tags, keyword.trim()] });
+    const requested = keyword.trim();
+    if (!requested) return { ok: true, project, keyword: '' };
+    const tags = projectTagCatalog(project);
+    const existing = findProjectTag(tags, requested);
+    if (existing) return { ok: true, project, keyword: existing.name };
+    const result = await updateProject(project.id, { tags: [...tags, { name: requested }] });
+    if (!result?.ok) return { ok: false, project, keyword: '', error: result?.error };
+    return { ok: true, project: result.value || project, keyword: requested };
   };
 
   const submit = async (event) => {
@@ -181,6 +196,7 @@ export function SimpleModePanel() {
     let project = selectedProject;
     let targetWbsId = selectedRootWbsId;
     let tagWarning = null;
+    let taskKeyword = keyword.trim();
 
     if (!project) {
       // Basit Mod portföy görünümünde kalır: çalışma alanı değiştirilirse bu form
@@ -215,10 +231,12 @@ export function SimpleModePanel() {
       // Proje satırı yazılamıyorsa (salt okunur kurumsal alan, sürüm çakışması vb.)
       // asıl işlem olan görev oluşturma engellenmez; yalnızca uyarı gösterilir.
       const tagged = await ensureTag(project);
-      if (tagged?.ok) {
-        project = tagged.value || project;
+      project = tagged.project || project;
+      if (tagged.ok) {
+        taskKeyword = tagged.keyword;
       } else {
-        tagWarning = tagged?.error?.message || 'Etiket proje kataloğuna eklenemedi.';
+        taskKeyword = '';
+        tagWarning = `${tagged.error?.message || 'Etiket proje kataloğuna eklenemedi.'} Görev etiketsiz oluşturuldu; etiketi Proje Yapısı sayfasından tanımlayıp göreve atayabilirsiniz.`;
       }
     }
 
@@ -236,7 +254,7 @@ export function SimpleModePanel() {
       color: project.color || 'blue',
       wbsId: targetWbsId,
       task: task.trim(),
-      keyword: keyword.trim(),
+      keyword: taskKeyword,
       assigneeIds: [...assigneeIds],
       sorumlu: selectedPeopleForTask.map((person) => person.name),
       status: 'todo',

@@ -66,9 +66,66 @@
 }
 .dashboard-status-card .donut-leg-row > .row { min-width: 0; }
 .dashboard-status-card .donut-leg-row > .tabular { min-width: 2ch; text-align: right; }
+/* ── Kişi ölçüm tablosu (Ekip iş yükü · Kaynak kullanımı) ──────────
+   Ad esnek sütunu alır ve kırpılmadan okunur; kartın kalan yatay alanı boş
+   kalmak yerine sayısal sütunlara ayrılır. */
+.pm-table { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pm-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(64px, 1.1fr) var(--pm-metric-cols, repeat(3, minmax(56px, auto)));
+  align-items: center;
+  gap: 12px;
+  padding: 6px;
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+.pm-row:not(.pm-head):hover { background: var(--bg-hover); }
+.pm-head {
+  padding-bottom: 7px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.pm-head .pm-metric-head { text-align: right; }
+.pm-person { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.pm-person-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* Tablonun varlık nedeni uzun kurumsal adların OKUNABİLİR olmasıdır: ad
+   kırpılmaz, gerekirse satıra sarar ve satır yüksekliği büyür. */
+.pm-name {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.35;
+}
+.pm-sub {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.3;
+}
+.pm-bar { display: block; min-width: 0; }
+.pm-bar .bar-track { display: block; height: 6px; }
+.pm-bar .bar-fill { display: block; }
+.pm-metric { font-size: 12px; text-align: right; white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .pm-row { gap: 8px; }
+  .pm-sub { display: none; }
+}
+
 .dashboard-bottom-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1fr);
+  /* Ekip iş yükü artık çok sütunlu bir tablodur: orta sütun en geniş paydır. */
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.35fr) minmax(0, 0.95fr);
   gap: 16px;
 }
 .dashboard-insights-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }

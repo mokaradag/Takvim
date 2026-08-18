@@ -96,6 +96,10 @@ BEGIN TRY
         ProjectTagId uniqueidentifier NOT NULL CONSTRAINT DF_MR_ProjectTags_Id DEFAULT NEWSEQUENTIALID(),
         ProjectId uniqueidentifier NOT NULL,
         TagName nvarchar(255) NOT NULL,
+        -- Etiketin görsel kimliği: uygulama paletinden bir renk anahtarı ve
+        -- simge adı. NULL değerler arayüzde ada göre türetilen varsayılana düşer.
+        ColorToken varchar(20) NULL,
+        IconKey varchar(40) NULL,
         SortOrder int NULL,
         CreatedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_ProjectTags_CreatedAt DEFAULT SYSUTCDATETIME(),
         CreatedBySicil int NULL,
@@ -183,6 +187,14 @@ BEGIN TRY
         ActualHours decimal(12,2) NULL,
         Budget decimal(19,4) NULL,
         Spent decimal(19,4) NULL,
+        -- Tekrarlayan gorev: RFC 5545 RRULE govdesi yalnizca SERI SABLONUNDA
+        -- bulunur; uretilen yinelemeler RecurrenceParentTaskId ile baglanir.
+        RecurrenceRule nvarchar(400) NULL,
+        RecurrenceParentTaskId uniqueidentifier NULL,
+        -- Yinelemenin DEGISMEZ seri kimligi (RFC 5545 RECURRENCE-ID karsiligi).
+        -- Gorev ertelense bile bu tarih durur; ayni seri gunu icin ikinci bir
+        -- yineleme uretilemez (asagidaki tekil dizin bunu zorunlu kilar).
+        RecurrenceOccurrenceDate date NULL,
         SortOrder int NULL,
         CreatedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_Tasks_CreatedAt DEFAULT SYSUTCDATETIME(),
         CreatedBySicil int NULL,
@@ -200,12 +212,25 @@ BEGIN TRY
         CONSTRAINT CK_MR_Tasks_ActualDates CHECK ((ActualFinish IS NULL OR ActualStart IS NOT NULL) AND (ActualStart IS NULL OR ActualFinish IS NULL OR ActualFinish >= ActualStart)),
         CONSTRAINT CK_MR_Tasks_MilestoneDuration CHECK (IsMilestone = 0 OR ISNULL(PlannedDurationDays, 0) = 0),
         CONSTRAINT CK_MR_Tasks_Status CHECK (Status IN ('planned','in-progress','done')),
-        CONSTRAINT CK_MR_Tasks_Priority CHECK (Priority IN ('low','medium','high','critical','normal'))
+        CONSTRAINT CK_MR_Tasks_Priority CHECK (Priority IN ('low','medium','high','critical','normal')),
+        CONSTRAINT FK_MR_Tasks_RecurrenceParent FOREIGN KEY (RecurrenceParentTaskId) REFERENCES dbo.MR_Tasks(TaskId),
+        -- Yineleme kendi kuralini tasiyamaz: kural tek bir sablonda yasar.
+        CONSTRAINT CK_MR_Tasks_Recurrence CHECK (RecurrenceParentTaskId IS NULL OR RecurrenceRule IS NULL),
+        -- Seri kimligi yalnizca bir yinelemede anlamlidir.
+        CONSTRAINT CK_MR_Tasks_RecurrenceOccurrence CHECK (RecurrenceOccurrenceDate IS NULL OR RecurrenceParentTaskId IS NOT NULL),
+        CONSTRAINT CK_MR_Tasks_RecurrenceSelf CHECK (RecurrenceParentTaskId IS NULL OR RecurrenceParentTaskId <> TaskId)
     );
     CREATE INDEX IX_MR_Tasks_Project_Status ON dbo.MR_Tasks(ProjectId, Status, SortOrder);
     CREATE INDEX IX_MR_Tasks_Project_TargetFinish ON dbo.MR_Tasks(ProjectId, TargetFinish);
     CREATE INDEX IX_MR_Tasks_Project_PlannedRange ON dbo.MR_Tasks(ProjectId, PlannedStart, PlannedFinish);
     CREATE INDEX IX_MR_Tasks_WbsId ON dbo.MR_Tasks(WbsId, SortOrder);
+    CREATE INDEX IX_MR_Tasks_RecurrenceParent ON dbo.MR_Tasks(RecurrenceParentTaskId) WHERE RecurrenceParentTaskId IS NOT NULL;
+    -- Ayni seri gunu icin iki yineleme olusturulamaz. Istemci tarafi denetim
+    -- eszamanli iki yaziciyi durduramaz: her ikisi de gunu "eksik" gorup farkli
+    -- TaskId ile ekleyebilir. Tekillik bu yuzden kalici katmanda zorunlu kilinir.
+    CREATE UNIQUE INDEX UX_MR_Tasks_RecurrenceOccurrence
+        ON dbo.MR_Tasks(RecurrenceParentTaskId, RecurrenceOccurrenceDate)
+        WHERE RecurrenceParentTaskId IS NOT NULL AND RecurrenceOccurrenceDate IS NOT NULL;
 
     CREATE TABLE dbo.MR_TaskAssignees (
         TaskId uniqueidentifier NOT NULL,
@@ -386,7 +411,8 @@ BEGIN TRY
     INSERT dbo.MR_SchemaMigrations(MigrationId, Description)
     VALUES (N'0001_durable_persistence', N'Initial MERGEN Rota durable SQL Server persistence schema'),
            (N'0002_corporate_wbs_sync_state', N'Corporate WBS synchronization fingerprints and canonical task priority default'),
-           (N'0003_keycloak_identity', N'Keycloak authentication: identity provider only, no schema change; SYSTEM_ADMIN seed parameterized');
+           (N'0003_keycloak_identity', N'Keycloak authentication: identity provider only, no schema change; SYSTEM_ADMIN seed parameterized'),
+           (N'0004_tag_appearance_and_recurrence', N'Project tag colour/icon columns and recurring task definition columns');
 
     COMMIT TRANSACTION;
 END TRY

@@ -10,6 +10,7 @@ import { DataModeChooser } from './DataModeChooser';
 import { DataModeContext } from './DataModeContext';
 import { PersistenceStatus } from './PersistenceStatus';
 import { PresentationPolish } from './PresentationPolish';
+import { UnsavedChangesGuard } from './UnsavedChangesGuard';
 import { corporateLoginHref, hasCorporateSession } from './actualAuthBootstrap.js';
 
 function browserStorage() {
@@ -122,6 +123,7 @@ export default function ApplicationRoot() {
         <PresentationPolish />
         <AppShell />
         <PersistenceStatus />
+        <UnsavedChangesGuard />
       </AppDataBoundary>
     </AppStateProvider>
   );

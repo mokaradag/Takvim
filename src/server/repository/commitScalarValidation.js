@@ -1,3 +1,5 @@
+import { findRecurrenceRuleIssue, normalizeRecurrenceRule } from '../../scheduling/recurrence/index.js';
+
 const TASK_STATUSES = new Set(['planned', 'in-progress', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical', 'normal']);
 const DEPENDENCY_LAG_UNITS = new Set(['day', 'week', 'month']);
@@ -134,6 +136,61 @@ function validateTaskScalars(changes) {
       return issue('TASK_KEYWORD_TOO_LONG', `${basePath}.keyword`, 'Görev anahtar sözcüğü en fazla 255 karakter olabilir.');
     }
 
+    // Tekrar kuralı RFC 5545 altkümesidir: ayrıştırılamayan bir metin kalıcı
+    // kayda düşerse arayüz seriyi hiç açamaz ve kural sessizce yok sayılırdı.
+    const recurrenceIssue = validateOptionalString(task?.recurrence, `${basePath}.recurrence`, 'Görev tekrar kuralı');
+    if (recurrenceIssue) return recurrenceIssue;
+    if (text(task.recurrence)) {
+      if (text(task.recurrence).length > 400) {
+        return issue('TASK_RECURRENCE_TOO_LONG', `${basePath}.recurrence`, 'Görev tekrar kuralı en fazla 400 karakter olabilir.');
+      }
+      // Katı denetim: `normalizeRecurrenceRule` okunamayan bileşeni düşürüp
+      // kuralı yine de döndürür, yani gönderilen kural saklanandan başka anlama
+      // gelebilirdi (örneğin COUNT=0 sınırsız seri olurdu).
+      const ruleIssue = findRecurrenceRuleIssue(task.recurrence);
+      if (ruleIssue) {
+        return issue(
+          'TASK_RECURRENCE_INVALID',
+          `${basePath}.recurrence`,
+          'Görev tekrar kuralı geçerli bir RFC 5545 RRULE olmalıdır.',
+          { reason: ruleIssue }
+        );
+      }
+      if (text(task.recurrenceParentId)) {
+        return issue(
+          'TASK_RECURRENCE_CONFLICT',
+          `${basePath}.recurrence`,
+          'Bir yineleme kendi tekrar kuralını taşıyamaz; kural yalnızca seri şablonunda bulunur.'
+        );
+      }
+    }
+
+    // Yinelemenin değişmez seri kimliği: görev ertelense bile bu tarih durur ve
+    // kalıcı katmanda `(şablon, gün)` çifti tekildir.
+    const occurrenceIssue = validateOptionalString(
+      task?.recurrenceOccurrenceDate,
+      `${basePath}.recurrenceOccurrenceDate`,
+      'Yineleme günü'
+    );
+    if (occurrenceIssue) return occurrenceIssue;
+    if (text(task.recurrenceOccurrenceDate)) {
+      if (!isValidIsoDate(task.recurrenceOccurrenceDate)) {
+        return issue(
+          'TASK_DATE_INVALID',
+          `${basePath}.recurrenceOccurrenceDate`,
+          'Yineleme günü geçerli bir YYYY-MM-DD tarihi olmalıdır.',
+          { field: 'recurrenceOccurrenceDate' }
+        );
+      }
+      if (!text(task.recurrenceParentId)) {
+        return issue(
+          'TASK_RECURRENCE_OCCURRENCE_ORPHAN',
+          `${basePath}.recurrenceOccurrenceDate`,
+          'Yineleme günü yalnızca bir seri şablonuna bağlı görevde bulunabilir.'
+        );
+      }
+    }
+
     if (task.status !== undefined && typeof task.status !== 'string') {
       return issue('TASK_STATUS_INVALID', `${basePath}.status`, 'Görev durumu desteklenen değerlerden biri olmalıdır.');
     }
@@ -175,6 +232,16 @@ function validateTaskScalars(changes) {
     const actualFinish = text(task.actualFinish);
     if (plannedStart && plannedFinish && plannedFinish < plannedStart) {
       return issue('TASK_PLANNED_RANGE_INVALID', `${basePath}.plannedFinish`, 'Planlanan bitiş başlangıçtan önce olamaz.');
+    }
+    // Seri başlangıcından önce biten bir kural sözdizimsel olarak geçerlidir ama
+    // hiçbir yineleme üretemez; imkânsız seri kalıcılaştırılmaz.
+    const recurrenceUntil = normalizeRecurrenceRule(task.recurrence)?.until || null;
+    if (recurrenceUntil && plannedStart && recurrenceUntil < plannedStart) {
+      return issue(
+        'TASK_RECURRENCE_RANGE_INVALID',
+        `${basePath}.recurrence`,
+        'Tekrar kuralının bitiş tarihi planlanan başlangıçtan önce olamaz.'
+      );
     }
     if (actualFinish && !actualStart) {
       return issue('TASK_ACTUAL_START_REQUIRED', `${basePath}.actualStart`, 'Gerçek bitiş için gerçek başlangıç gereklidir.');

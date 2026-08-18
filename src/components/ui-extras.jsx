@@ -8,6 +8,9 @@ import ReactDOM from 'react-dom';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
 import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../scheduling/dates';
+import { OPTION_SEARCH_THRESHOLD, matchesOptionQuery } from './columnFilterSearch.js';
+
+export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
 
 // ── Rich tooltip (portal, cursor-following, always on top) ─────
 export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent }) {
@@ -210,6 +213,10 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   const [numFrom, setNumFrom] = useSx(initialNum.from != null ? String(initialNum.from) : '');
   const [numTo, setNumTo] = useSx(initialNum.to != null ? String(initialNum.to) : '');
   const [numEq, setNumEq] = useSx(initialNum.eq != null ? String(initialNum.eq) : '');
+  // Çoklu/tekli seçim listelerinde canlı arama. Sorumlu ve proje gibi sütunlar
+  // binlerce seçenek taşıyabiliyor; arama olmadan listeyi kaydırarak aramak tek
+  // yoldu ve pratikte kullanılamıyordu.
+  const [optionQuery, setOptionQuery] = useSx('');
   const ref = useRx(null);
 
   useEx(() => {
@@ -273,6 +280,14 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     ? [...options].sort((a, b) => (a.label || '').localeCompare(b.label || '', 'tr'))
     : options;
 
+  // Seçili değerler aramada elense bile GÖRÜNÜR kalır: aksi hâlde kullanıcı
+  // arama yazdığında neyi seçtiğini göremez ve farkında olmadan kaldırır.
+  const searchableOptions = (type === 'multi' || type === 'single') && optionQuery.trim()
+    ? sortedOptions.filter((option) => matchesOptionQuery(option, optionQuery)
+      || (type === 'multi' ? sel.has(option.value) : String(option.value) === String(q ?? '')))
+    : sortedOptions;
+  const searchable = (type === 'multi' || type === 'single') && options.length > OPTION_SEARCH_THRESHOLD;
+
   return (
     <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top }}>
       <div className="col-filter-head">
@@ -303,9 +318,43 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
             />
           </div>
         )}
+        {searchable && (
+          <label className="col-filter-search">
+            <Icons.Search size={12} />
+            <input
+              autoFocus
+              value={optionQuery}
+              aria-label={`${label} seçeneklerinde ara`}
+              placeholder={`${label} ara...`}
+              onChange={(e) => setOptionQuery(e.target.value)}
+              // Enter aramadaki seçeneği uygular. Tek seçimli süzgeçte genel
+              // `apply()` çağrılırsa ARANAN değil, ÖNCEDEN seçili radyo değeri
+              // uygulanır: kullanıcı arayıp Enter'a bastığında süzgeç eskisi gibi
+              // kalır. Tek eşleşme varsa o seçilir, yoksa hiçbir şey uygulanmaz.
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                if (type !== 'single') { apply(); return; }
+                if (searchableOptions.length !== 1) return;
+                const [only] = searchableOptions;
+                setQ(only.value);
+                onChange(only.value);
+                onClose();
+              }}
+            />
+            {optionQuery && (
+              <button type="button" onClick={() => setOptionQuery('')} aria-label="Aramayı temizle">
+                <Icons.Close size={11} />
+              </button>
+            )}
+          </label>
+        )}
         {type === 'multi' && (
           <div className="col" style={{ gap: 2, maxHeight: 220, overflowY: 'auto' }}>
-            {sortedOptions.map(o => {
+            {!searchableOptions.length && (
+              <span className="col-filter-empty">Eşleşen seçenek yok.</span>
+            )}
+            {searchableOptions.map(o => {
               const checked = sel.has(o.value);
               return (
                 <label key={o.value} className="col-filter-opt">
@@ -330,7 +379,10 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
              yalnızca BİR değer taşıyabilir. Seçim anında uygulanır; böylece
              tablo başlığı ile üstteki dizin açılır listeleri eşzamanlı kalır. */
           <div className="col" role="radiogroup" aria-label={label} style={{ gap: 2, maxHeight: 240, overflowY: 'auto', minWidth: 220 }}>
-            {options.map((o) => {
+            {!searchableOptions.length && (
+              <span className="col-filter-empty">Eşleşen seçenek yok.</span>
+            )}
+            {searchableOptions.map((o) => {
               const checked = String(o.value) === String(q ?? '');
               return (
                 <label key={o.value || '__all__'} className="col-filter-opt">

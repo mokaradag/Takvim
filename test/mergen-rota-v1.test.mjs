@@ -18,6 +18,7 @@ import {
   setGanttDateRangeOverride
 } from '../src/scheduling/metrics/index.js';
 import { buildProjectCsv, buildProjectExcelHtml } from '../src/lib/exportProjectData.js';
+import { TAG_COLOR_KEYS, TAG_ICON_KEYS } from '../src/domain/tags/index.js';
 import { normalizeProjectTags, prepareProjectCreation, prepareProjectUpdate } from '../src/state/projectCreation.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,7 +34,15 @@ function projectContext() {
 }
 
 test('project tag catalog trims, deduplicates case-insensitively, and sorts values', () => {
-  assert.deepEqual(normalizeProjectTags([' Test ', 'test', 'Analiz', '', 'ANALİZ']), ['Analiz', 'Test']);
+  // Etiket artık ad + renk + simge taşır; kırpma/tekilleştirme/sıralama kuralları aynıdır.
+  assert.deepEqual(
+    normalizeProjectTags([' Test ', 'test', 'Analiz', '', 'ANALİZ']).map((tag) => tag.name),
+    ['Analiz', 'Test']
+  );
+  for (const tag of normalizeProjectTags(['Test'])) {
+    assert.ok(TAG_COLOR_KEYS.includes(tag.color));
+    assert.ok(TAG_ICON_KEYS.includes(tag.icon));
+  }
 });
 
 test('project creation persists the controlled tag catalog', () => {
@@ -46,7 +55,7 @@ test('project creation persists the controlled tag catalog', () => {
     tags: ['Test', ' Analiz ', 'test']
   }, context, { projectId: 'p2', rootWbsId: 'w2' });
   assert.equal(result.ok, true);
-  assert.deepEqual(result.project.tags, ['Analiz', 'Test']);
+  assert.deepEqual(result.project.tags.map((tag) => tag.name), ['Analiz', 'Test']);
 });
 
 test('partial project updates preserve an existing tag catalog', () => {
@@ -58,7 +67,7 @@ test('partial project updates preserve an existing tag catalog', () => {
     color: 'cyan'
   }, context);
   assert.equal(result.ok, true);
-  assert.deepEqual(result.project.tags, ['Analiz']);
+  assert.deepEqual(result.project.tags.map((tag) => tag.name), ['Analiz']);
 });
 
 test('lead and lag values support day, week, and month units', () => {

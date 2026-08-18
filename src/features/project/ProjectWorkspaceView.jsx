@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
@@ -13,6 +13,14 @@ import {
   projectTypeMeta,
   visibleProjects
 } from '../../domain/projectTypes';
+import {
+  TAG_COLOR_KEYS,
+  TAG_ICON_KEYS,
+  comparableTagName,
+  normalizeProjectTags,
+  projectTagCatalog
+} from '../../domain/tags';
+import { COLOR_MAP } from '../../lib/colors';
 import { useAppState } from '../../state/AppStateProvider';
 import { useAllPeople, useAllTasks, useTaskActions, useWorkspace } from '../../state/hooks';
 import { WbsView } from '../wbs/WbsView';
@@ -35,8 +43,64 @@ function projectForm(project, people, tasks) {
     leadId: project?.leadId || people.find((person) => person.name === project?.lead)?.id || '',
     dataDate: project?.dataDate || '',
     color: project?.color || 'blue',
-    tags: Array.isArray(project?.tags) ? [...project.tags] : legacyTags(project, tasks)
+    // Katalog her zaman kanonik `{name, color, icon}` üçlüleri olarak tutulur;
+    // eski anlık görüntülerdeki düz metinler de aynı biçime çevrilir.
+    //
+    // BOŞ katalog yetkilidir: projede bilinçli olarak etiket tanımlanmamış
+    // olabilir. Yalnızca katalog alanı HİÇ yoksa (eski anlık görüntü) görev
+    // anahtar sözcüklerinden türetilir; aksi hâlde ilgisiz bir alanı kaydetmek
+    // bu anahtar sözcükleri katalog olarak geri yazar ve boş katalog kararını
+    // sessizce bozardı.
+    tags: toCatalogEntries(Array.isArray(project?.tagCatalog) || Array.isArray(project?.tags)
+      ? projectTagCatalog(project)
+      : legacyTags(project, tasks))
   };
+}
+
+/**
+ * Katalog girdisine YEREL ve DEĞİŞMEZ bir kimlik verir.
+ *
+ * Etiketin kalıcı bir kimliği yoktur; birincil anahtar addır ve ad formda
+ * değiştirilebilir. Yeniden adlandırmayı ada göre izlemek yanlış sonuç veriyordu:
+ * `A → B` yapıp sonra yeni bir `A` ekleyip onu `C` yapmak, iki kaydı da aynı
+ * `from: A` ile günlüğe yazıyor ve görevler yanlış etikete taşınıyordu.
+ * `origin` girdinin YÜKLENDİĞİ andaki adıdır (yeni girdilerde `null`);
+ * yeniden adlandırma kümesi form durumundan TÜRETİLİR, ayrıca biriktirilmez —
+ * böylece formu geri almak bekleyen eşlemeleri de kendiliğinden temizler.
+ */
+function toCatalogEntries(tags) {
+  return normalizeProjectTags(tags).map((tag, index) => ({
+    ...tag,
+    entryId: `catalog-${index}`,
+    origin: tag.name
+  }));
+}
+
+/** Ad çakışmasını eler ve Türkçe alfabetik sıralar; yerel kimlikler korunur. */
+function sortCatalogEntries(entries) {
+  const seen = new Set();
+  return (entries || [])
+    .filter((entry) => entry && String(entry.name || '').trim())
+    .filter((entry) => {
+      const key = comparableTagName(entry.name);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((entry) => ({ ...entry, name: String(entry.name).trim() }))
+    .sort((left, right) => left.name.localeCompare(right.name, 'tr'));
+}
+
+/** Katalogdan kalıcılaştırılacak kanonik etiketler. */
+function catalogTags(entries) {
+  return normalizeProjectTags((entries || []).map(({ name, color, icon }) => ({ name, color, icon })));
+}
+
+/** Form durumundan türetilen eski→yeni ad eşlemeleri. */
+function catalogRenames(entries) {
+  return (entries || [])
+    .filter((entry) => entry.origin && comparableTagName(entry.origin) !== comparableTagName(entry.name))
+    .map((entry) => ({ from: entry.origin, to: entry.name }));
 }
 
 function projectLabel(project) {
@@ -47,28 +111,65 @@ function personLabel(person) {
   return person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name;
 }
 
+/**
+ * Etiket kataloğu düzenleyicisi.
+ *
+ * Etiket artık yalnızca bir metin değildir: adı değiştirilebilir, palet
+ * içinden bir renk ve kapalı listeden bir simge seçilebilir. Ad değişikliği
+ * kataloğu bozmadan uygulanır — `onRename` eski→yeni eşlemesini toplar ve
+ * kayıt sırasında görevlerin etiketi de taşınır.
+ */
 function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
   const [draft, setDraft] = useState('');
+  const [editing, setEditing] = useState(null);
+  const nextEntryId = useRef(0);
+
+  /**
+   * Etiketin GÖREV KULLANIMI, girdinin yüklendiği andaki adına bakılarak
+   * sayılır. Formdaki güncel adla sayılsaydı, kullanılan bir etiketi yeniden
+   * adlandırmak kullanım sayısını anında sıfıra düşürür, silmeyi serbest
+   * bırakır ve kaydetme sırasında görevler öksüz bir anahtar sözcükle kalırdı.
+   */
+  const usageFor = (entry) => usage.get(comparableTagName(entry.origin || entry.name)) || 0;
 
   const add = () => {
     const value = draft.trim();
     if (!value) return;
-    const exists = values.some((tag) => tag.toLocaleLowerCase('tr-TR') === value.toLocaleLowerCase('tr-TR'));
-    if (!exists) onChange([...values, value].sort((a, b) => a.localeCompare(b, 'tr')));
+    const exists = values.some((tag) => comparableTagName(tag.name) === comparableTagName(value));
+    if (!exists) {
+      nextEntryId.current += 1;
+      onChange([...values, { name: value, color: undefined, icon: undefined, entryId: `catalog-new-${nextEntryId.current}`, origin: null }]);
+    }
     setDraft('');
   };
 
-  const remove = (tag) => {
-    const count = usage.get(tag) || 0;
-    if (count > 0) {
-      onBlockedRemove(tag, count);
+  const patch = (tag, changes) => {
+    onChange(values.map((item) => (item.entryId === tag.entryId ? { ...item, ...changes } : item)));
+  };
+
+  const commitRename = (tag, nextName) => {
+    const name = String(nextName || '').trim();
+    setEditing(null);
+    if (!name || name === tag.name) return;
+    const clash = values.some((item) => item.entryId !== tag.entryId && comparableTagName(item.name) === comparableTagName(name));
+    if (clash) {
+      onBlockedRemove(name, usageFor(tag), 'duplicate');
       return;
     }
-    onChange(values.filter((value) => value !== tag));
+    onChange(values.map((item) => (item.entryId === tag.entryId ? { ...item, name } : item)));
+  };
+
+  const remove = (tag) => {
+    const count = usageFor(tag);
+    if (count > 0) {
+      onBlockedRemove(tag.name, count);
+      return;
+    }
+    onChange(values.filter((item) => item.entryId !== tag.entryId));
   };
 
   return (
-    <div className="col" style={{ gap: 8 }}>
+    <div className="col" style={{ gap: 10 }}>
       <div className="row" style={{ gap: 7, alignItems: 'stretch', flexWrap: 'wrap' }}>
         <input
           className="input"
@@ -88,20 +189,86 @@ function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
           <Icons.Plus size={13} /> Etiket ekle
         </button>
       </div>
-      <div className="project-label-editor">
-        {values.map((tag) => (
-          <span className="project-label-chip" key={tag}>
-            <span>{tag}</span>
-            {(usage.get(tag) || 0) > 0 && <span className="muted">· {usage.get(tag)}</span>}
-            <button type="button" onClick={() => remove(tag)} disabled={disabled} title={(usage.get(tag) || 0) > 0 ? 'Kullanımdaki etiket önce görevlerden kaldırılmalıdır.' : 'Etiketi kaldır'}>
-              <Icons.Close size={10} />
-            </button>
-          </span>
-        ))}
+
+      <div className="tag-catalog">
+        {values.map((tag) => {
+          const count = usageFor(tag);
+          const TagIcon = Icons[tag.icon] || Icons.Flag;
+          const isEditing = editing?.entryId === tag.entryId;
+          return (
+            <div className="tag-catalog-row" key={tag.entryId} style={{ '--tag-color': COLOR_MAP[tag.color] || 'var(--c-blue)' }}>
+              <span className="tag-catalog-ico"><TagIcon size={14} /></span>
+              {isEditing ? (
+                <input
+                  className="input tag-catalog-name-input"
+                  autoFocus
+                  value={editing.value}
+                  aria-label={`${tag.name} etiketini yeniden adlandır`}
+                  onChange={(event) => setEditing({ ...editing, value: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') { event.preventDefault(); commitRename(tag, editing.value); }
+                    if (event.key === 'Escape') { event.preventDefault(); setEditing(null); }
+                  }}
+                  onBlur={() => commitRename(tag, editing.value)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="tag-catalog-name"
+                  disabled={disabled}
+                  title="Adı değiştirmek için tıklayın"
+                  onClick={() => setEditing({ entryId: tag.entryId, value: tag.name })}
+                >
+                  {tag.name}
+                  <Icons.Edit size={11} />
+                </button>
+              )}
+              <span className="tag-catalog-usage muted">{count} görev</span>
+
+              <span className="tag-swatches" role="group" aria-label={`${tag.name} etiket rengi`}>
+                {TAG_COLOR_KEYS.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`tag-swatch${tag.color === key ? ' active' : ''}`}
+                    style={{ background: COLOR_MAP[key] }}
+                    aria-label={key}
+                    aria-pressed={tag.color === key}
+                    disabled={disabled}
+                    onClick={() => patch(tag, { color: key })}
+                  />
+                ))}
+              </span>
+
+              <select
+                className="input tag-icon-select"
+                value={tag.icon}
+                disabled={disabled}
+                aria-label={`${tag.name} etiket simgesi`}
+                onChange={(event) => patch(tag, { icon: event.target.value })}
+              >
+                {TAG_ICON_KEYS.map((key) => <option key={key} value={key}>{key}</option>)}
+              </select>
+
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => remove(tag)}
+                disabled={disabled}
+                title={count > 0 ? 'Kullanımdaki etiket önce görevlerden kaldırılmalıdır.' : 'Etiketi kaldır'}
+              >
+                <Icons.Close size={12} />
+              </button>
+            </div>
+          );
+        })}
         {!values.length && <span className="muted" style={{ fontSize: 11.5 }}>Henüz etiket tanımlanmadı.</span>}
       </div>
+
       <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.55 }}>
-        Etiketler proje düzeyinde kontrollü bir katalog olarak yönetilir. Basit Modda girilen yeni kısa açıklamalar da proje kataloğuna eklenir; böylece Gelişmiş Moda geçildiğinde kayıtlar aynı yapı içinde kullanılabilir.
+        Etiketler proje düzeyinde kontrollü bir katalog olarak yönetilir: ad, renk ve simge burada belirlenir ve görev listeleri,
+        Kanban ile Gantt aynı görseli kullanır. Bir etiketin adını değiştirdiğinizde o etiketi taşıyan görevler de kaydetme
+        sırasında yeni ada taşınır. Basit Modda girilen yeni kısa açıklamalar da bu kataloğa eklenir.
       </div>
     </div>
   );
@@ -133,11 +300,15 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
     setMessage(null);
   }, [defaults]);
 
+  // Kullanım sayısı harf duyarsız KANONİK adla tutulur: `Analiz` ve `analiz`
+  // aynı etikettir, ayrı sayılırsa kullanılan bir etiket "kullanılmıyor" görünür
+  // ve silinebilirdi.
   const usage = useMemo(() => {
     const counts = new Map();
     tasks.filter((task) => task.projectId === project.id).forEach((task) => {
       if (!task.keyword || task.keyword === 'Yeni') return;
-      counts.set(task.keyword, (counts.get(task.keyword) || 0) + 1);
+      const key = comparableTagName(task.keyword);
+      counts.set(key, (counts.get(key) || 0) + 1);
     });
     return counts;
   }, [tasks, project.id]);
@@ -157,7 +328,14 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
     if (saving || !dirty) return;
     setSaving(true);
     setMessage(null);
-    const result = await onSave(form);
+    // Yeniden adlandırma kümesi form durumundan TÜRETİLİR; ayrı bir günlükte
+    // biriktirilseydi formu geri almak onu temizlemez ve iptal edilmiş bir
+    // eşleme yine de görev etiketlerini taşırdı.
+    const result = await onSave({
+      ...form,
+      tags: catalogTags(form.tags),
+      tagRenames: catalogRenames(form.tags)
+    });
     setSaving(false);
     if (!result?.ok) {
       setMessage({ type: 'error', text: result?.error?.message || 'Proje bilgileri kaydedilemedi.' });
@@ -250,11 +428,13 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
             disabled={saving}
             onChange={(tags) => {
               setMessage(null);
-              setForm((current) => ({ ...current, tags }));
+              setForm((current) => ({ ...current, tags: sortCatalogEntries(tags) }));
             }}
-            onBlockedRemove={(tag, count) => setMessage({
+            onBlockedRemove={(tag, count, reason) => setMessage({
               type: 'error',
-              text: `“${tag}” etiketi ${count} görevde kullanılıyor. Katalogdan kaldırmadan önce bu görevleri başka bir etikete taşıyın.`
+              text: reason === 'duplicate'
+                ? `“${tag}” adında bir etiket katalogda zaten var. Farklı bir ad seçin.`
+                : `“${tag}” etiketi ${count} görevde kullanılıyor. Katalogdan kaldırmadan önce bu görevleri başka bir etikete taşıyın.`
             })}
           />
         </div>
@@ -416,13 +596,18 @@ function PortfolioProjectBrowser({ projects, onSelect }) {
   );
 }
 
-export function ProjectWorkspaceView() {
+/**
+ * @param {{initialTab?: 'definition'|'tree'}} props `initialTab` bir derin
+ *   bağlantı niyetidir: karşılama ekranındaki "İş Dağılım Ağacı" kısayolu bu
+ *   sayfayı açtığında Proje Tanımı sekmesine değil, adını taşıdığı ağaca düşer.
+ */
+export function ProjectWorkspaceView({ initialTab = 'definition' }) {
   const workspace = useWorkspace();
   const people = useAllPeople();
   const tasks = useAllTasks();
   const { canCreateProjects } = useAppState();
   const { addProject, updateProject } = useTaskActions();
-  const [tab, setTab] = useState('definition');
+  const [tab, setTab] = useState(initialTab === 'tree' ? 'tree' : 'definition');
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
 
   const project = workspace.selectedProject || null;

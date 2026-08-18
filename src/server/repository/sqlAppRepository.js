@@ -10,7 +10,10 @@ import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
+import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
+import { formatRecurrenceRule } from '../../scheduling/recurrence/index.js';
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
+import { CORPORATE_WBS_SYNC_WARMTH_SQL } from './corporateWbsQueries.js';
 import { synchronizeCorporateWbs } from './corporateWbsSync.js';
 import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
@@ -194,7 +197,7 @@ async function loadSnapshotFrom(executor, auth) {
     WHERE p.IsActive = 1
     ORDER BY p.ProjectName;
 
-    SELECT pt.ProjectId, pt.TagName, pt.SortOrder
+    SELECT pt.ProjectId, pt.TagName, pt.ColorToken, pt.IconKey, pt.SortOrder
     FROM dbo.MR_ProjectTags pt
     JOIN @VisibleProjects v ON v.ProjectId = pt.ProjectId
     ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
@@ -249,7 +252,10 @@ async function loadSnapshotFrom(executor, auth) {
              )
            )
        )
-    ORDER BY t.ProjectId, t.SortOrder, t.Title;
+    -- Sıralama tam belirlenimlidir: aynı seriden üretilen yinelemeler başlıkta ve
+    -- sıra anahtarında eşitlenebilir; kararlı bir ek anahtar olmadan SQL bunları
+    -- her yüklemede farklı sırada döndürebilir ve Kanban kendiliğinden karışırdı.
+    ORDER BY t.ProjectId, t.SortOrder, t.Title, t.PlannedStart, t.TaskId;
 
     SELECT ta.TaskId, ta.Sicil
     FROM dbo.MR_TaskAssignees ta
@@ -333,7 +339,9 @@ async function loadSnapshotFrom(executor, auth) {
   for (const row of tagRows || []) {
     const key = id(row.ProjectId);
     if (!tags.has(key)) tags.set(key, []);
-    tags.get(key).push(row.TagName);
+    // Renk/simge boş olabilir (eski kayıtlar); alan modeli ada göre kararlı bir
+    // varsayılan türetir, bu yüzden burada uydurma bir değer yazılmaz.
+    tags.get(key).push({ name: row.TagName, color: row.ColorToken || null, icon: row.IconKey || null });
   }
   for (const row of assigneeRows || []) {
     const key = id(row.TaskId);
@@ -382,7 +390,12 @@ async function loadSnapshotFrom(executor, auth) {
       dataDate: isoDate(row.DataDate),
       color: row.ColorToken || 'blue',
       calendarId: id(row.CalendarId),
-      tags: tags.get(id(row.ProjectId)) || [],
+      // İKİ alan bilinçlidir. `tags` eski sözleşmedeki düz metin listesidir:
+      // sürüm geçişi sırasında açık kalan eski istemci paketleri etiketi metin
+      // sanar ve nesne aldığında proje ekranı çöker. `tagCatalog` renk ve
+      // simgeyi taşıyan kanonik katalogdur; yeni arayüz bunu okur.
+      tags: projectTagNames(tags.get(id(row.ProjectId)) || []),
+      tagCatalog: tags.get(id(row.ProjectId)) || [],
       version: encodeVersion(row.RowVersion),
       accessLevel: row.AccessLevel,
       schedulingCapability: row.AccessLevel === 'FULL' ? 'COMPLETE' : 'SUPPRESSED_PARTIAL'
@@ -428,6 +441,10 @@ async function loadSnapshotFrom(executor, auth) {
       actualHours: nullableNumber(row.ActualHours),
       budget: nullableNumber(row.Budget),
       spent: nullableNumber(row.Spent),
+      // Tekrar kuralı yalnızca seri şablonunda dolu; yinelemeler üst göreve bağlıdır.
+      recurrence: row.RecurrenceRule || null,
+      recurrenceParentId: id(row.RecurrenceParentTaskId),
+      recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate),
       sortOrder: row.SortOrder,
       assigneeIds: assignees.get(id(row.TaskId)) || [],
       deps: dependencies.get(id(row.TaskId)) || [],
@@ -453,21 +470,81 @@ async function loadSnapshotFrom(executor, auth) {
   };
 }
 
-async function reconcileProjectTags(executor, actorSicil, projectId, values) {
+async function readProjectTags(executor, projectId) {
+  const req = request(executor);
+  req.input('projectId', sql.UniqueIdentifier, projectId);
+  const result = await req.query(`
+    SELECT TagName, ColorToken, IconKey
+    FROM dbo.MR_ProjectTags
+    WHERE ProjectId = @projectId
+    ORDER BY SortOrder, TagName;
+  `);
+  return (result.recordset || []).map((row) => ({ name: row.TagName, color: row.ColorToken, icon: row.IconKey }));
+}
+
+async function reconcileProjectTags(executor, actorSicil, projectId, values, renames = []) {
+  // Saklanan görünüm ÖNCE okunur: eski istemci paketleri kataloğu düz metin
+  // dizisi olarak geri gönderir ve renk/simge taşımaz. Doğrudan
+  // kanonikleştirilseydi, yeni istemcinin kaydettiği özel renk ve simgeler
+  // sürüm geçişi sırasında sessizce varsayılana döner, yani kalıcı veri
+  // kaybolurdu.
+  const stored = await readProjectTags(executor, projectId);
   const clear = request(executor);
   clear.input('projectId', sql.UniqueIdentifier, projectId);
   await clear.query('DELETE dbo.MR_ProjectTags WHERE ProjectId = @projectId;');
-  for (let index = 0; index < (values || []).length; index += 1) {
+  // Etiket kataloğu alan modelinde kanonikleştirilir: düz metinler de kabul
+  // edilir ve renk/simge anahtarları kapalı kümeye göre doğrulanır.
+  const canonical = mergeProjectTagAppearance(values, stored);
+  for (let index = 0; index < canonical.length; index += 1) {
+    const tag = canonical[index];
     const req = request(executor);
     req.input('projectId', sql.UniqueIdentifier, projectId);
-    req.input('tagName', sql.NVarChar(255), values[index]);
+    req.input('tagName', sql.NVarChar(255), tag.name);
+    req.input('colorToken', sql.VarChar(20), tag.color);
+    req.input('iconKey', sql.VarChar(40), tag.icon);
     req.input('sortOrder', sql.Int, index);
     req.input('actorSicil', sql.Int, actorSicil);
     await req.query(`
-      INSERT dbo.MR_ProjectTags(ProjectId, TagName, SortOrder, CreatedBySicil)
-      VALUES(@projectId, @tagName, @sortOrder, @actorSicil);
+      INSERT dbo.MR_ProjectTags(ProjectId, TagName, ColorToken, IconKey, SortOrder, CreatedBySicil)
+      VALUES(@projectId, @tagName, @colorToken, @iconKey, @sortOrder, @actorSicil);
     `);
   }
+  return planProjectTagPropagation({ storedTags: stored, nextTags: canonical, renames });
+}
+
+/**
+ * Katalog değişikliğini CANLI görev satırlarına uygular.
+ *
+ * Yayılım istemcinin gördüğü görev kümesine bırakılamaz: görev yazmaları proje
+ * satırının sürümünü ilerletmediği için, eşzamanlı bir kullanıcının aynı anda
+ * oluşturduğu görev katalog dışında kalır ve kalıcı bir öksüz anahtar sözcük
+ * doğardı. Katalog yazmasıyla AYNI işlemde çalışır.
+ *
+ * Ad eşleşmesi veritabanı harmanlamasına (collation) göre harf duyarsızdır;
+ * `BIN2` karşılaştırması yalnızca zaten birebir aynı olan satırları eler,
+ * böylece harf varyantları kanonik yazıma çekilirken gereksiz yazma olmaz.
+ *
+ * @returns {Promise<string[]>} güncellenen görev kimlikleri
+ */
+async function propagateProjectTagChanges(executor, actorSicil, projectId, plan = []) {
+  const touched = [];
+  for (const entry of plan) {
+    const req = request(executor);
+    req.input('projectId', sql.UniqueIdentifier, projectId);
+    req.input('from', sql.NVarChar(255), entry.from);
+    req.input('to', sql.NVarChar(255), entry.to);
+    req.input('actorSicil', sql.Int, actorSicil);
+    const result = await req.query(`
+      UPDATE dbo.MR_Tasks
+      SET Keyword = @to, UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
+      OUTPUT inserted.TaskId
+      WHERE ProjectId = @projectId
+        AND Keyword = @from
+        AND (@to IS NULL OR Keyword <> @to COLLATE Latin1_General_BIN2);
+    `);
+    for (const row of result.recordset || []) touched.push(id(row.TaskId));
+  }
+  return touched;
 }
 
 async function commitProject(executor, actor, project, rootWbs, correlationId) {
@@ -528,8 +605,8 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
     await audit(executor, actor, correlationId, 'CREATE', 'PROJECT_ACCESS', `${projectId}:${actor.sicil}`, projectId, null, {
       projectId, sicil: actor.sicil, accessLevel: 'FULL', grantSource: 'OWNER'
     });
-    await reconcileProjectTags(executor, actor.sicil, projectId, project.tags);
-    return { created: true, consumedRootId: authoritativeRoot.id };
+    const tagPlan = await reconcileProjectTags(executor, actor.sicil, projectId, project.tags, project.tagRenames);
+    return { created: true, consumedRootId: authoritativeRoot.id, tagPlan };
   }
 
   assertProjectWriteAccess(actor.effective, projectId);
@@ -563,9 +640,9 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
   if (!updated.recordset[0]?.Affected) {
     throw new ServerPersistenceError('CONFLICT', 'Proje başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
   }
-  await reconcileProjectTags(executor, actor.sicil, projectId, project.tags);
+  const tagPlan = await reconcileProjectTags(executor, actor.sicil, projectId, project.tags, project.tagRenames);
   await audit(executor, actor, correlationId, 'UPDATE', 'PROJECT', projectId, projectId, before, project);
-  return { created: false, consumedRootId: null };
+  return { created: false, consumedRootId: null, tagPlan };
 }
 
 async function assertWbsProjectIsWritableStructure(executor, projectId) {
@@ -638,6 +715,38 @@ async function commitWbs(executor, actor, node, correlationId) {
   await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'WBS', wbsId, projectId, before, node);
 }
 
+function hasOwnField(value, field) {
+  return Boolean(value) && Object.prototype.hasOwnProperty.call(value, field);
+}
+
+/** Şablona bağlı yineleme sayısı. */
+async function countRecurrenceChildren(executor, taskId) {
+  const req = request(executor);
+  req.input('parentId', sql.UniqueIdentifier, taskId);
+  const result = await req.query(`
+    SELECT COUNT_BIG(*) AS ChildCount
+    FROM dbo.MR_Tasks
+    WHERE RecurrenceParentTaskId = @parentId;
+  `);
+  return Number(result.recordset?.[0]?.ChildCount ?? 0);
+}
+
+/** Aynı seri gününde başka bir yineleme var mı? */
+async function recurrenceOccurrenceExists(executor, parentId, occurrenceDate, taskId) {
+  const req = request(executor);
+  req.input('parentId', sql.UniqueIdentifier, parentId);
+  req.input('occurrenceDate', sql.Date, occurrenceDate);
+  req.input('taskId', sql.UniqueIdentifier, taskId);
+  const result = await req.query(`
+    SELECT TOP (1) TaskId
+    FROM dbo.MR_Tasks
+    WHERE RecurrenceParentTaskId = @parentId
+      AND RecurrenceOccurrenceDate = @occurrenceDate
+      AND TaskId <> @taskId;
+  `);
+  return Boolean(result.recordset?.[0]);
+}
+
 async function commitTask(executor, actor, task, correlationId) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
@@ -662,8 +771,54 @@ async function commitTask(executor, actor, task, correlationId) {
   if ((task.isMilestone || task.milestone) && Number(task.plannedDurationDays || 0) !== 0) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Kilometre taşı süresi sıfır olmalıdır.');
   }
+
+  // ── Tekrar serisi bütünlüğü ────────────────────────────────────────────────
+  // Alanlar YALNIZCA gönderildiklerinde yazılır. Sürümlü güncelleme sözleşmesi
+  // `recurrence`/`recurrenceParentId` alanlarını zorunlu kılmaz; eksik değeri
+  // NULL saymak, eski bir istemcinin ilgisiz bir alanı düzenlemesiyle serinin
+  // kuralını silmesine ya da yinelemenin şablonundan kopmasına yol açardı.
+  const recurrenceRule = hasOwnField(task, 'recurrence')
+    ? (formatRecurrenceRule(task.recurrence) || null)
+    : (before?.RecurrenceRule ?? null);
+  const recurrenceParentId = hasOwnField(task, 'recurrenceParentId')
+    ? (task.recurrenceParentId ? uuid(task.recurrenceParentId) : null)
+    : (before ? id(before.RecurrenceParentTaskId) : null);
+  const recurrenceOccurrenceDate = hasOwnField(task, 'recurrenceOccurrenceDate')
+    ? (task.recurrenceOccurrenceDate || null)
+    : (before ? isoDate(before.RecurrenceOccurrenceDate) : null);
+
+  if (recurrenceParentId) {
+    // Yabancı anahtar yalnızca kimliğin var olduğunu kanıtlar. Şablonun aynı
+    // projede ve gerçekten bir şablon olduğu burada doğrulanır; aksi hâlde bir
+    // proje, başka bir projedeki göreve bağlanıp onun silinmesini de bloklardı.
+    if (sameActualId(recurrenceParentId, taskId)) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Bir görev kendi tekrar şablonu olamaz.');
+    }
+    const parent = await taskRow(executor, recurrenceParentId);
+    if (!parent) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar şablonu bulunamadı.');
+    }
+    if (!sameActualId(parent.ProjectId, projectId)) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Yineleme, tekrar şablonuyla aynı projede olmalıdır.');
+    }
+    if (parent.RecurrenceParentTaskId) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar şablonu başka bir serinin yinelemesi olamaz.');
+    }
+    if (recurrenceOccurrenceDate && await recurrenceOccurrenceExists(executor, recurrenceParentId, recurrenceOccurrenceDate, taskId)) {
+      throw new ServerPersistenceError('CONFLICT', 'Bu tekrar günü için zaten bir yineleme var. Verileri yeniden yükleyin.');
+    }
+  }
+
   const assigneeSicils = await ensurePeople(executor, task.assigneeIds || []);
   const projectChanged = before && !sameActualId(before.ProjectId, projectId);
+  if (projectChanged && await countRecurrenceChildren(executor, taskId)) {
+    // Şablon taşınırsa yinelemeleri eski projede kalır ve seri iki projeye
+    // bölünür: yeni proje "hiç yineleme yok" görüp ikinci bir seri üretebilirdi.
+    throw new ServerPersistenceError(
+      'MUTATION_FAILED',
+      'Yinelemeleri olan bir tekrar şablonu başka projeye taşınamaz; önce yinelemeleri kaldırın.'
+    );
+  }
   if (projectChanged) {
     const dependencyCleanup = request(executor);
     dependencyCleanup.input('taskId', sql.UniqueIdentifier, taskId);
@@ -699,6 +854,12 @@ async function commitTask(executor, actor, task, correlationId) {
   req.input('budget', sql.Decimal(19, 4), nullableNumber(task.budget));
   req.input('spent', sql.Decimal(19, 4), nullableNumber(task.spent));
   req.input('sortOrder', sql.Int, task.sortOrder ?? null);
+  // Kural kanonikleştirilerek yazılır: geçersiz bir RRULE metni kalıcı kayda düşmez.
+  req.input('recurrenceRule', sql.NVarChar(400), recurrenceRule);
+  req.input('recurrenceParentId', sql.UniqueIdentifier, recurrenceParentId);
+  // Yinelemenin DEĞİŞMEZ seri kimliği: görev ertelense bile bu tarih durur,
+  // böylece aynı gün ikinci kez üretilemez (bkz. UX_MR_Tasks_RecurrenceOccurrence).
+  req.input('recurrenceOccurrenceDate', sql.Date, recurrenceParentId ? recurrenceOccurrenceDate : null);
   req.input('actorSicil', sql.Int, actor.sicil);
 
   if (!before) {
@@ -707,12 +868,14 @@ async function commitTask(executor, actor, task, correlationId) {
         TaskId, ProjectId, WbsId, CalendarId, Title, Description, Keyword, Status, Priority,
         IsMilestone, PlannedStart, PlannedFinish, PlannedDurationDays, TargetFinish,
         ActualStart, ActualFinish, RemainingDurationDays, Progress, PlannedHours, ActualHours,
-        Budget, Spent, SortOrder, CreatedBySicil, UpdatedBySicil
+        Budget, Spent, RecurrenceRule, RecurrenceParentTaskId, RecurrenceOccurrenceDate,
+        SortOrder, CreatedBySicil, UpdatedBySicil
       ) VALUES(
         @taskId, @projectId, @wbsId, @calendarId, @title, @description, @keyword, @status, @priority,
         @isMilestone, @plannedStart, @plannedFinish, @plannedDuration, @targetFinish,
         @actualStart, @actualFinish, @remainingDuration, @progress, @plannedHours, @actualHours,
-        @budget, @spent, @sortOrder, @actorSicil, @actorSicil
+        @budget, @spent, @recurrenceRule, @recurrenceParentId, @recurrenceOccurrenceDate,
+        @sortOrder, @actorSicil, @actorSicil
       );
     `);
   } else {
@@ -726,7 +889,10 @@ async function commitTask(executor, actor, task, correlationId) {
           ActualStart = @actualStart, ActualFinish = @actualFinish,
           RemainingDurationDays = @remainingDuration, Progress = @progress,
           PlannedHours = @plannedHours, ActualHours = @actualHours,
-          Budget = @budget, Spent = @spent, SortOrder = @sortOrder,
+          Budget = @budget, Spent = @spent,
+          RecurrenceRule = @recurrenceRule, RecurrenceParentTaskId = @recurrenceParentId,
+          RecurrenceOccurrenceDate = @recurrenceOccurrenceDate,
+          SortOrder = @sortOrder,
           UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
       WHERE TaskId = @taskId AND RowVersion = @version;
       SELECT @@ROWCOUNT AS Affected;
@@ -792,9 +958,21 @@ async function deleteTask(executor, actor, entry, correlationId) {
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   req.input('version', sql.Binary(8), decodeVersion(entry.version));
+  req.input('actorSicil', sql.Int, actor.sicil);
   const result = await req.query(`
     IF NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks WHERE TaskId = @taskId AND RowVersion = @version)
       THROW 51009, 'STALE_TASK', 1;
+    -- Seri şablonu silinirken üretilmiş yinelemeler AYRILIR, silinmez: her
+    -- yineleme gerçek bir görevdir ve kendi ilerlemesini taşır. Ayırma
+    -- yapılmasaydı kendine başvuran yabancı anahtar silmeyi tümüyle
+    -- engellerdi. Seri kimliği de temizlenir: şablonu olmayan bir yinelemenin
+    -- seri günü anlamsızdır.
+    UPDATE dbo.MR_Tasks
+    SET RecurrenceParentTaskId = NULL,
+        RecurrenceOccurrenceDate = NULL,
+        UpdatedAt = SYSUTCDATETIME(),
+        UpdatedBySicil = @actorSicil
+    WHERE RecurrenceParentTaskId = @taskId;
     DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
     DELETE dbo.MR_Tasks WHERE TaskId = @taskId AND RowVersion = @version;
@@ -856,6 +1034,16 @@ async function deleteWbs(executor, actor, entry, correlationId) {
  * kaynak geçici olarak erişilemez olduğunda uygulamanın tümüyle kilitlenmesi
  * kabul edilebilir değildir.
  */
+/**
+ * Depodaki eşitleme durumunu okur: kurumsal ağaç zaten kurulmuşsa yeniden
+ * başlatmadan sonraki ilk istek de arka planda tazeler, tam turu beklemez.
+ */
+async function readCorporateWbsSyncWarmth() {
+  const pool = await getSqlPool();
+  const row = (await pool.request().query(CORPORATE_WBS_SYNC_WARMTH_SQL)).recordset?.[0] || null;
+  return { syncedAt: row?.LastSyncedAt ?? null, projectCount: Number(row?.ProjectCount ?? 0) };
+}
+
 async function refreshCorporateCatalog() {
   // Yetki bağlamı bilinçli olarak pencerenin İÇİNDE yüklenir: tazelik penceresi
   // açıkken istek başına tek bir fazladan sorgu bile çalışmaz.
@@ -871,13 +1059,47 @@ async function refreshCorporateCatalog() {
     // (varsayılan beş dakika) hiç denenmemesine yol açardı.
     const synchronized = Boolean(wbs.synchronized) || wbs.reason === 'NOT_CONFIGURED';
     return { synchronized, refreshed: synchronized, wbs };
-  });
+  }, { readDurableSyncState: readCorporateWbsSyncWarmth });
+}
+
+/**
+ * Kurumsal katalog tazelemeden yalnızca yetkili anlık görüntüyü okur ve
+ * kullandığı yetki bağlamını da döndürür.
+ *
+ * Bağlam bilerek dışarı verilir: açılış isteği oturumu aynı yanıtta taşır ve
+ * kişi/rol/proje erişimi ile görev-atama kapsamını hesaplayan (büyük veri
+ * kümesinde pahalı) yetki sorgusu tek bir istekte İKİ kez çalışmaz.
+ */
+async function readSnapshotWithAuthorization() {
+  const pool = await getSqlPool();
+  const auth = await loadAuthorizationContext(pool);
+  return { snapshot: await loadSnapshotFrom(pool, auth), auth };
 }
 
 /** Kurumsal katalog tazelemeden yalnızca yetkili anlık görüntüyü okur. */
 async function readSnapshot() {
-  const pool = await getSqlPool();
-  return loadSnapshotFrom(pool, await loadAuthorizationContext(pool));
+  return (await readSnapshotWithAuthorization()).snapshot;
+}
+
+/**
+ * Hazır yetki bağlamından oturum bağlamını kurar.
+ *
+ * Kimlik doğrulamasından gelen GÖRÜNTÜLEME alanları (ad, e-posta, Keycloak
+ * departmanı) kurumsal rehber kaydının üzerine eklenir. Yetki kararları
+ * buradan DEĞİL, yalnızca Sicil üzerinden türetilmeye devam eder.
+ */
+async function sessionContextFrom(auth) {
+  const identity = await getTrustedSessionIdentity().catch(() => null);
+  return {
+    dataMode: 'actual',
+    authMode: resolveAuthMode(),
+    authenticated: true,
+    currentUser: buildSessionCurrentUser(auth.currentUser, identity),
+    isSystemAdmin: auth.isSystemAdmin,
+    isExecutive: auth.isExecutive,
+    canCreateProjects: auth.canCreateProjects,
+    projectAccess: [...auth.effective.access.values()]
+  };
 }
 
 export function createSqlAppRepository() {
@@ -885,25 +1107,13 @@ export function createSqlAppRepository() {
     kind: 'sql-server',
 
     async loadSessionContext() {
-      const auth = await loadAuthorizationContext();
-      // Kimlik doğrulamasından gelen GÖRÜNTÜLEME alanları (ad, e-posta,
-      // Keycloak departmanı) kurumsal rehber kaydının üzerine eklenir. Yetki
-      // kararları buradan DEĞİL, yalnızca Sicil üzerinden türetilmeye devam eder.
-      const identity = await getTrustedSessionIdentity().catch(() => null);
-      return {
-        dataMode: 'actual',
-        authMode: resolveAuthMode(),
-        authenticated: true,
-        currentUser: buildSessionCurrentUser(auth.currentUser, identity),
-        isSystemAdmin: auth.isSystemAdmin,
-        isExecutive: auth.isExecutive,
-        canCreateProjects: auth.canCreateProjects,
-        projectAccess: [...auth.effective.access.values()]
-      };
+      return sessionContextFrom(await loadAuthorizationContext());
     },
 
     refreshCorporateCatalog,
     readSnapshot,
+    readSnapshotWithAuthorization,
+    sessionContextFrom,
 
     async loadSnapshot() {
       await refreshCorporateCatalog();
@@ -916,16 +1126,25 @@ export function createSqlAppRepository() {
         const actor = await loadAuthorizationContext(transaction);
         const correlationId = randomUUID();
         const consumedRootIds = new Set();
+        const tagPlans = [];
 
         for (const project of changes.projectUpserts) {
           const root = changes.wbsUpserts.find((node) => sameActualId(node.projectId, project.id) && node.parentId == null) || null;
           const result = await commitProject(transaction, actor, project, root, correlationId);
           if (result.consumedRootId) consumedRootIds.add(result.consumedRootId);
+          if (result.tagPlan?.length) tagPlans.push({ projectId: id(project.id), plan: result.tagPlan });
         }
         for (const node of changes.wbsUpserts) {
           if (!consumedRootIds.has(id(node.id))) await commitWbs(transaction, actor, node, correlationId);
         }
         for (const task of changes.taskUpserts) await commitTask(transaction, actor, task, correlationId);
+        // Etiket yayılımı görev yazmalarından SONRA çalışır: aynı işlemde
+        // istemcinin gönderdiği görevler kendi sürüm anahtarlarıyla kaydedilir,
+        // ardından katalog dışında kalan CANLI satırlar hizalanır.
+        const propagatedTaskIds = [];
+        for (const entry of tagPlans) {
+          propagatedTaskIds.push(...await propagateProjectTagChanges(transaction, actor.sicil, entry.projectId, entry.plan));
+        }
         for (const entry of changes.taskDeletes) await deleteTask(transaction, actor, entry, correlationId);
         for (const entry of changes.wbsDeletes) await deleteWbs(transaction, actor, entry, correlationId);
         if (changes.projectDeletes.length) {
@@ -935,7 +1154,7 @@ export function createSqlAppRepository() {
         const authoritative = await loadSnapshotFrom(transaction, actor);
         const projectIds = new Set(changes.projectUpserts.map((value) => id(value.id)));
         const wbsIds = new Set([...changes.wbsUpserts.map((value) => id(value.id)), ...consumedRootIds]);
-        const taskIds = new Set(changes.taskUpserts.map((value) => id(value.id)));
+        const taskIds = new Set([...changes.taskUpserts.map((value) => id(value.id)), ...propagatedTaskIds]);
         return {
           projectUpserts: authoritative.projects.filter((value) => projectIds.has(value.id)),
           projectDeletes: [],

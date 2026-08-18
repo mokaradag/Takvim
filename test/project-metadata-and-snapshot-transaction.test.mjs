@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { normalizeTaskReferences } from '../src/domain/validation/index.js';
+import { applyProjectTagPropagation, planProjectTagPropagation } from '../src/domain/tags/index.js';
 import {
   prepareProjectCreation,
   prepareProjectUpdateChanges
@@ -118,8 +119,13 @@ test('project tag canonicalization still persists only the affected task keyword
   const result = prepareProjectUpdateChanges('project-1', { tags: ['Risk'] }, base);
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.changes.taskUpserts.map((task) => task.id), ['task-1']);
-  assert.equal(result.changes.taskUpserts[0].keyword, 'Risk');
+  // Kanonikleştirme kalıcı katmanda canlı satırlara uygulanır: istemcinin
+  // gördüğü görev listesinden türetilen bir yama, eşzamanlı bir kullanıcının
+  // aynı anda oluşturduğu görevi kapsamazdı.
+  assert.deepEqual(result.changes.taskUpserts, []);
+  const plan = planProjectTagPropagation({ storedTags: base.projects[0].tags, nextTags: result.project.tags });
+  const propagated = applyProjectTagPropagation(base.tasks, 'project-1', plan);
+  assert.deepEqual(propagated.map((task) => [task.id, task.keyword]), [['task-1', 'Risk'], ['task-2', 'Other']]);
 });
 
 test('persisted data mode is restored only after hydration', () => {
@@ -138,7 +144,7 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   assert.match(poolSource, /const activeTransaction = transactionContext\.getStore\(\);\s*if \(activeTransaction\) return activeTransaction;/s);
   assert.match(poolSource, /withSqlTransaction\(work, \{ isolationLevel = sql\.ISOLATION_LEVEL\.READ_COMMITTED \} = \{\}\)/);
   assert.match(projectionSource, /return withSqlTransaction\(async \(transaction\) => \{/);
-  assert.match(projectionSource, /const snapshot = await baseRepository\.readSnapshot\(\);/);
+  assert.match(projectionSource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(\);/);
   // Kurumsal katalog tazelemesi bilinçli olarak serileştirilebilir işlemin dışındadır.
   assert.match(projectionSource, /await baseRepository\.refreshCorporateCatalog\(\);\s*return withSqlTransaction\(/s);
   assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds\)/);

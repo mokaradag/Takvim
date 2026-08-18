@@ -90,11 +90,38 @@ export function findNestedCommitCollectionIssue(changes = {}) {
       );
     }
     for (let tagIndex = 0; tagIndex < (tags || []).length; tagIndex += 1) {
-      if (typeof tags[tagIndex] !== 'string' || !tags[tagIndex].trim()) {
+      // Etiket ya düz metindir (eski istemciler) ya da `{ name, color, icon }`
+      // nesnesidir; her iki durumda da adın dolu olması beklenir.
+      const tag = tags[tagIndex];
+      const name = typeof tag === 'string' ? tag : (tag && typeof tag === 'object' ? tag.name : null);
+      if (typeof name !== 'string' || !name.trim()) {
         return issue(
           'PROJECT_TAG_INVALID',
           `${basePath}.tags[${tagIndex}]`,
-          'Proje etiketi boş olmayan bir metin olmalıdır.'
+          'Proje etiketi boş olmayan bir metin adı taşımalıdır.'
+        );
+      }
+    }
+
+    // Etiket yeniden adlandırmaları katalog yazmasıyla birlikte gelir ve canlı
+    // görev satırlarına uygulanır; şekli bu yüzden sınırda doğrulanır.
+    const renames = project?.tagRenames;
+    if (renames !== undefined && !Array.isArray(renames)) {
+      return issue(
+        'PROJECT_TAG_RENAMES_NOT_ARRAY',
+        `${basePath}.tagRenames`,
+        'Etiket yeniden adlandırmaları dizi olmalıdır.'
+      );
+    }
+    for (let renameIndex = 0; renameIndex < (renames || []).length; renameIndex += 1) {
+      const entry = renames[renameIndex];
+      const from = entry && typeof entry === 'object' ? entry.from : null;
+      const to = entry && typeof entry === 'object' ? entry.to : null;
+      if (typeof from !== 'string' || !from.trim() || typeof to !== 'string' || !to.trim()) {
+        return issue(
+          'PROJECT_TAG_RENAME_INVALID',
+          `${basePath}.tagRenames[${renameIndex}]`,
+          'Etiket yeniden adlandırması dolu `from` ve `to` adları taşımalıdır.'
         );
       }
     }

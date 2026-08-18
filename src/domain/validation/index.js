@@ -63,7 +63,15 @@ export function normalizeTaskScheduleFields(task) {
     targetFinish: task.targetFinish || null,
     actualStart: task.actualStart || null,
     actualFinish: task.actualFinish || null,
-    remainingDurationDays: task.remainingDurationDays ?? null
+    remainingDurationDays: task.remainingDurationDays ?? null,
+    // Tekrar kuralı (RFC 5545 RRULE gövdesi) yalnızca SERİ ŞABLONUNDA bulunur;
+    // üretilen yinelemeler `recurrenceParentId` ile şablona bağlanır.
+    recurrence: task.recurrence || null,
+    recurrenceParentId: task.recurrenceParentId || null,
+    // Yinelemenin değişmez seri kimliği (RFC 5545 RECURRENCE-ID karşılığı):
+    // görev ertelense bile bu tarih korunur, böylece aynı yineleme ikinci kez
+    // üretilmez ve kalıcı katman seride tekilliği uygulayabilir.
+    recurrenceOccurrenceDate: task.recurrenceOccurrenceDate || null
   };
 }
 

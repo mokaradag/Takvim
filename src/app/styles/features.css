@@ -256,7 +256,135 @@
 .wbs-tree-row { min-height: 54px; border-bottom: 1px solid var(--border); }
 .wbs-tree-row:last-child { border-bottom: 0; }
 
+/* ── Dağılım ağacı · sürükle-bırak ─────────────────────────────
+   Bırakma niyeti üç ayrı işaretle gösterilir: üst/alt kenar çizgisi kardeş
+   sırasını, dolgulu çerçeve ise alt düğüm yapmayı anlatır. */
+.wbs-tree-row { position: relative; }
+.wbs-tree-row.draggable { cursor: grab; }
+.wbs-tree-row.draggable:active { cursor: grabbing; }
+.wbs-tree-row.dragging { opacity: .45; }
+.wbs-drag-handle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  opacity: .45;
+  transition: opacity .15s ease, color .15s ease;
+}
+.wbs-tree-row:hover .wbs-drag-handle { opacity: 1; color: var(--accent); }
+.wbs-drag-handle[data-disabled='true'] { opacity: .18; }
+.wbs-tree-row:hover .wbs-drag-handle[data-disabled='true'] { opacity: .18; color: var(--text-dim); }
+.wbs-tree-row.drop-inside {
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 55%, transparent);
+  border-radius: var(--r-sm);
+}
+.wbs-tree-row.drop-before::before,
+.wbs-tree-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent);
+}
+.wbs-tree-row.drop-before::before { top: -1px; }
+.wbs-tree-row.drop-after::after { bottom: -1px; }
+.wbs-tree-row.drop-blocked.drop-inside {
+  background: color-mix(in oklab, var(--status-overdue) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--status-overdue) 55%, transparent);
+}
+.wbs-tree-row.drop-blocked.drop-before::before,
+.wbs-tree-row.drop-blocked.drop-after::after {
+  background: var(--status-overdue);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--status-overdue) 22%, transparent);
+}
+.wbs-inline-input {
+  min-width: 0;
+  flex: 1 1 180px;
+  height: 26px;
+  padding: 2px 8px;
+  font-size: 12.5px;
+}
+.wbs-inline-add { margin-top: 4px; color: var(--text-dim); }
+
+/* ── Tekrarlayan görev düzenleyicisi ───────────────────────────
+   Kural formu ve RFC 5545 karşılığı yan yana gösterilir: kullanıcı ne
+   tanımladığını, dışa aktarımda ne taşındığını aynı anda görür. */
+.recurrence-days { display: flex; flex-wrap: wrap; gap: 5px; }
+.recurrence-day {
+  min-width: 40px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.recurrence-day:hover { border-color: var(--border-strong); color: var(--text); }
+.recurrence-day.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.recurrence-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+}
+.recurrence-rule { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.recurrence-code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+.recurrence-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.recurrence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* ── Task Detail drawer ────────────────────────────────────── */
+.drawer-title-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--status-overdue);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
 .drawer-backdrop { z-index: var(--z-drawer-backdrop); }
 .drawer {
   z-index: var(--z-drawer);

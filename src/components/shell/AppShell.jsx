@@ -20,9 +20,11 @@ import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay'
 import {
   useAllPeople,
   useAllProjects,
+  useCurrentUser,
   usePeople,
   useTaskActions,
   useTasks,
+  usePortfolioTaskStats,
   useTaskStats,
   useWbs,
   useWorkspace
@@ -67,6 +69,8 @@ export default function AppShell() {
     selectWorkspace
   } = workspace;
   const stats = useTaskStats();
+  const portfolioStats = usePortfolioTaskStats();
+  const currentUser = useCurrentUser();
   const { openTask } = useTaskActions();
   const simpleMode = t.appMode === 'simple';
 
@@ -74,6 +78,12 @@ export default function AppShell() {
     const landing = TWEAK_DEFAULTS.landingView || 'ozet';
     return NAV_ITEMS.some((item) => item.id === landing) ? landing : 'ozet';
   });
+  // Gezinme niyeti: bir sayfanın hangi alt görünümle açılacağını taşır.
+  const [viewIntent, setViewIntent] = useState(null);
+  const navigate = (nextView, intent = null) => {
+    setViewIntent(intent);
+    setView(nextView);
+  };
   const [simpleCalendarTab, setSimpleCalendarTab] = useState('calendar');
   const [cmdOpen, setCmdOpen] = useState(false);
   const [showArchivedProjects, setShowArchivedProjects] = useState(false);
@@ -103,14 +113,14 @@ export default function AppShell() {
     if (mode === 'simple') {
       selectWorkspace(null);
       setSimpleCalendarTab('calendar');
-      setView('takvim');
+      navigate('takvim');
     }
   };
 
   useEffect(() => {
     if (!simpleMode) return;
     if (workspaceMode !== 'portfolio') selectWorkspace(null);
-    if (!SIMPLE_NAV_IDS.has(view)) setView('takvim');
+    if (!SIMPLE_NAV_IDS.has(view)) navigate('takvim');
   }, [simpleMode, view, workspaceMode, selectWorkspace]);
 
   useEffect(() => {
@@ -174,9 +184,11 @@ export default function AppShell() {
 
   const renderView = () => {
     switch (view) {
-      case 'ozet': return <DashboardView onNavigate={setView} />;
+      case 'ozet': return <DashboardView onNavigate={navigate} />;
       case 'veri': return <TasksView />;
-      case 'wbs': return <ProjectWorkspaceView />;
+      // Sekme niyeti anahtar olarak taşınır: karşılama kısayolu ağacı açar,
+      // sıradan gezinme Proje Tanımı ile başlar.
+      case 'wbs': return <ProjectWorkspaceView key={`wbs:${viewIntent || 'definition'}`} initialTab={viewIntent} />;
       case 'takvim': return simpleMode ? (
         <div className="simple-calendar-workspace">
           <div className="simple-calendar-tabs seg" role="tablist" aria-label="Basit Mod Takvim görünümü">
@@ -228,9 +240,10 @@ export default function AppShell() {
   if (welcomeOpen && !simpleMode) {
     return (
       <WelcomeScreen
-        stats={stats}
+        stats={portfolioStats}
+        currentUser={currentUser}
         onClose={closeWelcome}
-        onNavigate={setView}
+        onNavigate={navigate}
         showAgain={!hideWelcome}
         onShowAgainChange={(show) => setHideWelcome(!show)}
       />
@@ -312,7 +325,7 @@ export default function AppShell() {
                 className={`nav-item${view === item.id ? ' active' : ''}`}
                 onClick={() => {
                   if (simpleMode && item.id === 'takvim') setSimpleCalendarTab('calendar');
-                  setView(item.id);
+                  navigate(item.id);
                 }}
               >
                 <Icon className="nav-icon" size={15} />
@@ -372,7 +385,7 @@ export default function AppShell() {
       {cmdOpen && !simpleMode && (
         <CommandPalette
           onClose={() => setCmdOpen(false)}
-          onNavigate={setView}
+          onNavigate={navigate}
           onOpenTask={openTask}
           onSetTheme={(theme) => setTweak('theme', theme)}
           tasks={tasks}
