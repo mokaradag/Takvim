@@ -84,6 +84,38 @@ kalan saat/görev/boşta kapasite/haftalık ortalama/doluluk). Önceki tek çubu
 düzen adı sabit 110 pikselik bir sütuna sıkıştırıyor, uzun kurumsal adlar üç
 noktaya kırpılıyordu.
 
+Ad **kırpılmaz**: gerekirse satıra sarar ve satır yüksekliği büyür. Tablonun
+varlık nedeni uzun kurumsal adların okunabilir olmasıdır; üç noktalı kırpma
+korunsaydı ilk sütun daraldığı anda aynı sorun geri gelirdi. Satır ipuçları
+`asChild` ile doğrudan satıra bağlanır: varsayılan sarmalayıcı satırı bir
+`inline-flex` `span` içine alıyor, `.pm-row` artık `.pm-table`'ın doğrudan
+çocuğu olmadığı için ızgara sütunları satırdan satıra kayıyordu.
+
+Kaynak kullanımındaki **haftalık ortalama** ve boşta kapasite yalnızca altı
+haftalık rapor ufkuna düşen işi sayar: kalan işin tamamı kapasiteyle
+karşılaştırılırsa, önümüzdeki bir yıla yayılmış 240 saatlik yük de "haftada 40
+saat" gibi görünüyordu. İş, planlanan aralığın ufukla kesişimi oranında
+sayılır; planlanmamış ve gecikmiş işin kalanı bugünün yüküdür.
+
+## Karşılama ekranı
+
+Ekran, doğrulanmış oturumdan gelen kullanıcı fotoğrafı (yoksa baş harf yedeği),
+adı ve departmanıyla kişiselleştirilmiştir. Kimlik yalnızca **gösterim**
+amaçlıdır; hiçbir yetki kararı buradan türetilmez.
+
+Saate göre selamlama **yalnızca tarayıcıda** hesaplanır. Bu istemci bileşeni
+sunucuda da ön-render edilebilir; `new Date()` orada sunucu saat diliminde
+okunur ve iki taraf farklı dilime düşerse hidrasyon uyuşmazlığı ve yanlış
+selamlama oluşurdu. Bağlanana kadar dilimden bağımsız bir metin gösterilir.
+
+Ölçüm kartları **portföyün tamamını** özetler (`usePortfolioTaskStats`), çalışma
+alanı seçimini değil: başlık portföy özeti dediği hâlde, son çalışma alanı tek
+bir proje olan kullanıcıya o projenin sayıları gösteriliyordu.
+
+Özellik kartları bir **gezinme niyeti** taşıyabilir. "Sürükle-bırak iş dağılım
+ağacı" kartı `wbs` sayfasını `tree` sekmesiyle açar; niyet olmasaydı kart adını
+taşıdığı ağaca değil, Proje Tanımı sekmesine düşerdi.
+
 ## Sütun süzgeçlerinde canlı arama
 
 Çoklu (`multi`) ve tekli (`single`) sütun süzgeçleri, seçenek sayısı
@@ -99,8 +131,20 @@ olarak yaşar ve seçeneğin etiketi, değeri, açıklaması ve `keywords` alan�
 proje süzgeci proje kodu ve türünü anahtar sözcük olarak taşır — binlerce
 kayıtlık bir dizinde ad tek başına yeterli bir arama anahtarı değildir.
 
-Karşılaştırma Türkçe küçük harfe indirgenerek yapılır: `toLowerCase()` "İ/ı"
-ayrımı yüzünden kurumsal adlarda yanlış sonuç verirdi.
+Karşılaştırma **iki katlamayla** yapılır. Türkçe katlama insan adları için
+doğrudur: `toLowerCase()` "İ/ı" ayrımı yüzünden kurumsal adlarda yanlış sonuç
+verir. Ancak aynı yardımcı proje kodu, Sicil ve kullanıcı adı gibi ASCII
+tanımlayıcıları da arar; `MIR` kodu Türkçe katlamada `mır` olur ve kullanıcı
+`mir` yazdığında hiç eşleşmezdi. Bu yüzden her iki katlama da denenir.
+
+Süzgeç **değeri** görünen ad değil, kararlı kimliktir (proje kimliği, Sicil).
+Ada göre süzülseydi aynı ada sahip iki proje ya da iki çalışan tek seçenekte
+birleşir; kullanıcı benzersiz kodu arayıp birini seçse bile sonuçta ikisi de
+listelenirdi.
+
+Tek seçimli süzgeçte **Enter**, arama tek bir seçeneğe indiyse onu uygular.
+Genel `apply()` çağrısı aranan değeri değil, önceden seçili radyo değerini
+uyguluyordu: kullanıcı arayıp Enter'a bastığında süzgeç eskisi gibi kalıyordu.
 
 **Seçili değerler aramada elense bile listede kalır.** Aksi hâlde kullanıcı
 arama yazdığında neyi seçtiğini göremez ve farkında olmadan seçimini

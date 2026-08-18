@@ -45,11 +45,13 @@ The project root node is always MERGEN-generated: its `SourceKey` is `NULL` and 
 
 ## Project tag appearance
 
+Existing durable databases receive these columns through `database/MR_Upgrade_0004_Tag_Appearance_And_Recurrence.sql`, which is run **before** the application version is deployed. The clean-create script deliberately aborts when any `MR_*` object already exists, so it can never upgrade a live database; the upgrade script is idempotent and adds columns, constraints and indexes only when they are missing.
+
 `MR_ProjectTags` carries `ColorToken varchar(20)` and `IconKey varchar(40)` beside `TagName`. Both are nullable: a `NULL` colour resolves to a deterministic palette entry derived from the tag name, and a `NULL` icon resolves to the default. Rows written before this column pair existed therefore stay valid without a data migration. Both values are closed sets owned by `src/domain/tags/index.js`; the commit boundary rejects anything outside them (`PROJECT_TAG_COLOR_INVALID`, `PROJECT_TAG_ICON_INVALID`). See `docs/TAGS-AND-RECURRING-TASKS.md`.
 
 ## Recurring task columns
 
-`MR_Tasks` carries `RecurrenceRule nvarchar(400)` and `RecurrenceParentTaskId uniqueidentifier`. The rule is an RFC 5545 `RRULE` body and lives only on the series template; generated occurrences reference the template through `RecurrenceParentTaskId`. `CK_MR_Tasks_Recurrence` enforces that an occurrence never carries its own rule, and a filtered index supports listing a template's occurrences. The rule text is canonicalized before it is written, so an unparseable value cannot reach durable storage.
+`MR_Tasks` carries `RecurrenceRule nvarchar(400)`, `RecurrenceParentTaskId uniqueidentifier` and `RecurrenceOccurrenceDate date`. The rule is an RFC 5545 `RRULE` body and lives only on the series template; generated occurrences reference the template through `RecurrenceParentTaskId`. `CK_MR_Tasks_Recurrence` enforces that an occurrence never carries its own rule, `CK_MR_Tasks_RecurrenceSelf` blocks a self-reference, and a filtered index supports listing a template's occurrences. `RecurrenceOccurrenceDate` is the occurrence's immutable series identity (the RFC 5545 `RECURRENCE-ID` equivalent): rescheduling an occurrence does not change it, and `UX_MR_Tasks_RecurrenceOccurrence` makes `(template, occurrence day)` unique so two concurrent writers cannot both materialize the same day. The rule text is canonicalized before it is written and validated strictly at the commit boundary, so neither an unparseable value nor a rule the engine can never fulfil reaches durable storage.
 
 ## Task priority values
 

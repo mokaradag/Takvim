@@ -315,6 +315,11 @@ Three drop positions exist, chosen from the pointer's vertical position inside t
 | `inside` | middle       | node becomes the last child of the target |
 | `after`  | bottom 28 %  | node becomes the next sibling of the target |
 
+`inside` is a **parent** change only. Dropping a node onto the middle of the
+parent it already belongs to is rejected as `WBS_DROP_NO_CHANGE` rather than
+silently moving it to the end of the sibling list; sibling order is controlled
+by `before`/`after` alone.
+
 Rejections carry a stable code and a user-facing Turkish reason: `WBS_NODE_NOT_FOUND`, `WBS_TARGET_NOT_FOUND`, `WBS_DROP_ON_SELF`, `WBS_ROOT_REPARENT_FORBIDDEN`, `WBS_ROOT_SIBLING_FORBIDDEN`, `CROSS_PROJECT_WBS_PARENT`, `WBS_REPARENT_TO_DESCENDANT`, `WBS_DROP_NO_CHANGE`. The row highlight turns red while a drop would be rejected, so the rule is visible before the pointer is released.
 
 The resolved move is applied by the `wbs/move` state action, which combines the existing reparent semantics with sibling ordering:
@@ -324,11 +329,17 @@ The resolved move is applied by the `wbs/move` state action, which combines the 
 
 Ordering deliberately does **not** rewrite WBS codes. The tree sorts by `sortOrder` first, so display order stays correct, and a single drag does not have to update hundreds of records. Only siblings whose `sortOrder` actually changed become new objects, so the persistence change set stays minimal and optimistic-concurrency conflicts stay rare.
 
-Drag-and-drop is disabled for corporate (CN43N-sourced) and read-only projects, and project roots are never draggable. The select-based **Taşı** action remains available as the keyboard-accessible path.
+Drag-and-drop is disabled for corporate (CN43N-sourced) and read-only projects, and project roots are never draggable. A drag starts **only from the grip handle**: the row also contains the inline name input and the action buttons, and a whole-row drag source could start a hierarchy change while the user was selecting text.
+
+The move is persisted pessimistically, so the visible tree is one commit behind until the response lands. Further drags are therefore disabled while a move is in flight — a second drop would otherwise compute an absolute sibling index from the stale tree and apply it to the new one. When an `inside` drop is accepted the destination is expanded before the drag ends, so the moved node stays visible instead of disappearing under a collapsed (or previously childless) parent.
+
+`dragover` fires on every pointer movement, so the drag session builds its lookup index once (`createWbsDropIndex`) and reuses it for every resolution; the drop hint is only rewritten when it actually changes. Rebuilding the parent/child index per event made the pointer stutter on corporate trees of ~38k nodes.
+
+Sibling order is not drag-only: every row carries **move up / move down** actions beside **Taşı**, so a keyboard user can reproduce the ordering operation. The select-based **Taşı** action remains the keyboard path for reparenting.
 
 ### In-page node editing
 
-Adding a child, renaming and deleting no longer use blocking `prompt()` / `confirm()` dialogs. Adding and renaming happen in an inline input (Enter commits, Esc cancels, blur with an empty value cancels), and deletion asks for confirmation inline on the row. The tree view state (expansion, open panels, selections) resets only when the selected project changes — previously any tree edit produced a new row array and collapsed the tree back to the default depth.
+Adding a child, renaming and deleting no longer use blocking `prompt()` / `confirm()` dialogs. Adding and renaming happen in an inline input (Enter commits, Esc cancels, blur with an empty value cancels), and deletion asks for confirmation inline on the row. The inline editor closes only when the mutation **succeeds**: on a row-version conflict or a transient repository failure the typed name stays in the field instead of being lost with the unmounted input. The tree view state (expansion, open panels, selections) resets only when the selected project changes — previously any tree edit produced a new row array and collapsed the tree back to the default depth.
 
 ## 14. Persistence semantics and current limitations
 

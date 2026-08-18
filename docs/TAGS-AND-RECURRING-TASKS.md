@@ -42,13 +42,29 @@ updateProject(projectId, {
 });
 ```
 
-`prepareProjectUpdateChanges` bu eşlemeyi kullanarak eski adı taşıyan
-görevlerin `keyword` alanını yeni ada taşır. Eşleme gönderilmezse ad değişikliği
-yalnızca katalogda kalır ve görevler katalog dışında kalırdı — bu yüzden
-yeniden adlandırma arayüzü eşlemeyi biriktirmek zorundadır.
+Eşleme **kalıcılaştırma sınırında**, katalog yazmasıyla aynı işlemde uygulanır
+(`planProjectTagPropagation` + `propagateProjectTagChanges`). Yayılım istemcinin
+gördüğü görev kümesinden türetilseydi, eşzamanlı bir kullanıcının aynı anda
+oluşturduğu görev kapsanmaz ve katalog dışında kalırdı: görev yazmaları proje
+satırının sürümünü ilerletmediği için bu çakışma sessizce başarılı olurdu.
 
-Aynı etiket birden çok kez yeniden adlandırıldığında zincir tek bir
-eski→son ad eşlemesine sadeleştirilir.
+Plan üç kuraldan oluşur:
+
+1. **Yeniden adlandırma** — açıkça bildirilen eski→yeni eşlemesi uygulanır.
+2. **Ad düzeltme** — katalogdaki adın harf varyantları kanonik yazıma çekilir.
+3. **Kaldırma** — yalnızca bu yazmada katalogdan çıkarılan ad temizlenir. Hiç
+   katalogda olmamış eski anahtar sözcükler korunur; aksi hâlde boş kataloglu
+   eski bir projeyi kaydetmek bütün etiketleri silerdi.
+
+Formdaki katalog girdileri **yerel ve değişmez** bir kimlik taşır; eşleme
+kümesi form durumundan türetilir. Ada bağlı bir günlük tutulsaydı, `A → B` yapıp
+yeni bir `A` ekleyip onu `C` yapmak iki kaydı da aynı kaynakla günlüğe yazar ve
+görevleri yanlış etikete taşırdı. Türetilmiş olması aynı zamanda formu geri
+almanın bekleyen eşlemeleri de temizlemesini sağlar.
+
+Etiketin kullanım sayısı girdinin **yüklendiği** addan sayılır: güncel adla
+sayılsaydı, kullanılan bir etiketi yeniden adlandırmak kullanımı anında sıfıra
+düşürür ve silmeyi serbest bırakırdı.
 
 ### 1.3 Kalıcılaştırma
 
@@ -62,6 +78,17 @@ IconKey    varchar(40) NULL,
 `NULL` değerler geçerlidir: arayüz o etiket için ada göre türetilen varsayılana
 düşer. Böylece bu sürümden önce yazılmış satırlar geçerli kalır ve veri göçü
 gerektirmez.
+
+Anlık görüntü kataloğu **iki alanla** taşır: `tags` eski sözleşmedeki düz metin
+listesidir (sürüm geçişinde açık kalan eski paketler etiketi metin sanar ve
+nesne aldıklarında proje ekranı çökerdi), `tagCatalog` ise renk ve simgeyi
+taşıyan kanonik katalogdur. Yeni arayüz `projectTagCatalog(project)` ile
+kataloğu okur, yoksa düz metin listesine düşer.
+
+Yazma yolunda saklanan görünüm **korunur**: eski bir paket kataloğu düz metin
+olarak geri gönderdiğinde renk ve simge varsayılana dönmez
+(`mergeProjectTagAppearance`). Aksi hâlde sürüm geçişi sırasında yeni istemcinin
+kaydettiği özelleştirmeler kalıcı olarak kaybolurdu.
 
 Yazma yolu `reconcileProjectTags` içinde kanonikleştirir; sunucu doğrulaması
 (`commitProjectWbsValidation`) bilinmeyen renk/simge anahtarını
@@ -118,34 +145,75 @@ veritabanı kısıtında (`CK_MR_Tasks_Recurrence`) zorlanır.
 
 Üretim sırasında:
 
-- şablonun **süresi** korunur (her yineleme aynı uzunlukta planlanır);
-- hedef bitiş uzaklığı korunur;
-- çalışma takvimi verildiğinde tatil ve hafta sonuna denk gelen yineleme bir
+- şablonun **süresi** korunur; süre `plannedDurationDays` gibi **dahil iş günü**
+  ölçüsüdür, bu yüzden bitiş N'inci iş günü olarak hesaplanır ve hafta sonuna
+  taşmaz. Şablonun planlanan bitişi yoksa yinelemeye de bitiş uydurulmaz;
+- hedef bitiş uzaklığı **iş günü ölçüsüyle** korunur. Şablonun termini yoksa
+  yinelemeye termin yazılmaz; planlanan bitişten önceye konmuş bir termin de
+  bitişe kadar ötelenmez;
+- çalışma takvimi görevden çözülür (`resolveTaskCalendar`: görev geçersiz
+  kılması, sonra proje takvimi). Tatil ve hafta sonuna denk gelen yineleme bir
   sonraki iş gününe kaydırılır, kaydırma iki yinelemeyi aynı güne düşürürse
   ikincisi üretilmez;
+- **COUNT / UNTIL / ufuk sınırları kaydırma ve tekilleştirmeden sonraki kümeye**
+  uygulanır: kullanıcı üç yineleme istediyse üç görev oluşur ve hiçbir görev
+  `UNTIL` tarihinden sonraya kalıcılaştırılmaz;
 - şablonun **bağımlılıkları kopyalanmaz** — aksi hâlde aynı öncül onlarca kez
   tekrarlanır ve CPM ağı bozulurdu;
-- daha önce üretilmiş bir başlangıç günü yeniden üretilmez, bu yüzden düğmeye
-  ikinci kez basmak kopya görev oluşturmaz, yalnızca eksik günleri tamamlar.
+- gerçekleşen tarih, emek ve harcama sıfırlanır, kalan süre yinelemenin kendi
+  planlanan süresiyle başlar ve her yinelemeye ayrı bir sıra anahtarı verilir;
+- daha önce üretilmiş bir yineleme yeniden üretilmez. Tanıma **değişmez seri
+  kimliği** (`recurrenceOccurrenceDate`) üzerinden yapılır: kullanıcı bir
+  yinelemeyi ertelese bile o gün ikinci kez üretilmez.
 
-Ayın 31'i olmayan aylarda yineleme ayın son gününe çekilir. RFC 5545 o ayı
-atlamayı öngörür; planlamada bir yinelemeyi kaybetmemek daha yararlıdır ve
-kullanıcı beklentisine uyar.
+Takvimde bulunmayan bir tarih (31 Şubat, artık olmayan yılda 29 Şubat) RFC 5545
+gereği **atlanır** ve yineleme sayılmaz. Kural dışa aktarıldığında başka bir
+takvim uygulamasıyla aynı seriyi vermelidir; ayın son gününe çekmek saklanan
+`RRULE`'ün anlamını sessizce değiştirirdi.
 
-Sonsuz kurallar `MAX_RECURRENCE_OCCURRENCES` (400) ile sınırlıdır.
+Haftalık kuralda `BYDAY` verilmediğinde RFC 5545 serinin başlangıç gününü
+varsayar. Arayüz de başlangıç gününü kümeden çıkarmaya izin vermez: `BYDAY`
+`DTSTART` gününü dışlarsa kural üç yineleme derken şablonla birlikte dört görev
+oluşur ve dışa aktarılan `RRULE`'ün `DTSTART`'ı kendi kuralını sağlamazdı.
+
+Sonsuz kurallar `MAX_RECURRENCE_OCCURRENCES` (400) ile sınırlıdır. Bu tavanı
+aşan sonlu bir `COUNT` hiçbir zaman tamamlanamayacağı için hem arayüzde hem de
+kalıcılaştırma sınırında reddedilir.
 
 ### 2.3 Kalıcılaştırma
 
 `dbo.MR_Tasks`:
 
 ```sql
-RecurrenceRule         nvarchar(400) NULL,
-RecurrenceParentTaskId uniqueidentifier NULL,
+RecurrenceRule           nvarchar(400) NULL,
+RecurrenceParentTaskId   uniqueidentifier NULL,
+RecurrenceOccurrenceDate date NULL,
 ```
 
 Kural yazılmadan önce `formatRecurrenceRule` ile kanonikleştirilir: ayrıştırılamayan
-bir metin kalıcı kayda düşmez. Sunucu doğrulaması geçersiz kuralı
-`TASK_RECURRENCE_INVALID` ile reddeder.
+bir metin kalıcı kayda düşmez. Sunucu doğrulaması gönderilen `RRULE` gövdesini
+**katı** biçimde denetler (`findRecurrenceRuleIssue`): desteklenmeyen bileşen,
+geçersiz `BYDAY`/`BYMONTHDAY`, `COUNT=0` ya da tavanı aşan `COUNT`
+`TASK_RECURRENCE_INVALID` ile reddedilir. Hoşgörülü normalleştirme yalnızca
+OKUMA yolundadır; yazma yolunda hoşgörü, gönderilen kuralın saklanandan başka
+anlama gelmesi demektir. Başlangıçtan önce biten bir kural
+(`TASK_RECURRENCE_RANGE_INVALID`) hiçbir yineleme üretemeyeceği için kabul
+edilmez.
+
+`RecurrenceOccurrenceDate` yinelemenin **değişmez** seri kimliğidir (RFC 5545
+`RECURRENCE-ID` karşılığı). `UX_MR_Tasks_RecurrenceOccurrence` filtrelenmiş
+tekil dizini `(şablon, gün)` çiftini garanti eder: istemci tarafı denetim
+eşzamanlı iki yazıcıyı durduramaz, ikisi de günü "eksik" görüp farklı `TaskId`
+ile ekleyebilirdi.
+
+Seri bütünlüğü kalıcı katmanda korunur:
+
+- yineleme, şablonuyla **aynı projede** olmak zorundadır ve şablonun kendisi
+  başka bir serinin yinelemesi olamaz;
+- yinelemeleri olan bir şablon **başka projeye taşınamaz** — aksi hâlde seri iki
+  projeye bölünür ve yeni proje ikinci bir seri üretebilirdi;
+- şablon silindiğinde yinelemeler **ayrılır, silinmez**: her yineleme gerçek bir
+  görevdir ve kendi ilerlemesini taşır.
 
 ### 2.4 Arayüz
 
@@ -163,3 +231,11 @@ işaretlenir.
 Her iki özellik de `0004_tag_appearance_and_recurrence` göç kimliğiyle
 kaydedilir. Eklenen sütunların tamamı `NULL` kabul eder ve varsayılan davranışı
 değiştirmez; mevcut kayıtlar için veri dönüşümü gerekmez.
+
+**Mevcut veritabanları için göç betiği ayrıdır.** Temiz kurulum betiği
+(`MR_Create_Durable_Persistence.sql`) herhangi bir `MR_*` nesnesi varsa bilerek
+durur; dolayısıyla çalışan bir kurulum yeni sütunları ondan alamaz. Uygulama
+sürümü dağıtılmadan **önce**
+`database/MR_Upgrade_0004_Tag_Appearance_And_Recurrence.sql` çalıştırılır. Betik
+yinelenebilirdir: sütun, kısıt ve dizinleri yalnızca yoksa ekler, göç kaydını
+yalnızca bir kez yazar.
