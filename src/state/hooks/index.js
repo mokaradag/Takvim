@@ -23,6 +23,8 @@ export function useCurrentUser() { return useAppState().currentUser; }
 export function useSessionContext() { return useAppState().session; }
 export function useSelectedTask() { return useAppState().selectedTask; }
 export function useTaskStats() { return useAppState().taskStats; }
+/** Portföyün tamamı için ölçümler (çalışma alanı seçiminden bağımsız). */
+export function usePortfolioTaskStats() { return useAppState().portfolioTaskStats; }
 export function usePortfolioSchedule() { return useAppState().schedule; }
 export function useProjectSchedule(projectId) { return selectProjectSchedule(useAppState().schedule, projectId); }
 export function useTaskSchedule(taskId) { return selectTaskSchedule(useAppState().schedule, taskId); }
@@ -48,6 +50,8 @@ export function useDataLifecycle() {
     saveError: state.saveError,
     lastSavedAt: state.lastSavedAt,
     reloadData: state.actions.reloadData,
+    retryFailedChanges: state.actions.retryFailedChanges,
+    hasPendingChanges: state.actions.hasPendingChanges,
     clearPersistenceError: state.actions.clearPersistenceError
   };
 }

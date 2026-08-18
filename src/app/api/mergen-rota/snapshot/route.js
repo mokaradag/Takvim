@@ -14,15 +14,19 @@ export const revalidate = 0;
  * yeni eşitlenen kurumsal projeler erişim listesinde görünmez. Aynı sıra tek
  * bir istek içinde korunur ve açılıştan bir tam tur eksilir.
  *
+ * Oturum, anlık görüntünün YETKİ BAĞLAMINDAN kurulur: ayrı bir
+ * `loadSessionContext()` çağrısı aynı kişi/rol/proje erişimi ve görev-atama
+ * kapsamı sorgularını bu istekte ikinci kez çalıştırır ve gidiş-dönüşten
+ * kazanılan süreyi geri harcardı.
+ *
  * Ayrı `/session` ucu olduğu gibi durmaya devam eder (oturum tazeleme ve
  * eski istemciler için).
  */
 export async function GET() {
   try {
     const repository = createProjectedSqlAppRepository();
-    const snapshot = await repository.loadSnapshot();
-    const session = await repository.loadSessionContext();
-    return Response.json({ ...snapshot, session }, {
+    const body = await repository.loadSnapshotWithSession();
+    return Response.json(body, {
       headers: { 'cache-control': 'no-store' }
     });
   } catch (error) {

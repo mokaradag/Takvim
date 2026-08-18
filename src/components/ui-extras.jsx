@@ -327,7 +327,20 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
               aria-label={`${label} seçeneklerinde ara`}
               placeholder={`${label} ara...`}
               onChange={(e) => setOptionQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } }}
+              // Enter aramadaki seçeneği uygular. Tek seçimli süzgeçte genel
+              // `apply()` çağrılırsa ARANAN değil, ÖNCEDEN seçili radyo değeri
+              // uygulanır: kullanıcı arayıp Enter'a bastığında süzgeç eskisi gibi
+              // kalır. Tek eşleşme varsa o seçilir, yoksa hiçbir şey uygulanmaz.
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                if (type !== 'single') { apply(); return; }
+                if (searchableOptions.length !== 1) return;
+                const [only] = searchableOptions;
+                setQ(only.value);
+                onChange(only.value);
+                onClose();
+              }}
             />
             {optionQuery && (
               <button type="button" onClick={() => setOptionQuery('')} aria-label="Aramayı temizle">

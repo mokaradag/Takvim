@@ -34,23 +34,40 @@ async function loadDefaultCalendarId(executor) {
 
 export function createProjectedSqlAppRepository() {
   const baseRepository = createBaseSqlAppRepository();
+
+  async function readProjectedSnapshot() {
+    // Kurumsal katalog tazelemesi bilinçli olarak işlemin DIŞINDA çalışır.
+    // Aynı işlemin içinde çalıştığında CN43N birleştirmesi SERIALIZABLE
+    // yalıtımını devralıyor, 38 bin satırlık MR_WBS üzerinde aralık kilitleri
+    // biriktiriyor ve tek bir anlık görüntü isteğini otuz saniyenin üzerine
+    // çıkarıyordu. İşlemin içinde yalnızca okumalar kalır.
+    await baseRepository.refreshCorporateCatalog();
+    return withSqlTransaction(async (transaction) => {
+      const { snapshot, auth } = await baseRepository.readSnapshotWithAuthorization();
+      const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
+      const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
+      const defaultCalendarId = await loadDefaultCalendarId(transaction);
+      Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
+      return { snapshot: applyTaskAssigneeProjection(snapshot, assigneeRows), auth };
+    }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+  }
+
   return {
     ...baseRepository,
     async loadSnapshot() {
-      // Kurumsal katalog tazelemesi bilinçli olarak işlemin DIŞINDA çalışır.
-      // Aynı işlemin içinde çalıştığında CN43N birleştirmesi SERIALIZABLE
-      // yalıtımını devralıyor, 38 bin satırlık MR_WBS üzerinde aralık kilitleri
-      // biriktiriyor ve tek bir anlık görüntü isteğini otuz saniyenin üzerine
-      // çıkarıyordu. İşlemin içinde yalnızca okumalar kalır.
-      await baseRepository.refreshCorporateCatalog();
-      return withSqlTransaction(async (transaction) => {
-        const snapshot = await baseRepository.readSnapshot();
-        const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
-        const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
-        const defaultCalendarId = await loadDefaultCalendarId(transaction);
-        Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
-        return applyTaskAssigneeProjection(snapshot, assigneeRows);
-      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+      return (await readProjectedSnapshot()).snapshot;
+    },
+
+    /**
+     * Açılış isteği: anlık görüntü ve oturum bağlamı tek yanıtta döner.
+     *
+     * Oturum, anlık görüntünün YETKİ BAĞLAMINDAN kurulur; ayrı bir
+     * `loadSessionContext()` çağrısı kişi/rol/proje erişimi ve görev-atama
+     * kapsamını aynı istekte ikinci kez sorgulardı.
+     */
+    async loadSnapshotWithSession() {
+      const { snapshot, auth } = await readProjectedSnapshot();
+      return { ...snapshot, session: await baseRepository.sessionContextFrom(auth) };
     }
   };
 }

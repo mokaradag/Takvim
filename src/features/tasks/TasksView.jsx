@@ -6,7 +6,8 @@ import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/c
 import { fmt, diffDays, today } from '../../scheduling/dates';
 import { describeRecurrenceRule } from '../../scheduling/recurrence';
 import { projectColorVar } from '../../lib/colors';
-import { Avatar, AvatarStack, Kw, StatusPill, StatusIcon } from '../../components/ui';
+import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
+import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, useTaskActions } from '../../state/hooks';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
@@ -42,12 +43,15 @@ export function TasksView() {
   const projectById = useMemo1(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const canAddTask = projects.some(canWriteProject);
 
+  // Süzgeç değeri KARARLI kimliktir, görünen ad değil. Ada göre süzülseydi aynı
+  // ada sahip iki proje (ya da iki çalışan) tek bir seçenekte birleşir; kullanıcı
+  // benzersiz kodu arayıp birini seçse bile sonuçta ikisi de listelenirdi.
   const projOpts = useMemo1(() => projects
     .slice()
     .sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr'))
     // Süzgeç listesindeki canlı arama proje kodunu ve türünü de tarar.
     .map(p => ({
-      value: p.name,
+      value: p.id,
       label: projectLabel(p),
       keywords: [p.code, p.name, p.projectTypeCode, p.projectTypeName],
       icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} />
@@ -61,7 +65,7 @@ export function TasksView() {
     // Sicil, unvan ve birim de aranabilir: binlerce kişilik dizinde ad tek
     // başına yeterli bir arama anahtarı değildir.
     .map(p => ({
-      value: p.name,
+      value: String(p.id),
       label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
       keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
       icon: <Avatar name={p.name} person={p} size="sm" />
@@ -98,13 +102,15 @@ export function TasksView() {
         return haystack.some((value) => value.includes(q));
       });
     }
-    if (colFilter.proje.length) out = out.filter(t => colFilter.proje.includes(t.proje));
+    if (colFilter.proje.length) out = out.filter(t => colFilter.proje.includes(t.projectId));
     if (colFilter.task) {
       const q = colFilter.task.toLocaleLowerCase('tr-TR');
       out = out.filter(t => String(t.task || '').toLocaleLowerCase('tr-TR').includes(q));
     }
     if (colFilter.keyword.length) out = out.filter(t => colFilter.keyword.includes(t.keyword));
-    if (colFilter.sorumlu.length) out = out.filter(t => (t.sorumlu || []).some(s => colFilter.sorumlu.includes(s)));
+    if (colFilter.sorumlu.length) {
+      out = out.filter(t => (t.assigneeIds || []).some(id => colFilter.sorumlu.includes(String(id))));
+    }
     if (colFilter.priority?.length) out = out.filter(t => colFilter.priority.includes(normalizePriorityId(t.priority)));
     if (colFilter.status.length) {
       out = out.filter(t => {
@@ -279,7 +285,7 @@ export function TasksView() {
                         )}
                       </div>
                     </td>
-                    <td><Kw color={t.color}>{t.keyword}</Kw></td>
+                    <td><TaskKeyword task={t} /></td>
                     <td><AvatarStack names={t.sorumlu || []} personIds={t.assigneeIds} max={3} size="sm" /></td>
                     <td><StatusPill task={t} /></td>
                     <td><span style={{ fontSize: 11.5, fontWeight: 600, color: prio.color }}>{prio.label}</span></td>

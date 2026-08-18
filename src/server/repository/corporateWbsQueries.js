@@ -48,6 +48,16 @@ SELECT s.ProjectCode, s.ContentHash, s.NodeCount,
   ) AS StoredNodeCount
 FROM dbo.MR_CorporateWbsSyncState s;`;
 
+/**
+ * Depoda kullanılabilir bir kurumsal ağaç var mı ve en son ne zaman eşitlendi?
+ *
+ * Süreç belleği bu soruyu yanıtlayamaz: yeniden başlatma ve yeni işçi süreçleri
+ * "hiç eşitlenmemiş" gibi davranıp ilk isteği tam bir CN43N turuna kilitlerdi.
+ */
+export const CORPORATE_WBS_SYNC_WARMTH_SQL = `
+SELECT MAX(s.SyncedAt) AS LastSyncedAt, COUNT_BIG(*) AS ProjectCount
+FROM dbo.MR_CorporateWbsSyncState s;`;
+
 /** Bir projenin eşitleme parmak izini günceller (yoksa ekler). */
 export const CORPORATE_WBS_SYNC_STATE_UPSERT_SQL = `
 UPDATE dbo.MR_CorporateWbsSyncState

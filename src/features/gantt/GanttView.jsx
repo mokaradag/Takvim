@@ -161,7 +161,9 @@ export function GanttView() {
       out = out.filter(t => t.task.toLowerCase().includes(q));
     }
     if (colFilters.proje.length) out = out.filter(t => colFilters.proje.includes(t.proje));
-    if (colFilters.sorumlu.length) out = out.filter(t => (t.sorumlu || []).some(s => colFilters.sorumlu.includes(s)));
+    if (colFilters.sorumlu.length) {
+      out = out.filter(t => (t.assigneeIds || []).some(id => colFilters.sorumlu.includes(String(id))));
+    }
     if (colFilters.priority.length) out = out.filter(t => colFilters.priority.includes(t.priority || 'medium'));
     if (colFilters.status.length) {
       out = out.filter(t => {
@@ -574,10 +576,13 @@ export function GanttView() {
                 filterType = 'multi';
                 filterValue = colFilters.sorumlu;
                 onFilter = (v) => setCF('sorumlu', v);
-                // Canlı arama sicil, unvan ve birim üzerinde de çalışır.
+                // Canlı arama sicil, unvan ve birim üzerinde de çalışır. Süzgeç
+                // değeri KARARLI Sicil kimliğidir: ada göre süzülseydi aynı adlı
+                // iki çalışan tek seçenekte birleşir ve biri seçildiğinde diğerinin
+                // görevleri de listelenirdi.
                 filterOptions = people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr'))
                   .map(p => ({
-                    value: p.name,
+                    value: String(p.id),
                     label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
                     keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
                     icon: <Avatar name={p.name} person={p} size="sm" />

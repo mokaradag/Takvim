@@ -1,10 +1,11 @@
 'use client';
 import { useState as useState1, useMemo as useMemo1 } from 'react';
 import { Icons } from '../../components/icons';
-import { parseDate, fmt, addDays, diffDays, today } from '../../scheduling/dates';
+import { parseDate, fmt, fmtISO, addDays, diffDays, today } from '../../scheduling/dates';
 import { depId } from '../../scheduling/dependencies';
 import { projectColorVar, personColorVar } from '../../lib/colors';
-import { AvatarStack, Kw, StatusPill, HeroHeader, Donut, AreaChart } from '../../components/ui';
+import { AvatarStack, StatusPill, HeroHeader, Donut, AreaChart } from '../../components/ui';
+import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, CardHead, AnimatedNumber, HoverListCard } from '../../components/ui-extras';
 import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetricTable';
 import { useAllPeople, useTasks, useTaskActions } from '../../state/hooks';
@@ -15,7 +16,12 @@ export function DashboardView({ onNavigate }) {
   const tasks = useTasks();
   const people = useAllPeople();
   const { openTask: onOpenTask } = useTaskActions();
-  const today_ = today();
+  // Referans gün KARARLI bir değerdir. `today()` her çizimde yeni bir `Date`
+  // döndürür; doğrudan bağımlılık olarak kullanılsaydı tarihe duyarlı memolar
+  // her çizimde yeniden hesaplanır, bağımlılıktan çıkarılsaydı pano gece
+  // yarısını açık geçtiğinde dünün sınıflandırmasında kalırdı.
+  const todayKey = fmtISO(today());
+  const today_ = useMemo1(() => parseDate(todayKey), [todayKey]);
   const [donutSel, setDonutSel] = useState1(null);
 
   // Üst rozetler: kartlar durum alanını doğrudan okur (bir görev hem "devam
@@ -129,23 +135,27 @@ export function DashboardView({ onNavigate }) {
     };
   }, [tasks]);
 
+  // "Bu hafta tamamlanan" GERÇEKLEŞEN bitiş tarihinden sayılır. Planlanan bitişe
+  // bakmak, bugün biten ama planı daha eskiye düşen görevi saymıyor; buna
+  // karşılık aylar önce bitmiş, planlanan bitişi bu haftaya düşen görevi
+  // sayıyordu. Pencere son 7 günlük kayan aralıktır (bugün dahil).
   const weeklyDelta = useMemo1(() => {
-    const thisWeekDone = tasks.filter(t => {
-      if (t.status !== 'done') return false;
-      const e = parseDate(t.plannedFinish);
-      return diffDays(e, today_) >= -7 && diffDays(e, today_) <= 0;
+    const completedWithin = (fromDays, toDays) => tasks.filter((t) => {
+      if (t.status !== 'done' || !t.actualFinish) return false;
+      const gap = diffDays(parseDate(t.actualFinish), today_);
+      return gap >= fromDays && gap <= toDays;
     }).length;
-    const lastWeekDone = tasks.filter(t => {
-      if (t.status !== 'done') return false;
-      const e = parseDate(t.plannedFinish);
-      return diffDays(e, today_) >= -14 && diffDays(e, today_) < -7;
-    }).length;
+    const thisWeekDone = completedWithin(-6, 0);
+    const lastWeekDone = completedWithin(-13, -7);
     return { thisWeekDone, lastWeekDone, delta: thisWeekDone - lastWeekDone };
-  }, [tasks]);
+  }, [tasks, today_]);
 
   // Halka grafiği birbirini dışlayan kovalarla beslenir: dilimlerin toplamı
   // her zaman görev sayısına eşittir (bkz. statusDistribution.js).
-  const distribution = useMemo1(() => selectStatusDistribution(tasks, today_), [tasks]);
+  // `today_` bağımlılıktadır: pano gece yarısını açık geçtiğinde, yeniden çizim
+  // olsa bile halka dünün gecikme sınıflandırmasında kalır ve üstteki
+  // "Geciken" kartıyla çelişirdi.
+  const distribution = useMemo1(() => selectStatusDistribution(tasks, today_), [tasks, today_]);
   const statusDonut = distribution.segments;
   // Seçim dilim SIRASI değil, kova KİMLİĞİ ile tutulur: görevler değiştiğinde
   // dilim listesi kısalabilir ve saklanan sıra numarası boşa düşerek çizimi
@@ -586,7 +596,7 @@ export function DashboardView({ onNavigate }) {
               }}>
                 <div style={{ fontSize: 12.5, fontWeight: 500 }}>{t.task}</div>
                 <div className="row" style={{ gap: 8 }}>
-                  <Kw color={t.color}>{t.keyword}</Kw>
+                  <TaskKeyword task={t} />
                   <span className="muted" style={{ fontSize: 11 }}>{t.deps.length} bekleyen bağımlılık</span>
                 </div>
               </button>

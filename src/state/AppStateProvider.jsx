@@ -12,9 +12,9 @@ import {
 import { appRepository } from '../data';
 import { createClientEntityId } from '../data/clientEntityId.js';
 import { setProjectColorOverrides } from '../lib/colors';
-import { resolveProjectCalendar } from '../scheduling/calendars';
+import { resolveProjectCalendar, resolveTaskCalendar } from '../scheduling/calendars';
 import { selectTaskStats } from '../scheduling/metrics';
-import { normalizeRecurrenceRule, planRecurringOccurrences } from '../scheduling/recurrence';
+import { MAX_RECURRENCE_OCCURRENCES, normalizeRecurrenceRule, planRecurringOccurrences } from '../scheduling/recurrence';
 import { appStateReducer, createLoadingState, createNewTask, normalizeStateTask } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
@@ -75,8 +75,15 @@ export function AppStateProvider({ children, repository = appRepository }) {
     const result = await loadApplicationData(repository);
     if (requestId !== loadRequestRef.current) return result;
 
-    if (result.ok) applyStateAction({ type: 'data/load-success', snapshot: result.snapshot });
-    else applyStateAction({ type: 'data/load-error', error: result.error });
+    if (result.ok) {
+      // Yeniden yükleme, saklanan başarısız yamalar için açık bir vazgeçmedir:
+      // kullanıcı sunucudaki yetkili sürümü istemiştir, reddedilen düzenleme
+      // artık taşınmaz.
+      persistence.discardFailedTaskUpdates();
+      applyStateAction({ type: 'data/load-success', snapshot: result.snapshot });
+    } else {
+      applyStateAction({ type: 'data/load-error', error: result.error });
+    }
     return result;
   }, [applyStateAction, persistence, repository]);
 
@@ -121,8 +128,12 @@ export function AppStateProvider({ children, repository = appRepository }) {
    * Bekleyen düzenlemeler önce sunucuya yazılır. Yazma BAŞARISIZ olsa bile
    * panel kapanır: daha önce başarısız kayıt paneli açık tutuyordu ve
    * kullanıcı hiçbir düğmeyle çıkamıyordu (uygulama donmuş görünüyordu).
-   * Hata kaybolmaz; kalıcılaştırma durumu şeridinde nedeni, alanı ve
-   * "Verileri yeniden yükle" eylemiyle birlikte görünmeye devam eder.
+   *
+   * Düzenleme yine de kaybolmaz. Reddedilen yama birleştirme kuyruğunda
+   * saklanır (bkz. createTaskPatchCoalescer): panel kapansa ve taslak sökülse
+   * bile alan değerleri durur, kullanıcı yazmaya devam ederse üzerine birleşir
+   * ve kalıcılaştırma şeridindeki "Yeniden dene" ile gönderilebilir. Vazgeçme
+   * yalnızca açık bir "Verileri yeniden yükle" kararıyla olur.
    */
   const closeTask = useCallback(async () => {
     const selectedTaskId = stateRef.current.selectedTaskId;
@@ -138,8 +149,17 @@ export function AppStateProvider({ children, repository = appRepository }) {
     if (!access.ok) return rejectedWrite('task/update', access);
     return persistence.updateTask(id, patch);
   }, [persistence]);
-  const flushPendingChanges = useCallback(() => persistence.flush(), [persistence]);
+  const flushPendingChanges = useCallback((options = {}) => persistence.flush(options), [persistence]);
   const hasPendingChanges = useCallback(() => persistence.hasPendingChanges(), [persistence]);
+  // Reddedilen yamalar saklanır; kullanıcı kalıcılaştırma şeridinden yeniden
+  // deneyebilir, böylece kaybedilen tek kopya diye bir durum oluşmaz.
+  const retryFailedChanges = useCallback(() => persistence.retryFailedTaskUpdates(), [persistence]);
+  // Arayüz bir alanı geçersiz kıldığında (örneğin başlık silindiğinde) o alanın
+  // kuyrukta bekleyen önceki değeri de düşürülür.
+  const cancelTaskFieldUpdates = useCallback(
+    (id, fields) => persistence.cancelTaskFieldUpdates(id, fields),
+    [persistence]
+  );
 
   const moveTaskToWbs = useCallback(async (id, wbsId) => {
     const access = resolveTaskWbsMoveAccess(stateRef.current, [id], wbsId);
@@ -219,6 +239,12 @@ export function AppStateProvider({ children, repository = appRepository }) {
    * kez basmak kopya görev oluşturmaz, yalnızca eksik kalan günleri tamamlar.
    */
   const generateTaskSeries = useCallback(async (taskId, { limit = 60 } = {}) => {
+    // Kuyruktaki bütün yazmalar önce tamamlanır: kullanıcı kuralı veya tarihi
+    // değiştirip hemen bu düğmeye bastığında şablon henüz eski durumda olurdu
+    // ve yinelemeler kaydedilmiş şablonla çelişen tarihlerle oluşurdu.
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
+
     const current = stateRef.current;
     const template = current.tasks.find((task) => task.id === taskId) || null;
     if (!template) {
@@ -235,36 +261,60 @@ export function AppStateProvider({ children, repository = appRepository }) {
       });
     }
 
-    const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([taskId]));
-    if (failedFlush) return failedFlush;
+    // Görev kendi takvimini geçersiz kılabilir; yinelemeler bu takvimi devraldığı
+    // için kaydırma da onunla yapılmalıdır (bkz. resolveTaskCalendar önceliği).
+    const calendar = resolveTaskCalendar(template, current.projects, current.calendars);
 
-    const project = current.projects.find((item) => item.id === template.projectId) || null;
-    const calendar = resolveProjectCalendar(project, current.calendars);
-    const existingStarts = new Set(current.tasks
-      .filter((task) => task.recurrenceParentId === taskId || task.id === taskId)
-      .map((task) => task.plannedStart));
+    // Üretilmiş yinelemeler değişmez seri kimliğiyle tanınır: kullanıcı bir
+    // yinelemeyi ertelese bile o gün ikinci kez üretilmez.
+    const materialized = new Set(current.tasks
+      .filter((task) => task.recurrenceParentId === taskId)
+      .map((task) => task.recurrenceOccurrenceDate || task.plannedStart)
+      .filter(Boolean));
+    // Şablonun kendi günü serinin ilk yinelemesidir.
+    materialized.add(template.recurrenceOccurrenceDate || template.plannedStart);
 
-    const plan = planRecurringOccurrences(template, rule, { calendar, limit })
-      .filter((occurrence) => !existingStarts.has(occurrence.plannedStart));
+    // Açılım eksik yinelemeleri dolduracak kadar ilerletilir: sabit bir önek
+    // açılsaydı ilk turdan sonra her tıklama aynı (ve tamamı elenmiş) günleri
+    // üretir, seri hiçbir zaman ilerlemezdi.
+    const horizon = Math.min(MAX_RECURRENCE_OCCURRENCES, materialized.size + Math.max(1, limit));
+    const plan = planRecurringOccurrences(template, rule, { calendar, limit: horizon })
+      .filter((occurrence) => !materialized.has(occurrence.plannedStart))
+      .slice(0, limit);
     if (!plan.length) return { ok: true, value: [] };
 
-    const tasks = plan.map((occurrence) => normalizeStateTask({
-      ...template,
-      id: createClientEntityId('task'),
-      version: undefined,
-      recurrence: null,
-      recurrenceParentId: taskId,
-      status: 'todo',
-      progress: 0,
-      actualStart: null,
-      actualFinish: null,
-      plannedStart: occurrence.plannedStart,
-      plannedFinish: occurrence.plannedFinish,
-      targetFinish: occurrence.targetFinish,
-      // Yineleme başka bir göreve bağımlı değildir: şablonun bağımlılıkları
-      // kopyalanırsa aynı öncül onlarca kez tekrarlanır ve CPM ağı bozulur.
-      deps: []
-    }, current));
+    const sortOrderBase = Number.isFinite(template.sortOrder) ? template.sortOrder : null;
+    const tasks = plan.map((occurrence, offset) => {
+      const created = normalizeStateTask({
+        ...template,
+        id: createClientEntityId('task'),
+        version: undefined,
+        recurrence: null,
+        recurrenceParentId: taskId,
+        recurrenceOccurrenceDate: occurrence.plannedStart,
+        status: 'todo',
+        progress: 0,
+        actualStart: null,
+        actualFinish: null,
+        // Gerçekleşen emek ve harcama da sıfırlanır: yeni yineleme oluşturulduğu
+        // anda şablonun geçmiş gerçekleşmesini üstlenirse iş yükü ve maliyet
+        // toplamları daha ilk günden bozulur.
+        actualHours: null,
+        spent: null,
+        plannedStart: occurrence.plannedStart,
+        plannedFinish: occurrence.plannedFinish,
+        targetFinish: occurrence.targetFinish,
+        // Her yinelemeye ayrı sıra anahtarı verilir; aksi hâlde bütün seri
+        // şablonla aynı anahtarda eşitlenir ve her yüklemede farklı sırada gelir.
+        sortOrder: sortOrderBase === null ? null : sortOrderBase + offset + 1,
+        // Yineleme başka bir göreve bağımlı değildir: şablonun bağımlılıkları
+        // kopyalanırsa aynı öncül onlarca kez tekrarlanır ve CPM ağı bozulur.
+        deps: []
+      }, current);
+      // Kalan süre bağımsız bir planlama girdisidir: başlamamış yineleme
+      // şablonun tükenmiş kalan süresini değil, kendi tam süresini taşır.
+      return { ...created, remainingDurationDays: created.plannedDurationDays };
+    });
 
     return persistence.mutate('task/series', { type: 'task/add-many', tasks });
   }, [persistence]);
@@ -404,6 +454,9 @@ export function AppStateProvider({ children, repository = appRepository }) {
   );
   const workspace = useMemo(() => selectWorkspaceContext(state), [state]);
   const taskStats = useMemo(() => selectTaskStats(workspace.tasks), [workspace.tasks]);
+  // Karşılama ekranı portföyün TAMAMINI özetlediğini söyler; çalışma alanı
+  // ölçümleri son seçilen projeye daralmış olabilir, ikisi ayrı tutulur.
+  const portfolioTaskStats = useMemo(() => selectTaskStats(state.tasks), [state.tasks]);
   const schedule = useMemo(
     () => buildPortfolioSchedule({ tasks: state.tasks, projects: state.projects, calendars: state.calendars }),
     [state.tasks, state.projects, state.calendars]
@@ -414,6 +467,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
     updateTask,
     flushPendingChanges,
     hasPendingChanges,
+    retryFailedChanges,
+    cancelTaskFieldUpdates,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
@@ -436,6 +491,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
     updateTask,
     flushPendingChanges,
     hasPendingChanges,
+    retryFailedChanges,
+    cancelTaskFieldUpdates,
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
@@ -454,8 +511,8 @@ export function AppStateProvider({ children, repository = appRepository }) {
     reloadData
   ]);
   const value = useMemo(
-    () => ({ ...state, selectedTask, taskStats, schedule, workspace, actions }),
-    [state, selectedTask, taskStats, schedule, workspace, actions]
+    () => ({ ...state, selectedTask, taskStats, portfolioTaskStats, schedule, workspace, actions }),
+    [state, selectedTask, taskStats, portfolioTaskStats, schedule, workspace, actions]
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;

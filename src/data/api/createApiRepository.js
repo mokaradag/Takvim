@@ -290,32 +290,35 @@ export function createApiRepository({
   aliasStorageKey
 } = {}) {
   const clientIdAliases = loadActualIdAliases(aliasStorage, aliasStorageKey);
-  // Anlık görüntü yanıtı oturum bağlamını da taşır. Açılışta ikinci bir ağ
-  // isteği yapılmaması için buraya bırakılır ve İLK okumada tüketilir; sonraki
-  // `loadSessionContext` çağrıları (oturum tazeleme) yine sunucuya gider.
-  let sessionFromSnapshot = null;
   return {
     kind: 'actual-api',
     async loadSessionContext() {
-      if (sessionFromSnapshot) {
-        const session = sessionFromSnapshot;
-        sessionFromSnapshot = null;
-        return session;
-      }
       const session = await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
       return restoreActualSessionIds(session, clientIdAliases);
     },
+    /**
+     * Anlık görüntü yanıtı oturum bağlamını da taşır ve bağlam anlık görüntüyle
+     * BİRLİKTE döndürülür. Paylaşılan tek yuvada saklansaydı, üst üste binen iki
+     * yükleme birbirinin oturumunu tüketebilir ve A anlık görüntüsü B'nin proje
+     * erişimiyle eşleşebilirdi.
+     */
     async loadSnapshot() {
       const body = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
       const { session, ...snapshot } = body || {};
-      sessionFromSnapshot = session ? restoreActualSessionIds(session, clientIdAliases) : null;
-      return restoreActualSnapshotIds(snapshot, clientIdAliases);
+      const restored = restoreActualSnapshotIds(snapshot, clientIdAliases);
+      return session ? { ...restored, session: restoreActualSessionIds(session, clientIdAliases) } : restored;
     },
-    async commitChanges(changes) {
+    /**
+     * `keepalive`, sekme kapanırken yapılan son yazma içindir: tarayıcı sayfayı
+     * boşaltırken sıradan bir `fetch` iptal edilebilir, bu bayrakla isteğin
+     * tamamlanması garanti altına alınır.
+     */
+    async commitChanges(changes, { keepalive = false } = {}) {
       collectClientIds(changes, clientIdAliases);
       persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey);
       const committed = await requestJson(`${basePath}/commit`, {
         method: 'POST',
+        keepalive,
         body: JSON.stringify({ changes: normalizeActualChanges(changes) })
       }, 'commitChanges');
       return restoreActualCommitIds(committed, changes, clientIdAliases);

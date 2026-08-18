@@ -216,31 +216,23 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
   if (!prepared.ok) return prepared;
 
   const projects = context.projects || [];
-  const tasks = context.tasks || [];
   const wbs = context.wbs || [];
   const existing = projects.find((project) => project.id === projectId);
   const canonicalTags = new Map(
     (prepared.project.tags || []).map((tag) => [comparableTagName(tag.name), tag.name])
   );
   // Yeniden adlandırma çıkarımla bulunamaz (etiketin kalıcı bir kimliği yoktur);
-  // arayüz eski→yeni eşlemesini açıkça gönderir ve görev etiketleri buna göre
-  // taşınır. Aksi hâlde ad değiştirmek görevleri katalog dışında bırakırdı.
-  const renames = new Map();
+  // arayüz eski→yeni eşlemesini açıkça gönderir. Eşleme görev anahtar
+  // sözcüklerine KALICI KATMANDA, katalog yazmasıyla aynı işlemde uygulanır:
+  // istemcinin gördüğü görev kümesinden türetilen bir liste, eşzamanlı bir
+  // kullanıcının aynı anda oluşturduğu görevi kapsamaz ve o görev katalog
+  // dışında kalırdı (bkz. planProjectTagPropagation).
+  const tagRenames = [];
   for (const entry of Array.isArray(input.tagRenames) ? input.tagRenames : []) {
-    const from = comparableTagName(entry?.from);
+    const from = String(entry?.from ?? '').trim();
     const to = canonicalTags.get(comparableTagName(entry?.to));
-    if (from && to && from !== comparableTagName(to)) renames.set(from, to);
+    if (from && to && comparableTagName(from) !== comparableTagName(to)) tagRenames.push({ from, to });
   }
-
-  const taskUpserts = tasks
-    .filter((task) => task.projectId === projectId)
-    .map((task) => {
-      const key = comparableTagName(task.keyword);
-      const nextKeyword = renames.get(key) || canonicalTags.get(key);
-      const keywordChanged = Boolean(nextKeyword) && task.keyword !== nextKeyword;
-      return keywordChanged ? { ...task, keyword: nextKeyword } : null;
-    })
-    .filter(Boolean);
 
   const rootWbs = wbs.find((node) => node.projectId === projectId && node.parentId == null) || null;
   const projectNameChanged = existing.name !== prepared.project.name;
@@ -252,8 +244,8 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
   return {
     ...prepared,
     changes: {
-      projectUpserts: [prepared.project],
-      taskUpserts,
+      projectUpserts: [tagRenames.length ? { ...prepared.project, tagRenames } : prepared.project],
+      taskUpserts: [],
       wbsUpserts
     }
   };

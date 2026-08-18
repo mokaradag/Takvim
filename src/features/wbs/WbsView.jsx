@@ -192,7 +192,20 @@ export function WbsView() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [drag, setDrag] = useState(null);
   const [dropHint, setDropHint] = useState(null);
+  // Taşıma kötümser olarak kalıcılaştırılır: yanıt gelene kadar görünen ağaç
+  // eskidir. Bu aralıkta yeni bir sürüklemeye izin verilirse, mutlak kardeş
+  // sırası eski ağaçtan hesaplanıp güncel ağaca uygulanır ve sonuç kullanıcının
+  // gördüğünden başka olur.
+  const [movePending, setMovePending] = useState(false);
+  // Satırın tamamı `draggable` olsaydı ad alanında metin seçmek ya da eylem
+  // düğmelerinde işaretçiyi kaydırmak sürüklemeyi başlatabilir ve istenmeyen bir
+  // hiyerarşi değişikliği kalıcılaşabilirdi; sürükleme yalnızca tutamaktan başlar.
+  const [dragHandleNodeId, setDragHandleNodeId] = useState(null);
   const hoverExpandRef = useRef({ nodeId: null, timer: null });
+  // Sürükleme oturumu boyunca paylaşılan arama dizini: `dragover` her işaretçi
+  // hareketinde tetiklenir, ağaç indeksinin her olayda yeniden kurulması
+  // kurumsal ölçekte sürüklemeyi kilitler.
+  const dropIndexRef = useRef(null);
   const validationIssues = useMemo(() => validateWbsStructure(wbs), [wbs]);
   // Toplulaştırmalar satır başına değil, ağacın tamamı için tek geçişte
   // hesaplanır; 38 bin düğümlü kurumsal ağaçta satır çizimi böylece ucuz kalır.
@@ -297,12 +310,22 @@ export function WbsView() {
     setEditing({ mode: 'rename', nodeId: node.id, value: node.name });
   };
 
-  const submitEditing = () => {
-    if (!editing) return;
+  // Satır içi taslak yalnızca kayıt BAŞARILI olduğunda kapanır: sürüm çakışması
+  // ya da geçici bir depo hatasında alan kapatılsaydı kullanıcının yazdığı ad
+  // kaybolur ve yeniden yazmaktan başka yolu kalmazdı.
+  const submitEditing = async () => {
+    if (!editing || editing.busy) return;
     const name = editing.value.trim();
     if (!name) return;
-    if (editing.mode === 'add') addWbsChild(editing.nodeId, name);
-    else renameWbs(editing.nodeId, name);
+    const current = editing;
+    setEditing({ ...current, busy: true });
+    const result = current.mode === 'add'
+      ? await addWbsChild(current.nodeId, name)
+      : await renameWbs(current.nodeId, name);
+    if (result && result.ok === false) {
+      setEditing({ ...current, busy: false });
+      return;
+    }
     setEditing(null);
   };
 
@@ -331,36 +354,83 @@ export function WbsView() {
     cancelHoverExpand();
     setDrag(null);
     setDropHint(null);
+    setDragHandleNodeId(null);
+    dropIndexRef.current = null;
   };
 
   const onRowDragStart = (node) => (event) => {
-    if (!canEdit || node.parentId == null) return;
+    if (!canEdit || node.parentId == null || movePending || dragHandleNodeId !== node.id) {
+      event.preventDefault();
+      return;
+    }
     setDrag({ id: node.id });
     setPendingDelete(null);
     setEditing(null);
+    dropIndexRef.current = createWbsDropIndex(wbs);
     event.dataTransfer.effectAllowed = 'move';
     // Bazı tarayıcılar veri taşımayan sürüklemeyi başlatmaz.
     try { event.dataTransfer.setData('text/plain', node.id); } catch {}
   };
 
+  const resolveDrop = (dragId, targetId, position) => resolveWbsDrop(
+    wbs,
+    { dragId, targetId, position },
+    { index: dropIndexRef.current || (dropIndexRef.current = createWbsDropIndex(wbs)) }
+  );
+
   const onRowDragOver = (node) => (event) => {
     if (!drag || !canEdit) return;
     const position = dropPositionFromPointer(event, event.currentTarget);
-    const resolution = resolveWbsDrop(wbs, { dragId: drag.id, targetId: node.id, position });
+    const resolution = resolveDrop(drag.id, node.id, position);
     event.preventDefault();
     event.dataTransfer.dropEffect = resolution.ok ? 'move' : 'none';
     if (position === 'inside' && resolution.ok) scheduleHoverExpand(node);
     else cancelHoverExpand();
-    setDropHint({ nodeId: node.id, position, ok: resolution.ok, message: resolution.ok ? null : resolution.message });
+    // İpucu yalnızca gerçekten değiştiğinde yazılır; aksi hâlde her işaretçi
+    // hareketi bütün ağacı yeniden çizerdi.
+    setDropHint((current) => (current
+      && current.nodeId === node.id
+      && current.position === position
+      && current.ok === resolution.ok
+      ? current
+      : { nodeId: node.id, position, ok: resolution.ok, message: resolution.ok ? null : resolution.message }));
+  };
+
+  const onRowDragLeave = (node) => (event) => {
+    // Satır içindeki bir alt öğeye geçiş "ayrılma" değildir; yalnızca gerçekten
+    // satırdan çıkıldığında bekleyen açma zamanlayıcısı da iptal edilir, aksi
+    // hâlde artık hedef olmayan satır sürükleme sürerken kendiliğinden açılır.
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    if (hoverExpandRef.current.nodeId === node.id) cancelHoverExpand();
+    setDropHint((current) => (current?.nodeId === node.id ? null : current));
   };
 
   const onRowDrop = (node) => (event) => {
     event.preventDefault();
     if (!drag || !canEdit) return endDrag();
     const position = dropPositionFromPointer(event, event.currentTarget);
-    const resolution = resolveWbsDrop(wbs, { dragId: drag.id, targetId: node.id, position });
-    if (resolution.ok) moveWbsNode(resolution.move.id, resolution.move.parentId, resolution.move.index);
+    const resolution = resolveDrop(drag.id, node.id, position);
     endDrag();
+    if (!resolution.ok) return;
+    // Hedefin altına alınan düğüm görünür kalmalıdır: hedef kapalıysa (ya da
+    // taşımadan önce yaprak olduğu için hiç açılamıyorsa) düğüm bırakıldığı anda
+    // ağaçtan kayboluyor, taşıma başarısız olmuş gibi görünüyordu.
+    if (position === 'inside') setExpanded((current) => new Set(current).add(node.id));
+    setMovePending(true);
+    Promise.resolve(moveWbsNode(resolution.move.id, resolution.move.parentId, resolution.move.index))
+      .finally(() => setMovePending(false));
+  };
+
+  /** Klavye/işaretçi ayrımı olmadan kardeş sırası: sürükleme tek yol değildir. */
+  const moveSibling = (node, offset) => {
+    if (!canEdit || movePending || node.parentId == null) return;
+    const siblings = wbsSiblings(wbs, node.parentId);
+    const currentIndex = siblings.findIndex((sibling) => sibling.id === node.id);
+    const nextIndex = currentIndex + offset;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= siblings.length) return;
+    setMovePending(true);
+    Promise.resolve(moveWbsNode(node.id, node.parentId, nextIndex))
+      .finally(() => setMovePending(false));
   };
 
   const onSourceChange = (wbsId) => {
@@ -567,7 +637,9 @@ export function WbsView() {
               const isReparenting = reparenting?.nodeId === node.id;
               const blockedTargets = new Set([node.id, ...selectWbsDescendantIds(wbs, node.id)]);
               const parentCandidates = orderedRows.filter(({ node: candidate }) => !blockedTargets.has(candidate.id));
-              const draggable = canEdit && node.parentId != null;
+              const draggable = canEdit && node.parentId != null && !movePending;
+              const siblingIndex = draggable ? wbsSiblings(wbs, node.parentId).findIndex((sibling) => sibling.id === node.id) : -1;
+              const siblingCount = draggable ? wbsSiblings(wbs, node.parentId).length : 0;
               const hint = dropHint?.nodeId === node.id ? dropHint : null;
               const rowClass = [
                 'wbs-tree-grid',
@@ -581,11 +653,11 @@ export function WbsView() {
                 <div
                   key={node.id}
                   className={rowClass}
-                  draggable={draggable}
+                  draggable={draggable && dragHandleNodeId === node.id}
                   onDragStart={onRowDragStart(node)}
                   onDragEnd={endDrag}
                   onDragOver={onRowDragOver(node)}
-                  onDragLeave={() => setDropHint((current) => (current?.nodeId === node.id ? null : current))}
+                  onDragLeave={onRowDragLeave(node)}
                   onDrop={onRowDrop(node)}
                   title={hint && !hint.ok ? hint.message : undefined}
                 >
@@ -596,6 +668,8 @@ export function WbsView() {
                         aria-hidden="true"
                         title={draggable ? 'Sürükleyerek taşıyın' : 'Kök düğüm taşınamaz'}
                         data-disabled={draggable ? undefined : 'true'}
+                        onPointerDown={() => draggable && setDragHandleNodeId(node.id)}
+                        onPointerUp={() => setDragHandleNodeId(null)}
                       >
                         <Icons.Grip size={13} />
                       </span>
@@ -683,6 +757,30 @@ export function WbsView() {
                         <button className="btn" onClick={() => startAddChild(node)}>Alt ekle</button>
                         <button className="btn" onClick={() => startRename(node)}>Ad</button>
                         {node.parentId != null && <button className="btn" onClick={() => startReparent(node)}>Taşı</button>}
+                        {/* Kardeş sırası sürüklemeye bağlı bırakılamaz: fare
+                            kullanmayan bir kullanıcı için bu düğmeler tek yoldur. */}
+                        {node.parentId != null && (
+                          <>
+                            <button
+                              className="icon-btn"
+                              aria-label="Bir sıra yukarı taşı"
+                              title="Bir sıra yukarı taşı"
+                              disabled={!draggable || siblingIndex <= 0}
+                              onClick={() => moveSibling(node, -1)}
+                            >
+                              <Icons.ChevronUp size={12} />
+                            </button>
+                            <button
+                              className="icon-btn"
+                              aria-label="Bir sıra aşağı taşı"
+                              title="Bir sıra aşağı taşı"
+                              disabled={!draggable || siblingIndex < 0 || siblingIndex >= siblingCount - 1}
+                              onClick={() => moveSibling(node, 1)}
+                            >
+                              <Icons.ChevronDown size={12} />
+                            </button>
+                          </>
+                        )}
                         <button className="btn" onClick={() => { setEditing(null); setPendingDelete(node.id); }}>Sil</button>
                       </>
                     ))}

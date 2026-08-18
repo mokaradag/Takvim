@@ -115,6 +115,11 @@ export function createOrderedMutationQueue() {
 
 export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   const pending = new Map();
+  // Reddedilen yama atılmaz: kalıcılaştırma başarısız olduğunda düzenlemenin
+  // tek kopyası bu olabilir (panel kapanmış, taslak sökülmüş olabilir). Yama
+  // burada saklanır, kullanıcı yazmaya devam ederse üzerine birleşir ve açık
+  // bir yeniden deneme ya da yeniden yükleme kararına kadar kaybolmaz.
+  const failed = new Map();
   let disposed = false;
 
   function disposalResult() {
@@ -140,7 +145,11 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   function schedule(taskId, patch) {
     if (disposed) return Promise.resolve(disposalResult());
     return new Promise((resolve) => {
-      const current = pending.get(taskId) || { patch: {}, waiters: [], timer: null };
+      // Saklanan başarısız yama yeni düzenlemenin altına serilir: kullanıcı
+      // yazmaya devam ettiğinde reddedilen alanlar da birlikte yeniden gönderilir.
+      const retained = failed.get(taskId);
+      failed.delete(taskId);
+      const current = pending.get(taskId) || { patch: { ...(retained || {}) }, waiters: [], timer: null };
       current.patch = { ...current.patch, ...patch };
       current.waiters.push(resolve);
       pending.set(taskId, current);
@@ -148,14 +157,14 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     });
   }
 
-  async function flush(taskId) {
+  async function flush(taskId, options = {}) {
     const entry = pending.get(taskId);
     if (!entry) return { ok: true, value: null };
     pending.delete(taskId);
     clearTimeout(entry.timer);
     let result;
     try {
-      result = await flushPatch(taskId, entry.patch);
+      result = await flushPatch(taskId, entry.patch, options);
     } catch {
       result = {
         ok: false,
@@ -168,14 +177,17 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
         }
       };
     }
+    // Başarısız yama saklanır; `pending` içine geri konmaz, aksi hâlde kalıcı
+    // olarak reddedilen bir düzenleme her boşaltmayı sonsuz döngüye sokardı.
+    if (!result.ok) failed.set(taskId, { ...(failed.get(taskId) || {}), ...entry.patch });
     for (const resolve of entry.waiters) resolve(result);
     return result;
   }
 
-  async function flushAll() {
+  async function flushAll(options = {}) {
     const results = [];
     while (pending.size) {
-      const batch = await Promise.all([...pending.keys()].map((taskId) => flush(taskId)));
+      const batch = await Promise.all([...pending.keys()].map((taskId) => flush(taskId, options)));
       results.push(...batch);
     }
     return results;
@@ -183,6 +195,52 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
 
   function hasPending() {
     return pending.size > 0;
+  }
+
+  /**
+   * Bekleyen (ve saklanan) yamadan belirli alanları düşürür.
+   *
+   * Arayüz bir alanı geçersiz kılabilir — örneğin başlık silindiğinde. Alan
+   * yalnızca yeni yamaya konmazsa, kuyrukta duran ÖNCEKİ tuş vuruşu yine de
+   * kalıcılaşır ve kullanıcı ekranda görmediği bir değeri kaydetmiş olurdu.
+   */
+  function cancelFields(taskId, fields = []) {
+    const keys = Array.isArray(fields) ? fields : [fields];
+    if (!keys.length) return;
+    const entry = pending.get(taskId);
+    if (entry) {
+      for (const key of keys) delete entry.patch[key];
+      if (!Object.keys(entry.patch).length) {
+        clearTimeout(entry.timer);
+        pending.delete(taskId);
+        for (const resolve of entry.waiters) resolve({ ok: true, value: null });
+      }
+    }
+    const retained = failed.get(taskId);
+    if (!retained) return;
+    for (const key of keys) delete retained[key];
+    if (!Object.keys(retained).length) failed.delete(taskId);
+  }
+
+  /** Kaydedilmemiş düzenleme: kuyrukta bekleyen ya da reddedilip saklanan. */
+  function hasUnsavedChanges() {
+    return pending.size > 0 || failed.size > 0;
+  }
+
+  /** Saklanan başarısız yamaları kuyruğa alıp yeniden gönderir. */
+  function retryFailed(options = {}) {
+    for (const [taskId, patch] of failed) {
+      failed.delete(taskId);
+      const current = pending.get(taskId) || { patch: {}, waiters: [], timer: null };
+      current.patch = { ...patch, ...current.patch };
+      pending.set(taskId, current);
+    }
+    return flushAll(options);
+  }
+
+  /** Saklanan başarısız yamaları atar (kullanıcı yeniden yüklemeyi seçtiğinde). */
+  function discardFailed() {
+    failed.clear();
   }
 
   function dispose() {
@@ -193,9 +251,10 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
       for (const resolve of entry.waiters) resolve(result);
     }
     pending.clear();
+    failed.clear();
   }
 
-  return { schedule, flush, flushAll, hasPending, dispose };
+  return { schedule, flush, flushAll, cancelFields, hasPending, hasUnsavedChanges, retryFailed, discardFailed, dispose };
 }
 
 function defaultSessionContext(repository) {
@@ -224,10 +283,13 @@ function defaultSessionContext(repository) {
  */
 export async function loadApplicationData(repository) {
   try {
-    const snapshot = await repository.loadSnapshot();
-    const session = typeof repository.loadSessionContext === 'function'
-      ? await repository.loadSessionContext()
-      : defaultSessionContext(repository);
+    const { session: embeddedSession, ...snapshot } = await repository.loadSnapshot();
+    // Gerçek Sistem deposu oturumu anlık görüntüyle birlikte döndürür; ayrı bir
+    // istek yalnızca bağlam gömülü gelmediğinde yapılır.
+    const session = embeddedSession
+      || (typeof repository.loadSessionContext === 'function'
+        ? await repository.loadSessionContext()
+        : defaultSessionContext(repository));
     return { ok: true, snapshot: { ...snapshot, session } };
   } catch (error) {
     return {
@@ -250,7 +312,7 @@ export function createStateMutationOrchestrator({
 }) {
   const queue = createOrderedMutationQueue();
 
-  const persistAction = (operation, actionOrFactory) => queue.enqueue(async () => {
+  const persistAction = (operation, actionOrFactory, options = {}) => queue.enqueue(async () => {
     const before = getState();
     const action = typeof actionOrFactory === 'function' ? actionOrFactory(before) : actionOrFactory;
     if (!action) return { ok: true, value: null };
@@ -267,7 +329,7 @@ export function createStateMutationOrchestrator({
     }
     applyStateAction({ type: 'persistence/start', operation });
     try {
-      const committed = await repository.commitChanges(changes);
+      const committed = await repository.commitChanges(changes, options);
       applyStateAction({
         type: 'persistence/success',
         changes: committed,
@@ -310,7 +372,7 @@ export function createStateMutationOrchestrator({
   });
 
   const taskPatches = createTaskPatchCoalescer(
-    (id, patch) => persistAction('task/update', { type: 'task/update', id, patch }),
+    (id, patch, options) => persistAction('task/update', { type: 'task/update', id, patch }, options),
     { delayMs: taskPatchDelayMs }
   );
 
@@ -327,15 +389,21 @@ export function createStateMutationOrchestrator({
     updateTask,
     mutate: persistAction,
     commitChanges,
-    flushTaskUpdates(ids = []) { return Promise.all([...new Set(ids)].map((id) => taskPatches.flush(id))); },
-    flushAllTaskUpdates() { return taskPatches.flushAll(); },
-    // Henüz sunucuya gitmemiş, gecikmeli birleştirme kuyruğunda bekleyen
-    // düzenleme var mı? Sekme kapatılırken uyarmak için kullanılır.
-    hasPendingChanges() { return taskPatches.hasPending(); },
+    flushTaskUpdates(ids = [], options = {}) {
+      return Promise.all([...new Set(ids)].map((id) => taskPatches.flush(id, options)));
+    },
+    flushAllTaskUpdates(options = {}) { return taskPatches.flushAll(options); },
+    // Kaydedilmemiş düzenleme var mı? Gecikmeli birleştirme kuyruğunda bekleyen
+    // yamalar ve reddedilip saklanan yamalar birlikte sayılır: sekme
+    // kapatılırken uyarmak ve yeniden denemeyi önermek için kullanılır.
+    hasPendingChanges() { return taskPatches.hasUnsavedChanges(); },
+    cancelTaskFieldUpdates(id, fields) { taskPatches.cancelFields(id, fields); },
+    retryFailedTaskUpdates(options = {}) { return taskPatches.retryFailed(options); },
+    discardFailedTaskUpdates() { taskPatches.discardFailed(); },
     whenIdle() { return queue.whenIdle(); },
-    async flush() {
+    async flush(options = {}) {
       while (true) {
-        const results = await taskPatches.flushAll();
+        const results = await taskPatches.flushAll(options);
         const failed = results.find((result) => result && !result.ok);
         if (failed) return failed;
         await queue.whenIdle();

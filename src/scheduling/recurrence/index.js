@@ -1,5 +1,5 @@
 import { addDays, fmtISO, parseDate } from '../dates/index.js';
-import { isWorkingDay, moveToWorkingDay } from '../calendars/index.js';
+import { addWorkingDays, countWorkingDays, isWorkingDay, moveToWorkingDay } from '../calendars/index.js';
 
 /**
  * Tekrarlayan görev kuralları — RFC 5545 (iCalendar) RRULE altkümesi.
@@ -137,6 +137,89 @@ export function parseRecurrenceRule(text) {
   };
 }
 
+/** RRULE gövdesinde desteklenen alanlar; başkası sessizce yok sayılmaz. */
+const SUPPORTED_RULE_PARTS = Object.freeze(['FREQ', 'INTERVAL', 'BYDAY', 'BYMONTHDAY', 'COUNT', 'UNTIL']);
+
+/** `INTERVAL` üst sınırı; daha büyüğü seriyi pratikte üretilemez kılar. */
+export const MAX_RECURRENCE_INTERVAL = 999;
+
+function integerPart(value) {
+  const body = String(value ?? '').trim();
+  return /^\d+$/.test(body) ? Number(body) : null;
+}
+
+/**
+ * RRULE gövdesini *katı* biçimde denetler.
+ *
+ * `normalizeRecurrenceRule` bilinçli olarak hoşgörülüdür: okunamayan bir alanı
+ * düşürüp kuralı yine de döndürür; eski kayıtların ekranda açılabilmesi için
+ * gerekli. Kalıcılaştırma sınırında ise bu hoşgörü, gönderilen kuralın
+ * saklanandan başka anlama gelmesi demektir (örneğin `COUNT=0` sınırsız seriye
+ * dönüşür). Yazma yolunda bu nedenle bu denetim kullanılır.
+ *
+ * @param {string} text RRULE gövdesi (`RRULE:` öneki isteğe bağlı)
+ * @returns {string|null} sorunun Türkçe açıklaması, geçerliyse `null`
+ */
+export function findRecurrenceRuleIssue(text) {
+  const body = String(text ?? '').trim().replace(/^RRULE:/i, '');
+  if (!body) return 'Tekrar kuralı boş olamaz.';
+
+  const values = new Map();
+  for (const part of body.split(';')) {
+    if (!part.trim()) return 'Tekrar kuralında boş bileşen bulunamaz.';
+    const separator = part.indexOf('=');
+    if (separator < 0) return `Tekrar kuralı bileşeni ad=değer biçiminde olmalıdır: ${part.trim()}`;
+    const key = part.slice(0, separator).trim().toUpperCase();
+    const value = part.slice(separator + 1).trim();
+    if (!SUPPORTED_RULE_PARTS.includes(key)) return `Desteklenmeyen tekrar bileşeni: ${key || part.trim()}`;
+    if (values.has(key)) return `Tekrar bileşeni birden çok kez verilemez: ${key}`;
+    if (!value) return `Tekrar bileşeni değersiz olamaz: ${key}`;
+    values.set(key, value);
+  }
+
+  const freq = String(values.get('FREQ') ?? '').toUpperCase();
+  if (!freq) return 'Tekrar kuralı FREQ bileşenini içermelidir.';
+  if (!RECURRENCE_FREQUENCIES.includes(freq)) return `Desteklenmeyen tekrar sıklığı: ${freq}`;
+
+  if (values.has('INTERVAL')) {
+    const interval = integerPart(values.get('INTERVAL'));
+    if (!interval || interval < 1 || interval > MAX_RECURRENCE_INTERVAL) {
+      return `INTERVAL 1 ile ${MAX_RECURRENCE_INTERVAL} arasında bir tam sayı olmalıdır.`;
+    }
+  }
+
+  if (values.has('BYDAY')) {
+    if (freq !== 'WEEKLY') return 'BYDAY yalnızca haftalık tekrar kuralında kullanılabilir.';
+    const days = values.get('BYDAY').split(',').map((day) => day.trim().toUpperCase());
+    for (const day of days) {
+      if (!RECURRENCE_WEEKDAYS.includes(day)) return `Geçersiz BYDAY günü: ${day || '(boş)'}`;
+    }
+    if (new Set(days).size !== days.length) return 'BYDAY aynı günü birden çok kez içeremez.';
+  }
+
+  if (values.has('BYMONTHDAY')) {
+    if (freq !== 'MONTHLY') return 'BYMONTHDAY yalnızca aylık tekrar kuralında kullanılabilir.';
+    const monthDay = integerPart(values.get('BYMONTHDAY'));
+    if (!monthDay || monthDay < 1 || monthDay > 31) return 'BYMONTHDAY 1 ile 31 arasında bir tam sayı olmalıdır.';
+  }
+
+  if (values.has('COUNT') && values.has('UNTIL')) return 'COUNT ve UNTIL birlikte verilemez.';
+
+  if (values.has('COUNT')) {
+    const count = integerPart(values.get('COUNT'));
+    if (!count || count < 1) return 'COUNT en az 1 olmalıdır.';
+    // Açılım güvenlik tavanında durur; tavanı aşan bir COUNT hiçbir zaman
+    // tamamlanamaz, bu yüzden kabul edilmez.
+    if (count > MAX_RECURRENCE_OCCURRENCES) return `COUNT en fazla ${MAX_RECURRENCE_OCCURRENCES} olabilir.`;
+  }
+
+  if (values.has('UNTIL') && !isoFromCompactDate(values.get('UNTIL'))) {
+    return 'UNTIL YYYYMMDD biçiminde geçerli bir tarih olmalıdır.';
+  }
+
+  return null;
+}
+
 /** Kuralı Türkçe, insan okunur bir cümleye çevirir. */
 export function describeRecurrenceRule(rule) {
   const normalized = normalizeRecurrenceRule(rule);
@@ -160,38 +243,69 @@ export function describeRecurrenceRule(rule) {
   return base;
 }
 
+/** Dönem taraması için üst sınır; kötü kurulmuş bir kural sonsuz dönmesin. */
+const MAX_PERIOD_SCANS = MAX_RECURRENCE_OCCURRENCES * 10;
+
 /**
- * Yalnızca HAFTALIK kural gün gün taranır (seçili günler seyrek olabilir);
- * diğer sıklıklarda `advance` doğrudan bir sonraki yinelemeyi üretir, bu
- * yüzden ayrıca süzmeye gerek yoktur.
+ * Haftalık kuralda gün kümesi zorunludur; `BYDAY` verilmediğinde RFC 5545
+ * serinin başlangıç gününü (DTSTART) varsayar. Aksi hâlde `FREQ=WEEKLY`
+ * haftanın her gününe açılırdı.
  */
-function matchesRule(date, rule) {
-  if (rule.freq !== 'WEEKLY') return true;
-  if (!rule.byWeekday.length) return true;
-  return rule.byWeekday.includes(RECURRENCE_WEEKDAYS[isoWeekday(date)]);
+function weeklyDays(rule, startDate) {
+  return rule.byWeekday.length ? rule.byWeekday : [RECURRENCE_WEEKDAYS[isoWeekday(startDate)]];
 }
 
-function clampedMonthDay(year, month, day) {
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  return new Date(year, month, Math.min(day, lastDay));
+function daysInMonth(year, month) {
+  return new Date(year, month + 1, 0).getDate();
 }
 
-function advance(date, rule, start) {
-  if (rule.freq === 'DAILY') return addDays(date, rule.interval);
-  // Haftalık kuralda gün gün ilerlenir; hafta atlaması `weekIndex` ile uygulanır.
-  if (rule.freq === 'WEEKLY') return addDays(date, 1);
-  if (rule.freq === 'MONTHLY') {
-    // Ayın 31'i olmayan aylarda yineleme ayın son gününe çekilir: RFC 5545
-    // o ayı atlamayı öngörür, planlamada ise bir yineleme kaybetmemek daha
-    // yararlıdır ve kullanıcı beklentisine uyar.
-    return clampedMonthDay(date.getFullYear(), date.getMonth() + rule.interval, rule.byMonthDay || start.getDate());
+/**
+ * Bir dönemin (gün/hafta/ay/yıl) aday tarihlerini artan sırada üretir.
+ *
+ * RFC 5545 takvimde bulunmayan tarihi (31 Şubat, artık olmayan yılda 29 Şubat)
+ * atlamayı ve yineleme saymamayı şart koşar. Kural dışa aktarıldığında başka
+ * bir takvim uygulamasıyla aynı seriyi vermesi gerektiği için burada da ayın
+ * son gününe çekilmez, atlanır.
+ */
+function periodDates(rule, startDate, period) {
+  if (rule.freq === 'DAILY') return [addDays(startDate, period * rule.interval)];
+
+  if (rule.freq === 'WEEKLY') {
+    const weekStart = addDays(startDate, period * rule.interval * 7 - isoWeekday(startDate));
+    return weeklyDays(rule, startDate)
+      .map((day) => addDays(weekStart, RECURRENCE_WEEKDAYS.indexOf(day)))
+      .sort((a, b) => a - b);
   }
-  return clampedMonthDay(date.getFullYear() + rule.interval, start.getMonth(), start.getDate());
+
+  const monthly = rule.freq === 'MONTHLY';
+  const monthDay = monthly ? (rule.byMonthDay || startDate.getDate()) : startDate.getDate();
+  const anchor = new Date(
+    monthly ? startDate.getFullYear() : startDate.getFullYear() + period * rule.interval,
+    monthly ? startDate.getMonth() + period * rule.interval : startDate.getMonth(),
+    1
+  );
+  if (monthDay > daysInMonth(anchor.getFullYear(), anchor.getMonth())) return [];
+  return [new Date(anchor.getFullYear(), anchor.getMonth(), monthDay)];
 }
 
-function weekIndex(date, start) {
-  const startOfWeek = addDays(start, -isoWeekday(start));
-  return Math.floor(Math.round((parseDate(date).getTime() - startOfWeek.getTime()) / 86400000) / 7);
+/**
+ * Kuralın ham (çalışma takvimine göre kaydırılmamış) tarihlerini artan sırada
+ * üretir. Gün gün taranmaz, dönem dönem ilerlenir: `INTERVAL` ne kadar büyük
+ * olursa olsun tarama bütçesi yineleme sayısıyla orantılı kalır.
+ */
+function* iterateRecurrenceDates(rule, startDate) {
+  for (let period = 0; period < MAX_PERIOD_SCANS; period += 1) {
+    for (const date of periodDates(rule, startDate, period)) {
+      if (date < startDate) continue;
+      yield date;
+    }
+  }
+}
+
+/** Üretilecek yineleme sayısı: istenen sınır, kuralın COUNT'u ve güvenlik tavanı. */
+function occurrenceCap(rule, limit) {
+  const requested = Math.min(Math.max(1, limit), MAX_RECURRENCE_OCCURRENCES);
+  return rule.count ? Math.min(requested, rule.count) : requested;
 }
 
 /**
@@ -199,9 +313,9 @@ function weekIndex(date, start) {
  *
  * @param {object|string} rule kanonik kural ya da RRULE metni
  * @param {{start: string, limit?: number, horizonEnd?: string}} options
- *   `start` serinin ilk aday günüdür (ISO). `limit` üretilecek en fazla
- *   yineleme, `horizonEnd` ise takvim ufkudur; ikisi de sonsuz kuralları
- *   sınırlamak içindir.
+ *   `start` serinin ilk aday günüdür (ISO, RFC 5545 DTSTART). `limit`
+ *   üretilecek en fazla yineleme, `horizonEnd` ise takvim ufkudur; ikisi de
+ *   sonsuz kuralları sınırlamak içindir.
  * @returns {string[]} ISO tarihler, artan sırada
  */
 export function expandRecurrence(rule, { start, limit = MAX_RECURRENCE_OCCURRENCES, horizonEnd = null } = {}) {
@@ -209,35 +323,50 @@ export function expandRecurrence(rule, { start, limit = MAX_RECURRENCE_OCCURRENC
   if (!normalized || !start) return [];
 
   const startDate = parseDate(start);
-  const cap = Math.min(Math.max(1, limit), MAX_RECURRENCE_OCCURRENCES);
+  const cap = occurrenceCap(normalized, limit);
   const hardEnd = horizonEnd ? parseDate(horizonEnd) : null;
   const untilDate = normalized.until ? parseDate(normalized.until) : null;
 
   const dates = [];
-  let cursor = startDate;
-  // Tarama adımı: kural tutmayan günlerde de ilerleriz, bu yüzden güvenlik
-  // için ayrı bir yineleme sayacı tutulur.
-  let guard = 0;
-  const guardLimit = MAX_RECURRENCE_OCCURRENCES * 40;
-
-  while (dates.length < cap && guard < guardLimit) {
-    guard += 1;
-    if (hardEnd && cursor > hardEnd) break;
-    if (untilDate && cursor > untilDate) break;
-
-    const weeklySkipped = normalized.freq === 'WEEKLY'
-      && normalized.interval > 1
-      && weekIndex(cursor, startDate) % normalized.interval !== 0;
-
-    if (!weeklySkipped && matchesRule(cursor, normalized)) {
-      dates.push(fmtISO(cursor));
-      if (normalized.count && dates.length >= normalized.count) break;
-    }
-
-    cursor = advance(cursor, normalized, startDate);
+  for (const date of iterateRecurrenceDates(normalized, startDate)) {
+    if (hardEnd && date > hardEnd) break;
+    if (untilDate && date > untilDate) break;
+    dates.push(fmtISO(date));
+    if (dates.length >= cap) break;
   }
-
   return dates;
+}
+
+function dayGap(from, to) {
+  return Math.round((parseDate(to).getTime() - parseDate(from).getTime()) / 86400000);
+}
+
+/**
+ * İki tarih arasındaki *dahil* gün sayısı. Çalışma takvimi verildiğinde iş günü
+ * sayılır — `plannedDurationDays` de bu ölçüyü kullanır (bkz. scheduling/plans).
+ */
+function spanBetween(from, to, calendar) {
+  if (calendar) return countWorkingDays(from, to, calendar);
+  const gap = dayGap(from, to);
+  return gap >= 0 ? gap + 1 : gap - 1;
+}
+
+/** `spanBetween` ile ölçülen dahil süreyi bir başlangıca yeniden uygular. */
+function addSpan(start, span, calendar) {
+  const steps = span > 0 ? span - 1 : (span < 0 ? span + 1 : 0);
+  return calendar ? addWorkingDays(start, steps, calendar) : addDays(start, steps);
+}
+
+/**
+ * Şablonun planlanan süresi. `plannedDurationDays` bir iş günü sayısıdır;
+ * yoksa planlanan bitişten türetilir. Şablonun bitişi de yoksa süre
+ * *bilinmiyordur* — yinelemeye uydurulmuş bir bitiş yazılmaz.
+ */
+function plannedSpanDays(template, calendar) {
+  const declared = template?.plannedDurationDays;
+  if (Number.isFinite(declared) && declared >= 0) return Math.round(declared);
+  if (!template?.plannedFinish) return null;
+  return spanBetween(template.plannedStart, template.plannedFinish, calendar);
 }
 
 /**
@@ -247,7 +376,12 @@ export function expandRecurrence(rule, { start, limit = MAX_RECURRENCE_OCCURRENC
  * planlanır. Çalışma takvimi verildiğinde tatil ve hafta sonuna denk gelen
  * yinelemeler bir sonraki iş gününe kaydırılır (`skipNonWorkingDays`).
  *
- * @returns {Array<{index: number, plannedStart: string, plannedFinish: string, targetFinish: string}>}
+ * COUNT/UNTIL/ufuk sınırları kaydırma ve tekilleştirmeden *sonraki* kümeye
+ * uygulanır: kullanıcı üç yineleme istediyse üç görev oluşur ve hiçbir görev
+ * UNTIL tarihinden sonraya kalıcılaştırılmaz.
+ *
+ * @returns {Array<{index: number, plannedStart: string, plannedFinish: string|null,
+ *   targetFinish: string|null}>}
  */
 export function planRecurringOccurrences(template, rule, {
   calendar = null,
@@ -255,33 +389,43 @@ export function planRecurringOccurrences(template, rule, {
   horizonEnd = null,
   skipNonWorkingDays = true
 } = {}) {
+  const normalized = normalizeRecurrenceRule(rule);
   const start = template?.plannedStart;
-  if (!start) return [];
+  if (!normalized || !start) return [];
 
-  const durationDays = Number.isFinite(template.plannedDurationDays) && template.plannedDurationDays > 0
-    ? Math.round(template.plannedDurationDays)
-    : Math.max(0, template.plannedFinish ? dayGap(start, template.plannedFinish) : 0);
-  const targetOffset = template.targetFinish ? dayGap(start, template.targetFinish) : durationDays;
+  const startDate = parseDate(start);
+  const cap = occurrenceCap(normalized, limit);
+  const hardEnd = horizonEnd ? parseDate(horizonEnd) : null;
+  const untilDate = normalized.until ? parseDate(normalized.until) : null;
+  const shiftCalendar = skipNonWorkingDays ? calendar : null;
+
+  const durationSpan = plannedSpanDays(template, calendar);
+  // Şablonun yönetsel terminini koru: olmayan bir termin uydurulmaz, planlanan
+  // bitişten önceye konmuş bir termin de bitişe kadar ötelenmez.
+  const targetSpan = template?.targetFinish ? spanBetween(start, template.targetFinish, calendar) : null;
 
   const seen = new Set();
   const plan = [];
-  for (const [index, date] of expandRecurrence(rule, { start, limit, horizonEnd }).entries()) {
-    const shifted = calendar && skipNonWorkingDays && !isWorkingDay(date, calendar)
-      ? fmtISO(moveToWorkingDay(date, calendar, 1))
+  for (const date of iterateRecurrenceDates(normalized, startDate)) {
+    const shifted = shiftCalendar && !isWorkingDay(date, shiftCalendar)
+      ? moveToWorkingDay(date, shiftCalendar, 1)
       : date;
-    // Kaydırma iki yinelemeyi aynı güne düşürebilir; aynı gün iki kez üretilmez.
-    if (seen.has(shifted)) continue;
-    seen.add(shifted);
+    if (hardEnd && shifted > hardEnd) break;
+    if (untilDate && shifted > untilDate) break;
+
+    // Kaydırma iki yinelemeyi aynı güne düşürebilir; aynı gün iki kez
+    // üretilmez, buna karşılık açılım istenen sayı tamamlanana kadar sürer.
+    const iso = fmtISO(shifted);
+    if (seen.has(iso)) continue;
+    seen.add(iso);
+
     plan.push({
-      index,
-      plannedStart: shifted,
-      plannedFinish: fmtISO(addDays(shifted, durationDays)),
-      targetFinish: fmtISO(addDays(shifted, Math.max(targetOffset, durationDays)))
+      index: plan.length,
+      plannedStart: iso,
+      plannedFinish: durationSpan === null ? null : fmtISO(addSpan(shifted, durationSpan, calendar)),
+      targetFinish: targetSpan === null ? null : fmtISO(addSpan(shifted, targetSpan, calendar))
     });
+    if (plan.length >= cap) break;
   }
   return plan;
-}
-
-function dayGap(from, to) {
-  return Math.round((parseDate(to).getTime() - parseDate(from).getTime()) / 86400000);
 }

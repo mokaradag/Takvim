@@ -1,4 +1,4 @@
-import { normalizeRecurrenceRule } from '../../scheduling/recurrence/index.js';
+import { findRecurrenceRuleIssue, normalizeRecurrenceRule } from '../../scheduling/recurrence/index.js';
 
 const TASK_STATUSES = new Set(['planned', 'in-progress', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical', 'normal']);
@@ -144,8 +144,17 @@ function validateTaskScalars(changes) {
       if (text(task.recurrence).length > 400) {
         return issue('TASK_RECURRENCE_TOO_LONG', `${basePath}.recurrence`, 'Görev tekrar kuralı en fazla 400 karakter olabilir.');
       }
-      if (!normalizeRecurrenceRule(task.recurrence)) {
-        return issue('TASK_RECURRENCE_INVALID', `${basePath}.recurrence`, 'Görev tekrar kuralı geçerli bir RFC 5545 RRULE olmalıdır.');
+      // Katı denetim: `normalizeRecurrenceRule` okunamayan bileşeni düşürüp
+      // kuralı yine de döndürür, yani gönderilen kural saklanandan başka anlama
+      // gelebilirdi (örneğin COUNT=0 sınırsız seri olurdu).
+      const ruleIssue = findRecurrenceRuleIssue(task.recurrence);
+      if (ruleIssue) {
+        return issue(
+          'TASK_RECURRENCE_INVALID',
+          `${basePath}.recurrence`,
+          'Görev tekrar kuralı geçerli bir RFC 5545 RRULE olmalıdır.',
+          { reason: ruleIssue }
+        );
       }
       if (text(task.recurrenceParentId)) {
         return issue(
@@ -197,6 +206,16 @@ function validateTaskScalars(changes) {
     const actualFinish = text(task.actualFinish);
     if (plannedStart && plannedFinish && plannedFinish < plannedStart) {
       return issue('TASK_PLANNED_RANGE_INVALID', `${basePath}.plannedFinish`, 'Planlanan bitiş başlangıçtan önce olamaz.');
+    }
+    // Seri başlangıcından önce biten bir kural sözdizimsel olarak geçerlidir ama
+    // hiçbir yineleme üretemez; imkânsız seri kalıcılaştırılmaz.
+    const recurrenceUntil = normalizeRecurrenceRule(task.recurrence)?.until || null;
+    if (recurrenceUntil && plannedStart && recurrenceUntil < plannedStart) {
+      return issue(
+        'TASK_RECURRENCE_RANGE_INVALID',
+        `${basePath}.recurrence`,
+        'Tekrar kuralının bitiş tarihi planlanan başlangıçtan önce olamaz.'
+      );
     }
     if (actualFinish && !actualStart) {
       return issue('TASK_ACTUAL_START_REQUIRED', `${basePath}.actualStart`, 'Gerçek bitiş için gerçek başlangıç gereklidir.');

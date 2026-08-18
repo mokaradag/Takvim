@@ -2,7 +2,8 @@
 import { Icons } from '../../components/icons';
 import { fmt } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
-import { AvatarStack, Kw, StatusPill } from '../../components/ui';
+import { AvatarStack, StatusPill } from '../../components/ui';
+import { TaskKeyword } from '../../components/TaskKeyword';
 
 function valueOrDash(value) {
   return value == null || value === '' ? '—' : value;
@@ -30,7 +31,7 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
               <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
                 {task.projectCode ? `${task.projectCode} · ${task.proje}` : task.proje}
               </span>
-              {task.keyword && <Kw color={task.color}>{task.keyword}</Kw>}
+              {task.keyword && <TaskKeyword task={task} />}
               <span className="badge">Salt okunur</span>
             </div>
             <div style={{ fontSize: 18, fontWeight: 600, lineHeight: 1.35 }}>{task.task}</div>

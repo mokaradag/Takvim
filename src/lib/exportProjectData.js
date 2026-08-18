@@ -1,6 +1,7 @@
 import { normalizePriorityId } from '../domain/constants/index.js';
 import { depId, formatDependencyLag, relTypeOf } from '../scheduling/dependencies/index.js';
 import { fmtDisplayDate } from '../scheduling/dates/index.js';
+import { formatRecurrenceRule } from '../scheduling/recurrence/index.js';
 
 const STATUS_LABELS = {
   todo: 'Yapılacak',
@@ -14,6 +15,16 @@ const PRIORITY_LABELS = {
   high: 'Yüksek',
   critical: 'Kritik'
 };
+
+/** Dışa aktarım sütunları tek yerde tanımlıdır; CSV ve Excel aynı sırayı kullanır. */
+export const EXPORT_HEADERS = Object.freeze([
+  'WBS', 'Görev', 'Etiket', 'Sorumlu', 'Durum', 'Öncelik', 'Başlangıç', 'Bitiş', 'Hedef',
+  'İlerleme', 'İlişkiler', 'Tekrar Kuralı', 'Seri', 'Seri Günü'
+]);
+export const EXPORT_KEYS = Object.freeze([
+  'wbs', 'gorev', 'etiket', 'sorumlu', 'durum', 'oncelik', 'baslangic', 'bitis', 'hedef',
+  'ilerleme', 'iliskiler', 'tekrarKurali', 'seri', 'seriGunu'
+]);
 
 function clean(value) {
   return value == null ? '' : String(value);
@@ -49,11 +60,33 @@ function dependencyText(dependency, taskById) {
   return `${predecessor?.task || depId(dependency) || 'Bilinmeyen görev'} · ${relation}${lag ? ` · ${lag}` : ''}`;
 }
 
+/**
+ * Tekrar serisi bilgisi dışa aktarımda taşınır.
+ *
+ * Kural RFC 5545 `RRULE` gövdesi olarak yazılır; şablon ile yinelemeleri
+ * birbirine bağlayan seri kimliği ve yinelemenin değişmez günü de ayrı
+ * sütunlarda çıkar. Aksi hâlde tekrarlayan bir proje dışa aktarıldığında hem
+ * kural hem de seri ilişkisi düşer ve satırlar sıradan görevlerden ayırt
+ * edilemezdi.
+ */
+function recurrenceColumns(task, taskById) {
+  const rule = task.recurrence ? formatRecurrenceRule(task.recurrence) : '';
+  const template = task.recurrenceParentId ? taskById.get(task.recurrenceParentId) : null;
+  return {
+    tekrarKurali: rule ? `RRULE:${rule}` : '',
+    seri: task.recurrenceParentId
+      ? (template?.task || task.recurrenceParentId)
+      : (rule ? task.task || '' : ''),
+    seriGunu: displayDate(task.recurrenceOccurrenceDate)
+  };
+}
+
 export function buildExportRows({ tasks = [], wbs = [] } = {}) {
   const wbsById = new Map(wbs.map((node) => [node.id, node]));
   const taskById = new Map(tasks.map((task) => [task.id, task]));
 
   return tasks.map((task) => ({
+    ...recurrenceColumns(task, taskById),
     wbs: task.wbsId ? `${wbsById.get(task.wbsId)?.code || ''} ${wbsById.get(task.wbsId)?.name || ''}`.trim() : '',
     gorev: task.task || '',
     etiket: task.keyword || '',
@@ -69,9 +102,9 @@ export function buildExportRows({ tasks = [], wbs = [] } = {}) {
 }
 
 export function buildProjectCsv(input = {}) {
-  const headers = ['WBS', 'Görev', 'Etiket', 'Sorumlu', 'Durum', 'Öncelik', 'Başlangıç', 'Bitiş', 'Hedef', 'İlerleme', 'İlişkiler'];
+  const headers = EXPORT_HEADERS;
   const rows = buildExportRows(input);
-  const keys = ['wbs', 'gorev', 'etiket', 'sorumlu', 'durum', 'oncelik', 'baslangic', 'bitis', 'hedef', 'ilerleme', 'iliskiler'];
+  const keys = EXPORT_KEYS;
   return [
     headers.map(escapeCsv).join(';'),
     ...rows.map((row) => keys.map((key) => escapeCsv(row[key])).join(';'))
@@ -82,8 +115,8 @@ export function buildProjectExcelHtml({ project = null, projects = [], tasks = [
   const title = project?.name || 'MERGEN Rota Portföyü';
   const rows = buildExportRows({ tasks, wbs });
   const projectCount = project ? 1 : projects.length;
-  const headers = ['WBS', 'Görev', 'Etiket', 'Sorumlu', 'Durum', 'Öncelik', 'Başlangıç', 'Bitiş', 'Hedef', 'İlerleme', 'İlişkiler'];
-  const keys = ['wbs', 'gorev', 'etiket', 'sorumlu', 'durum', 'oncelik', 'baslangic', 'bitis', 'hedef', 'ilerleme', 'iliskiler'];
+  const headers = EXPORT_HEADERS;
+  const keys = EXPORT_KEYS;
   const projectWbs = project ? wbs.filter((node) => node.projectId === project.id) : wbs;
 
   return `<!doctype html>

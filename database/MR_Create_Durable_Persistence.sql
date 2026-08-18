@@ -191,6 +191,10 @@ BEGIN TRY
         -- bulunur; uretilen yinelemeler RecurrenceParentTaskId ile baglanir.
         RecurrenceRule nvarchar(400) NULL,
         RecurrenceParentTaskId uniqueidentifier NULL,
+        -- Yinelemenin DEGISMEZ seri kimligi (RFC 5545 RECURRENCE-ID karsiligi).
+        -- Gorev ertelense bile bu tarih durur; ayni seri gunu icin ikinci bir
+        -- yineleme uretilemez (asagidaki tekil dizin bunu zorunlu kilar).
+        RecurrenceOccurrenceDate date NULL,
         SortOrder int NULL,
         CreatedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_Tasks_CreatedAt DEFAULT SYSUTCDATETIME(),
         CreatedBySicil int NULL,
@@ -211,13 +215,22 @@ BEGIN TRY
         CONSTRAINT CK_MR_Tasks_Priority CHECK (Priority IN ('low','medium','high','critical','normal')),
         CONSTRAINT FK_MR_Tasks_RecurrenceParent FOREIGN KEY (RecurrenceParentTaskId) REFERENCES dbo.MR_Tasks(TaskId),
         -- Yineleme kendi kuralini tasiyamaz: kural tek bir sablonda yasar.
-        CONSTRAINT CK_MR_Tasks_Recurrence CHECK (RecurrenceParentTaskId IS NULL OR RecurrenceRule IS NULL)
+        CONSTRAINT CK_MR_Tasks_Recurrence CHECK (RecurrenceParentTaskId IS NULL OR RecurrenceRule IS NULL),
+        -- Seri kimligi yalnizca bir yinelemede anlamlidir.
+        CONSTRAINT CK_MR_Tasks_RecurrenceOccurrence CHECK (RecurrenceOccurrenceDate IS NULL OR RecurrenceParentTaskId IS NOT NULL),
+        CONSTRAINT CK_MR_Tasks_RecurrenceSelf CHECK (RecurrenceParentTaskId IS NULL OR RecurrenceParentTaskId <> TaskId)
     );
     CREATE INDEX IX_MR_Tasks_Project_Status ON dbo.MR_Tasks(ProjectId, Status, SortOrder);
     CREATE INDEX IX_MR_Tasks_Project_TargetFinish ON dbo.MR_Tasks(ProjectId, TargetFinish);
     CREATE INDEX IX_MR_Tasks_Project_PlannedRange ON dbo.MR_Tasks(ProjectId, PlannedStart, PlannedFinish);
     CREATE INDEX IX_MR_Tasks_WbsId ON dbo.MR_Tasks(WbsId, SortOrder);
     CREATE INDEX IX_MR_Tasks_RecurrenceParent ON dbo.MR_Tasks(RecurrenceParentTaskId) WHERE RecurrenceParentTaskId IS NOT NULL;
+    -- Ayni seri gunu icin iki yineleme olusturulamaz. Istemci tarafi denetim
+    -- eszamanli iki yaziciyi durduramaz: her ikisi de gunu "eksik" gorup farkli
+    -- TaskId ile ekleyebilir. Tekillik bu yuzden kalici katmanda zorunlu kilinir.
+    CREATE UNIQUE INDEX UX_MR_Tasks_RecurrenceOccurrence
+        ON dbo.MR_Tasks(RecurrenceParentTaskId, RecurrenceOccurrenceDate)
+        WHERE RecurrenceParentTaskId IS NOT NULL AND RecurrenceOccurrenceDate IS NOT NULL;
 
     CREATE TABLE dbo.MR_TaskAssignees (
         TaskId uniqueidentifier NOT NULL,

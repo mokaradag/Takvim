@@ -1,4 +1,4 @@
-import { compareWbsNodes, selectWbsDescendantIds } from '../../domain/selectors/wbsSelectors.js';
+import { compareWbsNodes } from '../../domain/selectors/wbsSelectors.js';
 
 /**
  * İş dağılım ağacı sürükle-bırak ilkeleri.
@@ -37,16 +37,59 @@ export function wbsSiblings(wbs, parentId) {
 }
 
 /**
+ * Sürükleme oturumu için bir kez kurulan arama dizini.
+ *
+ * `dragover` işaretçi her kıpırdadığında tetiklenir. Dizin olmadan her olayda
+ * bütün ağaç için üst→çocuk haritası kuruluyor ve her kardeş kümesi yeniden
+ * sıralanıyordu; 38 bin düğümlük kurumsal ağaçta bu, sürüklemeyi kilitler.
+ * Alt ağaç kimlikleri de düğüm başına bir kez hesaplanıp saklanır.
+ */
+export function createWbsDropIndex(wbs) {
+  const byId = new Map();
+  const childrenByParent = new Map();
+  for (const node of wbs || []) {
+    byId.set(node.id, node);
+    const key = node.parentId ?? null;
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(node);
+  }
+  for (const list of childrenByParent.values()) list.sort(compareWbsNodes);
+  return { byId, childrenByParent, descendants: new Map() };
+}
+
+function indexChildren(index, parentId) {
+  return index.childrenByParent.get(parentId ?? null) || [];
+}
+
+function indexDescendantIds(index, nodeId) {
+  const cached = index.descendants.get(nodeId);
+  if (cached) return cached;
+  const ids = new Set();
+  const queue = [nodeId];
+  while (queue.length) {
+    const current = queue.pop();
+    for (const child of indexChildren(index, current)) {
+      if (ids.has(child.id)) continue;
+      ids.add(child.id);
+      queue.push(child.id);
+    }
+  }
+  index.descendants.set(nodeId, ids);
+  return ids;
+}
+
+/**
  * Bırakma isteğini doğrular ve uygulanacak taşımayı üretir.
  *
  * @param {Array<object>} wbs tüm dağılım düğümleri
  * @param {{dragId: string, targetId: string, position: 'before'|'inside'|'after'}} drop
+ * @param {{index?: object}} options sürükleme oturumu boyunca paylaşılan dizin
  * @returns {{ok: true, move: {id: string, parentId: string, index: number}} | {ok: false, code: string, message: string}}
  */
-export function resolveWbsDrop(wbs, { dragId, targetId, position = 'inside' } = {}) {
-  const nodes = wbs || [];
-  const node = nodes.find((item) => item.id === dragId) || null;
-  const target = nodes.find((item) => item.id === targetId) || null;
+export function resolveWbsDrop(wbs, { dragId, targetId, position = 'inside' } = {}, options = {}) {
+  const lookup = options.index || createWbsDropIndex(wbs);
+  const node = lookup.byId.get(dragId) || null;
+  const target = lookup.byId.get(targetId) || null;
 
   if (!node) return reject('WBS_NODE_NOT_FOUND');
   if (!target) return reject('WBS_TARGET_NOT_FOUND');
@@ -54,18 +97,21 @@ export function resolveWbsDrop(wbs, { dragId, targetId, position = 'inside' } = 
   if (node.parentId == null) return reject('WBS_ROOT_REPARENT_FORBIDDEN');
   if (node.projectId !== target.projectId) return reject('CROSS_PROJECT_WBS_PARENT');
 
-  const blocked = new Set(selectWbsDescendantIds(nodes, node.id));
-  if (blocked.has(target.id)) return reject('WBS_REPARENT_TO_DESCENDANT');
+  if (indexDescendantIds(lookup, node.id).has(target.id)) return reject('WBS_REPARENT_TO_DESCENDANT');
 
   const inside = position === 'inside';
   // Kök düğümün kardeşi olamaz: proje başına tek kök vardır.
   if (!inside && target.parentId == null) return reject('WBS_ROOT_SIBLING_FORBIDDEN');
 
   const parentId = inside ? target.id : target.parentId;
-  const siblings = wbsSiblings(nodes, parentId).filter((sibling) => sibling.id !== node.id);
+  const siblings = indexChildren(lookup, parentId).filter((sibling) => sibling.id !== node.id);
 
   let index;
   if (inside) {
+    // `inside` yalnızca ÜST değişikliğidir; kardeş sırası before/after ile
+    // denetlenir. Düğüm zaten bu üstün altındaysa ortaya bırakmak onu listenin
+    // sonuna atardı — belgelenen anlamın dışında, sessiz bir sıra değişikliği.
+    if (node.parentId === target.id) return reject('WBS_DROP_NO_CHANGE');
     index = siblings.length;
   } else {
     const targetIndex = siblings.findIndex((sibling) => sibling.id === target.id);
@@ -76,7 +122,7 @@ export function resolveWbsDrop(wbs, { dragId, targetId, position = 'inside' } = 
   if (node.parentId === parentId) {
     const next = siblings.map((sibling) => sibling.id);
     next.splice(index, 0, node.id);
-    const current = wbsSiblings(nodes, node.parentId).map((sibling) => sibling.id);
+    const current = indexChildren(lookup, node.parentId).map((sibling) => sibling.id);
     if (next.length === current.length && next.every((value, at) => value === current[at])) {
       return reject('WBS_DROP_NO_CHANGE');
     }

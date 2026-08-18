@@ -9,6 +9,7 @@ import { normalizeCalendar } from '../src/scheduling/calendars/index.js';
 import { calculateCpm } from '../src/scheduling/cpm/index.js';
 import { dependencyLagDays } from '../src/scheduling/dependencies/index.js';
 import { prepareProjectUpdateChanges } from '../src/state/projectCreation.js';
+import { applyProjectTagPropagation, planProjectTagPropagation } from '../src/domain/tags/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -127,8 +128,12 @@ test('project tag deduplication remaps legacy task variants to the retained tag'
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.project.tags.map((tag) => tag.name), ['Test']);
+  // Harf varyantlarının kanonik ada çekilmesi artık istemcinin gördüğü görev
+  // listesinden türetilmez; plan kalıcı katmanda CANLI satırlara uygulanır.
+  assert.deepEqual(result.changes.taskUpserts, []);
+  const plan = planProjectTagPropagation({ storedTags: ['Test', ' test '], nextTags: result.project.tags });
   assert.deepEqual(
-    result.changes.taskUpserts.map((task) => [task.id, task.keyword]),
+    applyProjectTagPropagation(context.tasks, 'p1', plan).map((task) => [task.id, task.keyword]),
     [['t1', 'Test'], ['t2', 'Test']]
   );
 });

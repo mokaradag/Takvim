@@ -102,8 +102,11 @@ export function TaskDetailOverlay() {
    * Önceden başarısız bir kayıt `waitForIdle()` üzerinden geri döndürülüyor ve
    * `closeTask()` hiç çağrılmıyordu: sunucu bir alanı reddettiğinde (örneğin
    * boş görev başlığı) panel kilitleniyor, kullanıcı ne "Tamam" ne de kapatma
-   * düğmesiyle çıkabiliyordu. Hata artık paneli rehin almaz; kalıcılaştırma
-   * durumu şeridinde görünür kalır ve oradan yeniden denenebilir.
+   * düğmesiyle çıkabiliyordu. Hata artık paneli rehin almaz.
+   *
+   * Kapanış düzenlemeyi de atmaz: taslak burada sökülse bile reddedilen yama
+   * kalıcılaştırma kuyruğunda saklanır ve şeritteki "Yeniden dene" ile aynı
+   * değerlerle gönderilir (bkz. createTaskPatchCoalescer).
    */
   const onClose = async () => {
     const pendingResult = await updateTrackerRef.current.waitForIdle();

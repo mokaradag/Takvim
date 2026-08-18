@@ -22,10 +22,13 @@ import { appStateReducer } from '../src/state/appState.js';
 import {
   TAG_COLOR_KEYS,
   TAG_ICON_KEYS,
+  applyProjectTagPropagation,
   defaultTagColor,
   findProjectTag,
+  mergeProjectTagAppearance,
   normalizeProjectTag,
   normalizeProjectTags,
+  planProjectTagPropagation,
   projectTagNames
 } from '../src/domain/tags/index.js';
 import {
@@ -216,8 +219,8 @@ test('dağılım ağacı düzenlemesi engelleyici tarayıcı pencereleri kullanm
 
 test('kurumsal ve salt okunur ağaçlarda satırlar sürüklenemez', () => {
   const view = read('src/features/wbs/WbsView.jsx');
-  assert.match(view, /const draggable = canEdit && node\.parentId != null;/);
-  assert.match(view, /if \(!canEdit \|\| node\.parentId == null\) return;/);
+  assert.match(view, /const draggable = canEdit && node\.parentId != null && !movePending;/);
+  assert.match(view, /if \(!canEdit \|\| node\.parentId == null \|\| movePending \|\| dragHandleNodeId !== node\.id\) \{/);
 });
 
 /* ── 3. Karşılama ekranı ──────────────────────────────────────── */
@@ -272,19 +275,22 @@ test('oturum bağlamı anlık görüntüden SONRA okunur (kurumsal eşitleme sı
   assert.deepEqual(result.snapshot.session, session);
 });
 
-test('anlık görüntü yanıtındaki oturum ikinci bir ağ isteği yapılmadan kullanılır', async () => {
+test('anlık görüntü yanıtındaki oturum kendi isteğiyle EŞLEŞİK döner', async () => {
   const { createApiRepository } = await import('../src/data/api/createApiRepository.js');
+  const { loadApplicationData } = await import('../src/state/persistence.js');
   const requests = [];
   const originalFetch = globalThis.fetch;
+  let sequence = 0;
   globalThis.fetch = async (url) => {
     requests.push(String(url));
+    const id = String(url).includes('/snapshot') ? (sequence += 1) : sequence;
     return {
       ok: true,
       status: 200,
       async json() {
         return {
           calendars: [], projects: [], people: [], wbs: [], tasks: [], baselines: [], taskBaselineSnapshots: [],
-          session: { dataMode: 'actual', projectAccess: [] }
+          session: { dataMode: 'actual', projectAccess: [], requestId: id }
         };
       }
     };
@@ -292,25 +298,40 @@ test('anlık görüntü yanıtındaki oturum ikinci bir ağ isteği yapılmadan 
 
   try {
     const repository = createApiRepository({ basePath: '/test-api' });
-    const snapshot = await repository.loadSnapshot();
-    assert.equal(snapshot.session, undefined, 'oturum anlık görüntü gövdesinden ayrılmalıdır');
 
-    const session = await repository.loadSessionContext();
-    assert.equal(session.dataMode, 'actual');
+    // Oturum, anlık görüntünün SONUCUYLA birlikte taşınır: paylaşılan tek bir
+    // yuvada saklansaydı üst üste binen iki yükleme birbirinin oturumunu
+    // tüketebilir ve A anlık görüntüsü B'nin proje erişimiyle eşleşebilirdi.
+    const [first, second] = await Promise.all([repository.loadSnapshot(), repository.loadSnapshot()]);
+    assert.equal(first.session.requestId, 1);
+    assert.equal(second.session.requestId, 2);
+
+    // Açılış tek istekle tamamlanır: gömülü oturum için ayrı bir tur yapılmaz.
+    requests.length = 0;
+    const loaded = await loadApplicationData(repository);
+    assert.equal(loaded.ok, true);
+    assert.equal(loaded.snapshot.session.dataMode, 'actual');
     assert.deepEqual(requests, ['/test-api/snapshot'], 'açılışta yalnızca tek istek yapılmalıdır');
 
-    // İkinci okuma (oturum tazeleme) yine sunucuya gider.
+    // Oturum tazeleme (gömülü bağlam olmadan) yine sunucuya gider.
+    requests.length = 0;
     await repository.loadSessionContext();
-    assert.deepEqual(requests, ['/test-api/snapshot', '/test-api/session']);
+    assert.deepEqual(requests, ['/test-api/session']);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('anlık görüntü ucu oturumu aynı istek içinde ve eşitlemeden sonra döndürür', () => {
+test('anlık görüntü ucu oturumu aynı istek içinde ve tek yetkilendirmeyle döndürür', () => {
   const route = read('src/app/api/mergen-rota/snapshot/route.js');
-  assert.match(route, /const snapshot = await repository\.loadSnapshot\(\);\s*const session = await repository\.loadSessionContext\(\);/);
-  assert.match(route, /Response\.json\(\{ \.\.\.snapshot, session \}/);
+  const repository = read('src/server/repository/projectedSqlAppRepository.js');
+  assert.match(route, /const body = await repository\.loadSnapshotWithSession\(\);/);
+  assert.match(route, /Response\.json\(body/);
+  // Oturum anlık görüntünün YETKİ BAĞLAMINDAN kurulur: kişi/rol/proje erişimi
+  // ve görev-atama kapsamı aynı istekte ikinci kez sorgulanmaz.
+  assert.match(repository, /const \{ snapshot, auth \} = await readProjectedSnapshot\(\);/);
+  assert.match(repository, /session: await baseRepository\.sessionContextFrom\(auth\)/);
+  assert.doesNotMatch(repository, /await baseRepository\.loadSessionContext\(\)/);
 });
 
 test('kurumsal katalog ilk kurulumdan sonra arka planda tazelenir', async () => {
@@ -425,10 +446,37 @@ test('etiket yeniden adlandırıldığında görevlerin etiketi de taşınır', 
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.project.tags, [{ name: 'Çözümleme', color: 'rose', icon: 'Target' }]);
+  // Yayılım artık istemcinin gördüğü görev kümesinden TÜRETİLMEZ: eşleme proje
+  // yazmasıyla birlikte gönderilir ve kalıcı katmanda canlı satırlara uygulanır.
+  assert.deepEqual(result.changes.taskUpserts, []);
+  assert.deepEqual(result.changes.projectUpserts[0].tagRenames, [{ from: 'Analiz', to: 'Çözümleme' }]);
+
+  const plan = planProjectTagPropagation({
+    storedTags: ['Analiz'],
+    nextTags: [{ name: 'Çözümleme', color: 'rose', icon: 'Target' }],
+    renames: [{ from: 'Analiz', to: 'Çözümleme' }]
+  });
   assert.deepEqual(
-    result.changes.taskUpserts.map((task) => [task.id, task.keyword]),
-    [['t1', 'Çözümleme']],
+    applyProjectTagPropagation(context.tasks, 'p1', plan).map((task) => [task.id, task.keyword]),
+    [['t1', 'Çözümleme'], ['t2', 'Başka']],
     'yalnızca yeniden adlandırılan etiketi taşıyan görev güncellenmelidir'
+  );
+});
+
+test('etiket yayılımı kalıcı katmanda canlı görev satırlarına uygulanır', () => {
+  const repository = read('src/server/repository/sqlAppRepository.js');
+  // Görev yazmaları proje satırının sürümünü ilerletmez: eşzamanlı bir
+  // kullanıcının oluşturduğu görev, istemcinin listesinde bulunmadığı için
+  // katalog dışında kalırdı. Bu yüzden eşleme SQL sınırında uygulanır.
+  assert.match(repository, /async function propagateProjectTagChanges/);
+  assert.match(repository, /UPDATE dbo\.MR_Tasks\s*\n\s*SET Keyword = @to/);
+  assert.match(repository, /OUTPUT inserted\.TaskId/);
+  assert.match(repository, /propagatedTaskIds\.push\(\.\.\.await propagateProjectTagChanges/);
+  // Yayılım görev yazmalarından SONRA çalışır; aksi hâlde istemcinin gönderdiği
+  // görevler eskimiş sürüm anahtarıyla çakışırdı.
+  assert.ok(
+    repository.indexOf('for (const task of changes.taskUpserts) await commitTask')
+      < repository.indexOf('propagatedTaskIds.push(...await propagateProjectTagChanges')
   );
 });
 
@@ -438,7 +486,13 @@ test('etiket rengi ve simgesi kalıcı kayda kapalı küme olarak yazılır', ()
   const schema = read('database/MR_Create_Durable_Persistence.sql');
 
   assert.match(repository, /INSERT dbo\.MR_ProjectTags\(ProjectId, TagName, ColorToken, IconKey, SortOrder, CreatedBySicil\)/);
-  assert.match(repository, /const canonical = normalizeProjectTags\(values\);/);
+  // Eski istemci paketleri kataloğu düz metin olarak geri gönderir; saklanan
+  // renk ve simge bu yazmalarda korunur (sürüm geçişinde veri kaybı olmaz).
+  assert.match(repository, /const canonical = mergeProjectTagAppearance\(values, stored\);/);
+  assert.equal(
+    mergeProjectTagAppearance(['Analiz'], [{ name: 'analiz', color: 'rose', icon: 'Target' }])[0].color,
+    'rose'
+  );
   assert.match(validation, /PROJECT_TAG_COLOR_INVALID/);
   assert.match(validation, /PROJECT_TAG_ICON_INVALID/);
   assert.match(schema, /ColorToken varchar\(20\) NULL,\s*\n\s*IconKey varchar\(40\) NULL,/);
@@ -486,10 +540,32 @@ test('kural somut tarihlere açılır: günlük, haftalık, aylık, yıllık', (
   );
 });
 
-test('ayın 31\'i olmayan aylarda yineleme ayın son gününe çekilir', () => {
+test('takvimde bulunmayan yineleme günü RFC 5545 gereği ATLANIR', () => {
+  // Kural dışa aktarıldığında başka bir takvim uygulamasıyla aynı seriyi
+  // vermelidir: 31 Şubat yoktur, o yineleme sayılmaz ve ayın son gününe
+  // çekilmez (çekilseydi saklanan RRULE'ün anlamı sessizce değişirdi).
   assert.deepEqual(
     expandRecurrence({ freq: 'MONTHLY', byMonthDay: 31, count: 4 }, { start: '2026-01-31' }),
-    ['2026-01-31', '2026-02-28', '2026-03-31', '2026-04-30']
+    ['2026-01-31', '2026-03-31', '2026-05-31', '2026-07-31']
+  );
+  // 29 Şubat yalnızca artık yıllarda vardır.
+  assert.deepEqual(
+    expandRecurrence({ freq: 'YEARLY', count: 2 }, { start: '2028-02-29' }),
+    ['2028-02-29', '2032-02-29']
+  );
+});
+
+test('haftalık kural gün seçilmediğinde başlangıç gününü kullanır', () => {
+  // `BYDAY` yokken kural her güne açılıyordu: kullanıcı "Haftalık" seçip henüz
+  // gün işaretlemediğinde seri günlüğe dönüşüyordu.
+  assert.deepEqual(
+    expandRecurrence({ freq: 'WEEKLY', count: 3 }, { start: '2026-08-18' }),
+    ['2026-08-18', '2026-08-25', '2026-09-01']
+  );
+  // Büyük INTERVAL değerlerinde tarama bütçesi yineleme sayısıyla orantılıdır.
+  assert.equal(
+    expandRecurrence({ freq: 'WEEKLY', interval: 99, byWeekday: ['MO'], count: 5 }, { start: '2026-08-17' }).length,
+    5
   );
 });
 
@@ -518,25 +594,46 @@ test('kural Türkçe olarak özetlenir', () => {
 });
 
 test('yineleme planı süreyi korur ve tatil gününü ileri kaydırır', () => {
+  // `plannedDurationDays` DAHİL iş günü sayısıdır: Pzt→Sal iki iş günüdür.
   const template = {
     plannedStart: '2026-08-17',
     plannedFinish: '2026-08-18',
     targetFinish: '2026-08-19',
-    plannedDurationDays: 1
+    plannedDurationDays: 2
   };
   const plan = planRecurringOccurrences(template, { freq: 'DAILY', count: 3 }, {});
   assert.deepEqual(plan.map((item) => item.plannedStart), ['2026-08-17', '2026-08-18', '2026-08-19']);
   assert.deepEqual(plan.map((item) => item.plannedFinish), ['2026-08-18', '2026-08-19', '2026-08-20']);
   assert.deepEqual(plan.map((item) => item.targetFinish), ['2026-08-19', '2026-08-20', '2026-08-21']);
 
-  // Hafta sonu çalışma günü değildir: Cumartesi'ye düşen yineleme Pazartesi'ye kayar.
+  // Hafta sonu çalışma günü değildir: Cumartesi'ye düşen yineleme Pazartesi'ye
+  // kayar. COUNT kaydırma ve tekilleştirmeden SONRAKİ kümeye uygulanır, yani
+  // kullanıcı üç yineleme istediyse üç görev oluşur.
   const calendar = { workingDays: [1, 2, 3, 4, 5], holidays: [] };
   const shifted = planRecurringOccurrences(
-    { ...template, plannedStart: '2026-08-21' },
+    { ...template, plannedStart: '2026-08-21', plannedFinish: '2026-08-21', targetFinish: null, plannedDurationDays: 1 },
     { freq: 'DAILY', count: 3 },
     { calendar }
   );
-  assert.deepEqual(shifted.map((item) => item.plannedStart), ['2026-08-21', '2026-08-24']);
+  assert.deepEqual(shifted.map((item) => item.plannedStart), ['2026-08-21', '2026-08-24', '2026-08-25']);
+  // Şablonun yönetsel termini yoksa yinelemeye termin UYDURULMAZ.
+  assert.deepEqual(shifted.map((item) => item.targetFinish), [null, null, null]);
+
+  // Planlanan bitişi olmayan şablon yinelemeye de bitiş yazmaz.
+  const open = planRecurringOccurrences(
+    { plannedStart: '2026-08-17' },
+    { freq: 'DAILY', count: 2 },
+    {}
+  );
+  assert.deepEqual(open.map((item) => item.plannedFinish), [null, null]);
+
+  // UNTIL kaydırılmış tarihe uygulanır: sınırın ötesine görev taşmaz.
+  const bounded = planRecurringOccurrences(
+    { plannedStart: '2026-08-21', plannedDurationDays: 1 },
+    { freq: 'DAILY', until: '2026-08-23' },
+    { calendar }
+  );
+  assert.deepEqual(bounded.map((item) => item.plannedStart), ['2026-08-21']);
 });
 
 test('planlanan başlangıcı olmayan şablon yineleme üretmez', () => {
@@ -547,7 +644,14 @@ test('yinelemeler şablona bağlanır, kuralı ve bağımlılıkları kopyalamaz
   const provider = read('src/state/AppStateProvider.jsx');
   assert.match(provider, /recurrence: null,\s*\n\s*recurrenceParentId: taskId,/);
   assert.match(provider, /deps: \[\]/);
-  assert.match(provider, /existingStarts\.has\(occurrence\.plannedStart\)/);
+  // Kimlik DEĞİŞMEZDİR: yineleme ertelense bile o gün ikinci kez üretilmez.
+  assert.match(provider, /recurrenceOccurrenceDate: occurrence\.plannedStart,/);
+  assert.match(provider, /materialized\.has\(occurrence\.plannedStart\)/);
+  // Gerçekleşen emek/harcama ve kalan süre yinelemeye taşınmaz.
+  assert.match(provider, /actualHours: null,\s*\n\s*spent: null,/);
+  assert.match(provider, /remainingDurationDays: created\.plannedDurationDays/);
+  // Şablon ve kural, kuyruktaki yazmalar tamamlandıktan SONRA okunur.
+  assert.ok(provider.indexOf('const flushResult = await persistence.flush();') < provider.indexOf('const template = current.tasks.find'));
 });
 
 test('kalıcılaştırma tekrar kuralını doğrular ve yinelemede kurala izin vermez', async () => {
@@ -600,10 +704,18 @@ test('sekme kapatılırken bekleyen düzenlemeler kaybolmaz', () => {
   const root = read('src/components/shell/ApplicationRoot.jsx');
   const persistence = read('src/state/persistence.js');
 
-  assert.match(persistence, /hasPendingChanges\(\) \{ return taskPatches\.hasPending\(\); \}/);
+  // Kaydedilmemiş düzenleme: kuyrukta bekleyen VE reddedilip saklanan yamalar.
+  assert.match(persistence, /hasPendingChanges\(\) \{ return taskPatches\.hasUnsavedChanges\(\); \}/);
+  assert.match(persistence, /if \(!result\.ok\) failed\.set\(taskId/);
   assert.match(guard, /window\.addEventListener\('beforeunload', onBeforeUnload\)/);
+  assert.match(guard, /window\.addEventListener\('pagehide', flushBeforeTeardown\)/);
   assert.match(guard, /document\.addEventListener\('visibilitychange', flushIfHidden\)/);
   assert.match(guard, /event\.preventDefault\(\);\s*\n\s*event\.returnValue = '';/);
+  // Süren yazma da korunur: boşaltma başladığında yama kuyruktan çıkar.
+  assert.match(guard, /const isSaving = pendingMutationCount > 0;/);
+  // Son yazma sayfa boşaltılırken iptal edilmemelidir.
+  assert.match(guard, /flushPendingChanges\(\{ keepalive: true \}\)/);
+  assert.match(read('src/data/api/createApiRepository.js'), /async commitChanges\(changes, \{ keepalive = false \} = \{\}\)/);
   assert.match(root, /<UnsavedChangesGuard \/>/);
 });
 
@@ -620,9 +732,16 @@ test('boş görev başlığı kalıcılaştırmaya hiç gönderilmez', async () 
   // birleştirilen ilerleme/tarih düzenlemeleri de o istekle birlikte düşüyordu.
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
   assert.match(drawer, /const saveTitle = \(value\) => \{/);
-  assert.match(drawer, /if \(String\(value\)\.trim\(\)\) onUpdate\(task\.id, \{ task: value \}\);/);
+  assert.match(drawer, /if \(String\(value\)\.trim\(\)\) \{[\s\S]*onUpdate\(task\.id, \{ task: value \}\);/);
   assert.match(drawer, /onChange=\{\(e\) => saveTitle\(e\.target\.value\)\}/);
   assert.match(drawer, /Görev başlığı boş bırakılamaz/);
+  // Alan boşaldığında kuyrukta bekleyen önceki tuş vuruşu da iptal edilir; aksi
+  // hâlde arayüzün "kaydedilmeyecek" dediği ön ek kalıcılaşıyordu.
+  assert.match(drawer, /cancelTaskFieldUpdates\(task\.id, \['task'\]\);/);
+  assert.match(read('src/state/persistence.js'), /function cancelFields\(taskId, fields = \[\]\)/);
+  // Yerel boş başlık taslağı, ilgisiz bir alan düzenlendiğinde gelen yeni görev
+  // nesnesiyle geri yazılmaz.
+  assert.match(drawer, /const draft = titleDraftRef\.current;/);
 
   const { findCommitScalarIssue } = await import('../src/server/repository/commitScalarValidation.js');
   const rejected = findCommitScalarIssue({

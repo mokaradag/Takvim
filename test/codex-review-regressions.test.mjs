@@ -139,7 +139,7 @@ test('simple mode creates the final task in one guarded mutation and keeps proje
 
   assert.doesNotMatch(simple, /updateTask/);
   // Hızlı giriş etiketi kataloğa kanonik üçlü olarak ekler (ad + varsayılan renk/simge).
-  assert.match(simple, /updateProject\(project\.id, \{ tags: \[\.\.\.tags, \{ name: keyword\.trim\(\) \}\] \}\)/);
+  assert.match(simple, /updateProject\(project\.id, \{ tags: \[\.\.\.tags, \{ name: requested \}\] \}\)/);
   assert.match(simple, /const createdTask = await addTask\(\{/);
   assert.match(simple, /projectId: project\.id/);
   assert.match(simple, /color: project\.color \|\| 'blue'/);

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Icons } from '../icons';
 import { Avatar } from '../ui';
 import { resolveUserDepartmentLabel, resolveUserDisplayName } from '../../domain/identity/sessionUser.js';
@@ -17,7 +17,9 @@ import { greetingForHour, welcomeFirstName } from './welcomeGreeting.js';
 const FEATURES = [
   { ico: 'Dashboard', color: 'var(--accent)', view: 'ozet', title: 'Yönetici özet panosu',
     desc: 'Tamamlama oranı, bekleyen iş yükü, geciken görevler ve trendler tek ekranda.' },
-  { ico: 'Layers', color: 'var(--c-emerald)', view: 'wbs', title: 'Sürükle-bırak iş dağılım ağacı',
+  // `intent` sayfanın hangi alt görünümle açılacağını taşır: bu kart adını
+  // taşıdığı ağacı açmalıdır, Proje Tanımı sekmesini değil.
+  { ico: 'Layers', color: 'var(--c-emerald)', view: 'wbs', intent: 'tree', title: 'Sürükle-bırak iş dağılım ağacı',
     desc: 'Proje yapısını satırları sürükleyerek kurun; alt düğüm yapın veya kardeş sırasını değiştirin.' },
   { ico: 'Gantt', color: 'var(--c-purple)', view: 'gantt', title: 'Primavera-tarzı Gantt',
     desc: 'FS/SS/FF/SF bağımlılıkları, özet (rollup) çubukları, kilometre taşları, tatil işaretleri.' },
@@ -29,12 +31,21 @@ const FEATURES = [
     desc: 'Çevrim süresi, zamanında teslim oranı, kaynak kullanımı ve trend eğrileri.' }
 ];
 
-export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgain, stats, currentUser = null, now = new Date() }) {
+export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgain, stats, currentUser = null, now = null }) {
   const displayName = resolveUserDisplayName(currentUser, { fallback: '' });
   const firstName = welcomeFirstName(displayName);
-  const greeting = greetingForHour(now.getHours());
   const department = resolveUserDepartmentLabel(currentUser, { fallback: '' });
   const employeeNo = currentUser?.employeeNo || currentUser?.sicil || null;
+
+  // Saate göre selamlama YALNIZCA tarayıcıda hesaplanır. Bu istemci bileşeni
+  // sunucuda da ön-render edilebilir; `new Date()` orada sunucu saat diliminde
+  // okunur ve iki taraf farklı dilime düşerse hidrasyon uyuşmazlığı (ve yanlış
+  // selamlama) oluşurdu. Bağlanana kadar dilimden bağımsız bir metin gösterilir.
+  const [browserNow, setBrowserNow] = useState(now);
+  useEffect(() => {
+    if (!now) setBrowserNow(new Date());
+  }, [now]);
+  const greeting = browserNow ? greetingForHour(browserNow.getHours()) : 'Hoş geldiniz';
 
   // Esc karşılama ekranını kapatır: modalın klavyeyle de kapanabilmesi gerekir.
   useEffect(() => {
@@ -124,7 +135,7 @@ export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgai
                   key={f.title}
                   className="welcome-card"
                   style={{ '--wc-color': f.color }}
-                  onClick={() => { onNavigate(f.view); onClose(); }}
+                  onClick={() => { onNavigate(f.view, f.intent || null); onClose(); }}
                 >
                   <span className="wc-ico"><I size={17} /></span>
                   <span className="col" style={{ gap: 0, flex: 1, minWidth: 0, textAlign: 'left' }}>

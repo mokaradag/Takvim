@@ -13,13 +13,25 @@ export const OPTION_SEARCH_THRESHOLD = 7;
 /**
  * Seçenek etiketi, değeri, açıklaması ve varsa anahtar sözcükleri üzerinde arar.
  *
- * Arama Türkçe küçük harfe indirgenerek yapılır: "İ/ı" ayrımı yüzünden
- * `toLowerCase()` kurumsal adlarda yanlış sonuç verirdi.
+ * İKİ katlama birden uygulanır. Türkçe katlama insan adları için doğrudur:
+ * "İ/ı" ayrımı yüzünden `toLowerCase()` kurumsal adlarda yanlış sonuç verir.
+ * Ama aynı yardımcı proje kodu, Sicil ve kullanıcı adı gibi ASCII tanımlayıcıları
+ * da arar: `MIR` kodu Türkçe katlamada `mır` olur ve kullanıcı `mir` yazdığında
+ * hiç eşleşmezdi. Bu yüzden her iki katlama da denenir.
  */
+function folds(value) {
+  const text = String(value);
+  return [text.toLocaleLowerCase('tr-TR'), text.toLowerCase()];
+}
+
 export function matchesOptionQuery(option, query) {
-  const needle = String(query || '').trim().toLocaleLowerCase('tr-TR');
-  if (!needle) return true;
+  const raw = String(query || '').trim();
+  if (!raw) return true;
+  const [turkishNeedle, invariantNeedle] = folds(raw);
   return [option?.label, option?.value, option?.description, ...(option?.keywords || [])]
     .filter((value) => value != null && value !== '')
-    .some((value) => String(value).toLocaleLowerCase('tr-TR').includes(needle));
+    .some((value) => {
+      const [turkish, invariant] = folds(value);
+      return turkish.includes(turkishNeedle) || invariant.includes(invariantNeedle);
+    });
 }

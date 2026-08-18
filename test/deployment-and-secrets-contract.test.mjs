@@ -203,7 +203,13 @@ test('korunan veri uçları sunucu tarafı yetkilendirmeyi korur', () => {
   // istek içinde oturum bağlamını da (eşitlemeden SONRA) döndürür.
   const snapshotRoute = read('src/app/api/mergen-rota/snapshot/route.js');
   assert.match(snapshotRoute, /const repository = createProjectedSqlAppRepository\(\);/);
-  assert.match(snapshotRoute, /await repository\.loadSnapshot\(\);[\s\S]*await repository\.loadSessionContext\(\);/);
+  // Oturum, anlık görüntünün yetki bağlamından kurulur: aynı istekte ikinci bir
+  // yetkilendirme turu çalıştırılmaz.
+  assert.match(snapshotRoute, /await repository\.loadSnapshotWithSession\(\);/);
+  assert.match(
+    read('src/server/repository/projectedSqlAppRepository.js'),
+    /session: await baseRepository\.sessionContextFrom\(auth\)/
+  );
   assert.match(read('src/app/api/mergen-rota/commit/route.js'), /createOrderedSqlAppRepository\(\)\.commitChanges\(changes\)/);
 
   // Yetki kararı React bileşenlerine taşınmadı.

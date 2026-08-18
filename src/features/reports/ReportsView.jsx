@@ -67,7 +67,8 @@ export function ReportsView() {
   }, [tasks]);
 
   // Resource utilization (planned hours vs capacity)
-  const CAPACITY_PER_PERSON = 40 * 6; // ~6-week horizon × 40h
+  const REPORT_HORIZON_WEEKS = 6;
+  const CAPACITY_PER_PERSON = 40 * REPORT_HORIZON_WEEKS; // 6-haftalık ufuk × 40 sa
   // Kaynak kullanımı satırları yalnızca ada göre toplanır; fotoğraf için
   // kanonik kişi kaydı ayrıca çözülür (aynı adlı iki çalışanda tahmin yapılmaz).
   const personByName = useMemo2(() => {
@@ -79,12 +80,41 @@ export function ReportsView() {
     return index;
   }, [people]);
 
+  /**
+   * Bir görevin kalan işinin ne kadarı RAPOR UFKUNA düşer?
+   *
+   * Kapasite altı haftalık ufka göre tanımlıdır; kalan işin tamamını bu
+   * kapasiteyle karşılaştırmak, önümüzdeki bir yıla yayılmış 240 saatlik iş
+   * yükünü de "haftada 40 saat" gibi gösteriyor ve boşta kapasiteyi tüketiyordu.
+   * İş, planlanan aralığın ufukla KESİŞİMİ oranında sayılır.
+   *
+   * İki bilinçli istisna vardır: planlanmamış görevin tamamı bugünün yüküne
+   * yazılır (takvime alınmamış iş gizlenmemelidir) ve ufuktan önce bitmesi
+   * gereken gecikmiş işin kalanı da bugünkü yüktür.
+   */
+  const horizonShare = (task, horizonStart, horizonEnd) => {
+    const start = task.plannedStart ? parseDate(task.plannedStart) : null;
+    const finish = task.plannedFinish ? parseDate(task.plannedFinish) : start;
+    if (!start || !finish) return 1;
+    if (finish < horizonStart) return 1;
+    if (start > horizonEnd) return 0;
+    const from = start > horizonStart ? start : horizonStart;
+    const to = finish < horizonEnd ? finish : horizonEnd;
+    const span = diffDays(finish, start) + 1;
+    const overlap = diffDays(to, from) + 1;
+    return span > 0 ? Math.max(0, Math.min(1, overlap / span)) : 1;
+  };
+
   const resourceUtilization = useMemo2(() => {
+    const horizonStart = today();
+    const horizonEnd = addDays(horizonStart, REPORT_HORIZON_WEEKS * 7 - 1);
     const map = {};
     tasks.forEach(t => {
       if (t.status === 'done') return; // only count remaining work
+      const share = horizonShare(t, horizonStart, horizonEnd);
+      if (share <= 0) return;
       (t.sorumlu || []).forEach(s => {
-        const remaining = (t.plannedHours || 0) * (1 - (t.progress || 0) / 100);
+        const remaining = (t.plannedHours || 0) * (1 - (t.progress || 0) / 100) * share;
         map[s] = map[s] || { hours: 0, tasks: 0 };
         map[s].hours += remaining / (t.sorumlu.length || 1);
         map[s].tasks += 1;
@@ -95,9 +125,11 @@ export function ReportsView() {
       person: personByName.get(name) || null,
       hours: Math.round(v.hours),
       tasks: v.tasks,
+      weekly: Math.round(v.hours / REPORT_HORIZON_WEEKS),
       pct: Math.round((v.hours / CAPACITY_PER_PERSON) * 100),
       color: personColorVar(name)
     })).sort((a, b) => b.pct - a.pct);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, personByName]);
 
 
@@ -272,7 +304,7 @@ export function ReportsView() {
           <PeopleMetricTable
             barLabel="Kullanım"
             columns={[
-              { key: 'hours', label: 'Kalan', title: 'Kalan planlanan saat' },
+              { key: 'hours', label: 'Kalan', title: 'Altı haftalık ufka düşen kalan planlanan saat' },
               { key: 'tasks', label: 'Görev', title: 'Açık görev sayısı' },
               { key: 'free', label: 'Boşta', title: 'Kapasiteden artan saat' },
               { key: 'weekly', label: 'Haftalık', title: 'Altı haftaya yayılmış haftalık ortalama yük' },
@@ -294,7 +326,7 @@ export function ReportsView() {
                   hours: `${r.hours} sa`,
                   tasks: { value: r.tasks, tone: 'muted' },
                   free: { value: `${free} sa`, tone: free === 0 ? 'overdue' : 'muted' },
-                  weekly: { value: `${Math.round(r.hours / 6)} sa`, tone: 'muted' },
+                  weekly: { value: `${r.weekly} sa`, tone: 'muted' },
                   pct: { value: `%${r.pct}`, tone: danger ? 'overdue' : warn ? 'warn' : 'done' }
                 },
                 tooltip: <>

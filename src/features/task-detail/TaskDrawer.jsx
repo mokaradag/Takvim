@@ -1,11 +1,11 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
 import { isArchivedProject, projectTypeMeta, visibleProjects } from '../../domain/projectTypes';
-import { normalizeProjectTags } from '../../domain/tags';
+import { normalizeProjectTags, projectTagCatalog } from '../../domain/tags';
 import {
   LAG_UNITS,
   REL_TYPES,
@@ -18,15 +18,18 @@ import {
 } from '../../scheduling/dependencies';
 import { TR_DAYS, diffDays, fmt, today } from '../../scheduling/dates';
 import {
+  MAX_RECURRENCE_OCCURRENCES,
   RECURRENCE_WEEKDAYS,
   describeRecurrenceRule,
-  expandRecurrence,
   formatRecurrenceRule,
-  normalizeRecurrenceRule
+  normalizeRecurrenceRule,
+  planRecurringOccurrences
 } from '../../scheduling/recurrence';
 import { getTaskCalendarWarnings } from '../../scheduling/calendarWarnings';
+import { resolveTaskCalendar } from '../../scheduling/calendars';
 import { COLOR_MAP, projectColorVar } from '../../lib/colors';
-import { Avatar, Kw, StatusIcon, statusColorVar } from '../../components/ui';
+import { Avatar, StatusIcon, statusColorVar } from '../../components/ui';
+import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton } from '../../components/ui-extras';
 import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskActions, useTaskPrimaryBaseline } from '../../state/hooks';
 
@@ -38,12 +41,17 @@ function legacyProjectTags(projectId, tasks) {
   )).sort((a, b) => a.localeCompare(b, 'tr'));
 }
 
-/** Kanonik etiket kataloğu: `{name, color, icon}` üçlüleri. */
+/**
+ * Kanonik etiket kataloğu: `{name, color, icon}` üçlüleri.
+ *
+ * BOŞ katalog yetkilidir: projede bilinçli olarak etiket tanımlanmamış olabilir.
+ * Yalnızca katalog alanı HİÇ yoksa (eski anlık görüntü) görev anahtar
+ * sözcüklerinden türetilir.
+ */
 function tagsForProject(project, tasks) {
   if (!project) return [];
-  return normalizeProjectTags(Array.isArray(project.tags) && project.tags.length
-    ? project.tags
-    : legacyProjectTags(project.id, tasks));
+  const hasCatalog = Array.isArray(project.tagCatalog) || Array.isArray(project.tags);
+  return hasCatalog ? projectTagCatalog(project) : normalizeProjectTags(legacyProjectTags(project.id, tasks));
 }
 
 function projectLabel(project) {
@@ -62,14 +70,28 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const calendars = useCalendars();
   const allWbs = useAllWbs();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
-  const { generateTaskSeries } = useTaskActions();
+  const { generateTaskSeries, cancelTaskFieldUpdates } = useTaskActions();
   const occurrenceCount = useMemo(
     () => tasks.filter((item) => item.recurrenceParentId === task.id).length,
     [tasks, task.id]
   );
   const [local, setLocal] = useState({ ...task });
+  // Kalıcılaştırılmayan başlık taslağı. Boş başlık sunucuya gönderilmediği için
+  // yetkili görev kaydı eski başlığı taşımaya devam eder; taslak bu referansta
+  // tutulmasaydı, kullanıcı başka bir alanı düzenler düzenlemez gelen yeni
+  // `task` nesnesi silinen başlığı geri yazardı.
+  const titleDraftRef = useRef(null);
 
-  useEffect(() => { setLocal({ ...task }); }, [task]);
+  useEffect(() => {
+    titleDraftRef.current = null;
+  }, [task.id]);
+
+  useEffect(() => {
+    setLocal((current) => {
+      const draft = titleDraftRef.current;
+      return draft === null ? { ...task } : { ...task, task: draft };
+    });
+  }, [task]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === local.projectId) || null,
@@ -78,6 +100,12 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const projectTags = useMemo(() => tagsForProject(selectedProject, tasks), [selectedProject, tasks]);
   const calendarWarnings = useMemo(
     () => getTaskCalendarWarnings(local, { projects, calendars }),
+    [local, projects, calendars]
+  );
+  // Görev kendi takvimini geçersiz kılabilir; tekrar önizlemesi de üretimle aynı
+  // takvimi kullanmalıdır (bkz. resolveTaskCalendar önceliği).
+  const taskCalendar = useMemo(
+    () => resolveTaskCalendar(local, projects, calendars),
     [local, projects, calendars]
   );
 
@@ -164,10 +192,21 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
    * tuş vuruşunda güncellenir. Ancak BOŞ başlık kalıcılaştırmaya GÖNDERİLMEZ:
    * sunucu `TASK_TITLE_REQUIRED` ile tüm yamayı reddediyor, aynı yamada
    * birleştirilen ilerleme ve tarih düzenlemeleri de birlikte düşüyordu.
+   *
+   * Alan boşaldığında kuyrukta bekleyen başlık yaması da İPTAL EDİLİR: `ABC` →
+   * `AB` → `A` → boş yazımında kuyrukta hâlâ `A` duruyordu ve gecikme dolunca
+   * (ya da panel kapanınca) arayüzün "kaydedilmeyecek" dediği bu ön ek
+   * kalıcılaşıyordu.
    */
   const saveTitle = (value) => {
     setLocal((current) => ({ ...current, task: value }));
-    if (String(value).trim()) onUpdate(task.id, { task: value });
+    if (String(value).trim()) {
+      titleDraftRef.current = null;
+      onUpdate(task.id, { task: value });
+      return;
+    }
+    titleDraftRef.current = value;
+    cancelTaskFieldUpdates(task.id, ['task']);
   };
 
   useEffect(() => {
@@ -220,7 +259,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               <span className="muted" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
                 {projectLabel(selectedProject) || local.proje}
               </span>
-              {local.keyword && <><span className="muted">·</span><Kw color={local.color}>{local.keyword}</Kw></>}
+              {local.keyword && <><span className="muted">·</span><TaskKeyword task={local} /></>}
             </div>
             {/* Başlık boşken KAYDEDİLMEZ. Boş başlık sunucuda
                 TASK_TITLE_REQUIRED ile reddediliyor; aynı yamada birleştirilen
@@ -389,6 +428,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
             >
               <RecurrenceEditor
                 task={local}
+                calendar={taskCalendar}
                 occurrenceCount={occurrenceCount}
                 onChange={(recurrence) => save({ recurrence })}
                 onGenerate={() => generateTaskSeries(task.id)}
@@ -479,19 +519,50 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
  * bu metnin okunabilir bir yüzüdür. Böylece kural dışa aktarımda ve başka
  * sistemlerle alışverişte standart kalır.
  */
-function RecurrenceEditor({ task, occurrenceCount, onChange, onGenerate }) {
+function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerate }) {
   const rule = normalizeRecurrenceRule(task.recurrence);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
 
+  // Serinin başlangıç günü (RFC 5545 DTSTART). Haftalık kuralda bu gün her zaman
+  // seçili kalır: BYDAY başlangıç gününü dışlarsa kural üç yineleme derken
+  // şablonla birlikte dört görev oluşur ve dışa aktarılan RRULE'ün DTSTART'ı
+  // kendi kuralını sağlamaz.
+  const startWeekday = task.plannedStart
+    ? RECURRENCE_WEEKDAYS[(new Date(`${task.plannedStart}T00:00:00`).getDay() + 6) % 7]
+    : null;
+
   const patch = (changes) => {
-    const next = normalizeRecurrenceRule({ ...(rule || { freq: 'WEEKLY', interval: 1 }), ...changes });
+    const merged = { ...(rule || { freq: 'WEEKLY', interval: 1 }), ...changes };
+    if (merged.freq === 'WEEKLY' && startWeekday) {
+      const days = Array.isArray(merged.byWeekday) ? merged.byWeekday : [];
+      merged.byWeekday = days.includes(startWeekday) ? days : [...days, startWeekday];
+    }
+    const next = normalizeRecurrenceRule(merged);
     setMessage(null);
     onChange(next ? formatRecurrenceRule(next) : null);
   };
 
+  const clearRule = () => {
+    // Üretilmiş yinelemeler şablona bağlı kalır; kural silinseydi bu görevler
+    // kuralsız bir şablona bağlı "yineleme" olarak kalır, sonra tanımlanan yeni
+    // bir kural eskilerin yanına ikinci bir seri eklerdi.
+    if (occurrenceCount > 0) {
+      setMessage({
+        type: 'error',
+        text: 'Bu seriden üretilmiş yinelemeler var. Kuralı kaldırmadan önce yinelemeleri silin.'
+      });
+      return;
+    }
+    setMessage(null);
+    onChange(null);
+  };
+
+  // Önizleme üretimle AYNI planlayıcıyı kullanır: ham açılım hafta sonuna denk
+  // gelen günleri gösterir, üretim ise onları iş gününe kaydırıp tekilleştirir;
+  // ikisi ayrıştığında onay ekranı oluşacak görevlerle çelişirdi.
   const preview = rule
-    ? expandRecurrence(rule, { start: task.plannedStart, limit: 4 })
+    ? planRecurringOccurrences(task, rule, { calendar, limit: 4 }).map((occurrence) => occurrence.plannedStart)
     : [];
 
   const generate = async () => {
@@ -528,7 +599,7 @@ function RecurrenceEditor({ task, occurrenceCount, onChange, onGenerate }) {
           value={rule?.freq || ''}
           onChange={(event) => (event.target.value
             ? patch({ freq: event.target.value })
-            : onChange(null))}
+            : clearRule())}
           style={{ maxWidth: 170 }}
         >
           <option value="">Tekrar yok</option>
@@ -556,21 +627,26 @@ function RecurrenceEditor({ task, occurrenceCount, onChange, onGenerate }) {
 
       {rule?.freq === 'WEEKLY' && (
         <div className="recurrence-days" role="group" aria-label="Tekrar günleri">
-          {RECURRENCE_WEEKDAYS.map((day, index) => (
-            <button
-              key={day}
-              type="button"
-              className={`recurrence-day${rule.byWeekday.includes(day) ? ' active' : ''}`}
-              aria-pressed={rule.byWeekday.includes(day)}
-              onClick={() => patch({
-                byWeekday: rule.byWeekday.includes(day)
-                  ? rule.byWeekday.filter((value) => value !== day)
-                  : [...rule.byWeekday, day]
-              })}
-            >
-              {TR_DAYS[index]}
-            </button>
-          ))}
+          {RECURRENCE_WEEKDAYS.map((day, index) => {
+            const locked = day === startWeekday;
+            return (
+              <button
+                key={day}
+                type="button"
+                className={`recurrence-day${rule.byWeekday.includes(day) ? ' active' : ''}`}
+                aria-pressed={rule.byWeekday.includes(day)}
+                disabled={locked}
+                title={locked ? 'Serinin başlangıç günü her zaman seriye dahildir.' : undefined}
+                onClick={() => patch({
+                  byWeekday: rule.byWeekday.includes(day)
+                    ? rule.byWeekday.filter((value) => value !== day)
+                    : [...rule.byWeekday, day]
+                })}
+              >
+                {TR_DAYS[index]}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -599,11 +675,16 @@ function RecurrenceEditor({ task, occurrenceCount, onChange, onGenerate }) {
               className="input tabular"
               type="number"
               min={1}
-              max={400}
+              max={MAX_RECURRENCE_OCCURRENCES}
               aria-label="Yineleme sayısı"
               value={rule.count || ''}
               placeholder="—"
-              onChange={(event) => patch({ count: event.target.value, until: null })}
+              // Açılım güvenlik tavanında durur; tavanı aşan bir sayı hiçbir
+              // zaman tamamlanamayacağı için girildiği anda sınırlanır.
+              onChange={(event) => patch({
+                count: Math.min(Number(event.target.value) || 0, MAX_RECURRENCE_OCCURRENCES) || '',
+                until: null
+              })}
               style={{ width: 80 }}
             />
           </label>
@@ -611,7 +692,15 @@ function RecurrenceEditor({ task, occurrenceCount, onChange, onGenerate }) {
             <span className="muted">Bitiş tarihi</span>
             <DateInput
               value={rule.until || ''}
-              onChange={(value) => patch({ until: value, count: null })}
+              // Başlangıçtan önce biten kural sözdizimsel olarak geçerlidir ama
+              // hiçbir yineleme üretemez; kaydedilmeden önce reddedilir.
+              onChange={(value) => {
+                if (value && task.plannedStart && value < task.plannedStart) {
+                  setMessage({ type: 'error', text: 'Tekrar bitiş tarihi planlanan başlangıçtan önce olamaz.' });
+                  return;
+                }
+                patch({ until: value, count: null });
+              }}
               allowEmpty
             />
           </label>

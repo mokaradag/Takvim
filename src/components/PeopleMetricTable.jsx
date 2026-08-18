@@ -100,9 +100,14 @@ export function PeopleMetricTable({
           </div>
         );
         if (!row.tooltip) return <React.Fragment key={row.id}>{body}</React.Fragment>;
+        // `asChild`: varsayılan sarmalayıcı satırı `inline-flex` bir `span`
+        // içine alır ve `.pm-row` artık `.pm-table`'ın doğrudan çocuğu olmaz;
+        // ızgara sütunları satırdan satıra kayar. İpucu doğrudan satırın
+        // kendisine bağlanır.
         return (
           <Tooltip
             key={row.id}
+            asChild
             title={row.name}
             accent={row.barColor}
             icon={<Avatar name={row.name} person={row.person} size="sm" />}
