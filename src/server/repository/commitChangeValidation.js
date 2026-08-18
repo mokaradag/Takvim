@@ -62,6 +62,9 @@ export function canonicalizeCommitChanges(changes) {
       projectId: canonicalUuid(task?.projectId),
       wbsId: canonicalUuid(task?.wbsId),
       calendarId: canonicalUuid(task?.calendarId),
+      // Seri şablonu kimliği de kanonikleştirilir: yalnızca harf büyüklüğü
+      // farkı yüzünden şablon bulunamadı hatası alınmamalıdır.
+      recurrenceParentId: canonicalUuid(task?.recurrenceParentId),
       deps: Array.isArray(task?.deps) ? task.deps.map((dependency) => ({
         ...dependency,
         id: canonicalUuid(dependency?.id),

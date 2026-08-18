@@ -165,6 +165,32 @@ function validateTaskScalars(changes) {
       }
     }
 
+    // Yinelemenin değişmez seri kimliği: görev ertelense bile bu tarih durur ve
+    // kalıcı katmanda `(şablon, gün)` çifti tekildir.
+    const occurrenceIssue = validateOptionalString(
+      task?.recurrenceOccurrenceDate,
+      `${basePath}.recurrenceOccurrenceDate`,
+      'Yineleme günü'
+    );
+    if (occurrenceIssue) return occurrenceIssue;
+    if (text(task.recurrenceOccurrenceDate)) {
+      if (!isValidIsoDate(task.recurrenceOccurrenceDate)) {
+        return issue(
+          'TASK_DATE_INVALID',
+          `${basePath}.recurrenceOccurrenceDate`,
+          'Yineleme günü geçerli bir YYYY-MM-DD tarihi olmalıdır.',
+          { field: 'recurrenceOccurrenceDate' }
+        );
+      }
+      if (!text(task.recurrenceParentId)) {
+        return issue(
+          'TASK_RECURRENCE_OCCURRENCE_ORPHAN',
+          `${basePath}.recurrenceOccurrenceDate`,
+          'Yineleme günü yalnızca bir seri şablonuna bağlı görevde bulunabilir.'
+        );
+      }
+    }
+
     if (task.status !== undefined && typeof task.status !== 'string') {
       return issue('TASK_STATUS_INVALID', `${basePath}.status`, 'Görev durumu desteklenen değerlerden biri olmalıdır.');
     }

@@ -64,6 +64,7 @@ export function canonicalizeCommitScalars(changes) {
       keyword: trimString(task?.keyword),
       status: trimRequiredEnum(task?.status),
       priority: trimRequiredEnum(task?.priority),
+      recurrenceOccurrenceDate: trimString(task?.recurrenceOccurrenceDate),
       plannedStart: trimString(task?.plannedStart),
       plannedFinish: trimString(task?.plannedFinish),
       plannedDurationDays: emptyStringToNull(task?.plannedDurationDays),

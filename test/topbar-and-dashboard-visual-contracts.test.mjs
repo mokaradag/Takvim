@@ -26,7 +26,7 @@ test('topbar and dashboard visual contracts have semantic owners instead of chro
   assert.doesNotMatch(layout, /enhancements\.css|fixes\.css|followup-fixes\.css|topbar-dashboard-polish\.css/);
 });
 
-test('topbar keeps popovers visible while only the decorative emblem layer clips the final PR28 heptagon', () => {
+test('topbar keeps popovers visible while only the decorative emblem layer clips the heptagon', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/styles/shell.css');
 
@@ -64,7 +64,7 @@ test('selected project identity remains at the true horizontal center with disti
   assert.match(css, /\.theme-light \.topbar-project-context strong\.topbar-project-name\s*\{[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 68%, var\(--text\)\);/s);
 });
 
-test('Durum dağılımı uses semantic dashboard structure with the exact accepted PR28 dimensions', () => {
+test('Durum dağılımı uses semantic dashboard structure with the exact accepted dimensions', () => {
   const css = read('src/app/styles/dashboard.css');
   const dashboard = read('src/features/dashboard/DashboardView.jsx');
   const ui = read('src/components/ui.jsx');
@@ -95,7 +95,7 @@ test('Durum dağılımı uses semantic dashboard structure with the exact accept
   assert.match(ui, /const ty = isSelected \? Math\.sin\(rad\) \* DONUT_LIFT : 0;/);
   assert.match(ui, /translate\(\$\{tx\}px, \$\{ty\}px\)/);
 
-  // No rejected PR28-only forced segment pinning or 214px SVG override may return.
+  // No rejected forced segment pinning or 214px SVG override may return.
   assert.doesNotMatch(allCss, /> svg > g\s*\{[^}]*transform:\s*none\s*!important;/s);
   assert.doesNotMatch(allCss, /> div:first-child > svg\s*\{[^}]*width:\s*214px\s*!important;/s);
 });

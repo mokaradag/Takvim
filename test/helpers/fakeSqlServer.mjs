@@ -672,6 +672,24 @@ function runQuery(db, statement, params, { database }) {
     db.wbs = db.wbs.filter((row) => !sameGuid(row.WbsId, params.wbsId));
     return result([[{ Affected: 1 }]]);
   }
+  if (sqlText.includes('IF NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks WHERE TaskId = @taskId AND RowVersion = @version)')) {
+    const task = taskById(db, params.taskId);
+    if (!task || !sameVersion(task.RowVersion, params.version)) {
+      throw new Error("STALE_TASK");
+    }
+    // Seri şablonu silinirken yinelemeler ayrılır, silinmez.
+    for (const entry of db.tasks) {
+      if (!sameGuid(entry.RecurrenceParentTaskId, params.taskId)) continue;
+      entry.RecurrenceParentTaskId = null;
+      entry.RecurrenceOccurrenceDate = null;
+      entry.RowVersion = nextVersion();
+    }
+    db.taskDependencies = db.taskDependencies
+      .filter((entry) => !sameGuid(entry.TaskId, params.taskId) && !sameGuid(entry.PredecessorTaskId, params.taskId));
+    db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
+    db.tasks = db.tasks.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
+    return result([[{ Affected: 1 }]]);
+  }
   if (sqlText.includes('COUNT_BIG(*) AS ChildCount')) {
     const childCount = db.tasks.filter((task) => sameGuid(task.RecurrenceParentTaskId, params.parentId)).length;
     return result([[{ ChildCount: childCount }]]);
@@ -789,24 +807,6 @@ function runQuery(db, statement, params, { database }) {
       LagUnit: params.lagUnit ?? null
     });
     return result([[]]);
-  }
-  if (sqlText.includes('IF NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks WHERE TaskId = @taskId AND RowVersion = @version)')) {
-    const task = taskById(db, params.taskId);
-    if (!task || !sameVersion(task.RowVersion, params.version)) {
-      throw new Error("STALE_TASK");
-    }
-    // Seri şablonu silinirken yinelemeler ayrılır, silinmez.
-    for (const entry of db.tasks) {
-      if (!sameGuid(entry.RecurrenceParentTaskId, params.taskId)) continue;
-      entry.RecurrenceParentTaskId = null;
-      entry.RecurrenceOccurrenceDate = null;
-      entry.RowVersion = nextVersion();
-    }
-    db.taskDependencies = db.taskDependencies
-      .filter((entry) => !sameGuid(entry.TaskId, params.taskId) && !sameGuid(entry.PredecessorTaskId, params.taskId));
-    db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
-    db.tasks = db.tasks.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
-    return result([[{ Affected: 1 }]]);
   }
   if (sqlText.includes('INSERT dbo.MR_AuditLog(')) {
     db.auditLog.push({

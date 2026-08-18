@@ -103,6 +103,29 @@ export function findNestedCommitCollectionIssue(changes = {}) {
       }
     }
 
+    // Etiket yeniden adlandırmaları katalog yazmasıyla birlikte gelir ve canlı
+    // görev satırlarına uygulanır; şekli bu yüzden sınırda doğrulanır.
+    const renames = project?.tagRenames;
+    if (renames !== undefined && !Array.isArray(renames)) {
+      return issue(
+        'PROJECT_TAG_RENAMES_NOT_ARRAY',
+        `${basePath}.tagRenames`,
+        'Etiket yeniden adlandırmaları dizi olmalıdır.'
+      );
+    }
+    for (let renameIndex = 0; renameIndex < (renames || []).length; renameIndex += 1) {
+      const entry = renames[renameIndex];
+      const from = entry && typeof entry === 'object' ? entry.from : null;
+      const to = entry && typeof entry === 'object' ? entry.to : null;
+      if (typeof from !== 'string' || !from.trim() || typeof to !== 'string' || !to.trim()) {
+        return issue(
+          'PROJECT_TAG_RENAME_INVALID',
+          `${basePath}.tagRenames[${renameIndex}]`,
+          'Etiket yeniden adlandırması dolu `from` ve `to` adları taşımalıdır.'
+        );
+      }
+    }
+
     if (hasPersistenceVersion(project?.version)) {
       const fieldIssue = versionedFieldIssue(
         project,
