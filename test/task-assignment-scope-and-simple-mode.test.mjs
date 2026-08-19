@@ -130,8 +130,8 @@ test('geniş proje seçimi yönetici/ilgisiz yetkiler vermez', () => {
 test('görev atama kapsamı sunucuda YENİDEN doğrulanır', () => {
   const repository = read('src/server/repository/sqlAppRepository.js');
   const body = repository.slice(
-    repository.indexOf('async function assertTaskProjectAccess'),
-    repository.indexOf('async function taskAssigneeSicils')
+    repository.indexOf('async function assertTaskProjectScope'),
+    repository.indexOf('async function projectRootWbsId')
   );
   // Kapsam yalnızca etkin KURUMSAL projeleri ve yöneticinin KENDİ personelini kapsar.
   assert.match(body, /SourceType = 'CORPORATE' AND IsActive = 1/);
@@ -151,12 +151,28 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
     repository.indexOf('async function loadSnapshotFrom'),
     repository.indexOf('async function readProjectTags')
   );
-  // Bayrak yalnızca ek proje listesinde kullanılır.
+  // Bayrak YALNIZCA üç yerde kullanılır: seçilebilir proje listesi, kişi
+  // rehberinin yöneticinin KENDİ personeliyle sınırlı genişlemesi ve atanabilir
+  // çalışan Sicilleri. Rehber genişlemesi olmadan, görünür FULL projesi
+  // bulunmayan bir yönetici atayabileceği çalışanı seçicide hiç bulamıyordu;
+  // Sicil kümesi olmadan da seçici bütün rehberi gösterip garanti reddedilen
+  // kayıtlar ürettiriyordu.
   const usages = snapshot.match(/@canAssignAllCorporate/g) || [];
-  assert.equal(usages.length, 1, 'atama bayrağı yalnızca seçilebilir proje sorgusunda kullanılmalıdır');
+  assert.equal(usages.length, 3, 'atama bayrağı yalnızca seçilebilir proje, kişi ve kapsam sorgularında kullanılmalıdır');
   // Görünür proje kümesi bayrağa bakmaz.
   const visibleBlock = snapshot.slice(snapshot.indexOf('INSERT @VisibleProjects'), snapshot.indexOf('DECLARE @HasFullScope'));
   assert.doesNotMatch(visibleBlock, /@canAssignAllCorporate/);
+  // Görev ve iş dağılım ağacı görünürlüğü de bayraktan etkilenmez.
+  const taskBlock = snapshot.slice(snapshot.indexOf('SELECT t.*, v.AccessLevel'), snapshot.indexOf('SELECT ta.TaskId, ta.Sicil'));
+  assert.doesNotMatch(taskBlock, /@canAssignAllCorporate/);
+  const wbsBlock = snapshot.slice(snapshot.indexOf(';WITH RequiredPartialWbs'), snapshot.indexOf('SELECT t.*, v.AccessLevel'));
+  assert.doesNotMatch(wbsBlock, /@canAssignAllCorporate/);
+  // Rehber genişlemesi yalnızca yöneticinin kendi kapsamı kadardır.
+  const peopleBlock = snapshot.slice(snapshot.indexOf('FROM dbo.MR_V_PeopleDirectory pd'), snapshot.indexOf('-- Görev ATAMA kapsamı: yöneticiler'));
+  assert.match(peopleBlock, /@canAssignAllCorporate = 1\s+AND EXISTS \(\s+SELECT 1 FROM dbo\.MR_V_ExecutiveScope es/);
+  // Atanabilir çalışan kümesi de yalnızca yöneticinin kendi kapsamıdır.
+  const scopeBlock = snapshot.slice(snapshot.indexOf('SELECT es.EmployeeSicil'));
+  assert.match(scopeBlock, /WHERE @canAssignAllCorporate = 1 AND es\.ManagerSicil = @sicil/);
 });
 
 /* ── 2. Basit Mod Görevler ──────────────────────────────────────── */

@@ -15,7 +15,7 @@ Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yen
 
 ## Basit Modda Gantt
 
-Basit Mod gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+Basit Mod gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Rol kapılı **yönetici** sayfaları (`ADMIN_NAV_IDS`, örneğin Hatırlatma E-postaları) bu süzgeçten muaftır: yalnızca sistem yöneticisine açılan bir yapılandırma ekranı, kullanıcı Basit Modda diye ulaşılamaz olmamalıdır. Rol denetimi değişmez — yönetici olmayan bu sayfaları iki modda da görmez. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
 
 ## Basit Modda Görevler
 
@@ -42,7 +42,13 @@ Sayfa dört yetenek sunar; hepsi aynı sadeleştirilmiş alan kümesi üzerinde 
 3. **Sıralama** — termin, öncelik ve görev adına göre.
 4. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
 
-`SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda ve panelin altında hatırlatma gönderme ve silme düğmeleri bulunur (`docs/TASK-REMINDERS.md`).
+`SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda ve panelin altında hatırlatma gönderme ve silme düğmeleri bulunur (`docs/TASK-REMINDERS.md`). Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
+
+Üç davranış Gelişmiş Modla ortaktır ve bilinçlidir:
+
+- **Boş başlık kalıcılaştırılmaz.** Kullanıcı adı silip yeniden yazarken geçici boş metin yerel taslakta kalır; sunucu boş başlığı reddettiği için kuyruğa hiç girmez.
+- **Kısa açıklama proje etiket kataloğuyla eşleştirilir.** Alan bırakıldığında değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) etiket yine görevde saklanır — istenip sonra sessizce düşürülmez.
+- **Gizli plan tarihleri ezilmez.** Basit Mod planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Gelişmiş Modda kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
 
 **Gelişmiş Mod değişmez.** `AppShell` yalnızca `simpleMode` bayrağına göre bileşen seçer (`case 'veri': return simpleMode ? <SimpleTasksView /> : <TasksView />;`); `TasksView` ve `TaskDrawer` bu değişiklikten hiç etkilenmez.
 
@@ -176,7 +182,7 @@ Ayarlar sayfasındaki **Tarih biçimi** seçeneği (`gg/aa/yyyy` ↔ `18 Ağu 20
 `DateInput` artık tercihe uyar. Kurallar React'ten bağımsız `src/components/dateInputFormat.js` modülündedir:
 
 - **Yazma** tercihe uyar (`formatEditableDate`).
-- **Okuma** bilerek daha geniştir (`parseDisplayDate`): `18/08/2026`, `18 Ağu 2026`, `18 Ağustos 2026` ve ISO biçimi kabul edilir; ay adı Türkçe küçültme kurallarıyla eşleştirilir. Biçim değiştiğinde yarım kalmış bir giriş ya da kopyalanmış eski bir metin reddedilmemelidir. Takvimde olmayan gün (`31 Şub 2026`) her iki biçimde de reddedilir.
+- **Okuma** bilerek daha geniştir (`parseDisplayDate`): `18/08/2026`, `18 Ağu 2026`, `18 Ağustos 2026` ve ISO biçimi kabul edilir; ay adı Türkçe küçültme kurallarıyla eşleştirilir. Biçim değiştiğinde yarım kalmış bir giriş ya da kopyalanmış eski bir metin reddedilmemelidir. Takvimde olmayan gün (`31 Şub 2026`, `2026-02-31`) **her biçimde** reddedilir — ISO metni rakam maskesini atladığı için gerçek takvim doğrulaması ayrıca uygulanır, aksi hâlde imkânsız tarih mart ayına yuvarlanıyordu.
 - **Rakam maskesi** yalnızca rakam ve eğik çizgi içeren girişe uygulanır (`maskDateDraft`); aksi hâlde `18 Ağu 2026` yazılırken rakamlar ayıklanıp `18/20/26` üretiliyordu.
 - **Yer tutucu ve hata iletisi** tercihten türetilir; koda gömülü `gg/aa/yyyy` metni kalmadı.
 

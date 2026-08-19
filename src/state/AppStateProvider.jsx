@@ -153,6 +153,17 @@ export function AppStateProvider({ children, repository = appRepository }) {
     return persistence.updateTask(id, stamped);
   }, [persistence]);
   const flushPendingChanges = useCallback((options = {}) => persistence.flush(options), [persistence]);
+  /**
+   * TEK bir görevin bekleyen düzenlemelerini sunucuya yazar.
+   *
+   * Alan düzenlemeleri gecikmeli birleştirilir; sunucu tarafında görevi yeniden
+   * okuyan eylemler (hatırlatma gönderimi gibi) bu kuyruk boşaltılmadan
+   * çalıştırılırsa ESKİ başlık, termin ve sorumlularla iş görür.
+   */
+  const flushTaskEdits = useCallback(async (id) => {
+    if (!id) return { ok: true, value: null };
+    return firstFailedResult(await persistence.flushTaskUpdates([id])) || { ok: true, value: null };
+  }, [persistence]);
   const hasPendingChanges = useCallback(() => persistence.hasPendingChanges(), [persistence]);
   // Reddedilen yamalar saklanır; kullanıcı kalıcılaştırma şeridinden yeniden
   // deneyebilir, böylece kaybedilen tek kopya diye bir durum oluşmaz.
@@ -473,6 +484,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     closeTask,
     updateTask,
     flushPendingChanges,
+    flushTaskEdits,
     hasPendingChanges,
     retryFailedChanges,
     cancelTaskFieldUpdates,
@@ -497,6 +509,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     closeTask,
     updateTask,
     flushPendingChanges,
+    flushTaskEdits,
     hasPendingChanges,
     retryFailedChanges,
     cancelTaskFieldUpdates,

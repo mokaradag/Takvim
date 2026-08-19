@@ -171,7 +171,20 @@ export function SimpleTasksView() {
                         <span className="simple-tasks-project">{task.projectCode ? `${task.projectCode} · ${task.proje}` : task.proje}</span>
                       </div>
                     </td>
-                    <td><span className="simple-tasks-title">{task.task}</span></td>
+                    <td>
+                      {/* Başlık odaklanabilir bir DÜĞMEDİR: satırın kendisi
+                          klavyeyle odaklanamıyor ve Enter/Boşluk işlemiyordu,
+                          yani klavye kullanıcısı hatırlatma ile silmeye
+                          ulaşırken görevi düzenlemek için hiçbir yol
+                          bulamıyordu. Tablo semantiği korunur. */}
+                      <button
+                        type="button"
+                        className="simple-tasks-open"
+                        onClick={(event) => { event.stopPropagation(); openTask(task); }}
+                      >
+                        <span className="simple-tasks-title">{task.task}</span>
+                      </button>
+                    </td>
                     <td><span className="muted">{task.keyword || '—'}</span></td>
                     <td>
                       <AvatarStack

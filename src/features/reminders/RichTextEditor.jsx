@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { Icons } from '../../components/icons';
 import { sanitizeReminderHtml } from '../../domain/reminders/reminderTemplate.js';
+import { plainTextToHtml } from './plainTextHtml.js';
 
 /**
  * Küçük zengin metin düzenleyicisi.
@@ -142,10 +143,14 @@ export function RichTextEditor({ value, onChange, ariaLabel = 'E-posta gövdesi'
         // Yapıştırılan içerik DÜZ METİN olarak alınır: dış kaynaktan gelen
         // biçimlendirme, e-posta istemcilerinde bozulan devasa bir HTML
         // yığınıyla birlikte gelir.
+        //
+        // Satır sonları AÇIKÇA korunur. HTML yüzeyinde ham `\n` daraltılabilir
+        // boşluktur; çok satırlı bir şablon yapıştırıldığında paragraf yapısı
+        // tek akışa çöküyor ve aynı çökmüş metin postalanıyordu.
         onPaste={(event) => {
           event.preventDefault();
           const text = event.clipboardData?.getData('text/plain') || '';
-          insertHtml(text.replace(/[<>]/g, (character) => (character === '<' ? '&lt;' : '&gt;')));
+          insertHtml(plainTextToHtml(text));
         }}
       />
     </div>

@@ -256,17 +256,18 @@ export function SettingsView({ t, setTweak }) {
           {/* Tarih biçimi daha önce koda gömülüydü; kurumsal alışkanlığa göre
               seçilebilmesi gerekir.
 
-              Sözleşme bilinçli olarak DARDIR ve açıklama bunu birebir yazar:
-              ayar YALNIZCA okunan tarihleri biçimlendirir. Tarih GİRİŞ alanları
-              (görev paneli, hızlı görev tanımı, süzgeçler) her zaman gg/aa/yyyy
-              maskesiyle çalışır; giriş biçimi tercihe bağlansaydı aynı alan
-              kullanıcıdan bazen "18 Ağu 2026" bekler, ay adının yazımına
-              takılan her giriş sessizce reddedilirdi. Grafik eksenleri de bu
-              ayardan etkilenmez: eksen etiketi her zaman kısa biçimdedir
-              (bkz. fmtAxisDate). */}
+              Sözleşme, DÜZENLENEBİLİR tarih alanlarını da kapsar: `DateInput`
+              seçilen biçime göre `formatEditableDate()`/`maskDateDraft()`
+              kullanır, yani "18 Ağu 2026" seçildiğinde giriş alanları da o
+              biçimde görünür ve yazılır. Ayrıştırma her iki biçimi de kabul
+              eder (bkz. components/dateInputFormat.js · parseDisplayDate), bu
+              yüzden alışkın olunan gg/aa/yyyy yazımı hiçbir zaman reddedilmez.
+
+              Grafik EKSENLERİ bu ayardan etkilenmez: eksen etiketi her zaman
+              kısa biçimdedir (bkz. fmtAxisDate). */}
           <SettingsRow
             title="Tarih biçimi"
-            desc="Listelerde, kartlarda ve raporlarda GÖSTERİLEN tarihlerin yazımını belirler. Tarih girişi ve grafik eksenleri her zaman kısa biçimi kullanır."
+            desc="Gösterilen VE düzenlenen tarihlerin yazımını belirler; her iki biçimde yazılan giriş de kabul edilir. Grafik eksenleri her zaman kısa biçimi kullanır."
           >
             <Segmented
               value={t.dateFormat || 'dd/mm/yyyy'}

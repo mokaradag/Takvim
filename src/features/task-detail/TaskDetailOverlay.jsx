@@ -4,7 +4,7 @@ import {
   useAllPeople,
   useAllProjects,
   useAllTasks,
-  useAssignmentScopeProjects,
+  useTaskAssignmentScope,
   useSelectedTask,
   useTaskActions
 } from '../../state/hooks';
@@ -23,7 +23,10 @@ export function TaskDetailOverlay({ simple = false }) {
   const task = useSelectedTask();
   const tasks = useAllTasks();
   const projects = useAllProjects();
-  const assignableProjects = useAssignmentScopeProjects();
+  // Yazma kararı HAM kapsamı kullanır: yönetici bu projede görev oluşturunca
+  // proje PARTIAL görünür hâle gelir ve süzülmüş liste kendi görevini salt
+  // okunur açardı.
+  const assignableProjects = useTaskAssignmentScope();
   const people = useAllPeople();
   const { closeTask, updateTask, moveTaskToWbs, deleteTask } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
@@ -63,7 +66,14 @@ export function TaskDetailOverlay({ simple = false }) {
   // Yazma yetkisi görev ATAMA kapsamını da içerir: yönetici, kendi personeline
   // tanımladığı görevi düzenleyebilmelidir (bkz. projectWritePolicy).
   const writeState = { projects, tasks, assignableProjects };
-  if (!canAssignTasksInProject(writeState, task.projectId)) {
+  // Sunucu, atama kapsamıyla yazmayı görevin BÜTÜN sorumlularının yönetici
+  // kapsamında olmasına bağlar; anlık görüntü ise TEK bir ast yeterken görevi
+  // gösterir. Kapsam dışı bir eş sorumlunun satırı gizlendiği için istemci
+  // yalnızca SAYIYI karşılaştırabilir: gizlenmiş sorumlu varsa panel salt
+  // okunur açılır ve her düzenleme sunucuda reddedilmek yerine hiç başlamaz.
+  const hasHiddenAssignees = Number(task.assigneeCount ?? (task.assigneeIds || []).length)
+    > (task.assigneeIds || []).length;
+  if (!canAssignTasksInProject(writeState, task.projectId) || hasHiddenAssignees) {
     return <ReadOnlyTaskDrawer task={task} onClose={closeTask} />;
   }
 

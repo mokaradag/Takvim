@@ -10,6 +10,8 @@ import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
+import { useAppState } from '../../state/AppStateProvider';
+import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 
@@ -49,7 +51,12 @@ export function TasksView() {
     () => new Set(assignableProjects.map((project) => String(project.id))),
     [assignableProjects]
   );
-  const canAddTask = assignableProjects.length > 0;
+  // Düğme, isteğin KABUL EDİLEBİLİR bir sorumluyla gidebildiği en az bir proje
+  // varken etkinleşir. Atama kapsamındaki projede varsayılan sorumlu oturum
+  // sahibi olduğunda istek panel açılmadan reddediliyor, kullanıcıya da astını
+  // seçme fırsatı verilmiyordu.
+  const appState = useAppState();
+  const canAddTask = assignableProjects.some((project) => canResolveTaskAssignee(appState, project));
 
   // Süzgeç değeri KARARLI kimliktir, görünen ad değil. Ada göre süzülseydi aynı
   // ada sahip iki proje (ya da iki çalışan) tek bir seçenekte birleşir; kullanıcı
@@ -191,7 +198,7 @@ export function TasksView() {
           className="btn primary"
           onClick={onAddTask}
           disabled={!canAddTask}
-          title={canAddTask ? 'Yeni görev' : 'Görev eklemek için tam proje yazma yetkisi gerekir.'}
+          title={canAddTask ? 'Yeni görev' : 'Görev eklemek için yazabileceğiniz bir proje ve atayabileceğiniz bir sorumlu gerekir.'}
         >
           <Icons.Plus size={14} /> Yeni görev
         </button>

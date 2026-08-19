@@ -45,7 +45,12 @@ function isoFromParts(year, month, day) {
 export function parseDisplayDate(value) {
   const text = String(value || '').trim();
   if (!text) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  // ISO biçimli metin de TAKVİM DOĞRULAMASINDAN geçer. Tireli metin
+  // `maskDateDraft` süzgecini atladığı için `2026-02-31` doğrudan kabul
+  // ediliyor, `parseDate()` onu mart ayına yuvarlıyor ya da imkânsız tarih
+  // kalıcı kayda düşüyordu.
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return isoFromParts(Number(iso[1]), Number(iso[2]), Number(iso[3]));
 
   const slash = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (slash) return isoFromParts(Number(slash[3]), Number(slash[2]), Number(slash[1]));

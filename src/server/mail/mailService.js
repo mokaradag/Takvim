@@ -1,5 +1,5 @@
 import 'server-only';
-import { getSmtpConfig, isSmtpConfigured } from './smtpConfig.js';
+import { getSmtpConfig, smtpConfigurationProblem } from './smtpConfig.js';
 import { SmtpError, sendSmtpMail } from './smtpClient.js';
 
 /**
@@ -12,12 +12,14 @@ import { SmtpError, sendSmtpMail } from './smtpClient.js';
 
 const MAIL_ERROR_MESSAGES = Object.freeze({
   SMTP_NOT_CONFIGURED: 'E-posta gönderimi yapılandırılmamış. Sunucuda SMTP_HOST ve SMTP_FROM tanımlanmalıdır.',
+  SMTP_CONFIG_INVALID: 'E-posta yapılandırması geçersiz. Sunucudaki SMTP ayarları gözden geçirilmelidir.',
   SMTP_CONNECTION_FAILED: 'E-posta sunucusuna ulaşılamadı.',
   SMTP_TLS_FAILED: 'E-posta sunucusuyla güvenli bağlantı kurulamadı.',
   SMTP_AUTH_FAILED: 'E-posta sunucusunda kimlik doğrulama başarısız oldu.',
   SMTP_TIMEOUT: 'E-posta sunucusu zamanında yanıt vermedi.',
   SMTP_NO_RECIPIENTS: 'Gönderilecek geçerli bir alıcı adresi bulunamadı.',
   SMTP_INVALID_RECIPIENT: 'Alıcı adresi geçerli değil.',
+  SMTP_AUTH_UNSUPPORTED: 'E-posta sunucusu desteklenen bir kimlik doğrulama yöntemi bildirmedi.',
   SMTP_SEND_FAILED: 'E-posta gönderilemedi.'
 });
 
@@ -29,18 +31,23 @@ export function mailErrorMessage(code, fallback = MAIL_ERROR_MESSAGES.SMTP_SEND_
 /**
  * İletiyi gönderir.
  *
- * @returns {Promise<{ok: true, accepted: string[], messageId: string}
+ * @returns {Promise<{ok: true, accepted: string[],
+ *   rejected: {address: string, statusCode: number|null}[], messageId: string}
  *   | {ok: false, code: string, message: string}>}
  *   Başarı YALNIZCA SMTP sunucusu iletiyi kabul ettiğinde bildirilir.
  */
 export async function sendMail({ to = [], subject = '', html = '', text = '' } = {}) {
-  if (!isSmtpConfigured()) {
-    return { ok: false, code: 'SMTP_NOT_CONFIGURED', message: MAIL_ERROR_MESSAGES.SMTP_NOT_CONFIGURED };
+  // Yapılandırma ÇÖZÜMLEMESİ de denetlenir: bozuk `SMTP_PORT`/`SMTP_TIMEOUT_MS`
+  // değeri genel bir sunucu hatası olarak dışarı sızmaz, sözleşmedeki
+  // `{ ok: false, code, message }` biçiminde döner.
+  const problem = smtpConfigurationProblem();
+  if (problem) {
+    return { ok: false, code: problem, message: mailErrorMessage(problem) };
   }
   const config = getSmtpConfig();
   try {
     const result = await sendSmtpMail(config, { to, subject, html, text });
-    return { ok: true, accepted: result.accepted, messageId: result.messageId };
+    return { ok: true, accepted: result.accepted, rejected: result.rejected || [], messageId: result.messageId };
   } catch (error) {
     // Hata gövdesi kullanıcıya gider: kimlik bilgisi, parola ve ham yığın izi
     // asla taşınmaz.

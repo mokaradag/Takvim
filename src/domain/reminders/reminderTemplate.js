@@ -63,6 +63,44 @@ export function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+const NAMED_ENTITIES = Object.freeze({
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0'
+});
+
+/**
+ * HTML varlıklarını çözer.
+ *
+ * Zengin metin düzenleyicisi `innerHTML` verdiği için metin sunucuya ZATEN
+ * kodlanmış gelir (`A & B` → `A &amp; B`). Yeniden kaçırmadan önce çözülmezse
+ * temizleyici her geçişte bir kat daha kodlar (`&amp;amp;`) ve önizleme ile
+ * e-posta ham varlık gösterir; ayar yükle/kaydet/gönder yolunda temizleyici
+ * birden çok kez çalıştığı için kat sayısı büyür.
+ *
+ * Çözüm AYRICA güvenliği artırır: `&#106;avascript:` gibi kodlanmış değerler
+ * şema denetiminden önce açığa çıkar.
+ */
+export function decodeHtmlEntities(value) {
+  return String(value ?? '').replace(/&(#[Xx][0-9A-Fa-f]+|#\d+|[A-Za-z][A-Za-z0-9]*);/g, (match, entity) => {
+    if (entity[0] === '#') {
+      const hex = entity[1] === 'x' || entity[1] === 'X';
+      const code = Number.parseInt(hex ? entity.slice(2) : entity.slice(1), hex ? 16 : 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return match;
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return match;
+      }
+    }
+    const named = NAMED_ENTITIES[entity.toLowerCase()];
+    return named === undefined ? match : named;
+  });
+}
+
+/** Metni HTML'e güvenle yazar: önce çözer, sonra kaçırır — yani IDEMPOTENTTİR. */
+export function escapeText(value) {
+  return escapeHtml(decodeHtmlEntities(value));
+}
+
 function sanitizeStyle(value) {
   return String(value || '')
     .split(';')
@@ -94,7 +132,9 @@ function sanitizeAttributes(raw) {
   while ((match = pattern.exec(raw))) {
     const name = match[1].toLowerCase();
     if (!ALLOWED_ATTRIBUTES.has(name)) continue;
-    const value = match[3] ?? match[4] ?? match[5] ?? '';
+    // Öznitelik değeri kaynakta kodlu gelir; önce çözülür ki denetim gerçek
+    // değeri görsün ve yeniden yazım kat kat kodlamaya dönüşmesin.
+    const value = decodeHtmlEntities(match[3] ?? match[4] ?? match[5] ?? '');
     if (name === 'href') {
       const href = sanitizeHref(value);
       if (href) attributes.push(`href="${escapeHtml(href)}"`);
@@ -125,10 +165,10 @@ export function sanitizeReminderHtml(input) {
   while (index < source.length) {
     const start = source.indexOf('<', index);
     if (start < 0) {
-      output += escapeHtml(source.slice(index));
+      output += escapeText(source.slice(index));
       break;
     }
-    output += escapeHtml(source.slice(index, start));
+    output += escapeText(source.slice(index, start));
 
     // Yorumlar ve işlem yönergeleri tümüyle düşer.
     if (source.startsWith('<!--', start)) {
@@ -144,7 +184,7 @@ export function sanitizeReminderHtml(input) {
 
     const end = source.indexOf('>', start);
     if (end < 0) {
-      output += escapeHtml(source.slice(start));
+      output += escapeText(source.slice(start));
       break;
     }
     const raw = source.slice(start + 1, end);

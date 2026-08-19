@@ -38,9 +38,30 @@ function integerValue(name, fallback, { max = 65535 } = {}) {
   return value;
 }
 
-/** Posta gönderimi yapılandırıldı mı? */
+/**
+ * Yapılandırma sorununu döner; sorun yoksa `null`.
+ *
+ * Varlık denetimi TEK BAŞINA yetmez: `SMTP_HOST`/`SMTP_FROM` tanımlıyken bozuk
+ * bir `SMTP_PORT` değeri de gönderimi olanaksız kılar. İki durum ayrı kodlarla
+ * bildirilir ki arayüz "yapılandırılmamış" ile "yapılandırma hatalı"yı
+ * karıştırmasın.
+ *
+ * @returns {'SMTP_NOT_CONFIGURED'|'SMTP_CONFIG_INVALID'|null}
+ */
+export function smtpConfigurationProblem() {
+  if (!(stringValue('SMTP_HOST') && stringValue('SMTP_FROM'))) return 'SMTP_NOT_CONFIGURED';
+  try {
+    readSmtpConfig();
+  } catch {
+    // Değerin kendisi taşınmaz: hata iletisi ortam değişkeni içeriğini sızdırmaz.
+    return 'SMTP_CONFIG_INVALID';
+  }
+  return null;
+}
+
+/** Posta gönderimi eksiksiz yapılandırıldı mı? */
 export function isSmtpConfigured() {
-  return Boolean(stringValue('SMTP_HOST') && stringValue('SMTP_FROM'));
+  return smtpConfigurationProblem() === null;
 }
 
 /**
@@ -49,7 +70,11 @@ export function isSmtpConfigured() {
  *   timeoutMs:number}|null}
  */
 export function getSmtpConfig() {
-  if (!isSmtpConfigured()) return null;
+  if (!(stringValue('SMTP_HOST') && stringValue('SMTP_FROM'))) return null;
+  return readSmtpConfig();
+}
+
+function readSmtpConfig() {
   return Object.freeze({
     host: stringValue('SMTP_HOST'),
     port: integerValue('SMTP_PORT', 587),

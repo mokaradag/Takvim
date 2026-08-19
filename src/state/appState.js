@@ -1,4 +1,5 @@
 import { normalizeTaskRecord } from '../data/normalizeTaskRecord.js';
+import { TASK_STATUSES } from '../domain/constants/index.js';
 import { compareWbsNodes, selectDefaultProjectWbs, selectWbsDescendantIds } from '../domain/selectors/index.js';
 import {
   validateTaskWbsMove,
@@ -227,6 +228,7 @@ function emptyApplicationData() {
     taskBaselineSnapshots: [],
     // Görev atama kapsamındaki (görünür OLMAYAN) kurumsal projeler.
     assignableProjects: [],
+    assignmentScopeSicils: [],
     session: null,
     currentUser: null,
     isSystemAdmin: false,
@@ -280,6 +282,7 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
     calendars: snapshot.calendars || [],
     projects: snapshot.projects || [],
     assignableProjects: snapshot.assignableProjects || [],
+    assignmentScopeSicils: snapshot.assignmentScopeSicils || [],
     people: snapshot.people || [],
     wbs: snapshot.wbs || [],
     baselines: snapshot.baselines || [],
@@ -310,8 +313,13 @@ export function createInitialState(snapshot = {}) {
   return createStateFromSnapshot(snapshot, createLoadingState());
 }
 
+function isDoneStatus(value) {
+  return String(value ?? '').trim().toLowerCase() === TASK_STATUSES.DONE;
+}
+
 /**
- * Görev "Tamamlandı"ya geçerken GERÇEKLEŞEN bitişi damgalar.
+ * Görev "Tamamlandı"ya geçerken GERÇEKLEŞEN bitişi damgalar; geri açıldığında
+ * damgayı temizler.
  *
  * Normal tamamlama yolları (görev panelindeki durum düğmesi, Kanban bırakması)
  * yalnızca `status: 'done'` yamalıyor, doğrulama da buna izin veriyordu. Sonuç,
@@ -319,25 +327,43 @@ export function createInitialState(snapshot = {}) {
  * planlanan bitişle dolduruyor ve gelecek aya planlanmış ama bugün bitirilen
  * işi eğriye gelecek ay sokuyordu.
  *
+ * Damga `done` DIŞINA çıkışta temizlenir. Aksi hâlde pazartesi tamamlanıp salı
+ * yeniden açılan ve cuma tekrar bitirilen bir görev, eski damgası durduğu için
+ * tamamlanma eğrisine hâlâ pazartesi yazılıyordu.
+ *
  * `actualStart` de birlikte doldurulur: kalıcılaştırma sınırı gerçekleşen bitiş
  * için gerçekleşen başlangıç ister ve başlangıç bitişten sonraya düşemez.
+ * Gerçek başlangıç bilinmiyorsa PLAN tarihi gerçekmiş gibi yazılmaz —
+ * ocak ayına planlanıp bugün yapılan iş "ocakta başlamış" diye kaydedilirdi.
  *
  * @returns {object} damgalanmış yama (değişiklik gerekmiyorsa aynı nesne)
  */
 export function withCompletionStamp(state, taskId, patch, referenceDate = today()) {
-  if (!patch || patch.status !== 'done') return patch;
+  if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'status')) return patch;
   const task = (state?.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
   if (!task) return patch;
-  const hasFinish = Object.prototype.hasOwnProperty.call(patch, 'actualFinish')
-    ? patch.actualFinish
-    : task.actualFinish;
-  if (hasFinish) return patch;
+
+  const wasDone = isDoneStatus(task.status);
+  const becomesDone = isDoneStatus(patch.status);
+  const declaresFinish = Object.prototype.hasOwnProperty.call(patch, 'actualFinish');
+
+  if (!becomesDone) {
+    // Yeniden açılan görevin tamamlanma damgası düşer; kullanıcı açıkça bir
+    // tarih verdiyse ona dokunulmaz.
+    if (!wasDone || declaresFinish || !task.actualFinish) return patch;
+    return { ...patch, actualFinish: null };
+  }
+
+  if (declaresFinish && patch.actualFinish) return patch;
+  // Zaten tamamlanmış bir görev yeniden `done` yamalanırsa damga korunur;
+  // yalnızca GERÇEK bir geçiş yeni tarih yazar.
+  if (wasDone && !declaresFinish && task.actualFinish) return patch;
 
   const actualFinish = fmtISO(referenceDate);
   const declaredStart = Object.prototype.hasOwnProperty.call(patch, 'actualStart')
     ? patch.actualStart
     : task.actualStart;
-  const candidateStart = declaredStart || task.plannedStart || actualFinish;
+  const candidateStart = declaredStart || actualFinish;
   return {
     ...patch,
     actualStart: candidateStart > actualFinish ? actualFinish : candidateStart,
@@ -569,13 +595,37 @@ export function appStateReducer(state, action) {
   }
 }
 
-function defaultTaskAssignee(state) {
-  if (state.session?.dataMode === 'actual') {
-    const currentUserId = state.currentUser?.id == null ? null : String(state.currentUser.id);
-    if (!currentUserId) return null;
-    return (state.people || []).find((person) => String(person.id) === currentUserId) || state.currentUser;
-  }
-  return state.people?.[0] || null;
+/**
+ * Yeni görevin VARSAYILAN sorumlusu.
+ *
+ * Görev ATAMA kapsamıyla açılan bir projede sunucu, görevin bütün
+ * sorumlularının yöneticinin `MR_V_ExecutiveScope` kapsamında olmasını şart
+ * koşar. Varsayılan olarak oturum sahibini yazmak bu projelerde oluşturma
+ * isteğini panel açılmadan reddettiriyor ve yönetici astını seçemiyordu; bu
+ * yüzden kapsam dışı kalan varsayılan, kapsamdaki ilk çalışanla değiştirilir.
+ * Kullanıcı paneli açar açmaz sorumluyu değiştirebilir.
+ */
+export function defaultTaskAssignee(state, project = null) {
+  const fallback = state.session?.dataMode === 'actual'
+    ? (() => {
+      const currentUserId = state.currentUser?.id == null ? null : String(state.currentUser.id);
+      if (!currentUserId) return null;
+      return (state.people || []).find((person) => String(person.id) === currentUserId) || state.currentUser;
+    })()
+    : (state.people?.[0] || null);
+
+  const assignOnly = Boolean(project?.accessLevel) && project.accessLevel !== 'FULL';
+  const scope = state.assignmentScopeSicils || [];
+  if (!assignOnly || !scope.length) return fallback;
+
+  const scoped = new Set(scope.map(String));
+  if (fallback && scoped.has(String(fallback.id))) return fallback;
+  return (state.people || []).find((person) => scoped.has(String(person.id))) || null;
+}
+
+/** Bu projede oluşturma isteği KABUL EDİLEBİLİR bir sorumluyla gidebilir mi? */
+export function canResolveTaskAssignee(state = {}, project = null) {
+  return Boolean(defaultTaskAssignee(state, project));
 }
 
 /**
@@ -592,7 +642,7 @@ export function createNewTask(state, referenceDate = today(), id = `n-${Date.now
     ? candidates.find((project) => project.id === state.selectedProjectId) || null
     : null;
   const project = explicitProject || selectedProject || state.projects[0] || null;
-  const person = defaultTaskAssignee(state);
+  const person = defaultTaskAssignee(state, project);
   const calendar = resolveProjectCalendar(project, state.calendars);
   const start = moveToWorkingDay(referenceDate, calendar, 1);
   // Görünür ağaç yoksa projenin kök düğümü atama kapsamı kaydından okunur.

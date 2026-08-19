@@ -17,23 +17,35 @@ import { ServerPersistenceError } from '../errors.js';
 /**
  * Kullanıcı bu görevi görüyor mu?
  *
- * Sorgu, anlık görüntüdeki görev görünürlüğüyle aynı üç kaynağı denetler.
+ * Sorgu, anlık görüntüdeki görev görünürlüğüyle AYNI kuralı uygular:
+ *  - kurumsal proje erişimi (FULL),
+ *  - elle verilmiş `MR_ProjectAccess` yetkisi YALNIZCA `FULL`/`READ` ise
+ *    proje geneli görev görünürlüğü sayılır — `PARTIAL` yetki anlık görüntüde
+ *    görev kapsamlıdır ve tek başına başkasının görevine posta göndermeye
+ *    yetmemelidir,
+ *  - görevin kendisine ya da yöneticinin kapsamındaki bir çalışana atanmış
+ *    olması.
+ *
  * Görev atama kapsamı burada YETKİ VERMEZ: yönetici, göremediği bir görevin
  * sorumlularına posta gönderemez.
+ *
+ * Sistem yöneticisi kullanıcı bazlı yetki denetimlerini atlar ama proje ETKİN
+ * olmalıdır: etkin olmayan projeler anlık görüntülerin tamamından dışlanır ve
+ * yöneticinin etkin FULL yetkileri de yalnızca etkin projelerden kurulur.
  */
 export async function assertTaskReminderAccess(executor, actor, taskId) {
-  if (actor.isSystemAdmin) return;
-
   const request = executor.request();
   request.input('taskId', sql.UniqueIdentifier, taskId);
   request.input('sicil', sql.Int, actor.sicil);
+  request.input('isAdmin', sql.Bit, Boolean(actor?.isSystemAdmin));
   const result = await request.query(`
     SELECT TOP (1) t.TaskId
     FROM dbo.MR_Tasks t
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     WHERE t.TaskId = @taskId
       AND (
-        EXISTS (
+        @isAdmin = 1
+        OR EXISTS (
           SELECT 1
           FROM dbo.MR_V_CorporateProjectAccess a
           WHERE a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
@@ -41,6 +53,7 @@ export async function assertTaskReminderAccess(executor, actor, taskId) {
         OR EXISTS (
           SELECT 1 FROM dbo.MR_ProjectAccess pa
           WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+            AND pa.AccessLevel IN ('FULL', 'READ')
         )
         OR EXISTS (
           SELECT 1 FROM dbo.MR_TaskAssignees ta
