@@ -25,7 +25,7 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_AuditLog` | Append-only committed business audit | identity PK; Project/time, actor/time, entity/time and correlation indexes |
 | `MR_CorporateWbsSyncState` | CN43N synchronization fingerprints per corporate project | PK `ProjectCode` (`nvarchar(255)`, same width as `MR_Projects.ProjectCode`); `ContentHash` (SHA-256 hex), `NodeCount`, `SyncedAt` |
 | `MR_ReminderSettings` | Single-row reminder template and automatic policy | PK `SettingsId` with `CHECK (SettingsId = 1)`; rowversion |
-| `MR_TaskReminderLog` | Append-only reminder send history and duplicate-send claim | identity PK; Task/time index; filtered unique `UX_MR_TaskReminderLog_AutomaticSlot` on `(TaskId, SlotKey)` where `SlotKey IS NOT NULL` |
+| `MR_TaskReminderLog` | Append-only reminder send history and duplicate-send claim | identity PK; `IX_MR_TaskReminderLog_Task_Created`; filtered unique `UX_MR_TaskReminderLog_AutomaticSlot` on `(TaskId, SlotKey)` where `ReminderKind = 'AUTOMATIC'` |
 
 ## Rowversion
 
@@ -106,7 +106,9 @@ Normalizes HR02 by Sicil and chooses one deterministic row for duplicate Sicil v
 
 `MR_ReminderSettings` holds exactly one row. The editable e-mail template (`SubjectTemplate`, `BodyTemplate`) and the automatic policy (`AutomaticEnabled`, `WindowValue`, `WindowUnit`, `FrequencyValue`, `FrequencyUnit`) live here — not in `.env.local` — because they are administrator-editable application data, not deployment configuration. Only SMTP connection settings and the scheduler secret are environment variables. The row is seeded with the default Turkish template and `AutomaticEnabled = 0`, so an upgrade never starts sending mail on its own.
 
-`MR_TaskReminderLog` serves two purposes at once. It is the audit history of every attempt (`TaskId`, `Mode` = `manual`/`automatic`, `Status` = `sent`/`failed`, `RecipientCount`, `Recipients` masked, `ErrorMessage`, `SentAt`, `ActorSicil`), and it is the duplicate-send claim: an automatic pass inserts the row carrying the deterministic `SlotKey` *before* dialling SMTP. `UX_MR_TaskReminderLog_AutomaticSlot` makes that insert the mutual-exclusion primitive, so the same slot cannot be claimed twice across restarts or by two application instances racing on the same schedule. A slot whose send later fails stays claimed; the retry happens in the next slot rather than in a tight loop. Manual sends store `SlotKey = NULL` and are therefore never blocked by the index.
+`MR_TaskReminderLog` serves two purposes at once. It is the audit history of every attempt (`ReminderKind` = `MANUAL`/`AUTOMATIC`, `Status` = `PENDING` → `SENT`/`FAILED`, `RecipientCount`, `RecipientDigest`, `FailureCode`, `RequestedBySicil`, `CreatedAt`, `CompletedAt`), and it is the duplicate-send claim: an automatic pass inserts the row carrying the deterministic `SlotKey` as `PENDING` *before* dialling SMTP, then completes it. `UX_MR_TaskReminderLog_AutomaticSlot` makes that insert the mutual-exclusion primitive, so the same slot cannot be claimed twice across restarts or by two application instances racing on the same schedule. A slot whose send later fails stays claimed; the retry happens in the next slot rather than in a tight loop.
+
+The index is filtered on `ReminderKind = 'AUTOMATIC'`, so manual sends are outside it entirely: a user may deliberately send a second reminder for the same task. Manual rows still carry a slot key (`manual:<uuid>`) so every row has a stable identity.
 
 Recipient addresses are stored masked (`a***@example.com`). The authoritative address always remains `DC01_userr.EmailAddress`; nothing copies personnel e-mail into Task records.
 

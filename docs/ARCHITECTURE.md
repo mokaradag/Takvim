@@ -134,7 +134,7 @@ Snapshot loading is deliberately two steps: `refreshCorporateCatalog()` brings t
 
 `reminders/` is the reminder application service. `reminderQueries.js` owns the SQL text, including the recipient chain `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress`; `reminderStore.js` reads/writes the settings row and the send log and masks addresses before they reach any log line; `reminderAccess.js` owns the authorization checks (task access, admin-only settings, the scheduler key compared with `timingSafeEqual`); `reminderService.js` orchestrates the single shared path `deliverTaskReminder()` used by both the manual button and the scheduler, so the two flows can never diverge in recipient resolution, rendering or transport. The send function is injectable, which is how integration tests exercise everything up to the socket.
 
-The scheduler is server-side: `POST /api/mergen-rota/reminders/run` runs one automatic pass and is driven by Windows Task Scheduler or cron. No browser needs to be open. Duplicate sends are prevented by claiming the deterministic slot key in `MR_TaskReminderLog` *before* sending, under a unique filtered index, so restarts and multiple application instances converge on one message per slot.
+The scheduler is server-side: `POST /api/mergen-rota/reminders/run` runs one automatic pass and is driven by Windows Task Scheduler or cron. No browser needs to be open. Duplicate sends are prevented by claiming the deterministic slot key in `MR_TaskReminderLog` *before* sending, under a unique index filtered to automatic sends, so restarts and multiple application instances converge on one message per slot.
 
 ### Presentation and styling ownership
 
