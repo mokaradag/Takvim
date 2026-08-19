@@ -147,6 +147,11 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   assert.match(projectionSource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(\);/);
   // Kurumsal katalog tazelemesi bilinçli olarak serileştirilebilir işlemin dışındadır.
   assert.match(projectionSource, /await baseRepository\.refreshCorporateCatalog\(\);\s*return withSqlTransaction\(/s);
-  assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds\)/);
+  // Tamamlama aynı işlemde ve YETKİ BAĞLAMIYLA çalışır: satır düzeyinde
+  // görünürlük süzgeci olmadan, kısmi anlık görüntünün gizlediği eş sorumlular
+  // geri getiriliyordu.
+  assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds, auth\)/);
+  assert.match(projectionSource, /WHERE @isAdmin = 1/);
+  assert.match(projectionSource, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @sicil AND es\.EmployeeSicil = ta\.Sicil/);
   assert.match(projectionSource, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });

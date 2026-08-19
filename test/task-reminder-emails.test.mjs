@@ -395,7 +395,11 @@ test('elle gönderim ucu istemciden alıcı kabul etmez', () => {
   // Gövde hiç okunmaz: uç açık posta rölesine dönüşemez.
   assert.equal(route.includes('request.json()'), false);
   assert.match(route, /assertTaskReminderAccess\(pool, actor, taskId\)/);
-  assert.match(route, /canonicalActualId\(rawTaskId\)/);
+  // Kimlik sunucuda çözülür; istemci öneki (`task-<uuid>`) de kabul edilir,
+  // çünkü gerçek kipte yeni oluşturulan görevler takma adı korur.
+  assert.match(route, /extractActualId\(rawTaskId\)/);
+  // Yetki, gönderime girecek satır yüklendikten sonra YENİDEN doğrulanır.
+  assert.match(route, /authorize: \(task\) => assertTaskReminderAccess\(pool, actor, task\.id\)/);
   const client = read('src/features/reminders/reminderClient.js');
   assert.match(client, /sendTaskReminderRequest\(taskId\)/);
   // İstemci istek gövdesi göndermez.

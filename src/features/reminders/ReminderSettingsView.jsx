@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Icons } from '../../components/icons';
 import { InfoButton } from '../../components/ui-extras';
 import { DATA_MODES } from '../../data/dataMode.js';
@@ -36,14 +36,41 @@ const PREVIEW_VALUES = Object.freeze(Object.fromEntries(
   REMINDER_PLACEHOLDERS.map((placeholder) => [placeholder.key, placeholder.example])
 ));
 
+/**
+ * Alan sarmalayıcısı.
+ *
+ * Sarmalayıcı bilinçli olarak `<label>` DEĞİLDİR: alanların çoğu birden çok
+ * denetim taşır (aç/kapa düğmeleri, sayı + birim ikilisi, zengin metin yüzeyi).
+ * Örtük `<label>` ilişkilendirmesinde ilk etiketlenebilir öğe (örneğin "Açık"
+ * düğmesi) etiketli denetim sayılıyor ve açıklama metnine tıklamak ayarı
+ * değiştirebiliyordu. Grup, `aria-labelledby` ile adlandırılır; denetimlerin
+ * kendi `aria-label` değerleri korunur.
+ */
 function Field({ label, hint, children }) {
+  const labelId = useId();
   return (
-    <label className="reminder-field">
-      <span className="reminder-field-label">{label}</span>
+    <div className="reminder-field" role="group" aria-labelledby={labelId}>
+      <span className="reminder-field-label" id={labelId}>{label}</span>
       {children}
       {hint && <small className="muted">{hint}</small>}
-    </label>
+    </div>
   );
+}
+
+/** Formu sunucudan gelen KALICI ayarlara eşitler. */
+function formFromSettings(settings) {
+  return {
+    automaticEnabled: Boolean(settings.automaticEnabled),
+    windowValue: settings.windowValue,
+    windowUnit: settings.windowUnit,
+    frequencyValue: settings.frequencyValue,
+    frequencyUnit: settings.frequencyUnit,
+    subject: settings.subject,
+    body: settings.body,
+    // Satır sürümü düzenlemeyle birlikte taşınır: kaydederken geri gönderilir ve
+    // arada başka bir yöneticinin yaptığı değişiklik sessizce ezilmez.
+    rowVersion: settings.rowVersion ?? null
+  };
 }
 
 export function ReminderSettingsView() {
@@ -58,8 +85,12 @@ export function ReminderSettingsView() {
   const [form, setForm] = useState(() => ({
     ...DEFAULT_REMINDER_SETTINGS,
     subject: DEFAULT_REMINDER_SUBJECT,
-    body: DEFAULT_REMINDER_BODY
+    body: DEFAULT_REMINDER_BODY,
+    rowVersion: null
   }));
+  // Son KALICI durum: "Turu şimdi çalıştır" kaydedilmemiş düzenlemeyle
+  // çalıştırılmasın diye formla karşılaştırılır.
+  const [savedForm, setSavedForm] = useState(null);
 
   const load = useCallback(async () => {
     if (!actualMode) return;
@@ -70,15 +101,9 @@ export function ReminderSettingsView() {
       setMessage({ type: 'error', text: response.message });
       return;
     }
-    setForm({
-      automaticEnabled: Boolean(response.settings.automaticEnabled),
-      windowValue: response.settings.windowValue,
-      windowUnit: response.settings.windowUnit,
-      frequencyValue: response.settings.frequencyValue,
-      frequencyUnit: response.settings.frequencyUnit,
-      subject: response.settings.subject,
-      body: response.settings.body
-    });
+    const loaded = formFromSettings(response.settings);
+    setForm(loaded);
+    setSavedForm(loaded);
     setSmtpConfigured(Boolean(response.smtpConfigured));
     setSchemaReady(response.schemaReady !== false);
     setHistory(response.history || []);
@@ -106,27 +131,53 @@ export function ReminderSettingsView() {
       setMessage({ type: 'error', text: response.message });
       return;
     }
+    // Form KAYDEDİLEN değerle değiştirilir. Sunucu konuyu 400 karaktere kırpar
+    // ve gövdeyi temizler; ekranda kalan kaydedilmemiş metin önizlemeyi de
+    // gönderilecek iletiyle uyumsuz gösteriyordu.
+    const persisted = formFromSettings(response.settings);
+    setForm(persisted);
+    setSavedForm(persisted);
     setHistory(response.history || []);
     setSchemaReady(response.schemaReady !== false);
-    setMessage({ type: 'success', text: 'Hatırlatma yapılandırması kaydedildi.' });
+    setMessage({
+      type: 'success',
+      text: response.appliedSubject && response.appliedSubject !== form.subject
+        ? 'Hatırlatma yapılandırması kaydedildi. Konu satırı sunucuda kısaltıldı.'
+        : 'Hatırlatma yapılandırması kaydedildi.'
+    });
   };
 
   const runNow = async () => {
     setBusy(true);
     const response = await runAutomaticRemindersRequest();
     setBusy(false);
-    if (!response.ok) {
+    // `code` yalnızca taşıma/uç hatasında bulunur; tur özeti kendi `ok` alanını
+    // taşıdığı için ikisi ayrı ayrı değerlendirilir.
+    if (response.code) {
       setMessage({ type: 'error', text: response.message });
+      return;
+    }
+    if (response.reason === 'SMTP_NOT_CONFIGURED') {
+      setMessage({
+        type: 'error',
+        text: 'SMTP yapılandırılmadan otomatik tur çalıştırılmaz; hiçbir hatırlatma aralığı tüketilmedi.'
+      });
       return;
     }
     setMessage({
       type: response.enabled ? 'success' : 'warning',
       text: response.enabled
-        ? `Tur tamamlandı: ${response.sent} gönderildi, ${response.skipped} atlandı, ${response.failed} başarısız.`
+        ? `Tur tamamlandı: ${response.sent} gönderildi`
+          + `${response.partial ? ` (${response.partial} kısmi alıcı)` : ''}`
+          + `, ${response.skipped} atlandı, ${response.failed} başarısız.`
         : 'Otomatik hatırlatma kapalı olduğu için tur hiçbir ileti göndermedi.'
     });
     load();
   };
+
+  // Kaydedilmemiş düzenleme varken tur ÇALIŞTIRILMAZ: uç son kayıtlı
+  // yapılandırmayı kullanır ve ekrandaki taslakla gönderim yaptığı sanılırdı.
+  const dirty = Boolean(savedForm) && JSON.stringify(form) !== JSON.stringify(savedForm);
 
   if (!actualMode) {
     return (
@@ -140,7 +191,21 @@ export function ReminderSettingsView() {
     <div className="col reminder-settings-page" style={{ gap: 16 }}>
       {status === 'loading' && <div className="card muted">Yapılandırma yükleniyor…</div>}
 
-      {status !== 'loading' && (
+      {status === 'error' && (
+        // Düzenleyici YÜKLENEMEYEN yapılandırmayla gösterilmez: form hâlâ
+        // varsayılanları taşır ve "Kaydet" gerçek yapılandırmayı bu
+        // varsayılanlarla ezerdi.
+        <div className="card reminder-warning">
+          <Icons.Alert size={14} /> Hatırlatma yapılandırması yüklenemedi. Düzenleme, kayıtlı yapılandırma
+          okunmadan açılmaz.
+          {message?.text && <div className="reminder-message error">{message.text}</div>}
+          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+            <button className="btn primary sm" type="button" onClick={load}>Yeniden dene</button>
+          </div>
+        </div>
+      )}
+
+      {status === 'ready' && (
         <>
           {!smtpConfigured && (
             <div className="card reminder-warning">
@@ -302,9 +367,22 @@ export function ReminderSettingsView() {
               >
                 Varsayılan şablona dön
               </button>
-              <button className="btn" type="button" disabled={busy} onClick={runNow}>
-                <Icons.Clock size={13} /> Turu şimdi çalıştır
+              <button
+                className="btn"
+                type="button"
+                disabled={busy || dirty}
+                title={dirty
+                  ? 'Tur SON KAYDEDİLEN yapılandırmayı kullanır. Önce değişiklikleri kaydedin.'
+                  : 'Tur son kaydedilen yapılandırmayla çalışır.'}
+                onClick={runNow}
+              >
+                <Icons.Clock size={13} /> Turu şimdi çalıştır (kayıtlı ayarlarla)
               </button>
+              {dirty && (
+                <span className="muted" style={{ fontSize: 11, alignSelf: 'center' }}>
+                  Kaydedilmemiş değişiklik var; tur kayıtlı yapılandırmayı kullanır.
+                </span>
+              )}
             </div>
             {message && <div className={`reminder-message ${message.type}`}>{message.text}</div>}
           </section>

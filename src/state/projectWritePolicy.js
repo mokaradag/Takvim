@@ -68,8 +68,11 @@ export function resolveTaskCreationProject(state = {}, requestedProjectId = null
     return findAssignableProject(state, requestedProjectId);
   }
   if (state.workspaceMode === 'project') {
-    const selected = findProject(state.projects, state.selectedProjectId);
-    return canWriteProject(selected) ? selected : null;
+    // Seçili proje GÖREV ATAMA kapsamıyla da yazılabilir olabilir: yönetici,
+    // astına atanmış bir görev üzerinden PARTIAL görünen bir CN43N projesini
+    // açmış olabilir. Yalnızca görünür FULL proje aranırsa "Yeni görev" düğmesi
+    // etkin görünüyor ama oluşturma daha panel açılmadan reddediliyordu.
+    return findAssignableProject(state, state.selectedProjectId);
   }
   return selectable[0] || null;
 }

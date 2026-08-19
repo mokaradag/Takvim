@@ -50,9 +50,18 @@ Görev arayüzü / zamanlayıcı
 - Demo modunda kapalıdır: e-posta yalnızca Gerçek Sistem verisiyle gönderilir.
 
 **Yetki**: kullanıcı görevi **görüyorsa** hatırlatma gönderebilir. Görünürlük
-kuralı anlık görüntüyle aynıdır: tam proje yetkisi, kendi görevi ya da astına
-atanmış görev. Görev atama kapsamı (bkz. `docs/AUTHORIZATION-MODEL.md`) burada
-yetki **vermez**: yönetici, göremediği bir görevin sorumlularına posta gönderemez.
+kuralı anlık görüntüyle aynıdır: tam proje yetkisi (`MR_ProjectAccess` üzerinde
+`FULL`/`READ`), kendi görevi ya da astına atanmış görev. Elle verilmiş bir
+`PARTIAL` proje yetkisi görev kapsamlıdır ve tek başına **başkasının görevine**
+posta göndermeye yetmez. Görev atama kapsamı (bkz. `docs/AUTHORIZATION-MODEL.md`)
+burada yetki **vermez**: yönetici, göremediği bir görevin sorumlularına posta
+gönderemez. Sistem yöneticisi kullanıcı bazlı yetki denetimlerini atlar ama
+projenin **etkin** olması gerekir.
+
+Yetki iki kez denetlenir: istek geldiğinde ve gönderime girecek görev satırı
+yüklendikten sonra. Görev iki sorgu arasında taşınmış ya da yeniden atanmış
+olabilir; eski duruma dayanan bir yetki, artık görülmeyen bir görevin
+sorumlularına posta göndermeye yeterdi.
 
 İstemci **alıcı gönderemez**. Uç istek gövdesini hiç okumaz; alıcılar yalnızca
 görevin kendisinden türetilir. Aksi hâlde uç açık bir posta rölesine dönüşürdü.
@@ -89,6 +98,17 @@ Ele alınan durumlar:
 
 Alıcı adresleri tarayıcıya **taşınmaz**; kalıcı kayda da maskelenerek yazılır
 (`a***@alan.adi`).
+
+Kullanıcıya dönen uyarılar **kimlik taşımaz**: yalnızca sayı ve neden yazılır
+("1 sorumlunun DC01_userr kaydında e-posta adresi yok"). PARTIAL anlık görüntü
+kapsam dışı bir eş sorumluyu bilinçli olarak gizler; ayrıntılı iletiyi geri
+vermek o kimliği yalnızca hatırlatma göndererek öğrenilebilir kılardı.
+Ayrıntılı tanılama sunucuda kalır.
+
+`{{assignees}}` yer tutucusu **bütün** sorumlu satırlarından kurulur: adresi
+çözülemeyen bir sorumlu iletide "görevden sorumlu değil" gibi görünmez. Kısmi
+alıcı çözümü gönderim geçmişine `PARTIAL_RECIPIENTS` olarak yazılır ve otomatik
+tur özetinde ayrıca sayılır.
 
 ---
 
@@ -178,7 +198,12 @@ Kavramlar:
 - **Sıklık**: pencere içindeyken hatırlatmanın ne sıklıkla yineleneceği.
 
 Birim olarak **gün** ve **saat** desteklenir; değer serbestçe girilir (sabit
-bir liste yoktur).
+bir liste yoktur). Pencere en çok **365 gün** (saat biriminde 8760 saat)
+olabilir; daha büyük bir değer bu sınıra **kırpılarak kaydedilir**, böylece
+ekranda görünen plan motorun gerçekte uyguladığı planla aynı kalır.
+
+Sıklık pencereden **uzun** olabilir ve sessizce kısaltılmaz: bu durumda pencere
+içinde tek bir hatırlatma gönderilir ve yönetici ekranı bunu açıkça yazar.
 
 **Varsayılanlar**: otomatik gönderim **kapalı**, pencere **7 gün**, sıklık
 **2 gün**. Kapalı gelmesi bilinçlidir: kurulumdan hemen sonra kimseye habersiz
@@ -194,8 +219,15 @@ bile özellik ilk günden çalışır.
 | 15 Ağustos | 5 gün | 2. hatırlatma |
 | 17 Ağustos | 3 gün | 3. hatırlatma |
 | 19 Ağustos | 1 gün | 4. hatırlatma |
-| 20 Ağustos | 0 | Son hatırlatma (termin günü) |
+| 20 Ağustos | 0 | Son hatırlatma (termin günü, **kendi aralığı**) |
 | 21 Ağustos | — | **Durur** |
+
+Termin günü **kendi aralık anahtarını** taşır (`…|sdue`). Sayısal aralıkla
+paylaşılan bir anahtar kullanılsaydı benzersiz `(TaskId, SlotKey)` kısıtı son
+hatırlatmayı susturur ve gece yarısından sonra çalışan her tur da "termin
+geçti" diye elenirdi. Termin bir **takvim günüdür**: o gün içinde saat kaçta
+çalışılırsa çalışılsın son hatırlatma gönderilebilir, gün bittikten sonra
+gönderim durur.
 
 ### Durma koşulları
 
@@ -205,8 +237,11 @@ Otomatik hatırlatma şu durumlarda **durur**:
 - görev iptal edildi (`cancelled`),
 - görev silindi,
 - görevin termini yok,
-- termin günü geçildi,
-- yönetici otomatik gönderimi kapattı.
+- termin günü geçildi (o gün bittikten sonra),
+- yönetici otomatik gönderimi kapattı — **tur sürerken kapatılsa bile**:
+  yapılandırma her adımda yeniden okunur ve kalan adaylar atlanır,
+- SMTP yapılandırılmamış: bu durumda tur hiçbir aralığı **sahiplenmez**, aksi
+  hâlde tüketilen aralık SMTP sonradan kurulduğunda bir daha gönderilemezdi.
 
 Gecikme (overdue) hatırlatması bu sürümde bilinçli olarak **yoktur**: sınırsız
 gecikme postası göndermek kullanıcıyı hatırlatmalara tümüyle sağırlaştırır.
@@ -219,6 +254,7 @@ Her uygun görev için **determinist bir aralık anahtarı** hesaplanır:
 
 ```text
 <termin> | w<pencere dakika> | f<sıklık dakika> | s<aralık sırası>
+<termin> | w<pencere dakika> | f<sıklık dakika> | sdue      (termin günü)
 ```
 
 Anahtar `MR_TaskReminderLog` üzerindeki benzersiz dizinle (`TaskId`, `SlotKey`,
@@ -232,7 +268,14 @@ Sonuç:
 - birden çok uygulama örneği aynı anda çalışsa bile ikinci ekleme veritabanı
   tarafından reddedilir;
 - başarısız bir aralık sahiplenilmiş kalır: aynı aralıkta sonsuz yeniden
-  deneme yapılmaz, bir sonraki aralıkta yeniden denenir.
+  deneme yapılmaz, bir sonraki aralıkta yeniden denenir;
+- sahiplenilen aralık **her koşulda kapatılır**: beklenmedik bir hata da kaydı
+  `FAILED` yapar, böylece geçmişte kalıcı olarak "Sürüyor" görünen ve sorun
+  giderilse bile bir daha denenemeyen aralık oluşmaz.
+
+Aralık sahiplenildikten sonra görev **yeniden yüklenir ve uygunluğu yeniden
+değerlendirilir**: tur sürerken tamamlanan, iptal edilen ya da termini değişen
+bir görev ileti almaz.
 
 Anahtar termini, pencereyi ve sıklığı da taşır: yönetici ayarları değiştirdiğinde
 (ya da görevin termini kaydığında) yeni bir aralık dizisi başlar ve geçmiş
@@ -262,15 +305,24 @@ SMTP_TIMEOUT_MS=20000
 ```
 
 `SMTP_HOST` ya da `SMTP_FROM` boşsa gönderim kapalıdır: arayüz bunu açıkça
-söyler ve hiçbir zaman "gönderildi" demez.
+söyler ve hiçbir zaman "gönderildi" demez. Değerler **çözümlenebilir** de
+olmalıdır: bozuk bir `SMTP_PORT`/`SMTP_TIMEOUT_MS`/boole değeri genel bir sunucu
+hatasına dönüşmez, `SMTP_CONFIG_INVALID` koduyla ayrıca bildirilir (ortam
+değişkeninin içeriği hata iletisine taşınmaz).
 
 Protokol akışı, kurumda çalıştığı doğrulanmış Python (`smtplib`) uygulamasının
 davranışını birebir yeniden üretir:
 
 ```text
-EHLO → STARTTLS → EHLO → AUTH (LOGIN, gerekirse PLAIN)
+EHLO → STARTTLS → EHLO → AUTH (duyurulan mekanizma)
      → MAIL FROM → RCPT TO → DATA → QUIT
 ```
+
+Çok satırlı EHLO yanıtının **bütün satırları** korunur: yetenekler ara satırlarda
+bildirilebilir. Kimlik doğrulama yöntemi yalnızca **duyurulan** mekanizmalardan
+seçilir — LOGIN varsa LOGIN, yoksa PLAIN; ikisi de yoksa açık bir
+`SMTP_AUTH_UNSUPPORTED` hatası döner. Sunucu hiç AUTH bildirmiyorsa eski LOGIN
+yedeği korunur.
 
 Yalnızca e-posta göndermek için Python çalışma zamanı taşınmaz: aynı protokol
 Node'un `net`/`tls` modülleriyle konuşulur ve **yeni bir paket bağımlılığı
@@ -282,7 +334,14 @@ Güvenlik ve dayanıklılık:
 - bağlantı, TLS, kimlik doğrulama, zaman aşımı ve gönderim hataları ayrı
   kodlarla döner;
 - bağlantı her koşulda (`finally`) serbest bırakılır;
-- başlıklara satır sonu enjekte edilemez, geçersiz alıcı iletiyi hiç kurdurmaz.
+- STARTTLS el sıkışması zaman aşımına uğrarsa bağlantı yıkılır ve hata döner:
+  el sıkışmasında duran bir sunucu sıralı otomatik turu süresiz dondurmaz;
+- başlıklara satır sonu enjekte edilemez, geçersiz alıcı iletiyi hiç kurdurmaz;
+- uzun konu satırı RFC 2047 "encoded-word" dizisine bölünür, `Subject`/`To`/
+  `From` başlıkları RFC 5322 kurallarıyla katlanır; özel karakter taşıyan ASCII
+  görünen ad (örneğin `MERGEN Rota, PMO`) tırnaklanır;
+- sunucu tek bir alıcıyı reddederse gönderim düşmez: kabul edilen alıcılara
+  ileti gider, hiçbiri kabul edilmezse gönderim başarısız olur.
 
 ---
 

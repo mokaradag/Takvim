@@ -119,6 +119,12 @@ export function createFakeDatabase(seed = {}) {
       ActualHours: task.ActualHours ?? null,
       Budget: task.Budget ?? null,
       Spent: task.Spent ?? null,
+      // Tekrar serisi alanları tohumdan da taşınır: seri bağı yalnızca commit
+      // yolundan kurulabilseydi, var olan bir seriyle başlayan senaryolar
+      // (silme sırasında yinelemelerin ayrılması gibi) sınanamazdı.
+      RecurrenceRule: task.RecurrenceRule ?? null,
+      RecurrenceParentTaskId: guid(task.RecurrenceParentTaskId),
+      RecurrenceOccurrenceDate: task.RecurrenceOccurrenceDate ?? null,
       SortOrder: task.SortOrder ?? null,
       RowVersion: nextVersion()
     })),
@@ -168,7 +174,9 @@ export function createFakeDatabase(seed = {}) {
       EmailAddress: entry.EmailAddress ?? null
     })),
     // Hatırlatma yapılandırması ve KALICI gönderim geçmişi.
-    reminderSettings: seed.reminderSettings === null ? null : (seed.reminderSettings || undefined),
+    reminderSettings: seed.reminderSettings === null
+      ? null
+      : (seed.reminderSettings ? { RowVersion: nextVersion(), ...seed.reminderSettings } : undefined),
     taskReminderLog: (seed.taskReminderLog || []).map((entry, index) => ({
       TaskReminderLogId: index + 1,
       TaskId: guid(entry.TaskId),
@@ -269,8 +277,28 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
         && sameGuid(entry.ProjectId, task.ProjectId));
       return readGranted || visibleAssignee(db, task.TaskId, sicil);
     })
-    .map((task) => ({ ...task, AccessLevel: visible.get(guid(task.ProjectId)) }));
-  const assignees = db.taskAssignees.filter((entry) => tasks.some((task) => sameGuid(task.TaskId, entry.TaskId)));
+    .map((task) => ({
+      ...task,
+      AccessLevel: visible.get(guid(task.ProjectId)),
+      // YETKİLİ sorumlu sayısı: görünen satırlarla farkı, gizlenmiş bir eş
+      // sorumlu olduğunu söyler (kimlik taşımaz).
+      AssigneeCount: db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, task.TaskId)).length
+    }));
+  // Sorumlu satırları da süzülür: KISMİ projede yalnızca kullanıcının kendisi
+  // ve kapsamındaki çalışanlar görünür. Süzgeç olmadan kapsam dışı eş sorumlu
+  // istemciye sızıyor ve panelin salt okunur açılma kuralı sınanamıyordu.
+  const assignees = db.taskAssignees.filter((entry) => {
+    const task = tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
+    if (!task) return false;
+    if (task.AccessLevel === 'FULL') return true;
+    const readGranted = db.projectAccess.some((grant) => grant.IsActive
+      && grant.Sicil === sicil
+      && grant.AccessLevel === 'READ'
+      && sameGuid(grant.ProjectId, task.ProjectId));
+    if (readGranted) return true;
+    return entry.Sicil === sicil
+      || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil);
+  });
   const dependencies = db.taskDependencies.filter((entry) => visible.get(guid(entry.ProjectId)) === 'FULL');
   const people = db.people.map((person) => ({ ...person }));
 
@@ -286,9 +314,18 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
         ProjectTypeCode: project.ProjectTypeCode ?? null,
         ProjectTypeName: project.ProjectTypeName ?? null,
         ColorToken: project.ColorToken ?? null,
+        CalendarId: project.CalendarId ?? null,
         RootWbsId: db.wbs.find((node) => sameGuid(node.ProjectId, project.ProjectId) && node.ParentWbsId == null)?.WbsId ?? null
       }))
       .sort((left, right) => String(left.ProjectCode || '').localeCompare(String(right.ProjectCode || '')))
+    : [];
+
+  // Atama kapsamındaki çalışanlar: seçiciler bu kümeyle sınırlanır.
+  const assignmentScope = canAssignAllCorporate
+    ? db.executiveScope
+      .filter((entry) => entry.ManagerSicil === sicil)
+      .map((entry) => ({ EmployeeSicil: entry.EmployeeSicil }))
+      .sort((left, right) => left.EmployeeSicil - right.EmployeeSicil)
     : [];
 
   return [
@@ -302,7 +339,8 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
     db.taskBaselineSnapshots,
     calendarRows(db),
     people,
-    assignable
+    assignable,
+    assignmentScope
   ];
 }
 
@@ -553,7 +591,24 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
     const ids = new Set(String(params.taskIds || '').split(',').map((value) => value.trim().toUpperCase()).filter(Boolean));
-    return result([db.taskAssignees.filter((entry) => ids.has(String(entry.TaskId).toUpperCase()))]);
+    // Tamamlama, anlık görüntüyle AYNI görünürlük kuralına uyar: kapsam dışı eş
+    // sorumlu geri getirilmez.
+    return result([db.taskAssignees.filter((entry) => {
+      if (!ids.has(String(entry.TaskId).toUpperCase())) return false;
+      if (params.isAdmin) return true;
+      const task = db.tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
+      if (!task) return false;
+      const project = projectById(db, task.ProjectId);
+      const corporate = project?.SourceType === 'CORPORATE' && db.corporateProjectAccess
+        .some((row) => row.Sicil === params.sicil
+          && String(row.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase());
+      const granted = db.projectAccess.some((row) => row.IsActive
+        && row.Sicil === params.sicil
+        && ['FULL', 'READ'].includes(row.AccessLevel)
+        && sameGuid(row.ProjectId, task.ProjectId));
+      return corporate || granted || entry.Sicil === params.sicil
+        || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil);
+    })]);
   }
   if (sqlText.includes('SELECT TOP (1) CalendarId') && sqlText.includes('IsDefault = 1 AND IsActive = 1') && !sqlText.includes('@calendarId')) {
     const calendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;
@@ -581,19 +636,18 @@ function runQuery(db, statement, params, { database }) {
   }
 
   /* ── Görev hatırlatma e-postaları ─────────────────────────── */
-  if (sqlText.includes('FROM dbo.MR_ReminderSettings')) {
-    if (db.reminderSchemaMissing) {
-      const error = new Error("Invalid object name 'dbo.MR_ReminderSettings'.");
-      error.number = 208;
-      throw error;
-    }
-    return result([db.reminderSettings ? [db.reminderSettings] : []]);
-  }
+  // Yazma dalı ÖNCE denenir: upsert metni de `FROM dbo.MR_ReminderSettings`
+  // içerdiği için okuma dalı sırada önde olsaydı kaydı sessizce yutardı.
   if (sqlText.includes('UPDATE dbo.MR_ReminderSettings')) {
     if (db.reminderSchemaMissing) {
       const error = new Error("Invalid object name 'dbo.MR_ReminderSettings'.");
       error.number = 208;
       throw error;
+    }
+    // İyimser kilit: satır sürümü verilmişse ve eşleşmiyorsa hiçbir alan yazılmaz.
+    if (db.reminderSettings && params.rowVersion != null
+      && !sameVersion(db.reminderSettings.RowVersion, params.rowVersion)) {
+      return result([[{ AffectedRows: 0 }]]);
     }
     db.reminderSettings = {
       AutomaticEnabled: params.automaticEnabled ? 1 : 0,
@@ -604,9 +658,18 @@ function runQuery(db, statement, params, { database }) {
       SubjectTemplate: params.subjectTemplate,
       BodyTemplate: params.bodyTemplate,
       UpdatedAt: new Date().toISOString(),
-      UpdatedBySicil: params.actorSicil ?? null
+      UpdatedBySicil: params.actorSicil ?? null,
+      RowVersion: nextVersion()
     };
-    return result([[]]);
+    return result([[{ AffectedRows: 1 }]]);
+  }
+  if (sqlText.includes('FROM dbo.MR_ReminderSettings')) {
+    if (db.reminderSchemaMissing) {
+      const error = new Error("Invalid object name 'dbo.MR_ReminderSettings'.");
+      error.number = 208;
+      throw error;
+    }
+    return result([db.reminderSettings ? [db.reminderSettings] : []]);
   }
   if (sqlText.includes('FROM dbo.MR_Tasks t') && sqlText.includes('p.ProjectCode, p.ProjectName') && sqlText.includes('WHERE t.TaskId = @taskId')) {
     const task = db.tasks.find((entry) => sameGuid(entry.TaskId, params.taskId));
@@ -731,6 +794,37 @@ function runQuery(db, statement, params, { database }) {
   }
 
   // Görev atama kapsamı denetimleri.
+  if (sqlText.includes('SELECT TOP (1) ProjectId FROM dbo.MR_Projects WHERE ProjectId = @projectId AND IsActive = 1')) {
+    const project = projectById(db, params.projectId);
+    return result([project && project.IsActive ? [{ ProjectId: project.ProjectId }] : []]);
+  }
+  if (sqlText.includes('SELECT TOP (1) WbsId FROM dbo.MR_WBS')
+    && sqlText.includes('ParentWbsId IS NULL')
+    && sqlText.includes('@projectId')) {
+    const root = db.wbs
+      .filter((node) => sameGuid(node.ProjectId, params.projectId) && node.ParentWbsId == null)
+      .sort((left, right) => (left.SortOrder ?? 0) - (right.SortOrder ?? 0)
+        || String(left.Code || '').localeCompare(String(right.Code || '')))[0];
+    return result([root ? [{ WbsId: root.WbsId }] : []]);
+  }
+  // Silmenin KAPSAM DIŞI görevlere yazıp yazmadığı denetimi.
+  if (sqlText.includes('SELECT TOP (1) related.TaskId')) {
+    const relatedIds = new Set();
+    for (const task of db.tasks) {
+      if (sameGuid(task.RecurrenceParentTaskId, params.taskId)) relatedIds.add(String(task.TaskId).toLowerCase());
+    }
+    for (const dependency of db.taskDependencies || []) {
+      if (sameGuid(dependency.PredecessorTaskId, params.taskId)) relatedIds.add(String(dependency.TaskId).toLowerCase());
+    }
+    relatedIds.delete(String(params.taskId).toLowerCase());
+    const outside = [...relatedIds].find((relatedId) => {
+      const assignees = db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, relatedId));
+      if (!assignees.length) return true;
+      return assignees.some((entry) => !db.executiveScope.some((scope) => scope.ManagerSicil === params.managerSicil
+        && scope.EmployeeSicil === entry.Sicil));
+    });
+    return result([outside ? [{ TaskId: outside }] : []]);
+  }
   if (sqlText.includes("WHERE ProjectId = @projectId AND SourceType = 'CORPORATE' AND IsActive = 1")) {
     const project = projectById(db, params.projectId);
     return result([project && project.SourceType === 'CORPORATE' && project.IsActive
@@ -1033,6 +1127,12 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;')) {
     db.taskDependencies = db.taskDependencies.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
+    db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
+    return result([[]]);
+  }
+  // Tam yetkisi olmayan yazmada bağımlılık satırları KORUNUR; yalnızca
+  // sorumlular yeniden yazılır (bkz. commitTask · fullProjectWrite).
+  if (sqlText.trim() === 'DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;') {
     db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
     return result([[]]);
   }

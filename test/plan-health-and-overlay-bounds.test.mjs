@@ -262,9 +262,17 @@ test('tam ekran kaplar ölçüler ölçekli görünüm değişkenlerini kullanı
     const bareWidth = css.match(/\b(width|max-width|min-width):[^;]*\d+vw/g) || [];
     assert.deepEqual(bareWidth, [], `${file} doğrudan vw kullanmamalı: ${bareWidth.join(', ')}`);
   }
-  // Değişkenin kendisi ölçeğe bölünerek yayımlanır.
+  // Değişkenin kendisi ölçeğe bölünerek yayımlanır. Değer, AppShell öncesi
+  // ekranların da aynı ölçekte boyanabilmesi için açılış betiğiyle ORTAK bir
+  // kaynaktan gelir (bkz. lib/tweaksBootstrap.js).
+  const bootstrap = read('src/lib/tweaksBootstrap.js');
+  assert.match(bootstrap, /viewportWidth: `calc\(100vw \/ \$\{scale\}\)`/);
+  assert.match(bootstrap, /viewportHeight: `calc\(100vh \/ \$\{scale\}\)`/);
+  // Açılış betiği aynı değişkenleri ilk boyamadan önce yazar.
+  assert.match(bootstrap, /r\.setProperty\('--app-viewport-w','calc\(100vw \/ '\+s\+'\)'\)/);
   const tweaks = read('src/hooks/useApplyTweaks.js');
-  assert.match(tweaks, /--app-viewport-w', `calc\(100vw \/ \$\{scale\}\)`/);
+  assert.match(tweaks, /fontScaleStyleForTweaks\(\{ fontScale: tweaks\.fontScale \}\)/);
+  assert.match(tweaks, /setProperty\('--app-viewport-w', viewportWidth\)/);
 });
 
 test('görev paneli alt çubuğu küçülmez ve gövde taşmayı kendi içinde tutar', () => {

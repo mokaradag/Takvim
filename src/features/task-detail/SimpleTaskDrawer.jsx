@@ -1,12 +1,15 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar, StatusIcon } from '../../components/ui';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
+import { findProjectTag, projectTagCatalog } from '../../domain/tags';
+import { ownsSimpleModePlan } from './simpleTaskPlan.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
-import { useAllPeople } from '../../state/hooks';
+import { useAllProjects, useAllPeople, useAssignmentScopeSicils, useTaskActions } from '../../state/hooks';
+import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 /**
  * Basit Mod · Görev düzenleme.
@@ -20,13 +23,76 @@ import { useAllPeople } from '../../state/hooks';
  */
 export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
   const people = useAllPeople();
+  const projects = useAllProjects();
+  const assignmentScopeSicils = useAssignmentScopeSicils();
+  const { cancelTaskFieldUpdates, updateProject } = useTaskActions();
   const [local, setLocal] = useState({ ...task });
+  const [catalogWarning, setCatalogWarning] = useState(null);
+  // Kalıcılaştırılmayan başlık taslağı — Gelişmiş Moddaki TaskDrawer ile aynı
+  // davranış. Sunucu boş başlığı reddettiği için silinmiş metin kuyruğa hiç
+  // girmez; taslak burada tutulmasaydı gelen yeni `task` nesnesi silinen
+  // başlığı geri yazardı.
+  const titleDraftRef = useRef(null);
 
-  useEffect(() => { setLocal({ ...task }); }, [task]);
+  useEffect(() => { titleDraftRef.current = null; }, [task.id]);
+
+  useEffect(() => {
+    setLocal((current) => {
+      const draft = titleDraftRef.current;
+      return draft === null ? { ...task } : { ...task, task: draft };
+    });
+  }, [task]);
+
+  const project = useMemo(
+    () => projects.find((item) => item.id === task.projectId) || null,
+    [projects, task.projectId]
+  );
 
   const save = (patch) => {
     setLocal((current) => ({ ...current, ...patch }));
     onUpdate(task.id, patch);
+  };
+
+  const changeTitle = (value) => {
+    setLocal((current) => ({ ...current, task: value }));
+    if (String(value).trim()) {
+      titleDraftRef.current = null;
+      onUpdate(task.id, { task: value });
+      return;
+    }
+    titleDraftRef.current = value;
+    cancelTaskFieldUpdates?.(task.id, ['task']);
+  };
+
+  /**
+   * Kısa açıklamayı proje etiket KATALOĞUYLA uyumlu kaydeder.
+   *
+   * Serbest metin doğrudan yazıldığında katalogda karşılığı olmayan bir etiket
+   * kalıyor ve katalog tabanlı seçiciler, yeniden adlandırma ile renk yayılımı
+   * bu değeri temsil edemiyordu. Katalog yazması ikincildir: proje üst verisi
+   * yazılamıyorsa (atama kapsamı) görev etiketi yine korunur.
+   */
+  const commitKeyword = async (value) => {
+    const requested = String(value || '').trim();
+    setCatalogWarning(null);
+    if (!requested) {
+      onUpdate(task.id, { keyword: '' });
+      return;
+    }
+    const catalog = projectTagCatalog(project);
+    const existing = findProjectTag(catalog, requested);
+    if (existing) {
+      setLocal((current) => ({ ...current, keyword: existing.name }));
+      onUpdate(task.id, { keyword: existing.name });
+      return;
+    }
+    if (canWriteProject(project)) {
+      const result = await updateProject(project.id, { tags: [...catalog, { name: requested }] });
+      if (!result?.ok) {
+        setCatalogWarning('Etiket proje kataloğuna eklenemedi; görevde saklandı.');
+      }
+    }
+    onUpdate(task.id, { keyword: requested });
   };
 
   const selectedAssignees = useMemo(() => {
@@ -34,10 +100,21 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
     return ids.map((id) => people.find((person) => String(person.id) === id)).filter(Boolean);
   }, [people, local.assigneeIds]);
 
+  // Atama kapsamıyla açılan projede sunucu, sorumluların tamamının yöneticinin
+  // kapsamında olmasını şart koşar; seçici bütün rehberi gösterseydi kapsam dışı
+  // bir kişi seçmek garanti reddedilen bir kayıt üretirdi (Gelişmiş Moddaki
+  // TaskDrawer ile aynı kural).
+  const assignmentScopeOnly = useMemo(() => {
+    if (!assignmentScopeSicils.length) return null;
+    if (project && canWriteProject(project)) return null;
+    return new Set(assignmentScopeSicils.map(String));
+  }, [assignmentScopeSicils, project]);
+
   const personOptions = useMemo(() => {
     const selected = new Set(selectedAssignees.map((person) => String(person.id)));
     return people
       .filter((person) => !selected.has(String(person.id)))
+      .filter((person) => !assignmentScopeOnly || assignmentScopeOnly.has(String(person.id)))
       .slice()
       .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
       .map((person) => ({
@@ -47,7 +124,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
         keywords: [person.name, person.employeeNo, person.username, person.team],
         icon: <Avatar name={person.name} person={person} size="sm" />
       }));
-  }, [people, selectedAssignees]);
+  }, [people, selectedAssignees, assignmentScopeOnly]);
 
   const setAssignees = (ids) => {
     const unique = [...new Set(ids.map((id) => String(id)))];
@@ -79,7 +156,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
             <input
               className="input"
               value={local.task || ''}
-              onChange={(event) => save({ task: event.target.value })}
+              onChange={(event) => changeTitle(event.target.value)}
               placeholder="Yapılacak işi yazın"
             />
           </label>
@@ -89,9 +166,14 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
             <input
               className="input"
               value={local.keyword || ''}
-              onChange={(event) => save({ keyword: event.target.value })}
+              // Yazarken yalnızca yerel taslak güncellenir; katalog eşlemesi ve
+              // kalıcılaştırma alan bırakıldığında yapılır, böylece her tuş
+              // vuruşu proje kataloğuna yazma denemesine dönüşmez.
+              onChange={(event) => setLocal((current) => ({ ...current, keyword: event.target.value }))}
+              onBlur={(event) => commitKeyword(event.target.value)}
               placeholder="Örn. Teklif, Onay, Teslim"
             />
+            {catalogWarning && <small className="muted">{catalogWarning}</small>}
           </label>
 
           <div className="simple-field">
@@ -129,13 +211,18 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
             <span>Termin tarihi</span>
             <DateInput
               value={local.targetFinish || ''}
-              onChange={(value) => save({
-                targetFinish: value || null,
+              onChange={(value) => save(ownsSimpleModePlan(task)
                 // Basit Modda plan ve termin aynı gündür: hızlı görev tanımı da
                 // üç alanı birlikte yazar, iki mod arasında tutarsızlık olmaz.
-                plannedStart: value || local.plannedStart,
-                plannedFinish: value || local.plannedFinish
-              })}
+                ? {
+                  targetFinish: value || null,
+                  plannedStart: value || local.plannedStart,
+                  plannedFinish: value || local.plannedFinish
+                }
+                // Gelişmiş Modda kurulmuş bir plan Basit Moddan EZİLMEZ:
+                // yalnızca terminin düzenlenmesi, görevin Gantt/CPM sonuçlarını
+                // değiştiren gizli planını yok ederdi.
+                : { targetFinish: value || null })}
               allowEmpty
             />
           </label>

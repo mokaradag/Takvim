@@ -9,9 +9,13 @@
  * uygulandığı için mod seçim penceresinin giriş animasyonu her açılışta bir kez
  * görünüyordu.
  *
+ * Yazı ÖLÇEĞİ de aynı nedenle burada uygulanır: yalnızca `useApplyTweaks`
+ * içinde yazıldığında, büyütülmüş yazı seçen kullanıcı bu ekranları %100'de
+ * görüyor ve `AppShell` monte olduğunda ekran bir kez zıplıyordu.
+ *
  * Bu yüzden saklanan tercihler, uygulama paketi çalışmadan ÖNCE gövdeye
  * yazılır. Betik `<head>` içinde engelleyici olarak çalışır; tek yaptığı
- * `localStorage` okuyup sınıf eklemektir.
+ * `localStorage` okuyup sınıf/stil yazmaktır.
  */
 
 export const TWEAKS_STORAGE_KEY = 'mergen_rota_tweaks_v1';
@@ -23,6 +27,18 @@ export function bodyClassesForTweaks(tweaks = {}) {
   if (tweaks.highContrast) classes.push('high-contrast');
   if (tweaks.showEmblem === false) classes.push('no-emblem');
   return classes;
+}
+
+/** Yazı ölçeğinin gövde/kök değişkenleri (bkz. hooks/useApplyTweaks.js). */
+export function fontScaleStyleForTweaks(tweaks = {}) {
+  const scale = Number(tweaks.fontScale) || 1;
+  return {
+    zoom: String(scale),
+    // `zoom` genişliği de ölçekler; görünüm alanı değişkenleri bu yüzden aynı
+    // oranda geri bölünür.
+    viewportHeight: `calc(100vh / ${scale})`,
+    viewportWidth: `calc(100vw / ${scale})`
+  };
 }
 
 /**
@@ -41,4 +57,9 @@ c.toggle('theme-dark',t.theme!=='light');
 c.toggle('reduce-motion',!!t.reduceMotion);
 c.toggle('high-contrast',!!t.highContrast);
 c.toggle('no-emblem',t.showEmblem===false);
+var s=Number(t.fontScale)||1;
+document.body.style.zoom=String(s);
+var r=document.documentElement.style;
+r.setProperty('--app-viewport-h','calc(100vh / '+s+')');
+r.setProperty('--app-viewport-w','calc(100vw / '+s+')');
 }catch(e){}})();`;

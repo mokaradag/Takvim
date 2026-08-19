@@ -70,6 +70,11 @@ export const REMINDER_TASK_SQL = `
  * Kapalı durumlar ve terminsiz görevler SQL'de elenir; pencere/sıklık kararı
  * saf ilke modülünde verilir (bkz. domain/reminders/reminderPolicy.js).
  * Ufuk, en geniş pencere için bile yeterli olacak biçimde gün cinsinden verilir.
+ *
+ * İş günü `@today` PARAMETRESİYLE gelir; `SYSDATETIME()` kullanılsaydı ön eleme
+ * veritabanı sunucusunun saat dilimine, uygunluk kararı ise turu çalıştıran
+ * Node sürecinin saatine göre verilir ve iki taraf farklı saat diliminde
+ * olduğunda uygun bir hatırlatma ilke katmanını hiç görmeden elenirdi.
  */
 export const REMINDER_CANDIDATES_SQL = `
   SELECT t.TaskId, t.ProjectId, t.Title, t.Status, t.TargetFinish
@@ -77,38 +82,57 @@ export const REMINDER_CANDIDATES_SQL = `
   JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
   WHERE t.TargetFinish IS NOT NULL
     AND t.Status NOT IN ('done', 'completed', 'cancelled')
-    AND t.TargetFinish >= CAST(SYSDATETIME() AS date)
-    AND t.TargetFinish <= DATEADD(day, @horizonDays, CAST(SYSDATETIME() AS date))
+    AND t.TargetFinish >= @today
+    AND t.TargetFinish <= DATEADD(day, @horizonDays, @today)
     AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ta WHERE ta.TaskId = t.TaskId)
   ORDER BY t.TargetFinish, t.TaskId;`;
 
 export const REMINDER_SETTINGS_SQL = `
   SELECT TOP (1) AutomaticEnabled, WindowValue, WindowUnit, FrequencyValue, FrequencyUnit,
-    SubjectTemplate, BodyTemplate, UpdatedAt, UpdatedBySicil
+    SubjectTemplate, BodyTemplate, UpdatedAt, UpdatedBySicil, RowVersion
   FROM dbo.MR_ReminderSettings
   WHERE SettingsId = 1;`;
 
+/**
+ * Yapılandırmayı İYİMSER KİLİTLE yazar.
+ *
+ * `@rowVersion` verildiğinde güncelleme yalnızca satır o sürümdeyken uygulanır.
+ * Koşulsuz upsert'te iki yönetici aynı şablonu yükleyip ayrı düzenlemeler
+ * kaydettiğinde ikinci yazma birincisini sessizce siliyordu; artık etkilenen
+ * satır sayısı sıfır dönerek çakışma bildirilir.
+ */
 export const REMINDER_SETTINGS_UPSERT_SQL = `
-  UPDATE dbo.MR_ReminderSettings
-  SET AutomaticEnabled = @automaticEnabled,
-      WindowValue = @windowValue,
-      WindowUnit = @windowUnit,
-      FrequencyValue = @frequencyValue,
-      FrequencyUnit = @frequencyUnit,
-      SubjectTemplate = @subjectTemplate,
-      BodyTemplate = @bodyTemplate,
-      UpdatedAt = SYSUTCDATETIME(),
-      UpdatedBySicil = @actorSicil
-  WHERE SettingsId = 1;
+  DECLARE @affected int = 0;
 
-  IF @@ROWCOUNT = 0
+  IF EXISTS (SELECT 1 FROM dbo.MR_ReminderSettings WHERE SettingsId = 1)
+  BEGIN
+    UPDATE dbo.MR_ReminderSettings
+    SET AutomaticEnabled = @automaticEnabled,
+        WindowValue = @windowValue,
+        WindowUnit = @windowUnit,
+        FrequencyValue = @frequencyValue,
+        FrequencyUnit = @frequencyUnit,
+        SubjectTemplate = @subjectTemplate,
+        BodyTemplate = @bodyTemplate,
+        UpdatedAt = SYSUTCDATETIME(),
+        UpdatedBySicil = @actorSicil
+    WHERE SettingsId = 1
+      AND (@rowVersion IS NULL OR RowVersion = @rowVersion);
+    SET @affected = @@ROWCOUNT;
+  END
+  ELSE
+  BEGIN
     INSERT dbo.MR_ReminderSettings(
       SettingsId, AutomaticEnabled, WindowValue, WindowUnit, FrequencyValue, FrequencyUnit,
       SubjectTemplate, BodyTemplate, UpdatedBySicil
     ) VALUES(
       1, @automaticEnabled, @windowValue, @windowUnit, @frequencyValue, @frequencyUnit,
       @subjectTemplate, @bodyTemplate, @actorSicil
-    );`;
+    );
+    SET @affected = @@ROWCOUNT;
+  END
+
+  SELECT @affected AS AffectedRows;`;
 
 /**
  * Otomatik gönderim aralığını KALICI olarak sahiplenir.

@@ -226,12 +226,17 @@ Ayarlar sayfası tema, yoğunluk, vurgu rengi ve yazı boyutunun yanında şunla
 taşır:
 
 - **Tarih biçimi** — `gg/aa/yyyy` veya `18 Ağu 2026`. Daha önce koda gömülüydü.
+  Tercih gösterilen tarihlerin yanı sıra **düzenlenebilir** tarih kutularını da
+  kapsar; okuma her iki biçimi de kabul eder.
 - **Yüksek karşıtlık** — sınırları ve ikincil metni koyulaştırır; parlak ortamda
   ve açık temada okunabilirliği artırır.
 
 Yazı boyutu ölçeği gövdeye `zoom` uygular. Tam ekran kaplayan her yükseklik bu
 ölçeğe bölünmüş `--app-viewport-h` değişkenini kullanır; aksi hâlde yazı
-büyütüldüğünde panel alt çubuğu ekranın dışına itiliyordu. Açılır listeler,
+büyütüldüğünde panel alt çubuğu ekranın dışına itiliyordu. Ölçek, tema ve
+erişilebilirlik sınıflarıyla birlikte **ilk boyamadan önce** uygulanır
+(`src/lib/tweaksBootstrap.js`): `AppShell` monte olmadan çizilen veri modu ve
+oturum ekranları da doğru ölçekte açılır, yerleşim zıplaması olmaz. Açılır listeler,
 ipuçları ve süzgeç kutuları da ölçeği hesaba katıp görünüm alanına sığdırılır.
 Ayrıntılar: `docs/UI-STYLING-ARCHITECTURE.md`.
 

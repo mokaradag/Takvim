@@ -28,20 +28,108 @@ function needsEncoding(value) {
   return /[^\x20-\x7E]/.test(value);
 }
 
+/**
+ * Tek bir "encoded-word" için sekizlik bütçesi.
+ *
+ * RFC 2047 üst sınırı 75'tir; burada daha DAR tutulur. `Subject: ` gibi en uzun
+ * başlık öneki 9 sekizliktir ve 75'lik bir sözcük eklendiğinde ilk fiziksel
+ * satır RFC 5322'nin önerdiği 78 sekizliği aşıyordu. 63 ile önek + sözcük her
+ * koşulda sınırın altında kalır.
+ */
+const MAX_ENCODED_WORD = 63;
+
+/** RFC 5322 · 2.1.1 önerilen satır sınırı 78 sekizliktir; altında kalınır. */
+const MAX_HEADER_LINE = 76;
+
+const ENCODED_WORD_PREFIX = '=?UTF-8?B?';
+const ENCODED_WORD_SUFFIX = '?=';
+
+/**
+ * Başlığı RFC 2047 base64 "encoded-word" dizisine çevirir.
+ *
+ * Uzun Türkçe konu satırı TEK bir sözcüğe sıkıştırılamaz: 75 sekizliği aşan
+ * encoded-word'ü kimi sunucular reddediyor, kimi istemciler bozuk çözüyor.
+ * Bu yüzden metin, kod noktası bütünlüğü korunarak birden çok sözcüğe bölünür.
+ */
+export function encodeHeaderWords(value) {
+  const clean = sanitizeHeaderValue(value);
+  if (!clean) return [];
+  if (!needsEncoding(clean)) return [clean];
+  // base64 her 3 sekizliği 4 karaktere çevirir; sözcük başına düşen sekizlik
+  // bütçesi buradan gelir.
+  const budget = MAX_ENCODED_WORD - ENCODED_WORD_PREFIX.length - ENCODED_WORD_SUFFIX.length;
+  const maxBytes = Math.floor(budget / 4) * 3;
+  const words = [];
+  let chunk = '';
+  let size = 0;
+  const push = () => {
+    if (!chunk) return;
+    words.push(`${ENCODED_WORD_PREFIX}${Buffer.from(chunk, 'utf8').toString('base64')}${ENCODED_WORD_SUFFIX}`);
+    chunk = '';
+    size = 0;
+  };
+  // `for…of` kod noktalarında ilerler: çok baytlı karakter ikiye bölünmez.
+  for (const char of clean) {
+    const bytes = Buffer.byteLength(char, 'utf8');
+    if (size + bytes > maxBytes) push();
+    chunk += char;
+    size += bytes;
+  }
+  push();
+  return words;
+}
+
 /** Başlığı RFC 2047 base64 "encoded-word" biçimine çevirir (gerekiyorsa). */
 export function encodeHeaderValue(value) {
+  return encodeHeaderWords(value).join(' ');
+}
+
+/**
+ * Başlık satırını RFC 5322 · 2.2.3 katlama kurallarıyla yazar.
+ *
+ * Belirteçler arasına boşluk konur; satır sınırı aşılacaksa CRLF + tek boşluk
+ * ile devam edilir. Katlama olmadan uzun konu ya da kalabalık alıcı listesi
+ * fiziksel satır sınırını aşıyor ve kimi SMTP sunucularınca bozuluyordu.
+ */
+export function foldHeader(name, tokens) {
+  const parts = (Array.isArray(tokens) ? tokens : [tokens])
+    .map((token) => String(token ?? '').trim())
+    .filter(Boolean);
+  if (!parts.length) return `${name}:`;
+  const lines = [];
+  let current = `${name}:`;
+  for (const part of parts) {
+    // Belirteç HİÇBİR koşulda bölünmez; sınırı tek başına aşan bir belirteç
+    // (örneğin çok uzun bir adres) kendi satırında yazılır.
+    if (current !== `${name}:` && current.length + 1 + part.length > MAX_HEADER_LINE) {
+      lines.push(current);
+      current = ' ';
+    }
+    current = current === ' ' ? ` ${part}` : `${current} ${part}`;
+  }
+  lines.push(current);
+  return lines.join('\r\n');
+}
+
+// RFC 5322 · 3.2.3 "specials": tırnaksız bir phrase içinde yer alamazlar.
+// Örneğin `MERGEN Rota, PMO` virgül yüzünden iki posta kutusu gibi ayrıştırılır.
+const ADDRESS_SPECIALS = /[()<>@,;:\\".\[\]]/;
+
+/** Görünen adı gerekiyorsa kodlar, gerekiyorsa tırnaklayıp kaçırır. */
+export function quoteDisplayName(value) {
   const clean = sanitizeHeaderValue(value);
   if (!clean) return '';
-  if (!needsEncoding(clean)) return clean;
-  return `=?UTF-8?B?${Buffer.from(clean, 'utf8').toString('base64')}?=`;
+  if (needsEncoding(clean)) return encodeHeaderValue(clean);
+  if (!ADDRESS_SPECIALS.test(clean)) return clean;
+  return `"${clean.replace(/([\\"])/g, '\\$1')}"`;
 }
 
 /** `Ad <adres>` biçiminde bir gönderici/alıcı başlığı üretir. */
 export function formatAddress(address, displayName = '') {
   const cleanAddress = sanitizeHeaderValue(address);
-  const cleanName = sanitizeHeaderValue(displayName);
+  const cleanName = quoteDisplayName(displayName);
   if (!cleanName) return cleanAddress;
-  return `${encodeHeaderValue(cleanName)} <${cleanAddress}>`;
+  return `${cleanName} <${cleanAddress}>`;
 }
 
 function base64Body(value) {
@@ -78,9 +166,13 @@ export function buildMimeMessage({
 
   const boundary = `----=_MERGENRota_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   const headers = [
-    `From: ${formatAddress(sender, fromName)}`,
-    `To: ${recipients.join(', ')}`,
-    `Subject: ${encodeHeaderValue(subject)}`,
+    foldHeader('From', [formatAddress(sender, fromName)]),
+    // Alıcı listesi katlanır: virgül belirtece bitişik kalır, sınır aşılınca
+    // satır devam eder.
+    foldHeader('To', recipients.map((address, index) => (
+      index < recipients.length - 1 ? `${address},` : address
+    ))),
+    foldHeader('Subject', encodeHeaderWords(subject)),
     `Date: ${date.toUTCString()}`,
     `Message-ID: <${sanitizeHeaderValue(messageId || `${Date.now()}.${Math.random().toString(36).slice(2)}@mergen-rota`)}>`,
     'MIME-Version: 1.0',

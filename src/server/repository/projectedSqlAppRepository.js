@@ -5,16 +5,48 @@ import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRe
 import { applyDefaultCalendarProjection } from './calendarProjection.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 
-async function loadVisibleTaskAssignees(executor, taskIds) {
+/**
+ * Görünür görevlerin sorumluları.
+ *
+ * Tamamlama YALNIZCA zaten yetkilendirilmiş görev kimlikleri için yapılır; buna
+ * ek olarak satır düzeyinde GÖRÜNÜRLÜK kuralı da uygulanır ve kural anlık
+ * görüntüdekiyle birebir aynıdır (bkz. sqlAppRepository · loadSnapshotFrom):
+ * tam proje yetkisi, `READ` bağışı, kişinin kendisi ya da yöneticinin
+ * `MR_V_ExecutiveScope` kapsamı.
+ *
+ * Süzgeç olmadan bu tamamlama, KISMİ anlık görüntünün bilinçli olarak gizlediği
+ * eş sorumluları geri getiriyordu: bir astıyla birlikte kapsam dışı bir
+ * çalışana atanmış görevde, o çalışanın Sicili tarayıcıya sızıyordu.
+ */
+async function loadVisibleTaskAssignees(executor, taskIds, auth) {
   if (!taskIds.length) return [];
 
   const request = executor.request();
   request.input('taskIds', sql.NVarChar(sql.MAX), taskIds.join(','));
+  request.input('sicil', sql.Int, auth?.sicil ?? null);
+  request.input('isAdmin', sql.Bit, Boolean(auth?.isSystemAdmin));
   const result = await request.query(`
     SELECT ta.TaskId, ta.Sicil
     FROM dbo.MR_TaskAssignees ta
     JOIN STRING_SPLIT(@taskIds, ',') visible
       ON ta.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(visible.value)))
+    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+    WHERE @isAdmin = 1
+       OR EXISTS (
+         SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+         WHERE a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+       )
+       OR EXISTS (
+         SELECT 1 FROM dbo.MR_ProjectAccess pa
+         WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+           AND pa.AccessLevel IN ('FULL', 'READ')
+       )
+       OR ta.Sicil = @sicil
+       OR EXISTS (
+         SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+       )
     ORDER BY ta.TaskId, ta.Sicil;
   `);
   return result.recordset || [];
@@ -45,7 +77,7 @@ export function createProjectedSqlAppRepository() {
     return withSqlTransaction(async (transaction) => {
       const { snapshot, auth } = await baseRepository.readSnapshotWithAuthorization();
       const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
-      const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds);
+      const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds, auth);
       const defaultCalendarId = await loadDefaultCalendarId(transaction);
       Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
       return { snapshot: applyTaskAssigneeProjection(snapshot, assigneeRows), auth };

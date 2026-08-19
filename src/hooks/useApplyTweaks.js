@@ -1,5 +1,6 @@
 'use client';
 import { useEffect } from 'react';
+import { fontScaleStyleForTweaks } from '../lib/tweaksBootstrap.js';
 import { setAppDateDisplayFormat } from '../scheduling/dates';
 
 const ACCENT_PRESETS = {
@@ -37,13 +38,17 @@ export function useApplyTweaks(tweaks) {
   }, [tweaks.density]);
 
   useEffect(() => {
-    const scale = Number(tweaks.fontScale) || 1;
-    document.body.style.zoom = String(scale);
+    // Değerler açılış betiğiyle ORTAKTIR (bkz. lib/tweaksBootstrap.js): aynı
+    // ölçek AppShell monte olmadan önceki ekranlarda da uygulanır, böylece
+    // büyütülmüş yazı seçen kullanıcı yerleşim zıplaması görmez.
+    //
     // `zoom` yalnızca yüksekliği değil GENİŞLİĞİ de ölçekler: `100vw` ile
     // sınırlanan panel %125 ölçekte 500 pikselik bir görünüm alanında yaklaşık
     // 625 piksel genişliğinde çiziliyor ve sol kenarı kırpılıyordu.
-    document.documentElement.style.setProperty('--app-viewport-h', `calc(100vh / ${scale})`);
-    document.documentElement.style.setProperty('--app-viewport-w', `calc(100vw / ${scale})`);
+    const { zoom, viewportHeight, viewportWidth } = fontScaleStyleForTweaks({ fontScale: tweaks.fontScale });
+    document.body.style.zoom = zoom;
+    document.documentElement.style.setProperty('--app-viewport-h', viewportHeight);
+    document.documentElement.style.setProperty('--app-viewport-w', viewportWidth);
     return () => {
       document.documentElement.style.removeProperty('--app-viewport-h');
       document.documentElement.style.removeProperty('--app-viewport-w');

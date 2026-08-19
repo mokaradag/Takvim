@@ -63,7 +63,9 @@ export function buildReminderValues(task, { assigneeNames = [], appName = 'MERGE
     assignees: assigneeNames.filter(Boolean).join(', '),
     due_date: formatDate(task?.targetFinish),
     remaining_days: remainingDays == null ? '' : String(remainingDays),
-    remaining_duration: remainingMinutes == null ? '' : describeRemainingDuration(remainingMinutes),
+    // Gün farkı BİRLİKTE verilir: termin günü içindeki gönderim "geçti" diye
+    // anlatılmaz, `remaining_days` ile `remaining_duration` aynı günü söyler.
+    remaining_duration: remainingMinutes == null ? '' : describeRemainingDuration(remainingMinutes, { remainingDays }),
     priority: priority?.label || '',
     status: reminderStatusLabel(task?.status),
     app_name: appName,

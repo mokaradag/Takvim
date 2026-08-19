@@ -128,7 +128,10 @@ export default function AppShell() {
   useEffect(() => {
     if (!simpleMode) return;
     if (workspaceMode !== 'portfolio') selectWorkspace(null);
-    if (!SIMPLE_NAV_IDS.has(view)) navigate('takvim');
+    // Rol kapılı yönetici sayfaları Basit Mod yönlendirmesinden MUAFTIR:
+    // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Basit
+    // Modda diye ulaşılamaz olmamalıdır.
+    if (!SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) navigate('takvim');
   }, [simpleMode, view, workspaceMode, selectWorkspace]);
 
   // Yönetici sayfasında yetki kaybı (oturum tazelenmesi, rol kaldırılması)
@@ -194,7 +197,9 @@ export default function AppShell() {
   }), [tasks.length, wbs.length, projects.length, people.length, workspaceMode]);
 
   const visibleNavItems = (simpleMode
-    ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id))
+    // Yönetici sayfaları Basit Modda da listelenir; aşağıdaki rol süzgeci
+    // bunları yine yalnızca sistem yöneticisine gösterir.
+    ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))
     : NAV_ITEMS
   ).filter((item) => !ADMIN_NAV_IDS.has(item.id) || isSystemAdmin);
 

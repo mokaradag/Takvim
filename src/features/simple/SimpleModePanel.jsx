@@ -10,6 +10,7 @@ import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domai
 import { findProjectTag, projectTagCatalog } from '../../domain/tags';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
+import { canWriteProject } from '../../state/projectWritePolicy.js';
 import { useAllPeople, useAllWbs, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import {
   findProjectRootWbsId,
@@ -180,6 +181,11 @@ export function SimpleModePanel() {
     const tags = projectTagCatalog(project);
     const existing = findProjectTag(tags, requested);
     if (existing) return { ok: true, project, keyword: existing.name };
+    // Atama kapsamıyla açılan projede üst veri YAZILAMAZ ve katalog boştur.
+    // Katalog yazmasını denemek her seferinde reddediliyor, ekranda ZORUNLU
+    // tutulan kısa açıklama da sessizce düşüyordu; bu projelerde etiket
+    // doğrudan görev kaydında saklanır.
+    if (!canWriteProject(project)) return { ok: true, project, keyword: requested, catalogSkipped: true };
     const result = await updateProject(project.id, { tags: [...tags, { name: requested }] });
     if (!result?.ok) return { ok: false, project, keyword: '', error: result?.error };
     return { ok: true, project: result.value || project, keyword: requested };

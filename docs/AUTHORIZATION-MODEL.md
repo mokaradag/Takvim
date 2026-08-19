@@ -73,16 +73,28 @@ Selecting a Project **for a new or reassigned Task** is a different question fro
 
 For an ordinary employee `assignableProjects` is empty: the selector offers exactly their `corporateprojectaccess` Projects, as before. Directors, managers, and team leaders (`isExecutive`, derived from HR02 exactly as executive visibility is — there is no hard-coded user list) receive the **entire active CN43N corporate Project catalog** in `assignableProjects`, so they can assign work to their own personnel under any corporate Project even where they hold no `corporateprojectaccess` of their own. SYSTEM_ADMIN already reaches every Project through precedence.
 
-The widening is deliberately narrow. `assertTaskProjectAccess` (server-side, `sqlAppRepository.js`) permits an assignment-scope write only when *all* of the following hold:
+The widening is deliberately narrow. The server splits the decision into a Project-level check (`assertTaskProjectScope`) and an assignee-level check (`assertAssigneeScope`), and permits an assignment-scope write only when *all* of the following hold:
 
 - the actor has task-assignment scope (`hasTaskAssignmentScope`: SYSTEM_ADMIN or executive);
 - the target Project is an **active corporate** Project;
 - the Task ends up with at least one assignee;
 - **every** assignee — before and after the change — is inside the actor's `MR_V_ExecutiveScope`.
 
-Both the source and the destination of a move are checked, so a Task cannot be dragged out of an executive's scope or into it past someone else's personnel. Assignment scope grants nothing else: no Project metadata writes, no WBS create/rename/move/delete, no access-record changes, no visibility of Tasks belonging to people outside the executive's scope. A manager who assigns a corporate Task still sees only that Task afterwards, through ordinary executive visibility.
+The Project-level check runs **before** assignee Sicils are validated against `MR_V_PeopleDirectory`. Validating people first let an unauthorized caller distinguish a real employee (`FORBIDDEN`) from an unknown one (`invalid employee`) and probe the corporate directory that way.
 
-The client mirrors the same rule (`src/state/projectWritePolicy.js`) purely for usability. A request that skips the UI is judged only by `assertTaskProjectAccess`; `test/task-assignment-scope-e2e.test.mjs` drives the real route bodies to prove it.
+Both the source and the destination of a move are checked, so a Task cannot be dragged out of an executive's scope or into it past someone else's personnel. Assignment scope grants nothing else, and three limits are enforced explicitly because the Task write itself can otherwise reach beyond it:
+
+- **WBS placement.** A non-FULL write cannot choose a WBS node: a new Task is attached to the Project's root node (the only node the assignment-scope record exposes) and an existing Task keeps the node it already has. Arbitrary placement still requires FULL access.
+- **Dependencies.** PARTIAL snapshots do not load `MR_TaskDependencies`, so the client holds `deps: []`. A non-FULL write therefore leaves existing dependency rows untouched instead of replacing them, and an explicit dependency edit from such a caller is rejected — otherwise editing a title would silently erase predecessors the manager was never allowed to see.
+- **Cascading deletes.** Deleting a Task also detaches its recurrence occurrences and clears dependency rows where it is the predecessor. Those related Tasks can be invisible and assigned outside the actor's scope, so a non-FULL delete is rejected when any related Task falls outside `MR_V_ExecutiveScope`.
+
+Creating a recurrence occurrence under a template is checked the same way: for a non-FULL write the **template's authoritative assignees** must also be in scope, so series generation cannot silently drop a co-assignee the PARTIAL snapshot hid.
+
+SYSTEM_ADMIN skips the per-user grant checks but still cannot write a Task into an **inactive** Project: effective FULL grants are themselves built only from active Projects, and a Task moved into an inactive Project would disappear from every snapshot.
+
+A manager who assigns a corporate Task still sees only that Task afterwards, through ordinary executive visibility.
+
+The client mirrors the same rule (`src/state/projectWritePolicy.js`) purely for usability. To mirror it faithfully the snapshot also returns `assignmentScopeSicils` — the employees the executive may assign — so the assignee pickers in both modes offer only people the server will accept, and the Task drawer opens read-only when a visible Task has assignees the snapshot hid (compared by count, never by identity). A request that skips the UI is judged only by the server checks; `test/task-assignment-scope-e2e.test.mjs` and `test/assignment-scope-write-boundary.test.mjs` drive the real route bodies to prove it.
 
 ## Assignee visibility
 
@@ -111,7 +123,7 @@ Visible Projects are the union of:
 - active MR_ProjectAccess grants;
 - Projects containing own or subordinate-assigned visible Tasks.
 
-`assignableProjects` is returned beside — never inside — this union, so widening Task selection for executives cannot widen what anyone sees.
+`assignableProjects` is returned beside — never inside — this union, so widening Task selection for executives cannot widen what anyone sees. The people directory is widened by exactly one rule: when task-assignment scope is on, the executive's own `MR_V_ExecutiveScope` employees are included. Without it an executive holding no visible FULL Project could not find the very subordinate the rule exists to let them assign. Task, WBS, and Project visibility remain untouched by that flag.
 
 FULL Project snapshots include the complete Task network, WBS, dependencies, baselines, and scheduling context. PARTIAL snapshots include only authorized Tasks and necessary Project/WBS context. Deny-by-default prevents unrelated A01 catalog Projects from appearing for ordinary employees.
 

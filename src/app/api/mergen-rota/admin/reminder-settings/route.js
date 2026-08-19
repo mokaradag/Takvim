@@ -33,7 +33,10 @@ function settingsResponse(settings, history) {
       subject: settings.subject,
       body: settings.body,
       updatedAt: settings.updatedAt,
-      updatedBySicil: settings.updatedBySicil
+      updatedBySicil: settings.updatedBySicil,
+      // Satır sürümü düzenleyiciye kadar taşınır ve kaydederken geri gelir:
+      // iki yöneticinin aynı şablonu ayrı ayrı kaydetmesi sessiz kayıp üretmez.
+      rowVersion: settings.rowVersion ?? null
     },
     summary: describeReminderSchedule(settings),
     placeholders: REMINDER_PLACEHOLDERS,

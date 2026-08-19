@@ -177,23 +177,51 @@ test('tamamlanmaya geçiş gerçekleşen başlangıcı ve bitişi damgalar', () 
   const state = {
     tasks: [
       { id: 'a', status: 'todo', plannedStart: '2026-08-10', actualStart: null, actualFinish: null },
-      { id: 'b', status: 'todo', plannedStart: '2026-08-25', actualStart: null, actualFinish: null },
-      { id: 'c', status: 'in_progress', actualStart: '2026-08-01', actualFinish: '2026-08-05' }
+      { id: 'b', status: 'todo', plannedStart: '2026-08-25', actualStart: '2026-08-25', actualFinish: null },
+      { id: 'c', status: 'done', actualStart: '2026-08-01', actualFinish: '2026-08-05' }
     ]
   };
   const reference = new Date(2026, 7, 19);
 
   const stamped = withCompletionStamp(state, 'a', { status: 'done' }, reference);
   assert.equal(stamped.actualFinish, '2026-08-19');
-  assert.equal(stamped.actualStart, '2026-08-10');
+  // PLAN tarihi gerçekmiş gibi yazılmaz: ocağa planlanıp bugün yapılan iş
+  // "ocakta başlamış" diye kaydedilirdi. Gerçek başlangıç bilinmiyorsa
+  // tamamlanma günü kullanılır.
+  assert.equal(stamped.actualStart, '2026-08-19');
 
-  // Planlanan başlangıç bugünden sonraysa gerçekleşen başlangıç bitişi geçemez.
+  // Gerçekleşen başlangıç bugünden sonraysa bitişi geçemez.
   assert.equal(withCompletionStamp(state, 'b', { status: 'done' }, reference).actualStart, '2026-08-19');
 
-  // Zaten gerçekleşen bitişi olan görev DEĞİŞTİRİLMEZ.
+  // Zaten tamamlanmış görev yeniden `done` yamalanırsa damga DEĞİŞTİRİLMEZ.
   assert.deepEqual(withCompletionStamp(state, 'c', { status: 'done' }, reference), { status: 'done' });
   // Durum yaması olmayan güncelleme dokunulmadan geçer.
   assert.deepEqual(withCompletionStamp(state, 'a', { progress: 40 }, reference), { progress: 40 });
+});
+
+test('yeniden açılan görevin tamamlanma damgası düşer ve ikinci tamamlanma yeniden damgalanır', () => {
+  const completed = {
+    tasks: [{ id: 'c', status: 'done', actualStart: '2026-08-10', actualFinish: '2026-08-10' }]
+  };
+  // `done` dışına çıkış: eski damga kalırsa tamamlanma eğrisi ve velocity işi
+  // ilk bitirilme gününe yazmaya devam ederdi.
+  const reopened = withCompletionStamp(completed, 'c', { status: 'in_progress' }, new Date(2026, 7, 11));
+  assert.equal(reopened.actualFinish, null);
+  assert.equal(reopened.status, 'in_progress');
+
+  // Yeniden açılmış görev tekrar tamamlanınca YENİ tarih damgalanır.
+  const reopenedState = {
+    tasks: [{ id: 'c', status: 'in_progress', actualStart: '2026-08-10', actualFinish: '2026-08-10' }]
+  };
+  const recompleted = withCompletionStamp(reopenedState, 'c', { status: 'done' }, new Date(2026, 7, 14));
+  assert.equal(recompleted.actualFinish, '2026-08-14');
+  assert.equal(recompleted.actualStart, '2026-08-10');
+
+  // Kullanıcının açıkça verdiği tarih korunur.
+  assert.equal(
+    withCompletionStamp(reopenedState, 'c', { status: 'done', actualFinish: '2026-08-13' }, new Date(2026, 7, 14)).actualFinish,
+    '2026-08-13'
+  );
 });
 
 /* ── 6. İş dağılım ağacı sürükleme durumu ───────────────────────── */

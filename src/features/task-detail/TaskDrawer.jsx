@@ -37,6 +37,7 @@ import {
   useAllProjects,
   useAllWbs,
   useAssignmentScopeProjects,
+  useAssignmentScopeSicils,
   useCalendars,
   useTaskActions,
   useTaskPrimaryBaseline
@@ -90,6 +91,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const calendars = useCalendars();
   const allWbs = useAllWbs();
   const assignmentScopeProjects = useAssignmentScopeProjects();
+  const assignmentScopeSicils = useAssignmentScopeSicils();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
   const { generateTaskSeries, cancelTaskFieldUpdates, updateTask } = useTaskActions();
   // Üretilmiş yinelemelerin DEĞİŞMEZ seri kimlikleri. Sayı tek başına yetmez:
@@ -193,6 +195,18 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     return records;
   }, [people, local.assigneeIds, local.sorumlu]);
 
+  // Görev ATAMA kapsamıyla açılan projede sunucu, sorumluların tamamının
+  // yöneticinin kapsamında olmasını şart koşar. Seçici bütün rehberi
+  // gösterseydi (yöneticinin bir FULL projesi varsa rehber eksiksiz gelir),
+  // kapsam dışı bir kişi seçmek garanti reddedilen bir kayıt üretirdi.
+  const assignmentScopeOnly = useMemo(() => {
+    if (!assignmentScopeSicils.length || !local.projectId) return null;
+    const writable = projects.find((project) => project.id === local.projectId);
+    const isAssignOnly = !writable || (writable.accessLevel && writable.accessLevel !== 'FULL');
+    if (!isAssignOnly) return null;
+    return new Set(assignmentScopeSicils.map(String));
+  }, [assignmentScopeSicils, local.projectId, projects]);
+
   const personOptions = useMemo(() => {
     const selectedIds = new Set(selectedAssignees.map((record) => String(record.id)));
     // Yalnızca Sicil kimliğiyle eşleşmeyen (eski ad tabanlı) kayıtlar için ad
@@ -201,6 +215,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     const legacyNames = new Set(selectedAssignees.filter((record) => !record.person).map((record) => record.name));
     return people
       .filter((person) => !selectedIds.has(String(person.id)) && !legacyNames.has(person.name))
+      .filter((person) => !assignmentScopeOnly || assignmentScopeOnly.has(String(person.id)))
       .slice()
       .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
       .map((person) => ({
@@ -211,7 +226,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
         keywords: [person.name, person.employeeNo, person.username, person.role, person.team],
         icon: <Avatar name={person.name} person={person} size="sm" />
       }));
-  }, [people, selectedAssignees]);
+  }, [people, selectedAssignees, assignmentScopeOnly]);
 
   const save = (patch) => {
     const next = { ...local, ...patch };
@@ -643,7 +658,8 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
     // RFC 5545, `DTSTART` kuralla senkron değilken yineleme kümesini tanımsız
     // sayar. Kullanıcı şablonun gününü kural dışında bıraktığında başlangıç
     // kuralın ilk yinelemesine taşınır; plan ve termin aynı farkla kayar.
-    const alignment = planTemplateStartAlignment(task, next);
+    // Takvim verilir: bitiş, çalışma günü süresi korunarak yeniden hesaplanır.
+    const alignment = planTemplateStartAlignment(task, next, { calendar });
     if (alignment) {
       const { shiftDays, ...dates } = alignment;
       setMessage({
@@ -683,7 +699,15 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
     occurrence.occurrenceDate !== templateOccurrence
     && !(occurrenceDates?.has?.(occurrence.occurrenceDate))
   )).length;
-  const nextBatch = Math.min(pendingOccurrences, TASK_SERIES_BATCH_LIMIT);
+  // Sınırsız ve kesilmiş planda `plan.occurrences` yalnızca ÖNİZLEME
+  // penceresidir (bkz. summarizeRecurrencePlan · boundedLimit). Kalan sayı bu
+  // örnekten türetilseydi süresiz bir seri "en fazla 7 kaldı" der, önizlenen
+  // günler üretilince de "oluşturulacak yineleme yok" derdi — oysa üretim
+  // sonraki toplu partileri açmayı sürdürür.
+  const pendingUnknown = plan.unbounded || plan.truncated;
+  const nextBatch = pendingUnknown
+    ? TASK_SERIES_BATCH_LIMIT
+    : Math.min(pendingOccurrences, TASK_SERIES_BATCH_LIMIT);
 
   const generate = async () => {
     setBusy(true);
@@ -884,9 +908,11 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
                       </>
                     )}
                 {occurrenceCount > 0 && <> Şu ana kadar <strong>{occurrenceCount}</strong> yineleme oluşturuldu.</>}
-                {pendingOccurrences > 0
-                  ? <> Sırada <strong>{pendingOccurrences}</strong> yineleme var; bu işlemde en fazla <strong>{nextBatch}</strong> görev oluşturulur.</>
-                  : <> Oluşturulacak yeni yineleme yok.</>}
+                {pendingUnknown
+                  ? <> Seri sürdüğü için kalan yineleme sayısı bilinmiyor; bu işlemde en fazla <strong>{nextBatch}</strong> görev oluşturulur.</>
+                  : pendingOccurrences > 0
+                    ? <> Sırada <strong>{pendingOccurrences}</strong> yineleme var; bu işlemde en fazla <strong>{nextBatch}</strong> görev oluşturulur.</>
+                    : <> Oluşturulacak yeni yineleme yok.</>}
               </span>
             </div>
           )}
@@ -1109,7 +1135,23 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
     // Taslak ÖNCE yazılır: bir sonraki düzenleme yetkili yanıtı beklemeden bu
     // kenarın üstüne birleşir.
     setSuccessorDrafts((current) => new Map(current).set(plan.successorId, plan.patch.deps));
-    onUpdateTask?.(plan.successorId, plan.patch);
+    // Yazma sonucu İZLENİR. Reddedilen bir yamada kanonik kayıt taslağa hiç
+    // yaklaşmaz; temizleme etkisi taslağı düşüremez, panel hiç kaydedilmemiş
+    // bir bağı gösterir ve döngü doğrulaması o hayalet kenara göre çalışırdı.
+    const dropDraft = () => setSuccessorDrafts((current) => {
+      if (!current.has(plan.successorId)) return current;
+      const next = new Map(current);
+      next.delete(plan.successorId);
+      return next;
+    });
+    Promise.resolve(onUpdateTask?.(plan.successorId, plan.patch)).then((saveResult) => {
+      if (!saveResult || saveResult.ok !== false) return;
+      dropDraft();
+      setLinkError(saveResult.error?.message || 'Ardıl bağı kaydedilemedi.');
+    }).catch(() => {
+      dropDraft();
+      setLinkError('Ardıl bağı kaydedilemedi.');
+    });
   };
 
   const addSuccessor = (successorId) => applySuccessorPlan(planSuccessorLink(task, successorId, graph, { type: successorType }));

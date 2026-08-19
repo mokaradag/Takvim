@@ -69,8 +69,40 @@ export function resolveReminderRecipients(rows = []) {
   return { recipients, resolved, problems };
 }
 
-/** Alıcı bulunamadığında kullanıcıya gösterilecek açıklayıcı ileti. */
+const PROBLEM_SUMMARY_LABELS = Object.freeze({
+  NO_USERNAME: 'sorumlunun kurumsal kullanıcı adı tanımlı değil',
+  NO_EMAIL: 'sorumlunun DC01_userr kaydında e-posta adresi yok',
+  INVALID_EMAIL: 'sorumlunun e-posta adresi geçerli değil'
+});
+
+/**
+ * Tarayıcıya dönecek KAPSAM GÜVENLİ uyarılar.
+ *
+ * Her sorunun ayrıntılı `message` alanı sorumlunun adını/kullanıcı adını taşır.
+ * PARTIAL anlık görüntü, kapsam dışındaki bir eş sorumluyu bilinçli olarak
+ * gizler; hatırlatma yanıtında ham iletiyi geri vermek, o kimliği yalnızca posta
+ * göndererek öğrenilebilir kılardı. Bu yüzden istemciye SAYI ve NEDEN gider,
+ * ayrıntı sunucuda kalır.
+ *
+ * @returns {string[]}
+ */
+export function summarizeRecipientProblems(problems = []) {
+  const counts = new Map();
+  for (const problem of problems || []) {
+    const code = problem?.code || 'UNKNOWN';
+    counts.set(code, (counts.get(code) || 0) + 1);
+  }
+  return [...counts.entries()].map(([code, count]) => (
+    `${count} ${PROBLEM_SUMMARY_LABELS[code] || 'sorumluya hatırlatma iletilemedi'}.`
+  ));
+}
+
+/**
+ * Alıcı bulunamadığında kullanıcıya gösterilecek açıklayıcı ileti.
+ *
+ * İleti KİMLİK TAŞIMAZ (bkz. `summarizeRecipientProblems`).
+ */
 export function describeRecipientProblems(problems = []) {
   if (!problems.length) return 'Görevin sorumlusu bulunmuyor; hatırlatma gönderilecek kimse yok.';
-  return `Hatırlatma gönderilemedi. ${problems.map((problem) => problem.message).join(' ')}`;
+  return `Hatırlatma gönderilemedi. ${summarizeRecipientProblems(problems).join(' ')}`;
 }

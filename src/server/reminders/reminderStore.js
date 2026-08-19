@@ -8,6 +8,7 @@ import {
 } from '../../domain/reminders/reminderTemplate.js';
 import { DEFAULT_REMINDER_SETTINGS, normalizeReminderSettings } from '../../domain/reminders/reminderPolicy.js';
 import { sql } from '../db/pool.js';
+import { ServerPersistenceError } from '../errors.js';
 import {
   REMINDER_CANDIDATES_SQL,
   REMINDER_CLAIM_SQL,
@@ -58,6 +59,7 @@ export async function loadReminderSettings(executor) {
       body: DEFAULT_REMINDER_BODY,
       updatedAt: null,
       updatedBySicil: null,
+      rowVersion: null,
       schemaReady: false
     };
   }
@@ -78,11 +80,36 @@ export async function loadReminderSettings(executor) {
     body: sanitizeReminderHtml(row?.BodyTemplate || DEFAULT_REMINDER_BODY),
     updatedAt: row?.UpdatedAt ? new Date(row.UpdatedAt).toISOString() : null,
     updatedBySicil: row?.UpdatedBySicil == null ? null : Number(row.UpdatedBySicil),
+    // Satır sürümü İSTEMCİYE kadar taşınır: yönetici ekranı düzenlediği sürümü
+    // geri gönderir ve arada yapılan başka bir kayıt sessizce ezilmez.
+    rowVersion: encodeRowVersion(row?.RowVersion),
     schemaReady: true
   };
 }
 
-/** Ayarları yazar. Şablon gövdesi yazmadan ÖNCE temizlenir. */
+/** `rowversion` ikili değerini taşınabilir onaltılık metne çevirir. */
+export function encodeRowVersion(value) {
+  if (value == null) return null;
+  if (Buffer.isBuffer(value)) return `0x${value.toString('hex').toUpperCase()}`;
+  const text = String(value).trim();
+  return /^0x[0-9a-f]+$/i.test(text) ? text.toUpperCase() : null;
+}
+
+/** Onaltılık satır sürümünü SQL parametresi için ikiliye çevirir. */
+export function decodeRowVersion(value) {
+  if (value == null || value === '') return null;
+  if (Buffer.isBuffer(value)) return value;
+  const text = String(value).trim();
+  if (!/^0x[0-9a-f]+$/i.test(text)) return null;
+  return Buffer.from(text.slice(2), 'hex');
+}
+
+/**
+ * Ayarları yazar. Şablon gövdesi yazmadan ÖNCE temizlenir.
+ *
+ * `input.rowVersion` verildiğinde yazma İYİMSER KİLİTLİDİR: satır arada
+ * değiştiyse hiçbir alan güncellenmez ve çakışma bildirilir.
+ */
 export async function saveReminderSettings(executor, actorSicil, input = {}) {
   const settings = normalizeReminderSettings(input);
   const subject = String(input.subject || DEFAULT_REMINDER_SUBJECT).replace(/[\r\n]+/g, ' ').trim().slice(0, 400);
@@ -97,7 +124,17 @@ export async function saveReminderSettings(executor, actorSicil, input = {}) {
   request.input('subjectTemplate', sql.NVarChar(400), subject);
   request.input('bodyTemplate', sql.NVarChar(sql.MAX), body);
   request.input('actorSicil', sql.Int, actorSicil);
-  await request.query(REMINDER_SETTINGS_UPSERT_SQL);
+  request.input('rowVersion', sql.VarBinary(8), decodeRowVersion(input.rowVersion));
+  const result = await request.query(REMINDER_SETTINGS_UPSERT_SQL);
+
+  const affected = Number(result?.recordset?.[0]?.AffectedRows ?? 1);
+  if (!affected) {
+    throw new ServerPersistenceError(
+      'VERSION_CONFLICT',
+      'Hatırlatma yapılandırması başka bir yönetici tarafından güncellendi. Sayfayı yenileyip değişikliğinizi yeniden uygulayın.',
+      { status: 409 }
+    );
+  }
 
   return { ...settings, subject, body };
 }
@@ -138,10 +175,22 @@ export async function loadReminderRecipientRows(executor, taskId) {
   }));
 }
 
-/** Otomatik gönderim adayları (kapalı ve terminsiz görevler zaten elenir). */
-export async function loadReminderCandidates(executor, horizonDays) {
+/** Turu çalıştıran sürecin İŞ GÜNÜ (yerel takvim günü). */
+export function workerBusinessDate(now = new Date()) {
+  const reference = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+  return `${reference.getFullYear()}-${String(reference.getMonth() + 1).padStart(2, '0')}-${String(reference.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Otomatik gönderim adayları (kapalı ve terminsiz görevler zaten elenir).
+ *
+ * İş günü, uygunluğu değerlendiren süreçten gelir; ön eleme ile ilke katmanı
+ * böylece AYNI saati kullanır (bkz. REMINDER_CANDIDATES_SQL).
+ */
+export async function loadReminderCandidates(executor, horizonDays, now = new Date()) {
   const request = executor.request();
   request.input('horizonDays', sql.Int, Math.max(1, Math.min(Number(horizonDays) || 7, 365)));
+  request.input('today', sql.Date, workerBusinessDate(now));
   const result = await request.query(REMINDER_CANDIDATES_SQL);
   return (result.recordset || []).map((row) => ({
     id: id(row.TaskId),

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icons } from '../../components/icons';
 import { DATA_MODES } from '../../data/dataMode.js';
 import { useDataMode } from '../../components/shell/DataModeContext.jsx';
+import { useTaskActions } from '../../state/hooks';
 import { sendTaskReminderRequest } from './reminderClient.js';
 
 /**
@@ -16,14 +17,25 @@ import { sendTaskReminderRequest } from './reminderClient.js';
  *    iyimser bir "gönderildi" göstermez.
  *  - Eylem yalnızca posta gönderir; görevi hiçbir biçimde değiştirmez ya da
  *    silmez (satır tıklamasını da yutar).
+ *  - Bekleyen görev düzenlemeleri ÖNCE kalıcılaştırılır: sunucu görevi ve
+ *    sorumlularını SQL'den yeniden okur, kuyrukta bekleyen bir termin/sorumlu
+ *    değişikliği boşaltılmasaydı ileti eski veriyle ve eski alıcılara giderdi.
  */
 export function TaskReminderButton({ task, size = 26, onResult = null }) {
   const { dataMode } = useDataMode();
+  const { flushTaskEdits } = useTaskActions();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const mountedRef = useRef(true);
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // StrictMode geliştirmede etkileri kur → söküp → yeniden kur biçiminde
+  // çalıştırır. Bayrak yalnızca sökümde değiştirilseydi ikinci kurulumdan sonra
+  // `false` kalır, yanıt geldiğinde durum hiç güncellenmez ve düğme sonsuza dek
+  // "gönderiliyor" görünürdü.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   useEffect(() => {
     if (!result) return undefined;
     const timer = setTimeout(() => { if (mountedRef.current) setResult(null); }, 6000);
@@ -39,6 +51,20 @@ export function TaskReminderButton({ task, size = 26, onResult = null }) {
     if (disabled) return;
     setBusy(true);
     setResult(null);
+    // Kuyruk boşaltılamazsa gönderim YAPILMAZ: eski veriyle posta atmaktansa
+    // kullanıcıya kaydedilemeyen düzenleme olduğunu söylemek doğrudur.
+    const flushed = await flushTaskEdits?.(task.id);
+    if (flushed && flushed.ok === false) {
+      if (!mountedRef.current) return;
+      setBusy(false);
+      const failure = {
+        type: 'error',
+        text: 'Görevdeki değişiklikler kaydedilemedi; hatırlatma gönderilmedi.'
+      };
+      setResult(failure);
+      onResult?.(failure);
+      return;
+    }
     const response = await sendTaskReminderRequest(task.id);
     if (!mountedRef.current) return;
     setBusy(false);

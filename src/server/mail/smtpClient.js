@@ -34,6 +34,9 @@ export class SmtpError extends Error {
 
 export function createSmtpDialogue(socket, timeoutMs) {
   let buffer = '';
+  // Çok satırlı yanıtın biriken satırları: ARA satırlar da yetenek taşır ve
+  // atılırsa AUTH duyurusu görünmez olur.
+  let pending = [];
   const waiters = [];
 
   const flush = () => {
@@ -44,9 +47,15 @@ export function createSmtpDialogue(socket, timeoutMs) {
       const line = buffer.slice(0, index);
       buffer = buffer.slice(index + 2);
       const match = /^(\d{3})([ -])?(.*)$/.exec(line);
-      if (match && match[2] !== '-') {
-        const waiter = waiters.shift();
-        if (waiter) waiter.resolve({ code: Number(match[1]), text: line });
+      if (match) {
+        pending.push(line);
+        if (match[2] !== '-') {
+          const lines = pending;
+          pending = [];
+          const waiter = waiters.shift();
+          // `text` yanıtın TAMAMIDIR; `lastLine` yalnızca kapanış satırı.
+          if (waiter) waiter.resolve({ code: Number(match[1]), text: lines.join('\n'), lines, lastLine: line });
+        }
       }
       index = buffer.indexOf('\r\n');
     }
@@ -106,14 +115,36 @@ function connect({ host, port, timeoutMs }) {
 
 function upgradeToTls(socket, { host, rejectUnauthorized, timeoutMs }) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    // STARTTLS'i kabul edip el sıkışmasında duran sunucu, zaman aşımı
+    // bağlanmadığında `sendSmtpMail`i süresiz askıda bırakıyordu; otomatik tur
+    // sıralı çalıştığı için tek bağlantı bütün turu dondurabiliyordu.
+    const cleanup = () => {
+      settled = true;
+      secure.removeListener('error', onError);
+      secure.removeListener('timeout', onTimeout);
+    };
+    const onError = (error) => {
+      if (settled) return;
+      cleanup();
+      secure.destroy();
+      reject(new SmtpError('SMTP_TLS_FAILED', 'STARTTLS el sıkışması tamamlanamadı.', { cause: error }));
+    };
+    const onTimeout = () => {
+      if (settled) return;
+      cleanup();
+      secure.destroy();
+      reject(new SmtpError('SMTP_TIMEOUT', 'STARTTLS el sıkışması zamanında tamamlanmadı.'));
+    };
     const secure = tls.connect({ socket, servername: host, rejectUnauthorized }, () => {
+      if (settled) return;
+      cleanup();
       secure.setTimeout(0);
       resolve(secure);
     });
     secure.setTimeout(timeoutMs);
-    secure.once('error', (error) => {
-      reject(new SmtpError('SMTP_TLS_FAILED', 'STARTTLS el sıkışması tamamlanamadı.', { cause: error }));
-    });
+    secure.once('error', onError);
+    secure.once('timeout', onTimeout);
   });
 }
 
@@ -122,12 +153,35 @@ export function authPlainToken(username, password) {
   return Buffer.from(`${NUL}${username}${NUL}${password}`, 'utf8').toString('base64');
 }
 
+/**
+ * EHLO yanıtından AUTH mekanizmalarını çıkarır (RFC 4954).
+ *
+ * `advertised`, sunucunun AUTH satırı bildirip bildirmediğini ayırır: hiç
+ * bildirmeyen sunucuda eski LOGIN yedeği korunur, bildiren sunucuda ise
+ * yalnızca duyurulan mekanizma denenir.
+ */
+export function parseAuthMechanisms(capabilities) {
+  const mechanisms = new Set();
+  let advertised = false;
+  for (const rawLine of String(capabilities || '').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    // `250-AUTH LOGIN PLAIN` ve eski `250-AUTH=LOGIN` biçimleri.
+    const match = /^(?:\d{3}[ -]?)?AUTH(?:[ =]+(.*))?$/i.exec(line);
+    if (!match) continue;
+    advertised = true;
+    for (const token of String(match[1] || '').split(/[\s,]+/)) {
+      if (token) mechanisms.add(token.toUpperCase());
+    }
+  }
+  return { advertised, mechanisms };
+}
+
 async function authenticate(dialogue, capabilities, { username, password }) {
   if (!username) return;
-  const mechanisms = String(capabilities || '').toUpperCase();
-  // Sunucu yeteneklerini bildirmiyorsa da LOGIN denenir: Python karşılığı da
-  // aynı sırayla çalışıyor ve kurumsal sunucuda kabul ediliyor.
-  if (!mechanisms.includes('AUTH') || mechanisms.includes('LOGIN')) {
+  const { advertised, mechanisms } = parseAuthMechanisms(capabilities);
+  // Sunucu yeteneklerini hiç bildirmiyorsa da LOGIN denenir: Python karşılığı
+  // da aynı sırayla çalışıyor ve kurumsal sunucuda kabul ediliyor.
+  if (!advertised || mechanisms.has('LOGIN')) {
     await dialogue.command('AUTH LOGIN', { expect: [334], code: 'SMTP_AUTH_FAILED', description: 'AUTH LOGIN' });
     await dialogue.command(Buffer.from(username, 'utf8').toString('base64'), {
       expect: [334], code: 'SMTP_AUTH_FAILED', description: 'Kullanıcı adı'
@@ -137,9 +191,18 @@ async function authenticate(dialogue, capabilities, { username, password }) {
     });
     return;
   }
-  await dialogue.command(`AUTH PLAIN ${authPlainToken(username, password)}`, {
-    expect: [235], code: 'SMTP_AUTH_FAILED', description: 'Kimlik doğrulama'
-  });
+  if (mechanisms.has('PLAIN')) {
+    await dialogue.command(`AUTH PLAIN ${authPlainToken(username, password)}`, {
+      expect: [235], code: 'SMTP_AUTH_FAILED', description: 'Kimlik doğrulama'
+    });
+    return;
+  }
+  // Duyurulmayan bir mekanizmayı denemek yerine açık hata verilir: sunucu
+  // CRAM-MD5 gibi başka bir yöntem istiyorsa bu açıkça görünür.
+  throw new SmtpError(
+    'SMTP_AUTH_UNSUPPORTED',
+    `Sunucu desteklenen bir kimlik doğrulama yöntemi bildirmedi (${[...mechanisms].join(', ') || 'yok'}).`
+  );
 }
 
 /**
@@ -147,9 +210,11 @@ async function authenticate(dialogue, capabilities, { username, password }) {
  *
  * @param {object} config `getSmtpConfig()` çıktısı
  * @param {{to:string[], subject:string, html:string, text:string}} message
- * @returns {Promise<{accepted:string[], messageId:string}>}
+ * @returns {Promise<{accepted:string[],
+ *   rejected:{address:string, statusCode:number|null}[], messageId:string}>}
  *   Söz YALNIZCA sunucu iletiyi kabul ettiğinde çözülür; aksi hâlde `SmtpError`
  *   fırlatılır. Böylece "gönderildi" bilgisi hiçbir zaman uydurulmaz.
+ *   `rejected`, kabul edilen en az bir alıcı varken düşen kutuları taşır.
  */
 export async function sendSmtpMail(config, message) {
   const recipients = [...new Set((message.to || []).map((value) => String(value).trim()).filter(Boolean))];
@@ -194,8 +259,26 @@ export async function sendSmtpMail(config, message) {
 
     await authenticate(dialogue, ehlo.text, config);
     await dialogue.command(`MAIL FROM:<${config.from}>`, { description: 'MAIL FROM' });
+    // Alıcı çözümü kısmi sorunlarla sürdüğü gibi SMTP de sürer: kapatılmış tek
+    // bir kutu, öteki sorumluların hatırlatmayı almasını engellemez.
+    const acceptedRecipients = [];
+    const rejectedRecipients = [];
     for (const address of recipients) {
-      await dialogue.command(`RCPT TO:<${address}>`, { expect: [250, 251], description: `RCPT TO ${address}` });
+      const outcome = await dialogue
+        .command(`RCPT TO:<${address}>`, { expect: [250, 251], description: `RCPT TO ${address}` })
+        .catch((error) => {
+          // Yalnızca sunucunun DURUM KODUYLA reddi alıcıya özeldir; bağlantı ve
+          // zaman aşımı hataları bütün gönderimi düşürmeye devam eder.
+          if (error instanceof SmtpError && error.statusCode != null) return error;
+          throw error;
+        });
+      if (outcome instanceof SmtpError) rejectedRecipients.push({ address, statusCode: outcome.statusCode });
+      else acceptedRecipients.push(address);
+    }
+    if (!acceptedRecipients.length) {
+      throw new SmtpError('SMTP_NO_RECIPIENTS', 'Sunucu hiçbir alıcı adresini kabul etmedi.', {
+        statusCode: rejectedRecipients[0]?.statusCode ?? null
+      });
     }
     await dialogue.command('DATA', { expect: [354], description: 'DATA' });
     socket.write(`${dotStuff(mime)}\r\n.\r\n`);
@@ -204,7 +287,7 @@ export async function sendSmtpMail(config, message) {
       throw new SmtpError('SMTP_SEND_FAILED', `Sunucu iletiyi kabul etmedi (${accepted.code}).`, { statusCode: accepted.code });
     }
     await dialogue.command('QUIT', { expect: [221], description: 'QUIT' }).catch(() => null);
-    return { accepted: recipients, messageId };
+    return { accepted: acceptedRecipients, rejected: rejectedRecipients, messageId };
   } finally {
     // Bağlantı her koşulda serbest bırakılır.
     socket.destroy();
