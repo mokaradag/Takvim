@@ -12,7 +12,7 @@
   backdrop-filter: blur(12px);
 }
 .mode-picker {
-  width: min(980px, 96vw);
+  width: min(980px, calc(var(--app-viewport-w, 100vw) * 0.96));
   animation: modePickerIn .28s cubic-bezier(.2, .8, .2, 1) both;
   max-height: calc(var(--app-viewport-h, 100vh) - 56px);
   overflow: auto;
@@ -75,7 +75,7 @@
 .mode-picker-points > span { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 12px; }
 .mode-picker-points svg { color: var(--status-done); }
 .mode-picker-action { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--accent); font-size: 12.5px; font-weight: 750; }
-.data-mode-picker { width: min(900px, 96vw); }
+.data-mode-picker { width: min(900px, calc(var(--app-viewport-w, 100vw) * 0.96)); }
 /* Veri modu anahtarı: kenar çubuğunu sade tutmak için Ayarlar sayfasında yaşar. */
 .data-mode-indicator {
   display: flex;
@@ -198,8 +198,16 @@
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: none; }
 }
+/* Uygulama ayarı ilk boyamadan ÖNCE gövdeye yazılır (lib/tweaksBootstrap.js);
+   aksi hâlde bu giriş animasyonu her açılışta bir kez görünüyor, sınıf ancak
+   React etkisiyle geldiğinde iptal ediliyordu. İşletim sistemi tercihi de
+   ayrıca karşılanır. */
 .reduce-motion .mode-picker,
 .reduce-motion .mode-picker-card { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .mode-picker,
+  .mode-picker-card { animation: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .mode-picker,
   .mode-picker-card { animation: none; }

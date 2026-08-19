@@ -437,7 +437,7 @@
   right: 0;
   height: var(--app-viewport-h, 100vh);
   max-height: var(--app-viewport-h, 100vh);
-  width: min(720px, 100vw);
+  width: min(720px, var(--app-viewport-w, 100vw));
 }
 .drawer .rel-fields-grid {
   grid-template-columns: minmax(210px, 1.7fr) minmax(105px, .7fr) minmax(100px, .7fr);
@@ -533,6 +533,10 @@
   background: color-mix(in oklab, var(--priority-color) 14%, transparent);
   color: var(--text);
 }
+/* Seçili öncelik yeniden yazma üretmesin diye kapatılır; görünümü DEĞİŞMEZ:
+   kapatılmış bir düğme soluk görünseydi seçili değer okunamaz hâle gelirdi. */
+.task-priority-option:disabled { cursor: default; opacity: 1; }
+.task-priority-option:disabled:hover { border-color: color-mix(in oklab, var(--priority-color) 60%, var(--border)); }
 
 /* ── Öncül / ardıl sekmeleri ────────────────────────────────── */
 .rel-tabs { width: 100%; }
@@ -574,7 +578,7 @@
 }
 
 @media (max-width: 760px) {
-  .drawer { width: 100vw; }
+  .drawer { width: var(--app-viewport-w, 100vw); }
   .drawer .rel-fields-grid,
   .task-project-wbs-grid,
   .task-date-grid,
@@ -649,7 +653,15 @@
   from { opacity: 0; transform: translateY(12px) scale(.985); }
   to { opacity: 1; transform: none; }
 }
-.reduce-motion .person-dialog { animation: none; }
+/* Perde de tercihe uyar: yalnızca pencere durdurulduğunda, "Hareketi azalt"
+   açık olan kullanıcı pencereyi her açışında zeminin belirmesini görüyordu.
+   İşletim sistemi tercihi de ayrıca karşılanır. */
+.reduce-motion .person-dialog,
+.reduce-motion .person-dialog-backdrop { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .person-dialog,
+  .person-dialog-backdrop { animation: none; }
+}
 
 .person-dialog-head {
   position: relative;

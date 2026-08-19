@@ -216,6 +216,10 @@
 .aging-report-cell {
   display: flex;
   flex-direction: column;
+  /* Kart ızgara sütununun TAMAMINI kaplar. İpucu sarmalayıcısı ızgara öğesidir;
+     kart genişlik almazsa içeriğine göre daralır ve eşit sütunlara rağmen
+     kartlar (ve yüzde çubukları) farklı genişlikte görünür. */
+  width: 100%;
   gap: 2px;
   padding: 14px 15px;
   border: 1px solid var(--border);

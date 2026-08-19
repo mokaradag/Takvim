@@ -39,8 +39,15 @@ export function useApplyTweaks(tweaks) {
   useEffect(() => {
     const scale = Number(tweaks.fontScale) || 1;
     document.body.style.zoom = String(scale);
+    // `zoom` yalnızca yüksekliği değil GENİŞLİĞİ de ölçekler: `100vw` ile
+    // sınırlanan panel %125 ölçekte 500 pikselik bir görünüm alanında yaklaşık
+    // 625 piksel genişliğinde çiziliyor ve sol kenarı kırpılıyordu.
     document.documentElement.style.setProperty('--app-viewport-h', `calc(100vh / ${scale})`);
-    return () => document.documentElement.style.removeProperty('--app-viewport-h');
+    document.documentElement.style.setProperty('--app-viewport-w', `calc(100vw / ${scale})`);
+    return () => {
+      document.documentElement.style.removeProperty('--app-viewport-h');
+      document.documentElement.style.removeProperty('--app-viewport-w');
+    };
   }, [tweaks.fontScale]);
 
   useEffect(() => {

@@ -2,13 +2,15 @@
 import React, { useMemo as useMemo2 } from 'react';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
-import { parseDate, fmt, fmtISO, addDays, diffDays, startOfWeek, endOfWeek, today } from '../../scheduling/dates';
+import { parseDate, fmt, fmtAxisDate, addDays, diffDays, startOfWeek, endOfWeek, today } from '../../scheduling/dates';
+import { countUnknownCompletionDates, taskCompletionDate } from '../../scheduling/metrics';
 import { COLOR_MAP, projectColorVar, personColorVar } from '../../lib/colors';
 import { HeroHeader, AreaChart } from '../../components/ui';
 import { Tooltip, InfoButton, CardHead, AnimatedNumber } from '../../components/ui-extras';
 import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetricTable';
 import { usePeople, useTasks } from '../../state/hooks';
 import { selectOverdueAging } from '../dashboard/planHealth.js';
+import { useTodayKey } from '../../hooks/useTodayKey.js';
 
 /* ── Rapor (Reports) ──────────────────────────────────── */
 export function ReportsView() {
@@ -17,7 +19,9 @@ export function ReportsView() {
   // Referans gün KARARLI bir değerdir: `today()` her çizimde yeni bir `Date`
   // döndürdüğü için doğrudan bağımlılık olamaz, bağımlılıktan çıkarıldığında da
   // sayfa gece yarısını açık geçtiğinde dünün sınıflandırmasında kalırdı.
-  const todayKey = fmtISO(today());
+  // Gün sınırı İZLENİR: sayfa gece yarısını açık geçtiğinde yeniden çizilir
+  // ve tarihe duyarlı bütün memolar tazelenir.
+  const todayKey = useTodayKey();
   const today_ = useMemo2(() => parseDate(todayKey), [todayKey]);
 
   // Bir görev GERÇEKLEŞEN bitiş tarihinde tamamlanmış sayılır; planlanan bitişe
@@ -27,17 +31,22 @@ export function ReportsView() {
     const values = [];
     const labels = [];
     const completions = tasks
-      .filter((t) => t.status === 'done')
-      .map((t) => t.actualFinish || t.plannedFinish)
+      .map(taskCompletionDate)
       .filter(Boolean)
       .map((value) => parseDate(value));
     for (let offset = 29; offset >= 0; offset -= 1) {
       const day = addDays(today_, -offset);
       values.push(completions.filter((finish) => finish <= day).length);
-      labels.push(offset % 5 === 0 ? fmt(day, 'dd MMM') : '');
+      // Eksen etiketi tarih biçimi tercihinden BAĞIMSIZDIR: `dd/mm/yyyy`
+      // seçiliyken altı etiket birbirine giriyor ve karttan taşıyordu.
+      labels.push(offset % 5 === 0 ? fmtAxisDate(day) : '');
     }
     return { values, labels };
   }, [tasks, today_]);
+
+  // Gerçekleşen bitişi olmayan tamamlanmış görevler kronolojik ölçümlerin
+  // DIŞINDA kalır; sessizce kaybolmamaları için sayıları raporlanır.
+  const unknownCompletions = useMemo2(() => countUnknownCompletionDates(tasks), [tasks]);
 
 
   // Cumulative Flow Diagram — last 14 days
@@ -48,13 +57,18 @@ export function ReportsView() {
       let todo = 0, prog = 0, done = 0;
       tasks.forEach(t => {
         const s = parseDate(t.plannedStart);
-        const e = parseDate(t.plannedFinish);
         if (s > d) return; // hasn't started yet
-        if (t.status === 'done' && e <= d) done++;
-        else if (t.status === 'in_progress' || (t.status === 'done' && e > d)) prog++;
+        // Tamamlanma kronolojisi GERÇEKLEŞEN bitişten okunur. Planlanan bitişe
+        // bakan eski hesap, 18 Ağustos'ta biten ama 10 Eylül'e planlanmış bir
+        // görevi eğilim grafiğinde tamamlanmış, CFD'de ise Eylül'e kadar devam
+        // ediyor gösteriyordu.
+        const finished = taskCompletionDate(t);
+        if (t.status === 'done' && !finished) return; // ne zaman bittiği bilinmiyor
+        if (finished && parseDate(finished) <= d) done++;
+        else if (t.status === 'in_progress' || t.status === 'done') prog++;
         else todo++;
       });
-      days.push({ d, todo, prog, done, label: i % 3 === 0 ? fmt(d, 'dd MMM') : '' });
+      days.push({ d, todo, prog, done, label: i % 3 === 0 ? fmtAxisDate(d) : '' });
     }
     return days;
   }, [tasks, today_]);
@@ -66,8 +80,9 @@ export function ReportsView() {
       const weekEnd = endOfWeek(addDays(today_, -i * 7));
       const weekStart = startOfWeek(weekEnd);
       const count = tasks.filter(t => {
-        if (t.status !== 'done') return false;
-        const e = parseDate(t.plannedFinish);
+        const finished = taskCompletionDate(t);
+        if (!finished) return false;
+        const e = parseDate(finished);
         return e >= weekStart && e <= weekEnd;
       }).length;
       out.push({ label: `${fmt(weekStart, 'd')}–${fmt(weekEnd, 'd')}`, value: count });
@@ -252,9 +267,19 @@ export function ReportsView() {
                 <div className="rt-row"><span className="rt-label">Eğri dik</span><span className="rt-val">Hızlanma</span></div>
               </InfoButton>
             </div>
-            <div className="muted" style={{ fontSize: 12 }}>Birikimli ‘Tamamlandı’ sayısı</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Birikimli ‘Tamamlandı’ sayısı · gerçekleşen bitiş tarihine göre
+            </div>
           </div>
         </div>
+        {/* Gerçekleşen bitişi olmayan tamamlanmış görevler kronolojiye
+            giremez; sayı gizlenmez, açıkça yazılır. */}
+        {unknownCompletions > 0 && (
+          <div className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>
+            {unknownCompletions} tamamlanmış görevin gerçekleşen bitiş tarihi yok; eğri, akış ve hız
+            ölçümlerine dâhil edilmedi.
+          </div>
+        )}
         <AreaChart data={trend.values} labels={trend.labels} width={1100} height={200} color="var(--status-done)" animated />
       </div>
 
@@ -381,6 +406,14 @@ export function ReportsView() {
                 key={bucket.id}
                 title={`${bucket.label} geciken`}
                 accent={bucket.color}
+                // Kova payı ve ilk görev adları YALNIZCA bu ipucunda bulunur;
+                // klavye kullanıcısı için tetikleyici odaklanabilir olmalıdır.
+                focusable
+                ariaLabel={`${bucket.label} geciken · ${bucket.value} görev`}
+                // Izgara hücresi sarmalayıcıdır: genişlik verilmezse kart
+                // içeriği kadar daralır ve eşit sütunlara rağmen kartlar
+                // (ve yüzde çubukları) farklı genişliklerde görünürdü.
+                wrapperStyle={{ display: 'block', width: '100%' }}
                 icon={<span style={{ width: 10, height: 10, borderRadius: 2, background: bucket.color, display: 'inline-block' }} />}
                 content={<>
                   <div className="rt-row"><span className="rt-label">Görev</span><span className="rt-val">{bucket.value}</span></div>

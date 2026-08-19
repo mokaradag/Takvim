@@ -240,16 +240,31 @@ test('süzgeç kutusu yatayda kırpılmaz', () => {
 
 /* ── 4. Yazı boyutu ölçeği ──────────────────────────────────────── */
 
-test('tam ekran kaplar yükseklikler ölçekli görünüm değişkenini kullanır', () => {
-  // Yazı boyutu ölçeği gövdeye `zoom` uygular; `100vh` ölçekle birlikte
-  // büyüdüğü için panel alt çubuğu ekranın dışına itiliyordu.
-  for (const file of ['src/app/globals.css', 'src/app/styles/features.css', 'src/app/styles/shell.css', 'src/app/styles/experience.css']) {
-    // Yalnızca `--app-viewport-h` yedeği olarak yazılan `100vh` kabul edilir;
+test('tam ekran kaplar ölçüler ölçekli görünüm değişkenlerini kullanır', () => {
+  // Yazı boyutu ölçeği gövdeye `zoom` uygular; `100vh` VE `100vw` ölçekle
+  // birlikte büyüdüğü için panelin alt çubuğu ekranın dışına itiliyor, geniş
+  // paneller ise yatayda kırpılıyordu.
+  const files = [
+    'src/app/globals.css',
+    'src/app/styles/features.css',
+    'src/app/styles/shell.css',
+    'src/app/styles/experience.css',
+    'src/app/styles/components.css'
+  ];
+  for (const file of files) {
+    // Yalnızca değişkenin yedeği olarak yazılan `100vh`/`100vw` kabul edilir;
     // ölçüm için önce bu yedekler metinden düşürülür.
-    const css = read(file).replaceAll('var(--app-viewport-h, 100vh)', 'var(--app-viewport-h)');
-    const bare = css.match(/\b(height|max-height|padding-top):[^;]*\d+vh/g) || [];
-    assert.deepEqual(bare, [], `${file} doğrudan vh kullanmamalı: ${bare.join(', ')}`);
+    const css = read(file)
+      .replaceAll('var(--app-viewport-h, 100vh)', 'var(--app-viewport-h)')
+      .replaceAll('var(--app-viewport-w, 100vw)', 'var(--app-viewport-w)');
+    const bareHeight = css.match(/\b(height|max-height|padding-top):[^;]*\d+vh/g) || [];
+    assert.deepEqual(bareHeight, [], `${file} doğrudan vh kullanmamalı: ${bareHeight.join(', ')}`);
+    const bareWidth = css.match(/\b(width|max-width|min-width):[^;]*\d+vw/g) || [];
+    assert.deepEqual(bareWidth, [], `${file} doğrudan vw kullanmamalı: ${bareWidth.join(', ')}`);
   }
+  // Değişkenin kendisi ölçeğe bölünerek yayımlanır.
+  const tweaks = read('src/hooks/useApplyTweaks.js');
+  assert.match(tweaks, /--app-viewport-w', `calc\(100vw \/ \$\{scale\}\)`/);
 });
 
 test('görev paneli alt çubuğu küçülmez ve gövde taşmayı kendi içinde tutar', () => {
@@ -347,5 +362,9 @@ test('ardıl düzenleyicisi ayrı bir alan tutmaz: kenar tek yerde saklanır', (
   const policy = read('src/features/task-detail/taskSuccessorPolicy.js');
   assert.doesNotMatch(drawer, /successors:\s*\[/);
   assert.doesNotMatch(policy, /task\.successors/);
-  assert.match(drawer, /planSuccessorLink\(task, successorId, tasks, \{ type: successorType \}\)/);
+  // Doğrulama, panelin iyimser görevini ve bekleyen ardıl taslaklarını içeren
+  // GÜNCEL ağ üzerinde çalışır; kanonik anlık görüntü tek başına eskidir.
+  assert.match(drawer, /planSuccessorLink\(task, successorId, graph, \{ type: successorType \}\)/);
+  assert.match(drawer, /const \[successorDrafts, setSuccessorDrafts\] = useState/);
+  assert.match(drawer, /const graph = useMemo/);
 });

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Icons } from '../icons';
 import { useDataLifecycle } from '../../state/hooks';
+import { useReducedMotion } from '../../hooks/useReducedMotion.js';
 import { AppLogo } from './AppLogo';
 import { DATA_MODES } from '../../data/dataMode';
 import { publicRotaPath } from '../../lib/publicPath.js';
@@ -52,18 +53,28 @@ const BOOT_STEPS = [
  */
 function BootSteps() {
   const [activeStep, setActiveStep] = useState(0);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
+    // Tercih etkinken adım döngüsü HİÇ çalışmaz. CSS geçersiz kılması yalnızca
+    // giriş animasyonunu kapatıyor, 900 ms'de bir değişen etkin durum ise
+    // görünür biçimde hareket etmeye devam ediyordu.
+    if (reduceMotion) {
+      setActiveStep(0);
+      return undefined;
+    }
     const timer = setInterval(() => setActiveStep((current) => (current + 1) % BOOT_STEPS.length), 900);
     return () => clearInterval(timer);
-  }, []);
+  }, [reduceMotion]);
 
   return (
     <div className="app-boot-steps">
       {BOOT_STEPS.map((step, index) => (
         <span
           key={step.id}
-          className={`app-boot-step${index === activeStep ? ' is-active' : ''}`}
+          // Hareket azaltıldığında bütün adımlar durağan biçimde vurgulanır:
+          // kullanıcı hangi aşamaların hazırlandığını yine görür.
+          className={`app-boot-step${reduceMotion || index === activeStep ? ' is-active' : ''}`}
           style={{ '--step-delay': `${index * 110}ms` }}
         >
           <step.Icon size={12} /> {step.label}

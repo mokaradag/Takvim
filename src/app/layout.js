@@ -5,6 +5,7 @@ import './styles/dashboard.css';
 import './styles/features.css';
 import './styles/simple-mode.css';
 import './styles/experience.css';
+import { TWEAKS_BOOTSTRAP_SCRIPT } from '../lib/tweaksBootstrap.js';
 
 export const metadata = {
   title: 'MERGEN Rota — Proje Yönetimi',
@@ -20,7 +21,15 @@ export default function RootLayout({ children }) {
       <head>
         <link rel="icon" type="image/svg+xml" href={FAVICON} />
       </head>
-      <body className="theme-dark">{children}</body>
+      <body className="theme-dark">
+        {/* Erişilebilirlik ve hareket tercihleri, uygulama paketi çalışmadan
+            ÖNCE gövdeye yazılır (bkz. lib/tweaksBootstrap.js). Aksi hâlde
+            yüksek karşıtlık ve "Hareketi azalt" ancak AppShell monte edildikten
+            sonra devreye giriyor, ondan önceki uzun ömürlü ekranlarda tercih
+            yok sayılıyordu. */}
+        <script dangerouslySetInnerHTML={{ __html: TWEAKS_BOOTSTRAP_SCRIPT }} />
+        {children}
+      </body>
     </html>
   );
 }

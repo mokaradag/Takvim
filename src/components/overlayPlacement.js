@@ -23,19 +23,22 @@ function clamp(value, min, max) {
  * @param {{width:number, height:number}} size Kutunun ölçüsü.
  * @param {{width:number, height:number}} viewport Görünüm alanı ölçüsü.
  * @param {{margin?:number, gap?:number}} [options]
- * @returns {{left:number, top:number, maxHeight:number, flipped:boolean}}
+ * @returns {{left:number, top:number, maxWidth:number, maxHeight:number, flipped:boolean}}
  *   `maxHeight` kutunun kaplayabileceği en fazla yükseklik; kutu bu değerden
- *   uzunsa kendi içinde kaymalıdır.
+ *   uzunsa kendi içinde kaymalıdır. `maxWidth` aynı kuralın yatay karşılığıdır:
+ *   görünüm alanı kutudan darsa kutu DARALTILIR. Yalnızca `left` kırpılsaydı
+ *   kutunun sağ kenarı ekran dışında kalır ve denetimleri erişilemez olurdu.
  */
 export function clampOverlayToViewport(anchorRect, size, viewport, options = {}) {
   const margin = options.margin ?? OVERLAY_MARGIN;
   const gap = options.gap ?? OVERLAY_GAP;
   const viewportWidth = viewport?.width || 0;
   const viewportHeight = viewport?.height || 0;
-  const width = size?.width || 0;
   const height = size?.height || 0;
 
-  const maxLeft = Math.max(margin, viewportWidth - width - margin);
+  const availableWidth = Math.max(0, viewportWidth - margin * 2);
+  const maxWidth = Math.min(size?.width || 0, availableWidth);
+  const maxLeft = Math.max(margin, viewportWidth - maxWidth - margin);
   const left = clamp(anchorRect?.left ?? 0, margin, maxLeft);
 
   const spaceBelow = Math.max(0, viewportHeight - (anchorRect?.bottom ?? 0) - gap - margin);
@@ -46,13 +49,19 @@ export function clampOverlayToViewport(anchorRect, size, viewport, options = {})
   const available = Math.max(0, flipped ? spaceAbove : spaceBelow);
   const maxHeight = Math.max(0, Math.min(height || available, available));
 
-  const top = flipped
-    ? Math.max(margin, (anchorRect?.top ?? 0) - gap - maxHeight)
-    : Math.min((anchorRect?.bottom ?? 0) + gap, Math.max(margin, viewportHeight - maxHeight - margin));
+  // Dikey konum İKİ YANDAN da sınırlanır. Çapa görünüm alanının üstüne
+  // kaydırılmışsa `bottom + gap` negatif olabilir ve kutu ekranın üstünde
+  // kaybolurdu; altına kaydırılmışsa çevrilen dal aynı biçimde taşardı.
+  const minTop = margin;
+  const maxTop = Math.max(margin, viewportHeight - maxHeight - margin);
+  const preferredTop = flipped
+    ? (anchorRect?.top ?? 0) - gap - maxHeight
+    : (anchorRect?.bottom ?? 0) + gap;
 
   return {
     left: Math.round(left),
-    top: Math.round(top),
+    top: Math.round(clamp(preferredTop, minTop, maxTop)),
+    maxWidth: Math.round(maxWidth),
     maxHeight: Math.round(maxHeight),
     flipped
   };

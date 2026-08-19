@@ -136,15 +136,47 @@ test('süre DAHİL iş günü olarak korunur ve iş takvimine göre uygulanır',
   assert.deepEqual(plan.map((item) => item.targetFinish), ['2026-08-24', '2026-08-31']);
 });
 
-test('COUNT kaydırma ve tekilleştirmeden SONRAKİ kümeye uygulanır', () => {
+test('COUNT ham yineleme sırasına, kaydırma ve tekilleştirmeden ÖNCE uygulanır', () => {
   // Cuma başlayan günlük seri: Cmt ve Paz Pazartesi'ye kayar ve biri elenir.
-  // Eski davranışta kullanıcı üç yineleme isteyip iki görev alıyordu.
+  // COUNT kuralın KENDİ yineleme sayısıdır (RFC 5545): üç yineleme Cum/Cmt/Paz
+  // günleridir ve iki farklı iş gününe düşer. Kural sonrasına taşınmaz.
+  // Önceki davranış kopyayı elediğinde döngüyü sürdürüyor, RRULE'da hiç
+  // bulunmayan dördüncü yinelemeyi (Salı) kalıcılaştırıyordu.
   const plan = planRecurringOccurrences(
     { plannedStart: '2026-08-21', plannedDurationDays: 1 },
     { freq: 'DAILY', count: 3 },
     { calendar: WORK_WEEK }
   );
-  assert.deepEqual(plan.map((item) => item.plannedStart), ['2026-08-21', '2026-08-24', '2026-08-25']);
+  assert.deepEqual(plan.map((item) => item.plannedStart), ['2026-08-21', '2026-08-24']);
+  assert.deepEqual(plan.map((item) => item.occurrenceDate), ['2026-08-21', '2026-08-22']);
+});
+
+test('kaydırılan şablon günü serinin birinci yinelemesi olmayı sürdürür', () => {
+  // Cumartesi başlayan `COUNT=3` günlük seri Pzt–Cum takviminde Pzt/Sal/Çar
+  // planlanır. Şablonun kendi günü (Cmt) kaydığı için eski davranışta hiçbir
+  // yinelemeyle eşleşmiyor, üç yinelemenin tamamı ŞABLONA EK olarak üretiliyor
+  // ve seri üç yerine dört kayda çıkıyordu.
+  const template = { plannedStart: '2026-08-22', plannedDurationDays: 1 };
+  const plan = planRecurringOccurrences(
+    template,
+    { freq: 'WEEKLY', byWeekday: ['SA'], count: 3 },
+    { calendar: WORK_WEEK }
+  );
+  // Planlanan başlangıçlar Pazartesi'ye kayar; ham yineleme günleri Cumartesi kalır.
+  assert.deepEqual(plan.map((item) => item.plannedStart), ['2026-08-24', '2026-08-31', '2026-09-07']);
+  assert.deepEqual(plan.map((item) => item.occurrenceDate), ['2026-08-22', '2026-08-29', '2026-09-05']);
+  // Şablonun ham günü plandadır: üretim onu ikinci kez oluşturmaz.
+  assert.ok(plan.some((item) => item.occurrenceDate === template.plannedStart));
+
+  const materialized = new Set([template.plannedStart]);
+  const generated = plan.filter((item) => !materialized.has(item.occurrenceDate));
+  assert.equal(generated.length, 2, 'şablon dışında yalnızca iki yeni görev üretilir');
+
+  // Günlük seride üç ham yineleme (Cmt/Paz/Pzt) tek iş gününe düşer: şablonun
+  // günü zaten üretilmiş sayıldığı için hiç yeni görev oluşmaz.
+  const dailyPlan = planRecurringOccurrences(template, { freq: 'DAILY', count: 3 }, { calendar: WORK_WEEK });
+  assert.deepEqual(dailyPlan.map((item) => item.occurrenceDate), ['2026-08-22']);
+  assert.equal(dailyPlan.filter((item) => !materialized.has(item.occurrenceDate)).length, 0);
 });
 
 test('seri istenen sayıda eksik yinelemeyi üretecek kadar ilerler', () => {

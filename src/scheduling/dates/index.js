@@ -47,6 +47,21 @@ export function fmt(value, pattern = 'dd MMM') {
   return appDateDisplayFormat === 'dd/mm/yyyy' ? fmtDisplayDate(date) : date.toLocaleDateString('tr-TR');
 }
 
+/**
+ * Grafik ekseni için KISA tarih etiketi.
+ *
+ * `fmt(value, 'dd MMM')` uygulama genelindeki tarih biçimi tercihine tabidir ve
+ * `dd/mm/yyyy` seçiliyken `18/08/2026` üretir: otuz günlük eksenin altı etiketi
+ * birbirine giriyor, ilk ve son etiket karttan taşıyordu. Eksen etiketi bu
+ * yüzden tercihten BAĞIMSIZ olarak her zaman kısadır — ayrıca memolanmış eksen
+ * dizileri gizli modül durumuna bağımlı kalmaz.
+ */
+export function fmtAxisDate(value) {
+  if (!value) return '';
+  const date = parseDate(value);
+  return `${String(date.getDate()).padStart(2, '0')} ${TR_MONTHS[date.getMonth()]}`;
+}
+
 export function addDays(value, amount) {
   const date = parseDate(value);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + amount);

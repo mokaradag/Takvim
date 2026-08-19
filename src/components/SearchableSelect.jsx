@@ -189,6 +189,10 @@ export function SearchableSelect({
         width: placement.width,
         // Panelin tamamı görünüm alanına sığar; taşan içerik liste içinde kayar.
         maxHeight: placement.panelMaxHeight,
+        // Panel çerçevesi (arama satırı, dipnot) bile sığmıyorsa panelin KENDİSİ
+        // kaydırılır; aksi hâlde sabit satırlar payı tüketip seçenekleri
+        // `overflow: hidden` altında erişilemez bırakırdı.
+        ...(placement.scrollPanel ? { overflowY: 'auto' } : null),
         ...(placement.openUp ? { bottom: placement.bottom } : { top: placement.top })
       }}
     >

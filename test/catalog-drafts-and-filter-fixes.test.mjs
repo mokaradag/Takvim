@@ -233,8 +233,13 @@ test('sürükleme yalnızca tutamaktan başlar ve bekleyen taşıma sırasında 
   assert.match(view, /draggable=\{draggable && dragHandleNodeId === node\.id\}/);
   assert.match(view, /onPointerDown=\{\(\) => draggable && setDragHandleNodeId\(node\.id\)\}/);
   // Kötümser kalıcılaştırma sırasında yeni sürükleme, eski ağaçtan hesaplanmış
-  // mutlak bir sıra numarası kuyruğa alırdı.
-  assert.match(view, /setMovePending\(true\);/);
+  // mutlak bir sıra numarası kuyruğa alırdı. Kilit artık TEK bir yapısal yazma
+  // kilididir: ekleme/ad değiştirme/silme/taşıma da aynı kapıdan geçer.
+  assert.match(view, /runStructuralWrite\(\(\) => moveWbsNode\(/);
+  assert.match(view, /runStructuralWrite\(\(\) => deleteWbs\(/);
+  assert.match(view, /runStructuralWrite\(\(\) => reparentWbs\(/);
+  assert.match(view, /runStructuralWrite\(\(\) => \(current\.mode === 'add'/);
+  assert.match(view, /if \(structuralWritePending\) return Promise\.resolve\(\{ ok: false/);
 });
 
 test('satırdan gerçekten çıkıldığında bekleyen açma zamanlayıcısı iptal edilir', () => {
@@ -301,9 +306,10 @@ test('kişi ölçüm tablosu satırları ızgara öğesi olarak kalır ve uzun a
 test('haftalık tamamlama gerçekleşen bitişten sayılır ve gün değişimini izler', () => {
   const dashboard = read('src/features/dashboard/DashboardView.jsx');
   assert.match(dashboard, /if \(t\.status !== 'done' \|\| !t\.actualFinish\) return false;/);
-  // Referans gün kararlıdır: memo her çizimde yeniden hesaplanmaz ama gece
-  // yarısından sonra da dünün sınıflandırmasında kalmaz.
-  assert.match(dashboard, /const todayKey = fmtISO\(today\(\)\);/);
+  // Referans gün kararlıdır: memo her çizimde yeniden hesaplanmaz. Gün sınırı
+  // ayrıca İZLENİR; hiçbir görev değişmese bile gece yarısında yeniden çizim
+  // planlanır (bkz. hooks/useTodayKey.js).
+  assert.match(dashboard, /const todayKey = useTodayKey\(\);/);
   assert.match(dashboard, /selectStatusDistribution\(tasks, today_\), \[tasks, today_\]/);
 });
 

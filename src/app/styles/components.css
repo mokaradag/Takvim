@@ -153,6 +153,16 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .reduce-motion .card .donut-slices,
 .reduce-motion .bar-row > div:nth-child(2) > div,
 .reduce-motion .velocity-bars .vel-bar { animation: none !important; }
+/* Animasyon kapatılırken GÖRÜNÜRLÜK geri verilmelidir: dilimler ve alanlar
+   `opacity: 0` başlangıç durumundan `chartDataFade` ile çıkıyordu; animasyon
+   iptal edildiğinde "Hareketi azalt" açık olan her kullanıcıda halka grafiği
+   tamamen görünmez kalıyordu. Aynısı çizgi grafiğinin kesikli çizim durumu
+   ve ölçeklenerek büyüyen çubuklar için de geçerlidir. */
+.reduce-motion .card svg[viewBox^='0 0 600 '] polygon,
+.reduce-motion .card .donut-slices { opacity: 1 !important; }
+.reduce-motion .chart-area + polyline { stroke-dashoffset: 0 !important; }
+.reduce-motion .bar-row > div:nth-child(2) > div { transform: scaleX(1) !important; }
+.reduce-motion .velocity-bars .vel-bar { transform: scaleY(1) !important; }
 
 /* ── Forms and DateInput ───────────────────────────────────── */
 .date-input-shell {
@@ -200,7 +210,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--status-overdue) 12%, transparent);
 }
 .gantt-range-controls .date-input-shell { width: 145px; flex: 0 0 145px; }
-.date-column-filter-pop { width: min(300px, calc(100vw - 16px)); }
+.date-column-filter-pop { width: min(300px, calc(var(--app-viewport-w, 100vw) - 16px)); }
 
 /* ── Tables and shared filter popovers ────────────────────── */
 .tbl thead th {

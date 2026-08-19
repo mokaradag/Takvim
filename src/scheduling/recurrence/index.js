@@ -50,11 +50,36 @@ function positiveInteger(value, fallback = null) {
   return Number.isSafeInteger(number) && number > 0 ? number : fallback;
 }
 
-/** `YYYYMMDD` (RFC 5545) ↔ `YYYY-MM-DD` (uygulama içi) dönüşümü. */
+/**
+ * Takvimde GERÇEKTEN var olan bir ISO tarih mi?
+ *
+ * `2026-02-31` biçim olarak kusursuzdur ama böyle bir gün yoktur. `parseDate`
+ * onu Mart'a yuvarlar; kural o zaman RRULE'un yazdığından başka bir tarihte
+ * biter. Bu yüzden yıl/ay/gün üçlüsü geri okunarak doğrulanır.
+ */
+function isValidIsoDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? '').trim());
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1) return false;
+  return day <= daysInMonth(year, month - 1);
+}
+
+/**
+ * `YYYYMMDD` (RFC 5545) ↔ `YYYY-MM-DD` (uygulama içi) dönüşümü.
+ *
+ * Kalıp TAM değere sabitlenmiştir ve tarih takvimde doğrulanır: `UNTIL=20260231`
+ * daha önce `2026-02-31` olarak normalleşiyor, `parseDate` bunu Mart'a taşıyor
+ * ve önizleme ile üretim RRULE'un söylediğinden başka bir bitiş kullanıyordu.
+ */
 function isoFromCompactDate(value) {
   const text = String(value ?? '').trim();
-  const match = /^(\d{4})(\d{2})(\d{2})/.exec(text);
-  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+  const match = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
+  if (!match) return null;
+  const iso = `${match[1]}-${match[2]}-${match[3]}`;
+  return isValidIsoDate(iso) ? iso : null;
 }
 
 function compactDateFromIso(value) {
@@ -90,7 +115,7 @@ export function normalizeRecurrenceRule(input) {
   const byMonthDay = freq === 'MONTHLY' ? positiveInteger(source.byMonthDay) : null;
   const count = positiveInteger(source.count);
   const untilIso = String(source.until ?? '').trim();
-  const until = /^\d{4}-\d{2}-\d{2}$/.test(untilIso) ? untilIso : null;
+  const until = isValidIsoDate(untilIso) ? untilIso : null;
 
   return {
     freq,
@@ -213,8 +238,11 @@ export function findRecurrenceRuleIssue(text) {
     if (count > MAX_RECURRENCE_OCCURRENCES) return `COUNT en fazla ${MAX_RECURRENCE_OCCURRENCES} olabilir.`;
   }
 
+  // Takvimde bulunmayan bir gün (`20260231`) de reddedilir: normalleştirme onu
+  // başka bir tarihe yuvarlayacağı için saklanan kural gönderilenden başka
+  // anlama gelirdi.
   if (values.has('UNTIL') && !isoFromCompactDate(values.get('UNTIL'))) {
-    return 'UNTIL YYYYMMDD biçiminde geçerli bir tarih olmalıdır.';
+    return 'UNTIL YYYYMMDD biçiminde geçerli bir takvim tarihi olmalıdır.';
   }
 
   return null;
@@ -302,9 +330,15 @@ function* iterateRecurrenceDates(rule, startDate) {
   }
 }
 
-/** Üretilecek yineleme sayısı: istenen sınır, kuralın COUNT'u ve güvenlik tavanı. */
-function occurrenceCap(rule, limit) {
-  const requested = Math.min(Math.max(1, limit), MAX_RECURRENCE_OCCURRENCES);
+/**
+ * Üretilecek yineleme sayısı: istenen sınır, kuralın COUNT'u ve güvenlik tavanı.
+ *
+ * `hardCap` yalnızca ÖZET yolunda bir artırılır: güvenlik tavanına dayanmış bir
+ * UNTIL serisini "tam olarak 400 yineleme" diye sunmamak için bir fazlası
+ * istenip kesilme tespit edilir. Üretim yolu tavanı aşmaz.
+ */
+function occurrenceCap(rule, limit, hardCap = MAX_RECURRENCE_OCCURRENCES) {
+  const requested = Math.min(Math.max(1, limit), hardCap);
   return rule.count ? Math.min(requested, rule.count) : requested;
 }
 
@@ -387,14 +421,21 @@ export function planRecurringOccurrences(template, rule, {
   calendar = null,
   limit = MAX_RECURRENCE_OCCURRENCES,
   horizonEnd = null,
-  skipNonWorkingDays = true
+  skipNonWorkingDays = true,
+  hardCap = MAX_RECURRENCE_OCCURRENCES
 } = {}) {
   const normalized = normalizeRecurrenceRule(rule);
   const start = template?.plannedStart;
   if (!normalized || !start) return [];
 
   const startDate = parseDate(start);
-  const cap = occurrenceCap(normalized, limit);
+  // İKİ ayrı tavan vardır ve karıştırılmamalıdırlar:
+  //  - `rawCap` kuralın kendi yineleme sayısıdır (COUNT). Kaydırma ve
+  //    tekilleştirmeden ÖNCE, ham yineleme sırasına uygulanır.
+  //  - `planCap` çağıranın istediği ÜRETİLECEK görev sayısıdır; seri üretimi
+  //    her turda bu kadar yeni gün ilerleyebilsin diye plan uzunluğuna bakar.
+  const rawCap = normalized.count ? Math.min(normalized.count, hardCap) : hardCap;
+  const planCap = Math.min(Math.max(1, limit), hardCap);
   const hardEnd = horizonEnd ? parseDate(horizonEnd) : null;
   const untilDate = normalized.until ? parseDate(normalized.until) : null;
   const shiftCalendar = skipNonWorkingDays ? calendar : null;
@@ -406,26 +447,43 @@ export function planRecurringOccurrences(template, rule, {
 
   const seen = new Set();
   const plan = [];
+  // HAM yineleme sırası ayrı sayılır. COUNT kuralın kendi yineleme sayısıdır:
+  // kaydırma iki ham yinelemeyi aynı iş gününe düşürdüğünde eskiden kopya
+  // eleniyor ve döngü kuralın DIŞINDAKİ bir sonraki yinelemeyi tüketerek sayıyı
+  // tamamlıyordu (`BYDAY=SA,SU;COUNT=2`, Pzt–Cum takvimi → üçüncü yineleme).
+  let rawOrdinal = 0;
   for (const date of iterateRecurrenceDates(normalized, startDate)) {
+    // Kuralın sonu HAM tarihe göre belirlenir (RFC 5545 yineleme kümesi).
+    if (hardEnd && date > hardEnd) break;
+    if (untilDate && date > untilDate) break;
+    rawOrdinal += 1;
+    if (rawOrdinal > rawCap) break;
+
     const shifted = shiftCalendar && !isWorkingDay(date, shiftCalendar)
       ? moveToWorkingDay(date, shiftCalendar, 1)
       : date;
-    if (hardEnd && shifted > hardEnd) break;
-    if (untilDate && shifted > untilDate) break;
+    // Kaydırılan gün sınırın dışına taşarsa o yineleme kalıcılaştırılmaz;
+    // kuralın yineleme sırası yine de tüketilmiştir.
+    if (hardEnd && shifted > hardEnd) continue;
+    if (untilDate && shifted > untilDate) continue;
 
-    // Kaydırma iki yinelemeyi aynı güne düşürebilir; aynı gün iki kez
-    // üretilmez, buna karşılık açılım istenen sayı tamamlanana kadar sürer.
+    // Kaydırma iki yinelemeyi aynı güne düşürebilir; aynı gün iki kez üretilmez.
     const iso = fmtISO(shifted);
     if (seen.has(iso)) continue;
     seen.add(iso);
 
     plan.push({
       index: plan.length,
+      // Serinin DEĞİŞMEZ kimliği ham yineleme günüdür (RFC 5545 `RECURRENCE-ID`
+      // karşılığı). Şablonun kendi günü çalışma takvimi nedeniyle kaydırılsa
+      // bile bu değer değişmez; şablon kimliği böylece korunur ve birinci
+      // yineleme ikinci kez üretilmez.
+      occurrenceDate: fmtISO(date),
       plannedStart: iso,
       plannedFinish: durationSpan === null ? null : fmtISO(addSpan(shifted, durationSpan, calendar)),
       targetFinish: targetSpan === null ? null : fmtISO(addSpan(shifted, targetSpan, calendar))
     });
-    if (plan.length >= cap) break;
+    if (plan.length >= planCap) break;
   }
   return plan;
 }
@@ -449,31 +507,51 @@ export function planRecurringOccurrences(template, rule, {
 export function summarizeRecurrencePlan(template, rule, { calendar = null, previewLimit = 8 } = {}) {
   const normalized = normalizeRecurrenceRule(rule);
   const empty = {
-    occurrences: [], dates: [], preview: [], hiddenCount: 0,
+    occurrences: [], dates: [], preview: [], hiddenCount: 0, hasMore: false, truncated: false,
     includesTemplate: false, totalCount: 0, generatedCount: 0, unbounded: false
   };
   if (!normalized || !template?.plannedStart) return empty;
 
   // Sınırsız kuralda tüm seri açılamaz; önizleme için bir pencere yeter.
   const unbounded = !normalized.count && !normalized.until;
-  const limit = unbounded
-    ? previewLimit + 1
+  const boundedLimit = unbounded
+    ? previewLimit
     : Math.min(MAX_RECURRENCE_OCCURRENCES, normalized.count || MAX_RECURRENCE_OCCURRENCES);
-  const occurrences = planRecurringOccurrences(template, normalized, { calendar, limit });
+  // Bir FAZLASI istenir: sınırsız kuralda "devamı var" bilgisini, UNTIL
+  // kuralında ise güvenlik tavanına dayanıldığını yalnızca böyle ayırt
+  // edebiliriz. Fazlalık sayıya katılmaz.
+  const probed = planRecurringOccurrences(template, normalized, {
+    calendar,
+    limit: boundedLimit + 1,
+    hardCap: MAX_RECURRENCE_OCCURRENCES + 1
+  });
+  const hasMore = probed.length > boundedLimit;
+  const occurrences = hasMore ? probed.slice(0, boundedLimit) : probed;
   const dates = occurrences.map((occurrence) => occurrence.plannedStart);
   // Şablonun kendi günü seride yer alıyorsa o gün için YENİ görev üretilmez
-  // (bkz. AppStateProvider · generateTaskSeries).
-  const includesTemplate = dates.includes(template.plannedStart);
-  const totalCount = unbounded ? 0 : dates.length;
+  // (bkz. AppStateProvider · generateTaskSeries). Karşılaştırma HAM yineleme
+  // gününe göredir: çalışma takvimi şablonun gününü kaydırsa bile şablon
+  // serinin birinci yinelemesi olmayı sürdürür.
+  const templateOccurrence = template.recurrenceOccurrenceDate || template.plannedStart;
+  const includesTemplate = occurrences.some((occurrence) => occurrence.occurrenceDate === templateOccurrence);
+  // Sınırsız seride toplam bilinmez. UNTIL serisi güvenlik tavanına dayandıysa
+  // da bilinmez: 400 rakamı serinin TOPLAMI değil, açılabilen kısmıdır.
+  const truncated = !unbounded && hasMore;
+  const countable = !unbounded && !truncated;
+  const totalCount = countable ? dates.length : 0;
 
   return {
     occurrences,
     dates,
     preview: dates.slice(0, previewLimit),
-    hiddenCount: unbounded ? 0 : Math.max(0, dates.length - previewLimit),
+    hiddenCount: Math.max(0, dates.length - previewLimit),
+    // Önizlemenin ötesinde başka yineleme var mı? Sınırsız/kesilmiş seride
+    // sayı verilemez, yalnızca varlık bildirilir.
+    hasMore: hasMore || dates.length > previewLimit,
+    truncated,
     includesTemplate,
     totalCount,
-    generatedCount: unbounded ? 0 : Math.max(0, totalCount - (includesTemplate ? 1 : 0)),
+    generatedCount: countable ? Math.max(0, totalCount - (includesTemplate ? 1 : 0)) : 0,
     unbounded
   };
 }

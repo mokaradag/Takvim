@@ -274,6 +274,41 @@ export function createInitialState(snapshot = {}) {
   return createStateFromSnapshot(snapshot, createLoadingState());
 }
 
+/**
+ * Görev "Tamamlandı"ya geçerken GERÇEKLEŞEN bitişi damgalar.
+ *
+ * Normal tamamlama yolları (görev panelindeki durum düğmesi, Kanban bırakması)
+ * yalnızca `status: 'done'` yamalıyor, doğrulama da buna izin veriyordu. Sonuç,
+ * gerçekleşen tarihi olmayan tamamlanmış görevlerdi: raporlar bu boşluğu
+ * planlanan bitişle dolduruyor ve gelecek aya planlanmış ama bugün bitirilen
+ * işi eğriye gelecek ay sokuyordu.
+ *
+ * `actualStart` de birlikte doldurulur: kalıcılaştırma sınırı gerçekleşen bitiş
+ * için gerçekleşen başlangıç ister ve başlangıç bitişten sonraya düşemez.
+ *
+ * @returns {object} damgalanmış yama (değişiklik gerekmiyorsa aynı nesne)
+ */
+export function withCompletionStamp(state, taskId, patch, referenceDate = today()) {
+  if (!patch || patch.status !== 'done') return patch;
+  const task = (state?.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
+  if (!task) return patch;
+  const hasFinish = Object.prototype.hasOwnProperty.call(patch, 'actualFinish')
+    ? patch.actualFinish
+    : task.actualFinish;
+  if (hasFinish) return patch;
+
+  const actualFinish = fmtISO(referenceDate);
+  const declaredStart = Object.prototype.hasOwnProperty.call(patch, 'actualStart')
+    ? patch.actualStart
+    : task.actualStart;
+  const candidateStart = declaredStart || task.plannedStart || actualFinish;
+  return {
+    ...patch,
+    actualStart: candidateStart > actualFinish ? actualFinish : candidateStart,
+    actualFinish
+  };
+}
+
 export function normalizeStateTask(task, state) {
   return normalizeTaskRecord(task, taskContext(state));
 }

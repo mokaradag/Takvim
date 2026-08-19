@@ -46,12 +46,16 @@ export function computePopoverPlacement(triggerRect, viewport = {}) {
   const viewportWidth = viewport.width || 0;
   const viewportHeight = viewport.height || 0;
 
-  const width = Math.min(
-    Math.max(triggerRect.width, MIN_PANEL_WIDTH),
-    Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, viewportWidth - VIEWPORT_MARGIN * 2))
-  );
+  // Genişlik ALT SINIRI da görünüm alanına uyar. Her iki uç `MIN_PANEL_WIDTH`
+  // ile zorlandığında 304 pikselden dar bir görünüm alanında (dar mobil ekran
+  // ya da yazı ölçeği normalizasyonu sonrası) panel 280 pikselde kalıyor,
+  // `left` ise kenar boşluğuna yapışıyordu: sağ kenar hâlâ ekranın dışındaydı.
+  const availableWidth = Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2);
+  const upperBound = availableWidth > 0 ? Math.min(MAX_PANEL_WIDTH, availableWidth) : MIN_PANEL_WIDTH;
+  const lowerBound = Math.min(MIN_PANEL_WIDTH, upperBound);
+  const width = clamp(triggerRect.width, lowerBound, upperBound);
   const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN);
-  const left = Math.min(Math.max(triggerRect.left, VIEWPORT_MARGIN), maxLeft);
+  const left = clamp(triggerRect.left, VIEWPORT_MARGIN, maxLeft);
 
   // Gerçekte var olan boşluklar. Tetikleyici görünüm alanının dışına kaymışsa
   // negatif çıkabilir; sıfıra çekilir.
@@ -66,15 +70,30 @@ export function computePopoverPlacement(triggerRect, viewport = {}) {
 
   // Panel hiçbir koşulda seçilen yöndeki boşluğu aşamaz.
   const panelMaxHeight = Math.max(0, Math.min(available, MAX_LIST_HEIGHT + PANEL_CHROME_HEIGHT));
-  const listMaxHeight = clamp(panelMaxHeight - PANEL_CHROME_HEIGHT, MIN_LIST_HEIGHT, MAX_LIST_HEIGHT);
+  // Taban liste yüksekliği yalnızca panel ÇERÇEVESİ sığdığında söz verilir.
+  // Aksi hâlde 60 piksellik bir panelde listeye 96 piksel ayrılır, sabit arama
+  // ve dipnot satırları bu payı tüketir ve seçenekler `overflow: hidden` altında
+  // erişilemez kalırdı. O durumda panelin TAMAMI kaydırılır.
+  const fitsChrome = panelMaxHeight >= PANEL_CHROME_HEIGHT + MIN_LIST_HEIGHT;
+  const listMaxHeight = fitsChrome
+    ? clamp(panelMaxHeight - PANEL_CHROME_HEIGHT, MIN_LIST_HEIGHT, MAX_LIST_HEIGHT)
+    : Math.max(0, panelMaxHeight - PANEL_CHROME_HEIGHT);
+
+  // Dikey konum görünüm alanına hapsedilir: tetikleyici yukarı kaydığında
+  // `bottom + gap` negatif olur ve panel ekranın üstünde kaybolurdu.
+  const verticalLimit = Math.max(VIEWPORT_MARGIN, viewportHeight - panelMaxHeight - VIEWPORT_MARGIN);
+  const top = clamp(triggerRect.bottom + PANEL_GAP, VIEWPORT_MARGIN, verticalLimit);
+  const bottom = clamp(viewportHeight - triggerRect.top + PANEL_GAP, VIEWPORT_MARGIN, verticalLimit);
 
   return {
     left: Math.round(left),
     width: Math.round(width),
     openUp,
-    top: openUp ? null : Math.round(triggerRect.bottom + PANEL_GAP),
-    bottom: openUp ? Math.round(viewportHeight - triggerRect.top + PANEL_GAP) : null,
+    top: openUp ? null : Math.round(top),
+    bottom: openUp ? Math.round(bottom) : null,
     panelMaxHeight: Math.round(panelMaxHeight),
-    listMaxHeight: Math.round(listMaxHeight)
+    listMaxHeight: Math.round(listMaxHeight),
+    // Panel çerçevesi bile sığmıyorsa panelin kendisi kaydırılmalıdır.
+    scrollPanel: !fitsChrome
   };
 }

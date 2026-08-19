@@ -77,6 +77,27 @@ export function getGroupScheduleSummaries(groups) {
   return summaries;
 }
 
+/**
+ * Tamamlanan bir görevin GERÇEKLEŞEN bitiş günü.
+ *
+ * Planlanan bitiş yedek olarak KULLANILMAZ. Plan bir niyettir: gelecek aya
+ * planlanmış ama bugün bitirilen görev, plan tarihine yazıldığında eğriye
+ * gelecek ay giriyor; gecikmiş bir plan ise görevi geçmişte bitmiş gibi
+ * gösteriyordu. Gerçekleşen tarih yoksa görevin ne zaman bittiği BİLİNMİYORDUR
+ * ve görev kronolojik ölçümlerin dışında bırakılır (sayısı ayrıca raporlanır).
+ *
+ * @returns {string|null} ISO tarih ya da `null`
+ */
+export function taskCompletionDate(task) {
+  if (!task || task.status !== 'done') return null;
+  return task.actualFinish || null;
+}
+
+/** Gerçekleşen bitişi olmayan tamamlanmış görev sayısı. */
+export function countUnknownCompletionDates(tasks) {
+  return (tasks || []).filter((task) => task?.status === 'done' && !task.actualFinish).length;
+}
+
 export function getStatus(task, referenceDate = today()) {
   if (task.status === 'done') return { id: 'done', label: 'Tamamlandı', cls: 'status-done' };
   if (task.targetFinish && diffDays(task.targetFinish, referenceDate) < 0) return { id: 'overdue', label: 'Geciken', cls: 'status-overdue' };

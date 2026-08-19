@@ -254,8 +254,20 @@ export function SettingsView({ t, setTweak }) {
           <div className="set-sep" />
 
           {/* Tarih biçimi daha önce koda gömülüydü; kurumsal alışkanlığa göre
-              seçilebilmesi gerekir. */}
-          <SettingsRow title="Tarih biçimi" desc="Tüm ekranlarda tarihlerin nasıl yazılacağını belirler.">
+              seçilebilmesi gerekir.
+
+              Sözleşme bilinçli olarak DARDIR ve açıklama bunu birebir yazar:
+              ayar YALNIZCA okunan tarihleri biçimlendirir. Tarih GİRİŞ alanları
+              (görev paneli, hızlı görev tanımı, süzgeçler) her zaman gg/aa/yyyy
+              maskesiyle çalışır; giriş biçimi tercihe bağlansaydı aynı alan
+              kullanıcıdan bazen "18 Ağu 2026" bekler, ay adının yazımına
+              takılan her giriş sessizce reddedilirdi. Grafik eksenleri de bu
+              ayardan etkilenmez: eksen etiketi her zaman kısa biçimdedir
+              (bkz. fmtAxisDate). */}
+          <SettingsRow
+            title="Tarih biçimi"
+            desc="Listelerde, kartlarda ve raporlarda GÖSTERİLEN tarihlerin yazımını belirler. Tarih girişi ve grafik eksenleri her zaman kısa biçimi kullanır."
+          >
             <Segmented
               value={t.dateFormat || 'dd/mm/yyyy'}
               onChange={(v) => setTweak('dateFormat', v)}

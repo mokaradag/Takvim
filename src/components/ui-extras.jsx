@@ -8,13 +8,23 @@ import ReactDOM from 'react-dom';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
 import { clampOverlayToViewport } from './overlayPlacement.js';
+import { measureNaturalRect } from './overlayMeasurement.js';
 import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../scheduling/dates';
 import { OPTION_SEARCH_THRESHOLD, matchesOptionQuery } from './columnFilterSearch.js';
 
 export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
 
 // ── Rich tooltip (portal, cursor-following, always on top) ─────
-export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent }) {
+/**
+ * `focusable` bilgi taşıyan ipuçları içindir.
+ *
+ * Varsayılan sarmalayıcı `<span>` odaklanabilir DEĞİLDİR: yalnızca fareyle
+ * ulaşılabilen bir ipucunun içinde başka hiçbir yerde bulunmayan bilgi
+ * durduğunda (örneğin gecikme yaşlandırma kartlarının payı ve görev adları) bu
+ * bilgi klavye kullanıcısına hiç açılmıyordu. Her ipucunu sekme durağı yapmak
+ * ise klavye gezinmesini bozardı; bu yüzden davranış açıkça seçilir.
+ */
+export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel }) {
   const [show, setShow] = useSx(false);
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
   const tipRef = useRx(null);
@@ -80,7 +90,8 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
       if (r) { lastMouse.current = { x: r.left + r.width / 2, y: r.bottom }; }
       enter({ clientX: lastMouse.current.x, clientY: lastMouse.current.y });
     },
-    onBlur: leave
+    onBlur: leave,
+    onKeyDown: (e) => { if (e.key === 'Escape') leave(); }
   };
 
   const tip = show && ReactDOM.createPortal(
@@ -127,7 +138,11 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
 
   return (
     <>
-      <span {...handlers} style={{ display: 'inline-flex', alignItems: 'center', ...wrapperStyle }}>
+      <span
+        {...handlers}
+        {...(focusable ? { tabIndex: 0, role: 'button', 'aria-label': ariaLabel || title } : null)}
+        style={{ display: 'inline-flex', alignItems: 'center', ...wrapperStyle }}
+      >
         {children}
       </span>
       {tip}
@@ -232,13 +247,14 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   }, []);
 
   // Çapaya göre yerleşim; kutu her zaman görünüm alanının içinde kalır.
-  const [pos, setPos] = useSx({ left: 0, top: 0, maxHeight: null });
+  const [pos, setPos] = useSx({ left: 0, top: 0, maxWidth: null, maxHeight: null });
   useEx(() => {
     if (!anchor) return undefined;
     const place = () => {
       const Z = appZoom();
       const r = anchor.getBoundingClientRect();
-      const box = ref.current?.getBoundingClientRect();
+      // Ölçüm DOĞAL boyutla yapılır; önceki kırpma yeniden ölçülmez.
+      const box = measureNaturalRect(ref.current);
       setPos(clampOverlayToViewport(
         { left: r.left / Z, top: r.top / Z, bottom: r.bottom / Z, width: r.width / Z },
         { width: box ? box.width / Z : 300, height: box ? box.height / Z : 320 },
@@ -304,7 +320,20 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   const searchable = (type === 'multi' || type === 'single') && options.length > OPTION_SEARCH_THRESHOLD;
 
   return (
-    <div ref={ref} className="col-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top, maxHeight: pos.maxHeight || undefined }}>
+    // `?? undefined` bilinçlidir: sıfır GEÇERLİ bir sınırdır. `|| undefined`
+    // yazıldığında "hiç yer yok" sonucu "sınır yok"a dönüşüyor ve kutu tam da
+    // bu kırpmanın engellemesi gereken biçimde görünüm alanının dışına taşıyordu.
+    <div
+      ref={ref}
+      className="col-filter-pop"
+      style={{
+        position: 'fixed',
+        left: pos.left,
+        top: pos.top,
+        maxWidth: pos.maxWidth ?? undefined,
+        maxHeight: pos.maxHeight ?? undefined
+      }}
+    >
       <div className="col-filter-head">
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.01em', color: 'var(--text-dim)' }}>{label}</span>
       </div>
@@ -684,18 +713,57 @@ export function HoverListCard({
     setPos({ x, y, ready: !!el });
   };
 
+  // Sabitleme (pin): tıklama/klavye ile açılan kart, işaretçi ayrıldığında
+  // KAPANMAZ. Dokunmatik ve klavye kullanıcısının listedeki görev düğmelerine
+  // ulaşabilmesinin tek yolu budur.
+  const [pinned, setPinned] = useSx(false);
+
   const open = () => {
     clearTimeout(closeT.current);
     if (show) return;
     openT.current = setTimeout(() => setShow(true), 90);
   };
+  const openNow = () => {
+    clearTimeout(closeT.current);
+    clearTimeout(openT.current);
+    setShow(true);
+  };
+  const closeNow = () => {
+    clearTimeout(openT.current);
+    clearTimeout(closeT.current);
+    setPinned(false);
+    setShow(false);
+  };
   const scheduleClose = () => {
     clearTimeout(openT.current);
+    if (pinned) return;
     closeT.current = setTimeout(() => setShow(false), 160);
+  };
+  const toggle = () => {
+    if (pinned) { closeNow(); return; }
+    setPinned(true);
+    openNow();
   };
 
   useEx(() => { if (show) place(); }, [show]);
   useEx(() => () => { clearTimeout(openT.current); clearTimeout(closeT.current); }, []);
+
+  // Sabitlenmiş kart dışarı tıklamayla ve Esc ile kapanır.
+  useEx(() => {
+    if (!pinned) return undefined;
+    const onPointerDown = (event) => {
+      if (wrapRef.current?.contains(event.target) || cardRef.current?.contains(event.target)) return;
+      closeNow();
+    };
+    const onKey = (event) => { if (event.key === 'Escape') closeNow(); };
+    document.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinned]);
 
   const card = show && ReactDOM.createPortal(
     <div
@@ -708,6 +776,7 @@ export function HoverListCard({
       }}
       onMouseEnter={() => clearTimeout(closeT.current)}
       onMouseLeave={scheduleClose}
+      onFocus={() => clearTimeout(closeT.current)}
     >
       {(title || icon) && (
         <div className="rich-tip-head">
@@ -733,12 +802,30 @@ export function HoverListCard({
 
   return (
     <>
+      {/* Tetikleyici odaklanabilir ve tıklanabilirdir: eski `<span>` yalnızca
+          `onMouseEnter` ile açılıyordu, dolayısıyla klavye kullanıcısı listeyi
+          hiç açamıyor, dokunmatik kullanıcı ise ipucunun "Açmak için tıklayın"
+          yönergesini izleyemiyordu. */}
       <span
         ref={wrapRef}
         className={wrapperClass}
+        role="button"
+        tabIndex={0}
+        aria-expanded={show}
         style={{ display: 'block', ...wrapperStyle }}
         onMouseEnter={open}
         onMouseLeave={scheduleClose}
+        onFocus={openNow}
+        onBlur={scheduleClose}
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggle();
+          } else if (event.key === 'Escape') {
+            closeNow();
+          }
+        }}
       >
         {children}
       </span>

@@ -19,15 +19,31 @@ const DAY_TONE = Object.freeze({
  * İlgili tarih önce HEDEF bitiştir; yoksa planlanan bitişe düşülür. İkisi de
  * yoksa görev tarihsizdir — uydurma bir tarihle listeye sokulmaz.
  *
+ * GECİKME SINIFLANDIRMASI yalnızca HEDEF bitişe bakar. Uygulamanın kanonik
+ * `overdue` durumu ve Ekip sayfasının "geciken" ölçümü de böyle çalışır:
+ * termini olmayan bir görev gecikemez. Planlanan bitiş yalnızca NÖTR bir tarih
+ * yedeğidir; aksi hâlde bu pencere kırmızı "N gün gecikti" yazarken yanındaki
+ * durum rozeti "Yapılacak" diyor ve personelin geciken sayısı bu görevi hiç
+ * saymıyordu.
+ *
  * @param {object} task
  * @param {Date} [referenceDate]
  * @returns {{due: string|null, days: number|null, tone: object, text: string}}
  */
 export function dueTone(task, referenceDate = today()) {
-  const due = task?.targetFinish || task?.plannedFinish || null;
+  const target = task?.targetFinish || null;
+  const due = target || task?.plannedFinish || null;
   if (!due) return { due: null, days: null, tone: DAY_TONE.later, text: 'Tarih yok' };
 
   const days = diffDays(due, referenceDate);
+  if (!target) {
+    // Termin yok: geçmiş bir planlanan bitiş gecikme olarak sunulmaz.
+    if (days < 0) return { due, days, tone: DAY_TONE.later, text: `Planlanan bitiş ${Math.abs(days)} gün önceydi` };
+    if (days === 0) return { due, days, tone: DAY_TONE.later, text: 'Planlanan bitiş bugün' };
+    if (days === 1) return { due, days, tone: DAY_TONE.soon, text: 'Planlanan bitiş yarın' };
+    if (days <= 7) return { due, days, tone: DAY_TONE.soon, text: `Planlanan bitişe ${days} gün` };
+    return { due, days, tone: DAY_TONE.later, text: `Planlanan bitişe ${days} gün` };
+  }
   // Bugün biten iş de gecikme rengini alır: gün bitmeden yapılması gerekir.
   if (days < 0) return { due, days, tone: DAY_TONE.overdue, text: `${Math.abs(days)} gün gecikti` };
   if (days === 0) return { due, days, tone: DAY_TONE.overdue, text: 'Bugün' };
