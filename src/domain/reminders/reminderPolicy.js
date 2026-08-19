@@ -97,16 +97,23 @@ function parseDueDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-/** Kalan süreyi insan okunur biçimde anlatır. */
+/**
+ * Kalan süreyi insan okunur biçimde anlatır.
+ *
+ * Gün sayısı YUKARI yuvarlanır ve `remaining_days` yer tutucusuyla birebir
+ * aynı değeri verir: aynı iletide "3 gün kaldı" yazarken sayının 2 görünmesi
+ * okuyucuyu yanıltırdı. Bir günden az kalan süre saat olarak anlatılır.
+ */
 export function describeRemainingDuration(remainingMinutes) {
   if (remainingMinutes == null) return 'termin tarihi belirtilmemiş';
   if (remainingMinutes < 0) {
     const lateDays = Math.ceil(Math.abs(remainingMinutes) / MINUTES_PER_UNIT.day);
     return `${lateDays} gün geçti`;
   }
-  const days = Math.floor(remainingMinutes / MINUTES_PER_UNIT.day);
-  if (days >= 1) return `${days} gün kaldı`;
-  const hours = Math.floor(remainingMinutes / MINUTES_PER_UNIT.hour);
+  if (remainingMinutes >= MINUTES_PER_UNIT.day) {
+    return `${Math.ceil(remainingMinutes / MINUTES_PER_UNIT.day)} gün kaldı`;
+  }
+  const hours = Math.ceil(remainingMinutes / MINUTES_PER_UNIT.hour);
   if (hours >= 1) return `${hours} saat kaldı`;
   return 'bugün son gün';
 }

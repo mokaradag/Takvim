@@ -38,7 +38,10 @@ export async function deliverTaskReminder(executor, {
   kind,
   logId = null,
   actorSicil = null,
-  now = new Date()
+  now = new Date(),
+  // Posta hizmeti ENJEKTE EDİLEBİLİR: testler SMTP sunucusu olmadan da
+  // başarı/başarısızlık yollarını sınayabilir. Üretimde varsayılan kullanılır.
+  send = sendMail
 }) {
   const rows = await loadReminderRecipientRows(executor, task.id);
   const { recipients, resolved, problems } = resolveReminderRecipients(rows);
@@ -58,7 +61,7 @@ export async function deliverTaskReminder(executor, {
     now
   });
   const rendered = renderReminderEmail({ subject: settings.subject, body: settings.body }, values);
-  const sent = await sendMail({
+  const sent = await send({
     to: recipients,
     subject: rendered.subject,
     html: rendered.html,
@@ -86,7 +89,7 @@ export async function deliverTaskReminder(executor, {
  * Alıcılar yalnızca görevin kendisinden türetilir; istemci alıcı listesi
  * gönderemez (açık posta rölesi olmaması için).
  */
-export async function sendManualReminder(executor, { taskId, actorSicil, now = new Date() }) {
+export async function sendManualReminder(executor, { taskId, actorSicil, now = new Date(), send = sendMail }) {
   const task = await loadReminderTask(executor, taskId);
   if (!task) return { ok: false, code: 'TASK_NOT_FOUND', message: 'Hatırlatma gönderilecek görev bulunamadı.' };
 
@@ -99,7 +102,7 @@ export async function sendManualReminder(executor, { taskId, actorSicil, now = n
     actorSicil
   });
 
-  return deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now });
+  return deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now, send });
 }
 
 /**
@@ -111,7 +114,7 @@ export async function sendManualReminder(executor, { taskId, actorSicil, now = n
  * @returns {Promise<{ok: boolean, enabled: boolean, evaluated: number,
  *   sent: number, skipped: number, failed: number, results: Array<object>}>}
  */
-export async function runAutomaticReminders(executor, { now = new Date(), actorSicil = null } = {}) {
+export async function runAutomaticReminders(executor, { now = new Date(), actorSicil = null, send = sendMail } = {}) {
   const settings = await loadReminderSettings(executor);
   if (!settings.automaticEnabled) {
     return { ok: true, enabled: false, evaluated: 0, sent: 0, skipped: 0, failed: 0, results: [] };
@@ -163,7 +166,8 @@ export async function runAutomaticReminders(executor, { now = new Date(), actorS
         kind: 'AUTOMATIC',
         logId,
         actorSicil,
-        now
+        now,
+        send
       });
       if (delivery.ok) {
         sent += 1;

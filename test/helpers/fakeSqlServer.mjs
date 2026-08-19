@@ -160,7 +160,32 @@ export function createFakeDatabase(seed = {}) {
       ContentHash: entry.ContentHash,
       NodeCount: entry.NodeCount ?? 0,
       SyncedBySicil: entry.SyncedBySicil ?? null
-    }))
+    })),
+    // Kurumsal kullanıcı dizini (DC01_userr). MERGEN Rota tarafından
+    // OLUŞTURULMAZ; yalnızca okunur.
+    corporateUsers: (seed.corporateUsers || []).map((entry) => ({
+      Name: entry.Name,
+      EmailAddress: entry.EmailAddress ?? null
+    })),
+    // Hatırlatma yapılandırması ve KALICI gönderim geçmişi.
+    reminderSettings: seed.reminderSettings === null ? null : (seed.reminderSettings || undefined),
+    taskReminderLog: (seed.taskReminderLog || []).map((entry, index) => ({
+      TaskReminderLogId: index + 1,
+      TaskId: guid(entry.TaskId),
+      ProjectId: guid(entry.ProjectId),
+      ReminderKind: entry.ReminderKind || 'AUTOMATIC',
+      SlotKey: entry.SlotKey,
+      Status: entry.Status || 'SENT',
+      RecipientCount: entry.RecipientCount ?? 0,
+      RecipientDigest: entry.RecipientDigest ?? null,
+      FailureCode: entry.FailureCode ?? null,
+      RequestedBySicil: entry.RequestedBySicil ?? null,
+      CreatedAt: entry.CreatedAt || new Date().toISOString(),
+      CompletedAt: entry.CompletedAt || null
+    })),
+    // `reminderSchemaMissing: true` ile 0005 göçü çalıştırılmamış bir kurulum
+    // taklit edilir.
+    reminderSchemaMissing: Boolean(seed.reminderSchemaMissing)
   };
 }
 
@@ -196,6 +221,13 @@ function calendarRows(db) {
   return rows;
 }
 
+/** Görev, kullanıcıya ya da astlarından birine atanmış mı? */
+function visibleAssignee(db, taskId, sicil) {
+  return db.taskAssignees.some((entry) => sameGuid(entry.TaskId, taskId)
+    && (entry.Sicil === sicil
+      || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil)));
+}
+
 function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
   const visible = new Map();
   if (isAdmin) {
@@ -207,8 +239,12 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
       const corporateAccess = project.SourceType === 'CORPORATE' && db.corporateProjectAccess
         .some((entry) => entry.Sicil === sicil && String(entry.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase());
       const grant = db.projectAccess.find((entry) => entry.IsActive && entry.Sicil === sicil && sameGuid(entry.ProjectId, project.ProjectId));
+      // Kendi görevi ya da astının görevi bulunan proje KISMİ görünür olur;
+      // gerçek sorgu da aynı üç kaynağın birleşimini kullanır.
+      const scopedTask = db.tasks.some((task) => sameGuid(task.ProjectId, project.ProjectId)
+        && visibleAssignee(db, task.TaskId, sicil));
       if (corporateAccess || grant?.AccessLevel === 'FULL') visible.set(project.ProjectId, 'FULL');
-      else if (grant) visible.set(project.ProjectId, 'PARTIAL');
+      else if (grant || scopedTask) visible.set(project.ProjectId, 'PARTIAL');
     }
   }
 
@@ -221,8 +257,18 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
   const wbs = db.wbs
     .filter((node) => visible.get(guid(node.ProjectId)) === 'FULL')
     .sort((left, right) => (left.SortOrder ?? 0) - (right.SortOrder ?? 0) || String(left.Code).localeCompare(String(right.Code)));
+  // KISMİ projelerde yalnızca kendi/astının görevleri döner.
   const tasks = db.tasks
-    .filter((task) => visible.has(guid(task.ProjectId)))
+    .filter((task) => {
+      const level = visible.get(guid(task.ProjectId));
+      if (!level) return false;
+      if (level === 'FULL') return true;
+      const readGranted = db.projectAccess.some((entry) => entry.IsActive
+        && entry.Sicil === sicil
+        && entry.AccessLevel === 'READ'
+        && sameGuid(entry.ProjectId, task.ProjectId));
+      return readGranted || visibleAssignee(db, task.TaskId, sicil);
+    })
     .map((task) => ({ ...task, AccessLevel: visible.get(guid(task.ProjectId)) }));
   const assignees = db.taskAssignees.filter((entry) => tasks.some((task) => sameGuid(task.TaskId, entry.TaskId)));
   const dependencies = db.taskDependencies.filter((entry) => visible.get(guid(entry.ProjectId)) === 'FULL');
@@ -517,6 +563,173 @@ function runQuery(db, statement, params, { database }) {
     const calendar = db.calendars.find((entry) => sameGuid(entry.CalendarId, params.calendarId) && entry.IsActive);
     return result([calendar ? [{ CalendarId: calendar.CalendarId }] : []]);
   }
+  // Hatırlatma gönderme yetkisi: kullanıcı görevi GÖRÜYOR mu?
+  if (sqlText.includes('SELECT TOP (1) t.TaskId') && sqlText.includes('MR_V_CorporateProjectAccess')) {
+    const task = db.tasks.find((entry) => sameGuid(entry.TaskId, params.taskId)) || null;
+    const project = task ? projectById(db, task.ProjectId) : null;
+    if (!task || !project?.IsActive) return result([[]]);
+    const code = String(project.ProjectCode || '').toUpperCase();
+    const corporate = db.corporateProjectAccess.some((entry) => entry.Sicil === params.sicil
+      && String(entry.ProjectCode).toUpperCase() === code);
+    const granted = db.projectAccess.some((entry) => entry.IsActive
+      && entry.Sicil === params.sicil
+      && sameGuid(entry.ProjectId, task.ProjectId));
+    const assigned = db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId)
+      && (entry.Sicil === params.sicil
+        || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil)));
+    return result([corporate || granted || assigned ? [{ TaskId: task.TaskId }] : []]);
+  }
+
+  /* ── Görev hatırlatma e-postaları ─────────────────────────── */
+  if (sqlText.includes('FROM dbo.MR_ReminderSettings')) {
+    if (db.reminderSchemaMissing) {
+      const error = new Error("Invalid object name 'dbo.MR_ReminderSettings'.");
+      error.number = 208;
+      throw error;
+    }
+    return result([db.reminderSettings ? [db.reminderSettings] : []]);
+  }
+  if (sqlText.includes('UPDATE dbo.MR_ReminderSettings')) {
+    if (db.reminderSchemaMissing) {
+      const error = new Error("Invalid object name 'dbo.MR_ReminderSettings'.");
+      error.number = 208;
+      throw error;
+    }
+    db.reminderSettings = {
+      AutomaticEnabled: params.automaticEnabled ? 1 : 0,
+      WindowValue: params.windowValue,
+      WindowUnit: params.windowUnit,
+      FrequencyValue: params.frequencyValue,
+      FrequencyUnit: params.frequencyUnit,
+      SubjectTemplate: params.subjectTemplate,
+      BodyTemplate: params.bodyTemplate,
+      UpdatedAt: new Date().toISOString(),
+      UpdatedBySicil: params.actorSicil ?? null
+    };
+    return result([[]]);
+  }
+  if (sqlText.includes('FROM dbo.MR_Tasks t') && sqlText.includes('p.ProjectCode, p.ProjectName') && sqlText.includes('WHERE t.TaskId = @taskId')) {
+    const task = db.tasks.find((entry) => sameGuid(entry.TaskId, params.taskId));
+    if (!task) return result([[]]);
+    const project = projectById(db, task.ProjectId);
+    return result([[{
+      TaskId: task.TaskId,
+      ProjectId: task.ProjectId,
+      Title: task.Title,
+      Description: task.Description,
+      Keyword: task.Keyword,
+      Status: task.Status,
+      Priority: task.Priority,
+      TargetFinish: task.TargetFinish,
+      PlannedStart: task.PlannedStart,
+      PlannedFinish: task.PlannedFinish,
+      ProjectCode: project?.ProjectCode ?? null,
+      ProjectName: project?.ProjectName ?? null
+    }]]);
+  }
+  if (sqlText.includes('directory.EmailAddress AS Email')) {
+    // Sorumlu → HR02 kullanıcı adı → DC01_userr.Name → EmailAddress zinciri.
+    const rows = db.taskAssignees
+      .filter((entry) => sameGuid(entry.TaskId, params.taskId))
+      .map((entry) => {
+        const person = db.people.find((candidate) => candidate.Sicil === entry.Sicil) || null;
+        const username = person?.Username ? String(person.Username).trim() : '';
+        const directory = username
+          ? db.corporateUsers.find((candidate) => String(candidate.Name || '').trim() === username
+            && String(candidate.EmailAddress || '').trim() !== '')
+          : null;
+        return {
+          Sicil: entry.Sicil,
+          Name: person?.DisplayName ?? null,
+          Username: person?.Username ?? null,
+          Email: directory ? String(directory.EmailAddress).trim() : null
+        };
+      });
+    return result([rows]);
+  }
+  if (sqlText.includes('FROM dbo.MR_Tasks t') && sqlText.includes('@horizonDays')) {
+    const horizon = new Date();
+    horizon.setHours(0, 0, 0, 0);
+    const start = new Date(horizon);
+    horizon.setDate(horizon.getDate() + Number(params.horizonDays || 7));
+    const rows = db.tasks.filter((task) => {
+      const project = projectById(db, task.ProjectId);
+      if (!project?.IsActive) return false;
+      if (!task.TargetFinish) return false;
+      if (['done', 'completed', 'cancelled'].includes(String(task.Status || '').toLowerCase())) return false;
+      const due = new Date(`${task.TargetFinish}T00:00:00`);
+      if (due < start || due > horizon) return false;
+      return db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId));
+    }).map((task) => ({
+      TaskId: task.TaskId,
+      ProjectId: task.ProjectId,
+      Title: task.Title,
+      Status: task.Status,
+      TargetFinish: task.TargetFinish
+    }));
+    return result([rows]);
+  }
+  if (sqlText.includes("ReminderKind = 'AUTOMATIC'") && sqlText.includes('INSERT dbo.MR_TaskReminderLog')) {
+    // Benzersiz dizin taklidi: aynı (TaskId, SlotKey) ikinci kez sahiplenilemez.
+    const taken = db.taskReminderLog.some((entry) => sameGuid(entry.TaskId, params.taskId)
+      && entry.SlotKey === params.slotKey
+      && entry.ReminderKind === 'AUTOMATIC');
+    if (taken) return result([[{ TaskReminderLogId: null }]]);
+    const logId = db.taskReminderLog.length + 1;
+    db.taskReminderLog.push({
+      TaskReminderLogId: logId,
+      TaskId: guid(params.taskId),
+      ProjectId: guid(params.projectId),
+      ReminderKind: 'AUTOMATIC',
+      SlotKey: params.slotKey,
+      Status: 'PENDING',
+      RecipientCount: 0,
+      RecipientDigest: null,
+      FailureCode: null,
+      RequestedBySicil: params.actorSicil ?? null,
+      CreatedAt: new Date().toISOString(),
+      CompletedAt: null
+    });
+    return result([[{ TaskReminderLogId: logId }]]);
+  }
+  if (sqlText.includes("VALUES(@taskId, @projectId, 'MANUAL'")) {
+    const logId = db.taskReminderLog.length + 1;
+    db.taskReminderLog.push({
+      TaskReminderLogId: logId,
+      TaskId: guid(params.taskId),
+      ProjectId: guid(params.projectId),
+      ReminderKind: 'MANUAL',
+      SlotKey: params.slotKey,
+      Status: 'PENDING',
+      RecipientCount: 0,
+      RecipientDigest: null,
+      FailureCode: null,
+      RequestedBySicil: params.actorSicil ?? null,
+      CreatedAt: new Date().toISOString(),
+      CompletedAt: null
+    });
+    return result([[{ TaskReminderLogId: logId }]]);
+  }
+  if (sqlText.includes('UPDATE dbo.MR_TaskReminderLog')) {
+    const entry = db.taskReminderLog.find((row) => row.TaskReminderLogId === Number(params.logId));
+    if (entry) {
+      entry.Status = params.status;
+      entry.RecipientCount = params.recipientCount ?? 0;
+      entry.RecipientDigest = params.recipientDigest ?? null;
+      entry.FailureCode = params.failureCode ?? null;
+      entry.CompletedAt = new Date().toISOString();
+    }
+    return result([[]]);
+  }
+  if (sqlText.includes('FROM dbo.MR_TaskReminderLog') && sqlText.includes('ORDER BY TaskReminderLogId DESC')) {
+    if (db.reminderSchemaMissing) {
+      const error = new Error("Invalid object name 'dbo.MR_TaskReminderLog'.");
+      error.number = 208;
+      throw error;
+    }
+    return result([[...db.taskReminderLog].reverse().slice(0, Number(params.limit || 20))]);
+  }
+
   // Görev atama kapsamı denetimleri.
   if (sqlText.includes("WHERE ProjectId = @projectId AND SourceType = 'CORPORATE' AND IsActive = 1")) {
     const project = projectById(db, params.projectId);
