@@ -161,8 +161,37 @@ Record browser, OS, build commit and viewport dimensions with the result.
 
 ## Basit Mod
 
-- The sidebar exposes Takvim, Gantt, Kullanım Rehberi and Ayarlar.
+- The sidebar exposes Görevler, Takvim, Gantt, Kullanım Rehberi and Ayarlar.
 - Gantt renders the portfolio timeline, identical to Gelişmiş Mod's portfolio Gantt.
+- Görevler shows the simplified table only: Proje, Görev, Kısa açıklama,
+  Sorumlular, Öncelik, Durum, Termin. No progress bar, effort/hours, start date,
+  baseline, dependency or WBS column appears anywhere on the page.
+- Search, the status segments, the priority filter and the sort selector all
+  narrow/reorder the list; clearing them restores the full list.
+- Clicking a row opens the simplified task panel, which edits only those same
+  fields and saves without touching advanced planning data.
+- Öncelik appears in Hızlı Görev Tanımı, in the table, in the panel and in the
+  filter — with the same four labels and badge colours as Gelişmiş Mod.
+- Switching to Gelişmiş Mod still shows the full Görevler table unchanged.
+
+## Görev hatırlatma
+
+- A compact envelope button sits next to the Delete button on task rows and in
+  the task panel footer, in both modes, with a tooltip and an aria-label.
+- Pressing it shows a pending state, then either a success message naming the
+  recipient count or an explicit error; it never reports success without an
+  accepted send.
+- The button is disabled while a send is in flight, so a double click cannot
+  produce two messages.
+- Sending does not modify or delete the task: the row's values are unchanged
+  afterwards.
+- The button works while automatic reminders are disabled.
+- The **Hatırlatma** page appears in the sidebar only for administrators; a
+  non-administrator navigating to it sees a refusal rather than the editor.
+- The template editor's toolbar (bold/italic/list/link) applies formatting, the
+  placeholder list inserts tokens, and the preview renders real task values.
+- Saving the automatic policy shows the human-readable schedule summary
+  ("termine 7 gün kala başlar ve 2 günde bir yinelenir").
 
 ## Kanban, Reports, Settings and persistence status
 

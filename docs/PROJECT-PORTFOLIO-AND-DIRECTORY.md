@@ -113,6 +113,24 @@ Bu ayrım binlerce çalışanın bulunduğu dizinde zorunludur: ad eşlemesi (`i
 
 Yalnızca `sorumlu` (ad listesi) gönderen eski çağrılarda kimlik türetme davranışı korunur.
 
+## Görev tanımlamada proje seçimi
+
+Görev tanımlarken açılan proje listesi, çalışma alanı seçicisindeki **görünür**
+proje listesiyle aynı değildir. Sunucu anlık görüntüsü iki ayrı dizi taşır:
+`projects` (görülebilenler) ve `assignableProjects` (görev tanımlamak için
+seçilebilenler). İkincisi birinciyle asla birleştirilmez; süzgeçler, raporlar,
+portföy istatistikleri ve görev görünürlüğü değişmeden kalır.
+
+Sıradan kullanıcıda `assignableProjects` boştur: seçici eskisi gibi yalnızca
+kendi `corporateprojectaccess` projelerini gösterir. Müdür/direktör/takım
+liderinde ise tüm etkin CN43N kataloğunu taşır; büyük katalogda seçici yine
+`SearchableSelect` üzerinden aranarak kullanılır ve kök iş dağılım düğümü
+(`rootWbsId`) proje kaydıyla birlikte gelir, böylece görev seçimden hemen sonra
+yazılabilir.
+
+Kural ve sunucu tarafı sınırı: `docs/AUTHORIZATION-MODEL.md` · *Task assignment
+scope*.
+
 ## Kayıt güvenilirliği
 
 Gerçek Sistem kayıtları için şu korumalar uygulanır:

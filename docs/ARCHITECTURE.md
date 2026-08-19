@@ -32,6 +32,8 @@ WBS is a separate structural domain entity. Shared pure selectors own hierarchy 
 
 WBS rollups exist in two shapes: `selectWbsTaskRollup` for a single node, and `selectWbsRollupIndex` for every node in one pass. Anything that renders many rows uses the index; per-row calls to the single-node selector are quadratic in the node count.
 
+`reminders/` owns task-reminder rules with no I/O of any kind. `reminderTemplate.js` holds the placeholder catalog, the allowlist HTML sanitizer, placeholder substitution with HTML escaping, plain-text derivation and the default Turkish subject/body. `reminderPolicy.js` holds the automatic policy: settings normalization, remaining-duration description, window/frequency evaluation and the deterministic *slot key* used for duplicate-send prevention. `reminderRecipients.js` and `emailAddress.js` own address validation, normalization and de-duplication; `reminderValues.js` maps a Task onto placeholder values. Because these modules are pure, the whole reminder decision surface is tested without a clock, a database or an SMTP server.
+
 ### `src/scheduling`
 
 Pure scheduling logic. `dates` owns parsing, formatting and date-range helpers; `calendars` owns holiday/working-day rules; `dependencies` owns FS/SS/FF/SF metadata and normalization; `plans` owns canonical current-plan duration normalization; `metrics` owns schedule-derived calculations used by Gantt and task status summaries; `cpm` owns the calendar-aware critical-path engine, forward/backward passes, early/late dates, float and critical paths. Scheduling remains independent from React and application state.
@@ -128,6 +130,12 @@ Corporate WBS synchronization is split into a pure projection module (`repositor
 
 Snapshot loading is deliberately two steps: `refreshCorporateCatalog()` brings the corporate catalog up to date and `readSnapshot()` reads the authorized snapshot. `projectedSqlAppRepository` calls the refresh *before* opening its serializable read transaction, so a large CN43N merge never inherits serializable isolation or holds range locks across the read. `loadSnapshot()` remains the composition of the two for callers that want both.
 
+`mail/` is the SMTP transport. `smtpConfig.js` reads server-only environment variables (never `NEXT_PUBLIC_*`), `mimeMessage.js` builds an RFC 5322 multipart/alternative message with encoded headers and dot-stuffed bodies, `smtpClient.js` speaks the SMTP dialogue over `node:net`/`node:tls` (EHLO → STARTTLS → EHLO → AUTH → MAIL FROM → RCPT TO → DATA → QUIT) and `mailService.js` composes the two. No third-party mail dependency is added: the native server stack already performs this flow, and credentials never leave the server process or appear in logs.
+
+`reminders/` is the reminder application service. `reminderQueries.js` owns the SQL text, including the recipient chain `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress`; `reminderStore.js` reads/writes the settings row and the send log and masks addresses before they reach any log line; `reminderAccess.js` owns the authorization checks (task access, admin-only settings, the scheduler key compared with `timingSafeEqual`); `reminderService.js` orchestrates the single shared path `deliverTaskReminder()` used by both the manual button and the scheduler, so the two flows can never diverge in recipient resolution, rendering or transport. The send function is injectable, which is how integration tests exercise everything up to the socket.
+
+The scheduler is server-side: `POST /api/mergen-rota/reminders/run` runs one automatic pass and is driven by Windows Task Scheduler or cron. No browser needs to be open. Duplicate sends are prevented by claiming the deterministic slot key in `MR_TaskReminderLog` *before* sending, under a unique filtered index, so restarts and multiple application instances converge on one message per slot.
+
 ### Presentation and styling ownership
 
 Presentation follows the same ownership rule as domain, scheduling, data and state architecture: current behavior is defined by the component or feature that owns it, not by a chronological override chain. `src/app/globals.css` owns global tokens/base primitives; `src/app/styles/shell.css` owns application chrome; `dashboard.css` owns Dashboard structure; `components.css` owns shared visual/component, form and table contracts; `features.css` owns Gantt, WBS and Task Detail layout sections; `simple-mode.css` owns Basit Mod; and `experience.css` owns mode/settings/help presentation.
@@ -143,6 +151,8 @@ Shared layer tokens define sticky, chrome, popover, drawer, modal and tooltip or
 - Date, dependency, calendar, current-plan duration or CPM calculations: `src/scheduling`
 - Repository contracts, memory/API/database adapters and migration boundaries: `src/data`
 - Global client orchestration, async persistence commands, workspace selection and derived application projections: `src/state`
+- Reminder rules, templates and policy: `src/domain/reminders`
+- SMTP transport, reminder persistence and the reminder service: `src/server/mail` and `src/server/reminders`
 - Feature UI and feature-only helpers: the relevant `src/features/<feature>` folder
 - Generic visual primitives: `src/components/ui*`
 - Sidebar/topbar/global overlays and application lifecycle surfaces: `src/components/shell`
