@@ -277,8 +277,28 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
         && sameGuid(entry.ProjectId, task.ProjectId));
       return readGranted || visibleAssignee(db, task.TaskId, sicil);
     })
-    .map((task) => ({ ...task, AccessLevel: visible.get(guid(task.ProjectId)) }));
-  const assignees = db.taskAssignees.filter((entry) => tasks.some((task) => sameGuid(task.TaskId, entry.TaskId)));
+    .map((task) => ({
+      ...task,
+      AccessLevel: visible.get(guid(task.ProjectId)),
+      // YETKİLİ sorumlu sayısı: görünen satırlarla farkı, gizlenmiş bir eş
+      // sorumlu olduğunu söyler (kimlik taşımaz).
+      AssigneeCount: db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, task.TaskId)).length
+    }));
+  // Sorumlu satırları da süzülür: KISMİ projede yalnızca kullanıcının kendisi
+  // ve kapsamındaki çalışanlar görünür. Süzgeç olmadan kapsam dışı eş sorumlu
+  // istemciye sızıyor ve panelin salt okunur açılma kuralı sınanamıyordu.
+  const assignees = db.taskAssignees.filter((entry) => {
+    const task = tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
+    if (!task) return false;
+    if (task.AccessLevel === 'FULL') return true;
+    const readGranted = db.projectAccess.some((grant) => grant.IsActive
+      && grant.Sicil === sicil
+      && grant.AccessLevel === 'READ'
+      && sameGuid(grant.ProjectId, task.ProjectId));
+    if (readGranted) return true;
+    return entry.Sicil === sicil
+      || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil);
+  });
   const dependencies = db.taskDependencies.filter((entry) => visible.get(guid(entry.ProjectId)) === 'FULL');
   const people = db.people.map((person) => ({ ...person }));
 
@@ -294,9 +314,18 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
         ProjectTypeCode: project.ProjectTypeCode ?? null,
         ProjectTypeName: project.ProjectTypeName ?? null,
         ColorToken: project.ColorToken ?? null,
+        CalendarId: project.CalendarId ?? null,
         RootWbsId: db.wbs.find((node) => sameGuid(node.ProjectId, project.ProjectId) && node.ParentWbsId == null)?.WbsId ?? null
       }))
       .sort((left, right) => String(left.ProjectCode || '').localeCompare(String(right.ProjectCode || '')))
+    : [];
+
+  // Atama kapsamındaki çalışanlar: seçiciler bu kümeyle sınırlanır.
+  const assignmentScope = canAssignAllCorporate
+    ? db.executiveScope
+      .filter((entry) => entry.ManagerSicil === sicil)
+      .map((entry) => ({ EmployeeSicil: entry.EmployeeSicil }))
+      .sort((left, right) => left.EmployeeSicil - right.EmployeeSicil)
     : [];
 
   return [
@@ -310,7 +339,8 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
     db.taskBaselineSnapshots,
     calendarRows(db),
     people,
-    assignable
+    assignable,
+    assignmentScope
   ];
 }
 
@@ -561,7 +591,24 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
     const ids = new Set(String(params.taskIds || '').split(',').map((value) => value.trim().toUpperCase()).filter(Boolean));
-    return result([db.taskAssignees.filter((entry) => ids.has(String(entry.TaskId).toUpperCase()))]);
+    // Tamamlama, anlık görüntüyle AYNI görünürlük kuralına uyar: kapsam dışı eş
+    // sorumlu geri getirilmez.
+    return result([db.taskAssignees.filter((entry) => {
+      if (!ids.has(String(entry.TaskId).toUpperCase())) return false;
+      if (params.isAdmin) return true;
+      const task = db.tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
+      if (!task) return false;
+      const project = projectById(db, task.ProjectId);
+      const corporate = project?.SourceType === 'CORPORATE' && db.corporateProjectAccess
+        .some((row) => row.Sicil === params.sicil
+          && String(row.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase());
+      const granted = db.projectAccess.some((row) => row.IsActive
+        && row.Sicil === params.sicil
+        && ['FULL', 'READ'].includes(row.AccessLevel)
+        && sameGuid(row.ProjectId, task.ProjectId));
+      return corporate || granted || entry.Sicil === params.sicil
+        || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil);
+    })]);
   }
   if (sqlText.includes('SELECT TOP (1) CalendarId') && sqlText.includes('IsDefault = 1 AND IsActive = 1') && !sqlText.includes('@calendarId')) {
     const calendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;

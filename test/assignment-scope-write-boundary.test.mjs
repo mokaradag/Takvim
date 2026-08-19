@@ -280,6 +280,46 @@ test('yetki, kurumsal rehber yoklamasından ÖNCE denetlenir', async () => {
   }
 });
 
+/* ── 5b. Gizli eş sorumlu ───────────────────────────────────────── */
+
+test('KISMİ anlık görüntü kapsam dışı eş sorumluyu istemciye vermez', async () => {
+  const seed = assignmentSeed();
+  seed.tasks = [{
+    TaskId: NEW_TASK_ID,
+    ProjectId: CORPORATE_PROJECT_ID,
+    WbsId: CORPORATE_ROOT_WBS_ID,
+    Title: 'Ortak görev',
+    Status: 'planned',
+    Priority: 'medium',
+    TargetFinish: '2026-08-20'
+  }];
+  // Görev bir asta VE kapsam dışı bir çalışana atanmıştır.
+  seed.taskAssignees = [
+    { TaskId: NEW_TASK_ID, Sicil: SUBORDINATE_SICIL },
+    { TaskId: NEW_TASK_ID, Sicil: OUTSIDER_SICIL }
+  ];
+
+  const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
+  try {
+    const snapshot = await stack.repository.loadSnapshot();
+    const task = snapshot.tasks.find((entry) => String(entry.id).toLowerCase().includes('aa11bb22'));
+    assert.ok(task, 'görev astı üzerinden yöneticiye görünür');
+
+    // Kapsam dışı sorumlunun Sicili istemciye TAŞINMAZ. Görünür görevler için
+    // çalışan sorumlu tamamlaması, anlık görüntünün gizlediği satırları geri
+    // getirmemelidir.
+    assert.deepEqual(task.assigneeIds, [String(SUBORDINATE_SICIL)]);
+    assert.equal(task.assigneeIds.includes(String(OUTSIDER_SICIL)), false);
+
+    // Yetkili SAYI yine de bildirilir: arayüz "gizli sorumlu var" sonucuna
+    // varıp paneli salt okunur açabilsin diye. Sayı kimlik taşımaz.
+    assert.equal(task.assigneeCount, 2);
+    assert.ok(task.assigneeCount > task.assigneeIds.length, 'gizli sorumlu tespit edilebilmelidir');
+  } finally {
+    await stack.dispose();
+  }
+});
+
 /* ── 6. Basit Mod planı ─────────────────────────────────────────── */
 
 test('Basit Mod düzenlemesi Gelişmiş Modda kurulmuş planın sahibi değildir', () => {
