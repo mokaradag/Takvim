@@ -41,3 +41,12 @@ export function normalizePriorityId(value) {
 export function resolvePriority(value) {
   return PRIORITIES[normalizePriorityId(value)];
 }
+
+/**
+ * Tek bir "Tekrarları oluştur" işleminde en fazla kaç yineleme kalıcılaştırılır.
+ *
+ * Kullanıcıya kaç görevin GERÇEKTEN oluşacağını söyleyebilmek için arayüz ve
+ * üretim aynı sabiti okur; sayı iki yerde yazıldığında panel "12 yeni görev
+ * oluşturulur" derken işlem 60'ta duruyordu.
+ */
+export const TASK_SERIES_BATCH_LIMIT = 60;

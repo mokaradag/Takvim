@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 
 import { dueTone } from '../src/features/team/upcomingTaskPolicy.js';
 import { selectStatusDistribution } from '../src/features/dashboard/statusDistribution.js';
+import { withCompletionStamp } from '../src/state/appState.js';
 
 function read(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -56,9 +57,21 @@ test('personel penceresi kimlikle açılır: süzgeç değişince eski satır ek
 test('personel penceresi yalnızca AÇIK görevleri listeler ve Esc ile kapanır', () => {
   const dialog = read('src/features/team/PersonDetailDialog.jsx');
   assert.match(dialog, /\(member\?\.tasks \|\| \[\]\)\.filter\(\(task\) => task\.status !== 'done'\)/);
-  assert.match(dialog, /if \(event\.key === 'Escape'\) onClose\(\)/);
+  assert.match(dialog, /if \(event\.key === 'Escape'\) \{\s*\n\s*closeHandlerRef\.current\?\.\(\);/);
   assert.match(dialog, /window\.removeEventListener\('keydown', onKey\)/);
   assert.match(dialog, /aria-modal="true"/);
+});
+
+test('personel penceresi odağı içeride tutar ve kapanışta açana geri verir', () => {
+  const dialog = read('src/features/team/PersonDetailDialog.jsx');
+  // `aria-modal` tek başına odağı hapsetmez: sekmeyle ilerleyen kullanıcı
+  // arkadaki TeamView denetimlerine geçebiliyordu.
+  assert.match(dialog, /if \(event\.key !== 'Tab'\) return;/);
+  assert.match(dialog, /event\.preventDefault\(\);\s*\n\s*last\.focus\(\);/);
+  // Odak yalnızca pencere AÇILDIĞINDA taşınır; üst bileşenin her çizimi odağı
+  // geri çalmaz.
+  assert.match(dialog, /\}, \[personId\]\);/);
+  assert.match(dialog, /opener\.focus\(\)/);
 });
 
 test('personel penceresi görünüm alanına sığar ve içeriği kendi içinde kayar', () => {
@@ -134,17 +147,53 @@ test('tarihe duyarlı memolar referans günü bağımlılık olarak taşır', ()
   // sınıflandırmasında kalıyordu.
   for (const file of ['src/features/dashboard/DashboardView.jsx', 'src/features/reports/ReportsView.jsx']) {
     const source = read(file);
-    assert.match(source, /const todayKey = fmtISO\(today\(\)\)/, `${file} kararlı referans gün kullanmalı`);
+    assert.match(source, /const todayKey = useTodayKey\(\)/, `${file} kararlı referans gün kullanmalı`);
     assert.match(source, /parseDate\(todayKey\), \[todayKey\]\)/, `${file} referans günü memolamalı`);
+    // Anahtar gece yarısında kendiliğinden tazelenir; sayfa açık kalsa bile
+    // dünün sınıflandırmasında donmaz.
+    assert.match(read('src/hooks/useTodayKey.js'), /scheduleNextMidnight/);
   }
 });
 
-test('tamamlanma eğrisi görevleri GERÇEKLEŞEN bitişte sayar', () => {
+test('tamamlanma kronolojisi YALNIZCA gerçekleşen bitişten okunur', () => {
   // Planlanan bitişe bakmak, planı ileri bir tarihte olan ama bugün bitirilen
-  // görevi eğriye hiç sokmuyordu.
+  // görevi eğriye hiç sokmuyordu. Planlanan bitişi YEDEK saymak ise ters
+  // yönde yanlıştı: gelecek aya planlanmış bir tamamlanma eğriye gelecek ay
+  // giriyor, gecikmiş bir plan görevi geçmişte bitmiş gösteriyordu.
   for (const file of ['src/features/dashboard/DashboardView.jsx', 'src/features/reports/ReportsView.jsx']) {
-    assert.match(read(file), /t\.actualFinish \|\| t\.plannedFinish/, `${file} gerçekleşen bitişi önceliklendirmeli`);
+    const source = read(file);
+    assert.doesNotMatch(source, /actualFinish \|\| t?\.?plannedFinish/, `${file} planı gerçekleşen yerine koymamalı`);
+    assert.match(source, /taskCompletionDate/, `${file} ortak tamamlanma seçicisini kullanmalı`);
   }
+  // Akış diyagramı ve hız ölçümü de aynı seçiciyi kullanır.
+  const reports = read('src/features/reports/ReportsView.jsx');
+  assert.match(reports, /const finished = taskCompletionDate\(t\);/);
+  // Tamamlanmaya geçiş gerçekleşen bitişi damgalar; ölçümler artık boş alanla
+  // baş başa kalmaz.
+  assert.match(read('src/state/AppStateProvider.jsx'), /withCompletionStamp\(stateRef\.current, id, patch\)/);
+});
+
+test('tamamlanmaya geçiş gerçekleşen başlangıcı ve bitişi damgalar', () => {
+  const state = {
+    tasks: [
+      { id: 'a', status: 'todo', plannedStart: '2026-08-10', actualStart: null, actualFinish: null },
+      { id: 'b', status: 'todo', plannedStart: '2026-08-25', actualStart: null, actualFinish: null },
+      { id: 'c', status: 'in_progress', actualStart: '2026-08-01', actualFinish: '2026-08-05' }
+    ]
+  };
+  const reference = new Date(2026, 7, 19);
+
+  const stamped = withCompletionStamp(state, 'a', { status: 'done' }, reference);
+  assert.equal(stamped.actualFinish, '2026-08-19');
+  assert.equal(stamped.actualStart, '2026-08-10');
+
+  // Planlanan başlangıç bugünden sonraysa gerçekleşen başlangıç bitişi geçemez.
+  assert.equal(withCompletionStamp(state, 'b', { status: 'done' }, reference).actualStart, '2026-08-19');
+
+  // Zaten gerçekleşen bitişi olan görev DEĞİŞTİRİLMEZ.
+  assert.deepEqual(withCompletionStamp(state, 'c', { status: 'done' }, reference), { status: 'done' });
+  // Durum yaması olmayan güncelleme dokunulmadan geçer.
+  assert.deepEqual(withCompletionStamp(state, 'a', { progress: 40 }, reference), { progress: 40 });
 });
 
 /* ── 6. İş dağılım ağacı sürükleme durumu ───────────────────────── */

@@ -437,7 +437,7 @@
   right: 0;
   height: var(--app-viewport-h, 100vh);
   max-height: var(--app-viewport-h, 100vh);
-  width: min(720px, 100vw);
+  width: min(720px, var(--app-viewport-w, 100vw));
 }
 .drawer .rel-fields-grid {
   grid-template-columns: minmax(210px, 1.7fr) minmax(105px, .7fr) minmax(100px, .7fr);
@@ -533,6 +533,10 @@
   background: color-mix(in oklab, var(--priority-color) 14%, transparent);
   color: var(--text);
 }
+/* Seçili öncelik yeniden yazma üretmesin diye kapatılır; görünümü DEĞİŞMEZ:
+   kapatılmış bir düğme soluk görünseydi seçili değer okunamaz hâle gelirdi. */
+.task-priority-option:disabled { cursor: default; opacity: 1; }
+.task-priority-option:disabled:hover { border-color: color-mix(in oklab, var(--priority-color) 60%, var(--border)); }
 
 /* ── Öncül / ardıl sekmeleri ────────────────────────────────── */
 .rel-tabs { width: 100%; }
@@ -574,7 +578,7 @@
 }
 
 @media (max-width: 760px) {
-  .drawer { width: 100vw; }
+  .drawer { width: var(--app-viewport-w, 100vw); }
   .drawer .rel-fields-grid,
   .task-project-wbs-grid,
   .task-date-grid,
@@ -649,7 +653,15 @@
   from { opacity: 0; transform: translateY(12px) scale(.985); }
   to { opacity: 1; transform: none; }
 }
-.reduce-motion .person-dialog { animation: none; }
+/* Perde de tercihe uyar: yalnızca pencere durdurulduğunda, "Hareketi azalt"
+   açık olan kullanıcı pencereyi her açışında zeminin belirmesini görüyordu.
+   İşletim sistemi tercihi de ayrıca karşılanır. */
+.reduce-motion .person-dialog,
+.reduce-motion .person-dialog-backdrop { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .person-dialog,
+  .person-dialog-backdrop { animation: none; }
+}
 
 .person-dialog-head {
   position: relative;
@@ -809,3 +821,106 @@
 .team-person-button:hover { background: var(--bg-hover); border-color: var(--border); }
 .team-person-button strong { display: block; white-space: nowrap; }
 .team-person-button small { display: block; }
+
+/* ── Hatırlatma e-postası eylemi ve yönetici sayfası ─────────── */
+.task-reminder-action { display: inline-flex; align-items: center; gap: 6px; }
+.task-reminder-button.is-busy { opacity: .7; }
+.task-reminder-result {
+  max-width: 260px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.task-reminder-result.success { color: var(--status-done); }
+.task-reminder-result.warning { color: var(--c-amber); }
+.task-reminder-result.error { color: var(--status-overdue); }
+
+.reminder-settings-page { min-height: 0; }
+.reminder-section { display: flex; flex-direction: column; gap: 12px; }
+.reminder-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.reminder-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.reminder-field-label { font-size: 11.5px; font-weight: 650; color: var(--text-muted); }
+.reminder-summary {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+}
+.reminder-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-color: color-mix(in oklab, var(--status-overdue) 40%, var(--border));
+  color: var(--text);
+  font-size: 12.5px;
+}
+.reminder-warning code { font-family: var(--font-mono); font-size: 11.5px; }
+.reminder-warning-inline { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-amber); }
+.reminder-message { font-size: 12.5px; }
+.reminder-message.success { color: var(--status-done); }
+.reminder-message.warning { color: var(--c-amber); }
+.reminder-message.error { color: var(--status-overdue); }
+.reminder-placeholders { display: flex; flex-direction: column; gap: 7px; }
+.reminder-placeholders-title { font-size: 11.5px; font-weight: 650; color: var(--text-muted); }
+.reminder-placeholder-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+.reminder-placeholder {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+}
+.reminder-placeholder code { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.reminder-placeholder small { font-size: 10.5px; color: var(--text-dim); }
+.reminder-preview-subject { font-size: 12.5px; }
+.reminder-preview-body {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: #ffffff;
+  color: #111827;
+  overflow-x: auto;
+}
+.reminder-preview-body table { border-collapse: collapse; width: 100%; }
+
+/* Zengin metin düzenleyicisi. */
+.rich-editor { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.rich-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev-2);
+}
+.rich-editor-tool {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.rich-editor-tool:hover:not(:disabled) { border-color: var(--border); background: var(--bg-hover); color: var(--text); }
+.rich-editor-tool:disabled { opacity: .45; cursor: default; }
+.rich-editor-surface {
+  min-height: 220px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--bg-input);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.rich-editor-surface:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rich-editor.is-disabled .rich-editor-surface { opacity: .6; }

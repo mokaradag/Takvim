@@ -14,11 +14,44 @@ import {
   normalizeWorkspaceSelection
 } from './selectors/workspaceSelectors.js';
 
+/**
+ * Görev tanımlarken seçilebilen, GÖRÜNÜR olmayan projeler.
+ *
+ * Yöneticinin görev atama kapsamı, kendisine "corporateprojectaccess"
+ * verilmemiş CN43N projelerini de seçilebilir kılar. Bu kayıtlar bilinçli
+ * olarak `state.projects` dışında tutulur: çalışma alanı seçicisi, süzgeçler,
+ * raporlar ve görev görünürlüğü DEĞİŞMEZ.
+ */
+export function selectAssignableProjects(state = {}) {
+  const visible = new Set((state.projects || []).map((project) => String(project.id)));
+  return (state.assignableProjects || []).filter((project) => project && !visible.has(String(project.id)));
+}
+
+/**
+ * Görev normalleştirmesinin bağlamı.
+ *
+ * Seçilebilir projeler ve kök dağılım düğümleri bu bağlama EKLENİR — ama
+ * yalnızca buraya. Aksi hâlde yönetici bu projelerden birine görev tanımladığında
+ * proje adı çözülemez ve kök düğüm bilinmediği için `wbsId` boşaltılırdı.
+ */
 function taskContext(state) {
+  const assignable = selectAssignableProjects(state);
   return {
-    projects: state.projects || [],
+    projects: [...(state.projects || []), ...assignable],
     people: state.people || [],
-    wbs: state.wbs || [],
+    wbs: [
+      ...(state.wbs || []),
+      ...assignable
+        .filter((project) => project.rootWbsId)
+        .map((project) => ({
+          id: project.rootWbsId,
+          projectId: project.id,
+          parentId: null,
+          code: project.code || '',
+          name: project.name,
+          sortOrder: 0
+        }))
+    ],
     calendars: state.calendars || []
   };
 }
@@ -192,6 +225,8 @@ function emptyApplicationData() {
     tasks: [],
     baselines: [],
     taskBaselineSnapshots: [],
+    // Görev atama kapsamındaki (görünür OLMAYAN) kurumsal projeler.
+    assignableProjects: [],
     session: null,
     currentUser: null,
     isSystemAdmin: false,
@@ -244,6 +279,7 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
     ...sessionState,
     calendars: snapshot.calendars || [],
     projects: snapshot.projects || [],
+    assignableProjects: snapshot.assignableProjects || [],
     people: snapshot.people || [],
     wbs: snapshot.wbs || [],
     baselines: snapshot.baselines || [],
@@ -272,6 +308,41 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
 
 export function createInitialState(snapshot = {}) {
   return createStateFromSnapshot(snapshot, createLoadingState());
+}
+
+/**
+ * Görev "Tamamlandı"ya geçerken GERÇEKLEŞEN bitişi damgalar.
+ *
+ * Normal tamamlama yolları (görev panelindeki durum düğmesi, Kanban bırakması)
+ * yalnızca `status: 'done'` yamalıyor, doğrulama da buna izin veriyordu. Sonuç,
+ * gerçekleşen tarihi olmayan tamamlanmış görevlerdi: raporlar bu boşluğu
+ * planlanan bitişle dolduruyor ve gelecek aya planlanmış ama bugün bitirilen
+ * işi eğriye gelecek ay sokuyordu.
+ *
+ * `actualStart` de birlikte doldurulur: kalıcılaştırma sınırı gerçekleşen bitiş
+ * için gerçekleşen başlangıç ister ve başlangıç bitişten sonraya düşemez.
+ *
+ * @returns {object} damgalanmış yama (değişiklik gerekmiyorsa aynı nesne)
+ */
+export function withCompletionStamp(state, taskId, patch, referenceDate = today()) {
+  if (!patch || patch.status !== 'done') return patch;
+  const task = (state?.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
+  if (!task) return patch;
+  const hasFinish = Object.prototype.hasOwnProperty.call(patch, 'actualFinish')
+    ? patch.actualFinish
+    : task.actualFinish;
+  if (hasFinish) return patch;
+
+  const actualFinish = fmtISO(referenceDate);
+  const declaredStart = Object.prototype.hasOwnProperty.call(patch, 'actualStart')
+    ? patch.actualStart
+    : task.actualStart;
+  const candidateStart = declaredStart || task.plannedStart || actualFinish;
+  return {
+    ...patch,
+    actualStart: candidateStart > actualFinish ? actualFinish : candidateStart,
+    actualFinish
+  };
 }
 
 export function normalizeStateTask(task, state) {
@@ -507,15 +578,27 @@ function defaultTaskAssignee(state) {
   return state.people?.[0] || null;
 }
 
-export function createNewTask(state, referenceDate = today(), id = `n-${Date.now()}`) {
+/**
+ * @param {object} state uygulama durumu
+ * @param {Date} [referenceDate]
+ * @param {string} [id]
+ * @param {object|null} [explicitProject] görev atama kapsamındaki bir proje
+ *   görünür proje listesinde BULUNMAZ; çağıran çözdüğü projeyi burada verir,
+ *   aksi hâlde yeni görev sessizce başka bir projeye düşerdi.
+ */
+export function createNewTask(state, referenceDate = today(), id = `n-${Date.now()}`, explicitProject = null) {
+  const candidates = [...(state.projects || []), ...selectAssignableProjects(state)];
   const selectedProject = state.workspaceMode === WORKSPACE_MODE_PROJECT
-    ? state.projects.find((project) => project.id === state.selectedProjectId) || null
+    ? candidates.find((project) => project.id === state.selectedProjectId) || null
     : null;
-  const project = selectedProject || state.projects[0] || null;
+  const project = explicitProject || selectedProject || state.projects[0] || null;
   const person = defaultTaskAssignee(state);
   const calendar = resolveProjectCalendar(project, state.calendars);
   const start = moveToWorkingDay(referenceDate, calendar, 1);
-  const defaultWbs = project ? selectDefaultProjectWbs(state.wbs, project.id) : null;
+  // Görünür ağaç yoksa projenin kök düğümü atama kapsamı kaydından okunur.
+  const defaultWbs = project
+    ? (selectDefaultProjectWbs(state.wbs, project.id) || (project.rootWbsId ? { id: project.rootWbsId } : null))
+    : null;
 
   const task = normalizeStateTask({
     id,

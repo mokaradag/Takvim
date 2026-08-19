@@ -42,22 +42,121 @@ function sourceFiles(dir, out = []) {
   return out;
 }
 
-/** Yorumları ve dizgi gövdelerini düşürür: içlerindeki metin kod sayılmaz. */
+/** Kapanış tırnağından SONRAKİ konumu döndürür (kaçış dizileri dâhil). */
+function skipQuoted(source, index) {
+  const quote = source[index];
+  let i = index + 1;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\') { i += 2; continue; }
+    if (ch === quote) return i + 1;
+    if (ch === '\n') return i;
+    i += 1;
+  }
+  return i;
+}
+
+/**
+ * Şablon dizgisini okur.
+ *
+ * METİN bölümü düşürülür, `${...}` İFADELERİ ise kod olarak korunur. Şablonun
+ * tamamı silinseydi ``${wbsSiblings(nodes, parentId)}`` gibi bir çağrı taramadan
+ * önce yok olur ve bu ratchet tam olarak engellemesi gereken bağlanmamış modül
+ * çağrısını kaçırırdı.
+ */
+function readTemplate(source, index) {
+  let i = index + 1;
+  let code = ' `` ';
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\') { i += 2; continue; }
+    if (ch === '`') { i += 1; break; }
+    if (ch === '$' && source[i + 1] === '{') {
+      i += 2;
+      const start = i;
+      let depth = 1;
+      while (i < source.length && depth > 0) {
+        const inner = source[i];
+        if (inner === '\\') { i += 2; continue; }
+        if (inner === "'" || inner === '"') { i = skipQuoted(source, i); continue; }
+        if (inner === '`') { i = readTemplate(source, i).end; continue; }
+        if (inner === '{') depth += 1;
+        else if (inner === '}') { depth -= 1; if (!depth) break; }
+        i += 1;
+      }
+      code += ` ${stripNonCode(source.slice(start, i))} `;
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return { end: i, code };
+}
+
+/** Yorumları ve dizgi METİNLERİNİ düşürür; şablon ifadeleri kod olarak kalır. */
 function stripNonCode(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
-    .replace(/'(?:\\.|[^'\\])*'/g, "''")
-    .replace(/"(?:\\.|[^"\\])*"/g, '""')
-    .replace(/`(?:\\.|[^`\\])*`/g, '``');
+  let out = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === '/' && next === '*') {
+      const end = source.indexOf('*/', i + 2);
+      i = end < 0 ? source.length : end + 2;
+      out += ' ';
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      const end = source.indexOf('\n', i);
+      i = end < 0 ? source.length : end;
+      out += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      out += ch + ch;
+      i = skipQuoted(source, i);
+      continue;
+    }
+    if (ch === '`') {
+      const parsed = readTemplate(source, i);
+      out += parsed.code;
+      i = parsed.end;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * İçe aktarma yan tümcesinden YEREL bağlanan adları toplar.
+ *
+ * Takma adlı içe aktarmada yalnızca `as` sonrasındaki ad kapsama girer.
+ * Yan tümcedeki her tanımlayıcı bağlı sayılsaydı `import { useState as useState1 }`
+ * yazan bir modülde yanlışlıkla yazılmış bir `useState()` çağrısı taramadan
+ * kaçardı — bu kalıp görünüm dosyalarında zaten kullanılıyor.
+ */
+function bindImportClause(clause, bound) {
+  const named = /\{([\s\S]*?)\}/.exec(clause);
+  for (const part of clause.replace(/\{[\s\S]*?\}/, ' ').split(',')) {
+    const namespace = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(part);
+    if (namespace) { bound.add(namespace[1]); continue; }
+    const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(part);
+    if (name) bound.add(name[1]);
+  }
+  for (const specifier of named ? named[1].split(',') : []) {
+    const alias = /([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/.exec(specifier);
+    if (alias) { bound.add(alias[2]); continue; }
+    const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(specifier.trim());
+    if (name) bound.add(name[1]);
+  }
 }
 
 /** Dosyada bir ada değer bağlayan her sözdizimi. */
 function boundNames(code) {
   const bound = new Set();
-  for (const match of code.matchAll(/import\s+([\s\S]*?)\s+from\s+/g)) {
-    for (const identifier of match[1].matchAll(/[A-Za-z_$][\w$]*/g)) bound.add(identifier[0]);
-  }
+  for (const match of code.matchAll(/import\s+([\s\S]*?)\s+from\s+/g)) bindImportClause(match[1], bound);
   for (const match of code.matchAll(/(?:function|class)\s+([A-Za-z_$][\w$]*)/g)) bound.add(match[1]);
   for (const match of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) bound.add(match[1]);
   for (const match of code.matchAll(/(?:const|let|var)\s*[{[]([^}\]]*)[}\]]/g)) {
@@ -109,14 +208,44 @@ test('kaynak ağacında içe aktarılmamış modül işlevi çağrılmaz', () =>
   assert.deepEqual([...new Set(unbound)], []);
 });
 
+test('tarayıcı şablon dizgisi ifadelerini kod olarak korur', () => {
+  // Şablonun tamamı silinseydi bu çağrı taramadan önce yok olurdu.
+  const code = stripNonCode('const label = `${wbsSiblings(nodes, parentId)} kardeş`;');
+  assert.match(code, /wbsSiblings\(/);
+  // Metin bölümü kod sayılmaz.
+  assert.doesNotMatch(code, /kardeş/);
+  // İç içe şablon ve dizgiler ifadeyi bozmaz.
+  const nested = stripNonCode('const x = `${format(`${inner(value)}`, "a`b")}`;');
+  assert.match(nested, /format\(/);
+  assert.match(nested, /inner\(/);
+  // Yorumlar ve sıradan dizgiler düşer.
+  assert.doesNotMatch(stripNonCode('// notImported()\nconst a = 1;'), /notImported/);
+  assert.doesNotMatch(stripNonCode("const a = 'notImported()';"), /notImported/);
+});
+
+test('içe aktarma taraması yalnızca YEREL bağlanan adı kaydeder', () => {
+  const bound = boundNames("import { useState as useState1, useMemo } from 'react';");
+  assert.equal(bound.has('useState1'), true);
+  assert.equal(bound.has('useMemo'), true);
+  // Takma addan ÖNCEKİ ad kapsamda değildir.
+  assert.equal(bound.has('useState'), false);
+
+  const mixed = boundNames("import React, * as ReactAll from 'react';");
+  assert.equal(mixed.has('React'), true);
+  assert.equal(mixed.has('ReactAll'), true);
+});
+
 test('İş Dağılım Ağacı görünümü sürükle-bırak ilkelerini içe aktarır', () => {
   // Doğrudan gerileme koruması: bu içe aktarma eksikken sayfa açılır açılmaz
   // "Application error: a client-side exception has occurred" ile çöküyordu.
   const view = read('src/features/wbs/WbsView.jsx');
   assert.match(view, /import \{[^}]*createWbsDropIndex[^}]*\} from '\.\/wbsDragPolicy\.js'/s);
-  assert.match(view, /import \{[^}]*wbsSiblings[^}]*\} from '\.\/wbsDragPolicy\.js'/s);
-  assert.match(view, /wbsSiblings\(wbs, node\.parentId\)/);
-  assert.match(view, /createWbsDropIndex\(wbs\)/);
+  assert.match(view, /import \{[^}]*wbsSiblingPlacement[^}]*\} from '\.\/wbsDragPolicy\.js'/s);
+  assert.match(view, /import \{[^}]*wbsIndexChildren[^}]*\} from '\.\/wbsDragPolicy\.js'/s);
+  // Kardeş verisi ağaç değeri başına BİR kez dizinlenir; satır çizimi O(1) okur.
+  assert.match(view, /useMemo\(\(\) => createWbsDropIndex\(wbs\), \[wbs\]\)/);
+  assert.match(view, /wbsSiblingPlacement\(dropIndex, node\)/);
+  assert.match(view, /wbsIndexChildren\(dropIndex, node\.parentId\)/);
 });
 
 test('testlerden içe aktarılan ilke modülleri dizin yolu kullanmaz', () => {
@@ -213,13 +342,17 @@ test('UNTIL sınırı özetteki toplam sayıyı belirler', () => {
   assert.equal(plan.generatedCount, 4);
 });
 
-test('tekrar düzenleyicisi gün düğmelerini devre dışı bırakmaz', () => {
+test('tekrar düzenleyicisi gün seçimini kullanıcıya bırakır, kuralı ise üretimden sonra kilitler', () => {
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.doesNotMatch(drawer, /disabled=\{locked\}/);
   assert.match(drawer, /className=\{`recurrence-day\$\{active \? ' active' : ''\}/);
-  // Kaç YENİ görev oluşacağı açıkça yazılır.
+  // Yineleme ÜRETİLDİKTEN sonra kural alanları kilitlenir: aksi hâlde tek seri
+  // eski ve yeni takvimin karışımına dönüşüyordu.
+  assert.match(drawer, /const ruleLocked = occurrenceCount > 0;/);
+  assert.match(drawer, /disabled=\{ruleLocked\}/);
+  // Kaç yinelemenin KALDIĞI ve tek işlemin toplu sınırı açıkça yazılır.
   assert.match(drawer, /recurrence-count-note/);
-  assert.match(drawer, /plan\.generatedCount/);
+  assert.match(drawer, /const pendingOccurrences = plan\.occurrences\.filter/);
+  assert.match(drawer, /TASK_SERIES_BATCH_LIMIT/);
 });
 
 /* ── 3. Öncelik alanı ───────────────────────────────────────────── */
@@ -228,8 +361,10 @@ test('görev paneli öncelik seçimi sunar', () => {
   // Öncelik Görevler, Gantt, Kanban ve Raporlar sayfalarında GÖSTERİLİYOR ama
   // hiçbir ekrandan TANIMLANAMIYORDU; değer her görevde varsayılan kalıyordu.
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /import \{ PRIORITIES, resolvePriority \} from '\.\.\/\.\.\/domain\/constants\/index\.js'/);
-  assert.match(drawer, /save\(\{ priority: priority\.id \}\)/);
+  assert.match(drawer, /import \{ PRIORITIES, TASK_SERIES_BATCH_LIMIT, resolvePriority \} from '\.\.\/\.\.\/domain\/constants\/index\.js'/);
+  // Zaten seçili öncelik yeniden yazma üretmez: anlamsız bir tıklama görev
+  // sürümünü ilerletip başka bir kullanıcıya çakışma olarak dönüyordu.
+  assert.match(drawer, /if \(!isActive\) save\(\{ priority: priority\.id \}\);/);
   assert.match(drawer, /aria-label="Görev önceliği"/);
   for (const priority of Object.values(PRIORITIES)) {
     assert.ok(priority.label.length > 0);

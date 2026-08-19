@@ -284,8 +284,8 @@ test('dağılım ağacı düzenlemesi engelleyici tarayıcı pencereleri kullanm
 
 test('kurumsal ve salt okunur ağaçlarda satırlar sürüklenemez', () => {
   const view = read('src/features/wbs/WbsView.jsx');
-  assert.match(view, /const draggable = canEdit && node\.parentId != null && !movePending;/);
-  assert.match(view, /if \(!canEdit \|\| node\.parentId == null \|\| movePending \|\| dragHandleNodeId !== node\.id\) \{/);
+  assert.match(view, /const draggable = canEdit && node\.parentId != null && !structuralWritePending;/);
+  assert.match(view, /if \(!canEdit \|\| node\.parentId == null \|\| structuralWritePending \|\| dragHandleNodeId !== node\.id\) \{/);
 });
 
 /* ── 3. Karşılama ekranı ──────────────────────────────────────── */
@@ -672,17 +672,22 @@ test('yineleme planı süreyi korur ve tatil gününü ileri kaydırır', () => 
   assert.deepEqual(plan.map((item) => item.targetFinish), ['2026-08-19', '2026-08-20', '2026-08-21']);
 
   // Hafta sonu çalışma günü değildir: Cumartesi'ye düşen yineleme Pazartesi'ye
-  // kayar. COUNT kaydırma ve tekilleştirmeden SONRAKİ kümeye uygulanır, yani
-  // kullanıcı üç yineleme istediyse üç görev oluşur.
+  // kayar. COUNT kuralın KENDİ yineleme sayısıdır ve kaydırmadan ÖNCE ham
+  // yineleme sırasına uygulanır (RFC 5545). Cuma başlayan `COUNT=3` günlük seri
+  // Cum/Cmt/Paz yinelemelerini tüketir; Cmt ve Paz aynı Pazartesi'ye kaydığı
+  // için ortaya iki görev çıkar. Daha önce kopya elenip döngü kuralın DIŞINDAKİ
+  // dördüncü yinelemeyi tüketiyor ve RRULE'da bulunmayan bir gün üretiliyordu.
   const calendar = { workingDays: [1, 2, 3, 4, 5], holidays: [] };
   const shifted = planRecurringOccurrences(
     { ...template, plannedStart: '2026-08-21', plannedFinish: '2026-08-21', targetFinish: null, plannedDurationDays: 1 },
     { freq: 'DAILY', count: 3 },
     { calendar }
   );
-  assert.deepEqual(shifted.map((item) => item.plannedStart), ['2026-08-21', '2026-08-24', '2026-08-25']);
+  assert.deepEqual(shifted.map((item) => item.plannedStart), ['2026-08-21', '2026-08-24']);
+  // Ham yineleme günü seri kimliğidir ve kaydırmadan etkilenmez.
+  assert.deepEqual(shifted.map((item) => item.occurrenceDate), ['2026-08-21', '2026-08-22']);
   // Şablonun yönetsel termini yoksa yinelemeye termin UYDURULMAZ.
-  assert.deepEqual(shifted.map((item) => item.targetFinish), [null, null, null]);
+  assert.deepEqual(shifted.map((item) => item.targetFinish), [null, null]);
 
   // Planlanan bitişi olmayan şablon yinelemeye de bitiş yazmaz.
   const open = planRecurringOccurrences(
@@ -710,8 +715,10 @@ test('yinelemeler şablona bağlanır, kuralı ve bağımlılıkları kopyalamaz
   assert.match(provider, /recurrence: null,\s*\n\s*recurrenceParentId: taskId,/);
   assert.match(provider, /deps: \[\]/);
   // Kimlik DEĞİŞMEZDİR: yineleme ertelense bile o gün ikinci kez üretilmez.
-  assert.match(provider, /recurrenceOccurrenceDate: occurrence\.plannedStart,/);
-  assert.match(provider, /materialized\.has\(occurrence\.plannedStart\)/);
+  // Kimlik HAM yineleme günüdür; çalışma takvimi planlanan başlangıcı kaydırsa
+  // bile şablonun kendi yinelemesi ikinci kez üretilmez.
+  assert.match(provider, /recurrenceOccurrenceDate: occurrence\.occurrenceDate,/);
+  assert.match(provider, /materialized\.has\(occurrence\.occurrenceDate\)/);
   // Gerçekleşen emek/harcama ve kalan süre yinelemeye taşınmaz.
   assert.match(provider, /actualHours: null,\s*\n\s*spent: null,/);
   assert.match(provider, /remainingDurationDays: created\.plannedDurationDays/);

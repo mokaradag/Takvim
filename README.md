@@ -36,7 +36,7 @@ Gerçek Sistem seçildiğinde application-state provider kurulmadan önce kurums
 
 Kullanım modları aynı seçili veri kaynağı üzerinde çalışır:
 
-- **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu ve termin tarihiyle hızlı giriş ve Takvim takibi.
+- **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sadeleştirilmiş **Görevler** listesi ve Takvim takibi. İlerleme, saat/efor, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Basit Modda gösterilmez.
 - **Gelişmiş Mod**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
 
 ## Durable SQL Server mimarisi
@@ -91,6 +91,8 @@ Eşitleme her istekte baştan çalışmaz. Proje başına içerik parmak izi `MR
 4. Kendi atandığı görevler (`PARTIAL`, salt okunur)
 5. Varsayılan ret
 
+**Görev atama kapsamı** görünürlükten ayrı bir kavramdır. Müdür, direktör ve takım liderleri (HR02'den türeyen mevcut `isExecutive` soyutlaması; koda gömülü kullanıcı listesi yoktur) yeni görev tanımlarken proje seçicisinde **tüm etkin CN43N kataloğunu** görür; böylece kendi personeline, kendisinde `corporateprojectaccess` bulunmayan bir kurumsal projede de iş atayabilir. Bu genişleme yalnızca seçime ve görev yazmasına açıktır: görev görünürlüğü, proje üst verisi, iş dağılım ağacı ve yönetici işlevleri değişmez ve sunucu her atananın `MR_V_ExecutiveScope` içinde olmasını arar. Sıradan kullanıcının seçicisi eskisi gibi yalnızca kendi `corporateprojectaccess` projeleridir. Ayrıntılar: `docs/AUTHORIZATION-MODEL.md`.
+
 `MR_UserRoles` oluşturma betiği sistem yöneticilerini parametreli tohumlar: kurulumdan önce `@SystemAdminSicils` değişkenine virgülle ayrılmış Sicil listesi yazılır. Gerçek Sicil değerleri kişisel veridir ve depoya işlenmez. HR09 sorumlulukları kurumsal FULL erişim sağlar. Manuel erişimler `MR_ProjectAccess` içinde tutulur. Sistem yöneticileri ile HR02'de dinamik olarak yönetici görünen kullanıcılar manuel Project oluşturabilir; Project, kök WBS, FULL OWNER erişimi ve audit kayıtları aynı transaction içinde oluşturulur.
 
 PARTIAL görünürlük tam Project yönetim yetkisi vermez. Kısmi Task ağı üzerinde yanıltıcı CPM/critical-path hesaplanmaz; Project scheduling sonucu `suppressed-partial` olarak işaretlenir.
@@ -137,13 +139,14 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
-2. `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın.
+2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; sonuncusu görev hatırlatma tablolarını ekleyen `database/MR_Upgrade_0005_Task_Reminders.sql` dosyasıdır. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
 5. `npm ci`
 6. `npm run build`
 7. `npm run start -- -H 0.0.0.0 -p 8008`
-8. **Gerçek Sistem** seçerek yetki ve kalıcılığı doğrulayın.
+8. İsteğe bağlı: hatırlatma postaları için `.env.local` içindeki SMTP bloğunu doldurun ve zamanlayıcıyı kaydedin (`docs/TASK-REMINDERS.md`).
+9. **Gerçek Sistem** seçerek yetki ve kalıcılığı doğrulayın.
 
 Build aşamasında tüm MERGEN Rota nesnelerini kaldırmak için `database/MR_Rollback_Durable_Persistence.sql` çalıştırılabilir. **Bu işlem tüm MR_* uygulama verisini kalıcı olarak siler.** HR02, A01 ve HR09 tablolarına dokunmaz.
 
@@ -164,7 +167,7 @@ npm run start -- -H 0.0.0.0 -p 8008
 - `src/domain` — Project, Task, Dependency, Person, WBS, Baseline, etiket kataloğu, calendar kavramları ve Gerçek Sistem kimlik kuralları
 - `src/scheduling` — tarih, çalışma günü, dependency, tekrar kuralları (RFC 5545) ve saf CPM hesapları
 - `src/data` — AppRepository sözleşmesi, Demo adapter ve Actual API adapter
-- `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı) ve durable repository
+- `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı), durable repository, SMTP taşıması (`mail`) ve hatırlatma servisi/zamanlayıcısı (`reminders`)
 - `src/state` — yükleme, sıralı mutation queue, Task patch coalescing ve access-aware scheduling selector'ları
 - `src/features` — uygulama özellikleri; SQL veya API route import etmez
 - `src/components/shell` — application shell, Veri Modu/Kullanım Modu seçimleri ve persistence durumları
@@ -183,6 +186,7 @@ Ayrıntılar:
 - `docs/SCHEDULING-DATA-MODEL.md`
 - `docs/CPM.md`
 - `docs/TAGS-AND-RECURRING-TASKS.md`
+- `docs/TASK-REMINDERS.md`
 - `docs/SIMPLE-MODE-AND-UI.md`
 - `docs/UI-STYLING-ARCHITECTURE.md`
 - `docs/VISUAL-SMOKE-TESTS.md`
@@ -206,6 +210,15 @@ Görev önceliği (`Kritik` / `Yüksek` / `Orta` / `Düşük`) görev panelindek
 **Öncelik** bölümünden tanımlanır ve Görevler, Gantt, Kanban ile Raporlar risk
 matrisini besler. Öncelik bir planlama kısıtı değildir; CPM sonuçlarını
 etkilemez. Ayrıntılar: `docs/SCHEDULING.md`.
+
+## Görev hatırlatma postaları
+
+Her görev için sorumlularına hatırlatma e-postası gönderilebilir. İki akış vardır ve ikisi de aynı alıcı çözümleme, şablon işleme ve SMTP servisini kullanır:
+
+- **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki modda). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
+- **Otomatik gönderim** — yöneticinin belirlediği pencere (`kalan süre = termin - şimdi`, örn. 7 gün) ve sıklıkla (örn. 2 günde bir) sunucu tarafındaki zamanlayıcı üzerinden. Görev tamamlandığında, iptal edildiğinde, silindiğinde, otomatik gönderim kapatıldığında veya termin gününe ulaşıldığında durur; sınırsız gecikme postası gönderilmez.
+
+Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Hatırlatma** yönetici sayfasından düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur. Ayrıntılar: `docs/TASK-REMINDERS.md`.
 
 ## Görünüm tercihleri
 

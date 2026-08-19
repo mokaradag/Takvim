@@ -196,11 +196,13 @@ test('açılış perdesi kabuk ızgarasını kullanmaz ve ekranın ortasında du
   assert.match(css, /@keyframes app-boot-sweep/);
 });
 
-test('Basit Mod gezinmesi Gantt sayfasını da içerir', () => {
+test('Basit Mod gezinmesi Görevler ve Gantt sayfalarını da içerir', () => {
   const source = read('src/components/shell/AppShell.jsx');
-  assert.match(source, /const SIMPLE_NAV_IDS = new Set\(\['takvim', 'gantt', 'yardim', 'ayarlar'\]\);/);
+  assert.match(source, /const SIMPLE_NAV_IDS = new Set\(\['veri', 'takvim', 'gantt', 'yardim', 'ayarlar'\]\);/);
   // Gantt görünümü her iki modda da aynı bileşenle çizilir.
   assert.match(source, /case 'gantt': return <WorkspaceGanttView \/>;/);
+  // Görevler sayfası Basit Modda SADE sürümle açılır; Gelişmiş Mod tablosu değişmez.
+  assert.match(source, /case 'veri': return simpleMode \? <SimpleTasksView \/> : <TasksView \/>;/);
 });
 
 test('vurgu rengi kataloğu Türkçe "Kehribar" adını kullanır', () => {

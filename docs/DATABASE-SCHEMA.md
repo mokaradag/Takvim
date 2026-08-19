@@ -24,6 +24,8 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_TaskBaselineSnapshots` | Immutable planned Task snapshots | PK `(BaselineId, TaskId)`; Task lookup; deliberately no FK to current Task |
 | `MR_AuditLog` | Append-only committed business audit | identity PK; Project/time, actor/time, entity/time and correlation indexes |
 | `MR_CorporateWbsSyncState` | CN43N synchronization fingerprints per corporate project | PK `ProjectCode` (`nvarchar(255)`, same width as `MR_Projects.ProjectCode`); `ContentHash` (SHA-256 hex), `NodeCount`, `SyncedAt` |
+| `MR_ReminderSettings` | Single-row reminder template and automatic policy | PK `SettingsId` with `CHECK (SettingsId = 1)`; rowversion |
+| `MR_TaskReminderLog` | Append-only reminder send history and duplicate-send claim | identity PK; `IX_MR_TaskReminderLog_Task_Created`; filtered unique `UX_MR_TaskReminderLog_AutomaticSlot` on `(TaskId, SlotKey)` where `ReminderKind = 'AUTOMATIC'` |
 
 ## Rowversion
 
@@ -100,6 +102,29 @@ Produces the union of Directorate, Department, and Unit subordinate scopes direc
 
 Normalizes HR02 by Sicil and chooses one deterministic row for duplicate Sicil values. Team falls back from Unit to Department, Directorate, then Sector. Duplicate master data remains observable at the source boundary and never produces duplicate Person IDs.
 
+## Reminder schema
+
+`MR_ReminderSettings` holds exactly one row. The editable e-mail template (`SubjectTemplate`, `BodyTemplate`) and the automatic policy (`AutomaticEnabled`, `WindowValue`, `WindowUnit`, `FrequencyValue`, `FrequencyUnit`) live here — not in `.env.local` — because they are administrator-editable application data, not deployment configuration. Only SMTP connection settings and the scheduler secret are environment variables. The row is seeded with the default Turkish template and `AutomaticEnabled = 0`, so an upgrade never starts sending mail on its own.
+
+`MR_TaskReminderLog` serves two purposes at once. It is the audit history of every attempt (`ReminderKind` = `MANUAL`/`AUTOMATIC`, `Status` = `PENDING` → `SENT`/`FAILED`, `RecipientCount`, `RecipientDigest`, `FailureCode`, `RequestedBySicil`, `CreatedAt`, `CompletedAt`), and it is the duplicate-send claim: an automatic pass inserts the row carrying the deterministic `SlotKey` as `PENDING` *before* dialling SMTP, then completes it. `UX_MR_TaskReminderLog_AutomaticSlot` makes that insert the mutual-exclusion primitive, so the same slot cannot be claimed twice across restarts or by two application instances racing on the same schedule. A slot whose send later fails stays claimed; the retry happens in the next slot rather than in a tight loop.
+
+The index is filtered on `ReminderKind = 'AUTOMATIC'`, so manual sends are outside it entirely: a user may deliberately send a second reminder for the same task. Manual rows still carry a slot key (`manual:<uuid>`) so every row has a stable identity.
+
+Recipient addresses are stored masked (`a***@example.com`). The authoritative address always remains `DC01_userr.EmailAddress`; nothing copies personnel e-mail into Task records.
+
+### Personnel e-mail resolution (`DC01_userr`)
+
+Recipients are resolved server-side at send time by joining MERGEN data to the corporate user directory:
+
+```
+MR_TaskAssignees.Sicil
+  → MR_V_PeopleDirectory.Username          (HR02 rehber, kullanici_adi)
+  → DC01_userr.Name                        (case-insensitive match)
+  → DC01_userr.EmailAddress
+```
+
+`DC01_userr` is read-only, lives in `MERGEN_ROTA_DB_DATABASE`, and is never written to. Its schema and table name are configurable (`MERGEN_ROTA_USER_DIRECTORY_SCHEMA`, `MERGEN_ROTA_USER_DIRECTORY_TABLE`) so an installation with a different directory object needs no code change. The query tolerates every observed data defect: a missing directory row, a NULL/blank/malformed address, several users sharing one address and one user appearing more than once. Addresses are validated and de-duplicated before use; when nothing valid survives, no message is sent and the caller is told why.
+
 ## Index rationale
 
 - Project/status and Project/date indexes support Task lists, filters, Gantt, and target-date sorting.
@@ -109,6 +134,7 @@ Normalizes HR02 by Sicil and chooses one deterministic row for duplicate Sicil v
 - Dependency predecessor index supports relationship validation and explicit delete cleanup.
 - Baseline Project and snapshot Task indexes support Project history and deleted-Task lookup.
 - Audit indexes support Project, actor, entity, and transaction-correlation investigations.
+- The reminder log's Task/time index supports send history; its filtered unique slot index is the duplicate-send guard rather than a read optimization.
 
 Indexes are limited to demonstrated repository and UI query patterns rather than being created for every column.
 
@@ -123,6 +149,8 @@ Then create the complete current schema with:
 `database/MR_Create_Durable_Persistence.sql`
 
 The creation script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, creates `MR_V_CorporateProjectAccess` directly with the `PPTS` role code, seeds the default calendar, seeds SYSTEM_ADMIN roles from the `@SystemAdminSicils` parameter (empty by default; real Sicil values are personal data and are not committed), and records `0001_durable_persistence`.
+
+Task reminders are added by `database/MR_Upgrade_0005_Task_Reminders.sql`, which is idempotent and safe to rerun: it creates `MR_ReminderSettings` and `MR_TaskReminderLog` only when absent, seeds the single settings row with automatic sending disabled, creates the filtered unique slot index and records `0005_task_reminders`. Existing data is untouched. `MR_Create_Durable_Persistence.sql` creates the same objects for a fresh installation and `MR_Rollback_Durable_Persistence.sql` drops them in reverse order.
 
 During the first corporate project synchronization, the repository fills `MR_Projects.LeadSicil` from the `PROJECT_MANAGER` role. No separate `0002` migration script is required while the application is being tested through clean database recreation.
 

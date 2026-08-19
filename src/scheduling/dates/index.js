@@ -9,6 +9,18 @@ export function setAppDateDisplayFormat(format = 'pattern') {
   appDateDisplayFormat = format === 'dd/mm/yyyy' ? 'dd/mm/yyyy' : 'pattern';
 }
 
+/**
+ * Yürürlükteki tarih biçimi tercihi.
+ *
+ * DÜZENLENEBİLİR tarih alanları da bu tercihe uymak zorundadır: ayar "her
+ * ekrandaki tarih" diyorken yalnızca pasif etiketlerin değişmesi, aynı sayfada
+ * `18 Ağu 2026` yazan bir etiketle `18/08/2026` bekleyen bir kutunun yan yana
+ * durmasına yol açıyordu.
+ */
+export function getAppDateDisplayFormat() {
+  return appDateDisplayFormat;
+}
+
 export function parseDate(value) {
   if (value instanceof Date) return value;
   if (!value) return new Date();
@@ -45,6 +57,21 @@ export function fmt(value, pattern = 'dd MMM') {
   if (pattern === 'dd MMM') return `${day} ${TR_MONTHS[date.getMonth()]}`;
   if (pattern === 'dd MMM yyyy') return `${day} ${TR_MONTHS[date.getMonth()]} ${date.getFullYear()}`;
   return appDateDisplayFormat === 'dd/mm/yyyy' ? fmtDisplayDate(date) : date.toLocaleDateString('tr-TR');
+}
+
+/**
+ * Grafik ekseni için KISA tarih etiketi.
+ *
+ * `fmt(value, 'dd MMM')` uygulama genelindeki tarih biçimi tercihine tabidir ve
+ * `dd/mm/yyyy` seçiliyken `18/08/2026` üretir: otuz günlük eksenin altı etiketi
+ * birbirine giriyor, ilk ve son etiket karttan taşıyordu. Eksen etiketi bu
+ * yüzden tercihten BAĞIMSIZ olarak her zaman kısadır — ayrıca memolanmış eksen
+ * dizileri gizli modül durumuna bağımlı kalmaz.
+ */
+export function fmtAxisDate(value) {
+  if (!value) return '';
+  const date = parseDate(value);
+  return `${String(date.getDate()).padStart(2, '0')} ${TR_MONTHS[date.getMonth()]}`;
 }
 
 export function addDays(value, amount) {

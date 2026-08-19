@@ -15,7 +15,46 @@ Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yen
 
 ## Basit Modda Gantt
 
-Basit Mod gezinmesi `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+Basit Mod gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+
+## Basit Modda Görevler
+
+Basit Mod gezinmesi `veri` (Görevler), `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Basit Modda **Görevler** sayfası Gelişmiş Moddaki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
+
+Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`src/features/tasks/simpleTaskColumns.js`):
+
+| Sütun | Kaynak alan |
+| --- | --- |
+| Proje | `projectId` |
+| Görev | `task` |
+| Kısa açıklama | `keyword` |
+| Sorumlular | `assigneeIds` |
+| Öncelik | `priority` |
+| Durum | `status` |
+| Termin | `targetFinish` |
+
+Gelişmiş Moda ait planlama alanları Basit Modda **hiç gösterilmez**: ilerleme yüzdesi, saat/efor, başlangıç tarihleri, temel plan (baseline), bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve `test/task-assignment-scope-and-simple-mode.test.mjs` alanların sızmadığını doğrular.
+
+Sayfa dört yetenek sunar; hepsi aynı sadeleştirilmiş alan kümesi üzerinde çalışır:
+
+1. **Arama** — görev adı, kısa açıklama ve proje kodu üzerinde canlı süzme.
+2. **Süzme** — durum segmentleri ve öncelik seçici.
+3. **Sıralama** — termin, öncelik ve görev adına göre.
+4. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
+
+`SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda ve panelin altında hatırlatma gönderme ve silme düğmeleri bulunur (`docs/TASK-REMINDERS.md`).
+
+**Gelişmiş Mod değişmez.** `AppShell` yalnızca `simpleMode` bayrağına göre bileşen seçer (`case 'veri': return simpleMode ? <SimpleTasksView /> : <TasksView />;`); `TasksView` ve `TaskDrawer` bu değişiklikten hiç etkilenmez.
+
+### Öncelik Basit Modda
+
+Öncelik, Basit Modda daha önce hiç görünmüyordu; artık dört yüzeyde birden vardır: Hızlı Görev Tanımı formunda, sadeleştirilmiş tabloda, sadeleştirilmiş görev düzenlemede ve süzme/sıralamada.
+
+Yeni bir öncelik modeli **tanımlanmaz**. Gelişmiş Modun `TASK_PRIORITIES` kataloğu, `normalizePriorityId` normalleştirmesi ve aynı rozet stilleri kullanılır; iki mod arasında geçiş yapan kullanıcı aynı değeri aynı adla görür.
+
+### Proje seçimi
+
+Hızlı Görev Tanımı ve sadeleştirilmiş görev düzenleme proje listesini `useTaskAssignableProjects()` üzerinden alır. Sıradan kullanıcı için bu, bugüne kadar olduğu gibi yalnızca kendi `corporateprojectaccess` projeleridir; müdür/direktör için buna kurumsal CN43N kataloğu eklenir. Kural ve sunucu tarafı sınırı: `docs/AUTHORIZATION-MODEL.md` · *Task assignment scope*.
 
 ## Açılış perdesi
 
@@ -129,6 +168,19 @@ haftalık rapor ufkuna düşen işi sayar: kalan işin tamamı kapasiteyle
 karşılaştırılırsa, önümüzdeki bir yıla yayılmış 240 saatlik yük de "haftada 40
 saat" gibi görünüyordu. İş, planlanan aralığın ufukla kesişimi oranında
 sayılır; planlanmamış ve gecikmiş işin kalanı bugünün yüküdür.
+
+## Tarih biçimi düzenlenebilir alanlarda da geçerlidir
+
+Ayarlar sayfasındaki **Tarih biçimi** seçeneği (`gg/aa/yyyy` ↔ `18 Ağu 2026`) yalnızca pasif etiketleri değiştiriyordu: `18 Ağu 2026` seçen kullanıcı görev panelinde `18/08/2026` bekleyen bir kutu görüyordu.
+
+`DateInput` artık tercihe uyar. Kurallar React'ten bağımsız `src/components/dateInputFormat.js` modülündedir:
+
+- **Yazma** tercihe uyar (`formatEditableDate`).
+- **Okuma** bilerek daha geniştir (`parseDisplayDate`): `18/08/2026`, `18 Ağu 2026`, `18 Ağustos 2026` ve ISO biçimi kabul edilir; ay adı Türkçe küçültme kurallarıyla eşleştirilir. Biçim değiştiğinde yarım kalmış bir giriş ya da kopyalanmış eski bir metin reddedilmemelidir. Takvimde olmayan gün (`31 Şub 2026`) her iki biçimde de reddedilir.
+- **Rakam maskesi** yalnızca rakam ve eğik çizgi içeren girişe uygulanır (`maskDateDraft`); aksi hâlde `18 Ağu 2026` yazılırken rakamlar ayıklanıp `18/20/26` üretiliyordu.
+- **Yer tutucu ve hata iletisi** tercihten türetilir; koda gömülü `gg/aa/yyyy` metni kalmadı.
+
+Taslak durumu değerin yanı sıra biçim tercihine de bağlıdır: aksi hâlde değer aynı kalırken tercih değiştiğinde kutu eski biçimde donuyordu.
 
 ## Karşılama ekranı
 

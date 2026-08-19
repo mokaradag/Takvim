@@ -149,7 +149,7 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   width: max-content;
   min-height: 32px;
   height: 32px;
-  max-width: min(42vw, 620px);
+  max-width: min(calc(var(--app-viewport-w, 100vw) * 0.42), 620px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -233,13 +233,13 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 .export-menu-pop small { color: var(--text-dim); font-size: 10.5px; line-height: 1.35; }
 
 @media (max-width: 1080px) {
-  .topbar-project-context { max-width: 44vw; }
+  .topbar-project-context { max-width: calc(var(--app-viewport-w, 100vw) * 0.44); }
 }
 
 @media (max-width: 760px) {
   .topbar-project-context {
     display: none;
-    max-width: 46vw;
+    max-width: calc(var(--app-viewport-w, 100vw) * 0.46);
     height: 30px;
     min-height: 30px;
   }
@@ -253,7 +253,7 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   right: 18px;
   bottom: 18px;
   z-index: var(--z-popover);
-  width: min(400px, calc(100vw - 32px));
+  width: min(400px, calc(var(--app-viewport-w, 100vw) - 32px));
   padding: 11px 13px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -314,7 +314,7 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 }
 .app-boot-card {
   position: relative;
-  width: min(520px, calc(100vw - 40px));
+  width: min(520px, calc(var(--app-viewport-w, 100vw) - 40px));
   display: grid;
   gap: 14px;
   justify-items: center;

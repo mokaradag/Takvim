@@ -40,16 +40,65 @@ function IdentityRow({ label, value }) {
 
 export function PersonDetailDialog({ member, onClose, onOpenTask }) {
   const closeRef = useRef(null);
+  const dialogRef = useRef(null);
+  const openerRef = useRef(null);
+  const closeHandlerRef = useRef(onClose);
   const today_ = today();
+  const personId = member?.person?.id || null;
 
-  // Kapatma her zaman erişilebilir olmalıdır: odak açılışta kapatma düğmesine
-  // taşınır, Esc pencereyi kapatır.
+  // Kapatma geri çağırması her çizimde YENİ kimlikle gelir (`onClose={() =>
+  // setOpenPersonId(null)}`). Referansta tutulur, böylece odak/Esc etkisi bu
+  // kimliğe bağlı kalmaz.
+  closeHandlerRef.current = onClose;
+
+  // Odak YALNIZCA pencere açıldığında taşınır. Etki `onClose` kimliğine bağlı
+  // olduğunda, TeamView'in her yeniden çizimi odağı görev listesinden kapatma
+  // düğmesine geri çalıyordu. Kapanışta odak pencereyi AÇAN öğeye döner.
   useEffect(() => {
+    if (!personId) return undefined;
+    openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
     closeRef.current?.focus();
-    const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+    return () => {
+      const opener = openerRef.current;
+      if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
+    };
+  }, [personId]);
+
+  // Esc her zaman kapatır; Tab odağı pencerenin İÇİNDE tutar. `aria-modal`
+  // tek başına odağı hapsetmez: sekmeyle ilerleyen kullanıcı pencere açıkken
+  // arkadaki TeamView denetimlerine geçebiliyordu.
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        closeHandlerRef.current?.();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = [...dialog.querySelectorAll(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )].filter((element) => element.offsetParent !== null || element === document.activeElement);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!dialog.contains(active)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, []);
 
   const person = member?.person || null;
   const openTasks = useMemo(
@@ -75,6 +124,7 @@ export function PersonDetailDialog({ member, onClose, onOpenTask }) {
   return (
     <div className="person-dialog-backdrop" role="presentation" onClick={onClose}>
       <section
+        ref={dialogRef}
         className="person-dialog"
         role="dialog"
         aria-modal="true"

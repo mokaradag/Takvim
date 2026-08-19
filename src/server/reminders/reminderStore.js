@@ -1,0 +1,239 @@
+import 'server-only';
+import { canonicalActualId } from '../../domain/identity/actualId.js';
+import { normalizePriorityId } from '../../domain/constants/index.js';
+import {
+  DEFAULT_REMINDER_BODY,
+  DEFAULT_REMINDER_SUBJECT,
+  sanitizeReminderHtml
+} from '../../domain/reminders/reminderTemplate.js';
+import { DEFAULT_REMINDER_SETTINGS, normalizeReminderSettings } from '../../domain/reminders/reminderPolicy.js';
+import { sql } from '../db/pool.js';
+import {
+  REMINDER_CANDIDATES_SQL,
+  REMINDER_CLAIM_SQL,
+  REMINDER_COMPLETE_SQL,
+  REMINDER_HISTORY_SQL,
+  REMINDER_MANUAL_LOG_SQL,
+  REMINDER_SETTINGS_SQL,
+  REMINDER_SETTINGS_UPSERT_SQL,
+  REMINDER_TASK_SQL,
+  reminderRecipientsSql
+} from './reminderQueries.js';
+
+/**
+ * Hatırlatma verisinin kalıcı katmanı.
+ *
+ * Gönderim geçmişi VERİTABANINDA tutulur; bellek içi bir küme uygulama ya da
+ * sunucu yeniden başladığında sıfırlanır ve aynı aralık için ikinci bir ileti
+ * gönderilirdi.
+ */
+
+function id(value) {
+  return value == null ? null : (canonicalActualId(value) ?? String(value));
+}
+
+function isoDate(value) {
+  return value ? new Date(value).toISOString().slice(0, 10) : null;
+}
+
+const MISSING_TABLE_CODES = new Set([208, 2812]);
+
+function isMissingReminderSchema(error) {
+  // Yükseltme betiği henüz çalıştırılmamış olabilir: yapılandırma okunamadığında
+  // uygulama çökmez, VARSAYILAN şablonla ve kapalı otomatik gönderimle sürer.
+  return MISSING_TABLE_CODES.has(Number(error?.number)) || /Invalid object name/i.test(String(error?.message || ''));
+}
+
+/** Yönetici ayarları + şablon. Kayıt yoksa belgelenen varsayılanlar döner. */
+export async function loadReminderSettings(executor) {
+  let row = null;
+  try {
+    const result = await executor.request().query(REMINDER_SETTINGS_SQL);
+    row = result.recordset?.[0] || null;
+  } catch (error) {
+    if (!isMissingReminderSchema(error)) throw error;
+    return {
+      ...normalizeReminderSettings(DEFAULT_REMINDER_SETTINGS),
+      subject: DEFAULT_REMINDER_SUBJECT,
+      body: DEFAULT_REMINDER_BODY,
+      updatedAt: null,
+      updatedBySicil: null,
+      schemaReady: false
+    };
+  }
+
+  const settings = normalizeReminderSettings(row ? {
+    automaticEnabled: Boolean(row.AutomaticEnabled),
+    windowValue: row.WindowValue,
+    windowUnit: row.WindowUnit,
+    frequencyValue: row.FrequencyValue,
+    frequencyUnit: row.FrequencyUnit
+  } : DEFAULT_REMINDER_SETTINGS);
+
+  return {
+    ...settings,
+    subject: row?.SubjectTemplate || DEFAULT_REMINDER_SUBJECT,
+    // Saklanan gövde okunurken DE temizlenir: kayıt eski bir sürümde ya da
+    // doğrudan veritabanından yazılmış olabilir.
+    body: sanitizeReminderHtml(row?.BodyTemplate || DEFAULT_REMINDER_BODY),
+    updatedAt: row?.UpdatedAt ? new Date(row.UpdatedAt).toISOString() : null,
+    updatedBySicil: row?.UpdatedBySicil == null ? null : Number(row.UpdatedBySicil),
+    schemaReady: true
+  };
+}
+
+/** Ayarları yazar. Şablon gövdesi yazmadan ÖNCE temizlenir. */
+export async function saveReminderSettings(executor, actorSicil, input = {}) {
+  const settings = normalizeReminderSettings(input);
+  const subject = String(input.subject || DEFAULT_REMINDER_SUBJECT).replace(/[\r\n]+/g, ' ').trim().slice(0, 400);
+  const body = sanitizeReminderHtml(input.body || DEFAULT_REMINDER_BODY);
+
+  const request = executor.request();
+  request.input('automaticEnabled', sql.Bit, settings.automaticEnabled);
+  request.input('windowValue', sql.Int, settings.windowValue);
+  request.input('windowUnit', sql.VarChar(10), settings.windowUnit);
+  request.input('frequencyValue', sql.Int, settings.frequencyValue);
+  request.input('frequencyUnit', sql.VarChar(10), settings.frequencyUnit);
+  request.input('subjectTemplate', sql.NVarChar(400), subject);
+  request.input('bodyTemplate', sql.NVarChar(sql.MAX), body);
+  request.input('actorSicil', sql.Int, actorSicil);
+  await request.query(REMINDER_SETTINGS_UPSERT_SQL);
+
+  return { ...settings, subject, body };
+}
+
+/** Hatırlatma için gereken görev alanları. */
+export async function loadReminderTask(executor, taskId) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, taskId);
+  const result = await request.query(REMINDER_TASK_SQL);
+  const row = result.recordset?.[0];
+  if (!row) return null;
+  return {
+    id: id(row.TaskId),
+    projectId: id(row.ProjectId),
+    task: row.Title,
+    description: row.Description || '',
+    keyword: row.Keyword || '',
+    status: row.Status,
+    priority: normalizePriorityId(row.Priority),
+    targetFinish: isoDate(row.TargetFinish),
+    plannedStart: isoDate(row.PlannedStart),
+    plannedFinish: isoDate(row.PlannedFinish),
+    projectCode: row.ProjectCode || '',
+    projectName: row.ProjectName || ''
+  };
+}
+
+/** Sorumlu → kullanıcı adı → DC01_userr adresi satırları. */
+export async function loadReminderRecipientRows(executor, taskId) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, taskId);
+  const result = await request.query(reminderRecipientsSql());
+  return (result.recordset || []).map((row) => ({
+    sicil: row.Sicil == null ? '' : String(row.Sicil),
+    name: row.Name || '',
+    username: row.Username || '',
+    email: row.Email || ''
+  }));
+}
+
+/** Otomatik gönderim adayları (kapalı ve terminsiz görevler zaten elenir). */
+export async function loadReminderCandidates(executor, horizonDays) {
+  const request = executor.request();
+  request.input('horizonDays', sql.Int, Math.max(1, Math.min(Number(horizonDays) || 7, 365)));
+  const result = await request.query(REMINDER_CANDIDATES_SQL);
+  return (result.recordset || []).map((row) => ({
+    id: id(row.TaskId),
+    projectId: id(row.ProjectId),
+    task: row.Title,
+    status: row.Status,
+    targetFinish: isoDate(row.TargetFinish)
+  }));
+}
+
+/**
+ * Otomatik aralığı sahiplenir.
+ *
+ * @returns {Promise<number|null>} günlük kaydı kimliği; aralık zaten
+ *   sahiplenilmişse `null` (bu turda gönderim YAPILMAZ).
+ */
+export async function claimAutomaticReminder(executor, { taskId, projectId, slotKey, actorSicil = null }) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, taskId);
+  request.input('projectId', sql.UniqueIdentifier, projectId || null);
+  request.input('slotKey', sql.NVarChar(200), slotKey);
+  request.input('actorSicil', sql.Int, actorSicil);
+  try {
+    const result = await request.query(REMINDER_CLAIM_SQL);
+    const logId = result.recordset?.[0]?.TaskReminderLogId;
+    return logId == null ? null : Number(logId);
+  } catch (error) {
+    // Benzersiz dizin ihlali: aralığı başka bir çalıştırma (ya da başka bir
+    // uygulama örneği) az önce sahiplendi.
+    if (Number(error?.number) === 2601 || Number(error?.number) === 2627) return null;
+    throw error;
+  }
+}
+
+/** Elle gönderim kaydı açar. */
+export async function logManualReminder(executor, { taskId, projectId, slotKey, actorSicil = null }) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, taskId);
+  request.input('projectId', sql.UniqueIdentifier, projectId || null);
+  request.input('slotKey', sql.NVarChar(200), slotKey);
+  request.input('actorSicil', sql.Int, actorSicil);
+  const result = await request.query(REMINDER_MANUAL_LOG_SQL);
+  const logId = result.recordset?.[0]?.TaskReminderLogId;
+  return logId == null ? null : Number(logId);
+}
+
+/**
+ * Alıcı özeti; kişisel veri yığmamak için adresler MASKELENİR.
+ * Sorun gidermeye yetecek kadar bilgi kalır, posta kutusu adresi kalmaz.
+ */
+export function maskRecipients(recipients = []) {
+  return recipients
+    .map((address) => {
+      const [local, domain] = String(address).split('@');
+      if (!domain) return '***';
+      const head = local.slice(0, 1);
+      return `${head}***@${domain}`;
+    })
+    .join(', ')
+    .slice(0, 400);
+}
+
+export async function completeReminderLog(executor, logId, { status, recipients = [], failureCode = null }) {
+  if (logId == null) return;
+  const request = executor.request();
+  request.input('logId', sql.BigInt, logId);
+  request.input('status', sql.VarChar(20), status);
+  request.input('recipientCount', sql.Int, recipients.length);
+  request.input('recipientDigest', sql.NVarChar(400), maskRecipients(recipients) || null);
+  request.input('failureCode', sql.VarChar(60), failureCode);
+  await request.query(REMINDER_COMPLETE_SQL);
+}
+
+/** Son gönderim kayıtları (yönetici ekranı için). */
+export async function loadReminderHistory(executor, limit = 20) {
+  try {
+    const request = executor.request();
+    request.input('limit', sql.Int, Math.max(1, Math.min(Number(limit) || 20, 100)));
+    const result = await request.query(REMINDER_HISTORY_SQL);
+    return (result.recordset || []).map((row) => ({
+      id: Number(row.TaskReminderLogId),
+      taskId: id(row.TaskId),
+      kind: row.ReminderKind,
+      slotKey: row.SlotKey,
+      status: row.Status,
+      recipientCount: Number(row.RecipientCount || 0),
+      failureCode: row.FailureCode || null,
+      createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
+      completedAt: row.CompletedAt ? new Date(row.CompletedAt).toISOString() : null
+    }));
+  } catch (error) {
+    if (isMissingReminderSchema(error)) return [];
+    throw error;
+  }
+}

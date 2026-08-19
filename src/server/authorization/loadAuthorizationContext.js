@@ -3,7 +3,7 @@ import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { getSqlPool, sql } from '../db/pool.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
 import { ServerPersistenceError } from '../errors.js';
-import { ACCESS_REASONS, deriveEffectiveAccess } from './authorization.js';
+import { ACCESS_REASONS, deriveEffectiveAccess, hasTaskAssignmentScope } from './authorization.js';
 
 // Yetki haritası kanonik (küçük harf) proje kimlikleriyle kurulur. Aksi hâlde
 // SQL Server'ın büyük harfli GUID metni ile istemciden gelen kanonik kimlik
@@ -124,6 +124,10 @@ export async function loadAuthorizationContext(executor = null) {
     isSystemAdmin,
     isExecutive,
     canCreateProjects: isSystemAdmin || isExecutive,
+    // Görev atama kapsamı: yöneticiler kendi personeline HERHANGİ bir etkin
+    // CN43N projesi altında görev tanımlayabilir (bkz. authorization.js ·
+    // hasTaskAssignmentScope). Görev görünürlüğü bundan etkilenmez.
+    canAssignAllCorporateProjects: hasTaskAssignmentScope({ isSystemAdmin, isExecutive }),
     effective
   };
 }

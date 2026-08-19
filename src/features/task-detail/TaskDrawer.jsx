@@ -16,7 +16,7 @@ import {
   lagValueOf,
   relTypeOf
 } from '../../scheduling/dependencies';
-import { PRIORITIES, resolvePriority } from '../../domain/constants/index.js';
+import { PRIORITIES, TASK_SERIES_BATCH_LIMIT, resolvePriority } from '../../domain/constants/index.js';
 import { TR_DAYS, diffDays, fmt, today } from '../../scheduling/dates';
 import {
   MAX_RECURRENCE_OCCURRENCES,
@@ -32,14 +32,26 @@ import { COLOR_MAP, projectColorVar } from '../../lib/colors';
 import { Avatar, StatusIcon, statusColorVar } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton } from '../../components/ui-extras';
-import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskActions, useTaskPrimaryBaseline } from '../../state/hooks';
+import {
+  useAllPeople,
+  useAllProjects,
+  useAllWbs,
+  useAssignmentScopeProjects,
+  useCalendars,
+  useTaskActions,
+  useTaskPrimaryBaseline
+} from '../../state/hooks';
 import {
   collectPredecessorClosure,
+  collectSuccessorClosure,
+  planPredecessorLink,
   planSuccessorLink,
   planSuccessorUnlink,
   planSuccessorUpdate,
   selectSuccessors
 } from './taskSuccessorPolicy.js';
+import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
+import { TaskReminderButton } from '../reminders/TaskReminderButton';
 
 function legacyProjectTags(projectId, tasks) {
   return Array.from(new Set(
@@ -77,8 +89,16 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const projects = useAllProjects();
   const calendars = useCalendars();
   const allWbs = useAllWbs();
+  const assignmentScopeProjects = useAssignmentScopeProjects();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
   const { generateTaskSeries, cancelTaskFieldUpdates, updateTask } = useTaskActions();
+  // Üretilmiş yinelemelerin DEĞİŞMEZ seri kimlikleri. Sayı tek başına yetmez:
+  // panel kaç yinelemenin daha oluşacağını söyleyebilmek için hangi günlerin
+  // zaten kalıcılaştığını bilmek zorundadır.
+  const occurrenceDates = useMemo(() => new Set(tasks
+    .filter((item) => item.recurrenceParentId === task.id)
+    .map((item) => item.recurrenceOccurrenceDate || item.plannedStart)
+    .filter(Boolean)), [tasks, task.id]);
   const occurrenceCount = useMemo(
     () => tasks.filter((item) => item.recurrenceParentId === task.id).length,
     [tasks, task.id]
@@ -130,7 +150,13 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   })), [projectWbsRows, allWbs]);
 
   const projectOptions = useMemo(() => {
-    const listed = visibleProjects(projects);
+    // Görev PROJESİ seçicisi görev atama kapsamını kullanır: yönetici, kendi
+    // personeline herhangi bir CN43N projesi altında iş tanımlayabilmelidir.
+    // Görünür proje listesi ve görev görünürlüğü bundan etkilenmez.
+    const listed = visibleProjects([
+      ...projects,
+      ...assignmentScopeProjects.filter((scoped) => !projects.some((project) => project.id === scoped.id))
+    ]);
     if (selectedProject && !listed.some((project) => project.id === selectedProject.id)) listed.unshift(selectedProject);
     return [
       { value: '', label: 'Proje seçilmedi', icon: <Icons.Layers size={13} /> },
@@ -147,7 +173,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
         };
       })
     ];
-  }, [projects, selectedProject]);
+  }, [projects, assignmentScopeProjects, selectedProject]);
 
   const selectedAssignees = useMemo(() => {
     const records = [];
@@ -224,7 +250,9 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   }, [local.keyword, projectTags, task.id, onUpdate]);
 
   const changeProject = (projectId) => {
-    const project = projects.find((item) => item.id === projectId) || null;
+    const project = projects.find((item) => item.id === projectId)
+      || assignmentScopeProjects.find((item) => item.id === projectId)
+      || null;
     const tags = tagsForProject(project, tasks);
     const roots = allWbs.filter((node) => node.projectId === projectId && node.parentId == null);
     save({
@@ -232,7 +260,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
       projectCode: project?.code || '',
       proje: project?.name || '',
       color: project?.color || local.color,
-      wbsId: roots.length === 1 ? roots[0].id : null,
+      // Atama kapsamındaki projenin ağacı yüklenmez; kök düğüm kapsam kaydından gelir.
+      wbsId: roots.length === 1 ? roots[0].id : (project?.rootWbsId || null),
       keyword: tags.some((tag) => tag.name === local.keyword) ? local.keyword : (tags[0]?.name || '')
     });
   };
@@ -339,7 +368,13 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                       className={`task-priority-option${isActive ? ' active' : ''}`}
                       aria-pressed={isActive}
                       style={{ '--priority-color': priority.color }}
-                      onClick={() => save({ priority: priority.id })}
+                      // Zaten seçili önceliğe yeniden tıklamak YAZMA üretmez.
+                      // Görev güncellemeleri kalıcılaştırılır ve satır sürüm
+                      // anahtarını ilerletir: anlamsız bir tıklama, aynı görevi
+                      // düzenleyen başka bir kullanıcıya sürüm çakışması olarak
+                      // döner (aynı sütuna Kanban bırakması da bu nedenle elenir).
+                      disabled={isActive}
+                      onClick={() => { if (!isActive) save({ priority: priority.id }); }}
                     >
                       <Icons.Flag size={12} />
                       <span>{priority.label}</span>
@@ -465,7 +500,10 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                 task={local}
                 calendar={taskCalendar}
                 occurrenceCount={occurrenceCount}
-                onChange={(recurrence) => save({ recurrence })}
+                occurrenceDates={occurrenceDates}
+                onChange={(recurrence, alignment) => save(alignment
+                  ? { recurrence, ...alignment }
+                  : { recurrence })}
                 onGenerate={() => generateTaskSeries(task.id)}
               />
             </Section>
@@ -546,6 +584,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
           <button className="btn" onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
             <Icons.Trash size={13} /> Sil
           </button>
+          {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
+          <TaskReminderButton task={task} size={30} />
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={onClose}>Tamam</button>
         </div>
@@ -561,10 +601,21 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
  * bu metnin okunabilir bir yüzüdür. Böylece kural dışa aktarımda ve başka
  * sistemlerle alışverişte standart kalır.
  */
-function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerate }) {
+function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, onChange, onGenerate }) {
   const rule = normalizeRecurrenceRule(task.recurrence);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
+  // Toplam yineleme alanı geçerli olana kadar YEREL taslakta tutulur.
+  const [countDraft, setCountDraft] = useState(null);
+  /**
+   * Kural alanları, seriden yineleme üretildikten sonra KİLİTLENİR.
+   *
+   * `clearRule` kuralın kaldırılmasını zaten engelliyordu, ama sıklık/aralık/
+   * gün/COUNT/UNTIL düzenlemeleri açıktı. Üretilmiş çocuklar şablona bağlı
+   * kaldığı ve bir sonraki üretim yalnızca "zaten üretilmiş günleri" elediği
+   * için tek bir seri sessizce ESKİ ve YENİ takvimin karışımına dönüşüyordu.
+   */
+  const ruleLocked = occurrenceCount > 0;
 
   // Serinin başlangıç günü (RFC 5545 DTSTART). Yalnızca BİLGİ amaçlıdır: gün
   // seçimi kullanıcınındır, bu gün de serbestçe kaldırılabilir. Daha önce bu
@@ -575,10 +626,34 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
     : null;
 
   const patch = (changes) => {
+    if (ruleLocked) {
+      setMessage({
+        type: 'error',
+        text: 'Bu seriden yinelemeler üretildi. Kuralı değiştirmek için önce üretilmiş yinelemeleri silin.'
+      });
+      return;
+    }
     const merged = { ...(rule || { freq: 'WEEKLY', interval: 1 }), ...changes };
     const next = normalizeRecurrenceRule(merged);
     setMessage(null);
-    onChange(next ? formatRecurrenceRule(next) : null);
+    if (!next) {
+      onChange(null);
+      return;
+    }
+    // RFC 5545, `DTSTART` kuralla senkron değilken yineleme kümesini tanımsız
+    // sayar. Kullanıcı şablonun gününü kural dışında bıraktığında başlangıç
+    // kuralın ilk yinelemesine taşınır; plan ve termin aynı farkla kayar.
+    const alignment = planTemplateStartAlignment(task, next);
+    if (alignment) {
+      const { shiftDays, ...dates } = alignment;
+      setMessage({
+        type: 'success',
+        text: `Planlanan başlangıç kuralın ilk yinelemesine taşındı (${shiftDays} gün ileri); tarih ve termin aynı farkla kaydırıldı.`
+      });
+      onChange(formatRecurrenceRule(next), dates);
+      return;
+    }
+    onChange(formatRecurrenceRule(next));
   };
 
   const clearRule = () => {
@@ -600,6 +675,15 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
   // gelen günleri gösterir, üretim ise onları iş gününe kaydırıp tekilleştirir;
   // ikisi ayrıştığında onay ekranı oluşacak görevlerle çelişirdi.
   const plan = summarizeRecurrencePlan(task, rule, { calendar, previewLimit: 8 });
+  const templateOccurrence = task.recurrenceOccurrenceDate || task.plannedStart;
+  // KALAN yineleme sayısı: kuralın toplamı değil, henüz kalıcılaşmamış günler.
+  // Not daha önce `generatedCount` yazıyordu; bir bölümü zaten üretilmişken de
+  // "hepsi oluşturulacak" diyor, üstelik tek işlemin toplu sınırını saklıyordu.
+  const pendingOccurrences = plan.occurrences.filter((occurrence) => (
+    occurrence.occurrenceDate !== templateOccurrence
+    && !(occurrenceDates?.has?.(occurrence.occurrenceDate))
+  )).length;
+  const nextBatch = Math.min(pendingOccurrences, TASK_SERIES_BATCH_LIMIT);
 
   const generate = async () => {
     setBusy(true);
@@ -633,6 +717,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
           className="input"
           aria-label="Tekrar sıklığı"
           value={rule?.freq || ''}
+          disabled={ruleLocked}
           onChange={(event) => (event.target.value
             ? patch({ freq: event.target.value })
             : clearRule())}
@@ -653,6 +738,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
               min={1}
               max={99}
               aria-label="Tekrar aralığı"
+              disabled={ruleLocked}
               value={rule.interval}
               onChange={(event) => patch({ interval: event.target.value })}
               style={{ width: 68 }}
@@ -673,6 +759,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
                   type="button"
                   className={`recurrence-day${active ? ' active' : ''}${isStart ? ' is-start' : ''}`}
                   aria-pressed={active}
+                  disabled={ruleLocked}
                   title={isStart ? 'Planlanan başlangıç bu güne denk geliyor.' : undefined}
                   onClick={() => patch({
                     byWeekday: active
@@ -703,6 +790,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
             min={1}
             max={31}
             aria-label="Ayın günü"
+            disabled={ruleLocked}
             value={rule.byMonthDay || ''}
             placeholder="Başlangıç günü"
             onChange={(event) => patch({ byMonthDay: event.target.value })}
@@ -721,14 +809,28 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
               min={1}
               max={MAX_RECURRENCE_OCCURRENCES}
               aria-label="Toplam yineleme sayısı"
-              value={rule.count || ''}
-              placeholder="Sınırsız"
-              // Açılım güvenlik tavanında durur; tavanı aşan bir sayı hiçbir
-              // zaman tamamlanamayacağı için girildiği anda sınırlanır.
-              onChange={(event) => patch({
-                count: Math.min(Number(event.target.value) || 0, MAX_RECURRENCE_OCCURRENCES) || '',
-                until: null
-              })}
+              value={countDraft ?? (rule.count || '')}
+              disabled={ruleLocked}
+              /*
+               * `min={1}` yalnızca tarayıcı kısıtı bildirir; `onChange` yine de
+               * `0`, `-1` ya da düzenleme sırasındaki ondalık bir değer alır.
+               * Bu değerler normalleştirmede DÜŞÜYOR, aynı yama `until` alanını
+               * da temizlediği için SONLU bir kural sessizce SINIRSIZ bir RRULE
+               * olarak kalıcılaşıyordu. Geçersiz girdi artık yalnızca taslakta
+               * durur: kural değişmez, önceki sonlandırıcı korunur.
+               */
+              onChange={(event) => {
+                const raw = event.target.value;
+                setCountDraft(raw);
+                if (raw === '') {
+                  patch({ count: null });
+                  return;
+                }
+                const value = Number(raw);
+                if (!Number.isInteger(value) || value < 1) return;
+                patch({ count: Math.min(value, MAX_RECURRENCE_OCCURRENCES), until: null });
+              }}
+              onBlur={() => setCountDraft(null)}
               style={{ width: 92 }}
             />
           </label>
@@ -736,6 +838,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
             <span className="muted">Bitiş tarihi</span>
             <DateInput
               value={rule.until || ''}
+              disabled={ruleLocked}
               // Başlangıçtan önce biten kural sözdizimsel olarak geçerlidir ama
               // hiçbir yineleme üretemez; kaydedilmeden önce reddedilir.
               onChange={(value) => {
@@ -762,14 +865,28 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
               TOPLAM yineleme sayısıdır ve planlanan başlangıç kurala uyuyorsa
               ilk yineleme şablonun kendisidir. Kaç yeni görev oluşacağı bu
               yüzden açıkça yazılır. */}
-          {!plan.unbounded && plan.totalCount > 0 && (
+          {(plan.totalCount > 0 || plan.truncated || plan.unbounded) && (
             <div className="recurrence-count-note">
               <Icons.Info size={12} />
               <span>
-                Seri toplam <strong>{plan.totalCount}</strong> yinelemeden oluşur.
-                {plan.includesTemplate
-                  ? <> İlki bu görevin kendisidir; <strong>{plan.generatedCount}</strong> yeni görev oluşturulur.</>
-                  : <> Tümü yeni görev olarak oluşturulur.</>}
+                {plan.unbounded
+                  ? <>Seri süresizdir; sonu belirtilmedi.</>
+                  : plan.truncated
+                    // UNTIL kuralı güvenlik tavanına dayandı: 400 rakamı serinin
+                    // TOPLAMI değil, açılabilen kısmıdır ve öyle sunulamaz.
+                    ? <>Seri {MAX_RECURRENCE_OCCURRENCES} yinelemelik güvenli açılım sınırını aşıyor; toplam sayı gösterilemiyor.</>
+                    : (
+                      <>
+                        Seri toplam <strong>{plan.totalCount}</strong> yinelemeden oluşur.
+                        {plan.includesTemplate
+                          ? <> İlki bu görevin kendisidir.</>
+                          : <> Şablonun günü kuralın dışındadır.</>}
+                      </>
+                    )}
+                {occurrenceCount > 0 && <> Şu ana kadar <strong>{occurrenceCount}</strong> yineleme oluşturuldu.</>}
+                {pendingOccurrences > 0
+                  ? <> Sırada <strong>{pendingOccurrences}</strong> yineleme var; bu işlemde en fazla <strong>{nextBatch}</strong> görev oluşturulur.</>
+                  : <> Oluşturulacak yeni yineleme yok.</>}
               </span>
             </div>
           )}
@@ -788,8 +905,13 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
                     <span className="recurrence-preview-dow">{TR_DAYS[(new Date(`${date}T00:00:00`).getDay() + 6) % 7]}</span>
                   </span>
                 ))}
-                {plan.hiddenCount > 0 && <span className="recurrence-preview-more">+{plan.hiddenCount} daha</span>}
-                {plan.unbounded && <span className="recurrence-preview-more">süresiz</span>}
+                {/* Sınırsız/kesilmiş seride GERİYE KALAN sayı bilinmez. Önizleme
+                    sınırının bir fazlası yalnızca "devamı var" işaretidir; bu
+                    değer sayı gibi yazıldığında her süresiz seri "+1 daha"
+                    diyordu. */}
+                {plan.unbounded || plan.truncated
+                  ? <span className="recurrence-preview-more">{plan.unbounded ? 'süresiz' : 'devamı var'}</span>
+                  : plan.hiddenCount > 0 && <span className="recurrence-preview-more">+{plan.hiddenCount} daha</span>}
               </div>
             </div>
           )}
@@ -814,6 +936,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, onChange, onGenerat
           </button>
           <span className="muted" style={{ fontSize: 11.5, alignSelf: 'center' }}>
             {occurrenceCount} yineleme bu seriden üretildi.
+            {ruleLocked ? ' Kural alanları kilitli: değiştirmek için yinelemeleri silin.' : ''}
           </span>
         </div>
       )}
@@ -861,16 +984,66 @@ function Section({ title, icon, tone = 'var(--accent)', hint, info, children }) 
  */
 function RelEditor({ task, tasks, onChange, onUpdateTask }) {
   const deps = useMemo(() => task.deps || [], [task.deps]);
-  const others = useMemo(
-    () => tasks.filter((item) => item.id !== task.id && (!task.projectId || item.projectId === task.projectId)),
-    [tasks, task.id, task.projectId]
-  );
   const [tab, setTab] = useState('predecessors');
   const [selectedType, setSelectedType] = useState('FS');
   const [successorType, setSuccessorType] = useState('FS');
   const [linkError, setLinkError] = useState(null);
+  /**
+   * ARDIL kenarları için yerel taslak (ardıl kimliği → bağımlılık listesi).
+   *
+   * Ardıl düzenlemesi ARDIL görevi yamalar ve yazma eşzamansızdır. Yama her
+   * seferinde `tasks` anlık görüntüsünden türetilseydi, kullanıcı ilişki türünü
+   * değiştirip yanıt gelmeden gecikmeyi (ya da çok basamaklı bir sayıyı)
+   * yazdığında ikinci yama ESKİ kenardan hesaplanır ve birincinin değiştirdiği
+   * alanları geri alırdı. Taslak, yetkili kayıt yetişene kadar en güncel kenarı
+   * taşır.
+   */
+  const [successorDrafts, setSuccessorDrafts] = useState(() => new Map());
 
-  const successors = useMemo(() => selectSuccessors(task.id, tasks), [task.id, tasks]);
+  /**
+   * Doğrulamanın çalıştığı ağ.
+   *
+   * İki düzeltme içerir:
+   *  - Panelin İYİMSER görevi (`task`) kanonik listedeki eski kaydın yerine
+   *    geçer. Aksi hâlde yeni eklenen bir öncül henüz `tasks` içinde görünmez
+   *    ve aynı görev ardıl olarak da seçilip döngü kurulabilirdi.
+   *  - Bekleyen ardıl taslakları uygulanır.
+   */
+  const graph = useMemo(() => {
+    let replaced = false;
+    const merged = (tasks || []).map((item) => {
+      if (item.id === task.id) { replaced = true; return task; }
+      const draft = successorDrafts.get(item.id);
+      return draft ? { ...item, deps: draft } : item;
+    });
+    return replaced ? merged : [...merged, task];
+  }, [tasks, task, successorDrafts]);
+
+  const others = useMemo(
+    () => graph.filter((item) => item.id !== task.id && (!task.projectId || item.projectId === task.projectId)),
+    [graph, task.id, task.projectId]
+  );
+
+  const successors = useMemo(() => selectSuccessors(task.id, graph), [task.id, graph]);
+
+  // Yetkili kayıt taslakla eşitlendiğinde taslak düşer; aksi hâlde sunucudan
+  // gelen sonraki bir değişiklik taslağın altında görünmez kalırdı.
+  useEffect(() => {
+    setSuccessorDrafts((current) => {
+      if (!current.size) return current;
+      const next = new Map(current);
+      let changed = false;
+      for (const [id, draftDeps] of current) {
+        const canonical = (tasks || []).find((item) => item.id === id);
+        if (!canonical) continue;
+        if (JSON.stringify(canonical.deps || []) === JSON.stringify(draftDeps)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [tasks]);
 
   // Öncül görev listesi de büyük projelerde canlı arama gerektirir.
   const taskOption = (candidate) => ({
@@ -880,23 +1053,29 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
     keywords: [candidate.task, candidate.keyword, candidate.projectCode]
   });
 
-  const predecessorOptions = useMemo(() => others
-    .filter((candidate) => !deps.some((dependency) => depId(dependency) === candidate.id))
-    .slice()
-    .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
-    .map(taskOption), [others, deps]);
+  const predecessorOptions = useMemo(() => {
+    // Döngü denetimi ARDIL yönünde de uygulanır: `A → B → C` ağında `A` açılıp
+    // `C` öncül seçilirse `A → B → C → A` döngüsü kapanırdı.
+    const blocked = collectSuccessorClosure(task.id, graph);
+    return others
+      .filter((candidate) => !deps.some((dependency) => depId(dependency) === candidate.id))
+      .filter((candidate) => !blocked.has(candidate.id))
+      .slice()
+      .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
+      .map(taskOption);
+  }, [others, deps, task.id, graph]);
 
   const successorOptions = useMemo(() => {
     const linked = new Set(successors.map((entry) => entry.task.id));
     // Döngü yaratacak adaylar listeye HİÇ girmez: kullanıcı reddedilecek bir
     // seçimi yapmak zorunda kalmasın.
-    const blocked = collectPredecessorClosure(task.id, tasks);
+    const blocked = collectPredecessorClosure(task.id, graph);
     return others
       .filter((candidate) => !linked.has(candidate.id) && !blocked.has(candidate.id))
       .slice()
       .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
       .map(taskOption);
-  }, [others, successors, task.id, tasks]);
+  }, [others, successors, task.id, graph]);
 
   const updateDep = (idx, patch) => {
     const next = deps.map((d, i) => {
@@ -910,7 +1089,15 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
   const removeDep = (idx) => onChange(deps.filter((_, i) => i !== idx));
   const addDep = (depTaskId, type) => {
     if (!depTaskId) return;
-    onChange([...deps, { id: depTaskId, predecessorId: depTaskId, type: type || 'FS', lagValue: 0, lagUnit: 'day', lagDays: 0 }]);
+    // Seçenek listesi döngü kuracak adayları zaten eler; yazma yolunda ayrıca
+    // doğrulanır, çünkü liste render anındaki ağa göre üretilmiştir.
+    const plan = planPredecessorLink(task, depTaskId, graph, { type });
+    if (!plan.ok) {
+      setLinkError(plan.message);
+      return;
+    }
+    setLinkError(null);
+    onChange(plan.deps);
   };
 
   const applySuccessorPlan = (plan) => {
@@ -919,12 +1106,15 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
       return;
     }
     setLinkError(null);
+    // Taslak ÖNCE yazılır: bir sonraki düzenleme yetkili yanıtı beklemeden bu
+    // kenarın üstüne birleşir.
+    setSuccessorDrafts((current) => new Map(current).set(plan.successorId, plan.patch.deps));
     onUpdateTask?.(plan.successorId, plan.patch);
   };
 
-  const addSuccessor = (successorId) => applySuccessorPlan(planSuccessorLink(task, successorId, tasks, { type: successorType }));
-  const removeSuccessor = (successorId) => applySuccessorPlan(planSuccessorUnlink(task, successorId, tasks));
-  const updateSuccessor = (successorId, changes) => applySuccessorPlan(planSuccessorUpdate(task, successorId, changes, tasks));
+  const addSuccessor = (successorId) => applySuccessorPlan(planSuccessorLink(task, successorId, graph, { type: successorType }));
+  const removeSuccessor = (successorId) => applySuccessorPlan(planSuccessorUnlink(task, successorId, graph));
+  const updateSuccessor = (successorId, changes) => applySuccessorPlan(planSuccessorUpdate(task, successorId, changes, graph));
 
   const renderRelationFields = (relation, onPatch, onRemove, titleText) => {
     const type = relTypeOf(relation);

@@ -224,6 +224,12 @@ export function restoreActualSnapshotIds(body, map) {
       id: restoreClientId(project.id, map),
       calendarId: restoreClientId(project.calendarId, map)
     })) : body.projects,
+    // Görev tanımlarken seçilebilen ek projeler de aynı kimlik eşlemesinden geçer.
+    assignableProjects: Array.isArray(body.assignableProjects) ? body.assignableProjects.map((project) => ({
+      ...project,
+      id: restoreClientId(project.id, map),
+      rootWbsId: restoreClientId(project.rootWbsId, map)
+    })) : body.assignableProjects,
     wbs: Array.isArray(body.wbs) ? body.wbs.map((node) => ({
       ...node,
       id: restoreClientId(node.id, map),

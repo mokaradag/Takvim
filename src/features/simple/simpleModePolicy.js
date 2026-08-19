@@ -1,9 +1,18 @@
-import { canWriteProject, writableProjects } from '../../state/projectWritePolicy.js';
+import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 export { canWriteProject };
 
+/**
+ * Basit Modda görev tanımlanabilecek projeler.
+ *
+ * Liste artık hazır gelir (bkz. state/projectWritePolicy · taskAssignableProjects):
+ * sıradan kullanıcıda "corporateprojectaccess" ile tam yetki alınan görünür
+ * projeler, yöneticide ek olarak görev atama kapsamındaki CN43N projeleri.
+ * Kapsam kaydının `accessLevel` değeri `ASSIGN`'dır ve tam yazma yetkisi
+ * anlamına GELMEZ; bu yüzden burada `canWriteProject` süzgeci uygulanmaz.
+ */
 export function writableSimpleModeProjects(projects = []) {
-  return writableProjects(projects);
+  return (projects || []).filter((project) => canWriteProject(project) || project?.accessLevel === 'ASSIGN');
 }
 
 export function resolveSimpleProjectChoice(currentChoice, projects = [], canCreateProjects = false) {

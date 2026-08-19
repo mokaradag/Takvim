@@ -240,16 +240,31 @@ test('süzgeç kutusu yatayda kırpılmaz', () => {
 
 /* ── 4. Yazı boyutu ölçeği ──────────────────────────────────────── */
 
-test('tam ekran kaplar yükseklikler ölçekli görünüm değişkenini kullanır', () => {
-  // Yazı boyutu ölçeği gövdeye `zoom` uygular; `100vh` ölçekle birlikte
-  // büyüdüğü için panel alt çubuğu ekranın dışına itiliyordu.
-  for (const file of ['src/app/globals.css', 'src/app/styles/features.css', 'src/app/styles/shell.css', 'src/app/styles/experience.css']) {
-    // Yalnızca `--app-viewport-h` yedeği olarak yazılan `100vh` kabul edilir;
+test('tam ekran kaplar ölçüler ölçekli görünüm değişkenlerini kullanır', () => {
+  // Yazı boyutu ölçeği gövdeye `zoom` uygular; `100vh` VE `100vw` ölçekle
+  // birlikte büyüdüğü için panelin alt çubuğu ekranın dışına itiliyor, geniş
+  // paneller ise yatayda kırpılıyordu.
+  const files = [
+    'src/app/globals.css',
+    'src/app/styles/features.css',
+    'src/app/styles/shell.css',
+    'src/app/styles/experience.css',
+    'src/app/styles/components.css'
+  ];
+  for (const file of files) {
+    // Yalnızca değişkenin yedeği olarak yazılan `100vh`/`100vw` kabul edilir;
     // ölçüm için önce bu yedekler metinden düşürülür.
-    const css = read(file).replaceAll('var(--app-viewport-h, 100vh)', 'var(--app-viewport-h)');
-    const bare = css.match(/\b(height|max-height|padding-top):[^;]*\d+vh/g) || [];
-    assert.deepEqual(bare, [], `${file} doğrudan vh kullanmamalı: ${bare.join(', ')}`);
+    const css = read(file)
+      .replaceAll('var(--app-viewport-h, 100vh)', 'var(--app-viewport-h)')
+      .replaceAll('var(--app-viewport-w, 100vw)', 'var(--app-viewport-w)');
+    const bareHeight = css.match(/\b(height|max-height|padding-top):[^;]*\d+vh/g) || [];
+    assert.deepEqual(bareHeight, [], `${file} doğrudan vh kullanmamalı: ${bareHeight.join(', ')}`);
+    const bareWidth = css.match(/\b(width|max-width|min-width):[^;]*\d+vw/g) || [];
+    assert.deepEqual(bareWidth, [], `${file} doğrudan vw kullanmamalı: ${bareWidth.join(', ')}`);
   }
+  // Değişkenin kendisi ölçeğe bölünerek yayımlanır.
+  const tweaks = read('src/hooks/useApplyTweaks.js');
+  assert.match(tweaks, /--app-viewport-w', `calc\(100vw \/ \$\{scale\}\)`/);
 });
 
 test('görev paneli alt çubuğu küçülmez ve gövde taşmayı kendi içinde tutar', () => {
@@ -347,5 +362,67 @@ test('ardıl düzenleyicisi ayrı bir alan tutmaz: kenar tek yerde saklanır', (
   const policy = read('src/features/task-detail/taskSuccessorPolicy.js');
   assert.doesNotMatch(drawer, /successors:\s*\[/);
   assert.doesNotMatch(policy, /task\.successors/);
-  assert.match(drawer, /planSuccessorLink\(task, successorId, tasks, \{ type: successorType \}\)/);
+  // Doğrulama, panelin iyimser görevini ve bekleyen ardıl taslaklarını içeren
+  // GÜNCEL ağ üzerinde çalışır; kanonik anlık görüntü tek başına eskidir.
+  assert.match(drawer, /planSuccessorLink\(task, successorId, graph, \{ type: successorType \}\)/);
+  assert.match(drawer, /const \[successorDrafts, setSuccessorDrafts\] = useState/);
+  assert.match(drawer, /const graph = useMemo/);
+});
+
+/*
+ * 5. Tarih biçimi tercihi DÜZENLENEBİLİR alanlara da uygulanır
+ *
+ * Ayar "her ekrandaki tarih" derken yalnızca pasif etiketleri değiştiriyordu:
+ * `18 Ağu 2026` seçen kullanıcı görev panelinde `18/08/2026` yazan bir kutu
+ * görüyordu. Kutu artık tercihe göre yazar, İKİ biçimi de okur.
+ */
+test('düzenlenebilir tarih alanı yürürlükteki biçim tercihine göre yazar', async () => {
+  const { setAppDateDisplayFormat, getAppDateDisplayFormat } = await import('../src/scheduling/dates/index.js');
+  const { formatEditableDate } = await import('../src/components/dateInputFormat.js');
+  const previous = getAppDateDisplayFormat();
+  try {
+    setAppDateDisplayFormat('dd/mm/yyyy');
+    assert.equal(formatEditableDate('2026-08-18'), '18/08/2026');
+    setAppDateDisplayFormat('pattern');
+    assert.equal(formatEditableDate('2026-08-18'), '18 Ağu 2026');
+    assert.equal(formatEditableDate(''), '');
+  } finally {
+    setAppDateDisplayFormat(previous);
+  }
+});
+
+test('tarih alanı her iki biçimi de okur; geçersiz gün reddedilir', async () => {
+  const { parseDisplayDate } = await import('../src/components/dateInputFormat.js');
+  // Yazma biçimi tek olsa da OKUMA geniştir: tercih değiştiğinde yarım kalmış
+  // bir giriş ya da kopyalanmış eski bir metin reddedilmemelidir.
+  assert.equal(parseDisplayDate('18/08/2026'), '2026-08-18');
+  assert.equal(parseDisplayDate('18 Ağu 2026'), '2026-08-18');
+  assert.equal(parseDisplayDate('18 Ağustos 2026'), '2026-08-18');
+  assert.equal(parseDisplayDate('18 AĞU 2026'), '2026-08-18', 'Türkçe büyük harf aynı aya çözülmelidir');
+  assert.equal(parseDisplayDate('2026-08-18'), '2026-08-18');
+  assert.equal(parseDisplayDate(''), '');
+  assert.equal(parseDisplayDate('31 Şub 2026'), null, 'takvimde olmayan gün kabul edilmez');
+  assert.equal(parseDisplayDate('18 Xyz 2026'), null, 'tanınmayan ay adı kabul edilmez');
+  assert.equal(parseDisplayDate('31/02/2026'), null);
+});
+
+test('yer tutucu ve hata iletisi biçim tercihinden türetilir', () => {
+  const source = readFileSync(new URL('../src/components/DateInput.jsx', import.meta.url), 'utf8');
+  // Metin koda gömülü kalsaydı `18 Ağu 2026` seçen kullanıcıya hâlâ
+  // "gg/aa/yyyy biçiminde girin" denirdi.
+  assert.match(source, /const hint = dateInputHint\(dateFormat\);/);
+  assert.match(source, /placeholder=\{placeholder \|\| hint\}/);
+  assert.match(source, /Tarihi \$\{hint\} biçiminde girin\./);
+  // Taslak, değerin yanı sıra BİÇİM değiştiğinde de yenilenmelidir.
+  assert.match(source, /\}, \[value, dateFormat\]\);/);
+});
+
+test('rakam maskesi harf içeren girişe uygulanmaz', async () => {
+  const { maskDateDraft } = await import('../src/components/dateInputFormat.js');
+  // Rakam yazan kullanıcı eğik çizgileri kendisi yazmaz…
+  assert.equal(maskDateDraft('18082026'), '18/08/2026');
+  assert.equal(maskDateDraft('1808'), '18/08');
+  // …ama `18 Ağu 2026` yazılırken rakamlar ayıklansaydı kutu `18/20/26` gösterirdi.
+  assert.equal(maskDateDraft('18 Ağu 2026'), '18 Ağu 2026');
+  assert.equal(maskDateDraft('18 A'), '18 A');
 });

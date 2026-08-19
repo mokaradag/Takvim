@@ -24,7 +24,7 @@ import {
 import { useAppState } from '../../state/AppStateProvider';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 import { DEFAULT_WBS_DEPTH, WBS_DEPTH_OPTIONS, expandedIdsForDepth } from './wbsTreeViewPolicy.js';
-import { createWbsDropIndex, resolveWbsDrop, wbsSiblings } from './wbsDragPolicy.js';
+import { createWbsDropIndex, resolveWbsDrop, wbsIndexChildren, wbsSiblingPlacement } from './wbsDragPolicy.js';
 
 // Satır içinde imlecin dikey konumu bırakma niyetini belirler: üst/alt şeritler
 // kardeş sırası, orta bölge ise alt düğüm yapar.
@@ -170,6 +170,9 @@ export function WbsView() {
   const projectSchedule = useProjectSchedule(workspace.selectedProjectId);
   const { moveTasksToWbs } = useTaskActions();
   const { addWbsChild, renameWbs, reparentWbs, moveWbsNode, deleteWbs, clearWbsError, error } = useWbsActions();
+  // Kardeş/alt ağaç dizini ağaç değeri başına BİR kez kurulur. Satır çizimi ve
+  // sürükleme doğrulaması O(1) arama yapar.
+  const dropIndex = useMemo(() => createWbsDropIndex(wbs), [wbs]);
   const tree = useMemo(() => buildWbsTree(wbs), [wbs]);
   const orderedRows = useMemo(() => flattenWbsTree(tree), [tree]);
   // Dağılım ağacı büyüdüğünde açılır listeler canlı arama ile kullanılabilir kalır.
@@ -196,7 +199,29 @@ export function WbsView() {
   // eskidir. Bu aralıkta yeni bir sürüklemeye izin verilirse, mutlak kardeş
   // sırası eski ağaçtan hesaplanıp güncel ağaca uygulanır ve sonuç kullanıcının
   // gördüğünden başka olur.
-  const [movePending, setMovePending] = useState(false);
+  // TEK bir yapısal yazma kilidi. Kilit yalnızca sürükleyerek taşımayı
+  // koruduğunda; ekleme/silme/taşıma yazmaları serbest kalıyordu. WBS
+  // kalıcılaştırması karamsardır ve yazmalar kuyruğa girer: kullanıcı bir üst
+  // düğüm değişikliği gönderip yanıt gelmeden sürüklemeye başladığında, sayısal
+  // kardeş sırası ESKİ ağaçtan hesaplanıyor ve düğüm bırakıldığı yerden başka
+  // bir konuma kalıcılaşabiliyordu.
+  const [structuralWritePending, setStructuralWritePending] = useState(false);
+  // Üst düğüm adayları YALNIZCA taşınmakta olan düğüm için, ağaç başına BİR kez
+  // hesaplanır. Her satırda alt ağaç kimlikleri çıkarılıp bütün liste
+  // süzüldüğünde çizim ağaç boyutuyla karesel büyüyor ve 38 bin düğümlük
+  // kurumsal ağaçta sayfa donmuş görünüyordu.
+  const reparentCandidates = useMemo(() => {
+    const nodeId = reparenting?.nodeId;
+    if (!nodeId) return [];
+    const blocked = new Set([nodeId, ...selectWbsDescendantIds(wbs, nodeId)]);
+    return orderedRows.filter(({ node }) => !blocked.has(node.id));
+  }, [reparenting?.nodeId, wbs, orderedRows]);
+
+  const runStructuralWrite = (operation) => {
+    if (structuralWritePending) return Promise.resolve({ ok: false, code: 'WBS_WRITE_IN_PROGRESS' });
+    setStructuralWritePending(true);
+    return Promise.resolve(operation()).finally(() => setStructuralWritePending(false));
+  };
   // Satırın tamamı `draggable` olsaydı ad alanında metin seçmek ya da eylem
   // düğmelerinde işaretçiyi kaydırmak sürüklemeyi başlatabilir ve istenmeyen bir
   // hiyerarşi değişikliği kalıcılaşabilirdi; sürükleme yalnızca tutamaktan başlar.
@@ -205,7 +230,6 @@ export function WbsView() {
   // Sürükleme oturumu boyunca paylaşılan arama dizini: `dragover` her işaretçi
   // hareketinde tetiklenir, ağaç indeksinin her olayda yeniden kurulması
   // kurumsal ölçekte sürüklemeyi kilitler.
-  const dropIndexRef = useRef(null);
   const validationIssues = useMemo(() => validateWbsStructure(wbs), [wbs]);
   // Toplulaştırmalar satır başına değil, ağacın tamamı için tek geçişte
   // hesaplanır; 38 bin düğümlü kurumsal ağaçta satır çizimi böylece ucuz kalır.
@@ -332,9 +356,9 @@ export function WbsView() {
     if (!name) return;
     const current = editing;
     setEditing({ ...current, busy: true });
-    const result = current.mode === 'add'
-      ? await addWbsChild(current.nodeId, name)
-      : await renameWbs(current.nodeId, name);
+    const result = await runStructuralWrite(() => (current.mode === 'add'
+      ? addWbsChild(current.nodeId, name)
+      : renameWbs(current.nodeId, name)));
     if (result && result.ok === false) {
       setEditing({ ...current, busy: false });
       return;
@@ -343,7 +367,7 @@ export function WbsView() {
   };
 
   const confirmDelete = (node) => {
-    deleteWbs(node.id);
+    runStructuralWrite(() => deleteWbs(node.id));
     setPendingDelete(null);
   };
 
@@ -368,18 +392,16 @@ export function WbsView() {
     setDrag(null);
     setDropHint(null);
     setDragHandleNodeId(null);
-    dropIndexRef.current = null;
   };
 
   const onRowDragStart = (node) => (event) => {
-    if (!canEdit || node.parentId == null || movePending || dragHandleNodeId !== node.id) {
+    if (!canEdit || node.parentId == null || structuralWritePending || dragHandleNodeId !== node.id) {
       event.preventDefault();
       return;
     }
     setDrag({ id: node.id });
     setPendingDelete(null);
     setEditing(null);
-    dropIndexRef.current = createWbsDropIndex(wbs);
     event.dataTransfer.effectAllowed = 'move';
     // Bazı tarayıcılar veri taşımayan sürüklemeyi başlatmaz.
     try { event.dataTransfer.setData('text/plain', node.id); } catch {}
@@ -388,7 +410,7 @@ export function WbsView() {
   const resolveDrop = (dragId, targetId, position) => resolveWbsDrop(
     wbs,
     { dragId, targetId, position },
-    { index: dropIndexRef.current || (dropIndexRef.current = createWbsDropIndex(wbs)) }
+    { index: dropIndex }
   );
 
   const onRowDragOver = (node) => (event) => {
@@ -429,21 +451,17 @@ export function WbsView() {
     // taşımadan önce yaprak olduğu için hiç açılamıyorsa) düğüm bırakıldığı anda
     // ağaçtan kayboluyor, taşıma başarısız olmuş gibi görünüyordu.
     if (position === 'inside') setExpanded((current) => new Set(current).add(node.id));
-    setMovePending(true);
-    Promise.resolve(moveWbsNode(resolution.move.id, resolution.move.parentId, resolution.move.index))
-      .finally(() => setMovePending(false));
+    runStructuralWrite(() => moveWbsNode(resolution.move.id, resolution.move.parentId, resolution.move.index));
   };
 
   /** Klavye/işaretçi ayrımı olmadan kardeş sırası: sürükleme tek yol değildir. */
   const moveSibling = (node, offset) => {
-    if (!canEdit || movePending || node.parentId == null) return;
-    const siblings = wbsSiblings(wbs, node.parentId);
+    if (!canEdit || structuralWritePending || node.parentId == null) return;
+    const siblings = wbsIndexChildren(dropIndex, node.parentId);
     const currentIndex = siblings.findIndex((sibling) => sibling.id === node.id);
     const nextIndex = currentIndex + offset;
     if (currentIndex < 0 || nextIndex < 0 || nextIndex >= siblings.length) return;
-    setMovePending(true);
-    Promise.resolve(moveWbsNode(node.id, node.parentId, nextIndex))
-      .finally(() => setMovePending(false));
+    runStructuralWrite(() => moveWbsNode(node.id, node.parentId, nextIndex));
   };
 
   const onSourceChange = (wbsId) => {
@@ -476,7 +494,7 @@ export function WbsView() {
 
   const applyReparent = () => {
     if (!reparenting?.nodeId || !reparenting?.parentId) return;
-    reparentWbs(reparenting.nodeId, reparenting.parentId);
+    runStructuralWrite(() => reparentWbs(reparenting.nodeId, reparenting.parentId));
     setReparenting(null);
   };
 
@@ -648,11 +666,15 @@ export function WbsView() {
               const rollup = rollups.get(node.id) || emptyWbsRollup(node.id);
               const hasChildren = (node.children || []).length > 0;
               const isReparenting = reparenting?.nodeId === node.id;
-              const blockedTargets = new Set([node.id, ...selectWbsDescendantIds(wbs, node.id)]);
-              const parentCandidates = orderedRows.filter(({ node: candidate }) => !blockedTargets.has(candidate.id));
-              const draggable = canEdit && node.parentId != null && !movePending;
-              const siblingIndex = draggable ? wbsSiblings(wbs, node.parentId).findIndex((sibling) => sibling.id === node.id) : -1;
-              const siblingCount = draggable ? wbsSiblings(wbs, node.parentId).length : 0;
+              // Üst düğüm adayları YALNIZCA taşınmakta olan satır için hesaplanır:
+              // her satırda alt ağaç kimlikleri çıkarılıp bütün liste süzülseydi
+              // çizim yine ağaç boyutuyla karesel büyürdü.
+              const parentCandidates = isReparenting ? reparentCandidates : [];
+              const draggable = canEdit && node.parentId != null && !structuralWritePending;
+              // Kardeş sırası dizinden O(1) okunur.
+              const placement = draggable ? wbsSiblingPlacement(dropIndex, node) : { index: -1, count: 0 };
+              const siblingIndex = placement.index;
+              const siblingCount = placement.count;
               const hint = dropHint?.nodeId === node.id ? dropHint : null;
               const rowClass = [
                 'wbs-tree-grid',

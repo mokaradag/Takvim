@@ -9,7 +9,8 @@ import { projectColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
-import { useTasks, useProjects, usePeople, useTaskActions } from '../../state/hooks';
+import { TaskReminderButton } from '../reminders/TaskReminderButton';
+import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 function projectLabel(project) {
@@ -41,7 +42,14 @@ export function TasksView() {
 
   const setCF = (key, value) => setColFilter(f => ({ ...f, [key]: value }));
   const projectById = useMemo1(() => new Map(projects.map((project) => [project.id, project])), [projects]);
-  const canAddTask = projects.some(canWriteProject);
+  // Görev yazma yetkisi görev ATAMA kapsamını da içerir: yönetici, kendi
+  // personeline tanımladığı görevi düzenleyip silebilir.
+  const assignableProjects = useTaskAssignableProjects();
+  const assignableProjectIds = useMemo1(
+    () => new Set(assignableProjects.map((project) => String(project.id))),
+    [assignableProjects]
+  );
+  const canAddTask = assignableProjects.length > 0;
 
   // Süzgeç değeri KARARLI kimliktir, görünen ad değil. Ada göre süzülseydi aynı
   // ada sahip iki proje (ya da iki çalışan) tek bir seçenekte birleşir; kullanıcı
@@ -246,7 +254,7 @@ export function TasksView() {
                   sortKey={sortDirFor('targetFinish')} onSort={setSortFor('targetFinish')}
                   filter={colFilter.targetFinish} onFilter={v => setCF('targetFinish', v)}
                 />
-                <th style={{ width: 60 }} />
+                <th style={{ width: 78 }} aria-label="İşlemler" />
               </tr>
             </thead>
             <tbody>
@@ -258,7 +266,8 @@ export function TasksView() {
                 const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
                 const prio = resolvePriority(t.priority);
                 const prog = t.progress != null ? t.progress : (t.status === 'done' ? 100 : 0);
-                const canEditTask = canWriteProject(projectById.get(t.projectId));
+                const canEditTask = canWriteProject(projectById.get(t.projectId))
+                  || assignableProjectIds.has(String(t.projectId));
                 return (
                   <tr key={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
                     <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{idx + 1}</td>
@@ -302,15 +311,21 @@ export function TasksView() {
                     <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedFinish)}</td>
                     <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
                     <td>
-                      <button
-                        className="icon-btn"
-                        style={{ width: 26, height: 26 }}
-                        disabled={!canEditTask}
-                        title={canEditTask ? 'Görevi sil' : 'Salt okunur görev'}
-                        onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}
-                      >
-                        <Icons.Trash size={13} />
-                      </button>
+                      {/* Hatırlatma eylemi silme simgesinin YANINDA durur;
+                          Basit Modda da aynı yerdedir. */}
+                      <div className="row" style={{ gap: 4 }}>
+                        <TaskReminderButton task={t} />
+                        <button
+                          className="icon-btn"
+                          style={{ width: 26, height: 26 }}
+                          disabled={!canEditTask}
+                          title={canEditTask ? 'Görevi sil' : 'Salt okunur görev'}
+                          aria-label="Görevi sil"
+                          onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}
+                        >
+                          <Icons.Trash size={13} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

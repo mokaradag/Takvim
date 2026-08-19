@@ -812,7 +812,7 @@ img.avatar-photo {
 .drawer {
   position: fixed;
   top: 0; right: 0;
-  width: min(520px, 100vw);
+  width: min(520px, var(--app-viewport-w, 100vw));
   height: var(--app-viewport-h, 100vh);
   background: var(--bg-elev);
   border-left: 1px solid var(--border);
@@ -865,7 +865,7 @@ img.avatar-photo {
   animation: fadein 0.12s ease;
 }
 .cmd-panel {
-  width: min(560px, 92vw);
+  width: min(560px, calc(var(--app-viewport-w, 100vw) * 0.92));
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -1276,7 +1276,10 @@ img.avatar-photo {
 
 /* ─── Column filter popover ───────────────── */
 .col-filter-pop {
-  min-width: 240px;
+  /* Taban genişlik görünüm alanını AŞAMAZ: dar bir pencerede (ya da yazı
+     ölçeği normalizasyonundan sonra) 240 piksellik taban, yerleşimin uyguladığı
+     `max-width` kısıtını yenip kutunun sağ kenarını ekran dışına taşıyordu. */
+  min-width: min(240px, calc(var(--app-viewport-w, 100vw) - 16px));
   background: var(--bg-elev);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
@@ -2077,7 +2080,7 @@ img.avatar-photo {
   animation: fadein 0.14s ease;
 }
 .day-expand-panel {
-  width: min(520px, 92vw);
+  width: min(520px, calc(var(--app-viewport-w, 100vw) * 0.92));
   max-height: calc(var(--app-viewport-h, 100vh) - 60px);
   background: var(--bg-elev);
   border: 1px solid var(--border);

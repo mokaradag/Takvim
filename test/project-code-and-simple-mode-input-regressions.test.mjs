@@ -166,5 +166,8 @@ test('clearing a date propagates an empty value that task normalization stores a
 
 test('required date inputs restore their previous value instead of clearing form state', () => {
   const dateInput = read('src/components/DateInput.jsx');
-  assert.match(dateInput, /if \(!allowEmpty\) setDraft\(fmtDisplayDate\(value\)\);\n\s+else onChange\?\.\(''\);/);
+  // Tarih biçimi tercihi düzenlenebilir alanlara da uygulandığından biçimlendirici
+  // `fmtDisplayDate` yerine tercihe duyarlı `formatEditableDate` oldu. Sınanan
+  // DAVRANIŞ değişmedi: zorunlu alan temizlendiğinde önceki değer geri yazılır.
+  assert.match(dateInput, /if \(!allowEmpty\) setDraft\(formatEditableDate\(value\)\);\n\s+else onChange\?\.\(''\);/);
 });

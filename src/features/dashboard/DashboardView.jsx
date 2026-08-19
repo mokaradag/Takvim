@@ -1,7 +1,8 @@
 'use client';
 import { useState as useState1, useMemo as useMemo1 } from 'react';
 import { Icons } from '../../components/icons';
-import { parseDate, fmt, fmtISO, addDays, diffDays, today } from '../../scheduling/dates';
+import { parseDate, fmt, fmtAxisDate, addDays, diffDays } from '../../scheduling/dates';
+import { taskCompletionDate } from '../../scheduling/metrics';
 import { depId } from '../../scheduling/dependencies';
 import { projectColorVar, personColorVar } from '../../lib/colors';
 import { AvatarStack, StatusPill, HeroHeader, Donut, AreaChart } from '../../components/ui';
@@ -11,6 +12,7 @@ import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetri
 import { useAllPeople, useTasks, useTaskActions } from '../../state/hooks';
 import { STATUS_DISTRIBUTION_BUCKETS, selectStatusDistribution } from './statusDistribution.js';
 import { selectOverdueAging, selectPlanHygiene } from './planHealth.js';
+import { useTodayKey } from '../../hooks/useTodayKey.js';
 
 /* ── Özet (Dashboard) ──────────────────────────────────── */
 export function DashboardView({ onNavigate }) {
@@ -21,7 +23,9 @@ export function DashboardView({ onNavigate }) {
   // döndürür; doğrudan bağımlılık olarak kullanılsaydı tarihe duyarlı memolar
   // her çizimde yeniden hesaplanır, bağımlılıktan çıkarılsaydı pano gece
   // yarısını açık geçtiğinde dünün sınıflandırmasında kalırdı.
-  const todayKey = fmtISO(today());
+  // Gün sınırı İZLENİR: sayfa gece yarısını açık geçtiğinde yeniden çizilir
+  // ve tarihe duyarlı bütün memolar tazelenir.
+  const todayKey = useTodayKey();
   const today_ = useMemo1(() => parseDate(todayKey), [todayKey]);
   const [donutSel, setDonutSel] = useState1(null);
 
@@ -38,9 +42,15 @@ export function DashboardView({ onNavigate }) {
   const doneTasks = bucketItems.get('done') || [];
   const progressTasks = bucketItems.get('in_progress') || [];
   const overdueTasks = bucketItems.get('overdue') || [];
+  // `todo` kovası da GÖSTERİLİR. Rozet satırı yalnızca Toplam/Tamamlanan/
+  // Devam eden/Geciken taşıdığında, henüz başlamamış sıradan bir görev halkada
+  // görünüyor ama hiçbir kartta sayılmıyordu; "dört kartın toplamı görev
+  // sayısına eşittir" iddiası da yanlıştı (dördüncü kart Toplam'dı).
+  const todoTasks = bucketItems.get('todo') || [];
   const done = doneTasks.length;
   const progress = progressTasks.length;
   const overdue = overdueTasks.length;
+  const todo = todoTasks.length;
   const compRate = distribution.completionRate;
 
   const byProject = useMemo1(() => {
@@ -91,15 +101,20 @@ export function DashboardView({ onNavigate }) {
   const completionTrend = useMemo1(() => {
     const values = [];
     const labels = [];
+    // Planlanan bitiş YEDEK DEĞİLDİR: gelecek aya planlanmış ama bugün bitirilen
+    // görev eğriye gelecek ay girer, gecikmiş bir plan ise görevi geçmişte
+    // bitmiş gösterirdi. Gerçekleşen bitişi olmayan tamamlanmış görev kronolojiye
+    // girmez (bkz. scheduling/metrics · taskCompletionDate).
     const completions = tasks
-      .filter((t) => t.status === 'done')
-      .map((t) => t.actualFinish || t.plannedFinish)
+      .map(taskCompletionDate)
       .filter(Boolean)
       .map((value) => parseDate(value));
     for (let offset = 13; offset >= 0; offset -= 1) {
       const day = addDays(today_, -offset);
       values.push(completions.filter((finish) => finish <= day).length);
-      labels.push(offset % 3 === 0 ? fmt(day, 'dd MMM') : '');
+      // Eksen etiketi tarih biçimi tercihinden bağımsızdır; memolanmış etiketler
+      // böylece gizli modül durumuna göre eskimez.
+      labels.push(offset % 3 === 0 ? fmtAxisDate(day) : '');
     }
     return { values, labels };
   }, [tasks, today_]);
@@ -177,7 +192,10 @@ export function DashboardView({ onNavigate }) {
   // Gecikme yaşlandırması ve plan bütünlüğü: tek bir "9 geciken" sayısı, dün
   // gecikmiş işle aylardır bekleyen işi aynı kefeye koyar.
   const aging = useMemo1(() => selectOverdueAging(tasks, today_), [tasks, today_]);
-  const hygiene = useMemo1(() => selectPlanHygiene(tasks), [tasks]);
+  // Sorumlu denetimi kişi dizinine göre ÇÖZÜLÜR: eşleşmeyen bir Sicil ya da
+  // eski ad, alan dolu diye "sağlıklı" sayılmamalıdır (Ekip sayfası bu
+  // referansları düşürür ve görev iş yükü tablosundan kaybolur).
+  const hygiene = useMemo1(() => selectPlanHygiene(tasks, people), [tasks, people]);
 
   const statusDonut = distribution.segments;
   // Seçim dilim SIRASI değil, kova KİMLİĞİ ile tutulur: görevler değiştiğinde
@@ -203,7 +221,9 @@ export function DashboardView({ onNavigate }) {
         <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${weeklyDelta.thisWeekDone} bu hafta`} trendUp={weeklyDelta.thisWeekDone > 0} items={doneTasks} onOpenTask={onOpenTask}
           tip="Durumu 'Tamamlandı' olarak işaretlenmiş görev sayısı. Bu sayı tamamlanma oranını ve hız göstergelerini besler." />
         <Stat icon={<Icons.Clock size={16} />} label="Devam eden" value={progress} accent="var(--status-progress)" trend="aktif" items={progressTasks} onOpenTask={onOpenTask}
-          tip="Üzerinde çalışılan ve hedef tarihi henüz geçmemiş görevler. Hedefi geçmiş olanlar “Geciken” kartında sayılır; böylece dört kartın toplamı her zaman toplam görev sayısına eşittir." />
+          tip="Üzerinde çalışılan ve hedef tarihi henüz geçmemiş görevler. Hedefi geçmiş olanlar “Geciken” kartında sayılır; Yapılacak, Devam eden, Geciken ve Tamamlanan kartlarının toplamı her zaman toplam görev sayısına eşittir." />
+        <Stat icon={<Icons.Circle size={16} />} label="Yapılacak" value={todo} accent="var(--status-todo)" trend="başlanmadı" items={todoTasks} onOpenTask={onOpenTask}
+          tip="Henüz başlanmamış ve hedef tarihi geçmemiş görevler. Halka grafiğindeki “Yapılacak” dilimiyle aynı kovadır." />
         <Stat icon={<Icons.Alert size={16} />} label="Geciken" value={overdue} accent="var(--status-overdue)" trend={overdue > 0 ? 'müdahale gerekli' : 'tertip'} trendDown={overdue > 0} items={overdueTasks} onOpenTask={onOpenTask}
           tip={<>
             <p>Hedef tarihi geçmiş ve hâlâ tamamlanmamış görevler.</p>
