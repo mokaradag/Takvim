@@ -41,6 +41,26 @@ export function deriveEffectiveAccess({ isSystemAdmin, fullProjectIds = [], part
   };
 }
 
+/**
+ * Görev ATAMA kapsamı.
+ *
+ * İş kuralı: direktör/müdür/birim yöneticileri, kendilerine "corporateprojectaccess"
+ * verilmemiş olsa bile HERHANGİ bir CN43N projesi altında KENDİ personeline iş
+ * tanımlayabilmelidir. Kapsam bilinçli olarak DAR tutulur:
+ *
+ *  - yalnızca GÖREV yazmalarını kapsar (proje üst verisi, iş dağılım ağacı,
+ *    erişim kayıtları ve manuel proje oluşturma dışarıdadır);
+ *  - yalnızca ETKİN KURUMSAL projeleri kapsar;
+ *  - görevin sorumlularının tamamı yöneticinin `MR_V_ExecutiveScope` kapsamında
+ *    olmalıdır.
+ *
+ * Görev GÖRÜNÜRLÜĞÜ değişmez: yönetici bu projelerin diğer görevlerini görmez,
+ * yalnızca kendi personeline atanmış olanları görmeye devam eder.
+ */
+export function hasTaskAssignmentScope({ isSystemAdmin = false, isExecutive = false } = {}) {
+  return Boolean(isSystemAdmin || isExecutive);
+}
+
 export function assertProjectWriteAccess(effective, projectId) {
   if (effective.isSystemAdmin) return;
   if (effective.access.get(projectId)?.accessLevel !== 'FULL') {

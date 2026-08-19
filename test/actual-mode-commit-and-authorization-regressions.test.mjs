@@ -223,10 +223,35 @@ test('existing task updates authorize both stored source and requested destinati
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
   const loadIndex = body.indexOf('const before = await taskRow(executor, taskId)');
-  const sourceAuthIndex = body.indexOf('if (before) assertProjectWriteAccess(actor.effective, id(before.ProjectId))');
-  const destinationAuthIndex = body.indexOf('assertProjectWriteAccess(actor.effective, projectId)');
-  assert.ok(loadIndex >= 0 && loadIndex < sourceAuthIndex);
-  assert.ok(sourceAuthIndex < destinationAuthIndex);
+  // Proje yetkisi, sorumlu doğrulamasından ÖNCE verilir: `ensurePeople` daha
+  // erken çalıştığında yetkisiz bir kullanıcı, geçerli ve geçersiz sicillerin
+  // farklı hata üretmesinden kurumsal rehberi okuyabiliyordu.
+  const sourceScopeIndex = body.indexOf('await assertTaskProjectScope(executor, actor, beforeProjectId)');
+  const destinationScopeIndex = body.indexOf('await assertTaskProjectScope(executor, actor, projectId)');
+  const peopleIndex = body.indexOf('await ensurePeople(executor, task.assigneeIds');
+  const sourceAssigneeIndex = body.indexOf('await assertAssigneeScope(executor, actor, beforeProjectId');
+  const destinationAssigneeIndex = body.indexOf('await assertAssigneeScope(executor, actor, projectId, assigneeSicils)');
+  assert.ok(loadIndex >= 0 && loadIndex < sourceScopeIndex);
+  assert.ok(sourceScopeIndex < destinationScopeIndex);
+  assert.ok(destinationScopeIndex < peopleIndex, 'proje yetkisi rehber yoklamasından önce denetlenmelidir');
+  assert.ok(peopleIndex < sourceAssigneeIndex);
+  assert.ok(sourceAssigneeIndex < destinationAssigneeIndex);
+});
+
+test('görev atama kapsamı yalnızca etkin kurumsal projeleri ve kendi personelini kapsar', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function assertTaskProjectScope'), source.indexOf('async function projectRootWbsId'));
+  // FULL erişim ve sistem yöneticisi kısa devre yapar; yönetici yine de ETKİN
+  // OLMAYAN bir projeye yazamaz (etkin FULL yetkileri de etkin projelerden kurulur).
+  assert.match(body, /if \(actor\.isSystemAdmin\) \{\s+await assertActiveProject\(executor, projectId\);\s+return;\s+\}/);
+  assert.match(body, /accessLevel === 'FULL'\) return;/);
+  // Kapsam yalnızca yöneticilere açıktır.
+  assert.match(body, /if \(!hasTaskAssignmentScope\(actor\) \|\| !actor\.isExecutive\)/);
+  // Yalnızca ETKİN KURUMSAL proje.
+  assert.match(body, /SourceType = 'CORPORATE' AND IsActive = 1/);
+  // Sorumluların tamamı yöneticinin kapsamında olmalı.
+  assert.match(body, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @managerSicil/);
+  assert.match(body, /görevin en az bir sorumlusu olmalıdır/);
 });
 
 test('cross-project task moves clear incoming and outgoing dependency rows before changing ProjectId', () => {

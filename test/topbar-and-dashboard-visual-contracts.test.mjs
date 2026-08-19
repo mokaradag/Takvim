@@ -86,14 +86,16 @@ test('Durum dağılımı uses semantic dashboard structure with the exact accept
   assert.doesNotMatch(css, /\.card:nth-child/);
   assert.doesNotMatch(css, /svg\[viewBox=/);
 
-  // The generic Donut interaction is unchanged: selected slices keep the translate/bounce behavior.
-  // The lift distance now lives in the named DONUT_LIFT constant so the viewBox padding can be
-  // derived from it, but the mechanism (polar offset of the selected slice) is identical.
-  assert.match(ui, /Donut chart \(SVG\) — with click-to-select \+ bounce animation/);
-  assert.match(ui, /const DONUT_LIFT = \d+;/);
-  assert.match(ui, /const tx = isSelected \? Math\.cos\(rad\) \* DONUT_LIFT : 0;/);
-  assert.match(ui, /const ty = isSelected \? Math\.sin\(rad\) \* DONUT_LIFT : 0;/);
-  assert.match(ui, /translate\(\$\{tx\}px, \$\{ty\}px\)/);
+  // Halka dilimleri kapalı YOL olarak çizilir. Kesik desenli çizim (dash) ve
+  // seçili dilimi dışarı öteleyen "patlatma" kaldırıldı: ikisi de dilimi
+  // halkadan koparıp bölünmüş gösteriyordu.
+  assert.match(ui, /donutSlicePath\(/);
+  assert.match(ui, /donutSegments\(data\)/);
+  assert.doesNotMatch(ui, /strokeDasharray=\{dash\}/);
+  assert.doesNotMatch(ui, /DONUT_LIFT/);
+  // Vurgu yalnızca İÇ yarıçapı değiştirir; dış çap sabit kaldığı için dilim
+  // ne kırpılır ne de komşusunun üstüne biner.
+  assert.match(ui, /const emphasisedInner = Math\.max\(2, inner - DONUT_EMPHASIS\);/);
 
   // No rejected forced segment pinning or 214px SVG override may return.
   assert.doesNotMatch(allCss, /> svg > g\s*\{[^}]*transform:\s*none\s*!important;/s);

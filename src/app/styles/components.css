@@ -126,10 +126,23 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .project-source-note { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-elev-2); color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
 .project-source-note svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
 
+/* Alan grafiği eksen etiketleri: SVG ölçeklense de metin sabit boyutta kalır. */
+.chart-axis-labels { position: absolute; left: 0; right: 0; bottom: 2px; height: 0; pointer-events: none; }
+.chart-axis-labels > span {
+  position: absolute;
+  transform: translateX(-50%);
+  bottom: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Grafik hareketlerini yalnızca veri görsellerinde yeniden etkinleştir. */
 .chart-area + polyline { stroke-dasharray: 2400; stroke-dashoffset: 2400; animation: drawLine 1s .05s cubic-bezier(.2,.8,.2,1) forwards; }
 .card svg[viewBox^='0 0 600 '] polygon { opacity: 0; animation: chartDataFade .65s cubic-bezier(.2,.8,.2,1) forwards; }
-.card svg[viewBox^='-10 -10'] circle[stroke-dasharray] { opacity: 0; animation: chartDataFade .55s cubic-bezier(.2,.8,.2,1) forwards; }
+.card .donut-slices { opacity: 0; animation: chartDataFade .55s cubic-bezier(.2,.8,.2,1) forwards; }
 .bar-row > div:nth-child(2) > div { transform-origin: left center; animation: chartGrowX .7s cubic-bezier(.2,.8,.2,1) both; }
 .velocity-bars .vel-bar { transform-origin: center bottom; animation: chartGrowY .7s cubic-bezier(.2,.8,.2,1) both; }
 @keyframes chartDataFade { from { opacity: 0; } to { opacity: 1; } }
@@ -137,9 +150,19 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 @keyframes chartGrowY { from { transform: scaleY(.05); } to { transform: scaleY(1); } }
 .reduce-motion .chart-area + polyline,
 .reduce-motion .card svg[viewBox^='0 0 600 '] polygon,
-.reduce-motion .card svg[viewBox^='-10 -10'] circle[stroke-dasharray],
+.reduce-motion .card .donut-slices,
 .reduce-motion .bar-row > div:nth-child(2) > div,
 .reduce-motion .velocity-bars .vel-bar { animation: none !important; }
+/* Animasyon kapatılırken GÖRÜNÜRLÜK geri verilmelidir: dilimler ve alanlar
+   `opacity: 0` başlangıç durumundan `chartDataFade` ile çıkıyordu; animasyon
+   iptal edildiğinde "Hareketi azalt" açık olan her kullanıcıda halka grafiği
+   tamamen görünmez kalıyordu. Aynısı çizgi grafiğinin kesikli çizim durumu
+   ve ölçeklenerek büyüyen çubuklar için de geçerlidir. */
+.reduce-motion .card svg[viewBox^='0 0 600 '] polygon,
+.reduce-motion .card .donut-slices { opacity: 1 !important; }
+.reduce-motion .chart-area + polyline { stroke-dashoffset: 0 !important; }
+.reduce-motion .bar-row > div:nth-child(2) > div { transform: scaleX(1) !important; }
+.reduce-motion .velocity-bars .vel-bar { transform: scaleY(1) !important; }
 
 /* ── Forms and DateInput ───────────────────────────────────── */
 .date-input-shell {
@@ -187,7 +210,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--status-overdue) 12%, transparent);
 }
 .gantt-range-controls .date-input-shell { width: 145px; flex: 0 0 145px; }
-.date-column-filter-pop { width: min(300px, calc(100vw - 16px)); }
+.date-column-filter-pop { width: min(300px, calc(var(--app-viewport-w, 100vw) - 16px)); }
 
 /* ── Tables and shared filter popovers ────────────────────── */
 .tbl thead th {
@@ -260,6 +283,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   isolation: isolate;
 }
 .searchable-select-search {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -276,6 +300,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   font: inherit;
 }
 .searchable-select-clear {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -291,7 +316,9 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   cursor: pointer;
 }
 .searchable-select-clear:hover { background: var(--bg-hover); color: var(--text); }
-.searchable-select-list { overflow-y: auto; padding: 6px; background: var(--bg-elev); }
+/* Liste panelin kalan yüksekliğini alır ve KENDİ İÇİNDE kayar; panel
+   görünüm alanı için hesaplanan yüksekliği hiçbir koşulda aşamaz. */
+.searchable-select-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px; background: var(--bg-elev); }
 .searchable-select-option {
   width: 100%;
   display: flex;
@@ -328,6 +355,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 }
 .searchable-select-empty { padding: 18px; text-align: center; font-size: 12px; }
 .searchable-select-foot {
+  flex: 0 0 auto;
   padding: 8px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-elev);

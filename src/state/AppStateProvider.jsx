@@ -15,7 +15,7 @@ import { setProjectColorOverrides } from '../lib/colors';
 import { resolveProjectCalendar, resolveTaskCalendar } from '../scheduling/calendars';
 import { selectTaskStats } from '../scheduling/metrics';
 import { MAX_RECURRENCE_OCCURRENCES, normalizeRecurrenceRule, planRecurringOccurrences } from '../scheduling/recurrence';
-import { appStateReducer, createLoadingState, createNewTask, normalizeStateTask } from './appState';
+import { appStateReducer, createLoadingState, createNewTask, normalizeStateTask, withCompletionStamp } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
 import {
@@ -145,11 +145,25 @@ export function AppStateProvider({ children, repository = appRepository }) {
   }, [applyStateAction, persistence]);
 
   const updateTask = useCallback((id, patch) => {
-    const access = resolveTaskMutationAccess(stateRef.current, id, patch);
+    // "Tamamlandı"ya geçiş gerçekleşen bitişi damgalar: aksi hâlde raporlar
+    // planlanan bitişi gerçekleşen sanmak zorunda kalırdı.
+    const stamped = withCompletionStamp(stateRef.current, id, patch);
+    const access = resolveTaskMutationAccess(stateRef.current, id, stamped);
     if (!access.ok) return rejectedWrite('task/update', access);
-    return persistence.updateTask(id, patch);
+    return persistence.updateTask(id, stamped);
   }, [persistence]);
   const flushPendingChanges = useCallback((options = {}) => persistence.flush(options), [persistence]);
+  /**
+   * TEK bir görevin bekleyen düzenlemelerini sunucuya yazar.
+   *
+   * Alan düzenlemeleri gecikmeli birleştirilir; sunucu tarafında görevi yeniden
+   * okuyan eylemler (hatırlatma gönderimi gibi) bu kuyruk boşaltılmadan
+   * çalıştırılırsa ESKİ başlık, termin ve sorumlularla iş görür.
+   */
+  const flushTaskEdits = useCallback(async (id) => {
+    if (!id) return { ok: true, value: null };
+    return firstFailedResult(await persistence.flushTaskUpdates([id])) || { ok: true, value: null };
+  }, [persistence]);
   const hasPendingChanges = useCallback(() => persistence.hasPendingChanges(), [persistence]);
   // Reddedilen yamalar saklanır; kullanıcı kalıcılaştırma şeridinden yeniden
   // deneyebilir, böylece kaybedilen tek kopya diye bir durum oluşmaz.
@@ -208,7 +222,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     };
     const taskInput = input || {};
     const result = await persistence.mutate('task/create', () => {
-      const baseTask = createNewTask(scopedState, undefined, id);
+      const baseTask = createNewTask(scopedState, undefined, id, project);
       return {
         type: 'task/add',
         task: {
@@ -278,8 +292,12 @@ export function AppStateProvider({ children, repository = appRepository }) {
     // açılsaydı ilk turdan sonra her tıklama aynı (ve tamamı elenmiş) günleri
     // üretir, seri hiçbir zaman ilerlemezdi.
     const horizon = Math.min(MAX_RECURRENCE_OCCURRENCES, materialized.size + Math.max(1, limit));
+    // Eleme DEĞİŞMEZ seri kimliğine (ham yineleme günü) göre yapılır. Planlanan
+    // başlangıç çalışma takvimiyle kaydırılabilir; şablonun günü kaydığında
+    // eskiden hiçbir kayıtla eşleşmiyor ve serinin birinci yinelemesi şablona
+    // EK olarak bir kez daha üretiliyordu.
     const plan = planRecurringOccurrences(template, rule, { calendar, limit: horizon })
-      .filter((occurrence) => !materialized.has(occurrence.plannedStart))
+      .filter((occurrence) => !materialized.has(occurrence.occurrenceDate))
       .slice(0, limit);
     if (!plan.length) return { ok: true, value: [] };
 
@@ -291,7 +309,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
         version: undefined,
         recurrence: null,
         recurrenceParentId: taskId,
-        recurrenceOccurrenceDate: occurrence.plannedStart,
+        recurrenceOccurrenceDate: occurrence.occurrenceDate,
         status: 'todo',
         progress: 0,
         actualStart: null,
@@ -466,6 +484,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     closeTask,
     updateTask,
     flushPendingChanges,
+    flushTaskEdits,
     hasPendingChanges,
     retryFailedChanges,
     cancelTaskFieldUpdates,
@@ -490,6 +509,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     closeTask,
     updateTask,
     flushPendingChanges,
+    flushTaskEdits,
     hasPendingChanges,
     retryFailedChanges,
     cancelTaskFieldUpdates,

@@ -15,7 +15,52 @@ Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yen
 
 ## Basit Modda Gantt
 
-Basit Mod gezinmesi `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+Basit Mod gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Rol kapılı **yönetici** sayfaları (`ADMIN_NAV_IDS`, örneğin Hatırlatma E-postaları) bu süzgeçten muaftır: yalnızca sistem yöneticisine açılan bir yapılandırma ekranı, kullanıcı Basit Modda diye ulaşılamaz olmamalıdır. Rol denetimi değişmez — yönetici olmayan bu sayfaları iki modda da görmez. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+
+## Basit Modda Görevler
+
+Basit Mod gezinmesi `veri` (Görevler), `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Basit Modda **Görevler** sayfası Gelişmiş Moddaki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
+
+Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`src/features/tasks/simpleTaskColumns.js`):
+
+| Sütun | Kaynak alan |
+| --- | --- |
+| Proje | `projectId` |
+| Görev | `task` |
+| Kısa açıklama | `keyword` |
+| Sorumlular | `assigneeIds` |
+| Öncelik | `priority` |
+| Durum | `status` |
+| Termin | `targetFinish` |
+
+Gelişmiş Moda ait planlama alanları Basit Modda **hiç gösterilmez**: ilerleme yüzdesi, saat/efor, başlangıç tarihleri, temel plan (baseline), bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve `test/task-assignment-scope-and-simple-mode.test.mjs` alanların sızmadığını doğrular.
+
+Sayfa dört yetenek sunar; hepsi aynı sadeleştirilmiş alan kümesi üzerinde çalışır:
+
+1. **Arama** — görev adı, kısa açıklama ve proje kodu üzerinde canlı süzme.
+2. **Süzme** — durum segmentleri ve öncelik seçici.
+3. **Sıralama** — termin, öncelik ve görev adına göre.
+4. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
+
+`SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda ve panelin altında hatırlatma gönderme ve silme düğmeleri bulunur (`docs/TASK-REMINDERS.md`). Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
+
+Üç davranış Gelişmiş Modla ortaktır ve bilinçlidir:
+
+- **Boş başlık kalıcılaştırılmaz.** Kullanıcı adı silip yeniden yazarken geçici boş metin yerel taslakta kalır; sunucu boş başlığı reddettiği için kuyruğa hiç girmez.
+- **Kısa açıklama proje etiket kataloğuyla eşleştirilir.** Alan bırakıldığında değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) etiket yine görevde saklanır — istenip sonra sessizce düşürülmez.
+- **Gizli plan tarihleri ezilmez.** Basit Mod planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Gelişmiş Modda kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
+
+**Gelişmiş Mod değişmez.** `AppShell` yalnızca `simpleMode` bayrağına göre bileşen seçer (`case 'veri': return simpleMode ? <SimpleTasksView /> : <TasksView />;`); `TasksView` ve `TaskDrawer` bu değişiklikten hiç etkilenmez.
+
+### Öncelik Basit Modda
+
+Öncelik, Basit Modda daha önce hiç görünmüyordu; artık dört yüzeyde birden vardır: Hızlı Görev Tanımı formunda, sadeleştirilmiş tabloda, sadeleştirilmiş görev düzenlemede ve süzme/sıralamada.
+
+Yeni bir öncelik modeli **tanımlanmaz**. Gelişmiş Modun `TASK_PRIORITIES` kataloğu, `normalizePriorityId` normalleştirmesi ve aynı rozet stilleri kullanılır; iki mod arasında geçiş yapan kullanıcı aynı değeri aynı adla görür.
+
+### Proje seçimi
+
+Hızlı Görev Tanımı ve sadeleştirilmiş görev düzenleme proje listesini `useTaskAssignableProjects()` üzerinden alır. Sıradan kullanıcı için bu, bugüne kadar olduğu gibi yalnızca kendi `corporateprojectaccess` projeleridir; müdür/direktör için buna kurumsal CN43N kataloğu eklenir. Kural ve sunucu tarafı sınırı: `docs/AUTHORIZATION-MODEL.md` · *Task assignment scope*.
 
 ## Açılış perdesi
 
@@ -66,13 +111,46 @@ kovasını hedef tarihinden türetiyordu. Geciken bir görev aynı anda iki kova
 birden düştüğü için dilimlerin toplamı görev sayısını aşıyor (44 görev için 54
 birim), halka 360 dereceyi geçip kendi üzerine biniyordu.
 
-Üst rozetler (KPI kartları) bilinçli olarak farklı okur: orada bir görev hem
-"devam eden" hem "geciken" sayılabilir, çünkü kartlar `selectTaskStats`
-çıktısını yansıtır. İki okuma karıştırılmamalıdır.
+Üst rozetler (KPI kartları) **aynı kovaları** okur. Daha önce kartlar durum
+alanını doğrudan okuyordu ve iki okuma bilinçli olarak farklıydı; sonuç, aynı
+ekranda çelişen iki sayı oldu: kart "6 devam eden" derken halka aynı anda "3"
+gösteriyordu. Kartlar artık `selectStatusDistribution` kovalarından beslenir,
+dolayısıyla dört kartın toplamı her zaman toplam görev sayısına eşittir. Hedefi
+geçmiş bir "devam eden" görev yalnızca **Geciken** kartında sayılır ve kartın
+ipucu bunu açıkça söyler.
 
 Dilim seçimi sıra numarasıyla değil **kova kimliğiyle** saklanır: görev listesi
 kısaldığında saklanan sıra numarası boşa düşüyor ve merkez etiket
 `undefined.color` okumasıyla çöküyordu.
+
+### Halka dilimleri kapalı yol olarak çizilir
+
+Dilimler `stroke-dasharray` yerine kapalı yay YOLU olarak çizilir
+(`src/components/charts/donutGeometry.js`). Kesik desen çevre boyunca
+tekrarlandığı için yuvarlama artığı deseni başa sardırıyor, aynı dilim halkanın
+iki ayrı yerinde parça parça görünüyordu; seçili dilimi dışarı öteleyen
+"patlatma" da dilimi halkadan kopararak aynı bölünmüş izlenimi veriyordu. Vurgu
+artık yalnızca iç yarıçapı değiştirir. Ayrıntı için bkz.
+`docs/UI-STYLING-ARCHITECTURE.md` § 10.
+
+### Plan sağlığı kartları
+
+Özet iki eyleme dönük kart daha taşır (ikisi de
+`src/features/dashboard/planHealth.js` üzerinden beslenir, Raporlar sayfası
+yaşlandırmayı yeniden kullanır):
+
+- **Gecikme yaşlandırması** — geciken görevleri hedef tarihinin üzerinden geçen
+  güne göre 1–7 / 8–30 / 31–90 / 90+ kovalarına ayırır. Tek bir "9 geciken"
+  sayısı, dün gecikmiş bir işle aylardır bekleyen bir işi aynı kefeye koyar.
+- **Plan bütünlüğü** — açık görevlerde eksik kalan planlama alanlarını
+  (sorumlu, termin, planlanan tarih, dağılım düğümü) sayar. Eksik alanı olan bir
+  görev iş yükü, gecikme ve kritik yol hesaplarının hiçbirine girmez.
+
+### Grafik eksen etiketleri
+
+Eksen etiketleri SVG'nin **dışında**, gerçek HTML metni olarak çizilir. SVG kart
+genişliğine göre ölçeklendiği için içine yazılan `font-size` de ölçekleniyordu ve
+geniş kartlarda etiketler neredeyse iki katı boyutta görünüyordu.
 
 ### Kişi ölçüm tabloları
 
@@ -96,6 +174,19 @@ haftalık rapor ufkuna düşen işi sayar: kalan işin tamamı kapasiteyle
 karşılaştırılırsa, önümüzdeki bir yıla yayılmış 240 saatlik yük de "haftada 40
 saat" gibi görünüyordu. İş, planlanan aralığın ufukla kesişimi oranında
 sayılır; planlanmamış ve gecikmiş işin kalanı bugünün yüküdür.
+
+## Tarih biçimi düzenlenebilir alanlarda da geçerlidir
+
+Ayarlar sayfasındaki **Tarih biçimi** seçeneği (`gg/aa/yyyy` ↔ `18 Ağu 2026`) yalnızca pasif etiketleri değiştiriyordu: `18 Ağu 2026` seçen kullanıcı görev panelinde `18/08/2026` bekleyen bir kutu görüyordu.
+
+`DateInput` artık tercihe uyar. Kurallar React'ten bağımsız `src/components/dateInputFormat.js` modülündedir:
+
+- **Yazma** tercihe uyar (`formatEditableDate`).
+- **Okuma** bilerek daha geniştir (`parseDisplayDate`): `18/08/2026`, `18 Ağu 2026`, `18 Ağustos 2026` ve ISO biçimi kabul edilir; ay adı Türkçe küçültme kurallarıyla eşleştirilir. Biçim değiştiğinde yarım kalmış bir giriş ya da kopyalanmış eski bir metin reddedilmemelidir. Takvimde olmayan gün (`31 Şub 2026`, `2026-02-31`) **her biçimde** reddedilir — ISO metni rakam maskesini atladığı için gerçek takvim doğrulaması ayrıca uygulanır, aksi hâlde imkânsız tarih mart ayına yuvarlanıyordu.
+- **Rakam maskesi** yalnızca rakam ve eğik çizgi içeren girişe uygulanır (`maskDateDraft`); aksi hâlde `18 Ağu 2026` yazılırken rakamlar ayıklanıp `18/20/26` üretiliyordu.
+- **Yer tutucu ve hata iletisi** tercihten türetilir; koda gömülü `gg/aa/yyyy` metni kalmadı.
+
+Taslak durumu değerin yanı sıra biçim tercihine de bağlıdır: aksi hâlde değer aynı kalırken tercih değiştiğinde kutu eski biçimde donuyordu.
 
 ## Karşılama ekranı
 
@@ -215,6 +306,19 @@ Tablo sütunları Görevler sayfasıyla aynı süzgeç/sıralama bileşenini kul
 kurumsal düzey süzgeçleri üstteki dizin açılır listeleriyle tek durumu paylaşır.
 Ayrıntı: `docs/PROJECT-PORTFOLIO-AND-DIRECTORY.md`.
 
+## Ekip · personel ayrıntı penceresi
+
+Ekip tablosunda personel adı bir düğmedir; tıklandığında kişinin kurumsal
+kimliğini, yük özetini, öncelik kırılımını ve **yakın görevlerinin tam
+listesini** gösteren bir pencere açılır (`PersonDetailDialog`). Tablo satırı
+yalnızca ilk iki görevi gösterebiliyordu.
+
+Liste yalnızca **açık** görevleri taşır: kapanmış bir iş "yaklaşan" değildir.
+Aciliyet tonlaması saf bir ilkedir (`upcomingTaskPolicy.js`) ve ayrıca sınanır;
+hedef bitiş yoksa planlanan bitişe düşülür, ikisi de yoksa görev tarihsiz
+sayılır — uydurma bir tarihle listeye sokulmaz. Pencere kimlikle açılır, bu
+sayede süzgeç değişip satır listeden düştüğünde ekranda eski veri kalmaz.
+
 ## Kenar çubuğu kullanıcı bloğu
 
 Kenar çubuğunun altındaki kullanıcı bloğu artık sabit bir örnek kişi değil,
@@ -254,6 +358,19 @@ beklemek alt ağacı kendiliğinden açar.
 Kural mantığı görünümden ayrıdır (`src/features/wbs/wbsDragPolicy.js`) ve tek
 başına sınanır. Fare kullanmadan taşımak için satırdaki **Taşı** düğmesi
 korunmuştur.
+
+> **Gerileme kaydı.** Görünüm bu ilke modülünden `wbsSiblings` ve
+> `createWbsDropIndex` işlevlerini kullanıyor ama **içe aktarmıyordu**. Sekme
+> açılır açılmaz `ReferenceError: wbsSiblings is not defined` fırlıyor ve sayfa
+> "Application error: a client-side exception has occurred" ile çöküyordu; hata
+> yalnızca satır çizimi sırasında oluştuğu için ne birim testleri ne de
+> `next build` yakalıyordu. `test/module-binding-and-recurrence-editing.test.mjs`
+> artık kaynak ağacının tamamını tarar: bir modülün dışa aktardığı bir işlev,
+> başka bir dosyada içe aktarılmadan çağrılıyorsa test düşer.
+
+Sürükleme tutamağı `pointerup`/`pointercancel` olaylarını **pencere düzeyinde**
+dinler. Tutamağa basıp sürüklemeden başka bir yerde bırakmak satırı
+`draggable` durumda bırakıyor ve içindeki metin seçilemiyordu.
 
 Alt düğüm ekleme, ad değiştirme ve silme artık engelleyici `prompt()`/`confirm()`
 pencereleri kullanmaz: ekleme ve ad değişikliği satır içi bir alanda (Enter

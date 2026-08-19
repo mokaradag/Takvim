@@ -13,6 +13,8 @@ BEGIN TRY
     IF OBJECT_ID(N'dbo.MR_V_ExecutiveScope', N'V') IS NOT NULL DROP VIEW dbo.MR_V_ExecutiveScope;
     IF OBJECT_ID(N'dbo.MR_V_CorporateProjects', N'V') IS NOT NULL DROP VIEW dbo.MR_V_CorporateProjects;
 
+    IF OBJECT_ID(N'dbo.MR_TaskReminderLog', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskReminderLog;
+    IF OBJECT_ID(N'dbo.MR_ReminderSettings', N'U') IS NOT NULL DROP TABLE dbo.MR_ReminderSettings;
     IF OBJECT_ID(N'dbo.MR_CorporateWbsSyncState', N'U') IS NOT NULL DROP TABLE dbo.MR_CorporateWbsSyncState;
     IF OBJECT_ID(N'dbo.MR_AuditLog', N'U') IS NOT NULL DROP TABLE dbo.MR_AuditLog;
     IF OBJECT_ID(N'dbo.MR_TaskBaselineSnapshots', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskBaselineSnapshots;

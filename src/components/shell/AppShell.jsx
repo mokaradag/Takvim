@@ -7,6 +7,8 @@ import { PeopleDirectoryProvider } from '../PeopleDirectoryContext.jsx';
 import { SearchableSelect } from '../SearchableSelect';
 import { DashboardView } from '../../features/dashboard/DashboardView';
 import { TasksView } from '../../features/tasks/TasksView';
+import { SimpleTasksView } from '../../features/tasks/SimpleTasksView';
+import { ReminderSettingsView } from '../../features/reminders/ReminderSettingsView';
 import { ProjectWorkspaceView } from '../../features/project/ProjectWorkspaceView';
 import { CalendarView } from '../../features/calendar/CalendarView';
 import { WorkspaceGanttView } from '../../features/gantt/WorkspaceGanttView';
@@ -30,20 +32,25 @@ import {
   useWorkspace
 } from '../../state/hooks';
 import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domain/projectTypes';
+import { useAppState } from '../../state/AppStateProvider';
 import { useTweaks } from '../../hooks/useTweaks';
 import { useApplyTweaks } from '../../hooks/useApplyTweaks';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
 import { ModeChooser } from './ModeChooser';
-import { NAV_ITEMS, PAGE_META } from './navigation';
+import { ADMIN_NAV_IDS, NAV_ITEMS, PAGE_META } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
 import { SidebarUserPanel } from './SidebarUserPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 
 // Basit Mod, Gelişmiş Mod ile aynı Gantt görünümünü paylaşır: hızlı görev
 // tanımı yapan kullanıcı da planı zaman çizelgesinde görebilmelidir.
-const SIMPLE_NAV_IDS = new Set(['takvim', 'gantt', 'yardim', 'ayarlar']);
+//
+// Görevler sayfası da Basit Modda bulunur; ancak Gelişmiş Modun tam tablosu
+// DEĞİL, Hızlı Görev Tanımı'yla toplanan alanları listeleyen sade sürümü
+// gösterilir (bkz. features/tasks/SimpleTasksView.jsx).
+const SIMPLE_NAV_IDS = new Set(['veri', 'takvim', 'gantt', 'yardim', 'ayarlar']);
 const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 
 function projectDisplayName(project) {
@@ -71,6 +78,7 @@ export default function AppShell() {
   const stats = useTaskStats();
   const portfolioStats = usePortfolioTaskStats();
   const currentUser = useCurrentUser();
+  const { isSystemAdmin } = useAppState();
   const { openTask } = useTaskActions();
   const simpleMode = t.appMode === 'simple';
 
@@ -120,8 +128,17 @@ export default function AppShell() {
   useEffect(() => {
     if (!simpleMode) return;
     if (workspaceMode !== 'portfolio') selectWorkspace(null);
-    if (!SIMPLE_NAV_IDS.has(view)) navigate('takvim');
+    // Rol kapılı yönetici sayfaları Basit Mod yönlendirmesinden MUAFTIR:
+    // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Basit
+    // Modda diye ulaşılamaz olmamalıdır.
+    if (!SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) navigate('takvim');
   }, [simpleMode, view, workspaceMode, selectWorkspace]);
+
+  // Yönetici sayfasında yetki kaybı (oturum tazelenmesi, rol kaldırılması)
+  // kullanıcıyı boş bir ekranda bırakmaz.
+  useEffect(() => {
+    if (ADMIN_NAV_IDS.has(view) && !isSystemAdmin) navigate('ozet');
+  }, [view, isSystemAdmin]);
 
   useEffect(() => {
     if (simpleMode && view === 'takvim') setSimpleCalendarTab('calendar');
@@ -175,17 +192,21 @@ export default function AppShell() {
     rapor: null,
     kisi: people.length,
     yardim: null,
-    ayarlar: null
+    ayarlar: null,
+    hatirlatma: null
   }), [tasks.length, wbs.length, projects.length, people.length, workspaceMode]);
 
-  const visibleNavItems = simpleMode
-    ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id))
-    : NAV_ITEMS;
+  const visibleNavItems = (simpleMode
+    // Yönetici sayfaları Basit Modda da listelenir; aşağıdaki rol süzgeci
+    // bunları yine yalnızca sistem yöneticisine gösterir.
+    ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))
+    : NAV_ITEMS
+  ).filter((item) => !ADMIN_NAV_IDS.has(item.id) || isSystemAdmin);
 
   const renderView = () => {
     switch (view) {
       case 'ozet': return <DashboardView onNavigate={navigate} />;
-      case 'veri': return <TasksView />;
+      case 'veri': return simpleMode ? <SimpleTasksView /> : <TasksView />;
       // Sekme niyeti anahtar olarak taşınır: karşılama kısayolu ağacı açar,
       // sıradan gezinme Proje Tanımı ile başlar.
       case 'wbs': return <ProjectWorkspaceView key={`wbs:${viewIntent || 'definition'}`} initialTab={viewIntent} />;
@@ -224,6 +245,9 @@ export default function AppShell() {
       case 'kisi': return <TeamView />;
       case 'yardim': return <HelpView />;
       case 'ayarlar': return <SettingsView t={t} setTweak={setTweak} />;
+      // Yönetici sayfası: gezinme öğesi gizlense bile doğrudan geçiş
+      // denendiğinde de yalnızca yönetici görebilir. Sunucu ayrıca denetler.
+      case 'hatirlatma': return isSystemAdmin ? <ReminderSettingsView /> : null;
       default: return null;
     }
   };
@@ -381,7 +405,7 @@ export default function AppShell() {
         <main key={workspaceKey} className={`content content-${view}`}>{renderView()}</main>
       </div>
 
-      <TaskDetailOverlay />
+      <TaskDetailOverlay simple={simpleMode} />
       {cmdOpen && !simpleMode && (
         <CommandPalette
           onClose={() => setCmdOpen(false)}

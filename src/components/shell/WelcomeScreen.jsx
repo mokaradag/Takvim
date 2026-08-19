@@ -16,7 +16,7 @@ import { greetingForHour, welcomeFirstName } from './welcomeGreeting.js';
 
 const FEATURES = [
   { ico: 'Dashboard', color: 'var(--accent)', view: 'ozet', title: 'Yönetici özet panosu',
-    desc: 'Tamamlama oranı, bekleyen iş yükü, geciken görevler ve trendler tek ekranda.' },
+    desc: 'Tamamlama oranı, bekleyen iş yükü, geciken görevler ve eğilimler tek ekranda.' },
   // `intent` sayfanın hangi alt görünümle açılacağını taşır: bu kart adını
   // taşıdığı ağacı açmalıdır, Proje Tanımı sekmesini değil.
   { ico: 'Layers', color: 'var(--c-emerald)', view: 'wbs', intent: 'tree', title: 'Sürükle-bırak iş dağılım ağacı',
@@ -28,7 +28,7 @@ const FEATURES = [
   { ico: 'Kanban', color: 'var(--c-amber)', view: 'kanban', title: 'Sürükle-bırak Kanban',
     desc: 'Yapılacak → Devam ediyor → Tamamlandı kolonları arasında kartları sürükleyin.' },
   { ico: 'Chart', color: 'var(--c-rose)', view: 'rapor', title: 'Etkileşimli raporlar',
-    desc: 'Çevrim süresi, zamanında teslim oranı, kaynak kullanımı ve trend eğrileri.' }
+    desc: 'Çevrim süresi, zamanında teslim oranı, kaynak kullanımı ve eğilim eğrileri.' }
 ];
 
 export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgain, stats, currentUser = null, now = null }) {

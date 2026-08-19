@@ -1,7 +1,11 @@
 'use client';
 import { useCallback, useState } from 'react';
 
-const STORAGE_KEY = 'mergen_rota_tweaks_v1';
+import { TWEAKS_STORAGE_KEY } from '../lib/tweaksBootstrap.js';
+
+// Sürümlü depolama anahtarı `mergen_rota_tweaks_v1` tek yerde tanımlıdır: ilk
+// boyamadan önce çalışan bootstrap betiği de aynı girdiyi okur.
+const STORAGE_KEY = TWEAKS_STORAGE_KEY;
 
 function loadStored(defaults) {
   if (typeof window === 'undefined') return defaults;

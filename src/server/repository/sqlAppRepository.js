@@ -9,7 +9,7 @@ import { resolveAuthMode } from '../identity/keycloakConfig.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
-import { assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
+import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
 import { formatRecurrenceRule } from '../../scheduling/recurrence/index.js';
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
@@ -141,6 +141,9 @@ async function loadSnapshotFrom(executor, auth) {
   const req = request(executor);
   req.input('sicil', sql.Int, auth.sicil);
   req.input('isAdmin', sql.Bit, auth.isSystemAdmin);
+  // Görev atama kapsamı yalnızca SEÇİLEBİLİR proje listesini genişletir; görev,
+  // WBS ve kişi görünürlüğü sorguları bu bayrağa hiç bakmaz.
+  req.input('canAssignAllCorporate', sql.Bit, Boolean(auth.canAssignAllCorporateProjects));
   const result = await req.query(`
     DECLARE @VisibleProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY, AccessLevel varchar(10));
     DECLARE @ReadGrantedProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY);
@@ -235,7 +238,12 @@ async function loadSnapshotFrom(executor, auth) {
     ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code
     OPTION (MAXRECURSION 1000);
 
-    SELECT t.*, v.AccessLevel
+    -- Sorumlu SAYISI da döner. PARTIAL anlık görüntü kapsam dışı bir eş
+    -- sorumlunun satırını bilinçli olarak gizler; istemci yalnızca sayıyı
+    -- karşılaştırarak "gizlenmiş sorumlu var" sonucuna varabilir ve sunucunun
+    -- reddedeceği bir düzenlemeyi baştan açmaz. Sayı kimlik taşımaz.
+    SELECT t.*, v.AccessLevel,
+      (SELECT COUNT(*) FROM dbo.MR_TaskAssignees ta WHERE ta.TaskId = t.TaskId) AS AssigneeCount
     FROM dbo.MR_Tasks t
     JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
     WHERE v.AccessLevel = 'FULL'
@@ -296,6 +304,17 @@ async function loadSnapshotFrom(executor, auth) {
     FROM dbo.MR_V_PeopleDirectory pd
     WHERE @HasFullScope = 1
        OR pd.Sicil = @sicil
+       -- Görev ATAMA kapsamı açıkken yöneticinin KENDİ personeli rehberde
+       -- görünür. Aksi hâlde görünür FULL projesi olmayan bir yönetici,
+       -- atayabileceği çalışanı seçicide hiç bulamıyordu. Kapsam yalnızca
+       -- MR_V_ExecutiveScope kadardır; görev/proje/WBS görünürlüğü değişmez.
+       OR (
+         @canAssignAllCorporate = 1
+         AND EXISTS (
+           SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+           WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = pd.Sicil
+         )
+       )
        OR EXISTS (
          SELECT 1
          FROM dbo.MR_Projects p
@@ -328,9 +347,39 @@ async function loadSnapshotFrom(executor, auth) {
             )
         )
     ORDER BY pd.DisplayName, pd.Sicil;
+
+    -- Görev ATAMA kapsamı: yöneticiler (direktör/müdür/birim yöneticisi) kendi
+    -- personeline HERHANGİ bir etkin CN43N projesi altında görev tanımlayabilir.
+    -- Bu liste yalnızca görev tanımlarken kullanılan proje SEÇİCİSİNİ besler;
+    -- görünür projeler, görevler, WBS ve kişiler kümesine hiçbir şey eklemez.
+    -- Kök düğüm kimliği de döner: yeni görev, projenin kök dağılım düğümüne
+    -- bağlanır ve istemci bu proje için ağacın tamamını görmez.
+    -- Proje takvimi de döner: görev, proje görünür olmadan önce takvimini bu
+    -- kayıttan çözer ve CalendarId olmadan genel varsayılana düşerek çalışma
+    -- günü hesaplarını yanlış takvimle yapardı.
+    SELECT p.ProjectId, p.ProjectCode, p.ProjectName, p.ProjectTypeCode, p.ProjectTypeName,
+           p.ColorToken, p.CalendarId, root.WbsId AS RootWbsId
+    FROM dbo.MR_Projects p
+    OUTER APPLY (
+      SELECT TOP (1) w.WbsId
+      FROM dbo.MR_WBS w
+      WHERE w.ProjectId = p.ProjectId AND w.ParentWbsId IS NULL
+      ORDER BY w.SortOrder, w.Code
+    ) root
+    WHERE @canAssignAllCorporate = 1 AND p.SourceType = 'CORPORATE' AND p.IsActive = 1
+    ORDER BY p.ProjectCode;
+
+    -- Atama kapsamındaki ÇALIŞANLAR. Sunucu, kapsam projelerinde görevin bütün
+    -- sorumlularının bu kümede olmasını şart koşar; istemci kümeyi bilmeden
+    -- seçiciye bütün rehberi koyuyor ve seçilen kişi kaydı garanti reddediyordu.
+    -- Küme yalnızca Sicil taşır ve kişi rehberi zaten bu kişileri içerir.
+    SELECT es.EmployeeSicil
+    FROM dbo.MR_V_ExecutiveScope es
+    WHERE @canAssignAllCorporate = 1 AND es.ManagerSicil = @sicil
+    ORDER BY es.EmployeeSicil;
   `);
 
-  const [projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows, baselineRows, snapshotRows, calendarRows, peopleRows] = result.recordsets;
+  const [projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows, baselineRows, snapshotRows, calendarRows, peopleRows, assignableRows, assignmentScopeRows] = result.recordsets;
   const tags = new Map();
   const assignees = new Map();
   const dependencies = new Map();
@@ -447,6 +496,9 @@ async function loadSnapshotFrom(executor, auth) {
       recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate),
       sortOrder: row.SortOrder,
       assigneeIds: assignees.get(id(row.TaskId)) || [],
+      // Yetkili sorumlu sayısı: `assigneeIds.length` ile farklıysa görevin
+      // görünmeyen sorumluları vardır (bkz. yukarıdaki AssigneeCount).
+      assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
       deps: dependencies.get(id(row.TaskId)) || [],
       version: encodeVersion(row.RowVersion)
     })),
@@ -466,7 +518,24 @@ async function loadSnapshotFrom(executor, auth) {
         sector: row.Sector || null, directorate: row.Directorate || null,
         department: row.Department || null, unit: row.Unit || null
       }
-    }))
+    })),
+    // Görev tanımlarken SEÇİLEBİLİR ek projeler. `projects` listesine
+    // karışmazlar: çalışma alanı seçicisi, süzgeçler ve raporlar değişmez.
+    assignableProjects: (assignableRows || []).map((row) => ({
+      id: id(row.ProjectId),
+      code: row.ProjectCode || null,
+      name: row.ProjectName,
+      projectTypeCode: row.ProjectTypeCode || null,
+      projectTypeName: row.ProjectTypeName || null,
+      color: row.ColorToken || 'blue',
+      calendarId: id(row.CalendarId),
+      rootWbsId: id(row.RootWbsId),
+      accessLevel: 'ASSIGN'
+    })),
+    // Atama kapsamı projelerinde göreve atanabilecek çalışanların Sicilleri.
+    assignmentScopeSicils: [...new Set((assignmentScopeRows || [])
+      .map((row) => (row.EmployeeSicil == null ? '' : String(row.EmployeeSicil)))
+      .filter(Boolean))]
   };
 }
 
@@ -747,20 +816,221 @@ async function recurrenceOccurrenceExists(executor, parentId, occurrenceDate, ta
   return Boolean(result.recordset?.[0]);
 }
 
+
+/**
+ * Görev yazması için proje erişimi.
+ *
+ * FULL erişim her zaman yeterlidir. Buna EK OLARAK direktör/müdür/birim
+ * yöneticileri, kendilerine "corporateprojectaccess" verilmemiş olsa bile
+ * herhangi bir ETKİN KURUMSAL proje altında KENDİ personeline görev
+ * tanımlayabilir. Kapsam kasıtlı olarak dardır:
+ *
+ *  - yalnızca görev satırını kapsar; proje üst verisi, iş dağılım ağacı ve
+ *    erişim kayıtları hâlâ FULL erişim ister,
+ *  - manuel projeleri kapsamaz,
+ *  - görevin BÜTÜN sorumluları yöneticinin `MR_V_ExecutiveScope` kapsamında
+ *    olmalıdır — aksi hâlde yönetici, göremediği bir projeye kendi personeli
+ *    olmayan kişiler için kayıt yazabilirdi.
+ *
+ * Görev GÖRÜNÜRLÜĞÜ bu kapsamdan etkilenmez: yönetici bu projelerin diğer
+ * görevlerini görmez.
+ */
+/** Aktör bu projeye TAM yetkiyle mi yazıyor? (bağımlılık/WBS kararlarının ölçütü) */
+function hasFullProjectWriteAccess(actor, projectId) {
+  return Boolean(actor.isSystemAdmin) || actor.effective.access.get(projectId)?.accessLevel === 'FULL';
+}
+
+/** Proje ETKİN mi? Etkin olmayan proje bütün anlık görüntülerden dışlanır. */
+async function assertActiveProject(executor, projectId) {
+  const req = request(executor);
+  req.input('projectId', sql.UniqueIdentifier, projectId);
+  const rows = await req.query('SELECT TOP (1) ProjectId FROM dbo.MR_Projects WHERE ProjectId = @projectId AND IsActive = 1;');
+  if (!rows.recordset.length) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Etkin olmayan bir projede görev yazılamaz.');
+  }
+}
+
+/**
+ * PROJE düzeyinde yetki: sorumlu listesine bakmadan verilebilen karar.
+ *
+ * Sorumlu doğrulamasından ÖNCE çağrılabilmesi için ayrılmıştır; aksi hâlde
+ * yetkisiz bir kullanıcı, geçersiz ve geçerli sicillerin farklı hata üretmesini
+ * kullanarak kurumsal rehberi yoklayabiliyordu.
+ */
+async function assertTaskProjectScope(executor, actor, projectId) {
+  // Sistem yöneticisi kullanıcı bazlı yetkileri atlar ama ETKİN OLMAYAN projeye
+  // yazamaz: etkin FULL yetkileri de yalnızca etkin projelerden kurulur ve
+  // taşınan görev normal anlık görüntülerden tümüyle kaybolurdu.
+  if (actor.isSystemAdmin) {
+    await assertActiveProject(executor, projectId);
+    return;
+  }
+  if (actor.effective.access.get(projectId)?.accessLevel === 'FULL') return;
+  if (!hasTaskAssignmentScope(actor) || !actor.isExecutive) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Bu proje için tam yazma yetkiniz yok.');
+  }
+
+  const projectCheck = request(executor);
+  projectCheck.input('projectId', sql.UniqueIdentifier, projectId);
+  const projectRows = await projectCheck.query(`
+    SELECT TOP (1) ProjectId FROM dbo.MR_Projects
+    WHERE ProjectId = @projectId AND SourceType = 'CORPORATE' AND IsActive = 1;
+  `);
+  if (!projectRows.recordset.length) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Görev atama kapsamı yalnızca etkin kurumsal projeleri kapsar.');
+  }
+}
+
+/** SORUMLU düzeyinde yetki: her sorumlu yöneticinin kapsamında olmalıdır. */
+async function assertAssigneeScope(executor, actor, projectId, assigneeSicils) {
+  if (hasFullProjectWriteAccess(actor, projectId)) return;
+
+  const sicils = [...new Set((assigneeSicils || []).map(Number).filter((value) => Number.isSafeInteger(value) && value > 0))];
+  if (!sicils.length) {
+    throw new ServerPersistenceError(
+      'FORBIDDEN',
+      'Yetki alanınız dışındaki bir projede görev yalnızca kendi personelinize atanabilir; görevin en az bir sorumlusu olmalıdır.'
+    );
+  }
+
+  const scopeCheck = request(executor);
+  scopeCheck.input('managerSicil', sql.Int, actor.sicil);
+  scopeCheck.input('sicils', sql.NVarChar(sql.MAX), sicils.join(','));
+  const outside = await scopeCheck.query(`
+    SELECT TRY_CONVERT(int, LTRIM(RTRIM(value))) AS Sicil
+    FROM STRING_SPLIT(@sicils, ',')
+    WHERE TRY_CONVERT(int, LTRIM(RTRIM(value))) IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+        WHERE es.ManagerSicil = @managerSicil
+          AND es.EmployeeSicil = TRY_CONVERT(int, LTRIM(RTRIM(value)))
+      );
+  `);
+  if (outside.recordset.length) {
+    const list = outside.recordset.map((row) => row.Sicil).join(', ');
+    throw new ServerPersistenceError(
+      'FORBIDDEN',
+      `Bu projede görev yalnızca kendi personelinize atanabilir. Yetki alanınız dışındaki sicil: ${list}`
+    );
+  }
+}
+
+/** Proje ve sorumlu denetimlerinin bileşimi. */
+async function assertTaskProjectAccess(executor, actor, projectId, assigneeSicils) {
+  await assertTaskProjectScope(executor, actor, projectId);
+  await assertAssigneeScope(executor, actor, projectId, assigneeSicils);
+}
+
+/**
+ * Projenin KÖK iş dağılım düğümü.
+ *
+ * Atama kapsamıyla açılan projelerde istemciye yalnızca bu düğüm bildirilir
+ * (bkz. anlık görüntüdeki `assignableProjects.rootWbsId`).
+ */
+async function projectRootWbsId(executor, projectId) {
+  const req = request(executor);
+  req.input('projectId', sql.UniqueIdentifier, projectId);
+  const result = await req.query(`
+    SELECT TOP (1) WbsId FROM dbo.MR_WBS
+    WHERE ProjectId = @projectId AND ParentWbsId IS NULL
+    ORDER BY SortOrder, Code;
+  `);
+  return id(result.recordset?.[0]?.WbsId) || null;
+}
+
+/**
+ * Silme, KAPSAM DIŞI görevlere de yazar mı?
+ *
+ * Görev silinirken yinelemeleri ayrılır ve ardıl bağımlılıkları temizlenir.
+ * Bu ilişkili görevler görünmez ve yöneticinin kapsamı dışında olabilir; tam
+ * yetkisi olmayan bir aktör için silme o satırlara dokunmamalıdır.
+ */
+async function hasRelatedTasksOutsideScope(executor, actor, taskId) {
+  const req = request(executor);
+  req.input('taskId', sql.UniqueIdentifier, taskId);
+  req.input('managerSicil', sql.Int, actor.sicil);
+  const result = await req.query(`
+    SELECT TOP (1) related.TaskId
+    FROM (
+      SELECT TaskId FROM dbo.MR_Tasks WHERE RecurrenceParentTaskId = @taskId
+      UNION
+      SELECT TaskId FROM dbo.MR_TaskDependencies WHERE PredecessorTaskId = @taskId
+    ) related
+    WHERE related.TaskId <> @taskId
+      AND (
+        NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ta WHERE ta.TaskId = related.TaskId)
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_TaskAssignees ta
+          WHERE ta.TaskId = related.TaskId
+            AND NOT EXISTS (
+              SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+              WHERE es.ManagerSicil = @managerSicil AND es.EmployeeSicil = ta.Sicil
+            )
+        )
+      );
+  `);
+  return Boolean(result.recordset?.length);
+}
+
+/** Görevin kalıcı sorumlu sicilleri (mevcut hâli). */
+async function taskAssigneeSicils(executor, taskId) {
+  const req = request(executor);
+  req.input('taskId', sql.UniqueIdentifier, taskId);
+  const result = await req.query('SELECT Sicil FROM dbo.MR_TaskAssignees WHERE TaskId = @taskId;');
+  return (result.recordset || []).map((row) => Number(row.Sicil));
+}
+
 async function commitTask(executor, actor, task, correlationId) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
   const before = await taskRow(executor, taskId);
-  if (before) assertProjectWriteAccess(actor.effective, id(before.ProjectId));
-  assertProjectWriteAccess(actor.effective, projectId);
+  const beforeProjectId = before ? id(before.ProjectId) : null;
+  // PROJE yetkisi, sorumlu doğrulamasından ÖNCE denetlenir. `ensurePeople`
+  // önce çalıştığında, erişimi olmayan bir kullanıcı bilinmeyen sicil için
+  // "geçersiz çalışan", var olan sicil için FORBIDDEN alıyor ve bu farkla
+  // kurumsal rehberi yoklayabiliyordu.
+  if (beforeProjectId) await assertTaskProjectScope(executor, actor, beforeProjectId);
+  await assertTaskProjectScope(executor, actor, projectId);
+
+  // Sorumlular sonra doğrulanır: görev atama kapsamı, yamanın SONUÇ
+  // sorumlularına bakarak karar verir.
+  const assigneeSicils = await ensurePeople(executor, task.assigneeIds || []);
+  // Kaynak proje: görevin ŞU ANKİ sorumluları kapsam denetimine girer.
+  if (beforeProjectId) {
+    await assertAssigneeScope(executor, actor, beforeProjectId, await taskAssigneeSicils(executor, taskId));
+  }
+  await assertAssigneeScope(executor, actor, projectId, assigneeSicils);
   if (!await projectRow(executor, projectId)) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Görev projesi bulunamadı.');
   }
-  if (task.wbsId) {
-    const wbs = await wbsRow(executor, task.wbsId);
-    if (!wbs || !sameActualId(wbs.ProjectId, projectId)) {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Görev WBS kaydı aynı projede olmalıdır.');
+
+  // Tam yetki, bu görevde nelerin YAZILABİLECEĞİNİ belirler: atama kapsamı
+  // yalnızca görev satırını kapsar, iş dağılım ağacı ve bağımlılık grafiği
+  // görünürlüğü vermez.
+  const fullProjectWrite = hasFullProjectWriteAccess(actor, projectId)
+    && (!beforeProjectId || hasFullProjectWriteAccess(actor, beforeProjectId));
+
+  let wbsId = task.wbsId || null;
+  if (fullProjectWrite) {
+    if (wbsId) {
+      const wbs = await wbsRow(executor, wbsId);
+      if (!wbs || !sameActualId(wbs.ProjectId, projectId)) {
+        throw new ServerPersistenceError('MUTATION_FAILED', 'Görev WBS kaydı aynı projede olmalıdır.');
+      }
     }
+  } else {
+    // Atama kapsamında düğüm SEÇİLEMEZ: istemciye yalnızca projenin kök düğümü
+    // açılır. Var olan görev bulunduğu düğümde kalır; yenisi köke bağlanır.
+    const allowedWbsId = before && sameActualId(before.ProjectId, projectId)
+      ? id(before.WbsId)
+      : await projectRootWbsId(executor, projectId);
+    if (wbsId && !sameActualId(wbsId, allowedWbsId)) {
+      throw new ServerPersistenceError(
+        'FORBIDDEN',
+        'Görev atama kapsamında iş dağılım ağacı düğümü seçilemez; görev projenin kök düğümüne bağlanır.'
+      );
+    }
+    wbsId = wbsId || allowedWbsId;
   }
   if (task.actualFinish && !task.actualStart) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Gerçek bitiş için gerçek başlangıç gereklidir.');
@@ -807,9 +1077,15 @@ async function commitTask(executor, actor, task, correlationId) {
     if (recurrenceOccurrenceDate && await recurrenceOccurrenceExists(executor, recurrenceParentId, recurrenceOccurrenceDate, taskId)) {
       throw new ServerPersistenceError('CONFLICT', 'Bu tekrar günü için zaten bir yineleme var. Verileri yeniden yükleyin.');
     }
+    if (!fullProjectWrite) {
+      // Şablonun YETKİLİ sorumluları da kapsamda olmalıdır. PARTIAL anlık
+      // görüntü kapsam dışı bir eş sorumluyu gizler; seri üretimi yalnızca
+      // görünen astı klonlar ve bu denetim olmadan öteki sorumlu her
+      // yinelemeden sessizce düşerdi.
+      await assertAssigneeScope(executor, actor, projectId, await taskAssigneeSicils(executor, recurrenceParentId));
+    }
   }
 
-  const assigneeSicils = await ensurePeople(executor, task.assigneeIds || []);
   const projectChanged = before && !sameActualId(before.ProjectId, projectId);
   if (projectChanged && await countRecurrenceChildren(executor, taskId)) {
     // Şablon taşınırsa yinelemeleri eski projede kalır ve seri iki projeye
@@ -830,7 +1106,7 @@ async function commitTask(executor, actor, task, correlationId) {
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   req.input('projectId', sql.UniqueIdentifier, projectId);
-  req.input('wbsId', sql.UniqueIdentifier, task.wbsId || null);
+  req.input('wbsId', sql.UniqueIdentifier, wbsId || null);
   req.input('calendarId', sql.UniqueIdentifier, task.calendarId || null);
   req.input('title', sql.NVarChar(1000), task.task || task.title);
   req.input('description', sql.NVarChar(sql.MAX), task.description || null);
@@ -902,10 +1178,17 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   }
 
+  // Bağımlılık satırları YALNIZCA tam yetkili yazmada değiştirilir. PARTIAL
+  // anlık görüntü `MR_TaskDependencies` yüklemez; istemci `deps: []` taşır ve
+  // koşulsuz silme, yöneticinin hiç göremediği öncülleri sessizce yok ederdi.
   const clear = request(executor);
   clear.input('taskId', sql.UniqueIdentifier, taskId);
-  await clear.query(`
+  await clear.query(fullProjectWrite
+    ? `
     DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;
+    DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
+  `
+    : `
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
   `);
 
@@ -920,7 +1203,13 @@ async function commitTask(executor, actor, task, correlationId) {
     `);
   }
 
-  for (const dependency of task.deps || []) {
+  if (!fullProjectWrite && (task.deps || []).length) {
+    throw new ServerPersistenceError(
+      'FORBIDDEN',
+      'Görev bağımlılıkları yalnızca tam proje yetkisiyle düzenlenebilir.'
+    );
+  }
+  for (const dependency of fullProjectWrite ? (task.deps || []) : []) {
     const predecessorId = uuid(dependency.predecessorId);
     const predecessor = await taskRow(executor, predecessorId);
     if (!predecessor || !sameActualId(predecessor.ProjectId, projectId) || sameActualId(predecessorId, taskId)) {
@@ -954,7 +1243,18 @@ async function deleteTask(executor, actor, entry, correlationId) {
   const before = await taskRow(executor, taskId);
   if (!before) return;
   const projectId = id(before.ProjectId);
-  assertProjectWriteAccess(actor.effective, projectId);
+  await assertTaskProjectAccess(executor, actor, projectId, await taskAssigneeSicils(executor, taskId));
+  // Silme yalnızca bu satırı değil, yinelemelerini ve ardıllarının bağımlılık
+  // satırlarını da değiştirir. Tam yetkisi olmayan aktör için bu ilişkili
+  // görevlerin de kapsam içinde olduğu doğrulanır; aksi hâlde kapsam içi bir
+  // görevi silmek, hiç görülmeyen görevlere yazardı.
+  if (!hasFullProjectWriteAccess(actor, projectId)
+    && await hasRelatedTasksOutsideScope(executor, actor, taskId)) {
+    throw new ServerPersistenceError(
+      'FORBIDDEN',
+      'Bu görev, yetki alanınız dışındaki görevlerle ilişkili (yineleme ya da bağımlılık). Silme işlemi tam proje yetkisi gerektirir.'
+    );
+  }
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   req.input('version', sql.Binary(8), decodeVersion(entry.version));
@@ -1098,6 +1398,8 @@ async function sessionContextFrom(auth) {
     isSystemAdmin: auth.isSystemAdmin,
     isExecutive: auth.isExecutive,
     canCreateProjects: auth.canCreateProjects,
+    // Yalnızca yetenek bildirimidir; yetki kararı sunucuda yeniden verilir.
+    canAssignAllCorporateProjects: Boolean(auth.canAssignAllCorporateProjects),
     projectAccess: [...auth.effective.access.values()]
   };
 }

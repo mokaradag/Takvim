@@ -130,3 +130,79 @@
   .simple-entry-grid { grid-template-columns: 1fr; }
   .simple-project-field, .simple-task-field { grid-column: auto; }
 }
+
+/* ── Basit Mod · Öncelik seçimi ────────────────────────────────
+   Katalog Gelişmiş Modla aynıdır; yalnızca sunum sadeleştirilir. */
+.simple-priority-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.simple-priority-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-elev);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  transition: border-color .14s ease, background .14s ease, color .14s ease;
+}
+.simple-priority-option svg { color: var(--priority-color); }
+.simple-priority-option:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.simple-priority-option.active {
+  border-color: color-mix(in oklab, var(--priority-color) 60%, var(--border));
+  background: color-mix(in oklab, var(--priority-color) 14%, transparent);
+  color: var(--text);
+}
+.simple-priority-option:disabled { opacity: .5; cursor: default; }
+
+/* ── Basit Mod · Görevler tablosu ──────────────────────────────
+   Gelişmiş Modun tam tablosu değil, Hızlı Görev Tanımı'yla toplanan
+   alanların sade listesi. */
+.simple-tasks-page { height: 100%; min-height: 0; gap: 14px; }
+.simple-tasks-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.simple-tasks-search { flex: 1; min-width: 220px; max-width: 380px; }
+.simple-tasks-filter button { font-size: 12px; font-weight: 600; padding: 6px 12px; }
+.simple-tasks-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.simple-tasks-select .input { padding: 6px 8px; font-size: 12px; }
+.simple-tasks-count { margin-left: auto; font-size: 12.5px; }
+.simple-tasks-card { padding: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.simple-tasks-scroll { min-height: 0; overflow: auto; }
+.simple-tasks-table th { position: sticky; top: 0; z-index: 1; background: var(--bg-elev); }
+.simple-tasks-project { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simple-tasks-title { font-weight: 550; }
+/* Görev başlığı klavyeyle ulaşılabilir bir düğmedir; görünüm satır metniyle
+   aynı kalır, odak halkası standart yoldan gelir. */
+.simple-tasks-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.simple-tasks-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.simple-tasks-priority { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650; }
+.simple-tasks-late { color: var(--status-overdue); font-weight: 650; }
+.simple-tasks-actions { justify-content: flex-end; }
+.simple-tasks-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  padding: 0 2px;
+}
+
+/* Basit Mod görev düzenleyicisi. */
+.simple-task-drawer .drawer-body { padding: 18px 20px; }
+.simple-drawer-assignees { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+.simple-drawer-assignees .simple-person { cursor: default; }

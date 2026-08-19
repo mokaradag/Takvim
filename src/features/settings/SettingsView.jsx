@@ -250,6 +250,40 @@ export function SettingsView({ t, setTweak }) {
           <SettingsRow title="Hareketi azalt" desc="Süslemeli ve sürekli animasyonları kapatır.">
             <ToggleSeg value={!!t.reduceMotion} onChange={(v) => setTweak('reduceMotion', v)} />
           </SettingsRow>
+
+          <div className="set-sep" />
+
+          {/* Tarih biçimi daha önce koda gömülüydü; kurumsal alışkanlığa göre
+              seçilebilmesi gerekir.
+
+              Sözleşme, DÜZENLENEBİLİR tarih alanlarını da kapsar: `DateInput`
+              seçilen biçime göre `formatEditableDate()`/`maskDateDraft()`
+              kullanır, yani "18 Ağu 2026" seçildiğinde giriş alanları da o
+              biçimde görünür ve yazılır. Ayrıştırma her iki biçimi de kabul
+              eder (bkz. components/dateInputFormat.js · parseDisplayDate), bu
+              yüzden alışkın olunan gg/aa/yyyy yazımı hiçbir zaman reddedilmez.
+
+              Grafik EKSENLERİ bu ayardan etkilenmez: eksen etiketi her zaman
+              kısa biçimdedir (bkz. fmtAxisDate). */}
+          <SettingsRow
+            title="Tarih biçimi"
+            desc="Gösterilen VE düzenlenen tarihlerin yazımını belirler; her iki biçimde yazılan giriş de kabul edilir. Grafik eksenleri her zaman kısa biçimi kullanır."
+          >
+            <Segmented
+              value={t.dateFormat || 'dd/mm/yyyy'}
+              onChange={(v) => setTweak('dateFormat', v)}
+              options={[['dd/mm/yyyy', 'gg/aa/yyyy'], ['pattern', '18 Ağu 2026']]}
+            />
+          </SettingsRow>
+
+          <div className="set-sep" />
+
+          <SettingsRow
+            title="Yüksek karşıtlık"
+            desc="Sınırları ve ikincil metni koyulaştırır; parlak ortamda ve açık temada okunabilirliği artırır."
+          >
+            <ToggleSeg value={!!t.highContrast} onChange={(v) => setTweak('highContrast', v)} />
+          </SettingsRow>
         </div>
 
         <div className="card">

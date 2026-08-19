@@ -1,5 +1,7 @@
 'use client';
 import { useAppState } from '../AppStateProvider';
+import { selectAssignableProjects } from '../appState';
+import { taskAssignableProjects } from '../projectWritePolicy.js';
 import { selectPrimaryBaselineForProject, selectTaskBaselineSnapshot } from '../selectors/baselineSelectors';
 import { selectProjectSchedule, selectTaskSchedule } from '../selectors/scheduleSelectors';
 
@@ -7,6 +9,34 @@ export function useTasks() { return useAppState().workspace.tasks; }
 export function useAllTasks() { return useAppState().tasks; }
 export function useProjects() { return useAppState().workspace.projects; }
 export function useAllProjects() { return useAppState().projects; }
+/**
+ * Görev tanımlarken SEÇİLEBİLEN projeler.
+ *
+ * Sıradan kullanıcıda bu küme yazılabilir görünür projelerdir. Direktör/müdür/
+ * birim yöneticisinde ek olarak bütün etkin CN43N projeleri gelir; görünür
+ * proje listesi, görev görünürlüğü ve çalışma alanı seçicisi değişmez.
+ */
+export function useTaskAssignableProjects() { return taskAssignableProjects(useAppState()); }
+/** Yalnızca görev atama kapsamıyla gelen (görünür olmayan) projeler. */
+export function useAssignmentScopeProjects() { return selectAssignableProjects(useAppState()); }
+/**
+ * Sunucunun bildirdiği HAM görev atama kapsamı.
+ *
+ * YAZMA kararları bu listeyi kullanmalıdır. `useAssignmentScopeProjects()`
+ * görünür olanları süzer (seçici listesini tekrarlamamak için); yönetici bu
+ * projede bir görev oluşturur oluşturmaz proje PARTIAL görünür hâle gelir,
+ * süzülmüş liste kapsamı düşürür ve yöneticinin kendi görevi salt okunur
+ * açılırdı.
+ */
+export function useTaskAssignmentScope() { return useAppState().assignableProjects || []; }
+/**
+ * Atama kapsamı projelerinde göreve ATANABİLECEK çalışanların Sicilleri.
+ *
+ * Sunucu, bu projelerde görevin bütün sorumlularının yöneticinin
+ * `MR_V_ExecutiveScope` kapsamında olmasını şart koşar. Küme boşsa (sıradan
+ * kullanıcı) kısıtlama yoktur; seçiciler bütün rehberi göstermeye devam eder.
+ */
+export function useAssignmentScopeSicils() { return useAppState().assignmentScopeSicils || []; }
 export function usePeople() { return useAppState().workspace.people; }
 export function useAllPeople() { return useAppState().people; }
 export function useWbs() { return useAppState().workspace.wbs; }

@@ -8,8 +8,14 @@ export const NAV_ITEMS = [
   { id: 'rapor', label: 'Raporlar', icon: 'Chart' },
   { id: 'kisi', label: 'Ekip', icon: 'Users' },
   { id: 'yardim', label: 'Kullanım Rehberi', icon: 'Help' },
-  { id: 'ayarlar', label: 'Ayarlar', icon: 'Settings' }
+  { id: 'ayarlar', label: 'Ayarlar', icon: 'Settings' },
+  // Yönetici sayfası: gezinmede YALNIZCA sistem yöneticisine gösterilir
+  // (bkz. ADMIN_NAV_IDS). Asıl sınır sunucudadır; gizleme güvenlik değildir.
+  { id: 'hatirlatma', label: 'Hatırlatma E-postaları', icon: 'Mail' }
 ];
+
+/** Yalnızca sistem yöneticisine gösterilen sayfalar. */
+export const ADMIN_NAV_IDS = new Set(['hatirlatma']);
 
 export const PAGE_META = {
   ozet: { title: 'Özet', sub: 'Genel görünüm ve metrikler' },
@@ -18,8 +24,9 @@ export const PAGE_META = {
   takvim: { title: 'Takvim', sub: 'Aylık görünüm' },
   gantt: { title: 'Gantt', sub: 'Zaman çizelgesi ve bağımlılıklar' },
   kanban: { title: 'Kanban', sub: 'Durum panosu' },
-  rapor: { title: 'Raporlar', sub: 'Çevrim süresi, performans ve trendler' },
+  rapor: { title: 'Raporlar', sub: 'Çevrim süresi, performans ve eğilimler' },
   kisi: { title: 'Ekip', tab: 'kisi', sub: 'Ekip üyeleri ve iş yükü' },
   yardim: { title: 'Kullanım Rehberi', sub: 'MERGEN Rota kullanım adımları ve sayfa açıklamaları' },
-  ayarlar: { title: 'Ayarlar', sub: 'Görünüm ve tercihler' }
+  ayarlar: { title: 'Ayarlar', sub: 'Görünüm ve tercihler' },
+  hatirlatma: { title: 'Hatırlatma E-postaları', sub: 'Şablon, otomatik gönderim planı ve gönderim geçmişi' }
 };

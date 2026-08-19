@@ -24,6 +24,12 @@ Feature modules continue to use state actions. They do not import SQL Server pac
 - `GET /api/mergen-rota/snapshot`
 - `POST /api/mergen-rota/commit`
 
+Task reminders add three routes that follow the same rules but are not part of the `AppRepository` contract, because they are actions rather than snapshot/commit traffic:
+
+- `POST /api/mergen-rota/tasks/{taskId}/reminder` — manual send. The request body is never read, so the browser cannot supply recipients; the actor must already be authorized for that Task.
+- `GET|PUT /api/mergen-rota/admin/reminder-settings` — template and automatic policy, administrator-only on the server. The response reports only whether SMTP is configured, never the credentials.
+- `POST /api/mergen-rota/reminders/run` — one automatic pass, for the scheduler. Accepts a shared secret compared with `timingSafeEqual`, or a SYSTEM_ADMIN session.
+
 All routes force the Next.js Node.js runtime, disable caching, derive identity on the server, and return normalized safe errors. SQL stacks, connection settings, and raw query text are not returned to the browser.
 
 ## SQL Server connection
@@ -46,6 +52,10 @@ Required deployment variables are listed in `.env.example`:
 - `MERGEN_ROTA_DB_REQUEST_TIMEOUT_MS`
 
 Do not add `MERGEN_ROTA_DB_USER` or `MERGEN_ROTA_DB_PASSWORD`; they are not used by the Windows-authenticated adapter. All database variables are server-only and must never use the `NEXT_PUBLIC_` prefix.
+
+### Corporate user directory (`DC01_userr`)
+
+The personnel e-mail directory `DC01_userr` lives in `MERGEN_ROTA_DB_DATABASE` and therefore needs no extra pool — it is read through the main connection, read-only, with parameterized queries. Its object name is configurable through `MERGEN_ROTA_USER_DIRECTORY_SCHEMA` and `MERGEN_ROTA_USER_DIRECTORY_TABLE`. The Windows service account needs `SELECT` on it before reminders can resolve recipients.
 
 ### Second connection: corporate WBS source (CN43N)
 
@@ -135,15 +145,16 @@ Persistence errors are surfaced to the user verbatim. `PersistenceStatus` render
 ## Deployment
 
 1. Back up the target database.
-2. Run `database/MR_Create_Durable_Persistence.sql`.
+2. Run `database/MR_Create_Durable_Persistence.sql` for a new installation. For an **existing** installation run the upgrade scripts instead, in order; the latest is `database/MR_Upgrade_0005_Task_Reminders.sql`, which adds `MR_ReminderSettings` and `MR_TaskReminderLog`. Every upgrade script is idempotent and preserves existing data.
 3. Install Microsoft ODBC Driver 18 for SQL Server on the MERGEN Rota host.
 4. Make sure the Windows account that will run Node.js has the required SQL Server permissions.
 5. Create `.env.local` from `.env.example` and configure the server-only database variables.
 6. Configure the Keycloak variables in `.env.local` and register the redirect URIs listed in `docs/KEYCLOAK-SSO.md`. Enable the development identity only in a local development environment.
 7. Run `npm ci`.
 8. Run `npm run build`.
-9. Start with `npm run start -- -H 0.0.0.0 -p 8008` (or `npm run start:prod`) under the approved Windows/domain account. MERGEN Rota uses port 8008; 8009 belongs to MERGEN Bilge.
-10. Select **Gerçek Sistem** and verify authorization and persistence.
+9. Optional: configure the SMTP block in `.env.local` and register the reminder scheduler (Windows Task Scheduler or cron) as described in `docs/TASK-REMINDERS.md`. Automatic reminders stay disabled until an administrator enables them on the **Hatırlatma** page; the manual send button works as soon as SMTP is configured.
+10. Start with `npm run start -- -H 0.0.0.0 -p 8008` (or `npm run start:prod`) under the approved Windows/domain account. MERGEN Rota uses port 8008; 8009 belongs to MERGEN Bilge.
+11. Select **Gerçek Sistem** and verify authorization and persistence.
 
 To remove the build-phase schema, run `database/MR_Rollback_Durable_Persistence.sql`. **Rollback permanently deletes all MR_* application data.** It never modifies the three corporate source tables.
 

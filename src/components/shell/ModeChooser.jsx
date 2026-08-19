@@ -1,5 +1,6 @@
 'use client';
 import { Icons } from '../icons';
+import { AppLogo } from './AppLogo';
 
 const MODES = [
   {
@@ -25,7 +26,14 @@ export function ModeChooser({ onChoose }) {
     <div className="mode-picker-backdrop" role="presentation">
       <section className="mode-picker" role="dialog" aria-modal="true" aria-labelledby="mode-picker-title">
         <div className="mode-picker-head">
-          <div className="mode-picker-kicker">MERGEN Rota</div>
+          {/* Ürün adı küçük bir üst etiket değil, pencerenin kimliğidir. */}
+          <div className="mode-picker-brand">
+            <AppLogo size={46} />
+            <div className="mode-picker-wordmark">
+              <span>MERGEN</span><strong>Rota</strong>
+              <small>Proje Yönetimi</small>
+            </div>
+          </div>
           <h2 id="mode-picker-title">Nasıl çalışmak istersiniz?</h2>
           <p>İki mod da aynı veri altyapısını kullanır. Daha sonra Ayarlar sayfasından istediğiniz anda geçiş yapabilirsiniz.</p>
         </div>

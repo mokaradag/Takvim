@@ -1,5 +1,7 @@
 'use client';
 import { useEffect } from 'react';
+import { fontScaleStyleForTweaks } from '../lib/tweaksBootstrap.js';
+import { setAppDateDisplayFormat } from '../scheduling/dates';
 
 const ACCENT_PRESETS = {
   '#3b82f6': { fg: 'white' },
@@ -11,6 +13,11 @@ const ACCENT_PRESETS = {
 };
 
 export function useApplyTweaks(tweaks) {
+  // Tarih biçimi modül düzeyinde tutulur ve ÇİZİM SIRASINDA uygulanır: etki
+  // olarak uygulansaydı seçim değiştikten sonraki ilk çizim boyunca eski biçim
+  // görünür, tarihler bir kare geriden gelirdi. İşlem etkisizdir (idempotent).
+  setAppDateDisplayFormat(tweaks.dateFormat || 'dd/mm/yyyy');
+
   useEffect(() => {
     const body = document.body;
     body.classList.toggle('theme-light', tweaks.theme === 'light');
@@ -31,15 +38,30 @@ export function useApplyTweaks(tweaks) {
   }, [tweaks.density]);
 
   useEffect(() => {
-    const scale = Number(tweaks.fontScale) || 1;
-    document.body.style.zoom = String(scale);
-    document.documentElement.style.setProperty('--app-viewport-h', `calc(100vh / ${scale})`);
-    return () => document.documentElement.style.removeProperty('--app-viewport-h');
+    // Değerler açılış betiğiyle ORTAKTIR (bkz. lib/tweaksBootstrap.js): aynı
+    // ölçek AppShell monte olmadan önceki ekranlarda da uygulanır, böylece
+    // büyütülmüş yazı seçen kullanıcı yerleşim zıplaması görmez.
+    //
+    // `zoom` yalnızca yüksekliği değil GENİŞLİĞİ de ölçekler: `100vw` ile
+    // sınırlanan panel %125 ölçekte 500 pikselik bir görünüm alanında yaklaşık
+    // 625 piksel genişliğinde çiziliyor ve sol kenarı kırpılıyordu.
+    const { zoom, viewportHeight, viewportWidth } = fontScaleStyleForTweaks({ fontScale: tweaks.fontScale });
+    document.body.style.zoom = zoom;
+    document.documentElement.style.setProperty('--app-viewport-h', viewportHeight);
+    document.documentElement.style.setProperty('--app-viewport-w', viewportWidth);
+    return () => {
+      document.documentElement.style.removeProperty('--app-viewport-h');
+      document.documentElement.style.removeProperty('--app-viewport-w');
+    };
   }, [tweaks.fontScale]);
 
   useEffect(() => {
     document.body.classList.toggle('reduce-motion', !!tweaks.reduceMotion);
   }, [tweaks.reduceMotion]);
+
+  useEffect(() => {
+    document.body.classList.toggle('high-contrast', !!tweaks.highContrast);
+  }, [tweaks.highContrast]);
 
   useEffect(() => {
     document.body.classList.toggle('no-emblem', !tweaks.showEmblem);

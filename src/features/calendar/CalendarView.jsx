@@ -257,7 +257,7 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
           {byProj.length === 0 && <div className="empty" style={{ padding: 32 }}>Bu gün için görev yok.</div>}
           {byProj.map(([proj, list]) => (
             <div key={proj} className="col" style={{ gap: 2, marginBottom: 6 }}>
-              <div style={{ padding: '6px 10px 4px', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ padding: '6px 10px 4px', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.01em', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(proj) }} />
                 {proj} · {list.length}
               </div>

@@ -57,8 +57,27 @@ export function createWbsDropIndex(wbs) {
   return { byId, childrenByParent, descendants: new Map() };
 }
 
+/** Dizinden bir üst düğümün SIRALI çocuk listesi (O(1) arama). */
+export function wbsIndexChildren(index, parentId) {
+  return index?.childrenByParent?.get(parentId ?? null) || [];
+}
+
 function indexChildren(index, parentId) {
-  return index.childrenByParent.get(parentId ?? null) || [];
+  return wbsIndexChildren(index, parentId);
+}
+
+/**
+ * Düğümün kardeşleri arasındaki sırası ve kardeş sayısı.
+ *
+ * Satır çizimi bunu dizinden okur. `wbsSiblings` her çağrıda bütün ağacı
+ * süzüp sıralar; 38 bin düğümlük kurumsal ağaçta satır başına iki kez
+ * çağrılması "Tümünü aç" sonrasında çizimi fiilen O(n²) yapıyor ve sayfayı
+ * donmuş gösteriyordu.
+ */
+export function wbsSiblingPlacement(index, node) {
+  if (!node || node.parentId == null) return { index: -1, count: 0 };
+  const siblings = indexChildren(index, node.parentId);
+  return { index: siblings.findIndex((sibling) => sibling.id === node.id), count: siblings.length };
 }
 
 function indexDescendantIds(index, nodeId) {

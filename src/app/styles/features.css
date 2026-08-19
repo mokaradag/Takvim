@@ -28,7 +28,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: calc(100vh - 210px);
+  max-height: calc(var(--app-viewport-h, 100vh) - 210px);
 }
 .project-browser-head { flex: 0 0 auto; }
 .project-browser-types {
@@ -132,7 +132,7 @@
   color: var(--text);
   font-size: 11.5px;
   font-weight: 650;
-  letter-spacing: .01em;
+  letter-spacing: 0.01em;
   cursor: pointer;
   white-space: nowrap;
   transition: background .16s ease, border-color .16s ease, transform .12s ease, box-shadow .16s ease;
@@ -250,8 +250,8 @@
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .05em;
+  text-transform: none;
+  letter-spacing: 0.05em;
 }
 .wbs-tree-row { min-height: 54px; border-bottom: 1px solid var(--border); }
 .wbs-tree-row:last-child { border-bottom: 0; }
@@ -334,6 +334,51 @@
   background: var(--accent-soft);
   color: var(--accent);
 }
+/* Planlanan başlangıcın haftanın günü işaretlenir; seçimi ZORUNLU değildir. */
+.recurrence-day.is-start { box-shadow: inset 0 -2px 0 color-mix(in oklab, var(--accent) 55%, transparent); }
+
+/* Yineleme takvimi önizlemesi: kaç gün oluşacağı tek bakışta okunur. */
+.recurrence-preview { display: flex; flex-wrap: wrap; gap: 5px; }
+.recurrence-preview-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 58px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  line-height: 1.2;
+}
+.recurrence-preview-chip.is-template {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+  background: var(--accent-soft);
+}
+.recurrence-preview-day { font-size: 11.5px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+.recurrence-preview-dow { font-size: 10px; color: var(--text-dim); }
+.recurrence-preview-more {
+  align-self: center;
+  padding: 4px 9px;
+  border-radius: var(--r-pill);
+  background: var(--bg-elev);
+  border: 1px dashed var(--border-strong);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.recurrence-count-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.recurrence-count-note svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+.recurrence-count-note strong { color: var(--text); }
 .recurrence-summary {
   display: flex;
   flex-direction: column;
@@ -390,9 +435,9 @@
   z-index: var(--z-drawer);
   top: 0;
   right: 0;
-  height: 100vh;
-  max-height: 100vh;
-  width: min(720px, 100vw);
+  height: var(--app-viewport-h, 100vh);
+  max-height: var(--app-viewport-h, 100vh);
+  width: min(720px, var(--app-viewport-w, 100vw));
 }
 .drawer .rel-fields-grid {
   grid-template-columns: minmax(210px, 1.7fr) minmax(105px, .7fr) minmax(100px, .7fr);
@@ -421,13 +466,119 @@
   margin-top: 4px;
 }
 
+/* ── Görev paneli bölümleri ──────────────────────────────────────
+   Her bölüm kendi vurgu rengini (`--section-tone`) taşır. Başlıklar daha önce
+   tek tip gri ve BÜYÜK HARFLİ idi; panel tek bir metin bloğu gibi okunuyordu. */
+.task-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in oklab, var(--section-tone) 65%, transparent);
+  border-radius: var(--r-md);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--section-tone) 5%, var(--bg-elev-2)),
+    var(--bg-elev-2)
+  );
+}
+.task-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.task-section-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: var(--r-sm);
+  color: var(--section-tone);
+  background: color-mix(in oklab, var(--section-tone) 14%, transparent);
+  border: 1px solid color-mix(in oklab, var(--section-tone) 28%, transparent);
+}
+/* Cümle düzeni: başlıklar büyük harfe zorlanmaz. */
+.task-section-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  text-transform: none;
+}
+.task-section-hint { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+.task-section-body { display: flex; flex-direction: column; gap: 9px; }
+
+/* ── Öncelik seçimi ─────────────────────────────────────────── */
+.task-priority-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-priority-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-elev);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color .14s ease, background .14s ease, color .14s ease;
+}
+.task-priority-option svg { color: var(--priority-color); }
+.task-priority-option:hover { border-color: var(--border-strong); color: var(--text); }
+.task-priority-option.active {
+  border-color: color-mix(in oklab, var(--priority-color) 60%, var(--border));
+  background: color-mix(in oklab, var(--priority-color) 14%, transparent);
+  color: var(--text);
+}
+/* Seçili öncelik yeniden yazma üretmesin diye kapatılır; görünümü DEĞİŞMEZ:
+   kapatılmış bir düğme soluk görünseydi seçili değer okunamaz hâle gelirdi. */
+.task-priority-option:disabled { cursor: default; opacity: 1; }
+.task-priority-option:disabled:hover { border-color: color-mix(in oklab, var(--priority-color) 60%, var(--border)); }
+
+/* ── Öncül / ardıl sekmeleri ────────────────────────────────── */
+.rel-tabs { width: 100%; }
+.rel-tabs > button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600; }
+.rel-tab-count {
+  min-width: 19px;
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.rel-empty {
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+}
+.rel-direction-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.rel-direction-note svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+
 @media (max-width: 900px) {
   .task-date-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rel-fields-grid { grid-template-columns: minmax(180px, 1.35fr) minmax(100px, .65fr) minmax(100px, .7fr); }
 }
 
 @media (max-width: 760px) {
-  .drawer { width: 100vw; }
+  .drawer { width: var(--app-viewport-w, 100vw); }
   .drawer .rel-fields-grid,
   .task-project-wbs-grid,
   .task-date-grid,
@@ -471,3 +622,305 @@
 }
 /* Yatay kaydırmada başlık hücrelerinin arkası saydam kalmamalıdır. */
 .team-table-scroll .tbl thead th { background: var(--bg-elev); z-index: 2; }
+
+/* ── Personel ayrıntı penceresi ───────────────────────────────────
+   Ekip tablosunda bir satır yalnızca ilk iki görevi gösterebiliyordu; kişinin
+   yükünü ve yakın görevlerini tam olarak görmek için ayrı bir pencere gerekir. */
+.person-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in oklab, var(--bg) 62%, black);
+  backdrop-filter: blur(8px);
+  animation: fadein .16s ease;
+}
+.person-dialog {
+  width: min(680px, 100%);
+  max-height: calc(var(--app-viewport-h, 100vh) - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--r-xl);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+  animation: personDialogIn .24s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes personDialogIn {
+  from { opacity: 0; transform: translateY(12px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+/* Perde de tercihe uyar: yalnızca pencere durdurulduğunda, "Hareketi azalt"
+   açık olan kullanıcı pencereyi her açışında zeminin belirmesini görüyordu.
+   İşletim sistemi tercihi de ayrıca karşılanır. */
+.reduce-motion .person-dialog,
+.reduce-motion .person-dialog-backdrop { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .person-dialog,
+  .person-dialog-backdrop { animation: none; }
+}
+
+.person-dialog-head {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 24px 20px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 9%, var(--bg-elev)), var(--bg-elev));
+  overflow: hidden;
+}
+.person-dialog-glow {
+  position: absolute;
+  inset: -60% 55% auto -10%;
+  height: 200%;
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--accent) 26%, transparent), transparent);
+  pointer-events: none;
+}
+.person-dialog-identity { position: relative; min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.person-dialog-identity h2 { margin: 0; font-size: 20px; font-weight: 750; letter-spacing: -.02em; line-height: 1.2; }
+.person-dialog-role { font-size: 12.5px; color: var(--text-muted); }
+.person-dialog-org { font-size: 11.5px; color: var(--text-dim); }
+.person-dialog-close { position: relative; flex: 0 0 auto; align-self: flex-start; }
+
+.person-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.person-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+.person-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+}
+.person-metric-value { font-size: 21px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.person-metric-label { font-size: 11px; color: var(--text-dim); }
+
+.person-dialog-details { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.person-identity-row { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.person-identity-row > span { color: var(--text-dim); }
+.person-identity-row > strong { color: var(--text); font-weight: 600; }
+
+.person-priority-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.person-priority-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid color-mix(in oklab, var(--priority-color) 40%, var(--border));
+  background: color-mix(in oklab, var(--priority-color) 10%, transparent);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.person-priority-chip svg { color: var(--priority-color); }
+.person-priority-chip strong { color: var(--text); }
+
+.person-tasks { display: flex; flex-direction: column; gap: 8px; }
+.person-tasks-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.person-tasks-head svg { color: var(--accent); }
+.person-tasks-count {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.person-tasks-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 22px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.person-tasks-empty svg { color: var(--status-done); }
+
+.person-task-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.person-task-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  text-align: left;
+  color: var(--text);
+  transition: border-color .14s ease, background .14s ease, transform .14s ease;
+}
+.person-task-item:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  transform: translateX(2px);
+}
+.reduce-motion .person-task-item:hover { transform: none; }
+.person-task-bar { width: 3px; align-self: stretch; border-radius: 2px; flex: 0 0 auto; }
+.person-task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.person-task-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.person-task-meta { display: flex; flex-wrap: wrap; gap: 5px; font-size: 11px; color: var(--text-dim); }
+.person-task-dot { opacity: .6; }
+.person-task-due { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.person-task-due-days { font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.person-task-due-date { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* Ekip tablosunda personel adı, ayrıntı penceresini açan bir düğmedir. */
+.team-person-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+.team-person-button:hover { background: var(--bg-hover); border-color: var(--border); }
+.team-person-button strong { display: block; white-space: nowrap; }
+.team-person-button small { display: block; }
+
+/* ── Hatırlatma e-postası eylemi ve yönetici sayfası ─────────── */
+.task-reminder-action { display: inline-flex; align-items: center; gap: 6px; }
+.task-reminder-button.is-busy { opacity: .7; }
+.task-reminder-result {
+  max-width: 260px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.task-reminder-result.success { color: var(--status-done); }
+.task-reminder-result.warning { color: var(--c-amber); }
+.task-reminder-result.error { color: var(--status-overdue); }
+
+.reminder-settings-page { min-height: 0; }
+.reminder-section { display: flex; flex-direction: column; gap: 12px; }
+.reminder-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.reminder-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.reminder-field-label { font-size: 11.5px; font-weight: 650; color: var(--text-muted); }
+.reminder-summary {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+}
+.reminder-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-color: color-mix(in oklab, var(--status-overdue) 40%, var(--border));
+  color: var(--text);
+  font-size: 12.5px;
+}
+.reminder-warning code { font-family: var(--font-mono); font-size: 11.5px; }
+.reminder-warning-inline { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-amber); }
+.reminder-message { font-size: 12.5px; }
+.reminder-message.success { color: var(--status-done); }
+.reminder-message.warning { color: var(--c-amber); }
+.reminder-message.error { color: var(--status-overdue); }
+.reminder-placeholders { display: flex; flex-direction: column; gap: 7px; }
+.reminder-placeholders-title { font-size: 11.5px; font-weight: 650; color: var(--text-muted); }
+.reminder-placeholder-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+.reminder-placeholder {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+}
+.reminder-placeholder code { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.reminder-placeholder small { font-size: 10.5px; color: var(--text-dim); }
+.reminder-preview-subject { font-size: 12.5px; }
+.reminder-preview-body {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: #ffffff;
+  color: #111827;
+  overflow-x: auto;
+}
+.reminder-preview-body table { border-collapse: collapse; width: 100%; }
+
+/* Zengin metin düzenleyicisi. */
+.rich-editor { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.rich-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev-2);
+}
+.rich-editor-tool {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.rich-editor-tool:hover:not(:disabled) { border-color: var(--border); background: var(--bg-hover); color: var(--text); }
+.rich-editor-tool:disabled { opacity: .45; cursor: default; }
+.rich-editor-surface {
+  min-height: 220px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--bg-input);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.rich-editor-surface:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rich-editor.is-disabled .rich-editor-surface { opacity: .6; }

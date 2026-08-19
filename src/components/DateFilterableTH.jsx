@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { appZoom } from '../lib/zoom';
+import { clampOverlayToViewport } from './overlayPlacement.js';
+import { measureNaturalRect } from './overlayMeasurement.js';
 import { DateInput } from './DateInput';
 import { Icons } from './icons';
 
@@ -59,19 +61,32 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
   const [preset, setPreset] = useState(initial.preset || '');
   const [from, setFrom] = useState(initial.from || '');
   const [to, setTo] = useState(initial.to || '');
-  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const [pos, setPos] = useState({ left: 0, top: 0, maxWidth: null, maxHeight: null });
   const ref = useRef(null);
 
+  // Yerleşim kutunun GERÇEK ölçüsüyle yapılır: sayfanın altına yakın açılan
+  // süzgeç kutusunun alt kısmı daha önce ekranın dışında kalıyordu.
   useEffect(() => {
-    if (!anchor) return;
-    const zoom = appZoom();
-    const rect = anchor.getBoundingClientRect();
-    const viewportWidth = window.innerWidth / zoom;
-    setPos({
-      left: Math.max(8, Math.min(viewportWidth - 308, rect.left / zoom)),
-      top: rect.bottom / zoom + 4
-    });
-  }, [anchor]);
+    if (!anchor) return undefined;
+    const place = () => {
+      const zoom = appZoom();
+      const rect = anchor.getBoundingClientRect();
+      // Ölçüm DOĞAL boyutla yapılır; önceki kırpma yeniden ölçülmez.
+      const box = measureNaturalRect(ref.current);
+      setPos(clampOverlayToViewport(
+        { left: rect.left / zoom, top: rect.top / zoom, bottom: rect.bottom / zoom, width: rect.width / zoom },
+        { width: box ? box.width / zoom : 300, height: box ? box.height / zoom : 320 },
+        { width: window.innerWidth / zoom, height: window.innerHeight / zoom }
+      ));
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchor, mode]);
 
   useEffect(() => {
     const onPointerDown = (event) => {
@@ -105,9 +120,20 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
   };
 
   return ReactDOM.createPortal(
-    <div ref={ref} className="col-filter-pop date-column-filter-pop" style={{ position: 'fixed', left: pos.left, top: pos.top }}>
+    <div
+      ref={ref}
+      className="col-filter-pop date-column-filter-pop"
+      // `?? undefined`: sıfır GEÇERLİ bir sınırdır, "sınır yok" demek değildir.
+      style={{
+        position: 'fixed',
+        left: pos.left,
+        top: pos.top,
+        maxWidth: pos.maxWidth ?? undefined,
+        maxHeight: pos.maxHeight ?? undefined
+      }}
+    >
       <div className="col-filter-head">
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>{label}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.01em', color: 'var(--text-dim)' }}>{label}</span>
       </div>
       {onSort && (
         <div className="col-filter-sort">

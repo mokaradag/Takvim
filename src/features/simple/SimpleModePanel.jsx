@@ -5,11 +5,13 @@ import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar } from '../../components/ui';
 import { ProjectCreateDialog } from '../../components/shell/ProjectCreateDialog';
+import { PRIORITIES, DEFAULT_PRIORITY_ID, normalizePriorityId } from '../../domain/constants';
 import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domain/projectTypes';
 import { findProjectTag, projectTagCatalog } from '../../domain/tags';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
-import { useAllPeople, useAllProjects, useAllWbs, useTaskActions } from '../../state/hooks';
+import { canWriteProject } from '../../state/projectWritePolicy.js';
+import { useAllPeople, useAllWbs, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import {
   findProjectRootWbsId,
   resolveSimpleProjectChoice,
@@ -39,7 +41,9 @@ function PersonChoice({ person, active, onToggle }) {
 }
 
 export function SimpleModePanel() {
-  const projects = useAllProjects();
+  // Proje seçicisi görev ATAMA kapsamını kullanır: sıradan kullanıcıda
+  // "corporateprojectaccess" projeleri, yöneticide bütün CN43N listesi.
+  const projects = useTaskAssignableProjects();
   const people = useAllPeople();
   const wbs = useAllWbs();
   const { canCreateProjects } = useAppState();
@@ -55,6 +59,10 @@ export function SimpleModePanel() {
   const [task, setTask] = useState('');
   const [keyword, setKeyword] = useState('');
   const [dueDate, setDueDate] = useState('');
+  // Öncelik Basit Modda da tanımlanır. Katalog GELİŞMİŞ MODLA AYNIDIR
+  // (domain/constants · PRIORITIES): ikinci bir öncelik modeli, aynı görevin iki
+  // ekranda farklı okunmasına yol açardı.
+  const [priority, setPriority] = useState(DEFAULT_PRIORITY_ID);
   const [assigneeIds, setAssigneeIds] = useState([]);
   const [peopleQuery, setPeopleQuery] = useState('');
   const [saving, setSaving] = useState(false);
@@ -94,9 +102,11 @@ export function SimpleModePanel() {
   }, [selectableProjects, canCreateProjects]);
 
   const selectedProject = writableProjects.find((project) => project.id === projectChoice) || null;
+  // Atama kapsamındaki projenin dağılım ağacı istemciye yüklenmez; kök düğüm
+  // kimliği kapsam kaydından okunur.
   const selectedRootWbsId = useMemo(
-    () => findProjectRootWbsId(wbs, selectedProject?.id),
-    [wbs, selectedProject?.id]
+    () => findProjectRootWbsId(wbs, selectedProject?.id) || selectedProject?.rootWbsId || null,
+    [wbs, selectedProject?.id, selectedProject?.rootWbsId]
   );
   const selectedPeople = useMemo(
     () => sortedPeople.filter((person) => assigneeIds.includes(person.id)),
@@ -148,6 +158,7 @@ export function SimpleModePanel() {
     setTask('');
     setKeyword('');
     setDueDate('');
+    setPriority(DEFAULT_PRIORITY_ID);
     setAssigneeIds([]);
     setPeopleQuery('');
   };
@@ -170,6 +181,11 @@ export function SimpleModePanel() {
     const tags = projectTagCatalog(project);
     const existing = findProjectTag(tags, requested);
     if (existing) return { ok: true, project, keyword: existing.name };
+    // Atama kapsamıyla açılan projede üst veri YAZILAMAZ ve katalog boştur.
+    // Katalog yazmasını denemek her seferinde reddediliyor, ekranda ZORUNLU
+    // tutulan kısa açıklama da sessizce düşüyordu; bu projelerde etiket
+    // doğrudan görev kaydında saklanır.
+    if (!canWriteProject(project)) return { ok: true, project, keyword: requested, catalogSkipped: true };
     const result = await updateProject(project.id, { tags: [...tags, { name: requested }] });
     if (!result?.ok) return { ok: false, project, keyword: '', error: result?.error };
     return { ok: true, project: result.value || project, keyword: requested };
@@ -258,7 +274,7 @@ export function SimpleModePanel() {
       assigneeIds: [...assigneeIds],
       sorumlu: selectedPeopleForTask.map((person) => person.name),
       status: 'todo',
-      priority: 'medium',
+      priority: normalizePriorityId(priority),
       progress: 0,
       plannedStart: dueDate,
       plannedFinish: dueDate,
@@ -367,6 +383,27 @@ export function SimpleModePanel() {
             <span>Termin tarihi</span>
             <DateInput value={dueDate} onChange={(value) => { setDueDate(value); setMessage(null); }} disabled={!hasWritableDestination} />
           </label>
+          <div className="simple-field">
+            <span>Öncelik</span>
+            <div className="simple-priority-picker" role="group" aria-label="Görev önceliği">
+              {Object.values(PRIORITIES).map((option) => {
+                const active = normalizePriorityId(priority) === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`simple-priority-option${active ? ' active' : ''}`}
+                    aria-pressed={active}
+                    style={{ '--priority-color': option.color }}
+                    disabled={!hasWritableDestination}
+                    onClick={() => { setPriority(option.id); setMessage(null); }}
+                  >
+                    <Icons.Flag size={11} /> {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         {!hasWritableDestination && (
