@@ -203,7 +203,10 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Settings controls remain readable in both themes.
 - The accent-colour catalog reads `Kehribar` (not `Amber`).
 - **Tarih biçimi** switches every date on screen between `gg/aa/yyyy` and
-  `18 Ağu 2026` without a reload.
+  `18 Ağu 2026` without a reload — **including editable date fields**: the Task
+  Detail / Hızlı Görev Tanımı date boxes show the selected format, their
+  placeholder and validation message match it, and typing `18 Ağu 2026` or
+  `18/08/2026` both commit correctly in either mode.
 - **Yüksek karşıtlık** visibly darkens borders and secondary text in both themes.
 - Appearance/emblem/mode settings visibly apply as expected.
 - At every font scale from 90 % to 140 %, no button, dropdown, tooltip or dialog

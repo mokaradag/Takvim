@@ -169,6 +169,19 @@ karşılaştırılırsa, önümüzdeki bir yıla yayılmış 240 saatlik yük de
 saat" gibi görünüyordu. İş, planlanan aralığın ufukla kesişimi oranında
 sayılır; planlanmamış ve gecikmiş işin kalanı bugünün yüküdür.
 
+## Tarih biçimi düzenlenebilir alanlarda da geçerlidir
+
+Ayarlar sayfasındaki **Tarih biçimi** seçeneği (`gg/aa/yyyy` ↔ `18 Ağu 2026`) yalnızca pasif etiketleri değiştiriyordu: `18 Ağu 2026` seçen kullanıcı görev panelinde `18/08/2026` bekleyen bir kutu görüyordu.
+
+`DateInput` artık tercihe uyar. Kurallar React'ten bağımsız `src/components/dateInputFormat.js` modülündedir:
+
+- **Yazma** tercihe uyar (`formatEditableDate`).
+- **Okuma** bilerek daha geniştir (`parseDisplayDate`): `18/08/2026`, `18 Ağu 2026`, `18 Ağustos 2026` ve ISO biçimi kabul edilir; ay adı Türkçe küçültme kurallarıyla eşleştirilir. Biçim değiştiğinde yarım kalmış bir giriş ya da kopyalanmış eski bir metin reddedilmemelidir. Takvimde olmayan gün (`31 Şub 2026`) her iki biçimde de reddedilir.
+- **Rakam maskesi** yalnızca rakam ve eğik çizgi içeren girişe uygulanır (`maskDateDraft`); aksi hâlde `18 Ağu 2026` yazılırken rakamlar ayıklanıp `18/20/26` üretiliyordu.
+- **Yer tutucu ve hata iletisi** tercihten türetilir; koda gömülü `gg/aa/yyyy` metni kalmadı.
+
+Taslak durumu değerin yanı sıra biçim tercihine de bağlıdır: aksi hâlde değer aynı kalırken tercih değiştiğinde kutu eski biçimde donuyordu.
+
 ## Karşılama ekranı
 
 Ekran, doğrulanmış oturumdan gelen kullanıcı fotoğrafı (yoksa baş harf yedeği),

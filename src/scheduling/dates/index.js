@@ -9,6 +9,18 @@ export function setAppDateDisplayFormat(format = 'pattern') {
   appDateDisplayFormat = format === 'dd/mm/yyyy' ? 'dd/mm/yyyy' : 'pattern';
 }
 
+/**
+ * Yürürlükteki tarih biçimi tercihi.
+ *
+ * DÜZENLENEBİLİR tarih alanları da bu tercihe uymak zorundadır: ayar "her
+ * ekrandaki tarih" diyorken yalnızca pasif etiketlerin değişmesi, aynı sayfada
+ * `18 Ağu 2026` yazan bir etiketle `18/08/2026` bekleyen bir kutunun yan yana
+ * durmasına yol açıyordu.
+ */
+export function getAppDateDisplayFormat() {
+  return appDateDisplayFormat;
+}
+
 export function parseDate(value) {
   if (value instanceof Date) return value;
   if (!value) return new Date();

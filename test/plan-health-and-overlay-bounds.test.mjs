@@ -368,3 +368,61 @@ test('ardıl düzenleyicisi ayrı bir alan tutmaz: kenar tek yerde saklanır', (
   assert.match(drawer, /const \[successorDrafts, setSuccessorDrafts\] = useState/);
   assert.match(drawer, /const graph = useMemo/);
 });
+
+/*
+ * 5. Tarih biçimi tercihi DÜZENLENEBİLİR alanlara da uygulanır
+ *
+ * Ayar "her ekrandaki tarih" derken yalnızca pasif etiketleri değiştiriyordu:
+ * `18 Ağu 2026` seçen kullanıcı görev panelinde `18/08/2026` yazan bir kutu
+ * görüyordu. Kutu artık tercihe göre yazar, İKİ biçimi de okur.
+ */
+test('düzenlenebilir tarih alanı yürürlükteki biçim tercihine göre yazar', async () => {
+  const { setAppDateDisplayFormat, getAppDateDisplayFormat } = await import('../src/scheduling/dates/index.js');
+  const { formatEditableDate } = await import('../src/components/dateInputFormat.js');
+  const previous = getAppDateDisplayFormat();
+  try {
+    setAppDateDisplayFormat('dd/mm/yyyy');
+    assert.equal(formatEditableDate('2026-08-18'), '18/08/2026');
+    setAppDateDisplayFormat('pattern');
+    assert.equal(formatEditableDate('2026-08-18'), '18 Ağu 2026');
+    assert.equal(formatEditableDate(''), '');
+  } finally {
+    setAppDateDisplayFormat(previous);
+  }
+});
+
+test('tarih alanı her iki biçimi de okur; geçersiz gün reddedilir', async () => {
+  const { parseDisplayDate } = await import('../src/components/dateInputFormat.js');
+  // Yazma biçimi tek olsa da OKUMA geniştir: tercih değiştiğinde yarım kalmış
+  // bir giriş ya da kopyalanmış eski bir metin reddedilmemelidir.
+  assert.equal(parseDisplayDate('18/08/2026'), '2026-08-18');
+  assert.equal(parseDisplayDate('18 Ağu 2026'), '2026-08-18');
+  assert.equal(parseDisplayDate('18 Ağustos 2026'), '2026-08-18');
+  assert.equal(parseDisplayDate('18 AĞU 2026'), '2026-08-18', 'Türkçe büyük harf aynı aya çözülmelidir');
+  assert.equal(parseDisplayDate('2026-08-18'), '2026-08-18');
+  assert.equal(parseDisplayDate(''), '');
+  assert.equal(parseDisplayDate('31 Şub 2026'), null, 'takvimde olmayan gün kabul edilmez');
+  assert.equal(parseDisplayDate('18 Xyz 2026'), null, 'tanınmayan ay adı kabul edilmez');
+  assert.equal(parseDisplayDate('31/02/2026'), null);
+});
+
+test('yer tutucu ve hata iletisi biçim tercihinden türetilir', () => {
+  const source = readFileSync(new URL('../src/components/DateInput.jsx', import.meta.url), 'utf8');
+  // Metin koda gömülü kalsaydı `18 Ağu 2026` seçen kullanıcıya hâlâ
+  // "gg/aa/yyyy biçiminde girin" denirdi.
+  assert.match(source, /const hint = dateInputHint\(dateFormat\);/);
+  assert.match(source, /placeholder=\{placeholder \|\| hint\}/);
+  assert.match(source, /Tarihi \$\{hint\} biçiminde girin\./);
+  // Taslak, değerin yanı sıra BİÇİM değiştiğinde de yenilenmelidir.
+  assert.match(source, /\}, \[value, dateFormat\]\);/);
+});
+
+test('rakam maskesi harf içeren girişe uygulanmaz', async () => {
+  const { maskDateDraft } = await import('../src/components/dateInputFormat.js');
+  // Rakam yazan kullanıcı eğik çizgileri kendisi yazmaz…
+  assert.equal(maskDateDraft('18082026'), '18/08/2026');
+  assert.equal(maskDateDraft('1808'), '18/08');
+  // …ama `18 Ağu 2026` yazılırken rakamlar ayıklansaydı kutu `18/20/26` gösterirdi.
+  assert.equal(maskDateDraft('18 Ağu 2026'), '18 Ağu 2026');
+  assert.equal(maskDateDraft('18 A'), '18 A');
+});
