@@ -29,17 +29,49 @@ export function writableProjects(projects = []) {
   return (projects || []).filter(canWriteProject);
 }
 
+/**
+ * Görev TANIMLARKEN seçilebilen projeler.
+ *
+ * Sıradan kullanıcı için bu küme, "corporateprojectaccess" ile tam yetki
+ * aldığı görünür projelerdir — davranış değişmez. Direktör/müdür/birim
+ * yöneticisi için ek olarak bütün etkin CN43N projeleri gelir; sunucu bu
+ * kapsamı yeniden doğrular ve görevin kendi personeline atanmasını şart koşar.
+ *
+ * Kapsam YALNIZCA görev yazmasıdır: proje üst verisi, iş dağılım ağacı ve
+ * görev görünürlüğü etkilenmez.
+ */
+export function taskAssignableProjects(state = {}) {
+  const visible = writableProjects(state.projects || []);
+  const known = new Set(visible.map((project) => String(project.id)));
+  const scoped = (state.assignableProjects || []).filter((project) => project && !known.has(String(project.id)));
+  return [...visible, ...scoped];
+}
+
+/** Bu projeye görev yazılabilir mi? (tam yetki ya da görev atama kapsamı) */
+export function canAssignTasksInProject(state = {}, projectId = null) {
+  const id = projectId == null || projectId === '' ? null : String(projectId);
+  if (!id) return false;
+  const visible = findProject(state.projects, id);
+  if (canWriteProject(visible)) return true;
+  return (state.assignableProjects || []).some((project) => String(project.id) === id);
+}
+
+function findAssignableProject(state = {}, value = null) {
+  const id = projectId(value);
+  if (!id) return null;
+  return taskAssignableProjects(state).find((project) => String(project.id) === id) || null;
+}
+
 export function resolveTaskCreationProject(state = {}, requestedProjectId = null) {
-  const projects = state.projects || [];
+  const selectable = taskAssignableProjects(state);
   if (requestedProjectId != null && requestedProjectId !== '') {
-    const requested = findProject(projects, requestedProjectId);
-    return canWriteProject(requested) ? requested : null;
+    return findAssignableProject(state, requestedProjectId);
   }
   if (state.workspaceMode === 'project') {
-    const selected = findProject(projects, state.selectedProjectId);
+    const selected = findProject(state.projects, state.selectedProjectId);
     return canWriteProject(selected) ? selected : null;
   }
-  return projects.find(canWriteProject) || null;
+  return selectable[0] || null;
 }
 
 export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
@@ -48,8 +80,10 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     return { ok: false, code: 'TASK_NOT_FOUND', field: 'taskId', message: 'Güncellenecek görev bulunamadı.' };
   }
 
-  const sourceProject = findProject(state.projects, task.projectId);
-  if (!canWriteProject(sourceProject)) {
+  // Kaynak proje görev atama kapsamında da olabilir: yönetici, kendi
+  // personeline tanımladığı görevi düzenleyebilmelidir.
+  const sourceProject = findProject(state.projects, task.projectId) || findAssignableProject(state, task.projectId);
+  if (!canAssignTasksInProject(state, task.projectId)) {
     return {
       ok: false,
       code: 'PROJECT_WRITE_FORBIDDEN',
@@ -61,12 +95,13 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
 
   let destinationProject = sourceProject;
   if (Object.prototype.hasOwnProperty.call(patch || {}, 'projectId')) {
-    destinationProject = findProject(state.projects, patch.projectId);
+    destinationProject = findProject(state.projects, patch.projectId) || findAssignableProject(state, patch.projectId);
   } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'proje')) {
-    destinationProject = findProjectByName(state.projects, patch.proje);
+    destinationProject = findProjectByName(state.projects, patch.proje)
+      || findProjectByName(state.assignableProjects, patch.proje);
   }
 
-  if (!canWriteProject(destinationProject)) {
+  if (!canAssignTasksInProject(state, destinationProject?.id)) {
     return {
       ok: false,
       code: 'PROJECT_WRITE_FORBIDDEN',

@@ -196,7 +196,7 @@ function calendarRows(db) {
   return rows;
 }
 
-function snapshotRecordsets(db, sicil, isAdmin) {
+function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
   const visible = new Map();
   if (isAdmin) {
     for (const project of db.projects.filter((entry) => entry.IsActive)) {
@@ -228,6 +228,23 @@ function snapshotRecordsets(db, sicil, isAdmin) {
   const dependencies = db.taskDependencies.filter((entry) => visible.get(guid(entry.ProjectId)) === 'FULL');
   const people = db.people.map((person) => ({ ...person }));
 
+  // Görev ATAMA kapsamı: seçilebilir kurumsal projeler. Görünür proje/görev
+  // kümesine hiçbir şey eklemez.
+  const assignable = canAssignAllCorporate
+    ? db.projects
+      .filter((project) => project.IsActive && project.SourceType === 'CORPORATE')
+      .map((project) => ({
+        ProjectId: project.ProjectId,
+        ProjectCode: project.ProjectCode,
+        ProjectName: project.ProjectName,
+        ProjectTypeCode: project.ProjectTypeCode ?? null,
+        ProjectTypeName: project.ProjectTypeName ?? null,
+        ColorToken: project.ColorToken ?? null,
+        RootWbsId: db.wbs.find((node) => sameGuid(node.ProjectId, project.ProjectId) && node.ParentWbsId == null)?.WbsId ?? null
+      }))
+      .sort((left, right) => String(left.ProjectCode || '').localeCompare(String(right.ProjectCode || '')))
+    : [];
+
   return [
     projects,
     tags,
@@ -238,7 +255,8 @@ function snapshotRecordsets(db, sicil, isAdmin) {
     db.baselines,
     db.taskBaselineSnapshots,
     calendarRows(db),
-    people
+    people,
+    assignable
   ];
 }
 
@@ -481,7 +499,7 @@ function runQuery(db, statement, params, { database }) {
     return result(authorizationRecordsets(db, sicil));
   }
   if (sqlText.includes('DECLARE @VisibleProjects TABLE')) {
-    return result(snapshotRecordsets(db, sicil, Boolean(params.isAdmin)));
+    return result(snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate)));
   }
   if (sqlText.includes("THROW 51001")) {
     synchronizeCorporateProjects(db, params.actorSicil);
@@ -499,6 +517,25 @@ function runQuery(db, statement, params, { database }) {
     const calendar = db.calendars.find((entry) => sameGuid(entry.CalendarId, params.calendarId) && entry.IsActive);
     return result([calendar ? [{ CalendarId: calendar.CalendarId }] : []]);
   }
+  // Görev atama kapsamı denetimleri.
+  if (sqlText.includes("WHERE ProjectId = @projectId AND SourceType = 'CORPORATE' AND IsActive = 1")) {
+    const project = projectById(db, params.projectId);
+    return result([project && project.SourceType === 'CORPORATE' && project.IsActive
+      ? [{ ProjectId: project.ProjectId }]
+      : []]);
+  }
+  if (sqlText.includes('FROM STRING_SPLIT(@sicils') && sqlText.includes('dbo.MR_V_ExecutiveScope')) {
+    const sicils = String(params.sicils || '').split(',').map((value) => Number(value.trim())).filter(Boolean);
+    const outside = sicils.filter((employee) => !db.executiveScope.some((entry) => entry.ManagerSicil === params.managerSicil
+      && entry.EmployeeSicil === employee));
+    return result([outside.map((value) => ({ Sicil: value }))]);
+  }
+  if (sqlText.includes('SELECT Sicil FROM dbo.MR_TaskAssignees WHERE TaskId = @taskId')) {
+    return result([db.taskAssignees
+      .filter((entry) => sameGuid(entry.TaskId, params.taskId))
+      .map((entry) => ({ Sicil: entry.Sicil }))]);
+  }
+
   if (sqlText.includes('SELECT TOP (1) Sicil FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
     const person = db.people.find((entry) => entry.Sicil === params.sicil);
     return result([person ? [{ Sicil: person.Sicil }] : []]);

@@ -32,7 +32,15 @@ import { COLOR_MAP, projectColorVar } from '../../lib/colors';
 import { Avatar, StatusIcon, statusColorVar } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton } from '../../components/ui-extras';
-import { useAllPeople, useAllProjects, useAllWbs, useCalendars, useTaskActions, useTaskPrimaryBaseline } from '../../state/hooks';
+import {
+  useAllPeople,
+  useAllProjects,
+  useAllWbs,
+  useAssignmentScopeProjects,
+  useCalendars,
+  useTaskActions,
+  useTaskPrimaryBaseline
+} from '../../state/hooks';
 import {
   collectPredecessorClosure,
   collectSuccessorClosure,
@@ -43,6 +51,7 @@ import {
   selectSuccessors
 } from './taskSuccessorPolicy.js';
 import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
+import { TaskReminderButton } from '../reminders/TaskReminderButton';
 
 function legacyProjectTags(projectId, tasks) {
   return Array.from(new Set(
@@ -80,6 +89,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   const projects = useAllProjects();
   const calendars = useCalendars();
   const allWbs = useAllWbs();
+  const assignmentScopeProjects = useAssignmentScopeProjects();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
   const { generateTaskSeries, cancelTaskFieldUpdates, updateTask } = useTaskActions();
   // Üretilmiş yinelemelerin DEĞİŞMEZ seri kimlikleri. Sayı tek başına yetmez:
@@ -140,7 +150,13 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   })), [projectWbsRows, allWbs]);
 
   const projectOptions = useMemo(() => {
-    const listed = visibleProjects(projects);
+    // Görev PROJESİ seçicisi görev atama kapsamını kullanır: yönetici, kendi
+    // personeline herhangi bir CN43N projesi altında iş tanımlayabilmelidir.
+    // Görünür proje listesi ve görev görünürlüğü bundan etkilenmez.
+    const listed = visibleProjects([
+      ...projects,
+      ...assignmentScopeProjects.filter((scoped) => !projects.some((project) => project.id === scoped.id))
+    ]);
     if (selectedProject && !listed.some((project) => project.id === selectedProject.id)) listed.unshift(selectedProject);
     return [
       { value: '', label: 'Proje seçilmedi', icon: <Icons.Layers size={13} /> },
@@ -157,7 +173,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
         };
       })
     ];
-  }, [projects, selectedProject]);
+  }, [projects, assignmentScopeProjects, selectedProject]);
 
   const selectedAssignees = useMemo(() => {
     const records = [];
@@ -234,7 +250,9 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   }, [local.keyword, projectTags, task.id, onUpdate]);
 
   const changeProject = (projectId) => {
-    const project = projects.find((item) => item.id === projectId) || null;
+    const project = projects.find((item) => item.id === projectId)
+      || assignmentScopeProjects.find((item) => item.id === projectId)
+      || null;
     const tags = tagsForProject(project, tasks);
     const roots = allWbs.filter((node) => node.projectId === projectId && node.parentId == null);
     save({
@@ -242,7 +260,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
       projectCode: project?.code || '',
       proje: project?.name || '',
       color: project?.color || local.color,
-      wbsId: roots.length === 1 ? roots[0].id : null,
+      // Atama kapsamındaki projenin ağacı yüklenmez; kök düğüm kapsam kaydından gelir.
+      wbsId: roots.length === 1 ? roots[0].id : (project?.rootWbsId || null),
       keyword: tags.some((tag) => tag.name === local.keyword) ? local.keyword : (tags[0]?.name || '')
     });
   };
@@ -565,6 +584,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
           <button className="btn" onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
             <Icons.Trash size={13} /> Sil
           </button>
+          {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
+          <TaskReminderButton task={task} size={30} />
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={onClose}>Tamam</button>
         </div>

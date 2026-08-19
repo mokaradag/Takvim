@@ -43,6 +43,8 @@ export const Icons = {
   Trash: (p) => <Icon {...p} d='<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' />,
   Edit: (p) => <Icon {...p} d='<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/>' />,
   Flag: (p) => <Icon {...p} d='<path d="M4 22V4a1 1 0 0 1 1-1h12l-2 4 2 4H5"/>' />,
+  Mail: (p) => <Icon {...p} d='<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 7 10-7"/>' />,
+  MailCheck: (p) => <Icon {...p} d='<path d="M22 12V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><path d="m2 7 10 7 10-7"/><path d="m16 19 2 2 4-4"/>' />,
   Link: (p) => <Icon {...p} d='<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>' />,
   Filter: (p) => <Icon {...p} d='<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>' />,
   TrendUp: (p) => <Icon {...p} d='<path d="m22 7-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>' />,

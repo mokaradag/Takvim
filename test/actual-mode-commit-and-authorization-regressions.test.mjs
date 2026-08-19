@@ -223,10 +223,25 @@ test('existing task updates authorize both stored source and requested destinati
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
   const loadIndex = body.indexOf('const before = await taskRow(executor, taskId)');
-  const sourceAuthIndex = body.indexOf('if (before) assertProjectWriteAccess(actor.effective, id(before.ProjectId))');
-  const destinationAuthIndex = body.indexOf('assertProjectWriteAccess(actor.effective, projectId)');
+  const sourceAuthIndex = body.indexOf('await assertTaskProjectAccess(executor, actor, id(before.ProjectId)');
+  const destinationAuthIndex = body.indexOf('await assertTaskProjectAccess(executor, actor, projectId, assigneeSicils)');
   assert.ok(loadIndex >= 0 && loadIndex < sourceAuthIndex);
   assert.ok(sourceAuthIndex < destinationAuthIndex);
+});
+
+test('görev atama kapsamı yalnızca etkin kurumsal projeleri ve kendi personelini kapsar', () => {
+  const source = read('src/server/repository/sqlAppRepository.js');
+  const body = source.slice(source.indexOf('async function assertTaskProjectAccess'), source.indexOf('async function taskAssigneeSicils'));
+  // FULL erişim ve sistem yöneticisi kısa devre yapar.
+  assert.match(body, /if \(actor\.isSystemAdmin\) return;/);
+  assert.match(body, /accessLevel === 'FULL'\) return;/);
+  // Kapsam yalnızca yöneticilere açıktır.
+  assert.match(body, /if \(!hasTaskAssignmentScope\(actor\) \|\| !actor\.isExecutive\)/);
+  // Yalnızca ETKİN KURUMSAL proje.
+  assert.match(body, /SourceType = 'CORPORATE' AND IsActive = 1/);
+  // Sorumluların tamamı yöneticinin kapsamında olmalı.
+  assert.match(body, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @managerSicil/);
+  assert.match(body, /görevin en az bir sorumlusu olmalıdır/);
 });
 
 test('cross-project task moves clear incoming and outgoing dependency rows before changing ProjectId', () => {

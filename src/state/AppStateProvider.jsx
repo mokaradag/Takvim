@@ -211,7 +211,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
     };
     const taskInput = input || {};
     const result = await persistence.mutate('task/create', () => {
-      const baseTask = createNewTask(scopedState, undefined, id);
+      const baseTask = createNewTask(scopedState, undefined, id, project);
       return {
         type: 'task/add',
         task: {

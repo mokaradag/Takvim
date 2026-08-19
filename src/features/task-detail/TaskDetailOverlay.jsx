@@ -1,20 +1,29 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useAllPeople, useAllProjects, useAllTasks, useSelectedTask, useTaskActions } from '../../state/hooks';
 import {
-  canWriteProject,
+  useAllPeople,
+  useAllProjects,
+  useAllTasks,
+  useAssignmentScopeProjects,
+  useSelectedTask,
+  useTaskActions
+} from '../../state/hooks';
+import {
+  canAssignTasksInProject,
   projectWriteFailure,
   resolveTaskMutationAccess
 } from '../../state/projectWritePolicy.js';
 import { ReadOnlyTaskDrawer } from './ReadOnlyTaskDrawer';
+import { SimpleTaskDrawer } from './SimpleTaskDrawer';
 import { TaskDrawer } from './TaskDrawer';
 import { normalizeTaskAssigneePatch } from './taskAssigneePatch.js';
 import { createTaskUpdateTracker, reconcileTaskDraft } from './taskDraft';
 
-export function TaskDetailOverlay() {
+export function TaskDetailOverlay({ simple = false }) {
   const task = useSelectedTask();
   const tasks = useAllTasks();
   const projects = useAllProjects();
+  const assignableProjects = useAssignmentScopeProjects();
   const people = useAllPeople();
   const { closeTask, updateTask, moveTaskToWbs, deleteTask } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
@@ -51,8 +60,10 @@ export function TaskDetailOverlay() {
 
   if (!task) return null;
 
-  const project = projects.find((item) => item.id === task.projectId) || null;
-  if (!canWriteProject(project)) {
+  // Yazma yetkisi görev ATAMA kapsamını da içerir: yönetici, kendi personeline
+  // tanımladığı görevi düzenleyebilmelidir (bkz. projectWritePolicy).
+  const writeState = { projects, tasks, assignableProjects };
+  if (!canAssignTasksInProject(writeState, task.projectId)) {
     return <ReadOnlyTaskDrawer task={task} onClose={closeTask} />;
   }
 
@@ -66,7 +77,7 @@ export function TaskDetailOverlay() {
     if (!assigneePatch.ok) return rejectedUpdate(assigneePatch.error);
     const persistedPatch = assigneePatch.patch;
 
-    const access = resolveTaskMutationAccess({ projects, tasks }, taskId, persistedPatch);
+    const access = resolveTaskMutationAccess(writeState, taskId, persistedPatch);
     if (!access.ok) return rejectedUpdate(access);
 
     const keys = [...new Set([...Object.keys(patch || {}), ...Object.keys(persistedPatch || {})])];
@@ -113,6 +124,19 @@ export function TaskDetailOverlay() {
     const closeResult = await closeTask();
     return pendingResult.ok ? closeResult : pendingResult;
   };
+
+  // Basit Modda sade düzenleyici açılır: Gelişmiş Modun tam paneli, Basit Modda
+  // hiç toplanmayan alanlarla kullanıcıyı karşılardı.
+  if (simple) {
+    return (
+      <SimpleTaskDrawer
+        task={displayTask || task}
+        onClose={onClose}
+        onUpdate={onUpdate}
+        onDelete={deleteTask}
+      />
+    );
+  }
 
   return (
     <TaskDrawer

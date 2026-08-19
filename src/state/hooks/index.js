@@ -1,5 +1,7 @@
 'use client';
 import { useAppState } from '../AppStateProvider';
+import { selectAssignableProjects } from '../appState';
+import { taskAssignableProjects } from '../projectWritePolicy.js';
 import { selectPrimaryBaselineForProject, selectTaskBaselineSnapshot } from '../selectors/baselineSelectors';
 import { selectProjectSchedule, selectTaskSchedule } from '../selectors/scheduleSelectors';
 
@@ -7,6 +9,16 @@ export function useTasks() { return useAppState().workspace.tasks; }
 export function useAllTasks() { return useAppState().tasks; }
 export function useProjects() { return useAppState().workspace.projects; }
 export function useAllProjects() { return useAppState().projects; }
+/**
+ * Görev tanımlarken SEÇİLEBİLEN projeler.
+ *
+ * Sıradan kullanıcıda bu küme yazılabilir görünür projelerdir. Direktör/müdür/
+ * birim yöneticisinde ek olarak bütün etkin CN43N projeleri gelir; görünür
+ * proje listesi, görev görünürlüğü ve çalışma alanı seçicisi değişmez.
+ */
+export function useTaskAssignableProjects() { return taskAssignableProjects(useAppState()); }
+/** Yalnızca görev atama kapsamıyla gelen (görünür olmayan) projeler. */
+export function useAssignmentScopeProjects() { return selectAssignableProjects(useAppState()); }
 export function usePeople() { return useAppState().workspace.people; }
 export function useAllPeople() { return useAppState().people; }
 export function useWbs() { return useAppState().workspace.wbs; }
