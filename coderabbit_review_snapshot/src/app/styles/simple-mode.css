@@ -1,0 +1,208 @@
+/* MERGEN Rota · Simple Mode ownership */
+
+/* Basit Mod hızlı giriş kartı. */
+.calendar-page-stack { display: flex; flex-direction: column; gap: 18px; }
+.simple-entry-card { padding: 20px; border: 1px solid var(--chrome-border); border-radius: var(--r-xl); background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 7%, var(--bg-elev)), var(--bg-elev)); box-shadow: var(--shadow-sm); }
+.simple-entry-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.simple-entry-head h2 { margin: 7px 0 4px; font-size: 19px; letter-spacing: -.025em; }
+.simple-entry-head p { margin: 0; max-width: 760px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.simple-mode-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 800; }
+/* Akış göstergesi ve "Yeni proje" düğmesi başlığın sağ kolonunda alt alta durur. */
+.simple-entry-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; flex: 0 0 auto; }
+.simple-entry-flow { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--bg-elev-2); color: var(--text-muted); font-size: 10.5px; }
+.simple-entry-flow i { color: var(--accent); font-style: normal; }
+.simple-entry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.simple-field { display: grid; gap: 6px; min-width: 0; }
+.simple-field > span { color: var(--text-muted); font-size: 11px; font-weight: 700; }
+.simple-field > span small { color: var(--text-dim); font-weight: 500; }
+.simple-project-field, .simple-task-field { grid-column: span 2; }
+.simple-people-block { margin-top: 16px; }
+.simple-people-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.simple-people-title > span { font-size: 11px; font-weight: 750; color: var(--text-muted); }
+.simple-people-title small { color: var(--text-dim); }
+.simple-people-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
+.simple-person { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-elev-2); color: var(--text); text-align: left; }
+.simple-person:hover { border-color: var(--border-strong); }
+.simple-person.active { border-color: var(--accent); background: var(--accent-soft); }
+.simple-person > span { display: grid; min-width: 0; flex: 1; }
+.simple-person strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.simple-person small { color: var(--text-dim); font-size: 9.5px; font-family: var(--font-mono); }
+.simple-person > svg { color: var(--accent); flex: 0 0 auto; }
+.simple-entry-foot { display: flex; gap: 12px; justify-content: flex-end; align-items: center; margin-top: 16px; }
+.simple-message { flex: 1; padding: 8px 10px; border-radius: var(--r-md); font-size: 11.5px; }
+.simple-message.success { color: var(--status-done); background: color-mix(in oklab, var(--status-done) 10%, transparent); }
+.simple-message.error { color: var(--status-overdue); background: color-mix(in oklab, var(--status-overdue) 10%, transparent); }
+/* Kayıt başarılı ancak ikincil bir yazma (etiket kataloğu) tamamlanamadı. */
+.simple-message.warning { color: var(--c-amber); background: color-mix(in oklab, var(--c-amber) 12%, transparent); }
+.simple-project-back { grid-column: 1 / -1; justify-self: start; }
+.simple-save { min-width: 130px; justify-content: center; }
+
+/* Basit Mod Takvim sayfası: Takvim varsayılan, hızlı giriş ayrı sekmede. */
+.simple-calendar-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.simple-calendar-tabs {
+  width: max-content;
+  max-width: 100%;
+  padding: 3px;
+}
+
+.simple-calendar-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.simple-calendar-tab-panel { min-width: 0; }
+
+/* Büyük çalışan listelerinde tüm kişileri aynı anda render etmek yerine arama + sınırlı sonuç. */
+.simple-people-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  color: var(--text-dim);
+}
+
+.simple-people-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.simple-people-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.simple-people-search input::placeholder { color: var(--text-dim); }
+.simple-people-selection { margin-bottom: 12px; }
+.simple-people-results-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0 7px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 750;
+}
+.simple-people-results-title small { color: var(--text-dim); font-weight: 500; }
+.simple-people-empty,
+.simple-people-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.simple-person:not(.active) > svg:last-child { color: var(--text-dim); }
+
+/* Üst sağdaki dönen yedigen görünür bir bölümle başlık çubuğunun içinde kalır. */
+
+@media (max-width: 1100px) {
+  .simple-entry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .simple-calendar-tabs { width: 100%; }
+  .simple-calendar-tabs button { flex: 1; }
+  .simple-entry-head { flex-direction: column; }
+  .simple-entry-actions { align-items: flex-start; }
+  .simple-entry-flow { display: none; max-width: 100%; overflow-x: auto; }
+  .simple-entry-grid { grid-template-columns: 1fr; }
+  .simple-project-field, .simple-task-field { grid-column: auto; }
+}
+
+/* ── Basit Mod · Öncelik seçimi ────────────────────────────────
+   Katalog Gelişmiş Modla aynıdır; yalnızca sunum sadeleştirilir. */
+.simple-priority-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.simple-priority-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-elev);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  transition: border-color .14s ease, background .14s ease, color .14s ease;
+}
+.simple-priority-option svg { color: var(--priority-color); }
+.simple-priority-option:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.simple-priority-option.active {
+  border-color: color-mix(in oklab, var(--priority-color) 60%, var(--border));
+  background: color-mix(in oklab, var(--priority-color) 14%, transparent);
+  color: var(--text);
+}
+.simple-priority-option:disabled { opacity: .5; cursor: default; }
+
+/* ── Basit Mod · Görevler tablosu ──────────────────────────────
+   Gelişmiş Modun tam tablosu değil, Hızlı Görev Tanımı'yla toplanan
+   alanların sade listesi. */
+.simple-tasks-page { height: 100%; min-height: 0; gap: 14px; }
+.simple-tasks-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.simple-tasks-search { flex: 1; min-width: 220px; max-width: 380px; }
+.simple-tasks-filter button { font-size: 12px; font-weight: 600; padding: 6px 12px; }
+.simple-tasks-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.simple-tasks-select .input { padding: 6px 8px; font-size: 12px; }
+.simple-tasks-count { margin-left: auto; font-size: 12.5px; }
+.simple-tasks-card { padding: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.simple-tasks-scroll { min-height: 0; overflow: auto; }
+.simple-tasks-table th { position: sticky; top: 0; z-index: 1; background: var(--bg-elev); }
+.simple-tasks-project { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simple-tasks-title { font-weight: 550; }
+/* Görev başlığı klavyeyle ulaşılabilir bir düğmedir; görünüm satır metniyle
+   aynı kalır, odak halkası standart yoldan gelir. */
+.simple-tasks-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.simple-tasks-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.simple-tasks-priority { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650; }
+.simple-tasks-late { color: var(--status-overdue); font-weight: 650; }
+.simple-tasks-actions { justify-content: flex-end; }
+.simple-tasks-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  padding: 0 2px;
+}
+
+/* Basit Mod görev düzenleyicisi. */
+.simple-task-drawer .drawer-body { padding: 18px 20px; }
+.simple-drawer-assignees { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+.simple-drawer-assignees .simple-person { cursor: default; }
