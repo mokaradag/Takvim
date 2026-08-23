@@ -1,0 +1,238 @@
+/* MERGEN Rota · Dashboard ownership */
+
+.dashboard { gap: 20px; }
+.dashboard-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.dashboard-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.dashboard-trend-card { grid-column: 1 / 3; }
+.dashboard-status-card {
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+}
+.dashboard-status-body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(168px, 1fr) minmax(132px, 188px);
+  justify-content: center;
+  align-items: center;
+  gap: clamp(8px, 1vw, 16px);
+  min-height: 214px;
+}
+.dashboard-status-chart {
+  position: relative;
+  width: clamp(174px, 13vw, 190px);
+  height: clamp(174px, 13vw, 190px);
+  justify-self: center;
+}
+.dashboard-status-chart > svg { width: 100%; height: 100%; }
+.dashboard-status-center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  pointer-events: none;
+}
+.dashboard-status-legend {
+  width: 100%;
+  max-width: 188px;
+  justify-self: end;
+  gap: 7px;
+  flex: 1;
+}
+.dashboard-status-card .donut-leg-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: initial;
+  gap: 12px;
+  width: 100%;
+  max-width: none;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .18s, border-color .18s;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.dashboard-status-card .donut-leg-row > .row { min-width: 0; }
+.dashboard-status-card .donut-leg-row > .tabular { min-width: 2ch; text-align: right; }
+/* ── Kişi ölçüm tablosu (Ekip iş yükü · Kaynak kullanımı) ──────────
+   Ad esnek sütunu alır ve kırpılmadan okunur; kartın kalan yatay alanı boş
+   kalmak yerine sayısal sütunlara ayrılır. */
+.pm-table { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pm-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(64px, 1.1fr) var(--pm-metric-cols, repeat(3, minmax(56px, auto)));
+  align-items: center;
+  gap: 12px;
+  padding: 6px;
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+.pm-row:not(.pm-head):hover { background: var(--bg-hover); }
+.pm-head {
+  padding-bottom: 7px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.pm-head .pm-metric-head { text-align: right; }
+.pm-person { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.pm-person-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* Tablonun varlık nedeni uzun kurumsal adların OKUNABİLİR olmasıdır: ad
+   kırpılmaz, gerekirse satıra sarar ve satır yüksekliği büyür. */
+.pm-name {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.35;
+}
+.pm-sub {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.3;
+}
+.pm-bar { display: block; min-width: 0; }
+.pm-bar .bar-track { display: block; height: 6px; }
+.pm-bar .bar-fill { display: block; }
+.pm-metric { font-size: 12px; text-align: right; white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .pm-row { gap: 8px; }
+  .pm-sub { display: none; }
+}
+
+.dashboard-bottom-grid {
+  display: grid;
+  /* Ekip iş yükü artık çok sütunlu bir tablodur: orta sütun en geniş paydır. */
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.35fr) minmax(0, 0.95fr);
+  gap: 16px;
+}
+.dashboard-insights-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+@media (max-width: 1280px) {
+  .dashboard-trend-card,
+  .dashboard-status-card { grid-column: 1 / -1; }
+  .dashboard-status-body {
+    grid-template-columns: minmax(184px, 220px) minmax(160px, 220px);
+    justify-content: center;
+    gap: 28px;
+  }
+  .dashboard-status-legend { max-width: 220px; }
+}
+
+/* ── Plan sağlığı: gecikme yaşlandırması + plan bütünlüğü ───────── */
+.dashboard-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.aging-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: default;
+}
+.aging-row:hover { border-color: var(--border); background: var(--bg-hover); }
+.aging-label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.aging-value { min-width: 2ch; text-align: right; font-weight: 700; font-size: 13px; }
+
+.hygiene-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: default;
+}
+.hygiene-row:hover { border-color: var(--border); background: var(--bg-hover); }
+.hygiene-icon { display: inline-grid; place-items: center; color: var(--status-done); }
+.hygiene-row.has-gap .hygiene-icon { color: var(--c-amber); }
+.hygiene-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hygiene-value { font-weight: 700; font-size: 13px; min-width: 2ch; text-align: right; }
+.hygiene-row.has-gap .hygiene-value { color: var(--c-amber); }
+
+@media (max-width: 1100px) {
+  .dashboard-insights-grid { grid-template-columns: 1fr; }
+  .dashboard-health-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 1080px) {
+  .dashboard-main-grid,
+  .dashboard-bottom-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .dashboard-main-grid,
+  .dashboard-bottom-grid { grid-template-columns: 1fr; }
+  .dashboard-status-body {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 14px;
+  }
+  .dashboard-status-legend { max-width: 240px; justify-self: center; }
+}
+
+/* Raporlar · gecikme yaşlandırması kartı */
+.aging-report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.aging-report-cell {
+  display: flex;
+  flex-direction: column;
+  /* Kart ızgara sütununun TAMAMINI kaplar. İpucu sarmalayıcısı ızgara öğesidir;
+     kart genişlik almazsa içeriğine göre daralır ve eşit sütunlara rağmen
+     kartlar (ve yüzde çubukları) farklı genişlikte görünür. */
+  width: 100%;
+  gap: 2px;
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--aging-color);
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--aging-color) 7%, var(--bg-elev-2)), var(--bg-elev-2));
+  cursor: help;
+}
+.aging-report-value {
+  font-size: 26px;
+  font-weight: 750;
+  line-height: 1.1;
+  color: var(--aging-color);
+  font-variant-numeric: tabular-nums;
+}
+.aging-report-label { font-size: 11.5px; color: var(--text-muted); }

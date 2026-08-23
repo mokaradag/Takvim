@@ -1,0 +1,438 @@
+/* MERGEN Rota · application shell ownership */
+
+.theme-dark {
+  --bg: oklch(18% 0.008 270);
+  --bg-elev: oklch(21.5% 0.01 270);
+  --bg-elev-2: oklch(25% 0.012 270);
+  --bg-hover: oklch(29% 0.014 270);
+  --bg-input: oklch(19.5% 0.008 270);
+  --border: oklch(32% 0.014 270);
+  --border-strong: oklch(42% 0.018 270);
+  --chrome-bg: color-mix(in oklab, var(--accent) 14%, var(--bg-elev));
+  --chrome-bg-soft: color-mix(in oklab, var(--accent) 8%, var(--bg-elev));
+  --chrome-border: color-mix(in oklab, var(--accent) 26%, var(--border));
+}
+
+.theme-light {
+  --bg: oklch(96.5% 0.006 270);
+  --bg-elev: oklch(99% 0.003 270);
+  --bg-elev-2: oklch(94.5% 0.008 270);
+  --bg-hover: oklch(92.5% 0.012 270);
+  --bg-input: oklch(98% 0.004 270);
+  --border: oklch(87% 0.012 270);
+  --border-strong: oklch(75% 0.022 270);
+  --chrome-bg: color-mix(in oklab, var(--accent) 10%, var(--bg-elev));
+  --chrome-bg-soft: color-mix(in oklab, var(--accent) 6%, var(--bg-elev));
+  --chrome-border: color-mix(in oklab, var(--accent) 24%, var(--border));
+}
+
+.app { height: var(--app-viewport-h, 100vh); }
+.sidebar { min-height: 0; height: 100%; }
+.sidebar-header, .sidebar > .col, .cmd-trigger, .sidebar-section-title { flex-shrink: 0; }
+.nav { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+.sidebar-footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 9px 12px 10px;
+  background: var(--bg-elev);
+  position: relative;
+  z-index: 8;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.sidebar-footer-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Portföye dönüş, proje çalışma alanı seçiliyken kenar çubuğunda görünür. */
+.workspace-back-btn { width: 100%; justify-content: center; gap: 6px; }
+.sidebar-version { padding: 0 4px; font-size: 9.5px; color: var(--text-dim); letter-spacing: 0.04em; }
+.sidebar-simple-mode {
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--r-lg);
+  background: linear-gradient(135deg, var(--accent-soft), var(--bg-elev-2));
+  display: grid;
+  gap: 3px;
+}
+.sidebar-simple-mode > span { display: flex; align-items: center; gap: 7px; color: var(--accent); font-size: 12px; font-weight: 750; }
+.sidebar-simple-mode small { color: var(--text-dim); font-size: 10.5px; }
+
+/* Topbar: single authoritative visual contract. */
+.topbar {
+  height: 56px;
+  padding: 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: relative;
+  z-index: var(--z-chrome);
+  overflow: visible;
+  isolation: isolate;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--chrome-border);
+  background: linear-gradient(180deg, var(--chrome-bg), var(--chrome-bg-soft));
+}
+.topbar h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+.topbar h1.hero-title { letter-spacing: -0.015em; }
+.topbar .sub { font-size: 12.5px; color: var(--text-muted); }
+.topbar-spacer { flex: 1; }
+.topbar-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  min-width: 260px;
+  color: var(--text-muted);
+  font-size: 13px;
+  transition: border-color 0.12s ease;
+}
+.topbar-search:focus-within { border-color: var(--accent); }
+.topbar-search input {
+  border: none;
+  background: transparent;
+  outline: none;
+  width: 100%;
+  font-size: 13px;
+  color: var(--text);
+}
+.topbar-search input::placeholder { color: var(--text-dim); }
+
+.topbar-emblem-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+.topbar-emblem-clip .hept-topbar {
+  position: absolute;
+  display: block;
+  visibility: visible;
+  top: -190px;
+  right: -205px;
+  bottom: auto;
+  left: auto;
+  width: 320px;
+  height: 320px;
+  transform: none;
+  opacity: 0.42;
+  pointer-events: none;
+  filter: drop-shadow(0 0 7px color-mix(in oklab, var(--accent) 24%, transparent));
+}
+.theme-light .topbar-emblem-clip .hept-topbar {
+  opacity: 0.24;
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 18%, transparent));
+}
+body.no-emblem .topbar-emblem-clip .hept-topbar {
+  display: none;
+  visibility: hidden;
+}
+.topbar > :not(.topbar-emblem-clip):not(.topbar-project-context) { position: relative; z-index: 2; }
+.topbar-page-copy { min-width: 180px; }
+.topbar-project-context {
+  position: absolute;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 4;
+  width: max-content;
+  min-height: 32px;
+  height: 32px;
+  max-width: min(calc(var(--app-viewport-w, 100vw) * 0.42), 620px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 3px;
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, var(--border));
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--bg-elev) 92%, transparent);
+  box-shadow: 0 1px 0 color-mix(in oklab, white 7%, transparent) inset;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  text-align: center;
+  pointer-events: none;
+}
+.topbar-project-code {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border-radius: calc(var(--r-pill) - 3px);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.topbar-project-separator {
+  width: 1px;
+  height: 15px;
+  margin: 0 3px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--accent) 24%, var(--border));
+  color: transparent;
+  font-size: 0;
+  flex: 0 0 1px;
+}
+.topbar-project-context strong.topbar-project-name {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 9px 0 6px;
+  color: color-mix(in oklab, var(--accent) 78%, var(--text));
+  font-size: 14.5px;
+  font-weight: 760;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.theme-light .topbar-project-context strong.topbar-project-name {
+  color: color-mix(in oklab, var(--accent) 68%, var(--text));
+}
+.topbar-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+
+.export-menu { position: relative; }
+.export-menu > summary { list-style: none; }
+.export-menu > summary::-webkit-details-marker { display: none; }
+.export-menu-pop {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: var(--z-popover);
+  width: 280px;
+  padding: 6px;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+}
+.export-menu-pop button { width: 100%; border: 0; background: transparent; color: var(--text); display: flex; gap: 10px; padding: 10px; border-radius: var(--r-md); text-align: left; }
+.export-menu-pop button:hover { background: var(--accent-soft); }
+.export-menu-pop button > span { display: flex; flex-direction: column; gap: 2px; }
+.export-menu-pop strong { font-size: 12.5px; }
+.export-menu-pop small { color: var(--text-dim); font-size: 10.5px; line-height: 1.35; }
+
+@media (max-width: 1080px) {
+  .topbar-project-context { max-width: calc(var(--app-viewport-w, 100vw) * 0.44); }
+}
+
+@media (max-width: 760px) {
+  .topbar-project-context {
+    display: none;
+    max-width: calc(var(--app-viewport-w, 100vw) * 0.46);
+    height: 30px;
+    min-height: 30px;
+  }
+  .topbar-project-code { padding: 0 6px; font-size: 9.5px; }
+  .topbar-project-context strong.topbar-project-name { padding: 0 7px 0 5px; font-size: 12.5px; }
+}
+
+/* Kalıcılaştırma bildirimi: sağ alt köşenin tek sahibi. */
+.persistence-status {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: var(--z-popover);
+  width: min(400px, calc(var(--app-viewport-w, 100vw) - 32px));
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+}
+.persistence-status.is-error {
+  border-color: color-mix(in oklab, var(--status-overdue) 55%, var(--border));
+  background: color-mix(in oklab, var(--status-overdue) 7%, var(--bg-elev));
+}
+.persistence-status-line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+.persistence-status-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--status-overdue);
+  font-size: 12.5px;
+}
+.persistence-status-head strong { flex: 1; }
+.persistence-status-message {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.persistence-status-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+.persistence-status-meta .badge { font-size: 9.5px; letter-spacing: 0.04em; }
+
+@media (max-width: 760px) {
+  .persistence-status { right: 10px; bottom: 10px; }
+}
+
+/* ── Açılış perdesi (veri yükleme / yükleme hatası) ───────────────
+   Perde uygulama ızgarasının dışındadır: `.app` iki sütunludur ve ilk sütun
+   kenar çubuğuna ayrılmıştır. Perde o ızgarayı kullandığında kart 240 piksellik
+   sütuna sıkışıp ekranın solunda kırpılıyordu. */
+.app-boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+  overflow: hidden;
+  z-index: 40;
+}
+.app-boot-aura {
+  position: absolute;
+  inset: -30% -10% auto -10%;
+  height: 70%;
+  pointer-events: none;
+  background:
+    radial-gradient(50% 60% at 50% 40%, color-mix(in oklab, var(--accent) 22%, transparent), transparent 70%),
+    radial-gradient(38% 48% at 78% 18%, color-mix(in oklab, var(--c-cyan, var(--accent)) 14%, transparent), transparent 72%);
+  filter: blur(2px);
+  opacity: .85;
+}
+.app-boot-card {
+  position: relative;
+  width: min(520px, calc(var(--app-viewport-w, 100vw) - 40px));
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  text-align: center;
+  padding: 34px 32px 30px;
+  border-radius: 20px;
+  border: 1px solid var(--chrome-border);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--accent) 7%, var(--bg-elev)), var(--bg-elev)) padding-box;
+  box-shadow:
+    0 1px 0 color-mix(in oklab, white 10%, transparent) inset,
+    0 24px 60px -24px oklch(0% 0 0 / .55),
+    0 2px 10px -4px oklch(0% 0 0 / .3);
+  animation: app-boot-rise .45s cubic-bezier(.2, .8, .2, 1) both;
+}
+.app-boot-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  border-radius: 20px 20px 0 0;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: .9;
+}
+.app-boot-brand { display: flex; align-items: center; gap: 14px; }
+/* Ürün adı perdenin ana kimliğidir; küçük bir alt satır gibi görünmemelidir. */
+.app-boot-wordmark {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  column-gap: 7px;
+  font-size: 26px;
+  line-height: 1.05;
+  letter-spacing: -.025em;
+}
+.app-boot-wordmark span { font-weight: 750; color: var(--text); }
+.app-boot-wordmark strong { font-weight: 750; color: var(--accent); }
+.app-boot-wordmark small {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+.app-boot-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 750;
+  letter-spacing: -.02em;
+  color: var(--text);
+}
+.app-boot-sub {
+  margin: 0;
+  max-width: 36ch;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.app-boot-progress {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--bg-elev-2);
+  overflow: hidden;
+}
+.app-boot-progress > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: app-boot-sweep 1.35s cubic-bezier(.65, 0, .35, 1) infinite;
+}
+.app-boot-steps { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+/* Adımlar sırayla vurgulanır: gerçek yüzde uydurmadan hangi aşamanın
+   hazırlandığını anlatan sakin bir gösterge. */
+.app-boot-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: color .35s ease, border-color .35s ease, background .35s ease;
+  animation: app-boot-step-in .4s cubic-bezier(.2, .8, .2, 1) both;
+  animation-delay: var(--step-delay, 0ms);
+}
+.app-boot-step.is-active {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  background: color-mix(in oklab, var(--accent) 12%, var(--bg-elev-2));
+}
+.app-boot-step.is-active svg { color: var(--accent); }
+@keyframes app-boot-step-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.app-boot-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+
+@keyframes app-boot-rise {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes app-boot-sweep {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(275%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-boot-card,
+  .app-boot-step { animation: none; }
+  .app-boot-progress > span { animation-duration: 3s; }
+}
+.reduce-motion .app-boot-card,
+.reduce-motion .app-boot-step { animation: none; }

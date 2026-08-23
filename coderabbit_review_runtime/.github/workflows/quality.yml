@@ -1,0 +1,51 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js 24.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Refresh lockfile for Windows SQL driver
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-package-lock
+          path: package-lock.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Run lint
+        run: npm run lint
+      - name: Run automated tests
+        run: npm test -- --test-concurrency=1 --test-reporter=junit --test-reporter-destination=test-results.xml
+      - name: Upload automated test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+      - name: Build production application
+        id: production-build
+        run: npm run build 2>&1 | tee build-output.log
+      - name: Upload production build log
+        if: failure() && steps.production-build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-build-log
+          path: build-output.log
