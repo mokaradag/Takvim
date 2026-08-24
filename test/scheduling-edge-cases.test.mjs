@@ -220,8 +220,14 @@ test('holidayFor accepts Date instances and returns null for normal days', () =>
   assert.equal(holidayFor('2026-07-16'), null);
 });
 
-test('isWorkingDay respects an explicitly empty working-day calendar', () => {
-  assert.equal(isWorkingDay('2026-07-22', noWorkCalendar), false);
+test('an empty working-day list falls back to the default working week', () => {
+  // Boş liste GEÇERLİ bir yapılandırma değildir: sunucu, çalışma günü satırı
+  // olmayan takvimi `workingDays: []` olarak yansıtıyor ve her arama
+  // karşılıksız kalıyordu. Varsayılan haftaya düşmek tek tutarlı davranıştır.
+  assert.deepEqual(noWorkCalendar.workingDays, [...DEFAULT_WORKING_DAYS]);
+  assert.equal(isWorkingDay('2026-07-22', noWorkCalendar), true);
+  assert.equal(isWorkingDay('2026-07-22', { id: 'raw', workingDays: [] }), true);
+  assert.equal(isWorkingDay('2026-07-25', { id: 'raw', workingDays: [] }), false);
 });
 
 test('moveToWorkingDay treats zero direction as forward', () => {
@@ -318,11 +324,19 @@ test('group summaries use explicit progress even when status is done', () => {
   assert.equal(summary.done, 1);
 });
 
-test('group summaries return zero progress when all non-milestone durations are zero', () => {
+test('group summaries fall back to an unweighted average when every duration is zero', () => {
+  // Ağırlıklı ortalamanın paydası 0 olduğunda sabit 0 yazmak, hepsi
+  // tamamlanmış bir grubu %0 gösteriyordu.
   const summary = getGroupScheduleSummaries([['g', [{
     plannedStart: '2026-07-01', plannedFinish: '2026-07-01', plannedDurationDays: 0, progress: 100
   }]]]).g;
-  assert.equal(summary.progress, 0);
+  assert.equal(summary.progress, 100);
+
+  const mixed = getGroupScheduleSummaries([['g', [
+    { plannedStart: '2026-07-01', plannedFinish: '2026-07-01', plannedDurationDays: 0, progress: 100 },
+    { plannedStart: '2026-07-01', plannedFinish: '2026-07-01', plannedDurationDays: 0, progress: 0 }
+  ]]]).g;
+  assert.equal(mixed.progress, 50);
 });
 
 test('done status takes precedence over overdue target dates', () => {
@@ -372,8 +386,14 @@ test('calculatePlannedDurationDays rejects malformed and impossible dates', () =
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-07-22', plannedFinish: '2026-07-21' }), null);
 });
 
-test('calculatePlannedDurationDays returns zero when a valid span has no working days', () => {
+test('calculatePlannedDurationDays never reports zero for a valid non-milestone span', () => {
+  // Hafta sonuna denk gelen tek günlük görev, 0 süreyle Gantt özetlerinde
+  // kilometre taşı gibi çiziliyor ve ilerleme ağırlığını kaybediyordu.
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-07-25', plannedFinish: '2026-07-26' }, {
+    projects, calendars
+  }), 1);
+  // Kilometre taşı yine sıfırdır.
+  assert.equal(calculatePlannedDurationDays({ milestone: true, plannedStart: '2026-07-25', plannedFinish: '2026-07-26' }, {
     projects, calendars
   }), 0);
 });

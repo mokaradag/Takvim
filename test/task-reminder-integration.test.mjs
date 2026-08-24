@@ -454,3 +454,90 @@ test('zamanlayıcı anahtarı yapılandırılmadan kimliksiz erişim açılmaz',
     else process.env.MERGEN_ROTA_REMINDER_CRON_SECRET = previous;
   }
 });
+
+/* ── Elle gönderim: en küçük aralık ─────────────────────────────── */
+
+test('aynı kullanıcı aynı göreve arka arkaya elle hatırlatma gönderemez', async () => {
+  await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const mailer = recordingMailer();
+
+    const first = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send });
+    assert.equal(first.ok, true);
+    assert.equal(mailer.sent.length, 1);
+
+    const second = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send });
+    assert.equal(second.ok, false);
+    assert.equal(second.code, 'MANUAL_REMINDER_RATE_LIMITED');
+    assert.ok(second.retryAfterSeconds > 0);
+    assert.equal(mailer.sent.length, 1, 'sınıra takılan istek ileti üretmemelidir');
+    // Reddedilen istek gönderim kaydı da AÇMAZ.
+    assert.equal(db.taskReminderLog.filter((entry) => entry.ReminderKind === 'MANUAL').length, 1);
+
+    // Aralık dolduğunda yeniden gönderilebilir.
+    const later = await sendManualReminder(pool, {
+      taskId: TASK_ID,
+      actorSicil: 900001,
+      now: new Date(Date.now() + (6 * 60 * 1000)),
+      send: mailer.send
+    });
+    assert.equal(later.ok, true);
+    assert.equal(mailer.sent.length, 2);
+  });
+});
+
+test('en küçük aralık kullanıcı başınadır', async () => {
+  await withReminderStack(reminderSeed(), async ({ pool }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const mailer = recordingMailer();
+    assert.equal((await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send })).ok, true);
+    // Başka bir yönetici aynı görev için kendi hatırlatmasını gönderebilir.
+    assert.equal((await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900002, send: mailer.send })).ok, true);
+    assert.equal(mailer.sent.length, 2);
+  });
+});
+
+/* ── Terk edilmiş aralığın kurtarılması ─────────────────────────── */
+
+test('süreç çökmesiyle PENDING kalan aralık eşikten sonra yeniden gönderilir', async () => {
+  await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+    const { claimAutomaticReminder, ABANDONED_CLAIM_MINUTES } = await import('../src/server/reminders/reminderStore.js');
+    const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
+    const mailer = recordingMailer();
+
+    // Turun ortasında sonlanan bir süreç taklidi: aralık sahiplenildi, gönderim
+    // hiç tamamlanmadı.
+    const { evaluateReminderEligibility } = await import('../src/domain/reminders/reminderPolicy.js');
+    const { loadReminderSettings } = await import('../src/server/reminders/reminderStore.js');
+    const settings = await loadReminderSettings(pool);
+    const now = at(2026, 8, 15, 9);
+    const slotKey = evaluateReminderEligibility(
+      { id: TASK_ID, status: 'in-progress', targetFinish: '2026-08-20' },
+      settings,
+      now
+    ).slotKey;
+    const logId = await claimAutomaticReminder(pool, {
+      taskId: TASK_ID,
+      projectId: PROJECT_ID,
+      slotKey,
+      actorSicil: 900001
+    });
+    assert.ok(logId);
+
+    // Eşik dolmadan tur hiçbir şey göndermez.
+    const early = await runAutomaticReminders(pool, { now, send: mailer.send });
+    assert.equal(early.sent, 0);
+    assert.equal(early.results[0].reason, 'ALREADY_SENT');
+
+    // Kayıt eskitilir: terk edilmiş sayılır ve aralık yeniden sahiplenilir.
+    const stale = db.taskReminderLog.find((entry) => entry.TaskReminderLogId === logId);
+    stale.CreatedAt = new Date(Date.now() - ((ABANDONED_CLAIM_MINUTES + 5) * 60000)).toISOString();
+
+    const recovered = await runAutomaticReminders(pool, { now, send: mailer.send });
+    assert.equal(recovered.sent, 1, 'terk edilmiş aralık kalıcı olarak kaybolmamalıdır');
+    assert.equal(mailer.sent.length, 1);
+    // İkinci satır AÇILMAZ: benzersiz dizin korunur, kayıt yerinde güncellenir.
+    assert.equal(db.taskReminderLog.filter((entry) => entry.ReminderKind === 'AUTOMATIC').length, 1);
+    assert.equal(db.taskReminderLog[0].Status, 'SENT');
+  });
+});

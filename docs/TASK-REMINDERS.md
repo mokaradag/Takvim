@@ -66,6 +66,14 @@ sorumlularına posta göndermeye yeterdi.
 İstemci **alıcı gönderemez**. Uç istek gövdesini hiç okumaz; alıcılar yalnızca
 görevin kendisinden türetilir. Aksi hâlde uç açık bir posta rölesine dönüşürdü.
 
+**En küçük aralık.** Aynı kullanıcı aynı göreve **beş dakikada birden** sık elle
+hatırlatma gönderemez (`MANUAL_REMINDER_MIN_INTERVAL_MS`). Sınır olmadan, görevi
+görebilen herkes uç üzerinde bir döngüyle iş arkadaşlarının posta kutularını
+doldurabilir ve kurumsal SMTP aktarıcısını engelletebilirdi. Sınıra takılan
+istek `429` ve `retry-after` başlığıyla döner, gönderim kaydı **açmaz** ve ileti
+üretmez. Sınır `(TaskId, RequestedBySicil)` başınadır: başka bir yönetici aynı
+görev için kendi hatırlatmasını gönderebilir.
+
 ---
 
 ## 3. Alıcıların çözümü
@@ -271,7 +279,15 @@ Sonuç:
   deneme yapılmaz, bir sonraki aralıkta yeniden denenir;
 - sahiplenilen aralık **her koşulda kapatılır**: beklenmedik bir hata da kaydı
   `FAILED` yapar, böylece geçmişte kalıcı olarak "Sürüyor" görünen ve sorun
-  giderilse bile bir daha denenemeyen aralık oluşmaz.
+  giderilse bile bir daha denenemeyen aralık oluşmaz;
+- **terk edilmiş** kayıt kurtarılır. `catch` bloğu yalnızca JavaScript hatalarını
+  kapsar; sürecin kendisi dağıtım, yeniden başlatma ya da makine çökmesiyle
+  sonlanırsa satır `PENDING` kalıyor, sonraki turlar aralığı "gönderilmiş"
+  sayıyor ve o hatırlatma **kalıcı olarak** kayboluyordu. `ABANDONED_CLAIM_MINUTES`
+  (30 dakika) süresini aşmış bir `PENDING` satır bu yüzden **yerinde** yeniden
+  sahiplenilir (`FailureCode = 'ABANDONED'`); benzersiz dizin korunur, ikinci
+  satır açılmaz. Eşik `SMTP_TIMEOUT_MS` değerinin çok üstündedir ki hâlâ süren
+  bir gönderim yanlışlıkla ikinci kez sahiplenilmesin.
 
 Aralık sahiplenildikten sonra görev **yeniden yüklenir ve uygunluğu yeniden
 değerlendirilir**: tur sürerken tamamlanan, iptal edilen ya da termini değişen
@@ -283,6 +299,11 @@ gönderimler yeni planı susturmaz.
 
 Bir görevin gönderimi başarısız olduğunda **tur durmaz**; öteki uygun görevler
 işlenmeye devam eder.
+
+Durdurma anahtarı (yöneticinin "otomatik gönderim" kapatması) uzun bir tur
+sürerken de geçerlidir: yapılandırma **30 saniyede bir** yeniden okunur. Her aday
+için yeniden okumak, yüzlerce adaylı bir turda aynı sayıda gereksiz SQL
+gidiş-dönüşü demekti.
 
 ---
 
@@ -302,6 +323,8 @@ SMTP_FROM_NAME=MERGEN Rota
 SMTP_USE_STARTTLS=true
 SMTP_TLS_REJECT_UNAUTHORIZED=true
 SMTP_TIMEOUT_MS=20000
+# Yalnızca BİLİNÇLİ bir istisna için; varsayılan false.
+SMTP_ALLOW_INSECURE_AUTH=false
 ```
 
 `SMTP_HOST` ya da `SMTP_FROM` boşsa gönderim kapalıdır: arayüz bunu açıkça
@@ -309,6 +332,20 @@ söyler ve hiçbir zaman "gönderildi" demez. Değerler **çözümlenebilir** de
 olmalıdır: bozuk bir `SMTP_PORT`/`SMTP_TIMEOUT_MS`/boole değeri genel bir sunucu
 hatasına dönüşmez, `SMTP_CONFIG_INVALID` koduyla ayrıca bildirilir (ortam
 değişkeninin içeriği hata iletisine taşınmaz).
+
+`SMTP_FROM` **yapılandırma anında** geçerli bir e-posta adresi olarak doğrulanır.
+Eskiden boş olmayan her değer kabul ediliyor, arayüz SMTP'yi "hazır" gösteriyor
+ve hata ancak MIME kurulurken genel `SMTP_SEND_FAILED` olarak ortaya çıkıyordu.
+Otomatik turda bu, aralık **zaten sahiplenildikten sonra** olduğu için o
+hatırlatma değer düzeltilse bile bir daha gönderilemiyordu.
+
+**Şifrelenmemiş kanalda kimlik bilgisi gönderilmez.** `AUTH LOGIN`/`AUTH PLAIN`
+kullanıcı adını ve parolayı base64 ile taşır; base64 şifreleme değildir.
+`SMTP_USE_STARTTLS=false` yapıldığında bunlar düz TCP üzerinden gidiyordu.
+Gönderim artık `SMTP_INSECURE_AUTH` koduyla reddedilir; şifresiz kanalda kimlik
+doğrulama yalnızca `SMTP_ALLOW_INSECURE_AUTH=true` ile bilinçli olarak açılır.
+STARTTLS yükseltmesinden **önce** düz oturumun dinleyicileri de sökülür, aksi
+hâlde el sıkışma baytları eski konuşmaya akabiliyordu.
 
 Protokol akışı, kurumda çalıştığı doğrulanmış Python (`smtplib`) uygulamasının
 davranışını birebir yeniden üretir:
@@ -383,6 +420,12 @@ kez gönderilmesini engeller. Saatte bir çalıştırmak, gün içinde tanımlan
 görevlerin de zamanında hatırlatılmasını sağlar.
 
 Yanıt gövdesi turun özetini taşır: `evaluated`, `sent`, `skipped`, `failed`.
+
+**Durum kodu turun başlayıp başlamadığını söyler.** Tur hiç başlayamadığında
+(örneğin SMTP yapılandırılmamışken) yanıt `503` döner; başarılı turda `200`
+gelir. İşletim sistemi zamanlayıcısı yalnızca HTTP durumuna — ya da `curl` çıkış
+koduna — bakar, bu yüzden her koşulda `200` dönmek hatırlatmalar tamamen
+dururken çalıştırmayı başarılı gösteriyor ve kimse uyarılmıyordu.
 
 ---
 

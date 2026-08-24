@@ -711,9 +711,13 @@ function runQuery(db, statement, params, { database }) {
     return result([rows]);
   }
   if (sqlText.includes('FROM dbo.MR_Tasks t') && sqlText.includes('@horizonDays')) {
-    const horizon = new Date();
-    horizon.setHours(0, 0, 0, 0);
-    const start = new Date(horizon);
+    // Pencere `@today` parametresinden okunur, süreç saatinden DEĞİL. Gerçek
+    // sorgu da öyle yapar (`TargetFinish >= @today`); duvar saati kullanılınca
+    // sabit terminli sınamalar o tarih geçtiği gün topluca kırılıyordu.
+    const start = params.today
+      ? new Date(`${String(params.today).slice(0, 10)}T00:00:00`)
+      : (() => { const value = new Date(); value.setHours(0, 0, 0, 0); return value; })();
+    const horizon = new Date(start);
     horizon.setDate(horizon.getDate() + Number(params.horizonDays || 7));
     const rows = db.tasks.filter((task) => {
       const project = projectById(db, task.ProjectId);
@@ -734,10 +738,27 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes("ReminderKind = 'AUTOMATIC'") && sqlText.includes('INSERT dbo.MR_TaskReminderLog')) {
     // Benzersiz dizin taklidi: aynı (TaskId, SlotKey) ikinci kez sahiplenilemez.
-    const taken = db.taskReminderLog.some((entry) => sameGuid(entry.TaskId, params.taskId)
+    const existing = db.taskReminderLog.find((entry) => sameGuid(entry.TaskId, params.taskId)
       && entry.SlotKey === params.slotKey
       && entry.ReminderKind === 'AUTOMATIC');
-    if (taken) return result([[{ TaskReminderLogId: null }]]);
+    if (existing) {
+      // TERK EDİLMİŞ kaydın yeniden sahiplenilmesi: süreç gönderim sırasında
+      // sonlandığında satır `PENDING` kalır ve eşik geçtikten sonra o aralık
+      // yeniden denenebilir olmalıdır.
+      const staleMinutes = Math.max(1, Number(params.staleMinutes) || 30);
+      const staleBefore = Date.now() - (staleMinutes * 60000);
+      const abandoned = existing.Status === 'PENDING'
+        && new Date(existing.CreatedAt).getTime() < staleBefore;
+      if (!abandoned) return result([[{ TaskReminderLogId: null }]]);
+      existing.Status = 'PENDING';
+      existing.RequestedBySicil = params.actorSicil ?? null;
+      existing.RecipientCount = 0;
+      existing.RecipientDigest = null;
+      existing.FailureCode = 'ABANDONED';
+      existing.CreatedAt = new Date().toISOString();
+      existing.CompletedAt = null;
+      return result([[{ TaskReminderLogId: existing.TaskReminderLogId }]]);
+    }
     const logId = db.taskReminderLog.length + 1;
     db.taskReminderLog.push({
       TaskReminderLogId: logId,
@@ -754,6 +775,14 @@ function runQuery(db, statement, params, { database }) {
       CompletedAt: null
     });
     return result([[{ TaskReminderLogId: logId }]]);
+  }
+  if (sqlText.includes("ReminderKind = 'MANUAL'") && sqlText.includes('ORDER BY TaskReminderLogId DESC')) {
+    const rows = db.taskReminderLog
+      .filter((entry) => sameGuid(entry.TaskId, params.taskId)
+        && entry.ReminderKind === 'MANUAL'
+        && Number(entry.RequestedBySicil) === Number(params.actorSicil))
+      .sort((left, right) => right.TaskReminderLogId - left.TaskReminderLogId);
+    return result([rows.slice(0, 1).map((entry) => ({ CreatedAt: entry.CreatedAt }))]);
   }
   if (sqlText.includes("VALUES(@taskId, @projectId, 'MANUAL'")) {
     const logId = db.taskReminderLog.length + 1;

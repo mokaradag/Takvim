@@ -21,7 +21,7 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_TaskAssignees` | Normalized Task-to-Sicil assignments | PK `(TaskId, Sicil)`; critical `IX_MR_TaskAssignees_Sicil_Task` |
 | `MR_TaskDependencies` | Normalized FS/SS/FF/SF relationships | PK `TaskDependencyId`; same-Project composite Task FKs; unique relationship; predecessor index |
 | `MR_Baselines` | Immutable baseline headers | PK `BaselineId`; Project lookup; one primary baseline per Project |
-| `MR_TaskBaselineSnapshots` | Immutable planned Task snapshots | PK `(BaselineId, TaskId)`; Task lookup; deliberately no FK to current Task |
+| `MR_TaskBaselineSnapshots` | Immutable planned Task snapshots | PK `(BaselineId, TaskId)`; Task lookup; deliberately no FK to current Task (see *Baseline history*) |
 | `MR_AuditLog` | Append-only committed business audit | identity PK; Project/time, actor/time, entity/time and correlation indexes |
 | `MR_CorporateWbsSyncState` | CN43N synchronization fingerprints per corporate project | PK `ProjectCode` (`nvarchar(255)`, same width as `MR_Projects.ProjectCode`); `ContentHash` (SHA-256 hex), `NodeCount`, `SyncedAt` |
 | `MR_ReminderSettings` | Single-row reminder template and automatic policy | PK `SettingsId` with `CHECK (SettingsId = 1)`; rowversion |
@@ -71,7 +71,7 @@ Assignments store one row per `(TaskId, Sicil)`. No comma-separated identity fie
 
 ## Baseline history
 
-A baseline snapshot can outlive its current Task. Therefore `MR_TaskBaselineSnapshots.TaskId` is indexed but intentionally has no FK to `MR_Tasks`. Deleting a current Task does not rewrite or silently delete historical snapshots. Normal Task/WBS mutations never update baseline rows.
+A baseline snapshot can outlive its current Task. Therefore `MR_TaskBaselineSnapshots.TaskId` is indexed but intentionally has no FK to `MR_Tasks`; the create script states the same decision at the table definition so it is not read as an oversight. Deleting a current Task does not rewrite or silently delete historical snapshots — adding the constraint would let a delete rewrite variance history retroactively. Normal Task/WBS mutations never update baseline rows.
 
 ## Audit model
 
@@ -88,7 +88,9 @@ Reads only:
 - `ProjeKodu`
 - `ProjeAdi`
 
-from `A01_ProjeUrunFaaliyetRaporu`, filters blank codes, and uses `GROUP BY Tur, Tur_Aciklama, ProjeKodu, ProjeAdi`. No wide source columns or `SELECT *` are permitted.
+from `A01_ProjeUrunFaaliyetRaporu`, filters blank codes, and groups by the **normalized** code, `UPPER(NULLIF(LTRIM(RTRIM(ProjeKodu)), ''))`. No wide source columns or `SELECT *` are permitted.
+
+Grouping by the raw columns produced several rows for one `ProjectCode`: source rows `' abc '` and `'ABC'` formed two groups that both normalized to `ABC`, and one code carrying two different `ProjeAdi` or `Tur_Aciklama` values had the same effect. `UX_MR_Projects_ProjectCode` is unique on the code, so a synchronization that upserts one row per view row either failed with a duplicate-key violation or wrote a nondeterministic project name depending on row order. The remaining columns are therefore aggregated with `MIN(...)`, which picks one deterministic value per code.
 
 ### `MR_V_CorporateProjectAccess`
 
@@ -107,6 +109,8 @@ Normalizes HR02 by Sicil and chooses one deterministic row for duplicate Sicil v
 `MR_ReminderSettings` holds exactly one row. The editable e-mail template (`SubjectTemplate`, `BodyTemplate`) and the automatic policy (`AutomaticEnabled`, `WindowValue`, `WindowUnit`, `FrequencyValue`, `FrequencyUnit`) live here — not in `.env.local` — because they are administrator-editable application data, not deployment configuration. Only SMTP connection settings and the scheduler secret are environment variables. The row is seeded with the default Turkish template and `AutomaticEnabled = 0`, so an upgrade never starts sending mail on its own.
 
 `MR_TaskReminderLog` serves two purposes at once. It is the audit history of every attempt (`ReminderKind` = `MANUAL`/`AUTOMATIC`, `Status` = `PENDING` → `SENT`/`FAILED`, `RecipientCount`, `RecipientDigest`, `FailureCode`, `RequestedBySicil`, `CreatedAt`, `CompletedAt`), and it is the duplicate-send claim: an automatic pass inserts the row carrying the deterministic `SlotKey` as `PENDING` *before* dialling SMTP, then completes it. `UX_MR_TaskReminderLog_AutomaticSlot` makes that insert the mutual-exclusion primitive, so the same slot cannot be claimed twice across restarts or by two application instances racing on the same schedule. A slot whose send later fails stays claimed; the retry happens in the next slot rather than in a tight loop.
+
+A `PENDING` row is not claimed forever, though. The service's `catch` block covers JavaScript exceptions only, so a process that ends mid-send (deploy, restart, host failure) used to leave the slot claimed permanently and that reminder could never be delivered. `REMINDER_CLAIM_SQL` therefore re-claims a `PENDING` row older than 30 minutes **in place** — the row is reused, marked `FailureCode = 'ABANDONED'` and re-stamped, so the filtered unique index still holds and no second row appears. The threshold is far above `SMTP_TIMEOUT_MS` so a send that is still running is never re-claimed.
 
 The index is filtered on `ReminderKind = 'AUTOMATIC'`, so manual sends are outside it entirely: a user may deliberately send a second reminder for the same task. Manual rows still carry a slot key (`manual:<uuid>`) so every row has a stable identity.
 

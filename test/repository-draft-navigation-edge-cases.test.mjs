@@ -157,18 +157,27 @@ test('mock repository deduplicates deletion IDs in commit results', async () => 
   assert.deepEqual(result.taskDeletes, ['t1', 't2']);
 });
 
-test('mock repository deletion wins over an upsert for the same existing task', async () => {
+test('mock repository rejects a change set that both upserts and deletes one task', async () => {
+  // Eskiden silme kazanıyor, ekleme sessizce düşüyor ve çağrı yine de başarıyla
+  // çözülüyordu: istemci durumu ile depo anlık görüntüsü ayrışıyordu.
   const repository = createMockRepository(seed());
-  await repository.commitChanges({
-    taskUpserts: [{ ...seed().tasks[0], task: 'Should not survive' }],
-    taskDeletes: ['t1']
-  });
-  assert.equal((await repository.loadSnapshot()).tasks.some((task) => task.id === 't1'), false);
+  await assert.rejects(
+    () => repository.commitChanges({
+      taskUpserts: [{ ...seed().tasks[0], task: 'Should not survive' }],
+      taskDeletes: ['t1']
+    }),
+    (error) => error.code === 'MUTATION_FAILED' && /hem güncellenip hem silinemez/.test(error.message)
+  );
+  // Reddedilen küme anlık görüntüyü DEĞİŞTİRMEZ.
+  assert.equal((await repository.loadSnapshot()).tasks.some((task) => task.id === 't1'), true);
 });
 
-test('mock repository deletion wins over insertion of a new task with the same ID', async () => {
+test('mock repository rejects a change set that inserts and deletes the same new task id', async () => {
   const repository = createMockRepository(seed());
-  await repository.commitChanges({ taskUpserts: [{ id: 't3', task: 'Three' }], taskDeletes: ['t3'] });
+  await assert.rejects(
+    () => repository.commitChanges({ taskUpserts: [{ id: 't3', task: 'Three' }], taskDeletes: ['t3'] }),
+    (error) => error.code === 'MUTATION_FAILED'
+  );
   assert.equal((await repository.loadSnapshot()).tasks.some((task) => task.id === 't3'), false);
 });
 

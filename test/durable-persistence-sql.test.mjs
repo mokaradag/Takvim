@@ -62,7 +62,14 @@ test('corporate Project view uses only approved A01 columns and GROUP BY', () =>
   assert.match(view, /Tur_Aciklama/);
   assert.match(view, /ProjeKodu/);
   assert.match(view, /ProjeAdi/);
-  assert.match(view, /GROUP BY\s+Tur,\s*Tur_Aciklama,\s*ProjeKodu,\s*ProjeAdi/i);
+  // Gruplama NORMALLEŞTİRİLMİŞ koda göredir: ham sütunlarla gruplanınca
+  // ' abc ' ve 'ABC' iki satır üretiyor, aynı ProjectCode iki kez dönüyor ve
+  // benzersiz kod dizini yüzünden eşitleme ya çöküyor ya da belirsiz bir proje
+  // adı yazıyordu.
+  assert.match(view, /GROUP BY\s+UPPER\(NULLIF\(LTRIM\(RTRIM\(ProjeKodu\)\)/i);
+  assert.doesNotMatch(view, /GROUP BY\s+Tur,/i);
+  // Kod başına TEK ve belirlenimci ad seçilir.
+  assert.match(view, /MIN\(COALESCE\(NULLIF\(LTRIM\(RTRIM\(ProjeAdi\)\)/i);
   assert.doesNotMatch(view, /SELECT\s+\*/i);
   const identifiers = [...view.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\b/g)].map((match) => match[1]);
   for (const forbidden of ['Masraf', 'Butce', 'Tarih', 'Aciklama2']) assert.equal(identifiers.includes(forbidden), false);

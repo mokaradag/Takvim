@@ -41,7 +41,7 @@ süzülmüş anlık görüntüler ve kısmi proje CPM bastırması **değişmemi
 | `/auth/implicit-callback` | GET | **(Implicit köprü)** URL parçasını okuyup hemen silen küçük geri dönüş sayfası |
 | `/api/mergen-rota/auth/implicit-session` | POST | **(Implicit köprü)** İşlem çerezi + `state` + `Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir |
 | `/api/mergen-rota/auth/session` | POST | Genel uyumluluk: `Authorization: Bearer` jetonunu HttpOnly oturuma çevirir |
-| `/api/mergen-rota/auth/logout` | POST/GET | MERGEN Rota oturumunu kapatır, Keycloak `end_session` adresini verir |
+| `/api/mergen-rota/auth/logout` | POST | MERGEN Rota oturumunu kapatır, Keycloak `end_session` adresini verir (**aynı kaynak** zorunlu) |
 
 Korunan veri uçları değişmedi: `GET /api/mergen-rota/session`,
 `GET /api/mergen-rota/snapshot`, `POST /api/mergen-rota/commit`. Her mutasyon
@@ -158,6 +158,13 @@ HttpOnly oturuma çevrilir. Erişim jetonu `localStorage`'da saklanmaz.
 ## 3. Zorunlu Keycloak claim'leri
 
 Doğrulanan standart claim'ler: `iss`, `exp`, `aud`, `azp`, `typ`, `nbf`, `iat`.
+
+`typ` claim'i **zorunludur** ve erişim jetonu sınırında yalnızca `Bearer`
+kabul edilir. Keycloak erişim jetonuna `typ: 'Bearer'`, kimlik jetonuna
+`typ: 'ID'` yazar; liste ikisini birden kabul ederken (ve claim eksikse denetimi
+tümüyle atlarken) issuer, kitle, yetkili taraf ve kimlik alanları geçerli olan
+**imzalı bir kimlik jetonu** da uygulama oturumu açabiliyordu.
+
 Kimlik için okunan claim'ler:
 
 | Claim | Kullanım |
@@ -197,6 +204,15 @@ Kimlik için okunan claim'ler:
 - **Kapalı başarısızlık**: JWKS alınamıyorsa, anahtar bilinmiyorsa, imza
   geçersizse, süre dolmuşsa, issuer/kitle/istemci doğrulaması başarısızsa veya
   Sicil çözülemiyorsa istek reddedilir.
+- Bozuk bir Sicil claim'i **kullanıcı adı yedeğine düşmez**. Denetim claim adını
+  `KEYCLOAK_CLAIM_MAP` üzerinden okur; sabit `'sicil'` metni, eşleme
+  değiştiğinde bu kapalı başarısızlığı sessizce devre dışı bırakıyordu.
+- Kimlik sağlayıcısının **arızası** yetkisizlik değildir: jeton ucundan gelen
+  `5xx` yanıtı `DATABASE_UNAVAILABLE` olarak bildirilir. `UNAUTHORIZED` demek,
+  kullanıcıyı erişilemeyen sağlayıcıya karşı yönlendirme döngüsüne sokuyordu.
+- `SSO_KEYCLOAK_URL` içindeki gömülü realm ile `MERGEN_ROTA_KEYCLOAK_REALM`
+  **çelişiyorsa** issuer üretilmez ve yapılandırma hatası bildirilir; realm
+  değeri sessizce yok sayılmaz.
 
 ---
 
@@ -225,7 +241,21 @@ bulunmaz.
 `POST /api/mergen-rota/auth/logout` her durumda MERGEN Rota çerezini temizler
 (Keycloak yapılandırması eksik olsa bile) ve `endSessionUrl` döndürür. İstemci
 yönlendirmeyi kendisi yapar; bu, fetch tabanlı çıkışta yönlendirme döngüsünü
-önler. `GET` sürümü doğrudan Keycloak `end_session` adresine yönlendirir.
+önler.
+
+**Çerez temizleyen bir `GET` ucu yoktur** ve `POST` yalnızca **aynı kaynaktan**
+kabul edilir. Üçüncü taraf bir sayfa, tarayıcıyı `GET .../auth/logout` adresine
+yönlendirerek ya da siteler arası bir form göndererek her kullanıcıyı zorla
+oturumdan düşürebiliyordu. Tarayıcı `POST` isteklerinde `Origin` başlığını her
+zaman gönderir: başlık varsa isteğin kendi kaynağıyla eşleşmelidir, aksi hâlde
+uç `403` döner. Başlık hiç yoksa istek tarayıcıdan gelmiyordur (betik, test,
+sunucudan sunucuya) ve CSRF vektörü oluşmaz.
+
+Implicit köprünün geri dönüş sayfası, `returnTo` değerini **denetim
+karakterleri temizlendikten sonra** doğrular ve yapılandırılmış uygulama köküne
+(`APP_ROOT_PATH`) düşer. Tarayıcı adresi çözmeden önce sekme/CR/LF karakterlerini
+attığı için `"/\t/evil.example"` gibi bir değer denetimden geçip
+`//evil.example` olarak çözülüyordu.
 
 ---
 

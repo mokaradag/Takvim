@@ -1,0 +1,4 @@
+# Windows toplu iş dosyaları CRLF ile saklanır: `cmd.exe`, LF satır sonlu bir
+# betikte `if not defined ... (` gibi çok satırlı blokları hatalı ayrıştırabilir.
+*.cmd text eol=crlf
+*.bat text eol=crlf
