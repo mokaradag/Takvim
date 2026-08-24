@@ -16,6 +16,20 @@
  * certificate contents, and never attempts to capture a real access token.
  */
 const { loadEnvConfig } = require('@next/env');
+
+/**
+ * Every outbound request carries a DEADLINE.
+ *
+ * A filtered corporate firewall drops the SYN packet instead of rejecting it.
+ * Without a timeout the diagnostic hangs with no output and the operator has to
+ * interrupt it, which defeats the purpose of this script: a timeout turns that
+ * case into an actionable message.
+ */
+const FETCH_TIMEOUT_MS = 15000;
+
+function requestSignal() {
+  return AbortSignal.timeout(FETCH_TIMEOUT_MS);
+}
 const crypto = require('node:crypto');
 
 const FLOWS = { AUTHORIZATION_CODE: 'authorization-code', IMPLICIT_BRIDGE: 'implicit-bridge' };
@@ -99,7 +113,7 @@ async function inspectLiveLoginRoute({ callbackUrl, expectations }) {
   const localLoginUrl = `${localScheme}//127.0.0.1:${localPort}/api/mergen-rota/auth/login`;
 
   try {
-    const liveResponse = await fetch(localLoginUrl, { redirect: 'manual' });
+    const liveResponse = await fetch(localLoginUrl, { redirect: 'manual', signal: requestSignal() });
     const liveLocation = liveResponse.headers.get('location');
     const setCookie = liveResponse.headers.get('set-cookie') || '';
     let liveInfo = null;
@@ -162,6 +176,7 @@ async function diagnoseAuthorizationCode({ authorizationEndpoint, tokenEndpoint,
   }).toString();
 
   const authorizationResponse = await fetch(authorizationUrl, {
+    signal: requestSignal(),
     redirect: 'manual',
     headers: { accept: 'text/html,application/xhtml+xml' }
   });
@@ -193,6 +208,7 @@ async function diagnoseAuthorizationCode({ authorizationEndpoint, tokenEndpoint,
   if (clientSecret) tokenBody.set('client_secret', clientSecret);
 
   const tokenResponse = await fetch(tokenEndpoint, {
+    signal: requestSignal(),
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
@@ -264,6 +280,7 @@ async function diagnoseImplicitBridge({ authorizationEndpoint, clientId, implici
   }).toString();
 
   const authorizationResponse = await fetch(authorizationUrl, {
+    signal: requestSignal(),
     redirect: 'manual',
     headers: { accept: 'text/html,application/xhtml+xml' }
   });
@@ -361,6 +378,7 @@ async function main() {
   printHeading('TEST 2 — OIDC discovery and Node TLS trust');
   const discoveryUrl = `${issuer}/.well-known/openid-configuration`;
   const discoveryResponse = await fetch(discoveryUrl, {
+    signal: requestSignal(),
     headers: { accept: 'application/json' }
   });
   const discoveryBody = await readJsonSafely(discoveryResponse);

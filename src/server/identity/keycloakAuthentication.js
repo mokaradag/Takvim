@@ -1,7 +1,7 @@
 import 'server-only';
 import { ServerPersistenceError } from '../errors.js';
 import { assertKeycloakConfigured, readKeycloakConfig } from './keycloakConfig.js';
-import { extractKeycloakIdentity, maskIdentityForLog } from './keycloakClaims.js';
+import { extractKeycloakIdentity, KEYCLOAK_CLAIM_MAP, maskIdentityForLog } from './keycloakClaims.js';
 import { createKeycloakJwksClient } from './keycloakJwks.js';
 import { verifyKeycloakToken } from './keycloakToken.js';
 import { resolveSicilFromUsername } from './resolveSicilFromUsername.js';
@@ -75,7 +75,9 @@ export async function authenticateAccessToken(token, {
   // İmzalı olsa bile mevcut fakat bozuk bir Sicil değeri kimlik kaynağını
   // sessizce değiştirmemeli; aksi hâlde `0` gibi değerler dizin eşleşmesiyle
   // geçerli bir oturuma dönüşebilir.
-  if (Object.hasOwn(claims, 'sicil')) {
+  // Claim ADI eşlemeden okunur: sabit 'sicil' metni, eşleme değiştiğinde
+  // denetimi sessizce devre dışı bırakıyordu (kapalı başarısızlık ilkesi).
+  if (Object.hasOwn(claims, KEYCLOAK_CLAIM_MAP.sicil)) {
     logger?.warn?.('MERGEN ROTA AUTH: Sicil claim biçimi geçersiz', maskIdentityForLog(identity));
     throw unauthorized('Kurumsal Sicil bilgisi geçersiz. Sistem yöneticinizle görüşün.');
   }
@@ -134,7 +136,15 @@ export async function exchangeAuthorizationCode({
   } catch (cause) {
     throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Kimlik sağlayıcısına ulaşılamadı.', { cause });
   }
-  if (!response?.ok) throw unauthorized('Kimlik sağlayıcısı yetkilendirme kodunu kabul etmedi.');
+  if (!response?.ok) {
+    // Sağlayıcı ARIZASI yetkisizlik değildir: 5xx yanıtı `UNAUTHORIZED`
+    // olarak bildirildiğinde kullanıcı oturum açmayı yineliyor ve erişilemeyen
+    // sağlayıcıya karşı yönlendirme döngüsü oluşuyordu.
+    if (Number(response?.status) >= 500) {
+      throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Kimlik sağlayıcısına ulaşılamadı. Lütfen daha sonra yeniden deneyin.');
+    }
+    throw unauthorized('Kimlik sağlayıcısı yetkilendirme kodunu kabul etmedi.');
+  }
 
   let payload;
   try {

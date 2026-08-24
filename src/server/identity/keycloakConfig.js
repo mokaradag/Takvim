@@ -74,7 +74,14 @@ export function deriveIssuerUrl(baseUrl, realm) {
   const base = stripTrailingSlash(text(baseUrl));
   const realmName = text(realm);
   if (!base) return '';
-  if (/\/realms\/[^/]+$/.test(base)) return base;
+  const embedded = /\/realms\/([^/]+)$/.exec(base);
+  if (embedded) {
+    // Adreste gömülü realm ile `MERGEN_ROTA_KEYCLOAK_REALM` ÇELİŞİYORSA bu bir
+    // yapılandırma hatasıdır. Eskiden realm değeri sessizce yok sayılıyor,
+    // uygulama yöneticinin beklemediği bir realm'e karşı doğrulama yapıyordu.
+    if (realmName && decodeURIComponent(embedded[1]) !== realmName) return '';
+    return base;
+  }
   if (!realmName) return '';
   return `${base}/realms/${encodeURIComponent(realmName)}`;
 }
@@ -144,7 +151,9 @@ export function readKeycloakConfig(env = process.env) {
 export function keycloakConfigurationIssues(config) {
   const issues = [];
   if (!config.baseUrl) issues.push('MERGEN_ROTA_KEYCLOAK_BASE_URL');
-  if (!config.issuerUrl) issues.push('MERGEN_ROTA_KEYCLOAK_REALM');
+  // Realm yalnızca temel adres VARKEN raporlanır: adres eksikken iki değişkeni
+  // birden bildirmek, yöneticinin asıl eksiği bulmasını zorlaştırıyordu.
+  if (config.baseUrl && !config.issuerUrl) issues.push('MERGEN_ROTA_KEYCLOAK_REALM');
   if (!config.clientId) issues.push('MERGEN_ROTA_KEYCLOAK_CLIENT_ID');
   if (!config.jwksUri) issues.push('MERGEN_ROTA_KEYCLOAK_JWKS_URL');
   if (!config.sessionSecret || config.sessionSecret.length < 32) issues.push('MERGEN_ROTA_SESSION_SECRET');

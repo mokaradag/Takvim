@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { IMPLICIT_SESSION_ENDPOINT, LOGIN_ENDPOINT } from './keycloakFlows.js';
+import { APP_ROOT_PATH, IMPLICIT_SESSION_ENDPOINT, LOGIN_ENDPOINT } from './keycloakFlows.js';
 
 /**
  * Implicit köprünün tarayıcı tarafı geri dönüş sayfası.
@@ -100,12 +100,13 @@ const STYLES = `
  * SONRA ağ isteği yapılır. Böylece jeton adres çubuğunda, geçmişte, `Referer`
  * başlığında veya yer imlerinde kalmaz.
  */
-function callbackScript({ sessionEndpoint }) {
+function callbackScript({ sessionEndpoint, appRootPath = APP_ROOT_PATH }) {
   return `
 (function () {
   'use strict';
 
   var SESSION_ENDPOINT = ${escapeJsString(sessionEndpoint)};
+  var APP_ROOT = ${escapeJsString(appRootPath)};
 
   function node(id) {
     return document.getElementById(id);
@@ -121,10 +122,18 @@ function callbackScript({ sessionEndpoint }) {
   }
 
   function safeReturnTo(value) {
-    if (typeof value !== 'string') return '/';
-    if (value.charAt(0) !== '/' || value.charAt(1) === '/') return '/';
-    if (value.indexOf('\\\\') >= 0) return '/';
-    return value;
+    if (typeof value !== 'string') return APP_ROOT;
+    // Tarayıcı, adresi çözmeden ÖNCE sekme/CR/LF karakterlerini atar:
+    // '/\t/evil.example' denetimden geçip '//evil.example' olarak çözülüyordu.
+    // Denetim bu yüzden denetim karakterleri temizlendikten SONRA yapılır.
+    var cleaned = '';
+    for (var index = 0; index < value.length; index += 1) {
+      var code = value.charCodeAt(index);
+      if (code > 31 && code !== 127) cleaned += value.charAt(index);
+    }
+    if (cleaned.charAt(0) !== '/' || cleaned.charAt(1) === '/') return APP_ROOT;
+    if (cleaned.indexOf('\\\\') >= 0) return APP_ROOT;
+    return cleaned;
   }
 
   var hash = window.location.hash || '';

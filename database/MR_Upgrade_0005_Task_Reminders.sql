@@ -88,6 +88,16 @@ GO
 BEGIN TRY
     BEGIN TRANSACTION;
 
+    /* GO bir ISTEMCI toplu is ayracidir, islem siniri DEGILDIR: sqlcmd ve SSMS,
+       -b verilmedikce ilk toplu is hata verse bile bir sonrakini calistirir.
+       Bu toplu is bu yuzden kendi on kosulunu dogrular. */
+    IF OBJECT_ID(N'dbo.MR_SchemaMigrations', N'U') IS NULL
+        THROW 51000, 'MERGEN Rota durable schema was not found. Run MR_Create_Durable_Persistence.sql first.', 1;
+
+    IF OBJECT_ID(N'dbo.MR_ReminderSettings', N'U') IS NULL
+        OR OBJECT_ID(N'dbo.MR_TaskReminderLog', N'U') IS NULL
+        THROW 51003, 'Reminder tables are missing. The first batch of MR_Upgrade_0005 did not complete.', 1;
+
     /* Kopya gonderimi ONLEYEN benzersiz dizin. Elle gonderimler haric tutulur:
        kullanici ayni goreve bilerek ikinci bir hatirlatma gonderebilir. */
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_MR_TaskReminderLog_AutomaticSlot' AND object_id = OBJECT_ID(N'dbo.MR_TaskReminderLog'))

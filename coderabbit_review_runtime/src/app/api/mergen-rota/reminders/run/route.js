@@ -39,7 +39,14 @@ export async function POST(request) {
     }
 
     const summary = await runAutomaticReminders(pool, { actorSicil });
-    return Response.json(summary, { headers: { 'cache-control': 'no-store' } });
+    // Tur BAŞLAYAMADIYSA durum kodu da bunu söyler. İşletim sistemi
+    // zamanlayıcısı yalnızca HTTP durumuna (ya da `curl` çıkış koduna) bakar;
+    // her koşulda 200 dönmek, hatırlatmalar tamamen dururken çalıştırmayı
+    // başarılı gösteriyordu.
+    return Response.json(summary, {
+      status: summary.ok === false ? 503 : 200,
+      headers: { 'cache-control': 'no-store' }
+    });
   } catch (error) {
     return safeErrorResponse(error);
   }

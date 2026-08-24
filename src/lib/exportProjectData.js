@@ -134,8 +134,11 @@ body{font-family:Arial,sans-serif;color:#172033}h1{font-size:22px;margin:0 0 6px
 }
 
 export function safeExportName(value) {
+  // `NFKD`, `ğ ü ş ö ç İ` harflerini taban harf + birleşen imle ayrıştırıyor;
+  // izin listesi yalnızca BİRLEŞİK biçimleri tuttuğu için her im `_` oluyordu
+  // ("Ağustos" → "Ag_ustos"). `NFC` birleşik biçimi korur.
   return clean(value || 'MERGEN_Rota')
-    .normalize('NFKD')
+    .normalize('NFC')
     .replace(/[^a-zA-Z0-9ğüşöçıİĞÜŞÖÇ_-]+/g, '_')
     .replace(/^_+|_+$/g, '') || 'MERGEN_Rota';
 }

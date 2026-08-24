@@ -14,7 +14,8 @@
  * görüyor ve `AppShell` monte olduğunda ekran bir kez zıplıyordu.
  *
  * Bu yüzden saklanan tercihler, uygulama paketi çalışmadan ÖNCE gövdeye
- * yazılır. Betik `<head>` içinde engelleyici olarak çalışır; tek yaptığı
+ * yazılır. Betik `<body>` etiketinin İLK ÇOCUĞU olarak engelleyici çalışır
+ * (bkz. app/layout.js); `document.body` o anda vardır. Tek yaptığı
  * `localStorage` okuyup sınıf/stil yazmaktır.
  */
 
@@ -42,7 +43,7 @@ export function fontScaleStyleForTweaks(tweaks = {}) {
 }
 
 /**
- * `<head>` içine gömülen engelleyici betik.
+ * `<body>` etiketinin ilk çocuğu olarak gömülen engelleyici betik.
  *
  * Kaynak metin olarak tutulur çünkü paket yüklenmeden çalışması gerekir.
  * Depolama okunamıyorsa (gizli sekme, kapalı çerezler) sessizce varsayılanla

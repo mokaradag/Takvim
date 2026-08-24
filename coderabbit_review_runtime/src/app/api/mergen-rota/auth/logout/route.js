@@ -5,8 +5,7 @@ import { AUTH_TRANSACTION_COOKIE_NAME, SESSION_COOKIE_NAME } from '../../../../.
 import {
   authCookieSecurity,
   clearedCookieHeader,
-  jsonResponse,
-  redirectResponse
+  jsonResponse
 } from '../../../../../server/identity/authRouteSupport.js';
 
 export const runtime = 'nodejs';
@@ -35,7 +34,50 @@ function fallbackPostLogoutRedirect(config, requestUrl) {
   return new URL(APP_ROOT_PATH, new URL(requestUrl).origin).toString();
 }
 
+function hostOf(value) {
+  try {
+    return new URL(String(value)).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * İSTEĞİN aynı kaynaktan geldiğini doğrular.
+ *
+ * Üçüncü taraf bir sayfa, çerez temizleyen bu uca form gönderip kullanıcıyı
+ * zorla oturumdan düşürebiliyordu. Tarayıcı `POST` isteklerinde `Origin`
+ * başlığını her zaman gönderir; başlık varsa isteğin kendi kaynağıyla
+ * eşleşmelidir. Başlık hiç yoksa istek tarayıcıdan gelmiyordur (betik, test,
+ * sunucudan sunucuya) ve CSRF vektörü oluşmaz.
+ *
+ * Çerez temizleyen bir `GET` ucu BULUNMAZ: bağlantıya tıklatmak ya da
+ * `<img src>` ile istemek yeterdi.
+ */
+function isSameOriginRequest(request) {
+  const site = request.headers.get('sec-fetch-site');
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+
+  const origin = request.headers.get('origin');
+  if (!origin) return true;
+  const originHost = hostOf(origin);
+  if (!originHost) return false;
+
+  const expected = new Set([
+    request.headers.get('x-forwarded-host'),
+    request.headers.get('host'),
+    hostOf(request.url)
+  ].filter(Boolean).map((value) => String(value).toLowerCase()));
+  return expected.has(originHost);
+}
+
 export async function POST(request) {
+  if (!isSameOriginRequest(request)) {
+    return jsonResponse(
+      { error: { code: 'FORBIDDEN', message: 'Oturum kapatma isteği aynı kaynaktan gelmelidir.', details: null } },
+      { status: 403 }
+    );
+  }
   const config = readKeycloakConfig();
   const postLogoutRedirectUri = fallbackPostLogoutRedirect(config, request.url);
   const endSessionUrl = buildEndSessionUrl({
@@ -47,15 +89,4 @@ export async function POST(request) {
     { signedOut: true, endSessionUrl: endSessionUrl || postLogoutRedirectUri },
     { cookieHeaders: logoutCookies(config, request.url) }
   );
-}
-
-export async function GET(request) {
-  const config = readKeycloakConfig();
-  const postLogoutRedirectUri = fallbackPostLogoutRedirect(config, request.url);
-  const endSessionUrl = buildEndSessionUrl({
-    endSessionEndpoint: config.endSessionEndpoint,
-    clientId: config.clientId,
-    postLogoutRedirectUri
-  });
-  return redirectResponse(endSessionUrl || postLogoutRedirectUri, logoutCookies(config, request.url));
 }

@@ -218,7 +218,14 @@ Her görev için sorumlularına hatırlatma e-postası gönderilebilir. İki ak�
 - **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki modda). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
 - **Otomatik gönderim** — yöneticinin belirlediği pencere (`kalan süre = termin - şimdi`, örn. 7 gün) ve sıklıkla (örn. 2 günde bir) sunucu tarafındaki zamanlayıcı üzerinden. Görev tamamlandığında, iptal edildiğinde, silindiğinde, otomatik gönderim kapatıldığında veya termin gününe ulaşıldığında durur; sınırsız gecikme postası gönderilmez.
 
-Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Hatırlatma** yönetici sayfasından düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur. Ayrıntılar: `docs/TASK-REMINDERS.md`.
+Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Hatırlatma** yönetici sayfasından düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur.
+
+Elle gönderim, aynı kullanıcı–görev çifti için **beş dakikada bir** ile
+sınırlıdır (`429` + `retry-after`); şifrelenmemiş bir SMTP kanalında kimlik
+bilgisi gönderilmez; zamanlayıcı ucu tur hiç başlayamadığında `503` döner. Süreç
+gönderim sırasında sonlanırsa `PENDING` kalan aralık 30 dakika sonra yeniden
+sahiplenilir, böylece o hatırlatma kalıcı olarak kaybolmaz. Ayrıntılar:
+`docs/TASK-REMINDERS.md`.
 
 ## Görünüm tercihleri
 
@@ -245,6 +252,26 @@ Ayrıntılar: `docs/UI-STYLING-ARCHITECTURE.md`.
 Canonical Task; güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`), gerçekleşen tarihleri (`actualStart`, `actualFinish`) ve kalan süreyi (`remainingDurationDays`) ayrı tutar. Project `dataDate` taşır. Baseline verisi ayrı immutable `Baseline` ve `TaskBaselineSnapshot` kayıtlarıdır; normal Task/WBS değişiklikleri eski baseline'ları değiştirmez.
 
 CPM erken/geç tarihler, float, kritik bayraklar, WBS rollup'ları ve Dashboard aggregate'ları SQL'e yazılmaz. Bunlar yalnızca tam Project ağı için türetilir.
+
+### Çalışma günü hesapları SONLANIR
+
+Bütün çalışma günü aramaları sınırlıdır. İki sıradan girdi eskiden tarayıcı
+sekmesini tümüyle donduruyordu — kullanıcıların "görev oluşturup **Tamam**'a
+basınca uygulama donuyor" olarak bildirdiği hata:
+
+- takvimin `workingDays` listesi **boşsa** (sunucu, `MR_CalendarWorkingDays`
+  tablosunda satırı olmayan takvimi böyle yansıtır) `isWorkingDay()` her gün için
+  `false` dönüyor, `moveToWorkingDay()`/`addWorkingDays()` hiç bitmiyordu.
+  `createNewTask()` bu işlevi çağırdığı için o projede görev açmak sekmeyi
+  kilitliyordu. Boş liste artık **varsayılan haftaya** düşer;
+- çözülemeyen bir tarih Geçersiz Tarih üretiyor, `diffWorkingDays()` içindeki
+  eşitlik hiç sağlanmıyordu. Geçersiz tarih artık `0` (ya da girdinin kendisi)
+  döner ve her tarama on yıllık üst sınırda durur.
+
+Kritik yol sayımı da sınırlıdır (`MAX_CRITICAL_PATHS`): art arda elmas desenleri
+yol sayısını üstel büyütür. Kritik **görev** kümesi tam kalır; yalnızca yol
+listesi kesilir ve `criticalPathsTruncated` ile bildirilir. Ayrıntılar:
+`docs/SCHEDULING.md` ve `docs/CPM.md`.
 
 ## Sonraki aşama
 

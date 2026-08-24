@@ -147,6 +147,7 @@ test('calculateCpm returns a canonical empty result for an empty portfolio', () 
     orderedTaskIds: [],
     criticalTaskIds: [],
     criticalPaths: [],
+    criticalPathsTruncated: false,
     tasks: {}
   });
 });

@@ -268,7 +268,11 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
     };
-  }, [anchor, type]);
+    // Kip değişince kutunun YÜKSEKLİĞİ değişir (hazır ayar ızgarası tek girişli
+    // kiplerden çok daha yüksektir). Yerleşim yeniden ölçülmezse görünüm
+    // alanının altında kalan yüksek kip kırpılıyor ve düğmelerine
+    // erişilemiyordu (bkz. DateFilterableTH · DateColumnFilter, aynı kural).
+  }, [anchor, type, dateMode, numMode]);
 
   const apply = () => {
     if (type === 'text' || type === 'single') onChange(q);

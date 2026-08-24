@@ -145,15 +145,20 @@ export default function AppShell() {
   }, [simpleMode, view]);
 
   useEffect(() => {
+    // Basit Modda komut paleti RENDER EDİLMEZ: kısayolu yine de yutmak,
+    // tarayıcının kendi Ctrl+K davranışını hiçbir karşılık vermeden alıyor ve
+    // `cmdOpen` açık kaldığı için Gelişmiş Moda geçildiğinde palet kendiliğinden
+    // açılıyordu.
+    if (simpleMode) return undefined;
     const onKey = (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if ((event.metaKey || event.ctrlKey) && event.key?.toLowerCase() === 'k') {
         event.preventDefault();
         setCmdOpen(true);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [simpleMode]);
 
   const archivedProjectCount = useMemo(() => projects.filter(isArchivedProject).length, [projects]);
   const workspaceProjectOptions = useMemo(() => {

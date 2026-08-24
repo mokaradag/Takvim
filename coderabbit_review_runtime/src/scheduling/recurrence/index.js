@@ -398,7 +398,12 @@ function addSpan(start, span, calendar) {
  */
 function plannedSpanDays(template, calendar) {
   const declared = template?.plannedDurationDays;
-  if (Number.isFinite(declared) && declared >= 0) return Math.round(declared);
+  // `plannedDurationDays` bir İŞ GÜNÜ sayısıdır. Takvim yokken `addSpan` takvim
+  // günü eklediği için bildirilen değer doğrudan kullanılamaz: perşembeden
+  // ertesi çarşambaya uzanan bir şablonun süresi 5 iş günü / 7 takvim günüdür
+  // ve her yineleme iki gün kısa planlanıyordu. Takvim yoksa süre şablonun
+  // KENDİ tarihlerinden ölçülür.
+  if (calendar && Number.isFinite(declared) && declared >= 0) return Math.round(declared);
   if (!template?.plannedFinish) return null;
   return spanBetween(template.plannedStart, template.plannedFinish, calendar);
 }

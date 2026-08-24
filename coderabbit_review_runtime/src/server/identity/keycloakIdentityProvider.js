@@ -37,12 +37,11 @@ export class KeycloakIdentityProvider {
     if (typeof config.sessionSecret !== 'string' || config.sessionSecret.length < 32) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum doğrulaması yapılandırılmamış. Sistem yöneticinizle görüşün.');
     }
-    let cookieValue = null;
-    try {
-      cookieValue = await this.readSessionCookie(SESSION_COOKIE_NAME);
-    } catch {
-      cookieValue = null;
-    }
+    // Çerez okuyucusunun hatası YUTULMAZ. Okuyucu, çerez yokken zaten `null`
+    // döner; `catch` bloğu yalnızca istek bağlamı ve altyapı hatalarını
+    // (örneğin Next.js `DynamicServerError`) yakalayıp kullanıcıya "oturum
+    // düştü" gibi gösteriyor, gerçek nedeni hata işleyicisinden gizliyordu.
+    const cookieValue = await this.readSessionCookie(SESSION_COOKIE_NAME);
     const payload = readSessionPayload(cookieValue, config.sessionSecret, { now: this.now() });
     if (!payload) {
       throw new ServerPersistenceError('SESSION_REQUIRED', 'Oturum bulunamadı veya süresi doldu. Lütfen yeniden oturum açın.');

@@ -1,4 +1,9 @@
-import { depId, dependencyLagDays, relTypeOf } from '../../scheduling/dependencies/index.js';
+import {
+  depId,
+  dependencyLagDays,
+  materializeDependencyLag,
+  relTypeOf
+} from '../../scheduling/dependencies/index.js';
 
 /**
  * Ardıl görev düzenleme ilkeleri.
@@ -162,7 +167,9 @@ export function planSuccessorUpdate(task, successorId, changes, tasks) {
     const current = typeof entry === 'string'
       ? { id: entry, predecessorId: entry, type: relTypeOf(entry), lagValue: 0, lagUnit: 'day' }
       : { ...entry };
-    const updated = { ...current, ...changes };
+    // Eski `lagDays` sayısı, birim değiştirildiğinde açık `lagValue` alanına
+    // taşınır (bkz. materializeDependencyLag).
+    const updated = materializeDependencyLag({ ...current, ...changes });
     return { ...updated, lagDays: dependencyLagDays(updated) };
   });
   return { ok: true, successorId, patch: { deps } };

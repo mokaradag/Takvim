@@ -163,7 +163,13 @@ function moveWbsNode(state, nodeId, targetParentId, index) {
   const target = (state.wbs || []).find((item) => item.id === targetParentId) || null;
   if (!target) return withWbsError(state, 'WBS_PARENT_NOT_FOUND', targetParentId);
 
-  const reparented = node.parentId === target.id ? state : reparentWbs(state, nodeId, targetParentId);
+  // Yalnızca BU geçişin ürettiği hata döndürülür. Ebeveyn değişmediğinde eski
+  // bir `wbsActionError` hâlâ duruyorsa sıralama sessizce düşüyor, indirgeyici
+  // aynı durumu döndürdüğü için kalıcılaştırma boş bir değişiklik kümesi
+  // üretiyordu.
+  const reparented = node.parentId === target.id
+    ? { ...state, wbsActionError: null }
+    : reparentWbs(state, nodeId, targetParentId);
   if (reparented.wbsActionError) return reparented;
 
   const siblings = (reparented.wbs || [])
@@ -288,7 +294,11 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
     baselines: snapshot.baselines || [],
     taskBaselineSnapshots: snapshot.taskBaselineSnapshots || []
   };
-  const tasks = (snapshot.tasks || []).map((task) => normalizeTaskRecord(task, taskContext(base)));
+  // Bağlam görev BAŞINA değil, bir kez kurulur: birleştirilmiş `projects`,
+  // `wbs` ve `people` dizileri her görev için yeniden ayrılınca maliyet
+  // görev × (proje + wbs) kadar büyüyordu.
+  const context = taskContext(base);
+  const tasks = (snapshot.tasks || []).map((task) => normalizeTaskRecord(task, context));
   const nextBase = { ...previous, ...base, tasks };
   const selection = workspaceState(nextBase, previous);
   const selectedTaskId = tasks.some((task) => task.id === selection.selectedTaskId)
@@ -641,7 +651,7 @@ export function createNewTask(state, referenceDate = today(), id = `n-${Date.now
   const selectedProject = state.workspaceMode === WORKSPACE_MODE_PROJECT
     ? candidates.find((project) => project.id === state.selectedProjectId) || null
     : null;
-  const project = explicitProject || selectedProject || state.projects[0] || null;
+  const project = explicitProject || selectedProject || (state.projects || [])[0] || null;
   const person = defaultTaskAssignee(state, project);
   const calendar = resolveProjectCalendar(project, state.calendars);
   const start = moveToWorkingDay(referenceDate, calendar, 1);

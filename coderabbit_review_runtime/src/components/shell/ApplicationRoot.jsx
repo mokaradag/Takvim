@@ -100,14 +100,15 @@ function CorporateSessionGate({ children, onUseDemo }) {
 }
 
 export default function ApplicationRoot() {
-  const [dataMode, setDataModeState] = useState(null);
+  // Saklanan mod İLK RENDER'da okunur. Etkiyle okunduğunda ilk kare her zaman
+  // `DataModeChooser` çiziyor, kullanıcı her yeniden yüklemede pencereyi
+  // görüyor ve o karede yapılan bir tıklama saklanan modu eziyordu. Bileşen
+  // `dynamic(..., { ssr: false })` ile yüklenir (bkz. app/page.js), bu yüzden
+  // tembel başlatıcı hidrasyon uyuşmazlığı üretmez.
+  const [dataMode, setDataModeState] = useState(readInitialDataMode);
   const repository = useMemo(() => dataMode
     ? createRepositoryForDataMode(dataMode, { aliasStorage: browserStorage() })
     : null, [dataMode]);
-
-  useEffect(() => {
-    setDataModeState(readInitialDataMode());
-  }, []);
 
   const setDataMode = async (nextMode) => {
     if (nextMode !== DATA_MODES.DEMO && nextMode !== DATA_MODES.ACTUAL) return;

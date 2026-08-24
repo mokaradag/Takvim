@@ -239,7 +239,9 @@ test('quality workflow continuously runs install, tests, and production build', 
   const source = read('.github/workflows/quality.yml');
   assert.match(source, /run:\s*npm ci/);
   assert.match(source, /run:\s*npm test/);
-  assert.match(source, /run:\s*npm run build/);
+  assert.match(source, /npm run build/);
+  // Boru hattı `tee` yüzünden başarısızlığı yutmaz.
+  assert.match(source, /set -o pipefail/);
   assert.match(source, /pull_request:/);
   assert.match(source, /branches:\s*\n\s*- main/);
 });

@@ -14,6 +14,7 @@ import {
   REMINDER_CLAIM_SQL,
   REMINDER_COMPLETE_SQL,
   REMINDER_HISTORY_SQL,
+  REMINDER_LAST_MANUAL_SQL,
   REMINDER_MANUAL_LOG_SQL,
   REMINDER_SETTINGS_SQL,
   REMINDER_SETTINGS_UPSERT_SQL,
@@ -100,7 +101,17 @@ export function decodeRowVersion(value) {
   if (value == null || value === '') return null;
   if (Buffer.isBuffer(value)) return value;
   const text = String(value).trim();
-  if (!/^0x[0-9a-f]+$/i.test(text)) return null;
+  // "Yok" ile "BOZUK" ayrılır. Çözülemeyen belirteç `null` bağlandığında
+  // yükseltme sorgusu bunu "koşulsuz güncelle" olarak yorumluyor ve iyimser
+  // kilit sessizce devre dışı kalıyordu: kırpılmış bir belirteç gönderen
+  // istemci, beklenen 409 yerine eşzamanlı değişikliği eziyordu.
+  if (!/^0x[0-9a-f]+$/i.test(text)) {
+    throw new ServerPersistenceError(
+      'MUTATION_FAILED',
+      'Geçersiz satır sürümü gönderildi. Sayfayı yenileyip yeniden deneyin.',
+      { status: 400 }
+    );
+  }
   return Buffer.from(text.slice(2), 'hex');
 }
 
@@ -127,7 +138,9 @@ export async function saveReminderSettings(executor, actorSicil, input = {}) {
   request.input('rowVersion', sql.VarBinary(8), decodeRowVersion(input.rowVersion));
   const result = await request.query(REMINDER_SETTINGS_UPSERT_SQL);
 
-  const affected = Number(result?.recordset?.[0]?.AffectedRows ?? 1);
+  // Okunamayan sonuç ÇAKIŞMA sayılır: 1 varsaymak, kaybolan bir güncellemeyi
+  // yöneticiye "kaydedildi" diye bildiriyordu.
+  const affected = Number(result?.recordset?.[0]?.AffectedRows ?? 0);
   if (!affected) {
     throw new ServerPersistenceError(
       'VERSION_CONFLICT',
@@ -202,17 +215,33 @@ export async function loadReminderCandidates(executor, horizonDays, now = new Da
 }
 
 /**
+ * Bir `PENDING` kaydın TERK EDİLMİŞ sayılması için geçmesi gereken süre.
+ *
+ * Gönderim `SMTP_TIMEOUT_MS` kadar sürebilir; eşik bunun çok üzerindedir ki
+ * hâlâ süren bir gönderim yanlışlıkla ikinci kez sahiplenilmesin.
+ */
+export const ABANDONED_CLAIM_MINUTES = 30;
+
+/**
  * Otomatik aralığı sahiplenir.
  *
  * @returns {Promise<number|null>} günlük kaydı kimliği; aralık zaten
- *   sahiplenilmişse `null` (bu turda gönderim YAPILMAZ).
+ *   sahiplenilmişse `null` (bu turda gönderim YAPILMAZ). Süreç çökmesi yüzünden
+ *   `PENDING` kalmış eski bir kayıt yeniden sahiplenilir.
  */
-export async function claimAutomaticReminder(executor, { taskId, projectId, slotKey, actorSicil = null }) {
+export async function claimAutomaticReminder(executor, {
+  taskId,
+  projectId,
+  slotKey,
+  actorSicil = null,
+  staleMinutes = ABANDONED_CLAIM_MINUTES
+}) {
   const request = executor.request();
   request.input('taskId', sql.UniqueIdentifier, taskId);
   request.input('projectId', sql.UniqueIdentifier, projectId || null);
   request.input('slotKey', sql.NVarChar(200), slotKey);
   request.input('actorSicil', sql.Int, actorSicil);
+  request.input('staleMinutes', sql.Int, Math.max(1, Math.trunc(Number(staleMinutes) || ABANDONED_CLAIM_MINUTES)));
   try {
     const result = await request.query(REMINDER_CLAIM_SQL);
     const logId = result.recordset?.[0]?.TaskReminderLogId;
@@ -221,6 +250,28 @@ export async function claimAutomaticReminder(executor, { taskId, projectId, slot
     // Benzersiz dizin ihlali: aralığı başka bir çalıştırma (ya da başka bir
     // uygulama örneği) az önce sahiplendi.
     if (Number(error?.number) === 2601 || Number(error?.number) === 2627) return null;
+    throw error;
+  }
+}
+
+/**
+ * Kullanıcının o göreve yaptığı SON elle gönderimin zamanı.
+ *
+ * @returns {Promise<Date|null>} kayıt yoksa (ya da şema henüz kurulmamışsa) `null`
+ */
+export async function loadLastManualReminderAt(executor, taskId, actorSicil) {
+  if (actorSicil == null) return null;
+  try {
+    const request = executor.request();
+    request.input('taskId', sql.UniqueIdentifier, taskId);
+    request.input('actorSicil', sql.Int, actorSicil);
+    const result = await request.query(REMINDER_LAST_MANUAL_SQL);
+    const createdAt = result.recordset?.[0]?.CreatedAt;
+    if (!createdAt) return null;
+    const value = new Date(createdAt);
+    return Number.isNaN(value.getTime()) ? null : value;
+  } catch (error) {
+    if (isMissingReminderSchema(error)) return null;
     throw error;
   }
 }

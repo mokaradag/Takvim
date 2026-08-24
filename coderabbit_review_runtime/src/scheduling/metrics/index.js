@@ -69,7 +69,14 @@ export function getGroupScheduleSummaries(groups) {
     summaries[groupName] = {
       start,
       end,
-      progress: totalDuration ? Math.round(weightedProgress / totalDuration) : 0,
+      // Bütün görevlerin süresi 0 olduğunda ağırlıklı ortalama tanımsızdır;
+      // sabit 0 yazmak, hepsi tamamlanmış bir grubu %0 gösteriyordu. Bu durumda
+      // AĞIRLIKSIZ ortalamaya düşülür.
+      progress: totalDuration
+        ? Math.round(weightedProgress / totalDuration)
+        : Math.round(scheduled.reduce((sum, task) => (
+          sum + (task.progress != null ? task.progress : (task.status === 'done' ? 100 : 0))
+        ), 0) / scheduled.length),
       items: items.length,
       done: items.filter((task) => task.status === 'done').length
     };

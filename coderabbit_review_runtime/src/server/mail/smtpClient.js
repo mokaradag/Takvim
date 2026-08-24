@@ -61,25 +61,35 @@ export function createSmtpDialogue(socket, timeoutMs) {
     }
   };
 
-  socket.setEncoding('utf8');
-  socket.on('data', (chunk) => { buffer += chunk; flush(); });
-  socket.on('error', (error) => {
+  const onData = (chunk) => { buffer += chunk; flush(); };
+  const onError = (error) => {
     while (waiters.length) waiters.shift().reject(error);
-  });
-  socket.on('close', () => {
+  };
+  const onClose = () => {
     while (waiters.length) {
       waiters.shift().reject(new SmtpError('SMTP_CONNECTION_FAILED', 'SMTP bağlantısı beklenmedik biçimde kapandı.'));
     }
-  });
+  };
+
+  socket.setEncoding('utf8');
+  socket.on('data', onData);
+  socket.on('error', onError);
+  socket.on('close', onClose);
 
   const read = () => new Promise((resolve, reject) => {
+    // Zaman aşımına uğrayan bekleyici KUYRUKTAN DÜŞÜRÜLÜR. Ölü kayıt kuyrukta
+    // kalınca sunucunun bir sonraki satırı ona teslim ediliyor ve bundan sonraki
+    // bütün yanıtlar bir kayıyordu: zaman aşımından sonra devam eden çağıran
+    // yanlış durum kodunu okuyordu.
+    const entry = {};
     const timer = setTimeout(() => {
+      const index = waiters.indexOf(entry);
+      if (index >= 0) waiters.splice(index, 1);
       reject(new SmtpError('SMTP_TIMEOUT', 'SMTP sunucusu zamanında yanıt vermedi.'));
     }, timeoutMs);
-    waiters.push({
-      resolve: (value) => { clearTimeout(timer); resolve(value); },
-      reject: (error) => { clearTimeout(timer); reject(error); }
-    });
+    entry.resolve = (value) => { clearTimeout(timer); resolve(value); };
+    entry.reject = (error) => { clearTimeout(timer); reject(error); };
+    waiters.push(entry);
   });
 
   return {
@@ -91,6 +101,24 @@ export function createSmtpDialogue(socket, timeoutMs) {
         throw new SmtpError(code, `${description} reddedildi (${response.code}).`, { statusCode: response.code });
       }
       return response;
+    },
+    /**
+     * Dinleyicileri SÖKER ve bekleyenleri düşürür.
+     *
+     * STARTTLS yükseltmesinde alttaki yuva `tls.connect({ socket })` ile
+     * sarılır. Düz oturumun `data` dinleyicisi ve `utf8` kodlaması yuvada
+     * kalırsa el sıkışma baytları eski konuşmaya da akar; yükseltmeden önce
+     * konuşma kapatılmalıdır.
+     */
+    dispose() {
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+      socket.removeListener('close', onClose);
+      while (waiters.length) {
+        waiters.shift().reject(new SmtpError('SMTP_CONNECTION_FAILED', 'SMTP oturumu yükseltildi.'));
+      }
+      buffer = '';
+      pending = [];
     }
   };
 }
@@ -176,8 +204,24 @@ export function parseAuthMechanisms(capabilities) {
   return { advertised, mechanisms };
 }
 
-async function authenticate(dialogue, capabilities, { username, password }) {
+/**
+ * Kimlik doğrulama.
+ *
+ * ŞİFRESİZ kanalda kimlik bilgisi GÖNDERİLMEZ. `AUTH LOGIN`/`AUTH PLAIN`
+ * kullanıcı adını ve parolayı base64 ile taşır; base64 şifreleme değildir.
+ * `SMTP_USE_STARTTLS=false` yapıldığında bunlar düz TCP üzerinden gidiyordu.
+ * Şifresiz kanalda kimlik doğrulama ancak `SMTP_ALLOW_INSECURE_AUTH=true` ile
+ * açıkça izin verildiğinde denenir.
+ */
+async function authenticate(dialogue, capabilities, { username, password, secureChannel, allowInsecureAuth }) {
   if (!username) return;
+  if (!secureChannel && !allowInsecureAuth) {
+    throw new SmtpError(
+      'SMTP_INSECURE_AUTH',
+      'Şifrelenmemiş SMTP bağlantısında kimlik doğrulama yapılmaz. STARTTLS açın '
+      + 'ya da bilinçli olarak SMTP_ALLOW_INSECURE_AUTH=true tanımlayın.'
+    );
+  }
   const { advertised, mechanisms } = parseAuthMechanisms(capabilities);
   // Sunucu yeteneklerini hiç bildirmiyorsa da LOGIN denenir: Python karşılığı
   // da aynı sırayla çalışıyor ve kurumsal sunucuda kabul ediliyor.
@@ -249,6 +293,8 @@ export async function sendSmtpMail(config, message) {
     let ehlo = await dialogue.command('EHLO mergen-rota', { description: 'EHLO' });
     if (config.useStartTls) {
       await dialogue.command('STARTTLS', { expect: [220], code: 'SMTP_TLS_FAILED', description: 'STARTTLS' });
+      // Düz oturum yükseltmeden ÖNCE kapatılır (bkz. dialogue.dispose).
+      dialogue.dispose();
       const secure = await upgradeToTls(socket, config);
       socket = secure;
       dialogue = createSmtpDialogue(secure, config.timeoutMs);
@@ -257,7 +303,12 @@ export async function sendSmtpMail(config, message) {
       ehlo = await dialogue.command('EHLO mergen-rota', { description: 'EHLO (TLS sonrası)' });
     }
 
-    await authenticate(dialogue, ehlo.text, config);
+    await authenticate(dialogue, ehlo.text, {
+      username: config.username,
+      password: config.password,
+      secureChannel: Boolean(config.useStartTls),
+      allowInsecureAuth: Boolean(config.allowInsecureAuth)
+    });
     await dialogue.command(`MAIL FROM:<${config.from}>`, { description: 'MAIL FROM' });
     // Alıcı çözümü kısmi sorunlarla sürdüğü gibi SMTP de sürer: kapatılmış tek
     // bir kutu, öteki sorumluların hatırlatmayı almasını engellemez.

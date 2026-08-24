@@ -3,7 +3,15 @@ import { normalizeTaskRecord } from '../normalizeTaskRecord.js';
 import { addDays, fmtISO, today } from '../../scheduling/dates/index.js';
 import { CALENDARS } from './calendars.js';
 
-const MOCK_DATA_DATE = '2026-07-21';
+/**
+ * Demo verisinin VERİ TARİHİ.
+ *
+ * Görev tarihleri `rel()` ile içe aktarma anındaki `today()` üzerinden
+ * üretilir; sabit bir veri tarihi yalnızca o tek günde tutarlıydı. Veri
+ * tarihini `project.dataDate` ile karşılaştıran her görünüm başka her gün
+ * yanlış sonuç veriyordu (örneğin veri tarihinden sonra biten görevler).
+ */
+const MOCK_DATA_DATE = fmtISO(today());
 
 const RAW_PROJECTS = [
   { id: 'p-web', code: 'PRJ-WEB-001', name: 'Web Sitesi Yenileme', source: 'corporate', color: 'blue', lead: 'Ahmet Yılmaz', calendarId: 'cal-tr-standard-2026', dataDate: MOCK_DATA_DATE },
@@ -139,11 +147,20 @@ export const BASELINES = PROJECTS.map((project) => ({
 const primaryBaselineByProjectId = new Map(BASELINES.map((baseline) => [baseline.projectId, baseline]));
 const projectById = new Map(PROJECTS.map((project) => [project.id, project]));
 
-export const TASK_BASELINE_SNAPSHOTS = TASKS.map((task) => ({
-  baselineId: primaryBaselineByProjectId.get(task.projectId).id,
-  taskId: task.id,
-  plannedStart: task.plannedStart,
-  plannedFinish: task.plannedFinish,
-  plannedDurationDays: task.plannedDurationDays,
-  calendarId: task.calendarId || projectById.get(task.projectId)?.calendarId || null
-}));
+export const TASK_BASELINE_SNAPSHOTS = TASKS.map((task) => {
+  const baseline = primaryBaselineByProjectId.get(task.projectId);
+  // Tohum verisi modül YÜKLENİRKEN değerlendirilir: eşleşmeyen bir proje adı
+  // `undefined.id` ile TypeError üretiyor ve Demo Modu okunmayan bir yığın
+  // iziyle hiç açılmıyordu.
+  if (!baseline) {
+    throw new Error(`Demo tohumu: "${task.task}" görevi tanınan bir projeye bağlı değil (projectId: ${task.projectId}).`);
+  }
+  return {
+    baselineId: baseline.id,
+    taskId: task.id,
+    plannedStart: task.plannedStart,
+    plannedFinish: task.plannedFinish,
+    plannedDurationDays: task.plannedDurationDays,
+    calendarId: task.calendarId || projectById.get(task.projectId)?.calendarId || null
+  };
+});

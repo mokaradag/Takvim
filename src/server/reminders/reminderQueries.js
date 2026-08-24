@@ -144,16 +144,57 @@ export const REMINDER_SETTINGS_UPSERT_SQL = `
  * sahiplenilmiş kalır: aynı aralıkta sonsuz yeniden deneme yapılmaz, bir
  * sonraki aralıkta yeniden denenir.
  */
+/**
+ * Otomatik aralığı sahiplenir.
+ *
+ * TERK EDİLMİŞ kayıt yeniden sahiplenilebilir. Kayıt gönderimden ÖNCE
+ * `PENDING` olarak yazılır; süreç dağıtım, yeniden başlatma ya da makine
+ * çökmesiyle arada sonlanırsa satır sonsuza dek `PENDING` kalıyor, sonraki
+ * turlar aralığı "gönderilmiş" sayıyor ve o hatırlatma bir daha
+ * gönderilemiyordu. `@staleMinutes` dakikadan eski bir `PENDING` satır bu
+ * yüzden yerinde yeniden sahiplenilir (benzersiz dizin ikinci satıra izin
+ * vermez).
+ *
+ * Sonuç TEK bir kayıt kümesidir: sürücü ilk kümeyi okur.
+ */
 export const REMINDER_CLAIM_SQL = `
-  IF EXISTS (
+  SET NOCOUNT ON;
+
+  DECLARE @logId bigint = NULL;
+  DECLARE @staleBefore datetime2(3) = DATEADD(minute, -@staleMinutes, SYSUTCDATETIME());
+  DECLARE @reclaimed TABLE (TaskReminderLogId bigint);
+  DECLARE @created TABLE (TaskReminderLogId bigint);
+
+  UPDATE dbo.MR_TaskReminderLog
+  SET Status = 'PENDING',
+      RequestedBySicil = @actorSicil,
+      RecipientCount = 0,
+      RecipientDigest = NULL,
+      FailureCode = 'ABANDONED',
+      CreatedAt = SYSUTCDATETIME(),
+      CompletedAt = NULL
+  OUTPUT inserted.TaskReminderLogId INTO @reclaimed
+  WHERE TaskId = @taskId
+    AND SlotKey = @slotKey
+    AND ReminderKind = 'AUTOMATIC'
+    AND Status = 'PENDING'
+    AND CreatedAt < @staleBefore;
+
+  SELECT TOP (1) @logId = TaskReminderLogId FROM @reclaimed;
+
+  IF @logId IS NULL AND NOT EXISTS (
     SELECT 1 FROM dbo.MR_TaskReminderLog
     WHERE TaskId = @taskId AND SlotKey = @slotKey AND ReminderKind = 'AUTOMATIC'
   )
-    SELECT CAST(NULL AS bigint) AS TaskReminderLogId;
-  ELSE
+  BEGIN
     INSERT dbo.MR_TaskReminderLog(TaskId, ProjectId, ReminderKind, SlotKey, Status, RequestedBySicil)
-    OUTPUT inserted.TaskReminderLogId
-    VALUES(@taskId, @projectId, 'AUTOMATIC', @slotKey, 'PENDING', @actorSicil);`;
+    OUTPUT inserted.TaskReminderLogId INTO @created
+    VALUES(@taskId, @projectId, 'AUTOMATIC', @slotKey, 'PENDING', @actorSicil);
+
+    SELECT TOP (1) @logId = TaskReminderLogId FROM @created;
+  END
+
+  SELECT @logId AS TaskReminderLogId;`;
 
 export const REMINDER_MANUAL_LOG_SQL = `
   INSERT dbo.MR_TaskReminderLog(TaskId, ProjectId, ReminderKind, SlotKey, Status, RequestedBySicil)
@@ -168,6 +209,20 @@ export const REMINDER_COMPLETE_SQL = `
       FailureCode = @failureCode,
       CompletedAt = SYSUTCDATETIME()
   WHERE TaskReminderLogId = @logId;`;
+
+/**
+ * Bir kullanıcının o göreve yaptığı SON elle gönderim.
+ *
+ * Elle gönderim ucu, görevi görebilen herkesin çağırabildiği ve her çağrının
+ * gerçek e-posta ürettiği bir uçtur; en küçük aralık bu kayıttan hesaplanır.
+ */
+export const REMINDER_LAST_MANUAL_SQL = `
+  SELECT TOP (1) CreatedAt
+  FROM dbo.MR_TaskReminderLog
+  WHERE TaskId = @taskId
+    AND ReminderKind = 'MANUAL'
+    AND RequestedBySicil = @actorSicil
+  ORDER BY TaskReminderLogId DESC;`;
 
 export const REMINDER_HISTORY_SQL = `
   SELECT TOP (@limit) TaskReminderLogId, TaskId, ReminderKind, SlotKey, Status,

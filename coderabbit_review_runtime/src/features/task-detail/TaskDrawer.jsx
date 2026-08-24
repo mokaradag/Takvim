@@ -11,6 +11,7 @@ import {
   REL_TYPES,
   depId,
   dependencyLagDays,
+  materializeDependencyLag,
   formatDependencyLag,
   lagUnitOf,
   lagValueOf,
@@ -1107,7 +1108,10 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
     const next = deps.map((d, i) => {
       if (i !== idx) return d;
       const cur = typeof d === 'string' ? { id: d, type: 'FS', lagValue: 0, lagUnit: 'day', lagDays: 0 } : { ...d };
-      const updated = { ...cur, ...patch };
+      // Birim kutusu değiştirildiğinde eski `lagDays` sayısı açık `lagValue`
+      // alanına taşınır: aksi hâlde bir sonraki okuma 15 iş gününü "15 hafta"
+      // sanar ve gecikme her düzenlemede katlanırdı.
+      const updated = materializeDependencyLag({ ...cur, ...patch });
       return { ...updated, lagDays: dependencyLagDays(updated) };
     });
     onChange(next);

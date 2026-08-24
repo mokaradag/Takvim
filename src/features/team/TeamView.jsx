@@ -5,7 +5,8 @@ import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar } from '../../components/ui';
 import { AnimatedNumber, FilterableTH, InfoButton, numericMatchesFilter } from '../../components/ui-extras';
-import { diffDays, today } from '../../scheduling/dates';
+import { diffDays, parseDate } from '../../scheduling/dates';
+import { useTodayKey } from '../../hooks/useTodayKey';
 import { projectColorVar } from '../../lib/colors';
 import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
 import { PersonDetailDialog } from './PersonDetailDialog.jsx';
@@ -88,7 +89,12 @@ export function TeamView() {
   // Açık personel penceresi KİMLİKLE tutulur: süzgeç değişince satır listeden
   // düşse bile saklanan bir satır nesnesi eski verilerle ekranda kalırdı.
   const [openPersonId, setOpenPersonId] = useState(null);
-  const today_ = today();
+  // Gün ANAHTARI kararlıdır; `today()` her boyamada yeni bir `Date` üretir ve
+  // `stats` memosu hiçbir zaman yeniden kullanılamıyordu: binlerce kişilik
+  // rehberde arama kutusundaki her tuş vuruşu tüm süzgeç/sıralama hattını
+  // baştan çalıştırıyordu. Gün döndüğünde anahtar değişir ve memo tazelenir.
+  const todayKey = useTodayKey();
+  const today_ = useMemo(() => parseDate(todayKey), [todayKey]);
 
   const peopleByName = useMemo(() => new Map(people.map((person) => [person.name, person.id])), [people]);
   const tasksByPersonId = useMemo(() => {
@@ -96,7 +102,15 @@ export function TeamView() {
     for (const task of tasks) {
       for (const personId of task.assigneeIds || []) addTaskToPerson(map, String(personId), task);
       if (!(task.assigneeIds || []).length) {
-        for (const name of task.sorumlu || []) addTaskToPerson(map, peopleByName.get(name), task);
+        for (const name of task.sorumlu || []) {
+          // Anahtar METİNLEŞTİRİLİR: arama her zaman `String(person.id)` ile
+          // yapılır, sayısal bir kimlikle yazılan `12` anahtarı `'12'` ile
+          // eşleşmiyor ve yalnızca `sorumlu` adı taşıyan görevler kişinin
+          // toplamlarından, geciken sayısından ve yaklaşan listesinden
+          // tümüyle düşüyordu.
+          const personId = peopleByName.get(name);
+          if (personId != null) addTaskToPerson(map, String(personId), task);
+        }
       }
     }
     return map;

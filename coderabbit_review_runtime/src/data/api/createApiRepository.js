@@ -192,10 +192,15 @@ export function restoreActualCommitIds(body, changes = {}, aliases = null) {
       wbsId: restoreClientId(task.wbsId, map),
       calendarId: restoreClientId(task.calendarId, map),
       recurrenceParentId: restoreClientId(task.recurrenceParentId, map),
-      deps: (task.deps || []).map((dependency) => ({
-        ...dependency,
-        predecessorId: restoreClientId(dependency.predecessorId, map)
-      }))
+      // Alan YOKSA eklenmez: `deps: []` "bağımlılık yok" demektir, eksik alan
+      // "bilgi taşınmadı" demektir. Takma ad eşlemesi boşken gövde olduğu gibi
+      // döndüğü için aynı sunucu yanıtı iki farklı biçime çözülüyordu.
+      ...(Array.isArray(task.deps) ? {
+        deps: task.deps.map((dependency) => ({
+          ...dependency,
+          predecessorId: restoreClientId(dependency.predecessorId, map)
+        }))
+      } : {})
     }));
   }
   if (Array.isArray(body.taskDeletes)) {
@@ -243,10 +248,15 @@ export function restoreActualSnapshotIds(body, map) {
       wbsId: restoreClientId(task.wbsId, map),
       calendarId: restoreClientId(task.calendarId, map),
       recurrenceParentId: restoreClientId(task.recurrenceParentId, map),
-      deps: (task.deps || []).map((dependency) => ({
-        ...dependency,
-        predecessorId: restoreClientId(dependency.predecessorId, map)
-      }))
+      // Alan YOKSA eklenmez: `deps: []` "bağımlılık yok" demektir, eksik alan
+      // "bilgi taşınmadı" demektir. Takma ad eşlemesi boşken gövde olduğu gibi
+      // döndüğü için aynı sunucu yanıtı iki farklı biçime çözülüyordu.
+      ...(Array.isArray(task.deps) ? {
+        deps: task.deps.map((dependency) => ({
+          ...dependency,
+          predecessorId: restoreClientId(dependency.predecessorId, map)
+        }))
+      } : {})
     })) : body.tasks,
     baselines: Array.isArray(body.baselines) ? body.baselines.map((baseline) => ({
       ...baseline,
@@ -271,12 +281,59 @@ function normalizeActualResponse(body) {
   return body;
 }
 
+/**
+ * Sunucu isteği için SON TARİH.
+ *
+ * Süresiz bir `fetch`, bağlantıyı kabul edip yanıt vermeyen bir sunucuda hiç
+ * sonuçlanmaz. Sıralı yazma kuyruğu dönen söze bağlandığı için tek bir askıda
+ * kalan istek sekme ömrü boyunca bütün yazmaları durduruyor, görev panelindeki
+ * "Tamam" düğmesi `waitForIdle()` üzerinde takılıp uygulamayı DONMUŞ
+ * gösteriyordu.
+ */
+export const REQUEST_TIMEOUT_MS = 30000;
+
+/**
+ * `keepalive` isteği için gövde ÜST SINIRI (Fetch standardı: 64 KiB).
+ *
+ * Sekme kapanırken yapılan son yazma büyük bir değişiklik kümesi taşıyabilir;
+ * sınırı aşan `keepalive` isteği tarayıcı tarafından reddedilir ve düzenleme
+ * "sunucuya ulaşılamadı" diyerek sessizce kaybolurdu. Sınır aşıldığında istek
+ * SIRADAN bir `fetch` olarak gönderilir.
+ */
+export const KEEPALIVE_BODY_LIMIT_BYTES = 60 * 1024;
+
+function bodyByteLength(body) {
+  if (typeof body !== 'string') return 0;
+  if (typeof TextEncoder === 'function') return new TextEncoder().encode(body).length;
+  return Buffer.byteLength(body, 'utf8');
+}
+
 async function requestJson(url, init, operation) {
+  // `keepalive` isteği sayfa boşalırken TAMAMLANMALIDIR: zaman aşımı denetimi
+  // yalnızca sıradan isteklere kurulur.
+  const abortable = !init?.keepalive && typeof AbortController === 'function';
+  const controller = abortable ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
+
   let response;
   try {
-    response = await fetch(url, { ...init, cache: 'no-store', headers: { 'content-type': 'application/json', ...(init?.headers || {}) } });
+    response = await fetch(url, {
+      ...init,
+      ...(controller ? { signal: controller.signal } : {}),
+      cache: 'no-store',
+      headers: { 'content-type': 'application/json', ...(init?.headers || {}) }
+    });
   } catch (cause) {
-    throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE, message: 'Gerçek Sistem sunucusuna ulaşılamadı.', operation, cause });
+    throw new AppRepositoryError({
+      code: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE,
+      message: controller?.signal.aborted
+        ? 'Gerçek Sistem sunucusu zamanında yanıt vermedi.'
+        : 'Gerçek Sistem sunucusuna ulaşılamadı.',
+      operation,
+      cause
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -322,10 +379,14 @@ export function createApiRepository({
     async commitChanges(changes, { keepalive = false } = {}) {
       collectClientIds(changes, clientIdAliases);
       persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey);
+      const body = JSON.stringify({ changes: normalizeActualChanges(changes) });
+      // Büyük gövde `keepalive` sınırını aşar ve istek hiç gönderilmez; sıradan
+      // isteğe düşmek, değişikliği sessizce kaybetmekten iyidir.
+      const useKeepalive = keepalive && bodyByteLength(body) <= KEEPALIVE_BODY_LIMIT_BYTES;
       const committed = await requestJson(`${basePath}/commit`, {
         method: 'POST',
-        keepalive,
-        body: JSON.stringify({ changes: normalizeActualChanges(changes) })
+        keepalive: useKeepalive,
+        body
       }, 'commitChanges');
       return restoreActualCommitIds(committed, changes, clientIdAliases);
     },

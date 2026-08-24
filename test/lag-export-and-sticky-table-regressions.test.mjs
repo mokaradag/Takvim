@@ -7,7 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { buildProjectCsv, buildProjectExcelHtml } from '../src/lib/exportProjectData.js';
 import { normalizeCalendar } from '../src/scheduling/calendars/index.js';
 import { calculateCpm } from '../src/scheduling/cpm/index.js';
-import { dependencyLagDays } from '../src/scheduling/dependencies/index.js';
+import {
+  dependencyLagDays,
+  materializeDependencyLag,
+  normalizeDependency
+} from '../src/scheduling/dependencies/index.js';
 import { prepareProjectUpdateChanges } from '../src/state/projectCreation.js';
 import { applyProjectTagPropagation, planProjectTagPropagation } from '../src/domain/tags/index.js';
 
@@ -17,7 +21,7 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('legacy day lag values are preserved before a unit-only edit is recalculated', () => {
+test('legacy day lag values are read as the declared unit without mutating the record', () => {
   const editedDependency = {
     id: 'pred',
     predecessorId: 'pred',
@@ -27,8 +31,27 @@ test('legacy day lag values are preserved before a unit-only edit is recalculate
   };
 
   assert.equal(dependencyLagDays(editedDependency), 15);
-  assert.equal(editedDependency.lagValue, 3);
+  // OKUMA yolu girdiyi değiştirmez: bağımlılıklar uygulama durumundaki görev
+  // kayıtlarından gelir, yerinde yazma indirgeyici dışında durum değiştirirdi.
+  assert.equal(editedDependency.lagValue, undefined);
   assert.equal(editedDependency.lagUnit, 'week');
+});
+
+test('the editor write path materializes the legacy value into an explicit copy', () => {
+  const stored = Object.freeze({
+    id: 'pred',
+    predecessorId: 'pred',
+    type: 'FS',
+    lagDays: 3,
+    lagUnit: 'week'
+  });
+
+  const materialized = materializeDependencyLag(stored);
+  assert.notEqual(materialized, stored, 'kopya dönmelidir');
+  assert.equal(materialized.lagValue, 3);
+  assert.equal(materialized.lagUnit, 'week');
+  assert.equal(dependencyLagDays(materialized), 15);
+  assert.equal(stored.lagValue, undefined);
 });
 
 test('legacy lag calculations tolerate immutable dependency snapshots', () => {
@@ -42,6 +65,14 @@ test('legacy lag calculations tolerate immutable dependency snapshots', () => {
 
   assert.equal(dependencyLagDays(frozenDependency), 15);
   assert.equal(frozenDependency.lagValue, undefined);
+});
+
+test('normalizeDependency converts week lag with the supplied calendar', () => {
+  const sixDay = normalizeCalendar({ id: 'six', name: 'Six', workingDays: [1, 2, 3, 4, 5, 6], holidays: [] });
+  // Varsayılan takvimle 5, altı günlük takvimle 6 iş günü: kaydedilen `lagDays`
+  // artık zamanlamanın uyguladığı gecikmeyle aynıdır.
+  assert.equal(normalizeDependency({ predecessorId: 'a', lagValue: 1, lagUnit: 'week' }).lagDays, 5);
+  assert.equal(normalizeDependency({ predecessorId: 'a', lagValue: 1, lagUnit: 'week' }, sixDay).lagDays, 6);
 });
 
 test('week lags use the successor active calendar in both CPM passes', () => {

@@ -18,7 +18,12 @@ export function calculatePlannedDurationDays(task, { projects = [], calendars = 
   if (!start || !finish || finish < start) return null;
 
   const calendar = resolveTaskCalendar(task, projects, calendars);
-  return countWorkingDays(start, finish, calendar);
+  // Kızılötesi durum: başlangıç ve bitiş geçerli ama aralıkta hiç çalışma günü
+  // yok (tek günlük hafta sonu/tatil görevi). Ham sayım 0 döndüğünde görev
+  // Gantt özetlerinde kilometre taşı gibi çiziliyor ve ilerleme ağırlığı
+  // sıfırlanıyordu. Kilometre taşı OLMAYAN, tarihleri geçerli bir görev en az
+  // bir gün sürer.
+  return Math.max(1, countWorkingDays(start, finish, calendar));
 }
 
 export function normalizeTaskPlan(task, context = {}) {

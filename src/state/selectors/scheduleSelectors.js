@@ -43,6 +43,7 @@ function scheduleShape(projectId, status, error = null) {
     projectFinish: null,
     criticalTaskIds: [],
     criticalPaths: [],
+    criticalPathsTruncated: false,
     criticalDependencyKeys: [],
     tasks: {},
     status,
@@ -123,6 +124,8 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
         projectFinish: cpm.projectFinish,
         criticalTaskIds: [...cpm.criticalTaskIds],
         criticalPaths: cpm.criticalPaths.map((path) => [...path]),
+        // Yol sayımı üst sınırda kesildiyse arayüz "tam liste" iddia etmemelidir.
+        criticalPathsTruncated: Boolean(cpm.criticalPathsTruncated),
         criticalDependencyKeys: criticalDependencyKeys(cpm.criticalPaths),
         tasks: projectedTasks,
         status: 'valid',

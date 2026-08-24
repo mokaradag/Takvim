@@ -43,9 +43,15 @@ export async function POST(_request, context) {
       authorize: (task) => assertTaskReminderAccess(pool, actor, task.id)
     });
     if (!result.ok) {
+      // 404 bulunamayan görev, 429 en küçük aralık, 422 gönderim engeli.
+      const status = result.code === 'TASK_NOT_FOUND'
+        ? 404
+        : (result.code === 'MANUAL_REMINDER_RATE_LIMITED' ? 429 : 422);
+      const headers = { 'cache-control': 'no-store' };
+      if (result.retryAfterSeconds) headers['retry-after'] = String(result.retryAfterSeconds);
       return Response.json({
         error: { code: result.code, message: result.message, details: null }
-      }, { status: result.code === 'TASK_NOT_FOUND' ? 404 : 422, headers: { 'cache-control': 'no-store' } });
+      }, { status, headers });
     }
     return Response.json({
       ok: true,

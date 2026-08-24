@@ -47,6 +47,46 @@ GO
 BEGIN TRY
     BEGIN TRANSACTION;
 
+    /* GO bir ISTEMCI toplu is ayracidir, islem siniri DEGILDIR: sqlcmd ve SSMS,
+       -b verilmedikce ilk toplu is hata verse bile bir sonrakini calistirir.
+       Bu toplu is bu yuzden kendi on kosulunu dogrular; aksi halde birinci
+       toplu isin hatasi, hic olusmamis nesnelere karsi ikinci ve alakasiz bir
+       hata daha uretiyordu. */
+    IF OBJECT_ID(N'dbo.MR_SchemaMigrations', N'U') IS NULL
+        THROW 51000, 'MERGEN Rota durable schema was not found. Run MR_Create_Durable_Persistence.sql first.', 1;
+
+    IF COL_LENGTH(N'dbo.MR_Tasks', N'RecurrenceParentTaskId') IS NULL
+        OR COL_LENGTH(N'dbo.MR_Tasks', N'RecurrenceOccurrenceDate') IS NULL
+        THROW 51001, 'Recurrence columns are missing. The first batch of MR_Upgrade_0004 did not complete.', 1;
+
+    /* Benzersiz dizin, ONCEDEN olusmus yinelenen yinelemelerde basarisiz olur.
+       SQL Server iletisi yalnizca dizini adlandirir; catisan satirlar burada
+       acikca bildirilir ki operator duzeltebilsin. */
+    IF EXISTS (
+        SELECT 1
+        FROM dbo.MR_Tasks
+        WHERE RecurrenceParentTaskId IS NOT NULL AND RecurrenceOccurrenceDate IS NOT NULL
+        GROUP BY RecurrenceParentTaskId, RecurrenceOccurrenceDate
+        HAVING COUNT(*) > 1
+    )
+    BEGIN
+        DECLARE @conflicts nvarchar(max) = (
+            SELECT STRING_AGG(CONVERT(nvarchar(100), RecurrenceParentTaskId)
+                + N' @ ' + CONVERT(nvarchar(10), RecurrenceOccurrenceDate, 23), N', ')
+            FROM (
+                SELECT RecurrenceParentTaskId, RecurrenceOccurrenceDate
+                FROM dbo.MR_Tasks
+                WHERE RecurrenceParentTaskId IS NOT NULL AND RecurrenceOccurrenceDate IS NOT NULL
+                GROUP BY RecurrenceParentTaskId, RecurrenceOccurrenceDate
+                HAVING COUNT(*) > 1
+            ) duplicates
+        );
+        DECLARE @conflictMessage nvarchar(2048) =
+            N'Duplicate recurrence occurrences block UX_MR_Tasks_RecurrenceOccurrence: '
+            + ISNULL(@conflicts, N'(unknown)');
+        THROW 51002, @conflictMessage, 1;
+    END;
+
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_MR_Tasks_RecurrenceParent')
         ALTER TABLE dbo.MR_Tasks ADD CONSTRAINT FK_MR_Tasks_RecurrenceParent
             FOREIGN KEY (RecurrenceParentTaskId) REFERENCES dbo.MR_Tasks(TaskId);

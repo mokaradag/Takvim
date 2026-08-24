@@ -30,8 +30,15 @@ export const LEGACY_PRIORITY_ALIASES = Object.freeze({
 /** Herhangi bir kaynaktan gelen öncelik değerini katalogdaki kimliğe indirger. */
 export function normalizePriorityId(value) {
   const text = String(value ?? '').trim().toLocaleLowerCase('en-US');
-  if (PRIORITIES[text]) return text;
-  return LEGACY_PRIORITY_ALIASES[text] || DEFAULT_PRIORITY_ID;
+  // Arama KENDİ anahtarlarıyla sınırlıdır: nesne değişmezleri
+  // `Object.prototype`ten kalıtır ve `Object.freeze` bunu kaldırmaz. `value`
+  // 'constructor' olduğunda arama `Object` işlevini döndürüyor, kimlik yerine
+  // bir fonksiyon dönüyor, `resolvePriority` `undefined` veriyor ve `prio.color`
+  // okuması çöküyordu — tablonun önlemesi gereken çökmenin ta kendisi.
+  if (Object.hasOwn(PRIORITIES, text)) return text;
+  return Object.hasOwn(LEGACY_PRIORITY_ALIASES, text)
+    ? LEGACY_PRIORITY_ALIASES[text]
+    : DEFAULT_PRIORITY_ID;
 }
 
 /**

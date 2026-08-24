@@ -149,8 +149,11 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
       // yazmaya devam ettiğinde reddedilen alanlar da birlikte yeniden gönderilir.
       const retained = failed.get(taskId);
       failed.delete(taskId);
-      const current = pending.get(taskId) || { patch: { ...(retained || {}) }, waiters: [], timer: null };
-      current.patch = { ...current.patch, ...patch };
+      // Saklanan yama HER İKİ dalda da serilir. Kuyrukta zaten bir kayıt varsa
+      // `retained` yalnızca siliniyor, hiç birleştirilmiyordu: reddedilen
+      // düzenleme, korunması gereken tek kopya olduğu hâlde kayboluyordu.
+      const current = pending.get(taskId) || { patch: {}, waiters: [], timer: null };
+      current.patch = { ...(retained || {}), ...current.patch, ...patch };
       current.waiters.push(resolve);
       pending.set(taskId, current);
       scheduleFlush(taskId);

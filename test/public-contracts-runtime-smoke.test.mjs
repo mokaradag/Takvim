@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TASK_STATUSES, PRIORITIES } from '../src/domain/constants/index.js';
 import { DOMAIN_MODEL_VERSION } from '../src/domain/models/index.js';
 import { CALENDARS } from '../src/data/mock/calendars.js';
-import { appRepository } from '../src/data/index.js';
+import { getAppRepository } from '../src/data/index.js';
 import { assertAppRepository } from '../src/data/contracts/appRepository.js';
 import { DEFAULT_CALENDAR } from '../src/scheduling/calendars/index.js';
 import { TWEAK_DEFAULTS } from '../src/lib/tweaks-defaults.js';
@@ -110,20 +110,23 @@ test('domain model version is a positive integer contract', () => {
 });
 
 test('application repository satisfies the public repository contract', () => {
+  const appRepository = getAppRepository();
   assert.strictEqual(assertAppRepository(appRepository), appRepository);
   assert.equal(appRepository.kind, 'async-memory');
+  // Depo TEK örnektir; her çağrıda yeniden kurulmaz.
+  assert.strictEqual(getAppRepository(), appRepository);
 });
 
 test('application repository loads all canonical snapshot collections', async () => {
-  const snapshot = await appRepository.loadSnapshot();
+  const snapshot = await getAppRepository().loadSnapshot();
   for (const key of ['calendars', 'projects', 'people', 'wbs', 'tasks', 'baselines', 'taskBaselineSnapshots']) {
     assert.equal(Array.isArray(snapshot[key]), true, key);
   }
 });
 
 test('application repository returns isolated snapshots across repeated loads', async () => {
-  const first = await appRepository.loadSnapshot();
-  const second = await appRepository.loadSnapshot();
+  const first = await getAppRepository().loadSnapshot();
+  const second = await getAppRepository().loadSnapshot();
   assert.notStrictEqual(first, second);
   for (const key of ['calendars', 'projects', 'people', 'wbs', 'tasks', 'baselines', 'taskBaselineSnapshots']) {
     assert.notStrictEqual(first[key], second[key], key);

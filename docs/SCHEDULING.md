@@ -16,6 +16,17 @@ A scheduling calendar has:
 
 Holiday dates are intentionally year-specific. Movable holidays must not be stored as recurring `MM-DD` values because that would silently mark the wrong dates as non-working in later years.
 
+`workingDays` must contain at least one weekday. An empty list is not a valid
+configuration: the SQL projection emits `workingDays: []` for a calendar that has
+no rows in `MR_CalendarWorkingDays`, and with such a list every working-day
+search is unsatisfiable. `isWorkingDay()` and `normalizeCalendar()` therefore
+treat an empty list as the default Monday-Friday week.
+
+The fallback calendar ships the fixed-date Turkish national holidays through
+2028. Movable religious holidays (Ramazan, Kurban) are announced officially and
+are **not** guessed for future years; a deployment supplies them through its own
+`MR_CalendarHolidays` rows.
+
 The current mock adapter supplies two calendars:
 
 - `cal-tr-standard-2026`: Monday-Friday;
@@ -54,7 +65,38 @@ diffWorkingDays(addWorkingDays(start, n, calendar), start, calendar) === n
 
 `countWorkingDays(start, end, calendar)` counts working dates inclusively. Current-plan normalization uses it to calculate `plannedDurationDays` from `plannedStart` and `plannedFinish` under the task's effective calendar. CPM can use the same current-plan dates as a duration fallback when an explicit canonical planned duration is not supplied.
 
-These contracts are covered by unit tests and are the arithmetic foundation used by the current-plan and CPM layers.
+`calculatePlannedDurationDays()` clamps a valid non-milestone range to at least
+one day. A single-day task that falls on a weekend or holiday counts zero working
+days; reporting `0` made the task render as a milestone in Gantt group summaries
+and dropped its progress weight.
+
+### Termination guarantees
+
+Every working-day search is **bounded**. The helpers used to loop unconditionally,
+so two ordinary inputs froze the browser tab outright — the reported "the app
+freezes when I press Tamam" defect:
+
+- a calendar whose `workingDays` list is empty (see above) made `isWorkingDay()`
+  return `false` for every date, and `moveToWorkingDay()` / `addWorkingDays()`
+  never terminated. `createNewTask()` calls `moveToWorkingDay()`, so creating a
+  task in such a project hung the whole tab;
+- a value `parseDate()` cannot resolve produces an Invalid Date, whose
+  `getTime()` is `NaN`. `diffWorkingDays()` compares timestamps for equality, so
+  its loop never ended either.
+
+The contract now is:
+
+- an unresolvable date returns the input unchanged (`moveToWorkingDay`,
+  `addWorkingDays`) or `0` (`diffWorkingDays`, `countWorkingDays`);
+- every scan stops after `MAX_CALENDAR_SCAN_DAYS` (about ten years) and falls
+  back to the input rather than looping;
+- `parseDate()` accepts an ISO string that carries a time part
+  (`2026-08-18T00:00:00.000Z`) and returns an Invalid Date — never a silent
+  "today" — for anything it cannot resolve. `isValidDate()` is exported for
+  callers that need to tell the two apart.
+
+These contracts are covered by unit tests (`test/task-dialog-freeze-regressions.test.mjs`)
+and are the arithmetic foundation used by the current-plan and CPM layers.
 
 ## Duration semantics
 
@@ -75,6 +117,24 @@ The canonical dependency field remains `lagDays`, but scheduling interprets it a
 - negative `lagDays` = lead.
 
 Use `applyDependencyLag()` instead of adding calendar days directly. The helper applies the selected scheduling calendar and skips non-working dates.
+
+`lagValue`/`lagUnit` is the source of truth and `lagDays` is the derived cache.
+`normalizeDependency()` therefore takes the **calendar** as a parameter and
+converts week and month units with it; converting with the default calendar
+wrote a `lagDays` value that disagreed with the date scheduling actually applied
+on a six-day calendar, and consumers that read `lagDays` directly (the
+cross-project dependency report, for example) reported a lag that did not match
+the plan. `normalizeTaskRecord()` resolves the task's own calendar and passes it
+through.
+
+`dependencyLagDays()` is a **pure read**: it never writes to the dependency it
+inspects. Dependencies come from task records held in application state, so an
+in-place write changed state outside the reducer and left equality checks on
+`task.deps` reporting "unchanged" while the content differed. The legacy
+completion — filling `lagValue` from a stored `lagDays` when the record carries a
+unit but no explicit value — moved to `materializeDependencyLag()`, which returns
+a **copy** and is called only from the editor write paths (`TaskDrawer.updateDep`,
+`planSuccessorUpdate`).
 
 ## Predecessors and successors
 

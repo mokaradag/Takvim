@@ -10,7 +10,16 @@ import { createPublicKey, createVerify } from 'node:crypto';
  */
 
 const ALGORITHM_DIGESTS = Object.freeze({ RS256: 'sha256', RS384: 'sha384', RS512: 'sha512' });
-const DEFAULT_ACCEPTED_TYPES = Object.freeze(['Bearer', 'ID', 'JWT']);
+/**
+ * ERİŞİM jetonu sınırında kabul edilen `typ` değeri.
+ *
+ * Keycloak erişim jetonuna `typ: 'Bearer'`, kimlik jetonuna `typ: 'ID'` yazar.
+ * Liste ikisini birden kabul ettiğinde, issuer/kitle/yetkili taraf ve kimlik
+ * alanları geçerli olan İMZALI BİR KİMLİK JETONU da uygulama oturumu
+ * açabiliyordu. `typ` alanı ayrıca ZORUNLUDUR: eksik değer eskiden denetimi
+ * tümüyle atlıyordu.
+ */
+const DEFAULT_ACCEPTED_TYPES = Object.freeze(['Bearer']);
 
 export class KeycloakTokenError extends Error {
   constructor(reason, message) {
@@ -122,7 +131,7 @@ export function validateKeycloakClaims(claims, {
     fail('TOKEN_NOT_ACTIVE', 'Token gelecekte üretilmiş görünüyor.');
   }
 
-  if (Array.isArray(acceptedTypes) && acceptedTypes.length && claims.typ != null && !acceptedTypes.includes(claims.typ)) {
+  if (Array.isArray(acceptedTypes) && acceptedTypes.length && !acceptedTypes.includes(claims.typ)) {
     fail('TOKEN_TYPE_INVALID', 'Token türü kabul edilmiyor.');
   }
 

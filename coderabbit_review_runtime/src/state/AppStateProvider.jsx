@@ -9,7 +9,7 @@ import {
   useRef,
   useState
 } from 'react';
-import { appRepository } from '../data';
+import { getAppRepository } from '../data';
 import { createClientEntityId } from '../data/clientEntityId.js';
 import { setProjectColorOverrides } from '../lib/colors';
 import { resolveProjectCalendar, resolveTaskCalendar } from '../scheduling/calendars';
@@ -39,7 +39,7 @@ function rejectedWrite(operation, issue) {
   return Promise.resolve(projectWriteFailure(operation, issue));
 }
 
-export function AppStateProvider({ children, repository = appRepository }) {
+export function AppStateProvider({ children, repository = getAppRepository() }) {
   const [state, dispatch] = useReducer(appStateReducer, undefined, createLoadingState);
   const stateRef = useRef(state);
   const loadRequestRef = useRef(0);
@@ -50,7 +50,14 @@ export function AppStateProvider({ children, repository = appRepository }) {
   const [workspaceWriteReady, setWorkspaceWriteReady] = useState(false);
 
   stateRef.current = state;
-  setProjectColorOverrides(state.projects);
+
+  // Renk geçersiz kılmaları modül düzeyindeki bir eşlemeye yazılır: RENDER
+  // içinde yapılan bu yazma, işlenmeyen bir render'ın (StrictMode çift render,
+  // kesilen/eşzamanlı render) değerlerini eşlemede bırakıyor ve başka
+  // bileşenler bir sonraki boyamada o değerleri okuyordu.
+  useEffect(() => {
+    setProjectColorOverrides(state.projects);
+  }, [state.projects]);
 
   const applyStateAction = useCallback((action) => {
     stateRef.current = appStateReducer(stateRef.current, action);
@@ -415,10 +422,13 @@ export function AppStateProvider({ children, repository = appRepository }) {
       // Sunucu güncellenen projeyi yankılamadıysa elimizdeki sürüm anahtarı artık
       // eskimiştir; yerel kopyayı yazmak yerine yetkili anlık görüntü yeniden yüklenir.
       await reloadData();
-    } else if (!committed.taskUpserts?.length && changes.taskUpserts?.length) {
-      // Etiket kataloğu yeniden adlandırıldığında görev kayıtları da yerel olarak hizalanır.
-      applyStateAction({ type: 'data/apply-changes', changes: { taskUpserts: changes.taskUpserts } });
     }
+    // Etiket yeniden adlandırması görev anahtar sözcüklerine KALICI KATMANDA,
+    // katalog yazmasıyla aynı işlemde uygulanır (bkz. planProjectTagPropagation)
+    // ve etkilenen görevler `committed.taskUpserts` içinde geri döner; bu
+    // yankı `persistence/success` ile duruma zaten işlenir. Yerel bir hizalama
+    // dalı yoktu: `prepareProjectUpdateChanges` her zaman boş `taskUpserts`
+    // ürettiği için o dal hiç çalışmıyordu.
 
     const latest = stateRef.current;
     return {
@@ -426,7 +436,7 @@ export function AppStateProvider({ children, repository = appRepository }) {
       value: latest.projects.find((projectValue) => projectValue.id === projectId) || prepared.project,
       changes: committed
     };
-  }, [applyStateAction, persistence, reloadData]);
+  }, [persistence, reloadData]);
 
   const selectWorkspace = useCallback((projectId) => {
     applyStateAction({

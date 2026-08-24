@@ -103,6 +103,20 @@ The result includes:
 
 Multiple critical paths can therefore be returned when parallel paths have equal controlling duration.
 
+### Path enumeration is bounded
+
+Path enumeration materializes one array per critical root-to-leaf path, and that
+count grows **exponentially** with consecutive diamond structures: twenty-five
+critical diamond layers describe more than thirty-three million paths.
+`buildPortfolioSchedule()` calls `calculateCpm()` synchronously, so such a network
+froze schedule rendering or exhausted browser memory.
+
+Enumeration therefore stops at `MAX_CRITICAL_PATHS` (500) and reports
+`criticalPathsTruncated: true`. `criticalTaskIds` stays **complete** — only the
+path listing is cut — so criticality highlighting is never wrong, just less
+detailed. `selectPortfolioSchedule()` carries the flag through to each project
+schedule so the UI never claims a complete listing.
+
 ## Result shape
 
 `calculateCpm()` returns:
@@ -113,6 +127,7 @@ projectFinish
 orderedTaskIds
 criticalTaskIds
 criticalPaths
+criticalPathsTruncated
 tasks
   <taskId>
     id

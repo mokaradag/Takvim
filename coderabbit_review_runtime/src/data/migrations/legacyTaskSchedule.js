@@ -8,8 +8,10 @@ export function migrateLegacyTaskSchedule(task = {}) {
   const migrated = { ...task };
 
   for (const [legacyField, canonicalField] of Object.entries(LEGACY_TO_CANONICAL)) {
-    if (!Object.prototype.hasOwnProperty.call(migrated, canonicalField)
-      && Object.prototype.hasOwnProperty.call(migrated, legacyField)) {
+    // Denetim ANAHTAR varlığına değil DEĞERE bakar: kanonik alanı adıyla taşıyan
+    // ama değeri `undefined`/`null` olan bir kayıt (kısmi bir yamanın yayılması)
+    // eski alanı devralmıyor, sonraki satırda onu siliyor ve tarih kayboluyordu.
+    if (migrated[canonicalField] == null && migrated[legacyField] != null) {
       migrated[canonicalField] = migrated[legacyField];
     }
     delete migrated[legacyField];

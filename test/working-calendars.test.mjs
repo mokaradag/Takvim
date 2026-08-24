@@ -32,7 +32,17 @@ const projects = [
 
 test('holidays are explicit year-specific dates instead of recurring month/day entries', () => {
   assert.equal(holidayFor('2026-07-15', DEFAULT_CALENDAR)?.short, '15 Temmuz');
-  assert.equal(holidayFor('2027-07-15', DEFAULT_CALENDAR), null);
+  // Sabit tarihli ulusal bayramlar 2028'e kadar YAZILIDIR; kapsam dışı bir yıl
+  // kendiliğinden yinelenmez (kural değil, tarih listesi tutulur).
+  assert.equal(holidayFor('2027-07-15', DEFAULT_CALENDAR)?.short, '15 Temmuz');
+  assert.equal(holidayFor('2029-07-15', DEFAULT_CALENDAR), null);
+});
+
+test('movable religious holidays are not guessed for future years', () => {
+  // Ramazan/Kurban resmî ilanla kesinleşir: yalnızca 2026 için yazılıdır,
+  // sonraki yıllar kurulumun kendi takvim tanımından gelir.
+  assert.equal(holidayFor('2026-03-20', DEFAULT_CALENDAR)?.short, 'Ramazan B.');
+  assert.equal(holidayFor('2027-03-09', DEFAULT_CALENDAR), null);
 });
 
 test('standard and project-specific calendars can define different working weekdays', () => {

@@ -88,7 +88,10 @@ BEGIN TRY
         CONSTRAINT CK_MR_Projects_SourceType CHECK (SourceType IN ('CORPORATE','MANUAL'))
     );
     CREATE UNIQUE INDEX UX_MR_Projects_ProjectCode ON dbo.MR_Projects(ProjectCode) WHERE ProjectCode IS NOT NULL;
-    CREATE UNIQUE INDEX UX_MR_Projects_Project_ProjectId ON dbo.MR_Projects(ProjectId);
+    /* PK_MR_Projects zaten ProjectId uzerinde benzersiz kumelenmis dizin kurar.
+       Ayri bir UX_MR_Projects_Project_ProjectId dizini anahtarin ikinci bir
+       kopyasini saklayip her ekleme/guncelleme/silmede yazma maliyeti ekliyordu;
+       hicbir bilesik yabanci anahtar bu dizini hedef almiyor. */
     CREATE INDEX IX_MR_Projects_Source_Active ON dbo.MR_Projects(SourceType, IsActive, ProjectCode);
     CREATE INDEX IX_MR_Projects_CalendarId ON dbo.MR_Projects(CalendarId);
 
@@ -287,6 +290,11 @@ BEGIN TRY
         CalendarId uniqueidentifier NULL,
         CONSTRAINT PK_MR_TaskBaselineSnapshots PRIMARY KEY (BaselineId, TaskId),
         CONSTRAINT FK_MR_TaskBaselineSnapshots_Baselines FOREIGN KEY (BaselineId) REFERENCES dbo.MR_Baselines(BaselineId),
+        /* TaskId BILEREK yabanci anahtar TASIMAZ (bkz. docs/DATABASE-SCHEMA.md
+           "Baseline history"). Referans anlik goruntusu, karsilastirdigi
+           gorevden DAHA UZUN yasar: gorev silindiginde tarihsel kayit da
+           silinseydi, o referansa gore olculen sapma gecmisi geriye donuk
+           degisirdi. Bu yuzden TaskId yalnizca dizinlenir. */
         CONSTRAINT FK_MR_TaskBaselineSnapshots_Calendars FOREIGN KEY (CalendarId) REFERENCES dbo.MR_Calendars(CalendarId)
     );
     CREATE INDEX IX_MR_TaskBaselineSnapshots_TaskId ON dbo.MR_TaskBaselineSnapshots(TaskId);
@@ -379,15 +387,22 @@ BEGIN TRY
     CREATE INDEX IX_MR_TaskReminderLog_Task_Created
         ON dbo.MR_TaskReminderLog(TaskId, CreatedAt DESC);
 
+    /* Gruplama NORMALLESTIRILMIS ifadeler uzerinden yapilir. Ham sutunlarla
+       gruplanirken '' abc '' ve ''ABC'' iki ayri grup uretiyor, gorunum ayni
+       ProjectCode degerini tasiyan iki satir donduruyordu; ayni kod icin farkli
+       ProjeAdi/Tur_Aciklama degerleri de ayni etkiyi yapiyordu. Kod uzerinde
+       benzersiz olan UX_MR_Projects_ProjectCode yuzunden esitleme ya yinelenen
+       anahtar hatasi veriyor ya da satir sirasina gore belirsiz bir proje adi
+       yaziyordu. Her kod icin TEK ve belirlenimci bir ad secilir. */
     EXEC(N'CREATE VIEW dbo.MR_V_CorporateProjects AS
         SELECT
-            NULLIF(LTRIM(RTRIM(Tur)), N'''') AS ProjectTypeCode,
-            NULLIF(LTRIM(RTRIM(Tur_Aciklama)), N'''') AS ProjectTypeName,
+            MIN(NULLIF(LTRIM(RTRIM(Tur)), N'''')) AS ProjectTypeCode,
+            MIN(NULLIF(LTRIM(RTRIM(Tur_Aciklama)), N'''')) AS ProjectTypeName,
             UPPER(NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectCode,
-            COALESCE(NULLIF(LTRIM(RTRIM(ProjeAdi)), N''''), NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''')) AS ProjectName
+            MIN(COALESCE(NULLIF(LTRIM(RTRIM(ProjeAdi)), N''''), NULLIF(LTRIM(RTRIM(ProjeKodu)), N''''))) AS ProjectName
         FROM dbo.A01_ProjeUrunFaaliyetRaporu
         WHERE NULLIF(LTRIM(RTRIM(ProjeKodu)), N'''') IS NOT NULL
-        GROUP BY Tur, Tur_Aciklama, ProjeKodu, ProjeAdi;');
+        GROUP BY UPPER(NULLIF(LTRIM(RTRIM(ProjeKodu)), N''''));');
 
     EXEC(N'CREATE VIEW dbo.MR_V_ExecutiveScope AS
         SELECT DISTINCT direktorluk_yonetici_sicil AS ManagerSicil, sicil AS EmployeeSicil, CAST(''DIRECTORATE'' AS varchar(20)) AS ScopeType

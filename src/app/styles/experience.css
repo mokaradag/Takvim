@@ -13,7 +13,7 @@
 }
 .mode-picker {
   width: min(980px, calc(var(--app-viewport-w, 100vw) * 0.96));
-  animation: modePickerIn .28s cubic-bezier(.2, .8, .2, 1) both;
+  animation: mode-picker-in .28s cubic-bezier(.2, .8, .2, 1) both;
   max-height: calc(var(--app-viewport-h, 100vh) - 56px);
   overflow: auto;
   padding: 28px;
@@ -186,15 +186,15 @@
   .settings-mode-heading { flex-direction: column; }
 }
 
-@keyframes modePickerIn {
+@keyframes mode-picker-in {
   from { opacity: 0; transform: translateY(14px) scale(.99); }
   to { opacity: 1; transform: none; }
 }
 /* Kartlar sırayla belirir; süsleme değil, okuma sırasını taşıyan bir ipucu. */
-.mode-picker-card { animation: modePickerCardIn .34s cubic-bezier(.2, .8, .2, 1) both; }
+.mode-picker-card { animation: mode-picker-card-in .34s cubic-bezier(.2, .8, .2, 1) both; }
 .mode-picker-grid > .mode-picker-card:nth-child(1) { animation-delay: .1s; }
 .mode-picker-grid > .mode-picker-card:nth-child(2) { animation-delay: .18s; }
-@keyframes modePickerCardIn {
+@keyframes mode-picker-card-in {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: none; }
 }
@@ -204,10 +204,6 @@
    ayrıca karşılanır. */
 .reduce-motion .mode-picker,
 .reduce-motion .mode-picker-card { animation: none; }
-@media (prefers-reduced-motion: reduce) {
-  .mode-picker,
-  .mode-picker-card { animation: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   .mode-picker,
   .mode-picker-card { animation: none; }

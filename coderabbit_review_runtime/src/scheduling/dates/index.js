@@ -21,11 +21,29 @@ export function getAppDateDisplayFormat() {
   return appDateDisplayFormat;
 }
 
+/**
+ * Metni ya da `Date` nesnesini YEREL güne çevirir.
+ *
+ * Saat taşıyan ISO metinleri de okunur. `2026-08-18T00:00:00.000Z` biçimindeki
+ * bir sunucu yanıtı doğrudan `split('-')` ile ayrıştırıldığında üçüncü parça
+ * sayıya çevrilemiyor ve GEÇERSİZ TARİH üretiyordu; geçersiz tarih iş günü
+ * döngülerini sonsuza kilitliyordu (bkz. scheduling/calendars).
+ *
+ * Çözülemeyen metin için Geçersiz Tarih döner: çağıran `isValidDate` ile
+ * ayırt eder, sessizce bugüne düşmez.
+ */
 export function parseDate(value) {
   if (value instanceof Date) return value;
   if (!value) return new Date();
-  const [year, month, day] = value.split('-').map(Number);
+  if (typeof value === 'number') return new Date(value);
+  const [datePart] = String(value).trim().split(/[T\s]/);
+  const [year, month, day] = datePart.split('-').map(Number);
   return new Date(year, month - 1, day);
+}
+
+/** Tarih gerçekten çözüldü mü? */
+export function isValidDate(value) {
+  return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
 export function fmtISO(value) {
@@ -124,6 +142,7 @@ export function eachDay(start, end) {
   const days = [];
   let current = parseDate(start);
   const last = parseDate(end);
+  if (!isValidDate(current) || !isValidDate(last)) return days;
   while (current <= last) {
     days.push(new Date(current));
     current = addDays(current, 1);

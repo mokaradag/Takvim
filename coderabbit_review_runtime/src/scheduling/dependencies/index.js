@@ -53,21 +53,25 @@ export function lagValueOf(dependency) {
   return 0;
 }
 
-function canWriteOwnProperty(target, key) {
-  const descriptor = Object.getOwnPropertyDescriptor(target, key);
-  return descriptor ? descriptor.writable === true : Object.isExtensible(target);
-}
-
-function materializeLegacyLagValueForUnitEdit(dependency) {
-  if (typeof dependency !== 'object' || dependency === null) return;
-  if (dependency.lagValue != null || dependency.lagUnit == null || !Number.isFinite(dependency.lagDays)) return;
-  if (!canWriteOwnProperty(dependency, 'lagValue') || !canWriteOwnProperty(dependency, 'lagUnit')) return;
-  dependency.lagValue = dependency.lagDays;
-  dependency.lagUnit = lagUnitOf(dependency);
+/**
+ * Birimi yazılı ama DEĞERİ yazılmamış eski kaydı açık biçime taşır.
+ *
+ * KOPYA döner. Daha önce bu tamamlama `dependencyLagDays` içinde, yani bir OKUMA
+ * yolunda yapılıyor ve girdinin kendisini değiştiriyordu: bağımlılık nesneleri
+ * uygulama durumundaki görev kayıtlarından gelir, yerinde yazma indirgeyici
+ * dışında durum değiştirir ve `task.deps` eşitlik denetimleri içerik değişmişken
+ * "değişmedi" der. Tamamlama artık YALNIZCA düzenleyici yazma yolunda,
+ * açıkça çağrılır.
+ */
+export function materializeDependencyLag(dependency) {
+  if (typeof dependency !== 'object' || dependency === null) return dependency;
+  if (dependency.lagValue != null || dependency.lagUnit == null || !Number.isFinite(dependency.lagDays)) {
+    return dependency;
+  }
+  return { ...dependency, lagValue: dependency.lagDays, lagUnit: lagUnitOf(dependency) };
 }
 
 export function dependencyLagDays(dependency, calendar = DEFAULT_CALENDAR) {
-  materializeLegacyLagValueForUnitEdit(dependency);
   const value = lagValueOf(dependency);
   const unit = lagUnitOf(dependency);
   const workdaysPerWeek = Math.max(1, calendar?.workingDays?.length || 5);
@@ -76,7 +80,15 @@ export function dependencyLagDays(dependency, calendar = DEFAULT_CALENDAR) {
   return Math.trunc(value);
 }
 
-export function normalizeDependency(dependency) {
+/**
+ * @param {object|string} dependency
+ * @param {object} [calendar] gecikmenin uygulanacağı takvim. Hafta ve ay
+ *   birimleri iş gününe bu takvimle çevrilir; varsayılanla çevrilen `lagDays`,
+ *   altı günlük bir takvimde zamanlamanın uyguladığı tarihle uyuşmuyordu ve
+ *   `lagDays` alanını doğrudan okuyan tüketiciler (çapraz proje bağımlılık
+ *   raporu gibi) plandan farklı bir gecikme bildiriyordu.
+ */
+export function normalizeDependency(dependency, calendar = DEFAULT_CALENDAR) {
   const predecessorId = depId(dependency);
   const type = relTypeOf(dependency);
   const hasExplicitUnit = typeof dependency === 'object' && (dependency?.lagValue != null || dependency?.lagUnit != null);
@@ -86,7 +98,7 @@ export function normalizeDependency(dependency) {
   }
   const lagUnit = lagUnitOf(dependency);
   const lagValue = lagValueOf(dependency);
-  const lagDays = dependencyLagDays({ lagValue, lagUnit });
+  const lagDays = dependencyLagDays({ lagValue, lagUnit }, calendar);
   return { id: predecessorId, predecessorId, type, lagValue, lagUnit, lagDays };
 }
 

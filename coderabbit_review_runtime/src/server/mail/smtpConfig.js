@@ -1,4 +1,5 @@
 import 'server-only';
+import { isValidEmailAddress } from '../../domain/reminders/emailAddress.js';
 
 /**
  * SMTP yapılandırması — YALNIZCA sunucu tarafı.
@@ -75,6 +76,14 @@ export function getSmtpConfig() {
 }
 
 function readSmtpConfig() {
+  // Gönderen adresi YAPILANDIRMA anında doğrulanır. Geçersiz bir `SMTP_FROM`
+  // ile yapılandırma "hazır" görünüyor, hata ancak MIME kurulurken ortaya
+  // çıkıyordu: otomatik turda bu, aralık zaten sahiplenildikten SONRA olduğu
+  // için o hatırlatma değer düzeltilse bile bir daha gönderilemiyordu.
+  const from = stringValue('SMTP_FROM');
+  if (from && !isValidEmailAddress(from)) {
+    throw new Error('SMTP_FROM must be a valid email address.');
+  }
   return Object.freeze({
     host: stringValue('SMTP_HOST'),
     port: integerValue('SMTP_PORT', 587),
@@ -84,6 +93,8 @@ function readSmtpConfig() {
     from: stringValue('SMTP_FROM'),
     fromName: stringValue('SMTP_FROM_NAME', 'MERGEN Rota'),
     useStartTls: booleanValue('SMTP_USE_STARTTLS', true),
+    // Şifresiz kanalda kimlik doğrulama ancak BİLİNÇLİ olarak açılır.
+    allowInsecureAuth: booleanValue('SMTP_ALLOW_INSECURE_AUTH', false),
     // Kurumsal sunucular çoğu zaman kendi kök sertifikalarını kullanır.
     rejectUnauthorized: booleanValue('SMTP_TLS_REJECT_UNAUTHORIZED', true),
     timeoutMs: integerValue('SMTP_TIMEOUT_MS', 20000, { max: 300000 })

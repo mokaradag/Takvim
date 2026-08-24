@@ -15,6 +15,17 @@ import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 
+/**
+ * Görevin GÖRÜNEN ilerleme değeri.
+ *
+ * Süzgeç ve tablo hücresi bunu ORTAK kullanır; ayrı yedeklerle çalışmak,
+ * ekranda %100 gösterilen bir görevi sayısal süzgeçte 0 sayıyordu.
+ */
+function taskProgressValue(task) {
+  if (task?.progress != null) return task.progress;
+  return task?.status === 'done' ? 100 : 0;
+}
+
 function projectLabel(project) {
   if (!project) return '';
   return project.code ? `${project.code} · ${project.name}` : project.name;
@@ -140,7 +151,10 @@ export function TasksView() {
     });
     ['progress', 'plannedHours'].forEach(k => {
       const spec = colFilter[k];
-      if (spec) out = out.filter(t => numericMatchesFilter(t[k] != null ? t[k] : 0, spec));
+      // Süzgeç ve hücre AYNI türetilmiş değeri kullanır: süzgeç `null` ilerlemeyi
+      // 0 sayarken satır tamamlanmış görevi %100 gösteriyor, "Eşit 100" süzgeci
+      // ekranda 100 yazan satırları gizliyordu.
+      if (spec) out = out.filter(t => numericMatchesFilter(k === 'progress' ? taskProgressValue(t) : (t[k] != null ? t[k] : 0), spec));
     });
 
     out.sort((a, b) => {
@@ -272,7 +286,7 @@ export function TasksView() {
                 const today_ = today();
                 const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
                 const prio = resolvePriority(t.priority);
-                const prog = t.progress != null ? t.progress : (t.status === 'done' ? 100 : 0);
+                const prog = taskProgressValue(t);
                 const canEditTask = canWriteProject(projectById.get(t.projectId))
                   || assignableProjectIds.has(String(t.projectId));
                 return (

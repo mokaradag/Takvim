@@ -157,6 +157,31 @@ function sanitizeAttributes(raw) {
  * (`<script>` ve `<style>` gövdeleriyle birlikte). Böylece zengin metin
  * düzenleyicisi XSS yüzeyi açmaz.
  */
+/**
+ * Etiketin KAPANIŞ konumunu bulur; tırnak içindeki `>` etiketi bitirmez.
+ *
+ * İlk `>` karakterinde durmak, `<a title="a > b">` gibi geçerli bir etiketi
+ * ortasından kesiyor, öznitelik değerini yitiriyor ve bozuk çıktı üretiyordu.
+ *
+ * @returns {number} `>` karakterinin dizini; kapanış yoksa `-1`
+ */
+function findTagEnd(source, start) {
+  let quote = '';
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '>') return index;
+  }
+  return -1;
+}
+
 export function sanitizeReminderHtml(input) {
   const source = String(input ?? '');
   let output = '';
@@ -182,7 +207,7 @@ export function sanitizeReminderHtml(input) {
       continue;
     }
 
-    const end = source.indexOf('>', start);
+    const end = findTagEnd(source, start);
     if (end < 0) {
       output += escapeText(source.slice(start));
       break;
@@ -254,12 +279,13 @@ export function htmlToPlainText(html) {
     .replace(/<\s*li[^>]*>/gi, '• ')
     .replace(/<\s*t[dh][^>]*>/gi, '\t')
     .replace(/<[^>]+>/g, '')
-    .replaceAll('&nbsp;', ' ')
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'")
+    // Varlıklar TEK GEÇİŞTE çözülür. Zincirlenmiş `replaceAll` çağrıları
+    // birbirinin çıktısı üzerinde çalışıyordu: `&amp;lt;` önce `&lt;` oluyor,
+    // sonraki adım onu `<` yapıyordu; HTML'de `<` gösteren metin düz metin
+    // bölümünde `<` olarak bozuluyordu.
+    .replace(/&(nbsp|amp|lt|gt|quot|#39);/g, (match, entity) => (
+      { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[entity] ?? match
+    ))
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -341,10 +367,15 @@ export function renderReminderEmail(template, values = {}) {
     // katmanında yapılır (bkz. server/mail/mimeMessage.js).
     { escape: (value) => value }
   );
-  const bodyResult = applyReminderPlaceholders(
-    sanitizeReminderHtml(template?.body || DEFAULT_REMINDER_BODY),
-    values
-  );
+  // SIRA ÖNEMLİDİR: yer tutucular ÖNCE yerleştirilir, temizlik SONRA çalışır.
+  // Ters sırada `sanitizeStyle` ve `sanitizeHref` yalnızca şablonun kendisini
+  // görüyor, yerleştirilen DEĞERİ hiç denetlemiyordu: `style="color: {{keyword}}"`
+  // yazan bir yönetici şablonuna, `red; background-image: url(...)` gibi bir
+  // anahtar sözcük enjekte edilebiliyordu (`escapeHtml`, `(`, `)`, `:` ve `;`
+  // karakterlerini kaçırmaz). Artık izin listeleri dinamik değerler için de
+  // yetkilidir.
+  const substituted = applyReminderPlaceholders(template?.body || DEFAULT_REMINDER_BODY, values);
+  const bodyResult = { text: sanitizeReminderHtml(substituted.text), unknown: substituted.unknown };
   return {
     subject: subjectResult.text,
     // Tam ileti gövdesi (e-posta iskeletiyle birlikte).

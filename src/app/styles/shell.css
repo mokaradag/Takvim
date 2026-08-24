@@ -436,3 +436,6 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 }
 .reduce-motion .app-boot-card,
 .reduce-motion .app-boot-step { animation: none; }
+/* Uygulama içi "Hareketi azalt" ayarı, işletim sistemi tercihiyle AYNI şeyi
+   kapsamalıdır: süpürme animasyonu sınıf yolunda tam hızda kalıyordu. */
+.reduce-motion .app-boot-progress > span { animation-duration: 3s; }

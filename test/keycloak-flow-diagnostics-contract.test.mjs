@@ -37,9 +37,13 @@ test('CMD dosyası kendi depo dizininden çalışır ve dağıtım yolu içermez
   assert.doesNotMatch(CMD, /set "NODE_EXTRA_CA_CERTS=/, 'sertifika yolu betiğe gömülmemelidir');
 });
 
-test('CMD dosyası NODE_EXTRA_CA_CERTS eksikse durur ve değerini yazdırmaz', () => {
+test('CMD dosyası NODE_EXTRA_CA_CERTS eksikse uyarır, durmaz ve değerini yazdırmaz', () => {
   assert.match(CMD, /if not defined NODE_EXTRA_CA_CERTS \(/);
-  assert.match(CMD, /exit \/b 1/);
+  // Herkese açık güvenilen bir sertifikada bu değişken GEREKMEZ; sarmalayıcı
+  // burada çıktığında TEST 2 hiç çalışmıyor ve o geçerli yapılandırma teşhis
+  // edilemiyordu. Uyarır ve devam eder.
+  assert.doesNotMatch(CMD, /exit \/b 1/);
+  assert.match(CMD, /TEST 2 will report whether Node trusts the Keycloak certificate/);
   // Değişkenin GENİŞLETİLMİŞ değeri hiçbir yerde yazdırılmaz.
   assert.doesNotMatch(CMD, /echo[^\n]*%NODE_EXTRA_CA_CERTS%/);
 });
@@ -170,9 +174,13 @@ test('teşhis dosyaları gerçek konak, IP veya kurumsal adres taşımaz', () =>
 
 /* ── Ortam şablonu ──────────────────────────────────────── */
 
-test('.env.example etkin implicit köprü dağıtımını yer tutucularla belgeler', () => {
+test('.env.example implicit köprüyü belgeler ama ETKİN akış authorization-code kalır', () => {
   assert.match(ENV_EXAMPLE, /^NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH=\/rota$/m);
-  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge$/m);
+  // Şablonu kopyalayan kurulum, belgelenen Authorization Code akışında kalır:
+  // etkin `implicit-bridge` değeri yönlendirme adresini yok saydırıyor ve
+  // erişim jetonunu tarayıcı akışına taşıyordu.
+  assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_FLOW=authorization-code$/m);
+  assert.doesNotMatch(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge$/m);
   assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_CLIENT_SECRET=$/m);
   assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI=https:\/\/<MERGEN_HOST>\/rota\/auth\/implicit-callback$/m);
   assert.match(ENV_EXAMPLE, /^MERGEN_ROTA_SESSION_COOKIE_SECURE=true$/m);

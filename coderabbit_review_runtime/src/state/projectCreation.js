@@ -187,7 +187,11 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
     // Kurumsal projelerde sorumlu bilgisi kaynak sistemin sorumluluğundadır:
     // sorumlu tanımlı olmasa bile renk/etiket gibi MERGEN Rota alanları güncellenebilir.
     if (sourceControlled && (issue.code === 'PROJECT_LEAD_REQUIRED' || issue.code === 'PROJECT_LEAD_NOT_FOUND')) return false;
-    if (input.leadId === undefined && !existing.leadId && issue.code === 'PROJECT_LEAD_REQUIRED') return false;
+    // KISMİ güncelleme sorumluya dokunmuyorsa sorumluyla ilgili bulgular
+    // düşürülür: saklı sorumlu artık rehberde bulunmuyorsa (ayrıldı, kapsam
+    // değişti) yalnızca renk ya da etiket değiştiren bir istek de reddediliyordu.
+    if (input.leadId === undefined
+      && (issue.code === 'PROJECT_LEAD_REQUIRED' || issue.code === 'PROJECT_LEAD_NOT_FOUND')) return false;
     return true;
   });
 
@@ -230,8 +234,21 @@ export function prepareProjectUpdateChanges(projectId, input, context = {}) {
   const tagRenames = [];
   for (const entry of Array.isArray(input.tagRenames) ? input.tagRenames : []) {
     const from = String(entry?.from ?? '').trim();
+    const target = String(entry?.to ?? '').trim();
     const to = canonicalTags.get(comparableTagName(entry?.to));
-    if (from && to && comparableTagName(from) !== comparableTagName(to)) tagRenames.push({ from, to });
+    if (!from || !target) continue;
+    if (comparableTagName(from) === comparableTagName(target)) continue;
+    // Hedef etiket katalogda YOKSA sessizce atlanmaz. Çağıran `tagRenames`
+    // gönderip `tags` listesini eksik bıraktığında yeniden adlandırma düşüyor,
+    // görevler eski anahtar sözcükle kalıyor ve çağıran `ok: true` alıyordu.
+    if (!to) {
+      return validationError([{
+        code: 'PROJECT_TAG_RENAME_TARGET_MISSING',
+        field: 'tagRenames',
+        message: `"${target}" etiketi proje etiket kataloğunda bulunmuyor; yeniden adlandırma uygulanamaz.`
+      }]);
+    }
+    tagRenames.push({ from, to });
   }
 
   const rootWbs = wbs.find((node) => node.projectId === projectId && node.parentId == null) || null;

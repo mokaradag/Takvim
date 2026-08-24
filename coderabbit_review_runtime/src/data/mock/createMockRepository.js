@@ -43,6 +43,25 @@ function normalizeChanges(changes = {}) {
   }
   return normalized;
 }
+/**
+ * Aynı kimliği HEM ekleyen HEM silen değişiklik kümesi reddedilir.
+ *
+ * Eskiden silme kazanıyor, ekleme sessizce düşüyor ve `commitChanges` yine de
+ * başarıyla çözülüyordu: çağıran hem `taskUpserts` hem `taskDeletes` içinde o
+ * kimliği geri alıyor, istemci durumu ile depo anlık görüntüsü ayrışıyordu.
+ */
+function assertNoConflictingChange(upserts = [], deletes = [], collection = 'kayıt') {
+  const deleted = new Set(deletes);
+  const conflicting = upserts.map((item) => item?.id).find((id) => id != null && deleted.has(id));
+  if (conflicting != null) {
+    throw new AppRepositoryError({
+      code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+      message: `Aynı ${collection} tek bir değişiklik kümesinde hem güncellenip hem silinemez (${conflicting}).`,
+      operation: 'commitChanges'
+    });
+  }
+}
+
 function applyCollectionChanges(items, upserts = [], deletes = [], { prependNew = false } = {}) {
   const deleted = new Set(deletes);
   const upsertsById = new Map(upserts.map((item) => [item.id, item]));
@@ -122,6 +141,9 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
       const beforeTasksById = new Map(beforeTasks.map((task) => [task.id, task]));
       const beforeProjectsById = new Map((snapshot.projects || []).map((project) => [project.id, project]));
       const candidate = clone(snapshot);
+      assertNoConflictingChange(normalized.projectUpserts, normalized.projectDeletes, 'proje');
+      assertNoConflictingChange(normalized.taskUpserts, normalized.taskDeletes, 'görev');
+      assertNoConflictingChange(normalized.wbsUpserts, normalized.wbsDeletes, 'WBS düğümü');
       candidate.projects = applyCollectionChanges(candidate.projects || [], normalized.projectUpserts, normalized.projectDeletes);
       const invalidated = invalidatedPredecessorIds(beforeTasks, normalized.taskUpserts, normalized.taskDeletes);
       const appliedTasks = applyCollectionChanges(candidate.tasks || [], normalized.taskUpserts, normalized.taskDeletes, { prependNew: true });

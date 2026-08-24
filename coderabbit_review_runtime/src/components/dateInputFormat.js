@@ -83,7 +83,15 @@ export function formatEditableDate(value) {
 export function maskDateDraft(value) {
   const text = String(value || '');
   if (!/^[\d/]*$/.test(text)) return text;
-  const digits = text.replace(/\D/g, '').slice(0, 8);
+  // Kullanıcının yazdığı `/` grubu KAPATIR. Maske yalnızca rakamlardan yeniden
+  // kurulduğunda `1/2/2026` girişi `12/20/26` oluyor, `parseDisplayDate` dört
+  // haneli yıl beklediği için geçerli giriş "geçersiz tarih" olarak
+  // gösteriliyordu.
+  const groups = text.split('/');
+  const closed = groups
+    .map((group, index) => (index < groups.length - 1 && index < 2 && group.length === 1 ? `0${group}` : group))
+    .join('');
+  const digits = closed.replace(/\D/g, '').slice(0, 8);
   if (digits.length <= 2) return digits;
   if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
   return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;

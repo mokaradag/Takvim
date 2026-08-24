@@ -74,18 +74,27 @@ export function resolveAvatarEntries({ people = null, personIds = null, names = 
   }
 
   // Önce kanonik kimlikler çözülür (fotoğraf için Sicil gerekir).
-  const resolvedNames = new Set();
+  // Ad başına KAÇ KEZ çözüldüğü sayılır: küme kullanmak, aynı görünen ada sahip
+  // iki çalışandan yalnızca biri kimlikle çözüldüğünde ötekini de eliyor ve
+  // sorumlu, baş harf yedeğine düşmek yerine yığından tümüyle kayboluyordu.
+  const resolvedNameCounts = new Map();
   for (const id of Array.isArray(personIds) ? personIds : []) {
     const person = lookup.byId(id);
     if (!person) continue;
-    resolvedNames.add(text(person.name));
+    const resolvedName = text(person.name);
+    resolvedNameCounts.set(resolvedName, (resolvedNameCounts.get(resolvedName) || 0) + 1);
     push(person, person.name);
   }
 
   // Kimlikle çözülemeyen sorumlular kaybolmaz: ad üzerinden eklenir. Ad birden
   // çok çalışanla eşleşiyorsa kişi belirsizdir ve baş harf yedeği kullanılır.
   for (const name of Array.isArray(names) ? names : []) {
-    if (resolvedNames.has(text(name))) continue;
+    const key = text(name);
+    const remaining = resolvedNameCounts.get(key) || 0;
+    if (remaining > 0) {
+      resolvedNameCounts.set(key, remaining - 1);
+      continue;
+    }
     push(lookup.byName(name), name);
   }
   return entries;

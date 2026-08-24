@@ -128,13 +128,17 @@ test('project tag canonicalization still persists only the affected task keyword
   assert.deepEqual(propagated.map((task) => [task.id, task.keyword]), [['task-1', 'Risk'], ['task-2', 'Other']]);
 });
 
-test('persisted data mode is restored only after hydration', () => {
+test('persisted data mode is read in the state initializer, not after the first render', () => {
   const source = read('src/components/shell/ApplicationRoot.jsx');
+  const page = read('src/app/page.js');
 
-  assert.match(source, /import \{ useEffect, useMemo, useState \} from 'react';/);
-  assert.match(source, /const \[dataMode, setDataModeState\] = useState\(null\);/);
-  assert.match(source, /useEffect\(\(\) => \{\s*setDataModeState\(readInitialDataMode\(\)\);\s*\}, \[\]\);/s);
-  assert.doesNotMatch(source, /useState\(readInitialDataMode\)/);
+  // Uygulama kökü YALNIZCA tarayıcıda çizilir; tembel başlatıcı hidrasyon
+  // uyuşmazlığı üretemez. Modu etkiyle okumak ilk karede her zaman
+  // `DataModeChooser` çiziyor, kullanıcı her yeniden yüklemede pencereyi
+  // görüyor ve o karedeki tıklama saklanan modu eziyordu.
+  assert.match(page, /dynamic\(\(\) => import\('\.\.\/components\/shell\/ApplicationRoot'\), \{ ssr: false \}\)/);
+  assert.match(source, /const \[dataMode, setDataModeState\] = useState\(readInitialDataMode\);/);
+  assert.doesNotMatch(source, /setDataModeState\(readInitialDataMode\(\)\)/);
 });
 
 test('snapshot and co-assignee projection reuse one serializable SQL transaction', () => {

@@ -174,7 +174,7 @@ See `docs/PERSISTENCE-BOUNDARY.md` for asynchronous loading/mutation semantics, 
 
 ## Database/API migration path
 
-The application starts through `appRepository`, which currently resolves to the asynchronous in-memory adapter. A durable implementation should keep the feature-facing hooks unchanged and replace the data-side adapter behind the state orchestration boundary.
+The application starts through `getAppRepository()`, which lazily resolves to the asynchronous in-memory adapter used by Demo Mode. It is an accessor rather than a module-level constant so the demo seed is not built at import time when the session runs on Actual System data. A durable implementation should keep the feature-facing hooks unchanged and replace the data-side adapter behind the state orchestration boundary.
 
 The intended direction is:
 

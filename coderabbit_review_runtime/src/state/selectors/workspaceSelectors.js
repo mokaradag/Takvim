@@ -44,9 +44,12 @@ export function selectWorkspacePeople(state) {
   if (!selectedProject) return [...(state?.people || [])];
 
   const projectTasks = selectTasksByProject(state.tasks || [], selectedProject.id);
-  const participantIds = new Set(projectTasks.flatMap((task) => task.assigneeIds || []));
-  if (selectedProject.leadId) participantIds.add(selectedProject.leadId);
-  return (state?.people || []).filter((person) => participantIds.has(person.id));
+  // Kimlikler METİN olarak karşılaştırılır: sayısal bir `person.id` ile metin
+  // biçimli bir sorumlu kimliği `Set.has` katı eşitliğinde eşleşmiyor ve proje
+  // ekibi boş dönüyordu (bkz. defaultTaskAssignee, aynı kural).
+  const participantIds = new Set(projectTasks.flatMap((task) => (task.assigneeIds || []).map(String)));
+  if (selectedProject.leadId != null) participantIds.add(String(selectedProject.leadId));
+  return (state?.people || []).filter((person) => participantIds.has(String(person.id)));
 }
 
 export function selectWorkspaceContext(state) {

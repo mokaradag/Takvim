@@ -149,6 +149,17 @@ function relationshipSlack(edge, schedules, metadata) {
   return Math.max(0, diffWorkingDays(successor.earlyStart, requiredStart, successorMeta.calendar));
 }
 
+/**
+ * Sayılan KRİTİK YOL üst sınırı.
+ *
+ * Her kritik kök-yaprak yolu ayrı bir dizi olarak üretilir; art arda gelen
+ * elmas desenleri yol sayısını ÜSTEL büyütür (25 katman ≈ 33 milyon yol).
+ * `buildPortfolioSchedule` hesabı eşzamanlı çağırdığı için bu, zamanlama
+ * ekranını dondurup belleği tüketiyordu. Sınıra ulaşıldığında sayım kesilir ve
+ * `criticalPathsTruncated` ile bildirilir; kritik görev kümesi TAM kalır.
+ */
+const MAX_CRITICAL_PATHS = 500;
+
 function findCriticalPaths(graph, schedules, metadata) {
   const criticalIds = new Set(
     graph.topologicalOrder.filter((id) => schedules.get(id).totalFloatDays <= 0)
@@ -167,8 +178,13 @@ function findCriticalPaths(graph, schedules, metadata) {
     (id) => criticalIds.has(id) && criticalIncomingCount.get(id) === 0
   );
   const paths = [];
+  let truncated = false;
 
   function visit(taskId, path) {
+    if (paths.length >= MAX_CRITICAL_PATHS) {
+      truncated = true;
+      return;
+    }
     const nextPath = [...path, taskId];
     const successors = criticalOutgoing.get(taskId);
     if (!successors.length) {
@@ -179,7 +195,7 @@ function findCriticalPaths(graph, schedules, metadata) {
   }
 
   for (const taskId of starts) visit(taskId, []);
-  return paths;
+  return { paths, truncated };
 }
 
 function serializeSchedule(schedule) {
@@ -210,6 +226,7 @@ export function calculateCpm(tasks, {
       orderedTaskIds: [],
       criticalTaskIds: [],
       criticalPaths: [],
+      criticalPathsTruncated: false,
       tasks: {}
     };
   }
@@ -304,7 +321,7 @@ export function calculateCpm(tasks, {
 
   const actualProjectStart = earliestDate([...schedules.values()].map((schedule) => schedule.earlyStart));
   const criticalTaskIds = graph.topologicalOrder.filter((id) => schedules.get(id).totalFloatDays <= 0);
-  const criticalPaths = findCriticalPaths(graph, schedules, metadata);
+  const { paths: criticalPaths, truncated: criticalPathsTruncated } = findCriticalPaths(graph, schedules, metadata);
   const serializedTasks = Object.fromEntries(
     graph.topologicalOrder.map((id) => [id, serializeSchedule(schedules.get(id))])
   );
@@ -315,6 +332,8 @@ export function calculateCpm(tasks, {
     orderedTaskIds: [...graph.topologicalOrder],
     criticalTaskIds,
     criticalPaths,
+    // Kritik GÖREV kümesi her zaman tamdır; kesilen yalnızca yol SAYIMIdır.
+    criticalPathsTruncated,
     tasks: serializedTasks
   };
 }

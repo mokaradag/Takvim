@@ -13,6 +13,7 @@ import { isSmtpConfigured } from '../mail/smtpConfig.js';
 import {
   claimAutomaticReminder,
   completeReminderLog,
+  loadLastManualReminderAt,
   loadReminderCandidates,
   loadReminderRecipientRows,
   loadReminderSettings,
@@ -131,6 +132,9 @@ export async function deliverTaskReminder(executor, {
   };
 }
 
+/** Aynı kullanıcının aynı göreve elle hatırlatma gönderme aralığı (ms). */
+export const MANUAL_REMINDER_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
 /**
  * ELLE tetiklenen hatırlatma.
  *
@@ -142,6 +146,7 @@ export async function sendManualReminder(executor, {
   actorSicil,
   now = new Date(),
   send = sendMail,
+  minIntervalMs = MANUAL_REMINDER_MIN_INTERVAL_MS,
   // Yetki, GÖNDERİME GİRECEK satıra karşı yeniden doğrulanır. İlk denetim ile
   // bu yükleme ayrı sorgulardır; görev arada başka bir projeye taşınmış ya da
   // yeniden atanmış olabilir ve eski duruma dayanan bir yetki, kullanıcının
@@ -151,6 +156,24 @@ export async function sendManualReminder(executor, {
   const task = await loadReminderTask(executor, taskId);
   if (!task) return { ok: false, code: 'TASK_NOT_FOUND', message: 'Hatırlatma gönderilecek görev bulunamadı.' };
   if (authorize) await authorize(task);
+
+  // EN KÜÇÜK ARALIK: görevi görebilen herkes bu ucu çağırabilir ve her çağrı
+  // bütün sorumlulara gerçek e-posta gönderir. Sınır olmadan uç üzerinde bir
+  // döngü, iş arkadaşlarının posta kutularını doldurabilir ve SMTP aktarıcısını
+  // engelletebilirdi.
+  const lastManualAt = await loadLastManualReminderAt(executor, task.id, actorSicil);
+  if (lastManualAt && minIntervalMs > 0) {
+    const elapsedMs = now.getTime() - lastManualAt.getTime();
+    if (elapsedMs >= 0 && elapsedMs < minIntervalMs) {
+      const waitSeconds = Math.ceil((minIntervalMs - elapsedMs) / 1000);
+      return {
+        ok: false,
+        code: 'MANUAL_REMINDER_RATE_LIMITED',
+        message: `Bu görev için az önce hatırlatma gönderildi. ${waitSeconds} saniye sonra yeniden deneyebilirsiniz.`,
+        retryAfterSeconds: waitSeconds
+      };
+    }
+  }
 
   const settings = await loadReminderSettings(executor);
   // Elle gönderim, otomatik hatırlatma KAPALI olsa da çalışır.
@@ -163,6 +186,9 @@ export async function sendManualReminder(executor, {
 
   return deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now, send });
 }
+
+/** Durdurma anahtarının yeniden okunma aralığı (ms). */
+const SETTINGS_REFRESH_MS = 30000;
 
 /**
  * OTOMATİK hatırlatma turu.
@@ -211,11 +237,17 @@ export async function runAutomaticReminders(executor, {
   let failed = 0;
   let partial = 0;
 
+  let settingsReadAt = Date.now();
+
   for (const candidate of candidates) {
-    // Yapılandırma HER ADIMDA yeniden okunur: uzun bir tur sürerken yönetici
+    // Yapılandırma ARALIKLA yeniden okunur: uzun bir tur sürerken yönetici
     // otomatik gönderimi kapatabilir ve belgelenen durdurma anahtarı ancak
-    // böyle gerçekten durdurur.
-    settings = await loadReminderSettings(executor);
+    // böyle gerçekten durdurur. Her aday için yeniden okumak, yüzlerce adaylı
+    // bir turda aynı sayıda gereksiz SQL gidiş-dönüşü demekti.
+    if (Date.now() - settingsReadAt >= SETTINGS_REFRESH_MS) {
+      settings = await loadReminderSettings(executor);
+      settingsReadAt = Date.now();
+    }
     if (!settings.automaticEnabled) {
       skipped += 1;
       results.push({ taskId: candidate.id, status: 'SKIPPED', reason: 'AUTOMATIC_DISABLED' });

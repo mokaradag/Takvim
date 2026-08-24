@@ -151,7 +151,11 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
   if (targetNodeId != null) {
     const targetNode = nodes.find((item) => String(item.id) === String(targetNodeId)) || null;
     const targetProject = targetNode ? findProject(state.projects, targetNode.projectId) : null;
-    if (!targetNode || !canWriteProject(targetProject) || targetNode.projectId !== node.projectId) {
+    // Proje kimlikleri METİN olarak karşılaştırılır (modülün geri kalanı gibi):
+    // bir kayıt sayısal, ötekisi metin kimlik taşıdığında geçerli bir taşıma
+    // "çapraz proje" sanılıp reddediliyordu.
+    if (!targetNode || !canWriteProject(targetProject)
+      || String(targetNode.projectId) !== String(node.projectId)) {
       return {
         ok: false,
         code: 'PROJECT_WRITE_FORBIDDEN',
@@ -181,7 +185,7 @@ export function resolveTaskWbsMoveAccess(state = {}, taskIds = [], targetWbsId =
   for (const id of [...new Set(taskIds || [])]) {
     const access = resolveTaskMutationAccess(state, id);
     if (!access.ok) return access;
-    if (access.task.projectId !== target.projectId) {
+    if (String(access.task.projectId) !== String(target.projectId)) {
       return {
         ok: false,
         code: 'CROSS_PROJECT_TASK_WBS_MOVE',

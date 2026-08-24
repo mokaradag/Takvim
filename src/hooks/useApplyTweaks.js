@@ -50,6 +50,10 @@ export function useApplyTweaks(tweaks) {
     document.documentElement.style.setProperty('--app-viewport-h', viewportHeight);
     document.documentElement.style.setProperty('--app-viewport-w', viewportWidth);
     return () => {
+      // `zoom` da geri alınır: temizlik yalnızca telafi değişkenlerini
+      // kaldırdığında gövde ölçekli kalıyor, `100vw` ile sınırlanan paneller
+      // yeniden kırpılıyordu — yorumun önlemeyi amaçladığı durumun aynısı.
+      document.body.style.removeProperty('zoom');
       document.documentElement.style.removeProperty('--app-viewport-h');
       document.documentElement.style.removeProperty('--app-viewport-w');
     };

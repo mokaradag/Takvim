@@ -44,11 +44,17 @@ export function selectWbsChildren(wbs, parentId) {
 }
 
 export function selectWbsDescendantIds(wbs, wbsId) {
+  // Kenarlar `buildWbsTree` ile AYNI kuralla kurulur: başka bir projeye ait
+  // ebeveyn bağı ağaçta kullanılmaz. İki yol farklı kenar kümesi izlediğinde
+  // aynı düğüm için farklı görev sayısı ve ilerleme raporlanıyordu.
+  const byId = new Map((wbs || []).map((node) => [node.id, node]));
   const childrenByParentId = new Map();
   for (const node of wbs || []) {
-    const bucket = childrenByParentId.get(node.parentId) || [];
+    const parent = node.parentId == null ? null : byId.get(node.parentId);
+    if (!parent || parent.projectId !== node.projectId || parent.id === node.id) continue;
+    const bucket = childrenByParentId.get(parent.id) || [];
     bucket.push(node);
-    childrenByParentId.set(node.parentId, bucket);
+    childrenByParentId.set(parent.id, bucket);
   }
   for (const children of childrenByParentId.values()) children.sort(compareWbsNodes);
 
@@ -238,14 +244,23 @@ export function emptyWbsRollup(wbsId = null) {
  * @returns {Map<string, object>} düğüm kimliği → toplulaştırma
  */
 export function selectWbsRollupIndex(wbs, tasks, taskSchedules = {}) {
-  const rows = flattenWbsTree(buildWbsTree(wbs));
+  const tree = buildWbsTree(wbs);
+  const rows = flattenWbsTree(tree);
+  // Çocuk kenarları AĞACIN kendisinden okunur, ham `parentId` alanından değil.
+  // `buildWbsTree` başka projeye ait ya da döngü kapatan bağı kullanmaz; böyle
+  // bir çocuk ayrı bir kök olarak satırlarda ebeveyninden ÖNCE gelebiliyor,
+  // ters DFS ebeveyni önce işleyince çocuğun toplamı henüz hesaplanmamış
+  // oluyor ve o alt ağaç sessizce düşüyordu.
   const childIdsByParent = new Map();
-  for (const { node } of rows) {
-    if (node.parentId == null) continue;
-    const bucket = childIdsByParent.get(node.parentId) || [];
-    bucket.push(node.id);
-    childIdsByParent.set(node.parentId, bucket);
-  }
+  const seen = new Set();
+  const collectEdges = (node) => {
+    if (!node || seen.has(node.id)) return;
+    seen.add(node.id);
+    const children = node.children || [];
+    if (children.length) childIdsByParent.set(node.id, children.map((child) => child.id));
+    for (const child of children) collectEdges(child);
+  };
+  for (const root of tree) collectEdges(root);
 
   const directTasksByWbsId = new Map();
   for (const task of tasks || []) {
