@@ -334,11 +334,13 @@ test('yerel SQL sürücüsü yalnızca çalışma zamanında yüklenir', () => {
   assert.match(source, /DATABASE_UNAVAILABLE/);
 });
 
-test('paket kilidi yerel SQL sürücüsünü içerir', () => {
+test('paket bildirimi ve kilidi SQL bağımlılıklarını içerir', () => {
   const lock = JSON.parse(read('package-lock.json'));
   const manifest = JSON.parse(read('package.json'));
 
-  // Kilit dosyasında sürücü yoksa `npm ci` doğrudan başarısız olur.
+  // Her iki paket de üretim bağımlılığıdır; `npm ci` bunları birlikte kurar.
+  assert.equal(lock.packages[''].dependencies.mssql, manifest.dependencies.mssql);
+  assert.ok(lock.packages['node_modules/mssql'], 'mssql kilit dosyasında çözülmelidir');
   assert.equal(lock.packages[''].dependencies.msnodesqlv8, manifest.dependencies.msnodesqlv8);
   assert.ok(lock.packages['node_modules/msnodesqlv8'], 'msnodesqlv8 kilit dosyasında çözülmelidir');
 });
