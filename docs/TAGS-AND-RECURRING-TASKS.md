@@ -160,8 +160,8 @@ veritabanı kısıtında (`CK_MR_Tasks_Recurrence`) zorlanır.
   `UNTIL` tarihinden sonraya kalıcılaştırılmaz;
 - şablonun **bağımlılıkları kopyalanmaz** — aksi hâlde aynı öncül onlarca kez
   tekrarlanır ve CPM ağı bozulurdu;
-- gerçekleşen tarih, emek ve harcama sıfırlanır, kalan süre yinelemenin kendi
-  planlanan süresiyle başlar ve her yinelemeye ayrı bir sıra anahtarı verilir;
+- gerçekleşen tarih, emek ve harcama sıfırlanır, yapay bir kalan süre üretilmez
+  ve her yinelemeye ayrı bir sıra anahtarı verilir;
 - daha önce üretilmiş bir yineleme yeniden üretilmez. Tanıma **değişmez seri
   kimliği** (`recurrenceOccurrenceDate`) üzerinden yapılır: kullanıcı bir
   yinelemeyi ertelese bile o gün ikinci kez üretilmez.

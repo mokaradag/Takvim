@@ -326,6 +326,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
         // toplamları daha ilk günden bozulur.
         actualHours: null,
         spent: null,
+        remainingDurationDays: null,
         plannedStart: occurrence.plannedStart,
         plannedFinish: occurrence.plannedFinish,
         targetFinish: occurrence.targetFinish,
@@ -336,9 +337,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
         // kopyalanırsa aynı öncül onlarca kez tekrarlanır ve CPM ağı bozulur.
         deps: []
       }, current);
-      // Kalan süre bağımsız bir planlama girdisidir: başlamamış yineleme
-      // şablonun tükenmiş kalan süresini değil, kendi tam süresini taşır.
-      return { ...created, remainingDurationDays: created.plannedDurationDays };
+      return created;
     });
 
     return persistence.mutate('task/series', { type: 'task/add-many', tasks });

@@ -5,6 +5,7 @@
    ============================================================ */
 import React, { useState as useSx, useEffect as useEx, useRef as useRx } from 'react';
 import ReactDOM from 'react-dom';
+import { DateInput } from './DateInput';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
 import { clampOverlayToViewport } from './overlayPlacement.js';
@@ -479,14 +480,14 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
             {dateMode === 'before' && (
               <div className="col" style={{ gap: 4 }}>
                 <span className="dff-label">Bu tarihten önce</span>
-                <input type="date" className="input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                <DateInput value={dateTo} onChange={setDateTo} allowEmpty />
                 <span className="dff-hint">‘{dateTo || 'tarih'}’ tarihinden öncesi listelenir.</span>
               </div>
             )}
             {dateMode === 'after' && (
               <div className="col" style={{ gap: 4 }}>
                 <span className="dff-label">Bu tarihten sonra</span>
-                <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                <DateInput value={dateFrom} onChange={setDateFrom} allowEmpty />
                 <span className="dff-hint">‘{dateFrom || 'tarih'}’ tarihinden sonrası listelenir.</span>
               </div>
             )}
@@ -494,11 +495,11 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
               <div className="col" style={{ gap: 6 }}>
                 <div className="col" style={{ gap: 4 }}>
                   <span className="dff-label">Başlangıç (dahil)</span>
-                  <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                  <DateInput value={dateFrom} onChange={setDateFrom} allowEmpty maxDate={dateTo} />
                 </div>
                 <div className="col" style={{ gap: 4 }}>
                   <span className="dff-label">Bitiş (dahil)</span>
-                  <input type="date" className="input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ padding: '5px 8px', fontSize: 12.5 }} />
+                  <DateInput value={dateTo} onChange={setDateTo} allowEmpty minDate={dateFrom} />
                 </div>
               </div>
             )}

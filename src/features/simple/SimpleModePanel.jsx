@@ -182,8 +182,7 @@ export function SimpleModePanel() {
     const existing = findProjectTag(tags, requested);
     if (existing) return { ok: true, project, keyword: existing.name };
     // Atama kapsamıyla açılan projede üst veri YAZILAMAZ ve katalog boştur.
-    // Katalog yazmasını denemek her seferinde reddediliyor, ekranda ZORUNLU
-    // tutulan kısa açıklama da sessizce düşüyordu; bu projelerde etiket
+    // Katalog yazmasını denemek her seferinde reddediliyor; bu projelerde etiket
     // doğrudan görev kaydında saklanır.
     if (!canWriteProject(project)) return { ok: true, project, keyword: requested, catalogSkipped: true };
     const result = await updateProject(project.id, { tags: [...tags, { name: requested }] });
@@ -199,8 +198,8 @@ export function SimpleModePanel() {
       setMessage({ type: 'error', text: 'Görev ekleyebileceğiniz yazılabilir bir proje bulunmuyor.' });
       return;
     }
-    if (!task.trim() || !keyword.trim() || !dueDate || assigneeIds.length === 0) {
-      setMessage({ type: 'error', text: 'Görev, kısa açıklama, sorumlu ve termin tarihi alanlarını tamamlayın.' });
+    if (!task.trim() || !dueDate || assigneeIds.length === 0) {
+      setMessage({ type: 'error', text: 'Görev, sorumlu ve termin tarihi alanlarını tamamlayın.' });
       return;
     }
     if (projectChoice === MANUAL_PROJECT && !manualProjectName.trim()) {
@@ -223,7 +222,7 @@ export function SimpleModePanel() {
         leadId: assigneeIds[0] || people[0]?.id || '',
         dataDate: fmtISO(today()),
         color: 'blue',
-        tags: [keyword.trim()],
+        tags: keyword.trim() ? [keyword.trim()] : [],
         source: 'manual'
       }, { focusWorkspace: false });
       if (!created?.ok) {
@@ -376,7 +375,7 @@ export function SimpleModePanel() {
             <input className="input" value={task} onChange={(event) => setTask(event.target.value)} placeholder="Yapılacak işi yazın" disabled={!hasWritableDestination} />
           </label>
           <label className="simple-field">
-            <span>Anahtar sözcük / kısa açıklama</span>
+            <span>Anahtar sözcük / kısa açıklama <small>isteğe bağlı</small></span>
             <input className="input" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Örn. Teklif, Onay, Teslim" disabled={!hasWritableDestination} />
           </label>
           <label className="simple-field">

@@ -666,7 +666,7 @@ export function createNewTask(state, referenceDate = today(), id = `n-${Date.now
     wbsId: defaultWbs?.id || null,
     proje: project?.name || '',
     task: 'Yeni görev',
-    keyword: 'Yeni',
+    keyword: '',
     assigneeIds: person ? [person.id] : [],
     sorumlu: person ? [person.name] : [],
     status: 'todo',
@@ -680,8 +680,5 @@ export function createNewTask(state, referenceDate = today(), id = `n-${Date.now
     deps: []
   }, state);
 
-  return {
-    ...task,
-    remainingDurationDays: task.plannedDurationDays
-  };
+  return task;
 }

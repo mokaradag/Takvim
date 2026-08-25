@@ -74,7 +74,7 @@
  * @property {string|null} targetFinish Management target/deadline; not automatically a CPM constraint.
  * @property {string|null} actualStart Explicit observed start; never inferred from status or progress.
  * @property {string|null} actualFinish Explicit observed finish; never inferred from status or progress.
- * @property {number|null} remainingDurationDays Independent remaining working duration; not derived from percentage complete.
+ * @property {number|null} remainingDurationDays Gelecekteki kullanım için korunan nullable uyumluluk alanı.
  * @property {string} [proje] Legacy display field retained for the current UI.
  * @property {string[]} [sorumlu] Legacy display field retained for the current UI.
  */

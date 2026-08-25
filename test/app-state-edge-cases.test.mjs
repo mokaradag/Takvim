@@ -470,10 +470,10 @@ test('createNewTask moves a weekend reference date to the next working day', () 
   assert.equal(task.plannedStart, '2026-07-27');
 });
 
-test('createNewTask initializes remaining duration from normalized planned duration', () => {
+test('createNewTask leaves tag and remaining duration empty until explicitly supplied', () => {
   const task = createNewTask(state(), '2026-07-22', 'new');
-  assert.equal(task.remainingDurationDays, task.plannedDurationDays);
-  assert.equal(task.remainingDurationDays > 0, true);
+  assert.equal(task.keyword, '');
+  assert.equal(task.remainingDurationDays, null);
 });
 
 test('createNewTask safely works without projects or people', () => {

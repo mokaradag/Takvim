@@ -164,7 +164,7 @@ Stored schedule data and calculated schedule data have deliberately different se
 - current plan: mutable canonical Task fields;
 - management target: mutable `targetFinish`, not a CPM constraint;
 - actuals: explicit observed dates, never inferred from status;
-- remaining duration: explicit working-day planning input, independent of progress percentage;
+- remaining duration: nullable compatibility field, not manufactured or consumed by current scheduling;
 - project data date: stored, optional project status cutoff — not a row timestamp;
 - baseline: separate immutable snapshot entities under normal Task/WBS CRUD;
 - CPM schedule: derived state only;

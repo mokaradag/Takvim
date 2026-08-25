@@ -249,7 +249,7 @@ Ayrıntılar: `docs/UI-STYLING-ARCHITECTURE.md`.
 
 ## Scheduling ve baseline ilkeleri
 
-Canonical Task; güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`), gerçekleşen tarihleri (`actualStart`, `actualFinish`) ve kalan süreyi (`remainingDurationDays`) ayrı tutar. Project `dataDate` taşır. Baseline verisi ayrı immutable `Baseline` ve `TaskBaselineSnapshot` kayıtlarıdır; normal Task/WBS değişiklikleri eski baseline'ları değiştirmez.
+Canonical Task; güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`) ve gerçekleşen tarihleri (`actualStart`, `actualFinish`) ayrı tutar. `remainingDurationDays` gelecekteki ilerleme duyarlı planlama için nullable uyumluluk alanı olarak korunur; mevcut arayüz ve planlama motoru bu alanı kullanmaz. Project `dataDate` taşır. Baseline verisi ayrı immutable `Baseline` ve `TaskBaselineSnapshot` kayıtlarıdır; normal Task/WBS değişiklikleri eski baseline'ları değiştirmez.
 
 CPM erken/geç tarihler, float, kritik bayraklar, WBS rollup'ları ve Dashboard aggregate'ları SQL'e yazılmaz. Bunlar yalnızca tam Project ağı için türetilir.
 

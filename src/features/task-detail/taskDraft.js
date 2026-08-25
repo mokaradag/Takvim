@@ -38,6 +38,12 @@ export function reconcileTaskDraft(canonicalTask, localDraft, dirtyFields = new 
   return { task: nextTask, dirtyFields: nextDirtyFields };
 }
 
+/** Kapanışta yalnızca gerçekten değişmiş yerel alanı tek yamaya dönüştürür. */
+export function finalTaskFieldPatch(canonicalTask, localDraft, field) {
+  if (!field || taskDraftValuesEqual(canonicalTask?.[field], localDraft?.[field])) return null;
+  return { [field]: localDraft?.[field] ?? '' };
+}
+
 export function createTaskUpdateTracker() {
   const pending = new Set();
   let failure = null;

@@ -81,7 +81,7 @@ Actual dates are explicit data. MERGEN Rota does not fabricate them from task st
 
 ## 4. Remaining Duration
 
-`remainingDurationDays` is an independent planning input measured in working days. It is not derived from percentage complete.
+`remainingDurationDays` is retained as a nullable compatibility field. The current scheduling engine does not consume it and the task editor does not present it as an operational planning input. It is not derived from percentage complete.
 
 The application does not apply a formula such as:
 
@@ -89,7 +89,7 @@ The application does not apply a formula such as:
 remaining duration = planned duration × (1 - progress)
 ```
 
-For a newly created, not-yet-started task, the state boundary initializes remaining duration from its normalized planned duration. Existing migrated tasks may keep `remainingDurationDays` as `null` when no explicit remaining-duration information exists.
+New tasks and generated recurring occurrences leave `remainingDurationDays` as `null`. Existing persisted values remain readable for compatibility; no destructive migration is required.
 
 ## 5. Project Data Date
 
@@ -200,7 +200,7 @@ A WBS summary bar must not be interpreted as CPM Early/Late schedule output. Cur
 | Current plan | `plannedStart`, `plannedFinish`, `plannedDurationDays` | Stored, mutable |
 | Management target | `targetFinish` | Stored, mutable |
 | Actuals | `actualStart`, `actualFinish` | Stored, mutable only through explicit user/data actions |
-| Remaining duration | `remainingDurationDays` | Stored, mutable, independent of progress percentage |
+| Remaining duration | `remainingDurationDays` | Nullable compatibility field; not edited or used by current scheduling |
 | Project status cutoff | `dataDate` | Stored on Project, mutable, optional |
 | Baseline | `Baseline`, `TaskBaselineSnapshot` | Stored immutable snapshot data under normal Task/WBS CRUD |
 | WBS schedule summary | descendant date range, progress and counts | Derived, not written to WBS |
@@ -211,7 +211,7 @@ A WBS summary bar must not be interpreted as CPM Early/Late schedule output. Cur
 All scheduling durations are working-day values unless explicitly documented otherwise.
 
 - `plannedDurationDays` is normalized from the current-plan date range using the task's effective calendar.
-- `remainingDurationDays` is a separate explicit planning input.
+- `remainingDurationDays` remains nullable for compatibility and is not manufactured from planned duration.
 - CPM result `durationDays` is the duration used by that calculation and is derived from canonical current-plan input.
 - Dependency `lagDays` and lead values continue to use working days.
 

@@ -196,18 +196,90 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 }
 .date-input-button:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
 .date-input-button:disabled { cursor: default; opacity: .45; }
-.date-input-native {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
 .date-input-shell.invalid > .input {
   border-color: var(--status-overdue);
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--status-overdue) 12%, transparent);
+}
+.date-input-error {
+  display: block;
+  margin-top: 4px;
+  color: var(--status-overdue);
+  font-size: 11px;
+  line-height: 1.3;
+}
+.date-picker-panel {
+  z-index: var(--z-select-popover);
+  min-width: 280px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+.date-picker-head,
+.date-picker-foot {
+  display: flex;
+  align-items: center;
+}
+.date-picker-head {
+  justify-content: space-between;
+  min-height: 32px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+.date-picker-head .icon-btn:disabled { opacity: .3; cursor: default; }
+.date-picker-weekdays,
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+.date-picker-weekdays {
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+.date-picker-weekdays span { padding: 3px 0; }
+.date-picker-grid button {
+  min-width: 0;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.date-picker-grid button:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--accent) 48%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.date-picker-grid button.other-month { color: var(--text-dim); opacity: .58; }
+.date-picker-grid button.today { border-color: var(--accent); }
+.date-picker-grid button.selected {
+  background: var(--accent);
+  color: var(--accent-contrast, white);
+  font-weight: 700;
+}
+.date-picker-grid button:disabled {
+  color: var(--text-dim);
+  opacity: .25;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+.date-picker-foot {
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 .gantt-range-controls .date-input-shell { width: 145px; flex: 0 0 145px; }
 .date-column-filter-pop { width: min(300px, calc(var(--app-viewport-w, 100vw) - 16px)); }

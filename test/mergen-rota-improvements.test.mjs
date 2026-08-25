@@ -719,9 +719,10 @@ test('yinelemeler şablona bağlanır, kuralı ve bağımlılıkları kopyalamaz
   // bile şablonun kendi yinelemesi ikinci kez üretilmez.
   assert.match(provider, /recurrenceOccurrenceDate: occurrence\.occurrenceDate,/);
   assert.match(provider, /materialized\.has\(occurrence\.occurrenceDate\)/);
-  // Gerçekleşen emek/harcama ve kalan süre yinelemeye taşınmaz.
+  // Gerçekleşen emek/harcama ve yapay kalan süre yinelemeye taşınmaz.
   assert.match(provider, /actualHours: null,\s*\n\s*spent: null,/);
-  assert.match(provider, /remainingDurationDays: created\.plannedDurationDays/);
+  assert.match(provider, /remainingDurationDays: null,/);
+  assert.doesNotMatch(provider, /remainingDurationDays: created\.plannedDurationDays/);
   // Şablon ve kural, kuyruktaki yazmalar tamamlandıktan SONRA okunur.
   assert.ok(provider.indexOf('const flushResult = await persistence.flush();') < provider.indexOf('const template = current.tasks.find'));
 });
@@ -813,7 +814,7 @@ test('boş görev başlığı kalıcılaştırmaya hiç gönderilmez', async () 
   assert.match(read('src/state/persistence.js'), /function cancelFields\(taskId, fields = \[\]\)/);
   // Yerel boş başlık taslağı, ilgisiz bir alan düzenlendiğinde gelen yeni görev
   // nesnesiyle geri yazılmaz.
-  assert.match(drawer, /const draft = titleDraftRef\.current;/);
+  assert.match(drawer, /if \(titleDraftRef\.current !== null\) next\.task = titleDraftRef\.current;/);
 
   const { findCommitScalarIssue } = await import('../src/server/repository/commitScalarValidation.js');
   const rejected = findCommitScalarIssue({

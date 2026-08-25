@@ -5,7 +5,7 @@ import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
 import { isArchivedProject, projectTypeMeta, visibleProjects } from '../../domain/projectTypes';
-import { normalizeProjectTags, projectTagCatalog } from '../../domain/tags';
+import { normalizeProjectTags, projectTagCatalog, resolveTaskTagForProject } from '../../domain/tags';
 import {
   LAG_UNITS,
   REL_TYPES,
@@ -53,6 +53,7 @@ import {
   selectSuccessors
 } from './taskSuccessorPolicy.js';
 import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
+import { finalTaskFieldPatch } from './taskDraft.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 
 function legacyProjectTags(projectId, tasks) {
@@ -112,15 +113,21 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
   // tutulmasaydı, kullanıcı başka bir alanı düzenler düzenlemez gelen yeni
   // `task` nesnesi silinen başlığı geri yazardı.
   const titleDraftRef = useRef(null);
+  const descriptionDraftRef = useRef(null);
+  const closingRef = useRef(null);
 
   useEffect(() => {
     titleDraftRef.current = null;
+    descriptionDraftRef.current = null;
+    closingRef.current = null;
   }, [task.id]);
 
   useEffect(() => {
     setLocal((current) => {
-      const draft = titleDraftRef.current;
-      return draft === null ? { ...task } : { ...task, task: draft };
+      const next = { ...task };
+      if (titleDraftRef.current !== null) next.task = titleDraftRef.current;
+      if (descriptionDraftRef.current !== null) next.description = descriptionDraftRef.current;
+      return next;
     });
   }, [task]);
 
@@ -259,6 +266,28 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
     cancelTaskFieldUpdates(task.id, ['task']);
   };
 
+  const changeDescription = (value) => {
+    descriptionDraftRef.current = value;
+    setLocal((current) => ({ ...current, description: value }));
+  };
+
+  const closeWithDraft = () => {
+    if (closingRef.current) return closingRef.current;
+    const draft = descriptionDraftRef.current;
+    const patch = draft === null
+      ? null
+      : finalTaskFieldPatch(task, { ...task, description: draft }, 'description');
+    const closing = (async () => {
+      if (patch) await onUpdate(task.id, patch);
+      return onClose();
+    })();
+    closingRef.current = closing;
+    closing.finally(() => {
+      if (closingRef.current === closing) closingRef.current = null;
+    });
+    return closing;
+  };
+
   useEffect(() => {
     if (local.keyword !== 'Yeni' || projectTags.some((tag) => tag.name === 'Yeni')) return;
     setLocal((current) => ({ ...current, keyword: '' }));
@@ -278,7 +307,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
       color: project?.color || local.color,
       // Atama kapsamındaki projenin ağacı yüklenmez; kök düğüm kapsam kaydından gelir.
       wbsId: roots.length === 1 ? roots[0].id : (project?.rootWbsId || null),
-      keyword: tags.some((tag) => tag.name === local.keyword) ? local.keyword : (tags[0]?.name || '')
+      keyword: resolveTaskTagForProject(local.keyword, tags)
     });
   };
 
@@ -304,7 +333,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
 
   return (
     <>
-      <div className="drawer-backdrop" onClick={onClose} />
+      <div className="drawer-backdrop" onClick={closeWithDraft} />
       <div className="drawer">
         <div className="drawer-head">
           <div className="col" style={{ gap: 8, flex: 1 }}>
@@ -337,7 +366,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </span>
             )}
           </div>
-          <button className="icon-btn" onClick={onClose} title="Kapat (Esc)"><Icons.Close size={16} /></button>
+          <button className="icon-btn" onClick={closeWithDraft} title="Kapat (Esc)"><Icons.Close size={16} /></button>
         </div>
 
         <div className="drawer-body">
@@ -478,8 +507,8 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
 
             <Section title="Güncel plan" icon={<Icons.Calendar size={13} />} tone="var(--accent)">
               <div className="task-date-grid">
-                <DateField label="Planlanan başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} />
-                <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} />
+                <DateField label="Planlanan başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} maxDate={local.plannedFinish} />
+                <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} minDate={local.plannedStart} />
                 <DateField label="Hedef bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} />
               </div>
               <div className="muted" style={{ fontSize: 11.5 }}>
@@ -524,11 +553,24 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               />
             </Section>
 
-            <Section title="Gerçekleşen ve kalan" icon={<Icons.Clock size={13} />} tone="var(--c-emerald)">
+            <Section title="Gerçekleşen tarihler" icon={<Icons.Clock size={13} />} tone="var(--c-emerald)">
               <div className="task-date-grid">
-                <DateField label="Gerçekleşen başlangıç" value={local.actualStart} onChange={(v) => save({ actualStart: v })} nullable />
-                <DateField label="Gerçekleşen bitiş" value={local.actualFinish} onChange={(v) => save({ actualFinish: v })} nullable />
-                <NumberField label="Kalan süre" value={local.remainingDurationDays} onChange={(v) => save({ remainingDurationDays: v })} suffix="gün" />
+                <DateField
+                  label="Gerçekleşen başlangıç"
+                  value={local.actualStart}
+                  onChange={(v) => save({ actualStart: v })}
+                  maxDate={local.actualFinish}
+                  nullable
+                  allowEmpty={!local.actualFinish}
+                />
+                <DateField
+                  label="Gerçekleşen bitiş"
+                  value={local.actualFinish}
+                  onChange={(v) => save({ actualFinish: v })}
+                  minDate={local.actualStart}
+                  disabled={!local.actualStart}
+                  nullable
+                />
               </div>
             </Section>
 
@@ -588,7 +630,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               <textarea
                 className="input" rows={4}
                 value={local.description || ''}
-                onChange={(e) => save({ description: e.target.value })}
+                onChange={(e) => changeDescription(e.target.value)}
                 placeholder="Notlar, gereksinimler, bağlantılar..."
                 style={{ resize: 'vertical', fontFamily: 'inherit' }}
               />
@@ -603,7 +645,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
           <TaskReminderButton task={task} size={30} />
           <div style={{ flex: 1 }} />
-          <button className="btn primary" onClick={onClose}>Tamam</button>
+          <button className="btn primary" onClick={closeWithDraft}>Tamam</button>
         </div>
       </div>
     </>
@@ -1322,35 +1364,29 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
   );
 }
 
-function DateField({ label, value, onChange, accent, nullable = false }) {
+function DateField({
+  label,
+  value,
+  onChange,
+  accent,
+  nullable = false,
+  allowEmpty = nullable,
+  disabled = false,
+  minDate = '',
+  maxDate = ''
+}) {
   return (
     <div className="col" style={{ gap: 6 }}>
       <div className="label">{label}</div>
       <DateInput
         value={value || ''}
         onChange={(next) => onChange(nullable && !next ? null : next)}
-        allowEmpty={nullable}
+        allowEmpty={allowEmpty}
+        disabled={disabled}
+        minDate={minDate || ''}
+        maxDate={maxDate || ''}
         style={accent ? { '--date-field-accent': accent } : undefined}
       />
-    </div>
-  );
-}
-
-function NumberField({ label, value, onChange, suffix }) {
-  return (
-    <div className="col" style={{ gap: 6 }}>
-      <div className="label">{label}</div>
-      <div className="row" style={{ gap: 6 }}>
-        <input
-          type="number"
-          min={0}
-          step={1}
-          className="input"
-          value={value ?? ''}
-          onChange={(e) => onChange(e.target.value === '' ? null : Math.max(0, Number(e.target.value)))}
-        />
-        {suffix && <span className="muted" style={{ fontSize: 12 }}>{suffix}</span>}
-      </div>
     </div>
   );
 }

@@ -158,7 +158,7 @@ test('current-plan edits and new tasks do not mutate historical baseline snapsho
   const newTask = createNewTask(edited, new Date(2026, 6, 21), 'new-task');
   const withNewTask = appStateReducer(edited, { type: 'task/add', task: newTask });
   assert.equal(withNewTask.taskBaselineSnapshots.some((snapshot) => snapshot.taskId === 'new-task'), false);
-  assert.equal(newTask.remainingDurationDays, newTask.plannedDurationDays);
+  assert.equal(newTask.remainingDurationDays, null);
 });
 
 test('mock projects expose a primary baseline and initial task snapshots', () => {

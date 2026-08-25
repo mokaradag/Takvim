@@ -442,7 +442,6 @@
 .drawer .rel-fields-grid {
   grid-template-columns: minmax(210px, 1.7fr) minmax(105px, .7fr) minmax(100px, .7fr);
 }
-.drawer input[type='date'] { min-width: 0; }
 .task-project-wbs-grid {
   display: grid;
   grid-template-columns: minmax(0, .95fr) minmax(0, 1.35fr);

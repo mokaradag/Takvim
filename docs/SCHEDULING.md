@@ -103,7 +103,7 @@ and are the arithmetic foundation used by the current-plan and CPM layers.
 All scheduling durations are working-day values unless explicitly documented otherwise.
 
 - `Task.plannedDurationDays` is the normalized duration of the mutable current plan.
-- `Task.remainingDurationDays` is an independent explicit planning input and is not calculated from `progress`.
+- `Task.remainingDurationDays` is a nullable compatibility field; the current UI and scheduling engine do not use it, and new tasks do not derive it from plan or progress.
 - `CpmTaskResult.durationDays` is the working-day duration used by that particular CPM calculation.
 - `Dependency.lagDays` is a working-day lag/lead value.
 
@@ -175,12 +175,12 @@ The current scheduling model distinguishes:
 - current plan: `plannedStart`, `plannedFinish`, `plannedDurationDays`;
 - management target: `targetFinish`;
 - actuals: `actualStart`, `actualFinish`;
-- remaining planning input: `remainingDurationDays`;
+- nullable remaining-duration compatibility field: `remainingDurationDays`;
 - project status cutoff: `Project.dataDate`;
 - immutable historical baseline snapshots;
 - derived CPM results.
 
-`targetFinish` is not a scheduling constraint. Actual dates are not inferred from status. Remaining duration is not inferred from percentage complete.
+`targetFinish` is not a scheduling constraint. Actual dates are not inferred from status. Remaining duration is not inferred from plan or percentage complete and is not edited by the current task UI.
 
 ## Data and state boundary
 

@@ -137,6 +137,11 @@ export function findProjectTag(tags, name) {
   return (tags || []).map(normalizeProjectTag).find((tag) => tag && comparableTagName(tag.name) === key) || null;
 }
 
+/** Proje değişiminde yalnızca yeni katalogda bulunan aynı etiketi korur. */
+export function resolveTaskTagForProject(currentTag, tags = []) {
+  return findProjectTag(tags, currentTag)?.name || '';
+}
+
 /**
  * Katalog değişikliğinin görev anahtar sözcüklerine nasıl yansıyacağını planlar.
  *

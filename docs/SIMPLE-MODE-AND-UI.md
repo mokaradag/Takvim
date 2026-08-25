@@ -9,7 +9,7 @@ Basit Modda **Takvim** sayfası açıldığında varsayılan görünüm aylık T
 Takvim sayfasında iki sekme bulunur:
 
 1. **Takvim** — varsayılan görünüm; aylık görev takibini gösterir.
-2. **Hızlı Görev Tanımı** — proje, görev, kısa açıklama, sorumlular ve termin tarihi ile hızlı kayıt oluşturur.
+2. **Hızlı Görev Tanımı** — proje, görev, isteğe bağlı kısa açıklama/etiket, sorumlular ve termin tarihi ile hızlı kayıt oluşturur.
 
 Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Basit Modda oluşturulan kayıtlar mevcut Project/Task veri altyapısını kullanmaya devam eder ve Gelişmiş Modda ayrıntılandırılabilir.
 
@@ -47,7 +47,7 @@ Sayfa dört yetenek sunar; hepsi aynı sadeleştirilmiş alan kümesi üzerinde 
 Üç davranış Gelişmiş Modla ortaktır ve bilinçlidir:
 
 - **Boş başlık kalıcılaştırılmaz.** Kullanıcı adı silip yeniden yazarken geçici boş metin yerel taslakta kalır; sunucu boş başlığı reddettiği için kuyruğa hiç girmez.
-- **Kısa açıklama proje etiket kataloğuyla eşleştirilir.** Alan bırakıldığında değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) etiket yine görevde saklanır — istenip sonra sessizce düşürülmez.
+- **Kısa açıklama/etiket isteğe bağlıdır.** Kullanıcı değer girerse proje etiket kataloğuyla eşleştirilir; değer yoksa görev etiketsiz oluşturulur. Girilen değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) açıkça girilen etiket yine görevde saklanır.
 - **Gizli plan tarihleri ezilmez.** Basit Mod planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Gelişmiş Modda kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
 
 **Gelişmiş Mod değişmez.** `AppShell` yalnızca `simpleMode` bayrağına göre bileşen seçer (`case 'veri': return simpleMode ? <SimpleTasksView /> : <TasksView />;`); `TasksView` ve `TaskDrawer` bu değişiklikten hiç etkilenmez.
