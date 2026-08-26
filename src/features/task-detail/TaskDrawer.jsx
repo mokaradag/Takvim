@@ -87,7 +87,17 @@ function personLabel(person) {
   return employeeNo ? `${employeeNo} · ${person.name}` : person.name;
 }
 
-export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
+export function TaskDrawer({
+  task,
+  tasks,
+  onClose,
+  onUpdate,
+  onDelete,
+  canManageStructure = true,
+  canManageAssignees = true,
+  canDelete = true,
+  isSaving = false
+}) {
   const people = useAllPeople();
   const projects = useAllProjects();
   const calendars = useCalendars();
@@ -440,6 +450,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                     placeholder="Proje seçilmedi"
                     searchPlaceholder="Proje kodu, adı veya türüyle ara"
                     maxVisible={60}
+                    disabled={!canManageStructure}
                   />
                 </div>
                 <div className="col" style={{ gap: 6 }}>
@@ -451,7 +462,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                     placeholder="WBS seçilmedi"
                     searchPlaceholder="WBS kodu veya adıyla ara"
                     emptyText="Bu projede dağılım düğümü bulunamadı."
-                    disabled={!local.projectId || projectWbsRows.length === 0}
+                    disabled={!canManageStructure || !local.projectId || projectWbsRows.length === 0}
                     maxVisible={60}
                   />
                 </div>
@@ -489,7 +500,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                   <span key={`${record.id}:${record.name}`} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
                     <Avatar name={record.name} person={record.person} size="sm" />
                     <span style={{ fontSize: 12 }}>{record.name}</span>
-                    <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>
+                    {canManageAssignees && <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>}
                   </span>
                 ))}
               </div>
@@ -502,7 +513,13 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                 emptyText="Eklenebilecek başka personel bulunamadı."
                 maxVisible={60}
                 compact
+                disabled={!canManageAssignees}
               />
+              {!canManageAssignees && Number(task.assigneeCount ?? (task.assigneeIds || []).length) > (task.assigneeIds || []).length && (
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  Diğer sorumlular gizli yetki kapsamındadır; sorumlu listesi yalnızca tam proje yetkisiyle değiştirilebilir.
+                </div>
+              )}
             </Section>
 
             <Section title="Güncel plan" icon={<Icons.Calendar size={13} />} tone="var(--accent)">
@@ -524,7 +541,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               )}
             </Section>
 
-            <Section
+            {canManageStructure && <Section
               title="Tekrar"
               icon={<Icons.Clock size={13} />}
               tone="var(--c-amber)"
@@ -551,7 +568,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                   : { recurrence })}
                 onGenerate={() => generateTaskSeries(task.id)}
               />
-            </Section>
+            </Section>}
 
             <Section title="Gerçekleşen tarihler" icon={<Icons.Clock size={13} />} tone="var(--c-emerald)">
               <div className="task-date-grid">
@@ -596,7 +613,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
               </div>
             </Section>
 
-            <Section
+            {canManageStructure && <Section
               title="İlişkiler ve bağımlılıklar"
               icon={<Icons.Link size={13} />}
               tone="var(--status-overdue)"
@@ -624,7 +641,7 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
                 onChange={(deps) => save({ deps })}
                 onUpdateTask={updateTask}
               />
-            </Section>
+            </Section>}
 
             <Section title="Notlar" icon={<Icons.Info size={13} />} tone="var(--text-dim)">
               <textarea
@@ -639,13 +656,15 @@ export function TaskDrawer({ task, tasks, onClose, onUpdate, onDelete }) {
         </div>
 
         <div className="drawer-foot">
-          <button className="btn" onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
+          {canDelete && <button className="btn" onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
             <Icons.Trash size={13} /> Sil
-          </button>
+          </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
           <TaskReminderButton task={task} size={30} />
           <div style={{ flex: 1 }} />
-          <button className="btn primary" onClick={closeWithDraft}>Tamam</button>
+          <button className="btn primary" onClick={closeWithDraft} disabled={isSaving} aria-busy={isSaving}>
+            {isSaving ? 'Kaydediliyor…' : 'Tamam'}
+          </button>
         </div>
       </div>
     </>

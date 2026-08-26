@@ -17,6 +17,11 @@ export const NAV_ITEMS = [
 /** Yalnızca sistem yöneticisine gösterilen sayfalar. */
 export const ADMIN_NAV_IDS = new Set(['hatirlatma']);
 
+/** Basit Takvim'e giriş niyetini açılacak alt sekmeye dönüştürür. */
+export function simpleCalendarTabForIntent(intent = null) {
+  return intent === 'entry' ? 'entry' : 'calendar';
+}
+
 export const PAGE_META = {
   ozet: { title: 'Özet', sub: 'Genel görünüm ve metrikler' },
   veri: { title: 'Görevler', sub: 'Görevleri listele ve düzenle' },

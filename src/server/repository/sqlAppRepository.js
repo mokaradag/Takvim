@@ -62,6 +62,11 @@ async function rowById(executor, table, column, value) {
   return (await req.query(`SELECT TOP (1) * FROM dbo.${table} WHERE ${column} = @id;`)).recordset[0] || null;
 }
 function projectRow(executor, value) { return rowById(executor, 'MR_Projects', 'ProjectId', value); }
+async function projectRowForUpdate(executor, value) {
+  const req = request(executor);
+  req.input('id', sql.UniqueIdentifier, uuid(value));
+  return (await req.query('SELECT TOP (1) * FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK) WHERE ProjectId = @id;')).recordset[0] || null;
+}
 function wbsRow(executor, value) { return rowById(executor, 'MR_WBS', 'WbsId', value); }
 async function wbsRowForUpdate(executor, value) {
   const req = request(executor);
@@ -168,6 +173,12 @@ async function loadSnapshotFrom(executor, auth) {
       AND pa.AccessLevel = 'READ' AND p.IsActive = 1;
 
     INSERT @VisibleProjects(ProjectId, AccessLevel)
+    SELECT p.ProjectId, 'FULL'
+    FROM dbo.MR_Projects p
+    WHERE @isAdmin = 0 AND p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil
+      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = p.ProjectId);
+
+    INSERT @VisibleProjects(ProjectId, AccessLevel)
     SELECT pa.ProjectId, CASE WHEN pa.AccessLevel = 'FULL' THEN 'FULL' ELSE 'PARTIAL' END
     FROM dbo.MR_ProjectAccess pa
     JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
@@ -243,7 +254,11 @@ async function loadSnapshotFrom(executor, auth) {
     -- karşılaştırarak "gizlenmiş sorumlu var" sonucuna varabilir ve sunucunun
     -- reddedeceği bir düzenlemeyi baştan açmaz. Sayı kimlik taşımaz.
     SELECT t.*, v.AccessLevel,
-      (SELECT COUNT(*) FROM dbo.MR_TaskAssignees ta WHERE ta.TaskId = t.TaskId) AS AssigneeCount
+      (SELECT COUNT(*) FROM dbo.MR_TaskAssignees ta WHERE ta.TaskId = t.TaskId) AS AssigneeCount,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
+        WHERE ownAssignment.TaskId = t.TaskId AND ownAssignment.Sicil = @sicil
+      ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserAssignee
     FROM dbo.MR_Tasks t
     JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
     WHERE v.AccessLevel = 'FULL'
@@ -499,6 +514,9 @@ async function loadSnapshotFrom(executor, auth) {
       // Yetkili sorumlu sayısı: `assigneeIds.length` ile farklıysa görevin
       // görünmeyen sorumluları vardır (bkz. yukarıdaki AssigneeCount).
       assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
+      // Kimlikleri açığa çıkarmadan görev düzeyi yazma kararını destekler.
+      // Sunucu mutasyonda üyeliği yeniden, yetkili tablodan doğrular.
+      isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
       deps: dependencies.get(id(row.TaskId)) || [],
       version: encodeVersion(row.RowVersion)
     })),
@@ -536,6 +554,244 @@ async function loadSnapshotFrom(executor, auth) {
     assignmentScopeSicils: [...new Set((assignmentScopeRows || [])
       .map((row) => (row.EmployeeSicil == null ? '' : String(row.EmployeeSicil)))
       .filter(Boolean))]
+  };
+}
+
+/**
+ * Bir mutasyon yanıtı için yalnızca dokunulan satırların yetkili, kalıcı
+ * görünümünü yükler. Önceki akış bütün proje portföyünü, WBS ağacını, görevleri,
+ * kişileri, takvimleri ve baz planları yazma işlemi kapanmadan yeniden kuruyor;
+ * tek görev güncellemesini büyük veri kümelerinde uzun süre kilit altında
+ * tutuyordu.
+ */
+async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], wbsIds = [], taskIds = [] } = {}) {
+  const req = request(executor);
+  req.input('sicil', sql.Int, auth.sicil);
+  req.input('isAdmin', sql.Bit, auth.isSystemAdmin);
+  req.input('projectIds', sql.NVarChar(sql.MAX), projectIds.join(','));
+  req.input('wbsIds', sql.NVarChar(sql.MAX), wbsIds.join(','));
+  req.input('taskIds', sql.NVarChar(sql.MAX), taskIds.join(','));
+  const result = await req.query(`
+    SELECT p.*, CASE
+      WHEN @isAdmin = 1
+        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+        )
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_ProjectAccess fullGrant
+          WHERE fullGrant.ProjectId = p.ProjectId AND fullGrant.Sicil = @sicil
+            AND fullGrant.IsActive = 1 AND fullGrant.AccessLevel = 'FULL'
+        )
+      THEN CAST('FULL' AS varchar(10)) ELSE CAST('PARTIAL' AS varchar(10))
+    END AS AccessLevel
+    FROM dbo.MR_Projects p
+    JOIN STRING_SPLIT(@projectIds, ',') requested
+      ON p.ProjectId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
+    WHERE p.IsActive = 1 AND (
+      @isAdmin = 1
+      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_ProjectAccess pa
+        WHERE pa.ProjectId = p.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM dbo.MR_Tasks visibleTask
+        JOIN dbo.MR_TaskAssignees visibleAssignment ON visibleAssignment.TaskId = visibleTask.TaskId
+        WHERE visibleTask.ProjectId = p.ProjectId AND (
+          visibleAssignment.Sicil = @sicil
+          OR EXISTS (
+            SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignment.Sicil
+          )
+        )
+      )
+    );
+
+    SELECT pt.ProjectId, pt.TagName, pt.ColorToken, pt.IconKey, pt.SortOrder
+    FROM dbo.MR_ProjectTags pt
+    JOIN STRING_SPLIT(@projectIds, ',') requested
+      ON pt.ProjectId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
+    ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
+
+    SELECT w.*
+    FROM dbo.MR_WBS w
+    JOIN dbo.MR_Projects p ON p.ProjectId = w.ProjectId AND p.IsActive = 1
+    JOIN STRING_SPLIT(@wbsIds, ',') requested
+      ON w.WbsId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
+    WHERE @isAdmin = 1
+      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_ProjectAccess pa
+        WHERE pa.ProjectId = w.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+          AND pa.AccessLevel IN ('FULL', 'READ')
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM dbo.MR_Tasks visibleTask
+        JOIN dbo.MR_TaskAssignees visibleAssignment ON visibleAssignment.TaskId = visibleTask.TaskId
+        WHERE visibleTask.WbsId = w.WbsId AND (
+          visibleAssignment.Sicil = @sicil
+          OR EXISTS (
+            SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignment.Sicil
+          )
+        )
+      );
+
+    SELECT t.*,
+      (SELECT COUNT(*) FROM dbo.MR_TaskAssignees countAssignment WHERE countAssignment.TaskId = t.TaskId) AS AssigneeCount,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
+        WHERE ownAssignment.TaskId = t.TaskId AND ownAssignment.Sicil = @sicil
+      ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserAssignee
+    FROM dbo.MR_Tasks t
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    JOIN STRING_SPLIT(@taskIds, ',') requested
+      ON t.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
+    WHERE @isAdmin = 1
+      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_ProjectAccess pa
+        WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+          AND pa.AccessLevel IN ('FULL', 'READ')
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_TaskAssignees visibleAssignment
+        WHERE visibleAssignment.TaskId = t.TaskId AND (
+          visibleAssignment.Sicil = @sicil
+          OR EXISTS (
+            SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignment.Sicil
+          )
+        )
+      );
+
+    SELECT ta.TaskId, ta.Sicil
+    FROM dbo.MR_TaskAssignees ta
+    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    JOIN STRING_SPLIT(@taskIds, ',') requested
+      ON ta.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
+    WHERE @isAdmin = 1
+      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_ProjectAccess pa
+        WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+          AND pa.AccessLevel IN ('FULL', 'READ')
+      )
+      OR ta.Sicil = @sicil
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+      );
+
+    SELECT d.*
+    FROM dbo.MR_TaskDependencies d
+    JOIN dbo.MR_Projects p ON p.ProjectId = d.ProjectId AND p.IsActive = 1
+    JOIN STRING_SPLIT(@taskIds, ',') requested
+      ON d.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
+    WHERE @isAdmin = 1
+      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_ProjectAccess pa
+        WHERE pa.ProjectId = d.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1 AND pa.AccessLevel = 'FULL'
+      );
+  `);
+
+  const [projectRows = [], tagRows = [], wbsRows = [], taskRows = [], assigneeRows = [], dependencyRows = []] = result.recordsets || [];
+  const tags = new Map();
+  const assignees = new Map();
+  const dependencies = new Map();
+  for (const row of tagRows) {
+    const key = id(row.ProjectId);
+    if (!tags.has(key)) tags.set(key, []);
+    tags.get(key).push({ name: row.TagName, color: row.ColorToken || null, icon: row.IconKey || null });
+  }
+  for (const row of assigneeRows) {
+    const key = id(row.TaskId);
+    if (!assignees.has(key)) assignees.set(key, []);
+    assignees.get(key).push(String(row.Sicil));
+  }
+  for (const row of dependencyRows) {
+    const key = id(row.TaskId);
+    if (!dependencies.has(key)) dependencies.set(key, []);
+    dependencies.get(key).push({
+      id: id(row.TaskDependencyId),
+      predecessorId: id(row.PredecessorTaskId),
+      type: row.DependencyType,
+      lagDays: Number(row.LagDays || 0),
+      lagValue: row.LagValue == null ? undefined : Number(row.LagValue),
+      lagUnit: row.LagUnit || undefined
+    });
+  }
+
+  return {
+    projectUpserts: projectRows.map((row) => ({
+      id: id(row.ProjectId),
+      source: String(row.SourceType || 'MANUAL').toLowerCase(),
+      code: row.ProjectCode || null,
+      name: row.ProjectName,
+      projectTypeCode: row.ProjectTypeCode || null,
+      projectTypeName: row.ProjectTypeName || null,
+      leadId: row.LeadSicil == null ? null : String(row.LeadSicil),
+      dataDate: isoDate(row.DataDate),
+      color: row.ColorToken || 'blue',
+      calendarId: id(row.CalendarId),
+      tags: projectTagNames(tags.get(id(row.ProjectId)) || []),
+      tagCatalog: tags.get(id(row.ProjectId)) || [],
+      version: encodeVersion(row.RowVersion),
+      accessLevel: row.AccessLevel === 'FULL' ? 'FULL' : 'PARTIAL',
+      schedulingCapability: row.AccessLevel === 'FULL' ? 'COMPLETE' : 'SUPPRESSED_PARTIAL'
+    })),
+    wbsUpserts: wbsRows.map((row) => ({
+      id: id(row.WbsId), projectId: id(row.ProjectId), parentId: id(row.ParentWbsId),
+      code: row.Code, name: row.Name, sortOrder: row.SortOrder,
+      source: String(row.SourceType || 'MANUAL').toLowerCase(),
+      sourceKey: row.SourceKey || null, outlineCode: row.OutlineCode || null,
+      level: row.WbsLevel == null ? null : Number(row.WbsLevel),
+      statusCode: row.StatusCode || null, elementTypeCode: row.ElementTypeCode || null,
+      version: encodeVersion(row.RowVersion)
+    })),
+    taskUpserts: taskRows.map((row) => ({
+      id: id(row.TaskId), projectId: id(row.ProjectId), wbsId: id(row.WbsId), calendarId: id(row.CalendarId),
+      task: row.Title, description: row.Description || '', keyword: row.Keyword || '', status: row.Status,
+      priority: normalizePriorityId(row.Priority), isMilestone: Boolean(row.IsMilestone), milestone: Boolean(row.IsMilestone),
+      plannedStart: isoDate(row.PlannedStart), plannedFinish: isoDate(row.PlannedFinish),
+      plannedDurationDays: nullableNumber(row.PlannedDurationDays), targetFinish: isoDate(row.TargetFinish),
+      actualStart: isoDate(row.ActualStart), actualFinish: isoDate(row.ActualFinish),
+      remainingDurationDays: nullableNumber(row.RemainingDurationDays), progress: nullableNumber(row.Progress),
+      plannedHours: nullableNumber(row.PlannedHours), actualHours: nullableNumber(row.ActualHours),
+      budget: nullableNumber(row.Budget), spent: nullableNumber(row.Spent),
+      recurrence: row.RecurrenceRule || null, recurrenceParentId: id(row.RecurrenceParentTaskId),
+      recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate), sortOrder: row.SortOrder,
+      assigneeIds: assignees.get(id(row.TaskId)) || [],
+      assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
+      isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
+      deps: dependencies.get(id(row.TaskId)) || [], version: encodeVersion(row.RowVersion)
+    }))
   };
 }
 
@@ -980,26 +1236,154 @@ async function taskAssigneeSicils(executor, taskId) {
   return (result.recordset || []).map((row) => Number(row.Sicil));
 }
 
+/**
+ * İstemcinin aynı yetki bağlamında görebileceği kalıcı görev sorumlularını
+ * döndürür. Dar sorumlu güncellemesinde gelen `assigneeIds`, eksik PARTIAL
+ * görünümün yetkili listeyi değiştirmesine izin vermeden bu projeksiyonla
+ * karşılaştırılır.
+ */
+async function visibleTaskAssigneeSicils(executor, actor, taskId) {
+  const req = request(executor);
+  req.input('taskId', sql.UniqueIdentifier, taskId);
+  req.input('sicil', sql.Int, actor.sicil);
+  req.input('isAdmin', sql.Bit, actor.isSystemAdmin);
+  const result = await req.query(`
+    SELECT ta.Sicil
+    FROM dbo.MR_TaskAssignees ta
+    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    WHERE ta.TaskId = @taskId AND (
+      @isAdmin = 1
+      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_ProjectAccess pa
+        WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+          AND pa.AccessLevel IN ('FULL', 'READ')
+      )
+      OR ta.Sicil = @sicil
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+      )
+    );
+  `);
+  return (result.recordset || []).map((row) => Number(row.Sicil));
+}
+
+/** Sicil listelerini sıra ve tekrar farklarından bağımsız karşılaştırır. */
+function sameSicilSet(left = [], right = []) {
+  const a = [...new Set(left.map(Number))].sort((x, y) => x - y);
+  const b = [...new Set(right.map(Number))].sort((x, y) => x - y);
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function sameNullableId(left, right) {
+  if (left == null && right == null) return true;
+  return sameActualId(left, right);
+}
+
+const ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS = Object.freeze([
+  ['plannedHours', 'PlannedHours'],
+  ['actualHours', 'ActualHours'],
+  ['budget', 'Budget'],
+  ['spent', 'Spent']
+]);
+
+/**
+ * Sıradan görev sorumlusu görev içeriğini/ilerlemesini güncelleyebilir; proje
+ * yapısını, WBS'yi, atama listesini ve tekrar/dependency modelini yönetemez.
+ * Bu denetim istemci görünümüne değil kilit altında okunmuş görev satırına
+ * dayanır. Böylece eksik PARTIAL anlık görüntü yetki yükseltme aracı olamaz.
+ */
+function assertAssigneeWorkFieldsOnly(before, task) {
+  const protectedValueChange = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS.some(([field, storedField]) => (
+    hasOwnField(task, field) && nullableNumber(task[field]) !== nullableNumber(before[storedField])
+  ));
+  const structuralChange = !sameActualId(before.ProjectId, task.projectId)
+    || !sameNullableId(before.WbsId, task.wbsId)
+    || Boolean(before.IsMilestone) !== Boolean(task.isMilestone || task.milestone)
+    || (hasOwnField(task, 'recurrence') && (formatRecurrenceRule(task.recurrence) || null) !== (before.RecurrenceRule || null))
+    || (hasOwnField(task, 'recurrenceParentId') && !sameNullableId(before.RecurrenceParentTaskId, task.recurrenceParentId))
+    || (hasOwnField(task, 'recurrenceOccurrenceDate')
+      && isoDate(before.RecurrenceOccurrenceDate) !== (task.recurrenceOccurrenceDate || null))
+    || (task.sortOrder ?? null) !== (before.SortOrder ?? null)
+    || Boolean(task.assigneeMutation)
+    || (task.deps || []).length > 0;
+  if (structuralChange || protectedValueChange) {
+    throw new ServerPersistenceError(
+      'FORBIDDEN',
+      'Görev sorumlusu görev içeriğini ve ilerlemesini düzenleyebilir; proje, WBS, sorumlular, tekrar, bağımlılık, saat ve finans alanları tam proje yetkisi gerektirir.'
+    );
+  }
+}
+
 async function commitTask(executor, actor, task, correlationId) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
   const before = await taskRow(executor, taskId);
   const beforeProjectId = before ? id(before.ProjectId) : null;
+  const authoritativeAssigneeSicils = before ? await taskAssigneeSicils(executor, taskId) : [];
+  const actorIsAssignee = authoritativeAssigneeSicils.includes(Number(actor.sicil));
+  const fullProjectWrite = hasFullProjectWriteAccess(actor, projectId)
+    && (!beforeProjectId || hasFullProjectWriteAccess(actor, beforeProjectId));
+  // Atama listesi değişmiyorsa, kalıcı MR_TaskAssignees üyeliği dar bir görev
+  // yazma hakkı verir. İstemcinin görünür `assigneeIds` alt kümesi bu kararda
+  // kullanılmaz ve hiçbir zaman yetkili listeyi değiştirmez.
+  const assigneeWorkOnly = Boolean(before) && actorIsAssignee
+    && !fullProjectWrite && !Boolean(task.assigneeMutation);
+
+  if (assigneeWorkOnly) {
+    const submittedAssigneeSicils = (task.assigneeIds || []).map(Number);
+    const visibleAssigneeSicils = await visibleTaskAssigneeSicils(executor, actor, taskId);
+    if (!sameSicilSet(submittedAssigneeSicils, visibleAssigneeSicils)) {
+      throw new ServerPersistenceError(
+        'FORBIDDEN',
+        'Görev sorumlusu görünür sorumlu listesini değiştiremez; sorumlu değişikliği açık atama yetkisi gerektirir.'
+      );
+    }
+  }
+
   // PROJE yetkisi, sorumlu doğrulamasından ÖNCE denetlenir. `ensurePeople`
   // önce çalıştığında, erişimi olmayan bir kullanıcı bilinmeyen sicil için
   // "geçersiz çalışan", var olan sicil için FORBIDDEN alıyor ve bu farkla
   // kurumsal rehberi yoklayabiliyordu.
-  if (beforeProjectId) await assertTaskProjectScope(executor, actor, beforeProjectId);
-  await assertTaskProjectScope(executor, actor, projectId);
+  if (assigneeWorkOnly) {
+    await assertActiveProject(executor, beforeProjectId);
+    assertAssigneeWorkFieldsOnly(before, task);
+  } else {
+    if (beforeProjectId) await assertTaskProjectScope(executor, actor, beforeProjectId);
+    await assertTaskProjectScope(executor, actor, projectId);
+  }
+
+  // Dar sorumlu yazması ürün yüzeyinden kaldırılmış saat/finans alanlarını
+  // atlayabilir; diğer güncelleme türleri tam satır değiştirme sözleşmesine
+  // uyar. Yetki kontrolünden SONRA denetlenmesi kayıt varlığı sızıntısını önler.
+  if (before && !assigneeWorkOnly) {
+    const missingField = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS
+      .map(([field]) => field)
+      .find((field) => !hasOwnField(task, field));
+    if (missingField) {
+      throw new ServerPersistenceError(
+        'MUTATION_FAILED',
+        `Güncellenen görev için ${missingField} alanı gönderilmelidir.`
+      );
+    }
+  }
 
   // Sorumlular sonra doğrulanır: görev atama kapsamı, yamanın SONUÇ
   // sorumlularına bakarak karar verir.
-  const assigneeSicils = await ensurePeople(executor, task.assigneeIds || []);
+  const assigneeSicils = assigneeWorkOnly
+    ? authoritativeAssigneeSicils
+    : await ensurePeople(executor, task.assigneeIds || []);
   // Kaynak proje: görevin ŞU ANKİ sorumluları kapsam denetimine girer.
-  if (beforeProjectId) {
-    await assertAssigneeScope(executor, actor, beforeProjectId, await taskAssigneeSicils(executor, taskId));
+  if (!assigneeWorkOnly && beforeProjectId) {
+    await assertAssigneeScope(executor, actor, beforeProjectId, authoritativeAssigneeSicils);
   }
-  await assertAssigneeScope(executor, actor, projectId, assigneeSicils);
+  if (!assigneeWorkOnly) await assertAssigneeScope(executor, actor, projectId, assigneeSicils);
   if (!await projectRow(executor, projectId)) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Görev projesi bulunamadı.');
   }
@@ -1007,9 +1391,6 @@ async function commitTask(executor, actor, task, correlationId) {
   // Tam yetki, bu görevde nelerin YAZILABİLECEĞİNİ belirler: atama kapsamı
   // yalnızca görev satırını kapsar, iş dağılım ağacı ve bağımlılık grafiği
   // görünürlüğü vermez.
-  const fullProjectWrite = hasFullProjectWriteAccess(actor, projectId)
-    && (!beforeProjectId || hasFullProjectWriteAccess(actor, beforeProjectId));
-
   let wbsId = task.wbsId || null;
   if (fullProjectWrite) {
     if (wbsId) {
@@ -1086,6 +1467,7 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   }
 
+  const relatedTaskIds = new Set();
   const projectChanged = before && !sameActualId(before.ProjectId, projectId);
   if (projectChanged && await countRecurrenceChildren(executor, taskId)) {
     // Şablon taşınırsa yinelemeleri eski projede kalır ve seri iki projeye
@@ -1098,16 +1480,22 @@ async function commitTask(executor, actor, task, correlationId) {
   if (projectChanged) {
     const dependencyCleanup = request(executor);
     dependencyCleanup.input('taskId', sql.UniqueIdentifier, taskId);
-    await dependencyCleanup.query(`
+    const cleanup = await dependencyCleanup.query(`
       DELETE dbo.MR_TaskDependencies
+      OUTPUT deleted.TaskId AS RelatedTaskId
       WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;
     `);
+    for (const row of cleanup.recordset || []) {
+      if (!sameActualId(row.RelatedTaskId, taskId)) relatedTaskIds.add(id(row.RelatedTaskId));
+    }
   }
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   req.input('projectId', sql.UniqueIdentifier, projectId);
   req.input('wbsId', sql.UniqueIdentifier, wbsId || null);
-  req.input('calendarId', sql.UniqueIdentifier, task.calendarId || null);
+  // Varsayılan takvim istemci projeksiyonunda görev alanına doldurulabilir.
+  // Dar sorumlu yazması satırın yapısal takvim geçersiz kılmasını değiştirmez.
+  req.input('calendarId', sql.UniqueIdentifier, assigneeWorkOnly ? id(before.CalendarId) : (task.calendarId || null));
   req.input('title', sql.NVarChar(1000), task.task || task.title);
   req.input('description', sql.NVarChar(sql.MAX), task.description || null);
   req.input('keyword', sql.NVarChar(255), task.keyword || null);
@@ -1125,10 +1513,10 @@ async function commitTask(executor, actor, task, correlationId) {
   req.input('actualFinish', sql.Date, task.actualFinish || null);
   req.input('remainingDuration', sql.Decimal(10, 2), nullableNumber(task.remainingDurationDays));
   req.input('progress', sql.Decimal(5, 2), nullableNumber(task.progress));
-  req.input('plannedHours', sql.Decimal(12, 2), nullableNumber(task.plannedHours));
-  req.input('actualHours', sql.Decimal(12, 2), nullableNumber(task.actualHours));
-  req.input('budget', sql.Decimal(19, 4), nullableNumber(task.budget));
-  req.input('spent', sql.Decimal(19, 4), nullableNumber(task.spent));
+  req.input('plannedHours', sql.Decimal(12, 2), nullableNumber(assigneeWorkOnly ? before.PlannedHours : task.plannedHours));
+  req.input('actualHours', sql.Decimal(12, 2), nullableNumber(assigneeWorkOnly ? before.ActualHours : task.actualHours));
+  req.input('budget', sql.Decimal(19, 4), nullableNumber(assigneeWorkOnly ? before.Budget : task.budget));
+  req.input('spent', sql.Decimal(19, 4), nullableNumber(assigneeWorkOnly ? before.Spent : task.spent));
   req.input('sortOrder', sql.Int, task.sortOrder ?? null);
   // Kural kanonikleştirilerek yazılır: geçersiz bir RRULE metni kalıcı kayda düşmez.
   req.input('recurrenceRule', sql.NVarChar(400), recurrenceRule);
@@ -1181,26 +1569,28 @@ async function commitTask(executor, actor, task, correlationId) {
   // Bağımlılık satırları YALNIZCA tam yetkili yazmada değiştirilir. PARTIAL
   // anlık görüntü `MR_TaskDependencies` yüklemez; istemci `deps: []` taşır ve
   // koşulsuz silme, yöneticinin hiç göremediği öncülleri sessizce yok ederdi.
-  const clear = request(executor);
-  clear.input('taskId', sql.UniqueIdentifier, taskId);
-  await clear.query(fullProjectWrite
-    ? `
+  if (!assigneeWorkOnly) {
+    const clear = request(executor);
+    clear.input('taskId', sql.UniqueIdentifier, taskId);
+    await clear.query(fullProjectWrite
+      ? `
     DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
   `
-    : `
+      : `
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
   `);
 
-  for (const sicil of assigneeSicils) {
-    const assignment = request(executor);
-    assignment.input('taskId', sql.UniqueIdentifier, taskId);
-    assignment.input('sicil', sql.Int, Number(sicil));
-    assignment.input('actorSicil', sql.Int, actor.sicil);
-    await assignment.query(`
-      INSERT dbo.MR_TaskAssignees(TaskId, Sicil, AssignedBySicil)
-      VALUES(@taskId, @sicil, @actorSicil);
-    `);
+    for (const sicil of assigneeSicils) {
+      const assignment = request(executor);
+      assignment.input('taskId', sql.UniqueIdentifier, taskId);
+      assignment.input('sicil', sql.Int, Number(sicil));
+      assignment.input('actorSicil', sql.Int, actor.sicil);
+      await assignment.query(`
+        INSERT dbo.MR_TaskAssignees(TaskId, Sicil, AssignedBySicil)
+        VALUES(@taskId, @sicil, @actorSicil);
+      `);
+    }
   }
 
   if (!fullProjectWrite && (task.deps || []).length) {
@@ -1236,12 +1626,16 @@ async function commitTask(executor, actor, task, correlationId) {
     `);
   }
   await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'TASK', taskId, projectId, before, task);
+  return {
+    taskId: id(taskId), projectId, beforeProjectId, wbsId: id(wbsId),
+    relatedTaskIds: [...relatedTaskIds]
+  };
 }
 
 async function deleteTask(executor, actor, entry, correlationId) {
   const taskId = uuid(entry.id);
   const before = await taskRow(executor, taskId);
-  if (!before) return;
+  if (!before) return null;
   const projectId = id(before.ProjectId);
   await assertTaskProjectAccess(executor, actor, projectId, await taskAssigneeSicils(executor, taskId));
   // Silme yalnızca bu satırı değil, yinelemelerini ve ardıllarının bağımlılık
@@ -1262,6 +1656,7 @@ async function deleteTask(executor, actor, entry, correlationId) {
   const result = await req.query(`
     IF NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks WHERE TaskId = @taskId AND RowVersion = @version)
       THROW 51009, 'STALE_TASK', 1;
+    DECLARE @relatedTasks TABLE(TaskId uniqueidentifier);
     -- Seri şablonu silinirken üretilmiş yinelemeler AYRILIR, silinmez: her
     -- yineleme gerçek bir görevdir ve kendi ilerlemesini taşır. Ayırma
     -- yapılmasaydı kendine başvuran yabancı anahtar silmeyi tümüyle
@@ -1272,11 +1667,15 @@ async function deleteTask(executor, actor, entry, correlationId) {
         RecurrenceOccurrenceDate = NULL,
         UpdatedAt = SYSUTCDATETIME(),
         UpdatedBySicil = @actorSicil
+    OUTPUT inserted.TaskId INTO @relatedTasks(TaskId)
     WHERE RecurrenceParentTaskId = @taskId;
-    DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;
+    DELETE dbo.MR_TaskDependencies
+    OUTPUT deleted.TaskId INTO @relatedTasks(TaskId)
+    WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
     DELETE dbo.MR_Tasks WHERE TaskId = @taskId AND RowVersion = @version;
     SELECT @@ROWCOUNT AS Affected;
+    SELECT DISTINCT TaskId FROM @relatedTasks WHERE TaskId <> @taskId;
   `).catch((error) => {
     if (error?.message?.includes('STALE_TASK')) {
       throw new ServerPersistenceError('CONFLICT', 'Görev silinmeden önce başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
@@ -1287,6 +1686,11 @@ async function deleteTask(executor, actor, entry, correlationId) {
     throw new ServerPersistenceError('CONFLICT', 'Görev silinemedi. Verileri yeniden yükleyin.');
   }
   await audit(executor, actor, correlationId, 'DELETE', 'TASK', taskId, projectId, before, null);
+  return {
+    taskId: id(taskId),
+    projectId,
+    relatedTaskIds: (result.recordsets?.[1] || []).map((row) => id(row.TaskId))
+  };
 }
 
 async function deleteWbs(executor, actor, entry, correlationId) {
@@ -1322,6 +1726,88 @@ async function deleteWbs(executor, actor, entry, correlationId) {
     throw new ServerPersistenceError('CONFLICT', 'WBS silinmeden önce başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
   }
   await audit(executor, actor, correlationId, 'DELETE', 'WBS', wbsId, projectId, before, null);
+}
+
+/**
+ * Yalnızca boş, MANUAL projeyi sistem yöneticisi için pasifleştirir. WBS,
+ * etiketler ve denetim geçmişi fiziksel olarak korunur; etkin erişim bağışları
+ * aynı işlemde kapatılır. Kurumsal/CN43N kayıtları bu yoldan asla değişmez.
+ */
+async function deleteProject(executor, actor, entry, correlationId) {
+  const projectId = uuid(entry.id);
+  if (!actor.isSystemAdmin) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
+  }
+  const before = await projectRowForUpdate(executor, projectId);
+  if (!before || !before.IsActive) return [];
+  if (isCorporateSource(before.SourceType)) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Kurumsal/CN43N projeleri uygulamadan silinemez.');
+  }
+
+  const taskCheck = request(executor);
+  taskCheck.input('projectId', sql.UniqueIdentifier, projectId);
+  const taskCount = Number((await taskCheck.query(`
+    SELECT COUNT_BIG(*) AS TaskCount
+    FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)
+    WHERE ProjectId = @projectId;
+  `)).recordset?.[0]?.TaskCount ?? 0);
+  if (taskCount > 0) {
+    throw new ServerPersistenceError(
+      'MUTATION_FAILED',
+      `Bu manuel proje ${taskCount} görev içerdiği için silinemez. Önce görevleri başka projeye taşıyın veya kaldırın.`
+    );
+  }
+
+  const related = request(executor);
+  related.input('projectId', sql.UniqueIdentifier, projectId);
+  const wbsIds = (await related.query('SELECT WbsId FROM dbo.MR_WBS WHERE ProjectId = @projectId;')).recordset
+    .map((row) => id(row.WbsId));
+
+  const grants = request(executor);
+  grants.input('projectId', sql.UniqueIdentifier, projectId);
+  const revokedGrants = (await grants.query(`
+    SELECT Sicil, AccessLevel, GrantSource
+    FROM dbo.MR_ProjectAccess
+    WHERE ProjectId = @projectId AND IsActive = 1;
+  `)).recordset || [];
+
+  const req = request(executor);
+  req.input('projectId', sql.UniqueIdentifier, projectId);
+  req.input('version', sql.Binary(8), decodeVersion(entry.version));
+  req.input('actorSicil', sql.Int, actor.sicil);
+  const result = await req.query(`
+    UPDATE dbo.MR_Projects
+    SET IsActive = 0, UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
+    WHERE ProjectId = @projectId AND SourceType = 'MANUAL' AND IsActive = 1 AND RowVersion = @version;
+    DECLARE @affected int = @@ROWCOUNT;
+    UPDATE dbo.MR_ProjectAccess
+    SET IsActive = 0, UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
+    WHERE @affected > 0 AND ProjectId = @projectId AND IsActive = 1;
+    SELECT @affected AS Affected;
+  `);
+  if (!result.recordset?.[0]?.Affected) {
+    throw new ServerPersistenceError('CONFLICT', 'Proje silinmeden önce başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
+  }
+  await audit(executor, actor, correlationId, 'DEACTIVATE', 'PROJECT', projectId, projectId, before, null);
+  for (const grant of revokedGrants) {
+    await audit(
+      executor,
+      actor,
+      correlationId,
+      'DEACTIVATE',
+      'PROJECT_ACCESS',
+      `${projectId}:${grant.Sicil}`,
+      projectId,
+      {
+        projectId,
+        sicil: grant.Sicil,
+        accessLevel: grant.AccessLevel,
+        grantSource: grant.GrantSource
+      },
+      null
+    );
+  }
+  return wbsIds;
 }
 
 /**
@@ -1429,6 +1915,9 @@ export function createSqlAppRepository() {
         const correlationId = randomUUID();
         const consumedRootIds = new Set();
         const tagPlans = [];
+        const touchedTaskProjects = new Set();
+        const touchedTaskWbs = new Set();
+        const relatedTaskIds = new Set();
 
         for (const project of changes.projectUpserts) {
           const root = changes.wbsUpserts.find((node) => sameActualId(node.projectId, project.id) && node.parentId == null) || null;
@@ -1439,7 +1928,13 @@ export function createSqlAppRepository() {
         for (const node of changes.wbsUpserts) {
           if (!consumedRootIds.has(id(node.id))) await commitWbs(transaction, actor, node, correlationId);
         }
-        for (const task of changes.taskUpserts) await commitTask(transaction, actor, task, correlationId);
+        for (const task of changes.taskUpserts) {
+          const touched = await commitTask(transaction, actor, task, correlationId);
+          if (touched.projectId) touchedTaskProjects.add(touched.projectId);
+          if (touched.beforeProjectId) touchedTaskProjects.add(touched.beforeProjectId);
+          if (touched.wbsId) touchedTaskWbs.add(touched.wbsId);
+          for (const relatedTaskId of touched.relatedTaskIds || []) relatedTaskIds.add(relatedTaskId);
+        }
         // Etiket yayılımı görev yazmalarından SONRA çalışır: aynı işlemde
         // istemcinin gönderdiği görevler kendi sürüm anahtarlarıyla kaydedilir,
         // ardından katalog dışında kalan CANLI satırlar hizalanır.
@@ -1447,22 +1942,50 @@ export function createSqlAppRepository() {
         for (const entry of tagPlans) {
           propagatedTaskIds.push(...await propagateProjectTagChanges(transaction, actor.sicil, entry.projectId, entry.plan));
         }
-        for (const entry of changes.taskDeletes) await deleteTask(transaction, actor, entry, correlationId);
+        for (const entry of changes.taskDeletes) {
+          const touched = await deleteTask(transaction, actor, entry, correlationId);
+          if (touched?.projectId) touchedTaskProjects.add(touched.projectId);
+          for (const relatedTaskId of touched?.relatedTaskIds || []) relatedTaskIds.add(relatedTaskId);
+        }
         for (const entry of changes.wbsDeletes) await deleteWbs(transaction, actor, entry, correlationId);
-        if (changes.projectDeletes.length) {
-          throw new ServerPersistenceError('FORBIDDEN', 'Proje silme Gerçek Sistem için desteklenmiyor; projeler pasifleştirilmelidir.');
+        const deletedWbsIds = [];
+        for (const entry of changes.projectDeletes) {
+          deletedWbsIds.push(...await deleteProject(transaction, actor, entry, correlationId));
         }
 
-        const authoritative = await loadSnapshotFrom(transaction, actor);
-        const projectIds = new Set(changes.projectUpserts.map((value) => id(value.id)));
-        const wbsIds = new Set([...changes.wbsUpserts.map((value) => id(value.id)), ...consumedRootIds]);
-        const taskIds = new Set([...changes.taskUpserts.map((value) => id(value.id)), ...propagatedTaskIds]);
+        const projectIds = new Set([
+          ...changes.projectUpserts.map((value) => id(value.id)),
+          ...touchedTaskProjects
+        ]);
+        const wbsIds = new Set([
+          ...changes.wbsUpserts.map((value) => id(value.id)),
+          ...consumedRootIds,
+          ...touchedTaskWbs
+        ]);
+        const taskIds = new Set([
+          ...changes.taskUpserts.map((value) => id(value.id)),
+          ...propagatedTaskIds,
+          ...relatedTaskIds
+        ]);
+        const authoritative = await loadAuthoritativeMutationRows(transaction, actor, {
+          projectIds: [...projectIds],
+          wbsIds: [...wbsIds],
+          taskIds: [...taskIds]
+        });
+        const invisibleChangedProjectIds = [...projectIds]
+          .filter((projectId) => !authoritative.projectUpserts.some((project) => sameActualId(project.id, projectId)));
         return {
-          projectUpserts: authoritative.projects.filter((value) => projectIds.has(value.id)),
-          projectDeletes: [],
-          wbsUpserts: authoritative.wbs.filter((value) => wbsIds.has(value.id)),
-          wbsDeletes: changes.wbsDeletes.map((value) => id(value.id)),
-          taskUpserts: authoritative.tasks.filter((value) => taskIds.has(value.id)),
+          projectUpserts: authoritative.projectUpserts,
+          // Lead değişimi aktörün son FULL kaynağını kaldırmış olabilir. Geniş
+          // snapshot bunu görünmez yapıyordu; hedefli yanıt da eski yetkili
+          // proje nesnesini istemcide bırakmamalıdır.
+          projectDeletes: [...new Set([
+            ...changes.projectDeletes.map((value) => id(value.id)),
+            ...invisibleChangedProjectIds
+          ])],
+          wbsUpserts: authoritative.wbsUpserts,
+          wbsDeletes: [...new Set([...changes.wbsDeletes.map((value) => id(value.id)), ...deletedWbsIds])],
+          taskUpserts: authoritative.taskUpserts,
           taskDeletes: changes.taskDeletes.map((value) => id(value.id))
         };
       });

@@ -382,7 +382,9 @@ export function withCompletionStamp(state, taskId, patch, referenceDate = today(
 }
 
 export function normalizeStateTask(task, state) {
-  return normalizeTaskRecord(task, taskContext(state));
+  const persistentTask = { ...task };
+  delete persistentTask.assigneeMutation;
+  return normalizeTaskRecord(persistentTask, taskContext(state));
 }
 
 function deleteId(value) {
@@ -422,6 +424,17 @@ function applyUpserts(items, upserts, deletes, normalize, { prependNew = false }
 }
 
 function applyCommittedChanges(state, changes = {}) {
+  const deletedProjectIds = new Set((changes.projectDeletes || []).map(deleteId).filter(Boolean));
+  // FULL erişimin PARTIAL'a düşmesi (manuel lead devri gibi) daha önce görünür
+  // olan tam görev/WBS ağını istemcide bırakamaz. Güvenli alt küme bir sonraki
+  // yetkili snapshot ile yüklenene kadar proje bağlamı boşaltılır.
+  const downgradedProjectIds = new Set((changes.projectUpserts || [])
+    .filter((project) => {
+      const before = state.projects.find((entry) => entry.id === project.id);
+      return before?.accessLevel === 'FULL' && project.accessLevel !== 'FULL';
+    })
+    .map((project) => project.id));
+  const scrubbedProjectIds = new Set([...deletedProjectIds, ...downgradedProjectIds]);
   // Sunucunun yetkili yanıtı projelere de uygulanır. Aksi hâlde proje kayıtları
   // eski (veya eksik) sürüm anahtarıyla kalır ve bir sonraki güncelleme
   // "Kayıt kimliği zaten kullanılıyor" çakışmasıyla reddedilir.
@@ -432,26 +445,37 @@ function applyCommittedChanges(state, changes = {}) {
     (project) => ({ ...project })
   );
   const wbs = applyUpserts(
-    state.wbs,
-    changes.wbsUpserts || [],
+    state.wbs.filter((node) => !scrubbedProjectIds.has(node.projectId)),
+    (changes.wbsUpserts || []).filter((node) => !scrubbedProjectIds.has(node.projectId)),
     changes.wbsDeletes || [],
     (node) => ({ ...node })
   );
   const taskState = { ...state, projects, wbs };
   const invalidated = invalidatedPredecessorIds(
     state.tasks,
-    changes.taskUpserts || [],
-    changes.taskDeletes || []
+    (changes.taskUpserts || []).filter((task) => !scrubbedProjectIds.has(task.projectId)),
+    [
+      ...(changes.taskDeletes || []),
+      ...state.tasks.filter((task) => scrubbedProjectIds.has(task.projectId)).map((task) => task.id)
+    ]
   );
   const appliedTasks = applyUpserts(
-    state.tasks,
-    changes.taskUpserts || [],
+    state.tasks.filter((task) => !scrubbedProjectIds.has(task.projectId)),
+    (changes.taskUpserts || []).filter((task) => !scrubbedProjectIds.has(task.projectId)),
     changes.taskDeletes || [],
     (task) => normalizeStateTask(task, taskState),
     { prependNew: true }
   );
   const tasks = removePredecessorReferences(appliedTasks, invalidated);
-  const next = { ...state, projects, wbs, tasks };
+  const baselines = (state.baselines || []).filter((baseline) => !scrubbedProjectIds.has(baseline.projectId));
+  const baselineIds = new Set(baselines.map((baseline) => baseline.id));
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const taskBaselineSnapshots = (state.taskBaselineSnapshots || [])
+    .filter((snapshot) => baselineIds.has(snapshot.baselineId) && taskIds.has(snapshot.taskId));
+  const selectedTaskId = tasks.some((task) => task.id === state.selectedTaskId)
+    ? state.selectedTaskId
+    : null;
+  const next = { ...state, projects, wbs, tasks, baselines, taskBaselineSnapshots, selectedTaskId };
   return { ...next, ...workspaceState(next, next) };
 }
 

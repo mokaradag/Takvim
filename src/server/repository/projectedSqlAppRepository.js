@@ -42,6 +42,7 @@ async function loadVisibleTaskAssignees(executor, taskIds, auth) {
          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
            AND pa.AccessLevel IN ('FULL', 'READ')
        )
+       OR (p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil)
        OR ta.Sicil = @sicil
        OR EXISTS (
          SELECT 1 FROM dbo.MR_V_ExecutiveScope es

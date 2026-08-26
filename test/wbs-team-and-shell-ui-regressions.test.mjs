@@ -202,7 +202,9 @@ test('Basit Mod gezinmesi Görevler ve Gantt sayfalarını da içerir', () => {
   // Gantt görünümü her iki modda da aynı bileşenle çizilir.
   assert.match(source, /case 'gantt': return <WorkspaceGanttView \/>;/);
   // Görevler sayfası Basit Modda SADE sürümle açılır; Gelişmiş Mod tablosu değişmez.
-  assert.match(source, /case 'veri': return simpleMode \? <SimpleTasksView \/> : <TasksView \/>;/);
+  const tasksCase = source.match(/case 'veri':([\s\S]*?)(?=\n\s*case 'wbs':)/)?.[1] || '';
+  assert.match(tasksCase, /return\s+simpleMode\s*\?\s*<SimpleTasksView\b[^>]*onNewTask=/);
+  assert.match(tasksCase, /:\s*<TasksView\s*\/>/);
 });
 
 test('vurgu rengi kataloğu Türkçe "Kehribar" adını kullanır', () => {

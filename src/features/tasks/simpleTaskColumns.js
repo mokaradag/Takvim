@@ -18,6 +18,16 @@ export const SIMPLE_TASK_COLUMNS = Object.freeze([
   Object.freeze({ id: 'targetFinish', label: 'Termin', field: 'targetFinish' })
 ]);
 
+/** Basit görev tablosunun boş arama ve sütun süzgeci durumu. */
+export function createEmptySimpleTaskFilterState() {
+  return {
+    search: '',
+    filters: {
+      proje: [], task: '', keyword: [], sorumlu: [], priority: [], status: [], targetFinish: null
+    }
+  };
+}
+
 /**
  * Basit Modda GÖSTERİLMEYEN, yalnızca Gelişmiş Moda ait alanlar.
  *

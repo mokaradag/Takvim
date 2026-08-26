@@ -104,9 +104,6 @@ export function KanbanView() {
                       <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">{fmt(t.plannedStart, 'dd MMM yyyy')}</span></div>
                       <div className="rt-row"><span className="rt-label">Bitiş</span><span className="rt-val">{fmt(t.plannedFinish, 'dd MMM yyyy')}</span></div>
                       <div className="rt-row"><span className="rt-label">Hedef</span><span className="rt-val" style={overdue ? { color: 'var(--status-overdue)' } : null}>{t.targetFinish ? fmt(t.targetFinish, 'dd MMM yyyy') : '—'}</span></div>
-                      {t.plannedHours != null && (
-                        <div className="rt-row"><span className="rt-label">Saat</span><span className="rt-val">{t.actualHours || 0} / {t.plannedHours} sa</span></div>
-                      )}
                       {t.progress != null && t.progress > 0 && (
                         <>
                           <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{t.progress}%</span></div>

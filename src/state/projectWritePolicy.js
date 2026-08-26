@@ -84,15 +84,66 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   }
 
   // Kaynak proje görev atama kapsamında da olabilir: yönetici, kendi
-  // personeline tanımladığı görevi düzenleyebilmelidir.
-  const sourceProject = findProject(state.projects, task.projectId) || findAssignableProject(state, task.projectId);
-  if (!canAssignTasksInProject(state, task.projectId)) {
+  // personeline tanımladığı görevi düzenleyebilmelidir. Görevin kalıcı
+  // sorumlusu ise yalnızca bu görev için dar bir içerik/ilerleme hakkı alır.
+  const visibleSourceProject = findProject(state.projects, task.projectId);
+  const sourceProject = visibleSourceProject || findAssignableProject(state, task.projectId);
+  const hasFullSourceProject = canWriteProject(visibleSourceProject);
+  const hasProjectTaskWrite = canAssignTasksInProject(state, task.projectId);
+  const hasHiddenAssignees = Number(task.assigneeCount ?? (task.assigneeIds || []).length)
+    > (task.assigneeIds || []).length;
+  const assigneeWorkOnly = Boolean(task.isCurrentUserAssignee)
+    && (!hasProjectTaskWrite || (hasHiddenAssignees && !hasFullSourceProject));
+  if (hasHiddenAssignees && !hasFullSourceProject && !task.isCurrentUserAssignee) {
+    return {
+      ok: false,
+      code: 'TASK_HIDDEN_ASSIGNEES_FORBIDDEN',
+      field: 'assigneeIds',
+      projectId: task.projectId,
+      message: 'Görevin kapsam dışı sorumluları bulunduğu için bu görev yalnızca tam proje yetkisiyle değiştirilebilir.'
+    };
+  }
+  if (!hasProjectTaskWrite && !assigneeWorkOnly) {
     return {
       ok: false,
       code: 'PROJECT_WRITE_FORBIDDEN',
       field: 'projectId',
       projectId: task.projectId,
       message: 'Bu görev salt okunur bir projede bulunduğu için değiştirilemez.'
+    };
+  }
+
+
+  if (assigneeWorkOnly) {
+    const protectedFields = new Set([
+      'projectId', 'proje', 'wbsId', 'calendarId', 'assigneeIds', 'deps',
+      'isMilestone', 'milestone', 'recurrence', 'recurrenceParentId',
+      'recurrenceOccurrenceDate', 'sortOrder',
+      // Planlama/hedef/gerçekleşen tarihler bilinçli olarak korunmaz: ürün
+      // sözleşmesi görev sorumlusunun bu iş alanlarını düzenlemesine izin verir.
+      // Saat alanları veri uyumluluğu için taşınır ama ürün yüzeyinden ve dar
+      // sorumlu yetkisinden çıkarılmıştır. Finansal alanlar da proje yönetimidir.
+      'plannedHours', 'actualHours', 'budget', 'spent'
+    ]);
+    const field = Object.keys(patch || {}).find((key) => protectedFields.has(key));
+    if (field) {
+      return {
+        ok: false,
+        code: 'TASK_ASSIGNEE_FIELD_FORBIDDEN',
+        field,
+        projectId: task.projectId,
+        message: 'Görev sorumlusu içerik ve ilerleme alanlarını düzenleyebilir; proje yapısı ve sorumlu listesi tam proje yetkisi gerektirir.'
+      };
+    }
+    return {
+      ok: true,
+      task,
+      sourceProject,
+      destinationProject: sourceProject,
+      scope: 'ASSIGNEE',
+      canManageStructure: false,
+      canManageAssignees: false,
+      canDelete: false
     };
   }
 
@@ -114,7 +165,27 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     };
   }
 
-  return { ok: true, task, sourceProject, destinationProject };
+  // Atama kataloğu kaydı accessLevel taşımayabilir; bu, Demo projesi gibi FULL
+  // sayılacağı anlamına gelmez. Tam yetki yalnızca görünür proje kümesindeki
+  // kaynak ve hedef kayıtlarından türetilir.
+  const visibleDestinationProject = findProject(state.projects, destinationProject?.id);
+  const full = hasFullSourceProject && canWriteProject(visibleDestinationProject);
+  return {
+    ok: true,
+    task,
+    sourceProject,
+    destinationProject,
+    scope: full ? 'FULL' : 'ASSIGNMENT',
+    canManageStructure: full,
+    canManageAssignees: !hasHiddenAssignees,
+    canDelete: true
+  };
+}
+
+/** Liste eylemlerinde sunucunun görev silme sınırını aynı kararla uygular. */
+export function canDeleteTask(state = {}, taskId = null) {
+  const access = resolveTaskMutationAccess(state, taskId, {});
+  return Boolean(access.ok && access.canDelete);
 }
 
 export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null) {

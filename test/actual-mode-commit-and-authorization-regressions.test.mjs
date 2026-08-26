@@ -368,7 +368,8 @@ test('corporate project sync serializes concurrent first inserts by ProjectCode'
 test('task assignees persist only the Sicil list that passed normalization and directory validation', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /function normalizeSicils\(sicils\)/);
-  assert.match(source, /const assigneeSicils = await ensurePeople\(executor, task\.assigneeIds \|\| \[\]\);/);
+  assert.match(source, /: await ensurePeople\(executor, task\.assigneeIds \|\| \[\]\);/);
+  assert.match(source, /assigneeWorkOnly\s+\? authoritativeAssigneeSicils/);
   assert.match(source, /for \(const sicil of assigneeSicils\)/);
   assert.doesNotMatch(source, /\(sicils \|\| \[\]\)\.filter\(Boolean\)\.map\(Number\)/);
 });
@@ -506,7 +507,10 @@ test('HR02 people directory duplicate ranking has deterministic projected-field 
 
 test('server-generated fallback project roots are included in commit WBS responses', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
-  assert.match(source, /const wbsIds = new Set\(\[\.\.\.changes\.wbsUpserts\.map\(\(value\) => id\(value\.id\)\), \.\.\.consumedRootIds\]\)/);
+  const responseWbsScope = source.slice(source.indexOf('const wbsIds = new Set(['), source.indexOf('const taskIds = new Set('));
+  assert.match(responseWbsScope, /changes\.wbsUpserts\.map\(\(value\) => id\(value\.id\)\)/);
+  assert.match(responseWbsScope, /\.\.\.consumedRootIds/);
+  assert.match(responseWbsScope, /\.\.\.touchedTaskWbs/);
   assert.match(source, /return \{ created: true, consumedRootId: authoritativeRoot\.id, tagPlan \}/);
 });
 

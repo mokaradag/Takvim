@@ -91,6 +91,15 @@ async function assertActiveProjectMutationTargets(executor, changes) {
       });
     }
   }
+  for (const entry of changes.projectDeletes) {
+    const projectId = uuid(entry.id, 'Proje kimliği');
+    const row = await loadProject(projectId);
+    // Pasifleştirme yanıtı istemciye ulaşmadıysa aynı silme yeniden gelebilir.
+    // Etkin olmayan satır tamamlanmış işlem sayılır; temel depo idempotent boş
+    // yanıt üretir. Etkin ve eksik hedeflerin mevcut doğrulaması korunur.
+    if (row && !Boolean(row.IsActive)) continue;
+    await requireActiveProject(projectId);
+  }
 
   for (const node of changes.wbsUpserts) {
     await requireActiveProject(node.projectId);

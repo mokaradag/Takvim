@@ -4,13 +4,6 @@ import {
 } from '../data/contracts/appRepository.js';
 import { appStateReducer } from './appState.js';
 
-const COALESCED_TASK_FIELDS = new Set([
-  'task',
-  'description',
-  'progress',
-  'remainingDurationDays'
-]);
-
 function changedEntities(before = [], after = []) {
   const beforeById = new Map(before.map((item) => [item.id, item]));
   const afterById = new Map(after.map((item) => [item.id, item]));
@@ -115,6 +108,7 @@ export function createOrderedMutationQueue() {
 
 export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   const pending = new Map();
+  const inFlight = new Map();
   // Reddedilen yama atılmaz: kalıcılaştırma başarısız olduğunda düzenlemenin
   // tek kopyası bu olabilir (panel kapanmış, taslak sökülmüş olabilir). Yama
   // burada saklanır, kullanıcı yazmaya devam ederse üzerine birleşir ve açık
@@ -161,43 +155,76 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   }
 
   async function flush(taskId, options = {}) {
+    const active = inFlight.get(taskId);
+    if (active) {
+      const activeResult = await active;
+      // İlk kayıt başarısızsa yaması bu noktada daha yeni bekleyen kaydın
+      // altına birleşmiştir. Aynı görevin ikinci kaydını ancak bundan sonra
+      // çıkarıp göndeririz; bekleyen yoksa ilk sonucun kendisini taşırız.
+      return pending.has(taskId) ? flush(taskId, options) : activeResult;
+    }
+
     const entry = pending.get(taskId);
     if (!entry) return { ok: true, value: null };
     pending.delete(taskId);
     clearTimeout(entry.timer);
-    let result;
-    try {
-      result = await flushPatch(taskId, entry.patch, options);
-    } catch {
-      result = {
-        ok: false,
-        error: {
-          kind: 'persistence',
-          code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
-          message: 'Değişiklik kaydedilemedi.',
-          operation: 'task/update',
-          details: null
+    const operation = (async () => {
+      let result;
+      try {
+        result = await flushPatch(taskId, entry.patch, options);
+      } catch {
+        result = {
+          ok: false,
+          error: {
+            kind: 'persistence',
+            code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+            message: 'Değişiklik kaydedilemedi.',
+            operation: 'task/update',
+            details: null
+          }
+        };
+      }
+      // Başarısız yama saklanır; yeni bir yama ilk istek sürerken kuyruğa
+      // girdiyse ikisi tek yeniden denemede birleşir. Dispose sonrasında yeni
+      // saklama oluşturulmaz.
+      if (!result.ok && !disposed) {
+        const retainedPatch = { ...(failed.get(taskId) || {}), ...entry.patch };
+        const newer = pending.get(taskId);
+        if (newer) {
+          // Eski alanlar alta serilir: daha yeni yerel değerler her zaman kazanır.
+          newer.patch = { ...retainedPatch, ...newer.patch };
+          failed.delete(taskId);
+        } else {
+          failed.set(taskId, retainedPatch);
         }
-      };
+      }
+      // schedule() bekleyenleri çözülmeden önce kayıt artık uçuşta sayılmaz;
+      // çağıran `await updateTask()` sonrasında kararlı kuyruk durumunu görür.
+      if (inFlight.get(taskId) === operation) inFlight.delete(taskId);
+      for (const resolve of entry.waiters) resolve(result);
+      return result;
+    })();
+
+    inFlight.set(taskId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (inFlight.get(taskId) === operation) inFlight.delete(taskId);
     }
-    // Başarısız yama saklanır; `pending` içine geri konmaz, aksi hâlde kalıcı
-    // olarak reddedilen bir düzenleme her boşaltmayı sonsuz döngüye sokardı.
-    if (!result.ok) failed.set(taskId, { ...(failed.get(taskId) || {}), ...entry.patch });
-    for (const resolve of entry.waiters) resolve(result);
-    return result;
   }
 
   async function flushAll(options = {}) {
     const results = [];
-    while (pending.size) {
-      const batch = await Promise.all([...pending.keys()].map((taskId) => flush(taskId, options)));
+    while (pending.size || inFlight.size) {
+      const taskIds = new Set([...inFlight.keys(), ...pending.keys()]);
+      const batch = await Promise.all([...taskIds].map((taskId) => flush(taskId, options)));
       results.push(...batch);
     }
     return results;
   }
 
   function hasPending() {
-    return pending.size > 0;
+    return pending.size > 0 || inFlight.size > 0;
   }
 
   /**
@@ -227,7 +254,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
 
   /** Kaydedilmemiş düzenleme: kuyrukta bekleyen ya da reddedilip saklanan. */
   function hasUnsavedChanges() {
-    return pending.size > 0 || failed.size > 0;
+    return pending.size > 0 || inFlight.size > 0 || failed.size > 0;
   }
 
   /** Saklanan başarısız yamaları kuyruğa alıp yeniden gönderir. */
@@ -326,6 +353,17 @@ export function createStateMutationOrchestrator({
       return { ok: false, error: domainError };
     }
     const changes = hydrateKnownVersions(createPersistenceChangeSet(before, planned), before);
+    // Sorumlu listesi mutasyonu sunucuda içerik düzenlemesinden ayrı yetki
+    // ister. Tam görev nesnesindeki `assigneeIds` değişiklik kümesinde her zaman
+    // bulunduğu için niyet, gerçek yamadan ayrıca taşınır. Bu işaret kalıcı
+    // modele girmez; sunucu eksik PARTIAL görünümün yetkili listeyi ezmesine
+    // izin vermez.
+    if (action.type === 'task/update') {
+      const assigneeMutation = Object.prototype.hasOwnProperty.call(action.patch || {}, 'assigneeIds');
+      changes.taskUpserts = changes.taskUpserts.map((task) => (
+        String(task.id) === String(action.id) ? { ...task, assigneeMutation } : task
+      ));
+    }
     if (isEmptyChangeSet(changes)) {
       applyStateAction(action);
       return { ok: true, value: null };
@@ -381,11 +419,11 @@ export function createStateMutationOrchestrator({
 
   async function updateTask(id, patch = {}) {
     const keys = Object.keys(patch);
-    const canCoalesce = keys.length > 0 && keys.every((key) => COALESCED_TASK_FIELDS.has(key));
-    if (canCoalesce) return taskPatches.schedule(id, patch);
-    const pendingResult = await taskPatches.flush(id);
-    if (!pendingResult.ok) return pendingResult;
-    return persistAction('task/update', { type: 'task/update', id, patch });
+    // Bir düzenleme oturumundaki uyumlu alanların tamamı tek görev yamasında
+    // birleşir. Önceki dört alanlık beyaz liste; tarih, durum, öncelik ve etiket
+    // değişimlerini ayrı, sıralı commit'lere dönüştürüyordu.
+    if (keys.length > 0) return taskPatches.schedule(id, patch);
+    return { ok: true, value: null };
   }
 
   return {

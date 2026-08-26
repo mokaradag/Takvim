@@ -201,6 +201,15 @@ test('persistence/success updates and normalizes existing tasks', () => {
   assert.equal(task.plannedDurationDays, 6);
 });
 
+test('persistence/success does not retain transient assignee mutation metadata', () => {
+  const next = appStateReducer(state(), {
+    type: 'persistence/success',
+    changes: { taskUpserts: [{ ...snapshot().tasks[0], assigneeMutation: false }] }
+  });
+
+  assert.equal(Object.hasOwn(next.tasks.find((item) => item.id === 't1'), 'assigneeMutation'), false);
+});
+
 test('persistence/success prepends newly committed tasks', () => {
   const newTask = {
     id: 't3', projectId: 'p1', wbsId: 'p1-root', task: 'New', status: 'todo',

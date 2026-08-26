@@ -25,6 +25,7 @@ import {
   resolveTaskWbsMoveAccess,
   resolveWbsMutationAccess
 } from './projectWritePolicy.js';
+import { reconcileProjectMutationAccess } from './projectMutationReconciliation.js';
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
@@ -201,6 +202,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   const deleteTask = useCallback(async (id) => {
     const access = resolveTaskMutationAccess(stateRef.current, id);
     if (!access.ok) return projectWriteFailure('task/delete', access);
+    if (!access.canDelete) {
+      return projectWriteFailure('task/delete', {
+        code: 'TASK_DELETE_FORBIDDEN',
+        field: 'taskId',
+        message: 'Görev sorumlusu görevi düzenleyebilir ancak silemez; silme tam proje yetkisi gerektirir.'
+      });
+    }
     const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([id]));
     if (failedFlush) return failedFlush;
     const result = await persistence.mutate('task/delete', { type: 'task/delete', id });
@@ -417,10 +425,14 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     if (!result.ok) return result;
 
     const committed = result.value || {};
-    if (!committed.projectUpserts?.length) {
+    const committedProject = committed.projectUpserts?.find((projectValue) => projectValue.id === projectId) || null;
+    if (!committedProject || committedProject.accessLevel !== 'FULL') {
       // Sunucu güncellenen projeyi yankılamadıysa elimizdeki sürüm anahtarı artık
-      // eskimiştir; yerel kopyayı yazmak yerine yetkili anlık görüntü yeniden yüklenir.
-      await reloadData();
+      // eskimiştir. FULL erişim lead devriyle PARTIAL'a düştüyse de önceki tam
+      // görev/WBS ağı güvenli alt küme değildir. Her iki durumda yetkili anlık
+      // görüntü yeniden yüklenir.
+      const reloadResult = await reconcileProjectMutationAccess(committedProject, reloadData);
+      if (!reloadResult?.ok) return reloadResult;
     }
     // Etiket yeniden adlandırması görev anahtar sözcüklerine KALICI KATMANDA,
     // katalog yazmasıyla aynı işlemde uygulanır (bkz. planProjectTagPropagation)
@@ -436,6 +448,43 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       changes: committed
     };
   }, [persistence, reloadData]);
+
+  const deleteProject = useCallback(async (projectId) => {
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
+    const current = stateRef.current;
+    const project = current.projects.find((item) => String(item.id) === String(projectId));
+    if (!project) {
+      return projectWriteFailure('project/delete', {
+        code: 'PROJECT_NOT_FOUND', field: 'projectId', message: 'Silinecek proje bulunamadı.'
+      });
+    }
+    if (!current.isSystemAdmin) {
+      return projectWriteFailure('project/delete', {
+        code: 'PROJECT_DELETE_FORBIDDEN', field: 'projectId', message: 'Projeyi yalnızca sistem yöneticisi silebilir.'
+      });
+    }
+    if (String(project.source || '').toLowerCase() !== 'manual') {
+      return projectWriteFailure('project/delete', {
+        code: 'CORPORATE_PROJECT_DELETE_FORBIDDEN', field: 'projectId', message: 'Kurumsal/CN43N projeleri uygulamadan silinemez.'
+      });
+    }
+    const taskCount = current.tasks.filter((task) => String(task.projectId) === String(projectId)).length;
+    if (taskCount > 0) {
+      return projectWriteFailure('project/delete', {
+        code: 'PROJECT_NOT_EMPTY', field: 'projectId',
+        message: `Bu manuel proje ${taskCount} görev içerdiği için silinemez.`
+      });
+    }
+    const result = await persistence.commitChanges('project/delete', {
+      projectUpserts: [], projectDeletes: [{ id: project.id, version: project.version }],
+      wbsUpserts: [], wbsDeletes: [], taskUpserts: [], taskDeletes: []
+    });
+    if (result.ok && String(stateRef.current.selectedProjectId) === String(projectId)) {
+      applyStateAction({ type: 'workspace/select', workspaceMode: 'portfolio', selectedProjectId: null });
+    }
+    return result;
+  }, [applyStateAction, persistence]);
 
   const selectWorkspace = useCallback((projectId) => {
     applyStateAction({
@@ -504,6 +553,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     generateTaskSeries,
     addProject,
     updateProject,
+    deleteProject,
     selectWorkspace,
     addWbsChild,
     renameWbs,
@@ -529,6 +579,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     generateTaskSeries,
     addProject,
     updateProject,
+    deleteProject,
     selectWorkspace,
     addWbsChild,
     renameWbs,

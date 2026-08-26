@@ -8,7 +8,7 @@ Basit Modda **Takvim** sayfası açıldığında varsayılan görünüm aylık T
 
 Takvim sayfasında iki sekme bulunur:
 
-1. **Takvim** — varsayılan görünüm; aylık görev takibini gösterir.
+1. **Takvim** — varsayılan görünüm; her görevi yalnızca Termin (`targetFinish`) gününde gösterir. Eski bir kayıtta hedef yoksa `plannedFinish` güvenli yedektir; süre `plannedStart`–`plannedFinish` aralığında çoğaltılmaz ve Gantt'ta izlenir.
 2. **Hızlı Görev Tanımı** — proje, görev, isteğe bağlı kısa açıklama/etiket, sorumlular ve termin tarihi ile hızlı kayıt oluşturur.
 
 Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Basit Modda oluşturulan kayıtlar mevcut Project/Task veri altyapısını kullanmaya devam eder ve Gelişmiş Modda ayrıntılandırılabilir.
@@ -33,14 +33,16 @@ Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`
 | Durum | `status` |
 | Termin | `targetFinish` |
 
-Gelişmiş Moda ait planlama alanları Basit Modda **hiç gösterilmez**: ilerleme yüzdesi, saat/efor, başlangıç tarihleri, temel plan (baseline), bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve `test/task-assignment-scope-and-simple-mode.test.mjs` alanların sızmadığını doğrular.
+Gelişmiş Moda ait planlama alanları Basit Modda **hiç gösterilmez**: ilerleme yüzdesi, başlangıç tarihleri, temel plan (baseline), bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Saat/efor alanları ise ürünün hiçbir normal kullanıcı görünümünde gösterilmez; eski `plannedHours` / `actualHours` değerleri yalnızca veri uyumluluğu için korunur. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve regresyon testleri alanların sızmadığını doğrular.
 
-Sayfa dört yetenek sunar; hepsi aynı sadeleştirilmiş alan kümesi üzerinde çalışır:
+Sayfa aynı sadeleştirilmiş alan kümesi üzerinde şu yetenekleri sunar:
 
-1. **Arama** — görev adı, kısa açıklama ve proje kodu üzerinde canlı süzme.
-2. **Süzme** — durum segmentleri ve öncelik seçici.
-3. **Sıralama** — termin, öncelik ve görev adına göre.
-4. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
+1. **Yeni Görev** — sağ üst düğme Takvim sayfasındaki mevcut **Hızlı Görev Tanımı** akışını açar; Gelişmiş görev düzenleyicisine yönlendirmez.
+2. **Arama** — görev adı, kısa açıklama, proje ve sorumlu üzerinde canlı süzme.
+3. **Sütun süzme** — Proje, Görev, Kısa açıklama, Sorumlular, Öncelik, Durum ve Termin başlıklarında ortak filtre bileşenlerini kullanır.
+4. **Süzgeçleri temizleme** — global arama ve bütün sütun filtrelerini birlikte sıfırlar.
+5. **Sıralama** — sade sütun başlıklarından yapılır.
+6. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
 
 `SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda ve panelin altında hatırlatma gönderme ve silme düğmeleri bulunur (`docs/TASK-REMINDERS.md`). Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
 
@@ -50,7 +52,7 @@ Sayfa dört yetenek sunar; hepsi aynı sadeleştirilmiş alan kümesi üzerinde 
 - **Kısa açıklama/etiket isteğe bağlıdır.** Kullanıcı değer girerse proje etiket kataloğuyla eşleştirilir; değer yoksa görev etiketsiz oluşturulur. Girilen değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) açıkça girilen etiket yine görevde saklanır.
 - **Gizli plan tarihleri ezilmez.** Basit Mod planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Gelişmiş Modda kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
 
-**Gelişmiş Mod değişmez.** `AppShell` yalnızca `simpleMode` bayrağına göre bileşen seçer (`case 'veri': return simpleMode ? <SimpleTasksView /> : <TasksView />;`); `TasksView` ve `TaskDrawer` bu değişiklikten hiç etkilenmez.
+`AppShell`, `simpleMode` bayrağına göre sade veya gelişmiş görev tablosunu seçer. Her iki görünüm aynı kalıcı Task modelini kullanır; Basit Mod düğmesi yalnızca var olan hızlı kayıt sekmesine geçer.
 
 ### Öncelik Basit Modda
 

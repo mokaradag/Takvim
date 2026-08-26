@@ -44,6 +44,7 @@ import {
 import { greetingForHour, welcomeFirstName } from '../src/components/shell/welcomeGreeting.js';
 import { prepareProjectUpdateChanges } from '../src/state/projectCreation.js';
 import { loadApplicationData } from '../src/state/persistence.js';
+import { closeTaskWithPendingUpdates, createTaskUpdateTracker } from '../src/features/task-detail/taskDraft.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -779,7 +780,6 @@ test('sekme kapatılırken bekleyen düzenlemeler kaybolmaz', () => {
 
   // Kaydedilmemiş düzenleme: kuyrukta bekleyen VE reddedilip saklanan yamalar.
   assert.match(persistence, /hasPendingChanges\(\) \{ return taskPatches\.hasUnsavedChanges\(\); \}/);
-  assert.match(persistence, /if \(!result\.ok\) failed\.set\(taskId/);
   assert.match(guard, /window\.addEventListener\('beforeunload', onBeforeUnload\)/);
   assert.match(guard, /window\.addEventListener\('pagehide', flushBeforeTeardown\)/);
   assert.match(guard, /document\.addEventListener\('visibilitychange', flushIfHidden\)/);
@@ -831,10 +831,18 @@ test('başarısız bir kayıt görev panelini rehin almaz', async () => {
   // Panel daha önce başarısız kaydı geri döndürüp `closeTask()` çağırmıyordu:
   // sunucu bir alanı reddettiğinde ne "Tamam" ne de kapatma düğmesi çalışıyor,
   // uygulama donmuş görünüyordu.
-  const overlay = read('src/features/task-detail/TaskDetailOverlay.jsx');
-  assert.match(overlay, /const closeResult = await closeTask\(\);/);
-  assert.match(overlay, /return pendingResult\.ok \? closeResult : pendingResult;/);
-  assert.doesNotMatch(overlay, /if \(!pendingResult\.ok\) return pendingResult;/);
+  const tracker = createTaskUpdateTracker();
+  let releaseSave;
+  tracker.track(new Promise((resolve) => { releaseSave = resolve; }));
+  let closeCalls = 0;
+  const closing = closeTaskWithPendingUpdates(tracker, async () => {
+    closeCalls += 1;
+    return { ok: true };
+  });
+  assert.equal(closeCalls, 1, 'kapanış başarısız kaydı beklemeden başlar');
+  const failure = { ok: false, error: { code: 'MUTATION_FAILED' } };
+  releaseSave(failure);
+  assert.deepEqual(await closing, failure);
 
   const provider = read('src/state/AppStateProvider.jsx');
   assert.match(provider, /applyStateAction\(\{ type: 'task\/select', id: null \}\);\s*\n\s*return failedFlush \|\| \{ ok: true, value: null \};/);
@@ -888,7 +896,7 @@ test('görev ve Gantt süzgeçleri kişi/proje için arama anahtarları taşır'
 
 /* ── Kart düzenleri ───────────────────────────────────────────── */
 
-test('kişi ölçüm tablosu adı esnek sütunda tutar ve sayısal sütunlar ekler', () => {
+test('kişi ölçüm tablosu Özet sütunlarını korur, Raporlar saat ölçümlerini göstermez', () => {
   const table = read('src/components/PeopleMetricTable.jsx');
   const dashboard = read('src/features/dashboard/DashboardView.jsx');
   const reports = read('src/features/reports/ReportsView.jsx');
@@ -901,8 +909,9 @@ test('kişi ölçüm tablosu adı esnek sütunda tutar ve sayısal sütunlar ekl
   assert.match(dashboard, /key: 'total'/);
   assert.match(dashboard, /key: 'active'/);
   assert.match(dashboard, /key: 'late'/);
-  // Raporlar · Kaynak kullanımı
-  assert.match(reports, /key: 'free'/);
-  assert.match(reports, /key: 'weekly'/);
-  assert.match(reports, /key: 'pct'/);
+  // Raporlar · saat/efor tabanlı kaynak kullanımı ürün yüzeyinden kaldırıldı.
+  assert.doesNotMatch(reports, /key: 'free'/);
+  assert.doesNotMatch(reports, /key: 'weekly'/);
+  assert.doesNotMatch(reports, /key: 'pct'/);
+  assert.doesNotMatch(reports, /plannedHours|actualHours/);
 });

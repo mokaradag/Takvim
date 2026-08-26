@@ -36,8 +36,10 @@ Gerçek Sistem seçildiğinde application-state provider kurulmadan önce kurums
 
 Kullanım modları aynı seçili veri kaynağı üzerinde çalışır:
 
-- **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sadeleştirilmiş **Görevler** listesi ve Takvim takibi. İlerleme, saat/efor, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Basit Modda gösterilmez.
+- **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sütun filtreli sadeleştirilmiş **Görevler** listesi ve termin günü Takvim takibi. İlerleme, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Basit Modda gösterilmez.
 - **Gelişmiş Mod**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
+
+Planlanan/gerçekleşen saat alanları veritabanı ve API uyumluluğu için korunur ancak normal uygulama arayüzünde hiçbir modda gösterilmez; kullanıcı ilerlemeyi `İlerleme` üzerinden izler.
 
 ## Durable SQL Server mimarisi
 
@@ -86,14 +88,16 @@ Eşitleme her istekte baştan çalışmaz. Proje başına içerik parmak izi `MR
 Öncelik sırası:
 
 1. `SYSTEM_ADMIN`
-2. Proje bazlı `FULL`
+2. Proje bazlı `FULL` (kurumsal sorumluluk, açık erişim veya etkin manuel proje sorumluluğu)
 3. Yönetici alt-organizasyon görünürlüğü (`PARTIAL`, salt okunur)
-4. Kendi atandığı görevler (`PARTIAL`, salt okunur)
+4. Kendi atandığı görevler (`PARTIAL`, yalnızca o görevin iş alanlarını düzenleyebilir)
 5. Varsayılan ret
 
 **Görev atama kapsamı** görünürlükten ayrı bir kavramdır. Müdür, direktör ve takım liderleri (HR02'den türeyen mevcut `isExecutive` soyutlaması; koda gömülü kullanıcı listesi yoktur) yeni görev tanımlarken proje seçicisinde **tüm etkin CN43N kataloğunu** görür; böylece kendi personeline, kendisinde `corporateprojectaccess` bulunmayan bir kurumsal projede de iş atayabilir. Bu genişleme yalnızca seçime ve görev yazmasına açıktır: görev görünürlüğü, proje üst verisi, iş dağılım ağacı ve yönetici işlevleri değişmez ve sunucu her atananın `MR_V_ExecutiveScope` içinde olmasını arar. Sıradan kullanıcının seçicisi eskisi gibi yalnızca kendi `corporateprojectaccess` projeleridir. Ayrıntılar: `docs/AUTHORIZATION-MODEL.md`.
 
-`MR_UserRoles` oluşturma betiği sistem yöneticilerini parametreli tohumlar: kurulumdan önce `@SystemAdminSicils` değişkenine virgülle ayrılmış Sicil listesi yazılır. Gerçek Sicil değerleri kişisel veridir ve depoya işlenmez. HR09 sorumlulukları kurumsal FULL erişim sağlar. Manuel erişimler `MR_ProjectAccess` içinde tutulur. Sistem yöneticileri ile HR02'de dinamik olarak yönetici görünen kullanıcılar manuel Project oluşturabilir; Project, kök WBS, FULL OWNER erişimi ve audit kayıtları aynı transaction içinde oluşturulur.
+`MR_UserRoles` oluşturma betiği sistem yöneticilerini parametreli tohumlar: kurulumdan önce `@SystemAdminSicils` değişkenine virgülle ayrılmış Sicil listesi yazılır. Gerçek Sicil değerleri kişisel veridir ve depoya işlenmez. HR09 sorumlulukları kurumsal FULL erişim sağlar. Manuel açık erişimler `MR_ProjectAccess` içinde tutulur. Sistem yöneticileri ile HR02'de dinamik olarak yönetici görünen kullanıcılar manuel Project oluşturabilir; Project, kök WBS, oluşturucu için FULL OWNER erişimi ve audit kayıtları aynı transaction içinde oluşturulur. Seçilen manuel Proje sorumlusu ayrıca türetilmiş FULL erişim alır; bu erişim lead değişikliğini izler ve bağımsız erişim kayıtlarını silmez.
+
+SYSTEM_ADMIN yalnızca hiç Task kaydı olmayan manuel bir Projecti kaldırabilir. İşlem projeyi ve etkin erişimlerini pasifleştirir, audit/WBS geçmişini korur; kurumsal/CN43N projeleri bu yolla silinemez.
 
 PARTIAL görünürlük tam Project yönetim yetkisi vermez. Kısmi Task ağı üzerinde yanıltıcı CPM/critical-path hesaplanmaz; Project scheduling sonucu `suppressed-partial` olarak işaretlenir.
 

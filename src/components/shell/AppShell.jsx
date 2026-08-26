@@ -39,7 +39,7 @@ import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
 import { ModeChooser } from './ModeChooser';
-import { ADMIN_NAV_IDS, NAV_ITEMS, PAGE_META } from './navigation';
+import { ADMIN_NAV_IDS, NAV_ITEMS, PAGE_META, simpleCalendarTabForIntent } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
 import { SidebarUserPanel } from './SidebarUserPanel';
 import { WelcomeScreen } from './WelcomeScreen';
@@ -141,8 +141,10 @@ export default function AppShell() {
   }, [view, isSystemAdmin]);
 
   useEffect(() => {
-    if (simpleMode && view === 'takvim') setSimpleCalendarTab('calendar');
-  }, [simpleMode, view]);
+    if (simpleMode && view === 'takvim') {
+      setSimpleCalendarTab(simpleCalendarTabForIntent(viewIntent));
+    }
+  }, [simpleMode, view, viewIntent]);
 
   useEffect(() => {
     // Basit Modda komut paleti RENDER EDİLMEZ: kısayolu yine de yutmak,
@@ -211,7 +213,9 @@ export default function AppShell() {
   const renderView = () => {
     switch (view) {
       case 'ozet': return <DashboardView onNavigate={navigate} />;
-      case 'veri': return simpleMode ? <SimpleTasksView /> : <TasksView />;
+      case 'veri': return simpleMode
+        ? <SimpleTasksView onNewTask={() => navigate('takvim', 'entry')} />
+        : <TasksView />;
       // Sekme niyeti anahtar olarak taşınır: karşılama kısayolu ağacı açar,
       // sıradan gezinme Proje Tanımı ile başlar.
       case 'wbs': return <ProjectWorkspaceView key={`wbs:${viewIntent || 'definition'}`} initialTab={viewIntent} />;

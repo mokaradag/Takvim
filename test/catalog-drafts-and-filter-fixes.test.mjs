@@ -313,11 +313,9 @@ test('haftalık tamamlama gerçekleşen bitişten sayılır ve gün değişimini
   assert.match(dashboard, /selectStatusDistribution\(tasks, today_\), \[tasks, today_\]/);
 });
 
-test('haftalık yük yalnızca altı haftalık ufka düşen işi sayar', () => {
+test('rapor görünümü planlanan/gerçekleşen saat veya kapasite deneyimi sunmaz', () => {
   const reports = read('src/features/reports/ReportsView.jsx');
-  assert.match(reports, /const horizonShare = \(task, horizonStart, horizonEnd\) => \{/);
-  assert.match(reports, /\* share;/);
-  assert.match(reports, /weekly: Math\.round\(v\.hours \/ REPORT_HORIZON_WEEKS\)/);
+  assert.doesNotMatch(reports, /plannedHours|actualHours|Kalan saat|Kapasite.*sa|Kaynak kullanımı/);
 });
 
 test('karşılama ekranı portföyü özetler, saati tarayıcıdan okur ve ağacı açar', () => {

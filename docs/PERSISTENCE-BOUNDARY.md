@@ -10,6 +10,8 @@ MERGEN Rota separates feature behavior from the mechanism used to store canonica
 loadSnapshot(): Promise<AppDataSnapshot>
 
 commitChanges({
+  projectUpserts,
+  projectDeletes,
   taskUpserts,
   taskDeletes,
   wbsUpserts,
@@ -198,16 +200,11 @@ The queue serializes persistence effects, not ordinary UI actions such as openin
 
 Task Detail keeps its immediate local draft behavior so typing remains responsive. The persistence boundary prevents one write per keyboard character.
 
-Rapid patches for the current high-frequency fields are coalesced per Task for a short 250 ms window:
+Compatible Task field patches are coalesced per Task for a short 250 ms window. Title, description, progress, status, priority and date changes from the same editing burst are merged into one canonical patch and persisted through the same ordered queue. Structural operations still preserve ordering: before a destructive operation, Task WBS move or application reload proceeds, any pending patch for the affected Task is flushed first. If that pending save fails, the dependent operation does not silently continue past the failed write.
 
-- Task title;
-- description/notes;
-- progress;
-- remaining duration.
+Closing the Task detail panel requests that flush immediately and waits for the same in-flight promise; it does not first wait for the debounce timer and then issue a second flush. The close button exposes an active `Kaydediliyor…` state while this finishes. Failed patches remain retryable and are not silently discarded.
 
-The latest values are merged into one canonical Task patch and persisted through the same ordered queue.
-
-Discrete controls such as dates, status, Project, WBS and relationship changes persist immediately. Before a discrete mutation, destructive operation, Task WBS move or application reload proceeds, any pending coalesced patch for the affected Task is flushed first. If that pending save fails, the dependent operation does not silently continue past the failed write.
+The SQL commit response reconstructs only authoritative rows touched by the mutation (plus their required visible assignees/dependencies), rather than rebuilding the complete authorization-filtered portfolio snapshot while the write transaction is open. Optimistic rowversion checks, authorization and integrity validation remain inside the transaction, and the browser's existing 30-second request timeout remains unchanged.
 
 This provides a future API-safe commit boundary without redesigning Task Detail around an explicit Save button.
 

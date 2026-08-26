@@ -13,18 +13,8 @@ import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
-import { canWriteProject } from '../../state/projectWritePolicy.js';
-
-/**
- * Görevin GÖRÜNEN ilerleme değeri.
- *
- * Süzgeç ve tablo hücresi bunu ORTAK kullanır; ayrı yedeklerle çalışmak,
- * ekranda %100 gösterilen bir görevi sayısal süzgeçte 0 sayıyordu.
- */
-function taskProgressValue(task) {
-  if (task?.progress != null) return task.progress;
-  return task?.status === 'done' ? 100 : 0;
-}
+import { canDeleteTask } from '../../state/projectWritePolicy.js';
+import { taskProgressValue, taskSortValue } from './taskDisplayValues.js';
 
 function projectLabel(project) {
   if (!project) return '';
@@ -49,18 +39,16 @@ export function TasksView() {
     plannedStart: null,
     plannedFinish: null,
     targetFinish: null,
-    progress: null,
-    plannedHours: null
+    progress: null
   });
 
   const setCF = (key, value) => setColFilter(f => ({ ...f, [key]: value }));
-  const projectById = useMemo1(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   // Görev yazma yetkisi görev ATAMA kapsamını da içerir: yönetici, kendi
   // personeline tanımladığı görevi düzenleyip silebilir.
   const assignableProjects = useTaskAssignableProjects();
-  const assignableProjectIds = useMemo1(
-    () => new Set(assignableProjects.map((project) => String(project.id))),
-    [assignableProjects]
+  const taskMutationState = useMemo1(
+    () => ({ tasks, projects, assignableProjects }),
+    [tasks, projects, assignableProjects]
   );
   // Düğme, isteğin KABUL EDİLEBİLİR bir sorumluyla gidebildiği en az bir proje
   // varken etkinleşir. Atama kapsamındaki projede varsayılan sorumlu oturum
@@ -106,17 +94,6 @@ export function TasksView() {
     value: p.id, label: p.label, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} />
   }));
 
-  const numStats = useMemo1(() => {
-    const stats = {};
-    ['progress', 'plannedHours', 'actualHours'].forEach(k => {
-      const vals = tasks.map(t => Number(t[k]) || 0);
-      stats[k] = vals.length
-        ? { min: Math.min(...vals), max: Math.max(...vals) }
-        : { min: 0, max: 0 };
-    });
-    return stats;
-  }, [tasks]);
-
   const filtered = useMemo1(() => {
     const today_ = today();
     let out = [...tasks];
@@ -149,7 +126,7 @@ export function TasksView() {
       const spec = colFilter[k];
       if (spec) out = out.filter(t => !!t[k] && dateMatchesFilter(t[k], spec));
     });
-    ['progress', 'plannedHours'].forEach(k => {
+    ['progress'].forEach(k => {
       const spec = colFilter[k];
       // Süzgeç ve hücre AYNI türetilmiş değeri kullanır: süzgeç `null` ilerlemeyi
       // 0 sayarken satır tamamlanmış görevi %100 gösteriyor, "Eşit 100" süzgeci
@@ -158,7 +135,7 @@ export function TasksView() {
     });
 
     out.sort((a, b) => {
-      let va = a[sort.key], vb = b[sort.key];
+      let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
       if (sort.key === 'sorumlu') { va = (a.sorumlu?.[0] || ''); vb = (b.sorumlu?.[0] || ''); }
       if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
       const aMissing = va == null || va === '';
@@ -178,7 +155,7 @@ export function TasksView() {
 
   const clearAll = () => {
     setSearch('');
-    setColFilter({ proje: [], task: '', keyword: [], sorumlu: [], status: [], priority: [], plannedStart: null, plannedFinish: null, targetFinish: null, progress: null, plannedHours: null });
+    setColFilter({ proje: [], task: '', keyword: [], sorumlu: [], status: [], priority: [], plannedStart: null, plannedFinish: null, targetFinish: null, progress: null });
   };
   const hasAnyFilter = search || Object.values(colFilter).some(v => {
     if (Array.isArray(v)) return v.length > 0;
@@ -258,11 +235,6 @@ export function TasksView() {
                   filter={colFilter.progress} onFilter={v => setCF('progress', v)}
                   filterType="number" numericMin={0} numericMax={100} numericUnit="%"
                 />
-                <FilterableTH label="Saat (P)" style={{ minWidth: 80 }}
-                  sortKey={sortDirFor('plannedHours')} onSort={setSortFor('plannedHours')}
-                  filter={colFilter.plannedHours} onFilter={v => setCF('plannedHours', v)}
-                  filterType="number" numericMin={numStats.plannedHours.min} numericMax={numStats.plannedHours.max} numericUnit=" sa"
-                />
                 <DateFilterableTH label="Başlangıç" style={{ minWidth: 130 }}
                   sortKey={sortDirFor('plannedStart')} onSort={setSortFor('plannedStart')}
                   filter={colFilter.plannedStart} onFilter={v => setCF('plannedStart', v)}
@@ -280,15 +252,14 @@ export function TasksView() {
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={13} className="empty">Eşleşen görev bulunamadı.</td></tr>
+                <tr><td colSpan={12} className="empty">Eşleşen görev bulunamadı.</td></tr>
               )}
               {filtered.map((t, idx) => {
                 const today_ = today();
                 const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
                 const prio = resolvePriority(t.priority);
                 const prog = taskProgressValue(t);
-                const canEditTask = canWriteProject(projectById.get(t.projectId))
-                  || assignableProjectIds.has(String(t.projectId));
+                const canDeleteCurrentTask = canDeleteTask(taskMutationState, t.id);
                 return (
                   <tr key={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
                     <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{idx + 1}</td>
@@ -327,7 +298,6 @@ export function TasksView() {
                         <span className="tabular" style={{ fontSize: 11, minWidth: 28, textAlign: 'right', color: 'var(--text-muted)' }}>{prog}%</span>
                       </div>
                     </td>
-                    <td className="tabular" style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{t.plannedHours || 0} sa</td>
                     <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedStart)}</td>
                     <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedFinish)}</td>
                     <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
@@ -339,8 +309,8 @@ export function TasksView() {
                         <button
                           className="icon-btn"
                           style={{ width: 26, height: 26 }}
-                          disabled={!canEditTask}
-                          title={canEditTask ? 'Görevi sil' : 'Salt okunur görev'}
+                          disabled={!canDeleteCurrentTask}
+                          title={canDeleteCurrentTask ? 'Görevi sil' : 'Görevi silme yetkiniz yok'}
                           aria-label="Görevi sil"
                           onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}
                         >

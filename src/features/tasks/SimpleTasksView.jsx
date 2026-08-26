@@ -1,44 +1,73 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
-import { AvatarStack, StatusIcon, StatusPill } from '../../components/ui';
-import { InfoButton } from '../../components/ui-extras';
+import { Avatar, AvatarStack, StatusIcon, StatusPill } from '../../components/ui';
+import { FilterableTH, InfoButton, dateMatchesFilter } from '../../components/ui-extras';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
 import { projectColorVar } from '../../lib/colors';
 import { diffDays, fmt, today } from '../../scheduling/dates';
-import { canWriteProject } from '../../state/projectWritePolicy.js';
+import { useAppState } from '../../state/AppStateProvider';
+import { canResolveTaskAssignee } from '../../state/appState';
+import { canDeleteTask } from '../../state/projectWritePolicy.js';
 import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useTasks } from '../../state/hooks';
-import { SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
+import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
 
 /**
  * Basit Mod · Görevler.
  *
  * Gelişmiş Modun tam tablosu BİLİNÇLİ OLARAK gösterilmez. Basit Mod kullanıcısı
  * görevini "Hızlı Görev Tanımı" ile açar: proje, görev, kısa açıklama, sorumlu,
- * termin ve öncelik. Tablo aynı alanları listeler; ilerleme yüzdesi, efor
- * saatleri, planlanan başlangıç/bitiş, dağılım ağacı ve bağımlılıklar gibi
+ * termin ve öncelik. Tablo aynı alanları listeler; ilerleme yüzdesi,
+ * planlanan başlangıç/bitiş, dağılım ağacı ve bağımlılıklar gibi
  * Basit Modda hiç toplanmayan sütunlar dışarıda kalır (bkz. simpleTaskColumns.js).
  *
  * Gelişmiş Mod tablosu (TasksView) değişmeden durur.
  */
-export function SimpleTasksView() {
+function projectLabel(project) {
+  if (!project) return '';
+  return project.code ? `${project.code} · ${project.name}` : project.name;
+}
+
+export function SimpleTasksView({ onNewTask }) {
   const tasks = useTasks();
   const projects = useProjects();
   const people = usePeople();
   const assignableProjects = useTaskAssignableProjects();
+  const appState = useAppState();
   const { openTask, deleteTask } = useTaskActions();
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('open');
-  const [priorityFilter, setPriorityFilter] = useState('');
-  const [sort, setSort] = useState('targetFinish');
+  const initialFilterState = useMemo(() => createEmptySimpleTaskFilterState(), []);
+  const [search, setSearch] = useState(initialFilterState.search);
+  const [filters, setFilters] = useState(initialFilterState.filters);
+  const [sort, setSort] = useState({ key: 'targetFinish', dir: 'asc' });
 
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
-  const assignableProjectIds = useMemo(
-    () => new Set(assignableProjects.map((project) => String(project.id))),
-    [assignableProjects]
+  const taskMutationState = useMemo(
+    () => ({ tasks, projects, assignableProjects }),
+    [tasks, projects, assignableProjects]
   );
+  const canAddTask = assignableProjects.some((project) => canResolveTaskAssignee(appState, project));
   const peopleById = useMemo(() => new Map(people.map((person) => [String(person.id), person])), [people]);
+  const projectOptions = useMemo(() => projects.slice()
+    .sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr'))
+    .map((project) => ({ value: project.id, label: projectLabel(project), keywords: [project.code, project.name] })), [projects]);
+  const keywordOptions = useMemo(() => [...new Set(tasks.map((task) => String(task.keyword || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'tr')).map((value) => ({ value, label: value })), [tasks]);
+  const assigneeOptions = useMemo(() => people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr')).map((person) => ({
+    value: String(person.id),
+    label: person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name,
+    keywords: [person.name, person.employeeNo, person.role, person.team],
+    icon: <Avatar name={person.name} person={person} size="sm" />
+  })), [people]);
+  const priorityOptions = Object.values(PRIORITIES).map((priority) => ({ value: priority.id, label: priority.label }));
+  const statusOptions = [
+    { value: 'todo', label: 'Yapılacak', icon: <StatusIcon id="todo" size={11} /> },
+    { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },
+    { value: 'done', label: 'Tamamlandı', icon: <StatusIcon id="done" size={11} /> },
+    { value: 'overdue', label: 'Geciken', icon: <StatusIcon id="overdue" size={11} /> }
+  ];
+  const setFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
 
   const visible = useMemo(() => {
     const referenceDay = today();
@@ -49,32 +78,40 @@ export function SimpleTasksView() {
           .map((value) => String(value || '').toLocaleLowerCase('tr-TR'));
         if (!haystack.some((value) => value.includes(query))) return false;
       }
-      if (statusFilter === 'open' && task.status === 'done') return false;
-      if (statusFilter === 'done' && task.status !== 'done') return false;
-      if (statusFilter === 'late') {
-        const late = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0;
-        if (!late) return false;
+      if (filters.proje.length && !filters.proje.includes(task.projectId)) return false;
+      if (filters.task && !String(task.task || '').toLocaleLowerCase('tr-TR').includes(filters.task.toLocaleLowerCase('tr-TR'))) return false;
+      if (filters.keyword.length && !filters.keyword.includes(task.keyword)) return false;
+      if (filters.sorumlu.length && !(task.assigneeIds || []).some((id) => filters.sorumlu.includes(String(id)))) return false;
+      if (filters.priority.length && !filters.priority.includes(normalizePriorityId(task.priority))) return false;
+      if (filters.status.length) {
+        const overdue = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0;
+        if (!(filters.status.includes(task.status || 'todo') || (overdue && filters.status.includes('overdue')))) return false;
       }
-      if (priorityFilter && normalizePriorityId(task.priority) !== priorityFilter) return false;
+      if (filters.targetFinish && (!task.targetFinish || !dateMatchesFilter(task.targetFinish, filters.targetFinish))) return false;
       return true;
     });
 
     return filtered.sort((left, right) => {
-      if (sort === 'priority') {
-        const delta = resolvePriority(left.priority).order - resolvePriority(right.priority).order;
-        if (delta !== 0) return delta;
-      }
-      const leftDue = left.targetFinish || '';
-      const rightDue = right.targetFinish || '';
-      if (!leftDue && !rightDue) return String(left.task || '').localeCompare(String(right.task || ''), 'tr');
-      if (!leftDue) return 1;
-      if (!rightDue) return -1;
-      return leftDue.localeCompare(rightDue);
+      let a = left[sort.key];
+      let b = right[sort.key];
+      if (sort.key === 'priority') { a = resolvePriority(left.priority).order; b = resolvePriority(right.priority).order; }
+      if (sort.key === 'sorumlu') { a = left.sorumlu?.[0] || ''; b = right.sorumlu?.[0] || ''; }
+      if (sort.key === 'proje') { a = projectLabel(projectById.get(left.projectId)); b = projectLabel(projectById.get(right.projectId)); }
+      if (a == null || a === '') return b == null || b === '' ? 0 : 1;
+      if (b == null || b === '') return -1;
+      const delta = typeof a === 'number' ? a - b : String(a).localeCompare(String(b), 'tr');
+      return sort.dir === 'asc' ? delta : -delta;
     });
-  }, [tasks, search, statusFilter, priorityFilter, sort]);
+  }, [tasks, search, filters, sort, projectById]);
 
-  const canEdit = (task) => canWriteProject(projectById.get(task.projectId))
-    || assignableProjectIds.has(String(task.projectId));
+  const hasFilters = Boolean(search || Object.values(filters).some((value) => Array.isArray(value) ? value.length : value));
+  const clearFilters = () => {
+    const empty = createEmptySimpleTaskFilterState();
+    setSearch(empty.search);
+    setFilters(empty.filters);
+  };
+  const setSortFor = (key) => (dir) => setSort({ key, dir });
+  const sortFor = (key) => sort.key === key ? sort.dir : null;
 
   return (
     <div className="simple-tasks-page col">
@@ -94,42 +131,7 @@ export function SimpleTasksView() {
           )}
         </div>
 
-        <div className="seg simple-tasks-filter" role="group" aria-label="Durum süzgeci">
-          {[['open', 'Açık'], ['late', 'Geciken'], ['done', 'Tamamlanan'], ['all', 'Tümü']].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={statusFilter === value ? 'active' : ''}
-              aria-pressed={statusFilter === value}
-              onClick={() => setStatusFilter(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <label className="simple-tasks-select">
-          <span className="muted">Öncelik</span>
-          <select
-            className="input"
-            value={priorityFilter}
-            onChange={(event) => setPriorityFilter(event.target.value)}
-            aria-label="Öncelik süzgeci"
-          >
-            <option value="">Tümü</option>
-            {Object.values(PRIORITIES).map((priority) => (
-              <option key={priority.id} value={priority.id}>{priority.label}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className="simple-tasks-select">
-          <span className="muted">Sırala</span>
-          <select className="input" value={sort} onChange={(event) => setSort(event.target.value)} aria-label="Sıralama">
-            <option value="targetFinish">Termine göre</option>
-            <option value="priority">Önceliğe göre</option>
-          </select>
-        </label>
+        {hasFilters && <button type="button" className="btn ghost sm" onClick={clearFilters}><Icons.Close size={12} /> Filtreleri temizle</button>}
 
         <InfoButton title="Basit Mod Görevler" icon={<Icons.Table size={12} />}>
           <p>Hızlı Görev Tanımı ile girdiğiniz bilgiler burada listelenir.</p>
@@ -137,20 +139,40 @@ export function SimpleTasksView() {
           <div className="rt-row"><Icons.Edit size={12} className="rt-ico" /><span>Satıra tıklayın: görevi düzenleyin</span></div>
           <div className="rt-row"><Icons.Mail size={12} className="rt-ico" /><span>Zarf simgesi: sorumlulara hatırlatma e-postası gönderir</span></div>
           <div className="rt-sep" />
-          <p>İlerleme yüzdesi, efor saatleri ve planlama sütunları Gelişmiş Modda yer alır.</p>
+          <p>İlerleme yüzdesi ve ayrıntılı planlama sütunları Gelişmiş Modda yer alır.</p>
         </InfoButton>
 
         <span className="muted tabular simple-tasks-count">{visible.length} / {tasks.length} görev</span>
+        <button
+          type="button"
+          className="btn primary"
+          onClick={onNewTask}
+          disabled={!canAddTask}
+          title={canAddTask ? 'Yeni görev' : 'Görev eklemek için yazabileceğiniz bir proje ve atayabileceğiniz bir sorumlu gerekir.'}
+        >
+          <Icons.Plus size={14} /> Yeni Görev
+        </button>
       </div>
 
       <div className="card simple-tasks-card">
         <div className="simple-tasks-scroll">
-          <table className="tbl simple-tasks-table">
+          <table className="tbl simple-tasks-table" aria-label="Basit Mod Görevler">
             <thead>
               <tr>
-                {SIMPLE_TASK_COLUMNS.map((column) => (
-                  <th key={column.id} data-column={column.id}>{column.label}</th>
-                ))}
+                <FilterableTH label="Proje" style={{ minWidth: 170 }} sortKey={sortFor('proje')} onSort={setSortFor('proje')}
+                  filter={filters.proje} onFilter={(value) => setFilter('proje', value)} filterType="multi" filterOptions={projectOptions} />
+                <FilterableTH label="Görev" style={{ minWidth: 220 }} sortKey={sortFor('task')} onSort={setSortFor('task')}
+                  filter={filters.task} onFilter={(value) => setFilter('task', value)} filterType="text" />
+                <FilterableTH label="Kısa açıklama" style={{ minWidth: 130 }} sortKey={sortFor('keyword')} onSort={setSortFor('keyword')}
+                  filter={filters.keyword} onFilter={(value) => setFilter('keyword', value)} filterType="multi" filterOptions={keywordOptions} />
+                <FilterableTH label="Sorumlular" style={{ minWidth: 140 }} sortKey={sortFor('sorumlu')} onSort={setSortFor('sorumlu')}
+                  filter={filters.sorumlu} onFilter={(value) => setFilter('sorumlu', value)} filterType="multi" filterOptions={assigneeOptions} />
+                <FilterableTH label="Öncelik" style={{ minWidth: 100 }} sortKey={sortFor('priority')} onSort={setSortFor('priority')}
+                  filter={filters.priority} onFilter={(value) => setFilter('priority', value)} filterType="multi" filterOptions={priorityOptions} />
+                <FilterableTH label="Durum" style={{ minWidth: 120 }} sortKey={sortFor('status')} onSort={setSortFor('status')}
+                  filter={filters.status} onFilter={(value) => setFilter('status', value)} filterType="multi" filterOptions={statusOptions} />
+                <DateFilterableTH label="Termin" style={{ minWidth: 125 }} sortKey={sortFor('targetFinish')} onSort={setSortFor('targetFinish')}
+                  filter={filters.targetFinish} onFilter={(value) => setFilter('targetFinish', value)} />
                 <th style={{ width: 78 }} aria-label="İşlemler" />
               </tr>
             </thead>
@@ -162,7 +184,7 @@ export function SimpleTasksView() {
                 const priority = resolvePriority(task.priority);
                 const referenceDay = today();
                 const late = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0;
-                const editable = canEdit(task);
+                const deletable = canDeleteTask(taskMutationState, task.id);
                 return (
                   <tr key={task.id} onClick={() => openTask(task)} style={{ cursor: 'pointer' }}>
                     <td>
@@ -207,8 +229,8 @@ export function SimpleTasksView() {
                         <button
                           className="icon-btn"
                           style={{ width: 26, height: 26 }}
-                          disabled={!editable}
-                          title={editable ? 'Görevi sil' : 'Salt okunur görev'}
+                          disabled={!deletable}
+                          title={deletable ? 'Görevi sil' : 'Görevi silme yetkiniz yok'}
                           aria-label="Görevi sil"
                           onClick={(event) => {
                             event.stopPropagation();

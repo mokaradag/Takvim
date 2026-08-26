@@ -69,7 +69,11 @@ const RAW_TASKS = [
 
 export { CALENDARS };
 export const PEOPLE = RAW_PEOPLE.map((person) => normalizePersonReferences(person));
-export const PROJECTS = RAW_PROJECTS.map((project) => normalizeProjectReferences(project, PEOPLE));
+export const PROJECTS = RAW_PROJECTS.map((project) => ({
+  ...normalizeProjectReferences(project, PEOPLE),
+  accessLevel: 'FULL',
+  schedulingCapability: 'COMPLETE'
+}));
 
 export const WBS = [
   { id: 'wbs-p-web-root', projectId: 'p-web', parentId: null, code: '1', name: 'Web Sitesi Yenileme', sortOrder: 1 },

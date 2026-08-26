@@ -33,12 +33,13 @@ const VERSIONED_TASK_FIELDS = Object.freeze([
   'actualFinish',
   'remainingDurationDays',
   'progress',
-  'plannedHours',
-  'actualHours',
-  'budget',
-  'spent',
   'sortOrder'
 ]);
+
+// Saat/finans alanlarının varlığı yetki bağlamına bağlıdır: dar görev sorumlusu
+// görünümü bunları atlayabilir ve sunucu kalıcı değeri korur. FULL/atama kapsamı
+// güncellemelerinde eksiklik, yetki denetiminden sonra commitTask tarafından
+// reddedilir; böylece alan varlığı yetkisiz kullanıcıya kayıt bilgisi sızdırmaz.
 
 function issue(code, path, message) {
   return { code, path, message };

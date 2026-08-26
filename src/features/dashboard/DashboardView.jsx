@@ -144,14 +144,8 @@ export function DashboardView({ onNavigate }) {
       .slice(0, 4);
   }, [tasks]);
 
-  // Sektör göstergeleri: efor kullanımı ve haftalık değişim
+  // Proje RAG (red/amber/green) sağlık göstergeleri.
   const portfolioHealth = useMemo1(() => {
-    let totalPlanned = 0, totalActual = 0;
-    tasks.forEach(t => {
-      totalPlanned += t.plannedHours || 0;
-      totalActual += t.actualHours || 0;
-    });
-    // Project RAG (red/amber/green) health: based on % overdue
     const projHealth = {};
     tasks.forEach(t => {
       const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
@@ -167,11 +161,7 @@ export function DashboardView({ onNavigate }) {
       else if (overdueRate > 0.1) rag = 'amber';
       return { name, ...v, rag, color: projectColorVar(name) };
     });
-    return {
-      totalPlanned, totalActual,
-      hoursUsage: totalPlanned ? totalActual / totalPlanned : 0,
-      portfolio
-    };
+    return { portfolio };
   }, [tasks, today_]);
 
   // "Bu hafta tamamlanan" GERÇEKLEŞEN bitiş tarihinden sayılır. Planlanan bitişe
@@ -566,7 +556,7 @@ export function DashboardView({ onNavigate }) {
         </div>
       </div>
 
-      {/* Haftalık kesit ve efor göstergesi */}
+      {/* Haftalık tamamlanma kesiti */}
       <div className="dashboard-insights-grid">
         <div className="card mini-kpi">
           <CardHead
@@ -592,27 +582,6 @@ export function DashboardView({ onNavigate }) {
           </div>
         </div>
 
-        <div className="card mini-kpi">
-          <CardHead
-            icon={<Icons.Hours size={14} />}
-            title="İş gücü"
-            infoAccent="var(--c-cyan)"
-            infoIcon={<Icons.Hours size={12} />}
-            info={<>
-              <p>Planlanan saatlere göre fiili harcanan saatlerin oranı (ortalama efor verimliliği).</p>
-              <div className="rt-sep" />
-              <div className="rt-row"><span className="rt-label">Fiili</span><span className="rt-val">{portfolioHealth.totalActual} sa</span></div>
-              <div className="rt-row"><span className="rt-label">Planlanan</span><span className="rt-val">{portfolioHealth.totalPlanned} sa</span></div>
-            </>}
-          />
-          <div className="kpi-big" style={{ color: portfolioHealth.hoursUsage > 1 ? 'var(--status-overdue)' : 'var(--text)' }}>
-            %<AnimatedNumber value={Math.round(portfolioHealth.hoursUsage * 100)} />
-          </div>
-          <div className="bar-track" style={{ height: 6, marginTop: 8 }}>
-            <div className="bar-fill" style={{ width: `${Math.min(100, portfolioHealth.hoursUsage * 100)}%`, background: portfolioHealth.hoursUsage > 1 ? 'var(--status-overdue)' : 'var(--c-cyan)' }} />
-          </div>
-          <div className="kpi-delta">{portfolioHealth.totalActual} / {portfolioHealth.totalPlanned} sa</div>
-        </div>
       </div>
 
       <div className="dashboard-health-grid">

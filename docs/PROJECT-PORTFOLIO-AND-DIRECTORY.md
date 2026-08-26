@@ -41,7 +41,7 @@ Bu düzen, sınırlı proje erişimi bulunan ekiplerin yalın deneyimini korurke
 
 ## Kurumsal proje sorumlusu
 
-Kurumsal bir projenin `Proje Sorumlusu`, `MR_V_CorporateProjectAccess` görünümündeki `PROJECT_MANAGER` rolünden alınır. Kurumsal projelerde bu alan salt okunurdur. Manuel projelerde ise yetkili kullanıcı canlı arama ile bir sorumlu seçebilir.
+Kurumsal bir projenin `Proje Sorumlusu`, `MR_V_CorporateProjectAccess` görünümündeki `PROJECT_MANAGER` rolünden alınır. Kurumsal projelerde bu alan salt okunurdur. Manuel projelerde ise yetkili kullanıcı canlı arama ile bir sorumlu seçebilir. Etkin manuel projenin seçili `LeadSicil` değeri o kişiye türetilmiş FULL erişim verir; proje oluşturucusunun OWNER kaydı kalır. Sorumlu değiştiğinde bu türetilmiş erişim yeni kişiyi izler ve eski sorumlunun bağımsız `MR_ProjectAccess` kaydı silinmez. Kurumsal lead alanı bu mekanizmaya dahil değildir.
 
 `src/server/repository/corporateQueries.js`, kurumsal proje eşitlemesi sırasında `MR_Projects.LeadSicil` alanını bu rolün siciliyle yeniler.
 

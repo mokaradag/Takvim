@@ -313,7 +313,7 @@ BEGIN TRY
         RequestId nvarchar(100) NULL,
         BeforeJson nvarchar(max) NULL,
         AfterJson nvarchar(max) NULL,
-        CONSTRAINT CK_MR_AuditLog_Action CHECK (ActionCode IN ('CREATE','UPDATE','DELETE')),
+        CONSTRAINT CK_MR_AuditLog_Action CHECK (ActionCode IN ('CREATE','UPDATE','DELETE','DEACTIVATE')),
         CONSTRAINT CK_MR_AuditLog_BeforeJson CHECK (BeforeJson IS NULL OR ISJSON(BeforeJson) = 1),
         CONSTRAINT CK_MR_AuditLog_AfterJson CHECK (AfterJson IS NULL OR ISJSON(AfterJson) = 1)
     );

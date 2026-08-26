@@ -1,6 +1,7 @@
 import 'server-only';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
+import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
 import { assertTaskDependencyReconciliationCovered } from './dependencyReconciliationValidation.js';
@@ -76,6 +77,15 @@ export function createOrderedSqlAppRepository() {
       };
 
       return withSqlTransaction(async (transaction) => {
+        // Proje varlığı/sürümü sorgulanmadan önce rol denetlenir. Aksi hâlde
+        // yönetici olmayan kullanıcı etkin, etkin olmayan ve bilinmeyen proje
+        // kimlikleri için farklı hata alarak kayıt varlığını yoklayabilirdi.
+        if (orderedChanges.projectDeletes.length) {
+          const actor = await loadAuthorizationContext(transaction);
+          if (!actor.isSystemAdmin) {
+            throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
+          }
+        }
         await assertUpsertIntentMatchesPersistence(transaction, orderedChanges);
         await assertManualProjectCodesAvailable(transaction, orderedChanges);
         await assertDeleteIntentMatchesPersistence(transaction, orderedChanges);
