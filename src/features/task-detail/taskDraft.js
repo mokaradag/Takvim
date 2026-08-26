@@ -44,6 +44,11 @@ export function finalTaskFieldPatch(canonicalTask, localDraft, field) {
   return { [field]: localDraft?.[field] ?? '' };
 }
 
+/** Eski bir kapanışın sonucu, daha sonra başlayan başka bir kapanışı temizleyemez. */
+export function clearCompletedClosingTaskId(currentClosingTaskId, completedTaskId) {
+  return currentClosingTaskId === completedTaskId ? null : currentClosingTaskId;
+}
+
 export function createTaskUpdateTracker() {
   const pending = new Set();
   let failure = null;
@@ -88,4 +93,17 @@ export function createTaskUpdateTracker() {
       return pending.size;
     }
   };
+}
+
+/**
+ * Görev panelini, bekleyen kayıt sonucu ne olursa olsun kapatır. İki işlem aynı
+ * anda başlatılır; başarısız kayıt kullanıcıya döndürülürken kapanışın kendisi
+ * başarısız kayıt tarafından bloke edilmez.
+ */
+export async function closeTaskWithPendingUpdates(updateTracker, closeTask) {
+  const [pendingResult, closeResult] = await Promise.all([
+    updateTracker.waitForIdle(),
+    closeTask()
+  ]);
+  return pendingResult.ok ? closeResult : pendingResult;
 }

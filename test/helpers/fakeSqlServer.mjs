@@ -251,7 +251,8 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
       // gerçek sorgu da aynı üç kaynağın birleşimini kullanır.
       const scopedTask = db.tasks.some((task) => sameGuid(task.ProjectId, project.ProjectId)
         && visibleAssignee(db, task.TaskId, sicil));
-      if (corporateAccess || grant?.AccessLevel === 'FULL') visible.set(project.ProjectId, 'FULL');
+      const manualLead = project.SourceType === 'MANUAL' && project.LeadSicil === sicil;
+      if (corporateAccess || manualLead || grant?.AccessLevel === 'FULL') visible.set(project.ProjectId, 'FULL');
       else if (grant || scopedTask) visible.set(project.ProjectId, 'PARTIAL');
     }
   }
@@ -262,8 +263,17 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
     .sort((left, right) => String(left.ProjectName).localeCompare(String(right.ProjectName)));
 
   const tags = db.projectTags.filter((tag) => visible.has(guid(tag.ProjectId)));
+  const requiredPartialWbs = new Set();
+  for (const task of db.tasks.filter((entry) => visible.get(guid(entry.ProjectId)) === 'PARTIAL'
+    && visibleAssignee(db, entry.TaskId, sicil))) {
+    let node = wbsById(db, task.WbsId);
+    while (node && !requiredPartialWbs.has(guid(node.WbsId))) {
+      requiredPartialWbs.add(guid(node.WbsId));
+      node = node.ParentWbsId ? wbsById(db, node.ParentWbsId) : null;
+    }
+  }
   const wbs = db.wbs
-    .filter((node) => visible.get(guid(node.ProjectId)) === 'FULL')
+    .filter((node) => visible.get(guid(node.ProjectId)) === 'FULL' || requiredPartialWbs.has(guid(node.WbsId)))
     .sort((left, right) => (left.SortOrder ?? 0) - (right.SortOrder ?? 0) || String(left.Code).localeCompare(String(right.Code)));
   // KISMİ projelerde yalnızca kendi/astının görevleri döner.
   const tasks = db.tasks
@@ -282,7 +292,8 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
       AccessLevel: visible.get(guid(task.ProjectId)),
       // YETKİLİ sorumlu sayısı: görünen satırlarla farkı, gizlenmiş bir eş
       // sorumlu olduğunu söyler (kimlik taşımaz).
-      AssigneeCount: db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, task.TaskId)).length
+      AssigneeCount: db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, task.TaskId)).length,
+      IsCurrentUserAssignee: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && entry.Sicil === sicil)
     }));
   // Sorumlu satırları da süzülür: KISMİ projede yalnızca kullanıcının kendisi
   // ve kapsamındaki çalışanlar görünür. Süzgeç olmadan kapsam dışı eş sorumlu
@@ -359,6 +370,10 @@ function authorizationRecordsets(db, sicil) {
     const hasRole = db.corporateProjectAccess.some((entry) => entry.Sicil === sicil
       && String(entry.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase());
     if (hasRole) grants.push({ ProjectId: project.ProjectId, AccessLevel: 'FULL', Reason: 'CORPORATE_PROJECT_ROLE' });
+  }
+  for (const project of db.projects.filter((entry) => entry.IsActive
+    && entry.SourceType === 'MANUAL' && entry.LeadSicil === sicil)) {
+    grants.push({ ProjectId: project.ProjectId, AccessLevel: 'FULL', Reason: 'MANUAL_PROJECT_LEAD' });
   }
   for (const entry of db.projectAccess.filter((row) => row.IsActive && row.Sicil === sicil)) {
     const project = projectById(db, entry.ProjectId);
@@ -589,6 +604,21 @@ function runQuery(db, statement, params, { database }) {
     synchronizeCorporateProjects(db, params.actorSicil);
     return result([[]]);
   }
+  if (sqlText.includes('JOIN STRING_SPLIT(@projectIds') && sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
+    const requested = (value) => new Set(String(value || '').split(',').map((entry) => entry.trim().toUpperCase()).filter(Boolean));
+    const projectIds = requested(params.projectIds);
+    const wbsIds = requested(params.wbsIds);
+    const taskIds = requested(params.taskIds);
+    const snapshot = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), false);
+    return result([
+      snapshot[0].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
+      snapshot[1].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
+      snapshot[2].filter((row) => wbsIds.has(String(row.WbsId).toUpperCase())),
+      snapshot[3].filter((row) => taskIds.has(String(row.TaskId).toUpperCase())),
+      snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase())),
+      snapshot[5].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()))
+    ]);
+  }
   if (sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
     const ids = new Set(String(params.taskIds || '').split(',').map((value) => value.trim().toUpperCase()).filter(Boolean));
     // Tamamlama, anlık görüntüyle AYNI görünürlük kuralına uyar: kapsam dışı eş
@@ -628,11 +658,13 @@ function runQuery(db, statement, params, { database }) {
       && String(entry.ProjectCode).toUpperCase() === code);
     const granted = db.projectAccess.some((entry) => entry.IsActive
       && entry.Sicil === params.sicil
+      && ['FULL', 'READ'].includes(entry.AccessLevel)
       && sameGuid(entry.ProjectId, task.ProjectId));
+    const manualLead = project.SourceType === 'MANUAL' && project.LeadSicil === params.sicil;
     const assigned = db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId)
       && (entry.Sicil === params.sicil
         || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil)));
-    return result([corporate || granted || assigned ? [{ TaskId: task.TaskId }] : []]);
+    return result([corporate || manualLead || granted || assigned ? [{ TaskId: task.TaskId }] : []]);
   }
 
   /* ── Görev hatırlatma e-postaları ─────────────────────────── */
@@ -871,6 +903,23 @@ function runQuery(db, statement, params, { database }) {
       .filter((entry) => sameGuid(entry.TaskId, params.taskId))
       .map((entry) => ({ Sicil: entry.Sicil }))]);
   }
+  if (sqlText.includes('SELECT ta.Sicil')
+    && sqlText.includes('FROM dbo.MR_TaskAssignees ta')
+    && sqlText.includes('WHERE ta.TaskId = @taskId')) {
+    const task = taskById(db, params.taskId);
+    const project = task ? projectById(db, task.ProjectId) : null;
+    const broadVisibility = Boolean(params.isAdmin)
+      || (project?.SourceType === 'MANUAL' && project.LeadSicil === params.sicil)
+      || (project?.SourceType === 'CORPORATE' && db.corporateProjectAccess.some((entry) => entry.Sicil === params.sicil
+        && String(entry.ProjectCode).toUpperCase() === String(project?.ProjectCode || '').toUpperCase()))
+      || db.projectAccess.some((entry) => entry.IsActive && entry.Sicil === params.sicil
+        && sameGuid(entry.ProjectId, task?.ProjectId) && ['FULL', 'READ'].includes(entry.AccessLevel));
+    return result([db.taskAssignees
+      .filter((entry) => sameGuid(entry.TaskId, params.taskId))
+      .filter((entry) => broadVisibility || entry.Sicil === params.sicil
+        || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil))
+      .map((entry) => ({ Sicil: entry.Sicil }))]);
+  }
 
   if (sqlText.includes('SELECT TOP (1) Sicil FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
     const person = db.people.find((entry) => entry.Sicil === params.sicil);
@@ -935,6 +984,23 @@ function runQuery(db, statement, params, { database }) {
       || db.tasks.some((task) => sameGuid(task.WbsId, params.wbsId));
     return result([referenced ? [{ Found: 1 }] : []]);
   }
+  if (sqlText.includes('COUNT_BIG(*) AS TaskCount') && sqlText.includes('WHERE ProjectId = @projectId')) {
+    const count = db.tasks.filter((task) => sameGuid(task.ProjectId, params.projectId)).length;
+    return result([[{ TaskCount: count }]]);
+  }
+  if (sqlText.trim() === 'SELECT WbsId FROM dbo.MR_WBS WHERE ProjectId = @projectId;') {
+    return result([db.wbs.filter((node) => sameGuid(node.ProjectId, params.projectId)).map((node) => ({ WbsId: node.WbsId }))]);
+  }
+  if (sqlText.includes('SELECT Sicil, AccessLevel, GrantSource')
+    && sqlText.includes('FROM dbo.MR_ProjectAccess')) {
+    return result([db.projectAccess
+      .filter((entry) => sameGuid(entry.ProjectId, params.projectId) && entry.IsActive)
+      .map((entry) => ({
+        Sicil: entry.Sicil,
+        AccessLevel: entry.AccessLevel,
+        GrantSource: entry.GrantSource
+      }))]);
+  }
 
   // ── Yazma işlemleri ────────────────────────────────────────
   if (sqlText.includes('INSERT dbo.MR_Projects(')) {
@@ -975,6 +1041,26 @@ function runQuery(db, statement, params, { database }) {
       IsActive: 1
     });
     return result([[]]);
+  }
+  if (sqlText.includes('SET IsActive = 0') && sqlText.includes("SourceType = 'MANUAL'")) {
+    const project = projectById(db, params.projectId);
+    if (!project || project.SourceType !== 'MANUAL' || !project.IsActive || !sameVersion(project.RowVersion, params.version)) {
+      // Gerçek SQL'de erişim kapatma aynı `@affected` koşuluna bağlı olmalıdır.
+      // Koruma kaldırılırsa ikiz de eski hatayı üretir ve eski sürüm testi bunu
+      // yakalar.
+      if (!sqlText.includes('WHERE @affected > 0 AND ProjectId = @projectId')) {
+        for (const access of db.projectAccess) {
+          if (sameGuid(access.ProjectId, params.projectId)) access.IsActive = 0;
+        }
+      }
+      return result([[{ Affected: 0 }]]);
+    }
+    project.IsActive = 0;
+    project.RowVersion = nextVersion();
+    for (const access of db.projectAccess) {
+      if (sameGuid(access.ProjectId, params.projectId)) access.IsActive = 0;
+    }
+    return result([[{ Affected: 1 }]]);
   }
   if (sqlText.includes('UPDATE dbo.MR_Projects')) {
     const project = projectById(db, params.projectId);
@@ -1050,18 +1136,26 @@ function runQuery(db, statement, params, { database }) {
     if (!task || !sameVersion(task.RowVersion, params.version)) {
       throw new Error("STALE_TASK");
     }
+    const relatedTaskIds = new Set();
     // Seri şablonu silinirken yinelemeler ayrılır, silinmez.
     for (const entry of db.tasks) {
       if (!sameGuid(entry.RecurrenceParentTaskId, params.taskId)) continue;
+      relatedTaskIds.add(guid(entry.TaskId));
       entry.RecurrenceParentTaskId = null;
       entry.RecurrenceOccurrenceDate = null;
       entry.RowVersion = nextVersion();
     }
-    db.taskDependencies = db.taskDependencies
-      .filter((entry) => !sameGuid(entry.TaskId, params.taskId) && !sameGuid(entry.PredecessorTaskId, params.taskId));
+    db.taskDependencies = db.taskDependencies.filter((entry) => {
+      const removed = sameGuid(entry.TaskId, params.taskId) || sameGuid(entry.PredecessorTaskId, params.taskId);
+      if (removed && !sameGuid(entry.TaskId, params.taskId)) relatedTaskIds.add(guid(entry.TaskId));
+      return !removed;
+    });
     db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
     db.tasks = db.tasks.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
-    return result([[{ Affected: 1 }]]);
+    return result([
+      [{ Affected: 1 }],
+      [...relatedTaskIds].map((TaskId) => ({ TaskId }))
+    ]);
   }
   if (sqlText.includes('COUNT_BIG(*) AS ChildCount')) {
     const childCount = db.tasks.filter((task) => sameGuid(task.RecurrenceParentTaskId, params.parentId)).length;
@@ -1153,6 +1247,15 @@ function runQuery(db, statement, params, { database }) {
       RowVersion: nextVersion()
     });
     return result([[{ Affected: 1 }]]);
+  }
+  if (sqlText.includes('OUTPUT deleted.TaskId AS RelatedTaskId')
+    && sqlText.includes('DELETE dbo.MR_TaskDependencies')) {
+    const relatedTaskIds = db.taskDependencies
+      .filter((entry) => sameGuid(entry.TaskId, params.taskId) || sameGuid(entry.PredecessorTaskId, params.taskId))
+      .map((entry) => entry.TaskId);
+    db.taskDependencies = db.taskDependencies
+      .filter((entry) => !sameGuid(entry.TaskId, params.taskId) && !sameGuid(entry.PredecessorTaskId, params.taskId));
+    return result([relatedTaskIds.map((RelatedTaskId) => ({ RelatedTaskId }))]);
   }
   if (sqlText.includes('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;')) {
     db.taskDependencies = db.taskDependencies.filter((entry) => !sameGuid(entry.TaskId, params.taskId));

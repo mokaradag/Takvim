@@ -121,6 +121,14 @@ test('geniş proje seçimi yönetici/ilgisiz yetkiler vermez', () => {
   const wbsAccess = resolveWbsMutationAccess(wbsState, 'wbs-scope');
   assert.equal(wbsAccess.ok, false);
   assert.equal(wbsAccess.code, 'PROJECT_WRITE_FORBIDDEN');
+  const assignmentOnlyState = {
+    ...state,
+    assignableProjects: [{ ...SCOPE_PROJECT, accessLevel: undefined }]
+  };
+  const taskAccess = resolveTaskMutationAccess(assignmentOnlyState, 't-scope', { task: 'Yeni ad' });
+  assert.equal(taskAccess.ok, true);
+  assert.equal(taskAccess.scope, 'ASSIGNMENT');
+  assert.equal(taskAccess.canManageStructure, false);
   // Kapsam yalnızca yöneticilere açıktır ve sistem yöneticiliğiyle eş değildir.
   assert.equal(hasTaskAssignmentScope({ isExecutive: true }), true);
   assert.equal(hasTaskAssignmentScope({ isSystemAdmin: true }), true);
@@ -180,7 +188,7 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
 test('Görevler sayfası Basit Modda ulaşılabilir', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   assert.match(shell, /const SIMPLE_NAV_IDS = new Set\(\['veri',/);
-  assert.match(shell, /case 'veri': return simpleMode \? <SimpleTasksView \/> : <TasksView \/>;/);
+  assert.match(shell, /<SimpleTasksView onNewTask=/);
 });
 
 test('Basit Mod tablosu yalnızca hızlı görev tanımı alanlarını gösterir', () => {
@@ -217,11 +225,12 @@ test('Basit Mod görünümü gelişmiş alanları okumaz', () => {
   assert.match(view, /fmt\(task\.targetFinish\)/);
 });
 
-test('Gelişmiş Mod tablosu değişmeden durur', () => {
+test('Gelişmiş Mod tablosu ilerlemeyi korur ve efor saatini göstermez', () => {
   const view = read('src/features/tasks/TasksView.jsx');
-  for (const label of ['İlerleme', 'Saat (P)', 'Başlangıç', 'Bitiş', 'Hedef']) {
+  for (const label of ['İlerleme', 'Başlangıç', 'Bitiş', 'Hedef']) {
     assert.ok(view.includes(label), `${label} sütunu Gelişmiş Modda kalmalıdır`);
   }
+  assert.doesNotMatch(view, /Saat \(P\)|plannedHours|actualHours/);
 });
 
 test('Öncelik Basit Modda tanımlanır, listelenir ve düzenlenir', () => {
@@ -233,7 +242,8 @@ test('Öncelik Basit Modda tanımlanır, listelenir ve düzenlenir', () => {
   assert.match(panel, /aria-label="Görev önceliği"/);
   assert.match(panel, /priority: normalizePriorityId\(priority\)/);
   // Sade tabloda hem gösterilir hem süzülür.
-  assert.match(view, /aria-label="Öncelik süzgeci"/);
+  assert.match(view, /<FilterableTH label="Öncelik"/);
+  assert.match(view, /filter=\{filters\.priority\}/);
   // Basit görev düzenleyicisinde değiştirilir.
   assert.match(drawer, /aria-label="Görev önceliği"/);
   assert.match(drawer, /save\(\{ priority: option\.id \}\)/);

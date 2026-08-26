@@ -10,6 +10,7 @@ import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton } from '../../components/ui-extras';
 import { appZoom } from '../../lib/zoom';
 import { useTasks, useTaskActions } from '../../state/hooks';
+import { bucketCalendarTasks, taskCalendarDate } from './calendarTaskBucketing.js';
 
 /* ── Takvim (Calendar) ─────────────────────────────────── */
 export function CalendarView({ t, setTweak }) {
@@ -29,20 +30,7 @@ export function CalendarView({ t, setTweak }) {
   }, [month]);
 
   const eventsByDay = useMemo2(() => {
-    const map = {};
-    tasks.forEach((task) => {
-      const startValue = task.plannedStart || task.plannedFinish || task.targetFinish;
-      const endValue = task.plannedFinish || task.plannedStart || task.targetFinish;
-      if (!startValue || !endValue) return;
-      const start = parseDate(startValue);
-      const end = parseDate(endValue);
-      eachDay(start <= end ? start : end, start <= end ? end : start).forEach((date) => {
-        const key = fmtISO(date);
-        map[key] = map[key] || [];
-        map[key].push(task);
-      });
-    });
-    return map;
+    return bucketCalendarTasks(tasks);
   }, [tasks]);
 
   const goPrev = () => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1));
@@ -115,7 +103,8 @@ export function CalendarView({ t, setTweak }) {
         <span className="cl-item"><span className="cl-swatch" style={{ background: 'var(--accent)', borderRadius: 99 }} /> Bugün</span>
         <span className="cl-item ms-auto">
           <InfoButton title="Takvim görünümü" icon={<Icons.Calendar size={12} />} corner accent="var(--accent)">
-            <p>Aylık takvimde her hücre bir günü temsil eder. Hücredeki etiketler o güne denk gelen görevlerdir.</p>
+            <p>Aylık takvim bir termin görünümüdür. Her görev yalnızca hedef bitiş gününde görünür; hedef bitişi olmayan eski görevlerde planlanan bitiş kullanılır.</p>
+            <p>Görev süresini günlere yayılmış görmek için Gantt görünümünü kullanın.</p>
             <div className="rt-sep" />
             <div className="rt-row"><Icons.Calendar size={12} className="rt-ico" /><span><strong>Hafta sonu:</strong> mavi-gri dolgu</span></div>
             <div className="rt-row"><Icons.Gift size={12} className="rt-ico" /><span><strong>Resmi tatil:</strong> kırmızı dolgu</span></div>
@@ -174,7 +163,7 @@ export function CalendarView({ t, setTweak }) {
                           <div className="rt-row"><span className="rt-label">Proje</span><span className="rt-val">{t.proje}</span></div>
                           <div className="rt-row"><span className="rt-label">Etiket</span><span className="rt-val">{t.keyword}</span></div>
                           <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
-                          <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(t.plannedStart || t.targetFinish)} – {fmt(t.plannedFinish || t.targetFinish)}</span></div>
+                          <div className="rt-row"><span className="rt-label">Termin</span><span className="rt-val">{fmt(taskCalendarDate(t))}</span></div>
                           <div className="rt-sep" />
                           <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val"><StatusPill task={t} size={10.5} /></span></div>
                         </>
@@ -273,7 +262,7 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
                   </div>
                   <div className="col" style={{ alignItems: 'flex-end', gap: 4 }}>
                     <AvatarStack names={t.sorumlu} personIds={t.assigneeIds} max={2} size="sm" />
-                    <span className="muted tabular" style={{ fontSize: 10.5 }}>{fmt(t.plannedStart || t.targetFinish)} → {fmt(t.plannedFinish || t.targetFinish)}</span>
+                    <span className="muted tabular" style={{ fontSize: 10.5 }}>Termin · {fmt(taskCalendarDate(t))}</span>
                   </div>
                 </button>
               ))}

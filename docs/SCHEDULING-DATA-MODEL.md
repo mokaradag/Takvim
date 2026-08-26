@@ -50,7 +50,7 @@ The current plan is the editable schedule currently used by the application:
 - `plannedFinish`
 - `plannedDurationDays`
 
-`plannedStart` and `plannedFinish` are the authoritative editable current-plan dates. The primary Gantt activity bars, Calendar task ranges and current-plan date columns use these fields.
+`plannedStart` and `plannedFinish` are the authoritative editable current-plan dates. The primary Gantt activity bars and current-plan date columns use these fields. Takvim is deliberately a due-date view: it buckets each Task once on `targetFinish`, with `plannedFinish` only as a legacy fallback when no target exists.
 
 `plannedDurationDays` is the inclusive working-day duration of the current plan under the task's effective scheduling calendar. The normalization boundary recalculates it from `plannedStart` and `plannedFinish` whenever a task is loaded or updated so the stored duration does not become stale. Milestones always have a planned duration of zero.
 

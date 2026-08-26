@@ -396,6 +396,13 @@ test('şablon silindiğinde yinelemeler ayrılır, silinmez', async () => {
       taskDeletes: [{ id: TASK_ID, version: template.version }]
     });
     assert.equal(deleted.ok, true, deleted.error?.message);
+    const authoritativeChild = deleted.value.taskUpserts.find((task) => task.id === CHILD_ID);
+    assert.ok(authoritativeChild, 'silmenin değiştirdiği yineleme yetkili yanıtta yeniden yüklenir');
+    assert.equal(authoritativeChild.recurrenceParentId, null);
+    assert.equal(authoritativeChild.recurrenceOccurrenceDate, null);
+    const reconciledChild = stack.state.tasks.find((task) => task.id === CHILD_ID);
+    assert.equal(reconciledChild.recurrenceParentId, null);
+    assert.equal(reconciledChild.recurrenceOccurrenceDate, null);
 
     // Her yineleme gerçek bir görevdir ve kendi ilerlemesini taşır: şablonun
     // silinmesi onları da silmemeli, yalnızca seriden ayırmalıdır.

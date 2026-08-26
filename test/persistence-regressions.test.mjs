@@ -5,6 +5,8 @@ import { createMockRepository } from '../src/data/mock/createMockRepository.js';
 import { appStateReducer, createInitialState } from '../src/state/appState.js';
 import { createStateMutationOrchestrator } from '../src/state/persistence.js';
 import {
+  clearCompletedClosingTaskId,
+  closeTaskWithPendingUpdates,
   createTaskUpdateTracker,
   reconcileTaskDraft,
   taskDraftValuesEqual
@@ -94,6 +96,29 @@ test('Task Detail update tracker waits for an in-flight save before allowing clo
   assert.equal(tracker.getPendingCount(), 0);
 });
 
+test('Task Detail close starts immediately and still reports a failed pending save', async () => {
+  const tracker = createTaskUpdateTracker();
+  let releaseSave;
+  const save = new Promise((resolve) => { releaseSave = resolve; });
+  tracker.track(save);
+  let closeStarted = false;
+
+  const closing = closeTaskWithPendingUpdates(tracker, async () => {
+    closeStarted = true;
+    return { ok: true, value: 'closed' };
+  });
+
+  assert.equal(closeStarted, true, 'kapanış bekleyen kayıtla eşzamanlı başlar');
+  const failure = { ok: false, error: { code: 'MUTATION_FAILED' } };
+  releaseSave(failure);
+  assert.deepEqual(await closing, failure);
+});
+
+test('an older Task Detail close cannot clear the saving state of a newer task', () => {
+  assert.equal(clearCompletedClosingTaskId('task-2', 'task-1'), 'task-2');
+  assert.equal(clearCompletedClosingTaskId('task-2', 'task-2'), null);
+});
+
 test('Task Detail update tracker remembers a failure even after the failed save settles', async () => {
   const tracker = createTaskUpdateTracker();
   const failed = {
@@ -171,7 +196,7 @@ test('persistence reducer keeps an earlier save error through later start and su
   assert.equal(state.saveError, null);
 });
 
-test('a failed queued Task edit remains visible after the following queued edit succeeds', async () => {
+test('a failed coalesced Task edit is retained and retried with the following edit', async () => {
   const memory = createMockRepository();
   let commitCount = 0;
   const repository = {
@@ -186,14 +211,71 @@ test('a failed queued Task edit remains visible after the following queued edit 
   const before = structuredClone(harness.state.tasks.find((task) => task.id === 't1'));
 
   const first = harness.persistence.updateTask('t1', { status: 'done' });
-  const second = harness.persistence.updateTask('t1', { targetFinish: '2026-12-31' });
-  const [firstResult, secondResult] = await Promise.all([first, second]);
+  const [firstResult] = await Promise.all([
+    first,
+    harness.persistence.flushTaskUpdates(['t1'])
+  ]);
 
   assert.equal(firstResult.ok, false);
-  assert.equal(secondResult.ok, true);
   assert.equal(harness.state.tasks.find((task) => task.id === 't1').status, before.status);
+
+  const second = harness.persistence.updateTask('t1', { targetFinish: '2026-12-31' });
+  const [secondResult] = await Promise.all([
+    second,
+    harness.persistence.flushTaskUpdates(['t1'])
+  ]);
+
+  assert.equal(secondResult.ok, true);
+  assert.equal(commitCount, 2);
+  assert.equal(harness.state.tasks.find((task) => task.id === 't1').status, 'done');
   assert.equal(harness.state.tasks.find((task) => task.id === 't1').targetFinish, '2026-12-31');
   assert.equal(harness.state.saveError.code, 'MUTATION_FAILED');
+});
+
+test('an in-flight failed Task patch is merged under a newer pending patch', async () => {
+  const memory = createMockRepository();
+  let commitCount = 0;
+  const committedChanges = [];
+  let releaseFirst;
+  let markFirstStarted;
+  const firstStarted = new Promise((resolve) => { markFirstStarted = resolve; });
+  const repository = {
+    loadSnapshot: () => memory.loadSnapshot(),
+    async commitChanges(changes) {
+      commitCount += 1;
+      committedChanges.push(changes);
+      if (commitCount === 1) {
+        markFirstStarted();
+        await new Promise((resolve) => { releaseFirst = resolve; });
+        throw new Error('first in-flight save fails');
+      }
+      return memory.commitChanges(changes);
+    }
+  };
+  const harness = await createHarness(repository, { taskPatchDelayMs: 60_000 });
+
+  const first = harness.persistence.updateTask('t1', { status: 'done' });
+  const firstFlush = harness.persistence.flushTaskUpdates(['t1']);
+  await firstStarted;
+  const newer = harness.persistence.updateTask('t1', { targetFinish: '2026-12-31' });
+  const forcedFlush = harness.persistence.flushTaskUpdates(['t1']);
+  releaseFirst();
+  const [[firstFlushResult], [forcedFlushResult], firstResult, newerResult] = await Promise.all([
+    firstFlush,
+    forcedFlush,
+    first,
+    newer
+  ]);
+  assert.equal(firstFlushResult.ok, false);
+  assert.equal(forcedFlushResult.ok, true);
+  assert.equal(firstResult.ok, false);
+  assert.equal(newerResult.ok, true);
+  assert.equal(commitCount, 2);
+  assert.equal(committedChanges[1].taskUpserts[0].status, 'done');
+  assert.equal(committedChanges[1].taskUpserts[0].targetFinish, '2026-12-31');
+  assert.equal(harness.state.tasks.find((task) => task.id === 't1').status, 'done');
+  assert.equal(harness.state.tasks.find((task) => task.id === 't1').targetFinish, '2026-12-31');
+  harness.persistence.dispose();
 });
 
 test('a failed coalesced Task save keeps the newer local draft available for retry', async () => {

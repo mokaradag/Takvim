@@ -9,7 +9,6 @@ import {
   useTaskActions
 } from '../../state/hooks';
 import {
-  canAssignTasksInProject,
   projectWriteFailure,
   resolveTaskMutationAccess
 } from '../../state/projectWritePolicy.js';
@@ -17,7 +16,12 @@ import { ReadOnlyTaskDrawer } from './ReadOnlyTaskDrawer';
 import { SimpleTaskDrawer } from './SimpleTaskDrawer';
 import { TaskDrawer } from './TaskDrawer';
 import { normalizeTaskAssigneePatch } from './taskAssigneePatch.js';
-import { createTaskUpdateTracker, reconcileTaskDraft } from './taskDraft';
+import {
+  clearCompletedClosingTaskId,
+  closeTaskWithPendingUpdates,
+  createTaskUpdateTracker,
+  reconcileTaskDraft
+} from './taskDraft';
 
 export function TaskDetailOverlay({ simple = false }) {
   const task = useSelectedTask();
@@ -30,6 +34,7 @@ export function TaskDetailOverlay({ simple = false }) {
   const people = useAllPeople();
   const { closeTask, updateTask, moveTaskToWbs, deleteTask } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
+  const [closingTaskId, setClosingTaskId] = useState(null);
   const taskIdRef = useRef(task?.id || null);
   const canonicalTaskRef = useRef(task);
   const dirtyFieldsRef = useRef(new Set());
@@ -63,17 +68,16 @@ export function TaskDetailOverlay({ simple = false }) {
 
   if (!task) return null;
 
-  // Yazma yetkisi görev ATAMA kapsamını da içerir: yönetici, kendi personeline
-  // tanımladığı görevi düzenleyebilmelidir (bkz. projectWritePolicy).
+  // Yazma yetkisi görev ATAMA kapsamını ve görevin yetkili sorumlusu için dar
+  // içerik/ilerleme kapsamını içerir (bkz. projectWritePolicy).
   const writeState = { projects, tasks, assignableProjects };
   // Sunucu, atama kapsamıyla yazmayı görevin BÜTÜN sorumlularının yönetici
   // kapsamında olmasına bağlar; anlık görüntü ise TEK bir ast yeterken görevi
   // gösterir. Kapsam dışı bir eş sorumlunun satırı gizlendiği için istemci
   // yalnızca SAYIYI karşılaştırabilir: gizlenmiş sorumlu varsa panel salt
   // okunur açılır ve her düzenleme sunucuda reddedilmek yerine hiç başlamaz.
-  const hasHiddenAssignees = Number(task.assigneeCount ?? (task.assigneeIds || []).length)
-    > (task.assigneeIds || []).length;
-  if (!canAssignTasksInProject(writeState, task.projectId) || hasHiddenAssignees) {
+  const initialAccess = resolveTaskMutationAccess(writeState, task.id, {});
+  if (!initialAccess.ok) {
     return <ReadOnlyTaskDrawer task={task} onClose={closeTask} />;
   }
 
@@ -130,9 +134,16 @@ export function TaskDetailOverlay({ simple = false }) {
    * değerlerle gönderilir (bkz. createTaskPatchCoalescer).
    */
   const onClose = async () => {
-    const pendingResult = await updateTrackerRef.current.waitForIdle();
-    const closeResult = await closeTask();
-    return pendingResult.ok ? closeResult : pendingResult;
+    const taskId = task.id;
+    setClosingTaskId(taskId);
+    try {
+      // closeTask bekleyen yamayı hemen boşaltır. İzleyiciyle paralel beklemek,
+      // önce debounce süresini sonra aynı kaydı ikinci kez bekleyen seri kapanışı
+      // ortadan kaldırır; boşaltılan yama yalnızca bir commit üretir.
+      return await closeTaskWithPendingUpdates(updateTrackerRef.current, closeTask);
+    } finally {
+      setClosingTaskId((currentTaskId) => clearCompletedClosingTaskId(currentTaskId, taskId));
+    }
   };
 
   // Basit Modda sade düzenleyici açılır: Gelişmiş Modun tam paneli, Basit Modda
@@ -144,6 +155,9 @@ export function TaskDetailOverlay({ simple = false }) {
         onClose={onClose}
         onUpdate={onUpdate}
         onDelete={deleteTask}
+        canManageAssignees={initialAccess.canManageAssignees}
+        canDelete={initialAccess.canDelete}
+        isSaving={closingTaskId === task.id}
       />
     );
   }
@@ -155,6 +169,10 @@ export function TaskDetailOverlay({ simple = false }) {
       onClose={onClose}
       onUpdate={onUpdate}
       onDelete={deleteTask}
+      canManageStructure={initialAccess.canManageStructure}
+      canManageAssignees={initialAccess.canManageAssignees}
+      canDelete={initialAccess.canDelete}
+      isSaving={closingTaskId === task.id}
     />
   );
 }

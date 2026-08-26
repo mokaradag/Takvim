@@ -6,6 +6,7 @@ import { toActualUuid } from '../src/data/api/createApiRepository.js';
 import { createMockRepository } from '../src/data/mock/createMockRepository.js';
 import { appStateReducer, createInitialState } from '../src/state/appState.js';
 import { createPersistenceChangeSet, createStateMutationOrchestrator } from '../src/state/persistence.js';
+import { reconcileProjectMutationAccess } from '../src/state/projectMutationReconciliation.js';
 
 function project(id, name, calendarId) {
   return { id, name, code: id.toUpperCase(), color: 'blue', calendarId, dataDate: '2026-07-24' };
@@ -68,6 +69,23 @@ test('client entity ID fallback remains UUID-v4 compatible without crypto.random
   assert.equal(toActualUuid(value), '00010203-0405-4607-8809-0a0b0c0d0e0f');
 });
 
+test('project access reconciliation propagates an authoritative reload failure', async () => {
+  const failure = { ok: false, error: { code: 'LOAD_FAILED', message: 'Yüklenemedi' } };
+  let reloadCalls = 0;
+  const result = await reconcileProjectMutationAccess(
+    { id: 'p-1', accessLevel: 'PARTIAL' },
+    async () => { reloadCalls += 1; return failure; }
+  );
+  assert.equal(reloadCalls, 1);
+  assert.deepEqual(result, failure);
+
+  const full = await reconcileProjectMutationAccess(
+    { id: 'p-1', accessLevel: 'FULL' },
+    async () => { throw new Error('FULL erişimde yeniden yükleme çağrılmamalı'); }
+  );
+  assert.deepEqual(full, { ok: true, reloaded: false });
+});
+
 test('stable flush persists a coalesced edit scheduled while an earlier mutation is in flight', async () => {
   let state = createInitialState(seed());
   let releaseFirst;
@@ -91,13 +109,15 @@ test('stable flush persists a coalesced edit scheduled while an earlier mutation
       state = appStateReducer(state, action);
       return state;
     },
+    // Zamanlayıcı bu testi geçiremez: ilk ve geç yama yalnızca flush döngüsüyle
+    // depoya ulaşır.
     taskPatchDelayMs: 60_000,
     now: () => '2026-07-24T06:00:00.000Z'
   });
 
   const first = persistence.updateTask('task-1', { priority: 'high' });
-  await firstStarted;
   const draining = persistence.flush();
+  await firstStarted;
   const late = persistence.updateTask('task-1', { description: 'late edit' });
   releaseFirst();
 
@@ -121,6 +141,20 @@ test('task deletion removes incoming dependencies and persists successor reconci
   assert.deepEqual(changes.taskDeletes, ['task-1']);
   assert.deepEqual(changes.taskUpserts.map((item) => item.id), ['task-2']);
   assert.deepEqual(changes.taskUpserts[0].deps, []);
+});
+
+test('project scrubbing clears a selected task that is no longer present', () => {
+  const selected = {
+    ...createInitialState(seed()),
+    selectedTaskId: 'task-1'
+  };
+  const scrubbed = appStateReducer(selected, {
+    type: 'data/apply-changes',
+    changes: { projectDeletes: ['p-1'] }
+  });
+
+  assert.equal(scrubbed.tasks.some((item) => item.id === 'task-1'), false);
+  assert.equal(scrubbed.selectedTaskId, null);
 });
 
 test('moving a task across projects clears both outgoing and incoming dependencies', () => {
@@ -162,4 +196,20 @@ test('Demo repository returns and reloads dependency reconciliation after direct
   assert.deepEqual(successor.deps, []);
   assert.equal(reloaded.tasks.some((item) => item.id === 'task-1'), false);
   assert.deepEqual(reloaded.tasks.find((item) => item.id === 'task-2').deps, []);
+});
+
+test('Demo repository preserves FULL project access and never persists task mutation metadata', async () => {
+  const data = seed();
+  const repository = createMockRepository(data);
+  const committed = await repository.commitChanges({
+    projectUpserts: [{ ...data.projects[0], name: 'Updated Project' }],
+    taskUpserts: [{ ...data.tasks[0], description: 'Updated Task', assigneeMutation: false }]
+  });
+  const reloaded = await repository.loadSnapshot();
+
+  assert.equal(committed.projectUpserts[0].accessLevel, 'FULL');
+  assert.equal(committed.projectUpserts[0].schedulingCapability, 'COMPLETE');
+  assert.equal(Object.hasOwn(committed.taskUpserts[0], 'assigneeMutation'), false);
+  assert.equal(reloaded.projects.find((item) => item.id === 'p-1').accessLevel, 'FULL');
+  assert.equal(Object.hasOwn(reloaded.tasks.find((item) => item.id === 'task-1'), 'assigneeMutation'), false);
 });

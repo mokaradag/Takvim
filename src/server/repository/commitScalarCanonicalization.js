@@ -73,10 +73,13 @@ export function canonicalizeCommitScalars(changes) {
       actualFinish: trimString(task?.actualFinish),
       remainingDurationDays: emptyStringToNull(task?.remainingDurationDays),
       progress: emptyStringToNull(task?.progress),
-      plannedHours: emptyStringToNull(task?.plannedHours),
-      actualHours: emptyStringToNull(task?.actualHours),
-      budget: emptyStringToNull(task?.budget),
-      spent: emptyStringToNull(task?.spent),
+      // Dar görev görünümü bu ürün-dışı alanları göndermeyebilir. Eksik alanı
+      // `undefined` anahtarı olarak eklemek, sunucu yetki katmanının "gönderilmedi"
+      // ile "değiştirilmeye çalışıldı" ayrımını yapmasını engellerdi.
+      ...(hasOwn(task, 'plannedHours') ? { plannedHours: emptyStringToNull(task.plannedHours) } : {}),
+      ...(hasOwn(task, 'actualHours') ? { actualHours: emptyStringToNull(task.actualHours) } : {}),
+      ...(hasOwn(task, 'budget') ? { budget: emptyStringToNull(task.budget) } : {}),
+      ...(hasOwn(task, 'spent') ? { spent: emptyStringToNull(task.spent) } : {}),
       sortOrder: emptyStringToNull(task?.sortOrder),
       assigneeIds: mapArray(task?.assigneeIds, trimString),
       deps: mapArray(task?.deps, (dependency) => ({

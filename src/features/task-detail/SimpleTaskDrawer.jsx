@@ -15,13 +15,21 @@ import { canWriteProject } from '../../state/projectWritePolicy.js';
  * Basit Mod · Görev düzenleme.
  *
  * Yalnızca "Hızlı Görev Tanımı"nda toplanan alanları düzenler: görev, kısa
- * açıklama, sorumlular, termin, öncelik ve durum. İlerleme yüzdesi, efor
- * saatleri, planlanan başlangıç/bitiş, dağılım ağacı, bağımlılıklar ve tekrar
+ * açıklama, sorumlular, termin, öncelik ve durum. İlerleme yüzdesi,
+ * planlanan başlangıç/bitiş, dağılım ağacı, bağımlılıklar ve tekrar
  * kuralı Gelişmiş Modda kalır — Basit Modda ne toplanır ne de gösterilir.
  *
  * Kayıt YAPISI aynıdır: aynı görev Gelişmiş Modda tüm alanlarıyla açılır.
  */
-export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
+export function SimpleTaskDrawer({
+  task,
+  onClose,
+  onUpdate,
+  onDelete,
+  canManageAssignees = true,
+  canDelete = true,
+  isSaving = false
+}) {
   const people = useAllPeople();
   const projects = useAllProjects();
   const assignmentScopeSicils = useAssignmentScopeSicils();
@@ -183,7 +191,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
                 <span key={person.id} className="simple-person active">
                   <Avatar name={person.name} person={person} size="sm" />
                   <span><strong>{person.name}</strong><small>{person.employeeNo || person.id}</small></span>
-                  <button
+                  {canManageAssignees && <button
                     type="button"
                     className="icon-btn"
                     style={{ width: 20, height: 20 }}
@@ -193,7 +201,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
                       .map((entry) => entry.id))}
                   >
                     <Icons.Close size={10} />
-                  </button>
+                  </button>}
                 </span>
               ))}
             </div>
@@ -204,7 +212,11 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
               placeholder="Sorumlu ekle"
               searchPlaceholder="Ad, sicil veya birimle ara"
               ariaLabel="Sorumlu ekle"
+              disabled={!canManageAssignees}
             />
+            {!canManageAssignees && Number(task.assigneeCount ?? selectedAssignees.length) > selectedAssignees.length && (
+              <small className="muted">Gizli eş sorumlular korunur; sorumlu listesi yalnızca tam proje yetkisiyle değiştirilebilir.</small>
+            )}
           </div>
 
           <label className="simple-field">
@@ -274,16 +286,18 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
         </div>
 
         <div className="drawer-foot">
-          <button
+          {canDelete && <button
             className="btn"
             onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}
           >
             <Icons.Trash size={13} /> Sil
-          </button>
+          </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki modda da aynı. */}
           <TaskReminderButton task={task} size={30} />
           <div style={{ flex: 1 }} />
-          <button className="btn primary" onClick={onClose}>Tamam</button>
+          <button className="btn primary" onClick={onClose} disabled={isSaving} aria-busy={isSaving}>
+            {isSaving ? 'Kaydediliyor…' : 'Tamam'}
+          </button>
         </div>
       </aside>
     </>

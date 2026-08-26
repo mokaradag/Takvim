@@ -64,6 +64,11 @@ export async function loadAuthorizationContext(executor = null) {
     JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = UPPER(p.ProjectCode)
     WHERE p.SourceType = 'CORPORATE' AND p.IsActive = 1 AND a.Sicil = @sicil
     UNION
+    SELECT p.ProjectId, CAST('FULL' AS varchar(20)) AS AccessLevel,
+      CAST('MANUAL_PROJECT_LEAD' AS varchar(30)) AS Reason
+    FROM dbo.MR_Projects p
+    WHERE p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil
+    UNION
     SELECT pa.ProjectId, pa.AccessLevel,
       CASE WHEN pa.GrantSource = 'OWNER' THEN 'MANUAL_OWNER' ELSE 'MANUAL_GRANT' END
     FROM dbo.MR_ProjectAccess pa

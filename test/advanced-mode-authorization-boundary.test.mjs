@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
+  canDeleteTask,
   canWriteProject,
   projectWriteFailure,
   resolveTaskCreationProject,
@@ -52,6 +53,8 @@ test('task mutations require writable source and destination projects', () => {
   assert.equal(resolveTaskMutationAccess(state, 'task-full', { projectId: 'partial' }).code, 'PROJECT_WRITE_FORBIDDEN');
   assert.equal(resolveTaskMutationAccess(state, 'task-full', { projectId: 'full' }).ok, true);
   assert.equal(resolveTaskMutationAccess(state, 'missing', {}).code, 'TASK_NOT_FOUND');
+  assert.equal(canDeleteTask(state, 'task-full'), true);
+  assert.equal(canDeleteTask(state, 'task-partial'), false);
 });
 
 test('WBS mutations and task moves require the same writable project', () => {
@@ -93,7 +96,7 @@ test('Advanced Mode views use the shared capability boundary', () => {
   assert.match(provider, /resolveTaskWbsMoveAccess/);
   assert.match(provider, /resolveWbsMutationAccess/);
   assert.match(tasksView, /disabled=\{!canAddTask\}/);
-  assert.match(tasksView, /canWriteProject\(projectById\.get\(t\.projectId\)\)/);
+  assert.match(tasksView, /canDeleteTask\(taskMutationState, t\.id\)/);
   assert.match(detailOverlay, /ReadOnlyTaskDrawer/);
   assert.match(wbsView, /canEdit\s*&&/);
 });

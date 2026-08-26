@@ -27,6 +27,12 @@ const UPSERT_TARGETS = Object.freeze([
 
 const DELETE_TARGETS = Object.freeze([
   {
+    collection: 'projectDeletes',
+    table: 'MR_Projects',
+    idColumn: 'ProjectId',
+    entityType: 'PROJECT'
+  },
+  {
     collection: 'wbsDeletes',
     table: 'MR_WBS',
     idColumn: 'WbsId',

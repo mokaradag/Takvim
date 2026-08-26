@@ -10,6 +10,7 @@ import { projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
 import { Tooltip, InfoButton, ColumnFilter, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, usePortfolioSchedule, useTaskActions } from '../../state/hooks';
+import { taskProgressValue, taskSortValue } from '../tasks/taskDisplayValues.js';
 
 /* ── Gantt ──────────────────────────────────────────────── */
 const GANTT_DEFAULT_COLS = {
@@ -23,7 +24,6 @@ const GANTT_DEFAULT_COLS = {
   lateFinish: false,
   totalFloat: false,
   freeFloat: false,
-  hours: false,
   progress: false,
   status: false,
   sorumlu: false,
@@ -50,12 +50,8 @@ const GANTT_COL_DEFS = [
       return <span className="tabular" style={{ color: critical ? 'var(--status-overdue)' : 'inherit', fontWeight: critical ? 700 : 500 }}>{schedule.totalFloatDays}g</span>;
   } },
   { key: 'freeFloat', label: 'Serbest Bolluk', width: 88, align: 'right', render: (t, today_, schedule) => schedule ? <span className="tabular">{schedule.freeFloatDays}g</span> : <span className="muted">—</span> },
-  { key: 'hours', label: 'Saat', width: 64, align: 'right', render: (t) => {
-      if (t.milestone) return <span className="muted">—</span>;
-      return <span className="tabular" style={{ fontSize: 11 }}>{t.actualHours || 0}/{t.plannedHours || 0}</span>;
-  } },
   { key: 'progress', label: '%', width: 56, align: 'right', render: (t) => {
-      const p = t.progress != null ? t.progress : (t.status === 'done' ? 100 : 0);
+      const p = taskProgressValue(t);
       return <span className="tabular">{p}%</span>;
   } },
   { key: 'status', label: 'Durum', width: 110, align: 'left', render: (t) => <StatusPill task={t} size={10.5} /> },
@@ -131,7 +127,6 @@ export function GanttView() {
     priority: [],
     status: [],
     progress: null,
-    plannedHours: null,
     plannedStart: null,
     plannedFinish: null,
     targetFinish: null
@@ -175,18 +170,18 @@ export function GanttView() {
     ['plannedStart', 'plannedFinish', 'targetFinish'].forEach(k => {
       if (colFilters[k]) out = out.filter(t => dateMatchesFilter(t[k], colFilters[k]));
     });
-    ['progress', 'plannedHours'].forEach(k => {
-      if (colFilters[k]) out = out.filter(t => numericMatchesFilter(t[k] != null ? t[k] : 0, colFilters[k]));
+    ['progress'].forEach(k => {
+      if (colFilters[k]) out = out.filter(t => numericMatchesFilter(taskProgressValue(t), colFilters[k]));
     });
     if (criticalOnly) out = out.filter(t => schedule.tasks[t.id]?.isCritical);
     return out;
   }, [tasks, globalSearch, colFilters, today_, criticalOnly, schedule]);
 
-  const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedHours || colFilters.plannedStart || colFilters.plannedFinish || colFilters.targetFinish);
+  const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedStart || colFilters.plannedFinish || colFilters.targetFinish);
   const clearAllFilters = () => {
     setCriticalOnly(false);
     setGlobalSearch('');
-    setColFilters({ task: '', proje: [], sorumlu: [], priority: [], status: [], progress: null, plannedHours: null, plannedStart: null, plannedFinish: null, targetFinish: null });
+    setColFilters({ task: '', proje: [], sorumlu: [], priority: [], status: [], progress: null, plannedStart: null, plannedFinish: null, targetFinish: null });
   };
 
   // Setters for per-column filters
@@ -225,7 +220,7 @@ export function GanttView() {
       // Apply column sort if any, else default by start
       arr.sort((a, b) => {
         if (sort.key) {
-          let va = a[sort.key], vb = b[sort.key];
+          let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
           if (sort.key === 'sorumlu') { va = (a.sorumlu[0] || ''); vb = (b.sorumlu[0] || ''); }
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
@@ -560,7 +555,6 @@ export function GanttView() {
               else if (c.key === 'end') { filterType = 'date'; filterValue = colFilters.plannedFinish; onFilter = (v) => setCF('plannedFinish', v); }
               else if (c.key === 'hedef') { filterType = 'date'; filterValue = colFilters.targetFinish; onFilter = (v) => setCF('targetFinish', v); }
               else if (c.key === 'progress') { filterType = 'number'; filterValue = colFilters.progress; onFilter = (v) => setCF('progress', v); numMin = 0; numMax = 100; numUnit = '%'; }
-              else if (c.key === 'hours') { filterType = 'number'; filterValue = colFilters.plannedHours; onFilter = (v) => setCF('plannedHours', v); numMin = 0; numMax = 200; numUnit = ' sa'; }
               else if (c.key === 'status') {
                 filterType = 'multi';
                 filterValue = colFilters.status;
@@ -842,9 +836,6 @@ export function GanttView() {
                         <div className="rt-sep" />
                         <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
                         <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{pct}%</span></div>
-                        {t.plannedHours != null && (
-                          <div className="rt-row"><span className="rt-label">Saat</span><span className="rt-val">{t.actualHours || 0}/{t.plannedHours} sa</span></div>
-                        )}
                         <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
                         <CpmTooltipRows schedule={taskSchedule} />
                       </>

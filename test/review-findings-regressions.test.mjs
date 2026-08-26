@@ -1,5 +1,5 @@
 /**
- * PR #57 incelemesindeki P0–P3 bulgularının gerileme sınamaları.
+ * Kod incelemesindeki P0–P3 bulgularının gerileme sınamaları.
  *
  * Her sınama, giderilen bulgunun DAVRANIŞINI sabitler: kod bir sonraki
  * düzenlemede eski hâline dönerse burada kırılır.

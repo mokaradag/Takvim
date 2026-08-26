@@ -26,7 +26,7 @@ import { parseDisplayDate } from '../src/components/dateInputFormat.js';
 import { ownsSimpleModePlan } from '../src/features/task-detail/simpleTaskPlan.js';
 import { plainTextToHtml } from '../src/features/reminders/plainTextHtml.js';
 import { planTemplateStartAlignment } from '../src/features/task-detail/recurrenceTemplateAlignment.js';
-import { resolveTaskCreationProject } from '../src/state/projectWritePolicy.js';
+import { canDeleteTask, resolveTaskCreationProject } from '../src/state/projectWritePolicy.js';
 import { canResolveTaskAssignee } from '../src/state/appState.js';
 
 const MANAGER_SICIL = 900500;
@@ -315,6 +315,7 @@ test('KISMİ anlık görüntü kapsam dışı eş sorumluyu istemciye vermez', a
     // varıp paneli salt okunur açabilsin diye. Sayı kimlik taşımaz.
     assert.equal(task.assigneeCount, 2);
     assert.ok(task.assigneeCount > task.assigneeIds.length, 'gizli sorumlu tespit edilebilmelidir');
+    assert.equal(canDeleteTask(stack.state, task.id), false, 'liste eylemi sunucunun gizli sorumlu sınırını izler');
   } finally {
     await stack.dispose();
   }

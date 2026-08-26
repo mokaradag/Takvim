@@ -274,7 +274,7 @@ function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
   );
 }
 
-function ProjectDefinition({ project, people, tasks, onSave }) {
+function ProjectDefinition({ project, people, tasks, onSave, onDelete, isSystemAdmin }) {
   const defaults = useMemo(() => projectForm(project, people, tasks), [project, people, tasks]);
   const personOptions = useMemo(() => people
     .slice()
@@ -289,8 +289,10 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
     })), [people]);
   const [form, setForm] = useState(defaults);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [message, setMessage] = useState(null);
   const isCorporate = String(project?.source || '').toLowerCase() === 'corporate';
+  const projectTaskCount = tasks.filter((task) => String(task.projectId) === String(project.id)).length;
   const manager = people.find((person) => String(person.id) === String(form.leadId)) || null;
   const type = projectTypeMeta(project.projectTypeCode, project.projectTypeName);
   const TypeIcon = Icons[type.icon] || Icons.Layers;
@@ -331,17 +333,41 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
     // Yeniden adlandırma kümesi form durumundan TÜRETİLİR; ayrı bir günlükte
     // biriktirilseydi formu geri almak onu temizlemez ve iptal edilmiş bir
     // eşleme yine de görev etiketlerini taşırdı.
-    const result = await onSave({
-      ...form,
-      tags: catalogTags(form.tags),
-      tagRenames: catalogRenames(form.tags)
-    });
-    setSaving(false);
+    let result;
+    try {
+      result = await onSave({
+        ...form,
+        tags: catalogTags(form.tags),
+        tagRenames: catalogRenames(form.tags)
+      });
+    } catch {
+      result = { ok: false, error: { message: 'Proje bilgileri kaydedilemedi.' } };
+    } finally {
+      setSaving(false);
+    }
     if (!result?.ok) {
       setMessage({ type: 'error', text: result?.error?.message || 'Proje bilgileri kaydedilemedi.' });
       return;
     }
     setMessage({ type: 'success', text: 'Proje bilgileri ve etiket kataloğu kaydedildi.' });
+  };
+
+  const removeProject = async () => {
+    if (deleting || isCorporate || projectTaskCount > 0) return;
+    if (!confirm('Boş manuel proje silinsin mi? Proje normal görünümlerden kaldırılacaktır.')) return;
+    setDeleting(true);
+    setMessage(null);
+    let result;
+    try {
+      result = await onDelete(project.id);
+    } catch {
+      result = { ok: false, error: { message: 'Proje silinemedi.' } };
+    } finally {
+      setDeleting(false);
+    }
+    if (!result?.ok) {
+      setMessage({ type: 'error', text: result?.error?.message || 'Proje silinemedi.' });
+    }
   };
 
   return (
@@ -463,6 +489,20 @@ function ProjectDefinition({ project, people, tasks, onSave }) {
       </div>
 
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+        {isSystemAdmin && !isCorporate && (
+          <div className="col" style={{ gap: 3, marginRight: 'auto', alignItems: 'flex-start' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={removeProject}
+              disabled={saving || deleting || projectTaskCount > 0}
+              title={projectTaskCount > 0 ? 'Görev içeren proje silinemez.' : 'Boş manuel projeyi kaldır'}
+            >
+              <Icons.Trash size={13} /> {deleting ? 'Siliniyor…' : 'Projeyi sil'}
+            </button>
+            {projectTaskCount > 0 && <small className="muted">{projectTaskCount} görev bulunduğu için proje silinemez.</small>}
+          </div>
+        )}
         <button type="button" className="btn" disabled={!dirty || saving} onClick={() => setForm(defaults)}>Değişiklikleri geri al</button>
         <button type="submit" className="btn primary" disabled={!dirty || saving || (!isCorporate && !people.length)}>
           <Icons.Check size={14} /> {saving ? 'Kaydediliyor...' : 'Değişiklikleri kaydet'}
@@ -605,8 +645,8 @@ export function ProjectWorkspaceView({ initialTab = 'definition' }) {
   const workspace = useWorkspace();
   const people = useAllPeople();
   const tasks = useAllTasks();
-  const { canCreateProjects } = useAppState();
-  const { addProject, updateProject } = useTaskActions();
+  const { canCreateProjects, isSystemAdmin } = useAppState();
+  const { addProject, updateProject, deleteProject } = useTaskActions();
   const [tab, setTab] = useState(initialTab === 'tree' ? 'tree' : 'definition');
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
 
@@ -685,6 +725,8 @@ export function ProjectWorkspaceView({ initialTab = 'definition' }) {
           people={people}
           tasks={tasks}
           onSave={(form) => updateProject(project.id, form)}
+          onDelete={deleteProject}
+          isSystemAdmin={isSystemAdmin}
         />
       )}
 

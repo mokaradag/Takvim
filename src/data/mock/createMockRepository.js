@@ -30,14 +30,34 @@ function clone(value) {
 function wait(ms) { return ms ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve(); }
 function shouldFail(setting, context) { return typeof setting === 'function' ? Boolean(setting(context)) : Boolean(setting); }
 function normalizeDelete(value) { return typeof value === 'string' ? value : value?.id; }
+function normalizeMockProject(project = {}) {
+  return {
+    ...project,
+    accessLevel: project.accessLevel || 'FULL',
+    schedulingCapability: project.schedulingCapability || 'COMPLETE'
+  };
+}
+function normalizeMockTask(task = {}) {
+  const persistentTask = { ...task };
+  delete persistentTask.assigneeMutation;
+  return persistentTask;
+}
+function normalizeMockSnapshot(seed) {
+  const snapshot = clone(seed);
+  snapshot.projects = (snapshot.projects || []).map(normalizeMockProject);
+  snapshot.tasks = (snapshot.tasks || []).map(normalizeMockTask);
+  return snapshot;
+}
 function normalizeChanges(changes = {}) {
   const normalized = {
-    taskUpserts: clone(changes.taskUpserts || []),
+    taskUpserts: clone(changes.taskUpserts || []).map(normalizeMockTask),
     taskDeletes: [...new Set((changes.taskDeletes || []).map(normalizeDelete).filter(Boolean))],
     wbsUpserts: clone(changes.wbsUpserts || []),
     wbsDeletes: [...new Set((changes.wbsDeletes || []).map(normalizeDelete).filter(Boolean))]
   };
-  if ('projectUpserts' in changes) normalized.projectUpserts = clone(changes.projectUpserts || []);
+  if ('projectUpserts' in changes) {
+    normalized.projectUpserts = clone(changes.projectUpserts || []).map(normalizeMockProject);
+  }
   if ('projectDeletes' in changes) {
     normalized.projectDeletes = [...new Set((changes.projectDeletes || []).map(normalizeDelete).filter(Boolean))];
   }
@@ -92,7 +112,7 @@ function dependenciesChanged(before, after) {
 }
 
 export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
-  let snapshot = clone(seed || DEFAULT_SEED);
+  let snapshot = normalizeMockSnapshot(seed || DEFAULT_SEED);
   let failNextMutation = Boolean(options.failNextMutation);
   let loadAttempt = 0;
   let mutationAttempt = 0;

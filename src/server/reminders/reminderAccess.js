@@ -19,6 +19,7 @@ import { ServerPersistenceError } from '../errors.js';
  *
  * Sorgu, anlık görüntüdeki görev görünürlüğüyle AYNI kuralı uygular:
  *  - kurumsal proje erişimi (FULL),
+ *  - etkin manuel projenin sorumlusu olmak (FULL),
  *  - elle verilmiş `MR_ProjectAccess` yetkisi YALNIZCA `FULL`/`READ` ise
  *    proje geneli görev görünürlüğü sayılır — `PARTIAL` yetki anlık görüntüde
  *    görev kapsamlıdır ve tek başına başkasının görevine posta göndermeye
@@ -50,6 +51,7 @@ export async function assertTaskReminderAccess(executor, actor, taskId) {
           FROM dbo.MR_V_CorporateProjectAccess a
           WHERE a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
         )
+        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
         OR EXISTS (
           SELECT 1 FROM dbo.MR_ProjectAccess pa
           WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
