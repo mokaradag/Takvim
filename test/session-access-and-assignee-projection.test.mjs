@@ -22,13 +22,15 @@ test('visible task projection restores every co-assignee without duplicates', ()
   };
 
   const projected = applyTaskAssigneeProjection(snapshot, [
-    { TaskId: TASK_A, Sicil: 10001 },
-    { TaskId: TASK_A, Sicil: 10002 },
-    { TaskId: TASK_A, Sicil: 10002 }
+    { TaskId: TASK_A, Sicil: 10001, DisplayName: 'Ayşe Kaya' },
+    { TaskId: TASK_A, Sicil: 10002, DisplayName: 'Mehmet Demir' },
+    { TaskId: TASK_A, Sicil: 10002, DisplayName: 'Mehmet Demir' }
   ]);
 
   assert.deepEqual(projected.tasks[0].assigneeIds, ['10001', '10002']);
+  assert.deepEqual(projected.tasks[0].assigneeDisplayNames, ['Ayşe Kaya', 'Mehmet Demir']);
   assert.deepEqual(projected.tasks[1].assigneeIds, []);
+  assert.deepEqual(projected.tasks[1].assigneeDisplayNames, []);
   assert.notEqual(projected.tasks[0], snapshot.tasks[0]);
 });
 
@@ -40,6 +42,11 @@ test('snapshot API completes assignees only for already-authorized visible task 
   assert.match(repositorySource, /taskIds = \[\.\.\.new Set\(\(snapshot\.tasks \|\| \[\]\)/);
   assert.match(repositorySource, /request\.input\('taskIds', sql\.NVarChar\(sql\.MAX\), taskIds\.join\(','\)\);/);
   assert.match(repositorySource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
+  assert.match(repositorySource, /ownAssignment\.TaskId = ta\.TaskId AND ownAssignment\.Sicil = @sicil/);
+  assert.match(repositorySource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
+  assert.equal((repositorySource.match(/MR_V_CorporateProjectAccess/g) || []).length, 1);
+  assert.match(repositorySource, /WHERE auth\.IdentityVisible = 1/);
+  assert.match(repositorySource, /LEFT JOIN dbo\.MR_V_PeopleDirectory pd ON pd\.Sicil = ta\.Sicil/);
   assert.match(repositorySource, /return \{ snapshot: applyTaskAssigneeProjection\(snapshot, assigneeRows\), auth \};/);
   assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
   assert.match(routeSource, /await repository\.loadSnapshotWithSession\(\);/);

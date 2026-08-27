@@ -341,23 +341,16 @@ async function loadSnapshotFrom(executor, auth) {
          FROM dbo.MR_TaskAssignees visibleAssignee
          JOIN dbo.MR_Tasks visibleTask ON visibleTask.TaskId = visibleAssignee.TaskId
          JOIN @VisibleProjects visibleProject ON visibleProject.ProjectId = visibleTask.ProjectId
-          WHERE visibleAssignee.Sicil = pd.Sicil
+         WHERE visibleAssignee.Sicil = pd.Sicil
             AND (
               EXISTS (
                 SELECT 1 FROM @ReadGrantedProjects readProject
                 WHERE readProject.ProjectId = visibleTask.ProjectId
               )
+              OR visibleAssignee.Sicil = @sicil
               OR EXISTS (
-                SELECT 1
-                FROM dbo.MR_TaskAssignees visibilityGate
-                WHERE visibilityGate.TaskId = visibleTask.TaskId
-                  AND (
-                    visibilityGate.Sicil = @sicil
-                    OR EXISTS (
-                      SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-                      WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibilityGate.Sicil
-                    )
-                  )
+                SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+                WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignee.Sicil
               )
             )
         )
@@ -681,10 +674,45 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
         )
       );
 
-    SELECT ta.TaskId, ta.Sicil
+    SELECT ta.TaskId,
+      CASE WHEN @isAdmin = 1
+        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+        )
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_ProjectAccess pa
+          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+            AND pa.AccessLevel IN ('FULL', 'READ')
+        )
+        OR ta.Sicil = @sicil
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+        )
+      THEN ta.Sicil ELSE NULL END AS Sicil,
+      COALESCE(NULLIF(LTRIM(RTRIM(pd.DisplayName)), ''), CASE WHEN @isAdmin = 1
+        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+        )
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_ProjectAccess pa
+          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+            AND pa.AccessLevel IN ('FULL', 'READ')
+        )
+        OR ta.Sicil = @sicil
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+        )
+      THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END) AS DisplayName
     FROM dbo.MR_TaskAssignees ta
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = ta.Sicil
     JOIN STRING_SPLIT(@taskIds, ',') requested
       ON ta.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
     WHERE @isAdmin = 1
@@ -702,6 +730,10 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es
         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+      )
+      OR EXISTS (
+        SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
+        WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil
       );
 
     SELECT d.*
@@ -724,6 +756,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
   const [projectRows = [], tagRows = [], wbsRows = [], taskRows = [], assigneeRows = [], dependencyRows = []] = result.recordsets || [];
   const tags = new Map();
   const assignees = new Map();
+  const assigneeDisplayNames = new Map();
   const dependencies = new Map();
   for (const row of tagRows) {
     const key = id(row.ProjectId);
@@ -732,8 +765,15 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
   }
   for (const row of assigneeRows) {
     const key = id(row.TaskId);
-    if (!assignees.has(key)) assignees.set(key, []);
-    assignees.get(key).push(String(row.Sicil));
+    if (row.Sicil != null) {
+      if (!assignees.has(key)) assignees.set(key, []);
+      assignees.get(key).push(String(row.Sicil));
+    }
+    const displayName = row.DisplayName == null ? '' : String(row.DisplayName).trim();
+    if (displayName) {
+      if (!assigneeDisplayNames.has(key)) assigneeDisplayNames.set(key, []);
+      assigneeDisplayNames.get(key).push(displayName);
+    }
   }
   for (const row of dependencyRows) {
     const key = id(row.TaskId);
@@ -788,6 +828,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       recurrence: row.RecurrenceRule || null, recurrenceParentId: id(row.RecurrenceParentTaskId),
       recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate), sortOrder: row.SortOrder,
       assigneeIds: assignees.get(id(row.TaskId)) || [],
+      assigneeDisplayNames: assigneeDisplayNames.get(id(row.TaskId)) || [],
       assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
       isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
       deps: dependencies.get(id(row.TaskId)) || [], version: encodeVersion(row.RowVersion)

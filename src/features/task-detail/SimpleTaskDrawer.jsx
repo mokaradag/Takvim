@@ -7,6 +7,10 @@ import { Avatar, StatusIcon } from '../../components/ui';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
 import { findProjectTag, projectTagCatalog } from '../../domain/tags';
 import { ownsSimpleModePlan } from './simpleTaskPlan.js';
+import { filterTaskAssigneeCandidates, resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
+import { keywordDirtyFields, reconcileTaskDraft, runCurrentKeywordCommit } from './taskDraft.js';
+import { canCloseWithTaskTitle, useTaskTitleDraft } from './taskTitleDraft.js';
+import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { useAllProjects, useAllPeople, useAssignmentScopeSicils, useTaskActions } from '../../state/hooks';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
@@ -36,19 +40,25 @@ export function SimpleTaskDrawer({
   const { cancelTaskFieldUpdates, updateProject } = useTaskActions();
   const [local, setLocal] = useState({ ...task });
   const [catalogWarning, setCatalogWarning] = useState(null);
-  // Kalıcılaştırılmayan başlık taslağı — Gelişmiş Moddaki TaskDrawer ile aynı
-  // davranış. Sunucu boş başlığı reddettiği için silinmiş metin kuyruğa hiç
-  // girmez; taslak burada tutulmasaydı gelen yeni `task` nesnesi silinen
-  // başlığı geri yazardı.
-  const titleDraftRef = useRef(null);
-
-  useEffect(() => { titleDraftRef.current = null; }, [task.id]);
+  const closingRef = useRef(null);
+  const keywordDraftRef = useRef(null);
+  const {
+    draft: titleDraft,
+    change: changeTitle,
+    flush: flushTitle,
+    valid: titleValid
+  } = useTaskTitleDraft({
+    canonicalTitle: task.task,
+    persist: (value) => onUpdate(task.id, { task: value }),
+    cancel: () => cancelTaskFieldUpdates?.(task.id, ['task'])
+  });
 
   useEffect(() => {
-    setLocal((current) => {
-      const draft = titleDraftRef.current;
-      return draft === null ? { ...task } : { ...task, task: draft };
-    });
+    setLocal((current) => reconcileTaskDraft(
+      task,
+      current,
+      keywordDirtyFields(keywordDraftRef.current)
+    ).task);
   }, [task]);
 
   const project = useMemo(
@@ -61,15 +71,21 @@ export function SimpleTaskDrawer({
     onUpdate(task.id, patch);
   };
 
-  const changeTitle = (value) => {
-    setLocal((current) => ({ ...current, task: value }));
-    if (String(value).trim()) {
-      titleDraftRef.current = null;
-      onUpdate(task.id, { task: value });
-      return;
+  const closeWithTitle = () => {
+    if (closingRef.current) return closingRef.current;
+    if (!canCloseWithTaskTitle(titleDraft)) {
+      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
     }
-    titleDraftRef.current = value;
-    cancelTaskFieldUpdates?.(task.id, ['task']);
+    const closing = (async () => {
+      const titleResult = await flushTitle();
+      const closeResult = await onClose();
+      return titleResult?.ok === false ? titleResult : closeResult;
+    })();
+    closingRef.current = closing;
+    closing.finally(() => {
+      if (closingRef.current === closing) closingRef.current = null;
+    });
+    return closing;
   };
 
   /**
@@ -82,47 +98,61 @@ export function SimpleTaskDrawer({
    */
   const commitKeyword = async (value) => {
     const requested = String(value || '').trim();
+    const draftAtCommit = keywordDraftRef.current;
     setCatalogWarning(null);
     if (!requested) {
+      keywordDraftRef.current = null;
       onUpdate(task.id, { keyword: '' });
       return;
     }
     const catalog = projectTagCatalog(project);
     const existing = findProjectTag(catalog, requested);
     if (existing) {
+      keywordDraftRef.current = null;
       setLocal((current) => ({ ...current, keyword: existing.name }));
       onUpdate(task.id, { keyword: existing.name });
       return;
     }
     if (canWriteProject(project)) {
-      const result = await updateProject(project.id, { tags: [...catalog, { name: requested }] });
+      const settled = await runCurrentKeywordCommit({
+        draftAtCommit,
+        getCurrentDraft: () => keywordDraftRef.current,
+        commit: () => updateProject(project.id, { tags: [...catalog, { name: requested }] })
+      });
+      if (!settled.current) return;
+      const { result } = settled;
       if (!result?.ok) {
         setCatalogWarning('Etiket proje kataloğuna eklenemedi; görevde saklandı.');
       }
     }
+    keywordDraftRef.current = null;
     onUpdate(task.id, { keyword: requested });
   };
 
   const selectedAssignees = useMemo(() => {
-    const ids = (local.assigneeIds || []).map((id) => String(id));
-    return ids.map((id) => people.find((person) => String(person.id) === id)).filter(Boolean);
-  }, [people, local.assigneeIds]);
+    return resolveTaskAssigneeDisplayRecords({
+      assigneeIds: local.assigneeIds,
+      assigneeDisplayNames: local.assigneeDisplayNames,
+      sorumlu: local.sorumlu
+    }, people, !canManageAssignees);
+  }, [people, local.assigneeIds, local.assigneeDisplayNames, local.sorumlu, canManageAssignees]);
+  const hiddenAssigneeCount = Math.max(
+    0,
+    Number(local.assigneeCount || 0) - selectedAssignees.length
+  );
 
   // Atama kapsamıyla açılan projede sunucu, sorumluların tamamının yöneticinin
   // kapsamında olmasını şart koşar; seçici bütün rehberi gösterseydi kapsam dışı
   // bir kişi seçmek garanti reddedilen bir kayıt üretirdi (Gelişmiş Moddaki
   // TaskDrawer ile aynı kural).
   const assignmentScopeOnly = useMemo(() => {
-    if (!assignmentScopeSicils.length) return null;
-    if (project && canWriteProject(project)) return null;
+    if (!project || canWriteProject(project)) return null;
     return new Set(assignmentScopeSicils.map(String));
   }, [assignmentScopeSicils, project]);
 
   const personOptions = useMemo(() => {
-    const selected = new Set(selectedAssignees.map((person) => String(person.id)));
-    return people
-      .filter((person) => !selected.has(String(person.id)))
-      .filter((person) => !assignmentScopeOnly || assignmentScopeOnly.has(String(person.id)))
+    return filterTaskAssigneeCandidates(people, selectedAssignees)
+      .filter((person) => !assignmentScopeOnly || assignmentScopeOnly.has(String(simpleAssigneeNumber(person))))
       .slice()
       .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
       .map((person) => ({
@@ -135,18 +165,14 @@ export function SimpleTaskDrawer({
   }, [people, selectedAssignees, assignmentScopeOnly]);
 
   const setAssignees = (ids) => {
-    const unique = [...new Set(ids.map((id) => String(id)))];
-    save({
-      assigneeIds: unique,
-      sorumlu: unique.map((id) => people.find((person) => String(person.id) === id)?.name).filter(Boolean)
-    });
+    save(taskAssigneeMutationPatch(local, people, ids));
   };
 
   const priority = normalizePriorityId(local.priority);
 
   return (
     <>
-      <div className="drawer-backdrop" onClick={onClose} />
+      <div className="drawer-backdrop" onClick={closeWithTitle} />
       <aside className="drawer simple-task-drawer" role="dialog" aria-label="Görev düzenle">
         <header className="drawer-head">
           <div className="col" style={{ gap: 2, minWidth: 0 }}>
@@ -155,7 +181,7 @@ export function SimpleTaskDrawer({
               {local.projectCode ? `${local.projectCode} · ${local.proje}` : local.proje}
             </span>
           </div>
-          <button className="icon-btn" onClick={onClose} aria-label="Kapat"><Icons.Close size={15} /></button>
+          <button className="icon-btn" onClick={closeWithTitle} aria-label="Kapat"><Icons.Close size={15} /></button>
         </header>
 
         <div className="drawer-body col" style={{ gap: 14 }}>
@@ -163,10 +189,17 @@ export function SimpleTaskDrawer({
             <span>Görev</span>
             <input
               className="input"
-              value={local.task || ''}
+              value={titleDraft}
               onChange={(event) => changeTitle(event.target.value)}
+              onBlur={flushTitle}
+              aria-invalid={!titleValid}
               placeholder="Yapılacak işi yazın"
             />
+            {!titleValid && (
+              <span className="drawer-title-warning">
+                <Icons.Alert size={12} /> Görev başlığı boş bırakılamaz; başlık girilene kadar panel kapatılamaz.
+              </span>
+            )}
           </label>
 
           <label className="simple-field">
@@ -177,7 +210,10 @@ export function SimpleTaskDrawer({
               // Yazarken yalnızca yerel taslak güncellenir; katalog eşlemesi ve
               // kalıcılaştırma alan bırakıldığında yapılır, böylece her tuş
               // vuruşu proje kataloğuna yazma denemesine dönüşmez.
-              onChange={(event) => setLocal((current) => ({ ...current, keyword: event.target.value }))}
+              onChange={(event) => {
+                keywordDraftRef.current = event.target.value;
+                setLocal((current) => ({ ...current, keyword: event.target.value }));
+              }}
               onBlur={(event) => commitKeyword(event.target.value)}
               placeholder="Örn. Teklif, Onay, Teslim"
             />
@@ -187,18 +223,17 @@ export function SimpleTaskDrawer({
           <div className="simple-field">
             <span>Sorumlular</span>
             <div className="simple-drawer-assignees">
-              {selectedAssignees.map((person) => (
-                <span key={person.id} className="simple-person active">
-                  <Avatar name={person.name} person={person} size="sm" />
-                  <span><strong>{person.name}</strong><small>{person.employeeNo || person.id}</small></span>
-                  {canManageAssignees && <button
+              {selectedAssignees.map((record) => (
+                <span key={record.key} className="simple-person active">
+                  <Avatar name={record.name} person={record.person} size="sm" />
+                  <span><strong>{record.name}</strong><small>{record.person?.employeeNo || 'Görev sorumlusu'}</small></span>
+                  {canManageAssignees && record.id != null && <button
                     type="button"
                     className="icon-btn"
                     style={{ width: 20, height: 20 }}
-                    aria-label={`${person.name} kaldır`}
-                    onClick={() => setAssignees(selectedAssignees
-                      .filter((entry) => entry.id !== person.id)
-                      .map((entry) => entry.id))}
+                    aria-label={`${record.name} kaldır`}
+                    onClick={() => setAssignees((local.assigneeIds || [])
+                      .filter((id) => String(id) !== String(record.id)))}
                   >
                     <Icons.Close size={10} />
                   </button>}
@@ -208,14 +243,22 @@ export function SimpleTaskDrawer({
             <SearchableSelect
               value=""
               options={personOptions}
-              onChange={(personId) => personId && setAssignees([...selectedAssignees.map((person) => person.id), personId])}
+              onChange={(personId) => personId && setAssignees([
+                ...(local.assigneeIds || []),
+                personId
+              ])}
               placeholder="Sorumlu ekle"
               searchPlaceholder="Ad, sicil veya birimle ara"
               ariaLabel="Sorumlu ekle"
               disabled={!canManageAssignees}
             />
-            {!canManageAssignees && Number(task.assigneeCount ?? selectedAssignees.length) > selectedAssignees.length && (
-              <small className="muted">Gizli eş sorumlular korunur; sorumlu listesi yalnızca tam proje yetkisiyle değiştirilebilir.</small>
+            {!canManageAssignees && (
+              <small className="muted">
+                Sorumlu listesi görüntülenebilir; değiştirmek için tam proje yetkisi gerekir.
+                {hiddenAssigneeCount > 0
+                  ? ` ${hiddenAssigneeCount} sorumlunun adı personel kaydında bulunamadığı için gösterilemiyor.`
+                  : ''}
+              </small>
             )}
           </div>
 
@@ -295,7 +338,7 @@ export function SimpleTaskDrawer({
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki modda da aynı. */}
           <TaskReminderButton task={task} size={30} />
           <div style={{ flex: 1 }} />
-          <button className="btn primary" onClick={onClose} disabled={isSaving} aria-busy={isSaving}>
+          <button className="btn primary" onClick={closeWithTitle} disabled={isSaving} aria-busy={isSaving}>
             {isSaving ? 'Kaydediliyor…' : 'Tamam'}
           </button>
         </div>

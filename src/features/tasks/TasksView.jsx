@@ -2,11 +2,16 @@
 import { useState as useState1, useMemo as useMemo1 } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
-import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
+import {
+  TASK_PRIORITY_FILTER_OPTIONS,
+  TASK_STATUS_FILTER_OPTIONS,
+  normalizePriorityId,
+  resolvePriority
+} from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
 import { describeRecurrenceRule } from '../../scheduling/recurrence';
 import { projectColorVar } from '../../lib/colors';
-import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
+import { Avatar, AvatarStack, PriorityIcon, StatusPill, StatusIcon } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
@@ -84,14 +89,14 @@ export function TasksView() {
       keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
       icon: <Avatar name={p.name} person={p} size="sm" />
     })), [people]);
-  const statusOpts = [
-    { value: 'todo', label: 'Yapılacak', icon: <StatusIcon id="todo" size={11} /> },
-    { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },
-    { value: 'done', label: 'Tamamlandı', icon: <StatusIcon id="done" size={11} /> },
-    { value: 'overdue', label: 'Geciken', icon: <StatusIcon id="overdue" size={11} /> }
-  ];
-  const priorityOpts = Object.values(PRIORITIES).map(p => ({
-    value: p.id, label: p.label, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} />
+  const statusOpts = TASK_STATUS_FILTER_OPTIONS.map((status) => ({
+    ...status,
+    icon: <StatusIcon id={status.value} size={11} />
+  }));
+  const priorityOpts = TASK_PRIORITY_FILTER_OPTIONS.map((priority) => ({
+    value: priority.id,
+    label: priority.label,
+    icon: <PriorityIcon color={priority.color} size={11} />
   }));
 
   const filtered = useMemo1(() => {

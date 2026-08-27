@@ -318,7 +318,7 @@ test('application shell has a renderer branch for every navigation destination',
 
 test('root layout keeps Turkish document metadata and the default dark theme', () => {
   const source = read('src/app/layout.js');
-  assert.match(source, /title:\s*['\"]MERGEN Rota — Proje Yönetimi['\"]/);
+  assert.match(source, /title:\s*['\"]MERGEN Rota — Görev Yönetimi['\"]/);
   assert.match(source, /<html lang=['\"]tr['\"]>/);
   assert.match(source, /<body className=['\"]theme-dark['\"]>/);
   assert.match(source, /href=\{FAVICON\}/);

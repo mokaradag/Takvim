@@ -38,10 +38,42 @@ export function reconcileTaskDraft(canonicalTask, localDraft, dirtyFields = new 
   return { task: nextTask, dirtyFields: nextDirtyFields };
 }
 
+/** Basit Mod etiket taslağı varken yalnızca `keyword` alanı korunur. */
+export function keywordDirtyFields(keywordDraft) {
+  return keywordDraft === null ? new Set() : new Set(['keyword']);
+}
+
+/**
+ * Proje etiketi kataloğu yazılırken kullanıcı yeni bir taslak açmış olabilir.
+ * Asenkron işlemin sonucu yalnızca başladığı taslak hâlâ güncelse uygulanır.
+ */
+export async function runCurrentKeywordCommit({ draftAtCommit, getCurrentDraft, commit }) {
+  const result = await commit();
+  return {
+    current: getCurrentDraft() === draftAtCommit,
+    result
+  };
+}
+
 /** Kapanışta yalnızca gerçekten değişmiş yerel alanı tek yamaya dönüştürür. */
 export function finalTaskFieldPatch(canonicalTask, localDraft, field) {
   if (!field || taskDraftValuesEqual(canonicalTask?.[field], localDraft?.[field])) return null;
   return { [field]: localDraft?.[field] ?? '' };
+}
+
+/** Taslak kayıtları tamamlanmadan görev panelini kapatma. */
+export async function closeAfterTaskDrafts({ flushTitle, persistDescription, close }) {
+  const settle = (run) => Promise.resolve()
+    .then(run)
+    .catch((error) => ({ ok: false, error }));
+  const [titleResult, descriptionResult] = await Promise.all([
+    settle(flushTitle),
+    settle(persistDescription)
+  ]);
+  const closeResult = await close();
+  if (titleResult?.ok === false) return titleResult;
+  if (descriptionResult?.ok === false) return descriptionResult;
+  return closeResult;
 }
 
 /** Eski bir kapanışın sonucu, daha sonra başlayan başka bir kapanışı temizleyemez. */

@@ -71,11 +71,8 @@ export function TaskDetailOverlay({ simple = false }) {
   // Yazma yetkisi görev ATAMA kapsamını ve görevin yetkili sorumlusu için dar
   // içerik/ilerleme kapsamını içerir (bkz. projectWritePolicy).
   const writeState = { projects, tasks, assignableProjects };
-  // Sunucu, atama kapsamıyla yazmayı görevin BÜTÜN sorumlularının yönetici
-  // kapsamında olmasına bağlar; anlık görüntü ise TEK bir ast yeterken görevi
-  // gösterir. Kapsam dışı bir eş sorumlunun satırı gizlendiği için istemci
-  // yalnızca SAYIYI karşılaştırabilir: gizlenmiş sorumlu varsa panel salt
-  // okunur açılır ve her düzenleme sunucuda reddedilmek yerine hiç başlamaz.
+  // Görev kapsamlı adlar yalnızca gösterilir; kimlik ve yazma kararı mevcut
+  // Sicil kapsamı ile yetkili sorumlu sayısından türetilir.
   const initialAccess = resolveTaskMutationAccess(writeState, task.id, {});
   if (!initialAccess.ok) {
     return <ReadOnlyTaskDrawer task={task} onClose={closeTask} />;
@@ -151,6 +148,7 @@ export function TaskDetailOverlay({ simple = false }) {
   if (simple) {
     return (
       <SimpleTaskDrawer
+        key={task.id}
         task={displayTask || task}
         onClose={onClose}
         onUpdate={onUpdate}
@@ -164,6 +162,7 @@ export function TaskDetailOverlay({ simple = false }) {
 
   return (
     <TaskDrawer
+      key={task.id}
       task={displayTask || task}
       tasks={tasks}
       onClose={onClose}

@@ -34,11 +34,15 @@ export function PersistenceStatus() {
 
   if (!isSaving && !details && !showSaved && !refreshFailed) return null;
 
-  const reload = async () => {
+  const reload = async ({ allowDiscard = false } = {}) => {
     setReloading(true);
     try {
-      await reloadData();
-      clearPersistenceError();
+      let result = await reloadData();
+      if (!result?.ok && allowDiscard && hasPendingChanges()) {
+        const discard = confirm('Kaydedilemeyen yerel değişiklikler atılıp sunucudaki veriler yüklensin mi?');
+        if (discard) result = await reloadData({ discardFailedTaskUpdates: true });
+      }
+      if (result?.ok) clearPersistenceError();
     } finally {
       setReloading(false);
     }
@@ -86,7 +90,7 @@ export function PersistenceStatus() {
               </button>
             )}
             {details.canReload && (
-              <button type="button" className="btn sm" onClick={reload} disabled={reloading || retrying}>
+              <button type="button" className="btn sm" onClick={() => reload({ allowDiscard: true })} disabled={reloading || retrying}>
                 {reloading ? 'Yükleniyor...' : 'Verileri yeniden yükle'}
               </button>
             )}
@@ -105,7 +109,7 @@ export function PersistenceStatus() {
             Görüntülenen veriler son başarılı yüklemeden geliyor. Bağlantı kurulduğunda yeniden deneyin.
           </p>
           <div className="row" style={{ gap: 7, justifyContent: 'flex-end' }}>
-            <button type="button" className="btn primary sm" onClick={reload} disabled={reloading}>
+            <button type="button" className="btn primary sm" onClick={() => reload({ allowDiscard: true })} disabled={reloading}>
               {reloading ? 'Yükleniyor...' : 'Yeniden dene'}
             </button>
           </div>

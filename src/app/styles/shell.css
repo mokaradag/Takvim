@@ -210,6 +210,30 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   color: color-mix(in oklab, var(--accent) 68%, var(--text));
 }
 .topbar-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+.data-refresh-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--border));
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--bg-elev) 88%, transparent);
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.data-refresh-control:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.data-refresh-control:disabled { cursor: wait; opacity: .72; }
+.data-refresh-control.is-error {
+  border-color: color-mix(in oklab, var(--status-overdue) 45%, var(--border));
+  color: var(--status-overdue);
+}
+.data-refresh-control .is-spinning { animation: data-refresh-spin .8s linear infinite; }
+@keyframes data-refresh-spin { to { transform: rotate(360deg); } }
 
 .export-menu { position: relative; }
 .export-menu > summary { list-style: none; }
@@ -245,6 +269,8 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   }
   .topbar-project-code { padding: 0 6px; font-size: 9.5px; }
   .topbar-project-context strong.topbar-project-name { padding: 0 7px 0 5px; font-size: 12.5px; }
+  .data-refresh-control span { display: none; }
+  .data-refresh-control { width: 30px; justify-content: center; padding: 5px; }
 }
 
 /* Kalıcılaştırma bildirimi: sağ alt köşenin tek sahibi. */

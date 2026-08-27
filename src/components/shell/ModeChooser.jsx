@@ -31,7 +31,7 @@ export function ModeChooser({ onChoose }) {
             <AppLogo size={46} />
             <div className="mode-picker-wordmark">
               <span>MERGEN</span><strong>Rota</strong>
-              <small>Proje Yönetimi</small>
+              <small>Görev Yönetimi</small>
             </div>
           </div>
           <h2 id="mode-picker-title">Nasıl çalışmak istersiniz?</h2>

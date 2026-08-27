@@ -45,6 +45,7 @@ import { greetingForHour, welcomeFirstName } from '../src/components/shell/welco
 import { prepareProjectUpdateChanges } from '../src/state/projectCreation.js';
 import { loadApplicationData } from '../src/state/persistence.js';
 import { closeTaskWithPendingUpdates, createTaskUpdateTracker } from '../src/features/task-detail/taskDraft.js';
+import { createTaskTitleDraftController } from '../src/features/task-detail/taskTitleDraft.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -804,17 +805,36 @@ test('boş görev başlığı kalıcılaştırmaya hiç gönderilmez', async () 
   // Boş başlık sunucuda TASK_TITLE_REQUIRED ile reddediliyor ve aynı yamada
   // birleştirilen ilerleme/tarih düzenlemeleri de o istekle birlikte düşüyordu.
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /const saveTitle = \(value\) => \{/);
-  assert.match(drawer, /if \(String\(value\)\.trim\(\)\) \{[\s\S]*onUpdate\(task\.id, \{ task: value \}\);/);
-  assert.match(drawer, /onChange=\{\(e\) => saveTitle\(e\.target\.value\)\}/);
+  assert.match(drawer, /useTaskTitleDraft\(\{/);
+  assert.match(drawer, /onChange=\{\(e\) => changeTitle\(e\.target\.value\)\}/);
   assert.match(drawer, /Görev başlığı boş bırakılamaz/);
   // Alan boşaldığında kuyrukta bekleyen önceki tuş vuruşu da iptal edilir; aksi
   // hâlde arayüzün "kaydedilmeyecek" dediği ön ek kalıcılaşıyordu.
-  assert.match(drawer, /cancelTaskFieldUpdates\(task\.id, \['task'\]\);/);
+  assert.match(drawer, /cancelTaskFieldUpdates\(task\.id, \['task'\]\)/);
   assert.match(read('src/state/persistence.js'), /function cancelFields\(taskId, fields = \[\]\)/);
-  // Yerel boş başlık taslağı, ilgisiz bir alan düzenlendiğinde gelen yeni görev
-  // nesnesiyle geri yazılmaz.
-  assert.match(drawer, /if \(titleDraftRef\.current !== null\) next\.task = titleDraftRef\.current;/);
+
+  const jobs = [];
+  const persisted = [];
+  let cancelledUpdates = 0;
+  const controller = createTaskTitleDraftController({
+    initialTitle: 'Eski başlık',
+    persist: async (value) => { persisted.push(value); return { ok: true }; },
+    cancel: () => { cancelledUpdates += 1; },
+    schedule(run) {
+      const job = { run, cancelled: false };
+      jobs.push(job);
+      return job;
+    },
+    clearSchedule(job) { job.cancelled = true; }
+  });
+  controller.update('Gönderilmemesi gereken ön ek');
+  controller.update('   ');
+  for (const job of jobs) if (!job.cancelled) job.run();
+  await Promise.resolve();
+  assert.deepEqual(persisted, []);
+  assert.equal(cancelledUpdates, 1);
+  assert.equal(controller.getDraft(), '   ');
+  assert.equal(controller.reconcile('İlgisiz sunucu güncellemesi'), '   ');
 
   const { findCommitScalarIssue } = await import('../src/server/repository/commitScalarValidation.js');
   const rejected = findCommitScalarIssue({

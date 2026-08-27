@@ -33,7 +33,7 @@ function BootBrand() {
       <AppLogo size={54} />
       <div className="app-boot-wordmark">
         <span>MERGEN</span><strong>Rota</strong>
-        <small>Proje Yönetimi</small>
+        <small>Görev Yönetimi</small>
       </div>
     </div>
   );

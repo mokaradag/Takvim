@@ -4,12 +4,21 @@ export const TASK_STATUSES = Object.freeze({
   DONE: 'done'
 });
 
+export const TASK_STATUS_FILTER_OPTIONS = Object.freeze([
+  Object.freeze({ value: 'todo', label: 'Yapılacak' }),
+  Object.freeze({ value: 'in_progress', label: 'Devam ediyor' }),
+  Object.freeze({ value: 'done', label: 'Tamamlandı' }),
+  Object.freeze({ value: 'overdue', label: 'Geciken' })
+]);
+
 export const PRIORITIES = Object.freeze({
   critical: { id: 'critical', label: 'Kritik', color: 'var(--status-overdue)', order: 0 },
   high: { id: 'high', label: 'Yüksek', color: 'oklch(70% 0.16 50)', order: 1 },
   medium: { id: 'medium', label: 'Orta', color: 'oklch(70% 0.13 200)', order: 2 },
   low: { id: 'low', label: 'Düşük', color: 'var(--text-dim)', order: 3 }
 });
+
+export const TASK_PRIORITY_FILTER_OPTIONS = Object.freeze(Object.values(PRIORITIES));
 
 /** Öncelik belirtilmediğinde kullanılan kanonik değer. */
 export const DEFAULT_PRIORITY_ID = 'medium';

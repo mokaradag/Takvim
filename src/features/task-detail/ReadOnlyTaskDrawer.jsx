@@ -4,6 +4,7 @@ import { fmt } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { AvatarStack, StatusPill } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
+import { taskAssigneeDisplayNames } from './taskAssigneeDisplay.js';
 
 function valueOrDash(value) {
   return value == null || value === '' ? '—' : value;
@@ -20,6 +21,7 @@ function ReadOnlyField({ label, value }) {
 
 export function ReadOnlyTaskDrawer({ task, onClose }) {
   const color = projectColorVar(task.proje);
+  const assigneeNames = taskAssigneeDisplayNames(task);
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
@@ -54,8 +56,8 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
 
             <div className="col" style={{ gap: 8 }}>
               <div className="label">Sorumlular</div>
-              {(task.sorumlu || []).length
-                ? <AvatarStack names={task.sorumlu} personIds={task.assigneeIds} max={8} size="sm" />
+              {assigneeNames.length
+                ? <AvatarStack names={assigneeNames} personIds={task.assigneeIds} max={8} size="sm" />
                 : <span className="muted">Sorumlu tanımlanmamış.</span>}
             </div>
 

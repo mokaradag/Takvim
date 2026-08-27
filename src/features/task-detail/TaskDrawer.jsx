@@ -53,7 +53,10 @@ import {
   selectSuccessors
 } from './taskSuccessorPolicy.js';
 import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
-import { finalTaskFieldPatch } from './taskDraft.js';
+import { closeAfterTaskDrafts, finalTaskFieldPatch } from './taskDraft.js';
+import { resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
+import { canCloseWithTaskTitle, useTaskTitleDraft } from './taskTitleDraft.js';
+import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 
 function legacyProjectTags(projectId, tasks) {
@@ -118,16 +121,20 @@ export function TaskDrawer({
     [tasks, task.id]
   );
   const [local, setLocal] = useState({ ...task });
-  // Kalıcılaştırılmayan başlık taslağı. Boş başlık sunucuya gönderilmediği için
-  // yetkili görev kaydı eski başlığı taşımaya devam eder; taslak bu referansta
-  // tutulmasaydı, kullanıcı başka bir alanı düzenler düzenlemez gelen yeni
-  // `task` nesnesi silinen başlığı geri yazardı.
-  const titleDraftRef = useRef(null);
   const descriptionDraftRef = useRef(null);
   const closingRef = useRef(null);
+  const {
+    draft: titleDraft,
+    change: changeTitle,
+    flush: flushTitle,
+    valid: titleValid
+  } = useTaskTitleDraft({
+    canonicalTitle: task.task,
+    persist: (value) => onUpdate(task.id, { task: value }),
+    cancel: () => cancelTaskFieldUpdates(task.id, ['task'])
+  });
 
   useEffect(() => {
-    titleDraftRef.current = null;
     descriptionDraftRef.current = null;
     closingRef.current = null;
   }, [task.id]);
@@ -135,7 +142,6 @@ export function TaskDrawer({
   useEffect(() => {
     setLocal((current) => {
       const next = { ...task };
-      if (titleDraftRef.current !== null) next.task = titleDraftRef.current;
       if (descriptionDraftRef.current !== null) next.description = descriptionDraftRef.current;
       return next;
     });
@@ -196,29 +202,23 @@ export function TaskDrawer({
   }, [projects, assignmentScopeProjects, selectedProject]);
 
   const selectedAssignees = useMemo(() => {
-    const records = [];
-    const usedNames = new Set();
-    for (const id of local.assigneeIds || []) {
-      const person = people.find((item) => String(item.id) === String(id));
-      if (!person) continue;
-      records.push({ id: person.id, name: person.name, person });
-      usedNames.add(person.name);
-    }
-    for (const name of local.sorumlu || []) {
-      if (usedNames.has(name)) continue;
-      const person = people.find((item) => item.name === name) || null;
-      records.push({ id: person?.id || name, name, person });
-      usedNames.add(name);
-    }
-    return records;
-  }, [people, local.assigneeIds, local.sorumlu]);
+    return resolveTaskAssigneeDisplayRecords({
+      assigneeIds: local.assigneeIds,
+      assigneeDisplayNames: local.assigneeDisplayNames,
+      sorumlu: local.sorumlu
+    }, people, !canManageAssignees);
+  }, [people, local.assigneeIds, local.assigneeDisplayNames, local.sorumlu, canManageAssignees]);
+  const hiddenAssigneeCount = Math.max(
+    0,
+    Number(local.assigneeCount || 0) - selectedAssignees.length
+  );
 
   // Görev ATAMA kapsamıyla açılan projede sunucu, sorumluların tamamının
   // yöneticinin kapsamında olmasını şart koşar. Seçici bütün rehberi
   // gösterseydi (yöneticinin bir FULL projesi varsa rehber eksiksiz gelir),
   // kapsam dışı bir kişi seçmek garanti reddedilen bir kayıt üretirdi.
   const assignmentScopeOnly = useMemo(() => {
-    if (!assignmentScopeSicils.length || !local.projectId) return null;
+    if (!local.projectId) return null;
     const writable = projects.find((project) => project.id === local.projectId);
     const isAssignOnly = !writable || (writable.accessLevel && writable.accessLevel !== 'FULL');
     if (!isAssignOnly) return null;
@@ -226,14 +226,14 @@ export function TaskDrawer({
   }, [assignmentScopeSicils, local.projectId, projects]);
 
   const personOptions = useMemo(() => {
-    const selectedIds = new Set(selectedAssignees.map((record) => String(record.id)));
+    const selectedIds = new Set(selectedAssignees.map((record) => record.id).filter(Boolean).map(String));
     // Yalnızca Sicil kimliğiyle eşleşmeyen (eski ad tabanlı) kayıtlar için ad
     // eşlemesi kullanılır. Aksi hâlde aynı ada sahip ikinci bir çalışan listeden
     // düşer ve göreve hiçbir zaman atanamazdı.
     const legacyNames = new Set(selectedAssignees.filter((record) => !record.person).map((record) => record.name));
     return people
       .filter((person) => !selectedIds.has(String(person.id)) && !legacyNames.has(person.name))
-      .filter((person) => !assignmentScopeOnly || assignmentScopeOnly.has(String(person.id)))
+      .filter((person) => !assignmentScopeOnly || assignmentScopeOnly.has(String(simpleAssigneeNumber(person))))
       .slice()
       .sort((left, right) => left.name.localeCompare(right.name, 'tr'))
       .map((person) => ({
@@ -252,30 +252,6 @@ export function TaskDrawer({
     onUpdate(task.id, patch);
   };
 
-  /**
-   * Başlık yazımı.
-   *
-   * Kullanıcı başlığı silip yeniden yazabilmelidir; bu yüzden yerel değer her
-   * tuş vuruşunda güncellenir. Ancak BOŞ başlık kalıcılaştırmaya GÖNDERİLMEZ:
-   * sunucu `TASK_TITLE_REQUIRED` ile tüm yamayı reddediyor, aynı yamada
-   * birleştirilen ilerleme ve tarih düzenlemeleri de birlikte düşüyordu.
-   *
-   * Alan boşaldığında kuyrukta bekleyen başlık yaması da İPTAL EDİLİR: `ABC` →
-   * `AB` → `A` → boş yazımında kuyrukta hâlâ `A` duruyordu ve gecikme dolunca
-   * (ya da panel kapanınca) arayüzün "kaydedilmeyecek" dediği bu ön ek
-   * kalıcılaşıyordu.
-   */
-  const saveTitle = (value) => {
-    setLocal((current) => ({ ...current, task: value }));
-    if (String(value).trim()) {
-      titleDraftRef.current = null;
-      onUpdate(task.id, { task: value });
-      return;
-    }
-    titleDraftRef.current = value;
-    cancelTaskFieldUpdates(task.id, ['task']);
-  };
-
   const changeDescription = (value) => {
     descriptionDraftRef.current = value;
     setLocal((current) => ({ ...current, description: value }));
@@ -283,14 +259,20 @@ export function TaskDrawer({
 
   const closeWithDraft = () => {
     if (closingRef.current) return closingRef.current;
+    if (!canCloseWithTaskTitle(titleDraft)) {
+      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
+    }
     const draft = descriptionDraftRef.current;
     const patch = draft === null
       ? null
       : finalTaskFieldPatch(task, { ...task, description: draft }, 'description');
-    const closing = (async () => {
-      if (patch) await onUpdate(task.id, patch);
-      return onClose();
-    })();
+    const closing = closeAfterTaskDrafts({
+      flushTitle,
+      persistDescription: () => (
+        patch ? onUpdate(task.id, patch) : Promise.resolve({ ok: true, value: null })
+      ),
+      close: onClose
+    });
     closingRef.current = closing;
     closing.finally(() => {
       if (closingRef.current === closing) closingRef.current = null;
@@ -325,15 +307,13 @@ export function TaskDrawer({
     const person = people.find((item) => String(item.id) === String(personId));
     if (!person) return;
     const assigneeIds = [...new Set([...(local.assigneeIds || []).map(String), String(person.id)])];
-    const sorumlu = [...new Set([...(local.sorumlu || []), person.name])];
-    save({ assigneeIds, sorumlu });
+    save(taskAssigneeMutationPatch(local, people, assigneeIds));
   };
 
   const removeAssignee = (record) => {
-    save({
-      assigneeIds: (local.assigneeIds || []).filter((id) => String(id) !== String(record.id)),
-      sorumlu: (local.sorumlu || []).filter((name) => name !== record.name)
-    });
+    if (record.id == null) return;
+    const assigneeIds = (local.assigneeIds || []).filter((id) => String(id) !== String(record.id));
+    save(taskAssigneeMutationPatch(local, people, assigneeIds));
   };
 
   const today_ = today();
@@ -358,10 +338,11 @@ export function TaskDrawer({
                 TASK_TITLE_REQUIRED ile reddediliyor; aynı yamada birleştirilen
                 ilerleme/tarih düzenlemeleri de o istekle birlikte kaybediliyordu. */}
             <textarea
-              value={local.task}
-              onChange={(e) => saveTitle(e.target.value)}
+              value={titleDraft}
+              onChange={(e) => changeTitle(e.target.value)}
+              onBlur={flushTitle}
               aria-label="Görev başlığı"
-              aria-invalid={!String(local.task || '').trim()}
+              aria-invalid={!titleValid}
               rows={2}
               style={{
                 border: 0, background: 'transparent', resize: 'none',
@@ -370,7 +351,7 @@ export function TaskDrawer({
                 padding: 0, width: '100%'
               }}
             />
-            {!String(local.task || '').trim() && (
+            {!titleValid && (
               <span className="drawer-title-warning">
                 <Icons.Alert size={12} /> Görev başlığı boş bırakılamaz; başlık girilene kadar değişiklikler kaydedilmez.
               </span>
@@ -497,10 +478,10 @@ export function TaskDrawer({
             <Section title="Sorumlular" icon={<Icons.Users size={13} />} tone="var(--c-cyan)">
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 {selectedAssignees.map((record) => (
-                  <span key={`${record.id}:${record.name}`} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
+                  <span key={record.key} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
                     <Avatar name={record.name} person={record.person} size="sm" />
                     <span style={{ fontSize: 12 }}>{record.name}</span>
-                    {canManageAssignees && <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>}
+                    {canManageAssignees && record.id != null && <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>}
                   </span>
                 ))}
               </div>
@@ -515,9 +496,12 @@ export function TaskDrawer({
                 compact
                 disabled={!canManageAssignees}
               />
-              {!canManageAssignees && Number(task.assigneeCount ?? (task.assigneeIds || []).length) > (task.assigneeIds || []).length && (
+              {!canManageAssignees && (
                 <div className="muted" style={{ fontSize: 11.5 }}>
-                  Diğer sorumlular gizli yetki kapsamındadır; sorumlu listesi yalnızca tam proje yetkisiyle değiştirilebilir.
+                  Sorumlu listesi görüntülenebilir; değiştirmek için tam proje yetkisi gerekir.
+                  {hiddenAssigneeCount > 0
+                    ? ` ${hiddenAssigneeCount} sorumlunun adı personel kaydında bulunamadığı için gösterilemiyor.`
+                    : ''}
                 </div>
               )}
             </Section>

@@ -26,6 +26,10 @@ import {
   resolveWbsMutationAccess
 } from './projectWritePolicy.js';
 import { reconcileProjectMutationAccess } from './projectMutationReconciliation.js';
+import {
+  createDataRefreshRequestGuard,
+  resolvePersistenceDataRefreshSafety
+} from './dataRefreshSafety.js';
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
@@ -43,7 +47,7 @@ function rejectedWrite(operation, issue) {
 export function AppStateProvider({ children, repository = getAppRepository() }) {
   const [state, dispatch] = useReducer(appStateReducer, undefined, createLoadingState);
   const stateRef = useRef(state);
-  const loadRequestRef = useRef(0);
+  const loadRequestGuardRef = useRef(createDataRefreshRequestGuard());
   const initialLoadStartedRef = useRef(false);
   const workspacePreferenceRef = useRef(null);
   const workspaceRestoredRef = useRef(false);
@@ -74,25 +78,53 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
 
   useEffect(() => () => persistence.dispose(), [persistence]);
 
-  const reloadData = useCallback(async () => {
+  const reloadData = useCallback(async ({
+    discardFailedTaskUpdates = false,
+    preserveFailedTaskUpdates = false
+  } = {}) => {
     const flushResult = await persistence.flush();
     if (!flushResult.ok) return flushResult;
+    const refreshSafety = resolvePersistenceDataRefreshSafety(persistence, {
+      discardFailedTaskUpdates,
+      preserveFailedTaskUpdates
+    });
+    if (!refreshSafety.ok) return refreshSafety;
 
-    const requestId = ++loadRequestRef.current;
+    const request = loadRequestGuardRef.current.begin();
     applyStateAction({ type: 'data/load-start' });
-    const result = await loadApplicationData(repository);
-    if (requestId !== loadRequestRef.current) return result;
+    return persistence.runSerialized(async () => {
+      if (!request.isCurrent()) return request.settle();
 
-    if (result.ok) {
-      // Yeniden yükleme, saklanan başarısız yamalar için açık bir vazgeçmedir:
-      // kullanıcı sunucudaki yetkili sürümü istemiştir, reddedilen düzenleme
-      // artık taşınmaz.
-      persistence.discardFailedTaskUpdates();
-      applyStateAction({ type: 'data/load-success', snapshot: result.snapshot });
-    } else {
-      applyStateAction({ type: 'data/load-error', error: result.error });
-    }
-    return result;
+      const result = await loadApplicationData(repository);
+      if (!request.isCurrent()) return request.settle(result);
+
+      if (result.ok) {
+        if (refreshSafety.discardFailedTaskUpdates) persistence.discardFailedTaskUpdates();
+        const rebased = preserveFailedTaskUpdates
+          ? persistence.rebaseFailedTaskUpdates(result.snapshot)
+          : { snapshot: result.snapshot, missingTaskIds: [] };
+        applyStateAction({
+          type: 'data/load-success',
+          snapshot: rebased.snapshot,
+          preserveSaveError: preserveFailedTaskUpdates && persistence.hasFailedTaskUpdates(),
+          refreshedAt: new Date().toISOString()
+        });
+        if (rebased.missingTaskIds.length) {
+          const error = {
+            kind: 'persistence',
+            code: 'TASK_NOT_FOUND',
+            message: 'Kaydedilemeyen değişikliklere ait görev artık bulunamıyor.',
+            operation: 'task/update',
+            details: { taskIds: rebased.missingTaskIds }
+          };
+          applyStateAction({ type: 'persistence/failure', error });
+          return { ok: false, error };
+        }
+      } else {
+        applyStateAction({ type: 'data/load-error', error: result.error });
+      }
+      return result;
+    });
   }, [applyStateAction, persistence, repository]);
 
   useEffect(() => {
@@ -380,7 +412,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       // Depo yeni projeyi yankılamadıysa yerel kayıtta sürüm anahtarı bulunmaz.
       // Sürümsüz bir kaydı durumda tutmak, sonraki her güncellemenin sunucu
       // tarafında "oluşturma" sanılmasına ve çakışmayla reddedilmesine yol açar.
-      await reloadData();
+      const reloadResult = await reloadData({ preserveFailedTaskUpdates: true });
+      if (!reloadResult.ok) return reloadResult;
     } else if (!stateRef.current.projects.some((projectValue) => projectValue.id === committedProject.id)) {
       applyStateAction({ type: 'data/apply-changes', changes: { projectUpserts: [committedProject] } });
     }
@@ -431,7 +464,10 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       // eskimiştir. FULL erişim lead devriyle PARTIAL'a düştüyse de önceki tam
       // görev/WBS ağı güvenli alt küme değildir. Her iki durumda yetkili anlık
       // görüntü yeniden yüklenir.
-      const reloadResult = await reconcileProjectMutationAccess(committedProject, reloadData);
+      const reloadResult = await reconcileProjectMutationAccess(
+        committedProject,
+        () => reloadData({ preserveFailedTaskUpdates: true })
+      );
       if (!reloadResult?.ok) return reloadResult;
     }
     // Etiket yeniden adlandırması görev anahtar sözcüklerine KALICI KATMANDA,

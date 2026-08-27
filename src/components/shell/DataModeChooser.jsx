@@ -16,7 +16,7 @@ export function DataModeChooser({ onChoose }) {
             <AppLogo size={46} />
             <div className="mode-picker-wordmark">
               <span>MERGEN</span><strong>Rota</strong>
-              <small>Proje Yönetimi</small>
+              <small>Görev Yönetimi</small>
             </div>
           </div>
           <h2 id="data-mode-picker-title">Veri Modu</h2>

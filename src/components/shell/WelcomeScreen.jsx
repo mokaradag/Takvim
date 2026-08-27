@@ -87,7 +87,7 @@ export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgai
             <AppLogo size={40} />
             <div className="col" style={{ gap: 1 }}>
               <span className="welcome-brand-name">MERGEN <strong>Rota</strong></span>
-              <span className="welcome-brand-sub">Proje Yönetimi · Sürüm 1.0</span>
+              <span className="welcome-brand-sub">Görev Yönetimi · Sürüm 1.0</span>
             </div>
           </div>
 

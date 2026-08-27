@@ -257,6 +257,10 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     return pending.size > 0 || inFlight.size > 0 || failed.size > 0;
   }
 
+  function hasFailedChanges() {
+    return failed.size > 0;
+  }
+
   /** Saklanan başarısız yamaları kuyruğa alıp yeniden gönderir. */
   function retryFailed(options = {}) {
     for (const [taskId, patch] of failed) {
@@ -273,6 +277,23 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     failed.clear();
   }
 
+  /** Başarısız yamaları yeni sunucu anlık görüntüsünün üzerine geri uygular. */
+  function rebaseFailedChanges(tasks = []) {
+    const failedById = new Map([...failed].map(([taskId, patch]) => [String(taskId), patch]));
+    const found = new Set();
+    const rebasedTasks = (tasks || []).map((task) => {
+      const taskId = String(task?.id ?? '');
+      const patch = failedById.get(taskId);
+      if (!patch) return task;
+      found.add(taskId);
+      return { ...task, ...patch };
+    });
+    return {
+      tasks: rebasedTasks,
+      missingTaskIds: [...failedById.keys()].filter((taskId) => !found.has(taskId))
+    };
+  }
+
   function dispose() {
     disposed = true;
     const result = disposalResult();
@@ -284,7 +305,19 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     failed.clear();
   }
 
-  return { schedule, flush, flushAll, cancelFields, hasPending, hasUnsavedChanges, retryFailed, discardFailed, dispose };
+  return {
+    schedule,
+    flush,
+    flushAll,
+    cancelFields,
+    hasPending,
+    hasUnsavedChanges,
+    hasFailedChanges,
+    retryFailed,
+    discardFailed,
+    rebaseFailedChanges,
+    dispose
+  };
 }
 
 function defaultSessionContext(repository) {
@@ -346,6 +379,18 @@ export function createStateMutationOrchestrator({
     const before = getState();
     const action = typeof actionOrFactory === 'function' ? actionOrFactory(before) : actionOrFactory;
     if (!action) return { ok: true, value: null };
+    if (action.type === 'task/update'
+      && !(before.tasks || []).some((task) => String(task.id) === String(action.id))) {
+      const error = {
+        kind: 'persistence',
+        code: 'TASK_NOT_FOUND',
+        message: 'Kaydedilemeyen değişikliğin görevi artık bulunamıyor.',
+        operation: 'task/update',
+        details: { taskId: action.id }
+      };
+      applyStateAction({ type: 'persistence/failure', error });
+      return { ok: false, error };
+    }
     const planned = appStateReducer(before, action);
     const domainError = domainErrorFromTransition(before, planned);
     if (domainError) {
@@ -438,9 +483,18 @@ export function createStateMutationOrchestrator({
     // yamalar ve reddedilip saklanan yamalar birlikte sayılır: sekme
     // kapatılırken uyarmak ve yeniden denemeyi önermek için kullanılır.
     hasPendingChanges() { return taskPatches.hasUnsavedChanges(); },
+    hasFailedTaskUpdates() { return taskPatches.hasFailedChanges(); },
     cancelTaskFieldUpdates(id, fields) { taskPatches.cancelFields(id, fields); },
     retryFailedTaskUpdates(options = {}) { return taskPatches.retryFailed(options); },
     discardFailedTaskUpdates() { taskPatches.discardFailed(); },
+    rebaseFailedTaskUpdates(snapshot = {}) {
+      const rebased = taskPatches.rebaseFailedChanges(snapshot.tasks || []);
+      return {
+        snapshot: { ...snapshot, tasks: rebased.tasks },
+        missingTaskIds: rebased.missingTaskIds
+      };
+    },
+    runSerialized(operation) { return queue.enqueue(operation); },
     whenIdle() { return queue.whenIdle(); },
     async flush(options = {}) {
       while (true) {

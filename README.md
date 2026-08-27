@@ -1,6 +1,6 @@
-# MERGEN Rota — Proje Yönetimi
+# MERGEN Rota — Görev Yönetimi
 
-Endüstriyel/kontrol paneli tarzında bir proje yönetimi uygulaması: Basit Modda hızlı görev/termin takibi; Gelişmiş Modda Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
+Endüstriyel/kontrol paneli tarzında bir görev yönetimi uygulaması: Basit Modda hızlı görev/termin takibi; Gelişmiş Modda Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
 
 MERGEN Rota artık iki tümüyle yalıtılmış **Veri Modu** sunar:
 

@@ -39,7 +39,16 @@ import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
 import { ModeChooser } from './ModeChooser';
-import { ADMIN_NAV_IDS, NAV_ITEMS, PAGE_META, simpleCalendarTabForIntent } from './navigation';
+import { DataRefreshControl } from './DataRefreshControl';
+import {
+  ADMIN_NAV_IDS,
+  NAV_ITEMS,
+  PAGE_META,
+  nextSimpleCalendarTab,
+  simpleCalendarPanelId,
+  simpleCalendarTabForIntent,
+  simpleCalendarTabId
+} from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
 import { SidebarUserPanel } from './SidebarUserPanel';
 import { WelcomeScreen } from './WelcomeScreen';
@@ -56,6 +65,48 @@ const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 function projectDisplayName(project) {
   if (!project) return '';
   return project.code ? `${project.code} · ${project.name}` : project.name;
+}
+
+function SimpleCalendarTabs({ active, onChange }) {
+  const onKeyDown = (event) => {
+    const next = nextSimpleCalendarTab(active, event.key);
+    if (!next) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onChange(next);
+    requestAnimationFrame(() => document.getElementById(simpleCalendarTabId(next))?.focus());
+  };
+
+  return (
+    <div className="simple-calendar-tabs seg" role="tablist" aria-label="Basit Mod Takvim görünümü">
+      <button
+        type="button"
+        id={simpleCalendarTabId('calendar')}
+        role="tab"
+        aria-selected={active === 'calendar'}
+        aria-controls={simpleCalendarPanelId('calendar')}
+        tabIndex={active === 'calendar' ? 0 : -1}
+        className={active === 'calendar' ? 'active' : ''}
+        onClick={() => onChange('calendar')}
+        onKeyDown={onKeyDown}
+      >
+        <Icons.Calendar size={13} /> Takvim
+      </button>
+      <button
+        type="button"
+        id={simpleCalendarTabId('entry')}
+        role="tab"
+        aria-selected={active === 'entry'}
+        aria-controls={simpleCalendarPanelId('entry')}
+        tabIndex={active === 'entry' ? 0 : -1}
+        className={active === 'entry' ? 'active' : ''}
+        onClick={() => onChange('entry')}
+        onKeyDown={onKeyDown}
+      >
+        <Icons.Plus size={13} /> Hızlı Görev Tanımı
+      </button>
+    </div>
+  );
 }
 
 export default function AppShell() {
@@ -93,6 +144,10 @@ export default function AppShell() {
     setView(nextView);
   };
   const [simpleCalendarTab, setSimpleCalendarTab] = useState('calendar');
+  const [simpleCalendarMonth, setSimpleCalendarMonth] = useState(() => {
+    const current = new Date();
+    return new Date(current.getFullYear(), current.getMonth(), 1);
+  });
   const [cmdOpen, setCmdOpen] = useState(false);
   const [showArchivedProjects, setShowArchivedProjects] = useState(false);
   const [modePickerOpen, setModePickerOpen] = useState(() => {
@@ -221,31 +276,27 @@ export default function AppShell() {
       case 'wbs': return <ProjectWorkspaceView key={`wbs:${viewIntent || 'definition'}`} initialTab={viewIntent} />;
       case 'takvim': return simpleMode ? (
         <div className="simple-calendar-workspace">
-          <div className="simple-calendar-tabs seg" role="tablist" aria-label="Basit Mod Takvim görünümü">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={simpleCalendarTab === 'calendar'}
-              className={simpleCalendarTab === 'calendar' ? 'active' : ''}
-              onClick={() => setSimpleCalendarTab('calendar')}
+          {simpleCalendarTab === 'calendar' ? (
+            <CalendarView
+              t={t}
+              setTweak={setTweak}
+              month={simpleCalendarMonth}
+              onMonthChange={setSimpleCalendarMonth}
+              panelId={simpleCalendarPanelId('calendar')}
+              panelLabelledBy={simpleCalendarTabId('calendar')}
+              leadingControls={<SimpleCalendarTabs active={simpleCalendarTab} onChange={setSimpleCalendarTab} />}
+            />
+          ) : (
+            <div
+              id={simpleCalendarPanelId('entry')}
+              className="simple-calendar-tab-panel"
+              role="tabpanel"
+              aria-labelledby={simpleCalendarTabId('entry')}
             >
-              <Icons.Calendar size={13} /> Takvim
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={simpleCalendarTab === 'entry'}
-              className={simpleCalendarTab === 'entry' ? 'active' : ''}
-              onClick={() => setSimpleCalendarTab('entry')}
-            >
-              <Icons.Plus size={13} /> Hızlı Görev Tanımı
-            </button>
-          </div>
-          <div className="simple-calendar-tab-panel" role="tabpanel">
-            {simpleCalendarTab === 'calendar'
-              ? <CalendarView t={t} setTweak={setTweak} />
-              : <SimpleModePanel />}
-          </div>
+              <SimpleCalendarTabs active={simpleCalendarTab} onChange={setSimpleCalendarTab} />
+              <SimpleModePanel />
+            </div>
+          )}
         </div>
       ) : <CalendarView t={t} setTweak={setTweak} />;
       case 'gantt': return <WorkspaceGanttView />;
@@ -265,6 +316,7 @@ export default function AppShell() {
   const workspaceKey = `${workspaceMode}:${selectedProjectId || 'all'}:${simpleMode ? 'simple' : 'advanced'}`;
   const projectContextVisible = !simpleMode && selectedProject && view !== 'ayarlar' && view !== 'yardim';
   const exportVisible = !simpleMode && view !== 'ayarlar' && view !== 'yardim';
+  const calendarContentActive = view === 'takvim' && (!simpleMode || simpleCalendarTab === 'calendar');
 
   // İlk açılış akışlarında ana uygulama hiç render edilmez. Böylece Özet üst çubuğu,
   // sidebar veya başka bir sayfa parçası karşılama/mod seçim ekranının arkasından görünmez.
@@ -293,7 +345,7 @@ export default function AppShell() {
           <AppLogo size={34} />
           <div className="col" style={{ gap: 0 }}>
             <div className="brand-name"><span>MERGEN</span><span className="brand-accent">Rota</span><span className="brand-dot" /></div>
-            <div className="brand-sub">Proje Yönetimi</div>
+            <div className="brand-sub">Görev Yönetimi</div>
           </div>
         </div>
 
@@ -396,6 +448,7 @@ export default function AppShell() {
           )}
           <div className="topbar-spacer" />
           <div className="topbar-actions">
+            <DataRefreshControl />
             {exportVisible && (
               <ProjectExportMenu
                 project={selectedProject}
@@ -411,7 +464,7 @@ export default function AppShell() {
             )}
           </div>
         </header>
-        <main key={workspaceKey} className={`content content-${view}`}>{renderView()}</main>
+        <main key={workspaceKey} className={`content content-${view}${calendarContentActive ? ' calendar-content-active' : ''}`}>{renderView()}</main>
       </div>
 
       <TaskDetailOverlay simple={simpleMode} />

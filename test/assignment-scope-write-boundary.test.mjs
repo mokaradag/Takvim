@@ -282,7 +282,7 @@ test('yetki, kurumsal rehber yoklamasından ÖNCE denetlenir', async () => {
 
 /* ── 5b. Gizli eş sorumlu ───────────────────────────────────────── */
 
-test('KISMİ anlık görüntü kapsam dışı eş sorumluyu istemciye vermez', async () => {
+test('KISMİ yönetici görünümü kapsam dışı eş sorumlu kimliğini veya adını vermez', async () => {
   const seed = assignmentSeed();
   seed.tasks = [{
     TaskId: NEW_TASK_ID,
@@ -310,6 +310,7 @@ test('KISMİ anlık görüntü kapsam dışı eş sorumluyu istemciye vermez', a
     // getirmemelidir.
     assert.deepEqual(task.assigneeIds, [String(SUBORDINATE_SICIL)]);
     assert.equal(task.assigneeIds.includes(String(OUTSIDER_SICIL)), false);
+    assert.deepEqual(task.assigneeDisplayNames, ['Ast Personel']);
 
     // Yetkili SAYI yine de bildirilir: arayüz "gizli sorumlu var" sonucuna
     // varıp paneli salt okunur açabilsin diye. Sayı kimlik taşımaz.
