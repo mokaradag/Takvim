@@ -2,10 +2,15 @@
 import { useMemo, useState } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
-import { Avatar, AvatarStack, StatusIcon, StatusPill } from '../../components/ui';
-import { FilterableTH, InfoButton, dateMatchesFilter } from '../../components/ui-extras';
+import { Avatar, AvatarStack, PriorityIcon, StatusIcon, StatusPill } from '../../components/ui';
+import { FilterableTH, InfoButton } from '../../components/ui-extras';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
-import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
+import {
+  TASK_PRIORITY_FILTER_OPTIONS,
+  TASK_STATUS_FILTER_OPTIONS,
+  normalizePriorityId,
+  resolvePriority
+} from '../../domain/constants';
 import { projectColorVar } from '../../lib/colors';
 import { diffDays, fmt, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
@@ -13,6 +18,7 @@ import { canResolveTaskAssignee } from '../../state/appState';
 import { canDeleteTask } from '../../state/projectWritePolicy.js';
 import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useTasks } from '../../state/hooks';
 import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
+import { SIMPLE_TASK_FACET_KEYS, simpleTaskFacetValues, simpleTaskMatches } from './simpleTaskFacets.js';
 
 /**
  * Basit Mod · Görevler.
@@ -49,47 +55,44 @@ export function SimpleTasksView({ onNewTask }) {
   );
   const canAddTask = assignableProjects.some((project) => canResolveTaskAssignee(appState, project));
   const peopleById = useMemo(() => new Map(people.map((person) => [String(person.id), person])), [people]);
-  const projectOptions = useMemo(() => projects.slice()
+  const facetValues = useMemo(() => Object.fromEntries(SIMPLE_TASK_FACET_KEYS.map((key) => [
+    key,
+    simpleTaskFacetValues(tasks, { search, filters }, key)
+  ])), [tasks, search, filters]);
+  const projectOptions = useMemo(() => projects
+    .filter((project) => facetValues.proje.has(project.id))
+    .slice()
     .sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr'))
-    .map((project) => ({ value: project.id, label: projectLabel(project), keywords: [project.code, project.name] })), [projects]);
-  const keywordOptions = useMemo(() => [...new Set(tasks.map((task) => String(task.keyword || '').trim()).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b, 'tr')).map((value) => ({ value, label: value })), [tasks]);
-  const assigneeOptions = useMemo(() => people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr')).map((person) => ({
+    .map((project) => ({ value: project.id, label: projectLabel(project), keywords: [project.code, project.name] })),
+  [projects, facetValues]);
+  const keywordOptions = useMemo(() => [...facetValues.keyword]
+    .sort((a, b) => a.localeCompare(b, 'tr')).map((value) => ({ value, label: value })), [facetValues]);
+  const assigneeOptions = useMemo(() => people
+    .filter((person) => facetValues.sorumlu.has(String(person.id)))
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, 'tr')).map((person) => ({
     value: String(person.id),
     label: person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name,
     keywords: [person.name, person.employeeNo, person.role, person.team],
     icon: <Avatar name={person.name} person={person} size="sm" />
-  })), [people]);
-  const priorityOptions = Object.values(PRIORITIES).map((priority) => ({ value: priority.id, label: priority.label }));
-  const statusOptions = [
-    { value: 'todo', label: 'Yapılacak', icon: <StatusIcon id="todo" size={11} /> },
-    { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },
-    { value: 'done', label: 'Tamamlandı', icon: <StatusIcon id="done" size={11} /> },
-    { value: 'overdue', label: 'Geciken', icon: <StatusIcon id="overdue" size={11} /> }
-  ];
+  })), [people, facetValues]);
+  const priorityOptions = TASK_PRIORITY_FILTER_OPTIONS
+    .filter((priority) => facetValues.priority.has(priority.id))
+    .map((priority) => ({
+      value: priority.id,
+      label: priority.label,
+      icon: <PriorityIcon color={priority.color} size={11} />
+    }));
+  const statusOptions = TASK_STATUS_FILTER_OPTIONS
+    .filter((status) => facetValues.status.has(status.value))
+    .map((status) => ({
+      ...status,
+      icon: <StatusIcon id={status.value} size={11} />
+    }));
   const setFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
 
   const visible = useMemo(() => {
-    const referenceDay = today();
-    const query = search.trim().toLocaleLowerCase('tr-TR');
-    const filtered = tasks.filter((task) => {
-      if (query) {
-        const haystack = [task.task, task.proje, task.projectCode, task.keyword, ...(task.sorumlu || [])]
-          .map((value) => String(value || '').toLocaleLowerCase('tr-TR'));
-        if (!haystack.some((value) => value.includes(query))) return false;
-      }
-      if (filters.proje.length && !filters.proje.includes(task.projectId)) return false;
-      if (filters.task && !String(task.task || '').toLocaleLowerCase('tr-TR').includes(filters.task.toLocaleLowerCase('tr-TR'))) return false;
-      if (filters.keyword.length && !filters.keyword.includes(task.keyword)) return false;
-      if (filters.sorumlu.length && !(task.assigneeIds || []).some((id) => filters.sorumlu.includes(String(id)))) return false;
-      if (filters.priority.length && !filters.priority.includes(normalizePriorityId(task.priority))) return false;
-      if (filters.status.length) {
-        const overdue = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0;
-        if (!(filters.status.includes(task.status || 'todo') || (overdue && filters.status.includes('overdue')))) return false;
-      }
-      if (filters.targetFinish && (!task.targetFinish || !dateMatchesFilter(task.targetFinish, filters.targetFinish))) return false;
-      return true;
-    });
+    const filtered = tasks.filter((task) => simpleTaskMatches(task, { search, filters }));
 
     return filtered.sort((left, right) => {
       let a = left[sort.key];

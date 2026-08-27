@@ -79,6 +79,7 @@ export function useDataLifecycle() {
     isSaving: state.pendingMutationCount > 0,
     saveError: state.saveError,
     lastSavedAt: state.lastSavedAt,
+    lastRefreshedAt: state.lastRefreshedAt,
     reloadData: state.actions.reloadData,
     retryFailedChanges: state.actions.retryFailedChanges,
     hasPendingChanges: state.actions.hasPendingChanges,

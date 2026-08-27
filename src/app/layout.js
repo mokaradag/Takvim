@@ -8,8 +8,8 @@ import './styles/experience.css';
 import { TWEAKS_BOOTSTRAP_SCRIPT } from '../lib/tweaksBootstrap.js';
 
 export const metadata = {
-  title: 'MERGEN Rota — Proje Yönetimi',
-  description: 'MERGEN Rota — Sürüm 1.0 endüstriyel proje yönetimi paneli: Özet, Görevler, Proje Yapısı, Takvim, Gantt, Kanban ve Raporlar.',
+  title: 'MERGEN Rota — Görev Yönetimi',
+  description: 'MERGEN Rota — Sürüm 1.0 endüstriyel görev yönetimi paneli: Özet, Görevler, Proje Yapısı, Takvim, Gantt, Kanban ve Raporlar.',
 };
 
 const FAVICON =

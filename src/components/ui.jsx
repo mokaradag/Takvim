@@ -124,6 +124,9 @@ export function StatusIcon({ id, size = 12 }) {
   const I = STATUS_ICONS[id] || STATUS_ICONS.todo;
   return <I size={size} />;
 }
+export function PriorityIcon({ color, size = 12 }) {
+  return <Icons.Flag size={size} style={{ color }} />;
+}
 export function statusColorVar(id) {
   return id === 'done' ? 'var(--status-done)'
     : id === 'in_progress' ? 'var(--status-progress)'

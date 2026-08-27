@@ -155,7 +155,8 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   // görünürlük süzgeci olmadan, kısmi anlık görüntünün gizlediği eş sorumlular
   // geri getiriliyordu.
   assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds, auth\)/);
-  assert.match(projectionSource, /WHERE @isAdmin = 1/);
+  assert.match(projectionSource, /SELECT CAST\(CASE WHEN @isAdmin = 1/);
+  assert.match(projectionSource, /WHERE auth\.IdentityVisible = 1/);
   assert.match(projectionSource, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @sicil AND es\.EmployeeSicil = ta\.Sicil/);
   assert.match(projectionSource, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });

@@ -259,7 +259,8 @@ export function createLoadingState() {
     loadError: null,
     pendingMutationCount: 0,
     saveError: null,
-    lastSavedAt: null
+    lastSavedAt: null,
+    lastRefreshedAt: null
   };
 }
 
@@ -315,7 +316,8 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
     loadError: null,
     pendingMutationCount: previous.pendingMutationCount || 0,
     saveError: null,
-    lastSavedAt: previous.lastSavedAt || null
+    lastSavedAt: previous.lastSavedAt || null,
+    lastRefreshedAt: previous.lastRefreshedAt || null
   };
 }
 
@@ -483,8 +485,14 @@ export function appStateReducer(state, action) {
   switch (action.type) {
     case 'data/load-start':
       return { ...state, dataStatus: 'loading', loadError: null };
-    case 'data/load-success':
-      return createStateFromSnapshot(action.snapshot, state);
+    case 'data/load-success': {
+      const loaded = createStateFromSnapshot(action.snapshot, state);
+      return {
+        ...loaded,
+        saveError: action.preserveSaveError ? state.saveError : loaded.saveError,
+        lastRefreshedAt: action.refreshedAt || state.lastRefreshedAt || null
+      };
+    }
     case 'data/load-error':
       return { ...state, dataStatus: 'error', loadError: action.error };
     case 'persistence/start':

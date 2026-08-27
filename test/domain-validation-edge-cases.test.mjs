@@ -130,6 +130,19 @@ test('task reference normalization filters unknown canonical assignee IDs', () =
   assert.deepEqual(result.sorumlu, ['Ayşe']);
 });
 
+test('task reference normalization preserves scoped display names when a canonical ID is absent from the directory', () => {
+  const result = normalizeTaskReferences({
+    id: 't1',
+    projectId: 'p1',
+    assigneeIds: ['u1', 'missing'],
+    assigneeCount: 2,
+    assigneeDisplayNames: ['Ayşe', 'Rehber Dışı Görevli']
+  }, { projects, people, wbs });
+
+  assert.deepEqual(result.assigneeIds, ['u1']);
+  assert.deepEqual(result.sorumlu, ['Ayşe', 'Rehber Dışı Görevli']);
+});
+
 test('task reference normalization derives canonical assignee IDs from legacy names', () => {
   const result = normalizeTaskReferences({ id: 't1', projectId: 'p1', sorumlu: ['Bora', 'Unknown', 'Ayşe'] }, { projects, people, wbs });
   assert.deepEqual(result.assigneeIds, ['u2', 'u1']);

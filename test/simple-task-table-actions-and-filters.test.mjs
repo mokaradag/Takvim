@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from '../src/features/tasks/simpleTaskColumns.js';
-import { simpleCalendarTabForIntent } from '../src/components/shell/navigation.js';
+import {
+  nextSimpleCalendarTab,
+  simpleCalendarPanelId,
+  simpleCalendarTabForIntent,
+  simpleCalendarTabId
+} from '../src/components/shell/navigation.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -13,6 +18,13 @@ test('Basit Görevler üst sağdaki Yeni Görev eylemini mevcut hızlı girişe 
   assert.match(view, /className="btn primary"[\s\S]*onClick=\{onNewTask\}[\s\S]*disabled=\{!canAddTask\}[\s\S]*Yeni Görev/);
   assert.equal(simpleCalendarTabForIntent('entry'), 'entry');
   assert.equal(simpleCalendarTabForIntent(null), 'calendar');
+  assert.equal(nextSimpleCalendarTab('calendar', 'ArrowRight'), 'entry');
+  assert.equal(nextSimpleCalendarTab('entry', 'ArrowRight'), 'calendar');
+  assert.equal(nextSimpleCalendarTab('entry', 'ArrowLeft'), 'calendar');
+  assert.equal(nextSimpleCalendarTab('calendar', 'ArrowLeft'), 'entry');
+  assert.equal(nextSimpleCalendarTab('calendar', 'Enter'), null);
+  assert.equal(simpleCalendarTabId('calendar'), 'simple-calendar-calendar-tab');
+  assert.equal(simpleCalendarPanelId('entry'), 'simple-calendar-entry-panel');
   assert.match(shell, /onNewTask=\{\(\) => navigate\('takvim', 'entry'\)\}/);
   assert.match(shell, /<SimpleModePanel \/>/);
 });
@@ -28,7 +40,7 @@ test('Basit Görevler yalnızca sade sütunlarda ortak filtre bileşenlerini kul
   assert.match(view, /<DateFilterableTH label="Termin"/);
   assert.match(view, /filterType="text"/);
   assert.match(view, /filterType="multi"/);
-  assert.match(view, /dateMatchesFilter\(task\.targetFinish, filters\.targetFinish\)/);
+  assert.match(view, /simpleTaskMatches\(task, \{ search, filters \}\)/);
 });
 
 test('Basit Görevler filtre sıfırlama ve klavye ile görev açma davranışını korur', () => {

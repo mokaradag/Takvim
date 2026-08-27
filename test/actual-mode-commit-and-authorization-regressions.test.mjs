@@ -437,7 +437,9 @@ test('partial-only snapshots constrain the people directory to authorized projec
   assert.match(source, /DECLARE @HasFullScope bit = CASE[\s\S]*AccessLevel = 'FULL'/);
   assert.match(source, /FROM dbo\.MR_V_PeopleDirectory pd\s+WHERE @HasFullScope = 1\s+OR pd\.Sicil = @sicil/s);
   assert.match(source, /WHERE p\.LeadSicil = pd\.Sicil/);
-  assert.match(source, /WHERE visibleAssignee\.Sicil = pd\.Sicil[\s\S]*visibilityGate\.Sicil = @sicil/s);
+  assert.match(source, /WHERE visibleAssignee\.Sicil = pd\.Sicil[\s\S]*visibleAssignee\.Sicil = @sicil/s);
+  assert.match(source, /es\.EmployeeSicil = visibleAssignee\.Sicil/);
+  assert.doesNotMatch(source, /visibilityGate\.TaskId = visibleTask\.TaskId/);
 });
 
 test('corporate project view always supplies a usable ProjectName', () => {

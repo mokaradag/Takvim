@@ -12,7 +12,13 @@ import { parseDisplayDate } from '../src/components/dateInputFormat.js';
 import { resolveTaskTagForProject } from '../src/domain/tags/index.js';
 import { validateTaskSchedule } from '../src/domain/validation/index.js';
 import { createNewTask } from '../src/state/appState.js';
-import { finalTaskFieldPatch } from '../src/features/task-detail/taskDraft.js';
+import {
+  closeAfterTaskDrafts,
+  finalTaskFieldPatch,
+  keywordDirtyFields,
+  reconcileTaskDraft,
+  runCurrentKeywordCommit
+} from '../src/features/task-detail/taskDraft.js';
 
 function read(relativePath) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
@@ -76,17 +82,60 @@ test('tarih seçici yerel takvim kullanır ve tarayıcının yerel date girişin
   assert.doesNotMatch(read('src/hooks/useApplyTweaks.js'), /input\[type="date"\]|en-GB/);
 });
 
-test('uzun Notlar metni yalnızca yerel taslak olur ve kapanışta tek yama üretir', () => {
+test('uzun Notlar metni yalnızca yerel taslak olur ve kaydı bitmeden panel kapanmaz', async () => {
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
   assert.match(drawer, /onChange=\{\(e\) => changeDescription\(e\.target\.value\)\}/);
   assert.doesNotMatch(drawer, /save\(\{ description: e\.target\.value \}\)/);
-  assert.match(drawer, /if \(patch\) await onUpdate\(task\.id, patch\);/);
-  assert.match(drawer, /return onClose\(\);/);
 
   const longNote = 'Uzun not '.repeat(10000);
   const patch = finalTaskFieldPatch({ description: 'Eski' }, { description: longNote }, 'description');
   assert.deepEqual(patch, { description: longNote });
   assert.equal(finalTaskFieldPatch({ description: longNote }, { description: longNote }, 'description'), null);
+
+  let releaseDescription;
+  const descriptionResult = new Promise((resolve) => { releaseDescription = resolve; });
+  let closeCalls = 0;
+  const closing = closeAfterTaskDrafts({
+    flushTitle: async () => ({ ok: true }),
+    persistDescription: () => descriptionResult,
+    close: async () => { closeCalls += 1; return { ok: true }; }
+  });
+  await Promise.resolve();
+  assert.equal(closeCalls, 0);
+  releaseDescription({ ok: true });
+  assert.equal((await closing).ok, true);
+  assert.equal(closeCalls, 1);
+});
+
+test('Basit Mod kısa açıklama taslağı veri yenilenirken korunur', () => {
+  const reconciled = reconcileTaskDraft(
+    { id: 'task-1', task: 'Sunucu başlığı', keyword: 'Sunucu etiketi', status: 'done' },
+    { id: 'task-1', task: 'Eski başlık', keyword: 'Yazılmakta olan etiket', status: 'todo' },
+    new Set(['keyword'])
+  );
+  assert.equal(reconciled.task.task, 'Sunucu başlığı');
+  assert.equal(reconciled.task.status, 'done');
+  assert.equal(reconciled.task.keyword, 'Yazılmakta olan etiket');
+
+  assert.deepEqual([...keywordDirtyFields(null)], []);
+  assert.deepEqual([...keywordDirtyFields('Yazılmakta olan etiket')], ['keyword']);
+});
+
+test('geciken etiket kataloğu yazması daha yeni kısa açıklama taslağını ezmez', async () => {
+  let currentDraft = 'İlk etiket';
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const settlement = runCurrentKeywordCommit({
+    draftAtCommit: currentDraft,
+    getCurrentDraft: () => currentDraft,
+    commit: () => pending
+  });
+
+  currentDraft = 'Daha yeni etiket';
+  release({ ok: true });
+  const result = await settlement;
+  assert.equal(result.current, false);
+  assert.equal(result.result.ok, true);
 });
 
 test('proje değişiminde yalnızca aynı geçerli etiket korunur, ilk etiket seçilmez', () => {

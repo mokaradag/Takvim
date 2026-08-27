@@ -17,7 +17,7 @@ test('Basit Mod Takvim sayfası Takvim ile açılır ve hızlı görev tanımı 
   assert.match(shell, /aria-label="Basit Mod Takvim görünümü"/);
   assert.match(shell, />\s*<Icons\.Calendar[^>]*\/> Takvim\s*</s);
   assert.match(shell, />\s*<Icons\.Plus[^>]*\/> Hızlı Görev Tanımı\s*</s);
-  assert.match(shell, /simpleCalendarTab === 'calendar'[\s\S]*?<CalendarView[\s\S]*?: <SimpleModePanel/);
+  assert.match(shell, /simpleCalendarTab === 'calendar'[\s\S]*?<CalendarView[\s\S]*?leadingControls=\{<SimpleCalendarTabs[\s\S]*?: \([\s\S]*?<SimpleModePanel/);
   assert.doesNotMatch(shell, /calendar-page-stack/);
 });
 
@@ -33,12 +33,14 @@ test('Basit Mod workspace etkisi hook bağımlılıklarını nesne yerine kararl
 test('Basit Mod sorumlu seçimi büyük kişi listeleri için arama ve sınırlı sonuç kullanır', () => {
   const simple = read('src/features/simple/SimpleModePanel.jsx');
 
-  assert.match(simple, /const MAX_VISIBLE_PEOPLE = 8;/);
+  const search = read('src/features/simple/simpleAssigneeSearch.js');
+
+  assert.match(search, /SIMPLE_ASSIGNEE_RESULT_LIMIT = 8/);
   assert.match(simple, /placeholder="Ad, sicil, unvan veya birimle ara"/);
-  assert.match(simple, /peopleMatches\.slice\(0, MAX_VISIBLE_PEOPLE\)/);
-  assert.match(simple, /personNumber\(person\)/);
+  assert.match(simple, /peopleMatches\.slice\(0, SIMPLE_ASSIGNEE_RESULT_LIMIT\)/);
+  assert.match(simple, /simpleAssigneeNumber\(person\)/);
   assert.match(simple, />Seçilenler</);
-  assert.match(simple, /İlk \{MAX_VISIBLE_PEOPLE\} sonuç gösteriliyor/);
+  assert.match(simple, /İlk \{SIMPLE_ASSIGNEE_RESULT_LIMIT\} sonuç gösteriliyor/);
 });
 
 test('sorumlu aramasında Enter tuşu hızlı görev formunu yanlışlıkla göndermez', () => {

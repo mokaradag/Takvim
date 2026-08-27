@@ -1,5 +1,5 @@
 /* ============================================================
-   Proje Yönetimi — design tokens + base styles
+   Görev Yönetimi — tasarım değişkenleri ve temel stiller
    ============================================================ */
 
 :root {
@@ -626,6 +626,51 @@ img.avatar-photo {
 .k-date.late { color: var(--status-overdue); font-weight: 600; }
 
 /* ── Calendar ─────────────────────────────────────── */
+.content.calendar-content-active {
+  overflow: hidden;
+  padding-bottom: 16px;
+}
+.calendar-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+.calendar-toolbar {
+  position: relative;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 3px 0;
+  background: var(--bg);
+}
+.calendar-toolbar-main,
+.calendar-navigation,
+.calendar-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.calendar-toolbar-main { min-width: 0; }
+.calendar-navigation { position: relative; }
+.calendar-toolbar-end {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.calendar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+}
 .cal-month-picker {
   display: flex;
   gap: 4px;
@@ -674,12 +719,18 @@ img.avatar-photo {
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background: var(--bg-elev);
-  overflow: hidden;
+  min-width: 760px;
 }
 .cal-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   border-bottom: 1px solid var(--border);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: var(--bg-elev);
+  box-shadow: 0 1px 0 var(--border);
 }
 .cal-head .dow {
   padding: 10px 12px;
@@ -758,6 +809,17 @@ img.avatar-photo {
   font-weight: 500;
 }
 .theme-light .cal-event { background: color-mix(in oklab, var(--ev-color) 14%, white); }
+
+@media (max-width: 1180px) {
+  .calendar-toolbar { flex-wrap: wrap; }
+  .calendar-toolbar-main { flex: 1 1 100%; flex-wrap: wrap; }
+  .calendar-toolbar-end { margin-left: 0; }
+}
+
+@media (max-width: 760px) {
+  .calendar-navigation { flex-wrap: wrap; }
+  .cal-month-picker { margin-left: 0; }
+}
 
 /* ── Gantt (legacy bar/row helpers) ──────────────── */
 .gantt-row {

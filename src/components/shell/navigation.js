@@ -17,6 +17,26 @@ export const NAV_ITEMS = [
 /** Yalnızca sistem yöneticisine gösterilen sayfalar. */
 export const ADMIN_NAV_IDS = new Set(['hatirlatma']);
 
+const SIMPLE_CALENDAR_TABS = ['calendar', 'entry'];
+
+export function simpleCalendarTabId(tab) {
+  return `simple-calendar-${tab}-tab`;
+}
+
+export function simpleCalendarPanelId(tab) {
+  return `simple-calendar-${tab}-panel`;
+}
+
+/** Sekme ok tuşları uçlarda sarar; diğer tuşlar seçimi değiştirmez. */
+export function nextSimpleCalendarTab(active, key) {
+  if (!['ArrowLeft', 'ArrowRight'].includes(key)) return null;
+  const currentIndex = Math.max(0, SIMPLE_CALENDAR_TABS.indexOf(active));
+  const direction = key === 'ArrowRight' ? 1 : -1;
+  return SIMPLE_CALENDAR_TABS[
+    (currentIndex + direction + SIMPLE_CALENDAR_TABS.length) % SIMPLE_CALENDAR_TABS.length
+  ];
+}
+
 /** Basit Takvim'e giriş niyetini açılacak alt sekmeye dönüştürür. */
 export function simpleCalendarTabForIntent(intent = null) {
   return intent === 'entry' ? 'entry' : 'calendar';

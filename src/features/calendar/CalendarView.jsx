@@ -13,12 +13,26 @@ import { useTasks, useTaskActions } from '../../state/hooks';
 import { bucketCalendarTasks, taskCalendarDate } from './calendarTaskBucketing.js';
 
 /* ── Takvim (Calendar) ─────────────────────────────────── */
-export function CalendarView({ t, setTweak }) {
+export function CalendarView({
+  t,
+  setTweak,
+  leadingControls = null,
+  month: controlledMonth = null,
+  onMonthChange = null,
+  panelId = null,
+  panelLabelledBy = null
+}) {
   const tasks = useTasks();
   const { openTask: onOpenTask } = useTaskActions();
   const today_ = today();
   const calLarge = !!(t && t.calLarge);
-  const [month, setMonth] = useState2(new Date(today_.getFullYear(), today_.getMonth(), 1));
+  const [localMonth, setLocalMonth] = useState2(new Date(today_.getFullYear(), today_.getMonth(), 1));
+  const month = controlledMonth ?? localMonth;
+  const setMonth = (nextMonth) => {
+    const next = typeof nextMonth === 'function' ? nextMonth(month) : nextMonth;
+    if (controlledMonth == null) setLocalMonth(next);
+    onMonthChange?.(next);
+  };
   const [dayOpen, setDayOpen] = useState2(null); // ISO date string
   const [jumpOpen, setJumpOpen] = useState2(false);
   const jumpAnchorRef = useRef2(null);
@@ -50,9 +64,16 @@ export function CalendarView({ t, setTweak }) {
   }, [month, dayOpen]);
 
   return (
-    <div className="col" style={{ gap: 16, position: 'relative' }}>
-      <div className="row" style={{ flexWrap: 'wrap', gap: 12 }}>
-        <div className="row" style={{ gap: 8 }}>
+    <div
+      id={panelId || undefined}
+      className="calendar-view"
+      role={panelId ? 'tabpanel' : undefined}
+      aria-labelledby={panelLabelledBy || undefined}
+    >
+      <div className="calendar-toolbar">
+        <div className="calendar-toolbar-main">
+          {leadingControls}
+          <div className="calendar-navigation">
           <button className="icon-btn" onClick={goPrev} title="Önceki ay (←)"><Icons.ChevronLeft size={16} /></button>
           <button className="icon-btn" onClick={goNext} title="Sonraki ay (→)"><Icons.ChevronRight size={16} /></button>
           <div className="cal-month-picker">
@@ -76,11 +97,13 @@ export function CalendarView({ t, setTweak }) {
           <button ref={jumpAnchorRef} className="btn sm" onClick={() => setJumpOpen(o => !o)} title="Tarihe git">
             <Icons.Calendar size={13} /> Tarihe git
           </button>
+          <button className="btn sm" onClick={goToday}>Bugün</button>
           {jumpOpen && (
             <DateJumpPopover anchor={jumpAnchorRef.current} onClose={() => setJumpOpen(false)} onJump={(d) => { setMonth(new Date(d.getFullYear(), d.getMonth(), 1)); setJumpOpen(false); }} />
           )}
+          </div>
         </div>
-        <div className="row" style={{ marginLeft: 'auto', gap: 8 }}>
+        <div className="calendar-toolbar-end">
           <div className="seg" title="Gün kutusu boyutu">
             <button className={!calLarge ? 'active' : ''} onClick={() => setTweak && setTweak('calLarge', false)}>Normal</button>
             <button className={calLarge ? 'active' : ''} onClick={() => setTweak && setTweak('calLarge', true)}>Büyük</button>
@@ -93,15 +116,6 @@ export function CalendarView({ t, setTweak }) {
                 && holidayDate.getMonth() === month.getMonth();
             }).length} resmi tatil
           </span>
-          <button className="btn sm" onClick={goToday}>Bugün</button>
-        </div>
-      </div>
-
-      <div className="cal-legend">
-        <span className="cl-item"><span className="cl-swatch" style={{ background: 'var(--cal-weekend-bg)' }} /> Hafta sonu</span>
-        <span className="cl-item"><span className="cl-swatch" style={{ background: 'var(--cal-holiday-bg)' }} /> Resmi tatil</span>
-        <span className="cl-item"><span className="cl-swatch" style={{ background: 'var(--accent)', borderRadius: 99 }} /> Bugün</span>
-        <span className="cl-item ms-auto">
           <InfoButton title="Takvim görünümü" icon={<Icons.Calendar size={12} />} corner accent="var(--accent)">
             <p>Aylık takvim bir termin görünümüdür. Her görev yalnızca hedef bitiş gününde görünür; hedef bitişi olmayan eski görevlerde planlanan bitiş kullanılır.</p>
             <p>Görev süresini günlere yayılmış görmek için Gantt görünümünü kullanın.</p>
@@ -113,15 +127,16 @@ export function CalendarView({ t, setTweak }) {
             <div className="rt-row"><span className="rt-label">Tıklama</span><span className="rt-val">Günü genişlet</span></div>
             <div className="rt-row"><span className="rt-label">Ok tuşları</span><span className="rt-val">Ay değiştir</span></div>
           </InfoButton>
-        </span>
+        </div>
       </div>
 
-      <div className={`cal anim-in${calLarge ? ' cal-lg' : ''}`}>
-        <div className="cal-head">
-          {TR_DAYS.map(d => <div className="dow" key={d}>{d}</div>)}
-        </div>
-        <div className="cal-body">
-          {days.map(d => {
+      <div className="calendar-scroll">
+        <div className={`cal anim-in${calLarge ? ' cal-lg' : ''}`}>
+          <div className="cal-head">
+            {TR_DAYS.map(d => <div className="dow" key={d}>{d}</div>)}
+          </div>
+          <div className="cal-body">
+            {days.map(d => {
             const inMonth = d.getMonth() === month.getMonth();
             const isToday_ = isSameDay(d, today_);
             const k = fmtISO(d);
@@ -193,7 +208,8 @@ export function CalendarView({ t, setTweak }) {
                 </div>
               </div>
             );
-          })}
+            })}
+          </div>
         </div>
       </div>
 

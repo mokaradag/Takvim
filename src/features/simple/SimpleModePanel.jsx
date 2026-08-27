@@ -11,30 +11,37 @@ import { findProjectTag, projectTagCatalog } from '../../domain/tags';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
-import { useAllPeople, useAllWbs, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
+import {
+  useAllPeople,
+  useAllWbs,
+  useAssignmentScopeSicils,
+  useTaskActions,
+  useTaskAssignableProjects
+} from '../../state/hooks';
 import {
   findProjectRootWbsId,
   resolveSimpleProjectChoice,
   withManualProjectOption,
   writableSimpleModeProjects
 } from './simpleModePolicy.js';
+import {
+  SIMPLE_ASSIGNEE_RESULT_LIMIT,
+  searchSimpleAssignees,
+  simpleAssigneeNumber,
+  simpleAssignmentCandidates
+} from './simpleAssigneeSearch.js';
 
 const MANUAL_PROJECT = '__manual_project__';
-const MAX_VISIBLE_PEOPLE = 8;
 
 function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
-}
-
-function personNumber(person) {
-  return person.employeeNo || person.SicilNo || person.PersonelNo || person.id;
 }
 
 function PersonChoice({ person, active, onToggle }) {
   return (
     <button type="button" className={`simple-person${active ? ' active' : ''}`} onClick={() => onToggle(person.id)}>
       <Avatar name={person.name} person={person} size="sm" />
-      <span><strong>{person.name}</strong><small>{personNumber(person)}</small></span>
+      <span><strong>{person.name}</strong><small>{simpleAssigneeNumber(person)}</small></span>
       {active ? <Icons.Check size={13} /> : <Icons.Plus size={13} />}
     </button>
   );
@@ -46,6 +53,7 @@ export function SimpleModePanel() {
   const projects = useTaskAssignableProjects();
   const people = useAllPeople();
   const wbs = useAllWbs();
+  const assignmentScopeSicils = useAssignmentScopeSicils();
   const { canCreateProjects } = useAppState();
   const { addProject, updateProject, addTask, closeTask } = useTaskActions();
   const sortedProjects = useMemo(() => projects.slice().sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr')), [projects]);
@@ -102,6 +110,18 @@ export function SimpleModePanel() {
   }, [selectableProjects, canCreateProjects]);
 
   const selectedProject = writableProjects.find((project) => project.id === projectChoice) || null;
+  const assignmentScopeOnly = useMemo(() => {
+    if (!selectedProject || canWriteProject(selectedProject)) return null;
+    return new Set(assignmentScopeSicils.map(String));
+  }, [selectedProject, assignmentScopeSicils]);
+  const candidatePeople = useMemo(
+    () => simpleAssignmentCandidates(sortedPeople, assignmentScopeOnly),
+    [sortedPeople, assignmentScopeOnly]
+  );
+  const candidatePersonIds = useMemo(
+    () => new Set(candidatePeople.map((person) => String(person.id))),
+    [candidatePeople]
+  );
   // Atama kapsamındaki projenin dağılım ağacı istemciye yüklenmez; kök düğüm
   // kimliği kapsam kaydından okunur.
   const selectedRootWbsId = useMemo(
@@ -109,19 +129,23 @@ export function SimpleModePanel() {
     [wbs, selectedProject?.id, selectedProject?.rootWbsId]
   );
   const selectedPeople = useMemo(
-    () => sortedPeople.filter((person) => assigneeIds.includes(person.id)),
-    [sortedPeople, assigneeIds]
+    () => candidatePeople.filter((person) => assigneeIds.some((id) => String(id) === String(person.id))),
+    [candidatePeople, assigneeIds]
   );
-  const peopleMatches = useMemo(() => {
-    const query = peopleQuery.trim().toLocaleLowerCase('tr-TR');
-    return sortedPeople.filter((person) => {
-      if (assigneeIds.includes(person.id)) return false;
-      if (!query) return true;
-      return `${person.name} ${personNumber(person)} ${person.role || ''} ${person.team || ''}`.toLocaleLowerCase('tr-TR').includes(query);
-    });
-  }, [sortedPeople, peopleQuery, assigneeIds]);
-  const visiblePeople = peopleMatches.slice(0, MAX_VISIBLE_PEOPLE);
+  const peopleMatches = useMemo(
+    () => searchSimpleAssignees(candidatePeople, peopleQuery, assigneeIds),
+    [candidatePeople, peopleQuery, assigneeIds]
+  );
+  const visiblePeople = peopleMatches.slice(0, SIMPLE_ASSIGNEE_RESULT_LIMIT);
   const hasWritableDestination = writableProjects.length > 0 || canCreateProjects;
+
+  useEffect(() => {
+    if (!assignmentScopeOnly) return;
+    setAssigneeIds((current) => {
+      const allowed = current.filter((id) => candidatePersonIds.has(String(id)));
+      return allowed.length === current.length ? current : allowed;
+    });
+  }, [assignmentScopeOnly, candidatePersonIds]);
 
   // Basit Modda proje oluşturmak, görev tanımlamaktan bağımsız bir yetenektir:
   // kullanıcı görevleri sonra eklemek üzere yalnızca projeyi açabilir.
@@ -412,7 +436,7 @@ export function SimpleModePanel() {
         <div className="simple-people-block">
           <div className="simple-people-title">
             <span>Sorumlular</span>
-            <small>{assigneeIds.length} kişi seçili · {people.length} kişi</small>
+            <small>{assigneeIds.length} kişi seçili · {candidatePeople.length} kişi</small>
           </div>
           <label className="simple-people-search">
             <Icons.Search size={14} />
@@ -437,26 +461,32 @@ export function SimpleModePanel() {
             </div>
           )}
 
-          <div className="simple-people-results-title">
-            <span>{peopleQuery.trim() ? 'Arama sonuçları' : 'Hızlı seçim'}</span>
-            <small>{peopleMatches.length} eşleşme</small>
-          </div>
-          <div className="simple-people-grid">
-            {visiblePeople.map((person) => (
-              <PersonChoice key={person.id} person={person} active={false} onToggle={togglePerson} />
-            ))}
-          </div>
-          {visiblePeople.length === 0 && <div className="simple-people-empty">Eşleşen başka kişi yok.</div>}
-          {peopleMatches.length > MAX_VISIBLE_PEOPLE && (
-            <div className="simple-people-hint">
-              İlk {MAX_VISIBLE_PEOPLE} sonuç gösteriliyor. Arama alanını kullanarak listeyi daraltın.
-            </div>
+          {!peopleQuery.trim() ? (
+            <div className="simple-people-empty">Ad, sicil, unvan veya birim yazarak sorumlu arayın.</div>
+          ) : (
+            <>
+              <div className="simple-people-results-title">
+                <span>Arama sonuçları</span>
+                <small>{peopleMatches.length} eşleşme</small>
+              </div>
+              <div className="simple-people-grid">
+                {visiblePeople.map((person) => (
+                  <PersonChoice key={person.id} person={person} active={false} onToggle={togglePerson} />
+                ))}
+              </div>
+              {visiblePeople.length === 0 && <div className="simple-people-empty">Eşleşen sorumlu bulunamadı.</div>}
+              {peopleMatches.length > SIMPLE_ASSIGNEE_RESULT_LIMIT && (
+                <div className="simple-people-hint">
+                  İlk {SIMPLE_ASSIGNEE_RESULT_LIMIT} sonuç gösteriliyor. Arama alanını kullanarak listeyi daraltın.
+                </div>
+              )}
+            </>
           )}
         </div>
 
         <div className="simple-entry-foot">
           {message && <div className={`simple-message ${message.type}`}>{message.text}</div>}
-          <button className="btn primary simple-save" type="submit" disabled={saving || people.length === 0 || !hasWritableDestination}>
+          <button className="btn primary simple-save" type="submit" disabled={saving || candidatePeople.length === 0 || !hasWritableDestination}>
             <Icons.Plus size={14} /> {saving ? 'Kaydediliyor...' : 'Takvime ekle'}
           </button>
         </div>

@@ -236,6 +236,33 @@ function visibleAssignee(db, taskId, sicil) {
       || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil)));
 }
 
+function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin) {
+  return db.taskAssignees.flatMap((entry) => {
+    if (!taskIds.has(String(entry.TaskId).toUpperCase())) return [];
+    const task = db.tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
+    const project = task ? projectById(db, task.ProjectId) : null;
+    if (!task || !project?.IsActive) return [];
+    const broadVisibility = isAdmin
+      || (project.SourceType === 'MANUAL' && project.LeadSicil === sicil)
+      || (project.SourceType === 'CORPORATE' && db.corporateProjectAccess.some((row) => row.Sicil === sicil
+        && String(row.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase()))
+      || db.projectAccess.some((row) => row.IsActive && row.Sicil === sicil
+        && ['FULL', 'READ'].includes(row.AccessLevel) && sameGuid(row.ProjectId, task.ProjectId));
+    const identityVisible = broadVisibility || entry.Sicil === sicil
+      || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil);
+    const currentUserAssigned = db.taskAssignees.some((assignment) => sameGuid(assignment.TaskId, task.TaskId)
+      && assignment.Sicil === sicil);
+    if (!identityVisible && !currentUserAssigned) return [];
+    const person = db.people.find((candidate) => candidate.Sicil === entry.Sicil);
+    const displayName = String(person?.DisplayName || '').trim();
+    return [{
+      TaskId: entry.TaskId,
+      Sicil: identityVisible ? entry.Sicil : null,
+      DisplayName: displayName || (identityVisible ? String(entry.Sicil) : null)
+    }];
+  });
+}
+
 function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
   const visible = new Map();
   if (isAdmin) {
@@ -311,7 +338,22 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
       || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil);
   });
   const dependencies = db.taskDependencies.filter((entry) => visible.get(guid(entry.ProjectId)) === 'FULL');
-  const people = db.people.map((person) => ({ ...person }));
+  const hasFullScope = isAdmin || [...visible.values()].includes('FULL');
+  const people = db.people
+    .filter((person) => hasFullScope
+      || person.Sicil === sicil
+      || (canAssignAllCorporate && db.executiveScope.some((scope) => scope.ManagerSicil === sicil
+        && scope.EmployeeSicil === person.Sicil))
+      || projects.some((project) => project.LeadSicil === person.Sicil)
+      || db.taskAssignees.some((assignment) => assignment.Sicil === person.Sicil
+        && tasks.some((task) => sameGuid(task.TaskId, assignment.TaskId)
+          && (db.projectAccess.some((grant) => grant.IsActive && grant.Sicil === sicil
+            && grant.AccessLevel === 'READ' && sameGuid(grant.ProjectId, task.ProjectId))
+            || assignment.Sicil === sicil
+            || db.executiveScope.some((scope) => scope.ManagerSicil === sicil
+              && scope.EmployeeSicil === assignment.Sicil)))))
+    .map((person) => ({ ...person }))
+    .sort((left, right) => String(left.DisplayName || left.Sicil).localeCompare(String(right.DisplayName || right.Sicil), 'tr'));
 
   // Görev ATAMA kapsamı: seçilebilir kurumsal projeler. Görünür proje/görev
   // kümesine hiçbir şey eklemez.
@@ -610,35 +652,21 @@ function runQuery(db, statement, params, { database }) {
     const wbsIds = requested(params.wbsIds);
     const taskIds = requested(params.taskIds);
     const snapshot = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), false);
+    const projectedAssignees = sqlText.includes('LEFT JOIN dbo.MR_V_PeopleDirectory pd')
+      ? taskScopedAssigneeRows(db, taskIds, sicil, Boolean(params.isAdmin))
+      : snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()));
     return result([
       snapshot[0].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
       snapshot[1].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
       snapshot[2].filter((row) => wbsIds.has(String(row.WbsId).toUpperCase())),
       snapshot[3].filter((row) => taskIds.has(String(row.TaskId).toUpperCase())),
-      snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase())),
+      projectedAssignees,
       snapshot[5].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()))
     ]);
   }
   if (sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
     const ids = new Set(String(params.taskIds || '').split(',').map((value) => value.trim().toUpperCase()).filter(Boolean));
-    // Tamamlama, anlık görüntüyle AYNI görünürlük kuralına uyar: kapsam dışı eş
-    // sorumlu geri getirilmez.
-    return result([db.taskAssignees.filter((entry) => {
-      if (!ids.has(String(entry.TaskId).toUpperCase())) return false;
-      if (params.isAdmin) return true;
-      const task = db.tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
-      if (!task) return false;
-      const project = projectById(db, task.ProjectId);
-      const corporate = project?.SourceType === 'CORPORATE' && db.corporateProjectAccess
-        .some((row) => row.Sicil === params.sicil
-          && String(row.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase());
-      const granted = db.projectAccess.some((row) => row.IsActive
-        && row.Sicil === params.sicil
-        && ['FULL', 'READ'].includes(row.AccessLevel)
-        && sameGuid(row.ProjectId, task.ProjectId));
-      return corporate || granted || entry.Sicil === params.sicil
-        || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil);
-    })]);
+    return result([taskScopedAssigneeRows(db, ids, sicil, Boolean(params.isAdmin))]);
   }
   if (sqlText.includes('SELECT TOP (1) CalendarId') && sqlText.includes('IsDefault = 1 AND IsActive = 1') && !sqlText.includes('@calendarId')) {
     const calendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;
