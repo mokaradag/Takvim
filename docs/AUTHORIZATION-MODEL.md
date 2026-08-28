@@ -7,7 +7,7 @@ Authorization is evaluated on the Next.js server using trusted Sicil identity. C
 1. **SYSTEM_ADMIN** — full access to every Project and operation.
 2. **FULL_PROJECT_ACCESS** — full access to one Project from HR09 responsibility, active `MR_ProjectAccess` FULL grant, or being the selected lead of an active manual Project.
 3. **EXECUTIVE_SCOPE** — read-only visibility of Tasks assigned to subordinate employees.
-4. **ASSIGNEE_SCOPE** — task-level work editing for the current user's assigned Tasks.
+4. **ASSIGNEE_SCOPE** — task-level work editing for the current user's assigned Tasks and narrow self-assigned Task creation in Projects where such an authoritative assignment exists.
 5. **DENY BY DEFAULT**.
 
 FULL always wins when the same Project is also visible through a partial source.
@@ -73,7 +73,24 @@ Selecting a Project **for a new or reassigned Task** is a different question fro
 - `projects` — what the user may *see*: workspace switcher, filters, reports, Gantt, portfolio statistics. Unchanged by this rule.
 - `assignableProjects` — what the user may *choose from* when defining or assigning a Task. Additive, selection-only, and never merged into `projects`.
 
-For an ordinary employee `assignableProjects` is empty: the selector offers exactly their `corporateprojectaccess` Projects, as before. Directors, managers, and team leaders (`isExecutive`, derived from HR02 exactly as executive visibility is — there is no hard-coded user list) receive the **entire active CN43N corporate Project catalog** in `assignableProjects`, so they can assign work to their own personnel under any corporate Project even where they hold no `corporateprojectaccess` of their own. SYSTEM_ADMIN already reaches every Project through precedence.
+For an ordinary employee the server-side `assignableProjects` catalog remains empty. The client adds only visible Projects in which the snapshot contains at least one Task marked `isCurrentUserAssignee`; the server never trusts that derived list. Directors, managers, and team leaders (`isExecutive`, derived from HR02 exactly as executive visibility is — there is no hard-coded user list) receive the **entire active CN43N corporate Project catalog** in `assignableProjects`, so they can assign work to their own personnel under any corporate Project even where they hold no `corporateprojectaccess` of their own. SYSTEM_ADMIN already reaches every Project through precedence.
+
+## Assignee Task creation scope
+
+An ordinary employee who is the authoritative assignee of at least one Task in Project P may create a new Task in Project P. This is `ASSIGNEE_CREATE`, not FULL Project access and not executive assignment scope.
+
+The server decides this inside the Task-create SQL transaction by reading `MR_TaskAssignees` joined to the active Project. The membership lookup uses update/serializable key-range locks, so an assignment removed before the create transaction runs cannot be replaced by stale browser state. A forged direct request receives `FORBIDDEN` when that authoritative row is absent.
+
+`ASSIGNEE_CREATE` is deliberately constrained:
+
+- the new Task remains in the same active Project;
+- the actor is the Task's only initial assignee;
+- the Task is attached to the Project root WBS;
+- planning, target and actual dates; dependencies; recurrence; milestone; ordering; Task-specific calendar; hour and financial fields cannot be introduced through this scope;
+- Project metadata, Project access, WBS, baseline, dependency and Project-delete permissions are unchanged;
+- unrelated Projects and Tasks remain absent from the authorization-filtered snapshot.
+
+The same `taskCreationScopeInProject` policy feeds Advanced Mode, Simple Mode and the quick-entry assignee picker. In Simple Mode an `ASSIGNEE_CREATE` Project offers only the current user as the initial assignee. These client rules are usability constraints; the transactional server check is the security boundary.
 
 The widening is deliberately narrow. The server splits the decision into a Project-level check (`assertTaskProjectScope`) and an assignee-level check (`assertAssigneeScope`), and permits an assignment-scope write only when *all* of the following hold:
 
@@ -102,7 +119,7 @@ The client mirrors the same rule (`src/state/projectWritePolicy.js`) purely for 
 
 An ordinary employee sees Tasks assigned to their Sicil plus the Project and WBS context needed to understand those Tasks. Unrelated Projects and Tasks are not returned. The server authorizes an update only after reading the authoritative `MR_TaskAssignees` rows inside the transaction and confirming that the current Sicil is still assigned.
 
-An assignee may edit the assigned Task's work fields: title, description/tag, status, priority, progress and planning/target/actual dates. This does not grant Project metadata, WBS, access, dependency, recurrence, milestone, ordering, deletion or assignment-list mutation rights. Those structural fields still require their existing stronger authorization.
+An assignee may edit the assigned Task's work fields: title, description/tag, status, priority, progress and planning/target/actual dates. The same actor may create a self-assigned Task under the narrow rules above. Neither operation grants Project metadata, WBS, access, dependency, recurrence, milestone, ordering, deletion or assignment-list mutation rights. Those structural fields still require their existing stronger authorization.
 
 Partial snapshots may intentionally omit co-assignees. An assignee work update therefore never treats the client assignee list as authoritative: it neither deletes nor reinserts `MR_TaskAssignees`, so hidden co-assignees are preserved. To mutate the assignment list, the client must send an explicit `assigneeIds` patch and the server requires FULL or valid executive assignment scope.
 
@@ -110,7 +127,7 @@ Partial snapshots may intentionally omit co-assignees. An assignee work update t
 
 FULL Project users may create/edit/delete Tasks, assign employees, manage dependencies, manage WBS, move Tasks, reparent WBS, edit permitted Project metadata, and use complete Project scheduling/reporting.
 
-PARTIAL users cannot mutate Project, WBS, assignment, dependency, baseline, tag, or access records. There are two narrow Task exceptions: the executive Task assignment scope described above, and authoritative current assignees editing only their assigned Task's work fields. The client may disable controls, but the server independently returns FORBIDDEN for unauthorized writes.
+PARTIAL users cannot mutate Project, WBS, assignment, dependency, baseline, tag, or access records. There are three narrow Task exceptions: the executive Task assignment scope described above, authoritative current assignees editing only their assigned Task's work fields, and `ASSIGNEE_CREATE` creating a root-WBS Task assigned only to the actor. The client may disable controls, but the server independently returns FORBIDDEN for unauthorized writes.
 
 Corporate identity fields are source-controlled. Even FULL users cannot change corporate SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName, or LeadSicil; the update statement preserves the corporate lead explicitly, so editing MERGEN-owned fields can never clear it. They may change supported application metadata such as Data Date, color, calendar, and tags. Manual Project owners may change the manual Project lead.
 

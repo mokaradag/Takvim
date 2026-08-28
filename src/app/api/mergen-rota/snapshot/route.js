@@ -5,14 +5,21 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+export async function loadSnapshotForRequest(request, repository) {
+  const manualRefresh = request?.headers?.get('x-mergen-rota-refresh-mode') === 'manual';
+  return repository.loadSnapshotWithSession({
+    catalogSync: manualRefresh ? 'background-after' : 'blocking-before'
+  });
+}
+
 /**
  * Anlık görüntü yanıtı oturum bağlamını da taşır.
  *
  * Açılışta istemcinin iki ayrı gidiş-dönüşe (anlık görüntü + oturum) ihtiyacı
- * vardı ve bu istekler paralelleştirilemez: oturum bağlamı, anlık görüntünün
- * tetiklediği kurumsal katalog eşitlemesinden SONRA okunmalıdır; aksi hâlde
- * yeni eşitlenen kurumsal projeler erişim listesinde görünmez. Aynı sıra tek
- * bir istek içinde korunur ve açılıştan bir tam tur eksilir.
+ * vardı. İlk uygulama yükü boş katalog kurulumunu gerektiğinde bekler. Manuel
+ * Refresh ise önce mevcut yetkili snapshot'ı okur, sonra TTL/single-flight
+ * denetimli katalog tazelemesini arka planda başlatır; var olan ekran 38 bin
+ * satırlık CN43N turunu beklemez.
  *
  * Oturum, anlık görüntünün YETKİ BAĞLAMINDAN kurulur: ayrı bir
  * `loadSessionContext()` çağrısı aynı kişi/rol/proje erişimi ve görev-atama
@@ -22,10 +29,10 @@ export const revalidate = 0;
  * Ayrı `/session` ucu olduğu gibi durmaya devam eder (oturum tazeleme ve
  * eski istemciler için).
  */
-export async function GET() {
+export async function GET(request = null) {
   try {
     const repository = createProjectedSqlAppRepository();
-    const body = await repository.loadSnapshotWithSession();
+    const body = await loadSnapshotForRequest(request, repository);
     return Response.json(body, {
       headers: { 'cache-control': 'no-store' }
     });

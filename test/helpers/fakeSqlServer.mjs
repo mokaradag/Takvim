@@ -236,7 +236,7 @@ function visibleAssignee(db, taskId, sicil) {
       || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil)));
 }
 
-function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin) {
+function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedAvatar = false } = {}) {
   return db.taskAssignees.flatMap((entry) => {
     if (!taskIds.has(String(entry.TaskId).toUpperCase())) return [];
     const task = db.tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
@@ -258,6 +258,7 @@ function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin) {
     return [{
       TaskId: entry.TaskId,
       Sicil: identityVisible ? entry.Sicil : null,
+      AvatarEmployeeNo: displayName && (identityVisible || exposeTaskScopedAvatar) ? entry.Sicil : null,
       DisplayName: displayName || (identityVisible ? String(entry.Sicil) : null)
     }];
   });
@@ -666,7 +667,9 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
     const ids = new Set(String(params.taskIds || '').split(',').map((value) => value.trim().toUpperCase()).filter(Boolean));
-    return result([taskScopedAssigneeRows(db, ids, sicil, Boolean(params.isAdmin))]);
+    return result([taskScopedAssigneeRows(db, ids, sicil, Boolean(params.isAdmin), {
+      exposeTaskScopedAvatar: true
+    })]);
   }
   if (sqlText.includes('SELECT TOP (1) CalendarId') && sqlText.includes('IsDefault = 1 AND IsActive = 1') && !sqlText.includes('@calendarId')) {
     const calendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;
@@ -883,7 +886,8 @@ function runQuery(db, statement, params, { database }) {
   }
 
   // Görev atama kapsamı denetimleri.
-  if (sqlText.includes('SELECT TOP (1) ProjectId FROM dbo.MR_Projects WHERE ProjectId = @projectId AND IsActive = 1')) {
+  if (sqlText.includes('SELECT TOP (1) ProjectId FROM dbo.MR_Projects')
+    && sqlText.includes('WHERE ProjectId = @projectId AND IsActive = 1')) {
     const project = projectById(db, params.projectId);
     return result([project && project.IsActive ? [{ ProjectId: project.ProjectId }] : []]);
   }
@@ -930,6 +934,14 @@ function runQuery(db, statement, params, { database }) {
     return result([db.taskAssignees
       .filter((entry) => sameGuid(entry.TaskId, params.taskId))
       .map((entry) => ({ Sicil: entry.Sicil }))]);
+  }
+  if (sqlText.includes('FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK)')
+    && sqlText.includes('WHERE t.ProjectId = @projectId AND ta.Sicil = @sicil')) {
+    const assignment = db.taskAssignees.find((entry) => entry.Sicil === params.sicil
+      && db.tasks.some((task) => sameGuid(task.TaskId, entry.TaskId)
+        && sameGuid(task.ProjectId, params.projectId)
+        && projectById(db, task.ProjectId)?.IsActive));
+    return result([assignment ? [{ TaskId: assignment.TaskId }] : []]);
   }
   if (sqlText.includes('SELECT ta.Sicil')
     && sqlText.includes('FROM dbo.MR_TaskAssignees ta')

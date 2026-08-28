@@ -55,7 +55,7 @@ const GANTT_COL_DEFS = [
       return <span className="tabular">{p}%</span>;
   } },
   { key: 'status', label: 'Durum', width: 110, align: 'left', render: (t) => <StatusPill task={t} size={10.5} /> },
-  { key: 'sorumlu', label: 'Sorumlu', width: 80, align: 'right', render: (t) => <AvatarStack names={t.sorumlu} personIds={t.assigneeIds} max={2} size="sm" /> },
+  { key: 'sorumlu', label: 'Sorumlu', width: 80, align: 'right', render: (t) => <AvatarStack names={t.sorumlu} personIds={t.assigneeIds} people={t.assigneeAvatarIdentities} max={2} size="sm" /> },
   { key: 'priority', label: 'Öncelik', width: 76, align: 'left', render: (t) => {
       const p = resolvePriority(t.priority);
       return <span style={{ fontSize: 11, fontWeight: 600, color: p.color }}>{p.label}</span>;

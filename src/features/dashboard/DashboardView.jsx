@@ -485,7 +485,7 @@ export function DashboardView({ onNavigate }) {
                       <span className="tabular" style={{ fontSize: 11.5, fontWeight: 600, color: urgent ? 'var(--status-overdue)' : 'var(--text-muted)' }}>
                         {days === 0 ? 'Bugün' : days === 1 ? 'Yarın' : `${days} gün`}
                       </span>
-                      <AvatarStack names={t.sorumlu} personIds={t.assigneeIds} max={2} size="sm" />
+                      <AvatarStack names={t.sorumlu} personIds={t.assigneeIds} people={t.assigneeAvatarIdentities} max={2} size="sm" />
                     </div>
                   </button>
                 );

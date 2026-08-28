@@ -109,6 +109,16 @@ test('yönetici bütün etkin CN43N projelerini görev tanımlarken seçebilir',
   assert.equal(resolveTaskCreationProject(state, 'p-scope')?.rootWbsId, 'wbs-scope');
 });
 
+test('görev atama kapsamı yinelenen proje kayıtlarını seçicide çoğaltmaz', () => {
+  const state = executiveState();
+  state.assignableProjects = [
+    SCOPE_PROJECT,
+    { ...SCOPE_PROJECT },
+    { ...FULL_PROJECT, accessLevel: 'ASSIGN' }
+  ];
+  assert.deepEqual(taskAssignableProjects(state).map((project) => project.id), ['p-full', 'p-scope']);
+});
+
 test('geniş proje seçimi yönetici/ilgisiz yetkiler vermez', () => {
   const state = executiveState();
   // Kapsam kaydı TAM YAZMA yetkisi değildir.

@@ -365,8 +365,11 @@ export function createApiRepository({
      * yükleme birbirinin oturumunu tüketebilir ve A anlık görüntüsü B'nin proje
      * erişimiyle eşleşebilirdi.
      */
-    async loadSnapshot() {
-      const body = await requestJson(`${basePath}/snapshot`, { method: 'GET' }, 'loadSnapshot');
+    async loadSnapshot({ refreshMode = 'initial' } = {}) {
+      const body = await requestJson(`${basePath}/snapshot`, {
+        method: 'GET',
+        headers: { 'x-mergen-rota-refresh-mode': refreshMode === 'initial' ? 'initial' : 'manual' }
+      }, 'loadSnapshot');
       const { session, ...snapshot } = body || {};
       const restored = restoreActualSnapshotIds(snapshot, clientIdAliases);
       return session ? { ...restored, session: restoreActualSessionIds(session, clientIdAliases) } : restored;

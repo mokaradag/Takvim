@@ -205,7 +205,8 @@ test('korunan veri uçları sunucu tarafı yetkilendirmeyi korur', () => {
   assert.match(snapshotRoute, /const repository = createProjectedSqlAppRepository\(\);/);
   // Oturum, anlık görüntünün yetki bağlamından kurulur: aynı istekte ikinci bir
   // yetkilendirme turu çalıştırılmaz.
-  assert.match(snapshotRoute, /await repository\.loadSnapshotWithSession\(\);/);
+  assert.match(snapshotRoute, /loadSnapshotForRequest\(request, repository\)/);
+  assert.match(snapshotRoute, /repository\.loadSnapshotWithSession\(\{/);
   assert.match(
     read('src/server/repository/projectedSqlAppRepository.js'),
     /session: await baseRepository\.sessionContextFrom\(auth\)/

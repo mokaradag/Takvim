@@ -16,6 +16,10 @@ async function loadVisibleTaskAssignees(executor, taskIds, auth) {
   const result = await request.query(`
     SELECT ta.TaskId,
       CASE WHEN auth.IdentityVisible = 1 THEN ta.Sicil ELSE NULL END AS Sicil,
+      CASE
+        WHEN NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL THEN ta.Sicil
+        ELSE NULL
+      END AS AvatarEmployeeNo,
       COALESCE(
         NULLIF(LTRIM(RTRIM(pd.DisplayName)), ''),
         CASE WHEN auth.IdentityVisible = 1 THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END
@@ -70,27 +74,36 @@ async function loadDefaultCalendarId(executor) {
 export function createProjectedSqlAppRepository() {
   const baseRepository = createBaseSqlAppRepository();
 
-  async function readProjectedSnapshot() {
+  async function readProjectedSnapshot({ catalogSync = 'blocking-before' } = {}) {
     // Kurumsal katalog tazelemesi bilinçli olarak işlemin DIŞINDA çalışır.
     // Aynı işlemin içinde çalıştığında CN43N birleştirmesi SERIALIZABLE
     // yalıtımını devralıyor, 38 bin satırlık MR_WBS üzerinde aralık kilitleri
     // biriktiriyor ve tek bir anlık görüntü isteğini otuz saniyenin üzerine
     // çıkarıyordu. İşlemin içinde yalnızca okumalar kalır.
-    await baseRepository.refreshCorporateCatalog();
-    return withSqlTransaction(async (transaction) => {
-      const { snapshot, auth } = await baseRepository.readSnapshotWithAuthorization();
+    if (catalogSync === 'blocking-before') {
+      await baseRepository.refreshCorporateCatalog({ waitForColdStart: true });
+    }
+    const projected = await withSqlTransaction(async (transaction) => {
+      const { snapshot, auth } = await baseRepository.readSnapshotWithAuthorization(transaction);
       const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
       const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds, auth);
       const defaultCalendarId = await loadDefaultCalendarId(transaction);
       Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
       return { snapshot: applyTaskAssigneeProjection(snapshot, assigneeRows), auth };
     }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+    // Manuel Refresh önce depodaki yetkili snapshot'ı okur; ancak bundan sonra
+    // tazelik zamanlayıcısını dürter. Böylece bu isteğin SERIALIZABLE okuması,
+    // kendi başlattığı 38 bin satırlık eşitlemeyle kilit yarışına girmez.
+    if (catalogSync === 'background-after') {
+      await baseRepository.refreshCorporateCatalog({ waitForColdStart: false });
+    }
+    return projected;
   }
 
   return {
     ...baseRepository,
-    async loadSnapshot() {
-      return (await readProjectedSnapshot()).snapshot;
+    async loadSnapshot(options = {}) {
+      return (await readProjectedSnapshot(options)).snapshot;
     },
 
     /**
@@ -100,8 +113,8 @@ export function createProjectedSqlAppRepository() {
      * `loadSessionContext()` çağrısı kişi/rol/proje erişimi ve görev-atama
      * kapsamını aynı istekte ikinci kez sorgulardı.
      */
-    async loadSnapshotWithSession() {
-      const { snapshot, auth } = await readProjectedSnapshot();
+    async loadSnapshotWithSession(options = {}) {
+      const { snapshot, auth } = await readProjectedSnapshot(options);
       return { ...snapshot, session: await baseRepository.sessionContextFrom(auth) };
     }
   };

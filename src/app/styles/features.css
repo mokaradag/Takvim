@@ -923,3 +923,8 @@
 }
 .rich-editor-surface:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
 .rich-editor.is-disabled .rich-editor-surface { opacity: .6; }
+.task-table-pagination {
+  justify-content: center;
+  gap: 10px;
+  padding: 4px 0;
+}

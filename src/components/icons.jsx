@@ -56,7 +56,9 @@ export const Icons = {
   Menu: (p) => <Icon {...p} d='<path d="M3 6h18M3 12h18M3 18h18"/>' />,
   Compass: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><polygon points="15.6 8.4 13.3 13.3 8.4 15.6 10.7 10.7 15.6 8.4"/>' />,
   Database: (p) => <Icon {...p} d='<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>' />,
-  Refresh: (p) => <Icon {...p} d='<path d="M20 11a8 8 0 1 0 2 5M20 4v7h-7"/>' />,
+  // İki karşılıklı yay 24×24 görünüm alanında (12,12) çevresinde geometrik
+  // olarak dengelidir; tek taraftaki eski ok dönüş sırasında yörüngeleniyordu.
+  Refresh: (p) => <Icon {...p} d='<path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.4-2L20 8"/><path d="M17.9 16a7 7 0 0 1-11.4 2L4 16"/>' />,
 
   Info: (p) => (
     <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>

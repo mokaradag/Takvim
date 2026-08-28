@@ -1,5 +1,5 @@
 'use client';
-import { useAppState } from '../AppStateProvider';
+import { useAppState, useDataLifecycleState } from '../AppStateProvider';
 import { selectAssignableProjects } from '../appState';
 import { taskAssignableProjects } from '../projectWritePolicy.js';
 import { selectPrimaryBaselineForProject, selectTaskBaselineSnapshot } from '../selectors/baselineSelectors';
@@ -12,9 +12,9 @@ export function useAllProjects() { return useAppState().projects; }
 /**
  * Görev tanımlarken SEÇİLEBİLEN projeler.
  *
- * Sıradan kullanıcıda bu küme yazılabilir görünür projelerdir. Direktör/müdür/
- * birim yöneticisinde ek olarak bütün etkin CN43N projeleri gelir; görünür
- * proje listesi, görev görünürlüğü ve çalışma alanı seçicisi değişmez.
+ * Sıradan kullanıcıda bu küme yazılabilir projeler ile sorumluluktan doğan dar
+ * oluşturma projeleridir. Direktör/müdür/birim yöneticisinde ek olarak bütün
+ * etkin CN43N projeleri gelir; görünürlük ve çalışma alanı seçicisi değişmez.
  */
 export function useTaskAssignableProjects() { return taskAssignableProjects(useAppState()); }
 /** Yalnızca görev atama kapsamıyla gelen (görünür olmayan) projeler. */
@@ -70,21 +70,7 @@ export function useTaskPrimaryBaseline(taskId) {
   return { baseline, snapshot };
 }
 export function useDataLifecycle() {
-  const state = useAppState();
-  return {
-    dataStatus: state.dataStatus,
-    hasLoadedOnce: Boolean(state.hasLoadedOnce),
-    loadError: state.loadError,
-    pendingMutationCount: state.pendingMutationCount,
-    isSaving: state.pendingMutationCount > 0,
-    saveError: state.saveError,
-    lastSavedAt: state.lastSavedAt,
-    lastRefreshedAt: state.lastRefreshedAt,
-    reloadData: state.actions.reloadData,
-    retryFailedChanges: state.actions.retryFailedChanges,
-    hasPendingChanges: state.actions.hasPendingChanges,
-    clearPersistenceError: state.actions.clearPersistenceError
-  };
+  return useDataLifecycleState();
 }
 
 export function normalizeTaskCreationInput(input) {

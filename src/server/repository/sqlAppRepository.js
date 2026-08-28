@@ -675,62 +675,41 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       );
 
     SELECT ta.TaskId,
-      CASE WHEN @isAdmin = 1
-        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-        )
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_ProjectAccess pa
-          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-            AND pa.AccessLevel IN ('FULL', 'READ')
-        )
-        OR ta.Sicil = @sicil
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-        )
-      THEN ta.Sicil ELSE NULL END AS Sicil,
-      COALESCE(NULLIF(LTRIM(RTRIM(pd.DisplayName)), ''), CASE WHEN @isAdmin = 1
-        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-        )
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_ProjectAccess pa
-          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-            AND pa.AccessLevel IN ('FULL', 'READ')
-        )
-        OR ta.Sicil = @sicil
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-        )
-      THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END) AS DisplayName
+      CASE WHEN auth.IdentityVisible = 1 THEN ta.Sicil ELSE NULL END AS Sicil,
+      CASE
+        WHEN auth.IdentityVisible = 1
+          AND NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL
+        THEN ta.Sicil
+        ELSE NULL
+      END AS AvatarEmployeeNo,
+      COALESCE(NULLIF(LTRIM(RTRIM(pd.DisplayName)), ''), CASE WHEN auth.IdentityVisible = 1
+        THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END) AS DisplayName
     FROM dbo.MR_TaskAssignees ta
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = ta.Sicil
+    CROSS APPLY (
+      SELECT CAST(CASE WHEN @isAdmin = 1
+        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+        )
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_ProjectAccess pa
+          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+            AND pa.AccessLevel IN ('FULL', 'READ')
+        )
+        OR ta.Sicil = @sicil
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+        )
+      THEN 1 ELSE 0 END AS bit) AS IdentityVisible
+    ) auth
     JOIN STRING_SPLIT(@taskIds, ',') requested
       ON ta.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
-    WHERE @isAdmin = 1
-      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-      )
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_ProjectAccess pa
-        WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-          AND pa.AccessLevel IN ('FULL', 'READ')
-      )
-      OR ta.Sicil = @sicil
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-      )
+    WHERE auth.IdentityVisible = 1
       OR EXISTS (
         SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
         WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil
@@ -757,6 +736,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
   const tags = new Map();
   const assignees = new Map();
   const assigneeDisplayNames = new Map();
+  const assigneeAvatarIdentities = new Map();
   const dependencies = new Map();
   for (const row of tagRows) {
     const key = id(row.ProjectId);
@@ -773,6 +753,11 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     if (displayName) {
       if (!assigneeDisplayNames.has(key)) assigneeDisplayNames.set(key, []);
       assigneeDisplayNames.get(key).push(displayName);
+    }
+    const avatarEmployeeNo = row.AvatarEmployeeNo == null ? '' : String(row.AvatarEmployeeNo);
+    if (displayName && avatarEmployeeNo) {
+      if (!assigneeAvatarIdentities.has(key)) assigneeAvatarIdentities.set(key, []);
+      assigneeAvatarIdentities.get(key).push({ name: displayName, employeeNo: avatarEmployeeNo });
     }
   }
   for (const row of dependencyRows) {
@@ -829,6 +814,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate), sortOrder: row.SortOrder,
       assigneeIds: assignees.get(id(row.TaskId)) || [],
       assigneeDisplayNames: assigneeDisplayNames.get(id(row.TaskId)) || [],
+      assigneeAvatarIdentities: assigneeAvatarIdentities.get(id(row.TaskId)) || [],
       assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
       isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
       deps: dependencies.get(id(row.TaskId)) || [], version: encodeVersion(row.RowVersion)
@@ -1141,7 +1127,9 @@ function hasFullProjectWriteAccess(actor, projectId) {
 async function assertActiveProject(executor, projectId) {
   const req = request(executor);
   req.input('projectId', sql.UniqueIdentifier, projectId);
-  const rows = await req.query('SELECT TOP (1) ProjectId FROM dbo.MR_Projects WHERE ProjectId = @projectId AND IsActive = 1;');
+  const rows = await req.query(
+    'SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK) WHERE ProjectId = @projectId AND IsActive = 1;'
+  );
   if (!rows.recordset.length) {
     throw new ServerPersistenceError('FORBIDDEN', 'Etkin olmayan bir projede görev yazılamaz.');
   }
@@ -1154,35 +1142,79 @@ async function assertActiveProject(executor, projectId) {
  * yetkisiz bir kullanıcı, geçersiz ve geçerli sicillerin farklı hata üretmesini
  * kullanarak kurumsal rehberi yoklayabiliyordu.
  */
-async function assertTaskProjectScope(executor, actor, projectId) {
+const TASK_PROJECT_SCOPES = Object.freeze({
+  FULL: 'FULL',
+  ASSIGNMENT: 'ASSIGNMENT',
+  ASSIGNEE_CREATE: 'ASSIGNEE_CREATE'
+});
+
+/**
+ * Kullanıcı işlem anında bu projedeki en az bir görevin yetkili sorumlusu mu?
+ *
+ * Kilit ipuçları üyelik satırını commit sonuna kadar korur: sorumluluk aynı
+ * anda kaldırılıyorsa oluşturma eski bir istemci snapshot'ına dayanarak aradan
+ * geçemez. Sorgu yalnızca task/create yolunda çağrılır.
+ */
+async function hasAuthoritativeAssigneeTaskCreateScope(executor, actor, projectId) {
+  const scopeCheck = request(executor);
+  scopeCheck.input('projectId', sql.UniqueIdentifier, projectId);
+  scopeCheck.input('sicil', sql.Int, actor.sicil);
+  const result = await scopeCheck.query(`
+    SELECT TOP (1) ta.TaskId
+    FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK)
+    JOIN dbo.MR_Tasks t WITH (HOLDLOCK) ON t.TaskId = ta.TaskId
+    JOIN dbo.MR_Projects p WITH (UPDLOCK, HOLDLOCK)
+      ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    WHERE t.ProjectId = @projectId AND ta.Sicil = @sicil;
+  `);
+  return result.recordset.length > 0;
+}
+
+async function assertTaskProjectScope(executor, actor, projectId, { allowAssigneeCreate = false } = {}) {
   // Sistem yöneticisi kullanıcı bazlı yetkileri atlar ama ETKİN OLMAYAN projeye
   // yazamaz: etkin FULL yetkileri de yalnızca etkin projelerden kurulur ve
   // taşınan görev normal anlık görüntülerden tümüyle kaybolurdu.
   if (actor.isSystemAdmin) {
     await assertActiveProject(executor, projectId);
-    return;
+    return TASK_PROJECT_SCOPES.FULL;
   }
-  if (actor.effective.access.get(projectId)?.accessLevel === 'FULL') return;
-  if (!hasTaskAssignmentScope(actor) || !actor.isExecutive) {
-    throw new ServerPersistenceError('FORBIDDEN', 'Bu proje için tam yazma yetkiniz yok.');
+  if (actor.effective.access.get(projectId)?.accessLevel === 'FULL') {
+    await assertActiveProject(executor, projectId);
+    return TASK_PROJECT_SCOPES.FULL;
   }
 
-  const projectCheck = request(executor);
-  projectCheck.input('projectId', sql.UniqueIdentifier, projectId);
-  const projectRows = await projectCheck.query(`
-    SELECT TOP (1) ProjectId FROM dbo.MR_Projects
-    WHERE ProjectId = @projectId AND SourceType = 'CORPORATE' AND IsActive = 1;
-  `);
-  if (!projectRows.recordset.length) {
-    throw new ServerPersistenceError('FORBIDDEN', 'Görev atama kapsamı yalnızca etkin kurumsal projeleri kapsar.');
+  if (hasTaskAssignmentScope(actor) && actor.isExecutive) {
+    const projectCheck = request(executor);
+    projectCheck.input('projectId', sql.UniqueIdentifier, projectId);
+    const projectRows = await projectCheck.query(`
+      SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
+      WHERE ProjectId = @projectId AND SourceType = 'CORPORATE' AND IsActive = 1;
+    `);
+    if (projectRows.recordset.length) return TASK_PROJECT_SCOPES.ASSIGNMENT;
   }
+
+  if (allowAssigneeCreate
+    && await hasAuthoritativeAssigneeTaskCreateScope(executor, actor, projectId)) {
+    return TASK_PROJECT_SCOPES.ASSIGNEE_CREATE;
+  }
+
+  throw new ServerPersistenceError('FORBIDDEN', 'Bu proje için tam yazma yetkiniz yok ve dar görev oluşturma kapsamınız bulunmuyor.');
 }
 
 /** SORUMLU düzeyinde yetki: her sorumlu yöneticinin kapsamında olmalıdır. */
-async function assertAssigneeScope(executor, actor, projectId, assigneeSicils) {
+async function assertAssigneeScope(executor, actor, projectId, assigneeSicils, projectScope = null) {
   if (hasFullProjectWriteAccess(actor, projectId)) return;
 
   const sicils = [...new Set((assigneeSicils || []).map(Number).filter((value) => Number.isSafeInteger(value) && value > 0))];
+  if (projectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE) {
+    if (sicils.length !== 1 || sicils[0] !== Number(actor.sicil)) {
+      throw new ServerPersistenceError(
+        'FORBIDDEN',
+        'Görev sorumlusu bu dar kapsamla yalnızca kendisini yeni göreve atayabilir.'
+      );
+    }
+    return;
+  }
   if (!sicils.length) {
     throw new ServerPersistenceError(
       'FORBIDDEN',
@@ -1214,8 +1246,8 @@ async function assertAssigneeScope(executor, actor, projectId, assigneeSicils) {
 
 /** Proje ve sorumlu denetimlerinin bileşimi. */
 async function assertTaskProjectAccess(executor, actor, projectId, assigneeSicils) {
-  await assertTaskProjectScope(executor, actor, projectId);
-  await assertAssigneeScope(executor, actor, projectId, assigneeSicils);
+  const projectScope = await assertTaskProjectScope(executor, actor, projectId);
+  await assertAssigneeScope(executor, actor, projectId, assigneeSicils, projectScope);
 }
 
 /**
@@ -1362,6 +1394,32 @@ function assertAssigneeWorkFieldsOnly(before, task) {
   }
 }
 
+/** Dar sorumlu oluşturması yalnızca görev iş alanlarını başlatabilir. */
+function assertAssigneeTaskCreateFieldsOnly(task) {
+  const structuralValue = Boolean(task.isMilestone || task.milestone)
+    || Boolean(task.recurrence)
+    || Boolean(task.recurrenceParentId)
+    || Boolean(task.recurrenceOccurrenceDate)
+    || task.sortOrder != null
+    || task.calendarId != null
+    || task.plannedStart != null
+    || task.plannedFinish != null
+    || task.plannedDurationDays != null
+    || task.targetFinish != null
+    || task.actualStart != null
+    || task.actualFinish != null
+    || task.remainingDurationDays != null
+    || (task.deps || []).length > 0;
+  const protectedValue = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS
+    .some(([field]) => task[field] != null);
+  if (structuralValue || protectedValue) {
+    throw new ServerPersistenceError(
+      'FORBIDDEN',
+      'Görev sorumlusu yeni görevde proje yapısı, sorumlu, takvim, tarih, tekrar, bağımlılık, saat veya finans alanlarını yönetemez.'
+    );
+  }
+}
+
 async function commitTask(executor, actor, task, correlationId) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
@@ -1392,12 +1450,16 @@ async function commitTask(executor, actor, task, correlationId) {
   // önce çalıştığında, erişimi olmayan bir kullanıcı bilinmeyen sicil için
   // "geçersiz çalışan", var olan sicil için FORBIDDEN alıyor ve bu farkla
   // kurumsal rehberi yoklayabiliyordu.
+  let sourceProjectScope = null;
+  let destinationProjectScope = null;
   if (assigneeWorkOnly) {
     await assertActiveProject(executor, beforeProjectId);
     assertAssigneeWorkFieldsOnly(before, task);
   } else {
-    if (beforeProjectId) await assertTaskProjectScope(executor, actor, beforeProjectId);
-    await assertTaskProjectScope(executor, actor, projectId);
+    if (beforeProjectId) sourceProjectScope = await assertTaskProjectScope(executor, actor, beforeProjectId);
+    destinationProjectScope = await assertTaskProjectScope(executor, actor, projectId, {
+      allowAssigneeCreate: !before
+    });
   }
 
   // Dar sorumlu yazması ürün yüzeyinden kaldırılmış saat/finans alanlarını
@@ -1422,9 +1484,14 @@ async function commitTask(executor, actor, task, correlationId) {
     : await ensurePeople(executor, task.assigneeIds || []);
   // Kaynak proje: görevin ŞU ANKİ sorumluları kapsam denetimine girer.
   if (!assigneeWorkOnly && beforeProjectId) {
-    await assertAssigneeScope(executor, actor, beforeProjectId, authoritativeAssigneeSicils);
+    await assertAssigneeScope(executor, actor, beforeProjectId, authoritativeAssigneeSicils, sourceProjectScope);
   }
-  if (!assigneeWorkOnly) await assertAssigneeScope(executor, actor, projectId, assigneeSicils);
+  if (!assigneeWorkOnly) {
+    await assertAssigneeScope(executor, actor, projectId, assigneeSicils, destinationProjectScope);
+    if (!before && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE) {
+      assertAssigneeTaskCreateFieldsOnly(task);
+    }
+  }
   if (!await projectRow(executor, projectId)) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Görev projesi bulunamadı.');
   }
@@ -1446,6 +1513,14 @@ async function commitTask(executor, actor, task, correlationId) {
     const allowedWbsId = before && sameActualId(before.ProjectId, projectId)
       ? id(before.WbsId)
       : await projectRootWbsId(executor, projectId);
+    if (!before
+      && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE
+      && !allowedWbsId) {
+      throw new ServerPersistenceError(
+        'MUTATION_FAILED',
+        'Dar görev oluşturma için projenin kök WBS düğümü bulunmalıdır.'
+      );
+    }
     if (wbsId && !sameActualId(wbsId, allowedWbsId)) {
       throw new ServerPersistenceError(
         'FORBIDDEN',
@@ -1504,7 +1579,13 @@ async function commitTask(executor, actor, task, correlationId) {
       // görüntü kapsam dışı bir eş sorumluyu gizler; seri üretimi yalnızca
       // görünen astı klonlar ve bu denetim olmadan öteki sorumlu her
       // yinelemeden sessizce düşerdi.
-      await assertAssigneeScope(executor, actor, projectId, await taskAssigneeSicils(executor, recurrenceParentId));
+      await assertAssigneeScope(
+        executor,
+        actor,
+        projectId,
+        await taskAssigneeSicils(executor, recurrenceParentId),
+        destinationProjectScope
+      );
     }
   }
 
@@ -1871,7 +1952,7 @@ async function readCorporateWbsSyncWarmth() {
   return { syncedAt: row?.LastSyncedAt ?? null, projectCount: Number(row?.ProjectCount ?? 0) };
 }
 
-async function refreshCorporateCatalog() {
+async function refreshCorporateCatalog({ waitForColdStart = true } = {}) {
   // Yetki bağlamı bilinçli olarak pencerenin İÇİNDE yüklenir: tazelik penceresi
   // açıkken istek başına tek bir fazladan sorgu bile çalışmaz.
   return runCorporateWbsSync(async () => {
@@ -1886,7 +1967,7 @@ async function refreshCorporateCatalog() {
     // (varsayılan beş dakika) hiç denenmemesine yol açardı.
     const synchronized = Boolean(wbs.synchronized) || wbs.reason === 'NOT_CONFIGURED';
     return { synchronized, refreshed: synchronized, wbs };
-  }, { readDurableSyncState: readCorporateWbsSyncWarmth });
+  }, { readDurableSyncState: readCorporateWbsSyncWarmth, waitForColdStart });
 }
 
 /**
@@ -1897,10 +1978,10 @@ async function refreshCorporateCatalog() {
  * kişi/rol/proje erişimi ile görev-atama kapsamını hesaplayan (büyük veri
  * kümesinde pahalı) yetki sorgusu tek bir istekte İKİ kez çalışmaz.
  */
-async function readSnapshotWithAuthorization() {
-  const pool = await getSqlPool();
-  const auth = await loadAuthorizationContext(pool);
-  return { snapshot: await loadSnapshotFrom(pool, auth), auth };
+async function readSnapshotWithAuthorization(executor = null) {
+  const connection = executor || await getSqlPool();
+  const auth = await loadAuthorizationContext(connection);
+  return { snapshot: await loadSnapshotFrom(connection, auth), auth };
 }
 
 /** Kurumsal katalog tazelemeden yalnızca yetkili anlık görüntüyü okur. */

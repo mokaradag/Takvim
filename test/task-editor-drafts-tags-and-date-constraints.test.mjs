@@ -12,6 +12,7 @@ import { parseDisplayDate } from '../src/components/dateInputFormat.js';
 import { resolveTaskTagForProject } from '../src/domain/tags/index.js';
 import { validateTaskSchedule } from '../src/domain/validation/index.js';
 import { createNewTask } from '../src/state/appState.js';
+import { simpleTaskRequiredFieldsError } from '../src/features/simple/simpleModePolicy.js';
 import {
   closeAfterTaskDrafts,
   finalTaskFieldPatch,
@@ -166,7 +167,24 @@ test('yeni görev açık seçim olmadan etiketsiz ve yapay kalan süresiz başla
 
 test('Basit Mod boş etiketi zorunlu tutmaz ve göreve açıkça boş değer yollar', () => {
   const panel = read('src/features/simple/SimpleModePanel.jsx');
-  assert.match(panel, /if \(!task\.trim\(\) \|\| !dueDate \|\| assigneeIds\.length === 0\)/);
+  assert.equal(simpleTaskRequiredFieldsError({
+    task: 'Dar görev',
+    dueDate: '',
+    assigneeIds: ['1001'],
+    creationScope: 'ASSIGNEE_CREATE'
+  }), null);
+  assert.match(simpleTaskRequiredFieldsError({
+    task: 'Tam kapsamlı görev',
+    dueDate: '',
+    assigneeIds: ['1001'],
+    creationScope: 'FULL'
+  }), /termin tarihi/);
+  assert.equal(simpleTaskRequiredFieldsError({
+    task: 'Tam kapsamlı görev',
+    dueDate: '2026-08-28',
+    assigneeIds: ['1001'],
+    creationScope: 'FULL'
+  }), null);
   assert.match(panel, /tags: keyword\.trim\(\) \? \[keyword\.trim\(\)\] : \[\]/);
   assert.match(panel, /keyword: taskKeyword/);
   assert.match(panel, /isteğe bağlı/);

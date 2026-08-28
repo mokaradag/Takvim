@@ -1,0 +1,45 @@
+'use client';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Icons } from '../../components/icons';
+import {
+  paginateTaskRows,
+  synchronizeTaskTablePageState,
+  taskTablePageForReset
+} from './taskTablePagination.js';
+
+export { TASK_TABLE_PAGE_SIZE, paginateTaskRows } from './taskTablePagination.js';
+
+export function useTaskTablePagination(rows, resetKey) {
+  const [pageState, setPageState] = useState(() => ({ page: 0, resetKey }));
+  const requestedPage = taskTablePageForReset(pageState.page, pageState.resetKey, resetKey);
+  const result = useMemo(() => paginateTaskRows(rows, requestedPage), [rows, requestedPage]);
+  useEffect(() => {
+    setPageState((current) => synchronizeTaskTablePageState(current, resetKey, result.page));
+  }, [resetKey, result.page]);
+  const setPage = useCallback((update) => {
+    setPageState((current) => {
+      const requested = taskTablePageForReset(current.page, current.resetKey, resetKey);
+      const visiblePage = Math.min(requested, result.page);
+      const page = typeof update === 'function' ? update(visiblePage) : update;
+      return { resetKey, page };
+    });
+  }, [resetKey, result.page]);
+  return { ...result, setPage };
+}
+
+export function TaskTablePagination({ page, pageCount, setPage }) {
+  if (pageCount <= 1) return null;
+  return (
+    <nav className="row task-table-pagination" aria-label="Görev sayfaları">
+      <button type="button" className="btn ghost sm" onClick={() => setPage((value) => Math.max(0, value - 1))}
+        disabled={page === 0} aria-label="Önceki görev sayfası">
+        <Icons.ChevronLeft size={13} /> Önceki
+      </button>
+      <span className="muted tabular">{page + 1} / {pageCount}</span>
+      <button type="button" className="btn ghost sm" onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
+        disabled={page >= pageCount - 1} aria-label="Sonraki görev sayfası">
+        Sonraki <Icons.ChevronRight size={13} />
+      </button>
+    </nav>
+  );
+}

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { createMockRepository } from '../src/data/mock/createMockRepository.js';
+import { createApiRepository } from '../src/data/api/createApiRepository.js';
 import {
   dataRefreshFailure,
   dataRefreshLabel,
@@ -15,6 +16,12 @@ import {
 } from '../src/state/dataRefreshSafety.js';
 import { createStateMutationOrchestrator } from '../src/state/persistence.js';
 import { describeSaveError } from '../src/components/shell/persistenceStatusMessage.js';
+import {
+  paginateTaskRows,
+  synchronizeTaskTablePageState,
+  taskTablePageForReset,
+  TASK_TABLE_PAGE_SIZE
+} from '../src/features/tasks/taskTablePagination.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -26,6 +33,16 @@ test('uygulama düzeyi yenileme denetimi tarayıcı gezinmesi yerine veri yaşam
   assert.match(control, /aria-busy=\{busy\}/);
   assert.doesNotMatch(control, /window\.location|location\.reload|router\.refresh/);
   assert.match(shell, /<DataRefreshControl \/>/);
+});
+
+test('yenileme simgesi 24x24 merkezinde döner ve azaltılmış hareketi gözetir', () => {
+  const control = read('src/components/shell/DataRefreshControl.jsx');
+  const icons = read('src/components/icons.jsx');
+  const css = read('src/app/styles/shell.css');
+  assert.match(control, /<Icons\.Refresh size=\{13\} className=\{busy \? 'is-spinning' : ''\} \/>/);
+  assert.match(icons, /Refresh:[\s\S]*?M20 7v5h-5[\s\S]*?M4 17v-5h5/);
+  assert.match(css, /\.data-refresh-control \.is-spinning[\s\S]*?transform-box: view-box;[\s\S]*?transform-origin: center;/);
+  assert.match(css, /prefers-reduced-motion: reduce[\s\S]*?\.data-refresh-control \.is-spinning \{ animation: none; \}/);
 });
 
 test('son başarılı veri yükleme zamanı kayıt zamanından ayrı güncellenir', () => {
@@ -81,6 +98,144 @@ test('başarısız veri yenilemesi mevcut uygulama anlık görüntüsünü korur
   assert.strictEqual(next.tasks, current.tasks);
   assert.strictEqual(next.projects, current.projects);
   assert.equal(next.dataStatus, 'error');
+});
+
+test('eşdeğer snapshot değişmeyen varlık ve koleksiyon referanslarını korur', async () => {
+  const repository = createMockRepository();
+  const current = createInitialState(await repository.loadSnapshot());
+  const replacement = structuredClone(await repository.loadSnapshot());
+  const next = appStateReducer(current, { type: 'data/load-success', snapshot: replacement });
+
+  for (const key of ['projects', 'tasks', 'wbs', 'people', 'calendars', 'baselines', 'taskBaselineSnapshots']) {
+    assert.strictEqual(next[key], current[key], `${key} koleksiyonu kararlı kalmalıdır`);
+  }
+});
+
+test('manuel yenileme seçili proje çalışma alanını ve açık görev çekmecesini sökmez', async () => {
+  const repository = createMockRepository();
+  const snapshot = await repository.loadSnapshot();
+  const task = snapshot.tasks[0];
+  let current = createInitialState(snapshot);
+  current = appStateReducer(current, {
+    type: 'workspace/select',
+    workspaceMode: 'project',
+    selectedProjectId: task.projectId
+  });
+  current = appStateReducer(current, { type: 'task/select', id: task.id });
+
+  const loading = appStateReducer(current, { type: 'data/load-start' });
+  assert.equal(loading.hasLoadedOnce, true);
+  assert.equal(loading.selectedTaskId, task.id);
+  assert.equal(loading.selectedProjectId, task.projectId);
+
+  const refreshed = appStateReducer(loading, {
+    type: 'data/load-success',
+    snapshot: structuredClone(snapshot)
+  });
+  assert.equal(refreshed.workspaceMode, 'project');
+  assert.equal(refreshed.selectedProjectId, task.projectId);
+  assert.equal(refreshed.selectedTaskId, task.id);
+  assert.strictEqual(
+    refreshed.tasks.find((entry) => entry.id === task.id),
+    current.tasks.find((entry) => entry.id === task.id)
+  );
+});
+
+test('yapısal paylaşım yetkiden çıkan kayıtları önceki snapshot üzerinden geri getirmez', async () => {
+  const repository = createMockRepository();
+  const snapshot = await repository.loadSnapshot();
+  const current = createInitialState(snapshot);
+  const removedTaskId = snapshot.tasks[0].id;
+  const next = appStateReducer(current, {
+    type: 'data/load-success',
+    snapshot: { ...structuredClone(snapshot), tasks: snapshot.tasks.slice(1) }
+  });
+
+  assert.equal(next.tasks.some((task) => task.id === removedTaskId), false);
+  assert.notStrictEqual(next.tasks, current.tasks);
+});
+
+test('yenileme yaşam döngüsü büyük uygulama bağlamından ve pahalı seçici bağımlılıklarından ayrıdır', () => {
+  const provider = read('src/state/AppStateProvider.jsx');
+  const hooks = read('src/state/hooks/index.js');
+  assert.match(provider, /const DataLifecycleContext = createContext\(null\)/);
+  const applicationState = provider.match(/const applicationState = \{([\s\S]*?)\n    \};\n    return/);
+  assert.ok(applicationState);
+  assert.doesNotMatch(applicationState[1], /dataStatus|hasLoadedOnce|loadError|lastRefreshedAt/);
+  assert.match(provider, /const workspace = useMemo\(\(\) => selectWorkspaceContext\(\{/);
+  assert.doesNotMatch(provider, /selectWorkspaceContext\(state\), \[state\]/);
+  assert.match(provider, /buildPortfolioSchedule[\s\S]*?\[state\.tasks, state\.projects, state\.calendars\]/);
+  assert.match(hooks, /return useDataLifecycleState\(\)/);
+});
+
+test('ilk yükleme ve manuel yenileme katalog eşitlemesine farklı niyet gönderir', async () => {
+  const provider = read('src/state/AppStateProvider.jsx');
+  const route = read('src/app/api/mergen-rota/snapshot/route.js');
+  assert.match(provider, /reloadData\(\{ refreshMode: 'initial' \}\)/);
+  assert.match(route, /manualRefresh \? 'background-after' : 'blocking-before'/);
+
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), headers: init.headers || {} });
+    return Response.json({ projects: [], tasks: [], wbs: [], people: [], calendars: [] });
+  };
+  try {
+    const repository = createApiRepository({ basePath: '/refresh-intent-test' });
+    await repository.loadSnapshot();
+    await repository.loadSnapshot({ refreshMode: 'initial' });
+    await repository.loadSnapshot({ refreshMode: 'manual' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(
+    requests.map((request) => request.headers['x-mergen-rota-refresh-mode']),
+    ['initial', 'initial', 'manual']
+  );
+});
+
+test('büyük görev tabloları tüm satırları aynı anda render etmek yerine erişilebilir sayfalara ayrılır', () => {
+  const rows = Array.from({ length: TASK_TABLE_PAGE_SIZE * 2 + 7 }, (_, id) => ({ id }));
+  const first = paginateTaskRows(rows, 0);
+  const last = paginateTaskRows(rows, 99);
+  assert.equal(first.rows.length, TASK_TABLE_PAGE_SIZE);
+  assert.equal(first.pageCount, 3);
+  assert.equal(last.page, 2, 'geçersiz/eski sayfa numarası güvenle son sayfaya sıkıştırılmalıdır');
+  assert.equal(last.rows.length, 7);
+
+  const advanced = read('src/features/tasks/TasksView.jsx');
+  const simple = read('src/features/tasks/SimpleTasksView.jsx');
+  const control = read('src/features/tasks/TaskTablePagination.jsx');
+  assert.match(advanced, /paged\.rows\.map/);
+  assert.match(simple, /paged\.rows\.map/);
+  assert.match(control, /aria-label="Görev sayfaları"/);
+});
+
+test('görev sayfalama girdileri sınırlandırılır ve geçersiz sayfa boyutları reddedilir', () => {
+  const rows = Array.from({ length: 250 }, (_, id) => ({ id }));
+  assert.equal(paginateTaskRows(rows, 1.9).page, 1);
+  assert.equal(paginateTaskRows(rows, Number.POSITIVE_INFINITY).page, 0);
+  assert.equal(paginateTaskRows(rows, -4).page, 0);
+
+  for (const pageSize of [0, -1, 1.5, Number.POSITIVE_INFINITY, Number.NaN]) {
+    assert.throws(() => paginateTaskRows(rows, 0, pageSize), RangeError);
+  }
+});
+
+test('süzgeç sıfırlaması ve azalan satır sayısı eski saklanan sayfayı göstermeden eşitlenir', () => {
+  const stale = { page: 2, resetKey: 'önceki-süzgeç' };
+  assert.equal(taskTablePageForReset(stale.page, stale.resetKey, 'yeni-süzgeç'), 0);
+  assert.deepEqual(
+    synchronizeTaskTablePageState(stale, 'yeni-süzgeç', 0),
+    { page: 0, resetKey: 'yeni-süzgeç' }
+  );
+
+  const rowsReduced = { page: 2, resetKey: 'aynı-süzgeç' };
+  assert.deepEqual(
+    synchronizeTaskTablePageState(rowsReduced, 'aynı-süzgeç', 1),
+    { page: 1, resetKey: 'aynı-süzgeç' }
+  );
 });
 
 test('koruyucu veri yüklemesi kayıt hatasını görünür tutar', () => {

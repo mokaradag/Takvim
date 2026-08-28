@@ -19,6 +19,7 @@ import { canDeleteTask } from '../../state/projectWritePolicy.js';
 import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useTasks } from '../../state/hooks';
 import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
 import { SIMPLE_TASK_FACET_KEYS, simpleTaskFacetValues, simpleTaskMatches } from './simpleTaskFacets.js';
+import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
 
 /**
  * Basit Mod · Görevler.
@@ -106,6 +107,8 @@ export function SimpleTasksView({ onNewTask }) {
       return sort.dir === 'asc' ? delta : -delta;
     });
   }, [tasks, search, filters, sort, projectById]);
+  const paginationKey = `${search}\u001f${JSON.stringify(filters)}\u001f${sort.key}\u001f${sort.dir}`;
+  const paged = useTaskTablePagination(visible, paginationKey);
 
   const hasFilters = Boolean(search || Object.values(filters).some((value) => Array.isArray(value) ? value.length : value));
   const clearFilters = () => {
@@ -183,7 +186,7 @@ export function SimpleTasksView({ onNewTask }) {
               {visible.length === 0 && (
                 <tr><td colSpan={SIMPLE_TASK_COLUMNS.length + 1} className="empty">Eşleşen görev bulunamadı.</td></tr>
               )}
-              {visible.map((task) => {
+              {paged.rows.map((task) => {
                 const priority = resolvePriority(task.priority);
                 const referenceDay = today();
                 const late = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0;
@@ -215,6 +218,7 @@ export function SimpleTasksView({ onNewTask }) {
                       <AvatarStack
                         names={task.sorumlu || []}
                         personIds={(task.assigneeIds || []).map((id) => String(id)).filter((id) => peopleById.has(id))}
+                        people={task.assigneeAvatarIdentities}
                         max={3}
                         size="sm"
                       />
@@ -251,6 +255,8 @@ export function SimpleTasksView({ onNewTask }) {
           </table>
         </div>
       </div>
+
+      <TaskTablePagination page={paged.page} pageCount={paged.pageCount} setPage={paged.setPage} />
 
       <div className="simple-tasks-legend muted">
         <StatusIcon id="todo" size={11} /> Yapılacak

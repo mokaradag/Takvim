@@ -30,12 +30,26 @@ export function writableProjects(projects = []) {
 }
 
 /**
+ * Kullanıcının kalıcı sorumluluğundan doğan DAR görev oluşturma projeleri.
+ *
+ * Bu küme yalnızca sunucunun yetkili snapshot'ta `isCurrentUserAssignee`
+ * işaretiyle döndürdüğü görevlerden türetilir. Projeyi FULL yapmaz ve mevcut
+ * görevlerde atama/yapı yönetimi yetkisi vermez.
+ */
+export function assigneeTaskCreateProjects(state = {}) {
+  const projectIds = new Set((state.tasks || [])
+    .filter((task) => task?.isCurrentUserAssignee && task.projectId != null)
+    .map((task) => String(task.projectId)));
+  return (state.projects || []).filter((project) => projectIds.has(String(project.id)));
+}
+
+/**
  * Görev TANIMLARKEN seçilebilen projeler.
  *
  * Sıradan kullanıcı için bu küme, "corporateprojectaccess" ile tam yetki
- * aldığı görünür projelerdir — davranış değişmez. Direktör/müdür/birim
- * yöneticisi için ek olarak bütün etkin CN43N projeleri gelir; sunucu bu
- * kapsamı yeniden doğrular ve görevin kendi personeline atanmasını şart koşar.
+ * aldığı projelerle birlikte yetkili sorumlusu olduğu en az bir görev bulunan
+ * görünür projelerdir. Direktör/müdür/birim yöneticisi için ek olarak bütün
+ * etkin CN43N projeleri gelir; sunucu her kapsamı yeniden doğrular.
  *
  * Kapsam YALNIZCA görev yazmasıdır: proje üst verisi, iş dağılım ağacı ve
  * görev görünürlüğü etkilenmez.
@@ -43,8 +57,34 @@ export function writableProjects(projects = []) {
 export function taskAssignableProjects(state = {}) {
   const visible = writableProjects(state.projects || []);
   const known = new Set(visible.map((project) => String(project.id)));
-  const scoped = (state.assignableProjects || []).filter((project) => project && !known.has(String(project.id)));
-  return [...visible, ...scoped];
+  const scoped = (state.assignableProjects || []).filter((project) => {
+    if (!project) return false;
+    const id = String(project.id);
+    if (known.has(id)) return false;
+    known.add(id);
+    return true;
+  });
+  const assigneeScoped = assigneeTaskCreateProjects(state)
+    .filter((project) => !known.has(String(project.id)));
+  return [...visible, ...scoped, ...assigneeScoped];
+}
+
+/**
+ * Görev OLUŞTURMA kapsamı. `ASSIGNEE_CREATE`, mevcut görevleri yönetme veya
+ * sorumlu listesini değiştirme hakkı değildir.
+ */
+export function taskCreationScopeInProject(state = {}, value = null) {
+  const id = projectId(value);
+  if (!id) return null;
+  const visible = findProject(state.projects, id);
+  if (canWriteProject(visible)) return 'FULL';
+  if ((state.assignableProjects || []).some((project) => String(project.id) === id)) return 'ASSIGNMENT';
+  if (assigneeTaskCreateProjects(state).some((project) => String(project.id) === id)) return 'ASSIGNEE_CREATE';
+  return null;
+}
+
+export function canCreateTasksInProject(state = {}, value = null) {
+  return taskCreationScopeInProject(state, value) !== null;
 }
 
 /** Bu projeye görev yazılabilir mi? (tam yetki ya da görev atama kapsamı) */
@@ -75,6 +115,19 @@ export function resolveTaskCreationProject(state = {}, requestedProjectId = null
     return findAssignableProject(state, state.selectedProjectId);
   }
   return selectable[0] || null;
+}
+
+export function resolveTaskCreationAccess(state = {}, requestedProjectId = null) {
+  const project = resolveTaskCreationProject(state, requestedProjectId);
+  const scope = project ? taskCreationScopeInProject(state, project.id) : null;
+  return project && scope ? { ok: true, project, scope } : {
+    ok: false,
+    project: null,
+    scope: null,
+    code: 'PROJECT_WRITE_FORBIDDEN',
+    field: 'projectId',
+    message: 'Görev eklemek için yetkili olduğunuz bir proje gerekir.'
+  };
 }
 
 export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {

@@ -9,6 +9,7 @@ import { normalizeTaskRecord } from '../src/data/normalizeTaskRecord.js';
 import { normalizeTaskScheduleFields } from '../src/domain/validation/index.js';
 import { createInitialState, appStateReducer } from '../src/state/appState.js';
 import { createStateMutationOrchestrator } from '../src/state/persistence.js';
+import { executeTaskCreation } from '../src/state/taskCreationPolicy.js';
 import {
   prepareProjectCreation,
   prepareProjectUpdate,
@@ -133,9 +134,8 @@ test('simple-mode task input preserves selected IDs and the selected project col
   assert.equal(normalized.wbsId, 'w-2');
 });
 
-test('simple mode creates the final task in one guarded mutation and keeps project metadata intact', () => {
+test('simple mode creates the final task in one guarded mutation and keeps project metadata intact', async () => {
   const simple = read('src/features/simple/SimpleModePanel.jsx');
-  const provider = read('src/state/AppStateProvider.jsx');
 
   assert.doesNotMatch(simple, /updateTask/);
   // Hızlı giriş etiketi kataloğa kanonik üçlü olarak ekler (ad + varsayılan renk/simge).
@@ -144,10 +144,51 @@ test('simple mode creates the final task in one guarded mutation and keeps proje
   assert.match(simple, /projectId: project\.id/);
   assert.match(simple, /color: project\.color \|\| 'blue'/);
   assert.match(simple, /assigneeIds: \[\.\.\.assigneeIds\]/);
-  assert.match(provider, /const addTask = useCallback\(async \(input = null\)/);
-  assert.match(provider, /const project = resolveTaskCreationProject\(current, input\?\.projectId\)/);
-  assert.match(provider, /const result = await persistence\.mutate\('task\/create', \(\) => \{/);
-  assert.match(provider, /task:\s*\{\s*\.\.\.baseTask,\s*\.\.\.taskInput,\s*id,\s*projectId: project\.id/s);
+
+  const currentUser = { id: '1001', name: 'Ada' };
+  const project = {
+    id: 'p-restricted', code: 'SAFE', name: 'Yetkili proje', color: 'blue', accessLevel: 'PARTIAL'
+  };
+  const calls = [];
+  await executeTaskCreation({
+    state: {
+      projects: [project],
+      assignableProjects: [],
+      tasks: [{ id: 'assigned', projectId: project.id, isCurrentUserAssignee: true }],
+      wbs: [{ id: 'root', projectId: project.id, parentId: null, code: '1', name: 'Kök' }],
+      people: [currentUser, { id: '2002', name: 'Başka kullanıcı' }],
+      calendars: [],
+      currentUser,
+      workspaceMode: 'portfolio'
+    },
+    id: 'created',
+    input: {
+      projectId: project.id,
+      projectCode: 'FORGED',
+      proje: 'Sahte proje',
+      color: 'rose',
+      wbsId: 'forged-wbs',
+      assigneeIds: ['2002'],
+      recurrence: 'FREQ=WEEKLY',
+      plannedStart: '2026-08-28',
+      task: 'Güvenli görev'
+    },
+    async mutate(operation, actionFactory) {
+      const action = actionFactory();
+      calls.push({ operation, task: action.task });
+      return { ok: true, value: { taskUpserts: [action.task] } };
+    }
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].operation, 'task/create');
+  assert.equal(calls[0].task.projectCode, 'SAFE');
+  assert.equal(calls[0].task.proje, 'Yetkili proje');
+  assert.equal(calls[0].task.color, 'blue');
+  assert.equal(calls[0].task.wbsId, 'root');
+  assert.deepEqual(calls[0].task.assigneeIds, ['1001']);
+  assert.equal(calls[0].task.recurrence, null);
+  assert.equal(calls[0].task.plannedStart, null);
 });
 
 test('clearing a date propagates an empty value that task normalization stores as null', () => {

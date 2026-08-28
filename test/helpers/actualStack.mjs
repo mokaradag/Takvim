@@ -90,7 +90,12 @@ export async function createActualStack(seed = {}, options = {}) {
         body: init.body
       }));
     }
-    if (path.endsWith('/snapshot')) return snapshotRoute.GET();
+    if (path.endsWith('/snapshot')) {
+      return snapshotRoute.GET(new Request('http://localhost' + path, {
+        method: 'GET',
+        headers: init.headers
+      }));
+    }
     if (path.endsWith('/session')) return sessionRoute.GET();
     throw new Error(`Unexpected request path: ${path}`);
   };
@@ -112,8 +117,8 @@ export async function createActualStack(seed = {}, options = {}) {
     now: () => '2026-07-25T09:00:00.000Z'
   });
 
-  async function reload() {
-    const loaded = await loadApplicationData(repository);
+  async function reload({ refreshMode = 'initial' } = {}) {
+    const loaded = await loadApplicationData(repository, { refreshMode });
     if (!loaded.ok) throw new Error(`Snapshot load failed: ${loaded.error?.message}`);
     state = createInitialState(loaded.snapshot);
     return state;

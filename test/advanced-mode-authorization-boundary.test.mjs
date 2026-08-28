@@ -11,6 +11,7 @@ import {
   resolveWbsMutationAccess,
   writableProjects
 } from '../src/state/projectWritePolicy.js';
+import { executeTaskCreation } from '../src/state/taskCreationPolicy.js';
 
 const projects = [
   { id: 'partial', name: 'Partial', accessLevel: 'PARTIAL' },
@@ -86,17 +87,72 @@ test('forbidden writes return a stable domain error without entering persistence
 });
 
 test('Advanced Mode views use the shared capability boundary', () => {
-  const provider = fs.readFileSync(new URL('../src/state/AppStateProvider.jsx', import.meta.url), 'utf8');
   const tasksView = fs.readFileSync(new URL('../src/features/tasks/TasksView.jsx', import.meta.url), 'utf8');
   const detailOverlay = fs.readFileSync(new URL('../src/features/task-detail/TaskDetailOverlay.jsx', import.meta.url), 'utf8');
   const wbsView = fs.readFileSync(new URL('../src/features/wbs/WbsView.jsx', import.meta.url), 'utf8');
 
-  assert.match(provider, /resolveTaskCreationProject/);
-  assert.match(provider, /resolveTaskMutationAccess/);
-  assert.match(provider, /resolveTaskWbsMoveAccess/);
-  assert.match(provider, /resolveWbsMutationAccess/);
   assert.match(tasksView, /disabled=\{!canAddTask\}/);
   assert.match(tasksView, /canDeleteTask\(taskMutationState, t\.id\)/);
   assert.match(detailOverlay, /ReadOnlyTaskDrawer/);
   assert.match(wbsView, /canEdit\s*&&/);
+});
+
+test('Advanced Mode task creation applies the restricted payload before persistence', async () => {
+  const currentUser = { id: '1001', name: 'Görevli Kullanıcı' };
+  const project = { id: 'partial', code: 'P-1', name: 'Kısıtlı proje', accessLevel: 'PARTIAL' };
+  const restrictedState = {
+    projects: [project],
+    assignableProjects: [],
+    tasks: [{ id: 'assigned', projectId: project.id, isCurrentUserAssignee: true }],
+    wbs: [{ id: 'root', projectId: project.id, parentId: null, code: '1', name: 'Kök' }],
+    people: [currentUser, { id: '2002', name: 'Başka Kullanıcı' }],
+    calendars: [],
+    currentUser,
+    workspaceMode: 'portfolio'
+  };
+  const calls = [];
+  const createdTask = { id: 'task-created' };
+  const mutation = await executeTaskCreation({
+    state: restrictedState,
+    id: createdTask.id,
+    input: {
+      projectId: project.id,
+      task: 'Yeni görev',
+      wbsId: 'forged-wbs',
+      assigneeIds: ['2002'],
+      recurrence: 'FREQ=WEEKLY',
+      plannedStart: '2026-08-28',
+      targetFinish: '2026-08-30'
+    },
+    async mutate(operation, actionFactory) {
+      const action = actionFactory();
+      calls.push({ operation, action });
+      return { ok: true, value: { taskUpserts: [action.task] } };
+    }
+  });
+
+  assert.equal(mutation.result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].operation, 'task/create');
+  assert.equal(calls[0].action.task.projectId, project.id);
+  assert.equal(calls[0].action.task.wbsId, 'root');
+  assert.deepEqual(calls[0].action.task.assigneeIds, ['1001']);
+  assert.deepEqual(calls[0].action.task.sorumlu, ['Görevli Kullanıcı']);
+  assert.equal(calls[0].action.task.recurrence, null);
+  assert.equal(calls[0].action.task.plannedStart, null);
+  assert.equal(calls[0].action.task.targetFinish, null);
+
+  let unauthorizedMutationCalls = 0;
+  const unauthorized = await executeTaskCreation({
+    state: restrictedState,
+    id: 'task-forged',
+    input: { projectId: 'read', task: 'Yetkisiz görev' },
+    async mutate() {
+      unauthorizedMutationCalls += 1;
+      return { ok: true };
+    }
+  });
+  assert.equal(unauthorized.result.ok, false);
+  assert.equal(unauthorized.result.error.code, 'PROJECT_WRITE_FORBIDDEN');
+  assert.equal(unauthorizedMutationCalls, 0);
 });
