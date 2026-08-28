@@ -23,8 +23,8 @@
  *      başlatması demekti. Başarısızlıklar ayrı bir damgayla üstel beklemeye
  *      alınır: başarı taklit edilmez, deneme sıklığı sınırlanır.
  *
- * Süre `MERGEN_ROTA_WBS_SYNC_TTL_MS` ile ayarlanır. `0` verildiğinde eşitleme
- * her istekte eşzamanlı çalışır (geliştirme ve test için).
+ * Süre `MERGEN_ROTA_WBS_SYNC_TTL_MS` ile ayarlanır. `0` verildiğinde ilk yük
+ * yolu her istekte eşzamanlı çalışır; manuel Refresh yine beklemeden döner.
  */
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
@@ -132,42 +132,71 @@ export function hasCorporateWbsSyncedOnce() {
  *     kaynağının hızına bağlı kalmasını önleyen asıl kazanç budur.
  *
  * `MERGEN_ROTA_WBS_SYNC_TTL_MS=0` verildiğinde tazelik penceresi tümüyle
- * kapalıdır; bu kipte davranış eskisi gibi her istekte eşzamanlı çalışmaktır.
+ * kapalıdır. İlk yük yolu eşzamanlıdır; `waitForColdStart: false` kullanan
+ * manuel Refresh yolu işi yine arka plana bırakır.
  */
-export async function runCorporateWbsSync(run, { now = Date.now, logger = console, readDurableSyncState = null } = {}) {
+export async function runCorporateWbsSync(run, {
+  now = Date.now,
+  logger = console,
+  readDurableSyncState = null,
+  waitForColdStart = true
+} = {}) {
   const startedAt = now();
   if (isCorporateWbsSyncFresh(startedAt)) return skipped('FRESH');
-  if (isCorporateWbsSyncBackedOff(startedAt)) return skipped('BACKOFF');
 
-  await probeDurableWarmth(readDurableSyncState, logger);
-
-  const canRevalidateInBackground = getCorporateWbsSyncTtlMs() > 0 && (lastSuccessAt != null || durableWarmth);
-  if (inFlight) return canRevalidateInBackground ? skipped('REVALIDATING') : inFlight;
-
-  const job = (async () => {
-    try {
-      const result = await run();
-      // Kaynak erişilemediğinde pencere ilerletilmez: bir sonraki istek yeniden
-      // dener, ancak deneme sıklığı üstel beklemeyle sınırlanır.
-      if (result?.synchronized) {
-        lastSuccessAt = now();
-        lastFailureAt = null;
-        failureCount = 0;
-        durableWarmth = true;
-      } else {
+  const startJob = ({ probeBeforeRun = false } = {}) => {
+    const job = (async () => {
+      if (probeBeforeRun) await probeDurableWarmth(readDurableSyncState, logger);
+      try {
+        const result = await run();
+        // Kaynak erişilemediğinde pencere ilerletilmez: bir sonraki istek yeniden
+        // dener, ancak deneme sıklığı üstel beklemeyle sınırlanır.
+        if (result?.synchronized) {
+          lastSuccessAt = now();
+          lastFailureAt = null;
+          failureCount = 0;
+          durableWarmth = true;
+        } else {
+          lastFailureAt = now();
+          failureCount += 1;
+        }
+        return result;
+      } catch (cause) {
         lastFailureAt = now();
         failureCount += 1;
+        throw cause;
+      } finally {
+        inFlight = null;
       }
-      return result;
-    } catch (cause) {
-      lastFailureAt = now();
-      failureCount += 1;
-      throw cause;
-    } finally {
-      inFlight = null;
-    }
-  })();
-  inFlight = job;
+    })();
+    inFlight = job;
+    return job;
+  };
+
+  // Manuel yenileme eldeki yetkili snapshot'ı öne alır. Süreç soğuk olsa bile
+  // depo sıcaklığı sorgusu bu isteğin dönüş yolunda BEKLENMEZ; sorgu ve katalog
+  // turu tek arka plan işinin içinde çalışır.
+  if (!waitForColdStart) {
+    if (isCorporateWbsSyncBackedOff(startedAt)) return skipped('BACKOFF');
+    if (inFlight) return skipped('REVALIDATING');
+    const job = startJob({ probeBeforeRun: true });
+    job.catch((cause) => logger?.warn?.('Kurumsal katalog arka plan tazelemesi tamamlanamadı.', cause));
+    return skipped('REVALIDATING');
+  }
+
+  await probeDurableWarmth(readDurableSyncState, logger);
+  const requiresBlockingColdStart = !durableWarmth;
+  // Sıcak depoda kesinti beklemesi korunur. Boş depodaki ilk yük ise önceki
+  // başarısız manuel turun beklemesine takılmaz; yeni bir eşitlemeyi bekler.
+  if (isCorporateWbsSyncBackedOff(startedAt) && !requiresBlockingColdStart) {
+    return skipped('BACKOFF');
+  }
+
+  const canRevalidateInBackground = getCorporateWbsSyncTtlMs() > 0
+    && (lastSuccessAt != null || durableWarmth);
+  if (inFlight) return canRevalidateInBackground ? skipped('REVALIDATING') : inFlight;
+
+  const job = startJob();
 
   if (!canRevalidateInBackground) return job;
 

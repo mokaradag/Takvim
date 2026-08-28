@@ -11,6 +11,8 @@ import {
 } from '../src/features/task-detail/taskAssigneeDisplay.js';
 import { resolveTaskMutationAccess } from '../src/state/projectWritePolicy.js';
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
+import { resolveAvatarEntries } from '../src/components/avatarIdentity.js';
+import { personPhotoUrl } from '../src/lib/userPhoto.js';
 
 const PROJECT_ID = '71111111-1111-4111-8111-111111111111';
 const WBS_ID = '72222222-2222-4222-8222-222222222222';
@@ -18,6 +20,7 @@ const TASK_ID = '73333333-3333-4333-8333-333333333333';
 const OWNER = 920001;
 const CURRENT_ASSIGNEE = 920002;
 const CO_ASSIGNEE = 920003;
+const PHOTO_BASE = 'https://fotograf.test.internal/kurumsal/personel';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 
@@ -63,12 +66,25 @@ test('göreve atanmış kullanıcı tüm eş sorumlu adlarını görev kapsamın
     assert.deepEqual(task.assigneeIds, [String(CURRENT_ASSIGNEE)]);
     assert.deepEqual(task.assigneeDisplayNames, ['Ayşe Görevli', 'Mehmet Görevli']);
     assert.deepEqual(task.sorumlu, ['Ayşe Görevli', 'Mehmet Görevli']);
+    assert.deepEqual(task.assigneeAvatarIdentities, [
+      { name: 'Ayşe Görevli', employeeNo: String(CURRENT_ASSIGNEE) },
+      { name: 'Mehmet Görevli', employeeNo: String(CO_ASSIGNEE) }
+    ]);
     assert.equal(stack.state.people.some((person) => person.id === String(CO_ASSIGNEE)), false);
+
+    const avatarEntries = resolveAvatarEntries({ people: task.assigneeAvatarIdentities });
+    assert.equal(
+      personPhotoUrl(avatarEntries[1].person, PHOTO_BASE),
+      `${PHOTO_BASE}/${CO_ASSIGNEE}.jpg`
+    );
 
     const records = resolveTaskAssigneeDisplayRecords(task, stack.state.people, true);
     assert.deepEqual(records.map((record) => record.name), ['Ayşe Görevli', 'Mehmet Görevli']);
     assert.equal(records[1].id, null);
-    assert.equal(records[1].person, null);
+    assert.deepEqual(records[1].person, {
+      name: 'Mehmet Görevli',
+      employeeNo: String(CO_ASSIGNEE)
+    });
 
     const contentAccess = resolveTaskMutationAccess(stack.state, task.id, { task: 'Güncel başlık' });
     assert.equal(contentAccess.ok, true);
@@ -133,14 +149,26 @@ test('kırpılmış görev kapsamı adı rehber kişisini ikinci kez göstermez'
   assert.equal(records[0].id, '1001');
 });
 
-test('görev güncelleme yanıtı görev kapsamlı eş sorumlu adlarını korur', async () => {
+test('görev güncelleme yanıtı gizli Sicili maskeleyip önceki görev kapsamlı fotoğrafı korur', async () => {
   const stack = await createActualStack(seed(), { sicil: CURRENT_ASSIGNEE, corporateWbsSource: false });
   try {
     const task = stack.state.tasks[0];
     const result = await stack.persistence.updateTask(task.id, { task: 'Güncellenen görev' });
     assert.equal(result.ok, true);
     assert.deepEqual(result.value.taskUpserts[0].assigneeDisplayNames, ['Ayşe Görevli', 'Mehmet Görevli']);
+    assert.deepEqual(result.value.taskUpserts[0].assigneeAvatarIdentities, [
+      { name: 'Ayşe Görevli', employeeNo: String(CURRENT_ASSIGNEE) }
+    ]);
+    assert.equal(JSON.stringify(result.value.taskUpserts[0]).includes(String(CO_ASSIGNEE)), false);
     assert.deepEqual(stack.state.tasks[0].assigneeDisplayNames, ['Ayşe Görevli', 'Mehmet Görevli']);
+    assert.deepEqual(stack.state.tasks[0].assigneeAvatarIdentities, [
+      { name: 'Ayşe Görevli', employeeNo: String(CURRENT_ASSIGNEE) },
+      { name: 'Mehmet Görevli', employeeNo: String(CO_ASSIGNEE) }
+    ]);
+    assert.equal(
+      personPhotoUrl(stack.state.tasks[0].assigneeAvatarIdentities[1], PHOTO_BASE),
+      `${PHOTO_BASE}/${CO_ASSIGNEE}.jpg`
+    );
     assert.deepEqual(stack.db.taskAssignees.map((entry) => entry.Sicil).sort(), [CURRENT_ASSIGNEE, CO_ASSIGNEE]);
   } finally {
     await stack.dispose();
@@ -175,9 +203,14 @@ test('rehber adı bulunmayan kapsam dışı eş sorumlunun Sicili ad yerine aç�
 
 test('genel personel sorgusu eş sorumluyu görev görünürlüğünden rehbere taşımaz', () => {
   const repositorySource = read('src/server/repository/sqlAppRepository.js');
+  const projectionSource = read('src/server/repository/projectedSqlAppRepository.js');
   assert.match(repositorySource, /OR visibleAssignee\.Sicil = @sicil/);
   assert.match(repositorySource, /es\.EmployeeSicil = visibleAssignee\.Sicil/);
   assert.doesNotMatch(repositorySource, /visibilityGate\.TaskId = visibleTask\.TaskId/);
+  assert.match(repositorySource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
+  assert.match(repositorySource, /WHEN auth\.IdentityVisible = 1\s+AND NULLIF\(LTRIM\(RTRIM\(pd\.DisplayName\)\), ''\) IS NOT NULL\s+THEN ta\.Sicil/);
+  assert.match(projectionSource, /END AS AvatarEmployeeNo/);
+  assert.match(projectionSource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
 });
 
 test('SQL test doubles do not project assignees from inactive projects', () => {

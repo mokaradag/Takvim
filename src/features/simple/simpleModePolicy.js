@@ -6,17 +6,25 @@ export { canWriteProject };
  * Basit Modda görev tanımlanabilecek projeler.
  *
  * Liste artık hazır gelir (bkz. state/projectWritePolicy · taskAssignableProjects):
- * sıradan kullanıcıda "corporateprojectaccess" ile tam yetki alınan görünür
- * projeler, yöneticide ek olarak görev atama kapsamındaki CN43N projeleri.
- * Kapsam kaydının `accessLevel` değeri `ASSIGN`'dır ve tam yazma yetkisi
- * anlamına GELMEZ; bu yüzden burada `canWriteProject` süzgeci uygulanmaz.
+ * sıradan kullanıcıda FULL ve sorumluluktan doğan dar oluşturma projeleri,
+ * yöneticide ek olarak görev atama kapsamındaki CN43N projeleri. Liste zaten
+ * merkezi politikadan geçtiği için burada ikinci bir yetki modeli kurulmaz.
  */
-export function writableSimpleModeProjects(projects = []) {
-  return (projects || []).filter((project) => canWriteProject(project) || project?.accessLevel === 'ASSIGN');
+export function writableSimpleModeProjects(projects = [], { alreadyAuthorized = false } = {}) {
+  // Ürün akışı `alreadyAuthorized` ile merkezi `taskAssignableProjects`
+  // sonucunu aynen kullanır; ikinci bir accessLevel süzgeci ASSIGNEE_CREATE
+  // projelerini sessizce düşürürdü. Yardımcı tek başına çağrıldığında ise
+  // güvenli varsayılanını korur ve yalnızca FULL/demo projeleri geçirir.
+  return (projects || []).filter((project) => project && (alreadyAuthorized || canWriteProject(project)));
 }
 
-export function resolveSimpleProjectChoice(currentChoice, projects = [], canCreateProjects = false) {
-  const writable = writableSimpleModeProjects(projects);
+export function resolveSimpleProjectChoice(
+  currentChoice,
+  projects = [],
+  canCreateProjects = false,
+  { alreadyAuthorized = false } = {}
+) {
+  const writable = writableSimpleModeProjects(projects, { alreadyAuthorized });
   if (writable.some((project) => project.id === currentChoice)) return currentChoice;
   if (currentChoice === '__manual_project__' && canCreateProjects) return currentChoice;
   return writable[0]?.id || (canCreateProjects ? '__manual_project__' : '');
@@ -38,4 +46,30 @@ export function withManualProjectOption(options = [], canCreateProjects = false,
 export function findProjectRootWbsId(wbs = [], projectId = null) {
   if (!projectId) return null;
   return (wbs || []).find((node) => node.projectId === projectId && node.parentId == null)?.id || null;
+}
+
+export function simpleAssignmentScope({
+  selectedProject = null,
+  creationScope = null,
+  currentUserId = null,
+  assignmentScopeSicils = []
+} = {}) {
+  if (!selectedProject || creationScope === 'FULL') return null;
+  if (creationScope === 'ASSIGNEE_CREATE') {
+    return currentUserId == null ? new Set() : new Set([String(currentUserId)]);
+  }
+  return new Set((assignmentScopeSicils || []).map(String));
+}
+
+export function simpleTaskRequiredFieldsError({
+  task = '',
+  dueDate = '',
+  assigneeIds = [],
+  creationScope = null
+} = {}) {
+  const assigneeCreateOnly = creationScope === 'ASSIGNEE_CREATE';
+  if (String(task).trim() && (assigneeCreateOnly || dueDate) && assigneeIds.length > 0) return null;
+  return assigneeCreateOnly
+    ? 'Görev ve sorumlu alanlarını tamamlayın.'
+    : 'Görev, sorumlu ve termin tarihi alanlarını tamamlayın.';
 }

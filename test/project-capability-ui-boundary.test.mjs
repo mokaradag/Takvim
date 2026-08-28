@@ -96,6 +96,12 @@ test('Simple Mode restores a valid choice after asynchronous project loading', (
   assert.equal(resolveSimpleProjectChoice('', [], true), '__manual_project__');
   assert.equal(resolveSimpleProjectChoice('__manual_project__', projects, true), '__manual_project__');
   assert.equal(resolveSimpleProjectChoice('', [], false), '');
+  const centrallyAuthorizedPartial = { id: 'partial', accessLevel: 'PARTIAL' };
+  assert.equal(
+    resolveSimpleProjectChoice('', [centrallyAuthorizedPartial], false, { alreadyAuthorized: true }),
+    'partial',
+    'merkezi yetkiden geçen dar proje ikinci kez accessLevel süzgecine girmemelidir'
+  );
 });
 
 test('Simple Mode task creation resolves the project root WBS', () => {

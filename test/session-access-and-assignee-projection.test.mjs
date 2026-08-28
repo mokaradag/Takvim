@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { applyTaskAssigneeProjection } from '../src/server/repository/taskAssigneeProjection.js';
+import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -29,16 +30,21 @@ test('visible task projection restores every co-assignee without duplicates', ()
 
   assert.deepEqual(projected.tasks[0].assigneeIds, ['10001', '10002']);
   assert.deepEqual(projected.tasks[0].assigneeDisplayNames, ['Ayşe Kaya', 'Mehmet Demir']);
+  assert.deepEqual(projected.tasks[0].assigneeAvatarIdentities, [
+    { name: 'Ayşe Kaya', employeeNo: '10001' },
+    { name: 'Mehmet Demir', employeeNo: '10002' }
+  ]);
   assert.deepEqual(projected.tasks[1].assigneeIds, []);
   assert.deepEqual(projected.tasks[1].assigneeDisplayNames, []);
+  assert.deepEqual(projected.tasks[1].assigneeAvatarIdentities, []);
   assert.notEqual(projected.tasks[0], snapshot.tasks[0]);
 });
 
-test('snapshot API completes assignees only for already-authorized visible task IDs', () => {
+test('snapshot API completes assignees only for already-authorized visible task IDs', async () => {
   const repositorySource = read('src/server/repository/projectedSqlAppRepository.js');
   const routeSource = read('src/app/api/mergen-rota/snapshot/route.js');
 
-  assert.match(repositorySource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(\);/);
+  assert.match(repositorySource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(transaction\);/);
   assert.match(repositorySource, /taskIds = \[\.\.\.new Set\(\(snapshot\.tasks \|\| \[\]\)/);
   assert.match(repositorySource, /request\.input\('taskIds', sql\.NVarChar\(sql\.MAX\), taskIds\.join\(','\)\);/);
   assert.match(repositorySource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
@@ -49,7 +55,25 @@ test('snapshot API completes assignees only for already-authorized visible task 
   assert.match(repositorySource, /LEFT JOIN dbo\.MR_V_PeopleDirectory pd ON pd\.Sicil = ta\.Sicil/);
   assert.match(repositorySource, /return \{ snapshot: applyTaskAssigneeProjection\(snapshot, assigneeRows\), auth \};/);
   assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
-  assert.match(routeSource, /await repository\.loadSnapshotWithSession\(\);/);
+  assert.match(routeSource, /loadSnapshotForRequest\(request, repository\)/);
+
+  registerServerOnlyShim();
+  const { loadSnapshotForRequest } = await import('../src/app/api/mergen-rota/snapshot/route.js');
+  const modes = [];
+  const fakeRepository = {
+    async loadSnapshotWithSession(options) {
+      modes.push(options.catalogSync);
+      return { tasks: [] };
+    }
+  };
+  await loadSnapshotForRequest(null, fakeRepository);
+  await loadSnapshotForRequest(new Request('http://localhost/snapshot', {
+    headers: { 'x-mergen-rota-refresh-mode': 'initial' }
+  }), fakeRepository);
+  await loadSnapshotForRequest(new Request('http://localhost/snapshot', {
+    headers: { 'x-mergen-rota-refresh-mode': 'manual' }
+  }), fakeRepository);
+  assert.deepEqual(modes, ['blocking-before', 'blocking-before', 'background-after']);
 });
 
 test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reason', () => {

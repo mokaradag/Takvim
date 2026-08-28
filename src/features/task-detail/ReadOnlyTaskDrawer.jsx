@@ -57,7 +57,7 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
             <div className="col" style={{ gap: 8 }}>
               <div className="label">Sorumlular</div>
               {assigneeNames.length
-                ? <AvatarStack names={assigneeNames} personIds={task.assigneeIds} max={8} size="sm" />
+                ? <AvatarStack names={assigneeNames} personIds={task.assigneeIds} people={task.assigneeAvatarIdentities} max={8} size="sm" />
                 : <span className="muted">Sorumlu tanımlanmamış.</span>}
             </div>
 

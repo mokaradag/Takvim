@@ -7,6 +7,7 @@ import {
   searchSimpleAssignees,
   simpleAssignmentCandidates
 } from '../src/features/simple/simpleAssigneeSearch.js';
+import { simpleAssignmentScope } from '../src/features/simple/simpleModePolicy.js';
 
 const people = Array.from({ length: 12 }, (_, index) => ({
   id: `person-${index}`,
@@ -40,11 +41,21 @@ test('yönetici atama kapsamındaki projede yalnızca izinli sorumlular adaydır
   assert.deepEqual(restricted.map((person) => person.id), ['person-2', 'person-7']);
   assert.deepEqual(simpleAssignmentCandidates(people, []), []);
   assert.equal(simpleAssignmentCandidates(people, null).length, people.length);
+  const assigneeCreateScope = simpleAssignmentScope({
+    selectedProject: { id: 'restricted' },
+    creationScope: 'ASSIGNEE_CREATE',
+    currentUserId: 'SICIL-3',
+    assignmentScopeSicils: ['SICIL-2', 'SICIL-7']
+  });
+  assert.deepEqual([...assigneeCreateScope], ['SICIL-3']);
+  assert.deepEqual(
+    simpleAssignmentCandidates(people, assigneeCreateScope).map((person) => person.id),
+    ['person-3']
+  );
 
   const panel = read('src/features/simple/SimpleModePanel.jsx');
   const simpleDrawer = read('src/features/task-detail/SimpleTaskDrawer.jsx');
   const advancedDrawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(panel, /if \(!selectedProject \|\| canWriteProject\(selectedProject\)\) return null/);
   assert.match(panel, /simpleAssignmentCandidates\(sortedPeople, assignmentScopeOnly\)/);
   assert.match(panel, /current\.filter\(\(id\) => candidatePersonIds\.has\(String\(id\)\)\)/);
   assert.match(simpleDrawer, /if \(!project \|\| canWriteProject\(project\)\) return null;\s*return new Set\(assignmentScopeSicils\.map\(String\)\)/);

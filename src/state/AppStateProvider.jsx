@@ -15,17 +15,17 @@ import { setProjectColorOverrides } from '../lib/colors';
 import { resolveProjectCalendar, resolveTaskCalendar } from '../scheduling/calendars';
 import { selectTaskStats } from '../scheduling/metrics';
 import { MAX_RECURRENCE_OCCURRENCES, normalizeRecurrenceRule, planRecurringOccurrences } from '../scheduling/recurrence';
-import { appStateReducer, createLoadingState, createNewTask, normalizeStateTask, withCompletionStamp } from './appState';
+import { appStateReducer, createLoadingState, normalizeStateTask, withCompletionStamp } from './appState';
 import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
 import {
   projectWriteFailure,
-  resolveTaskCreationProject,
   resolveTaskMutationAccess,
   resolveTaskWbsMoveAccess,
   resolveWbsMutationAccess
 } from './projectWritePolicy.js';
 import { reconcileProjectMutationAccess } from './projectMutationReconciliation.js';
+import { executeTaskCreation } from './taskCreationPolicy.js';
 import {
   createDataRefreshRequestGuard,
   resolvePersistenceDataRefreshSafety
@@ -35,7 +35,7 @@ import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/work
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
 
 const AppStateContext = createContext(null);
-
+const DataLifecycleContext = createContext(null);
 function firstFailedResult(results = []) {
   return results.find((result) => result && !result.ok) || null;
 }
@@ -80,7 +80,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
 
   const reloadData = useCallback(async ({
     discardFailedTaskUpdates = false,
-    preserveFailedTaskUpdates = false
+    preserveFailedTaskUpdates = false,
+    refreshMode = 'manual'
   } = {}) => {
     const flushResult = await persistence.flush();
     if (!flushResult.ok) return flushResult;
@@ -95,7 +96,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     return persistence.runSerialized(async () => {
       if (!request.isCurrent()) return request.settle();
 
-      const result = await loadApplicationData(repository);
+      const result = await loadApplicationData(repository, { refreshMode });
       if (!request.isCurrent()) return request.settle(result);
 
       if (result.ok) {
@@ -130,7 +131,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   useEffect(() => {
     if (initialLoadStartedRef.current) return;
     initialLoadStartedRef.current = true;
-    reloadData();
+    reloadData({ refreshMode: 'initial' });
   }, [reloadData]);
 
   useEffect(() => {
@@ -252,38 +253,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
 
   const addTask = useCallback(async (input = null) => {
     const current = stateRef.current;
-    const project = resolveTaskCreationProject(current, input?.projectId);
-    if (!project) {
-      return projectWriteFailure('task/create', {
-        code: 'PROJECT_WRITE_FORBIDDEN',
-        field: 'projectId',
-        message: 'Görev eklemek için tam yazma yetkiniz bulunan bir proje gerekir.'
-      });
-    }
-
     const id = createClientEntityId('task');
-    const scopedState = {
-      ...current,
-      workspaceMode: WORKSPACE_MODE_PROJECT,
-      selectedProjectId: project.id
-    };
-    const taskInput = input || {};
-    const result = await persistence.mutate('task/create', () => {
-      const baseTask = createNewTask(scopedState, undefined, id, project);
-      return {
-        type: 'task/add',
-        task: {
-          ...baseTask,
-          ...taskInput,
-          id,
-          projectId: project.id,
-          projectCode: taskInput.projectCode ?? project.code ?? '',
-          proje: taskInput.proje ?? project.name ?? '',
-          color: taskInput.color ?? project.color ?? baseTask.color
-        }
-      };
+    const { result, created } = await executeTaskCreation({
+      state: current,
+      input,
+      id,
+      mutate: (operation, action) => persistence.mutate(operation, action)
     });
-    const created = result.ok ? result.value?.taskUpserts?.[0] || null : null;
     if (created) applyStateAction({ type: 'task/select', id: created.id });
     return result.ok ? { ...result, value: created } : result;
   }, [applyStateAction, persistence]);
@@ -564,7 +540,21 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     () => state.tasks.find((task) => task.id === state.selectedTaskId) || null,
     [state.tasks, state.selectedTaskId]
   );
-  const workspace = useMemo(() => selectWorkspaceContext(state), [state]);
+  const workspace = useMemo(() => selectWorkspaceContext({
+    workspaceMode: state.workspaceMode,
+    selectedProjectId: state.selectedProjectId,
+    projects: state.projects,
+    tasks: state.tasks,
+    wbs: state.wbs,
+    people: state.people
+  }), [
+    state.workspaceMode,
+    state.selectedProjectId,
+    state.projects,
+    state.tasks,
+    state.wbs,
+    state.people
+  ]);
   const taskStats = useMemo(() => selectTaskStats(workspace.tasks), [workspace.tasks]);
   // Karşılama ekranı portföyün TAMAMINI özetlediğini söyler; çalışma alanı
   // ölçümleri son seçilen projeye daralmış olabilir, ikisi ayrı tutulur.
@@ -626,16 +616,107 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     clearPersistenceError,
     reloadData
   ]);
-  const value = useMemo(
-    () => ({ ...state, selectedTask, taskStats, portfolioTaskStats, schedule, workspace, actions }),
-    [state, selectedTask, taskStats, portfolioTaskStats, schedule, workspace, actions]
-  );
+  // Yenileme durumunu büyük uygulama bağlamından ayırır. `data/load-start`
+  // yalnızca üst çubuktaki yaşam döngüsü tüketicilerini günceller; binlerce
+  // görev satırı ve portföy görünümleri aynı iş verisiyle yeniden render olmaz.
+  const value = useMemo(() => {
+    const applicationState = {
+      calendars: state.calendars,
+      projects: state.projects,
+      assignableProjects: state.assignableProjects,
+      assignmentScopeSicils: state.assignmentScopeSicils,
+      people: state.people,
+      wbs: state.wbs,
+      tasks: state.tasks,
+      baselines: state.baselines,
+      taskBaselineSnapshots: state.taskBaselineSnapshots,
+      session: state.session,
+      currentUser: state.currentUser,
+      isSystemAdmin: state.isSystemAdmin,
+      isExecutive: state.isExecutive,
+      canCreateProjects: state.canCreateProjects,
+      projectAccess: state.projectAccess,
+      selectedTaskId: state.selectedTaskId,
+      workspaceMode: state.workspaceMode,
+      selectedProjectId: state.selectedProjectId,
+      wbsActionError: state.wbsActionError,
+      pendingMutationCount: state.pendingMutationCount,
+      saveError: state.saveError,
+      lastSavedAt: state.lastSavedAt
+    };
+    return { ...applicationState, selectedTask, taskStats, portfolioTaskStats, schedule, workspace, actions };
+  }, [
+    state.calendars,
+    state.projects,
+    state.assignableProjects,
+    state.assignmentScopeSicils,
+    state.people,
+    state.wbs,
+    state.tasks,
+    state.baselines,
+    state.taskBaselineSnapshots,
+    state.session,
+    state.currentUser,
+    state.isSystemAdmin,
+    state.isExecutive,
+    state.canCreateProjects,
+    state.projectAccess,
+    state.selectedTaskId,
+    state.workspaceMode,
+    state.selectedProjectId,
+    state.wbsActionError,
+    state.pendingMutationCount,
+    state.saveError,
+    state.lastSavedAt,
+    selectedTask,
+    taskStats,
+    portfolioTaskStats,
+    schedule,
+    workspace,
+    actions
+  ]);
+  const dataLifecycle = useMemo(() => ({
+    dataStatus: state.dataStatus,
+    hasLoadedOnce: Boolean(state.hasLoadedOnce),
+    loadError: state.loadError,
+    pendingMutationCount: state.pendingMutationCount,
+    isSaving: state.pendingMutationCount > 0,
+    saveError: state.saveError,
+    lastSavedAt: state.lastSavedAt,
+    lastRefreshedAt: state.lastRefreshedAt,
+    reloadData,
+    retryFailedChanges,
+    hasPendingChanges,
+    clearPersistenceError
+  }), [
+    state.dataStatus,
+    state.hasLoadedOnce,
+    state.loadError,
+    state.pendingMutationCount,
+    state.saveError,
+    state.lastSavedAt,
+    state.lastRefreshedAt,
+    reloadData,
+    retryFailedChanges,
+    hasPendingChanges,
+    clearPersistenceError
+  ]);
 
-  return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
+  return (
+    <AppStateContext.Provider value={value}>
+      <DataLifecycleContext.Provider value={dataLifecycle}>{children}</DataLifecycleContext.Provider>
+    </AppStateContext.Provider>
+  );
 }
 
 export function useAppState() {
   const value = useContext(AppStateContext);
   if (!value) throw new Error('useAppState must be used inside AppStateProvider.');
+  return value;
+}
+
+export function useDataLifecycleState() {
+  const value = useContext(DataLifecycleContext);
+  if (!value) throw new Error('useDataLifecycleState must be used inside AppStateProvider.');
   return value;
 }

@@ -1,5 +1,6 @@
 import { normalizePriorityId } from '../constants/index.js';
-import { selectDefaultProjectWbs } from '../selectors/wbsSelectors.js';
+
+const TASK_REFERENCE_INDEX = Symbol('taskReferenceIndex');
 
 function indexByName(items) {
   return new Map(items.filter((item) => item?.name).map((item) => [item.name, item]));
@@ -38,9 +39,7 @@ export function normalizePersonReferences(person = {}) {
   };
 }
 
-export function normalizeProjectReferences(project = {}, people = []) {
-  const normalizedPeople = people.map(normalizePersonReferences);
-  const peopleByName = indexByUniqueName(normalizedPeople);
+function normalizeProjectWithPeopleIndex(project = {}, peopleByName = new Map()) {
   const code = String(project.code || project.ProjeKodu || '').trim();
   const name = String(project.name || project.ProjeAdi || '').trim();
   return {
@@ -52,6 +51,55 @@ export function normalizeProjectReferences(project = {}, people = []) {
     leadId: project.leadId || peopleByName.get(project.lead)?.id || null,
     dataDate: project.dataDate || null
   };
+}
+
+export function normalizeProjectReferences(project = {}, people = []) {
+  const normalizedPeople = people.map(normalizePersonReferences);
+  return normalizeProjectWithPeopleIndex(project, indexByUniqueName(normalizedPeople));
+}
+
+/**
+ * Aynı snapshot bağlamı binlerce görev için kullanılır. Proje/kişi/WBS
+ * dizinlerini görev başına yeniden kurmak görev × katalog maliyeti üretir;
+ * Hazırlanmış bağlam görevler arasında tek bir güvenli, salt-okunur dizin
+ * paylaşır. Ham bağlam kullanan tekil çağrıların önceki semantiği değişmez.
+ */
+function buildTaskReferenceIndex(context) {
+  const source = context && typeof context === 'object' ? context : {};
+  const projects = source.projects || [];
+  const people = source.people || [];
+  const wbs = source.wbs || [];
+  const normalizedPeople = people.map(normalizePersonReferences);
+  const peopleByName = indexByUniqueName(normalizedPeople);
+  const normalizedProjects = projects.map((project) => normalizeProjectWithPeopleIndex(project, peopleByName));
+  const rootsByProjectId = new Map();
+  for (const node of wbs) {
+    if (node?.parentId != null) continue;
+    const roots = rootsByProjectId.get(node.projectId) || [];
+    roots.push(node);
+    rootsByProjectId.set(node.projectId, roots);
+  }
+
+  return {
+    projectsById: new Map(normalizedProjects.map((item) => [item.id, item])),
+    projectsByName: indexByName(normalizedProjects),
+    projectsByCode: new Map(normalizedProjects.filter((item) => item.code).map((item) => [item.code, item])),
+    peopleByName,
+    peopleById: new Map(normalizedPeople.map((item) => [item.id, item])),
+    wbsById: new Map(wbs.map((node) => [node.id, node])),
+    defaultWbsByProjectId: new Map([...rootsByProjectId]
+      .filter(([, roots]) => roots.length === 1)
+      .map(([projectId, roots]) => [projectId, roots[0]]))
+  };
+}
+
+export function prepareTaskReferenceContext(context = {}) {
+  const source = context && typeof context === 'object' ? context : {};
+  return { ...source, [TASK_REFERENCE_INDEX]: buildTaskReferenceIndex(source) };
+}
+
+function taskReferenceIndex(context) {
+  return context?.[TASK_REFERENCE_INDEX] || buildTaskReferenceIndex(context);
 }
 
 export function normalizeTaskScheduleFields(task) {
@@ -75,19 +123,20 @@ export function normalizeTaskScheduleFields(task) {
   };
 }
 
-export function normalizeTaskReferences(task, { projects = [], people = [], wbs = [] }) {
-  const normalizedProjects = projects.map((project) => normalizeProjectReferences(project, people));
-  const normalizedPeople = people.map(normalizePersonReferences);
-  const projectsById = new Map(normalizedProjects.map((item) => [item.id, item]));
-  const projectsByName = indexByName(normalizedProjects);
-  const projectsByCode = new Map(normalizedProjects.filter((item) => item.code).map((item) => [item.code, item]));
+export function normalizeTaskReferences(task, context = {}) {
+  const {
+    projectsById,
+    projectsByName,
+    projectsByCode,
+    peopleByName,
+    peopleById,
+    wbsById,
+    defaultWbsByProjectId
+  } = taskReferenceIndex(context);
   const project = (task.projectId ? projectsById.get(task.projectId) : null)
     || (task.projectCode ? projectsByCode.get(task.projectCode) : null)
     || projectsByName.get(task.proje)
     || null;
-  const peopleByName = indexByUniqueName(normalizedPeople);
-  const peopleById = new Map(normalizedPeople.map((item) => [item.id, item]));
-  const wbsById = new Map(wbs.map((node) => [node.id, node]));
 
   const explicitAssigneeNames = Array.isArray(task.sorumlu) ? task.sorumlu : [];
   const taskScopedAssigneeNames = (Array.isArray(task.assigneeDisplayNames) ? task.assigneeDisplayNames : [])
@@ -108,7 +157,7 @@ export function normalizeTaskReferences(task, { projects = [], people = [], wbs 
 
   const requestedWbs = task.wbsId ? wbsById.get(task.wbsId) : null;
   const validRequestedWbs = requestedWbs && requestedWbs.projectId === project?.id ? requestedWbs : null;
-  const defaultWbs = project ? selectDefaultProjectWbs(wbs, project.id) : null;
+  const defaultWbs = project ? defaultWbsByProjectId.get(project.id) || null : null;
   const { assigneeIdsCanonical: _assigneeIdsCanonical, ...canonicalTask } = task;
 
   return {

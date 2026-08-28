@@ -227,10 +227,10 @@ test('existing task updates authorize both stored source and requested destinati
   // erken çalıştığında yetkisiz bir kullanıcı, geçerli ve geçersiz sicillerin
   // farklı hata üretmesinden kurumsal rehberi okuyabiliyordu.
   const sourceScopeIndex = body.indexOf('await assertTaskProjectScope(executor, actor, beforeProjectId)');
-  const destinationScopeIndex = body.indexOf('await assertTaskProjectScope(executor, actor, projectId)');
+  const destinationScopeIndex = body.indexOf('await assertTaskProjectScope(executor, actor, projectId,');
   const peopleIndex = body.indexOf('await ensurePeople(executor, task.assigneeIds');
   const sourceAssigneeIndex = body.indexOf('await assertAssigneeScope(executor, actor, beforeProjectId');
-  const destinationAssigneeIndex = body.indexOf('await assertAssigneeScope(executor, actor, projectId, assigneeSicils)');
+  const destinationAssigneeIndex = body.indexOf('await assertAssigneeScope(executor, actor, projectId, assigneeSicils, destinationProjectScope)');
   assert.ok(loadIndex >= 0 && loadIndex < sourceScopeIndex);
   assert.ok(sourceScopeIndex < destinationScopeIndex);
   assert.ok(destinationScopeIndex < peopleIndex, 'proje yetkisi rehber yoklamasından önce denetlenmelidir');
@@ -243,15 +243,27 @@ test('görev atama kapsamı yalnızca etkin kurumsal projeleri ve kendi personel
   const body = source.slice(source.indexOf('async function assertTaskProjectScope'), source.indexOf('async function projectRootWbsId'));
   // FULL erişim ve sistem yöneticisi kısa devre yapar; yönetici yine de ETKİN
   // OLMAYAN bir projeye yazamaz (etkin FULL yetkileri de etkin projelerden kurulur).
-  assert.match(body, /if \(actor\.isSystemAdmin\) \{\s+await assertActiveProject\(executor, projectId\);\s+return;\s+\}/);
-  assert.match(body, /accessLevel === 'FULL'\) return;/);
+  assert.match(body, /if \(actor\.isSystemAdmin\) \{\s+await assertActiveProject\(executor, projectId\);\s+return TASK_PROJECT_SCOPES\.FULL;\s+\}/);
+  assert.match(body, /accessLevel === 'FULL'\) \{\s+await assertActiveProject\(executor, projectId\);\s+return TASK_PROJECT_SCOPES\.FULL;\s+\}/);
   // Kapsam yalnızca yöneticilere açıktır.
-  assert.match(body, /if \(!hasTaskAssignmentScope\(actor\) \|\| !actor\.isExecutive\)/);
+  assert.match(body, /if \(hasTaskAssignmentScope\(actor\) && actor\.isExecutive\)/);
   // Yalnızca ETKİN KURUMSAL proje.
   assert.match(body, /SourceType = 'CORPORATE' AND IsActive = 1/);
+  assert.match(body, /MR_Projects WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*SourceType = 'CORPORATE' AND IsActive = 1/);
   // Sorumluların tamamı yöneticinin kapsamında olmalı.
   assert.match(body, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @managerSicil/);
   assert.match(body, /görevin en az bir sorumlusu olmalıdır/);
+
+  const activeLock = source.slice(
+    source.indexOf('async function assertActiveProject'),
+    source.indexOf('const TASK_PROJECT_SCOPES')
+  );
+  assert.match(activeLock, /MR_Projects WITH \(UPDLOCK, HOLDLOCK\)/);
+  const assigneeCreateLock = source.slice(
+    source.indexOf('async function hasAuthoritativeAssigneeTaskCreateScope'),
+    source.indexOf('async function assertTaskProjectScope')
+  );
+  assert.match(assigneeCreateLock, /MR_Projects p WITH \(UPDLOCK, HOLDLOCK\)/);
 });
 
 test('cross-project task moves clear incoming and outgoing dependency rows before changing ProjectId', () => {

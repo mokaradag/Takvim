@@ -20,6 +20,7 @@ import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { canDeleteTask } from '../../state/projectWritePolicy.js';
 import { taskProgressValue, taskSortValue } from './taskDisplayValues.js';
+import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
 
 function projectLabel(project) {
   if (!project) return '';
@@ -154,6 +155,8 @@ export function TasksView() {
     });
     return out;
   }, [tasks, search, sort, colFilter]);
+  const paginationKey = `${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
+  const paged = useTaskTablePagination(filtered, paginationKey);
 
   const setSortFor = (key) => (dir) => setSort({ key, dir });
   const sortDirFor = (key) => sort.key === key ? sort.dir : null;
@@ -259,7 +262,7 @@ export function TasksView() {
               {filtered.length === 0 && (
                 <tr><td colSpan={12} className="empty">Eşleşen görev bulunamadı.</td></tr>
               )}
-              {filtered.map((t, idx) => {
+              {paged.rows.map((t, idx) => {
                 const today_ = today();
                 const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
                 const prio = resolvePriority(t.priority);
@@ -267,7 +270,7 @@ export function TasksView() {
                 const canDeleteCurrentTask = canDeleteTask(taskMutationState, t.id);
                 return (
                   <tr key={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
-                    <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{idx + 1}</td>
+                    <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{paged.start + idx + 1}</td>
                     <td>
                       <div className="row" style={{ gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: projectColorVar(t.proje) }} />
@@ -292,7 +295,7 @@ export function TasksView() {
                       </div>
                     </td>
                     <td><TaskKeyword task={t} /></td>
-                    <td><AvatarStack names={t.sorumlu || []} personIds={t.assigneeIds} max={3} size="sm" /></td>
+                    <td><AvatarStack names={t.sorumlu || []} personIds={t.assigneeIds} people={t.assigneeAvatarIdentities} max={3} size="sm" /></td>
                     <td><StatusPill task={t} /></td>
                     <td><span style={{ fontSize: 11.5, fontWeight: 600, color: prio.color }}>{prio.label}</span></td>
                     <td>
@@ -330,6 +333,7 @@ export function TasksView() {
           </table>
         </div>
       </div>
+      <TaskTablePagination page={paged.page} pageCount={paged.pageCount} setPage={paged.setPage} />
     </div>
   );
 }

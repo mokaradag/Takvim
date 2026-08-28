@@ -9,11 +9,16 @@ function rowId(value) {
 export function applyTaskAssigneeProjection(snapshot = {}, rows = []) {
   const assigneesByTask = new Map();
   const displayNamesByTask = new Map();
+  const avatarIdentitiesByTask = new Map();
   const seenAssignees = new Set();
+  const seenAvatarIdentities = new Set();
 
   for (const row of rows || []) {
     const taskId = rowId(row?.TaskId);
     const sicil = row?.Sicil == null ? '' : String(row.Sicil);
+    const avatarEmployeeNo = row?.AvatarEmployeeNo == null
+      ? sicil
+      : String(row.AvatarEmployeeNo);
     const displayName = row?.DisplayName == null ? '' : String(row.DisplayName).trim();
     if (!taskId) continue;
     if (sicil) {
@@ -28,6 +33,17 @@ export function applyTaskAssigneeProjection(snapshot = {}, rows = []) {
       if (!displayNamesByTask.has(taskId)) displayNamesByTask.set(taskId, []);
       displayNamesByTask.get(taskId).push(displayName);
     }
+    if (displayName && avatarEmployeeNo) {
+      const avatarKey = `${taskId}:${avatarEmployeeNo}`;
+      if (!seenAvatarIdentities.has(avatarKey)) {
+        seenAvatarIdentities.add(avatarKey);
+        if (!avatarIdentitiesByTask.has(taskId)) avatarIdentitiesByTask.set(taskId, []);
+        avatarIdentitiesByTask.get(taskId).push({
+          name: displayName,
+          employeeNo: avatarEmployeeNo
+        });
+      }
+    }
   }
 
   return {
@@ -35,7 +51,10 @@ export function applyTaskAssigneeProjection(snapshot = {}, rows = []) {
     tasks: (snapshot.tasks || []).map((task) => ({
       ...task,
       assigneeIds: assigneesByTask.get(rowId(task.id)) || [],
-      assigneeDisplayNames: displayNamesByTask.get(rowId(task.id)) || []
+      assigneeDisplayNames: displayNamesByTask.get(rowId(task.id)) || [],
+      // Fotoğraf için gereken Sicil yalnızca bu yetkili görev satırında taşınır;
+      // genel `people` dizinine hiçbir eş sorumlu eklenmez.
+      assigneeAvatarIdentities: avatarIdentitiesByTask.get(rowId(task.id)) || []
     }))
   };
 }

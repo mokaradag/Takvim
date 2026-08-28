@@ -392,11 +392,12 @@ test('anlık görüntü yanıtındaki oturum kendi isteğiyle EŞLEŞİK döner'
 test('anlık görüntü ucu oturumu aynı istek içinde ve tek yetkilendirmeyle döndürür', () => {
   const route = read('src/app/api/mergen-rota/snapshot/route.js');
   const repository = read('src/server/repository/projectedSqlAppRepository.js');
-  assert.match(route, /const body = await repository\.loadSnapshotWithSession\(\);/);
+  assert.match(route, /const body = await loadSnapshotForRequest\(request, repository\);/);
+  assert.match(route, /repository\.loadSnapshotWithSession\(\{/);
   assert.match(route, /Response\.json\(body/);
   // Oturum anlık görüntünün YETKİ BAĞLAMINDAN kurulur: kişi/rol/proje erişimi
   // ve görev-atama kapsamı aynı istekte ikinci kez sorgulanmaz.
-  assert.match(repository, /const \{ snapshot, auth \} = await readProjectedSnapshot\(\);/);
+  assert.match(repository, /const \{ snapshot, auth \} = await readProjectedSnapshot\(options\);/);
   assert.match(repository, /session: await baseRepository\.sessionContextFrom\(auth\)/);
   assert.doesNotMatch(repository, /await baseRepository\.loadSessionContext\(\)/);
 });

@@ -232,8 +232,17 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   border-color: color-mix(in oklab, var(--status-overdue) 45%, var(--border));
   color: var(--status-overdue);
 }
-.data-refresh-control .is-spinning { animation: data-refresh-spin .8s linear infinite; }
+.data-refresh-control .is-spinning {
+  transform-box: view-box;
+  transform-origin: center;
+  animation: data-refresh-spin .8s linear infinite;
+  will-change: transform;
+}
 @keyframes data-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .data-refresh-control .is-spinning { animation: none; }
+}
+.reduce-motion .data-refresh-control .is-spinning { animation: none; }
 
 .export-menu { position: relative; }
 .export-menu > summary { list-style: none; }

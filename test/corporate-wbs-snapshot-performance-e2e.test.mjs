@@ -20,11 +20,12 @@ import sql from 'mssql';
 import { createActualStack, corporateSeed } from './helpers/actualStack.mjs';
 import {
   resetCorporateWbsSyncScheduleForTests,
+  runCorporateWbsSync,
   whenCorporateWbsSyncSettled
 } from '../src/server/repository/corporateWbsSyncSchedule.js';
 
 const MERGE_STATEMENT = 'OPENJSON(@payload)';
-const SOURCE_STATEMENT = 'WBS element';
+const SOURCE_STATEMENT = 'LTRIM(RTRIM([WBS element]))';
 
 function countStatements(stack, fragment) {
   return stack.db.statements.filter((entry) => entry.sql.includes(fragment)).length;
@@ -66,6 +67,54 @@ function cn43nRows(projectCode = 'P4417041', packageCount = 12, itemsPerPackage 
 
 const TOTAL_NODES = 12 * 9; // paket + alt kalemler
 const TOTAL_WITH_ROOT = TOTAL_NODES + 1;
+
+test('soğuk manuel yenileme geciken depo sıcaklığı sorgusunu beklemez', async () => {
+  resetCorporateWbsSyncScheduleForTests();
+  let releaseProbe;
+  const probe = new Promise((resolve) => { releaseProbe = resolve; });
+  let syncRuns = 0;
+
+  const result = await runCorporateWbsSync(async () => {
+    syncRuns += 1;
+    return { synchronized: true };
+  }, {
+    waitForColdStart: false,
+    readDurableSyncState: () => probe,
+    logger: { warn() {} }
+  });
+
+  assert.equal(result.reason, 'REVALIDATING');
+  assert.equal(syncRuns, 0, 'manuel yanıt depo sorgusu tamamlanmadan dönmelidir');
+  releaseProbe({ projectCount: 0 });
+  await whenCorporateWbsSyncSettled();
+  assert.equal(syncRuns, 1);
+});
+
+test('başarısız manuel turun backoff kaydı boş depodaki ilk yükü atlatmaz', async () => {
+  resetCorporateWbsSyncScheduleForTests();
+  let syncRuns = 0;
+  await runCorporateWbsSync(async () => {
+    syncRuns += 1;
+    return { synchronized: false };
+  }, {
+    waitForColdStart: false,
+    readDurableSyncState: async () => ({ projectCount: 0 }),
+    logger: { warn() {} }
+  });
+  await whenCorporateWbsSyncSettled();
+
+  const initial = await runCorporateWbsSync(async () => {
+    syncRuns += 1;
+    return { synchronized: true };
+  }, {
+    waitForColdStart: true,
+    readDurableSyncState: async () => ({ projectCount: 0 }),
+    logger: { warn() {} }
+  });
+
+  assert.equal(initial.synchronized, true);
+  assert.equal(syncRuns, 2, 'boş katalog ilk yükte yeniden eşitlenmelidir');
+});
 
 test('ilk yükleme kurumsal ağacı kurar, ikinci yükleme hiç birleştirme yapmaz', async () => {
   const stack = await createActualStack(corporateSeed({ corporateWbsRows: cn43nRows() }));
@@ -309,5 +358,47 @@ test('eşitleme başarısız olsa bile anlık görüntü yüklenir', async () =>
     assert.equal(stack.projectWbs(project.id).length, TOTAL_WITH_ROOT, 'önceden eşitlenmiş ağaç korunmalıdır');
   } finally {
     await stack.dispose();
+  }
+});
+
+test('manuel yenileme snapshot okumasını bitirdikten sonra katalog tazelemesini arka planda başlatır', async () => {
+  process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS = '0';
+  const stack = await createActualStack(corporateSeed({ corporateWbsRows: cn43nRows() }));
+  try {
+    resetStatements(stack);
+    const snapshot = await stack.repository.loadSnapshot({ refreshMode: 'manual' });
+    assert.ok(snapshot.projects.length > 0, 'mevcut yetkili snapshot hemen dönmelidir');
+    await whenCorporateWbsSyncSettled();
+
+    const serializable = stack.db.transactions.find((transaction) => (
+      transaction.isolationLevel === sql.ISOLATION_LEVEL.SERIALIZABLE
+    ));
+    const sourceIndex = stack.db.statements.findIndex((entry) => entry.sql.includes(SOURCE_STATEMENT));
+    assert.ok(serializable);
+    assert.ok(sourceIndex > serializable.statementIndex, 'manuel isteğin başlattığı CN43N okuması snapshot işleminden sonra olmalıdır');
+  } finally {
+    await stack.dispose();
+    delete process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS;
+  }
+});
+
+test('eşzamanlı manuel yenilemeler aynı pahalı katalog turunu çoğaltmaz', async () => {
+  process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS = '600000';
+  const stack = await createActualStack(corporateSeed({ corporateWbsRows: cn43nRows() }));
+  try {
+    // Süreç tazelik belleği kaybolmuş, fakat depoda kullanılabilir katalog var:
+    // ilk manuel istek arka plan turunu başlatır; eşzamanlı diğerleri paylaşır.
+    resetCorporateWbsSyncScheduleForTests();
+    resetStatements(stack);
+    await Promise.all([
+      stack.repository.loadSnapshot({ refreshMode: 'manual' }),
+      stack.repository.loadSnapshot({ refreshMode: 'manual' }),
+      stack.repository.loadSnapshot({ refreshMode: 'manual' })
+    ]);
+    await whenCorporateWbsSyncSettled();
+    assert.equal(countStatements(stack, SOURCE_STATEMENT), 1, 'tek uçuş kilidi tek CN43N turu çalıştırmalıdır');
+  } finally {
+    await stack.dispose();
+    delete process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS;
   }
 });

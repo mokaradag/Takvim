@@ -334,19 +334,17 @@ function defaultSessionContext(repository) {
 /**
  * Açılış verisi yüklenir.
  *
- * SIRA BİLİNÇLİDİR ve paralelleştirilemez: anlık görüntü isteği kurumsal
- * katalog eşitlemesini tetikler ve yeni kurumsal proje kayıtları oluşturabilir.
- * Oturum bağlamı (yetkiler, proje erişimi) bu eşitlemeden ÖNCE okunursa yeni
- * projeler erişim listesinde görünmez. Bu yüzden oturum her zaman anlık
- * görüntüden sonra okunur.
+ * İlk yükleme ile manuel yenileme niyeti depoya açıkça iletilir. İlk yükleme
+ * boş kurumsal katalog kurulumunu bekleyebilir; manuel yenileme mevcut yetkili
+ * snapshot'ı öne alır ve katalog tazelemesini bu okumanın arkasına bırakır.
  *
- * Gidiş-dönüş maliyeti sıralamayı bozmadan düşürülür: Gerçek Sistem deposu
+ * Gidiş-dönüş maliyeti düşürülür: Gerçek Sistem deposu
  * oturum bağlamını anlık görüntü yanıtının içinde taşır ve `loadSessionContext`
  * ikinci bir ağ isteği yapmadan bunu döndürür (bkz. createApiRepository).
  */
-export async function loadApplicationData(repository) {
+export async function loadApplicationData(repository, { refreshMode = 'initial' } = {}) {
   try {
-    const { session: embeddedSession, ...snapshot } = await repository.loadSnapshot();
+    const { session: embeddedSession, ...snapshot } = await repository.loadSnapshot({ refreshMode });
     // Gerçek Sistem deposu oturumu anlık görüntüyle birlikte döndürür; ayrı bir
     // istek yalnızca bağlam gömülü gelmediğinde yapılır.
     const session = embeddedSession

@@ -10,7 +10,7 @@ import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domai
 import { findProjectTag, projectTagCatalog } from '../../domain/tags';
 import { fmtISO, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
-import { canWriteProject } from '../../state/projectWritePolicy.js';
+import { canWriteProject, taskCreationScopeInProject } from '../../state/projectWritePolicy.js';
 import {
   useAllPeople,
   useAllWbs,
@@ -21,6 +21,8 @@ import {
 import {
   findProjectRootWbsId,
   resolveSimpleProjectChoice,
+  simpleAssignmentScope,
+  simpleTaskRequiredFieldsError,
   withManualProjectOption,
   writableSimpleModeProjects
 } from './simpleModePolicy.js';
@@ -49,15 +51,19 @@ function PersonChoice({ person, active, onToggle }) {
 
 export function SimpleModePanel() {
   // Proje seçicisi görev ATAMA kapsamını kullanır: sıradan kullanıcıda
-  // "corporateprojectaccess" projeleri, yöneticide bütün CN43N listesi.
+  // FULL ve sorumluluktan doğan dar projeler; yöneticide bütün CN43N listesi.
   const projects = useTaskAssignableProjects();
   const people = useAllPeople();
   const wbs = useAllWbs();
   const assignmentScopeSicils = useAssignmentScopeSicils();
-  const { canCreateProjects } = useAppState();
+  const appState = useAppState();
+  const { canCreateProjects, currentUser } = appState;
   const { addProject, updateProject, addTask, closeTask } = useTaskActions();
   const sortedProjects = useMemo(() => projects.slice().sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr')), [projects]);
-  const writableProjects = useMemo(() => writableSimpleModeProjects(sortedProjects), [sortedProjects]);
+  const writableProjects = useMemo(
+    () => writableSimpleModeProjects(sortedProjects, { alreadyAuthorized: true }),
+    [sortedProjects]
+  );
   const sortedPeople = useMemo(() => people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr')), [people]);
 
   const [projectChoice, setProjectChoice] = useState('');
@@ -106,14 +112,36 @@ export function SimpleModePanel() {
   }, [selectableProjects, canCreateProjects]);
 
   useEffect(() => {
-    setProjectChoice((current) => resolveSimpleProjectChoice(current, selectableProjects, canCreateProjects));
+    setProjectChoice((current) => resolveSimpleProjectChoice(
+      current,
+      selectableProjects,
+      canCreateProjects,
+      { alreadyAuthorized: true }
+    ));
   }, [selectableProjects, canCreateProjects]);
 
   const selectedProject = writableProjects.find((project) => project.id === projectChoice) || null;
-  const assignmentScopeOnly = useMemo(() => {
-    if (!selectedProject || canWriteProject(selectedProject)) return null;
-    return new Set(assignmentScopeSicils.map(String));
-  }, [selectedProject, assignmentScopeSicils]);
+  const taskCreationState = useMemo(() => ({
+    tasks: appState.tasks,
+    projects: appState.projects,
+    assignableProjects: appState.assignableProjects
+  }), [appState.tasks, appState.projects, appState.assignableProjects]);
+  const selectedCreationScope = useMemo(
+    () => selectedProject ? taskCreationScopeInProject(taskCreationState, selectedProject.id) : null,
+    [selectedProject, taskCreationState]
+  );
+  const assigneeCreateOnly = selectedCreationScope === 'ASSIGNEE_CREATE';
+  const assignmentScopeOnly = useMemo(() => simpleAssignmentScope({
+    selectedProject,
+    creationScope: selectedCreationScope,
+    currentUserId: currentUser?.id,
+    assignmentScopeSicils
+  }), [
+    selectedProject,
+    selectedCreationScope,
+    currentUser?.id,
+    assignmentScopeSicils
+  ]);
   const candidatePeople = useMemo(
     () => simpleAssignmentCandidates(sortedPeople, assignmentScopeOnly),
     [sortedPeople, assignmentScopeOnly]
@@ -175,7 +203,12 @@ export function SimpleModePanel() {
     setMessage(null);
     setManualProjectName('');
     setManualProjectCode('');
-    setProjectChoice(resolveSimpleProjectChoice('', selectableProjects, false));
+    setProjectChoice(resolveSimpleProjectChoice(
+      '',
+      selectableProjects,
+      false,
+      { alreadyAuthorized: true }
+    ));
   };
 
   const resetTaskFields = () => {
@@ -222,8 +255,14 @@ export function SimpleModePanel() {
       setMessage({ type: 'error', text: 'Görev ekleyebileceğiniz yazılabilir bir proje bulunmuyor.' });
       return;
     }
-    if (!task.trim() || !dueDate || assigneeIds.length === 0) {
-      setMessage({ type: 'error', text: 'Görev, sorumlu ve termin tarihi alanlarını tamamlayın.' });
+    const requiredFieldsError = simpleTaskRequiredFieldsError({
+      task,
+      dueDate,
+      assigneeIds,
+      creationScope: selectedCreationScope
+    });
+    if (requiredFieldsError) {
+      setMessage({ type: 'error', text: requiredFieldsError });
       return;
     }
     if (projectChoice === MANUAL_PROJECT && !manualProjectName.trim()) {
@@ -299,15 +338,17 @@ export function SimpleModePanel() {
       status: 'todo',
       priority: normalizePriorityId(priority),
       progress: 0,
-      plannedStart: dueDate,
-      plannedFinish: dueDate,
-      targetFinish: dueDate,
-      actualStart: null,
-      actualFinish: null,
-      plannedDurationDays: null,
-      remainingDurationDays: null,
-      plannedHours: 0,
-      actualHours: 0,
+      ...(!assigneeCreateOnly ? {
+        plannedStart: dueDate,
+        plannedFinish: dueDate,
+        targetFinish: dueDate,
+        actualStart: null,
+        actualFinish: null,
+        plannedDurationDays: null,
+        remainingDurationDays: null,
+        plannedHours: 0,
+        actualHours: 0
+      } : {}),
       deps: []
     });
 
@@ -403,8 +444,12 @@ export function SimpleModePanel() {
             <input className="input" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Örn. Teklif, Onay, Teslim" disabled={!hasWritableDestination} />
           </label>
           <label className="simple-field">
-            <span>Termin tarihi</span>
-            <DateInput value={dueDate} onChange={(value) => { setDueDate(value); setMessage(null); }} disabled={!hasWritableDestination} />
+            <span>Termin tarihi {assigneeCreateOnly && <small>tam proje yetkisi gerekir</small>}</span>
+            <DateInput
+              value={assigneeCreateOnly ? '' : dueDate}
+              onChange={(value) => { setDueDate(value); setMessage(null); }}
+              disabled={!hasWritableDestination || assigneeCreateOnly}
+            />
           </label>
           <div className="simple-field">
             <span>Öncelik</span>

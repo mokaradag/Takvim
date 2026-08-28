@@ -2,6 +2,7 @@ import { normalizeTaskRecord } from '../data/normalizeTaskRecord.js';
 import { TASK_STATUSES } from '../domain/constants/index.js';
 import { compareWbsNodes, selectDefaultProjectWbs, selectWbsDescendantIds } from '../domain/selectors/index.js';
 import {
+  prepareTaskReferenceContext,
   validateTaskWbsMove,
   validateWbsDeletion,
   validateWbsReparent,
@@ -9,6 +10,7 @@ import {
 } from '../domain/validation/index.js';
 import { fmtISO, today } from '../scheduling/dates/index.js';
 import { addWorkingDays, moveToWorkingDay, resolveProjectCalendar } from '../scheduling/calendars/index.js';
+import { reconcileSnapshotCollection, reuseSnapshotValue } from './snapshotStructuralSharing.js';
 import {
   WORKSPACE_MODE_PORTFOLIO,
   WORKSPACE_MODE_PROJECT,
@@ -37,7 +39,7 @@ export function selectAssignableProjects(state = {}) {
  */
 function taskContext(state) {
   const assignable = selectAssignableProjects(state);
-  return {
+  return prepareTaskReferenceContext({
     projects: [...(state.projects || []), ...assignable],
     people: state.people || [],
     wbs: [
@@ -54,7 +56,7 @@ function taskContext(state) {
         }))
     ],
     calendars: state.calendars || []
-  };
+  });
 }
 
 function workspaceState(state, selection) {
@@ -266,7 +268,7 @@ export function createLoadingState() {
 
 function createStateFromSnapshot(snapshot = {}, previous = createLoadingState()) {
   const hasSession = Object.prototype.hasOwnProperty.call(snapshot, 'session');
-  const session = hasSession ? snapshot.session : previous.session;
+  const session = hasSession ? reuseSnapshotValue(previous.session, snapshot.session) : previous.session;
   const sessionState = hasSession
     ? {
         session: session || null,
@@ -286,20 +288,31 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
       };
   const base = {
     ...sessionState,
-    calendars: snapshot.calendars || [],
-    projects: snapshot.projects || [],
-    assignableProjects: snapshot.assignableProjects || [],
-    assignmentScopeSicils: snapshot.assignmentScopeSicils || [],
-    people: snapshot.people || [],
-    wbs: snapshot.wbs || [],
-    baselines: snapshot.baselines || [],
-    taskBaselineSnapshots: snapshot.taskBaselineSnapshots || []
+    calendars: reconcileSnapshotCollection(previous.calendars, snapshot.calendars),
+    projects: reconcileSnapshotCollection(previous.projects, snapshot.projects),
+    assignableProjects: reconcileSnapshotCollection(previous.assignableProjects, snapshot.assignableProjects),
+    assignmentScopeSicils: reconcileSnapshotCollection(
+      previous.assignmentScopeSicils,
+      snapshot.assignmentScopeSicils,
+      (value) => value
+    ),
+    people: reconcileSnapshotCollection(previous.people, snapshot.people),
+    wbs: reconcileSnapshotCollection(previous.wbs, snapshot.wbs),
+    baselines: reconcileSnapshotCollection(previous.baselines, snapshot.baselines),
+    taskBaselineSnapshots: reconcileSnapshotCollection(
+      previous.taskBaselineSnapshots,
+      snapshot.taskBaselineSnapshots,
+      (value) => value?.id || `${value?.baselineId || ''}:${value?.taskId || ''}`
+    )
   };
   // Bağlam görev BAŞINA değil, bir kez kurulur: birleştirilmiş `projects`,
   // `wbs` ve `people` dizileri her görev için yeniden ayrılınca maliyet
   // görev × (proje + wbs) kadar büyüyordu.
   const context = taskContext(base);
-  const tasks = (snapshot.tasks || []).map((task) => normalizeTaskRecord(task, context));
+  const tasks = reconcileSnapshotCollection(
+    previous.tasks,
+    (snapshot.tasks || []).map((task) => normalizeTaskRecord(task, context))
+  );
   const nextBase = { ...previous, ...base, tasks };
   const selection = workspaceState(nextBase, previous);
   const selectedTaskId = tasks.some((task) => task.id === selection.selectedTaskId)
@@ -425,6 +438,57 @@ function applyUpserts(items, upserts, deletes, normalize, { prependNew = false }
   return prependNew ? [...additions, ...updated] : [...updated, ...additions];
 }
 
+/**
+ * Dar görev görünümündeki fotoğraf kimliği yalnızca yetkili snapshot'ta gelir.
+ * Mutasyon yanıtı gizli eş sorumlunun Sicilini yeniden açmaz; buna karşılık
+ * aynı sorumlu adı yetkili yanıtta hâlâ bulunuyorsa daha önce görev kapsamında
+ * alınmış fotoğraf kimliği korunur. Ad yanıttan kalktığında kimlik de kalkar.
+ */
+function preserveTaskScopedAvatarIdentities(previousTask, committedTask) {
+  const previous = Array.isArray(previousTask?.assigneeAvatarIdentities)
+    ? previousTask.assigneeAvatarIdentities
+    : [];
+  if (!previous.length) return committedTask;
+
+  const names = (Array.isArray(committedTask?.assigneeDisplayNames)
+    ? committedTask.assigneeDisplayNames
+    : (committedTask?.sorumlu || []))
+    .map((name) => String(name ?? '').trim())
+    .filter(Boolean);
+  if (!names.length) return { ...committedTask, assigneeAvatarIdentities: [] };
+
+  const queueByName = (identities) => {
+    const queues = new Map();
+    for (const identity of identities || []) {
+      const name = String(identity?.name ?? '').trim();
+      if (!name) continue;
+      if (!queues.has(name)) queues.set(name, []);
+      queues.get(name).push(identity);
+    }
+    return queues;
+  };
+  const freshQueues = queueByName(committedTask.assigneeAvatarIdentities || []);
+  const previousQueues = queueByName(previous);
+  const merged = [];
+
+  for (const name of names) {
+    const fresh = freshQueues.get(name)?.shift() || null;
+    const oldQueue = previousQueues.get(name) || [];
+    if (fresh) {
+      const employeeNo = String(fresh.employeeNo ?? '');
+      const matchingOld = oldQueue.findIndex((identity) => String(identity?.employeeNo ?? '') === employeeNo);
+      if (matchingOld >= 0) oldQueue.splice(matchingOld, 1);
+      else oldQueue.shift();
+      merged.push(fresh);
+      continue;
+    }
+    const old = oldQueue.shift() || null;
+    if (old) merged.push(old);
+  }
+
+  return { ...committedTask, assigneeAvatarIdentities: merged };
+}
+
 function applyCommittedChanges(state, changes = {}) {
   const deletedProjectIds = new Set((changes.projectDeletes || []).map(deleteId).filter(Boolean));
   // FULL erişimin PARTIAL'a düşmesi (manuel lead devri gibi) daha önce görünür
@@ -453,9 +517,13 @@ function applyCommittedChanges(state, changes = {}) {
     (node) => ({ ...node })
   );
   const taskState = { ...state, projects, wbs };
+  const previousTasksById = new Map(state.tasks.map((task) => [String(task.id), task]));
+  const taskUpserts = (changes.taskUpserts || []).map((task) => (
+    preserveTaskScopedAvatarIdentities(previousTasksById.get(String(task.id)) || null, task)
+  ));
   const invalidated = invalidatedPredecessorIds(
     state.tasks,
-    (changes.taskUpserts || []).filter((task) => !scrubbedProjectIds.has(task.projectId)),
+    taskUpserts.filter((task) => !scrubbedProjectIds.has(task.projectId)),
     [
       ...(changes.taskDeletes || []),
       ...state.tasks.filter((task) => scrubbedProjectIds.has(task.projectId)).map((task) => task.id)
@@ -463,7 +531,7 @@ function applyCommittedChanges(state, changes = {}) {
   );
   const appliedTasks = applyUpserts(
     state.tasks.filter((task) => !scrubbedProjectIds.has(task.projectId)),
-    (changes.taskUpserts || []).filter((task) => !scrubbedProjectIds.has(task.projectId)),
+    taskUpserts.filter((task) => !scrubbedProjectIds.has(task.projectId)),
     changes.taskDeletes || [],
     (task) => normalizeStateTask(task, taskState),
     { prependNew: true }
