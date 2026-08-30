@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { Icons } from '../../components/icons';
 import { sanitizeReminderHtml } from '../../domain/reminders/reminderTemplate.js';
 import { plainTextToHtml } from './plainTextHtml.js';
+import { RichEditorSurface } from './RichEditorSurface.js';
 
 /**
  * Küçük zengin metin düzenleyicisi.
@@ -130,14 +131,10 @@ export function RichTextEditor({ value, onChange, ariaLabel = 'E-posta gövdesi'
           <Icons.Table size={12} />
         </button>
       </div>
-      <div
+      <RichEditorSurface
         ref={editorRef}
-        className="rich-editor-surface"
-        contentEditable={!disabled}
-        suppressContentEditableWarning
-        role="textbox"
-        aria-multiline="true"
-        aria-label={ariaLabel}
+        disabled={disabled}
+        ariaLabel={ariaLabel}
         onInput={emit}
         onBlur={emit}
         // Yapıştırılan içerik DÜZ METİN olarak alınır: dış kaynaktan gelen
