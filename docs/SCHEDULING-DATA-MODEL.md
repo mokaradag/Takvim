@@ -62,6 +62,12 @@ Changing the current plan does not change actual dates and does not rewrite any 
 
 `targetFinish` is not a CPM scheduling constraint. The CPM engine does not interpret it as Must Finish On, Finish No Later Than or another scheduling constraint. A future constraint model must represent those concepts explicitly.
 
+### Schedule-change request workflow
+
+An assignee who does not control another person's Task plan never changes `plannedStart`, `plannedFinish`, or `targetFinish` by submitting a normal Task patch. A separate persistent `MR_TaskScheduleChangeRequests` record captures the original and proposed value of all three dates, the requester message, the authoritative creator as decision owner, status, audit identities/times, and the Task rowversion used at creation. The Task remains unchanged while the request is PENDING.
+
+Accept compares the captured original date triple with the current Task under SERIALIZABLE isolation. A mismatch produces STALE and preserves the newer plan. Otherwise the proposed triple, calendar-derived `plannedDurationDays`, ACCEPTED status, and correlated audit events commit atomically. Reject records the decision and leaves the current plan untouched. A replacement request cancels the same requester's earlier PENDING row for that Task.
+
 ## 3. Actuals
 
 Observed execution dates are represented independently:
@@ -199,6 +205,7 @@ A WBS summary bar must not be interpreted as CPM Early/Late schedule output. Cur
 | Task WBS assignment | `Task.wbsId` | Stored, mutable, same-project relationship |
 | Current plan | `plannedStart`, `plannedFinish`, `plannedDurationDays` | Stored, mutable |
 | Management target | `targetFinish` | Stored, mutable |
+| Schedule request | original/proposed plan dates, requester/owner, status, captured Task version, decision | Stored separately; never treated as the current Task plan until accepted |
 | Actuals | `actualStart`, `actualFinish` | Stored, mutable only through explicit user/data actions |
 | Remaining duration | `remainingDurationDays` | Nullable compatibility field; not edited or used by current scheduling |
 | Project status cutoff | `dataDate` | Stored on Project, mutable, optional |
@@ -263,6 +270,6 @@ This model intentionally does not yet implement:
 - cross-project CPM networks;
 - resource leveling;
 - earned value management;
-- database or API persistence.
+- cross-project schedule-request delegation rules.
 
 Those capabilities can now build on distinct Project/WBS/Activity relationships and separate current-plan, target, actual, remaining-duration, baseline, data-date, WBS-rollup and calculated-schedule semantics without redefining the core Task schedule model.

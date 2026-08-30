@@ -58,6 +58,37 @@ function result(recordsets) {
 }
 
 export function createFakeDatabase(seed = {}) {
+  const tasks = (seed.tasks || []).map((task) => ({
+    TaskId: guid(task.TaskId),
+    ProjectId: guid(task.ProjectId),
+    WbsId: guid(task.WbsId),
+    CalendarId: guid(task.CalendarId),
+    Title: task.Title,
+    Description: task.Description ?? null,
+    Keyword: task.Keyword ?? null,
+    Status: task.Status || 'planned',
+    Priority: task.Priority || 'normal',
+    IsMilestone: task.IsMilestone ?? 0,
+    PlannedStart: task.PlannedStart ?? null,
+    PlannedFinish: task.PlannedFinish ?? null,
+    PlannedDurationDays: task.PlannedDurationDays ?? null,
+    TargetFinish: task.TargetFinish ?? null,
+    ActualStart: task.ActualStart ?? null,
+    ActualFinish: task.ActualFinish ?? null,
+    RemainingDurationDays: task.RemainingDurationDays ?? null,
+    Progress: task.Progress ?? null,
+    PlannedHours: task.PlannedHours ?? null,
+    ActualHours: task.ActualHours ?? null,
+    Budget: task.Budget ?? null,
+    Spent: task.Spent ?? null,
+    RecurrenceRule: task.RecurrenceRule ?? null,
+    RecurrenceParentTaskId: guid(task.RecurrenceParentTaskId),
+    RecurrenceOccurrenceDate: task.RecurrenceOccurrenceDate ?? null,
+    SortOrder: task.SortOrder ?? null,
+    CreatedBySicil: task.CreatedBySicil ?? null,
+    UpdatedBySicil: task.UpdatedBySicil ?? null,
+    RowVersion: nextVersion()
+  }));
   return {
     projects: (seed.projects || []).map((project) => ({
       ProjectId: guid(project.ProjectId),
@@ -96,39 +127,34 @@ export function createFakeDatabase(seed = {}) {
       ElementTypeCode: node.ElementTypeCode ?? null,
       RowVersion: nextVersion()
     })),
-    tasks: (seed.tasks || []).map((task) => ({
-      TaskId: guid(task.TaskId),
-      ProjectId: guid(task.ProjectId),
-      WbsId: guid(task.WbsId),
-      CalendarId: guid(task.CalendarId),
-      Title: task.Title,
-      Description: task.Description ?? null,
-      Keyword: task.Keyword ?? null,
-      Status: task.Status || 'planned',
-      Priority: task.Priority || 'normal',
-      IsMilestone: task.IsMilestone ?? 0,
-      PlannedStart: task.PlannedStart ?? null,
-      PlannedFinish: task.PlannedFinish ?? null,
-      PlannedDurationDays: task.PlannedDurationDays ?? null,
-      TargetFinish: task.TargetFinish ?? null,
-      ActualStart: task.ActualStart ?? null,
-      ActualFinish: task.ActualFinish ?? null,
-      RemainingDurationDays: task.RemainingDurationDays ?? null,
-      Progress: task.Progress ?? null,
-      PlannedHours: task.PlannedHours ?? null,
-      ActualHours: task.ActualHours ?? null,
-      Budget: task.Budget ?? null,
-      Spent: task.Spent ?? null,
-      // Tekrar serisi alanları tohumdan da taşınır: seri bağı yalnızca commit
-      // yolundan kurulabilseydi, var olan bir seriyle başlayan senaryolar
-      // (silme sırasında yinelemelerin ayrılması gibi) sınanamazdı.
-      RecurrenceRule: task.RecurrenceRule ?? null,
-      RecurrenceParentTaskId: guid(task.RecurrenceParentTaskId),
-      RecurrenceOccurrenceDate: task.RecurrenceOccurrenceDate ?? null,
-      SortOrder: task.SortOrder ?? null,
+    tasks,
+    taskAssignees: (seed.taskAssignees || []).map((entry) => ({
+      TaskId: guid(entry.TaskId),
+      Sicil: entry.Sicil,
+      AssignedBySicil: entry.AssignedBySicil ?? null
+    })),
+    taskScheduleChangeRequests: (seed.taskScheduleChangeRequests || []).map((entry) => ({
+      RequestId: guid(entry.RequestId || newGuid()),
+      TaskId: guid(entry.TaskId),
+      RequesterSicil: entry.RequesterSicil,
+      DecisionOwnerSicil: entry.DecisionOwnerSicil,
+      OriginalPlannedStart: nullableDate(entry.OriginalPlannedStart),
+      ProposedPlannedStart: nullableDate(entry.ProposedPlannedStart),
+      OriginalPlannedFinish: nullableDate(entry.OriginalPlannedFinish),
+      ProposedPlannedFinish: nullableDate(entry.ProposedPlannedFinish),
+      OriginalTargetFinish: nullableDate(entry.OriginalTargetFinish),
+      ProposedTargetFinish: nullableDate(entry.ProposedTargetFinish),
+      RequesterMessage: entry.RequesterMessage ?? null,
+      Status: entry.Status || 'PENDING',
+      CreatedAgainstTaskVersion: entry.CreatedAgainstTaskVersion
+        || tasks.find((task) => sameGuid(task.TaskId, entry.TaskId))?.RowVersion
+        || nextVersion(),
+      CreatedAt: entry.CreatedAt || new Date().toISOString(),
+      DecidedAt: entry.DecidedAt || null,
+      DecisionBySicil: entry.DecisionBySicil ?? null,
+      DecisionMessage: entry.DecisionMessage ?? null,
       RowVersion: nextVersion()
     })),
-    taskAssignees: (seed.taskAssignees || []).map((entry) => ({ TaskId: guid(entry.TaskId), Sicil: entry.Sicil })),
     taskDependencies: (seed.taskDependencies || []).map((entry) => ({
       TaskDependencyId: guid(entry.TaskDependencyId || newGuid()),
       ProjectId: guid(entry.ProjectId),
@@ -193,7 +219,9 @@ export function createFakeDatabase(seed = {}) {
     })),
     // `reminderSchemaMissing: true` ile 0005 göçü çalıştırılmamış bir kurulum
     // taklit edilir.
-    reminderSchemaMissing: Boolean(seed.reminderSchemaMissing)
+    reminderSchemaMissing: Boolean(seed.reminderSchemaMissing),
+    // `scheduleChangeSchemaMissing: true`, 0007 öncesi kurulumu taklit eder.
+    scheduleChangeSchemaMissing: Boolean(seed.scheduleChangeSchemaMissing)
   };
 }
 
@@ -205,6 +233,13 @@ function wbsById(db, value) {
 }
 function taskById(db, value) {
   return db.tasks.find((task) => sameGuid(task.TaskId, value)) || null;
+}
+
+function throwIfScheduleChangeSchemaMissing(db) {
+  if (!db.scheduleChangeSchemaMissing) return;
+  const error = new Error("Invalid object name 'dbo.MR_TaskScheduleChangeRequests'.");
+  error.number = 208;
+  throw error;
 }
 
 function calendarRows(db) {
@@ -236,6 +271,11 @@ function visibleAssignee(db, taskId, sicil) {
       || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil)));
 }
 
+/** Görev doğrudan kullanıcıya atanmış mı? Yönetici kapsamını genişletmez. */
+function directAssignee(db, taskId, sicil) {
+  return db.taskAssignees.some((entry) => sameGuid(entry.TaskId, taskId) && entry.Sicil === sicil);
+}
+
 function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedAvatar = false } = {}) {
   return db.taskAssignees.flatMap((entry) => {
     if (!taskIds.has(String(entry.TaskId).toUpperCase())) return [];
@@ -248,7 +288,7 @@ function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedA
         && String(row.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase()))
       || db.projectAccess.some((row) => row.IsActive && row.Sicil === sicil
         && ['FULL', 'READ'].includes(row.AccessLevel) && sameGuid(row.ProjectId, task.ProjectId));
-    const identityVisible = broadVisibility || entry.Sicil === sicil
+    const identityVisible = broadVisibility || entry.Sicil === sicil || Number(task.CreatedBySicil) === Number(sicil)
       || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil);
     const currentUserAssigned = db.taskAssignees.some((assignment) => sameGuid(assignment.TaskId, task.TaskId)
       && assignment.Sicil === sicil);
@@ -262,6 +302,38 @@ function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedA
       DisplayName: displayName || (identityVisible ? String(entry.Sicil) : null)
     }];
   });
+}
+
+function scheduleRequestRows(db, sicil, requestId = null) {
+  const rows = db.taskScheduleChangeRequests
+    .filter((entry) => (!requestId || sameGuid(entry.RequestId, requestId))
+      && (Number(entry.RequesterSicil) === Number(sicil)
+        || Number(entry.DecisionOwnerSicil) === Number(sicil)))
+    .flatMap((entry) => {
+      const task = taskById(db, entry.TaskId);
+      const project = task ? projectById(db, task.ProjectId) : null;
+      if (!task || !project?.IsActive) return [];
+      const requester = db.people.find((person) => Number(person.Sicil) === Number(entry.RequesterSicil));
+      const owner = db.people.find((person) => Number(person.Sicil) === Number(entry.DecisionOwnerSicil));
+      return [{
+        ...entry,
+        TaskTitle: task?.Title ?? '',
+        ProjectId: task?.ProjectId ?? null,
+        ProjectName: project?.ProjectName ?? '',
+        ProjectCode: project?.ProjectCode ?? '',
+        RequesterName: requester?.DisplayName ?? null,
+        DecisionOwnerName: owner?.DisplayName ?? null
+      }];
+    })
+    .sort((left, right) => {
+      const pending = Number(right.Status === 'PENDING') - Number(left.Status === 'PENDING');
+      return pending
+        || String(right.CreatedAt).localeCompare(String(left.CreatedAt))
+        || String(right.RequestId).localeCompare(String(left.RequestId));
+    });
+  if (requestId) return rows;
+  let decidedCount = 0;
+  return rows.filter((row) => row.Status === 'PENDING' || ++decidedCount <= 100);
 }
 
 function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
@@ -278,7 +350,7 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
       // Kendi görevi ya da astının görevi bulunan proje KISMİ görünür olur;
       // gerçek sorgu da aynı üç kaynağın birleşimini kullanır.
       const scopedTask = db.tasks.some((task) => sameGuid(task.ProjectId, project.ProjectId)
-        && visibleAssignee(db, task.TaskId, sicil));
+        && (visibleAssignee(db, task.TaskId, sicil) || Number(task.CreatedBySicil) === Number(sicil)));
       const manualLead = project.SourceType === 'MANUAL' && project.LeadSicil === sicil;
       if (corporateAccess || manualLead || grant?.AccessLevel === 'FULL') visible.set(project.ProjectId, 'FULL');
       else if (grant || scopedTask) visible.set(project.ProjectId, 'PARTIAL');
@@ -292,8 +364,11 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
 
   const tags = db.projectTags.filter((tag) => visible.has(guid(tag.ProjectId)));
   const requiredPartialWbs = new Set();
+  const creatorCatalogProjects = new Set(db.tasks
+    .filter((task) => Number(task.CreatedBySicil) === Number(sicil) || directAssignee(db, task.TaskId, sicil))
+    .map((task) => guid(task.ProjectId)));
   for (const task of db.tasks.filter((entry) => visible.get(guid(entry.ProjectId)) === 'PARTIAL'
-    && visibleAssignee(db, entry.TaskId, sicil))) {
+    && (visibleAssignee(db, entry.TaskId, sicil) || Number(entry.CreatedBySicil) === Number(sicil)))) {
     let node = wbsById(db, task.WbsId);
     while (node && !requiredPartialWbs.has(guid(node.WbsId))) {
       requiredPartialWbs.add(guid(node.WbsId));
@@ -301,7 +376,9 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
     }
   }
   const wbs = db.wbs
-    .filter((node) => visible.get(guid(node.ProjectId)) === 'FULL' || requiredPartialWbs.has(guid(node.WbsId)))
+    .filter((node) => visible.get(guid(node.ProjectId)) === 'FULL'
+      || creatorCatalogProjects.has(guid(node.ProjectId))
+      || requiredPartialWbs.has(guid(node.WbsId)))
     .sort((left, right) => (left.SortOrder ?? 0) - (right.SortOrder ?? 0) || String(left.Code).localeCompare(String(right.Code)));
   // KISMİ projelerde yalnızca kendi/astının görevleri döner.
   const tasks = db.tasks
@@ -313,7 +390,7 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
         && entry.Sicil === sicil
         && entry.AccessLevel === 'READ'
         && sameGuid(entry.ProjectId, task.ProjectId));
-      return readGranted || visibleAssignee(db, task.TaskId, sicil);
+      return readGranted || visibleAssignee(db, task.TaskId, sicil) || Number(task.CreatedBySicil) === Number(sicil);
     })
     .map((task) => ({
       ...task,
@@ -321,7 +398,8 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
       // YETKİLİ sorumlu sayısı: görünen satırlarla farkı, gizlenmiş bir eş
       // sorumlu olduğunu söyler (kimlik taşımaz).
       AssigneeCount: db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, task.TaskId)).length,
-      IsCurrentUserAssignee: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && entry.Sicil === sicil)
+      IsCurrentUserAssignee: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && entry.Sicil === sicil),
+      IsCurrentUserCreator: Number(task.CreatedBySicil) === Number(sicil)
     }));
   // Sorumlu satırları da süzülür: KISMİ projede yalnızca kullanıcının kendisi
   // ve kapsamındaki çalışanlar görünür. Süzgeç olmadan kapsam dışı eş sorumlu
@@ -335,7 +413,7 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
       && grant.AccessLevel === 'READ'
       && sameGuid(grant.ProjectId, task.ProjectId));
     if (readGranted) return true;
-    return entry.Sicil === sicil
+    return Number(task.CreatedBySicil) === Number(sicil) || entry.Sicil === sicil
       || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil);
   });
   const dependencies = db.taskDependencies.filter((entry) => visible.get(guid(entry.ProjectId)) === 'FULL');
@@ -435,6 +513,10 @@ function authorizationRecordsets(db, sicil) {
       return task ? { ProjectId: task.ProjectId, TaskId: task.TaskId, Reason: 'ASSIGNEE' } : null;
     })
     .filter(Boolean);
+
+  for (const task of db.tasks.filter((entry) => Number(entry.CreatedBySicil) === Number(sicil))) {
+    partialTasks.push({ ProjectId: task.ProjectId, TaskId: task.TaskId, Reason: 'TASK_CREATOR' });
+  }
 
   return [
     person ? [person] : [],
@@ -679,6 +761,172 @@ function runQuery(db, statement, params, { database }) {
     const calendar = db.calendars.find((entry) => sameGuid(entry.CalendarId, params.calendarId) && entry.IsActive);
     return result([calendar ? [{ CalendarId: calendar.CalendarId }] : []]);
   }
+
+  /* ── Görev tarih değişikliği talepleri ───────────────────── */
+  if (sqlText.includes('FROM dbo.MR_TaskScheduleChangeRequests r WITH (UPDLOCK, HOLDLOCK)')
+    && sqlText.includes('t.RowVersion AS TaskRowVersion')) {
+    throwIfScheduleChangeSchemaMissing(db);
+    const entry = db.taskScheduleChangeRequests.find((row) => sameGuid(row.RequestId, params.requestId));
+    const task = entry ? taskById(db, entry.TaskId) : null;
+    const project = task ? projectById(db, task.ProjectId) : null;
+    const defaultCalendar = db.calendars.find((calendar) => calendar.IsDefault && calendar.IsActive) || null;
+    return result([entry && task && project?.IsActive ? [{
+      ...entry,
+      ProjectId: task.ProjectId,
+      TaskTitle: task.Title,
+      CalendarId: task.CalendarId,
+      IsMilestone: task.IsMilestone,
+      PlannedDurationDays: task.PlannedDurationDays,
+      PlannedStart: task.PlannedStart,
+      PlannedFinish: task.PlannedFinish,
+      TargetFinish: task.TargetFinish,
+      TaskRowVersion: task.RowVersion,
+      EffectiveCalendarId: task.CalendarId || project.CalendarId || defaultCalendar?.CalendarId || null
+    }] : []]);
+  }
+  if (sqlText.includes('SELECT TOP (1) t.*')
+    && sqlText.includes('AS IsRequesterAssignee')
+    && sqlText.includes('FROM dbo.MR_Tasks t WITH (UPDLOCK, HOLDLOCK)')) {
+    const task = taskById(db, params.taskId);
+    const project = task ? projectById(db, task.ProjectId) : null;
+    const defaultCalendar = db.calendars.find((calendar) => calendar.IsDefault && calendar.IsActive) || null;
+    if (!task || !project?.IsActive) return result([[]]);
+    const decisionCandidates = [
+      [task.CreatedBySicil],
+      [project.SourceType === 'MANUAL' ? project.LeadSicil : null],
+      db.projectAccess.filter((entry) => sameGuid(entry.ProjectId, task.ProjectId)
+        && entry.IsActive && entry.AccessLevel === 'FULL').map((entry) => entry.Sicil),
+      db.corporateProjectAccess.filter((entry) => project.SourceType === 'CORPORATE'
+        && String(entry.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase()).map((entry) => entry.Sicil)
+    ].flatMap((group) => group
+      .filter((candidate) => candidate != null)
+      .sort((left, right) => Number(left) - Number(right)));
+    const effectiveDecisionOwner = decisionCandidates.find(
+      (candidate) => candidate != null && Number(candidate) !== Number(params.sicil)
+    ) ?? null;
+    return result([[{
+      ...task,
+      EffectiveCalendarId: task.CalendarId || project.CalendarId || defaultCalendar?.CalendarId || null,
+      EffectiveDecisionOwnerSicil: effectiveDecisionOwner,
+      IsRequesterAssignee: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId)
+        && Number(entry.Sicil) === Number(params.sicil)) ? 1 : 0
+    }]]);
+  }
+  if (sqlText.includes('INSERT dbo.MR_TaskScheduleChangeRequests(')) {
+    throwIfScheduleChangeSchemaMissing(db);
+    const now = new Date().toISOString();
+    const cancelledRequests = [];
+    for (const entry of db.taskScheduleChangeRequests) {
+      if (!sameGuid(entry.TaskId, params.taskId)
+        || Number(entry.RequesterSicil) !== Number(params.requesterSicil)
+        || entry.Status !== 'PENDING') continue;
+      entry.Status = 'CANCELLED';
+      entry.DecidedAt = now;
+      entry.DecisionBySicil = params.requesterSicil;
+      entry.DecisionMessage = 'Yeni tarih talebiyle değiştirildi.';
+      entry.RowVersion = nextVersion();
+      cancelledRequests.push({ RequestId: entry.RequestId });
+    }
+    db.taskScheduleChangeRequests.push({
+      RequestId: guid(params.requestId),
+      TaskId: guid(params.taskId),
+      RequesterSicil: params.requesterSicil,
+      DecisionOwnerSicil: params.decisionOwnerSicil,
+      OriginalPlannedStart: nullableDate(params.originalPlannedStart),
+      ProposedPlannedStart: nullableDate(params.proposedPlannedStart),
+      OriginalPlannedFinish: nullableDate(params.originalPlannedFinish),
+      ProposedPlannedFinish: nullableDate(params.proposedPlannedFinish),
+      OriginalTargetFinish: nullableDate(params.originalTargetFinish),
+      ProposedTargetFinish: nullableDate(params.proposedTargetFinish),
+      RequesterMessage: params.requesterMessage ?? null,
+      Status: 'PENDING',
+      CreatedAgainstTaskVersion: params.taskVersion,
+      CreatedAt: now,
+      DecidedAt: null,
+      DecisionBySicil: null,
+      DecisionMessage: null,
+      RowVersion: nextVersion()
+    });
+    return result([cancelledRequests]);
+  }
+  if (sqlText.includes('UPDATE dbo.MR_Tasks')
+    && sqlText.includes('PlannedDurationDays = @plannedDuration')
+    && sqlText.includes("Status = 'ACCEPTED'")) {
+    throwIfScheduleChangeSchemaMissing(db);
+    const task = taskById(db, params.taskId);
+    const entry = db.taskScheduleChangeRequests.find((row) => sameGuid(row.RequestId, params.requestId));
+    if (task) {
+      task.PlannedStart = nullableDate(params.plannedStart);
+      task.PlannedFinish = nullableDate(params.plannedFinish);
+      task.PlannedDurationDays = params.plannedDuration ?? null;
+      task.TargetFinish = nullableDate(params.targetFinish);
+      task.RowVersion = nextVersion();
+    }
+    if (entry?.Status === 'PENDING') {
+      entry.Status = 'ACCEPTED';
+      entry.DecidedAt = new Date().toISOString();
+      entry.DecisionBySicil = params.sicil;
+      entry.DecisionMessage = params.message ?? null;
+      entry.RowVersion = nextVersion();
+    }
+    return result([[]]);
+  }
+  if (sqlText.includes('UPDATE dbo.MR_TaskScheduleChangeRequests')
+    && (sqlText.includes("Status = 'STALE'") || sqlText.includes("Status = 'REJECTED'"))) {
+    throwIfScheduleChangeSchemaMissing(db);
+    const entry = db.taskScheduleChangeRequests.find((row) => sameGuid(row.RequestId, params.requestId)
+      && row.Status === 'PENDING');
+    if (entry) {
+      entry.Status = sqlText.includes("Status = 'STALE'") ? 'STALE' : 'REJECTED';
+      entry.DecidedAt = new Date().toISOString();
+      entry.DecisionBySicil = params.sicil;
+      entry.DecisionMessage = params.message ?? null;
+      entry.RowVersion = nextVersion();
+    }
+    return result([[]]);
+  }
+  if (sqlText.includes('FROM dbo.MR_TaskScheduleChangeRequests r')) {
+    throwIfScheduleChangeSchemaMissing(db);
+    return result([scheduleRequestRows(db, params.sicil, params.requestId || null)]);
+  }
+  if (sqlText.includes('AS PlanCalendarId') && sqlText.includes('FROM dbo.MR_Projects p')) {
+    const project = projectById(db, params.projectId);
+    const defaultCalendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;
+    const calendar = db.calendars.find((entry) => entry.IsActive && sameGuid(
+      entry.CalendarId,
+      params.calendarId || project?.CalendarId || defaultCalendar?.CalendarId
+    )) || null;
+    if (!project || !calendar) return result([[]]);
+    const rows = [];
+    const weekdays = calendar.WorkingDays.length ? calendar.WorkingDays : [null];
+    const holidays = calendar.Holidays.length ? calendar.Holidays : [null];
+    for (const Weekday of weekdays) {
+      for (const holiday of holidays) {
+        rows.push({
+          PlanCalendarId: calendar.CalendarId,
+          Name: calendar.Name,
+          TimeZone: calendar.TimeZone,
+          Weekday,
+          HolidayDate: holiday?.date ?? null,
+          HolidayName: holiday?.name ?? null,
+          ShortName: holiday?.short ?? null
+        });
+      }
+    }
+    return result([rows]);
+  }
+  if (sqlText.includes('FROM dbo.MR_CalendarWorkingDays') && sqlText.includes('@calendarId')) {
+    const calendar = db.calendars.find((entry) => sameGuid(entry.CalendarId, params.calendarId) && entry.IsActive) || null;
+    return result([
+      calendar ? [{ CalendarId: calendar.CalendarId, Name: calendar.Name, TimeZone: calendar.TimeZone }] : [],
+      (calendar?.WorkingDays || []).map((Weekday) => ({ Weekday })),
+      (calendar?.Holidays || []).map((holiday) => ({
+        HolidayDate: holiday.date,
+        Name: holiday.name,
+        ShortName: holiday.short ?? holiday.name
+      }))
+    ]);
+  }
   // Hatırlatma gönderme yetkisi: kullanıcı görevi GÖRÜYOR mu?
   if (sqlText.includes('SELECT TOP (1) t.TaskId') && sqlText.includes('MR_V_CorporateProjectAccess')) {
     const task = db.tasks.find((entry) => sameGuid(entry.TaskId, params.taskId)) || null;
@@ -908,9 +1156,12 @@ function runQuery(db, statement, params, { database }) {
     }
     for (const dependency of db.taskDependencies || []) {
       if (sameGuid(dependency.PredecessorTaskId, params.taskId)) relatedIds.add(String(dependency.TaskId).toLowerCase());
+      if (sameGuid(dependency.TaskId, params.taskId)) relatedIds.add(String(dependency.PredecessorTaskId).toLowerCase());
     }
     relatedIds.delete(String(params.taskId).toLowerCase());
     const outside = [...relatedIds].find((relatedId) => {
+      const relatedTask = taskById(db, relatedId);
+      if (Number(relatedTask?.CreatedBySicil) === Number(params.managerSicil)) return false;
       const assignees = db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, relatedId));
       if (!assignees.length) return true;
       return assignees.some((entry) => !db.executiveScope.some((scope) => scope.ManagerSicil === params.managerSicil
@@ -931,6 +1182,12 @@ function runQuery(db, statement, params, { database }) {
     return result([outside.map((value) => ({ Sicil: value }))]);
   }
   if (sqlText.includes('SELECT Sicil FROM dbo.MR_TaskAssignees WHERE TaskId = @taskId')) {
+    return result([db.taskAssignees
+      .filter((entry) => sameGuid(entry.TaskId, params.taskId))
+      .map((entry) => ({ Sicil: entry.Sicil }))]);
+  }
+  if (sqlText.includes('FROM dbo.MR_TaskAssignees WITH (UPDLOCK, HOLDLOCK)')
+    && sqlText.includes('WHERE TaskId = @taskId')) {
     return result([db.taskAssignees
       .filter((entry) => sameGuid(entry.TaskId, params.taskId))
       .map((entry) => ({ Sicil: entry.Sicil }))]);
@@ -1191,6 +1448,8 @@ function runQuery(db, statement, params, { database }) {
       return !removed;
     });
     db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
+    db.taskScheduleChangeRequests = db.taskScheduleChangeRequests
+      .filter((entry) => !sameGuid(entry.TaskId, params.taskId));
     db.tasks = db.tasks.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
     return result([
       [{ Affected: 1 }],
@@ -1251,6 +1510,7 @@ function runQuery(db, statement, params, { database }) {
       RecurrenceParentTaskId: guid(params.recurrenceParentId),
       RecurrenceOccurrenceDate: nullableDate(params.recurrenceOccurrenceDate),
       SortOrder: params.sortOrder ?? null,
+      CreatedBySicil: params.actorSicil ?? null,
       RowVersion: nextVersion()
     });
     return result([[]]);
@@ -1314,7 +1574,11 @@ function runQuery(db, statement, params, { database }) {
     return result([[]]);
   }
   if (sqlText.includes('INSERT dbo.MR_TaskAssignees(')) {
-    db.taskAssignees.push({ TaskId: guid(params.taskId), Sicil: params.sicil });
+    db.taskAssignees.push({
+      TaskId: guid(params.taskId),
+      Sicil: params.sicil,
+      AssignedBySicil: params.actorSicil ?? null
+    });
     return result([[]]);
   }
   if (sqlText.includes('INSERT dbo.MR_TaskDependencies(')) {
@@ -1349,6 +1613,7 @@ function tableRows(db, table) {
     MR_Projects: db.projects,
     MR_WBS: db.wbs,
     MR_Tasks: db.tasks,
+    MR_TaskScheduleChangeRequests: db.taskScheduleChangeRequests,
     MR_Calendars: db.calendars
   }[table] || [];
 }

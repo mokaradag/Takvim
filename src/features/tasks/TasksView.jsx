@@ -18,7 +18,7 @@ import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
-import { canDeleteTask } from '../../state/projectWritePolicy.js';
+import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { taskProgressValue, taskSortValue } from './taskDisplayValues.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
 
@@ -49,18 +49,18 @@ export function TasksView() {
   });
 
   const setCF = (key, value) => setColFilter(f => ({ ...f, [key]: value }));
-  // Görev yazma yetkisi görev ATAMA kapsamını da içerir: yönetici, kendi
-  // personeline tanımladığı görevi düzenleyip silebilir.
+  const appState = useAppState();
+  // Görev yazma yetkisi görev ATAMA kapsamını da içerir; silme kararı ayrıca
+  // görev oluşturucusu ve kalıcı sorumlu listesiyle sınırlandırılır.
   const assignableProjects = useTaskAssignableProjects();
   const taskMutationState = useMemo1(
-    () => ({ tasks, projects, assignableProjects }),
-    [tasks, projects, assignableProjects]
+    () => ({ tasks, projects, assignableProjects, currentUser: appState.currentUser }),
+    [tasks, projects, assignableProjects, appState.currentUser]
   );
   // Düğme, isteğin KABUL EDİLEBİLİR bir sorumluyla gidebildiği en az bir proje
   // varken etkinleşir. Atama kapsamındaki projede varsayılan sorumlu oturum
   // sahibi olduğunda istek panel açılmadan reddediliyor, kullanıcıya da astını
   // seçme fırsatı verilmiyordu.
-  const appState = useAppState();
   const canAddTask = assignableProjects.some((project) => canResolveTaskAssignee(appState, project));
 
   // Süzgeç değeri KARARLI kimliktir, görünen ad değil. Ada göre süzülseydi aynı
@@ -267,7 +267,7 @@ export function TasksView() {
                 const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
                 const prio = resolvePriority(t.priority);
                 const prog = taskProgressValue(t);
-                const canDeleteCurrentTask = canDeleteTask(taskMutationState, t.id);
+                const deleteAccess = resolveTaskDeleteAccess(taskMutationState, t.id);
                 return (
                   <tr key={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
                     <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{paged.start + idx + 1}</td>
@@ -317,8 +317,8 @@ export function TasksView() {
                         <button
                           className="icon-btn"
                           style={{ width: 26, height: 26 }}
-                          disabled={!canDeleteCurrentTask}
-                          title={canDeleteCurrentTask ? 'Görevi sil' : 'Görevi silme yetkiniz yok'}
+                          disabled={!deleteAccess.canDelete}
+                          title={deleteAccess.canDelete ? 'Görevi sil' : deleteAccess.reason}
                           aria-label="Görevi sil"
                           onClick={(e) => { e.stopPropagation(); if (confirm('Görev silinsin mi?')) onDeleteTask(t.id); }}
                         >

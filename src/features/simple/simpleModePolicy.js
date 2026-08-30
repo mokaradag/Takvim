@@ -67,9 +67,6 @@ export function simpleTaskRequiredFieldsError({
   assigneeIds = [],
   creationScope = null
 } = {}) {
-  const assigneeCreateOnly = creationScope === 'ASSIGNEE_CREATE';
-  if (String(task).trim() && (assigneeCreateOnly || dueDate) && assigneeIds.length > 0) return null;
-  return assigneeCreateOnly
-    ? 'Görev ve sorumlu alanlarını tamamlayın.'
-    : 'Görev, sorumlu ve termin tarihi alanlarını tamamlayın.';
+  if (String(task).trim() && dueDate && assigneeIds.length > 0) return null;
+  return 'Görev, sorumlu ve termin tarihi alanlarını tamamlayın.';
 }

@@ -167,12 +167,21 @@ test('yeni görev açık seçim olmadan etiketsiz ve yapay kalan süresiz başla
 
 test('Basit Mod boş etiketi zorunlu tutmaz ve göreve açıkça boş değer yollar', () => {
   const panel = read('src/features/simple/SimpleModePanel.jsx');
+  assert.match(panel, /plannedStart: dueDate/);
+  assert.match(panel, /plannedFinish: dueDate/);
+  assert.match(panel, /targetFinish: dueDate/);
   assert.equal(simpleTaskRequiredFieldsError({
+    task: 'Dar görev',
+    dueDate: '2026-08-28',
+    assigneeIds: ['1001'],
+    creationScope: 'ASSIGNEE_CREATE'
+  }), null);
+  assert.match(simpleTaskRequiredFieldsError({
     task: 'Dar görev',
     dueDate: '',
     assigneeIds: ['1001'],
     creationScope: 'ASSIGNEE_CREATE'
-  }), null);
+  }), /termin tarihi/);
   assert.match(simpleTaskRequiredFieldsError({
     task: 'Tam kapsamlı görev',
     dueDate: '',

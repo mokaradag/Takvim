@@ -53,7 +53,7 @@ test('snapshot API completes assignees only for already-authorized visible task 
   assert.equal((repositorySource.match(/MR_V_CorporateProjectAccess/g) || []).length, 1);
   assert.match(repositorySource, /WHERE auth\.IdentityVisible = 1/);
   assert.match(repositorySource, /LEFT JOIN dbo\.MR_V_PeopleDirectory pd ON pd\.Sicil = ta\.Sicil/);
-  assert.match(repositorySource, /return \{ snapshot: applyTaskAssigneeProjection\(snapshot, assigneeRows\), auth \};/);
+  assert.match(repositorySource, /snapshot: \{ \.\.\.applyTaskAssigneeProjection\(snapshot, assigneeRows\), scheduleRequests \}/);
   assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
   assert.match(routeSource, /loadSnapshotForRequest\(request, repository\)/);
 

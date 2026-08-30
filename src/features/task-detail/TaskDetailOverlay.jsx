@@ -5,6 +5,8 @@ import {
   useAllProjects,
   useAllTasks,
   useTaskAssignmentScope,
+  useCurrentUser,
+  useScheduleRequests,
   useSelectedTask,
   useTaskActions
 } from '../../state/hooks';
@@ -32,7 +34,9 @@ export function TaskDetailOverlay({ simple = false }) {
   // okunur açardı.
   const assignableProjects = useTaskAssignmentScope();
   const people = useAllPeople();
-  const { closeTask, updateTask, moveTaskToWbs, deleteTask } = useTaskActions();
+  const currentUser = useCurrentUser();
+  const scheduleRequests = useScheduleRequests();
+  const { closeTask, updateTask, moveTaskToWbs, deleteTask, submitScheduleChange } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
   const [closingTaskId, setClosingTaskId] = useState(null);
   const taskIdRef = useRef(task?.id || null);
@@ -70,7 +74,7 @@ export function TaskDetailOverlay({ simple = false }) {
 
   // Yazma yetkisi görev ATAMA kapsamını ve görevin yetkili sorumlusu için dar
   // içerik/ilerleme kapsamını içerir (bkz. projectWritePolicy).
-  const writeState = { projects, tasks, assignableProjects };
+  const writeState = { projects, tasks, assignableProjects, currentUser };
   // Görev kapsamlı adlar yalnızca gösterilir; kimlik ve yazma kararı mevcut
   // Sicil kapsamı ile yetkili sorumlu sayısından türetilir.
   const initialAccess = resolveTaskMutationAccess(writeState, task.id, {});
@@ -154,6 +158,10 @@ export function TaskDetailOverlay({ simple = false }) {
         onUpdate={onUpdate}
         onDelete={deleteTask}
         canManageAssignees={initialAccess.canManageAssignees}
+        canControlSchedule={initialAccess.canControlSchedule}
+        canProposeSchedule={initialAccess.canProposeSchedule}
+        scheduleRequests={scheduleRequests.filter((request) => String(request.taskId) === String(task.id))}
+        onProposeSchedule={submitScheduleChange}
         canDelete={initialAccess.canDelete}
         isSaving={closingTaskId === task.id}
       />
@@ -169,7 +177,12 @@ export function TaskDetailOverlay({ simple = false }) {
       onUpdate={onUpdate}
       onDelete={deleteTask}
       canManageStructure={initialAccess.canManageStructure}
+      canChooseWbs={initialAccess.canChooseWbs}
       canManageAssignees={initialAccess.canManageAssignees}
+      canControlSchedule={initialAccess.canControlSchedule}
+      canProposeSchedule={initialAccess.canProposeSchedule}
+      scheduleRequests={scheduleRequests.filter((request) => String(request.taskId) === String(task.id))}
+      onProposeSchedule={submitScheduleChange}
       canDelete={initialAccess.canDelete}
       isSaving={closingTaskId === task.id}
     />

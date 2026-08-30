@@ -15,7 +15,7 @@ import { projectColorVar } from '../../lib/colors';
 import { diffDays, fmt, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
-import { canDeleteTask } from '../../state/projectWritePolicy.js';
+import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useTasks } from '../../state/hooks';
 import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
 import { SIMPLE_TASK_FACET_KEYS, simpleTaskFacetValues, simpleTaskMatches } from './simpleTaskFacets.js';
@@ -51,8 +51,8 @@ export function SimpleTasksView({ onNewTask }) {
 
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const taskMutationState = useMemo(
-    () => ({ tasks, projects, assignableProjects }),
-    [tasks, projects, assignableProjects]
+    () => ({ tasks, projects, assignableProjects, currentUser: appState.currentUser }),
+    [tasks, projects, assignableProjects, appState.currentUser]
   );
   const canAddTask = assignableProjects.some((project) => canResolveTaskAssignee(appState, project));
   const peopleById = useMemo(() => new Map(people.map((person) => [String(person.id), person])), [people]);
@@ -190,7 +190,7 @@ export function SimpleTasksView({ onNewTask }) {
                 const priority = resolvePriority(task.priority);
                 const referenceDay = today();
                 const late = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0;
-                const deletable = canDeleteTask(taskMutationState, task.id);
+                const deleteAccess = resolveTaskDeleteAccess(taskMutationState, task.id);
                 return (
                   <tr key={task.id} onClick={() => openTask(task)} style={{ cursor: 'pointer' }}>
                     <td>
@@ -236,8 +236,8 @@ export function SimpleTasksView({ onNewTask }) {
                         <button
                           className="icon-btn"
                           style={{ width: 26, height: 26 }}
-                          disabled={!deletable}
-                          title={deletable ? 'Görevi sil' : 'Görevi silme yetkiniz yok'}
+                          disabled={!deleteAccess.canDelete}
+                          title={deleteAccess.canDelete ? 'Görevi sil' : deleteAccess.reason}
                           aria-label="Görevi sil"
                           onClick={(event) => {
                             event.stopPropagation();

@@ -338,10 +338,10 @@ export function SimpleModePanel() {
       status: 'todo',
       priority: normalizePriorityId(priority),
       progress: 0,
+      plannedStart: dueDate,
+      plannedFinish: dueDate,
+      targetFinish: dueDate,
       ...(!assigneeCreateOnly ? {
-        plannedStart: dueDate,
-        plannedFinish: dueDate,
-        targetFinish: dueDate,
         actualStart: null,
         actualFinish: null,
         plannedDurationDays: null,
@@ -444,11 +444,11 @@ export function SimpleModePanel() {
             <input className="input" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Örn. Teklif, Onay, Teslim" disabled={!hasWritableDestination} />
           </label>
           <label className="simple-field">
-            <span>Termin tarihi {assigneeCreateOnly && <small>tam proje yetkisi gerekir</small>}</span>
+            <span>Termin tarihi</span>
             <DateInput
-              value={assigneeCreateOnly ? '' : dueDate}
+              value={dueDate}
               onChange={(value) => { setDueDate(value); setMessage(null); }}
-              disabled={!hasWritableDestination || assigneeCreateOnly}
+              disabled={!hasWritableDestination}
             />
           </label>
           <div className="simple-field">

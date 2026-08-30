@@ -7,7 +7,8 @@ export const ACCESS_REASONS = Object.freeze({
   MANUAL_PROJECT_LEAD: 'MANUAL_PROJECT_LEAD',
   MANUAL_GRANT: 'MANUAL_GRANT',
   EXECUTIVE_SCOPE: 'EXECUTIVE_SCOPE',
-  ASSIGNEE: 'ASSIGNEE'
+  ASSIGNEE: 'ASSIGNEE',
+  TASK_CREATOR: 'TASK_CREATOR'
 });
 
 export function deriveEffectiveAccess({ isSystemAdmin, fullProjectIds = [], partialProjectRows = [], partialTaskRows = [] }) {

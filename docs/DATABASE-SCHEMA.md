@@ -19,6 +19,7 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_WBS` | Structural WBS hierarchy (manual and CN43N-sourced) | PK `WbsId`; unique `(WbsId, ProjectId)` and `(ProjectId, Code)`; filtered unique `(ProjectId, SourceKey)`; same-Project composite parent FK; project/parent/sort and project/source indexes; rowversion |
 | `MR_Tasks` | Canonical mutable activity data | PK `TaskId`; unique `(TaskId, ProjectId)`; same-Project WBS FK; project/status, target, planned-range and WBS indexes; rowversion |
 | `MR_TaskAssignees` | Normalized Task-to-Sicil assignments | PK `(TaskId, Sicil)`; critical `IX_MR_TaskAssignees_Sicil_Task` |
+| `MR_TaskScheduleChangeRequests` | Persistent proposed-date workflow and decision history | PK `RequestId`; Task FK; filtered unique pending `(TaskId, RequesterSicil)`; owner/status and requester/status indexes; rowversion |
 | `MR_TaskDependencies` | Normalized FS/SS/FF/SF relationships | PK `TaskDependencyId`; same-Project composite Task FKs; unique relationship; predecessor index |
 | `MR_Baselines` | Immutable baseline headers | PK `BaselineId`; Project lookup; one primary baseline per Project |
 | `MR_TaskBaselineSnapshots` | Immutable planned Task snapshots | PK `(BaselineId, TaskId)`; Task lookup; deliberately no FK to current Task (see *Baseline history*) |
@@ -29,7 +30,7 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 
 ## Rowversion
 
-`MR_Projects`, `MR_WBS`, `MR_Tasks`, `MR_UserRoles`, `MR_Calendars`, and `MR_ProjectAccess` include `rowversion`. The application returns these bytes as opaque Base64 tokens. They are compared in update/delete predicates and are never interpreted as business numbers.
+`MR_Projects`, `MR_WBS`, `MR_Tasks`, `MR_TaskScheduleChangeRequests`, `MR_UserRoles`, `MR_Calendars`, and `MR_ProjectAccess` include `rowversion`. The application returns these bytes as opaque Base64 tokens. They are compared in update/delete predicates and are never interpreted as business numbers.
 
 ## Project schema
 
@@ -68,6 +69,12 @@ Calculated CPM dates, float, critical flags, WBS schedule rollups, Dashboard agg
 ## Assignments and external identity
 
 Assignments store one row per `(TaskId, Sicil)`. No comma-separated identity fields and no FK to HR02 are used. The server validates Sicil through the normalized people view before committing assignment changes.
+
+## Schedule-change requests
+
+`MR_TaskScheduleChangeRequests` stores the requester and decision-owner Sicils, original/proposed planned start, planned finish and target finish, requester/decision messages, status, timestamps, decision actor, `CreatedAgainstTaskVersion binary(8)`, and its own rowversion. Status is constrained to `PENDING`, `ACCEPTED`, `REJECTED`, `CANCELLED`, or `STALE`. A filtered unique index permits at most one PENDING request per requester and Task while preserving the complete decision history.
+
+The Task foreign key cascades deletion because a request cannot remain meaningful after its Task is removed. Acceptance does not trust the request row alone: the transaction compares the original date triple with the locked current Task before applying dates and marks the request `STALE` when the plan moved. `CreatedAgainstTaskVersion` is recorded as diagnostic evidence only, because an unrelated Task write also changes the rowversion. Request create, accept, reject/stale and the resulting Task update use the existing audit log and trusted Sicil identity.
 
 ## Baseline history
 
@@ -155,6 +162,8 @@ Then create the complete current schema with:
 The creation script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, creates `MR_V_CorporateProjectAccess` directly with the `PPTS` role code, seeds the default calendar, seeds SYSTEM_ADMIN roles from the `@SystemAdminSicils` parameter (empty by default; real Sicil values are personal data and are not committed), and records `0001_durable_persistence`.
 
 Task reminders are added by `database/MR_Upgrade_0005_Task_Reminders.sql`, which is idempotent and safe to rerun: it creates `MR_ReminderSettings` and `MR_TaskReminderLog` only when absent, seeds the single settings row with automatic sending disabled, creates the filtered unique slot index and records `0005_task_reminders`. Existing data is untouched. `MR_Create_Durable_Persistence.sql` creates the same objects for a fresh installation and `MR_Rollback_Durable_Persistence.sql` drops them in reverse order.
+
+Schedule-change requests are added by `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql`. The migration is idempotent, creates only the missing table/indexes, records `0007_task_schedule_change_requests`, and never rewrites existing Tasks. Fresh installations create the same object in `MR_Create_Durable_Persistence.sql`; rollback drops it before Task rows.
 
 During the first corporate project synchronization, the repository fills `MR_Projects.LeadSicil` from the `PROJECT_MANAGER` role. No separate `0002` migration script is required while the application is being tested through clean database recreation.
 

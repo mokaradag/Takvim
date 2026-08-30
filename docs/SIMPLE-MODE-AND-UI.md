@@ -44,7 +44,9 @@ Sayfa aynı sadeleştirilmiş alan kümesi üzerinde şu yetenekleri sunar:
 5. **Sıralama** — sade sütun başlıklarından yapılır.
 6. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
 
-`SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda ve panelin altında hatırlatma gönderme ve silme düğmeleri bulunur (`docs/TASK-REMINDERS.md`). Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
+`SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda silme eylemi bulunur; silme simgesi yetkisiz durumda açıklayıcı nedenle pasiftir, paneldeki büyük **Sil** düğmesi ise yalnızca sunucudaki kuralla uyumlu yetkili görevlerde gösterilir. Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
+
+Dar `ASSIGNEE_CREATE` kapsamında yeni görev tanımlayan normal kullanıcı için Termin alanı etkin ve zorunludur; değer sunucuya `plannedStart`, `plannedFinish` ve `targetFinish` olarak aynı günle gönderilir. Böylece arayüzde seçilen tarih sessizce atılmaz. Başka birinin oluşturduğu mevcut görevde kontrollü planı doğrudan değiştiremeyen sorumlu için Termin salt okunurdur; tarih önerisi Basit ve Gelişmiş Moddaki aynı kalıcı talep akışından yapılır.
 
 Üç davranış Gelişmiş Modla ortaktır ve bilinçlidir:
 
@@ -62,7 +64,7 @@ Yeni bir öncelik modeli **tanımlanmaz**. Gelişmiş Modun `TASK_PRIORITIES` ka
 
 ### Proje seçimi
 
-Hızlı Görev Tanımı ve sadeleştirilmiş görev düzenleme proje listesini `useTaskAssignableProjects()` üzerinden alır. Sıradan kullanıcı için bu, bugüne kadar olduğu gibi yalnızca kendi `corporateprojectaccess` projeleridir; müdür/direktör için buna kurumsal CN43N kataloğu eklenir. Kural ve sunucu tarafı sınırı: `docs/AUTHORIZATION-MODEL.md` · *Task assignment scope*.
+Hızlı Görev Tanımı ve sadeleştirilmiş görev düzenleme proje listesini `useTaskAssignableProjects()` üzerinden alır. Sıradan kullanıcı için tam yetkili projelere ek olarak, yetkili sorumlusu olduğu görev bulunan proje dar kendi-görev oluşturma kapsamında seçilebilir; müdür/direktör için buna kurumsal CN43N kataloğu eklenir. Bu genişleme proje veya WBS yönetim yetkisi vermez. Kural ve sunucu tarafı sınırı: `docs/AUTHORIZATION-MODEL.md` · *Task assignment scope*.
 
 ## Açılış perdesi
 

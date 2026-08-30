@@ -19,6 +19,7 @@ import { HelpView } from '../../features/help/HelpView';
 import { SettingsView } from '../../features/settings/SettingsView';
 import { SimpleModePanel } from '../../features/simple/SimpleModePanel';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
+import { ScheduleRequestCenter } from '../../features/schedule-change/ScheduleRequestCenter.jsx';
 import {
   useAllPeople,
   useAllProjects,
@@ -448,6 +449,7 @@ export default function AppShell() {
           )}
           <div className="topbar-spacer" />
           <div className="topbar-actions">
+            <ScheduleRequestCenter />
             <DataRefreshControl />
             {exportVisible && (
               <ProjectExportMenu

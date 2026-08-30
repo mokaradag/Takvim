@@ -3,7 +3,8 @@ import { projectWriteFailure, resolveTaskCreationAccess } from './projectWritePo
 import { WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors.js';
 
 const ASSIGNEE_TASK_CREATE_FIELDS = new Set([
-  'task', 'title', 'description', 'keyword', 'status', 'priority', 'progress'
+  'task', 'title', 'description', 'keyword', 'status', 'priority', 'progress',
+  'wbsId', 'plannedStart', 'plannedFinish', 'targetFinish'
 ]);
 
 /**
@@ -36,6 +37,10 @@ export async function executeTaskCreation({ state = {}, input = null, id, mutate
   const scopedInput = scope === 'ASSIGNEE_CREATE'
     ? Object.fromEntries(Object.entries(taskInput).filter(([key]) => ASSIGNEE_TASK_CREATE_FIELDS.has(key)))
     : taskInput;
+  const scopedWbsId = scope === 'ASSIGNEE_CREATE'
+    ? (state.wbs || []).find((node) => String(node.id) === String(scopedInput.wbsId)
+      && String(node.projectId) === String(project.id))?.id || baseTask.wbsId
+    : null;
   const currentUserId = state.currentUser?.id == null ? null : String(state.currentUser.id);
   const currentUserName = String(state.currentUser?.name || '').trim();
 
@@ -50,7 +55,7 @@ export async function executeTaskCreation({ state = {}, input = null, id, mutate
       proje: scope === 'ASSIGNEE_CREATE' ? (project.name ?? '') : (taskInput.proje ?? project.name ?? ''),
       color: scope === 'ASSIGNEE_CREATE' ? (project.color ?? baseTask.color) : (taskInput.color ?? project.color ?? baseTask.color),
       ...(scope === 'ASSIGNEE_CREATE' ? {
-        wbsId: baseTask.wbsId,
+        wbsId: scopedWbsId,
         calendarId: null,
         assigneeIds: currentUserId ? [currentUserId] : [],
         sorumlu: currentUserId && currentUserName ? [currentUserName] : [],
@@ -61,10 +66,10 @@ export async function executeTaskCreation({ state = {}, input = null, id, mutate
         milestone: false,
         isMilestone: false,
         sortOrder: null,
-        plannedStart: null,
-        plannedFinish: null,
+        plannedStart: scopedInput.plannedStart ?? baseTask.plannedStart,
+        plannedFinish: scopedInput.plannedFinish ?? baseTask.plannedFinish,
         plannedDurationDays: null,
-        targetFinish: null,
+        targetFinish: scopedInput.targetFinish ?? baseTask.targetFinish,
         actualStart: null,
         actualFinish: null,
         remainingDurationDays: null,

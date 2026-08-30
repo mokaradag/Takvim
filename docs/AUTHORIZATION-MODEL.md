@@ -6,9 +6,10 @@ Authorization is evaluated on the Next.js server using trusted Sicil identity. C
 
 1. **SYSTEM_ADMIN** — full access to every Project and operation.
 2. **FULL_PROJECT_ACCESS** — full access to one Project from HR09 responsibility, active `MR_ProjectAccess` FULL grant, or being the selected lead of an active manual Project.
-3. **EXECUTIVE_SCOPE** — read-only visibility of Tasks assigned to subordinate employees.
-4. **ASSIGNEE_SCOPE** — task-level work editing for the current user's assigned Tasks and narrow self-assigned Task creation in Projects where such an authoritative assignment exists.
-5. **DENY BY DEFAULT**.
+3. **TASK_CREATOR_SCOPE** — limited ownership of one Task identified by authoritative `MR_Tasks.CreatedBySicil`; it never becomes Project access.
+4. **EXECUTIVE_SCOPE** — read-only visibility of Tasks assigned to subordinate employees.
+5. **ASSIGNEE_SCOPE** — task-level work editing for the current user's assigned Tasks and narrow self-assigned Task creation in Projects where such an authoritative assignment exists.
+6. **DENY BY DEFAULT**.
 
 FULL always wins when the same Project is also visible through a partial source.
 
@@ -85,8 +86,9 @@ The server decides this inside the Task-create SQL transaction by reading `MR_Ta
 
 - the new Task remains in the same active Project;
 - the actor is the Task's only initial assignee;
-- the Task is attached to the Project root WBS;
-- planning, target and actual dates; dependencies; recurrence; milestone; ordering; Task-specific calendar; hour and financial fields cannot be introduced through this scope;
+- the actor may choose an existing WBS node in the same Project, but cannot create, rename, move, or delete WBS nodes;
+- planned start, planned finish, and target finish may be supplied; Simple Mode maps its required Termin date to all three fields for a new Task;
+- actual dates, dependencies, recurrence, milestone, ordering, Task-specific calendar, hour and financial fields cannot be introduced through this scope;
 - Project metadata, Project access, WBS, baseline, dependency and Project-delete permissions are unchanged;
 - unrelated Projects and Tasks remain absent from the authorization-filtered snapshot.
 
@@ -103,9 +105,9 @@ The Project-level check runs **before** assignee Sicils are validated against `M
 
 Both the source and the destination of a move are checked, so a Task cannot be dragged out of an executive's scope or into it past someone else's personnel. Assignment scope grants nothing else, and three limits are enforced explicitly because the Task write itself can otherwise reach beyond it:
 
-- **WBS placement.** A non-FULL write cannot choose a WBS node: a new Task is attached to the Project's root node (the only node the assignment-scope record exposes) and an existing Task keeps the node it already has. Arbitrary placement still requires FULL access.
+- **WBS placement.** Executive assignment scope cannot choose a WBS node: a new Task is attached to the Project root and an existing Task keeps its current node. `ASSIGNEE_CREATE` and a limited Task creator are separate narrow scopes: they may select an existing same-Project node from a read-only catalog, but cannot administer the WBS structure.
 - **Dependencies.** PARTIAL snapshots do not load `MR_TaskDependencies`, so the client holds `deps: []`. A non-FULL write therefore leaves existing dependency rows untouched instead of replacing them, and an explicit dependency edit from such a caller is rejected — otherwise editing a title would silently erase predecessors the manager was never allowed to see.
-- **Cascading deletes.** Deleting a Task also detaches its recurrence occurrences and clears dependency rows where it is the predecessor. Those related Tasks can be invisible and assigned outside the actor's scope, so a non-FULL delete is rejected when any related Task falls outside `MR_V_ExecutiveScope`.
+- **Cascading deletes.** Executive assignment scope and ordinary assignee scope cannot delete Tasks. A limited creator may delete only a Task they created while every authoritative assignee is either that creator or absent. The existing related-Task safety check still prevents such a delete from mutating invisible recurrence/dependency records.
 
 Creating a recurrence occurrence under a template is checked the same way: for a non-FULL write the **template's authoritative assignees** must also be in scope, so series generation cannot silently drop a co-assignee the PARTIAL snapshot hid.
 
@@ -119,15 +121,27 @@ The client mirrors the same rule (`src/state/projectWritePolicy.js`) purely for 
 
 An ordinary employee sees Tasks assigned to their Sicil plus the Project and WBS context needed to understand those Tasks. Unrelated Projects and Tasks are not returned. The server authorizes an update only after reading the authoritative `MR_TaskAssignees` rows inside the transaction and confirming that the current Sicil is still assigned.
 
-An assignee may edit the assigned Task's work fields: title, description/tag, status, priority, progress and planning/target/actual dates. The same actor may create a self-assigned Task under the narrow rules above. Neither operation grants Project metadata, WBS, access, dependency, recurrence, milestone, ordering, deletion or assignment-list mutation rights. Those structural fields still require their existing stronger authorization.
+An assignee may edit the assigned Task's work fields such as title, description/tag, status, priority, progress and the existing permitted actual/work fields. Controlled planned start, planned finish, and target finish are not directly writable on somebody else's Task: the assignee submits a persistent schedule-change request instead. The same actor may create a self-assigned Task under the narrow rules above. Neither operation grants Project metadata, WBS administration, access, dependency, recurrence, milestone, ordering, deletion or assignment-list mutation rights.
 
 Partial snapshots may intentionally omit co-assignees. An assignee work update therefore never treats the client assignee list as authoritative: it neither deletes nor reinserts `MR_TaskAssignees`, so hidden co-assignees are preserved. To mutate the assignment list, the client must send an explicit `assigneeIds` patch and the server requires FULL or valid executive assignment scope.
+
+## Limited Task creator scope
+
+`MR_Tasks.CreatedBySicil` is the authoritative source of limited ownership. A normal creator can directly edit the three controlled plan dates and select an existing same-Project WBS node for that one Task. They do not receive FULL Project access, Project metadata rights, assignee management, dependency management, or WBS administration.
+
+The creator may delete the Task only when the authoritative `MR_TaskAssignees` set contains no Sicil other than the creator. An empty set and a creator-only set are eligible; any other assignee blocks deletion. List and drawer controls reuse the shared client policy for a precise explanation, while the SQL transaction reloads creator and assignee rows and is the final boundary.
+
+## Schedule-change requests
+
+An assignee of somebody else's Task submits a row in `MR_TaskScheduleChangeRequests`; the Task itself is unchanged. The server prefers `MR_Tasks.CreatedBySicil` as the deterministic decision owner. When creator provenance is absent on a legacy Task, it falls back in order to the manual Project lead, an active FULL Project-access user, or an authorized corporate FULL user. Only the requester and decision owner can read the request, and only that exact owner can accept or reject it. One PENDING row per `(TaskId, RequesterSicil)` is active; submitting a replacement cancels the earlier row.
+
+Accept runs under SERIALIZABLE isolation, compares the three captured original dates with the current Task, recalculates planned working-day duration with the effective calendar, updates the Task and request atomically, and writes correlated audit rows. A date mismatch marks the request STALE and never overwrites the newer plan. Reject stores the decision without changing Task dates. The projected snapshot is the persistent notification source for both parties, so status survives refresh, logout, and offline periods; the UI uses a non-blocking request center rather than a mandatory real-time modal.
 
 ## Write permissions
 
 FULL Project users may create/edit/delete Tasks, assign employees, manage dependencies, manage WBS, move Tasks, reparent WBS, edit permitted Project metadata, and use complete Project scheduling/reporting.
 
-PARTIAL users cannot mutate Project, WBS, assignment, dependency, baseline, tag, or access records. There are three narrow Task exceptions: the executive Task assignment scope described above, authoritative current assignees editing only their assigned Task's work fields, and `ASSIGNEE_CREATE` creating a root-WBS Task assigned only to the actor. The client may disable controls, but the server independently returns FORBIDDEN for unauthorized writes.
+PARTIAL users cannot mutate Project, WBS structure, assignment, dependency, baseline, tag, or access records. Narrow Task exceptions are the executive Task assignment scope, authoritative current assignees editing work fields, `ASSIGNEE_CREATE` creating a self-assigned Task with Termin and an existing WBS selection, and the limited creator scope described above. The client may disable controls, but the server independently returns FORBIDDEN for unauthorized writes.
 
 Corporate identity fields are source-controlled. Even FULL users cannot change corporate SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName, or LeadSicil; the update statement preserves the corporate lead explicitly, so editing MERGEN-owned fields can never clear it. They may change supported application metadata such as Data Date, color, calendar, and tags. Manual Project owners may change the manual Project lead.
 
@@ -143,9 +157,11 @@ Visible Projects are the union of:
 - HR09-authorized corporate Projects, including Projects with zero Tasks;
 - active MR_ProjectAccess grants;
 - active manual Projects whose `LeadSicil` is the current Sicil;
-- Projects containing own or subordinate-assigned visible Tasks.
+- Projects containing own-created, own-assigned, or subordinate-assigned visible Tasks.
 
 `assignableProjects` is returned beside — never inside — this union, so widening Task selection for executives cannot widen what anyone sees. The people directory is widened by exactly one rule: when task-assignment scope is on, the executive's own `MR_V_ExecutiveScope` employees are included. Without it an executive holding no visible FULL Project could not find the very subordinate the rule exists to let them assign. Task, WBS, and Project visibility remain untouched by that flag.
+
+Co-assignee avatars do not widen the people directory. The projected snapshot carries a Task-scoped `(DisplayName, AvatarEmployeeNo)` identity only for already-authorized visible Task IDs. Task surfaces and Dashboard workload aggregation retain that Sicil through grouping and derive the photograph from it; display name alone is never used to choose a photograph, so same-name employees cannot receive each other's image.
 
 FULL Project snapshots include the complete Task network, WBS, dependencies, baselines, and scheduling context. PARTIAL snapshots include only authorized Tasks and necessary Project/WBS context. Deny-by-default prevents unrelated A01 catalog Projects from appearing for ordinary employees.
 

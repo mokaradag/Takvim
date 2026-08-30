@@ -1,5 +1,7 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
 
 BEGIN TRY
     BEGIN TRANSACTION;
@@ -244,6 +246,41 @@ BEGIN TRY
         CONSTRAINT FK_MR_TaskAssignees_Tasks FOREIGN KEY (TaskId) REFERENCES dbo.MR_Tasks(TaskId)
     );
     CREATE INDEX IX_MR_TaskAssignees_Sicil_Task ON dbo.MR_TaskAssignees(Sicil, TaskId);
+
+    CREATE TABLE dbo.MR_TaskScheduleChangeRequests (
+        RequestId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskScheduleChangeRequests_Id DEFAULT NEWSEQUENTIALID(),
+        TaskId uniqueidentifier NOT NULL,
+        RequesterSicil int NOT NULL,
+        DecisionOwnerSicil int NOT NULL,
+        OriginalPlannedStart date NULL,
+        ProposedPlannedStart date NULL,
+        OriginalPlannedFinish date NULL,
+        ProposedPlannedFinish date NULL,
+        OriginalTargetFinish date NULL,
+        ProposedTargetFinish date NULL,
+        RequesterMessage nvarchar(2000) NOT NULL,
+        Status varchar(20) NOT NULL,
+        CreatedAgainstTaskVersion binary(8) NOT NULL,
+        CreatedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_TaskScheduleChangeRequests_CreatedAt DEFAULT SYSUTCDATETIME(),
+        DecidedAt datetime2(7) NULL,
+        DecisionBySicil int NULL,
+        DecisionMessage nvarchar(2000) NULL,
+        RowVersion rowversion NOT NULL,
+        CONSTRAINT PK_MR_TaskScheduleChangeRequests PRIMARY KEY (RequestId),
+        CONSTRAINT FK_MR_TaskScheduleChangeRequests_Tasks FOREIGN KEY (TaskId)
+            REFERENCES dbo.MR_Tasks(TaskId) ON DELETE CASCADE,
+        CONSTRAINT CK_MR_TaskScheduleChangeRequests_Status
+            CHECK (Status IN ('PENDING','ACCEPTED','REJECTED','CANCELLED','STALE')),
+        CONSTRAINT CK_MR_TaskScheduleChangeRequests_PlannedDates
+            CHECK (ProposedPlannedStart IS NULL OR ProposedPlannedFinish IS NULL OR ProposedPlannedFinish >= ProposedPlannedStart)
+    );
+    CREATE UNIQUE INDEX UX_MR_TaskScheduleChangeRequests_RequesterPending
+        ON dbo.MR_TaskScheduleChangeRequests(TaskId, RequesterSicil)
+        WHERE Status = 'PENDING';
+    CREATE INDEX IX_MR_TaskScheduleChangeRequests_OwnerStatus
+        ON dbo.MR_TaskScheduleChangeRequests(DecisionOwnerSicil, Status, CreatedAt DESC);
+    CREATE INDEX IX_MR_TaskScheduleChangeRequests_RequesterStatus
+        ON dbo.MR_TaskScheduleChangeRequests(RequesterSicil, Status, CreatedAt DESC);
 
     CREATE TABLE dbo.MR_TaskDependencies (
         TaskDependencyId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskDependencies_Id DEFAULT NEWSEQUENTIALID(),
@@ -513,7 +550,9 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0002_corporate_wbs_sync_state', N'Corporate WBS synchronization fingerprints and canonical task priority default'),
            (N'0003_keycloak_identity', N'Keycloak authentication: identity provider only, no schema change; SYSTEM_ADMIN seed parameterized'),
            (N'0004_tag_appearance_and_recurrence', N'Project tag colour/icon columns and recurring task definition columns'),
-           (N'0005_task_reminders', N'Task reminder e-mail settings, template and persistent send history');
+           (N'0005_task_reminders', N'Task reminder e-mail settings, template and persistent send history'),
+           (N'0006_audit_deactivation', N'Denetim kaydında geri alınabilir proje devre dışı bırakma eylemi'),
+           (N'0007_task_schedule_change_requests', N'Persistent task schedule change request and decision workflow');
 
     COMMIT TRANSACTION;
 END TRY
