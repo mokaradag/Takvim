@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icons } from '../../components/icons.jsx';
 import { useScheduleRequests, useTaskActions } from '../../state/hooks/index.js';
 import { SCHEDULE_DATE_ROWS, requestDates, scheduleDifferenceSummary } from './scheduleChangePresentation.js';
+import { reduceScheduleRequestCenterOpen, scheduleRequestCenterViewState } from './scheduleRequestCenterState.js';
 import { useModalFocusTrap } from './useModalFocusTrap.js';
 
 const STATUS_LABELS = Object.freeze({
@@ -130,6 +131,9 @@ function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restor
   );
 }
 
+/**
+ * Tarih değişikliği taleplerini ve kalıcı karar bildirimlerini sunar.
+ */
 export function ScheduleRequestCenter() {
   const requests = useScheduleRequests();
   const { decideScheduleChange, openTask } = useTaskActions();
@@ -139,9 +143,18 @@ export function ScheduleRequestCenter() {
   const toggleRef = useRef(null);
   const pendingCount = requests.filter((request) => request.status === 'PENDING' && request.isDecisionOwner).length;
   const listed = requests;
+  const {
+    hasRequests,
+    isOpen: requestCenterOpen,
+    disabled: requestToggleDisabled
+  } = scheduleRequestCenterViewState(requests, open);
 
   useEffect(() => {
-    if (!open) return undefined;
+    setOpen((current) => reduceScheduleRequestCenterOpen(current, { type: 'sync', hasRequests }));
+  }, [hasRequests]);
+
+  useEffect(() => {
+    if (!requestCenterOpen) return undefined;
     const handlePointer = (event) => {
       if (!rootRef.current?.contains(event.target)) setOpen(false);
     };
@@ -154,7 +167,7 @@ export function ScheduleRequestCenter() {
       document.removeEventListener('mousedown', handlePointer);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [open]);
+  }, [requestCenterOpen]);
 
   return (
     <>
@@ -163,22 +176,22 @@ export function ScheduleRequestCenter() {
           ref={toggleRef}
           className="icon-btn schedule-request-toggle"
           type="button"
-          aria-label={pendingCount ? `${pendingCount} bekleyen tarih talebi` : 'Tarih talepleri'}
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
-          title="Tarih talepleri"
+          aria-label={pendingCount ? `${pendingCount} bekleyen tarih talebi` : hasRequests ? 'Tarih talepleri' : 'Tarih talebi bulunmuyor'}
+          aria-expanded={requestCenterOpen}
+          disabled={requestToggleDisabled}
+          onClick={() => setOpen((current) => reduceScheduleRequestCenterOpen(current, { type: 'toggle', hasRequests }))}
+          title={hasRequests ? 'Tarih talepleri' : 'Tarih talebi bulunmuyor'}
         >
           <Icons.Bell size={15} />
           {pendingCount > 0 && <span className="schedule-request-badge">{pendingCount > 9 ? '9+' : pendingCount}</span>}
         </button>
-        {open && (
+        {requestCenterOpen && (
           <section className="schedule-request-popover" role="dialog" aria-label="Tarih talepleri">
             <header>
               <div><strong>Tarih talepleri</strong><small>Kalıcı bildirimler ve kararlar</small></div>
               <span>{requests.length}</span>
             </header>
             <div className="schedule-request-list">
-              {!listed.length && <div className="schedule-request-empty"><Icons.Calendar size={18} /> Tarih talebi bulunmuyor.</div>}
               {listed.map((request) => {
                 const summary = scheduleDifferenceSummary(
                   requestDates(request, 'original'),
