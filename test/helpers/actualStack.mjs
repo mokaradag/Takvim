@@ -56,6 +56,7 @@ function applyEnvironment({ corporateWbsSource = true, authMode = 'development' 
  */
 export async function createActualStack(seed = {}, options = {}) {
   registerServerOnlyShim();
+  const previousDevSicil = process.env.MERGEN_ROTA_DEV_SICIL;
   applyEnvironment(options);
   if (options.sicil) process.env.MERGEN_ROTA_DEV_SICIL = String(options.sicil);
 
@@ -78,6 +79,8 @@ export async function createActualStack(seed = {}, options = {}) {
   const commitRoute = await import('../../src/app/api/mergen-rota/commit/route.js');
   const snapshotRoute = await import('../../src/app/api/mergen-rota/snapshot/route.js');
   const sessionRoute = await import('../../src/app/api/mergen-rota/session/route.js');
+  const scheduleCreateRoute = await import('../../src/app/api/mergen-rota/schedule-changes/route.js');
+  const scheduleDecisionRoute = await import('../../src/app/api/mergen-rota/schedule-changes/[requestId]/route.js');
 
   const requests = [];
   const fetchImplementation = async (url, init = {}) => {
@@ -97,6 +100,21 @@ export async function createActualStack(seed = {}, options = {}) {
       }));
     }
     if (path.endsWith('/session')) return sessionRoute.GET();
+    if (path.endsWith('/api/mergen-rota/schedule-changes') && (init.method || 'GET') === 'POST') {
+      return scheduleCreateRoute.POST(new Request('http://localhost' + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: init.body
+      }));
+    }
+    const scheduleMatch = path.match(/\/api\/mergen-rota\/schedule-changes\/([^/]+)$/);
+    if (scheduleMatch && (init.method || 'GET') === 'PATCH') {
+      return scheduleDecisionRoute.PATCH(new Request('http://localhost' + path, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: init.body
+      }), { params: { requestId: decodeURIComponent(scheduleMatch[1]) } });
+    }
     throw new Error(`Unexpected request path: ${path}`);
   };
 
@@ -150,6 +168,8 @@ export async function createActualStack(seed = {}, options = {}) {
       resetSqlPoolForTests();
       resetCorporateWbsPoolForTests();
       resetCorporateWbsSyncScheduleForTests();
+      if (previousDevSicil == null) delete process.env.MERGEN_ROTA_DEV_SICIL;
+      else process.env.MERGEN_ROTA_DEV_SICIL = previousDevSicil;
     }
   };
 }

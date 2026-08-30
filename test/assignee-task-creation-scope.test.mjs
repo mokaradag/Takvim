@@ -16,6 +16,7 @@ import {
 const PROJECT_P = '11111111-1111-4111-8111-111111111111';
 const PROJECT_Q = '11111111-1111-4111-8111-222222222222';
 const WBS_P = '22222222-2222-4222-8222-111111111111';
+const WBS_P_CHILD = '22222222-2222-4222-8222-111111111112';
 const WBS_Q = '22222222-2222-4222-8222-222222222222';
 const TASK_A = '33333333-3333-4333-8333-111111111111';
 const TASK_Q = '33333333-3333-4333-8333-222222222222';
@@ -41,6 +42,7 @@ function seed() {
     projectAccess: [{ ProjectId: PROJECT_P, Sicil: OWNER, AccessLevel: 'FULL', GrantSource: 'OWNER' }],
     wbs: [
       { WbsId: WBS_P, ProjectId: PROJECT_P, ParentWbsId: null, Code: 'P', Name: 'Proje P', SortOrder: 1 },
+      { WbsId: WBS_P_CHILD, ProjectId: PROJECT_P, ParentWbsId: WBS_P, Code: 'P.1', Name: 'Mevcut iş paketi', SortOrder: 2 },
       { WbsId: WBS_Q, ProjectId: PROJECT_Q, ParentWbsId: null, Code: 'Q', Name: 'Proje Q', SortOrder: 1 }
     ],
     tasks: [
@@ -125,9 +127,20 @@ test('yetkili görev sorumlusu doğrudan sunucu isteğiyle aynı projede kendisi
     assert.deepEqual(stack.state.tasks.map((task) => task.id), [TASK_A]);
     assert.equal(stack.state.projects[0].accessLevel, 'PARTIAL');
 
-    const committed = await stack.repository.commitChanges({ taskUpserts: [newTask()] });
+    const committed = await stack.repository.commitChanges({
+      taskUpserts: [newTask(TASK_B, {
+        wbsId: WBS_P_CHILD,
+        plannedStart: '2026-08-25',
+        plannedFinish: '2026-08-28',
+        targetFinish: '2026-08-28'
+      })]
+    });
     assert.equal(committed.taskUpserts[0].id, TASK_B);
     assert.equal(committed.taskUpserts[0].isCurrentUserAssignee, true);
+    assert.equal(committed.taskUpserts[0].wbsId, WBS_P_CHILD);
+    assert.equal(committed.taskUpserts[0].targetFinish, '2026-08-28');
+    assert.equal(committed.taskUpserts[0].plannedDurationDays, 4);
+    assert.equal(stack.db.tasks.find((task) => String(task.TaskId).toLowerCase() === TASK_B).PlannedDurationDays, 4);
     assert.deepEqual(
       stack.db.taskAssignees.filter((entry) => String(entry.TaskId).toLowerCase() === TASK_B).map((entry) => entry.Sicil),
       [ASSIGNEE]
@@ -153,10 +166,7 @@ test('dar kapsam başka proje, başka sorumlu ve yapısal yönetim için kullan�
       (error) => error.code === 'FORBIDDEN'
     );
     for (const [field, value] of [
-      ['plannedStart', '2026-08-25'],
-      ['plannedFinish', '2026-08-28'],
       ['plannedDurationDays', 3],
-      ['targetFinish', '2026-08-28'],
       ['actualStart', '2026-08-25'],
       ['actualFinish', '2026-08-28'],
       ['remainingDurationDays', 2]
@@ -166,7 +176,7 @@ test('dar kapsam başka proje, başka sorumlu ve yapısal yönetim için kullan�
         : { [field]: value };
       await assert.rejects(
         stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, schedulingPatch)] }),
-        (error) => error.code === 'FORBIDDEN' && /tarih/.test(error.message),
+        (error) => error.code === 'FORBIDDEN' && /saat veya finans/.test(error.message),
         `${field} dar oluşturma kapsamında reddedilmelidir`
       );
     }
@@ -187,16 +197,14 @@ test('dar kapsam başka proje, başka sorumlu ve yapısal yönetim için kullan�
   }
 });
 
-test('dar sorumlu oluşturması kök WBS bulunmayan projede boş WbsId yazmaz', async () => {
+test('dar sorumlu oluşturması WBS bulunmayan projede boş WbsId ile güvenle tamamlanır', async () => {
   const withoutRoot = seed();
   withoutRoot.wbs = [];
   const stack = await createActualStack(withoutRoot, { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
-    await assert.rejects(
-      stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, { wbsId: null })] }),
-      (error) => error.code === 'MUTATION_FAILED' && /kök WBS/.test(error.message)
-    );
-    assert.equal(stack.db.tasks.some((task) => String(task.TaskId).toLowerCase() === TASK_B), false);
+    const committed = await stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, { wbsId: null })] });
+    assert.equal(committed.taskUpserts[0].wbsId, null);
+    assert.equal(stack.db.tasks.some((task) => String(task.TaskId).toLowerCase() === TASK_B), true);
   } finally {
     await stack.dispose();
   }

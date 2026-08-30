@@ -65,6 +65,83 @@ test('WBS mutations and task moves require the same writable project', () => {
   assert.equal(resolveWbsMutationAccess(state, 'wbs-full', 'wbs-partial').code, 'PROJECT_WRITE_FORBIDDEN');
   assert.equal(resolveTaskWbsMoveAccess(state, ['task-full'], 'wbs-full').ok, true);
   assert.equal(resolveTaskWbsMoveAccess(state, ['task-partial'], 'wbs-full').code, 'PROJECT_WRITE_FORBIDDEN');
+  assert.deepEqual(
+    resolveTaskWbsMoveAccess(state, ['task-full'], 'missing-wbs'),
+    {
+      ok: false,
+      code: 'WBS_NODE_NOT_FOUND',
+      field: 'wbsId',
+      projectId: null,
+      message: 'Seçilen WBS düğümü bulunamadı.'
+    }
+  );
+});
+
+test('gizli eş sorumlular sınırlı oluşturucunun görev-özel hakkını engellemez', () => {
+  const creatorState = {
+    projects: [{ id: 'partial', name: 'Kısıtlı', accessLevel: 'PARTIAL' }],
+    assignableProjects: [],
+    currentUser: { id: '1001', name: 'Oluşturucu' },
+    tasks: [{
+      id: 'creator-task',
+      projectId: 'partial',
+      createdBySicil: '1001',
+      isCurrentUserCreator: true,
+      isCurrentUserAssignee: false,
+      assigneeIds: [],
+      assigneeCount: 2
+    }]
+  };
+  const access = resolveTaskMutationAccess(creatorState, 'creator-task', { targetFinish: '2026-09-10' });
+  assert.equal(access.ok, true);
+  assert.equal(access.scope, 'CREATOR');
+  assert.equal(access.canControlSchedule, true);
+  assert.equal(access.canDelete, false);
+  const actualDateAccess = resolveTaskMutationAccess(creatorState, 'creator-task', { actualStart: '2026-09-01' });
+  assert.equal(actualDateAccess.ok, false);
+  assert.equal(actualDateAccess.code, 'TASK_CREATOR_FIELD_FORBIDDEN');
+});
+
+test('oluşturucu kaydı olmayan görevde kalıcı sorumlu tarih talebi eylemini görür', () => {
+  const legacyState = {
+    projects: [{ id: 'partial', name: 'Kısıtlı', accessLevel: 'PARTIAL' }],
+    assignableProjects: [],
+    currentUser: { id: '1001', name: 'Sorumlu' },
+    tasks: [{
+      id: 'legacy-task',
+      projectId: 'partial',
+      createdBySicil: null,
+      isCurrentUserCreator: false,
+      isCurrentUserAssignee: true,
+      assigneeIds: ['1001'],
+      assigneeCount: 1
+    }]
+  };
+  const access = resolveTaskMutationAccess(legacyState, 'legacy-task', {});
+  assert.equal(access.ok, true);
+  assert.equal(access.scope, 'ASSIGNEE');
+  assert.equal(access.canProposeSchedule, true);
+});
+
+test('atama kapsamındaki kalıcı sorumlu tarih talebi eylemini korur', () => {
+  const assignmentState = {
+    projects: [{ id: 'partial', name: 'Kısıtlı', accessLevel: 'PARTIAL' }],
+    assignableProjects: [{ id: 'partial', name: 'Kısıtlı', accessLevel: 'PARTIAL' }],
+    currentUser: { id: '1001', name: 'Atama Yöneticisi' },
+    tasks: [{
+      id: 'assignment-task',
+      projectId: 'partial',
+      createdBySicil: '2002',
+      isCurrentUserCreator: false,
+      isCurrentUserAssignee: true,
+      assigneeIds: ['1001'],
+      assigneeCount: 1
+    }]
+  };
+  const access = resolveTaskMutationAccess(assignmentState, 'assignment-task', {});
+  assert.equal(access.ok, true);
+  assert.equal(access.scope, 'ASSIGNMENT');
+  assert.equal(access.canProposeSchedule, true);
 });
 
 test('forbidden writes return a stable domain error without entering persistence', () => {
@@ -92,7 +169,7 @@ test('Advanced Mode views use the shared capability boundary', () => {
   const wbsView = fs.readFileSync(new URL('../src/features/wbs/WbsView.jsx', import.meta.url), 'utf8');
 
   assert.match(tasksView, /disabled=\{!canAddTask\}/);
-  assert.match(tasksView, /canDeleteTask\(taskMutationState, t\.id\)/);
+  assert.match(tasksView, /resolveTaskDeleteAccess\(taskMutationState, t\.id\)/);
   assert.match(detailOverlay, /ReadOnlyTaskDrawer/);
   assert.match(wbsView, /canEdit\s*&&/);
 });
@@ -122,6 +199,7 @@ test('Advanced Mode task creation applies the restricted payload before persiste
       assigneeIds: ['2002'],
       recurrence: 'FREQ=WEEKLY',
       plannedStart: '2026-08-28',
+      plannedFinish: '2026-08-29',
       targetFinish: '2026-08-30'
     },
     async mutate(operation, actionFactory) {
@@ -139,8 +217,9 @@ test('Advanced Mode task creation applies the restricted payload before persiste
   assert.deepEqual(calls[0].action.task.assigneeIds, ['1001']);
   assert.deepEqual(calls[0].action.task.sorumlu, ['Görevli Kullanıcı']);
   assert.equal(calls[0].action.task.recurrence, null);
-  assert.equal(calls[0].action.task.plannedStart, null);
-  assert.equal(calls[0].action.task.targetFinish, null);
+  assert.equal(calls[0].action.task.plannedStart, '2026-08-28');
+  assert.equal(calls[0].action.task.plannedFinish, '2026-08-29');
+  assert.equal(calls[0].action.task.targetFinish, '2026-08-30');
 
   let unauthorizedMutationCalls = 0;
   const unauthorized = await executeTaskCreation({

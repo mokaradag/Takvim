@@ -162,7 +162,7 @@ test('atama kapsamı düzenlemesi GÖRÜNMEYEN öncülleri silmez', async () => 
 
 /* ── 3. Kapsam dışı ilişkili görevler ───────────────────────────── */
 
-test('atama kapsamı silmesi KAPSAM DIŞI yinelemeye dokunamaz', async () => {
+test('atama kapsamı oluşturucu olmadan görevi silemez ve kapsam dışı yinelemeye dokunamaz', async () => {
   // Görev silindiğinde yinelemeleri AYRILIR (`RecurrenceParentTaskId = NULL`).
   // Bu yinelemeler görünmez ve yöneticinin kapsamı dışında olabilir; kapsam içi
   // bir görevi silmek onlara yazmamalıdır.
@@ -206,7 +206,7 @@ test('atama kapsamı silmesi KAPSAM DIŞI yinelemeye dokunamaz', async () => {
       stack.repository.commitChanges({ taskDeletes: [{ id: visible.id, version: visible.version }] }),
       (error) => {
         assert.equal(error.code, 'FORBIDDEN');
-        assert.match(error.message, /yetki alanınız dışındaki görevlerle ilişkili/i);
+        assert.match(error.message, /kendi oluşturduğunuz görevleri/i);
         return true;
       }
     );

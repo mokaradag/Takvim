@@ -84,7 +84,12 @@ export async function loadAuthorizationContext(executor = null) {
        OR EXISTS (
           SELECT 1 FROM dbo.MR_V_ExecutiveScope es
           WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-       );
+       )
+    UNION
+    SELECT t.ProjectId, t.TaskId, CAST('TASK_CREATOR' AS varchar(30)) AS Reason
+    FROM dbo.MR_Tasks t
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    WHERE t.CreatedBySicil = @sicil;
   `);
 
   const personRow = result.recordsets[0]?.[0];
@@ -99,7 +104,11 @@ export async function loadAuthorizationContext(executor = null) {
   const partialRows = (result.recordsets[4] || []).map((row) => ({
     projectId: rowId(row.ProjectId),
     taskId: rowId(row.TaskId),
-    reason: row.Reason === ACCESS_REASONS.ASSIGNEE ? ACCESS_REASONS.ASSIGNEE : ACCESS_REASONS.EXECUTIVE_SCOPE
+    reason: row.Reason === ACCESS_REASONS.ASSIGNEE
+      ? ACCESS_REASONS.ASSIGNEE
+      : row.Reason === ACCESS_REASONS.TASK_CREATOR
+        ? ACCESS_REASONS.TASK_CREATOR
+        : ACCESS_REASONS.EXECUTIVE_SCOPE
   }));
   const effective = deriveEffectiveAccess({
     isSystemAdmin,

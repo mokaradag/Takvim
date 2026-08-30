@@ -33,6 +33,10 @@ import {
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
+import {
+  decideScheduleChangeRequest,
+  submitScheduleChangeRequest
+} from '../data/api/scheduleChangeClient.js';
 
 const AppStateContext = createContext(null);
 const DataLifecycleContext = createContext(null);
@@ -239,7 +243,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       return projectWriteFailure('task/delete', {
         code: 'TASK_DELETE_FORBIDDEN',
         field: 'taskId',
-        message: 'Görev sorumlusu görevi düzenleyebilir ancak silemez; silme tam proje yetkisi gerektirir.'
+        message: access.deleteReason || 'Bu görevi silmek için proje yetkisi gerekir.'
       });
     }
     const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([id]));
@@ -250,6 +254,42 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     }
     return result;
   }, [applyStateAction, persistence]);
+
+  const submitScheduleChange = useCallback(async (input) => {
+    if (String(stateRef.current.session?.dataMode || '').toLowerCase() !== 'actual') {
+      return projectWriteFailure('schedule-change/create', {
+        code: 'ACTUAL_MODE_REQUIRED',
+        message: 'Tarih değişikliği talepleri yalnızca Gerçek Sistem modunda kullanılabilir.'
+      });
+    }
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
+    const result = await submitScheduleChangeRequest(input);
+    if (!result.ok) {
+      const details = result.error && typeof result.error === 'object' ? result.error : result;
+      return { ok: false, error: { kind: 'persistence', ...details } };
+    }
+    const reloadResult = await reloadData({ preserveFailedTaskUpdates: true });
+    return reloadResult.ok ? result : { ...result, refreshError: reloadResult.error || reloadResult };
+  }, [persistence, reloadData]);
+
+  const decideScheduleChange = useCallback(async (requestId, decision, message = '') => {
+    if (String(stateRef.current.session?.dataMode || '').toLowerCase() !== 'actual') {
+      return projectWriteFailure('schedule-change/decide', {
+        code: 'ACTUAL_MODE_REQUIRED',
+        message: 'Tarih değişikliği talepleri yalnızca Gerçek Sistem modunda kullanılabilir.'
+      });
+    }
+    const flushResult = await persistence.flush();
+    if (!flushResult.ok) return flushResult;
+    const result = await decideScheduleChangeRequest(requestId, decision, message);
+    if (!result.ok) {
+      const details = result.error && typeof result.error === 'object' ? result.error : result;
+      return { ok: false, error: { kind: 'persistence', ...details } };
+    }
+    const reloadResult = await reloadData({ preserveFailedTaskUpdates: true });
+    return reloadResult.ok ? result : { ...result, refreshError: reloadResult.error || reloadResult };
+  }, [persistence, reloadData]);
 
   const addTask = useCallback(async (input = null) => {
     const current = stateRef.current;
@@ -575,6 +615,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
+    submitScheduleChange,
+    decideScheduleChange,
     addTask,
     generateTaskSeries,
     addProject,
@@ -601,6 +643,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     moveTaskToWbs,
     moveTasksToWbs,
     deleteTask,
+    submitScheduleChange,
+    decideScheduleChange,
     addTask,
     generateTaskSeries,
     addProject,
@@ -630,6 +674,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       tasks: state.tasks,
       baselines: state.baselines,
       taskBaselineSnapshots: state.taskBaselineSnapshots,
+      scheduleRequests: state.scheduleRequests,
       session: state.session,
       currentUser: state.currentUser,
       isSystemAdmin: state.isSystemAdmin,
@@ -655,6 +700,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     state.tasks,
     state.baselines,
     state.taskBaselineSnapshots,
+    state.scheduleRequests,
     state.session,
     state.currentUser,
     state.isSystemAdmin,

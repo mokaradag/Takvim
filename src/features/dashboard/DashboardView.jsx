@@ -13,6 +13,7 @@ import { useAllPeople, useTasks, useTaskActions } from '../../state/hooks';
 import { STATUS_DISTRIBUTION_BUCKETS, selectStatusDistribution } from './statusDistribution.js';
 import { selectOverdueAging, selectPlanHygiene } from './planHealth.js';
 import { useTodayKey } from '../../hooks/useTodayKey.js';
+import { selectDashboardWorkload } from './workloadProjection.js';
 
 /* ── Özet (Dashboard) ──────────────────────────────────── */
 export function DashboardView({ onNavigate }) {
@@ -65,35 +66,13 @@ export function DashboardView({ onNavigate }) {
       .sort((a, b) => b.value - a.value);
   }, [tasks]);
 
-  // Aynı adlı iki çalışan olduğunda kişi kaydı çözülmez; fotoğraf yerine baş
-  // harf yedeği gösterilir (yanlış kişiyi göstermektense belirsiz bırakılır).
-  const personByName = useMemo1(() => {
-    const index = new Map();
-    for (const person of people) {
-      if (!person?.name) continue;
-      index.set(person.name, index.has(person.name) ? null : person);
-    }
-    return index;
-  }, [people]);
-
-  const workload = useMemo1(() => {
-    const map = {};
-    tasks.forEach(t => {
-      t.sorumlu.forEach(s => {
-        map[s] = map[s] || { total: 0, done: 0, late: 0, active: 0 };
-        map[s].total++;
-        if (t.status === 'done') map[s].done++;
-        else map[s].active++;
-        if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) map[s].late++;
-      });
-    });
-    const rows = Object.entries(map)
-      .map(([name, v]) => ({ name, ...v, color: personColorVar(name) }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 5);
-    const max = rows.reduce((peak, row) => Math.max(peak, row.total), 1);
-    return rows.map((row) => ({ ...row, share: row.total / max, person: personByName.get(row.name) || null }));
-  }, [tasks, personByName, today_]);
+  // Fotoğraf kimliği genel kişi dizininden ada göre yeniden çözülmez. Görev
+  // kapsamında yetkili olarak gelen Sicil iş yükü satırına kadar korunur.
+  const workload = useMemo1(
+    () => selectDashboardWorkload(tasks, people, today_)
+      .map((row) => ({ ...row, color: personColorVar(row.name) })),
+    [tasks, people, today_]
+  );
 
   // Birikimli tamamlanma: bir görevin tamamlandığı gün GERÇEKLEŞEN bitiştir.
   // Planlanan bitişe bakmak, planı ileri bir tarihte olan ama bugün bitirilen
@@ -425,7 +404,7 @@ export function DashboardView({ onNavigate }) {
             ]}
             emptyText="Görev atanmış ekip üyesi yok."
             rows={workload.map((row) => ({
-              id: row.name,
+              id: row.id,
               name: row.name,
               person: row.person,
               subtitle: personUnitLabel(row.person),

@@ -4,6 +4,23 @@ import { sql, withSqlTransaction } from '../db/pool.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 import { applyDefaultCalendarProjection } from './calendarProjection.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
+import { listScheduleChanges } from '../schedule-change/scheduleChangeStore.js';
+
+function missingScheduleRequestSchema(error) {
+  return Number(error?.number) === 208
+    && String(error?.message || '').includes('MR_TaskScheduleChangeRequests');
+}
+
+async function loadScheduleChanges(executor, auth) {
+  try {
+    return await listScheduleChanges(executor, auth);
+  } catch (error) {
+    // Uygulama paketi göçten önce açılırsa eski kurulum kullanılabilir kalır;
+    // başka bütün SQL hataları yine görünür biçimde yükseltilir.
+    if (missingScheduleRequestSchema(error)) return [];
+    throw error;
+  }
+}
 
 /** Görünür görevlerin kimlik ve görev kapsamlı ad izdüşümü. */
 async function loadVisibleTaskAssignees(executor, taskIds, auth) {
@@ -42,6 +59,7 @@ async function loadVisibleTaskAssignees(executor, taskIds, auth) {
             AND pa.AccessLevel IN ('FULL', 'READ')
         )
         OR (p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil)
+        OR t.CreatedBySicil = @sicil
         OR ta.Sicil = @sicil
         OR EXISTS (
           SELECT 1 FROM dbo.MR_V_ExecutiveScope es
@@ -88,8 +106,12 @@ export function createProjectedSqlAppRepository() {
       const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
       const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds, auth);
       const defaultCalendarId = await loadDefaultCalendarId(transaction);
+      const scheduleRequests = await loadScheduleChanges(transaction, auth);
       Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
-      return { snapshot: applyTaskAssigneeProjection(snapshot, assigneeRows), auth };
+      return {
+        snapshot: { ...applyTaskAssigneeProjection(snapshot, assigneeRows), scheduleRequests },
+        auth
+      };
     }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
     // Manuel Refresh önce depodaki yetkili snapshot'ı okur; ancak bundan sonra
     // tazelik zamanlayıcısını dürter. Böylece bu isteğin SERIALIZABLE okuması,

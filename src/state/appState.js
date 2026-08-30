@@ -234,6 +234,7 @@ function emptyApplicationData() {
     tasks: [],
     baselines: [],
     taskBaselineSnapshots: [],
+    scheduleRequests: [],
     // Görev atama kapsamındaki (görünür OLMAYAN) kurumsal projeler.
     assignableProjects: [],
     assignmentScopeSicils: [],
@@ -303,7 +304,8 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
       previous.taskBaselineSnapshots,
       snapshot.taskBaselineSnapshots,
       (value) => value?.id || `${value?.baselineId || ''}:${value?.taskId || ''}`
-    )
+    ),
+    scheduleRequests: reconcileSnapshotCollection(previous.scheduleRequests, snapshot.scheduleRequests)
   };
   // Bağlam görev BAŞINA değil, bir kez kurulur: birleştirilmiş `projects`,
   // `wbs` ve `people` dizileri her görev için yeniden ayrılınca maliyet

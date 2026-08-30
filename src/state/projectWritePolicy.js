@@ -145,9 +145,13 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   const hasProjectTaskWrite = canAssignTasksInProject(state, task.projectId);
   const hasHiddenAssignees = Number(task.assigneeCount ?? (task.assigneeIds || []).length)
     > (task.assigneeIds || []).length;
-  const assigneeWorkOnly = Boolean(task.isCurrentUserAssignee)
+  const currentUserId = state.currentUser?.id == null ? null : String(state.currentUser.id);
+  const isTaskCreator = Boolean(task.isCurrentUserCreator)
+    || Boolean(currentUserId && String(task.createdBySicil || '') === currentUserId);
+  const limitedCreator = isTaskCreator && !hasFullSourceProject;
+  const assigneeWorkOnly = Boolean(task.isCurrentUserAssignee) && !limitedCreator
     && (!hasProjectTaskWrite || (hasHiddenAssignees && !hasFullSourceProject));
-  if (hasHiddenAssignees && !hasFullSourceProject && !task.isCurrentUserAssignee) {
+  if (hasHiddenAssignees && !hasFullSourceProject && !task.isCurrentUserAssignee && !limitedCreator) {
     return {
       ok: false,
       code: 'TASK_HIDDEN_ASSIGNEES_FORBIDDEN',
@@ -156,7 +160,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       message: 'Görevin kapsam dışı sorumluları bulunduğu için bu görev yalnızca tam proje yetkisiyle değiştirilebilir.'
     };
   }
-  if (!hasProjectTaskWrite && !assigneeWorkOnly) {
+  if (!hasProjectTaskWrite && !assigneeWorkOnly && !limitedCreator) {
     return {
       ok: false,
       code: 'PROJECT_WRITE_FORBIDDEN',
@@ -166,14 +170,51 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     };
   }
 
+  if (limitedCreator) {
+    const protectedFields = new Set([
+      'projectId', 'proje', 'calendarId', 'assigneeIds', 'deps',
+      'isMilestone', 'milestone', 'recurrence', 'recurrenceParentId',
+      'recurrenceOccurrenceDate', 'sortOrder',
+      'actualStart', 'actualFinish',
+      'plannedHours', 'actualHours', 'budget', 'spent'
+    ]);
+    const field = Object.keys(patch || {}).find((key) => protectedFields.has(key));
+    if (field) {
+      return {
+        ok: false,
+        code: 'TASK_CREATOR_FIELD_FORBIDDEN',
+        field,
+        projectId: task.projectId,
+        message: 'Görev oluşturucusu tarih ve mevcut WBS seçimini yönetebilir; proje, sorumlu ve genel proje yapısını yönetemez.'
+      };
+    }
+    const visibleAssignees = (task.assigneeIds || []).map(String);
+    const hasOtherAssignee = visibleAssignees.some((id) => !currentUserId || id !== currentUserId)
+      || Number(task.assigneeCount ?? visibleAssignees.length) > visibleAssignees.length;
+    return {
+      ok: true,
+      task,
+      sourceProject,
+      destinationProject: sourceProject,
+      scope: 'CREATOR',
+      canManageStructure: false,
+      canChooseWbs: true,
+      canManageAssignees: false,
+      canControlSchedule: true,
+      canProposeSchedule: false,
+      canDelete: !hasOtherAssignee,
+      deleteReason: hasOtherAssignee ? 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.' : null
+    };
+  }
+
 
   if (assigneeWorkOnly) {
     const protectedFields = new Set([
       'projectId', 'proje', 'wbsId', 'calendarId', 'assigneeIds', 'deps',
       'isMilestone', 'milestone', 'recurrence', 'recurrenceParentId',
       'recurrenceOccurrenceDate', 'sortOrder',
-      // Planlama/hedef/gerçekleşen tarihler bilinçli olarak korunmaz: ürün
-      // sözleşmesi görev sorumlusunun bu iş alanlarını düzenlemesine izin verir.
+      // Kontrollü plan tarihleri yalnızca kalıcı tarih talebiyle değişir.
+      'plannedStart', 'plannedFinish', 'targetFinish',
       // Saat alanları veri uyumluluğu için taşınır ama ürün yüzeyinden ve dar
       // sorumlu yetkisinden çıkarılmıştır. Finansal alanlar da proje yönetimidir.
       'plannedHours', 'actualHours', 'budget', 'spent'
@@ -195,8 +236,12 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       destinationProject: sourceProject,
       scope: 'ASSIGNEE',
       canManageStructure: false,
+      canChooseWbs: false,
       canManageAssignees: false,
-      canDelete: false
+      canControlSchedule: false,
+      canProposeSchedule: !isTaskCreator,
+      canDelete: false,
+      deleteReason: 'Yalnızca kendi oluşturduğunuz görevleri silebilirsiniz.'
     };
   }
 
@@ -230,8 +275,12 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     destinationProject,
     scope: full ? 'FULL' : 'ASSIGNMENT',
     canManageStructure: full,
+    canChooseWbs: full,
     canManageAssignees: !hasHiddenAssignees,
-    canDelete: true
+    canControlSchedule: full,
+    canProposeSchedule: !full && Boolean(task.isCurrentUserAssignee) && !isTaskCreator,
+    canDelete: full,
+    deleteReason: full ? null : 'Bu görevi silmek için proje yetkisi gerekir.'
   };
 }
 
@@ -239,6 +288,16 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
 export function canDeleteTask(state = {}, taskId = null) {
   const access = resolveTaskMutationAccess(state, taskId, {});
   return Boolean(access.ok && access.canDelete);
+}
+
+/** Liste ve panel için tek yetki kararı ile açıklayıcı silme nedenini döndürür. */
+export function resolveTaskDeleteAccess(state = {}, taskId = null) {
+  const access = resolveTaskMutationAccess(state, taskId, {});
+  if (!access.ok) return { canDelete: false, reason: access.message || 'Bu görevi silmek için proje yetkisi gerekir.' };
+  return {
+    canDelete: Boolean(access.canDelete),
+    reason: access.canDelete ? null : (access.deleteReason || 'Bu görevi silmek için proje yetkisi gerekir.')
+  };
 }
 
 export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null) {
@@ -296,19 +355,28 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
 export function resolveTaskWbsMoveAccess(state = {}, taskIds = [], targetWbsId = null) {
   const target = (state.wbs || []).find((node) => String(node.id) === String(targetWbsId)) || null;
   const targetProject = target ? findProject(state.projects, target.projectId) : null;
-  if (!target || !canWriteProject(targetProject)) {
+  if (!target) {
     return {
       ok: false,
-      code: 'PROJECT_WRITE_FORBIDDEN',
-      field: 'projectId',
-      projectId: target?.projectId || null,
-      message: 'Görevler yalnızca yazılabilir bir projenin WBS düğümüne taşınabilir.'
+      code: 'WBS_NODE_NOT_FOUND',
+      field: 'wbsId',
+      projectId: null,
+      message: 'Seçilen WBS düğümü bulunamadı.'
     };
   }
 
   for (const id of [...new Set(taskIds || [])]) {
     const access = resolveTaskMutationAccess(state, id);
     if (!access.ok) return access;
+    if (!access.canChooseWbs) {
+      return {
+        ok: false,
+        code: 'TASK_WBS_FORBIDDEN',
+        field: 'wbsId',
+        projectId: target.projectId,
+        message: 'Bu görev için WBS seçme yetkiniz bulunmuyor.'
+      };
+    }
     if (String(access.task.projectId) !== String(target.projectId)) {
       return {
         ok: false,

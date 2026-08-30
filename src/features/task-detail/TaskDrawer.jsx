@@ -58,6 +58,8 @@ import { resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './
 import { canCloseWithTaskTitle, useTaskTitleDraft } from './taskTitleDraft.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
+import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
+import { scheduleDifferenceSummary, requestDates } from '../schedule-change/scheduleChangePresentation.js';
 
 function legacyProjectTags(projectId, tasks) {
   return Array.from(new Set(
@@ -97,7 +99,12 @@ export function TaskDrawer({
   onUpdate,
   onDelete,
   canManageStructure = true,
+  canChooseWbs = true,
   canManageAssignees = true,
+  canControlSchedule = true,
+  canProposeSchedule = false,
+  scheduleRequests = [],
+  onProposeSchedule = null,
   canDelete = true,
   isSaving = false
 }) {
@@ -121,6 +128,7 @@ export function TaskDrawer({
     [tasks, task.id]
   );
   const [local, setLocal] = useState({ ...task });
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const descriptionDraftRef = useRef(null);
   const closingRef = useRef(null);
   const {
@@ -155,6 +163,10 @@ export function TaskDrawer({
   const calendarWarnings = useMemo(
     () => getTaskCalendarWarnings(local, { projects, calendars }),
     [local, projects, calendars]
+  );
+  const pendingScheduleRequest = useMemo(
+    () => scheduleRequests.find((request) => request.status === 'PENDING' && request.isRequester) || null,
+    [scheduleRequests]
   );
   // Görev kendi takvimini geçersiz kılabilir; tekrar önizlemesi de üretimle aynı
   // takvimi kullanmalıdır (bkz. resolveTaskCalendar önceliği).
@@ -443,7 +455,7 @@ export function TaskDrawer({
                     placeholder="WBS seçilmedi"
                     searchPlaceholder="WBS kodu veya adıyla ara"
                     emptyText="Bu projede dağılım düğümü bulunamadı."
-                    disabled={!canManageStructure || !local.projectId || projectWbsRows.length === 0}
+                    disabled={!canChooseWbs || !local.projectId || projectWbsRows.length === 0}
                     maxVisible={60}
                   />
                 </div>
@@ -507,14 +519,34 @@ export function TaskDrawer({
             </Section>
 
             <Section title="Güncel plan" icon={<Icons.Calendar size={13} />} tone="var(--accent)">
+              {pendingScheduleRequest && (
+                <div className="schedule-pending-indicator">
+                  <Icons.Clock size={13} />
+                  <span>
+                    <strong>Tarih değişikliği bekliyor</strong>
+                    <small>{pendingScheduleRequest.requesterName} · {new Date(pendingScheduleRequest.createdAt).toLocaleString('tr-TR')}</small>
+                  </span>
+                  <span className="schedule-pending-summary">
+                    {scheduleDifferenceSummary(
+                      requestDates(pendingScheduleRequest, 'original'),
+                      requestDates(pendingScheduleRequest, 'proposed')
+                    )[0] || 'Plan değişikliği'}
+                  </span>
+                </div>
+              )}
               <div className="task-date-grid">
-                <DateField label="Planlanan başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} maxDate={local.plannedFinish} />
-                <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} minDate={local.plannedStart} />
-                <DateField label="Hedef bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} />
+                <DateField label="Planlanan başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} maxDate={local.plannedFinish} disabled={!canControlSchedule} />
+                <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} minDate={local.plannedStart} disabled={!canControlSchedule} />
+                <DateField label="Hedef bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} disabled={!canControlSchedule} />
               </div>
               <div className="muted" style={{ fontSize: 11.5 }}>
                 Planlanan süre: <span className="tabular">{local.plannedDurationDays ?? '—'}</span> çalışma günü
               </div>
+              {!canControlSchedule && (
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  Bu plan görev oluşturucusu tarafından yönetilir. Yeni bir tarih önerebilirsiniz.
+                </div>
+              )}
               {calendarWarnings.length > 0 && (
                 <div className="calendar-warning">
                   <strong>Çalışma takvimi uyarısı</strong>
@@ -645,12 +677,26 @@ export function TaskDrawer({
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
           <TaskReminderButton task={task} size={30} />
+          {canProposeSchedule && <button
+            type="button"
+            className="btn schedule-propose-button"
+            onClick={() => setScheduleDialogOpen(true)}
+          >
+            <Icons.Calendar size={13} /> {pendingScheduleRequest ? 'Öneriyi değiştir' : 'Yeni tarih öner'}
+          </button>}
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={closeWithDraft} disabled={isSaving} aria-busy={isSaving}>
             {isSaving ? 'Kaydediliyor…' : 'Tamam'}
           </button>
         </div>
       </div>
+      {scheduleDialogOpen && onProposeSchedule && (
+        <ScheduleChangeDialog
+          task={task}
+          onCancel={() => setScheduleDialogOpen(false)}
+          onSubmit={onProposeSchedule}
+        />
+      )}
     </>
   );
 }

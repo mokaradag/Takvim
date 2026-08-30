@@ -12,6 +12,7 @@ import { keywordDirtyFields, reconcileTaskDraft, runCurrentKeywordCommit } from 
 import { canCloseWithTaskTitle, useTaskTitleDraft } from './taskTitleDraft.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
+import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
 import { useAllProjects, useAllPeople, useAssignmentScopeSicils, useTaskActions } from '../../state/hooks';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 
@@ -31,6 +32,10 @@ export function SimpleTaskDrawer({
   onUpdate,
   onDelete,
   canManageAssignees = true,
+  canControlSchedule = true,
+  canProposeSchedule = false,
+  scheduleRequests = [],
+  onProposeSchedule = null,
   canDelete = true,
   isSaving = false
 }) {
@@ -40,6 +45,7 @@ export function SimpleTaskDrawer({
   const { cancelTaskFieldUpdates, updateProject } = useTaskActions();
   const [local, setLocal] = useState({ ...task });
   const [catalogWarning, setCatalogWarning] = useState(null);
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const closingRef = useRef(null);
   const keywordDraftRef = useRef(null);
   const {
@@ -169,6 +175,9 @@ export function SimpleTaskDrawer({
   };
 
   const priority = normalizePriorityId(local.priority);
+  const pendingScheduleRequest = scheduleRequests.find(
+    (request) => request.status === 'PENDING' && request.isRequester
+  ) || null;
 
   return (
     <>
@@ -279,7 +288,11 @@ export function SimpleTaskDrawer({
                 // değiştiren gizli planını yok ederdi.
                 : { targetFinish: value || null })}
               allowEmpty
+              disabled={!canControlSchedule}
             />
+            {!canControlSchedule && (
+              <small className="muted">Bu görevin plan tarihleri görev oluşturucusunun onayıyla değiştirilir.</small>
+            )}
           </label>
 
           <div className="simple-field">
@@ -337,12 +350,26 @@ export function SimpleTaskDrawer({
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki modda da aynı. */}
           <TaskReminderButton task={task} size={30} />
+          {canProposeSchedule && <button
+            type="button"
+            className="btn schedule-propose-button"
+            onClick={() => setScheduleDialogOpen(true)}
+          >
+            <Icons.Calendar size={13} /> {pendingScheduleRequest ? 'Öneriyi değiştir' : 'Yeni tarih öner'}
+          </button>}
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={closeWithTitle} disabled={isSaving} aria-busy={isSaving}>
             {isSaving ? 'Kaydediliyor…' : 'Tamam'}
           </button>
         </div>
       </aside>
+      {scheduleDialogOpen && onProposeSchedule && (
+        <ScheduleChangeDialog
+          task={task}
+          onCancel={() => setScheduleDialogOpen(false)}
+          onSubmit={onProposeSchedule}
+        />
+      )}
     </>
   );
 }

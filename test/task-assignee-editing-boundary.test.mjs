@@ -25,7 +25,7 @@ function seed() {
     tasks: [{
       TaskId: TASK_ID, ProjectId: PROJECT_ID, WbsId: WBS_ID, Title: 'Ortak görev', Status: 'todo',
       Priority: 'medium', PlannedStart: '2026-08-10', PlannedFinish: '2026-08-15', TargetFinish: '2026-08-15',
-      Progress: 0, PlannedHours: 12, ActualHours: 3, SortOrder: 1
+      PlannedDurationDays: 5, Progress: 0, PlannedHours: 12, ActualHours: 3, SortOrder: 1
     }],
     taskAssignees: [{ TaskId: TASK_ID, Sicil: FIRST }, { TaskId: TASK_ID, Sicil: SECOND }]
   };
@@ -55,8 +55,13 @@ test('iki yetkili sorumludan her biri görev iş alanlarını düzenler ve gizli
     task = stack.state.tasks[0];
     assert.equal(task.isCurrentUserAssignee, true);
     assert.deepEqual(task.assigneeIds, [String(SECOND)]);
-    const secondResult = await updateVisibleTask(stack, { targetFinish: '2026-08-18', progress: 70 });
-    assert.equal(secondResult.taskUpserts[0].targetFinish, '2026-08-18');
+    await assert.rejects(
+      updateVisibleTask(stack, { targetFinish: '2026-08-18' }),
+      (error) => error.code === 'FORBIDDEN' && /tarih değişikliği talebi/.test(error.message)
+    );
+    assert.equal(stack.db.tasks[0].TargetFinish, '2026-08-15');
+    const secondResult = await updateVisibleTask(stack, { progress: 70 });
+    assert.equal(secondResult.taskUpserts[0].targetFinish, '2026-08-15');
     assert.deepEqual(stack.db.taskAssignees.map((entry) => entry.Sicil).sort(), [FIRST, SECOND]);
   } finally {
     await stack.dispose();
@@ -104,6 +109,21 @@ test('sorumlu kapsamı atama listesini, projeyi veya WBS yapısını yönetme ha
     assert.equal(ignoredProductFields.taskUpserts[0].progress, 20);
     assert.equal(stack.db.tasks[0].PlannedHours, 12);
     assert.equal(stack.db.tasks[0].Budget ?? null, null);
+    const omittedSchedule = { ...ignoredProductFields.taskUpserts[0], task: 'Tarihler korunarak güncellendi' };
+    for (const field of ['plannedStart', 'plannedFinish', 'plannedDurationDays', 'targetFinish']) {
+      delete omittedSchedule[field];
+    }
+    const schedulePreserved = await stack.repository.commitChanges({
+      taskUpserts: [{ ...omittedSchedule, assigneeMutation: false }]
+    });
+    assert.equal(schedulePreserved.taskUpserts[0].plannedStart, '2026-08-10');
+    assert.equal(schedulePreserved.taskUpserts[0].plannedFinish, '2026-08-15');
+    assert.equal(schedulePreserved.taskUpserts[0].plannedDurationDays, 5);
+    assert.equal(schedulePreserved.taskUpserts[0].targetFinish, '2026-08-15');
+    assert.equal(stack.db.tasks[0].PlannedStart, '2026-08-10');
+    assert.equal(stack.db.tasks[0].PlannedFinish, '2026-08-15');
+    assert.equal(stack.db.tasks[0].PlannedDurationDays, 5);
+    assert.equal(stack.db.tasks[0].TargetFinish, '2026-08-15');
     await assert.rejects(
       stack.repository.commitChanges({
         taskUpserts: [{ ...task, plannedHours: 99, assigneeMutation: false }]

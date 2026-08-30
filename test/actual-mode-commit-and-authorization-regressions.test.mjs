@@ -199,7 +199,7 @@ test('partial task visibility cannot add inactive projects to the visible projec
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(
     source,
-    /SELECT DISTINCT t\.ProjectId, 'PARTIAL'\s+FROM dbo\.MR_Tasks t\s+JOIN dbo\.MR_Projects p ON p\.ProjectId = t\.ProjectId\s+JOIN dbo\.MR_TaskAssignees ta ON ta\.TaskId = t\.TaskId\s+WHERE @isAdmin = 0 AND p\.IsActive = 1/s
+    /SELECT DISTINCT t\.ProjectId, 'PARTIAL'\s+FROM dbo\.MR_Tasks t\s+JOIN dbo\.MR_Projects p ON p\.ProjectId = t\.ProjectId\s+WHERE @isAdmin = 0 AND p\.IsActive = 1[\s\S]*t\.CreatedBySicil = @sicil[\s\S]*FROM dbo\.MR_TaskAssignees ta/s
   );
 });
 
@@ -381,7 +381,7 @@ test('task assignees persist only the Sicil list that passed normalization and d
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /function normalizeSicils\(sicils\)/);
   assert.match(source, /: await ensurePeople\(executor, task\.assigneeIds \|\| \[\]\);/);
-  assert.match(source, /assigneeWorkOnly\s+\? authoritativeAssigneeSicils/);
+  assert.match(source, /narrowTaskWrite\s+\? authoritativeAssigneeSicils/);
   assert.match(source, /for \(const sicil of assigneeSicils\)/);
   assert.doesNotMatch(source, /\(sicils \|\| \[\]\)\.filter\(Boolean\)\.map\(Number\)/);
 });
@@ -394,11 +394,13 @@ test('snapshot HR09 FULL visibility applies only to corporate projects', () => {
   );
 });
 
-test('partial snapshots return only visible-task WBS context and its ancestor chain', () => {
+test('partial snapshots expose the WBS catalog only for a creator or assigned user while retaining ancestor fallback', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
+  assert.match(source, /DECLARE @TaskScopedWbsProjects TABLE\(ProjectId uniqueidentifier PRIMARY KEY\)/);
+  assert.match(source, /INSERT @TaskScopedWbsProjects\(ProjectId\)[\s\S]*t\.CreatedBySicil = @sicil[\s\S]*FROM dbo\.MR_TaskAssignees ta[\s\S]*ta\.Sicil = @sicil/);
   assert.match(source, /;WITH RequiredPartialWbs AS \(/);
   assert.match(source, /WHERE v\.AccessLevel = 'PARTIAL'[\s\S]*JOIN RequiredPartialWbs child ON child\.ParentWbsId = parent\.WbsId/);
-  assert.match(source, /WHERE v\.AccessLevel = 'FULL'\s+OR EXISTS \(SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject\.ProjectId = w\.ProjectId\)\s+OR EXISTS \(SELECT 1 FROM RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
+  assert.match(source, /WHERE v\.AccessLevel = 'FULL'[\s\S]*@TaskScopedWbsProjects scopedProject[\s\S]*OR EXISTS \(SELECT 1 FROM RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
   assert.match(source, /OPTION \(MAXRECURSION 1000\)/);
 });
 
