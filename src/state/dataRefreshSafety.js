@@ -43,3 +43,51 @@ export function createDataRefreshRequestGuard() {
     }
   };
 }
+
+/** Manuel ve otomatik yenilemeleri aynı tek-uçuş sınırında güvenle sıralar. */
+export function createDataRefreshSingleFlight() {
+  let active = null;
+  let queued = null;
+
+  function start(operation, operationKind) {
+    const promise = Promise.resolve().then(operation);
+    const current = { promise, operationKind };
+    active = current;
+    const clear = () => {
+      if (active === current) active = null;
+    };
+    void promise.then(clear, clear);
+    return promise;
+  }
+
+  function queueAfterActive(operation, operationKind) {
+    if (queued) return queued;
+    const activePromise = active.promise;
+    queued = activePromise
+      .then(() => undefined, () => undefined)
+      .then(() => {
+        queued = null;
+        return active ? active.promise : start(operation, operationKind);
+      });
+    return queued;
+  }
+
+  return {
+    run(operation, {
+      skipIfBusy = false,
+      operationKind = 'default',
+      queueIfActiveKind = null
+    } = {}) {
+      if (active) {
+        if (skipIfBusy) {
+          return Promise.resolve({ ok: true, value: null, skipped: true, reason: 'REFRESH_IN_PROGRESS' });
+        }
+        if (queueIfActiveKind && active.operationKind === queueIfActiveKind) {
+          return queueAfterActive(operation, operationKind);
+        }
+        return active.promise;
+      }
+      return start(operation, operationKind);
+    }
+  };
+}

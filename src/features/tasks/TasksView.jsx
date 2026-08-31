@@ -21,6 +21,10 @@ import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProj
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { taskProgressValue, taskSortValue } from './taskDisplayValues.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
+import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
+import { TaskOrganizationFilterControls } from './TaskOrganizationFilterControls.jsx';
+import { useSharedTaskOrganizationFilter } from './TaskOrganizationFilterContext.jsx';
+import { useTaskOrganizationFilter } from './useTaskOrganizationFilter.js';
 
 function projectLabel(project) {
   if (!project) return '';
@@ -33,6 +37,7 @@ export function TasksView() {
   const projects = useProjects();
   const people = usePeople();
   const { openTask: onOpenTask, addTask: onAddTask, deleteTask: onDeleteTask } = useTaskActions();
+  const { selection: organizationFilter, setSelection: onOrganizationFilterChange } = useSharedTaskOrganizationFilter();
   const [search, setSearch] = useState1('');
   const [sort, setSort] = useState1({ key: 'plannedStart', dir: 'asc' });
   const [colFilter, setColFilter] = useState1({
@@ -47,6 +52,12 @@ export function TasksView() {
     targetFinish: null,
     progress: null
   });
+  const organization = useTaskOrganizationFilter(
+    tasks,
+    people,
+    organizationFilter,
+    onOrganizationFilterChange
+  );
 
   const setCF = (key, value) => setColFilter(f => ({ ...f, [key]: value }));
   const appState = useAppState();
@@ -76,9 +87,9 @@ export function TasksView() {
       keywords: [p.code, p.name, p.projectTypeCode, p.projectTypeName],
       icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} />
     })), [projects]);
-  const kwOpts = useMemo1(() => Array.from(new Set(tasks.map(t => String(t.keyword || '').trim()).filter(Boolean)))
+  const kwOpts = useMemo1(() => Array.from(new Set(organization.filteredTasks.map(t => String(t.keyword || '').trim()).filter(Boolean)))
     .sort((a, b) => a.localeCompare(b, 'tr'))
-    .map(k => ({ value: k, label: k })), [tasks]);
+    .map(k => ({ value: k, label: k })), [organization.filteredTasks]);
   const sorumluOpts = useMemo1(() => people
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
@@ -102,7 +113,9 @@ export function TasksView() {
 
   const filtered = useMemo1(() => {
     const today_ = today();
-    let out = [...tasks];
+    // `filteredTasks`, yetkili çalışma alanı kümesinin kurumsal kapsamla
+    // daraltılmış hâlidir; arama ve mevcut tablo süzgeçleri bundan sonra gelir.
+    let out = [...organization.filteredTasks];
     if (search) {
       const q = search.toLocaleLowerCase('tr-TR');
       out = out.filter(t => {
@@ -154,8 +167,8 @@ export function TasksView() {
       return 0;
     });
     return out;
-  }, [tasks, search, sort, colFilter]);
-  const paginationKey = `${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
+  }, [organization.filteredTasks, search, sort, colFilter]);
+  const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(filtered, paginationKey);
 
   const setSortFor = (key) => (dir) => setSort({ key, dir });
@@ -164,8 +177,9 @@ export function TasksView() {
   const clearAll = () => {
     setSearch('');
     setColFilter({ proje: [], task: '', keyword: [], sorumlu: [], status: [], priority: [], plannedStart: null, plannedFinish: null, targetFinish: null, progress: null });
+    onOrganizationFilterChange(createEmptyOrgFilter());
   };
-  const hasAnyFilter = search || Object.values(colFilter).some(v => {
+  const hasAnyFilter = hasOrgSelection(organization.selection) || search || Object.values(colFilter).some(v => {
     if (Array.isArray(v)) return v.length > 0;
     if (typeof v === 'string') return v.length > 0;
     return !!v;
@@ -173,12 +187,13 @@ export function TasksView() {
 
   return (
     <div className="tasks-page col">
-      <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
-        <div className="topbar-search" style={{ flex: 1, minWidth: 240, maxWidth: 360 }}>
+      <div className="row tasks-toolbar">
+        <div className="topbar-search tasks-toolbar-search">
           <Icons.Search size={14} />
           <input placeholder="Görev, proje, sorumlu, etiket..." value={search} onChange={e => setSearch(e.target.value)} />
           {search && <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setSearch('')}><Icons.Close size={12} /></button>}
         </div>
+        <TaskOrganizationFilterControls organization={organization} />
         <InfoButton title="Görevler tablosu" icon={<Icons.Table size={12} />}>
           <p>Tüm görevlerin tek bakışta listesi.</p>
           <div className="rt-sep" />
@@ -269,7 +284,7 @@ export function TasksView() {
                 const prog = taskProgressValue(t);
                 const deleteAccess = resolveTaskDeleteAccess(taskMutationState, t.id);
                 return (
-                  <tr key={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
+                  <tr key={t.id} data-task-id={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
                     <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{paged.start + idx + 1}</td>
                     <td>
                       <div className="row" style={{ gap: 8 }}>

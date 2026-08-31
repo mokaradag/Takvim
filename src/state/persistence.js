@@ -334,9 +334,10 @@ function defaultSessionContext(repository) {
 /**
  * Açılış verisi yüklenir.
  *
- * İlk yükleme ile manuel yenileme niyeti depoya açıkça iletilir. İlk yükleme
- * boş kurumsal katalog kurulumunu bekleyebilir; manuel yenileme mevcut yetkili
- * snapshot'ı öne alır ve katalog tazelemesini bu okumanın arkasına bırakır.
+ * İlk yükleme ile kullanıcı/otomatik yenileme niyeti depoya açıkça iletilir.
+ * İlk yükleme boş kurumsal katalog kurulumunu bekleyebilir; sonraki yenilemeler
+ * mevcut yetkili snapshot'ı öne alır ve katalog tazelemesini bu okumanın
+ * arkasına bırakır.
  *
  * Gidiş-dönüş maliyeti düşürülür: Gerçek Sistem deposu
  * oturum bağlamını anlık görüntü yanıtının içinde taşır ve `loadSessionContext`

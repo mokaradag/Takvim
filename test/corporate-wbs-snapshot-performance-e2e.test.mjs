@@ -196,15 +196,15 @@ test('depodaki düğümler silinirse parmak izi eşleşse bile eşitleme kendini
   }
 });
 
-test('tazelik penceresi açıkken kurumsal kaynak hiç sorgulanmaz', async () => {
+test('otomatik yenilemeler tazelik penceresi açıkken kurumsal kaynağı sorgulamaz', async () => {
   process.env.MERGEN_ROTA_WBS_SYNC_TTL_MS = '600000';
   const stack = await createActualStack(corporateSeed({ corporateWbsRows: cn43nRows() }));
   try {
     assert.ok(countStatements(stack, SOURCE_STATEMENT) >= 1, 'ilk yükleme kaynağı okumalıdır');
 
     resetStatements(stack);
-    await stack.reload();
-    await stack.reload();
+    await stack.reload({ refreshMode: 'automatic' });
+    await stack.reload({ refreshMode: 'automatic' });
 
     assert.equal(countStatements(stack, SOURCE_STATEMENT), 0, 'pencere içindeki yüklemeler CN43N kaynağına gitmemelidir');
     assert.equal(countStatements(stack, MERGE_STATEMENT), 0);

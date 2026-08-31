@@ -42,6 +42,8 @@ The host must have Microsoft ODBC Driver 18 for SQL Server installed. Driver 17 
 
 Required deployment variables are listed in `.env.example`:
 
+- `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` (default `60000`; minimum `30000`; invalid values fall back to the default)
+
 - `MERGEN_ROTA_DB_SERVER`
 - `MERGEN_ROTA_DB_PORT`
 - `MERGEN_ROTA_DB_DATABASE`
@@ -52,6 +54,8 @@ Required deployment variables are listed in `.env.example`:
 - `MERGEN_ROTA_DB_REQUEST_TIMEOUT_MS`
 
 Do not add `MERGEN_ROTA_DB_USER` or `MERGEN_ROTA_DB_PASSWORD`; they are not used by the Windows-authenticated adapter. All database variables are server-only and must never use the `NEXT_PUBLIC_` prefix.
+
+The automatic-refresh value is intentionally public because it controls browser scheduling and contains no secret. Next.js embeds it into the client bundle, so changing it requires a rebuild. Actual Mode polls only while the tab is visible; Demo Mode does not poll. The browser uses the existing snapshot endpoint and persistence queue, not a direct SQL connection or a second data path.
 
 ### Corporate user directory (`DC01_userr`)
 
@@ -110,6 +114,8 @@ Corporate project synchronization and corporate WBS synchronization together for
 - it is **fingerprint-gated** per project through `MR_CorporateWbsSyncState`, so an unchanged corporate tree issues no merge statements.
 
 A failed refresh does not advance the freshness window and does not fail the request: the snapshot is served from whatever is already persisted, and the next request retries immediately. An unconfigured CN43N source is not a failure — there is nothing to synchronize, so the window advances normally and corporate project synchronization is not repeated on every request.
+
+The 60-second browser data refresh does not replace or shorten this catalog policy. Manual and automatic snapshot requests return the current authorized snapshot first and schedule catalog work behind it; `MERGEN_ROTA_WBS_SYNC_TTL_MS`, the process single-flight guard and per-project fingerprints still decide whether CN43N is read or merged. The client never duplicates corporate synchronization logic.
 
 ## Demo versus Actual mode
 

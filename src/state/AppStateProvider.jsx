@@ -16,7 +16,7 @@ import { resolveProjectCalendar, resolveTaskCalendar } from '../scheduling/calen
 import { selectTaskStats } from '../scheduling/metrics';
 import { MAX_RECURRENCE_OCCURRENCES, normalizeRecurrenceRule, planRecurringOccurrences } from '../scheduling/recurrence';
 import { appStateReducer, createLoadingState, normalizeStateTask, withCompletionStamp } from './appState';
-import { createStateMutationOrchestrator, loadApplicationData } from './persistence';
+import { createStateMutationOrchestrator } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
 import {
   projectWriteFailure,
@@ -28,8 +28,17 @@ import { reconcileProjectMutationAccess } from './projectMutationReconciliation.
 import { executeTaskCreation } from './taskCreationPolicy.js';
 import {
   createDataRefreshRequestGuard,
-  resolvePersistenceDataRefreshSafety
+  createDataRefreshSingleFlight
 } from './dataRefreshSafety.js';
+import {
+  createDataReloadOperation,
+  dataReloadSingleFlightOptions
+} from './dataReloadLifecycle.js';
+import {
+  automaticDataRefreshInterval,
+  createAutomaticDataRefreshController,
+  supportsAutomaticDataRefresh
+} from './automaticDataRefresh.js';
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
@@ -52,6 +61,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   const [state, dispatch] = useReducer(appStateReducer, undefined, createLoadingState);
   const stateRef = useRef(state);
   const loadRequestGuardRef = useRef(createDataRefreshRequestGuard());
+  const loadSingleFlightRef = useRef(createDataRefreshSingleFlight());
   const initialLoadStartedRef = useRef(false);
   const workspacePreferenceRef = useRef(null);
   const workspaceRestoredRef = useRef(false);
@@ -82,61 +92,38 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
 
   useEffect(() => () => persistence.dispose(), [persistence]);
 
-  const reloadData = useCallback(async ({
-    discardFailedTaskUpdates = false,
-    preserveFailedTaskUpdates = false,
-    refreshMode = 'manual'
-  } = {}) => {
-    const flushResult = await persistence.flush();
-    if (!flushResult.ok) return flushResult;
-    const refreshSafety = resolvePersistenceDataRefreshSafety(persistence, {
-      discardFailedTaskUpdates,
-      preserveFailedTaskUpdates
-    });
-    if (!refreshSafety.ok) return refreshSafety;
+  const runDataReload = useMemo(() => createDataReloadOperation({
+    repository,
+    persistence,
+    getState: () => stateRef.current,
+    applyStateAction,
+    requestGuard: loadRequestGuardRef.current
+  }), [applyStateAction, persistence, repository]);
 
-    const request = loadRequestGuardRef.current.begin();
-    applyStateAction({ type: 'data/load-start' });
-    return persistence.runSerialized(async () => {
-      if (!request.isCurrent()) return request.settle();
-
-      const result = await loadApplicationData(repository, { refreshMode });
-      if (!request.isCurrent()) return request.settle(result);
-
-      if (result.ok) {
-        if (refreshSafety.discardFailedTaskUpdates) persistence.discardFailedTaskUpdates();
-        const rebased = preserveFailedTaskUpdates
-          ? persistence.rebaseFailedTaskUpdates(result.snapshot)
-          : { snapshot: result.snapshot, missingTaskIds: [] };
-        applyStateAction({
-          type: 'data/load-success',
-          snapshot: rebased.snapshot,
-          preserveSaveError: preserveFailedTaskUpdates && persistence.hasFailedTaskUpdates(),
-          refreshedAt: new Date().toISOString()
-        });
-        if (rebased.missingTaskIds.length) {
-          const error = {
-            kind: 'persistence',
-            code: 'TASK_NOT_FOUND',
-            message: 'Kaydedilemeyen değişikliklere ait görev artık bulunamıyor.',
-            operation: 'task/update',
-            details: { taskIds: rebased.missingTaskIds }
-          };
-          applyStateAction({ type: 'persistence/failure', error });
-          return { ok: false, error };
-        }
-      } else {
-        applyStateAction({ type: 'data/load-error', error: result.error });
-      }
-      return result;
-    });
-  }, [applyStateAction, persistence, repository]);
+  const reloadData = useCallback((options = {}) => {
+    const refreshMode = options.refreshMode || 'manual';
+    return loadSingleFlightRef.current.run(
+      () => runDataReload({ ...options, refreshMode }),
+      dataReloadSingleFlightOptions(refreshMode)
+    );
+  }, [runDataReload]);
 
   useEffect(() => {
     if (initialLoadStartedRef.current) return;
     initialLoadStartedRef.current = true;
     reloadData({ refreshMode: 'initial' });
   }, [reloadData]);
+
+  useEffect(() => {
+    if (!supportsAutomaticDataRefresh(repository)) return undefined;
+    const controller = createAutomaticDataRefreshController({
+      intervalMs: automaticDataRefreshInterval(),
+      getLastRefreshedAt: () => stateRef.current.lastRefreshedAt,
+      refresh: () => reloadData({ refreshMode: 'automatic' })
+    });
+    controller.start();
+    return () => controller.stop();
+  }, [reloadData, repository]);
 
   useEffect(() => {
     workspacePreferenceRef.current = readWorkspacePreference();

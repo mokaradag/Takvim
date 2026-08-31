@@ -6,9 +6,10 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function loadSnapshotForRequest(request, repository) {
-  const manualRefresh = request?.headers?.get('x-mergen-rota-refresh-mode') === 'manual';
+  const refreshMode = request?.headers?.get('x-mergen-rota-refresh-mode');
+  const backgroundCatalogRefresh = refreshMode === 'manual' || refreshMode === 'automatic';
   return repository.loadSnapshotWithSession({
-    catalogSync: manualRefresh ? 'background-after' : 'blocking-before'
+    catalogSync: backgroundCatalogRefresh ? 'background-after' : 'blocking-before'
   });
 }
 
@@ -17,9 +18,9 @@ export async function loadSnapshotForRequest(request, repository) {
  *
  * Açılışta istemcinin iki ayrı gidiş-dönüşe (anlık görüntü + oturum) ihtiyacı
  * vardı. İlk uygulama yükü boş katalog kurulumunu gerektiğinde bekler. Manuel
- * Refresh ise önce mevcut yetkili snapshot'ı okur, sonra TTL/single-flight
- * denetimli katalog tazelemesini arka planda başlatır; var olan ekran 38 bin
- * satırlık CN43N turunu beklemez.
+ * ve otomatik yenileme ise önce mevcut yetkili snapshot'ı okur, sonra
+ * TTL/tek-uçuş denetimli katalog tazelemesini arka planda başlatır; var olan
+ * ekran 38 bin satırlık CN43N turunu beklemez.
  *
  * Oturum, anlık görüntünün YETKİ BAĞLAMINDAN kurulur: ayrı bir
  * `loadSessionContext()` çağrısı aynı kişi/rol/proje erişimi ve görev-atama

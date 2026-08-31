@@ -73,7 +73,10 @@ test('snapshot API completes assignees only for already-authorized visible task 
   await loadSnapshotForRequest(new Request('http://localhost/snapshot', {
     headers: { 'x-mergen-rota-refresh-mode': 'manual' }
   }), fakeRepository);
-  assert.deepEqual(modes, ['blocking-before', 'blocking-before', 'background-after']);
+  await loadSnapshotForRequest(new Request('http://localhost/snapshot', {
+    headers: { 'x-mergen-rota-refresh-mode': 'automatic' }
+  }), fakeRepository);
+  assert.deepEqual(modes, ['blocking-before', 'blocking-before', 'background-after', 'background-after']);
 });
 
 test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reason', () => {

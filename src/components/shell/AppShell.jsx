@@ -37,6 +37,7 @@ import { useAppState } from '../../state/AppStateProvider';
 import { useTweaks } from '../../hooks/useTweaks';
 import { useApplyTweaks } from '../../hooks/useApplyTweaks';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
+import { TaskOrganizationFilterProvider } from '../../features/tasks/TaskOrganizationFilterContext.jsx';
 import { AppLogo } from './AppLogo';
 import { CommandPalette } from './CommandPalette';
 import { ModeChooser } from './ModeChooser';
@@ -466,7 +467,11 @@ export default function AppShell() {
             )}
           </div>
         </header>
-        <main key={workspaceKey} className={`content content-${view}${calendarContentActive ? ' calendar-content-active' : ''}`}>{renderView()}</main>
+        {/* Sağlayıcı anahtar verilen içerik alanının DIŞINDADIR: çalışma alanı veya
+            mod değişse de geçerli kurumsal görev kapsamı yeniden kurulmaz. */}
+        <TaskOrganizationFilterProvider>
+          <main key={workspaceKey} className={`content content-${view}${calendarContentActive ? ' calendar-content-active' : ''}`}>{renderView()}</main>
+        </TaskOrganizationFilterProvider>
       </div>
 
       <TaskDetailOverlay simple={simpleMode} />

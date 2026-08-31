@@ -303,6 +303,50 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .col-filter-foot { background: color-mix(in oklab, var(--accent) 7%, var(--bg-elev-2)); }
 .content-veri { overflow: hidden; padding-bottom: 16px; }
 .tasks-page { height: 100%; min-height: 0; gap: 16px; }
+.tasks-toolbar,
+.simple-tasks-toolbar {
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.tasks-toolbar-search,
+.simple-tasks-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 300px;
+}
+.task-org-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.task-org-select { width: 138px; flex: 0 1 138px; font-size: 12px; }
+.task-org-select .searchable-select-trigger { padding-inline: 9px; gap: 6px; }
+.task-org-overflow { display: none; position: relative; flex: 0 0 auto; }
+.task-org-overflow > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  list-style: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.task-org-overflow > summary::-webkit-details-marker { display: none; }
+.task-org-overflow.is-active > summary { color: var(--accent); border-color: var(--accent); }
+.task-org-overflow-panel {
+  position: absolute;
+  z-index: var(--z-popover);
+  top: calc(100% + 7px);
+  right: 0;
+  width: min(440px, calc(var(--app-viewport-w, 100%) - 32px));
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  box-shadow: 0 18px 42px rgb(0 0 0 / .28);
+}
+.task-org-filters-compact .task-org-select { width: 100%; flex: 1 1 0; }
 .tasks-table-card {
   flex: 1 1 0;
   min-height: 0;
@@ -324,6 +368,18 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 @media (max-width: 760px) {
   .date-input-button { right: 5px; }
   .gantt-range-controls .date-input-shell { width: 132px; flex-basis: 132px; }
+  .tasks-toolbar,
+  .simple-tasks-toolbar { flex-wrap: wrap; }
+  .tasks-toolbar-search,
+  .simple-tasks-search { flex-basis: 100%; max-width: none; }
+  .task-org-overflow-panel { left: 0; right: auto; }
+  .task-org-filters-compact { flex-direction: column; align-items: stretch; }
+}
+
+/* Dar VDI ve tablet genişliklerinde üç seçim tek satırlık açılır panele taşınır. */
+@media (max-width: 1280px) {
+  .task-org-filters-direct { display: none; }
+  .task-org-overflow { display: block; }
 }
 
 /* ── Aranabilir seçim bileşeni (SearchableSelect) ─────────── */

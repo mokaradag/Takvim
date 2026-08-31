@@ -53,7 +53,7 @@ A Project is always selected by stable ID, never by display name. An invalid or 
 
 The last selection is stored under the local UI-preference key `mergen-rota.workspace.v1`. This localStorage value is only a workspace preference; it is not project data or application persistence. Repository loading therefore remains independent from this preference, which is restored only after Project data is ready and can be validated.
 
-Switching projects clears a selected Task when that Task belongs to a different Project. The shell also remounts feature-local view state for the new workspace so stale cross-project filters do not survive a workspace switch.
+Switching projects clears a selected Task when that Task belongs to a different Project. The shell also remounts feature-local view state for the new workspace so stale cross-project table filters do not survive a workspace switch. The Tasks organization selection is deliberately shell-owned so it can survive Simple/Advanced mode changes and snapshot refreshes; after a workspace switch it is validated against only the new workspace's projected task assignees and any invalid child path is pruned.
 
 Repository reload uses the same reconciliation rules: a missing selected Project falls back to Portfolio mode and a selected Task that no longer exists or no longer belongs to the active Project is cleared.
 
@@ -120,6 +120,8 @@ CN43N is read with one query per `MERGEN_ROTA_WBS_SYNC_PROJECT_BATCH` project co
 3. **Isolation separation.** The refresh runs *outside* the serializable snapshot-read transaction (`projectedSqlAppRepository`). Previously the merge inherited `SERIALIZABLE` from the enclosing read and accumulated range locks over the whole `MR_WBS` table; each project merge now takes its own short `READ COMMITTED` transaction together with its fingerprint write.
 
 Steady state is therefore one authorization read, one corporate-project sync, one fingerprint read, one CN43N read per batch, and zero merges — or, inside the freshness window, no corporate work at all.
+
+Gerçek Sistem'in görünür sekmede varsayılan 60 saniyelik otomatik veri yenilemesi bu kuralları atlamaz. Her tur mevcut snapshot yaşam döngüsünü kullanır; katalog işi snapshot okumasının arkasında kalır ve ancak bağımsız `MERGEN_ROTA_WBS_SYNC_TTL_MS`/tek-uçuş/parmak izi denetimleri izin verirse CN43N kaynağına gider. İstemci ayrı bir kurumsal WBS eşitlemesi çağırmaz.
 
 `test/corporate-wbs-snapshot-performance-e2e.test.mjs` covers this end to end by counting the SQL statements the real chain issues.
 

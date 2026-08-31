@@ -63,13 +63,15 @@ A future browser-side API repository adapter should implement the same applicati
 
 ### `src/state`
 
-`AppStateProvider` owns React application state and composes focused feature-facing actions. Pure state initialization, canonical snapshot normalization and reducer transitions live in `src/state/appState.js`. Asynchronous persistence orchestration lives outside the reducer in `src/state/persistence.js`.
+`AppStateProvider` owns React application state and composes focused feature-facing actions. Pure state initialization, canonical snapshot normalization and reducer transitions live in `src/state/appState.js`. Asynchronous persistence orchestration lives outside the reducer in `src/state/persistence.js`; the shared initial/manual/automatic reload execution path lives in `src/state/dataReloadLifecycle.js`.
 
-The application-data lifecycle is explicit through `dataStatus: loading | ready | error`, `loadError`, `pendingMutationCount`, `saveError` and `lastSavedAt`. Initial loading and reload use the same `repository.loadSnapshot()` path. The shell does not render normal features against incomplete loading data and exposes retry after load failure.
+The application-data lifecycle is explicit through `dataStatus: loading | ready | error`, `loadError`, `pendingMutationCount`, `saveError` and `lastSavedAt`. Initial loading, manual refresh and visibility-aware automatic refresh use the same `reloadData()` → `repository.loadSnapshot()` path. The automatic controller is installed only for the Actual repository, pauses while the document is hidden, self-schedules without overlapping requests and is cleaned up with the provider effect. Automatic refresh keeps an already-loaded shell interactive and quiet for transient background failures; session/authentication failures still enter the established data-error flow. The shell does not render normal features against incomplete initial data and exposes retry after load failure.
 
 Current Task/WBS mutations use pessimistic canonical-state semantics: the state layer calculates and validates the intended pure transition, derives the smallest Task/WBS change set, persists it, then reconciles application state with the repository's authoritative returned entities. Persistence failures therefore do not require optimistic rollback.
 
 All repository mutations pass through one ordered queue so delayed responses cannot overwrite newer edits and structural operations cannot complete out of order. High-frequency Task Detail patches are coalesced per Task before persistence; discrete and destructive operations flush dependent pending patches first.
+
+Every refresh also crosses that ordered persistence boundary. Pending patches are flushed first, unresolved failed Task patches block automatic refresh without being discarded, and a shared active-load guard prevents manual and automatic refresh from racing. A manual request that arrives during an automatic load is queued once behind it instead of inheriting the automatic load's quiet background-error semantics. Successful snapshots are reconciled with structural sharing, so unchanged business data does not churn feature trees or reset UI-owned state. The Tasks organization selection (`directorate → department → unit`) is owned by `TaskOrganizationFilterProvider`, mounted by `AppShell` outside the keyed mode-specific Tasks view, so automatic refresh and Simple/Advanced mode switches preserve it. A refreshed authorized projection only prunes a selected child path when that path is no longer represented by a visible task assignee.
 
 Workspace orchestration has one source of truth:
 
@@ -78,7 +80,7 @@ workspaceMode: portfolio | project
 selectedProjectId: null | Project.id
 ```
 
-Pure workspace selectors expose the active Project, Projects, Tasks, WBS and participating People. Feature-facing hooks consume these scoped selectors. The same feature implementation therefore serves Portfolio and Project mode without importing raw mock data or repeating `projectId` filters in every view.
+Pure workspace selectors expose the active Project, Projects, Tasks, WBS and participating People. Feature-facing hooks consume these scoped selectors. The same feature implementation therefore serves Portfolio and Project mode without importing raw mock data or repeating `projectId` filters in every view. Tasks applies its organization filter only after these selectors: the filter cannot introduce a Task or Person outside the authorized workspace projection.
 
 The last workspace is stored only as the UI preference `mergen-rota.workspace.v1`. It is restored only after repository data becomes ready so the Project ID can be validated. Invalid persisted Project IDs normalize to Portfolio mode. Workspace switching also prevents a selected Task from remaining open when it belongs to another Project. The preference is not part of `AppRepository`.
 
@@ -104,7 +106,7 @@ Feature-oriented modules: dashboard, tasks, WBS, calendar, Gantt, Kanban, report
 
 Dashboard, Tasks, Calendar, Kanban, Reports and Team consume workspace-scoped hooks. Settings remains global. The WBS feature is primarily project-oriented and consumes the shared domain hierarchy selectors.
 
-Feature-local pure rules live in sibling `*Policy.js` modules rather than inside `.jsx` components, so they can be imported by plain Node tests: `features/wbs/wbsTreeViewPolicy.js` (hierarchy expansion depth), `features/team/teamDirectoryPolicy.js` (directorate filtering including the unassigned bucket) and the existing `features/simple/simpleModePolicy.js`.
+Reusable pure rules live outside large `.jsx` render bodies so plain Node tests can exercise them. `domain/organization/organizationHierarchy.js` owns the stable hierarchical path keys, option generation, matching and selection pruning shared by Team and Tasks. `domain/organization/taskOrganizationFilter.js` adds stable-assignee-ID indexing, guarded legacy-name compatibility and ANY-assignee Task matching without importing Team feature logic. Team-only sorting remains in `features/team/teamFilterPolicy.js`; `features/wbs/wbsTreeViewPolicy.js` and `features/simple/simpleModePolicy.js` retain their feature-specific rules.
 
 Portfolio Gantt preserves the existing portfolio-oriented implementation. Project Workspace defaults to a WBS hierarchy whose WBS summary rows and bars are derived view data, not fake Tasks. The existing Gantt remains available for responsible-person/CPM detail. Neither Gantt path calls `calculateCpm()` directly.
 
