@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { createMockRepository } from '../src/data/mock/createMockRepository.js';
-import { createApiRepository } from '../src/data/api/createApiRepository.js';
 import {
   dataRefreshFailure,
   dataRefreshLabel,
@@ -12,10 +11,16 @@ import {
 import { appStateReducer, createInitialState } from '../src/state/appState.js';
 import {
   createDataRefreshRequestGuard,
+  createDataRefreshSingleFlight,
   resolvePersistenceDataRefreshSafety
 } from '../src/state/dataRefreshSafety.js';
 import { createStateMutationOrchestrator } from '../src/state/persistence.js';
+import {
+  createDataReloadOperation,
+  dataReloadSingleFlightOptions
+} from '../src/state/dataReloadLifecycle.js';
 import { describeSaveError } from '../src/components/shell/persistenceStatusMessage.js';
+import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 import {
   paginateTaskRows,
   synchronizeTaskTablePageState,
@@ -84,6 +89,40 @@ test('daha yeni yenilemenin gerisinde kalan hata çağırana başarısızlık ol
     superseded: true
   });
   assert.deepEqual(second.settle({ ok: true, snapshot: {} }), { ok: true, snapshot: {} });
+});
+
+test('manuel ve otomatik yenilemeler ortak tek-uçuş sınırında üst üste binmez', async () => {
+  const singleFlight = createDataRefreshSingleFlight();
+  let calls = 0;
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const first = singleFlight.run(async () => {
+    calls += 1;
+    await pending;
+    return { ok: true };
+  }, dataReloadSingleFlightOptions('automatic'));
+  const queuedManual = singleFlight.run(async () => {
+    calls += 1;
+    return { ok: true };
+  }, dataReloadSingleFlightOptions('manual'));
+  const skippedAutomatic = await singleFlight.run(async () => {
+    calls += 1;
+    return { ok: true };
+  }, dataReloadSingleFlightOptions('automatic'));
+
+  assert.notStrictEqual(queuedManual, first);
+  assert.equal(calls, 1);
+  assert.equal(skippedAutomatic.skipped, true);
+  release();
+  await first;
+  await queuedManual;
+  assert.equal(calls, 2);
+
+  await singleFlight.run(async () => {
+    calls += 1;
+    return { ok: true };
+  });
+  assert.equal(calls, 3);
 });
 
 test('başarısız veri yenilemesi mevcut uygulama anlık görüntüsünü korur', async () => {
@@ -168,31 +207,110 @@ test('yenileme yaşam döngüsü büyük uygulama bağlamından ve pahalı seçi
   assert.match(hooks, /return useDataLifecycleState\(\)/);
 });
 
-test('ilk yükleme ve manuel yenileme katalog eşitlemesine farklı niyet gönderir', async () => {
-  const provider = read('src/state/AppStateProvider.jsx');
-  const route = read('src/app/api/mergen-rota/snapshot/route.js');
-  assert.match(provider, /reloadData\(\{ refreshMode: 'initial' \}\)/);
-  assert.match(route, /manualRefresh \? 'background-after' : 'blocking-before'/);
-
-  const requests = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init = {}) => {
-    requests.push({ url: String(url), headers: init.headers || {} });
-    return Response.json({ projects: [], tasks: [], wbs: [], people: [], calendars: [] });
+test('ilk yükleme ile manuel ve otomatik yenileme katalog eşitlemesine doğru niyeti gönderir', async () => {
+  const refreshModes = [];
+  const repository = {
+    async loadSnapshot({ refreshMode }) {
+      refreshModes.push(refreshMode);
+      return {
+        projects: [], tasks: [], wbs: [], people: [], calendars: [],
+        session: { dataMode: 'actual', projectAccess: [] }
+      };
+    }
   };
-  try {
-    const repository = createApiRepository({ basePath: '/refresh-intent-test' });
-    await repository.loadSnapshot();
-    await repository.loadSnapshot({ refreshMode: 'initial' });
-    await repository.loadSnapshot({ refreshMode: 'manual' });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const actions = [];
+  const persistence = {
+    flush: async () => ({ ok: true }),
+    hasFailedTaskUpdates: () => false,
+    runSerialized: async (operation) => operation(),
+    discardFailedTaskUpdates() {},
+    rebaseFailedTaskUpdates(snapshot) { return { snapshot, missingTaskIds: [] }; }
+  };
+  const runDataReload = createDataReloadOperation({
+    repository,
+    persistence,
+    getState: () => ({ hasLoadedOnce: false }),
+    applyStateAction: (action) => actions.push(action),
+    requestGuard: createDataRefreshRequestGuard(),
+    now: () => '2026-08-31T12:00:00.000Z'
+  });
+  const initial = await runDataReload({ refreshMode: 'initial' });
 
-  assert.deepEqual(
-    requests.map((request) => request.headers['x-mergen-rota-refresh-mode']),
-    ['initial', 'initial', 'manual']
+  assert.equal(initial.ok, true);
+  assert.deepEqual(refreshModes, ['initial']);
+  assert.deepEqual(actions.map((action) => action.type), ['data/load-start', 'data/load-success']);
+  assert.equal(actions[1].refreshedAt, '2026-08-31T12:00:00.000Z');
+
+  registerServerOnlyShim();
+  const { loadSnapshotForRequest } = await import('../src/app/api/mergen-rota/snapshot/route.js');
+  const catalogSyncModes = [];
+  const routeRepository = {
+    async loadSnapshotWithSession({ catalogSync }) {
+      catalogSyncModes.push(catalogSync);
+      return { tasks: [] };
+    }
+  };
+  await loadSnapshotForRequest(new Request('http://localhost/snapshot', {
+    headers: { 'x-mergen-rota-refresh-mode': 'initial' }
+  }), routeRepository);
+  await loadSnapshotForRequest(new Request('http://localhost/snapshot', {
+    headers: { 'x-mergen-rota-refresh-mode': 'automatic' }
+  }), routeRepository);
+  await loadSnapshotForRequest(new Request('http://localhost/snapshot', {
+    headers: { 'x-mergen-rota-refresh-mode': 'manual' }
+  }), routeRepository);
+  assert.deepEqual(catalogSyncModes, [
+    'blocking-before',
+    'background-after',
+    'background-after'
+  ]);
+});
+
+test('otomatik istek sürerken gelen manuel yenileme kendi hata yaşam döngüsünü çalıştırır', async () => {
+  const singleFlight = createDataRefreshSingleFlight();
+  const refreshModes = [];
+  let releaseAutomatic;
+  const automaticPending = new Promise((resolve) => { releaseAutomatic = resolve; });
+  const repository = {
+    async loadSnapshot({ refreshMode }) {
+      refreshModes.push(refreshMode);
+      if (refreshMode === 'automatic') await automaticPending;
+      throw Object.assign(new Error('Bağlantı yok'), { code: 'LOAD_FAILED' });
+    }
+  };
+  const actions = [];
+  const persistence = {
+    flush: async () => ({ ok: true }),
+    hasFailedTaskUpdates: () => false,
+    runSerialized: async (operation) => operation(),
+    discardFailedTaskUpdates() {},
+    rebaseFailedTaskUpdates(snapshot) { return { snapshot, missingTaskIds: [] }; }
+  };
+  const runDataReload = createDataReloadOperation({
+    repository,
+    persistence,
+    getState: () => ({ hasLoadedOnce: true }),
+    applyStateAction: (action) => actions.push(action),
+    requestGuard: createDataRefreshRequestGuard()
+  });
+
+  const automatic = singleFlight.run(
+    () => runDataReload({ refreshMode: 'automatic' }),
+    dataReloadSingleFlightOptions('automatic')
   );
+  const manual = singleFlight.run(
+    () => runDataReload({ refreshMode: 'manual' }),
+    dataReloadSingleFlightOptions('manual')
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(refreshModes, ['automatic']);
+  releaseAutomatic();
+  await automatic;
+  const manualResult = await manual;
+
+  assert.equal(manualResult.ok, false);
+  assert.deepEqual(refreshModes, ['automatic', 'manual']);
+  assert.deepEqual(actions.map((action) => action.type), ['data/load-start', 'data/load-error']);
 });
 
 test('büyük görev tabloları tüm satırları aynı anda render etmek yerine erişilebilir sayfalara ayrılır', () => {
@@ -290,12 +408,14 @@ test('rutin yenileme saklanan başarısız görev değişikliklerini sessizce at
   assert.deepEqual(missing.missingTaskIds, ['t1']);
 
   const provider = read('src/state/AppStateProvider.jsx');
+  const lifecycle = read('src/state/dataReloadLifecycle.js');
   const status = read('src/components/shell/PersistenceStatus.jsx');
-  assert.match(provider, /const refreshSafety = resolvePersistenceDataRefreshSafety\(persistence/);
-  assert.match(provider, /persistence\.runSerialized\(async \(\) =>/);
-  assert.match(provider, /persistence\.rebaseFailedTaskUpdates\(result\.snapshot\)/);
+  assert.match(provider, /createDataReloadOperation\(\{/);
+  assert.match(lifecycle, /const refreshSafety = resolvePersistenceDataRefreshSafety\(persistence/);
+  assert.match(lifecycle, /persistence\.runSerialized\(async \(\) =>/);
+  assert.match(lifecycle, /persistence\.rebaseFailedTaskUpdates\(result\.snapshot\)/);
   assert.match(provider, /reloadData\(\{ preserveFailedTaskUpdates: true \}\)/);
-  assert.match(provider, /if \(refreshSafety\.discardFailedTaskUpdates\) persistence\.discardFailedTaskUpdates\(\)/);
+  assert.match(lifecycle, /if \(refreshSafety\.discardFailedTaskUpdates\) persistence\.discardFailedTaskUpdates\(\)/);
   assert.match(status, /onClick=\{\(\) => reload\(\{ allowDiscard: true \}\)\}/);
   persistence.dispose();
 });

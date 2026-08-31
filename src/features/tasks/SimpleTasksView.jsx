@@ -20,6 +20,10 @@ import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useT
 import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
 import { SIMPLE_TASK_FACET_KEYS, simpleTaskFacetValues, simpleTaskMatches } from './simpleTaskFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
+import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
+import { TaskOrganizationFilterControls } from './TaskOrganizationFilterControls.jsx';
+import { useSharedTaskOrganizationFilter } from './TaskOrganizationFilterContext.jsx';
+import { useTaskOrganizationFilter } from './useTaskOrganizationFilter.js';
 
 /**
  * Basit Mod · Görevler.
@@ -44,10 +48,17 @@ export function SimpleTasksView({ onNewTask }) {
   const assignableProjects = useTaskAssignableProjects();
   const appState = useAppState();
   const { openTask, deleteTask } = useTaskActions();
+  const { selection: organizationFilter, setSelection: onOrganizationFilterChange } = useSharedTaskOrganizationFilter();
   const initialFilterState = useMemo(() => createEmptySimpleTaskFilterState(), []);
   const [search, setSearch] = useState(initialFilterState.search);
   const [filters, setFilters] = useState(initialFilterState.filters);
   const [sort, setSort] = useState({ key: 'targetFinish', dir: 'asc' });
+  const organization = useTaskOrganizationFilter(
+    tasks,
+    people,
+    organizationFilter,
+    onOrganizationFilterChange
+  );
 
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const taskMutationState = useMemo(
@@ -58,8 +69,8 @@ export function SimpleTasksView({ onNewTask }) {
   const peopleById = useMemo(() => new Map(people.map((person) => [String(person.id), person])), [people]);
   const facetValues = useMemo(() => Object.fromEntries(SIMPLE_TASK_FACET_KEYS.map((key) => [
     key,
-    simpleTaskFacetValues(tasks, { search, filters }, key)
-  ])), [tasks, search, filters]);
+    simpleTaskFacetValues(organization.filteredTasks, { search, filters }, key)
+  ])), [organization.filteredTasks, search, filters]);
   const projectOptions = useMemo(() => projects
     .filter((project) => facetValues.proje.has(project.id))
     .slice()
@@ -93,7 +104,9 @@ export function SimpleTasksView({ onNewTask }) {
   const setFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
 
   const visible = useMemo(() => {
-    const filtered = tasks.filter((task) => simpleTaskMatches(task, { search, filters }));
+    // Kurumsal kapsam yetkili çalışma alanı görevlerini önce daraltır; Basit Mod
+    // araması, fasetleri ve sıralaması bu kümenin üzerinde çalışır.
+    const filtered = organization.filteredTasks.filter((task) => simpleTaskMatches(task, { search, filters }));
 
     return filtered.sort((left, right) => {
       let a = left[sort.key];
@@ -106,15 +119,18 @@ export function SimpleTasksView({ onNewTask }) {
       const delta = typeof a === 'number' ? a - b : String(a).localeCompare(String(b), 'tr');
       return sort.dir === 'asc' ? delta : -delta;
     });
-  }, [tasks, search, filters, sort, projectById]);
-  const paginationKey = `${search}\u001f${JSON.stringify(filters)}\u001f${sort.key}\u001f${sort.dir}`;
+  }, [organization.filteredTasks, search, filters, sort, projectById]);
+  const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(filters)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(visible, paginationKey);
 
-  const hasFilters = Boolean(search || Object.values(filters).some((value) => Array.isArray(value) ? value.length : value));
+  const hasFilters = Boolean(hasOrgSelection(organization.selection)
+    || search
+    || Object.values(filters).some((value) => Array.isArray(value) ? value.length : value));
   const clearFilters = () => {
     const empty = createEmptySimpleTaskFilterState();
     setSearch(empty.search);
     setFilters(empty.filters);
+    onOrganizationFilterChange(createEmptyOrgFilter());
   };
   const setSortFor = (key) => (dir) => setSort({ key, dir });
   const sortFor = (key) => sort.key === key ? sort.dir : null;
@@ -136,6 +152,8 @@ export function SimpleTasksView({ onNewTask }) {
             </button>
           )}
         </div>
+
+        <TaskOrganizationFilterControls organization={organization} />
 
         {hasFilters && <button type="button" className="btn ghost sm" onClick={clearFilters}><Icons.Close size={12} /> Filtreleri temizle</button>}
 
@@ -192,7 +210,7 @@ export function SimpleTasksView({ onNewTask }) {
                 const late = task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0;
                 const deleteAccess = resolveTaskDeleteAccess(taskMutationState, task.id);
                 return (
-                  <tr key={task.id} onClick={() => openTask(task)} style={{ cursor: 'pointer' }}>
+                  <tr key={task.id} data-task-id={task.id} onClick={() => openTask(task)} style={{ cursor: 'pointer' }}>
                     <td>
                       <div className="row" style={{ gap: 8, minWidth: 0 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: projectColorVar(task.proje), flexShrink: 0 }} />

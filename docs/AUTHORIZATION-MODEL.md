@@ -215,3 +215,9 @@ Ambiguous or unresolved lookups return UNAUTHORIZED. All business authorization 
 The session response carries safe display fields alongside the authorization data: `sicil`, `employeeNo`, `name`, `username`, `givenName`, `familyName`, `email`, `department` (Keycloak claim), `sector`, `managementUnit`, `subject`, plus the corporate directory `role`, `team`, and `organization`. Raw access tokens are never exposed.
 
 `currentUser.department` is the Keycloak `department` claim and is what the sidebar displays. `currentUser.organization.department` is the corporate directory value derived from HR02 `mudurluk`. These are different sources and must not be conflated. None of these fields participates in an authorization decision.
+
+### Görevler sayfasındaki kurumsal süzgeç yetki değildir
+
+Görevler araç çubuğundaki **Direktörlük → Müdürlük → Birim** seçimi yalnızca istemci tarafı kullanım kolaylığıdır. Sunucu önce mevcut oturum, proje erişimi ve görev görünürlüğü kurallarıyla yetkili snapshot'ı üretir; istemci çalışma alanı/proje seçimini uygular; kurumsal süzgeç ancak bundan sonra bu kümeyi daraltır. Seçili bir kurumsal yol yeni görev, proje veya kişi kaydı görünür kılamaz ve yazma/silme/atama kararlarına katılmaz.
+
+Eşleşme görev oluşturucusu, proje sorumlusu veya oturum kullanıcısı üzerinden değil görevin mevcut projeksiyondaki sorumluları üzerinden yapılır. Kararlı `assigneeIds` varsa ad eşlemesi kullanılmaz. Eski bir kayıtta kimlik hiç yoksa yalnızca mevcut kişi projeksiyonundaki tekil ad güvenli yedektir; aynı adlı iki kişi varsa tahmin yapılmaz. Çok sorumlulu görevde en az bir görünür sorumlunun seçili kurumsal yolda bulunması yeterlidir. Projeksiyon dışındaki veya gizli sorumlular için kurumsal bilgi türetilmez; kişi dizini genişletilmez.

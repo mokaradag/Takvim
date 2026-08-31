@@ -77,6 +77,7 @@ test('.env.example tüm Keycloak anahtarlarını yer tutucularla içerir', () =>
   const env = read('.env.example');
   const required = [
     'NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH',
+    'NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS',
     'MERGEN_ROTA_AUTH_MODE',
     'MERGEN_ROTA_KEYCLOAK_FLOW',
     'MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI',
@@ -105,6 +106,7 @@ test('yalnızca güvenli tarayıcı ayarları NEXT_PUBLIC ile açığa çıkar',
   const env = read('.env.example');
   const publicKeys = [...env.matchAll(/^(NEXT_PUBLIC_[A-Z0-9_]+)=/gm)].map((match) => match[1]);
   assert.deepEqual(publicKeys, [
+    'NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS',
     'NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH',
     'NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL'
   ]);

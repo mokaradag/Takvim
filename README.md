@@ -9,6 +9,16 @@ MERGEN Rota artık iki tümüyle yalıtılmış **Veri Modu** sunar:
 
 Veri Modu, **Basit Mod / Gelişmiş Mod** kullanım seçiminden bağımsızdır. Veri Modu değiştiğinde application-state provider yeniden kurulur; Demo ve Gerçek Sistem snapshot'ları birleştirilmez. Demo etkin olduğunda sürekli görünen `DEMO` göstergesi vardır.
 
+## Otomatik veri yenileme
+
+Gerçek Sistem verisi, sekme görünürken varsayılan olarak **60 saniyede bir** uygulamanın mevcut `reloadData()`/snapshot yaşam döngüsüyle yenilenir. Bu bir tarayıcı sayfası yenilemesi değildir: çalışma alanı, arama, görev tablosu süzgeçleri ve Direktörlük/Müdürlük/Birim seçimi korunur; seçili proje ile açık görev çekmecesi ise dayandıkları kayıtlar yetkili snapshot'ta geçerli kaldığı sürece korunur. Proje artık geçerli değilse Portföy moduna dönülür, seçili görev artık geçerli değilse çekmece kapatılır. Eşdeğer snapshot'larda değişmeyen nesne ve koleksiyon referansları yeniden kullanılır. Yenilenen yetkili kişi/görev projeksiyonunda kurumsal yol gerçekten kaybolmuşsa yalnızca geçersiz alt seçim en yakın geçerli üst kapsama indirilir. Manuel yenileme denetimi de kullanılabilir durumda kalır.
+
+Aralık, gizli olmayan ve derleme sırasında istemci paketine gömülen `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` değişkeniyle ayarlanır. Varsayılan `60000`, izin verilen en küçük değer `30000` milisaniyedir. Eksik, boş, sayısal olmayan, sıfır, negatif, alt sınırdan küçük veya tarayıcı zamanlayıcı sınırını aşan değerler güvenli biçimde `60000` değerine döner; değişiklikten sonra üretim paketi yeniden derlenmelidir.
+
+Gizli sekmede periyodik yoklama durur. Sekmeye dönüldüğünde veri aralık kadar eskimişse hemen yenilenir; değilse kalan süre beklenir. Tek-uçuş denetimi otomatik ve manuel yenilemelerin üst üste binmesini önler. Otomatik tur sürerken başlatılan manuel yenileme, arka plan sonucuna katılmak yerine turun hemen arkasına tek kez alınır; böylece manuel isteğin yükleme ve hata durumu görünür kalır. Otomatik yenileme önce bekleyen yazmaları mevcut sıralı persistence kuyruğuyla tamamlar; çözülememiş başarısız görev yaması varsa yenilemeyi sessizce atlar ve yerel düzenlemeyi hiçbir zaman otomatik olarak silmez. Geçici arka plan bağlantı hataları mevcut veriyi kullanılamaz hâle getirmez; oturum/kimlik hataları mevcut uygulama akışında işlenmeye devam eder.
+
+Demo Modu bellek içi depoya karşı otomatik yoklama yapmaz. Her otomatik tur normal snapshot ucunu kullanır; istemci ayrı bir CN43N eşitlemesi başlatmaz. Kurumsal WBS eşitlemesi bağımsız `MERGEN_ROTA_WBS_SYNC_TTL_MS` penceresi, tek-uçuş kilidi ve içerik parmak iziyle korunmaya devam eder; 60 saniyelik veri yenilemesi CN43N'yi 60 saniyede bir zorla eşitlemez.
+
 ## Yerel geliştirme
 
 Gereksinim: Node.js 24 (üretim ve Quality CI: 24.14.0)
@@ -38,6 +48,8 @@ Kullanım modları aynı seçili veri kaynağı üzerinde çalışır:
 
 - **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sütun filtreli sadeleştirilmiş **Görevler** listesi ve termin günü Takvim takibi. İlerleme, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Basit Modda gösterilmez.
 - **Gelişmiş Mod**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
+
+Her iki modun **Görevler** araç çubuğunda Ekip sayfasıyla aynı kararlı kurumsal yol semantiğini kullanan **Direktörlük → Müdürlük → Birim** süzgeçleri bulunur. Süzgeç, görevin oluşturucusuna veya proje sorumlusuna değil görev sorumlularına bakar; çok sorumlulu görevde en az bir sorumlunun seçili kapsamda olması yeterlidir. Bu yalnızca istemci tarafı daraltmadır: önce sunucunun yetkilendirdiği snapshot ve seçili çalışma alanı/proje uygulanır, kurumsal seçim bunlara yeni görev veya kişi ekleyemez. Basit/Gelişmiş Mod geçişi aynı oturum içindeki kurumsal seçimi paylaşır.
 
 Planlanan/gerçekleşen saat alanları veritabanı ve API uyumluluğu için korunur ancak normal uygulama arayüzünde hiçbir modda gösterilmez; kullanıcı ilerlemeyi `İlerleme` üzerinden izler.
 

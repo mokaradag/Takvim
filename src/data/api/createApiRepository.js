@@ -366,9 +366,10 @@ export function createApiRepository({
      * erişimiyle eşleşebilirdi.
      */
     async loadSnapshot({ refreshMode = 'initial' } = {}) {
+      const requestMode = ['manual', 'automatic'].includes(refreshMode) ? refreshMode : 'initial';
       const body = await requestJson(`${basePath}/snapshot`, {
         method: 'GET',
-        headers: { 'x-mergen-rota-refresh-mode': refreshMode === 'initial' ? 'initial' : 'manual' }
+        headers: { 'x-mergen-rota-refresh-mode': requestMode }
       }, 'loadSnapshot');
       const { session, ...snapshot } = body || {};
       const restored = restoreActualSnapshotIds(snapshot, clientIdAliases);

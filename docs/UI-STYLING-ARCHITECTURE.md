@@ -26,6 +26,7 @@ Current root sequence:
 | Dashboard/Özet | `src/app/styles/dashboard.css` |
 | Forms/inputs/DateInput | `src/app/styles/components.css` |
 | Tables/shared filter popovers | `src/app/styles/components.css` |
+| Tasks toolbar/organization filter overflow | `src/app/styles/components.css` |
 | Gantt | `src/app/styles/features.css` (`Gantt` section) |
 | WBS (toolbar, tree controls, tree table) | `src/app/styles/features.css` (`Proje Yapısı` section) |
 | Team directory (`.team-*`) | `src/app/styles/features.css` (`Ekip` section) |
@@ -135,6 +136,8 @@ Remaining uses must be structurally justified, such as an explicit reduced-motio
 ## 8. Responsive breakpoint ownership
 
 A component's responsive rules belong beside its base rules in the same owner. Dashboard behavior at 1280, 1080 and 760 pixels is therefore defined in `dashboard.css`; Simple Mode responsiveness is in `simple-mode.css`; Task Detail and Gantt/WBS behavior is in `features.css`.
+
+The shared Tasks toolbar remains one row at normal desktop widths: search, the three organization selectors, information/clear controls, count and **Yeni Görev** share the same flex line. At viewport widths up to 1280 px the three direct selectors are replaced by the compact **Kurumsal filtre** disclosure; only genuinely narrow widths may wrap the toolbar. Both mode-specific Tasks views consume the same `TaskOrganizationFilterControls` markup and the responsive owner is `components.css`.
 
 Do not duplicate competing breakpoints for the same component across unrelated files.
 

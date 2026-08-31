@@ -6,11 +6,19 @@ Bu belge, MERGEN Rota'nın yüzlerce proje ve binlerce personel bulunan Gerçek 
 
 Proje veya personel seçen uzun listeler yerel HTML `select` alanları yerine canlı arama destekli `SearchableSelect` bileşenini kullanır. Arama Türkçe yerel ayarına göre çalışır ve proje kodu, proje adı, proje türü; personelde ise ad, sicil, unvan ve organizasyon alanlarını tarar. Sonuç listesi sınırlı sayıda kayıt oluşturur; daha ayrıntılı arama yapıldıkça liste daralır.
 
-`Aktif çalışma alanı`, Basit Mod proje seçimi, Yeni Proje sorumlusu, Proje Tanımı içindeki manuel proje sorumlusu, görev çekmecesindeki proje/sorumlu/WBS/etiket/öncül görev seçimleri ve iş dağılım ağacındaki taşıma/üst düğüm seçimleri bu ortak davranışı kullanır.
+`Aktif çalışma alanı`, Basit Mod proje seçimi, Yeni Proje sorumlusu, Proje Tanımı içindeki manuel proje sorumlusu, görev çekmecesindeki proje/sorumlu/WBS/etiket/öncül görev seçimleri, Görevler sayfasındaki kurumsal seçimler ve iş dağılım ağacındaki taşıma/üst düğüm seçimleri bu ortak davranışı kullanır.
 
 Ham `<select>` yalnızca sabit ve kısa numaralandırmalar için kalır: ilişki türü (FS/SS/FF/SF), gecikme birimi ve takvimdeki ay/yıl seçimi.
 
 Açılır panelin yerleşim ve katman sözleşmesi `SIMPLE-MODE-AND-UI.md` içinde tanımlanır. Panel `document.body` altına taşınır; bu sayede kenar çubuğunun `overflow: hidden` kırpması ve yığın bağlamı listeyi etkilemez.
+
+## Görevler sayfasında kurumsal daraltma
+
+Basit ve Gelişmiş Moddaki Görevler araç çubuğu **Direktörlük → Müdürlük → Birim** seçimlerini taşır. Görünen ad kimlik değildir: müdürlük anahtarı direktörlük yolunu, birim anahtarı direktörlük ve müdürlük yolunu birlikte taşır. Bu nedenle farklı dallardaki aynı adlı müdürlükler ve birimler çakışmaz. Alt düzey seçimi üst yolu türetir; üst düzey değişikliği artık geçersiz alt seçimi temizler.
+
+Kurumsal yol semantiğinin sahibi `src/domain/organization/organizationHierarchy.js` dosyasıdır; Ekip ve Görevler aynı işlevleri kullanır. Görev-sorumlu eşleşmesi `src/domain/organization/taskOrganizationFilter.js` içinde kişi kimliğine göre bir kez indekslenir. Çok sorumlulu görev, sorumlulardan **en az biri** seçili yolda olduğunda eşleşir. Seçenek listesi geçici tablo fasetlerinden değil mevcut yetkili çalışma alanı görevlerinin projekte edilmiş sorumlularından üretilir.
+
+Bu bölüm bir yetkilendirme kuralı tanımlamaz. İşlem sırası yetkili snapshot ve çalışma alanı/proje seçiminden sonra başlar; kurumsal seçim yalnızca eldeki görevleri azaltabilir. Basit/Gelişmiş Mod aynı oturumluk seçimi paylaşır. Otomatik veri yenilemesi geçerli yolu korur; yeni projeksiyonda bir alt yol kaybolursa seçim en yakın geçerli üst kapsama indirilir.
 
 ## Proje türleri
 
@@ -63,7 +71,7 @@ Ekip görünümü tüm personel için büyük kartlar oluşturmaz. Başlangıç 
 
 Görev sayıları tek geçişte personel kimliğine göre dizinlenir. Böylece eski `personel × görev` taraması yerine yaklaşık `personel + atama` maliyetli hesaplama kullanılır. Personel sonuçları artımlı yüklenir.
 
-Direktörlüğü tanımlı olmayan personel de dizinde yer alır. Kurumsal rehberde bazı çalışanların yalnızca yöneticisi bilinir; önceki sürümde başlangıç görünümü yalnızca direktörlük değeri dolu olanları grupladığı için bu kişiler hiçbir kartta görünmüyordu. Artık "Direktörlük tanımsız" ayrı bir özet kartı ve ayrı bir süzgeç seçeneğidir. Eşleşme kuralı `src/features/team/teamDirectoryPolicy.js` içindeki `matchesDirectorateFilter` işlevinde tanımlıdır ve tek başına sınanır.
+Direktörlüğü tanımlı olmayan personel de dizinde yer alır. Kurumsal rehberde bazı çalışanların yalnızca yöneticisi bilinir; önceki sürümde başlangıç görünümü yalnızca direktörlük değeri dolu olanları grupladığı için bu kişiler hiçbir kartta görünmüyordu. Artık "Direktörlük tanımsız" ayrı bir özet kartı ve ayrı bir süzgeç seçeneğidir. Eşleşme kuralı ortak `src/domain/organization/organizationHierarchy.js` modülünde tanımlıdır; eski `teamDirectoryPolicy.js` içe aktarma yolu geriye uyumluluk için bu ortak işlevi yeniden dışa aktarır.
 
 Dizin kartı ile tablo başlığı sayfa kaydırılırken sabit kalır: sayfa `.content` yüksekliğini doldurur, kaydırma yalnızca personel tablosuna aittir.
 
@@ -102,7 +110,8 @@ verebilmek için **Müdürlük** ve **Birim** olarak ayrılmıştır. Temizleme
 düğmesinin metni **"Filtreleri temizle"** olup her iki konumdaki tüm süzgeçleri
 ve genel aramayı sıfırlar.
 
-Saf kurallar `src/features/team/teamFilterPolicy.js` içindedir ve
+Ortak hiyerarşi kuralları `src/domain/organization/organizationHierarchy.js`, Ekip
+sıralama kuralları `src/features/team/teamFilterPolicy.js` içindedir ve
 `test/team-directory-filtering-e2e.test.mjs` ile tek başına sınanır.
 
 ## Görev sorumlusu ataması

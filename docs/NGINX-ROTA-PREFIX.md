@@ -48,6 +48,7 @@ Use masked values as a template:
 
 ```ini
 NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH=/rota
+NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS=60000
 
 MERGEN_ROTA_AUTH_MODE=keycloak
 MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge
@@ -60,7 +61,7 @@ MERGEN_ROTA_SESSION_COOKIE_SECURE=true
 
 The implicit callback URI must be permitted by the existing Keycloak client exactly as written.
 
-`NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH` is embedded into the browser bundle, so changing it requires a rebuild:
+Both `NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH` and `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` are embedded into the browser bundle, so changing either requires a rebuild. The refresh interval defaults to 60 seconds, rejects values below 30 seconds, pauses in hidden tabs and is unused in Demo Mode:
 
 ```cmd
 npm run build

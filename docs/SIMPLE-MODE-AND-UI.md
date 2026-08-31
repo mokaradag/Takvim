@@ -38,11 +38,14 @@ Gelişmiş Moda ait planlama alanları Basit Modda **hiç gösterilmez**: ilerle
 Sayfa aynı sadeleştirilmiş alan kümesi üzerinde şu yetenekleri sunar:
 
 1. **Yeni Görev** — sağ üst düğme Takvim sayfasındaki mevcut **Hızlı Görev Tanımı** akışını açar; Gelişmiş görev düzenleyicisine yönlendirmez.
-2. **Arama** — görev adı, kısa açıklama, proje ve sorumlu üzerinde canlı süzme.
-3. **Sütun süzme** — Proje, Görev, Kısa açıklama, Sorumlular, Öncelik, Durum ve Termin başlıklarında ortak filtre bileşenlerini kullanır.
-4. **Süzgeçleri temizleme** — global arama ve bütün sütun filtrelerini birlikte sıfırlar.
-5. **Sıralama** — sade sütun başlıklarından yapılır.
-6. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
+2. **Kurumsal süzme** — aynı araç çubuğu satırındaki Direktörlük, Müdürlük ve Birim seçimleri Ekip sayfasının ortak yol-anahtarı semantiğini kullanır. Çok sorumlulu görevde sorumlulardan en az birinin eşleşmesi yeterlidir.
+3. **Arama** — görev adı, kısa açıklama, proje ve sorumlu üzerinde canlı süzme.
+4. **Sütun süzme** — Proje, Görev, Kısa açıklama, Sorumlular, Öncelik, Durum ve Termin başlıklarında ortak filtre bileşenlerini kullanır.
+5. **Süzgeçleri temizleme** — global arama, kurumsal seçim ve bütün sütun filtrelerini birlikte sıfırlar.
+6. **Sıralama** — sade sütun başlıklarından yapılır.
+7. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
+
+İşlem sırası `yetkili snapshot → çalışma alanı/proje → kurumsal kapsam → arama → sütun fasetleri → sıralama → sayfalama` biçimindedir. Direktörlük/Müdürlük/Birim bir yetkilendirme kuralı değildir ve görev/kişi görünürlüğünü genişletmez. Seçenekler yalnızca mevcut çalışma alanındaki görevlerin, mevcut kişi projeksiyonunda çözülebilen sorumlularından üretilir; geçici arama veya sütun süzgeci kurumsal seçeneği listeden düşürmez.
 
 `SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda silme eylemi bulunur; silme simgesi yetkisiz durumda açıklayıcı nedenle pasiftir, paneldeki büyük **Sil** düğmesi ise yalnızca sunucudaki kuralla uyumlu yetkili görevlerde gösterilir. Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
 
@@ -54,7 +57,7 @@ Dar `ASSIGNEE_CREATE` kapsamında yeni görev tanımlayan normal kullanıcı iç
 - **Kısa açıklama/etiket isteğe bağlıdır.** Kullanıcı değer girerse proje etiket kataloğuyla eşleştirilir; değer yoksa görev etiketsiz oluşturulur. Girilen değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) açıkça girilen etiket yine görevde saklanır.
 - **Gizli plan tarihleri ezilmez.** Basit Mod planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Gelişmiş Modda kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
 
-`AppShell`, `simpleMode` bayrağına göre sade veya gelişmiş görev tablosunu seçer. Her iki görünüm aynı kalıcı Task modelini kullanır; Basit Mod düğmesi yalnızca var olan hızlı kayıt sekmesine geçer.
+`AppShell`, `simpleMode` bayrağına göre sade veya gelişmiş görev tablosunu seçer. Her iki görünüm aynı kalıcı Task modelini ve kabuğun anahtarlı içerik alanı dışında duran `TaskOrganizationFilterProvider` geçici durumunu kullanır; bu nedenle Basit → Gelişmiş ve Gelişmiş → Basit geçişinde seçim korunur. Durum sunucuya yazılmaz. Basit Mod düğmesi yalnızca var olan hızlı kayıt sekmesine geçer.
 
 ### Öncelik Basit Modda
 

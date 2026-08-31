@@ -10,13 +10,16 @@ import { useTodayKey } from '../../hooks/useTodayKey';
 import { projectColorVar } from '../../lib/colors';
 import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
 import { PersonDetailDialog } from './PersonDetailDialog.jsx';
-import { UNASSIGNED_DIRECTORATE, organizationValue } from './teamDirectoryPolicy.js';
 import {
   applyOrgSelection,
   createEmptyOrgFilter,
   hasOrgSelection,
   matchesOrgFilter,
   orgLevelOptions,
+  organizationValue,
+  UNASSIGNED_DIRECTORATE
+} from '../../domain/organization/organizationHierarchy.js';
+import {
   sortTeamRows
 } from './teamFilterPolicy.js';
 
