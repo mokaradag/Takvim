@@ -257,8 +257,27 @@ test('tweak hook is SSR-safe and falls back when stored preferences are invalid'
 test('tweak hook persists merged values under a versioned storage key', () => {
   const source = read('src/hooks/useTweaks.js');
   assert.match(source, /mergen_rota_tweaks_v1/);
-  assert.match(source, /const next\s*=\s*\{\s*\.\.\.prev,\s*\.\.\.edits\s*\}/s);
-  assert.match(source, /localStorage\.setItem\(STORAGE_KEY,\s*JSON\.stringify\(next\)\)/);
+  // Birleştirme durum güncelleyicisinde, KALICILAŞTIRMA ise çizimden sonraki
+  // etkide yapılır: React bir güncelleyiciyi birden çok kez çalıştırabildiği
+  // için depolama yazması güncelleyicinin içinde saf olmayan bir yan etkiydi.
+  assert.match(source, /setValues\(\(prev\)\s*=>\s*\(\{\s*\.\.\.prev,\s*\.\.\.edits\s*\}\)\)/s);
+  // Eşleşme TEK bir etki geri çağırımıyla sınırlıdır: `[\s\S]*` etki sınırını
+  // aşabiliyordu, bu yüzden yanlış bağımlılık dizisi taşıyan bir kalıcılaştırma
+  // etkisi, DAHA SONRAKİ ilgisiz bir etkinin `[values]` dizisiyle eşleşip testi
+  // yeşil bırakabiliyordu.
+  assert.match(
+    source,
+    /useEffect\(\(\)\s*=>\s*\{(?:(?!useEffect)[\s\S])*?localStorage\.setItem\(STORAGE_KEY,\s*JSON\.stringify\(values\)\)(?:(?!useEffect)[\s\S])*?\},\s*\[values\]\)/
+  );
+  // Yazma TEK olmalıdır: yukarıdaki eşleşme DOĞRU bir etkinin varlığını
+  // kanıtlar ama başka bir yerde (örneğin güncelleyicinin içinde) kalan İKİNCİ
+  // bir `setItem` çağrısını dışlamaz. Kaldırılması gereken yazma yerinde
+  // kalırken bu sınama yine yeşil olurdu.
+  assert.equal(
+    (source.match(/localStorage\.setItem\(STORAGE_KEY,\s*JSON\.stringify\(values\)\)/g) || []).length,
+    1,
+    'values yalnızca [values] etkisinde kalıcılaştırılmalıdır'
+  );
 });
 
 test('tweak application hook applies every persisted visual preference', () => {

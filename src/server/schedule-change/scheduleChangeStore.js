@@ -1,6 +1,7 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
+import { MAX_WORKING_DAY_SPAN } from '../../scheduling/calendars/index.js';
 import { calculatePlannedDurationDays } from '../../scheduling/plans/index.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
@@ -411,6 +412,29 @@ export async function decideScheduleChange(requestIdValue, input = {}) {
         plannedFinish: isoDate(row.ProposedPlannedFinish),
         milestone: Boolean(row.IsMilestone)
       }, scheduleContext);
+      // Süre ZAMANLAMA UFKUNA karşı doğrulanır.
+      //
+      // Olağan görev yazmalarında bu sınır `commitScalarValidation` içinde
+      // uygulanır (`0..MAX_WORKING_DAY_SPAN`); kabul yolu ise süreyi kendisi
+      // hesaplayıp doğrudan yazdığı için denetimi tümüyle atlıyordu. Sonuç,
+      // KABUL EDİLMİŞ bir talebin CPM'in zamanlayamayacağı bir süre
+      // kalıcılaştırmasıydı: takvim tavanını aşan aralıkta `null`, ufku aşan
+      // aralıkta ise motorun temsil edemediği bir sayı yazılıyordu. Karar
+      // sahibine hata bildirmek, sessizce tutarsız bir satır bırakmaktan iyidir.
+      if (plannedDurationDays == null || !Number.isFinite(plannedDurationDays)) {
+        throw new ServerPersistenceError(
+          'MUTATION_FAILED',
+          'Önerilen tarih aralığı zamanlama ufkunun dışında; süre hesaplanamadı. Talebi daha dar bir aralıkla yeniden oluşturun.',
+          { status: 400 }
+        );
+      }
+      if (plannedDurationDays < 0 || plannedDurationDays > MAX_WORKING_DAY_SPAN) {
+        throw new ServerPersistenceError(
+          'MUTATION_FAILED',
+          `Önerilen tarih aralığı en fazla ${MAX_WORKING_DAY_SPAN} iş günü olabilir.`,
+          { status: 400 }
+        );
+      }
       const update = transaction.request();
       update.input('requestId', sql.UniqueIdentifier, requestId);
       update.input('taskId', sql.UniqueIdentifier, row.TaskId);

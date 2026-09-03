@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { fmt, fmtISO, today } from '../../scheduling/dates';
 import {
+  MAX_GANTT_RANGE_DAYS,
   calculateTaskDateRange,
   clearGanttDateRangeOverride,
   setGanttDateRangeOverride
@@ -28,6 +29,16 @@ export function WorkspaceGanttView() {
   const [rangeStart, setRangeStart] = useState(autoStart);
   const [rangeEnd, setRangeEnd] = useState(autoEnd);
 
+  // GÖRÜNÜM sıfırlaması yalnızca PROJE değişiminde yapılır.
+  //
+  // Etki `autoStart`/`autoEnd` değerlerine de bağlıydı; ikisi de `tasks`
+  // üzerinden `calculateTaskDateRange` ile türetilir. Bu yüzden bir iş
+  // arkadaşının tek bir tarih düzenlemesi (60 saniyelik otomatik yenilemeyle
+  // gelen) çalışma alanının en erken başlangıcını ya da en geç bitişini
+  // oynattığında etki yeniden çalışıyor, `rangeRevision` artıyor, `chartKey`
+  // değişiyor ve grafik SÖKÜLÜP yeniden kuruluyordu: yakınlaştırma, sütun
+  // süzgeçleri, sıralama, açık WBS dalları, kip seçimi ve kullanıcının açıkça
+  // uyguladığı özel aralık sessizce kayboluyordu.
   useEffect(() => {
     setMode('wbs');
     setRangeMode('auto');
@@ -36,7 +47,18 @@ export function WorkspaceGanttView() {
     setRangeError('');
     clearGanttDateRangeOverride();
     setRangeRevision((value) => value + 1);
-  }, [workspace.selectedProjectId, autoStart, autoEnd]);
+    // `autoStart`/`autoEnd` BİLEREK dışarıda: bunlar veriden türer, kullanıcı
+    // eyleminden değil. Aşağıdaki etki onları izler.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.selectedProjectId]);
+
+  // Otomatik kipteyken görünen aralık veriyle birlikte güncellenir; ÖZEL aralık
+  // korunur ve grafik yeniden kurulmaz (`rangeRevision` artmaz).
+  useEffect(() => {
+    if (rangeMode !== 'auto') return;
+    setRangeStart(autoStart);
+    setRangeEnd(autoEnd);
+  }, [autoStart, autoEnd, rangeMode]);
 
   useEffect(() => () => clearGanttDateRangeOverride(), []);
 
@@ -49,9 +71,20 @@ export function WorkspaceGanttView() {
       setRangeError('Başlangıç tarihi bitiş tarihinden sonra olamaz.');
       return;
     }
-    setGanttDateRangeOverride({ start: rangeStart, end: rangeEnd });
+    // UYGULANAN aralık geri okunur. `setGanttDateRangeOverride` sınırı aşan bir
+    // aralığı kırpar; dönen değer yok sayılıp denetimler kullanıcının yazdığı
+    // tarihlerde bırakılsaydı, grafik yalnızca kırpılmış bölümü çizerken üstteki
+    // özet ve tarih kutuları tam aralığın etkin olduğunu söylerdi — kullanıcı
+    // görmediği bir aralığa güvenip dışarıda kalan görevleri kaçırırdı.
+    const applied = setGanttDateRangeOverride({ start: rangeStart, end: rangeEnd });
+    if (applied) {
+      setRangeStart(fmtISO(applied.start));
+      setRangeEnd(fmtISO(applied.end));
+    }
     setRangeMode('custom');
-    setRangeError('');
+    setRangeError(applied?.truncated
+      ? `Görüntü aralığı en fazla ${MAX_GANTT_RANGE_DAYS} gün olabilir; bitiş ${fmt(fmtISO(applied.end), 'dd MMM yyyy')} tarihine kısaltıldı.`
+      : '');
     setRangeRevision((value) => value + 1);
   };
 
@@ -87,6 +120,13 @@ export function WorkspaceGanttView() {
         {rangeMode === 'auto'
           ? `Otomatik aralık: ${fmt(autoStart, 'dd MMM yyyy')} – ${fmt(autoEnd, 'dd MMM yyyy')}`
           : `Seçili aralık: ${fmt(rangeStart, 'dd MMM yyyy')} – ${fmt(rangeEnd, 'dd MMM yyyy')}`}
+        {/* Otomatik kırpma uyarısı YALNIZCA otomatik kipte anlamlıdır; özel
+            aralığın kırpılması `rangeError` ile ayrıca bildirilir. */}
+        {rangeMode === 'auto' && automaticRange.truncated && (
+          <span style={{ marginLeft: 10, color: 'var(--status-overdue)', fontWeight: 600 }}>
+            {`Görüntü aralığı ${MAX_GANTT_RANGE_DAYS} güne kısaltıldı; planda çok uzak tarihli görevler var.`}
+          </span>
+        )}
         {rangeError && <span style={{ marginLeft: 10, color: 'var(--status-overdue)', fontWeight: 600 }}>{rangeError}</span>}
       </div>
 

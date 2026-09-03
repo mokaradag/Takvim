@@ -2,10 +2,6 @@ import { normalizePriorityId } from '../constants/index.js';
 
 const TASK_REFERENCE_INDEX = Symbol('taskReferenceIndex');
 
-function indexByName(items) {
-  return new Map(items.filter((item) => item?.name).map((item) => [item.name, item]));
-}
-
 function indexByUniqueName(items) {
   const values = new Map();
   const duplicates = new Set();
@@ -82,7 +78,14 @@ function buildTaskReferenceIndex(context) {
 
   return {
     projectsById: new Map(normalizedProjects.map((item) => [item.id, item])),
-    projectsByName: indexByName(normalizedProjects),
+    // Ad yedeği BELİRSİZ adları düşürür. `indexByName` aynı ada sahip iki
+    // projeden yalnızca SONUNCUSUNU tutuyordu: kimliği ve kodu olmayan bir
+    // görev, dizi sırasına göre YANLIŞ projeye bağlanabiliyor, onun takvimini
+    // ve WBS ağacını miras alıyordu. Proje adları sunucuda benzersiz değildir
+    // (kurumsal eşitleme aynı `ProjeAdi` taşıyan iki kodu iki proje yazar), bu
+    // yüzden kişi/sorumlu aramalarındaki aynı koruma buraya da uygulanır: ad
+    // belirsizse görevin kimliği ya da kodu gereklidir.
+    projectsByName: indexByUniqueName(normalizedProjects),
     projectsByCode: new Map(normalizedProjects.filter((item) => item.code).map((item) => [item.code, item])),
     peopleByName,
     peopleById: new Map(normalizedPeople.map((item) => [item.id, item])),
@@ -224,6 +227,19 @@ export function validateTaskBaselineSnapshot(snapshot) {
   const issues = [];
   const start = snapshot.plannedStart ? validDate(snapshot.plannedStart) : null;
   const finish = snapshot.plannedFinish ? validDate(snapshot.plannedFinish) : null;
+
+  // GEÇERSİZ tarih sessizce `null` sayılmaz. `validDate` reddettiğinde değer
+  // yalnızca sıralama denetiminin dışında kalıyor ve fonksiyon hiçbir sorun
+  // bildirmiyordu: `plannedStart: '2026-02-30'` taşıyan bir başlangıç anlık
+  // görüntüsü "geçerli" sayılıp kalıcılaştırılabiliyordu. Görev zamanlama
+  // doğrulayıcısı aynı durumu zaten bildiriyor; başlangıç anlık görüntüsü de
+  // aynı kuralı uygular.
+  if (snapshot.plannedStart && !start) {
+    issues.push({ code: 'INVALID_BASELINE_START', field: 'plannedStart' });
+  }
+  if (snapshot.plannedFinish && !finish) {
+    issues.push({ code: 'INVALID_BASELINE_FINISH', field: 'plannedFinish' });
+  }
 
   if (start && finish && finish < start) {
     issues.push({ code: 'BASELINE_FINISH_BEFORE_START', field: 'plannedFinish' });

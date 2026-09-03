@@ -59,10 +59,23 @@ export function extractActualId(value) {
   return canonicalActualId(match ? match[1] : normalized);
 }
 
-/** İki kimlik aynı kaydı mı gösteriyor? (büyük/küçük harf duyarsız) */
+/**
+ * İki kimlik aynı kaydı mı gösteriyor? (büyük/küçük harf duyarsız)
+ *
+ * YOKLUK eşitlik saymaz. `text()` hem `null` hem `undefined` hem de `''`
+ * değerini `''` üretir; yedek karşılaştırma bu yüzden iki taraf da BOŞKEN
+ * `true` dönüyordu, oysa hiçbiri bir kaydı göstermiyor. `sameNullableId`
+ * açık null-null davranışını korur ve bu değişiklikten etkilenmez.
+ */
 export function sameActualId(left, right) {
   const first = canonicalActualId(left);
   const second = canonicalActualId(right);
   if (first && second) return first === second;
-  return text(left).toLowerCase() === text(right).toLowerCase();
+  const leftText = text(left);
+  const rightText = text(right);
+  // YOKLUK kimlik saymaz: bu işlev NOT NULL sütunlar içindir ve iki boş değeri
+  // "aynı proje" saymak, kapsam denetimini sessizce gevşetirdi. Boş değerin
+  // anlamlı olduğu NULL yapılabilir sütunlar için `sameNullableId` kullanılır.
+  if (!leftText || !rightText) return false;
+  return leftText.toLowerCase() === rightText.toLowerCase();
 }

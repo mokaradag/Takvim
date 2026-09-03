@@ -379,7 +379,12 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
             style={animated ? { animationDelay: `${0.25 + i * 0.02}s` } : null}
           />
         ))}
-        {hover != null && (
+        {/* `hover`, ÖNCEKİ `pts` dizisine ait bir dizindir. `onLeave` yalnızca
+            işaretçi SVG'den çıkınca çalışır; işaretçi grafiğin üzerindeyken veri
+            kısalırsa (otomatik yenileme ya da süzgeç değişimi) dizin dizinin
+            dışına düşüyor ve `pts[hover][0]` çizim sırasında TypeError
+            fırlatıyordu. */}
+        {hover != null && hover < pts.length && (
           <line x1={pts[hover][0]} x2={pts[hover][0]} y1={pad} y2={pad + innerH} stroke={color} strokeWidth="1" strokeDasharray="2 2" opacity="0.5" />
         )}
       </svg>
@@ -396,7 +401,7 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
           ))}
         </div>
       )}
-      {hover != null && (
+      {hover != null && hover < pts.length && (
         <div className="rich-tip" style={{
           position: 'absolute',
           left: `${(pts[hover][0] / width) * 100}%`,

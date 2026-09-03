@@ -111,14 +111,40 @@ export function WbsGanttView() {
   const [hotTaskId, setHotTaskId] = useState(null);
   const leftRef = useRef(null);
   const rightRef = useRef(null);
+  // Daha önce görülen düğümler: "yeni eklenen dal açık başlasın" kuralı, ancak
+  // gerçekten YENİ olan düğümler için uygulanır.
+  const seenWbsIdsRef = useRef(new Set());
   const today_ = useMemo(() => today(), []);
   const hasWbs = wbs.length > 0;
   const scheduleAvailable = projectSchedule?.status === 'valid';
   const criticalPathUnavailable = projectSchedule?.status === 'invalid';
 
+  // Açık dallar YALNIZCA proje değişiminde sıfırlanır. Etki `wbs` dizisine de
+  // bağlıydı ve her WBS değişikliği (ve her otomatik yenileme) diziyi yeniden
+  // kurduğu için kullanıcının kapattığı dallar kendiliğinden yeniden açılıyordu.
   useEffect(() => {
-    setExpanded(new Set(wbs.map((node) => node.id)));
-  }, [workspace.selectedProjectId, wbs]);
+    seenWbsIdsRef.current = new Set();
+    setExpanded(new Set());
+  }, [workspace.selectedProjectId]);
+
+  // Yeni gelen düğümler açık başlar; kullanıcının kapattığı dallar korunur.
+  //
+  // `seenWbsIdsRef` güncellemesi DURUM GÜNCELLEYİCİSİNİN DIŞINDA yapılır. React
+  // bir güncelleyiciyi tek bir işleme için birden çok kez çağırabilir (StrictMode
+  // geliştirme derlemelerinde çağırır); ref mutasyonu içerideyken ikinci çağrıda
+  // bütün kimlikler zaten "görülmüş" oluyor, döngü hepsini atlıyor ve güncelleyici
+  // `previous` döndürüyordu: yeni gelen dallar açılmıyordu — etkinin garanti
+  // etmesi gereken davranışın tam tersi.
+  useEffect(() => {
+    const newIds = wbs.map((node) => node.id).filter((id) => !seenWbsIdsRef.current.has(id));
+    if (!newIds.length) return;
+    for (const id of newIds) seenWbsIdsRef.current.add(id);
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      for (const id of newIds) next.add(id);
+      return next;
+    });
+  }, [wbs]);
 
   const tree = useMemo(() => buildWbsTree(wbs), [wbs]);
   const scheduleTasks = scheduleAvailable ? projectSchedule.tasks : EMPTY_SCHEDULE_TASKS;

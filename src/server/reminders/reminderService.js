@@ -18,6 +18,7 @@ import {
   loadReminderRecipientRows,
   loadReminderSettings,
   loadReminderTask,
+  loadReminderTaskProjectState,
   logManualReminder
 } from './reminderStore.js';
 
@@ -136,6 +137,35 @@ export async function deliverTaskReminder(executor, {
 export const MANUAL_REMINDER_MIN_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
+ * Görev YÜKLENEMEDİĞİNDE nedeni ayırt eder.
+ *
+ * `loadReminderTask` etkin proje koşulunu taşır, bu yüzden "görev gerçekten
+ * yok" ile "görev duruyor ama projesi devre dışı" aynı boş sonuca düşer. Tek
+ * bir `TASK_NOT_FOUND` bildirmek, görevi ekranında GÖREN kullanıcıya
+ * "bulunamadı" (404) diyordu; kullanıcı da hatayı bir arıza sanıp yeniden
+ * deniyordu. Ayrım YALNIZCA raporlamadadır: iki durumda da posta gönderilmez.
+ *
+ * Neden okunamazsa (ağ/izin) genel `TASK_NOT_FOUND` korunur; ek bir tanı
+ * sorgusu asıl akışı çökertmemelidir.
+ */
+async function unloadableTaskReason(executor, taskId) {
+  let state = null;
+  try {
+    state = await loadReminderTaskProjectState(executor, taskId);
+  } catch {
+    return 'TASK_NOT_FOUND';
+  }
+  return state?.exists && !state.projectActive ? 'PROJECT_INACTIVE' : 'TASK_NOT_FOUND';
+}
+
+async function unloadableTaskFailure(executor, taskId) {
+  const code = await unloadableTaskReason(executor, taskId);
+  return code === 'PROJECT_INACTIVE'
+    ? { ok: false, code, message: 'Görevin projesi devre dışı bırakıldığı için hatırlatma gönderilemez.' }
+    : { ok: false, code, message: 'Hatırlatma gönderilecek görev bulunamadı.' };
+}
+
+/**
  * ELLE tetiklenen hatırlatma.
  *
  * Alıcılar yalnızca görevin kendisinden türetilir; istemci alıcı listesi
@@ -154,25 +184,35 @@ export async function sendManualReminder(executor, {
   authorize = null
 }) {
   const task = await loadReminderTask(executor, taskId);
-  if (!task) return { ok: false, code: 'TASK_NOT_FOUND', message: 'Hatırlatma gönderilecek görev bulunamadı.' };
+  if (!task) return unloadableTaskFailure(executor, taskId);
   if (authorize) await authorize(task);
 
   // EN KÜÇÜK ARALIK: görevi görebilen herkes bu ucu çağırabilir ve her çağrı
   // bütün sorumlulara gerçek e-posta gönderir. Sınır olmadan uç üzerinde bir
   // döngü, iş arkadaşlarının posta kutularını doldurabilir ve SMTP aktarıcısını
   // engelletebilirdi.
+  //
+  // Bu ön okuma YALNIZCA kullanıcıya gösterilecek bekleme süresini üretir;
+  // sınırı gerçekten uygulayan denetim aşağıdaki koşullu kayıt açmadır. Ayrı
+  // bir okuma tek başına yarışa açıktı: aynı kullanıcının iki eşzamanlı isteği
+  // de "son gönderim yok" görüp ikisi de posta gönderiyordu.
+  const rateLimited = async () => {
+    const lastAt = await loadLastManualReminderAt(executor, task.id, actorSicil);
+    const elapsedMs = lastAt ? now.getTime() - lastAt.getTime() : 0;
+    const remainingMs = Math.max(1000, minIntervalMs - Math.max(0, elapsedMs));
+    const waitSeconds = Math.ceil(remainingMs / 1000);
+    return {
+      ok: false,
+      code: 'MANUAL_REMINDER_RATE_LIMITED',
+      message: `Bu görev için az önce hatırlatma gönderildi. ${waitSeconds} saniye sonra yeniden deneyebilirsiniz.`,
+      retryAfterSeconds: waitSeconds
+    };
+  };
+
   const lastManualAt = await loadLastManualReminderAt(executor, task.id, actorSicil);
   if (lastManualAt && minIntervalMs > 0) {
     const elapsedMs = now.getTime() - lastManualAt.getTime();
-    if (elapsedMs >= 0 && elapsedMs < minIntervalMs) {
-      const waitSeconds = Math.ceil((minIntervalMs - elapsedMs) / 1000);
-      return {
-        ok: false,
-        code: 'MANUAL_REMINDER_RATE_LIMITED',
-        message: `Bu görev için az önce hatırlatma gönderildi. ${waitSeconds} saniye sonra yeniden deneyebilirsiniz.`,
-        retryAfterSeconds: waitSeconds
-      };
-    }
+    if (elapsedMs >= 0 && elapsedMs < minIntervalMs) return rateLimited();
   }
 
   const settings = await loadReminderSettings(executor);
@@ -181,8 +221,12 @@ export async function sendManualReminder(executor, {
     taskId: task.id,
     projectId: task.projectId,
     slotKey: `manual:${randomUUID()}`,
-    actorSicil
+    actorSicil,
+    intervalStart: minIntervalMs > 0 ? new Date(now.getTime() - minIntervalMs) : null
   });
+  // Sahiplenme başarısız: aralık henüz dolmamış ya da eşzamanlı bir istek
+  // hakkı az önce almış. Hiçbir posta gönderilmez.
+  if (logId == null && minIntervalMs > 0) return rateLimited();
 
   return deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now, send });
 }
@@ -284,10 +328,14 @@ export async function runAutomaticReminders(executor, {
 
       const task = await loadReminderTask(executor, candidate.id);
       if (!task) {
-        // Görev tur sırasında silinmiş olabilir.
-        await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'TASK_NOT_FOUND' });
+        // Görev tur sırasında silinmiş YA DA projesi devre dışı bırakılmış
+        // olabilir. İkisi de gönderimi durdurur; denetim kaydında tek bir
+        // `TASK_NOT_FOUND` görmek, silinmemiş bir görevi araştıran yöneticiyi
+        // yanlış yöne sürüklüyordu.
+        const reason = await unloadableTaskReason(executor, candidate.id);
+        await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: reason });
         failed += 1;
-        results.push({ taskId: candidate.id, status: 'FAILED', reason: 'TASK_NOT_FOUND' });
+        results.push({ taskId: candidate.id, status: 'FAILED', reason });
         continue;
       }
 

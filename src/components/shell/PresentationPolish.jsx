@@ -14,9 +14,25 @@ function hideTechnicalGanttWarnings(root = document) {
 export function PresentationPolish() {
   useEffect(() => {
     hideTechnicalGanttWarnings();
-    const observer = new MutationObserver(() => hideTechnicalGanttWarnings());
+    // Gözlemci `document.body` altındaki HER `childList` değişimini izler ve
+    // geri çağrının kendisi belgenin tamamında `querySelectorAll` çalıştırır.
+    // Büyük tablolar (görev listesi, Gantt satırları) tek çizimde yüzlerce
+    // değişiklik yığını ürettiği için bu tam-belge sorgusu çizim boyunca
+    // defalarca tekrarlanıyordu; çağrılar tek bir kareye toplanır.
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        hideTechnicalGanttWarnings();
+      });
+    };
+    const observer = new MutationObserver(schedule);
     observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, []);
 
   return (

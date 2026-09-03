@@ -110,7 +110,25 @@ async function inspectLiveLoginRoute({ callbackUrl, expectations }) {
   const callback = new URL(callbackUrl);
   const localPort = callback.port || (callback.protocol === 'https:' ? '443' : '80');
   const localScheme = callback.protocol === 'https:' ? 'https:' : 'http:';
-  const localLoginUrl = `${localScheme}//127.0.0.1:${localPort}/api/mergen-rota/auth/login`;
+  // Yol ÖNEKİ callback adresinden türetilir. Sabit `/api/mergen-rota/auth/login`
+  // kullanmak, kurulum belgelenen `/rota` önekiyle çalışırken TEST 5'in başka
+  // bir adresi yoklamasına ve gerçekte doğru olan yapılandırmayı 404 ya da
+  // uyumsuzluk olarak raporlamasına yol açıyordu.
+  //
+  // İKİ geri dönüş biçimi vardır. Yetkilendirme kodu akışı
+  // `/api/mergen-rota/auth/callback` adresine döner; İMPLİCİT KÖPRÜ ise
+  // `/auth/implicit-callback` adresine (bkz. IMPLICIT_CALLBACK_PATH ve
+  // docs/NGINX-ROTA-PREFIX.md). Yalnızca `/api/mergen-rota/` aranırsa implicit
+  // kurulumda önek BOŞ kalır, TEST 5 öneksiz adresi yoklar ve DOĞRU
+  // yapılandırılmış önekli bir kurulum 404/uyumsuz diye raporlanır — tanının
+  // gerçek bir giriş yolu hatasını göstermesini de geciktirir.
+  const callbackPath = callback.pathname;
+  const callbackMarker = callbackPath.includes('/api/mergen-rota/')
+    ? '/api/mergen-rota/'
+    : '/auth/implicit-callback';
+  const markerIndex = callbackPath.indexOf(callbackMarker);
+  const basePath = markerIndex > 0 ? callbackPath.slice(0, markerIndex) : '';
+  const localLoginUrl = `${localScheme}//127.0.0.1:${localPort}${basePath}/api/mergen-rota/auth/login`;
 
   try {
     const liveResponse = await fetch(localLoginUrl, { redirect: 'manual', signal: requestSignal() });

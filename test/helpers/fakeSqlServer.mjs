@@ -544,7 +544,10 @@ function synchronizeCorporateProjects(db, actorSicil) {
       existing.ProjectName = source.ProjectName;
       existing.ProjectTypeCode = source.ProjectTypeCode ?? null;
       existing.ProjectTypeName = source.ProjectTypeName ?? null;
-      existing.LeadSicil = manager;
+      // Gerçek SQL `ISNULL(manager.Sicil, target.LeadSicil)` uygular: kaynakta
+      // PROJECT_MANAGER satırı YOKSA mevcut sorumlu KORUNUR. İkiz koşulsuz
+      // atama yapıyordu ve üretim davranışından sapıyordu.
+      existing.LeadSicil = manager ?? existing.LeadSicil ?? null;
       existing.IsActive = 1;
       continue;
     }
@@ -933,17 +936,23 @@ function runQuery(db, statement, params, { database }) {
     const project = task ? projectById(db, task.ProjectId) : null;
     if (!task || !project?.IsActive) return result([[]]);
     const code = String(project.ProjectCode || '').toUpperCase();
-    const corporate = db.corporateProjectAccess.some((entry) => entry.Sicil === params.sicil
-      && String(entry.ProjectCode).toUpperCase() === code);
+    // Kurumsal rol satırları YALNIZCA kurumsal projelerde geçerlidir: iki
+    // görünüm ayrı kurumsal kaynaklardan beslenir, kod çakışması manuel bir
+    // projeye yetki taşımamalıdır.
+    const corporate = project.SourceType === 'CORPORATE'
+      && db.corporateProjectAccess.some((entry) => entry.Sicil === params.sicil
+        && String(entry.ProjectCode).toUpperCase() === code);
     const granted = db.projectAccess.some((entry) => entry.IsActive
       && entry.Sicil === params.sicil
       && ['FULL', 'READ'].includes(entry.AccessLevel)
       && sameGuid(entry.ProjectId, task.ProjectId));
     const manualLead = project.SourceType === 'MANUAL' && project.LeadSicil === params.sicil;
+    const creator = task.CreatedBySicil != null && Number(task.CreatedBySicil) === Number(params.sicil);
     const assigned = db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId)
       && (entry.Sicil === params.sicil
         || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil)));
-    return result([corporate || manualLead || granted || assigned ? [{ TaskId: task.TaskId }] : []]);
+    const visible = params.isAdmin ? true : (corporate || manualLead || creator || granted || assigned);
+    return result([visible ? [{ TaskId: task.TaskId }] : []]);
   }
 
   /* ── Görev hatırlatma e-postaları ─────────────────────────── */
@@ -986,6 +995,9 @@ function runQuery(db, statement, params, { database }) {
     const task = db.tasks.find((entry) => sameGuid(entry.TaskId, params.taskId));
     if (!task) return result([[]]);
     const project = projectById(db, task.ProjectId);
+    // Gerçek sorgu `p.IsActive = 1` ile birleştirir: devre dışı bırakılmış bir
+    // projenin görevi gönderim aşamasında artık yüklenemez.
+    if (!project?.IsActive) return result([[]]);
     return result([[{
       TaskId: task.TaskId,
       ProjectId: task.ProjectId,
@@ -1000,6 +1012,14 @@ function runQuery(db, statement, params, { database }) {
       ProjectCode: project?.ProjectCode ?? null,
       ProjectName: project?.ProjectName ?? null
     }]]);
+  }
+  if (sqlText.includes('CAST(ISNULL(p.IsActive, 0) AS int) AS IsActive') && sqlText.includes('WHERE t.TaskId = @taskId')) {
+    // Yükleme boş döndüğünde nedeni ayırt eden tanı sorgusu: görev yoksa hiç
+    // satır, varsa projesinin etkinlik durumu döner.
+    const task = db.tasks.find((entry) => sameGuid(entry.TaskId, params.taskId));
+    if (!task) return result([[]]);
+    const project = projectById(db, task.ProjectId);
+    return result([[{ IsActive: project?.IsActive ? 1 : 0 }]]);
   }
   if (sqlText.includes('directory.EmailAddress AS Email')) {
     // Sorumlu → HR02 kullanıcı adı → DC01_userr.Name → EmailAddress zinciri.
@@ -1045,6 +1065,11 @@ function runQuery(db, statement, params, { database }) {
       Status: task.Status,
       TargetFinish: task.TargetFinish
     }));
+    // Aday seçimi ile gönderim öncesi yeniden yükleme ARASINA girebilmek için
+    // dikiş. Aday sorgusu etkin olmayan projeleri zaten eler; sınamalar bu
+    // kancayı kullanmadan `REMINDER_TASK_SQL` içindeki `p.IsActive = 1`
+    // yüklemine hiç ulaşamıyordu.
+    db.onCandidatesSelected?.(rows);
     return result([rows]);
   }
   if (sqlText.includes("ReminderKind = 'AUTOMATIC'") && sqlText.includes('INSERT dbo.MR_TaskReminderLog')) {
@@ -1091,11 +1116,23 @@ function runQuery(db, statement, params, { database }) {
     const rows = db.taskReminderLog
       .filter((entry) => sameGuid(entry.TaskId, params.taskId)
         && entry.ReminderKind === 'MANUAL'
-        && Number(entry.RequestedBySicil) === Number(params.actorSicil))
+        && Number(entry.RequestedBySicil) === Number(params.actorSicil)
+        // Başarısız gönderim aralığı tutmaz (gerçek sorgu: Status <> 'FAILED').
+        && entry.Status !== 'FAILED')
       .sort((left, right) => right.TaskReminderLogId - left.TaskReminderLogId);
     return result([rows.slice(0, 1).map((entry) => ({ CreatedAt: entry.CreatedAt }))]);
   }
-  if (sqlText.includes("VALUES(@taskId, @projectId, 'MANUAL'")) {
+  if (sqlText.includes("SELECT @taskId, @projectId, 'MANUAL'")) {
+    // Koşullu ekleme: aralık dolmadan ikinci bir elle gönderim sahiplenilemez.
+    const threshold = params.intervalStart ? new Date(params.intervalStart).getTime() : null;
+    if (threshold != null && !Number.isNaN(threshold)) {
+      const recent = db.taskReminderLog.some((entry) => sameGuid(entry.TaskId, params.taskId)
+        && entry.ReminderKind === 'MANUAL'
+        && Number(entry.RequestedBySicil) === Number(params.actorSicil)
+        && entry.Status !== 'FAILED'
+        && new Date(entry.CreatedAt).getTime() > threshold);
+      if (recent) return result([[]]);
+    }
     const logId = db.taskReminderLog.length + 1;
     db.taskReminderLog.push({
       TaskReminderLogId: logId,

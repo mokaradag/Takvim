@@ -1,5 +1,6 @@
 import 'server-only';
 import { sql } from '../db/pool.js';
+import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
 import { findDeleteIntentIssue } from './deleteIntentPolicy.js';
 import { findUpsertIntentIssue } from './upsertIntentPolicy.js';
@@ -51,12 +52,14 @@ function normalizedDelete(entry) {
 }
 
 async function targetExistsForUpdate(executor, target, id) {
+  const safeTable = sqlIdentifier(target.table, 'table');
+  const safeColumn = sqlIdentifier(target.idColumn, 'column');
   const request = executor.request();
   request.input('entityId', sql.UniqueIdentifier, id);
   const result = await request.query(`
-    SELECT TOP (1) ${target.idColumn}
-    FROM dbo.${target.table} WITH (UPDLOCK, HOLDLOCK)
-    WHERE ${target.idColumn} = @entityId;
+    SELECT TOP (1) ${safeColumn}
+    FROM dbo.${safeTable} WITH (UPDLOCK, HOLDLOCK)
+    WHERE ${safeColumn} = @entityId;
   `);
   return Boolean(result.recordset?.length);
 }

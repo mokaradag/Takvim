@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput.jsx';
+import { fmt } from '../../scheduling/dates/index.js';
 import { Icons } from '../../components/icons.jsx';
 import {
   SCHEDULE_DATE_ROWS,
@@ -98,7 +99,11 @@ export function ScheduleChangeDialog({ task, onCancel, onSubmit }) {
             {SCHEDULE_DATE_ROWS.map(({ key, label }) => (
               <tr className="schedule-compare-row" key={key}>
                 <th scope="row">{label}</th>
-                <td className="tabular">{current[key] || '—'}</td>
+                {/* Tarih, kullanıcının biçim tercihiyle çizilir. Ham saklanan
+                    değer yazıldığında aynı iletişim kutusunda iki farklı tarih
+                    biçimi görünüyordu (`scheduleDifferenceSummary` zaten `fmt`
+                    kullanır). */}
+                <td className="tabular">{current[key] ? fmt(current[key], 'dd MMM yyyy') : '—'}</td>
                 <td>
                   <DateInput
                     value={proposed[key] || ''}

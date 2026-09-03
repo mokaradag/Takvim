@@ -18,7 +18,7 @@ Feature modules continue to use state actions. They do not import SQL Server pac
 
 ## Repository and API contract
 
-`AppRepository` provides `loadSessionContext()`, `loadSnapshot()`, and atomic `commitChanges()`. Actual mode uses:
+`AppRepository` requires `loadSnapshot()` and atomic `commitChanges()`; `loadSessionContext()` is **optional** and only Actual mode implements it (`assertAppRepository()` accepts a repository without it, and `docs/PERSISTENCE-BOUNDARY.md` states the same two-method contract). Actual mode uses:
 
 - `GET /api/mergen-rota/session`
 - `GET /api/mergen-rota/snapshot`
@@ -151,7 +151,13 @@ Persistence errors are surfaced to the user verbatim. `PersistenceStatus` render
 ## Deployment
 
 1. Back up the target database.
-2. Run `database/MR_Create_Durable_Persistence.sql` for a new installation. For an **existing** installation run the upgrade scripts instead, in order; the latest is `database/MR_Upgrade_0005_Task_Reminders.sql`, which adds `MR_ReminderSettings` and `MR_TaskReminderLog`. Every upgrade script is idempotent and preserves existing data.
+2. Run `database/MR_Create_Durable_Persistence.sql` for a new installation. For an **existing** installation run the upgrade scripts instead, **in order**:
+   1. `database/MR_Upgrade_0004_Tag_Appearance_And_Recurrence.sql` — tag appearance and task recurrence.
+   2. `database/MR_Upgrade_0005_Task_Reminders.sql` — `MR_ReminderSettings` and `MR_TaskReminderLog`.
+   3. `database/MR_Upgrade_0006_Audit_Deactivation.sql` — the `DEACTIVATE` audit action.
+   4. `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql` — `MR_TaskScheduleChangeRequests`; this is the **latest** upgrade.
+
+   Stopping at `0005` leaves `MR_TaskScheduleChangeRequests` absent, and every schedule-change request then fails when the application reaches that table. Every upgrade script is idempotent and preserves existing data.
 3. Install Microsoft ODBC Driver 18 for SQL Server on the MERGEN Rota host.
 4. Make sure the Windows account that will run Node.js has the required SQL Server permissions.
 5. Create `.env.local` from `.env.example` and configure the server-only database variables.

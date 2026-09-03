@@ -7,6 +7,7 @@ import { buildSessionCurrentUser } from '../../domain/identity/sessionUser.js';
 import { getTrustedSessionIdentity } from '../identity/currentUserProvider.js';
 import { resolveAuthMode } from '../identity/keycloakConfig.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
+import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
@@ -60,7 +61,9 @@ async function synchronizeCorporateProjects(executor, actorSicil) {
 async function rowById(executor, table, column, value) {
   const req = request(executor);
   req.input('id', sql.UniqueIdentifier, uuid(value));
-  return (await req.query(`SELECT TOP (1) * FROM dbo.${table} WHERE ${column} = @id;`)).recordset[0] || null;
+  const safeTable = sqlIdentifier(table, 'table');
+  const safeColumn = sqlIdentifier(column, 'column');
+  return (await req.query(`SELECT TOP (1) * FROM dbo.${safeTable} WHERE ${safeColumn} = @id;`)).recordset[0] || null;
 }
 function projectRow(executor, value) { return rowById(executor, 'MR_Projects', 'ProjectId', value); }
 async function projectRowForUpdate(executor, value) {
@@ -581,6 +584,8 @@ async function loadSnapshotFrom(executor, auth) {
       isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
       createdBySicil: row.CreatedBySicil == null ? null : String(row.CreatedBySicil),
       isCurrentUserCreator: Boolean(row.IsCurrentUserCreator),
+      // Görev künyesi: kartta "kim, ne zaman oluşturdu" satırını besler.
+      createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
       deps: dependencies.get(id(row.TaskId)) || [],
       version: encodeVersion(row.RowVersion)
     })),
@@ -903,6 +908,8 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
       createdBySicil: row.CreatedBySicil == null ? null : String(row.CreatedBySicil),
       isCurrentUserCreator: Boolean(row.IsCurrentUserCreator),
+      // Görev künyesi: kartta "kim, ne zaman oluşturdu" satırını besler.
+      createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
       deps: dependencies.get(id(row.TaskId)) || [], version: encodeVersion(row.RowVersion)
     }))
   };
@@ -1468,7 +1475,12 @@ function sameSicilSet(left = [], right = []) {
 }
 
 function sameNullableId(left, right) {
-  if (left == null && right == null) return true;
+  // BOŞ DİZE de yokluk sayılır. Yalnızca `== null` denetlendiğinde, kalıcı
+  // satırda NULL taşıyan bir alan (örneğin `WbsId`) istemciden boş dize olarak
+  // geldiğinde `sameActualId` `false` döndürüyor, dar yazma bunu yapısal
+  // değişiklik sayıp geçerli bir güncellemeyi FORBIDDEN ile reddediyordu.
+  const absent = (value) => value == null || (typeof value === 'string' && !value.trim());
+  if (absent(left) && absent(right)) return true;
   return sameActualId(left, right);
 }
 
@@ -1482,6 +1494,23 @@ const ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS = Object.freeze([
 const CONTROLLED_SCHEDULE_FIELDS = Object.freeze([
   ['plannedStart', 'PlannedStart'],
   ['plannedFinish', 'PlannedFinish'],
+  ['targetFinish', 'TargetFinish']
+]);
+
+/**
+ * Görev SORUMLUSUNUN doğrudan yazamadığı plan tarihleri.
+ *
+ * Sorumlu, kendi işinin PLANINI (`plannedStart` / `plannedFinish`) ve
+ * gerçekleşen tarihlerini yönetir: işi yapan kişidir ve bu tarihler onun
+ * ilerlemesini anlatır. Eskiden üç kontrollü tarihin tamamı engelleniyordu, bu
+ * yüzden sıradan bir kullanıcı kendisine atanmış görevin "Güncel Plan" kartını
+ * hiç düzenleyemiyordu.
+ *
+ * `targetFinish` (HEDEF bitiş) bir TAAHHÜTtür, kendi planı değil: görev
+ * oluşturucusu ya da tam proje yetkisi olmadan değiştirilemez; sorumlu bunun
+ * için tarih değişikliği talebi gönderir.
+ */
+const ASSIGNEE_BLOCKED_SCHEDULE_FIELDS = Object.freeze([
   ['targetFinish', 'TargetFinish']
 ]);
 
@@ -1502,16 +1531,16 @@ function assertAssigneeWorkFieldsOnly(before, task) {
     || (hasOwnField(task, 'recurrenceParentId') && !sameNullableId(before.RecurrenceParentTaskId, task.recurrenceParentId))
     || (hasOwnField(task, 'recurrenceOccurrenceDate')
       && isoDate(before.RecurrenceOccurrenceDate) !== (task.recurrenceOccurrenceDate || null))
-    || (task.sortOrder ?? null) !== (before.SortOrder ?? null)
+    || (hasSubmittedField(task, 'sortOrder') && (task.sortOrder ?? null) !== (before.SortOrder ?? null))
     || Boolean(task.assigneeMutation)
     || (task.deps || []).length > 0;
-  const scheduleChange = CONTROLLED_SCHEDULE_FIELDS.some(([field, storedField]) => (
+  const scheduleChange = ASSIGNEE_BLOCKED_SCHEDULE_FIELDS.some(([field, storedField]) => (
     hasSubmittedField(task, field) && (task[field] || null) !== isoDate(before[storedField])
   ));
   if (structuralChange || protectedValueChange || scheduleChange) {
     throw new ServerPersistenceError(
       'FORBIDDEN',
-      'Görev sorumlusu içerik ve ilerlemeyi düzenleyebilir; kontrollü plan tarihleri için tarih değişikliği talebi göndermelidir.'
+      'Görev sorumlusu kendi plan ve gerçekleşen tarihlerini düzenleyebilir; HEDEF bitiş tarihi için tarih değişikliği talebi göndermelidir.'
     );
   }
 }
@@ -1534,15 +1563,17 @@ function assertLimitedCreatorFieldsOnly(before, task) {
   const protectedValueChange = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS.some(([field, storedField]) => (
     hasOwnField(task, field) && nullableNumber(task[field]) !== nullableNumber(before[storedField])
   ));
+  // GERÇEKLEŞEN tarihler oluşturucudan da esirgenmez: görevi açan kişi çoğu
+  // zaman onu yürüten kişidir ve işin ne zaman başlayıp bittiğini yalnızca o
+  // bilir. Engel kaldığında kendi görevinde "Gerçekleşen tarihler" kartı salt
+  // okunur kalıyordu.
   const forbiddenChange = !sameActualId(before.ProjectId, task.projectId)
     || Boolean(before.IsMilestone) !== Boolean(task.isMilestone || task.milestone)
-    || (hasSubmittedField(task, 'actualStart') && (task.actualStart || null) !== isoDate(before.ActualStart))
-    || (hasSubmittedField(task, 'actualFinish') && (task.actualFinish || null) !== isoDate(before.ActualFinish))
     || (hasOwnField(task, 'recurrence') && (formatRecurrenceRule(task.recurrence) || null) !== (before.RecurrenceRule || null))
     || (hasOwnField(task, 'recurrenceParentId') && !sameNullableId(before.RecurrenceParentTaskId, task.recurrenceParentId))
     || (hasOwnField(task, 'recurrenceOccurrenceDate')
       && isoDate(before.RecurrenceOccurrenceDate) !== (task.recurrenceOccurrenceDate || null))
-    || (task.sortOrder ?? null) !== (before.SortOrder ?? null)
+    || (hasSubmittedField(task, 'sortOrder') && (task.sortOrder ?? null) !== (before.SortOrder ?? null))
     || Boolean(task.assigneeMutation)
     || (task.deps || []).length > 0;
   if (forbiddenChange || protectedValueChange) {
@@ -1671,6 +1702,20 @@ async function commitTask(executor, actor, task, correlationId) {
   const targetFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'targetFinish')
     ? isoDate(before.TargetFinish)
     : (task.targetFinish || null);
+  // GERÇEKLEŞEN tarihler de aynı kuralla ETKİN değere indirgenir ve doğrulama
+  // bu çift üzerinden yapılır. Ham istek alanlarına bakan denetim, dar bir
+  // güncellemede kalıcı karşı tarafı göremiyordu:
+  //  - kaydında `ActualStart` duran bir görevde YALNIZCA `actualFinish` yazan
+  //    sorumlunun isteği "gerçek bitiş için gerçek başlangıç gereklidir" ile
+  //    reddediliyordu;
+  //  - kaydında `ActualFinish` duran bir göreve daha GEÇ bir `actualStart`
+  //    yazıldığında ise bitişi başlangıcından önce olan bir satır kalıyordu.
+  const actualStart = before && narrowTaskWrite && !hasSubmittedField(task, 'actualStart')
+    ? isoDate(before.ActualStart)
+    : (task.actualStart || null);
+  const actualFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'actualFinish')
+    ? isoDate(before.ActualFinish)
+    : (task.actualFinish || null);
   const isMilestone = narrowTaskWrite ? Boolean(before.IsMilestone) : Boolean(task.isMilestone || task.milestone);
   const persistedCalendarId = narrowTaskWrite ? id(before.CalendarId) : (task.calendarId || null);
 
@@ -1702,8 +1747,11 @@ async function commitTask(executor, actor, task, correlationId) {
     }
     wbsId = wbsId || allowedWbsId;
   }
-  if (task.actualFinish && !task.actualStart) {
+  if (actualFinish && !actualStart) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Gerçek bitiş için gerçek başlangıç gereklidir.');
+  }
+  if (actualStart && actualFinish && actualFinish < actualStart) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'Gerçekleşen bitiş başlangıçtan önce olamaz.');
   }
   if (plannedStart && plannedFinish && plannedFinish < plannedStart) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Planlanan bitiş başlangıçtan önce olamaz.');
@@ -1787,6 +1835,20 @@ async function commitTask(executor, actor, task, correlationId) {
   let plannedDurationDays = assigneeWorkOnly
     ? nullableNumber(before.PlannedDurationDays)
     : nullableNumber(task.plannedDurationDays);
+  // Sorumlu artık plan tarihlerini düzenleyebildiği için süre de YENİDEN
+  // hesaplanmalıdır; kalıcı değer korunsaydı satır, tarihleriyle çelişen bir
+  // süre taşırdı.
+  if (assigneeWorkOnly
+    && (hasSubmittedField(task, 'plannedStart') || hasSubmittedField(task, 'plannedFinish'))) {
+    const planContext = await loadTaskPlanContext(executor, projectId, persistedCalendarId);
+    plannedDurationDays = calculatePlannedDurationDays({
+      projectId,
+      calendarId: persistedCalendarId,
+      plannedStart,
+      plannedFinish,
+      milestone: isMilestone
+    }, planContext);
+  }
   if (limitedCreatorWrite || assigneeCreate) {
     const planContext = await loadTaskPlanContext(executor, projectId, persistedCalendarId);
     plannedDurationDays = calculatePlannedDurationDays({
@@ -1805,27 +1867,52 @@ async function commitTask(executor, actor, task, correlationId) {
   // Dar sorumlu yazması satırın yapısal takvim geçersiz kılmasını değiştirmez.
   req.input('calendarId', sql.UniqueIdentifier, persistedCalendarId);
   req.input('title', sql.NVarChar(1000), task.task || task.title);
-  req.input('description', sql.NVarChar(sql.MAX), task.description || null);
-  req.input('keyword', sql.NVarChar(255), task.keyword || null);
-  req.input('status', sql.VarChar(30), task.status || 'planned');
+  // Dar yazmada GÖNDERİLMEYEN alan kalıcı değeri korur.
+  //
+  // Tarihler, WBS bağı ve ürün-dışı alanlar için bu kural zaten uygulanıyordu;
+  // içerik alanları ise atlanınca varsayılana düşüyordu. Görev sorumlusunun
+  // yalnızca ilerleme yazan dar bir güncellemesi bu yüzden `Status` alanını
+  // `planned` değerine geri alıyor, `Keyword`, `Description`, `Progress`,
+  // `RemainingDurationDays` ve `SortOrder` alanlarını da NULL'a çekiyordu.
+  const preserved = (field, column, fallback = null) => {
+    if (!before || !narrowTaskWrite || hasSubmittedField(task, field)) return undefined;
+    return before[column] ?? fallback;
+  };
+  const submittedOr = (field, column, value, fallback = null) => {
+    const kept = preserved(field, column, fallback);
+    return kept === undefined ? value : kept;
+  };
+  req.input('description', sql.NVarChar(sql.MAX), submittedOr('description', 'Description', task.description || null));
+  req.input('keyword', sql.NVarChar(255), submittedOr('keyword', 'Keyword', task.keyword || null));
+  req.input('status', sql.VarChar(30), submittedOr('status', 'Status', task.status || 'planned', 'planned'));
   // Arayüz kataloğunda `normal` diye bir öncelik yoktur; varsayılan olarak
   // yazıldığında Görevler/Kanban/Raporlar sayfaları çöküyordu. Kalıcı kayıt da
   // kanonik kimliği tutar.
-  req.input('priority', sql.VarChar(30), normalizePriorityId(task.priority));
+  req.input('priority', sql.VarChar(30), normalizePriorityId(
+    submittedOr('priority', 'Priority', task.priority)
+  ));
   req.input('isMilestone', sql.Bit, isMilestone);
   req.input('plannedStart', sql.Date, plannedStart);
   req.input('plannedFinish', sql.Date, plannedFinish);
   req.input('plannedDuration', sql.Decimal(10, 2), plannedDurationDays);
   req.input('targetFinish', sql.Date, targetFinish);
-  req.input('actualStart', sql.Date, limitedCreatorWrite ? isoDate(before.ActualStart) : (task.actualStart || null));
-  req.input('actualFinish', sql.Date, limitedCreatorWrite ? isoDate(before.ActualFinish) : (task.actualFinish || null));
-  req.input('remainingDuration', sql.Decimal(10, 2), nullableNumber(task.remainingDurationDays));
-  req.input('progress', sql.Decimal(5, 2), nullableNumber(task.progress));
+  // GERÇEKLEŞEN tarihler oluşturucu yazmasında da GÖNDERİLEN değeri alır;
+  // yalnızca gönderilmediğinde kalıcı değer korunur (dar yazma sözleşmesi).
+  // Değerler yukarıda ETKİN çift olarak çözülür ve DOĞRULANIR; burada aynı
+  // çift bağlanır, aksi hâlde doğrulanan değerle yazılan değer ayrışırdı.
+  req.input('actualStart', sql.Date, actualStart);
+  req.input('actualFinish', sql.Date, actualFinish);
+  req.input('remainingDuration', sql.Decimal(10, 2), nullableNumber(
+    submittedOr('remainingDurationDays', 'RemainingDurationDays', task.remainingDurationDays)
+  ));
+  req.input('progress', sql.Decimal(5, 2), nullableNumber(
+    submittedOr('progress', 'Progress', task.progress)
+  ));
   req.input('plannedHours', sql.Decimal(12, 2), nullableNumber(narrowTaskWrite ? before.PlannedHours : task.plannedHours));
   req.input('actualHours', sql.Decimal(12, 2), nullableNumber(narrowTaskWrite ? before.ActualHours : task.actualHours));
   req.input('budget', sql.Decimal(19, 4), nullableNumber(narrowTaskWrite ? before.Budget : task.budget));
   req.input('spent', sql.Decimal(19, 4), nullableNumber(narrowTaskWrite ? before.Spent : task.spent));
-  req.input('sortOrder', sql.Int, task.sortOrder ?? null);
+  req.input('sortOrder', sql.Int, submittedOr('sortOrder', 'SortOrder', task.sortOrder ?? null));
   // Kural kanonikleştirilerek yazılır: geçersiz bir RRULE metni kalıcı kayda düşmez.
   req.input('recurrenceRule', sql.NVarChar(400), recurrenceRule);
   req.input('recurrenceParentId', sql.UniqueIdentifier, recurrenceParentId);

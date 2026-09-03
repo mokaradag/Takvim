@@ -18,6 +18,7 @@ import {
   REMINDER_MANUAL_LOG_SQL,
   REMINDER_SETTINGS_SQL,
   REMINDER_SETTINGS_UPSERT_SQL,
+  REMINDER_TASK_PROJECT_STATE_SQL,
   REMINDER_TASK_SQL,
   reminderRecipientsSql
 } from './reminderQueries.js';
@@ -175,6 +176,22 @@ export async function loadReminderTask(executor, taskId) {
   };
 }
 
+/**
+ * `loadReminderTask` boş döndüğünde NEDENİ ayırt eder.
+ *
+ * Yalnızca RAPORLAMA içindir: görev gerçekten yoksa `{ exists: false }`,
+ * görev duruyor ama projesi devre dışı ise `{ exists: true, projectActive:
+ * false }` döner. Çağıran her iki durumda da gönderimi iptal eder.
+ */
+export async function loadReminderTaskProjectState(executor, taskId) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, taskId);
+  const result = await request.query(REMINDER_TASK_PROJECT_STATE_SQL);
+  const row = result.recordset?.[0];
+  if (!row) return { exists: false, projectActive: false };
+  return { exists: true, projectActive: Number(row.IsActive) === 1 };
+}
+
 /** Sorumlu → kullanıcı adı → DC01_userr adresi satırları. */
 export async function loadReminderRecipientRows(executor, taskId) {
   const request = executor.request();
@@ -276,13 +293,35 @@ export async function loadLastManualReminderAt(executor, taskId, actorSicil) {
   }
 }
 
-/** Elle gönderim kaydı açar. */
-export async function logManualReminder(executor, { taskId, projectId, slotKey, actorSicil = null }) {
+/**
+ * Elle gönderim hakkını sahiplenir ve kaydı açar.
+ *
+ * En küçük aralık denetimi ile kaydın açılması TEK SQL deyimidir: aralığı ayrı
+ * bir okumada denetleyip sonra koşulsuz eklemek, aynı kullanıcının eşzamanlı
+ * iki isteğinin de sınırı geçmesine izin veriyordu.
+ *
+ * @param {{intervalStart?: Date|null}} input `intervalStart` aralığın
+ *   başlangıcıdır; bu andan sonra açılmış başarısız olmayan bir kayıt varsa
+ *   sahiplenme reddedilir. `null` verilirse sınır uygulanmaz.
+ * @returns {Promise<number|null>} kayıt kimliği; aralık henüz dolmadıysa `null`
+ *   (bu durumda hiçbir posta gönderilmez).
+ */
+export async function logManualReminder(executor, {
+  taskId,
+  projectId,
+  slotKey,
+  actorSicil = null,
+  intervalStart = null
+}) {
+  const boundary = intervalStart instanceof Date && !Number.isNaN(intervalStart.getTime())
+    ? intervalStart
+    : null;
   const request = executor.request();
   request.input('taskId', sql.UniqueIdentifier, taskId);
   request.input('projectId', sql.UniqueIdentifier, projectId || null);
   request.input('slotKey', sql.NVarChar(200), slotKey);
   request.input('actorSicil', sql.Int, actorSicil);
+  request.input('intervalStart', sql.DateTime2, boundary);
   const result = await request.query(REMINDER_MANUAL_LOG_SQL);
   const logId = result.recordset?.[0]?.TaskReminderLogId;
   return logId == null ? null : Number(logId);

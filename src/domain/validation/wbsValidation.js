@@ -64,7 +64,13 @@ export function validateWbsStructure(wbs) {
 
   const done = new Set();
   const emittedCycles = new Set();
-  const ordered = [...nodes].filter((node) => node?.id).sort((a, b) => a.id.localeCompare(b.id));
+  // Kimlikler `String()` ile sarılır: sayısal bir WBS kimliği geldiğinde
+  // `localeCompare` bir işlev olmadığı için `validateWbsStructure` sorun
+  // listesi döndürmek yerine `TypeError` ile düşüyordu. Kardeş modül
+  // `wbsSelectors` aynı karşılaştırmayı zaten böyle yapar.
+  const ordered = [...nodes]
+    .filter((node) => node?.id)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
   for (const start of ordered) {
     if (done.has(start.id)) continue;
@@ -161,11 +167,17 @@ export function validateWbsReparent(wbs, nodeId, targetParentId) {
 export function validateWbsDeletion(wbs, tasks, wbsId) {
   const issues = [];
   const node = indexWbs(wbs).get(wbsId) || null;
+  // BİLİNMEYEN düğüm açıkça bildirilir. Alt düğümü ve görevi olmayan geçersiz
+  // bir `wbsId` için fonksiyon boş liste döndürüyordu; durum katmanı boş sorun
+  // listesini "geçerli yazma" saydığı için silme, var olmayan bir düğüm için
+  // sessizce ilerliyordu. `validateWbsReparent` aynı durumu zaten
+  // `WBS_NODE_NOT_FOUND` ile bildirir.
+  if (!node) return [issue('WBS_NODE_NOT_FOUND', wbsId)];
   const childIds = (wbs || []).filter((item) => item.parentId === wbsId).map((item) => item.id);
   const taskIds = (tasks || []).filter((task) => task.wbsId === wbsId).map((task) => task.id);
 
   if (childIds.length) issues.push(issue('WBS_HAS_CHILDREN', wbsId, { childIds }));
   if (taskIds.length) issues.push(issue('WBS_HAS_TASKS', wbsId, { taskIds }));
-  if (node && node.parentId == null) issues.push(issue('WBS_ROOT_DELETE_FORBIDDEN', wbsId));
+  if (node.parentId == null) issues.push(issue('WBS_ROOT_DELETE_FORBIDDEN', wbsId));
   return issues;
 }

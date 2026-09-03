@@ -51,7 +51,8 @@ export function fontScaleStyleForTweaks(tweaks = {}) {
  */
 export const TWEAKS_BOOTSTRAP_SCRIPT = `(function(){try{
 var raw=localStorage.getItem(${JSON.stringify(TWEAKS_STORAGE_KEY)});
-var t=raw?JSON.parse(raw):{};
+var p=raw?JSON.parse(raw):{};
+var t=p&&typeof p==='object'&&!Array.isArray(p)?p:{};
 var c=document.body.classList;
 c.toggle('theme-light',t.theme==='light');
 c.toggle('theme-dark',t.theme!=='light');

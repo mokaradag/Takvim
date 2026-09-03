@@ -49,9 +49,9 @@ export function createDataRefreshSingleFlight() {
   let active = null;
   let queued = null;
 
-  function start(operation, operationKind) {
+  function start(operation, operationKind, requestKey) {
     const promise = Promise.resolve().then(operation);
-    const current = { promise, operationKind };
+    const current = { promise, operationKind, requestKey };
     active = current;
     const clear = () => {
       if (active === current) active = null;
@@ -60,34 +60,52 @@ export function createDataRefreshSingleFlight() {
     return promise;
   }
 
-  function queueAfterActive(operation, operationKind) {
-    if (queued) return queued;
-    const activePromise = active.promise;
-    queued = activePromise
+  function queueAfterActive(operation, operationKind, requestKey) {
+    // Kuyrukta AYNI isteği taşıyan bir çalıştırma varsa onunla birleşilir;
+    // farklı seçenek taşıyan istek onun ARDINA eklenir.
+    if (queued && queued.requestKey === requestKey) return queued.promise;
+    const previous = queued ? queued.promise : active.promise;
+    const entry = { operationKind, requestKey };
+    entry.promise = previous
       .then(() => undefined, () => undefined)
       .then(() => {
-        queued = null;
-        return active ? active.promise : start(operation, operationKind);
+        if (queued === entry) queued = null;
+        return active && active.requestKey === requestKey
+          ? active.promise
+          : start(operation, operationKind, requestKey);
       });
-    return queued;
+    queued = entry;
+    return entry.promise;
   }
 
   return {
+    /**
+     * @param {object} [options]
+     * @param {string|null} [options.requestKey] İSTEĞİN kimliği. Etkin
+     *   çalıştırmanın sözünü döndürmek yalnızca aynı isteği yeniden soran
+     *   çağıran için doğrudur. Farklı seçenekler taşıyan bir istek
+     *   (`discardFailedTaskUpdates` / `preserveFailedTaskUpdates`) birleştirilip
+     *   yutulduğunda, kullanıcının "yeniden yükle ve kaydedilmemiş değişiklikleri
+     *   at" seçimi hiç çalışmıyor, çağıran da başka bir yenilemenin sonucunu
+     *   alıyordu.
+     */
     run(operation, {
       skipIfBusy = false,
       operationKind = 'default',
-      queueIfActiveKind = null
+      queueIfActiveKind = null,
+      requestKey = null
     } = {}) {
       if (active) {
         if (skipIfBusy) {
           return Promise.resolve({ ok: true, value: null, skipped: true, reason: 'REFRESH_IN_PROGRESS' });
         }
         if (queueIfActiveKind && active.operationKind === queueIfActiveKind) {
-          return queueAfterActive(operation, operationKind);
+          return queueAfterActive(operation, operationKind, requestKey);
         }
-        return active.promise;
+        if (active.requestKey === requestKey) return active.promise;
+        return queueAfterActive(operation, operationKind, requestKey);
       }
-      return start(operation, operationKind);
+      return start(operation, operationKind, requestKey);
     }
   };
 }

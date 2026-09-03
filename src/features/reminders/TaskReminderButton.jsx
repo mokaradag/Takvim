@@ -51,31 +51,37 @@ export function TaskReminderButton({ task, size = 26, onResult = null }) {
     if (disabled) return;
     setBusy(true);
     setResult(null);
-    // Kuyruk boşaltılamazsa gönderim YAPILMAZ: eski veriyle posta atmaktansa
-    // kullanıcıya kaydedilemeyen düzenleme olduğunu söylemek doğrudur.
-    const flushed = await flushTaskEdits?.(task.id);
-    if (flushed && flushed.ok === false) {
-      if (!mountedRef.current) return;
-      setBusy(false);
-      const failure = {
-        type: 'error',
-        text: 'Görevdeki değişiklikler kaydedilemedi; hatırlatma gönderilmedi.'
-      };
-      setResult(failure);
-      onResult?.(failure);
-      return;
-    }
-    const response = await sendTaskReminderRequest(task.id);
-    if (!mountedRef.current) return;
-    setBusy(false);
-    const next = response.ok
-      ? {
-        type: response.warnings?.length ? 'warning' : 'success',
-        text: response.warnings?.length
-          ? `${response.message} Uyarı: ${response.warnings.join(' ')}`
-          : response.message
+    // `busy` bayrağı HER YOLDA temizlenir: beklenen çağrılardan biri
+    // reddedildiğinde (kalıcılık katmanından gelen bir hata gerçekçi bir
+    // tetikleyicidir) düğme kalıcı olarak devre dışı kalıyor, kullanıcı ne
+    // yeniden deneyebiliyor ne de bir ileti görebiliyordu.
+    let next = null;
+    try {
+      // Kuyruk boşaltılamazsa gönderim YAPILMAZ: eski veriyle posta atmaktansa
+      // kullanıcıya kaydedilemeyen düzenleme olduğunu söylemek doğrudur.
+      const flushed = await flushTaskEdits?.(task.id);
+      if (flushed && flushed.ok === false) {
+        next = {
+          type: 'error',
+          text: 'Görevdeki değişiklikler kaydedilemedi; hatırlatma gönderilmedi.'
+        };
+      } else {
+        const response = await sendTaskReminderRequest(task.id);
+        next = response.ok
+          ? {
+            type: response.warnings?.length ? 'warning' : 'success',
+            text: response.warnings?.length
+              ? `${response.message} Uyarı: ${response.warnings.join(' ')}`
+              : response.message
+          }
+          : { type: 'error', text: response.message };
       }
-      : { type: 'error', text: response.message };
+    } catch {
+      next = { type: 'error', text: 'Hatırlatma gönderilemedi. Lütfen yeniden deneyin.' };
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+    if (!mountedRef.current) return;
     setResult(next);
     onResult?.(next);
   };

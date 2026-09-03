@@ -27,6 +27,7 @@ export function SidebarUserPanel({ theme, onToggleTheme }) {
   const session = useSessionContext();
   const { dataMode } = useDataMode();
   const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState('');
 
   const name = resolveUserDisplayName(currentUser);
   const department = resolveUserDepartmentLabel(currentUser);
@@ -36,14 +37,30 @@ export function SidebarUserPanel({ theme, onToggleTheme }) {
 
   const signOut = async () => {
     setSigningOut(true);
+    setSignOutError('');
     try {
       const response = await fetch(publicRotaPath('/api/mergen-rota/auth/logout'), { method: 'POST', cache: 'no-store' });
       const body = await response.json().catch(() => ({}));
+      // BAŞARISIZ çıkış, başarılı gibi sunulmaz. Yanıt durumu denetlenmediğinde
+      // 403 (aynı köken denetimi) ya da 500 dönen bir istek `endSessionUrl`
+      // taşımıyor, kullanıcı `appRoot` adresine yönlendiriliyor ve oturum çerezi
+      // hâlâ geçerli olduğu için uygulamaya OTURUMU AÇIK dönüyordu — üstelik
+      // hiçbir hata görmeden.
+      if (!response.ok) {
+        setSigningOut(false);
+        setSignOutError(body?.error?.message || 'Oturum kapatılamadı. Lütfen yeniden deneyin.');
+        return;
+      }
       // Yönlendirmeyi istemci yapar: sunucu 302 döndürseydi fetch akışında
       // yönlendirme döngüsü oluşabilirdi.
       window.location.assign(body?.endSessionUrl || appRoot);
     } catch {
-      window.location.assign(appRoot);
+      // İstek hiç tamamlanmadıysa (çevrimdışı, ağ hatası, iptal) oturum
+      // SUNUCUDA hâlâ açıktır. `appRoot` adresine yönlendirmek, başarısız çıkışı
+      // başarılı gibi gösterip kullanıcıyı oturumu açık hâlde uygulamaya geri
+      // döndürüyordu; hata da görünmediği için yeniden deneme yolu yoktu.
+      setSigningOut(false);
+      setSignOutError('Oturum kapatılamadı. Lütfen yeniden deneyin.');
     }
   };
 
@@ -74,6 +91,9 @@ export function SidebarUserPanel({ theme, onToggleTheme }) {
         >
           <Icons.LogOut size={15} />
         </button>
+      )}
+      {signOutError && (
+        <span role="alert" className="sidebar-signout-error">{signOutError}</span>
       )}
     </div>
   );

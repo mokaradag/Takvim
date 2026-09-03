@@ -58,9 +58,19 @@ export const CORPORATE_WBS_SYNC_WARMTH_SQL = `
 SELECT MAX(s.SyncedAt) AS LastSyncedAt, COUNT_BIG(*) AS ProjectCount
 FROM dbo.MR_CorporateWbsSyncState s;`;
 
-/** Bir projenin eşitleme parmak izini günceller (yoksa ekler). */
+/**
+ * Bir projenin eşitleme parmak izini günceller (yoksa ekler).
+ *
+ * Ekleme KOŞULLUDUR ve anahtar satırı üzerinde güncelleme kilidi alır.
+ * `IF @@ROWCOUNT = 0` + koşulsuz `INSERT` biçimi eşzamanlı iki eşitleme turunda
+ * ikisini de ekleme yoluna sokuyor, ikincisi birincil anahtar ihlaliyle
+ * düşüyordu; `synchronizeCorporateWbs` bu hatayı yakalayıp BÜTÜN eşitlemeyi
+ * `SOURCE_UNAVAILABLE` ile bırakıyor ve sonraki partilerdeki projeler de hiç
+ * birleştirilmiyordu. Eşzamanlı tur gerçekten olasıdır: `readProjectedSnapshot`
+ * eşitlemeyi kendi işleminin dışında tetikler.
+ */
 export const CORPORATE_WBS_SYNC_STATE_UPSERT_SQL = `
-UPDATE dbo.MR_CorporateWbsSyncState
+UPDATE dbo.MR_CorporateWbsSyncState WITH (UPDLOCK, HOLDLOCK)
 SET ContentHash = @contentHash,
     NodeCount = @nodeCount,
     SyncedAt = SYSUTCDATETIME(),
@@ -69,7 +79,11 @@ WHERE ProjectCode = @projectCode;
 
 IF @@ROWCOUNT = 0
   INSERT dbo.MR_CorporateWbsSyncState(ProjectCode, ContentHash, NodeCount, SyncedBySicil)
-  VALUES(@projectCode, @contentHash, @nodeCount, @actorSicil);`;
+  SELECT @projectCode, @contentHash, @nodeCount, @actorSicil
+  WHERE NOT EXISTS (
+    SELECT 1 FROM dbo.MR_CorporateWbsSyncState WITH (UPDLOCK, HOLDLOCK)
+    WHERE ProjectCode = @projectCode
+  );`;
 
 /**
  * Tek bir kurumsal projenin CN43N kaynaklı düğümlerini MR_WBS ile eşitler.

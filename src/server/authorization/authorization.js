@@ -1,3 +1,4 @@
+import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ServerPersistenceError } from '../errors.js';
 
 export const ACCESS_REASONS = Object.freeze({
@@ -13,27 +14,38 @@ export const ACCESS_REASONS = Object.freeze({
 
 export function deriveEffectiveAccess({ isSystemAdmin, fullProjectIds = [], partialProjectRows = [], partialTaskRows = [] }) {
   const access = new Map();
+  // Anahtarlar BURADA da kanonikleştirilir. Tek üretim çağıranı
+  // (`loadAuthorizationContext`) değerleri zaten `rowId` ile kanonikleştirir ve
+  // `assertProjectWriteAccess` aramayı aynı biçimde yapar; yine de işlev dışa
+  // aktarıldığı için ham kimlik geçiren bir çağıran, yalnızca harf büyüklüğü
+  // farklı bir GUID yüzünden FULL yetkiyi ıskalatabilirdi. Kanonikleştirme
+  // etkisizdir (idempotent), bu yüzden ek maliyet getirmez.
+  const key = (value) => (value == null ? value : (canonicalActualId(value) ?? String(value)));
   if (isSystemAdmin) {
-    return { isSystemAdmin: true, access, partialTaskIds: new Set(), fullProjectIds: new Set(fullProjectIds) };
+    return {
+      isSystemAdmin: true,
+      access,
+      partialTaskIds: new Set(),
+      fullProjectIds: new Set(fullProjectIds.map(key))
+    };
   }
   for (const projectId of fullProjectIds) {
-    access.set(projectId, { projectId, accessLevel: 'FULL', reasons: [ACCESS_REASONS.CORPORATE_PROJECT_ROLE] });
+    const id = key(projectId);
+    access.set(id, { projectId: id, accessLevel: 'FULL', reasons: [ACCESS_REASONS.CORPORATE_PROJECT_ROLE] });
   }
-  for (const row of partialProjectRows) {
-    if (!access.has(row.projectId)) {
-      access.set(row.projectId, { projectId: row.projectId, accessLevel: 'PARTIAL', reasons: [row.reason] });
-    } else if (access.get(row.projectId).accessLevel === 'PARTIAL') {
-      access.get(row.projectId).reasons = [...new Set([...access.get(row.projectId).reasons, row.reason])];
+  const mergePartial = (rawProjectId, reason) => {
+    const id = key(rawProjectId);
+    if (!access.has(id)) {
+      access.set(id, { projectId: id, accessLevel: 'PARTIAL', reasons: [reason] });
+    } else if (access.get(id).accessLevel === 'PARTIAL') {
+      access.get(id).reasons = [...new Set([...access.get(id).reasons, reason])];
     }
-  }
+  };
+  for (const row of partialProjectRows) mergePartial(row.projectId, row.reason);
   const partialTaskIds = new Set();
   for (const row of partialTaskRows) {
     partialTaskIds.add(row.taskId);
-    if (!access.has(row.projectId)) {
-      access.set(row.projectId, { projectId: row.projectId, accessLevel: 'PARTIAL', reasons: [row.reason] });
-    } else if (access.get(row.projectId).accessLevel === 'PARTIAL') {
-      access.get(row.projectId).reasons = [...new Set([...access.get(row.projectId).reasons, row.reason])];
-    }
+    mergePartial(row.projectId, row.reason);
   }
   return {
     isSystemAdmin: false,
@@ -65,7 +77,12 @@ export function hasTaskAssignmentScope({ isSystemAdmin = false, isExecutive = fa
 
 export function assertProjectWriteAccess(effective, projectId) {
   if (effective.isSystemAdmin) return;
-  if (effective.access.get(projectId)?.accessLevel !== 'FULL') {
+  // Anahtarlar `loadAuthorizationContext` içinde KANONİK kimliklerle kurulur.
+  // Ham `projectId` ile arama, yalnızca büyük/küçük harf ya da biçim farkı olan
+  // (ama tamamen geçerli) bir GUID geldiğinde ıskalıyor ve FULL yetkisi olan
+  // kullanıcı FORBIDDEN alıyordu.
+  const canonicalId = projectId == null ? projectId : (canonicalActualId(projectId) ?? projectId);
+  if (effective.access.get(canonicalId)?.accessLevel !== 'FULL') {
     throw new ServerPersistenceError('FORBIDDEN', 'Bu proje için tam yazma yetkiniz yok.');
   }
 }

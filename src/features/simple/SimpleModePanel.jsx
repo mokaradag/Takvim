@@ -270,100 +270,109 @@ export function SimpleModePanel() {
       return;
     }
 
+    // `saving` bayrağı HER YOLDA temizlenir: beklenen çağrılardan biri
+    // reddedildiğinde bayrak `true` kalıyor, gönder düğmesi devre dışı kalıyor
+    // ve kullanıcı ne hata iletisi görüyor ne de yeniden deneyebiliyordu.
     setSaving(true);
-    let project = selectedProject;
-    let targetWbsId = selectedRootWbsId;
-    let tagWarning = null;
-    let taskKeyword = keyword.trim();
+    try {
+      let project = selectedProject;
+      let targetWbsId = selectedRootWbsId;
+      let tagWarning = null;
+      let taskKeyword = keyword.trim();
 
-    if (!project) {
-      // Basit Mod portföy görünümünde kalır: çalışma alanı değiştirilirse bu form
-      // kayıt tamamlanmadan yeniden monte edilir ve sonuç mesajı kaybolur.
-      const created = await addProject({
-        name: manualProjectName.trim(),
-        code: manualProjectCode.trim(),
-        leadId: assigneeIds[0] || people[0]?.id || '',
-        dataDate: fmtISO(today()),
-        color: 'blue',
-        tags: keyword.trim() ? [keyword.trim()] : [],
-        source: 'manual'
-      }, { focusWorkspace: false });
-      if (!created?.ok) {
-        setSaving(false);
-        setMessage({ type: 'error', text: created?.error?.message || 'Proje oluşturulamadı.' });
+      if (!project) {
+        // Basit Mod portföy görünümünde kalır: çalışma alanı değiştirilirse bu form
+        // kayıt tamamlanmadan yeniden monte edilir ve sonuç mesajı kaybolur.
+        const created = await addProject({
+          name: manualProjectName.trim(),
+          code: manualProjectCode.trim(),
+          leadId: assigneeIds[0] || people[0]?.id || '',
+          dataDate: fmtISO(today()),
+          color: 'blue',
+          tags: keyword.trim() ? [keyword.trim()] : [],
+          source: 'manual'
+        }, { focusWorkspace: false });
+        if (!created?.ok) {
+          setMessage({ type: 'error', text: created?.error?.message || 'Proje oluşturulamadı.' });
+          return;
+        }
+        project = created.value;
+        // Kök düğüm önce sunucunun döndürdüğü değişiklik kümesinden, bulunamazsa
+        // güncel uygulama durumundan çözülür. Böylece tek bir kaynağa bağımlı kalmayız.
+        targetWbsId = created.rootWbs?.id
+          || created.changes?.wbsUpserts?.find(
+            (node) => node.projectId === project.id && node.parentId == null
+          )?.id
+          || findProjectRootWbsId(wbs, project.id);
+        setProjectChoice(project.id);
+        setManualProjectName('');
+        setManualProjectCode('');
+      } else {
+        // Etiket kataloğuna ekleme, görev kaydından bağımsız ikincil bir yazmadır.
+        // Proje satırı yazılamıyorsa (salt okunur kurumsal alan, sürüm çakışması vb.)
+        // asıl işlem olan görev oluşturma engellenmez; yalnızca uyarı gösterilir.
+        const tagged = await ensureTag(project);
+        project = tagged.project || project;
+        if (tagged.ok) {
+          taskKeyword = tagged.keyword;
+        } else {
+          taskKeyword = '';
+          tagWarning = `${tagged.error?.message || 'Etiket proje kataloğuna eklenemedi.'} Görev etiketsiz oluşturuldu; etiketi Proje Yapısı sayfasından tanımlayıp göreve atayabilirsiniz.`;
+        }
+      }
+
+      if (!targetWbsId) {
+        setMessage({ type: 'error', text: 'Projenin kök iş dağılım düğümü bulunamadı. Proje Yapısı sayfasından kök düğümü oluşturun.' });
         return;
       }
-      project = created.value;
-      // Kök düğüm önce sunucunun döndürdüğü değişiklik kümesinden, bulunamazsa
-      // güncel uygulama durumundan çözülür. Böylece tek bir kaynağa bağımlı kalmayız.
-      targetWbsId = created.rootWbs?.id
-        || created.changes?.wbsUpserts?.find(
-          (node) => node.projectId === project.id && node.parentId == null
-        )?.id
-        || findProjectRootWbsId(wbs, project.id);
-      setProjectChoice(project.id);
-      setManualProjectName('');
-      setManualProjectCode('');
-    } else {
-      // Etiket kataloğuna ekleme, görev kaydından bağımsız ikincil bir yazmadır.
-      // Proje satırı yazılamıyorsa (salt okunur kurumsal alan, sürüm çakışması vb.)
-      // asıl işlem olan görev oluşturma engellenmez; yalnızca uyarı gösterilir.
-      const tagged = await ensureTag(project);
-      project = tagged.project || project;
-      if (tagged.ok) {
-        taskKeyword = tagged.keyword;
-      } else {
-        taskKeyword = '';
-        tagWarning = `${tagged.error?.message || 'Etiket proje kataloğuna eklenemedi.'} Görev etiketsiz oluşturuldu; etiketi Proje Yapısı sayfasından tanımlayıp göreve atayabilirsiniz.`;
+
+      const selectedPeopleForTask = assigneeIds.map((id) => people.find((person) => person.id === id)).filter(Boolean);
+      const createdTask = await addTask({
+        projectId: project.id,
+        projectCode: project.code || '',
+        proje: project.name,
+        color: project.color || 'blue',
+        wbsId: targetWbsId,
+        task: task.trim(),
+        keyword: taskKeyword,
+        assigneeIds: [...assigneeIds],
+        sorumlu: selectedPeopleForTask.map((person) => person.name),
+        status: 'todo',
+        priority: normalizePriorityId(priority),
+        progress: 0,
+        plannedStart: dueDate,
+        plannedFinish: dueDate,
+        targetFinish: dueDate,
+        ...(!assigneeCreateOnly ? {
+          actualStart: null,
+          actualFinish: null,
+          plannedDurationDays: null,
+          remainingDurationDays: null,
+          plannedHours: 0,
+          actualHours: 0
+        } : {}),
+        deps: []
+      });
+
+      if (!createdTask?.ok || !createdTask.value) {
+        setMessage({ type: 'error', text: createdTask?.error?.message || 'Görev oluşturulamadı.' });
+        return;
       }
-    }
 
-    if (!targetWbsId) {
+      await closeTask();
+      resetTaskFields();
+      setMessage(tagWarning
+        ? { type: 'warning', text: `Kayıt Takvim görünümüne eklendi. Etiket kataloğu güncellenemedi: ${tagWarning}` }
+        : { type: 'success', text: 'Kayıt Takvim görünümüne eklendi.' });
+    } catch {
+      // `finally` yalnızca `saving` bayrağını temizliyordu: `addProject`,
+      // `ensureTag`, `addTask` ya da `closeTask` reddettiğinde `message` `null`
+      // kalıyor, kullanıcı dönen çarkın durduğunu görüyor ama ne sonuç ne de
+      // gerekçe alıyordu.
+      setMessage({ type: 'error', text: 'Kayıt tamamlanamadı. Lütfen yeniden deneyin.' });
+    } finally {
       setSaving(false);
-      setMessage({ type: 'error', text: 'Projenin kök iş dağılım düğümü bulunamadı. Proje Yapısı sayfasından kök düğümü oluşturun.' });
-      return;
     }
-
-    const selectedPeopleForTask = assigneeIds.map((id) => people.find((person) => person.id === id)).filter(Boolean);
-    const createdTask = await addTask({
-      projectId: project.id,
-      projectCode: project.code || '',
-      proje: project.name,
-      color: project.color || 'blue',
-      wbsId: targetWbsId,
-      task: task.trim(),
-      keyword: taskKeyword,
-      assigneeIds: [...assigneeIds],
-      sorumlu: selectedPeopleForTask.map((person) => person.name),
-      status: 'todo',
-      priority: normalizePriorityId(priority),
-      progress: 0,
-      plannedStart: dueDate,
-      plannedFinish: dueDate,
-      targetFinish: dueDate,
-      ...(!assigneeCreateOnly ? {
-        actualStart: null,
-        actualFinish: null,
-        plannedDurationDays: null,
-        remainingDurationDays: null,
-        plannedHours: 0,
-        actualHours: 0
-      } : {}),
-      deps: []
-    });
-
-    if (!createdTask?.ok || !createdTask.value) {
-      setSaving(false);
-      setMessage({ type: 'error', text: createdTask?.error?.message || 'Görev oluşturulamadı.' });
-      return;
-    }
-
-    await closeTask();
-    resetTaskFields();
-    setSaving(false);
-    setMessage(tagWarning
-      ? { type: 'warning', text: `Kayıt Takvim görünümüne eklendi. Etiket kataloğu güncellenemedi: ${tagWarning}` }
-      : { type: 'success', text: 'Kayıt Takvim görünümüne eklendi.' });
   };
 
   return (

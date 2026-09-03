@@ -14,10 +14,17 @@ import { STATUS_DISTRIBUTION_BUCKETS, selectStatusDistribution } from './statusD
 import { selectOverdueAging, selectPlanHygiene } from './planHealth.js';
 import { useTodayKey } from '../../hooks/useTodayKey.js';
 import { selectDashboardWorkload } from './workloadProjection.js';
+import { DateRangeFilter } from '../../components/DateRangeFilter';
+import {
+  DEFAULT_DATE_RANGE_PRESET,
+  describeDateRange,
+  filterTasksByDateRange,
+  resolveDateRangeSelection
+} from '../shared/dateRangeFilter.js';
 
 /* ── Özet (Dashboard) ──────────────────────────────────── */
 export function DashboardView({ onNavigate }) {
-  const tasks = useTasks();
+  const allTasks = useTasks();
   const people = useAllPeople();
   const { openTask: onOpenTask } = useTaskActions();
   // Referans gün KARARLI bir değerdir. `today()` her çizimde yeni bir `Date`
@@ -29,6 +36,20 @@ export function DashboardView({ onNavigate }) {
   const todayKey = useTodayKey();
   const today_ = useMemo1(() => parseDate(todayKey), [todayKey]);
   const [donutSel, setDonutSel] = useState1(null);
+
+  // Pano bütün çalışma alanını özetliyordu: kurulum yaşlandıkça kartlar ve
+  // tablolar yıllar önce kapanmış görevleri de sayıyor, "son dönemde ne oldu"
+  // sorusu okunamaz hâle geliyordu. Aralık seçimi bütün türetilmiş ölçümlerin
+  // ÖNÜNDE uygulanır ki her kart aynı kümeyi anlatsın.
+  const [dateRange, setDateRange] = useState1({ preset: DEFAULT_DATE_RANGE_PRESET, start: '', end: '' });
+  const activeRange = useMemo1(
+    () => resolveDateRangeSelection(dateRange, today_),
+    [dateRange, today_]
+  );
+  const tasks = useMemo1(
+    () => filterTasksByDateRange(allTasks, activeRange),
+    [allTasks, activeRange]
+  );
 
   // Üst rozetler ve halka grafiği TEK kaynaktan beslenir: birbirini dışlayan
   // durum kovaları (bkz. statusDistribution.js). Daha önce kartlar durum
@@ -182,6 +203,14 @@ export function DashboardView({ onNavigate }) {
           {fmt(today_, 'dd MMM yyyy')} · {tasks.length} görev · {progress} aktif · <span style={{ color: overdue > 0 ? 'var(--status-overdue)' : 'var(--text-dim)' }}>{overdue} geciken</span>
         </div>
       </HeroHeader>
+
+      <DateRangeFilter
+        value={dateRange}
+        onChange={setDateRange}
+        summary={activeRange
+          ? `${describeDateRange(activeRange)} · ${tasks.length}/${allTasks.length} görev`
+          : `${allTasks.length} görev`}
+      />
 
       <div className="dashboard-kpi-grid">
         <Stat icon={<Icons.Briefcase size={16} />} label="Toplam görev" value={tasks.length} accent="var(--text)" trend={`${compRate}% tamamlandı`} items={tasks} onOpenTask={onOpenTask}

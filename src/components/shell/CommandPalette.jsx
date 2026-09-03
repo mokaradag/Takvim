@@ -9,12 +9,24 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
   const [active, setActive] = useState(0);
   const inputRef = useRef(null);
 
+  // Etkin satır DURUMUN KENDİSİNDE sınırlanır. `setActive((a) => a + 1)`
+  // sınırsız artıyor, çizim ise `Math.min(active, items.length - 1)` ile
+  // kırpıyordu: kullanıcı ArrowDown tuşuna sonuç sayısından fazla bastıktan
+  // sonra ArrowUp'a bastığında seçim oynamıyor, önce fazladan basılan her tuş
+  // için bir kez geri saymak gerekiyordu.
+  const itemCountRef = useRef(0);
+
   useEffect(() => {
     inputRef.current?.focus();
     const onKey = (e) => {
       if (e.key === 'Escape') onClose();
-      else if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => a + 1); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
+      else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive((a) => Math.min(a + 1, Math.max(0, itemCountRef.current - 1)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive((a) => Math.max(0, a - 1));
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -44,6 +56,21 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
     return all;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, tasks]);
+
+  // Sayaç RENDER İÇİNDE değil, işlemeden sonra güncellenir: render saf kalır
+  // (React yarıda kesilen bir render'ı atabilir ya da yeniden oynatabilir).
+  useEffect(() => {
+    itemCountRef.current = items.length;
+    // DURUMUN KENDİSİ de kırpılır, yalnızca çizilen değer değil. Sonuç listesi
+    // kısaldığında `active` eski (büyük) değerinde kalırsa, kullanıcının bir
+    // sonraki ArrowUp'ı görünür seçimi oynatmaz: fazlalık kadar tuşa basması
+    // gerekirdi.
+    setActive((current) => {
+      const max = items.length - 1;
+      if (max < 0) return 0;
+      return current > max ? max : current;
+    });
+  }, [items.length]);
 
   const a = Math.min(active, items.length - 1);
 
@@ -81,11 +108,16 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
               <div key={group}>
                 <div className="cmd-group-title">{group}</div>
                 {list.map((it) => {
-                  idx++;
-                  const isActive = idx === a;
+                  // Satır dizini KOPYALANIR: `onMouseEnter` işleyicileri ortak
+                  // ve değişebilir `idx` bağlamasını kapatıyordu; çizim
+                  // bittiğinde `idx` son satırın dizinine eşit olduğu için
+                  // hangi satırın üzerine gelinirse gelinsin SON satır etkin
+                  // hâle geliyordu.
+                  const itemIndex = ++idx;
+                  const isActive = itemIndex === a;
                   const I = Icons[it.icon] || Icons.Target;
                   return (
-                    <div key={idx} className={`cmd-row${isActive ? ' active' : ''}`} onMouseEnter={() => setActive(idx)} onClick={() => it.action()}>
+                    <div key={itemIndex} className={`cmd-row${isActive ? ' active' : ''}`} onMouseEnter={() => setActive(itemIndex)} onClick={() => it.action()}>
                       <I size={14} className="cmd-icon" />
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
                       {it.sub && <span className="cmd-meta">{it.sub}</span>}

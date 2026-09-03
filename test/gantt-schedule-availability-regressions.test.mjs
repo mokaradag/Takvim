@@ -90,3 +90,25 @@ test('cross-project dependencies produce an invalid project schedule for the UI 
   assert.equal(schedule.tasks['a-1'], undefined);
   assert.equal(schedule.warnings.some((warning) => warning.code === 'CROSS_PROJECT_DEPENDENCY'), true);
 });
+
+test('proje dışı bağımlılık, görev kimliği SAYI iken de yakalanır', () => {
+  // `tasksById` anahtarları ham `task.id` ile kurulduğunda sayısal kimlik,
+  // metin gelen `predecessorId` ile eşleşmiyordu. Iskalanan öncül sessizce
+  // atlandığı için denetim hiç çalışmıyor ve `calculateCpm` çözümlenmemiş
+  // öncüllü bir ağı "geçerli" olarak zamanlıyordu.
+  const schedule = buildPortfolioSchedule({
+    projects: [
+      { id: 'p-a', name: 'A' },
+      { id: 'p-b', name: 'B' }
+    ],
+    tasks: [
+      { id: 1, projectId: 'p-a', plannedStart: '2026-07-01', plannedFinish: '2026-07-02', deps: [{ id: '2', type: 'FS' }] },
+      { id: 2, projectId: 'p-b', plannedStart: '2026-07-01', plannedFinish: '2026-07-02', deps: [] }
+    ],
+    calendars: []
+  });
+
+  assert.equal(schedule.projects['p-a'].status, 'invalid');
+  assert.equal(schedule.projects['p-a'].error.code, 'CROSS_PROJECT_DEPENDENCY');
+  assert.equal(schedule.projects['p-a'].error.details.dependencies[0].predecessorProjectId, 'p-b');
+});

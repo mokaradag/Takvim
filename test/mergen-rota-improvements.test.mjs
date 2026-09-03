@@ -313,8 +313,11 @@ test('karşılama ekranı doğrulanmış oturum kimliğini gösterir', () => {
   assert.match(welcome, /resolveUserDepartmentLabel\(currentUser/);
   assert.match(welcome, /role="dialog"/);
   assert.match(welcome, /aria-modal="true"/);
-  // Esc modalı kapatır.
-  assert.match(welcome, /event\.key === 'Escape'/);
+  // Esc modalı kapatır ve odak panelin İÇİNDE kalır: ikisi de paylaşımlı
+  // `useModalFocusTrap` kancasından gelir (`aria-modal` tek başına odağı
+  // kısıtlamaz, kullanıcı arkadaki kabuğa sekme ile geçebiliyordu).
+  assert.match(welcome, /useModalFocusTrap\(\{ containerRef: panelRef, initialFocusRef, onClose \}\)/);
+  assert.match(read('src/hooks/useModalFocusTrap.js'), /event\.key === 'Escape'/);
   assert.match(shell, /currentUser=\{currentUser\}/);
 });
 

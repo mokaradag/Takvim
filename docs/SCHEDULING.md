@@ -88,8 +88,25 @@ The contract now is:
 
 - an unresolvable date returns the input unchanged (`moveToWorkingDay`,
   `addWorkingDays`) or `0` (`diffWorkingDays`, `countWorkingDays`);
-- every scan stops after `MAX_CALENDAR_SCAN_DAYS` (about ten years) and falls
-  back to the input rather than looping;
+- the scan budget for `addWorkingDays` is **derived from the request**
+  (`7n + 7` calendar days plus a ten-year floor), so a long but valid lag or
+  duration is computed exactly instead of silently collapsing to the input.
+  A fixed cap made every span beyond roughly 2595 working days indistinguishable
+  from zero, and the failure was in the optimistic direction: a 4000-working-day
+  lag scheduled as no lag at all, a 2600-day activity as a zero-length milestone;
+- a span beyond `MAX_WORKING_DAY_SPAN` (20 000 working days) is **reported, not
+  truncated**: `addWorkingDays` returns `null` and the CPM engine raises
+  `SCHEDULE_HORIZON_EXCEEDED`, so the project schedule is surfaced as invalid
+  rather than published with a wrong date. The same bound is enforced at the
+  write boundary (`commitScalarValidation`) and on the Lead/Lag input, so an
+  ordinary edit cannot reach it;
+- `diffWorkingDays` / `countWorkingDays` walk toward a fixed endpoint and always
+  terminate; their `MAX_CALENDAR_SPAN_DAYS` bound (about a hundred years) exists
+  only to keep the extreme dates SQL accepts (year 0001–9999) from becoming
+  millions of iterations. `calculatePlannedDurationDays` returns `null` rather
+  than a truncated count for a span beyond it;
+- a calendar with no reachable working day still falls back to the input rather
+  than looping — that is the condition the floor protects against;
 - `parseDate()` accepts an ISO string that carries a time part
   (`2026-08-18T00:00:00.000Z`) and returns an Invalid Date — never a silent
   "today" — for anything it cannot resolve. `isValidDate()` is exported for

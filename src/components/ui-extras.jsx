@@ -558,55 +558,10 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   );
 }
 
-// Helper for VeriView: check if a date matches a date-filter spec
-export function dateMatchesFilter(iso, spec) {
-  if (!spec) return true;
-  const t = today();
-  const d = parseDate(iso);
-  if (spec.mode === 'range') {
-    if (spec.from && d < parseDate(spec.from)) return false;
-    if (spec.to && d > parseDate(spec.to)) return false;
-    return true;
-  }
-  if (spec.mode === 'before') {
-    if (spec.to && d > parseDate(spec.to)) return false;
-    return true;
-  }
-  if (spec.mode === 'after') {
-    if (spec.from && d < parseDate(spec.from)) return false;
-    return true;
-  }
-  if (spec.mode === 'preset') {
-    const days = diffDays(d, t);
-    switch (spec.preset) {
-      case 'overdue': return days < 0;
-      case 'today': return days === 0;
-      case 'tomorrow': return days === 1;
-      case 'thisWeek': {
-        const ws = startOfWeek(t);
-        const we = endOfWeek(t);
-        return d >= ws && d <= we;
-      }
-      case 'nextWeek': {
-        const ws = addDays(startOfWeek(t), 7);
-        const we = addDays(endOfWeek(t), 7);
-        return d >= ws && d <= we;
-      }
-      case 'thisMonth': {
-        return d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear();
-      }
-      case 'nextMonth': {
-        const next = new Date(t.getFullYear(), t.getMonth() + 1, 1);
-        return d.getMonth() === next.getMonth() && d.getFullYear() === next.getFullYear();
-      }
-      case 'last7': return days >= -7 && days <= 0;
-      case 'last30': return days >= -30 && days <= 0;
-      case 'next30': return days >= 0 && days <= 30;
-      default: return true;
-    }
-  }
-  return true;
-}
+// Helper for VeriView: check if a date matches a date-filter spec.
+// Uygulama `./dateMatchesFilter.js` içindedir (düz Node'dan sınanabilmesi için);
+// burada yalnızca yeniden dışa aktarılır, çağıranların içe aktarımı değişmez.
+export { dateMatchesFilter } from './dateMatchesFilter.js';
 
 // Helper: numeric filter match
 export function numericMatchesFilter(val, spec) {

@@ -10,10 +10,22 @@ Nginx strips `/rota` before forwarding. MERGEN Rota therefore does **not** use N
 
 ## Compatible Nginx rule
 
-The existing prefix-stripping form is supported:
+The existing prefix-stripping form is supported. Note the `^~ /rota/` boundary:
+a bare `location /rota` is a *prefix* match, so it also captures unrelated paths
+such as `/rota-admin` and `/rotavirus` and forwards them to the Rota upstream
+instead of their intended handler (or a 404). The exact `= /rota` location keeps
+the bare path working.
 
 ```nginx
-location /rota {
+location = /rota {
+    # `$is_args$args` ZORUNLUDUR: `return` yönergesi, `rewrite`'ın aksine
+    # özgün sorgu dizesini kendiliğinden eklemez. Bunlar olmadan
+    # `/rota?mode=actual` adresi `/rota/` olarak yeniden yazılır ve sorgu
+    # parametreleri sessizce düşerdi.
+    return 308 /rota/$is_args$args;
+}
+
+location ^~ /rota/ {
     proxy_pass http://<ROTA_SERVER>:8008;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;

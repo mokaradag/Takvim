@@ -171,8 +171,13 @@
 .simple-tasks-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .simple-tasks-select .input { padding: 6px 8px; font-size: 12px; }
 .simple-tasks-count { margin-left: auto; font-size: 12.5px; }
-.simple-tasks-card { padding: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.simple-tasks-scroll { min-height: 0; overflow: auto; }
+/* Gelişmiş moddaki `.tasks-table-card` / `.tasks-table-scroll` ikilisiyle aynı
+   esnek boyutlandırma: `flex: 1 1 0` olmadan kart içeriğine göre büyüyor,
+   `overflow: auto` hiç devreye girmiyor ve yapışkan `th` için kaydırılabilir bir
+   ata kalmıyordu — uzun listede başlık ekrandan çıkıyor, tablo yerine sayfa
+   kayıyordu. */
+.simple-tasks-card { flex: 1 1 0; padding: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.simple-tasks-scroll { flex: 1 1 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
 .simple-tasks-table th { position: sticky; top: 0; z-index: 1; background: var(--bg-elev); }
 .simple-tasks-project { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .simple-tasks-title { font-weight: 550; }

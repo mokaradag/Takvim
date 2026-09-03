@@ -33,6 +33,11 @@ export function SimpleTaskDrawer({
   onDelete,
   canManageAssignees = true,
   canControlSchedule = true,
+  // Termin AYRI bir yetkidir: sorumlu kendi planladığı tarihleri güncelleyebilir
+  // (`canControlSchedule`) ama görevi kendisi oluşturmadıysa HEDEF BİTİŞİ
+  // değiştiremez. Tek bayrağa bakan alan, sunucunun FORBIDDEN döndüğü bir
+  // düzenlemeyi açık bırakıyordu.
+  canEditTargetFinish = true,
   canProposeSchedule = false,
   scheduleRequests = [],
   onProposeSchedule = null,
@@ -106,6 +111,20 @@ export function SimpleTaskDrawer({
     const requested = String(value || '').trim();
     const draftAtCommit = keywordDraftRef.current;
     setCatalogWarning(null);
+    // DEĞİŞMEYEN değer yeniden yazılmaz. `onBlur` her odak kaybında çalışıyor;
+    // alana girip hiçbir şey değiştirmeden çıkan kullanıcı da `onUpdate`
+    // çağrısını tetikliyor ve görev sürümü boş yere ilerliyordu. Öncelik ve
+    // durum denetimleri bu boş yazmaları bilinçli olarak eler; etiket alanı da
+    // aynı kuralı uygular.
+    if (requested === String(task.keyword || '').trim()) {
+      // Yerel taslak KALICI değere geri alınır. Yalnızca baştaki/sondaki boşluk
+      // eklenmişse `requested` eşit çıkar ve yazma atlanır, ama `local.keyword`
+      // ham taslağı tutmaya devam ederdi: kullanıcı kaydedilmemiş bir değer
+      // görür, yenileme ya da yeniden açılışta o değer kaybolurdu.
+      setLocal((current) => ({ ...current, keyword: task.keyword || '' }));
+      keywordDraftRef.current = null;
+      return;
+    }
     if (!requested) {
       keywordDraftRef.current = null;
       onUpdate(task.id, { keyword: '' });
@@ -288,10 +307,13 @@ export function SimpleTaskDrawer({
                 // değiştiren gizli planını yok ederdi.
                 : { targetFinish: value || null })}
               allowEmpty
-              disabled={!canControlSchedule}
+              disabled={!canControlSchedule || !canEditTargetFinish}
             />
             {!canControlSchedule && (
               <small className="muted">Bu görevin plan tarihleri görev oluşturucusunun onayıyla değiştirilir.</small>
+            )}
+            {canControlSchedule && !canEditTargetFinish && (
+              <small className="muted">Termin tarihini yalnızca görevi oluşturan kişi değiştirebilir.</small>
             )}
           </label>
 

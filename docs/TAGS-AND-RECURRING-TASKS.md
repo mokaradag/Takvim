@@ -125,8 +125,16 @@ BYMONTHDAY=<1..31>                 aylık tekrarda ayın günü
 COUNT=<n> | UNTIL=<YYYYMMDD>       seri sonu (ikisi birden verilemez)
 ```
 
-`COUNT` ve `UNTIL` birlikte verilirse RFC 5545 gereği kural geçersizdir;
-normalleştirme `COUNT`'u önceler ve `UNTIL`'i düşürür.
+`COUNT` ve `UNTIL` birlikte verilirse RFC 5545 gereği kural geçersizdir ve
+**yazma sınırında reddedilir**: `findRecurrenceRuleIssue` bunu
+`COUNT ve UNTIL birlikte verilemez.` gerekçesiyle bildirir, commit ucu da
+`TASK_RECURRENCE_INVALID` döndürür. Kullanıcının verdiği bitiş tarihi bu yüzden
+sessizce kaybolamaz.
+
+`normalizeRecurrenceRule` bir OKUMA yolu yardımcısıdır ve hoşgörülüdür: elde
+kalmış ya da eski bir kaydı çözerken ikisi birden geldiğinde `COUNT`'u önceler.
+Bu tolerans yalnızca çözümlemede geçerlidir; kalıcılaştırma yolunda geçersiz
+birleşim hiç kabul edilmez.
 
 Kural motoru `src/scheduling/recurrence/index.js` içindedir ve saftır.
 

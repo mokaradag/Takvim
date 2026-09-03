@@ -80,6 +80,13 @@ export function planCorporateWbsSyncBatch(projectCodes, plannedByCode, syncState
 
   for (const projectCode of projectCodes) {
     const nodes = plannedByCode.get(projectCode) || [];
+    // BOŞ küme birleştirilmez ve bu BİLİNÇLİDİR. Birleştirme SQL'i kaynakta
+    // bulunmayan düğümleri (alt düğümü ve görevi olmayanları) siler; kaynağın
+    // geçici olarak sıfır satır döndürmesi — CN43N kesintisi, yetki değişimi,
+    // besleme gecikmesi — böylece o projenin kurumsal WBS yapraklarını kalıcı
+    // olarak silerdi. Kaynak gerçekten boşaldığında düğümler bir sonraki
+    // gerçek turda değil, elle temizlemeyle kaldırılır; veri kaybı riski
+    // bayat düğüm riskinden ağır basar.
     if (!nodes.length) continue;
     const contentHash = corporateWbsContentHash(nodes);
     if (canSkipCorporateWbsMerge(syncState.get(projectCode), contentHash, nodes.length)) {

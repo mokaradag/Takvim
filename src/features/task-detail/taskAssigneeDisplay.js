@@ -40,12 +40,15 @@ export function resolveTaskAssigneeDisplayRecords(task = {}, people = [], includ
 
   names.forEach((name, index) => {
     const nameKey = assigneeNameKey(name);
-    const taskScopedPerson = taskIdentitiesByName.get(nameKey)?.shift() || null;
     const visibleCount = visibleNameCounts.get(nameKey) || 0;
     if (visibleCount > 0) {
       visibleNameCounts.set(nameKey, visibleCount - 1);
       return;
     }
+    // `shift()` ATLAMA denetiminden SONRA çağrılır. Önce çağrıldığında, adı
+    // zaten çözülmüş bir kişi yüzünden atlanan kayıt sıradaki kimliği tüketiyor
+    // ve aynı adı taşıyan sonraki kayıt yanlış `employeeNo` alıyordu.
+    const taskScopedPerson = taskIdentitiesByName.get(nameKey)?.shift() || null;
     records.push({ key: `task:${index}:${name}`, id: null, name, person: taskScopedPerson });
   });
 

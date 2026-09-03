@@ -66,6 +66,30 @@ export function DateInput({
     if (disabled) setOpen(false);
   }, [disabled]);
 
+  // Odak panel açıldığında YAZILIMLA içeri taşınır.
+  //
+  // `tabIndex={-1}` paneli sekme sırasına ALMAZ; yalnızca yazılımla
+  // odaklanabilir kılar. Odak girdide kaldığı sürece panelin `onKeyDown`
+  // işleyicisi hiç çalışmıyor, panel içindeki Escape ulaşılamıyor ve gün
+  // düğmeleri — panel `document.body`'ye taşındığı için — belge sekme sırasının
+  // en sonunda kalıyordu.
+  //
+  // Odak AÇILIŞ BAŞINA BİR KEZ alınır. Etki `placement` bağımlılığını taşır
+  // (panel ölçülmeden odaklanamaz), ama `placement` her yakalanan kaydırma ve
+  // yeniden boyutlandırmada YENİDEN hesaplanır: koşulsuz odaklama, açık
+  // seçicide sayfa kaydırıldığında odağı seçili gün düğmesinden çalıp panel
+  // kabına geri sıçratıyor ve klavye gezinmesini kesiyordu.
+  const panelFocusedRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      panelFocusedRef.current = false;
+      return;
+    }
+    if (!placement || panelFocusedRef.current) return;
+    panelFocusedRef.current = true;
+    panelRef.current?.focus();
+  }, [open, placement]);
+
   const measure = useCallback(() => {
     if (!rootRef.current || typeof window === 'undefined') return;
     const scale = appZoom();
@@ -157,7 +181,17 @@ export function DateInput({
       className="date-picker-panel"
       role="dialog"
       aria-label="Tarih seçici"
-      onMouseDown={(event) => event.preventDefault()}
+      // Panel ODAK ALABİLİR: portala taşındığı için DOM sekme sırasında girdiden
+      // sonra değil, sayfanın en sonunda yer alır; odak hiç içeri girmediğinde
+      // aşağıdaki `onKeyDown` işleyicisi çalışmıyor ve gün düğmelerine klavyeyle
+      // erişilemiyordu.
+      tabIndex={-1}
+      // `preventDefault` yalnızca panelin BOŞ alanı için gerekir (girdinin odağı
+      // korunsun). Düğmelerde engellenmesi, tıklanan günün odağı almasını da
+      // engelliyordu.
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) event.preventDefault();
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -244,7 +278,15 @@ export function DateInput({
           setValidationMessage('');
           setDraft(maskDateDraft(event.target.value));
         }}
-        onBlur={commit}
+        // Odak SEÇİCİNİN İÇİNE geçtiğinde taslak işlenmez. Panel açılışta odağı
+        // alır ve gün düğmesine basmak da odağı girdiden alır; koşulsuz `commit`
+        // bu yüzden önce taslaktaki tarihi, hemen ardından `selectDate` seçilen
+        // günü yazıyordu. İki `onChange` arka arkaya gittiği için ARADAKİ tarih
+        // kalıcılaşabiliyordu.
+        onBlur={(event) => {
+          if (panelRef.current?.contains(event.relatedTarget)) return;
+          commit();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault();

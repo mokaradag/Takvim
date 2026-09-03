@@ -11,7 +11,22 @@ import { CALENDARS } from './calendars.js';
  * tarihini `project.dataDate` ile karşılaştıran her görünüm başka her gün
  * yanlış sonuç veriyordu (örneğin veri tarihinden sonra biten görevler).
  */
-const MOCK_DATA_DATE = fmtISO(today());
+/**
+ * Demo verisinin TEK referans günü.
+ *
+ * `rel()` eskiden `today()` çağrısını bağımsız yapıyordu: modül değerlendirmesi
+ * gece yarısını geçtiğinde proje veri tarihi ile görev tarihleri FARKLI günlere
+ * dayanıyor ve o yüklemede demo takvim durumu tutarsız çıkıyordu. Referans bir
+ * kez alınır, ikisi de onu kullanır.
+ *
+ * Tarihler bilinçli olarak GÖRECELİDİR (sabit bir yıla sabitlenmez): veri
+ * tarihini `project.dataDate` ile karşılaştıran görünümler aksi hâlde o tek gün
+ * dışında yanlış sonuç veriyordu. Demo takvimleri `DEFAULT_CALENDAR` tatil
+ * listesinden beslenir; liste sabit tarihli ulusal bayramları 2028'e kadar
+ * kapsar (dinî bayramlar resmî ilana bağlı olduğu için tahmin yazılmaz).
+ */
+const MOCK_REFERENCE_DATE = today();
+const MOCK_DATA_DATE = fmtISO(MOCK_REFERENCE_DATE);
 
 const RAW_PROJECTS = [
   { id: 'p-web', code: 'PRJ-WEB-001', name: 'Web Sitesi Yenileme', source: 'corporate', color: 'blue', lead: 'Ahmet Yılmaz', calendarId: 'cal-tr-standard-2026', dataDate: MOCK_DATA_DATE },
@@ -33,7 +48,7 @@ const RAW_PEOPLE = [
 ];
 
 function rel(days) {
-  return fmtISO(addDays(today(), days));
+  return fmtISO(addDays(MOCK_REFERENCE_DATE, days));
 }
 
 const RAW_TASKS = [

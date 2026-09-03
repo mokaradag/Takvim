@@ -26,7 +26,9 @@ The engine determines working-day duration in this order:
 
 1. explicit numeric `task.plannedDurationDays`;
 2. zero for `task.milestone === true`;
-3. inclusive working-day count between `plannedStart` and `plannedFinish` using the activity's effective calendar.
+3. inclusive working-day count between `plannedStart` and `plannedFinish` using the activity's effective calendar, clamped to a minimum of one day for a non-milestone activity.
+
+The minimum in step 3 matters: a valid one-day activity whose start and finish both land on a weekend or holiday counts zero working days, and `SCHEDULING.md` requires such a duration to clamp to one. Publishing the raw count would draw the activity as a milestone and zero its progress weight.
 
 Canonical application tasks normally arrive with `plannedDurationDays` normalized from their current-plan date range. The date fallback keeps the pure engine usable for focused scheduling scenarios while preserving the same canonical current-plan semantics.
 

@@ -220,7 +220,25 @@ export function WbsView() {
   const runStructuralWrite = (operation) => {
     if (structuralWritePending) return Promise.resolve({ ok: false, code: 'WBS_WRITE_IN_PROGRESS' });
     setStructuralWritePending(true);
-    return Promise.resolve(operation()).finally(() => setStructuralWritePending(false));
+    // Söz zinciri `operation` ÇAĞRILMADAN ÖNCE kurulur. `Promise.resolve(operation())`
+    // biçiminde işlem eşzamanlı bir hata fırlattığında `.finally` hiç
+    // çalışmıyor, `structuralWritePending` sonsuza dek `true` kalıyordu: bundan
+    // sonraki her ekleme, yeniden adlandırma, silme, üst değiştirme ve sürükleme
+    // görünüm yeniden monte edilene kadar `WBS_WRITE_IN_PROGRESS` dönüyordu.
+    return Promise.resolve()
+      .then(operation)
+      // REDDETME de sonuç nesnesine çevrilir. Zincir yalnızca bayrağı
+      // temizleseydi, reddeden bir işlem çağıranın `result.ok === false` dalını
+      // ATLARDI: `submitEditing` `busy` bayrağını açık bırakır (satır içi ad
+      // düzenleyici yeniden monte edilene kadar kilitli kalır), `confirmDelete`
+      // ile `applyReparent` ise onay satırını açık bırakıp yakalanmamış bir söz
+      // reddetmesi üretirdi.
+      .catch((cause) => ({
+        ok: false,
+        code: 'WBS_WRITE_FAILED',
+        error: { message: cause?.message || 'Yazma tamamlanamadı.' }
+      }))
+      .finally(() => setStructuralWritePending(false));
   };
   // Satırın tamamı `draggable` olsaydı ad alanında metin seçmek ya da eylem
   // düğmelerinde işaretçiyi kaydırmak sürüklemeyi başlatabilir ve istenmeyen bir
@@ -366,8 +384,13 @@ export function WbsView() {
     setEditing(null);
   };
 
-  const confirmDelete = (node) => {
-    runStructuralWrite(() => deleteWbs(node.id));
+  // Onay satırı yalnızca silme GERÇEKTEN yapıldığında kapanır. Beklenmeyen
+  // sonuç (`WBS_WRITE_IN_PROGRESS` gibi) `deleteWbs` çağrısını hiç yapmaz;
+  // satır yine de kapandığı için düğüm ağaçta kalıyor ve kullanıcı hiçbir
+  // bildirim almıyordu. `submitEditing` aynı sonucu zaten böyle ele alır.
+  const confirmDelete = async (node) => {
+    const result = await runStructuralWrite(() => deleteWbs(node.id));
+    if (result && result.ok === false) return;
     setPendingDelete(null);
   };
 
@@ -479,9 +502,14 @@ export function WbsView() {
     });
   };
 
-  const moveSelectedTasks = () => {
+  const moveSelectedTasks = async () => {
     if (!selectedCount || !moveTargetWbsId) return;
-    moveTasksToWbs([...selectedTaskIds], moveTargetWbsId);
+    // Seçim yalnızca taşıma BAŞARILI olduğunda temizlenir; aksi hâlde kullanıcı
+    // hiçbir ileti görmeden seçimini kaybediyor ve baştan seçmek zorunda kalıyordu.
+    // `moveTasksToWbs` doğrudan beklenir; reddetme de başarısızlık sayılır ki
+    // seçim korunsun ve yakalanmamış bir söz reddetmesi kalmasın.
+    const result = await moveTasksToWbs([...selectedTaskIds], moveTargetWbsId).catch(() => ({ ok: false }));
+    if (result && result.ok === false) return;
     setSelectedTaskIds(new Set());
   };
 
@@ -492,9 +520,11 @@ export function WbsView() {
     setReparenting({ nodeId: node.id, parentId: preferred?.id || '' });
   };
 
-  const applyReparent = () => {
+  const applyReparent = async () => {
     if (!reparenting?.nodeId || !reparenting?.parentId) return;
-    runStructuralWrite(() => reparentWbs(reparenting.nodeId, reparenting.parentId));
+    // Bkz. `confirmDelete`: iletişim kutusu yalnızca yazma gerçekleştiğinde kapanır.
+    const result = await runStructuralWrite(() => reparentWbs(reparenting.nodeId, reparenting.parentId));
+    if (result && result.ok === false) return;
     setReparenting(null);
   };
 

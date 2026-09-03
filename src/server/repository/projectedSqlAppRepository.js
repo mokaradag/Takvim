@@ -32,6 +32,12 @@ async function loadVisibleTaskAssignees(executor, taskIds, auth) {
   request.input('isAdmin', sql.Bit, Boolean(auth?.isSystemAdmin));
   const result = await request.query(`
     SELECT ta.TaskId,
+      -- AvatarEmployeeNo, Sicil maskeliyken de dolu gelir ve bu BILINCLIDIR:
+      -- goreve atanmis bir kullanici, ayni gorevdeki es sorumlunun adini ve
+      -- kurumsal fotografini gorur (asagidaki WHERE icindeki ownAssignment dali
+      -- tam olarak bunun icin vardir). Sicil YALNIZCA o gorev satirinda tasinir;
+      -- genel people dizinine hicbir es sorumlu eklenmez ve yazma yetkisi
+      -- dogmaz. Bkz. test/task-scoped-co-assignee-visibility.test.mjs.
       CASE WHEN auth.IdentityVisible = 1 THEN ta.Sicil ELSE NULL END AS Sicil,
       CASE
         WHEN NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL THEN ta.Sicil

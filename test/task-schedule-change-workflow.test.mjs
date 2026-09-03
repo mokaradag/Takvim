@@ -157,6 +157,42 @@ test('oluşturucu kabul ettiğinde üç tarih ve süre atomik güncellenir, tale
   }
 });
 
+test('sorumlu gerçekleşen tarihleri yazar; ters sıralı çift REDDEDİLİR', async () => {
+  // 1) Sorumlu KENDİ görevinin gerçekleşen tarihlerini doğrudan yazabilmelidir.
+  //    Bu alanlar önceden oluşturucuya kilitliydi ve sorumlu, yürüttüğü işin
+  //    fiilî tarihlerini hiç giremiyordu.
+  // 2) Çift SIRALI olmalıdır. Denetim yalnızca "bitiş varken başlangıç yok"
+  //    durumunu kapatıyordu; başlangıcından ÖNCE biten bir kayıt, planlanan
+  //    tarihlerde aynı kural uygulanmasına rağmen sunucudan geçiyordu.
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks[0];
+    assert.equal(task.createdBySicil, String(CREATOR), 'görevi başkası oluşturmuş olmalıdır');
+
+    const written = await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, actualStart: '2026-09-01', actualFinish: '2026-09-05', assigneeMutation: false }]
+    });
+    assert.equal(written.taskUpserts[0].actualFinish, '2026-09-05');
+    assert.equal(stack.db.tasks[0].ActualStart, '2026-09-01');
+    assert.equal(stack.db.tasks[0].ActualFinish, '2026-09-05');
+
+    await assert.rejects(
+      stack.repository.commitChanges({
+        taskUpserts: [{
+          ...written.taskUpserts[0],
+          actualStart: '2026-09-09',
+          actualFinish: '2026-09-05',
+          assigneeMutation: false
+        }]
+      }),
+      (error) => error.code === 'MUTATION_FAILED' && /başlangıçtan önce/.test(error.message)
+    );
+    assert.equal(stack.db.tasks[0].ActualStart, '2026-09-01', 'reddedilen istek kaydı değiştirmemelidir');
+  } finally {
+    await stack.dispose();
+  }
+});
+
 test('ret görevin tarihlerini korur ve karar bilgisi kalıcılaşır', async () => {
   const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
@@ -227,7 +263,7 @@ test('geçersiz takvim günü sunucuda reddedilir', async () => {
   }
 });
 
-test('sınırlı oluşturucu kendi görevinde tarih ve mevcut WBS seçer; gerçekleşen tarihleri değiştiremez ve solo görevi silebilir', async () => {
+test('sınırlı oluşturucu kendi görevinde plan, hedef ve gerçekleşen tarihlerle mevcut WBS seçer; yapıyı değiştiremez ve solo görevi silebilir', async () => {
   const original = seed();
   const creatorSeed = seed({
     tasks: [{ ...original.tasks[0], ActualStart: '2026-09-01', ActualFinish: '2026-09-02' }],
@@ -250,15 +286,24 @@ test('sınırlı oluşturucu kendi görevinde tarih ve mevcut WBS seçer; gerçe
     assert.equal(updated.taskUpserts[0].wbsId, CHILD_WBS_ID);
     assert.equal(stack.db.tasks[0].TargetFinish, '2026-09-03');
     assert.equal(stack.db.tasks[0].PlannedDurationDays, 3);
+    // GERÇEKLEŞEN tarihler artık oluşturucuya açıktır: görevi açan kişi
+    // çoğunlukla onu yürüten kişidir. Yapısal alanlar (proje, sorumlu, tekrar,
+    // bağımlılık) kapalı kalır.
+    const withActual = await stack.repository.commitChanges({
+      taskUpserts: [{ ...updated.taskUpserts[0], actualStart: '2026-08-31', assigneeMutation: false }]
+    });
+    assert.equal(withActual.taskUpserts[0].actualStart, '2026-08-31');
+    assert.equal(stack.db.tasks[0].ActualStart, '2026-08-31');
     await assert.rejects(
       stack.repository.commitChanges({
-        taskUpserts: [{ ...updated.taskUpserts[0], actualStart: '2026-08-31', assigneeMutation: false }]
+        taskUpserts: [{ ...withActual.taskUpserts[0], sortOrder: 999, assigneeMutation: false }]
       }),
       (error) => error.code === 'FORBIDDEN'
     );
-    assert.equal(stack.db.tasks[0].ActualStart, '2026-09-01');
 
-    const directTask = { ...updated.taskUpserts[0], targetFinish: '2026-09-04', assigneeMutation: false };
+    // Sürüm, gerçekleşen tarih yazmasıyla ilerledi: sonraki yazma GÜNCEL satırı
+    // temel almalıdır, aksi hâlde iyimser kilit çakışma bildirir.
+    const directTask = { ...withActual.taskUpserts[0], targetFinish: '2026-09-04', assigneeMutation: false };
     delete directTask.wbsId;
     const { createSqlAppRepository } = await import('../src/server/repository/sqlAppRepository.js');
     const directlyUpdated = await createSqlAppRepository().commitChanges({ taskUpserts: [directTask] });
@@ -606,7 +651,12 @@ test('Basit Mod tarih talebi eylemini ve ortak modal erişilebilirlik sınırın
   const overlay = readFileSync(new URL('../src/features/task-detail/TaskDetailOverlay.jsx', import.meta.url), 'utf8');
   const simpleDrawer = readFileSync(new URL('../src/features/task-detail/SimpleTaskDrawer.jsx', import.meta.url), 'utf8');
   const advancedDrawer = readFileSync(new URL('../src/features/task-detail/TaskDrawer.jsx', import.meta.url), 'utf8');
-  const focusTrap = readFileSync(new URL('../src/features/schedule-change/useModalFocusTrap.js', import.meta.url), 'utf8');
+  // Odak tuzağı PAYLAŞIMLI kancaya taşındı: aynı davranışı karşılama ekranı ve
+  // veri modu seçici de kullanır (`src/features/schedule-change/useModalFocusTrap.js`
+  // artık yalnızca yeniden dışa aktarır).
+  const focusTrap = readFileSync(new URL('../src/hooks/useModalFocusTrap.js', import.meta.url), 'utf8');
+  const focusTrapReExport = readFileSync(new URL('../src/features/schedule-change/useModalFocusTrap.js', import.meta.url), 'utf8');
+  assert.match(focusTrapReExport, /export \{ useModalFocusTrap \} from '\.\.\/\.\.\/hooks\/useModalFocusTrap\.js'/);
   const provider = readFileSync(new URL('../src/state/AppStateProvider.jsx', import.meta.url), 'utf8');
   const dialog = readFileSync(new URL('../src/features/schedule-change/ScheduleChangeDialog.jsx', import.meta.url), 'utf8');
   const requestCenter = readFileSync(new URL('../src/features/schedule-change/ScheduleRequestCenter.jsx', import.meta.url), 'utf8');

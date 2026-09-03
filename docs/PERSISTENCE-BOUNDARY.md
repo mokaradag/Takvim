@@ -227,7 +227,9 @@ The merge happens in **both** branches of `schedule()`. It previously ran only w
 
 Every request the Actual System repository makes carries a **30 second deadline** (`REQUEST_TIMEOUT_MS`). An unbounded `fetch` never settles when the server accepts the connection and then answers nothing. The ordered mutation queue serializes on the returned promise, so a single stalled request blocked every later mutation for the lifetime of the tab, `whenIdle()` never resolved, and the Task panel's `Tamam` button — which awaits the pending writes before closing — hung with it. An aborted request is reported as `DATABASE_UNAVAILABLE` with a distinct "did not answer in time" message.
 
-The final unload flush keeps `keepalive`, which is exempt from the deadline (aborting it would defeat its purpose), but the Fetch standard caps a `keepalive` body at 64 KiB. A large change set therefore falls back to an ordinary request instead of being rejected outright and losing the edit with a misleading "server unreachable" message.
+The final unload flush keeps `keepalive`, which is exempt from the deadline (aborting it would defeat its purpose), but the Fetch standard caps a `keepalive` body at 64 KiB. A change set above that cap falls back to an ordinary request rather than being rejected outright with a misleading "server unreachable" message.
+
+**That fallback is a better error, not a delivery guarantee.** A plain `fetch` started during unload may be cancelled with the document, so an oversized change set can still be lost. The protection that actually works is flushing *before* unload: `UnsavedChangesGuard` warns while writes are outstanding, and the coalescer keeps a rejected patch in `failed` so the edit survives in the tab rather than depending on the unload request. Treat the unload flush as best-effort for small change sets only; anything larger must be committed while the page is still alive.
 
 ## 10. Atomic structural operations
 

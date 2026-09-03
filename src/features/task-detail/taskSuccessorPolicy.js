@@ -169,6 +169,14 @@ export function planSuccessorUpdate(task, successorId, changes, tasks) {
       : { ...entry };
     // Eski `lagDays` sayısı, birim değiştirildiğinde açık `lagValue` alanına
     // taşınır (bkz. materializeDependencyLag).
+    //
+    // Birleştirme materyalleştirmeden ÖNCE yapılır ve bu SIRA GEREKLİDİR:
+    // `materializeDependencyLag` yalnızca bir `lagUnit` varken taşıma yapar.
+    // Birimi olmayan eski bir bağımlılık (`{ lagDays: 1 }`) önce
+    // materyalleştirilseydi kayıt olduğu gibi dönerdi ve `lagValue` hiç
+    // yazılmazdı; sonraki birim değişimi `lagDays` sayısını gecikme DEĞERİ
+    // sanardı. Gelen `lagUnit` ile birleştirmek taşımayı tam olarak
+    // gerektiği anda tetikler (bkz. bu davranışı sabitleyen gerileme sınaması).
     const updated = materializeDependencyLag({ ...current, ...changes });
     return { ...updated, lagDays: dependencyLagDays(updated) };
   });
