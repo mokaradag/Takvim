@@ -56,7 +56,9 @@ export function transactionCookieHeader(signedValue, { secure }) {
   });
 }
 
-const BEARER_PATTERN = /^Bearer\s+([A-Za-z0-9._~+/-]+=*)$/;
+// Şema adı RFC 7235'e göre BÜYÜK/KÜÇÜK HARF duyarsızdır: `bearer <jeton>`
+// gönderen uyumlu bir istemci, jetonu geçerliyken bile "bozuk" sayılıyordu.
+const BEARER_PATTERN = /^Bearer\s+([A-Za-z0-9._~+/-]+=*)$/i;
 
 export const BEARER_REJECTIONS = Object.freeze({ MISSING: 'BEARER_MISSING', MALFORMED: 'BEARER_MALFORMED' });
 
@@ -101,14 +103,22 @@ export function jsonResponse(body, { status = 200, cookieHeaders = [] } = {}) {
 export function authErrorResponse(error, { fallbackMessage = 'Kimlik doğrulanamadı.' } = {}) {
   const known = error instanceof ServerPersistenceError;
   const status = known ? error.status : 500;
-  console.error('MERGEN ROTA AUTH ERROR:', { code: known ? error.code : 'AUTH_FAILED', status });
+  const code = known ? error.code : 'AUTH_FAILED';
+  console.error('MERGEN ROTA AUTH ERROR:', { code, status });
+  // SINIFLANDIRILMAMIŞ sunucu hatası 401 olarak SUNULMAZ.
+  //
+  // Bir `TypeError`, JWKS okuyucu arızası ya da sarmalanmamış altyapı hatası
+  // 401/UNAUTHORIZED'a çevrildiğinde tarayıcı "oturum açılmamış" sonucunu
+  // çıkarıp giriş akışını hâlâ bozuk olan sunucuya karşı yeniden başlatıyor ve
+  // sağlayıcı kesintilerinde belgelenen yönlendirme döngüsü oluşuyordu. 401
+  // yalnızca gerçek bir kimlik doğrulama KARARIDIR.
   return jsonResponse({
     error: {
-      code: known ? error.code : 'UNAUTHORIZED',
+      code,
       message: known ? error.message : fallbackMessage,
       details: null
     }
-  }, { status: status === 500 ? 401 : status });
+  }, { status });
 }
 
 export function debugLogIdentity(stage, identity) {

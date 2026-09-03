@@ -36,6 +36,10 @@ export function dueTone(task, referenceDate = today()) {
   if (!due) return { due: null, days: null, tone: DAY_TONE.later, text: 'Tarih yok' };
 
   const days = diffDays(due, referenceDate);
+  // Çözülemeyen tarih EKSİK tarih gibi ele alınır: `diffDays` NaN döndürdüğünde
+  // aşağıdaki karşılaştırmaların tamamı yanlış oluyor, pencerede "Planlanan
+  // bitişe NaN gün" yazıyordu.
+  if (!Number.isFinite(days)) return { due: null, days: null, tone: DAY_TONE.later, text: 'Tarih yok' };
   if (!target) {
     // Termin yok: geçmiş bir planlanan bitiş gecikme olarak sunulmaz.
     if (days < 0) return { due, days, tone: DAY_TONE.later, text: `Planlanan bitiş ${Math.abs(days)} gün önceydi` };

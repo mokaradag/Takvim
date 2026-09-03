@@ -15,6 +15,7 @@ import {
 } from '../../domain/projectTypes';
 import {
   TAG_COLOR_KEYS,
+  DEFAULT_TAG_ICON,
   TAG_ICON_KEYS,
   comparableTagName,
   normalizeProjectTags,
@@ -242,7 +243,11 @@ function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
 
               <select
                 className="input tag-icon-select"
-                value={tag.icon}
+                // Yeni etiket `icon: undefined` ile oluşur; denetimsiz kalan
+                // `select`, listenin ilk ögesini gösterirken satır simgesi
+                // `Icons.Flag` çiziyordu. Kullanıcı aynı etiket için İKİ farklı
+                // simge görüyor ve kaydın hangisini yazacağını bilemiyordu.
+                value={tag.icon || DEFAULT_TAG_ICON}
                 disabled={disabled}
                 aria-label={`${tag.name} etiket simgesi`}
                 onChange={(event) => patch(tag, { icon: event.target.value })}

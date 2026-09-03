@@ -68,7 +68,7 @@ export function isSmtpConfigured() {
 /**
  * @returns {{host:string, port:number, username:string, password:string,
  *   from:string, fromName:string, useStartTls:boolean, rejectUnauthorized:boolean,
- *   timeoutMs:number}|null}
+ *   allowInsecureAuth:boolean, timeoutMs:number}|null}
  */
 export function getSmtpConfig() {
   if (!(stringValue('SMTP_HOST') && stringValue('SMTP_FROM'))) return null;

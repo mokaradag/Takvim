@@ -11,27 +11,61 @@ export async function getSqlPool() {
   const activeTransaction = transactionContext.getStore();
   if (activeTransaction) return activeTransaction;
 
+  // Havuz sözü, sürücü BEKLENMEDEN önce atanır.
+  //
+  // `await getSqlDriver()` olay döngüsünü bırakır. Atama yalnızca o beklemeden
+  // SONRA yapıldığında, soğuk açılıştaki eşzamanlı isteklerin hepsi
+  // `!poolPromise` denetimini geçiyor ve her biri AYRI bir `ConnectionPool`
+  // kuruyordu. Önbellekte yalnızca sonuncusu kalıyor, öncekiler ne kapatılıyor
+  // ne de erişilebiliyordu: açılıştaki bir istek yığını SQL Server
+  // bağlantılarını tüketip kalıcılığı kullanılamaz hâle getirebilirdi.
   if (!poolPromise) {
-    const config = getSqlServerConfig();
-    const driver = await getSqlDriver();
+    // Kurulumun TAMAMI tek bir hata yoluyla korunur.
+    //
+    // Yapılandırma okuması, sürücü yüklemesi ve `ConnectionPool` kurucusu da
+    // hata yükseltebilir. Yalnızca `pool.connect()` çağrısı sarılsaydı, bu üç
+    // durumdan biri REDDEDİLMİŞ bir sözü önbellekte bırakır ve sonraki her
+    // istek — sorun giderilse bile — süreç yeniden başlatılana kadar aynı
+    // hatayı alırdı: kurtarılabilir bir yapılandırma hatası kalıcı kesintiye
+    // dönüşürdü.
+    const attempt = (async () => {
+      let pool = null;
+      try {
+        const config = getSqlServerConfig();
+        const driver = await getSqlDriver();
 
-    const pool = new driver.ConnectionPool({
-      ...config,
-      pool: { ...config.pool },
-      options: { ...config.options },
-    });
+        pool = new driver.ConnectionPool({
+          ...config,
+          pool: { ...config.pool },
+          options: { ...config.options },
+        });
 
-    pool.on('error', () => {
-      poolPromise = undefined;
-    });
+        // Bozulan havuz önbellekten düşerken KAPATILIR: yalnızca söz silinseydi
+        // her geçici hata bir havuzu ve bağlantılarını süreç ömrü boyunca açık
+        // bırakırdı.
+        pool.on('error', () => {
+          if (poolPromise === attempt) poolPromise = undefined;
+          pool.close().catch(() => {});
+        });
 
-    poolPromise = pool.connect().catch((cause) => {
-      poolPromise = undefined;
-      throw new ServerPersistenceError(
-        'DATABASE_UNAVAILABLE',
-        'SQL Server bağlantısı kurulamadı.',
-        { cause }
-      );
+        return await pool.connect();
+      } catch (cause) {
+        pool?.close?.().catch(() => {});
+        if (cause instanceof ServerPersistenceError) throw cause;
+        throw new ServerPersistenceError(
+          'DATABASE_UNAVAILABLE',
+          'SQL Server bağlantısı kurulamadı.',
+          { cause }
+        );
+      }
+    })();
+    poolPromise = attempt;
+    // Önbellek temizliği ATAMADAN SONRA bağlanır. Kurulum eşzamanlı olarak
+    // (bozuk yapılandırma) hata yükselttiğinde, IIFE içindeki `catch` bloğu
+    // `poolPromise` daha atanmadan çalışır; temizlik orada yapılsaydı reddedilen
+    // söz yine önbelleğe yazılırdı. Çağıran yine bu reddi görür.
+    attempt.catch(() => {
+      if (poolPromise === attempt) poolPromise = undefined;
     });
   }
   return poolPromise;

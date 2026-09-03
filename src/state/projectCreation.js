@@ -192,6 +192,12 @@ export function prepareProjectUpdate(projectId, input, context = {}) {
     // değişti) yalnızca renk ya da etiket değiştiren bir istek de reddediliyordu.
     if (input.leadId === undefined
       && (issue.code === 'PROJECT_LEAD_REQUIRED' || issue.code === 'PROJECT_LEAD_NOT_FOUND')) return false;
+    // Aynı gerekçe RENK için de geçerlidir: `MR_Projects.ColorToken` serbest
+    // metin kabul eder ve izdüşüm boş olmayan değerleri olduğu gibi taşır, bu
+    // yüzden katalog dışı bir belirteç uygulama durumuna ulaşabilir. Renge
+    // dokunmayan (yalnızca etiket ya da veri tarihi değiştiren) bir güncelleme
+    // saklı belirteç yüzünden reddedilmemelidir. Boş değer zaten `blue` olur.
+    if (input.color === undefined && issue.code === 'PROJECT_COLOR_INVALID') return false;
     return true;
   });
 

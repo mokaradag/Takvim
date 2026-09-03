@@ -41,7 +41,11 @@ export function selectOverdueAging(tasks, referenceDate = today()) {
   for (const task of tasks || []) {
     if (!task || task.status === 'done' || !task.targetFinish) continue;
     const lateBy = -diffDays(task.targetFinish, referenceDate);
-    if (lateBy < 1) continue;
+    // Çözülemeyen `targetFinish` NaN üretir ve `NaN < 1` yanlış olduğu için
+    // eskiden bu koruma devreye girmiyordu: `worstDays` NaN'e sabitleniyor,
+    // kova araması boş dönüyor ve gösterge panelinde "en büyük gecikme" NaN
+    // olarak çiziliyordu.
+    if (!Number.isFinite(lateBy) || lateBy < 1) continue;
     worstDays = Math.max(worstDays, lateBy);
     const bucket = buckets.find((entry) => lateBy >= entry.min && lateBy <= entry.max);
     if (bucket) bucket.items.push({ ...task, lateBy });

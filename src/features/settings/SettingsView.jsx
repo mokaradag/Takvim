@@ -201,7 +201,11 @@ export function SettingsView({ t, setTweak }) {
           </div>
 
           <div className="row" style={{ gap: 12, marginTop: 14, alignItems: 'center' }}>
+            {/* `SettingsRow` başlığı bir `div`'dir ve hiçbir denetimi
+                etiketlemez; ekran okuyucu kullanıcıları bu iki denetimin ne
+                yaptığını anlayamıyordu. */}
             <input type="range" min="0.8" max="1.4" step="0.05" value={fontScale}
+              aria-label="Yazı tipi ölçeği"
               onChange={(e) => setTweak('fontScale', parseFloat(e.target.value))}
               style={{ flex: 1, accentColor: 'var(--accent)' }} />
             <span className="tabular" style={{ fontSize: 13, fontWeight: 600, minWidth: 44, textAlign: 'right' }}>%{pct}</span>
@@ -234,7 +238,7 @@ export function SettingsView({ t, setTweak }) {
           <div className="card-sub">Başlangıç ve görünüm davranışı.</div>
 
           <SettingsRow title="Açılış sayfası" desc="Gelişmiş mod açıldığında gösterilecek sayfa.">
-            <select className="set-select" value={t.landingView || 'ozet'} onChange={(e) => setTweak('landingView', e.target.value)}>
+            <select className="set-select" aria-label="Açılış sayfası" value={t.landingView || 'ozet'} onChange={(e) => setTweak('landingView', e.target.value)}>
               {landingOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </SettingsRow>

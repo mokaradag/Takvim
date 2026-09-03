@@ -1,6 +1,7 @@
 import { fmtISO, parseDate } from '../dates/index.js';
 import {
   DEFAULT_CALENDAR,
+  MAX_WORKING_DAY_SPAN,
   addWorkingDays,
   countWorkingDays,
   diffWorkingDays,
@@ -66,13 +67,33 @@ function activityDuration(task, calendar) {
   return Math.max(1, countWorkingDays(start, end, calendar));
 }
 
+/**
+ * Ufku aşan bir çalışma günü aramasını AÇIK HATAYA çevirir.
+ *
+ * `addWorkingDays` sınır dışı bir aralık için `null` döndürür. Eskiden aynı
+ * durum sessizce GİRİŞ TARİHİNE düşüyordu: 4000 iş günlük bir gecikme sıfır
+ * gecikmeyle, 2600 günlük bir görev de kilometre taşıyla aynı sonucu veriyordu.
+ * Plan yanlış — üstelik iyimser yönde yanlış — yayımlanıyordu. Artık proje
+ * zamanlaması "geçersiz" olarak işaretlenir ve neden arayüze taşınır.
+ */
+function requireWithinHorizon(date, taskId, field) {
+  if (date != null) return date;
+  throw new CpmValidationError(
+    'SCHEDULE_HORIZON_EXCEEDED',
+    `Task ${taskId} cannot be scheduled: ${field} exceeds the supported planning horizon of ${MAX_WORKING_DAY_SPAN} working days.`,
+    { taskId, field, limit: MAX_WORKING_DAY_SPAN }
+  );
+}
+
 function finishFromStart(start, durationDays, calendar) {
+  if (start == null) return null;
   const alignedStart = moveToWorkingDay(start, calendar, 1);
   if (durationDays === 0) return alignedStart;
   return addWorkingDays(alignedStart, durationDays - 1, calendar);
 }
 
 function startFromFinish(finish, durationDays, calendar) {
+  if (finish == null) return null;
   const alignedFinish = moveToWorkingDay(finish, calendar, -1);
   if (durationDays === 0) return alignedFinish;
   return addWorkingDays(alignedFinish, -(durationDays - 1), calendar);
@@ -90,20 +111,24 @@ function forwardConstraint(predecessorSchedule, dependency, successorDuration, s
   switch (dependency.type) {
     case 'SS': {
       const start = applyDependencyLag(predecessorSchedule.earlyStart, dependency, successorCalendar);
-      return moveToWorkingDay(start, successorCalendar, 1);
+      return start == null ? null : moveToWorkingDay(start, successorCalendar, 1);
     }
     case 'FF': {
       const finish = applyDependencyLag(predecessorSchedule.earlyFinish, dependency, successorCalendar);
+      if (finish == null) return null;
       return startFromFinish(moveToWorkingDay(finish, successorCalendar, 1), successorDuration, successorCalendar);
     }
     case 'SF': {
       const finish = applyDependencyLag(predecessorSchedule.earlyStart, dependency, successorCalendar);
+      if (finish == null) return null;
       return startFromFinish(moveToWorkingDay(finish, successorCalendar, 1), successorDuration, successorCalendar);
     }
     case 'FS':
     default: {
       const laggedFinish = applyDependencyLag(predecessorSchedule.earlyFinish, dependency, successorCalendar);
-      return moveToWorkingDay(addWorkingDays(laggedFinish, 1, successorCalendar), successorCalendar, 1);
+      if (laggedFinish == null) return null;
+      const nextDay = addWorkingDays(laggedFinish, 1, successorCalendar);
+      return nextDay == null ? null : moveToWorkingDay(nextDay, successorCalendar, 1);
     }
   }
 }
@@ -114,23 +139,32 @@ function backwardStartBound(taskSchedule, successorSchedule, dependency, taskCal
   switch (dependency.type) {
     case 'SS': {
       const bound = addWorkingDays(successorSchedule.lateStart, -lagDays, successorCalendar);
-      return moveToWorkingDay(bound, taskCalendar, -1);
+      return bound == null ? null : moveToWorkingDay(bound, taskCalendar, -1);
     }
     case 'FF': {
       const finishBound = addWorkingDays(successorSchedule.lateFinish, -lagDays, successorCalendar);
+      if (finishBound == null) return null;
       return startFromFinish(moveToWorkingDay(finishBound, taskCalendar, -1), taskSchedule.durationDays, taskCalendar);
     }
     case 'SF': {
       const bound = addWorkingDays(successorSchedule.lateFinish, -lagDays, successorCalendar);
-      return moveToWorkingDay(bound, taskCalendar, -1);
+      return bound == null ? null : moveToWorkingDay(bound, taskCalendar, -1);
     }
     case 'FS':
     default: {
-      const finishBound = addWorkingDays(
-        successorSchedule.lateStart,
-        -(lagDays + 1),
-        successorCalendar
-      );
+      // Gecikme ve İLİŞKİ KAYMASI ayrı adımlardır; `-(lagDays + 1)` olarak
+      // birleştirilemezler. Ufuk denetimi tek çağrının BÜYÜKLÜĞÜNE bakar
+      // (`MAX_WORKING_DAY_SPAN`), bu yüzden belgelenen en büyük gecikme
+      // (20 000) bir fazlasıyla istenince `null` dönüyor,
+      // `requireWithinHorizon` bunu `SCHEDULE_HORIZON_EXCEEDED` yapıyordu:
+      // yazma sınırının kabul ettiği sınır değeri yalnızca FS bağlarında ve
+      // yalnızca yeniden hesaplama sırasında kullanılamaz hâle geliyordu.
+      // İleri geçiş (bkz. forwardConstraint) bu iki adımı zaten ayrı atıyor;
+      // geri geçiş de aynı biçimi izler.
+      const laggedStart = addWorkingDays(successorSchedule.lateStart, -lagDays, successorCalendar);
+      if (laggedStart == null) return null;
+      const finishBound = addWorkingDays(laggedStart, -1, successorCalendar);
+      if (finishBound == null) return null;
       return startFromFinish(moveToWorkingDay(finishBound, taskCalendar, -1), taskSchedule.durationDays, taskCalendar);
     }
   }
@@ -146,6 +180,9 @@ function relationshipSlack(edge, schedules, metadata) {
     successorMeta.durationDays,
     successorMeta.calendar
   );
+  // İleri geçiş aynı kısıtı zaten doğruladı; buraya `null` düşerse serbest
+  // yüzmeyi sıfır saymak, kırpılmış bir sayı üretmekten iyidir.
+  if (requiredStart == null) return 0;
   return Math.max(0, diffWorkingDays(successor.earlyStart, requiredStart, successorMeta.calendar));
 }
 
@@ -255,18 +292,24 @@ export function calculateCpm(tasks, {
     const startCandidates = [moveToWorkingDay(startAnchor, meta.calendar, 1)];
 
     for (const edge of graph.incoming.get(taskId)) {
-      startCandidates.push(
+      startCandidates.push(requireWithinHorizon(
         forwardConstraint(
           schedules.get(edge.predecessorId),
           edge.dependency,
           meta.durationDays,
           meta.calendar
-        )
-      );
+        ),
+        taskId,
+        `dependency lag from ${edge.predecessorId}`
+      ));
     }
 
     const earlyStart = latestDate(startCandidates);
-    const earlyFinish = finishFromStart(earlyStart, meta.durationDays, meta.calendar);
+    const earlyFinish = requireWithinHorizon(
+      finishFromStart(earlyStart, meta.durationDays, meta.calendar),
+      taskId,
+      'plannedDurationDays'
+    );
     schedules.set(taskId, {
       id: taskId,
       calendarId: meta.calendar.id,
@@ -286,24 +329,34 @@ export function calculateCpm(tasks, {
     const meta = metadata.get(taskId);
     const schedule = schedules.get(taskId);
     const projectFinishBound = moveToWorkingDay(projectFinish, meta.calendar, -1);
-    const startBounds = [startFromFinish(projectFinishBound, meta.durationDays, meta.calendar)];
+    const startBounds = [requireWithinHorizon(
+      startFromFinish(projectFinishBound, meta.durationDays, meta.calendar),
+      taskId,
+      'plannedDurationDays'
+    )];
 
     for (const edge of graph.outgoing.get(taskId)) {
       const successorSchedule = schedules.get(edge.successorId);
       const successorMeta = metadata.get(edge.successorId);
-      startBounds.push(
+      startBounds.push(requireWithinHorizon(
         backwardStartBound(
           schedule,
           successorSchedule,
           edge.dependency,
           meta.calendar,
           successorMeta.calendar
-        )
-      );
+        ),
+        taskId,
+        `dependency lag to ${edge.successorId}`
+      ));
     }
 
     schedule.lateStart = earliestDate(startBounds);
-    schedule.lateFinish = finishFromStart(schedule.lateStart, meta.durationDays, meta.calendar);
+    schedule.lateFinish = requireWithinHorizon(
+      finishFromStart(schedule.lateStart, meta.durationDays, meta.calendar),
+      taskId,
+      'plannedDurationDays'
+    );
     schedule.totalFloatDays = diffWorkingDays(schedule.lateStart, schedule.earlyStart, meta.calendar);
   }
 

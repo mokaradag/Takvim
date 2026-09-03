@@ -218,7 +218,12 @@ BEGIN TRY
         CONSTRAINT CK_MR_Tasks_MilestoneDuration CHECK (IsMilestone = 0 OR ISNULL(PlannedDurationDays, 0) = 0),
         CONSTRAINT CK_MR_Tasks_Status CHECK (Status IN ('planned','in-progress','done')),
         CONSTRAINT CK_MR_Tasks_Priority CHECK (Priority IN ('low','medium','high','critical','normal')),
-        CONSTRAINT FK_MR_Tasks_RecurrenceParent FOREIGN KEY (RecurrenceParentTaskId) REFERENCES dbo.MR_Tasks(TaskId),
+        -- Sablon AYNI projede olmalidir. Yalnizca TaskId'ye bakan yabanci
+        -- anahtar, B projesindeki bir gorevin A projesindeki bir sablona
+        -- baglanmasina izin veriyordu; boyle bir seri gecersizdir ve yineleme
+        -- uretimi, erisim suzgeci ile silme davranisi yanlis proje uzerinde
+        -- calisirdi. Bilesik anahtar mevcut UX_MR_Tasks_Id_Project'e dayanir.
+        CONSTRAINT FK_MR_Tasks_RecurrenceParent FOREIGN KEY (RecurrenceParentTaskId, ProjectId) REFERENCES dbo.MR_Tasks(TaskId, ProjectId),
         -- Yineleme kendi kuralini tasiyamaz: kural tek bir sablonda yasar.
         CONSTRAINT CK_MR_Tasks_Recurrence CHECK (RecurrenceParentTaskId IS NULL OR RecurrenceRule IS NULL),
         -- Seri kimligi yalnizca bir yinelemede anlamlidir.

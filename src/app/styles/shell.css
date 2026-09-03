@@ -41,7 +41,9 @@
   align-items: stretch;
   gap: 6px;
 }
-.sidebar-footer-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sidebar-footer-row { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+/* Oturum kapatma hatası: kullanıcı çıkış yaptığını sanmamalıdır. */
+.sidebar-signout-error { flex: 1 0 100%; color: var(--status-overdue); font-size: 11px; line-height: 1.35; }
 /* Portföye dönüş, proje çalışma alanı seçiliyken kenar çubuğunda görünür. */
 .workspace-back-btn { width: 100%; justify-content: center; gap: 6px; }
 .sidebar-version { padding: 0 4px; font-size: 9.5px; color: var(--text-dim); letter-spacing: 0.04em; }
@@ -326,6 +328,10 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
    Perde uygulama ızgarasının dışındadır: `.app` iki sütunludur ve ilk sütun
    kenar çubuğuna ayrılmıştır. Perde o ızgarayı kullandığında kart 240 piksellik
    sütuna sıkışıp ekranın solunda kırpılıyordu. */
+/* `z-index` burada bilinçli olarak düşüktür ve katman sözleşmesine (globals.css)
+   bağlanmaz: `AppDataBoundary` açılış perdesini kabuğun ÜSTÜNE değil, YERİNE
+   çizer (`children` hiç monte edilmez), dolayısıyla perdenin örtmesi gereken bir
+   üst çubuk ya da kalıcılık göstergesi yoktur. */
 .app-boot {
   position: fixed;
   inset: 0;

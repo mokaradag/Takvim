@@ -175,7 +175,8 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       'projectId', 'proje', 'calendarId', 'assigneeIds', 'deps',
       'isMilestone', 'milestone', 'recurrence', 'recurrenceParentId',
       'recurrenceOccurrenceDate', 'sortOrder',
-      'actualStart', 'actualFinish',
+      // GERÇEKLEŞEN tarihler oluşturucuya açıktır: görevi açan kişi çoğunlukla
+      // onu yürüten kişidir (bkz. assertLimitedCreatorFieldsOnly).
       'plannedHours', 'actualHours', 'budget', 'spent'
     ]);
     const field = Object.keys(patch || {}).find((key) => protectedFields.has(key));
@@ -201,6 +202,8 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       canChooseWbs: true,
       canManageAssignees: false,
       canControlSchedule: true,
+      // Görevi kendisi oluşturduğu için HEDEF bitişi de belirleyebilir.
+      canEditTargetFinish: true,
       canProposeSchedule: false,
       canDelete: !hasOtherAssignee,
       deleteReason: hasOtherAssignee ? 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.' : null
@@ -213,8 +216,11 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       'projectId', 'proje', 'wbsId', 'calendarId', 'assigneeIds', 'deps',
       'isMilestone', 'milestone', 'recurrence', 'recurrenceParentId',
       'recurrenceOccurrenceDate', 'sortOrder',
-      // Kontrollü plan tarihleri yalnızca kalıcı tarih talebiyle değişir.
-      'plannedStart', 'plannedFinish', 'targetFinish',
+      // Sorumlu KENDİ plan tarihlerini (`plannedStart` / `plannedFinish`) ve
+      // gerçekleşen tarihlerini yönetir; işi yapan kişidir. Yalnızca HEDEF
+      // bitiş bir taahhüt olduğu için kapalıdır ve tarih değişikliği talebiyle
+      // değişir (bkz. ASSIGNEE_BLOCKED_SCHEDULE_FIELDS).
+      'targetFinish',
       // Saat alanları veri uyumluluğu için taşınır ama ürün yüzeyinden ve dar
       // sorumlu yetkisinden çıkarılmıştır. Finansal alanlar da proje yönetimidir.
       'plannedHours', 'actualHours', 'budget', 'spent'
@@ -238,7 +244,10 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       canManageStructure: false,
       canChooseWbs: false,
       canManageAssignees: false,
-      canControlSchedule: false,
+      // Sorumlu kendi PLAN tarihlerini doğrudan düzenler; HEDEF bitiş ayrı
+      // yetkiyle korunur.
+      canControlSchedule: true,
+      canEditTargetFinish: false,
       canProposeSchedule: !isTaskCreator,
       canDelete: false,
       deleteReason: 'Yalnızca kendi oluşturduğunuz görevleri silebilirsiniz.'
@@ -278,6 +287,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     canChooseWbs: full,
     canManageAssignees: !hasHiddenAssignees,
     canControlSchedule: full,
+    canEditTargetFinish: full,
     canProposeSchedule: !full && Boolean(task.isCurrentUserAssignee) && !isTaskCreator,
     canDelete: full,
     deleteReason: full ? null : 'Bu görevi silmek için proje yetkisi gerekir.'

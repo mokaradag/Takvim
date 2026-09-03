@@ -39,12 +39,34 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
+  // Form YALNIZCA açılış geçişinde sıfırlanır.
+  //
+  // Etki `defaults` bağımlılığını taşıyordu; `defaults` ise `people` dizisine
+  // memolanmış. Durum katmanının otomatik yenilemesi yeni bir `people` dizisi
+  // ürettiğinde kimlik değişiyor, etki yeniden çalışıyor ve kullanıcının açık
+  // iletişim kutusuna girdiği kod, ad, sorumlu, veri tarihi ve renk siliniyordu.
   useEffect(() => {
     if (!open) return;
-    setForm(defaults);
+    setForm(initialForm(people));
     setSaving(false);
     setError(null);
-  }, [open, defaults]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Sorumlu VARSAYILANI dizin sonradan geldiğinde tamamlanır.
+  //
+  // Sıfırlama yalnızca `open` geçişinde çalıştığı için, iletişim kutusu kişi
+  // dizini henüz BOŞKEN açıldığında `leadId` kalıcı olarak boş kalıyordu:
+  // seçici kişiler yüklenince etkinleşiyor ama form dokunulmamış hâlde
+  // gönderildiğinde sunucu `PROJECT_LEAD_REQUIRED` döndürüyordu.
+  //
+  // Yalnızca HÂLÂ BOŞ olan alan doldurulur; kullanıcının seçtiği sorumlu ya da
+  // girdiği diğer alanlar hiçbir koşulda ezilmez (`[open]` daraltmasının
+  // koruduğu davranış budur).
+  useEffect(() => {
+    if (!open || !people.length) return;
+    setForm((current) => (current.leadId ? current : { ...current, leadId: people[0]?.id || '' }));
+  }, [open, people]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -71,7 +93,19 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
     if (saving) return;
     setSaving(true);
     setError(null);
-    const result = await onCreate(form);
+    // `saving` bayrağı HER YOLDA temizlenir. `onCreate` reddedildiğinde
+    // bayrak `true` kalıyor; kapatma düğmesi, işlem düğmeleri, Escape ve arka
+    // plan tıklaması hepsi `saving` ile kilitli olduğu için iletişim kutusundan
+    // çıkmanın tek yolu sayfayı yeniden yüklemek — yani girilen veriyi
+    // kaybetmek — oluyordu.
+    let result = null;
+    try {
+      result = await onCreate(form);
+    } catch {
+      setSaving(false);
+      setError('Proje oluşturulamadı. Lütfen yeniden deneyin.');
+      return;
+    }
     setSaving(false);
     if (!result?.ok) {
       setError(result?.error?.message || 'Proje oluşturulamadı. Lütfen yeniden deneyin.');

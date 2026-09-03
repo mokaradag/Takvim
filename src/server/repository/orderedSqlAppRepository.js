@@ -80,7 +80,10 @@ export function createOrderedSqlAppRepository() {
         // Proje varlığı/sürümü sorgulanmadan önce rol denetlenir. Aksi hâlde
         // yönetici olmayan kullanıcı etkin, etkin olmayan ve bilinmeyen proje
         // kimlikleri için farklı hata alarak kayıt varlığını yoklayabilirdi.
-        if (orderedChanges.projectDeletes.length) {
+        // `projectDeletes` isteğe bağlıdır ve kanonikleştirme onu `undefined`
+        // olarak korur: doğrudan `.length` okuması, alanı hiç göndermeyen
+        // (tamamen geçerli) bir istekte işlem başlamadan TypeError üretiyordu.
+        if ((orderedChanges.projectDeletes || []).length) {
           const actor = await loadAuthorizationContext(transaction);
           if (!actor.isSystemAdmin) {
             throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');

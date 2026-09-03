@@ -100,7 +100,13 @@ export function KanbanView() {
                       <div className="rt-row"><span className="rt-label">Etiket</span><span className="rt-val">{t.keyword}</span></div>
                       <div className="rt-row"><span className="rt-label">Öncelik</span><span className="rt-val" style={{ color: prio.color }}>{prio.label}</span></div>
                       <div className="rt-sep" />
-                      <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
+                      {/* `sorumlu` her kayıtta dizi DEĞİLDİR (Gantt görünümü aynı alanı zaten
+                          korumalı okur); korumasız `join`, sorumlusuz tek bir görev
+                          yüzünden yalnızca o kartı değil BÜTÜN panoyu çizim hatasıyla
+                          düşürüyordu. İsteğe bağlı zincir YALNIZCA null/undefined
+                          durumunu karşılar: içe aktarılmış bir kayıtta metin ya da
+                          nesne varsa `join` yine tanımsız olur ve aynı hatayı verir. */}
+                      <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{Array.isArray(t.sorumlu) ? t.sorumlu.join(', ') || '—' : '—'}</span></div>
                       <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">{fmt(t.plannedStart, 'dd MMM yyyy')}</span></div>
                       <div className="rt-row"><span className="rt-label">Bitiş</span><span className="rt-val">{fmt(t.plannedFinish, 'dd MMM yyyy')}</span></div>
                       <div className="rt-row"><span className="rt-label">Hedef</span><span className="rt-val" style={overdue ? { color: 'var(--status-overdue)' } : null}>{t.targetFinish ? fmt(t.targetFinish, 'dd MMM yyyy') : '—'}</span></div>
@@ -118,9 +124,31 @@ export function KanbanView() {
                     className={`k-card${dragId === t.id ? ' dragging' : ''}${flashId === t.id ? ' flash' : ''}`}
                     draggable
                     style={{ borderLeft: `3px solid ${color}`, animationDelay: `${Math.min(i * 30, 240)}ms` }}
-                    onDragStart={() => onDragStart(t.id)}
+                    // Firefox, `dragstart` sırasında veri deposu boş kalırsa
+                    // sürüklemeyi iptal eder ve kolon bırakma işleyicileri hiç
+                    // çalışmaz; taşıma sessizce başarısız oluyordu.
+                    onDragStart={(event) => {
+                      event.dataTransfer?.setData?.('text/plain', String(t.id));
+                      onDragStart(t.id);
+                    }}
                     onDragEnd={onDragEnd}
                     onClick={() => onOpenTask(t)}
+                    // Kart bir `div` olduğu için klavye ve ekran okuyucu
+                    // kullanıcıları görev ayrıntısını hiç açamıyordu.
+                    role="button"
+                    tabIndex={0}
+                    // YAKALAMA evresinde dinlenir. `Tooltip asChild`, çocuğu
+                    // `React.cloneElement` ile kopyalar ve KENDİ `onKeyDown`
+                    // işleyicisini (yalnızca Escape) çocuğun proplarından SONRA
+                    // yayar; kabarcık evresindeki `onKeyDown` bu yüzden tamamen
+                    // eziliyor ve odaklanmış kart Enter/Space ile açılmıyordu.
+                    // Fare hâlâ çalıştığı için gerileme işaretçi kullanıcılarda
+                    // görünmüyordu.
+                    onKeyDownCapture={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      onOpenTask(t);
+                    }}
                   >
                     <div className="k-title">{t.task}</div>
                     <div className="k-meta">

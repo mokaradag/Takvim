@@ -1,5 +1,5 @@
 'use client';
-import React, { useMemo as useMemo2 } from 'react';
+import React, { useMemo as useMemo2, useState as useState2 } from 'react';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
 import { parseDate, fmt, fmtAxisDate, addDays, diffDays, startOfWeek, endOfWeek, today } from '../../scheduling/dates';
@@ -10,10 +10,17 @@ import { Tooltip, InfoButton, CardHead, AnimatedNumber } from '../../components/
 import { useTasks } from '../../state/hooks';
 import { selectOverdueAging } from '../dashboard/planHealth.js';
 import { useTodayKey } from '../../hooks/useTodayKey.js';
+import { DateRangeFilter } from '../../components/DateRangeFilter';
+import {
+  DEFAULT_DATE_RANGE_PRESET,
+  describeDateRange,
+  filterTasksByDateRange,
+  resolveDateRangeSelection
+} from '../shared/dateRangeFilter.js';
 
 /* ── Rapor (Reports) ──────────────────────────────────── */
 export function ReportsView() {
-  const tasks = useTasks();
+  const allTasks = useTasks();
   // Referans gün KARARLI bir değerdir: `today()` her çizimde yeni bir `Date`
   // döndürdüğü için doğrudan bağımlılık olamaz, bağımlılıktan çıkarıldığında da
   // sayfa gece yarısını açık geçtiğinde dünün sınıflandırmasında kalırdı.
@@ -21,6 +28,13 @@ export function ReportsView() {
   // ve tarihe duyarlı bütün memolar tazelenir.
   const todayKey = useTodayKey();
   const today_ = useMemo2(() => parseDate(todayKey), [todayKey]);
+
+  // Raporlar bütün geçmişi tek sayfada özetliyordu; kurulum yaşlandıkça eğilim
+  // grafikleri ve tablolar okunamaz hâle geliyordu. Aralık, türetilmiş bütün
+  // ölçümlerin ÖNÜNDE uygulanır ki her kart aynı kümeyi anlatsın.
+  const [dateRange, setDateRange] = useState2({ preset: DEFAULT_DATE_RANGE_PRESET, start: '', end: '' });
+  const activeRange = useMemo2(() => resolveDateRangeSelection(dateRange, today_), [dateRange, today_]);
+  const tasks = useMemo2(() => filterTasksByDateRange(allTasks, activeRange), [allTasks, activeRange]);
 
   // Bir görev GERÇEKLEŞEN bitiş tarihinde tamamlanmış sayılır; planlanan bitişe
   // bakmak, planı ileri bir tarihte olan ama bugün bitirilen görevi eğriye
@@ -54,7 +68,15 @@ export function ReportsView() {
       const d = addDays(today_, -i);
       let todo = 0, prog = 0, done = 0;
       tasks.forEach(t => {
+        // Tarihi OLMAYAN görev sütun dışında bırakılır. `parseDate(null)` bugünü
+        // döndürdüğü için başlangıcı boş bir görev "bugün başlamış" sayılıyor,
+        // sonuç sayfanın ne zaman açıldığına göre değişiyordu.
+        if (!t.plannedStart) return;
         const s = parseDate(t.plannedStart);
+        // ÇÖZÜMLENEMEYEN başlangıç da elenir: `parseDate('invalid')` Invalid Date
+        // döndürür, `s > d` karşılaştırması `false` olur ve görev CFD'nin HER
+        // gününde "başlamış" sayılırdı.
+        if (!Number.isFinite(s?.getTime?.())) return;
         if (s > d) return; // hasn't started yet
         // Tamamlanma kronolojisi GERÇEKLEŞEN bitişten okunur. Planlanan bitişe
         // bakan eski hesap, 18 Ağustos'ta biten ama 10 Eylül'e planlanmış bir
@@ -130,9 +152,15 @@ export function ReportsView() {
   const onTime = useMemo2(() => {
     const completed = tasks.filter(t => t.status === 'done');
     if (!completed.length) return 0;
-    const targeted = completed.filter(t => t.targetFinish);
+    // Oran GERÇEKLEŞEN bitişten hesaplanır. `plannedFinish` PLANIN öngörüsüdür,
+    // tamamlanma tarihi değil: hedefinden önce bitmesi PLANLANMIŞ ama hedeften
+    // sonra TAMAMLANMIŞ bir görev "zamanında" sayılıyordu. Eğilim ve CFD
+    // hesapları zaten `taskCompletionDate` kullanır.
+    const targeted = completed
+      .map(t => ({ task: t, finished: taskCompletionDate(t) }))
+      .filter(({ task, finished }) => task.targetFinish && finished);
     if (!targeted.length) return 0;
-    const ot = targeted.filter(t => diffDays(t.plannedFinish, t.targetFinish) <= 0).length;
+    const ot = targeted.filter(({ task, finished }) => diffDays(finished, task.targetFinish) <= 0).length;
     return Math.round((ot / targeted.length) * 100);
   }, [tasks]);
 
@@ -140,11 +168,16 @@ export function ReportsView() {
     const map = {};
     const taskMap = {};
     tasks.forEach(t => {
-      map[t.keyword] = (map[t.keyword] || 0) + 1;
-      taskMap[t.keyword] = taskMap[t.keyword] || { done: 0, total: 0, late: 0, color: t.color };
-      taskMap[t.keyword].total++;
-      if (t.status === 'done') taskMap[t.keyword].done++;
-      if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) taskMap[t.keyword].late++;
+      // Etiket anahtarı `distinctTagCount` ile AYNI biçimde normalleştirilir:
+      // aksi hâlde `"Risk"` ile `" Risk "` iki ayrı çip olarak çizilirken alt
+      // başlık tek bir etiket bildiriyordu.
+      const key = String(t.keyword || '').trim();
+      if (!key) return;
+      map[key] = (map[key] || 0) + 1;
+      taskMap[key] = taskMap[key] || { done: 0, total: 0, late: 0, color: t.color };
+      taskMap[key].total++;
+      if (t.status === 'done') taskMap[key].done++;
+      if (t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0) taskMap[key].late++;
     });
     return Object.entries(map).map(([k, v]) => ({
       label: k, value: v, color: COLOR_MAP[taskMap[k].color] || 'var(--accent)',
@@ -152,6 +185,13 @@ export function ReportsView() {
     })).sort((a, b) => b.value - a.value).slice(0, 10);
   }, [tasks, today_]);
 
+  // Farklı etiket sayısı, listenin ilk 10'a kırpılmasından ÖNCE ölçülür:
+  // `tagDist.length` kullanıldığında 10'dan fazla etiket taşıyan her projede
+  // başlık her zaman "10 farklı etiket" diyordu.
+  const distinctTagCount = useMemo2(
+    () => new Set(tasks.map((t) => String(t.keyword || '').trim()).filter(Boolean)).size,
+    [tasks]
+  );
   const aging = useMemo2(() => selectOverdueAging(tasks, today_), [tasks, today_]);
   const agingAverage = useMemo2(() => {
     const late = aging.buckets.flatMap((bucket) => bucket.items).map((task) => task.lateBy);
@@ -167,6 +207,14 @@ export function ReportsView() {
       <HeroHeader title="Raporlar">
         <div className="muted" style={{ fontSize: 13.5 }}>Performans, çevrim süreleri ve teslim oranları.</div>
       </HeroHeader>
+
+      <DateRangeFilter
+        value={dateRange}
+        onChange={setDateRange}
+        summary={activeRange
+          ? `${describeDateRange(activeRange)} · ${tasks.length}/${allTasks.length} görev`
+          : `${allTasks.length} görev`}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         <Big label="Tamamlama oranı" value={compRate} suffix="%" sub={`${doneCount} / ${tasks.length} görev`}
@@ -450,7 +498,7 @@ export function ReportsView() {
           <CardHead
             icon={<Icons.Sparkle size={14} />}
             title="En sık etiketler"
-            subtitle={`${tagDist.length} farklı etiket · top 10`}
+            subtitle={`${distinctTagCount} farklı etiket · top 10`}
             infoAccent="var(--c-purple)"
             infoIcon={<Icons.Sparkle size={12} />}
             info={<>

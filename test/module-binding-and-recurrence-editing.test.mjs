@@ -291,6 +291,29 @@ test('haftalık kuralda başlangıç günü seçimden çıkarılabilir', () => {
   assert.equal(plan.dates[0], '2026-08-20');
 });
 
+test('güvenlik tavanına dayanan UNTIL serisi TAM sayılmaz', () => {
+  // Pzt–Cum takviminde GÜNLÜK bir UNTIL kuralı: hafta sonu tarihleri Pazartesiye
+  // kayar ve tekilleşir, bu yüzden ham tavan (400) dolduğunda dönen plan çok
+  // daha KISADIR. Kesinti yalnızca plan uzunluğundan çıkarılsaydı `truncated`
+  // yanlış kalır ve arayüz, UNTIL aralığında çok daha fazla yineleme varken
+  // sonlu bir toplam ile "hepsi bu" derdi.
+  const workweek = { workingDays: [1, 2, 3, 4, 5], holidays: [] };
+  const rule = { freq: 'DAILY', interval: 1, until: '2030-12-31' };
+  const plan = summarizeRecurrencePlan(TEMPLATE, rule, { calendar: workweek });
+
+  assert.equal(plan.truncated, true, 'ham tavana dayanan seri KESİLMİŞ sayılmalıdır');
+  assert.equal(plan.hasMore, true);
+  // Kesilmiş seride sayı verilmez: bilinen kısım serinin toplamı değildir.
+  assert.equal(plan.totalCount, 0);
+  assert.equal(plan.generatedCount, 0);
+
+  // Tavanın ÇOK altında biten bir UNTIL serisi tam sayılmaya devam eder.
+  const short = summarizeRecurrencePlan(TEMPLATE, { freq: 'WEEKLY', interval: 1, until: '2026-09-08' });
+  assert.equal(short.truncated, false);
+  assert.equal(short.totalCount, short.dates.length);
+  assert.ok(short.totalCount > 0);
+});
+
 test('gün seçilmezse seri planlanan başlangıcın gününü kullanır', () => {
   const rule = normalizeRecurrenceRule({ freq: 'WEEKLY', interval: 1, byWeekday: [], count: 3 });
   assert.deepEqual(rule.byWeekday, []);

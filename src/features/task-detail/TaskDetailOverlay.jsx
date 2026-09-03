@@ -159,6 +159,7 @@ export function TaskDetailOverlay({ simple = false }) {
         onDelete={deleteTask}
         canManageAssignees={initialAccess.canManageAssignees}
         canControlSchedule={initialAccess.canControlSchedule}
+        canEditTargetFinish={initialAccess.canEditTargetFinish}
         canProposeSchedule={initialAccess.canProposeSchedule}
         scheduleRequests={scheduleRequests.filter((request) => String(request.taskId) === String(task.id))}
         onProposeSchedule={submitScheduleChange}
@@ -180,6 +181,7 @@ export function TaskDetailOverlay({ simple = false }) {
       canChooseWbs={initialAccess.canChooseWbs}
       canManageAssignees={initialAccess.canManageAssignees}
       canControlSchedule={initialAccess.canControlSchedule}
+      canEditTargetFinish={initialAccess.canEditTargetFinish}
       canProposeSchedule={initialAccess.canProposeSchedule}
       scheduleRequests={scheduleRequests.filter((request) => String(request.taskId) === String(task.id))}
       onProposeSchedule={submitScheduleChange}

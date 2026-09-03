@@ -65,10 +65,32 @@ export function createImplicitAuthTransaction({ returnTo = '/', now = Date.now()
   };
 }
 
-/** Açık yönlendirme (open redirect) engeli: yalnızca uygulama içi yollar. */
+/**
+ * Açık yönlendirme (open redirect) engeli: yalnızca uygulama içi yollar.
+ *
+ * DENETİM KARAKTERLERİ de reddedilir. Değer, başarılı kod değişiminden sonra
+ * doğrudan `Location` başlığına konur; `/%09/evil.example` gibi bir yol tek eğik
+ * çizgiyle başladığı ve ters bölü içermediği için eski denetimden geçiyor, URL
+ * çözümleyicileri ise sekmeyi atıp kalanı `//evil.example` olarak — yani DIŞ bir
+ * otorite olarak — yorumlayabiliyordu. Kimliksiz bir saldırgan böylece giriş
+ * sonrası dış yönlendirme elde ediyordu.
+ */
+const UNSAFE_RETURN_TO_CHARACTERS = /[\u0000-\u001F\u007F]/;
+
 export function safeReturnTo(value) {
   const raw = String(value ?? '').trim();
   if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return '/';
+  if (UNSAFE_RETURN_TO_CHARACTERS.test(raw)) return '/';
+  // Yüzde kodlaması çözüldüğünde ortaya çıkan denetim karakteri ya da ikinci bir
+  // eğik çizgi de aynı sonucu verir; çözülebiliyorsa çözülmüş biçim de denetlenir.
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return '/';
+  }
+  if (!decoded.startsWith('/') || decoded.startsWith('//') || decoded.includes('\\')) return '/';
+  if (UNSAFE_RETURN_TO_CHARACTERS.test(decoded)) return '/';
   return raw;
 }
 

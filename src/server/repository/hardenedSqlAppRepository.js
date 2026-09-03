@@ -2,6 +2,7 @@ import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ServerPersistenceError } from '../errors.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
+import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { findDependencyCycle } from './dependencyGraphValidation.js';
 import {
   findFinalTaskReferenceIssue,
@@ -44,12 +45,14 @@ function request(executor) {
 
 async function rowForUpdate(executor, table, idColumn, value, label) {
   const entityId = uuid(value, label);
+  const safeTable = sqlIdentifier(table, 'table');
+  const safeColumn = sqlIdentifier(idColumn, 'column');
   const req = request(executor);
   req.input('entityId', sql.UniqueIdentifier, entityId);
   const result = await req.query(`
     SELECT TOP (1) *
-    FROM dbo.${table} WITH (UPDLOCK, HOLDLOCK)
-    WHERE ${idColumn} = @entityId;
+    FROM dbo.${safeTable} WITH (UPDLOCK, HOLDLOCK)
+    WHERE ${safeColumn} = @entityId;
   `);
   return result.recordset[0] || null;
 }

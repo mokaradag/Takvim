@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Aynı dala arka arkaya yapılan itmeler, aşılmış çalıştırmaları da sonuna kadar
+# koşturuyordu; her biri 15 dakikaya kadar Actions dakikası harcıyordu.
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
@@ -21,15 +27,36 @@ jobs:
         with:
           node-version: 24.14.0
           cache: npm
-      - name: Refresh lockfile for Windows SQL driver
-        run: npm install --package-lock-only --ignore-scripts
-      - name: Upload generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-package-lock
-          path: package-lock.json
+      # Kurulum, DEPODAKİ kilit dosyasından yapılır.
+      #
+      # Önce `npm install --package-lock-only` çalıştırılıyordu: bu komut
+      # `package.json` içindeki her semver aralığını o anki kayıt defterine göre
+      # yeniden çözüp `package-lock.json` dosyasını YERİNDE değiştirir. Ardından
+      # gelen `npm ci` de artık depodaki kilidi değil, az önce üretilen dosyayı
+      # kuruyordu. `npm ci` komutunun bütün değeri — incelenen kilidin bire bir
+      # kurulması — böylece kayboluyor; lint, test ve derleme kimsenin
+      # incelemediği, çalıştırmadan çalıştırmaya değişebilen bir bağımlılık
+      # ağacına karşı koşuyordu. Üretim ise depodaki kilitten kuruluyordu.
+      #
+      # `--ignore-scripts` gereklidir ve YETERLİDİR: `msnodesqlv8` Windows
+      # odaklı yerel bir eklentidir ve `node-gyp` derlemesi Linux'ta başarısız
+      # olur. Kilidi yeniden üretmek bu sorunun çözümü değildi.
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      # `package.json` ile kilit dosyasının BİRBİRİNDEN AYRIŞTIĞI durum artık
+      # sessizce yutulmaz; kopyada yeniden çözüm yapılır ve fark varsa iş düşer.
+      - name: Verify committed lockfile matches package.json
+        run: |
+          set -euo pipefail
+          cp package-lock.json "$RUNNER_TEMP/package-lock.committed.json"
+          npm install --package-lock-only --ignore-scripts
+          if ! diff -q "$RUNNER_TEMP/package-lock.committed.json" package-lock.json > /dev/null; then
+            echo "::error::package-lock.json, package.json ile uyumlu değil. 'npm install --package-lock-only' çalıştırıp sonucu işleyin."
+            diff -u "$RUNNER_TEMP/package-lock.committed.json" package-lock.json || true
+            cp "$RUNNER_TEMP/package-lock.committed.json" package-lock.json
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/package-lock.committed.json" package-lock.json
       - name: Run lint
         run: npm run lint
       - name: Run automated tests

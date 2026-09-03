@@ -18,12 +18,16 @@ import { ServerPersistenceError } from '../errors.js';
  * Kullanıcı bu görevi görüyor mu?
  *
  * Sorgu, anlık görüntüdeki görev görünürlüğüyle AYNI kuralı uygular:
- *  - kurumsal proje erişimi (FULL),
+ *  - kurumsal proje erişimi (FULL) — `MR_V_CorporateProjectAccess` YALNIZCA
+ *    `SourceType = 'CORPORATE'` projelerde geçerlidir: iki görünüm farklı
+ *    kurumsal kaynaklardan beslendiği için, kodu HR09'da bulunan bir MANUEL
+ *    proje aksi hâlde göremeyen kişilere hatırlatma yetkisi verirdi,
  *  - etkin manuel projenin sorumlusu olmak (FULL),
  *  - elle verilmiş `MR_ProjectAccess` yetkisi YALNIZCA `FULL`/`READ` ise
  *    proje geneli görev görünürlüğü sayılır — `PARTIAL` yetki anlık görüntüde
  *    görev kapsamlıdır ve tek başına başkasının görevine posta göndermeye
  *    yetmemelidir,
+ *  - görevi oluşturmuş olmak,
  *  - görevin kendisine ya da yöneticinin kapsamındaki bir çalışana atanmış
  *    olması.
  *
@@ -49,9 +53,10 @@ export async function assertTaskReminderAccess(executor, actor, taskId) {
         OR EXISTS (
           SELECT 1
           FROM dbo.MR_V_CorporateProjectAccess a
-          WHERE a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
+          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
         )
         OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
+        OR t.CreatedBySicil = @sicil
         OR EXISTS (
           SELECT 1 FROM dbo.MR_ProjectAccess pa
           WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1

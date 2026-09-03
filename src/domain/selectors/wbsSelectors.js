@@ -39,8 +39,44 @@ export function selectDefaultProjectWbs(wbs, projectId) {
   return roots.length === 1 ? roots[0] : null;
 }
 
+/** Ağaç kurulumundaki geçerli ebeveyn bağı kuralı (tek tanım). */
+function hasValidParentLink(node, parent) {
+  return Boolean(parent) && parent.projectId === node.projectId && parent.id !== node.id;
+}
+
+/**
+ * Bir düğümün doğrudan çocukları.
+ *
+ * Süzgeç `buildWbsTree` ve `selectWbsDescendantIds` ile AYNI geçerli-ebeveyn
+ * kuralını uygular. Yalnızca `parentId` eşitliğine bakan eski süzgeç, ebeveyni
+ * bulunmayan, BAŞKA bir projeye ait ya da kendisini ebeveyn gösteren bağları da
+ * kabul ediyordu; üç seçici aynı WBS verisi için farklı çocuk kümeleri
+ * döndürdüğünde ağaç ile sayımlar birbirini tutmuyordu.
+ */
 export function selectWbsChildren(wbs, parentId) {
-  return (wbs || []).filter((node) => node.parentId === parentId).slice().sort(compareWbsNodes);
+  const nodes = wbs || [];
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  // KÖK sorgusu ayrı bir daldır. `parentId` boşken `byId.get(null)` `undefined`
+  // döner ve `hasValidParentLink` her kök düğümü eler: seçici, `selectWbsRoots`
+  // ile `buildWbsTree` kök kabul ederken BOŞ liste döndürüyordu. Geçerli-ebeveyn
+  // kuralı yalnızca gerçek bir ebeveyn istendiğinde anlamlıdır.
+  //
+  // Kök ölçütü `selectWbsRoots` ile BİREBİR aynıdır: boş ebeveyn YA DA geçersiz
+  // ebeveyn bağı. Yalnızca `parentId == null` süzülseydi ÖKSÜZ düğüm (ebeveyni
+  // bulunmayan, başka projeye ait ya da kendini gösteren) hiçbir sorgudan
+  // dönmezdi: kök sorgusu onu atar, kendi `parentId` değeriyle yapılan sorgu ise
+  // `hasValidParentLink` ile eler. Bu, tam olarak yukarıdaki açıklamanın
+  // kapatmayı amaçladığı çocuk-kümesi uyuşmazlığıdır.
+  if (parentId == null) {
+    return nodes
+      .filter((node) => node.parentId == null || !hasValidParentLink(node, byId.get(node.parentId)))
+      .slice()
+      .sort(compareWbsNodes);
+  }
+  return nodes
+    .filter((node) => node.parentId === parentId && hasValidParentLink(node, byId.get(node.parentId)))
+    .slice()
+    .sort(compareWbsNodes);
 }
 
 export function selectWbsDescendantIds(wbs, wbsId) {

@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Icons } from '../../components/icons';
 
 const SECTIONS = [
@@ -160,34 +160,85 @@ function Summary() {
 export function HelpView() {
   const [section, setSection] = useState('summary');
   const page = CONTENT[section];
+  const tabRefs = useRef(new Map());
+
+  // Gezinen sekme durağı, OK TUŞLARIYLA birlikte anlam taşır. Yalnızca
+  // `tabIndex={-1}` eklemek, seçili olmayan bölümleri klavyeyle tümüyle
+  // ulaşılamaz yapardı: eskiden her düğme sekme sırasındaydı, dolayısıyla bu
+  // tek başına bir gerileme olurdu. WAI-ARIA sekme kalıbı odağı ok, Home ve
+  // End tuşlarıyla taşır.
+  const focusSection = (id) => {
+    setSection(id);
+    // Odak, seçim durumu çizildikten sonra taşınır.
+    requestAnimationFrame(() => tabRefs.current.get(id)?.focus());
+  };
+
+  const onTabKeyDown = (event) => {
+    const ids = SECTIONS.map((item) => item.id);
+    const current = ids.indexOf(section);
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      focusSection(ids[(current + 1) % ids.length]);
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusSection(ids[(current - 1 + ids.length) % ids.length]);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      focusSection(ids[0]);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      focusSection(ids[ids.length - 1]);
+    }
+  };
 
   return (
     <div className="help-shell">
+      {/* `role="tablist"` çocuklardan sekme anlamı bekler. Çocuklar düz düğme
+          kaldığında ekran okuyucu "sekme içermeyen bir sekme listesi" duyuruyor
+          ve seçili bölüm hiç bildirilmiyordu. */}
       <div className="help-page-switch" role="tablist" aria-label="Kullanım rehberi bölümleri">
         {SECTIONS.map((item) => {
           const Icon = Icons[item.icon];
+          const selected = section === item.id;
           return (
-            <button key={item.id} type="button" className={section === item.id ? 'active' : ''} onClick={() => setSection(item.id)}>
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              id={`help-tab-${item.id}`}
+              ref={(element) => {
+                if (element) tabRefs.current.set(item.id, element);
+                else tabRefs.current.delete(item.id);
+              }}
+              aria-selected={selected}
+              aria-controls="help-tabpanel"
+              tabIndex={selected ? 0 : -1}
+              className={selected ? 'active' : ''}
+              onKeyDown={onTabKeyDown}
+              onClick={() => setSection(item.id)}
+            >
               <Icon size={13} /> {item.label}
             </button>
           );
         })}
       </div>
-      {section === 'summary' ? <Summary /> : section === 'modes' ? <ModeGuide /> : (
-        <div className="help-content-grid">
-          <section className="help-hero-card">
-            <div className="help-kicker">Sayfa rehberi</div>
-            <h2>{page.title}</h2>
-            <p>{page.intro}</p>
-          </section>
-          <section className="card help-section-card">
-            <h3>Nasıl kullanılır?</h3>
-            <div className="help-checks">
-              {page.points.map((point, index) => <div key={point}><span>{index + 1}</span><p>{point}</p></div>)}
-            </div>
-          </section>
-        </div>
-      )}
+      <div id="help-tabpanel" role="tabpanel" aria-labelledby={`help-tab-${section}`}>
+        {section === 'summary' ? <Summary /> : section === 'modes' ? <ModeGuide /> : (
+          <div className="help-content-grid">
+            <section className="help-hero-card">
+              <div className="help-kicker">Sayfa rehberi</div>
+              <h2>{page.title}</h2>
+              <p>{page.intro}</p>
+            </section>
+            <section className="card help-section-card">
+              <h3>Nasıl kullanılır?</h3>
+              <div className="help-checks">
+                {page.points.map((point, index) => <div key={point}><span>{index + 1}</span><p>{point}</p></div>)}
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

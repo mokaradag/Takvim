@@ -61,11 +61,15 @@ export function selectStatusDistribution(tasks, referenceDate = today()) {
     (items.get(bucketId) || items.get('todo')).push(task);
   }
 
-  const total = list.length;
   const done = items.get('done').length;
   const segments = STATUS_DISTRIBUTION_BUCKETS
     .map((bucket) => ({ ...bucket, value: items.get(bucket.id).length, items: items.get(bucket.id) }))
     .filter((segment) => segment.value > 0);
+  // `total`, SINIFLANDIRILAN görev sayısıdır. `list.length` kullanıldığında
+  // döngünün atladığı boş girdiler de sayılıyor, belgelenen "dilim değerlerinin
+  // toplamı her zaman total'e eşittir" kuralı bozuluyordu: halkada açıklanamayan
+  // bir boşluk kalıyor ve tamamlanma oranı şişmiş bir paydaya bölünüyordu.
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
 
   return {
     total,

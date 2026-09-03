@@ -54,14 +54,39 @@ export function reminderRecipientsSql() {
     ORDER BY pd.DisplayName, ta.Sicil;`;
 }
 
-/** Hatırlatma için gereken görev/proje alanları. */
+/**
+ * Hatırlatma için gereken görev/proje alanları.
+ *
+ * `p.IsActive = 1` ADAY SEÇİMİNDEKİ kuralın aynısıdır ve burada da gereklidir:
+ * otomatik tur, adayları seçtikten sonra gönderimden hemen önce görevi yeniden
+ * yükler. Bu yükleme etkin proje koşulunu uygulamasaydı, aday listesi ile
+ * gönderim arasında devre dışı bırakılan bir projenin sorumlularına yine posta
+ * giderdi.
+ */
 export const REMINDER_TASK_SQL = `
   SELECT TOP (1)
     t.TaskId, t.ProjectId, t.Title, t.Description, t.Keyword, t.Status, t.Priority,
     t.TargetFinish, t.PlannedStart, t.PlannedFinish,
     p.ProjectCode, p.ProjectName
   FROM dbo.MR_Tasks t
-  JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+  JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+  WHERE t.TaskId = @taskId;`;
+
+/**
+ * Görev VAR MI, projesi ETKİN Mİ?
+ *
+ * `REMINDER_TASK_SQL` etkin proje koşulunu bilinçli olarak taşır; bunun yan
+ * etkisi, devre dışı bırakılmış bir projenin görevinin de "satır yok" dönmesi
+ * ve elle gönderimin kullanıcıya `TASK_NOT_FOUND` (404) bildirmesiydi. Görev
+ * ekranda dururken "görev bulunamadı" iletisi açıklanamaz; nedeni ayırt etmek
+ * için yükleme boş döndüğünde YALNIZCA bu sorgu çalıştırılır.
+ *
+ * Gönderim kararı DEĞİŞMEZ: her iki durumda da hiçbir posta gönderilmez.
+ */
+export const REMINDER_TASK_PROJECT_STATE_SQL = `
+  SELECT TOP (1) CAST(ISNULL(p.IsActive, 0) AS int) AS IsActive
+  FROM dbo.MR_Tasks t
+  LEFT JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
   WHERE t.TaskId = @taskId;`;
 
 /**
@@ -102,32 +127,38 @@ export const REMINDER_SETTINGS_SQL = `
  * satır sayısı sıfır dönerek çakışma bildirilir.
  */
 export const REMINDER_SETTINGS_UPSERT_SQL = `
+  SET NOCOUNT ON;
+
   DECLARE @affected int = 0;
 
-  IF EXISTS (SELECT 1 FROM dbo.MR_ReminderSettings WHERE SettingsId = 1)
+  UPDATE dbo.MR_ReminderSettings WITH (UPDLOCK, HOLDLOCK)
+  SET AutomaticEnabled = @automaticEnabled,
+      WindowValue = @windowValue,
+      WindowUnit = @windowUnit,
+      FrequencyValue = @frequencyValue,
+      FrequencyUnit = @frequencyUnit,
+      SubjectTemplate = @subjectTemplate,
+      BodyTemplate = @bodyTemplate,
+      UpdatedAt = SYSUTCDATETIME(),
+      UpdatedBySicil = @actorSicil
+  WHERE SettingsId = 1
+    AND (@rowVersion IS NULL OR RowVersion = @rowVersion);
+  SET @affected = @@ROWCOUNT;
+
+  IF @affected = 0
   BEGIN
-    UPDATE dbo.MR_ReminderSettings
-    SET AutomaticEnabled = @automaticEnabled,
-        WindowValue = @windowValue,
-        WindowUnit = @windowUnit,
-        FrequencyValue = @frequencyValue,
-        FrequencyUnit = @frequencyUnit,
-        SubjectTemplate = @subjectTemplate,
-        BodyTemplate = @bodyTemplate,
-        UpdatedAt = SYSUTCDATETIME(),
-        UpdatedBySicil = @actorSicil
-    WHERE SettingsId = 1
-      AND (@rowVersion IS NULL OR RowVersion = @rowVersion);
-    SET @affected = @@ROWCOUNT;
-  END
-  ELSE
-  BEGIN
+    -- Koşullu ekleme TEK deyimdir: iki yönetici satır hiç yokken aynı anda
+    -- kaydettiğinde ayrı \`IF EXISTS\` + \`INSERT\` adımları ikisini de ekleme
+    -- yoluna sokuyor ve ikincisi birincil anahtar ihlaliyle patlıyordu. Yarışı
+    -- kaybeden artık sıfır satır etkiler ve belgelenen VERSION_CONFLICT alır.
     INSERT dbo.MR_ReminderSettings(
       SettingsId, AutomaticEnabled, WindowValue, WindowUnit, FrequencyValue, FrequencyUnit,
       SubjectTemplate, BodyTemplate, UpdatedBySicil
-    ) VALUES(
-      1, @automaticEnabled, @windowValue, @windowUnit, @frequencyValue, @frequencyUnit,
+    )
+    SELECT 1, @automaticEnabled, @windowValue, @windowUnit, @frequencyValue, @frequencyUnit,
       @subjectTemplate, @bodyTemplate, @actorSicil
+    WHERE NOT EXISTS (
+      SELECT 1 FROM dbo.MR_ReminderSettings WITH (UPDLOCK, HOLDLOCK) WHERE SettingsId = 1
     );
     SET @affected = @@ROWCOUNT;
   END
@@ -196,10 +227,45 @@ export const REMINDER_CLAIM_SQL = `
 
   SELECT @logId AS TaskReminderLogId;`;
 
+/**
+ * Elle gönderim hakkını ATOMİK olarak sahiplenir.
+ *
+ * En küçük aralık, ayrı bir `SELECT` ile denetlenip ardından koşulsuz `INSERT`
+ * yapıldığında yarışa açıktı: aynı kullanıcının aynı göreve gönderdiği iki
+ * eşzamanlı istek de "son gönderim yok" görüp ikisi de posta gönderiyordu.
+ * Koşullu ekleme TEK deyim olduğu için aralık denetimi ile sahiplenme
+ * bölünemez; yarışı kaybeden istek hiç satır eklemez ve kimlik döndürmez.
+ *
+ * `Status <> 'FAILED'` bilinçlidir: alıcısı çözülemeyen ya da SMTP'nin
+ * reddettiği bir gönderim, kullanıcıyı beş dakika boyunca yeniden denemekten
+ * alıkoymamalıdır. Süren (`PENDING`) bir gönderim ise aralığı tutar — yarış
+ * koruması tam olarak buna dayanır.
+ *
+ * Aralığın başlangıcı `@intervalStart` PARAMETRESİYLE gelir; `SYSUTCDATETIME()`
+ * kullanılsaydı kullanıcıya gösterilen bekleme süresi Node sürecinin saatinden,
+ * asıl karar veritabanı sunucusunun saatinden hesaplanırdı (bkz.
+ * REMINDER_CANDIDATES_SQL, aynı gerekçe). `@intervalStart` NULL ise sınır
+ * uygulanmaz.
+ */
 export const REMINDER_MANUAL_LOG_SQL = `
+  SET NOCOUNT ON;
+
+  DECLARE @claimed TABLE (TaskReminderLogId bigint);
+
   INSERT dbo.MR_TaskReminderLog(TaskId, ProjectId, ReminderKind, SlotKey, Status, RequestedBySicil)
-  OUTPUT inserted.TaskReminderLogId
-  VALUES(@taskId, @projectId, 'MANUAL', @slotKey, 'PENDING', @actorSicil);`;
+  OUTPUT inserted.TaskReminderLogId INTO @claimed
+  SELECT @taskId, @projectId, 'MANUAL', @slotKey, 'PENDING', @actorSicil
+  WHERE @intervalStart IS NULL
+    OR NOT EXISTS (
+      SELECT 1 FROM dbo.MR_TaskReminderLog WITH (UPDLOCK, HOLDLOCK)
+      WHERE TaskId = @taskId
+        AND ReminderKind = 'MANUAL'
+        AND RequestedBySicil = @actorSicil
+        AND Status <> 'FAILED'
+        AND CreatedAt > @intervalStart
+    );
+
+  SELECT TOP (1) TaskReminderLogId FROM @claimed;`;
 
 export const REMINDER_COMPLETE_SQL = `
   UPDATE dbo.MR_TaskReminderLog
@@ -214,7 +280,12 @@ export const REMINDER_COMPLETE_SQL = `
  * Bir kullanıcının o göreve yaptığı SON elle gönderim.
  *
  * Elle gönderim ucu, görevi görebilen herkesin çağırabildiği ve her çağrının
- * gerçek e-posta ürettiği bir uçtur; en küçük aralık bu kayıttan hesaplanır.
+ * gerçek e-posta ürettiği bir uçtur; kullanıcıya gösterilen BEKLEME SÜRESİ bu
+ * kayıttan hesaplanır. Aralığı gerçekten uygulayan denetim
+ * `REMINDER_MANUAL_LOG_SQL` içindeki koşullu eklemedir.
+ *
+ * `Status <> 'FAILED'`: alıcısı çözülemeyen ya da SMTP'nin reddettiği bir
+ * gönderim, yeniden denemeyi beş dakika boyunca engellememelidir.
  */
 export const REMINDER_LAST_MANUAL_SQL = `
   SELECT TOP (1) CreatedAt
@@ -222,6 +293,7 @@ export const REMINDER_LAST_MANUAL_SQL = `
   WHERE TaskId = @taskId
     AND ReminderKind = 'MANUAL'
     AND RequestedBySicil = @actorSicil
+    AND Status <> 'FAILED'
   ORDER BY TaskReminderLogId DESC;`;
 
 export const REMINDER_HISTORY_SQL = `

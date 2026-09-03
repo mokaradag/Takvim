@@ -23,10 +23,21 @@ function taskAssigneeEntries(task, indexes) {
     identityQueues.get(name).push(identity);
   }
 
+  // `assigneeIds`, `assigneeDisplayNames` ile AYNI UZUNLUKTA OLMAYABİLİR: göreve
+  // atanmış bir kullanıcı, kimliği kendisine kapalı olan eş sorumlunun adını
+  // görür ama Sicil'ini görmez. Konumsal eşleme bu durumda görünen bir sicili
+  // yanlış ada bağlıyordu; kimlik önce fotoğraf kimliğinden (ada göre) çözülür
+  // ve konumsal yedek yalnızca iki dizi gerçekten hizalıyken kullanılır.
+  const visibleIds = (task.assigneeIds || []).map((value) => (value == null ? null : String(value)));
+  const visibleIdSet = new Set(visibleIds.filter(Boolean));
+  const positionallyAligned = visibleIds.length === names.length;
+
   return names.map((name, index) => ({ name, index })).filter(({ name }) => name).map(({ name, index }) => {
     const identity = identityQueues.get(name)?.shift() || null;
     const employeeNo = identity?.employeeNo == null ? null : String(identity.employeeNo);
-    const assigneeId = task.assigneeIds?.[index] == null ? null : String(task.assigneeIds[index]);
+    const assigneeId = employeeNo && visibleIdSet.has(employeeNo)
+      ? employeeNo
+      : (positionallyAligned ? visibleIds[index] : null);
     const directoryPerson = employeeNo
       ? indexes.byEmployeeNo.get(employeeNo) || null
       : assigneeId

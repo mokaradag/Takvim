@@ -1,8 +1,9 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icons } from '../icons';
 import { Avatar } from '../ui';
 import { resolveUserDepartmentLabel, resolveUserDisplayName } from '../../domain/identity/sessionUser.js';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { AppLogo } from './AppLogo';
 import { greetingForHour, welcomeFirstName } from './welcomeGreeting.js';
 
@@ -47,20 +48,22 @@ export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgai
   }, [now]);
   const greeting = browserNow ? greetingForHour(browserNow.getHours()) : 'Hoş geldiniz';
 
-  // Esc karşılama ekranını kapatır: modalın klavyeyle de kapanabilmesi gerekir.
-  useEffect(() => {
-    const onKeyDown = (event) => { if (event.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+  // Esc kapatır ve odak PANEL İÇİNDE kalır. `aria-modal="true"` odağı
+  // kısıtlamaz: klavye kullanıcısı karşılama ekranından arkadaki etkin
+  // uygulama kabuğunun denetimlerine sekme ile geçebiliyordu.
+  const panelRef = useRef(null);
+  const initialFocusRef = useRef(null);
+  useModalFocusTrap({ containerRef: panelRef, initialFocusRef, onClose });
 
   return (
     <div className="welcome-backdrop" onClick={onClose}>
       <div
+        ref={panelRef}
         className="welcome-panel"
         role="dialog"
         aria-modal="true"
         aria-labelledby="welcome-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="welcome-head">
@@ -166,7 +169,7 @@ export function WelcomeScreen({ onClose, onNavigate, onShowAgainChange, showAgai
           <button className="btn" onClick={() => { onNavigate('yardim'); onClose(); }}>
             <Icons.Help size={13} /> Kullanım rehberi
           </button>
-          <button className="btn primary" onClick={onClose}>
+          <button ref={initialFocusRef} className="btn primary" onClick={onClose}>
             Başlayalım <Icons.ArrowRight size={13} />
           </button>
         </div>

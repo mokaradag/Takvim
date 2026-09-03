@@ -237,24 +237,49 @@ export function GanttView() {
 
   const xForDate = (d) => diffDays(d, range.start) * zoom;
 
+  // Çubuk geometrisi SINIRLANMIŞ eksene kırpılır.
+  //
+  // Aralık üst sınıra dayandığında (bkz. MAX_GANTT_RANGE_DAYS) gün başlığı
+  // kırpılmış aralığı çizer, ama çubuklar HAM görev tarihlerinden ölçülüyordu:
+  // aralık dışına taşan bir görev kaydırılabilir içeriği gün başlığının
+  // ötesine büyütüyor, çubuk etiketsiz bir alanda kalıyordu. Denetimler
+  // "görünüm kısaltıldı" derken çubukların taşması tutarsız bir görünüm
+  // bırakıyordu. Aynı uyuşmazlık grup özet çubukları için de geçerliydi.
+  const axisWidth = days.length * zoom;
+  const clampBar = (startValue, finishValue) => {
+    const rawX = xForDate(parseDate(startValue));
+    const rawEnd = rawX + (diffDays(finishValue, startValue) + 1) * zoom;
+    const x = Math.max(0, Math.min(rawX, axisWidth));
+    const end = Math.max(x, Math.min(rawEnd, axisWidth));
+    return { x, w: end - x, clipped: rawX < 0 || rawEnd > axisWidth };
+  };
+
   // Schedule rollups are pure and independently testable.
   const groupSummaries = useMemo2(() => getGroupScheduleSummaries(groups), [groups]);
 
-  // Build flat row list (respect collapsed groups)
-  const rows = [];
-  groups.forEach(([groupName, items]) => {
-    const isCollapsed = collapsed.has(groupName);
-    const project = groupBy === 'proje' ? projectByName.get(groupName) : null;
-    rows.push({
-      type: 'group',
-      name: groupName,
-      summary: groupSummaries[groupName],
-      projectSchedule: project ? schedule.projects[project.id] || null : null,
-      collapsed: isCollapsed,
-      itemCount: items.length
+  // Satır listesi MEMOLANIR. Her çizimde yeniden kurulduğunda kimliği de
+  // değişiyor; `rowTops` ve `depArrows` bu diziyi bağımlılık listesinde
+  // taşıdığı için ikisi de her çizimde baştan hesaplanıyordu. `depArrows`
+  // bütün satırları ve bağımlılıkları dolaşıp ok dizinini kurar; işaretçiyi
+  // gezdirmek `hotTaskId` durumunu değiştirdiği için bu tam hesap fare
+  // hareketiyle tekrar tekrar çalışıyordu.
+  const rows = useMemo2(() => {
+    const list = [];
+    groups.forEach(([groupName, items]) => {
+      const isCollapsed = collapsed.has(groupName);
+      const project = groupBy === 'proje' ? projectByName.get(groupName) : null;
+      list.push({
+        type: 'group',
+        name: groupName,
+        summary: groupSummaries[groupName],
+        projectSchedule: project ? schedule.projects[project.id] || null : null,
+        collapsed: isCollapsed,
+        itemCount: items.length
+      });
+      if (!isCollapsed) items.forEach(t => list.push({ type: 'task', task: t, groupName }));
     });
-    if (!isCollapsed) items.forEach(t => rows.push({ type: 'task', task: t, groupName }));
-  });
+    return list;
+  }, [groups, collapsed, groupBy, projectByName, schedule, groupSummaries]);
 
   const toggleCollapse = (name) => {
     setCollapsed(s => {
@@ -762,8 +787,8 @@ export function GanttView() {
                           className="gantt-summary-bar"
                           style={{
                             top: top + 9,
-                            left: xForDate(s.start),
-                            width: Math.max(8, (diffDays(s.end, s.start) + 1) * zoom),
+                            left: clampBar(s.start, s.end).x,
+                            width: Math.max(8, clampBar(s.start, s.end).w),
                             pointerEvents: 'auto'
                           }}
                         >
@@ -814,8 +839,7 @@ export function GanttView() {
                   </React.Fragment>
                 );
               }
-              const x = xForDate(parseDate(t.plannedStart));
-              const w = (diffDays(t.plannedFinish, t.plannedStart) + 1) * zoom;
+              const { x, w } = clampBar(t.plannedStart, t.plannedFinish);
               const color = projectColorVar(t.proje);
               const done = t.status === 'done';
               const pct = t.progress != null ? t.progress : (done ? 100 : 0);

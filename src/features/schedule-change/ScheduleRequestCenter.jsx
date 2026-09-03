@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { Icons } from '../../components/icons.jsx';
+import { fmt } from '../../scheduling/dates/index.js';
 import { useScheduleRequests, useTaskActions } from '../../state/hooks/index.js';
 import { SCHEDULE_DATE_ROWS, requestDates, scheduleDifferenceSummary } from './scheduleChangePresentation.js';
 import { reduceScheduleRequestCenterOpen, scheduleRequestCenterViewState } from './scheduleRequestCenterState.js';
@@ -87,8 +88,10 @@ function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restor
             {SCHEDULE_DATE_ROWS.map(({ key, label }) => (
               <tr className="schedule-compare-row" key={key}>
                 <th scope="row">{label}</th>
-                <td className="tabular">{current[key] || '—'}</td>
-                <td className="tabular schedule-proposed-date">{proposed[key] || '—'}</td>
+                {/* Bkz. ScheduleChangeDialog: iki hücre de kullanıcının tarih
+                    biçimiyle çizilir. */}
+                <td className="tabular">{current[key] ? fmt(current[key], 'dd MMM yyyy') : '—'}</td>
+                <td className="tabular schedule-proposed-date">{proposed[key] ? fmt(proposed[key], 'dd MMM yyyy') : '—'}</td>
               </tr>
             ))}
           </tbody>

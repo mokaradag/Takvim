@@ -347,11 +347,10 @@ Adding a child, renaming and deleting no longer use blocking `prompt()` / `confi
 
 Task/WBS mutations now pass through the asynchronous state/data persistence boundary. Successful changes survive `loadSnapshot()` calls made against the same active async in-memory repository instance.
 
-The current adapter is not durable storage. A browser refresh that creates a new repository instance, process restart or VM restart starts again from the supplied seed. Real API/database persistence remains future work.
+**Demo mode** is not durable storage: a browser refresh that creates a new repository instance, a process restart or a VM restart starts again from the supplied seed. **Actual mode is durable** — WBS rows live in `MR_WBS`, corporate nodes are synchronized from CN43N and the sync fingerprint is persisted in `MR_CorporateWbsSyncState` (see section 13). Treat a persistence failure in Actual mode as a fault to investigate, not as the expected in-memory reset.
 
 This increment intentionally does not implement:
 
-- durable database or API persistence;
 - cross-project Task or WBS movement;
 - cascade deletion;
 - historical WBS versioning;

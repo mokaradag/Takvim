@@ -2,6 +2,30 @@ import { addDays, diffDays, parseDate, today } from '../dates/index.js';
 
 let ganttDateRangeOverride = null;
 
+/**
+ * Gantt gün ekseninin en fazla kapsayabileceği TAKVİM günü (≈10 yıl).
+ *
+ * Aralık, en erken planlanan başlangıç ile en geç planlanan bitişten hiçbir üst
+ * sınır olmadan türetiliyordu. Sunucu SQL'in 0001–9999 tarih aralığını kabul
+ * ettiği için, yanlış yazılmış TEK bir yıl (`2926` yerine `2026`) on binlerce
+ * gün üretiyor; Gantt görünümleri bu diziyi dört kez dolaşıp gün başına birer
+ * öge oluşturduğu için sekme donuyor ya da belleği tüketiyordu. Bu, projeyi
+ * açan HER kullanıcıyı etkiler.
+ *
+ * Sınır aşıldığında aralık kırpılır ve `truncated` ile bildirilir; görünüm
+ * kullanıcıya aralığın kısaltıldığını söyleyebilir.
+ */
+export const MAX_GANTT_RANGE_DAYS = 3660;
+
+function boundedRange(start, end) {
+  const span = diffDays(end, start);
+  // Aralık İKİ UÇU DA KAPSAR: `start`..`end` arası gün sayısı `span + 1`'dir.
+  // `span <= MAX` kabul edilip bitiş `start + MAX` yapılsaydı eksen
+  // MAX_GANTT_RANGE_DAYS + 1 gün çizerdi — sınırın kendisi bir gün aşılırdı.
+  if (!Number.isFinite(span) || span < MAX_GANTT_RANGE_DAYS) return { start, end, truncated: false };
+  return { start, end: addDays(start, MAX_GANTT_RANGE_DAYS - 1), truncated: true };
+}
+
 export function setGanttDateRangeOverride(range) {
   if (!range?.start || !range?.end) {
     ganttDateRangeOverride = null;
@@ -10,7 +34,7 @@ export function setGanttDateRangeOverride(range) {
   const start = parseDate(range.start);
   const end = parseDate(range.end);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return ganttDateRangeOverride;
-  ganttDateRangeOverride = { start, end };
+  ganttDateRangeOverride = boundedRange(start, end);
   return ganttDateRangeOverride;
 }
 
@@ -27,7 +51,9 @@ export const taskDurationDays = taskPlannedDurationDays;
 
 export function calculateTaskDateRange(tasks, { paddingDays = 3, fallbackStart = today(), fallbackDays = 30 } = {}) {
   const scheduled = (tasks || []).filter((task) => task?.plannedStart && task?.plannedFinish);
-  if (!scheduled.length) return { start: fallbackStart, end: addDays(fallbackStart, fallbackDays) };
+  if (!scheduled.length) {
+    return { start: fallbackStart, end: addDays(fallbackStart, fallbackDays), truncated: false };
+  }
   let min = parseDate(scheduled[0].plannedStart);
   let max = parseDate(scheduled[0].plannedFinish);
   scheduled.forEach((task) => {
@@ -36,7 +62,7 @@ export function calculateTaskDateRange(tasks, { paddingDays = 3, fallbackStart =
     if (start < min) min = start;
     if (end > max) max = end;
   });
-  return { start: addDays(min, -paddingDays), end: addDays(max, paddingDays) };
+  return boundedRange(addDays(min, -paddingDays), addDays(max, paddingDays));
 }
 
 export function getTaskDateRange(tasks, options = {}) {

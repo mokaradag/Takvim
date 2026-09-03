@@ -70,6 +70,24 @@ function stripTrailingSlash(value) {
  * (`https://kimlik.ornek.internal/realms/<realm>`). İkisi de aynı issuer'a
  * çözülür; realm iki kez eklenmez.
  */
+/**
+ * Yüzde kodlamasını SAVUNMACI çözer.
+ *
+ * `decodeURIComponent`, geçersiz bir kaçış dizisi için `URIError` yükseltir.
+ * `.../realms/ar%tr` gibi bozuk bir adres bu yüzden `readKeycloakConfig`
+ * içinden dışarı taşıyor, `keycloakConfigurationIssues` raporu hiç
+ * üretilemiyordu: yönetici, hangi ortam değişkeninin hatalı olduğunu söyleyen
+ * ileti yerine genel bir 500 alıyordu. Çözülemeyen segment artık yapılandırma
+ * ÇELİŞKİSİ sayılır ve normal hata yoluna düşer.
+ */
+function decodedSegment(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 export function deriveIssuerUrl(baseUrl, realm) {
   const base = stripTrailingSlash(text(baseUrl));
   const realmName = text(realm);
@@ -79,7 +97,7 @@ export function deriveIssuerUrl(baseUrl, realm) {
     // Adreste gömülü realm ile `MERGEN_ROTA_KEYCLOAK_REALM` ÇELİŞİYORSA bu bir
     // yapılandırma hatasıdır. Eskiden realm değeri sessizce yok sayılıyor,
     // uygulama yöneticinin beklemediği bir realm'e karşı doğrulama yapıyordu.
-    if (realmName && decodeURIComponent(embedded[1]) !== realmName) return '';
+    if (realmName && decodedSegment(embedded[1]) !== realmName) return '';
     return base;
   }
   if (!realmName) return '';

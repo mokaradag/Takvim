@@ -198,6 +198,17 @@ export function restoreActualCommitIds(body, changes = {}, aliases = null) {
       ...(Array.isArray(task.deps) ? {
         deps: task.deps.map((dependency) => ({
           ...dependency,
+          // Bağımlılığın KENDİ kimliği de geri çevrilir. `collectClientIds`
+          // `dependency.id` değerini takma ad eşlemesine yazar ve
+          // `normalizeActualChanges` onu sunucu biçimine çevirir; geri çevirme
+          // yalnızca `predecessorId` alanına uygulandığı için dönen satır,
+          // çevresindeki görev ve proje kimlikleri istemci biçimine dönmüşken
+          // kendi kimliğini sunucu biçiminde taşıyordu.
+          // `id` YALNIZCA bağımlılığın kendisi taşıyorsa geri yazılır.
+          // Koşulsuz atama, kimliksiz gelen bir bağımlılığa `id: undefined`
+          // KENDİ ÖZELLİĞİ ekliyordu: yanıt biçimi değişiyor ve alan varlığına
+          // bakan tüketiciler kimliksiz bağımlılığı yanlış sınıflandırıyordu.
+          ...(Object.hasOwn(dependency, 'id') ? { id: restoreClientId(dependency.id, map) } : {}),
           predecessorId: restoreClientId(dependency.predecessorId, map)
         }))
       } : {})
@@ -254,6 +265,17 @@ export function restoreActualSnapshotIds(body, map) {
       ...(Array.isArray(task.deps) ? {
         deps: task.deps.map((dependency) => ({
           ...dependency,
+          // Bağımlılığın KENDİ kimliği de geri çevrilir. `collectClientIds`
+          // `dependency.id` değerini takma ad eşlemesine yazar ve
+          // `normalizeActualChanges` onu sunucu biçimine çevirir; geri çevirme
+          // yalnızca `predecessorId` alanına uygulandığı için dönen satır,
+          // çevresindeki görev ve proje kimlikleri istemci biçimine dönmüşken
+          // kendi kimliğini sunucu biçiminde taşıyordu.
+          // `id` YALNIZCA bağımlılığın kendisi taşıyorsa geri yazılır.
+          // Koşulsuz atama, kimliksiz gelen bir bağımlılığa `id: undefined`
+          // KENDİ ÖZELLİĞİ ekliyordu: yanıt biçimi değişiyor ve alan varlığına
+          // bakan tüketiciler kimliksiz bağımlılığı yanlış sınıflandırıyordu.
+          ...(Object.hasOwn(dependency, 'id') ? { id: restoreClientId(dependency.id, map) } : {}),
           predecessorId: restoreClientId(dependency.predecessorId, map)
         }))
       } : {})
@@ -324,6 +346,7 @@ async function requestJson(url, init, operation) {
       headers: { 'content-type': 'application/json', ...(init?.headers || {}) }
     });
   } catch (cause) {
+    if (timer) clearTimeout(timer);
     throw new AppRepositoryError({
       code: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE,
       message: controller?.signal.aborted
@@ -332,10 +355,53 @@ async function requestJson(url, init, operation) {
       operation,
       cause
     });
+  }
+
+  // Zaman aşımı GÖVDE OKUNANA kadar sürer.
+  //
+  // `fetch` başlıklar gelir gelmez çözülür; sayaç gövde okunmadan önce
+  // temizlendiğinde, başlıkları gönderip gövdeyi askıda bırakan bir sunucu
+  // `response.json()` sözünü sonsuza dek çözülmemiş bırakıyordu. Sıralı yazma
+  // kuyruğu bu sözü beklediği için `waitForIdle()` hiç dönmüyor ve uygulama
+  // donmuş görünüyordu — kodun kendi yorumunun tarif ettiği hatanın ta kendisi.
+  // KESİLEN gövde, boş gövdeden ayrılır. İç `.catch(() => ({}))` iptali de
+  // yutuyordu: başlıkları gelmiş ama gövdesi askıda kalan bir commit yanıtı
+  // `response.ok` ile birlikte `{}` olarak dönüyor, kalıcılık kuyruğu bunu
+  // BAŞARI sayıp saklanan yeniden deneme durumunu atıyordu — sunucu değişikliği
+  // işlemiş de olabilir, hâlâ bekliyor da olabilirken. Ayrıştırılamayan ama
+  // TAMAMLANMIŞ bir gövde (boş 204, HTML hata sayfası) ise boş nesne sayılmaya
+  // devam eder ki durum kodu eşlemesi korunsun.
+  //
+  // Ayrım `SyntaxError` ÜZERİNDEN yapılır. Fetch sözleşmesinde `json()` yalnızca
+  // gövde baştan sona okunup ÇÖZÜMLENEMEDİĞİNDE `SyntaxError` reddi verir;
+  // akış düzeyindeki arızalar (kesilen bağlantı, bozuk `Content-Encoding`)
+  // `TypeError` üretir. Zaman aşımı dışındaki her reddi boş gövde saymak,
+  // yarıda kesilen bir commit yanıtını da BAŞARI gösteriyor ve saklanan yeniden
+  // deneme durumunu atıyordu; oysa sunucunun yazmayı işleyip işlemediği bilinmiyor.
+  let body;
+  try {
+    body = await response.json();
+  } catch (cause) {
+    if (controller?.signal.aborted) {
+      throw new AppRepositoryError({
+        code: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE,
+        message: 'Gerçek Sistem sunucusu zamanında yanıt vermedi.',
+        operation,
+        cause
+      });
+    }
+    if (!(cause instanceof SyntaxError)) {
+      throw new AppRepositoryError({
+        code: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE,
+        message: 'Gerçek Sistem yanıtı eksik alındı; işlemin sonucu belirsiz.',
+        operation,
+        cause
+      });
+    }
+    body = {};
   } finally {
     if (timer) clearTimeout(timer);
   }
-  const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new AppRepositoryError({
       code: body?.error?.code || CODE_BY_STATUS[response.status] || REPOSITORY_ERROR_CODES.MUTATION_FAILED,

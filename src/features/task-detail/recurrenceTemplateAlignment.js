@@ -54,10 +54,17 @@ function alignFinishByWorkingDays(oldStart, oldFinish, newStart, calendar) {
   // Süre, çalışma takviminde ölçülür. Başlangıç ya da bitiş tatile denk
   // geliyorsa ölçüm en yakın iş gününden yapılır; aksi hâlde tatile düşmüş bir
   // uç, süreyi olduğundan kısa gösterirdi.
+  // Başlangıç İLERİ, bitiş GERİ hizalanır. İki uç da ileri taşınınca, bitişi
+  // tatile denk gelen bir görev (Pzt–Paz görev, Pzt–Cum takvimi) bitişi bir
+  // sonraki Pazartesiye kayıyor ve süre beş iş gününden ALTIYA çıkıyordu; bitişi
+  // geri hizalamak ölçülen süreyi görevin gerçekten çalışılan günleriyle
+  // sınırlar.
   const measuredStart = fmtISO(moveToWorkingDay(parseDate(oldStart), calendar, 1));
-  const measuredFinish = fmtISO(moveToWorkingDay(parseDate(oldFinish), calendar, 1));
+  const measuredFinish = fmtISO(moveToWorkingDay(parseDate(oldFinish), calendar, -1));
   const workingSpan = Math.max(0, diffWorkingDays(measuredFinish, measuredStart, calendar));
   const alignedStart = moveToWorkingDay(parseDate(newStart), calendar, 1);
-  const finish = fmtISO(addWorkingDays(alignedStart, workingSpan, calendar));
+  const shiftedFinish = addWorkingDays(alignedStart, workingSpan, calendar);
+  // Ufku aşan süre `null` bildirir; hizalanmış başlangıç en güvenli sonuçtur.
+  const finish = fmtISO(shiftedFinish ?? alignedStart);
   return finish < newStart ? newStart : finish;
 }

@@ -67,7 +67,12 @@ SET ProjectCode = source.ProjectCode,
     ProjectName = source.ProjectName,
     ProjectTypeCode = source.ProjectTypeCode,
     ProjectTypeName = source.ProjectTypeName,
-    LeadSicil = manager.Sicil,
+    -- Kaynakta PROJECT_MANAGER satırı yoksa mevcut sorumlu KORUNUR.
+    -- manager satiri bir OUTER APPLY'dır; koşulsuz atama, satır başka bir nedenle
+    -- (örneğin proje adı değiştiği için) güncellendiğinde var olan LeadSicil
+    -- değerini NULL'a çekiyor ve erişim kaynağı sorumluyu hiç değiştirmemişken
+    -- proje sorumlusu kayboluyordu.
+    LeadSicil = ISNULL(manager.Sicil, target.LeadSicil),
     IsActive = 1,
     UpdatedAt = SYSUTCDATETIME(),
     UpdatedBySicil = @actorSicil
@@ -85,7 +90,9 @@ WHERE target.SourceType = 'CORPORATE'
     ISNULL(target.ProjectName, N'') <> ISNULL(source.ProjectName, N'') OR
     ISNULL(target.ProjectTypeCode, N'') <> ISNULL(source.ProjectTypeCode, N'') OR
     ISNULL(target.ProjectTypeName, N'') <> ISNULL(source.ProjectTypeName, N'') OR
-    ISNULL(target.LeadSicil, -1) <> ISNULL(manager.Sicil, -1) OR
+    -- Değişiklik yüklemi de aynı yedeği kullanır: eksik bir yönetici satırı
+    -- TEK BAŞINA projeyi "değişti" saymamalıdır.
+    ISNULL(target.LeadSicil, -1) <> ISNULL(ISNULL(manager.Sicil, target.LeadSicil), -1) OR
     target.IsActive = 0
   );
 

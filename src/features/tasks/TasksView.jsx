@@ -1,5 +1,5 @@
 'use client';
-import { useState as useState1, useMemo as useMemo1 } from 'react';
+import { useState as useState1, useMemo as useMemo1, useCallback as useCallback1 } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
 import {
@@ -77,8 +77,77 @@ export function TasksView() {
   // Süzgeç değeri KARARLI kimliktir, görünen ad değil. Ada göre süzülseydi aynı
   // ada sahip iki proje (ya da iki çalışan) tek bir seçenekte birleşir; kullanıcı
   // benzersiz kodu arayıp birini seçse bile sonuçta ikisi de listelenirdi.
+  // Sütun süzgeçleri ÜSTTEKİ kurumsal süzgecin sonucundan türetilir.
+  //
+  // Seçenekler tam proje/kişi dizininden üretildiğinde, direktörlük/müdürlük/
+  // birim seçimi tabloyu daraltıyor ama sütun süzgeçleri o tabloda HİÇ
+  // bulunmayan projeleri ve kişileri listelemeye devam ediyordu: kullanıcı bir
+  // seçenek seçip boş sonuç alıyordu. Aşağıdaki kümeler görünür satırlardan
+  // toplanır (`kwOpts` bunu zaten yapıyordu).
+  const visibleProjectIds = useMemo1(
+    () => new Set(organization.filteredTasks.map((t) => String(t.projectId ?? ''))),
+    [organization.filteredTasks]
+  );
+  const visibleAssigneeIds = useMemo1(() => {
+    const ids = new Set();
+    for (const task of organization.filteredTasks) {
+      for (const assigneeId of task.assigneeIds || []) ids.add(String(assigneeId));
+    }
+    return ids;
+  }, [organization.filteredTasks]);
+  const visibleStatuses = useMemo1(() => {
+    const values = new Set(organization.filteredTasks.map((t) => String(t.status || 'todo')));
+    // `overdue` SANAL bir durumdur: hiçbir görevde saklı değer olarak durmaz,
+    // termin geçmişliğinden türetilir (aşağıdaki süzme aynı kuralı uygular).
+    // Yalnızca saklı değerlere bakan bir süzgeç bu seçeneği menüden tümüyle
+    // düşürüyor, tabloda geciken görevler dururken kullanıcı onları
+    // süzemiyordu.
+    const today_ = today();
+    const overdue = organization.filteredTasks.some((t) => t.status !== 'done'
+      && t.targetFinish
+      && diffDays(t.targetFinish, today_) < 0);
+    if (overdue) values.add('overdue');
+    return values;
+  }, [organization.filteredTasks]);
+  const visiblePriorities = useMemo1(
+    () => new Set(organization.filteredTasks.map((t) => String(normalizePriorityId(t.priority)))),
+    [organization.filteredTasks]
+  );
+
+  // Seçenek listesi GÖRÜNÜR değerlerle HÂLEN SEÇİLİ değerlerin BİRLEŞİMİDİR.
+  //
+  // Yalnızca görünür değerler listelenseydi, kurumsal seçim ya da otomatik
+  // yenileme süzülen satırları kaldırdığında etkin seçenek menüden kayboluyor;
+  // kullanıcı o değeri işaretten çıkaramıyor ve tabloyu geri getiremiyordu.
+  // Geride, sütunu ya da tümünü temizlemeden kurtulunamayan GİZLİ bir süzgeç
+  // kalıyor, sıradan bir süzgeç değişikliği açıklanamaz biçimde boş tablo
+  // üretiyordu.
+  const withSelected = useCallback1((visible, selected) => {
+    if (!selected?.length) return visible;
+    const values = new Set(visible);
+    for (const value of selected) values.add(String(value));
+    return values;
+  }, []);
+
+  const projectOptionIds = useMemo1(
+    () => withSelected(visibleProjectIds, colFilter.proje),
+    [visibleProjectIds, colFilter.proje, withSelected]
+  );
+  const assigneeOptionIds = useMemo1(
+    () => withSelected(visibleAssigneeIds, colFilter.sorumlu),
+    [visibleAssigneeIds, colFilter.sorumlu, withSelected]
+  );
+  const statusOptionValues = useMemo1(
+    () => withSelected(visibleStatuses, colFilter.status),
+    [visibleStatuses, colFilter.status, withSelected]
+  );
+  const priorityOptionValues = useMemo1(
+    () => withSelected(visiblePriorities, colFilter.priority),
+    [visiblePriorities, colFilter.priority, withSelected]
+  );
+
   const projOpts = useMemo1(() => projects
-    .slice()
+    .filter(p => projectOptionIds.has(String(p.id)))
     .sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'tr'))
     // Süzgeç listesindeki canlı arama proje kodunu ve türünü de tarar.
     .map(p => ({
@@ -86,12 +155,16 @@ export function TasksView() {
       label: projectLabel(p),
       keywords: [p.code, p.name, p.projectTypeCode, p.projectTypeName],
       icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} />
-    })), [projects]);
-  const kwOpts = useMemo1(() => Array.from(new Set(organization.filteredTasks.map(t => String(t.keyword || '').trim()).filter(Boolean)))
+    })), [projects, projectOptionIds]);
+  const kwOpts = useMemo1(() => Array.from(withSelected(
+    new Set(organization.filteredTasks.map(t => String(t.keyword || '').trim()).filter(Boolean)),
+    colFilter.keyword
+  ))
+    .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'tr'))
-    .map(k => ({ value: k, label: k })), [organization.filteredTasks]);
+    .map(k => ({ value: k, label: k })), [organization.filteredTasks, colFilter.keyword, withSelected]);
   const sorumluOpts = useMemo1(() => people
-    .slice()
+    .filter(p => assigneeOptionIds.has(String(p.id)))
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
     // Sicil, unvan ve birim de aranabilir: binlerce kişilik dizinde ad tek
     // başına yeterli bir arama anahtarı değildir.
@@ -100,16 +173,20 @@ export function TasksView() {
       label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
       keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
       icon: <Avatar name={p.name} person={p} size="sm" />
-    })), [people]);
-  const statusOpts = TASK_STATUS_FILTER_OPTIONS.map((status) => ({
-    ...status,
-    icon: <StatusIcon id={status.value} size={11} />
-  }));
-  const priorityOpts = TASK_PRIORITY_FILTER_OPTIONS.map((priority) => ({
-    value: priority.id,
-    label: priority.label,
-    icon: <PriorityIcon color={priority.color} size={11} />
-  }));
+    })), [people, assigneeOptionIds]);
+  const statusOpts = useMemo1(() => TASK_STATUS_FILTER_OPTIONS
+    .filter((status) => statusOptionValues.has(String(status.value)))
+    .map((status) => ({
+      ...status,
+      icon: <StatusIcon id={status.value} size={11} />
+    })), [statusOptionValues]);
+  const priorityOpts = useMemo1(() => TASK_PRIORITY_FILTER_OPTIONS
+    .filter((priority) => priorityOptionValues.has(String(priority.id)))
+    .map((priority) => ({
+      value: priority.id,
+      label: priority.label,
+      icon: <PriorityIcon color={priority.color} size={11} />
+    })), [priorityOptionValues]);
 
   const filtered = useMemo1(() => {
     const today_ = today();
@@ -129,7 +206,12 @@ export function TasksView() {
       const q = colFilter.task.toLocaleLowerCase('tr-TR');
       out = out.filter(t => String(t.task || '').toLocaleLowerCase('tr-TR').includes(q));
     }
-    if (colFilter.keyword.length) out = out.filter(t => colFilter.keyword.includes(t.keyword));
+    // Seçenek listesi (`kwOpts`) kırpılmış etiket değerleri saklar; ham
+    // `t.keyword` ile karşılaştırıldığında başında/sonunda boşluk taşıyan bir
+    // etiket hiç eşleşmiyor ve o etiket seçildiğinde tablo boş kalıyordu.
+    if (colFilter.keyword.length) {
+      out = out.filter(t => colFilter.keyword.includes(String(t.keyword || '').trim()));
+    }
     if (colFilter.sorumlu.length) {
       out = out.filter(t => (t.assigneeIds || []).some(id => colFilter.sorumlu.includes(String(id))));
     }

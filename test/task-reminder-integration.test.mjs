@@ -541,3 +541,103 @@ test('süreç çökmesiyle PENDING kalan aralık eşikten sonra yeniden gönderi
     assert.equal(db.taskReminderLog[0].Status, 'SENT');
   });
 });
+
+/* ── İnceleme bulguları: yetki ve gönderim sınırı ────────────────── */
+
+test('MANUEL projede kurumsal rol satırı hatırlatma yetkisi VERMEZ', async () => {
+  // İki görünüm ayrı kurumsal kaynaklardan beslenir: `MR_V_CorporateProjectAccess`
+  // HR09'dan, `MR_V_CorporateProjects` A01'den. Kodu yalnızca HR09'da bulunan bir
+  // kod, manuel proje kodu olarak kullanılabilir; kaynak türü süzgeci olmadan o
+  // koddaki rol sahibi, hiç göremediği bir projeye posta gönderebiliyordu.
+  const seed = reminderSeed({
+    projects: [{
+      ProjectId: PROJECT_ID,
+      SourceType: 'MANUAL',
+      ProjectCode: 'P4417041',
+      ProjectName: 'Elle açılmış proje',
+      LeadSicil: 900002,
+      CalendarId: CALENDAR_ID,
+      IsActive: 1
+    }],
+    corporateProjectAccess: [{ ProjectCode: 'P4417041', Sicil: 700111, RoleCode: 'PROJECT_MANAGER' }]
+  });
+
+  await withReminderStack(seed, async ({ pool }) => {
+    const { assertTaskReminderAccess } = await import('../src/server/reminders/reminderAccess.js');
+    await assert.rejects(
+      assertTaskReminderAccess(pool, { sicil: 700111, isSystemAdmin: false }, TASK_ID),
+      (error) => error.code === 'FORBIDDEN'
+    );
+  }, { sicil: 700111 });
+});
+
+test('görevi OLUŞTURAN kullanıcı hatırlatma gönderebilir', async () => {
+  // Anlık görüntü görünürlüğü oluşturucuyu kapsar; hatırlatma yükleminde eksik
+  // olduğu için kullanıcı kendi görevi için FORBIDDEN alıyordu.
+  const seed = reminderSeed();
+  seed.tasks[0].CreatedBySicil = 900002;
+
+  await withReminderStack(seed, async ({ pool }) => {
+    const { assertTaskReminderAccess } = await import('../src/server/reminders/reminderAccess.js');
+    await assertTaskReminderAccess(pool, { sicil: 900002, isSystemAdmin: false }, TASK_ID);
+  }, { sicil: 900002 });
+});
+
+test('devre dışı bırakılan projenin görevine otomatik hatırlatma gitmez', async () => {
+  await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+    const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
+    const mailer = recordingMailer();
+
+    // Proje, aday seçimi TAMAMLANDIKTAN SONRA devre dışı bırakılır. Devre dışı
+    // bırakma önce yapılsaydı aday sorgusu görevi zaten elerdi ve sınama, asıl
+    // güvenceyi — gönderim öncesi yeniden yüklemedeki `p.IsActive = 1` yüklemini
+    // — hiç çalıştırmadan geçerdi.
+    let candidates = 0;
+    db.onCandidatesSelected = (rows) => {
+      candidates = rows.length;
+      db.projects[0].IsActive = 0;
+    };
+
+    const result = await runAutomaticReminders(pool, { now: at(2026, 8, 18), send: mailer.send });
+    assert.ok(candidates > 0, 'aday seçimi görevi bulmalıdır; aksi hâlde sınama yüklemi denemez');
+    assert.equal(mailer.sent.length, 0, 'etkin olmayan projenin sorumlularına posta gitmemelidir');
+    assert.equal(result.sent, 0);
+    // Denetim kaydı NEDENİ ayırt etmelidir: görev silinmedi, projesi devre dışı
+    // bırakıldı. Tek bir `TASK_NOT_FOUND`, duran bir görevi araştıran yöneticiyi
+    // yanlış yöne sürüklüyordu.
+    assert.equal(result.results[0].reason, 'PROJECT_INACTIVE');
+    assert.equal(db.taskReminderLog.at(-1).FailureCode, 'PROJECT_INACTIVE');
+  });
+});
+
+test('devre dışı projede ELLE gönderim "bulunamadı" demez', async () => {
+  await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const mailer = recordingMailer();
+    db.projects[0].IsActive = 0;
+
+    const result = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send });
+    assert.equal(result.ok, false);
+    // Görev DURUYOR; engelleyen şey projenin durumudur. 404 anlamına gelen
+    // `TASK_NOT_FOUND`, kullanıcıya ekranındaki kaydın yok olduğunu söylerdi.
+    assert.equal(result.code, 'PROJECT_INACTIVE');
+    assert.match(result.message, /devre dışı/);
+    assert.equal(mailer.sent.length, 0);
+  });
+});
+
+test('başarısız elle gönderim beş dakikalık aralığı TUTMAZ', async () => {
+  await withReminderStack(reminderSeed(), async ({ pool }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const failing = recordingMailer({ failWith: 'SMTP_SEND_FAILED' });
+
+    const first = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: failing.send });
+    assert.equal(first.ok, false);
+
+    // Gönderilemeyen bir hatırlatma yeniden denemeyi engellememelidir.
+    const mailer = recordingMailer();
+    const retry = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send });
+    assert.equal(retry.ok, true);
+    assert.equal(mailer.sent.length, 1);
+  });
+});

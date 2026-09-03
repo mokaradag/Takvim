@@ -91,7 +91,23 @@ export function CalendarView({
               onChange={(e) => setMonth(new Date(parseInt(e.target.value), month.getMonth(), 1))}
               aria-label="Yıl"
             >
-              {Array.from({ length: 11 }, (_, i) => today_.getFullYear() - 5 + i).map(y => <option key={y} value={y}>{y}</option>)}
+              {/* Seçenek aralığı `month` değerini de KAPSAR. Sabit ±5 yıllık
+                  pencere, ok tuşlarıyla ya da denetimli bir `month` prop'uyla
+                  aşılabiliyor; hiçbir seçenek değere uymadığında tarayıcı ilk
+                  seçeneği gösteriyor ve ızgara doğru ayı çizerken açılır kutu
+                  yanlış yılı bildiriyordu. */}
+              {/* Pencere SINIRLI kalır: aradaki her yıl için seçenek üretmek,
+                  uzak ama geçerli bir `month` değerinde yüz binlerce DOM
+                  düğümü oluşturup görünümü kilitlerdi. Pencere dışındaki
+                  seçili yıl TEK bir ek seçenek olarak katılır. */}
+              {(() => {
+                const base = today_.getFullYear();
+                const years = Array.from({ length: 11 }, (_, i) => base - 5 + i);
+                const selected = month.getFullYear();
+                if (!years.includes(selected)) years.push(selected);
+                years.sort((a, b) => a - b);
+                return years.map(y => <option key={y} value={y}>{y}</option>);
+              })()}
             </select>
           </div>
           <button ref={jumpAnchorRef} className="btn sm" onClick={() => setJumpOpen(o => !o)} title="Tarihe git">

@@ -100,8 +100,16 @@ export async function synchronizeCorporateWbs(executor, actorSicil, { logger = c
     return { synchronized: false, projectCount: 0, nodeCount: 0, mergedProjectCount: 0, skippedProjectCount: 0, reason: 'NOT_CONFIGURED' };
   }
 
-  const config = getCorporateWbsDbConfig();
   try {
+    // Yapılandırma okuması TRY İÇİNDEDİR. `getCorporateWbsDbConfig()` bozuk bir
+    // ortam değeri için hata yükseltir (tanımlayıcı olmayan şema/tablo adı,
+    // sayısal olmayan bağlantı noktası ya da tanınmayan `..._ENCRYPT` değeri),
+    // `isCorporateWbsSourceConfigured()` ise yalnızca SERVER ve DATABASE
+    // değişkenlerine bakar. Çağrı `try` dışındayken tek bir yazım hatası bu
+    // fonksiyondan dışarı taşıyor, `refreshCorporateCatalog` üzerinden HER
+    // `GET /snapshot` isteğini düşürüyor ve belgelenen "kurumsal WBS olmadan
+    // yüklemeye devam et" sözleşmesini bozuyordu.
+    const config = getCorporateWbsDbConfig();
     const sourcePool = await getCorporateWbsPool();
     if (!sourcePool) {
       return { synchronized: false, projectCount: 0, nodeCount: 0, mergedProjectCount: 0, skippedProjectCount: 0, reason: 'NOT_CONFIGURED' };

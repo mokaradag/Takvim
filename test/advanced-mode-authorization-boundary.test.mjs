@@ -97,9 +97,16 @@ test('gizli eş sorumlular sınırlı oluşturucunun görev-özel hakkını enge
   assert.equal(access.scope, 'CREATOR');
   assert.equal(access.canControlSchedule, true);
   assert.equal(access.canDelete, false);
+  // GERÇEKLEŞEN tarihler oluşturucuya AÇIKTIR: görevi açan kişi çoğunlukla onu
+  // yürüten kişidir ve işin ne zaman başlayıp bittiğini yalnızca o bilir. Eski
+  // kural bu kartı kendi görevinde bile salt okunur bırakıyordu.
   const actualDateAccess = resolveTaskMutationAccess(creatorState, 'creator-task', { actualStart: '2026-09-01' });
-  assert.equal(actualDateAccess.ok, false);
-  assert.equal(actualDateAccess.code, 'TASK_CREATOR_FIELD_FORBIDDEN');
+  assert.equal(actualDateAccess.ok, true);
+  assert.equal(actualDateAccess.scope, 'CREATOR');
+  // Proje/sorumlu yapısı yine kapalıdır.
+  const structuralAccess = resolveTaskMutationAccess(creatorState, 'creator-task', { assigneeIds: ['1002'] });
+  assert.equal(structuralAccess.ok, false);
+  assert.equal(structuralAccess.code, 'TASK_CREATOR_FIELD_FORBIDDEN');
 });
 
 test('oluşturucu kaydı olmayan görevde kalıcı sorumlu tarih talebi eylemini görür', () => {

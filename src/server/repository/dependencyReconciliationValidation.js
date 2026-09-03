@@ -70,7 +70,11 @@ export async function assertTaskDependencyReconciliationCovered(executor, change
   const issue = findTaskDependencyReconciliationIssue({
     invalidatedPredecessorIds,
     incomingTaskIdsByPredecessor,
-    taskUpsertIds: taskUpserts.map((task) => task.id),
+    // Kimlikler KANONİK gönderilir. `loadIncomingTaskIds` kanonik kimlik döner
+    // ve karşılaştırma düz `String()` iledir: ham `task.id` (örneğin büyük
+    // harfli bir GUID) hiç eşleşmiyor ve bağımlılığı gerçekten uzlaştıran bir
+    // değişiklik kümesi reddediliyordu.
+    taskUpsertIds: taskUpserts.map((task) => id(task.id)),
     taskDeleteIds
   });
   if (!issue) return;

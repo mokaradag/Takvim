@@ -9,13 +9,41 @@ function serializeScheduleError(error) {
   };
 }
 
+/**
+ * Proje kimliğinin KARŞILAŞTIRMA anahtarı.
+ *
+ * `Map` anahtarları katı eşitlikle çözülür: `project.id` sayı, `task.projectId`
+ * metin olduğunda (ya da tersi) arama ıskalıyor, projenin BÜTÜN görevleri
+ * `UNKNOWN_PROJECT` uyarısına düşüyor ve proje zamanlaması `empty` kalıyordu —
+ * arayüzde ne tarih ne kritik yol görünüyordu. Durum katmanının geri kalanı
+ * karışık kimlik türlerini gerçek bir durum sayar ve `String()` ile
+ * normalleştirir (bkz. projectWritePolicy.js, appState.js).
+ */
+function projectKey(value) {
+  return value == null || value === '' ? null : String(value);
+}
+
+/**
+ * Görev kimliğinin KARŞILAŞTIRMA anahtarı.
+ *
+ * `projectKey` ile aynı gerekçe, bu kez görevler için: `task.id` sayı,
+ * `dependency.predecessorId` metin olduğunda (ya da tersi) `tasksById` araması
+ * ıskalıyordu. Iskalanan öncül SESSİZCE atlandığı için proje dışına uzanan
+ * bağımlılık `CROSS_PROJECT_DEPENDENCY` denetimine hiç takılmıyor, ardından
+ * `calculateCpm` çözümlenmemiş öncüllü bir ağı zamanlıyordu.
+ */
+function taskKey(value) {
+  return value == null || value === '' ? null : String(value);
+}
+
 function findCrossProjectDependencies(project, projectTasks, tasksById) {
   const unsupported = [];
+  const ownProjectKey = projectKey(project.id);
   for (const task of projectTasks) {
     for (const rawDependency of task.deps || []) {
       const dependency = normalizeDependency(rawDependency);
-      const predecessor = tasksById.get(dependency.predecessorId);
-      if (!predecessor || predecessor.projectId === project.id) continue;
+      const predecessor = tasksById.get(taskKey(dependency.predecessorId));
+      if (!predecessor || projectKey(predecessor.projectId) === ownProjectKey) continue;
       unsupported.push({
         taskId: task.id,
         predecessorId: dependency.predecessorId,
@@ -64,13 +92,14 @@ function isPartialProject(project) {
 }
 
 export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = [] } = {}) {
-  const projectsById = new Map(projects.map((project) => [project.id, project]));
-  const tasksById = new Map(tasks.filter((task) => task?.id).map((task) => [task.id, task]));
-  const tasksByProjectId = new Map(projects.map((project) => [project.id, []]));
+  const projectsById = new Map(projects.map((project) => [projectKey(project.id), project]));
+  const tasksById = new Map(tasks.filter((task) => task?.id).map((task) => [taskKey(task.id), task]));
+  const tasksByProjectId = new Map(projects.map((project) => [projectKey(project.id), []]));
   const warnings = [];
 
   for (const task of tasks) {
-    if (!task?.projectId || !projectsById.has(task.projectId)) {
+    const taskProjectKey = projectKey(task?.projectId);
+    if (!taskProjectKey || !projectsById.has(taskProjectKey)) {
       warnings.push({
         scope: 'task',
         taskId: task?.id || null,
@@ -81,7 +110,7 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
       });
       continue;
     }
-    tasksByProjectId.get(task.projectId).push(task);
+    tasksByProjectId.get(taskProjectKey).push(task);
   }
 
   const projectSchedules = {};
@@ -89,7 +118,7 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
   const allCriticalTaskIds = [];
 
   for (const project of projects) {
-    const projectTasks = tasksByProjectId.get(project.id) || [];
+    const projectTasks = tasksByProjectId.get(projectKey(project.id)) || [];
     if (isPartialProject(project)) {
       const suppressed = suppressedProjectSchedule(project.id);
       projectSchedules[project.id] = suppressed;

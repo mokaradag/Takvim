@@ -75,9 +75,15 @@ export function computePopoverPlacement(triggerRect, viewport = {}) {
   // ve dipnot satırları bu payı tüketir ve seçenekler `overflow: hidden` altında
   // erişilemez kalırdı. O durumda panelin TAMAMI kaydırılır.
   const fitsChrome = panelMaxHeight >= PANEL_CHROME_HEIGHT + MIN_LIST_HEIGHT;
+  // Panel kaydırma yolunda liste KISITLANMAZ. `panelMaxHeight - PANEL_CHROME_HEIGHT`
+  // ifadesi, boşluk çerçeve yüksekliğinin (104 piksel) altına düştüğünde sıfır
+  // oluyor; tüketici bu değeri doğrudan listenin `maxHeight` özelliğine yazdığı
+  // için liste yüksekliği sıfırlanıyor ve panel kaydırılsa bile yalnızca arama
+  // satırıyla dipnot görünüyordu — bu dalın önlemeyi amaçladığı hatanın ta
+  // kendisi. `null`, listenin doğal yüksekliğini korur; panelin kendisi kayar.
   const listMaxHeight = fitsChrome
     ? clamp(panelMaxHeight - PANEL_CHROME_HEIGHT, MIN_LIST_HEIGHT, MAX_LIST_HEIGHT)
-    : Math.max(0, panelMaxHeight - PANEL_CHROME_HEIGHT);
+    : null;
 
   // Dikey konum görünüm alanına hapsedilir: tetikleyici yukarı kaydığında
   // `bottom + gap` negatif olur ve panel ekranın üstünde kaybolurdu.
@@ -92,7 +98,9 @@ export function computePopoverPlacement(triggerRect, viewport = {}) {
     top: openUp ? null : Math.round(top),
     bottom: openUp ? Math.round(bottom) : null,
     panelMaxHeight: Math.round(panelMaxHeight),
-    listMaxHeight: Math.round(listMaxHeight),
+    // `null` KORUNUR: `Math.round(null)` sıfır üretip sınırın kaldırıldığı
+    // durumu yeniden "yükseklik sıfır" hâline getiriyordu.
+    listMaxHeight: listMaxHeight == null ? null : Math.round(listMaxHeight),
     // Panel çerçevesi bile sığmıyorsa panelin kendisi kaydırılmalıdır.
     scrollPanel: !fitsChrome
   };

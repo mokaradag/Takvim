@@ -46,8 +46,13 @@ export function RichTextEditor({ value, onChange, ariaLabel = 'E-posta gövdesi'
     const element = editorRef.current;
     if (!element) return;
     if (value === lastValueRef.current) return;
-    lastValueRef.current = value || '';
-    element.innerHTML = value || '';
+    // Gelen değer `innerHTML` ile yazılmadan ÖNCE temizlenir. Kaydetme ve
+    // okuma yolları da temizler, ama bu atama HTML'i doğrudan belgeye koyan
+    // noktadır: temizleme burada da yapılmazsa, zincirin herhangi bir ucunda
+    // açılacak bir boşluk doğrudan çalıştırılabilir içeriğe dönüşürdü.
+    const safeValue = sanitizeReminderHtml(value || '');
+    lastValueRef.current = safeValue;
+    element.innerHTML = safeValue;
   }, [value]);
 
   const emit = () => {

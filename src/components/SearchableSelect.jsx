@@ -198,11 +198,18 @@ export function SearchableSelect({
     >
       <label className="searchable-select-search">
         <Icons.Search size={14} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
+        {/* `onKeyDown` YALNIZCA panel kapsayıcısında durur. Arama kutusu React
+            ağacında panelin torunudur ve React olayları portal sınırını aşarak
+            ağaç boyunca kabarır; işleyici iki yerde birden bağlıyken her tuş
+            vuruşu onu iki kez çalıştırıyordu: ArrowDown/ArrowUp `activeIndex`
+            değerini ikişer ikişer oynatıyor (seçeneklerin yarısına klavyeyle
+            hiç ulaşılamıyor), Enter ise `onChange` olayını aynı seçenek için
+            iki kez tetikliyordu. Panel açılınca odak zaten bu kutuya geçtiği
+            için bu, kenar durum değil OLAĞAN klavye yoluydu. */}
         <input
           ref={inputRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={onKeyDown}
           placeholder={searchPlaceholder}
           aria-label={searchPlaceholder}
         />
@@ -219,7 +226,12 @@ export function SearchableSelect({
         </button>
       )}
 
-      <div ref={listRef} className="searchable-select-list" style={{ maxHeight: placement.listMaxHeight }}>
+      <div
+        ref={listRef}
+        className="searchable-select-list"
+        // `listMaxHeight` sayı değilse (panel kaydırma yolu) sınır uygulanmaz.
+        style={Number.isFinite(placement.listMaxHeight) ? { maxHeight: placement.listMaxHeight } : undefined}
+      >
         {visible.map((option, index) => {
           const selectedOption = String(option.value) === String(value);
           return (

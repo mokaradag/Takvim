@@ -44,6 +44,9 @@ export async function POST(_request, context) {
     });
     if (!result.ok) {
       // 404 bulunamayan görev, 429 en küçük aralık, 422 gönderim engeli.
+      // `PROJECT_INACTIVE` bilinçli olarak 422'dir: görev DURUYOR, gönderimi
+      // engelleyen şey projenin durumudur; 404 dönmek kullanıcıya görmekte
+      // olduğu kaydın yok olduğunu söylerdi.
       const status = result.code === 'TASK_NOT_FOUND'
         ? 404
         : (result.code === 'MANUAL_REMINDER_RATE_LIMITED' ? 429 : 422);

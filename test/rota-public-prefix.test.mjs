@@ -26,13 +26,31 @@ test('unsafe public paths are rejected', () => {
   assert.throws(() => publicRotaPath('https://example.invalid/api', '/rota'));
 });
 
-test('Next config uses asset prefix plus prefix-stripping compatibility rewrites', () => {
-  const source = read('next.config.mjs');
-  assert.match(source, /assetPrefix:\s*publicBasePath/);
-  assert.match(source, /source:\s*`\$\{publicBasePath\}\/\:path\*`/);
-  assert.match(source, /destination:\s*'\/\:path\*'/);
-  assert.match(source, /destination:\s*`\$\{publicBasePath\}\/`/);
-  assert.doesNotMatch(source, /basePath\s*:/);
+test('Next config uses asset prefix plus prefix-stripping compatibility rewrites', async () => {
+  // Yapılandırma ÇALIŞTIRILIR: kaynak metni aramak, `rewrites()` bozulduğunda
+  // ya da yönlendirme geri geldiğinde testi yeşil bırakabiliyordu.
+  process.env.NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH = '/rota';
+  const config = (await import(`../next.config.mjs?case=prefix-${Date.now()}`)).default;
+
+  assert.equal(config.assetPrefix, '/rota');
+  // `basePath` KULLANILMAZ: nginx öneki soyduğu için uygulama kökte çalışır.
+  assert.equal(config.basePath, undefined);
+  // YÖNLENDİRME yoktur; `/rota` -> `/rota/` yönlendirmesi `trailingSlash: false`
+  // normalleştirmesiyle sonsuz döngüye giriyordu.
+  assert.equal(typeof config.redirects, 'undefined');
+
+  const rewrites = await config.rewrites();
+  const rules = Array.isArray(rewrites) ? rewrites : (rewrites.beforeFiles || []);
+  // Önekli yol köke yeniden yazılır.
+  assert.ok(
+    rules.some((rule) => rule.source === '/rota/:path*' && rule.destination === '/:path*'),
+    'önekli yollar köke yeniden yazılmalıdır'
+  );
+  // Çıplak önek de yeniden yazılır (yönlendirilmez).
+  assert.ok(
+    rules.some((rule) => rule.source === '/rota' && rule.destination === '/'),
+    'çıplak önek köke yeniden YAZILMALIDIR'
+  );
 });
 
 test('browser-facing API, login and logout paths use the public prefix helper', () => {

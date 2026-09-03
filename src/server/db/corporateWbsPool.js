@@ -12,27 +12,50 @@ let poolPromise;
 export async function getCorporateWbsPool() {
   if (!isCorporateWbsSourceConfigured()) return null;
 
+  // Bkz. `getSqlPool`: söz, sürücü beklenmeden ÖNCE atanır ki soğuk açılışta
+  // eşzamanlı çağrılar aynı havuzu paylaşsın. `readProjectedSnapshot`
+  // eşitlemeyi kendi işleminin dışında tetiklediği için art arda gelen anlık
+  // görüntü istekleri bu dala gerçekten paralel giriyordu.
   if (!poolPromise) {
-    const config = getCorporateWbsDbConfig();
-    const driver = await getSqlDriver();
-    const { schema, table, projectBatchSize, ...connectionConfig } = config;
-    const pool = new driver.ConnectionPool({
-      ...connectionConfig,
-      pool: { ...config.pool },
-      options: { ...config.options }
-    });
+    // Bkz. `getSqlPool`: kurulumun TAMAMI (yapılandırma okuması, sürücü
+    // yüklemesi, kurucu) tek bir hata yoluyla korunur ve reddedilen bir söz
+    // önbellekte bırakılmaz — aksi hâlde bozuk tek bir ortam değeri, düzeltilse
+    // bile süreç yeniden başlatılana kadar bu veri yolunu kapatırdı.
+    const attempt = (async () => {
+      let pool = null;
+      try {
+        const config = getCorporateWbsDbConfig();
+        const driver = await getSqlDriver();
+        const { schema, table, projectBatchSize, ...connectionConfig } = config;
+        pool = new driver.ConnectionPool({
+          ...connectionConfig,
+          pool: { ...config.pool },
+          options: { ...config.options }
+        });
 
-    pool.on('error', () => {
-      poolPromise = undefined;
-    });
+        // Önbellekten düşen havuz KAPATILIR; aksi hâlde kurumsal kaynakta yinelenen
+        // geçici bir hata her seferinde dört bağlantılık bir havuz sızdırırdı.
+        pool.on('error', () => {
+          if (poolPromise === attempt) poolPromise = undefined;
+          pool.close().catch(() => {});
+        });
 
-    poolPromise = pool.connect().catch((cause) => {
-      poolPromise = undefined;
-      throw new ServerPersistenceError(
-        'DATABASE_UNAVAILABLE',
-        'Kurumsal WBS kaynağı (CN43N) veritabanına bağlanılamadı.',
-        { cause }
-      );
+        return await pool.connect();
+      } catch (cause) {
+        pool?.close?.().catch(() => {});
+        if (cause instanceof ServerPersistenceError) throw cause;
+        throw new ServerPersistenceError(
+          'DATABASE_UNAVAILABLE',
+          'Kurumsal WBS kaynağı (CN43N) veritabanına bağlanılamadı.',
+          { cause }
+        );
+      }
+    })();
+    poolPromise = attempt;
+    // Temizlik ATAMADAN SONRA bağlanır: eşzamanlı bir hata, `poolPromise` daha
+    // atanmadan çalışan bir `catch` bloğuyla temizlenemezdi.
+    attempt.catch(() => {
+      if (poolPromise === attempt) poolPromise = undefined;
     });
   }
   return poolPromise;

@@ -20,6 +20,10 @@ const MAIL_ERROR_MESSAGES = Object.freeze({
   SMTP_NO_RECIPIENTS: 'Gönderilecek geçerli bir alıcı adresi bulunamadı.',
   SMTP_INVALID_RECIPIENT: 'Alıcı adresi geçerli değil.',
   SMTP_AUTH_UNSUPPORTED: 'E-posta sunucusu desteklenen bir kimlik doğrulama yöntemi bildirmedi.',
+  // `smtpClient.authenticate()` bu kodu yükseltiyor ama karşılığı burada yoktu:
+  // `mailErrorMessage` ham hata metnine düşüyor ve kullanıcıya sunucu
+  // yapılandırma değişkeninin adını (`SMTP_ALLOW_INSECURE_AUTH`) gösteriyordu.
+  SMTP_INSECURE_AUTH: 'Şifrelenmemiş e-posta bağlantısında kimlik doğrulama yapılamaz.',
   SMTP_SEND_FAILED: 'E-posta gönderilemedi.'
 });
 

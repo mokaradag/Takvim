@@ -99,7 +99,19 @@ export function TeamView() {
   const todayKey = useTodayKey();
   const today_ = useMemo(() => parseDate(todayKey), [todayKey]);
 
-  const peopleByName = useMemo(() => new Map(people.map((person) => [person.name, person.id])), [people]);
+  // Ad başına TÜM kimlikler tutulur. `Map` ile tek kimlik saklandığında,
+  // kurumsal rehberde aynı adı taşıyan iki kişiden sonraki öncekini eziyor;
+  // aşağıdaki ad yedeği o adı içeren bütün görevleri adaşlardan yalnızca birine
+  // bağlıyordu. Öteki adaş sıfır toplam, sıfır geciken ve boş "Yakın görevler"
+  // ile görünüyordu.
+  const peopleIdsByName = useMemo(() => {
+    const map = new Map();
+    for (const person of people) {
+      if (!map.has(person.name)) map.set(person.name, []);
+      map.get(person.name).push(person.id);
+    }
+    return map;
+  }, [people]);
   const tasksByPersonId = useMemo(() => {
     const map = new Map();
     for (const task of tasks) {
@@ -111,20 +123,26 @@ export function TeamView() {
           // eşleşmiyor ve yalnızca `sorumlu` adı taşıyan görevler kişinin
           // toplamlarından, geciken sayısından ve yaklaşan listesinden
           // tümüyle düşüyordu.
-          const personId = peopleByName.get(name);
-          if (personId != null) addTaskToPerson(map, String(personId), task);
+          for (const personId of peopleIdsByName.get(name) || []) {
+            if (personId != null) addTaskToPerson(map, String(personId), task);
+          }
         }
       }
     }
     return map;
-  }, [tasks, peopleByName]);
+  }, [tasks, peopleIdsByName]);
 
   const stats = useMemo(() => people.map((person) => {
     const personTasks = upcomingTaskOrder(tasksByPersonId.get(String(person.id)) || []);
     const done = personTasks.filter((task) => task.status === 'done').length;
     const active = personTasks.filter((task) => task.status === 'in_progress').length;
     const late = personTasks.filter((task) => task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, today_) < 0).length;
-    const nearest = personTasks[0] || null;
+    // "Yakın görevler" sütunu AÇIK görevleri gösterir. `PersonDetailDialog`
+    // tamamlananları zaten eliyor; satır listesi, "+N görev daha" sayacı ve
+    // sütun metin süzgeci onları saydığında iki görünüm birbirini tutmuyor,
+    // bütün görevleri bitmiş bir kişi yine de "yakın görev" gösteriyordu.
+    const openTasks = personTasks.filter((task) => task.status !== 'done');
+    const nearest = openTasks[0] || null;
     return {
       person,
       total: personTasks.length,
@@ -132,9 +150,10 @@ export function TeamView() {
       active,
       late,
       tasks: personTasks,
+      openTasks,
       // Sıralama kararlıdır: önce en yakın ilgili tarih, sonra görev adı.
       upcomingSortValue: nearest ? `${nearest.targetFinish || nearest.plannedFinish || '9999-12-31'}|${nearest.task || ''}` : '',
-      upcomingText: personTasks.map((task) => task.task).filter(Boolean).join(' ')
+      upcomingText: openTasks.map((task) => task.task).filter(Boolean).join(' ')
     };
   }), [people, tasksByPersonId, today_]);
 
@@ -401,7 +420,7 @@ export function TeamView() {
                     <td className="tabular" style={member.late > 0 ? { color: 'var(--status-overdue)', fontWeight: 700 } : null}>{member.late}</td>
                     <td>
                       <div className="col" style={{ gap: 3 }}>
-                        {member.tasks.slice(0, 2).map((task) => (
+                        {member.openTasks.slice(0, 2).map((task) => (
                           <button
                             type="button"
                             key={task.id}
@@ -412,8 +431,10 @@ export function TeamView() {
                             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>{task.task}</span>
                           </button>
                         ))}
-                        {member.tasks.length > 2 && <small className="muted">+{member.tasks.length - 2} görev daha</small>}
-                        {!member.tasks.length && <small className="muted">Atanmış görev yok</small>}
+                        {member.openTasks.length > 2 && <small className="muted">+{member.openTasks.length - 2} görev daha</small>}
+                        {/* Liste AÇIK görevleri gösterir: tamamlanmış atamaları
+                            olan bir personel için "Atanmış görev yok" yanlıştı. */}
+                        {!member.openTasks.length && <small className="muted">Atanmış açık görev yok</small>}
                       </div>
                     </td>
                   </tr>

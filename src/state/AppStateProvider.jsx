@@ -68,7 +68,16 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [workspaceWriteReady, setWorkspaceWriteReady] = useState(false);
 
-  stateRef.current = state;
+  // `stateRef` RENDER SIRASINDA yazılmaz.
+  //
+  // `applyStateAction` her eylemi indirgeyiciden geçirip `stateRef` değerini
+  // iyimser biçimde ilerletir; kalıcılık katmanı da değişiklik kümesini bu
+  // referanstan türetir. Render içinde `stateRef.current = state` yapmak,
+  // React'in yarıda kesip attığı ya da yeniden oynattığı bir render'da
+  // referansı DAHA ESKİ bir indirgeyici durumuna geri alabiliyordu; sonraki
+  // `createPersistenceChangeSet` çağrısı bu bayat durumu "önce" olarak okuyup
+  // bekleyen değişiklikleri atlayabiliyor ya da yanlış anlık görüntüden
+  // türetebiliyordu (React kuralı: render saf kalmalıdır).
 
   // Renk geçersiz kılmaları modül düzeyindeki bir eşlemeye yazılır: RENDER
   // içinde yapılan bu yazma, işlenmeyen bir render'ın (StrictMode çift render,
@@ -104,7 +113,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     const refreshMode = options.refreshMode || 'manual';
     return loadSingleFlightRef.current.run(
       () => runDataReload({ ...options, refreshMode }),
-      dataReloadSingleFlightOptions(refreshMode)
+      dataReloadSingleFlightOptions(refreshMode, options)
     );
   }, [runDataReload]);
 

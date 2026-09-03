@@ -2,12 +2,21 @@ import { loadApplicationData } from './persistence.js';
 import { resolvePersistenceDataRefreshSafety } from './dataRefreshSafety.js';
 import { shouldSurfaceAutomaticRefreshFailure } from './automaticDataRefresh.js';
 
-/** Yenileme türünü ortak tek-uçuş ilkesine dönüştürür. */
-export function dataReloadSingleFlightOptions(refreshMode = 'manual') {
+/**
+ * Yenileme türünü ortak tek-uçuş ilkesine dönüştürür.
+ *
+ * `requestKey`, isteğin SEÇENEKLERİNİ de taşır: kaydedilmemiş değişiklikleri
+ * atma ya da koruma kararı, süren bir yenilemeyle birleştirilip yutulmamalıdır.
+ */
+export function dataReloadSingleFlightOptions(refreshMode = 'manual', {
+  discardFailedTaskUpdates = false,
+  preserveFailedTaskUpdates = false
+} = {}) {
   return {
     skipIfBusy: refreshMode === 'automatic',
     operationKind: refreshMode,
-    queueIfActiveKind: refreshMode === 'automatic' ? null : 'automatic'
+    queueIfActiveKind: refreshMode === 'automatic' ? null : 'automatic',
+    requestKey: `${refreshMode}:${discardFailedTaskUpdates ? 1 : 0}:${preserveFailedTaskUpdates ? 1 : 0}`
   };
 }
 

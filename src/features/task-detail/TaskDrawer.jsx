@@ -28,7 +28,7 @@ import {
   summarizeRecurrencePlan
 } from '../../scheduling/recurrence';
 import { getTaskCalendarWarnings } from '../../scheduling/calendarWarnings';
-import { resolveTaskCalendar } from '../../scheduling/calendars';
+import { MAX_WORKING_DAY_SPAN, resolveTaskCalendar } from '../../scheduling/calendars';
 import { COLOR_MAP, projectColorVar } from '../../lib/colors';
 import { Avatar, StatusIcon, statusColorVar } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
@@ -102,6 +102,7 @@ export function TaskDrawer({
   canChooseWbs = true,
   canManageAssignees = true,
   canControlSchedule = true,
+  canEditTargetFinish = true,
   canProposeSchedule = false,
   scheduleRequests = [],
   onProposeSchedule = null,
@@ -111,6 +112,24 @@ export function TaskDrawer({
   const people = useAllPeople();
   const projects = useAllProjects();
   const calendars = useCalendars();
+  // Görev künyesi: "kim oluşturdu, ne zaman". Sicil rehberde bulunamazsa (kapsam
+  // dışı bir oluşturucu) sicil numarası gösterilmez, yalnızca tarih kalır.
+  const taskByline = useMemo(() => {
+    const sicil = task?.createdBySicil == null ? null : String(task.createdBySicil);
+    const createdAtIso = task?.createdAt || null;
+    if (!sicil && !createdAtIso) return null;
+    const person = sicil ? people.find((item) => String(item.id) === sicil) : null;
+    const createdDate = createdAtIso ? new Date(createdAtIso) : null;
+    const valid = createdDate && Number.isFinite(createdDate.getTime());
+    return {
+      sicil,
+      name: person?.name || (sicil ? 'Bilinmeyen kullanıcı' : '—'),
+      employeeNo: person?.employeeNo || null,
+      createdAtIso,
+      createdAt: valid ? fmt(createdDate, 'dd MMM yyyy') : null,
+      createdAtLong: valid ? createdDate.toLocaleString('tr-TR') : null
+    };
+  }, [task?.createdBySicil, task?.createdAt, people]);
   const allWbs = useAllWbs();
   const assignmentScopeProjects = useAssignmentScopeProjects();
   const assignmentScopeSicils = useAssignmentScopeSicils();
@@ -368,6 +387,22 @@ export function TaskDrawer({
                 <Icons.Alert size={12} /> Görev başlığı boş bırakılamaz; başlık girilene kadar değişiklikler kaydedilmez.
               </span>
             )}
+            {taskByline && (
+              <div className="task-byline">
+                <Avatar name={taskByline.name} personId={taskByline.sicil} employeeNo={taskByline.employeeNo} size="sm" />
+                <span className="task-byline-text">
+                  <span className="task-byline-name">{taskByline.name}</span>
+                  {taskByline.createdAt && (
+                    <>
+                      <span className="task-byline-sep">·</span>
+                      <time dateTime={taskByline.createdAtIso} title={taskByline.createdAtLong}>
+                        {taskByline.createdAt}
+                      </time>
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
           </div>
           <button className="icon-btn" onClick={closeWithDraft} title="Kapat (Esc)"><Icons.Close size={16} /></button>
         </div>
@@ -537,7 +572,10 @@ export function TaskDrawer({
               <div className="task-date-grid">
                 <DateField label="Planlanan başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} maxDate={local.plannedFinish} disabled={!canControlSchedule} />
                 <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} minDate={local.plannedStart} disabled={!canControlSchedule} />
-                <DateField label="Hedef bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} disabled={!canControlSchedule} />
+                {/* HEDEF bitiş ayrı yetkiyle korunur: sorumlu kendi plan
+                    tarihlerini yönetir ama taahhüt edilen hedefi yalnızca görev
+                    oluşturucusu ya da tam proje yetkisi değiştirebilir. */}
+                <DateField label="Hedef bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} disabled={!canEditTargetFinish} />
               </div>
               <div className="muted" style={{ fontSize: 11.5 }}>
                 Planlanan süre: <span className="tabular">{local.plannedDurationDays ?? '—'}</span> çalışma günü
@@ -545,6 +583,11 @@ export function TaskDrawer({
               {!canControlSchedule && (
                 <div className="muted" style={{ fontSize: 11.5 }}>
                   Bu plan görev oluşturucusu tarafından yönetilir. Yeni bir tarih önerebilirsiniz.
+                </div>
+              )}
+              {canControlSchedule && !canEditTargetFinish && (
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  Hedef bitiş tarihi görev oluşturucusu tarafından belirlenir. Değişiklik için tarih talebi gönderebilirsiniz.
                 </div>
               )}
               {calendarWarnings.length > 0 && (
@@ -1258,6 +1301,10 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
     const rt = REL_TYPES[type];
     const lagValue = lagValueOf(relation);
     const lagUnit = lagUnitOf(relation);
+    // Birim çevrimi de sınıra dahildir: "ay" birimi bir değeri yirmi iş gününe
+    // çevirir, bu yüzden alanın üst sınırı birime göre daralır.
+    const lagUnitWorkingDays = lagUnit === 'month' ? 20 : (lagUnit === 'week' ? 5 : 1);
+    const lagInputBound = Math.floor(MAX_WORKING_DAY_SPAN / lagUnitWorkingDays);
     return (
       <>
         <div className="rel-row">
@@ -1281,9 +1328,15 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
           </label>
           <label className="rel-type-field">
             <span className="rel-type-field-label">Lead / Lag</span>
+            {/* Sınır, zamanlama motorunun temsil edebildiği ufuktur: sınırsız
+                bir alan, "200 ay" gibi sıradan görünen bir değerle motorun
+                aralığını aşıyor ve gecikme sessizce SIFIRA düşüyordu. Aynı
+                sınır sunucu tarafında da uygulanır. */}
             <input
               type="number"
               step="1"
+              min={-lagInputBound}
+              max={lagInputBound}
               className="input"
               value={lagValue}
               onChange={(e) => onPatch({ lagValue: e.target.value === '' ? 0 : Number(e.target.value) })}

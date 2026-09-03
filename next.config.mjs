@@ -11,16 +11,21 @@ const nextConfig = {
   // forwarding. Browser assets must therefore carry the public prefix, while
   // Next.js continues to serve internal routes from /.
   assetPrefix: publicBasePath || undefined,
-  async redirects() {
-    return publicBasePath
-      ? [{ source: publicBasePath, destination: `${publicBasePath}/`, permanent: false }]
-      : [];
-  },
   async rewrites() {
     // Keeps direct port-8008 testing possible even when a prefixed production
     // build is running without Nginx in front of it.
+    //
+    // The bare prefix is REWRITTEN, not redirected. A custom redirect from
+    // `/rota` to `/rota/` loops: with `trailingSlash` at its default `false`,
+    // Next.js normalizes `/rota/` straight back to `/rota` before custom
+    // redirects run, so the two rules bounce the request between each other
+    // indefinitely. A rewrite resolves the bare prefix in place, with no
+    // redirect for the normalizer to undo.
     return publicBasePath
-      ? [{ source: `${publicBasePath}/:path*`, destination: '/:path*' }]
+      ? [
+        { source: publicBasePath, destination: '/' },
+        { source: `${publicBasePath}/:path*`, destination: '/:path*' }
+      ]
       : [];
   },
   experimental: {

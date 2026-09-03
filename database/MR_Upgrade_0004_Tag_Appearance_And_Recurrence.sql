@@ -87,9 +87,49 @@ BEGIN TRY
         THROW 51002, @conflictMessage, 1;
     END;
 
+    -- Yineleme sablonu AYNI projede olmalidir (bkz. MR_Create_Durable_Persistence.sql).
+    -- Yalnizca TaskId'ye bakan eski yabanci anahtar varsa birakilir ve yerine
+    -- bilesik anahtar konur; once cakisan satirlar RAPORLANIR ki kisitlama
+    -- eklenirken cikan hata anlasilmaz olmasin.
+    IF EXISTS (
+        SELECT 1
+        FROM dbo.MR_Tasks child
+        JOIN dbo.MR_Tasks parent ON parent.TaskId = child.RecurrenceParentTaskId
+        WHERE child.RecurrenceParentTaskId IS NOT NULL
+          AND parent.ProjectId <> child.ProjectId
+    )
+    BEGIN
+        DECLARE @crossProject nvarchar(2000) = (
+            SELECT STRING_AGG(CONVERT(nvarchar(60), child.TaskId), N', ')
+            FROM (
+                SELECT TOP (25) child.TaskId
+                FROM dbo.MR_Tasks child
+                JOIN dbo.MR_Tasks parent ON parent.TaskId = child.RecurrenceParentTaskId
+                WHERE child.RecurrenceParentTaskId IS NOT NULL
+                  AND parent.ProjectId <> child.ProjectId
+                ORDER BY child.TaskId
+            ) child
+        );
+        DECLARE @crossProjectMessage nvarchar(2048) =
+            N'Cross-project recurrence parents block FK_MR_Tasks_RecurrenceParent: '
+            + ISNULL(@crossProject, N'(unknown)');
+        THROW 51003, @crossProjectMessage, 1;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys fk
+        WHERE fk.name = N'FK_MR_Tasks_RecurrenceParent'
+          AND (SELECT COUNT(*) FROM sys.foreign_key_columns c WHERE c.constraint_object_id = fk.object_id) = 1
+    )
+        ALTER TABLE dbo.MR_Tasks DROP CONSTRAINT FK_MR_Tasks_RecurrenceParent;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UX_MR_Tasks_Id_Project')
+        ALTER TABLE dbo.MR_Tasks ADD CONSTRAINT UX_MR_Tasks_Id_Project UNIQUE (TaskId, ProjectId);
+
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_MR_Tasks_RecurrenceParent')
         ALTER TABLE dbo.MR_Tasks ADD CONSTRAINT FK_MR_Tasks_RecurrenceParent
-            FOREIGN KEY (RecurrenceParentTaskId) REFERENCES dbo.MR_Tasks(TaskId);
+            FOREIGN KEY (RecurrenceParentTaskId, ProjectId) REFERENCES dbo.MR_Tasks(TaskId, ProjectId);
 
     IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_MR_Tasks_Recurrence')
         ALTER TABLE dbo.MR_Tasks ADD CONSTRAINT CK_MR_Tasks_Recurrence

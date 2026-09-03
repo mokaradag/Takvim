@@ -50,7 +50,21 @@ export function PeopleMetricTable({
   barLabel = 'Dağılım',
   emptyText = 'Gösterilecek kayıt yok.'
 }) {
-  const template = { '--pm-metric-cols': `repeat(${columns.length}, minmax(56px, auto))` };
+  // `repeat()` en az 1 tam sayı ister. Ölçüt sütunu olmayan bir çağrıda
+  // `repeat(0, ...)` üretiliyor, bütün `grid-template-columns` bildirimi
+  // geçersiz sayılıyor ve satırlar otomatik yerleşime düşerek kişi ile dağılım
+  // hücrelerinin sütun genişliklerini kaybediyordu.
+  const template = {
+    // Sütun YOKKEN değişken BOŞ bırakılır (tek boşluk, CSS'te geçerli bir boş
+    // özel değer). `none` yazılsaydı `.pm-row` bildirimi
+    // `minmax(0,1fr) minmax(64px,1.1fr) none` hâline gelir ve bu geçersiz
+    // `grid-template-columns` değeri satırı otomatik yerleşime düşürürdü —
+    // düzeltilmek istenen sorunun aynısı. Boş değer `var()` yerine hiçbir şey
+    // koyar, geriye iki geçerli iz kalır.
+    '--pm-metric-cols': columns.length
+      ? `repeat(${columns.length}, minmax(56px, auto))`
+      : ' '
+  };
 
   if (!rows.length) return <div className="empty">{emptyText}</div>;
 

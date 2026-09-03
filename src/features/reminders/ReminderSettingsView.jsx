@@ -46,6 +46,18 @@ const PREVIEW_VALUES = Object.freeze(Object.fromEntries(
  * değiştirebiliyordu. Grup, `aria-labelledby` ile adlandırılır; denetimlerin
  * kendi `aria-label` değerleri korunur.
  */
+/**
+ * Hatırlatma sayısını kabul edilen aralığa (1–365) çeker.
+ *
+ * Alan bırakıldığında uygulanır; yazarken ham metin korunur ki son basamağı
+ * silmek engellenmesin.
+ */
+function clampReminderCount(value) {
+  const next = Number(String(value ?? '').trim());
+  if (!Number.isFinite(next)) return 1;
+  return Math.min(365, Math.max(1, Math.trunc(next)));
+}
+
 function Field({ label, hint, children }) {
   const labelId = useId();
   return (
@@ -125,7 +137,14 @@ export function ReminderSettingsView() {
 
   const save = async () => {
     setBusy(true);
-    const response = await saveReminderSettingsRequest(form);
+    // Sayısal alanlar yazarken ham metin taşıyabilir (bkz. clampReminderCount);
+    // gönderim öncesinde kabul edilen aralığa çekilir.
+    const payload = {
+      ...form,
+      windowValue: clampReminderCount(form.windowValue),
+      frequencyValue: clampReminderCount(form.frequencyValue)
+    };
+    const response = await saveReminderSettingsRequest(payload);
     setBusy(false);
     if (!response.ok) {
       setMessage({ type: 'error', text: response.message });
@@ -266,11 +285,12 @@ export function ReminderSettingsView() {
                     max={365}
                     value={form.windowValue}
                     aria-label="Hatırlatma penceresi değeri"
-                    onChange={(event) => {
-                      const next = Number(event.target.value);
-                      if (!Number.isInteger(next) || next < 1) return;
-                      setField('windowValue', Math.min(next, 365));
-                    }}
+                    // Yazarken BOŞ değer korunur. `Number('')` sıfır ürettiği
+                    // için son basamağı silmek reddediliyor, alan eski değerine
+                    // geri sıçrıyor ve sayıyı düzenlemek imkânsız hâle
+                    // geliyordu. Sınırlama alan bırakıldığında uygulanır.
+                    onChange={(event) => setField('windowValue', event.target.value)}
+                    onBlur={(event) => setField('windowValue', clampReminderCount(event.target.value))}
                     style={{ width: 88 }}
                   />
                   <select
@@ -295,11 +315,10 @@ export function ReminderSettingsView() {
                     max={365}
                     value={form.frequencyValue}
                     aria-label="Yineleme sıklığı değeri"
-                    onChange={(event) => {
-                      const next = Number(event.target.value);
-                      if (!Number.isInteger(next) || next < 1) return;
-                      setField('frequencyValue', Math.min(next, 365));
-                    }}
+                    // Bkz. pencere değeri: yazarken ham metin korunur, sınır
+                    // alan bırakıldığında uygulanır.
+                    onChange={(event) => setField('frequencyValue', event.target.value)}
+                    onBlur={(event) => setField('frequencyValue', clampReminderCount(event.target.value))}
                     style={{ width: 88 }}
                   />
                   <select

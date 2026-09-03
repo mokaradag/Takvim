@@ -130,8 +130,29 @@ test('uzun proje ve personel seçim noktaları canlı arama bileşenini kullanı
   }
 });
 
+test('proje oluşturma kutusu sorumlu varsayılanını dizin GEÇ gelse de doldurur', () => {
+  const dialog = source('src/components/shell/ProjectCreateDialog.jsx');
+
+  // Sıfırlama yalnızca `[open]` geçişinde çalışır (açık kutuya girilen veriyi
+  // otomatik yenileme silmesin diye). Bunun yan etkisi: kutu kişi dizini henüz
+  // BOŞKEN açıldığında `leadId` kalıcı olarak boş kalıyor ve dokunulmamış form
+  // sunucudan `PROJECT_LEAD_REQUIRED` alıyordu. Ayrı bir etki bu boşluğu
+  // kapatır.
+  assert.match(dialog, /\}, \[open\]\);/, 'sıfırlama YALNIZCA açılış geçişine bağlı kalmalıdır');
+  assert.match(dialog, /if \(!open \|\| !people\.length\) return;/);
+  assert.match(dialog, /\}, \[open, people\]\);/);
+  // Yalnızca HÂLÂ BOŞ alan doldurulur: kullanıcının seçtiği sorumlu ezilmez.
+  assert.match(dialog, /current\.leadId \? current : \{ \.\.\.current, leadId:/);
+});
+
 test('kurumsal proje sorumlusu PROJECT_MANAGER rolünden eşitlenir ve arayüzde salt okunur açıklanır', () => {
-  assert.match(source('src/server/repository/corporateQueries.js'), /LeadSicil\s*=\s*manager\.Sicil/);
+  // Sorumlu PROJECT_MANAGER rolünden eşitlenir; kaynakta yönetici satırı YOKSA
+  // mevcut sorumlu korunur (OUTER APPLY sonucu NULL olduğunda koşulsuz atama
+  // var olan LeadSicil değerini siliyordu).
+  assert.match(
+    source('src/server/repository/corporateQueries.js'),
+    /LeadSicil\s*=\s*ISNULL\(manager\.Sicil,\s*target\.LeadSicil\)/
+  );
   assert.match(source('src/server/repository/corporateQueries.js'), /RoleCode\s*=\s*'PROJECT_MANAGER'/);
   assert.match(source('src/features/project/ProjectWorkspaceView.jsx'), /PROJECT_MANAGER rolünden otomatik alınır/);
 });
@@ -149,4 +170,33 @@ test('görev eylem kancası tarayıcı tıklama olayını kayıt yükünden ayı
   assert.match(hooks, /normalizeTaskCreationInput/);
   assert.match(hooks, /input\.nativeEvent/);
   assert.match(hooks, /actions\.addTask\(normalizeTaskCreationInput\(input\)\)/);
+});
+
+test('kurumsal eşitleme yönetici satırı yokken mevcut sorumluyu KORUR', async () => {
+  // Kaynak metin denetimi (yukarıda) gönderilen SQL'i sabitler; bu sınama aynı
+  // güvenceyi ÇALIŞTIRARAK doğrular: `ISNULL(manager.Sicil, target.LeadSicil)`
+  // koşulsuz atamaya dönerse kurumsal eşitleme, var olan sorumluyu sessizce
+  // siler.
+  const { createActualStack, corporateSeed } = await import('./helpers/actualStack.mjs');
+  // Kurumsal katalogda proje var, ama PROJECT_MANAGER rolü YOK.
+  const stack = await createActualStack(
+    corporateSeed({ corporateProjectAccess: [] }),
+    { corporateWbsSource: false }
+  );
+  try {
+    const findProject = () => stack.db.projects.find(
+      (project) => project.SourceType === 'CORPORATE' && project.ProjectCode === 'P4417041'
+    );
+    const synced = findProject();
+    assert.ok(synced, 'kurumsal proje bulunmalıdır');
+    // Kalıcı satırda bir sorumlu vardır; kaynakta yönetici satırı yoktur.
+    assert.equal(synced.LeadSicil, 900010);
+
+    // Eşitleme yeniden çalıştırılır.
+    await stack.repository.loadSnapshot();
+
+    assert.equal(findProject().LeadSicil, 900010, 'yönetici satırı yokken mevcut sorumlu korunmalıdır');
+  } finally {
+    await stack.dispose();
+  }
 });

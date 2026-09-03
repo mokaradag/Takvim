@@ -479,7 +479,7 @@ da bu durumu bir uyarı olarak gösterir.
 | İleti | Olası neden |
 | --- | --- |
 | E-posta sunucusuna ulaşılamadı | Yanlış `SMTP_HOST`/`SMTP_PORT`, güvenlik duvarı |
-| Güvenli bağlantı kurulamadı | Sunucu STARTTLS beklemiyor (`SMTP_USE_STARTTLS=false` deneyin) ya da kurumsal kök sertifika yüklü değil (`NODE_EXTRA_CA_CERTS`, geçici olarak `SMTP_TLS_REJECT_UNAUTHORIZED=false`) |
+| Güvenli bağlantı kurulamadı | Sunucu STARTTLS beklemiyor (`SMTP_USE_STARTTLS=false` deneyin) ya da kurumsal kök sertifika yüklü değil — kök sertifikayı `NODE_EXTRA_CA_CERTS` ile tanıtın. **`SMTP_TLS_REJECT_UNAUTHORIZED=false` kullanmayın:** bu ayar saldırganın sunduğu sertifikayı da kabul eder ve ağdaki etkin bir saldırgan hem SMTP kimlik bilgilerini hem de hatırlatma içeriğini alabilir. |
 | Kimlik doğrulama başarısız | `SMTP_USERNAME`/`SMTP_PASSWORD` hatalı ya da sunucu kimlik doğrulama beklemiyor (kullanıcı adını boş bırakın) |
 | Sunucu iletiyi kabul etmedi | Gönderici adresi yetkisiz, alıcı alan adı reddedildi, ileti boyutu sınırı |
 

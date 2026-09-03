@@ -114,6 +114,14 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   // burada saklanır, kullanıcı yazmaya devam ederse üzerine birleşir ve açık
   // bir yeniden deneme ya da yeniden yükleme kararına kadar kaybolmaz.
   const failed = new Map();
+  // Uçuştaki istek sürerken İPTAL EDİLEN alanlar. `cancelFields` yalnızca
+  // `pending` ve `failed` haritalarına bakıyordu; `flush`, yamayı gönderime
+  // vermeden ÖNCE `pending` üzerinden sildiği için, HTTP gidiş-dönüşü boyunca
+  // yama iki haritada da görünmüyor ve iptal sessizce hiçbir şey yapmıyordu.
+  // İstek başarısız olduğunda iptal edilmiş alan `failed` içine geri yazılıyor,
+  // "Yeniden dene" onu kalıcılaştırıyor ve kullanıcı sildiği başlığı geri
+  // buluyordu.
+  const cancelledInFlight = new Map();
   let disposed = false;
 
   function disposalResult() {
@@ -187,15 +195,28 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
       // Başarısız yama saklanır; yeni bir yama ilk istek sürerken kuyruğa
       // girdiyse ikisi tek yeniden denemede birleşir. Dispose sonrasında yeni
       // saklama oluşturulmaz.
+      const cancelledKeys = cancelledInFlight.get(taskId);
+      cancelledInFlight.delete(taskId);
       if (!result.ok && !disposed) {
-        const retainedPatch = { ...(failed.get(taskId) || {}), ...entry.patch };
+        // Gönderim sürerken iptal edilen alan SAKLANMAZ: kullanıcı o değeri
+        // ekrandan kaldırdı, yeniden denemede geri gelmemelidir.
+        const inFlightPatch = { ...entry.patch };
+        if (cancelledKeys) for (const key of cancelledKeys) delete inFlightPatch[key];
+        const retainedPatch = { ...(failed.get(taskId) || {}), ...inFlightPatch };
+        if (cancelledKeys) for (const key of cancelledKeys) delete retainedPatch[key];
         const newer = pending.get(taskId);
         if (newer) {
           // Eski alanlar alta serilir: daha yeni yerel değerler her zaman kazanır.
           newer.patch = { ...retainedPatch, ...newer.patch };
           failed.delete(taskId);
-        } else {
+        } else if (Object.keys(retainedPatch).length) {
           failed.set(taskId, retainedPatch);
+        } else {
+          // Bütün alanları iptal edilmiş bir yama SAKLANMAZ. Boş bir kayıt
+          // bırakmak `hasFailedChanges()` sonucunu doğru tutuyor, veri
+          // yenilemesini `UNSAVED_TASK_CHANGES` ile süresiz engelliyor ve
+          // kullanıcıya artık var olmayan bir değişiklik için uyarı gösteriyordu.
+          failed.delete(taskId);
         }
       }
       // schedule() bekleyenleri çözülmeden önce kayıt artık uçuşta sayılmaz;
@@ -233,10 +254,22 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
    * Arayüz bir alanı geçersiz kılabilir — örneğin başlık silindiğinde. Alan
    * yalnızca yeni yamaya konmazsa, kuyrukta duran ÖNCEKİ tuş vuruşu yine de
    * kalıcılaşır ve kullanıcı ekranda görmediği bir değeri kaydetmiş olurdu.
+   *
+   * Yamanın ÜÇ durumu da kapsanır: kuyrukta bekleyen, UÇUŞTA olan ve reddedilip
+   * saklanan. Değişmez kural: `cancelFields(id, [f])` çağrıldıktan sonra,
+   * kullanıcı `f` alanını yeniden yazmadıkça `id` için giden hiçbir istek o
+   * alanı taşımaz.
    */
   function cancelFields(taskId, fields = []) {
     const keys = Array.isArray(fields) ? fields : [fields];
     if (!keys.length) return;
+    // Uçuştaki istek geri alınamaz; iptal, isteğin SONUCUNDA uygulanır: yanıt
+    // başarısızsa alan saklanan yamaya hiç yazılmaz.
+    if (inFlight.has(taskId)) {
+      const cancelled = cancelledInFlight.get(taskId) || new Set();
+      for (const key of keys) cancelled.add(key);
+      cancelledInFlight.set(taskId, cancelled);
+    }
     const entry = pending.get(taskId);
     if (entry) {
       for (const key of keys) delete entry.patch[key];
@@ -303,6 +336,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     }
     pending.clear();
     failed.clear();
+    cancelledInFlight.clear();
   }
 
   return {

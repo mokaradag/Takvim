@@ -385,10 +385,26 @@ function spanBetween(from, to, calendar) {
   return gap >= 0 ? gap + 1 : gap - 1;
 }
 
-/** `spanBetween` ile ölçülen dahil süreyi bir başlangıca yeniden uygular. */
+/**
+ * `spanBetween` ile ölçülen dahil süreyi bir başlangıca yeniden uygular.
+ *
+ * Ufuk aşıldığında `null` döner. Eskiden `addDays`'e düşülüyordu; bu, BİRİMİ
+ * sessizce değiştiriyordu: saklanan süre ve olağan yol iş günü cinsindendir,
+ * yedek yol takvim günü. Sonuç, hafta sonuna/tatile düşen ve süresi yanlış olan
+ * bir yineleme bitişiydi — geçersiz bir planı bildirmek yerine yanlış bir plan
+ * yayımlamak. Bitiş artık BİLİNMİYOR olarak işaretlenir.
+ */
 function addSpan(start, span, calendar) {
   const steps = span > 0 ? span - 1 : (span < 0 ? span + 1 : 0);
-  return calendar ? addWorkingDays(start, steps, calendar) : addDays(start, steps);
+  if (!calendar) return addDays(start, steps);
+  return addWorkingDays(start, steps, calendar);
+}
+
+/** `addSpan` sonucunu ISO'ya çevirir; ufuk aşımında `null` bırakır. */
+function spanFinishIso(start, span, calendar) {
+  if (span === null) return null;
+  const finish = addSpan(start, span, calendar);
+  return finish == null ? null : fmtISO(finish);
 }
 
 /**
@@ -427,7 +443,11 @@ export function planRecurringOccurrences(template, rule, {
   limit = MAX_RECURRENCE_OCCURRENCES,
   horizonEnd = null,
   skipNonWorkingDays = true,
-  hardCap = MAX_RECURRENCE_OCCURRENCES
+  hardCap = MAX_RECURRENCE_OCCURRENCES,
+  // İsteğe bağlı ÇIKTI nesnesi: güvenlik tavanına dayanıldıysa
+  // `rawCapReached` doğru yapılır. Dönüş türü dizi olarak korunur (bütün
+  // çağıranlar onu bekler); tavan bilgisi yalnızca özetleyiciye gerekir.
+  capReport = null
 } = {}) {
   const normalized = normalizeRecurrenceRule(rule);
   const start = template?.plannedStart;
@@ -462,7 +482,12 @@ export function planRecurringOccurrences(template, rule, {
     if (hardEnd && date > hardEnd) break;
     if (untilDate && date > untilDate) break;
     rawOrdinal += 1;
-    if (rawOrdinal > rawCap) break;
+    if (rawOrdinal > rawCap) {
+      // Tavan KURALIN kendi COUNT değeri olduğunda bu, serinin olağan sonudur.
+      // Yalnızca GÜVENLİK tavanına dayanıldığında kesinti bildirilir.
+      if (capReport && (!normalized.count || normalized.count > rawCap)) capReport.rawCapReached = true;
+      break;
+    }
 
     const shifted = shiftCalendar && !isWorkingDay(date, shiftCalendar)
       ? moveToWorkingDay(date, shiftCalendar, 1)
@@ -485,8 +510,8 @@ export function planRecurringOccurrences(template, rule, {
       // yineleme ikinci kez üretilmez.
       occurrenceDate: fmtISO(date),
       plannedStart: iso,
-      plannedFinish: durationSpan === null ? null : fmtISO(addSpan(shifted, durationSpan, calendar)),
-      targetFinish: targetSpan === null ? null : fmtISO(addSpan(shifted, targetSpan, calendar))
+      plannedFinish: spanFinishIso(shifted, durationSpan, calendar),
+      targetFinish: spanFinishIso(shifted, targetSpan, calendar)
     });
     if (plan.length >= planCap) break;
   }
@@ -525,10 +550,12 @@ export function summarizeRecurrencePlan(template, rule, { calendar = null, previ
   // Bir FAZLASI istenir: sınırsız kuralda "devamı var" bilgisini, UNTIL
   // kuralında ise güvenlik tavanına dayanıldığını yalnızca böyle ayırt
   // edebiliriz. Fazlalık sayıya katılmaz.
+  const capReport = {};
   const probed = planRecurringOccurrences(template, normalized, {
     calendar,
     limit: boundedLimit + 1,
-    hardCap: MAX_RECURRENCE_OCCURRENCES + 1
+    hardCap: MAX_RECURRENCE_OCCURRENCES + 1,
+    capReport
   });
   const hasMore = probed.length > boundedLimit;
   const occurrences = hasMore ? probed.slice(0, boundedLimit) : probed;
@@ -541,7 +568,14 @@ export function summarizeRecurrencePlan(template, rule, { calendar = null, previ
   const includesTemplate = occurrences.some((occurrence) => occurrence.occurrenceDate === templateOccurrence);
   // Sınırsız seride toplam bilinmez. UNTIL serisi güvenlik tavanına dayandıysa
   // da bilinmez: 400 rakamı serinin TOPLAMI değil, açılabilen kısmıdır.
-  const truncated = !unbounded && hasMore;
+  //
+  // Tavanın uzunluktan AYRI izlenmesi şarttır: çalışma takvimi kaydırması ham
+  // tarihleri tekilleştirir, bu yüzden dönen plan tavandan KISA olabilir.
+  // Pzt–Cum takviminde GÜNLÜK bir UNTIL kuralında 401 ham gün ~287 benzersiz
+  // güne çöker; yalnızca uzunluğa bakan denetim `hasMore` değerini yanlış
+  // olarak yanlış bulur ve arayüz, UNTIL aralığında çok daha fazla yineleme
+  // varken "287 yineleme, tamamı bu" der.
+  const truncated = !unbounded && (hasMore || capReport.rawCapReached === true);
   const countable = !unbounded && !truncated;
   const totalCount = countable ? dates.length : 0;
 
@@ -552,7 +586,7 @@ export function summarizeRecurrencePlan(template, rule, { calendar = null, previ
     hiddenCount: Math.max(0, dates.length - previewLimit),
     // Önizlemenin ötesinde başka yineleme var mı? Sınırsız/kesilmiş seride
     // sayı verilemez, yalnızca varlık bildirilir.
-    hasMore: hasMore || dates.length > previewLimit,
+    hasMore: hasMore || truncated || dates.length > previewLimit,
     truncated,
     includesTemplate,
     totalCount,

@@ -10,6 +10,10 @@ export const Icon = ({ d, size = 16, stroke = 1.75, className = '', style }) => 
     strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round"
     className={className} style={style}
   >
+    {/* `d` yalnızca aşağıdaki `Icons` eşlemesindeki DERLEME ZAMANI dizgilerinden
+        gelir: hiçbir istek gövdesi, sorgu parametresi ya da kalıcı veri bu
+        yola ulaşmaz. Kullanıcı içeriği için sürüm bilinçli olarak yoktur —
+        yeni bir simge eklerken yol verisi de sabit olmalıdır. */}
     <g dangerouslySetInnerHTML={{ __html: d }} />
   </svg>
 );

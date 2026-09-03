@@ -1,3 +1,15 @@
+import { MAX_WORKING_DAY_SPAN } from '../../scheduling/calendars/index.js';
+import { dependencyLagDays } from '../../scheduling/dependencies/index.js';
+
+/**
+ * Gecikme çevriminde EN KÖTÜ durumu temsil eden takvim (haftanın yedi günü).
+ *
+ * `dependencyLagDays` hafta ve ay birimlerini takvimin çalışma günü sayısıyla
+ * ölçekler; bu yüzden aynı `lagValue` yoğun bir takvimde daha çok iş gününe
+ * karşılık gelir. Sınır bu takvimle denetlenerek her desteklenen takvimde
+ * geçerli kalır.
+ */
+const MAX_DENSITY_CALENDAR = Object.freeze({ workingDays: [0, 1, 2, 3, 4, 5, 6] });
 import { findRecurrenceRuleIssue, normalizeRecurrenceRule } from '../../scheduling/recurrence/index.js';
 
 const TASK_STATUSES = new Set(['planned', 'in-progress', 'done']);
@@ -104,8 +116,12 @@ function validateTaskScalars(changes) {
     ['actualFinish', 'Gerçek bitiş']
   ];
   const numericFields = [
-    ['plannedDurationDays', 'Planlanan süre', 0, DECIMAL_10_2_MAX],
-    ['remainingDurationDays', 'Kalan süre', 0, DECIMAL_10_2_MAX],
+    // Süre sınırı SÜTUN GENİŞLİĞİ değil, zamanlama motorunun temsil edebildiği
+    // ufuktur. `decimal(10,2)` sınırı motorun sınırının dört kat üzerindeydi:
+    // aradaki her değer sessizce kırpılmış — üstelik iyimser yönde kırpılmış —
+    // bir plan üretiyordu (bkz. MAX_WORKING_DAY_SPAN).
+    ['plannedDurationDays', 'Planlanan süre', 0, MAX_WORKING_DAY_SPAN],
+    ['remainingDurationDays', 'Kalan süre', 0, MAX_WORKING_DAY_SPAN],
     ['plannedHours', 'Planlanan iş gücü', -DECIMAL_12_2_MAX, DECIMAL_12_2_MAX],
     ['actualHours', 'Gerçekleşen iş gücü', -DECIMAL_12_2_MAX, DECIMAL_12_2_MAX],
     ['budget', 'Bütçe', -DECIMAL_19_4_MAX, DECIMAL_19_4_MAX],
@@ -295,16 +311,19 @@ function validateDependencyScalars(changes) {
       }
       if (predecessorId) predecessorIds.add(predecessorId);
 
+      // Gecikme sınırı da motorun ufkudur; `decimal(10,2)` genişliği zamanlama
+      // motorunun temsil ettiği aralığın çok üstündeydi ve aradaki değerler
+      // sessizce SIFIR gecikmeye düşüyordu.
       const lagDaysIssue = validateNumber(dependency.lagDays, `${path}.lagDays`, 'Bağımlılık gecikme günü', {
-        min: -DECIMAL_10_2_MAX,
-        max: DECIMAL_10_2_MAX,
+        min: -MAX_WORKING_DAY_SPAN,
+        max: MAX_WORKING_DAY_SPAN,
         invalidCode: 'DEPENDENCY_LAG_INVALID',
         rangeCode: 'DEPENDENCY_LAG_INVALID'
       });
       if (lagDaysIssue) return lagDaysIssue;
       const lagValueIssue = validateNumber(dependency.lagValue, `${path}.lagValue`, 'Bağımlılık gecikme değeri', {
-        min: -DECIMAL_10_2_MAX,
-        max: DECIMAL_10_2_MAX,
+        min: -MAX_WORKING_DAY_SPAN,
+        max: MAX_WORKING_DAY_SPAN,
         invalidCode: 'DEPENDENCY_LAG_INVALID',
         rangeCode: 'DEPENDENCY_LAG_INVALID'
       });
@@ -314,6 +333,26 @@ function validateDependencyScalars(changes) {
       }
       if (text(dependency.lagUnit) && !DEPENDENCY_LAG_UNITS.has(text(dependency.lagUnit))) {
         return issue('DEPENDENCY_LAG_UNIT_INVALID', `${path}.lagUnit`, 'Bağımlılık gecikme birimi day, week veya month olmalıdır.');
+      }
+      // Birim ÇEVRİLDİKTEN sonra da sınır içinde kalmalıdır: 200 "ay" değeri
+      // tek başına küçük görünür ama 4000 iş gününe karşılık gelir.
+      //
+      // Çevrim, desteklenen EN YOĞUN takvimle (haftanın yedi günü çalışma)
+      // ölçülür. Varsayılan beş günlük takvimle ölçülseydi sınır takvime göre
+      // kayardı: 3000 "hafta" varsayılanda 15 000 iş günü sayılıp geçer, aynı
+      // bağımlılık yedi günlük bir takvimde 21 000 iş gününe karşılık gelir ve
+      // `MAX_WORKING_DAY_SPAN` aşılmış olarak kalıcılaşırdı. Doğrulayıcı görevin
+      // takvimini çözemediği için en kötü durum bağlayıcı alınır.
+      const lagValue = numericValue(dependency.lagValue);
+      if (lagValue.present && lagValue.valid && Math.abs(dependencyLagDays({
+        lagValue: Number(lagValue.value),
+        lagUnit: text(dependency.lagUnit) || 'day'
+      }, MAX_DENSITY_CALENDAR)) > MAX_WORKING_DAY_SPAN) {
+        return issue(
+          'DEPENDENCY_LAG_INVALID',
+          `${path}.lagValue`,
+          `Bağımlılık gecikmesi ${MAX_WORKING_DAY_SPAN} iş gününü aşamaz.`
+        );
       }
     }
   }
