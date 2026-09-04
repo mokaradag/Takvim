@@ -123,19 +123,22 @@ test('Görevler sütun süzgeci ETKİN seçimi menüde tutar', async () => {
   // kurtulunamayan GİZLİ bir süzgeç kalır.
   assert.match(source, /const withSelected = useCallback1\(/);
   for (const [set, selection] of [
-    ['visibleProjectIds', 'colFilter.proje'],
-    ['visibleAssigneeIds', 'colFilter.sorumlu'],
-    ['visibleStatuses', 'colFilter.status'],
-    ['visiblePriorities', 'colFilter.priority']
+    ['facetValues.proje', 'colFilter.proje'],
+    ['facetValues.sorumlu', 'colFilter.sorumlu'],
+    ['facetValues.status', 'colFilter.status'],
+    ['facetValues.priority', 'colFilter.priority'],
+    // Etiket listesi de aynı birleşimi uygular.
+    ['facetValues.keyword', 'colFilter.keyword']
   ]) {
     assert.match(
       source,
-      new RegExp(`withSelected\\(${set}, ${selection.replace('.', '\\.')}\\)`),
+      new RegExp(`withSelected\\(${set.replace('.', '\\.')}, ${selection.replace('.', '\\.')}\\)`),
       `${set} seçili değerlerle birleştirilmelidir`
     );
   }
-  // Etiket listesi de aynı birleşimi uygular.
-  assert.match(source, /withSelected\(\s*new Set\(organization\.filteredTasks[\s\S]*?colFilter\.keyword/);
+  // Fasetler ÇAPRAZ süzülür: her sütunun seçenekleri öteki süzgeçlerden geçen
+  // satırlardan toplanır.
+  assert.match(source, /taskTableFacetValues\(organization\.filteredTasks, \{ search, filters: colFilter \}, key\)/);
   // Seçenek listeleri artık HAM görünür kümeyi değil, birleşimi süzer.
   assert.match(source, /\.filter\(p => projectOptionIds\.has\(String\(p\.id\)\)\)/);
   assert.match(source, /\.filter\(p => assigneeOptionIds\.has\(String\(p\.id\)\)\)/);

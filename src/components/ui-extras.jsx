@@ -564,20 +564,10 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
 export { dateMatchesFilter } from './dateMatchesFilter.js';
 
 // Helper: numeric filter match
-export function numericMatchesFilter(val, spec) {
-  if (!spec) return true;
-  const v = (val == null || val === '') ? null : Number(val);
-  if (v == null || isNaN(v)) return false;
-  if (spec.mode === 'between') {
-    if (spec.from != null && v < spec.from) return false;
-    if (spec.to != null && v > spec.to) return false;
-    return true;
-  }
-  if (spec.mode === 'before') return spec.to == null || v < spec.to;
-  if (spec.mode === 'after') return spec.from == null || v > spec.from;
-  if (spec.mode === 'equals') return v === spec.eq;
-  return true;
-}
+// Uygulama `./numericMatchesFilter.js` içindedir (düz Node'dan sınanabilmesi
+// için); burada yalnızca yeniden dışa aktarılır, çağıranların içe aktarımı
+// değişmez.
+export { numericMatchesFilter } from './numericMatchesFilter.js';
 
 // ── Sortable + filterable column header ──────────────────
 export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter, filterType = 'text', filterOptions, style, numericMin, numericMax, numericUnit }) {

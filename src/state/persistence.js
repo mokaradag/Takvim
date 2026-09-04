@@ -339,11 +339,27 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     cancelledInFlight.clear();
   }
 
+  /**
+   * Kapatılmış kuyruğu yeniden kullanıma açar.
+   *
+   * React 18 geliştirme derlemesinde `StrictMode` etkileri BİR KEZ söküp
+   * yeniden bağlar. Kuyruk `useMemo` ile üretildiği için ikinci bağlamada aynı
+   * nesne kullanılıyor, ama sahte sökülmede `dispose()` çağrıldığı için
+   * `schedule()` her yamayı sessizce reddediyordu: geliştirme sunucusunda
+   * hiçbir görev düzenlemesi kaydedilmiyor, kullanıcı ne kayıt ne de hata
+   * görüyordu. Yeniden bağlanan sağlayıcı kuyruğu bununla diriltir; üretim
+   * derlemesinde etki tek kez çalıştığı için çağrı etkisizdir.
+   */
+  function revive() {
+    disposed = false;
+  }
+
   return {
     schedule,
     flush,
     flushAll,
     cancelFields,
+    revive,
     hasPending,
     hasUnsavedChanges,
     hasFailedChanges,
@@ -538,6 +554,8 @@ export function createStateMutationOrchestrator({
         if (!taskPatches.hasPending()) return { ok: true };
       }
     },
-    dispose() { taskPatches.dispose(); }
+    dispose() { taskPatches.dispose(); },
+    /** Bkz. createTaskPatchCoalescer.revive — StrictMode sahte sökülmesi. */
+    revive() { taskPatches.revive(); }
   };
 }

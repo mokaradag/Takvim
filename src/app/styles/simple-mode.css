@@ -2,6 +2,9 @@
 
 /* Basit Mod hızlı giriş kartı. */
 .calendar-page-stack { display: flex; flex-direction: column; gap: 18px; }
+/* Kayıt perdesi SARMALAYICIYA göre konumlanır: perde formun dışındadır,
+   böylece form `inert` olduğunda bildirim erişilebilir kalır. */
+.simple-entry-shell { position: relative; }
 .simple-entry-card { padding: 20px; border: 1px solid var(--chrome-border); border-radius: var(--r-xl); background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 7%, var(--bg-elev)), var(--bg-elev)); box-shadow: var(--shadow-sm); }
 .simple-entry-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .simple-entry-head h2 { margin: 7px 0 4px; font-size: 19px; letter-spacing: -.025em; }

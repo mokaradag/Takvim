@@ -34,6 +34,10 @@ Current root sequence:
 | Simple Mode | `src/app/styles/simple-mode.css` |
 | Shared component chrome | `src/app/styles/components.css` |
 | Mode chooser/settings/help presentation | `src/app/styles/experience.css` |
+| Loading indicators (`.app-spinner`, `.saving-overlay`) | `src/app/styles/components.css` |
+| Toggle switch (`.toggle-field`, `.toggle-switch`) | `src/app/styles/components.css` |
+| Gantt outline controls (`.gantt-outline-*`, `.gantt-level-*`) | `src/app/styles/components.css` |
+| Topbar quick actions (`.quick-actions`, `.theme-switch`) | `src/app/styles/shell.css` |
 
 A feature may use shared tokens and primitives, but its structural layout remains owned by the feature's stylesheet section.
 
@@ -140,6 +144,23 @@ A component's responsive rules belong beside its base rules in the same owner. D
 The shared Tasks toolbar remains one row at normal desktop widths: search, the three organization selectors, information/clear controls, count and **Yeni Görev** share the same flex line. At viewport widths up to 1280 px the three direct selectors are replaced by the compact **Kurumsal filtre** disclosure; only genuinely narrow widths may wrap the toolbar. Both mode-specific Tasks views consume the same `TaskOrganizationFilterControls` markup and the responsive owner is `components.css`.
 
 Do not duplicate competing breakpoints for the same component across unrelated files.
+
+### 8.1 Container queries for zoom-driven narrowing
+
+The font-size preference is applied as `body { zoom }`. Media queries evaluate
+against the viewport, which zoom does **not** change, so `@media (max-width: …)`
+cannot see the space a table actually lost when the user enlarges the type. The
+Tasks table therefore declares `container-type: inline-size` on
+`.tasks-table-card` and narrows itself with `@container gorevler-tablosu (…)`:
+the index column is dropped and cell padding shrinks. Browsers without container
+query support simply keep the wide layout — the sticky action column already
+guarantees the row actions stay reachable, so the rule is a progressive
+enhancement, never a correctness dependency.
+
+The Tasks action column is `position: sticky; right: 0` with an opaque
+background and a hover rule (`tr:hover .tasks-actions-cell`), because a sticky
+cell paints over the scrolled row beneath it and would otherwise show the page
+through the row highlight.
 
 ## 9. z-index/layering contract
 

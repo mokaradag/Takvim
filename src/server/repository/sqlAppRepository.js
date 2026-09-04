@@ -464,6 +464,12 @@ async function loadSnapshotFrom(executor, auth) {
   const assignees = new Map();
   const dependencies = new Map();
   const calendars = new Map();
+  // Görev görünürlüğü, oluşturanın personel kimliğini görme yetkisi değildir.
+  // Yalnızca aşağıdaki yetkili kişi sorgusundan geçmiş Siciller görev künyesine
+  // taşınır; böylece adla birlikte fotoğraf anahtarı da aynı sınırda maskelenir.
+  const visiblePeopleBySicil = new Map((peopleRows || [])
+    .filter((row) => row.Sicil != null)
+    .map((row) => [String(row.Sicil), row]));
 
   for (const row of tagRows || []) {
     const key = id(row.ProjectId);
@@ -546,49 +552,58 @@ async function loadSnapshotFrom(executor, auth) {
       elementTypeCode: row.ElementTypeCode || null,
       version: encodeVersion(row.RowVersion)
     })),
-    tasks: (taskRows || []).map((row) => ({
-      id: id(row.TaskId),
-      projectId: id(row.ProjectId),
-      wbsId: id(row.WbsId),
-      calendarId: id(row.CalendarId),
-      task: row.Title,
-      description: row.Description || '',
-      keyword: row.Keyword || '',
-      status: row.Status,
-      priority: normalizePriorityId(row.Priority),
-      isMilestone: Boolean(row.IsMilestone),
-      milestone: Boolean(row.IsMilestone),
-      plannedStart: isoDate(row.PlannedStart),
-      plannedFinish: isoDate(row.PlannedFinish),
-      plannedDurationDays: nullableNumber(row.PlannedDurationDays),
-      targetFinish: isoDate(row.TargetFinish),
-      actualStart: isoDate(row.ActualStart),
-      actualFinish: isoDate(row.ActualFinish),
-      remainingDurationDays: nullableNumber(row.RemainingDurationDays),
-      progress: nullableNumber(row.Progress),
-      plannedHours: nullableNumber(row.PlannedHours),
-      actualHours: nullableNumber(row.ActualHours),
-      budget: nullableNumber(row.Budget),
-      spent: nullableNumber(row.Spent),
-      // Tekrar kuralı yalnızca seri şablonunda dolu; yinelemeler üst göreve bağlıdır.
-      recurrence: row.RecurrenceRule || null,
-      recurrenceParentId: id(row.RecurrenceParentTaskId),
-      recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate),
-      sortOrder: row.SortOrder,
-      assigneeIds: assignees.get(id(row.TaskId)) || [],
-      // Yetkili sorumlu sayısı: `assigneeIds.length` ile farklıysa görevin
-      // görünmeyen sorumluları vardır (bkz. yukarıdaki AssigneeCount).
-      assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
-      // Kimlikleri açığa çıkarmadan görev düzeyi yazma kararını destekler.
-      // Sunucu mutasyonda üyeliği yeniden, yetkili tablodan doğrular.
-      isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
-      createdBySicil: row.CreatedBySicil == null ? null : String(row.CreatedBySicil),
-      isCurrentUserCreator: Boolean(row.IsCurrentUserCreator),
-      // Görev künyesi: kartta "kim, ne zaman oluşturdu" satırını besler.
-      createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
-      deps: dependencies.get(id(row.TaskId)) || [],
-      version: encodeVersion(row.RowVersion)
-    })),
+    tasks: (taskRows || []).map((row) => {
+      const rawCreatorSicil = row.CreatedBySicil == null ? null : String(row.CreatedBySicil);
+      const creatorPerson = rawCreatorSicil ? visiblePeopleBySicil.get(rawCreatorSicil) : null;
+      return {
+        id: id(row.TaskId),
+        projectId: id(row.ProjectId),
+        wbsId: id(row.WbsId),
+        calendarId: id(row.CalendarId),
+        task: row.Title,
+        description: row.Description || '',
+        keyword: row.Keyword || '',
+        status: row.Status,
+        priority: normalizePriorityId(row.Priority),
+        isMilestone: Boolean(row.IsMilestone),
+        milestone: Boolean(row.IsMilestone),
+        plannedStart: isoDate(row.PlannedStart),
+        plannedFinish: isoDate(row.PlannedFinish),
+        plannedDurationDays: nullableNumber(row.PlannedDurationDays),
+        targetFinish: isoDate(row.TargetFinish),
+        actualStart: isoDate(row.ActualStart),
+        actualFinish: isoDate(row.ActualFinish),
+        remainingDurationDays: nullableNumber(row.RemainingDurationDays),
+        progress: nullableNumber(row.Progress),
+        plannedHours: nullableNumber(row.PlannedHours),
+        actualHours: nullableNumber(row.ActualHours),
+        budget: nullableNumber(row.Budget),
+        spent: nullableNumber(row.Spent),
+        // Tekrar kuralı yalnızca seri şablonunda dolu; yinelemeler üst göreve bağlıdır.
+        recurrence: row.RecurrenceRule || null,
+        recurrenceParentId: id(row.RecurrenceParentTaskId),
+        recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate),
+        sortOrder: row.SortOrder,
+        assigneeIds: assignees.get(id(row.TaskId)) || [],
+        // Yetkili sorumlu sayısı: `assigneeIds.length` ile farklıysa görevin
+        // görünmeyen sorumluları vardır (bkz. yukarıdaki AssigneeCount).
+        assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
+        // Kimlikleri açığa çıkarmadan görev düzeyi yazma kararını destekler.
+        // Sunucu mutasyonda üyeliği yeniden, yetkili tablodan doğrular.
+        isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
+        createdBySicil: creatorPerson ? rawCreatorSicil : null,
+        isCurrentUserCreator: Boolean(row.IsCurrentUserCreator),
+        // Ad ve Sicil birlikte yetkili kişi satırından türer. Gizli oluşturan için
+        // ikisi de null kalır; panel bu durumda genel kullanıcı etiketi gösterir
+        // ve kurumsal fotoğraf URL'si kuramaz.
+        createdByName: creatorPerson?.DisplayName == null
+          ? null
+          : String(creatorPerson.DisplayName).trim() || null,
+        createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
+        deps: dependencies.get(id(row.TaskId)) || [],
+        version: encodeVersion(row.RowVersion)
+      };
+    }),
     baselines: (baselineRows || []).map((row) => ({
       id: id(row.BaselineId), projectId: id(row.ProjectId), name: row.Name,
       createdAt: new Date(row.CreatedAt).toISOString(), isPrimary: Boolean(row.IsPrimary)
@@ -637,6 +652,8 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
   const req = request(executor);
   req.input('sicil', sql.Int, auth.sicil);
   req.input('isAdmin', sql.Bit, auth.isSystemAdmin);
+  req.input('hasFullScope', sql.Bit, Boolean(auth.isSystemAdmin || auth.effective?.fullProjectIds?.size));
+  req.input('canAssignAllCorporate', sql.Bit, Boolean(auth.canAssignAllCorporateProjects));
   req.input('projectIds', sql.NVarChar(sql.MAX), projectIds.join(','));
   req.input('wbsIds', sql.NVarChar(sql.MAX), wbsIds.join(','));
   req.input('taskIds', sql.NVarChar(sql.MAX), taskIds.join(','));
@@ -734,9 +751,40 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
         SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
         WHERE ownAssignment.TaskId = t.TaskId AND ownAssignment.Sicil = @sicil
       ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserAssignee,
-      CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator
+      CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator,
+      CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
+      NULLIF(LTRIM(RTRIM(creator.DisplayName)), '') AS CreatedByName
     FROM dbo.MR_Tasks t
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    CROSS APPLY (
+      SELECT CAST(CASE WHEN @hasFullScope = 1
+        OR t.CreatedBySicil = @sicil
+        OR p.LeadSicil = t.CreatedBySicil
+        OR (
+          @canAssignAllCorporate = 1
+          AND EXISTS (
+            SELECT 1 FROM dbo.MR_V_ExecutiveScope creatorScope
+            WHERE creatorScope.ManagerSicil = @sicil
+              AND creatorScope.EmployeeSicil = t.CreatedBySicil
+          )
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM dbo.MR_TaskAssignees creatorAssignment
+          JOIN dbo.MR_Tasks creatorTask ON creatorTask.TaskId = creatorAssignment.TaskId
+          WHERE creatorAssignment.Sicil = t.CreatedBySicil
+            AND EXISTS (
+              SELECT 1 FROM dbo.MR_ProjectAccess creatorReadGrant
+              WHERE creatorReadGrant.ProjectId = creatorTask.ProjectId
+                AND creatorReadGrant.Sicil = @sicil
+                AND creatorReadGrant.IsActive = 1
+                AND creatorReadGrant.AccessLevel = 'READ'
+            )
+        )
+      THEN 1 ELSE 0 END AS bit) AS IdentityVisible
+    ) creatorAuth
+    LEFT JOIN dbo.MR_V_PeopleDirectory creator
+      ON creator.Sicil = t.CreatedBySicil AND creatorAuth.IdentityVisible = 1
     JOIN STRING_SPLIT(@taskIds, ',') requested
       ON t.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
     WHERE @isAdmin = 1
@@ -906,9 +954,10 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       assigneeAvatarIdentities: assigneeAvatarIdentities.get(id(row.TaskId)) || [],
       assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
       isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
-      createdBySicil: row.CreatedBySicil == null ? null : String(row.CreatedBySicil),
+      createdBySicil: row.VisibleCreatedBySicil == null ? null : String(row.VisibleCreatedBySicil),
       isCurrentUserCreator: Boolean(row.IsCurrentUserCreator),
       // Görev künyesi: kartta "kim, ne zaman oluşturdu" satırını besler.
+      createdByName: row.CreatedByName == null ? null : String(row.CreatedByName).trim() || null,
       createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
       deps: dependencies.get(id(row.TaskId)) || [], version: encodeVersion(row.RowVersion)
     }))

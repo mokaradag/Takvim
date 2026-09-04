@@ -489,3 +489,198 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   background: var(--bg-elev);
   font-size: 10.5px;
 }
+
+/* ── Yükleniyor göstergeleri (bkz. components/Loader.jsx) ──── */
+.app-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--spinner-size, 14px);
+  height: var(--spinner-size, 14px);
+  border-radius: 50%;
+  border: 2px solid color-mix(in oklab, currentcolor 22%, transparent);
+  border-top-color: currentcolor;
+  animation: app-spin 0.7s linear infinite;
+}
+@keyframes app-spin { to { transform: rotate(360deg); } }
+
+.saving-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-sticky);
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--bg-elev) 72%, transparent);
+  backdrop-filter: blur(2px);
+  animation: saving-overlay-in 0.16s ease-out;
+}
+@keyframes saving-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+.saving-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 16px 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.saving-overlay-card .app-spinner { color: var(--accent); }
+.saving-overlay-track,
+.persistence-progress {
+  position: relative;
+  display: block;
+  width: 132px;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--bg-elev-2);
+  overflow: hidden;
+}
+.persistence-progress { width: 100%; margin-top: 8px; }
+.saving-overlay-bar,
+.persistence-progress-bar {
+  position: absolute;
+  inset-block: 0;
+  width: 42%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: saving-sweep 1.15s ease-in-out infinite;
+}
+@keyframes saving-sweep {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(260%); }
+}
+.persistence-status-saving { display: flex; flex-direction: column; gap: 2px; }
+.reduce-motion .app-spinner { animation-duration: 1.6s; }
+.reduce-motion .saving-overlay-bar,
+.reduce-motion .persistence-progress-bar { animation-duration: 3s; }
+@media (prefers-reduced-motion: reduce) {
+  .app-spinner { animation-duration: 1.6s; }
+  .saving-overlay,
+  .saving-overlay-bar,
+  .persistence-progress-bar { animation-duration: 3s; }
+}
+
+/* ── Aç/kapa anahtarı (kilometre taşı vb.) ─────────────────── */
+.toggle-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.toggle-field.is-on {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  background: color-mix(in oklab, var(--accent) 8%, var(--bg-elev-2));
+}
+.toggle-field.is-disabled { opacity: 0.6; cursor: not-allowed; }
+.toggle-field-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.toggle-field-text strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.toggle-field-text small { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
+.toggle-switch {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 21px;
+  border: 1px solid var(--border-strong);
+  border-radius: 99px;
+  background: var(--bg-elev);
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.toggle-field[aria-checked="true"] .toggle-switch {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.16s ease;
+}
+.toggle-field[aria-checked="true"] .toggle-knob {
+  transform: translateX(17px);
+  background: var(--accent-fg, white);
+}
+
+/* ── Gantt anahat denetimleri ──────────────────────────────── */
+.gantt-outline-controls { display: inline-flex; align-items: center; gap: 6px; }
+.gantt-outline-seg button,
+.gantt-level-seg button { display: inline-flex; align-items: center; gap: 4px; }
+.gantt-level-seg button { min-width: 26px; justify-content: center; font-variant-numeric: tabular-nums; }
+.gantt-control-label { font-size: 12px; }
+.gantt-toolbar-right { flex-wrap: wrap; row-gap: 6px; }
+@media (max-width: 1180px) {
+  .gantt-outline-seg button span { display: none; }
+}
+
+/* ── Görevler tablosu: dar ekran ve büyük yazı tipi davranışı ──
+   Yazı ölçeği büyütüldüğünde (`body { zoom }`) görünüm alanı CSS pikseli
+   cinsinden küçülür ve geniş sabit sütunlar tabloyu yatay kaydırmaya sokardı;
+   en sağdaki posta ve silme düğmeleri de görüş dışında kalırdı. Sütun alt
+   sınırları içeriğe göre daraltıldı, eylem sütunu ise sağa YAPIŞIK durur ve
+   her koşulda erişilebilir kalır. */
+.tasks-table { --pad-cell-x: 9px; }
+.tasks-table .tasks-index-col,
+.tasks-table .tasks-index-cell {
+  width: 42px;
+  padding-inline: 4px;
+  font-size: 11.5px;
+  text-align: center;
+  white-space: nowrap;
+}
+.tasks-table .tasks-date-cell { font-size: 12px; white-space: nowrap; }
+/* Başlıklar SARMALANMAZ: sütun alt sınırları daraltıldığında "Başlangıç" gibi
+   etiketler hece hece kırılıyor ve satır yüksekliği iki katına çıkıyordu.
+   Uzun metin yalnızca gövde hücrelerinde sarılır. */
+.tasks-table thead th { white-space: nowrap; }
+.tasks-table tbody td { overflow-wrap: anywhere; }
+
+.tasks-actions-col,
+.tasks-actions-cell {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  width: 72px;
+  padding-inline: 8px;
+  background: var(--bg-elev);
+  /* Kaydırma sırasında sabit sütunun sınırı belirgin kalsın. */
+  box-shadow: -8px 0 12px -10px rgb(0 0 0 / .55);
+}
+.tbl thead th.tasks-actions-col { z-index: calc(var(--z-sticky) + 1); }
+.tbl tbody tr:hover .tasks-actions-cell { background: var(--bg-hover); }
+
+/* Dar alanda tablo kendini toplar. Ölçüt KAPSAYICININ genişliğidir, görünüm
+   alanının değil: yazı ölçeği `body { zoom }` ile uygulandığı için ortam
+   sorgusu (`@media`) pencere boyutunu değişmemiş görür, kapsayıcı sorgusu ise
+   gerçekten daralan alanı ölçer. Destek yoksa kural yok sayılır ve tablo
+   bugünkü davranışını sürdürür. */
+.tasks-table-card { container-type: inline-size; container-name: gorevler-tablosu; }
+@container gorevler-tablosu (max-width: 1150px) {
+  /* Sıra numarası bilgi taşımaz; yer daraldığında ilk o düşer. */
+  .tasks-table .tasks-index-col,
+  .tasks-table .tasks-index-cell { display: none; }
+  .tasks-table { --pad-cell-x: 7px; }
+}

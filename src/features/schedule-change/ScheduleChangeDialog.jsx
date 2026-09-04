@@ -4,13 +4,15 @@ import { DateInput } from '../../components/DateInput.jsx';
 import { fmt } from '../../scheduling/dates/index.js';
 import { Icons } from '../../components/icons.jsx';
 import {
-  SCHEDULE_DATE_ROWS,
   reconcileScheduleProposal,
-  scheduleDifferenceSummary
+  scheduleDifferenceSummary,
+  scheduleProposalRows
 } from './scheduleChangePresentation.js';
 import { useModalFocusTrap } from './useModalFocusTrap.js';
 
-export function ScheduleChangeDialog({ task, onCancel, onSubmit }) {
+export function ScheduleChangeDialog({ task, onCancel, onSubmit, fields = null }) {
+  const rows = useMemo(() => scheduleProposalRows(fields), [fields]);
+  const targetOnly = rows.length === 1 && rows[0].key === 'targetFinish';
   const current = useMemo(() => ({
     plannedStart: task.plannedStart || null,
     plannedFinish: task.plannedFinish || null,
@@ -23,7 +25,12 @@ export function ScheduleChangeDialog({ task, onCancel, onSubmit }) {
   const messageRef = useRef(null);
   const dialogRef = useRef(null);
   const dirtyDateFieldsRef = useRef(new Set());
-  const summary = useMemo(() => scheduleDifferenceSummary(current, proposed), [current, proposed]);
+  // Özet de yalnızca sorulan alanları karşılaştırır: gizli bir alan farklı
+  // görünse bile kullanıcı onu önermiyor.
+  const summary = useMemo(
+    () => scheduleDifferenceSummary(current, proposed, rows),
+    [current, proposed, rows]
+  );
 
   useEffect(() => {
     setProposed((dates) => reconcileScheduleProposal(
@@ -59,7 +66,16 @@ export function ScheduleChangeDialog({ task, onCancel, onSubmit }) {
     setError(null);
     let result;
     try {
-      result = await onSubmit({ taskId: task.id, proposedDates: proposed, message: message.trim() });
+      // YALNIZCA pencerede sorulan alanlar gönderilir. Gizli alanlar da
+      // taşınsaydı, pencere açıkken planı başkası değiştirdiğinde öneri
+      // panelin eski değerlerini de kalıcılaştırır ve kabul, kullanıcının hiç
+      // istemediği bir geri alma yazardı (sunucu eksik alanı güncel görev
+      // satırından tamamlar).
+      result = await onSubmit({
+        taskId: task.id,
+        proposedDates: Object.fromEntries(rows.map(({ key }) => [key, proposed[key] || null])),
+        message: message.trim()
+      });
     } catch (submissionError) {
       setError(submissionError?.message || 'Tarih değişikliği talebi gönderilemedi.');
       return;
@@ -81,7 +97,11 @@ export function ScheduleChangeDialog({ task, onCancel, onSubmit }) {
           <div>
             <span className="schedule-modal-eyebrow"><Icons.Calendar size={12} /> Plan onayı</span>
             <h2 id="schedule-change-title">Yeni tarih öner</h2>
-            <p>Görev tarihleri hemen değişmez. Öneri, görevi oluşturan kişinin kararına gönderilir.</p>
+            <p>
+              {targetOnly
+                ? 'Hedef bitiş tarihi bir taahhüttür ve doğrudan değiştirilemez. Planlanan ve gerçekleşen tarihleri panelden kendiniz güncelleyebilirsiniz; öneri yalnızca hedef bitiş için gönderilir.'
+                : 'Görev tarihleri hemen değişmez. Öneri, görevi oluşturan kişinin kararına gönderilir.'}
+            </p>
           </div>
           <button className="icon-btn" type="button" onClick={onCancel} aria-label="Kapat" disabled={busy}><Icons.Close size={15} /></button>
         </header>
@@ -96,7 +116,7 @@ export function ScheduleChangeDialog({ task, onCancel, onSubmit }) {
             </tr>
           </thead>
           <tbody>
-            {SCHEDULE_DATE_ROWS.map(({ key, label }) => (
+            {rows.map(({ key, label }) => (
               <tr className="schedule-compare-row" key={key}>
                 <th scope="row">{label}</th>
                 {/* Tarih, kullanıcının biçim tercihiyle çizilir. Ham saklanan

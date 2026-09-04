@@ -215,6 +215,19 @@ Two guards protect the coalescing window:
 - **Tab close / hide.** `UnsavedChangesGuard` flushes the pending queue on `visibilitychange` and `pagehide`, and raises the browser's own confirmation on `beforeunload` while a write is pending or in flight. Previously an edit made less than 250 ms before the tab closed never reached the server, and the "Kaydedildi" indicator never appeared, so the loss was invisible. That final flush is sent with `keepalive`, because a plain `fetch` started during unload may be cancelled by the browser. "In flight" is read from `pendingMutationCount`: the coalescer removes a patch from the queue *before* awaiting the request, so a queue-only check would leave an already-started write unprotected.
 - **Invalid values never enter the queue.** An empty Task title is rejected in the drawer before it is scheduled. The server rejects an empty title with `TASK_TITLE_REQUIRED`, and because coalescing merges fields, that rejection took the batched progress and date edits down with it. Clearing the field also **cancels the queued title patch**: after `ABC → AB → A → empty`, the queue still held `A`, which the delay (or the drawer close) then persisted even though the UI said it would not be saved.
 
+### 9.1.1 A remounted provider must not keep a closed queue
+
+`dispose()` rejects pending patches and closes the coalescer, so a disposed
+queue silently refuses every later `schedule()` call. React 18 `StrictMode`
+mounts, unmounts and remounts effects once in development, while the queue
+itself is produced by `useMemo` and therefore survives that simulated unmount.
+The provider consequently reused a **closed** queue: in `npm run dev` no Task
+edit ever reached the repository, the optimistic reducer action never ran (the
+state action is dispatched inside `persistAction`), and the user saw neither a
+save nor an error. `AppStateProvider` now calls `persistence.revive()` when the
+effect mounts and `dispose()` on cleanup. Production builds run the effect once,
+where `revive()` on a fresh queue is a no-op.
+
 ### 9.2 A failed write never traps the Task panel
 
 Closing the Task panel flushes pending writes, but the close itself is **unconditional**. Earlier, both `closeTask()` and the overlay's `onClose` returned the failed flush result without clearing the selection, so a server-rejected field left the panel open with no working close button — the application appeared frozen. The failure is still reported: it stays in the persistence status strip with its message, code and field path.

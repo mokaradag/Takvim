@@ -52,8 +52,10 @@ import {
   simpleCalendarTabId
 } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
+import { QuickActions } from './QuickActions';
 import { SidebarUserPanel } from './SidebarUserPanel';
 import { WelcomeScreen } from './WelcomeScreen';
+import { useSignOut } from './useSignOut.js';
 
 // Basit Mod, Gelişmiş Mod ile aynı Gantt görünümünü paylaşır: hızlı görev
 // tanımı yapan kullanıcı da planı zaman çizelgesinde görebilmelidir.
@@ -133,6 +135,8 @@ export default function AppShell() {
   const currentUser = useCurrentUser();
   const { isSystemAdmin } = useAppState();
   const { openTask } = useTaskActions();
+  // Üst ve yan çubuktaki iki çıkış düğmesi aynı istek/durum örneğini paylaşır.
+  const signOutState = useSignOut();
   const simpleMode = t.appMode === 'simple';
 
   const [view, setView] = useState(() => {
@@ -429,6 +433,7 @@ export default function AppShell() {
           <SidebarUserPanel
             theme={t.theme}
             onToggleTheme={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')}
+            signOutState={signOutState}
           />
           <div className="sidebar-version">MERGEN Rota · Sürüm 1.0 · {simpleMode ? 'Basit' : 'Gelişmiş'} Mod</div>
         </div>
@@ -452,12 +457,21 @@ export default function AppShell() {
           <div className="topbar-actions">
             <ScheduleRequestCenter />
             <DataRefreshControl />
+            {/* Mod, tema ve oturum eylemleri her sayfadan tek tıkla erişilir. */}
+            <QuickActions
+              simpleMode={simpleMode}
+              onChooseMode={chooseMode}
+              theme={t.theme}
+              onToggleTheme={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')}
+              signOutState={signOutState}
+            />
             {exportVisible && (
               <ProjectExportMenu
                 project={selectedProject}
                 projects={projects}
                 tasks={tasks}
                 wbs={wbs}
+                people={directoryPeople}
               />
             )}
             {view === 'veri' && (

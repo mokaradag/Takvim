@@ -214,6 +214,104 @@ bir proje olan kullanıcıya o projenin sayıları gösteriliyordu.
 ağacı" kartı `wbs` sayfasını `tree` sekmesiyle açar; niyet olmasaydı kart adını
 taşıdığı ağaca değil, Proje Tanımı sekmesine düşerdi.
 
+## Üst çubuk hızlı eylemleri
+
+Mod seçimi, tema ve oturum kapatma her sayfadan tek tıkla erişilir
+(`src/components/shell/QuickActions.jsx`). Üçü de önceden ya **Ayarlar**
+sayfasında ya da kenar çubuğunun altında duruyordu; en sık kullanılan üç eylem
+için sayfa değiştirmek gerekiyordu.
+
+- **Basit / Gelişmiş** — hap biçimli iki durumlu seçim. `AppShell.chooseMode`
+  ile aynı akışı çalıştırır: Basit Moda geçişte çalışma alanı portföye döner ve
+  Takvim sayfası açılır. Ayarlar sayfasındaki mod kartları kaldırılmadı; iki yol
+  aynı tercihi yazar.
+- **Tema** — güneş/ay ikonlu kaydırmalı anahtar (`role="switch"`). Topuz seçili
+  tarafı örter.
+- **Oturumu kapat** — yalnızca Gerçek Sistem + Keycloak oturumunda görünür.
+  Çıkış akışı kenar çubuğu kullanıcı bloğuyla **paylaşılan** `useSignOut`
+  kancasındadır; iki kopya arasında düzeltme farkı oluşmaz. Başarısız çıkış
+  başarılı gibi sunulmaz.
+
+## Kayıt göstergeleri
+
+Görev tanımı ve düzenlemesi veritabanına yazılırken birkaç saniye sürebilir.
+`src/components/Loader.jsx` üç göstergeyi tek yerde toplar ve hepsi aynı
+hareket dilini kullanır; `reduce-motion` tercihinde animasyonlar CSS tarafında
+yavaşlar:
+
+- `Spinner` — düğme ve durum satırlarındaki dönen halka,
+- `ButtonSpinner` — kayıt sürerken düğmenin simgesinin yerini alır,
+- `SavingOverlay` — Hızlı Görev Tanımı kartının üzerine yayılan ve işaretçi
+  etkileşimini kesen perde. Klavye etkileşimini kendi başına kesmez: her çağıran
+  etkileşimli içerik ağacına kayıt boyunca `inert` uygulamalı, erişilebilir durum
+  bildirimini ise bu `inert` ağacının dışında tutmalıdır.
+
+Kullanıldığı yerler: Hızlı Görev Tanımı (`Takvime ekle`), Görevler sayfasındaki
+**Yeni görev**, iki moddaki görev panelinin **Tamam** düğmesi, dışa aktarma
+menüsü ve sağ alttaki kalıcılaştırma şeridi (`Kaydediliyor…` + ilerleme
+süpürmesi).
+
+## Görev tablosu · çapraz sütun süzgeçleri
+
+Gelişmiş Moddaki **Görevler** tablosunda bir sütuna süzgeç uygulandığında öteki
+sütunların seçenek listesi de daralır: menüde yalnızca o an görünen satırlarda
+bulunan değerler kalır (`src/features/tasks/taskTableFacets.js`). Seçenekler
+süzülmemiş kümeden üretildiğinde kullanıcı, sonucu kesinlikle boş olan bir
+değeri seçebiliyordu — örneğin bir proje süzülüyken başka projenin sorumlusunu.
+
+Bir sütunun **kendi** süzgeci, kendi seçenekleri hesaplanırken yok sayılır;
+aksi hâlde seçili değerin dışındaki her seçenek listeden düşer ve ikinci bir
+değer eklenemezdi. Seçili değerler ayrıca listede tutulur: otomatik yenileme ya
+da kurumsal seçim satırları kaldırdığında kullanıcı o değeri işaretten
+çıkarabilmelidir. Satır süzmesi ile faset hesabı **aynı yüklemi** kullanır
+(`taskTableMatches`), böylece iki kopya arasında kural farkı oluşmaz. Basit Mod
+tablosu aynı davranışı `simpleTaskFacets.js` ile zaten uyguluyordu.
+
+## Görev tablosu · büyük yazı tipinde yerleşim
+
+Yazı ölçeği gövdeye `zoom` uygular; görünüm alanı CSS pikseli cinsinden küçülür
+ve 12 sütunlu tablo yatay kaydırmaya girer. Önceden en sağdaki **posta** ve
+**silme** düğmeleri görüş dışında kalıyor, tarih ve sorumlu sütunları ise
+gereğinden geniş duruyordu. Üç kural bunu düzeltir:
+
+1. Sütun alt sınırları içeriğe göre daraltıldı (tarihler 130 → 96 piksel,
+   sorumlu 150 → 96, öncelik 100 → 86); tablonun doğal genişliği ~1540
+   pikselden ~1230 piksele indi.
+2. Eylem sütunu **sağa yapışıktır** (`position: sticky; right: 0`); tablo
+   kaydırılsa da posta ve silme düğmeleri her zaman erişilebilir kalır. Aynı
+   kural Basit Mod tablosunda da geçerlidir.
+3. Kapsayıcı daraldığında sıra numarası sütunu düşer ve hücre boşluğu azalır.
+   Ölçüt **kapsayıcı sorgusudur** (`@container`), ortam sorgusu değil: `zoom`
+   pencere boyutunu değiştirmediği için `@media` bu daralmayı göremez.
+
+Başlıklar sarmalanmaz; uzun metin yalnızca gövde hücrelerinde sarılır.
+
+## Gantt · anahat denetimleri ve kilometre taşları
+
+Gantt araç çubuğundaki İngilizce **Zoom** etiketi **Yakınlaştırma** oldu ve
+S/M/L düğmeleri **Dar / Orta / Geniş** olarak yazıldı. Yanına ortak anahat
+denetimleri eklendi (`src/features/gantt/GanttOutlineControls.jsx`):
+
+- **Genişlet / Daralt** — bütün grupları (Portföy Gantt'ı) veya bütün WBS
+  dallarını (WBS Gantt'ı) tek tıkla açar/kapatır.
+- **Seviye** — yalnızca WBS Gantt'ında görünür ve hiyerarşiyi belirtilen
+  seviyeye kadar açar. Seviye 1 yalnızca kökleri gösterir. Eşleme saf bir
+  modülde tutulur (`ganttOutlineLevels.js`); kullanıcı dalları tek tek açtıysa
+  hiçbir seviye düğmesi etkin görünmez.
+
+Talep penceresi yalnızca **sorduğu** alanları gönderir; sunucu eksik alanları
+kilitli görev satırından tamamlar. Gizli alanlar da taşınsaydı, pencere açıkken
+planı başkası değiştirdiğinde öneri panelin eski değerlerini kalıcılaştırır ve
+kabul, kullanıcının hiç istemediği bir geri alma yazardı.
+
+**Kilometre taşı**, görev panelindeki *Güncel plan* kartında bir anahtarla
+tanımlanır (tam proje yetkisi gerekir). Açıldığında görev sıfır süreli tek bir
+güne indirgenir: planlanan bitiş başlangıcı izler, süre sıfırlanır ve alan
+"Kilometre taşı tarihi" olarak adlandırılır. Gantt görünümleri bu görevi çubuk
+yerine eşkenar dörtgenle çizer. Alan daha önce veri modelinde ve dışa aktarımda
+vardı ama hiçbir ekrandan **tanımlanamıyordu**; bu yüzden Gantt'ta kilometre
+taşı hiç görünmüyordu.
+
 ## Sütun süzgeçlerinde canlı arama
 
 Çoklu (`multi`) ve tekli (`single`) sütun süzgeçleri, seçenek sayısı

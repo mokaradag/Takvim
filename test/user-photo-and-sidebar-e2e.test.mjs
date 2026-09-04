@@ -260,12 +260,19 @@ test('kenar çubuğu footer kısayolu kaldırıldı, Yardım sayfası ve gezinme
   assert.match(navigation, /id: 'yardim'/);
   assert.match(shell, /case 'yardim': return <HelpView \/>;/);
 
-  // Tema ve oturum kapatma denetimleri korunur.
+  // Tema ve oturum kapatma denetimleri korunur. Çıkış akışı AppShell'deki tek
+  // `useSignOut` örneğinden üst ve yan çubuğa taşınır.
   assert.match(panel, /onToggleTheme/);
   assert.match(panel, /title="Tema"/);
   assert.match(panel, /title="Oturumu kapat"/);
-  assert.match(panel, /auth\/logout/);
-  assert.match(panel, /session\?\.authMode === 'keycloak'/);
+  assert.match(panel, /signOutState/);
+  assert.doesNotMatch(panel, /useSignOut\(\)/);
+  assert.match(shell, /const signOutState = useSignOut\(\);/);
+  assert.equal((shell.match(/signOutState=\{signOutState\}/g) || []).length, 2);
+
+  const signOut = read('src/components/shell/useSignOut.js');
+  assert.match(signOut, /auth\/logout/);
+  assert.match(signOut, /session\?\.authMode === 'keycloak'/);
 });
 
 test('departman satırı uzun metin için sarmalanır ve küçük yazı tipi kullanır', () => {

@@ -67,11 +67,7 @@ function seed(overrides = {}) {
 function proposal(targetFinish = '2026-09-03') {
   return {
     taskId: TASK_ID,
-    proposedDates: {
-      plannedStart: '2026-09-01',
-      plannedFinish: targetFinish,
-      targetFinish
-    },
+    proposedDates: { targetFinish },
     message: 'Doğrulama ortamı bir gün sonra hazır olacak.'
   };
 }
@@ -80,7 +76,8 @@ test('başkasının görevindeki sorumlu doğrudan planı değiştiremez, talep 
   const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
     const task = stack.state.tasks[0];
-    assert.equal(task.createdBySicil, String(CREATOR));
+    assert.equal(task.createdBySicil, null, 'kısmi görünüm ilgisiz oluşturan Sicilini maskelemelidir');
+    assert.equal(task.isCurrentUserCreator, false);
     await assert.rejects(
       stack.repository.commitChanges({ taskUpserts: [{ ...task, targetFinish: '2026-09-03', assigneeMutation: false }] }),
       (error) => error.code === 'FORBIDDEN'
@@ -99,6 +96,80 @@ test('başkasının görevindeki sorumlu doğrudan planı değiştiremez, talep 
     assert.ok(stack.db.auditLog.some((entry) => entry.ActionCode === 'UPDATE'
       && entry.EntityType === 'TASK_SCHEDULE_REQUEST'
       && String(entry.EntityId).toLowerCase() === first.value.id));
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('yalnızca hedef bitiş önerisi gizli plan tarihlerini geri almaz', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    // Pencere açıkken planı BAŞKASI ilerletir: istemcinin elindeki plan artık
+    // bayattır. Hedef bitiş talebi yalnızca kendi alanını taşımalıdır.
+    stack.db.tasks[0].PlannedStart = '2026-09-05';
+    stack.db.tasks[0].PlannedFinish = '2026-09-06';
+
+    const created = await submitScheduleChangeRequest({
+      taskId: TASK_ID,
+      proposedDates: { targetFinish: '2026-09-10' },
+      message: 'Yalnızca hedef bitiş için onay istiyorum.'
+    });
+    assert.equal(created.ok, true);
+
+    const request = stack.db.taskScheduleChangeRequests.at(-1);
+    // Gönderilmeyen alanlar KİLİTLİ görev satırından tamamlanır; istemcinin
+    // eski değerleri talebe hiç girmez.
+    assert.equal(request.ProposedPlannedStart, '2026-09-05');
+    assert.equal(request.ProposedPlannedFinish, '2026-09-06');
+    assert.equal(request.ProposedTargetFinish, '2026-09-10');
+
+    process.env.MERGEN_ROTA_DEV_SICIL = String(CREATOR);
+    await stack.reload();
+    const decided = await decideScheduleChangeRequest(created.value.id, 'ACCEPT', 'Uygundur.');
+    assert.equal(decided.ok, true);
+    assert.equal(decided.value.outcome, 'ACCEPTED');
+    // Kabul yalnızca hedef bitişi yazar; güncel plan korunur.
+    assert.equal(stack.db.tasks[0].PlannedStart, '2026-09-05');
+    assert.equal(stack.db.tasks[0].PlannedFinish, '2026-09-06');
+    assert.equal(stack.db.tasks[0].TargetFinish, '2026-09-10');
+    process.env.MERGEN_ROTA_DEV_SICIL = String(ASSIGNEE);
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('hiç tarih taşımayan talep reddedilir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    const result = await submitScheduleChangeRequest({
+      taskId: TASK_ID,
+      proposedDates: {},
+      message: 'Boş talep.'
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /en az bir plan tarihi/i);
+    // Reddedilen talep ARKASINDA kayıt bırakmamalıdır: doğrulama, satır
+    // yazıldıktan sonra çalışırsa karar bekleyen boş bir talep birikirdi.
+    assert.equal(stack.db.taskScheduleChangeRequests.length, 0);
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('sorumlu plan tarihlerini hedef bitiş talebine ekleyemez', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    for (const field of ['plannedStart', 'plannedFinish']) {
+      const result = await submitScheduleChangeRequest({
+        taskId: TASK_ID,
+        proposedDates: { targetFinish: '2026-09-10', [field]: '2026-09-09' },
+        message: 'Yetki sınırı doğrulaması.'
+      });
+      assert.equal(result.ok, false, field);
+      assert.equal(result.code, 'MUTATION_FAILED', field);
+      assert.match(result.message, /yalnızca hedef bitiş/i, field);
+    }
+    assert.equal(stack.db.taskScheduleChangeRequests.length, 0);
   } finally {
     await stack.dispose();
   }
@@ -128,7 +199,7 @@ test('göreve atanmamış kullanıcı talep oluşturamaz ve sorumlu karar sahibi
   }
 });
 
-test('oluşturucu kabul ettiğinde üç tarih ve süre atomik güncellenir, talep iki tarafa kalıcı görünür', async () => {
+test('oluşturucu kabul ettiğinde yalnız hedef bitiş güncellenir, talep iki tarafa kalıcı görünür', async () => {
   const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
     const created = await submitScheduleChangeRequest(proposal());
@@ -141,9 +212,9 @@ test('oluşturucu kabul ettiğinde üç tarih ve süre atomik güncellenir, tale
     assert.equal(decided.ok, true);
     assert.equal(decided.value.outcome, 'ACCEPTED');
     assert.equal(stack.db.tasks[0].PlannedStart, '2026-09-01');
-    assert.equal(stack.db.tasks[0].PlannedFinish, '2026-09-03');
+    assert.equal(stack.db.tasks[0].PlannedFinish, '2026-09-02');
     assert.equal(stack.db.tasks[0].TargetFinish, '2026-09-03');
-    assert.equal(stack.db.tasks[0].PlannedDurationDays, 3);
+    assert.equal(stack.db.tasks[0].PlannedDurationDays, 2);
     assert.equal(stack.db.taskScheduleChangeRequests[0].Status, 'ACCEPTED');
 
     process.env.MERGEN_ROTA_DEV_SICIL = String(ASSIGNEE);
@@ -167,7 +238,8 @@ test('sorumlu gerçekleşen tarihleri yazar; ters sıralı çift REDDEDİLİR', 
   const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
     const task = stack.state.tasks[0];
-    assert.equal(task.createdBySicil, String(CREATOR), 'görevi başkası oluşturmuş olmalıdır');
+    assert.equal(task.createdBySicil, null, 'başkasına ait gizli oluşturan Sicili açığa çıkmamalıdır');
+    assert.equal(task.isCurrentUserCreator, false, 'görevi başkası oluşturmuş olmalıdır');
 
     const written = await stack.repository.commitChanges({
       taskUpserts: [{ ...task, actualStart: '2026-09-01', actualFinish: '2026-09-05', assigneeMutation: false }]

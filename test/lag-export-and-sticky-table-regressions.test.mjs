@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildProjectCsv, buildProjectExcelHtml } from '../src/lib/exportProjectData.js';
+import { buildProjectCsv, buildProjectWorkbook } from '../src/lib/exportProjectData.js';
 import { normalizeCalendar } from '../src/scheduling/calendars/index.js';
 import { calculateCpm } from '../src/scheduling/cpm/index.js';
 import {
@@ -121,16 +121,17 @@ test('CSV and Excel-compatible exports neutralize formula-like user values', () 
   };
 
   const csv = buildProjectCsv(input);
-  const html = buildProjectExcelHtml(input);
+  const workbook = Buffer.from(buildProjectWorkbook(input)).toString('utf8');
 
   assert.match(csv, /'=2\+2/);
   assert.match(csv, /'\+SUM\(A1:A2\)/);
   assert.match(csv, /'@cmd/);
   assert.doesNotMatch(csv, /(?:^|;)=2\+2(?:;|$)/m);
 
-  assert.match(html, /&#039;=2\+2/);
-  assert.match(html, /&#039;\+SUM\(A1:A2\)/);
-  assert.match(html, /&#039;@cmd/);
+  // Excel hücreleri de nötrlenir: satır içi metin kesme işaretiyle başlar.
+  assert.match(workbook, /&apos;=2\+2/);
+  assert.match(workbook, /&apos;\+SUM\(A1:A2\)/);
+  assert.match(workbook, /&apos;@cmd/);
 });
 
 test('project tag deduplication remaps legacy task variants to the retained tag', () => {

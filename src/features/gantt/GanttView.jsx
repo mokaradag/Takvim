@@ -8,9 +8,11 @@ import { depId, relTypeOf } from '../../scheduling/dependencies';
 import { getTaskDateRange, getGroupScheduleSummaries, taskDurationDays, getStatus } from '../../scheduling/metrics';
 import { projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
-import { Tooltip, InfoButton, ColumnFilter, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
+import { Tooltip, InfoButton, ColumnFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, usePortfolioSchedule, useTaskActions } from '../../state/hooks';
 import { taskProgressValue, taskSortValue } from '../tasks/taskDisplayValues.js';
+import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '../tasks/taskTableFacets.js';
+import { GanttOutlineControls } from './GanttOutlineControls.jsx';
 
 /* ── Gantt ──────────────────────────────────────────────── */
 const GANTT_DEFAULT_COLS = {
@@ -138,44 +140,27 @@ export function GanttView() {
   const projectById = useMemo2(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const projectByName = useMemo2(() => new Map(projects.map((project) => [project.name, project])), [projects]);
 
-  // Apply global search + per-column filters to tasks
-  const filteredTasks = useMemo2(() => {
-    let out = [...tasks];
-    if (globalSearch) {
-      const q = globalSearch.toLowerCase();
-      out = out.filter(t =>
-        t.task.toLowerCase().includes(q)
-        || t.proje.toLowerCase().includes(q)
-        || t.keyword.toLowerCase().includes(q)
-        || (t.sorumlu || []).some(s => s.toLowerCase().includes(q))
-        || (t.priority || '').toLowerCase().includes(q)
-      );
-    }
-    if (colFilters.task) {
-      const q = colFilters.task.toLowerCase();
-      out = out.filter(t => t.task.toLowerCase().includes(q));
-    }
-    if (colFilters.proje.length) out = out.filter(t => colFilters.proje.includes(t.proje));
-    if (colFilters.sorumlu.length) {
-      out = out.filter(t => (t.assigneeIds || []).some(id => colFilters.sorumlu.includes(String(id))));
-    }
-    if (colFilters.priority.length) out = out.filter(t => colFilters.priority.includes(t.priority || 'medium'));
-    if (colFilters.status.length) {
-      out = out.filter(t => {
-        const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
-        if (colFilters.status.includes('overdue') && overdue) return true;
-        return colFilters.status.includes(t.status || 'todo');
-      });
-    }
-    ['plannedStart', 'plannedFinish', 'targetFinish'].forEach(k => {
-      if (colFilters[k]) out = out.filter(t => dateMatchesFilter(t[k], colFilters[k]));
-    });
-    ['progress'].forEach(k => {
-      if (colFilters[k]) out = out.filter(t => numericMatchesFilter(taskProgressValue(t), colFilters[k]));
-    });
-    if (criticalOnly) out = out.filter(t => schedule.tasks[t.id]?.isCritical);
-    return out;
-  }, [tasks, globalSearch, colFilters, today_, criticalOnly, schedule]);
+  // Kritik süzgeci sütun süzgeçlerinden ÖNCE uygulanır: sütun seçenekleri de bu
+  // daraltılmış kümeden türetilir.
+  const criticalScopedTasks = useMemo2(
+    () => (criticalOnly ? tasks.filter((t) => schedule.tasks[t.id]?.isCritical) : tasks),
+    [tasks, criticalOnly, schedule]
+  );
+
+  // Arama ve sütun süzgeçleri Görevler tablosuyla AYNI yüklemi kullanır
+  // (bkz. features/tasks/taskTableFacets.js): iki ekranda iki ayrı kopya,
+  // birinde düzeltilen bir kuralı ötekinde bırakıyordu.
+  const filteredTasks = useMemo2(
+    () => criticalScopedTasks.filter((task) => taskTableMatches(task, { search: globalSearch, filters: colFilters }, null, today_)),
+    [criticalScopedTasks, globalSearch, colFilters, today_]
+  );
+
+  // Sütun seçenekleri ÇAPRAZ süzülür: bir sütuna süzgeç uygulandığında öteki
+  // sütunlarda yalnızca hâlâ görünen değerler listelenir.
+  const facets = useMemo2(() => Object.fromEntries(TASK_TABLE_FACET_KEYS.map((key) => [
+    key,
+    taskTableFacetValues(criticalScopedTasks, { search: globalSearch, filters: colFilters }, key, today_)
+  ])), [criticalScopedTasks, globalSearch, colFilters, today_]);
 
   const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedStart || colFilters.plannedFinish || colFilters.targetFinish);
   const clearAllFilters = () => {
@@ -280,6 +265,11 @@ export function GanttView() {
     });
     return list;
   }, [groups, collapsed, groupBy, projectByName, schedule, groupSummaries]);
+
+  const expandAllGroups = () => setCollapsed(new Set());
+  // Daraltma listesi GRUP ADLARINI tutar; tümünü daraltmak için görünen bütün
+  // grup adları kümeye alınır.
+  const collapseAllGroups = () => setCollapsed(new Set(groups.map(([name]) => name)));
 
   const toggleCollapse = (name) => {
     setCollapsed(s => {
@@ -480,12 +470,14 @@ export function GanttView() {
             <Icons.Close size={12} /> Filtreleri temizle
           </button>
         )}
-        <div className="row" style={{ marginLeft: 'auto', gap: 6 }}>
-          <span className="muted" style={{ fontSize: 12 }}>Zoom</span>
+        <div className="row gantt-toolbar-right" style={{ marginLeft: 'auto', gap: 6 }}>
+          {/* Grup satırları tek tıkla topluca açılıp kapanır. */}
+          <GanttOutlineControls onExpandAll={expandAllGroups} onCollapseAll={collapseAllGroups} />
+          <span className="muted gantt-control-label">Yakınlaştırma</span>
           <div className="seg">
-            <button className={zoom === 22 ? 'active' : ''} onClick={() => setZoom(22)}>S</button>
-            <button className={zoom === 28 ? 'active' : ''} onClick={() => setZoom(28)}>M</button>
-            <button className={zoom === 40 ? 'active' : ''} onClick={() => setZoom(40)}>L</button>
+            <button className={zoom === 22 ? 'active' : ''} onClick={() => setZoom(22)} title="Dar gün genişliği">Dar</button>
+            <button className={zoom === 28 ? 'active' : ''} onClick={() => setZoom(28)} title="Orta gün genişliği">Orta</button>
+            <button className={zoom === 40 ? 'active' : ''} onClick={() => setZoom(40)} title="Geniş gün genişliği">Geniş</button>
           </div>
           <InfoButton title="Gantt görünümü" icon={<Icons.Gantt size={12} />} corner accent="var(--c-purple)">
             <p>Görev çubukları kayıtlı başlangıç ve bitiş tarihlerine göre konumlanır. CPM sonuçları kritik görevleri ve ilişkileri vurgular; hesaplanan tarihler ayrı sütun ve bilgi alanlarında gösterilir.</p>
@@ -589,7 +581,7 @@ export function GanttView() {
                   { value: 'in_progress', label: 'Devam ediyor', icon: <StatusIcon id="in_progress" size={11} /> },
                   { value: 'done', label: 'Tamamlandı', icon: <StatusIcon id="done" size={11} /> },
                   { value: 'overdue', label: 'Geciken', icon: <StatusIcon id="overdue" size={11} /> }
-                ];
+                ].filter((option) => facets.status.has(option.value) || colFilters.status.includes(option.value));
               }
               else if (c.key === 'sorumlu') {
                 filterType = 'multi';
@@ -599,7 +591,10 @@ export function GanttView() {
                 // değeri KARARLI Sicil kimliğidir: ada göre süzülseydi aynı adlı
                 // iki çalışan tek seçenekte birleşir ve biri seçildiğinde diğerinin
                 // görevleri de listelenirdi.
-                filterOptions = people.slice().sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+                filterOptions = people
+                  .filter((p) => facets.sorumlu.has(String(p.id)) || colFilters.sorumlu.includes(String(p.id)))
+                  .slice()
+                  .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
                   .map(p => ({
                     value: String(p.id),
                     label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
@@ -611,7 +606,9 @@ export function GanttView() {
                 filterType = 'multi';
                 filterValue = colFilters.priority;
                 onFilter = (v) => setCF('priority', v);
-                filterOptions = Object.values(PRIORITIES).map(p => ({ value: p.id, label: p.label, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} /> }));
+                filterOptions = Object.values(PRIORITIES)
+                  .filter((p) => facets.priority.has(p.id) || colFilters.priority.includes(p.id))
+                  .map(p => ({ value: p.id, label: p.label, icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} /> }));
               }
               return (
                 <div key={c.key} style={{ textAlign: c.align === 'right' ? 'right' : 'left' }}>

@@ -20,6 +20,7 @@ const TASK_ID = '73333333-3333-4333-8333-333333333333';
 const OWNER = 920001;
 const CURRENT_ASSIGNEE = 920002;
 const CO_ASSIGNEE = 920003;
+const HIDDEN_CREATOR = 920004;
 const PHOTO_BASE = 'https://fotograf.test.internal/kurumsal/personel';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -170,6 +171,50 @@ test('görev güncelleme yanıtı gizli Sicili maskeleyip önceki görev kapsaml
       `${PHOTO_BASE}/${CO_ASSIGNEE}.jpg`
     );
     assert.deepEqual(stack.db.taskAssignees.map((entry) => entry.Sicil).sort(), [CURRENT_ASSIGNEE, CO_ASSIGNEE]);
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('kısmi görev görünürlüğü ilgisiz oluşturanın kimlik, ad ve fotoğraf anahtarını sızdırmaz', async () => {
+  const data = seed();
+  data.people.push({ Sicil: HIDDEN_CREATOR, DisplayName: 'Gizli Oluşturan', Username: 'gizliolusturan' });
+  data.tasks[0].CreatedBySicil = HIDDEN_CREATOR;
+  const stack = await createActualStack(data, { sicil: CURRENT_ASSIGNEE, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks[0];
+    assert.equal(task.createdBySicil, null);
+    assert.equal(task.createdByName, null);
+    assert.equal(task.isCurrentUserCreator, false);
+    assert.equal(stack.state.people.some((person) => person.id === String(HIDDEN_CREATOR)), false);
+    assert.equal(JSON.stringify(task).includes(String(HIDDEN_CREATOR)), false);
+    assert.equal(JSON.stringify(task).includes('Gizli Oluşturan'), false);
+
+    const result = await stack.persistence.updateTask(task.id, { task: 'Kimlik sızdırmadan güncellendi' });
+    assert.equal(result.ok, true);
+    assert.equal(result.value.taskUpserts[0].createdBySicil, null);
+    assert.equal(result.value.taskUpserts[0].createdByName, null);
+    assert.equal(JSON.stringify(result.value.taskUpserts[0]).includes(String(HIDDEN_CREATOR)), false);
+    assert.equal(JSON.stringify(result.value.taskUpserts[0]).includes('Gizli Oluşturan'), false);
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('kendi oluşturduğu görevin yetkili künye kimliği snapshot ve mutasyon yanıtında korunur', async () => {
+  const data = seed();
+  data.tasks[0].CreatedBySicil = CURRENT_ASSIGNEE;
+  const stack = await createActualStack(data, { sicil: CURRENT_ASSIGNEE, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks[0];
+    assert.equal(task.createdBySicil, String(CURRENT_ASSIGNEE));
+    assert.equal(task.createdByName, 'Ayşe Görevli');
+    assert.equal(task.isCurrentUserCreator, true);
+
+    const result = await stack.persistence.updateTask(task.id, { task: 'Künye korunarak güncellendi' });
+    assert.equal(result.ok, true);
+    assert.equal(result.value.taskUpserts[0].createdBySicil, String(CURRENT_ASSIGNEE));
+    assert.equal(result.value.taskUpserts[0].createdByName, 'Ayşe Görevli');
   } finally {
     await stack.dispose();
   }

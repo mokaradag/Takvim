@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Icons } from '../icons';
+import { Spinner } from '../Loader';
 import { useDataLifecycle } from '../../state/hooks';
 import { describeSaveError } from './persistenceStatusMessage.js';
 
@@ -62,7 +63,12 @@ export function PersistenceStatus() {
 
   return (
     <div className={`persistence-status${(details || refreshFailed) && !isSaving ? ' is-error' : ''}`} role="status" aria-live="polite">
-      {isSaving && <span className="persistence-status-line"><Icons.Clock size={13} /> Kaydediliyor...</span>}
+      {isSaving && (
+        <div className="persistence-status-saving">
+          <span className="persistence-status-line"><Spinner size={14} /> Kaydediliyor…</span>
+          <span className="persistence-progress"><span className="persistence-progress-bar" /></span>
+        </div>
+      )}
 
       {!isSaving && details && (
         <div className="col" style={{ gap: 9 }}>

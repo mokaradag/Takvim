@@ -33,6 +33,10 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - **Marka amblemi** preference hides both sidebar and topbar emblems.
 - Decorative emblem does not intercept pointer events.
 - `Dışa aktar` opens below the topbar without clipping and remains keyboard reachable.
+- Quick actions sit at the end of the topbar: the **Basit / Gelişmiş** pill
+  reflects and switches the active mode, the theme switch slides its knob over
+  the selected side, and the sign-out button appears only in an authenticated
+  Keycloak session. At 1100 px and below the mode labels collapse to icons.
 - Focus indicators are visible on keyboard-reachable controls.
 
 ## Dashboard / Özet
@@ -63,6 +67,12 @@ Record browser, OS, build commit and viewport dimensions with the result.
   screen they flip upward and stay fully inside the viewport.
 - DateInput displays and edits `gg/aa/yyyy` correctly.
 - Calendar button, invalid-state border and narrow-width DateInput remain usable.
+- Applying a filter in one column narrows the option lists of the other columns
+  to the values still visible; the column's own menu keeps offering its other
+  values, and an already selected value never disappears from its own menu.
+- The rightmost action column stays pinned while the table scrolls sideways: the
+  mail and delete buttons are reachable at every width. At **font scale 125 %**
+  the row-number column drops out and the header labels never wrap.
 
 ## Task Detail
 
@@ -78,6 +88,11 @@ Record browser, OS, build commit and viewport dimensions with the result.
   deselected — including the planned start's own weekday. The summary states how
   many occurrences the series has and how many new tasks will be created, and the
   occurrence calendar lists up to eight dates with the template's own day marked.
+- **Kilometre taşı** switch in *Güncel plan*: turning it on hides the planned
+  finish field, renames the start field, states that the duration is zero, and
+  the task is drawn as a diamond in both Gantt views. One click toggles once.
+- An assignee who did not create the task can edit planned/actual dates but not
+  **Hedef bitiş**; `Yeni tarih öner` then asks for the target finish only.
 - **İlişkiler ve bağımlılıklar** has `Öncüller` and `Ardıllar` tabs. Adding a
   successor updates the other task; a selection that would create a cycle is not
   offered in the list.
@@ -121,6 +136,11 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Column filters and Gantt column popovers open above chart content without clipping.
 - Holiday stripes and dependency overlays retain their intended local paint order.
 - WBS Gantt and responsible-person/CPM views remain usable.
+- Toolbar labels are Turkish: **Yakınlaştırma** with `Dar / Orta / Geniş`.
+- **Genişlet / Daralt** open and close every group (portfolio) or branch (WBS);
+  the **Seviye** buttons appear only in the WBS Gantt and expand the hierarchy
+  down to the chosen level, with no level highlighted after manual expansion.
+- A milestone task is drawn as a diamond, not a bar.
 
 ## Boot curtain (first data load)
 
@@ -213,6 +233,17 @@ Record browser, OS, build commit and viewport dimensions with the result.
   is rendered outside the visible area on any page.
 - The Gerçek Sistem / Demo switch is present in the Settings **Veri kaynağı** card and absent from the sidebar.
 - Persistence status indicator appears above normal content when saving/error/saved state is simulated by existing test/dev mechanisms.
+
+## Export output
+
+- **Excel çalışma kitabı** opens in Excel **without** the "file format and
+  extension don't match" warning, and contains Özet, Görevler, İş Dağılım Ağacı
+  (plus Projeler for a portfolio export).
+- The header row of every sheet is frozen and carries autofilter arrows; dates
+  sort as dates and İlerleme shows as a percentage.
+- **CSV paketi** downloads a ZIP whose entries open with Turkish characters
+  intact; **Görev listesi** still downloads the single flat CSV.
+- While an export is being produced the menu button shows the spinner.
 
 ## Result record
 

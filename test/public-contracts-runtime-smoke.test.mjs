@@ -235,7 +235,7 @@ test('data boundary presents user-facing Turkish status messages', () => {
 
 test('persistence status distinguishes saving, failure, and successful save states', () => {
   const source = read('src/components/shell/PersistenceStatus.jsx');
-  for (const message of ['Kaydediliyor...', 'Kaydetme hatası', 'Kaydedildi']) {
+  for (const message of ['Kaydediliyor…', 'Kaydetme hatası', 'Kaydedildi']) {
     assert.ok(source.includes(message), message);
   }
   assert.match(source, /onClick=\{clearPersistenceError\}/);

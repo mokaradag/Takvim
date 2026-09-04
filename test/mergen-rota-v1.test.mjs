@@ -17,7 +17,7 @@ import {
   getTaskDateRange,
   setGanttDateRangeOverride
 } from '../src/scheduling/metrics/index.js';
-import { buildProjectCsv, buildProjectExcelHtml } from '../src/lib/exportProjectData.js';
+import { buildProjectCsv, buildProjectWorkbook } from '../src/lib/exportProjectData.js';
 import { TAG_COLOR_KEYS, TAG_ICON_KEYS } from '../src/domain/tags/index.js';
 import { normalizeProjectTags, prepareProjectCreation, prepareProjectUpdate } from '../src/state/projectCreation.js';
 
@@ -124,11 +124,33 @@ test('CSV and Excel exports include structured project data and formatted dates'
     }]
   };
   const csv = buildProjectCsv(input);
-  const excel = buildProjectExcelHtml(input);
+  const workbookBytes = Buffer.from(buildProjectWorkbook(input));
   assert.match(csv, /WBS;Görev;Etiket/);
   assert.match(csv, /22\/07\/2026/);
-  assert.match(excel, /MERGEN Rota · Sürüm 1\.0/);
-  assert.match(excel, /<th>İlişkiler<\/th>/);
+  // Çalışma kitabı GERÇEK bir `.xlsx` kabıdır (ZIP imzası) ve sıkıştırmasız
+  // yazıldığı için sayfa içerikleri doğrudan aranabilir.
+  assert.equal(workbookBytes.subarray(0, 2).toString('latin1'), 'PK');
+  let offset = 0;
+  let tasksSheet = null;
+  while (offset + 30 <= workbookBytes.length && workbookBytes.readUInt32LE(offset) === 0x04034b50) {
+    const dataLength = workbookBytes.readUInt32LE(offset + 18);
+    const nameLength = workbookBytes.readUInt16LE(offset + 26);
+    const extraLength = workbookBytes.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const name = workbookBytes.subarray(nameStart, nameStart + nameLength).toString('utf8');
+    if (name === 'xl/worksheets/sheet2.xml') {
+      assert.equal(workbookBytes.readUInt16LE(offset + 8), 0, 'çalışma sayfası sıkıştırmasız olmalıdır');
+      tasksSheet = workbookBytes.subarray(dataStart, dataStart + dataLength).toString('utf8');
+      break;
+    }
+    offset = dataStart + dataLength;
+  }
+  assert.notEqual(tasksSheet, null, 'ikinci çalışma sayfası ZIP içinde bulunmalıdır');
+  assert.match(tasksSheet, /Görevler/);
+  assert.match(tasksSheet, /İlişkiler/);
+  assert.match(tasksSheet, /autoFilter/);
+  assert.match(tasksSheet, /state="frozen"/);
 });
 
 test('Sürüm 1.0 UI contracts place project creation and tag governance in Proje Yapısı', () => {

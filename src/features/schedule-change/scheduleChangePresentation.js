@@ -6,8 +6,23 @@ export const SCHEDULE_DATE_ROWS = Object.freeze([
   { key: 'targetFinish', label: 'Hedef bitiş' }
 ]);
 
-export function scheduleDifferenceSummary(current = {}, proposed = {}) {
-  return SCHEDULE_DATE_ROWS.flatMap(({ key, label }) => {
+/**
+ * Talep penceresinde SORULACAK tarih satırları.
+ *
+ * Sorumlu kendi plan ve gerçekleşen tarihlerini panelden doğrudan yazar; ondan
+ * yalnızca doğrudan değiştiremediği tarih istenir. Bütün satırlar her koşulda
+ * gösterildiğinde kullanıcı, zaten kendi düzenleyebildiği tarihler için de
+ * onay bekleyen bir talep açıyordu.
+ */
+export function scheduleProposalRows(fields = null) {
+  if (!Array.isArray(fields) || !fields.length) return SCHEDULE_DATE_ROWS;
+  const allowed = new Set(fields.map(String));
+  const rows = SCHEDULE_DATE_ROWS.filter((row) => allowed.has(row.key));
+  return rows.length ? rows : SCHEDULE_DATE_ROWS;
+}
+
+export function scheduleDifferenceSummary(current = {}, proposed = {}, rows = SCHEDULE_DATE_ROWS) {
+  return (rows || SCHEDULE_DATE_ROWS).flatMap(({ key, label }) => {
     const before = current[key] || null;
     const after = proposed[key] || null;
     if (before === after) return [];

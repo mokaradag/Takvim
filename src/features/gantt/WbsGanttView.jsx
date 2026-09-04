@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Icons } from '../../components/icons';
 import { InfoButton, Tooltip } from '../../components/ui-extras';
 import { buildWbsTree, selectWbsTaskRollup } from '../../domain/selectors/index.js';
+import { GanttOutlineControls } from './GanttOutlineControls.jsx';
+import { allWbsIds, expandedIdsForLevel, levelForExpandedIds, wbsTreeDepth } from './ganttOutlineLevels.js';
 import { projectColorVar } from '../../lib/colors';
 import { holidayFor } from '../../scheduling/calendars';
 import { depId, relTypeOf } from '../../scheduling/dependencies';
@@ -152,6 +154,10 @@ export function WbsGanttView() {
     () => buildRows(tree, tasks, wbs, expanded, scheduleTasks),
     [tree, tasks, wbs, expanded, scheduleTasks]
   );
+  // Seviye düğmeleri açık dal kümesinden türetilir; kullanıcı dalları tek tek
+  // açtıysa hiçbir seviye etkin görünmez (bkz. ganttOutlineLevels.js).
+  const outlineDepth = useMemo(() => wbsTreeDepth(tree), [tree]);
+  const activeOutlineLevel = useMemo(() => levelForExpandedIds(tree, expanded), [tree, expanded]);
   const knownWbsIds = useMemo(() => new Set(wbs.map((node) => node.id)), [wbs]);
   const unassignedTasks = useMemo(
     () => tasks.filter((task) => !task.wbsId || !knownWbsIds.has(task.wbsId)),
@@ -328,12 +334,20 @@ export function WbsGanttView() {
           <div style={{ fontWeight: 700 }}>{workspace.selectedProject?.name} · WBS Gantt</div>
           <div className="muted" style={{ fontSize: 11.5 }}>WBS hiyerarşisi ve görevler aynı zaman ekseninde gösterilir. Kullanılabilir olduğunda kritik yol ve bağımlılık vurguları da eklenir.</div>
         </div>
-        <div className="row" style={{ marginLeft: 'auto', gap: 6 }}>
-          <span className="muted" style={{ fontSize: 12 }}>Zoom</span>
+        <div className="row gantt-toolbar-right" style={{ marginLeft: 'auto', gap: 6 }}>
+          {/* Anahat denetimleri: tümünü genişlet/daralt ve seviye seçimi. */}
+          <GanttOutlineControls
+            onExpandAll={() => setExpanded(allWbsIds(tree))}
+            onCollapseAll={() => setExpanded(new Set())}
+            levels={outlineDepth}
+            activeLevel={activeOutlineLevel}
+            onSelectLevel={(level) => setExpanded(expandedIdsForLevel(tree, level))}
+          />
+          <span className="muted gantt-control-label">Yakınlaştırma</span>
           <div className="seg">
-            <button className={zoom === 22 ? 'active' : ''} onClick={() => setZoom(22)}>S</button>
-            <button className={zoom === 28 ? 'active' : ''} onClick={() => setZoom(28)}>M</button>
-            <button className={zoom === 40 ? 'active' : ''} onClick={() => setZoom(40)}>L</button>
+            <button className={zoom === 22 ? 'active' : ''} onClick={() => setZoom(22)} title="Dar gün genişliği">Dar</button>
+            <button className={zoom === 28 ? 'active' : ''} onClick={() => setZoom(28)} title="Orta gün genişliği">Orta</button>
+            <button className={zoom === 40 ? 'active' : ''} onClick={() => setZoom(40)} title="Geniş gün genişliği">Geniş</button>
           </div>
           <InfoButton title="Kritik Yol" icon={<Icons.Gantt size={12} />} corner accent="var(--c-purple)">
             <p>Kritik Yol Yöntemi (CPM), proje bitişini doğrudan etkileyen görev zincirini gösterir. Kırmızı çerçeveli görevlerde gecikme proje bitişini geciktirebilir.</p>

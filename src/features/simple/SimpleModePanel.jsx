@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
+import { ButtonSpinner, SavingOverlay } from '../../components/Loader';
 import { Avatar } from '../../components/ui';
 import { ProjectCreateDialog } from '../../components/shell/ProjectCreateDialog';
 import { PRIORITIES, DEFAULT_PRIORITY_ID, normalizePriorityId } from '../../domain/constants';
@@ -379,7 +380,13 @@ export function SimpleModePanel() {
     // Proje oluşturma penceresi form ağacının DIŞINDA durur: iç içe <form>
     // öğeleri geçersizdir ve tarayıcı iç formu yok sayar.
     <>
-      <form className="simple-entry-card" onSubmit={submit}>
+      <div className="simple-entry-shell">
+      {/* Kayıt sürerken form ETKİLEŞİME KAPANIR. Perde yalnızca işaretçiyi
+          durduruyordu; kullanıcı sekme ile altındaki alanlara geçip kaydedilen
+          değerleri değiştirebiliyordu. `inert` odak ve klavyeyi de keser.
+          Perde formun DIŞINDA durur, böylece "Kaydediliyor…" bildirimi
+          erişilebilirlik ağacında kalır. */}
+      <form className="simple-entry-card" onSubmit={submit} inert={saving ? '' : undefined}>
         <div className="simple-entry-head">
           <div>
             <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Basit Mod</span>
@@ -540,12 +547,22 @@ export function SimpleModePanel() {
 
         <div className="simple-entry-foot">
           {message && <div className={`simple-message ${message.type}`}>{message.text}</div>}
-          <button className="btn primary simple-save" type="submit" disabled={saving || candidatePeople.length === 0 || !hasWritableDestination}>
-            <Icons.Plus size={14} /> {saving ? 'Kaydediliyor...' : 'Takvime ekle'}
+          <button
+            className="btn primary simple-save"
+            type="submit"
+            disabled={saving || candidatePeople.length === 0 || !hasWritableDestination}
+            aria-busy={saving}
+          >
+            <ButtonSpinner busy={saving} size={14}><Icons.Plus size={14} /></ButtonSpinner>
+            {saving ? 'Kaydediliyor…' : 'Takvime ekle'}
           </button>
         </div>
 
       </form>
+      {/* Kayıt veritabanına yazılırken ilerleme görünür kalır: kullanıcı ikinci
+          kez göndermeye çalışmaz. */}
+      <SavingOverlay active={saving} message="Görev kaydediliyor…" />
+      </div>
 
       <ProjectCreateDialog
         open={projectCreateOpen}

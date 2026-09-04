@@ -55,7 +55,7 @@ test('Next config uses asset prefix plus prefix-stripping compatibility rewrites
 
 test('browser-facing API, login and logout paths use the public prefix helper', () => {
   const boundary = read('src/components/shell/AppDataBoundary.jsx');
-  const sidebar = read('src/components/shell/SidebarUserPanel.jsx');
+  const sidebar = read('src/components/shell/useSignOut.js');
   const dataMode = read('src/data/dataMode.js');
   const flows = read('src/server/identity/keycloakFlows.js');
 
