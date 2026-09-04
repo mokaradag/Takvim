@@ -480,3 +480,118 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 /* Uygulama içi "Hareketi azalt" ayarı, işletim sistemi tercihiyle AYNI şeyi
    kapsamalıdır: süpürme animasyonu sınıf yolunda tam hızda kalıyordu. */
 .reduce-motion .app-boot-progress > span { animation-duration: 3s; }
+
+/* ── Üst çubuk hızlı eylemleri (mod · tema · oturum) ───────── */
+.quick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--chrome-border, var(--border));
+}
+.quick-mode-switch {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--chrome-border, var(--border));
+  border-radius: 99px;
+  background: var(--bg-elev-2);
+}
+.quick-mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.quick-mode-switch button:hover { color: var(--text); }
+.quick-mode-switch button.active {
+  background: var(--accent);
+  color: var(--accent-fg, white);
+  box-shadow: var(--shadow-sm);
+}
+
+.theme-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 52px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--chrome-border, var(--border));
+  border-radius: 99px;
+  background: var(--bg-elev-2);
+  cursor: pointer;
+  overflow: hidden;
+}
+.theme-switch-icon { display: inline-flex; z-index: 1; line-height: 0; transition: color 0.16s ease; }
+.theme-switch-icon.sun { color: var(--c-amber, #f59e0b); }
+.theme-switch-icon.moon { color: var(--text-dim); }
+.theme-switch.is-light .theme-switch-icon.moon { color: var(--text-muted); }
+.theme-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Açık temada topuz GÜNEŞİN üstüne gelir: seçili taraf her zaman örtülür. */
+.theme-switch .theme-switch-knob { transform: translateX(26px); }
+.theme-switch.is-light .theme-switch-knob { transform: translateX(0); }
+
+.quick-action-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--chrome-border, var(--border));
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+}
+.quick-action-btn:hover:not(:disabled) {
+  color: var(--status-overdue);
+  border-color: color-mix(in oklab, var(--status-overdue) 45%, var(--border));
+}
+.quick-action-btn:disabled { opacity: 0.6; cursor: progress; }
+.quick-signout-error { font-size: 10.5px; color: var(--status-overdue); max-width: 160px; }
+
+.reduce-motion .theme-switch-knob,
+.reduce-motion .quick-mode-switch button { transition: none; }
+
+@media (max-width: 1100px) {
+  .quick-mode-switch button span { display: none; }
+  .quick-mode-switch button { padding: 4px 8px; }
+}
+@media (max-width: 860px) {
+  .quick-actions { padding-left: 4px; gap: 4px; }
+  .theme-switch { width: 44px; }
+  .theme-switch .theme-switch-knob { transform: translateX(18px); }
+}
+
+.export-menu-error {
+  margin: 6px 8px 2px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in oklab, var(--status-overdue) 45%, var(--border));
+  border-radius: var(--r-sm, 6px);
+  background: color-mix(in oklab, var(--status-overdue) 8%, var(--bg-elev));
+  color: var(--status-overdue);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.export-menu-pop button:disabled { opacity: 0.55; cursor: progress; }

@@ -197,7 +197,7 @@ export function SimpleTasksView({ onNewTask }) {
                   filter={filters.status} onFilter={(value) => setFilter('status', value)} filterType="multi" filterOptions={statusOptions} />
                 <DateFilterableTH label="Termin" style={{ minWidth: 125 }} sortKey={sortFor('targetFinish')} onSort={setSortFor('targetFinish')}
                   filter={filters.targetFinish} onFilter={(value) => setFilter('targetFinish', value)} />
-                <th style={{ width: 78 }} aria-label="İşlemler" />
+                <th className="tasks-actions-col" aria-label="İşlemler" />
               </tr>
             </thead>
             <tbody>
@@ -247,8 +247,9 @@ export function SimpleTasksView({ onNewTask }) {
                       </span>
                     </td>
                     <td><StatusPill task={task} /></td>
-                    <td className={`tabular${late ? ' simple-tasks-late' : ''}`}>{fmt(task.targetFinish)}</td>
-                    <td>
+                    <td className={`tabular tasks-date-cell${late ? ' simple-tasks-late' : ''}`}>{fmt(task.targetFinish)}</td>
+                    {/* Eylem sütunu sağa yapışıktır (Gelişmiş Modla aynı kural). */}
+                    <td className="tasks-actions-cell">
                       <div className="row simple-tasks-actions" style={{ gap: 4 }}>
                         <TaskReminderButton task={task} />
                         <button

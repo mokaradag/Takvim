@@ -280,11 +280,16 @@ test('süzgeç değerleri kararlı kimliktir', () => {
   const tasksView = read('src/features/tasks/TasksView.jsx');
   // Aynı ada sahip iki proje ya da iki çalışan tek seçenekte birleşmemelidir.
   assert.match(tasksView, /value: p\.id,/);
-  assert.match(tasksView, /colFilter\.proje\.includes\(t\.projectId\)/);
-  assert.match(tasksView, /\(t\.assigneeIds \|\| \[\]\)\.some\(id => colFilter\.sorumlu\.includes\(String\(id\)\)\)/);
+  // Satır süzmesi ile faset hesabı AYNI yüklemi paylaşır.
+  const facets = read('src/features/tasks/taskTableFacets.js');
+  assert.match(facets, /filters\.proje\.includes\(task\.projectId\)/);
+  assert.match(facets, /\(task\.assigneeIds \|\| \[\]\)\.some\(\(id\) => filters\.sorumlu\.includes\(String\(id\)\)\)/);
 
+  // Gantt de aynı paylaşılan yüklemi kullanır; kimlik karşılaştırması orada da
+  // ada değil kararlı Sicil'e dayanır.
   const gantt = read('src/features/gantt/GanttView.jsx');
-  assert.match(gantt, /\(t\.assigneeIds \|\| \[\]\)\.some\(id => colFilters\.sorumlu\.includes\(String\(id\)\)\)/);
+  assert.match(gantt, /taskTableMatches\(task, \{ search: globalSearch, filters: colFilters \}, null, today_\)/);
+  assert.match(gantt, /facets\.sorumlu\.has\(String\(p\.id\)\)/);
 });
 
 test('tek seçimli süzgeçte Enter aranan seçeneği uygular', () => {
@@ -347,6 +352,17 @@ test('dışa aktarım tekrar kuralını ve seri ilişkisini taşır', () => {
   assert.equal(rows[1].seriGunu, '24/08/2026');
   assert.ok(EXPORT_HEADERS.includes('Tekrar Kuralı'));
   assert.ok(EXPORT_HEADERS.includes('Seri Günü'));
+
+  const partialRows = buildExportRows({
+    tasks: [{
+      id: 't2',
+      task: 'Kısmi görünür yineleme',
+      recurrenceParentId: 'a1b2c3d4-0000-4000-8000-000000000003',
+      recurrenceOccurrenceDate: '2026-08-24'
+    }]
+  });
+  assert.equal(partialRows[0].seri, '');
+  assert.doesNotMatch(JSON.stringify(partialRows), /a1b2c3d4-0000-4000-8000-000000000003/);
 });
 
 test('tekrar önizlemesi üretimle aynı planlayıcıyı kullanır', () => {

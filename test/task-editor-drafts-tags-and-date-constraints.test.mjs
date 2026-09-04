@@ -51,7 +51,9 @@ test('takvim ve elle yazılan tarihler aynı kapsayıcı alt/üst sınırları u
 
 test('görev tarih alanları imkânsız plan ve gerçekleşen aralıklarını daha arayüzde engeller', () => {
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /Planlanan başlangıç[\s\S]*maxDate=\{local\.plannedFinish\}/);
+  // Kilometre taşı tek günlüktür: bitiş alanı gizlenir ve başlangıç sınırı
+  // yalnızca sıradan görevlerde uygulanır.
+  assert.match(drawer, /Planlanan başlangıç[\s\S]*maxDate=\{milestone \? '' : local\.plannedFinish\}/);
   assert.match(drawer, /Planlanan bitiş[\s\S]*minDate=\{local\.plannedStart\}/);
   assert.match(drawer, /Gerçekleşen başlangıç[\s\S]*maxDate=\{local\.actualFinish\}/);
   assert.match(drawer, /Gerçekleşen bitiş[\s\S]*minDate=\{local\.actualStart\}/);

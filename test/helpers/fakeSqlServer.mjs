@@ -276,6 +276,20 @@ function directAssignee(db, taskId, sicil) {
   return db.taskAssignees.some((entry) => sameGuid(entry.TaskId, taskId) && entry.Sicil === sicil);
 }
 
+/** Mutasyon görev künyesinde üretim sorgusuyla aynı dar kişi kapsamını uygular. */
+function creatorIdentityVisible(db, task, sicil, { hasFullScope = false, canAssignAllCorporate = false } = {}) {
+  if (task?.CreatedBySicil == null) return false;
+  const project = projectById(db, task.ProjectId);
+  if (hasFullScope || Number(task.CreatedBySicil) === Number(sicil)
+    || Number(project?.LeadSicil) === Number(task.CreatedBySicil)) return true;
+  if (canAssignAllCorporate && db.executiveScope.some((scope) => scope.ManagerSicil === sicil
+    && scope.EmployeeSicil === task.CreatedBySicil)) return true;
+  return db.taskAssignees.some((assignment) => assignment.Sicil === task.CreatedBySicil
+    && db.tasks.some((candidate) => sameGuid(candidate.TaskId, assignment.TaskId)
+      && db.projectAccess.some((grant) => grant.IsActive && grant.Sicil === sicil
+        && grant.AccessLevel === 'READ' && sameGuid(grant.ProjectId, candidate.ProjectId))));
+}
+
 function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedAvatar = false } = {}) {
   return db.taskAssignees.flatMap((entry) => {
     if (!taskIds.has(String(entry.TaskId).toUpperCase())) return [];
@@ -737,7 +751,23 @@ function runQuery(db, statement, params, { database }) {
     const projectIds = requested(params.projectIds);
     const wbsIds = requested(params.wbsIds);
     const taskIds = requested(params.taskIds);
-    const snapshot = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), false);
+    const snapshot = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
+    const projectedTasks = snapshot[3]
+      .filter((row) => taskIds.has(String(row.TaskId).toUpperCase()))
+      .map((row) => {
+        const identityVisible = creatorIdentityVisible(db, row, sicil, {
+          hasFullScope: Boolean(params.hasFullScope),
+          canAssignAllCorporate: Boolean(params.canAssignAllCorporate)
+        });
+        const creator = identityVisible
+          ? db.people.find((person) => Number(person.Sicil) === Number(row.CreatedBySicil))
+          : null;
+        return {
+          ...row,
+          VisibleCreatedBySicil: identityVisible ? row.CreatedBySicil : null,
+          CreatedByName: creator?.DisplayName || null
+        };
+      });
     const projectedAssignees = sqlText.includes('LEFT JOIN dbo.MR_V_PeopleDirectory pd')
       ? taskScopedAssigneeRows(db, taskIds, sicil, Boolean(params.isAdmin))
       : snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()));
@@ -745,7 +775,7 @@ function runQuery(db, statement, params, { database }) {
       snapshot[0].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
       snapshot[1].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
       snapshot[2].filter((row) => wbsIds.has(String(row.WbsId).toUpperCase())),
-      snapshot[3].filter((row) => taskIds.has(String(row.TaskId).toUpperCase())),
+      projectedTasks,
       projectedAssignees,
       snapshot[5].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()))
     ]);

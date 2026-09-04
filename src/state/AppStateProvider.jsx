@@ -99,7 +99,14 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     applyStateAction
   }), [repository, applyStateAction]);
 
-  useEffect(() => () => persistence.dispose(), [persistence]);
+  // Sökülmede bekleyen yamalar reddedilir. Yeniden bağlanmada kuyruk yeniden
+  // açılır: React 18 `StrictMode` geliştirmede etkileri bir kez söküp yeniden
+  // bağladığı için, `useMemo` ile üretilen aynı kuyruk kapalı kalıyor ve
+  // geliştirme sunucusunda hiçbir görev düzenlemesi kaydedilmiyordu.
+  useEffect(() => {
+    persistence.revive();
+    return () => persistence.dispose();
+  }, [persistence]);
 
   const runDataReload = useMemo(() => createDataReloadOperation({
     repository,

@@ -277,6 +277,13 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   // kaynak ve hedef kayıtlarından türetilir.
   const visibleDestinationProject = findProject(state.projects, destinationProject?.id);
   const full = hasFullSourceProject && canWriteProject(visibleDestinationProject);
+  // Görevin SORUMLUSU, atama kapsamı da taşısa, kendi plan ve gerçekleşen
+  // tarihlerini doğrudan yönetir: işi yapan kişidir ve sunucu da aynı kararı
+  // verir (bkz. assigneeWorkOnly / ASSIGNEE_BLOCKED_SCHEDULE_FIELDS). Bayrak
+  // yalnızca `full` değerine bakınca, kendisine atanmış bir görevi atama
+  // kapsamındaki projede açan kullanıcı "Güncel plan" kartını salt okunur
+  // görüyor, sunucunun kabul edeceği bir düzenlemeyi hiç deneyemiyordu.
+  const schedulesOwnWork = full || Boolean(task.isCurrentUserAssignee);
   return {
     ok: true,
     task,
@@ -286,7 +293,9 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     canManageStructure: full,
     canChooseWbs: full,
     canManageAssignees: !hasHiddenAssignees,
-    canControlSchedule: full,
+    canControlSchedule: schedulesOwnWork,
+    // HEDEF bitiş bir taahhüttür: yalnızca tam proje yetkisiyle değişir,
+    // sorumlu bunun için tarih değişikliği talebi gönderir.
     canEditTargetFinish: full,
     canProposeSchedule: !full && Boolean(task.isCurrentUserAssignee) && !isTaskCreator,
     canDelete: full,

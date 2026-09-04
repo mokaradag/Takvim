@@ -116,6 +116,10 @@ Task Detail edits current-plan, target, actual, remaining-duration, Project and 
 
 `components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen, logo and the authenticated sidebar user panel. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
 
+`components/Loader.jsx` owns the shared loading indicators (`Spinner`,
+`ButtonSpinner`, `SavingOverlay`) used by task creation, the drawers, the export
+menu and the persistence strip; no feature defines its own spinner.
+
 `Avatar`/`AvatarStack` show corporate photographs with a reliable initials fallback. They must not import application state, so the shell supplies the person directory through `components/PeopleDirectoryContext.jsx`; the pure resolution rules live in `components/avatarIdentity.js` and the single URL builder in `lib/userPhoto.js`. Identity resolution prefers a supplied person, then a canonical id/Sicil, and only then a display name — an ambiguous name never guesses between two employees.
 
 ### Server layer (`src/server`)
@@ -157,7 +161,36 @@ Shared layer tokens define sticky, chrome, popover, drawer, modal and tooltip or
 - SMTP transport, reminder persistence and the reminder service: `src/server/mail` and `src/server/reminders`
 - Feature UI and feature-only helpers: the relevant `src/features/<feature>` folder
 - Generic visual primitives: `src/components/ui*`
+- Shared loading indicators: `src/components/Loader.jsx`
 - Sidebar/topbar/global overlays and application lifecycle surfaces: `src/components/shell`
+- Spreadsheet/archive writers and export shaping: `src/lib/xlsx` and `src/lib/exportProjectData.js`
+
+## Export pipeline
+
+Export output has one sheet model and two renderers. `lib/exportProjectData.js`
+builds the sheet descriptors (`buildExportSheets`) — Özet, Görevler, İş Dağılım
+Ağacı and, for portfolio exports only, Projeler — where every column declares a
+key, a width and an optional cell type (`date`, `percent`, `number`) — or a
+per-row type field (`typeKey`), which the summary sheet uses so counts stay
+numbers, the report date stays a date and average progress stays a percentage.
+The Excel renderer (`buildProjectWorkbook`) and the CSV renderer (`sheetToCsv`,
+`buildProjectCsvBundle`) consume the same descriptors, so the two outputs cannot
+drift apart. The legacy single-file `buildProjectCsv` keeps its flat column
+contract for machine consumers.
+
+Dates come from the local calendar, never from `toISOString()`: in UTC+3 the UTC
+day is yesterday until 03:00, which shifted both the overdue count and the report
+date. The project lead is resolved from `leadId` against the authorized people
+snapshot, because corporate Projects carry an id rather than a display name.
+
+`lib/xlsx/` is a dependency-free writer: `zipArchive.js` produces a stored
+(uncompressed) ZIP container with a correct central directory, and
+`xlsxWorkbook.js` emits the OOXML parts — workbook, styles, one worksheet per
+sheet — with inline strings, real date serials, percent cells, frozen header
+panes, autofilter and column widths. The previous export wrote an HTML table
+under an `.xls` extension, which made Excel warn that the file format and
+extension do not match on every open. Cell text is neutralized against formula
+injection in both renderers.
 
 ## Scheduling data ownership
 

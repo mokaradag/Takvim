@@ -186,7 +186,8 @@ npm run start -- -H 0.0.0.0 -p 8008
 - `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı), durable repository, SMTP taşıması (`mail`) ve hatırlatma servisi/zamanlayıcısı (`reminders`)
 - `src/state` — yükleme, sıralı mutation queue, Task patch coalescing ve access-aware scheduling selector'ları
 - `src/features` — uygulama özellikleri; SQL veya API route import etmez
-- `src/components/shell` — application shell, Veri Modu/Kullanım Modu seçimleri ve persistence durumları
+- `src/components/shell` — application shell, Veri Modu/Kullanım Modu seçimleri, üst çubuk hızlı eylemleri ve persistence durumları
+- `src/lib/xlsx` — bağımlılıksız `.xlsx` ve ZIP yazıcısı (dışa aktarma çıktısı)
 - `database` — deterministic create ve destructive rollback SQL betikleri
 
 Ayrıntılar:
@@ -204,6 +205,7 @@ Ayrıntılar:
 - `docs/TAGS-AND-RECURRING-TASKS.md`
 - `docs/TASK-REMINDERS.md`
 - `docs/SIMPLE-MODE-AND-UI.md`
+- `docs/SCHEDULING.md`
 - `docs/UI-STYLING-ARCHITECTURE.md`
 - `docs/VISUAL-SMOKE-TESTS.md`
 
@@ -225,7 +227,33 @@ listesini yamalar. Döngü oluşturacak seçimler listeye hiç girmez.
 Görev önceliği (`Kritik` / `Yüksek` / `Orta` / `Düşük`) görev panelindeki
 **Öncelik** bölümünden tanımlanır ve Görevler, Gantt, Kanban ile Raporlar risk
 matrisini besler. Öncelik bir planlama kısıtı değildir; CPM sonuçlarını
-etkilemez. Ayrıntılar: `docs/SCHEDULING.md`.
+etkilemez.
+
+**Kilometre taşı** aynı panelin *Güncel plan* kartındaki anahtarla tanımlanır
+(tam proje yetkisi gerekir): görev sıfır süreli tek bir güne indirgenir ve Gantt
+görünümlerinde çubuk yerine eşkenar dörtgenle çizilir. Ayrıntılar:
+`docs/SCHEDULING.md`.
+
+## Dışa aktarma
+
+Üst çubuktaki **Dışa aktar** menüsü üç çıktı sunar. Üçü de aynı sayfa
+modelinden üretilir (`src/lib/exportProjectData.js`), böylece Excel ve CSV
+içerikleri birbirinden ayrı düşmez:
+
+| Çıktı | Dosya | İçerik |
+| --- | --- | --- |
+| **Excel çalışma kitabı** | `<ad>_Raporu.xlsx` | Özet, Görevler, İş Dağılım Ağacı ve portföy çıktısında Projeler sayfaları |
+| **CSV paketi** | `<ad>_CSV.zip` | Aynı sayfaların her biri ayrı `.csv` dosyası (UTF-8 BOM) |
+| **Görev listesi** | `<ad>_Gorevler.csv` | Tek dosyalık düz görev tablosu (veri aktarımı için) |
+
+Excel çıktısı **gerçek bir `.xlsx` kabıdır**: başlık satırı dondurulmuş ve
+otomatik süzgeçlidir, tarihler gerçek tarih, ilerleme gerçek yüzde hücresidir,
+sütun genişlikleri içeriğe göre ayarlanır. Önceki sürüm `.xls` uzantılı bir HTML
+tablosu yazdığı için Excel her açılışta "biçim ve uzantı eşleşmiyor" uyarısı
+gösteriyordu. Yazıcı bağımlılıksızdır (`src/lib/xlsx`); çevrimdışı kurulumda ek
+paket gerekmez. Her iki çıktıda da `=`, `+`, `-`, `@` ile başlayan metin formül
+enjeksiyonuna karşı nötrlenir ve dışarı yalnızca ekranda da görülen alanlar
+çıkar — iç kimlikler, sürüm anahtarları ve yetki alanları taşınmaz.
 
 ## Görev hatırlatma postaları
 
@@ -253,6 +281,10 @@ taşır:
   kapsar; okuma her iki biçimi de kabul eder.
 - **Yüksek karşıtlık** — sınırları ve ikincil metni koyulaştırır; parlak ortamda
   ve açık temada okunabilirliği artırır.
+
+Üst çubuktaki **hızlı eylemler** ayrıca mod seçimini (Basit / Gelişmiş), tema
+anahtarını ve oturum kapatmayı her sayfadan tek tıkla erişilir kılar; aynı
+tercihler Ayarlar sayfasından da yönetilebilir.
 
 Yazı boyutu ölçeği gövdeye `zoom` uygular. Tam ekran kaplayan her yükseklik bu
 ölçeğe bölünmüş `--app-viewport-h` değişkenini kullanır; aksi hâlde yazı

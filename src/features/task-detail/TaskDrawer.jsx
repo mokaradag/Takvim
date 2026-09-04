@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
+import { Spinner } from '../../components/Loader';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { buildWbsTree, flattenWbsTree, formatWbsPath } from '../../domain/selectors/index.js';
 import { isArchivedProject, projectTypeMeta, visibleProjects } from '../../domain/projectTypes';
@@ -18,7 +19,7 @@ import {
   relTypeOf
 } from '../../scheduling/dependencies';
 import { PRIORITIES, TASK_SERIES_BATCH_LIMIT, resolvePriority } from '../../domain/constants/index.js';
-import { TR_DAYS, diffDays, fmt, today } from '../../scheduling/dates';
+import { TR_DAYS, diffDays, fmt, fmtISO, today } from '../../scheduling/dates';
 import {
   MAX_RECURRENCE_OCCURRENCES,
   RECURRENCE_WEEKDAYS,
@@ -87,6 +88,20 @@ function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
+/**
+ * Kilometre taşı yaması.
+ *
+ * Dönüm noktası TEK bir gündür: başlangıç ve bitiş aynı tarihe çekilir, süre
+ * normalleştirme sırasında sıfırlanır (bkz. calculatePlannedDurationDays).
+ * Sunucu da sıfır olmayan süreli bir kilometre taşını reddeder.
+ */
+function milestonePatch(date) {
+  // Yedek gün de KANONİK biçimde yazılır: `today()` bir `Date` nesnesi döndürür
+  // ve görev modeli tarihleri ISO metin olarak taşır.
+  const day = date || fmtISO(today());
+  return { milestone: true, isMilestone: true, plannedStart: day, plannedFinish: day };
+}
+
 function personLabel(person) {
   const employeeNo = person.employeeNo || person.SicilNo || person.PersonelNo || person.CalisanNo;
   return employeeNo ? `${employeeNo} · ${person.name}` : person.name;
@@ -112,24 +127,27 @@ export function TaskDrawer({
   const people = useAllPeople();
   const projects = useAllProjects();
   const calendars = useCalendars();
-  // Görev künyesi: "kim oluşturdu, ne zaman". Sicil rehberde bulunamazsa (kapsam
-  // dışı bir oluşturucu) sicil numarası gösterilmez, yalnızca tarih kalır.
+  // Görev künyesi: "kim oluşturdu, ne zaman". Ad ÖNCE görev satırının kendi
+  // `createdByName` alanından okunur: sıradan kullanıcının kişi dizini yalnızca
+  // kendi kapsamını taşıdığı için rehber araması çoğu görevde boş dönüyor ve
+  // künye "Bilinmeyen kullanıcı" yazıyordu. Fotoğraf da aynı Sicil'den üretilir.
   const taskByline = useMemo(() => {
     const sicil = task?.createdBySicil == null ? null : String(task.createdBySicil);
     const createdAtIso = task?.createdAt || null;
     if (!sicil && !createdAtIso) return null;
     const person = sicil ? people.find((item) => String(item.id) === sicil) : null;
+    const projectedName = String(task?.createdByName || '').trim();
     const createdDate = createdAtIso ? new Date(createdAtIso) : null;
     const valid = createdDate && Number.isFinite(createdDate.getTime());
     return {
       sicil,
-      name: person?.name || (sicil ? 'Bilinmeyen kullanıcı' : '—'),
-      employeeNo: person?.employeeNo || null,
+      name: person?.name || projectedName || (sicil ? 'Bilinmeyen kullanıcı' : '—'),
+      employeeNo: person?.employeeNo || sicil || null,
       createdAtIso,
       createdAt: valid ? fmt(createdDate, 'dd MMM yyyy') : null,
       createdAtLong: valid ? createdDate.toLocaleString('tr-TR') : null
     };
-  }, [task?.createdBySicil, task?.createdAt, people]);
+  }, [task?.createdBySicil, task?.createdByName, task?.createdAt, people]);
   const allWbs = useAllWbs();
   const assignmentScopeProjects = useAssignmentScopeProjects();
   const assignmentScopeSicils = useAssignmentScopeSicils();
@@ -187,6 +205,13 @@ export function TaskDrawer({
     () => scheduleRequests.find((request) => request.status === 'PENDING' && request.isRequester) || null,
     [scheduleRequests]
   );
+  // Talep penceresi yalnızca kullanıcının KENDİ yazamadığı tarihleri sorar:
+  // sorumlu plan ve gerçekleşen tarihleri panelden düzenler, hedef bitişi öneri
+  // ile ister.
+  const proposableScheduleFields = useMemo(
+    () => (canControlSchedule && !canEditTargetFinish ? ['targetFinish'] : null),
+    [canControlSchedule, canEditTargetFinish]
+  );
   // Görev kendi takvimini geçersiz kılabilir; tekrar önizlemesi de üretimle aynı
   // takvimi kullanmalıdır (bkz. resolveTaskCalendar önceliği).
   const taskCalendar = useMemo(
@@ -233,12 +258,24 @@ export function TaskDrawer({
   }, [projects, assignmentScopeProjects, selectedProject]);
 
   const selectedAssignees = useMemo(() => {
+    // Fotoğraf kimlikleri de taşınır: rehberde çözülemeyen eş sorumlular için
+    // görev satırındaki `assigneeAvatarIdentities` tek fotoğraf kaynağıdır.
+    // Kırpılmış nesne bu alanı dışarıda bıraktığı için kartta herkes baş harfe
+    // düşüyordu (liste sütunu aynı veriyle fotoğrafı gösteriyordu).
     return resolveTaskAssigneeDisplayRecords({
       assigneeIds: local.assigneeIds,
       assigneeDisplayNames: local.assigneeDisplayNames,
+      assigneeAvatarIdentities: local.assigneeAvatarIdentities,
       sorumlu: local.sorumlu
     }, people, !canManageAssignees);
-  }, [people, local.assigneeIds, local.assigneeDisplayNames, local.sorumlu, canManageAssignees]);
+  }, [
+    people,
+    local.assigneeIds,
+    local.assigneeDisplayNames,
+    local.assigneeAvatarIdentities,
+    local.sorumlu,
+    canManageAssignees
+  ]);
   const hiddenAssigneeCount = Math.max(
     0,
     Number(local.assigneeCount || 0) - selectedAssignees.length
@@ -351,6 +388,7 @@ export function TaskDrawer({
   const activePriority = resolvePriority(local.priority);
   const overdue = local.status !== 'done' && local.targetFinish && diffDays(local.targetFinish, today_) < 0;
   const color = projectColorVar(local.proje);
+  const milestone = Boolean(local.milestone || local.isMilestone);
 
   return (
     <>
@@ -570,15 +608,45 @@ export function TaskDrawer({
                 </div>
               )}
               <div className="task-date-grid">
-                <DateField label="Planlanan başlangıç" value={local.plannedStart} onChange={(v) => save({ plannedStart: v })} maxDate={local.plannedFinish} disabled={!canControlSchedule} />
-                <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} minDate={local.plannedStart} disabled={!canControlSchedule} />
+                <DateField
+                  label={milestone ? 'Kilometre taşı tarihi' : 'Planlanan başlangıç'}
+                  value={local.plannedStart}
+                  onChange={(v) => save(milestone ? milestonePatch(v) : { plannedStart: v })}
+                  maxDate={milestone ? '' : local.plannedFinish}
+                  disabled={!canControlSchedule}
+                />
+                {/* Kilometre taşı SIFIR süreli tek bir gündür: bitiş alanı
+                    başlangıcı izler ve ayrıca düzenlenmez. */}
+                {!milestone && <DateField label="Planlanan bitiş" value={local.plannedFinish} onChange={(v) => save({ plannedFinish: v })} minDate={local.plannedStart} disabled={!canControlSchedule} />}
                 {/* HEDEF bitiş ayrı yetkiyle korunur: sorumlu kendi plan
                     tarihlerini yönetir ama taahhüt edilen hedefi yalnızca görev
                     oluşturucusu ya da tam proje yetkisi değiştirebilir. */}
                 <DateField label="Hedef bitiş" value={local.targetFinish} onChange={(v) => save({ targetFinish: v })} accent={overdue ? 'var(--status-overdue)' : null} disabled={!canEditTargetFinish} />
               </div>
+              {canManageStructure && (
+                <ToggleField
+                  label="Kilometre taşı"
+                  description="Sıfır süreli dönüm noktası. Gantt'ta çubuk yerine eşkenar dörtgen olarak çizilir."
+                  icon={<Icons.Diamond size={12} />}
+                  checked={milestone}
+                  // Anahtar PLAN tarihi yazar; bu yüzden yapı yetkisine değil,
+                  // yazdığı alanların yetkisine de bakar. Bugün yapı yetkisi
+                  // zaten tam proje yetkisi demek ve onu ima ediyor; kilit,
+                  // takvim yetkisi ileride daraltılırsa denetimin sessizce
+                  // atlanmasını engeller.
+                  disabled={!canControlSchedule}
+                  onChange={(next) => save(next
+                    // Yedek gün `milestonePatch` içindedir: buradaki `today()`
+                    // truthy bir `Date` üretip o yedeği atlıyor, tarihsiz bir
+                    // görevde sunucuya ISO metin yerine `Date` gidiyordu.
+                    ? milestonePatch(local.plannedStart || local.targetFinish)
+                    : { milestone: false, isMilestone: false })}
+                />
+              )}
               <div className="muted" style={{ fontSize: 11.5 }}>
-                Planlanan süre: <span className="tabular">{local.plannedDurationDays ?? '—'}</span> çalışma günü
+                {milestone
+                  ? 'Kilometre taşı süresi sıfır çalışma günüdür.'
+                  : <>Planlanan süre: <span className="tabular">{local.plannedDurationDays ?? '—'}</span> çalışma günü</>}
               </div>
               {!canControlSchedule && (
                 <div className="muted" style={{ fontSize: 11.5 }}>
@@ -587,7 +655,8 @@ export function TaskDrawer({
               )}
               {canControlSchedule && !canEditTargetFinish && (
                 <div className="muted" style={{ fontSize: 11.5 }}>
-                  Hedef bitiş tarihi görev oluşturucusu tarafından belirlenir. Değişiklik için tarih talebi gönderebilirsiniz.
+                  Planlanan ve gerçekleşen tarihleri kendiniz güncelleyebilirsiniz. Hedef bitiş bir taahhüttür;
+                  değiştirmek için <strong>Yeni tarih öner</strong> ile talep gönderin.
                 </div>
               )}
               {calendarWarnings.length > 0 && (
@@ -729,6 +798,7 @@ export function TaskDrawer({
           </button>}
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={closeWithDraft} disabled={isSaving} aria-busy={isSaving}>
+            {isSaving && <Spinner size={13} />}
             {isSaving ? 'Kaydediliyor…' : 'Tamam'}
           </button>
         </div>
@@ -738,6 +808,7 @@ export function TaskDrawer({
           task={task}
           onCancel={() => setScheduleDialogOpen(false)}
           onSubmit={onProposeSchedule}
+          fields={proposableScheduleFields}
         />
       )}
     </>
@@ -1490,6 +1561,33 @@ function DateField({
         style={accent ? { '--date-field-accent': accent } : undefined}
       />
     </div>
+  );
+}
+
+/**
+ * Aç/kapa anahtarı: etiket, açıklama ve erişilebilir `switch` rolü.
+ *
+ * Denetimin TAMAMI tek bir düğmedir. Anahtar bir `<label>` içine alındığında
+ * etiket, tıklamayı içerdiği düğmeye İKİNCİ kez iletiyor; iki olay arasında
+ * React yeniden çizdiği için ikinci çağrı değeri geri alıyor ve anahtar hiç
+ * kaydedilmiyordu.
+ */
+function ToggleField({ label, description, icon, checked, onChange, disabled = false }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      className={`toggle-field${checked ? ' is-on' : ''}${disabled ? ' is-disabled' : ''}`}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="toggle-switch" aria-hidden="true"><span className="toggle-knob" /></span>
+      <span className="toggle-field-text">
+        <strong>{icon}{label}</strong>
+        {description && <small>{description}</small>}
+      </span>
+    </button>
   );
 }
 

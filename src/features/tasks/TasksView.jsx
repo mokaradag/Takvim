@@ -2,10 +2,10 @@
 import { useState as useState1, useMemo as useMemo1, useCallback as useCallback1 } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
+import { ButtonSpinner } from '../../components/Loader';
 import {
   TASK_PRIORITY_FILTER_OPTIONS,
   TASK_STATUS_FILTER_OPTIONS,
-  normalizePriorityId,
   resolvePriority
 } from '../../domain/constants';
 import { fmt, diffDays, today } from '../../scheduling/dates';
@@ -13,13 +13,14 @@ import { describeRecurrenceRule } from '../../scheduling/recurrence';
 import { projectColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, PriorityIcon, StatusPill, StatusIcon } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
-import { InfoButton, FilterableTH, dateMatchesFilter, numericMatchesFilter } from '../../components/ui-extras';
+import { InfoButton, FilterableTH } from '../../components/ui-extras';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { taskProgressValue, taskSortValue } from './taskDisplayValues.js';
+import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from './taskTableFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
 import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
 import { TaskOrganizationFilterControls } from './TaskOrganizationFilterControls.jsx';
@@ -39,6 +40,9 @@ export function TasksView() {
   const { openTask: onOpenTask, addTask: onAddTask, deleteTask: onDeleteTask } = useTaskActions();
   const { selection: organizationFilter, setSelection: onOrganizationFilterChange } = useSharedTaskOrganizationFilter();
   const [search, setSearch] = useState1('');
+  // Görev oluşturma sunucuya yazma yapar ve birkaç saniye sürebilir; düğme bu
+  // süre boyunca dönen halkayı gösterir ve ikinci tıklamayı engeller.
+  const [creating, setCreating] = useState1(false);
   const [sort, setSort] = useState1({ key: 'plannedStart', dir: 'asc' });
   const [colFilter, setColFilter] = useState1({
     proje: [],
@@ -77,42 +81,17 @@ export function TasksView() {
   // Süzgeç değeri KARARLI kimliktir, görünen ad değil. Ada göre süzülseydi aynı
   // ada sahip iki proje (ya da iki çalışan) tek bir seçenekte birleşir; kullanıcı
   // benzersiz kodu arayıp birini seçse bile sonuçta ikisi de listelenirdi.
-  // Sütun süzgeçleri ÜSTTEKİ kurumsal süzgecin sonucundan türetilir.
   //
-  // Seçenekler tam proje/kişi dizininden üretildiğinde, direktörlük/müdürlük/
-  // birim seçimi tabloyu daraltıyor ama sütun süzgeçleri o tabloda HİÇ
-  // bulunmayan projeleri ve kişileri listelemeye devam ediyordu: kullanıcı bir
-  // seçenek seçip boş sonuç alıyordu. Aşağıdaki kümeler görünür satırlardan
-  // toplanır (`kwOpts` bunu zaten yapıyordu).
-  const visibleProjectIds = useMemo1(
-    () => new Set(organization.filteredTasks.map((t) => String(t.projectId ?? ''))),
-    [organization.filteredTasks]
-  );
-  const visibleAssigneeIds = useMemo1(() => {
-    const ids = new Set();
-    for (const task of organization.filteredTasks) {
-      for (const assigneeId of task.assigneeIds || []) ids.add(String(assigneeId));
-    }
-    return ids;
-  }, [organization.filteredTasks]);
-  const visibleStatuses = useMemo1(() => {
-    const values = new Set(organization.filteredTasks.map((t) => String(t.status || 'todo')));
-    // `overdue` SANAL bir durumdur: hiçbir görevde saklı değer olarak durmaz,
-    // termin geçmişliğinden türetilir (aşağıdaki süzme aynı kuralı uygular).
-    // Yalnızca saklı değerlere bakan bir süzgeç bu seçeneği menüden tümüyle
-    // düşürüyor, tabloda geciken görevler dururken kullanıcı onları
-    // süzemiyordu.
-    const today_ = today();
-    const overdue = organization.filteredTasks.some((t) => t.status !== 'done'
-      && t.targetFinish
-      && diffDays(t.targetFinish, today_) < 0);
-    if (overdue) values.add('overdue');
-    return values;
-  }, [organization.filteredTasks]);
-  const visiblePriorities = useMemo1(
-    () => new Set(organization.filteredTasks.map((t) => String(normalizePriorityId(t.priority)))),
-    [organization.filteredTasks]
-  );
+  // Seçenekler ÇAPRAZ süzülür: her sütunun listesi, ÖTEKİ sütun süzgeçlerinden
+  // (ve aramadan, kurumsal seçimden) geçen satırlardan toplanır. Böylece bir
+  // sütunda süzme yapıldığında öteki sütunlarda yalnızca hâlâ görünen değerler
+  // kalır; sonucu kesinlikle boş olan bir seçenek listelenmez. Sütunun KENDİ
+  // süzgeci hesap dışıdır, yoksa kullanıcı ikinci bir değer ekleyemezdi
+  // (bkz. features/tasks/taskTableFacets.js).
+  const facetValues = useMemo1(() => Object.fromEntries(TASK_TABLE_FACET_KEYS.map((key) => [
+    key,
+    taskTableFacetValues(organization.filteredTasks, { search, filters: colFilter }, key)
+  ])), [organization.filteredTasks, search, colFilter]);
 
   // Seçenek listesi GÖRÜNÜR değerlerle HÂLEN SEÇİLİ değerlerin BİRLEŞİMİDİR.
   //
@@ -130,20 +109,20 @@ export function TasksView() {
   }, []);
 
   const projectOptionIds = useMemo1(
-    () => withSelected(visibleProjectIds, colFilter.proje),
-    [visibleProjectIds, colFilter.proje, withSelected]
+    () => withSelected(facetValues.proje, colFilter.proje),
+    [facetValues, colFilter.proje, withSelected]
   );
   const assigneeOptionIds = useMemo1(
-    () => withSelected(visibleAssigneeIds, colFilter.sorumlu),
-    [visibleAssigneeIds, colFilter.sorumlu, withSelected]
+    () => withSelected(facetValues.sorumlu, colFilter.sorumlu),
+    [facetValues, colFilter.sorumlu, withSelected]
   );
   const statusOptionValues = useMemo1(
-    () => withSelected(visibleStatuses, colFilter.status),
-    [visibleStatuses, colFilter.status, withSelected]
+    () => withSelected(facetValues.status, colFilter.status),
+    [facetValues, colFilter.status, withSelected]
   );
   const priorityOptionValues = useMemo1(
-    () => withSelected(visiblePriorities, colFilter.priority),
-    [visiblePriorities, colFilter.priority, withSelected]
+    () => withSelected(facetValues.priority, colFilter.priority),
+    [facetValues, colFilter.priority, withSelected]
   );
 
   const projOpts = useMemo1(() => projects
@@ -156,13 +135,10 @@ export function TasksView() {
       keywords: [p.code, p.name, p.projectTypeCode, p.projectTypeName],
       icon: <span style={{ width: 8, height: 8, borderRadius: 2, background: projectColorVar(p.name) }} />
     })), [projects, projectOptionIds]);
-  const kwOpts = useMemo1(() => Array.from(withSelected(
-    new Set(organization.filteredTasks.map(t => String(t.keyword || '').trim()).filter(Boolean)),
-    colFilter.keyword
-  ))
+  const kwOpts = useMemo1(() => Array.from(withSelected(facetValues.keyword, colFilter.keyword))
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'tr'))
-    .map(k => ({ value: k, label: k })), [organization.filteredTasks, colFilter.keyword, withSelected]);
+    .map(k => ({ value: k, label: k })), [facetValues, colFilter.keyword, withSelected]);
   const sorumluOpts = useMemo1(() => people
     .filter(p => assigneeOptionIds.has(String(p.id)))
     .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
@@ -191,49 +167,11 @@ export function TasksView() {
   const filtered = useMemo1(() => {
     const today_ = today();
     // `filteredTasks`, yetkili çalışma alanı kümesinin kurumsal kapsamla
-    // daraltılmış hâlidir; arama ve mevcut tablo süzgeçleri bundan sonra gelir.
-    let out = [...organization.filteredTasks];
-    if (search) {
-      const q = search.toLocaleLowerCase('tr-TR');
-      out = out.filter(t => {
-        const haystack = [t.task, t.proje, t.projectCode, t.keyword, ...(t.sorumlu || [])]
-          .map((value) => String(value || '').toLocaleLowerCase('tr-TR'));
-        return haystack.some((value) => value.includes(q));
-      });
-    }
-    if (colFilter.proje.length) out = out.filter(t => colFilter.proje.includes(t.projectId));
-    if (colFilter.task) {
-      const q = colFilter.task.toLocaleLowerCase('tr-TR');
-      out = out.filter(t => String(t.task || '').toLocaleLowerCase('tr-TR').includes(q));
-    }
-    // Seçenek listesi (`kwOpts`) kırpılmış etiket değerleri saklar; ham
-    // `t.keyword` ile karşılaştırıldığında başında/sonunda boşluk taşıyan bir
-    // etiket hiç eşleşmiyor ve o etiket seçildiğinde tablo boş kalıyordu.
-    if (colFilter.keyword.length) {
-      out = out.filter(t => colFilter.keyword.includes(String(t.keyword || '').trim()));
-    }
-    if (colFilter.sorumlu.length) {
-      out = out.filter(t => (t.assigneeIds || []).some(id => colFilter.sorumlu.includes(String(id))));
-    }
-    if (colFilter.priority?.length) out = out.filter(t => colFilter.priority.includes(normalizePriorityId(t.priority)));
-    if (colFilter.status.length) {
-      out = out.filter(t => {
-        const overdue = t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) < 0;
-        if (colFilter.status.includes('overdue') && overdue) return true;
-        return colFilter.status.includes(t.status || 'todo');
-      });
-    }
-    ['plannedStart', 'plannedFinish', 'targetFinish'].forEach(k => {
-      const spec = colFilter[k];
-      if (spec) out = out.filter(t => !!t[k] && dateMatchesFilter(t[k], spec));
-    });
-    ['progress'].forEach(k => {
-      const spec = colFilter[k];
-      // Süzgeç ve hücre AYNI türetilmiş değeri kullanır: süzgeç `null` ilerlemeyi
-      // 0 sayarken satır tamamlanmış görevi %100 gösteriyor, "Eşit 100" süzgeci
-      // ekranda 100 yazan satırları gizliyordu.
-      if (spec) out = out.filter(t => numericMatchesFilter(k === 'progress' ? taskProgressValue(t) : (t[k] != null ? t[k] : 0), spec));
-    });
+    // daraltılmış hâlidir; arama ve tablo süzgeçleri bundan sonra gelir. Satır
+    // süzmesi ile faset hesabı AYNI yüklemi kullanır: iki ayrı kopya, birinde
+    // düzeltilen bir kural ötekinde kalıyordu.
+    const out = organization.filteredTasks
+      .filter((task) => taskTableMatches(task, { search, filters: colFilter }, null, today_));
 
     out.sort((a, b) => {
       let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
@@ -252,6 +190,16 @@ export function TasksView() {
   }, [organization.filteredTasks, search, sort, colFilter]);
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(filtered, paginationKey);
+
+  const createTask = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      await onAddTask();
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const setSortFor = (key) => (dir) => setSort({ key, dir });
   const sortDirFor = (key) => sort.key === key ? sort.dir : null;
@@ -292,67 +240,69 @@ export function TasksView() {
         <span className="muted tabular" style={{ marginLeft: 'auto', fontSize: 12.5 }}>{filtered.length} / {tasks.length} görev</span>
         <button
           className="btn primary"
-          onClick={onAddTask}
-          disabled={!canAddTask}
+          onClick={createTask}
+          disabled={!canAddTask || creating}
+          aria-busy={creating}
           title={canAddTask ? 'Yeni görev' : 'Görev eklemek için yazabileceğiniz bir proje ve atayabileceğiniz bir sorumlu gerekir.'}
         >
-          <Icons.Plus size={14} /> Yeni görev
+          <ButtonSpinner busy={creating} size={14}><Icons.Plus size={14} /></ButtonSpinner>
+          {creating ? 'Oluşturuluyor…' : 'Yeni görev'}
         </button>
       </div>
 
       <div className="tasks-table-card">
         <div className="tasks-table-scroll">
-          <table className="tbl">
+          <table className="tbl tasks-table" aria-label="Görevler">
             <thead>
               <tr>
-                <th style={{ width: 36, textAlign: 'center' }}>#</th>
-                <FilterableTH label="Proje" style={{ minWidth: 180 }}
+                <th className="tasks-index-col" style={{ textAlign: 'center' }}>#</th>
+                <FilterableTH label="Proje" style={{ minWidth: 148 }}
                   sortKey={sortDirFor('proje')} onSort={setSortFor('proje')}
                   filter={colFilter.proje} onFilter={v => setCF('proje', v)}
                   filterType="multi" filterOptions={projOpts}
                 />
-                <FilterableTH label="Görev" style={{ minWidth: 260 }}
+                <FilterableTH label="Görev" style={{ minWidth: 210 }}
                   sortKey={sortDirFor('task')} onSort={setSortFor('task')}
                   filter={colFilter.task} onFilter={v => setCF('task', v)}
                   filterType="text"
                 />
-                <FilterableTH label="Etiket" style={{ minWidth: 110 }}
+                <FilterableTH label="Etiket" style={{ minWidth: 100 }}
                   filter={colFilter.keyword} onFilter={v => setCF('keyword', v)}
                   filterType="multi" filterOptions={kwOpts}
                 />
-                <FilterableTH label="Sorumlu" style={{ minWidth: 150 }}
+                <FilterableTH label="Sorumlu" style={{ minWidth: 96 }}
                   sortKey={sortDirFor('sorumlu')} onSort={setSortFor('sorumlu')}
                   filter={colFilter.sorumlu} onFilter={v => setCF('sorumlu', v)}
                   filterType="multi" filterOptions={sorumluOpts}
                 />
-                <FilterableTH label="Durum" style={{ minWidth: 130 }}
+                <FilterableTH label="Durum" style={{ minWidth: 118 }}
                   sortKey={sortDirFor('status')} onSort={setSortFor('status')}
                   filter={colFilter.status} onFilter={v => setCF('status', v)}
                   filterType="multi" filterOptions={statusOpts}
                 />
-                <FilterableTH label="Öncelik" style={{ minWidth: 100 }}
+                <FilterableTH label="Öncelik" style={{ minWidth: 86 }}
                   sortKey={sortDirFor('priority')} onSort={setSortFor('priority')}
                   filter={colFilter.priority} onFilter={v => setCF('priority', v)}
                   filterType="multi" filterOptions={priorityOpts}
                 />
-                <FilterableTH label="İlerleme" style={{ minWidth: 110 }}
+                <FilterableTH label="İlerleme" style={{ minWidth: 100 }}
                   sortKey={sortDirFor('progress')} onSort={setSortFor('progress')}
                   filter={colFilter.progress} onFilter={v => setCF('progress', v)}
                   filterType="number" numericMin={0} numericMax={100} numericUnit="%"
                 />
-                <DateFilterableTH label="Başlangıç" style={{ minWidth: 130 }}
+                <DateFilterableTH label="Başlangıç" style={{ minWidth: 104 }}
                   sortKey={sortDirFor('plannedStart')} onSort={setSortFor('plannedStart')}
                   filter={colFilter.plannedStart} onFilter={v => setCF('plannedStart', v)}
                 />
-                <DateFilterableTH label="Bitiş" style={{ minWidth: 130 }}
+                <DateFilterableTH label="Bitiş" style={{ minWidth: 96 }}
                   sortKey={sortDirFor('plannedFinish')} onSort={setSortFor('plannedFinish')}
                   filter={colFilter.plannedFinish} onFilter={v => setCF('plannedFinish', v)}
                 />
-                <DateFilterableTH label="Hedef" style={{ minWidth: 130 }}
+                <DateFilterableTH label="Hedef" style={{ minWidth: 96 }}
                   sortKey={sortDirFor('targetFinish')} onSort={setSortFor('targetFinish')}
                   filter={colFilter.targetFinish} onFilter={v => setCF('targetFinish', v)}
                 />
-                <th style={{ width: 78 }} aria-label="İşlemler" />
+                <th className="tasks-actions-col" aria-label="İşlemler" />
               </tr>
             </thead>
             <tbody>
@@ -367,7 +317,7 @@ export function TasksView() {
                 const deleteAccess = resolveTaskDeleteAccess(taskMutationState, t.id);
                 return (
                   <tr key={t.id} data-task-id={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
-                    <td className="muted tabular" style={{ textAlign: 'center', fontSize: 11.5 }}>{paged.start + idx + 1}</td>
+                    <td className="muted tabular tasks-index-cell">{paged.start + idx + 1}</td>
                     <td>
                       <div className="row" style={{ gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: projectColorVar(t.proje) }} />
@@ -403,12 +353,13 @@ export function TasksView() {
                         <span className="tabular" style={{ fontSize: 11, minWidth: 28, textAlign: 'right', color: 'var(--text-muted)' }}>{prog}%</span>
                       </div>
                     </td>
-                    <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedStart)}</td>
-                    <td className="muted tabular" style={{ fontSize: 12 }}>{fmt(t.plannedFinish)}</td>
-                    <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
-                    <td>
-                      {/* Hatırlatma eylemi silme simgesinin YANINDA durur;
-                          Basit Modda da aynı yerdedir. */}
+                    <td className="muted tabular tasks-date-cell">{fmt(t.plannedStart)}</td>
+                    <td className="muted tabular tasks-date-cell">{fmt(t.plannedFinish)}</td>
+                    <td className="tabular tasks-date-cell" style={{ color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
+                    {/* Eylem sütunu sağa YAPIŞIKTIR: yazı tipi büyütülüp tablo
+                        yatay kaydırmaya girdiğinde bile posta ve silme düğmeleri
+                        görünür kalır. */}
+                    <td className="tasks-actions-cell">
                       <div className="row" style={{ gap: 4 }}>
                         <TaskReminderButton task={t} />
                         <button

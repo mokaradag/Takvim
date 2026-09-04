@@ -167,7 +167,7 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
   const repository = read('src/server/repository/sqlAppRepository.js');
   const snapshot = repository.slice(
     repository.indexOf('async function loadSnapshotFrom'),
-    repository.indexOf('async function readProjectTags')
+    repository.indexOf('async function loadAuthoritativeMutationRows')
   );
   // Bayrak YALNIZCA üç yerde kullanılır: seçilebilir proje listesi, kişi
   // rehberinin yöneticinin KENDİ personeliyle sınırlı genişlemesi ve atanabilir

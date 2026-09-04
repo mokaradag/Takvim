@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
+import { Spinner } from '../../components/Loader';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar, StatusIcon } from '../../components/ui';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
@@ -155,12 +156,24 @@ export function SimpleTaskDrawer({
   };
 
   const selectedAssignees = useMemo(() => {
+    // Fotoğraf kimlikleri de taşınır: rehberde çözülemeyen eş sorumlular için
+    // görev satırındaki `assigneeAvatarIdentities` tek fotoğraf kaynağıdır.
+    // Kırpılmış nesne bu alanı dışarıda bıraktığı için kartta herkes baş harfe
+    // düşüyordu (liste sütunu aynı veriyle fotoğrafı gösteriyordu).
     return resolveTaskAssigneeDisplayRecords({
       assigneeIds: local.assigneeIds,
       assigneeDisplayNames: local.assigneeDisplayNames,
+      assigneeAvatarIdentities: local.assigneeAvatarIdentities,
       sorumlu: local.sorumlu
     }, people, !canManageAssignees);
-  }, [people, local.assigneeIds, local.assigneeDisplayNames, local.sorumlu, canManageAssignees]);
+  }, [
+    people,
+    local.assigneeIds,
+    local.assigneeDisplayNames,
+    local.assigneeAvatarIdentities,
+    local.sorumlu,
+    canManageAssignees
+  ]);
   const hiddenAssigneeCount = Math.max(
     0,
     Number(local.assigneeCount || 0) - selectedAssignees.length
@@ -197,6 +210,9 @@ export function SimpleTaskDrawer({
   const pendingScheduleRequest = scheduleRequests.find(
     (request) => request.status === 'PENDING' && request.isRequester
   ) || null;
+  // Basit Modda plan tarihleri gizlidir; sorumlu yalnızca termin (hedef bitiş)
+  // için öneri gönderir.
+  const proposableScheduleFields = canControlSchedule && !canEditTargetFinish ? ['targetFinish'] : null;
 
   return (
     <>
@@ -381,6 +397,7 @@ export function SimpleTaskDrawer({
           </button>}
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={closeWithTitle} disabled={isSaving} aria-busy={isSaving}>
+            {isSaving && <Spinner size={13} />}
             {isSaving ? 'Kaydediliyor…' : 'Tamam'}
           </button>
         </div>
@@ -390,6 +407,7 @@ export function SimpleTaskDrawer({
           task={task}
           onCancel={() => setScheduleDialogOpen(false)}
           onSubmit={onProposeSchedule}
+          fields={proposableScheduleFields}
         />
       )}
     </>

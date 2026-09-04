@@ -126,6 +126,16 @@ All scheduling durations are working-day values unless explicitly documented oth
 
 Canonical planned duration must not be calculated with ordinary calendar-day subtraction. Milestones have zero planned duration.
 
+A milestone is declared from the Task drawer's *Güncel plan* card (full Project
+write access required). Turning the switch on collapses the Task to a single
+day — planned finish follows planned start and the duration normalizes to zero —
+and both Gantt views then draw a diamond instead of a bar. The stored field is
+`MR_Tasks.IsMilestone`, projected to the client as `milestone`/`isMilestone`;
+the server rejects a milestone whose planned duration is not zero. Until this
+switch existed the flag round-tripped through the data model and the export but
+could not be set anywhere in the product, so milestones never appeared on a
+Gantt chart.
+
 ## Dependency lag and lead
 
 The canonical dependency field remains `lagDays`, but scheduling interprets it as working days:

@@ -1,12 +1,8 @@
 'use client';
-import { useState } from 'react';
 import { Icons } from '../icons';
 import { Avatar } from '../ui';
-import { DATA_MODES } from '../../data/dataMode';
 import { resolveUserDepartmentLabel, resolveUserDisplayName } from '../../domain/identity/sessionUser.js';
-import { publicRotaPath } from '../../lib/publicPath.js';
-import { useCurrentUser, useSessionContext } from '../../state/hooks';
-import { useDataMode } from './DataModeContext';
+import { useCurrentUser } from '../../state/hooks';
 
 /**
  * Kenar çubuğu kullanıcı bloğu.
@@ -22,47 +18,13 @@ import { useDataMode } from './DataModeContext';
  * sayfası normal gezinme öğesi olarak durmaya devam eder. Boşalan yatay alan
  * uzun departman adlarına ayrılmıştır.
  */
-export function SidebarUserPanel({ theme, onToggleTheme }) {
+export function SidebarUserPanel({ theme, onToggleTheme, signOutState }) {
   const currentUser = useCurrentUser();
-  const session = useSessionContext();
-  const { dataMode } = useDataMode();
-  const [signingOut, setSigningOut] = useState(false);
-  const [signOutError, setSignOutError] = useState('');
+  const { canSignOut, signOut, signingOut, signOutError } = signOutState;
 
   const name = resolveUserDisplayName(currentUser);
   const department = resolveUserDepartmentLabel(currentUser);
   const employeeNo = currentUser?.employeeNo || currentUser?.sicil || null;
-  const canSignOut = dataMode === DATA_MODES.ACTUAL && session?.authMode === 'keycloak';
-  const appRoot = publicRotaPath('/');
-
-  const signOut = async () => {
-    setSigningOut(true);
-    setSignOutError('');
-    try {
-      const response = await fetch(publicRotaPath('/api/mergen-rota/auth/logout'), { method: 'POST', cache: 'no-store' });
-      const body = await response.json().catch(() => ({}));
-      // BAŞARISIZ çıkış, başarılı gibi sunulmaz. Yanıt durumu denetlenmediğinde
-      // 403 (aynı köken denetimi) ya da 500 dönen bir istek `endSessionUrl`
-      // taşımıyor, kullanıcı `appRoot` adresine yönlendiriliyor ve oturum çerezi
-      // hâlâ geçerli olduğu için uygulamaya OTURUMU AÇIK dönüyordu — üstelik
-      // hiçbir hata görmeden.
-      if (!response.ok) {
-        setSigningOut(false);
-        setSignOutError(body?.error?.message || 'Oturum kapatılamadı. Lütfen yeniden deneyin.');
-        return;
-      }
-      // Yönlendirmeyi istemci yapar: sunucu 302 döndürseydi fetch akışında
-      // yönlendirme döngüsü oluşabilirdi.
-      window.location.assign(body?.endSessionUrl || appRoot);
-    } catch {
-      // İstek hiç tamamlanmadıysa (çevrimdışı, ağ hatası, iptal) oturum
-      // SUNUCUDA hâlâ açıktır. `appRoot` adresine yönlendirmek, başarısız çıkışı
-      // başarılı gibi gösterip kullanıcıyı oturumu açık hâlde uygulamaya geri
-      // döndürüyordu; hata da görünmediği için yeniden deneme yolu yoktu.
-      setSigningOut(false);
-      setSignOutError('Oturum kapatılamadı. Lütfen yeniden deneyin.');
-    }
-  };
 
   return (
     <div className="sidebar-footer-row">

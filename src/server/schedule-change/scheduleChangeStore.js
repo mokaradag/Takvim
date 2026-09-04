@@ -13,6 +13,7 @@ const DATE_FIELDS = Object.freeze([
   ['plannedFinish', 'PlannedFinish'],
   ['targetFinish', 'TargetFinish']
 ]);
+const ASSIGNEE_PROPOSAL_FIELDS = new Set(['targetFinish']);
 
 function canonicalId(value, label) {
   const normalized = canonicalActualId(value);
@@ -39,14 +40,44 @@ function proposedDate(value, field) {
   return text;
 }
 
-function normalizedProposal(input = {}) {
-  const proposal = {};
+/**
+ * Talebin GÖNDERİLEN tarihleri. Gönderilmeyen alan "değişmesin" demektir.
+ *
+ * Talep eden yalnızca doğrudan yazamadığı tarihi önerir (bkz. hedef bitiş).
+ * Gönderilmeyen alanlar istemcinin panelde tuttuğu ESKİ değerlerle
+ * doldurulsaydı, pencere açıkken planı başkası değiştirdiğinde öneri o eski
+ * tarihleri de taşır; sunucu `Original*` alanlarını kilitli satırdan güncel
+ * okuduğu için bayatlık denetimi tetiklenmez ve kabul, kimsenin istemediği bir
+ * geri alma yazardı. Eksik alan bu yüzden istemciden değil, kilitli görev
+ * satırından tamamlanır (bkz. effectiveProposal).
+ */
+function submittedProposal(input = {}, allowedFields = null) {
+  const values = {};
+  const submitted = new Set();
   for (const [field] of DATE_FIELDS) {
-    if (!Object.prototype.hasOwnProperty.call(input, field)) {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Üç plan tarihi de talepte yer almalıdır.', { status: 400 });
+    if (!Object.prototype.hasOwnProperty.call(input, field)) continue;
+    if (allowedFields && !allowedFields.has(field)) {
+      throw new ServerPersistenceError(
+        'MUTATION_FAILED',
+        'Tarih değişikliği talebinde yalnızca hedef bitiş önerilebilir.',
+        { status: 400 }
+      );
     }
-    proposal[field] = proposedDate(input[field], field);
+    values[field] = proposedDate(input[field], field);
+    submitted.add(field);
   }
+  if (!submitted.size) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'Talepte en az bir plan tarihi yer almalıdır.', { status: 400 });
+  }
+  return { values, submitted };
+}
+
+/** Gönderilmeyen alanlar görevin YÜRÜRLÜKTEKİ değerleriyle tamamlanır. */
+function effectiveProposal({ values, submitted }, task) {
+  const proposal = Object.fromEntries(DATE_FIELDS.map(([field, column]) => [
+    field,
+    submitted.has(field) ? values[field] : isoDate(task[column])
+  ]));
   if (proposal.plannedStart && proposal.plannedFinish && proposal.plannedFinish < proposal.plannedStart) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Planlanan bitiş, planlanan başlangıçtan önce olamaz.', { status: 400 });
   }
@@ -214,7 +245,7 @@ async function readScheduleChange(executor, actor, requestId) {
 
 export async function createScheduleChange(input = {}) {
   const taskId = canonicalId(input.taskId, 'Görev kimliği');
-  const proposal = normalizedProposal(input.proposedDates || input);
+  const proposalInput = input.proposedDates || input;
   const requesterMessage = normalizeMessage(input.message, { required: true });
 
   return withSqlTransaction(async (transaction) => {
@@ -262,6 +293,11 @@ export async function createScheduleChange(input = {}) {
       || hasFullProjectAccess(actor, task.ProjectId) || task.EffectiveDecisionOwnerSicil == null) {
       throw new ServerPersistenceError('FORBIDDEN', 'Bu görev için tarih değişikliği talebi oluşturamazsınız.');
     }
+    // Bu uç nokta yalnızca doğrudan hedef bitiş yazamayan görev sorumlusunun
+    // onay talebi yoludur. Yetki veritabanındaki güncel görev/kapsam üzerinden
+    // doğrulandıktan sonra istemcinin plan tarihleri taşımaya çalışması kesilir.
+    const submission = submittedProposal(proposalInput, ASSIGNEE_PROPOSAL_FIELDS);
+    const proposal = effectiveProposal(submission, task);
     const changed = DATE_FIELDS.some(([field, column]) => proposal[field] !== isoDate(task[column]));
     if (!changed) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Önerilen tarihler mevcut planla aynıdır.', { status: 400 });
