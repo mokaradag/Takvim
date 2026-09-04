@@ -52,8 +52,8 @@ import {
   simpleCalendarTabId
 } from './navigation';
 import { ProjectExportMenu } from './ProjectExportMenu';
-import { QuickActions } from './QuickActions';
 import { SidebarUserPanel } from './SidebarUserPanel';
+import { readSidebarPreference, writeSidebarPreference } from './sidebarPreference.js';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useSignOut } from './useSignOut.js';
 
@@ -135,9 +135,10 @@ export default function AppShell() {
   const currentUser = useCurrentUser();
   const { isSystemAdmin } = useAppState();
   const { openTask } = useTaskActions();
-  // Üst ve yan çubuktaki iki çıkış düğmesi aynı istek/durum örneğini paylaşır.
   const signOutState = useSignOut();
   const simpleMode = t.appMode === 'simple';
+  const [sidebarPreference, setSidebarPreference] = useState(readSidebarPreference);
+  const { pinned: sidebarPinned, collapsed: sidebarCollapsed } = sidebarPreference;
 
   const [view, setView] = useState(() => {
     const landing = TWEAK_DEFAULTS.landingView || 'ozet';
@@ -185,6 +186,22 @@ export default function AppShell() {
       navigate('takvim');
     }
   };
+
+  const toggleSidebar = () => {
+    setSidebarPreference((current) => current.pinned
+      ? { ...current, collapsed: !current.collapsed }
+      : { pinned: true, collapsed: false });
+  };
+
+  const toggleSidebarPin = () => {
+    setSidebarPreference((current) => current.pinned
+      ? { pinned: false, collapsed: true }
+      : { pinned: true, collapsed: false });
+  };
+
+  useEffect(() => {
+    writeSidebarPreference(sidebarPreference);
+  }, [sidebarPreference]);
 
   useEffect(() => {
     if (!simpleMode) return;
@@ -342,21 +359,31 @@ export default function AppShell() {
   }
 
   return (
-    <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'}`}>
+    <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'} sidebar-is-${sidebarPinned ? 'pinned' : 'unpinned'} sidebar-is-${sidebarCollapsed ? 'collapsed' : 'expanded'}`}>
       {/* Kişi dizini bağlamı DOM düğümü üretmez: ızgara çocukları değişmez. */}
       <PeopleDirectoryProvider people={directoryPeople}>
       <aside className="sidebar">
         <Heptagon variant="hept-sidebar" />
         <div className="sidebar-header">
           <AppLogo size={34} />
-          <div className="col" style={{ gap: 0 }}>
+          <div className="brand-copy col" style={{ gap: 0 }}>
             <div className="brand-name"><span>MERGEN</span><span className="brand-accent">Rota</span><span className="brand-dot" /></div>
             <div className="brand-sub">Görev Yönetimi</div>
           </div>
         </div>
+        <button
+          type="button"
+          className="sidebar-collapse-button"
+          onClick={toggleSidebar}
+          aria-label={sidebarPinned && !sidebarCollapsed ? 'Kenar çubuğunu daralt' : 'Kenar çubuğunu genişlet ve sabitle'}
+          aria-expanded={sidebarPinned && !sidebarCollapsed}
+          title={sidebarPinned && !sidebarCollapsed ? 'Daralt' : 'Genişlet ve sabitle'}
+        >
+          <Icons.ChevronLeft size={14} />
+        </button>
 
         {!simpleMode ? (
-          <div className="col" style={{ gap: 6, padding: '0 12px 10px' }}>
+          <div className="sidebar-workspace-context col" style={{ gap: 6, padding: '0 12px 10px' }}>
             <div className="sidebar-section-title" style={{ margin: 0 }}>Aktif çalışma alanı</div>
             <SearchableSelect
               value={selectedProjectId || ''}
@@ -420,22 +447,24 @@ export default function AppShell() {
                 }}
               >
                 <Icon className="nav-icon" size={15} />
-                <span>{item.label}</span>
+                <span className="nav-label">{item.label}</span>
                 {totalsByView[item.id] != null && <span className="nav-count">{totalsByView[item.id]}</span>}
               </button>
             );
           })}
         </nav>
 
-        {/* Veri modu anahtarı kenar çubuğunda değil, Ayarlar sayfasında yaşar.
-            Kullanıcı bloğu artık sabit örnek kişi değil, doğrulanmış oturumdur. */}
+        {/* Kullanıcı, görünüm ve oturum kontrolleri tek alt araç alanında yaşar. */}
         <div className="sidebar-footer">
           <SidebarUserPanel
             theme={t.theme}
             onToggleTheme={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')}
+            simpleMode={simpleMode}
+            onChooseMode={chooseMode}
+            sidebarPinned={sidebarPinned}
+            onToggleSidebarPin={toggleSidebarPin}
             signOutState={signOutState}
           />
-          <div className="sidebar-version">MERGEN Rota · Sürüm 1.0 · {simpleMode ? 'Basit' : 'Gelişmiş'} Mod</div>
         </div>
       </aside>
 
@@ -457,14 +486,6 @@ export default function AppShell() {
           <div className="topbar-actions">
             <ScheduleRequestCenter />
             <DataRefreshControl />
-            {/* Mod, tema ve oturum eylemleri her sayfadan tek tıkla erişilir. */}
-            <QuickActions
-              simpleMode={simpleMode}
-              onChooseMode={chooseMode}
-              theme={t.theme}
-              onToggleTheme={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')}
-              signOutState={signOutState}
-            />
             {exportVisible && (
               <ProjectExportMenu
                 project={selectedProject}

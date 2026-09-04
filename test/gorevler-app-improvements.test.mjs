@@ -136,7 +136,11 @@ test('kayıt sürerken dönen halka ve perde gösterilir', () => {
   assertSimpleEntrySavingBoundary(panel);
 
   const tasksView = read('src/features/tasks/TasksView.jsx');
-  assert.match(tasksView, /<ButtonSpinner busy=\{creating\}/);
+  assert.match(tasksView, /beginTaskDraft/);
+  assert.doesNotMatch(tasksView, /<ButtonSpinner/);
+
+  const drawer = read('src/features/task-detail/TaskDrawer.jsx');
+  assert.match(drawer, /isSaving && <Spinner size=\{13\} \/>/);
 
   const status = read('src/components/shell/PersistenceStatus.jsx');
   assert.match(status, /<Spinner size=\{14\} \/> Kaydediliyor…/);
@@ -171,14 +175,13 @@ test('kalıcılaştırma kuyruğu yeniden bağlanmada diriltilir', async () => {
 /* ── 3 · Görev künyesi ve avatarlar ─────────────────────────── */
 
 test('görev künyesi oluşturanın adını görev satırından okur', () => {
-  const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /const projectedName = String\(task\?\.createdByName \|\| ''\)\.trim\(\);/);
-  assert.match(drawer, /person\?\.name \|\| projectedName \|\| \(sicil \? 'Bilinmeyen kullanıcı' : '—'\)/);
-  assert.match(drawer, /employeeNo: person\?\.employeeNo \|\| sicil \|\| null/);
+  const byline = read('src/features/task-detail/TaskCreatorByline.jsx');
+  assert.match(byline, /task\?\.createdByName \|\| fallback\?\.name/);
+  assert.match(byline, /person\?\.name/);
+  assert.match(byline, /Görevi tanımlayan/);
 
   const repository = read('src/server/repository/sqlAppRepository.js');
-  assert.match(repository, /const visiblePeopleBySicil = new Map/);
-  assert.match(repository, /createdBySicil: creatorPerson \? rawCreatorSicil : null/);
+  assert.match(repository, /creatorViewerAssignment\.Sicil = @sicil/);
   assert.match(repository, /creatorAuth\.IdentityVisible = 1 THEN t\.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil/);
   assert.match(repository, /createdBySicil: row\.VisibleCreatedBySicil == null/);
 });
@@ -193,26 +196,20 @@ test('paneldeki sorumlu kartı görev kapsamlı fotoğraf kimliklerini taşır',
   }
 });
 
-/* ── 4 · Üst çubuk hızlı eylemleri ──────────────────────────── */
+/* ── 4 · Kenar çubuğu hızlı eylemleri ───────────────────────── */
 
-test('mod, tema ve oturum eylemleri üst çubukta yer alır', () => {
+test('mod, tema ve oturum eylemleri kenar çubuğunun altında yer alır', () => {
   const shell = read('src/components/shell/AppShell.jsx');
-  assert.match(shell, /<QuickActions/);
-  assert.match(shell, /onChooseMode=\{chooseMode\}/);
+  assert.doesNotMatch(shell, /QuickActions/);
   assert.match(shell, /const signOutState = useSignOut\(\);/);
-  assert.equal((shell.match(/signOutState=\{signOutState\}/g) || []).length, 2);
+  assert.equal((shell.match(/signOutState=\{signOutState\}/g) || []).length, 1);
 
-  const quick = read('src/components/shell/QuickActions.jsx');
-  assert.match(quick, /quick-mode-switch/);
-  assert.match(quick, /role="switch"/);
-  assert.match(quick, /signOutState/);
-  assert.doesNotMatch(quick, /useSignOut\(\)/);
-  assert.match(quick, /Basit/);
-  assert.match(quick, /Gelişmiş/);
-
-  // Çıkış akışı AppShell'deki TEK kanca örneğinden iki denetime taşınır.
   const sidebar = read('src/components/shell/SidebarUserPanel.jsx');
   assert.match(sidebar, /signOutState/);
+  assert.match(sidebar, /sidebar-mode-toggle/);
+  assert.match(sidebar, /role="switch"/);
+  assert.match(sidebar, /onToggleTheme/);
+  assert.match(sidebar, /onClick=\{signOut\}/);
   assert.doesNotMatch(sidebar, /useSignOut\(\)/);
 
   const signOut = read('src/components/shell/useSignOut.js');

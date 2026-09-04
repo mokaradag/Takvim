@@ -40,6 +40,8 @@ export const Icons = {
   ChevronRight: (p) => <Icon {...p} d='<path d="m9 18 6-6-6-6"/>' />,
   ChevronDown: (p) => <Icon {...p} d='<path d="m6 9 6 6 6-6"/>' />,
   ChevronUp: (p) => <Icon {...p} d='<path d="m18 15-6-6-6 6"/>' />,
+  Pin: (p) => <Icon {...p} d='<path d="M12 17v5M5 4h14M7 4l1 7-3 3h14l-3-3 1-7"/>' />,
+  PinOff: (p) => <Icon {...p} d='<path d="m3 3 18 18M7 4h10l-1 7 3 3M9 14H5l2.2-2.2M12 17v5"/>' />,
   Clock: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>' />,
   Alert: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>' />,
   Briefcase: (p) => <Icon {...p} d='<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>' />,

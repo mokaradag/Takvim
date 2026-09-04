@@ -10,7 +10,7 @@ Proje veya personel seçen uzun listeler yerel HTML `select` alanları yerine ca
 
 Ham `<select>` yalnızca sabit ve kısa numaralandırmalar için kalır: ilişki türü (FS/SS/FF/SF), gecikme birimi ve takvimdeki ay/yıl seçimi.
 
-Açılır panelin yerleşim ve katman sözleşmesi `SIMPLE-MODE-AND-UI.md` içinde tanımlanır. Panel `document.body` altına taşınır; bu sayede kenar çubuğunun `overflow: hidden` kırpması ve yığın bağlamı listeyi etkilemez.
+Açılır panelin yerleşim ve katman sözleşmesi `SIMPLE-MODE-AND-UI.md` içinde tanımlanır. Panel `document.body` altına taşınır; bu sayede daraltılmış veya geçici açılmış kenar çubuğunun boyutu ve yığın bağlamı listeyi etkilemez.
 
 ## Görevler sayfasında kurumsal daraltma
 

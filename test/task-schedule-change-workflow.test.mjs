@@ -76,7 +76,8 @@ test('başkasının görevindeki sorumlu doğrudan planı değiştiremez, talep 
   const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
     const task = stack.state.tasks[0];
-    assert.equal(task.createdBySicil, null, 'kısmi görünüm ilgisiz oluşturan Sicilini maskelemelidir');
+    assert.equal(task.createdBySicil, String(CREATOR), 'görev sorumlusu görevi tanımlayan kişiyi görmelidir');
+    assert.equal(task.createdByName, `Kullanıcı ${CREATOR}`);
     assert.equal(task.isCurrentUserCreator, false);
     await assert.rejects(
       stack.repository.commitChanges({ taskUpserts: [{ ...task, targetFinish: '2026-09-03', assigneeMutation: false }] }),
@@ -87,6 +88,7 @@ test('başkasının görevindeki sorumlu doğrudan planı değiştiremez, talep 
     const first = await submitScheduleChangeRequest(proposal());
     assert.equal(first.ok, true);
     assert.equal(first.value.status, 'PENDING');
+    assert.equal(first.value.decisionOwnerSicil, String(CREATOR));
     assert.equal(stack.db.tasks[0].TargetFinish, '2026-09-02', 'talep görevi geçici olarak değiştirmemelidir');
 
     const replacement = await submitScheduleChangeRequest(proposal('2026-09-04'));
@@ -238,7 +240,7 @@ test('sorumlu gerçekleşen tarihleri yazar; ters sıralı çift REDDEDİLİR', 
   const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
     const task = stack.state.tasks[0];
-    assert.equal(task.createdBySicil, null, 'başkasına ait gizli oluşturan Sicili açığa çıkmamalıdır');
+    assert.equal(task.createdBySicil, String(CREATOR), 'sorumlu görev oluşturucusunu görmelidir');
     assert.equal(task.isCurrentUserCreator, false, 'görevi başkası oluşturmuş olmalıdır');
 
     const written = await stack.repository.commitChanges({

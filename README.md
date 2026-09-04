@@ -102,7 +102,7 @@ Eşitleme her istekte baştan çalışmaz. Proje başına içerik parmak izi `MR
 1. `SYSTEM_ADMIN`
 2. Proje bazlı `FULL` (kurumsal sorumluluk, açık erişim veya etkin manuel proje sorumluluğu)
 3. Yönetici alt-organizasyon görünürlüğü (`PARTIAL`, salt okunur)
-4. Kendi atandığı görevler (`PARTIAL`, yalnızca o görevin iş alanlarını düzenleyebilir)
+4. Kendi atandığı görevler (`PARTIAL`, yalnızca o görevin iş alanlarını düzenleyebilir; görevi tanımlayan kişi künyesi görünür)
 5. Varsayılan ret
 
 **Görev atama kapsamı** görünürlükten ayrı bir kavramdır. Müdür, direktör ve takım liderleri (HR02'den türeyen mevcut `isExecutive` soyutlaması; koda gömülü kullanıcı listesi yoktur) yeni görev tanımlarken proje seçicisinde **tüm etkin CN43N kataloğunu** görür; böylece kendi personeline, kendisinde `corporateprojectaccess` bulunmayan bir kurumsal projede de iş atayabilir. Bu genişleme yalnızca seçime ve görev yazmasına açıktır: görev görünürlüğü, proje üst verisi, iş dağılım ağacı ve yönetici işlevleri değişmez ve sunucu her atananın `MR_V_ExecutiveScope` içinde olmasını arar. Sıradan kullanıcının seçicisi eskisi gibi yalnızca kendi `corporateprojectaccess` projeleridir. Ayrıntılar: `docs/AUTHORIZATION-MODEL.md`.
@@ -186,7 +186,7 @@ npm run start -- -H 0.0.0.0 -p 8008
 - `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı), durable repository, SMTP taşıması (`mail`) ve hatırlatma servisi/zamanlayıcısı (`reminders`)
 - `src/state` — yükleme, sıralı mutation queue, Task patch coalescing ve access-aware scheduling selector'ları
 - `src/features` — uygulama özellikleri; SQL veya API route import etmez
-- `src/components/shell` — application shell, Veri Modu/Kullanım Modu seçimleri, üst çubuk hızlı eylemleri ve persistence durumları
+- `src/components/shell` — application shell, sabitlenebilir/daraltılabilir kenar çubuğu, görünüm kontrolleri ve persistence durumları
 - `src/lib/xlsx` — bağımlılıksız `.xlsx` ve ZIP yazıcısı (dışa aktarma çıktısı)
 - `database` — deterministic create ve destructive rollback SQL betikleri
 
@@ -282,9 +282,26 @@ taşır:
 - **Yüksek karşıtlık** — sınırları ve ikincil metni koyulaştırır; parlak ortamda
   ve açık temada okunabilirliği artırır.
 
-Üst çubuktaki **hızlı eylemler** ayrıca mod seçimini (Basit / Gelişmiş), tema
-anahtarını ve oturum kapatmayı her sayfadan tek tıkla erişilir kılar; aynı
-tercihler Ayarlar sayfasından da yönetilebilir.
+Tema, **Basit / Gelişmiş** mod ve oturum kapatma eylemleri kenar çubuğunun alt
+araç alanında tek sırada bulunur. Mod anahtarı tema ile çıkışın arasındadır;
+üst çubuk bu eylemleri yinelemez. Kenar çubuğu varsayılan olarak açık ve
+sabitlenmiş başlar. Kullanıcı daraltabilir veya sabitlemeyi kaldırıp üzerine
+gelince açılan düzene geçebilir; tercih tarayıcıda korunur. Alt sürüm satırı
+yalnızca `MERGEN Rota · Sürüm 1.0` bilgisini taşır.
+
+## Görev oluşturma ve oluşturan künyesi
+
+Gelişmiş Moddaki **Yeni Görev** eylemi veritabanına hemen kayıt yazmaz; yerel
+bir görev taslağı açar. Alan değişiklikleri taslakta kalır, kapatma taslağı
+atar ve ilk kalıcı `task/create` işlemi yalnızca paneldeki **Kaydet** düğmesiyle
+başlar. Mevcut görev panellerindeki birincil düğmenin adı da aynı eylem diliyle
+**Kaydet**tir.
+
+Görev başlığının altında kısa bir **Görevi tanımlayan** künyesi; oluşturanın
+fotoğrafını, tam adını ve oluşturma tarihini gösterir. Doğrudan görev sorumlusu,
+dar `PARTIAL` görünümde de `MR_Tasks.CreatedBySicil` ve yetkili ad projeksiyonunu
+alır. Bu kimlik aynı zamanda **Yeni tarih öner** talebinin karar sahibidir;
+istemci kişi dizininin dar olması oluşturanı `—` değerine düşürmez.
 
 Yazı boyutu ölçeği gövdeye `zoom` uygular. Tam ekran kaplayan her yükseklik bu
 ölçeğe bölünmüş `--app-viewport-h` değişkenini kullanır; aksi hâlde yazı
@@ -304,7 +321,7 @@ CPM erken/geç tarihler, float, kritik bayraklar, WBS rollup'ları ve Dashboard 
 ### Çalışma günü hesapları SONLANIR
 
 Bütün çalışma günü aramaları sınırlıdır. İki sıradan girdi eskiden tarayıcı
-sekmesini tümüyle donduruyordu — kullanıcıların "görev oluşturup **Tamam**'a
+sekmesini tümüyle donduruyordu — kullanıcıların "görev oluşturup **Kaydet**'e
 basınca uygulama donuyor" olarak bildirdiği hata:
 
 - takvimin `workingDays` listesi **boşsa** (sunucu, `MR_CalendarWorkingDays`

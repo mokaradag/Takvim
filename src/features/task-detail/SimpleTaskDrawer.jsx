@@ -16,6 +16,7 @@ import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
 import { useAllProjects, useAllPeople, useAssignmentScopeSicils, useTaskActions } from '../../state/hooks';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
+import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 /**
  * Basit Mod · Görev düzenleme.
@@ -43,7 +44,10 @@ export function SimpleTaskDrawer({
   scheduleRequests = [],
   onProposeSchedule = null,
   canDelete = true,
-  isSaving = false
+  isSaving = false,
+  isCreating = false,
+  onSave = null,
+  creatorFallback = null
 }) {
   const people = useAllPeople();
   const projects = useAllProjects();
@@ -99,6 +103,16 @@ export function SimpleTaskDrawer({
     });
     return closing;
   };
+
+  const saveCreationDraft = () => {
+    if (!onSave || !canCloseWithTaskTitle(titleDraft)) {
+      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
+    }
+    return onSave({ ...local, task: titleDraft.trim() });
+  };
+
+  const dismiss = isCreating ? onClose : closeWithTitle;
+  const primaryAction = isCreating ? saveCreationDraft : closeWithTitle;
 
   /**
    * Kısa açıklamayı proje etiket KATALOĞUYLA uyumlu kaydeder.
@@ -216,7 +230,7 @@ export function SimpleTaskDrawer({
 
   return (
     <>
-      <div className="drawer-backdrop" onClick={closeWithTitle} />
+      <div className="drawer-backdrop" onClick={dismiss} />
       <aside className="drawer simple-task-drawer" role="dialog" aria-label="Görev düzenle">
         <header className="drawer-head">
           <div className="col" style={{ gap: 2, minWidth: 0 }}>
@@ -224,8 +238,9 @@ export function SimpleTaskDrawer({
             <span className="muted" style={{ fontSize: 11.5 }}>
               {local.projectCode ? `${local.projectCode} · ${local.proje}` : local.proje}
             </span>
+            <TaskCreatorByline task={task} people={people} fallback={creatorFallback} />
           </div>
-          <button className="icon-btn" onClick={closeWithTitle} aria-label="Kapat"><Icons.Close size={15} /></button>
+          <button className="icon-btn" onClick={dismiss} aria-label="Kapat"><Icons.Close size={15} /></button>
         </header>
 
         <div className="drawer-body col" style={{ gap: 14 }}>
@@ -380,15 +395,15 @@ export function SimpleTaskDrawer({
         </div>
 
         <div className="drawer-foot">
-          {canDelete && <button
+          {!isCreating && canDelete && <button
             className="btn"
             onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}
           >
             <Icons.Trash size={13} /> Sil
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki modda da aynı. */}
-          <TaskReminderButton task={task} size={30} />
-          {canProposeSchedule && <button
+          {!isCreating && <TaskReminderButton task={task} size={30} />}
+          {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"
             onClick={() => setScheduleDialogOpen(true)}
@@ -396,9 +411,9 @@ export function SimpleTaskDrawer({
             <Icons.Calendar size={13} /> {pendingScheduleRequest ? 'Öneriyi değiştir' : 'Yeni tarih öner'}
           </button>}
           <div style={{ flex: 1 }} />
-          <button className="btn primary" onClick={closeWithTitle} disabled={isSaving} aria-busy={isSaving}>
+          <button className="btn primary" onClick={primaryAction} disabled={isSaving || !titleValid} aria-busy={isSaving}>
             {isSaving && <Spinner size={13} />}
-            {isSaving ? 'Kaydediliyor…' : 'Tamam'}
+            {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>
         </div>
       </aside>

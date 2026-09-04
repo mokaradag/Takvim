@@ -37,7 +37,7 @@ Current root sequence:
 | Loading indicators (`.app-spinner`, `.saving-overlay`) | `src/app/styles/components.css` |
 | Toggle switch (`.toggle-field`, `.toggle-switch`) | `src/app/styles/components.css` |
 | Gantt outline controls (`.gantt-outline-*`, `.gantt-level-*`) | `src/app/styles/components.css` |
-| Topbar quick actions (`.quick-actions`, `.theme-switch`) | `src/app/styles/shell.css` |
+| Sidebar collapse/pin and footer controls (`.sidebar-collapse-button`, `.sidebar-mode-toggle`) | `src/app/styles/shell.css` |
 
 A feature may use shared tokens and primitives, but its structural layout remains owned by the feature's stylesheet section.
 
@@ -48,7 +48,7 @@ the coordinate frame of the body and of every `position: fixed` descendant, but
 `vh` units are **not** rescaled consistently across browsers. A rule such as
 `height: 100vh` therefore renders taller than the screen once the user enlarges
 text, and anything anchored to the bottom of that element (the Task Detail
-drawer's Sil/Tamam bar, for example) is pushed out of the visible area.
+drawer's Sil/Kaydet bar, for example) is pushed out of the visible area.
 
 `useApplyTweaks` publishes the corrected height as a custom property:
 

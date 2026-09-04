@@ -54,6 +54,7 @@ export function useScheduleRequests() { return useAppState().scheduleRequests ||
 export function useCurrentUser() { return useAppState().currentUser; }
 export function useSessionContext() { return useAppState().session; }
 export function useSelectedTask() { return useAppState().selectedTask; }
+export function useTaskCreationDraft() { return useAppState().taskCreationDraft; }
 export function useTaskStats() { return useAppState().taskStats; }
 /** Portföyün tamamı için ölçümler (çalışma alanı seçiminden bağımsız). */
 export function usePortfolioTaskStats() { return useAppState().portfolioTaskStats; }
@@ -87,7 +88,8 @@ export function useTaskActions() {
   return {
     ...actions,
     // Düğmenin tıklama olayı yanlışlıkla görev verisi olarak iletilse bile kayıt yüküne girmez.
-    addTask: (input) => actions.addTask(normalizeTaskCreationInput(input))
+    addTask: (input) => actions.addTask(normalizeTaskCreationInput(input)),
+    beginTaskDraft: (input) => actions.beginTaskDraft(normalizeTaskCreationInput(input))
   };
 }
 export function useWbsActions() {

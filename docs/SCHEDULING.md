@@ -74,7 +74,7 @@ and dropped its progress weight.
 
 Every working-day search is **bounded**. The helpers used to loop unconditionally,
 so two ordinary inputs froze the browser tab outright — the reported "the app
-freezes when I press Tamam" defect:
+freezes when I press Kaydet" defect:
 
 - a calendar whose `workingDays` list is empty (see above) made `isWorkingDay()`
   return `false` for every date, and `moveToWorkingDay()` / `addWorkingDays()`

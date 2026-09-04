@@ -6,6 +6,8 @@ import { projectColorVar } from '../../lib/colors';
 import { AvatarStack, StatusPill } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { taskAssigneeDisplayNames } from './taskAssigneeDisplay.js';
+import { useAllPeople } from '../../state/hooks';
+import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 function valueOrDash(value) {
   return value == null || value === '' ? '—' : value;
@@ -21,6 +23,7 @@ function ReadOnlyField({ label, value }) {
 }
 
 export function ReadOnlyTaskDrawer({ task, onClose }) {
+  const people = useAllPeople();
   const color = projectColorVar(task.proje);
   const assigneeNames = taskAssigneeDisplayNames(task);
 
@@ -48,6 +51,7 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
               <span className="badge">Salt okunur</span>
             </div>
             <div style={{ fontSize: 18, fontWeight: 600, lineHeight: 1.35 }}>{task.task}</div>
+            <TaskCreatorByline task={task} people={people} />
           </div>
           <button className="icon-btn" onClick={onClose} title="Kapat (Esc)"><Icons.Close size={16} /></button>
         </div>

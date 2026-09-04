@@ -2,7 +2,6 @@
 import { useState as useState1, useMemo as useMemo1, useCallback as useCallback1 } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
-import { ButtonSpinner } from '../../components/Loader';
 import {
   TASK_PRIORITY_FILTER_OPTIONS,
   TASK_STATUS_FILTER_OPTIONS,
@@ -37,12 +36,9 @@ export function TasksView() {
   const tasks = useTasks();
   const projects = useProjects();
   const people = usePeople();
-  const { openTask: onOpenTask, addTask: onAddTask, deleteTask: onDeleteTask } = useTaskActions();
+  const { openTask: onOpenTask, beginTaskDraft, deleteTask: onDeleteTask } = useTaskActions();
   const { selection: organizationFilter, setSelection: onOrganizationFilterChange } = useSharedTaskOrganizationFilter();
   const [search, setSearch] = useState1('');
-  // Görev oluşturma sunucuya yazma yapar ve birkaç saniye sürebilir; düğme bu
-  // süre boyunca dönen halkayı gösterir ve ikinci tıklamayı engeller.
-  const [creating, setCreating] = useState1(false);
   const [sort, setSort] = useState1({ key: 'plannedStart', dir: 'asc' });
   const [colFilter, setColFilter] = useState1({
     proje: [],
@@ -191,15 +187,7 @@ export function TasksView() {
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(filtered, paginationKey);
 
-  const createTask = async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      await onAddTask();
-    } finally {
-      setCreating(false);
-    }
-  };
+  const createTask = () => beginTaskDraft();
 
   const setSortFor = (key) => (dir) => setSort({ key, dir });
   const sortDirFor = (key) => sort.key === key ? sort.dir : null;
@@ -241,12 +229,10 @@ export function TasksView() {
         <button
           className="btn primary"
           onClick={createTask}
-          disabled={!canAddTask || creating}
-          aria-busy={creating}
+          disabled={!canAddTask}
           title={canAddTask ? 'Yeni görev' : 'Görev eklemek için yazabileceğiniz bir proje ve atayabileceğiniz bir sorumlu gerekir.'}
         >
-          <ButtonSpinner busy={creating} size={14}><Icons.Plus size={14} /></ButtonSpinner>
-          {creating ? 'Oluşturuluyor…' : 'Yeni görev'}
+          <Icons.Plus size={14} /> Yeni görev
         </button>
       </div>
 

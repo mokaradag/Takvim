@@ -1,6 +1,6 @@
 # Basit Mod ve Arayüz Davranışları
 
-Bu belge, MERGEN Rota'daki Basit Mod akışını ve üst çubuk/Özet yerleşimine ilişkin arayüz sözleşmelerini açıklar.
+Bu belge, MERGEN Rota'daki Basit Mod akışını ve uygulama kabuğu/Özet yerleşimine ilişkin arayüz sözleşmelerini açıklar.
 
 ## Basit Mod Takvim akışı
 
@@ -214,23 +214,23 @@ bir proje olan kullanıcıya o projenin sayıları gösteriliyordu.
 ağacı" kartı `wbs` sayfasını `tree` sekmesiyle açar; niyet olmasaydı kart adını
 taşıdığı ağaca değil, Proje Tanımı sekmesine düşerdi.
 
-## Üst çubuk hızlı eylemleri
+## Kenar çubuğu görünüm kontrolleri
 
-Mod seçimi, tema ve oturum kapatma her sayfadan tek tıkla erişilir
-(`src/components/shell/QuickActions.jsx`). Üçü de önceden ya **Ayarlar**
-sayfasında ya da kenar çubuğunun altında duruyordu; en sık kullanılan üç eylem
-için sayfa değiştirmek gerekiyordu.
+Tema, **Basit / Gelişmiş** mod ve oturum kapatma eylemleri
+`SidebarUserPanel` içindeki tek alt araç alanında yaşar. Mod anahtarı tema ile
+çıkışın arasındadır ve `role="switch"` durumunu görsel rayıyla birlikte taşır.
+Üst çubuk bu kontrolleri yinelemez. Basit Moda geçiş yine
+`AppShell.chooseMode` akışını kullanır: çalışma alanı portföye döner ve Takvim
+sayfası açılır. Oturum kapatma yalnızca Gerçek Sistem + Keycloak oturumunda
+görünür; başarısız çıkış başarılı gibi sunulmaz.
 
-- **Basit / Gelişmiş** — hap biçimli iki durumlu seçim. `AppShell.chooseMode`
-  ile aynı akışı çalıştırır: Basit Moda geçişte çalışma alanı portföye döner ve
-  Takvim sayfası açılır. Ayarlar sayfasındaki mod kartları kaldırılmadı; iki yol
-  aynı tercihi yazar.
-- **Tema** — güneş/ay ikonlu kaydırmalı anahtar (`role="switch"`). Topuz seçili
-  tarafı örter.
-- **Oturumu kapat** — yalnızca Gerçek Sistem + Keycloak oturumunda görünür.
-  Çıkış akışı kenar çubuğu kullanıcı bloğuyla **paylaşılan** `useSignOut`
-  kancasındadır; iki kopya arasında düzeltme farkı oluşmaz. Başarısız çıkış
-  başarılı gibi sunulmaz.
+Kenar çubuğu ilk kullanımda **sabitlenmiş ve açık** başlar. Başlıktaki hareketli
+ok açık/dar görünümü değiştirir. Alt meta satırındaki raptiye sabitlemeyi
+kaldırdığında ana sütun 72 piksele iner; çubuk üzerine gelme veya klavye odağıyla
+geçici olarak açılır. Yeniden sabitleme açık durumu korur. Tercih
+`mergen_rota_sidebar_v1` anahtarıyla saklanır, azaltılmış hareket tercihinde
+geçiş animasyonları kapatılır. Alt bilgi yalnızca `MERGEN Rota · Sürüm 1.0`
+yazar; etkin mod anahtarın kendisinden anlaşılır.
 
 ## Kayıt göstergeleri
 
@@ -246,8 +246,8 @@ yavaşlar:
   etkileşimli içerik ağacına kayıt boyunca `inert` uygulamalı, erişilebilir durum
   bildirimini ise bu `inert` ağacının dışında tutmalıdır.
 
-Kullanıldığı yerler: Hızlı Görev Tanımı (`Takvime ekle`), Görevler sayfasındaki
-**Yeni görev**, iki moddaki görev panelinin **Tamam** düğmesi, dışa aktarma
+Kullanıldığı yerler: Hızlı Görev Tanımı (`Takvime ekle`), iki moddaki görev
+panelinin **Kaydet** düğmesi, dışa aktarma
 menüsü ve sağ alttaki kalıcılaştırma şeridi (`Kaydediliyor…` + ilerleme
 süpürmesi).
 
@@ -351,7 +351,7 @@ kaldırabilirdi.
 Proje, personel, iş dağılım düğümü ve öncül görev gibi binlerce kayda ulaşabilen tüm seçim noktaları `SearchableSelect` bileşenini kullanır. Bileşenin sözleşmesi:
 
 - açılır panel **React portalı ile `document.body` altına** taşınır. Panel `position: fixed` ile tetikleyiciye göre konumlanır ve `computePopoverPlacement` (bkz. `src/components/searchableSelectPlacement.js`) tarafından görünüm alanı içinde tutulur; alt kenara sıkışan liste yukarı açılır, yan kenardan taşan liste içeri çekilir;
-- panel gövdeye taşındığı için kenar çubuğunun `overflow: hidden` kırpması ve `.sidebar > *` yığın bağlamı listeyi artık etkilemez. Daha önce liste kenar çubuğunun içinde kalıyor, gezinme bağlantıları listenin üzerine boyanıyor ve liste arka planla karışmış görünüyordu;
+- panel gövdeye taşındığı için daraltılmış/geçici açılmış kenar çubuğunun boyutu ve `.sidebar > *` yığın bağlamı listeyi etkilemez. Daha önce liste kenar çubuğunun içinde kalıyor, gezinme bağlantıları listenin üzerine boyanıyor ve liste arka planla karışmış görünüyordu;
 - panel `--z-select-popover` katmanını kullanır. Bu katman kip pencerelerinin (`--z-modal`) üzerindedir; böylece bileşen bir kip pencere içinde de kullanılabilir;
 - liste her zaman opak `--bg-elev` zeminine sahiptir;
 - `allowClear` verildiğinde panelin üstünde bir **temizleme satırı** çıkar. Portföy/proje seçimi bu sayede geri alınabilir;
@@ -387,7 +387,7 @@ Her seçim yapılabilen yüzeyin geri dönüş yolu bulunmalıdır:
 
 ## Veri modu anahtarı ve kaydetme bildirimi
 
-Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı **Ayarlar** sayfasındaki *Veri kaynağı* kartında yaşar (`DataModeIndicator variant="settings"`). Kenar çubuğu ve veri sınırı ekranı anahtarı hiç göstermez; kenar çubuğu yalnızca çalışma alanı, gezinme ve kullanıcı bilgisini taşır.
+Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı **Ayarlar** sayfasındaki *Veri kaynağı* kartında yaşar (`DataModeIndicator variant="settings"`). Kenar çubuğu ve veri sınırı ekranı bu veri kaynağı anahtarını göstermez; kenar çubuğu çalışma alanı, gezinme, kullanıcı bilgisi ve tema/kullanım modu/oturum araçlarını taşır.
 
 Ayarlar sayfasına yalnızca uygulama kabuğu üzerinden ulaşıldığı için **ilk** veri yüklemesi başarısız olduğunda hata ekranı ayrıca bir **Demo moduna geç** çıkışı sunar (`DemoModeEscape`). Bu tek düğme olmadan Gerçek Sistem erişilemediğinde uygulama tamamen kilitlenirdi.
 

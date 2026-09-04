@@ -17,6 +17,23 @@ const ASSIGNEE_TASK_CREATE_FIELDS = new Set([
 export async function executeTaskCreation({ state = {}, input = null, id, mutate }) {
   if (typeof mutate !== 'function') throw new TypeError('mutate must be a function');
 
+  // `null` girdi, Yeni Görev eyleminin çalışma alanından varsayılan proje
+  // seçmesini sağlar. Buna karşılık panelden açıkça temizlenen `projectId`
+  // başka bir projeye sessizce düşmemelidir.
+  const explicitlyClearedProject = input && Object.prototype.hasOwnProperty.call(input, 'projectId')
+    && (input.projectId == null || input.projectId === '');
+  if (explicitlyClearedProject) {
+    return {
+      result: projectWriteFailure('task/create', {
+        code: 'PROJECT_REQUIRED',
+        field: 'projectId',
+        message: 'Görevi kaydetmek için bir proje seçin.'
+      }),
+      created: null,
+      scope: null
+    };
+  }
+
   const creation = resolveTaskCreationAccess(state, input?.projectId);
   if (!creation.ok) {
     return {

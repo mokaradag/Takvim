@@ -238,7 +238,9 @@ The merge happens in **both** branches of `schedule()`. It previously ran only w
 
 ### 9.3 A stalled server must not freeze the panel
 
-Every request the Actual System repository makes carries a **30 second deadline** (`REQUEST_TIMEOUT_MS`). An unbounded `fetch` never settles when the server accepts the connection and then answers nothing. The ordered mutation queue serializes on the returned promise, so a single stalled request blocked every later mutation for the lifetime of the tab, `whenIdle()` never resolved, and the Task panel's `Tamam` button — which awaits the pending writes before closing — hung with it. An aborted request is reported as `DATABASE_UNAVAILABLE` with a distinct "did not answer in time" message.
+Every request the Actual System repository makes carries a **30 second deadline** (`REQUEST_TIMEOUT_MS`). An unbounded `fetch` never settles when the server accepts the connection and then answers nothing. The ordered mutation queue serializes on the returned promise, so a single stalled request blocked every later mutation for the lifetime of the tab, `whenIdle()` never resolved, and the Task panel's `Kaydet` button — which awaits the pending writes before closing — hung with it. An aborted request is reported as `DATABASE_UNAVAILABLE` with a distinct "did not answer in time" message.
+
+Advanced Task creation has a separate pre-persistence phase. `beginTaskDraft` builds and normalizes a local Task but does not enter the mutation queue or add it to canonical state. Field changes update only `taskCreationDraft`; `saveTaskDraft` performs the first `task/create` mutation with the draft's stable client ID. Cancelling or closing the drawer clears the draft, so opening **Yeni Görev** can never leave an empty persisted row.
 
 The final unload flush keeps `keepalive`, which is exempt from the deadline (aborting it would defeat its purpose), but the Fetch standard caps a `keepalive` body at 64 KiB. A change set above that cap falls back to an ordinary request rather than being rejected outright with a misleading "server unreachable" message.
 
