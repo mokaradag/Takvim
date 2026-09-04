@@ -97,7 +97,7 @@ Record browser, OS, build commit and viewport dimensions with the result.
   successor updates the other task; a selection that would create a cycle is not
   offered in the list.
 - At **font scale 125 %** (Ayarlar → Yazı tipi boyutu → Çok büyük): `Sil` and
-  `Tamam` stay fully on screen, and the `+ Öncül görev seçin` dropdown opens
+  `Kaydet` stay fully on screen, and the `+ Öncül görev seçin` dropdown opens
   upward without any part leaving the viewport.
 
 ## Calendar
@@ -176,8 +176,14 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - A long full name wraps onto a second line rather than being truncated to
   `MEHMET O…`.
 - The sidebar footer has no `Kullanım rehberi` shortcut, while the Yardım navigation item still opens the help page.
+- The footer orders theme, the Basit/Gelişmiş switch and logout in one control row; none of those controls is duplicated in the topbar.
+- The sidebar starts pinned and expanded. Collapse resizes the main content to the 72 px rail; unpinning makes the rail expand on hover/focus, and the choice survives reload.
+- The footer version line reads only `MERGEN Rota · Sürüm 1.0`; the mode is shown by the switch itself.
+- The lower-left rotating heptagon exposes a visibly larger quadrant without competing with the footer controls.
 - The theme button still works and, in Gerçek Sistem, a compact logout button is present; logging out returns to an unauthenticated state.
 - Avatars render photographs across Görevler, Takvim, Kanban, Ekip, task drawers, dashboard, Gantt, reports, project workspace and simple mode, with initials as the fallback.
+- A direct assignee sees the task creator's avatar, full name and date under the explicit **Görevi tanımlayan** label; the same task opened by that creator shows the same identity.
+- In Gelişmiş Mod, clicking **Yeni Görev** opens an unsaved drawer. Closing it creates nothing; only **Kaydet** persists the Task.
 
 ## Basit Mod
 

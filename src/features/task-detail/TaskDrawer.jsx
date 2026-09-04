@@ -61,6 +61,7 @@ import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
 import { scheduleDifferenceSummary, requestDates } from '../schedule-change/scheduleChangePresentation.js';
+import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 function legacyProjectTags(projectId, tasks) {
   return Array.from(new Set(
@@ -122,32 +123,14 @@ export function TaskDrawer({
   scheduleRequests = [],
   onProposeSchedule = null,
   canDelete = true,
-  isSaving = false
+  isSaving = false,
+  isCreating = false,
+  onSave = null,
+  creatorFallback = null
 }) {
   const people = useAllPeople();
   const projects = useAllProjects();
   const calendars = useCalendars();
-  // Görev künyesi: "kim oluşturdu, ne zaman". Ad ÖNCE görev satırının kendi
-  // `createdByName` alanından okunur: sıradan kullanıcının kişi dizini yalnızca
-  // kendi kapsamını taşıdığı için rehber araması çoğu görevde boş dönüyor ve
-  // künye "Bilinmeyen kullanıcı" yazıyordu. Fotoğraf da aynı Sicil'den üretilir.
-  const taskByline = useMemo(() => {
-    const sicil = task?.createdBySicil == null ? null : String(task.createdBySicil);
-    const createdAtIso = task?.createdAt || null;
-    if (!sicil && !createdAtIso) return null;
-    const person = sicil ? people.find((item) => String(item.id) === sicil) : null;
-    const projectedName = String(task?.createdByName || '').trim();
-    const createdDate = createdAtIso ? new Date(createdAtIso) : null;
-    const valid = createdDate && Number.isFinite(createdDate.getTime());
-    return {
-      sicil,
-      name: person?.name || projectedName || (sicil ? 'Bilinmeyen kullanıcı' : '—'),
-      employeeNo: person?.employeeNo || sicil || null,
-      createdAtIso,
-      createdAt: valid ? fmt(createdDate, 'dd MMM yyyy') : null,
-      createdAtLong: valid ? createdDate.toLocaleString('tr-TR') : null
-    };
-  }, [task?.createdBySicil, task?.createdByName, task?.createdAt, people]);
   const allWbs = useAllWbs();
   const assignmentScopeProjects = useAssignmentScopeProjects();
   const assignmentScopeSicils = useAssignmentScopeSicils();
@@ -348,6 +331,17 @@ export function TaskDrawer({
     return closing;
   };
 
+  const saveCreationDraft = () => {
+    if (!onSave || !canCloseWithTaskTitle(titleDraft)) {
+      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
+    }
+    const description = descriptionDraftRef.current ?? local.description ?? '';
+    return onSave({ ...local, task: titleDraft.trim(), description });
+  };
+
+  const dismiss = isCreating ? onClose : closeWithDraft;
+  const primaryAction = isCreating ? saveCreationDraft : closeWithDraft;
+
   useEffect(() => {
     if (local.keyword !== 'Yeni' || projectTags.some((tag) => tag.name === 'Yeni')) return;
     setLocal((current) => ({ ...current, keyword: '' }));
@@ -392,7 +386,7 @@ export function TaskDrawer({
 
   return (
     <>
-      <div className="drawer-backdrop" onClick={closeWithDraft} />
+      <div className="drawer-backdrop" onClick={dismiss} />
       <div className="drawer">
         <div className="drawer-head">
           <div className="col" style={{ gap: 8, flex: 1 }}>
@@ -425,24 +419,9 @@ export function TaskDrawer({
                 <Icons.Alert size={12} /> Görev başlığı boş bırakılamaz; başlık girilene kadar değişiklikler kaydedilmez.
               </span>
             )}
-            {taskByline && (
-              <div className="task-byline">
-                <Avatar name={taskByline.name} personId={taskByline.sicil} employeeNo={taskByline.employeeNo} size="sm" />
-                <span className="task-byline-text">
-                  <span className="task-byline-name">{taskByline.name}</span>
-                  {taskByline.createdAt && (
-                    <>
-                      <span className="task-byline-sep">·</span>
-                      <time dateTime={taskByline.createdAtIso} title={taskByline.createdAtLong}>
-                        {taskByline.createdAt}
-                      </time>
-                    </>
-                  )}
-                </span>
-              </div>
-            )}
+            <TaskCreatorByline task={task} people={people} fallback={creatorFallback} />
           </div>
-          <button className="icon-btn" onClick={closeWithDraft} title="Kapat (Esc)"><Icons.Close size={16} /></button>
+          <button className="icon-btn" onClick={dismiss} title="Kapat (Esc)"><Icons.Close size={16} /></button>
         </div>
 
         <div className="drawer-body">
@@ -695,6 +674,7 @@ export function TaskDrawer({
                   ? { recurrence, ...alignment }
                   : { recurrence })}
                 onGenerate={() => generateTaskSeries(task.id)}
+                isCreating={isCreating}
               />
             </Section>}
 
@@ -767,7 +747,8 @@ export function TaskDrawer({
                 task={local}
                 tasks={tasks}
                 onChange={(deps) => save({ deps })}
-                onUpdateTask={updateTask}
+                onUpdateTask={isCreating ? null : updateTask}
+                allowSuccessorEdits={!isCreating}
               />
             </Section>}
 
@@ -784,12 +765,12 @@ export function TaskDrawer({
         </div>
 
         <div className="drawer-foot">
-          {canDelete && <button className="btn" onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
+          {!isCreating && canDelete && <button className="btn" onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
             <Icons.Trash size={13} /> Sil
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
-          <TaskReminderButton task={task} size={30} />
-          {canProposeSchedule && <button
+          {!isCreating && <TaskReminderButton task={task} size={30} />}
+          {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"
             onClick={() => setScheduleDialogOpen(true)}
@@ -797,9 +778,9 @@ export function TaskDrawer({
             <Icons.Calendar size={13} /> {pendingScheduleRequest ? 'Öneriyi değiştir' : 'Yeni tarih öner'}
           </button>}
           <div style={{ flex: 1 }} />
-          <button className="btn primary" onClick={closeWithDraft} disabled={isSaving} aria-busy={isSaving}>
+          <button className="btn primary" onClick={primaryAction} disabled={isSaving || !titleValid} aria-busy={isSaving}>
             {isSaving && <Spinner size={13} />}
-            {isSaving ? 'Kaydediliyor…' : 'Tamam'}
+            {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>
         </div>
       </div>
@@ -822,7 +803,7 @@ export function TaskDrawer({
  * bu metnin okunabilir bir yüzüdür. Böylece kural dışa aktarımda ve başka
  * sistemlerle alışverişte standart kalır.
  */
-function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, onChange, onGenerate }) {
+function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, onChange, onGenerate, isCreating = false }) {
   const rule = normalizeRecurrenceRule(task.recurrence);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
@@ -1161,10 +1142,11 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
           <button
             type="button"
             className="btn primary"
-            disabled={busy || !task.plannedStart}
+            disabled={busy || !task.plannedStart || isCreating}
+            title={isCreating ? 'Tekrarları oluşturmak için önce görevi kaydedin.' : undefined}
             onClick={generate}
           >
-            <Icons.Plus size={13} /> {busy ? 'Oluşturuluyor…' : 'Tekrarları oluştur'}
+            <Icons.Plus size={13} /> {busy ? 'Oluşturuluyor…' : isCreating ? 'Önce görevi kaydedin' : 'Tekrarları oluştur'}
           </button>
           <span className="muted" style={{ fontSize: 11.5, alignSelf: 'center' }}>
             {occurrenceCount} yineleme bu seriden üretildi.
@@ -1214,7 +1196,7 @@ function Section({ title, icon, tone = 'var(--accent)', hint, info, children }) 
  * ters yönden düzenler ve ARDIL görevi yamalar (bkz. taskSuccessorPolicy.js).
  * Böylece tek bir kenar iki yerde saklanmaz.
  */
-function RelEditor({ task, tasks, onChange, onUpdateTask }) {
+function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = true }) {
   const deps = useMemo(() => task.deps || [], [task.deps]);
   const [tab, setTab] = useState('predecessors');
   const [selectedType, setSelectedType] = useState('FS');
@@ -1336,6 +1318,10 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
   };
 
   const applySuccessorPlan = (plan) => {
+    if (!allowSuccessorEdits || !onUpdateTask) {
+      setLinkError('Ardıl ilişkilerini düzenlemek için önce görevi kaydedin.');
+      return;
+    }
     if (!plan.ok) {
       setLinkError(plan.message);
       return;
@@ -1447,6 +1433,8 @@ function RelEditor({ task, tasks, onChange, onUpdateTask }) {
           role="tab"
           aria-selected={tab === 'successors'}
           className={tab === 'successors' ? 'active' : ''}
+          disabled={!allowSuccessorEdits}
+          title={!allowSuccessorEdits ? 'Ardıl ilişkilerini düzenlemek için önce görevi kaydedin.' : undefined}
           onClick={() => { setTab('successors'); setLinkError(null); }}
         >
           <Icons.ArrowRight size={12} /> Ardıllar <span className="rel-tab-count">{successors.length}</span>

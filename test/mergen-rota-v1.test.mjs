@@ -155,6 +155,7 @@ test('CSV and Excel exports include structured project data and formatted dates'
 
 test('Sürüm 1.0 UI contracts place project creation and tag governance in Proje Yapısı', () => {
   const shell = fs.readFileSync(path.join(ROOT, 'src/components/shell/AppShell.jsx'), 'utf8');
+  const sidebar = fs.readFileSync(path.join(ROOT, 'src/components/shell/SidebarUserPanel.jsx'), 'utf8');
   const projectView = fs.readFileSync(path.join(ROOT, 'src/features/project/ProjectWorkspaceView.jsx'), 'utf8');
   const taskDrawer = fs.readFileSync(path.join(ROOT, 'src/features/task-detail/TaskDrawer.jsx'), 'utf8');
   const navigation = fs.readFileSync(path.join(ROOT, 'src/components/shell/navigation.js'), 'utf8');
@@ -165,7 +166,7 @@ test('Sürüm 1.0 UI contracts place project creation and tag governance in Proj
   assert.doesNotMatch(shell, /Data Date ·/);
   assert.doesNotMatch(shell, /CPM ·/);
   assert.match(shell, /topbar-project-context/);
-  assert.match(shell, /Sürüm 1\.0/);
+  assert.match(sidebar, /Sürüm 1\.0/);
   assert.match(projectView, /Etiket kataloğu/);
   assert.match(projectView, /Yeni Proje/);
   assert.match(taskDrawer, /kontrollü etiket kataloğundan açıkça seçilir/);

@@ -2806,7 +2806,7 @@ body.reduce-motion .brand-mark .logo-compass-needle { animation: none; }
 
 /* Single emblem — bottom-left corner of the sidebar. */
 .hept-sidebar {
-  bottom: -150px;
+  bottom: -126px;
   left: -150px;
   right: auto;
   top: auto;

@@ -281,6 +281,7 @@ function creatorIdentityVisible(db, task, sicil, { hasFullScope = false, canAssi
   if (task?.CreatedBySicil == null) return false;
   const project = projectById(db, task.ProjectId);
   if (hasFullScope || Number(task.CreatedBySicil) === Number(sicil)
+    || directAssignee(db, task.TaskId, sicil)
     || Number(project?.LeadSicil) === Number(task.CreatedBySicil)) return true;
   if (canAssignAllCorporate && db.executiveScope.some((scope) => scope.ManagerSicil === sicil
     && scope.EmployeeSicil === task.CreatedBySicil)) return true;
@@ -406,15 +407,31 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
         && sameGuid(entry.ProjectId, task.ProjectId));
       return readGranted || visibleAssignee(db, task.TaskId, sicil) || Number(task.CreatedBySicil) === Number(sicil);
     })
-    .map((task) => ({
-      ...task,
-      AccessLevel: visible.get(guid(task.ProjectId)),
-      // YETKİLİ sorumlu sayısı: görünen satırlarla farkı, gizlenmiş bir eş
-      // sorumlu olduğunu söyler (kimlik taşımaz).
-      AssigneeCount: db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, task.TaskId)).length,
-      IsCurrentUserAssignee: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && entry.Sicil === sicil),
-      IsCurrentUserCreator: Number(task.CreatedBySicil) === Number(sicil)
-    }));
+    .map((task) => {
+      const accessLevel = visible.get(guid(task.ProjectId));
+      const readGranted = db.projectAccess.some((entry) => entry.IsActive
+        && entry.Sicil === sicil
+        && entry.AccessLevel === 'READ'
+        && sameGuid(entry.ProjectId, task.ProjectId));
+      const identityVisible = creatorIdentityVisible(db, task, sicil, {
+        hasFullScope: isAdmin || accessLevel === 'FULL' || readGranted,
+        canAssignAllCorporate
+      });
+      const creator = identityVisible
+        ? db.people.find((person) => Number(person.Sicil) === Number(task.CreatedBySicil))
+        : null;
+      return {
+        ...task,
+        AccessLevel: accessLevel,
+        // YETKİLİ sorumlu sayısı: görünen satırlarla farkı, gizlenmiş bir eş
+        // sorumlu olduğunu söyler (kimlik taşımaz).
+        AssigneeCount: db.taskAssignees.filter((entry) => sameGuid(entry.TaskId, task.TaskId)).length,
+        IsCurrentUserAssignee: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && entry.Sicil === sicil),
+        IsCurrentUserCreator: Number(task.CreatedBySicil) === Number(sicil),
+        VisibleCreatedBySicil: identityVisible ? task.CreatedBySicil : null,
+        CreatedByName: creator?.DisplayName || null
+      };
+    });
   // Sorumlu satırları da süzülür: KISMİ projede yalnızca kullanıcının kendisi
   // ve kapsamındaki çalışanlar görünür. Süzgeç olmadan kapsam dışı eş sorumlu
   // istemciye sızıyor ve panelin salt okunur açılma kuralı sınanamıyordu.

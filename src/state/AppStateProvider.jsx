@@ -20,6 +20,7 @@ import { createStateMutationOrchestrator } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
 import {
   projectWriteFailure,
+  resolveTaskCreationAccess,
   resolveTaskMutationAccess,
   resolveTaskWbsMoveAccess,
   resolveWbsMutationAccess
@@ -59,7 +60,9 @@ function rejectedWrite(operation, issue) {
 
 export function AppStateProvider({ children, repository = getAppRepository() }) {
   const [state, dispatch] = useReducer(appStateReducer, undefined, createLoadingState);
+  const [taskCreationDraft, setTaskCreationDraft] = useState(null);
   const stateRef = useRef(state);
+  const taskCreationDraftRef = useRef(null);
   const loadRequestGuardRef = useRef(createDataRefreshRequestGuard());
   const loadSingleFlightRef = useRef(createDataRefreshSingleFlight());
   const initialLoadStartedRef = useRef(false);
@@ -167,6 +170,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   }, [workspaceReady, workspaceWriteReady, state.dataStatus, state.workspaceMode, state.selectedProjectId]);
 
   const openTask = useCallback((taskOrId) => {
+    taskCreationDraftRef.current = null;
+    setTaskCreationDraft(null);
     applyStateAction({ type: 'task/select', id: typeof taskOrId === 'string' ? taskOrId : taskOrId?.id });
   }, [applyStateAction]);
 
@@ -184,6 +189,11 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
    * yalnızca açık bir "Verileri yeniden yükle" kararıyla olur.
    */
   const closeTask = useCallback(async () => {
+    if (taskCreationDraftRef.current) {
+      taskCreationDraftRef.current = null;
+      setTaskCreationDraft(null);
+      return { ok: true, value: null };
+    }
     const selectedTaskId = stateRef.current.selectedTaskId;
     const failedFlush = selectedTaskId
       ? firstFailedResult(await persistence.flushTaskUpdates([selectedTaskId]))
@@ -305,6 +315,90 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     });
     if (created) applyStateAction({ type: 'task/select', id: created.id });
     return result.ok ? { ...result, value: created } : result;
+  }, [applyStateAction, persistence]);
+
+  const beginTaskDraft = useCallback(async (input = null) => {
+    const current = stateRef.current;
+    const id = createClientEntityId('task');
+    const { result, created, scope } = await executeTaskCreation({
+      state: current,
+      input,
+      id,
+      mutate: async (_operation, createAction) => {
+        const action = createAction();
+        const task = normalizeStateTask(action.task, current);
+        return { ok: true, value: { taskUpserts: [task] } };
+      }
+    });
+    if (!result.ok || !created) return result;
+    const draft = { task: created, scope, createdAt: new Date().toISOString() };
+    taskCreationDraftRef.current = draft;
+    setTaskCreationDraft(draft);
+    applyStateAction({ type: 'task/select', id: null });
+    return { ok: true, value: created };
+  }, [applyStateAction]);
+
+  const updateTaskDraft = useCallback((id, patch = {}) => {
+    const current = taskCreationDraftRef.current;
+    if (!current || String(current.task.id) !== String(id)) {
+      return rejectedWrite('task/draft-update', {
+        code: 'TASK_DRAFT_NOT_FOUND',
+        field: 'taskId',
+        message: 'Görev taslağı bulunamadı.'
+      });
+    }
+    const draftState = {
+      ...stateRef.current,
+      tasks: [...(stateRef.current.tasks || []), current.task]
+    };
+    const stampedPatch = withCompletionStamp(draftState, id, patch);
+    const task = normalizeStateTask({ ...current.task, ...stampedPatch }, stateRef.current);
+    // Proje değişince taslak yetkileri de HEDEF projenin kapsamına geçer.
+    // Kaydetme aynı kapsamı yeniden doğrular; panel eski FULL projenin
+    // sorumlu/yapı denetimlerini yeni dar projede açık bırakmaz.
+    const creation = resolveTaskCreationAccess(stateRef.current, task.projectId);
+    const next = { ...current, task, scope: creation.ok ? creation.scope : null };
+    taskCreationDraftRef.current = next;
+    setTaskCreationDraft(next);
+    return Promise.resolve({ ok: true, value: { taskUpserts: [task] } });
+  }, []);
+
+  const cancelTaskDraft = useCallback(() => {
+    taskCreationDraftRef.current = null;
+    setTaskCreationDraft(null);
+    return Promise.resolve({ ok: true, value: null });
+  }, []);
+
+  const saveTaskDraft = useCallback(async (input = null) => {
+    const draft = taskCreationDraftRef.current;
+    if (!draft) {
+      return projectWriteFailure('task/create', {
+        code: 'TASK_DRAFT_NOT_FOUND',
+        field: 'taskId',
+        message: 'Kaydedilecek görev taslağı bulunamadı.'
+      });
+    }
+    const draftState = {
+      ...stateRef.current,
+      tasks: [...(stateRef.current.tasks || []), draft.task]
+    };
+    const taskInput = withCompletionStamp(draftState, draft.task.id, input || draft.task);
+    const { result, created } = await executeTaskCreation({
+      state: stateRef.current,
+      input: taskInput,
+      id: draft.task.id,
+      mutate: (operation, action) => persistence.mutate(operation, action)
+    });
+    if (!result.ok || !created) return result;
+    // Yavaş kayıt sürerken kullanıcı A taslağını kapatıp B taslağını açmış
+    // olabilir. A'nın yanıtı B'yi temizlememeli veya seçimi A'ya çevirmemeli.
+    if (String(taskCreationDraftRef.current?.task?.id || '') !== String(draft.task.id)) {
+      return { ...result, value: created };
+    }
+    taskCreationDraftRef.current = null;
+    setTaskCreationDraft(null);
+    applyStateAction({ type: 'task/select', id: created.id });
+    return { ...result, value: created };
   }, [applyStateAction, persistence]);
 
   /**
@@ -580,8 +674,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   const clearPersistenceError = useCallback(() => applyStateAction({ type: 'persistence/clear-error' }), [applyStateAction]);
 
   const selectedTask = useMemo(
-    () => state.tasks.find((task) => task.id === state.selectedTaskId) || null,
-    [state.tasks, state.selectedTaskId]
+    () => taskCreationDraft?.task || state.tasks.find((task) => task.id === state.selectedTaskId) || null,
+    [state.tasks, state.selectedTaskId, taskCreationDraft]
   );
   const workspace = useMemo(() => selectWorkspaceContext({
     workspaceMode: state.workspaceMode,
@@ -621,6 +715,10 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     submitScheduleChange,
     decideScheduleChange,
     addTask,
+    beginTaskDraft,
+    updateTaskDraft,
+    cancelTaskDraft,
+    saveTaskDraft,
     generateTaskSeries,
     addProject,
     updateProject,
@@ -649,6 +747,10 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     submitScheduleChange,
     decideScheduleChange,
     addTask,
+    beginTaskDraft,
+    updateTaskDraft,
+    cancelTaskDraft,
+    saveTaskDraft,
     generateTaskSeries,
     addProject,
     updateProject,
@@ -685,6 +787,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       canCreateProjects: state.canCreateProjects,
       projectAccess: state.projectAccess,
       selectedTaskId: state.selectedTaskId,
+      taskCreationDraft,
       workspaceMode: state.workspaceMode,
       selectedProjectId: state.selectedProjectId,
       wbsActionError: state.wbsActionError,
@@ -711,6 +814,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     state.canCreateProjects,
     state.projectAccess,
     state.selectedTaskId,
+    taskCreationDraft,
     state.workspaceMode,
     state.selectedProjectId,
     state.wbsActionError,

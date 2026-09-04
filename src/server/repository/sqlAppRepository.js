@@ -328,9 +328,24 @@ async function loadSnapshotFrom(executor, auth) {
         SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
         WHERE ownAssignment.TaskId = t.TaskId AND ownAssignment.Sicil = @sicil
       ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserAssignee,
-      CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator
+      CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator,
+      CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
+      NULLIF(LTRIM(RTRIM(creator.DisplayName)), '') AS CreatedByName
     FROM dbo.MR_Tasks t
     JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
+    CROSS APPLY (
+      SELECT CAST(CASE WHEN v.AccessLevel = 'FULL'
+        OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
+        OR t.CreatedBySicil = @sicil
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_TaskAssignees creatorViewerAssignment
+          WHERE creatorViewerAssignment.TaskId = t.TaskId
+            AND creatorViewerAssignment.Sicil = @sicil
+        )
+      THEN 1 ELSE 0 END AS bit) AS IdentityVisible
+    ) creatorAuth
+    LEFT JOIN dbo.MR_V_PeopleDirectory creator
+      ON creator.Sicil = t.CreatedBySicil AND creatorAuth.IdentityVisible = 1
     WHERE v.AccessLevel = 'FULL'
        OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
        OR t.CreatedBySicil = @sicil
@@ -464,13 +479,6 @@ async function loadSnapshotFrom(executor, auth) {
   const assignees = new Map();
   const dependencies = new Map();
   const calendars = new Map();
-  // Görev görünürlüğü, oluşturanın personel kimliğini görme yetkisi değildir.
-  // Yalnızca aşağıdaki yetkili kişi sorgusundan geçmiş Siciller görev künyesine
-  // taşınır; böylece adla birlikte fotoğraf anahtarı da aynı sınırda maskelenir.
-  const visiblePeopleBySicil = new Map((peopleRows || [])
-    .filter((row) => row.Sicil != null)
-    .map((row) => [String(row.Sicil), row]));
-
   for (const row of tagRows || []) {
     const key = id(row.ProjectId);
     if (!tags.has(key)) tags.set(key, []);
@@ -553,8 +561,9 @@ async function loadSnapshotFrom(executor, auth) {
       version: encodeVersion(row.RowVersion)
     })),
     tasks: (taskRows || []).map((row) => {
-      const rawCreatorSicil = row.CreatedBySicil == null ? null : String(row.CreatedBySicil);
-      const creatorPerson = rawCreatorSicil ? visiblePeopleBySicil.get(rawCreatorSicil) : null;
+      const visibleCreatorSicil = row.VisibleCreatedBySicil == null
+        ? null
+        : String(row.VisibleCreatedBySicil);
       return {
         id: id(row.TaskId),
         projectId: id(row.ProjectId),
@@ -591,14 +600,14 @@ async function loadSnapshotFrom(executor, auth) {
         // Kimlikleri açığa çıkarmadan görev düzeyi yazma kararını destekler.
         // Sunucu mutasyonda üyeliği yeniden, yetkili tablodan doğrular.
         isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
-        createdBySicil: creatorPerson ? rawCreatorSicil : null,
+        createdBySicil: visibleCreatorSicil,
         isCurrentUserCreator: Boolean(row.IsCurrentUserCreator),
         // Ad ve Sicil birlikte yetkili kişi satırından türer. Gizli oluşturan için
         // ikisi de null kalır; panel bu durumda genel kullanıcı etiketi gösterir
         // ve kurumsal fotoğraf URL'si kuramaz.
-        createdByName: creatorPerson?.DisplayName == null
+        createdByName: row.CreatedByName == null
           ? null
-          : String(creatorPerson.DisplayName).trim() || null,
+          : String(row.CreatedByName).trim() || null,
         createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
         deps: dependencies.get(id(row.TaskId)) || [],
         version: encodeVersion(row.RowVersion)
@@ -759,6 +768,11 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     CROSS APPLY (
       SELECT CAST(CASE WHEN @hasFullScope = 1
         OR t.CreatedBySicil = @sicil
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_TaskAssignees creatorViewerAssignment
+          WHERE creatorViewerAssignment.TaskId = t.TaskId
+            AND creatorViewerAssignment.Sicil = @sicil
+        )
         OR p.LeadSicil = t.CreatedBySicil
         OR (
           @canAssignAllCorporate = 1

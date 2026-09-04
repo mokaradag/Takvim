@@ -114,7 +114,7 @@ Task Detail edits current-plan, target, actual, remaining-duration, Project and 
 
 ### `src/components`
 
-`components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen, logo and the authenticated sidebar user panel. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
+`components/shell` contains the application frame, async loading/error boundary, persistence-status indicator, stable-ID workspace switcher, navigation, command palette, welcome screen, logo and the authenticated sidebar user panel. Sidebar width/pin state is a local persisted presentation preference; it never enters authorization or repository state. `components/ui.jsx` and `components/ui-extras.jsx` remain reusable visual primitives.
 
 `components/Loader.jsx` owns the shared loading indicators (`Spinner`,
 `ButtonSpinner`, `SavingOverlay`) used by task creation, the drawers, the export

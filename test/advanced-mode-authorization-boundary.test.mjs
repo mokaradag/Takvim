@@ -175,7 +175,8 @@ test('Advanced Mode views use the shared capability boundary', () => {
   const detailOverlay = fs.readFileSync(new URL('../src/features/task-detail/TaskDetailOverlay.jsx', import.meta.url), 'utf8');
   const wbsView = fs.readFileSync(new URL('../src/features/wbs/WbsView.jsx', import.meta.url), 'utf8');
 
-  assert.match(tasksView, /disabled=\{!canAddTask \|\| creating\}/);
+  assert.match(tasksView, /disabled=\{!canAddTask\}/);
+  assert.match(tasksView, /beginTaskDraft/);
   assert.match(tasksView, /resolveTaskDeleteAccess\(taskMutationState, t\.id\)/);
   assert.match(detailOverlay, /ReadOnlyTaskDrawer/);
   assert.match(wbsView, /canEdit\s*&&/);

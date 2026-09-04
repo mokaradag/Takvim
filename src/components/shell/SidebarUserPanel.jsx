@@ -18,7 +18,15 @@ import { useCurrentUser } from '../../state/hooks';
  * sayfası normal gezinme öğesi olarak durmaya devam eder. Boşalan yatay alan
  * uzun departman adlarına ayrılmıştır.
  */
-export function SidebarUserPanel({ theme, onToggleTheme, signOutState }) {
+export function SidebarUserPanel({
+  theme,
+  onToggleTheme,
+  simpleMode,
+  onChooseMode,
+  sidebarPinned,
+  onToggleSidebarPin,
+  signOutState
+}) {
   const currentUser = useCurrentUser();
   const { canSignOut, signOut, signingOut, signOutError } = signOutState;
 
@@ -27,7 +35,7 @@ export function SidebarUserPanel({ theme, onToggleTheme, signOutState }) {
   const employeeNo = currentUser?.employeeNo || currentUser?.sicil || null;
 
   return (
-    <div className="sidebar-footer-row">
+    <div className="sidebar-user-panel">
       <div className="user-chip">
         <Avatar name={name} employeeNo={employeeNo} size="lg" />
         <div className="col" style={{ gap: 1, flex: 1, minWidth: 0 }}>
@@ -35,25 +43,52 @@ export function SidebarUserPanel({ theme, onToggleTheme, signOutState }) {
           <div className="department" title={department}>{department}</div>
         </div>
       </div>
-      <button
-        className="icon-btn"
-        onClick={onToggleTheme}
-        title="Tema"
-        aria-label="Temayı değiştir"
-      >
-        {theme === 'light' ? <Icons.Moon size={15} /> : <Icons.Sun size={15} />}
-      </button>
-      {canSignOut && (
+      <div className="sidebar-utility-row">
         <button
-          className="icon-btn"
-          onClick={signOut}
-          disabled={signingOut}
-          title="Oturumu kapat"
-          aria-label="Oturumu kapat"
+          className="sidebar-utility-button"
+          onClick={onToggleTheme}
+          title={theme === 'light' ? 'Koyu temaya geç' : 'Açık temaya geç'}
+          aria-label="Temayı değiştir"
         >
-          <Icons.LogOut size={15} />
+          {theme === 'light' ? <Icons.Moon size={15} /> : <Icons.Sun size={15} />}
         </button>
-      )}
+        <button
+          type="button"
+          className="sidebar-mode-toggle"
+          role="switch"
+          aria-checked={!simpleMode}
+          onClick={() => onChooseMode(simpleMode ? 'advanced' : 'simple')}
+          title={`${simpleMode ? 'Gelişmiş' : 'Basit'} Moda geç`}
+        >
+          <Icons.Sparkles size={14} />
+          <span className="sidebar-mode-copy"><strong>{simpleMode ? 'Basit' : 'Gelişmiş'}</strong><small>Mod</small></span>
+          <span className="sidebar-mode-track" aria-hidden="true"><span /></span>
+        </button>
+        {canSignOut && (
+          <button
+            className="sidebar-utility-button"
+            onClick={signOut}
+            disabled={signingOut}
+            title="Oturumu kapat"
+            aria-label="Oturumu kapat"
+          >
+            <Icons.LogOut size={15} />
+          </button>
+        )}
+      </div>
+      <div className="sidebar-meta-row">
+        <div className="sidebar-version"><span>MERGEN Rota</span><span>· Sürüm 1.0</span></div>
+        <button
+          type="button"
+          className={`sidebar-pin-button${sidebarPinned ? ' active' : ''}`}
+          onClick={onToggleSidebarPin}
+          aria-pressed={sidebarPinned}
+          title={sidebarPinned ? 'Kenar çubuğu sabitlemesini kaldır' : 'Kenar çubuğunu açık sabitle'}
+          aria-label={sidebarPinned ? 'Kenar çubuğu sabitlemesini kaldır' : 'Kenar çubuğunu açık sabitle'}
+        >
+          {sidebarPinned ? <Icons.Pin size={13} /> : <Icons.PinOff size={13} />}
+        </button>
+      </div>
       {signOutError && (
         <span role="alert" className="sidebar-signout-error">{signOutError}</span>
       )}

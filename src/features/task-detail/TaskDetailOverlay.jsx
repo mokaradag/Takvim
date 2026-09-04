@@ -8,6 +8,7 @@ import {
   useCurrentUser,
   useScheduleRequests,
   useSelectedTask,
+  useTaskCreationDraft,
   useTaskActions
 } from '../../state/hooks';
 import {
@@ -27,6 +28,7 @@ import {
 
 export function TaskDetailOverlay({ simple = false }) {
   const task = useSelectedTask();
+  const creationDraft = useTaskCreationDraft();
   const tasks = useAllTasks();
   const projects = useAllProjects();
   // Yazma kararı HAM kapsamı kullanır: yönetici bu projede görev oluşturunca
@@ -36,9 +38,19 @@ export function TaskDetailOverlay({ simple = false }) {
   const people = useAllPeople();
   const currentUser = useCurrentUser();
   const scheduleRequests = useScheduleRequests();
-  const { closeTask, updateTask, moveTaskToWbs, deleteTask, submitScheduleChange } = useTaskActions();
+  const {
+    closeTask,
+    updateTask,
+    moveTaskToWbs,
+    deleteTask,
+    submitScheduleChange,
+    updateTaskDraft,
+    cancelTaskDraft,
+    saveTaskDraft
+  } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
   const [closingTaskId, setClosingTaskId] = useState(null);
+  const [savingDraft, setSavingDraft] = useState(false);
   const taskIdRef = useRef(task?.id || null);
   const canonicalTaskRef = useRef(task);
   const dirtyFieldsRef = useRef(new Set());
@@ -71,6 +83,44 @@ export function TaskDetailOverlay({ simple = false }) {
   }, [task]);
 
   if (!task) return null;
+
+  const isCreating = creationDraft?.task?.id === task.id;
+  if (isCreating) {
+    const creatorFallback = { ...currentUser, createdAt: creationDraft.createdAt };
+    const canManageDraft = creationDraft.scope === 'FULL' || creationDraft.scope === 'ASSIGNMENT';
+    const saveDraft = async (input) => {
+      setSavingDraft(true);
+      try {
+        return await saveTaskDraft(input);
+      } finally {
+        setSavingDraft(false);
+      }
+    };
+    const common = {
+      task,
+      onClose: cancelTaskDraft,
+      onUpdate: updateTaskDraft,
+      onDelete: () => Promise.resolve({ ok: true, value: null }),
+      canManageAssignees: canManageDraft,
+      canControlSchedule: true,
+      canEditTargetFinish: true,
+      canProposeSchedule: false,
+      canDelete: false,
+      isSaving: savingDraft,
+      isCreating: true,
+      onSave: saveDraft,
+      creatorFallback
+    };
+    return simple
+      ? <SimpleTaskDrawer key={task.id} {...common} />
+      : <TaskDrawer
+          key={task.id}
+          {...common}
+          tasks={tasks}
+          canManageStructure={canManageDraft}
+          canChooseWbs={Boolean(creationDraft.scope)}
+        />;
+  }
 
   // Yazma yetkisi görev ATAMA kapsamını ve görevin yetkili sorumlusu için dar
   // içerik/ilerleme kapsamını içerir (bkz. projectWritePolicy).
