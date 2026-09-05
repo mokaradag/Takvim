@@ -1,13 +1,13 @@
-# MERGEN Rota — Proje Yönetimi
+# MERGEN Rota — Görev Yönetimi
 
-Endüstriyel/kontrol paneli tarzında bir proje yönetimi uygulaması: Basit Modda hızlı görev/termin takibi; Gelişmiş Modda Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
+Endüstriyel/kontrol paneli tarzında bir görev yönetimi uygulaması: Temel Kipte hızlı görev/termin takibi; Kapsamlı Kipte Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
 
-MERGEN Rota artık iki tümüyle yalıtılmış **Veri Modu** sunar:
+MERGEN Rota artık iki tümüyle yalıtılmış **Veri Kipi** sunar:
 
-- **Demo Modu** — mevcut zengin örnek veri kümesini kullanan, asenkron ve kalıcı olmayan bellek repository'si. Demo kayıtları SQL Server'a veya Gerçek Sistem API'sine gönderilmez.
+- **Demo Kipi** — mevcut zengin örnek veri kümesini kullanan, asenkron ve kalıcı olmayan bellek repository'si. Demo kayıtları SQL Server'a veya Gerçek Sistem API'sine gönderilmez.
 - **Gerçek Sistem** — tarayıcıdaki API repository'sinden Next.js sunucu katmanına, sunucu tarafı yetkilendirmeye ve SQL Server repository'sine giden kalıcı üretim veri yolu. Tarayıcı SQL Server'a hiçbir zaman doğrudan bağlanmaz.
 
-Veri Modu, **Basit Mod / Gelişmiş Mod** kullanım seçiminden bağımsızdır. Veri Modu değiştiğinde application-state provider yeniden kurulur; Demo ve Gerçek Sistem snapshot'ları birleştirilmez. Demo etkin olduğunda sürekli görünen `DEMO` göstergesi vardır.
+Veri Kipi, **Temel Kip / Kapsamlı Kip** kullanım seçiminden bağımsızdır. Veri Kipi değiştiğinde application-state provider yeniden kurulur; Demo ve Gerçek Sistem snapshot'ları birleştirilmez. Demo etkin olduğunda sürekli görünen `DEMO` göstergesi vardır.
 
 ## Yerel geliştirme
 
@@ -28,16 +28,16 @@ npm run dev
 - `npm run lint` — Next.js/ESLint kod kalite kontrolü
 - `npm test` — domain, scheduling, state, persistence, SQL şeması ve yetkilendirme regresyon testleri
 
-## Veri Modu ve kullanım modları
+## Veri Kipi ve kullanım kipleri
 
-İlk Veri Modu seçiminde kullanıcı **Demo Modunu Aç** veya **Gerçek Sisteme Geç** seçeneklerinden birini seçer. Gerçek Sistem yüklenemezse Demo'ya sessiz dönüş yapılmaz; veritabanı, kimlik veya yetki hatası açıkça gösterilir ve Demo'ya dönüş kullanıcı kararıyla gerçekleşir.
+İlk Veri Kipi seçiminde kullanıcı **Demo Kipini Aç** veya **Gerçek Sisteme Geç** seçeneklerinden birini seçer. Gerçek Sistem yüklenemezse Demo'ya sessiz dönüş yapılmaz; veritabanı, kimlik veya yetki hatası açıkça gösterilir ve Demo'ya dönüş kullanıcı kararıyla gerçekleşir.
 
 Gerçek Sistem seçildiğinde application-state provider kurulmadan önce kurumsal oturum denetlenir. Oturum yoksa kullanıcı doğrudan seçili Keycloak akışına yönlendirilir; uygulama içinde ayrıca `Oturum açmanız gerekiyor` kutusu gösterilmez.
 
-Kullanım modları aynı seçili veri kaynağı üzerinde çalışır:
+Kullanım kipleri aynı seçili veri kaynağı üzerinde çalışır:
 
-- **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sadeleştirilmiş **Görevler** listesi ve Takvim takibi. İlerleme, saat/efor, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Basit Modda gösterilmez.
-- **Gelişmiş Mod**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
+- **Temel Kip**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sadeleştirilmiş **Görevler** listesi ve Takvim takibi. İlerleme, saat/efor, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Temel Kipte gösterilmez.
+- **Kapsamlı Kip**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
 
 ## Durable SQL Server mimarisi
 
@@ -170,7 +170,7 @@ npm run start -- -H 0.0.0.0 -p 8008
 - `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı), durable repository, SMTP taşıması (`mail`) ve hatırlatma servisi/zamanlayıcısı (`reminders`)
 - `src/state` — yükleme, sıralı mutation queue, Task patch coalescing ve access-aware scheduling selector'ları
 - `src/features` — uygulama özellikleri; SQL veya API route import etmez
-- `src/components/shell` — application shell, Veri Modu/Kullanım Modu seçimleri ve persistence durumları
+- `src/components/shell` — application shell, Veri Kipi/Kullanım Kipi seçimleri ve persistence durumları
 - `database` — deterministic create ve destructive rollback SQL betikleri
 
 Ayrıntılar:
@@ -215,7 +215,7 @@ etkilemez. Ayrıntılar: `docs/SCHEDULING.md`.
 
 Her görev için sorumlularına hatırlatma e-postası gönderilebilir. İki akış vardır ve ikisi de aynı alıcı çözümleme, şablon işleme ve SMTP servisini kullanır:
 
-- **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki modda). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
+- **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki kipte). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
 - **Otomatik gönderim** — yöneticinin belirlediği pencere (`kalan süre = termin - şimdi`, örn. 7 gün) ve sıklıkla (örn. 2 günde bir) sunucu tarafındaki zamanlayıcı üzerinden. Görev tamamlandığında, iptal edildiğinde, silindiğinde, otomatik gönderim kapatıldığında veya termin gününe ulaşıldığında durur; sınırsız gecikme postası gönderilmez.
 
 Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Hatırlatma** yönetici sayfasından düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur.
@@ -242,7 +242,7 @@ Yazı boyutu ölçeği gövdeye `zoom` uygular. Tam ekran kaplayan her yüksekli
 ölçeğe bölünmüş `--app-viewport-h` değişkenini kullanır; aksi hâlde yazı
 büyütüldüğünde panel alt çubuğu ekranın dışına itiliyordu. Ölçek, tema ve
 erişilebilirlik sınıflarıyla birlikte **ilk boyamadan önce** uygulanır
-(`src/lib/tweaksBootstrap.js`): `AppShell` monte olmadan çizilen veri modu ve
+(`src/lib/tweaksBootstrap.js`): `AppShell` monte olmadan çizilen veri kipi ve
 oturum ekranları da doğru ölçekte açılır, yerleşim zıplaması olmaz. Açılır listeler,
 ipuçları ve süzgeç kutuları da ölçeği hesaba katıp görünüm alanına sığdırılır.
 Ayrıntılar: `docs/UI-STYLING-ARCHITECTURE.md`.

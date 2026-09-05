@@ -176,7 +176,7 @@ test('serbest projede görev, oluşturulan alt düğüme atanabilir', async () =
       projectUpserts: [{
         id: projectId,
         code: 'BAS-1',
-        name: 'Basit mod projesi',
+        name: 'Temel kip projesi',
         source: 'manual',
         color: 'emerald',
         leadId: '900001',
@@ -184,7 +184,7 @@ test('serbest projede görev, oluşturulan alt düğüme atanabilir', async () =
         dataDate: '2026-07-25',
         tags: ['Teklif']
       }],
-      wbsUpserts: [{ id: rootWbsId, projectId, parentId: null, code: '1', name: 'Basit mod projesi', sortOrder: 1 }]
+      wbsUpserts: [{ id: rootWbsId, projectId, parentId: null, code: '1', name: 'Temel kip projesi', sortOrder: 1 }]
     });
     assert.equal(created.ok, true, created.error?.message);
 

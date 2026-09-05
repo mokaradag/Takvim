@@ -4,7 +4,7 @@ Bu belge hatırlatma e-postası özelliğinin tamamını anlatır: elle gönderi
 otomatik gönderim planı, alıcı çözümü, şablon, SMTP yapılandırması, zamanlayıcı
 kurulumu, güvenlik kararları ve sorun giderme.
 
-Özellik hem **Basit Mod** hem **Gelişmiş Mod** için aynı biçimde çalışır.
+Özellik hem **Temel Kip** hem **Kapsamlı Kip** için aynı biçimde çalışır.
 
 ---
 
@@ -39,7 +39,7 @@ Görev arayüzü / zamanlayıcı
 
 ## 2. Elle hatırlatma
 
-- Zarf simgesi Görevler tablosunda (her iki mod) ve görev panelinin alt
+- Zarf simgesi Görevler tablosunda (her iki kip) ve görev panelinin alt
   çubuğunda bulunur; her zaman **silme eyleminin yanındadır**.
 - Yalnızca **seçili göreve** uygulanır.
 - İstek sürerken düğme kapatılır: art arda tıklamak kopya ileti üretmez.
@@ -47,7 +47,7 @@ Görev arayüzü / zamanlayıcı
   kabul ettiğinde bildirilir.
 - Gönderim görevi **değiştirmez ve silmez**; satır tıklaması da yutulur.
 - Otomatik hatırlatma kapalıyken de çalışır.
-- Demo modunda kapalıdır: e-posta yalnızca Gerçek Sistem verisiyle gönderilir.
+- Demo kipinde kapalıdır: e-posta yalnızca Gerçek Sistem verisiyle gönderilir.
 
 **Yetki**: kullanıcı görevi **görüyorsa** hatırlatma gönderebilir. Görünürlük
 kuralı anlık görüntüyle aynıdır: tam proje yetkisi (`MR_ProjectAccess` üzerinde

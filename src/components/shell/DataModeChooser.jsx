@@ -10,7 +10,7 @@ import { AppLogo } from './AppLogo';
 
 export function DataModeChooser({ onChoose }) {
   // Odak seçicinin İÇİNDE kalır. `aria-modal="true"` odağı kısıtlamadığı için
-  // kullanıcı zorunlu mod seçiminden sekme ile çıkabiliyordu. Bu ekranın
+  // kullanıcı zorunlu kip seçiminden sekme ile çıkabiliyordu. Bu ekranın
   // kapatılabilir bir durumu yoktur: Esc bir şey yapmaz (`onClose` yok).
   const panelRef = useRef(null);
   const initialFocusRef = useRef(null);
@@ -35,13 +35,13 @@ export function DataModeChooser({ onChoose }) {
               <small>Görev Yönetimi</small>
             </div>
           </div>
-          <h2 id="data-mode-picker-title">Veri Modu</h2>
-          <p>Örnek verileri veya kurumsal SQL Server üzerinde kalıcı Gerçek Sistem verilerini seçin. Bu seçim Basit/Gelişmiş kullanım modundan bağımsızdır.</p>
+          <h2 id="data-mode-picker-title">Veri Kipi</h2>
+          <p>Örnek verileri veya kurumsal SQL Server üzerinde kalıcı Gerçek Sistem verilerini seçin. Bu seçim Temel/Kapsamlı kullanım kipinden bağımsızdır.</p>
         </div>
         <div className="mode-picker-grid">
           <button ref={initialFocusRef} type="button" className="mode-picker-card mode-simple" onClick={() => onChoose(DATA_MODES.DEMO)}>
             <span className="mode-picker-icon"><Icons.Sparkle size={22} /></span>
-            <span className="mode-picker-copy"><small>İzole örnek veri</small><strong>Demo Modunu Aç</strong><span>Örnek verilerle uygulamanın tüm özelliklerini inceleyin. Demo kayıtları SQL Server&apos;a gönderilmez.</span></span>
+            <span className="mode-picker-copy"><small>İzole örnek veri</small><strong>Demo Kipini Aç</strong><span>Örnek verilerle uygulamanın tüm özelliklerini inceleyin. Demo kayıtları SQL Server&apos;a gönderilmez.</span></span>
             <span className="mode-picker-action">Demo ile başla <Icons.ArrowRight size={14} /></span>
           </button>
           <button type="button" className="mode-picker-card mode-advanced" onClick={() => onChoose(DATA_MODES.ACTUAL)}>

@@ -110,7 +110,7 @@ test('istemci tek merkezi modelle PARTIAL projede dar sorumlu oluşturma kapsam�
   assert.deepEqual(taskAssignableProjects(removed), []);
 });
 
-test('Basit ve Gelişmiş Mod aynı merkezi görev oluşturma uygunluk listesini kullanır', () => {
+test('Temel ve Kapsamlı Kip aynı merkezi görev oluşturma uygunluk listesini kullanır', () => {
   const advanced = read('src/features/tasks/TasksView.jsx');
   const simpleTasks = read('src/features/tasks/SimpleTasksView.jsx');
   const quickEntry = read('src/features/simple/SimpleModePanel.jsx');

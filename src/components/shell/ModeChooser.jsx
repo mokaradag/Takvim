@@ -5,18 +5,18 @@ import { AppLogo } from './AppLogo';
 const MODES = [
   {
     id: 'simple',
-    title: 'Basit Mod',
+    title: 'Temel Kip',
     kicker: 'Hızlı takip',
     icon: Icons.Calendar,
     description: 'Proje, görev, kısa açıklama, sorumlular ve termin tarihini tanımlayın; kayıtları doğrudan Takvim üzerinde izleyin.',
-    points: ['Az alan, hızlı giriş', 'Takvim odaklı görünüm', 'Gelişmiş moda sorunsuz geçiş']
+    points: ['Az alan, hızlı giriş', 'Takvim odaklı görünüm', 'Kapsamlı kipe sorunsuz geçiş']
   },
   {
     id: 'advanced',
-    title: 'Gelişmiş Mod',
-    kicker: 'Tam proje yönetimi',
+    title: 'Kapsamlı Kip',
+    kicker: 'Tam görev yönetimi',
     icon: Icons.Gantt,
-    description: 'Mevcut MERGEN Rota deneyimini; WBS, Gantt, bağımlılıklar, Kanban, raporlar ve proje yönetimi araçlarıyla kullanın.',
+    description: 'Mevcut MERGEN Rota deneyimini; WBS, Gantt, bağımlılıklar, Kanban, raporlar ve görev yönetimi araçlarıyla kullanın.',
     points: ['WBS ve bağımlılıklar', 'Gantt ve kritik yol', 'Raporlama ve portföy görünümü']
   }
 ];
@@ -35,7 +35,7 @@ export function ModeChooser({ onChoose }) {
             </div>
           </div>
           <h2 id="mode-picker-title">Nasıl çalışmak istersiniz?</h2>
-          <p>İki mod da aynı veri altyapısını kullanır. Daha sonra Ayarlar sayfasından istediğiniz anda geçiş yapabilirsiniz.</p>
+          <p>İki kip da aynı veri altyapısını kullanır. Daha sonra Ayarlar sayfasından istediğiniz anda geçiş yapabilirsiniz.</p>
         </div>
         <div className="mode-picker-grid">
           {MODES.map((mode) => {
@@ -51,7 +51,7 @@ export function ModeChooser({ onChoose }) {
                 <span className="mode-picker-points">
                   {mode.points.map((point) => <span key={point}><Icons.Check size={12} /> {point}</span>)}
                 </span>
-                <span className="mode-picker-action">Bu modla başla <Icons.ArrowRight size={14} /></span>
+                <span className="mode-picker-action">Bu kiple başla <Icons.ArrowRight size={14} /></span>
               </button>
             );
           })}

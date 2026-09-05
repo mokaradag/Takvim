@@ -272,7 +272,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     if (String(stateRef.current.session?.dataMode || '').toLowerCase() !== 'actual') {
       return projectWriteFailure('schedule-change/create', {
         code: 'ACTUAL_MODE_REQUIRED',
-        message: 'Tarih değişikliği talepleri yalnızca Gerçek Sistem modunda kullanılabilir.'
+        message: 'Tarih değişikliği talepleri yalnızca Gerçek Sistem kipinde kullanılabilir.'
       });
     }
     const flushResult = await persistence.flush();
@@ -290,7 +290,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     if (String(stateRef.current.session?.dataMode || '').toLowerCase() !== 'actual') {
       return projectWriteFailure('schedule-change/decide', {
         code: 'ACTUAL_MODE_REQUIRED',
-        message: 'Tarih değişikliği talepleri yalnızca Gerçek Sistem modunda kullanılabilir.'
+        message: 'Tarih değişikliği talepleri yalnızca Gerçek Sistem kipinde kullanılabilir.'
       });
     }
     const flushResult = await persistence.flush();
@@ -496,7 +496,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     return persistence.mutate('task/series', { type: 'task/add-many', tasks });
   }, [persistence]);
 
-  // `focusWorkspace` yeni projeyi etkin çalışma alanı yapar. Basit Mod bunu kapatır:
+  // `focusWorkspace` yeni projeyi etkin çalışma alanı yapar. Temel Kip bunu kapatır:
   // çalışma alanı değişimi uygulama kabuğunda içerik alanını yeniden monte ettiği
   // için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu
   // ne de hatayı görebiliyordu.

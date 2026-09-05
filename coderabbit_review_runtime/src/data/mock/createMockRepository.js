@@ -150,7 +150,7 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
       candidate.tasks = removePredecessorReferences(appliedTasks, invalidated);
       candidate.wbs = applyCollectionChanges(candidate.wbs || [], normalized.wbsUpserts, normalized.wbsDeletes);
       // Etiket kataloğu değiştiğinde görev anahtar sözcükleri Gerçek Sistem'de
-      // olduğu gibi DEPO sınırında hizalanır; iki veri modu aynı planı uygular.
+      // olduğu gibi DEPO sınırında hizalanır; iki veri kipi aynı planı uygular.
       const propagatedTaskIds = new Set();
       for (const project of normalized.projectUpserts || []) {
         const before = beforeProjectsById.get(project.id);

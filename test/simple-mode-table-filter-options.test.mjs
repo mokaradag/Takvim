@@ -29,7 +29,7 @@ const tasks = [
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('Basit Mod sorumlu seçeneklerini ilgili görev satırlarından üretir', () => {
+test('Temel Kip sorumlu seçeneklerini ilgili görev satırlarından üretir', () => {
   const state = { search: '', filters: { proje: ['project-a'], sorumlu: ['ayse'] } };
   const values = simpleTaskFacetValues(tasks, state, 'sorumlu', referenceDay);
 
@@ -56,7 +56,7 @@ test('kısa açıklama faseti seçenek ve satır eşlemesinde aynı kırpmayı k
   assert.deepEqual([...simpleTaskFacetValues([spaced], { filters: {} }, 'keyword', referenceDay)], ['Teklif']);
 });
 
-test('Basit Mod öncelik seçenekleri ortak renk ve simge üst verisini kullanır', () => {
+test('Temel Kip öncelik seçenekleri ortak renk ve simge üst verisini kullanır', () => {
   assert.deepEqual(TASK_PRIORITY_FILTER_OPTIONS.map(({ id, label }) => ({ id, label })), [
     { id: 'critical', label: 'Kritik' },
     { id: 'high', label: 'Yüksek' },
@@ -73,7 +73,7 @@ test('Basit Mod öncelik seçenekleri ortak renk ve simge üst verisini kullanı
   }
 });
 
-test('Basit Mod durum süzgeci mevcut ortak durum simgesi anlamlarını korur', () => {
+test('Temel Kip durum süzgeci mevcut ortak durum simgesi anlamlarını korur', () => {
   assert.deepEqual(TASK_STATUS_FILTER_OPTIONS, [
     { value: 'todo', label: 'Yapılacak' },
     { value: 'in_progress', label: 'Devam ediyor' },

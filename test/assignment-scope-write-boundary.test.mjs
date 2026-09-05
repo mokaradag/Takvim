@@ -9,7 +9,7 @@
  *      ilişkili görevlere DOKUNAMAZ.
  *   2. Sistem yöneticisi de etkin olmayan projeye görev yazamaz.
  *   3. Yetki, kurumsal rehber yoklamasından ÖNCE denetlenir.
- *   4. Basit Mod düzenlemesi Gelişmiş Modda kurulmuş planı ezmez.
+ *   4. Temel Kip düzenlemesi Kapsamlı Kipte kurulmuş planı ezmez.
  *   5. Tarih girişi imkânsız takvim gününü kabul etmez.
  */
 import test from 'node:test';
@@ -322,14 +322,14 @@ test('KISMİ yönetici görünümü kapsam dışı eş sorumlu kimliğini veya a
   }
 });
 
-/* ── 6. Basit Mod planı ─────────────────────────────────────────── */
+/* ── 6. Temel Kip planı ─────────────────────────────────────────── */
 
-test('Basit Mod düzenlemesi Gelişmiş Modda kurulmuş planın sahibi değildir', () => {
-  // Üç tarih eşitse plan Basit Modda kurulmuştur ve birlikte taşınabilir.
+test('Temel Kip düzenlemesi Kapsamlı Kipte kurulmuş planın sahibi değildir', () => {
+  // Üç tarih eşitse plan Temel Kipte kurulmuştur ve birlikte taşınabilir.
   assert.equal(ownsSimpleModePlan({ plannedStart: '2026-08-20', plannedFinish: '2026-08-20', targetFinish: '2026-08-20' }), true);
-  // Plan tarihleri ayrıştıysa Gelişmiş Moda aittir; Basit Mod onu ezmemelidir.
+  // Plan tarihleri ayrıştıysa Kapsamlı Kipe aittir; Temel Kip onu ezmemelidir.
   assert.equal(ownsSimpleModePlan({ plannedStart: '2026-08-10', plannedFinish: '2026-08-18', targetFinish: '2026-08-20' }), false);
-  // Hiç plan tarihi yoksa Basit Mod alanı serbestçe kurabilir.
+  // Hiç plan tarihi yoksa Temel Kip alanı serbestçe kurabilir.
   assert.equal(ownsSimpleModePlan({ targetFinish: '2026-08-20' }), true);
 });
 

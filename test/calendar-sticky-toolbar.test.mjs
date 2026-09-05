@@ -12,14 +12,14 @@ test('Takvim araçları masaüstünde tek ortak ve kompakt çubukta sıralanır'
   assert.doesNotMatch(calendar, /className="cal-legend"/);
 });
 
-test('Basit ve Gelişmiş Mod aynı Takvim araç çubuğunu kullanır', () => {
+test('Temel ve Kapsamlı Kip aynı Takvim araç çubuğunu kullanır', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   assert.match(shell, /leadingControls=\{<SimpleCalendarTabs/);
   assert.match(shell, /\) : <CalendarView t=\{t\} setTweak=\{setTweak\} \/>/);
   assert.equal((shell.match(/<CalendarView/g) || []).length, 2);
 });
 
-test('Basit Mod Takvim sekmeleri erişilebilir ve seçili ay sekme geçişinde korunur', () => {
+test('Temel Kip Takvim sekmeleri erişilebilir ve seçili ay sekme geçişinde korunur', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const calendar = read('src/features/calendar/CalendarView.jsx');
   assert.match(shell, /onKeyDown=\{onKeyDown\}/);

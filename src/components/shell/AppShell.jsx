@@ -57,10 +57,10 @@ import { readSidebarPreference, writeSidebarPreference } from './sidebarPreferen
 import { WelcomeScreen } from './WelcomeScreen';
 import { useSignOut } from './useSignOut.js';
 
-// Basit Mod, Gelişmiş Mod ile aynı Gantt görünümünü paylaşır: hızlı görev
+// Temel Kip, Kapsamlı Kip ile aynı Gantt görünümünü paylaşır: hızlı görev
 // tanımı yapan kullanıcı da planı zaman çizelgesinde görebilmelidir.
 //
-// Görevler sayfası da Basit Modda bulunur; ancak Gelişmiş Modun tam tablosu
+// Görevler sayfası da Temel Kipte bulunur; ancak Kapsamlı Kipin tam tablosu
 // DEĞİL, Hızlı Görev Tanımı'yla toplanan alanları listeleyen sade sürümü
 // gösterilir (bkz. features/tasks/SimpleTasksView.jsx).
 const SIMPLE_NAV_IDS = new Set(['veri', 'takvim', 'gantt', 'yardim', 'ayarlar']);
@@ -82,7 +82,7 @@ function SimpleCalendarTabs({ active, onChange }) {
   };
 
   return (
-    <div className="simple-calendar-tabs seg" role="tablist" aria-label="Basit Mod Takvim görünümü">
+    <div className="simple-calendar-tabs seg" role="tablist" aria-label="Temel Kip Takvim görünümü">
       <button
         type="button"
         id={simpleCalendarTabId('calendar')}
@@ -138,6 +138,7 @@ export default function AppShell() {
   const signOutState = useSignOut();
   const simpleMode = t.appMode === 'simple';
   const [sidebarPreference, setSidebarPreference] = useState(readSidebarPreference);
+  const [sidebarKeyboardOpen, setSidebarKeyboardOpen] = useState(false);
   const { pinned: sidebarPinned, collapsed: sidebarCollapsed } = sidebarPreference;
 
   const [view, setView] = useState(() => {
@@ -187,12 +188,6 @@ export default function AppShell() {
     }
   };
 
-  const toggleSidebar = () => {
-    setSidebarPreference((current) => current.pinned
-      ? { ...current, collapsed: !current.collapsed }
-      : { pinned: true, collapsed: false });
-  };
-
   const toggleSidebarPin = () => {
     setSidebarPreference((current) => current.pinned
       ? { pinned: false, collapsed: true }
@@ -206,9 +201,9 @@ export default function AppShell() {
   useEffect(() => {
     if (!simpleMode) return;
     if (workspaceMode !== 'portfolio') selectWorkspace(null);
-    // Rol kapılı yönetici sayfaları Basit Mod yönlendirmesinden MUAFTIR:
-    // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Basit
-    // Modda diye ulaşılamaz olmamalıdır.
+    // Rol kapılı yönetici sayfaları Temel Kip yönlendirmesinden MUAFTIR:
+    // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Temel
+    // Kipte diye ulaşılamaz olmamalıdır.
     if (!SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) navigate('takvim');
   }, [simpleMode, view, workspaceMode, selectWorkspace]);
 
@@ -225,9 +220,9 @@ export default function AppShell() {
   }, [simpleMode, view, viewIntent]);
 
   useEffect(() => {
-    // Basit Modda komut paleti RENDER EDİLMEZ: kısayolu yine de yutmak,
+    // Temel Kipte komut paleti RENDER EDİLMEZ: kısayolu yine de yutmak,
     // tarayıcının kendi Ctrl+K davranışını hiçbir karşılık vermeden alıyor ve
-    // `cmdOpen` açık kaldığı için Gelişmiş Moda geçildiğinde palet kendiliğinden
+    // `cmdOpen` açık kaldığı için Kapsamlı Kipe geçildiğinde palet kendiliğinden
     // açılıyordu.
     if (simpleMode) return undefined;
     const onKey = (event) => {
@@ -282,7 +277,7 @@ export default function AppShell() {
   }), [tasks.length, wbs.length, projects.length, people.length, workspaceMode]);
 
   const visibleNavItems = (simpleMode
-    // Yönetici sayfaları Basit Modda da listelenir; aşağıdaki rol süzgeci
+    // Yönetici sayfaları Temel Kipte de listelenir; aşağıdaki rol süzgeci
     // bunları yine yalnızca sistem yöneticisine gösterir.
     ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))
     : NAV_ITEMS
@@ -342,7 +337,7 @@ export default function AppShell() {
   const calendarContentActive = view === 'takvim' && (!simpleMode || simpleCalendarTab === 'calendar');
 
   // İlk açılış akışlarında ana uygulama hiç render edilmez. Böylece Özet üst çubuğu,
-  // sidebar veya başka bir sayfa parçası karşılama/mod seçim ekranının arkasından görünmez.
+  // sidebar veya başka bir sayfa parçası karşılama/kip seçim ekranının arkasından görünmez.
   if (modePickerOpen) return <ModeChooser onChoose={chooseMode} />;
 
   if (welcomeOpen && !simpleMode) {
@@ -362,7 +357,19 @@ export default function AppShell() {
     <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'} sidebar-is-${sidebarPinned ? 'pinned' : 'unpinned'} sidebar-is-${sidebarCollapsed ? 'collapsed' : 'expanded'}`}>
       {/* Kişi dizini bağlamı DOM düğümü üretmez: ızgara çocukları değişmez. */}
       <PeopleDirectoryProvider people={directoryPeople}>
-      <aside className="sidebar">
+      <aside
+        className="sidebar"
+        data-keyboard-open={sidebarKeyboardOpen}
+        onPointerDownCapture={() => setSidebarKeyboardOpen(false)}
+        onPointerLeave={() => setSidebarKeyboardOpen(false)}
+        onFocusCapture={(event) => {
+          if (event.target.matches(':focus-visible')) setSidebarKeyboardOpen(true);
+        }}
+        onKeyDownCapture={() => setSidebarKeyboardOpen(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setSidebarKeyboardOpen(false);
+        }}
+      >
         <Heptagon variant="hept-sidebar" />
         <div className="sidebar-header">
           <AppLogo size={34} />
@@ -371,20 +378,8 @@ export default function AppShell() {
             <div className="brand-sub">Görev Yönetimi</div>
           </div>
         </div>
-        <button
-          type="button"
-          className="sidebar-collapse-button"
-          onClick={toggleSidebar}
-          aria-label={sidebarPinned && !sidebarCollapsed ? 'Kenar çubuğunu daralt' : 'Kenar çubuğunu genişlet ve sabitle'}
-          aria-expanded={sidebarPinned && !sidebarCollapsed}
-          title={sidebarPinned && !sidebarCollapsed ? 'Daralt' : 'Genişlet ve sabitle'}
-        >
-          <Icons.ChevronLeft size={14} />
-        </button>
-
         {!simpleMode ? (
           <div className="sidebar-workspace-context col" style={{ gap: 6, padding: '0 12px 10px' }}>
-            <div className="sidebar-section-title" style={{ margin: 0 }}>Aktif çalışma alanı</div>
             <SearchableSelect
               value={selectedProjectId || ''}
               options={workspaceProjectOptions}
@@ -420,7 +415,7 @@ export default function AppShell() {
           </div>
         ) : (
           <div className="sidebar-simple-mode">
-            <span><Icons.Calendar size={13} /> Basit Mod</span>
+            <span><Icons.Calendar size={13} /> Temel Kip</span>
             <small>Hızlı tanım ve Takvim takibi</small>
           </div>
         )}
@@ -433,7 +428,6 @@ export default function AppShell() {
           </button>
         )}
 
-        <div className="sidebar-section-title">Çalışma alanı</div>
         <nav className="nav">
           {visibleNavItems.map((item) => {
             const Icon = Icons[item.icon];
@@ -503,7 +497,7 @@ export default function AppShell() {
           </div>
         </header>
         {/* Sağlayıcı anahtar verilen içerik alanının DIŞINDADIR: çalışma alanı veya
-            mod değişse de geçerli kurumsal görev kapsamı yeniden kurulmaz. */}
+            kip değişse de geçerli kurumsal görev kapsamı yeniden kurulmaz. */}
         <TaskOrganizationFilterProvider>
           <main key={workspaceKey} className={`content content-${view}${calendarContentActive ? ' calendar-content-active' : ''}`}>{renderView()}</main>
         </TaskOrganizationFilterProvider>

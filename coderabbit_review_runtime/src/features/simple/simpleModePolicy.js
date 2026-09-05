@@ -3,7 +3,7 @@ import { canWriteProject } from '../../state/projectWritePolicy.js';
 export { canWriteProject };
 
 /**
- * Basit Modda görev tanımlanabilecek projeler.
+ * Temel Kipte görev tanımlanabilecek projeler.
  *
  * Liste artık hazır gelir (bkz. state/projectWritePolicy · taskAssignableProjects):
  * sıradan kullanıcıda "corporateprojectaccess" ile tam yetki alınan görünür

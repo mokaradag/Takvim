@@ -5,11 +5,11 @@ export { createMockRepository } from './mock/createMockRepository.js';
 export { normalizeTaskRecord } from './normalizeTaskRecord.js';
 export { migrateLegacyTaskSchedule } from './migrations/legacyTaskSchedule.js';
 /**
- * Demo Modu deposu — İLK KULLANIMDA kurulur.
+ * Demo Kipi deposu — İLK KULLANIMDA kurulur.
  *
  * Modül düzeyinde HEMEN oluşturulan bir tekil, Gerçek Sistem seçilmiş olsa da
  * içe aktarma anında demo tohum verisini kuruyordu. Erişim bir işlev üzerinden
- * verilir: depo yalnızca gerçekten Demo Modu kullanıldığında üretilir ve
+ * verilir: depo yalnızca gerçekten Demo Kipi kullanıldığında üretilir ve
  * `AppStateProvider` kendi deposunu geçerken hiç kurulmaz.
  */
 let demoRepository = null;

@@ -52,18 +52,14 @@ export function SidebarUserPanel({
         >
           {theme === 'light' ? <Icons.Moon size={15} /> : <Icons.Sun size={15} />}
         </button>
-        <button
-          type="button"
-          className="sidebar-mode-toggle"
-          role="switch"
-          aria-checked={!simpleMode}
-          onClick={() => onChooseMode(simpleMode ? 'advanced' : 'simple')}
-          title={`${simpleMode ? 'Gelişmiş' : 'Basit'} Moda geç`}
-        >
-          <Icons.Sparkles size={14} />
-          <span className="sidebar-mode-copy"><strong>{simpleMode ? 'Basit' : 'Gelişmiş'}</strong><small>Mod</small></span>
-          <span className="sidebar-mode-track" aria-hidden="true"><span /></span>
-        </button>
+        <div className="sidebar-mode-toggle" role="group" aria-label="Çalışma kipi">
+          <button type="button" aria-pressed={simpleMode} aria-label="Temel Kip" title="Temel Kip" onClick={() => { if (!simpleMode) onChooseMode('simple'); }}>
+            <span className="sidebar-mode-short" aria-hidden="true">T</span><span className="sidebar-mode-copy">Temel</span>
+          </button>
+          <button type="button" aria-pressed={!simpleMode} aria-label="Kapsamlı Kip" title="Kapsamlı Kip" onClick={() => { if (simpleMode) onChooseMode('advanced'); }}>
+            <span className="sidebar-mode-short" aria-hidden="true">K</span><span className="sidebar-mode-copy">Kapsamlı</span>
+          </button>
+        </div>
         {canSignOut && (
           <button
             className="sidebar-utility-button"

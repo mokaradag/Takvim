@@ -10,7 +10,7 @@ const MODE_COPY = Object.freeze({
 });
 
 /**
- * Veri modu anahtarı. Kenar çubuğunu sade tutmak için anahtar artık yalnızca
+ * Veri kipi anahtarı. Kenar çubuğunu sade tutmak için anahtar artık yalnızca
  * Ayarlar sayfasında (`variant="settings"`) yaşar.
  */
 export function DataModeIndicator({ variant = 'settings' }) {
@@ -36,7 +36,7 @@ export function DataModeIndicator({ variant = 'settings' }) {
   return (
     <div
       className={`data-mode-indicator data-mode-variant-${variant} data-mode-${dataMode}`}
-      aria-label={`Veri modu: ${current.label}`}
+      aria-label={`Veri kipi: ${current.label}`}
     >
       <span className="data-mode-current">
         <CurrentIcon size={13} />
@@ -45,8 +45,8 @@ export function DataModeIndicator({ variant = 'settings' }) {
           <small>{current.hint}</small>
         </span>
       </span>
-      <button type="button" onClick={switchMode} disabled={switching} title={`${next.label} moduna geç`}>
-        {switching ? 'Geçiliyor…' : `${next.label} moduna geç`}
+      <button type="button" onClick={switchMode} disabled={switching} title={`${next.label} kipine geç`}>
+        {switching ? 'Geçiliyor…' : `${next.label} kipine geç`}
       </button>
     </div>
   );

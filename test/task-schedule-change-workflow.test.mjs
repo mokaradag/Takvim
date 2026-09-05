@@ -721,12 +721,12 @@ test('WBS kataloğu görev kapsamlı projeleri satır başına görev sorgulamad
   assert.doesNotMatch(wbsBody, /FROM dbo\.MR_Tasks scopedTask/);
 });
 
-test('Basit Mod tarih talebi eylemini ve ortak modal erişilebilirlik sınırını kullanır', () => {
+test('Temel Kip tarih talebi eylemini ve ortak modal erişilebilirlik sınırını kullanır', () => {
   const overlay = readFileSync(new URL('../src/features/task-detail/TaskDetailOverlay.jsx', import.meta.url), 'utf8');
   const simpleDrawer = readFileSync(new URL('../src/features/task-detail/SimpleTaskDrawer.jsx', import.meta.url), 'utf8');
   const advancedDrawer = readFileSync(new URL('../src/features/task-detail/TaskDrawer.jsx', import.meta.url), 'utf8');
   // Odak tuzağı PAYLAŞIMLI kancaya taşındı: aynı davranışı karşılama ekranı ve
-  // veri modu seçici de kullanır (`src/features/schedule-change/useModalFocusTrap.js`
+  // veri kipi seçici de kullanır (`src/features/schedule-change/useModalFocusTrap.js`
   // artık yalnızca yeniden dışa aktarır).
   const focusTrap = readFileSync(new URL('../src/hooks/useModalFocusTrap.js', import.meta.url), 'utf8');
   const focusTrapReExport = readFileSync(new URL('../src/features/schedule-change/useModalFocusTrap.js', import.meta.url), 'utf8');

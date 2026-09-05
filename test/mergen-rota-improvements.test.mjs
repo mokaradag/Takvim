@@ -888,7 +888,7 @@ test('süzgeç seçeneği etiketi, değeri ve anahtar sözcükleri üzerinde ara
   const option = {
     value: 'MEHMET ONUR KARADAĞ',
     label: '900123 · MEHMET ONUR KARADAĞ',
-    keywords: ['MEHMET ONUR KARADAĞ', '900123', 'Fiyatlandırma ve Proje Yönetimi Birimi']
+    keywords: ['MEHMET ONUR KARADAĞ', '900123', 'Fiyatlandırma ve Görev Yönetimi Birimi']
   };
 
   assert.equal(matchesOptionQuery(option, ''), true, 'boş arama her seçeneği geçirir');

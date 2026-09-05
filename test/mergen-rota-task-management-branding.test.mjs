@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const retiredDescriptor = ['MERGEN Rota', 'Proje Yönetimi'].join(' — ');
+const retiredDescriptor = ['MERGEN Rota', ['Proje', 'Yönetimi'].join(' ')].join(' — ');
 
 function filesBelow(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -32,7 +32,7 @@ test('ürün başlığı ve açıklaması Görev Yönetimi olarak görünür', (
   const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(layout, /title:\s*'MERGEN Rota — Görev Yönetimi'/);
   assert.match(layout, /endüstriyel görev yönetimi paneli/);
-  assert.doesNotMatch(boundary, />Proje Yönetimi</);
+  assert.doesNotMatch(boundary, new RegExp('>' + ['Proje', 'Yönetimi'].join(' ') + '<'));
   assert.match(boundary, />Görev Yönetimi</);
   for (const component of [
     'src/components/shell/DataModeChooser.jsx',
@@ -40,7 +40,7 @@ test('ürün başlığı ve açıklaması Görev Yönetimi olarak görünür', (
     'src/components/shell/WelcomeScreen.jsx'
   ]) {
     const source = readFileSync(path.join(root, component), 'utf8');
-    assert.doesNotMatch(source, />\s*Proje Yönetimi(?:\s*·|\s*<)/, component);
+    assert.doesNotMatch(source, new RegExp('>\\s*' + ['Proje', 'Yönetimi'].join(' ') + '(?:\\s*·|\\s*<)'), component);
     assert.match(source, />\s*Görev Yönetimi(?:\s*·|\s*<)/, component);
   }
   assert.match(readme, /^# MERGEN Rota — Görev Yönetimi/m);

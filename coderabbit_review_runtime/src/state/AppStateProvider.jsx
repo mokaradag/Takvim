@@ -344,7 +344,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     return persistence.mutate('task/series', { type: 'task/add-many', tasks });
   }, [persistence]);
 
-  // `focusWorkspace` yeni projeyi etkin çalışma alanı yapar. Basit Mod bunu kapatır:
+  // `focusWorkspace` yeni projeyi etkin çalışma alanı yapar. Temel Kip bunu kapatır:
   // çalışma alanı değişimi uygulama kabuğunda içerik alanını yeniden monte ettiği
   // için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu
   // ne de hatayı görebiliyordu.

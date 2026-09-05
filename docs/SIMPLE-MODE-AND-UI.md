@@ -1,25 +1,25 @@
-# Basit Mod ve Arayüz Davranışları
+# Temel Kip ve Arayüz Davranışları
 
-Bu belge, MERGEN Rota'daki Basit Mod akışını ve uygulama kabuğu/Özet yerleşimine ilişkin arayüz sözleşmelerini açıklar.
+Bu belge, MERGEN Rota'daki Temel Kip akışını ve uygulama kabuğu/Özet yerleşimine ilişkin arayüz sözleşmelerini açıklar.
 
-## Basit Mod Takvim akışı
+## Temel Kip Takvim akışı
 
-Basit Modda **Takvim** sayfası açıldığında varsayılan görünüm aylık Takvimdir. Hızlı kayıt formu Takvim ile aynı anda gösterilmez.
+Temel Kipte **Takvim** sayfası açıldığında varsayılan görünüm aylık Takvimdir. Hızlı kayıt formu Takvim ile aynı anda gösterilmez.
 
 Takvim sayfasında iki sekme bulunur:
 
 1. **Takvim** — varsayılan görünüm; her görevi yalnızca Termin (`targetFinish`) gününde gösterir. Eski bir kayıtta hedef yoksa `plannedFinish` güvenli yedektir; süre `plannedStart`–`plannedFinish` aralığında çoğaltılmaz ve Gantt'ta izlenir.
 2. **Hızlı Görev Tanımı** — proje, görev, isteğe bağlı kısa açıklama/etiket, sorumlular ve termin tarihi ile hızlı kayıt oluşturur.
 
-Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Basit Modda oluşturulan kayıtlar mevcut Project/Task veri altyapısını kullanmaya devam eder ve Gelişmiş Modda ayrıntılandırılabilir.
+Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Temel Kipte oluşturulan kayıtlar mevcut Project/Task veri altyapısını kullanmaya devam eder ve Kapsamlı Kipte ayrıntılandırılabilir.
 
-## Basit Modda Gantt
+## Temel Kipte Gantt
 
-Basit Mod gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Rol kapılı **yönetici** sayfaları (`ADMIN_NAV_IDS`, örneğin Hatırlatma E-postaları) bu süzgeçten muaftır: yalnızca sistem yöneticisine açılan bir yapılandırma ekranı, kullanıcı Basit Modda diye ulaşılamaz olmamalıdır. Rol denetimi değişmez — yönetici olmayan bu sayfaları iki modda da görmez. Gantt, Gelişmiş Moddaki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Basit Modda çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Basit Mod Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+Temel Kip gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Rol kapılı **yönetici** sayfaları (`ADMIN_NAV_IDS`, örneğin Hatırlatma E-postaları) bu süzgeçten muaftır: yalnızca sistem yöneticisine açılan bir yapılandırma ekranı, kullanıcı Temel Kipte diye ulaşılamaz olmamalıdır. Rol denetimi değişmez — yönetici olmayan bu sayfaları iki kipte de görmez. Gantt, Kapsamlı Kipteki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Temel Kipte çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Temel Kip Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
 
-## Basit Modda Görevler
+## Temel Kipte Görevler
 
-Basit Mod gezinmesi `veri` (Görevler), `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Basit Modda **Görevler** sayfası Gelişmiş Moddaki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
+Temel Kip gezinmesi `veri` (Görevler), `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Temel Kipte **Görevler** sayfası Kapsamlı Kipteki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
 
 Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`src/features/tasks/simpleTaskColumns.js`):
 
@@ -33,11 +33,11 @@ Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`
 | Durum | `status` |
 | Termin | `targetFinish` |
 
-Gelişmiş Moda ait planlama alanları Basit Modda **hiç gösterilmez**: ilerleme yüzdesi, başlangıç tarihleri, temel plan (baseline), bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Saat/efor alanları ise ürünün hiçbir normal kullanıcı görünümünde gösterilmez; eski `plannedHours` / `actualHours` değerleri yalnızca veri uyumluluğu için korunur. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve regresyon testleri alanların sızmadığını doğrular.
+Kapsamlı Kipe ait planlama alanları Temel Kipte **hiç gösterilmez**: ilerleme yüzdesi, başlangıç tarihleri, temel plan (baseline), bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Saat/efor alanları ise ürünün hiçbir normal kullanıcı görünümünde gösterilmez; eski `plannedHours` / `actualHours` değerleri yalnızca veri uyumluluğu için korunur. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve regresyon testleri alanların sızmadığını doğrular.
 
 Sayfa aynı sadeleştirilmiş alan kümesi üzerinde şu yetenekleri sunar:
 
-1. **Yeni Görev** — sağ üst düğme Takvim sayfasındaki mevcut **Hızlı Görev Tanımı** akışını açar; Gelişmiş görev düzenleyicisine yönlendirmez.
+1. **Yeni Görev** — sağ üst düğme Takvim sayfasındaki mevcut **Hızlı Görev Tanımı** akışını açar; Kapsamlı görev düzenleyicisine yönlendirmez.
 2. **Kurumsal süzme** — aynı araç çubuğu satırındaki Direktörlük, Müdürlük ve Birim seçimleri Ekip sayfasının ortak yol-anahtarı semantiğini kullanır. Çok sorumlulu görevde sorumlulardan en az birinin eşleşmesi yeterlidir.
 3. **Arama** — görev adı, kısa açıklama, proje ve sorumlu üzerinde canlı süzme.
 4. **Sütun süzme** — Proje, Görev, Kısa açıklama, Sorumlular, Öncelik, Durum ve Termin başlıklarında ortak filtre bileşenlerini kullanır.
@@ -47,23 +47,23 @@ Sayfa aynı sadeleştirilmiş alan kümesi üzerinde şu yetenekleri sunar:
 
 İşlem sırası `yetkili snapshot → çalışma alanı/proje → kurumsal kapsam → arama → sütun fasetleri → sıralama → sayfalama` biçimindedir. Direktörlük/Müdürlük/Birim bir yetkilendirme kuralı değildir ve görev/kişi görünürlüğünü genişletmez. Seçenekler yalnızca mevcut çalışma alanındaki görevlerin, mevcut kişi projeksiyonunda çözülebilen sorumlularından üretilir; geçici arama veya sütun süzgeci kurumsal seçeneği listeden düşürmez.
 
-`SimpleTaskDrawer`, Gelişmiş Moddaki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda silme eylemi bulunur; silme simgesi yetkisiz durumda açıklayıcı nedenle pasiftir, paneldeki büyük **Sil** düğmesi ise yalnızca sunucudaki kuralla uyumlu yetkili görevlerde gösterilir. Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
+`SimpleTaskDrawer`, Kapsamlı Kipteki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda silme eylemi bulunur; silme simgesi yetkisiz durumda açıklayıcı nedenle pasiftir, paneldeki büyük **Sil** düğmesi ise yalnızca sunucudaki kuralla uyumlu yetkili görevlerde gösterilir. Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
 
-Dar `ASSIGNEE_CREATE` kapsamında yeni görev tanımlayan normal kullanıcı için Termin alanı etkin ve zorunludur; değer sunucuya `plannedStart`, `plannedFinish` ve `targetFinish` olarak aynı günle gönderilir. Böylece arayüzde seçilen tarih sessizce atılmaz. Başka birinin oluşturduğu mevcut görevde kontrollü planı doğrudan değiştiremeyen sorumlu için Termin salt okunurdur; tarih önerisi Basit ve Gelişmiş Moddaki aynı kalıcı talep akışından yapılır.
+Dar `ASSIGNEE_CREATE` kapsamında yeni görev tanımlayan normal kullanıcı için Termin alanı etkin ve zorunludur; değer sunucuya `plannedStart`, `plannedFinish` ve `targetFinish` olarak aynı günle gönderilir. Böylece arayüzde seçilen tarih sessizce atılmaz. Başka birinin oluşturduğu mevcut görevde kontrollü planı doğrudan değiştiremeyen sorumlu için Termin salt okunurdur; tarih önerisi Temel ve Kapsamlı Kipteki aynı kalıcı talep akışından yapılır.
 
-Üç davranış Gelişmiş Modla ortaktır ve bilinçlidir:
+Üç davranış Kapsamlı Kiple ortaktır ve bilinçlidir:
 
 - **Boş başlık kalıcılaştırılmaz.** Kullanıcı adı silip yeniden yazarken geçici boş metin yerel taslakta kalır; sunucu boş başlığı reddettiği için kuyruğa hiç girmez.
 - **Kısa açıklama/etiket isteğe bağlıdır.** Kullanıcı değer girerse proje etiket kataloğuyla eşleştirilir; değer yoksa görev etiketsiz oluşturulur. Girilen değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) açıkça girilen etiket yine görevde saklanır.
-- **Gizli plan tarihleri ezilmez.** Basit Mod planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Gelişmiş Modda kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
+- **Gizli plan tarihleri ezilmez.** Temel Kip planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Kapsamlı Kipte kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
 
-`AppShell`, `simpleMode` bayrağına göre sade veya gelişmiş görev tablosunu seçer. Her iki görünüm aynı kalıcı Task modelini ve kabuğun anahtarlı içerik alanı dışında duran `TaskOrganizationFilterProvider` geçici durumunu kullanır; bu nedenle Basit → Gelişmiş ve Gelişmiş → Basit geçişinde seçim korunur. Durum sunucuya yazılmaz. Basit Mod düğmesi yalnızca var olan hızlı kayıt sekmesine geçer.
+`AppShell`, `simpleMode` bayrağına göre sade veya gelişmiş görev tablosunu seçer. Her iki görünüm aynı kalıcı Task modelini ve kabuğun anahtarlı içerik alanı dışında duran `TaskOrganizationFilterProvider` geçici durumunu kullanır; bu nedenle Temel → Kapsamlı ve Kapsamlı → Temel geçişinde seçim korunur. Durum sunucuya yazılmaz. Temel Kip düğmesi yalnızca var olan hızlı kayıt sekmesine geçer.
 
-### Öncelik Basit Modda
+### Öncelik Temel Kipte
 
-Öncelik, Basit Modda daha önce hiç görünmüyordu; artık dört yüzeyde birden vardır: Hızlı Görev Tanımı formunda, sadeleştirilmiş tabloda, sadeleştirilmiş görev düzenlemede ve süzme/sıralamada.
+Öncelik, Temel Kipte daha önce hiç görünmüyordu; artık dört yüzeyde birden vardır: Hızlı Görev Tanımı formunda, sadeleştirilmiş tabloda, sadeleştirilmiş görev düzenlemede ve süzme/sıralamada.
 
-Yeni bir öncelik modeli **tanımlanmaz**. Gelişmiş Modun `TASK_PRIORITIES` kataloğu, `normalizePriorityId` normalleştirmesi ve aynı rozet stilleri kullanılır; iki mod arasında geçiş yapan kullanıcı aynı değeri aynı adla görür.
+Yeni bir öncelik modeli **tanımlanmaz**. Kapsamlı Kipin `TASK_PRIORITIES` kataloğu, `normalizePriorityId` normalleştirmesi ve aynı rozet stilleri kullanılır; iki kip arasında geçiş yapan kullanıcı aynı değeri aynı adla görür.
 
 ### Proje seçimi
 
@@ -216,21 +216,43 @@ taşıdığı ağaca değil, Proje Tanımı sekmesine düşerdi.
 
 ## Kenar çubuğu görünüm kontrolleri
 
-Tema, **Basit / Gelişmiş** mod ve oturum kapatma eylemleri
-`SidebarUserPanel` içindeki tek alt araç alanında yaşar. Mod anahtarı tema ile
-çıkışın arasındadır ve `role="switch"` durumunu görsel rayıyla birlikte taşır.
-Üst çubuk bu kontrolleri yinelemez. Basit Moda geçiş yine
-`AppShell.chooseMode` akışını kullanır: çalışma alanı portföye döner ve Takvim
-sayfası açılır. Oturum kapatma yalnızca Gerçek Sistem + Keycloak oturumunda
-görünür; başarısız çıkış başarılı gibi sunulmaz.
+Tema, **Temel Kip / Kapsamlı Kip** seçimi ve oturum kapatma eylemleri
+`SidebarUserPanel` içindeki tek alt araç alanında yaşar. İki seçenekli kip
+seçicisi `role="group"` ve `aria-pressed` ile etkin tercihi bildirir; seçili
+kipe yeniden basmak gezinmeyi sıfırlamaz. İç kimlikler (`simple`, `advanced`,
+`appMode`) ve kaydedilmiş tercihler korunur. Üst çubuk bu kontrolleri yinelemez.
+Temel Kipe geçiş `AppShell.chooseMode` üzerinden portföy Takvimini açar.
 
-Kenar çubuğu ilk kullanımda **sabitlenmiş ve açık** başlar. Başlıktaki hareketli
-ok açık/dar görünümü değiştirir. Alt meta satırındaki raptiye sabitlemeyi
-kaldırdığında ana sütun 72 piksele iner; çubuk üzerine gelme veya klavye odağıyla
-geçici olarak açılır. Yeniden sabitleme açık durumu korur. Tercih
-`mergen_rota_sidebar_v1` anahtarıyla saklanır, azaltılmış hareket tercihinde
-geçiş animasyonları kapatılır. Alt bilgi yalnızca `MERGEN Rota · Sürüm 1.0`
-yazar; etkin mod anahtarın kendisinden anlaşılır.
+Kenar çubuğu ilk kullanımda **sabitlenmiş ve açık** başlar. Gereksiz çalışma
+alanı başlıkları ve daraltma oku yoktur; proje seçicisi markanın hemen altında
+yer alır. Alt raptiye sabitlemeyi kaldırınca ana sütun 72 piksele iner.
+Fare üzerine geldiğinde veya klavyeyle gezinirken geçici olarak açılır.
+Fare görünen çubuğun dışına çıktığında gezinme düğmesinde kalan odak çubuğu
+açık tutmaz. Klavye odağı içerideyken açık kalır; dışarı çıktığında kapanır.
+Yeniden sabitleme açık durumu korur. Tercih `mergen_rota_sidebar_v1` anahtarıyla
+saklanır; azaltılmış hareket tercihinde geçiş animasyonları kapatılır.
+
+Görev penceresindeki **Görevi tanımlayan** satırı fotoğrafı, adı ve oluşturma
+tarihini yerel saat/dakika ile gösterir. Yeni görevde taslağın zamanı, kayıttan
+sonra kalıcı `createdAt` kullanılır. Dar ekranlarda tarih ayrı satıra geçer.
+Her iki görev düzenleyicisinde Kaydet düğmesi kayıt simgesi taşır; işlem
+sürerken simgenin yerini mevcut bekleme göstergesi alır.
+
+## Kanban araması ve Gantt avatarları
+
+Kanban, Görevler ile aynı `TaskOrganizationFilterControls` ve
+`useTaskOrganizationFilter` bileşenlerini kullanır. Arama ve kurumsal seçim
+birlikte uygulanır; yalnızca görünür görevler kolonlara ve sayılara girer.
+Kurumsal seçim Görevler ile paylaşılır, arama sayfaya özeldir. Filtreleri
+temizle ikisini de sıfırlar. Seçili proje değiştiğinde artık geçerli olmayan
+alt kurumsal yol ortak süzgeç kurallarıyla temizlenir. Gizlenmiş bir kartın
+bekleyen sürüklemesi durum güncellemesi yapmaz.
+
+Gantt görev ve kilometre taşı ipuçları her sorumlunun fotoğrafını adıyla
+birlikte gösterir. WBS görünümü aynı `GanttAssignees` bileşenini kullanır.
+Sorumluya göre gruplama ilk sorumluyu esas alır; Sicil kimliği aynı adlı
+kişileri ayırır ve özet satırının avatarını belirler. Fotoğraf bulunamazsa
+baş harf yedeği kullanılır; sunucunun görev kapsamlı kimlikleri yeterlidir.
 
 ## Kayıt göstergeleri
 
@@ -246,14 +268,14 @@ yavaşlar:
   etkileşimli içerik ağacına kayıt boyunca `inert` uygulamalı, erişilebilir durum
   bildirimini ise bu `inert` ağacının dışında tutmalıdır.
 
-Kullanıldığı yerler: Hızlı Görev Tanımı (`Takvime ekle`), iki moddaki görev
+Kullanıldığı yerler: Hızlı Görev Tanımı (`Takvime ekle`), iki kipteki görev
 panelinin **Kaydet** düğmesi, dışa aktarma
 menüsü ve sağ alttaki kalıcılaştırma şeridi (`Kaydediliyor…` + ilerleme
 süpürmesi).
 
 ## Görev tablosu · çapraz sütun süzgeçleri
 
-Gelişmiş Moddaki **Görevler** tablosunda bir sütuna süzgeç uygulandığında öteki
+Kapsamlı Kipteki **Görevler** tablosunda bir sütuna süzgeç uygulandığında öteki
 sütunların seçenek listesi de daralır: menüde yalnızca o an görünen satırlarda
 bulunan değerler kalır (`src/features/tasks/taskTableFacets.js`). Seçenekler
 süzülmemiş kümeden üretildiğinde kullanıcı, sonucu kesinlikle boş olan bir
@@ -264,7 +286,7 @@ aksi hâlde seçili değerin dışındaki her seçenek listeden düşer ve ikinc
 değer eklenemezdi. Seçili değerler ayrıca listede tutulur: otomatik yenileme ya
 da kurumsal seçim satırları kaldırdığında kullanıcı o değeri işaretten
 çıkarabilmelidir. Satır süzmesi ile faset hesabı **aynı yüklemi** kullanır
-(`taskTableMatches`), böylece iki kopya arasında kural farkı oluşmaz. Basit Mod
+(`taskTableMatches`), böylece iki kopya arasında kural farkı oluşmaz. Temel Kip
 tablosu aynı davranışı `simpleTaskFacets.js` ile zaten uyguluyordu.
 
 ## Görev tablosu · büyük yazı tipinde yerleşim
@@ -279,7 +301,7 @@ gereğinden geniş duruyordu. Üç kural bunu düzeltir:
    pikselden ~1230 piksele indi.
 2. Eylem sütunu **sağa yapışıktır** (`position: sticky; right: 0`); tablo
    kaydırılsa da posta ve silme düğmeleri her zaman erişilebilir kalır. Aynı
-   kural Basit Mod tablosunda da geçerlidir.
+   kural Temel Kip tablosunda da geçerlidir.
 3. Kapsayıcı daraldığında sıra numarası sütunu düşer ve hücre boşluğu azalır.
    Ölçüt **kapsayıcı sorgusudur** (`@container`), ortam sorgusu değil: `zoom`
    pencere boyutunu değiştirmediği için `@media` bu daralmayı göremez.
@@ -359,17 +381,17 @@ Proje, personel, iş dağılım düğümü ve öncül görev gibi binlerce kayda
 
 Yeni bir uzun liste eklenirken ham `<select>` kullanılmamalıdır. Ham `<select>` yalnızca sabit ve kısa numaralandırmalar (ilişki türü, gecikme birimi, ay/yıl) için uygundur.
 
-## Basit Modda serbest proje tanımlama
+## Temel Kipte serbest proje tanımlama
 
 Kurumsal proje kataloğu binlerce kayıt içerebildiği ve açılır liste yalnızca ilk N sonucu gösterdiği için **Serbest proje tanımla** seçeneği listenin başına sabitlenir (`withManualProjectOption`). Seçenek yalnızca oturumun `canCreateProjects` yetkisi varsa eklenir.
 
 Serbest proje tanımı ekranından kurumsal listeye **Kurumsal proje listesine dön** düğmesiyle geri dönülür.
 
-Basit Modda proje oluşturmak etkin çalışma alanını **değiştirmez** (`addProject(input, { focusWorkspace: false })`). Çalışma alanı değiştiğinde uygulama kabuğu içerik alanını yeniden monte ettiği için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu ne de hatayı görebiliyordu.
+Temel Kipte proje oluşturmak etkin çalışma alanını **değiştirmez** (`addProject(input, { focusWorkspace: false })`). Çalışma alanı değiştiğinde uygulama kabuğu içerik alanını yeniden monte ettiği için hızlı görev formu kayıt tamamlanmadan sıfırlanıyor, kullanıcı ne sonucu ne de hatayı görebiliyordu.
 
 ### Görev tanımlamadan yalnızca proje oluşturma
 
-Kullanıcı bir projeyi açıp görevleri **sonra** tanımlamak isteyebilir. Bu nedenle Basit Modda, hızlı görev formundan bağımsız bir **Yeni proje** düğmesi bulunur; düğme Gelişmiş Moddaki `ProjectCreateDialog` penceresini açar ve yalnızca projeyi (ve kök iş dağılım düğümünü) oluşturur. Oluşturulan proje form üzerindeki proje seçiminde etkin hâle gelir, çalışma alanı değişmez ve hiçbir görev kaydı üretilmez. Düğme oturumun `canCreateProjects` yetkisi yoksa devre dışıdır.
+Kullanıcı bir projeyi açıp görevleri **sonra** tanımlamak isteyebilir. Bu nedenle Temel Kipte, hızlı görev formundan bağımsız bir **Yeni proje** düğmesi bulunur; düğme Kapsamlı Kipteki `ProjectCreateDialog` penceresini açar ve yalnızca projeyi (ve kök iş dağılım düğümünü) oluşturur. Oluşturulan proje form üzerindeki proje seçiminde etkin hâle gelir, çalışma alanı değişmez ve hiçbir görev kaydı üretilmez. Düğme oturumun `canCreateProjects` yetkisi yoksa devre dışıdır.
 
 Pencere, hızlı görev formunun **dışında** render edilir: iç içe `<form>` öğeleri geçersiz HTML'dir ve tarayıcı iç formu yok sayar.
 
@@ -383,13 +405,13 @@ Her seçim yapılabilen yüzeyin geri dönüş yolu bulunmalıdır:
 | --- | --- |
 | Kenar çubuğu · Aktif çalışma alanı | Açılır listedeki **Portföye dön (tüm projeler)** satırı ve seçicinin altındaki **Portföye dön** düğmesi |
 | Proje Yapısı sayfası | Sekme çubuğundaki **Proje listesi** düğmesi (proje seçili olduğunda görünür) |
-| Basit Mod · Serbest proje tanımı | **Kurumsal proje listesine dön** düğmesi |
+| Temel Kip · Serbest proje tanımı | **Kurumsal proje listesine dön** düğmesi |
 
-## Veri modu anahtarı ve kaydetme bildirimi
+## Veri kipi anahtarı ve kaydetme bildirimi
 
-Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı **Ayarlar** sayfasındaki *Veri kaynağı* kartında yaşar (`DataModeIndicator variant="settings"`). Kenar çubuğu ve veri sınırı ekranı bu veri kaynağı anahtarını göstermez; kenar çubuğu çalışma alanı, gezinme, kullanıcı bilgisi ve tema/kullanım modu/oturum araçlarını taşır.
+Sağ alt köşe yalnızca **kaydetme bildirimine** (`.persistence-status`) aittir. Demo/Gerçek Sistem anahtarı **Ayarlar** sayfasındaki *Veri kaynağı* kartında yaşar (`DataModeIndicator variant="settings"`). Kenar çubuğu ve veri sınırı ekranı bu veri kaynağı anahtarını göstermez; kenar çubuğu çalışma alanı, gezinme, kullanıcı bilgisi ve tema/kullanım kipi/oturum araçlarını taşır.
 
-Ayarlar sayfasına yalnızca uygulama kabuğu üzerinden ulaşıldığı için **ilk** veri yüklemesi başarısız olduğunda hata ekranı ayrıca bir **Demo moduna geç** çıkışı sunar (`DemoModeEscape`). Bu tek düğme olmadan Gerçek Sistem erişilemediğinde uygulama tamamen kilitlenirdi.
+Ayarlar sayfasına yalnızca uygulama kabuğu üzerinden ulaşıldığı için **ilk** veri yüklemesi başarısız olduğunda hata ekranı ayrıca bir **Demo kipine geç** çıkışı sunar (`DemoModeEscape`). Bu tek düğme olmadan Gerçek Sistem erişilemediğinde uygulama tamamen kilitlenirdi.
 
 ## Uygulama kabuğu yeniden yüklemede sökülmez
 
@@ -491,7 +513,7 @@ Ayarlar sayfasındaki vurgu rengi kataloğu Türkçedir. `Amber` yerine proje re
 
 ## Kurumsal iş dağılım ağacı salt okunurdur
 
-Gerçek Sistem modunda kurumsal projelerin İş Dağılım Ağacı sekmesi düzenleme eylemlerini (Alt ekle / Ad / Taşı / Sil) hiç göstermez, satırlar sürüklenemez ve yapının CN43N kaynağından beslendiğini açıklayan bir bilgi kartı sunar. Satırlarda kaynaktan gelen seviye, PYP kodu, eleman türü ve durum bilgisi gösterilir. Görevleri bu düğümlere atamak ve düğümler arasında taşımak yine mümkündür; görev-WBS bağı MERGEN Rota verisidir. Demo modunda kurumsal kaynak bulunmadığı için örnek projelerin ağacı düzenlenebilir kalır.
+Gerçek Sistem kipinde kurumsal projelerin İş Dağılım Ağacı sekmesi düzenleme eylemlerini (Alt ekle / Ad / Taşı / Sil) hiç göstermez, satırlar sürüklenemez ve yapının CN43N kaynağından beslendiğini açıklayan bir bilgi kartı sunar. Satırlarda kaynaktan gelen seviye, PYP kodu, eleman türü ve durum bilgisi gösterilir. Görevleri bu düğümlere atamak ve düğümler arasında taşımak yine mümkündür; görev-WBS bağı MERGEN Rota verisidir. Demo kipinde kurumsal kaynak bulunmadığı için örnek projelerin ağacı düzenlenebilir kalır.
 
 Kaydetme bildirimi artık sabit "Kaydetme hatası" metni yerine sunucunun gerçek iletisini, hata kodunu ve varsa alan/yol bilgisini gösterir. Sürüm/eşzamanlılık hatalarında (`CONFLICT`, `UPSERT_CREATE_COLLISION`, `UPSERT_TARGET_MISSING`) **Verileri yeniden yükle** eylemi sunulur.
 
@@ -500,7 +522,7 @@ Kaydetme bildirimi artık sabit "Kaydetme hatası" metni yerine sunucunun gerçe
 
 ### React Hook bağımlılık uyarısı
 
-Önceki sürümde `AppShell.jsx` içindeki Basit Mod `useEffect` bağımlılık listesi bütün `workspace` nesnesini dolaylı olarak kullanıyordu. Bu nedenle ESLint şu uyarıyı üretebiliyordu:
+Önceki sürümde `AppShell.jsx` içindeki Temel Kip `useEffect` bağımlılık listesi bütün `workspace` nesnesini dolaylı olarak kullanıyordu. Bu nedenle ESLint şu uyarıyı üretebiliyordu:
 
 ```text
 React Hook useEffect has a missing dependency: 'workspace'.
@@ -534,4 +556,4 @@ Kurum içi npm registry/proxy yapılandırması kullanılıyorsa ayarı silmeden
 
 ## Stil sahipliği
 
-Basit Mod arayüz stilleri `src/app/styles/simple-mode.css` içinde sahiplenilir. Üst çubuk `shell.css`, Özet/Dashboard `dashboard.css` tarafından yönetilir. Yerel bir görsel sorun için yeni bir global `fixes` veya `polish` katmanı eklenmemelidir; ilgili yetkili stil sahibi düzeltilmelidir. Ayrıntılar için `UI-STYLING-ARCHITECTURE.md` dosyasına bakın.
+Temel Kip arayüz stilleri `src/app/styles/simple-mode.css` içinde sahiplenilir. Üst çubuk `shell.css`, Özet/Dashboard `dashboard.css` tarafından yönetilir. Yerel bir görsel sorun için yeni bir global `fixes` veya `polish` katmanı eklenmemelidir; ilgili yetkili stil sahibi düzeltilmelidir. Ayrıntılar için `UI-STYLING-ARCHITECTURE.md` dosyasına bakın.

@@ -4,7 +4,7 @@ import { Icons } from '../../components/icons';
 
 const SECTIONS = [
   { id: 'summary', label: 'Başlangıç', icon: 'Dashboard' },
-  { id: 'modes', label: 'Çalışma Modları', icon: 'Sparkle' },
+  { id: 'modes', label: 'Çalışma Kipleri', icon: 'Sparkle' },
   { id: 'ozet', label: 'Özet', icon: 'Dashboard' },
   { id: 'veri', label: 'Görevler', icon: 'Table' },
   { id: 'wbs', label: 'Proje Yapısı', icon: 'Layers' },
@@ -34,8 +34,8 @@ const CONTENT = {
   },
   takvim: {
     title: 'Takvim',
-    intro: 'Görevleri aylık takvim üzerinde görsel olarak izlemek için kullanılır. Basit Modda Takvim varsayılan sekmedir; Hızlı Görev Tanımı ayrı bir sekmede açılır. Hafta sonları ve resmi tatiller çalışma takvimine göre ayırt edilir.',
-    points: ['Basit Modda önce Takvim görünür; yeni kayıt için Hızlı Görev Tanımı sekmesine geçin.', 'Sorumluları ad veya personel numarasıyla arayın ve bir ya da daha çok kişiyi seçin.', 'Ay ve yıl seçerek dönemler arasında ilerleyin.', 'Görev kartına tıklayarak ayrıntı panelini açın.', 'Planlama yaparken çalışma günü dışı uyarılarını dikkate alın.']
+    intro: 'Görevleri aylık takvim üzerinde görsel olarak izlemek için kullanılır. Temel Kipte Takvim varsayılan sekmedir; Hızlı Görev Tanımı ayrı bir sekmede açılır. Hafta sonları ve resmi tatiller çalışma takvimine göre ayırt edilir.',
+    points: ['Temel Kipte önce Takvim görünür; yeni kayıt için Hızlı Görev Tanımı sekmesine geçin.', 'Sorumluları ad veya personel numarasıyla arayın ve bir ya da daha çok kişiyi seçin.', 'Ay ve yıl seçerek dönemler arasında ilerleyin.', 'Görev kartına tıklayarak ayrıntı panelini açın.', 'Planlama yaparken çalışma günü dışı uyarılarını dikkate alın.']
   },
   gantt: {
     title: 'Gantt',
@@ -59,8 +59,8 @@ const CONTENT = {
   },
   ayarlar: {
     title: 'Ayarlar',
-    intro: 'Basit / Gelişmiş Mod seçimi ile tema, vurgu rengi, yoğunluk, yazı boyutu ve hareket tercihlerini yönetir. Bu sayfa proje seçiminden bağımsızdır.',
-    points: ['Çalışma Modu kartlarından Basit veya Gelişmiş Modu seçin.', 'Mod değiştirmek veriyi dönüştürmez veya silmez; aynı kayıtlar kullanılmaya devam eder.', 'Yazı boyutunu büyüttüğünüzde kenar çubuğu alt alanı görünür kalır.', 'Hareketi azalt seçeneği açıkken grafik ve arayüz animasyonları sınırlandırılır.']
+    intro: 'Temel / Kapsamlı Kip seçimi ile tema, vurgu rengi, yoğunluk, yazı boyutu ve hareket tercihlerini yönetir. Bu sayfa proje seçiminden bağımsızdır.',
+    points: ['Çalışma Kipi kartlarından Temel veya Kapsamlı Kipi seçin.', 'Kip değiştirmek veriyi dönüştürmez veya silmez; aynı kayıtlar kullanılmaya devam eder.', 'Yazı boyutunu büyüttüğünüzde kenar çubuğu alt alanı görünür kalır.', 'Hareketi azalt seçeneği açıkken grafik ve arayüz animasyonları sınırlandırılır.']
   }
 };
 
@@ -86,11 +86,11 @@ function ModeGuide() {
       <section className="help-hero-card">
         <div className="help-kicker">İki deneyim · tek veri altyapısı</div>
         <h2>İhtiyacınıza göre başlayın, istediğiniz zaman derinleşin</h2>
-        <p>Basit Mod ve Gelişmiş Mod ayrı uygulamalar değildir. İkisi de aynı proje, görev ve kişi kayıtlarını kullanır. Basit Modda girilen bir kayıt daha sonra Gelişmiş Modda WBS, plan tarihleri, iş gücü, ilişkiler ve diğer alanlarla zenginleştirilebilir.</p>
+        <p>Temel Kip ve Kapsamlı Kip ayrı uygulamalar değildir. İkisi de aynı proje, görev ve kişi kayıtlarını kullanır. Temel Kipte girilen bir kayıt daha sonra Kapsamlı Kipte WBS, plan tarihleri, iş gücü, ilişkiler ve diğer alanlarla zenginleştirilebilir.</p>
       </section>
       <div className="help-mode-grid">
         <section className="card help-mode-card simple">
-          <div className="help-mode-card-head"><Icons.Calendar size={20} /><div><small>Hızlı takip</small><h3>Basit Mod</h3></div></div>
+          <div className="help-mode-card-head"><Icons.Calendar size={20} /><div><small>Hızlı takip</small><h3>Temel Kip</h3></div></div>
           <Flow steps={[
             { title: 'Takvimi izle', text: 'Takvim sayfası varsayılan olarak aylık görünümle açılır.' },
             { title: 'Hızlı tanıma geç', text: 'Yeni kayıt için Hızlı Görev Tanımı sekmesini açın.' },
@@ -99,7 +99,7 @@ function ModeGuide() {
           ]} />
         </section>
         <section className="card help-mode-card advanced">
-          <div className="help-mode-card-head"><Icons.Gantt size={20} /><div><small>Tam proje yönetimi</small><h3>Gelişmiş Mod</h3></div></div>
+          <div className="help-mode-card-head"><Icons.Gantt size={20} /><div><small>Tam görev yönetimi</small><h3>Kapsamlı Kip</h3></div></div>
           <Flow steps={[
             { title: 'Projeyi yapılandır', text: 'Kod, tanımlar, etiket ve WBS yapısını yönetin.' },
             { title: 'Planı ayrıntılandır', text: 'Tarih, süre, iş gücü ve sorumluları tamamlayın.' },
@@ -109,11 +109,11 @@ function ModeGuide() {
         </section>
       </div>
       <section className="card help-section-card">
-        <h3>Modlar arasında geçiş</h3>
+        <h3>Kipler arasında geçiş</h3>
         <div className="help-checks">
           <div><span>1</span><p><strong>Ayarlar</strong> sayfasını açın.</p></div>
-          <div><span>2</span><p>Üstteki çalışma modu kartlarından istediğiniz modu seçin.</p></div>
-          <div><span>3</span><p>Basit Mod seçildiğinde uygulama Takvim odaklı sade görünüme geçer; Gelişmiş Mod seçildiğinde tüm proje yönetimi sayfaları yeniden açılır.</p></div>
+          <div><span>2</span><p>Üstteki çalışma kipi kartlarından istediğiniz kipi seçin.</p></div>
+          <div><span>3</span><p>Temel Kip seçildiğinde uygulama Takvim odaklı sade görünüme geçer; Kapsamlı Kip seçildiğinde tüm görev yönetimi sayfaları yeniden açılır.</p></div>
         </div>
       </section>
     </div>
@@ -126,12 +126,12 @@ function Summary() {
       <section className="help-hero-card">
         <div className="help-kicker">MERGEN Rota · Sürüm 1.0</div>
         <h2>İki çalışma biçimiyle hızlı başlangıç</h2>
-        <p>Yalnızca proje, görev, kısa açıklama, sorumlu ve termin takibi gerekiyorsa Basit Modu; WBS, bağımlılık, kritik yol, Kanban ve raporlama gerekiyorsa Gelişmiş Modu kullanın. Ayarlar sayfasından iki mod arasında veri kaybı olmadan geçiş yapabilirsiniz.</p>
+        <p>Yalnızca proje, görev, kısa açıklama, sorumlu ve termin takibi gerekiyorsa Temel Kipi; WBS, bağımlılık, kritik yol, Kanban ve raporlama gerekiyorsa Kapsamlı Kipi kullanın. Ayarlar sayfasından iki kip arasında veri kaybı olmadan geçiş yapabilirsiniz.</p>
       </section>
       <section className="card help-section-card">
-        <h3>Basit Mod akışı</h3>
+        <h3>Temel Kip akışı</h3>
         <Flow steps={[
-          { title: 'Takvim', text: 'Basit Mod Takvim sayfasında aylık görünümle başlar.' },
+          { title: 'Takvim', text: 'Temel Kip Takvim sayfasında aylık görünümle başlar.' },
           { title: 'Hızlı Görev Tanımı', text: 'Yeni kayıt için ayrı sekmeye geçin.' },
           { title: 'Proje ve görev', text: 'Projeyi belirleyip görevi ve kısa açıklamayı yazın.' },
           { title: 'Sorumlu', text: 'Ad veya personel numarasıyla kişileri arayıp seçin.' },
@@ -139,7 +139,7 @@ function Summary() {
         ]} />
       </section>
       <section className="card help-section-card">
-        <h3>Gelişmiş Mod akışı</h3>
+        <h3>Kapsamlı Kip akışı</h3>
         <Flow steps={[
           { title: 'Proje oluştur', text: 'Proje Yapısı sayfasında kod ve temel bilgileri girin.' },
           { title: 'Etiket ve WBS', text: 'Etiketleri tanımlayın, iş dağılım ağacını kurun.' },
@@ -149,7 +149,7 @@ function Summary() {
         ]} />
       </section>
       <section className="help-tip-grid">
-        <div><Icons.Sparkle size={18} /><strong>Tek veri altyapısı</strong><span>Basit Mod kayıtları Gelişmiş Modda yeniden kullanılabilir ve zenginleştirilebilir.</span></div>
+        <div><Icons.Sparkle size={18} /><strong>Tek veri altyapısı</strong><span>Temel Kip kayıtları Kapsamlı Kipte yeniden kullanılabilir ve zenginleştirilebilir.</span></div>
         <div><Icons.Calendar size={18} /><strong>Hızlı takip</strong><span>Takvim varsayılan görünüm, hızlı görev tanımı ise aynı sayfadaki ayrı sekmedir.</span></div>
         <div><Icons.Gantt size={18} /><strong>Derinleşen plan</strong><span>Gerektiğinde WBS, bağımlılık ve kritik yol araçlarına geçin.</span></div>
       </section>

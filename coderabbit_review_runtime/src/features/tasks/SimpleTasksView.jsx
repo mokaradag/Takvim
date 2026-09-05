@@ -12,15 +12,15 @@ import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useT
 import { SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
 
 /**
- * Basit Mod · Görevler.
+ * Temel Kip · Görevler.
  *
- * Gelişmiş Modun tam tablosu BİLİNÇLİ OLARAK gösterilmez. Basit Mod kullanıcısı
+ * Kapsamlı Kipin tam tablosu BİLİNÇLİ OLARAK gösterilmez. Temel Kip kullanıcısı
  * görevini "Hızlı Görev Tanımı" ile açar: proje, görev, kısa açıklama, sorumlu,
  * termin ve öncelik. Tablo aynı alanları listeler; ilerleme yüzdesi, efor
  * saatleri, planlanan başlangıç/bitiş, dağılım ağacı ve bağımlılıklar gibi
- * Basit Modda hiç toplanmayan sütunlar dışarıda kalır (bkz. simpleTaskColumns.js).
+ * Temel Kipte hiç toplanmayan sütunlar dışarıda kalır (bkz. simpleTaskColumns.js).
  *
- * Gelişmiş Mod tablosu (TasksView) değişmeden durur.
+ * Kapsamlı Kip tablosu (TasksView) değişmeden durur.
  */
 export function SimpleTasksView() {
   const tasks = useTasks();
@@ -131,13 +131,13 @@ export function SimpleTasksView() {
           </select>
         </label>
 
-        <InfoButton title="Basit Mod Görevler" icon={<Icons.Table size={12} />}>
+        <InfoButton title="Temel Kip Görevler" icon={<Icons.Table size={12} />}>
           <p>Hızlı Görev Tanımı ile girdiğiniz bilgiler burada listelenir.</p>
           <div className="rt-sep" />
           <div className="rt-row"><Icons.Edit size={12} className="rt-ico" /><span>Satıra tıklayın: görevi düzenleyin</span></div>
           <div className="rt-row"><Icons.Mail size={12} className="rt-ico" /><span>Zarf simgesi: sorumlulara hatırlatma e-postası gönderir</span></div>
           <div className="rt-sep" />
-          <p>İlerleme yüzdesi, efor saatleri ve planlama sütunları Gelişmiş Modda yer alır.</p>
+          <p>İlerleme yüzdesi, efor saatleri ve planlama sütunları Kapsamlı Kipte yer alır.</p>
         </InfoButton>
 
         <span className="muted tabular simple-tasks-count">{visible.length} / {tasks.length} görev</span>

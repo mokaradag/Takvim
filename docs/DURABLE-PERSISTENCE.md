@@ -119,7 +119,7 @@ The 60-second browser data refresh does not replace or shorten this catalog poli
 
 ## Demo versus Actual mode
 
-Demo mode remains non-durable and uses the existing rich sample dataset. It never calls SQL Server or the Actual API. Actual mode never imports or merges Demo seed records. Repository switching remounts the application state boundary; a persistent `DEMO` indicator prevents sample data from being mistaken for live data. Basit/Gelişmiş is a separate usage-mode choice.
+Demo mode remains non-durable and uses the existing rich sample dataset. It never calls SQL Server or the Actual API. Actual mode never imports or merges Demo seed records. Repository switching remounts the application state boundary; a persistent `DEMO` indicator prevents sample data from being mistaken for live data. Temel/Kapsamlı is a separate usage-mode choice.
 
 Actual-mode failures do not silently fall back to Demo. The user sees the Actual-system error and may deliberately switch back to Demo.
 

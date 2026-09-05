@@ -13,7 +13,7 @@ export const DEFAULT_WORKING_DAYS = Object.freeze([1, 2, 3, 4, 5]);
  * (Ramazan, Kurban) ay takvimine bağlıdır ve resmî ilanla kesinleşir; bu yüzden
  * buraya TAHMİN yazılmaz, kurulumun kendi takvim tanımından okunur
  * (`MR_CalendarHolidays`). Kurumsal kurulumlarda proje takvimi zaten
- * veritabanından gelir; bu liste yalnızca Demo Modu ve yedek takvim içindir.
+ * veritabanından gelir; bu liste yalnızca Demo Kipi ve yedek takvim içindir.
  */
 export const TURKEY_HOLIDAYS_2026 = Object.freeze([
   { date: '2026-01-01', name: 'Yılbaşı', short: 'Yılbaşı' },

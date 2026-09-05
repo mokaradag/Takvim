@@ -203,7 +203,7 @@ test('kurumsal projede WBS eylemleri istemci ilkesiyle reddedilir', () => {
   assert.equal(corporate.code, 'CORPORATE_WBS_READ_ONLY');
   assert.equal(resolveWbsMutationAccess(state, 'w-manual').ok, true);
 
-  // Demo modunda kurumsal kaynak yoktur: örnek projelerin ağacı denenebilir kalır.
+  // Demo kipinde kurumsal kaynak yoktur: örnek projelerin ağacı denenebilir kalır.
   const demoState = { ...state, session: { dataMode: 'demo' } };
   assert.equal(resolveWbsMutationAccess(demoState, 'w-corp').ok, true);
 });
@@ -268,9 +268,9 @@ test('veri tarihi alanı ilerleme kesim tarihi olarak açıklanır', () => {
   assert.doesNotMatch(validation, /'Proje veri tarihi gereklidir\.'/);
 });
 
-/* ── Basit Mod · yalnızca proje oluşturma ────────────────────── */
+/* ── Temel Kip · yalnızca proje oluşturma ────────────────────── */
 
-test('Basit Mod görev tanımlamadan proje oluşturma yolu sunar', () => {
+test('Temel Kip görev tanımlamadan proje oluşturma yolu sunar', () => {
   const panel = read('src/features/simple/SimpleModePanel.jsx');
   assert.match(panel, /const createProjectOnly = async \(input\) => \{/);
   assert.match(panel, /addProject\(input, \{ focusWorkspace: false \}\)/);
@@ -306,7 +306,7 @@ test('veri sınırı perdesi yalnızca ilk yüklemede gösterilir', () => {
   // Anahtar Ayarlar'da yaşadığı için ilk yükleme hatasında Demo çıkışı sunulmalıdır;
   // aksi hâlde Gerçek Sistem erişilemediğinde uygulama tamamen kilitlenir.
   assert.match(boundary, /function DemoModeEscape\(\)/);
-  assert.match(boundary, /Demo moduna geç/);
+  assert.match(boundary, /Demo kipine geç/);
   const status = read('src/components/shell/PersistenceStatus.jsx');
   // Başarısız tazeleme, kabuk açık kalırken bildirim alanında görünür.
   assert.match(status, /const refreshFailed = dataStatus === 'error' && hasLoadedOnce;/);

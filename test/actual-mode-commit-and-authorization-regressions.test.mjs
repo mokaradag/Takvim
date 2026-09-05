@@ -95,8 +95,8 @@ test('data mode switch lives on the settings page and never in the sidebar', () 
 
   assert.doesNotMatch(boundary, /DataModeIndicator/);
   // Ayarlar'a yalnızca kabuk üzerinden ulaşıldığı için ilk yükleme hatasında
-  // Demo moduna dönüş yolu korunur.
-  assert.match(boundary, /Demo moduna geç/);
+  // Demo kipine dönüş yolu korunur.
+  assert.match(boundary, /Demo kipine geç/);
   assert.doesNotMatch(shell, /DataModeIndicator/);
   assert.match(settings, /<DataModeIndicator variant="settings" \/>/);
   assert.ok(

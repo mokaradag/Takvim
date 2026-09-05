@@ -201,7 +201,7 @@ export function ReminderSettingsView() {
   if (!actualMode) {
     return (
       <div className="card muted reminder-settings-page">
-        Hatırlatma yapılandırması yalnızca Gerçek Sistem verisiyle çalışır. Demo modunda e-posta gönderilmez.
+        Hatırlatma yapılandırması yalnızca Gerçek Sistem verisiyle çalışır. Demo kipinde e-posta gönderilmez.
       </div>
     );
   }

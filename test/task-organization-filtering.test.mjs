@@ -229,15 +229,17 @@ test('üst seçim değişikliği geçersiz alt seçimleri temizler', () => {
   assert.deepEqual(applyOrgSelection(unitA, 'department', ''), { directorate: 'Direktörlük A', department: '', unit: '' });
 });
 
-test('Basit ve Gelişmiş görünüm sağlayıcının aynı kurumsal kapsamını davranışsal olarak uygular', async () => {
-  const [contextModule, advancedModule, simpleModule] = await Promise.all([
+test('Görevler ve Kanban aynı kurumsal kapsamı davranışsal olarak uygular', async () => {
+  const [contextModule, advancedModule, simpleModule, kanbanModule] = await Promise.all([
     import('../src/features/tasks/TaskOrganizationFilterContext.jsx'),
     import('../src/features/tasks/TasksView.jsx'),
-    import('../src/features/tasks/SimpleTasksView.jsx')
+    import('../src/features/tasks/SimpleTasksView.jsx'),
+    import('../src/features/kanban/KanbanView.jsx')
   ]);
   const { TaskOrganizationFilterProvider } = contextModule;
   const { TasksView } = advancedModule;
   const { SimpleTasksView } = simpleModule;
+  const { KanbanView } = kanbanModule;
   globalThis[TEST_APP_STATE_KEY] = {
     tasks: TASKS,
     projects: PROJECTS,
@@ -262,7 +264,8 @@ test('Basit ve Gelişmiş görünüm sağlayıcının aynı kurumsal kapsamını
       TaskOrganizationFilterProvider,
       { initialSelection },
       createElement('section', { 'data-mode': 'advanced' }, createElement(TasksView)),
-      createElement('section', { 'data-mode': 'simple' }, createElement(SimpleTasksView, { onNewTask() {} }))
+      createElement('section', { 'data-mode': 'simple' }, createElement(SimpleTasksView, { onNewTask() {} })),
+      createElement('section', { 'data-mode': 'kanban' }, createElement(KanbanView))
     )
   );
   const section = (markup, mode) => {
@@ -285,11 +288,11 @@ test('Basit ve Gelişmiş görünüm sağlayıcının aynı kurumsal kapsamını
     const unfilteredMarkup = renderViews(createEmptyOrgFilter());
     const filteredMarkup = renderViews(directorateA);
     const expectedIds = ['t-a', 't-multi', 't-p2', 't-legacy'];
-    for (const mode of ['advanced', 'simple']) {
+    for (const mode of ['advanced', 'simple', 'kanban']) {
       const unfiltered = section(unfilteredMarkup, mode);
       const filtered = section(filteredMarkup, mode);
       assert.equal(taskIds(unfiltered).length, TASKS.length, mode);
-      assert.deepEqual(taskIds(filtered), expectedIds, mode);
+      assert.deepEqual(taskIds(filtered).sort(), [...expectedIds].sort(), mode);
       assert.match(filtered, />4 \/ 8 görev</, mode);
     }
   } finally {
@@ -303,6 +306,43 @@ test('filtreleri temizleme iki görünümde kurumsal seçimi de sıfırlar', () 
     const source = read(path);
     assert.match(source, /onOrganizationFilterChange\(createEmptyOrgFilter\(\)\)/, path);
     assert.match(source, /Filtreleri temizle/, path);
+  }
+});
+
+test('görev künyesi oluşturma saatini korur; Gantt görev kapsamlı fotoğrafları adlarıyla sunar', async () => {
+  const { TaskCreatorByline } = await import('../src/features/task-detail/TaskCreatorByline.jsx');
+  const { GanttAssignees } = await import('../src/features/gantt/GanttAssignees.jsx');
+  const previousTimezone = process.env.TZ;
+  const previousPhotoBase = process.env.NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL;
+  process.env.TZ = 'UTC';
+  process.env.NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL = 'https://photos.example.test';
+  try {
+    const byline = renderToStaticMarkup(createElement(TaskCreatorByline, {
+      task: { createdBySicil: '1001', createdByName: 'Ayşe Ak', createdAt: '2026-09-05T12:30:00+03:00' }
+    }));
+    assert.match(byline, /Görevi tanımlayan/);
+    assert.match(byline, /dateTime="2026-09-05T09:30:00.000Z"/);
+    assert.match(byline, /09:30/);
+    assert.match(byline, /photos\.example\.test\/1001\.jpg/);
+    const invalid = renderToStaticMarkup(createElement(TaskCreatorByline, {
+      task: { createdByName: 'Ayşe Ak', createdAt: 'geçersiz' }
+    }));
+    assert.doesNotMatch(invalid, /<time/);
+    const assignees = renderToStaticMarkup(createElement(GanttAssignees, {
+      task: { assigneeAvatarIdentities: [
+        { name: 'Ayşe Ak', employeeNo: '1001' },
+        { name: 'Deniz Demir', employeeNo: '1002' }
+      ] }
+    }));
+    assert.match(assignees, /photos\.example\.test\/1001\.jpg/);
+    assert.match(assignees, /photos\.example\.test\/1002\.jpg/);
+    assert.match(assignees, /<span>Ayşe Ak<\/span>/);
+    assert.match(assignees, /<span>Deniz Demir<\/span>/);
+  } finally {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+    if (previousPhotoBase === undefined) delete process.env.NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL;
+    else process.env.NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL = previousPhotoBase;
   }
 });
 

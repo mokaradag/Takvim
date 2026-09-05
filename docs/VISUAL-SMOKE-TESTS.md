@@ -17,10 +17,10 @@ Record browser, OS, build commit and viewport dimensions with the result.
 ## Startup and modes
 
 - Initial mode chooser appears without the underlying application shell bleeding through.
-- Basit Mod opens successfully.
-- Basit Mod Takvim opens on the **Takvim** tab; **Hızlı Görev Tanımı** remains a separate tab.
-- Basit Mod **Yeni proje** button creates a project without any task and selects it in the project field.
-- Gelişmiş Mod opens successfully and mode switching does not alter project/task data.
+- Temel Kip opens successfully.
+- Temel Kip Takvim opens on the **Takvim** tab; **Hızlı Görev Tanımı** remains a separate tab.
+- Temel Kip **Yeni proje** button creates a project without any task and selects it in the project field.
+- Kapsamlı Kip opens successfully and mode switching does not alter project/task data.
 
 ## Shell, workspace and topbar
 
@@ -33,10 +33,8 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - **Marka amblemi** preference hides both sidebar and topbar emblems.
 - Decorative emblem does not intercept pointer events.
 - `Dışa aktar` opens below the topbar without clipping and remains keyboard reachable.
-- Quick actions sit at the end of the topbar: the **Basit / Gelişmiş** pill
-  reflects and switches the active mode, the theme switch slides its knob over
-  the selected side, and the sign-out button appears only in an authenticated
-  Keycloak session. At 1100 px and below the mode labels collapse to icons.
+- Theme, the Temel Kip/Kapsamlı Kip segmented selector and sign-out sit in
+  the sidebar footer; they are not duplicated in the topbar.
 - Focus indicators are visible on keyboard-reachable controls.
 
 ## Dashboard / Özet
@@ -105,7 +103,7 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Monthly calendar renders in both themes.
 - Date-filter/day-detail popovers layer correctly.
 - Weekend/holiday presentation remains readable.
-- Basit Mod quick-entry tasks appear in the existing calendar flow.
+- Temel Kip quick-entry tasks appear in the existing calendar flow.
 
 ## Project structure (Proje Yapısı)
 
@@ -147,7 +145,7 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - While the first snapshot loads, the card is centered horizontally and vertically — not clipped into a narrow left column.
 - Brand row, title, description, progress sweep and step chips all render in both themes.
 - `MERGEN Rota` reads as the card's identity (logo plus a full-size wordmark), not
-  as a small caption. The same holds for the Veri Modu and Nasıl çalışmak
+  as a small caption. The same holds for the Veri Kipi and Nasıl çalışmak
   istersiniz? dialogs.
 - Step chips highlight in sequence; with `Hareketi azalt` on, they stop animating.
 - The load-failure state shows `Yeniden Dene` and, outside Demo mode, the Demo escape button.
@@ -176,19 +174,19 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - A long full name wraps onto a second line rather than being truncated to
   `MEHMET O…`.
 - The sidebar footer has no `Kullanım rehberi` shortcut, while the Yardım navigation item still opens the help page.
-- The footer orders theme, the Basit/Gelişmiş switch and logout in one control row; none of those controls is duplicated in the topbar.
-- The sidebar starts pinned and expanded. Collapse resizes the main content to the 72 px rail; unpinning makes the rail expand on hover/focus, and the choice survives reload.
+- The footer orders theme, the Temel Kip/Kapsamlı Kip segmented selector and logout in one control row; none of those controls is duplicated in the topbar.
+- The sidebar starts pinned and expanded. Unpinning resizes the main content to a 72 px rail. Hover and keyboard navigation expand it. Click a page, then move outside the displayed sidebar: it collapses despite the clicked button retaining focus. Tab navigation remains usable; pinning and reload preserve the preference.
 - The footer version line reads only `MERGEN Rota · Sürüm 1.0`; the mode is shown by the switch itself.
 - The lower-left rotating heptagon exposes a visibly larger quadrant without competing with the footer controls.
 - The theme button still works and, in Gerçek Sistem, a compact logout button is present; logging out returns to an unauthenticated state.
 - Avatars render photographs across Görevler, Takvim, Kanban, Ekip, task drawers, dashboard, Gantt, reports, project workspace and simple mode, with initials as the fallback.
-- A direct assignee sees the task creator's avatar, full name and date under the explicit **Görevi tanımlayan** label; the same task opened by that creator shows the same identity.
-- In Gelişmiş Mod, clicking **Yeni Görev** opens an unsaved drawer. Closing it creates nothing; only **Kaydet** persists the Task.
+- A direct assignee sees the task creator's avatar, full name and creation date/time under the explicit **Görevi tanımlayan** label; the same task opened by that creator shows the same identity.
+- In Kapsamlı Kip, clicking **Yeni Görev** opens an unsaved drawer. Closing it creates nothing; only **Kaydet** persists the Task.
 
-## Basit Mod
+## Temel Kip
 
 - The sidebar exposes Görevler, Takvim, Gantt, Kullanım Rehberi and Ayarlar.
-- Gantt renders the portfolio timeline, identical to Gelişmiş Mod's portfolio Gantt.
+- Gantt renders the portfolio timeline, identical to Kapsamlı Kip's portfolio Gantt.
 - Görevler shows the simplified table only: Proje, Görev, Kısa açıklama,
   Sorumlular, Öncelik, Durum, Termin. No progress bar, effort/hours, start date,
   baseline, dependency or WBS column appears anywhere on the page.
@@ -197,8 +195,8 @@ Record browser, OS, build commit and viewport dimensions with the result.
 - Clicking a row opens the simplified task panel, which edits only those same
   fields and saves without touching advanced planning data.
 - Öncelik appears in Hızlı Görev Tanımı, in the table, in the panel and in the
-  filter — with the same four labels and badge colours as Gelişmiş Mod.
-- Switching to Gelişmiş Mod still shows the full Görevler table unchanged.
+  filter — with the same four labels and badge colours as Kapsamlı Kip.
+- Switching to Kapsamlı Kip still shows the full Görevler table unchanged.
 
 ## Görev hatırlatma
 
@@ -266,3 +264,21 @@ Notes / screenshots:
 ```
 
 A manual smoke pass complements automated tests; it does not replace them. Any visual regression should be fixed in the authoritative style owner documented in `UI-STYLING-ARCHITECTURE.md`, not by adding a new global override layer.
+
+## Görev arayüzü doğrulaması
+
+- Yeni ve mevcut görev pencerelerinde künye çerçevesizdir; ad ile oluşturma
+  tarihi/saat okunur. Kaydet simgesi ve kayıt sırasında bekleme göstergesi
+  her iki kipte görünür. Dar ekranda uzun ad ve tarih taşmaz.
+- Kenar çubuğunda fazladan ok, Aktif çalışma alanı ve Çalışma alanı başlıkları
+  bulunmaz; proje seçicisi marka bloğunun hemen altındadır.
+- Temel Kip ve Kapsamlı Kip seçimi mevcut tercihi korur; Ayarlar, karşılama,
+  yardım ve veri seçimi ekranları kip ve görev yönetimi ifadelerini kullanır.
+- Kanban aramasını bir proje kodu ve Türkçe sorumlu adıyla deneyin. Direktörlük,
+  müdürlük ve birim seçimlerini birlikte uygulayın; kolon sayıları, boş sonuç,
+  temizleme ve filtreli sürükleme doğru çalışır. Görevler sayfasına geçince
+  kurumsal seçim korunur; dar ekran ortak kurumsal filtre menüsünü kullanır.
+- Gantt görev ve kilometre taşı ipuçlarında tüm sorumluların fotoğraf/ad
+  çiftleri görünür. Aynı davranışı WBS görünümünde doğrulayın. Sorumluya göre
+  gruplamada avatarlar doğru Sicile aittir; aynı adlı kişiler birleşmez.
+  Fotoğraf bulunmayan kişi baş harflerle gösterilir.

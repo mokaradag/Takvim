@@ -110,7 +110,7 @@ test('uzun Notlar metni yalnızca yerel taslak olur ve kaydı bitmeden panel kap
   assert.equal(closeCalls, 1);
 });
 
-test('Basit Mod kısa açıklama taslağı veri yenilenirken korunur', () => {
+test('Temel Kip kısa açıklama taslağı veri yenilenirken korunur', () => {
   const reconciled = reconcileTaskDraft(
     { id: 'task-1', task: 'Sunucu başlığı', keyword: 'Sunucu etiketi', status: 'done' },
     { id: 'task-1', task: 'Eski başlık', keyword: 'Yazılmakta olan etiket', status: 'todo' },
@@ -167,7 +167,7 @@ test('yeni görev açık seçim olmadan etiketsiz ve yapay kalan süresiz başla
   assert.doesNotMatch(drawer, /Kalan süre/);
 });
 
-test('Basit Mod boş etiketi zorunlu tutmaz ve göreve açıkça boş değer yollar', () => {
+test('Temel Kip boş etiketi zorunlu tutmaz ve göreve açıkça boş değer yollar', () => {
   const panel = read('src/features/simple/SimpleModePanel.jsx');
   assert.match(panel, /plannedStart: dueDate/);
   assert.match(panel, /plannedFinish: dueDate/);

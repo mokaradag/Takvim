@@ -44,10 +44,10 @@ import { ProjectExportMenu } from './ProjectExportMenu';
 import { SidebarUserPanel } from './SidebarUserPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 
-// Basit Mod, Gelişmiş Mod ile aynı Gantt görünümünü paylaşır: hızlı görev
+// Temel Kip, Kapsamlı Kip ile aynı Gantt görünümünü paylaşır: hızlı görev
 // tanımı yapan kullanıcı da planı zaman çizelgesinde görebilmelidir.
 //
-// Görevler sayfası da Basit Modda bulunur; ancak Gelişmiş Modun tam tablosu
+// Görevler sayfası da Temel Kipte bulunur; ancak Kapsamlı Kipin tam tablosu
 // DEĞİL, Hızlı Görev Tanımı'yla toplanan alanları listeleyen sade sürümü
 // gösterilir (bkz. features/tasks/SimpleTasksView.jsx).
 const SIMPLE_NAV_IDS = new Set(['veri', 'takvim', 'gantt', 'yardim', 'ayarlar']);
@@ -128,9 +128,9 @@ export default function AppShell() {
   useEffect(() => {
     if (!simpleMode) return;
     if (workspaceMode !== 'portfolio') selectWorkspace(null);
-    // Rol kapılı yönetici sayfaları Basit Mod yönlendirmesinden MUAFTIR:
-    // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Basit
-    // Modda diye ulaşılamaz olmamalıdır.
+    // Rol kapılı yönetici sayfaları Temel Kip yönlendirmesinden MUAFTIR:
+    // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Temel
+    // Kipte diye ulaşılamaz olmamalıdır.
     if (!SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) navigate('takvim');
   }, [simpleMode, view, workspaceMode, selectWorkspace]);
 
@@ -145,9 +145,9 @@ export default function AppShell() {
   }, [simpleMode, view]);
 
   useEffect(() => {
-    // Basit Modda komut paleti RENDER EDİLMEZ: kısayolu yine de yutmak,
+    // Temel Kipte komut paleti RENDER EDİLMEZ: kısayolu yine de yutmak,
     // tarayıcının kendi Ctrl+K davranışını hiçbir karşılık vermeden alıyor ve
-    // `cmdOpen` açık kaldığı için Gelişmiş Moda geçildiğinde palet kendiliğinden
+    // `cmdOpen` açık kaldığı için Kapsamlı Kipe geçildiğinde palet kendiliğinden
     // açılıyordu.
     if (simpleMode) return undefined;
     const onKey = (event) => {
@@ -202,7 +202,7 @@ export default function AppShell() {
   }), [tasks.length, wbs.length, projects.length, people.length, workspaceMode]);
 
   const visibleNavItems = (simpleMode
-    // Yönetici sayfaları Basit Modda da listelenir; aşağıdaki rol süzgeci
+    // Yönetici sayfaları Temel Kipte de listelenir; aşağıdaki rol süzgeci
     // bunları yine yalnızca sistem yöneticisine gösterir.
     ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))
     : NAV_ITEMS
@@ -217,7 +217,7 @@ export default function AppShell() {
       case 'wbs': return <ProjectWorkspaceView key={`wbs:${viewIntent || 'definition'}`} initialTab={viewIntent} />;
       case 'takvim': return simpleMode ? (
         <div className="simple-calendar-workspace">
-          <div className="simple-calendar-tabs seg" role="tablist" aria-label="Basit Mod Takvim görünümü">
+          <div className="simple-calendar-tabs seg" role="tablist" aria-label="Temel Kip Takvim görünümü">
             <button
               type="button"
               role="tab"
@@ -263,7 +263,7 @@ export default function AppShell() {
   const exportVisible = !simpleMode && view !== 'ayarlar' && view !== 'yardim';
 
   // İlk açılış akışlarında ana uygulama hiç render edilmez. Böylece Özet üst çubuğu,
-  // sidebar veya başka bir sayfa parçası karşılama/mod seçim ekranının arkasından görünmez.
+  // sidebar veya başka bir sayfa parçası karşılama/kip seçim ekranının arkasından görünmez.
   if (modePickerOpen) return <ModeChooser onChoose={chooseMode} />;
 
   if (welcomeOpen && !simpleMode) {
@@ -289,7 +289,7 @@ export default function AppShell() {
           <AppLogo size={34} />
           <div className="col" style={{ gap: 0 }}>
             <div className="brand-name"><span>MERGEN</span><span className="brand-accent">Rota</span><span className="brand-dot" /></div>
-            <div className="brand-sub">Proje Yönetimi</div>
+            <div className="brand-sub">Görev Yönetimi</div>
           </div>
         </div>
 
@@ -331,7 +331,7 @@ export default function AppShell() {
           </div>
         ) : (
           <div className="sidebar-simple-mode">
-            <span><Icons.Calendar size={13} /> Basit Mod</span>
+            <span><Icons.Calendar size={13} /> Temel Kip</span>
             <small>Hızlı tanım ve Takvim takibi</small>
           </div>
         )}
@@ -365,14 +365,14 @@ export default function AppShell() {
           })}
         </nav>
 
-        {/* Veri modu anahtarı kenar çubuğunda değil, Ayarlar sayfasında yaşar.
+        {/* Veri kipi anahtarı kenar çubuğunda değil, Ayarlar sayfasında yaşar.
             Kullanıcı bloğu artık sabit örnek kişi değil, doğrulanmış oturumdur. */}
         <div className="sidebar-footer">
           <SidebarUserPanel
             theme={t.theme}
             onToggleTheme={() => setTweak('theme', t.theme === 'light' ? 'dark' : 'light')}
           />
-          <div className="sidebar-version">MERGEN Rota · Sürüm 1.0 · {simpleMode ? 'Basit' : 'Gelişmiş'} Mod</div>
+          <div className="sidebar-version">MERGEN Rota · Sürüm 1.0 · {simpleMode ? 'Basit' : 'Gelişmiş'} Kip</div>
         </div>
       </aside>
 

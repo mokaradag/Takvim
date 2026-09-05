@@ -18,7 +18,7 @@ export function resolveTaskCreatorByline(task, people = [], fallback = null) {
     employeeNo: person?.employeeNo || fallback?.employeeNo || sicil,
     createdAtIso: validDate ? createdAt.toISOString() : null,
     createdAt: validDate
-      ? createdAt.toLocaleDateString('tr-TR', { day: '2-digit', month: 'short', year: 'numeric' })
+      ? createdAt.toLocaleString('tr-TR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
       : null,
     createdAtLong: validDate ? createdAt.toLocaleString('tr-TR') : null
   };
@@ -29,17 +29,12 @@ export function TaskCreatorByline({ task, people = [], fallback = null }) {
   if (!byline) return null;
   return (
     <div className="task-byline" aria-label={`Görevi tanımlayan: ${byline.name}`}>
-      <span className="task-byline-label">Görevi tanımlayan</span>
       <Avatar name={byline.name} personId={byline.sicil} employeeNo={byline.employeeNo} size="sm" />
       <span className="task-byline-text">
+        <span className="task-byline-label">Görevi tanımlayan</span>
         <span className="task-byline-name">{byline.name}</span>
-        {byline.createdAt && (
-          <>
-            <span className="task-byline-sep">·</span>
-            <time dateTime={byline.createdAtIso} title={byline.createdAtLong}>{byline.createdAt}</time>
-          </>
-        )}
       </span>
+      {byline.createdAt && <time className="task-byline-date" dateTime={byline.createdAtIso} title={`Oluşturulma: ${byline.createdAtLong}`}>{byline.createdAt}</time>}
     </div>
   );
 }

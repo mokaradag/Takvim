@@ -268,7 +268,7 @@ function TagEditor({ values, usage, disabled, onChange, onBlockedRemove }) {
       <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.55 }}>
         Etiketler proje düzeyinde kontrollü bir katalog olarak yönetilir: ad, renk ve simge burada belirlenir ve görev listeleri,
         Kanban ile Gantt aynı görseli kullanır. Bir etiketin adını değiştirdiğinizde o etiketi taşıyan görevler de kaydetme
-        sırasında yeni ada taşınır. Basit Modda girilen yeni kısa açıklamalar da bu kataloğa eklenir.
+        sırasında yeni ada taşınır. Temel Kipte girilen yeni kısa açıklamalar da bu kataloğa eklenir.
       </div>
     </div>
   );

@@ -56,7 +56,7 @@ function ModeCard({ id, active, icon: Icon, title, kicker, description, points, 
       <span className="settings-mode-points">
         {points.map((point) => <span key={point}><Icons.Check size={11} /> {point}</span>)}
       </span>
-      <span className="settings-mode-state">{active ? <><Icons.Check size={13} /> Kullanılıyor</> : 'Bu moda geç'}</span>
+      <span className="settings-mode-state">{active ? <><Icons.Check size={13} /> Kullanılıyor</> : 'Bu kipe geç'}</span>
     </button>
   );
 }
@@ -99,24 +99,24 @@ export function SettingsView({ t, setTweak }) {
   return (
     <div className="col stagger" style={{ gap: 20 }}>
       <HeroHeader title="Ayarlar">
-        <div className="muted" style={{ fontSize: 13.5 }}>Çalışma modu, görünüm, okunabilirlik ve uygulama tercihleri.</div>
+        <div className="muted" style={{ fontSize: 13.5 }}>Çalışma kipi, görünüm, okunabilirlik ve uygulama tercihleri.</div>
       </HeroHeader>
 
       <section className="settings-mode-section">
         <div className="settings-mode-heading">
           <div>
             <span className="help-kicker">Çalışma biçimi</span>
-            <h2>MERGEN Rota modunu seçin</h2>
-            <p>İki mod aynı proje ve görev altyapısını kullanır. Basit modda oluşturduğunuz kayıtları daha sonra gelişmiş modda ayrıntılandırabilirsiniz.</p>
+            <h2>MERGEN Rota kipini seçin</h2>
+            <p>İki kip aynı proje ve görev altyapısını kullanır. Temel kipte oluşturduğunuz kayıtları daha sonra kapsamlı kipte ayrıntılandırabilirsiniz.</p>
           </div>
-          <span className="settings-mode-current">Aktif: {appMode === 'simple' ? 'Basit Mod' : 'Gelişmiş Mod'}</span>
+          <span className="settings-mode-current">Aktif: {appMode === 'simple' ? 'Temel Kip' : 'Kapsamlı Kip'}</span>
         </div>
         <div className="settings-mode-grid">
           <ModeCard
             id="simple"
             active={appMode === 'simple'}
             icon={Icons.Calendar}
-            title="Basit Mod"
+            title="Temel Kip"
             kicker="Hızlı takip"
             description="Proje, görev, kısa açıklama, sorumlu ve termin tarihi ile çalışın; kayıtları Takvim üzerinde izleyin."
             points={['Tek ekranlı hızlı giriş', 'Takvim odaklı takip', 'Aynı veri modeli']}
@@ -126,8 +126,8 @@ export function SettingsView({ t, setTweak }) {
             id="advanced"
             active={appMode === 'advanced'}
             icon={Icons.Gantt}
-            title="Gelişmiş Mod"
-            kicker="Tam proje yönetimi"
+            title="Kapsamlı Kip"
+            kicker="Tam görev yönetimi"
             description="WBS, Gantt, bağımlılıklar, Kanban, raporlar ve portföy araçlarının tümünü kullanın."
             points={['WBS ve kritik yol', 'Bağımlılık yönetimi', 'Raporlama ve portföy']}
             onSelect={setMode}
@@ -145,7 +145,7 @@ export function SettingsView({ t, setTweak }) {
 
           <SettingsRow
             title="Çalışma verisi"
-            desc="Gerçek Sistem kurumsal SQL Server üzerinde çalışır; Demo modu örnek veriyle güvenle denemenizi sağlar. Mod değiştirilmeden önce bekleyen kayıtlar tamamlanır."
+            desc="Gerçek Sistem kurumsal SQL Server üzerinde çalışır; Demo kipi örnek veriyle güvenle denemenizi sağlar. Kip değiştirilmeden önce bekleyen kayıtlar tamamlanır."
           >
             <DataModeIndicator variant="settings" />
           </SettingsRow>
@@ -233,7 +233,7 @@ export function SettingsView({ t, setTweak }) {
           </div>
           <div className="card-sub">Başlangıç ve görünüm davranışı.</div>
 
-          <SettingsRow title="Açılış sayfası" desc="Gelişmiş mod açıldığında gösterilecek sayfa.">
+          <SettingsRow title="Açılış sayfası" desc="Kapsamlı kip açıldığında gösterilecek sayfa.">
             <select className="set-select" value={t.landingView || 'ozet'} onChange={(e) => setTweak('landingView', e.target.value)}>
               {landingOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
@@ -292,7 +292,7 @@ export function SettingsView({ t, setTweak }) {
           </div>
           <div className="card-sub">Yardım, kısayollar ve sıfırlama.</div>
 
-          <SettingsRow title="Mod seçim ekranı" desc="Bir sonraki açılışta Basit / Gelişmiş Mod seçimini yeniden gösterir.">
+          <SettingsRow title="Kip seçim ekranı" desc="Bir sonraki açılışta Temel / Kapsamlı Kip seçimini yeniden gösterir.">
             <button className="btn sm" type="button" onClick={resetModeChoice}>
               <Icons.Sparkle size={13} /> Tekrar göster
             </button>
@@ -300,7 +300,7 @@ export function SettingsView({ t, setTweak }) {
 
           <div className="set-sep" />
 
-          <SettingsRow title="Karşılama ekranı" desc="Gelişmiş mod tanıtım turunu yeniden gösterir.">
+          <SettingsRow title="Karşılama ekranı" desc="Kapsamlı kip tanıtım turunu yeniden gösterir.">
             <button className="btn sm" type="button" onClick={resetWelcome}>
               <Icons.Help size={13} /> Tekrar göster
             </button>
@@ -308,13 +308,13 @@ export function SettingsView({ t, setTweak }) {
 
           <div className="set-sep" />
 
-          <SettingsRow title="Komut paleti" desc="Gelişmiş modda hızlı gezinme ve eylemler (Windows).">
+          <SettingsRow title="Komut paleti" desc="Kapsamlı kipte hızlı gezinme ve eylemler (Windows).">
             <span className="kbd-hint"><kbd>Ctrl</kbd><kbd>K</kbd></span>
           </SettingsRow>
 
           <div className="set-sep" />
 
-          <SettingsRow title="Varsayılanlara dön" desc="Tema, mod, yoğunluk, yazı boyutu, renk ve tüm tercihleri sıfırlar.">
+          <SettingsRow title="Varsayılanlara dön" desc="Tema, kip, yoğunluk, yazı boyutu, renk ve tüm tercihleri sıfırlar.">
             <button className="btn sm" type="button" onClick={resetDefaults}>
               <Icons.Sparkle size={13} /> Sıfırla
             </button>

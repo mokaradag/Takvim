@@ -12,14 +12,14 @@ import { useAllProjects, useAllPeople, useAssignmentScopeSicils, useTaskActions 
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 /**
- * Basit Mod · Görev düzenleme.
+ * Temel Kip · Görev düzenleme.
  *
  * Yalnızca "Hızlı Görev Tanımı"nda toplanan alanları düzenler: görev, kısa
  * açıklama, sorumlular, termin, öncelik ve durum. İlerleme yüzdesi, efor
  * saatleri, planlanan başlangıç/bitiş, dağılım ağacı, bağımlılıklar ve tekrar
- * kuralı Gelişmiş Modda kalır — Basit Modda ne toplanır ne de gösterilir.
+ * kuralı Kapsamlı Kipte kalır — Temel Kipte ne toplanır ne de gösterilir.
  *
- * Kayıt YAPISI aynıdır: aynı görev Gelişmiş Modda tüm alanlarıyla açılır.
+ * Kayıt YAPISI aynıdır: aynı görev Kapsamlı Kipte tüm alanlarıyla açılır.
  */
 export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
   const people = useAllPeople();
@@ -28,7 +28,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
   const { cancelTaskFieldUpdates, updateProject } = useTaskActions();
   const [local, setLocal] = useState({ ...task });
   const [catalogWarning, setCatalogWarning] = useState(null);
-  // Kalıcılaştırılmayan başlık taslağı — Gelişmiş Moddaki TaskDrawer ile aynı
+  // Kalıcılaştırılmayan başlık taslağı — Kapsamlı Kipteki TaskDrawer ile aynı
   // davranış. Sunucu boş başlığı reddettiği için silinmiş metin kuyruğa hiç
   // girmez; taslak burada tutulmasaydı gelen yeni `task` nesnesi silinen
   // başlığı geri yazardı.
@@ -102,7 +102,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
 
   // Atama kapsamıyla açılan projede sunucu, sorumluların tamamının yöneticinin
   // kapsamında olmasını şart koşar; seçici bütün rehberi gösterseydi kapsam dışı
-  // bir kişi seçmek garanti reddedilen bir kayıt üretirdi (Gelişmiş Moddaki
+  // bir kişi seçmek garanti reddedilen bir kayıt üretirdi (Kapsamlı Kipteki
   // TaskDrawer ile aynı kural).
   const assignmentScopeOnly = useMemo(() => {
     if (!assignmentScopeSicils.length) return null;
@@ -142,7 +142,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
       <aside className="drawer simple-task-drawer" role="dialog" aria-label="Görev düzenle">
         <header className="drawer-head">
           <div className="col" style={{ gap: 2, minWidth: 0 }}>
-            <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Basit Mod</span>
+            <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Temel Kip</span>
             <span className="muted" style={{ fontSize: 11.5 }}>
               {local.projectCode ? `${local.projectCode} · ${local.proje}` : local.proje}
             </span>
@@ -212,14 +212,14 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
             <DateInput
               value={local.targetFinish || ''}
               onChange={(value) => save(ownsSimpleModePlan(task)
-                // Basit Modda plan ve termin aynı gündür: hızlı görev tanımı da
-                // üç alanı birlikte yazar, iki mod arasında tutarsızlık olmaz.
+                // Temel Kipte plan ve termin aynı gündür: hızlı görev tanımı da
+                // üç alanı birlikte yazar, iki kip arasında tutarsızlık olmaz.
                 ? {
                   targetFinish: value || null,
                   plannedStart: value || local.plannedStart,
                   plannedFinish: value || local.plannedFinish
                 }
-                // Gelişmiş Modda kurulmuş bir plan Basit Moddan EZİLMEZ:
+                // Kapsamlı Kipte kurulmuş bir plan Temel Kipten EZİLMEZ:
                 // yalnızca terminin düzenlenmesi, görevin Gantt/CPM sonuçlarını
                 // değiştiren gizli planını yok ederdi.
                 : { targetFinish: value || null })}
@@ -280,7 +280,7 @@ export function SimpleTaskDrawer({ task, onClose, onUpdate, onDelete }) {
           >
             <Icons.Trash size={13} /> Sil
           </button>
-          {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki modda da aynı. */}
+          {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki kipte de aynı. */}
           <TaskReminderButton task={task} size={30} />
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={onClose}>Tamam</button>

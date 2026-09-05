@@ -44,12 +44,12 @@ Oturum bulunmaması normal bir açılış durumudur; bu nedenle ikinci yanıt da
 
 Tüm yanıtlar `Cache-Control: no-store, max-age=0` taşır.
 
-## Veri modları
+## Veri kipleri
 
 - **Gerçek Sistem:** Otomatik kurumsal oturum denetimi zorunludur.
-- **Demo Modu:** Keycloak denetimi yapılmaz ve uygulama doğrudan açılır.
+- **Demo Kipi:** Keycloak denetimi yapılmaz ve uygulama doğrudan açılır.
 
-Oturum sunucusuna ulaşılamazsa kullanıcıya `Yeniden Dene` ve `Demo moduna geç` seçenekleri gösterilir. Oturumun veri yüklemesi sırasında sona ermesi durumunda `AppDataBoundary` aynı giriş ucuna otomatik yönlendirme yapan yedek sınır olarak çalışır.
+Oturum sunucusuna ulaşılamazsa kullanıcıya `Yeniden Dene` ve `Demo kipine geç` seçenekleri gösterilir. Oturumun veri yüklemesi sırasında sona ermesi durumunda `AppDataBoundary` aynı giriş ucuna otomatik yönlendirme yapan yedek sınır olarak çalışır.
 
 ## Günlük davranışı
 

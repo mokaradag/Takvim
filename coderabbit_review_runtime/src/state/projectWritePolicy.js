@@ -136,7 +136,7 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
   }
 
   // Kurumsal projelerin dağılım ağacı yalnızca CN43N eşitlemesiyle yazılır.
-  // Kural Gerçek Sistem'e özgüdür: Demo modunda kurumsal kaynak bulunmadığı için
+  // Kural Gerçek Sistem'e özgüdür: Demo kipinde kurumsal kaynak bulunmadığı için
   // örnek projelerin ağacı serbestçe denenebilir.
   if (isActualDataMode(state) && !supportsManualWbsEditing(sourceProject)) {
     return {

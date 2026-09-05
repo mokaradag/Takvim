@@ -5,7 +5,7 @@ import { createEmptyOrgFilter } from '../../domain/organization/organizationHier
 
 const TaskOrganizationFilterContext = createContext(null);
 
-/** Modlar ve görünüm yeniden montajları arasında yaşayan oturumluk görev kapsamı. */
+/** Kipler ve görünüm yeniden montajları arasında yaşayan oturumluk görev kapsamı. */
 export function TaskOrganizationFilterProvider({ children, initialSelection = null }) {
   const [selection, setSelection] = useState(
     () => initialSelection ? { ...initialSelection } : createEmptyOrgFilter()

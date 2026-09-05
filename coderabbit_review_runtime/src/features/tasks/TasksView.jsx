@@ -333,7 +333,7 @@ export function TasksView() {
                     <td className="tabular" style={{ fontSize: 12, color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
                     <td>
                       {/* Hatırlatma eylemi silme simgesinin YANINDA durur;
-                          Basit Modda da aynı yerdedir. */}
+                          Temel Kipte de aynı yerdedir. */}
                       <div className="row" style={{ gap: 4 }}>
                         <TaskReminderButton task={t} />
                         <button

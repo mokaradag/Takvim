@@ -10,18 +10,18 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('Basit Mod Takvim sayfası Takvim ile açılır ve hızlı görev tanımı ayrı sekmededir', () => {
+test('Temel Kip Takvim sayfası Takvim ile açılır ve hızlı görev tanımı ayrı sekmededir', () => {
   const shell = read('src/components/shell/AppShell.jsx');
 
   assert.match(shell, /useState\('calendar'\)/);
-  assert.match(shell, /aria-label="Basit Mod Takvim görünümü"/);
+  assert.match(shell, /aria-label="Temel Kip Takvim görünümü"/);
   assert.match(shell, />\s*<Icons\.Calendar[^>]*\/> Takvim\s*</s);
   assert.match(shell, />\s*<Icons\.Plus[^>]*\/> Hızlı Görev Tanımı\s*</s);
   assert.match(shell, /simpleCalendarTab === 'calendar'[\s\S]*?<CalendarView[\s\S]*?leadingControls=\{<SimpleCalendarTabs[\s\S]*?: \([\s\S]*?<SimpleModePanel/);
   assert.doesNotMatch(shell, /calendar-page-stack/);
 });
 
-test('Basit Mod workspace etkisi hook bağımlılıklarını nesne yerine kararlı alanlarla izler', () => {
+test('Temel Kip workspace etkisi hook bağımlılıklarını nesne yerine kararlı alanlarla izler', () => {
   const shell = read('src/components/shell/AppShell.jsx');
 
   assert.match(shell, /mode: workspaceMode,[\s\S]*?selectWorkspace[\s\S]*?= workspace;/);
@@ -30,7 +30,7 @@ test('Basit Mod workspace etkisi hook bağımlılıklarını nesne yerine kararl
   assert.doesNotMatch(shell, /\[simpleMode, view, workspace\.mode, workspace\.selectWorkspace\]/);
 });
 
-test('Basit Mod sorumlu seçimi büyük kişi listeleri için arama ve sınırlı sonuç kullanır', () => {
+test('Temel Kip sorumlu seçimi büyük kişi listeleri için arama ve sınırlı sonuç kullanır', () => {
   const simple = read('src/features/simple/SimpleModePanel.jsx');
 
   const search = read('src/features/simple/simpleAssigneeSearch.js');
@@ -89,7 +89,7 @@ test('orta genişlikte trend ve durum kartlarının ikisi de tam satıra yayıl�
   );
 });
 
-test('kök stil yükleme sırası sorumluluk tabanlıdır ve rehber Basit Mod akışını açıklar', () => {
+test('kök stil yükleme sırası sorumluluk tabanlıdır ve rehber Temel Kip akışını açıklar', () => {
   const layout = read('src/app/layout.js');
   const help = read('src/features/help/HelpView.jsx');
 

@@ -144,7 +144,7 @@ The scheduler is server-side: `POST /api/mergen-rota/reminders/run` runs one aut
 
 ### Presentation and styling ownership
 
-Presentation follows the same ownership rule as domain, scheduling, data and state architecture: current behavior is defined by the component or feature that owns it, not by a chronological override chain. `src/app/globals.css` owns global tokens/base primitives; `src/app/styles/shell.css` owns application chrome; `dashboard.css` owns Dashboard structure; `components.css` owns shared visual/component, form and table contracts; `features.css` owns Gantt, WBS and Task Detail layout sections; `simple-mode.css` owns Basit Mod; and `experience.css` owns mode/settings/help presentation.
+Presentation follows the same ownership rule as domain, scheduling, data and state architecture: current behavior is defined by the component or feature that owns it, not by a chronological override chain. `src/app/globals.css` owns global tokens/base primitives; `src/app/styles/shell.css` owns application chrome; `dashboard.css` owns Dashboard structure; `components.css` owns shared visual/component, form and table contracts; `features.css` owns Gantt, WBS and Task Detail layout sections; `simple-mode.css` owns Temel Kip; and `experience.css` owns mode/settings/help presentation.
 
 Generic visual primitives belong under `src/components`; shell presentation belongs to shell ownership; feature-specific layout belongs to the relevant feature style owner. Root global styles must not become a sequence of `fixes`/`followup`/`polish` layers. Static application structure should be exposed through semantic classes rather than inferred from inline style text or child position. Dynamic runtime values such as colors and computed widths may remain inline.
 

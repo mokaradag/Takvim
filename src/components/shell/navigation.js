@@ -37,7 +37,7 @@ export function nextSimpleCalendarTab(active, key) {
   ];
 }
 
-/** Basit Takvim'e giriş niyetini açılacak alt sekmeye dönüştürür. */
+/** Temel Kip Takvim'e giriş niyetini açılacak alt sekmeye dönüştürür. */
 export function simpleCalendarTabForIntent(intent = null) {
   return intent === 'entry' ? 'entry' : 'calendar';
 }

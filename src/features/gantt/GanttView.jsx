@@ -1,5 +1,6 @@
 'use client';
 import React, { useState as useState2, useMemo as useMemo2, useEffect as useEffect2, useRef as useRef2 } from 'react';
+import { GanttAssignees } from './GanttAssignees.jsx';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
 import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, diffDays, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
@@ -13,6 +14,8 @@ import { useTasks, useProjects, usePeople, usePortfolioSchedule, useTaskActions 
 import { taskProgressValue, taskSortValue } from '../tasks/taskDisplayValues.js';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '../tasks/taskTableFacets.js';
 import { GanttOutlineControls } from './GanttOutlineControls.jsx';
+import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
+import { ganttAssigneeGroup } from './ganttAssignees.js';
 
 /* ── Gantt ──────────────────────────────────────────────── */
 const GANTT_DEFAULT_COLS = {
@@ -193,11 +196,17 @@ export function GanttView() {
   const days = useMemo2(() => eachDay(range.start, range.end), [range]);
   const totalWidth = days.length * zoom;
 
-  // Group tasks (using filtered set)
+  const personLookup = usePersonLookup();
+  const assigneeGroups = useMemo2(() => new Map(filteredTasks.map((task) => {
+    const group = ganttAssigneeGroup(task, personLookup);
+    return [group.key, group];
+  })), [filteredTasks, personLookup]);
+
+  // Sorumlu grupları aynı adlı kişileri Sicil üzerinden ayırır.
   const groups = useMemo2(() => {
-    const map = {};
+    const map = Object.create(null);
     filteredTasks.forEach(t => {
-      const key = groupBy === 'proje' ? t.proje : (t.sorumlu[0] || 'Atanmamış');
+      const key = groupBy === 'proje' ? t.proje : ganttAssigneeGroup(t, personLookup).key;
       map[key] = map[key] || [];
       map[key].push(t);
     });
@@ -206,7 +215,7 @@ export function GanttView() {
       arr.sort((a, b) => {
         if (sort.key) {
           let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
-          if (sort.key === 'sorumlu') { va = (a.sorumlu[0] || ''); vb = (b.sorumlu[0] || ''); }
+          if (sort.key === 'sorumlu') { va = ganttAssigneeGroup(a, personLookup).name; vb = ganttAssigneeGroup(b, personLookup).name; }
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
           if (vb == null) vb = '';
@@ -217,8 +226,12 @@ export function GanttView() {
         return parseDate(a.plannedStart) - parseDate(b.plannedStart);
       });
     });
-    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0], 'tr'));
-  }, [filteredTasks, groupBy, sort]);
+    return Object.entries(map).sort((a, b) => {
+      const aName = groupBy === 'proje' ? a[0] : assigneeGroups.get(a[0]).name;
+      const bName = groupBy === 'proje' ? b[0] : assigneeGroups.get(b[0]).name;
+      return aName.localeCompare(bName, 'tr') || a[0].localeCompare(b[0], 'tr');
+    });
+  }, [filteredTasks, groupBy, sort, personLookup, assigneeGroups]);
 
   const xForDate = (d) => diffDays(d, range.start) * zoom;
 
@@ -255,7 +268,9 @@ export function GanttView() {
       const project = groupBy === 'proje' ? projectByName.get(groupName) : null;
       list.push({
         type: 'group',
-        name: groupName,
+        key: groupName,
+        name: groupBy === 'proje' ? groupName : assigneeGroups.get(groupName).name,
+        assignee: groupBy === 'proje' ? null : assigneeGroups.get(groupName),
         summary: groupSummaries[groupName],
         projectSchedule: project ? schedule.projects[project.id] || null : null,
         collapsed: isCollapsed,
@@ -264,11 +279,10 @@ export function GanttView() {
       if (!isCollapsed) items.forEach(t => list.push({ type: 'task', task: t, groupName }));
     });
     return list;
-  }, [groups, collapsed, groupBy, projectByName, schedule, groupSummaries]);
+  }, [groups, collapsed, groupBy, projectByName, schedule, groupSummaries, assigneeGroups]);
 
   const expandAllGroups = () => setCollapsed(new Set());
-  // Daraltma listesi GRUP ADLARINI tutar; tümünü daraltmak için görünen bütün
-  // grup adları kümeye alınır.
+  // Daraltma listesi görünen grupların kararlı anahtarlarını tutar.
   const collapseAllGroups = () => setCollapsed(new Set(groups.map(([name]) => name)));
 
   const toggleCollapse = (name) => {
@@ -645,12 +659,14 @@ export function GanttView() {
                 <div
                   key={`g-${r.name}-${i}`}
                   className={`gantt-group-header${r.collapsed ? ' collapsed' : ''}`}
-                  onClick={() => toggleCollapse(r.name)}
+                  onClick={() => toggleCollapse(r.key)}
                   style={{ cursor: 'pointer' }}
                   title={r.collapsed ? 'Genişlet' : 'Daralt'}
                 >
                   <Icons.ChevronDown size={11} className="gh-chevron" style={{ transform: r.collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.18s', flexShrink: 0 }} />
-                  <span style={{ width: 8, height: 8, borderRadius: 2, background: groupBy === 'proje' ? projectColorVar(r.name) : personColorVar(r.name) }} />
+                  {r.assignee && r.assignee.key !== 'unassigned:'
+                    ? <Avatar name={r.assignee.name} person={r.assignee.person} lookupPerson={false} size="sm" />
+                    : <span style={{ width: 8, height: 8, borderRadius: 2, background: groupBy === 'proje' ? projectColorVar(r.name) : personColorVar(r.name) }} />}
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
                   {s && (
                     <span className="muted tabular" style={{ fontSize: 10, fontWeight: 600 }}>
@@ -754,7 +770,9 @@ export function GanttView() {
                     {s && (
                       <Tooltip
                         title={`${r.name} · Özet`}
-                        icon={<Icons.Layers size={12} />}
+                        icon={r.assignee && r.assignee.key !== 'unassigned:'
+                          ? <Avatar name={r.assignee.name} person={r.assignee.person} lookupPerson={false} size="sm" />
+                          : <Icons.Layers size={12} />}
                         content={
                           <>
                             <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">{fmt(fmtISO(s.start), 'dd MMM yyyy')}</span></div>
@@ -820,7 +838,7 @@ export function GanttView() {
                           <div className="rt-row"><span className="rt-label">Proje</span><span className="rt-val">{t.proje}</span></div>
                           <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{t.targetFinish ? fmt(t.targetFinish, 'dd MMM yyyy') : '—'}</span></div>
                           <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
-                          <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
+                          <GanttAssignees task={t} />
                           <CpmTooltipRows schedule={taskSchedule} />
                         </>
                       }
@@ -857,7 +875,7 @@ export function GanttView() {
                         <div className="rt-sep" />
                         <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
                         <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{pct}%</span></div>
-                        <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{t.sorumlu.join(', ')}</span></div>
+                        <GanttAssignees task={t} />
                         <CpmTooltipRows schedule={taskSchedule} />
                       </>
                     }

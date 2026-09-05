@@ -5,7 +5,7 @@ import { diffDays, today } from '../../scheduling/dates/index.js';
 import { taskProgressValue } from './taskDisplayValues.js';
 
 /**
- * Gelişmiş Mod · Görevler tablosunun ÇAPRAZ süzgeç fasetleri.
+ * Kapsamlı Kip · Görevler tablosunun ÇAPRAZ süzgeç fasetleri.
  *
  * Bir sütuna süzgeç uygulandığında öteki sütunların seçenek listesi de daralır:
  * listede yalnızca O AN görünen satırlarda bulunan değerler kalır. Seçenekler
@@ -37,7 +37,7 @@ function matchesSearch(task, query) {
   const haystack = [
     task.task, task.proje, task.projectCode, task.keyword,
     priority, resolvePriority(priority)?.label,
-    ...(task.sorumlu || [])
+    ...(Array.isArray(task.sorumlu) ? task.sorumlu : [])
   ].map((value) => String(value || '').toLocaleLowerCase('tr-TR'));
   return haystack.some((value) => value.includes(query));
 }

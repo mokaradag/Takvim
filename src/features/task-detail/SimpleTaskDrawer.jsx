@@ -19,14 +19,14 @@ import { canWriteProject } from '../../state/projectWritePolicy.js';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 /**
- * Basit Mod · Görev düzenleme.
+ * Temel Kip · Görev düzenleme.
  *
  * Yalnızca "Hızlı Görev Tanımı"nda toplanan alanları düzenler: görev, kısa
  * açıklama, sorumlular, termin, öncelik ve durum. İlerleme yüzdesi,
  * planlanan başlangıç/bitiş, dağılım ağacı, bağımlılıklar ve tekrar
- * kuralı Gelişmiş Modda kalır — Basit Modda ne toplanır ne de gösterilir.
+ * kuralı Kapsamlı Kipte kalır — Temel Kipte ne toplanır ne de gösterilir.
  *
- * Kayıt YAPISI aynıdır: aynı görev Gelişmiş Modda tüm alanlarıyla açılır.
+ * Kayıt YAPISI aynıdır: aynı görev Kapsamlı Kipte tüm alanlarıyla açılır.
  */
 export function SimpleTaskDrawer({
   task,
@@ -195,7 +195,7 @@ export function SimpleTaskDrawer({
 
   // Atama kapsamıyla açılan projede sunucu, sorumluların tamamının yöneticinin
   // kapsamında olmasını şart koşar; seçici bütün rehberi gösterseydi kapsam dışı
-  // bir kişi seçmek garanti reddedilen bir kayıt üretirdi (Gelişmiş Moddaki
+  // bir kişi seçmek garanti reddedilen bir kayıt üretirdi (Kapsamlı Kipteki
   // TaskDrawer ile aynı kural).
   const assignmentScopeOnly = useMemo(() => {
     if (!project || canWriteProject(project)) return null;
@@ -224,7 +224,7 @@ export function SimpleTaskDrawer({
   const pendingScheduleRequest = scheduleRequests.find(
     (request) => request.status === 'PENDING' && request.isRequester
   ) || null;
-  // Basit Modda plan tarihleri gizlidir; sorumlu yalnızca termin (hedef bitiş)
+  // Temel Kipte plan tarihleri gizlidir; sorumlu yalnızca termin (hedef bitiş)
   // için öneri gönderir.
   const proposableScheduleFields = canControlSchedule && !canEditTargetFinish ? ['targetFinish'] : null;
 
@@ -234,7 +234,7 @@ export function SimpleTaskDrawer({
       <aside className="drawer simple-task-drawer" role="dialog" aria-label="Görev düzenle">
         <header className="drawer-head">
           <div className="col" style={{ gap: 2, minWidth: 0 }}>
-            <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Basit Mod</span>
+            <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Temel Kip</span>
             <span className="muted" style={{ fontSize: 11.5 }}>
               {local.projectCode ? `${local.projectCode} · ${local.proje}` : local.proje}
             </span>
@@ -326,14 +326,14 @@ export function SimpleTaskDrawer({
             <DateInput
               value={local.targetFinish || ''}
               onChange={(value) => save(ownsSimpleModePlan(task)
-                // Basit Modda plan ve termin aynı gündür: hızlı görev tanımı da
-                // üç alanı birlikte yazar, iki mod arasında tutarsızlık olmaz.
+                // Temel Kipte plan ve termin aynı gündür: hızlı görev tanımı da
+                // üç alanı birlikte yazar, iki kip arasında tutarsızlık olmaz.
                 ? {
                   targetFinish: value || null,
                   plannedStart: value || local.plannedStart,
                   plannedFinish: value || local.plannedFinish
                 }
-                // Gelişmiş Modda kurulmuş bir plan Basit Moddan EZİLMEZ:
+                // Kapsamlı Kipte kurulmuş bir plan Temel Kipten EZİLMEZ:
                 // yalnızca terminin düzenlenmesi, görevin Gantt/CPM sonuçlarını
                 // değiştiren gizli planını yok ederdi.
                 : { targetFinish: value || null })}
@@ -401,7 +401,7 @@ export function SimpleTaskDrawer({
           >
             <Icons.Trash size={13} /> Sil
           </button>}
-          {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki modda da aynı. */}
+          {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki kipte de aynı. */}
           {!isCreating && <TaskReminderButton task={task} size={30} />}
           {!isCreating && canProposeSchedule && <button
             type="button"
@@ -412,8 +412,7 @@ export function SimpleTaskDrawer({
           </button>}
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={primaryAction} disabled={isSaving || !titleValid} aria-busy={isSaving}>
-            {isSaving && <Spinner size={13} />}
-            {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
+            {isSaving ? <Spinner size={13} /> : <Icons.Save size={14} />} {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>
         </div>
       </aside>

@@ -2,7 +2,7 @@
  * Proje etiket kataloğu — TEK doğruluk kaynağı.
  *
  * Etiket artık düz bir metin değil, `{ name, color, icon }` üçlüsüdür. Eski
- * anlık görüntülerde (ve Basit Mod'un hızlı girişinde) etiketler düz metin
+ * anlık görüntülerde (ve Temel Kip'un hızlı girişinde) etiketler düz metin
  * olarak geldiği için normalleştirme her iki biçimi de kabul eder.
  *
  * Modül saftır: React, Next.js veya SQL bağımlılığı yoktur; hem istemci hem
