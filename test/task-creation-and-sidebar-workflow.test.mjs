@@ -34,6 +34,9 @@ test('kenar çubuğu ilk kullanımda sabit ve açık başlar, tercih güvenle sa
   writeSidebarPreference({ pinned: false, collapsed: true }, storage);
   assert.deepEqual(JSON.parse(storage.value(SIDEBAR_PREFERENCE_KEY)), { pinned: false, collapsed: true });
   assert.deepEqual(readSidebarPreference(storage), { pinned: false, collapsed: true });
+  assert.deepEqual(readSidebarPreference(memoryStorage({
+    [SIDEBAR_PREFERENCE_KEY]: JSON.stringify({ pinned: true, collapsed: true })
+  })), { pinned: true, collapsed: false });
 });
 
 test('localStorage özelliğine erişim reddedilirse varsayılan tercih güvenle döner', () => {
@@ -115,7 +118,7 @@ test('açıkça temizlenen proje başka bir projeye düşmeden reddedilir', asyn
   assert.equal(mutateCalls, 0);
 });
 
-test('alt araç alanı tema, mod ve çıkışı sıralar; üst çubuk yinelenen denetimleri taşımaz', () => {
+test('alt araç alanı tema, kip ve çıkışı sıralar; üst çubuk yinelenen denetimleri taşımaz', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const panel = read('src/components/shell/SidebarUserPanel.jsx');
   const css = read('src/app/styles/shell.css');
@@ -126,7 +129,7 @@ test('alt araç alanı tema, mod ve çıkışı sıralar; üst çubuk yinelenen 
   assert.ok(panel.indexOf('sidebar-mode-toggle') < panel.indexOf('onClick={signOut}'));
   assert.match(panel, /MERGEN Rota/);
   assert.match(panel, /Sürüm 1\.0/);
-  assert.doesNotMatch(panel, /Gelişmiş Mod<\/div>/);
+  assert.doesNotMatch(panel, /Kapsamlı Kip<\/div>/);
 
   assert.match(shell, /sidebar-is-\$\{sidebarPinned \? 'pinned' : 'unpinned'\}/);
   assert.match(css, /\.app\.sidebar-is-collapsed,[\s\S]*grid-template-columns: 72px/);

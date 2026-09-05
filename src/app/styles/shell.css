@@ -42,32 +42,12 @@
 }
 .sidebar-is-unpinned .sidebar { width: 72px; }
 .sidebar-is-unpinned .sidebar:hover,
-.sidebar-is-unpinned .sidebar:focus-within {
+.sidebar-is-unpinned .sidebar[data-keyboard-open="true"] {
   width: 240px;
   box-shadow: 16px 0 34px -24px color-mix(in oklab, black 70%, transparent);
 }
 .sidebar-header, .sidebar > .col, .cmd-trigger, .sidebar-section-title { flex-shrink: 0; }
-.sidebar-collapse-button {
-  position: absolute;
-  top: 24px;
-  right: -12px;
-  z-index: 12;
-  width: 25px;
-  height: 25px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  color: var(--text-muted);
-  background: color-mix(in oklab, var(--bg-elev) 92%, var(--accent));
-  border: 1px solid var(--chrome-border);
-  border-radius: 999px;
-  box-shadow: 0 4px 13px -7px color-mix(in oklab, black 70%, transparent);
-  transition: color .16s ease, border-color .16s ease, transform .2s ease;
-}
-.sidebar-collapse-button:hover { color: var(--accent); border-color: var(--accent); transform: scale(1.06); }
-.sidebar-collapse-button svg { transition: transform .22s cubic-bezier(.2, .8, .2, 1); }
-.sidebar-is-collapsed .sidebar-collapse-button svg,
-.sidebar-is-unpinned .sidebar-collapse-button svg { transform: rotate(180deg); }
+.sidebar-header { padding: 16px 16px 12px; }
 .nav { flex: 1 1 0; min-height: 0; overflow: hidden auto; }
 .sidebar-footer {
   flex: 0 0 auto;
@@ -102,46 +82,32 @@
 .sidebar-utility-button:active,
 .sidebar-pin-button:active { transform: scale(.94); }
 .sidebar-mode-toggle {
-  min-width: 0;
-  height: 32px;
-  flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  padding: 0 8px;
-  color: var(--accent);
-  background: linear-gradient(135deg, var(--accent-soft), var(--bg-elev-2));
-  border: 1px solid var(--chrome-border);
-  border-radius: 9px;
-  text-align: left;
-  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
-}
-.sidebar-mode-toggle:hover { border-color: var(--accent); box-shadow: 0 5px 14px -10px var(--accent); }
-.sidebar-mode-toggle:active { transform: scale(.98); }
-.sidebar-mode-copy { display: flex; align-items: baseline; gap: 3px; min-width: 0; white-space: nowrap; }
-.sidebar-mode-copy strong { color: var(--text); font-size: 10.5px; font-weight: 700; }
-.sidebar-mode-copy small { color: var(--text-dim); font-size: 9.5px; }
-.sidebar-mode-track {
-  width: 24px;
-  height: 14px;
-  padding: 2px;
   display: flex;
-  justify-content: flex-start;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--text-dim) 30%, transparent);
-  transition: background .18s ease;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
 }
-.sidebar-mode-track > span {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
-  transition: transform .2s cubic-bezier(.2, .8, .2, 1);
+.sidebar-mode-toggle button {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  transition: background .16s ease, color .16s ease;
 }
-.sidebar-mode-toggle[aria-checked="true"] .sidebar-mode-track { background: var(--accent); }
-.sidebar-mode-toggle[aria-checked="true"] .sidebar-mode-track > span { transform: translateX(10px); }
+.sidebar-mode-toggle button:hover { background: var(--bg-hover); color: var(--text); }
+.sidebar-mode-toggle button[aria-pressed="true"] { background: var(--bg-elev-2); color: var(--text); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
+.sidebar-mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sidebar-mode-short { display: none; }
 .sidebar-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
 .sidebar-pin-button { width: 25px; height: 25px; flex-basis: 25px; border-radius: 8px; }
 /* Oturum kapatma hatası: kullanıcı çıkış yaptığını sanmamalıdır. */
@@ -161,55 +127,54 @@
 .sidebar-simple-mode > span { display: flex; align-items: center; gap: 7px; color: var(--accent); font-size: 12px; font-weight: 750; }
 .sidebar-simple-mode small { color: var(--text-dim); font-size: 10.5px; }
 
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .brand-copy,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-workspace-context,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-simple-mode,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .cmd-trigger,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-section-title,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .nav-label,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .nav-count,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .user-chip .col,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-mode-copy,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-mode-track,
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-version {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .brand-copy,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-workspace-context,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-simple-mode,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .cmd-trigger,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-section-title,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .nav-label,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .nav-count,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .user-chip .col,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-mode-copy,
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-version {
   display: none;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-header {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-header {
   justify-content: center;
   padding-inline: 10px;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .nav {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .nav {
   padding-inline: 10px;
   padding-top: 12px;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .nav-item {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .nav-item {
   justify-content: center;
   padding-inline: 0;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-footer {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-footer {
   padding-inline: 10px;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .user-chip {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .user-chip {
   justify-content: center;
   padding-inline: 0;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-utility-row {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-utility-row {
   flex-direction: column;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-mode-toggle {
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-mode-toggle {
   width: 32px;
-  flex: 0 0 32px;
-  grid-template-columns: 1fr;
-  justify-items: center;
-  padding: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  padding: 2px;
 }
-:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not(:focus-within)) .sidebar-meta-row {
+.sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"]) .sidebar-mode-short,
+.sidebar-is-collapsed.sidebar-is-pinned .sidebar .sidebar-mode-short { display: inline; }
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-meta-row {
   justify-content: center;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app, .sidebar, .sidebar-collapse-button, .sidebar-collapse-button svg,
-  .sidebar-mode-track, .sidebar-mode-track > span { transition: none; }
+  .app, .sidebar, .sidebar-mode-toggle button { transition: none; }
 }
 
 /* Topbar: single authoritative visual contract. */

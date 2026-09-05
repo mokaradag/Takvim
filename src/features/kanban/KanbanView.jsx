@@ -7,11 +7,25 @@ import { projectColorVar } from '../../lib/colors';
 import { AvatarStack } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton, AnimatedNumber } from '../../components/ui-extras';
-import { useTasks, useTaskActions } from '../../state/hooks';
+import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
+import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
+import { TaskOrganizationFilterControls } from '../tasks/TaskOrganizationFilterControls.jsx';
+import { useSharedTaskOrganizationFilter } from '../tasks/TaskOrganizationFilterContext.jsx';
+import { useTaskOrganizationFilter } from '../tasks/useTaskOrganizationFilter.js';
+import { taskTableMatches } from '../tasks/taskTableFacets.js';
 
 /* ── Kanban (drag-and-drop, animated) ──────────────── */
 export function KanbanView() {
   const tasks = useTasks();
+  const people = usePeople();
+  const [search, setSearch] = useState2('');
+  const { selection, setSelection } = useSharedTaskOrganizationFilter();
+  const organization = useTaskOrganizationFilter(tasks, people, selection, setSelection);
+  const filteredTasks = useMemo2(
+    () => organization.filteredTasks.filter((task) => taskTableMatches(task, { search })),
+    [organization.filteredTasks, search]
+  );
+  const hasFilters = Boolean(search) || hasOrgSelection(organization.selection);
   const { openTask: onOpenTask, updateTask: onUpdateTask } = useTaskActions();
   const cols = [
     { id: 'todo', title: 'Yapılacak', icon: <Icons.Circle size={14} />, color: 'var(--status-todo)',
@@ -32,7 +46,7 @@ export function KanbanView() {
 
   const grouped = useMemo2(() => {
     const map = { todo: [], in_progress: [], done: [] };
-    tasks.forEach(t => {
+    filteredTasks.forEach(t => {
       // Panoda yalnızca üç sütun vardır. Kalıcı kayıttan gelen tanınmayan bir
       // durum (eski şema, dış aktarım) doğrudan indekslenirse `map[s]` tanımsız
       // olur ve sayfa tümüyle çökerdi; bilinmeyen durum "Yapılacak" sayılır.
@@ -40,7 +54,7 @@ export function KanbanView() {
       map[status].push(t);
     });
     return map;
-  }, [tasks]);
+  }, [filteredTasks]);
 
   const onDragStart = (id) => setDragId(id);
   const onDragEnd = () => { setDragId(null); setDragOver(null); };
@@ -49,10 +63,11 @@ export function KanbanView() {
     const id = dragId;
     // Aynı sütuna bırakmak bir DEĞİŞİKLİK değildir: yama gönderilirse sunucuya
     // boşuna yazma isteği gider ve kayıt sürümü sebepsiz ilerler.
-    const current = tasks.find((task) => task.id === id);
+    const current = filteredTasks.find((task) => task.id === id);
     const unchanged = current && (current.status || 'todo') === colId;
     setDragId(null);
     setDragOver(null);
+    if (!current) return;
     if (unchanged) return;
     onUpdateTask(id, { status: colId });
     setFlashId(id);
@@ -61,6 +76,17 @@ export function KanbanView() {
   };
 
   return (
+    <div className="kanban-page col">
+      <div className="row tasks-toolbar">
+        <div className="topbar-search tasks-toolbar-search">
+          <Icons.Search size={14} />
+          <input aria-label="Kanban görevlerinde ara" placeholder="Görev, proje, sorumlu, etiket..." value={search} onChange={(event) => setSearch(event.target.value)} />
+          {search && <button type="button" className="icon-btn" aria-label="Aramayı temizle" onClick={() => setSearch('')}><Icons.Close size={12} /></button>}
+        </div>
+        <TaskOrganizationFilterControls organization={organization} />
+        {hasFilters && <button type="button" className="btn ghost sm" onClick={() => { setSearch(''); setSelection(createEmptyOrgFilter()); }}><Icons.Close size={12} /> Filtreleri temizle</button>}
+        <span className="muted tabular kanban-filter-count" role="status">{filteredTasks.length} / {tasks.length} görev</span>
+      </div>
     <div className="kanban">
       {cols.map((c, ci) => {
         const items = grouped[c.id] || [];
@@ -122,6 +148,7 @@ export function KanbanView() {
                   >
                   <div
                     className={`k-card${dragId === t.id ? ' dragging' : ''}${flashId === t.id ? ' flash' : ''}`}
+                    data-task-id={t.id}
                     draggable
                     style={{ borderLeft: `3px solid ${color}`, animationDelay: `${Math.min(i * 30, 240)}ms` }}
                     // Firefox, `dragstart` sırasında veri deposu boş kalırsa
@@ -167,12 +194,13 @@ export function KanbanView() {
                 );
               })}
               {items.length === 0 && (
-                <div className="empty" style={{ padding: 24, fontSize: 12 }}>Buraya sürükle</div>
+                <div className="empty" style={{ padding: 24, fontSize: 12 }}>{hasFilters ? 'Eşleşen görev bulunamadı.' : 'Buraya sürükle'}</div>
               )}
             </div>
           </div>
         );
       })}
+    </div>
     </div>
   );
 }

@@ -3,10 +3,10 @@
  *
  * `useApplyTweaks` gövde sınıflarını bir React etkisinde yazar ve yalnızca
  * `AppShell` monte edildikten sonra çalışır. `ApplicationRoot` ise ondan önce
- * Veri Modu penceresini, kurumsal oturum kapısını ve yükleme ekranını çizer:
+ * Veri Kipi penceresini, kurumsal oturum kapısını ve yükleme ekranını çizer:
  * yüksek karşıtlığı açmış bir kullanıcı, bu uzun ömürlü ekranlar boyunca
  * erişilebilirlik ayarını kaybediyordu. "Hareketi azalt" ise daha da geç
- * uygulandığı için mod seçim penceresinin giriş animasyonu her açılışta bir kez
+ * uygulandığı için kip seçim penceresinin giriş animasyonu her açılışta bir kez
  * görünüyordu.
  *
  * Yazı ÖLÇEĞİ de aynı nedenle burada uygulanır: yalnızca `useApplyTweaks`

@@ -197,7 +197,7 @@ export function TaskDetailOverlay({ simple = false }) {
     }
   };
 
-  // Basit Modda sade düzenleyici açılır: Gelişmiş Modun tam paneli, Basit Modda
+  // Temel Kipte sade düzenleyici açılır: Kapsamlı Kipin tam paneli, Temel Kipte
   // hiç toplanmayan alanlarla kullanıcıyı karşılardı.
   if (simple) {
     return (

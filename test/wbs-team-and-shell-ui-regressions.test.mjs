@@ -182,7 +182,7 @@ test('Ekip tablosunun başlığı ve dizin kartı kaydırmada görünür kalır'
   assert.match(css, /\.team-table-scroll \.tbl thead th \{[^}]*background: var\(--bg-elev\)/s);
 });
 
-/* ── Kabuk · açılış perdesi, Basit Mod Gantt, vurgu rengi ────────── */
+/* ── Kabuk · açılış perdesi, Temel Kip Gantt, vurgu rengi ────────── */
 
 test('açılış perdesi kabuk ızgarasını kullanmaz ve ekranın ortasında durur', () => {
   const source = read('src/components/shell/AppDataBoundary.jsx');
@@ -196,12 +196,12 @@ test('açılış perdesi kabuk ızgarasını kullanmaz ve ekranın ortasında du
   assert.match(css, /@keyframes app-boot-sweep/);
 });
 
-test('Basit Mod gezinmesi Görevler ve Gantt sayfalarını da içerir', () => {
+test('Temel Kip gezinmesi Görevler ve Gantt sayfalarını da içerir', () => {
   const source = read('src/components/shell/AppShell.jsx');
   assert.match(source, /const SIMPLE_NAV_IDS = new Set\(\['veri', 'takvim', 'gantt', 'yardim', 'ayarlar'\]\);/);
-  // Gantt görünümü her iki modda da aynı bileşenle çizilir.
+  // Gantt görünümü her iki kipte de aynı bileşenle çizilir.
   assert.match(source, /case 'gantt': return <WorkspaceGanttView \/>;/);
-  // Görevler sayfası Basit Modda SADE sürümle açılır; Gelişmiş Mod tablosu değişmez.
+  // Görevler sayfası Temel Kipte SADE sürümle açılır; Kapsamlı Kip tablosu değişmez.
   const tasksCase = source.match(/case 'veri':([\s\S]*?)(?=\n\s*case 'wbs':)/)?.[1] || '';
   assert.match(tasksCase, /return\s+simpleMode\s*\?\s*<SimpleTasksView\b[^>]*onNewTask=/);
   assert.match(tasksCase, /:\s*<TasksView\s*\/>/);

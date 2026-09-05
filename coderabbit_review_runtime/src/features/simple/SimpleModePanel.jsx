@@ -59,7 +59,7 @@ export function SimpleModePanel() {
   const [task, setTask] = useState('');
   const [keyword, setKeyword] = useState('');
   const [dueDate, setDueDate] = useState('');
-  // Öncelik Basit Modda da tanımlanır. Katalog GELİŞMİŞ MODLA AYNIDIR
+  // Öncelik Temel Kipte de tanımlanır. Katalog KAPSAMLI KİPLE AYNIDIR
   // (domain/constants · PRIORITIES): ikinci bir öncelik modeli, aynı görevin iki
   // ekranda farklı okunmasına yol açardı.
   const [priority, setPriority] = useState(DEFAULT_PRIORITY_ID);
@@ -123,7 +123,7 @@ export function SimpleModePanel() {
   const visiblePeople = peopleMatches.slice(0, MAX_VISIBLE_PEOPLE);
   const hasWritableDestination = writableProjects.length > 0 || canCreateProjects;
 
-  // Basit Modda proje oluşturmak, görev tanımlamaktan bağımsız bir yetenektir:
+  // Temel Kipte proje oluşturmak, görev tanımlamaktan bağımsız bir yetenektir:
   // kullanıcı görevleri sonra eklemek üzere yalnızca projeyi açabilir.
   const createProjectOnly = async (input) => {
     setMessage(null);
@@ -215,7 +215,7 @@ export function SimpleModePanel() {
     let taskKeyword = keyword.trim();
 
     if (!project) {
-      // Basit Mod portföy görünümünde kalır: çalışma alanı değiştirilirse bu form
+      // Temel Kip portföy görünümünde kalır: çalışma alanı değiştirilirse bu form
       // kayıt tamamlanmadan yeniden monte edilir ve sonuç mesajı kaybolur.
       const created = await addProject({
         name: manualProjectName.trim(),
@@ -309,12 +309,12 @@ export function SimpleModePanel() {
       <form className="simple-entry-card" onSubmit={submit}>
         <div className="simple-entry-head">
           <div>
-            <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Basit Mod</span>
+            <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Temel Kip</span>
             <h2>Hızlı görev tanımı</h2>
-            <p>Yalnızca gerekli bilgileri girin. Kayıt aynı proje ve görev altyapısında tutulur ve gelişmiş modda da kullanılabilir.</p>
+            <p>Yalnızca gerekli bilgileri girin. Kayıt aynı proje ve görev altyapısında tutulur ve kapsamlı kipte de kullanılabilir.</p>
           </div>
           <div className="simple-entry-actions">
-            <div className="simple-entry-flow" aria-label="Basit mod akışı">
+            <div className="simple-entry-flow" aria-label="Temel kip akışı">
               <span>Tanımla</span><i>→</i><span>Takvimde izle</span><i>→</i><span>Gerekirse geliştir</span>
             </div>
             {/* Görev tanımlamadan yalnızca proje açma yolu. */}

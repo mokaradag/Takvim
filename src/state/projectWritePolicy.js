@@ -222,7 +222,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // değişir (bkz. ASSIGNEE_BLOCKED_SCHEDULE_FIELDS).
       'targetFinish',
       // Saat alanları veri uyumluluğu için taşınır ama ürün yüzeyinden ve dar
-      // sorumlu yetkisinden çıkarılmıştır. Finansal alanlar da proje yönetimidir.
+      // sorumlu yetkisinden çıkarılmıştır. Finansal alanlar da görev yönetimidir.
       'plannedHours', 'actualHours', 'budget', 'spent'
     ]);
     const field = Object.keys(patch || {}).find((key) => protectedFields.has(key));
@@ -338,7 +338,7 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
   }
 
   // Kurumsal projelerin dağılım ağacı yalnızca CN43N eşitlemesiyle yazılır.
-  // Kural Gerçek Sistem'e özgüdür: Demo modunda kurumsal kaynak bulunmadığı için
+  // Kural Gerçek Sistem'e özgüdür: Demo kipinde kurumsal kaynak bulunmadığı için
   // örnek projelerin ağacı serbestçe denenebilir.
   if (isActualDataMode(state) && !supportsManualWbsEditing(sourceProject)) {
     return {

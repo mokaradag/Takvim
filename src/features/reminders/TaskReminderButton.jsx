@@ -9,7 +9,7 @@ import { sendTaskReminderRequest } from './reminderClient.js';
 /**
  * "Hatırlatma e-postası gönder" eylemi.
  *
- * Silme simgesinin YANINDA durur ve hem Basit hem Gelişmiş Modda aynı biçimde
+ * Silme simgesinin YANINDA durur ve hem Temel hem Kapsamlı Kipte aynı biçimde
  * çalışır. Üç davranış bilinçlidir:
  *
  *  - İstek sürerken düğme kapatılır: art arda tıklamak kopya ileti üretmez.

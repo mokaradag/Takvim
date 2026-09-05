@@ -13,7 +13,7 @@ Current root sequence:
 3. `src/app/styles/shell.css` — application shell, sidebar, topbar, project identity and export menu.
 4. `src/app/styles/dashboard.css` — Dashboard/Özet structural layout and status-donut presentation.
 5. `src/app/styles/features.css` — Gantt, WBS and Task Detail feature layout contracts.
-6. `src/app/styles/simple-mode.css` — Basit Mod quick-entry and calendar-tab presentation.
+6. `src/app/styles/simple-mode.css` — Temel Kip quick-entry and calendar-tab presentation.
 7. `src/app/styles/experience.css` — mode chooser, settings-mode cards and help/onboarding surfaces.
 
 ## 2. Ownership map
@@ -26,7 +26,8 @@ Current root sequence:
 | Dashboard/Özet | `src/app/styles/dashboard.css` |
 | Forms/inputs/DateInput | `src/app/styles/components.css` |
 | Tables/shared filter popovers | `src/app/styles/components.css` |
-| Tasks toolbar/organization filter overflow | `src/app/styles/components.css` |
+| Tasks/Kanban toolbar and organization filter overflow | `src/app/styles/components.css` |
+| Kanban page sizing and Gantt assignee lists | `src/app/styles/features.css` |
 | Gantt | `src/app/styles/features.css` (`Gantt` section) |
 | WBS (toolbar, tree controls, tree table) | `src/app/styles/features.css` (`Proje Yapısı` section) |
 | Team directory (`.team-*`) | `src/app/styles/features.css` (`Ekip` section) |
@@ -37,7 +38,7 @@ Current root sequence:
 | Loading indicators (`.app-spinner`, `.saving-overlay`) | `src/app/styles/components.css` |
 | Toggle switch (`.toggle-field`, `.toggle-switch`) | `src/app/styles/components.css` |
 | Gantt outline controls (`.gantt-outline-*`, `.gantt-level-*`) | `src/app/styles/components.css` |
-| Sidebar collapse/pin and footer controls (`.sidebar-collapse-button`, `.sidebar-mode-toggle`) | `src/app/styles/shell.css` |
+| Sidebar hover/keyboard expansion, pin and segmented kip selector (`.sidebar-mode-toggle`) | `src/app/styles/shell.css` |
 
 A feature may use shared tokens and primitives, but its structural layout remains owned by the feature's stylesheet section.
 

@@ -176,7 +176,7 @@ export async function runCorporateWbsSync(run, { now = Date.now, logger = consol
   return skipped('REVALIDATING');
 }
 
-/** Testler ve veri modu değişimi için zamanlayıcıyı sıfırlar. */
+/** Testler ve veri kipi değişimi için zamanlayıcıyı sıfırlar. */
 export function resetCorporateWbsSyncScheduleForTests() {
   lastSuccessAt = null;
   lastFailureAt = null;

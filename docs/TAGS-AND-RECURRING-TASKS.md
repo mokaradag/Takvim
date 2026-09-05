@@ -25,7 +25,7 @@ sunucu doğrulaması aynı listeleri kullanır; renk ve simge için ikinci bir l
 tanımlanmamalıdır.
 
 `normalizeProjectTags` düz metinleri de kabul eder. Eski anlık görüntülerde ve
-Basit Mod'un hızlı giriş akışında etiketler metin olarak geldiği için bu
+Temel Kip'un hızlı giriş akışında etiketler metin olarak geldiği için bu
 tolerans bilinçlidir; katalog her durumda kanonik üçlülere yükseltilir.
 
 ### 1.2 Yeniden adlandırma

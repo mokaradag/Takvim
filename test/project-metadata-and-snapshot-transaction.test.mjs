@@ -133,9 +133,9 @@ test('persisted data mode is read in the state initializer, not after the first 
   const page = read('src/app/page.js');
 
   // Uygulama kökü YALNIZCA tarayıcıda çizilir; tembel başlatıcı hidrasyon
-  // uyuşmazlığı üretemez. Modu etkiyle okumak ilk karede her zaman
+  // uyuşmazlığı üretemez. Kipi etkiyle okumak ilk karede her zaman
   // `DataModeChooser` çiziyor, kullanıcı her yeniden yüklemede pencereyi
-  // görüyor ve o karedeki tıklama saklanan modu eziyordu.
+  // görüyor ve o karedeki tıklama saklanan kipi eziyordu.
   assert.match(page, /dynamic\(\(\) => import\('\.\.\/components\/shell\/ApplicationRoot'\), \{ ssr: false \}\)/);
   assert.match(source, /const \[dataMode, setDataModeState\] = useState\(readInitialDataMode\);/);
   assert.doesNotMatch(source, /setDataModeState\(readInitialDataMode\(\)\)/);

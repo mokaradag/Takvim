@@ -267,7 +267,7 @@ attığı için `"/\t/evil.example"` gibi bir değer denetimden geçip
 | Kimlik geçerli ama uygulama yetkisi yetersiz | `403 FORBIDDEN` |
 
 Kimlik doğrulanmadığında istemci yarım yüklenmiş Gerçek Sistem verisi görmez;
-açılış perdesinde açık bir "Kurumsal oturum aç" eylemi gösterilir. **Demo Modu
+açılış perdesinde açık bir "Kurumsal oturum aç" eylemi gösterilir. **Demo Kipi
 bir kimlik yedeği değildir**; yalnızca kullanıcının bilinçli seçimidir.
 
 ---

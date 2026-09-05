@@ -18,7 +18,7 @@ export const CORPORATE_SESSION_TIMEOUT_MS = 15000;
  * bileşen sökülürken iptal eden bir `signal` verir ve hiç sayaç kurmaz;
  * bağlantıyı kabul edip yanıt göndermeyen bir uç, kapıyı sonsuza dek
  * `checking` durumunda bırakıyordu. O durumda ekranda yalnızca ilerleme çubuğu
- * çizilir: "Yeniden Dene" ve "Demo moduna geç" düğmeleri YALNIZCA `error`
+ * çizilir: "Yeniden Dene" ve "Demo kipine geç" düğmeleri YALNIZCA `error`
  * durumunda görünür, yani kullanıcının ne yeniden deneme ne de demo kipine
  * geçme yolu kalıyordu.
  */

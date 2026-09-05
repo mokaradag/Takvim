@@ -140,7 +140,7 @@ test('kayıt sürerken dönen halka ve perde gösterilir', () => {
   assert.doesNotMatch(tasksView, /<ButtonSpinner/);
 
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /isSaving && <Spinner size=\{13\} \/>/);
+  assert.match(drawer, /isSaving \? <Spinner size=\{13\} \/> : <Icons.Save size=\{14\} \/>/);
 
   const status = read('src/components/shell/PersistenceStatus.jsx');
   assert.match(status, /<Spinner size=\{14\} \/> Kaydediliyor…/);
@@ -198,7 +198,7 @@ test('paneldeki sorumlu kartı görev kapsamlı fotoğraf kimliklerini taşır',
 
 /* ── 4 · Kenar çubuğu hızlı eylemleri ───────────────────────── */
 
-test('mod, tema ve oturum eylemleri kenar çubuğunun altında yer alır', () => {
+test('kip, tema ve oturum eylemleri kenar çubuğunun altında yer alır', () => {
   const shell = read('src/components/shell/AppShell.jsx');
   assert.doesNotMatch(shell, /QuickActions/);
   assert.match(shell, /const signOutState = useSignOut\(\);/);
@@ -207,7 +207,9 @@ test('mod, tema ve oturum eylemleri kenar çubuğunun altında yer alır', () =>
   const sidebar = read('src/components/shell/SidebarUserPanel.jsx');
   assert.match(sidebar, /signOutState/);
   assert.match(sidebar, /sidebar-mode-toggle/);
-  assert.match(sidebar, /role="switch"/);
+  assert.match(sidebar, /role="group" aria-label="Çalışma kipi"/);
+  assert.match(sidebar, /aria-pressed=\{simpleMode\}/);
+  assert.match(sidebar, /aria-pressed=\{!simpleMode\}/);
   assert.match(sidebar, /onToggleTheme/);
   assert.match(sidebar, /onClick=\{signOut\}/);
   assert.doesNotMatch(sidebar, /useSignOut\(\)/);

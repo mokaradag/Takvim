@@ -779,8 +779,7 @@ export function TaskDrawer({
           </button>}
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={primaryAction} disabled={isSaving || !titleValid} aria-busy={isSaving}>
-            {isSaving && <Spinner size={13} />}
-            {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
+            {isSaving ? <Spinner size={13} /> : <Icons.Save size={14} />} {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>
         </div>
       </div>

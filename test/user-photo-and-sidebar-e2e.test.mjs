@@ -260,7 +260,7 @@ test('kenar çubuğu footer kısayolu kaldırıldı, Yardım sayfası ve gezinme
   assert.match(navigation, /id: 'yardim'/);
   assert.match(shell, /case 'yardim': return <HelpView \/>;/);
 
-  // Tema, mod ve oturum kapatma denetimleri alt araç alanında korunur.
+  // Tema, kip ve oturum kapatma denetimleri alt araç alanında korunur.
   assert.match(panel, /onToggleTheme/);
   assert.match(panel, /aria-label="Temayı değiştir"/);
   assert.match(panel, /sidebar-mode-toggle/);

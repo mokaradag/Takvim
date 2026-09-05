@@ -1,6 +1,6 @@
 /* MERGEN Rota · Simple Mode ownership */
 
-/* Basit Mod hızlı giriş kartı. */
+/* Temel Kip hızlı giriş kartı. */
 .calendar-page-stack { display: flex; flex-direction: column; gap: 18px; }
 .simple-entry-card { padding: 20px; border: 1px solid var(--chrome-border); border-radius: var(--r-xl); background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 7%, var(--bg-elev)), var(--bg-elev)); box-shadow: var(--shadow-sm); }
 .simple-entry-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
@@ -37,7 +37,7 @@
 .simple-project-back { grid-column: 1 / -1; justify-self: start; }
 .simple-save { min-width: 130px; justify-content: center; }
 
-/* Basit Mod Takvim sayfası: Takvim varsayılan, hızlı giriş ayrı sekmede. */
+/* Temel Kip Takvim sayfası: Takvim varsayılan, hızlı giriş ayrı sekmede. */
 .simple-calendar-workspace {
   display: flex;
   flex-direction: column;
@@ -131,8 +131,8 @@
   .simple-project-field, .simple-task-field { grid-column: auto; }
 }
 
-/* ── Basit Mod · Öncelik seçimi ────────────────────────────────
-   Katalog Gelişmiş Modla aynıdır; yalnızca sunum sadeleştirilir. */
+/* ── Temel Kip · Öncelik seçimi ────────────────────────────────
+   Katalog Kapsamlı Kiple aynıdır; yalnızca sunum sadeleştirilir. */
 .simple-priority-picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .simple-priority-option {
   display: inline-flex;
@@ -156,8 +156,8 @@
 }
 .simple-priority-option:disabled { opacity: .5; cursor: default; }
 
-/* ── Basit Mod · Görevler tablosu ──────────────────────────────
-   Gelişmiş Modun tam tablosu değil, Hızlı Görev Tanımı'yla toplanan
+/* ── Temel Kip · Görevler tablosu ──────────────────────────────
+   Kapsamlı Kipin tam tablosu değil, Hızlı Görev Tanımı'yla toplanan
    alanların sade listesi. */
 .simple-tasks-page { height: 100%; min-height: 0; gap: 14px; }
 .simple-tasks-toolbar {
@@ -202,7 +202,7 @@
   padding: 0 2px;
 }
 
-/* Basit Mod görev düzenleyicisi. */
+/* Temel Kip görev düzenleyicisi. */
 .simple-task-drawer .drawer-body { padding: 18px 20px; }
 .simple-drawer-assignees { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
 .simple-drawer-assignees .simple-person { cursor: default; }

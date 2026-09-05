@@ -26,15 +26,15 @@ import { useSharedTaskOrganizationFilter } from './TaskOrganizationFilterContext
 import { useTaskOrganizationFilter } from './useTaskOrganizationFilter.js';
 
 /**
- * Basit Mod · Görevler.
+ * Temel Kip · Görevler.
  *
- * Gelişmiş Modun tam tablosu BİLİNÇLİ OLARAK gösterilmez. Basit Mod kullanıcısı
+ * Kapsamlı Kipin tam tablosu BİLİNÇLİ OLARAK gösterilmez. Temel Kip kullanıcısı
  * görevini "Hızlı Görev Tanımı" ile açar: proje, görev, kısa açıklama, sorumlu,
  * termin ve öncelik. Tablo aynı alanları listeler; ilerleme yüzdesi,
  * planlanan başlangıç/bitiş, dağılım ağacı ve bağımlılıklar gibi
- * Basit Modda hiç toplanmayan sütunlar dışarıda kalır (bkz. simpleTaskColumns.js).
+ * Temel Kipte hiç toplanmayan sütunlar dışarıda kalır (bkz. simpleTaskColumns.js).
  *
- * Gelişmiş Mod tablosu (TasksView) değişmeden durur.
+ * Kapsamlı Kip tablosu (TasksView) değişmeden durur.
  */
 function projectLabel(project) {
   if (!project) return '';
@@ -104,7 +104,7 @@ export function SimpleTasksView({ onNewTask }) {
   const setFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
 
   const visible = useMemo(() => {
-    // Kurumsal kapsam yetkili çalışma alanı görevlerini önce daraltır; Basit Mod
+    // Kurumsal kapsam yetkili çalışma alanı görevlerini önce daraltır; Temel Kip
     // araması, fasetleri ve sıralaması bu kümenin üzerinde çalışır.
     const filtered = organization.filteredTasks.filter((task) => simpleTaskMatches(task, { search, filters }));
 
@@ -157,13 +157,13 @@ export function SimpleTasksView({ onNewTask }) {
 
         {hasFilters && <button type="button" className="btn ghost sm" onClick={clearFilters}><Icons.Close size={12} /> Filtreleri temizle</button>}
 
-        <InfoButton title="Basit Mod Görevler" icon={<Icons.Table size={12} />}>
+        <InfoButton title="Temel Kip Görevler" icon={<Icons.Table size={12} />}>
           <p>Hızlı Görev Tanımı ile girdiğiniz bilgiler burada listelenir.</p>
           <div className="rt-sep" />
           <div className="rt-row"><Icons.Edit size={12} className="rt-ico" /><span>Satıra tıklayın: görevi düzenleyin</span></div>
           <div className="rt-row"><Icons.Mail size={12} className="rt-ico" /><span>Zarf simgesi: sorumlulara hatırlatma e-postası gönderir</span></div>
           <div className="rt-sep" />
-          <p>İlerleme yüzdesi ve ayrıntılı planlama sütunları Gelişmiş Modda yer alır.</p>
+          <p>İlerleme yüzdesi ve ayrıntılı planlama sütunları Kapsamlı Kipte yer alır.</p>
         </InfoButton>
 
         <span className="muted tabular simple-tasks-count">{visible.length} / {tasks.length} görev</span>
@@ -180,7 +180,7 @@ export function SimpleTasksView({ onNewTask }) {
 
       <div className="card simple-tasks-card">
         <div className="simple-tasks-scroll">
-          <table className="tbl simple-tasks-table" aria-label="Basit Mod Görevler">
+          <table className="tbl simple-tasks-table" aria-label="Temel Kip Görevler">
             <thead>
               <tr>
                 <FilterableTH label="Proje" style={{ minWidth: 170 }} sortKey={sortFor('proje')} onSort={setSortFor('proje')}
@@ -248,7 +248,7 @@ export function SimpleTasksView({ onNewTask }) {
                     </td>
                     <td><StatusPill task={task} /></td>
                     <td className={`tabular tasks-date-cell${late ? ' simple-tasks-late' : ''}`}>{fmt(task.targetFinish)}</td>
-                    {/* Eylem sütunu sağa yapışıktır (Gelişmiş Modla aynı kural). */}
+                    {/* Eylem sütunu sağa yapışıktır (Kapsamlı Kiple aynı kural). */}
                     <td className="tasks-actions-cell">
                       <div className="row simple-tasks-actions" style={{ gap: 4 }}>
                         <TaskReminderButton task={task} />

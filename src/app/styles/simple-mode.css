@@ -1,6 +1,6 @@
 /* MERGEN Rota · Simple Mode ownership */
 
-/* Basit Mod hızlı giriş kartı. */
+/* Temel Kip hızlı giriş kartı. */
 .calendar-page-stack { display: flex; flex-direction: column; gap: 18px; }
 /* Kayıt perdesi SARMALAYICIYA göre konumlanır: perde formun dışındadır,
    böylece form `inert` olduğunda bildirim erişilebilir kalır. */
@@ -40,7 +40,7 @@
 .simple-project-back { grid-column: 1 / -1; justify-self: start; }
 .simple-save { min-width: 130px; justify-content: center; }
 
-/* Basit Mod Takvim sayfası: Takvim varsayılan, hızlı giriş ayrı sekmede. */
+/* Temel Kip Takvim sayfası: Takvim varsayılan, hızlı giriş ayrı sekmede. */
 .simple-calendar-workspace {
   display: flex;
   flex-direction: column;
@@ -137,8 +137,8 @@
   .simple-project-field, .simple-task-field { grid-column: auto; }
 }
 
-/* ── Basit Mod · Öncelik seçimi ────────────────────────────────
-   Katalog Gelişmiş Modla aynıdır; yalnızca sunum sadeleştirilir. */
+/* ── Temel Kip · Öncelik seçimi ────────────────────────────────
+   Katalog Kapsamlı Kiple aynıdır; yalnızca sunum sadeleştirilir. */
 .simple-priority-picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .simple-priority-option {
   display: inline-flex;
@@ -162,8 +162,8 @@
 }
 .simple-priority-option:disabled { opacity: .5; cursor: default; }
 
-/* ── Basit Mod · Görevler tablosu ──────────────────────────────
-   Gelişmiş Modun tam tablosu değil, Hızlı Görev Tanımı'yla toplanan
+/* ── Temel Kip · Görevler tablosu ──────────────────────────────
+   Kapsamlı Kipin tam tablosu değil, Hızlı Görev Tanımı'yla toplanan
    alanların sade listesi. */
 .simple-tasks-page { height: 100%; min-height: 0; gap: 14px; }
 .simple-tasks-toolbar {
@@ -174,7 +174,7 @@
 .simple-tasks-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .simple-tasks-select .input { padding: 6px 8px; font-size: 12px; }
 .simple-tasks-count { margin-left: auto; font-size: 12.5px; }
-/* Gelişmiş moddaki `.tasks-table-card` / `.tasks-table-scroll` ikilisiyle aynı
+/* Kapsamlı kipteki `.tasks-table-card` / `.tasks-table-scroll` ikilisiyle aynı
    esnek boyutlandırma: `flex: 1 1 0` olmadan kart içeriğine göre büyüyor,
    `overflow: auto` hiç devreye girmiyor ve yapışkan `th` için kaydırılabilir bir
    ata kalmıyordu — uzun listede başlık ekrandan çıkıyor, tablo yerine sayfa
@@ -210,7 +210,7 @@
   padding: 0 2px;
 }
 
-/* Basit Mod görev düzenleyicisi. */
+/* Temel Kip görev düzenleyicisi. */
 .simple-task-drawer .drawer-body { padding: 18px 20px; }
 .simple-drawer-assignees { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
 .simple-drawer-assignees .simple-person { cursor: default; }

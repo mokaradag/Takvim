@@ -1,6 +1,6 @@
 /* MERGEN Rota · onboarding, settings-mode and help ownership */
 
-/* İlk açılış çalışma modu seçimi. */
+/* İlk açılış çalışma kipi seçimi. */
 .mode-picker-backdrop {
   position: fixed;
   inset: 0;
@@ -76,7 +76,7 @@
 .mode-picker-points svg { color: var(--status-done); }
 .mode-picker-action { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--accent); font-size: 12.5px; font-weight: 750; }
 .data-mode-picker { width: min(900px, calc(var(--app-viewport-w, 100vw) * 0.96)); }
-/* Veri modu anahtarı: kenar çubuğunu sade tutmak için Ayarlar sayfasında yaşar. */
+/* Veri kipi anahtarı: kenar çubuğunu sade tutmak için Ayarlar sayfasında yaşar. */
 .data-mode-indicator {
   display: flex;
   align-items: center;
@@ -118,7 +118,7 @@
 .data-mode-variant-settings strong { font-size: 11.5px; }
 .data-mode-variant-settings small { font-size: 10px; }
 
-/* Ayarlar çalışma modu kartları. */
+/* Ayarlar çalışma kipi kartları. */
 .settings-mode-section { padding: 22px; border: 1px solid var(--chrome-border); border-radius: var(--r-xl); background: linear-gradient(135deg, var(--chrome-bg-soft), var(--bg-elev)); }
 .settings-mode-heading { display: flex; gap: 18px; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
 .settings-mode-heading h2 { margin: 3px 0 5px; font-size: 20px; letter-spacing: -.025em; }

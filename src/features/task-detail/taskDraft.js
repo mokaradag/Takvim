@@ -38,7 +38,7 @@ export function reconcileTaskDraft(canonicalTask, localDraft, dirtyFields = new 
   return { task: nextTask, dirtyFields: nextDirtyFields };
 }
 
-/** Basit Mod etiket taslağı varken yalnızca `keyword` alanı korunur. */
+/** Temel Kip etiket taslağı varken yalnızca `keyword` alanı korunur. */
 export function keywordDirtyFields(keywordDraft) {
   return keywordDraft === null ? new Set() : new Set(['keyword']);
 }

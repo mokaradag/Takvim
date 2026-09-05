@@ -108,7 +108,7 @@ test('çalışma alanı seçimi geri alınabilir', () => {
   assert.match(shell, /onClick=\{\(\) => selectWorkspace\(null\)\}/);
 });
 
-/* ── #4 · Basit Modda serbest proje tanımlama ────────────── */
+/* ── #4 · Temel Kipte serbest proje tanımlama ────────────── */
 
 test('serbest proje seçeneği kurumsal katalogdan önce listelenir', () => {
   const corporate = Array.from({ length: 500 }, (_, index) => ({ value: `p-${index}`, label: `Proje ${index}` }));
@@ -125,13 +125,13 @@ test('proje oluşturma yetkisi olmayan oturumda serbest proje seçeneği eklenme
   assert.deepEqual(options.map((option) => option.value), ['p-1']);
 });
 
-test('Basit Modda serbest proje tanımından kurumsal listeye dönüş vardır', () => {
+test('Temel Kipte serbest proje tanımından kurumsal listeye dönüş vardır', () => {
   const source = read('src/features/simple/SimpleModePanel.jsx');
   assert.match(source, /Kurumsal proje listesine dön/);
   assert.match(source, /const returnToProjectList = \(\) => \{/);
 });
 
-test('Basit Modda proje oluşturmak hızlı görev formunu yeniden monte etmez', () => {
+test('Temel Kipte proje oluşturmak hızlı görev formunu yeniden monte etmez', () => {
   const panel = read('src/features/simple/SimpleModePanel.jsx');
   const provider = read('src/state/AppStateProvider.jsx');
 
@@ -277,9 +277,9 @@ test('Gerçek Sistem kimlik hatası hangi kaydın hatalı olduğunu söyler', ()
   );
 });
 
-/* ── #9 · Veri modu anahtarının konumu ───────────────────── */
+/* ── #9 · Veri kipi anahtarının konumu ───────────────────── */
 
-test('veri modu anahtarı Ayarlar sayfasında yaşar', () => {
+test('veri kipi anahtarı Ayarlar sayfasında yaşar', () => {
   const indicator = read('src/components/shell/DataModeIndicator.jsx');
   const shell = read('src/components/shell/AppShell.jsx');
   const settings = read('src/features/settings/SettingsView.jsx');

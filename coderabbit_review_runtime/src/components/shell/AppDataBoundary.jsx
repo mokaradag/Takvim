@@ -33,7 +33,7 @@ function BootBrand() {
       <AppLogo size={54} />
       <div className="app-boot-wordmark">
         <span>MERGEN</span><strong>Rota</strong>
-        <small>Proje Yönetimi</small>
+        <small>Görev Yönetimi</small>
       </div>
     </div>
   );
@@ -85,9 +85,9 @@ function BootSteps() {
 }
 
 /**
- * Veri modu anahtarı Ayarlar sayfasında yaşar; Ayarlar'a ise yalnızca uygulama
+ * Veri kipi anahtarı Ayarlar sayfasında yaşar; Ayarlar'a ise yalnızca uygulama
  * kabuğu üzerinden ulaşılır. İlk yükleme başarısız olduğunda kabuk hiç render
- * edilmediği için kullanıcının Demo moduna dönebileceği tek çıkış yolu burada
+ * edilmediği için kullanıcının Demo kipine dönebileceği tek çıkış yolu burada
  * sunulur. Aksi hâlde Gerçek Sistem erişilemediğinde uygulama tümüyle kilitlenir.
  */
 function DemoModeEscape() {
@@ -106,7 +106,7 @@ function DemoModeEscape() {
         finally { setSwitching(false); }
       }}
     >
-      <Icons.Sparkle size={13} /> {switching ? 'Geçiliyor…' : 'Demo moduna geç'}
+      <Icons.Sparkle size={13} /> {switching ? 'Geçiliyor…' : 'Demo kipine geç'}
     </button>
   );
 }
@@ -115,7 +115,7 @@ function DemoModeEscape() {
  * Yükleme/hata perdesi YALNIZCA ilk veri yüklemesinde gösterilir.
  *
  * Daha önce veri yüklendiyse yeniden yükleme (proje oluşturma, kaydetme sonrası
- * tazeleme, veri modu değişikliği dışındaki her akış) kabuğu söktürmez: aksi
+ * tazeleme, veri kipi değişikliği dışındaki her akış) kabuğu söktürmez: aksi
  * hâlde AppShell yeniden monte olur, yerel durumu (açık sayfa, karşılama ekranı
  * tercihi, seçili sekme) sıfırlanır ve kullanıcı "Projeyi oluştur" düğmesine
  * bastığında uygulama baştan açılmış gibi davranıyordu.

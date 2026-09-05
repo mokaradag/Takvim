@@ -85,7 +85,7 @@ function CorporateSessionGate({ children, onUseDemo }) {
                 Yeniden Dene
               </button>
               <button className="btn" type="button" onClick={onUseDemo}>
-                <Icons.Sparkle size={13} /> Demo moduna geç
+                <Icons.Sparkle size={13} /> Demo kipine geç
               </button>
             </div>
           )
@@ -100,9 +100,9 @@ function CorporateSessionGate({ children, onUseDemo }) {
 }
 
 export default function ApplicationRoot() {
-  // Saklanan mod İLK RENDER'da okunur. Etkiyle okunduğunda ilk kare her zaman
+  // Saklanan kip İLK RENDER'da okunur. Etkiyle okunduğunda ilk kare her zaman
   // `DataModeChooser` çiziyor, kullanıcı her yeniden yüklemede pencereyi
-  // görüyor ve o karede yapılan bir tıklama saklanan modu eziyordu. Bileşen
+  // görüyor ve o karede yapılan bir tıklama saklanan kipi eziyordu. Bileşen
   // `dynamic(..., { ssr: false })` ile yüklenir (bkz. app/page.js), bu yüzden
   // tembel başlatıcı hidrasyon uyuşmazlığı üretmez.
   const [dataMode, setDataModeState] = useState(readInitialDataMode);

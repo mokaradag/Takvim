@@ -172,7 +172,7 @@ test('Sürüm 1.0 UI contracts place project creation and tag governance in Proj
   assert.match(taskDrawer, /kontrollü etiket kataloğundan açıkça seçilir/);
   assert.match(taskDrawer, /Lead \/ Lag/);
   assert.match(navigation, /Kullanım Rehberi/);
-  assert.match(help, /Gelişmiş Mod akışı/);
+  assert.match(help, /Kapsamlı Kip akışı/);
   assert.match(css, /\.gantt-left \{ z-index: 30; \}/);
   assert.match(fs.readFileSync(path.join(ROOT, 'src/app/styles/components.css'), 'utf8'), /\.col-filter-pop,\s*\n\.gantt-cols-pop/);
 });

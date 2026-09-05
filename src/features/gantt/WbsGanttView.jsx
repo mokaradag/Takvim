@@ -1,5 +1,6 @@
 'use client';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { GanttAssignees } from './GanttAssignees.jsx';
 import { Icons } from '../../components/icons';
 import { InfoButton, Tooltip } from '../../components/ui-extras';
 import { buildWbsTree, selectWbsTaskRollup } from '../../domain/selectors/index.js';
@@ -497,7 +498,7 @@ export function WbsGanttView() {
                     <Tooltip title={`${task.task} · Kilometre taşı`} icon={<Icons.Diamond size={11} />} content={<>
                       <div className="rt-row"><span className="rt-label">Tarih</span><span className="rt-val">{fmt(task.plannedStart, 'dd MMM yyyy')}</span></div>
                       <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
-                      <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{task.sorumlu?.join(', ') || '—'}</span></div>
+                      <GanttAssignees task={task} />
                       <CriticalPathDetails schedule={taskSchedule} />
                     </>}>
                       <div className="gantt-milestone" style={{ '--milestone-color': critical ? 'var(--status-overdue)' : projectColor, top: top + 11, left }} onClick={() => openTask(task)} onMouseEnter={() => setHotTaskId(task.id)} onMouseLeave={() => setHotTaskId(null)} />
@@ -518,7 +519,7 @@ export function WbsGanttView() {
                     <div className="rt-sep" />
                     <div className="rt-row"><span className="rt-label">Durum</span><span className="rt-val">{status.label}</span></div>
                     <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{progress}%</span></div>
-                    <div className="rt-row"><span className="rt-label">Sorumlu</span><span className="rt-val">{task.sorumlu?.join(', ') || '—'}</span></div>
+                    <GanttAssignees task={task} />
                     <CriticalPathDetails schedule={taskSchedule} />
                   </>}>
                     <div className={`gantt-bar${task.status === 'done' ? ' done' : ''}`} style={{ '--bar-color': projectColor, position: 'absolute', left: left + 2, width: Math.max(20, width - 4), top: top + 8, boxShadow: critical ? '0 0 0 2px var(--status-overdue)' : undefined }} onClick={() => openTask(task)} onMouseEnter={() => setHotTaskId(task.id)} onMouseLeave={() => setHotTaskId(null)}>

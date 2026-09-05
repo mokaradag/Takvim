@@ -299,7 +299,7 @@ export function WbsView() {
     );
   }
 
-  // Kurumsal kaynak (CN43N) yalnızca Gerçek Sistem modunda vardır.
+  // Kurumsal kaynak (CN43N) yalnızca Gerçek Sistem kipinde vardır.
   const isCorporate = isActualDataMode && isCorporateProject(workspace.selectedProject);
   // Kurumsal projelerde yapı CN43N kaynağından gelir; düzenleme eylemleri kapatılır.
   const canEdit = canWriteProject(workspace.selectedProject) && !isCorporate;

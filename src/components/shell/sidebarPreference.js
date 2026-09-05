@@ -9,7 +9,8 @@ export function readSidebarPreference(storage) {
     const resolvedStorage = storage === undefined ? globalThis.localStorage : storage;
     const value = JSON.parse(resolvedStorage?.getItem(SIDEBAR_PREFERENCE_KEY) || 'null');
     if (!value || typeof value !== 'object') return { ...DEFAULT_SIDEBAR_PREFERENCE };
-    return { pinned: value.pinned !== false, collapsed: value.collapsed === true };
+    const pinned = value.pinned !== false;
+    return { pinned, collapsed: !pinned };
   } catch {
     return { ...DEFAULT_SIDEBAR_PREFERENCE };
   }

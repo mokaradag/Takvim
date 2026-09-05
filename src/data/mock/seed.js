@@ -169,7 +169,7 @@ const projectById = new Map(PROJECTS.map((project) => [project.id, project]));
 export const TASK_BASELINE_SNAPSHOTS = TASKS.map((task) => {
   const baseline = primaryBaselineByProjectId.get(task.projectId);
   // Tohum verisi modül YÜKLENİRKEN değerlendirilir: eşleşmeyen bir proje adı
-  // `undefined.id` ile TypeError üretiyor ve Demo Modu okunmayan bir yığın
+  // `undefined.id` ile TypeError üretiyor ve Demo Kipi okunmayan bir yığın
   // iziyle hiç açılmıyordu.
   if (!baseline) {
     throw new Error(`Demo tohumu: "${task.task}" görevi tanınan bir projeye bağlı değil (projectId: ${task.projectId}).`);

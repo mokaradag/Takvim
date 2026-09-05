@@ -75,9 +75,9 @@ test('simple mode uses the existing task/project infrastructure and exposes the 
   assert.match(defaults, /appMode:\s*'advanced'/);
   assert.match(shell, /SimpleModePanel/);
   assert.match(shell, /SIMPLE_NAV_IDS/);
-  assert.match(settings, /Basit Mod/);
-  assert.match(settings, /Gelişmiş Mod/);
-  assert.match(help, /Çalışma Modları/);
+  assert.match(settings, /Temel Kip/);
+  assert.match(settings, /Kapsamlı Kip/);
+  assert.match(help, /Çalışma Kipleri/);
 
   for (const expected of ['Proje', 'Görev', 'Anahtar sözcük / kısa açıklama', 'Sorumlular', 'Termin tarihi']) {
     assert.match(simple, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

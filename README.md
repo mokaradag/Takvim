@@ -1,23 +1,23 @@
 # MERGEN Rota — Görev Yönetimi
 
-Endüstriyel/kontrol paneli tarzında bir görev yönetimi uygulaması: Basit Modda hızlı görev/termin takibi; Gelişmiş Modda Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
+Endüstriyel/kontrol paneli tarzında bir görev yönetimi uygulaması: Temel Kipte hızlı görev/termin takibi; Kapsamlı Kipte Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
 
-MERGEN Rota artık iki tümüyle yalıtılmış **Veri Modu** sunar:
+MERGEN Rota artık iki tümüyle yalıtılmış **Veri Kipi** sunar:
 
-- **Demo Modu** — mevcut zengin örnek veri kümesini kullanan, asenkron ve kalıcı olmayan bellek repository'si. Demo kayıtları SQL Server'a veya Gerçek Sistem API'sine gönderilmez.
+- **Demo Kipi** — mevcut zengin örnek veri kümesini kullanan, asenkron ve kalıcı olmayan bellek repository'si. Demo kayıtları SQL Server'a veya Gerçek Sistem API'sine gönderilmez.
 - **Gerçek Sistem** — tarayıcıdaki API repository'sinden Next.js sunucu katmanına, sunucu tarafı yetkilendirmeye ve SQL Server repository'sine giden kalıcı üretim veri yolu. Tarayıcı SQL Server'a hiçbir zaman doğrudan bağlanmaz.
 
-Veri Modu, **Basit Mod / Gelişmiş Mod** kullanım seçiminden bağımsızdır. Veri Modu değiştiğinde application-state provider yeniden kurulur; Demo ve Gerçek Sistem snapshot'ları birleştirilmez. Demo etkin olduğunda sürekli görünen `DEMO` göstergesi vardır.
+Veri Kipi, **Temel Kip / Kapsamlı Kip** kullanım seçiminden bağımsızdır. Veri Kipi değiştiğinde application-state provider yeniden kurulur; Demo ve Gerçek Sistem snapshot'ları birleştirilmez. Demo etkin olduğunda sürekli görünen `DEMO` göstergesi vardır.
 
 ## Otomatik veri yenileme
 
-Gerçek Sistem verisi, sekme görünürken varsayılan olarak **60 saniyede bir** uygulamanın mevcut `reloadData()`/snapshot yaşam döngüsüyle yenilenir. Bu bir tarayıcı sayfası yenilemesi değildir: çalışma alanı, arama, görev tablosu süzgeçleri ve Direktörlük/Müdürlük/Birim seçimi korunur; seçili proje ile açık görev çekmecesi ise dayandıkları kayıtlar yetkili snapshot'ta geçerli kaldığı sürece korunur. Proje artık geçerli değilse Portföy moduna dönülür, seçili görev artık geçerli değilse çekmece kapatılır. Eşdeğer snapshot'larda değişmeyen nesne ve koleksiyon referansları yeniden kullanılır. Yenilenen yetkili kişi/görev projeksiyonunda kurumsal yol gerçekten kaybolmuşsa yalnızca geçersiz alt seçim en yakın geçerli üst kapsama indirilir. Manuel yenileme denetimi de kullanılabilir durumda kalır.
+Gerçek Sistem verisi, sekme görünürken varsayılan olarak **60 saniyede bir** uygulamanın mevcut `reloadData()`/snapshot yaşam döngüsüyle yenilenir. Bu bir tarayıcı sayfası yenilemesi değildir: çalışma alanı, arama, görev tablosu süzgeçleri ve Direktörlük/Müdürlük/Birim seçimi korunur; seçili proje ile açık görev çekmecesi ise dayandıkları kayıtlar yetkili snapshot'ta geçerli kaldığı sürece korunur. Proje artık geçerli değilse Portföy kipine dönülür, seçili görev artık geçerli değilse çekmece kapatılır. Eşdeğer snapshot'larda değişmeyen nesne ve koleksiyon referansları yeniden kullanılır. Yenilenen yetkili kişi/görev projeksiyonunda kurumsal yol gerçekten kaybolmuşsa yalnızca geçersiz alt seçim en yakın geçerli üst kapsama indirilir. Manuel yenileme denetimi de kullanılabilir durumda kalır.
 
 Aralık, gizli olmayan ve derleme sırasında istemci paketine gömülen `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` değişkeniyle ayarlanır. Varsayılan `60000`, izin verilen en küçük değer `30000` milisaniyedir. Eksik, boş, sayısal olmayan, sıfır, negatif, alt sınırdan küçük veya tarayıcı zamanlayıcı sınırını aşan değerler güvenli biçimde `60000` değerine döner; değişiklikten sonra üretim paketi yeniden derlenmelidir.
 
 Gizli sekmede periyodik yoklama durur. Sekmeye dönüldüğünde veri aralık kadar eskimişse hemen yenilenir; değilse kalan süre beklenir. Tek-uçuş denetimi otomatik ve manuel yenilemelerin üst üste binmesini önler. Otomatik tur sürerken başlatılan manuel yenileme, arka plan sonucuna katılmak yerine turun hemen arkasına tek kez alınır; böylece manuel isteğin yükleme ve hata durumu görünür kalır. Otomatik yenileme önce bekleyen yazmaları mevcut sıralı persistence kuyruğuyla tamamlar; çözülememiş başarısız görev yaması varsa yenilemeyi sessizce atlar ve yerel düzenlemeyi hiçbir zaman otomatik olarak silmez. Geçici arka plan bağlantı hataları mevcut veriyi kullanılamaz hâle getirmez; oturum/kimlik hataları mevcut uygulama akışında işlenmeye devam eder.
 
-Demo Modu bellek içi depoya karşı otomatik yoklama yapmaz. Her otomatik tur normal snapshot ucunu kullanır; istemci ayrı bir CN43N eşitlemesi başlatmaz. Kurumsal WBS eşitlemesi bağımsız `MERGEN_ROTA_WBS_SYNC_TTL_MS` penceresi, tek-uçuş kilidi ve içerik parmak iziyle korunmaya devam eder; 60 saniyelik veri yenilemesi CN43N'yi 60 saniyede bir zorla eşitlemez.
+Demo Kipi bellek içi depoya karşı otomatik yoklama yapmaz. Her otomatik tur normal snapshot ucunu kullanır; istemci ayrı bir CN43N eşitlemesi başlatmaz. Kurumsal WBS eşitlemesi bağımsız `MERGEN_ROTA_WBS_SYNC_TTL_MS` penceresi, tek-uçuş kilidi ve içerik parmak iziyle korunmaya devam eder; 60 saniyelik veri yenilemesi CN43N'yi 60 saniyede bir zorla eşitlemez.
 
 ## Yerel geliştirme
 
@@ -38,20 +38,20 @@ npm run dev
 - `npm run lint` — Next.js/ESLint kod kalite kontrolü
 - `npm test` — domain, scheduling, state, persistence, SQL şeması ve yetkilendirme regresyon testleri
 
-## Veri Modu ve kullanım modları
+## Veri Kipi ve kullanım kipleri
 
-İlk Veri Modu seçiminde kullanıcı **Demo Modunu Aç** veya **Gerçek Sisteme Geç** seçeneklerinden birini seçer. Gerçek Sistem yüklenemezse Demo'ya sessiz dönüş yapılmaz; veritabanı, kimlik veya yetki hatası açıkça gösterilir ve Demo'ya dönüş kullanıcı kararıyla gerçekleşir.
+İlk Veri Kipi seçiminde kullanıcı **Demo Kipini Aç** veya **Gerçek Sisteme Geç** seçeneklerinden birini seçer. Gerçek Sistem yüklenemezse Demo'ya sessiz dönüş yapılmaz; veritabanı, kimlik veya yetki hatası açıkça gösterilir ve Demo'ya dönüş kullanıcı kararıyla gerçekleşir.
 
 Gerçek Sistem seçildiğinde application-state provider kurulmadan önce kurumsal oturum denetlenir. Oturum yoksa kullanıcı doğrudan seçili Keycloak akışına yönlendirilir; uygulama içinde ayrıca `Oturum açmanız gerekiyor` kutusu gösterilmez.
 
-Kullanım modları aynı seçili veri kaynağı üzerinde çalışır:
+Kullanım kipleri aynı seçili veri kaynağı üzerinde çalışır:
 
-- **Basit Mod**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sütun filtreli sadeleştirilmiş **Görevler** listesi ve termin günü Takvim takibi. İlerleme, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Basit Modda gösterilmez.
-- **Gelişmiş Mod**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
+- **Temel Kip**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sütun filtreli sadeleştirilmiş **Görevler** listesi ve termin günü Takvim takibi. İlerleme, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Temel Kipte gösterilmez.
+- **Kapsamlı Kip**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
 
-Her iki modun **Görevler** araç çubuğunda Ekip sayfasıyla aynı kararlı kurumsal yol semantiğini kullanan **Direktörlük → Müdürlük → Birim** süzgeçleri bulunur. Süzgeç, görevin oluşturucusuna veya proje sorumlusuna değil görev sorumlularına bakar; çok sorumlulu görevde en az bir sorumlunun seçili kapsamda olması yeterlidir. Bu yalnızca istemci tarafı daraltmadır: önce sunucunun yetkilendirdiği snapshot ve seçili çalışma alanı/proje uygulanır, kurumsal seçim bunlara yeni görev veya kişi ekleyemez. Basit/Gelişmiş Mod geçişi aynı oturum içindeki kurumsal seçimi paylaşır.
+Her iki kipin **Görevler** ve Kapsamlı Kipin **Kanban** araç çubuğunda Ekip sayfasıyla aynı kararlı kurumsal yol semantiğini kullanan **Direktörlük → Müdürlük → Birim** süzgeçleri bulunur. Süzgeç, görevin oluşturucusuna veya proje sorumlusuna değil görev sorumlularına bakar; çok sorumlulu görevde en az bir sorumlunun seçili kapsamda olması yeterlidir. Bu yalnızca istemci tarafı daraltmadır: önce sunucunun yetkilendirdiği snapshot ve seçili çalışma alanı/proje uygulanır, kurumsal seçim bunlara yeni görev veya kişi ekleyemez. Temel/Kapsamlı Kip ile Görevler/Kanban geçişleri aynı oturum içindeki kurumsal seçimi paylaşır. Kanban araması görev, proje adı/kodu, sorumlu, etiket ve öncelikle kurumsal seçimi birlikte uygular; sütun sayıları süzülmüş görevleri sayar. Filtreleri temizle aramayı ve kurumsal seçimi sıfırlar.
 
-Planlanan/gerçekleşen saat alanları veritabanı ve API uyumluluğu için korunur ancak normal uygulama arayüzünde hiçbir modda gösterilmez; kullanıcı ilerlemeyi `İlerleme` üzerinden izler.
+Planlanan/gerçekleşen saat alanları veritabanı ve API uyumluluğu için korunur ancak normal uygulama arayüzünde hiçbir kipte gösterilmez; kullanıcı ilerlemeyi `İlerleme` üzerinden izler.
 
 ## Durable SQL Server mimarisi
 
@@ -259,7 +259,7 @@ enjeksiyonuna karşı nötrlenir ve dışarı yalnızca ekranda da görülen ala
 
 Her görev için sorumlularına hatırlatma e-postası gönderilebilir. İki akış vardır ve ikisi de aynı alıcı çözümleme, şablon işleme ve SMTP servisini kullanır:
 
-- **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki modda). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
+- **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki kipte). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
 - **Otomatik gönderim** — yöneticinin belirlediği pencere (`kalan süre = termin - şimdi`, örn. 7 gün) ve sıklıkla (örn. 2 günde bir) sunucu tarafındaki zamanlayıcı üzerinden. Görev tamamlandığında, iptal edildiğinde, silindiğinde, otomatik gönderim kapatıldığında veya termin gününe ulaşıldığında durur; sınırsız gecikme postası gönderilmez.
 
 Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Hatırlatma** yönetici sayfasından düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur.
@@ -282,23 +282,26 @@ taşır:
 - **Yüksek karşıtlık** — sınırları ve ikincil metni koyulaştırır; parlak ortamda
   ve açık temada okunabilirliği artırır.
 
-Tema, **Basit / Gelişmiş** mod ve oturum kapatma eylemleri kenar çubuğunun alt
-araç alanında tek sırada bulunur. Mod anahtarı tema ile çıkışın arasındadır;
-üst çubuk bu eylemleri yinelemez. Kenar çubuğu varsayılan olarak açık ve
-sabitlenmiş başlar. Kullanıcı daraltabilir veya sabitlemeyi kaldırıp üzerine
-gelince açılan düzene geçebilir; tercih tarayıcıda korunur. Alt sürüm satırı
+Tema, **Temel Kip / Kapsamlı Kip** seçimi ve oturum kapatma eylemleri kenar
+çubuğunun alt araç alanında tek sırada bulunur. Kip seçicisi iki sade seçenek
+sunar. Kenar çubuğu varsayılan olarak açık ve sabitlenmiş başlar. Raptiye
+kaldırıldığında üzerine gelince açılır ve fare görünen çubuğun dışına çıkar
+çıkmaz daralır; sayfa seçiminin bıraktığı odak çubuğu açık tutmaz. Klavye ile
+gezinirken odak içeride kaldıkça açık kalır. Gereksiz çalışma alanı başlıkları
+ve daraltma oku kaldırılmıştır. Tercih tarayıcıda korunur; alt sürüm satırı
 yalnızca `MERGEN Rota · Sürüm 1.0` bilgisini taşır.
 
 ## Görev oluşturma ve oluşturan künyesi
 
-Gelişmiş Moddaki **Yeni Görev** eylemi veritabanına hemen kayıt yazmaz; yerel
+Kapsamlı Kipteki **Yeni Görev** eylemi veritabanına hemen kayıt yazmaz; yerel
 bir görev taslağı açar. Alan değişiklikleri taslakta kalır, kapatma taslağı
 atar ve ilk kalıcı `task/create` işlemi yalnızca paneldeki **Kaydet** düğmesiyle
 başlar. Mevcut görev panellerindeki birincil düğmenin adı da aynı eylem diliyle
 **Kaydet**tir.
 
 Görev başlığının altında kısa bir **Görevi tanımlayan** künyesi; oluşturanın
-fotoğrafını, tam adını ve oluşturma tarihini gösterir. Doğrudan görev sorumlusu,
+fotoğrafını, tam adını ve oluşturma tarihini saat ve dakika ile gösterir. Künye
+rozet yerine sade bir bilgi satırıdır; Kaydet düğmesi kayıt simgesi taşır. Doğrudan görev sorumlusu,
 dar `PARTIAL` görünümde de `MR_Tasks.CreatedBySicil` ve yetkili ad projeksiyonunu
 alır. Bu kimlik aynı zamanda **Yeni tarih öner** talebinin karar sahibidir;
 istemci kişi dizininin dar olması oluşturanı `—` değerine düşürmez.
@@ -307,10 +310,19 @@ Yazı boyutu ölçeği gövdeye `zoom` uygular. Tam ekran kaplayan her yüksekli
 ölçeğe bölünmüş `--app-viewport-h` değişkenini kullanır; aksi hâlde yazı
 büyütüldüğünde panel alt çubuğu ekranın dışına itiliyordu. Ölçek, tema ve
 erişilebilirlik sınıflarıyla birlikte **ilk boyamadan önce** uygulanır
-(`src/lib/tweaksBootstrap.js`): `AppShell` monte olmadan çizilen veri modu ve
+(`src/lib/tweaksBootstrap.js`): `AppShell` monte olmadan çizilen veri kipi ve
 oturum ekranları da doğru ölçekte açılır, yerleşim zıplaması olmaz. Açılır listeler,
 ipuçları ve süzgeç kutuları da ölçeği hesaba katıp görünüm alanına sığdırılır.
 Ayrıntılar: `docs/UI-STYLING-ARCHITECTURE.md`.
+
+## Gantt sorumlu görünümü
+
+Görev ve kilometre taşı ipuçlarında her sorumlunun fotoğrafı adıyla birlikte
+gösterilir; bu davranış portföy ve proje/WBS görünümünde ortaktır. **Sorumluya
+göre** gruplamada ilk sorumlunun avatarı özet satırında da görünür. Aynı adlı
+kişiler Sicil kimliğiyle ayrı gruplarda tutulur. Fotoğraf adresi tanımlı
+değilse veya yüklenemezse baş harfler gösterilir. Görev kapsamlı kimlikler
+kullanılır; kişi dizini ve yetki kapsamı genişletilmez.
 
 ## Scheduling ve baseline ilkeleri
 
