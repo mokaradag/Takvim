@@ -9,8 +9,12 @@ import { AvatarStack, StatusPill } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton } from '../../components/ui-extras';
 import { appZoom } from '../../lib/zoom';
-import { useTasks, useTaskActions } from '../../state/hooks';
+import { usePeople, useTasks, useTaskActions } from '../../state/hooks';
 import { bucketCalendarTasks, taskCalendarDate } from './calendarTaskBucketing.js';
+import { TaskOrganizationFilterControls } from '../tasks/TaskOrganizationFilterControls.jsx';
+import { useSharedTaskOrganizationFilter } from '../tasks/TaskOrganizationFilterContext.jsx';
+import { useTaskOrganizationFilter } from '../tasks/useTaskOrganizationFilter.js';
+import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
 
 /* ── Takvim (Calendar) ─────────────────────────────────── */
 export function CalendarView({
@@ -23,6 +27,9 @@ export function CalendarView({
   panelLabelledBy = null
 }) {
   const tasks = useTasks();
+  const people = usePeople();
+  const { selection, setSelection } = useSharedTaskOrganizationFilter();
+  const organization = useTaskOrganizationFilter(tasks, people, selection, setSelection);
   const { openTask: onOpenTask } = useTaskActions();
   const today_ = today();
   const calLarge = !!(t && t.calLarge);
@@ -44,8 +51,8 @@ export function CalendarView({
   }, [month]);
 
   const eventsByDay = useMemo2(() => {
-    return bucketCalendarTasks(tasks);
-  }, [tasks]);
+    return bucketCalendarTasks(organization.filteredTasks);
+  }, [organization.filteredTasks]);
 
   const goPrev = () => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1));
   const goNext = () => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1));
@@ -144,6 +151,16 @@ export function CalendarView({
             <div className="rt-row"><span className="rt-label">Ok tuşları</span><span className="rt-val">Ay değiştir</span></div>
           </InfoButton>
         </div>
+      </div>
+
+      <div className="calendar-organization-toolbar">
+        <TaskOrganizationFilterControls organization={organization} />
+        {hasOrgSelection(organization.selection) && (
+          <button className="btn ghost sm" onClick={() => setSelection(createEmptyOrgFilter())}>
+            <Icons.Close size={12} /> Filtreleri temizle
+          </button>
+        )}
+        <span className="muted tabular">{organization.filteredTasks.length} / {tasks.length} görev</span>
       </div>
 
       <div className="calendar-scroll">

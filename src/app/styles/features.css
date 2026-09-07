@@ -1125,3 +1125,17 @@
 .gantt-assignee-list { display: grid; gap: 6px; min-width: 0; }
 .gantt-assignee { display: flex; align-items: center; gap: 7px; text-align: left; }
 .gantt-assignee > span { overflow-wrap: anywhere; }
+
+.theme-dark { --cal-weekend-bg: oklch(29% 0.035 256); }
+.theme-dark .cal-cell.weekend:not(.holiday) { box-shadow: inset 0 2px 0 oklch(58% 0.075 256 / .6); }
+.theme-dark .cal-cell.weekend:not(.today):not(.other):not(.holiday) .dnum { color: oklch(83% 0.08 256); }
+.day-expand-panel { width: min(800px, calc(var(--app-viewport-w, 100vw) - 40px)); }
+.settings-switch { width: 42px; height: 24px; padding: 3px; border: 1px solid var(--border-strong); border-radius: 20px; background: var(--bg-elev-2); flex-shrink: 0; transition: background .2s; }
+.settings-switch span { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--text-muted); transition: transform .2s; }
+.settings-switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.settings-switch[aria-checked="true"] span { transform: translateX(18px); background: var(--accent-fg); }
+.settings-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.app[data-view="takvim"] .drawer { width: min(860px, var(--app-viewport-w, 100vw)); }
+@media (prefers-reduced-motion: reduce) { .settings-switch, .settings-switch span { transition: none; } }
+.reduce-motion .settings-switch, .reduce-motion .settings-switch span { transition: none; }

@@ -97,6 +97,6 @@ export async function executeTaskCreation({ state = {}, input = null, id, mutate
       } : {})
     }
   }));
-  const created = result.ok ? result.value?.taskUpserts?.[0] || null : null;
+  const created = result.ok ? result.value?.taskUpserts?.find((task) => String(task.id) === String(id)) || null : null;
   return { result, created, scope };
 }

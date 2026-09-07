@@ -28,19 +28,19 @@
 
 .app {
   height: var(--app-viewport-h, 100vh);
-  transition: grid-template-columns .22s cubic-bezier(.2, .8, .2, 1);
+  transition: grid-template-columns .42s cubic-bezier(.22, 1, .36, 1);
 }
 .app.sidebar-is-collapsed,
 .app.sidebar-is-unpinned { grid-template-columns: 72px minmax(0, 1fr); }
 .sidebar {
   min-height: 0;
   height: 100%;
-  width: 100%;
+  width: 240px;
   overflow: visible;
-  transition: width .22s cubic-bezier(.2, .8, .2, 1), box-shadow .22s ease;
+  transition: width .42s cubic-bezier(.22, 1, .36, 1), box-shadow .42s ease;
   z-index: calc(var(--z-chrome) + 1);
 }
-.sidebar-is-unpinned .sidebar { width: 72px; }
+.sidebar-is-unpinned .sidebar, .sidebar-is-collapsed.sidebar-is-pinned .sidebar { width: 72px; }
 .sidebar-is-unpinned .sidebar:hover,
 .sidebar-is-unpinned .sidebar[data-keyboard-open="true"] {
   width: 240px;
@@ -127,6 +127,21 @@
 .sidebar-simple-mode > span { display: flex; align-items: center; gap: 7px; color: var(--accent); font-size: 12px; font-weight: 750; }
 .sidebar-simple-mode small { color: var(--text-dim); font-size: 10.5px; }
 
+:where(.sidebar) .brand-copy, :where(.sidebar) .sidebar-workspace-context, :where(.sidebar) .cmd-trigger,
+:where(.sidebar) .nav-label, :where(.sidebar) .nav-count, :where(.sidebar) .user-chip .col,
+:where(.sidebar) .sidebar-mode-copy, :where(.sidebar) .sidebar-version {
+  opacity: 1;
+  max-width: 240px;
+  transition: opacity .28s ease, max-width .42s cubic-bezier(.22, 1, .36, 1), visibility .28s;
+}
+:where(.sidebar) .brand-copy, :where(.sidebar) .nav-label { white-space: nowrap; }
+.sidebar-workspace-context { max-height: 170px; transition: opacity .28s, max-height .42s, visibility .28s !important; }
+.sidebar-header, .nav, .nav-item, .sidebar-footer, .user-chip { transition: padding .42s ease; }
+:where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-workspace-context {
+  max-height: 0;
+  padding-block: 0 !important;
+}
+
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .brand-copy,
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-workspace-context,
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-simple-mode,
@@ -137,7 +152,11 @@
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .user-chip .col,
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-mode-copy,
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-version {
-  display: none;
+  opacity: 0;
+  visibility: hidden;
+  max-width: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-header {
   justify-content: center;
@@ -148,8 +167,7 @@
   padding-top: 12px;
 }
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .nav-item {
-  justify-content: center;
-  padding-inline: 0;
+  padding-inline: 14px;
 }
 :where(.sidebar-is-collapsed.sidebar-is-pinned .sidebar, .sidebar-is-unpinned .sidebar:not(:hover):not([data-keyboard-open="true"])) .sidebar-footer {
   padding-inline: 10px;
@@ -460,44 +478,39 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   overflow: hidden;
   z-index: 40;
 }
-.app-boot-aura {
+.app-boot-stars {
   position: absolute;
-  inset: -30% -10% auto -10%;
-  height: 70%;
+  inset: -10%;
   pointer-events: none;
-  background:
-    radial-gradient(50% 60% at 50% 40%, color-mix(in oklab, var(--accent) 22%, transparent), transparent 70%),
-    radial-gradient(38% 48% at 78% 18%, color-mix(in oklab, var(--c-cyan, var(--accent)) 14%, transparent), transparent 72%);
-  filter: blur(2px);
-  opacity: .85;
+  opacity: .38;
+  background-image:
+    radial-gradient(1px 1px at 32px 48px, var(--text-muted) 90%, transparent),
+    radial-gradient(1px 1px at 120px 90px, var(--text-dim) 90%, transparent),
+    radial-gradient(1.5px 1.5px at 180px 140px, var(--text-muted) 80%, transparent);
+  background-size: 211px 197px, 293px 251px, 419px 367px;
+  animation: app-boot-drift 42s linear infinite alternate;
+}
+.app-boot-company-logo {
+  position: absolute;
+  top: 28px;
+  left: 32px;
+  width: 164px;
+  height: 48px;
+  max-width: calc(var(--app-viewport-w, 100vw) - 64px);
+  object-fit: contain;
+  object-position: left center;
 }
 .app-boot-card {
   position: relative;
-  width: min(520px, calc(var(--app-viewport-w, 100vw) - 40px));
+  width: min(480px, calc(var(--app-viewport-w, 100vw) - 48px));
   display: grid;
-  gap: 14px;
-  justify-items: center;
-  text-align: center;
-  padding: 34px 32px 30px;
-  border-radius: 20px;
-  border: 1px solid var(--chrome-border);
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--accent) 7%, var(--bg-elev)), var(--bg-elev)) padding-box;
-  box-shadow:
-    0 1px 0 color-mix(in oklab, white 10%, transparent) inset,
-    0 24px 60px -24px oklch(0% 0 0 / .55),
-    0 2px 10px -4px oklch(0% 0 0 / .3);
-  animation: app-boot-rise .45s cubic-bezier(.2, .8, .2, 1) both;
+  gap: 18px;
+  justify-items: start;
+  padding: 32px 12px;
+  text-align: left;
+  animation: app-boot-rise .5s ease both;
 }
-.app-boot-card::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  border-radius: 20px 20px 0 0;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  opacity: .9;
-}
+@keyframes app-boot-drift { to { transform: translate3d(20px, -24px, 0); } }
 .app-boot-brand { display: flex; align-items: center; gap: 14px; }
 /* Ürün adı perdenin ana kimliğidir; küçük bir alt satır gibi görünmemelidir. */
 .app-boot-wordmark {
@@ -549,35 +562,6 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
   animation: app-boot-sweep 1.35s cubic-bezier(.65, 0, .35, 1) infinite;
 }
-.app-boot-steps { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
-/* Adımlar sırayla vurgulanır: gerçek yüzde uydurmadan hangi aşamanın
-   hazırlandığını anlatan sakin bir gösterge. */
-.app-boot-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 11px;
-  border-radius: 99px;
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  color: var(--text-dim);
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  transition: color .35s ease, border-color .35s ease, background .35s ease;
-  animation: app-boot-step-in .4s cubic-bezier(.2, .8, .2, 1) both;
-  animation-delay: var(--step-delay, 0ms);
-}
-.app-boot-step.is-active {
-  color: var(--text);
-  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
-  background: color-mix(in oklab, var(--accent) 12%, var(--bg-elev-2));
-}
-.app-boot-step.is-active svg { color: var(--accent); }
-@keyframes app-boot-step-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
 .app-boot-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 
 @keyframes app-boot-rise {
@@ -590,14 +574,14 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 }
 @media (prefers-reduced-motion: reduce) {
   .app-boot-card,
-  .app-boot-step { animation: none; }
-  .app-boot-progress > span { animation-duration: 3s; }
+  .app-boot-stars { animation: none; }
+  .app-boot-progress > span { animation: none; left: 30%; }
 }
 .reduce-motion .app-boot-card,
-.reduce-motion .app-boot-step { animation: none; }
+.reduce-motion .app-boot-stars { animation: none; }
 /* Uygulama içi "Hareketi azalt" ayarı, işletim sistemi tercihiyle AYNI şeyi
    kapsamalıdır: süpürme animasyonu sınıf yolunda tam hızda kalıyordu. */
-.reduce-motion .app-boot-progress > span { animation-duration: 3s; }
+.reduce-motion .app-boot-progress > span { animation: none; left: 30%; }
 
 .export-menu-error {
   margin: 6px 8px 2px;
@@ -610,3 +594,6 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
   line-height: 1.45;
 }
 .export-menu-pop button:disabled { opacity: 0.55; cursor: progress; }
+
+.reduce-motion .app, .reduce-motion .sidebar, .reduce-motion .sidebar * { transition: none !important; }
+@media (prefers-reduced-motion: reduce) { .sidebar * { transition: none !important; } }

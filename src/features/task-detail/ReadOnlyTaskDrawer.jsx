@@ -83,9 +83,13 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
             </div>
 
             <div className="task-date-grid">
+              {task.milestone || task.isMilestone ? (
+                <ReadOnlyField label="Gerçekleşen tarih" value={fmt(task.actualFinish)} />
+              ) : <>
               <ReadOnlyField label="Gerçekleşen Başlangıç" value={fmt(task.actualStart)} />
               <ReadOnlyField label="Gerçekleşen Bitiş" value={fmt(task.actualFinish)} />
               <ReadOnlyField label="İlerleme" value={`${Number(task.progress || 0)}%`} />
+              </>}
             </div>
 
             <div className="col" style={{ gap: 6 }}>

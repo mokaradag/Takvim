@@ -92,7 +92,8 @@ test('.env.example tüm Keycloak anahtarlarını yer tutucularla içerir', () =>
     'MERGEN_ROTA_KEYCLOAK_USERNAME_SICIL_FALLBACK',
     'MERGEN_ROTA_AUTH_DEBUG',
     'MERGEN_ROTA_SESSION_SECRET',
-    'NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL'
+    'NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL',
+    'NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL'
   ];
   for (const key of required) assert.match(env, new RegExp(`^${key}=`, 'm'), key);
 
@@ -108,7 +109,8 @@ test('yalnızca güvenli tarayıcı ayarları NEXT_PUBLIC ile açığa çıkar',
   assert.deepEqual(publicKeys, [
     'NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS',
     'NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH',
-    'NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL'
+    'NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL',
+    'NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL'
   ]);
   // Fotoğraf adresinin gizli olmadığı açıkça yazılmıştır.
   assert.match(env, /NOT A SECRET/);

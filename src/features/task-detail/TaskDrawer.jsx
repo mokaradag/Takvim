@@ -331,12 +331,12 @@ export function TaskDrawer({
     return closing;
   };
 
-  const saveCreationDraft = () => {
+  const saveCreationDraft = (options = {}) => {
     if (!onSave || !canCloseWithTaskTitle(titleDraft)) {
       return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
     }
     const description = descriptionDraftRef.current ?? local.description ?? '';
-    return onSave({ ...local, task: titleDraft.trim(), description });
+    return onSave({ ...local, task: titleDraft.trim(), description }, options);
   };
 
   const dismiss = isCreating ? onClose : closeWithDraft;
@@ -432,7 +432,7 @@ export function TaskDrawer({
                   ['todo', 'Yapılacak', statusColorVar('todo'), 'todo'],
                   ['in_progress', 'Devam ediyor', statusColorVar('in_progress'), 'in_progress'],
                   ['done', 'Tamamlandı', statusColorVar('done'), 'done']
-                ].map(([id, label, statusColor, iconId]) => {
+                ].filter(([id]) => !milestone || id !== 'in_progress').map(([id, label, statusColor, iconId]) => {
                   const isActive = (local.status || 'todo') === id;
                   return (
                     <button
@@ -673,13 +673,20 @@ export function TaskDrawer({
                 onChange={(recurrence, alignment) => save(alignment
                   ? { recurrence, ...alignment }
                   : { recurrence })}
-                onGenerate={() => generateTaskSeries(task.id)}
-                isCreating={isCreating}
+                onGenerate={() => isCreating ? saveCreationDraft({ generateSeries: true }) : generateTaskSeries(task.id)}
+                isSaving={isSaving}
               />
             </Section>}
 
-            <Section title="Gerçekleşen tarihler" icon={<Icons.Clock size={13} />} tone="var(--c-emerald)">
-              <div className="task-date-grid">
+            <Section title={milestone ? "Gerçekleşen tarih" : "Gerçekleşen tarihler"} icon={<Icons.Clock size={13} />} tone="var(--c-emerald)">
+              {milestone ? (
+                <DateField
+                  label="Gerçekleşen tarih"
+                  value={local.actualFinish}
+                  onChange={(date) => save({ actualStart: date || null, actualFinish: date || null, status: date ? 'done' : 'todo', progress: date ? 100 : 0 })}
+                  nullable
+                />
+              ) : <div className="task-date-grid">
                 <DateField
                   label="Gerçekleşen başlangıç"
                   value={local.actualStart}
@@ -696,7 +703,7 @@ export function TaskDrawer({
                   disabled={!local.actualStart}
                   nullable
                 />
-              </div>
+              </div>}
             </Section>
 
             {baselineSnapshot && (
@@ -709,7 +716,7 @@ export function TaskDrawer({
               </Section>
             )}
 
-            <Section title="İlerleme" icon={<Icons.TrendUp size={13} />} tone="var(--status-done)">
+            {!milestone && <Section title="İlerleme" icon={<Icons.TrendUp size={13} />} tone="var(--status-done)">
               <div className="row" style={{ gap: 12 }}>
                 <input
                   type="range" min={0} max={100} step={5}
@@ -719,7 +726,7 @@ export function TaskDrawer({
                 />
                 <span className="tabular" style={{ fontWeight: 600, minWidth: 38, textAlign: 'right' }}>{local.progress || 0}%</span>
               </div>
-            </Section>
+            </Section>}
 
             {canManageStructure && <Section
               title="İlişkiler ve bağımlılıklar"
@@ -802,7 +809,7 @@ export function TaskDrawer({
  * bu metnin okunabilir bir yüzüdür. Böylece kural dışa aktarımda ve başka
  * sistemlerle alışverişte standart kalır.
  */
-function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, onChange, onGenerate, isCreating = false }) {
+function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, onChange, onGenerate, isSaving = false }) {
   const rule = normalizeRecurrenceRule(task.recurrence);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
@@ -898,8 +905,10 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
   const generate = async () => {
     setBusy(true);
     setMessage(null);
-    const result = await onGenerate();
-    setBusy(false);
+    let result;
+    try { result = await onGenerate(); }
+    catch (error) { result = { ok: false, error: { message: error.message } }; }
+    finally { setBusy(false); }
     if (!result?.ok) {
       setMessage({ type: 'error', text: result?.error?.message || 'Tekrarlar oluşturulamadı.' });
       return;
@@ -1141,11 +1150,10 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
           <button
             type="button"
             className="btn primary"
-            disabled={busy || !task.plannedStart || isCreating}
-            title={isCreating ? 'Tekrarları oluşturmak için önce görevi kaydedin.' : undefined}
+            disabled={busy || isSaving || !task.plannedStart}
             onClick={generate}
           >
-            <Icons.Plus size={13} /> {busy ? 'Oluşturuluyor…' : isCreating ? 'Önce görevi kaydedin' : 'Tekrarları oluştur'}
+            <Icons.Plus size={13} /> {busy || isSaving ? 'Oluşturuluyor…' : 'Tekrarları oluştur'}
           </button>
           <span className="muted" style={{ fontSize: 11.5, alignSelf: 'center' }}>
             {occurrenceCount} yineleme bu seriden üretildi.

@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID, corporateSeed, createActualStack } from './helpers/actualStack.mjs';
+import { resolveTaskDeleteAccess, resolveTaskMutationAccess } from '../src/state/projectWritePolicy.js';
 
 const MANAGER_SICIL = 900500;
 const SUBORDINATE_SICIL = 900501;
@@ -60,6 +61,82 @@ function taskChanges({ assigneeIds }) {
     }]
   };
 }
+
+test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve tarih düzenler; son sürümle silebilir', async () => {
+  const seed = assignmentSeed();
+  seed.executiveScope.push({ ManagerSicil: MANAGER_SICIL, EmployeeSicil: PLAIN_SICIL, ScopeType: 'UNIT' });
+  const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
+  try {
+    await stack.repository.commitChanges(taskChanges({ assigneeIds: [String(SUBORDINATE_SICIL)] }));
+    await stack.reload();
+    assert.equal(stack.state.projects[0].accessLevel, 'PARTIAL');
+    assert.equal(stack.state.tasks[0].isCurrentUserCreator, true);
+    const access = resolveTaskMutationAccess(stack.state, NEW_TASK_ID, { assigneeIds: [String(PLAIN_SICIL)] });
+    assert.equal(access.ok, true);
+    assert.equal(access.canManageAssignees, true);
+    assert.equal(access.canManageStructure, false);
+    assert.equal(access.canDelete, true);
+    const originalVersion = stack.state.tasks[0].version;
+    const added = await Promise.all([
+      stack.persistence.updateTask(NEW_TASK_ID, { assigneeIds: [String(SUBORDINATE_SICIL), String(PLAIN_SICIL)] }),
+      stack.persistence.updateTask(NEW_TASK_ID, { keyword: 'Tasarım onayı' })
+    ]);
+    assert.ok(added.every((result) => result.ok), JSON.stringify(added));
+    assert.deepEqual(stack.state.tasks[0].assigneeIds.sort(), [String(SUBORDINATE_SICIL), String(PLAIN_SICIL)].sort());
+    assert.equal(stack.db.tasks[0].Keyword, 'Tasarım onayı');
+    assert.notEqual(stack.state.tasks[0].version, originalVersion);
+    const removed = await stack.persistence.updateTask(NEW_TASK_ID, { assigneeIds: [String(PLAIN_SICIL)] });
+    assert.equal(removed.ok, true, removed.error?.message);
+    const renamed = await stack.persistence.updateTask(NEW_TASK_ID, { task: 'Gözden geçirilen iş', targetFinish: '2026-08-24' });
+    assert.equal(renamed.ok, true, renamed.error?.message);
+    assert.equal(stack.state.tasks[0].targetFinish, '2026-08-24');
+    assert.equal(resolveTaskDeleteAccess(stack.state, NEW_TASK_ID).canDelete, true);
+    const deleted = await stack.persistence.mutate('task/delete', { type: 'task/delete', id: NEW_TASK_ID });
+    assert.equal(deleted.ok, true, deleted.error?.message);
+    assert.equal(stack.db.tasks.length, 0);
+    assert.equal(stack.db.taskAssignees.length, 0);
+  } finally { await stack.dispose(); }
+});
+
+test('yönetici oluşturucu kapsam dışı sorumlu atayamaz veya mevcut kapsam dışı sorumluyu kaldırıp görevi silemez', async () => {
+  const stack = await createActualStack(assignmentSeed(), { sicil: MANAGER_SICIL });
+  try {
+    const committed = await stack.repository.commitChanges(taskChanges({ assigneeIds: [String(SUBORDINATE_SICIL)] }));
+    const task = committed.taskUpserts[0];
+    for (const assigneeIds of [[String(OUTSIDER_SICIL)], []]) {
+      await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...task, assigneeIds, assigneeMutation: true }] }),
+        (error) => error.code === 'FORBIDDEN');
+    }
+    stack.db.taskAssignees.push({ TaskId: NEW_TASK_ID, Sicil: OUTSIDER_SICIL });
+    await stack.reload();
+    assert.equal(resolveTaskMutationAccess(stack.state, NEW_TASK_ID).canManageAssignees, false);
+    assert.equal(resolveTaskDeleteAccess(stack.state, NEW_TASK_ID).canDelete, false);
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...task, assigneeMutation: true }] }),
+      (error) => error.code === 'FORBIDDEN');
+    await assert.rejects(stack.repository.commitChanges({ taskDeletes: [{ id: NEW_TASK_ID, version: task.version }] }),
+      (error) => error.code === 'FORBIDDEN');
+    assert.equal(stack.db.taskAssignees.length, 2);
+    assert.equal(stack.db.tasks.length, 1);
+  } finally { await stack.dispose(); }
+});
+
+test('oluşturucu yöneticinin eski sürümü 409 ile reddedilir; güncel sürümle düzenleme devam eder', async () => {
+  const stack = await createActualStack(assignmentSeed(), { sicil: MANAGER_SICIL });
+  try {
+    const created = await stack.repository.commitChanges(taskChanges({ assigneeIds: [String(SUBORDINATE_SICIL)] }));
+    const stale = created.taskUpserts[0];
+    await stack.repository.commitChanges({ taskUpserts: [{ ...stale, task: 'Güncel sunucu başlığı', assigneeMutation: false }] });
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...stale, keyword: 'Eski sürümden etiket', assigneeMutation: false }] }),
+      (error) => error.code === 'CONFLICT');
+    assert.equal(stack.db.tasks[0].Title, 'Güncel sunucu başlığı');
+    assert.equal(stack.db.tasks[0].Keyword, 'Atama');
+    await stack.reload();
+    const updated = await stack.persistence.updateTask(NEW_TASK_ID, { keyword: 'Yeni etiket' });
+    assert.equal(updated.ok, true, updated.error?.message);
+    assert.equal(stack.db.tasks[0].Title, 'Güncel sunucu başlığı');
+    assert.equal(stack.db.tasks[0].Keyword, 'Yeni etiket');
+  } finally { await stack.dispose(); }
+});
 
 test('yönetici, erişimi olmayan CN43N projesinde kendi personeline görev tanımlayabilir', async () => {
   const stack = await createActualStack(assignmentSeed(), { sicil: MANAGER_SICIL });

@@ -149,6 +149,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   const isTaskCreator = Boolean(task.isCurrentUserCreator)
     || Boolean(currentUserId && String(task.createdBySicil || '') === currentUserId);
   const limitedCreator = isTaskCreator && !hasFullSourceProject;
+  const creatorCanAssign = limitedCreator && hasProjectTaskWrite && !hasHiddenAssignees;
   const assigneeWorkOnly = Boolean(task.isCurrentUserAssignee) && !limitedCreator
     && (!hasProjectTaskWrite || (hasHiddenAssignees && !hasFullSourceProject));
   if (hasHiddenAssignees && !hasFullSourceProject && !task.isCurrentUserAssignee && !limitedCreator) {
@@ -179,6 +180,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // onu yürüten kişidir (bkz. assertLimitedCreatorFieldsOnly).
       'plannedHours', 'actualHours', 'budget', 'spent'
     ]);
+    if (creatorCanAssign) protectedFields.delete('assigneeIds');
     const field = Object.keys(patch || {}).find((key) => protectedFields.has(key));
     if (field) {
       return {
@@ -200,13 +202,13 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       scope: 'CREATOR',
       canManageStructure: false,
       canChooseWbs: true,
-      canManageAssignees: false,
+      canManageAssignees: creatorCanAssign,
       canControlSchedule: true,
       // Görevi kendisi oluşturduğu için HEDEF bitişi de belirleyebilir.
       canEditTargetFinish: true,
       canProposeSchedule: false,
-      canDelete: !hasOtherAssignee,
-      deleteReason: hasOtherAssignee ? 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.' : null
+      canDelete: creatorCanAssign || !hasOtherAssignee,
+      deleteReason: !creatorCanAssign && hasOtherAssignee ? 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.' : null
     };
   }
 

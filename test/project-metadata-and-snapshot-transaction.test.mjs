@@ -146,7 +146,7 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   const projectionSource = read('src/server/repository/projectedSqlAppRepository.js');
 
   assert.match(poolSource, /const activeTransaction = transactionContext\.getStore\(\);\s*if \(activeTransaction\) return activeTransaction;/s);
-  assert.match(poolSource, /withSqlTransaction\(work, \{ isolationLevel = sql\.ISOLATION_LEVEL\.READ_COMMITTED \} = \{\}\)/);
+  assert.match(poolSource, /withSqlTransaction\(work, \{\s*isolationLevel = sql\.ISOLATION_LEVEL\.READ_COMMITTED,\s*deadlockRetries = 0\s*\} = \{\}\)/);
   assert.match(projectionSource, /const projected = await withSqlTransaction\(async \(transaction\) => \{/);
   assert.match(projectionSource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(transaction\);/);
   // Kurumsal katalog tazelemesi bilinçli olarak serileştirilebilir işlemin dışındadır.

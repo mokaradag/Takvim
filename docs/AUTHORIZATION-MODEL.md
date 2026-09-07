@@ -107,7 +107,7 @@ Both the source and the destination of a move are checked, so a Task cannot be d
 
 - **WBS placement.** Executive assignment scope cannot choose a WBS node: a new Task is attached to the Project root and an existing Task keeps its current node. `ASSIGNEE_CREATE` and a limited Task creator are separate narrow scopes: they may select an existing same-Project node from a read-only catalog, but cannot administer the WBS structure.
 - **Dependencies.** PARTIAL snapshots do not load `MR_TaskDependencies`, so the client holds `deps: []`. A non-FULL write therefore leaves existing dependency rows untouched instead of replacing them, and an explicit dependency edit from such a caller is rejected — otherwise editing a title would silently erase predecessors the manager was never allowed to see.
-- **Cascading deletes.** Executive assignment scope and ordinary assignee scope cannot delete Tasks. A limited creator may delete only a Task they created while every authoritative assignee is either that creator or absent. The existing related-Task safety check still prevents such a delete from mutating invisible recurrence/dependency records.
+- **Cascading deletes.** Executive assignment scope alone and ordinary assignee scope cannot delete Tasks. A creator with executive assignment scope may delete their own corporate Task when all current assignees are in that scope. An ordinary creator may delete only a Task with no other assignee. The related-Task safety check still prevents either delete from mutating out-of-scope recurrence/dependency records.
 
 Creating a recurrence occurrence under a template is checked the same way: for a non-FULL write the **template's authoritative assignees** must also be in scope, so series generation cannot silently drop a co-assignee the PARTIAL snapshot hid.
 
@@ -131,7 +131,11 @@ Partial snapshots may intentionally omit co-assignees. An assignee work update t
 
 `MR_Tasks.CreatedBySicil` is the authoritative source of limited ownership. A normal creator can directly edit the three controlled plan dates and select an existing same-Project WBS node for that one Task. They do not receive FULL Project access, Project metadata rights, assignee management, dependency management, or WBS administration.
 
-The creator may delete the Task only when the authoritative `MR_TaskAssignees` set contains no Sicil other than the creator. An empty set and a creator-only set are eligible; any other assignee blocks deletion. List and drawer controls reuse the shared client policy for a precise explanation, while the SQL transaction reloads creator and assignee rows and is the final boundary.
+An ordinary creator may delete the Task only when the authoritative `MR_TaskAssignees` set contains no Sicil other than the creator. An empty set and a creator-only set are eligible; any other assignee blocks deletion. List and drawer controls reuse the shared client policy for a precise explanation, while the SQL transaction reloads creator and assignee rows and is the final boundary.
+
+Creator status does not suppress a director's, manager's or team leader's existing assignment rights. On their own active corporate Task, an executive may add/remove in-scope assignees and delete the Task even when other team members are assigned. An explicit assignee mutation validates both the current and proposed lists against `MR_V_ExecutiveScope`; the resulting list must remain nonempty. Hidden/out-of-scope assignees cannot be removed to bypass this check. Content, tag and date edits retain creator permissions and preserve the authoritative assignee list unless reassignment is explicitly requested. Project metadata, dependencies, recurrence structure and WBS administration remain protected.
+
+Task updates and deletes still require the current `RowVersion`. `CONFLICT` (HTTP 409) means the submitted version is stale; it is distinct from `FORBIDDEN`. Consecutive successful UI saves apply the returned version before the next save. A stale request never silently overwrites the latest row; reload the data before retrying, using the existing explicit discard/reload flow when unsaved changes remain.
 
 ## Schedule-change requests
 
@@ -220,8 +224,8 @@ The session response carries safe display fields alongside the authorization dat
 
 `currentUser.department` is the Keycloak `department` claim and is what the sidebar displays. `currentUser.organization.department` is the corporate directory value derived from HR02 `mudurluk`. These are different sources and must not be conflated. None of these fields participates in an authorization decision.
 
-### Görevler sayfasındaki kurumsal süzgeç yetki değildir
+### Görev görünümlerindeki kurumsal süzgeç yetki değildir
 
-Görevler araç çubuğundaki **Direktörlük → Müdürlük → Birim** seçimi yalnızca istemci tarafı kullanım kolaylığıdır. Sunucu önce mevcut oturum, proje erişimi ve görev görünürlüğü kurallarıyla yetkili snapshot'ı üretir; istemci çalışma alanı/proje seçimini uygular; kurumsal süzgeç ancak bundan sonra bu kümeyi daraltır. Seçili bir kurumsal yol yeni görev, proje veya kişi kaydı görünür kılamaz ve yazma/silme/atama kararlarına katılmaz.
+Her iki kipte Görevler ve Takvim, ayrıca Kapsamlı Kipte Kanban araç çubuğundaki **Direktörlük → Müdürlük → Birim** seçimi yalnızca istemci tarafı kullanım kolaylığıdır. Sunucu önce mevcut oturum, proje erişimi ve görev görünürlüğü kurallarıyla yetkili snapshot'ı üretir; istemci çalışma alanı/proje seçimini uygular; kurumsal süzgeç ancak bundan sonra bu kümeyi daraltır. Seçili bir kurumsal yol yeni görev, proje veya kişi kaydı görünür kılamaz ve yazma/silme/atama kararlarına katılmaz. Takvimde gün kutuları, ek görev sayıları ve genişletilmiş gün penceresi aynı süzülmüş kümeyi kullanır.
 
 Eşleşme görev oluşturucusu, proje sorumlusu veya oturum kullanıcısı üzerinden değil görevin mevcut projeksiyondaki sorumluları üzerinden yapılır. Kararlı `assigneeIds` varsa ad eşlemesi kullanılmaz. Eski bir kayıtta kimlik hiç yoksa yalnızca mevcut kişi projeksiyonundaki tekil ad güvenli yedektir; aynı adlı iki kişi varsa tahmin yapılmaz. Çok sorumlulu görevde en az bir görünür sorumlunun seçili kurumsal yolda bulunması yeterlidir. Projeksiyon dışındaki veya gizli sorumlular için kurumsal bilgi türetilmez; kişi dizini genişletilmez.

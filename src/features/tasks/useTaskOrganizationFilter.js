@@ -13,7 +13,7 @@ import {
   organizationPeopleForTasks
 } from '../../domain/organization/taskOrganizationFilter.js';
 
-/** Temel ve Kapsamlı Görevler görünümünün ortak türetilmiş kurumsal durumu. */
+/** Görev görünümlerinin ortak kurumsal süzgeci. */
 export function useTaskOrganizationFilter(tasks, people, selection, onSelectionChange) {
   const peopleIndex = useMemo(() => createTaskAssigneeOrganizationIndex(people), [people]);
   const organizationPeople = useMemo(

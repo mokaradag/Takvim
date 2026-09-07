@@ -1,4 +1,5 @@
 import 'server-only';
+import { milestoneCompletion } from '../../domain/milestoneCompletion.js';
 import { randomUUID } from 'node:crypto';
 import { normalizePriorityId } from '../../domain/constants/index.js';
 import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
@@ -1622,7 +1623,7 @@ function assertControlledScheduleUnchanged(before, task) {
 }
 
 /** Görev oluşturucusunun görev-özel hakkı WBS seçimi ve kontrollü planla sınırlıdır. */
-function assertLimitedCreatorFieldsOnly(before, task) {
+function assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation = false } = {}) {
   const protectedValueChange = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS.some(([field, storedField]) => (
     hasOwnField(task, field) && nullableNumber(task[field]) !== nullableNumber(before[storedField])
   ));
@@ -1637,7 +1638,7 @@ function assertLimitedCreatorFieldsOnly(before, task) {
     || (hasOwnField(task, 'recurrenceOccurrenceDate')
       && isoDate(before.RecurrenceOccurrenceDate) !== (task.recurrenceOccurrenceDate || null))
     || (hasSubmittedField(task, 'sortOrder') && (task.sortOrder ?? null) !== (before.SortOrder ?? null))
-    || Boolean(task.assigneeMutation)
+    || (Boolean(task.assigneeMutation) && !allowAssigneeMutation)
     || (task.deps || []).length > 0;
   if (forbiddenChange || protectedValueChange) {
     throw new ServerPersistenceError(
@@ -1684,11 +1685,14 @@ async function commitTask(executor, actor, task, correlationId) {
   // yazma hakkı verir. İstemcinin görünür `assigneeIds` alt kümesi bu kararda
   // kullanılmaz ve hiçbir zaman yetkili listeyi değiştirmez.
   const limitedCreatorWrite = Boolean(before) && actorIsCreator && !fullProjectWrite;
+  const creatorCanAssign = limitedCreatorWrite && actor.isExecutive
+    && (await projectRow(executor, beforeProjectId))?.SourceType === 'CORPORATE';
+  const creatorAssigneeWrite = creatorCanAssign && Boolean(task.assigneeMutation);
   const assigneeWorkOnly = Boolean(before) && actorIsAssignee && !limitedCreatorWrite
     && !fullProjectWrite && !Boolean(task.assigneeMutation);
   const narrowTaskWrite = assigneeWorkOnly || limitedCreatorWrite;
 
-  if (narrowTaskWrite) {
+  if (narrowTaskWrite && !creatorAssigneeWrite) {
     const submittedAssigneeSicils = (task.assigneeIds || []).map(Number);
     const visibleAssigneeSicils = await visibleTaskAssigneeSicils(executor, actor, taskId);
     if (!sameSicilSet(submittedAssigneeSicils, visibleAssigneeSicils)) {
@@ -1710,7 +1714,11 @@ async function commitTask(executor, actor, task, correlationId) {
     assertAssigneeWorkFieldsOnly(before, task);
   } else if (limitedCreatorWrite) {
     await assertActiveProject(executor, beforeProjectId);
-    assertLimitedCreatorFieldsOnly(before, task);
+    assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation: creatorAssigneeWrite });
+    if (creatorAssigneeWrite) {
+      sourceProjectScope = await assertTaskProjectScope(executor, actor, beforeProjectId);
+      destinationProjectScope = sourceProjectScope;
+    }
   } else {
     if (beforeProjectId) sourceProjectScope = await assertTaskProjectScope(executor, actor, beforeProjectId);
     destinationProjectScope = await assertTaskProjectScope(executor, actor, projectId, {
@@ -1736,14 +1744,14 @@ async function commitTask(executor, actor, task, correlationId) {
 
   // Sorumlular sonra doğrulanır: görev atama kapsamı, yamanın SONUÇ
   // sorumlularına bakarak karar verir.
-  const assigneeSicils = narrowTaskWrite
+  const assigneeSicils = narrowTaskWrite && !creatorAssigneeWrite
     ? authoritativeAssigneeSicils
     : await ensurePeople(executor, task.assigneeIds || []);
   // Kaynak proje: görevin ŞU ANKİ sorumluları kapsam denetimine girer.
-  if (!narrowTaskWrite && beforeProjectId) {
+  if ((!narrowTaskWrite || creatorAssigneeWrite) && beforeProjectId) {
     await assertAssigneeScope(executor, actor, beforeProjectId, authoritativeAssigneeSicils, sourceProjectScope);
   }
-  if (!narrowTaskWrite) {
+  if (!narrowTaskWrite || creatorAssigneeWrite) {
     await assertAssigneeScope(executor, actor, projectId, assigneeSicils, destinationProjectScope);
     if (!before && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE) {
       assertAssigneeTaskCreateFieldsOnly(task);
@@ -1773,13 +1781,23 @@ async function commitTask(executor, actor, task, correlationId) {
   //    reddediliyordu;
   //  - kaydında `ActualFinish` duran bir göreve daha GEÇ bir `actualStart`
   //    yazıldığında ise bitişi başlangıcından önce olan bir satır kalıyordu.
-  const actualStart = before && narrowTaskWrite && !hasSubmittedField(task, 'actualStart')
+  let actualStart = before && narrowTaskWrite && !hasSubmittedField(task, 'actualStart')
     ? isoDate(before.ActualStart)
     : (task.actualStart || null);
-  const actualFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'actualFinish')
+  let actualFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'actualFinish')
     ? isoDate(before.ActualFinish)
     : (task.actualFinish || null);
   const isMilestone = narrowTaskWrite ? Boolean(before.IsMilestone) : Boolean(task.isMilestone || task.milestone);
+  const milestone = milestoneCompletion({
+    milestone: isMilestone,
+    status: before?.Status || 'todo', actualStart, actualFinish
+  }, Object.fromEntries(['status', 'actualFinish'].filter((field) => hasSubmittedField(task, field))
+    .map((field) => [field, task[field]])), new Date().toISOString().slice(0, 10));
+  if (milestone) {
+    actualStart = milestone.actualStart;
+    actualFinish = milestone.actualFinish;
+  }
+
   const persistedCalendarId = narrowTaskWrite ? id(before.CalendarId) : (task.calendarId || null);
 
   // Tam yetki, bu görevde nelerin YAZILABİLECEĞİNİ belirler: atama kapsamı
@@ -1947,7 +1965,7 @@ async function commitTask(executor, actor, task, correlationId) {
   };
   req.input('description', sql.NVarChar(sql.MAX), submittedOr('description', 'Description', task.description || null));
   req.input('keyword', sql.NVarChar(255), submittedOr('keyword', 'Keyword', task.keyword || null));
-  req.input('status', sql.VarChar(30), submittedOr('status', 'Status', task.status || 'planned', 'planned'));
+  req.input('status', sql.VarChar(30), milestone?.status ?? submittedOr('status', 'Status', task.status || 'planned', 'planned'));
   // Arayüz kataloğunda `normal` diye bir öncelik yoktur; varsayılan olarak
   // yazıldığında Görevler/Kanban/Raporlar sayfaları çöküyordu. Kalıcı kayıt da
   // kanonik kimliği tutar.
@@ -1969,7 +1987,7 @@ async function commitTask(executor, actor, task, correlationId) {
     submittedOr('remainingDurationDays', 'RemainingDurationDays', task.remainingDurationDays)
   ));
   req.input('progress', sql.Decimal(5, 2), nullableNumber(
-    submittedOr('progress', 'Progress', task.progress)
+    milestone?.progress ?? submittedOr('progress', 'Progress', task.progress)
   ));
   req.input('plannedHours', sql.Decimal(12, 2), nullableNumber(narrowTaskWrite ? before.PlannedHours : task.plannedHours));
   req.input('actualHours', sql.Decimal(12, 2), nullableNumber(narrowTaskWrite ? before.ActualHours : task.actualHours));
@@ -2027,7 +2045,7 @@ async function commitTask(executor, actor, task, correlationId) {
   // Bağımlılık satırları YALNIZCA tam yetkili yazmada değiştirilir. PARTIAL
   // anlık görüntü `MR_TaskDependencies` yüklemez; istemci `deps: []` taşır ve
   // koşulsuz silme, yöneticinin hiç göremediği öncülleri sessizce yok ederdi.
-  if (!narrowTaskWrite) {
+  if (!narrowTaskWrite || creatorAssigneeWrite) {
     const clear = request(executor);
     clear.input('taskId', sql.UniqueIdentifier, taskId);
     await clear.query(fullProjectWrite
@@ -2083,7 +2101,7 @@ async function commitTask(executor, actor, task, correlationId) {
       );
     `);
   }
-  await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'TASK', taskId, projectId, before, task);
+  await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'TASK', taskId, projectId, before, milestone ? { ...task, ...milestone } : task);
   return {
     taskId: id(taskId), projectId, beforeProjectId, wbsId: id(wbsId),
     relatedTaskIds: [...relatedTaskIds]
@@ -2105,7 +2123,11 @@ async function deleteTask(executor, actor, entry, correlationId) {
     if (Number(before.CreatedBySicil) !== Number(actor.sicil)) {
       throw new ServerPersistenceError('FORBIDDEN', 'Yalnızca kendi oluşturduğunuz görevleri silebilirsiniz.');
     }
-    if (assigneeSicils.some((sicil) => Number(sicil) !== Number(actor.sicil))) {
+    const creatorCanAssign = actor.isExecutive
+      && (await projectRow(executor, projectId))?.SourceType === 'CORPORATE';
+    if (creatorCanAssign && assigneeSicils.some((sicil) => Number(sicil) !== Number(actor.sicil))) {
+      await assertTaskProjectAccess(executor, actor, projectId, assigneeSicils);
+    } else if (assigneeSicils.some((sicil) => Number(sicil) !== Number(actor.sicil))) {
       throw new ServerPersistenceError('FORBIDDEN', 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.');
     }
   }

@@ -12,9 +12,9 @@ import {
 import { getAppRepository } from '../data';
 import { createClientEntityId } from '../data/clientEntityId.js';
 import { setProjectColorOverrides } from '../lib/colors';
-import { resolveProjectCalendar, resolveTaskCalendar } from '../scheduling/calendars';
+import { resolveProjectCalendar } from '../scheduling/calendars';
 import { selectTaskStats } from '../scheduling/metrics';
-import { MAX_RECURRENCE_OCCURRENCES, normalizeRecurrenceRule, planRecurringOccurrences } from '../scheduling/recurrence';
+import { normalizeRecurrenceRule } from '../scheduling/recurrence';
 import { appStateReducer, createLoadingState, normalizeStateTask, withCompletionStamp } from './appState';
 import { createStateMutationOrchestrator } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
@@ -26,6 +26,7 @@ import {
   resolveWbsMutationAccess
 } from './projectWritePolicy.js';
 import { reconcileProjectMutationAccess } from './projectMutationReconciliation.js';
+import { createRecurringTasks, taskCreationWithRecurrences } from './recurringTaskCreation.js';
 import { executeTaskCreation } from './taskCreationPolicy.js';
 import {
   createDataRefreshRequestGuard,
@@ -369,7 +370,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     return Promise.resolve({ ok: true, value: null });
   }, []);
 
-  const saveTaskDraft = useCallback(async (input = null) => {
+  const saveTaskDraft = useCallback(async (input = null, { generateSeries = false } = {}) => {
     const draft = taskCreationDraftRef.current;
     if (!draft) {
       return projectWriteFailure('task/create', {
@@ -387,7 +388,11 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       state: stateRef.current,
       input: taskInput,
       id: draft.task.id,
-      mutate: (operation, action) => persistence.mutate(operation, action)
+      mutate: (operation, action) => persistence.mutate(operation, (current) => {
+        const creation = action(current);
+        if (!generateSeries) return creation;
+        return taskCreationWithRecurrences(current, creation);
+      })
     });
     if (!result.ok || !created) return result;
     // Yavaş kayıt sürerken kullanıcı A taslağını kapatıp B taslağını açmış
@@ -435,63 +440,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       });
     }
 
-    // Görev kendi takvimini geçersiz kılabilir; yinelemeler bu takvimi devraldığı
-    // için kaydırma da onunla yapılmalıdır (bkz. resolveTaskCalendar önceliği).
-    const calendar = resolveTaskCalendar(template, current.projects, current.calendars);
-
-    // Üretilmiş yinelemeler değişmez seri kimliğiyle tanınır: kullanıcı bir
-    // yinelemeyi ertelese bile o gün ikinci kez üretilmez.
-    const materialized = new Set(current.tasks
-      .filter((task) => task.recurrenceParentId === taskId)
-      .map((task) => task.recurrenceOccurrenceDate || task.plannedStart)
-      .filter(Boolean));
-    // Şablonun kendi günü serinin ilk yinelemesidir.
-    materialized.add(template.recurrenceOccurrenceDate || template.plannedStart);
-
-    // Açılım eksik yinelemeleri dolduracak kadar ilerletilir: sabit bir önek
-    // açılsaydı ilk turdan sonra her tıklama aynı (ve tamamı elenmiş) günleri
-    // üretir, seri hiçbir zaman ilerlemezdi.
-    const horizon = Math.min(MAX_RECURRENCE_OCCURRENCES, materialized.size + Math.max(1, limit));
-    // Eleme DEĞİŞMEZ seri kimliğine (ham yineleme günü) göre yapılır. Planlanan
-    // başlangıç çalışma takvimiyle kaydırılabilir; şablonun günü kaydığında
-    // eskiden hiçbir kayıtla eşleşmiyor ve serinin birinci yinelemesi şablona
-    // EK olarak bir kez daha üretiliyordu.
-    const plan = planRecurringOccurrences(template, rule, { calendar, limit: horizon })
-      .filter((occurrence) => !materialized.has(occurrence.occurrenceDate))
-      .slice(0, limit);
-    if (!plan.length) return { ok: true, value: [] };
-
-    const sortOrderBase = Number.isFinite(template.sortOrder) ? template.sortOrder : null;
-    const tasks = plan.map((occurrence, offset) => {
-      const created = normalizeStateTask({
-        ...template,
-        id: createClientEntityId('task'),
-        version: undefined,
-        recurrence: null,
-        recurrenceParentId: taskId,
-        recurrenceOccurrenceDate: occurrence.occurrenceDate,
-        status: 'todo',
-        progress: 0,
-        actualStart: null,
-        actualFinish: null,
-        // Gerçekleşen emek ve harcama da sıfırlanır: yeni yineleme oluşturulduğu
-        // anda şablonun geçmiş gerçekleşmesini üstlenirse iş yükü ve maliyet
-        // toplamları daha ilk günden bozulur.
-        actualHours: null,
-        spent: null,
-        remainingDurationDays: null,
-        plannedStart: occurrence.plannedStart,
-        plannedFinish: occurrence.plannedFinish,
-        targetFinish: occurrence.targetFinish,
-        // Her yinelemeye ayrı sıra anahtarı verilir; aksi hâlde bütün seri
-        // şablonla aynı anahtarda eşitlenir ve her yüklemede farklı sırada gelir.
-        sortOrder: sortOrderBase === null ? null : sortOrderBase + offset + 1,
-        // Yineleme başka bir göreve bağımlı değildir: şablonun bağımlılıkları
-        // kopyalanırsa aynı öncül onlarca kez tekrarlanır ve CPM ağı bozulur.
-        deps: []
-      }, current);
-      return created;
-    });
+    const tasks = createRecurringTasks(current, template, { limit });
+    if (!tasks.length) return { ok: true, value: [] };
 
     return persistence.mutate('task/series', { type: 'task/add-many', tasks });
   }, [persistence]);

@@ -1,3 +1,4 @@
+import { milestoneCompletion } from '../domain/milestoneCompletion.js';
 import { normalizeTaskReferences, normalizeTaskScheduleFields } from '../domain/validation/index.js';
 import { resolveTaskCalendar } from '../scheduling/calendars/index.js';
 import { normalizeDependency } from '../scheduling/dependencies/index.js';
@@ -12,6 +13,7 @@ export function normalizeTaskRecord(task, context) {
   const calendar = resolveTaskCalendar(migrated, context?.projects, context?.calendars);
   const canonical = normalizeTaskScheduleFields({
     ...migrated,
+    ...milestoneCompletion(migrated),
     deps: (migrated.deps || []).map((dependency) => normalizeDependency(dependency, calendar))
   });
   const referenced = normalizeTaskReferences(canonical, context);

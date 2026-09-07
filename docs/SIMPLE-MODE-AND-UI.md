@@ -15,7 +15,7 @@ Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yen
 
 ## Temel Kipte Gantt
 
-Temel Kip gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Rol kapılı **yönetici** sayfaları (`ADMIN_NAV_IDS`, örneğin Hatırlatma E-postaları) bu süzgeçten muaftır: yalnızca sistem yöneticisine açılan bir yapılandırma ekranı, kullanıcı Temel Kipte diye ulaşılamaz olmamalıdır. Rol denetimi değişmez — yönetici olmayan bu sayfaları iki kipte de görmez. Gantt, Kapsamlı Kipteki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Temel Kipte çalışma alanı her zaman portföy olduğu için görünüm tüm projeleri birlikte gösterir. Ayrı bir Temel Kip Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+Temel Kip gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Rol kapılı **yönetici** sayfaları (`ADMIN_NAV_IDS`, örneğin Hatırlatma E-postaları) bu süzgeçten muaftır: yalnızca sistem yöneticisine açılan bir yapılandırma ekranı, kullanıcı Temel Kipte diye ulaşılamaz olmamalıdır. Rol denetimi değişmez — yönetici olmayan bu sayfaları iki kipte de görmez. Gantt, Kapsamlı Kipteki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Temel Kipte kenar çubuğundan portföy veya tek proje seçilebilir; Gantt seçilen kapsamı gösterir. Ayrı bir Temel Kip Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
 
 ## Temel Kipte Görevler
 
@@ -221,7 +221,7 @@ Tema, **Temel Kip / Kapsamlı Kip** seçimi ve oturum kapatma eylemleri
 seçicisi `role="group"` ve `aria-pressed` ile etkin tercihi bildirir; seçili
 kipe yeniden basmak gezinmeyi sıfırlamaz. İç kimlikler (`simple`, `advanced`,
 `appMode`) ve kaydedilmiş tercihler korunur. Üst çubuk bu kontrolleri yinelemez.
-Temel Kipe geçiş `AppShell.chooseMode` üzerinden portföy Takvimini açar.
+Temel Kipe geçiş `AppShell.chooseMode` üzerinden seçili çalışma alanını koruyarak Takvimi açar.
 
 Kenar çubuğu ilk kullanımda **sabitlenmiş ve açık** başlar. Gereksiz çalışma
 alanı başlıkları ve daraltma oku yoktur; proje seçicisi markanın hemen altında
@@ -557,3 +557,16 @@ Kurum içi npm registry/proxy yapılandırması kullanılıyorsa ayarı silmeden
 ## Stil sahipliği
 
 Temel Kip arayüz stilleri `src/app/styles/simple-mode.css` içinde sahiplenilir. Üst çubuk `shell.css`, Özet/Dashboard `dashboard.css` tarafından yönetilir. Yerel bir görsel sorun için yeni bir global `fixes` veya `polish` katmanı eklenmemelidir; ilgili yetkili stil sahibi düzeltilmelidir. Ayrıntılar için `UI-STYLING-ARCHITECTURE.md` dosyasına bakın.
+
+
+## Proje seçimi, ölçek ve Takvim görünümü
+
+Her iki kipte Takvimin üst bölümünde Görevler ile aynı **Direktörlük → Müdürlük → Birim** seçicileri bulunur. Seçim Görevler, Kanban ve Takvim geçişlerinde korunur; gün kutuları ve genişletilmiş gün penceresi aynı süzülmüş görevleri gösterir. **Filtreleri temizle** tüm kurumsal seçimleri sıfırlar. Dar ekranda seçiciler ortak **Kurumsal filtre** menüsünde toplanır.
+
+Birim yöneticisi dahil atama yetkisi bulunan görev oluşturucusu, kendi kurumsal görevinde kapsamındaki sorumluları ekleyip çıkarabilir ve görevi silebilir. İki kipin liste ve panelleri aynı yetki kararını kullanır. Sorumlu değişikliği görevde en az bir kapsam içi sorumlu bırakmalıdır. Etiket, başlık ve tarih düzenlemeleri aynı görev kaydetme akışından geçer; başka bir kullanıcının güncel sürümü eski bir kayıtla ezilmez.
+
+Her iki kipte kenar çubuğu aynı aranabilir proje/portföy seçicisini kullanır. Kip değişimi seçili projeyi sıfırlamaz; Görevler, Takvim ve Gantt bu kapsamı izler. **Tamamlanan ve kapatılanları göster** tercihi kenar çubuğundan **Ayarlar → Çalışma alanı** kartına taşınmıştır ve diğer görünüm tercihleriyle saklanır. Bu tercih seçicinin proje listesini etkiler; görev veya proje erişimini genişletmez.
+
+Temel Kip Görevler tablosu sabit sütun alt genişlikleri yerine oransal genişlikler kullanır. Proje adı, görev başlığı, durum ve başlıklar dar alanda satıra geçer. Ölçek büyüdüğünde tüm sütunlar kullanılabilir genişliğe sığar; içerik yüksekliği büyüyebilir. Eylemler gerektiğinde alt alta yerleşir ve hiçbir sütun gizlenmez.
+
+Koyu temada hafta sonları daha açık mavi zemin ve üst kenar çizgisiyle ayrılır. Takvim gün penceresi 800 piksele, Takvimden açılan görev paneli 860 piksele kadar genişler; ekran ve ölçek sınırları korunur. Kenar çubuğu genişliği ile etiketlerin görünürlüğü yumuşak geçiş yapar. Hareketi azalt tercihi bu geçişleri kapatır.

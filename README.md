@@ -49,7 +49,7 @@ Kullanım kipleri aynı seçili veri kaynağı üzerinde çalışır:
 - **Temel Kip**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; sütun filtreli sadeleştirilmiş **Görevler** listesi ve termin günü Takvim takibi. İlerleme, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Temel Kipte gösterilmez.
 - **Kapsamlı Kip**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
 
-Her iki kipin **Görevler** ve Kapsamlı Kipin **Kanban** araç çubuğunda Ekip sayfasıyla aynı kararlı kurumsal yol semantiğini kullanan **Direktörlük → Müdürlük → Birim** süzgeçleri bulunur. Süzgeç, görevin oluşturucusuna veya proje sorumlusuna değil görev sorumlularına bakar; çok sorumlulu görevde en az bir sorumlunun seçili kapsamda olması yeterlidir. Bu yalnızca istemci tarafı daraltmadır: önce sunucunun yetkilendirdiği snapshot ve seçili çalışma alanı/proje uygulanır, kurumsal seçim bunlara yeni görev veya kişi ekleyemez. Temel/Kapsamlı Kip ile Görevler/Kanban geçişleri aynı oturum içindeki kurumsal seçimi paylaşır. Kanban araması görev, proje adı/kodu, sorumlu, etiket ve öncelikle kurumsal seçimi birlikte uygular; sütun sayıları süzülmüş görevleri sayar. Filtreleri temizle aramayı ve kurumsal seçimi sıfırlar.
+Her iki kipin **Görevler** ve **Takvim**, ayrıca Kapsamlı Kipin **Kanban** araç çubuğunda Ekip sayfasıyla aynı kararlı kurumsal yol semantiğini kullanan **Direktörlük → Müdürlük → Birim** süzgeçleri bulunur. Süzgeç, görevin oluşturucusuna veya proje sorumlusuna değil görev sorumlularına bakar; çok sorumlulu görevde en az bir sorumlunun seçili kapsamda olması yeterlidir. Bu yalnızca istemci tarafı daraltmadır: önce sunucunun yetkilendirdiği snapshot ve seçili çalışma alanı/proje uygulanır, kurumsal seçim bunlara yeni görev veya kişi ekleyemez. Temel/Kapsamlı Kip ile Görevler/Kanban/Takvim geçişleri aynı oturum içindeki kurumsal seçimi paylaşır. Kanban araması görev, proje adı/kodu, sorumlu, etiket ve öncelikle kurumsal seçimi birlikte uygular; sütun sayıları süzülmüş görevleri sayar. Filtreleri temizle aramayı ve kurumsal seçimi sıfırlar.
 
 Planlanan/gerçekleşen saat alanları veritabanı ve API uyumluluğu için korunur ancak normal uygulama arayüzünde hiçbir kipte gösterilmez; kullanıcı ilerlemeyi `İlerleme` üzerinden izler.
 
@@ -353,3 +353,17 @@ listesi kesilir ve `criticalPathsTruncated` ile bildirilir. Ayrıntılar:
 ## Sonraki aşama
 
 Keycloak entegrasyonu tamamlanmıştır: kimlik doğrulama yalnızca `CurrentUserProvider` katmanını değiştirmiş; SQL şeması, yetkilendirme önceliği ve repository transaction modeli korunmuştur. Bundan sonraki iş kalemleri kimlik doğrulamayla ilgili değildir.
+
+
+### Görev akışı ve görünüm güncellemesi
+
+- Her iki kipte kenar çubuğundan proje/portföy seçimi; arşivlenmiş projeleri gösterme tercihi **Ayarlar → Çalışma alanı** altında.
+- Temel Kip tablosunda ölçeğe uyumlu sütunlar; koyu Takvimde belirgin hafta sonları ve daha geniş gün/görev pencereleri.
+- Takvimde iki kip için ortak direktörlük/müdürlük/birim filtresi; Görevler ile paylaşılan seçim.
+- Görevi oluşturan yöneticiye kapsam içi sorumlu yönetimi ve silme; normal kullanıcı ve kapsam dışı personel sınırları korunur.
+- Yeni görevde **Tekrarları oluştur**, şablonu ve tekrarları tek işlemde kaydeder.
+- Kilometre taşında tek gerçekleşen tarih ve ikili tamamlanma durumu.
+- Tarih önerisi/kararı sırasında SQL 1205 için sınırlı transaction yeniden denemesi. Veritabanı şema değişikliği gerekmez.
+- İsteğe bağlı açılış logosu: `.env.example` → `NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL`. SVG adresini girdikten sonra yeniden derleyip uygulamayı başlatın.
+
+Ayrıntılar: [Arayüz](docs/SIMPLE-MODE-AND-UI.md), [Tekrarlar](docs/TAGS-AND-RECURRING-TASKS.md), [Takvim veri modeli](docs/SCHEDULING-DATA-MODEL.md), [Görsel yapı](docs/UI-STYLING-ARCHITECTURE.md).

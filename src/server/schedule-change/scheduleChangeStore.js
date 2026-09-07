@@ -356,7 +356,7 @@ export async function createScheduleChange(input = {}) {
       status: 'PENDING'
     }, correlationId);
     return readScheduleChange(transaction, actor, requestId);
-  }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+  }, { deadlockRetries: 2 });
 }
 
 export async function decideScheduleChange(requestIdValue, input = {}) {
@@ -525,5 +525,5 @@ export async function decideScheduleChange(requestIdValue, input = {}) {
       outcome: decision === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
       message: decision === 'ACCEPT' ? 'Tarih değişikliği kabul edildi.' : 'Tarih değişikliği reddedildi.'
     };
-  }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+  }, { deadlockRetries: 2 });
 }

@@ -301,6 +301,35 @@ test('Görevler ve Kanban aynı kurumsal kapsamı davranışsal olarak uygular',
   }
 });
 
+test('iki kipin ortak Takvim görünümü kurumsal seçimi günlere ve görev sayısına uygular', async () => {
+  const { CalendarView } = await import('../src/features/calendar/CalendarView.jsx');
+  const { TaskOrganizationFilterProvider } = await import('../src/features/tasks/TaskOrganizationFilterContext.jsx');
+  const tasks = TASKS.map((task, index) => ({ ...task, proje: 'Birinci Proje', keyword: 'Takvim',
+    targetFinish: `2026-09-${String(index + 1).padStart(2, '0')}` }));
+  globalThis[TEST_APP_STATE_KEY] = {
+    tasks, projects: PROJECTS, people: PEOPLE, workspaceMode: 'portfolio',
+    workspace: { tasks, projects: PROJECTS, people: PEOPLE, wbs: [] },
+    actions: { openTask() {} }
+  };
+  try {
+    for (const selection of [createEmptyOrgFilter(), directorateA, departmentA, unitA]) {
+      const markup = renderToStaticMarkup(createElement(TaskOrganizationFilterProvider,
+        { initialSelection: selection }, createElement(CalendarView, { t: {}, month: new Date(2026, 8, 1) })));
+      const expected = filterTasksByOrganization(tasks, selection, INDEX);
+      assert.match(markup, new RegExp(`>${expected.length} / ${tasks.length} görev<`));
+      for (const task of tasks) {
+        const eventText = `Takvim · ${task.task}`;
+        assert.equal(markup.includes(eventText), expected.includes(task), task.id);
+      }
+      for (const label of ['Direktörlük filtresi', 'Müdürlük filtresi', 'Birim filtresi']) {
+        assert.ok(markup.includes(label), label);
+      }
+      assert.equal(markup.includes('Filtreleri temizle'), expected.length !== tasks.length);
+      assert.equal(markup.includes('Direktörlük C'), false);
+    }
+  } finally { delete globalThis[TEST_APP_STATE_KEY]; }
+});
+
 test('filtreleri temizleme iki görünümde kurumsal seçimi de sıfırlar', () => {
   for (const path of ['src/features/tasks/TasksView.jsx', 'src/features/tasks/SimpleTasksView.jsx']) {
     const source = read(path);

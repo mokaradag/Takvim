@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Icons } from '../icons';
 import { useDataLifecycle } from '../../state/hooks';
-import { useReducedMotion } from '../../hooks/useReducedMotion.js';
+import Image from 'next/image';
 import { AppLogo } from './AppLogo';
 import { DATA_MODES } from '../../data/dataMode';
 import { publicRotaPath } from '../../lib/publicPath.js';
@@ -18,9 +18,13 @@ import { useDataMode } from './DataModeContext';
  * yerleştirir.
  */
 function DataMessage({ children }) {
+  const logoUrl = process.env.NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL?.trim();
+  const [logoFailed, setLogoFailed] = useState(false);
   return (
     <div className="app-boot">
-      <div className="app-boot-aura" aria-hidden="true" />
+      <div className="app-boot-stars" aria-hidden="true" />
+      {logoUrl && !logoFailed && <Image className="app-boot-company-logo" src={logoUrl}
+        alt="Kurum logosu" width={164} height={48} unoptimized onError={() => setLogoFailed(true)} />}
       <div className="app-boot-card">{children}</div>
     </div>
   );
@@ -35,51 +39,6 @@ function BootBrand() {
         <span>MERGEN</span><strong>Rota</strong>
         <small>Görev Yönetimi</small>
       </div>
-    </div>
-  );
-}
-
-const BOOT_STEPS = [
-  { id: 'catalog', label: 'Kurumsal katalog', Icon: Icons.Database },
-  { id: 'wbs', label: 'İş dağılım ağacı', Icon: Icons.Layers },
-  { id: 'tasks', label: 'Görevler', Icon: Icons.Table }
-];
-
-/**
- * Yükleme adımları sırayla vurgulanır.
- *
- * Gerçek ilerleme sunucudan akmadığı için yüzde UYDURULMAZ; vurgu yalnızca
- * hangi aşamaların hazırlandığını anlatan sakin bir göstergedir.
- */
-function BootSteps() {
-  const [activeStep, setActiveStep] = useState(0);
-  const reduceMotion = useReducedMotion();
-
-  useEffect(() => {
-    // Tercih etkinken adım döngüsü HİÇ çalışmaz. CSS geçersiz kılması yalnızca
-    // giriş animasyonunu kapatıyor, 900 ms'de bir değişen etkin durum ise
-    // görünür biçimde hareket etmeye devam ediyordu.
-    if (reduceMotion) {
-      setActiveStep(0);
-      return undefined;
-    }
-    const timer = setInterval(() => setActiveStep((current) => (current + 1) % BOOT_STEPS.length), 900);
-    return () => clearInterval(timer);
-  }, [reduceMotion]);
-
-  return (
-    <div className="app-boot-steps">
-      {BOOT_STEPS.map((step, index) => (
-        <span
-          key={step.id}
-          // Hareket azaltıldığında bütün adımlar durağan biçimde vurgulanır:
-          // kullanıcı hangi aşamaların hazırlandığını yine görür.
-          className={`app-boot-step${reduceMotion || index === activeStep ? ' is-active' : ''}`}
-          style={{ '--step-delay': `${index * 110}ms` }}
-        >
-          <step.Icon size={12} /> {step.label}
-        </span>
-      ))}
     </div>
   );
 }
@@ -137,12 +96,11 @@ export function AppDataBoundary({ children }) {
         <BootBrand />
         <h1 className="app-boot-title">Veriler yükleniyor</h1>
         <p className="app-boot-sub">
-          Projeler, iş dağılım ağacı ve görevler hazırlanıyor. Kurumsal kaynak ilk açılışta eşitlenir.
+          Çalışma alanınız hazırlanıyor.
         </p>
         <div className="app-boot-progress" role="progressbar" aria-label="Veriler yükleniyor" aria-busy="true">
           <span />
         </div>
-        <BootSteps />
       </DataMessage>
     );
   }

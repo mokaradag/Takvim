@@ -4,6 +4,7 @@ export const TWEAK_DEFAULTS = {
   theme: 'dark',
   fontScale: 1,
   landingView: 'ozet',
+  showArchivedProjects: false,
   appMode: 'advanced',
   calLarge: false,
   reduceMotion: false,
