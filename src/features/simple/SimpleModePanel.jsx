@@ -136,11 +136,15 @@ export function SimpleModePanel() {
     selectedProject,
     creationScope: selectedCreationScope,
     currentUserId: currentUser?.id,
+    isExecutive: appState.isExecutive,
+    isSystemAdmin: appState.isSystemAdmin,
     assignmentScopeSicils
   }), [
     selectedProject,
     selectedCreationScope,
     currentUser?.id,
+    appState.isExecutive,
+    appState.isSystemAdmin,
     assignmentScopeSicils
   ]);
   const candidatePeople = useMemo(

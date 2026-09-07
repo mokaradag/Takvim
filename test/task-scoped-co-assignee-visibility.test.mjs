@@ -150,7 +150,7 @@ test('kırpılmış görev kapsamı adı rehber kişisini ikinci kez göstermez'
   assert.equal(records[0].id, '1001');
 });
 
-test('görev güncelleme yanıtı gizli Sicili maskeleyip önceki görev kapsamlı fotoğrafı korur', async () => {
+test('görev güncelleme yanıtı görev kapsamlı fotoğraf kimliklerini Sicil ile yeniler', async () => {
   const stack = await createActualStack(seed(), { sicil: CURRENT_ASSIGNEE, corporateWbsSource: false });
   try {
     const task = stack.state.tasks[0];
@@ -158,9 +158,10 @@ test('görev güncelleme yanıtı gizli Sicili maskeleyip önceki görev kapsaml
     assert.equal(result.ok, true);
     assert.deepEqual(result.value.taskUpserts[0].assigneeDisplayNames, ['Ayşe Görevli', 'Mehmet Görevli']);
     assert.deepEqual(result.value.taskUpserts[0].assigneeAvatarIdentities, [
-      { name: 'Ayşe Görevli', employeeNo: String(CURRENT_ASSIGNEE) }
+      { name: 'Ayşe Görevli', employeeNo: String(CURRENT_ASSIGNEE) },
+      { name: 'Mehmet Görevli', employeeNo: String(CO_ASSIGNEE) }
     ]);
-    assert.equal(JSON.stringify(result.value.taskUpserts[0]).includes(String(CO_ASSIGNEE)), false);
+    assert.deepEqual(result.value.taskUpserts[0].assigneeIds, [String(CURRENT_ASSIGNEE)]);
     assert.deepEqual(stack.state.tasks[0].assigneeDisplayNames, ['Ayşe Görevli', 'Mehmet Görevli']);
     assert.deepEqual(stack.state.tasks[0].assigneeAvatarIdentities, [
       { name: 'Ayşe Görevli', employeeNo: String(CURRENT_ASSIGNEE) },
@@ -251,7 +252,7 @@ test('genel personel sorgusu eş sorumluyu görev görünürlüğünden rehbere 
   assert.match(repositorySource, /es\.EmployeeSicil = visibleAssignee\.Sicil/);
   assert.doesNotMatch(repositorySource, /visibilityGate\.TaskId = visibleTask\.TaskId/);
   assert.match(repositorySource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
-  assert.match(repositorySource, /WHEN auth\.IdentityVisible = 1\s+AND NULLIF\(LTRIM\(RTRIM\(pd\.DisplayName\)\), ''\) IS NOT NULL\s+THEN ta\.Sicil/);
+  assert.match(repositorySource, /WHEN NULLIF\(LTRIM\(RTRIM\(pd\.DisplayName\)\), ''\) IS NOT NULL\s+THEN ta\.Sicil/);
   assert.match(projectionSource, /END AS AvatarEmployeeNo/);
   assert.match(projectionSource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
 });

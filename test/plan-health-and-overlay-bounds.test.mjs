@@ -434,3 +434,15 @@ test('rakam maskesi harf içeren girişe uygulanmaz', async () => {
   assert.equal(maskDateDraft('18 Ağu 2026'), '18 Ağu 2026');
   assert.equal(maskDateDraft('18 A'), '18 A');
 });
+
+test('plan bütünlüğü aynı adlı çalışanları birleştirmez ve geçersiz Sicili adla tamamlamaz', () => {
+  const people = [{ id: '1', name: 'Aynı Ad' }, { id: '2', name: 'Aynı Ad' }, { id: '3', name: 'Tekil Ad' }];
+  const tasks = [
+    { id: 'iki-sicil', status: 'todo', assigneeIds: ['1', '2'], sorumlu: ['Aynı Ad', 'Aynı Ad'] },
+    { id: 'belirsiz-ad', status: 'todo', sorumlu: ['Aynı Ad'] },
+    { id: 'gecersiz-sicil', status: 'todo', assigneeIds: ['4'], sorumlu: ['Tekil Ad'] },
+    { id: 'eski-tekil', status: 'todo', sorumlu: ['Tekil Ad'] }
+  ];
+  const result = selectPlanHygiene(tasks, people);
+  assert.deepEqual(result.checks.find((check) => check.id === 'assignee').items.map((task) => task.id), ['belirsiz-ad', 'gecersiz-sicil']);
+});

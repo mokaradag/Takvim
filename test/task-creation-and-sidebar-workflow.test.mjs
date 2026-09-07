@@ -82,11 +82,11 @@ test('yeni görev düğmesi yalnızca taslak açar, kalıcı yazma Kaydet eylemi
   const draftClear = provider.indexOf('taskCreationDraftRef.current = null;', activeDraftCheck);
   assert.ok(activeDraftCheck > saveStart && draftClear > activeDraftCheck);
 
-  assert.match(detailOverlay, /const canManageDraft = creationDraft\.scope === 'FULL' \|\| creationDraft\.scope === 'ASSIGNMENT'/);
-  assert.match(detailOverlay, /canChooseWbs=\{Boolean\(creationDraft\.scope\)\}/);
+  assert.match(detailOverlay, /const canManageDraft = creationDraft\?\.scope === 'FULL' \|\| creationDraft\?\.scope === 'ASSIGNMENT'/);
+  assert.match(detailOverlay, /canChooseWbs=\{isCreating \? Boolean\(creationDraft\.scope\)/);
 
   for (const drawer of [advancedDrawer, simpleDrawer]) {
-    assert.match(drawer, /isCreating \? saveCreationDraft/);
+    assert.match(drawer, /const primaryAction = \(\) => onSave\?\.\(/);
     assert.match(drawer, /'Kaydet'/);
     assert.doesNotMatch(drawer, /'Tamam'/);
   }

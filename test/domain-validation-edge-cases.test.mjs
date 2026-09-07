@@ -149,12 +149,12 @@ test('task reference normalization derives canonical assignee IDs from legacy na
   assert.deepEqual(result.sorumlu, ['Bora', 'Ayşe']);
 });
 
-test('task reference normalization keeps valid explicit display names when canonical IDs are also supplied', () => {
+test('task reference normalization resolves display names by canonical IDs when a stale name is also supplied', () => {
   const result = normalizeTaskReferences({
     id: 't1', projectId: 'p1', assigneeIds: ['u1'], sorumlu: ['Bora']
   }, { projects, people, wbs });
   assert.deepEqual(result.assigneeIds, ['u1']);
-  assert.deepEqual(result.sorumlu, ['Bora']);
+  assert.deepEqual(result.sorumlu, ['Ayşe']);
 });
 
 test('task reference normalization preserves a valid same-project WBS assignment', () => {

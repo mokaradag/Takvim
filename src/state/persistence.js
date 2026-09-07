@@ -458,6 +458,13 @@ export function createStateMutationOrchestrator({
         String(task.id) === String(action.id) ? { ...task, assigneeMutation } : task
       ));
     }
+    if (action.type === 'task/save-draft') {
+      const byId = new Map(action.updates.map((update) => [String(update.id), update.patch]));
+      changes.taskUpserts = changes.taskUpserts.map((task) => ({
+        ...task,
+        assigneeMutation: Object.prototype.hasOwnProperty.call(byId.get(String(task.id)) || {}, 'assigneeIds')
+      }));
+    }
     if (isEmptyChangeSet(changes)) {
       applyStateAction(action);
       return { ok: true, value: null };

@@ -661,12 +661,15 @@ img.avatar-photo {
 .calendar-organization-toolbar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 6px;
+  flex: 1 1 auto;
   min-width: 0;
 }
-.calendar-organization-toolbar > .muted { margin-left: auto; font-size: 12px; }
+.calendar-organization-toolbar > .muted { font-size: 11px; white-space: nowrap; }
+.calendar-organization-toolbar .task-org-filters { flex: 1; min-width: 0; }
+.calendar-organization-toolbar .task-org-select { flex: 1 1 130px; width: 130px; min-width: 90px; }
+@media (max-width: 1500px) { .calendar-organization-toolbar > .muted { display: none; } }
 .calendar-organization-toolbar .task-org-overflow-panel { left: 0; right: auto; }
 .calendar-navigation { position: relative; }
 .calendar-toolbar-end {

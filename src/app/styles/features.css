@@ -1016,7 +1016,8 @@
 .schedule-request-message strong { color: var(--text-muted); font-size: 10.5px; }
 .schedule-request-message p { margin: 4px 0 0; color: var(--text); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
 .schedule-request-message.decision { border-color: color-mix(in oklab, var(--accent) 30%, var(--border)); }
-.schedule-status { display: inline-flex; width: fit-content; padding: 2px 6px; border: 1px solid currentcolor; border-radius: 999px; font-size: 9.5px; font-weight: 750; letter-spacing: .03em; }
+.schedule-status { display: inline-flex; align-items: center; justify-content: center; align-self: start; width: fit-content; height: 24px; padding: 0 8px; border: 1px solid color-mix(in oklab, currentcolor 22%, transparent); border-radius: 6px; background: color-mix(in oklab, currentcolor 8%, var(--bg-elev)); font-size: 10.5px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.schedule-status::before { content: ''; width: 4px; height: 4px; margin-right: 6px; border-radius: 50%; background: currentcolor; }
 .schedule-status.pending { color: var(--c-amber); }
 .schedule-status.accepted { color: var(--status-done); }
 .schedule-status.rejected { color: var(--status-overdue); }
@@ -1036,7 +1037,10 @@
 .schedule-request-card { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; width: 100%; padding: 11px 14px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: inherit; text-align: left; }
 .schedule-request-card:hover,
 .schedule-request-card:focus-visible { background: var(--bg-hover); outline: none; }
-.schedule-request-card .schedule-status { grid-column: 2; grid-row: 1 / span 2; }
+.schedule-request-card .schedule-status { grid-column: 2; grid-row: 1 / span 2; justify-self: end; align-self: start; }
+.schedule-request-card > strong, .schedule-request-card > small, .schedule-request-card > span:not(.schedule-status) { grid-column: 1; min-width: 0; }
+.schedule-request-card time { grid-column: 2; }
+.drawer-save-error { margin: 0 20px 10px; padding: 10px 12px; border: 1px solid color-mix(in oklab, var(--status-overdue) 30%, var(--border)); border-radius: 8px; color: var(--status-overdue); font-size: 12px; }
 .schedule-request-card strong { color: var(--text); font-size: 12px; }
 .schedule-request-card small { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .schedule-request-card > span:not(.schedule-status) { color: var(--accent); font-size: 10.5px; }
@@ -1139,3 +1143,5 @@
 .app[data-view="takvim"] .drawer { width: min(860px, var(--app-viewport-w, 100vw)); }
 @media (prefers-reduced-motion: reduce) { .settings-switch, .settings-switch span { transition: none; } }
 .reduce-motion .settings-switch, .reduce-motion .settings-switch span { transition: none; }
+
+fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }

@@ -26,8 +26,10 @@ import {
   resolveWbsMutationAccess
 } from './projectWritePolicy.js';
 import { reconcileProjectMutationAccess } from './projectMutationReconciliation.js';
-import { createRecurringTasks, taskCreationWithRecurrences } from './recurringTaskCreation.js';
+import { createRecurringTasks } from './recurringTaskCreation.js';
 import { executeTaskCreation } from './taskCreationPolicy.js';
+import { prepareTaskCreationCommit, prepareTaskEditorCommit } from './taskEditorCommit.js';
+import { canonicalActualId } from '../domain/identity/actualId.js';
 import {
   createDataRefreshRequestGuard,
   createDataRefreshSingleFlight
@@ -170,11 +172,24 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     });
   }, [workspaceReady, workspaceWriteReady, state.dataStatus, state.workspaceMode, state.selectedProjectId]);
 
-  const openTask = useCallback((taskOrId) => {
+  const openTask = useCallback(async (taskOrId) => {
+    const rawId = typeof taskOrId === 'string' ? taskOrId : taskOrId?.id;
+    const id = canonicalActualId(rawId) || rawId;
+    let task = stateRef.current.tasks.find((item) => item.id === id);
+    if (!task) {
+      const refreshed = await reloadData({ refreshMode: 'manual' });
+      if (refreshed?.ok === false) return refreshed;
+      task = stateRef.current.tasks.find((item) => item.id === id);
+    }
+    if (!task) return { ok: false, error: { message: 'Görev bulunamadı veya artık görüntüleme yetkiniz yok.' } };
     taskCreationDraftRef.current = null;
     setTaskCreationDraft(null);
-    applyStateAction({ type: 'task/select', id: typeof taskOrId === 'string' ? taskOrId : taskOrId?.id });
-  }, [applyStateAction]);
+    if (stateRef.current.workspaceMode === 'project' && stateRef.current.selectedProjectId !== task.projectId) {
+      applyStateAction({ type: 'workspace/select', selectedProjectId: task.projectId, workspaceMode: 'project' });
+    }
+    applyStateAction({ type: 'task/select', id: task.id });
+    return { ok: true, value: task };
+  }, [applyStateAction, reloadData]);
 
   /**
    * Görev panelini kapatır.
@@ -211,6 +226,10 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     if (!access.ok) return rejectedWrite('task/update', access);
     return persistence.updateTask(id, stamped);
   }, [persistence]);
+  const saveTaskEdits = useCallback((edits, options = {}) => (
+    persistence.mutate('task/save-draft', (current) => prepareTaskEditorCommit(current, edits, options))
+      .catch((error) => ({ ok: false, error: { code: error.code || 'MUTATION_FAILED', message: error.message } }))
+  ), [persistence]);
   const flushPendingChanges = useCallback((options = {}) => persistence.flush(options), [persistence]);
   /**
    * TEK bir görevin bekleyen düzenlemelerini sunucuya yazar.
@@ -370,7 +389,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     return Promise.resolve({ ok: true, value: null });
   }, []);
 
-  const saveTaskDraft = useCallback(async (input = null, { generateSeries = false } = {}) => {
+  const saveTaskDraft = useCallback(async (input = null, options = {}) => {
     const draft = taskCreationDraftRef.current;
     if (!draft) {
       return projectWriteFailure('task/create', {
@@ -389,9 +408,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       input: taskInput,
       id: draft.task.id,
       mutate: (operation, action) => persistence.mutate(operation, (current) => {
-        const creation = action(current);
-        if (!generateSeries) return creation;
-        return taskCreationWithRecurrences(current, creation);
+        return prepareTaskCreationCommit(current, action(current), options);
       })
     });
     if (!result.ok || !created) return result;
@@ -654,6 +671,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     openTask,
     closeTask,
     updateTask,
+    saveTaskEdits,
     flushPendingChanges,
     flushTaskEdits,
     hasPendingChanges,
@@ -686,6 +704,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     openTask,
     closeTask,
     updateTask,
+    saveTaskEdits,
     flushPendingChanges,
     flushTaskEdits,
     hasPendingChanges,

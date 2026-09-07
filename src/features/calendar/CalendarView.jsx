@@ -126,6 +126,15 @@ export function CalendarView({
           )}
           </div>
         </div>
+        <div className="calendar-organization-toolbar">
+          <TaskOrganizationFilterControls organization={organization} />
+          {hasOrgSelection(organization.selection) && (
+            <button className="btn ghost sm" onClick={() => setSelection(createEmptyOrgFilter())}>
+              <Icons.Close size={12} /> Filtreleri temizle
+            </button>
+          )}
+          <span className="muted tabular">{organization.filteredTasks.length} / {tasks.length} görev</span>
+        </div>
         <div className="calendar-toolbar-end">
           <div className="seg" title="Gün kutusu boyutu">
             <button className={!calLarge ? 'active' : ''} onClick={() => setTweak && setTweak('calLarge', false)}>Normal</button>
@@ -153,15 +162,6 @@ export function CalendarView({
         </div>
       </div>
 
-      <div className="calendar-organization-toolbar">
-        <TaskOrganizationFilterControls organization={organization} />
-        {hasOrgSelection(organization.selection) && (
-          <button className="btn ghost sm" onClick={() => setSelection(createEmptyOrgFilter())}>
-            <Icons.Close size={12} /> Filtreleri temizle
-          </button>
-        )}
-        <span className="muted tabular">{organization.filteredTasks.length} / {tasks.length} görev</span>
-      </div>
 
       <div className="calendar-scroll">
         <div className={`cal anim-in${calLarge ? ' cal-lg' : ''}`}>

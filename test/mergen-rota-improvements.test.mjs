@@ -810,13 +810,10 @@ test('boş görev başlığı kalıcılaştırmaya hiç gönderilmez', async () 
   // Boş başlık sunucuda TASK_TITLE_REQUIRED ile reddediliyor ve aynı yamada
   // birleştirilen ilerleme/tarih düzenlemeleri de o istekle birlikte düşüyordu.
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /useTaskTitleDraft\(\{/);
-  assert.match(drawer, /onChange=\{\(e\) => changeTitle\(e\.target\.value\)\}/);
-  assert.match(drawer, /Görev başlığı boş bırakılamaz/);
-  // Alan boşaldığında kuyrukta bekleyen önceki tuş vuruşu da iptal edilir; aksi
-  // hâlde arayüzün "kaydedilmeyecek" dediği ön ek kalıcılaşıyordu.
-  assert.match(drawer, /cancelTaskFieldUpdates\(task\.id, \['task'\]\)/);
-  assert.match(read('src/state/persistence.js'), /function cancelFields\(taskId, fields = \[\]\)/);
+  assert.match(drawer, /const titleValid = Boolean\(titleDraft\.trim\(\)\)/);
+  assert.match(drawer, /disabled=\{isSaving \|\| !titleValid\}/);
+  assert.match(drawer, /Kaydetmek için görev başlığı girin/);
+  assert.doesNotMatch(drawer, /onBlur=\{flushTitle\}/);
 
   const jobs = [];
   const persisted = [];

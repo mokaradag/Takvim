@@ -1,3 +1,4 @@
+import { taskPersonnelScope } from './taskPersonnelScope.js';
 import { milestoneCompletion } from '../domain/milestoneCompletion.js';
 import { normalizeTaskRecord } from '../data/normalizeTaskRecord.js';
 import { TASK_STATUSES } from '../domain/constants/index.js';
@@ -453,6 +454,7 @@ function applyUpserts(items, upserts, deletes, normalize, { prependNew = false }
  * alınmış fotoğraf kimliği korunur. Ad yanıttan kalktığında kimlik de kalkar.
  */
 function preserveTaskScopedAvatarIdentities(previousTask, committedTask) {
+  if (Array.isArray(committedTask?.assigneeAvatarIdentities)) return committedTask;
   const previous = Array.isArray(previousTask?.assigneeAvatarIdentities)
     ? previousTask.assigneeAvatarIdentities
     : [];
@@ -602,6 +604,12 @@ export function appStateReducer(state, action) {
     case 'task/add-many':
       // Seri yinelemeleri tek işlemde eklenir; seçili görev şablonda kalır.
       return { ...state, tasks: [...(action.tasks || []), ...state.tasks] };
+    case 'task/save-draft': {
+      let next = { ...state, tasks: [...(action.tasks || []), ...state.tasks] };
+      for (const update of action.updates || []) next = appStateReducer(next, { type: 'task/update', ...update });
+      const projectsById = new Map((action.projectUpdates || []).map((project) => [project.id, project]));
+      return { ...next, projects: next.projects.map((project) => projectsById.get(project.id) || project) };
+    }
     case 'task/update': {
       const previousTask = state.tasks.find((task) => task.id === action.id) || null;
       let updatedTask = null;
@@ -732,11 +740,9 @@ export function defaultTaskAssignee(state, project = null) {
     })()
     : (state.people?.[0] || null);
 
-  const assignOnly = Boolean(project?.accessLevel) && project.accessLevel !== 'FULL';
-  const scope = state.assignmentScopeSicils || [];
-  if (!assignOnly || !scope.length) return fallback;
+  const scoped = taskPersonnelScope({ ...state, project });
+  if (!scoped || (!state.isExecutive && !scoped.size)) return fallback;
 
-  const scoped = new Set(scope.map(String));
   if (fallback && scoped.has(String(fallback.id))) return fallback;
   return (state.people || []).find((person) => scoped.has(String(person.id))) || null;
 }

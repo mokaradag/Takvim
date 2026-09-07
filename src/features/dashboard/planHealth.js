@@ -69,12 +69,12 @@ export function selectOverdueAging(tasks, referenceDate = today()) {
 function buildPeopleIndex(people) {
   if (!Array.isArray(people) || !people.length) return null;
   const byId = new Set();
-  const byName = new Set();
+  const byName = new Map();
   for (const person of people) {
     if (!person) continue;
     if (person.id != null) byId.add(String(person.id));
     const name = String(person.name || '').trim().toLocaleLowerCase('tr-TR');
-    if (name) byName.add(name);
+    if (name) byName.set(name, (byName.get(name) || 0) + 1);
   }
   return { byId, byName };
 }
@@ -84,12 +84,13 @@ function resolvedAssigneeCount(task, context = {}) {
   const index = context?.peopleIndex || null;
   const ids = (task?.assigneeIds || []).map((value) => String(value));
   const names = (task?.sorumlu || []).map((value) => String(value || '').trim());
-  if (!index) return ids.filter(Boolean).length + names.filter(Boolean).length;
+  if (!index) return ids.length ? new Set(ids.filter(Boolean)).size : new Set(names.filter(Boolean)).size;
   const resolved = new Set();
   for (const id of ids) if (index.byId.has(id)) resolved.add(`id:${id}`);
+  if (ids.length || task?.assigneeIdsCanonical) return resolved.size;
   for (const name of names) {
     const key = name.toLocaleLowerCase('tr-TR');
-    if (key && index.byName.has(key)) resolved.add(`name:${key}`);
+    if (key && index.byName.get(key) === 1) resolved.add(`name:${key}`);
   }
   return resolved.size;
 }

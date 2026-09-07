@@ -828,8 +828,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     SELECT ta.TaskId,
       CASE WHEN auth.IdentityVisible = 1 THEN ta.Sicil ELSE NULL END AS Sicil,
       CASE
-        WHEN auth.IdentityVisible = 1
-          AND NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL
+        WHEN NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL
         THEN ta.Sicil
         ELSE NULL
       END AS AvatarEmployeeNo,
@@ -1364,7 +1363,8 @@ async function assertTaskProjectScope(executor, actor, projectId, { allowAssigne
 
 /** SORUMLU düzeyinde yetki: her sorumlu yöneticinin kapsamında olmalıdır. */
 async function assertAssigneeScope(executor, actor, projectId, assigneeSicils, projectScope = null) {
-  if (hasFullProjectWriteAccess(actor, projectId)) return;
+  const fullAccess = hasFullProjectWriteAccess(actor, projectId);
+  if (actor.isSystemAdmin || (fullAccess && !actor.isExecutive)) return;
 
   const sicils = [...new Set((assigneeSicils || []).map(Number).filter((value) => Number.isSafeInteger(value) && value > 0))];
   if (projectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE) {
@@ -1377,6 +1377,7 @@ async function assertAssigneeScope(executor, actor, projectId, assigneeSicils, p
     return;
   }
   if (!sicils.length) {
+    if (fullAccess) return;
     throw new ServerPersistenceError(
       'FORBIDDEN',
       'Yetki alanınız dışındaki bir projede görev yalnızca kendi personelinize atanabilir; görevin en az bir sorumlusu olmalıdır.'
@@ -1744,15 +1745,18 @@ async function commitTask(executor, actor, task, correlationId) {
 
   // Sorumlular sonra doğrulanır: görev atama kapsamı, yamanın SONUÇ
   // sorumlularına bakarak karar verir.
-  const assigneeSicils = narrowTaskWrite && !creatorAssigneeWrite
+  const assigneesUnchanged = Boolean(before) && sameSicilSet(authoritativeAssigneeSicils, (task.assigneeIds || []).map(Number));
+  const assigneeSicils = (narrowTaskWrite && !creatorAssigneeWrite) || assigneesUnchanged
     ? authoritativeAssigneeSicils
     : await ensurePeople(executor, task.assigneeIds || []);
   // Kaynak proje: görevin ŞU ANKİ sorumluları kapsam denetimine girer.
-  if ((!narrowTaskWrite || creatorAssigneeWrite) && beforeProjectId) {
+  if ((!narrowTaskWrite || creatorAssigneeWrite) && beforeProjectId && !hasFullProjectWriteAccess(actor, beforeProjectId)) {
     await assertAssigneeScope(executor, actor, beforeProjectId, authoritativeAssigneeSicils, sourceProjectScope);
   }
   if (!narrowTaskWrite || creatorAssigneeWrite) {
-    await assertAssigneeScope(executor, actor, projectId, assigneeSicils, destinationProjectScope);
+    if (!before || beforeProjectId !== projectId || !fullProjectWrite || !sameSicilSet(authoritativeAssigneeSicils, assigneeSicils)) {
+      await assertAssigneeScope(executor, actor, projectId, assigneeSicils, destinationProjectScope);
+    }
     if (!before && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE) {
       assertAssigneeTaskCreateFieldsOnly(task);
     }
@@ -2042,21 +2046,16 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   }
 
-  // Bağımlılık satırları YALNIZCA tam yetkili yazmada değiştirilir. PARTIAL
-  // anlık görüntü `MR_TaskDependencies` yüklemez; istemci `deps: []` taşır ve
-  // koşulsuz silme, yöneticinin hiç göremediği öncülleri sessizce yok ederdi.
-  if (!narrowTaskWrite || creatorAssigneeWrite) {
+  if (fullProjectWrite) {
     const clear = request(executor);
     clear.input('taskId', sql.UniqueIdentifier, taskId);
-    await clear.query(fullProjectWrite
-      ? `
-    DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;
-    DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
-  `
-      : `
-    DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
-  `);
-
+    await clear.query('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;');
+  }
+  // Değişmeyen atamalar yeniden yazılmaz; atayan kişi ve tarih korunur.
+  if ((!narrowTaskWrite || creatorAssigneeWrite) && !assigneesUnchanged) {
+    const clear = request(executor);
+    clear.input('taskId', sql.UniqueIdentifier, taskId);
+    await clear.query('DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;');
     for (const sicil of assigneeSicils) {
       const assignment = request(executor);
       assignment.input('taskId', sql.UniqueIdentifier, taskId);

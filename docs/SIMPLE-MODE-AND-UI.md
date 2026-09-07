@@ -561,7 +561,7 @@ Temel Kip arayüz stilleri `src/app/styles/simple-mode.css` içinde sahiplenilir
 
 ## Proje seçimi, ölçek ve Takvim görünümü
 
-Her iki kipte Takvimin üst bölümünde Görevler ile aynı **Direktörlük → Müdürlük → Birim** seçicileri bulunur. Seçim Görevler, Kanban ve Takvim geçişlerinde korunur; gün kutuları ve genişletilmiş gün penceresi aynı süzülmüş görevleri gösterir. **Filtreleri temizle** tüm kurumsal seçimleri sıfırlar. Dar ekranda seçiciler ortak **Kurumsal filtre** menüsünde toplanır.
+Her iki kipte Takvimde ay/yıl seçimi ve Bugün düğmesinden sonra, Normal/Büyük denetiminden önce aynı araç çubuğu satırında Görevler ile aynı **Direktörlük → Müdürlük → Birim** seçicileri bulunur. Seçim Görevler, Kanban ve Takvim geçişlerinde korunur; gün kutuları ve genişletilmiş gün penceresi aynı süzülmüş görevleri gösterir. **Filtreleri temizle** tüm kurumsal seçimleri sıfırlar. Dar ekranda seçiciler ortak **Kurumsal filtre** menüsünde toplanır.
 
 Birim yöneticisi dahil atama yetkisi bulunan görev oluşturucusu, kendi kurumsal görevinde kapsamındaki sorumluları ekleyip çıkarabilir ve görevi silebilir. İki kipin liste ve panelleri aynı yetki kararını kullanır. Sorumlu değişikliği görevde en az bir kapsam içi sorumlu bırakmalıdır. Etiket, başlık ve tarih düzenlemeleri aynı görev kaydetme akışından geçer; başka bir kullanıcının güncel sürümü eski bir kayıtla ezilmez.
 
@@ -570,3 +570,15 @@ Her iki kipte kenar çubuğu aynı aranabilir proje/portföy seçicisini kullan�
 Temel Kip Görevler tablosu sabit sütun alt genişlikleri yerine oransal genişlikler kullanır. Proje adı, görev başlığı, durum ve başlıklar dar alanda satıra geçer. Ölçek büyüdüğünde tüm sütunlar kullanılabilir genişliğe sığar; içerik yüksekliği büyüyebilir. Eylemler gerektiğinde alt alta yerleşir ve hiçbir sütun gizlenmez.
 
 Koyu temada hafta sonları daha açık mavi zemin ve üst kenar çizgisiyle ayrılır. Takvim gün penceresi 800 piksele, Takvimden açılan görev paneli 860 piksele kadar genişler; ekran ve ölçek sınırları korunur. Kenar çubuğu genişliği ile etiketlerin görünürlüğü yumuşak geçiş yapar. Hareketi azalt tercihi bu geçişleri kapatır.
+
+## Görev penceresinde açık kayıt
+
+Temel ve Kapsamlı Kipte yeni veya mevcut görevde yapılan değişiklikler **Kaydet** seçilene kadar yerel taslakta kalır. Sorumlu, başlık, kısa açıklama/etiket, not, tarih, durum, öncelik, ilerleme, proje/WBS, bağımlılık ve tekrar alanları yazarken, odak kaybında veya pencere kapatılırken sunucuya gönderilmez. Kapatma ve arka plana tıklama taslağı bırakır. Boş başlık kaydı engeller; pencere yine kapatılabilir.
+
+Kaydet, görev ve değişen ardıl bağlantılarını tek değişiklik kümesinde gönderir. Kayıt sürerken alanlar ve tekrar tıklama kilitlenir. Başarılı sonuçtan sonra pencere kapanır; hata taslağı açık tutar. Yeni yetkili snapshot geldiğinde düzenlenen değerler korunur; eski sürüm güncel kaydı ezemez. Etiket kataloğuna ekleme yetkisi varsa Temel Kip kısa açıklaması aynı işlemde kataloğa eklenir. Başlık ve not için ayrı istek, kapanışta ek debounce beklemesi ve değişmeyen sorumluların tekrar yazılması yoktur.
+
+Sorumlu seçimi ve yazma `assigneeIds`/Sicil ile yapılır; adlar yalnızca gösterim içindir. Aynı adlı çalışanlar sicilleriyle ayrı ayrı seçilebilir, çıkarılabilir ve yeniden yüklenebilir. Yöneticiye ait manuel projeler ve yeni serbest proje formu da kurumsal atama kapsamıyla sınırlıdır; sistem yöneticisi istisnası korunur.
+
+Tarih talebi ayrıntısındaki **Görevi aç**, görev kimliğini çözer ve gerekirse yetkili veriyi yeniler. Farklı proje çalışma alanındaki göreve geçerken proje bağlamı da güncellenir. Silinmiş veya erişimi kaldırılmış görev için açık bir hata gösterilir.
+
+Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.

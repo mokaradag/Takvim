@@ -261,6 +261,10 @@ Both contracts are covered by
 
 ## Açılış ekranı ve kurum logosu
 
-Açılış ekranı çerçevesiz, sola hizalı ürün kimliği, sakin noktasal yıldız hareketi ve belirsiz ilerleme göstergesi kullanır. Gerçek ilerleme bilgisi olmayan sırayla değişen aşama rozetleri kaldırılmıştır. İşletim sistemi veya uygulamanın hareket azaltma tercihi sürekli animasyonları durdurur.
+Açılış ekranı koyu lacivert zemin, hafif ışık geçişleri, birbirinden bağımsız hareket eden yıldız katmanları ve sade bir marka kartı kullanır. Hareket ilk saniyelerden itibaren görülebilir. İşletim sistemi veya uygulamanın hareket azaltma tercihi yıldızları, arka planı ve ilerleme animasyonunu durdurur.
 
-`.env.example` içindeki `NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL`, kurumun sağlayacağı SVG dosyasının tarayıcıdan erişilebilen tam adresidir (örneğin `https://kurum.example/kurumsal/logo.svg`). Dosya sistemi/Windows yolu kullanılmaz. Adres gizli bilgi içermemelidir; tarayıcı paketine dahildir. Değişiklikten sonra `npm run build` ve uygulama yeniden başlatma gerekir. Boşken veya görüntü yüklenemezse kurum logosu gizlenir. Görüntü sol üstte 164 × 48 piksel kutuda, oranı korunarak gösterilir; ekranı kaplamaz.
+Kurum logosu `/api/mergen-rota/company-logo` üzerinden alınır. `MERGEN_ROTA_COMPANY_LOGO_PATH` sunucunun erişebildiği UNC, Windows veya mutlak SVG yoludur. Node hizmet hesabının paylaşım ve dosya okuma yetkisi bulunmalıdır; Linux kurulumunda paylaşım bağlanıp yerel bağlama yolu kullanılmalıdır. Eski `NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL` ayarı HTTPS adresi veya UNC SVG yolu içeriyorsa da çalışır. Yeni dosya yolu ayarı sunucuda okunur ve tarayıcıya gönderilmez. Ayar değişince hizmet yeniden başlatılır; değişen görsel beş dakikaya kadar önbellekte kalabilir. Logo 220 × 64 piksel alanda `object-fit: contain` ile gösterilir. Ayar boş veya dosya okunamıyorsa logo gizlenir; açılış engellenmez.
+
+Temel Kipte eylem sütununun başlığı da diğer başlıklarla birlikte yapışkandır ve opak zemin kullanır; kaydırılan zarf/silme simgeleri başlığın üstüne çıkmaz. Tarih talebi rozetleri sabit 24 piksel yüksekliğe sahiptir; ızgara satırlarının yüksekliğine uzamaz. Kilometre taşının gerçekleşen tarihi ortak tarih ızgarasında yer alır.
+
+Daralan kenar çubuğunda kullanıcı metni ve kip etiketlerinin gizli satırları yükseklik tüketmez. Menü kalan yüksekliği alır; fotoğraf ve araçlar altta kalır. Genişlik/padding geçişleri aynı 420 ms yumuşak hız eğrisini kullanır; hareket azaltma tercihi tüm geçişleri kapatır.
