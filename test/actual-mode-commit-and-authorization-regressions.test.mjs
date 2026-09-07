@@ -381,7 +381,7 @@ test('task assignees persist only the Sicil list that passed normalization and d
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /function normalizeSicils\(sicils\)/);
   assert.match(source, /: await ensurePeople\(executor, task\.assigneeIds \|\| \[\]\);/);
-  assert.match(source, /narrowTaskWrite\s+\? authoritativeAssigneeSicils/);
+  assert.match(source, /narrowTaskWrite && !creatorAssigneeWrite\s+\? authoritativeAssigneeSicils/);
   assert.match(source, /for \(const sicil of assigneeSicils\)/);
   assert.doesNotMatch(source, /\(sicils \|\| \[\]\)\.filter\(Boolean\)\.map\(Number\)/);
 });

@@ -257,3 +257,10 @@ light theme, and breaks selection highlighting.
 
 Both contracts are covered by
 `test/module-binding-and-recurrence-editing.test.mjs`.
+
+
+## Açılış ekranı ve kurum logosu
+
+Açılış ekranı çerçevesiz, sola hizalı ürün kimliği, sakin noktasal yıldız hareketi ve belirsiz ilerleme göstergesi kullanır. Gerçek ilerleme bilgisi olmayan sırayla değişen aşama rozetleri kaldırılmıştır. İşletim sistemi veya uygulamanın hareket azaltma tercihi sürekli animasyonları durdurur.
+
+`.env.example` içindeki `NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL`, kurumun sağlayacağı SVG dosyasının tarayıcıdan erişilebilen tam adresidir (örneğin `https://kurum.example/kurumsal/logo.svg`). Dosya sistemi/Windows yolu kullanılmaz. Adres gizli bilgi içermemelidir; tarayıcı paketine dahildir. Değişiklikten sonra `npm run build` ve uygulama yeniden başlatma gerekir. Boşken veya görüntü yüklenemezse kurum logosu gizlenir. Görüntü sol üstte 164 × 48 piksel kutuda, oranı korunarak gösterilir; ekranı kaplamaz.

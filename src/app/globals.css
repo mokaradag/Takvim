@@ -658,6 +658,16 @@ img.avatar-photo {
   gap: 6px;
 }
 .calendar-toolbar-main { min-width: 0; }
+.calendar-organization-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.calendar-organization-toolbar > .muted { margin-left: auto; font-size: 12px; }
+.calendar-organization-toolbar .task-org-overflow-panel { left: 0; right: auto; }
 .calendar-navigation { position: relative; }
 .calendar-toolbar-end {
   margin-left: auto;

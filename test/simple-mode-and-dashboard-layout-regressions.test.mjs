@@ -21,12 +21,12 @@ test('Temel Kip Takvim sayfası Takvim ile açılır ve hızlı görev tanımı 
   assert.doesNotMatch(shell, /calendar-page-stack/);
 });
 
-test('Temel Kip workspace etkisi hook bağımlılıklarını nesne yerine kararlı alanlarla izler', () => {
+test('Temel Kip gezinme etkisi seçili proje kapsamını korur', () => {
   const shell = read('src/components/shell/AppShell.jsx');
 
   assert.match(shell, /mode: workspaceMode,[\s\S]*?selectWorkspace[\s\S]*?= workspace;/);
-  assert.match(shell, /workspaceMode !== 'portfolio'\) selectWorkspace\(null\)/);
-  assert.match(shell, /\[simpleMode, view, workspaceMode, selectWorkspace\]/);
+  assert.doesNotMatch(shell, /workspaceMode !== 'portfolio'\) selectWorkspace\(null\)/);
+  assert.match(shell, /\[simpleMode, view\]/);
   assert.doesNotMatch(shell, /\[simpleMode, view, workspace\.mode, workspace\.selectWorkspace\]/);
 });
 

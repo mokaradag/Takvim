@@ -51,6 +51,7 @@ export function TaskDetailOverlay({ simple = false }) {
   const [displayTask, setDisplayTask] = useState(task);
   const [closingTaskId, setClosingTaskId] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
+  const draftSaveRef = useRef(null);
   const taskIdRef = useRef(task?.id || null);
   const canonicalTaskRef = useRef(task);
   const dirtyFieldsRef = useRef(new Set());
@@ -88,13 +89,18 @@ export function TaskDetailOverlay({ simple = false }) {
   if (isCreating) {
     const creatorFallback = { ...currentUser, createdAt: creationDraft.createdAt };
     const canManageDraft = creationDraft.scope === 'FULL' || creationDraft.scope === 'ASSIGNMENT';
-    const saveDraft = async (input) => {
+    const saveDraft = (input, options) => {
+      if (draftSaveRef.current?.id === task.id) return draftSaveRef.current.promise;
       setSavingDraft(true);
-      try {
-        return await saveTaskDraft(input);
-      } finally {
-        setSavingDraft(false);
-      }
+      const pending = { id: task.id, promise: null };
+      pending.promise = saveTaskDraft(input, options).finally(() => {
+        if (draftSaveRef.current === pending) {
+          draftSaveRef.current = null;
+          setSavingDraft(false);
+        }
+      });
+      draftSaveRef.current = pending;
+      return pending.promise;
     };
     const common = {
       task,

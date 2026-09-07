@@ -273,3 +273,13 @@ This model intentionally does not yet implement:
 - cross-project schedule-request delegation rules.
 
 Those capabilities can now build on distinct Project/WBS/Activity relationships and separate current-plan, target, actual, remaining-duration, baseline, data-date, WBS-rollup and calculated-schedule semantics without redefining the core Task schedule model.
+
+## Kilometre taşı gerçekleşmesi
+
+Kilometre taşı tek bir olaydır: **Gerçekleşen tarih** alanı iki eski SQL sütununa (`ActualStart`, `ActualFinish`) aynı değerle yazılır. Ayrı gerçekleşen başlangıç/bitiş veya ilerleme sürgüsü gösterilmez. Durumu **Yapılacak / Tamamlandı**, ilerlemesi **0 / 100** olur. Tamamlandı seçimi gerçekleşen tarihi damgalar; yeniden açma veya gerçekleşen tarihi temizleme iki sütunu birlikte boşaltır. Girilen gerçekleşen tarih değiştirildiğinde iki sütun birlikte güncellenir. Temel Kip ve salt okunur panel de ikili durumu kullanır.
+
+Ortak `milestoneCompletion` kuralı istemci durum güncellemelerinde, kayıt normalleştirmesinde ve SQL yazma sınırında uygulanır. Eski kayıtlar ayrıca topluca dönüştürülmez; okunurken normalleştirilir, sonraki yetkili yazmada kalıcılaştırılır. Normal görevlerin tarih ve ilerleme davranışı değişmez. SQL şeması yükseltmesi gerekmez.
+
+## Tarih önerilerinde eşzamanlı kayıt
+
+Talep oluşturma ve karar işlemleri `READ_COMMITTED` kullanır; görev ve bekleyen talep satırlarında mevcut `UPDLOCK, HOLDLOCK` koruması sürer. Yetki sorgularındaki geniş okuma kilitleri işlem sonuna kadar tutulmaz. SQL Server 1205 deadlock kurbanı hatasında yalnızca geri alınmış işlemin tamamı yeni transaction ile en fazla iki kez yeniden denenir. Her denemede yetki ve güncel görev yeniden okunur; zaman aşımı veya belirsiz bağlantı hatası otomatik yinelenmez. Denemeler tükenirse kullanıcıya yeniden denemesi için açık bir hata mesajı verilir. Diğer işlem türlerinin izolasyonu veya tekrar politikası değişmez.

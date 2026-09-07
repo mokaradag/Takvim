@@ -71,27 +71,47 @@ export async function getSqlPool() {
   return poolPromise;
 }
 
-export async function withSqlTransaction(work, { isolationLevel = sql.ISOLATION_LEVEL.READ_COMMITTED } = {}) {
+function isDeadlock(error, seen = new Set()) {
+  if (!error || typeof error !== 'object' || seen.has(error)) return false;
+  seen.add(error);
+  return Number(error.number) === 1205 || Number(error.code) === 1205
+    || [error.cause, error.originalError, error.info, ...(error.precedingErrors || [])]
+      .some((nested) => isDeadlock(nested, seen));
+}
+
+export async function withSqlTransaction(work, {
+  isolationLevel = sql.ISOLATION_LEVEL.READ_COMMITTED,
+  deadlockRetries = 0
+} = {}) {
   const activeTransaction = transactionContext.getStore();
   if (activeTransaction) return work(activeTransaction, sql);
 
   const pool = await getSqlPool();
   const driver = await getSqlDriver();
-  const transaction = new driver.Transaction(pool);
-  try {
-    await transaction.begin(isolationLevel);
-    return await transactionContext.run(transaction, async () => {
-      const result = await work(transaction, sql);
-      await transaction.commit();
-      return result;
-    });
-  } catch (error) {
+  for (let attempt = 0; ; attempt += 1) {
+    const transaction = new driver.Transaction(pool);
     try {
-      if (transaction._aborted !== true) await transaction.rollback();
-    } catch {
-      // Asıl hata korunur; geri alma hataları sunucu günlüğünün konusudur.
+      await transaction.begin(isolationLevel);
+      return await transactionContext.run(transaction, async () => {
+        const result = await work(transaction, sql);
+        await transaction.commit();
+        return result;
+      });
+    } catch (error) {
+      try {
+        if (transaction._aborted !== true) await transaction.rollback();
+      } catch {
+        // Asıl hata korunur.
+      }
+      if (!isDeadlock(error)) throw error;
+      if (attempt >= deadlockRetries) {
+        if (!deadlockRetries) throw error;
+        throw new ServerPersistenceError('DATABASE_UNAVAILABLE',
+          'İşlem eşzamanlı bir kayıtla çakıştı. Lütfen yeniden deneyin.', { cause: error });
+      }
+      // SQL Server'ın geri aldığı işlemin tamamı yeni bağlantı işlemiyle yinelenir.
+      await new Promise((resolve) => setTimeout(resolve, 60 * (2 ** attempt) + Math.random() * 60));
     }
-    throw error;
   }
 }
 

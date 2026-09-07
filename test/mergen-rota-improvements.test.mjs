@@ -718,17 +718,18 @@ test('planlanan başlangıcı olmayan şablon yineleme üretmez', () => {
 
 test('yinelemeler şablona bağlanır, kuralı ve bağımlılıkları kopyalamaz', () => {
   const provider = read('src/state/AppStateProvider.jsx');
-  assert.match(provider, /recurrence: null,\s*\n\s*recurrenceParentId: taskId,/);
-  assert.match(provider, /deps: \[\]/);
+  const series = read('src/state/recurringTaskCreation.js');
+  assert.match(series, /recurrence: null,\s*\n\s*recurrenceParentId: taskId,/);
+  assert.match(series, /deps: \[\]/);
   // Kimlik DEĞİŞMEZDİR: yineleme ertelense bile o gün ikinci kez üretilmez.
   // Kimlik HAM yineleme günüdür; çalışma takvimi planlanan başlangıcı kaydırsa
   // bile şablonun kendi yinelemesi ikinci kez üretilmez.
-  assert.match(provider, /recurrenceOccurrenceDate: occurrence\.occurrenceDate,/);
-  assert.match(provider, /materialized\.has\(occurrence\.occurrenceDate\)/);
+  assert.match(series, /recurrenceOccurrenceDate: occurrence\.occurrenceDate,/);
+  assert.match(series, /materialized\.has\(occurrence\.occurrenceDate\)/);
   // Gerçekleşen emek/harcama ve yapay kalan süre yinelemeye taşınmaz.
-  assert.match(provider, /actualHours: null,\s*\n\s*spent: null,/);
-  assert.match(provider, /remainingDurationDays: null,/);
-  assert.doesNotMatch(provider, /remainingDurationDays: created\.plannedDurationDays/);
+  assert.match(series, /actualHours: null,\s*\n\s*spent: null,/);
+  assert.match(series, /remainingDurationDays: null,/);
+  assert.doesNotMatch(series, /remainingDurationDays: created\.plannedDurationDays/);
   // Şablon ve kural, kuyruktaki yazmalar tamamlandıktan SONRA okunur.
   assert.ok(provider.indexOf('const flushResult = await persistence.flush();') < provider.indexOf('const template = current.tasks.find'));
 });

@@ -773,3 +773,63 @@ test('Temel Kip tarih talebi eylemini ve ortak modal erişilebilirlik sınırın
   assert.ok(submitFlushPosition >= 0, 'gönderim boşaltımı bulunmalıdır');
   assert.ok(submitGuardPosition < submitFlushPosition);
 });
+
+test('tarih önerisi SQL 1205 sonrasında tüm işlemi yeniden yürütür, tek talep ve denetim kaydı üretir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  const { setSqlDriverForTests, sql } = await import('../src/server/db/pool.js');
+  let attempts = 0;
+  class DeadlockTransaction extends stack.driver.Transaction {
+    async begin(level) {
+      attempts += 1;
+      this.requestsBefore = stack.db.taskScheduleChangeRequests.map((row) => ({ ...row }));
+      this.auditBefore = stack.db.auditLog.map((row) => ({ ...row }));
+      return super.begin(level);
+    }
+    request() {
+      const request = super.request();
+      const query = request.query.bind(request);
+      request.query = async (statement) => {
+        if (attempts === 1 && statement.includes('INSERT dbo.MR_AuditLog')) {
+          throw Object.assign(new Error('deadlock victim'), { code: 'EREQUEST', originalError: { info: { number: 1205 } } });
+        }
+        return query(statement);
+      };
+      return request;
+    }
+    async rollback() {
+      stack.db.taskScheduleChangeRequests = this.requestsBefore;
+      stack.db.auditLog = this.auditBefore;
+      return super.rollback();
+    }
+  }
+  setSqlDriverForTests({ ...stack.driver, Transaction: DeadlockTransaction });
+  try {
+    const result = await submitScheduleChangeRequest(proposal());
+    assert.equal(result.ok, true, result.error?.message);
+    assert.equal(attempts, 2);
+    assert.equal(stack.db.taskScheduleChangeRequests.length, 1);
+    assert.equal(stack.db.taskScheduleChangeRequests[0].Status, 'PENDING');
+    assert.equal(stack.db.auditLog.filter((row) => row.EntityType === 'TASK_SCHEDULE_REQUEST').length, 1);
+    assert.equal(stack.db.transactions.at(-1).isolationLevel, sql.ISOLATION_LEVEL.READ_COMMITTED);
+  } finally { await stack.dispose(); }
+});
+
+test('SQL işlemi yalnızca 1205 için ve sınırlı sayıda yeniden denenir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  const { withSqlTransaction } = await import('../src/server/db/pool.js');
+  try {
+    for (const [error, expected] of [[{ number: 1205 }, 3], [{ code: 'ETIMEOUT' }, 1], [{ number: 2627 }, 1]]) {
+      let calls = 0;
+      await assert.rejects(withSqlTransaction(async () => { calls += 1; throw error; }, { deadlockRetries: 2 }));
+      assert.equal(calls, expected);
+    }
+    let outer = 0;
+    let inner = 0;
+    await withSqlTransaction(async () => {
+      outer += 1;
+      await withSqlTransaction(async () => { inner += 1; if (inner === 1) throw { number: 1205 }; });
+    }, { deadlockRetries: 2 });
+    assert.equal(outer, 2);
+    assert.equal(inner, 2);
+  } finally { await stack.dispose(); }
+});

@@ -237,6 +237,15 @@ export function SettingsView({ t, setTweak }) {
           </div>
           <div className="card-sub">Başlangıç ve görünüm davranışı.</div>
 
+          <SettingsRow title="Tamamlanan ve kapatılanları göster" desc="Her iki kipte kenar çubuğunun proje seçicisine arşivlenmiş projeleri de ekler.">
+            <button type="button" role="switch" aria-checked={!!t.showArchivedProjects}
+              aria-label="Tamamlanan ve kapatılanları göster" className="settings-switch"
+              onClick={() => setTweak('showArchivedProjects', !t.showArchivedProjects)}>
+              <span />
+            </button>
+          </SettingsRow>
+          <div className="set-sep" />
+
           <SettingsRow title="Açılış sayfası" desc="Kapsamlı kip açıldığında gösterilecek sayfa.">
             <select className="set-select" aria-label="Açılış sayfası" value={t.landingView || 'ozet'} onChange={(e) => setTweak('landingView', e.target.value)}>
               {landingOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}

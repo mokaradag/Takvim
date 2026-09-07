@@ -157,7 +157,7 @@ export default function AppShell() {
     return new Date(current.getFullYear(), current.getMonth(), 1);
   });
   const [cmdOpen, setCmdOpen] = useState(false);
-  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
+  const showArchivedProjects = Boolean(t.showArchivedProjects);
   const [modePickerOpen, setModePickerOpen] = useState(() => {
     try { return localStorage.getItem(MODE_STORAGE_KEY) !== '1'; }
     catch { return false; }
@@ -182,7 +182,6 @@ export default function AppShell() {
     try { localStorage.setItem(MODE_STORAGE_KEY, '1'); } catch {}
     setModePickerOpen(false);
     if (mode === 'simple') {
-      selectWorkspace(null);
       setSimpleCalendarTab('calendar');
       navigate('takvim');
     }
@@ -200,12 +199,11 @@ export default function AppShell() {
 
   useEffect(() => {
     if (!simpleMode) return;
-    if (workspaceMode !== 'portfolio') selectWorkspace(null);
     // Rol kapılı yönetici sayfaları Temel Kip yönlendirmesinden MUAFTIR:
     // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Temel
     // Kipte diye ulaşılamaz olmamalıdır.
     if (!SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) navigate('takvim');
-  }, [simpleMode, view, workspaceMode, selectWorkspace]);
+  }, [simpleMode, view]);
 
   // Yönetici sayfasında yetki kaybı (oturum tazelenmesi, rol kaldırılması)
   // kullanıcıyı boş bir ekranda bırakmaz.
@@ -235,7 +233,6 @@ export default function AppShell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [simpleMode]);
 
-  const archivedProjectCount = useMemo(() => projects.filter(isArchivedProject).length, [projects]);
   const workspaceProjectOptions = useMemo(() => {
     const listed = visibleProjects(projects, { showArchived: showArchivedProjects });
     if (selectedProject && !listed.some((project) => project.id === selectedProject.id)) listed.unshift(selectedProject);
@@ -354,7 +351,7 @@ export default function AppShell() {
   }
 
   return (
-    <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'} sidebar-is-${sidebarPinned ? 'pinned' : 'unpinned'} sidebar-is-${sidebarCollapsed ? 'collapsed' : 'expanded'}`}>
+    <div className={`app app-mode-${simpleMode ? 'simple' : 'advanced'} sidebar-is-${sidebarPinned ? 'pinned' : 'unpinned'} sidebar-is-${sidebarCollapsed ? 'collapsed' : 'expanded'}`} data-view={view}>
       {/* Kişi dizini bağlamı DOM düğümü üretmez: ızgara çocukları değişmez. */}
       <PeopleDirectoryProvider people={directoryPeople}>
       <aside
@@ -378,47 +375,30 @@ export default function AppShell() {
             <div className="brand-sub">Görev Yönetimi</div>
           </div>
         </div>
-        {!simpleMode ? (
-          <div className="sidebar-workspace-context col" style={{ gap: 6, padding: '0 12px 10px' }}>
-            <SearchableSelect
-              value={selectedProjectId || ''}
-              options={workspaceProjectOptions}
-              onChange={(projectId) => selectWorkspace(projectId || null)}
-              placeholder="Portföy veya proje seçin"
-              searchPlaceholder="Proje kodu, adı veya türüyle ara"
-              ariaLabel="Portföy veya proje çalışma alanı seç"
-              maxVisible={70}
-              compact
-              allowClear
-              clearLabel="Portföye dön (tüm projeler)"
-              style={{ width: '100%', fontSize: 12.5 }}
-            />
-            {/* Proje çalışma alanından portföye tek tıkla dönüş. */}
-            {workspaceMode === 'project' && (
-              <button type="button" className="btn ghost sm workspace-back-btn" onClick={() => selectWorkspace(null)}>
-                <Icons.ArrowLeft size={12} /> Portföye dön
-              </button>
-            )}
-            {archivedProjectCount > 0 && (
-              <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={showArchivedProjects}
-                  onChange={(event) => setShowArchivedProjects(event.target.checked)}
-                />
-                Tamamlanan ve kapatılanları göster ({archivedProjectCount})
-              </label>
-            )}
-            <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
-              {workspaceMode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
-            </div>
+        <div className="sidebar-workspace-context col" style={{ gap: 6, padding: '0 12px 10px' }}>
+          <SearchableSelect
+            value={selectedProjectId || ''}
+            options={workspaceProjectOptions}
+            onChange={(projectId) => selectWorkspace(projectId || null)}
+            placeholder="Portföy veya proje seçin"
+            searchPlaceholder="Proje kodu, adı veya türüyle ara"
+            ariaLabel="Portföy veya proje çalışma alanı seç"
+            maxVisible={70}
+            compact
+            allowClear
+            clearLabel="Portföye dön (tüm projeler)"
+            style={{ width: '100%', fontSize: 12.5 }}
+          />
+          {/* Proje çalışma alanından portföye tek tıkla dönüş. */}
+          {workspaceMode === 'project' && (
+            <button type="button" className="btn ghost sm workspace-back-btn" onClick={() => selectWorkspace(null)}>
+              <Icons.ArrowLeft size={12} /> Portföye dön
+            </button>
+          )}
+          <div className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
+            {workspaceMode === 'project' ? `${tasks.length} görev · ${wbs.length} dağılım düğümü` : `${projects.length} proje · ${tasks.length} görev`}
           </div>
-        ) : (
-          <div className="sidebar-simple-mode">
-            <span><Icons.Calendar size={13} /> Temel Kip</span>
-            <small>Hızlı tanım ve Takvim takibi</small>
-          </div>
-        )}
+        </div>
 
         {!simpleMode && (
           <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
@@ -434,6 +414,7 @@ export default function AppShell() {
             return (
               <button
                 key={item.id}
+                aria-label={item.label}
                 className={`nav-item${view === item.id ? ' active' : ''}`}
                 onClick={() => {
                   if (simpleMode && item.id === 'takvim') setSimpleCalendarTab('calendar');

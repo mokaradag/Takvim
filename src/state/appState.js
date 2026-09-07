@@ -1,3 +1,4 @@
+import { milestoneCompletion } from '../domain/milestoneCompletion.js';
 import { normalizeTaskRecord } from '../data/normalizeTaskRecord.js';
 import { TASK_STATUSES } from '../domain/constants/index.js';
 import { compareWbsNodes, selectDefaultProjectWbs, selectWbsDescendantIds } from '../domain/selectors/index.js';
@@ -366,9 +367,14 @@ function isDoneStatus(value) {
  * @returns {object} damgalanmış yama (değişiklik gerekmiyorsa aynı nesne)
  */
 export function withCompletionStamp(state, taskId, patch, referenceDate = today()) {
-  if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'status')) return patch;
+  if (!patch) return patch;
   const task = (state?.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
   if (!task) return patch;
+  const changesCompletion = ['status', 'actualStart', 'actualFinish', 'progress', 'milestone', 'isMilestone']
+    .some((field) => Object.prototype.hasOwnProperty.call(patch, field));
+  const milestone = changesCompletion ? milestoneCompletion(task, patch, fmtISO(referenceDate)) : null;
+  if (milestone) return { ...patch, ...milestone };
+  if (!Object.prototype.hasOwnProperty.call(patch, 'status')) return patch;
 
   const wasDone = isDoneStatus(task.status);
   const becomesDone = isDoneStatus(patch.status);

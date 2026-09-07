@@ -270,3 +270,9 @@ sürümü dağıtılmadan **önce**
 `database/MR_Upgrade_0004_Tag_Appearance_And_Recurrence.sql` çalıştırılır. Betik
 yinelenebilirdir: sütun, kısıt ve dizinleri yalnızca yoksa ekler, göç kaydını
 yalnızca bir kez yazar.
+
+### Yeni görevde tekrarları oluşturma
+
+Kapsamlı Kipte yeni görev taslağının **Tekrarları oluştur** düğmesi, girilen başlık ve açıklama dahil şablonu ve ilk tekrar partisini tek kalıcı değişiklik kümesinde kaydeder. Önce Kaydet düğmesine basıp görevi yeniden açmak gerekmez. SQL katmanı tüm kümeyi tek işlemde yazar; bir kayıt reddedilirse taslak kapanmaz. Kayıt sürerken Kaydet ve tekrar üretimi aynı kayıt sözünü paylaşır.
+
+Yeni ve mevcut şablonlar `src/state/recurringTaskCreation.js` içindeki ortak planlayıcıyı kullanır. İş takvimi, 60 görevlik parti sınırı, değişmez yineleme kimlikleri ve daha önce üretilmiş günlerin tekilleştirilmesi korunur. Sorumluya tanınan dar görev oluşturma yetkisi yapısal tekrar yetkisine dönüşmez.

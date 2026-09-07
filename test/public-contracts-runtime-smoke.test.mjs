@@ -187,6 +187,7 @@ test('tweak defaults expose exactly the settings consumed by the application', (
     'highContrast',
     'landingView',
     'reduceMotion',
+    'showArchivedProjects',
     'showEmblem',
     'theme'
   ]);

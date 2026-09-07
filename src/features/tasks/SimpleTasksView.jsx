@@ -181,21 +181,24 @@ export function SimpleTasksView({ onNewTask }) {
       <div className="card simple-tasks-card">
         <div className="simple-tasks-scroll">
           <table className="tbl simple-tasks-table" aria-label="Temel Kip Görevler">
+            <colgroup>
+              {[16, 23, 12, 12, 9, 10, 11, 7].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}
+            </colgroup>
             <thead>
               <tr>
-                <FilterableTH label="Proje" style={{ minWidth: 170 }} sortKey={sortFor('proje')} onSort={setSortFor('proje')}
+                <FilterableTH label="Proje" sortKey={sortFor('proje')} onSort={setSortFor('proje')}
                   filter={filters.proje} onFilter={(value) => setFilter('proje', value)} filterType="multi" filterOptions={projectOptions} />
-                <FilterableTH label="Görev" style={{ minWidth: 220 }} sortKey={sortFor('task')} onSort={setSortFor('task')}
+                <FilterableTH label="Görev" sortKey={sortFor('task')} onSort={setSortFor('task')}
                   filter={filters.task} onFilter={(value) => setFilter('task', value)} filterType="text" />
-                <FilterableTH label="Kısa açıklama" style={{ minWidth: 130 }} sortKey={sortFor('keyword')} onSort={setSortFor('keyword')}
+                <FilterableTH label="Kısa açıklama" sortKey={sortFor('keyword')} onSort={setSortFor('keyword')}
                   filter={filters.keyword} onFilter={(value) => setFilter('keyword', value)} filterType="multi" filterOptions={keywordOptions} />
-                <FilterableTH label="Sorumlular" style={{ minWidth: 140 }} sortKey={sortFor('sorumlu')} onSort={setSortFor('sorumlu')}
+                <FilterableTH label="Sorumlular" sortKey={sortFor('sorumlu')} onSort={setSortFor('sorumlu')}
                   filter={filters.sorumlu} onFilter={(value) => setFilter('sorumlu', value)} filterType="multi" filterOptions={assigneeOptions} />
-                <FilterableTH label="Öncelik" style={{ minWidth: 100 }} sortKey={sortFor('priority')} onSort={setSortFor('priority')}
+                <FilterableTH label="Öncelik" sortKey={sortFor('priority')} onSort={setSortFor('priority')}
                   filter={filters.priority} onFilter={(value) => setFilter('priority', value)} filterType="multi" filterOptions={priorityOptions} />
-                <FilterableTH label="Durum" style={{ minWidth: 120 }} sortKey={sortFor('status')} onSort={setSortFor('status')}
+                <FilterableTH label="Durum" sortKey={sortFor('status')} onSort={setSortFor('status')}
                   filter={filters.status} onFilter={(value) => setFilter('status', value)} filterType="multi" filterOptions={statusOptions} />
-                <DateFilterableTH label="Termin" style={{ minWidth: 125 }} sortKey={sortFor('targetFinish')} onSort={setSortFor('targetFinish')}
+                <DateFilterableTH label="Termin" sortKey={sortFor('targetFinish')} onSort={setSortFor('targetFinish')}
                   filter={filters.targetFinish} onFilter={(value) => setFilter('targetFinish', value)} />
                 <th className="tasks-actions-col" aria-label="İşlemler" />
               </tr>

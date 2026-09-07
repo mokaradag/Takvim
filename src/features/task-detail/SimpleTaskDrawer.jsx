@@ -375,7 +375,7 @@ export function SimpleTaskDrawer({
           <div className="simple-field">
             <span>Durum</span>
             <div className="seg" role="group" aria-label="Görev durumu">
-              {[['todo', 'Yapılacak'], ['in_progress', 'Devam ediyor'], ['done', 'Tamamlandı']].map(([id, label]) => {
+              {[['todo', 'Yapılacak'], ['in_progress', 'Devam ediyor'], ['done', 'Tamamlandı']].filter(([id]) => !(task.milestone || task.isMilestone) || id !== 'in_progress').map(([id, label]) => {
                 const active = (local.status || 'todo') === id;
                 return (
                   <button
