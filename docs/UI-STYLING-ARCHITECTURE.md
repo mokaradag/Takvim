@@ -268,3 +268,11 @@ Kurum logosu `/api/mergen-rota/company-logo` üzerinden alınır. `MERGEN_ROTA_C
 Temel Kipte eylem sütununun başlığı da diğer başlıklarla birlikte yapışkandır ve opak zemin kullanır; kaydırılan zarf/silme simgeleri başlığın üstüne çıkmaz. Tarih talebi rozetleri sabit 24 piksel yüksekliğe sahiptir; ızgara satırlarının yüksekliğine uzamaz. Kilometre taşının gerçekleşen tarihi ortak tarih ızgarasında yer alır.
 
 Daralan kenar çubuğunda kullanıcı metni ve kip etiketlerinin gizli satırları yükseklik tüketmez. Menü kalan yüksekliği alır; fotoğraf ve araçlar altta kalır. Genişlik/padding geçişleri aynı 420 ms yumuşak hız eğrisini kullanır; hareket azaltma tercihi tüm geçişleri kapatır.
+
+
+## Talepler ve KPI ayrıntı listesi
+
+Yeni liste stilleri `features.css` içindedir; renkler mevcut tasarım değişkenlerini kullanır. KPI penceresi ölçekli görünüm ölçülerini izler ve kendi tablosunu kaydırır. Görev paneli açılınca alttaki KPI penceresi gizlenir ve odak tuzağı askıya alınır; kapanınca durumu korunarak geri gelir. Gerçekleşen tarih işareti nötr `--text-muted` rengindedir. Tarih açıklaması ve gezinme `.task-table-footer` içinde tek esnek satırdır; dar ekranda sarılır.
+
+
+Raporlar iki küçük sekmeyle aynı modül içinde kalır. Hareket filtreleri ortak SearchableSelect/DateInput ve kurumsal yol denetimlerini, tablo mevcut tema değişkenlerini kullanır. Paylaşılan modal odak kancası yalnızca en üst pencerenin Escape olayını işler; tarih/seçim portalları ait oldukları pencerenin odak kapsamını taşır.

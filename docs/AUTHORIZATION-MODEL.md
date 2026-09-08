@@ -237,3 +237,13 @@ Sorumlu yazmalarında `assigneeIds` (Sicil/SicilNo) kesin kaynaktır. Aynı iste
 Sistem yöneticisi olmayan direktör, müdür veya birim yöneticisinin yeni/değiştirilen atama listesi `MR_V_ExecutiveScope` ile doğrulanır. Manuel projenin sahibi/sorumlusu olmak veya kurumsal projede FULL erişim taşımak bu personel sınırını kaldırmaz. İstemcide üç görev giriş/düzenleme seçicisi aynı kümeyi kullanır; sunucu doğrudan API yazmalarında da denetler. FULL projede değişmeyen eski atamalar içerik düzenlemesini engellemez; sorumlu listesi veya proje değişirse sonuçtaki tüm çalışanlar kapsamda olmalıdır. Kısmi projede mevcut ve yeni atama listeleri ayrı ayrı doğrulanmaya devam eder.
 
 Kaydet işleminde görev/ardıl yamaları tek transaction ile uygulanır. Yerel taslak başlamasından sonra bilinen sürüm değişmişse istemci kaydı reddeder; sunucu mevcut rowversion denetimini ayrıca uygular. SQL şema değişikliği gerekmez.
+
+
+### Talep geçmişi ve bildirim yetkisi
+
+Talepler GET sorguları ve bildirim okuma/temizleme işlemleri yalnızca oturum Sicilinin talep eden veya belirlenmiş karar sahibi olduğu kayıtlarla sınırlıdır. Kullanıcı kimliği ve rolü istemci parametresi değildir. Kişi/proje kataloğu genişletilmez. Kalıcı geçmiş silinen görevin künyesini taşıyabilir; bu, göreve güncel erişim vermez. Karar işlemi halen güncel görev/proje yetkisini ve sürümünü doğrular. Komut araması kenar çubuğuyla ortak kip/rol süzgecini kullanır; Temel Kipte Gantt gösterilmez. Ayrıntılar: [Talepler](REQUESTS-AND-NOTIFICATIONS.md).
+
+
+### Görev Hareketleri gizlilik sınırı
+
+Ekip raporu, yetkili görev/proje kümesi ile `ActorSicil` üzerinden mevcut yönetici kapsamının kesişimidir. Görevin sorumlusu güncelleyen kişi yerine kullanılamaz; çalışan üyeliği başka projelere erişim vermez. SYSTEM_ADMIN ve FULL/READ proje görünürlüğü mevcut önceliğini korur. Silinen görevde son denetimin oluşturucu/atama künyesi aynı görünürlük kurallarına göre değerlendirilir; eksik tarihsel atamalar tahmin edilmez. Filtreler yalnızca daraltır; ham JSON istemciye çıkmaz. [Rapor yetkilendirmesi ve tarihsel kayıtlar](TASK-ACTIVITY-REPORT.md).

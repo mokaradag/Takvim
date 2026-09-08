@@ -7,6 +7,7 @@ const SECTIONS = [
   { id: 'modes', label: 'Çalışma Kipleri', icon: 'Sparkle' },
   { id: 'ozet', label: 'Özet', icon: 'Dashboard' },
   { id: 'veri', label: 'Görevler', icon: 'Table' },
+  { id: 'talepler', label: 'Talepler', icon: 'Bell' },
   { id: 'wbs', label: 'Proje Yapısı', icon: 'Layers' },
   { id: 'takvim', label: 'Takvim', icon: 'Calendar' },
   { id: 'gantt', label: 'Gantt', icon: 'Gantt' },
@@ -20,12 +21,17 @@ const CONTENT = {
   ozet: {
     title: 'Özet',
     intro: 'Seçili çalışma alanının genel durumunu tek bakışta izlemek için kullanılır. Proje seçildiğinde göstergeler yalnızca o projeyi, portföy seçildiğinde tüm projeleri temel alır.',
-    points: ['Görev, gecikme ve ilerleme göstergelerini izleyin.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
+    points: ['Görev, gecikme ve ilerleme göstergelerini izleyin.', 'KPI zengin listesindeki Tüm görevleri gör, arama ve proje/sorumlu süzgeçleriyle geniş görev penceresini açar. Görev panelinden dönünce liste durumunuz korunur.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
   },
   veri: {
     title: 'Görevler',
     intro: 'Görevlerin ayrıntılı listesidir. Yeni görev oluşturma, filtreleme, sıralama ve görev ayrıntılarını düzenleme işlemleri burada yapılır.',
-    points: ['Yeni görev düğmesi seçili proje altında yeni kayıt oluşturur.', 'Sütun başlıklarındaki filtreler birden çok koşulu birlikte kullanabilir.', 'Göreve tıklayarak tarihleri, etiketi, sorumluları ve ilişkileri düzenleyin.', 'Tatil veya hafta sonuna denk gelen plan tarihleri görev ayrıntısında uyarı olarak gösterilir.']
+    points: ['Yeni görev düğmesi seçili proje altında yeni kayıt oluşturur.', 'Geciken görevler Yapılacak veya Devam ediyor süzgecinde gösterilmez.', 'Kapsamlı Kipte Başlangıç/Bitiş, gerçekleşen tarih varsa onu gösterir; nötr ✓ bu tarihi belirtir. Sıralama ve süzme görünen tarihi izler.', 'Alt satırdaki İlk/Önceki/Sonraki/Son ile sayfalar arasında geçin; tarih açıklaması aynı satırdadır.', 'Sütun başlıklarındaki filtreler birden çok koşulu birlikte kullanabilir.', 'Göreve tıklayarak tarihleri, etiketi, sorumluları ve ilişkileri düzenleyin.', 'Tatil veya hafta sonuna denk gelen plan tarihleri görev ayrıntısında uyarı olarak gösterilir.']
+  },
+  talepler: {
+    title: 'Talepler',
+    intro: 'Her iki kipte tarih değişikliği taleplerini ve kalıcı karar geçmişini inceleyin.',
+    points: ['Bekleyenler kararınızı bekleyenleri, Gönderdiklerim kendi taleplerinizi, Geçmiş sonuçlanan kayıtları gösterir.', 'Görev/proje araması, talep eden, durum ve tarih süzgeçleriyle geçmişi daraltın; kayıtlar sayfalar halinde yüklenir.', 'Talebi açarak özgün/önerilen tarihleri ve notları karşılaştırın; yetkiniz varsa kabul veya reddedin.', 'Zil yalnızca son sekiz bildirimi gösterir. Okundu/temizle geçmişi silmez; açık kararlar görünür kalır. Tüm talepleri gör ile bu sayfaya geçin.']
   },
   wbs: {
     title: 'Proje Yapısı',
@@ -39,7 +45,7 @@ const CONTENT = {
   },
   gantt: {
     title: 'Gantt',
-    intro: 'Zaman çizelgesini, WBS yapısını, sorumluları, bağımlılıkları ve kritik yolu birlikte incelemek için kullanılır.',
+    intro: 'Yalnızca Kapsamlı Kipte sunulur. Zaman çizelgesini, WBS yapısını, sorumluları, bağımlılıkları ve kritik yolu birlikte incelemek için kullanılır.',
     points: ['Tarih aralığını elle seçebilir veya Otomatik seçeneğiyle görevlerin kapsadığı döneme dönebilirsiniz.', 'Proje görünümünde WBS ile Sorumlu / Kritik Yol görünümleri arasında geçiş yapın.', 'FS, SS, FF ve SF ilişkileri ile pozitif gecikme (lag) veya negatif öne çekme (lead) tanımlanabilir.', 'Görev ipuçlarında sorumluların fotoğraf ve adlarını, Sorumluya göre görünümünde grup avatarlarını izleyin.', 'Gantt içeriği kendi alanında yatay ve dikey kaydırılır; sayfanın bütünü gereksiz yere kaymaz.']
   },
   kanban: {
@@ -49,8 +55,8 @@ const CONTENT = {
   },
   rapor: {
     title: 'Raporlar',
-    intro: 'Tamamlama, teslim, çevrim süresi, iş hızı, kaynak kullanımı ve eğilimleri analiz eder.',
-    points: ['Grafikler sayfa açıldığında ve veri değiştiğinde hareketli olarak görünür.', 'Gösterge açıklamaları için bilgi simgelerini kullanın.', 'Dışa Aktar menüsünden seçili proje veya portföy için biçimlendirilmiş Excel raporu ve CSV alın.']
+    intro: 'Performans ve Görev Hareketleri sekmelerinde raporları ve kalıcı görev değişikliklerini inceleyin.',
+    points: ['Performans mevcut metrikleri ve görev tarih aralığını korur.', 'Görev Hareketleri, Bugün ve uygun kullanıcıda Ekibim ile açılır; güncelleyen kişi denetim kaydından alınır.', 'Kişi, proje, hareket türü, tarih ve kurumsal yol filtreleri yalnızca yetkili görevleri daraltır; Türkiye saati kullanılır.', 'Bir kaydetmedeki alan değişiklikleri birlikte gösterilir. Görev adına tıklayarak ayrıntıları açın; silinen görevler tarihsel adlarıyla kalır.', 'Grafikler sayfa açıldığında ve veri değiştiğinde hareketli olarak görünür.', 'Gösterge açıklamaları için bilgi simgelerini kullanın.', 'Dışa Aktar menüsünden seçili proje veya portföy için biçimlendirilmiş Excel raporu ve CSV alın.']
   },
   kisi: {
     title: 'Ekip',
@@ -91,6 +97,7 @@ function ModeGuide() {
       <div className="help-mode-grid">
         <section className="card help-mode-card simple">
           <div className="help-mode-card-head"><Icons.Calendar size={20} /><div><small>Hızlı takip</small><h3>Temel Kip</h3></div></div>
+          <p className="muted">Görevler, Takvim ve Talepler ile çalışın. Ara veya komut çalıştır… ve Ctrl/Cmd+K kullanılabilir; Gantt Kapsamlı Kiptedir.</p>
           <Flow steps={[
             { title: 'Takvimi izle', text: 'Takvim sayfası varsayılan olarak aylık görünümle açılır.' },
             { title: 'Hızlı tanıma geç', text: 'Yeni kayıt için Hızlı Görev Tanımı sekmesini açın.' },
@@ -145,7 +152,7 @@ function Summary() {
           { title: 'Etiket ve WBS', text: 'Etiketleri tanımlayın, iş dağılım ağacını kurun.' },
           { title: 'Görevleri girin', text: 'Tarih, sorumlu ve etiket bilgilerini tamamlayın.' },
           { title: 'İlişkileri kurun', text: 'FS/SS/FF/SF ve lead/lag değerlerini tanımlayın.' },
-          { title: 'Planı izleyin', text: 'Gantt, Takvim ve Raporlar ile kontrol edin.' }
+          { title: 'Planı izleyin', text: 'Gantt, Takvim ve Raporlar içindeki Performans ve Görev Hareketleri ile kontrol edin.' }
         ]} />
       </section>
       <section className="help-tip-grid">

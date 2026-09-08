@@ -180,6 +180,7 @@ export function SearchableSelect({
   const panel = open && placement && typeof document !== 'undefined' ? createPortal(
     <div
       ref={panelRef}
+      data-modal-owner={rootRef.current?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope')}
       className="searchable-select-panel"
       role="listbox"
       onKeyDown={onKeyDown}

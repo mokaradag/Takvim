@@ -45,6 +45,24 @@ test('ilerleme sıralaması hücrede gösterilen türetilmiş yüzdeyi kullanır
   assert.deepEqual(tasks.map((task) => task.id), ['todo', 'explicit', 'done']);
 });
 
+test('Görevler gerçekleşen tarihi, Gantt planlanan tarihi sıralama anlamı olarak korur', () => {
+  const task = {
+    plannedStart: '2026-08-01', actualStart: '2026-08-09',
+    plannedFinish: '2026-08-10', actualFinish: '2026-08-12'
+  };
+  assert.equal(taskSortValue(task, 'plannedStart'), '2026-08-01');
+  assert.equal(taskSortValue(task, 'plannedFinish'), '2026-08-10');
+  assert.equal(taskSortValue(task, 'plannedStart', 'effective'), '2026-08-09');
+  assert.equal(taskSortValue(task, 'plannedFinish', 'effective'), '2026-08-12');
+
+  const tasksView = read('src/features/tasks/TasksView.jsx');
+  const ganttView = read('src/features/gantt/GanttView.jsx');
+  assert.match(tasksView, /dateMode: 'effective'/);
+  assert.match(tasksView, /taskSortValue\(a, sort\.key, 'effective'\)/);
+  assert.match(ganttView, /taskSortValue\(a, sort\.key\), vb = taskSortValue\(b, sort\.key\)/);
+  assert.doesNotMatch(ganttView, /dateMode: 'effective'/);
+});
+
 test('normal kullanıcı görünümleri efor saati alanlarını sunmaz, kalıcı model uyumluluğu korunur', () => {
   const visibleFiles = [
     'src/features/tasks/TasksView.jsx',

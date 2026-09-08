@@ -11,7 +11,7 @@ import { publicRotaPath } from '../../lib/publicPath.js';
  */
 const REQUEST_TIMEOUT_MS = 30000;
 
-async function requestJson(path, init) {
+export async function requestJson(path, init) {
   const abortable = typeof AbortController === 'function';
   const controller = abortable ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
@@ -66,5 +66,16 @@ export function decideScheduleChangeRequest(requestId, decision, message = '') {
   return requestJson(`/api/mergen-rota/schedule-changes/${encodeURIComponent(requestId)}`, {
     method: 'PATCH',
     body: JSON.stringify({ decision, message })
+  });
+}
+
+export function fetchScheduleChanges(query = {}) {
+  const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value != null && value !== ''));
+  return requestJson(`/api/mergen-rota/schedule-changes?${params}`, { method: 'GET' });
+}
+
+export function markScheduleNotifications(notifications, action = 'read') {
+  return requestJson('/api/mergen-rota/schedule-changes', {
+    method: 'PATCH', body: JSON.stringify({ action, notifications: notifications.map(({ id, version }) => ({ id, version })) })
   });
 }

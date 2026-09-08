@@ -282,3 +282,22 @@ A manual smoke pass complements automated tests; it does not replace them. Any v
   çiftleri görünür. Aynı davranışı WBS görünümünde doğrulayın. Sorumluya göre
   gruplamada avatarlar doğru Sicile aittir; aynı adlı kişiler birleşmez.
   Fotoğraf bulunmayan kişi baş harflerle gösterilir.
+
+
+## Talepler, KPI detayları ve tablo davranışı
+
+Açık/koyu tema, normal/büyütülmüş yazı ve dar ekran için kontrol edin:
+
+- Her iki kipte Talepler düz menü öğesidir; üç sekme ok tuşlarıyla ve Home/End ile değişir. Arama/süzgeç sonrası sayfa başa döner.
+- Zilde en fazla sekiz kart vardır; karar gerekenler belirgindir. Okundu/temizle geçmişi silmez; açık karar ve dikkat noktası kalır. Yeni karar yeniden okunmamış görünür.
+- Özetin beş KPI kartında zengin liste ve Tüm görevleri gör çalışır; pencere doğru küme/sayı ile açılır. Sorumlular Sicil ile ayrılır. Görev paneli kapanınca liste durumu, liste kapanınca Özet bağlamı korunur.
+- Temel Kipte Ctrl/Cmd+K ve arama düğmesi çalışır; Gantt sonucu yoktur. Kapsamlı Kipte Gantt vardır.
+- Başlık ve Notlar içinde Home/ok tuşlarıyla ortaya gidip Türkçe karakter yazın, seçim yapıp değiştirin, yapıştırın ve silin; imleç sona atlamamalıdır. Kaydet öncesinde kalıcı görev değişmez.
+- Geciken todo/in_progress yalnızca Geciken durumunda görünür. Başlangıç/Bitişte gerçekleşen tarih varsa ✓ ile gösterilir; tarih süzgeci ve sıralama aynı değeri izler.
+- Tarih açıklaması ve İlk/Önceki/Sonraki/Son tek alt satırı paylaşır. İlk/son sayfa düğmeleri doğru kilitlenir.
+- Zil, komut paleti, KPI penceresi ve görev/talep panellerinde Tab/Shift+Tab odağı içeride tutar; Escape ve kapatma odağı uygun denetime döndürür. Kayıt sürerken kapanış kilidi korunur.
+
+
+### Raporlar → Görev Hareketleri
+
+Her iki temada Performans/Görev Hareketleri sekmelerini ok tuşları ve Home/End ile değiştirin; Performans aralığının korunduğunu kontrol edin. Bugün/Ekibim, özel aralık, kurumsal yol, kişi/proje/hareket türü ve son sayfa kontrollerini deneyin. Çok alanlı işlem ayrıntısını klavyeyle açın; görev çekmecesini kapatınca filtrelerin korunduğunu, silinen görevde açma düğmesi olmadığını doğrulayın. Dar ekranda yalnızca tablonun kendi alanının kaydığını kontrol edin.

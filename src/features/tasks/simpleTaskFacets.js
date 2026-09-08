@@ -1,3 +1,4 @@
+import { taskStatusFilterValues } from './taskTableFacets.js';
 import { normalizePriorityId } from '../../domain/constants/index.js';
 import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../../scheduling/dates/index.js';
 
@@ -30,11 +31,6 @@ function matchesDateFilter(iso, spec, referenceDay) {
   return true;
 }
 
-function taskStatusValues(task, referenceDay) {
-  const values = [task.status || 'todo'];
-  if (task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0) values.push('overdue');
-  return values;
-}
 
 export function simpleTaskMatches(task, { search = '', filters = {} } = {}, ignoredKey = null, referenceDay = today()) {
   const query = String(search).trim().toLocaleLowerCase('tr-TR');
@@ -48,7 +44,7 @@ export function simpleTaskMatches(task, { search = '', filters = {} } = {}, igno
   if (ignoredKey !== 'keyword' && filters.keyword?.length && !filters.keyword.includes(String(task.keyword || '').trim())) return false;
   if (ignoredKey !== 'sorumlu' && filters.sorumlu?.length && !(task.assigneeIds || []).some((id) => filters.sorumlu.includes(String(id)))) return false;
   if (ignoredKey !== 'priority' && filters.priority?.length && !filters.priority.includes(normalizePriorityId(task.priority))) return false;
-  if (ignoredKey !== 'status' && filters.status?.length && !taskStatusValues(task, referenceDay).some((value) => filters.status.includes(value))) return false;
+  if (ignoredKey !== 'status' && filters.status?.length && !taskStatusFilterValues(task, referenceDay).some((value) => filters.status.includes(value))) return false;
   if (ignoredKey !== 'targetFinish' && filters.targetFinish && (!task.targetFinish || !matchesDateFilter(task.targetFinish, filters.targetFinish, referenceDay))) return false;
   return true;
 }
@@ -61,7 +57,7 @@ export function simpleTaskFacetValues(tasks, state, key, referenceDay = today())
     if (key === 'keyword' && String(task.keyword || '').trim()) values.add(String(task.keyword).trim());
     if (key === 'sorumlu') for (const id of task.assigneeIds || []) values.add(String(id));
     if (key === 'priority') values.add(normalizePriorityId(task.priority));
-    if (key === 'status') for (const status of taskStatusValues(task, referenceDay)) values.add(status);
+    if (key === 'status') for (const status of taskStatusFilterValues(task, referenceDay)) values.add(status);
   }
   return values;
 }

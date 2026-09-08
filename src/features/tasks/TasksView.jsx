@@ -1,4 +1,5 @@
 'use client';
+import { TaskDate } from './TaskDate.jsx';
 import { useState as useState1, useMemo as useMemo1, useCallback as useCallback1 } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
@@ -86,7 +87,7 @@ export function TasksView() {
   // (bkz. features/tasks/taskTableFacets.js).
   const facetValues = useMemo1(() => Object.fromEntries(TASK_TABLE_FACET_KEYS.map((key) => [
     key,
-    taskTableFacetValues(organization.filteredTasks, { search, filters: colFilter }, key)
+    taskTableFacetValues(organization.filteredTasks, { search, filters: colFilter, dateMode: 'effective' }, key)
   ])), [organization.filteredTasks, search, colFilter]);
 
   // Seçenek listesi GÖRÜNÜR değerlerle HÂLEN SEÇİLİ değerlerin BİRLEŞİMİDİR.
@@ -167,10 +168,10 @@ export function TasksView() {
     // süzmesi ile faset hesabı AYNI yüklemi kullanır: iki ayrı kopya, birinde
     // düzeltilen bir kural ötekinde kalıyordu.
     const out = organization.filteredTasks
-      .filter((task) => taskTableMatches(task, { search, filters: colFilter }, null, today_));
+      .filter((task) => taskTableMatches(task, { search, filters: colFilter, dateMode: 'effective' }, null, today_));
 
     out.sort((a, b) => {
-      let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
+      let va = taskSortValue(a, sort.key, 'effective'), vb = taskSortValue(b, sort.key, 'effective');
       if (sort.key === 'sorumlu') { va = (a.sorumlu?.[0] || ''); vb = (b.sorumlu?.[0] || ''); }
       if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
       const aMissing = va == null || va === '';
@@ -339,8 +340,8 @@ export function TasksView() {
                         <span className="tabular" style={{ fontSize: 11, minWidth: 28, textAlign: 'right', color: 'var(--text-muted)' }}>{prog}%</span>
                       </div>
                     </td>
-                    <td className="muted tabular tasks-date-cell">{fmt(t.plannedStart)}</td>
-                    <td className="muted tabular tasks-date-cell">{fmt(t.plannedFinish)}</td>
+                    <td className="muted tabular tasks-date-cell"><TaskDate task={t} field="plannedStart" /></td>
+                    <td className="muted tabular tasks-date-cell"><TaskDate task={t} field="plannedFinish" /></td>
                     <td className="tabular tasks-date-cell" style={{ color: overdue ? 'var(--status-overdue)' : 'var(--text-muted)', fontWeight: overdue ? 600 : 500 }}>{fmt(t.targetFinish)}</td>
                     {/* Eylem sütunu sağa YAPIŞIKTIR: yazı tipi büyütülüp tablo
                         yatay kaydırmaya girdiğinde bile posta ve silme düğmeleri
@@ -367,7 +368,7 @@ export function TasksView() {
           </table>
         </div>
       </div>
-      <TaskTablePagination page={paged.page} pageCount={paged.pageCount} setPage={paged.setPage} />
+      <TaskTablePagination showDateLegend page={paged.page} pageCount={paged.pageCount} setPage={paged.setPage} />
     </div>
   );
 }

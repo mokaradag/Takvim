@@ -283,3 +283,8 @@ Ortak `milestoneCompletion` kuralı istemci durum güncellemelerinde, kayıt nor
 ## Tarih önerilerinde eşzamanlı kayıt
 
 Talep oluşturma ve karar işlemleri `READ_COMMITTED` kullanır; görev ve bekleyen talep satırlarında mevcut `UPDLOCK, HOLDLOCK` koruması sürer. Yetki sorgularındaki geniş okuma kilitleri işlem sonuna kadar tutulmaz. SQL Server 1205 deadlock kurbanı hatasında yalnızca geri alınmış işlemin tamamı yeni transaction ile en fazla iki kez yeniden denenir. Her denemede yetki ve güncel görev yeniden okunur; zaman aşımı veya belirsiz bağlantı hatası otomatik yinelenmez. Denemeler tükenirse kullanıcıya yeniden denemesi için açık bir hata mesajı verilir. Diğer işlem türlerinin izolasyonu veya tekrar politikası değişmez.
+
+
+## Görevler tablosunda gerçekleşen tarih gösterimi
+
+Başlangıç ve Bitiş sütunları sırasıyla `actualStart || plannedStart` ve `actualFinish || plannedFinish` gösterir; süzme ve sıralama da aynı değeri kullanır. Bu görünüm planı veya CPM hesabını değiştirmez. Nötr ✓ ve alanın erişilebilir açıklaması gerçekleşen tarihi belirtir; açıklama alt sayfalama satırındadır. Temel Kip Termin alanı değişmez. Tarih talebi geçmişi ve bildirim durumu için [ayrı veri modeli](REQUESTS-AND-NOTIFICATIONS.md) kullanılır.

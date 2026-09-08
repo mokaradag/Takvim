@@ -1,4 +1,5 @@
 'use client';
+import { TaskActivitiesView } from './TaskActivitiesView.jsx';
 import React, { useMemo as useMemo2, useState as useState2 } from 'react';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
@@ -19,7 +20,36 @@ import {
 } from '../shared/dateRangeFilter.js';
 
 /* ── Rapor (Reports) ──────────────────────────────────── */
+const REPORT_TABS = [{ id: 'performance', label: 'Performans' }, { id: 'activities', label: 'Görev Hareketleri' }];
+
 export function ReportsView() {
+  const [tab, setTab] = useState2('performance');
+  const [activityVisited, setActivityVisited] = useState2(false);
+  const tabsRef = React.useRef(null);
+  const select = (id) => { setTab(id); if (id === 'activities') setActivityVisited(true); };
+  return <div className="reports-module">
+    <HeroHeader title="Raporlar"><span className="muted">Performans ve görev değişiklikleri.</span></HeroHeader>
+    <div className="request-tabs" role="tablist" aria-label="Rapor türü" ref={tabsRef}>
+      {REPORT_TABS.map((item, index) => <button key={item.id} type="button" role="tab" id={`report-tab-${item.id}`}
+        aria-controls={`report-panel-${item.id}`} aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1}
+        onClick={() => select(item.id)} onKeyDown={(event) => {
+          let next;
+          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') next = 1 - index;
+          if (event.key === 'Home') next = 0;
+          if (event.key === 'End') next = 1;
+          if (next == null) return;
+          event.preventDefault(); select(REPORT_TABS[next].id);
+          tabsRef.current?.querySelectorAll('[role="tab"]')[next]?.focus();
+        }}>{item.label}</button>)}
+    </div>
+    <div role="tabpanel" id="report-panel-performance" aria-labelledby="report-tab-performance" hidden={tab !== 'performance'}><PerformanceReportsView /></div>
+    <div role="tabpanel" id="report-panel-activities" aria-labelledby="report-tab-activities" hidden={tab !== 'activities'}>
+      {activityVisited && <TaskActivitiesView active={tab === 'activities'} />}
+    </div>
+  </div>;
+}
+
+export function PerformanceReportsView() {
   const allTasks = useTasks();
   // Referans gün KARARLI bir değerdir: `today()` her çizimde yeni bir `Date`
   // döndürdüğü için doğrudan bağımlılık olamaz, bağımlılıktan çıkarıldığında da
@@ -204,9 +234,7 @@ export function ReportsView() {
 
   return (
     <div className="col stagger" style={{ gap: 20 }}>
-      <HeroHeader title="Raporlar">
-        <div className="muted" style={{ fontSize: 13.5 }}>Performans, çevrim süreleri ve teslim oranları.</div>
-      </HeroHeader>
+      <p className="muted" style={{ margin: 0 }}>Performans, çevrim süreleri ve teslim oranları.</p>
 
       <DateRangeFilter
         value={dateRange}

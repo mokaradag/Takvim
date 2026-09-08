@@ -20,6 +20,7 @@ BEGIN TRY
     IF OBJECT_ID(N'dbo.MR_TaskBaselineSnapshots', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskBaselineSnapshots;
     IF OBJECT_ID(N'dbo.MR_Baselines', N'U') IS NOT NULL DROP TABLE dbo.MR_Baselines;
     IF OBJECT_ID(N'dbo.MR_TaskDependencies', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskDependencies;
+    IF OBJECT_ID(N'dbo.MR_ScheduleRequestNotifications', N'U') IS NOT NULL DROP TABLE dbo.MR_ScheduleRequestNotifications;
     IF OBJECT_ID(N'dbo.MR_TaskScheduleChangeRequests', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskScheduleChangeRequests;
     IF OBJECT_ID(N'dbo.MR_TaskAssignees', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskAssignees;
     IF OBJECT_ID(N'dbo.MR_Tasks', N'U') IS NOT NULL DROP TABLE dbo.MR_Tasks;

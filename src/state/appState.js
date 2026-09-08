@@ -237,6 +237,7 @@ function emptyApplicationData() {
     baselines: [],
     taskBaselineSnapshots: [],
     scheduleRequests: [],
+    scheduleRequestSummary: { unreadCount: 0, pendingCount: 0 },
     // Görev atama kapsamındaki (görünür OLMAYAN) kurumsal projeler.
     assignableProjects: [],
     assignmentScopeSicils: [],
@@ -307,6 +308,7 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
       snapshot.taskBaselineSnapshots,
       (value) => value?.id || `${value?.baselineId || ''}:${value?.taskId || ''}`
     ),
+    scheduleRequestSummary: snapshot.scheduleRequestSummary || { unreadCount: 0, pendingCount: 0 },
     scheduleRequests: reconcileSnapshotCollection(previous.scheduleRequests, snapshot.scheduleRequests)
   };
   // Bağlam görev BAŞINA değil, bir kez kurulur: birleştirilmiş `projects`,

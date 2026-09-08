@@ -1,4 +1,5 @@
 'use client';
+import { KpiTaskModal } from './KpiTaskModal.jsx';
 import { useState as useState1, useMemo as useMemo1 } from 'react';
 import { Icons } from '../../components/icons';
 import { parseDate, fmt, fmtAxisDate, addDays, diffDays } from '../../scheduling/dates';
@@ -35,6 +36,9 @@ export function DashboardView({ onNavigate }) {
   // ve tarihe duyarlı bütün memolar tazelenir.
   const todayKey = useTodayKey();
   const today_ = useMemo1(() => parseDate(todayKey), [todayKey]);
+  const [detailCategory, setDetailCategory] = useState1(null);
+  const [detailOpener, setDetailOpener] = useState1(null);
+  const showDetails = (id, opener) => { setDetailOpener(opener); setDetailCategory(id); };
   const [donutSel, setDonutSel] = useState1(null);
 
   // Pano bütün çalışma alanını özetliyordu: kurulum yaşlandıkça kartlar ve
@@ -213,16 +217,16 @@ export function DashboardView({ onNavigate }) {
       />
 
       <div className="dashboard-kpi-grid">
-        <Stat icon={<Icons.Briefcase size={16} />} label="Toplam görev" value={tasks.length} accent="var(--text)" trend={`${compRate}% tamamlandı`} items={tasks} onOpenTask={onOpenTask}
+        <Stat icon={<Icons.Briefcase size={16} />} label="Toplam görev" value={tasks.length} accent="var(--text)" trend={`${compRate}% tamamlandı`} items={tasks} onViewAll={(opener) => showDetails('all', opener)} onOpenTask={onOpenTask}
           tip="Sistemdeki tüm aktif ve kapanmış görevlerin sayısı. Projeler, sorumlular ve tarih aralıklarına göre filtrelenebilir." />
         {/* Haftalık değer uydurulmaz: son 7 günde tamamlananların gerçek sayısıdır. */}
-        <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${weeklyDelta.thisWeekDone} bu hafta`} trendUp={weeklyDelta.thisWeekDone > 0} items={doneTasks} onOpenTask={onOpenTask}
+        <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${weeklyDelta.thisWeekDone} bu hafta`} trendUp={weeklyDelta.thisWeekDone > 0} items={doneTasks} onViewAll={(opener) => showDetails('done', opener)} onOpenTask={onOpenTask}
           tip="Durumu 'Tamamlandı' olarak işaretlenmiş görev sayısı. Bu sayı tamamlanma oranını ve hız göstergelerini besler." />
-        <Stat icon={<Icons.Clock size={16} />} label="Devam eden" value={progress} accent="var(--status-progress)" trend="aktif" items={progressTasks} onOpenTask={onOpenTask}
+        <Stat icon={<Icons.Clock size={16} />} label="Devam eden" value={progress} accent="var(--status-progress)" trend="aktif" items={progressTasks} onViewAll={(opener) => showDetails('in_progress', opener)} onOpenTask={onOpenTask}
           tip="Üzerinde çalışılan ve hedef tarihi henüz geçmemiş görevler. Hedefi geçmiş olanlar “Geciken” kartında sayılır; Yapılacak, Devam eden, Geciken ve Tamamlanan kartlarının toplamı her zaman toplam görev sayısına eşittir." />
-        <Stat icon={<Icons.Circle size={16} />} label="Yapılacak" value={todo} accent="var(--status-todo)" trend="başlanmadı" items={todoTasks} onOpenTask={onOpenTask}
+        <Stat icon={<Icons.Circle size={16} />} label="Yapılacak" value={todo} accent="var(--status-todo)" trend="başlanmadı" items={todoTasks} onViewAll={(opener) => showDetails('todo', opener)} onOpenTask={onOpenTask}
           tip="Henüz başlanmamış ve hedef tarihi geçmemiş görevler. Halka grafiğindeki “Yapılacak” dilimiyle aynı kovadır." />
-        <Stat icon={<Icons.Alert size={16} />} label="Geciken" value={overdue} accent="var(--status-overdue)" trend={overdue > 0 ? 'müdahale gerekli' : 'tertip'} trendDown={overdue > 0} items={overdueTasks} onOpenTask={onOpenTask}
+        <Stat icon={<Icons.Alert size={16} />} label="Geciken" value={overdue} accent="var(--status-overdue)" trend={overdue > 0 ? 'müdahale gerekli' : 'tertip'} trendDown={overdue > 0} items={overdueTasks} onViewAll={(opener) => showDetails('overdue', opener)} onOpenTask={onOpenTask}
           tip={<>
             <p>Hedef tarihi geçmiş ve hâlâ tamamlanmamış görevler.</p>
             <div className="rt-sep" />
@@ -749,11 +753,16 @@ export function DashboardView({ onNavigate }) {
           </div>
         </div>
       )}
+      {detailCategory && <KpiTaskModal
+        title={detailCategory === 'all' ? 'Toplam görev' : STATUS_DISTRIBUTION_BUCKETS.find((bucket) => bucket.id === detailCategory)?.label}
+        tasks={detailCategory === 'all' ? tasks : bucketItems.get(detailCategory) || []}
+        onClose={() => setDetailCategory(null)} onOpenTask={onOpenTask} restoreFocusRef={detailOpener}
+      />}
     </div>
   );
 }
 
-function Stat({ icon, label, value, accent, trend, trendUp, trendDown, tip, items, onOpenTask }) {
+export function Stat({ icon, label, value, accent, trend, trendUp, trendDown, tip, items, onOpenTask, onViewAll }) {
   const body = (
     <div className="stat">
       {tip && (
@@ -770,6 +779,7 @@ function Stat({ icon, label, value, accent, trend, trendUp, trendDown, tip, item
   return (
     <HoverListCard
       title={label}
+      onViewAll={onViewAll}
       icon={icon}
       accent={accent === 'var(--text)' ? 'var(--accent)' : accent}
       items={items}

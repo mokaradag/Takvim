@@ -632,7 +632,7 @@ export function useReveal() {
 //    and accepts pointer events, so a long list can be scrolled. ──
 export function HoverListCard({
   children, title, icon, accent, summary, items = [], renderItem,
-  listLabel = 'Görevler', listHint, emptyText = 'Kayıt yok.',
+  listLabel = 'Görevler', listHint, onViewAll, emptyText = 'Kayıt yok.',
   wrapperStyle, wrapperClass = 'hovercard-trigger'
 }) {
   const [show, setShow] = useSx(false);
@@ -740,6 +740,7 @@ export function HoverListCard({
           <span>{listLabel} · {items.length}</span>
           {listHint && <span className="rt-list-hint">{listHint}</span>}
         </div>
+        {onViewAll && <button type="button" className="btn ghost sm hover-list-detail" onClick={() => { closeNow(); onViewAll(wrapRef); }}>Tüm görevleri gör <Icons.ChevronRight size={12} /></button>}
         <div className="rt-list">
           {items.length === 0
             ? <div className="rt-list-empty">{emptyText}</div>

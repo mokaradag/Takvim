@@ -138,7 +138,7 @@ test('Görevler sütun süzgeci ETKİN seçimi menüde tutar', async () => {
   }
   // Fasetler ÇAPRAZ süzülür: her sütunun seçenekleri öteki süzgeçlerden geçen
   // satırlardan toplanır.
-  assert.match(source, /taskTableFacetValues\(organization\.filteredTasks, \{ search, filters: colFilter \}, key\)/);
+  assert.match(source, /taskTableFacetValues\(organization\.filteredTasks, \{ search, filters: colFilter, dateMode: 'effective' \}, key\)/);
   // Seçenek listeleri artık HAM görünür kümeyi değil, birleşimi süzer.
   assert.match(source, /\.filter\(p => projectOptionIds\.has\(String\(p\.id\)\)\)/);
   assert.match(source, /\.filter\(p => assigneeOptionIds\.has\(String\(p\.id\)\)\)/);

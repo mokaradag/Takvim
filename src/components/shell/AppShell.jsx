@@ -1,4 +1,6 @@
 'use client';
+import { SIMPLE_NAV_IDS, navigationItems } from './navigation.js';
+import { ScheduleRequestsView } from '../../features/schedule-change/ScheduleRequestsView.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../icons';
 import { Heptagon } from '../ui';
@@ -63,7 +65,6 @@ import { useSignOut } from './useSignOut.js';
 // Görevler sayfası da Temel Kipte bulunur; ancak Kapsamlı Kipin tam tablosu
 // DEĞİL, Hızlı Görev Tanımı'yla toplanan alanları listeleyen sade sürümü
 // gösterilir (bkz. features/tasks/SimpleTasksView.jsx).
-const SIMPLE_NAV_IDS = new Set(['veri', 'takvim', 'gantt', 'yardim', 'ayarlar']);
 const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 
 function projectDisplayName(project) {
@@ -218,11 +219,6 @@ export default function AppShell() {
   }, [simpleMode, view, viewIntent]);
 
   useEffect(() => {
-    // Temel Kipte komut paleti RENDER EDİLMEZ: kısayolu yine de yutmak,
-    // tarayıcının kendi Ctrl+K davranışını hiçbir karşılık vermeden alıyor ve
-    // `cmdOpen` açık kaldığı için Kapsamlı Kipe geçildiğinde palet kendiliğinden
-    // açılıyordu.
-    if (simpleMode) return undefined;
     const onKey = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key?.toLowerCase() === 'k') {
         event.preventDefault();
@@ -273,15 +269,12 @@ export default function AppShell() {
     hatirlatma: null
   }), [tasks.length, wbs.length, projects.length, people.length, workspaceMode]);
 
-  const visibleNavItems = (simpleMode
-    // Yönetici sayfaları Temel Kipte de listelenir; aşağıdaki rol süzgeci
-    // bunları yine yalnızca sistem yöneticisine gösterir.
-    ? NAV_ITEMS.filter((item) => SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))
-    : NAV_ITEMS
-  ).filter((item) => !ADMIN_NAV_IDS.has(item.id) || isSystemAdmin);
+  const visibleNavItems = navigationItems(simpleMode, isSystemAdmin);
 
   const renderView = () => {
+    if (simpleMode && !SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) return null;
     switch (view) {
+      case 'talepler': return <ScheduleRequestsView />;
       case 'ozet': return <DashboardView onNavigate={navigate} />;
       case 'veri': return simpleMode
         ? <SimpleTasksView onNewTask={() => navigate('takvim', 'entry')} />
@@ -314,7 +307,7 @@ export default function AppShell() {
           )}
         </div>
       ) : <CalendarView t={t} setTweak={setTweak} />;
-      case 'gantt': return <WorkspaceGanttView />;
+      case 'gantt': return simpleMode ? null : <WorkspaceGanttView />;
       case 'kanban': return <KanbanView />;
       case 'rapor': return <ReportsView />;
       case 'kisi': return <TeamView />;
@@ -400,13 +393,11 @@ export default function AppShell() {
           </div>
         </div>
 
-        {!simpleMode && (
-          <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
-            <Icons.Search size={13} />
-            <span>Ara veya komut çalıştır...</span>
-            <span className="kbd">Ctrl K</span>
-          </button>
-        )}
+        <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
+          <Icons.Search size={13} />
+          <span>Ara veya komut çalıştır...</span>
+          <span className="kbd">Ctrl K</span>
+        </button>
 
         <nav className="nav">
           {visibleNavItems.map((item) => {
@@ -459,7 +450,7 @@ export default function AppShell() {
           )}
           <div className="topbar-spacer" />
           <div className="topbar-actions">
-            <ScheduleRequestCenter />
+            <ScheduleRequestCenter onNavigate={navigate} />
             <DataRefreshControl />
             {exportVisible && (
               <ProjectExportMenu
@@ -485,8 +476,9 @@ export default function AppShell() {
       </div>
 
       <TaskDetailOverlay simple={simpleMode} />
-      {cmdOpen && !simpleMode && (
+      {cmdOpen && (
         <CommandPalette
+          navItems={visibleNavItems}
           onClose={() => setCmdOpen(false)}
           onNavigate={navigate}
           onOpenTask={openTask}

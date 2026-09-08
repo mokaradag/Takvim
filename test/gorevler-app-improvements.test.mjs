@@ -258,7 +258,7 @@ test('faset yüklemi satır süzmesiyle aynı sonucu verir', () => {
   assert.deepEqual(TASK_TABLE_FACET_KEYS, ['proje', 'keyword', 'sorumlu', 'status', 'priority']);
 
   const view = read('src/features/tasks/TasksView.jsx');
-  assert.match(view, /taskTableMatches\(task, \{ search, filters: colFilter \}, null, today_\)/);
+  assert.match(view, /taskTableMatches\(task, \{ search, filters: colFilter, dateMode: 'effective' \}, null, today_\)/);
 });
 
 /* ── 6 · Kilometre taşı ─────────────────────────────────────── */

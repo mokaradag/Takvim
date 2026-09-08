@@ -1,13 +1,16 @@
 'use client';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icons } from '../icons';
-import { NAV_ITEMS, PAGE_META } from './navigation';
+import { navigationItems, PAGE_META } from './navigation';
 
 /* ── Command palette (Cmd+K) ────────────────────────── */
-export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, tasks }) {
+export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, tasks, navItems = navigationItems(false, false) }) {
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef(null);
+  const dialogRef = useRef(null);
+  useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: inputRef, onClose });
 
   // Etkin satır DURUMUN KENDİSİNDE sınırlanır. `setActive((a) => a + 1)`
   // sınırsız artıyor, çizim ise `Math.min(active, items.length - 1)` ile
@@ -19,8 +22,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
   useEffect(() => {
     inputRef.current?.focus();
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
-      else if (e.key === 'ArrowDown') {
+      if (e.key === 'ArrowDown') {
         e.preventDefault();
         setActive((a) => Math.min(a + 1, Math.max(0, itemCountRef.current - 1)));
       } else if (e.key === 'ArrowUp') {
@@ -34,7 +36,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
   }, []);
 
   const items = useMemo(() => {
-    const nav = NAV_ITEMS.map((n) => ({
+    const nav = navItems.map((n) => ({
       kind: 'nav', icon: n.icon, label: n.label, sub: `${PAGE_META[n.id].sub}`,
       action: () => { onNavigate(n.id); onClose(); }
     }));
@@ -55,7 +57,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
     }
     return all;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, tasks]);
+  }, [q, tasks, navItems]);
 
   // Sayaç RENDER İÇİNDE değil, işlemeden sonra güncellenir: render saf kalır
   // (React yarıda kesilen bir render'ı atabilir ya da yeniden oynatabilir).
@@ -90,11 +92,11 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
   let idx = -1;
   return (
     <div className="cmd-backdrop" onClick={onClose}>
-      <form className="cmd-panel" onClick={(e) => e.stopPropagation()} onSubmit={onSubmit}>
+      <form ref={dialogRef} role="dialog" aria-modal="true" aria-label="Ara veya komut çalıştır" className="cmd-panel" onClick={(e) => e.stopPropagation()} onSubmit={onSubmit}>
         <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
           <Icons.Search size={15} className="muted" style={{ marginLeft: 18 }} />
           <input
-            ref={inputRef} className="cmd-input"
+            aria-label="Sayfa veya görev ara" ref={inputRef} className="cmd-input"
             placeholder="Sayfaya geç, görev ara veya komut çalıştır..."
             value={q} onChange={(e) => { setQ(e.target.value); setActive(0); }}
             style={{ borderBottom: 0, padding: '14px 14px 14px 10px' }}
@@ -117,11 +119,11 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
                   const isActive = itemIndex === a;
                   const I = Icons[it.icon] || Icons.Target;
                   return (
-                    <div key={itemIndex} className={`cmd-row${isActive ? ' active' : ''}`} onMouseEnter={() => setActive(itemIndex)} onClick={() => it.action()}>
+                    <button type="button" key={itemIndex} className={`cmd-row${isActive ? ' active' : ''}`} onMouseEnter={() => setActive(itemIndex)} onClick={() => it.action()}>
                       <I size={14} className="cmd-icon" />
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
                       {it.sub && <span className="cmd-meta">{it.sub}</span>}
-                    </div>
+                    </button>
                   );
                 })}
               </div>

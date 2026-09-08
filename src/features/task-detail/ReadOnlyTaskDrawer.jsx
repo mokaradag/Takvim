@@ -1,5 +1,6 @@
 'use client';
-import { useEffect } from 'react';
+import { useRef } from 'react';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { Icons } from '../../components/icons';
 import { fmt } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
@@ -27,19 +28,13 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
   const color = projectColorVar(task.proje);
   const assigneeNames = taskAssigneeDisplayNames(task);
 
-  // Kapatma düğmesinin ipucu "Kapat (Esc)" diyordu ama ne bu bileşen ne de
-  // üstündeki `TaskDetailOverlay` bir `keydown` dinleyicisi kuruyordu: Esc'e
-  // basan kullanıcı çekmecede kalıyordu.
-  useEffect(() => {
-    const onKeyDown = (event) => { if (event.key === 'Escape') onClose?.(); };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+  const drawerRef = useRef(null);
+  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, onClose });
 
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
-      <div className="drawer" aria-readonly="true">
+      <div ref={drawerRef} className="drawer" role="dialog" aria-modal="true" aria-label="Salt okunur görev ayrıntısı" tabIndex={-1}>
         <div className="drawer-head">
           <div className="col" style={{ gap: 8, flex: 1 }}>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>

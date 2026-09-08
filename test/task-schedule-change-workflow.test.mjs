@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
-import { decideScheduleChangeRequest, submitScheduleChangeRequest } from '../src/data/api/scheduleChangeClient.js';
+import { decideScheduleChangeRequest, submitScheduleChangeRequest, fetchScheduleChanges, markScheduleNotifications } from '../src/data/api/scheduleChangeClient.js';
 import { reconcileScheduleProposal } from '../src/features/schedule-change/scheduleChangePresentation.js';
 
 const PROJECT_ID = '11111111-1111-4111-8111-777777777777';
@@ -533,7 +533,7 @@ test('aynı öncelikteki karar sahipleri Sicil sırasıyla belirlenir', async ()
   }
 });
 
-test('anlık görüntü tüm bekleyenleri ve yalnızca en yeni 100 sonuçlanmış talebi döndürür', async () => {
+test('anlık görüntü yalnızca sekiz bildirim önizlemesi ve toplam sayaçları döndürür', async () => {
   const historical = Array.from({ length: 105 }, (_, index) => ({
     RequestId: `44444444-4444-4444-8444-${String(index).padStart(12, '0')}`,
     TaskId: TASK_ID,
@@ -564,7 +564,9 @@ test('anlık görüntü tüm bekleyenleri ve yalnızca en yeni 100 sonuçlanmı�
   });
   try {
     const requestIds = new Set(stack.state.scheduleRequests.map((request) => request.id));
-    assert.equal(stack.state.scheduleRequests.length, 102);
+    assert.equal(stack.state.scheduleRequests.length, 8);
+    assert.equal(stack.state.scheduleRequestSummary.unreadCount, 107);
+    assert.equal(stack.state.scheduleRequestSummary.pendingCount, 1);
     assert.equal(stack.state.scheduleRequests.filter((request) => request.status === 'PENDING').length, 2);
     assert.equal(requestIds.has('55555555-5555-4555-8555-555555555555'), true);
     assert.equal(requestIds.has('66666666-6666-4666-8666-666666666666'), true);
@@ -575,7 +577,7 @@ test('anlık görüntü tüm bekleyenleri ve yalnızca en yeni 100 sonuçlanmı�
   }
 });
 
-test('tarih talebi okumaları yalnızca etkin projeleri ve belirlenimli sıralamayı kullanır', () => {
+test('bildirim ve karar etkin projeyi gerektirir; geçmiş sorgusu kalıcı künyeyi korur', () => {
   const source = readFileSync(new URL('../src/server/schedule-change/scheduleChangeStore.js', import.meta.url), 'utf8');
   const listStart = source.indexOf('export async function listScheduleChanges');
   const readStart = source.indexOf('async function readScheduleChange');
@@ -583,9 +585,13 @@ test('tarih talebi okumaları yalnızca etkin projeleri ve belirlenimli sıralam
   assert.ok(listStart >= 0 && readStart > listStart && createStart > readStart);
   const listBody = source.slice(listStart, readStart);
   const readBody = source.slice(readStart, createStart);
-  assert.match(listBody, /JOIN dbo\.MR_Projects p ON p\.ProjectId = t\.ProjectId AND p\.IsActive = 1/);
+  assert.match(listBody, /readScheduleInbox/);
+  const queries = readFileSync(new URL('../src/server/schedule-change/scheduleRequestQueries.js', import.meta.url), 'utf8');
+  assert.match(queries, /SELECT TOP \(@limit\)/);
+  assert.match(queries, /LEFT JOIN dbo\.MR_Tasks/);
+  assert.match(queries, /COALESCE\(t\.Title, r\.TaskTitleSnapshot\)/);
   assert.match(readBody, /JOIN dbo\.MR_Projects p ON p\.ProjectId = t\.ProjectId AND p\.IsActive = 1/);
-  assert.match(listBody, /ORDER BY CASE WHEN r\.Status = 'PENDING' THEN 0 ELSE 1 END, r\.CreatedAt DESC, r\.RequestId DESC/);
+  assert.match(queries, /COALESCE\(r\.DecidedAt, r\.CreatedAt\) DESC, r\.RequestId DESC/);
 });
 
 test('0007 göçü henüz çalışmamışsa uygulama boş tarih talebi listesiyle açılır', async () => {
@@ -831,5 +837,112 @@ test('SQL işlemi yalnızca 1205 için ve sınırlı sayıda yeniden denenir', a
     }, { deadlockRetries: 2 });
     assert.equal(outer, 2);
     assert.equal(inner, 2);
+  } finally { await stack.dispose(); }
+});
+
+test('okuma ve temizleme kalıcı kayda dokunmaz; bekleyen karar görünür, yeni karar yeniden okunmamıştır', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    const created = await submitScheduleChangeRequest(proposal());
+    const request = created.value;
+    const before = Buffer.from(stack.db.taskScheduleChangeRequests[0].RowVersion);
+    assert.equal((await markScheduleNotifications([request], 'dismiss')).ok, true);
+    await stack.reload();
+    assert.equal(stack.state.scheduleRequests.length, 0);
+    assert.equal(stack.state.scheduleRequestSummary.unreadCount, 0);
+    assert.equal(stack.db.taskScheduleChangeRequests.length, 1);
+    assert.deepEqual(stack.db.taskScheduleChangeRequests[0].RowVersion, before);
+    const sent = await fetchScheduleChanges({ tab: 'sent' });
+    assert.equal(sent.value.total, 1);
+    assert.equal(sent.value.items[0].unread, false);
+
+    process.env.MERGEN_ROTA_DEV_SICIL = String(CREATOR);
+    await stack.reload();
+    assert.equal(stack.state.scheduleRequestSummary.unreadCount, 1);
+    assert.equal((await markScheduleNotifications(stack.state.scheduleRequests, 'dismiss')).ok, true);
+    await stack.reload();
+    assert.equal(stack.state.scheduleRequestSummary.pendingCount, 1);
+    assert.equal(stack.state.scheduleRequestSummary.unreadCount, 0);
+    assert.equal(stack.state.scheduleRequests.length, 1, 'okunmuş/temizlenmiş karar talebi görünür kalır');
+    assert.equal((await fetchScheduleChanges({ tab: 'pending' })).value.total, 1);
+    assert.equal((await decideScheduleChangeRequest(request.id, 'REJECT', 'Yeni tarih uygun değil.')).ok, true);
+    process.env.MERGEN_ROTA_DEV_SICIL = String(ASSIGNEE);
+    await stack.reload();
+    assert.equal(stack.state.scheduleRequestSummary.unreadCount, 1);
+    assert.equal(stack.state.scheduleRequests[0].status, 'REJECTED');
+    await markScheduleNotifications([request], 'dismiss');
+    await stack.reload();
+    assert.equal(stack.state.scheduleRequestSummary.unreadCount, 1, 'eski bildirim sürümü yeni kararı temizleyemez');
+    const history = await fetchScheduleChanges({ tab: 'history' });
+    assert.equal(history.value.total, 1);
+    assert.equal(history.value.items[0].decisionMessage, 'Yeni tarih uygun değil.');
+  } finally { await stack.dispose(); }
+});
+
+test('talep geçmişi sunucuda sayfalanır, tüm kayıtlara erişilir, filtre ve kullanıcı sınırı korunur', async () => {
+  const history = Array.from({ length: 105 }, (_, index) => ({
+    RequestId: `44444444-4444-4444-8444-${String(index).padStart(12, '0')}`,
+    TaskId: TASK_ID, RequesterSicil: ASSIGNEE, DecisionOwnerSicil: CREATOR,
+    Status: index % 2 ? 'ACCEPTED' : 'REJECTED', RequesterMessage: index === 104 ? 'Özel gerekçe' : '',
+    CreatedAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString()
+  }));
+  const stack = await createActualStack(seed({ taskScheduleChangeRequests: history }), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    assert.equal(stack.state.scheduleRequests.length, 8);
+    const ids = new Set();
+    for (let page = 0; page < 5; page++) {
+      const result = await fetchScheduleChanges({ tab: 'history', page, pageSize: 25 });
+      assert.equal(result.ok, true);
+      assert.equal(result.value.total, 105);
+      assert.equal(result.value.page, page);
+      assert.equal(result.value.items.length, page === 4 ? 5 : 25);
+      for (const item of result.value.items) ids.add(item.id);
+    }
+    assert.equal(ids.size, 105);
+    assert.equal((await fetchScheduleChanges({ tab: 'history', page: 99 })).value.page, 4);
+    assert.equal((await fetchScheduleChanges({ tab: 'pending' })).value.total, 0);
+    assert.equal((await fetchScheduleChanges({ tab: 'sent', status: 'ACCEPTED' })).value.total, 52);
+    const filtered = await fetchScheduleChanges({ tab: 'history', search: 'Özel', projectId: PROJECT_ID, taskId: TASK_ID, requester: String(ASSIGNEE), from: '2026-09-01', to: '2026-09-01' });
+    assert.equal(filtered.value.total, 1);
+    assert.equal((await fetchScheduleChanges({ tab: 'history', search: "' OR 1=1 --" })).value.total, 0);
+    assert.equal((await fetchScheduleChanges({ tab: 'history', from: '2026-09-02' })).value.total, 0);
+    process.env.MERGEN_ROTA_DEV_SICIL = String(OUTSIDER);
+    assert.equal((await fetchScheduleChanges({ tab: 'all' })).value.total, 0);
+    const other = stack.state.scheduleRequests[0];
+    await markScheduleNotifications([other], 'dismiss');
+    assert.equal(stack.db.scheduleNotifications.length, 0, 'başkasının bildirimi değiştirilemez');
+  } finally { await stack.dispose(); }
+});
+
+test('talep sorgusu geçersiz sayfa, tarih, kimlik ve durum girdilerini reddeder', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    for (const query of [{ page: -1 }, { pageSize: 101 }, { page: 1.5 }, { tab: 'bad' }, { status: 'bad' }, { taskId: 'bad' }, { from: '2026-02-30' }, { from: '2026-09-09', to: '2026-09-08' }]) {
+      const result = await fetchScheduleChanges(query);
+      assert.equal(result.ok, false, JSON.stringify(query));
+      assert.equal(result.code, 'MUTATION_FAILED');
+    }
+    assert.equal((await markScheduleNotifications([], 'dismiss')).ok, false);
+  } finally { await stack.dispose(); }
+});
+
+test('görev silinse de talep ve audit geçmişi kalır; açık talep güncelliğini yitirir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  try {
+    const created = await submitScheduleChangeRequest(proposal());
+    process.env.MERGEN_ROTA_DEV_SICIL = String(MANAGER);
+    await stack.reload();
+    await stack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: stack.state.tasks[0].version }] });
+    assert.equal(stack.db.tasks.length, 0);
+    assert.equal(stack.db.taskScheduleChangeRequests.length, 1);
+    assert.equal(stack.db.taskScheduleChangeRequests[0].Status, 'STALE');
+    assert.ok(stack.db.auditLog.some((row) => row.EntityType === 'TASK_SCHEDULE_REQUEST'));
+    process.env.MERGEN_ROTA_DEV_SICIL = String(ASSIGNEE);
+    const history = await fetchScheduleChanges({ tab: 'history' });
+    assert.equal(history.value.total, 1);
+    assert.equal(history.value.items[0].id, created.value.id);
+    assert.equal(history.value.items[0].taskTitle, 'Radar yazılım doğrulaması');
+    assert.equal(history.value.items[0].taskAvailable, false);
+    assert.equal(history.value.items[0].projectName, 'Tarih Talebi Projesi');
   } finally { await stack.dispose(); }
 });

@@ -45,7 +45,9 @@ export function useWorkspaceTasks() { return useAppState().workspace.tasks; }
 export function useWorkspaceWbs() { return useAppState().workspace.wbs; }
 export function useWorkspacePeople() { return useAppState().workspace.people; }
 export function useCalendars() { return useAppState().calendars; }
-/** Oturum kullanıcısına ait kalıcı tarih talebi bildirimleri. */
+/** Oturum kullanıcısının sınırlı bildirim önizlemesi. */
+const EMPTY_SCHEDULE_SUMMARY = Object.freeze({ unreadCount: 0, pendingCount: 0 });
+export function useScheduleRequestSummary() { return useAppState().scheduleRequestSummary || EMPTY_SCHEDULE_SUMMARY; }
 export function useScheduleRequests() { return useAppState().scheduleRequests || []; }
 /**
  * Oturum açmış kullanıcı. Gerçek Sistem'de sunucunun doğruladığı Keycloak

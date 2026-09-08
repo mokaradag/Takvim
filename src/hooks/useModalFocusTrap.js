@@ -1,5 +1,7 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
+
+const activeTraps = [];
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -44,7 +46,8 @@ export function resolveFocusTrapTarget({ focusableCount, activeIndex, containsAc
  * arkadaki uygulama kabuğuna sekme ile çıkabiliyordu. Bu kanca paylaşımlıdır ki
  * her modal aynı davranışı yeniden yazmak zorunda kalmasın.
  */
-export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, onClose, blocked = false }) {
+export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, onClose, blocked = false, enabled = true }) {
+  const scopeId = useId();
   const openerRef = useRef(null);
   const closeRef = useRef(onClose);
   const blockedRef = useRef(blocked);
@@ -55,6 +58,7 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
   }, [onClose, blocked]);
 
   useEffect(() => {
+    if (!enabled || typeof document === 'undefined') return undefined;
     openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
     const restoreFocus = restoreFocusRef?.current;
     initialFocusRef.current?.focus();
@@ -62,17 +66,28 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       const opener = openerRef.current?.isConnected ? openerRef.current : restoreFocus;
       if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
     };
-  }, [initialFocusRef, restoreFocusRef]);
+  }, [initialFocusRef, restoreFocusRef, enabled]);
 
   useEffect(() => {
+    if (!enabled || typeof document === 'undefined') return undefined;
+    const owner = containerRef.current;
+    owner?.setAttribute('data-focus-scope', scopeId);
+    const token = {};
+    activeTraps.push(token);
     const handleKeyDown = (event) => {
+      if (activeTraps[activeTraps.length - 1] !== token || event.defaultPrevented) return;
       if (event.key === 'Escape') {
-        if (!event.defaultPrevented && !blockedRef.current) closeRef.current?.();
+        if (!event.defaultPrevented && !blockedRef.current) {
+          event.preventDefault();
+          closeRef.current?.();
+        }
         return;
       }
       if (event.key !== 'Tab') return;
-      const container = containerRef.current;
-      if (!container) return;
+      const modal = containerRef.current;
+      if (!modal) return;
+      const portal = document.activeElement?.closest?.('[data-modal-owner]');
+      const container = portal?.getAttribute('data-modal-owner') === scopeId ? portal : modal;
       const focusable = [...container.querySelectorAll(FOCUSABLE_SELECTOR)]
         .filter((element) => element.offsetParent !== null || element === document.activeElement);
       const active = document.activeElement;
@@ -89,6 +104,11 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       else focusable[focusable.length - 1].focus();
     };
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [containerRef]);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      const index = activeTraps.indexOf(token);
+      if (index >= 0) activeTraps.splice(index, 1);
+      owner?.removeAttribute('data-focus-scope');
+    };
+  }, [containerRef, enabled, scopeId]);
 }

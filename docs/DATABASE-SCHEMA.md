@@ -186,3 +186,15 @@ SYSTEM_ADMIN seed.
 Generated user photograph URLs are presentation data and are **not persisted**
 in any table. They are derived at render time from the configured base URL and
 the employee number.
+
+
+## Talep bildirimleri ve geçmişin saklanması
+
+`0008_request_notifications` yükseltmesi `MR_ScheduleRequestNotifications` tablosunu ekler. `(RequestId, Sicil)` anahtarı; `ReadVersion binary(8)`, `DismissedVersion binary(8)` ve `UpdatedAt datetime2(7)` ile bildirim durumu ayrı tutulur. Talep `RowVersion` değeri değişince yeni olay okunmamış olur. Talep satırının sürümü okundu/temizle nedeniyle değişmez.
+
+Talep tablosuna `TaskTitleSnapshot nvarchar(1000)`, `ProjectIdSnapshot uniqueidentifier`, `ProjectNameSnapshot nvarchar(1000)` ve `ProjectCodeSnapshot nvarchar(100)` eklenir; mevcut kayıtlar doldurulur. Görevden talebe silme zinciri kaldırılır. Görev silinirken açık talepler STALE olur; tamamlanan talepler ve audit geçmişi korunur. Bildirim tablosu yalnızca kalıcı talebe yabancı anahtar taşır. Ana oluşturma/geri alma betikleri aynı nesne kümesini kapsar. Ayrıntılar: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+
+
+### Görev hareket raporu dizini
+
+`0009_task_activity_report`, mevcut MR_AuditLog üzerine `IX_MR_AuditLog_Type_Occurred(EntityType, OccurredAt DESC, AuditId DESC)` dizinini ekler; ActorSicil, ProjectId, EntityId, CorrelationId, ActionCode alanlarını kapsar. Ayrı hareket tablosu yoktur. Görev denetiminde kalıcı satır, sorumlu Sicilleri ve tarihsel proje künyesi saklanır; eski kayıtlar yeniden yazılmaz. [Sorgu ve tarihçe sözleşmesi](TASK-ACTIVITY-REPORT.md).

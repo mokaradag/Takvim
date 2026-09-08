@@ -1,13 +1,14 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { markScheduleNotifications } from '../../data/api/scheduleChangeClient.js';
 import { Icons } from '../../components/icons.jsx';
 import { fmt } from '../../scheduling/dates/index.js';
-import { useScheduleRequests, useTaskActions } from '../../state/hooks/index.js';
+import { useScheduleRequests, useScheduleRequestSummary, useTaskActions } from '../../state/hooks/index.js';
 import { SCHEDULE_DATE_ROWS, requestDates, scheduleDifferenceSummary } from './scheduleChangePresentation.js';
 import { reduceScheduleRequestCenterOpen, scheduleRequestCenterViewState } from './scheduleRequestCenterState.js';
 import { useModalFocusTrap } from './useModalFocusTrap.js';
 
-const STATUS_LABELS = Object.freeze({
+export const STATUS_LABELS = Object.freeze({
   PENDING: 'Bekliyor',
   ACCEPTED: 'Kabul edildi',
   REJECTED: 'Reddedildi',
@@ -20,11 +21,11 @@ function requestHeadline(request) {
   return `Tarih değişikliği ${STATUS_LABELS[request.status]?.toLocaleLowerCase('tr-TR') || 'sonuçlandı'}`;
 }
 
-function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restoreFocusRef }) {
+export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restoreFocusRef }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const decisionAvailable = request.isDecisionOwner && request.status === 'PENDING';
+  const decisionAvailable = request.isDecisionOwner && request.status === 'PENDING' && request.taskAvailable !== false;
   const current = requestDates(request, 'original');
   const proposed = requestDates(request, 'proposed');
   const summary = scheduleDifferenceSummary(current, proposed);
@@ -116,7 +117,7 @@ function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restor
         )}
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
         <footer className="schedule-modal-actions">
-          <button className="btn" type="button" disabled={busy} onClick={async () => {
+          <button className="btn" type="button" disabled={busy || request.taskAvailable === false} title={request.taskAvailable === false ? 'Görev silinmiş veya proje kapatılmış.' : undefined} onClick={async () => {
             setBusy(true);
             setError(null);
             try {
@@ -147,20 +148,38 @@ function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restor
 /**
  * Tarih değişikliği taleplerini ve kalıcı karar bildirimlerini sunar.
  */
-export function ScheduleRequestCenter() {
+export function ScheduleRequestCenter({ onNavigate }) {
   const requests = useScheduleRequests();
-  const { decideScheduleChange, openTask } = useTaskActions();
+  const { decideScheduleChange, openTask, reloadData } = useTaskActions();
+  const summary = useScheduleRequestSummary();
+  const [notificationError, setNotificationError] = useState(null);
+  const [marking, setMarking] = useState(false);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const rootRef = useRef(null);
   const toggleRef = useRef(null);
-  const pendingCount = requests.filter((request) => request.status === 'PENDING' && request.isDecisionOwner).length;
-  const listed = requests;
+  const popoverRef = useRef(null);
+  const pendingCount = summary.pendingCount;
+  const unreadCount = summary.unreadCount;
+  const listed = requests.slice(0, 8);
+  const mark = async (items, action = 'read') => {
+    if (!items.length || marking) return;
+    setMarking(true); setNotificationError(null);
+    try {
+      const result = await markScheduleNotifications(items, action);
+      if (!result.ok) setNotificationError(result.message);
+      else await reloadData?.({ preserveFailedTaskUpdates: true });
+    } catch (error) { setNotificationError(error.message || 'Bildirim güncellenemedi.'); }
+    finally { setMarking(false); }
+  };
   const {
     hasRequests,
     isOpen: requestCenterOpen,
     disabled: requestToggleDisabled
   } = scheduleRequestCenterViewState(requests, open);
+
+  useModalFocusTrap({ containerRef: popoverRef, initialFocusRef: popoverRef, restoreFocusRef: toggleRef,
+    onClose: () => setOpen(false), enabled: requestCenterOpen });
 
   useEffect(() => {
     setOpen((current) => reduceScheduleRequestCenterOpen(current, { type: 'sync', hasRequests }));
@@ -171,14 +190,9 @@ export function ScheduleRequestCenter() {
     const handlePointer = (event) => {
       if (!rootRef.current?.contains(event.target)) setOpen(false);
     };
-    const handleKey = (event) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
     document.addEventListener('mousedown', handlePointer);
-    document.addEventListener('keydown', handleKey);
     return () => {
       document.removeEventListener('mousedown', handlePointer);
-      document.removeEventListener('keydown', handleKey);
     };
   }, [requestCenterOpen]);
 
@@ -189,20 +203,21 @@ export function ScheduleRequestCenter() {
           ref={toggleRef}
           className="icon-btn schedule-request-toggle"
           type="button"
-          aria-label={pendingCount ? `${pendingCount} bekleyen tarih talebi` : hasRequests ? 'Tarih talepleri' : 'Tarih talebi bulunmuyor'}
+          aria-label={`${unreadCount} okunmamış bildirim, ${pendingCount} bekleyen tarih talebi`}
           aria-expanded={requestCenterOpen}
           disabled={requestToggleDisabled}
           onClick={() => setOpen((current) => reduceScheduleRequestCenterOpen(current, { type: 'toggle', hasRequests }))}
           title={hasRequests ? 'Tarih talepleri' : 'Tarih talebi bulunmuyor'}
         >
           <Icons.Bell size={15} />
-          {pendingCount > 0 && <span className="schedule-request-badge">{pendingCount > 9 ? '9+' : pendingCount}</span>}
+          {unreadCount > 0 && <span className="schedule-request-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+          {pendingCount > 0 && <span className="schedule-action-dot" title="Kararınızı bekleyen talepler var" />}
         </button>
         {requestCenterOpen && (
-          <section className="schedule-request-popover" role="dialog" aria-label="Tarih talepleri">
+          <section ref={popoverRef} tabIndex={-1} className="schedule-request-popover" role="dialog" aria-label="Tarih talepleri">
             <header>
-              <div><strong>Tarih talepleri</strong><small>Kalıcı bildirimler ve kararlar</small></div>
-              <span>{requests.length}</span>
+              <div><strong>Bildirimler</strong><small>{pendingCount ? `${pendingCount} talep kararınızı bekliyor` : 'Son tarih talebi bildirimleri'}</small></div>
+              <span>{unreadCount} yeni</span>
             </header>
             <div className="schedule-request-list">
               {listed.map((request) => {
@@ -211,9 +226,9 @@ export function ScheduleRequestCenter() {
                   requestDates(request, 'proposed')
                 )[0];
                 return (
-                  <button type="button" className="schedule-request-card" key={request.id} onClick={() => { setSelected(request); setOpen(false); }}>
+                  <button type="button" className="schedule-request-card" key={request.id} onClick={() => { setSelected(request); setOpen(false); mark([request]); }}>
                     <span className={`schedule-status ${request.status.toLowerCase()}`}>{STATUS_LABELS[request.status] || request.status}</span>
-                    <strong>{requestHeadline(request)}</strong>
+                    <strong>{request.isDecisionOwner && request.status === 'PENDING' ? 'Kararınız bekleniyor' : requestHeadline(request)}{request.unread && <span className="schedule-new-label">Yeni</span>}</strong>
                     <small>{request.isRequester ? request.taskTitle : `${request.requesterName} · ${request.taskTitle}`}</small>
                     <span>{summary || 'Plan tarihleri için değişiklik'}</span>
                     <time>{request.createdAt ? new Date(request.createdAt).toLocaleString('tr-TR') : ''}</time>
@@ -221,6 +236,12 @@ export function ScheduleRequestCenter() {
                 );
               })}
             </div>
+            {notificationError && <p role="alert" className="schedule-modal-error">{notificationError}</p>}
+            <footer className="schedule-inbox-actions">
+              <button type="button" className="btn ghost sm" disabled={marking} onClick={() => mark(listed)}>Okundu işaretle</button>
+              <button type="button" className="btn ghost sm" disabled={marking} onClick={() => mark(listed, 'dismiss')}>Görünenleri temizle</button>
+              <button type="button" className="btn sm" onClick={() => { setOpen(false); onNavigate?.('talepler'); }}>Tüm talepleri gör <Icons.ChevronRight size={12} /></button>
+            </footer>
           </section>
         )}
       </div>

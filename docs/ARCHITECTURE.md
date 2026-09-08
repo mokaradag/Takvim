@@ -232,3 +232,13 @@ SQL Server
 The browser must never connect directly to SQL Server. The server/database implementation should preserve atomic `commitChanges()` semantics and return authoritative canonical entities.
 
 A future persistence schema should preserve Project → WBS → Activity as separate stable-ID relationships and retain the semantic separation between current plan, actuals, baseline snapshots and calculated CPM output. SQL Server, Next.js route handlers, REST clients, Primavera/SAP integration, authorization and audit history remain outside the current implementation.
+
+
+## Talep geçmişi ve görev ayrıntı katmanı
+
+Genel snapshot `scheduleRequests` içinde en fazla sekiz önizleme, `scheduleRequestSummary` içinde sayaçlar taşır. Talepler sayfası ve görevdeki bekleyen öneri `schedule-changes` GET sorgularıyla ayrı yüklenir; geçmiş büyüklüğü uygulama bağlamını büyütmez. SQL okuma/temizleme ayrı bildirim tablosuna gider. KPI modalı zaten yetkilendirilmiş ve Özet tarafından daraltılmış görevleri yerel olarak arar/sayfalar. İki görev panelinde ikinci bir alan kopyası bulunmaz; `TaskEditor` taslağı tek kaynaktır. [Akış ve API](REQUESTS-AND-NOTIFICATIONS.md), [arayüz sözleşmesi](SIMPLE-MODE-AND-UI.md).
+
+
+### Görev hareket raporu
+
+Raporlar, Performans ve Görev Hareketleri sekmelerini içerir. Performans hesapları korunur; hareket sorgusu ayrı API → yetkilendirilmiş rapor servisi → MR_AuditLog yolunu kullanır. Aktör ve görev görünürlüğü birlikte doğrulanır; JSON farkları sunucuda Türkçe iş diline çevrilir. Genel snapshot denetim geçmişi taşımaz. Ayrıntılar: [Görev Hareketleri](TASK-ACTIVITY-REPORT.md).

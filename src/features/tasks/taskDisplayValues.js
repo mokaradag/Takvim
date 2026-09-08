@@ -7,7 +7,18 @@ export function taskProgressValue(task) {
   return task?.status === 'done' ? 100 : 0;
 }
 
-/** Sıralama, hücrenin ve sayısal süzgecin kullanıcıya gösterdiği değeri izler. */
-export function taskSortValue(task, key) {
-  return key === 'progress' ? taskProgressValue(task) : task?.[key];
+/**
+ * Tarih sıralamasında çağıran görünümün anlamını açıkça seçmesine izin verir.
+ * Gantt varsayılan olarak planı gösterir; Görevler tablosu gerçekleşen tarih
+ * varsa onu gösterdiği için `effective` kipini kullanır.
+ */
+export function taskSortValue(task, key, dateMode = 'planned') {
+  if (key === 'progress') return taskProgressValue(task);
+  return dateMode === 'effective' ? effectiveTaskDate(task, key) : task?.[key];
+}
+
+export function effectiveTaskDate(task, key) {
+  if (key === 'plannedStart') return task?.actualStart || task?.plannedStart;
+  if (key === 'plannedFinish') return task?.actualFinish || task?.plannedFinish;
+  return task?.[key];
 }

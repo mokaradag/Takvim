@@ -155,7 +155,9 @@ Persistence errors are surfaced to the user verbatim. `PersistenceStatus` render
    1. `database/MR_Upgrade_0004_Tag_Appearance_And_Recurrence.sql` — tag appearance and task recurrence.
    2. `database/MR_Upgrade_0005_Task_Reminders.sql` — `MR_ReminderSettings` and `MR_TaskReminderLog`.
    3. `database/MR_Upgrade_0006_Audit_Deactivation.sql` — the `DEACTIVATE` audit action.
-   4. `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql` — `MR_TaskScheduleChangeRequests`; this is the **latest** upgrade.
+   4. `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql` — `MR_TaskScheduleChangeRequests`.
+   5. `database/MR_Upgrade_0008_Request_Notifications.sql` — ayrı bildirim durumu ve kalıcı görev/proje künyesi.
+   6. `database/MR_Upgrade_0009_Task_Activity_Report.sql` — görev denetimi tarih aralığı dizini. Güncel yükseltmeler uygulama dağıtımından önce çalıştırılmalıdır.
 
    Stopping at `0005` leaves `MR_TaskScheduleChangeRequests` absent, and every schedule-change request then fails when the application reaches that table. Every upgrade script is idempotent and preserves existing data.
 3. Install Microsoft ODBC Driver 18 for SQL Server on the MERGEN Rota host.
@@ -202,3 +204,10 @@ The normal test suite uses pure/static and injected boundaries and does not requ
 The double behaves like SQL Server where it matters for correctness: `uniqueidentifier` values come back as upper-case text, comparisons are case-insensitive, corporate GUIDs without RFC 4122 version bits are stored verbatim, and `rowversion` tokens must match for an update or delete to affect a row. `test/helpers/actualStack.mjs` wires the stack and routes `fetch` to the route handlers; `server-only` is redirected to an empty module through a resolve hook, since that package throws in plain Node.
 
 This is still not a substitute for live database validation: T-SQL text itself (merge statements, snapshot query) is exercised only by its contract, not by SQL Server's parser.
+
+Tarih talepleri görev silme işleminden sonra da korunur. Bildirim okuma/temizleme talep/audit verisini değiştirmez. Şema, uç noktalar ve dağıtım ayrıntıları: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+
+
+### Audit reporting
+
+Raporlar → Görev Hareketleri queries MR_AuditLog through a dedicated authorized server report. The browser receives bounded Turkish activity rows, never BeforeJson/AfterJson or unrestricted audit history. UTC timestamps are filtered using Europe/Istanbul calendar boundaries; correlated TASK changes form one logical action. Committed task snapshots include authoritative stored fields and assignee Sicils. See [Görev Hareketleri](TASK-ACTIVITY-REPORT.md) for authorization, historical records and API parameters.
