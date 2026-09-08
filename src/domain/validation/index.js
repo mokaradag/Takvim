@@ -88,7 +88,7 @@ function buildTaskReferenceIndex(context) {
     projectsByName: indexByUniqueName(normalizedProjects),
     projectsByCode: new Map(normalizedProjects.filter((item) => item.code).map((item) => [item.code, item])),
     peopleByName,
-    peopleById: new Map(normalizedPeople.map((item) => [item.id, item])),
+    peopleById: new Map(normalizedPeople.map((item) => [String(item.id), item])),
     wbsById: new Map(wbs.map((node) => [node.id, node])),
     defaultWbsByProjectId: new Map([...rootsByProjectId]
       .filter(([, roots]) => roots.length === 1)
@@ -149,9 +149,9 @@ export function normalizeTaskReferences(task, context = {}) {
   const hasCanonicalAssigneeIds = Array.isArray(task.assigneeIds)
     && (task.assigneeIds.length > 0 || canonicalAssigneePatch || explicitAssigneeNames.length === 0);
   const assigneeIds = hasCanonicalAssigneeIds
-    ? [...new Set(task.assigneeIds.filter((id) => peopleById.has(id)))]
+    ? [...new Set(task.assigneeIds.map(String).filter((id) => peopleById.has(id)))]
     : [...new Set(explicitAssigneeNames.map((name) => peopleByName.get(name)?.id).filter(Boolean))];
-  const directoryAssigneeNames = canonicalAssigneePatch || explicitAssigneeNames.length === 0
+  const directoryAssigneeNames = hasCanonicalAssigneeIds
     ? assigneeIds.map((id) => peopleById.get(id)?.name).filter(Boolean)
     : explicitAssigneeNames.filter((name) => peopleByName.has(name));
   const hasTaskScopedCoAssignees = taskScopedAssigneeNames.length > 0

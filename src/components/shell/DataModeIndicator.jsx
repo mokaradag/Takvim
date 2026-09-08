@@ -17,6 +17,7 @@ export function DataModeIndicator({ variant = 'settings' }) {
   const { dataMode, setDataMode } = useDataMode();
   const { actions } = useAppState();
   const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState(null);
   const nextMode = dataMode === 'demo' ? 'actual' : 'demo';
   const current = MODE_COPY[dataMode] || MODE_COPY.demo;
   const next = MODE_COPY[nextMode];
@@ -24,9 +25,13 @@ export function DataModeIndicator({ variant = 'settings' }) {
 
   const switchMode = async () => {
     setSwitching(true);
+    setSwitchError(null);
     try {
       const flushResult = await actions.flushPendingChanges();
-      if (!flushResult?.ok) return;
+      if (!flushResult?.ok) {
+        setSwitchError(flushResult?.error?.message || 'Değişiklikler kaydedilemedi.');
+        return;
+      }
       await setDataMode(nextMode);
     } finally {
       setSwitching(false);
@@ -48,6 +53,7 @@ export function DataModeIndicator({ variant = 'settings' }) {
       <button type="button" onClick={switchMode} disabled={switching} title={`${next.label} kipine geç`}>
         {switching ? 'Geçiliyor…' : `${next.label} kipine geç`}
       </button>
+      {switchError && <span role="alert">{switchError}</span>}
     </div>
   );
 }

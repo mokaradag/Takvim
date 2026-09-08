@@ -1,3 +1,4 @@
+import { taskPersonnelScope } from '../../state/taskPersonnelScope.js';
 import { canWriteProject } from '../../state/projectWritePolicy.js';
 
 export { canWriteProject };
@@ -52,12 +53,15 @@ export function simpleAssignmentScope({
   selectedProject = null,
   creationScope = null,
   currentUserId = null,
-  assignmentScopeSicils = []
+  assignmentScopeSicils = [],
+  isExecutive = false,
+  isSystemAdmin = false
 } = {}) {
-  if (!selectedProject || creationScope === 'FULL') return null;
   if (creationScope === 'ASSIGNEE_CREATE') {
     return currentUserId == null ? new Set() : new Set([String(currentUserId)]);
   }
+  if (isExecutive && !isSystemAdmin) return taskPersonnelScope({ project: selectedProject, isExecutive, isSystemAdmin, assignmentScopeSicils });
+  if (!selectedProject || creationScope === 'FULL') return null;
   return new Set((assignmentScopeSicils || []).map(String));
 }
 

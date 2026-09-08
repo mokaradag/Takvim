@@ -735,7 +735,7 @@ test('Temel Kip tarih talebi eylemini ve ortak modal erişilebilirlik sınırın
   const dialog = readFileSync(new URL('../src/features/schedule-change/ScheduleChangeDialog.jsx', import.meta.url), 'utf8');
   const requestCenter = readFileSync(new URL('../src/features/schedule-change/ScheduleRequestCenter.jsx', import.meta.url), 'utf8');
 
-  assert.match(overlay, /<SimpleTaskDrawer[\s\S]*canProposeSchedule=\{initialAccess\.canProposeSchedule\}/);
+  assert.match(overlay, /canProposeSchedule: !isCreating && draftAccess\.canProposeSchedule/);
   assert.match(simpleDrawer, /<ScheduleChangeDialog/);
   assert.match(advancedDrawer, /request\.status === 'PENDING' && request\.isRequester/);
   assert.match(focusTrap, /event\.key !== 'Tab'/);

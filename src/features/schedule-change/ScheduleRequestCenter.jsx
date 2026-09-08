@@ -116,7 +116,17 @@ function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restor
         )}
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
         <footer className="schedule-modal-actions">
-          <button className="btn" type="button" disabled={busy} onClick={() => { onOpenTask(request.taskId); onClose(); }}>
+          <button className="btn" type="button" disabled={busy} onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              const result = await onOpenTask(request.taskId);
+              if (result?.ok === false) setError(result.error?.message || 'Görev açılamadı.');
+              else onClose();
+            } catch (openError) {
+              setError(openError.message || 'Görev açılamadı.');
+            } finally { setBusy(false); }
+          }}>
             Görevi aç
           </button>
           <div style={{ flex: 1 }} />

@@ -297,7 +297,7 @@ Kapsamlı Kipteki **Yeni Görev** eylemi veritabanına hemen kayıt yazmaz; yere
 bir görev taslağı açar. Alan değişiklikleri taslakta kalır, kapatma taslağı
 atar ve ilk kalıcı `task/create` işlemi yalnızca paneldeki **Kaydet** düğmesiyle
 başlar. Mevcut görev panellerindeki birincil düğmenin adı da aynı eylem diliyle
-**Kaydet**tir.
+**Kaydet**tir. Mevcut görevdeki tüm alan ve ardıl bağlantısı düzenlemeleri de yalnızca bu düğmeyle tek istekte yazılır; alan değişimi, odak kaybı ve kapatma kayıt başlatmaz. Başarısız kayıtta taslak açık kalır.
 
 Görev başlığının altında kısa bir **Görevi tanımlayan** künyesi; oluşturanın
 fotoğrafını, tam adını ve oluşturma tarihini saat ve dakika ile gösterir. Künye
@@ -361,9 +361,17 @@ Keycloak entegrasyonu tamamlanmıştır: kimlik doğrulama yalnızca `CurrentUse
 - Temel Kip tablosunda ölçeğe uyumlu sütunlar; koyu Takvimde belirgin hafta sonları ve daha geniş gün/görev pencereleri.
 - Takvimde iki kip için ortak direktörlük/müdürlük/birim filtresi; Görevler ile paylaşılan seçim.
 - Görevi oluşturan yöneticiye kapsam içi sorumlu yönetimi ve silme; normal kullanıcı ve kapsam dışı personel sınırları korunur.
-- Yeni görevde **Tekrarları oluştur**, şablonu ve tekrarları tek işlemde kaydeder.
+- **Tekrarları hazırla** tekrar üretimini taslağa ekler; **Kaydet** şablonu ve tekrarları tek işlemde yazar.
 - Kilometre taşında tek gerçekleşen tarih ve ikili tamamlanma durumu.
 - Tarih önerisi/kararı sırasında SQL 1205 için sınırlı transaction yeniden denemesi. Veritabanı şema değişikliği gerekmez.
-- İsteğe bağlı açılış logosu: `.env.example` → `NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL`. SVG adresini girdikten sonra yeniden derleyip uygulamayı başlatın.
+- Açılış logosu: `.env.example` → `MERGEN_ROTA_COMPANY_LOGO_PATH`. UNC/Windows SVG yolu sunucudan okunur; Node hizmet hesabının okuma yetkisi olmalıdır. Eski `NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL` içindeki UNC veya HTTPS değeri de desteklenir. Ayar değişince hizmeti yeniden başlatın.
 
 Ayrıntılar: [Arayüz](docs/SIMPLE-MODE-AND-UI.md), [Tekrarlar](docs/TAGS-AND-RECURRING-TASKS.md), [Takvim veri modeli](docs/SCHEDULING-DATA-MODEL.md), [Görsel yapı](docs/UI-STYLING-ARCHITECTURE.md).
+
+### Sicil, kayıt ve arayüz düzeltmeleri
+
+Personel atamaları SicilNo üzerinden yapılır; aynı adlı çalışanlar ayrı kimliklerle korunur. Yönetici, FULL erişimli manuel projelerinde de yalnızca kurumsal kapsamındaki personeli atayabilir. Görev penceresinde Kaydet dışındaki alan değişiklikleri yerel taslaktır; görev, değişen ardıl bağlantıları ve istenen tekrarlar tek işlemde yazılır. Değişmeyen atamalar yeniden doğrulanıp silinerek eklenmez.
+
+Temel Kip eylem başlığı kaydırmada sabit kalır. Takvim kurumsal seçicileri tarih denetimleriyle aynı satırdadır. Tarih talebi rozetleri ve Görevi aç akışı, kilometre taşı gerçekleşen tarih genişliği, yıldızlı açılış ekranı ve daralan kenar çubuğunun menü/fotoğraf yerleşimi güncellenmiştir. Ayrıntılar: [arayüz](docs/SIMPLE-MODE-AND-UI.md), [yetki modeli](docs/AUTHORIZATION-MODEL.md), [logo ve görünüm](docs/UI-STYLING-ARCHITECTURE.md). Veritabanı şema yükseltmesi gerekmez.
+
+Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.

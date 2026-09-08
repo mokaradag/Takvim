@@ -21,7 +21,7 @@ import { sendTaskReminderRequest } from './reminderClient.js';
  *    sorumlularını SQL'den yeniden okur, kuyrukta bekleyen bir termin/sorumlu
  *    değişikliği boşaltılmasaydı ileti eski veriyle ve eski alıcılara giderdi.
  */
-export function TaskReminderButton({ task, size = 26, onResult = null }) {
+export function TaskReminderButton({ task, size = 26, onResult = null, disabledReason = null }) {
   const { dataMode } = useDataMode();
   const { flushTaskEdits } = useTaskActions();
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,7 @@ export function TaskReminderButton({ task, size = 26, onResult = null }) {
   }, [result]);
 
   const demo = dataMode !== DATA_MODES.ACTUAL;
-  const disabled = busy || demo || !task?.id;
+  const disabled = busy || demo || !task?.id || Boolean(disabledReason);
 
   const send = async (event) => {
     event.stopPropagation();
@@ -86,11 +86,11 @@ export function TaskReminderButton({ task, size = 26, onResult = null }) {
     onResult?.(next);
   };
 
-  const title = demo
+  const title = disabledReason || (demo
     ? 'Hatırlatma e-postası yalnızca Gerçek Sistem verisiyle gönderilir.'
     : busy
       ? 'Hatırlatma gönderiliyor…'
-      : 'Hatırlatma e-postası gönder';
+      : 'Hatırlatma e-postası gönder');
 
   return (
     <span className="task-reminder-action" onClick={(event) => event.stopPropagation()}>

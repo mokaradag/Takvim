@@ -58,7 +58,8 @@ test('yönetici atama kapsamındaki projede yalnızca izinli sorumlular adaydır
   const advancedDrawer = read('src/features/task-detail/TaskDrawer.jsx');
   assert.match(panel, /simpleAssignmentCandidates\(sortedPeople, assignmentScopeOnly\)/);
   assert.match(panel, /current\.filter\(\(id\) => candidatePersonIds\.has\(String\(id\)\)\)/);
-  assert.match(simpleDrawer, /if \(!project \|\| canWriteProject\(project\)\) return null;\s*return new Set\(assignmentScopeSicils\.map\(String\)\)/);
+  assert.match(simpleDrawer, /taskPersonnelScope\(\{/);
+  assert.match(simpleDrawer, /isExecutive, isSystemAdmin, assignmentScopeSicils/);
   assert.match(simpleDrawer, /assignmentScopeOnly\.has\(String\(simpleAssigneeNumber\(person\)\)\)/);
   assert.match(advancedDrawer, /assignmentScopeOnly\.has\(String\(simpleAssigneeNumber\(person\)\)\)/);
   assert.doesNotMatch(simpleDrawer, /!assignmentScopeSicils\.length\) return null/);

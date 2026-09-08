@@ -29,6 +29,9 @@ export function resolveTaskAssigneeDisplayRecords(task = {}, people = [], includ
     const person = peopleById.get(String(id));
     if (!person) continue;
     records.push({ key: `person:${person.id}`, id: person.id, name: person.name, person });
+    const identities = taskIdentitiesByName.get(assigneeNameKey(person.name)) || [];
+    const matching = identities.findIndex((identity) => identity.employeeNo === String(person.employeeNo || person.id));
+    if (matching >= 0) identities.splice(matching, 1);
   }
 
   const names = includeTaskScopedNames ? taskAssigneeDisplayNames(task) : cleanNames(task.sorumlu);
@@ -94,6 +97,9 @@ export function taskAssigneeMutationPatch(task = {}, people = [], nextAssigneeId
 
   return {
     assigneeIds: uniqueIds,
-    sorumlu: names.filter((name, index) => names.indexOf(name) === index)
+    assigneeIdsCanonical: true,
+    assigneeCount: uniqueIds.length,
+    assigneeDisplayNames: names,
+    sorumlu: names
   };
 }

@@ -440,7 +440,7 @@ test('elle gönderim otomatik ayardan bağımsız çalışır', () => {
 test('hatırlatma düğmesi görevi değiştirmez ve kopya gönderimi engeller', () => {
   const button = read('src/features/reminders/TaskReminderButton.jsx');
   // İstek sürerken düğme kapalıdır.
-  assert.match(button, /const disabled = busy \|\| demo \|\| !task\?\.id;/);
+  assert.match(button, /const disabled = busy \|\| demo \|\| !task\?\.id \|\| Boolean\(disabledReason\);/);
   assert.match(button, /if \(disabled\) return;/);
   // Yalnızca gönderim yapılır; görev yazma eylemi çağrılmaz.
   for (const action of ['updateTask', 'deleteTask', 'onUpdate', 'onDelete']) {

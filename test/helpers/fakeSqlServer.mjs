@@ -1,3 +1,4 @@
+import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
  *
@@ -786,7 +787,7 @@ function runQuery(db, statement, params, { database }) {
         };
       });
     const projectedAssignees = sqlText.includes('LEFT JOIN dbo.MR_V_PeopleDirectory pd')
-      ? taskScopedAssigneeRows(db, taskIds, sicil, Boolean(params.isAdmin))
+      ? taskScopedAssigneeRows(db, taskIds, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
       : snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()));
     return result([
       snapshot[0].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
@@ -1643,7 +1644,9 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;')) {
     db.taskDependencies = db.taskDependencies.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
-    db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
+    if (sqlText.includes('DELETE dbo.MR_TaskAssignees')) {
+      db.taskAssignees = db.taskAssignees.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
+    }
     return result([[]]);
   }
   // Tam yetkisi olmayan yazmada bağımlılık satırları KORUNUR; yalnızca
@@ -1756,10 +1759,15 @@ export function createFakeSqlServerDriver(db) {
 
     async begin(isolationLevel) {
       this.began = true;
+      this.savedTables = deserialize(serialize(Object.fromEntries(Object.entries(db)
+        .filter(([key, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(key)))));
       db.transactions.push({ isolationLevel, statementIndex: db.statements.length });
     }
     async commit() { this.committed = true; }
-    async rollback() { this.rolledBack = true; }
+    async rollback() {
+      this.rolledBack = true;
+      if (this.savedTables) Object.assign(db, this.savedTables);
+    }
 
     request() {
       return new FakeRequest(this.pool);

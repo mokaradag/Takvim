@@ -1,5 +1,7 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAppState } from '../../state/AppStateProvider';
+import { taskPersonnelScope } from '../../state/taskPersonnelScope.js';
+import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { Spinner } from '../../components/Loader';
@@ -41,7 +43,6 @@ import {
   useAssignmentScopeProjects,
   useAssignmentScopeSicils,
   useCalendars,
-  useTaskActions,
   useTaskPrimaryBaseline
 } from '../../state/hooks';
 import {
@@ -54,9 +55,7 @@ import {
   selectSuccessors
 } from './taskSuccessorPolicy.js';
 import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
-import { closeAfterTaskDrafts, finalTaskFieldPatch } from './taskDraft.js';
 import { resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
-import { canCloseWithTaskTitle, useTaskTitleDraft } from './taskTitleDraft.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
@@ -124,18 +123,23 @@ export function TaskDrawer({
   onProposeSchedule = null,
   canDelete = true,
   isSaving = false,
+  hasUnsavedChanges = false,
+  saveError = null,
+  onUpdateRelatedTask = null,
   isCreating = false,
   onSave = null,
+  generateSeries = false,
+  onPrepareSeries = null,
   creatorFallback = null
 }) {
   const people = useAllPeople();
+  const { isExecutive, isSystemAdmin } = useAppState();
   const projects = useAllProjects();
   const calendars = useCalendars();
   const allWbs = useAllWbs();
   const assignmentScopeProjects = useAssignmentScopeProjects();
   const assignmentScopeSicils = useAssignmentScopeSicils();
   const { baseline, snapshot: baselineSnapshot } = useTaskPrimaryBaseline(task.id);
-  const { generateTaskSeries, cancelTaskFieldUpdates, updateTask } = useTaskActions();
   // Üretilmiş yinelemelerin DEĞİŞMEZ seri kimlikleri. Sayı tek başına yetmez:
   // panel kaç yinelemenin daha oluşacağını söyleyebilmek için hangi günlerin
   // zaten kalıcılaştığını bilmek zorundadır.
@@ -149,31 +153,9 @@ export function TaskDrawer({
   );
   const [local, setLocal] = useState({ ...task });
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
-  const descriptionDraftRef = useRef(null);
-  const closingRef = useRef(null);
-  const {
-    draft: titleDraft,
-    change: changeTitle,
-    flush: flushTitle,
-    valid: titleValid
-  } = useTaskTitleDraft({
-    canonicalTitle: task.task,
-    persist: (value) => onUpdate(task.id, { task: value }),
-    cancel: () => cancelTaskFieldUpdates(task.id, ['task'])
-  });
-
-  useEffect(() => {
-    descriptionDraftRef.current = null;
-    closingRef.current = null;
-  }, [task.id]);
-
-  useEffect(() => {
-    setLocal((current) => {
-      const next = { ...task };
-      if (descriptionDraftRef.current !== null) next.description = descriptionDraftRef.current;
-      return next;
-    });
-  }, [task]);
+  const titleDraft = local.task || '';
+  const titleValid = Boolean(titleDraft.trim());
+  useEffect(() => { setLocal({ ...task }); }, [task]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === local.projectId) || null,
@@ -268,13 +250,9 @@ export function TaskDrawer({
   // yöneticinin kapsamında olmasını şart koşar. Seçici bütün rehberi
   // gösterseydi (yöneticinin bir FULL projesi varsa rehber eksiksiz gelir),
   // kapsam dışı bir kişi seçmek garanti reddedilen bir kayıt üretirdi.
-  const assignmentScopeOnly = useMemo(() => {
-    if (!local.projectId) return null;
-    const writable = projects.find((project) => project.id === local.projectId);
-    const isAssignOnly = !writable || (writable.accessLevel && writable.accessLevel !== 'FULL');
-    if (!isAssignOnly) return null;
-    return new Set(assignmentScopeSicils.map(String));
-  }, [assignmentScopeSicils, local.projectId, projects]);
+  const assignmentScopeOnly = useMemo(() => taskPersonnelScope({
+    project: selectedProject, isExecutive, isSystemAdmin, assignmentScopeSicils
+  }), [selectedProject, isExecutive, isSystemAdmin, assignmentScopeSicils]);
 
   const personOptions = useMemo(() => {
     const selectedIds = new Set(selectedAssignees.map((record) => record.id).filter(Boolean).map(String));
@@ -298,55 +276,12 @@ export function TaskDrawer({
   }, [people, selectedAssignees, assignmentScopeOnly]);
 
   const save = (patch) => {
-    const next = { ...local, ...patch };
-    setLocal(next);
-    onUpdate(task.id, patch);
+    if (isSaving) return;
+    return onUpdate(task.id, patch);
   };
 
-  const changeDescription = (value) => {
-    descriptionDraftRef.current = value;
-    setLocal((current) => ({ ...current, description: value }));
-  };
-
-  const closeWithDraft = () => {
-    if (closingRef.current) return closingRef.current;
-    if (!canCloseWithTaskTitle(titleDraft)) {
-      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
-    }
-    const draft = descriptionDraftRef.current;
-    const patch = draft === null
-      ? null
-      : finalTaskFieldPatch(task, { ...task, description: draft }, 'description');
-    const closing = closeAfterTaskDrafts({
-      flushTitle,
-      persistDescription: () => (
-        patch ? onUpdate(task.id, patch) : Promise.resolve({ ok: true, value: null })
-      ),
-      close: onClose
-    });
-    closingRef.current = closing;
-    closing.finally(() => {
-      if (closingRef.current === closing) closingRef.current = null;
-    });
-    return closing;
-  };
-
-  const saveCreationDraft = (options = {}) => {
-    if (!onSave || !canCloseWithTaskTitle(titleDraft)) {
-      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
-    }
-    const description = descriptionDraftRef.current ?? local.description ?? '';
-    return onSave({ ...local, task: titleDraft.trim(), description }, options);
-  };
-
-  const dismiss = isCreating ? onClose : closeWithDraft;
-  const primaryAction = isCreating ? saveCreationDraft : closeWithDraft;
-
-  useEffect(() => {
-    if (local.keyword !== 'Yeni' || projectTags.some((tag) => tag.name === 'Yeni')) return;
-    setLocal((current) => ({ ...current, keyword: '' }));
-    onUpdate(task.id, { keyword: '' });
-  }, [local.keyword, projectTags, task.id, onUpdate]);
+  const dismiss = onClose;
+  const primaryAction = () => onSave?.({ ...local, task: titleDraft.trim() }, { generateSeries });
 
   const changeProject = (projectId) => {
     const project = projects.find((item) => item.id === projectId)
@@ -373,7 +308,7 @@ export function TaskDrawer({
   };
 
   const removeAssignee = (record) => {
-    if (record.id == null) return;
+    if (record.id == null || (assignmentScopeOnly && (local.assigneeIds || []).length <= 1)) return;
     const assigneeIds = (local.assigneeIds || []).filter((id) => String(id) !== String(record.id));
     save(taskAssigneeMutationPatch(local, people, assigneeIds));
   };
@@ -402,9 +337,9 @@ export function TaskDrawer({
                 ilerleme/tarih düzenlemeleri de o istekle birlikte kaybediliyordu. */}
             <textarea
               value={titleDraft}
-              onChange={(e) => changeTitle(e.target.value)}
-              onBlur={flushTitle}
+              onChange={(e) => save({ task: e.target.value })}
               aria-label="Görev başlığı"
+              disabled={isSaving}
               aria-invalid={!titleValid}
               rows={2}
               style={{
@@ -416,15 +351,15 @@ export function TaskDrawer({
             />
             {!titleValid && (
               <span className="drawer-title-warning">
-                <Icons.Alert size={12} /> Görev başlığı boş bırakılamaz; başlık girilene kadar değişiklikler kaydedilmez.
+                <Icons.Alert size={12} /> Kaydetmek için görev başlığı girin.
               </span>
             )}
             <TaskCreatorByline task={task} people={people} fallback={creatorFallback} />
           </div>
-          <button className="icon-btn" onClick={dismiss} title="Kapat (Esc)"><Icons.Close size={16} /></button>
+          <button className="icon-btn" onClick={dismiss} disabled={isSaving} title="Kapat (Esc)"><Icons.Close size={16} /></button>
         </div>
 
-        <div className="drawer-body">
+        <fieldset className="drawer-body" disabled={isSaving}>
           <div className="col" style={{ gap: 12 }}>
             <Section title="Durum" icon={<Icons.Check size={13} />} tone="var(--status-progress)">
               <div className="seg" style={{ width: '100%' }}>
@@ -545,13 +480,14 @@ export function TaskDrawer({
                   <span key={record.key} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
                     <Avatar name={record.name} person={record.person} size="sm" />
                     <span style={{ fontSize: 12 }}>{record.name}</span>
-                    {canManageAssignees && record.id != null && <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>}
+                    {canManageAssignees && record.id != null && <button className="icon-btn" style={{ width: 18, height: 18 }} disabled={Boolean(assignmentScopeOnly && (local.assigneeIds || []).length <= 1)} title="Görevde en az bir sorumlu kalmalıdır." onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>}
                   </span>
                 ))}
               </div>
               <SearchableSelect
                 value=""
                 options={personOptions}
+                ariaLabel="Sorumlu ekle"
                 onChange={addAssignee}
                 placeholder="+ Sorumlu ekle"
                 searchPlaceholder="Ad, sicil, unvan veya birimle ara"
@@ -673,19 +609,19 @@ export function TaskDrawer({
                 onChange={(recurrence, alignment) => save(alignment
                   ? { recurrence, ...alignment }
                   : { recurrence })}
-                onGenerate={() => isCreating ? saveCreationDraft({ generateSeries: true }) : generateTaskSeries(task.id)}
+                onGenerate={onPrepareSeries}
                 isSaving={isSaving}
               />
             </Section>}
 
             <Section title={milestone ? "Gerçekleşen tarih" : "Gerçekleşen tarihler"} icon={<Icons.Clock size={13} />} tone="var(--c-emerald)">
               {milestone ? (
-                <DateField
+                <div className="task-date-grid"><DateField
                   label="Gerçekleşen tarih"
                   value={local.actualFinish}
                   onChange={(date) => save({ actualStart: date || null, actualFinish: date || null, status: date ? 'done' : 'todo', progress: date ? 100 : 0 })}
                   nullable
-                />
+                /></div>
               ) : <div className="task-date-grid">
                 <DateField
                   label="Gerçekleşen başlangıç"
@@ -751,11 +687,11 @@ export function TaskDrawer({
               }
             >
               <RelEditor
+                key={local.projectId}
                 task={local}
                 tasks={tasks}
                 onChange={(deps) => save({ deps })}
-                onUpdateTask={isCreating ? null : updateTask}
-                allowSuccessorEdits={!isCreating}
+                onUpdateTask={onUpdateRelatedTask}
               />
             </Section>}
 
@@ -763,20 +699,21 @@ export function TaskDrawer({
               <textarea
                 className="input" rows={4}
                 value={local.description || ''}
-                onChange={(e) => changeDescription(e.target.value)}
+                onChange={(e) => save({ description: e.target.value })}
                 placeholder="Notlar, gereksinimler, bağlantılar..."
                 style={{ resize: 'vertical', fontFamily: 'inherit' }}
               />
             </Section>
           </div>
-        </div>
+        </fieldset>
 
+        {saveError && <div className="drawer-save-error" role="alert">{saveError}</div>}
         <div className="drawer-foot">
-          {!isCreating && canDelete && <button className="btn" onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
+          {!isCreating && canDelete && <button className="btn" disabled={isSaving} onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>
             <Icons.Trash size={13} /> Sil
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
-          {!isCreating && <TaskReminderButton task={task} size={30} />}
+          {!isCreating && <TaskReminderButton task={task} size={30} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? 'Hatırlatma göndermeden önce değişiklikleri Kaydet ile kaydedin.' : null} />}
           {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"
@@ -916,7 +853,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
     const created = Array.isArray(result.value?.taskUpserts) ? result.value.taskUpserts.length : 0;
     setMessage({
       type: 'success',
-      text: created ? `${created} yineleme oluşturuldu.` : 'Oluşturulacak yeni yineleme yok.'
+      text: result.staged ? 'Tekrarlar Kaydet ile oluşturulacak.' : created ? `${created} yineleme oluşturuldu.` : 'Oluşturulacak yeni yineleme yok.'
     });
   };
 
@@ -1153,7 +1090,7 @@ function RecurrenceEditor({ task, calendar, occurrenceCount, occurrenceDates, on
             disabled={busy || isSaving || !task.plannedStart}
             onClick={generate}
           >
-            <Icons.Plus size={13} /> {busy || isSaving ? 'Oluşturuluyor…' : 'Tekrarları oluştur'}
+            <Icons.Plus size={13} /> {busy || isSaving ? 'Oluşturuluyor…' : 'Tekrarları hazırla'}
           </button>
           <span className="muted" style={{ fontSize: 11.5, alignSelf: 'center' }}>
             {occurrenceCount} yineleme bu seriden üretildi.
@@ -1326,7 +1263,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
 
   const applySuccessorPlan = (plan) => {
     if (!allowSuccessorEdits || !onUpdateTask) {
-      setLinkError('Ardıl ilişkilerini düzenlemek için önce görevi kaydedin.');
+      setLinkError('Ardıl ilişkilerini düzenleme yetkiniz yok.');
       return;
     }
     if (!plan.ok) {
@@ -1441,7 +1378,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
           aria-selected={tab === 'successors'}
           className={tab === 'successors' ? 'active' : ''}
           disabled={!allowSuccessorEdits}
-          title={!allowSuccessorEdits ? 'Ardıl ilişkilerini düzenlemek için önce görevi kaydedin.' : undefined}
+          title={!allowSuccessorEdits ? 'Ardıl ilişkilerini düzenleme yetkiniz yok.' : undefined}
           onClick={() => { setTab('successors'); setLinkError(null); }}
         >
           <Icons.ArrowRight size={12} /> Ardıllar <span className="rel-tab-count">{successors.length}</span>
@@ -1489,8 +1426,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
           <div className="rel-direction-note">
             <Icons.Info size={12} />
             <span>
-              Ardıl ilişkisi ARDIL görevin öncül listesinde saklanır; buradan yapılan
-              değişiklik doğrudan o görevin kaydına işlenir.
+              Ardıl bağlantıları da diğer değişikliklerle birlikte Kaydet ile uygulanır.
             </span>
           </div>
           {successors.length === 0 && (

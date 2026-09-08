@@ -290,8 +290,8 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     return pending.size > 0 || inFlight.size > 0 || failed.size > 0;
   }
 
-  function hasFailedChanges() {
-    return failed.size > 0;
+  function hasFailedChanges(ids = null) {
+    return ids ? ids.some((id) => failed.has(id)) : failed.size > 0;
   }
 
   /** Saklanan başarısız yamaları kuyruğa alıp yeniden gönderir. */
@@ -458,6 +458,13 @@ export function createStateMutationOrchestrator({
         String(task.id) === String(action.id) ? { ...task, assigneeMutation } : task
       ));
     }
+    if (action.type === 'task/save-draft') {
+      const byId = new Map(action.updates.map((update) => [String(update.id), update.patch]));
+      changes.taskUpserts = changes.taskUpserts.map((task) => ({
+        ...task,
+        assigneeMutation: Object.prototype.hasOwnProperty.call(byId.get(String(task.id)) || {}, 'assigneeIds')
+      }));
+    }
     if (isEmptyChangeSet(changes)) {
       applyStateAction(action);
       return { ok: true, value: null };
@@ -532,7 +539,7 @@ export function createStateMutationOrchestrator({
     // yamalar ve reddedilip saklanan yamalar birlikte sayılır: sekme
     // kapatılırken uyarmak ve yeniden denemeyi önermek için kullanılır.
     hasPendingChanges() { return taskPatches.hasUnsavedChanges(); },
-    hasFailedTaskUpdates() { return taskPatches.hasFailedChanges(); },
+    hasFailedTaskUpdates(ids = null) { return taskPatches.hasFailedChanges(ids); },
     cancelTaskFieldUpdates(id, fields) { taskPatches.cancelFields(id, fields); },
     retryFailedTaskUpdates(options = {}) { return taskPatches.retryFailed(options); },
     discardFailedTaskUpdates() { taskPatches.discardFailed(); },

@@ -73,11 +73,11 @@ test('legacy duplicate-name references are not mapped to an arbitrary employee',
   assert.deepEqual(normalized.sorumlu, []);
 });
 
-test('task drawer boundary resets rejected optimistic edits and persists normalized patches', () => {
+test('task drawer boundary stages normalized patches until explicit saving', () => {
   const source = read('src/features/task-detail/TaskDetailOverlay.jsx');
 
   assert.match(source, /normalizeTaskAssigneePatch\(patch, people\)/);
-  assert.match(source, /setDisplayTask\(\{ \.\.\.task \}\)/);
-  assert.match(source, /updateTask\(taskId, persistedPatch\)/);
+  assert.match(source, /pendingRef\.current\.set\(taskId, entry\)/);
+  assert.match(source, /saveTaskEdits\(\[\.\.\.edits\.values\(\)\]/);
   assert.doesNotMatch(source, /updateTask\(taskId, patch\)/);
 });

@@ -1,4 +1,5 @@
 'use client';
+import { createPersonLookup } from '../../components/avatarIdentity.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
@@ -41,7 +42,7 @@ function projectForm(project, people, tasks) {
     code: project?.code || '',
     name: project?.name || '',
     source: project?.source || 'manual',
-    leadId: project?.leadId || people.find((person) => person.name === project?.lead)?.id || '',
+    leadId: project?.leadId || createPersonLookup(people).byName(project?.lead)?.id || '',
     dataDate: project?.dataDate || '',
     color: project?.color || 'blue',
     // Katalog her zaman kanonik `{name, color, icon}` üçlüleri olarak tutulur;

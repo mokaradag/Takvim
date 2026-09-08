@@ -87,8 +87,8 @@ test('tarih seçici yerel takvim kullanır ve tarayıcının yerel date girişin
 
 test('uzun Notlar metni yalnızca yerel taslak olur ve kaydı bitmeden panel kapanmaz', async () => {
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /onChange=\{\(e\) => changeDescription\(e\.target\.value\)\}/);
-  assert.doesNotMatch(drawer, /save\(\{ description: e\.target\.value \}\)/);
+  assert.match(drawer, /onChange=\{\(e\) => save\(\{ description: e\.target\.value \}\)\}/);
+  assert.doesNotMatch(drawer, /onUpdateTask=\{isCreating \? null : updateTask\}/);
 
   const longNote = 'Uzun not '.repeat(10000);
   const patch = finalTaskFieldPatch({ description: 'Eski' }, { description: longNote }, 'description');

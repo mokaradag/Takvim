@@ -252,7 +252,7 @@ dışa aktarımda ne taşınacağını aynı anda görür. Bunlara ek olarak:
 - **yineleme takvimi** ilk sekiz günü haftanın günüyle birlikte gösterir,
 - haftanın günleri serbestçe seçilip **kaldırılabilir**.
 
-"Tekrarları oluştur" düğmesi yinelemeleri gerçek görev olarak üretir.
+"Tekrarları hazırla" düğmesi üretimi taslağa ekler; "Kaydet" yinelemeleri gerçek görev olarak oluşturur.
 
 Görev listesinde seri şablonu **Seri**, üretilen yinelemeler **Tekrar** rozetiyle
 işaretlenir.
@@ -273,6 +273,6 @@ yalnızca bir kez yazar.
 
 ### Yeni görevde tekrarları oluşturma
 
-Kapsamlı Kipte yeni görev taslağının **Tekrarları oluştur** düğmesi, girilen başlık ve açıklama dahil şablonu ve ilk tekrar partisini tek kalıcı değişiklik kümesinde kaydeder. Önce Kaydet düğmesine basıp görevi yeniden açmak gerekmez. SQL katmanı tüm kümeyi tek işlemde yazar; bir kayıt reddedilirse taslak kapanmaz. Kayıt sürerken Kaydet ve tekrar üretimi aynı kayıt sözünü paylaşır.
+Kapsamlı Kipte **Tekrarları hazırla**, yeni veya mevcut görevin tekrar üretim isteğini yerel taslağa ekler. Şablon ve ilk tekrar partisi yalnızca **Kaydet** ile tek kalıcı değişiklik kümesinde yazılır. Önce kaydedip görevi yeniden açmak gerekmez. Başlık, açıklama ve diğer alanlar aynı işlemde yer alır; SQL katmanında bir kayıt reddedilirse tüm küme geri alınır ve taslak açık kalır. Tekrar tıklama aynı kaydı çoğaltmaz.
 
 Yeni ve mevcut şablonlar `src/state/recurringTaskCreation.js` içindeki ortak planlayıcıyı kullanır. İş takvimi, 60 görevlik parti sınırı, değişmez yineleme kimlikleri ve daha önce üretilmiş günlerin tekilleştirilmesi korunur. Sorumluya tanınan dar görev oluşturma yetkisi yapısal tekrar yetkisine dönüşmez.

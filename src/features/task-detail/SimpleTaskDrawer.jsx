@@ -1,21 +1,19 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAppState } from '../../state/AppStateProvider';
+import { taskPersonnelScope } from '../../state/taskPersonnelScope.js';
+import { useEffect, useMemo, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { Spinner } from '../../components/Loader';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar, StatusIcon } from '../../components/ui';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
-import { findProjectTag, projectTagCatalog } from '../../domain/tags';
 import { ownsSimpleModePlan } from './simpleTaskPlan.js';
 import { filterTaskAssigneeCandidates, resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
-import { keywordDirtyFields, reconcileTaskDraft, runCurrentKeywordCommit } from './taskDraft.js';
-import { canCloseWithTaskTitle, useTaskTitleDraft } from './taskTitleDraft.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
-import { useAllProjects, useAllPeople, useAssignmentScopeSicils, useTaskActions } from '../../state/hooks';
-import { canWriteProject } from '../../state/projectWritePolicy.js';
+import { useAllProjects, useAllPeople, useAssignmentScopeSicils } from '../../state/hooks';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 /**
@@ -45,37 +43,21 @@ export function SimpleTaskDrawer({
   onProposeSchedule = null,
   canDelete = true,
   isSaving = false,
+  hasUnsavedChanges = false,
+  saveError = null,
   isCreating = false,
   onSave = null,
   creatorFallback = null
 }) {
   const people = useAllPeople();
+  const { isExecutive, isSystemAdmin } = useAppState();
   const projects = useAllProjects();
   const assignmentScopeSicils = useAssignmentScopeSicils();
-  const { cancelTaskFieldUpdates, updateProject } = useTaskActions();
   const [local, setLocal] = useState({ ...task });
-  const [catalogWarning, setCatalogWarning] = useState(null);
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
-  const closingRef = useRef(null);
-  const keywordDraftRef = useRef(null);
-  const {
-    draft: titleDraft,
-    change: changeTitle,
-    flush: flushTitle,
-    valid: titleValid
-  } = useTaskTitleDraft({
-    canonicalTitle: task.task,
-    persist: (value) => onUpdate(task.id, { task: value }),
-    cancel: () => cancelTaskFieldUpdates?.(task.id, ['task'])
-  });
-
-  useEffect(() => {
-    setLocal((current) => reconcileTaskDraft(
-      task,
-      current,
-      keywordDirtyFields(keywordDraftRef.current)
-    ).task);
-  }, [task]);
+  useEffect(() => { setLocal({ ...task }); }, [task]);
+  const titleDraft = local.task || '';
+  const titleValid = Boolean(titleDraft.trim());
 
   const project = useMemo(
     () => projects.find((item) => item.id === task.projectId) || null,
@@ -83,91 +65,12 @@ export function SimpleTaskDrawer({
   );
 
   const save = (patch) => {
-    setLocal((current) => ({ ...current, ...patch }));
-    onUpdate(task.id, patch);
+    if (isSaving) return;
+    return onUpdate(task.id, patch);
   };
 
-  const closeWithTitle = () => {
-    if (closingRef.current) return closingRef.current;
-    if (!canCloseWithTaskTitle(titleDraft)) {
-      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
-    }
-    const closing = (async () => {
-      const titleResult = await flushTitle();
-      const closeResult = await onClose();
-      return titleResult?.ok === false ? titleResult : closeResult;
-    })();
-    closingRef.current = closing;
-    closing.finally(() => {
-      if (closingRef.current === closing) closingRef.current = null;
-    });
-    return closing;
-  };
-
-  const saveCreationDraft = () => {
-    if (!onSave || !canCloseWithTaskTitle(titleDraft)) {
-      return Promise.resolve({ ok: false, error: { code: 'TASK_TITLE_REQUIRED' } });
-    }
-    return onSave({ ...local, task: titleDraft.trim() });
-  };
-
-  const dismiss = isCreating ? onClose : closeWithTitle;
-  const primaryAction = isCreating ? saveCreationDraft : closeWithTitle;
-
-  /**
-   * Kısa açıklamayı proje etiket KATALOĞUYLA uyumlu kaydeder.
-   *
-   * Serbest metin doğrudan yazıldığında katalogda karşılığı olmayan bir etiket
-   * kalıyor ve katalog tabanlı seçiciler, yeniden adlandırma ile renk yayılımı
-   * bu değeri temsil edemiyordu. Katalog yazması ikincildir: proje üst verisi
-   * yazılamıyorsa (atama kapsamı) görev etiketi yine korunur.
-   */
-  const commitKeyword = async (value) => {
-    const requested = String(value || '').trim();
-    const draftAtCommit = keywordDraftRef.current;
-    setCatalogWarning(null);
-    // DEĞİŞMEYEN değer yeniden yazılmaz. `onBlur` her odak kaybında çalışıyor;
-    // alana girip hiçbir şey değiştirmeden çıkan kullanıcı da `onUpdate`
-    // çağrısını tetikliyor ve görev sürümü boş yere ilerliyordu. Öncelik ve
-    // durum denetimleri bu boş yazmaları bilinçli olarak eler; etiket alanı da
-    // aynı kuralı uygular.
-    if (requested === String(task.keyword || '').trim()) {
-      // Yerel taslak KALICI değere geri alınır. Yalnızca baştaki/sondaki boşluk
-      // eklenmişse `requested` eşit çıkar ve yazma atlanır, ama `local.keyword`
-      // ham taslağı tutmaya devam ederdi: kullanıcı kaydedilmemiş bir değer
-      // görür, yenileme ya da yeniden açılışta o değer kaybolurdu.
-      setLocal((current) => ({ ...current, keyword: task.keyword || '' }));
-      keywordDraftRef.current = null;
-      return;
-    }
-    if (!requested) {
-      keywordDraftRef.current = null;
-      onUpdate(task.id, { keyword: '' });
-      return;
-    }
-    const catalog = projectTagCatalog(project);
-    const existing = findProjectTag(catalog, requested);
-    if (existing) {
-      keywordDraftRef.current = null;
-      setLocal((current) => ({ ...current, keyword: existing.name }));
-      onUpdate(task.id, { keyword: existing.name });
-      return;
-    }
-    if (canWriteProject(project)) {
-      const settled = await runCurrentKeywordCommit({
-        draftAtCommit,
-        getCurrentDraft: () => keywordDraftRef.current,
-        commit: () => updateProject(project.id, { tags: [...catalog, { name: requested }] })
-      });
-      if (!settled.current) return;
-      const { result } = settled;
-      if (!result?.ok) {
-        setCatalogWarning('Etiket proje kataloğuna eklenemedi; görevde saklandı.');
-      }
-    }
-    keywordDraftRef.current = null;
-    onUpdate(task.id, { keyword: requested });
-  };
+  const dismiss = onClose;
+  const primaryAction = () => onSave?.({ ...local, task: titleDraft.trim(), keyword: String(local.keyword || '').trim() });
 
   const selectedAssignees = useMemo(() => {
     // Fotoğraf kimlikleri de taşınır: rehberde çözülemeyen eş sorumlular için
@@ -197,10 +100,9 @@ export function SimpleTaskDrawer({
   // kapsamında olmasını şart koşar; seçici bütün rehberi gösterseydi kapsam dışı
   // bir kişi seçmek garanti reddedilen bir kayıt üretirdi (Kapsamlı Kipteki
   // TaskDrawer ile aynı kural).
-  const assignmentScopeOnly = useMemo(() => {
-    if (!project || canWriteProject(project)) return null;
-    return new Set(assignmentScopeSicils.map(String));
-  }, [assignmentScopeSicils, project]);
+  const assignmentScopeOnly = useMemo(() => taskPersonnelScope({
+    project: project, isExecutive, isSystemAdmin, assignmentScopeSicils
+  }), [project, isExecutive, isSystemAdmin, assignmentScopeSicils]);
 
   const personOptions = useMemo(() => {
     return filterTaskAssigneeCandidates(people, selectedAssignees)
@@ -217,6 +119,7 @@ export function SimpleTaskDrawer({
   }, [people, selectedAssignees, assignmentScopeOnly]);
 
   const setAssignees = (ids) => {
+    if (assignmentScopeOnly && !ids.length) return;
     save(taskAssigneeMutationPatch(local, people, ids));
   };
 
@@ -240,23 +143,22 @@ export function SimpleTaskDrawer({
             </span>
             <TaskCreatorByline task={task} people={people} fallback={creatorFallback} />
           </div>
-          <button className="icon-btn" onClick={dismiss} aria-label="Kapat"><Icons.Close size={15} /></button>
+          <button className="icon-btn" onClick={dismiss} disabled={isSaving} aria-label="Kapat"><Icons.Close size={15} /></button>
         </header>
 
-        <div className="drawer-body col" style={{ gap: 14 }}>
+        <fieldset className="drawer-body col" style={{ gap: 14 }} disabled={isSaving}>
           <label className="simple-field">
             <span>Görev</span>
             <input
               className="input"
               value={titleDraft}
-              onChange={(event) => changeTitle(event.target.value)}
-              onBlur={flushTitle}
+              onChange={(event) => save({ task: event.target.value })}
               aria-invalid={!titleValid}
               placeholder="Yapılacak işi yazın"
             />
             {!titleValid && (
               <span className="drawer-title-warning">
-                <Icons.Alert size={12} /> Görev başlığı boş bırakılamaz; başlık girilene kadar panel kapatılamaz.
+                <Icons.Alert size={12} /> Kaydetmek için görev başlığı girin.
               </span>
             )}
           </label>
@@ -266,17 +168,9 @@ export function SimpleTaskDrawer({
             <input
               className="input"
               value={local.keyword || ''}
-              // Yazarken yalnızca yerel taslak güncellenir; katalog eşlemesi ve
-              // kalıcılaştırma alan bırakıldığında yapılır, böylece her tuş
-              // vuruşu proje kataloğuna yazma denemesine dönüşmez.
-              onChange={(event) => {
-                keywordDraftRef.current = event.target.value;
-                setLocal((current) => ({ ...current, keyword: event.target.value }));
-              }}
-              onBlur={(event) => commitKeyword(event.target.value)}
+              onChange={(event) => save({ keyword: event.target.value })}
               placeholder="Örn. Teklif, Onay, Teslim"
             />
-            {catalogWarning && <small className="muted">{catalogWarning}</small>}
           </label>
 
           <div className="simple-field">
@@ -291,6 +185,8 @@ export function SimpleTaskDrawer({
                     className="icon-btn"
                     style={{ width: 20, height: 20 }}
                     aria-label={`${record.name} kaldır`}
+                    disabled={Boolean(assignmentScopeOnly && (local.assigneeIds || []).length <= 1)}
+                    title="Görevde en az bir sorumlu kalmalıdır."
                     onClick={() => setAssignees((local.assigneeIds || [])
                       .filter((id) => String(id) !== String(record.id)))}
                   >
@@ -392,17 +288,19 @@ export function SimpleTaskDrawer({
               })}
             </div>
           </div>
-        </div>
+        </fieldset>
 
+        {saveError && <div className="drawer-save-error" role="alert">{saveError}</div>}
         <div className="drawer-foot">
           {!isCreating && canDelete && <button
             className="btn"
+            disabled={isSaving}
             onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}
           >
             <Icons.Trash size={13} /> Sil
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki kipte de aynı. */}
-          {!isCreating && <TaskReminderButton task={task} size={30} />}
+          {!isCreating && <TaskReminderButton task={task} size={30} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? 'Hatırlatma göndermeden önce değişiklikleri Kaydet ile kaydedin.' : null} />}
           {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"

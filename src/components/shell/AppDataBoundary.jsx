@@ -18,13 +18,15 @@ import { useDataMode } from './DataModeContext';
  * yerleştirir.
  */
 function DataMessage({ children }) {
-  const logoUrl = process.env.NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL?.trim();
+  const logoUrl = publicRotaPath('/api/mergen-rota/company-logo');
   const [logoFailed, setLogoFailed] = useState(false);
   return (
     <div className="app-boot">
       <div className="app-boot-stars" aria-hidden="true" />
+      <div className="app-boot-nebula" aria-hidden="true" />
+      <div className="app-boot-orbit" aria-hidden="true" />
       {logoUrl && !logoFailed && <Image className="app-boot-company-logo" src={logoUrl}
-        alt="Kurum logosu" width={164} height={48} unoptimized onError={() => setLogoFailed(true)} />}
+        alt="Kurum logosu" width={220} height={64} unoptimized onError={() => setLogoFailed(true)} />}
       <div className="app-boot-card">{children}</div>
     </div>
   );

@@ -223,6 +223,8 @@
 .simple-tasks-table .simple-tasks-open { width: 100%; min-width: 0; white-space: normal; }
 .simple-tasks-table .simple-tasks-title { overflow-wrap: anywhere; }
 .simple-tasks-table .simple-tasks-priority, .simple-tasks-table .status-pill { white-space: normal; flex-wrap: wrap; }
-.simple-tasks-table .tasks-actions-col, .simple-tasks-table .tasks-actions-cell { position: static; width: auto; padding-inline: 2px; box-shadow: none; }
+.simple-tasks-table .tasks-actions-col, .simple-tasks-table .tasks-actions-cell { width: auto; padding-inline: 2px; box-shadow: none; }
+.simple-tasks-table .tasks-actions-col { position: sticky; top: 0; z-index: 4; background: var(--bg-elev); }
+.simple-tasks-table .tasks-actions-cell { position: static; }
 .simple-tasks-table .simple-tasks-actions { flex-wrap: wrap; }
 .simple-tasks-table .avatar-stack { flex-wrap: wrap; max-width: 100%; }

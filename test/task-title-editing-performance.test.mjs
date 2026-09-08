@@ -222,23 +222,20 @@ for (const mode of ['throw', 'reject']) {
   });
 }
 
-test('iki görev düzenleyicisi de başlığı yerel taslakla işler ve kapanışta boşaltır', () => {
+test('iki görev düzenleyicisi başlığı yalnızca Kaydet ile gönderir', () => {
   for (const file of [
     'src/features/task-detail/TaskDrawer.jsx',
     'src/features/task-detail/SimpleTaskDrawer.jsx'
   ]) {
     const source = read(file);
-    assert.match(source, /useTaskTitleDraft\(/);
     assert.match(source, /value=\{titleDraft\}/);
-    assert.match(source, /onChange=\{\((?:event|e)\) => changeTitle\((?:event|e)\.target\.value\)\}/);
-    assert.match(source, /onBlur=\{flushTitle\}/);
-    assert.match(source, /await flushTitle\(\)|Promise\.all\(\[[\s\S]*?flushTitle\(\)|closeAfterTaskDrafts\(\{/);
-    assert.match(source, /if \(!canCloseWithTaskTitle\(titleDraft\)\)/);
-    assert.doesNotMatch(source, /onChange=\{[^}]*onUpdate\([^}]*task:/);
+    assert.match(source, /const primaryAction = \(\) => onSave/);
+    assert.match(source, /disabled=\{isSaving \|\| !titleValid\}/);
+    assert.doesNotMatch(source, /onBlur=\{flushTitle\}|useTaskTitleDraft\(/);
   }
 });
 
-test('boş başlık panel kapanışını engeller', () => {
+test('boş başlık kaydetmeye uygun değildir', () => {
   assert.equal(canCloseWithTaskTitle('Yeni başlık'), true);
   assert.equal(canCloseWithTaskTitle('   '), false);
   assert.equal(canCloseWithTaskTitle(null), false);
