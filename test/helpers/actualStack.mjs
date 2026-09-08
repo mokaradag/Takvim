@@ -80,12 +80,14 @@ export async function createActualStack(seed = {}, options = {}) {
   const snapshotRoute = await import('../../src/app/api/mergen-rota/snapshot/route.js');
   const sessionRoute = await import('../../src/app/api/mergen-rota/session/route.js');
   const scheduleCreateRoute = await import('../../src/app/api/mergen-rota/schedule-changes/route.js');
+  const activityRoute = await import('../../src/app/api/mergen-rota/reports/task-activities/route.js');
   const scheduleDecisionRoute = await import('../../src/app/api/mergen-rota/schedule-changes/[requestId]/route.js');
 
   const requests = [];
   const fetchImplementation = async (url, init = {}) => {
     const path = String(url);
     requests.push({ path, method: init.method || 'GET' });
+    if (path.includes('/reports/task-activities')) return activityRoute.GET(new Request('http://localhost' + path));
     if (path.endsWith('/commit')) {
       return commitRoute.POST(new Request('http://localhost' + path, {
         method: 'POST',
@@ -106,6 +108,10 @@ export async function createActualStack(seed = {}, options = {}) {
         headers: { 'content-type': 'application/json' },
         body: init.body
       }));
+    }
+    if (/\/api\/mergen-rota\/schedule-changes(?:\?|$)/.test(path) && (init.method || 'GET') !== 'POST') {
+      const req = new Request('http://localhost' + path, { method: init.method || 'GET', headers: { 'content-type': 'application/json' }, ...(init.body ? { body: init.body } : {}) });
+      return (init.method === 'PATCH' ? scheduleCreateRoute.PATCH : scheduleCreateRoute.GET)(req);
     }
     const scheduleMatch = path.match(/\/api\/mergen-rota\/schedule-changes\/([^/]+)$/);
     if (scheduleMatch && (init.method || 'GET') === 'PATCH') {

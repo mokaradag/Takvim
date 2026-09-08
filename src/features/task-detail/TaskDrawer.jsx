@@ -1,7 +1,8 @@
 'use client';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { useAppState } from '../../state/AppStateProvider';
 import { taskPersonnelScope } from '../../state/taskPersonnelScope.js';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { Spinner } from '../../components/Loader';
@@ -151,11 +152,12 @@ export function TaskDrawer({
     () => tasks.filter((item) => item.recurrenceParentId === task.id).length,
     [tasks, task.id]
   );
-  const [local, setLocal] = useState({ ...task });
+  const local = task;
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const drawerRef = useRef(null);
+  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, onClose, blocked: isSaving, enabled: !scheduleDialogOpen });
   const titleDraft = local.task || '';
   const titleValid = Boolean(titleDraft.trim());
-  useEffect(() => { setLocal({ ...task }); }, [task]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === local.projectId) || null,
@@ -322,7 +324,7 @@ export function TaskDrawer({
   return (
     <>
       <div className="drawer-backdrop" onClick={dismiss} />
-      <div className="drawer">
+      <div ref={drawerRef} className="drawer" role="dialog" aria-modal="true" aria-label="Görev ayrıntısı" tabIndex={-1}>
         <div className="drawer-head">
           <div className="col" style={{ gap: 8, flex: 1 }}>
             <div className="row" style={{ gap: 8 }}>

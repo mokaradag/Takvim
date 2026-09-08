@@ -1,4 +1,6 @@
 'use client';
+import { scheduleRequestItems } from '../schedule-change/scheduleRequestQueryState.js';
+import { useScheduleRequestQuery } from '../schedule-change/useScheduleRequestQuery.js';
 import { useEffect, useRef, useState } from 'react';
 import {
   useAllPeople, useAllProjects, useAllTasks, useTaskAssignmentScope, useCurrentUser,
@@ -157,7 +159,9 @@ export function TaskDetailOverlay({ simple = false }) {
   const assignableProjects = useTaskAssignmentScope();
   const people = useAllPeople();
   const currentUser = useCurrentUser();
-  const scheduleRequests = useScheduleRequests();
+  const previewRequests = useScheduleRequests();
+  const requestQuery = useScheduleRequestQuery({ tab: 'sent', status: 'PENDING', taskId: task?.id }, Boolean(task?.id && creationDraft?.task?.id !== task.id));
+  const scheduleRequests = scheduleRequestItems(previewRequests, requestQuery);
   if (!task) return null;
   return <TaskEditor key={task.id} {...{ task, simple, creationDraft, tasks, projects, assignableProjects, people, currentUser, scheduleRequests }} />;
 }

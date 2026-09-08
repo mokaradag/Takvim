@@ -255,6 +255,10 @@ BEGIN TRY
     CREATE TABLE dbo.MR_TaskScheduleChangeRequests (
         RequestId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskScheduleChangeRequests_Id DEFAULT NEWSEQUENTIALID(),
         TaskId uniqueidentifier NOT NULL,
+        TaskTitleSnapshot nvarchar(1000) NULL,
+        ProjectIdSnapshot uniqueidentifier NULL,
+        ProjectNameSnapshot nvarchar(1000) NULL,
+        ProjectCodeSnapshot nvarchar(100) NULL,
         RequesterSicil int NOT NULL,
         DecisionOwnerSicil int NOT NULL,
         OriginalPlannedStart date NULL,
@@ -272,8 +276,6 @@ BEGIN TRY
         DecisionMessage nvarchar(2000) NULL,
         RowVersion rowversion NOT NULL,
         CONSTRAINT PK_MR_TaskScheduleChangeRequests PRIMARY KEY (RequestId),
-        CONSTRAINT FK_MR_TaskScheduleChangeRequests_Tasks FOREIGN KEY (TaskId)
-            REFERENCES dbo.MR_Tasks(TaskId) ON DELETE CASCADE,
         CONSTRAINT CK_MR_TaskScheduleChangeRequests_Status
             CHECK (Status IN ('PENDING','ACCEPTED','REJECTED','CANCELLED','STALE')),
         CONSTRAINT CK_MR_TaskScheduleChangeRequests_PlannedDates
@@ -286,6 +288,17 @@ BEGIN TRY
         ON dbo.MR_TaskScheduleChangeRequests(DecisionOwnerSicil, Status, CreatedAt DESC);
     CREATE INDEX IX_MR_TaskScheduleChangeRequests_RequesterStatus
         ON dbo.MR_TaskScheduleChangeRequests(RequesterSicil, Status, CreatedAt DESC);
+
+        CREATE TABLE dbo.MR_ScheduleRequestNotifications (
+            RequestId uniqueidentifier NOT NULL,
+            Sicil int NOT NULL,
+            ReadVersion binary(8) NULL,
+            DismissedVersion binary(8) NULL,
+            UpdatedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_ScheduleRequestNotifications_UpdatedAt DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT PK_MR_ScheduleRequestNotifications PRIMARY KEY (RequestId, Sicil),
+            CONSTRAINT FK_MR_ScheduleRequestNotifications_Request FOREIGN KEY (RequestId)
+                REFERENCES dbo.MR_TaskScheduleChangeRequests(RequestId)
+        );
 
     CREATE TABLE dbo.MR_TaskDependencies (
         TaskDependencyId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskDependencies_Id DEFAULT NEWSEQUENTIALID(),
@@ -363,6 +376,8 @@ BEGIN TRY
     CREATE INDEX IX_MR_AuditLog_Actor_Occurred ON dbo.MR_AuditLog(ActorSicil, OccurredAt DESC);
     CREATE INDEX IX_MR_AuditLog_Entity_Occurred ON dbo.MR_AuditLog(EntityType, EntityId, OccurredAt DESC);
     CREATE INDEX IX_MR_AuditLog_Correlation ON dbo.MR_AuditLog(CorrelationId);
+    CREATE INDEX IX_MR_AuditLog_Type_Occurred ON dbo.MR_AuditLog(EntityType, OccurredAt DESC, AuditId DESC)
+        INCLUDE (ActorSicil, ProjectId, EntityId, CorrelationId, ActionCode);
 
     -- Kurumsal iş dağılım ağacı eşitlemesinin parmak izi defteri.
     -- CN43N kaynağı proje başına binlerce satır döndürür ve gün içinde nadiren
@@ -557,7 +572,9 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0004_tag_appearance_and_recurrence', N'Project tag colour/icon columns and recurring task definition columns'),
            (N'0005_task_reminders', N'Task reminder e-mail settings, template and persistent send history'),
            (N'0006_audit_deactivation', N'Denetim kaydında geri alınabilir proje devre dışı bırakma eylemi'),
-           (N'0007_task_schedule_change_requests', N'Persistent task schedule change request and decision workflow');
+           (N'0007_task_schedule_change_requests', N'Persistent task schedule change request and decision workflow'),
+           (N'0008_request_notifications', N'Talep geçmişinden ayrı bildirim durumu ve kalıcı görev künyesi'),
+           (N'0009_task_activity_report', N'Görev hareket raporu için tür ve tarih aralığı dizini');
 
     COMMIT TRANSACTION;
 END TRY

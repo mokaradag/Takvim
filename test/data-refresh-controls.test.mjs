@@ -327,7 +327,8 @@ test('büyük görev tabloları tüm satırları aynı anda render etmek yerine 
   const control = read('src/features/tasks/TaskTablePagination.jsx');
   assert.match(advanced, /paged\.rows\.map/);
   assert.match(simple, /paged\.rows\.map/);
-  assert.match(control, /aria-label="Görev sayfaları"/);
+  assert.match(control, /label = 'Görev sayfaları'/);
+  assert.match(control, /aria-label=\{label\}/);
 });
 
 test('görev sayfalama girdileri sınırlandırılır ve geçersiz sayfa boyutları reddedilir', () => {

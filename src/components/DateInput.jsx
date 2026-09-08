@@ -178,6 +178,7 @@ export function DateInput({
   const picker = open && placement && typeof document !== 'undefined' ? createPortal(
     <div
       ref={panelRef}
+      data-modal-owner={rootRef.current?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope')}
       className="date-picker-panel"
       role="dialog"
       aria-label="Tarih seçici"

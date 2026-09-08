@@ -8,18 +8,20 @@ Temel Kipte **Takvim** sayfası açıldığında varsayılan görünüm aylık T
 
 Takvim sayfasında iki sekme bulunur:
 
-1. **Takvim** — varsayılan görünüm; her görevi yalnızca Termin (`targetFinish`) gününde gösterir. Eski bir kayıtta hedef yoksa `plannedFinish` güvenli yedektir; süre `plannedStart`–`plannedFinish` aralığında çoğaltılmaz ve Gantt'ta izlenir.
+1. **Takvim** — varsayılan görünüm; her görevi yalnızca Termin (`targetFinish`) gününde gösterir. Eski bir kayıtta hedef yoksa `plannedFinish` güvenli yedektir; süre `plannedStart`–`plannedFinish` aralığında çoğaltılmaz; ayrıntılı zaman çizelgesi Kapsamlı Kip Gantt görünümünde izlenir.
 2. **Hızlı Görev Tanımı** — proje, görev, isteğe bağlı kısa açıklama/etiket, sorumlular ve termin tarihi ile hızlı kayıt oluşturur.
 
 Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Temel Kipte oluşturulan kayıtlar mevcut Project/Task veri altyapısını kullanmaya devam eder ve Kapsamlı Kipte ayrıntılandırılabilir.
 
-## Temel Kipte Gantt
+## Kip sınırları ve komut arama
 
-Temel Kip gezinmesi `veri`, `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Rol kapılı **yönetici** sayfaları (`ADMIN_NAV_IDS`, örneğin Hatırlatma E-postaları) bu süzgeçten muaftır: yalnızca sistem yöneticisine açılan bir yapılandırma ekranı, kullanıcı Temel Kipte diye ulaşılamaz olmamalıdır. Rol denetimi değişmez — yönetici olmayan bu sayfaları iki kipte de görmez. Gantt, Kapsamlı Kipteki portföy Gantt görünümünün aynısıdır (`WorkspaceGanttView`): Temel Kipte kenar çubuğundan portföy veya tek proje seçilebilir; Gantt seçilen kapsamı gösterir. Ayrı bir Temel Kip Gantt bileşeni yoktur; hızlı görev tanımı yapan kullanıcı planı aynı zaman çizelgesinde görür.
+Temel Kip gezinmesi Görevler, Takvim, Talepler, Kullanım Rehberi ve Ayarlar sayfalarını içerir. Gantt yalnızca Kapsamlı Kiptedir. Temel Kipte kenar çubuğu, komut sonuçları ve dolaylı yönlendirmeler Gantt veya diğer kapsamlı sayfaları açmaz. Rol kapılı yönetici sayfaları yalnızca sistem yöneticisine iki kipte de gösterilir.
+
+**Ara veya komut çalıştır...** düğmesi ile Ctrl/Cmd+K iki kipte de çalışır. Komut paleti kenar çubuğuyla aynı kip/rol listesini kullanır. Görev araması mevcut çalışma alanını daraltır. Tab odağı paletin içinde kalır, ok tuşları sonucu seçer, Enter çalıştırır, Escape kapatır ve odağı geri verir.
 
 ## Temel Kipte Görevler
 
-Temel Kip gezinmesi `veri` (Görevler), `takvim`, `gantt`, `yardim` ve `ayarlar` sayfalarını içerir. Temel Kipte **Görevler** sayfası Kapsamlı Kipteki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
+Temel Kip gezinmesi `veri` (Görevler), `takvim`, `talepler`, `yardim` ve `ayarlar` sayfalarını içerir. Temel Kipte **Görevler** sayfası Kapsamlı Kipteki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
 
 Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`src/features/tasks/simpleTaskColumns.js`):
 
@@ -587,3 +589,29 @@ Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ar
 Kaydedilmemiş görev taslakları sekme kapatma/yenileme korumasına katılır. Demo/Gerçek Sistem geçişi açık taslak varken durur ve Kaydet veya kapatarak vazgeçme yönlendirmesi gösterir. Temel/Kapsamlı Kip değişimi aynı görev taslağını korur. Yerel taslak varken hatırlatma e-postası gönderilemez; önce Kaydet gerekir. Tekrar hazırlama ve ardıl düzenlemeleri de bu korumaya dahildir.
 
 Taslakta proje değişince alan yetkileri birikmiş düzenlemeye göre yeniden hesaplanır. Kaydet, düzenlenen görevlerin önceki gecikmeli yazmalarını önce tamamlar; eski değerler yeni taslağın üzerine yazılmaz. Başarılı yerel yazmanın sürümü ilerletilir, gerçek dış sürüm çakışmaları reddedilir. FULL erişimi olan yöneticiler de son sorumluyu kaldıramaz; dar sorumlu oluşturma kapsamındaki kişi yalnızca kendisini seçebilir.
+
+
+## Talepler ve bildirim önizlemesi
+
+Her iki kipte düz **Talepler** sayfasının Bekleyenler, Gönderdiklerim ve Geçmiş sekmeleri vardır. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+
+## Özet KPI ayrıntı penceresi
+
+Toplam görev, Tamamlanan, Devam eden, Yapılacak ve Geciken kartlarının mevcut zengin açılır listeleri korunur. İçlerindeki **Tüm görevleri gör**, kartın aynı görev kümesiyle geniş bir pencere açar. Özet tarih aralığı ve çalışma alanı kapsamı korunur. Pencere görev/proje/sorumlu araması, proje ve Sicil temelli sorumlu seçimi, 100 kayıtlık sayfalama, başlık ve toplam/eşleşen sayısı içerir. Görev, Proje, Sorumlu, Durum, Başlangıç, Bitiş ve Hedef gösterilir. Görev başlığı mevcut paneli açar; panel kapatılınca liste ve süzgeçler geri gelir. Pencere kapanınca Özet yerinde kalır. Escape, Tab/Shift+Tab odak sınırı ve çağırana odak dönüşü desteklenir. Açık/koyu tema ve yazı ölçeği ortak tasarım değişkenlerini izler.
+
+## Durum, etkin tarihler ve alt gezinme satırı
+
+Her iki kipte durum süzgeci Özetle aynı `getStatus` sonucunu kullanır: `done` → Tamamlandı; bitmemiş ve hedefi geçmiş → Geciken; gecikmemiş `in_progress` → Devam ediyor; gecikmemiş `todo` → Yapılacak. Çoklu seçim bu ayrık kümelerin birleşimidir. Tarihi bugün olan görev gecikmiş sayılmaz.
+
+Kapsamlı Kip Görevler tablosunda **Başlangıç** = `actualStart || plannedStart`, **Bitiş** = `actualFinish || plannedFinish`. Sıralama ve tarih süzgeci hücreyle aynı etkin değeri kullanır; ham plan saklanmaya devam eder. Gerçekleşen tarihin yanında nötr renkli küçük ✓ vardır; erişilebilir açıklaması **Gerçekleşen başlangıç** veya **Gerçekleşen bitiş**tir. İşaret bir başarı veya görev tamamlanması iddiası taşımaz. Temel Kip sade sütunlarını ve Termin anlamını korur.
+
+Tablonun altındaki tek satırda solda **✓ Gerçekleşen tarih · İşaretsiz tarih planlanandır**, sağda **İlk / Önceki / Sayfa n / N / Sonraki / Son** bulunur. İlk sayfada İlk/Önceki, son sayfada Sonraki/Son devre dışıdır. Temel Kip aynı gezinmeyi tarih açıklaması olmadan kullanır. Tek sayfada da konum anlaşılır kalır; dar ekranlarda satır gerektiğinde sarılır.
+
+## Yazarken imleç ve taslak eşitleme
+
+Görev başlığı, Notlar ve diğer alanlar iki kez kopyalanan yerel durum yerine üst görev düzenleyicisinin aynı taslağından doğrudan çizilir. Her tuştan sonra etkiyle eski kontrollü değeri geri yazma yoktur; ortada yazma, seçim değiştirme, silme ve Türkçe karakterler normal alan davranışını izler. Taslak halen yalnızca **Kaydet** ile kalıcılaşır. Dışarıdan gelen görev, dokunulmayan alanları yeniler; yerel yamalar korunur ve başladıkları sürümle kaydedilir. Gerçek dış sürüm çakışması reddedilir.
+
+
+### Raporlar sekmeleri
+
+Kapsamlı Kipte Raporlar tek gezinme öğesi olarak kalır: Performans mevcut raporları, Görev Hareketleri ise kimin hangi görünür görevde ne değiştirdiğini gösterir. Sekmelerin tarih filtreleri bağımsızdır. Hareket raporu Bugün ve uygun kullanıcıda Ekibim ile açılır; Türkiye saatini, sunucu süzgeçlerini ve sayfalamayı kullanır. [Ayrıntılar](TASK-ACTIVITY-REPORT.md).

@@ -1,6 +1,7 @@
 export const NAV_ITEMS = [
   { id: 'ozet', label: 'Özet', icon: 'Dashboard' },
   { id: 'veri', label: 'Görevler', icon: 'Table' },
+  { id: 'talepler', label: 'Talepler', icon: 'Bell' },
   { id: 'wbs', label: 'Proje Yapısı', icon: 'Layers' },
   { id: 'takvim', label: 'Takvim', icon: 'Calendar' },
   { id: 'gantt', label: 'Gantt', icon: 'Gantt' },
@@ -45,6 +46,7 @@ export function simpleCalendarTabForIntent(intent = null) {
 export const PAGE_META = {
   ozet: { title: 'Özet', sub: 'Genel görünüm ve metrikler' },
   veri: { title: 'Görevler', sub: 'Görevleri listele ve düzenle' },
+  talepler: { title: 'Talepler', sub: 'Tarih değişikliği talepleri ve karar geçmişi' },
   wbs: { title: 'Proje Yapısı', sub: 'Proje tanımları, etiketler ve iş dağılım ağacı' },
   takvim: { title: 'Takvim', sub: 'Aylık görünüm' },
   gantt: { title: 'Gantt', sub: 'Zaman çizelgesi ve bağımlılıklar' },
@@ -55,3 +57,10 @@ export const PAGE_META = {
   ayarlar: { title: 'Ayarlar', sub: 'Görünüm ve tercihler' },
   hatirlatma: { title: 'Hatırlatma E-postaları', sub: 'Şablon, otomatik gönderim planı ve gönderim geçmişi' }
 };
+
+export const SIMPLE_NAV_IDS = new Set(['veri', 'takvim', 'talepler', 'yardim', 'ayarlar']);
+
+export function navigationItems(simple, isSystemAdmin) {
+  return NAV_ITEMS.filter((item) => (!simple || SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))
+    && (!ADMIN_NAV_IDS.has(item.id) || isSystemAdmin));
+}

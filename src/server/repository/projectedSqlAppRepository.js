@@ -4,20 +4,29 @@ import { sql, withSqlTransaction } from '../db/pool.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 import { applyDefaultCalendarProjection } from './calendarProjection.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
-import { listScheduleChanges } from '../schedule-change/scheduleChangeStore.js';
+import { readScheduleInbox } from '../schedule-change/scheduleRequestQueries.js';
 
 function missingScheduleRequestSchema(error) {
-  return Number(error?.number) === 208
-    && String(error?.message || '').includes('MR_TaskScheduleChangeRequests');
+  const number = Number(error?.number);
+  const message = String(error?.message || '');
+  if (number === 208) {
+    return ['MR_TaskScheduleChangeRequests', 'MR_ScheduleRequestNotifications']
+      .some((name) => message.includes(name));
+  }
+  if (number === 207) {
+    return ['TaskTitleSnapshot', 'ProjectIdSnapshot', 'ProjectNameSnapshot', 'ProjectCodeSnapshot']
+      .some((name) => message.includes(name));
+  }
+  return false;
 }
 
 async function loadScheduleChanges(executor, auth) {
   try {
-    return await listScheduleChanges(executor, auth);
+    return await readScheduleInbox(executor, auth);
   } catch (error) {
     // Uygulama paketi göçten önce açılırsa eski kurulum kullanılabilir kalır;
     // başka bütün SQL hataları yine görünür biçimde yükseltilir.
-    if (missingScheduleRequestSchema(error)) return [];
+    if (missingScheduleRequestSchema(error)) return { items: [], unreadCount: 0, pendingCount: 0 };
     throw error;
   }
 }
@@ -112,10 +121,10 @@ export function createProjectedSqlAppRepository() {
       const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
       const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds, auth);
       const defaultCalendarId = await loadDefaultCalendarId(transaction);
-      const scheduleRequests = await loadScheduleChanges(transaction, auth);
+      const scheduleInbox = await loadScheduleChanges(transaction, auth);
       Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
       return {
-        snapshot: { ...applyTaskAssigneeProjection(snapshot, assigneeRows), scheduleRequests },
+        snapshot: { ...applyTaskAssigneeProjection(snapshot, assigneeRows), scheduleRequests: scheduleInbox.items, scheduleRequestSummary: { unreadCount: scheduleInbox.unreadCount, pendingCount: scheduleInbox.pendingCount } },
         auth
       };
     }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });

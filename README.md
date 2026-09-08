@@ -1,6 +1,6 @@
 # MERGEN Rota — Görev Yönetimi
 
-Endüstriyel/kontrol paneli tarzında bir görev yönetimi uygulaması: Temel Kipte hızlı görev/termin takibi; Kapsamlı Kipte Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
+Endüstriyel/kontrol paneli tarzında bir görev yönetimi uygulaması: Temel Kipte hızlı görev/termin takibi; her iki kipte Talepler ve komut arama; Kapsamlı Kipte Özet, Görevler, İş Kırılım Yapısı, Takvim, Gantt, Kanban, Raporlar, Ekip ve Ayarlar sayfaları. Next.js App Router ve React kullanır.
 
 MERGEN Rota artık iki tümüyle yalıtılmış **Veri Kipi** sunar:
 
@@ -375,3 +375,14 @@ Personel atamaları SicilNo üzerinden yapılır; aynı adlı çalışanlar ayr�
 Temel Kip eylem başlığı kaydırmada sabit kalır. Takvim kurumsal seçicileri tarih denetimleriyle aynı satırdadır. Tarih talebi rozetleri ve Görevi aç akışı, kilometre taşı gerçekleşen tarih genişliği, yıldızlı açılış ekranı ve daralan kenar çubuğunun menü/fotoğraf yerleşimi güncellenmiştir. Ayrıntılar: [arayüz](docs/SIMPLE-MODE-AND-UI.md), [yetki modeli](docs/AUTHORIZATION-MODEL.md), [logo ve görünüm](docs/UI-STYLING-ARCHITECTURE.md). Veritabanı şema yükseltmesi gerekmez.
 
 Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.
+
+
+### Talepler, bildirimler ve ayrıntılı görev listeleri
+
+**Talepler** her iki kipte düz kenar çubuğunda yer alır: Bekleyenler, Gönderdiklerim ve Geçmiş sekmeleri sunucuda arama/süzme ve 25 kayıtlık sayfalama kullanır. Zil en fazla sekiz önizleme gösterir; okuma/temizleme yalnızca kullanıcıya ait bildirim durumunu değiştirir. Açık kararlar görünür kalır, talep/audit geçmişi silinmez. **Özet** KPI kartlarının zengin açılır listeleri korunur; **Tüm görevleri gör** arama, proje/sorumlu süzgeci ve sayfalama içeren geniş pencereyi açar. Görev panelinden geri dönünce pencerenin arama ve sayfa durumu korunur.
+
+**Temel Kip** Gantt içermez; **Ara veya komut çalıştır...** ve Ctrl/Cmd+K iki kipte de kullanılabilir, sonuçlar kip/rol sınırlarını izler. Görevler durumları birbirini dışlar: geciken bir görev Yapılacak veya Devam ediyor süzgecinde gösterilmez. Kapsamlı Kip Görevler tablosunda Başlangıç/Bitiş gerçekleşen tarih varsa onu, yoksa planlanan tarihi gösterir; sıralama ve süzme aynı tarihi kullanır. Küçük, nötr ✓ gerçekleşen tarihi belirtir. Açıklama ile İlk/Önceki/Sonraki/Son gezinmesi aynı alt satırdadır.
+
+**Dağıtım:** Mevcut veritabanında 0007 sonrasında `database/MR_Upgrade_0008_Request_Notifications.sql` ve `database/MR_Upgrade_0009_Task_Activity_Report.sql` sırasıyla çalıştırılmalıdır; ardından uygulamayı derleyip hizmeti yeniden başlatın. Ayrıntılar: [Talepler ve bildirimler](docs/REQUESTS-AND-NOTIFICATIONS.md), [arayüz sözleşmeleri](docs/SIMPLE-MODE-AND-UI.md).
+
+Raporlar artık **Performans** ve **Görev Hareketleri** sekmelerini içerir. Görev Hareketleri, MR_AuditLog üzerinden yetkili ekibin/görevlerin kalıcı değişikliklerini, gerçek aktör kimliği ve Türkiye takvim günüyle raporlar. [Kapsam, süzgeçler ve tarihçe](docs/TASK-ACTIVITY-REPORT.md).

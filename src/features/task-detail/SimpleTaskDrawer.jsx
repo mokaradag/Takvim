@@ -1,7 +1,8 @@
 'use client';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { useAppState } from '../../state/AppStateProvider';
 import { taskPersonnelScope } from '../../state/taskPersonnelScope.js';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { Spinner } from '../../components/Loader';
@@ -53,9 +54,10 @@ export function SimpleTaskDrawer({
   const { isExecutive, isSystemAdmin } = useAppState();
   const projects = useAllProjects();
   const assignmentScopeSicils = useAssignmentScopeSicils();
-  const [local, setLocal] = useState({ ...task });
+  const local = task;
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
-  useEffect(() => { setLocal({ ...task }); }, [task]);
+  const drawerRef = useRef(null);
+  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, onClose, blocked: isSaving, enabled: !scheduleDialogOpen });
   const titleDraft = local.task || '';
   const titleValid = Boolean(titleDraft.trim());
 
@@ -134,7 +136,7 @@ export function SimpleTaskDrawer({
   return (
     <>
       <div className="drawer-backdrop" onClick={dismiss} />
-      <aside className="drawer simple-task-drawer" role="dialog" aria-label="Görev düzenle">
+      <aside ref={drawerRef} className="drawer simple-task-drawer" role="dialog" aria-modal="true" aria-label="Görev düzenle" tabIndex={-1}>
         <header className="drawer-head">
           <div className="col" style={{ gap: 2, minWidth: 0 }}>
             <span className="simple-mode-badge"><Icons.Sparkle size={12} /> Temel Kip</span>

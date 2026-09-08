@@ -88,6 +88,6 @@ test('Temel Kip durum süzgeci mevcut ortak durum simgesi anlamlarını korur', 
     assert.match(source, /<StatusIcon id=\{status\.value\} size=\{11\} \/>/);
   }
   assert.deepEqual([...simpleTaskFacetValues(tasks, { filters: {} }, 'status', referenceDay)].sort(), [
-    'done', 'in_progress', 'overdue', 'todo'
+    'done', 'in_progress', 'overdue'
   ]);
 });

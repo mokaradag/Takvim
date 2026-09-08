@@ -1761,7 +1761,8 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   }
   const assigneeCreate = !before && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE;
-  if (!await projectRow(executor, projectId)) {
+  const auditProject = await projectRow(executor, projectId);
+  if (!auditProject) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Görev projesi bulunamadı.');
   }
 
@@ -2099,7 +2100,11 @@ async function commitTask(executor, actor, task, correlationId) {
       );
     `);
   }
-  await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'TASK', taskId, projectId, before, milestone ? { ...task, ...milestone } : task);
+  const committed = await taskRow(executor, taskId);
+  const projectIdentity = { ProjectName: auditProject.ProjectName, ProjectCode: auditProject.ProjectCode };
+  await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'TASK', taskId, projectId,
+    before ? { ...before, assigneeIds: authoritativeAssigneeSicils } : null,
+    { ...committed, ...projectIdentity, assigneeIds: assigneeSicils });
   return {
     taskId: id(taskId), projectId, beforeProjectId, wbsId: id(wbsId),
     relatedTaskIds: [...relatedTaskIds]
@@ -2167,6 +2172,11 @@ async function deleteTask(executor, actor, entry, correlationId) {
     OUTPUT deleted.TaskId INTO @relatedTasks(TaskId)
     WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId;
+    IF OBJECT_ID(N'dbo.MR_TaskScheduleChangeRequests', N'U') IS NOT NULL
+      UPDATE dbo.MR_TaskScheduleChangeRequests
+      SET Status = 'STALE', DecidedAt = SYSUTCDATETIME(), DecisionBySicil = @actorSicil,
+          DecisionMessage = N'İlgili görev silindi.'
+      WHERE TaskId = @taskId AND Status = 'PENDING';
     DELETE dbo.MR_Tasks WHERE TaskId = @taskId AND RowVersion = @version;
     SELECT @@ROWCOUNT AS Affected;
     SELECT DISTINCT TaskId FROM @relatedTasks WHERE TaskId <> @taskId;
@@ -2179,7 +2189,9 @@ async function deleteTask(executor, actor, entry, correlationId) {
   if (!result.recordset[0]?.Affected) {
     throw new ServerPersistenceError('CONFLICT', 'Görev silinemedi. Verileri yeniden yükleyin.');
   }
-  await audit(executor, actor, correlationId, 'DELETE', 'TASK', taskId, projectId, before, null);
+  const auditProject = await projectRow(executor, projectId);
+  await audit(executor, actor, correlationId, 'DELETE', 'TASK', taskId, projectId,
+    { ...before, assigneeIds: assigneeSicils, ProjectName: auditProject?.ProjectName, ProjectCode: auditProject?.ProjectCode }, null);
   return {
     taskId: id(taskId),
     projectId,

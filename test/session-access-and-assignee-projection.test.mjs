@@ -53,7 +53,7 @@ test('snapshot API completes assignees only for already-authorized visible task 
   assert.equal((repositorySource.match(/MR_V_CorporateProjectAccess/g) || []).length, 1);
   assert.match(repositorySource, /WHERE auth\.IdentityVisible = 1/);
   assert.match(repositorySource, /LEFT JOIN dbo\.MR_V_PeopleDirectory pd ON pd\.Sicil = ta\.Sicil/);
-  assert.match(repositorySource, /snapshot: \{ \.\.\.applyTaskAssigneeProjection\(snapshot, assigneeRows\), scheduleRequests \}/);
+  assert.match(repositorySource, /snapshot: \{ \.\.\.applyTaskAssigneeProjection\(snapshot, assigneeRows\), scheduleRequests: scheduleInbox\.items, scheduleRequestSummary:/);
   assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
   assert.match(routeSource, /loadSnapshotForRequest\(request, repository\)/);
 
@@ -77,6 +77,14 @@ test('snapshot API completes assignees only for already-authorized visible task 
     headers: { 'x-mergen-rota-refresh-mode': 'automatic' }
   }), fakeRepository);
   assert.deepEqual(modes, ['blocking-before', 'blocking-before', 'background-after', 'background-after']);
+});
+
+test('0007 şemasıyla açılışta 0008 alanları eksikse talep önizlemesi güvenle boş geçilir', () => {
+  const repositorySource = read('src/server/repository/projectedSqlAppRepository.js');
+
+  assert.match(repositorySource, /number === 208[\s\S]*MR_TaskScheduleChangeRequests[\s\S]*MR_ScheduleRequestNotifications/);
+  assert.match(repositorySource, /number === 207[\s\S]*TaskTitleSnapshot[\s\S]*ProjectIdSnapshot[\s\S]*ProjectNameSnapshot[\s\S]*ProjectCodeSnapshot/);
+  assert.match(repositorySource, /return \{ items: \[\], unreadCount: 0, pendingCount: 0 \};/);
 });
 
 test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reason', () => {

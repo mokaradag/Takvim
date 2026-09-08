@@ -6,7 +6,8 @@ import { calculatePlannedDurationDays } from '../../scheduling/plans/index.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
-import { encodeVersion } from '../repository/versionTokens.js';
+import { mapRequest } from './scheduleRequestMapping.js';
+import { readScheduleInbox } from './scheduleRequestQueries.js';
 
 const DATE_FIELDS = Object.freeze([
   ['plannedStart', 'PlannedStart'],
@@ -101,38 +102,6 @@ function hasFullProjectAccess(actor, projectId) {
   return actor.effective.access.get(id)?.accessLevel === 'FULL';
 }
 
-function mapRequest(row, actorSicil) {
-  if (!row) return null;
-  const requesterSicil = String(row.RequesterSicil);
-  const decisionOwnerSicil = String(row.DecisionOwnerSicil);
-  return {
-    id: canonicalActualId(row.RequestId) ?? String(row.RequestId),
-    taskId: canonicalActualId(row.TaskId) ?? String(row.TaskId),
-    taskTitle: row.TaskTitle || '',
-    projectId: canonicalActualId(row.ProjectId) ?? String(row.ProjectId),
-    projectName: row.ProjectName || '',
-    projectCode: row.ProjectCode || '',
-    requesterSicil,
-    requesterName: row.RequesterName || requesterSicil,
-    decisionOwnerSicil,
-    decisionOwnerName: row.DecisionOwnerName || decisionOwnerSicil,
-    originalPlannedStart: isoDate(row.OriginalPlannedStart),
-    proposedPlannedStart: isoDate(row.ProposedPlannedStart),
-    originalPlannedFinish: isoDate(row.OriginalPlannedFinish),
-    proposedPlannedFinish: isoDate(row.ProposedPlannedFinish),
-    originalTargetFinish: isoDate(row.OriginalTargetFinish),
-    proposedTargetFinish: isoDate(row.ProposedTargetFinish),
-    requesterMessage: row.RequesterMessage || '',
-    status: row.Status,
-    createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
-    decidedAt: row.DecidedAt ? new Date(row.DecidedAt).toISOString() : null,
-    decisionBySicil: row.DecisionBySicil == null ? null : String(row.DecisionBySicil),
-    decisionMessage: row.DecisionMessage || '',
-    version: encodeVersion(row.RowVersion),
-    isDecisionOwner: Number(row.DecisionOwnerSicil) === Number(actorSicil),
-    isRequester: Number(row.RequesterSicil) === Number(actorSicil)
-  };
-}
 
 async function audit(executor, actor, actionCode, entityType, entityId, projectId, before, after, correlationId) {
   const request = executor.request();
@@ -196,31 +165,7 @@ async function loadScheduleCalendar(executor, task) {
 }
 
 export async function listScheduleChanges(executor, actor) {
-  const request = executor.request();
-  request.input('sicil', sql.Int, actor.sicil);
-  const result = await request.query(`
-    WITH ActorRequests AS (
-      SELECT r.*,
-        ROW_NUMBER() OVER (
-          PARTITION BY CASE WHEN r.Status = 'PENDING' THEN 0 ELSE 1 END
-          ORDER BY r.CreatedAt DESC, r.RequestId DESC
-        ) AS BucketRow
-      FROM dbo.MR_TaskScheduleChangeRequests r
-      WHERE r.RequesterSicil = @sicil OR r.DecisionOwnerSicil = @sicil
-    )
-    SELECT r.*, t.Title AS TaskTitle, t.ProjectId,
-      p.ProjectName, p.ProjectCode,
-      requester.DisplayName AS RequesterName,
-      ownerPerson.DisplayName AS DecisionOwnerName
-    FROM ActorRequests r
-    JOIN dbo.MR_Tasks t ON t.TaskId = r.TaskId
-    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
-    LEFT JOIN dbo.MR_V_PeopleDirectory requester ON requester.Sicil = r.RequesterSicil
-    LEFT JOIN dbo.MR_V_PeopleDirectory ownerPerson ON ownerPerson.Sicil = r.DecisionOwnerSicil
-    WHERE r.Status = 'PENDING' OR r.BucketRow <= 100
-    ORDER BY CASE WHEN r.Status = 'PENDING' THEN 0 ELSE 1 END, r.CreatedAt DESC, r.RequestId DESC;
-  `);
-  return (result.recordset || []).map((row) => mapRequest(row, actor.sicil));
+  return (await readScheduleInbox(executor, actor)).items;
 }
 
 async function readScheduleChange(executor, actor, requestId) {
@@ -333,14 +278,17 @@ export async function createScheduleChange(input = {}) {
         OriginalPlannedStart, ProposedPlannedStart,
         OriginalPlannedFinish, ProposedPlannedFinish,
         OriginalTargetFinish, ProposedTargetFinish,
-        RequesterMessage, Status, CreatedAgainstTaskVersion
-      ) VALUES(
+        RequesterMessage, Status, CreatedAgainstTaskVersion,
+        TaskTitleSnapshot, ProjectIdSnapshot, ProjectNameSnapshot, ProjectCodeSnapshot
+      ) SELECT
         @requestId, @taskId, @requesterSicil, @decisionOwnerSicil,
         @originalPlannedStart, @proposedPlannedStart,
         @originalPlannedFinish, @proposedPlannedFinish,
         @originalTargetFinish, @proposedTargetFinish,
-        @requesterMessage, 'PENDING', @taskVersion
-      );
+        @requesterMessage, 'PENDING', @taskVersion,
+        t.Title, t.ProjectId, p.ProjectName, p.ProjectCode
+      FROM dbo.MR_Tasks t JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+      WHERE t.TaskId = @taskId;
 
       SELECT RequestId FROM @CancelledRequests;
     `);
@@ -493,12 +441,14 @@ export async function decideScheduleChange(requestIdValue, input = {}) {
         WHERE RequestId = @requestId AND Status = 'PENDING';
       `);
       const beforeDates = {
+        Title: row.TaskTitle,
         plannedStart: isoDate(row.PlannedStart),
         plannedFinish: isoDate(row.PlannedFinish),
         plannedDurationDays: row.PlannedDurationDays == null ? null : Number(row.PlannedDurationDays),
         targetFinish: isoDate(row.TargetFinish)
       };
       const afterDates = {
+        Title: row.TaskTitle,
         plannedStart: isoDate(row.ProposedPlannedStart),
         plannedFinish: isoDate(row.ProposedPlannedFinish),
         plannedDurationDays,

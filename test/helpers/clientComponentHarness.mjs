@@ -41,6 +41,7 @@ export function mountComponent(Component, initialProps) {
   let dirty = true;
   let effects = [];
   let output;
+  const frames = [];
   const sameDeps = (left, right) => left && right && left.length === right.length && left.every((value, i) => Object.is(value, right[i]));
   const memo = (factory, deps) => {
     const index = position++;
@@ -82,14 +83,14 @@ export function mountComponent(Component, initialProps) {
       effects = [];
       const previous = React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher.current;
       React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher.current = dispatcher;
-      try { output = Component(props); }
+      try { output = Component(props); frames.push(output); }
       finally { React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher.current = previous; }
       for (const effect of effects) effect();
     }
     return output;
   }
   render();
-  return { render, get output() { return output; }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
+  return { render, frames, get output() { return output; }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
 }
 
 export function findElement(tree, predicate) {

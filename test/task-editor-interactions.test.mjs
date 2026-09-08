@@ -286,3 +286,55 @@ test('yalnızca tekrar üretimi ve ardıl düzenlemesi de kaydedilmemiş taslak 
   } finally { view.close(); delete globalThis[CLIENT_STATE]; }
   assert.equal(registry.hasPendingChanges(), false);
 });
+
+for (const simple of [true, false]) {
+  for (const field of simple ? ['task', 'keyword'] : ['task', 'description']) {
+    test(`${simple ? 'Temel' : 'Kapsamlı'} Kip ${field}: ortada yazarken hiçbir çizim eski kontrollü değeri geri vermez`, () => {
+      const state = fixture();
+      const original = 'Başlangıç ve sonuç';
+      state.selectedTask[field] = original;
+      globalThis[CLIENT_STATE] = state;
+      const view = editorFor(simple);
+      try {
+        let value = original;
+        let caret = 9;
+        for (const typed of ['ı', 'ş', 'ğ', 'İ', 'ö']) {
+          const control = input(view.drawer.output, (node) => ['input', 'textarea'].includes(node.type) && node.props.value === value);
+          value = value.slice(0, caret) + typed + value.slice(caret);
+          caret++;
+          const frameCount = view.drawer.frames.length;
+          control.props.onChange({ target: { value, selectionStart: caret, selectionEnd: caret } });
+          view.sync();
+          for (const frame of view.drawer.frames.slice(frameCount)) {
+            assert.ok(findElement(frame, (node) => ['input', 'textarea'].includes(node.type) && node.props.value === value), 'Etki beklenmeden yeni değer çizilmelidir; eski değerin geri yazılması imleci taşır.');
+          }
+          assert.equal(view.editor.output.props.task[field], value);
+        }
+        assert.equal(state.tasks[0][field], original, 'Kaydet öncesinde kalıcı veri değişmemelidir.');
+      } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+    });
+  }
+}
+
+test('dış görev güncellemesi dokunulmamış alanı yeniler; başlık taslağı ve ilk sürüm korunur', async () => {
+  const state = fixture();
+  let saved;
+  state.actions.saveTaskEdits = async (edits) => { saved = edits; return { ok: false, error: { message: 'Sürüm çakışması' } }; };
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    await view.editor.output.props.onUpdate('t1', { task: 'Başlığa ekledim' });
+    view.sync();
+    const external = { ...state.selectedTask, version: 'v2', description: 'Dışarıdan gelen not' };
+    state.tasks = [external];
+    view.editor.render({ ...view.editor.output.props, task: external, tasks: [external], projects: state.projects,
+      assignableProjects: [], people: state.people, currentUser: state.currentUser, scheduleRequests: [], simple: false });
+    view.drawer.render(view.editor.output.props);
+    assert.equal(view.editor.output.props.task.task, 'Başlığa ekledim');
+    assert.equal(view.editor.output.props.task.description, 'Dışarıdan gelen not');
+    await view.editor.output.props.onSave(view.editor.output.props.task);
+    assert.equal(saved[0].version, 'v1');
+    view.sync();
+    assert.equal(view.editor.output.props.task.task, 'Başlığa ekledim');
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+});

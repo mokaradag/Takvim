@@ -1,11 +1,12 @@
+import { getStatus } from '../../scheduling/metrics/index.js';
 import { normalizePriorityId, resolvePriority } from '../../domain/constants/index.js';
 import { dateMatchesFilter } from '../../components/dateMatchesFilter.js';
 import { numericMatchesFilter } from '../../components/numericMatchesFilter.js';
-import { diffDays, today } from '../../scheduling/dates/index.js';
-import { taskProgressValue } from './taskDisplayValues.js';
+import { today } from '../../scheduling/dates/index.js';
+import { effectiveTaskDate, taskProgressValue } from './taskDisplayValues.js';
 
 /**
- * Kapsamlı Kip · Görevler tablosunun ÇAPRAZ süzgeç fasetleri.
+ * Kapsamlı Kip · Görevler ve Gantt tablolarının ÇAPRAZ süzgeç fasetleri.
  *
  * Bir sütuna süzgeç uygulandığında öteki sütunların seçenek listesi de daralır:
  * listede yalnızca O AN görünen satırlarda bulunan değerler kalır. Seçenekler
@@ -15,6 +16,10 @@ import { taskProgressValue } from './taskDisplayValues.js';
  * Bir sütunun KENDİ seçenekleri hesaplanırken kendi süzgeci yok sayılır
  * (`ignoredKey`): aksi hâlde seçili değerin dışındaki her seçenek listeden
  * düşer ve kullanıcı ikinci bir değer ekleyemezdi.
+ *
+ * `dateMode` görünüm sözleşmesini korur. Gantt planlanan tarihleri gösterir ve
+ * varsayılan `planned` değerini kullanır; Görevler tablosu gerçekleşen tarih
+ * varsa onu gösterdiği için `effective` kipini açıkça gönderir.
  */
 export const TASK_TABLE_FACET_KEYS = Object.freeze(['proje', 'keyword', 'sorumlu', 'status', 'priority']);
 
@@ -22,11 +27,7 @@ const DATE_KEYS = Object.freeze(['plannedStart', 'plannedFinish', 'targetFinish'
 
 /** Görevin süzgeçlerde karşılığı olan durum değerleri (`overdue` türetilmiştir). */
 export function taskStatusFilterValues(task, referenceDay) {
-  const values = [String(task.status || 'todo')];
-  if (task.status !== 'done' && task.targetFinish && diffDays(task.targetFinish, referenceDay) < 0) {
-    values.push('overdue');
-  }
-  return values;
+  return [getStatus(task, referenceDay).id];
 }
 
 function matchesSearch(task, query) {
@@ -42,7 +43,7 @@ function matchesSearch(task, query) {
   return haystack.some((value) => value.includes(query));
 }
 
-export function taskTableMatches(task, { search = '', filters = {} } = {}, ignoredKey = null, referenceDay = today()) {
+export function taskTableMatches(task, { search = '', filters = {}, dateMode = 'planned' } = {}, ignoredKey = null, referenceDay = today()) {
   if (!matchesSearch(task, String(search || '').trim().toLocaleLowerCase('tr-TR'))) return false;
 
   if (ignoredKey !== 'proje' && filters.proje?.length && !filters.proje.includes(task.projectId)) return false;
@@ -63,7 +64,8 @@ export function taskTableMatches(task, { search = '', filters = {} } = {}, ignor
 
   for (const key of DATE_KEYS) {
     if (ignoredKey === key || !filters[key]) continue;
-    if (!task[key] || !dateMatchesFilter(task[key], filters[key])) return false;
+    const value = dateMode === 'effective' ? effectiveTaskDate(task, key) : task?.[key];
+    if (!value || !dateMatchesFilter(value, filters[key])) return false;
   }
   if (ignoredKey !== 'progress' && filters.progress
     && !numericMatchesFilter(taskProgressValue(task), filters.progress)) return false;
