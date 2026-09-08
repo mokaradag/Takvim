@@ -582,3 +582,8 @@ Sorumlu seçimi ve yazma `assigneeIds`/Sicil ile yapılır; adlar yalnızca gös
 Tarih talebi ayrıntısındaki **Görevi aç**, görev kimliğini çözer ve gerekirse yetkili veriyi yeniler. Farklı proje çalışma alanındaki göreve geçerken proje bağlamı da güncellenir. Silinmiş veya erişimi kaldırılmış görev için açık bir hata gösterilir.
 
 Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.
+
+
+Kaydedilmemiş görev taslakları sekme kapatma/yenileme korumasına katılır. Demo/Gerçek Sistem geçişi açık taslak varken durur ve Kaydet veya kapatarak vazgeçme yönlendirmesi gösterir. Temel/Kapsamlı Kip değişimi aynı görev taslağını korur. Yerel taslak varken hatırlatma e-postası gönderilemez; önce Kaydet gerekir. Tekrar hazırlama ve ardıl düzenlemeleri de bu korumaya dahildir.
+
+Taslakta proje değişince alan yetkileri birikmiş düzenlemeye göre yeniden hesaplanır. Kaydet, düzenlenen görevlerin önceki gecikmeli yazmalarını önce tamamlar; eski değerler yeni taslağın üzerine yazılmaz. Başarılı yerel yazmanın sürümü ilerletilir, gerçek dış sürüm çakışmaları reddedilir. FULL erişimi olan yöneticiler de son sorumluyu kaldıramaz; dar sorumlu oluşturma kapsamındaki kişi yalnızca kendisini seçebilir.

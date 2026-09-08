@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CLIENT_STATE, findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
+import { createTaskEditorDraftRegistry, unsavedTaskEditorResult } from '../src/state/taskEditorDrafts.js';
+const { DataModeContext } = await import('../src/components/shell/DataModeContext.jsx');
+const { DataModeIndicator } = await import('../src/components/shell/DataModeIndicator.jsx');
+const { UnsavedChangesGuard } = await import('../src/components/shell/UnsavedChangesGuard.jsx');
 const { TaskDetailOverlay } = await import('../src/features/task-detail/TaskDetailOverlay.jsx');
 const { ScheduleRequestCenter } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
 
@@ -158,4 +162,127 @@ test('yeni görevde Ardıllar etkin; ekleme, gecikme ve kaldırma Kaydet öncesi
     assert.equal(saved[0][1].relatedEdits[0].patch.deps[0].lagValue, 3);
     assert.equal(cancelled, 0);
   } finally { relations?.unmount(); view.close(); delete globalThis[CLIENT_STATE]; }
+});
+
+
+for (const simple of [true, false]) {
+  test(`${simple ? 'Temel' : 'Kapsamlı'} Kipte son kapsam içi sorumlu kaldırılamaz`, async () => {
+    const state = fixture();
+    state.isExecutive = true;
+    state.assignmentScopeSicils = ['100', '200'];
+    globalThis[CLIENT_STATE] = state;
+    const view = editorFor(simple);
+    try {
+      const remove = input(view.drawer.output, (node) => node.type === 'button' &&
+        (node.props['aria-label']?.endsWith(' kaldır') || node.props.style?.width === 18));
+      assert.equal(remove.props.disabled, true);
+      remove.props.onClick();
+      view.sync();
+      assert.deepEqual(view.editor.output.props.task.assigneeIds, ['100']);
+    } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+  });
+
+  test(`${simple ? 'Temel' : 'Kapsamlı'} Kip taslağı hatırlatma, veri kipi ve sekme kapanışını korur`, async () => {
+    const state = fixture();
+    const registry = createTaskEditorDraftRegistry();
+    let saves = 0;
+    let switches = 0;
+    state.actions = { registerTaskEditorDraft: registry.register, hasPendingChanges: registry.hasPendingChanges,
+      flushPendingChanges: async () => registry.hasPendingChanges() ? unsavedTaskEditorResult() : { ok: true },
+      closeTask: async () => ({ ok: true }), saveTaskEdits: async () => { saves++; return { ok: false, error: { message: 'Kayıt reddedildi' } }; } };
+    globalThis[CLIENT_STATE] = state;
+    const previousMode = DataModeContext._currentValue;
+    DataModeContext._currentValue = { dataMode: 'actual', setDataMode: async () => { switches++; } };
+    const listeners = new Map();
+    globalThis.window = { addEventListener: (type, handler) => listeners.set(type, handler), removeEventListener: (type) => listeners.delete(type) };
+    globalThis.document = { ...globalThis.window, visibilityState: 'visible' };
+    const view = editorFor(simple);
+    const guard = mountComponent(UnsavedChangesGuard, {});
+    const indicator = mountComponent(DataModeIndicator, {});
+    let reminder;
+    try {
+      assert.equal(registry.hasPendingChanges(), false);
+      await view.editor.output.props.onUpdate('t1', { task: 'Kaydedilmeyen başlık' });
+      assert.equal(registry.hasPendingChanges(), true);
+      view.sync();
+      const reminderElement = input(view.drawer.output, (node) => node.props?.size === 30 && node.props?.task);
+      reminder = mountComponent(reminderElement.type, reminderElement.props);
+      const mail = input(reminder.output, (node) => node.type === 'button');
+      assert.equal(mail.props.disabled, true);
+      let sent = 0;
+      const previousFetch = globalThis.fetch;
+      globalThis.fetch = async () => { sent++; throw new Error('Gönderilmemeli'); };
+      try { await mail.props.onClick({ stopPropagation() {}, preventDefault() {} }); }
+      finally { globalThis.fetch = previousFetch; }
+      assert.equal(sent, 0);
+      let prevented = false;
+      listeners.get('beforeunload')({ preventDefault() { prevented = true; } });
+      assert.equal(prevented, true);
+      await input(indicator.output, (node) => node.type === 'button').props.onClick();
+      indicator.render();
+      assert.equal(switches, 0);
+      assert.ok(findElement(indicator.output, (node) => node.props?.role === 'alert'));
+      assert.equal(saves, 0);
+      await view.editor.output.props.onSave(view.editor.output.props.task);
+      assert.equal(registry.hasPendingChanges(), true);
+      await view.editor.output.props.onClose();
+      assert.equal(registry.hasPendingChanges(), false);
+      await input(indicator.output, (node) => node.type === 'button').props.onClick();
+      assert.equal(switches, 1);
+    } finally {
+      reminder?.unmount(); guard.unmount(); indicator.unmount(); view.close();
+      assert.equal(registry.hasPendingChanges(), false);
+      DataModeContext._currentValue = previousMode;
+      delete globalThis.window; delete globalThis.document; delete globalThis[CLIENT_STATE];
+    }
+  });
+}
+
+test('birikmiş proje taşıması tarih ve bağımlılık yetkilerini hemen daraltır', async () => {
+  const state = fixture();
+  state.projects.push({ id: 'p2', name: 'Atama projesi', accessLevel: 'PARTIAL' });
+  state.assignableProjects = [{ id: 'p2', name: 'Atama projesi' }];
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    assert.equal(view.editor.output.props.canManageStructure, true);
+    assert.equal((await view.editor.output.props.onUpdate('t1', { projectId: 'p2', wbsId: null })).ok, true);
+    view.sync();
+    assert.equal(view.editor.output.props.task.projectId, 'p2');
+    assert.equal(view.editor.output.props.canManageStructure, false);
+    assert.equal(view.editor.output.props.canEditTargetFinish, false);
+    assert.equal(view.editor.output.props.canControlSchedule, false);
+    for (const patch of [{ targetFinish: '2026-09-30' }, { deps: [{ id: 'other', type: 'FS' }] }]) {
+      assert.equal((await view.editor.output.props.onUpdate('t1', patch)).ok, false);
+      view.sync();
+    }
+    assert.equal(view.editor.output.props.task.targetFinish, undefined);
+    assert.deepEqual(view.editor.output.props.task.deps, []);
+    assert.equal((await view.editor.output.props.onUpdate('t1', { description: 'İzin verilen not' })).ok, true);
+    view.sync();
+    assert.equal(view.editor.output.props.task.description, 'İzin verilen not');
+    assert.equal(view.editor.output.props.task.projectId, 'p2');
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+});
+
+test('yalnızca tekrar üretimi ve ardıl düzenlemesi de kaydedilmemiş taslak sayılır', async () => {
+  const state = fixture();
+  state.tasks.push({ ...state.tasks[0], id: 't2' });
+  const registry = createTaskEditorDraftRegistry();
+  state.actions.registerTaskEditorDraft = registry.register;
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    await view.editor.output.props.onUpdateRelatedTask('t2', { deps: [{ id: 't1', type: 'FS', lagDays: 0 }] });
+    assert.equal(registry.hasPendingChanges('t1'), true);
+    assert.equal(registry.hasPendingChanges('t2'), true);
+    assert.equal(registry.hasPendingChanges('t3'), false);
+    await view.editor.output.props.onUpdateRelatedTask('t2', { deps: [] });
+    assert.equal(registry.hasPendingChanges(), false);
+    view.editor.output.props.onPrepareSeries();
+    assert.equal(registry.hasPendingChanges(), true);
+    view.sync();
+    assert.equal(view.editor.output.props.hasUnsavedChanges, true);
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+  assert.equal(registry.hasPendingChanges(), false);
 });

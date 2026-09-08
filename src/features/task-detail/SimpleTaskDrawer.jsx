@@ -43,6 +43,7 @@ export function SimpleTaskDrawer({
   onProposeSchedule = null,
   canDelete = true,
   isSaving = false,
+  hasUnsavedChanges = false,
   saveError = null,
   isCreating = false,
   onSave = null,
@@ -65,8 +66,7 @@ export function SimpleTaskDrawer({
 
   const save = (patch) => {
     if (isSaving) return;
-    setLocal((current) => ({ ...current, ...patch }));
-    onUpdate(task.id, patch);
+    return onUpdate(task.id, patch);
   };
 
   const dismiss = onClose;
@@ -119,6 +119,7 @@ export function SimpleTaskDrawer({
   }, [people, selectedAssignees, assignmentScopeOnly]);
 
   const setAssignees = (ids) => {
+    if (assignmentScopeOnly && !ids.length) return;
     save(taskAssigneeMutationPatch(local, people, ids));
   };
 
@@ -184,6 +185,8 @@ export function SimpleTaskDrawer({
                     className="icon-btn"
                     style={{ width: 20, height: 20 }}
                     aria-label={`${record.name} kaldır`}
+                    disabled={Boolean(assignmentScopeOnly && (local.assigneeIds || []).length <= 1)}
+                    title="Görevde en az bir sorumlu kalmalıdır."
                     onClick={() => setAssignees((local.assigneeIds || [])
                       .filter((id) => String(id) !== String(record.id)))}
                   >
@@ -297,7 +300,7 @@ export function SimpleTaskDrawer({
             <Icons.Trash size={13} /> Sil
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki kipte de aynı. */}
-          {!isCreating && <TaskReminderButton task={task} size={30} />}
+          {!isCreating && <TaskReminderButton task={task} size={30} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? 'Hatırlatma göndermeden önce değişiklikleri Kaydet ile kaydedin.' : null} />}
           {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"

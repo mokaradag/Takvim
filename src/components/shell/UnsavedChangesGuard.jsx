@@ -22,6 +22,8 @@ import { useAppState } from '../../state/AppStateProvider';
  * olan bir kaydı korumasız bırakırdı. Reddedilip saklanan yamalar da
  * `hasPendingChanges()` içinde sayılır: başarısız bir kayıt "kaydedilmiş" gibi
  * değerlendirilip sessizce atılmaz.
+ * Görev penceresindeki yerel taslaklar da korumaya katılır. Bu taslaklar
+ * görünürlük değişiminde otomatik yazılmaz; yalnızca Kaydet ile gönderilir.
  *
  * Bileşen DOM üretmez.
  */

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
 import { executeTaskCreation } from '../src/state/taskCreationPolicy.js';
-import { prepareTaskCreationCommit, prepareTaskEditorCommit } from '../src/state/taskEditorCommit.js';
+import { commitTaskEditorEdits, prepareTaskCreationCommit, prepareTaskEditorCommit } from '../src/state/taskEditorCommit.js';
 import { taskPersonnelScope } from '../src/state/taskPersonnelScope.js';
 import { simpleAssignmentScope } from '../src/features/simple/simpleModePolicy.js';
 import { normalizeTaskAssigneePatch } from '../src/domain/identity/taskAssigneePatch.js';
@@ -177,5 +177,129 @@ test('yeni görevin ardılında döngü veya eski sürüm varsa hiçbir değişi
     await assert.rejects(create(), { code: 'CONFLICT' });
     assert.equal(stack.db.tasks.length, 1);
     assert.equal(stack.db.taskDependencies.length, 0);
+  } finally { await stack.dispose(); }
+});
+
+
+test('yönetici dar sorumlu oluşturma kapsamında yalnızca kendisini seçebilir', () => {
+  for (const currentUserId of [String(manager), null]) {
+    const scope = simpleAssignmentScope({ selectedProject: { accessLevel: 'PARTIAL' }, creationScope: 'ASSIGNEE_CREATE',
+      currentUserId, isExecutive: true, assignmentScopeSicils: employees.map(String) });
+    assert.deepEqual([...scope], currentUserId ? [currentUserId] : []);
+  }
+});
+
+test('FULL yönetici son sorumluyu kaldıramaz ve aynı işlemdeki içerik yazılmaz', async () => {
+  const stack = await createActualStack(seed(), { sicil: manager, corporateWbsSource: false });
+  try {
+    const task = await createTask(stack);
+    const result = await save(stack, [{ id: taskId, version: task.version, patch: { assigneeIds: [], task: 'Sahipsiz' } }]);
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'FORBIDDEN');
+    await stack.reload();
+    assert.equal(stack.state.tasks[0].task, 'İlk görev');
+    assert.deepEqual(stack.state.tasks[0].assigneeIds, [String(employees[0])]);
+    const created = await executeTaskCreation({ state: stack.state, id: successorId,
+      input: { ...task, id: successorId, version: undefined, assigneeIds: [], sorumlu: [] },
+      mutate: (operation, action) => stack.persistence.mutate(operation, action) });
+    assert.equal(created.result.ok, false);
+    assert.equal(stack.db.tasks.length, 1);
+  } finally { await stack.dispose(); }
+});
+
+test('API proje taşımasında eksik ardıl uzlaştırmasını reddeder ve bağlantıları atomik temizler', async () => {
+  const targetId = '86666666-6666-4666-8666-666666666666';
+  const data = seed();
+  data.projects.push({ ...data.projects[0], ProjectId: targetId, ProjectCode: 'HEDEF' });
+  const stack = await createActualStack(data, { sicil: manager, corporateWbsSource: false });
+  try {
+    await createTask(stack);
+    await createTask(stack, successorId);
+    await createTask(stack, '87777777-7777-4777-8777-777777777777');
+    const linked = await save(stack, [
+      { id: taskId, patch: { deps: [{ id: '87777777-7777-4777-8777-777777777777', type: 'FS', lagDays: 0 }] } },
+      { id: successorId, patch: { deps: [{ id: taskId, type: 'FS', lagDays: 0 }] } }
+    ]);
+    assert.equal(linked.ok, true, linked.error?.message);
+    assert.equal(stack.db.taskDependencies.length, 2);
+    const task = stack.state.tasks.find((item) => item.id === taskId);
+    const changes = { taskUpserts: [{ ...task, projectId: targetId, wbsId: null, deps: [], version: 'AAAAAAAAAAA=' }], taskDeletes: [], wbsUpserts: [], wbsDeletes: [] };
+    await assert.rejects(stack.repository.commitChanges(changes), (error) => error.details?.code === 'TASK_DEPENDENCY_RECONCILIATION_REQUIRED');
+    assert.equal(stack.db.taskDependencies.length, 2);
+    const successor = stack.state.tasks.find((item) => item.id === successorId);
+    changes.taskUpserts.push({ ...successor, deps: [] });
+    await assert.rejects(stack.repository.commitChanges(changes), { code: 'CONFLICT' });
+    assert.equal(stack.db.taskDependencies.length, 2);
+    changes.taskUpserts[0].version = task.version;
+    const result = await stack.repository.commitChanges(changes);
+    assert.equal(stack.db.taskDependencies.length, 0);
+    assert.deepEqual(result.taskUpserts.find((item) => item.id === successorId).deps, []);
+    await stack.reload();
+    assert.equal(stack.state.tasks.find((item) => item.id === taskId).projectId, targetId);
+    assert.ok(stack.state.tasks.every((item) => item.deps.length === 0));
+  } finally { await stack.dispose(); }
+});
+
+test('Kaydet eski birleştirilmiş yamaları önce yazar ve son taslak değeri korunur', async () => {
+  const stack = await createActualStack(seed(), { sicil: manager, corporateWbsSource: false });
+  try {
+    const task = await createTask(stack);
+    const successor = await createTask(stack, successorId);
+    const older = stack.persistence.updateTask(taskId, { priority: 'high', description: 'Eski işlemden not' });
+    const relatedOlder = stack.persistence.updateTask(successorId, { priority: 'high' });
+    const result = await commitTaskEditorEdits(stack.persistence, () => stack.state, [
+      { id: taskId, version: task.version, patch: { priority: 'low' } },
+      { id: successorId, version: successor.version, patch: { priority: 'low' } }
+    ], { taskId });
+    assert.equal(result.ok, true, result.error?.message);
+    assert.ok((await Promise.all([older, relatedOlder])).every((entry) => entry.ok));
+    await stack.persistence.flush();
+    await stack.reload();
+    assert.ok(stack.state.tasks.every((item) => item.priority === 'low'));
+    assert.equal(stack.state.tasks.find((item) => item.id === taskId).description, 'Eski işlemden not');
+  } finally { await stack.dispose(); }
+});
+
+test('önceki yama reddedilirse Kaydet onu geçemez; dış sürüm çakışması korunur', async () => {
+  const stack = await createActualStack(seed(), { sicil: manager, corporateWbsSource: false });
+  try {
+    const task = await createTask(stack);
+    const older = stack.persistence.updateTask(taskId, { assigneeIds: [String(outsider)] });
+    const result = await commitTaskEditorEdits(stack.persistence, () => stack.state,
+      [{ id: taskId, version: task.version, patch: { description: 'Yazılmamalı' } }]);
+    assert.equal(result.ok, false);
+    assert.equal((await older).ok, false);
+    assert.equal(stack.db.tasks[0].Description, null);
+    const retryBeforeRecovery = await commitTaskEditorEdits(stack.persistence, () => stack.state,
+      [{ id: taskId, version: task.version, patch: { description: 'Yazılmamalı' } }]);
+    assert.equal(retryBeforeRecovery.ok, false);
+    assert.equal(retryBeforeRecovery.error.code, 'UNSAVED_TASK_CHANGES');
+    stack.persistence.discardFailedTaskUpdates();
+    const successful = stack.persistence.updateTask(taskId, { priority: 'high' });
+    await assert.rejects(commitTaskEditorEdits(stack.persistence, () => stack.state,
+      [{ id: taskId, version: 'eski', patch: { description: 'Yazılmamalı' } }]), { code: 'CONFLICT' });
+    assert.equal((await successful).ok, true);
+    assert.equal(stack.db.tasks[0].Description, null);
+  } finally { await stack.dispose(); }
+});
+
+
+test('eski yama başarılı fakat taslak kaydı reddedilmişse yeniden deneme yerel sürümü kullanır', async () => {
+  const stack = await createActualStack(seed(), { sicil: manager, corporateWbsSource: false });
+  try {
+    const task = await createTask(stack);
+    let edits = [{ id: taskId, version: task.version, patch: { assigneeIds: [String(outsider)], description: 'Taslak notu' } }];
+    const options = { onRebase: (rebased) => { edits = rebased; } };
+    const older = stack.persistence.updateTask(taskId, { priority: 'high' });
+    const failed = await commitTaskEditorEdits(stack.persistence, () => stack.state, edits, options);
+    assert.equal((await older).ok, true);
+    assert.equal(failed.ok, false);
+    assert.notEqual(edits[0].version, task.version);
+    edits[0].patch.assigneeIds = [String(employees[0])];
+    const retried = await commitTaskEditorEdits(stack.persistence, () => stack.state, edits, options);
+    assert.equal(retried.ok, true, retried.error?.message);
+    await stack.reload();
+    assert.equal(stack.state.tasks[0].description, 'Taslak notu');
+    assert.equal(stack.state.tasks[0].priority, 'high');
   } finally { await stack.dispose(); }
 });

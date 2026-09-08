@@ -123,10 +123,13 @@ export function TaskDrawer({
   onProposeSchedule = null,
   canDelete = true,
   isSaving = false,
+  hasUnsavedChanges = false,
   saveError = null,
   onUpdateRelatedTask = null,
   isCreating = false,
   onSave = null,
+  generateSeries = false,
+  onPrepareSeries = null,
   creatorFallback = null
 }) {
   const people = useAllPeople();
@@ -150,7 +153,6 @@ export function TaskDrawer({
   );
   const [local, setLocal] = useState({ ...task });
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
-  const [generateSeries, setGenerateSeries] = useState(false);
   const titleDraft = local.task || '';
   const titleValid = Boolean(titleDraft.trim());
   useEffect(() => { setLocal({ ...task }); }, [task]);
@@ -275,9 +277,7 @@ export function TaskDrawer({
 
   const save = (patch) => {
     if (isSaving) return;
-    const next = { ...local, ...patch };
-    setLocal(next);
-    onUpdate(task.id, patch);
+    return onUpdate(task.id, patch);
   };
 
   const dismiss = onClose;
@@ -308,7 +308,7 @@ export function TaskDrawer({
   };
 
   const removeAssignee = (record) => {
-    if (record.id == null) return;
+    if (record.id == null || (assignmentScopeOnly && (local.assigneeIds || []).length <= 1)) return;
     const assigneeIds = (local.assigneeIds || []).filter((id) => String(id) !== String(record.id));
     save(taskAssigneeMutationPatch(local, people, assigneeIds));
   };
@@ -480,7 +480,7 @@ export function TaskDrawer({
                   <span key={record.key} className="row" style={{ gap: 6, padding: '3px 8px 3px 4px', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', background: 'var(--bg-elev-2)' }}>
                     <Avatar name={record.name} person={record.person} size="sm" />
                     <span style={{ fontSize: 12 }}>{record.name}</span>
-                    {canManageAssignees && record.id != null && <button className="icon-btn" style={{ width: 18, height: 18 }} onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>}
+                    {canManageAssignees && record.id != null && <button className="icon-btn" style={{ width: 18, height: 18 }} disabled={Boolean(assignmentScopeOnly && (local.assigneeIds || []).length <= 1)} title="Görevde en az bir sorumlu kalmalıdır." onClick={() => removeAssignee(record)}><Icons.Close size={10} /></button>}
                   </span>
                 ))}
               </div>
@@ -609,7 +609,7 @@ export function TaskDrawer({
                 onChange={(recurrence, alignment) => save(alignment
                   ? { recurrence, ...alignment }
                   : { recurrence })}
-                onGenerate={() => { setGenerateSeries(true); return { ok: true, staged: true }; }}
+                onGenerate={onPrepareSeries}
                 isSaving={isSaving}
               />
             </Section>}
@@ -713,7 +713,7 @@ export function TaskDrawer({
             <Icons.Trash size={13} /> Sil
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
-          {!isCreating && <TaskReminderButton task={task} size={30} />}
+          {!isCreating && <TaskReminderButton task={task} size={30} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? 'Hatırlatma göndermeden önce değişiklikleri Kaydet ile kaydedin.' : null} />}
           {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"

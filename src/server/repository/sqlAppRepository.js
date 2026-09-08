@@ -1377,10 +1377,9 @@ async function assertAssigneeScope(executor, actor, projectId, assigneeSicils, p
     return;
   }
   if (!sicils.length) {
-    if (fullAccess) return;
     throw new ServerPersistenceError(
       'FORBIDDEN',
-      'Yetki alanınız dışındaki bir projede görev yalnızca kendi personelinize atanabilir; görevin en az bir sorumlusu olmalıdır.'
+      'Görev yalnızca kendi personelinize atanabilir; görevin en az bir sorumlusu olmalıdır.'
     );
   }
 

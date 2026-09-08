@@ -28,7 +28,8 @@ import {
 import { reconcileProjectMutationAccess } from './projectMutationReconciliation.js';
 import { createRecurringTasks } from './recurringTaskCreation.js';
 import { executeTaskCreation } from './taskCreationPolicy.js';
-import { prepareTaskCreationCommit, prepareTaskEditorCommit } from './taskEditorCommit.js';
+import { commitTaskEditorEdits, prepareTaskCreationCommit } from './taskEditorCommit.js';
+import { createTaskEditorDraftRegistry, unsavedTaskEditorResult } from './taskEditorDrafts.js';
 import { canonicalActualId } from '../domain/identity/actualId.js';
 import {
   createDataRefreshRequestGuard,
@@ -66,6 +67,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   const [taskCreationDraft, setTaskCreationDraft] = useState(null);
   const stateRef = useRef(state);
   const taskCreationDraftRef = useRef(null);
+  const editorDraftsRef = useRef(createTaskEditorDraftRegistry());
   const loadRequestGuardRef = useRef(createDataRefreshRequestGuard());
   const loadSingleFlightRef = useRef(createDataRefreshSingleFlight());
   const initialLoadStartedRef = useRef(false);
@@ -227,10 +229,16 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     return persistence.updateTask(id, stamped);
   }, [persistence]);
   const saveTaskEdits = useCallback((edits, options = {}) => (
-    persistence.mutate('task/save-draft', (current) => prepareTaskEditorCommit(current, edits, options))
+    commitTaskEditorEdits(persistence, () => stateRef.current, edits, options)
       .catch((error) => ({ ok: false, error: { code: error.code || 'MUTATION_FAILED', message: error.message } }))
   ), [persistence]);
-  const flushPendingChanges = useCallback((options = {}) => persistence.flush(options), [persistence]);
+  const registerTaskEditorDraft = useCallback((reader) => editorDraftsRef.current.register(reader), []);
+  const flushPendingChanges = useCallback(async (options = {}) => {
+    const result = await persistence.flush(options);
+    if (!result.ok) return result;
+    return taskCreationDraftRef.current || editorDraftsRef.current.hasPendingChanges()
+      ? unsavedTaskEditorResult() : result;
+  }, [persistence]);
   /**
    * TEK bir görevin bekleyen düzenlemelerini sunucuya yazar.
    *
@@ -240,9 +248,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
    */
   const flushTaskEdits = useCallback(async (id) => {
     if (!id) return { ok: true, value: null };
-    return firstFailedResult(await persistence.flushTaskUpdates([id])) || { ok: true, value: null };
+    if (editorDraftsRef.current.hasPendingChanges(id)) return unsavedTaskEditorResult();
+    const failed = firstFailedResult(await persistence.flushTaskUpdates([id]));
+    if (failed) return failed;
+    return editorDraftsRef.current.hasPendingChanges(id) ? unsavedTaskEditorResult() : { ok: true, value: null };
   }, [persistence]);
-  const hasPendingChanges = useCallback(() => persistence.hasPendingChanges(), [persistence]);
+  const hasPendingChanges = useCallback(() => Boolean(taskCreationDraftRef.current)
+    || editorDraftsRef.current.hasPendingChanges() || persistence.hasPendingChanges(), [persistence]);
   // Reddedilen yamalar saklanır; kullanıcı kalıcılaştırma şeridinden yeniden
   // deneyebilir, böylece kaybedilen tek kopya diye bir durum oluşmaz.
   const retryFailedChanges = useCallback(() => persistence.retryFailedTaskUpdates(), [persistence]);
@@ -672,6 +684,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     closeTask,
     updateTask,
     saveTaskEdits,
+    registerTaskEditorDraft,
     flushPendingChanges,
     flushTaskEdits,
     hasPendingChanges,
@@ -705,6 +718,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     closeTask,
     updateTask,
     saveTaskEdits,
+    registerTaskEditorDraft,
     flushPendingChanges,
     flushTaskEdits,
     hasPendingChanges,

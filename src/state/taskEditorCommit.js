@@ -18,6 +18,46 @@ export function taskEditorPatch(before = {}, draft = {}) {
   )));
 }
 
+export function resolveTaskEditorAccess(state, taskId, patch = {}) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  const changed = taskEditorPatch(task, patch);
+  const access = resolveTaskMutationAccess(state, taskId, changed);
+  if (!access.ok) return access;
+  const blocked = Object.keys(changed).find((field) => (
+    (field === 'targetFinish' && !access.canEditTargetFinish)
+    || (['plannedStart', 'plannedFinish'].includes(field) && !access.canControlSchedule)
+    || (['deps', 'recurrence'].includes(field) && !access.canManageStructure)
+  ));
+  return blocked ? {
+    ...access, ok: false, code: 'TASK_FIELD_FORBIDDEN', field: blocked,
+    message: 'Seçilen projede bu görev alanını değiştirme yetkiniz yok.'
+  } : access;
+}
+
+export async function commitTaskEditorEdits(persistence, getState, edits, { onRebase, ...options } = {}) {
+  const before = getState();
+  const ids = [...new Set(edits.map((edit) => edit.id))];
+  const flushed = await persistence.flushTaskUpdates(ids);
+  const failed = flushed.find((result) => result && !result.ok);
+  // Yalnızca bu boşaltmada başarıyla yazılmış yerel sürümü ilerletiriz.
+  // Daha önce eskimiş taslaklar ve dışarıdan gelen sürümler CONFLICT kalır.
+  const versions = new Map(flushed.flatMap((result) => result?.value?.taskUpserts || [])
+    .map((task) => [task.id, task.version]));
+  const rebased = edits.map((edit) => {
+    const original = before.tasks.find((task) => task.id === edit.id);
+    return edit.version && edit.version === original?.version && versions.get(edit.id)
+      ? { ...edit, version: versions.get(edit.id) }
+      : edit;
+  });
+  onRebase?.(rebased);
+  if (failed) return failed;
+  if (persistence.hasFailedTaskUpdates(ids)) return {
+    ok: false,
+    error: { code: 'UNSAVED_TASK_CHANGES', message: 'Önceki görev değişiklikleri kaydedilemedi. Önce bu kayıtları yeniden deneyin.' }
+  };
+  return persistence.mutate('task/save-draft', (current) => prepareTaskEditorCommit(current, rebased, options));
+}
+
 function taskKeywordCatalogUpdates(state, task) {
   const project = state.projects.find((item) => item.id === task?.projectId);
   if (!task?.keyword || !canWriteProject(project)) return [];
@@ -54,7 +94,7 @@ export function prepareTaskEditorCommit(state, edits, { taskId, generateSeries =
     if (Object.prototype.hasOwnProperty.call(patch, 'task') && !String(patch.task || '').trim()) {
       throw Object.assign(new Error('Kaydetmek için görev başlığı girin.'), { code: 'TASK_TITLE_REQUIRED' });
     }
-    const access = resolveTaskMutationAccess(planned, edit.id, patch);
+    const access = resolveTaskEditorAccess(planned, edit.id, patch);
     if (!access.ok) throw Object.assign(new Error(access.message), access);
     updates.push({ id: edit.id, patch });
     planned = appStateReducer(planned, { type: 'task/update', id: edit.id, patch });
