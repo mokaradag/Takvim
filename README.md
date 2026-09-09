@@ -155,13 +155,13 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
-2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; sonuncusu görev hatırlatma tablolarını ekleyen `database/MR_Upgrade_0005_Task_Reminders.sql` dosyasıdır. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
+2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; sonuncusu Outlook takvim aboneliklerini ekleyen `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` dosyasıdır. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
 5. `npm ci`
 6. `npm run build`
 7. `npm run start -- -H 0.0.0.0 -p 8008`
-8. İsteğe bağlı: hatırlatma postaları için `.env.local` içindeki SMTP bloğunu doldurun ve zamanlayıcıyı kaydedin (`docs/TASK-REMINDERS.md`).
+8. İsteğe bağlı: hatırlatma postaları ve Outlook takvim davetleri için `.env.local` içindeki SMTP bloğunu doldurun ve zamanlayıcıyı kaydedin (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Aynı zamanlanmış tur her ikisini de işler.
 9. **Gerçek Sistem** seçerek yetki ve kalıcılığı doğrulayın.
 
 Build aşamasında tüm MERGEN Rota nesnelerini kaldırmak için `database/MR_Rollback_Durable_Persistence.sql` çalıştırılabilir. **Bu işlem tüm MR_* uygulama verisini kalıcı olarak siler.** HR02, A01 ve HR09 tablolarına dokunmaz.
@@ -183,7 +183,7 @@ npm run start -- -H 0.0.0.0 -p 8008
 - `src/domain` — Project, Task, Dependency, Person, WBS, Baseline, etiket kataloğu, calendar kavramları ve Gerçek Sistem kimlik kuralları
 - `src/scheduling` — tarih, çalışma günü, dependency, tekrar kuralları (RFC 5545) ve saf CPM hesapları
 - `src/data` — AppRepository sözleşmesi, Demo adapter ve Actual API adapter
-- `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı), durable repository, SMTP taşıması (`mail`) ve hatırlatma servisi/zamanlayıcısı (`reminders`)
+- `src/server` — server-only identity, authorization, SQL config/pool (MERGEN Rota + kurumsal WBS kaynağı), durable repository, SMTP taşıması (`mail`), hatırlatma servisi/zamanlayıcısı (`reminders`) ve Outlook takvim abonelikleri (`outlook`)
 - `src/state` — yükleme, sıralı mutation queue, Task patch coalescing ve access-aware scheduling selector'ları
 - `src/features` — uygulama özellikleri; SQL veya API route import etmez
 - `src/components/shell` — application shell, sabitlenebilir/daraltılabilir kenar çubuğu, görünüm kontrolleri ve persistence durumları
@@ -204,6 +204,7 @@ Ayrıntılar:
 - `docs/CPM.md`
 - `docs/TAGS-AND-RECURRING-TASKS.md`
 - `docs/TASK-REMINDERS.md`
+- `docs/OUTLOOK-CALENDAR.md`
 - `docs/SIMPLE-MODE-AND-UI.md`
 - `docs/SCHEDULING.md`
 - `docs/UI-STYLING-ARCHITECTURE.md`
@@ -270,6 +271,32 @@ bilgisi gönderilmez; zamanlayıcı ucu tur hiç başlayamadığında `503` dön
 gönderim sırasında sonlanırsa `PENDING` kalan aralık 30 dakika sonra yeniden
 sahiplenilir, böylece o hatırlatma kalıcı olarak kaybolmaz. Ayrıntılar:
 `docs/TASK-REMINDERS.md`.
+
+## Outlook takvim tümleştirmesi
+
+Tekil/toplu ekleme, yeniden gönderme ve kaldırma kalıcı kuyruğa yazılır; gönderimi mevcut hatırlatma zamanlayıcısı yapar. Arayüz bekleyen, başarısız ve teslim edilmiş sonuçları ayırır. Sorumlu/proje lideri değişiklikleri, kurumsal proje eşitlemesi ve kabul edilen tarih talepleri aynı işlemde kuyruğa yansır. 0010 betiğinin önceki sürümü uygulanmışsa dağıtımdan önce güncel betiği yeniden çalıştırın; abonelikler korunarak iptal/yeniden gönderim niyeti, olası SMTP teslimatı ve görünürlük doğrulama alanları eklenir. Bekleyen işi olmayan aboneliklerin dış yetki kaynakları da periyodik olarak doğrulanır. Teslimat kirası bir dakikadır ve yenilenir; tur varsayılan 45 saniyeyle sınırlıdır. Deneme eşiğini aşan işler kaybolmaz, HTTP 503 ile görünür kalır ve otomatik yeniden denenir.
+
+Kullanıcı, görebildiği bir görevi **kendi** Outlook takvimine ekleyebilir. Görev
+panelinin alt çubuğundaki **Outlook'a Ekle** eylemi hem düzenlenebilir hem salt
+okunur panelde bulunur ve görev düzenleme yetkisi gerektirmez; eklendikten sonra
+**✓ Outlook'a eklendi** durumuna geçip sıkışık bir menü açar (daveti yeniden
+gönder · Outlook'tan kaldır). Görevler tablosundaki seçim kutularıyla birden çok
+görev tek işlemde eklenebilir; **her görev kendi bağımsız randevusunu** alır.
+
+Tümleştirme **kurum içi SMTP + iCalendar** ile çalışır: Microsoft Graph, Entra ID
+ve EWS kullanılmaz, internet erişimi gerekmez, yeni paket bağımlılığı eklenmez.
+Davet, oturum sahibinin kurumsal e-posta adresine gider; adres sunucuda
+`Sicil → MR_V_PeopleDirectory.Username → DC01_userr.EmailAddress` zinciriyle
+çözülür ve tarayıcı alıcı belirleyemez.
+
+Termin değiştiğinde MERGEN Rota **aynı `UID` ve daha yüksek `SEQUENCE`** ile bir
+güncelleme gönderir; Outlook ikinci bir randevu açmaz. Etiket, yorum, ilerleme
+gibi randevuya yazılmayan alanlar hiç ileti üretmez. Kaldırma, görev silme ve
+görünürlük kaybı `METHOD:CANCEL` üretir. Gönderim **dayanıklı bir kuyrukla**
+yapılır: görev kaydı hiçbir koşulda SMTP'ye bağlı değildir, bekleyen teslimatlar
+mevcut hatırlatma turunda sınırlı yığınlar hâlinde yeniden denenir. Şema göçü
+`database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql`; ayrıntılar:
+`docs/OUTLOOK-CALENDAR.md`.
 
 ## Görünüm tercihleri
 

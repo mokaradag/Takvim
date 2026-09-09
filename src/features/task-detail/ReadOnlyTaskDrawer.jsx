@@ -6,6 +6,7 @@ import { fmt } from '../../scheduling/dates';
 import { projectColorVar } from '../../lib/colors';
 import { AvatarStack, StatusPill } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
+import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { taskAssigneeDisplayNames } from './taskAssigneeDisplay.js';
 import { useAllPeople } from '../../state/hooks';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
@@ -98,6 +99,9 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
 
         <div className="drawer-foot">
           <span className="muted" style={{ fontSize: 12 }}>Salt okunur görev görünümü</span>
+          {/* Takvime ekleme DÜZENLEME yetkisi gerektirmez: görevi görebilen
+              kullanıcı onu kendi Outlook takvimine ekleyebilir. */}
+          <OutlookCalendarAction task={task} />
           <div style={{ flex: 1 }} />
           <button className="btn primary" onClick={onClose}>Kapat</button>
         </div>

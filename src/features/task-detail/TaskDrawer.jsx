@@ -58,6 +58,7 @@ import {
 import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
 import { resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
+import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
 import { scheduleDifferenceSummary, requestDates } from '../schedule-change/scheduleChangePresentation.js';
@@ -716,6 +717,9 @@ export function TaskDrawer({
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; görevi değiştirmez. */}
           {!isCreating && <TaskReminderButton task={task} size={30} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? 'Hatırlatma göndermeden önce değişiklikleri Kaydet ile kaydedin.' : null} />}
+          {/* Outlook eylemi görev DÜZENLEME yetkisi gerektirmez; kaydedilmemiş
+              değişiklik varken kapalıdır ki davet eski veriyle gitmesin. */}
+          {!isCreating && <OutlookCalendarAction task={task} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? "Outlook'a eklemeden önce değişiklikleri Kaydet ile kaydedin." : null} />}
           {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"

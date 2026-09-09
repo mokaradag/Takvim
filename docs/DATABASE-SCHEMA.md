@@ -27,6 +27,7 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_CorporateWbsSyncState` | CN43N synchronization fingerprints per corporate project | PK `ProjectCode` (`nvarchar(255)`, same width as `MR_Projects.ProjectCode`); `ContentHash` (SHA-256 hex), `NodeCount`, `SyncedAt` |
 | `MR_ReminderSettings` | Single-row reminder template and automatic policy | PK `SettingsId` with `CHECK (SettingsId = 1)`; rowversion |
 | `MR_TaskReminderLog` | Append-only reminder send history and duplicate-send claim | identity PK; `IX_MR_TaskReminderLog_Task_Created`; filtered unique `UX_MR_TaskReminderLog_AutomaticSlot` on `(TaskId, SlotKey)` where `ReminderKind = 'AUTOMATIC'` |
+| `MR_TaskOutlookSubscriptions` | Durable Task+Sicil Outlook calendar subscription and delivery outbox | identity PK; unique `UX_MR_TaskOutlookSubs_Task_User` on `(TaskId, UserSicil)`; filtered `IX_MR_TaskOutlookSubs_Pending`; `IX_MR_TaskOutlookSubs_User_Active`; rowversion |
 
 ## Rowversion
 
@@ -138,6 +139,18 @@ MR_TaskAssignees.Sicil
 
 `DC01_userr` is read-only, lives in `MERGEN_ROTA_DB_DATABASE`, and is never written to. Its schema and table name are configurable (`MERGEN_ROTA_USER_DIRECTORY_SCHEMA`, `MERGEN_ROTA_USER_DIRECTORY_TABLE`) so an installation with a different directory object needs no code change. The query tolerates every observed data defect: a missing directory row, a NULL/blank/malformed address, several users sharing one address and one user appearing more than once. Addresses are validated and de-duplicated before use; when nothing valid survives, no message is sent and the caller is told why.
 
+## Outlook calendar subscription schema
+
+`MR_TaskOutlookSubscriptions` records that one user (`UserSicil` — Sicil, never a display name) has added one Task to their own Outlook calendar. `UX_MR_TaskOutlookSubs_Task_User` on `(TaskId, UserSicil)` is the idempotency primitive: a double click, a second browser tab and a second application instance racing on the same Task can never create a second calendar item.
+
+The row carries the immutable iCalendar identity (`CalendarUid`) and the revision state: `Sequence` is the highest allocated iCalendar `SEQUENCE`, `PendingSequence`/`PendingPayloadHash` describe the revision *reserved for sending*, and `DeliveredSequence`/`DeliveredPayloadHash` describe the last revision the mail layer actually accepted. Reserving before sending is what makes a retry safe: if SMTP accepted the message but the completion write was lost, the next attempt re-sends the **same** `SEQUENCE` with the same content, so Outlook sees one revision rather than two.
+
+`CalendarAttendee` and `CalendarOrganizer` are reserved before the first send and retained for the subscription lifetime. They are never returned to the browser. The idempotent 0010 migration adds these fields and `LeaseToken`/`LeaseExpiresAt` to already-created tables; rerun the updated migration before deployment. Existing rows without identities use the current directory/configuration on their next send. Definitive first-delivery rejection clears provisional addresses; reactivation after completed cancellation resolves a new lifecycle’s addresses.
+
+The same row is the delivery **outbox**. `PendingMethod` (`NULL` / `REQUEST` / `CANCEL`) marks work; the persistence transaction writes it in the same transaction as the Task change, so a Task save never depends on SMTP availability. The scheduled reminder pass claims due rows in deterministic order, one immediately before delivery, with `READPAST`, an ownership `LeaseToken`, and a persisted `LeaseExpiresAt`, so two schedulers cannot send the same invitation and a process that dies mid-send does not leave the row claimed forever. `AttemptCount`/`NextAttemptAt` track retries with backoff capped at one hour; exceeding the configured attempt threshold remains an HTTP 503 health condition until recovery, and due rows continue retrying; `QueueSeq` increments on every enqueue so a change arriving *during* a delivery is not silently cleared by that delivery's completion.
+
+`DeliveredSummary` and `DeliveredDate` exist so a cancellation can still be rendered after the Task row is gone. That is also why the table has **no foreign key** to `MR_Tasks` — the same reasoning as `MR_TaskReminderLog` and post-0008 `MR_TaskScheduleChangeRequests`. After the first send, the subscription retains its `CalendarAttendee` and `CalendarOrganizer` addresses so later updates and cancellations target the same calendar identities; those addresses are never returned to the browser. Before the first accepted or possibly delivered send, the recipient is resolved from `Sicil` through the same `DC01_userr` chain described above.
+
 ## Index rationale
 
 - Project/status and Project/date indexes support Task lists, filters, Gantt, and target-date sorting.
@@ -148,6 +161,7 @@ MR_TaskAssignees.Sicil
 - Baseline Project and snapshot Task indexes support Project history and deleted-Task lookup.
 - Audit indexes support Project, actor, entity, and transaction-correlation investigations.
 - The reminder log's Task/time index supports send history; its filtered unique slot index is the duplicate-send guard rather than a read optimization.
+- The Outlook subscription indexes are similarly split by purpose: the unique `(TaskId, UserSicil)` index is the duplicate-subscription guard, the filtered pending index keeps the outbox scan proportional to queued work rather than to the whole table, and the user/active index serves the drawer and task-table "added" state in one lookup.
 
 Indexes are limited to demonstrated repository and UI query patterns rather than being created for every column.
 
@@ -164,6 +178,8 @@ Then create the complete current schema with:
 The creation script performs source-table preflight, fails fast if MR_* objects already exist, uses a transaction and TRY/CATCH, creates `MR_V_CorporateProjectAccess` directly with the `PPTS` role code, seeds the default calendar, seeds SYSTEM_ADMIN roles from the `@SystemAdminSicils` parameter (empty by default; real Sicil values are personal data and are not committed), and records `0001_durable_persistence`.
 
 Task reminders are added by `database/MR_Upgrade_0005_Task_Reminders.sql`, which is idempotent and safe to rerun: it creates `MR_ReminderSettings` and `MR_TaskReminderLog` only when absent, seeds the single settings row with automatic sending disabled, creates the filtered unique slot index and records `0005_task_reminders`. Existing data is untouched. `MR_Create_Durable_Persistence.sql` creates the same objects for a fresh installation and `MR_Rollback_Durable_Persistence.sql` drops them in reverse order.
+
+Outlook calendar subscriptions are added by `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql`. The migration is idempotent, creates or extends `MR_TaskOutlookSubscriptions` and its four indexes, records `0010_outlook_calendar_subscriptions`, and preserves existing subscriptions with conservative lifecycle backfills. It must run **before** the application version is deployed; until it does, the feature reports itself as unavailable instead of failing Task saves. Fresh installations create the same object in `MR_Create_Durable_Persistence.sql`; rollback drops it first. See `docs/OUTLOOK-CALENDAR.md`.
 
 Schedule-change requests are added by `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql`. The migration is idempotent, creates only the missing table/indexes, records `0007_task_schedule_change_requests`, and never rewrites existing Tasks. Fresh installations create the same object in `MR_Create_Durable_Persistence.sql`; rollback drops it before Task rows.
 
@@ -198,3 +214,5 @@ Talep tablosuna `TaskTitleSnapshot nvarchar(1000)`, `ProjectIdSnapshot uniqueide
 ### Görev hareket raporu dizini
 
 `0009_task_activity_report`, mevcut MR_AuditLog üzerine `IX_MR_AuditLog_Type_Occurred(EntityType, OccurredAt DESC, AuditId DESC)` dizinini ekler; ActorSicil, ProjectId, EntityId, CorrelationId, ActionCode alanlarını kapsar. Ayrı hareket tablosu yoktur. Görev denetiminde kalıcı satır, sorumlu Sicilleri ve tarihsel proje künyesi saklanır; eski kayıtlar yeniden yazılmaz. [Sorgu ve tarihçe sözleşmesi](TASK-ACTIVITY-REPORT.md).
+
+The latest 0010 also adds `CancelRequested` (explicit removal), `ForceResend` (durable resend intent), `DeliveryMayHaveEscaped` (possible SMTP acceptance), and `LastValidatedAt` (bounded periodic authorization revalidation). Existing pending cancellations are conservatively treated as explicit; existing allocated or delivered revisions are marked possibly delivered. `IX_MR_TaskOutlookSubs_Revalidation` covers clean active rows by validation time. Leases last 60 seconds and renew every 20 seconds; SMTP and SQL execution are cancelled at the run budget (45 seconds by default). Stop old workers before this migration, then start the updated application.

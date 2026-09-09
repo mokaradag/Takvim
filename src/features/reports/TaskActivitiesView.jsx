@@ -56,7 +56,7 @@ export function TaskActivitiesView({ active = true }) {
     </div>
     <div className="detail-list-scroll" aria-busy={loading}>
       <table className="table activity-table"><caption className="sr-only">Görev hareketleri · Türkiye saati</caption>
-        <thead><tr>{['Tarih / Saat', 'Güncelleyen', 'Proje', 'Görev', 'Yapılan değişiklik'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+        <thead><tr>{['Tarih / Saat', 'Güncelleyen', 'Proje', 'Görev', 'Yapılan değişiklik'].map((label) => <th scope="col" key={label} style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-elev)' }}>{label}</th>)}</tr></thead>
         <tbody>{data.items.map((item) => <tr key={item.id}>
           <td><time dateTime={item.occurredAt}>{timestamp.format(new Date(item.occurredAt))}</time></td>
           <td>{item.actorName}</td><td title={item.projectName}>{item.projectCode || item.projectName}</td>

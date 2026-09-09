@@ -1,18 +1,47 @@
 'use client';
+import { useEffect, useMemo } from 'react';
 import { DateInput } from './DateInput';
 import { Icons } from './icons';
 import { DATE_RANGE_PRESETS } from '../features/shared/dateRangeFilter.js';
+import { useAllPeople, useTasks } from '../state/hooks';
+import { hasOrgSelection } from '../domain/organization/organizationHierarchy.js';
+import { TaskOrganizationFilterControls } from '../features/tasks/TaskOrganizationFilterControls.jsx';
+import { useSharedTaskOrganizationFilter } from '../features/tasks/TaskOrganizationFilterContext.jsx';
+import { useTaskOrganizationFilter } from '../features/tasks/useTaskOrganizationFilter.js';
+
+function sameIds(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return left === right;
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
 
 /**
- * Özet ve Raporlar sayfalarının ortak tarih aralığı denetimi.
- *
- * Ön ayar çipleri + yalnızca "Özel" seçildiğinde açılan iki tarih kutusu.
- * Çipler tek bir `radiogroup` oluşturur: grup TEK sekme durağıdır ve seçim ok
- * tuşlarıyla değişir; odak seçimle birlikte taşınır (bkz. ProjectColorPicker).
+ * Özet ve Raporlar sayfalarının ortak tarih + kurumsal kapsam denetimi.
+ * Kurumsal seçim Görevler ile aynı oturumluk seçimi kullanır ve yalnızca
+ * kullanıcının zaten görebildiği görev kümesini daraltır.
  */
 export function DateRangeFilter({ value, onChange, label = 'Tarih aralığı', summary = null }) {
   const preset = value?.preset || 'all';
   const keys = DATE_RANGE_PRESETS.map((item) => item.id);
+  const allTasks = useTasks();
+  const people = useAllPeople();
+  const { selection, setSelection } = useSharedTaskOrganizationFilter();
+  const organization = useTaskOrganizationFilter(allTasks, people, selection, setSelection);
+  const organizationActive = hasOrgSelection(organization.selection);
+  const organizationTaskIds = useMemo(
+    () => organization.filteredTasks.map((task) => String(task.id)),
+    [organization.filteredTasks]
+  );
+
+  useEffect(() => {
+    const currentIds = Array.isArray(value?.organizationTaskIds) ? value.organizationTaskIds : null;
+    const nextIds = organizationActive ? organizationTaskIds : null;
+    if (sameIds(currentIds, nextIds)) return;
+    const nextValue = { ...value };
+    if (nextIds) nextValue.organizationTaskIds = nextIds;
+    else delete nextValue.organizationTaskIds;
+    onChange(nextValue);
+  }, [onChange, organizationActive, organizationTaskIds, value]);
 
   const moveSelection = (offset, group) => {
     const current = keys.indexOf(preset);
@@ -58,11 +87,6 @@ export function DateRangeFilter({ value, onChange, label = 'Tarih aralığı', s
       </div>
       {preset === 'custom' && (
         <div className="date-range-custom">
-          {/* Kutular birbirini SINIRLAR: ters sıralı bir aralık hiç girilemez.
-              Sınır olmasaydı `resolveDateRangeSelection` böyle bir seçim için
-              `null` döner, sayfa da bunu "süzgeç yok" sayıp sessizce TÜM ZAMANLAR
-              ölçümlerine dönerdi — kullanıcı yanlış aralık girdiğini fark etmeden
-              yanlış sayılara bakardı. */}
           <DateInput
             value={value?.start || ''}
             onChange={(start) => onChange({ ...value, preset: 'custom', start })}
@@ -80,9 +104,7 @@ export function DateRangeFilter({ value, onChange, label = 'Tarih aralığı', s
           />
         </div>
       )}
-      {/* Uygulanmayan özel aralık AÇIKÇA bildirilir: yarım bırakılmış bir seçim
-          süzgeci uygulamaz ve bu, sessiz kaldığında "süzgeç çalışmıyor" gibi
-          görünür. */}
+      <TaskOrganizationFilterControls organization={organization} />
       {preset === 'custom' && !(value?.start && value?.end) && (
         <span className="date-range-hint" role="status">
           Aralığı uygulamak için iki tarihi de seçin; şu an tüm zamanlar gösteriliyor.

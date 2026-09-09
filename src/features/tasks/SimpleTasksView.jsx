@@ -278,13 +278,14 @@ export function SimpleTasksView({ onNewTask }) {
         </div>
       </div>
 
-      <TaskTablePagination page={paged.page} pageCount={paged.pageCount} setPage={paged.setPage} />
-
-      <div className="simple-tasks-legend muted">
-        <StatusIcon id="todo" size={11} /> Yapılacak
-        <StatusIcon id="in_progress" size={11} /> Devam ediyor
-        <StatusIcon id="done" size={11} /> Tamamlandı
-        <StatusIcon id="overdue" size={11} /> Geciken
+      <div className="simple-tasks-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', minWidth: 0 }}>
+        <div className="simple-tasks-legend muted">
+          <StatusIcon id="todo" size={11} /> Yapılacak
+          <StatusIcon id="in_progress" size={11} /> Devam ediyor
+          <StatusIcon id="done" size={11} /> Tamamlandı
+          <StatusIcon id="overdue" size={11} /> Geciken
+        </div>
+        <TaskTablePagination page={paged.page} pageCount={paged.pageCount} setPage={paged.setPage} />
       </div>
     </div>
   );

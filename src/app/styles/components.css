@@ -651,6 +651,15 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
   text-align: center;
   white-space: nowrap;
 }
+/* Toplu seçim sütunu sıra numarasından da dardır ve dar alanda korunur:
+   seçim olmadan toplu eylem hiç kullanılamaz. */
+.tasks-table .tasks-select-col,
+.tasks-table .tasks-select-cell {
+  width: 30px;
+  padding-inline: 4px;
+  text-align: center;
+}
+.tasks-select-box { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
 .tasks-table .tasks-date-cell { font-size: 12px; white-space: nowrap; }
 /* Başlıklar SARMALANMAZ: sütun alt sınırları daraltıldığında "Başlangıç" gibi
    etiketler hece hece kırılıyor ve satır yüksekliği iki katına çıkıyordu.

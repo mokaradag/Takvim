@@ -35,27 +35,31 @@ export function mailErrorMessage(code, fallback = MAIL_ERROR_MESSAGES.SMTP_SEND_
 /**
  * İletiyi gönderir.
  *
+ * `calendar` verildiğinde ileti Outlook uyumlu bir takvim daveti taşır
+ * (bkz. mimeMessage · buildMimeMessage). Taşıyıcı, kimlik doğrulama ve TLS
+ * davranışı hatırlatma postalarıyla AYNIDIR; ikinci bir SMTP istemcisi yoktur.
+ *
  * @returns {Promise<{ok: true, accepted: string[],
  *   rejected: {address: string, statusCode: number|null}[], messageId: string}
  *   | {ok: false, code: string, message: string}>}
  *   Başarı YALNIZCA SMTP sunucusu iletiyi kabul ettiğinde bildirilir.
  */
-export async function sendMail({ to = [], subject = '', html = '', text = '' } = {}) {
+export async function sendMail({ to = [], subject = '', html = '', text = '', calendar = null, signal = null } = {}) {
   // Yapılandırma ÇÖZÜMLEMESİ de denetlenir: bozuk `SMTP_PORT`/`SMTP_TIMEOUT_MS`
   // değeri genel bir sunucu hatası olarak dışarı sızmaz, sözleşmedeki
   // `{ ok: false, code, message }` biçiminde döner.
   const problem = smtpConfigurationProblem();
   if (problem) {
-    return { ok: false, code: problem, message: mailErrorMessage(problem) };
+    return { ok: false, code: problem, deliveryMayHaveEscaped: false, message: mailErrorMessage(problem) };
   }
   const config = getSmtpConfig();
   try {
-    const result = await sendSmtpMail(config, { to, subject, html, text });
+    const result = await sendSmtpMail(config, { to, subject, html, text, calendar, signal });
     return { ok: true, accepted: result.accepted, rejected: result.rejected || [], messageId: result.messageId };
   } catch (error) {
     // Hata gövdesi kullanıcıya gider: kimlik bilgisi, parola ve ham yığın izi
     // asla taşınmaz.
     const code = error instanceof SmtpError ? error.code : 'SMTP_SEND_FAILED';
-    return { ok: false, code, message: mailErrorMessage(code, error?.message || MAIL_ERROR_MESSAGES.SMTP_SEND_FAILED) };
+    return { ok: false, code, deliveryMayHaveEscaped: error?.deliveryMayHaveEscaped !== false, message: mailErrorMessage(code, error?.message || MAIL_ERROR_MESSAGES.SMTP_SEND_FAILED) };
   }
 }

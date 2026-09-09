@@ -856,6 +856,68 @@
 .task-reminder-result.warning { color: var(--c-amber); }
 .task-reminder-result.error { color: var(--status-overdue); }
 
+/* ── Outlook takvim eylemi ───────────────────────────────────── */
+/* Eylem, MERGEN Rota'nın kendi düğme dilini kullanır: ayrı bir kart, marka
+   rengi ya da geçiş efekti yoktur. Eklenmiş durum aynı yerde, aynı boyutta
+   kalır; yalnızca simge ve etiket değişir. */
+.outlook-action,
+.outlook-bulk-action { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.outlook-action-menu { position: relative; display: inline-flex; }
+.outlook-action-button { gap: 6px; white-space: nowrap; }
+.outlook-action-button.is-added {
+  border-color: color-mix(in oklab, var(--status-done) 42%, var(--border));
+  color: var(--status-done);
+}
+.outlook-action-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 230px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+}
+.outlook-action-pop button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+}
+.outlook-action-pop button:hover:not(:disabled) { background: var(--accent-soft); }
+.outlook-action-pop button:disabled { opacity: .55; }
+.outlook-action-result {
+  max-width: 280px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.outlook-action-result.success { color: var(--status-done); }
+.outlook-action-result.warning { color: var(--c-amber); }
+.outlook-action-result.error { color: var(--status-overdue); }
+
+.tasks-bulk-bar {
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  flex-wrap: wrap;
+}
+.tasks-bulk-count { font-size: 12.5px; font-weight: 600; }
+
 .reminder-settings-page { min-height: 0; }
 .reminder-section { display: flex; flex-direction: column; gap: 12px; }
 .reminder-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
