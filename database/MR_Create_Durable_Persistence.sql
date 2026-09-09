@@ -444,6 +444,65 @@ BEGIN TRY
     CREATE INDEX IX_MR_TaskReminderLog_Task_Created
         ON dbo.MR_TaskReminderLog(TaskId, CreatedAt DESC);
 
+    -- Gorev + Sicil iliskisinin KALICI Outlook takvim aboneligi ve dayanikli
+    -- gonderim kuyrugu. Benzersiz kisit (TaskId, UserSicil) uzerindedir: cift
+    -- tiklama, ikinci sekme ya da ikinci uygulama ornegi ayni gorev icin ikinci
+    -- bir randevu acamaz. Yabanci anahtar YOKTUR (MR_TaskReminderLog ile ayni
+    -- gerekce): gorev silindiginde iptal daveti icin degismez UID ve son teslim
+    -- edilen kunye bu satirdan okunur.
+    CREATE TABLE dbo.MR_TaskOutlookSubscriptions (
+        SubscriptionId bigint IDENTITY(1, 1) NOT NULL
+            CONSTRAINT PK_MR_TaskOutlookSubscriptions PRIMARY KEY,
+        TaskId uniqueidentifier NOT NULL,
+        ProjectId uniqueidentifier NULL,
+        UserSicil int NOT NULL,
+        CalendarUid nvarchar(200) NOT NULL,
+        [Sequence] int NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_Sequence DEFAULT (0),
+        IsActive bit NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_IsActive DEFAULT (1),
+        QueueSeq bigint NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_QueueSeq DEFAULT (1),
+        PendingMethod varchar(10) NULL,
+        PendingSequence int NULL,
+        PendingPayloadHash char(64) NULL,
+        DeliveredSequence int NULL,
+        DeliveredPayloadHash char(64) NULL,
+        DeliveredSummary nvarchar(400) NULL,
+        DeliveredDate date NULL,
+        AttemptCount int NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_Attempts DEFAULT (0),
+        NextAttemptAt datetime2(3) NULL,
+        InFlightSince datetime2(3) NULL,
+            LeaseToken uniqueidentifier NULL,
+            LeaseExpiresAt datetime2(3) NULL,
+            CalendarAttendee nvarchar(320) NULL,
+            CalendarOrganizer nvarchar(320) NULL,
+            CancelRequested bit NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_CancelRequested DEFAULT 0,
+            ForceResend bit NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_ForceResend DEFAULT 0,
+            DeliveryMayHaveEscaped bit NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_MayHaveEscaped DEFAULT 0,
+            LastValidatedAt datetime2(3) NULL,
+        LastDeliveredAt datetime2(3) NULL,
+        LastFailureCode varchar(60) NULL,
+        CreatedBySicil int NULL,
+        CreatedAt datetime2(3) NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_CreatedAt DEFAULT SYSUTCDATETIME(),
+        UpdatedAt datetime2(3) NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_UpdatedAt DEFAULT SYSUTCDATETIME(),
+        RowVersion rowversion NOT NULL,
+        CONSTRAINT CK_MR_TaskOutlookSubs_PendingMethod
+            CHECK (PendingMethod IS NULL OR PendingMethod IN ('REQUEST', 'CANCEL')),
+        CONSTRAINT CK_MR_TaskOutlookSubs_Sequence CHECK ([Sequence] >= 0),
+        CONSTRAINT CK_MR_TaskOutlookSubs_Attempts CHECK (AttemptCount >= 0)
+    );
+
+    CREATE UNIQUE INDEX UX_MR_TaskOutlookSubs_Task_User
+        ON dbo.MR_TaskOutlookSubscriptions(TaskId, UserSicil);
+    CREATE INDEX IX_MR_TaskOutlookSubs_Pending
+        ON dbo.MR_TaskOutlookSubscriptions(NextAttemptAt, SubscriptionId)
+        INCLUDE (TaskId, UserSicil, PendingMethod, AttemptCount)
+        WHERE PendingMethod IS NOT NULL;
+    CREATE INDEX IX_MR_TaskOutlookSubs_Revalidation
+        ON dbo.MR_TaskOutlookSubscriptions(LastValidatedAt, SubscriptionId)
+        INCLUDE (LeaseExpiresAt) WHERE IsActive = 1 AND PendingMethod IS NULL;
+    CREATE INDEX IX_MR_TaskOutlookSubs_User_Active
+        ON dbo.MR_TaskOutlookSubscriptions(UserSicil, IsActive)
+        INCLUDE (TaskId, PendingMethod, DeliveredSequence, LastFailureCode);
+
     /* Gruplama NORMALLESTIRILMIS ifadeler uzerinden yapilir. Ham sutunlarla
        gruplanirken '' abc '' ve ''ABC'' iki ayri grup uretiyor, gorunum ayni
        ProjectCode degerini tasiyan iki satir donduruyordu; ayni kod icin farkli
@@ -574,7 +633,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0006_audit_deactivation', N'Denetim kaydında geri alınabilir proje devre dışı bırakma eylemi'),
            (N'0007_task_schedule_change_requests', N'Persistent task schedule change request and decision workflow'),
            (N'0008_request_notifications', N'Talep geçmişinden ayrı bildirim durumu ve kalıcı görev künyesi'),
-           (N'0009_task_activity_report', N'Görev hareket raporu için tür ve tarih aralığı dizini');
+           (N'0009_task_activity_report', N'Görev hareket raporu için tür ve tarih aralığı dizini'),
+           (N'0010_outlook_calendar_subscriptions', N'Görev/Sicil Outlook takvim abonelikleri ve dayanıklı gönderim kuyruğu');
 
     COMMIT TRANSACTION;
 END TRY

@@ -49,6 +49,32 @@ function applyEnvironment({ corporateWbsSource = true, authMode = 'development' 
 }
 
 /**
+ * Teslim edilmiş bir Outlook aboneliği tohumu, gerçek tablodaki sürüm
+ * değişmezini taşımalıdır. Testte yalnızca `DeliveredSequence` verilmişse
+ * sahte veritabanının varsayılan `Sequence=0` değeri teslim edilmiş sürümü
+ * geriye düşürmemelidir.
+ */
+function normalizeOutlookSubscriptionFixtures(seed) {
+  const rows = seed?.taskOutlookSubscriptions;
+  if (!Array.isArray(rows) || rows.length === 0) return seed;
+  let changed = false;
+  const normalized = rows.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const next = { ...row };
+    if (next.Sequence == null && next.DeliveredSequence != null) {
+      next.Sequence = next.DeliveredSequence;
+      changed = true;
+    }
+    if (next.PendingSequence === undefined) {
+      next.PendingSequence = null;
+      changed = true;
+    }
+    return next;
+  });
+  return changed ? { ...seed, taskOutlookSubscriptions: normalized } : seed;
+}
+
+/**
  * Uçtan uca yığını hazırlar.
  *
  * @param {object} seed  `createFakeDatabase` tohumu
@@ -60,7 +86,7 @@ export async function createActualStack(seed = {}, options = {}) {
   applyEnvironment(options);
   if (options.sicil) process.env.MERGEN_ROTA_DEV_SICIL = String(options.sicil);
 
-  const db = createFakeDatabase(seed);
+  const db = createFakeDatabase(normalizeOutlookSubscriptionFixtures(seed));
   const driver = createFakeSqlServerDriver(db);
 
   const { setSqlDriverForTests, resetSqlPoolForTests } = await import('../../src/server/db/pool.js');

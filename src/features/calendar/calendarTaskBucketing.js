@@ -1,9 +1,10 @@
+import { taskCalendarDate } from '../../domain/calendar/taskCalendarDate.js';
 import { fmtISO, isValidDate, parseDate } from '../../scheduling/dates/index.js';
 
-/** Takvim bir termin görünümüdür: her görev tek güne düşer. */
-export function taskCalendarDate(task = {}) {
-  return task.targetFinish || task.plannedFinish || null;
-}
+// Tarih kuralı ALAN MODELİNDEDİR: Outlook takvim daveti de aynı işlevi çağırır
+// (bkz. domain/calendar/taskCalendarDate.js). Burada yalnızca yeniden yayımlanır
+// ki mevcut Takvim çağrıları olduğu gibi çalışsın.
+export { taskCalendarDate };
 
 /**
  * Görevleri takvim GÜNÜNE göre kovalar.

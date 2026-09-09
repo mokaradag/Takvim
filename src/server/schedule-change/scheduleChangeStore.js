@@ -1,4 +1,5 @@
 import 'server-only';
+import { enqueueOutlookTaskChange } from '../outlook/outlookCommitHooks.js';
 import { randomUUID } from 'node:crypto';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { MAX_WORKING_DAY_SPAN } from '../../scheduling/calendars/index.js';
@@ -440,6 +441,9 @@ export async function decideScheduleChange(requestIdValue, input = {}) {
             DecisionBySicil = @sicil, DecisionMessage = @message
         WHERE RequestId = @requestId AND Status = 'PENDING';
       `);
+      await enqueueOutlookTaskChange(transaction, row.TaskId, row, {
+        ...row, PlannedFinish: row.ProposedPlannedFinish, TargetFinish: row.ProposedTargetFinish
+      });
       const beforeDates = {
         Title: row.TaskTitle,
         plannedStart: isoDate(row.PlannedStart),

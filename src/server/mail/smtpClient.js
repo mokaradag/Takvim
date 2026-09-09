@@ -28,6 +28,7 @@ export class SmtpError extends Error {
     this.name = 'SmtpError';
     this.code = code;
     this.statusCode = statusCode;
+    this.deliveryMayHaveEscaped = false;
     if (cause) this.cause = cause;
   }
 }
@@ -123,25 +124,33 @@ export function createSmtpDialogue(socket, timeoutMs) {
   };
 }
 
-function connect({ host, port, timeoutMs }) {
+function connect({ host, port, timeoutMs }, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new SmtpError('SMTP_TIMEOUT', 'SMTP gönderimi süre sınırına ulaştı.'));
     const socket = net.createConnection({ host, port });
-    socket.setTimeout(timeoutMs);
-    const fail = (error) => {
-      socket.destroy();
-      reject(new SmtpError('SMTP_CONNECTION_FAILED', `SMTP sunucusuna bağlanılamadı (${host}:${port}).`, { cause: error }));
-    };
-    socket.once('error', fail);
-    socket.once('timeout', () => fail(new Error('timeout')));
-    socket.once('connect', () => {
+    const cleanup = () => {
       socket.removeListener('error', fail);
-      socket.setTimeout(0);
-      resolve(socket);
-    });
+      socket.removeListener('timeout', onTimeout);
+      socket.removeListener('connect', onConnect);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = (error) => {
+      cleanup();
+      socket.destroy();
+      reject(new SmtpError('SMTP_CONNECTION_FAILED', 'SMTP sunucusuna bağlanılamadı.', { cause: error }));
+    };
+    const onTimeout = () => fail(new Error('timeout'));
+    const onAbort = () => fail(new Error('aborted'));
+    const onConnect = () => { cleanup(); socket.setTimeout(0); resolve(socket); };
+    socket.setTimeout(timeoutMs);
+    socket.once('error', fail);
+    socket.once('timeout', onTimeout);
+    socket.once('connect', onConnect);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
-function upgradeToTls(socket, { host, rejectUnauthorized, timeoutMs }) {
+function upgradeToTls(socket, { host, rejectUnauthorized, timeoutMs }, signal) {
   return new Promise((resolve, reject) => {
     let settled = false;
     // STARTTLS'i kabul edip el sıkışmasında duran sunucu, zaman aşımı
@@ -151,6 +160,7 @@ function upgradeToTls(socket, { host, rejectUnauthorized, timeoutMs }) {
       settled = true;
       secure.removeListener('error', onError);
       secure.removeListener('timeout', onTimeout);
+      signal?.removeEventListener('abort', onTimeout);
     };
     const onError = (error) => {
       if (settled) return;
@@ -173,6 +183,8 @@ function upgradeToTls(socket, { host, rejectUnauthorized, timeoutMs }) {
     secure.setTimeout(timeoutMs);
     secure.once('error', onError);
     secure.once('timeout', onTimeout);
+    signal?.addEventListener('abort', onTimeout, { once: true });
+    if (signal?.aborted) onTimeout();
   });
 }
 
@@ -275,12 +287,22 @@ export async function sendSmtpMail(config, message) {
     subject: message.subject,
     html: message.html,
     text: message.text,
+    // Takvim daveti VARSA aynı MIME kurucusuna verilir; ikinci bir ileti
+    // kurulumu yazılmaz.
+    calendar: message.calendar || null,
     messageId
   });
 
-  let socket = await connect(config);
-  let dialogue = createSmtpDialogue(socket, config.timeoutMs);
+  const signal = message.signal;
+  let socket;
+  let dialogue;
+  let deliveryMayHaveEscaped = false;
+  const onAbort = () => socket?.destroy();
   try {
+    socket = await connect(config, signal);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) throw new SmtpError('SMTP_TIMEOUT', 'SMTP gönderimi süre sınırına ulaştı.');
+    dialogue = createSmtpDialogue(socket, config.timeoutMs);
     const greeting = await dialogue.read();
     if (greeting.code !== 220) {
       throw new SmtpError(
@@ -295,7 +317,7 @@ export async function sendSmtpMail(config, message) {
       await dialogue.command('STARTTLS', { expect: [220], code: 'SMTP_TLS_FAILED', description: 'STARTTLS' });
       // Düz oturum yükseltmeden ÖNCE kapatılır (bkz. dialogue.dispose).
       dialogue.dispose();
-      const secure = await upgradeToTls(socket, config);
+      const secure = await upgradeToTls(socket, config, signal);
       socket = secure;
       dialogue = createSmtpDialogue(secure, config.timeoutMs);
       // TLS sonrası EHLO TEKRARLANIR: yetenek listesi şifreli oturumda yeniden
@@ -332,15 +354,21 @@ export async function sendSmtpMail(config, message) {
       });
     }
     await dialogue.command('DATA', { expect: [354], description: 'DATA' });
+    deliveryMayHaveEscaped = true;
     socket.write(`${dotStuff(mime)}\r\n.\r\n`);
     const accepted = await dialogue.read();
     if (accepted.code !== 250) {
+      deliveryMayHaveEscaped = false;
       throw new SmtpError('SMTP_SEND_FAILED', `Sunucu iletiyi kabul etmedi (${accepted.code}).`, { statusCode: accepted.code });
     }
     await dialogue.command('QUIT', { expect: [221], description: 'QUIT' }).catch(() => null);
     return { accepted: acceptedRecipients, rejected: rejectedRecipients, messageId };
+  } catch (error) {
+    error.deliveryMayHaveEscaped = deliveryMayHaveEscaped;
+    throw error;
   } finally {
-    // Bağlantı her koşulda serbest bırakılır.
-    socket.destroy();
+    signal?.removeEventListener('abort', onAbort);
+    socket?.destroy();
+    dialogue?.dispose();
   }
 }

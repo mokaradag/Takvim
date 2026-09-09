@@ -1,20 +1,32 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
 import { DateInput } from '../../components/DateInput.jsx';
 import { Icons } from '../../components/icons.jsx';
+import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { markScheduleNotifications } from '../../data/api/scheduleChangeClient.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { ScheduleRequestDetails, STATUS_LABELS } from './ScheduleRequestCenter.jsx';
 import { useScheduleRequestQuery } from './useScheduleRequestQuery.js';
 
-const TABS = [{ id: 'pending', label: 'Bekleyenler' }, { id: 'sent', label: 'Gönderdiklerim' }, { id: 'history', label: 'Geçmiş' }];
+const TABS = [{ id: 'pending', label: 'Gelenler' }, { id: 'sent', label: 'Gönderdiklerim' }, { id: 'history', label: 'Geçmiş' }];
 const INITIAL = { tab: 'pending', search: '', projectId: '', requester: '', status: '', from: '', to: '', page: 0 };
 
 export function ScheduleRequestsView() {
   const [query, setQuery] = useState(INITIAL);
   const [selected, setSelected] = useState(null);
   const projects = useAllProjects();
+  const projectOptions = useMemo(() => [
+    { value: '', label: 'Tüm projeler' },
+    ...projects
+      .map((project) => ({
+        value: project.id,
+        label: project.name || project.projectName || project.code || 'Adsız proje',
+        description: project.code || '',
+        keywords: [project.code, project.name, project.projectName].filter(Boolean)
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label, 'tr'))
+  ], [projects]);
   const { decideScheduleChange, openTask, reloadData } = useTaskActions();
   const { data, loading, error, actual, refresh } = useScheduleRequestQuery(query);
   const openerRef = useRef(null);
@@ -30,7 +42,6 @@ export function ScheduleRequestsView() {
     else { refresh(); await reloadData?.({ preserveFailedTaskUpdates: true }); }
   };
   return <div className="requests-view">
-    <div className="requests-intro"><h2>Talepler</h2><p className="muted">Tarih değişikliği taleplerinizi inceleyin, karar verin ve geçmişi arayın.</p></div>
     <div ref={tabsRef} className="request-tabs" role="tablist" aria-label="Talep türü">
       {TABS.map((tab, index) => <button key={tab.id} type="button" role="tab" id={`requests-${tab.id}-tab`}
         aria-controls="requests-panel" aria-selected={query.tab === tab.id} tabIndex={query.tab === tab.id ? 0 : -1}
@@ -48,7 +59,11 @@ export function ScheduleRequestsView() {
     <section className="card requests-panel" id="requests-panel" role="tabpanel" aria-labelledby={`requests-${query.tab}-tab`} aria-busy={loading}>
       <div className="detail-list-filters request-filters">
         <label><span>Ara</span><input className="input" type="search" value={query.search} placeholder="Görev, proje veya talep notu…" onChange={(event) => change('search', event.target.value)} /></label>
-        <label><span>Proje</span><select className="input" value={query.projectId} onChange={(event) => change('projectId', event.target.value)}><option value="">Tüm projeler</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name || project.projectName || project.code}</option>)}</select></label>
+        <div style={{ display: 'flex', flex: '1 1 160px', flexDirection: 'column', gap: 5, minWidth: 0, fontSize: 11, color: 'var(--text-dim)' }}>
+          <span>Proje</span>
+          <SearchableSelect compact style={{ width: '100%' }} ariaLabel="Proje filtresi" value={query.projectId}
+            onChange={(value) => change('projectId', value)} searchPlaceholder="Proje ara" options={projectOptions} />
+        </div>
         <label><span>Talep eden</span><input className="input" value={query.requester} placeholder="Ad veya sicil" onChange={(event) => change('requester', event.target.value)} /></label>
         <label><span>Durum</span><select className="input" value={query.status} onChange={(event) => change('status', event.target.value)}><option value="">Tüm durumlar</option>{Object.entries(STATUS_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
         <label><span>Talep tarihi · İlk</span><DateInput ariaLabel="İlk talep tarihi" value={query.from} onChange={(value) => change('from', value)} /></label>

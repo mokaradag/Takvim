@@ -793,10 +793,17 @@ test('kesilen gövde BAŞARILI boş yanıt olarak raporlanmaz', () => {
   assert.match(repository, /body = await response\.json\(\);/);
   assert.match(repository, /if \(controller\?\.signal\.aborted\)/);
 
-  for (const file of ['src/data/api/scheduleChangeClient.js', 'src/features/reminders/reminderClient.js']) {
+  // Hatırlatma ve Outlook takvim uçları ORTAK sarmalayıcıyı kullanır; kural
+  // artık tek yerde durur ve iki istemci de aynı davranışı miras alır.
+  for (const file of ['src/data/api/scheduleChangeClient.js', 'src/features/shared/jsonRequest.js']) {
     const source = read(file);
     assert.doesNotMatch(source, /response\.json\(\)\.catch\(/, file);
     assert.match(source, /if \(controller\?\.signal\.aborted\)/, file);
+  }
+  for (const file of ['src/features/reminders/reminderClient.js', 'src/features/outlook/outlookClient.js']) {
+    const source = read(file);
+    assert.doesNotMatch(source, /response\.json\(\)\.catch\(/, file);
+    assert.match(source, /from '\.\.\/shared\/jsonRequest\.js'/, file);
   }
 });
 

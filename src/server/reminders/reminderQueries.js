@@ -1,4 +1,5 @@
 import 'server-only';
+import { corporateUserTable } from '../identity/corporateDirectory.js';
 
 /**
  * Hatırlatma sorguları.
@@ -7,25 +8,9 @@ import 'server-only';
  * okunabilir ve testler sorguları doğrudan sınayabilir.
  */
 
-const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-
-function identifier(name, fallback) {
-  const value = String(process.env[name] ?? '').trim() || fallback;
-  if (!IDENTIFIER_PATTERN.test(value)) {
-    // Şema/tablo adı sorgu metnine gömüldüğü için serbest metne izin verilmez.
-    throw new Error(`${name} must be a plain SQL Server identifier.`);
-  }
-  return value;
-}
-
-/**
- * Kurumsal kullanıcı tablosu. Varsayılan `dbo.DC01_userr`; tablo MERGEN Rota
- * veritabanının İÇİNDEDİR (bkz. MERGEN_ROTA_DB_DATABASE) ve MERGEN'e ait
- * değildir — okunur, hiçbir zaman yazılmaz ve yeniden oluşturulmaz.
- */
-export function corporateUserTable() {
-  return `${identifier('MERGEN_ROTA_USER_DIRECTORY_SCHEMA', 'dbo')}.${identifier('MERGEN_ROTA_USER_DIRECTORY_TABLE', 'DC01_userr')}`;
-}
+// Kurumsal kullanıcı tablosu KİMLİK katmanında tanımlıdır; Outlook takvim
+// davetleri de aynı çözümleyiciyi kullanır (bkz. identity/corporateDirectory.js).
+export { corporateUserTable };
 
 /**
  * Görevin sorumluları ve e-posta adresleri.

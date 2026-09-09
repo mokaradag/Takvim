@@ -1,6 +1,8 @@
 import { loadAuthorizationContext } from '../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { runOutlookCalendarOutbox } from '../../../../../server/outlook/outlookCalendarService.js';
+import { isOutlookCalendarEnabled, outlookApplicationLink } from '../../../../../server/outlook/outlookConfig.js';
 import { hasReminderSchedulerKey } from '../../../../../server/reminders/reminderAccess.js';
 import { runAutomaticReminders } from '../../../../../server/reminders/reminderService.js';
 
@@ -38,13 +40,34 @@ export async function POST(request) {
       actorSicil = actor.sicil;
     }
 
-    const summary = await runAutomaticReminders(pool, { actorSicil });
+    let summary;
+    try {
+      summary = await runAutomaticReminders(pool, { actorSicil });
+    } catch (error) {
+      console.error('[reminders] hatırlatma turu işlenemedi', { code: error?.code || error?.number || null });
+      summary = { ok: false, reason: 'UNEXPECTED_ERROR' };
+    }
+    // Bekleyen Outlook takvim teslimatları AYNI turda işlenir: ikinci bir
+    // zamanlayıcı altyapısı eklenmez. Hatırlatma turunun sonucu bundan
+    // etkilenmez; takvim kuyruğundaki bir hata hatırlatmaları düşürmez.
+    let outlook = { ok: true, enabled: false };
+    if (isOutlookCalendarEnabled()) {
+      try {
+        outlook = {
+          enabled: true,
+          ...await runOutlookCalendarOutbox(pool, { link: outlookApplicationLink() })
+        };
+      } catch (error) {
+        console.error('[outlook] takvim kuyruğu işlenemedi', { code: error?.code || error?.number || null });
+        outlook = { ok: false, enabled: true, reason: 'UNEXPECTED_ERROR' };
+      }
+    }
     // Tur BAŞLAYAMADIYSA durum kodu da bunu söyler. İşletim sistemi
     // zamanlayıcısı yalnızca HTTP durumuna (ya da `curl` çıkış koduna) bakar;
     // her koşulda 200 dönmek, hatırlatmalar tamamen dururken çalıştırmayı
     // başarılı gösteriyordu.
-    return Response.json(summary, {
-      status: summary.ok === false ? 503 : 200,
+    return Response.json({ ...summary, outlook }, {
+      status: summary.ok === false || (outlook.enabled && outlook.ok === false) ? 503 : 200,
       headers: { 'cache-control': 'no-store' }
     });
   } catch (error) {

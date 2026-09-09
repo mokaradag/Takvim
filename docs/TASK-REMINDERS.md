@@ -6,6 +6,12 @@ kurulumu, güvenlik kararları ve sorun giderme.
 
 Özellik hem **Temel Kip** hem **Kapsamlı Kip** için aynı biçimde çalışır.
 
+Aynı SMTP altyapısı **Outlook takvim davetlerini** de taşır; takvim
+tümleştirmesi ayrı bir belgede anlatılır: `docs/OUTLOOK-CALENDAR.md`. Bu
+belgedeki SMTP yapılandırması ikisi için de geçerlidir ve hatırlatma
+e-postalarının biçimi takvim tümleştirmesinden **etkilenmez**: takvim parçası
+yalnızca davet iletilerine eklenir.
+
 ---
 
 ## 1. İki gönderim yolu, tek çekirdek
@@ -421,6 +427,12 @@ görevlerin de zamanında hatırlatılmasını sağlar.
 
 Yanıt gövdesi turun özetini taşır: `evaluated`, `sent`, `skipped`, `failed`.
 
+**Aynı tur, bekleyen Outlook takvim teslimatlarını da işler.** Etkin Outlook turunda hata varsa HTTP 503 döner; yanıt içindeki hatırlatma sonucu korunur. Zamanlayıcı takvim bağlantısı için `MERGEN_ROTA_PUBLIC_ORIGIN` kullanır, bu ayar yoksa bağlantıyı eklemez. İkinci bir
+zamanlayıcı görevi tanımlamak gerekmez; yanıt gövdesine `outlook` alanı eklenir
+(`claimed`, `sent`, `unchanged`, `cancelled`, `failed`). Takvim kuyruğundaki bir
+hata hatırlatma turunun sonucunu düşürmez. Ayrıntılar:
+`docs/OUTLOOK-CALENDAR.md`.
+
 **Durum kodu turun başlayıp başlamadığını söyler.** Tur hiç başlayamadığında
 (örneğin SMTP yapılandırılmamışken) yanıt `503` döner; başarılı turda `200`
 gelir. İşletim sistemi zamanlayıcısı yalnızca HTTP durumuna — ya da `curl` çıkış
@@ -508,8 +520,9 @@ hata koduyla listelenir. Alıcı adresleri maskelenmiştir.
 | `src/domain/reminders/reminderPolicy.js` | Pencere, sıklık, aralık anahtarı, durma koşulları (saf) |
 | `src/domain/reminders/reminderRecipients.js` | Alıcı kuralları ve tekilleştirme (saf) |
 | `src/domain/reminders/reminderValues.js` | Görevden şablon değerleri (saf) |
+| `src/server/identity/corporateDirectory.js` | Sicil → kurumsal e-posta (Outlook takvimiyle ortak) |
 | `src/server/mail/smtpConfig.js` | `.env.local` yapılandırması |
-| `src/server/mail/mimeMessage.js` | RFC 5322/2047 ileti kurulumu |
+| `src/server/mail/mimeMessage.js` | RFC 5322/2047 ileti kurulumu; isteğe bağlı `text/calendar` parçası |
 | `src/server/mail/smtpClient.js` | SMTP protokolü (net/tls) |
 | `src/server/mail/mailService.js` | Yeniden kullanılabilir gönderim hizmeti |
 | `src/server/reminders/reminderQueries.js` | SQL sözleşmesi |
@@ -519,3 +532,5 @@ hata koduyla listelenir. Alıcı adresleri maskelenmiştir.
 | `src/features/reminders/TaskReminderButton.jsx` | Elle gönderim eylemi |
 | `src/features/reminders/ReminderSettingsView.jsx` | Yönetici sayfası |
 | `src/features/reminders/RichTextEditor.jsx` | Zengin metin gövde düzenleyicisi |
+
+Outlook kullanıcı eylemleri kalıcı kuyruğa yazılır ve bu zamanlayıcı tarafından gönderilir. Hatırlatma sorgusu hata verse de Outlook kuyruğu denenir; iki işten biri başarısızsa uç HTTP 503 döndürür. Eksik Outlook şeması, geçersiz SMTP yapılandırması, deneme eşiğini aşmış bekleyen işler ve Outlook tur bütçesinin dolması sağlık hatasıdır. `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` varsayılanı 45.000 ms; ayrıntılar için [Outlook takvimi](OUTLOOK-CALENDAR.md).

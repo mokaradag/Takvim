@@ -1,6 +1,6 @@
 'use client';
 import { TaskDate } from './TaskDate.jsx';
-import { useState as useState1, useMemo as useMemo1, useCallback as useCallback1 } from 'react';
+import { useState as useState1, useMemo as useMemo1, useCallback as useCallback1, useEffect as useEffect1 } from 'react';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
 import {
@@ -14,6 +14,7 @@ import { projectColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, PriorityIcon, StatusPill, StatusIcon } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { InfoButton, FilterableTH } from '../../components/ui-extras';
+import { OutlookBulkAction } from '../outlook/OutlookBulkAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
@@ -188,6 +189,39 @@ export function TasksView() {
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(filtered, paginationKey);
 
+  // Toplu eylem seçimi GÖRÜNÜR satırlarla sınırlıdır: süzgeç değiştiğinde artık
+  // görünmeyen bir görev sessizce seçili kalmaz ve kullanıcı görmediği bir
+  // görevi takvimine eklemez.
+  const [selectedIds, setSelectedIds] = useState1(() => new Set());
+  useEffect1(() => {
+    const visible = new Set(filtered.map((task) => String(task.id)));
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [filtered]);
+  const selectedTasks = useMemo1(
+    () => filtered.filter((task) => selectedIds.has(String(task.id))),
+    [filtered, selectedIds]
+  );
+  const pageAllSelected = paged.rows.length > 0
+    && paged.rows.every((task) => selectedIds.has(String(task.id)));
+  const toggleSelected = (taskId) => setSelectedIds((current) => {
+    const next = new Set(current);
+    const key = String(taskId);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+  const togglePageSelection = () => setSelectedIds((current) => {
+    const next = new Set(current);
+    for (const task of paged.rows) {
+      if (pageAllSelected) next.delete(String(task.id));
+      else next.add(String(task.id));
+    }
+    return next;
+  });
+
   const createTask = () => beginTaskDraft();
 
   const setSortFor = (key) => (dir) => setSort({ key, dir });
@@ -237,11 +271,32 @@ export function TasksView() {
         </button>
       </div>
 
+      {selectedTasks.length > 0 && (
+        <div className="row tasks-bulk-bar" role="region" aria-label="Seçili görev işlemleri">
+          <span className="tasks-bulk-count tabular">{selectedTasks.length} görev seçildi</span>
+          <OutlookBulkAction tasks={selectedTasks} onCompleted={() => setSelectedIds(new Set())} />
+          <div style={{ flex: 1 }} />
+          <button className="btn ghost sm" onClick={() => setSelectedIds(new Set())}>
+            <Icons.Close size={12} /> Seçimi temizle
+          </button>
+        </div>
+      )}
+
       <div className="tasks-table-card">
         <div className="tasks-table-scroll">
           <table className="tbl tasks-table" aria-label="Görevler">
             <thead>
               <tr>
+                <th className="tasks-select-col">
+                  <input
+                    type="checkbox"
+                    className="tasks-select-box"
+                    checked={pageAllSelected}
+                    onChange={togglePageSelection}
+                    disabled={paged.rows.length === 0}
+                    aria-label="Sayfadaki görevleri seç"
+                  />
+                </th>
                 <th className="tasks-index-col" style={{ textAlign: 'center' }}>#</th>
                 <FilterableTH label="Proje" style={{ minWidth: 148 }}
                   sortKey={sortDirFor('proje')} onSort={setSortFor('proje')}
@@ -294,7 +349,7 @@ export function TasksView() {
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={12} className="empty">Eşleşen görev bulunamadı.</td></tr>
+                <tr><td colSpan={13} className="empty">Eşleşen görev bulunamadı.</td></tr>
               )}
               {paged.rows.map((t, idx) => {
                 const today_ = today();
@@ -304,6 +359,17 @@ export function TasksView() {
                 const deleteAccess = resolveTaskDeleteAccess(taskMutationState, t.id);
                 return (
                   <tr key={t.id} data-task-id={t.id} onClick={() => onOpenTask(t)} style={{ cursor: 'pointer' }}>
+                    {/* Seçim kutusu satır tıklamasını YUTAR: kutuyu işaretlemek
+                        görev panelini açmaz. */}
+                    <td className="tasks-select-cell" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        className="tasks-select-box"
+                        checked={selectedIds.has(String(t.id))}
+                        onChange={() => toggleSelected(t.id)}
+                        aria-label={`${t.task} görevini seç`}
+                      />
+                    </td>
                     <td className="muted tabular tasks-index-cell">{paged.start + idx + 1}</td>
                     <td>
                       <div className="row" style={{ gap: 8 }}>

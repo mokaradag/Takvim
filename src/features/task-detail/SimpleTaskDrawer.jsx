@@ -12,6 +12,7 @@ import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
 import { ownsSimpleModePlan } from './simpleTaskPlan.js';
 import { filterTaskAssigneeCandidates, resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
+import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
 import { useAllProjects, useAllPeople, useAssignmentScopeSicils } from '../../state/hooks';
@@ -303,6 +304,9 @@ export function SimpleTaskDrawer({
           </button>}
           {/* Hatırlatma eylemi silme eyleminin YANINDA durur; iki kipte de aynı. */}
           {!isCreating && <TaskReminderButton task={task} size={30} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? 'Hatırlatma göndermeden önce değişiklikleri Kaydet ile kaydedin.' : null} />}
+          {/* Outlook eylemi iki kipte de AYNIDIR; takvim tarihi de aynı kuraldan
+              gelir (bkz. domain/calendar/taskCalendarDate.js). */}
+          {!isCreating && <OutlookCalendarAction task={task} disabledReason={isSaving ? 'Kayıt işlemi sürüyor.' : hasUnsavedChanges ? "Outlook'a eklemeden önce değişiklikleri Kaydet ile kaydedin." : null} />}
           {!isCreating && canProposeSchedule && <button
             type="button"
             className="btn schedule-propose-button"

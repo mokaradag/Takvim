@@ -186,7 +186,9 @@ export function createFakeDatabase(seed = {}) {
     auditLog: seed.auditLog || [],
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
-    corporateProjects: seed.corporateProjects || [],
+    corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
+      ProjectCode: row.ProjectCode, ProjectName: row.ProjectName, ProjectTypeCode: row.ProjectTypeCode, ProjectTypeName: row.ProjectTypeName
+    })),
     corporateProjectAccess: seed.corporateProjectAccess || [],
     executiveScope: seed.executiveScope || [],
     corporateWbsRows: seed.corporateWbsRows || [],
@@ -224,6 +226,43 @@ export function createFakeDatabase(seed = {}) {
       CreatedAt: entry.CreatedAt || new Date().toISOString(),
       CompletedAt: entry.CompletedAt || null
     })),
+    // Görev + Sicil Outlook takvim abonelikleri ve dayanıklı gönderim kuyruğu.
+    taskOutlookSubscriptions: (seed.taskOutlookSubscriptions || []).map((entry, index) => ({
+      SubscriptionId: index + 1,
+      TaskId: guid(entry.TaskId),
+      ProjectId: guid(entry.ProjectId),
+      UserSicil: Number(entry.UserSicil),
+      CalendarUid: entry.CalendarUid,
+      CancelRequested: entry.CancelRequested ?? 0,
+      ForceResend: entry.ForceResend ?? 0,
+      DeliveryMayHaveEscaped: entry.DeliveryMayHaveEscaped ?? 0,
+      LastValidatedAt: entry.LastValidatedAt ?? null,
+      Sequence: entry.Sequence ?? 0,
+      IsActive: entry.IsActive ?? 1,
+      QueueSeq: entry.QueueSeq ?? 1,
+      PendingMethod: entry.PendingMethod ?? null,
+      PendingSequence: entry.PendingSequence ?? null,
+      PendingPayloadHash: entry.PendingPayloadHash ?? null,
+      DeliveredSequence: entry.DeliveredSequence ?? null,
+      DeliveredPayloadHash: entry.DeliveredPayloadHash ?? null,
+      DeliveredSummary: entry.DeliveredSummary ?? null,
+      DeliveredDate: entry.DeliveredDate ?? null,
+      AttemptCount: entry.AttemptCount ?? 0,
+      NextAttemptAt: entry.NextAttemptAt ?? null,
+      InFlightSince: entry.InFlightSince ?? null,
+      LeaseToken: entry.LeaseToken ?? null,
+      LeaseExpiresAt: entry.LeaseExpiresAt ?? null,
+      CalendarAttendee: entry.CalendarAttendee ?? null,
+      CalendarOrganizer: entry.CalendarOrganizer ?? null,
+      LastDeliveredAt: entry.LastDeliveredAt ?? null,
+      LastFailureCode: entry.LastFailureCode ?? null,
+      CreatedBySicil: entry.CreatedBySicil ?? null,
+      CreatedAt: entry.CreatedAt || new Date().toISOString(),
+      UpdatedAt: entry.UpdatedAt || new Date().toISOString()
+    })),
+    // `outlookSchemaMissing: true` ile 0010 göçü çalıştırılmamış bir kurulum
+    // taklit edilir.
+    outlookSchemaMissing: Boolean(seed.outlookSchemaMissing),
     // `reminderSchemaMissing: true` ile 0005 göçü çalıştırılmamış bir kurulum
     // taklit edilir.
     reminderSchemaMissing: Boolean(seed.reminderSchemaMissing),
@@ -620,6 +659,9 @@ function synchronizeCorporateProjects(db, actorSicil) {
       RowVersion: nextVersion()
     });
   }
+  for (const project of db.projects) {
+    if (project.SourceType === 'CORPORATE' && !db.corporateProjects.some((source) => String(source.ProjectCode).toUpperCase() === String(project.ProjectCode).toUpperCase())) project.IsActive = 0;
+  }
 }
 
 function mergeCorporateWbs(db, params) {
@@ -705,6 +747,351 @@ function nullableDate(value) {
   return value == null || value === '' ? null : isoDate(value);
 }
 
+/**
+ * Görev, o Sicil için görünür mü? (Outlook daveti ve hatırlatma ile AYNI kural.)
+ */
+function taskVisibleToSicil(db, task, sicil) {
+  if (!task) return false;
+  const project = projectById(db, task.ProjectId);
+  if (!project?.IsActive) return false;
+  if (db.systemAdminSicils.includes(sicil)) return true;
+  if (project.SourceType === 'CORPORATE' && db.corporateProjectAccess.some((entry) => entry.Sicil === sicil
+    && String(entry.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase())) return true;
+  if (project.SourceType === 'MANUAL' && project.LeadSicil === sicil) return true;
+  if (Number(task.CreatedBySicil) === Number(sicil)) return true;
+  if (db.projectAccess.some((entry) => entry.IsActive && entry.Sicil === sicil
+    && ['FULL', 'READ'].includes(entry.AccessLevel) && sameGuid(entry.ProjectId, task.ProjectId))) return true;
+  return visibleAssignee(db, task.TaskId, sicil);
+}
+
+const OUTLOOK_ROW_KEYS = [
+  'SubscriptionId', 'TaskId', 'ProjectId', 'UserSicil', 'CalendarUid', 'Sequence', 'IsActive',
+  'QueueSeq', 'PendingMethod', 'PendingSequence', 'PendingPayloadHash', 'DeliveredSequence',
+  'DeliveredPayloadHash', 'DeliveredSummary', 'DeliveredDate', 'AttemptCount',
+  'LeaseToken', 'LeaseExpiresAt', 'CalendarAttendee', 'CalendarOrganizer',
+  'CancelRequested', 'ForceResend', 'DeliveryMayHaveEscaped', 'LastValidatedAt'
+];
+
+function outlookOutputRow(entry) {
+  return Object.fromEntries(OUTLOOK_ROW_KEYS.map((key) => [key, entry[key] ?? null]));
+}
+
+function outlookMissingSchema() {
+  const error = new Error("Invalid object name 'dbo.MR_TaskOutlookSubscriptions'.");
+  error.number = 208;
+  return error;
+}
+
+/**
+ * Outlook abonelik tablosunun bellek içi karşılığı.
+ *
+ * Benzersiz kısıt, sürüm ayırma ve kuyruk sayacı GERÇEK sorgulardaki kurallarla
+ * aynıdır; testler kopya randevu, sürüm ilerlemesi ve yeniden deneme
+ * davranışını buradan sınayabilir.
+ */
+function runOutlookQuery(db, sqlText, params) {
+  if (db.outlookSchemaMissing) throw outlookMissingSchema();
+  const rows = db.taskOutlookSubscriptions;
+  const now = Date.now();
+  const byTaskUser = () => rows.find((entry) => sameGuid(entry.TaskId, params.taskId)
+    && Number(entry.UserSicil) === Number(params.sicil));
+  const owns = (entry) => entry && entry.LeaseToken != null && entry.LeaseToken === params.leaseToken;
+  const current = (entry) => owns(entry) && Number(entry.QueueSeq) === Number(params.queueSeq);
+  const release = (entry) => { entry.InFlightSince = null; entry.LeaseToken = null; entry.LeaseExpiresAt = null; };
+  const byId = () => rows.find((entry) => Number(entry.SubscriptionId) === Number(params.subscriptionId));
+
+  if (sqlText.includes('INSERT dbo.MR_TaskOutlookSubscriptions(')) {
+    const existing = byTaskUser();
+    if (existing) {
+      const unchanged = existing.IsActive === 1 && existing.PendingMethod == null
+        && existing.DeliveredPayloadHash === params.payloadHash;
+      const samePending = existing.IsActive === 1 && existing.PendingMethod === 'REQUEST'
+        && (existing.PendingSequence == null || existing.PendingPayloadHash === params.payloadHash);
+      if (existing.IsActive === 0) {
+        existing.CalendarAttendee = null;
+        existing.CalendarOrganizer = null;
+        existing.DeliveryMayHaveEscaped = 0;
+        existing.DeliveredSequence = null;
+        existing.DeliveredPayloadHash = null;
+        existing.DeliveredSummary = null;
+        existing.DeliveredDate = null;
+        existing.PendingSequence = null;
+        existing.PendingPayloadHash = null;
+      }
+      existing.CancelRequested = 0;
+      existing.IsActive = 1;
+      existing.ProjectId = guid(params.projectId) || existing.ProjectId;
+      existing.PendingMethod = unchanged ? null : 'REQUEST';
+      existing.QueueSeq = unchanged || samePending ? existing.QueueSeq : existing.QueueSeq + 1;
+      existing.AttemptCount = 0;
+      existing.NextAttemptAt = null;
+      existing.LastFailureCode = null;
+      existing.UpdatedAt = new Date().toISOString();
+      return result([[outlookOutputRow(existing)]]);
+    }
+    const created = {
+      SubscriptionId: rows.length + 1,
+      TaskId: guid(params.taskId),
+      ProjectId: guid(params.projectId),
+      UserSicil: Number(params.sicil),
+      CalendarUid: params.calendarUid,
+      CancelRequested: 0,
+      ForceResend: 0,
+      DeliveryMayHaveEscaped: 0,
+      LastValidatedAt: null,
+      Sequence: 0,
+      IsActive: 1,
+      QueueSeq: 1,
+      PendingMethod: 'REQUEST',
+      PendingSequence: null,
+      PendingPayloadHash: null,
+      DeliveredSequence: null,
+      DeliveredPayloadHash: null,
+      DeliveredSummary: null,
+      DeliveredDate: null,
+      AttemptCount: 0,
+      NextAttemptAt: null,
+      InFlightSince: null,
+      LastDeliveredAt: null,
+      LastFailureCode: null,
+      CreatedBySicil: Number(params.sicil),
+      CreatedAt: new Date().toISOString(),
+      UpdatedAt: new Date().toISOString()
+    };
+    rows.push(created);
+    return result([[outlookOutputRow(created)]]);
+  }
+
+  if (sqlText.includes('SELECT TOP (1) SubscriptionId')) {
+    const entry = byTaskUser();
+    return result([entry ? [outlookOutputRow(entry)] : []]);
+  }
+
+  if (sqlText.includes('WHERE UserSicil = @sicil AND IsActive = 1')) {
+    return result([rows
+      .filter((entry) => Number(entry.UserSicil) === Number(params.sicil) && entry.IsActive === 1)
+      .map((entry) => ({
+        TaskId: entry.TaskId,
+        PendingMethod: entry.PendingMethod,
+        DeliveredSequence: entry.DeliveredSequence,
+        LastFailureCode: entry.LastFailureCode
+      }))]);
+  }
+
+  if (sqlText.includes("SET PendingMethod = 'CANCEL'") && sqlText.includes('UserSicil = @sicil')) {
+    const entry = byTaskUser();
+    if (!entry || entry.IsActive !== 1) return result([[]]);
+    if (entry.PendingMethod !== 'CANCEL' || !entry.CancelRequested) {
+      entry.QueueSeq += 1;
+      entry.AttemptCount = 0;
+      entry.NextAttemptAt = null;
+      entry.LastFailureCode = null;
+    }
+    entry.PendingMethod = 'CANCEL';
+    entry.CancelRequested = 1;
+    entry.ForceResend = 0;
+    return result([[outlookOutputRow(entry)]]);
+  }
+
+  if (sqlText.includes("SET PendingMethod = 'REQUEST',") && sqlText.includes('ForceResend = 1,')) {
+    const entry = byTaskUser();
+    if (!entry || entry.IsActive !== 1 || entry.CancelRequested) return result([[]]);
+    if (!entry.ForceResend) {
+      entry.QueueSeq += 1;
+      entry.AttemptCount = 0;
+      entry.NextAttemptAt = null;
+      entry.LastFailureCode = null;
+    }
+    entry.PendingMethod = 'REQUEST';
+    entry.ForceResend = 1;
+    return result([[outlookOutputRow(entry)]]);
+  }
+
+  if (sqlText.includes(';WITH unchecked AS')) {
+    const eligible = rows.filter((entry) => entry.IsActive === 1 && !entry.PendingMethod
+      && (!entry.LastValidatedAt || new Date(entry.LastValidatedAt).getTime() <= now - 300000)
+      && (!entry.LeaseExpiresAt || new Date(entry.LeaseExpiresAt).getTime() <= now))
+      .sort((a, b) => new Date(a.LastValidatedAt || 0) - new Date(b.LastValidatedAt || 0) || a.SubscriptionId - b.SubscriptionId)
+      .slice(0, Number(params.limit));
+    for (const entry of eligible) {
+      entry.PendingMethod = 'REQUEST';
+      entry.QueueSeq += 1;
+      entry.AttemptCount = 0;
+      entry.LastFailureCode = null;
+      entry.NextAttemptAt = new Date(now).toISOString();
+      entry.LastValidatedAt = new Date(now).toISOString();
+    }
+    return result([[]]);
+  }
+
+  if (sqlText.includes('COUNT_BIG(*) AS Exhausted')) {
+    return result([[{ Exhausted: rows.filter((entry) => entry.PendingMethod && entry.AttemptCount >= params.maxAttempts).length }]]);
+  }
+
+  if (sqlText.includes('SET LeaseExpiresAt = DATEADD')) {
+    const entry = byId();
+    if (!owns(entry) || new Date(entry.LeaseExpiresAt).getTime() <= now) return result([[]]);
+    entry.LeaseExpiresAt = new Date(now + Number(params.leaseSeconds) * 1000).toISOString();
+    return result([[{ SubscriptionId: entry.SubscriptionId }]]);
+  }
+
+  if (sqlText.includes('SET IsActive = 0')) {
+    const entry = byId();
+    if (current(entry)) {
+      entry.IsActive = 0;
+      entry.PendingMethod = null;
+      entry.PendingSequence = null;
+      entry.PendingPayloadHash = null;
+      entry.AttemptCount = 0;
+      entry.NextAttemptAt = null;
+      release(entry);
+      return result([[{ SubscriptionId: entry.SubscriptionId }]]);
+    }
+    return { ...result([[]]), rowsAffected: [0] };
+  }
+
+  // Süren bir teslimat (kira) satırı sahiplenilemez.
+  const leaseFree = (entry) => entry.LeaseExpiresAt == null || new Date(entry.LeaseExpiresAt).getTime() <= now;
+
+  if (sqlText.includes(';WITH due AS')) {
+    const claimed = rows
+      .filter((entry) => entry.PendingMethod
+        && (entry.NextAttemptAt == null || new Date(entry.NextAttemptAt).getTime() <= now)
+        && leaseFree(entry, params.leaseSeconds)
+        && (entry.IsActive === 1 || entry.PendingMethod === 'CANCEL'))
+      .sort((a, b) => (new Date(a.NextAttemptAt || 0) - new Date(b.NextAttemptAt || 0)) || a.SubscriptionId - b.SubscriptionId)
+      .slice(0, Number(params.limit));
+    for (const entry of claimed) {
+      entry.AttemptCount += 1;
+      entry.LeaseToken = params.leaseToken;
+      entry.LeaseExpiresAt = new Date(now + Number(params.leaseSeconds) * 1000).toISOString();
+      entry.InFlightSince = new Date().toISOString();
+      entry.NextAttemptAt = new Date(now + (Number(params.leaseSeconds) * 1000)).toISOString();
+    }
+    return result([claimed.map(outlookOutputRow)]);
+  }
+
+  if (sqlText.includes('SET AttemptCount = 1')) {
+    const entry = byId();
+    if (!entry || !entry.PendingMethod || entry.IsActive !== 1 || !leaseFree(entry, params.leaseSeconds)) return result([[]]);
+    entry.AttemptCount = 1;
+    entry.LeaseToken = params.leaseToken;
+      entry.LeaseExpiresAt = new Date(now + Number(params.leaseSeconds) * 1000).toISOString();
+      entry.InFlightSince = new Date().toISOString();
+    entry.NextAttemptAt = new Date(now + (Number(params.leaseSeconds) * 1000)).toISOString();
+    return result([[outlookOutputRow(entry)]]);
+  }
+
+  if (sqlText.includes('AS AllocatedSequence')) {
+    const entry = byId();
+    if (!current(entry) || new Date(entry.LeaseExpiresAt).getTime() <= now) return result([[]]);
+    const reuse = entry.PendingSequence != null
+      && entry.PendingMethod === params.method
+      && entry.PendingPayloadHash === params.payloadHash;
+    if (params.reuseDelivered && entry.DeliveredPayloadHash === params.payloadHash && entry.DeliveredSequence === entry.Sequence) {
+      entry.PendingSequence = entry.DeliveredSequence;
+    } else if (!reuse) {
+      entry.Sequence += 1;
+      entry.PendingSequence = entry.Sequence;
+    }
+    entry.LeaseExpiresAt = new Date(now + Number(params.leaseSeconds) * 1000).toISOString();
+    entry.DeliveryMayHaveEscaped = 1;
+    entry.CalendarAttendee ||= params.attendee;
+    entry.CalendarOrganizer ||= params.organizer;
+    entry.PendingMethod = params.method;
+    entry.PendingPayloadHash = params.payloadHash;
+    return result([[{ AllocatedSequence: entry.PendingSequence, QueueSeq: entry.QueueSeq, CalendarAttendee: entry.CalendarAttendee, CalendarOrganizer: entry.CalendarOrganizer }]]);
+  }
+
+  if (sqlText.includes('SET DeliveredSequence = @sequence')) {
+    const entry = byId();
+    if (owns(entry)) {
+      entry.DeliveredSequence = Number(params.sequence);
+      entry.DeliveredPayloadHash = params.payloadHash;
+      entry.DeliveredSummary = params.summary ?? null;
+      entry.DeliveredDate = params.calendarDate ?? null;
+      entry.LastDeliveredAt = new Date().toISOString();
+      entry.LastValidatedAt = new Date().toISOString();
+      entry.LastFailureCode = null;
+      if (params.method === 'CANCEL' && current(entry)) entry.IsActive = 0;
+      const settle = Number(entry.QueueSeq) === Number(params.queueSeq);
+      if (settle) {
+        entry.ForceResend = 0;
+        entry.PendingMethod = null;
+        entry.PendingSequence = null;
+        entry.PendingPayloadHash = null;
+      }
+      entry.AttemptCount = 0;
+      entry.NextAttemptAt = null;
+      release(entry);
+    }
+    return result([[]]);
+  }
+
+  if (sqlText.includes('SET PendingMethod = CASE WHEN QueueSeq = @queueSeq')) {
+    const entry = byId();
+    if (current(entry)) {
+      entry.PendingMethod = null;
+      entry.PendingSequence = null;
+      entry.PendingPayloadHash = null;
+      entry.ForceResend = 0;
+      entry.AttemptCount = 0;
+    }
+    if (owns(entry)) {
+      entry.LastValidatedAt = new Date().toISOString();
+      entry.NextAttemptAt = null;
+      entry.LastFailureCode = null;
+      release(entry);
+    }
+    return result([[]]);
+  }
+
+  if (sqlText.includes('THEN @failureCode ELSE LastFailureCode END')) {
+    const entry = byId();
+    if (owns(entry)) {
+      if (params.clearProvisional && entry.DeliveredSequence == null) {
+        entry.CalendarAttendee = null;
+        entry.CalendarOrganizer = null;
+        entry.DeliveryMayHaveEscaped = 0;
+      }
+      if (current(entry)) {
+        entry.LastFailureCode = params.failureCode;
+        entry.NextAttemptAt = new Date(now + (Number(params.retrySeconds) * 1000)).toISOString();
+      }
+      release(entry);
+    }
+    return result([[]]);
+  }
+
+  if (sqlText.includes('JOIN dbo.MR_Tasks t ON t.TaskId = s.TaskId')) {
+    for (const entry of rows) {
+      const task = taskById(db, entry.TaskId);
+      if (!task || !sameGuid(task.ProjectId, params.projectId) || entry.IsActive !== 1 || entry.CancelRequested) continue;
+      entry.PendingMethod = entry.CancelRequested ? 'CANCEL' : 'REQUEST';
+      entry.QueueSeq += 1;
+      entry.AttemptCount = 0;
+      entry.NextAttemptAt = null;
+      entry.LastFailureCode = null;
+    }
+    return result([[]]);
+  }
+
+  if (sqlText.includes('WHERE TaskId = @taskId AND IsActive = 1')) {
+    const method = sqlText.includes("SET PendingMethod = 'CANCEL'") ? 'CANCEL' : 'REQUEST';
+    for (const entry of rows) {
+      if (!sameGuid(entry.TaskId, params.taskId) || entry.IsActive !== 1 || entry.CancelRequested) continue;
+      entry.PendingMethod = entry.CancelRequested ? 'CANCEL' : method;
+      entry.QueueSeq += 1;
+      entry.AttemptCount = 0;
+      entry.NextAttemptAt = null;
+      entry.LastFailureCode = null;
+    }
+    return result([[]]);
+  }
+
+  throw new Error(`Bilinmeyen Outlook sorgusu: ${sqlText.slice(0, 120)}`);
+}
+
 function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
@@ -768,8 +1155,9 @@ function runQuery(db, statement, params, { database }) {
     return result(snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate)));
   }
   if (sqlText.includes("THROW 51001")) {
+    const before = new Map(db.projects.map((row) => [row.ProjectId, JSON.stringify(row)]));
     synchronizeCorporateProjects(db, params.actorSicil);
-    return result([[]]);
+    return result([db.projects.filter((row) => before.has(row.ProjectId) && before.get(row.ProjectId) !== JSON.stringify(row)).map((row) => ({ ProjectId: row.ProjectId }))]);
   }
   if (sqlText.includes('JOIN STRING_SPLIT(@projectIds') && sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
     const requested = (value) => new Set(String(value || '').split(',').map((entry) => entry.trim().toUpperCase()).filter(Boolean));
@@ -1046,6 +1434,44 @@ function runQuery(db, statement, params, { database }) {
         || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil)));
     const visible = params.isAdmin ? true : (corporate || manualLead || creator || granted || assigned);
     return result([visible ? [{ TaskId: task.TaskId }] : []]);
+  }
+
+  /* ── Outlook takvim abonelikleri ──────────────────────────── */
+  if (sqlText.includes('MR_TaskOutlookSubscriptions')) {
+    return runOutlookQuery(db, sqlText, params);
+  }
+  // Kurumsal dizinden TEK kullanıcının adresi (Sicil → kullanıcı adı → adres).
+  if (sqlText.includes('SELECT TOP (1) pd.Sicil') && sqlText.includes('directory.EmailAddress AS Email')) {
+    const person = db.people.find((entry) => entry.Sicil === params.sicil) || null;
+    if (!person) return result([[]]);
+    const username = person.Username ? String(person.Username).trim() : '';
+    const directory = username
+      ? db.corporateUsers.find((candidate) => String(candidate.Name || '').trim() === username
+        && String(candidate.EmailAddress || '').trim() !== '')
+      : null;
+    return result([[{
+      Sicil: person.Sicil,
+      Name: person.DisplayName ?? null,
+      Username: person.Username ?? null,
+      Email: directory ? String(directory.EmailAddress).trim() : null
+    }]]);
+  }
+  // Görev + kullanıcı GÖRÜNÜRLÜĞÜ (Outlook daveti için).
+  if (sqlText.includes('AS Visible') && sqlText.includes('WHERE t.TaskId = @taskId')) {
+    const task = taskById(db, params.taskId);
+    if (!task) return result([[]]);
+    const project = projectById(db, task.ProjectId);
+    if (!project?.IsActive) return result([[]]);
+    return result([[{
+      TaskId: task.TaskId,
+      ProjectId: task.ProjectId,
+      Title: task.Title,
+      TargetFinish: task.TargetFinish,
+      PlannedFinish: task.PlannedFinish,
+      ProjectCode: project.ProjectCode ?? null,
+      ProjectName: project.ProjectName ?? null,
+      Visible: taskVisibleToSicil(db, task, params.sicil)
+    }]]);
   }
 
   /* ── Görev hatırlatma e-postaları ─────────────────────────── */

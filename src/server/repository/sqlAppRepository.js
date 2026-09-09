@@ -15,6 +15,12 @@ import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignme
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
 import { formatRecurrenceRule } from '../../scheduling/recurrence/index.js';
 import { calculatePlannedDurationDays } from '../../scheduling/plans/index.js';
+import {
+  enqueueOutlookProjectChange,
+  enqueueOutlookProjectRefresh,
+  enqueueOutlookTaskChange,
+  enqueueOutlookTaskRemoval
+} from '../outlook/outlookCommitHooks.js';
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
 import { CORPORATE_WBS_SYNC_WARMTH_SQL } from './corporateWbsQueries.js';
 import { synchronizeCorporateWbs } from './corporateWbsSync.js';
@@ -56,7 +62,10 @@ function normalizeChanges(changes = {}) {
 async function synchronizeCorporateProjects(executor, actorSicil) {
   const sync = request(executor);
   sync.input('actorSicil', sql.Int, actorSicil);
-  await sync.query(CORPORATE_PROJECT_SYNC_SQL);
+  const changed = await sync.query(CORPORATE_PROJECT_SYNC_SQL);
+  for (const row of changed.recordset || []) {
+    await enqueueOutlookProjectRefresh(executor, row.ProjectId);
+  }
 }
 
 async function rowById(executor, table, column, value) {
@@ -1149,6 +1158,12 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
     throw new ServerPersistenceError('CONFLICT', 'Proje başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
   }
   const tagPlan = await reconcileProjectTags(executor, actor.sicil, projectId, project.tags, project.tagRenames);
+  // Proje künyesi Outlook randevusunun açıklamasında GÖRÜNÜR; yeniden
+  // adlandırma o projenin abonelerine güncelleme kuyruğu açar. Yazılan değerler
+  // deyimin kendisinden bilinir; satır yeniden OKUNMAZ.
+  await enqueueOutlookProjectChange(executor, projectId, before, before.SourceType === 'MANUAL'
+    ? { ...before, ProjectName: project.name, ProjectCode: projectCode, LeadSicil: project.leadId ? Number(project.leadId) : null }
+    : before);
   await audit(executor, actor, correlationId, 'UPDATE', 'PROJECT', projectId, projectId, before, project);
   return { created: false, consumedRootId: null, tagPlan };
 }
@@ -2101,6 +2116,10 @@ async function commitTask(executor, actor, task, correlationId) {
     `);
   }
   const committed = await taskRow(executor, taskId);
+  // Takvim ve görünürlük değişiklikleri aynı işlemde kuyruğa yazılır.
+  await enqueueOutlookTaskChange(executor, taskId,
+    before ? { ...before, assigneeIds: authoritativeAssigneeSicils } : null,
+    { ...committed, assigneeIds: assigneeSicils });
   const projectIdentity = { ProjectName: auditProject.ProjectName, ProjectCode: auditProject.ProjectCode };
   await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'TASK', taskId, projectId,
     before ? { ...before, assigneeIds: authoritativeAssigneeSicils } : null,
@@ -2189,6 +2208,10 @@ async function deleteTask(executor, actor, entry, correlationId) {
   if (!result.recordset[0]?.Affected) {
     throw new ServerPersistenceError('CONFLICT', 'Görev silinemedi. Verileri yeniden yükleyin.');
   }
+  // Görev artık yok: abonelerin Outlook randevusu İPTAL edilir. Abonelik satırı
+  // korunur, çünkü iptal daveti için değişmez UID ve son teslim edilen künye
+  // gereklidir (bkz. MR_TaskOutlookSubscriptions · DeliveredSummary).
+  await enqueueOutlookTaskRemoval(executor, taskId);
   const auditProject = await projectRow(executor, projectId);
   await audit(executor, actor, correlationId, 'DELETE', 'TASK', taskId, projectId,
     { ...before, assigneeIds: assigneeSicils, ProjectName: auditProject?.ProjectName, ProjectCode: auditProject?.ProjectCode }, null);

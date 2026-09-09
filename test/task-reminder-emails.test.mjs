@@ -366,8 +366,8 @@ test('SMTP başarısızlığı asla "gönderildi" olarak raporlanmaz', () => {
   const client = read('src/server/mail/smtpClient.js');
   // Söz yalnızca sunucu 250 döndüğünde çözülür.
   assert.match(client, /if \(accepted\.code !== 250\) \{[\s\S]*?throw new SmtpError\('SMTP_SEND_FAILED'/);
-  // Bağlantı her koşulda serbest bırakılır.
-  assert.match(client, /finally \{[\s\S]*?socket\.destroy\(\)/);
+  // Bağlantı aynı finally bloğunda her koşulda serbest bırakılır.
+  assert.match(client, /finally \{[^{}]*socket\?\.destroy\(\)/);
 });
 
 test('SMTP kimlik bilgileri istemciye taşınmaz ve günlüğe yazılmaz', () => {

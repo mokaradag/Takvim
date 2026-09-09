@@ -202,7 +202,10 @@ test('göreve atanmamış kullanıcı talep oluşturamaz ve sorumlu karar sahibi
 });
 
 test('oluşturucu kabul ettiğinde yalnız hedef bitiş güncellenir, talep iki tarafa kalıcı görünür', async () => {
-  const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
+  const stack = await createActualStack(seed({ taskOutlookSubscriptions: [{
+    TaskId: TASK_ID, ProjectId: PROJECT_ID, UserSicil: ASSIGNEE, CalendarUid: 'schedule-task',
+    IsActive: 1, PendingMethod: null, DeliveredSequence: 1
+  }] }), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
     const created = await submitScheduleChangeRequest(proposal());
     assert.equal(created.ok, true);
@@ -216,6 +219,7 @@ test('oluşturucu kabul ettiğinde yalnız hedef bitiş güncellenir, talep iki 
     assert.equal(stack.db.tasks[0].PlannedStart, '2026-09-01');
     assert.equal(stack.db.tasks[0].PlannedFinish, '2026-09-02');
     assert.equal(stack.db.tasks[0].TargetFinish, '2026-09-03');
+    assert.equal(stack.db.taskOutlookSubscriptions[0].PendingMethod, 'REQUEST');
     assert.equal(stack.db.tasks[0].PlannedDurationDays, 2);
     assert.equal(stack.db.taskScheduleChangeRequests[0].Status, 'ACCEPTED');
 

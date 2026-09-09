@@ -22,6 +22,7 @@ WHERE ManagerSicil = @sicil;`;
 
 export const CORPORATE_PROJECT_SYNC_SQL = `
 SET XACT_ABORT ON;
+DECLARE @OutlookChangedProjects TABLE (ProjectId uniqueidentifier);
 
 IF EXISTS (
   SELECT ProjectCode
@@ -76,6 +77,7 @@ SET ProjectCode = source.ProjectCode,
     IsActive = 1,
     UpdatedAt = SYSUTCDATETIME(),
     UpdatedBySicil = @actorSicil
+OUTPUT inserted.ProjectId INTO @OutlookChangedProjects
 FROM dbo.MR_Projects target
 JOIN dbo.MR_V_CorporateProjects source ON source.ProjectCode = UPPER(target.ProjectCode)
 OUTER APPLY (
@@ -134,8 +136,10 @@ FROM @Inserted;
 
 UPDATE p
 SET IsActive = 0, UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
+OUTPUT inserted.ProjectId INTO @OutlookChangedProjects
 FROM dbo.MR_Projects p
 WHERE p.SourceType = 'CORPORATE'
   AND p.IsActive = 1
   AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_CorporateProjects source WHERE source.ProjectCode = UPPER(p.ProjectCode));
+SELECT DISTINCT ProjectId FROM @OutlookChangedProjects;
 `;
