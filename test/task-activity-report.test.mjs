@@ -161,7 +161,8 @@ test('sorgu güvenlik sınırı ve dizin sözleşmesi; ham geçmiş genel anlık
   assert.doesNotMatch(readFileSync(new URL('../src/server/repository/projectedSqlAppRepository.js', import.meta.url), 'utf8'), /MR_AuditLog|queryTaskActivities/);
 });
 
-test('kaydedilen görev denetimi kalıcı değerleri ve atamaları taşır; dar yazma sahte fark üretmez', async () => {
+test('kaydedilen görev denetimi kalıcı değerleri ve atamaları taşır; dar yazma sahte fark üretmez', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-07-25T09:00:00.000Z') });
   const stack = await createActualStack(seed({ auditLog: [] }), { sicil: employee, corporateWbsSource: false });
   try {
     const saved = await stack.persistence.updateTask(TASK, { description: 'Yeni not', progress: 70 });
@@ -175,6 +176,14 @@ test('kaydedilen görev denetimi kalıcı değerleri ve atamaları taşır; dar 
     assert.equal(after.Progress, stack.db.tasks[0].Progress);
     assert.equal(after.PlannedStart, stack.db.tasks[0].PlannedStart);
     assert.equal(audit.ActorSicil, employee);
-    assert.deepEqual(taskActivityChanges([audit]).changes, ['Notlar: — → Yeni not', 'İlerleme: — → %70']);
+    const changes = taskActivityChanges([audit]).changes;
+    assert.deepEqual(changes.slice(0, 2), ['Notlar: — → Yeni not', 'İlerleme: — → %70']);
+    const expectedActualStart = '2026-07-25';
+    assert.equal(after.ActualStart, expectedActualStart);
+    const expectedActualStartLabel = new Intl.DateTimeFormat('tr-TR', {
+      day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC'
+    }).format(new Date(expectedActualStart));
+    assert.equal(changes[2], `Gerçekleşen başlangıç: — → ${expectedActualStartLabel}`);
+    assert.equal(changes.length, 3);
   } finally { await stack.dispose(); }
 });

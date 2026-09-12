@@ -81,9 +81,13 @@ Valid states are:
 - `actualStart` recorded without `actualFinish`;
 - both dates recorded.
 
-`actualFinish` without `actualStart` is reported as a validation issue, and an `actualFinish` earlier than `actualStart` is invalid.
+`actualFinish` earlier than `actualStart` is invalid. A submitted finish without a recorded start uses same-day completion (`actualStart = actualFinish`) before persistence.
 
-Actual dates are explicit data. MERGEN Rota does not fabricate them from task status, progress percentage, the browser's current date or planned dates. Changing a task to `in_progress` does not set `actualStart`, and changing it to `done` does not set `actualFinish`.
+Task updates pass through one shared `normalizeTaskLifecycle` rule in the client and transactional SQL write path. Selecting `in_progress` fills a missing actual start with the effective task calendar's current date. Selecting `done` sets progress to 100 and fills a missing finish with that date; without a recorded start, both actuals use the completion day. Existing actual dates are preserved and planned dates are never copied into actuals.
+
+Entering a start changes `todo` to `in_progress`; editing it on a completed task preserves completion. Entering a finish completes the task and sets progress to 100. Progress alone never changes status, including at 100%; completed tasks always retain 100%.
+
+Reopening as `in_progress` preserves actual start and progress (including 100%) and clears actual finish. Returning to `todo` with historical actuals requires explicit confirmation (`resetActualDates: true` in the mutation envelope), then clears both actuals and sets progress to 0. The confirmation flag is not stored on the task. Existing row-version, audit and Outlook transaction hooks apply to the final state. No parallel history store or schema migration is added. The shared business-date formatter uses the effective calendar timezone, falling back to Europe/Istanbul.
 
 ## 4. Remaining Duration
 
@@ -276,9 +280,11 @@ Those capabilities can now build on distinct Project/WBS/Activity relationships 
 
 ## Kilometre taşı gerçekleşmesi
 
-Kilometre taşı tek bir olaydır: **Gerçekleşen tarih** alanı iki eski SQL sütununa (`ActualStart`, `ActualFinish`) aynı değerle yazılır. Ayrı gerçekleşen başlangıç/bitiş veya ilerleme sürgüsü gösterilmez. Durumu **Yapılacak / Tamamlandı**, ilerlemesi **0 / 100** olur. Tamamlandı seçimi gerçekleşen tarihi damgalar; yeniden açma veya gerçekleşen tarihi temizleme iki sütunu birlikte boşaltır. Girilen gerçekleşen tarih değiştirildiğinde iki sütun birlikte güncellenir. Temel Kip ve salt okunur panel de ikili durumu kullanır.
+Kilometre taşı tek bir olaydır: **Gerçekleşen tarih** alanı iki eski SQL sütununa (`ActualStart`, `ActualFinish`) aynı değerle yazılır. Ayrı gerçekleşen başlangıç/bitiş veya ilerleme sürgüsü gösterilmez. Durumu **Yapılacak / Tamamlandı**, ilerlemesi **0 / 100** olur. Tamamlandı seçimi gerçekleşen tarihi damgalar; yeniden açma veya gerçekleşen tarihi temizleme, mevcut gerçekleşen bilgi varsa açık onaydan sonra iki sütunu birlikte boşaltır. Girilen gerçekleşen tarih değiştirildiğinde iki sütun birlikte güncellenir. Temel Kip ve salt okunur panel de ikili durumu kullanır.
 
-Ortak `milestoneCompletion` kuralı istemci durum güncellemelerinde, kayıt normalleştirmesinde ve SQL yazma sınırında uygulanır. Eski kayıtlar ayrıca topluca dönüştürülmez; okunurken normalleştirilir, sonraki yetkili yazmada kalıcılaştırılır. Normal görevlerin tarih ve ilerleme davranışı değişmez. SQL şeması yükseltmesi gerekmez.
+Ortak `milestoneCompletion` kuralı istemci durum güncellemelerinde, kayıt normalleştirmesinde ve SQL yazma sınırında uygulanır. Eski kayıtlar ayrıca topluca dönüştürülmez; okunurken normalleştirilir, sonraki yetkili yazmada kalıcılaştırılır. Normal görevler de ortak yaşam döngüsü kuralını kullanır; kilometre taşının tek gün ve 0/100 davranışı korunur. SQL şeması yükseltmesi gerekmez.
+
+Hızlı durum değişiklikleri tek kayıtta birleştirilirken kullanıcının onayladığı gerçekleşen tarih sıfırlama niyeti korunur. Onay işareti kalıcı görev modeline yazılmaz.
 
 ## Tarih önerilerinde eşzamanlı kayıt
 

@@ -2,6 +2,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { sql } from '../db/pool.js';
+import { outlookMaxAttempts } from './outlookConfig.js';
 import { corporateUserEmailSql } from '../identity/corporateDirectory.js';
 import {
   OUTLOOK_ALLOCATE_SQL,
@@ -17,6 +18,7 @@ import {
   OUTLOOK_QUEUE_RESEND_SQL,
   OUTLOOK_REVALIDATE_SQL,
   OUTLOOK_HEALTH_SQL,
+  OUTLOOK_QUEUE_STATUS_SQL,
   OUTLOOK_RENEW_SQL,
   OUTLOOK_SETTLE_SQL,
   OUTLOOK_SUBSCRIPTION_SQL,
@@ -49,8 +51,9 @@ export const INTERACTIVE_LEASE_SECONDS = 60;
 
 export function isMissingOutlookSchema(error) {
   const errors = [error, error?.originalError, error?.originalError?.info, error?.cause, ...(error?.precedingErrors || [])];
-  return errors.some((entry) => /(?:Invalid object name|Invalid column name)/i.test(String(entry?.message || ''))
-    && /(?:MR_TaskOutlookSubscriptions|LeaseToken|LeaseExpiresAt|CalendarAttendee|CalendarOrganizer|CancelRequested|ForceResend|DeliveryMayHaveEscaped|LastValidatedAt)/i.test(String(entry?.message || '')));
+  return errors.some((entry) => ([207, 208].includes(Number(entry?.number))
+    || /(?:Invalid object name|Invalid column name)/i.test(String(entry?.message || '')))
+    && /(?<![\p{L}\p{N}_@$#])(?:MR_TaskOutlookSubscriptions|LeaseToken|LeaseExpiresAt|CalendarAttendee|CalendarOrganizer|CancelRequested|ForceResend|DeliveryMayHaveEscaped|LastValidatedAt|CompletionSuspended|CompletionDate|LastCancellationReason|DeliveredMethod|PendingDate)(?![\p{L}\p{N}_@$#])/iu.test(String(entry?.message || '')));
 }
 
 function subscriptionRow(row) {
@@ -63,6 +66,11 @@ function subscriptionRow(row) {
     calendarUid: row.CalendarUid,
     cancelRequested: Boolean(row.CancelRequested),
     forceResend: Boolean(row.ForceResend),
+    completionSuspended: Boolean(row.CompletionSuspended),
+    completionDate: isoDate(row.CompletionDate),
+    lastCancellationReason: row.LastCancellationReason || null,
+    deliveredMethod: row.DeliveredMethod || null,
+    pendingDate: isoDate(row.PendingDate),
     deliveryMayHaveEscaped: Boolean(row.DeliveryMayHaveEscaped),
     leaseToken: row.LeaseToken || null,
     calendarAttendee: row.CalendarAttendee || null,
@@ -100,6 +108,7 @@ export async function loadOutlookTask(executor, taskId, sicil) {
       id: id(row.TaskId),
       projectId: id(row.ProjectId),
       task: row.Title,
+      status: row.Status,
       targetFinish: isoDate(row.TargetFinish),
       plannedFinish: isoDate(row.PlannedFinish),
       projectCode: row.ProjectCode || '',
@@ -148,7 +157,7 @@ export async function loadOutlookSubscription(executor, taskId, sicil) {
   return subscriptionRow(result.recordset?.[0]);
 }
 
-/** Kullanıcının etkin abonelikleri; arayüz "eklendi" durumunu bundan kurar. */
+/** Etkin abonelik tercihi ve son davetin teslimat durumu. */
 export async function loadUserOutlookSubscriptions(executor, sicil) {
   const request = executor.request();
   request.input('sicil', sql.Int, sicil);
@@ -156,7 +165,8 @@ export async function loadUserOutlookSubscriptions(executor, sicil) {
   return (result.recordset || []).map((row) => ({
     taskId: id(row.TaskId),
     pending: Boolean(row.PendingMethod),
-    delivered: row.DeliveredSequence != null,
+    delivered: row.DeliveredSequence != null && row.DeliveredMethod !== 'CANCEL',
+    completionSuspended: Boolean(row.CompletionSuspended),
     failureCode: row.LastFailureCode || null
   }));
 }
@@ -165,6 +175,7 @@ export async function queueOutlookCancellation(executor, taskId, sicil) {
   const request = executor.request();
   request.input('taskId', sql.UniqueIdentifier, taskId);
   request.input('sicil', sql.Int, sicil);
+  request.input('maxAttempts', sql.Int, outlookMaxAttempts());
   const result = await request.query(OUTLOOK_QUEUE_CANCEL_SQL);
   return subscriptionRow(result.recordset?.[0]);
 }
@@ -173,6 +184,7 @@ export async function queueOutlookResend(executor, taskId, sicil) {
   const request = executor.request();
   request.input('taskId', sql.UniqueIdentifier, taskId);
   request.input('sicil', sql.Int, sicil);
+  request.input('maxAttempts', sql.Int, outlookMaxAttempts());
   return subscriptionRow((await request.query(OUTLOOK_QUEUE_RESEND_SQL)).recordset?.[0]);
 }
 
@@ -188,6 +200,14 @@ export async function outlookOutboxHealth(executor, maxAttempts) {
   return Number((await request.query(OUTLOOK_HEALTH_SQL)).recordset?.[0]?.Exhausted || 0);
 }
 
+export async function outlookQueueStatus(executor, maxAttempts) {
+  const request = executor.request();
+  request.input('maxAttempts', sql.Int, maxAttempts);
+  const row = (await request.query(OUTLOOK_QUEUE_STATUS_SQL)).recordset?.[0] || {};
+  return Object.fromEntries(['Pending', 'Failed', 'Exhausted', 'InFlight', 'Due']
+    .map((key) => [key[0].toLowerCase() + key.slice(1), Number(row[key] || 0)]));
+}
+
 export async function renewOutlookLease(executor, { subscriptionId, leaseToken }) {
   const request = executor.request();
   request.input('subscriptionId', sql.BigInt, subscriptionId);
@@ -196,8 +216,9 @@ export async function renewOutlookLease(executor, { subscriptionId, leaseToken }
   return Boolean((await request.query(OUTLOOK_RENEW_SQL)).recordset?.length);
 }
 
-export async function deactivateOutlookSubscription(executor, { subscriptionId, queueSeq, leaseToken }) {
+export async function deactivateOutlookSubscription(executor, { subscriptionId, queueSeq, leaseToken, cancellationReason = null }) {
   const request = executor.request();
+  request.input('cancellationReason', sql.VarChar(60), cancellationReason);
   request.input('subscriptionId', sql.BigInt, subscriptionId);
   request.input('queueSeq', sql.BigInt, queueSeq);
   request.input('leaseToken', sql.UniqueIdentifier, leaseToken);
@@ -236,8 +257,10 @@ export async function claimOutlookSubscription(executor, subscriptionId, { lease
  *
  * @returns {Promise<{sequence: number, queueSeq: number}|null>}
  */
-export async function allocateOutlookRevision(executor, { subscriptionId, method, payloadHash, queueSeq, leaseToken, attendee, organizer, reuseDelivered = false }) {
+export async function allocateOutlookRevision(executor, { subscriptionId, method, payloadHash, queueSeq, leaseToken, attendee, organizer, reuseDelivered = false, calendarDate = null, cancellationReason = null }) {
   const request = executor.request();
+  request.input('calendarDate', sql.Date, calendarDate);
+  request.input('cancellationReason', sql.VarChar(60), cancellationReason);
   request.input('subscriptionId', sql.BigInt, subscriptionId);
   request.input('method', sql.VarChar(10), method);
   request.input('payloadHash', sql.Char(64), payloadHash);
@@ -260,10 +283,14 @@ export async function completeOutlookDelivery(executor, {
   payloadHash,
   summary,
   calendarDate,
+  completionSuspended = false,
+  cancellationReason = null,
   queueSeq,
   leaseToken
 }) {
   const request = executor.request();
+  request.input('completionSuspended', sql.Bit, completionSuspended);
+  request.input('cancellationReason', sql.VarChar(60), cancellationReason);
   request.input('subscriptionId', sql.BigInt, subscriptionId);
   request.input('method', sql.VarChar(10), method);
   request.input('sequence', sql.Int, sequence);
@@ -272,16 +299,18 @@ export async function completeOutlookDelivery(executor, {
   request.input('calendarDate', sql.Date, calendarDate || null);
   request.input('queueSeq', sql.BigInt, queueSeq);
   request.input('leaseToken', sql.UniqueIdentifier, leaseToken);
-  await request.query(OUTLOOK_COMPLETE_SQL);
+  return Boolean((await request.query(OUTLOOK_COMPLETE_SQL)).recordset?.length);
 }
 
 /** Gönderilecek bir şey kalmadığında kuyruk kaydını düşürür. */
-export async function settleOutlookDelivery(executor, { subscriptionId, queueSeq, leaseToken }) {
+export async function settleOutlookDelivery(executor, { subscriptionId, queueSeq, leaseToken, completionSuspended = false, cancellationReason = null }) {
   const request = executor.request();
+  request.input('completionSuspended', sql.Bit, completionSuspended);
+  request.input('cancellationReason', sql.VarChar(60), cancellationReason);
   request.input('subscriptionId', sql.BigInt, subscriptionId);
   request.input('queueSeq', sql.BigInt, queueSeq);
   request.input('leaseToken', sql.UniqueIdentifier, leaseToken);
-  await request.query(OUTLOOK_SETTLE_SQL);
+  return Boolean((await request.query(OUTLOOK_SETTLE_SQL)).recordset?.length);
 }
 
 export async function failOutlookDelivery(executor, { subscriptionId, failureCode, retrySeconds, queueSeq, leaseToken, clearProvisional = false }) {
@@ -302,8 +331,10 @@ export async function failOutlookDelivery(executor, { subscriptionId, failureCod
  * (0010 henüz çalıştırılmamışsa) sessizce geçer. Bunun dışındaki hatalar
  * yukarı taşınır; kuyruk kaydı görev kaydıyla aynı işlemdedir.
  */
-export async function enqueueOutlookTaskUpdate(executor, taskId) {
+export async function enqueueOutlookTaskUpdate(executor, taskId, { suspendCompletion = false, completionDate = null } = {}) {
   const request = executor.request();
+  request.input('suspendCompletion', sql.Bit, suspendCompletion);
+  request.input('completionDate', sql.Date, completionDate);
   request.input('taskId', sql.UniqueIdentifier, taskId);
   await request.query(OUTLOOK_ENQUEUE_TASK_SQL);
 }

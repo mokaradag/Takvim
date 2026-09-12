@@ -15,7 +15,8 @@ const SUBSCRIPTION_COLUMNS = `
   inserted.DeliveredSequence, inserted.DeliveredPayloadHash, inserted.DeliveredSummary,
   inserted.DeliveredDate, inserted.AttemptCount, inserted.LeaseToken, inserted.LeaseExpiresAt,
   inserted.CalendarAttendee, inserted.CalendarOrganizer, inserted.CancelRequested,
-  inserted.ForceResend, inserted.DeliveryMayHaveEscaped, inserted.LastValidatedAt`;
+  inserted.ForceResend, inserted.DeliveryMayHaveEscaped, inserted.LastValidatedAt,
+  inserted.CompletionSuspended, inserted.CompletionDate, inserted.LastCancellationReason, inserted.DeliveredMethod, inserted.PendingDate`;
 
 /**
  * Görev + o kullanıcı için GÖRÜNÜRLÜK.
@@ -33,7 +34,7 @@ export const OUTLOOK_TASK_SQL = `
   ) THEN 1 ELSE 0 END;
 
   SELECT TOP (1)
-    t.TaskId, t.ProjectId, t.Title, t.TargetFinish, t.PlannedFinish,
+    t.TaskId, t.ProjectId, t.Title, t.Status, t.TargetFinish, t.PlannedFinish,
     p.ProjectCode, p.ProjectName,
     CASE WHEN (
       @isAdmin = 1
@@ -86,12 +87,17 @@ export const OUTLOOK_SUBSCRIPTION_UPSERT_SQL = `
     DeliveredSequence int, DeliveredPayloadHash char(64), DeliveredSummary nvarchar(400),
     DeliveredDate date, AttemptCount int, LeaseToken uniqueidentifier, LeaseExpiresAt datetime2(3),
     CalendarAttendee nvarchar(320), CalendarOrganizer nvarchar(320), CancelRequested bit,
-    ForceResend bit, DeliveryMayHaveEscaped bit, LastValidatedAt datetime2(3)
+    ForceResend bit, DeliveryMayHaveEscaped bit, LastValidatedAt datetime2(3),
+    CompletionSuspended bit, CompletionDate date, LastCancellationReason varchar(60), DeliveredMethod varchar(10), PendingDate date
   );
 
   UPDATE s
   SET IsActive = 1,
       CancelRequested = 0,
+      CompletionSuspended = CASE WHEN s.IsActive = 0 THEN 0 ELSE s.CompletionSuspended END,
+      CompletionDate = CASE WHEN s.IsActive = 0 THEN NULL ELSE s.CompletionDate END,
+      DeliveredMethod = CASE WHEN s.IsActive = 0 THEN NULL ELSE s.DeliveredMethod END,
+      PendingDate = CASE WHEN s.IsActive = 0 THEN NULL ELSE s.PendingDate END,
       CalendarAttendee = CASE WHEN s.IsActive = 0 THEN NULL ELSE s.CalendarAttendee END,
       CalendarOrganizer = CASE WHEN s.IsActive = 0 THEN NULL ELSE s.CalendarOrganizer END,
       DeliveryMayHaveEscaped = CASE WHEN s.IsActive = 0 THEN 0 ELSE s.DeliveryMayHaveEscaped END,
@@ -103,10 +109,10 @@ export const OUTLOOK_SUBSCRIPTION_UPSERT_SQL = `
       PendingPayloadHash = CASE WHEN s.IsActive = 0 THEN NULL ELSE s.PendingPayloadHash END,
       ProjectId = COALESCE(@projectId, s.ProjectId),
       PendingMethod = CASE
-        WHEN s.IsActive = 1 AND s.PendingMethod IS NULL AND s.DeliveredPayloadHash = @payloadHash
+        WHEN s.IsActive = 1 AND s.CompletionSuspended = 0 AND s.PendingMethod IS NULL AND s.DeliveredPayloadHash = @payloadHash
         THEN NULL ELSE 'REQUEST' END,
       QueueSeq = CASE
-        WHEN s.IsActive = 1 AND s.PendingMethod IS NULL AND s.DeliveredPayloadHash = @payloadHash
+        WHEN s.IsActive = 1 AND s.CompletionSuspended = 0 AND s.PendingMethod IS NULL AND s.DeliveredPayloadHash = @payloadHash
         THEN s.QueueSeq
         WHEN s.IsActive = 1 AND s.PendingMethod = 'REQUEST'
           AND (s.PendingSequence IS NULL OR s.PendingPayloadHash = @payloadHash)
@@ -148,13 +154,14 @@ export const OUTLOOK_SUBSCRIPTION_SQL = `
     IsActive, QueueSeq, PendingMethod, PendingSequence, PendingPayloadHash,
     DeliveredSequence, DeliveredPayloadHash, DeliveredSummary, DeliveredDate, AttemptCount,
     LeaseToken, LeaseExpiresAt, CalendarAttendee, CalendarOrganizer,
-    CancelRequested, ForceResend, DeliveryMayHaveEscaped, LastValidatedAt
+    CancelRequested, ForceResend, DeliveryMayHaveEscaped, LastValidatedAt,
+    CompletionSuspended, CompletionDate, LastCancellationReason, DeliveredMethod, PendingDate
   FROM dbo.MR_TaskOutlookSubscriptions
   WHERE TaskId = @taskId AND UserSicil = @sicil;`;
 
-/** Kullanıcının ETKİN abonelikleri (arayüz "eklendi" durumunu bundan kurar). */
+/** Etkin abonelik tercihi ve son davetin teslimat durumu. */
 export const OUTLOOK_USER_SUBSCRIPTIONS_SQL = `
-  SELECT TaskId, PendingMethod, DeliveredSequence, LastFailureCode
+  SELECT TaskId, PendingMethod, DeliveredSequence, LastFailureCode, CompletionSuspended, DeliveredMethod
   FROM dbo.MR_TaskOutlookSubscriptions
   WHERE UserSicil = @sicil AND IsActive = 1;`;
 
@@ -164,11 +171,12 @@ export const OUTLOOK_QUEUE_CANCEL_SQL = `
   UPDATE dbo.MR_TaskOutlookSubscriptions
   SET PendingMethod = 'CANCEL',
       CancelRequested = 1,
+      LastCancellationReason = 'USER_REMOVED',
       ForceResend = 0,
-      QueueSeq = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 THEN QueueSeq ELSE QueueSeq + 1 END,
-      AttemptCount = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 THEN AttemptCount ELSE 0 END,
-      NextAttemptAt = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 THEN NextAttemptAt ELSE NULL END,
-      LastFailureCode = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 THEN LastFailureCode ELSE NULL END,
+      QueueSeq = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 AND AttemptCount < @maxAttempts THEN QueueSeq ELSE QueueSeq + 1 END,
+      AttemptCount = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 AND AttemptCount < @maxAttempts THEN AttemptCount ELSE 0 END,
+      NextAttemptAt = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 AND AttemptCount < @maxAttempts THEN NextAttemptAt ELSE NULL END,
+      LastFailureCode = CASE WHEN PendingMethod = 'CANCEL' AND CancelRequested = 1 AND AttemptCount < @maxAttempts THEN LastFailureCode ELSE NULL END,
       UpdatedAt = SYSUTCDATETIME()
   OUTPUT ${SUBSCRIPTION_COLUMNS}
   WHERE TaskId = @taskId AND UserSicil = @sicil AND IsActive = 1;`;
@@ -177,10 +185,10 @@ export const OUTLOOK_QUEUE_RESEND_SQL = `
   UPDATE dbo.MR_TaskOutlookSubscriptions
   SET PendingMethod = 'REQUEST',
       ForceResend = 1,
-      QueueSeq = CASE WHEN ForceResend = 1 THEN QueueSeq ELSE QueueSeq + 1 END,
-      AttemptCount = CASE WHEN ForceResend = 1 THEN AttemptCount ELSE 0 END,
-      NextAttemptAt = CASE WHEN ForceResend = 1 THEN NextAttemptAt ELSE NULL END,
-      LastFailureCode = CASE WHEN ForceResend = 1 THEN LastFailureCode ELSE NULL END,
+      QueueSeq = CASE WHEN ForceResend = 1 AND AttemptCount < @maxAttempts THEN QueueSeq ELSE QueueSeq + 1 END,
+      AttemptCount = CASE WHEN ForceResend = 1 AND AttemptCount < @maxAttempts THEN AttemptCount ELSE 0 END,
+      NextAttemptAt = CASE WHEN ForceResend = 1 AND AttemptCount < @maxAttempts THEN NextAttemptAt ELSE NULL END,
+      LastFailureCode = CASE WHEN ForceResend = 1 AND AttemptCount < @maxAttempts THEN LastFailureCode ELSE NULL END,
       UpdatedAt = SYSUTCDATETIME()
   OUTPUT ${SUBSCRIPTION_COLUMNS}
   WHERE TaskId = @taskId AND UserSicil = @sicil AND IsActive = 1 AND CancelRequested = 0;`;
@@ -188,7 +196,7 @@ export const OUTLOOK_QUEUE_RESEND_SQL = `
 export const OUTLOOK_REVALIDATE_SQL = `
   ;WITH unchecked AS (
     SELECT TOP (@limit) * FROM dbo.MR_TaskOutlookSubscriptions WITH (READPAST, UPDLOCK, ROWLOCK)
-    WHERE IsActive = 1 AND PendingMethod IS NULL
+    WHERE IsActive = 1 AND PendingMethod IS NULL AND CompletionSuspended = 0
       AND (LastValidatedAt IS NULL OR LastValidatedAt <= DATEADD(second, -300, SYSUTCDATETIME()))
       AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt <= SYSUTCDATETIME())
     ORDER BY LastValidatedAt, SubscriptionId
@@ -200,6 +208,17 @@ export const OUTLOOK_REVALIDATE_SQL = `
 export const OUTLOOK_HEALTH_SQL = `
   SELECT COUNT_BIG(*) AS Exhausted FROM dbo.MR_TaskOutlookSubscriptions
   WHERE PendingMethod IS NOT NULL AND AttemptCount >= @maxAttempts;`;
+
+export const OUTLOOK_QUEUE_STATUS_SQL = `
+  SELECT COUNT_BIG(*) AS Pending,
+    COUNT_BIG(CASE WHEN LastFailureCode IS NOT NULL THEN 1 END) AS Failed,
+    COUNT_BIG(CASE WHEN AttemptCount >= @maxAttempts THEN 1 END) AS Exhausted,
+    COUNT_BIG(CASE WHEN LeaseExpiresAt > SYSUTCDATETIME() THEN 1 END) AS InFlight,
+    COUNT_BIG(CASE WHEN AttemptCount < @maxAttempts
+      AND (NextAttemptAt IS NULL OR NextAttemptAt <= SYSUTCDATETIME())
+      AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt <= SYSUTCDATETIME()) THEN 1 END) AS Due
+  FROM dbo.MR_TaskOutlookSubscriptions
+  WHERE PendingMethod IS NOT NULL;`;
 
 export const OUTLOOK_RENEW_SQL = `
   UPDATE dbo.MR_TaskOutlookSubscriptions
@@ -218,6 +237,11 @@ export const OUTLOOK_RENEW_SQL = `
 export const OUTLOOK_DEACTIVATE_SQL = `
   UPDATE dbo.MR_TaskOutlookSubscriptions
   SET IsActive = 0,
+      CompletionSuspended = 0,
+      CompletionDate = NULL,
+      LastCancellationReason = COALESCE(@cancellationReason, LastCancellationReason),
+      PendingDate = NULL,
+      LastFailureCode = NULL,
       PendingMethod = NULL,
       PendingSequence = NULL,
       PendingPayloadHash = NULL,
@@ -246,6 +270,7 @@ export const OUTLOOK_CLAIM_SQL = `
     SELECT TOP (@limit) *
     FROM dbo.MR_TaskOutlookSubscriptions WITH (READPAST, UPDLOCK, ROWLOCK)
     WHERE PendingMethod IS NOT NULL
+      AND AttemptCount < @maxAttempts
       AND (NextAttemptAt IS NULL OR NextAttemptAt <= SYSUTCDATETIME())
       AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt <= SYSUTCDATETIME())
       AND (IsActive = 1 OR PendingMethod = 'CANCEL')
@@ -297,16 +322,22 @@ export const OUTLOOK_ALLOCATE_SQL = `
 
   UPDATE dbo.MR_TaskOutlookSubscriptions
   SET [Sequence] = CASE
-        WHEN PendingSequence IS NOT NULL AND PendingMethod = @method AND PendingPayloadHash = @payloadHash
+        WHEN PendingSequence IS NOT NULL AND PendingPayloadHash = @payloadHash
+          AND (DeliveredSequence IS NULL OR PendingSequence > DeliveredSequence)
+          AND ((@method = 'CANCEL' AND PendingDate IS NULL) OR (@method = 'REQUEST' AND PendingDate = @calendarDate))
         THEN [Sequence]
         WHEN @reuseDelivered = 1 AND DeliveredPayloadHash = @payloadHash AND DeliveredSequence = [Sequence] THEN [Sequence]
         ELSE [Sequence] + 1 END,
       PendingSequence = CASE
-        WHEN PendingSequence IS NOT NULL AND PendingMethod = @method AND PendingPayloadHash = @payloadHash
+        WHEN PendingSequence IS NOT NULL AND PendingPayloadHash = @payloadHash
+          AND (DeliveredSequence IS NULL OR PendingSequence > DeliveredSequence)
+          AND ((@method = 'CANCEL' AND PendingDate IS NULL) OR (@method = 'REQUEST' AND PendingDate = @calendarDate))
         THEN PendingSequence
         WHEN @reuseDelivered = 1 AND DeliveredPayloadHash = @payloadHash AND DeliveredSequence = [Sequence] THEN DeliveredSequence
         ELSE [Sequence] + 1 END,
       PendingMethod = @method,
+      PendingDate = @calendarDate,
+      LastCancellationReason = COALESCE(@cancellationReason, LastCancellationReason),
       PendingPayloadHash = @payloadHash,
       DeliveryMayHaveEscaped = 1,
       CalendarAttendee = COALESCE(CalendarAttendee, @attendee),
@@ -321,13 +352,22 @@ export const OUTLOOK_ALLOCATE_SQL = `
 /**
  * Başarılı teslimatı kalıcılaştırır.
  *
- * `QueueSeq` karşılaştırması KAYIP GÜNCELLEMEYİ önler: gönderim sürerken görev
- * yeniden değiştiyse kuyruk numarası ilerlemiştir ve bekleyen iş temizlenmez,
- * bir sonraki tur yeni içeriği gönderir. Yeni ekleme isteği de korunur.
+ * Kira belirteci SMTP işleminin sahipliğini kanıtlar. `QueueSeq` ise SET içindeki
+ * koşullarda yeni neslin durumunu korur: teslimat sırasında daha yeni bir niyet
+ * geldiyse SMTP tarafından kabul edilen eski sürüm yine teslimat geçmişine
+ * yazılır ve kira bırakılır, fakat yeni bekleyen iş temizlenmez veya kapatılmaz.
  */
 export const OUTLOOK_COMPLETE_SQL = `
   UPDATE dbo.MR_TaskOutlookSubscriptions
   SET DeliveredSequence = @sequence,
+      DeliveredMethod = @method,
+      CompletionSuspended = CASE WHEN QueueSeq = @queueSeq THEN @completionSuspended ELSE CompletionSuspended END,
+      CompletionDate = CASE WHEN QueueSeq = @queueSeq AND @completionSuspended = 0 THEN NULL ELSE CompletionDate END,
+      LastCancellationReason = CASE
+        WHEN QueueSeq <> @queueSeq THEN LastCancellationReason
+        WHEN @completionSuspended = 0 AND @cancellationReason IS NULL AND LastCancellationReason = 'TASK_COMPLETED' THEN NULL
+        ELSE COALESCE(@cancellationReason, LastCancellationReason) END,
+      PendingDate = CASE WHEN QueueSeq = @queueSeq THEN NULL ELSE PendingDate END,
       DeliveredPayloadHash = @payloadHash,
       DeliveredSummary = @summary,
       DeliveredDate = @calendarDate,
@@ -339,7 +379,7 @@ export const OUTLOOK_COMPLETE_SQL = `
       InFlightSince = NULL,
       LeaseToken = NULL,
       LeaseExpiresAt = NULL,
-      IsActive = CASE WHEN @method = 'CANCEL' AND QueueSeq = @queueSeq THEN CAST(0 AS bit) ELSE IsActive END,
+      IsActive = CASE WHEN @method = 'CANCEL' AND @completionSuspended = 0 AND QueueSeq = @queueSeq THEN CAST(0 AS bit) ELSE IsActive END,
       PendingMethod = CASE
         WHEN QueueSeq = @queueSeq THEN NULL ELSE PendingMethod END,
       PendingSequence = CASE
@@ -349,12 +389,20 @@ export const OUTLOOK_COMPLETE_SQL = `
       AttemptCount = 0,
       NextAttemptAt = NULL,
       UpdatedAt = SYSUTCDATETIME()
+  OUTPUT inserted.SubscriptionId
   WHERE SubscriptionId = @subscriptionId AND LeaseToken = @leaseToken;`;
 
 /** İçerik değişmediği için gönderilmeyen iş kuyruktan düşürülür. */
 export const OUTLOOK_SETTLE_SQL = `
   UPDATE dbo.MR_TaskOutlookSubscriptions
   SET PendingMethod = CASE WHEN QueueSeq = @queueSeq THEN NULL ELSE PendingMethod END,
+      CompletionSuspended = CASE WHEN QueueSeq = @queueSeq THEN @completionSuspended ELSE CompletionSuspended END,
+      CompletionDate = CASE WHEN QueueSeq = @queueSeq AND @completionSuspended = 0 THEN NULL ELSE CompletionDate END,
+      LastCancellationReason = CASE
+        WHEN QueueSeq <> @queueSeq THEN LastCancellationReason
+        WHEN @completionSuspended = 0 AND @cancellationReason IS NULL AND LastCancellationReason = 'TASK_COMPLETED' THEN NULL
+        ELSE COALESCE(@cancellationReason, LastCancellationReason) END,
+      PendingDate = CASE WHEN QueueSeq = @queueSeq THEN NULL ELSE PendingDate END,
       PendingSequence = CASE WHEN QueueSeq = @queueSeq THEN NULL ELSE PendingSequence END,
       PendingPayloadHash = CASE WHEN QueueSeq = @queueSeq THEN NULL ELSE PendingPayloadHash END,
       ForceResend = CASE WHEN QueueSeq = @queueSeq THEN 0 ELSE ForceResend END,
@@ -366,6 +414,7 @@ export const OUTLOOK_SETTLE_SQL = `
       LeaseToken = NULL,
       LeaseExpiresAt = NULL,
       UpdatedAt = SYSUTCDATETIME()
+  OUTPUT inserted.SubscriptionId
   WHERE SubscriptionId = @subscriptionId AND LeaseToken = @leaseToken;`;
 
 /** Başarısız teslimat: bir sonraki hak geri çekilmeyle ertelenir. */
@@ -388,10 +437,14 @@ export const OUTLOOK_FAIL_SQL = `
  * Kalıcılık işleminin İÇİNDE çalışır: kuyruk kaydı görev kaydıyla birlikte
  * ya tümüyle olur ya da hiç olmaz. Hiçbir SMTP çağrısı bu işleme bağlı
  * değildir; posta sunucusu erişilemez olsa da görev kaydı tamamlanır.
+ * Tamamlanma askısı, yeniden açılan görev için yeni REQUEST teslim edilene kadar
+ * korunur; erken temizlenirse değişmeyen içerik denetimi bu daveti atlar.
  */
 export const OUTLOOK_ENQUEUE_TASK_SQL = `
   UPDATE dbo.MR_TaskOutlookSubscriptions
   SET PendingMethod = CASE WHEN CancelRequested = 1 THEN 'CANCEL' ELSE 'REQUEST' END,
+      CompletionSuspended = CASE WHEN @suspendCompletion = 1 THEN 1 ELSE CompletionSuspended END,
+      CompletionDate = COALESCE(@completionDate, CompletionDate),
       QueueSeq = QueueSeq + 1,
       AttemptCount = 0,
       NextAttemptAt = NULL,

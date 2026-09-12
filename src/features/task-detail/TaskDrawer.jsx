@@ -116,6 +116,7 @@ export function TaskDrawer({
   onUpdate,
   onDelete,
   canManageStructure = true,
+  canManageRecurrence = true,
   canChooseWbs = true,
   canManageAssignees = true,
   canControlSchedule = true,
@@ -587,7 +588,7 @@ export function TaskDrawer({
               )}
             </Section>
 
-            {canManageStructure && <Section
+            {canManageRecurrence && <Section
               title="Tekrar"
               icon={<Icons.Clock size={13} />}
               tone="var(--c-amber)"
@@ -622,7 +623,7 @@ export function TaskDrawer({
                 <div className="task-date-grid"><DateField
                   label="Gerçekleşen tarih"
                   value={local.actualFinish}
-                  onChange={(date) => save({ actualStart: date || null, actualFinish: date || null, status: date ? 'done' : 'todo', progress: date ? 100 : 0 })}
+                  onChange={(date) => save({ actualFinish: date || null })}
                   nullable
                 /></div>
               ) : <div className="task-date-grid">
@@ -639,7 +640,6 @@ export function TaskDrawer({
                   value={local.actualFinish}
                   onChange={(v) => save({ actualFinish: v })}
                   minDate={local.actualStart}
-                  disabled={!local.actualStart}
                   nullable
                 />
               </div>}
@@ -659,6 +659,8 @@ export function TaskDrawer({
               <div className="row" style={{ gap: 12 }}>
                 <input
                   type="range" min={0} max={100} step={5}
+                  aria-label="İlerleme"
+                  disabled={local.status === 'done'}
                   value={local.progress || 0}
                   onChange={(e) => save({ progress: parseInt(e.target.value) })}
                   style={{ flex: 1, accentColor: 'var(--accent)' }}

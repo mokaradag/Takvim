@@ -28,7 +28,8 @@ Task reminders add three routes that follow the same rules but are not part of t
 
 - `POST /api/mergen-rota/tasks/{taskId}/reminder` — manual send. The request body is never read, so the browser cannot supply recipients; the actor must already be authorized for that Task.
 - `GET|PUT /api/mergen-rota/admin/reminder-settings` — template and automatic policy, administrator-only on the server. The response reports only whether SMTP is configured, never the credentials.
-- `POST /api/mergen-rota/reminders/run` — one automatic pass, for the scheduler. Accepts a shared secret compared with `timingSafeEqual`, or a SYSTEM_ADMIN session.
+- `POST /api/mergen-rota/reminders/run` — reminder scheduler and manual diagnostic pass. Accepts a shared secret compared with `timingSafeEqual`, or a SYSTEM_ADMIN session. Returns separate reminder and Outlook summaries, including safe reasons on HTTP 503.
+- `GET /api/mergen-rota/reminders/run` — read-only Outlook queue health and process-local automatic worker status; SYSTEM_ADMIN session only.
 
 All routes force the Next.js Node.js runtime, disable caching, derive identity on the server, and return normalized safe errors. SQL stacks, connection settings, and raw query text are not returned to the browser.
 
@@ -157,16 +158,18 @@ Persistence errors are surfaced to the user verbatim. `PersistenceStatus` render
    3. `database/MR_Upgrade_0006_Audit_Deactivation.sql` — the `DEACTIVATE` audit action.
    4. `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql` — `MR_TaskScheduleChangeRequests`.
    5. `database/MR_Upgrade_0008_Request_Notifications.sql` — ayrı bildirim durumu ve kalıcı görev/proje künyesi.
-   6. `database/MR_Upgrade_0009_Task_Activity_Report.sql` — görev denetimi tarih aralığı dizini. Güncel yükseltmeler uygulama dağıtımından önce çalıştırılmalıdır.
+   6. `database/MR_Upgrade_0009_Task_Activity_Report.sql` — görev denetimi tarih aralığı dizini.
+   7. `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` — `MR_TaskOutlookSubscriptions` and the current Outlook queue fields. Apply the current migration before deployment, stopping old workers first. Installations that already applied the current PR #72 version of `0010` do not need to rerun 0010; they must still apply 0011 below.
+   8. `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` — completion suspension/date, cancellation reason, delivered method and reserved date. Required for all existing 0010 installations.
 
-   Stopping at `0005` leaves `MR_TaskScheduleChangeRequests` absent, and every schedule-change request then fails when the application reaches that table. Every upgrade script is idempotent and preserves existing data.
+   Stopping at `0005` leaves `MR_TaskScheduleChangeRequests` absent, and every schedule-change request then fails when the application reaches that table. Stopping at `0009` leaves the Outlook subscription table absent; Outlook delivery reports `OUTLOOK_SCHEMA_MISSING`. Every upgrade script is idempotent and preserves existing data. Complete the required upgrades before deploying the application.
 3. Install Microsoft ODBC Driver 18 for SQL Server on the MERGEN Rota host.
 4. Make sure the Windows account that will run Node.js has the required SQL Server permissions.
 5. Create `.env.local` from `.env.example` and configure the server-only database variables.
 6. Configure the Keycloak variables in `.env.local` and register the redirect URIs listed in `docs/KEYCLOAK-SSO.md`. Enable the development identity only in a local development environment.
 7. Run `npm ci`.
 8. Run `npm run build`.
-9. Optional: configure the SMTP block in `.env.local` and register the reminder scheduler (Windows Task Scheduler or cron) as described in `docs/TASK-REMINDERS.md`. Automatic reminders stay disabled until an administrator enables them on the **Hatırlatma** page; the manual send button works as soon as SMTP is configured.
+9. **SMTP is required whenever Outlook delivery or manual/automatic e-mail reminders are used.** Configure at least `SMTP_HOST` and a valid `SMTP_FROM`, plus the settings required by the corporate SMTP server. SMTP is optional only when both e-mail-reminder functionality and Outlook delivery are disabled. Without SMTP, Outlook invitations remain queued and undelivered. Configure the SMTP block in `.env.local` and, only if automatic reminder e-mails are wanted, register the reminder scheduler (Windows Task Scheduler or cron) as described in `docs/TASK-REMINDERS.md`. Automatic reminders stay disabled until an administrator enables them on the **Hatırlatma** page; the manual send button works as soon as SMTP is configured. Outlook delivery is independent: the Next.js Node startup hook starts the durable queue worker automatically, even when reminders are disabled; no administrator click or OS task is required for Outlook. Keep the Node application running as a managed service. Complete Step 2, including the new 0011 completion lifecycle migration, before deployment. See `docs/OUTLOOK-CALENDAR.md`.
 10. Start with `npm run start -- -H 0.0.0.0 -p 8008` (or `npm run start:prod`) under the approved Windows/domain account. MERGEN Rota uses port 8008; 8009 belongs to MERGEN Bilge.
 11. Select **Gerçek Sistem** and verify authorization and persistence.
 

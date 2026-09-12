@@ -187,7 +187,7 @@ test('simple mode creates the final task in one guarded mutation and keeps proje
   assert.equal(calls[0].task.color, 'blue');
   assert.equal(calls[0].task.wbsId, 'root');
   assert.deepEqual(calls[0].task.assigneeIds, ['1001']);
-  assert.equal(calls[0].task.recurrence, null);
+  assert.equal(calls[0].task.recurrence, 'FREQ=WEEKLY');
   assert.equal(calls[0].task.plannedStart, '2026-08-28');
 });
 

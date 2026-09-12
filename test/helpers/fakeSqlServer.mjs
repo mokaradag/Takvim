@@ -237,6 +237,11 @@ export function createFakeDatabase(seed = {}) {
       ForceResend: entry.ForceResend ?? 0,
       DeliveryMayHaveEscaped: entry.DeliveryMayHaveEscaped ?? 0,
       LastValidatedAt: entry.LastValidatedAt ?? null,
+      CompletionSuspended: entry.CompletionSuspended ?? 0,
+      CompletionDate: entry.CompletionDate ?? null,
+      LastCancellationReason: entry.LastCancellationReason ?? null,
+      DeliveredMethod: entry.DeliveredMethod ?? (entry.DeliveredSequence == null ? null : entry.IsActive === 0 ? 'CANCEL' : 'REQUEST'),
+      PendingDate: entry.PendingDate ?? null,
       Sequence: entry.Sequence ?? 0,
       IsActive: entry.IsActive ?? 1,
       QueueSeq: entry.QueueSeq ?? 1,
@@ -769,7 +774,8 @@ const OUTLOOK_ROW_KEYS = [
   'QueueSeq', 'PendingMethod', 'PendingSequence', 'PendingPayloadHash', 'DeliveredSequence',
   'DeliveredPayloadHash', 'DeliveredSummary', 'DeliveredDate', 'AttemptCount',
   'LeaseToken', 'LeaseExpiresAt', 'CalendarAttendee', 'CalendarOrganizer',
-  'CancelRequested', 'ForceResend', 'DeliveryMayHaveEscaped', 'LastValidatedAt'
+  'CancelRequested', 'ForceResend', 'DeliveryMayHaveEscaped', 'LastValidatedAt',
+  'CompletionSuspended', 'CompletionDate', 'LastCancellationReason', 'DeliveredMethod', 'PendingDate'
 ];
 
 function outlookOutputRow(entry) {
@@ -803,7 +809,7 @@ function runOutlookQuery(db, sqlText, params) {
   if (sqlText.includes('INSERT dbo.MR_TaskOutlookSubscriptions(')) {
     const existing = byTaskUser();
     if (existing) {
-      const unchanged = existing.IsActive === 1 && existing.PendingMethod == null
+      const unchanged = existing.IsActive === 1 && !existing.CompletionSuspended && existing.PendingMethod == null
         && existing.DeliveredPayloadHash === params.payloadHash;
       const samePending = existing.IsActive === 1 && existing.PendingMethod === 'REQUEST'
         && (existing.PendingSequence == null || existing.PendingPayloadHash === params.payloadHash);
@@ -815,6 +821,10 @@ function runOutlookQuery(db, sqlText, params) {
         existing.DeliveredPayloadHash = null;
         existing.DeliveredSummary = null;
         existing.DeliveredDate = null;
+        existing.DeliveredMethod = null;
+        existing.PendingDate = null;
+        existing.CompletionSuspended = 0;
+        existing.CompletionDate = null;
         existing.PendingSequence = null;
         existing.PendingPayloadHash = null;
       }
@@ -836,6 +846,11 @@ function runOutlookQuery(db, sqlText, params) {
       UserSicil: Number(params.sicil),
       CalendarUid: params.calendarUid,
       CancelRequested: 0,
+      CompletionSuspended: 0,
+      CompletionDate: null,
+      LastCancellationReason: null,
+      DeliveredMethod: null,
+      PendingDate: null,
       ForceResend: 0,
       DeliveryMayHaveEscaped: 0,
       LastValidatedAt: null,
@@ -874,14 +889,16 @@ function runOutlookQuery(db, sqlText, params) {
         TaskId: entry.TaskId,
         PendingMethod: entry.PendingMethod,
         DeliveredSequence: entry.DeliveredSequence,
-        LastFailureCode: entry.LastFailureCode
+        LastFailureCode: entry.LastFailureCode,
+        CompletionSuspended: entry.CompletionSuspended,
+        DeliveredMethod: entry.DeliveredMethod
       }))]);
   }
 
   if (sqlText.includes("SET PendingMethod = 'CANCEL'") && sqlText.includes('UserSicil = @sicil')) {
     const entry = byTaskUser();
     if (!entry || entry.IsActive !== 1) return result([[]]);
-    if (entry.PendingMethod !== 'CANCEL' || !entry.CancelRequested) {
+    if (entry.PendingMethod !== 'CANCEL' || !entry.CancelRequested || entry.AttemptCount >= params.maxAttempts) {
       entry.QueueSeq += 1;
       entry.AttemptCount = 0;
       entry.NextAttemptAt = null;
@@ -889,6 +906,7 @@ function runOutlookQuery(db, sqlText, params) {
     }
     entry.PendingMethod = 'CANCEL';
     entry.CancelRequested = 1;
+    entry.LastCancellationReason = 'USER_REMOVED';
     entry.ForceResend = 0;
     return result([[outlookOutputRow(entry)]]);
   }
@@ -896,7 +914,7 @@ function runOutlookQuery(db, sqlText, params) {
   if (sqlText.includes("SET PendingMethod = 'REQUEST',") && sqlText.includes('ForceResend = 1,')) {
     const entry = byTaskUser();
     if (!entry || entry.IsActive !== 1 || entry.CancelRequested) return result([[]]);
-    if (!entry.ForceResend) {
+    if (!entry.ForceResend || entry.AttemptCount >= params.maxAttempts) {
       entry.QueueSeq += 1;
       entry.AttemptCount = 0;
       entry.NextAttemptAt = null;
@@ -908,7 +926,7 @@ function runOutlookQuery(db, sqlText, params) {
   }
 
   if (sqlText.includes(';WITH unchecked AS')) {
-    const eligible = rows.filter((entry) => entry.IsActive === 1 && !entry.PendingMethod
+    const eligible = rows.filter((entry) => entry.IsActive === 1 && !entry.PendingMethod && !entry.CompletionSuspended
       && (!entry.LastValidatedAt || new Date(entry.LastValidatedAt).getTime() <= now - 300000)
       && (!entry.LeaseExpiresAt || new Date(entry.LeaseExpiresAt).getTime() <= now))
       .sort((a, b) => new Date(a.LastValidatedAt || 0) - new Date(b.LastValidatedAt || 0) || a.SubscriptionId - b.SubscriptionId)
@@ -928,6 +946,19 @@ function runOutlookQuery(db, sqlText, params) {
     return result([[{ Exhausted: rows.filter((entry) => entry.PendingMethod && entry.AttemptCount >= params.maxAttempts).length }]]);
   }
 
+  if (sqlText.includes('COUNT_BIG(*) AS Pending')) {
+    const pending = rows.filter((entry) => entry.PendingMethod);
+    return result([[{
+      Pending: pending.length,
+      Failed: pending.filter((entry) => entry.LastFailureCode).length,
+      Exhausted: pending.filter((entry) => entry.AttemptCount >= params.maxAttempts).length,
+      InFlight: pending.filter((entry) => entry.LeaseExpiresAt && new Date(entry.LeaseExpiresAt).getTime() > now).length,
+      Due: pending.filter((entry) => entry.AttemptCount < params.maxAttempts
+        && (!entry.NextAttemptAt || new Date(entry.NextAttemptAt).getTime() <= now)
+        && (!entry.LeaseExpiresAt || new Date(entry.LeaseExpiresAt).getTime() <= now)).length
+    }]]);
+  }
+
   if (sqlText.includes('SET LeaseExpiresAt = DATEADD')) {
     const entry = byId();
     if (!owns(entry) || new Date(entry.LeaseExpiresAt).getTime() <= now) return result([[]]);
@@ -938,7 +969,12 @@ function runOutlookQuery(db, sqlText, params) {
   if (sqlText.includes('SET IsActive = 0')) {
     const entry = byId();
     if (current(entry)) {
+      entry.LastFailureCode = null;
       entry.IsActive = 0;
+      entry.CompletionSuspended = 0;
+      entry.CompletionDate = null;
+      entry.LastCancellationReason = params.cancellationReason || entry.LastCancellationReason;
+      entry.PendingDate = null;
       entry.PendingMethod = null;
       entry.PendingSequence = null;
       entry.PendingPayloadHash = null;
@@ -956,6 +992,7 @@ function runOutlookQuery(db, sqlText, params) {
   if (sqlText.includes(';WITH due AS')) {
     const claimed = rows
       .filter((entry) => entry.PendingMethod
+        && entry.AttemptCount < params.maxAttempts
         && (entry.NextAttemptAt == null || new Date(entry.NextAttemptAt).getTime() <= now)
         && leaseFree(entry, params.leaseSeconds)
         && (entry.IsActive === 1 || entry.PendingMethod === 'CANCEL'))
@@ -986,7 +1023,8 @@ function runOutlookQuery(db, sqlText, params) {
     const entry = byId();
     if (!current(entry) || new Date(entry.LeaseExpiresAt).getTime() <= now) return result([[]]);
     const reuse = entry.PendingSequence != null
-      && entry.PendingMethod === params.method
+      && (entry.DeliveredSequence == null || entry.PendingSequence > entry.DeliveredSequence)
+      && (params.method === 'CANCEL' ? entry.PendingDate == null : entry.PendingDate === params.calendarDate)
       && entry.PendingPayloadHash === params.payloadHash;
     if (params.reuseDelivered && entry.DeliveredPayloadHash === params.payloadHash && entry.DeliveredSequence === entry.Sequence) {
       entry.PendingSequence = entry.DeliveredSequence;
@@ -999,6 +1037,8 @@ function runOutlookQuery(db, sqlText, params) {
     entry.CalendarAttendee ||= params.attendee;
     entry.CalendarOrganizer ||= params.organizer;
     entry.PendingMethod = params.method;
+    entry.PendingDate = params.calendarDate;
+    entry.LastCancellationReason = params.cancellationReason || entry.LastCancellationReason;
     entry.PendingPayloadHash = params.payloadHash;
     return result([[{ AllocatedSequence: entry.PendingSequence, QueueSeq: entry.QueueSeq, CalendarAttendee: entry.CalendarAttendee, CalendarOrganizer: entry.CalendarOrganizer }]]);
   }
@@ -1007,15 +1047,22 @@ function runOutlookQuery(db, sqlText, params) {
     const entry = byId();
     if (owns(entry)) {
       entry.DeliveredSequence = Number(params.sequence);
+      entry.DeliveredMethod = params.method;
       entry.DeliveredPayloadHash = params.payloadHash;
       entry.DeliveredSummary = params.summary ?? null;
       entry.DeliveredDate = params.calendarDate ?? null;
       entry.LastDeliveredAt = new Date().toISOString();
       entry.LastValidatedAt = new Date().toISOString();
       entry.LastFailureCode = null;
-      if (params.method === 'CANCEL' && current(entry)) entry.IsActive = 0;
+      if (params.method === 'CANCEL' && !params.completionSuspended && current(entry)) entry.IsActive = 0;
       const settle = Number(entry.QueueSeq) === Number(params.queueSeq);
       if (settle) {
+        entry.CompletionSuspended = Number(params.completionSuspended || 0);
+        if (!params.completionSuspended) entry.CompletionDate = null;
+        entry.LastCancellationReason = !params.completionSuspended && !params.cancellationReason
+          && entry.LastCancellationReason === 'TASK_COMPLETED'
+          ? null : params.cancellationReason || entry.LastCancellationReason;
+        entry.PendingDate = null;
         entry.ForceResend = 0;
         entry.PendingMethod = null;
         entry.PendingSequence = null;
@@ -1024,6 +1071,7 @@ function runOutlookQuery(db, sqlText, params) {
       entry.AttemptCount = 0;
       entry.NextAttemptAt = null;
       release(entry);
+      return result([[{ SubscriptionId: entry.SubscriptionId }]]);
     }
     return result([[]]);
   }
@@ -1031,6 +1079,12 @@ function runOutlookQuery(db, sqlText, params) {
   if (sqlText.includes('SET PendingMethod = CASE WHEN QueueSeq = @queueSeq')) {
     const entry = byId();
     if (current(entry)) {
+      entry.CompletionSuspended = Number(params.completionSuspended || 0);
+      if (!params.completionSuspended) entry.CompletionDate = null;
+      entry.LastCancellationReason = !params.completionSuspended && !params.cancellationReason
+        && entry.LastCancellationReason === 'TASK_COMPLETED'
+        ? null : params.cancellationReason || entry.LastCancellationReason;
+      entry.PendingDate = null;
       entry.PendingMethod = null;
       entry.PendingSequence = null;
       entry.PendingPayloadHash = null;
@@ -1042,6 +1096,7 @@ function runOutlookQuery(db, sqlText, params) {
       entry.NextAttemptAt = null;
       entry.LastFailureCode = null;
       release(entry);
+      return result([[{ SubscriptionId: entry.SubscriptionId }]]);
     }
     return result([[]]);
   }
@@ -1081,6 +1136,8 @@ function runOutlookQuery(db, sqlText, params) {
     for (const entry of rows) {
       if (!sameGuid(entry.TaskId, params.taskId) || entry.IsActive !== 1 || entry.CancelRequested) continue;
       entry.PendingMethod = entry.CancelRequested ? 'CANCEL' : method;
+      if (params.suspendCompletion) entry.CompletionSuspended = 1;
+      if (params.completionDate) entry.CompletionDate = params.completionDate;
       entry.QueueSeq += 1;
       entry.AttemptCount = 0;
       entry.NextAttemptAt = null;
@@ -1466,6 +1523,7 @@ function runQuery(db, statement, params, { database }) {
       TaskId: task.TaskId,
       ProjectId: task.ProjectId,
       Title: task.Title,
+      Status: task.Status,
       TargetFinish: task.TargetFinish,
       PlannedFinish: task.PlannedFinish,
       ProjectCode: project.ProjectCode ?? null,

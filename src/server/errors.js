@@ -9,6 +9,8 @@ export class ServerPersistenceError extends Error {
       FORBIDDEN: 403,
       CONFLICT: 409,
       MUTATION_FAILED: 400,
+      TASK_ACTUAL_RANGE_INVALID: 400,
+      ACTUAL_DATE_RESET_CONFIRMATION_REQUIRED: 400,
       DATABASE_UNAVAILABLE: 503
     }[code] ?? 500);
     this.details = details;

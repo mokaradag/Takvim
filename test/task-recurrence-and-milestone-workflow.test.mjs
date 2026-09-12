@@ -34,6 +34,7 @@ test('yeni şablon ve tekrarlar tek kalıcı istekle oluşur; yeniden üretim ko
     assert.equal(created.id, taskId);
     assert.equal(stack.requests.filter((request) => request.path.endsWith('/commit')).length, 1);
     assert.equal(stack.db.tasks.length, 3);
+    assert.ok(stack.db.tasks.every((task) => task.PlannedDurationDays === 1));
     assert.deepEqual(stack.state.tasks.map((task) => task.plannedStart).sort(), ['2026-09-07', '2026-09-14', '2026-09-21']);
     const children = stack.state.tasks.filter((task) => task.recurrenceParentId === taskId);
     assert.equal(children.length, 2);
@@ -67,6 +68,12 @@ test('kilometre taşının tamamlanması, tarih düzeltmesi ve yeniden açılmas
     assert.deepEqual(milestoneCompletion(complete, patch), { status: 'todo', progress: 0, actualStart: null, actualFinish: null });
   }
   assert.equal(milestoneCompletion({ milestone: false, status: 'in_progress', progress: 30 }), null);
+
+  const inProgress = { id: taskId, milestone: false, isMilestone: false, status: 'in_progress', progress: 30, actualStart: '2026-09-01' };
+  assert.deepEqual(
+    withCompletionStamp({ tasks: [inProgress] }, taskId, { milestone: true, isMilestone: true }, new Date('2026-09-07T12:00:00Z')),
+    { milestone: true, isMilestone: true, status: 'todo', progress: 0, actualStart: null, actualFinish: null }
+  );
 });
 
 test('SQL deposu kilometre taşında farklı gerçekleşen tarihleri ve kesirli ilerlemeyi normalleştirir', async () => {
@@ -81,8 +88,8 @@ test('SQL deposu kilometre taşında farklı gerçekleşen tarihleri ve kesirli 
     assert.equal(stored.Progress, 100);
     assert.equal(stored.PlannedDurationDays, 0);
     const task = stack.state.tasks.find((item) => item.id === taskId);
-    await stack.repository.commitChanges({ taskUpserts: [{ ...task, status: 'in_progress', progress: 50, assigneeMutation: false }] });
-    assert.equal(stack.db.tasks[0].Status, 'todo');
+    await stack.repository.commitChanges({ taskUpserts: [{ ...task, status: 'in_progress', progress: 50, resetActualDates: true, assigneeMutation: false }] });
+    assert.equal(stack.db.tasks[0].Status, 'planned');
     assert.equal(stack.db.tasks[0].Progress, 0);
     assert.equal(stack.db.tasks[0].ActualStart, null);
     assert.equal(stack.db.tasks[0].ActualFinish, null);

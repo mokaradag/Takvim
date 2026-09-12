@@ -1,5 +1,8 @@
 import 'server-only';
+import { businessDate } from '../../domain/calendar/businessDate.js';
+import { DEFAULT_CALENDAR } from '../../scheduling/calendars/index.js';
 import { hasOutlookCalendarChange } from '../../domain/outlook/outlookCalendarPayload.js';
+import { sql } from '../db/pool.js';
 import {
   enqueueOutlookProjectUpdate,
   enqueueOutlookTaskCancellation,
@@ -25,6 +28,37 @@ function day(value) {
   if (typeof value === 'string') return value.slice(0, 10);
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+async function taskCalendarTimeZone(executor, row) {
+  if (!row?.ProjectId) return DEFAULT_CALENDAR.timezone;
+  const request = executor.request();
+  request.input('projectId', sql.UniqueIdentifier, row.ProjectId);
+  request.input('calendarId', sql.UniqueIdentifier, row.CalendarId || null);
+  const result = await request.query(`
+    SELECT c.CalendarId AS PlanCalendarId, c.Name, c.TimeZone
+    FROM dbo.MR_Projects p
+    OUTER APPLY (
+      SELECT TOP (1) taskCalendar.CalendarId
+      FROM dbo.MR_Calendars taskCalendar
+      WHERE taskCalendar.CalendarId = @calendarId AND taskCalendar.IsActive = 1
+    ) taskCalendar
+    OUTER APPLY (
+      SELECT TOP (1) projectCalendar.CalendarId
+      FROM dbo.MR_Calendars projectCalendar
+      WHERE projectCalendar.CalendarId = p.CalendarId AND projectCalendar.IsActive = 1
+    ) projectCalendar
+    OUTER APPLY (
+      SELECT TOP (1) defaultCalendar.CalendarId
+      FROM dbo.MR_Calendars defaultCalendar
+      WHERE defaultCalendar.IsDefault = 1 AND defaultCalendar.IsActive = 1
+      ORDER BY defaultCalendar.CreatedAt, defaultCalendar.CalendarId
+    ) defaultCalendar
+    JOIN dbo.MR_Calendars c
+      ON c.CalendarId = COALESCE(taskCalendar.CalendarId, projectCalendar.CalendarId, defaultCalendar.CalendarId)
+    WHERE p.ProjectId = @projectId;
+  `);
+  return String(result.recordset?.[0]?.TimeZone || '').trim() || DEFAULT_CALENDAR.timezone;
 }
 
 /**
@@ -58,12 +92,21 @@ async function guarded(work) {
 }
 
 /** Görev yazıldıktan sonra: takvim alanları değiştiyse kuyruğa alınır. */
-export async function enqueueOutlookTaskChange(executor, taskId, before, after) {
+export async function enqueueOutlookTaskChange(executor, taskId, before, after, { now = new Date() } = {}) {
   const assignees = (row) => [...new Set((row?.assigneeIds || []).map(String))].sort().join(',');
   const visibilityChanged = assignees(before) !== assignees(after)
     || String(before?.CreatedBySicil ?? '') !== String(after?.CreatedBySicil ?? '');
-  if (!visibilityChanged && !hasOutlookCalendarChange(outlookTaskFields(before), outlookTaskFields(after))) return false;
-  await guarded(() => enqueueOutlookTaskUpdate(executor, taskId));
+  const completionChanged = (before?.Status === 'done') !== (after?.Status === 'done');
+  if (!completionChanged && !visibilityChanged && !hasOutlookCalendarChange(outlookTaskFields(before), outlookTaskFields(after))) return false;
+  await guarded(async () => {
+    const completionDate = completionChanged && after?.Status === 'done'
+      ? businessDate(now, await taskCalendarTimeZone(executor, after))
+      : null;
+    await enqueueOutlookTaskUpdate(executor, taskId, {
+      suspendCompletion: after?.Status === 'done',
+      completionDate
+    });
+  });
   return true;
 }
 

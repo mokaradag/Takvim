@@ -1,5 +1,6 @@
 import { taskPersonnelScope } from './taskPersonnelScope.js';
-import { milestoneCompletion } from '../domain/milestoneCompletion.js';
+import { normalizeTaskLifecycle, requiresActualDateReset, ACTUAL_DATE_RESET_MESSAGE } from '../domain/taskLifecycle.js';
+import { businessDate } from '../domain/calendar/businessDate.js';
 import { normalizeTaskRecord } from '../data/normalizeTaskRecord.js';
 import { TASK_STATUSES } from '../domain/constants/index.js';
 import { compareWbsNodes, selectDefaultProjectWbs, selectWbsDescendantIds } from '../domain/selectors/index.js';
@@ -11,7 +12,7 @@ import {
   validateWbsStructure
 } from '../domain/validation/index.js';
 import { fmtISO, today } from '../scheduling/dates/index.js';
-import { addWorkingDays, moveToWorkingDay, resolveProjectCalendar } from '../scheduling/calendars/index.js';
+import { addWorkingDays, moveToWorkingDay, resolveTaskCalendar, resolveProjectCalendar } from '../scheduling/calendars/index.js';
 import { reconcileSnapshotCollection, reuseSnapshotValue } from './snapshotStructuralSharing.js';
 import {
   WORKSPACE_MODE_PORTFOLIO,
@@ -344,72 +345,36 @@ export function createInitialState(snapshot = {}) {
   return createStateFromSnapshot(snapshot, createLoadingState());
 }
 
-function isDoneStatus(value) {
-  return String(value ?? '').trim().toLowerCase() === TASK_STATUSES.DONE;
+export function withCompletionStamp(state, taskId, patch, referenceDate = new Date()) {
+  if (!patch) return patch;
+  const task = (state?.tasks || []).find((item) => String(item.id) === String(taskId));
+  if (!task) return patch;
+  const calendarTask = { ...task, ...patch };
+  if (Object.prototype.hasOwnProperty.call(patch, 'proje')
+    && !Object.prototype.hasOwnProperty.call(patch, 'projectId')) delete calendarTask.projectId;
+  const calendar = resolveTaskCalendar(calendarTask, [...(state.projects || []), ...(state.assignableProjects || [])], state.calendars);
+  const lifecycleTask = { ...task, milestone: calendarTask.milestone, isMilestone: calendarTask.isMilestone };
+  return normalizeTaskLifecycle(lifecycleTask, patch, businessDate(referenceDate, calendar.timezone));
 }
 
-/**
- * Görev "Tamamlandı"ya geçerken GERÇEKLEŞEN bitişi damgalar; geri açıldığında
- * damgayı temizler.
- *
- * Normal tamamlama yolları (görev panelindeki durum düğmesi, Kanban bırakması)
- * yalnızca `status: 'done'` yamalıyor, doğrulama da buna izin veriyordu. Sonuç,
- * gerçekleşen tarihi olmayan tamamlanmış görevlerdi: raporlar bu boşluğu
- * planlanan bitişle dolduruyor ve gelecek aya planlanmış ama bugün bitirilen
- * işi eğriye gelecek ay sokuyordu.
- *
- * Damga `done` DIŞINA çıkışta temizlenir. Aksi hâlde pazartesi tamamlanıp salı
- * yeniden açılan ve cuma tekrar bitirilen bir görev, eski damgası durduğu için
- * tamamlanma eğrisine hâlâ pazartesi yazılıyordu.
- *
- * `actualStart` de birlikte doldurulur: kalıcılaştırma sınırı gerçekleşen bitiş
- * için gerçekleşen başlangıç ister ve başlangıç bitişten sonraya düşemez.
- * Gerçek başlangıç bilinmiyorsa PLAN tarihi gerçekmiş gibi yazılmaz —
- * ocak ayına planlanıp bugün yapılan iş "ocakta başlamış" diye kaydedilirdi.
- *
- * @returns {object} damgalanmış yama (değişiklik gerekmiyorsa aynı nesne)
- */
-export function withCompletionStamp(state, taskId, patch, referenceDate = today()) {
-  if (!patch) return patch;
-  const task = (state?.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
-  if (!task) return patch;
-  const changesCompletion = ['status', 'actualStart', 'actualFinish', 'progress', 'milestone', 'isMilestone']
-    .some((field) => Object.prototype.hasOwnProperty.call(patch, field));
-  const milestone = changesCompletion ? milestoneCompletion(task, patch, fmtISO(referenceDate)) : null;
-  if (milestone) return { ...patch, ...milestone };
-  if (!Object.prototype.hasOwnProperty.call(patch, 'status')) return patch;
-
-  const wasDone = isDoneStatus(task.status);
-  const becomesDone = isDoneStatus(patch.status);
-  const declaresFinish = Object.prototype.hasOwnProperty.call(patch, 'actualFinish');
-
-  if (!becomesDone) {
-    // Yeniden açılan görevin tamamlanma damgası düşer; kullanıcı açıkça bir
-    // tarih verdiyse ona dokunulmaz.
-    if (!wasDone || declaresFinish || !task.actualFinish) return patch;
-    return { ...patch, actualFinish: null };
+export function prepareTaskLifecycleIntent(state, taskId, patch, confirmReset) {
+  const task = state.tasks.find((item) => String(item.id) === String(taskId));
+  if (requiresActualDateReset(task, patch) && patch.resetActualDates !== true) {
+    if (!confirmReset?.(ACTUAL_DATE_RESET_MESSAGE)) return null;
+    patch = { ...patch, resetActualDates: true };
   }
+  return withCompletionStamp(state, taskId, patch);
+}
 
-  if (declaresFinish && patch.actualFinish) return patch;
-  // Zaten tamamlanmış bir görev yeniden `done` yamalanırsa damga korunur;
-  // yalnızca GERÇEK bir geçiş yeni tarih yazar.
-  if (wasDone && !declaresFinish && task.actualFinish) return patch;
-
-  const actualFinish = fmtISO(referenceDate);
-  const declaredStart = Object.prototype.hasOwnProperty.call(patch, 'actualStart')
-    ? patch.actualStart
-    : task.actualStart;
-  const candidateStart = declaredStart || actualFinish;
-  return {
-    ...patch,
-    actualStart: candidateStart > actualFinish ? actualFinish : candidateStart,
-    actualFinish
-  };
+function withInitialLifecycle(state, task) {
+  const context = { ...state, tasks: [{ id: task.id, status: 'todo' }] };
+  return withCompletionStamp(context, task.id, task);
 }
 
 export function normalizeStateTask(task, state) {
   const persistentTask = { ...task };
   delete persistentTask.assigneeMutation;
+  delete persistentTask.resetActualDates;
   return normalizeTaskRecord(persistentTask, taskContext(state));
 }
 
@@ -602,12 +567,12 @@ export function appStateReducer(state, action) {
     case 'persistence/clear-error':
       return { ...state, saveError: null };
     case 'task/add':
-      return { ...state, tasks: [action.task, ...state.tasks], selectedTaskId: action.task.id };
+      return { ...state, tasks: [withInitialLifecycle(state, action.task), ...state.tasks], selectedTaskId: action.task.id };
     case 'task/add-many':
       // Seri yinelemeleri tek işlemde eklenir; seçili görev şablonda kalır.
-      return { ...state, tasks: [...(action.tasks || []), ...state.tasks] };
+      return { ...state, tasks: [...(action.tasks || []).map((task) => withInitialLifecycle(state, task)), ...state.tasks] };
     case 'task/save-draft': {
-      let next = { ...state, tasks: [...(action.tasks || []), ...state.tasks] };
+      let next = { ...state, tasks: [...(action.tasks || []).map((task) => withInitialLifecycle(state, task)), ...state.tasks] };
       for (const update of action.updates || []) next = appStateReducer(next, { type: 'task/update', ...update });
       const projectsById = new Map((action.projectUpdates || []).map((project) => [project.id, project]));
       return { ...next, projects: next.projects.map((project) => projectsById.get(project.id) || project) };
@@ -617,7 +582,7 @@ export function appStateReducer(state, action) {
       let updatedTask = null;
       let tasks = state.tasks.map((task) => {
         if (task.id !== action.id) return task;
-        const next = { ...task, ...action.patch };
+        const next = { ...task, ...withCompletionStamp(state, task.id, action.patch) };
         const patchHasAssigneeIds = Object.prototype.hasOwnProperty.call(action.patch, 'assigneeIds');
         // Yalnızca ad listesi gönderildiğinde kimlikler adlardan yeniden türetilir.
         // Yama açıkça Sicil kimliklerini taşıyorsa bunlar kesin kaynaktır: binlerce
@@ -628,7 +593,8 @@ export function appStateReducer(state, action) {
         } else if (patchHasAssigneeIds) {
           next.assigneeIdsCanonical = true;
         }
-        if (Object.prototype.hasOwnProperty.call(action.patch, 'proje')) {
+        if (Object.prototype.hasOwnProperty.call(action.patch, 'proje')
+          && !Object.prototype.hasOwnProperty.call(action.patch, 'projectId')) {
           delete next.projectId;
           delete next.wbsId;
         }

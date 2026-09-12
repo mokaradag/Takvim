@@ -30,3 +30,7 @@ export function saveReminderSettingsRequest(settings) {
 export function runAutomaticRemindersRequest() {
   return requestJson('/api/mergen-rota/reminders/run', { method: 'POST' });
 }
+
+export function loadDeliveryStatusRequest(options = {}) {
+  return requestJson('/api/mergen-rota/reminders/run', { method: 'GET' }, options);
+}
