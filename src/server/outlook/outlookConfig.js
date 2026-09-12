@@ -9,6 +9,8 @@ import { publicRotaPath } from '../../lib/publicPath.js';
  * değildir.
  */
 
+let reportedInvalidOrigin = '';
+
 function booleanValue(name, fallback) {
   const raw = process.env[name];
   if (raw == null || String(raw).trim() === '') return fallback;
@@ -26,13 +28,30 @@ function integerValue(name, fallback, { min, max }) {
   return Math.min(max, Math.max(min, value));
 }
 
-function httpOrigin(value) {
+function isLocalDevelopmentHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+}
+
+function safeWebOrigin(value) {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : '';
+    if (parsed.protocol === 'https:') return parsed.origin;
+    if (parsed.protocol === 'http:' && isLocalDevelopmentHost(parsed.hostname)) return parsed.origin;
+    return '';
   } catch {
     return '';
   }
+}
+
+function reportInvalidPublicOrigin(configured) {
+  const key = String(configured || '').trim();
+  if (!key || reportedInvalidOrigin === key) return;
+  reportedInvalidOrigin = key;
+  console.error('[outlook] MERGEN_ROTA_PUBLIC_ORIGIN geçersiz', {
+    code: 'OUTLOOK_PUBLIC_ORIGIN_INVALID',
+    requirement: 'Üretimde HTTPS; HTTP yalnız localhost/loopback geliştirmede kabul edilir.'
+  });
 }
 
 /**
@@ -60,6 +79,10 @@ export function outlookRunBudgetMs() {
   return integerValue('MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS', 45000, { min: 1000, max: 240000 });
 }
 
+export function outlookPollIntervalMs() {
+  return integerValue('MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS', 5000, { min: 1000, max: 60000 });
+}
+
 /** Özellik açık mı? Kapalıyken uçlar 403 döner ve arayüz eylemi göstermez. */
 export function isOutlookCalendarEnabled() {
   return booleanValue('MERGEN_ROTA_OUTLOOK_CALENDAR_ENABLED', true);
@@ -80,15 +103,25 @@ export function outlookRetryDelaySeconds(attemptCount) {
  *
  * Üretim adresi KODA GÖMÜLMEZ: kanonik ön ek `publicRotaPath` ile, köken ise
  * ya sunucu tarafı `MERGEN_ROTA_PUBLIC_ORIGIN` ile ya da isteğin kendi
- * kökeniyle çözülür (Keycloak implicit yönlendirmesiyle aynı ilke).
+ * kökeniyle çözülür (Keycloak implicit yönlendirmesiyle aynı ilke). Dağıtılmış
+ * ortamlarda HTTPS zorunludur; düz HTTP yalnız localhost/loopback geliştirme
+ * kökenleri için kabul edilir. Geçersiz yapılandırılmış köken güvenli istek
+ * kökenine düşebilir ama sunucu günlüğüne açık yapılandırma hatası yazılır.
  *
  * @param {string|URL|null} requestUrl istekten türetilecek köken
  * @returns {string|null} tam adres ya da köken bilinmiyorsa `null`
  */
 export function outlookApplicationLink(requestUrl = null) {
   const configured = String(process.env.MERGEN_ROTA_PUBLIC_ORIGIN ?? '').trim();
-  let origin = configured ? httpOrigin(configured) : '';
-  if (!origin && requestUrl) origin = httpOrigin(requestUrl);
+  let origin = '';
+  if (configured) {
+    origin = safeWebOrigin(configured);
+    if (!origin) reportInvalidPublicOrigin(configured);
+    else reportedInvalidOrigin = '';
+  } else {
+    reportedInvalidOrigin = '';
+  }
+  if (!origin && requestUrl) origin = safeWebOrigin(requestUrl);
   if (!origin) return null;
   return `${origin}${publicRotaPath('/')}`;
 }

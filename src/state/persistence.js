@@ -106,6 +106,23 @@ export function createOrderedMutationQueue() {
   };
 }
 
+const owns = (value, field) => Object.prototype.hasOwnProperty.call(value, field);
+const DERIVED_LIFECYCLE_FIELDS = Object.freeze(['actualStart', 'actualFinish', 'progress', 'resetActualDates']);
+
+function mergeTaskPatches(previous = {}, next = {}) {
+  const base = { ...previous };
+  // Durum değişikliği önceki durum geçişinin türettiği gerçekleşen tarih/
+  // ilerleme alanlarını miras almamalıdır. Aksi hâlde 250 ms içinde yapılan
+  // `Tamamlandı → Yapılacak` değişikliği ilk yamanın bitiş/progress değerlerini
+  // taşıyarak kalıcılaştırmada tekrar `Tamamlandı` durumuna dönebiliyordu.
+  if (owns(previous, 'status') && owns(next, 'status') && previous.status !== next.status) {
+    for (const field of DERIVED_LIFECYCLE_FIELDS) {
+      if (!owns(next, field)) delete base[field];
+    }
+  }
+  return { ...base, ...next };
+}
+
 export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
   const pending = new Map();
   const inFlight = new Map();
@@ -155,7 +172,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
       // `retained` yalnızca siliniyor, hiç birleştirilmiyordu: reddedilen
       // düzenleme, korunması gereken tek kopya olduğu hâlde kayboluyordu.
       const current = pending.get(taskId) || { patch: {}, waiters: [], timer: null };
-      current.patch = { ...(retained || {}), ...current.patch, ...patch };
+      current.patch = mergeTaskPatches(mergeTaskPatches(retained || {}, current.patch), patch);
       current.waiters.push(resolve);
       pending.set(taskId, current);
       scheduleFlush(taskId);
@@ -202,12 +219,12 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
         // ekrandan kaldırdı, yeniden denemede geri gelmemelidir.
         const inFlightPatch = { ...entry.patch };
         if (cancelledKeys) for (const key of cancelledKeys) delete inFlightPatch[key];
-        const retainedPatch = { ...(failed.get(taskId) || {}), ...inFlightPatch };
+        const retainedPatch = mergeTaskPatches(failed.get(taskId) || {}, inFlightPatch);
         if (cancelledKeys) for (const key of cancelledKeys) delete retainedPatch[key];
         const newer = pending.get(taskId);
         if (newer) {
           // Eski alanlar alta serilir: daha yeni yerel değerler her zaman kazanır.
-          newer.patch = { ...retainedPatch, ...newer.patch };
+          newer.patch = mergeTaskPatches(retainedPatch, newer.patch);
           failed.delete(taskId);
         } else if (Object.keys(retainedPatch).length) {
           failed.set(taskId, retainedPatch);
@@ -299,7 +316,7 @@ export function createTaskPatchCoalescer(flushPatch, { delayMs = 250 } = {}) {
     for (const [taskId, patch] of failed) {
       failed.delete(taskId);
       const current = pending.get(taskId) || { patch: {}, waiters: [], timer: null };
-      current.patch = { ...patch, ...current.patch };
+      current.patch = mergeTaskPatches(patch, current.patch);
       pending.set(taskId, current);
     }
     return flushAll(options);
@@ -455,14 +472,15 @@ export function createStateMutationOrchestrator({
     if (action.type === 'task/update') {
       const assigneeMutation = Object.prototype.hasOwnProperty.call(action.patch || {}, 'assigneeIds');
       changes.taskUpserts = changes.taskUpserts.map((task) => (
-        String(task.id) === String(action.id) ? { ...task, assigneeMutation } : task
+        String(task.id) === String(action.id) ? { ...task, assigneeMutation, resetActualDates: action.patch?.resetActualDates === true } : task
       ));
     }
     if (action.type === 'task/save-draft') {
       const byId = new Map(action.updates.map((update) => [String(update.id), update.patch]));
       changes.taskUpserts = changes.taskUpserts.map((task) => ({
         ...task,
-        assigneeMutation: Object.prototype.hasOwnProperty.call(byId.get(String(task.id)) || {}, 'assigneeIds')
+        assigneeMutation: Object.prototype.hasOwnProperty.call(byId.get(String(task.id)) || {}, 'assigneeIds'),
+        resetActualDates: byId.get(String(task.id))?.resetActualDates === true
       }));
     }
     if (isEmptyChangeSet(changes)) {

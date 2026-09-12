@@ -1,5 +1,8 @@
 import 'server-only';
+import { outlookCompletionNeedsCancellation } from '../../domain/outlook/outlookCompletion.js';
 import { abortableOutlookOperation, keepOutlookLease, outlookDeadline, outlookExecutor } from './outlookExecution.js';
+import { outlookFailureCode } from './outlookFailure.js';
+import { outlookFailureMessage, safeOutlookFailureCode } from '../../domain/outlook/outlookFailures.js';
 import { isValidEmailAddress } from '../../domain/reminders/emailAddress.js';
 import {
   buildOutlookCalendarPayload,
@@ -62,23 +65,24 @@ const MESSAGES = Object.freeze({
   FORBIDDEN: 'Bu görevi görüntüleme yetkiniz olmadığı için Outlook takviminize ekleyemezsiniz.',
   NO_CALENDAR_DATE: 'Görevin termin tarihi yok; takvime eklenebilmesi için bir termin girin.',
   NO_RECIPIENT_ADDRESS: 'Kurumsal e-posta adresiniz personel kaydında bulunamadı.',
-  NOT_SUBSCRIBED: 'Bu görev Outlook takviminizde kayıtlı değil.',
-  ADDED: 'Görev Outlook takviminize eklendi.',
-  ALREADY_ADDED: 'Görev Outlook takviminizde zaten güncel.',
+  NOT_SUBSCRIBED: 'Bu görev için Outlook bağlantısı etkin değil.',
+  TASK_COMPLETED: 'Görev tamamlandı; Outlook bağlantısı yeniden açılana kadar bekletiliyor.',
+  ADDED: 'Outlook daveti gönderildi.',
+  ALREADY_ADDED: 'Outlook bağlantısı etkin; son davet güncel.',
   RESENT: 'Outlook daveti yeniden gönderildi.',
-  REMOVED: 'Görev Outlook takviminizden kaldırıldı.',
+  REMOVED: 'Outlook bağlantısı kapatıldı; gerekli iptal daveti gönderildi.',
   QUEUED: 'Outlook daveti gönderim kuyruğuna alındı.',
   RETRY_QUEUED: 'Sistem gönderimi yeniden deneyecek.',
   IN_PROGRESS: 'Outlook daveti şu anda gönderiliyor. Birkaç saniye sonra durumu yenileyin.',
   INVALID_IDENTITY: 'Görev ya da kullanıcı kimliği takvim daveti için geçerli değil.',
   SUBSCRIPTION_MISSING: 'Outlook takvim kaydı bulunamadı.',
   UNEXPECTED_ERROR: 'Outlook takvim işlemi tamamlanamadı.',
-  OUTLOOK_SCHEMA_MISSING: 'Outlook takvim şeması kurulmamış. Sunucuda 0010 yükseltme betiği çalıştırılmalıdır.'
+  OUTLOOK_SCHEMA_MISSING: 'Outlook takvim şeması kurulmamış. Sunucuda güncel 0010 ve 0011 yükseltme betikleri çalıştırılmalıdır.'
 });
 
 /** Kullanıcıya gösterilebilir, gizli bilgi taşımayan ileti. */
 export function outlookMessage(code, fallback = 'Outlook takvim işlemi tamamlanamadı.') {
-  return MESSAGES[code] || fallback;
+  return MESSAGES[code] || (safeOutlookFailureCode(code, null) ? outlookFailureMessage(code) : fallback);
 }
 
 /**
@@ -110,10 +114,13 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
   const executor = outlookExecutor(baseExecutor, execution.signal);
   const stopRenewal = keepOutlookLease(executor, subscription, execution);
   const force = subscription.forceResend;
-  let completion;
   const finish = async (operation) => {
-    completion ||= outlookDeadline(5000);
-    return operation(outlookExecutor(baseExecutor, completion.signal));
+    const completion = outlookDeadline(5000);
+    try {
+      return await operation(outlookExecutor(baseExecutor, completion.signal));
+    } finally {
+      completion.close();
+    }
   };
   const claim = {
     subscriptionId: subscription.subscriptionId,
@@ -132,24 +139,35 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
     const { taskState, payload } = subscription.cancelRequested
       ? { taskState: { exists: false }, payload: { ok: false } }
       : await resolveTaskPayload(executor, { taskId: subscription.taskId, sicil: subscription.userSicil, link });
-    const cancellationCode = subscription.cancelRequested ? 'REMOVED'
-      : !taskState.exists ? 'TASK_NOT_FOUND' : !taskState.visible ? 'FORBIDDEN' : !payload.ok ? payload.code : null;
-    const mustCancel = Boolean(cancellationCode);
+    const unavailable = subscription.cancelRequested ? 'USER_REMOVED'
+      : !taskState.exists ? 'TASK_NOT_FOUND' : !taskState.visible ? 'FORBIDDEN' : null;
+    const completedTask = !unavailable && taskState.task?.status === 'done';
+    if (completedTask && !outlookCompletionNeedsCancellation(subscription, payload.date, now)) {
+      const settled = await settleOutlookDelivery(executor, {
+        ...claim, completionSuspended: true, cancellationReason: 'TASK_COMPLETED'
+      });
+      return settled ? { status: 'UNCHANGED', code: 'TASK_COMPLETED' }
+        : { status: 'FAILED', code: 'OUTLOOK_LEASE_LOST' };
+    }
+    const cancellationReason = unavailable || (completedTask ? 'TASK_COMPLETED' : !payload.ok ? payload.code : null);
+    const cancellationCode = cancellationReason === 'USER_REMOVED' ? 'REMOVED' : cancellationReason;
+    const mustCancel = Boolean(cancellationReason);
     const method = mustCancel ? 'CANCEL' : 'REQUEST';
     const summary = mustCancel ? 'MERGEN Rota takvim kaydı' : payload.summary;
     const calendarDate = mustCancel ? null : payload.date;
 
     if (mustCancel && subscription.deliveredSequence == null && !subscription.deliveryMayHaveEscaped) {
-      const removed = await deactivateOutlookSubscription(executor, claim);
+      const removed = await deactivateOutlookSubscription(executor, { ...claim, cancellationReason });
       if (!removed) await settleOutlookDelivery(executor, claim);
       return { status: removed ? 'CANCELLED' : 'IN_PROGRESS', code: cancellationCode };
     }
     const payloadHash = mustCancel
       ? outlookCancellationHash({ summary, date: calendarDate }) : outlookPayloadHash(payload);
-    if (!mustCancel && !force && payloadHash === subscription.deliveredPayloadHash
+    if (!mustCancel && !force && !subscription.completionSuspended && subscription.deliveredMethod !== 'CANCEL'
+      && payloadHash === subscription.deliveredPayloadHash
       && (!subscription.pendingPayloadHash || subscription.pendingPayloadHash === subscription.deliveredPayloadHash)) {
-      await settleOutlookDelivery(executor, claim);
-      return { status: 'UNCHANGED' };
+      const settled = await settleOutlookDelivery(executor, claim);
+      return settled ? { status: 'UNCHANGED' } : { status: 'FAILED', code: 'OUTLOOK_LEASE_LOST' };
     }
 
     const configurationProblem = smtpConfigurationProblem();
@@ -164,7 +182,8 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
       ...claim, method, payloadHash,
       attendee: recipient.email,
       organizer: subscription.calendarOrganizer || config.from,
-      reuseDelivered: !mustCancel && force
+      calendarDate, cancellationReason,
+      reuseDelivered: !mustCancel && force && !subscription.completionSuspended && subscription.deliveredMethod !== 'CANCEL'
     });
     if (!allocated) {
       await settleOutlookDelivery(executor, claim);
@@ -187,28 +206,31 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
       calendar: { method, content: invitation, filename: 'mergen-rota.ics' },
       signal: execution.signal
     }), execution.signal);
-    if (!sent.ok) return await failed(sent.code || 'SMTP_SEND_FAILED',
+    if (!sent.ok) return await failed(safeOutlookFailureCode(sent.code, 'SMTP_SEND_FAILED'),
       sent.deliveryMayHaveEscaped === false && !subscription.deliveryMayHaveEscaped && subscription.deliveredSequence == null);
-    await finish((cleanup) => completeOutlookDelivery(cleanup, {
-      ...claim, method, sequence: allocated.sequence, payloadHash, summary, calendarDate
+    const completed = await finish((cleanup) => completeOutlookDelivery(cleanup, {
+      ...claim, method, sequence: allocated.sequence, payloadHash, summary, calendarDate,
+      completionSuspended: completedTask, cancellationReason
     }));
+    if (!completed) return { status: 'FAILED', code: 'OUTLOOK_LEASE_LOST', message: outlookMessage('OUTLOOK_LEASE_LOST') };
     return { status: mustCancel ? 'CANCELLED' : 'SENT', code: cancellationCode, sequence: allocated.sequence };
   } catch (error) {
     if (isMissingOutlookSchema(error)) throw error;
-    const code = execution.signal.aborted ? execution.signal.reason?.message : 'UNEXPECTED_ERROR';
-    return await failed(['OUTLOOK_RUN_TIMEOUT', 'OUTLOOK_LEASE_LOST'].includes(code) ? code : 'UNEXPECTED_ERROR');
+    const code = outlookFailureCode(execution.signal.aborted ? execution.signal.reason : error);
+    console.error('[outlook] teslimat tamamlanamadı', { subscriptionId: subscription.subscriptionId, code });
+    return await failed(code);
   } finally {
     await stopRenewal();
-    completion?.close();
     execution.close();
   }
 }
 
-/** Kullanıcının açık eylemi: abonelik açılır ve davet HEMEN gönderilir. */
+/** HTTP eylemleri kalıcı kuyruğa yazar; otomatik çalışan teslim eder. */
 async function addOne(executor, { taskId, sicil, link, send, now, queueOnly = false }) {
   const { taskState, payload } = await resolveTaskPayload(executor, { taskId, sicil, link });
   if (!taskState.exists) return { status: 'NOT_FOUND', code: 'TASK_NOT_FOUND', message: outlookMessage('TASK_NOT_FOUND') };
   if (!taskState.visible) return { status: 'FORBIDDEN', code: 'FORBIDDEN', message: outlookMessage('FORBIDDEN') };
+  if (taskState.task.status === 'done') return { status: 'FAILED', code: 'TASK_COMPLETED', message: outlookMessage('TASK_COMPLETED') };
   if (!payload.ok) {
     return { status: 'FAILED', code: payload.code, message: outlookMessage(payload.code) };
   }
@@ -326,6 +348,7 @@ export async function resendTaskInvitation(executor, { taskId, sicil, link = nul
   const taskState = await loadOutlookTask(executor, taskId, sicil);
   if (!taskState.exists) return { status: 'NOT_FOUND', code: 'TASK_NOT_FOUND', message: outlookMessage('TASK_NOT_FOUND') };
   if (!taskState.visible) return { status: 'FORBIDDEN', code: 'FORBIDDEN', message: outlookMessage('FORBIDDEN') };
+  if (taskState.task.status === 'done') return { status: 'FAILED', code: 'TASK_COMPLETED', message: outlookMessage('TASK_COMPLETED') };
 
   const payload = buildOutlookCalendarPayload(taskState.task, { link });
   if (!payload.ok) return { status: 'FAILED', code: payload.code, message: outlookMessage(payload.code) };
@@ -368,7 +391,7 @@ export async function removeTaskFromOutlook(executor, { taskId, sicil, link = nu
   };
 }
 
-/** Arayüzün "eklendi" durumu için kullanıcının etkin abonelikleri. */
+/** Kullanıcının etkin abonelik ve son teslimat durumu. */
 export async function loadOutlookCalendarState(executor, { sicil }) {
   try {
     const rows = await loadUserOutlookSubscriptions(executor, sicil);
@@ -379,13 +402,7 @@ export async function loadOutlookCalendarState(executor, { sicil }) {
   }
 }
 
-/**
- * Bekleyen Outlook teslimatlarının SINIRLI turu.
- *
- * Zamanlanmış hatırlatma turuyla aynı uçtan çalıştırılır: ayrı bir kuyruk
- * altyapısı eklenmez. Tur sık çalışabilir; sahiplenme ve sürüm ayırma SQL
- * tarafında bölünemez olduğu için aynı davet iki kez gönderilmez.
- */
+/** Otomatik çalışan ve tanı ucu aynı sınırlı, kiralı teslimat turunu kullanır. */
 export async function runOutlookCalendarOutbox(executor, {
   link = null,
   send = sendMail,
@@ -398,9 +415,10 @@ export async function runOutlookCalendarOutbox(executor, {
   const problem = smtpConfigurationProblem() || (mailConfigured === false ? 'SMTP_NOT_CONFIGURED' : null);
   if (problem) return { ok: false, reason: problem, claimed: 0, sent: 0, cancelled: 0, unchanged: 0, failed: 0 };
 
-  const summary = { ok: true, schemaReady: true, claimed: 0, sent: 0, cancelled: 0, unchanged: 0, failed: 0, exhausted: 0 };
+  const summary = { ok: true, schemaReady: true, claimed: 0, sent: 0, cancelled: 0, unchanged: 0, inProgress: 0, failed: 0, exhausted: 0, failureCodes: {} };
   const execution = outlookDeadline(Math.max(1, Math.min(240000, Number(budgetMs) || outlookRunBudgetMs())));
   const bounded = outlookExecutor(executor, execution.signal);
+  let deliveryInProgress = false;
   try {
     await revalidateOutlookSubscriptions(bounded, limit);
     summary.exhausted = await outlookOutboxHealth(bounded, maxAttempts);
@@ -408,20 +426,34 @@ export async function runOutlookCalendarOutbox(executor, {
       const [subscription] = await claimOutlookDeliveries(bounded, { limit: 1, maxAttempts });
       if (!subscription) break;
       summary.claimed += 1;
+      deliveryInProgress = true;
       const delivery = await deliverSubscription(executor, { subscription, link, send, now, signal: execution.signal });
+      deliveryInProgress = false;
       if (delivery.status === 'SENT') summary.sent += 1;
       else if (delivery.status === 'CANCELLED') summary.cancelled += 1;
-      else if (delivery.status === 'UNCHANGED' || delivery.status === 'IN_PROGRESS') summary.unchanged += 1;
-      else summary.failed += 1;
+      else if (delivery.status === 'UNCHANGED') summary.unchanged += 1;
+      else if (delivery.status === 'IN_PROGRESS') summary.inProgress += 1;
+      else {
+        summary.failed += 1;
+        const code = safeOutlookFailureCode(delivery.code);
+        summary.failureCodes[code] = (summary.failureCodes[code] || 0) + 1;
+      }
     }
     if (!execution.signal.aborted) summary.exhausted = await outlookOutboxHealth(bounded, maxAttempts);
     summary.ok = summary.failed === 0 && summary.exhausted === 0 && !execution.signal.aborted;
     if (execution.signal.aborted) summary.reason = 'OUTLOOK_RUN_TIMEOUT';
     else if (summary.exhausted) summary.reason = 'OUTLOOK_RETRY_EXHAUSTED';
+    else if (summary.failed) summary.reason = Object.keys(summary.failureCodes)[0];
     return summary;
   } catch (error) {
+    if (deliveryInProgress) {
+      summary.failed += 1;
+      const code = outlookFailureCode(execution.signal.aborted ? execution.signal.reason : error);
+      summary.failureCodes[code] = (summary.failureCodes[code] || 0) + 1;
+    }
     if (isMissingOutlookSchema(error)) return { ...summary, ok: false, schemaReady: false, reason: 'OUTLOOK_SCHEMA_MISSING' };
     if (execution.signal.aborted) return { ...summary, ok: false, reason: 'OUTLOOK_RUN_TIMEOUT' };
-    throw error;
+    console.error('[outlook] kuyruk sorgusu tamamlanamadı', { code: outlookFailureCode(error) });
+    return { ...summary, ok: false, reason: outlookFailureCode(error) };
   } finally { execution.close(); }
 }

@@ -76,7 +76,7 @@ test('yeni görev düğmesi yalnızca taslak açar, kalıcı yazma Kaydet eylemi
   assert.match(provider.slice(saveStart, saveEnd), /persistence\.mutate/);
   assert.match(provider, /resolveTaskCreationAccess\(stateRef\.current, task\.projectId\)/);
   assert.match(provider, /creation\.ok \? creation\.scope : null/);
-  assert.match(provider, /withCompletionStamp\(draftState, id, patch\)/);
+  assert.match(provider, /prepareTaskLifecycleIntent\(draftState, id, patch,/);
   assert.match(provider, /withCompletionStamp\(draftState, draft\.task\.id, input \|\| draft\.task\)/);
   const activeDraftCheck = provider.indexOf("String(taskCreationDraftRef.current?.task?.id || '') !== String(draft.task.id)", saveStart);
   const draftClear = provider.indexOf('taskCreationDraftRef.current = null;', activeDraftCheck);
