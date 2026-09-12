@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { registerHooks } from 'node:module';
+import { setImmediate } from 'node:timers/promises';
+import { mountComponent } from './helpers/clientComponentHarness.mjs';
+import { createMockRepository } from '../src/data/mock/createMockRepository.js';
+
+const providerUrl = new URL('../src/state/AppStateProvider.jsx', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === providerUrl) return { url: providerUrl, shortCircuit: true };
+    return nextResolve(specifier, context);
+  }
+});
+const { AppStateProvider } = await import(providerUrl);
 
 import {
   DEFAULT_SIDEBAR_PREFERENCE,
@@ -76,7 +89,6 @@ test('yeni görev düğmesi yalnızca taslak açar, kalıcı yazma Kaydet eylemi
   assert.match(provider.slice(saveStart, saveEnd), /persistence\.mutate/);
   assert.match(provider, /resolveTaskCreationAccess\(stateRef\.current, task\.projectId\)/);
   assert.match(provider, /creation\.ok \? creation\.scope : null/);
-  assert.match(provider, /withCompletionStamp\(draftState, id, patch\)/);
   assert.match(provider, /withCompletionStamp\(draftState, draft\.task\.id, input \|\| draft\.task\)/);
   const activeDraftCheck = provider.indexOf("String(taskCreationDraftRef.current?.task?.id || '') !== String(draft.task.id)", saveStart);
   const draftClear = provider.indexOf('taskCreationDraftRef.current = null;', activeDraftCheck);
@@ -90,6 +102,40 @@ test('yeni görev düğmesi yalnızca taslak açar, kalıcı yazma Kaydet eylemi
     assert.match(drawer, /'Kaydet'/);
     assert.doesNotMatch(drawer, /'Tamam'/);
   }
+});
+
+test('taslak sıfırlama onayı reddedilince sağlayıcı görevi değiştirmez', async (t) => {
+  const repository = createMockRepository({
+    projects: [{ id: 'p1', name: 'Proje', accessLevel: 'FULL' }],
+    tasks: [], wbs: [], people: [], calendars: [], baselines: [], taskBaselineSnapshots: []
+  });
+  let writes = 0;
+  const commit = repository.commitChanges.bind(repository);
+  repository.commitChanges = (...args) => { writes++; return commit(...args); };
+  const previousWindow = globalThis.window;
+  let confirmations = 0;
+  globalThis.window = { confirm() { confirmations++; return false; } };
+  t.after(() => {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  });
+  const view = mountComponent(AppStateProvider, { repository });
+  t.after(() => view.unmount());
+  await setImmediate();
+  view.render();
+  const created = await view.output.props.value.actions.beginTaskDraft({
+    projectId: 'p1', task: 'Tamamlanmış taslak', status: 'done', progress: 100,
+    actualStart: '2026-09-07', actualFinish: '2026-09-10'
+  });
+  assert.equal(created.ok, true, created.error?.message);
+  view.render();
+  const before = structuredClone(view.output.props.value.taskCreationDraft);
+  const result = await view.output.props.value.actions.updateTaskDraft(created.value.id, { status: 'todo' });
+  view.render();
+  assert.deepEqual(result, { ok: false, cancelled: true });
+  assert.equal(confirmations, 1);
+  assert.deepEqual(view.output.props.value.taskCreationDraft, before);
+  assert.equal(writes, 0);
 });
 
 test('açıkça temizlenen proje başka bir projeye düşmeden reddedilir', async () => {

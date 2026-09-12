@@ -15,7 +15,7 @@ import { setProjectColorOverrides } from '../lib/colors';
 import { resolveProjectCalendar } from '../scheduling/calendars';
 import { selectTaskStats } from '../scheduling/metrics';
 import { normalizeRecurrenceRule } from '../scheduling/recurrence';
-import { appStateReducer, createLoadingState, normalizeStateTask, withCompletionStamp } from './appState';
+import { appStateReducer, createLoadingState, normalizeStateTask, withCompletionStamp, prepareTaskLifecycleIntent } from './appState';
 import { createStateMutationOrchestrator } from './persistence';
 import { prepareProjectCreation, prepareProjectUpdateChanges } from './projectCreation';
 import {
@@ -221,9 +221,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   }, [applyStateAction, persistence]);
 
   const updateTask = useCallback((id, patch) => {
-    // "Tamamlandı"ya geçiş gerçekleşen bitişi damgalar: aksi hâlde raporlar
-    // planlanan bitişi gerçekleşen sanmak zorunda kalırdı.
-    const stamped = withCompletionStamp(stateRef.current, id, patch);
+    let stamped;
+    try {
+      stamped = prepareTaskLifecycleIntent(stateRef.current, id, patch, (message) => window.confirm(message));
+    } catch (error) {
+      return Promise.resolve({ ok: false, error });
+    }
+    if (!stamped) return Promise.resolve({ ok: false, cancelled: true });
     const access = resolveTaskMutationAccess(stateRef.current, id, stamped);
     if (!access.ok) return rejectedWrite('task/update', access);
     return persistence.updateTask(id, stamped);
@@ -383,7 +387,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       ...stateRef.current,
       tasks: [...(stateRef.current.tasks || []), current.task]
     };
-    const stampedPatch = withCompletionStamp(draftState, id, patch);
+    let stampedPatch;
+    try {
+      stampedPatch = prepareTaskLifecycleIntent(draftState, id, patch, (message) => window.confirm(message));
+    } catch (error) {
+      return Promise.resolve({ ok: false, error });
+    }
+    if (!stampedPatch) return Promise.resolve({ ok: false, cancelled: true });
     const task = normalizeStateTask({ ...current.task, ...stampedPatch }, stateRef.current);
     // Proje değişince taslak yetkileri de HEDEF projenin kapsamına geçer.
     // Kaydetme aynı kapsamı yeniden doğrular; panel eski FULL projenin
@@ -462,6 +472,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     }
     const access = resolveTaskMutationAccess(current, taskId);
     if (!access.ok) return projectWriteFailure('task/series', access);
+    if (!access.canManageRecurrence) {
+      return projectWriteFailure('task/series', {
+        ...access,
+        code: 'FORBIDDEN',
+        message: 'Tekrar oluşturma yetkiniz yok.'
+      });
+    }
     const rule = normalizeRecurrenceRule(template.recurrence);
     if (!rule) {
       return projectWriteFailure('task/series', {

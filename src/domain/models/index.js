@@ -72,8 +72,8 @@
  * @property {string|null} plannedFinish Mutable current-plan finish.
  * @property {number|null} plannedDurationDays Working-day duration normalized from current-plan dates; milestones are zero.
  * @property {string|null} targetFinish Management target/deadline; not automatically a CPM constraint.
- * @property {string|null} actualStart Explicit observed start; never inferred from status or progress.
- * @property {string|null} actualFinish Explicit observed finish; never inferred from status or progress.
+ * @property {string|null} actualStart Gerçekleşen başlangıç; yaşam döngüsü kuralıyla tamamlanır, plandan türetilmez.
+ * @property {string|null} actualFinish Gerçekleşen bitiş; tamamlanma niyetiyle doldurulur, ilerlemeden türetilmez.
  * @property {number|null} remainingDurationDays Gelecekteki kullanım için korunan nullable uyumluluk alanı.
  * @property {string} [proje] Legacy display field retained for the current UI.
  * @property {string[]} [sorumlu] Legacy display field retained for the current UI.

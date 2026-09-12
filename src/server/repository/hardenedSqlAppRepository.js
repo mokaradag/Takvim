@@ -267,6 +267,9 @@ async function planTaskCommits(executor, changes) {
     ...task,
     id: uuid(task.id, 'Görev kimliği'),
     projectId: uuid(task.projectId, 'Proje kimliği'),
+    recurrenceParentId: task.recurrenceParentId
+      ? uuid(task.recurrenceParentId, 'Tekrar şablonu kimliği')
+      : task.recurrenceParentId,
     deps: (task.deps || []).map((dependency) => ({
       ...dependency,
       predecessorId: uuid(dependency?.predecessorId, 'Öncül görev kimliği')
@@ -279,7 +282,10 @@ async function planTaskCommits(executor, changes) {
   const referencedTaskIds = new Set([
     ...taskUpserts.map((task) => task.id),
     ...taskDeletes.map((entry) => entry.id),
-    ...taskUpserts.flatMap((task) => task.deps.map((dependency) => dependency.predecessorId))
+    ...taskUpserts.flatMap((task) => task.deps.map((dependency) => dependency.predecessorId)),
+    ...taskUpserts
+      .filter((task) => task.recurrenceParentId)
+      .map((task) => task.recurrenceParentId)
   ]);
   const existingTaskProjects = new Map();
 

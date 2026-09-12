@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { CLIENT_STATE, findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
+
+const { TaskDrawer } = await import('../src/features/task-detail/TaskDrawer.jsx');
+const { DateInput } = await import('../src/components/DateInput.jsx');
 
 import {
   TURKISH_CALENDAR_WEEKDAYS,
@@ -57,7 +61,6 @@ test('görev tarih alanları imkânsız plan ve gerçekleşen aralıklarını da
   assert.match(drawer, /Planlanan bitiş[\s\S]*minDate=\{local\.plannedStart\}/);
   assert.match(drawer, /Gerçekleşen başlangıç[\s\S]*maxDate=\{local\.actualFinish\}/);
   assert.match(drawer, /Gerçekleşen bitiş[\s\S]*minDate=\{local\.actualStart\}/);
-  assert.match(drawer, /Gerçekleşen bitiş[\s\S]*disabled=\{!local\.actualStart\}/);
 
   assert.ok(validateTaskSchedule({
     plannedStart: '2026-08-25', plannedFinish: '2026-08-20'
@@ -72,6 +75,40 @@ test('görev tarih alanları imkânsız plan ve gerçekleşen aralıklarını da
     plannedStart: '2026-08-25', plannedFinish: '2026-08-25',
     actualStart: '2026-08-25', actualFinish: '2026-08-25'
   }), []);
+});
+
+test('başlangıcı boş görevde gerçekleşen bitiş girilebilir; kayıtta form kilitlenir', (t) => {
+  const previousState = globalThis[CLIENT_STATE];
+  const task = {
+    id: 'actual-dates', task: 'Görev', projectId: 'p1', status: 'todo', priority: 'medium',
+    actualStart: null, actualFinish: null, assigneeIds: [], sorumlu: [], deps: []
+  };
+  globalThis[CLIENT_STATE] = {
+    tasks: [task], projects: [{ id: 'p1', name: 'Proje', tags: [] }],
+    people: [], calendars: [], wbs: [], baselines: [], taskBaselineSnapshots: []
+  };
+  t.after(() => {
+    if (previousState === undefined) delete globalThis[CLIENT_STATE];
+    else globalThis[CLIENT_STATE] = previousState;
+  });
+  const patches = [];
+  const props = { task, tasks: [task], onClose() {}, onUpdate: (_id, patch) => patches.push(patch) };
+  const drawer = mountComponent(TaskDrawer, props);
+  t.after(() => drawer.unmount());
+  const form = findElement(drawer.output, (node) => node.type === 'fieldset');
+  assert.equal(Boolean(form.props.disabled), false);
+  const field = findElement(form, (node) => node.props?.label === 'Gerçekleşen bitiş');
+  assert.ok(field);
+  const renderedField = mountComponent(field.type, field.props);
+  t.after(() => renderedField.unmount());
+  const input = findElement(renderedField.output, (node) => node.type === DateInput);
+  assert.ok(input);
+  assert.equal(input.props.disabled, false);
+  assert.equal(input.props.minDate, '');
+  input.props.onChange('2026-09-08');
+  assert.deepEqual(patches, [{ actualFinish: '2026-09-08' }]);
+  drawer.render({ ...props, isSaving: true });
+  assert.equal(findElement(drawer.output, (node) => node.type === 'fieldset').props.disabled, true);
 });
 
 test('tarih seçici yerel takvim kullanır ve tarayıcının yerel date girişine dayanmaz', () => {

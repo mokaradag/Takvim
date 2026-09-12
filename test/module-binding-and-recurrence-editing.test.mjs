@@ -12,6 +12,7 @@
  *   3. Öncelik alanı arayüzden tanımlanabilir.
  */
 import test from 'node:test';
+import { Linter } from 'eslint';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,6 +27,13 @@ import { PRIORITIES } from '../src/domain/constants/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'src');
+const RUNTIME_GLOBALS = new Set([
+  'AbortController', 'AbortSignal', 'Blob', 'Buffer', 'clearImmediate', 'clearInterval', 'clearTimeout',
+  'console', 'crypto', 'document', 'fetch', 'File', 'FormData', 'global', 'globalThis', 'Headers',
+  'history', 'Intl', 'location', 'MessageChannel', 'navigator', 'performance', 'process', 'queueMicrotask',
+  'ReadableStream', 'Request', 'requestAnimationFrame', 'Response', 'setImmediate', 'setInterval',
+  'setTimeout', 'structuredClone', 'TextDecoder', 'TextEncoder', 'URL', 'URLSearchParams', 'WebSocket', 'window'
+]);
 
 function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -42,197 +50,173 @@ function sourceFiles(dir, out = []) {
   return out;
 }
 
-/** Kapanış tırnağından SONRAKİ konumu döndürür (kaçış dizileri dâhil). */
-function skipQuoted(source, index) {
-  const quote = source[index];
-  let i = index + 1;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '\\') { i += 2; continue; }
-    if (ch === quote) return i + 1;
-    if (ch === '\n') return i;
-    i += 1;
+function collectPatternNames(pattern, names) {
+  if (!pattern) return;
+  if (pattern.type === 'Identifier') {
+    names.add(pattern.name);
+    return;
   }
-  return i;
-}
-
-/**
- * Şablon dizgisini okur.
- *
- * METİN bölümü düşürülür, `${...}` İFADELERİ ise kod olarak korunur. Şablonun
- * tamamı silinseydi ``${wbsSiblings(nodes, parentId)}`` gibi bir çağrı taramadan
- * önce yok olur ve bu ratchet tam olarak engellemesi gereken bağlanmamış modül
- * çağrısını kaçırırdı.
- */
-function readTemplate(source, index) {
-  let i = index + 1;
-  let code = ' `` ';
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '\\') { i += 2; continue; }
-    if (ch === '`') { i += 1; break; }
-    if (ch === '$' && source[i + 1] === '{') {
-      i += 2;
-      const start = i;
-      let depth = 1;
-      while (i < source.length && depth > 0) {
-        const inner = source[i];
-        if (inner === '\\') { i += 2; continue; }
-        if (inner === "'" || inner === '"') { i = skipQuoted(source, i); continue; }
-        if (inner === '`') { i = readTemplate(source, i).end; continue; }
-        if (inner === '{') depth += 1;
-        else if (inner === '}') { depth -= 1; if (!depth) break; }
-        i += 1;
-      }
-      code += ` ${stripNonCode(source.slice(start, i))} `;
-      i += 1;
-      continue;
-    }
-    i += 1;
+  if (pattern.type === 'AssignmentPattern') {
+    collectPatternNames(pattern.left, names);
+    return;
   }
-  return { end: i, code };
-}
-
-/** Yorumları ve dizgi METİNLERİNİ düşürür; şablon ifadeleri kod olarak kalır. */
-function stripNonCode(source) {
-  let out = '';
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    const next = source[i + 1];
-    if (ch === '/' && next === '*') {
-      const end = source.indexOf('*/', i + 2);
-      i = end < 0 ? source.length : end + 2;
-      out += ' ';
-      continue;
-    }
-    if (ch === '/' && next === '/') {
-      const end = source.indexOf('\n', i);
-      i = end < 0 ? source.length : end;
-      out += ' ';
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      out += ch + ch;
-      i = skipQuoted(source, i);
-      continue;
-    }
-    if (ch === '`') {
-      const parsed = readTemplate(source, i);
-      out += parsed.code;
-      i = parsed.end;
-      continue;
-    }
-    out += ch;
-    i += 1;
+  if (pattern.type === 'RestElement') {
+    collectPatternNames(pattern.argument, names);
+    return;
   }
-  return out;
-}
-
-/**
- * İçe aktarma yan tümcesinden YEREL bağlanan adları toplar.
- *
- * Takma adlı içe aktarmada yalnızca `as` sonrasındaki ad kapsama girer.
- * Yan tümcedeki her tanımlayıcı bağlı sayılsaydı `import { useState as useState1 }`
- * yazan bir modülde yanlışlıkla yazılmış bir `useState()` çağrısı taramadan
- * kaçardı — bu kalıp görünüm dosyalarında zaten kullanılıyor.
- */
-function bindImportClause(clause, bound) {
-  const named = /\{([\s\S]*?)\}/.exec(clause);
-  for (const part of clause.replace(/\{[\s\S]*?\}/, ' ').split(',')) {
-    const namespace = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(part);
-    if (namespace) { bound.add(namespace[1]); continue; }
-    const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(part);
-    if (name) bound.add(name[1]);
+  if (pattern.type === 'ArrayPattern') {
+    for (const element of pattern.elements) collectPatternNames(element, names);
+    return;
   }
-  for (const specifier of named ? named[1].split(',') : []) {
-    const alias = /([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/.exec(specifier);
-    if (alias) { bound.add(alias[2]); continue; }
-    const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(specifier.trim());
-    if (name) bound.add(name[1]);
+  if (pattern.type === 'ObjectPattern') {
+    for (const property of pattern.properties) {
+      if (property.type === 'Property') collectPatternNames(property.value, names);
+      else if (property.type === 'RestElement') collectPatternNames(property.argument, names);
+    }
   }
 }
 
-/** Dosyada bir ada değer bağlayan her sözdizimi. */
-function boundNames(code) {
-  const bound = new Set();
-  for (const match of code.matchAll(/import\s+([\s\S]*?)\s+from\s+/g)) bindImportClause(match[1], bound);
-  for (const match of code.matchAll(/(?:function|class)\s+([A-Za-z_$][\w$]*)/g)) bound.add(match[1]);
-  for (const match of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) bound.add(match[1]);
-  for (const match of code.matchAll(/(?:const|let|var)\s*[{[]([^}\]]*)[}\]]/g)) {
-    for (const identifier of match[1].matchAll(/[A-Za-z_$][\w$]*/g)) bound.add(identifier[0]);
-  }
-  // İşlev parametreleri: `(a, b) =>`, `(a, b) {` ve `a =>` biçimleri.
-  for (const match of code.matchAll(/\(([^()]*)\)\s*(?:=>|\{)/g)) {
-    for (const identifier of match[1].matchAll(/[A-Za-z_$][\w$]*/g)) bound.add(identifier[0]);
-  }
-  for (const match of code.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) bound.add(match[1]);
-  return bound;
+function jsxRootName(node) {
+  let current = node;
+  while (current?.type === 'JSXMemberExpression') current = current.object;
+  return current?.type === 'JSXIdentifier' ? current.name : null;
 }
 
-const LANGUAGE_AND_HOST_NAMES = new Set([
-  'require', 'fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
-  'requestAnimationFrame', 'cancelAnimationFrame', 'Number', 'String', 'Boolean', 'Array',
-  'Object', 'Math', 'Date', 'JSON', 'Map', 'Set', 'WeakMap', 'Promise', 'Error', 'TypeError',
-  'RangeError', 'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent',
-  'decodeURIComponent', 'alert', 'confirm', 'prompt', 'structuredClone', 'queueMicrotask',
-  'Intl', 'RegExp', 'Symbol', 'BigInt', 'URL', 'URLSearchParams', 'Response', 'Request',
-  'Headers', 'AbortController', 'TextEncoder', 'TextDecoder', 'Buffer', 'process', 'console',
-  'crypto', 'btoa', 'atob', 'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof',
-  'function', 'await', 'super', 'of', 'do', 'with', 'import'
-]);
+function scopeHasBinding(scope, name) {
+  for (let current = scope; current; current = current.upper) {
+    if (current.set?.has(name)) return true;
+  }
+  return false;
+}
+
+function isUnboundCalleeRoot(identifier) {
+  let expression = identifier;
+  while (expression.parent?.type === 'MemberExpression' && expression.parent.object === expression) {
+    expression = expression.parent;
+  }
+  if (expression.parent?.type === 'ChainExpression' && expression.parent.expression === expression) {
+    expression = expression.parent;
+  }
+  const parent = expression.parent;
+  return (parent?.type === 'CallExpression' || parent?.type === 'NewExpression') && parent.callee === expression;
+}
+
+function inspectModule(source) {
+  const exported = new Set();
+  const unboundCalls = [];
+  const linter = new Linter();
+  linter.defineRule('module-bindings', {
+    create(context) {
+      return {
+        ExportNamedDeclaration(node) {
+          for (const specifier of node.specifiers || []) {
+            const name = specifier.exported?.name ?? specifier.exported?.value;
+            if (typeof name === 'string') exported.add(name);
+          }
+          const declaration = node.declaration;
+          collectPatternNames(declaration?.id, exported);
+          for (const item of declaration?.declarations || []) collectPatternNames(item.id, exported);
+        },
+        ExportDefaultDeclaration(node) {
+          collectPatternNames(node.declaration?.id, exported);
+        },
+        JSXOpeningElement(node) {
+          const name = jsxRootName(node.name);
+          if (!name || !/^[A-Z]/.test(name) || RUNTIME_GLOBALS.has(name)) return;
+          if (!scopeHasBinding(context.getScope(), name)) unboundCalls.push(name);
+        },
+        'Program:exit'() {
+          for (const reference of context.getSourceCode().scopeManager.globalScope.through) {
+            const identifier = reference.identifier;
+            if (RUNTIME_GLOBALS.has(identifier.name)) continue;
+            if (isUnboundCalleeRoot(identifier)) unboundCalls.push(identifier.name);
+          }
+        }
+      };
+    }
+  });
+  const messages = linter.verify(source, {
+    parserOptions: { ecmaVersion: 'latest', sourceType: 'module', ecmaFeatures: { jsx: true } },
+    rules: { 'module-bindings': 'error' }
+  }, { allowInlineConfig: false });
+  assert.deepEqual(messages, [], 'Kaynak JavaScript/JSX olarak ayrıştırılabilmeli.');
+  return { exported, unboundCalls };
+}
+
+test('nesne ve sınıf yöntemleri çağrı sayılmaz; bağımsız çağrılar korunur', () => {
+  const methods = [
+    'register() {}', 'async register() {}', 'get register() {}',
+    'set register(value) {}', '*register() {}', 'async *register() {}',
+    'register(callback = () => {}) {}', String.raw`register(pattern = /\)/) {}`,
+    'register(value = factory(nested())) {}',
+    'register({ callback = (value = factory()) => value } = {}) {}',
+    'register(value = "(\\\" )", /* ) */ pattern = /[()]/) {}',
+    'register(value = `text ) ${factory(`${nested()}`)}`) {}'
+  ];
+  for (const method of methods) {
+    for (const source of [`const registry = { ${method} };`, `class Registry { other() {} ${method} }`]) {
+      assert.equal(inspectModule(source).unboundCalls.includes('register'), false, source);
+      assert.equal(inspectModule(`${source} register();`).unboundCalls.filter((name) => name === 'register').length, 1, source);
+    }
+  }
+  assert.deepEqual(inspectModule('const values = [other(), register(factory())];').unboundCalls, ['other', 'register', 'factory']);
+  assert.deepEqual(inspectModule('const obj = { register(value = missing()) { register(); } };').unboundCalls, ['missing', 'register']);
+});
+
+test('kurucu çağrıları taranır; çalışma zamanı globalleri dışa aktarım adlarıyla çakışmaz', () => {
+  assert.deepEqual(inspectModule('new MissingWorker();').unboundCalls, ['MissingWorker']);
+  assert.deepEqual(inspectModule('MissingWorker(); new MissingWorker();').unboundCalls, ['MissingWorker', 'MissingWorker']);
+  assert.deepEqual(inspectModule("fetch('/api'); setTimeout(() => {}, 0); requestAnimationFrame(() => {}); new URL('https://example.test');").unboundCalls, []);
+  assert.deepEqual([...inspectModule('export function fetch() {}').exported], ['fetch']);
+});
+
+test('üye çağrılarının bağlanmamış kökleri de taranır', () => {
+  assert.deepEqual(inspectModule('MissingService.run();').unboundCalls, ['MissingService']);
+  assert.deepEqual(inspectModule('new MissingNamespace.Worker();').unboundCalls, ['MissingNamespace']);
+  assert.deepEqual(inspectModule('MissingNamespace.Tools.Worker();').unboundCalls, ['MissingNamespace']);
+  assert.deepEqual(inspectModule('const MissingService = { run() {} }; MissingService.run();').unboundCalls, []);
+});
+
+test('JSX bileşen bağları açıkça taranır ve mevcut kapsamlar korunur', () => {
+  assert.deepEqual(inspectModule('const view = <MissingView />;').unboundCalls, ['MissingView']);
+  assert.deepEqual(inspectModule('const view = <Missing.View />;').unboundCalls, ['Missing']);
+  assert.deepEqual(inspectModule("import MissingView from './view.js'; const view = <MissingView />;").unboundCalls, []);
+  assert.deepEqual(inspectModule('function LocalView() { return null; } const view = <LocalView />;').unboundCalls, []);
+  assert.deepEqual(inspectModule('const view = <div />;').unboundCalls, []);
+});
+
+test('adlandırılmış ihracatlar ve parçalanmış değişken bağları eksiksiz toplanır', () => {
+  assert.deepEqual([...inspectModule('const local = () => {}; export { local as publicName };').exported], ['publicName']);
+  assert.deepEqual([...inspectModule("export { external as reExported } from './module.js';").exported], ['reExported']);
+  assert.deepEqual([...inspectModule('export default function defaultWorker() {}').exported], ['defaultWorker']);
+  assert.deepEqual([...inspectModule('export default class DefaultRunner {}').exported], ['DefaultRunner']);
+  assert.deepEqual([...inspectModule('export default function () {}').exported], []);
+  assert.deepEqual(
+    [...inspectModule('export const { first: renamed, nested: { inner }, ...rest } = source;').exported].sort(),
+    ['inner', 'renamed', 'rest']
+  );
+});
 
 test('kaynak ağacında içe aktarılmamış modül işlevi çağrılmaz', () => {
-  const files = sourceFiles(SRC);
-
-  // Önce tüm modüllerin dışa aktardığı adlar toplanır.
-  const exportedBy = new Map();
-  for (const file of files) {
-    const code = stripNonCode(fs.readFileSync(file, 'utf8'));
-    for (const match of code.matchAll(/export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g)) exportedBy.set(match[1], file);
-    for (const match of code.matchAll(/export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) exportedBy.set(match[1], file);
-  }
-
-  const unbound = [];
-  for (const file of files) {
-    const code = stripNonCode(fs.readFileSync(file, 'utf8'));
-    const bound = boundNames(code);
-    for (const match of code.matchAll(/(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
-      const name = match[2];
-      if (LANGUAGE_AND_HOST_NAMES.has(name) || bound.has(name)) continue;
-      if (!exportedBy.has(name) || exportedBy.get(name) === file) continue;
-      unbound.push(`${path.relative(ROOT, file)} → ${name}() (${path.relative(ROOT, exportedBy.get(name))} içinde tanımlı, içe aktarılmamış)`);
-    }
-  }
-
+  const modules = sourceFiles(SRC).map((file) => ({ file, ...inspectModule(fs.readFileSync(file, 'utf8')) }));
+  const exportedBy = new Map(modules.flatMap(({ file, exported }) => [...exported].map((name) => [name, file])));
+  const unbound = modules.flatMap(({ file, unboundCalls }) => unboundCalls
+    .filter((name) => exportedBy.has(name))
+    .map((name) => `${path.relative(ROOT, file)} → ${name}() (${path.relative(ROOT, exportedBy.get(name))} içinde tanımlı, içe aktarılmamış)`));
   assert.deepEqual([...new Set(unbound)], []);
 });
 
-test('tarayıcı şablon dizgisi ifadelerini kod olarak korur', () => {
-  // Şablonun tamamı silinseydi bu çağrı taramadan önce yok olurdu.
-  const code = stripNonCode('const label = `${wbsSiblings(nodes, parentId)} kardeş`;');
-  assert.match(code, /wbsSiblings\(/);
-  // Metin bölümü kod sayılmaz.
-  assert.doesNotMatch(code, /kardeş/);
-  // İç içe şablon ve dizgiler ifadeyi bozmaz.
-  const nested = stripNonCode('const x = `${format(`${inner(value)}`, "a`b")}`;');
-  assert.match(nested, /format\(/);
-  assert.match(nested, /inner\(/);
-  // Yorumlar ve sıradan dizgiler düşer.
-  assert.doesNotMatch(stripNonCode('// notImported()\nconst a = 1;'), /notImported/);
-  assert.doesNotMatch(stripNonCode("const a = 'notImported()';"), /notImported/);
+test('tarayıcı şablon ifadelerini korur; yorum, dizgi ve regex metnini çağrı saymaz', () => {
+  assert.deepEqual(inspectModule('const label = `${wbsSiblings(nodes, parentId)} kardeş`;').unboundCalls, ['wbsSiblings']);
+  assert.deepEqual(inspectModule('const x = `${format(`${inner(value)}`, "a`b")}`;').unboundCalls, ['format', 'inner']);
+  assert.deepEqual(inspectModule('// missing()\nconst a = "missing()"; const re = /missing()/;').unboundCalls, []);
+  assert.deepEqual(inspectModule('const x = `${(() => { /* } */ return /}/.test(missing()); })()}`;').unboundCalls, ['missing']);
 });
 
-test('içe aktarma taraması yalnızca YEREL bağlanan adı kaydeder', () => {
-  const bound = boundNames("import { useState as useState1, useMemo } from 'react';");
-  assert.equal(bound.has('useState1'), true);
-  assert.equal(bound.has('useMemo'), true);
-  // Takma addan ÖNCEKİ ad kapsamda değildir.
-  assert.equal(bound.has('useState'), false);
-
-  const mixed = boundNames("import React, * as ReactAll from 'react';");
-  assert.equal(mixed.has('React'), true);
-  assert.equal(mixed.has('ReactAll'), true);
+test('içe aktarma taraması yalnızca yerel bağlanan adı kaydeder ve kapsamları ayırır', () => {
+  assert.deepEqual(inspectModule("import { useState as useState1, useMemo } from 'react'; useState1(); useMemo(); useState();").unboundCalls, ['useState']);
+  assert.deepEqual(inspectModule("import React, * as ReactAll from 'react'; React(); ReactAll();").unboundCalls, []);
+  assert.deepEqual(inspectModule('function one(register) { register(); } register();').unboundCalls, ['register']);
 });
 
 test('İş Dağılım Ağacı görünümü sürükle-bırak ilkelerini içe aktarır', () => {

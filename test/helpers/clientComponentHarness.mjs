@@ -49,6 +49,11 @@ export function mountComponent(Component, initialProps) {
     return slots[index].value;
   };
   const dispatcher = {
+    useReducer(reducer, initialArg, init) {
+      const [value, setValue] = dispatcher.useState(() => init ? init(initialArg) : initialArg);
+      const dispatch = memo(() => (action) => setValue((previous) => reducer(previous, action)), []);
+      return [value, dispatch];
+    },
     useState(initial) {
       const index = position++;
       if (!slots[index]) slots[index] = { value: typeof initial === 'function' ? initial() : initial };

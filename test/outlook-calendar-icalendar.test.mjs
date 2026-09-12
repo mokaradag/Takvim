@@ -261,6 +261,8 @@ test('davet iletisi metin ve HTML yedeğini taşır, fazladan bilgi sızdırmaz'
   const mail = renderOutlookInvitationMail({ method: 'REQUEST', payload, link: 'https://mergen.example.internal/rota/' });
   assert.match(mail.subject, /^Takvim daveti: MERGEN Rota · Teklif/);
   assert.match(mail.text, /Görev: Teklif dosyasının hazırlanması/);
+  assert.match(mail.text, /Outlook daveti gönderildi/);
+  assert.doesNotMatch(mail.text + mail.html, /takviminize eklendi/);
   assert.match(mail.html, /<td[^>]*>Teklif dosyasının hazırlanması<\/td>/);
   assert.equal(mail.html.includes('<script'), false);
 
@@ -269,7 +271,8 @@ test('davet iletisi metin ve HTML yedeğini taşır, fazladan bilgi sızdırmaz'
     payload: { summary: 'MERGEN Rota · Teklif', date: '2026-09-15', fields: { title: 'Teklif', project: '' } }
   });
   assert.match(cancel.subject, /^İptal: /);
-  assert.match(cancel.text, /kaldırıldı/);
+  assert.match(cancel.text, /takvim iptali gönderildi/);
+  assert.doesNotMatch(cancel.text + cancel.html, /takviminizden kaldırıldı/);
 });
 
 test('HTML gövdesi görev adındaki işaretlemeyi kaçırır', () => {
@@ -396,11 +399,11 @@ test('eylem Demo Kipte, kapalı özellikte ve eksik yapılandırmada AÇIKÇA ka
 test('toplu sonuç TEK cümleyle özetlenir', () => {
   assert.deepEqual(summarizeOutlookBulkResult({ summary: { added: 8, alreadyAdded: 0, failed: 0, total: 8 } }), {
     tone: 'success',
-    text: '8 görev eklendi.'
+    text: '8 Outlook daveti gönderildi.'
   });
   assert.deepEqual(summarizeOutlookBulkResult({ summary: { added: 5, alreadyAdded: 2, failed: 1, total: 8 } }), {
     tone: 'warning',
-    text: '5 görev eklendi, 2 görev zaten ekliydi, 1 görev eklenemedi.'
+    text: '5 Outlook daveti gönderildi, 2 Outlook bağlantısı zaten günceldi, 1 görev eklenemedi.'
   });
   assert.deepEqual(summarizeOutlookBulkResult({ summary: { added: 0, alreadyAdded: 0, failed: 3, total: 3 } }), {
     tone: 'error',

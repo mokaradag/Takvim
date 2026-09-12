@@ -75,7 +75,7 @@ export function OutlookCalendarAction({ task, disabledReason = null, actions = D
   const subscribed = actualDataMode && isTaskInOutlook(state, task?.id);
   const delivery = outlookTaskState(state, task?.id);
   const deliveryLabel = delivery.failureCode ? "Outlook gönderimi başarısız"
-    : delivery.pending ? "Outlook gönderimi bekliyor" : delivery.delivered ? "Outlook'a eklendi" : "Outlook gönderimi bekliyor";
+    : delivery.completionSuspended ? "Outlook bağlantısı bekletiliyor" : delivery.pending ? "Outlook gönderimi bekliyor" : delivery.delivered ? "Outlook bağlantısı etkin" : "Outlook gönderimi bekliyor";
   const busy = isTaskBusy(state, task?.id);
   const blocked = disabledReason || availability.reason;
   const disabled = busy || Boolean(blocked);
@@ -107,7 +107,7 @@ export function OutlookCalendarAction({ task, disabledReason = null, actions = D
 
   const title = blocked
     || (busy ? 'Outlook takvimi güncelleniyor…' : (subscribed
-      ? deliveryLabel
+      ? `${deliveryLabel}. Son gönderim Outlook'taki kabul veya takvim durumunu doğrulamaz.`
       : 'Görevi kendi Outlook takviminize ekleyin'));
 
   return (
@@ -129,7 +129,7 @@ export function OutlookCalendarAction({ task, disabledReason = null, actions = D
             <Icons.ChevronDown size={11} />
           </button>
           {open && (
-            <span className="outlook-action-pop" role="menu">
+            <span className="outlook-action-pop" role="menu" aria-label="Outlook bağlantısı">
               <button type="button" role="menuitem" onClick={resend} disabled={disabled}>
                 <Icons.Mail size={13} /> Outlook davetini yeniden gönder
               </button>

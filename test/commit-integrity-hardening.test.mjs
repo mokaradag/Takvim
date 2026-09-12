@@ -63,6 +63,14 @@ test('Actual commits validate the final dependency graph under transaction locks
   );
 });
 
+test('recurrence occurrence creation locks the template in the same hardened transaction', () => {
+  const source = read('src/server/repository/hardenedSqlAppRepository.js');
+  assert.match(source, /recurrenceParentId:\s*task\.recurrenceParentId\s*\?\s*uuid\(task\.recurrenceParentId, 'Tekrar şablonu kimliği'\)/);
+  assert.match(source, /\.filter\(\(task\) => task\.recurrenceParentId\)\s*\.map\(\(task\) => task\.recurrenceParentId\)/);
+  assert.match(source, /for \(const taskId of \[\.\.\.referencedTaskIds\]\.sort\(\)\) \{\s+const row = await rowForUpdate\(executor, 'MR_Tasks', 'TaskId', taskId/s);
+  assert.match(source, /FROM dbo\.\$\{safeTable\} WITH \(UPDLOCK, HOLDLOCK\)/);
+});
+
 test('Project writes require a calendar and all supplied calendar references must be active', () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(
