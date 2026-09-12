@@ -10,7 +10,6 @@ const SECTIONS = [
   { id: 'talepler', label: 'Talepler', icon: 'Bell' },
   { id: 'wbs', label: 'Proje Yapısı', icon: 'Layers' },
   { id: 'takvim', label: 'Takvim', icon: 'Calendar' },
-  { id: 'outlook', label: 'Outlook', icon: 'Mail' },
   { id: 'gantt', label: 'Gantt', icon: 'Gantt' },
   { id: 'kanban', label: 'Kanban', icon: 'Kanban' },
   { id: 'rapor', label: 'Raporlar', icon: 'Chart' },
@@ -19,20 +18,15 @@ const SECTIONS = [
 ];
 
 const CONTENT = {
-  outlook: {
-    title: 'Outlook bağlantısı',
-    intro: 'Rota → Outlook tek yönlüdür. Rota görevlerin ana kaynağıdır; Outlook değişiklikleri Rota’ya aktarılmaz.',
-    points: ["Outlook'a Ekle yalnızca seçtiğiniz görev için kişisel abonelik açar. Saat seçilmez; Takvim ile aynı termin günü tüm gün ve serbest gösterilir.", 'Outlook bağlantısı etkin, abonelik ve son SMTP gönderimini belirtir. Rota davetin kabul edildiğini, takvimde göründüğünü veya silinmediğini doğrulayamaz.', 'Daveti reddettiyseniz, sildiyseniz veya kaçırdıysanız Outlook davetini yeniden gönder eylemini kullanın.', 'Outlook’ta elle değiştirilen tarih veya başlık sonraki Rota güncellemesiyle değişebilir.', 'Bugün/gelecek terminli görev tamamlanınca iptal edilir; geçmiş kayıt tamamlanma nedeniyle değiştirilmez. Görev yeniden açıldığında etkin bağlantı aynı öğeyi geri getirir. Açıkça kaldırılan abonelik kendiliğinden açılmaz.', 'Her üretilmiş tekrar görevi ayrı takvim öğesidir; Outlook Tasks/To Do bu bağlantının kapsamı dışındadır.']
-  },
   ozet: {
     title: 'Özet',
     intro: 'Seçili çalışma alanının genel durumunu tek bakışta izlemek için kullanılır. Proje seçildiğinde göstergeler yalnızca o projeyi, portföy seçildiğinde tüm projeleri temel alır.',
-    points: ['Filtreleri Temizle tarih ve kurumsal seçimleri sıfırlar; çalışma alanınız ve görünürlük yetkileriniz korunur.', 'Görev, gecikme ve ilerleme göstergelerini izleyin.', 'KPI zengin listesindeki Tüm görevleri gör, arama ve proje/sorumlu süzgeçleriyle geniş görev penceresini açar. Görev panelinden dönünce liste durumunuz korunur.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
+    points: ['Görev, gecikme ve ilerleme göstergelerini izleyin.', 'KPI zengin listesindeki Tüm görevleri gör, arama ve proje/sorumlu süzgeçleriyle geniş görev penceresini açar. Görev panelinden dönünce liste durumunuz korunur.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
   },
   veri: {
     title: 'Görevler',
     intro: 'Görevlerin ayrıntılı listesidir. Yeni görev oluşturma, filtreleme, sıralama ve görev ayrıntılarını düzenleme işlemleri burada yapılır.',
-    points: ['Yeni görev düğmesi seçili proje altında yeni kayıt oluşturur.', 'Geciken görevler Yapılacak veya Devam ediyor süzgecinde gösterilmez.', 'Kapsamlı Kipte Başlangıç/Bitiş, gerçekleşen tarih varsa onu gösterir; nötr ✓ bu tarihi belirtir. Sıralama ve süzme görünen tarihi izler.', 'Alt satırdaki İlk/Önceki/Sonraki/Son ile sayfalar arasında geçin; tarih açıklaması aynı satırdadır.', 'Sütun başlıklarındaki filtreler birden çok koşulu birlikte kullanabilir.', 'Göreve tıklayarak tarihleri, etiketi, sorumluları ve ilişkileri düzenleyin.', 'Devam ediyor eksik gerçekleşen başlangıcı, Tamamlandı eksik bitişi bugünün Rota takvim tarihiyle doldurur. Tamamlanmada ilerleme %100 olur; yalnız ilerlemeyi %100 yapmak görevi kapatmaz.', 'Gerçek başlangıç görevi başlatır; gerçek bitiş tamamlar. Yeniden açma bitişi temizler, başlangıç ve ilerlemeyi korur. Yapılacak durumuna dönüşte tarihleri temizlemek için onay istenir.', 'Kapsamlı Kipte yalnız kendinize atanmış yetkili göreviniz için Tekrar tanımlayabilirsiniz; oluşumlar üretildikten sonra kural kilitlenir.', 'Tatil veya hafta sonuna denk gelen plan tarihleri görev ayrıntısında uyarı olarak gösterilir.']
+    points: ['Yeni görev düğmesi seçili proje altında yeni kayıt oluşturur.', 'Geciken görevler Yapılacak veya Devam ediyor süzgecinde gösterilmez.', 'Kapsamlı Kipte Başlangıç/Bitiş, gerçekleşen tarih varsa onu gösterir; nötr ✓ bu tarihi belirtir. Sıralama ve süzme görünen tarihi izler.', 'Alt satırdaki İlk/Önceki/Sonraki/Son ile sayfalar arasında geçin; tarih açıklaması aynı satırdadır.', 'Sütun başlıklarındaki filtreler birden çok koşulu birlikte kullanabilir.', 'Göreve tıklayarak tarihleri, etiketi, sorumluları ve ilişkileri düzenleyin.', 'Tatil veya hafta sonuna denk gelen plan tarihleri görev ayrıntısında uyarı olarak gösterilir.']
   },
   talepler: {
     title: 'Talepler',
@@ -62,7 +56,7 @@ const CONTENT = {
   rapor: {
     title: 'Raporlar',
     intro: 'Performans ve Görev Hareketleri sekmelerinde raporları ve kalıcı görev değişikliklerini inceleyin.',
-    points: ['Filtreleri Temizle etkin sekmenin filtrelerini varsayılana döndürür; hareketlerde bağımlı seçimler ve sayfa da sıfırlanır.', 'Performans mevcut metrikleri ve görev tarih aralığını korur.', 'Görev Hareketleri, Bugün ve uygun kullanıcıda Ekibim ile açılır; güncelleyen kişi denetim kaydından alınır.', 'Kişi, proje, hareket türü, tarih ve kurumsal yol filtreleri yalnızca yetkili görevleri daraltır; Türkiye saati kullanılır.', 'Bir kaydetmedeki alan değişiklikleri birlikte gösterilir. Görev adına tıklayarak ayrıntıları açın; silinen görevler tarihsel adlarıyla kalır.', 'Grafikler sayfa açıldığında ve veri değiştiğinde hareketli olarak görünür.', 'Gösterge açıklamaları için bilgi simgelerini kullanın.', 'Dışa Aktar menüsünden seçili proje veya portföy için biçimlendirilmiş Excel raporu ve CSV alın.']
+    points: ['Performans mevcut metrikleri ve görev tarih aralığını korur.', 'Görev Hareketleri, Bugün ve uygun kullanıcıda Ekibim ile açılır; güncelleyen kişi denetim kaydından alınır.', 'Kişi, proje, hareket türü, tarih ve kurumsal yol filtreleri yalnızca yetkili görevleri daraltır; Türkiye saati kullanılır.', 'Bir kaydetmedeki alan değişiklikleri birlikte gösterilir. Görev adına tıklayarak ayrıntıları açın; silinen görevler tarihsel adlarıyla kalır.', 'Grafikler sayfa açıldığında ve veri değiştiğinde hareketli olarak görünür.', 'Gösterge açıklamaları için bilgi simgelerini kullanın.', 'Dışa Aktar menüsünden seçili proje veya portföy için biçimlendirilmiş Excel raporu ve CSV alın.']
   },
   kisi: {
     title: 'Ekip',

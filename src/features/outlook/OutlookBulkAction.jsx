@@ -3,10 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Icons } from '../../components/icons';
 import { Spinner } from '../../components/Loader';
 import {
-  classifyOutlookBulkTasks,
   outlookActionAvailability,
-  outlookBulkBlockedReason,
-  outlookBulkSkipText,
+  selectableOutlookTasks,
   summarizeOutlookBulkResult
 } from './outlookPresentation.js';
 import { addTasksToOutlook } from './outlookSubscriptionStore.js';
@@ -39,14 +37,13 @@ export function OutlookBulkAction({ tasks = [], onCompleted = null, action = add
   }, [result]);
 
   const availability = outlookActionAvailability({ actualDataMode, state });
-  const selection = classifyOutlookBulkTasks(tasks);
-  const eligible = selection.eligible;
+  const eligible = selectableOutlookTasks(tasks);
   const limit = state.bulkLimit;
   const overLimit = eligible.length > limit;
-  const skipped = selection.completed + selection.unsaved + selection.undated;
+  const skipped = tasks.length - eligible.length;
 
   const blocked = availability.reason
-    || outlookBulkBlockedReason(selection)
+    || (!eligible.length ? 'Seçilen görevlerin takvime eklenebilecek bir termini yok.' : null)
     || (overLimit ? `Tek seferde en çok ${limit} görev eklenebilir. Seçimi daraltın.` : null);
   const disabled = busy || Boolean(blocked);
 
@@ -70,9 +67,9 @@ export function OutlookBulkAction({ tasks = [], onCompleted = null, action = add
       if (mountedRef.current) setBusy(false);
     }
     if (!mountedRef.current) return;
-    const skipText = outlookBulkSkipText(selection);
-    setResult(skipText && next.tone !== 'error'
-      ? { ...next, text: `${next.text} ${skipText}` }
+    // Termini olmayan görevler sessizce düşürülmez; özetin sonunda söylenir.
+    setResult(skipped > 0 && next.tone !== 'error'
+      ? { ...next, text: `${next.text} ${skipped} görev termini olmadığı için atlandı.` }
       : next);
   };
 

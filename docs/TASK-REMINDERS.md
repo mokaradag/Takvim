@@ -10,7 +10,7 @@ Aynı SMTP altyapısı **Outlook takvim davetlerini** de taşır; takvim
 tümleştirmesi ayrı bir belgede anlatılır: `docs/OUTLOOK-CALENDAR.md`. Bu
 belgedeki SMTP yapılandırması ikisi için de geçerlidir ve hatırlatma
 e-postalarının biçimi takvim tümleştirmesinden **etkilenmez**: takvim parçası
-yalnızca davet iletilerine eklenir. **Otomatik hatırlatma Açık/Kapalı ayarı Outlook teslimatını etkilemez.** Outlook kuyruğu Node sunucusuyla başlayan bağımsız çalışanla otomatik işlenir; yönetici eylemi ve Outlook için OS zamanlayıcısı gerekmez.
+yalnızca davet iletilerine eklenir.
 
 ---
 
@@ -187,7 +187,7 @@ yöneticilerine görünür. Gizleme tek başına güvenlik değildir: uçlar
 (`/api/mergen-rota/admin/reminder-settings`) her istekte yetkiyi yeniden
 denetler ve yetkisiz kullanıcıya `FORBIDDEN` döner.
 
-Sayfa beş bölümden oluşur:
+Sayfa dört bölümden oluşur:
 
 1. **Otomatik hatırlatma planı** — açık/kapalı, hatırlatma penceresi
    (değer + birim) ve yineleme sıklığı (değer + birim). Altında okunur özet:
@@ -197,7 +197,6 @@ Sayfa beş bölümden oluşur:
    Desteklenen yer tutucular listelenir.
 3. **Önizleme** — örnek değerlerle üretilmiş, temizlenmiş gövde.
 4. **Son gönderimler** — tür, durum, alıcı sayısı, aralık anahtarı ve zaman.
-5. **Outlook takvim teslimatı** — otomatik çalışan, ortak kuyruk sağlığı ve yerel son tur sonucu; hatırlatma ayarlarından bağımsız yenilenir.
 
 Yönetici ayrıca **"Turu şimdi çalıştır"** ile zamanlanmış turu elle
 tetikleyebilir (deneme amaçlı).
@@ -389,11 +388,9 @@ Güvenlik ve dayanıklılık:
 
 ---
 
-## 9. Hatırlatma zamanlayıcısı kurulumu (dağıtım adımı)
+## 9. Zamanlayıcı kurulumu (dağıtım adımı)
 
-Bu bölüm yalnız **otomatik hatırlatma e-postaları** için gereklidir; Outlook çalışanı bu zamanlayıcıya veya anahtara bağlı değildir.
-
-Otomatik hatırlatma turu **sunucu tarafındadır** ve açık bir tarayıcı gerektirmez. Uygulama
+Otomatik tur **sunucu tarafındadır** ve açık bir tarayıcı gerektirmez. Uygulama
 zaten Next.js sunucusu olarak çalıştığı için ayrı bir kuyruk altyapısı
 eklenmez; tur bir HTTP ucundan tetiklenir:
 
@@ -428,13 +425,19 @@ Turun sık çalışması **güvenlidir**: aralık anahtarı aynı hatırlatmanı
 kez gönderilmesini engeller. Saatte bir çalıştırmak, gün içinde tanımlanan
 görevlerin de zamanında hatırlatılmasını sağlar.
 
-Yanıt gövdesi `reminders` ve `outlook` özetlerini ayrı taşır. `evaluated`, `sent`, `skipped`, `failed`, `partial` hatırlatma alanları üst düzeyde de korunur; üst `ok` iki alt sistemin ortak sonucudur. Hatırlatma ve Outlook turları eşzamanlı başlar; biri hata verdiğinde diğerinin sonucu korunur. Outlook bölümü aynı kalıcı kuyruk/SQL kirasını kullanan bir tanı turudur; otomatik Outlook çalışanı sunucuda ayrıca devam eder.
+Yanıt gövdesi turun özetini taşır: `evaluated`, `sent`, `skipped`, `failed`.
 
-Hatırlatma kapalı ama Outlook daveti gönderilmişse yönetici sayfası “Otomatik hatırlatma: kapalı.” ve “Outlook: 1 iş alındı, 1 gönderildi…” özetlerini ayrı gösterir. Hiçbir ileti gönderilmediği söylenmez. Yönetici **“Turu şimdi çalıştır”** eylemi tanı/deneme içindir; normal Outlook teslimatı buna bağlı değildir. Outlook kuyruk bütçesi tanı ucunda 10 saniye, otomatik çalışanda `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` (varsayılan 45 saniye) değeridir. Her sonuç/hata yazımına bağımsız 5 saniye ayrılır. Otomatik çalışan ayrıca SQL bağlantısı edinmeye 15 saniye ayırır; toplam süre tek sonuçlandırmayla 65 saniye, zaman aşımından sonra hata kaydı da gerekirse 70 saniye olabilir. Hatırlatma turunun mevcut işleme davranışı korunur. Uzun hatırlatma turunda istemci 30 saniyede yanıt alamazsa `REQUEST_TIMEOUT`, işlem sonucunun henüz doğrulanmadığını bildirir.
+**Aynı tur, bekleyen Outlook takvim teslimatlarını da işler.** Etkin Outlook turunda hata varsa HTTP 503 döner; yanıt içindeki hatırlatma sonucu korunur. Zamanlayıcı takvim bağlantısı için `MERGEN_ROTA_PUBLIC_ORIGIN` kullanır, bu ayar yoksa bağlantıyı eklemez. İkinci bir
+zamanlayıcı görevi tanımlamak gerekmez; yanıt gövdesine `outlook` alanı eklenir
+(`claimed`, `sent`, `unchanged`, `cancelled`, `failed`). Takvim kuyruğundaki bir
+hata hatırlatma turunun sonucunu düşürmez. Ayrıntılar:
+`docs/OUTLOOK-CALENDAR.md`.
 
-Bir alt sistem başarısızsa HTTP **503**, ikisi de başarılıysa **200** döner. 503 gövdesindeki özetler ve güvenli `error.code`/`error.message` istemcide korunur. SMTP yapılandırma/gönderim, Outlook tur süresi/sahiplik ve SQL hata kategorileri görünür; sırlar, bağlantı dizeleri ve SQL metinleri görünmez. Hatırlatma kapalı olması tek başına hata değildir. Outlook `claimed`, `sent`, `unchanged`, `cancelled`, `inProgress`, `failed`, `exhausted`, `failureCodes` alanları [Outlook belgesinde](OUTLOOK-CALENDAR.md) açıklanır.
-
-Aynı ucun **GET** yöntemi yalnız SYSTEM_ADMIN oturumuyla kuyruk sağlık durumunu okur, posta göndermez; zamanlayıcı anahtarı GET yetkisi vermez. Yönetici sayfasında görünürken 15 saniyede bir yenilenir. Ortak veritabanı kuyruk sayıları ile bu Node sürecinin son otomatik Outlook turu ayrı gösterilir. Hatırlatma taslağı bu yenilemeden etkilenmez.
+**Durum kodu turun başlayıp başlamadığını söyler.** Tur hiç başlayamadığında
+(örneğin SMTP yapılandırılmamışken) yanıt `503` döner; başarılı turda `200`
+gelir. İşletim sistemi zamanlayıcısı yalnızca HTTP durumuna — ya da `curl` çıkış
+koduna — bakar, bu yüzden her koşulda `200` dönmek hatırlatmalar tamamen
+dururken çalıştırmayı başarılı gösteriyor ve kimse uyarılmıyordu.
 
 ---
 
@@ -488,7 +491,7 @@ da bu durumu bir uyarı olarak gösterir.
 | İleti | Olası neden |
 | --- | --- |
 | E-posta sunucusuna ulaşılamadı | Yanlış `SMTP_HOST`/`SMTP_PORT`, güvenlik duvarı |
-| Güvenli bağlantı kurulamadı | Sunucunun STARTTLS ilkesi yapılandırmayla uyuşmuyor ya da kurumsal kök sertifika yüklü değil — kök sertifikayı `NODE_EXTRA_CA_CERTS` ile tanıtın. **`SMTP_TLS_REJECT_UNAUTHORIZED=false` kullanmayın:** bu ayar saldırganın sunduğu sertifikayı da kabul eder ve ağdaki etkin bir saldırgan hem SMTP kimlik bilgilerini hem de hatırlatma içeriğini alabilir. |
+| Güvenli bağlantı kurulamadı | Sunucu STARTTLS beklemiyor (`SMTP_USE_STARTTLS=false` deneyin) ya da kurumsal kök sertifika yüklü değil — kök sertifikayı `NODE_EXTRA_CA_CERTS` ile tanıtın. **`SMTP_TLS_REJECT_UNAUTHORIZED=false` kullanmayın:** bu ayar saldırganın sunduğu sertifikayı da kabul eder ve ağdaki etkin bir saldırgan hem SMTP kimlik bilgilerini hem de hatırlatma içeriğini alabilir. |
 | Kimlik doğrulama başarısız | `SMTP_USERNAME`/`SMTP_PASSWORD` hatalı ya da sunucu kimlik doğrulama beklemiyor (kullanıcı adını boş bırakın) |
 | Sunucu iletiyi kabul etmedi | Gönderici adresi yetkisiz, alıcı alan adı reddedildi, ileti boyutu sınırı |
 
@@ -530,12 +533,4 @@ hata koduyla listelenir. Alıcı adresleri maskelenmiştir.
 | `src/features/reminders/ReminderSettingsView.jsx` | Yönetici sayfası |
 | `src/features/reminders/RichTextEditor.jsx` | Zengin metin gövde düzenleyicisi |
 
-Outlook kullanıcı eylemleri kalıcı kuyruğa yazılır ve uygulamayla başlayan otomatik Outlook çalışanı tarafından gönderilir; turlar arasında varsayılan 5 saniye beklenir (`MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS`). Geçici SMTP/SQL kesintilerinde kuyruk korunur ve otomatik geri çekilmeyle tekrar denenir. İşletim sistemi zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir. Hatırlatma sorgusu hata verse de Outlook kuyruğu denenir; iki işten biri başarısızsa uç HTTP 503 döndürür. Eksik Outlook şeması, geçersiz SMTP yapılandırması, deneme eşiğini aşmış bekleyen işler ve Outlook tur bütçesinin dolması sağlık hatasıdır. `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` varsayılanı 45.000 ms; ayrıntılar için [Outlook takvimi](OUTLOOK-CALENDAR.md).
-
-## Outlook ile ortak SMTP ve tur sonucu
-
-Outlook teslimatı etkinse SMTP zorunludur: en az `SMTP_HOST` ve geçerli `SMTP_FROM`, ayrıca kurumsal sunucunun istediği taşıma/kimlik doğrulama ayarları gerekir. SMTP yalnızca hem elle/otomatik e-posta hatırlatma işlevleri hem Outlook teslimatı kullanılmıyorsa isteğe bağlıdır. SMTP yokken Outlook davetleri kuyrukta teslim edilmemiş kalır. Otomatik hatırlatma anahtarını kapatmak Outlook teslimatını kapatmaz; Outlook çalışanı Node başlangıcından itibaren bağımsızdır. OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
-
-`runAutomaticReminders()` herhangi bir gerçek başarısız teslimatta `ok:false` döndürür. Birleşik `/reminders/run` sonucu, `reminders.ok`, pozitif başarısız sayısı ve `results[].status=FAILED` değerlerini birlikte değerlendirir; Outlook başarısı bu hatayı gizlemez. Başarısız birleşik tur HTTP 503 üretir; arayüz ayrı sayaçları ve hatırlatmaya özgü güvenli hata kodlarını gösterir. Kısmi alıcı çözümü uyarıları korunur; SMTP’ye hiç iletilmeyen uygunluk nedeniyle atlamalar teslimat hatası sayılmaz.
-
-Outlook tamamlanma/açılma davranışı için mevcut 0010 kurulumuna da `MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanır. Günlük FREE termin gösterimi, tek yönlü bağlantı ve Exchange kabul kontrolü [OUTLOOK-CALENDAR.md](OUTLOOK-CALENDAR.md) içindedir. Outlook kabul/ret/elle silme durumu okunmaz; bu durumlar hatırlatma politikasını değiştirmez.
+Outlook kullanıcı eylemleri kalıcı kuyruğa yazılır ve bu zamanlayıcı tarafından gönderilir. Hatırlatma sorgusu hata verse de Outlook kuyruğu denenir; iki işten biri başarısızsa uç HTTP 503 döndürür. Eksik Outlook şeması, geçersiz SMTP yapılandırması, deneme eşiğini aşmış bekleyen işler ve Outlook tur bütçesinin dolması sağlık hatasıdır. `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` varsayılanı 45.000 ms; ayrıntılar için [Outlook takvimi](OUTLOOK-CALENDAR.md).

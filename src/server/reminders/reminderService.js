@@ -1,4 +1,3 @@
-import { reminderRunOutcome } from '../../domain/reminders/reminderRunOutcome.js';
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import {
@@ -404,5 +403,5 @@ export async function runAutomaticReminders(executor, {
     }
   }
 
-  return reminderRunOutcome({ enabled: true, evaluated: candidates.length, sent, skipped, failed, partial, results });
+  return { ok: true, enabled: true, evaluated: candidates.length, sent, skipped, failed, partial, results };
 }

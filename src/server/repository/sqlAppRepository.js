@@ -1,7 +1,5 @@
 import 'server-only';
-import { normalizeTaskLifecycle } from '../../domain/taskLifecycle.js';
-import { businessDate } from '../../domain/calendar/businessDate.js';
-import { resolveTaskCalendar } from '../../scheduling/calendars/index.js';
+import { milestoneCompletion } from '../../domain/milestoneCompletion.js';
 import { randomUUID } from 'node:crypto';
 import { normalizePriorityId } from '../../domain/constants/index.js';
 import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
@@ -15,7 +13,7 @@ import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
-import { formatRecurrenceRule, normalizeRecurrenceRule, planRecurringOccurrences } from '../../scheduling/recurrence/index.js';
+import { formatRecurrenceRule } from '../../scheduling/recurrence/index.js';
 import { calculatePlannedDurationDays } from '../../scheduling/plans/index.js';
 import {
   enqueueOutlookProjectChange,
@@ -104,24 +102,15 @@ async function loadTaskPlanContext(executor, projectId, calendarId) {
     SELECT c.CalendarId AS PlanCalendarId, c.Name, c.TimeZone,
       wd.Weekday, h.HolidayDate, h.Name AS HolidayName, h.ShortName
     FROM dbo.MR_Projects p
-    OUTER APPLY (
-      SELECT TOP (1) taskCalendar.CalendarId
-      FROM dbo.MR_Calendars taskCalendar
-      WHERE taskCalendar.CalendarId = @calendarId AND taskCalendar.IsActive = 1
-    ) taskCalendar
-    OUTER APPLY (
-      SELECT TOP (1) projectCalendar.CalendarId
-      FROM dbo.MR_Calendars projectCalendar
-      WHERE projectCalendar.CalendarId = p.CalendarId AND projectCalendar.IsActive = 1
-    ) projectCalendar
-    OUTER APPLY (
-      SELECT TOP (1) defaultCalendar.CalendarId
-      FROM dbo.MR_Calendars defaultCalendar
-      WHERE defaultCalendar.IsDefault = 1 AND defaultCalendar.IsActive = 1
-      ORDER BY defaultCalendar.CreatedAt, defaultCalendar.CalendarId
-    ) defaultCalendar
-    JOIN dbo.MR_Calendars c
-      ON c.CalendarId = COALESCE(taskCalendar.CalendarId, projectCalendar.CalendarId, defaultCalendar.CalendarId)
+    CROSS APPLY (
+      SELECT COALESCE(@calendarId, p.CalendarId, (
+        SELECT TOP (1) defaultCalendar.CalendarId
+        FROM dbo.MR_Calendars defaultCalendar
+        WHERE defaultCalendar.IsDefault = 1 AND defaultCalendar.IsActive = 1
+        ORDER BY defaultCalendar.CreatedAt, defaultCalendar.CalendarId
+      )) AS CalendarId
+    ) effective
+    JOIN dbo.MR_Calendars c ON c.CalendarId = effective.CalendarId AND c.IsActive = 1
     LEFT JOIN dbo.MR_CalendarWorkingDays wd ON wd.CalendarId = c.CalendarId
     LEFT JOIN dbo.MR_CalendarHolidays h ON h.CalendarId = c.CalendarId
     WHERE p.ProjectId = @projectId;
@@ -571,7 +560,7 @@ async function loadSnapshotFrom(executor, auth) {
       code: row.Code,
       name: row.Name,
       sortOrder: row.SortOrder,
-      // Kurumsal projelerin iş dağılım ağacı CN43N kaynağından beslenir; arayüz bu
+      // Kurumsal projelerin dağılım ağacı CN43N kaynağından beslenir; arayüz bu
       // alanlara bakarak düzenleme eylemlerini kapatır ve kaynak bilgisini gösterir.
       source: String(row.SourceType || 'MANUAL').toLowerCase(),
       sourceKey: row.SourceKey || null,
@@ -1606,18 +1595,18 @@ const ASSIGNEE_BLOCKED_SCHEDULE_FIELDS = Object.freeze([
 
 /**
  * Sıradan görev sorumlusu görev içeriğini/ilerlemesini güncelleyebilir; proje
- * yapısını, WBS'yi, atama listesini ve bağımlılık modelini yönetemez.
+ * yapısını, WBS'yi, atama listesini ve tekrar/dependency modelini yönetemez.
  * Bu denetim istemci görünümüne değil kilit altında okunmuş görev satırına
  * dayanır. Böylece eksik PARTIAL anlık görüntü yetki yükseltme aracı olamaz.
  */
-function assertAssigneeWorkFieldsOnly(before, task, { allowRecurrence = false } = {}) {
+function assertAssigneeWorkFieldsOnly(before, task) {
   const protectedValueChange = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS.some(([field, storedField]) => (
     hasOwnField(task, field) && nullableNumber(task[field]) !== nullableNumber(before[storedField])
   ));
   const structuralChange = !sameActualId(before.ProjectId, task.projectId)
     || !sameNullableId(before.WbsId, task.wbsId)
     || Boolean(before.IsMilestone) !== Boolean(task.isMilestone || task.milestone)
-    || (!allowRecurrence && hasOwnField(task, 'recurrence') && (formatRecurrenceRule(task.recurrence) || null) !== (before.RecurrenceRule || null))
+    || (hasOwnField(task, 'recurrence') && (formatRecurrenceRule(task.recurrence) || null) !== (before.RecurrenceRule || null))
     || (hasOwnField(task, 'recurrenceParentId') && !sameNullableId(before.RecurrenceParentTaskId, task.recurrenceParentId))
     || (hasOwnField(task, 'recurrenceOccurrenceDate')
       && isoDate(before.RecurrenceOccurrenceDate) !== (task.recurrenceOccurrenceDate || null))
@@ -1649,7 +1638,7 @@ function assertControlledScheduleUnchanged(before, task) {
 }
 
 /** Görev oluşturucusunun görev-özel hakkı WBS seçimi ve kontrollü planla sınırlıdır. */
-function assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation = false, allowRecurrence = false } = {}) {
+function assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation = false } = {}) {
   const protectedValueChange = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS.some(([field, storedField]) => (
     hasOwnField(task, field) && nullableNumber(task[field]) !== nullableNumber(before[storedField])
   ));
@@ -1659,7 +1648,7 @@ function assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation = 
   // okunur kalıyordu.
   const forbiddenChange = !sameActualId(before.ProjectId, task.projectId)
     || Boolean(before.IsMilestone) !== Boolean(task.isMilestone || task.milestone)
-    || (!allowRecurrence && hasOwnField(task, 'recurrence') && (formatRecurrenceRule(task.recurrence) || null) !== (before.RecurrenceRule || null))
+    || (hasOwnField(task, 'recurrence') && (formatRecurrenceRule(task.recurrence) || null) !== (before.RecurrenceRule || null))
     || (hasOwnField(task, 'recurrenceParentId') && !sameNullableId(before.RecurrenceParentTaskId, task.recurrenceParentId))
     || (hasOwnField(task, 'recurrenceOccurrenceDate')
       && isoDate(before.RecurrenceOccurrenceDate) !== (task.recurrenceOccurrenceDate || null))
@@ -1669,27 +1658,30 @@ function assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation = 
   if (forbiddenChange || protectedValueChange) {
     throw new ServerPersistenceError(
       'FORBIDDEN',
-      'Görev oluşturucusu kendi görevinde tarih ve mevcut WBS seçimini yönetebilir; proje, sorumlu, bağımlılık, saat ve finans alanlarını yönetemez.'
+      'Görev oluşturucusu kendi görevinde tarih ve mevcut WBS seçimini yönetebilir; proje, sorumlu, tekrar, bağımlılık, saat ve finans alanlarını yönetemez.'
     );
   }
 }
 
 /** Dar sorumlu oluşturması yalnızca görev iş alanlarını başlatabilir. */
-function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
-  const structuralValue = Boolean(task.isMilestone || task.milestone) !== Boolean(parent?.IsMilestone)
-    || (!task.recurrenceParentId && task.sortOrder != null)
-    || (!task.recurrenceParentId && task.calendarId != null)
-    || (!task.recurrenceParentId && task.plannedDurationDays != null)
+function assertAssigneeTaskCreateFieldsOnly(task) {
+  const structuralValue = Boolean(task.isMilestone || task.milestone)
+    || Boolean(task.recurrence)
+    || Boolean(task.recurrenceParentId)
+    || Boolean(task.recurrenceOccurrenceDate)
+    || task.sortOrder != null
+    || task.calendarId != null
+    || task.plannedDurationDays != null
+    || task.actualStart != null
+    || task.actualFinish != null
     || task.remainingDurationDays != null
     || (task.deps || []).length > 0;
-  const protectedValue = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS.some(([field, storedField]) => {
-    const inherited = parent && ['plannedHours', 'budget'].includes(field) ? parent[storedField] : null;
-    return nullableNumber(task[field]) !== nullableNumber(inherited);
-  });
+  const protectedValue = ASSIGNEE_PROTECTED_TASK_VALUE_FIELDS
+    .some(([field]) => task[field] != null);
   if (structuralValue || protectedValue) {
     throw new ServerPersistenceError(
       'FORBIDDEN',
-      'Görev sorumlusu yeni kendi görevinde termin ve mevcut WBS seçebilir; sorumlu, takvim, bağımlılık, saat veya finans alanlarını yönetemez.'
+      'Görev sorumlusu yeni kendi görevinde termin ve mevcut WBS seçebilir; sorumlu, takvim, tekrar, bağımlılık, saat veya finans alanlarını yönetemez.'
     );
   }
 }
@@ -1714,8 +1706,6 @@ async function commitTask(executor, actor, task, correlationId) {
   const assigneeWorkOnly = Boolean(before) && actorIsAssignee && !limitedCreatorWrite
     && !fullProjectWrite && !Boolean(task.assigneeMutation);
   const narrowTaskWrite = assigneeWorkOnly || limitedCreatorWrite;
-  const selfRecurrence = narrowTaskWrite && !before.RecurrenceParentTaskId
-    && authoritativeAssigneeSicils.length === 1 && actorIsAssignee;
 
   if (narrowTaskWrite && !creatorAssigneeWrite) {
     const submittedAssigneeSicils = (task.assigneeIds || []).map(Number);
@@ -1736,10 +1726,10 @@ async function commitTask(executor, actor, task, correlationId) {
   let destinationProjectScope = null;
   if (assigneeWorkOnly) {
     await assertActiveProject(executor, beforeProjectId);
-    assertAssigneeWorkFieldsOnly(before, task, { allowRecurrence: selfRecurrence });
+    assertAssigneeWorkFieldsOnly(before, task);
   } else if (limitedCreatorWrite) {
     await assertActiveProject(executor, beforeProjectId);
-    assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation: creatorAssigneeWrite, allowRecurrence: selfRecurrence });
+    assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation: creatorAssigneeWrite });
     if (creatorAssigneeWrite) {
       sourceProjectScope = await assertTaskProjectScope(executor, actor, beforeProjectId);
       destinationProjectScope = sourceProjectScope;
@@ -1781,7 +1771,7 @@ async function commitTask(executor, actor, task, correlationId) {
     if (!before || beforeProjectId !== projectId || !fullProjectWrite || !sameSicilSet(authoritativeAssigneeSicils, assigneeSicils)) {
       await assertAssigneeScope(executor, actor, projectId, assigneeSicils, destinationProjectScope);
     }
-    if (!before && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE && !task.recurrenceParentId) {
+    if (!before && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE) {
       assertAssigneeTaskCreateFieldsOnly(task);
     }
   }
@@ -1802,35 +1792,32 @@ async function commitTask(executor, actor, task, correlationId) {
   const targetFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'targetFinish')
     ? isoDate(before.TargetFinish)
     : (task.targetFinish || null);
-  const requestedCalendarId = narrowTaskWrite ? id(before.CalendarId) : (task.calendarId || null);
-  const planContext = await loadTaskPlanContext(executor, projectId, requestedCalendarId);
-  const effectiveCalendarId = planContext.projects[0]?.calendarId || null;
-  // Etkinliğini yitirmiş ya da artık bulunmayan görev takvimi override'ı tekrar
-  // yazılmaz. NULL kalınca görev proje/varsayılan takvimini miras alır; bu da
-  // plan hesaplarında kullanılan etkin fallback ile kalıcı semantiği eşitler.
-  const persistedCalendarId = requestedCalendarId && sameActualId(requestedCalendarId, effectiveCalendarId)
-    ? requestedCalendarId
-    : null;
-  const calendar = resolveTaskCalendar({ projectId, calendarId: persistedCalendarId }, planContext.projects, planContext.calendars);
+  // GERÇEKLEŞEN tarihler de aynı kuralla ETKİN değere indirgenir ve doğrulama
+  // bu çift üzerinden yapılır. Ham istek alanlarına bakan denetim, dar bir
+  // güncellemede kalıcı karşı tarafı göremiyordu:
+  //  - kaydında `ActualStart` duran bir görevde YALNIZCA `actualFinish` yazan
+  //    sorumlunun isteği "gerçek bitiş için gerçek başlangıç gereklidir" ile
+  //    reddediliyordu;
+  //  - kaydında `ActualFinish` duran bir göreve daha GEÇ bir `actualStart`
+  //    yazıldığında ise bitişi başlangıcından önce olan bir satır kalıyordu.
+  let actualStart = before && narrowTaskWrite && !hasSubmittedField(task, 'actualStart')
+    ? isoDate(before.ActualStart)
+    : (task.actualStart || null);
+  let actualFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'actualFinish')
+    ? isoDate(before.ActualFinish)
+    : (task.actualFinish || null);
   const isMilestone = narrowTaskWrite ? Boolean(before.IsMilestone) : Boolean(task.isMilestone || task.milestone);
-  const canonicalStatus = (status) => ({ planned: 'todo', 'in-progress': 'in_progress' }[status] || status || 'todo');
-  const previousLifecycle = {
-    status: canonicalStatus(before?.Status), progress: nullableNumber(before?.Progress),
-    actualStart: isoDate(before?.ActualStart), actualFinish: isoDate(before?.ActualFinish),
-    milestone: isMilestone
-  };
-  const lifecyclePatch = Object.fromEntries(['status', 'progress', 'actualStart', 'actualFinish']
-    .filter((field) => hasSubmittedField(task, field))
-    .map((field) => [field, field === 'status' ? canonicalStatus(task[field]) : task[field]]));
-  let lifecycle;
-  try {
-    lifecycle = { ...previousLifecycle, ...normalizeTaskLifecycle(previousLifecycle, {
-      ...lifecyclePatch, resetActualDates: task.resetActualDates === true
-    }, businessDate(new Date(), calendar.timezone)) };
-  } catch (error) {
-    throw new ServerPersistenceError(error.code || 'MUTATION_FAILED', error.message);
+  const milestone = milestoneCompletion({
+    milestone: isMilestone,
+    status: before?.Status || 'todo', actualStart, actualFinish
+  }, Object.fromEntries(['status', 'actualFinish'].filter((field) => hasSubmittedField(task, field))
+    .map((field) => [field, task[field]])), new Date().toISOString().slice(0, 10));
+  if (milestone) {
+    actualStart = milestone.actualStart;
+    actualFinish = milestone.actualFinish;
   }
-  const { actualStart, actualFinish } = lifecycle;
+
+  const persistedCalendarId = narrowTaskWrite ? id(before.CalendarId) : (task.calendarId || null);
 
   // Tam yetki, bu görevde nelerin YAZILABİLECEĞİNİ belirler: atama kapsamı
   // yalnızca görev satırını kapsar, iş dağılım ağacı ve bağımlılık grafiği
@@ -1888,18 +1875,6 @@ async function commitTask(executor, actor, task, correlationId) {
     ? (task.recurrenceOccurrenceDate || null)
     : (before ? isoDate(before.RecurrenceOccurrenceDate) : null);
 
-  const recurrenceScheduleChanged = Boolean(before) && (
-    recurrenceRule !== (before.RecurrenceRule || null)
-    || plannedStart !== isoDate(before.PlannedStart)
-    || plannedFinish !== isoDate(before.PlannedFinish)
-    || targetFinish !== isoDate(before.TargetFinish)
-    || (hasSubmittedField(task, 'plannedDurationDays')
-      && nullableNumber(task.plannedDurationDays) !== nullableNumber(before.PlannedDurationDays))
-  );
-  if (recurrenceScheduleChanged && await countRecurrenceChildren(executor, taskId)) {
-    throw new ServerPersistenceError('MUTATION_FAILED', 'Yinelemeler üretildikten sonra tekrar kuralı veya seri planı değiştirilemez.');
-  }
-
   if (recurrenceParentId) {
     // Yabancı anahtar yalnızca kimliğin var olduğunu kanıtlar. Şablonun aynı
     // projede ve gerçekten bir şablon olduğu burada doğrulanır; aksi hâlde bir
@@ -1913,46 +1888,6 @@ async function commitTask(executor, actor, task, correlationId) {
     }
     if (!sameActualId(parent.ProjectId, projectId)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Yineleme, tekrar şablonuyla aynı projede olmalıdır.');
-    }
-    const parentRule = normalizeRecurrenceRule(parent.RecurrenceRule);
-    if (!before && (!parentRule || !recurrenceOccurrenceDate)) {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Yineleme için geçerli şablon kuralı ve tekrar günü gereklidir.');
-    }
-    if (!before) {
-      const parentContext = sameNullableId(parent.CalendarId, persistedCalendarId)
-        ? planContext : await loadTaskPlanContext(executor, projectId, id(parent.CalendarId));
-      const parentCalendar = resolveTaskCalendar({ projectId, calendarId: id(parent.CalendarId) }, parentContext.projects, parentContext.calendars);
-      const templateDate = isoDate(parent.RecurrenceOccurrenceDate) || isoDate(parent.PlannedStart);
-      const occurrences = planRecurringOccurrences({
-        plannedStart: isoDate(parent.PlannedStart), plannedFinish: isoDate(parent.PlannedFinish),
-        targetFinish: isoDate(parent.TargetFinish), plannedDurationDays: nullableNumber(parent.PlannedDurationDays)
-      }, parentRule, { calendar: parentCalendar }).filter((occurrence) => occurrence.occurrenceDate !== templateDate);
-      const occurrence = occurrences.find((item) => item.occurrenceDate === recurrenceOccurrenceDate);
-      if (!occurrence) {
-        throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar günü şablonun kuralı ve çalışma takvimiyle uyumlu olmalıdır.');
-      }
-      const expectedDuration = calculatePlannedDurationDays({
-        ...occurrence, projectId, calendarId: id(parent.CalendarId), milestone: Boolean(parent.IsMilestone)
-      }, parentContext);
-      if (plannedStart !== occurrence.plannedStart || plannedFinish !== occurrence.plannedFinish
-        || targetFinish !== (occurrence.targetFinish || null)
-        || nullableNumber(task.plannedDurationDays) !== expectedDuration) {
-        throw new ServerPersistenceError('MUTATION_FAILED', 'Yineleme planı ve süresi şablonun ürettiği tekrar günüyle uyumlu olmalıdır.');
-      }
-      if (await countRecurrenceChildren(executor, recurrenceParentId) >= occurrences.length) {
-        throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar oluşum sınırına ulaşıldı.');
-      }
-    }
-    if (assigneeCreate) {
-      assertAssigneeTaskCreateFieldsOnly(task, parent);
-      const parentAssignees = await taskAssigneeSicils(executor, recurrenceParentId);
-      if (!sameSicilSet(parentAssignees, [Number(actor.sicil)])
-        || !sameSicilSet(parentAssignees, assigneeSicils)
-        || !sameNullableId(parent.WbsId, wbsId)
-        || !sameNullableId(parent.CalendarId, persistedCalendarId)
-        || (task.sortOrder != null && (parent.SortOrder == null || task.sortOrder <= parent.SortOrder))) {
-        throw new ServerPersistenceError('FORBIDDEN', 'Yinelemeler yalnızca kendi görevinizin sorumlu ve yapı kapsamını devralabilir.');
-      }
     }
     if (parent.RecurrenceParentTaskId) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar şablonu başka bir serinin yinelemesi olamaz.');
@@ -2005,6 +1940,7 @@ async function commitTask(executor, actor, task, correlationId) {
   // süre taşırdı.
   if (assigneeWorkOnly
     && (hasSubmittedField(task, 'plannedStart') || hasSubmittedField(task, 'plannedFinish'))) {
+    const planContext = await loadTaskPlanContext(executor, projectId, persistedCalendarId);
     plannedDurationDays = calculatePlannedDurationDays({
       projectId,
       calendarId: persistedCalendarId,
@@ -2014,6 +1950,7 @@ async function commitTask(executor, actor, task, correlationId) {
     }, planContext);
   }
   if (limitedCreatorWrite || assigneeCreate) {
+    const planContext = await loadTaskPlanContext(executor, projectId, persistedCalendarId);
     plannedDurationDays = calculatePlannedDurationDays({
       projectId,
       calendarId: persistedCalendarId,
@@ -2047,7 +1984,7 @@ async function commitTask(executor, actor, task, correlationId) {
   };
   req.input('description', sql.NVarChar(sql.MAX), submittedOr('description', 'Description', task.description || null));
   req.input('keyword', sql.NVarChar(255), submittedOr('keyword', 'Keyword', task.keyword || null));
-  req.input('status', sql.VarChar(30), ({ todo: 'planned', in_progress: 'in-progress' }[lifecycle.status] || lifecycle.status));
+  req.input('status', sql.VarChar(30), milestone?.status ?? submittedOr('status', 'Status', task.status || 'planned', 'planned'));
   // Arayüz kataloğunda `normal` diye bir öncelik yoktur; varsayılan olarak
   // yazıldığında Görevler/Kanban/Raporlar sayfaları çöküyordu. Kalıcı kayıt da
   // kanonik kimliği tutar.
@@ -2069,7 +2006,7 @@ async function commitTask(executor, actor, task, correlationId) {
     submittedOr('remainingDurationDays', 'RemainingDurationDays', task.remainingDurationDays)
   ));
   req.input('progress', sql.Decimal(5, 2), nullableNumber(
-    lifecycle.progress
+    milestone?.progress ?? submittedOr('progress', 'Progress', task.progress)
   ));
   req.input('plannedHours', sql.Decimal(12, 2), nullableNumber(narrowTaskWrite ? before.PlannedHours : task.plannedHours));
   req.input('actualHours', sql.Decimal(12, 2), nullableNumber(narrowTaskWrite ? before.ActualHours : task.actualHours));

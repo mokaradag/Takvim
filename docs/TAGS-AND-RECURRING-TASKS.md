@@ -234,8 +234,6 @@ ile ekleyebilirdi.
 
 Seri bütünlüğü kalıcı katmanda korunur:
 
-- yeni yinelemenin ham tekrar günü, şablon kuralının ve çalışma takviminin ürettiği bir oluşumla eşleşmelidir; planlanan başlangıç, bitiş, termin ve iş günü süresi de aynı oluşumun değerlerini taşımalıdır. Uyumsuz bir satır bütün kayıt işlemini geri alır. Oluşturulduktan sonra yinelemenin kendi planı mevcut yetki ve sürüm kurallarıyla düzenlenebilir;
-
 - yineleme, şablonuyla **aynı projede** olmak zorundadır ve şablonun kendisi
   başka bir serinin yinelemesi olamaz;
 - yinelemeleri olan bir şablon **başka projeye taşınamaz** — aksi hâlde seri iki
@@ -278,9 +276,3 @@ yalnızca bir kez yazar.
 Kapsamlı Kipte **Tekrarları hazırla**, yeni veya mevcut görevin tekrar üretim isteğini yerel taslağa ekler. Şablon ve ilk tekrar partisi yalnızca **Kaydet** ile tek kalıcı değişiklik kümesinde yazılır. Önce kaydedip görevi yeniden açmak gerekmez. Başlık, açıklama ve diğer alanlar aynı işlemde yer alır; SQL katmanında bir kayıt reddedilirse tüm küme geri alınır ve taslak açık kalır. Tekrar tıklama aynı kaydı çoğaltmaz.
 
 Yeni ve mevcut şablonlar `src/state/recurringTaskCreation.js` içindeki ortak planlayıcıyı kullanır. İş takvimi, 60 görevlik parti sınırı, değişmez yineleme kimlikleri ve daha önce üretilmiş günlerin tekilleştirilmesi korunur. Sorumluya tanınan dar görev oluşturma yetkisi yapısal tekrar yetkisine dönüşmez.
-
-## Kendi görevinde tekrar yetkisi
-
-Kapsamlı Kipte **Tekrar**, genel yapı yönetiminden ayrı `canManageRecurrence` yeteneğiyle gösterilir. Normal kullanıcı, zaten görev oluşturabildiği projede yalnız kendisine atanmış görev için kural tanımlayabilir ve oluşumları hazırlayabilir. Gizli veya başka bir sorumlusu bulunan görev bu dar haktan yararlanamaz; kimlik denetimi yalnız Sicil üzerinden yapılır. Oluşturma ve üretim SQL işlemi içinde yeniden yetkilendirilir; proje/WBS yönetimi veya başka kişiye atama yetkisi verilmez.
-
-Şablonun yeni kuralı ve oluşumları aynı kayıt isteğindeyse şablon önce yazılır. Oluşumlar geçerli aynı proje, WBS, takvim ve sorumlu kapsamını devralır. Oluşum üretildikten sonra kural kilitlidir; mevcut oluşum sınırı, COUNT, RFC 5545, iş takvimi ve değişmez tekrar günüyle kopya önleme korunur.

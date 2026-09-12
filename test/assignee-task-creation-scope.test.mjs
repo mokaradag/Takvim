@@ -162,14 +162,18 @@ test('dar kapsam başka proje, başka sorumlu ve yapısal yönetim için kullan�
       (error) => error.code === 'FORBIDDEN' && /yalnızca kendisini/.test(error.message)
     );
     await assert.rejects(
-      stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, { recurrence: 'FREQ=WEEKLY', assigneeIds: [String(OUTSIDER)] })] }),
+      stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, { recurrence: 'FREQ=WEEKLY' })] }),
       (error) => error.code === 'FORBIDDEN'
     );
     for (const [field, value] of [
       ['plannedDurationDays', 3],
+      ['actualStart', '2026-08-25'],
+      ['actualFinish', '2026-08-28'],
       ['remainingDurationDays', 2]
     ]) {
-      const schedulingPatch = { [field]: value };
+      const schedulingPatch = field === 'actualFinish'
+        ? { actualStart: '2026-08-25', actualFinish: value }
+        : { [field]: value };
       await assert.rejects(
         stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, schedulingPatch)] }),
         (error) => error.code === 'FORBIDDEN' && /saat veya finans/.test(error.message),

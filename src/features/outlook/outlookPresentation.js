@@ -14,8 +14,7 @@ export const OUTLOOK_REASONS = Object.freeze({
   SCHEMA: 'Outlook takvim şeması kurulmamış. Sistem yöneticinizle görüşün.',
   MAIL: 'Sunucuda e-posta gönderimi yapılandırılmadığı için Outlook daveti gönderilemez.',
   NO_DATE: 'Görevin termin tarihi yok. Takvime eklemek için önce bir termin girin.',
-  NO_TASK: 'Kaydedilmemiş görev Outlook takvimine eklenemez.',
-  COMPLETED: 'Tamamlanan görevin Outlook bağlantısı yeniden açılana kadar bekletilir.'
+  NO_TASK: 'Kaydedilmemiş görev Outlook takvimine eklenemez.'
 });
 
 /**
@@ -31,56 +30,15 @@ export function outlookActionAvailability({ actualDataMode, state, task = null }
   if (state?.schemaReady === false) return { available: false, reason: OUTLOOK_REASONS.SCHEMA };
   if (state?.mailConfigured === false) return { available: false, reason: OUTLOOK_REASONS.MAIL };
   if (task !== null) {
-    if (task?.status === 'done') return { available: false, reason: OUTLOOK_REASONS.COMPLETED };
     if (!task?.id) return { available: false, reason: OUTLOOK_REASONS.NO_TASK };
     if (!taskCalendarDate(task)) return { available: false, reason: OUTLOOK_REASONS.NO_DATE };
   }
   return { available: true, reason: null };
 }
 
-/** Seçimi toplu Outlook eyleminin gerçek atlama nedenlerine göre ayırır. */
-export function classifyOutlookBulkTasks(tasks = []) {
-  const selection = { eligible: [], completed: 0, unsaved: 0, undated: 0 };
-  for (const task of tasks || []) {
-    if (task?.status === 'done') selection.completed += 1;
-    else if (!task?.id) selection.unsaved += 1;
-    else if (!taskCalendarDate(task)) selection.undated += 1;
-    else selection.eligible.push(task);
-  }
-  return selection;
-}
-
 /** Seçili görevlerden Outlook'a eklenebilecek olanlar (termini olanlar). */
 export function selectableOutlookTasks(tasks = []) {
-  return classifyOutlookBulkTasks(tasks).eligible;
-}
-
-/** Yerelde atlanan görevleri gerçek nedenleriyle özetler. */
-export function outlookBulkSkipText(selection = {}) {
-  const parts = [];
-  if (selection.completed) parts.push(`${selection.completed} tamamlanmış görev atlandı.`);
-  if (selection.unsaved) parts.push(`${selection.unsaved} kaydedilmemiş görev atlandı.`);
-  if (selection.undated) parts.push(`${selection.undated} görev termini olmadığı için atlandı.`);
-  return parts.join(' ');
-}
-
-/** Hiç uygun görev yoksa düğmenin doğru engelleme nedenini üretir. */
-export function outlookBulkBlockedReason(selection = {}) {
-  if (selection.eligible?.length) return null;
-  const completed = Number(selection.completed || 0);
-  const unsaved = Number(selection.unsaved || 0);
-  const undated = Number(selection.undated || 0);
-  if (completed > 0 && unsaved === 0 && undated === 0) {
-    return 'Seçilen görevlerin tümü tamamlanmış. Tamamlanan görevler Outlook takvimine eklenemez.';
-  }
-  if (undated > 0 && completed === 0 && unsaved === 0) {
-    return 'Seçilen görevlerin takvime eklenebilecek bir termini yok.';
-  }
-  if (unsaved > 0 && completed === 0 && undated === 0) {
-    return 'Seçilen görevler kaydedilmemiş olduğu için Outlook takvimine eklenemez.';
-  }
-  const detail = outlookBulkSkipText(selection);
-  return detail ? `Seçilen görevlerin hiçbiri Outlook takvimine eklenemez. ${detail}` : 'Outlook takvimine eklenecek görev seçilmedi.';
+  return (tasks || []).filter((task) => task?.id && taskCalendarDate(task));
 }
 
 /**
@@ -95,8 +53,8 @@ export function outlookBulkBlockedReason(selection = {}) {
 export function summarizeOutlookBulkResult(response) {
   const summary = response?.summary || { added: 0, alreadyAdded: 0, failed: 0, total: 0 };
   const parts = [];
-  if (summary.added) parts.push(`${summary.added} Outlook daveti gönderildi`);
-  if (summary.alreadyAdded) parts.push(`${summary.alreadyAdded} Outlook bağlantısı zaten günceldi`);
+  if (summary.added) parts.push(`${summary.added} görev eklendi`);
+  if (summary.alreadyAdded) parts.push(`${summary.alreadyAdded} görev zaten ekliydi`);
   if (summary.queued) parts.push(`${summary.queued} görev gönderim kuyruğuna alındı`);
   if (summary.failed) parts.push(`${summary.failed} görev eklenemedi`);
 

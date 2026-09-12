@@ -78,7 +78,7 @@ test('task scalar validation rejects SQL-constrained enum and title values', () 
 test('task scalar validation rejects invalid calendar dates and ranges', () => {
   assert.equal(taskIssue({ plannedStart: '2026-02-30' })?.code, 'TASK_DATE_INVALID');
   assert.equal(taskIssue({ plannedStart: '2026-07-25', plannedFinish: '2026-07-24' })?.code, 'TASK_PLANNED_RANGE_INVALID');
-  assert.equal(taskIssue({ actualStart: null, actualFinish: '2026-07-24' })?.code, undefined);
+  assert.equal(taskIssue({ actualStart: null, actualFinish: '2026-07-24' })?.code, 'TASK_ACTUAL_START_REQUIRED');
   assert.equal(taskIssue({ actualStart: '2026-07-25', actualFinish: '2026-07-24' })?.code, 'TASK_ACTUAL_RANGE_INVALID');
 });
 

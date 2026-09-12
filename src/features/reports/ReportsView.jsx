@@ -27,7 +27,7 @@ export function ReportsView() {
   const [activityVisited, setActivityVisited] = useState2(false);
   const tabsRef = React.useRef(null);
   const select = (id) => { setTab(id); if (id === 'activities') setActivityVisited(true); };
-  return <div className="reports-module" data-report-tab={tab}>
+  return <div className="reports-module">
     <HeroHeader title="Raporlar"><span className="muted">Performans ve görev değişiklikleri.</span></HeroHeader>
     <div className="request-tabs" role="tablist" aria-label="Rapor türü" ref={tabsRef}>
       {REPORT_TABS.map((item, index) => <button key={item.id} type="button" role="tab" id={`report-tab-${item.id}`}
@@ -237,7 +237,6 @@ export function PerformanceReportsView() {
       <p className="muted" style={{ margin: 0 }}>Performans, çevrim süreleri ve teslim oranları.</p>
 
       <DateRangeFilter
-        sticky
         value={dateRange}
         onChange={setDateRange}
         summary={activeRange

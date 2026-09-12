@@ -224,7 +224,7 @@ test('Advanced Mode task creation applies the restricted payload before persiste
   assert.equal(calls[0].action.task.wbsId, 'root');
   assert.deepEqual(calls[0].action.task.assigneeIds, ['1001']);
   assert.deepEqual(calls[0].action.task.sorumlu, ['Görevli Kullanıcı']);
-  assert.equal(calls[0].action.task.recurrence, 'FREQ=WEEKLY');
+  assert.equal(calls[0].action.task.recurrence, null);
   assert.equal(calls[0].action.task.plannedStart, '2026-08-28');
   assert.equal(calls[0].action.task.plannedFinish, '2026-08-29');
   assert.equal(calls[0].action.task.targetFinish, '2026-08-30');

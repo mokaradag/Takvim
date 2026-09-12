@@ -170,7 +170,7 @@ test('tamamlanma kronolojisi YALNIZCA gerçekleşen bitişten okunur', () => {
   assert.match(reports, /const finished = taskCompletionDate\(t\);/);
   // Tamamlanmaya geçiş gerçekleşen bitişi damgalar; ölçümler artık boş alanla
   // baş başa kalmaz.
-  assert.match(read('src/state/AppStateProvider.jsx'), /prepareTaskLifecycleIntent\(stateRef\.current, id, patch,/);
+  assert.match(read('src/state/AppStateProvider.jsx'), /withCompletionStamp\(stateRef\.current, id, patch\)/);
 });
 
 test('tamamlanmaya geçiş gerçekleşen başlangıcı ve bitişi damgalar', () => {
@@ -181,7 +181,7 @@ test('tamamlanmaya geçiş gerçekleşen başlangıcı ve bitişi damgalar', () 
       { id: 'c', status: 'done', actualStart: '2026-08-01', actualFinish: '2026-08-05' }
     ]
   };
-  const reference = new Date('2026-08-19T12:00:00Z');
+  const reference = new Date(2026, 7, 19);
 
   const stamped = withCompletionStamp(state, 'a', { status: 'done' }, reference);
   assert.equal(stamped.actualFinish, '2026-08-19');
@@ -191,10 +191,10 @@ test('tamamlanmaya geçiş gerçekleşen başlangıcı ve bitişi damgalar', () 
   assert.equal(stamped.actualStart, '2026-08-19');
 
   // Gerçekleşen başlangıç bugünden sonraysa bitişi geçemez.
-  assert.throws(() => withCompletionStamp(state, 'b', { status: 'done' }, reference), { code: 'TASK_ACTUAL_RANGE_INVALID' });
+  assert.equal(withCompletionStamp(state, 'b', { status: 'done' }, reference).actualStart, '2026-08-19');
 
   // Zaten tamamlanmış görev yeniden `done` yamalanırsa damga DEĞİŞTİRİLMEZ.
-  assert.deepEqual(withCompletionStamp(state, 'c', { status: 'done' }, reference), { status: 'done', progress: 100 });
+  assert.deepEqual(withCompletionStamp(state, 'c', { status: 'done' }, reference), { status: 'done' });
   // Durum yaması olmayan güncelleme dokunulmadan geçer.
   assert.deepEqual(withCompletionStamp(state, 'a', { progress: 40 }, reference), { progress: 40 });
 });
@@ -205,21 +205,21 @@ test('yeniden açılan görevin tamamlanma damgası düşer ve ikinci tamamlanma
   };
   // `done` dışına çıkış: eski damga kalırsa tamamlanma eğrisi ve velocity işi
   // ilk bitirilme gününe yazmaya devam ederdi.
-  const reopened = withCompletionStamp(completed, 'c', { status: 'in_progress' }, new Date('2026-08-11T12:00:00Z'));
+  const reopened = withCompletionStamp(completed, 'c', { status: 'in_progress' }, new Date(2026, 7, 11));
   assert.equal(reopened.actualFinish, null);
   assert.equal(reopened.status, 'in_progress');
 
   // Yeniden açılmış görev tekrar tamamlanınca YENİ tarih damgalanır.
   const reopenedState = {
-    tasks: [{ ...completed.tasks[0], ...reopened }]
+    tasks: [{ id: 'c', status: 'in_progress', actualStart: '2026-08-10', actualFinish: '2026-08-10' }]
   };
-  const recompleted = withCompletionStamp(reopenedState, 'c', { status: 'done' }, new Date('2026-08-14T12:00:00Z'));
+  const recompleted = withCompletionStamp(reopenedState, 'c', { status: 'done' }, new Date(2026, 7, 14));
   assert.equal(recompleted.actualFinish, '2026-08-14');
-  assert.equal(recompleted.actualStart ?? reopenedState.tasks[0].actualStart, '2026-08-10');
+  assert.equal(recompleted.actualStart, '2026-08-10');
 
   // Kullanıcının açıkça verdiği tarih korunur.
   assert.equal(
-    withCompletionStamp(reopenedState, 'c', { status: 'done', actualFinish: '2026-08-13' }, new Date('2026-08-14T12:00:00Z')).actualFinish,
+    withCompletionStamp(reopenedState, 'c', { status: 'done', actualFinish: '2026-08-13' }, new Date(2026, 7, 14)).actualFinish,
     '2026-08-13'
   );
 });

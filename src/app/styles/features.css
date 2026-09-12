@@ -1276,38 +1276,3 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
   .activity-filters > label { flex: 1 1 140px; }
   .activity-filters .input { max-width: 100%; }
 }
-
-/* Çalışma alanı, yapışkan denetimlerin tek kaydırma sınırıdır. */
-.workspace-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  flex-shrink: 0;
-  background: var(--bg-elev);
-  box-shadow: 0 1px 0 var(--border-strong);
-}
-.stagger > .workspace-sticky { animation: none; }
-.content-reports:has([data-report-tab="activities"]) { overflow: hidden; min-height: 0; padding-bottom: 16px; }
-.reports-module[data-report-tab="activities"] { height: 100%; min-height: 0; }
-.reports-module[data-report-tab="activities"] > :not([role="tabpanel"]) { flex: 0 0 auto; }
-.reports-module[data-report-tab="activities"] > [role="tabpanel"]:not([hidden]) { flex: 1 1 0; min-height: 0; display: flex; }
-.task-activities-view { flex: 1; min-height: 0; }
-.task-activities-view > :not(.activity-scroll) { flex: 0 0 auto; }
-.activity-scroll { flex: 1 1 0; min-height: 0; overflow: auto; border: 1px solid var(--border-strong); border-radius: var(--r-md); }
-.activity-table { border-collapse: separate; border-spacing: 0; }
-.activity-table thead th { position: sticky; top: 0; z-index: 2; }
-
-/* Eşdeğer talep ve hareket yüzeyleri iki temada aynı vurguyu kullanır. */
-.requests-view, .reports-module {
-  --enterprise-header: color-mix(in oklab, var(--accent) 8%, var(--bg-elev));
-  --enterprise-selected: color-mix(in oklab, var(--accent) 14%, var(--bg-elev));
-  --enterprise-hover: color-mix(in oklab, var(--accent) 5%, var(--bg-elev));
-}
-.request-tabs { padding: 4px 4px 0; border: 1px solid var(--border-strong); border-radius: var(--r-md) var(--r-md) 0 0; background: var(--bg-elev-2); flex-wrap: wrap; }
-.request-tabs button { border-radius: var(--r-sm) var(--r-sm) 0 0; color: var(--text-muted); }
-.request-tabs button:hover { background: var(--enterprise-hover); color: var(--text); }
-.request-tabs button[aria-selected="true"] { background: var(--enterprise-selected); color: var(--text); font-weight: 650; }
-.requests-panel { border-color: var(--border-strong); }
-.enterprise-table thead th { color: var(--text); background: var(--enterprise-header); font-weight: 650; border-bottom-color: var(--border-strong); box-shadow: inset 0 -1px 0 var(--border-strong); }
-.enterprise-table tbody tr:hover, .enterprise-table tbody tr:focus-within { background: var(--enterprise-hover); }
-.enterprise-table tbody tr[aria-selected="true"] { background: var(--enterprise-selected); }

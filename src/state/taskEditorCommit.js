@@ -8,7 +8,7 @@ const EDITABLE_FIELDS = new Set([
   'task', 'description', 'keyword', 'projectId', 'wbsId', 'calendarId',
   'assigneeIds', 'status', 'priority', 'progress', 'plannedStart', 'plannedFinish',
   'targetFinish', 'plannedDurationDays', 'actualStart', 'actualFinish',
-  'resetActualDates', 'remainingDurationDays', 'milestone', 'isMilestone', 'recurrence',
+  'remainingDurationDays', 'milestone', 'isMilestone', 'recurrence',
   'recurrenceOccurrenceDate', 'deps', 'plannedHours', 'actualHours', 'budget', 'spent'
 ]);
 
@@ -26,8 +26,7 @@ export function resolveTaskEditorAccess(state, taskId, patch = {}) {
   const blocked = Object.keys(changed).find((field) => (
     (field === 'targetFinish' && !access.canEditTargetFinish)
     || (['plannedStart', 'plannedFinish'].includes(field) && !access.canControlSchedule)
-    || (field === 'deps' && !access.canManageStructure)
-    || (field === 'recurrence' && !access.canManageRecurrence)
+    || (['deps', 'recurrence'].includes(field) && !access.canManageStructure)
   ));
   return blocked ? {
     ...access, ok: false, code: 'TASK_FIELD_FORBIDDEN', field: blocked,
@@ -103,7 +102,7 @@ export function prepareTaskEditorCommit(state, edits, { taskId, generateSeries =
   const template = planned.tasks.find((task) => task.id === taskId);
   const keywordChanged = updates.some((item) => item.id === taskId && Object.prototype.hasOwnProperty.call(item.patch, 'keyword'));
   const projectUpdates = syncKeywordCatalog && keywordChanged ? taskKeywordCatalogUpdates(planned, template) : [];
-  if (generateSeries && !resolveTaskMutationAccess(planned, taskId).canManageRecurrence) {
+  if (generateSeries && !resolveTaskMutationAccess(planned, taskId, { recurrence: template?.recurrence }).canManageStructure) {
     throw Object.assign(new Error('Tekrar oluşturma yetkiniz yok.'), { code: 'FORBIDDEN' });
   }
   return { type: 'task/save-draft', updates, projectUpdates, tasks: generateSeries && template ? createRecurringTasks(planned, template) : [] };

@@ -1,10 +1,9 @@
 'use client';
-import { prepareTaskLifecycleIntent } from '../../state/appState.js';
 import { scheduleRequestItems } from '../schedule-change/scheduleRequestQueryState.js';
 import { useScheduleRequestQuery } from '../schedule-change/useScheduleRequestQuery.js';
 import { useEffect, useRef, useState } from 'react';
 import {
-  useAllPeople, useAllProjects, useAllTasks, useCalendars, useTaskAssignmentScope, useCurrentUser,
+  useAllPeople, useAllProjects, useAllTasks, useTaskAssignmentScope, useCurrentUser,
   useScheduleRequests, useSelectedTask, useTaskCreationDraft, useTaskActions
 } from '../../state/hooks';
 import { projectWriteFailure, resolveTaskMutationAccess } from '../../state/projectWritePolicy.js';
@@ -35,8 +34,7 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
       : pendingRef.current.has(id)
   )), [registerTaskEditorDraft, task.id]);
   const isCreating = creationDraft?.task?.id === task.id;
-  const calendars = useCalendars();
-  const writeState = { projects, tasks, assignableProjects, currentUser, calendars };
+  const writeState = { projects, tasks, assignableProjects, currentUser };
   const initialAccess = resolveTaskMutationAccess(writeState, task.id, {});
   const draftAccess = isCreating ? initialAccess : resolveTaskEditorAccess(writeState, task.id, pendingRef.current.get(task.id)?.patch);
 
@@ -55,14 +53,6 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
         return result;
       });
     }
-    const previousTask = { ...tasks.find((item) => item.id === taskId), ...pendingRef.current.get(taskId)?.patch };
-    try {
-      patch = prepareTaskLifecycleIntent({ ...writeState, tasks: [previousTask] }, taskId, patch, (message) => window.confirm(message));
-    } catch (error) {
-      setSaveError(error.message);
-      return Promise.resolve({ ok: false, error });
-    }
-    if (!patch) return Promise.resolve({ ok: false, cancelled: true });
     const normalized = normalizeTaskAssigneePatch(patch, people);
     const previous = pendingRef.current.get(taskId);
     const combined = { ...previous?.patch, ...patch, ...normalized.patch };
@@ -156,7 +146,6 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
     onUpdateRelatedTask={onUpdate}
     generateSeries={generateSeries}
     onPrepareSeries={() => { seriesRef.current = true; setGenerateSeries(true); return { ok: true, staged: true }; }}
-    canManageRecurrence={isCreating ? Boolean(creationDraft.scope) : draftAccess.canManageRecurrence}
     canManageStructure={isCreating ? creationDraft.scope === 'FULL' : draftAccess.canManageStructure}
     canChooseWbs={isCreating ? Boolean(creationDraft.scope) : draftAccess.canChooseWbs}
   />;

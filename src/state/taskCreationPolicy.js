@@ -4,7 +4,7 @@ import { WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors.js';
 
 const ASSIGNEE_TASK_CREATE_FIELDS = new Set([
   'task', 'title', 'description', 'keyword', 'status', 'priority', 'progress',
-  'wbsId', 'plannedStart', 'plannedFinish', 'targetFinish', 'recurrence', 'actualStart', 'actualFinish'
+  'wbsId', 'plannedStart', 'plannedFinish', 'targetFinish'
 ]);
 
 /**
@@ -77,7 +77,7 @@ export async function executeTaskCreation({ state = {}, input = null, id, mutate
         assigneeIds: currentUserId ? [currentUserId] : [],
         sorumlu: currentUserId && currentUserName ? [currentUserName] : [],
         deps: [],
-        recurrence: scopedInput.recurrence || null,
+        recurrence: null,
         recurrenceParentId: null,
         recurrenceOccurrenceDate: null,
         milestone: false,
@@ -87,8 +87,8 @@ export async function executeTaskCreation({ state = {}, input = null, id, mutate
         plannedFinish: scopedInput.plannedFinish ?? baseTask.plannedFinish,
         plannedDurationDays: null,
         targetFinish: scopedInput.targetFinish ?? baseTask.targetFinish,
-        actualStart: scopedInput.actualStart || null,
-        actualFinish: scopedInput.actualFinish || null,
+        actualStart: null,
+        actualFinish: null,
         remainingDurationDays: null,
         plannedHours: null,
         actualHours: null,

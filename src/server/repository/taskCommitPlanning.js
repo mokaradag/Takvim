@@ -92,8 +92,7 @@ export function orderTaskUpsertsByDependencies(taskUpserts = []) {
 
   for (const task of tasks) {
     const id = taskId(task.id);
-    const references = [...(task.deps || []), ...(task.recurrenceParentId ? [{ predecessorId: task.recurrenceParentId }] : [])];
-    for (const dependency of references) {
+    for (const dependency of task.deps || []) {
       const predecessorId = taskId(dependency?.predecessorId);
       if (!byId.has(predecessorId) || predecessorId === id) continue;
       const next = successors.get(predecessorId);

@@ -673,7 +673,7 @@ export function ProjectWorkspaceView({ initialTab = 'definition' }) {
     /* İş dağılım ağacı sekmesinde sayfa yüksekliği ağaca devredilir: sekme
        çubuğu sabit kalır, ağaç tablosu kalan alanın tamamını kullanır. */
     <div className={`col project-workspace-page${tab === 'tree' ? ' tree' : ''}`}>
-      <div className="card project-workspace-tabs workspace-sticky" style={{ padding: 8 }}>
+      <div className="card project-workspace-tabs" style={{ padding: 8 }}>
         <div className="row" role="tablist" aria-label="Proje yapısı sekmeleri" style={{ gap: 6, flexWrap: 'wrap' }}>
           {/* Seçili projeden proje listesine dönüş. Bu düğüm olmadan kullanıcı
               proje seçtikten sonra karşılama/proje seçim ekranına hiç dönemiyordu. */}

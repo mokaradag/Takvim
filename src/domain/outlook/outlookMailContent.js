@@ -19,8 +19,8 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-const CANCEL_NOTE = 'Bu görev için Outlook takvim iptali gönderildi.';
-const REQUEST_NOTE = 'Bu görev için Outlook daveti gönderildi. Termin değiştiğinde MERGEN Rota aynı takvim öğesi için güncelleme gönderir.';
+const CANCEL_NOTE = 'Bu görev Outlook takviminizden kaldırıldı.';
+const REQUEST_NOTE = 'Bu görev Outlook takviminize eklendi. Termin değiştiğinde MERGEN Rota aynı randevuyu günceller.';
 
 /**
  * @param {{method:'REQUEST'|'CANCEL', payload:{summary:string, date:string,

@@ -175,13 +175,6 @@ test('kaydedilen görev denetimi kalıcı değerleri ve atamaları taşır; dar 
     assert.equal(after.Progress, stack.db.tasks[0].Progress);
     assert.equal(after.PlannedStart, stack.db.tasks[0].PlannedStart);
     assert.equal(audit.ActorSicil, employee);
-    const changes = taskActivityChanges([audit]).changes;
-    assert.deepEqual(changes.slice(0, 2), ['Notlar: — → Yeni not', 'İlerleme: — → %70']);
-    assert.match(after.ActualStart, /^\d{4}-\d{2}-\d{2}$/);
-    const expectedActualStart = new Intl.DateTimeFormat('tr-TR', {
-      day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC'
-    }).format(new Date(after.ActualStart));
-    assert.equal(changes[2], `Gerçekleşen başlangıç: — → ${expectedActualStart}`);
-    assert.equal(changes.length, 3);
+    assert.deepEqual(taskActivityChanges([audit]).changes, ['Notlar: — → Yeni not', 'İlerleme: — → %70']);
   } finally { await stack.dispose(); }
 });

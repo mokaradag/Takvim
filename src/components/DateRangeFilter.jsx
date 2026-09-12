@@ -4,7 +4,7 @@ import { DateInput } from './DateInput';
 import { Icons } from './icons';
 import { DATE_RANGE_PRESETS } from '../features/shared/dateRangeFilter.js';
 import { useAllPeople, useTasks } from '../state/hooks';
-import { createEmptyOrgFilter, hasOrgSelection } from '../domain/organization/organizationHierarchy.js';
+import { hasOrgSelection } from '../domain/organization/organizationHierarchy.js';
 import { TaskOrganizationFilterControls } from '../features/tasks/TaskOrganizationFilterControls.jsx';
 import { useSharedTaskOrganizationFilter } from '../features/tasks/TaskOrganizationFilterContext.jsx';
 import { useTaskOrganizationFilter } from '../features/tasks/useTaskOrganizationFilter.js';
@@ -20,7 +20,7 @@ function sameIds(left, right) {
  * Kurumsal seçim Görevler ile aynı oturumluk seçimi kullanır ve yalnızca
  * kullanıcının zaten görebildiği görev kümesini daraltır.
  */
-export function DateRangeFilter({ value, onChange, label = 'Tarih aralığı', summary = null, sticky = false }) {
+export function DateRangeFilter({ value, onChange, label = 'Tarih aralığı', summary = null }) {
   const preset = value?.preset || 'all';
   const keys = DATE_RANGE_PRESETS.map((item) => item.id);
   const allTasks = useTasks();
@@ -61,7 +61,7 @@ export function DateRangeFilter({ value, onChange, label = 'Tarih aralığı', s
   };
 
   return (
-    <div className={`date-range-filter${sticky ? ' workspace-sticky' : ''}`}>
+    <div className="date-range-filter">
       <span className="date-range-filter-label">
         <Icons.Calendar size={12} /> {label}
       </span>
@@ -109,12 +109,6 @@ export function DateRangeFilter({ value, onChange, label = 'Tarih aralığı', s
         <span className="date-range-hint" role="status">
           Aralığı uygulamak için iki tarihi de seçin; şu an tüm zamanlar gösteriliyor.
         </span>
-      )}
-      {(preset !== 'all' || value?.start || value?.end || organizationActive) && (
-        <button type="button" className="btn ghost sm" onClick={() => {
-          setSelection(createEmptyOrgFilter());
-          onChange({ preset: 'all', start: '', end: '' });
-        }}><Icons.Close size={12} /> Filtreleri Temizle</button>
       )}
       {summary && <span className="date-range-summary">{summary}</span>}
     </div>

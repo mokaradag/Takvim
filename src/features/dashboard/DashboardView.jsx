@@ -6,7 +6,7 @@ import { parseDate, fmt, fmtAxisDate, addDays, diffDays } from '../../scheduling
 import { taskCompletionDate } from '../../scheduling/metrics';
 import { depId } from '../../scheduling/dependencies';
 import { projectColorVar, personColorVar } from '../../lib/colors';
-import { AvatarStack, StatusPill, Donut, AreaChart } from '../../components/ui';
+import { AvatarStack, StatusPill, HeroHeader, Donut, AreaChart } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, CardHead, AnimatedNumber, HoverListCard } from '../../components/ui-extras';
 import { PeopleMetricTable, personUnitLabel } from '../../components/PeopleMetricTable';
@@ -202,8 +202,13 @@ export function DashboardView({ onNavigate }) {
 
   return (
     <div className="col stagger dashboard">
+      <HeroHeader title="Genel bakış">
+        <div className="muted" style={{ fontSize: 13.5 }}>
+          {fmt(today_, 'dd MMM yyyy')} · {tasks.length} görev · {progress} aktif · <span style={{ color: overdue > 0 ? 'var(--status-overdue)' : 'var(--text-dim)' }}>{overdue} geciken</span>
+        </div>
+      </HeroHeader>
+
       <DateRangeFilter
-        sticky
         value={dateRange}
         onChange={setDateRange}
         summary={activeRange

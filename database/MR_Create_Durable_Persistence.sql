@@ -478,11 +478,6 @@ BEGIN TRY
             ForceResend bit NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_ForceResend DEFAULT 0,
             DeliveryMayHaveEscaped bit NOT NULL CONSTRAINT DF_MR_TaskOutlookSubs_MayHaveEscaped DEFAULT 0,
             LastValidatedAt datetime2(3) NULL,
-            CompletionSuspended bit NOT NULL CONSTRAINT DF_MR_Outlook_CompletionSuspended DEFAULT (0),
-            CompletionDate date NULL,
-            LastCancellationReason varchar(60) NULL,
-            DeliveredMethod varchar(10) NULL,
-            PendingDate date NULL,
         LastDeliveredAt datetime2(3) NULL,
         LastFailureCode varchar(60) NULL,
         CreatedBySicil int NULL,
@@ -639,8 +634,7 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0007_task_schedule_change_requests', N'Persistent task schedule change request and decision workflow'),
            (N'0008_request_notifications', N'Talep geçmişinden ayrı bildirim durumu ve kalıcı görev künyesi'),
            (N'0009_task_activity_report', N'Görev hareket raporu için tür ve tarih aralığı dizini'),
-           (N'0010_outlook_calendar_subscriptions', N'Görev/Sicil Outlook takvim abonelikleri ve dayanıklı gönderim kuyruğu'),
-           (N'0011_outlook_completion_lifecycle', N'Outlook tamamlanma, yeniden açılma ve iptal nedeni');
+           (N'0010_outlook_calendar_subscriptions', N'Görev/Sicil Outlook takvim abonelikleri ve dayanıklı gönderim kuyruğu');
 
     COMMIT TRANSACTION;
 END TRY

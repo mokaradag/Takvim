@@ -82,7 +82,6 @@ function applyResult(key, result) {
   if (typeof result.subscribed !== 'boolean' && !deliveredStatus && !queuedStatus && !removed) return;
   const value = {
     subscribed: result.subscribed ?? !removed,
-    completionSuspended: result.completionSuspended ?? Boolean(queuedStatus && previous.completionSuspended),
     pending: result.pending ?? queuedStatus,
     delivered: result.delivered ?? (deliveredStatus || (queuedStatus && previous.delivered)),
     failureCode: result.failureCode || (!result.ok ? result.code : null) || null
@@ -124,7 +123,7 @@ export function ensureOutlookState({ load = loadOutlookCalendarStateRequest } = 
     for (const item of response.tasks || []) {
       const key = outlookTaskKey(item.taskId);
       subscribed.add(key);
-      tasks.set(key, { subscribed: true, completionSuspended: Boolean(item.completionSuspended), pending: Boolean(item.pending), delivered: Boolean(item.delivered), failureCode: item.failureCode || null });
+      tasks.set(key, { subscribed: true, pending: Boolean(item.pending), delivered: Boolean(item.delivered), failureCode: item.failureCode || null });
     }
     emit({
       ...snapshot, status: 'ready', enabled: response.enabled !== false,

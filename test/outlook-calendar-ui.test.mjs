@@ -81,16 +81,16 @@ test(`eklenmemiş görevde eylem "Outlook'a Ekle" olarak görünür ve etkindir`
   });
 });
 
-test('ekleme başarılıysa bağlantı etkin görünür ve sıkışık menü açılır', async () => {
+test('ekleme başarılıysa durum "eklendi" olur ve sıkışık menü açılır', async () => {
   await prepareStore();
   await withActualDataMode(async () => {
     const calls = [];
     const actions = {
       add: (taskId) => store.addTaskToOutlook(taskId, {
-        request: async (id) => { calls.push(id); return { ok: true, status: 'ADDED', message: 'Outlook daveti gönderildi.' }; }
+        request: async (id) => { calls.push(id); return { ok: true, status: 'ADDED', message: 'Görev Outlook takviminize eklendi.' }; }
       }),
       resend: async () => ({ ok: true, message: 'Outlook daveti yeniden gönderildi.' }),
-      remove: async () => ({ ok: true, message: 'Outlook bağlantısı kapatıldı.' })
+      remove: async () => ({ ok: true, message: 'Görev Outlook takviminizden kaldırıldı.' })
     };
     const view = mountComponent(OutlookCalendarAction, { task: TASK, actions });
     try {
@@ -98,12 +98,12 @@ test('ekleme başarılıysa bağlantı etkin görünür ve sıkışık menü aç
       view.render();
 
       assert.deepEqual(calls, ['task-1']);
-      const added = buttonWithLabel(view.output, 'Outlook bağlantısı etkin');
+      const added = buttonWithLabel(view.output, 'eklendi');
       assert.ok(added, 'eklendi durumu görünmelidir');
       assert.equal(added.props['aria-haspopup'], 'menu');
       assert.equal(added.props['aria-expanded'], false);
       // Başarı iletisi kullanıcıya gösterilir.
-      assert.match(JSON.stringify(view.output), /Outlook daveti gönderildi/);
+      assert.match(JSON.stringify(view.output), /Görev Outlook takviminize eklendi/);
 
       added.props.onClick({ preventDefault() {}, stopPropagation() {} });
       view.render();
@@ -120,12 +120,12 @@ test('kaldırma aboneliği düşürür ve eylem yeniden "ekle" durumuna döner',
       add: async () => ({ ok: true }),
       resend: async () => ({ ok: true }),
       remove: (taskId) => store.removeTaskFromOutlook(taskId, {
-        request: async () => ({ ok: true, status: 'REMOVED', message: 'Outlook bağlantısı kapatıldı.' })
+        request: async () => ({ ok: true, status: 'REMOVED', message: 'Görev Outlook takviminizden kaldırıldı.' })
       })
     };
     const view = mountComponent(OutlookCalendarAction, { task: TASK, actions });
     try {
-      const added = buttonWithLabel(view.output, 'Outlook bağlantısı etkin');
+      const added = buttonWithLabel(view.output, 'eklendi');
       assert.ok(added, 'sunucudan gelen abonelik "eklendi" olarak çizilmelidir');
       added.props.onClick({ preventDefault() {}, stopPropagation() {} });
       view.render();
@@ -134,7 +134,7 @@ test('kaldırma aboneliği düşürür ve eylem yeniden "ekle" durumuna döner',
       view.render();
 
       assert.ok(buttonWithLabel(view.output, "Outlook'a Ekle"));
-      assert.match(JSON.stringify(view.output), /bağlantısı kapatıldı/);
+      assert.match(JSON.stringify(view.output), /kaldırıldı/);
     } finally { view.unmount(); }
   });
 });
@@ -147,13 +147,13 @@ test('termini silinmiş görev takvimden yine de KALDIRILABİLİR', async () => 
       add: async () => ({ ok: true }),
       resend: async () => ({ ok: true }),
       remove: (taskId) => store.removeTaskFromOutlook(taskId, {
-        request: async () => { removed += 1; return { ok: true, subscribed: false, status: 'REMOVED', message: 'Outlook bağlantısı kapatıldı.' }; }
+        request: async () => { removed += 1; return { ok: true, subscribed: false, status: 'REMOVED', message: 'Görev Outlook takviminizden kaldırıldı.' }; }
       })
     };
     // Termin kaldırılmıştır: ekleme kapalıdır ama randevu Outlook'ta durmaktadır.
     const view = mountComponent(OutlookCalendarAction, { task: { ...TASK, targetFinish: null }, actions });
     try {
-      buttonWithLabel(view.output, 'Outlook bağlantısı etkin').props.onClick({ preventDefault() {}, stopPropagation() {} });
+      buttonWithLabel(view.output, 'eklendi').props.onClick({ preventDefault() {}, stopPropagation() {} });
       view.render();
       const resend = buttonWithLabel(view.output, 'yeniden gönder');
       assert.equal(resend.props.disabled, true, 'kapalı durumda yeniden gönderme yapılmaz');
@@ -263,7 +263,7 @@ test('toplu eylem sonucu özetler ve yerelde atlanan görevlerin seçimini korur
       view.render();
 
       const text = JSON.stringify(view.output);
-      assert.match(text, /1 Outlook daveti gönderildi, 1 Outlook bağlantısı zaten günceldi\./);
+      assert.match(text, /1 görev eklendi, 1 görev zaten ekliydi\./);
       // Termini olmayan görev sessizce düşürülmez.
       assert.match(text, /1 görev termini olmadığı için atlandı/);
       assert.equal(completed, null, 'terminsiz görevlerin seçimi korunmalıdır');
@@ -326,7 +326,7 @@ test('istemci takma adı ile çıplak GUID aynı aboneliği gösterir', async ()
       actions: {}
     });
     try {
-      assert.ok(buttonWithLabel(view.output, 'Outlook bağlantısı etkin'), 'takma adlı görev de "eklendi" görünmelidir');
+      assert.ok(buttonWithLabel(view.output, 'eklendi'), 'takma adlı görev de "eklendi" görünmelidir');
     } finally { view.unmount(); }
   });
 });
@@ -439,7 +439,7 @@ test('bekleyen veya başarısız ilk davet teslim edilmiş gibi gösterilmez', a
     await withActualDataMode(async () => {
       const view = mountComponent(OutlookCalendarAction, { task: TASK, actions: {} });
       try {
-        assert.equal(buttonWithLabel(view.output, 'Outlook bağlantısı etkin'), null);
+        assert.equal(buttonWithLabel(view.output, 'eklendi'), null);
         assert.ok(buttonWithLabel(view.output, failureCode ? 'başarısız' : 'bekliyor'));
       } finally { view.unmount(); }
     });
@@ -509,31 +509,3 @@ test('farklı görevlerin eşzamanlı sonuçları birbirini silmez', async () =>
   assert.deepEqual([...store.getOutlookSnapshot().subscribed].sort(), ['a', 'b']);
   assert.equal(store.getOutlookSnapshot().busy.size, 0);
 });
-
-for (const [delivery, label] of [
-  [{ delivered: true }, 'Outlook bağlantısı etkin'],
-  [{ delivered: true, pending: true }, 'Outlook gönderimi bekliyor'],
-  [{ delivered: true, pending: true, failureCode: 'DELIVERY_FAILED' }, 'Outlook gönderimi başarısız'],
-  [{ delivered: false, completionSuspended: true }, 'Outlook bağlantısı bekletiliyor']
-]) {
-  test(`abonelik ve davet durumu takvim onayı iddia etmez: ${label}`, async () => {
-    await prepareStore(state({ tasks: [{ taskId: TASK.id, ...delivery }] }));
-    await withActualDataMode(async () => {
-      const task = { ...TASK, status: delivery.completionSuspended ? 'done' : 'todo' };
-      const view = mountComponent(OutlookCalendarAction, { task, actions: {} });
-      try {
-        const button = buttonWithLabel(view.output, label);
-        assert.ok(button);
-        assert.doesNotMatch(JSON.stringify(view.output), /Outlook'a eklendi/);
-        assert.equal(store.isTaskInOutlook(store.getOutlookSnapshot(), task.id), true);
-        assert.equal(store.outlookTaskState(store.getOutlookSnapshot(), task.id).delivered, delivery.delivered);
-        if (!delivery.completionSuspended) assert.match(button.props.title, /kabul veya takvim durumunu doğrulamaz/);
-        button.props.onClick({ preventDefault() {}, stopPropagation() {} }); view.render();
-        const resend = buttonWithLabel(view.output, 'Outlook davetini yeniden gönder');
-        assert.ok(resend);
-        assert.equal(Boolean(resend.props.disabled), Boolean(delivery.completionSuspended));
-        assert.equal(buttonWithLabel(view.output, "Outlook'tan kaldır").props.disabled, false);
-      } finally { view.unmount(); }
-    });
-  });
-}

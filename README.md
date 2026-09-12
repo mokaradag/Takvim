@@ -155,13 +155,13 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
-2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
+2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; sonuncusu Outlook takvim aboneliklerini ekleyen `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` dosyasıdır. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
-5. Outlook teslimatı veya elle/otomatik hatırlatma kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
-6. `npm ci`
-7. `npm run build`
-8. `npm run start -- -H 0.0.0.0 -p 8008`
+5. `npm ci`
+6. `npm run build`
+7. `npm run start -- -H 0.0.0.0 -p 8008`
+8. İsteğe bağlı: hatırlatma postaları ve Outlook takvim davetleri için `.env.local` içindeki SMTP bloğunu doldurun ve zamanlayıcıyı kaydedin (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Aynı zamanlanmış tur her ikisini de işler.
 9. **Gerçek Sistem** seçerek yetki ve kalıcılığı doğrulayın.
 
 Build aşamasında tüm MERGEN Rota nesnelerini kaldırmak için `database/MR_Rollback_Durable_Persistence.sql` çalıştırılabilir. **Bu işlem tüm MR_* uygulama verisini kalıcı olarak siler.** HR02, A01 ve HR09 tablolarına dokunmaz.
@@ -274,18 +274,12 @@ sahiplenilir, böylece o hatırlatma kalıcı olarak kaybolmaz. Ayrıntılar:
 
 ## Outlook takvim tümleştirmesi
 
-Rota gün düzeyinde görev yönetir; saat/dakika toplanmaz. Outlook, Takvim ile aynı `taskCalendarDate()` kuralından tek günlük all-day FREE/TRANSPARENT termin işareti üretir; başlangıç–bitiş dönemi aktarılmaz. **Rota → Outlook tek yönlüdür**; Outlook’ta elle değiştirilen alanlar okunmaz ve sonraki Rota güncellemesi bunları değiştirebilir. Etkin bağlantı/SMTP kabulü, kullanıcının kabul ettiğini veya öğenin takvimde durduğunu doğrulamaz. Yeniden gönderim kullanılabilir.
-
-Bugün/gelecek tarihli abone görev tamamlanınca CANCEL gönderilir, abonelik tercihi korunur; geçmiş kayıt tamamlanma nedeniyle değiştirilmez. Yeniden açılma aynı UID ve daha yüksek SEQUENCE ile REQUEST üretir. Açık kaldırma, silme ve erişim kaybı kapanmış aboneliği kendiliğinden açmaz. Tekrar görevleri bağımsız TaskId/UID öğeleridir; Outlook tekrar master’ı veya Tasks/To Do yoktur.
-
-SMTP yalnızca hem e-posta hatırlatma işlevleri hem Outlook teslimatı kullanılmıyorsa isteğe bağlıdır. SMTP olmadan davetler kuyrukta teslim edilmemiş kalır. Varsayılan Outlook özelliği açıktır; üretimde SMTP yapılandırılmalıdır.
-
-Tekil/toplu ekleme, yeniden gönderme ve kaldırma kalıcı kuyruğa yazılır; gönderimi Next.js Node sunucusuyla başlayan Outlook çalışanı yapar. İlk tur açılışta, sonraki turlar önceki tamamlandıktan varsayılan 5 saniye sonra çalışır (`MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS`). Otomatik hatırlatma kapalı olsa da Outlook teslimatı ve yeniden denemeleri sürer; yönetici düğmesi veya Outlook için OS zamanlayıcısı gerekmez. Arayüz bekleyen, başarısız ve teslim edilmiş sonuçları ayırır. Sorumlu/proje lideri değişiklikleri, kurumsal proje eşitlemesi ve kabul edilen tarih talepleri aynı işlemde kuyruğa yansır. PR #72 öncesindeki eski 0010 betiği uygulanmışsa dağıtımdan önce güncel betiği yeniden çalıştırın; abonelikler korunarak iptal/yeniden gönderim niyeti, olası SMTP teslimatı ve görünürlük doğrulama alanları eklenir. Güncel PR #72/0010 bulunan mevcut kurulumlarda da `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanmalıdır. Bekleyen işi olmayan aboneliklerin dış yetki kaynakları da periyodik olarak doğrulanır. Teslimat kirası bir dakikadır ve yenilenir; kuyruk bütçesi varsayılan 45 saniyedir. SQL bağlantısı edinmeye 15 saniye, her sonuç/hata yazımına bağımsız 5 saniye ayrılır; otomatik tur tek sonuçlandırmayla 65, zaman aşımından sonra hata yazımı da gerekirse 70 saniyeye kadar çıkabilir. Deneme eşiğini aşan işler kaybolmaz, HTTP 503 ile görünür kalır ve otomatik yeniden denenir.
+Tekil/toplu ekleme, yeniden gönderme ve kaldırma kalıcı kuyruğa yazılır; gönderimi mevcut hatırlatma zamanlayıcısı yapar. Arayüz bekleyen, başarısız ve teslim edilmiş sonuçları ayırır. Sorumlu/proje lideri değişiklikleri, kurumsal proje eşitlemesi ve kabul edilen tarih talepleri aynı işlemde kuyruğa yansır. 0010 betiğinin önceki sürümü uygulanmışsa dağıtımdan önce güncel betiği yeniden çalıştırın; abonelikler korunarak iptal/yeniden gönderim niyeti, olası SMTP teslimatı ve görünürlük doğrulama alanları eklenir. Bekleyen işi olmayan aboneliklerin dış yetki kaynakları da periyodik olarak doğrulanır. Teslimat kirası bir dakikadır ve yenilenir; tur varsayılan 45 saniyeyle sınırlıdır. Deneme eşiğini aşan işler kaybolmaz, HTTP 503 ile görünür kalır ve otomatik yeniden denenir.
 
 Kullanıcı, görebildiği bir görevi **kendi** Outlook takvimine ekleyebilir. Görev
 panelinin alt çubuğundaki **Outlook'a Ekle** eylemi hem düzenlenebilir hem salt
-okunur panelde bulunur ve görev düzenleme yetkisi gerektirmez; davet teslim edildikten sonra
-**✓ Outlook bağlantısı etkin** durumuna geçip sıkışık bir menü açar (daveti yeniden
+okunur panelde bulunur ve görev düzenleme yetkisi gerektirmez; eklendikten sonra
+**✓ Outlook'a eklendi** durumuna geçip sıkışık bir menü açar (daveti yeniden
 gönder · Outlook'tan kaldır). Görevler tablosundaki seçim kutularıyla birden çok
 görev tek işlemde eklenebilir; **her görev kendi bağımsız randevusunu** alır.
 
@@ -300,8 +294,8 @@ güncelleme gönderir; Outlook ikinci bir randevu açmaz. Etiket, yorum, ilerlem
 gibi randevuya yazılmayan alanlar hiç ileti üretmez. Kaldırma, görev silme ve
 görünürlük kaybı `METHOD:CANCEL` üretir. Gönderim **dayanıklı bir kuyrukla**
 yapılır: görev kaydı hiçbir koşulda SMTP'ye bağlı değildir, bekleyen teslimatlar
-otomatik Outlook çalışanında sınırlı yığınlar hâlinde yeniden denenir. Yönetici “Turu şimdi çalıştır” eylemi tanı içindir; hatırlatma ve Outlook sayaçları, HTTP 503 olsa da güvenli hata nedenleriyle ayrı gösterilir. Son otomatik tur yerel sürece, kuyruk sağlık sayıları ortak veritabanına aittir. Şema göçü
-`database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` ve ardından `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`; ayrıntılar:
+mevcut hatırlatma turunda sınırlı yığınlar hâlinde yeniden denenir. Şema göçü
+`database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql`; ayrıntılar:
 `docs/OUTLOOK-CALENDAR.md`.
 
 ## Görünüm tercihleri
@@ -419,7 +413,3 @@ Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ar
 **Dağıtım:** Mevcut veritabanında 0007 sonrasında `database/MR_Upgrade_0008_Request_Notifications.sql` ve `database/MR_Upgrade_0009_Task_Activity_Report.sql` sırasıyla çalıştırılmalıdır; ardından uygulamayı derleyip hizmeti yeniden başlatın. Ayrıntılar: [Talepler ve bildirimler](docs/REQUESTS-AND-NOTIFICATIONS.md), [arayüz sözleşmeleri](docs/SIMPLE-MODE-AND-UI.md).
 
 Raporlar artık **Performans** ve **Görev Hareketleri** sekmelerini içerir. Görev Hareketleri, MR_AuditLog üzerinden yetkili ekibin/görevlerin kalıcı değişikliklerini, gerçek aktör kimliği ve Türkiye takvim günüyle raporlar. [Kapsam, süzgeçler ve tarihçe](docs/TASK-ACTIVITY-REPORT.md).
-
-Özet ve Raporlar’daki **Filtreleri Temizle**, tarih ve paylaşılan kurumsal seçimleri sıfırlar. Raporlar → Görev Hareketleri kendi dönem/kapsam/kişi/proje/tür/kurumsal seçimlerini ve sayfasını varsayılana döndürür. Görünürlük yetkileri ve seçili çalışma alanı korunur.
-
-Görev yaşam döngüsü istemci ve SQL yazma sınırında merkezîdir: başlatma eksik gerçek başlangıcı, tamamlama eksik gerçek bitişi doldurur ve ilerlemeyi %100 yapar. İlerleme tek başına kapatma eylemi değildir. Yeniden açma bitişi temizleyip başlangıç/ilerlemeyi korur; Yapılacak'a dönüşte tarih temizleme onayı gerekir. Proje değişikliğiyle aynı istekte tamamlanan görev hedef projenin etkin takvim gününü kullanır. Yeni tekrar oluşumlarının günü, plan tarihleri, termini ve süresi sunucuda şablon planıyla doğrulanır. Normal kullanıcı Kapsamlı Kipte kendi yetkili, yalnız kendisine atanmış görevini tekrarlayabilir; proje/WBS/atama yetkileri genişlemez. Özet/Performans filtreleri ve Proje Yapısı sekmeleri yapışkandır; Görev Hareketleri tek dikey tablo alanında kayar. Ayrıntılar: [yaşam döngüsü](docs/SCHEDULING-DATA-MODEL.md), [tekrar yetkisi](docs/TAGS-AND-RECURRING-TASKS.md), [arayüz](docs/SIMPLE-MODE-AND-UI.md).

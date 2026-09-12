@@ -17,11 +17,8 @@ import {
   renderReminderEmail
 } from '../../domain/reminders/reminderTemplate.js';
 import { RichTextEditor } from './RichTextEditor.jsx';
-import { deliveryRunMessage, outlookRunSummary } from './deliveryRunPresentation.js';
-import { outlookFailureMessage } from '../../domain/outlook/outlookFailures.js';
 import {
   loadReminderSettingsRequest,
-  loadDeliveryStatusRequest,
   runAutomaticRemindersRequest,
   saveReminderSettingsRequest
 } from './reminderClient.js';
@@ -97,7 +94,6 @@ export function ReminderSettingsView() {
   const [schemaReady, setSchemaReady] = useState(true);
   const [history, setHistory] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [deliveryStatus, setDeliveryStatus] = useState(null);
   const [form, setForm] = useState(() => ({
     ...DEFAULT_REMINDER_SETTINGS,
     subject: DEFAULT_REMINDER_SUBJECT,
@@ -127,26 +123,6 @@ export function ReminderSettingsView() {
   }, [actualMode]);
 
   useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    if (!actualMode) return;
-    let cancelled = false;
-    let timer;
-    const controller = new AbortController();
-    const refresh = async () => {
-      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
-        const response = await loadDeliveryStatusRequest({ signal: controller.signal });
-        if (!cancelled) setDeliveryStatus(response.ok ? response.outlook : { error: response.message });
-      }
-      if (!cancelled) timer = setTimeout(refresh, 15000);
-    };
-    refresh();
-    return () => {
-      cancelled = true;
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [actualMode]);
 
   const preview = useMemo(
     () => renderReminderEmail({ subject: form.subject, body: form.body }, PREVIEW_VALUES),
@@ -194,11 +170,28 @@ export function ReminderSettingsView() {
     setBusy(true);
     const response = await runAutomaticRemindersRequest();
     setBusy(false);
-    setMessage(deliveryRunMessage(response));
-    if (response.reminders || response.outlook) {
-      const latest = await loadReminderSettingsRequest();
-      if (latest.ok) setHistory(latest.history || []);
+    // `code` yalnızca taşıma/uç hatasında bulunur; tur özeti kendi `ok` alanını
+    // taşıdığı için ikisi ayrı ayrı değerlendirilir.
+    if (response.code) {
+      setMessage({ type: 'error', text: response.message });
+      return;
     }
+    if (response.reason === 'SMTP_NOT_CONFIGURED') {
+      setMessage({
+        type: 'error',
+        text: 'SMTP yapılandırılmadan otomatik tur çalıştırılmaz; hiçbir hatırlatma aralığı tüketilmedi.'
+      });
+      return;
+    }
+    setMessage({
+      type: response.enabled ? 'success' : 'warning',
+      text: response.enabled
+        ? `Tur tamamlandı: ${response.sent} gönderildi`
+          + `${response.partial ? ` (${response.partial} kısmi alıcı)` : ''}`
+          + `, ${response.skipped} atlandı, ${response.failed} başarısız.`
+        : 'Otomatik hatırlatma kapalı olduğu için tur hiçbir ileti göndermedi.'
+    });
+    load();
   };
 
   // Kaydedilmemiş düzenleme varken tur ÇALIŞTIRILMAZ: uç son kayıtlı
@@ -231,24 +224,6 @@ export function ReminderSettingsView() {
         </div>
       )}
 
-      <section className="card reminder-section" aria-label="Outlook gönderim durumu">
-        <div className="card-title"><Icons.Clock size={14} /> Outlook takvim teslimatı</div>
-        <p className="muted">Outlook kuyruğu sunucuda otomatik işlenir; otomatik hatırlatma ayarından bağımsızdır. “Turu şimdi çalıştır” yalnızca tanı ve deneme içindir.</p>
-        {!deliveryStatus ? <p>Gönderim durumu yükleniyor…</p> : deliveryStatus.error ? (
-          <p className="reminder-message error">{deliveryStatus.error}</p>
-        ) : (
-          <>
-            <p>{!deliveryStatus.enabled ? 'Outlook tümleştirmesi: kapalı.' : deliveryStatus.automatic
-              ? `Otomatik Outlook işleme: açık. Tur aralığı: ${deliveryStatus.intervalMs / 1000} saniye.`
-              : 'Otomatik Outlook çalışanı bu sunucuda başlamamış; sunucu başlatma günlüğünü inceleyin.'}</p>
-            {deliveryStatus.queue && <p>Kuyruk: {deliveryStatus.queue.pending} bekliyor, {deliveryStatus.queue.due} hazır, {deliveryStatus.queue.inFlight} işleniyor, {deliveryStatus.queue.failed} hatalı, {deliveryStatus.queue.exhausted} deneme eşiğini aştı.</p>}
-            {deliveryStatus.reason && <p className="reminder-message error">{outlookFailureMessage(deliveryStatus.reason)}</p>}
-            {deliveryStatus.running && <p>Bu sunucuda otomatik Outlook turu sürüyor.</p>}
-            {deliveryStatus.lastResult && <p>Bu sunucudaki son otomatik tur ({new Date(deliveryStatus.lastFinishedAt).toLocaleString('tr-TR')}): {outlookRunSummary(deliveryStatus.lastResult)}</p>}
-          </>
-        )}
-      </section>
-
       {status === 'ready' && (
         <>
           {!smtpConfigured && (
@@ -266,7 +241,6 @@ export function ReminderSettingsView() {
             </div>
           )}
 
-
           <section className="card reminder-section">
             <div className="card-title">
               <Icons.Clock size={14} /> Otomatik hatırlatma planı
@@ -276,7 +250,7 @@ export function ReminderSettingsView() {
                 <div className="rt-row"><span className="rt-label">Başlangıç</span><span className="rt-val">Termine kalan süre penceresi</span></div>
                 <div className="rt-row"><span className="rt-label">Yineleme</span><span className="rt-val">Pencere içinde seçilen sıklık</span></div>
                 <div className="rt-row"><span className="rt-label">Durma</span><span className="rt-val">Tamamlanan, iptal edilen, silinen görev ve termin günü</span></div>
-                <div className="rt-foot"><Icons.Info size={11} /> Elle hatırlatma ve otomatik Outlook teslimatı bu ayardan bağımsız çalışır.</div>
+                <div className="rt-foot"><Icons.Info size={11} /> Elle gönderim bu ayardan bağımsız çalışır.</div>
               </InfoButton>
             </div>
 
@@ -429,7 +403,7 @@ export function ReminderSettingsView() {
                 </span>
               )}
             </div>
-            {message && <div role="status" style={{ whiteSpace: 'pre-line' }} className={`reminder-message ${message.type}`}>{message.text}</div>}
+            {message && <div className={`reminder-message ${message.type}`}>{message.text}</div>}
           </section>
 
           <section className="card reminder-section">

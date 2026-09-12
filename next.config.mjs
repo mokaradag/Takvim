@@ -29,7 +29,6 @@ const nextConfig = {
       : [];
   },
   experimental: {
-    instrumentationHook: true,
     serverComponentsExternalPackages: ['mssql', 'msnodesqlv8'],
   },
 };

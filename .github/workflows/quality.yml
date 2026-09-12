@@ -60,7 +60,7 @@ jobs:
       - name: Run lint
         run: npm run lint
       - name: Run automated tests
-        run: npm test -- --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml
+        run: npm test -- --test-concurrency=1 --test-reporter=junit --test-reporter-destination=test-results.xml
       - name: Upload automated test results
         if: always()
         uses: actions/upload-artifact@v4

@@ -225,7 +225,6 @@ function seriesTask(overrides = {}) {
     status: 'todo',
     priority: 'medium',
     progress: 0,
-    plannedDurationDays: 1,
     plannedStart: '2026-08-17',
     plannedFinish: '2026-08-17',
     targetFinish: '2026-08-17',
@@ -270,61 +269,13 @@ test('aynı seri günü için ikinci bir yineleme kalıcılaştırılamaz', asyn
         recurrence: null,
         recurrenceParentId: TASK_ID,
         recurrenceOccurrenceDate: '2026-08-24',
-        plannedStart: '2026-08-24',
-        plannedFinish: '2026-08-24',
-        targetFinish: '2026-08-24'
+        plannedStart: '2026-09-07',
+        plannedFinish: '2026-09-07',
+        targetFinish: '2026-09-07'
       })]
     });
     assert.equal(duplicate.ok, false);
     assert.match(duplicate.error.message, /zaten bir yineleme/);
-  } finally {
-    await stack.dispose();
-  }
-});
-
-test('geçerli tekrar gününe farklı plan veya süre yazılamaz; toplu işlem geri alınır', async () => {
-  const stack = await createActualStack(corporateSeed());
-  try {
-    assert.equal((await stack.persistence.commitChanges('project/create', manualProjectChanges())).ok, true);
-    await stack.repository.commitChanges({ taskUpserts: [seriesTask({
-      recurrence: 'FREQ=WEEKLY;BYDAY=MO;COUNT=3',
-      plannedFinish: '2026-08-18', targetFinish: '2026-08-19', plannedDurationDays: 2
-    })] });
-    const child = seriesTask({
-      id: CHILD_ID, recurrence: null, recurrenceParentId: TASK_ID,
-      recurrenceOccurrenceDate: '2026-08-24',
-      plannedStart: '2026-08-24', plannedFinish: '2026-08-25',
-      targetFinish: '2026-08-26', plannedDurationDays: 2
-    });
-    const expectedError = {
-      code: 'MUTATION_FAILED',
-      message: 'Yineleme planı ve süresi şablonun ürettiği tekrar günüyle uyumlu olmalıdır.'
-    };
-    for (const patch of [
-      { plannedStart: '2026-08-23' },
-      { plannedFinish: '2026-08-26' },
-      { targetFinish: '2026-08-27' },
-      { plannedDurationDays: 3 },
-      { plannedDurationDays: null }
-    ]) {
-      await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...child, ...patch }] }), expectedError);
-      assert.equal(stack.db.tasks.length, 1);
-    }
-    const second = {
-      ...child, id: SECOND_CHILD_ID, recurrenceOccurrenceDate: '2026-08-31',
-      plannedStart: '2026-08-31', plannedFinish: '2026-09-01', targetFinish: '2026-09-02'
-    };
-    await assert.rejects(stack.repository.commitChanges({
-      taskUpserts: [child, { ...second, plannedDurationDays: 3 }]
-    }), expectedError);
-    assert.equal(stack.db.tasks.length, 1, 'önceki geçerli yineleme de geri alınır');
-    await stack.repository.commitChanges({ taskUpserts: [child, second] });
-    assert.equal(stack.db.tasks.length, 3);
-    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('2bbbbbbb'));
-    assert.equal(stored.PlannedStart, child.plannedStart);
-    assert.equal(stored.PlannedFinish, child.plannedFinish);
-    assert.equal(stored.TargetFinish, child.targetFinish);
-    assert.equal(stored.PlannedDurationDays, 2);
   } finally {
     await stack.dispose();
   }
@@ -408,6 +359,7 @@ test('yinelemeleri olan şablon başka projeye taşınamaz', async () => {
     const moved = await stack.persistence.commitChanges('task/update', {
       taskUpserts: [{
         ...stored,
+        recurrence: 'FREQ=WEEKLY;BYDAY=MO;COUNT=3',
         projectId: OTHER_PROJECT_ID,
         wbsId: OTHER_ROOT_WBS_ID,
         keyword: null

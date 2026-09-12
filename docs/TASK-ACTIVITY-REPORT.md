@@ -35,7 +35,3 @@ Yalnızca anlamlı TASK oluşturma/güncelleme/silme olayları alınır. Teknik 
 ## Dağıtım
 
 Mevcut kurulumda `database/MR_Upgrade_0009_Task_Activity_Report.sql` çalıştırılır. Yeni `IX_MR_AuditLog_Type_Occurred` dizini `(EntityType, OccurredAt DESC, AuditId DESC)` üzerinden tarih aralığındaki görev hareketlerine erişir; aktör/proje/korelasyon anahtarlarını kapsar, büyük JSON sütunlarını dizine kopyalamaz. Diğer denetim dizinleri korunur. Yeni kurulum betiği aynı dizini oluşturur. Bu değişiklik kümesinin bildirim yükseltmesi 0008 de uygulama dağıtımından önce tamamlanmalıdır.
-
-Etkin bir kullanıcı filtresi varken **Filtreleri Temizle** gösterilir. Tek işlemle dönem Bugün’e, kapsam sunucunun yetkili varsayılanına, kişi/proje/tür/tarih/kurumsal seçimler boş duruma ve sayfa ilk sayfaya döner. Aynı rapor ucu görünürlük ve ekip yetkilerini yeniden denetler; temizleme yetki kümesini değiştirmez.
-
-Görev Hareketleri çalışma alanında yalnız tablo gövdesinin bulunduğu alan dikey kayar; sütun başlıkları aynı tablo içinde yapışkandır. Filtreler, özet ve sayfalama alanı görünür kalır. Başlık ve satır vurguları Talepler ile aynı açık/koyu tema tokenlarını kullanır. Yaşam döngüsü kaynaklı durum, gerçek tarih ve ilerleme değişiklikleri mevcut görev denetiminde tek kaydın önce/sonra değerleriyle görünür.
