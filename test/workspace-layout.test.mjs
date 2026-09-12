@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import postcss from 'postcss';
 import { CLIENT_STATE, findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
 
+const { NAV_ITEMS } = await import('../src/components/shell/navigation.js');
 const { DashboardView } = await import('../src/features/dashboard/DashboardView.jsx');
 const { ReportsView, PerformanceReportsView } = await import('../src/features/reports/ReportsView.jsx');
 const { TaskActivitiesView } = await import('../src/features/reports/TaskActivitiesView.jsx');
@@ -75,7 +76,12 @@ test('Görev Hareketleri yalnız etkin paneli esnetir ve tek tablo kaydırma ala
   assert.ok(header && body);
   assert.equal(declaration('.activity-scroll', 'overflow'), 'auto');
   assert.equal(declaration('.activity-scroll', 'min-height'), '0');
-  assert.equal(declaration('.content-reports:has([data-report-tab="activities"])', 'overflow'), 'hidden');
+  // Kabuk içerik sınıfını gezinme KİMLİĞİNDEN üretir (`content-${view}`);
+  // rapor sayfasının kimliği `rapor`'dur. Seçici bu kimliğe bağlanmazsa kural
+  // hiçbir öğeyle eşleşmez ve tablo boş alan bırakır.
+  assert.ok(NAV_ITEMS.some((item) => item.id === 'rapor'));
+  assert.equal(declaration('.content-rapor:has([data-report-tab="activities"])', 'overflow'), 'hidden');
+  assert.equal(declaration('.content-rapor:has([data-report-tab="activities"])', 'min-height'), '0');
   assert.equal(declaration('.activity-table thead th', 'position'), 'sticky');
   assert.equal(declaration('.activity-table', 'border-collapse'), 'separate');
   assert.equal(declaration('.reports-module > [hidden]', 'display'), 'none');

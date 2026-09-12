@@ -408,8 +408,10 @@ test('elle gönderim ucu istemciden alıcı kabul etmez', () => {
 
 test('yapılandırma uçları yalnızca sistem yöneticisine açıktır', () => {
   const route = read('src/app/api/mergen-rota/admin/reminder-settings/route.js');
-  const getBody = route.slice(route.indexOf('export async function GET'), route.indexOf('export async function PUT'));
-  const putBody = route.slice(route.indexOf('export async function PUT'));
+  // İşleyiciler ölçüm sarmalayıcısıyla dışa aktarılır; gövdeler işleyici
+  // adlarıyla ayrılır (bkz. server/observability/observeOperation.js).
+  const getBody = route.slice(route.indexOf('async function handleLoadReminderSettings'), route.indexOf('async function handleSaveReminderSettings'));
+  const putBody = route.slice(route.indexOf('async function handleSaveReminderSettings'));
   assert.match(getBody, /assertReminderAdmin\(actor\)/);
   assert.match(putBody, /assertReminderAdmin\(actor\)/);
   // Yanıt yalnızca "yapılandırıldı mı" bilgisini taşır, kimlik bilgisini değil.
@@ -538,7 +540,11 @@ test('beklenmeyen SMTP yanıt kodu hata olarak yükselir', async () => {
 });
 
 test('SMTP akışı Python karşılığıyla aynı sırayı izler', () => {
-  const client = read('src/server/mail/smtpClient.js');
+  // Sıra denetimi GÖNDERİM akışında yapılır: aynı modül ayrıca ileti
+  // göndermeyen bir bağlantı denemesi (verifySmtpConnection) barındırır.
+  const client = read('src/server/mail/smtpClient.js').slice(
+    read('src/server/mail/smtpClient.js').indexOf('export async function sendSmtpMail')
+  );
   const flow = ['EHLO mergen-rota', 'STARTTLS', 'EHLO (TLS sonrası)', 'MAIL FROM:<', 'RCPT TO:<', 'DATA', 'QUIT'];
   let cursor = -1;
   for (const step of flow) {

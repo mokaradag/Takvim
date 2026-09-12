@@ -1,0 +1,608 @@
+/* ============================================================
+   MERGEN Rota · Sistem Yönetimi (işletim kokpiti)
+   ------------------------------------------------------------
+   Sayfa var olan tasarım belirteçlerini kullanır: renk, yarıçap,
+   gölge ve tipografi uygulamanın geri kalanıyla aynıdır. Burada
+   yalnızca yönetim konsoluna özgü yerleşim ve durum tonları
+   tanımlanır.
+   ============================================================ */
+
+.sysadmin-page {
+  --sys-ok: var(--status-done);
+  --sys-warn: var(--status-blocked);
+  --sys-crit: var(--status-overdue);
+  --sys-unknown: var(--text-dim);
+  --sys-idle: var(--text-dim);
+  --sys-info: var(--accent);
+  padding-bottom: 18px;
+}
+
+/* ── Durum göstergeleri ───────────────────────────────────── */
+.sysadmin-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sys-tone, var(--text));
+}
+.sysadmin-state.is-compact { font-size: 11.5px; gap: 4px; }
+.sysadmin-state-ok { --sys-tone: var(--sys-ok); }
+.sysadmin-state-warn { --sys-tone: var(--sys-warn); }
+.sysadmin-state-crit { --sys-tone: var(--sys-crit); }
+.sysadmin-state-unknown { --sys-tone: var(--sys-unknown); }
+.sysadmin-state-idle { --sys-tone: var(--sys-idle); }
+.sysadmin-state-label { color: inherit; }
+.sysadmin-state-stale {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sys-warn);
+  border: 1px solid color-mix(in oklab, var(--sys-warn) 45%, transparent);
+  border-radius: var(--r-pill);
+  padding: 0 6px;
+}
+
+.sysadmin-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sys-unknown);
+  flex: 0 0 auto;
+}
+.sysadmin-dot-ok { background: var(--sys-ok); }
+.sysadmin-dot-warn { background: var(--sys-warn); }
+.sysadmin-dot-crit { background: var(--sys-crit); }
+.sysadmin-dot-info { background: var(--sys-info); }
+
+.sysadmin-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--sys-info) 16%, transparent);
+  color: var(--sys-info);
+  white-space: nowrap;
+}
+.sysadmin-badge-warn { background: color-mix(in oklab, var(--sys-warn) 18%, transparent); color: var(--sys-warn); }
+.sysadmin-badge-crit { background: color-mix(in oklab, var(--sys-crit) 18%, transparent); color: var(--sys-crit); }
+.sysadmin-badge-info { background: color-mix(in oklab, var(--sys-info) 16%, transparent); color: var(--sys-info); }
+
+.sysadmin-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.sysadmin-chip-warn { color: var(--sys-warn); border-color: color-mix(in oklab, var(--sys-warn) 45%, transparent); }
+
+/* ── Sağlık şeridi ───────────────────────────────────────── */
+.sysadmin-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--sys-unknown);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 180ms ease, background 180ms ease;
+}
+.sysadmin-strip-ok { border-left-color: var(--sys-ok); }
+.sysadmin-strip-warn { border-left-color: var(--sys-warn); }
+.sysadmin-strip-crit {
+  border-left-color: var(--sys-crit);
+  background: color-mix(in oklab, var(--sys-crit) 6%, var(--bg-elev));
+}
+.sysadmin-strip-main { display: flex; align-items: center; gap: 10px; min-width: 240px; flex: 1 1 260px; }
+.sysadmin-strip-narrative { font-size: 12.5px; color: var(--text-muted); }
+.sysadmin-strip-components { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sysadmin-strip-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-elev-2);
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+.sysadmin-strip-chip:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.sysadmin-strip-chip-warn { border-color: color-mix(in oklab, var(--sys-warn) 40%, transparent); }
+.sysadmin-strip-chip-crit { border-color: color-mix(in oklab, var(--sys-crit) 55%, transparent); }
+.sysadmin-strip-counts { display: inline-flex; gap: 8px; margin-left: 4px; }
+.sysadmin-strip-count { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+.sysadmin-strip-count-crit { color: var(--sys-crit); }
+.sysadmin-strip-count-warn { color: var(--sys-warn); }
+.sysadmin-strip-refresh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.sysadmin-strip-updated, .sysadmin-strip-stale { font-size: 11.5px; color: var(--text-dim); }
+.sysadmin-strip-stale { color: var(--sys-warn); display: inline-flex; align-items: center; gap: 5px; }
+
+/* ── Sekmeler ────────────────────────────────────────────── */
+.sysadmin-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+.sysadmin-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.sysadmin-tab:hover { color: var(--text); background: var(--bg-hover); }
+.sysadmin-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.sysadmin-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sysadmin-panel { outline: none; animation: sysadmin-panel-in 180ms ease; }
+@keyframes sysadmin-panel-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ── Bölüm kartı ─────────────────────────────────────────── */
+.sysadmin-section { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.sysadmin-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sysadmin-section-title { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
+.sysadmin-section-title h3 { margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: 0.01em; }
+.sysadmin-section-desc {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.sysadmin-section-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+
+.sysadmin-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 26px 12px;
+  text-align: center;
+  color: var(--text-dim);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+}
+.sysadmin-empty p { margin: 0; font-size: 12.5px; color: var(--text-muted); }
+.sysadmin-empty small { font-size: 11px; }
+
+.sysadmin-inline-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--sys-crit);
+}
+.sysadmin-warning {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  border-left: 3px solid var(--sys-warn);
+}
+.sysadmin-warning code { font-size: 11.5px; }
+
+.sysadmin-skeleton { display: flex; flex-direction: column; gap: 8px; }
+.sysadmin-skeleton-row {
+  height: 14px;
+  border-radius: var(--r-sm);
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-hover) 50%, var(--bg-elev-2) 75%);
+  background-size: 240% 100%;
+  animation: sysadmin-shimmer 1.4s ease-in-out infinite;
+}
+.sysadmin-skeleton-row:nth-of-type(even) { width: 78%; }
+@keyframes sysadmin-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+
+/* ── Genel durum kahramanı ───────────────────────────────── */
+.sysadmin-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 14px 18px;
+  border-left: 3px solid var(--sys-unknown);
+}
+.sysadmin-hero-ok { border-left-color: var(--sys-ok); }
+.sysadmin-hero-warn { border-left-color: var(--sys-warn); }
+.sysadmin-hero-crit { border-left-color: var(--sys-crit); }
+.sysadmin-hero-main { display: flex; align-items: center; gap: 12px; flex: 1 1 300px; min-width: 0; }
+.sysadmin-hero-text { margin: 0; font-size: 13px; color: var(--text-muted); }
+.sysadmin-hero-meta { display: flex; gap: 22px; margin: 0; flex-wrap: wrap; }
+.sysadmin-hero-meta dt { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.sysadmin-hero-meta dd { margin: 2px 0 0; font-size: 12.5px; font-weight: 600; color: var(--text); }
+
+/* ── Dikkat gerektirenler ────────────────────────────────── */
+.sysadmin-attention-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sysadmin-attention-item {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--sys-info);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-elev-2);
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+.sysadmin-attention-item:hover { transform: translateX(2px); }
+.sysadmin-attention-warn { border-left-color: var(--sys-warn); }
+.sysadmin-attention-crit { border-left-color: var(--sys-crit); }
+.sysadmin-attention-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sysadmin-attention-head strong { font-size: 12.5px; font-weight: 600; }
+.sysadmin-attention-state { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+.sysadmin-attention-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); }
+.sysadmin-attention-action {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.sysadmin-attention-links { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ── Bileşen kartları ────────────────────────────────────── */
+.sysadmin-component-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px;
+}
+.sysadmin-component {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+.sysadmin-component:hover { border-color: var(--border-strong); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.sysadmin-component:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sysadmin-component-warn { border-color: color-mix(in oklab, var(--sys-warn) 40%, var(--border)); }
+.sysadmin-component-crit { border-color: color-mix(in oklab, var(--sys-crit) 55%, var(--border)); }
+.sysadmin-component-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sysadmin-component-head strong { font-size: 12.5px; }
+.sysadmin-component-message { font-size: 11.5px; color: var(--text-muted); }
+.sysadmin-component-meta { display: flex; gap: 12px; font-size: 10.5px; color: var(--text-dim); flex-wrap: wrap; }
+
+/* ── Gösterge kutucukları ────────────────────────────────── */
+.sysadmin-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+.sysadmin-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+  text-align: left;
+}
+.sysadmin-tile.is-clickable { cursor: pointer; transition: border-color 150ms ease, transform 150ms ease; }
+.sysadmin-tile.is-clickable:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.sysadmin-tile-warn { border-color: color-mix(in oklab, var(--sys-warn) 40%, var(--border)); }
+.sysadmin-tile-crit { border-color: color-mix(in oklab, var(--sys-crit) 55%, var(--border)); }
+.sysadmin-tile-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.sysadmin-tile-value { font-size: 18px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+.sysadmin-tile-trend { margin-top: 2px; }
+.sysadmin-tile-hint { font-size: 10.5px; color: var(--text-dim); }
+
+/* ── Grafikler ───────────────────────────────────────────── */
+.sysadmin-chart { position: relative; padding-left: 4px; }
+.sysadmin-chart svg { display: block; width: 100%; height: 190px; overflow: visible; }
+.sysadmin-chart-gridline { stroke: var(--border); stroke-dasharray: 3 4; }
+.sysadmin-chart-cursor { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.6; }
+.sysadmin-chart-line { transition: d 220ms ease; }
+.sysadmin-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 140px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+}
+.sysadmin-chart-empty p { margin: 0; font-size: 12px; color: var(--text-dim); }
+.sysadmin-chart-axis-y {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  bottom: 26px;
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: right;
+  pointer-events: none;
+}
+.sysadmin-chart-axis-x {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 6px 0 46px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.sysadmin-chart-tip {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-md);
+  font-size: 11px;
+  pointer-events: none;
+}
+.sysadmin-chart-tip strong { font-size: 10.5px; color: var(--text-dim); font-weight: 600; }
+.sysadmin-chart-tip span, .sysadmin-chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sysadmin-chart-tip i, .sysadmin-chart-legend i { width: 8px; height: 8px; border-radius: 2px; }
+.sysadmin-chart-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 6px 0 0 46px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.sysadmin-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+
+/* ── Araç çubuğu ve süzgeçler ────────────────────────────── */
+.sysadmin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sysadmin-toolbar-title { font-size: 12px; color: var(--text-dim); }
+.sysadmin-toolbar-right { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+.sysadmin-range button { font-size: 11.5px; }
+.sysadmin-stale-note { font-size: 11.5px; color: var(--sys-warn); }
+
+.sysadmin-filters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  padding: 12px 14px;
+}
+.sysadmin-filter { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.sysadmin-filter-grow { flex: 1 1 220px; }
+.sysadmin-filter span { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.sysadmin-filter .input { font-size: 12px; }
+
+/* ── Tablolar ────────────────────────────────────────────── */
+.sysadmin-table-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); }
+.sysadmin-table { font-size: 12px; }
+.sysadmin-table thead th { background: var(--bg-elev-2); z-index: var(--z-sticky); }
+.sysadmin-table-caption {
+  caption-side: top;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.sysadmin-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.sysadmin-sort-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sysadmin-op-name { font-family: var(--font-mono); font-size: 11.5px; }
+.sysadmin-ref { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.sysadmin-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 11.5px; }
+
+/* ── Akış ────────────────────────────────────────────────── */
+.sysadmin-feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sysadmin-feed li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.sysadmin-feed li:last-child { border-bottom: 0; }
+.sysadmin-feed-summary { color: var(--text); min-width: 0; }
+.sysadmin-feed-meta { margin-left: auto; font-size: 10.5px; color: var(--text-dim); white-space: nowrap; }
+
+/* ── Uyarılar ────────────────────────────────────────────── */
+.sysadmin-alert-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sysadmin-alert {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--sys-info);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-elev-2);
+}
+.sysadmin-alert-warn { border-left-color: var(--sys-warn); }
+.sysadmin-alert-crit { border-left-color: var(--sys-crit); }
+.sysadmin-alert-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sysadmin-alert-head strong { font-size: 12.5px; }
+.sysadmin-alert-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); }
+.sysadmin-alert-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ── Çalışan satırı ve eylemler ──────────────────────────── */
+.sysadmin-worker-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-muted); }
+.sysadmin-confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sysadmin-confirm-text { font-size: 11px; color: var(--sys-warn); }
+.sysadmin-action-result { display: flex; align-items: center; gap: 9px; padding: 11px 14px; font-size: 12.5px; }
+.sysadmin-action-success { border-left: 3px solid var(--sys-ok); }
+.sysadmin-action-error { border-left: 3px solid var(--sys-crit); color: var(--text); }
+
+/* ── Kaynak listesi ──────────────────────────────────────── */
+.sysadmin-resource-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px 18px; }
+.sysadmin-resource-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.sysadmin-resource-row span { color: var(--text-dim); }
+
+/* ── Entegrasyonlar ──────────────────────────────────────── */
+.sysadmin-integration-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.sysadmin-integration {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--bg-elev-2);
+}
+.sysadmin-integration-main { display: flex; gap: 11px; align-items: flex-start; }
+.sysadmin-integration-main strong { font-size: 13px; }
+.sysadmin-integration-kind { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.sysadmin-integration-message { font-size: 12px; color: var(--text-muted); }
+.sysadmin-integration-meta { display: flex; gap: 22px; margin: 0; flex-wrap: wrap; }
+.sysadmin-integration-meta dt { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.sysadmin-integration-meta dd { margin: 2px 0 0; font-size: 12px; color: var(--text); }
+.sysadmin-integration-missing { margin: 0; font-size: 11.5px; color: var(--sys-warn); }
+.sysadmin-integration-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sysadmin-test-result { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.sysadmin-test-result.is-ok { color: var(--sys-ok); }
+.sysadmin-test-result.is-fail { color: var(--sys-crit); }
+
+/* ── Çekmece ─────────────────────────────────────────────── */
+.sysadmin-drawer-title { margin: 0; font-size: 15px; font-weight: 650; }
+.sysadmin-drawer-subtitle { margin: 0; font-size: 11.5px; color: var(--text-dim); }
+.sysadmin-drawer-field {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.sysadmin-drawer-field span { color: var(--text-dim); }
+.sysadmin-drawer-field strong { text-align: right; word-break: break-word; }
+.sysadmin-drawer-message { margin: 0; font-size: 12.5px; color: var(--text-muted); }
+.sysadmin-drawer-action { display: flex; align-items: center; gap: 6px; }
+.sysadmin-drawer-json {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Demo kipi ───────────────────────────────────────────── */
+.sysadmin-demo-notice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-left: 3px solid var(--accent);
+}
+.sysadmin-demo-notice strong { font-size: 13px; }
+.sysadmin-demo-notice p { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
+
+/* ── Hareket ─────────────────────────────────────────────── */
+.sysadmin-spin { animation: sysadmin-rotate 900ms linear infinite; }
+@keyframes sysadmin-rotate { to { transform: rotate(360deg); } }
+
+/* Kritik durum dikkat çeker ama sürekli yanıp sönmez: tek seferlik,
+   yumuşak bir vurgu yöneticinin okumasını engellemez. */
+.sysadmin-strip-crit { animation: sysadmin-attention 420ms ease-out 1; }
+@keyframes sysadmin-attention {
+  from { box-shadow: 0 0 0 0 color-mix(in oklab, var(--sys-crit) 40%, transparent); }
+  to { box-shadow: 0 0 0 7px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sysadmin-panel,
+  .sysadmin-strip-crit,
+  .sysadmin-skeleton-row,
+  .sysadmin-spin { animation: none; }
+  .sysadmin-component,
+  .sysadmin-tile.is-clickable,
+  .sysadmin-attention-item,
+  .sysadmin-strip-chip { transition: none; }
+  .sysadmin-component:hover,
+  .sysadmin-tile.is-clickable:hover,
+  .sysadmin-attention-item:hover,
+  .sysadmin-strip-chip:hover { transform: none; }
+}
+
+/* ── Dar ekran ───────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .sysadmin-strip-refresh { margin-left: 0; width: 100%; justify-content: space-between; }
+  .sysadmin-hero-meta { gap: 14px; }
+  .sysadmin-section { padding: 14px; }
+  .sysadmin-tile-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .sysadmin-component-grid { grid-template-columns: 1fr; }
+  .sysadmin-attention-state { margin-left: 0; }
+  .sysadmin-section-actions { margin-left: 0; }
+  .sysadmin-toolbar-right { margin-left: 0; }
+}

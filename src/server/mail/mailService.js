@@ -1,6 +1,6 @@
 import 'server-only';
 import { getSmtpConfig, smtpConfigurationProblem } from './smtpConfig.js';
-import { SmtpError, sendSmtpMail } from './smtpClient.js';
+import { SmtpError, sendSmtpMail, verifySmtpConnection } from './smtpClient.js';
 
 /**
  * Yeniden kullanılabilir posta hizmeti.
@@ -30,6 +30,28 @@ const MAIL_ERROR_MESSAGES = Object.freeze({
 /** Kullanıcıya gösterilebilir, gizli bilgi taşımayan hata iletisi. */
 export function mailErrorMessage(code, fallback = MAIL_ERROR_MESSAGES.SMTP_SEND_FAILED) {
   return MAIL_ERROR_MESSAGES[code] || fallback;
+}
+
+/**
+ * SMTP bağlantısını DENER; ileti göndermez.
+ *
+ * Sistem Yönetimi · Entegrasyonlar sekmesindeki "Bağlantıyı Test Et" eylemi
+ * bunu kullanır. Sonuç `sendMail` ile aynı sözleşmeyi taşır: gizli bilgi
+ * içermeyen kod ve ileti.
+ *
+ * @returns {Promise<{ok: true, durationMs: number, startTls: boolean, authAnnounced: boolean}
+ *   | {ok: false, code: string, message: string}>}
+ */
+export async function verifyMailConnection({ signal = null } = {}) {
+  const problem = smtpConfigurationProblem();
+  if (problem) return { ok: false, code: problem, message: mailErrorMessage(problem) };
+  try {
+    const result = await verifySmtpConnection(getSmtpConfig(), { signal });
+    return { ok: true, durationMs: result.durationMs, startTls: result.startTls, authAnnounced: result.authAnnounced };
+  } catch (error) {
+    const code = error instanceof SmtpError ? error.code : 'SMTP_CONNECTION_FAILED';
+    return { ok: false, code, message: mailErrorMessage(code, MAIL_ERROR_MESSAGES.SMTP_CONNECTION_FAILED) };
+  }
 }
 
 /**

@@ -508,6 +508,103 @@ BEGIN TRY
         ON dbo.MR_TaskOutlookSubscriptions(UserSicil, IsActive)
         INCLUDE (TaskId, PendingMethod, DeliveredSequence, LastFailureCode);
 
+    /* ── Sistem Yönetimi · üretim gözlemlenebilirliği ──────────────────────
+       İşlem gözlemleri her istek için satır üretmez: uygulama bunları bellekte
+       beş dakikalık kovalarda toplar ve yalnızca KAPANMIŞ kovanın özetini
+       yazar. Saklama sınırlıdır (varsayılan 30 gün) ve eski satırlar telemetri
+       turunda parça parça silinir. */
+    CREATE TABLE dbo.MR_TelemetryOperationSamples (
+        BucketStart datetime2(0) NOT NULL,
+        Operation nvarchar(100) NOT NULL,
+        SampleCount int NOT NULL,
+        ErrorCount int NOT NULL CONSTRAINT DF_MR_TelemetryOperation_ErrorCount DEFAULT (0),
+        DurationSumMs bigint NOT NULL CONSTRAINT DF_MR_TelemetryOperation_DurationSum DEFAULT (0),
+        DurationMaxMs int NOT NULL CONSTRAINT DF_MR_TelemetryOperation_DurationMax DEFAULT (0),
+        P50Ms int NULL,
+        P95Ms int NULL,
+        P99Ms int NULL,
+        TopFailureCode varchar(60) NULL,
+        CONSTRAINT PK_MR_TelemetryOperationSamples PRIMARY KEY (BucketStart, Operation),
+        CONSTRAINT CK_MR_TelemetryOperation_Counts CHECK (SampleCount >= 0 AND ErrorCount >= 0 AND ErrorCount <= SampleCount)
+    );
+
+    CREATE INDEX IX_MR_TelemetryOperationSamples_Bucket
+        ON dbo.MR_TelemetryOperationSamples(BucketStart)
+        INCLUDE (Operation, SampleCount, ErrorCount, DurationSumMs, DurationMaxMs, P50Ms, P95Ms, P99Ms);
+
+    CREATE TABLE dbo.MR_TelemetryGaugeSamples (
+        BucketStart datetime2(0) NOT NULL,
+        MetricKey varchar(60) NOT NULL,
+        SampleCount int NOT NULL,
+        ValueAvg float NOT NULL,
+        ValueMin float NOT NULL,
+        ValueMax float NOT NULL,
+        CONSTRAINT PK_MR_TelemetryGaugeSamples PRIMARY KEY (BucketStart, MetricKey),
+        CONSTRAINT CK_MR_TelemetryGauge_SampleCount CHECK (SampleCount > 0)
+    );
+
+    CREATE INDEX IX_MR_TelemetryGaugeSamples_Metric
+        ON dbo.MR_TelemetryGaugeSamples(MetricKey, BucketStart)
+        INCLUDE (SampleCount, ValueAvg, ValueMin, ValueMax);
+
+    /* Kalıcı işletim olayları. Yinelenen özdeş olaylar yazılmadan önce tek
+       satırda toplanır: sekiz yüz aynı SMTP hatası sekiz yüz satır üretmez. */
+    CREATE TABLE dbo.MR_OperationalEvents (
+        OperationalEventId bigint IDENTITY(1, 1) NOT NULL
+            CONSTRAINT PK_MR_OperationalEvents PRIMARY KEY,
+        OccurredAt datetime2(3) NOT NULL CONSTRAINT DF_MR_OperationalEvents_OccurredAt DEFAULT SYSUTCDATETIME(),
+        Severity varchar(10) NOT NULL,
+        Component varchar(40) NOT NULL,
+        EventCode varchar(60) NOT NULL,
+        Summary nvarchar(300) NOT NULL,
+        Detail nvarchar(1000) NULL,
+        CorrelationId varchar(64) NULL,
+        OccurrenceCount int NOT NULL CONSTRAINT DF_MR_OperationalEvents_Occurrences DEFAULT (1),
+        ContextJson nvarchar(2000) NULL,
+        CONSTRAINT CK_MR_OperationalEvents_Severity CHECK (Severity IN ('INFO', 'WARNING', 'ERROR', 'CRITICAL')),
+        CONSTRAINT CK_MR_OperationalEvents_Occurrences CHECK (OccurrenceCount > 0)
+    );
+
+    CREATE INDEX IX_MR_OperationalEvents_OccurredAt
+        ON dbo.MR_OperationalEvents(OccurredAt DESC)
+        INCLUDE (Severity, Component, EventCode, Summary, OccurrenceCount);
+    CREATE INDEX IX_MR_OperationalEvents_Component
+        ON dbo.MR_OperationalEvents(Component, OccurredAt DESC)
+        INCLUDE (Severity, EventCode);
+
+    /* Otomatik uyarılar. Etkin uyarı anahtarı BENZERSİZDİR: aynı koşul ikinci
+       bir satır açamaz, yalnızca sayacı ilerletir. Çözülen uyarı geçmişte kalır
+       ve koşul yeniden görülürse yeni bir kayıt açılır. */
+    CREATE TABLE dbo.MR_OperationalAlerts (
+        OperationalAlertId bigint IDENTITY(1, 1) NOT NULL
+            CONSTRAINT PK_MR_OperationalAlerts PRIMARY KEY,
+        AlertKey varchar(200) NOT NULL,
+        Severity varchar(10) NOT NULL,
+        Component varchar(40) NOT NULL,
+        EventCode varchar(60) NOT NULL,
+        Summary nvarchar(300) NOT NULL,
+        Detail nvarchar(1000) NULL,
+        State varchar(20) NOT NULL CONSTRAINT DF_MR_OperationalAlerts_State DEFAULT ('OPEN'),
+        OccurrenceCount int NOT NULL CONSTRAINT DF_MR_OperationalAlerts_Occurrences DEFAULT (1),
+        FirstSeenAt datetime2(3) NOT NULL CONSTRAINT DF_MR_OperationalAlerts_FirstSeen DEFAULT SYSUTCDATETIME(),
+        LastSeenAt datetime2(3) NOT NULL CONSTRAINT DF_MR_OperationalAlerts_LastSeen DEFAULT SYSUTCDATETIME(),
+        AcknowledgedAt datetime2(3) NULL,
+        AcknowledgedBySicil int NULL,
+        ResolvedAt datetime2(3) NULL,
+        CorrelationId varchar(64) NULL,
+        ContextJson nvarchar(2000) NULL,
+        CONSTRAINT CK_MR_OperationalAlerts_Severity CHECK (Severity IN ('INFO', 'WARNING', 'ERROR', 'CRITICAL')),
+        CONSTRAINT CK_MR_OperationalAlerts_State CHECK (State IN ('OPEN', 'ACKNOWLEDGED', 'RESOLVED')),
+        CONSTRAINT CK_MR_OperationalAlerts_Occurrences CHECK (OccurrenceCount > 0)
+    );
+
+    CREATE UNIQUE INDEX UX_MR_OperationalAlerts_ActiveKey
+        ON dbo.MR_OperationalAlerts(AlertKey)
+        WHERE State <> 'RESOLVED';
+    CREATE INDEX IX_MR_OperationalAlerts_LastSeen
+        ON dbo.MR_OperationalAlerts(LastSeenAt DESC)
+        INCLUDE (Severity, Component, EventCode, State);
+
     /* Gruplama NORMALLESTIRILMIS ifadeler uzerinden yapilir. Ham sutunlarla
        gruplanirken '' abc '' ve ''ABC'' iki ayri grup uretiyor, gorunum ayni
        ProjectCode degerini tasiyan iki satir donduruyordu; ayni kod icin farkli
@@ -640,7 +737,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0008_request_notifications', N'Talep geçmişinden ayrı bildirim durumu ve kalıcı görev künyesi'),
            (N'0009_task_activity_report', N'Görev hareket raporu için tür ve tarih aralığı dizini'),
            (N'0010_outlook_calendar_subscriptions', N'Görev/Sicil Outlook takvim abonelikleri ve dayanıklı gönderim kuyruğu'),
-           (N'0011_outlook_completion_lifecycle', N'Outlook tamamlanma, yeniden açılma ve iptal nedeni');
+           (N'0011_outlook_completion_lifecycle', N'Outlook tamamlanma, yeniden açılma ve iptal nedeni'),
+           (N'0012_system_observability', N'Sistem Yönetimi telemetri toplamları, işletim olayları ve otomatik uyarılar');
 
     COMMIT TRANSACTION;
 END TRY

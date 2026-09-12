@@ -209,6 +209,23 @@ export const OUTLOOK_HEALTH_SQL = `
   SELECT COUNT_BIG(*) AS Exhausted FROM dbo.MR_TaskOutlookSubscriptions
   WHERE PendingMethod IS NOT NULL AND AttemptCount >= @maxAttempts;`;
 
+/**
+ * Yöneticinin "Başarısızları Yeniden Dene" eylemi.
+ *
+ * Deneme sayacı ve bir sonraki deneme anı sıfırlanır; `QueueSeq`, `Sequence` ve
+ * bekleyen sürümün künyesi DEĞİŞMEZ. Böylece aynı davet yeniden gönderilir ve
+ * Outlook UID/SEQUENCE bütünlüğü ile eski kuyruk kuşağının yeni niyeti ezmeme
+ * güvencesi korunur. Sahiplenilmiş (kiralı) kayıtlara dokunulmaz: süren bir
+ * teslimat kesilmemelidir.
+ */
+export const OUTLOOK_RETRY_FAILED_SQL = `
+  UPDATE dbo.MR_TaskOutlookSubscriptions
+  SET AttemptCount = 0, NextAttemptAt = NULL, UpdatedAt = SYSUTCDATETIME()
+  OUTPUT inserted.SubscriptionId
+  WHERE PendingMethod IS NOT NULL
+    AND LastFailureCode IS NOT NULL
+    AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt <= SYSUTCDATETIME());`;
+
 export const OUTLOOK_QUEUE_STATUS_SQL = `
   SELECT COUNT_BIG(*) AS Pending,
     COUNT_BIG(CASE WHEN LastFailureCode IS NOT NULL THEN 1 END) AS Failed,

@@ -10,7 +10,7 @@ import { SearchableSelect } from '../SearchableSelect';
 import { DashboardView } from '../../features/dashboard/DashboardView';
 import { TasksView } from '../../features/tasks/TasksView';
 import { SimpleTasksView } from '../../features/tasks/SimpleTasksView';
-import { ReminderSettingsView } from '../../features/reminders/ReminderSettingsView';
+import { SystemAdministrationView } from '../../features/system-admin/SystemAdministrationView';
 import { ProjectWorkspaceView } from '../../features/project/ProjectWorkspaceView';
 import { CalendarView } from '../../features/calendar/CalendarView';
 import { WorkspaceGanttView } from '../../features/gantt/WorkspaceGanttView';
@@ -46,6 +46,7 @@ import { ModeChooser } from './ModeChooser';
 import { DataRefreshControl } from './DataRefreshControl';
 import {
   ADMIN_NAV_IDS,
+  GLOBAL_NAV_IDS,
   NAV_ITEMS,
   PAGE_META,
   nextSimpleCalendarTab,
@@ -266,7 +267,7 @@ export default function AppShell() {
     kisi: people.length,
     yardim: null,
     ayarlar: null,
-    hatirlatma: null
+    sistem: null
   }), [tasks.length, wbs.length, projects.length, people.length, workspaceMode]);
 
   const visibleNavItems = navigationItems(simpleMode, isSystemAdmin);
@@ -315,15 +316,18 @@ export default function AppShell() {
       case 'ayarlar': return <SettingsView t={t} setTweak={setTweak} />;
       // Yönetici sayfası: gezinme öğesi gizlense bile doğrudan geçiş
       // denendiğinde de yalnızca yönetici görebilir. Sunucu ayrıca denetler.
-      case 'hatirlatma': return isSystemAdmin ? <ReminderSettingsView /> : null;
+      case 'sistem': return isSystemAdmin ? <SystemAdministrationView /> : null;
       default: return null;
     }
   };
 
   const meta = PAGE_META[view] || PAGE_META.ozet;
   const workspaceKey = `${workspaceMode}:${selectedProjectId || 'all'}:${simpleMode ? 'simple' : 'advanced'}`;
-  const projectContextVisible = !simpleMode && selectedProject && view !== 'ayarlar' && view !== 'yardim';
-  const exportVisible = !simpleMode && view !== 'ayarlar' && view !== 'yardim';
+  // Genel (proje kapsamı olmayan) sayfalarda proje künyesi ve dışa aktarma
+  // GÖSTERİLMEZ: Sistem Yönetimi bütün sisteme aittir, seçili projeye değil.
+  const globalPage = GLOBAL_NAV_IDS.has(view);
+  const projectContextVisible = !simpleMode && selectedProject && !globalPage;
+  const exportVisible = !simpleMode && !globalPage;
   const calendarContentActive = view === 'takvim' && (!simpleMode || simpleCalendarTab === 'calendar');
 
   // İlk açılış akışlarında ana uygulama hiç render edilmez. Böylece Özet üst çubuğu,

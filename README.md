@@ -155,7 +155,7 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
-2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
+2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
 5. Outlook teslimatı veya elle/otomatik hatırlatma kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
@@ -256,6 +256,18 @@ paket gerekmez. Her iki çıktıda da `=`, `+`, `-`, `@` ile başlayan metin for
 enjeksiyonuna karşı nötrlenir ve dışarı yalnızca ekranda da görülen alanlar
 çıkar — iç kimlikler, sürüm anahtarları ve yetki alanları taşınmaz.
 
+## Sistem Yönetimi ve üretim gözlemlenebilirliği
+
+Kenar çubuğundaki **Sistem Yönetimi** sayfası yalnızca `SYSTEM_ADMIN` rolüne açıktır ve bir yapılandırma dökümü değil bir **işletim kokpitidir**: sistem sağlıklı mı, ne bozuk, ne zaman bozuldu, ne yapmalıyım. Altı sekme vardır: **Genel Durum**, **Performans**, **Kuyruklar ve İşler**, **Hatalar ve Olaylar**, **Entegrasyonlar** ve **Hatırlatma E-postaları**. Hatırlatma yönetimi bağımsız bir sayfa olmaktan çıkıp bu sayfanın sekmesine taşınmıştır; davranışı değişmemiştir.
+
+Gezinme öğesini gizlemek güvenlik değildir: `/api/mergen-rota/admin/system/*` uçlarının tümü yetkiyi her istekte yeniden denetler ve yetkisiz kullanıcıya `403 FORBIDDEN` döner. Sayfa Temel ve Kapsamlı Kipte aynı biçimde açılır, projeye değil sisteme aittir (üst çubukta proje künyesi ve dışa aktarma gösterilmez) ve rol kaybında kullanıcıyı güvenle Özet'e alır.
+
+Durum modeli dürüsttür: **Sağlıklı · Dikkat · Kritik · Bilinmiyor** ve ayrı bir **bayat** bayrağı. Ölçülemeyen bileşen hiçbir koşulda sağlıklı sayılmaz; SQL yoklanamadığında durum `Bilinmiyor`/`Kritik` olur, `Sağlıklı` olmaz. Genel durum bileşenlerden türetilir, kodlanmaz.
+
+Telemetri **üretim güvenlidir**: yüksek sıklıklı gözlemler bellekte beş dakikalık kovalarda toplanır, yalnızca kapanmış kovaların özeti SQL'e yazılır (`MR_TelemetryOperationSamples`, `MR_TelemetryGaugeSamples`), işletim olayları ve otomatik uyarılar yinelenenler toplanarak saklanır (`MR_OperationalEvents`, `MR_OperationalAlerts`). Saklama sınırlıdır (varsayılan 30 gün) ve temizlik küçük yığınlar hâlinde yapılır. Telemetri hatası çekirdek uygulamayı düşürmez; 0012 göçü uygulanmadığında konsol çalışmaya devam eder ve eksik şemayı açıkça bildirir.
+
+Konsol yoklama ile tazelenir (varsayılan 10 sn): üst üste binen istek yoktur, gizli sekmede yoklama durur, dönüşte bayat veri hemen tazelenir ve geçici bir hata son geçerli bilgiyi silmez. Bu döngü normal görev verisi yenilemesinden bağımsızdır. Demo Kipinde üretim uçları hiç çağrılmaz. Yönetim yanıtları parola, jeton, çerez, bağlantı dizesi, SMTP kimlik bilgisi, iCalendar gövdesi ve gereksiz alıcı adresi taşımaz. Ayrıntılar: `docs/SYSTEM-ADMINISTRATION.md`.
+
 ## Görev hatırlatma postaları
 
 Her görev için sorumlularına hatırlatma e-postası gönderilebilir. İki akış vardır ve ikisi de aynı alıcı çözümleme, şablon işleme ve SMTP servisini kullanır:
@@ -263,7 +275,7 @@ Her görev için sorumlularına hatırlatma e-postası gönderilebilir. İki ak�
 - **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki kipte). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
 - **Otomatik gönderim** — yöneticinin belirlediği pencere (`kalan süre = termin - şimdi`, örn. 7 gün) ve sıklıkla (örn. 2 günde bir) sunucu tarafındaki zamanlayıcı üzerinden. Görev tamamlandığında, iptal edildiğinde, silindiğinde, otomatik gönderim kapatıldığında veya termin gününe ulaşıldığında durur; sınırsız gecikme postası gönderilmez.
 
-Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Hatırlatma** yönetici sayfasından düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur.
+Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Sistem Yönetimi → Hatırlatma E-postaları** sekmesinden düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur.
 
 Elle gönderim, aynı kullanıcı–görev çifti için **beş dakikada bir** ile
 sınırlıdır (`429` + `retry-after`); şifrelenmemiş bir SMTP kanalında kimlik

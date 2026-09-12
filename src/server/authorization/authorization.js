@@ -87,6 +87,19 @@ export function assertProjectWriteAccess(effective, projectId) {
   }
 }
 
+/**
+ * Sistem yönetimi uçlarının TEK yetki kapısı.
+ *
+ * Gezinme öğesini gizlemek güvenlik değildir: her yönetim ucu, oturumdan
+ * türetilen yetkiyi bağımsız olarak yeniden denetler ve yetkisiz kullanıcıya
+ * FORBIDDEN döner.
+ */
+export function assertSystemAdmin(actor) {
+  if (!actor?.isSystemAdmin) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Sistem Yönetimi yalnızca sistem yöneticilerine açıktır.');
+  }
+}
+
 export function assertCanCreateManualProject({ isSystemAdmin, isExecutive }) {
   if (!isSystemAdmin && !isExecutive) {
     throw new ServerPersistenceError('FORBIDDEN', 'Yalnızca sistem yöneticileri ve kurumsal yöneticiler manuel proje oluşturabilir.');

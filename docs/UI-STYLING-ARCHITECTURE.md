@@ -13,8 +13,9 @@ Current root sequence:
 3. `src/app/styles/shell.css` — application shell, sidebar, topbar, project identity and export menu.
 4. `src/app/styles/dashboard.css` — Dashboard/Özet structural layout and status-donut presentation.
 5. `src/app/styles/features.css` — Gantt, WBS and Task Detail feature layout contracts.
-6. `src/app/styles/simple-mode.css` — Temel Kip quick-entry and calendar-tab presentation.
-7. `src/app/styles/experience.css` — mode chooser, settings-mode cards and help/onboarding surfaces.
+6. `src/app/styles/system-admin.css` — Sistem Yönetimi console: health strip, tabs, section cards, metric tiles, charts and detail drawer.
+7. `src/app/styles/simple-mode.css` — Temel Kip quick-entry and calendar-tab presentation.
+8. `src/app/styles/experience.css` — mode chooser, settings-mode cards and help/onboarding surfaces.
 
 ## 2. Ownership map
 
@@ -32,6 +33,8 @@ Current root sequence:
 | WBS (toolbar, tree controls, tree table) | `src/app/styles/features.css` (`Proje Yapısı` section) |
 | Team directory (`.team-*`) | `src/app/styles/features.css` (`Ekip` section) |
 | Task Detail drawer | `src/app/styles/features.css` (`Task Detail` section) |
+| Sistem Yönetimi console (`.sysadmin-*`) | `src/app/styles/system-admin.css` |
+| Sticky workspace strips (`.workspace-sticky`) | `src/app/styles/features.css` |
 | Simple Mode | `src/app/styles/simple-mode.css` |
 | Shared component chrome | `src/app/styles/components.css` |
 | Mode chooser/settings/help presentation | `src/app/styles/experience.css` |

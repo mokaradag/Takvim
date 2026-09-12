@@ -112,20 +112,56 @@ Mevcut kurulum için:
 
 1. Veritabanını yedekleyin, eski uygulama çalışanlarını durdurun.
 2. Eksik önceki göçleri sırayla tamamlayın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` uygulanmış olmalıdır. PR #72’nin güncel 0010 sürümü zaten varsa 0010’ı tekrar çalıştırmak gerekmez.
-3. **`database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` çalıştırın.** PR #72/0010 bulunan kurulumlar da bu yeni tamamlanma göçünü uygulamalıdır. Göç yinelenebilir, UID/sıra/abonelikleri korur; eski belirsiz iptaller kendiliğinden yeniden etkinleştirilmez.
+3. **`database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, ardından `database/MR_Upgrade_0012_System_Observability.sql` çalıştırın.** PR #72/0010 bulunan kurulumlar da bu yeni tamamlanma göçünü uygulamalıdır. Göç yinelenebilir, UID/sıra/abonelikleri korur; eski belirsiz iptaller kendiliğinden yeniden etkinleştirilmez.
 4. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` her iki göçün son şemasını içerir; dolu veritabanında temiz kurulum betiğini kullanmayın.
 5. SMTP, kurumsal dizin, ODBC/SQL ve kimlik yapılandırmasını doğrulayın. Ayrıntılar: [Kalıcı kurulum](DURABLE-PERSISTENCE.md), [SMTP/hatırlatmalar](TASK-REMINDERS.md).
 6. `npm ci`, `npm run build`, ardından mevcut yönetilen Node hizmetini başlatın. Outlook için OS zamanlayıcısı kurmayın; **yalnız otomatik hatırlatma e-postaları** isteniyorsa mevcut Windows Task Scheduler/cron gerekir.
 
 Özelliği kapatmak için `MERGEN_ROTA_OUTLOOK_CALENDAR_ENABLED=false` kullanılır; kalıcı kuyruk silinmez. Tam şema geri alma betiği `MR_Rollback_Durable_Persistence.sql` bütün MR uygulama verilerini siler; Outlook özelliğini kapatmak için kullanılmaz.
 
+## İleti biçimi (MIME)
+
+Davet ve iptal iletileri **tek** bir `multipart/alternative` gövde taşır:
+
+```
+Content-class: urn:content-classes:calendarmessage
+Content-Type: multipart/alternative
+  ├── text/plain
+  ├── text/html
+  └── text/calendar; charset="UTF-8"; method=REQUEST|CANCEL
+```
+
+Takvim içeriğinin **ikinci bir kopyası ek olarak gönderilmez**. Aynı içerik hem
+alternatif parçada hem de ayrı bir `application/ics` ekinde taşındığında Outlook
+iletiyi takvim öğesi olarak işlemek yerine iki dosya eki gösteriyordu
+(`not supported calendar message.ics` ve `mergen-rota.ics`). Tek alternatif
+parça, davet ve iptal iletilerinin doğrudan takvim öğesi olarak açılmasını
+sağlar. Takvim parçası base64 taşınır: CRLF satır sonları ve Türkçe karakterler
+aktarım boyunca bozulmaz. Hatırlatma e-postaları takvim parçası taşımaz ve
+yapıları değişmemiştir.
+
 ## Yönetici tanısı
+
+Kuyruk, çalışan ve teslimat sağlığı **Sistem Yönetimi → Kuyruklar ve İşler**
+sekmesinde izlenir (`docs/SYSTEM-ADMINISTRATION.md`): çalışan nabzı, bekleyen /
+hazır / işleniyor / hatalı / deneme eşiğini aşan sayıları, **en eski bekleyen
+kayıt yaşı**, en yüksek deneme sayısı, son başarılı teslimat ve bekleyen
+kayıtların güvenli künyesi. Kritik UX kuralı: dolu kuyruk kendiliğinden sorun
+değildir, YAŞLANAN kuyruk sorundur. Alıcı adresi, takvim kimliği ve ileti
+içeriği hiçbir yönetim yanıtında yer almaz.
+
+Aynı sekmedeki iki onaylı eylem güvenlidir: **Şimdi Çalıştır** bekleyen
+teslimatları çalışanla aynı kiralı sahiplenme yolundan işler (ikinci davet
+üretmez); **Başarısızları Yeniden Dene** yalnızca deneme sayacını ve sonraki
+deneme anını sıfırlar — `QueueSeq` ve iCalendar `SEQUENCE` değişmez, kiralı
+(süren) teslimata dokunulmaz, böylece eski bir kuyruk kuşağı yeni niyeti ezemez.
+Yıkıcı bir "kuyruğu temizle" eylemi bilinçli olarak yoktur.
 
 `POST /api/mergen-rota/reminders/run`, SYSTEM_ADMIN veya mevcut reminder scheduler anahtarıyla sınırlıdır. Hatırlatma ve Outlook turlarını bağımsız başlatır. `reminders.ok=false`, pozitif `failed` veya herhangi bir `results[].status=FAILED`, Outlook başarılı olsa da toplam `ok=false` ve **HTTP 503** üretir. Başarısızlıklar güvenli kodlarıyla gösterilir; bir tarafın başarısı diğerinin hatasını gizlemez. Başarılı/kapalı iki taraf HTTP 200 üretir. Ham SQL, parolalar, adresler veya takvim gövdeleri tanı yanıtına yazılmaz.
 
 Otomatik çalışanda önce SQL bağlantısını edinmek için en çok **15 saniye**, ardından kuyruk işlemleri için `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` (varsayılan **45 saniye**) ayrılır. `completeOutlookDelivery` ve `failOutlookDelivery` işlemlerinin **her biri yeni ve bağımsız 5 saniyelik** sonuçlandırma süresine sahiptir. Böylece sonuç yazımı zaman aşımına uğrasa bile hata ve yeniden deneme zamanı kaydedilebilir. Tek sonuçlandırmayla otomatik turun toplamı **65 saniyeye**, sonuç yazımının ardından hata yazımı da gerekirse **70 saniyeye** kadar çıkabilir. Yönetici tanı ucunun Outlook kuyruk bütçesi 10 saniyedir; bu bütçe bağlantı edinme, sonuçlandırma ve ayrı hatırlatma turunun toplam süresi değildir. Tarayıcı `REQUEST_TIMEOUT` sonucu, işlemin sonucunun henüz doğrulanmadığını belirtir.
 
-SYSTEM_ADMIN-only GET ortak veritabanından pending/due/inFlight/failed/exhausted sayılarını ve **yerel Node sürecinin** son otomatik turunu verir. Son tur bütün sunucuların toplamı değildir. Yönetici ekranı görünürken 15 saniyede yenilenir; kaydedilmemiş hatırlatma taslağı değiştirilmez.
+SYSTEM_ADMIN-only GET ortak veritabanından pending/due/inFlight/failed/exhausted sayılarını ve **yerel Node sürecinin** son otomatik turunu verir. Son tur bütün sunucuların toplamı değildir. Yönetici ekranı görünürken 15 saniyede yenilenir; kaydedilmemiş hatırlatma taslağı değiştirilmez. Kuyruk tıkanması, çalışan nabzının eskimesi ve deneme eşiğinin dolması ayrıca `OUTLOOK_QUEUE_AGING`, `OUTLOOK_WORKER_STALE` ve `OUTLOOK_DELIVERY_FAILED` işletim uyarıları üretir.
 
 Güvenli tanılar: `SMTP_*`, `NO_RECIPIENT_ADDRESS`, `DATABASE_UNAVAILABLE`, `DATABASE_TIMEOUT`, `DATABASE_DEADLOCK`, `DATABASE_QUERY_FAILED`, `OUTLOOK_LEASE_LOST`, `OUTLOOK_RUN_TIMEOUT`, `OUTLOOK_RETRY_EXHAUSTED`, `OUTLOOK_SCHEMA_MISSING`. Sistem düzeldiğinde eşiğe ulaşmamış satırlar otomatik yeniden denenir; `exhausted` satırlar ise açık ekleme/yeniden gönderme/kaldırma eylemiyle deneme durumu sıfırlanana kadar bekler.
 

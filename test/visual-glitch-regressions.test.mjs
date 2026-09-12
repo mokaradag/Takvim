@@ -134,3 +134,71 @@ test('tarih talebi merkezi boş liste geçişinde paneli kapatır ve boşken yen
   open = reduceScheduleRequestCenterOpen(open, { type: 'toggle', hasRequests: view.hasRequests });
   assert.equal(open, false, 'dolu listedeki ikinci tıklama paneli kapatmalıdır');
 });
+
+/* ── Yapışkan çalışma alanı şeritleri ──────────────────────────── */
+
+/** Tek bir seçicinin bildirimlerini kaynak sırasına göre birleştirir. */
+function declarationsFor(source, selector) {
+  const merged = {};
+  for (const rule of parseCssRules(source)) {
+    if (!rule.selectors.includes(selector)) continue;
+    Object.assign(merged, rule.declarations);
+  }
+  return merged;
+}
+
+test('yapışkan çalışma alanı şeridi uygulama katmanındadır ve kaydırılan içerik üstüne binmez', () => {
+  const features = read('src/app/styles/features.css');
+  const sticky = declarationsFor(features, '.workspace-sticky');
+  assert.equal(sticky.position, 'sticky');
+  assert.equal(sticky.top, '0');
+  // Şerit içerik katmanının ÜSTÜNDEDİR: kart, grafik ve tablo üstüne binemez.
+  assert.equal(sticky['z-index'], 'var(--z-chrome)');
+  assert.equal(sticky.background, 'var(--bg-elev)');
+
+  // Tam genişlikli zemin `.content` yatay dolgusunu kapatır; alt/üst nefes payı
+  // kaydırılan içeriğin şeride yapışmasını önler.
+  const backdrop = declarationsFor(features, '.workspace-sticky::before');
+  assert.equal(backdrop.position, 'absolute');
+  assert.equal(backdrop.background, 'var(--bg)');
+  assert.equal(backdrop['z-index'], '-1');
+  assert.match(backdrop.inset, /^-\d+px\s+-\d+px$/);
+});
+
+test('rapor sekmeleri donar ve tarih şeridi sekmelerin altına yapışır', () => {
+  const features = read('src/app/styles/features.css');
+  const tabs = declarationsFor(features, '.reports-module > .request-tabs.workspace-sticky');
+  assert.equal(tabs.top, '0');
+  assert.equal(tabs['z-index'], 'calc(var(--z-chrome) + 1)');
+
+  const strip = declarationsFor(features, '.reports-module .workspace-sticky:not(.request-tabs)');
+  assert.equal(strip.top, 'var(--reports-tabs-height)');
+  assert.equal(declarationsFor(features, '.reports-module')['--reports-tabs-height'] != null, true);
+
+  // Sekme yüksekliği yazı ölçeğiyle değişir; sabit değer yerine ölçülür.
+  const view = read('src/features/reports/ReportsView.jsx');
+  assert.match(view, /className="request-tabs workspace-sticky"/);
+  assert.match(view, /new ResizeObserver\(apply\)/);
+  assert.match(view, /--reports-tabs-height/);
+});
+
+test('hatırlatma sonucu satır akışına girmez; görev satırının yüksekliği değişmez', () => {
+  const features = read('src/app/styles/features.css');
+  const action = declarationsFor(features, '.task-reminder-action');
+  const result = declarationsFor(features, '.task-reminder-result');
+  assert.equal(action.position, 'relative');
+  // Balon MUTLAK konumlanır: dar eylem hücresinde harf harf sarılıp satırı
+  // uzatan eski yerleşim geri gelmemelidir.
+  assert.equal(result.position, 'absolute');
+  assert.equal(result.width, 'max-content');
+  assert.equal(result['white-space'], 'normal');
+  assert.equal(result['z-index'], 'var(--z-popover)');
+});
+
+test('hatırlatma gönderim geçmişi kendi kaydırma sınırında durur', () => {
+  const features = read('src/app/styles/features.css');
+  const scroll = declarationsFor(features, '.reminder-history-scroll');
+  assert.equal(scroll.overflow, 'auto');
+  assert.match(scroll['max-height'], /^min\(/);
+  assert.match(read('src/features/reminders/ReminderSettingsView.jsx'), /className="reminder-history-scroll"/);
+});

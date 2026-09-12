@@ -220,7 +220,9 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
     });
     const sent = await abortableOutlookOperation(() => send({
       to: [allocated.attendee], subject: mail.subject, text: mail.text, html: mail.html,
-      calendar: { method, content: invitation, filename: 'mergen-rota.ics' },
+      // Davet TEK bir `text/calendar` alternatif parçası olarak taşınır; ayrı
+      // bir .ics eki gönderilmez (bkz. mail/mimeMessage.js).
+      calendar: { method, content: invitation },
       signal: execution.signal
     }), execution.signal);
     if (!sent.ok) return await failed(safeOutlookFailureCode(sent.code, 'SMTP_SEND_FAILED'),

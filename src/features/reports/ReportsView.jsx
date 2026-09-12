@@ -26,10 +26,25 @@ export function ReportsView() {
   const [tab, setTab] = useState2('performance');
   const [activityVisited, setActivityVisited] = useState2(false);
   const tabsRef = React.useRef(null);
+  const moduleRef = React.useRef(null);
   const select = (id) => { setTab(id); if (id === 'activities') setActivityVisited(true); };
-  return <div className="reports-module" data-report-tab={tab}>
+
+  // Sekme şeridi donar; tarih şeridi onun ALTINA yapışır. Yükseklik yazı
+  // ölçeğiyle değiştiği için sabit bir değer yerine ölçülür.
+  React.useEffect(() => {
+    const tabs = tabsRef.current;
+    const container = moduleRef.current;
+    if (!tabs || !container || typeof ResizeObserver !== 'function') return undefined;
+    const apply = () => container.style.setProperty('--reports-tabs-height', `${Math.round(tabs.getBoundingClientRect().height)}px`);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(tabs);
+    return () => observer.disconnect();
+  }, []);
+
+  return <div className="reports-module" data-report-tab={tab} ref={moduleRef}>
     <HeroHeader title="Raporlar"><span className="muted">Performans ve görev değişiklikleri.</span></HeroHeader>
-    <div className="request-tabs" role="tablist" aria-label="Rapor türü" ref={tabsRef}>
+    <div className="request-tabs workspace-sticky" role="tablist" aria-label="Rapor türü" ref={tabsRef}>
       {REPORT_TABS.map((item, index) => <button key={item.id} type="button" role="tab" id={`report-tab-${item.id}`}
         aria-controls={`report-panel-${item.id}`} aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1}
         onClick={() => select(item.id)} onKeyDown={(event) => {

@@ -12,11 +12,15 @@ export const NAV_ITEMS = [
   { id: 'ayarlar', label: 'Ayarlar', icon: 'Settings' },
   // Yönetici sayfası: gezinmede YALNIZCA sistem yöneticisine gösterilir
   // (bkz. ADMIN_NAV_IDS). Asıl sınır sunucudadır; gizleme güvenlik değildir.
-  { id: 'hatirlatma', label: 'Hatırlatma E-postaları', icon: 'Mail' }
+  // Hatırlatma yapılandırması bu sayfanın bir sekmesidir.
+  { id: 'sistem', label: 'Sistem Yönetimi', icon: 'Activity' }
 ];
 
 /** Yalnızca sistem yöneticisine gösterilen sayfalar. */
-export const ADMIN_NAV_IDS = new Set(['hatirlatma']);
+export const ADMIN_NAV_IDS = new Set(['sistem']);
+
+/** Yönetim sayfası projeye değil, SİSTEME aittir: proje bağlamı gösterilmez. */
+export const GLOBAL_NAV_IDS = new Set(['sistem', 'ayarlar', 'yardim']);
 
 const SIMPLE_CALENDAR_TABS = ['calendar', 'entry'];
 
@@ -55,7 +59,7 @@ export const PAGE_META = {
   kisi: { title: 'Ekip', tab: 'kisi', sub: 'Ekip üyeleri ve iş yükü' },
   yardim: { title: 'Kullanım Rehberi', sub: 'MERGEN Rota kullanım adımları ve sayfa açıklamaları' },
   ayarlar: { title: 'Ayarlar', sub: 'Görünüm ve tercihler' },
-  hatirlatma: { title: 'Hatırlatma E-postaları', sub: 'Şablon, otomatik gönderim planı ve gönderim geçmişi' }
+  sistem: { title: 'Sistem Yönetimi', sub: 'Sistem sağlığı, başarım, kuyruklar, olaylar ve entegrasyonlar' }
 };
 
 export const SIMPLE_NAV_IDS = new Set(['veri', 'takvim', 'talepler', 'yardim', 'ayarlar']);

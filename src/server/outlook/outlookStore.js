@@ -17,6 +17,7 @@ import {
   OUTLOOK_QUEUE_CANCEL_SQL,
   OUTLOOK_QUEUE_RESEND_SQL,
   OUTLOOK_REVALIDATE_SQL,
+  OUTLOOK_RETRY_FAILED_SQL,
   OUTLOOK_HEALTH_SQL,
   OUTLOOK_QUEUE_STATUS_SQL,
   OUTLOOK_RENEW_SQL,
@@ -206,6 +207,16 @@ export async function outlookQueueStatus(executor, maxAttempts) {
   const row = (await request.query(OUTLOOK_QUEUE_STATUS_SQL)).recordset?.[0] || {};
   return Object.fromEntries(['Pending', 'Failed', 'Exhausted', 'InFlight', 'Due']
     .map((key) => [key[0].toLowerCase() + key.slice(1), Number(row[key] || 0)]));
+}
+
+/**
+ * Başarısız teslimatları yeniden denenebilir hâle getirir (yönetici eylemi).
+ *
+ * @returns {Promise<number>} yeniden denenecek kayıt sayısı
+ */
+export async function retryFailedOutlookDeliveries(executor) {
+  const result = await executor.request().query(OUTLOOK_RETRY_FAILED_SQL);
+  return (result.recordset || []).length;
 }
 
 export async function renewOutlookLease(executor, { subscriptionId, leaseToken }) {
