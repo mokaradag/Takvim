@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { Icons } from '../../components/icons';
 import { DateInput } from '../../components/DateInput.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { useTaskActions } from '../../state/hooks/index.js';
@@ -46,6 +47,11 @@ export function TaskActivitiesView({ active = true }) {
         <option value="">Tüm hareketler</option><option value="created">Oluşturulan</option><option value="updated">Güncellenen</option><option value="completed">Tamamlanan</option><option value="deleted">Silinen</option>
       </select></label>
       <TaskOrganizationFilterControls organization={organization} />
+      {Object.keys(INITIAL).some((key) => key !== 'page' && query[key] !== INITIAL[key]) && (
+        <button type="button" className="btn ghost sm" onClick={() => setQuery({ ...INITIAL })}>
+          <Icons.Close size={12} /> Filtreleri Temizle
+        </button>
+      )}
       <button type="button" className="btn ghost sm" onClick={refresh} disabled={loading}>Yenile</button>
     </div>
     {!actual && <p className="muted">Görev hareketleri Gerçek Sistem verilerinden gösterilir.</p>}
@@ -54,9 +60,9 @@ export function TaskActivitiesView({ active = true }) {
       {[[data.total, 'değişiklik'], [data.summary.tasks, 'farklı görev'], [data.summary.people, team ? 'ekip üyesi' : 'kişi'], [data.summary.completed, 'tamamlanan görev']].map(([value, label]) =>
         <span key={label}><strong>{loading ? '—' : value}</strong> {label}</span>)}
     </div>
-    <div className="detail-list-scroll" aria-busy={loading}>
-      <table className="table activity-table"><caption className="sr-only">Görev hareketleri · Türkiye saati</caption>
-        <thead><tr>{['Tarih / Saat', 'Güncelleyen', 'Proje', 'Görev', 'Yapılan değişiklik'].map((label) => <th scope="col" key={label} style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-elev)' }}>{label}</th>)}</tr></thead>
+    <div className="detail-list-scroll activity-scroll" tabIndex={0} role="region" aria-label="Görev hareketleri tablosu" aria-busy={loading}>
+      <table className="table activity-table enterprise-table"><caption className="sr-only">Görev hareketleri · Türkiye saati</caption>
+        <thead><tr>{['Tarih / Saat', 'Güncelleyen', 'Proje', 'Görev', 'Yapılan değişiklik'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
         <tbody>{data.items.map((item) => <tr key={item.id}>
           <td><time dateTime={item.occurredAt}>{timestamp.format(new Date(item.occurredAt))}</time></td>
           <td>{item.actorName}</td><td title={item.projectName}>{item.projectCode || item.projectName}</td>

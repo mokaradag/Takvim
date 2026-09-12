@@ -74,7 +74,7 @@ export function ScheduleRequestsView() {
       {!actual && <p className="empty">Tarih değişikliği talepleri Gerçek Sistem kipinde kullanılabilir.</p>}
       {loading && <p className="muted" role="status">Talepler yükleniyor…</p>}
       <div className="detail-list-scroll">
-        <table className="table detail-list-table">
+        <table className="table detail-list-table enterprise-table">
           <caption className="sr-only">Tarih değişikliği talepleri</caption>
           <thead><tr>{['Görev / Proje', 'Talep eden', 'Durum', 'Talep tarihi', 'Karar tarihi'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
           <tbody>{data.items.map((request) => <tr key={request.id}>

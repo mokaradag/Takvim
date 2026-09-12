@@ -148,10 +148,28 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   const currentUserId = state.currentUser?.id == null ? null : String(state.currentUser.id);
   const isTaskCreator = Boolean(task.isCurrentUserCreator)
     || Boolean(currentUserId && String(task.createdBySicil || '') === currentUserId);
+  const selfRecurrence = !task.recurrenceParentId && !hasHiddenAssignees
+    && (task.assigneeIds || []).length === 1
+    && String(task.assigneeIds[0]) === currentUserId
+    && (isTaskCreator || Boolean(task.isCurrentUserAssignee))
+    && canCreateTasksInProject(state, task.projectId);
+  const hasRecurrenceChildren = (state.tasks || []).some((item) => (
+    String(item?.recurrenceParentId || '') === String(task.id)
+  ));
+  const canEditSelfRecurrence = selfRecurrence && !hasRecurrenceChildren;
   const limitedCreator = isTaskCreator && !hasFullSourceProject;
   const creatorCanAssign = limitedCreator && hasProjectTaskWrite && !hasHiddenAssignees;
   const assigneeWorkOnly = Boolean(task.isCurrentUserAssignee) && !limitedCreator
     && (!hasProjectTaskWrite || (hasHiddenAssignees && !hasFullSourceProject));
+  if (hasRecurrenceChildren && Object.prototype.hasOwnProperty.call(patch || {}, 'recurrence')) {
+    return {
+      ok: false,
+      code: 'TASK_RECURRENCE_LOCKED',
+      field: 'recurrence',
+      projectId: task.projectId,
+      message: 'Yinelemeler üretildikten sonra tekrar kuralı değiştirilemez; eksik yinelemeler mevcut kuralla üretilebilir.'
+    };
+  }
   if (hasHiddenAssignees && !hasFullSourceProject && !task.isCurrentUserAssignee && !limitedCreator) {
     return {
       ok: false,
@@ -180,6 +198,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // onu yürüten kişidir (bkz. assertLimitedCreatorFieldsOnly).
       'plannedHours', 'actualHours', 'budget', 'spent'
     ]);
+    if (canEditSelfRecurrence) protectedFields.delete('recurrence');
     if (creatorCanAssign) protectedFields.delete('assigneeIds');
     const field = Object.keys(patch || {}).find((key) => protectedFields.has(key));
     if (field) {
@@ -200,7 +219,12 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       sourceProject,
       destinationProject: sourceProject,
       scope: 'CREATOR',
+      // `canManageRecurrence` tekrar bölümünü/generasyonu açık tutar. Kural
+      // düzenleme yetkisi ayrı bayraktır; çocuklar üretildikten sonra kapanır.
       canManageStructure: false,
+      canManageRecurrence: selfRecurrence,
+      canEditRecurrenceRule: canEditSelfRecurrence,
+      canGenerateRecurrence: selfRecurrence,
       canChooseWbs: true,
       canManageAssignees: creatorCanAssign,
       canControlSchedule: true,
@@ -227,6 +251,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // sorumlu yetkisinden çıkarılmıştır. Finansal alanlar da görev yönetimidir.
       'plannedHours', 'actualHours', 'budget', 'spent'
     ]);
+    if (canEditSelfRecurrence) protectedFields.delete('recurrence');
     const field = Object.keys(patch || {}).find((key) => protectedFields.has(key));
     if (field) {
       return {
@@ -244,6 +269,9 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       destinationProject: sourceProject,
       scope: 'ASSIGNEE',
       canManageStructure: false,
+      canManageRecurrence: selfRecurrence,
+      canEditRecurrenceRule: canEditSelfRecurrence,
+      canGenerateRecurrence: selfRecurrence,
       canChooseWbs: false,
       canManageAssignees: false,
       // Sorumlu kendi PLAN tarihlerini doğrudan düzenler; HEDEF bitiş ayrı
@@ -286,6 +314,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   // kapsamındaki projede açan kullanıcı "Güncel plan" kartını salt okunur
   // görüyor, sunucunun kabul edeceği bir düzenlemeyi hiç deneyemiyordu.
   const schedulesOwnWork = full || Boolean(task.isCurrentUserAssignee);
+  const recurrenceAccess = full || selfRecurrence;
   return {
     ok: true,
     task,
@@ -293,6 +322,9 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     destinationProject,
     scope: full ? 'FULL' : 'ASSIGNMENT',
     canManageStructure: full,
+    canManageRecurrence: recurrenceAccess,
+    canEditRecurrenceRule: recurrenceAccess && !hasRecurrenceChildren,
+    canGenerateRecurrence: recurrenceAccess,
     canChooseWbs: full,
     canManageAssignees: !hasHiddenAssignees,
     canControlSchedule: schedulesOwnWork,

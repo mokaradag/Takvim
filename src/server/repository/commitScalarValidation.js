@@ -259,9 +259,6 @@ function validateTaskScalars(changes) {
         'Tekrar kuralının bitiş tarihi planlanan başlangıçtan önce olamaz.'
       );
     }
-    if (actualFinish && !actualStart) {
-      return issue('TASK_ACTUAL_START_REQUIRED', `${basePath}.actualStart`, 'Gerçek bitiş için gerçek başlangıç gereklidir.');
-    }
     if (actualStart && actualFinish && actualFinish < actualStart) {
       return issue('TASK_ACTUAL_RANGE_INVALID', `${basePath}.actualFinish`, 'Gerçek bitiş başlangıçtan önce olamaz.');
     }
