@@ -143,12 +143,6 @@ function boundaryToken(prefix) {
   return `----=_MERGENRota${prefix}_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 }
 
-/** Ek adı başlık değerine yazılmadan önce sadeleştirilir. */
-function calendarFilename(value) {
-  const clean = sanitizeHeaderValue(value).replace(/[^A-Za-z0-9._-]/g, '');
-  return clean || 'davet.ics';
-}
-
 /**
  * Takvim parçasının yöntemi. Yalnızca iki değer geçerlidir; başlık değerine
  * serbest metin yazılmaz.
@@ -160,21 +154,24 @@ function calendarMethod(value) {
 /**
  * Çok parçalı (HTML + düz metin) ileti gövdesini kurar.
  *
- * `calendar` verildiğinde yapı Outlook/Exchange'in beklediği biçime genişler:
+ * `calendar` verildiğinde yapı Outlook/Exchange'in beklediği biçimdedir:
  *
- *   multipart/mixed
- *     ├── multipart/alternative  (text/plain · text/html · text/calendar)
- *     └── application/ics        (aynı davet, ek olarak)
+ *   multipart/alternative
+ *     ├── text/plain
+ *     ├── text/html
+ *     └── text/calendar; method=REQUEST|CANCEL
  *
- * Takvim parçası `multipart/alternative` İÇİNDEDİR: Outlook iletiyi ancak bu
- * konumda gerçek bir toplantı isteği olarak işler. Ek kopyası, davet parçasını
- * anlamayan istemciler için durur. `calendar` verilmediğinde gövde eskisi gibi
- * yalın `multipart/alternative` kalır — hatırlatma e-postaları bu yüzden
- * değişmez.
+ * Davetin İKİNCİ bir kopyası EK OLARAK TAŞINMAZ. Aynı takvim içeriği hem
+ * alternatif parçada hem de `application/ics` ekinde gönderildiğinde Outlook
+ * iletiyi takvim iletisi olarak işlemek yerine iki dosya eki gösteriyordu
+ * ("not supported calendar message.ics" ve "mergen-rota.ics"). Tek alternatif
+ * parça, iptal ve davet iletilerinin doğrudan takvim öğesi olarak açılmasını
+ * sağlar. `calendar` verilmediğinde gövde eskisi gibi yalın kalır —
+ * hatırlatma e-postaları bu yüzden değişmez.
  *
  * @param {{from:string, fromName?:string, to:string[], subject:string,
  *   html:string, text:string, messageId?:string, date?:Date,
- *   calendar?:{method:'REQUEST'|'CANCEL', content:string, filename?:string}|null}} input
+ *   calendar?:{method:'REQUEST'|'CANCEL', content:string}|null}} input
  * @returns {string} CRLF satır sonlu RFC 5322 iletisi
  */
 export function buildMimeMessage({
@@ -198,7 +195,6 @@ export function buildMimeMessage({
 
   const boundary = boundaryToken('');
   const method = calendar ? calendarMethod(calendar.method) : null;
-  const mixedBoundary = calendar ? boundaryToken('Mixed') : null;
   const headers = [
     foldHeader('From', [formatAddress(sender, fromName)]),
     // Alıcı listesi katlanır: virgül belirtece bitişik kalır, sınır aşılınca
@@ -215,9 +211,7 @@ export function buildMimeMessage({
     // Exchange bu başlığa bakarak iletiyi takvim iletisi olarak sınıflandırır.
     headers.push('Content-class: urn:content-classes:calendarmessage');
   }
-  headers.push(calendar
-    ? `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`
-    : `Content-Type: multipart/alternative; boundary="${boundary}"`);
+  headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
 
   const alternative = [
     `--${boundary}`,
@@ -244,25 +238,7 @@ export function buildMimeMessage({
   }
   alternative.push(`--${boundary}--`, '');
 
-  if (!calendar) return `${headers.join('\r\n')}\r\n\r\n${alternative.join('\r\n')}`;
-
-  const filename = calendarFilename(calendar.filename);
-  const parts = [
-    `--${mixedBoundary}`,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    '',
-    ...alternative,
-    `--${mixedBoundary}`,
-    `Content-Type: application/ics; charset="UTF-8"; name="${filename}"`,
-    `Content-Disposition: attachment; filename="${filename}"`,
-    'Content-Transfer-Encoding: base64',
-    '',
-    base64Body(calendar.content),
-    `--${mixedBoundary}--`,
-    ''
-  ];
-
-  return `${headers.join('\r\n')}\r\n\r\n${parts.join('\r\n')}`;
+  return `${headers.join('\r\n')}\r\n\r\n${alternative.join('\r\n')}`;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { taskActivityRecordsets } from './taskActivitySql.mjs';
+import { runObservabilityQuery } from './observabilitySql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -184,6 +185,12 @@ export function createFakeDatabase(seed = {}) {
       Holidays: calendar.Holidays || []
     })),
     auditLog: seed.auditLog || [],
+    // Gözlemlenebilirlik tabloları (bkz. observabilitySql.mjs). Testler
+    // doğrudan satır ekleyebilsin diye ikiz kurulurken hazırlanır.
+    telemetryOperationSamples: seed.telemetryOperationSamples || [],
+    telemetryGaugeSamples: seed.telemetryGaugeSamples || [],
+    operationalEvents: seed.operationalEvents || [],
+    operationalAlerts: seed.operationalAlerts || [],
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
     corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
@@ -1152,6 +1159,11 @@ function runOutlookQuery(db, sqlText, params) {
 function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
+
+  // Gözlemlenebilirlik yüzeyi (telemetri toplamları, işletim olayları,
+  // uyarılar ve sağlık yoklamaları) ayrı bir modülde karşılanır.
+  const observability = runObservabilityQuery(db, sqlText, params);
+  if (observability) return result(observability);
 
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));

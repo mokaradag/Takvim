@@ -11,6 +11,8 @@ import { outlookQueueStatus } from '../../../../../server/outlook/outlookStore.j
 import { outlookDeadline, outlookExecutor } from '../../../../../server/outlook/outlookExecution.js';
 import { hasReminderSchedulerKey } from '../../../../../server/reminders/reminderAccess.js';
 import { runAutomaticReminders } from '../../../../../server/reminders/reminderService.js';
+import { observeOutcome, withRouteObservability } from '../../../../../server/observability/observeOperation.js';
+import { COMPONENTS } from '../../../../../domain/observability/eventModel.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +26,7 @@ function runErrorResponse(error) {
 }
 
 /** Hatırlatma zamanlayıcısı ve yöneticinin tanı turu. */
-export async function POST(request) {
+async function handleReminderRun(request) {
   try {
     const pool = await getSqlPool();
     let actorSicil = null;
@@ -47,7 +49,8 @@ export async function POST(request) {
     };
     const outlookEnabled = isOutlookCalendarEnabled();
     const [reminderResult, outlookResult] = await Promise.all([
-      runSafely('reminders', () => runAutomaticReminders(pool, { actorSicil })),
+      runSafely('reminders', () => observeOutcome('background.reminders.run',
+        () => runAutomaticReminders(pool, { actorSicil }), { component: COMPONENTS.REMINDER })),
       outlookEnabled ? runSafely('outlook', () => runOutlookCalendarOutbox(pool, {
         link: outlookApplicationLink(),
         budgetMs: hasReminderSchedulerKey(request) ? outlookRunBudgetMs() : Math.min(10000, outlookRunBudgetMs())
@@ -68,7 +71,7 @@ export async function POST(request) {
   } catch (error) { return runErrorResponse(error); }
 }
 
-export async function GET() {
+async function handleDeliveryStatus() {
   try {
     const pool = await getSqlPool();
     const actor = await loadAuthorizationContext(pool);
@@ -84,3 +87,8 @@ export async function GET() {
     return Response.json({ outlook }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return runErrorResponse(error); }
 }
+
+// Ölçüm sarmalayıcısı imzayı ve yanıtı DEĞİŞTİRMEZ; yalnızca süreyi, sonucu ve
+// ilişkilendirme kimliğini kaydeder (bkz. server/observability).
+export const POST = withRouteObservability('api.reminders.run', handleReminderRun);
+export const GET = withRouteObservability('api.reminders.status', handleDeliveryStatus);

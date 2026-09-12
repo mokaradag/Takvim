@@ -21,6 +21,20 @@ SYSTEM_ADMIN is never derived from Keycloak `resource_access` roles. A token may
 
 SYSTEM_ADMIN may view and mutate all Projects and may create manual Projects. It may also deactivate an empty manual Project. A Project is empty when no `MR_Tasks` row references it; root WBS, access, tags and audit rows do not make it non-empty. Corporate Projects and manual Projects containing even one Task cannot be deleted through this operation.
 
+### Administration surface
+
+SYSTEM_ADMIN is also the only role that reaches **Sistem Yönetimi**, the operations console described in `docs/SYSTEM-ADMINISTRATION.md`. It is the single administration entry point: reminder configuration, which used to be a standalone navigation item, is now one of its tabs.
+
+Navigation hiding is presentation, never a boundary. Every administration endpoint under `/api/mergen-rota/admin/system/*` — overview, performance, queues, events, integrations — independently reloads the authorization context and calls `assertSystemAdmin(actor)`, so an ordinary user who invokes the endpoint directly receives `403 FORBIDDEN` rather than data. The same holds for the two mutating endpoints (queue actions and alert acknowledgement) and for `/api/mergen-rota/admin/reminder-settings`.
+
+Three further rules hold for this surface:
+
+- The page is exempt from the Temel Kip navigation filter (`ADMIN_NAV_IDS`): a role-gated page must not become unreachable because the user chose the simpler mode.
+- Losing the role while the page is open redirects the user safely to **Özet**; the administration view renders nothing without the role.
+- The page is global rather than Project-scoped, so the shell hides the selected-Project chip and the export control while it is active (`GLOBAL_NAV_IDS`).
+
+Administration responses never carry secrets. Passwords, tokens, cookies, connection strings, SMTP credentials, iCalendar bodies and unnecessary recipient addresses are excluded by construction, and every diagnostic context passes through the single sanitizer in `domain/observability/redaction.js`. Configuration is reported only as "Yapılandırılmış"/"Yapılandırılmamış"; the authentication card lists the **names** of missing settings, never their values.
+
 ## Corporate full access
 
 `MR_V_CorporateProjectAccess` normalizes HR09 roles:

@@ -163,6 +163,8 @@ Shared layer tokens define sticky, chrome, popover, drawer, modal and tooltip or
 - Global client orchestration, async persistence commands, workspace selection and derived application projections: `src/state`
 - Reminder rules, templates and policy: `src/domain/reminders`
 - SMTP transport, reminder persistence and the reminder service: `src/server/mail` and `src/server/reminders`
+- Health states, event/alert model, metric math and diagnostic sanitization: `src/domain/observability`
+- Telemetry collection, health probes, alert rules, structured logging and administration endpoints: `src/server/observability` (see `docs/SYSTEM-ADMINISTRATION.md`)
 - Feature UI and feature-only helpers: the relevant `src/features/<feature>` folder
 - Generic visual primitives: `src/components/ui*`
 - Shared loading indicators: `src/components/Loader.jsx`

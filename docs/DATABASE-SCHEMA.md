@@ -151,6 +151,43 @@ The same row is the delivery **outbox**. `PendingMethod` (`NULL` / `REQUEST` / `
 
 `DeliveredSummary` and `DeliveredDate` retain the last SMTP-accepted representation; completion compares its date against the completion day. Cancellation uses a generic summary, stable UID and stored attendee/organizer without disclosing deleted or newly unauthorized task content. That is also why the table has **no foreign key** to `MR_Tasks` — the same reasoning as `MR_TaskReminderLog` and post-0008 `MR_TaskScheduleChangeRequests`. After the first send, the subscription retains its `CalendarAttendee` and `CalendarOrganizer` addresses so later updates and cancellations target the same calendar identities; those addresses are never returned to the browser. Before the first accepted or possibly delivered send, the recipient is resolved from `Sicil` through the same `DC01_userr` chain described above.
 
+## System administration telemetry schema
+
+`MR_Upgrade_0012_System_Observability.sql` adds the four tables behind **Sistem
+Yönetimi** (`docs/SYSTEM-ADMINISTRATION.md`). The design constraint is that
+observability must never become a production load source of its own, so no table
+receives one row per request.
+
+`MR_TelemetryOperationSamples` stores one **aggregate per operation per
+five-minute bucket**: sample count, error count, duration sum and maximum, and
+the P50/P95/P99 computed from a bounded in-memory reservoir. The primary key
+`(BucketStart, Operation)` makes the flush a merge rather than an append, so a
+retried flush cannot double-count, and `IX_…_Bucket` keeps range reads off the
+table scan path. `MR_TelemetryGaugeSamples` holds the same shape for point-in-
+time measurements (process memory, queue depth, oldest queued minutes) keyed by
+`(BucketStart, MetricKey)`.
+
+`MR_OperationalEvents` is the persistent operational record: timestamp,
+severity, component, stable event code, human-readable summary, sanitized
+detail, correlation id and `OccurrenceCount`. Identical events are merged
+**before** the write, so eight hundred identical SMTP failures produce one row
+with a counter of eight hundred rather than eight hundred rows.
+
+`MR_OperationalAlerts` holds automatic alerts with their lifecycle
+(`OPEN`/`ACKNOWLEDGED`/`RESOLVED`), first/last seen timestamps, occurrence count
+and acknowledgement author. The filtered unique index
+`UX_MR_OperationalAlerts_ActiveKey` on `AlertKey WHERE State <> 'RESOLVED'` is
+the deduplication primitive: one condition can hold at most one active alert, so
+a flapping dependency increments a counter instead of flooding the table, while a
+resolved alert stays in history and a recurrence opens a new row — the start and
+end of each outage remain separately visible.
+
+Retention is bounded (default 30 days, `MERGEN_ROTA_TELEMETRY_RETENTION_DAYS`).
+The telemetry cycle deletes in small batches so the cleanup never holds a long
+table lock, and it degrades quietly: when the migration has not been applied the
+application keeps running and the console reports the missing schema instead of
+failing.
+
 ## Index rationale
 
 - Project/status and Project/date indexes support Task lists, filters, Gantt, and target-date sorting.
@@ -162,6 +199,7 @@ The same row is the delivery **outbox**. `PendingMethod` (`NULL` / `REQUEST` / `
 - Audit indexes support Project, actor, entity, and transaction-correlation investigations.
 - The reminder log's Task/time index supports send history; its filtered unique slot index is the duplicate-send guard rather than a read optimization.
 - The Outlook subscription indexes are similarly split by purpose: the unique `(TaskId, UserSicil)` index is the duplicate-subscription guard, the filtered pending index keeps the outbox scan proportional to queued work rather than to the whole table, and the user/active index serves the drawer and task-table "added" state in one lookup.
+- Telemetry indexes follow the same split: `IX_MR_TelemetryOperationSamples_Bucket` and `IX_MR_TelemetryGaugeSamples_Metric` are read optimizations for bounded range queries, while `UX_MR_OperationalAlerts_ActiveKey` is a correctness constraint (one active alert per condition) rather than a read path. The operational-event indexes serve the two filters the console actually offers: newest-first time ranges and per-component drill-down.
 
 Indexes are limited to demonstrated repository and UI query patterns rather than being created for every column.
 
@@ -180,6 +218,8 @@ The creation script performs source-table preflight, fails fast if MR_* objects 
 Task reminders are added by `database/MR_Upgrade_0005_Task_Reminders.sql`, which is idempotent and safe to rerun: it creates `MR_ReminderSettings` and `MR_TaskReminderLog` only when absent, seeds the single settings row with automatic sending disabled, creates the filtered unique slot index and records `0005_task_reminders`. Existing data is untouched. `MR_Create_Durable_Persistence.sql` creates the same objects for a fresh installation and `MR_Rollback_Durable_Persistence.sql` drops them in reverse order.
 
 Outlook calendar subscriptions are added by `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql`. The migration is idempotent, creates or extends `MR_TaskOutlookSubscriptions` and its four indexes, records `0010_outlook_calendar_subscriptions`, and preserves existing subscriptions with conservative lifecycle backfills. It must run **before** the application version is deployed; until it does, the feature reports itself as unavailable instead of failing Task saves. Fresh installations create the same object in `MR_Create_Durable_Persistence.sql`; rollback drops it first. See `docs/OUTLOOK-CALENDAR.md`.
+
+System administration telemetry is added by `database/MR_Upgrade_0012_System_Observability.sql`, the current head migration. It is idempotent, creates the four tables and their indexes only when absent, records `0012_system_observability`, and touches no existing data. It runs **after** `0011`. Fresh installations create the same objects in `MR_Create_Durable_Persistence.sql`; rollback drops them before the Outlook subscription table. Until the migration runs, Sistem Yönetimi stays available and reports "telemetri tabloları bulunamadı" rather than failing. See `docs/SYSTEM-ADMINISTRATION.md`.
 
 Schedule-change requests are added by `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql`. The migration is idempotent, creates only the missing table/indexes, records `0007_task_schedule_change_requests`, and never rewrites existing Tasks. Fresh installations create the same object in `MR_Create_Durable_Persistence.sql`; rollback drops it before Task rows.
 

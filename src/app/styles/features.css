@@ -844,12 +844,27 @@
 .team-person-button small { display: block; }
 
 /* ── Hatırlatma e-postası eylemi ve yönetici sayfası ─────────── */
-.task-reminder-action { display: inline-flex; align-items: center; gap: 6px; }
+.task-reminder-action { position: relative; display: inline-flex; align-items: center; gap: 6px; }
 .task-reminder-button.is-busy { opacity: .7; }
+/* Sonuç iletisi satır AKIŞINA girmez: dar bir eylem hücresinde harf harf
+   sarılıyor ve satır yüksekliğini birkaç saniyeliğine katlıyordu. İleti,
+   düğmeye çıpalanmış küçük bir balonda gösterilir. */
 .task-reminder-result {
-  max-width: 260px;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-popover);
+  width: max-content;
+  max-width: min(280px, calc(var(--app-viewport-w, 100vw) - 48px));
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-md);
   font-size: 11px;
   line-height: 1.35;
+  white-space: normal;
+  text-align: left;
   color: var(--text-muted);
 }
 .task-reminder-result.success { color: var(--status-done); }
@@ -920,6 +935,15 @@
 
 .reminder-settings-page { min-height: 0; }
 .reminder-section { display: flex; flex-direction: column; gap: 12px; }
+/* Gönderim geçmişi KENDİ kaydırma sınırında durur: aksi hâlde yapışkan tablo
+   başlığı sayfanın ortasında yüzüyor ve satırlar altından geçiyordu. */
+.reminder-history-scroll {
+  max-height: min(380px, calc(var(--app-viewport-h, 100vh) - 260px));
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.reminder-history-scroll .tbl thead th { background: var(--bg-elev-2); z-index: var(--z-sticky); }
 .reminder-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
 .reminder-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .reminder-field-label { font-size: 11.5px; font-weight: 650; color: var(--text-muted); }
@@ -1277,17 +1301,42 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
   .activity-filters .input { max-width: 100%; }
 }
 
-/* Çalışma alanı, yapışkan denetimlerin tek kaydırma sınırıdır. */
+/* Çalışma alanı, yapışkan denetimlerin tek kaydırma sınırıdır.
+   Şerit UYGULAMA KATMANINDADIR (`--z-chrome`): kaydırılan kart, grafik ya da
+   tablo hiçbir koşulda üstüne binmez. Arkasındaki tam genişlikli zemin,
+   `.content` yatay dolgusunu da kapatır; altındaki nefes payı kaydırılan
+   içeriğin şeride yapışmasını önler. */
 .workspace-sticky {
   position: sticky;
   top: 0;
-  z-index: 40;
+  z-index: var(--z-chrome);
   flex-shrink: 0;
   background: var(--bg-elev);
   box-shadow: 0 1px 0 var(--border-strong);
 }
+.workspace-sticky::before {
+  content: '';
+  position: absolute;
+  /* Yanlarda `.content` yatay dolgusu, altta ve üstte nefes payı. */
+  inset: -10px -28px;
+  background: var(--bg);
+  z-index: -1;
+  pointer-events: none;
+}
 .stagger > .workspace-sticky { animation: none; }
-.content-reports:has([data-report-tab="activities"]) { overflow: hidden; min-height: 0; padding-bottom: 16px; }
+
+/* Rapor sekmeleri de donar ve tarih şeridi sekmelerin ALTINA yapışır.
+   Sekme yüksekliği yazı ölçeğiyle değiştiği için JavaScript ölçer
+   (bkz. features/reports/ReportsView.jsx). */
+.reports-module { --reports-tabs-height: 42px; }
+.reports-module > .request-tabs.workspace-sticky {
+  top: 0;
+  z-index: calc(var(--z-chrome) + 1);
+  background: var(--bg-elev);
+}
+.reports-module .workspace-sticky:not(.request-tabs) { top: var(--reports-tabs-height); }
+
+.content-rapor:has([data-report-tab="activities"]) { overflow: hidden; min-height: 0; padding-bottom: 16px; }
 .reports-module[data-report-tab="activities"] { height: 100%; min-height: 0; }
 .reports-module[data-report-tab="activities"] > :not([role="tabpanel"]) { flex: 0 0 auto; }
 .reports-module[data-report-tab="activities"] > [role="tabpanel"]:not([hidden]) { flex: 1 1 0; min-height: 0; display: flex; }

@@ -76,7 +76,10 @@ test('Temel Kip komutları Gantt ve diğer kapsamlı sayfaları içermez; yönet
   const simple = navigationItems(true, false).map((item) => item.id);
   assert.deepEqual(simple, ['veri', 'talepler', 'takvim', 'yardim', 'ayarlar']);
   assert.ok(navigationItems(false, false).some((item) => item.id === 'gantt'));
-  assert.ok(navigationItems(true, true).some((item) => item.id === 'hatirlatma'));
+  // Yönetim sayfası Temel Kipte de sistem yöneticisine açıktır; hatırlatma
+  // yapılandırması artık bu sayfanın bir sekmesidir.
+  assert.ok(navigationItems(true, true).some((item) => item.id === 'sistem'));
+  assert.equal(navigationItems(true, false).some((item) => item.id === 'sistem'), false);
   const listeners = new Map();
   globalThis.window = { addEventListener: (type, handler) => listeners.set(type, handler), removeEventListener() {} };
   const view = mountComponent(CommandPalette, { navItems: navigationItems(true, false), tasks: [], onClose() {}, onNavigate() {}, onSetTheme() {} });

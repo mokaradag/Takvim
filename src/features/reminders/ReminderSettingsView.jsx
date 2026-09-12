@@ -445,22 +445,26 @@ export function ReminderSettingsView() {
             {history.length === 0 ? (
               <div className="muted">Henüz hatırlatma gönderilmedi.</div>
             ) : (
-              <table className="tbl">
-                <thead>
-                  <tr><th>Tür</th><th>Durum</th><th>Alıcı</th><th>Aralık</th><th>Zaman</th></tr>
-                </thead>
-                <tbody>
-                  {history.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>{entry.kind === 'AUTOMATIC' ? 'Otomatik' : 'Elle'}</td>
-                      <td>{entry.status === 'SENT' ? 'Gönderildi' : entry.status === 'FAILED' ? `Başarısız (${entry.failureCode || '—'})` : 'Sürüyor'}</td>
-                      <td className="tabular">{entry.recipientCount}</td>
-                      <td className="muted" style={{ fontSize: 11 }}>{entry.slotKey}</td>
-                      <td className="muted" style={{ fontSize: 11 }}>{entry.completedAt || entry.createdAt}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              // Tablo kendi kaydırma kutusundadır: yapışkan başlık sayfanın
+              // ortasında yüzmez, satırlar başlığın altından sızmaz.
+              <div className="reminder-history-scroll">
+                <table className="tbl">
+                  <thead>
+                    <tr><th>Tür</th><th>Durum</th><th>Alıcı</th><th>Aralık</th><th>Zaman</th></tr>
+                  </thead>
+                  <tbody>
+                    {history.map((entry) => (
+                      <tr key={entry.id}>
+                        <td>{entry.kind === 'AUTOMATIC' ? 'Otomatik' : 'Elle'}</td>
+                        <td>{entry.status === 'SENT' ? 'Gönderildi' : entry.status === 'FAILED' ? `Başarısız (${entry.failureCode || '—'})` : 'Sürüyor'}</td>
+                        <td className="tabular">{entry.recipientCount}</td>
+                        <td className="muted" style={{ fontSize: 11 }}>{entry.slotKey}</td>
+                        <td className="muted" style={{ fontSize: 11 }}>{entry.completedAt || entry.createdAt}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
         </>

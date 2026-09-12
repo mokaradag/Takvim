@@ -284,7 +284,7 @@ test('HTML gövdesi görev adındaki işaretlemeyi kaçırır', () => {
 });
 
 test('takvim parçası Outlook uyumlu MIME yapısında ve base64 taşınır', () => {
-  const calendar = { method: 'REQUEST', content: invitation(), filename: 'mergen-rota.ics' };
+  const calendar = { method: 'REQUEST', content: invitation() };
   const message = buildMimeMessage({
     from: 'mergen-rota@example.internal',
     fromName: 'MERGEN Rota',
@@ -297,13 +297,16 @@ test('takvim parçası Outlook uyumlu MIME yapısında ve base64 taşınır', ()
 
   assert.match(message, /^From: MERGEN Rota <mergen-rota@example\.internal>/);
   assert.match(message, /\r\nContent-class: urn:content-classes:calendarmessage\r\n/);
-  assert.match(message, /Content-Type: multipart\/mixed; boundary="[^"]+"/);
   assert.match(message, /Content-Type: multipart\/alternative; boundary="[^"]+"/);
   assert.match(message, /Content-Type: text\/plain; charset="UTF-8"/);
   assert.match(message, /Content-Type: text\/html; charset="UTF-8"/);
   assert.match(message, /Content-Type: text\/calendar; charset="UTF-8"; method=REQUEST/);
-  assert.match(message, /Content-Type: application\/ics; charset="UTF-8"; name="mergen-rota\.ics"/);
-  assert.match(message, /Content-Disposition: attachment; filename="mergen-rota\.ics"/);
+  // Davetin İKİNCİ bir kopyası ek olarak taşınmaz: Outlook aynı içeriği iki
+  // parçada gördüğünde iletiyi takvim öğesi yerine dosya eki gibi gösteriyordu.
+  assert.equal(message.includes('multipart/mixed'), false);
+  assert.equal(message.includes('application/ics'), false);
+  assert.equal(message.includes('Content-Disposition: attachment'), false);
+  assert.equal((message.match(/Content-Type: text\/calendar/g) || []).length, 1);
   // Konu satırı Türkçe karakter için RFC 2047 ile kodlanır.
   assert.match(message, /Subject: =\?UTF-8\?B\?/);
   // Davet base64 taşınır: CRLF ve Türkçe karakterler aktarımda bozulmaz.
@@ -335,7 +338,7 @@ test('CANCEL yöntemi başlığa yazılır ve serbest metin kabul edilmez', () =
   assert.equal(injected.includes('Bcc:'), false);
 });
 
-test('ek adı başlık değerine ham geçmez', () => {
+test('ek adı artık hiçbir başlığa yazılmaz ve enjeksiyon taşıyamaz', () => {
   const message = buildMimeMessage({
     from: 'mergen-rota@example.internal',
     to: ['a@example.internal'],
@@ -344,8 +347,10 @@ test('ek adı başlık değerine ham geçmez', () => {
     html: 'h',
     calendar: { method: 'REQUEST', content: 'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n', filename: 'kötü"; x\r\nBcc: b@c.d' }
   });
-  assert.match(message, /filename="ktxBccbc\.d"/);
+  // Ek adı hiç kullanılmaz; çağıranın gönderdiği değer başlıklara ulaşamaz.
+  assert.equal(message.includes('filename='), false);
   assert.equal(message.includes('Bcc: b@c.d'), false);
+  assert.equal(message.includes('kötü'), false);
 });
 
 test('takvim parçası OLMAYAN ileti eskisi gibi yalın multipart/alternative kalır', () => {

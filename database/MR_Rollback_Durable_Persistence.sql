@@ -13,6 +13,10 @@ BEGIN TRY
     IF OBJECT_ID(N'dbo.MR_V_ExecutiveScope', N'V') IS NOT NULL DROP VIEW dbo.MR_V_ExecutiveScope;
     IF OBJECT_ID(N'dbo.MR_V_CorporateProjects', N'V') IS NOT NULL DROP VIEW dbo.MR_V_CorporateProjects;
 
+    IF OBJECT_ID(N'dbo.MR_OperationalAlerts', N'U') IS NOT NULL DROP TABLE dbo.MR_OperationalAlerts;
+    IF OBJECT_ID(N'dbo.MR_OperationalEvents', N'U') IS NOT NULL DROP TABLE dbo.MR_OperationalEvents;
+    IF OBJECT_ID(N'dbo.MR_TelemetryGaugeSamples', N'U') IS NOT NULL DROP TABLE dbo.MR_TelemetryGaugeSamples;
+    IF OBJECT_ID(N'dbo.MR_TelemetryOperationSamples', N'U') IS NOT NULL DROP TABLE dbo.MR_TelemetryOperationSamples;
     IF OBJECT_ID(N'dbo.MR_TaskOutlookSubscriptions', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskOutlookSubscriptions;
     IF OBJECT_ID(N'dbo.MR_TaskReminderLog', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskReminderLog;
     IF OBJECT_ID(N'dbo.MR_ReminderSettings', N'U') IS NOT NULL DROP TABLE dbo.MR_ReminderSettings;

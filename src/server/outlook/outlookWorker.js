@@ -4,6 +4,8 @@ import { runOutlookCalendarOutbox } from './outlookCalendarService.js';
 import { isOutlookCalendarEnabled, outlookApplicationLink, outlookPollIntervalMs } from './outlookConfig.js';
 import { outlookFailureCode } from './outlookFailure.js';
 import { abortableOutlookOperation, outlookDeadline } from './outlookExecution.js';
+import { observeOutcome } from '../observability/observeOperation.js';
+import { COMPONENTS } from '../../domain/observability/eventModel.js';
 
 const WORKER_KEY = Symbol.for('mergen-rota.outlook-worker');
 
@@ -14,7 +16,10 @@ async function runAutomaticOutlookPass() {
   catch (error) {
     return { ok: false, reason: connection.signal.aborted ? 'DATABASE_TIMEOUT' : outlookFailureCode(error) };
   } finally { connection.close(); }
-  return runOutlookCalendarOutbox(pool, { link: outlookApplicationLink() });
+  // Tur süresi ve sonucu ölçülür; ölçüm turun davranışını değiştirmez.
+  return observeOutcome('background.outlook.outbox',
+    () => runOutlookCalendarOutbox(pool, { link: outlookApplicationLink() }),
+    { component: COMPONENTS.OUTLOOK });
 }
 
 export function createOutlookWorker({
