@@ -3,6 +3,7 @@ import { REMINDER_PLACEHOLDERS } from '../../../../../domain/reminders/reminderT
 import { loadAuthorizationContext } from '../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { withRouteObservability } from '../../../../../server/observability/observeOperation.js';
 import { assertReminderAdmin } from '../../../../../server/reminders/reminderAccess.js';
 import { isSmtpConfigured } from '../../../../../server/mail/smtpConfig.js';
 import {
@@ -46,7 +47,7 @@ function settingsResponse(settings, history) {
   };
 }
 
-export async function GET() {
+async function handleLoadReminderSettings() {
   try {
     const pool = await getSqlPool();
     const actor = await loadAuthorizationContext(pool);
@@ -60,7 +61,7 @@ export async function GET() {
   }
 }
 
-export async function PUT(request) {
+async function handleSaveReminderSettings(request) {
   try {
     const pool = await getSqlPool();
     const actor = await loadAuthorizationContext(pool);
@@ -80,3 +81,8 @@ export async function PUT(request) {
     return safeErrorResponse(error);
   }
 }
+
+// Ölçüm sarmalayıcısı imzayı ve yanıtı DEĞİŞTİRMEZ; yalnızca süreyi, sonucu ve
+// ilişkilendirme kimliğini kaydeder (bkz. server/observability).
+export const GET = withRouteObservability('api.admin.reminder-settings', handleLoadReminderSettings);
+export const PUT = withRouteObservability('api.admin.reminder-settings.save', handleSaveReminderSettings);

@@ -2,8 +2,12 @@
    Icons — inline SVG, lucide-style, hand-picked
    ============================================================ */
 
-export const Icon = ({ d, size = 16, stroke = 1.75, className = '', style }) => (
+// Kalan özellikler SVG'ye AKTARILIR: çağıranların dekoratif simgelere geçirdiği
+// `aria-hidden`, `role` ve `focusable` gibi erişilebilirlik nitelikleri yolda
+// düşerse süsleme amaçlı simgeler yardımcı teknolojiye açık kalır.
+export const Icon = ({ d, size = 16, stroke = 1.75, className = '', style, ...svgProps }) => (
   <svg
+    {...svgProps}
     xmlns="http://www.w3.org/2000/svg"
     width={size} height={size} viewBox="0 0 24 24"
     fill="none" stroke="currentColor"
@@ -45,6 +49,9 @@ export const Icons = {
   PinOff: (p) => <Icon {...p} d='<path d="m3 3 18 18M7 4h10l-1 7 3 3M9 14H5l2.2-2.2M12 17v5"/>' />,
   Clock: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>' />,
   Alert: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>' />,
+  // Kritik durum, uyarıdan YALNIZCA renkle ayrılmaz: üçgen siluet, renk ayrımı
+  // olmayan kullanıcı için de iki durumu birbirinden ayırır.
+  Critical: (p) => <Icon {...p} d='<path d="M10.3 3.9 2.3 17.5A2 2 0 0 0 4 20.5h16a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>' />,
   Briefcase: (p) => <Icon {...p} d='<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>' />,
   Target: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>' />,
   Trash: (p) => <Icon {...p} d='<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' />,
@@ -67,6 +74,12 @@ export const Icons = {
   // İki karşılıklı yay 24×24 görünüm alanında (12,12) çevresinde geometrik
   // olarak dengelidir; tek taraftaki eski ok dönüş sırasında yörüngeleniyordu.
   Refresh: (p) => <Icon {...p} d='<path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.4-2L20 8"/><path d="M17.9 16a7 7 0 0 1-11.4 2L4 16"/>' />,
+  // Sistem Yönetimi · işletim nabzı
+  Activity: (p) => <Icon {...p} d='<path d="M3 12h4l3-8 4 16 3-8h4"/>' />,
+  Server: (p) => <Icon {...p} d='<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>' />,
+  Shield: (p) => <Icon {...p} d='<path d="M12 3l8 3v6c0 4.4-3.2 7.9-8 9-4.8-1.1-8-4.6-8-9V6l8-3z"/>' />,
+  Pause: (p) => <Icon {...p} d='<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>' />,
+  Play: (p) => <Icon {...p} d='<path d="M7 4.5v15l12-7.5-12-7.5z"/>' />,
 
   Info: (p) => (
     <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>

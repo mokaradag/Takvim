@@ -4,17 +4,26 @@ import { runOutlookCalendarOutbox } from './outlookCalendarService.js';
 import { isOutlookCalendarEnabled, outlookApplicationLink, outlookPollIntervalMs } from './outlookConfig.js';
 import { outlookFailureCode } from './outlookFailure.js';
 import { abortableOutlookOperation, outlookDeadline } from './outlookExecution.js';
+import { observeOutcome } from '../observability/observeOperation.js';
+import { COMPONENTS } from '../../domain/observability/eventModel.js';
 
 const WORKER_KEY = Symbol.for('mergen-rota.outlook-worker');
 
 async function runAutomaticOutlookPass() {
-  const connection = outlookDeadline(15000);
-  let pool;
-  try { pool = await abortableOutlookOperation(getSqlPool, connection.signal); }
-  catch (error) {
-    return { ok: false, reason: connection.signal.aborted ? 'DATABASE_TIMEOUT' : outlookFailureCode(error) };
-  } finally { connection.close(); }
-  return runOutlookCalendarOutbox(pool, { link: outlookApplicationLink() });
+  // Tur süresi ve sonucu ölçülür; ölçüm turun davranışını değiştirmez.
+  //
+  // Ölçüm turun TAMAMINI kapsar — veritabanı havuzunun alınması dahil. Havuz
+  // alınamadığında tur hiç çalışmamıştır; bu başarısızlık ölçümün dışında
+  // kalırsa arka plan hata oranı veritabanı kesintilerini hiç görmez.
+  return observeOutcome('background.outlook.outbox', async () => {
+    const connection = outlookDeadline(15000);
+    let pool;
+    try { pool = await abortableOutlookOperation(getSqlPool, connection.signal); }
+    catch (error) {
+      return { ok: false, reason: connection.signal.aborted ? 'DATABASE_TIMEOUT' : outlookFailureCode(error) };
+    } finally { connection.close(); }
+    return runOutlookCalendarOutbox(pool, { link: outlookApplicationLink() });
+  }, { component: COMPONENTS.OUTLOOK });
 }
 
 export function createOutlookWorker({
@@ -26,6 +35,7 @@ export function createOutlookWorker({
   let started = false;
   let timer = null;
   let running = null;
+  let runStartedAt = null;
   let lastFinishedAt = null;
   let lastResult = null;
   let lastFailure = null;
@@ -37,6 +47,10 @@ export function createOutlookWorker({
   const tick = () => {
     timer = null;
     if (!started || running) return;
+    // Süren turun BAŞLANGIÇ anı bildirilir: ilk turu takılı kalan çalışanın
+    // tamamlanmış turu (`lastFinishedAt`) hiç oluşmaz ve sağlık yoklaması
+    // nabzı ölçemeden "bilinmiyor" diye beklemeyi sürdürürdü.
+    runStartedAt = new Date().toISOString();
     running = Promise.resolve().then(() => enabled() ? run() : { ok: true, enabled: false })
       .catch((error) => ({ ok: false, reason: outlookFailureCode(error) }))
       .then((result) => {
@@ -47,6 +61,7 @@ export function createOutlookWorker({
         lastFailure = failure;
       }).finally(() => {
         running = null;
+        runStartedAt = null;
         if (started) schedule(intervalMs);
       });
   };
@@ -62,7 +77,7 @@ export function createOutlookWorker({
       timer = null;
       await running;
     },
-    status() { return { started, running: Boolean(running), intervalMs, lastFinishedAt, lastResult }; }
+    status() { return { started, running: Boolean(running), intervalMs, runStartedAt, lastFinishedAt, lastResult }; }
   };
 }
 
@@ -74,7 +89,7 @@ export function startOutlookWorker() {
 export function outlookWorkerStatus() {
   const enabled = isOutlookCalendarEnabled();
   const status = globalThis[WORKER_KEY]?.status() || {
-    started: false, running: false, intervalMs: outlookPollIntervalMs(), lastFinishedAt: null, lastResult: null
+    started: false, running: false, intervalMs: outlookPollIntervalMs(), runStartedAt: null, lastFinishedAt: null, lastResult: null
   };
   return { ...status, enabled, automatic: enabled && status.started };
 }

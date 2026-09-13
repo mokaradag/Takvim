@@ -1,4 +1,5 @@
 import { taskActivityRecordsets } from './taskActivitySql.mjs';
+import { runObservabilityQuery } from './observabilitySql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -184,6 +185,13 @@ export function createFakeDatabase(seed = {}) {
       Holidays: calendar.Holidays || []
     })),
     auditLog: seed.auditLog || [],
+    // Gözlemlenebilirlik tabloları (bkz. observabilitySql.mjs). Testler
+    // doğrudan satır ekleyebilsin diye ikiz kurulurken hazırlanır.
+    observabilitySchemaMissing: seed.observabilitySchemaMissing === true,
+    telemetryOperationSamples: seed.telemetryOperationSamples || [],
+    telemetryGaugeSamples: seed.telemetryGaugeSamples || [],
+    operationalEvents: seed.operationalEvents || [],
+    operationalAlerts: seed.operationalAlerts || [],
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
     corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
@@ -200,7 +208,10 @@ export function createFakeDatabase(seed = {}) {
       ProjectCode: String(entry.ProjectCode || '').toUpperCase(),
       ContentHash: entry.ContentHash,
       NodeCount: entry.NodeCount ?? 0,
-      SyncedBySicil: entry.SyncedBySicil ?? null
+      SyncedBySicil: entry.SyncedBySicil ?? null,
+      // Eşitleme ANI korunur: düşürülürse "bayat eşitleme" sağlık davranışı
+      // hiçbir testte sınanamaz, ikiz her zaman taze bir damga uydururdu.
+      SyncedAt: entry.SyncedAt ?? null
     })),
     // Kurumsal kullanıcı dizini (DC01_userr). MERGEN Rota tarafından
     // OLUŞTURULMAZ; yalnızca okunur.
@@ -1153,6 +1164,11 @@ function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
 
+  // Gözlemlenebilirlik yüzeyi (telemetri toplamları, işletim olayları,
+  // uyarılar ve sağlık yoklamaları) ayrı bir modülde karşılanır.
+  const observability = runObservabilityQuery(db, sqlText, params);
+  if (observability) return result(observability);
+
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));
   if (params.activityAssignees != null) return result([db.people.filter((person) => params.activityAssignees.split(',').includes(String(person.Sicil)))]);
@@ -1184,8 +1200,8 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('dbo.MR_CorporateWbsSyncState')) {
     const code = String(params.projectCode || '').toUpperCase();
     const existing = db.corporateWbsSyncState.find((entry) => entry.ProjectCode === code);
-    if (existing) Object.assign(existing, { ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null });
-    else db.corporateWbsSyncState.push({ ProjectCode: code, ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null });
+    if (existing) Object.assign(existing, { ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null, SyncedAt: new Date().toISOString() });
+    else db.corporateWbsSyncState.push({ ProjectCode: code, ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null, SyncedAt: new Date().toISOString() });
     return result([[]]);
   }
 
