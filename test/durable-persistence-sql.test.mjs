@@ -99,3 +99,48 @@ test('rollback is rerunnable and never names source tables as drop targets', () 
   assert.match(rollbackSql, /OBJECT_ID\(/i);
   for (const source of sourceTables) assert.doesNotMatch(rollbackSql, new RegExp(`DROP\\s+(?:TABLE|VIEW).*${source}`, 'i'));
 });
+
+const observabilityUpgrade = readFileSync(new URL('../database/MR_Upgrade_0012_System_Observability.sql', import.meta.url), 'utf8');
+
+function normalizeSqlDefinition(definition, locale) {
+  return definition.replace(/[ \[\]()]/g, '').toLocaleLowerCase(locale);
+}
+
+test('0012 SQL metninin harmanlamasını LOWER işleminden önce sabitler', () => {
+  const expressions = [...observabilityUpgrade.matchAll(/LOWER\(REPLACE\(REPLACE\(REPLACE\(REPLACE\(REPLACE\((\w+\.\w+)\s+COLLATE\s+(\w+),/g)];
+  assert.deepEqual(expressions.map((match) => match[1]).sort(), ['c.definition', 'd.definition', 'i.filter_definition']);
+  assert.ok(expressions.every((match) => match[2] === 'Latin1_General_100_CS_AS'));
+  assert.equal([...observabilityUpgrade.matchAll(/\bLOWER\(/g)].length, expressions.length);
+  assert.doesNotMatch(observabilityUpgrade, /ALTER\s+(?:DATABASE|TABLE)[\s\S]*?COLLATE/i);
+});
+
+test('0012 beklenen kısıtları Türkçe harf dönüşümüyle karıştırmaz', () => {
+  const expectedBlock = observabilityUpgrade.slice(observabilityUpgrade.indexOf('INSERT @RequiredChecks VALUES'), observabilityUpgrade.indexOf('DECLARE @InvalidCheck'));
+  const expected = new Map([...expectedBlock.matchAll(/\(N'[^']+', N'(CK_[^']+)', N'((?:[^']|'')*)', N'((?:[^']|'')*)', N'((?:[^']|'')*)'\)/g)]
+    .map((match) => [match[1], match.slice(2).map((value) => value.replace(/''/g, "'"))]));
+  const definitions = [...observabilityUpgrade.matchAll(/CONSTRAINT (CK_\w+) CHECK \(([^\r\n]+)\)/g)];
+  assert.equal(definitions.length, 7);
+  assert.equal(expected.size, 7);
+  let rejectedByTurkish = 0;
+  for (const [, name, definition] of definitions) {
+    const accepted = expected.get(name);
+    assert.ok(accepted.includes(normalizeSqlDefinition(definition, 'en-US')), name);
+    if (!accepted.includes(normalizeSqlDefinition(definition, 'tr-TR'))) rejectedByTurkish += 1;
+    assert.equal(accepted.includes(normalizeSqlDefinition(`${definition} OR 1=1`, 'en-US')), false, name);
+  }
+  assert.equal(rejectedByTurkish, 3);
+  const storedSeverity = "([Severity]='CRITICAL' OR [Severity]='ERROR' OR [Severity]='WARNING' OR [Severity]='INFO')";
+  assert.ok(expected.get('CK_MR_OperationalEvents_Severity').includes(normalizeSqlDefinition(storedSeverity, 'en-US')));
+  assert.equal(normalizeSqlDefinition('(sysutcdatetime())', 'en-US'), 'sysutcdatetime');
+  assert.equal(normalizeSqlDefinition('(SYSUTCDATETIME())', 'en-US'), 'sysutcdatetime');
+  assert.notEqual(normalizeSqlDefinition('(SYSUTCDATETIME())', 'tr-TR'), 'sysutcdatetime');
+});
+
+test('0012 gerçek kısıt hatasını adlandırır ve başarı kaydından önce durur', () => {
+  const validation = observabilityUpgrade.slice(observabilityUpgrade.indexOf('DECLARE @InvalidCheck'), observabilityUpgrade.indexOf('DECLARE @RequiredDefaults'));
+  assert.match(validation, /@InvalidCheck = r.TableName \+ N'\.' \+ r.ConstraintName/);
+  assert.match(validation, /c.object_id IS NULL OR c.is_disabled = 1 OR c.is_not_trusted = 1/);
+  assert.match(validation, /IF @InvalidCheck IS NOT NULL[\s\S]*THROW 51012, @CheckError, 1/);
+  assert.ok(observabilityUpgrade.indexOf('THROW 51012, @CheckError, 1') < observabilityUpgrade.indexOf('INSERT dbo.MR_SchemaMigrations'));
+  assert.match(observabilityUpgrade, /BEGIN CATCH\s+IF XACT_STATE\(\) <> 0 ROLLBACK TRANSACTION;\s+THROW;/);
+});
