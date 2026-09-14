@@ -15,11 +15,7 @@ import {
   REMINDER_RUN_STATE_SQL
 } from '../../../../../../server/observability/telemetryQueries.js';
 import { isCorporateWbsSourceConfigured } from '../../../../../../server/db/corporateWbsConfig.js';
-import {
-  getCorporateWbsSyncTtlMs,
-  hasCorporateWbsSyncedOnce,
-  isCorporateWbsSyncFresh
-} from '../../../../../../server/repository/corporateWbsSyncSchedule.js';
+import { getCorporateWbsSyncTtlMs } from '../../../../../../server/repository/corporateWbsSyncSchedule.js';
 import { synchronizeCorporateWbs } from '../../../../../../server/repository/corporateWbsSync.js';
 import { runOutlookCalendarOutbox } from '../../../../../../server/outlook/outlookCalendarService.js';
 import {
@@ -86,18 +82,40 @@ async function loadOutlookSection(pool) {
   };
 }
 
+function isFreshTimestamp(timestamp, ttlMs, now = Date.now()) {
+  if (!timestamp) return false;
+  const value = new Date(timestamp).getTime();
+  return Number.isFinite(value) && value <= now && now - value < ttlMs;
+}
+
 async function loadCorporateWbsSection(pool) {
   const configured = isCorporateWbsSourceConfigured();
-  if (!configured) return { configured, lastSyncedAt: null, projectCount: 0, nodeCount: 0 };
+  if (!configured) {
+    return {
+      configured,
+      lastSuccessfulSyncAt: null,
+      lastContentChangeAt: null,
+      projectCount: 0,
+      nodeCount: 0,
+      mergedProjectCount: null,
+      skippedProjectCount: null,
+      ttlMs: getCorporateWbsSyncTtlMs(),
+      fresh: false
+    };
+  }
   const row = (await pool.request().query(CORPORATE_WBS_STATE_SQL)).recordset?.[0] || {};
+  const lastSuccessfulSyncAt = row.LastSuccessfulSyncAt ? new Date(row.LastSuccessfulSyncAt).toISOString() : null;
+  const ttlMs = getCorporateWbsSyncTtlMs();
   return {
     configured,
-    lastSyncedAt: row.LastSyncedAt ? new Date(row.LastSyncedAt).toISOString() : null,
+    lastSuccessfulSyncAt,
+    lastContentChangeAt: row.LastContentChangeAt ? new Date(row.LastContentChangeAt).toISOString() : null,
     projectCount: Number(row.ProjectCount || 0),
     nodeCount: Number(row.NodeCount || 0),
-    ttlMs: getCorporateWbsSyncTtlMs(),
-    fresh: isCorporateWbsSyncFresh(),
-    syncedInThisProcess: hasCorporateWbsSyncedOnce()
+    mergedProjectCount: row.MergedProjectCount == null ? null : Number(row.MergedProjectCount),
+    skippedProjectCount: row.SkippedProjectCount == null ? null : Number(row.SkippedProjectCount),
+    ttlMs,
+    fresh: isFreshTimestamp(lastSuccessfulSyncAt, ttlMs)
   };
 }
 

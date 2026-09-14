@@ -57,7 +57,7 @@ export function deriveAlertConditions({ components = [], apiSummary = null, thre
   const wbs = map.get(COMPONENTS.CORPORATE_WBS);
   if (wbs?.state === HEALTH_STATES.WARNING) {
     add(condition(COMPONENTS.CORPORATE_WBS, 'CORPORATE_WBS_STALE', EVENT_SEVERITIES.WARNING, wbs.message,
-      { context: { lastSyncedAt: wbs.detail?.lastSyncedAt ?? null } }));
+      { context: { lastSuccessfulSyncAt: wbs.detail?.lastSuccessfulSyncAt ?? null } }));
   } else if (wbs?.state === HEALTH_STATES.UNKNOWN) {
     // ÖLÇÜLEMEMEK, eşitlemenin başarısız olduğu anlamına GELMEZ: durum sorgusu
     // okunamadığında ya da henüz hiç eşitleme yapılmadığında yalnızca ölçümün
@@ -122,7 +122,7 @@ export function deriveAlertConditions({ components = [], apiSummary = null, thre
     if (Number.isFinite(p95) && p95 > Number(thresholds.latencyP95Ms ?? 1500)) {
       add(condition(COMPONENTS.API, 'API_LATENCY_HIGH', EVENT_SEVERITIES.WARNING,
         `P95 yanıt süresi ${Math.round(p95)} ms; eşik ${Math.round(Number(thresholds.latencyP95Ms ?? 1500))} ms.`,
-        { scope: applicationInstanceId(), context: { p95Ms: Math.round(p95), count: Number(apiSummary.count) } }));
+        { scope: applicationInstanceId(), context: { p95Ms: Math.round(p95), count: Number(apiSummary.count || 0) } }));
     }
   }
 

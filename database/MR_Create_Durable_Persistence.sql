@@ -394,6 +394,26 @@ BEGIN TRY
         CONSTRAINT CK_MR_CorporateWbsSyncState_NodeCount CHECK (NodeCount >= 0)
     );
 
+    -- Tamamlanan son CN43N turu içerik değişikliğinden bağımsız tutulur.
+    CREATE TABLE dbo.MR_CorporateWbsSyncRunState (
+        StateId tinyint NOT NULL,
+        LastSuccessfulSyncAt datetime2(3) NOT NULL,
+        ProjectCount int NOT NULL,
+        NodeCount bigint NOT NULL,
+        MergedProjectCount int NOT NULL,
+        SkippedProjectCount int NOT NULL,
+        UpdatedBySicil int NULL,
+        CONSTRAINT PK_MR_CorporateWbsSyncRunState PRIMARY KEY (StateId),
+        CONSTRAINT CK_MR_CorporateWbsSyncRunState_StateId CHECK (StateId = 1),
+        CONSTRAINT CK_MR_CorporateWbsSyncRunState_Counts CHECK (
+            ProjectCount >= 0
+            AND NodeCount >= 0
+            AND MergedProjectCount >= 0
+            AND SkippedProjectCount >= 0
+            AND MergedProjectCount + SkippedProjectCount <= ProjectCount
+        )
+    );
+
     -- Görev hatırlatma e-postaları.
     --
     -- Tek satırlık yapılandırma yönetici ekranından yazılır; otomatik gönderim
@@ -755,7 +775,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0009_task_activity_report', N'Görev hareket raporu için tür ve tarih aralığı dizini'),
            (N'0010_outlook_calendar_subscriptions', N'Görev/Sicil Outlook takvim abonelikleri ve dayanıklı gönderim kuyruğu'),
            (N'0011_outlook_completion_lifecycle', N'Outlook tamamlanma, yeniden açılma ve iptal nedeni'),
-           (N'0012_system_observability', N'Sistem Yönetimi telemetri toplamları, işletim olayları ve otomatik uyarılar');
+           (N'0012_system_observability', N'Sistem Yönetimi telemetri toplamları, işletim olayları ve otomatik uyarılar'),
+           (N'0013_corporate_wbs_sync_freshness', N'CN43N başarılı tur tazeliği ile WBS içerik değişikliği zamanını ayırır');
 
     COMMIT TRANSACTION;
 END TRY

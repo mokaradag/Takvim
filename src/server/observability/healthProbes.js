@@ -141,7 +141,7 @@ export async function probeCorporateDirectory(executor, { now = Date.now(), time
   }
 }
 
-/** CN43N eşitlemesi: yapılandırılmış mı, en son ne zaman ve ne kadar taze? */
+/** CN43N eşitlemesi: yapılandırılmış mı, son başarılı tur ne zaman? */
 export async function probeCorporateWbs(executor, { now = Date.now(), timeoutMs = 4000 } = {}) {
   if (!isCorporateWbsSourceConfigured()) {
     return component(COMPONENTS.CORPORATE_WBS, HEALTH_STATES.NOT_CONFIGURED,
@@ -152,29 +152,39 @@ export async function probeCorporateWbs(executor, { now = Date.now(), timeoutMs 
   try {
     const result = await boundedExecutor(executor, deadline.signal).request().query(CORPORATE_WBS_STATE_SQL);
     const row = result.recordset?.[0] || {};
-    const lastSyncedAt = row.LastSyncedAt ? new Date(row.LastSyncedAt).toISOString() : null;
+    const lastSuccessfulSyncAt = row.LastSuccessfulSyncAt ? new Date(row.LastSuccessfulSyncAt).toISOString() : null;
+    const lastContentChangeAt = row.LastContentChangeAt ? new Date(row.LastContentChangeAt).toISOString() : null;
     const detail = {
-      lastSyncedAt,
+      lastSuccessfulSyncAt,
+      lastContentChangeAt,
       projectCount: Number(row.ProjectCount || 0),
       nodeCount: Number(row.NodeCount || 0),
+      mergedProjectCount: row.MergedProjectCount == null ? null : Number(row.MergedProjectCount),
+      skippedProjectCount: row.SkippedProjectCount == null ? null : Number(row.SkippedProjectCount),
       ttlMs: getCorporateWbsSyncTtlMs(),
-      syncedInThisProcess: hasCorporateWbsSyncedOnce()
+      successfulSyncObservedInThisProcess: hasCorporateWbsSyncedOnce()
     };
     const durationMs = Date.now() - startedAt;
-    if (!lastSyncedAt) {
+    if (!lastSuccessfulSyncAt) {
       return component(COMPONENTS.CORPORATE_WBS, HEALTH_STATES.UNKNOWN,
-        'Henüz kayıtlı bir CN43N eşitlemesi yok.', { durationMs, detail });
+        'Henüz kayıtlı bir başarılı CN43N eşitleme turu yok.', { durationMs, detail });
+    }
+    const lastSuccessfulSyncTime = new Date(lastSuccessfulSyncAt).getTime();
+    if (lastSuccessfulSyncTime > now) {
+      return component(COMPONENTS.CORPORATE_WBS, HEALTH_STATES.WARNING,
+        'Son başarılı eşitleme zamanı uygulama saatinden ileride; saat eşitlemesini denetleyin.',
+        { durationMs, detail, lastSuccessAt: lastSuccessfulSyncAt });
     }
     const staleAfterMs = corporateSyncStaleHours() * 3600000;
-    const age = ageMs(lastSyncedAt, now);
+    const age = ageMs(lastSuccessfulSyncAt, now);
     if (age != null && age > staleAfterMs) {
       return component(COMPONENTS.CORPORATE_WBS, HEALTH_STATES.WARNING,
         `Son başarılı eşitleme ${Math.round(age / 3600000)} saat önce; eşik ${corporateSyncStaleHours()} saat.`,
-        { durationMs, detail, lastSuccessAt: lastSyncedAt });
+        { durationMs, detail, lastSuccessAt: lastSuccessfulSyncAt });
     }
     return component(COMPONENTS.CORPORATE_WBS, HEALTH_STATES.HEALTHY,
-      `${detail.projectCount} proje eşitlenmiş durumda.`,
-      { durationMs, detail, lastSuccessAt: lastSyncedAt });
+      `${detail.projectCount} proje son başarılı turda denetlendi.`,
+      { durationMs, detail, lastSuccessAt: lastSuccessfulSyncAt });
   } catch {
     return component(COMPONENTS.CORPORATE_WBS, HEALTH_STATES.UNKNOWN,
       'CN43N eşitleme durumu bu yoklamada okunamadı.', { durationMs: Date.now() - startedAt });

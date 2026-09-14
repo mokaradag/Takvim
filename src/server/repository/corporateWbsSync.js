@@ -5,6 +5,7 @@ import { sql, withSqlTransaction } from '../db/pool.js';
 import {
   CORPORATE_PROJECT_CODES_SQL,
   CORPORATE_WBS_MERGE_SQL,
+  CORPORATE_WBS_SUCCESSFUL_RUN_UPSERT_SQL,
   CORPORATE_WBS_SYNC_STATE_SQL,
   CORPORATE_WBS_SYNC_STATE_UPSERT_SQL,
   buildCorporateWbsSourceQuery
@@ -79,6 +80,16 @@ async function recordSyncState(executor, actorSicil, projectCode, contentHash, n
   await request.query(CORPORATE_WBS_SYNC_STATE_UPSERT_SQL);
 }
 
+async function recordSuccessfulRun(executor, actorSicil, result) {
+  const request = executor.request();
+  request.input('projectCount', sql.Int, result.projectCount);
+  request.input('nodeCount', sql.BigInt, result.nodeCount);
+  request.input('mergedProjectCount', sql.Int, result.mergedProjectCount);
+  request.input('skippedProjectCount', sql.Int, result.skippedProjectCount);
+  request.input('actorSicil', sql.Int, actorSicil);
+  await request.query(CORPORATE_WBS_SUCCESSFUL_RUN_UPSERT_SQL);
+}
+
 /**
  * Kurumsal projelerin iş dağılım ağacını CN43N kaynağından eşitler.
  *
@@ -117,7 +128,9 @@ export async function synchronizeCorporateWbs(executor, actorSicil, { logger = c
 
     const projects = await loadCorporateProjects(executor);
     if (!projects.length) {
-      return { synchronized: true, projectCount: 0, nodeCount: 0, mergedProjectCount: 0, skippedProjectCount: 0 };
+      const result = { synchronized: true, projectCount: 0, nodeCount: 0, mergedProjectCount: 0, skippedProjectCount: 0 };
+      await withSqlTransaction((transaction) => recordSuccessfulRun(transaction, actorSicil, result));
+      return result;
     }
 
     const projectsByCode = new Map(projects.map((project) => [project.projectCode, project]));
@@ -152,7 +165,9 @@ export async function synchronizeCorporateWbs(executor, actorSicil, { logger = c
       }
     }
 
-    return { synchronized: true, projectCount, nodeCount, mergedProjectCount, skippedProjectCount };
+    const result = { synchronized: true, projectCount, nodeCount, mergedProjectCount, skippedProjectCount };
+    await withSqlTransaction((transaction) => recordSuccessfulRun(transaction, actorSicil, result));
+    return result;
   } catch (cause) {
     logger?.warn?.('Kurumsal WBS (CN43N) eşitlemesi tamamlanamadı; anlık görüntü kurumsal WBS olmadan yükleniyor.', cause);
     return { synchronized: false, projectCount: 0, nodeCount: 0, mergedProjectCount: 0, skippedProjectCount: 0, reason: 'SOURCE_UNAVAILABLE' };

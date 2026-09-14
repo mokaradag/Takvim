@@ -310,7 +310,7 @@ export function SystemQueuesTab({ enabled = true }) {
       <AdminSection
         title="CN43N / kurumsal WBS eşitlemesi"
         icon="Database"
-        description="Kaynak gün içinde nadiren değişir; eşitleme tazelik penceresiyle sınırlanır."
+        description="Başarılı eşitleme turu tazeliği ile gerçek WBS içerik değişikliği ayrı izlenir."
         loading={resource.loading}
         error={requestError}
         actions={wbs?.configured ? (
@@ -328,7 +328,8 @@ export function SystemQueuesTab({ enabled = true }) {
         {wbs && (
           wbs.configured ? (
             <div className="sysadmin-tile-grid">
-              <MetricTile label="Son eşitleme" value={wbs.lastSyncedAt ? formatRelativeTime(wbs.lastSyncedAt) : 'henüz yok'} unit="raw" icon="Clock" />
+              <MetricTile label="Son başarılı eşitleme" value={wbs.lastSuccessfulSyncAt ? formatRelativeTime(wbs.lastSuccessfulSyncAt) : 'henüz yok'} unit="raw" icon="Clock" />
+              <MetricTile label="Son içerik değişikliği" value={wbs.lastContentChangeAt ? formatRelativeTime(wbs.lastContentChangeAt) : 'henüz yok'} unit="raw" icon="Activity" />
               <MetricTile label="Eşitlenen proje" value={wbs.projectCount} unit="count" icon="Layers" />
               <MetricTile label="Düğüm sayısı" value={wbs.nodeCount} unit="count" icon="Table" />
               <MetricTile label="Tazelik penceresi" value={formatDuration(wbs.ttlMs)} unit="raw" icon="Refresh"
