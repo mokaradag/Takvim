@@ -452,3 +452,7 @@ Sistem Yönetimi eylemleri, uygulama örnekleri arasında SQL kilidiyle korunur.
 Telemetri hataları bağımsız sağlık ve saklama adımlarını durdurmaz; SMTP, kimlik
 ve hatırlatma sağlığı ölçüm tazeliğini gözetir. Ayrıntılar için
 [Sistem Yönetimi](docs/SYSTEM-ADMINISTRATION.md) belgesine bakın.
+
+0012 yükseltmesinde Türkçe harmanlamalı veritabanlarının kısıt doğrulaması
+düzeltildi. 51012 hatası alan kurulumlar güncel yükseltme dosyasının tamamını
+mevcut veritabanında yeniden çalıştırabilir; tabloların silinmesi gerekmez.

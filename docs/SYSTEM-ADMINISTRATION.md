@@ -632,3 +632,28 @@ işlemlerini durdurmaz. Tur başarısız sonucu, aşama bilgileri ve kritik sağ
 durumu birlikte bildirilir. Kayıp sayaçları, kayıp bildirimi kuyruğa kabul
 edilene kadar korunur. Performans aralığı değişirken önceki aralığın verisi
 gösterilmez; beş dakikalık başlangıç kovası aralıkla kesişiyorsa okumaya katılır.
+
+
+### 0012 yükseltmesinde Türkçe harmanlama hatası
+
+Eski betik, kısıt ve varsayılan SQL metinlerini veritabanının harmanlamasıyla
+küçük harfe dönüştürüyordu. Türkçe harmanlamada `INFO`, `CRITICAL` ve
+`SYSUTCDATETIME` içindeki `I` harfi `ı` olur; geçerli bir şema bile 51012
+hatasıyla reddedilebilir. Düzeltilmiş betik dizin filtresi, CHECK ve varsayılan
+değer metinlerinde `LOWER` işleminden **önce** açık İngilizce harmanlama uygular.
+Veritabanının, tabloların ve uygulama verisinin harmanlaması değiştirilmez.
+
+Bu hatada TRY/CATCH, 0012 işlemini geri alır; yükseltme başarı kaydı yazılmaz.
+Güncellenmiş `database/MR_Upgrade_0012_System_Observability.sql` dosyasının
+**tamamını**, uygulamanın mevcut veritabanında yeniden çalıştırın. Kurulum veya
+rollback betiklerini çalıştırmak ve mevcut tabloları silmek gerekmez. Eksik,
+devre dışı, güvenilmeyen veya uyumsuz bir CHECK gerçekten varsa işlem yine
+reddedilir; hata artık tablonun ve kısıtın adını da gösterir.
+
+Başarıyı aynı veritabanında şu salt okunur sorguyla doğrulayabilirsiniz:
+
+```sql
+SELECT MigrationId, AppliedAt
+FROM dbo.MR_SchemaMigrations
+WHERE MigrationId = N'0012_system_observability';
+```

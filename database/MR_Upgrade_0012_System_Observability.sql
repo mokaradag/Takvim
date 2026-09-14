@@ -215,6 +215,8 @@ BEGIN TRY
     )
         THROW 51012, '0012: Mevcut telemetri sütunları uyumsuz. Şemayı düzeltip göçü yeniden çalıştırın.', 1;
 
+    -- SQL metninin harf dönüşümü veritabanının dilinden bağımsızdır.
+    -- Türkçe harmanlamada INFO → ınfo dönüşümü geçerli kısıtı reddederdi.
     DECLARE @RequiredIndexes TABLE (
         TableName sysname, IndexName sysname, IsUnique bit, IsPrimaryKey bit, FilterDefinition nvarchar(200)
     );
@@ -235,7 +237,7 @@ BEGIN TRY
         LEFT JOIN sys.indexes i ON i.object_id = OBJECT_ID(N'dbo.' + r.TableName, N'U') AND i.name = r.IndexName
         WHERE i.index_id IS NULL OR i.is_disabled = 1 OR i.is_hypothetical = 1
             OR i.is_unique <> r.IsUnique OR i.is_primary_key <> r.IsPrimaryKey
-            OR ISNULL(LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(i.filter_definition,
+            OR ISNULL(LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(i.filter_definition COLLATE Latin1_General_100_CS_AS,
                 N' ', N''), N'[', N''), N']', N''), N'(', N''), N')', N'')), N'') <> ISNULL(r.FilterDefinition, N'')
     )
         THROW 51012, '0012: Gerekli telemetri dizini eksik veya uyumsuz.', 1;
@@ -318,15 +320,20 @@ BEGIN TRY
         (N'MR_OperationalAlerts', N'CK_MR_OperationalAlerts_Severity', N'severityin''info'',''warning'',''error'',''critical''', N'severity=''info''orseverity=''warning''orseverity=''error''orseverity=''critical''', N'severity=''critical''orseverity=''error''orseverity=''warning''orseverity=''info'''),
         (N'MR_OperationalAlerts', N'CK_MR_OperationalAlerts_State', N'statein''open'',''acknowledged'',''resolved''', N'state=''open''orstate=''acknowledged''orstate=''resolved''', N'state=''resolved''orstate=''acknowledged''orstate=''open'''),
         (N'MR_OperationalAlerts', N'CK_MR_OperationalAlerts_Occurrences', N'occurrencecount>0', N'occurrencecount>0', N'occurrencecount>0');
-    IF EXISTS (
-        SELECT 1 FROM @RequiredChecks r
-        LEFT JOIN sys.check_constraints c ON c.parent_object_id = OBJECT_ID(N'dbo.' + r.TableName, N'U') AND c.name = r.ConstraintName
-        WHERE c.object_id IS NULL OR c.is_disabled = 1 OR c.is_not_trusted = 1
-            OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.definition,
-                N' ', N''), N'[', N''), N']', N''), N'(', N''), N')', N''))
-                NOT IN (r.Definition, r.ExpandedDefinition, r.ReversedDefinition)
-    )
-        THROW 51012, '0012: Telemetri doğrulama kısıtları eksik veya uyumsuz.', 1;
+    DECLARE @InvalidCheck nvarchar(300), @CheckError nvarchar(2048);
+    SELECT TOP (1) @InvalidCheck = r.TableName + N'.' + r.ConstraintName
+    FROM @RequiredChecks r
+    LEFT JOIN sys.check_constraints c ON c.parent_object_id = OBJECT_ID(N'dbo.' + r.TableName, N'U') AND c.name = r.ConstraintName
+    WHERE c.object_id IS NULL OR c.is_disabled = 1 OR c.is_not_trusted = 1
+        OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.definition COLLATE Latin1_General_100_CS_AS,
+            N' ', N''), N'[', N''), N']', N''), N'(', N''), N')', N''))
+            NOT IN (r.Definition, r.ExpandedDefinition, r.ReversedDefinition)
+    ORDER BY r.TableName, r.ConstraintName;
+    IF @InvalidCheck IS NOT NULL
+    BEGIN
+        SET @CheckError = N'0012: Telemetri doğrulama kısıtı eksik, devre dışı, güvenilmez veya uyumsuz: ' + @InvalidCheck;
+        THROW 51012, @CheckError, 1;
+    END;
 
     DECLARE @RequiredDefaults TABLE (TableName sysname, ColumnName sysname, Definition nvarchar(200));
     INSERT @RequiredDefaults VALUES
@@ -345,7 +352,7 @@ BEGIN TRY
         SELECT 1 FROM @RequiredDefaults r
         JOIN sys.columns c ON c.object_id = OBJECT_ID(N'dbo.' + r.TableName, N'U') AND c.name = r.ColumnName
         LEFT JOIN sys.default_constraints d ON d.object_id = c.default_object_id
-        WHERE d.object_id IS NULL OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(d.definition,
+        WHERE d.object_id IS NULL OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(d.definition COLLATE Latin1_General_100_CS_AS,
             N' ', N''), N'[', N''), N']', N''), N'(', N''), N')', N'')) <> r.Definition
     )
         THROW 51012, '0012: Telemetri varsayılan değerleri eksik veya uyumsuz.', 1;
