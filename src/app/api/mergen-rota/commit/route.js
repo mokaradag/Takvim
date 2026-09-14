@@ -8,6 +8,7 @@ import { findCommitProjectWbsIssue } from '../../../../server/repository/commitP
 import { canonicalizeCommitScalars } from '../../../../server/repository/commitScalarCanonicalization.js';
 import { findCommitScalarIssue } from '../../../../server/repository/commitScalarValidation.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
+import { withRouteObservability } from '../../../../server/observability/observeOperation.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -89,7 +90,7 @@ async function readBodyWithinLimit(request) {
   return new TextDecoder().decode(merged);
 }
 
-export async function POST(request) {
+async function handleCommit(request) {
   try {
     assertBodyWithinLimit(request);
     const raw = await readBodyWithinLimit(request);
@@ -120,3 +121,7 @@ export async function POST(request) {
     return safeErrorResponse(error);
   }
 }
+
+// Ölçüm sarmalayıcısı imzayı ve yanıtı DEĞİŞTİRMEZ; yalnızca süreyi, sonucu ve
+// ilişkilendirme kimliğini kaydeder (bkz. server/observability).
+export const POST = withRouteObservability('api.commit', handleCommit);

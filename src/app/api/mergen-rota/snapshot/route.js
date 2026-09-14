@@ -1,5 +1,6 @@
 import { createProjectedSqlAppRepository } from '../../../../server/repository/projectedSqlAppRepository.js';
 import { safeErrorResponse } from '../../../../server/errors.js';
+import { withRouteObservability } from '../../../../server/observability/observeOperation.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,7 @@ export async function loadSnapshotForRequest(request, repository) {
  * Ayrı `/session` ucu olduğu gibi durmaya devam eder (oturum tazeleme ve
  * eski istemciler için).
  */
-export async function GET(request = null) {
+async function handleSnapshot(request = null) {
   try {
     const repository = createProjectedSqlAppRepository();
     const body = await loadSnapshotForRequest(request, repository);
@@ -41,3 +42,7 @@ export async function GET(request = null) {
     return safeErrorResponse(error);
   }
 }
+
+// Ölçüm sarmalayıcısı imzayı ve yanıtı DEĞİŞTİRMEZ; yalnızca süreyi, sonucu ve
+// ilişkilendirme kimliğini kaydeder (bkz. server/observability).
+export const GET = withRouteObservability('api.snapshot', handleSnapshot);

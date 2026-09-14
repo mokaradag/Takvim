@@ -4,6 +4,7 @@ import './styles/shell.css';
 import './styles/dashboard.css';
 import './styles/features.css';
 import './styles/reports.css';
+import './styles/system-admin.css';
 import './styles/simple-mode.css';
 import './styles/experience.css';
 import { TWEAKS_BOOTSTRAP_SCRIPT } from '../lib/tweaksBootstrap.js';

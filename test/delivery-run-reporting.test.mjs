@@ -275,3 +275,25 @@ test('gerçek hatırlatma SMTP reddi Outlook başarılıyken servis, HTTP ve ara
   assert.equal(body.error.code, 'SMTP_SEND_FAILED');
   assert.equal(deliveryRunMessage(body).type, 'error');
 });
+
+for (const reject of [false, true]) {
+  test(`zamanlayıcı turu Outlook teslimat sonucunu arka plan ölçümüne yansıtır (ret: ${reject})`, async (t) => {
+    const { pool } = await stack(t);
+    await smtpServer(t, reject);
+    const { resetTelemetryRegistryForTests, snapshotOperations } = await import('../src/server/observability/telemetryRegistry.js');
+    process.env.MERGEN_ROTA_TELEMETRY_ENABLED = 'true';
+    process.env.MERGEN_ROTA_REMINDER_CRON_SECRET = 'test-scheduler-secret';
+    resetTelemetryRegistryForTests();
+    t.after(resetTelemetryRegistryForTests);
+    await addTaskToOutlook(pool, { taskId: TASK, sicil: SICIL, queueOnly: true });
+    const response = await POST(new Request('http://localhost/reminders/run', {
+      method: 'POST', headers: { 'x-mergen-rota-reminder-key': 'test-scheduler-secret' }
+    }));
+    assert.equal(response.status, reject ? 503 : 200);
+    const operation = snapshotOperations().find((row) => row.operation === 'background.reminders.run');
+    assert.ok(operation);
+    assert.equal(operation.count, 1);
+    assert.equal(operation.errorCount, reject ? 1 : 0);
+    assert.equal(operation.topFailureCode, reject ? 'SMTP_SEND_FAILED' : null);
+  });
+}

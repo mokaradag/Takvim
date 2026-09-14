@@ -1,4 +1,5 @@
 import { taskActivityRecordsets } from './taskActivitySql.mjs';
+import { runObservabilityQuery } from './observabilitySql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -184,6 +185,13 @@ export function createFakeDatabase(seed = {}) {
       Holidays: calendar.Holidays || []
     })),
     auditLog: seed.auditLog || [],
+    // Gözlemlenebilirlik tabloları (bkz. observabilitySql.mjs). Testler
+    // doğrudan satır ekleyebilsin diye ikiz kurulurken hazırlanır.
+    observabilitySchemaMissing: seed.observabilitySchemaMissing === true,
+    telemetryOperationSamples: seed.telemetryOperationSamples || [],
+    telemetryGaugeSamples: seed.telemetryGaugeSamples || [],
+    operationalEvents: seed.operationalEvents || [],
+    operationalAlerts: seed.operationalAlerts || [],
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
     corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
@@ -200,7 +208,10 @@ export function createFakeDatabase(seed = {}) {
       ProjectCode: String(entry.ProjectCode || '').toUpperCase(),
       ContentHash: entry.ContentHash,
       NodeCount: entry.NodeCount ?? 0,
-      SyncedBySicil: entry.SyncedBySicil ?? null
+      SyncedBySicil: entry.SyncedBySicil ?? null,
+      // Eşitleme ANI korunur: düşürülürse "bayat eşitleme" sağlık davranışı
+      // hiçbir testte sınanamaz, ikiz her zaman taze bir damga uydururdu.
+      SyncedAt: entry.SyncedAt ?? null
     })),
     // Kurumsal kullanıcı dizini (DC01_userr). MERGEN Rota tarafından
     // OLUŞTURULMAZ; yalnızca okunur.
@@ -1153,6 +1164,11 @@ function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
 
+  // Gözlemlenebilirlik yüzeyi (telemetri toplamları, işletim olayları,
+  // uyarılar ve sağlık yoklamaları) ayrı bir modülde karşılanır.
+  const observability = runObservabilityQuery(db, sqlText, params);
+  if (observability) return result(observability);
+
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));
   if (params.activityAssignees != null) return result([db.people.filter((person) => params.activityAssignees.split(',').includes(String(person.Sicil)))]);
@@ -1184,8 +1200,8 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('dbo.MR_CorporateWbsSyncState')) {
     const code = String(params.projectCode || '').toUpperCase();
     const existing = db.corporateWbsSyncState.find((entry) => entry.ProjectCode === code);
-    if (existing) Object.assign(existing, { ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null });
-    else db.corporateWbsSyncState.push({ ProjectCode: code, ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null });
+    if (existing) Object.assign(existing, { ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null, SyncedAt: new Date().toISOString() });
+    else db.corporateWbsSyncState.push({ ProjectCode: code, ContentHash: params.contentHash, NodeCount: params.nodeCount, SyncedBySicil: params.actorSicil ?? null, SyncedAt: new Date().toISOString() });
     return result([[]]);
   }
 
@@ -2245,6 +2261,7 @@ function tableRows(db, table) {
  * veritabanı ile CN43N kaynağının aynı ikiz üzerinden ayrışmasını sağlar.
  */
 export function createFakeSqlServerDriver(db) {
+  db.adminActionLocks ||= new Map();
   class FakeRequest {
     constructor(pool) {
       this.pool = pool;
@@ -2260,6 +2277,14 @@ export function createFakeSqlServerDriver(db) {
     async query(statement) {
       const database = this.pool.config?.database || 'MERGEN_Rota';
       db.statements.push({ sql: String(statement), database });
+      if (String(statement).includes('sys.sp_getapplock')) {
+        if (!this.pool.began) throw new Error('Kilit bir SQL işlemi içinde alınmalıdır.');
+        this.pool.lockOnly = true;
+        const owner = db.adminActionLocks.get(this.params.resource);
+        if (owner && owner !== this.pool) return { recordset: [{ LockResult: -1 }] };
+        db.adminActionLocks.set(this.params.resource, this.pool);
+        return { recordset: [{ LockResult: 0 }] };
+      }
       return runQuery(db, statement, this.params, { database });
     }
   }
@@ -2298,14 +2323,20 @@ export function createFakeSqlServerDriver(db) {
         .filter(([key, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(key)))));
       db.transactions.push({ isolationLevel, statementIndex: db.statements.length });
     }
-    async commit() { this.committed = true; }
+    releaseLocks() {
+      for (const [key, owner] of db.adminActionLocks) {
+        if (owner === this) db.adminActionLocks.delete(key);
+      }
+    }
+    async commit() { this.committed = true; this.releaseLocks(); }
     async rollback() {
       this.rolledBack = true;
-      if (this.savedTables) Object.assign(db, this.savedTables);
+      this.releaseLocks();
+      if (this.savedTables && !this.lockOnly) Object.assign(db, this.savedTables);
     }
 
     request() {
-      return new FakeRequest(this.pool);
+      return new FakeRequest(this);
     }
   }
 

@@ -182,12 +182,17 @@ Kurallar:
 
 ## 6. Yönetici sayfası
 
-**Hatırlatma E-postaları** sayfası kenar çubuğunda yalnızca sistem
-yöneticilerine görünür. Gizleme tek başına güvenlik değildir: uçlar
-(`/api/mergen-rota/admin/reminder-settings`) her istekte yetkiyi yeniden
-denetler ve yetkisiz kullanıcıya `FORBIDDEN` döner.
+Hatırlatma yönetimi artık bağımsız bir gezinme öğesi değildir: kenar çubuğundaki
+**Sistem Yönetimi** sayfasının **Hatırlatma E-postaları** sekmesinde bulunur
+(`docs/SYSTEM-ADMINISTRATION.md`). Görünüm TAŞINMIŞTIR, çatallanmamıştır —
+yetki, ayarlar, zamanlayıcı, elle tur, doğrulama, hata işleme ve gönderim
+geçmişi davranışı değişmemiştir.
 
-Sayfa beş bölümden oluşur:
+Sayfa kenar çubuğunda yalnızca sistem yöneticilerine görünür. Gizleme tek başına
+güvenlik değildir: uçlar (`/api/mergen-rota/admin/reminder-settings`) her
+istekte yetkiyi yeniden denetler ve yetkisiz kullanıcıya `FORBIDDEN` döner.
+
+Sekme beş bölümden oluşur:
 
 1. **Otomatik hatırlatma planı** — açık/kapalı, hatırlatma penceresi
    (değer + birim) ve yineleme sıklığı (değer + birim). Altında okunur özet:
@@ -196,11 +201,16 @@ Sayfa beş bölümden oluşur:
    (kalın, italik, altı çizili, başlık, madde/numaralı liste, bağlantı, tablo).
    Desteklenen yer tutucular listelenir.
 3. **Önizleme** — örnek değerlerle üretilmiş, temizlenmiş gövde.
-4. **Son gönderimler** — tür, durum, alıcı sayısı, aralık anahtarı ve zaman.
+4. **Son gönderimler** — tür, durum, alıcı sayısı, aralık anahtarı ve zaman. Tablo KENDİ kaydırma sınırındadır: yapışkan başlık sayfa ortasında yüzmez, satırlar başlığın altından sızmaz.
 5. **Outlook takvim teslimatı** — otomatik çalışan, ortak kuyruk sağlığı ve yerel son tur sonucu; hatırlatma ayarlarından bağımsız yenilenir.
 
 Yönetici ayrıca **"Turu şimdi çalıştır"** ile zamanlanmış turu elle
-tetikleyebilir (deneme amaçlı).
+tetikleyebilir (deneme amaçlı). Aynı tur, Sistem Yönetimi → **Kuyruklar ve
+İşler** sekmesindeki onaylı eylemden de başlatılabilir; ikisi de aynı ucu
+(`/api/mergen-rota/reminders/run`) kullanır, ikinci bir uygulama yoktur.
+Hatırlatma hizmetinin sağlığı (otomatik gönderim açık mı, son tur başarılı mı)
+Genel Durum sekmesinde bir bileşen kartı olarak da izlenir; başarısız tur
+`REMINDER_RUN_FAILED` işletim uyarısı üretir.
 
 ---
 
