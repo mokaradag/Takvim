@@ -142,6 +142,20 @@ function matchesEventFilters(event, params) {
   return true;
 }
 
+function corporateWbsContentState(db) {
+  const rows = db.corporateWbsSyncState || [];
+  const stored = rows.map((row) => toMs(row.SyncedAt)).filter((value) => value != null);
+  return {
+    lastContentChangeAt: stored.length ? new Date(Math.max(...stored)).toISOString() : null,
+    projectCount: rows.length,
+    nodeCount: rows.reduce((sum, row) => sum + Number(row.NodeCount || 0), 0)
+  };
+}
+
+function guardCorporateWbsRunState(db) {
+  if (db.corporateWbsRunStateSchemaMissing) throw missingObject('MR_CorporateWbsSyncRunState');
+}
+
 /**
  * @returns {Array[]|null} kayıt kümeleri ya da sorgu tanınmadıysa `null`
  */
@@ -166,16 +180,37 @@ export function runObservabilityQuery(db, sqlText, params) {
   if (sqlText.includes('AS ResponsibilityProbe')) {
     return [db.corporateProjectAccess.length ? [{ ResponsibilityProbe: 1 }] : []];
   }
-  if (sqlText.includes('MAX(SyncedAt) AS LastSyncedAt')) {
-    const rows = db.corporateWbsSyncState;
-    // Saklanan EN YENİ damga döner. Her okumada "şimdi" uydurulursa eşitlemenin
-    // bayatlaması hiçbir zaman gözlenemez.
-    const stored = rows.map((row) => toMs(row.SyncedAt)).filter((value) => value != null);
-    const fallback = db.corporateWbsSyncedAt || new Date().toISOString();
+  if (sqlText.includes('UPDATE dbo.MR_CorporateWbsSyncRunState')) {
+    guardCorporateWbsRunState(db);
+    db.corporateWbsSyncRunState = {
+      StateId: 1,
+      LastSuccessfulSyncAt: new Date().toISOString(),
+      ProjectCount: Number(params.projectCount || 0),
+      NodeCount: Number(params.nodeCount || 0),
+      MergedProjectCount: Number(params.mergedProjectCount || 0),
+      SkippedProjectCount: Number(params.skippedProjectCount || 0),
+      UpdatedBySicil: params.actorSicil ?? null
+    };
+    return [[]];
+  }
+  if (sqlText.includes('LastContentChangeAt') && sqlText.includes('MR_CorporateWbsSyncRunState')) {
+    guardCorporateWbsRunState(db);
+    const content = corporateWbsContentState(db);
+    const runState = db.corporateWbsSyncRunState || null;
     return [[{
-      LastSyncedAt: stored.length ? new Date(Math.max(...stored)).toISOString() : (rows.length ? fallback : null),
-      ProjectCount: rows.length,
-      NodeCount: rows.reduce((sum, row) => sum + Number(row.NodeCount || 0), 0)
+      LastSuccessfulSyncAt: runState?.LastSuccessfulSyncAt ?? null,
+      LastContentChangeAt: content.lastContentChangeAt,
+      ProjectCount: runState?.ProjectCount ?? content.projectCount,
+      NodeCount: runState?.NodeCount ?? content.nodeCount,
+      MergedProjectCount: runState?.MergedProjectCount ?? null,
+      SkippedProjectCount: runState?.SkippedProjectCount ?? null
+    }]];
+  }
+  if (sqlText.includes('AS LastSyncedAt') && sqlText.includes('MR_CorporateWbsSyncRunState')) {
+    guardCorporateWbsRunState(db);
+    return [[{
+      LastSyncedAt: db.corporateWbsSyncRunState?.LastSuccessfulSyncAt ?? null,
+      ProjectCount: (db.corporateWbsSyncState || []).length
     }]];
   }
   if (sqlText.includes('SELECT TOP (1) Status, CreatedAt, CompletedAt, FailureCode')) {

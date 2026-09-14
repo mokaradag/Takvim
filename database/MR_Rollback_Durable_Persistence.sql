@@ -20,6 +20,7 @@ BEGIN TRY
     IF OBJECT_ID(N'dbo.MR_TaskOutlookSubscriptions', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskOutlookSubscriptions;
     IF OBJECT_ID(N'dbo.MR_TaskReminderLog', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskReminderLog;
     IF OBJECT_ID(N'dbo.MR_ReminderSettings', N'U') IS NOT NULL DROP TABLE dbo.MR_ReminderSettings;
+    IF OBJECT_ID(N'dbo.MR_CorporateWbsSyncRunState', N'U') IS NOT NULL DROP TABLE dbo.MR_CorporateWbsSyncRunState;
     IF OBJECT_ID(N'dbo.MR_CorporateWbsSyncState', N'U') IS NOT NULL DROP TABLE dbo.MR_CorporateWbsSyncState;
     IF OBJECT_ID(N'dbo.MR_AuditLog', N'U') IS NOT NULL DROP TABLE dbo.MR_AuditLog;
     IF OBJECT_ID(N'dbo.MR_TaskBaselineSnapshots', N'U') IS NOT NULL DROP TABLE dbo.MR_TaskBaselineSnapshots;

@@ -223,7 +223,7 @@ export function SystemOverviewTab({
           <MetricTile label="En eski bekleyen" icon="Clock" unit="minutes" value={oldestMinutes}
             hint="dakika (hiç denenmemiş kayıt)" />
           <MetricTile label="Son CN43N eşitlemesi" icon="Database" unit="raw"
-            value={wbs?.detail?.lastSyncedAt ? formatRelativeTime(wbs.detail.lastSyncedAt) : '—'} />
+            value={wbs?.detail?.lastSuccessfulSyncAt ? formatRelativeTime(wbs.detail.lastSuccessfulSyncAt) : '—'} />
           <MetricTile label="Son hatırlatma turu" icon="MailCheck" unit="raw"
             value={reminder?.detail?.lastRun?.completedAt
               ? formatRelativeTime(reminder.detail.lastRun.completedAt)
@@ -267,6 +267,14 @@ export function SystemOverviewTab({
               <DrawerField label="Son denetim" value={detail.item.lastCheckedAt} mono />
               <DrawerField label="Son başarılı işlem" value={detail.item.lastSuccessAt || 'bilinmiyor'} mono />
               <DrawerField label="Yanıt süresi" value={detail.item.durationMs != null ? formatDuration(detail.item.durationMs) : null} />
+              {detail.item.key === COMPONENTS.CORPORATE_WBS && (
+                <>
+                  <DrawerField label="Son başarılı eşitleme" value={detail.item.detail?.lastSuccessfulSyncAt || 'bilinmiyor'} mono />
+                  <DrawerField label="Son içerik değişikliği" value={detail.item.detail?.lastContentChangeAt || 'bilinmiyor'} mono />
+                  <DrawerField label="Proje" value={detail.item.detail?.projectCount ?? 0} mono />
+                  <DrawerField label="WBS düğümü" value={detail.item.detail?.nodeCount ?? 0} mono />
+                </>
+              )}
               {detail.item.detail && (
                 <pre className="sysadmin-drawer-json">{JSON.stringify(detail.item.detail, null, 2)}</pre>
               )}

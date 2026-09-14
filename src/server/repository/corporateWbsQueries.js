@@ -49,26 +49,17 @@ SELECT s.ProjectCode, s.ContentHash, s.NodeCount,
 FROM dbo.MR_CorporateWbsSyncState s;`;
 
 /**
- * Depoda kullanılabilir bir kurumsal ağaç var mı ve en son ne zaman eşitlendi?
+ * Depoda kullanılabilir bir kurumsal ağaç var mı ve son başarılı tur ne zaman?
  *
- * Süreç belleği bu soruyu yanıtlayamaz: yeniden başlatma ve yeni işçi süreçleri
- * "hiç eşitlenmemiş" gibi davranıp ilk isteği tam bir CN43N turuna kilitlerdi.
+ * Proje satırlarındaki `SyncedAt` yalnız içerik değiştiğinde ilerler. Tazelik
+ * saati bu nedenle ayrı, kalıcı başarılı-tur kaydından okunur.
  */
 export const CORPORATE_WBS_SYNC_WARMTH_SQL = `
-SELECT MAX(s.SyncedAt) AS LastSyncedAt, COUNT_BIG(*) AS ProjectCount
-FROM dbo.MR_CorporateWbsSyncState s;`;
+SELECT
+  (SELECT LastSuccessfulSyncAt FROM dbo.MR_CorporateWbsSyncRunState WHERE StateId = 1) AS LastSyncedAt,
+  (SELECT COUNT_BIG(*) FROM dbo.MR_CorporateWbsSyncState) AS ProjectCount;`;
 
-/**
- * Bir projenin eşitleme parmak izini günceller (yoksa ekler).
- *
- * Ekleme KOŞULLUDUR ve anahtar satırı üzerinde güncelleme kilidi alır.
- * `IF @@ROWCOUNT = 0` + koşulsuz `INSERT` biçimi eşzamanlı iki eşitleme turunda
- * ikisini de ekleme yoluna sokuyor, ikincisi birincil anahtar ihlaliyle
- * düşüyordu; `synchronizeCorporateWbs` bu hatayı yakalayıp BÜTÜN eşitlemeyi
- * `SOURCE_UNAVAILABLE` ile bırakıyor ve sonraki partilerdeki projeler de hiç
- * birleştirilmiyordu. Eşzamanlı tur gerçekten olasıdır: `readProjectedSnapshot`
- * eşitlemeyi kendi işleminin dışında tetikler.
- */
+/** Bir projenin eşitleme parmak izini günceller (yoksa ekler). */
 export const CORPORATE_WBS_SYNC_STATE_UPSERT_SQL = `
 UPDATE dbo.MR_CorporateWbsSyncState WITH (UPDLOCK, HOLDLOCK)
 SET ContentHash = @contentHash,
@@ -83,6 +74,29 @@ IF @@ROWCOUNT = 0
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.MR_CorporateWbsSyncState WITH (UPDLOCK, HOLDLOCK)
     WHERE ProjectCode = @projectCode
+  );`;
+
+/** Başarıyla tamamlanan CN43N turunun kalıcı özetini günceller. */
+export const CORPORATE_WBS_SUCCESSFUL_RUN_UPSERT_SQL = `
+UPDATE dbo.MR_CorporateWbsSyncRunState WITH (UPDLOCK, HOLDLOCK)
+SET LastSuccessfulSyncAt = SYSUTCDATETIME(),
+    ProjectCount = @projectCount,
+    NodeCount = @nodeCount,
+    MergedProjectCount = @mergedProjectCount,
+    SkippedProjectCount = @skippedProjectCount,
+    UpdatedBySicil = @actorSicil
+WHERE StateId = 1;
+
+IF @@ROWCOUNT = 0
+  INSERT dbo.MR_CorporateWbsSyncRunState(
+    StateId, LastSuccessfulSyncAt, ProjectCount, NodeCount,
+    MergedProjectCount, SkippedProjectCount, UpdatedBySicil
+  )
+  SELECT 1, SYSUTCDATETIME(), @projectCount, @nodeCount,
+         @mergedProjectCount, @skippedProjectCount, @actorSicil
+  WHERE NOT EXISTS (
+    SELECT 1 FROM dbo.MR_CorporateWbsSyncRunState WITH (UPDLOCK, HOLDLOCK)
+    WHERE StateId = 1
   );`;
 
 /**

@@ -329,8 +329,23 @@ export const CORPORATE_RESPONSIBILITY_PROBE_SQL = `
   SELECT TOP (1) 1 AS ResponsibilityProbe FROM dbo.MR_V_CorporateProjectAccess;`;
 
 export const CORPORATE_WBS_STATE_SQL = `
-  SELECT MAX(SyncedAt) AS LastSyncedAt, COUNT_BIG(*) AS ProjectCount, SUM(CAST(NodeCount AS bigint)) AS NodeCount
-  FROM dbo.MR_CorporateWbsSyncState;`;
+  SELECT runState.LastSuccessfulSyncAt,
+    content.LastContentChangeAt,
+    COALESCE(runState.ProjectCount, content.ProjectCount) AS ProjectCount,
+    COALESCE(runState.NodeCount, content.NodeCount) AS NodeCount,
+    runState.MergedProjectCount,
+    runState.SkippedProjectCount
+  FROM (
+    SELECT MAX(SyncedAt) AS LastContentChangeAt,
+      COUNT_BIG(*) AS ProjectCount,
+      COALESCE(SUM(CAST(NodeCount AS bigint)), 0) AS NodeCount
+    FROM dbo.MR_CorporateWbsSyncState
+  ) AS content
+  OUTER APPLY (
+    SELECT LastSuccessfulSyncAt, ProjectCount, NodeCount, MergedProjectCount, SkippedProjectCount
+    FROM dbo.MR_CorporateWbsSyncRunState
+    WHERE StateId = 1
+  ) AS runState;`;
 
 /** Son otomatik hatırlatma turunun özeti. */
 export const REMINDER_RUN_STATE_SQL = `
