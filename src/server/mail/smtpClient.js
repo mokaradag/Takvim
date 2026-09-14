@@ -272,6 +272,65 @@ async function authenticate(dialogue, capabilities, { username, password, secure
  *   fırlatılır. Böylece "gönderildi" bilgisi hiçbir zaman uydurulmaz.
  *   `rejected`, kabul edilen en az bir alıcı varken düşen kutuları taşır.
  */
+/**
+ * Bağlantı ve el sıkışma denemesi — İLETİ GÖNDERMEZ.
+ *
+ * Yönetici "Bağlantıyı Test Et" dediğinde kimseye posta gitmemelidir. Bu yüzden
+ * akış `EHLO` → (gerekiyorsa `STARTTLS` → `EHLO`) → `QUIT` ile biter; `MAIL
+ * FROM`/`DATA` hiç çalışmaz. Kimlik doğrulama da DENENMEZ: art arda başarısız
+ * denemeler kurumsal hesabı kilitleyebilir. Yalnızca sunucunun DUYURDUĞU
+ * yetenekler bildirilir.
+ *
+ * @returns {Promise<{greetingCode: number, startTls: boolean, authAnnounced: boolean, durationMs: number}>}
+ */
+export async function verifySmtpConnection(config, { signal = null } = {}) {
+  const startedAt = Date.now();
+  let socket;
+  let dialogue;
+  const onAbort = () => socket?.destroy();
+  try {
+    socket = await connect(config, signal);
+    dialogue = createSmtpDialogue(socket, config.timeoutMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    const greeting = await dialogue.read();
+    if (greeting.code !== 220) {
+      throw new SmtpError('SMTP_CONNECTION_FAILED', `SMTP sunucusu bağlantıyı kabul etmedi (${greeting.code}).`, { statusCode: greeting.code });
+    }
+    // Bu akış posta GÖNDERMEZ: `EHLO` reddedilirse hata kodu da bağlantı
+    // hatası olmalıdır. Varsayılan `SMTP_SEND_FAILED`, yöneticiye hiç
+    // denenmemiş bir gönderimin başarısız olduğunu söylerdi.
+    let ehlo = await dialogue.command('EHLO mergen-rota', {
+      code: 'SMTP_CONNECTION_FAILED',
+      description: 'EHLO'
+    });
+    if (config.useStartTls) {
+      await dialogue.command('STARTTLS', { expect: [220], code: 'SMTP_TLS_FAILED', description: 'STARTTLS' });
+      dialogue.dispose();
+      const secure = await upgradeToTls(socket, config, signal);
+      socket = secure;
+      dialogue = createSmtpDialogue(secure, config.timeoutMs);
+      ehlo = await dialogue.command('EHLO mergen-rota', {
+        code: 'SMTP_CONNECTION_FAILED',
+        description: 'EHLO (TLS sonrası)'
+      });
+    }
+    await dialogue.command('QUIT', { expect: [221], description: 'QUIT' }).catch(() => null);
+    return {
+      greetingCode: greeting.code,
+      startTls: Boolean(config.useStartTls),
+      // Yalnızca "AUTH duyuruldu mu" bilgisi taşınır; mekanizma listesi ve
+      // sunucu karşılama metni dışarı verilmez.
+      authAnnounced: parseAuthMechanisms(ehlo.text).advertised,
+      durationMs: Date.now() - startedAt
+    };
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    socket?.destroy();
+    dialogue?.dispose();
+  }
+}
+
 export async function sendSmtpMail(config, message) {
   const recipients = [...new Set((message.to || []).map((value) => String(value).trim()).filter(Boolean))];
   if (!recipients.length) throw new SmtpError('SMTP_NO_RECIPIENTS', 'Gönderilecek alıcı adresi yok.');

@@ -1,3 +1,5 @@
+import { sanitizeError } from '../domain/observability/redaction.js';
+
 export class ServerPersistenceError extends Error {
   constructor(code, message, { status, details = null, cause = null } = {}) {
     super(message);
@@ -22,7 +24,10 @@ export function safeErrorResponse(error) {
   const known = error instanceof ServerPersistenceError;
   // Oturum yokluğu yönlendirme akışının beklenen durumudur.
   if (!known || error.code !== 'SESSION_REQUIRED') {
-    console.error('MERGEN ROTA SERVER ERROR:', error);
+    // Ham hata günlüğe YAZILMAZ: iletisi bağlantı dizesi, jeton ya da adres
+    // taşıyabilir ve yığın izi sunucu yollarını açığa çıkarır. Tek kanonik
+    // temizleyiciden geçmiş özet yeterlidir (tür, kararlı kod, temiz ileti).
+    console.error('MERGEN ROTA SERVER ERROR:', sanitizeError(error));
   }
   return Response.json({
     error: {

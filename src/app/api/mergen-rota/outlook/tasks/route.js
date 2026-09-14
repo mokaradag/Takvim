@@ -3,6 +3,7 @@ import { extractActualId } from '../../../../../domain/identity/actualId.js';
 import { loadAuthorizationContext } from '../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { withRouteObservability } from '../../../../../server/observability/observeOperation.js';
 import { isSmtpConfigured } from '../../../../../server/mail/smtpConfig.js';
 import {
   addTasksToOutlook,
@@ -43,7 +44,7 @@ function requestedTaskIds(body, limit) {
   return ids.size > limit ? { ok: false, requested: ids.size } : { ok: true, ids: [...ids] };
 }
 
-export async function GET() {
+async function handleOutlookState() {
   try {
     const enabled = isOutlookCalendarEnabled();
     const pool = await getSqlPool();
@@ -66,7 +67,7 @@ export async function GET() {
   }
 }
 
-export async function POST(request) {
+async function handleOutlookBulkAdd(request) {
   try {
     if (!isOutlookCalendarEnabled()) {
       throw new ServerPersistenceError('FORBIDDEN', outlookMessage('DISABLED'));
@@ -126,3 +127,8 @@ export async function POST(request) {
     return safeErrorResponse(error);
   }
 }
+
+// Ölçüm sarmalayıcısı imzayı ve yanıtı DEĞİŞTİRMEZ; yalnızca süreyi, sonucu ve
+// ilişkilendirme kimliğini kaydeder (bkz. server/observability).
+export const GET = withRouteObservability('api.outlook.state', handleOutlookState);
+export const POST = withRouteObservability('api.outlook.bulk-add', handleOutlookBulkAdd);
