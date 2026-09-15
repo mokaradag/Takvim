@@ -53,6 +53,8 @@ Sekmeler erişilebilir sekme anlamlarını kullanır (`role="tablist"/"tab"/
 "tabpanel"`, dolaşan `tabindex`, ok tuşları + `Home`/`End`). Etkin sekme
 yenilemeler arasında korunur.
 
+Sağlık şeridi ve sekmeler sayfanın üstünde sabit kalır. Altı sekmenin tamamında dikey kaydırma yalnızca alt içerik paneline uygulanır; panel ile sekmeler arasında 14 piksel boşluk vardır. Sekme değiştiğinde yeni panel baştan açılır. Panel klavyeyle odaklanıp kaydırılabilir; uzun tablolardaki mevcut iç kaydırma alanları ve yapışkan tablo başlıkları korunur.
+
 Hatırlatma yönetimi **taşınmıştır, çatallanmamıştır**: var olan
 `ReminderSettingsView` olduğu gibi altıncı sekmeye gömülür. Yetki, şablon
 doğrulama, zamanlayıcı ve SMTP davranışı değişmemiştir

@@ -80,6 +80,18 @@ Görev değişikliği ve kuyruk kaydı aynı veritabanı işlemindedir; SMTP tas
 
 Toplu ekleme açık kullanıcı seçimidir; varsayılan üst sınır 25, yapılandırılabilir aralık 1–50’dir. Kimlikler normalleştirilip yinelenenler elenir. Her görev bağımsız yetkilendirilir ve ayrı takvim öğesidir; arayüz tek toplu özet verir, görev başına toast üretmez. Değişmeyen abonelikler yeniden gönderilmez.
 
+## Kuyruk yürütme tanısı
+
+`mssql` 12.7.0'ın `msnodesqlv8` işlem yolu, `BEGIN` sırasında oturumun yalıtımını değiştirir; `COMMIT` ve `ROLLBACK` sonrasında bu ayarı sıfırlamadan bağlantıyı havuza bırakır. Uygulamanın anlık görüntü okuma ve kayıt işlemleri `SERIALIZABLE` kullanır. Aynı fiziksel bağlantıyı sonradan alan Outlook yeniden doğrulama veya sahiplenme sorgusu, `READPAST` nedeniyle SQL Server 650 / `EREQUEST` hatası verebilir. Boş tablo da bu uyumsuzluğu ortadan kaldırmaz. Genel SQL sağlığı ve kuyruk durumunu okuyan sorgular `READPAST` kullanmadığından başarılı kalabilir; yeni bir SSMS oturumu da uygulamanın havuzda kalan ayarını devralmaz.
+
+`OUTLOOK_REVALIDATE_SQL` ve `OUTLOOK_CLAIM_SQL`, kuyruk işlemini yürüttükleri **aynı oturumda ve aynı SQL grubunda** `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` uygular. Sorgular farklı bağlantılar alabileceği için ikisi de bunu yapar. Bu, veritabanının `READ_COMMITTED_SNAPSHOT`/`SNAPSHOT_ISOLATION` ayarlarını değiştirmez; kayıt işlemlerinin `SERIALIZABLE` koruması, `READPAST`, `UPDLOCK`, `ROWLOCK`, kira ve kuyruk kuşağı koşulları korunur. Yeni göç veya yetki değişikliği gerekmez. SQL Server kuralı: [READPAST](https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table#readpast); sürücü yolu: `node_modules/mssql/lib/msnodesqlv8/transaction.js`.
+
+Başarısız turun `failureStage` alanı `revalidate`, `health-before-claim`, `claim`, `delivery` veya `health-after-delivery` olur. Teslimat hatası kuyruk sorgusu hatası olarak kaydedilmez. Sunucu günlüğü yalnız aşama, güvenli kod, izin verilen sürücü kodu ve mevcutsa SQL hata numarası/durumu/önem derecesini içerir; SQL metni, bağlantı bilgisi, parametreler ve kişi/takvim bilgileri yazılmaz. Yerel ODBC `HYT00`/`HYT01`/`S1T00` zaman aşımı, 1205 deadlock ve `08xxx` bağlantı hataları genel `EREQUEST` altında kaybolmaz. Turun kendi iptali `OUTLOOK_RUN_TIMEOUT` olarak korunur. Başarısız yönetici eylemi HTTP 503 döndürür.
+
+Regresyonlar gerçek `mssql` istek, işlem ve havuz sınıflarını kullanır; yalnız yerel ODBC taşıması ve SQL Server'ın oturum/sonuç sözleşmesi modellenir. Windows üretim sunucusuna test ortamından bağlantı kurulmaz. Testler `SERIALIZABLE` işlem → commit/rollback → aynı havuzda Outlook turu zincirini, parametre bağlamayı, iptal/hata sonrası başarılı turu ve bütün hata aşamalarını kapsar; mevcut teslimat yaşam döngüsü testleri ayrıca çalıştırılır.
+
+Dağıtımdan sonra güncel kodu derleyip Node hizmetini yeniden başlatın. Görevler sayfasını açıp normal bir kayıt işlemi yaptıktan sonra boş kuyrukta **Şimdi Çalıştır** eylemini deneyin: HTTP 200, `ok=true`, `claimed=0`, `failed=0` beklenir. Birkaç otomatik tur boyunca sorgu hata döngüsünün oluşmadığını doğrulayın. Ardından tek bir test görevinin davetini, tarih değişikliğini ve kaldırılmasını kontrol edin; UID aynı kalmalı, güncelleme/iptal sürümleri artmalı ve iptal son teslim edilmiş tarihi taşımalıdır. Kesin reddedilen tarih değişikliğinin ardından iptal, reddedilen tarihi kullanmamalıdır.
+
 ## SMTP ve dağıtım
 
 **Outlook teslimatı etkinse SMTP zorunludur.** En az `SMTP_HOST` ve geçerli bir `SMTP_FROM` bulunmalıdır. Diğer bağlantı/kimlik doğrulama ayarları kurumsal SMTP kurallarına uygun olmalıdır. SMTP yalnızca **hem e-posta hatırlatma işlevleri hem Outlook teslimatı kullanılmıyorsa** isteğe bağlıdır. Otomatik hatırlatmanın kapalı olması Outlook için SMTP gereksinimini kaldırmaz; elle hatırlatma da SMTP gerektirir.
@@ -133,12 +145,38 @@ Content-Type: multipart/alternative
 
 Takvim içeriğinin **ikinci bir kopyası ek olarak gönderilmez**. Aynı içerik hem
 alternatif parçada hem de ayrı bir `application/ics` ekinde taşındığında Outlook
-iletiyi takvim öğesi olarak işlemek yerine iki dosya eki gösteriyordu
-(`not supported calendar message.ics` ve `mergen-rota.ics`). Tek alternatif
-parça, davet ve iptal iletilerinin doğrudan takvim öğesi olarak açılmasını
-sağlar. Takvim parçası base64 taşınır: CRLF satır sonları ve Türkçe karakterler
+iletiyi takvim öğesi olarak işlemek yerine iki dosya eki gösterebilir.
+Tek alternatif parça çift eki önler; takvim içeriğinin de Exchange kurallarına
+uyması gerekir. Takvim parçası base64 taşınır: CRLF satır sonları ve Türkçe karakterler
 aktarım boyunca bozulmaz. Hatırlatma e-postaları takvim parçası taşımaz ve
 yapıları değişmemiştir.
+
+**İptalde tarih zorunludur.** RFC 5546 tarih alanını isteğe bağlı saysa da
+[Exchange CANCEL içe aktarma sözleşmesi](https://learn.microsoft.com/en-us/openspecs/exchange_standards/ms-stanxical/5dce2054-2b92-45eb-9cea-1a520c64d7cb)
+tam bir `DTSTART` ister. Tarihsiz iptal, tek MIME parçası kullanılsa bile
+`not supported calendar message.ics` olarak görünebilir. CANCEL aynı UID,
+yükselen SEQUENCE, `DTSTART;VALUE=DATE`, ertesi gün dışlayıcı DTEND ve FREE
+alanlarını taşır. Tarih, varsa sonucu belirsiz önceki teslimatın `PendingDate`
+alanından, yoksa `DeliveredDate` alanından alınır; görevin yeni tarihi kullanılmaz.
+İptal için ayrılan tarih de `PendingDate` içinde korunur; yeniden deneme aynı
+tarih/karma için aynı revizyonu kullanır. Yeni veritabanı göçü gerekmez.
+
+Başarılı veya belirsiz bir teslimattan sonraki revizyon kesin olarak
+gönderilmediyse onun bekleyen tarih, sürüm ve karması geri alınır;
+yeniden deneme kuyruğu korunur. Önceki
+teslimat başarılıysa sonraki iptal `DeliveredDate` kullanır. Önceki revizyonun
+teslimatı belirsizse onun bekleyen bilgileri korunur. Gönderim sırasında kuyruğa
+alınan yeni iptal isteği de bu temizlikten etkilenmez.
+
+Açık kullanıcı iptalinde önceki davetin saklanan başlığı konu ve gövdede
+gösterilir. Görev silindiğinde veya görünürlük kaybedildiğinde başlık genelleştirilir;
+proje, açıklama ve bağlantı gönderilmez. Önceden gönderilmiş tarih, Exchange'in
+iptali işlemesi için korunur. Henüz gönderilmemiş yeni görev bilgileri iptale
+eklenmez. Saklanan tarih de yoksa bozuk ileti göndermek yerine
+`OUTLOOK_CANCELLATION_DATE_MISSING` kaydedilir ve abonelik başarılı iptal edilmiş
+sayılmaz. Eski sürümün tarihini silerek tamamladığı iptaller otomatik yeniden
+gönderilmez; önceki e-postalar da bu düzeltmeyle değişmez. Gerçek Exchange/Outlook
+görünümü kurum ortamındaki kabul testiyle doğrulanmalıdır.
 
 ## Yönetici tanısı
 

@@ -57,7 +57,7 @@ export function createOutlookWorker({
         lastResult = result;
         lastFinishedAt = new Date().toISOString();
         const failure = result.ok === false ? result.reason || 'UNEXPECTED_ERROR' : null;
-        if (failure && failure !== lastFailure) log({ reason: failure, failureCodes: result.failureCodes || {} });
+        if (failure && failure !== lastFailure) log({ reason: failure, failureStage: result.failureStage, failureCodes: result.failureCodes || {} });
         lastFailure = failure;
       }).finally(() => {
         running = null;

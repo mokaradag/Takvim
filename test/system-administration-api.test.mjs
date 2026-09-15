@@ -292,6 +292,41 @@ test('tanınmayan yönetim eylemi reddedilir', async (t) => {
   assert.equal((await response.json()).error.code, 'MUTATION_FAILED');
 });
 
+test('yönetici boş Outlook kuyruğunu başarıyla çalıştırır', async (t) => {
+  stack(t, { outlookEnabled: true, smtpHost: 'mail.test.internal' });
+  const response = await queuesRoute.POST(postRequest('http://localhost/queues', { action: 'outlook-run' }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.result.ok, true);
+  assert.equal(body.result.claimed, 0);
+  assert.equal(body.result.failed, 0);
+});
+
+test('yönetici boş kuyruktaki gerçek SQL hatasını aşamasıyla 503 döndürür', async (t) => {
+  stack(t, { outlookEnabled: true, smtpHost: 'mail.test.internal' });
+  const pool = await poolApi.getSqlPool();
+  const { OUTLOOK_CLAIM_SQL } = await import('../src/server/outlook/outlookQueries.js');
+  const original = pool.request.bind(pool);
+  pool.request = () => {
+    const request = original();
+    const query = request.query.bind(request);
+    request.query = (text) => {
+      if (text === OUTLOOK_CLAIM_SQL) throw Object.assign(new Error('private SQL'), { code: 'EREQUEST', number: 650 });
+      return query(text);
+    };
+    return request;
+  };
+  t.mock.method(console, 'error', () => {});
+  const response = await queuesRoute.POST(postRequest('http://localhost/queues', { action: 'outlook-run' }));
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.result.reason, 'DATABASE_QUERY_FAILED');
+  assert.equal(body.result.failureStage, 'claim');
+  assert.doesNotMatch(JSON.stringify(body), /private SQL/);
+});
+
 test('kapalı Outlook tümleştirmesinde tur eylemi çalıştırılamaz', async (t) => {
   stack(t);
   const response = await queuesRoute.POST(postRequest('http://localhost/queues', { action: 'outlook-run' }));

@@ -331,9 +331,12 @@ input, textarea, select { font-family: inherit; }
 }
 
 .content {
+  --workspace-padding-top: 24px;
+  --workspace-padding-inline: 28px;
+
   flex: 1;
   overflow: auto;
-  padding: 24px 28px 40px;
+  padding: var(--workspace-padding-top) var(--workspace-padding-inline) 40px;
 }
 
 /* ── Primitives ───────────────────────────────────── */

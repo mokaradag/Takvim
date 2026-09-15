@@ -301,3 +301,13 @@ Açık/koyu tema, normal/büyütülmüş yazı ve dar ekran için kontrol edin:
 ### Raporlar → Görev Hareketleri
 
 Her iki temada Performans/Görev Hareketleri sekmelerini ok tuşları ve Home/End ile değiştirin; Performans aralığının korunduğunu kontrol edin. Bugün/Ekibim, özel aralık, kurumsal yol, kişi/proje/hareket türü ve son sayfa kontrollerini deneyin. Çok alanlı işlem ayrıntısını klavyeyle açın; görev çekmecesini kapatınca filtrelerin korunduğunu, silinen görevde açma düğmesi olmadığını doğrulayın. Dar ekranda yalnızca tablonun kendi alanının kaydığını kontrol edin.
+
+### Sabit şeritler ve hatırlatma sonucu
+
+Açık/koyu tema, normal/büyütülmüş yazı ve dar/geniş pencere için:
+
+- Özet ve Proje Yapısı → Proje Tanımı'nı ortasına ve sonuna kaydırın. Üst çubuk ile sabit şerit arasında grafik/metin görünmemeli; şeridin altındaki 10 piksel boşluk korunmalı. Kurumsal filtre açılır menüleri ve proje sekmeleri tıklanabilmeli.
+- Raporlar → Performans'ta sekmeler ve tarih/organizasyon şeridi sabit kalmalı; aralarındaki 12 piksel boşlukta kaydırılan içerik görünmemeli. Özel tarih aralığında satır yüksekliği değişince sekmeler çakışmamalı. Görev Hareketleri'ne geçip sekme gezinmesini ve tablo kaydırmasını doğrulayın.
+- Sistem Yönetimi'nin altı sekmesinde sağlık şeridi ve sekmeler sabit kalmalı; yalnız alt panel kaymalı. Sekme değişince panel baştan açılmalı; Tab ve PageDown ile panel kaydırılabilmeli. Hatırlatma E-postaları'nın son düğmelerine ulaşılabilmeli.
+- Her iki Görevler kipinde, yetkili bir test görevinin hatırlatma sonucunu orta ve son satırlarda gösterin. Komşu zarf/silme simgeleri metni örtmemeli; yatay kaydırma ve tablo başlığı davranışı korunmalı. Demo Kip gerçek posta göndermemeli.
+- Kurumsal test posta kutusunda bir daveti iptal edin: tek takvim iletisi, önceki görev başlığı/tarihi, aynı UID ve yükselen SEQUENCE doğrulanmalı; `not supported calendar message.ics` görülmemeli. SMTP sonrası Outlook görünümü ayrıca kontrol edilmeli.

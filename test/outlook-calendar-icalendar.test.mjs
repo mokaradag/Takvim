@@ -460,6 +460,8 @@ test('iCalendar URL alanı URI ayraçlarını korur ve satır enjeksiyonunu redd
   const document = renderOutlookInvitation({ ...input, link: url }).replace(/\r\n /g, '');
   assert.ok(document.includes(`URL:${url}\r\n`));
   assert.throws(() => renderOutlookInvitation({ ...input, link: 'https://example.internal/\r\nSUMMARY:changed' }));
-  const cancel = renderOutlookInvitation({ ...input, method: 'CANCEL', date: null });
-  assert.doesNotMatch(cancel, /DTSTART|DTEND/);
+  assert.throws(() => renderOutlookInvitation({ ...input, method: 'CANCEL', date: null }), /başlangıç günü/);
+  const cancel = renderOutlookInvitation({ ...input, method: 'CANCEL' });
+  assert.match(cancel, /DTSTART;VALUE=DATE:20260915/);
+  assert.match(cancel, /DTEND;VALUE=DATE:20260916/);
 });

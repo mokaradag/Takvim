@@ -194,6 +194,8 @@ export const OUTLOOK_QUEUE_RESEND_SQL = `
   WHERE TaskId = @taskId AND UserSicil = @sicil AND IsActive = 1 AND CancelRequested = 0;`;
 
 export const OUTLOOK_REVALIDATE_SQL = `
+  -- Havuzdan devralınan SERIALIZABLE oturumu READPAST ile uyumlu değildir.
+  SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
   ;WITH unchecked AS (
     SELECT TOP (@limit) * FROM dbo.MR_TaskOutlookSubscriptions WITH (READPAST, UPDLOCK, ROWLOCK)
     WHERE IsActive = 1 AND PendingMethod IS NULL AND CompletionSuspended = 0
@@ -288,6 +290,8 @@ export const OUTLOOK_DEACTIVATE_SQL = `
  * denenir.
  */
 export const OUTLOOK_CLAIM_SQL = `
+  -- Her sorgu havuzdan farklı bir oturum alabilir.
+  SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
   SET NOCOUNT ON;
 
   ;WITH due AS (
@@ -348,14 +352,14 @@ export const OUTLOOK_ALLOCATE_SQL = `
   SET [Sequence] = CASE
         WHEN PendingSequence IS NOT NULL AND PendingPayloadHash = @payloadHash
           AND (DeliveredSequence IS NULL OR PendingSequence > DeliveredSequence)
-          AND ((@method = 'CANCEL' AND PendingDate IS NULL) OR (@method = 'REQUEST' AND PendingDate = @calendarDate))
+          AND PendingDate = @calendarDate
         THEN [Sequence]
         WHEN @reuseDelivered = 1 AND DeliveredPayloadHash = @payloadHash AND DeliveredSequence = [Sequence] THEN [Sequence]
         ELSE [Sequence] + 1 END,
       PendingSequence = CASE
         WHEN PendingSequence IS NOT NULL AND PendingPayloadHash = @payloadHash
           AND (DeliveredSequence IS NULL OR PendingSequence > DeliveredSequence)
-          AND ((@method = 'CANCEL' AND PendingDate IS NULL) OR (@method = 'REQUEST' AND PendingDate = @calendarDate))
+          AND PendingDate = @calendarDate
         THEN PendingSequence
         WHEN @reuseDelivered = 1 AND DeliveredPayloadHash = @payloadHash AND DeliveredSequence = [Sequence] THEN DeliveredSequence
         ELSE [Sequence] + 1 END,
@@ -447,6 +451,9 @@ export const OUTLOOK_FAIL_SQL = `
   SET CalendarAttendee = CASE WHEN @clearProvisional = 1 AND DeliveredSequence IS NULL THEN NULL ELSE CalendarAttendee END,
       CalendarOrganizer = CASE WHEN @clearProvisional = 1 AND DeliveredSequence IS NULL THEN NULL ELSE CalendarOrganizer END,
       DeliveryMayHaveEscaped = CASE WHEN @clearProvisional = 1 AND DeliveredSequence IS NULL THEN 0 ELSE DeliveryMayHaveEscaped END,
+      PendingDate = CASE WHEN @restorePendingRevision = 1 THEN @previousPendingDate ELSE PendingDate END,
+      PendingSequence = CASE WHEN @restorePendingRevision = 1 THEN @previousPendingSequence ELSE PendingSequence END,
+      PendingPayloadHash = CASE WHEN @restorePendingRevision = 1 THEN @previousPendingPayloadHash ELSE PendingPayloadHash END,
       LastFailureCode = CASE WHEN QueueSeq = @queueSeq THEN @failureCode ELSE LastFailureCode END,
       NextAttemptAt = CASE WHEN QueueSeq = @queueSeq THEN DATEADD(second, @retrySeconds, SYSUTCDATETIME()) ELSE NextAttemptAt END,
       InFlightSince = NULL,

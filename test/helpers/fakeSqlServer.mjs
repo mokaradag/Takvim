@@ -1035,7 +1035,7 @@ function runOutlookQuery(db, sqlText, params) {
     if (!current(entry) || new Date(entry.LeaseExpiresAt).getTime() <= now) return result([[]]);
     const reuse = entry.PendingSequence != null
       && (entry.DeliveredSequence == null || entry.PendingSequence > entry.DeliveredSequence)
-      && (params.method === 'CANCEL' ? entry.PendingDate == null : entry.PendingDate === params.calendarDate)
+      && entry.PendingDate === params.calendarDate
       && entry.PendingPayloadHash === params.payloadHash;
     if (params.reuseDelivered && entry.DeliveredPayloadHash === params.payloadHash && entry.DeliveredSequence === entry.Sequence) {
       entry.PendingSequence = entry.DeliveredSequence;
@@ -1119,6 +1119,11 @@ function runOutlookQuery(db, sqlText, params) {
         entry.CalendarAttendee = null;
         entry.CalendarOrganizer = null;
         entry.DeliveryMayHaveEscaped = 0;
+      }
+      if (params.restorePendingRevision) {
+        entry.PendingDate = params.previousPendingDate;
+        entry.PendingSequence = params.previousPendingSequence;
+        entry.PendingPayloadHash = params.previousPendingPayloadHash;
       }
       if (current(entry)) {
         entry.LastFailureCode = params.failureCode;

@@ -148,7 +148,7 @@ export function buildTaskCalendarDocument({
 }) {
   const cancelled = method === 'CANCEL';
   const startDate = icsDate(start);
-  if (!startDate && !cancelled) throw new Error('Takvim daveti için geçerli bir başlangıç günü gereklidir.');
+  if (!startDate) throw new Error('Takvim daveti için geçerli bir başlangıç günü gereklidir.');
   if (!uid) throw new Error('Takvim daveti için değişmez bir UID gereklidir.');
   const organizerValue = mailtoValue(organizer?.address);
   const attendeeValue = mailtoValue(attendee?.address);

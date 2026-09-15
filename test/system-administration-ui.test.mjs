@@ -172,6 +172,8 @@ test('altı mantıksal sekme erişilebilir sekme anlamlarıyla çizilir', (t) =>
   const panel = findElement(view.output, (node) => node.props?.role === 'tabpanel');
   assert.equal(panel.props.id, systemAdminPanelId('genel'));
   assert.equal(panel.props['aria-labelledby'], systemAdminTabId('genel'));
+  assert.equal(panel.props.tabIndex, 0);
+  assert.ok(view.output.props.children.includes(panel));
 });
 
 test('sekme seçimi tıklama ve ok tuşlarıyla değişir', (t) => {
