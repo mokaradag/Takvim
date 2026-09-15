@@ -195,7 +195,7 @@ export const OUTLOOK_QUEUE_RESEND_SQL = `
 
 export const OUTLOOK_REVALIDATE_SQL = `
   -- Havuzdan devralınan SERIALIZABLE oturumu READPAST ile uyumlu değildir.
-  SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+  SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
   ;WITH unchecked AS (
     SELECT TOP (@limit) * FROM dbo.MR_TaskOutlookSubscriptions WITH (READPAST, UPDLOCK, ROWLOCK)
     WHERE IsActive = 1 AND PendingMethod IS NULL AND CompletionSuspended = 0
@@ -291,7 +291,7 @@ export const OUTLOOK_DEACTIVATE_SQL = `
  */
 export const OUTLOOK_CLAIM_SQL = `
   -- Her sorgu havuzdan farklı bir oturum alabilir.
-  SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+  SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
   SET NOCOUNT ON;
 
   ;WITH due AS (

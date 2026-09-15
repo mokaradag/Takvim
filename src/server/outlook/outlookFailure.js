@@ -23,12 +23,12 @@ function sqlState(entry) {
 }
 
 export function outlookFailureCode(error, signal = null) {
+  const entries = errorEntries(error);
   if (signal?.aborted) {
     const reason = signal.reason?.code || signal.reason?.message;
     if (['OUTLOOK_RUN_TIMEOUT', 'OUTLOOK_LEASE_LOST'].includes(reason)) return reason;
   }
-  if (isMissingOutlookSchema(error)) return 'OUTLOOK_SCHEMA_MISSING';
-  const entries = errorEntries(error);
+  if (entries.some((entry) => isMissingOutlookSchema(entry))) return 'OUTLOOK_SCHEMA_MISSING';
   if (entries.some((entry) => Number(entry.number ?? entry.code) === 1205)) return 'DATABASE_DEADLOCK';
   if (entries.some((entry) => entry.code === 'ETIMEOUT' || ['HYT00', 'HYT01', 'S1T00'].includes(sqlState(entry)))) return 'DATABASE_TIMEOUT';
   if (entries.some((entry) => ['ESOCKET', 'ECONNCLOSED', 'ENOTOPEN', 'ELOGIN', 'ECONNRESET', 'ECONNREFUSED'].includes(entry.code)

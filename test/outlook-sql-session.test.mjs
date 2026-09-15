@@ -15,12 +15,16 @@ delete require.cache[nativePath];
 const { runOutlookCalendarOutbox } = await import('../src/server/outlook/outlookCalendarService.js');
 const { revalidateOutlookSubscriptions, claimOutlookDeliveries } = await import('../src/server/outlook/outlookStore.js');
 const { abortableOutlookOperation } = await import('../src/server/outlook/outlookExecution.js');
+const { outlookFailureCode } = await import('../src/server/outlook/outlookFailure.js');
+const { createOutlookWorker } = await import('../src/server/outlook/outlookWorker.js');
 
 // Yalnız yerel taşıma taklittir; havuz, tip bağlama ve işlem sınıfları gerçek mssql'dir.
-async function stack(t) {
+async function stack(t, { readCommittedSnapshot = false } = {}) {
   const env = { ...process.env };
   Object.assign(process.env, { SMTP_HOST: 'mail.test.internal', SMTP_FROM: 'rota@example.internal' });
-  const session = { isolation: 'READ COMMITTED', commands: [], failure: null, hanging: false, cancels: 0 };
+  const session = {
+    isolation: 'READ COMMITTED', readCommittedSnapshot, commands: [], failure: null, hanging: false, cancels: 0
+  };
   native.open = (config, callback) => callback(null, {
     setUseNumericString() {}, setUseUTC() {},
     close: (done) => done(),
@@ -40,9 +44,12 @@ async function stack(t) {
       setImmediate(() => {
         if (session.hanging) { session.hanging = false; return; }
         const text = command.query_str;
-        const isolation = /set transaction isolation level (READ COMMITTED|SERIALIZABLE)/i.exec(text);
+        const isolation = /set transaction isolation level (READ COMMITTED|REPEATABLE READ|SERIALIZABLE)/i.exec(text);
         if (isolation) session.isolation = isolation[1].toUpperCase();
-        const failure = session.failure || (/\bREADPAST\b/i.test(text) && session.isolation === 'SERIALIZABLE'
+        const readPast = /\bREADPAST\b/i.test(text);
+        const incompatibleReadPast = readPast && (session.isolation === 'SERIALIZABLE'
+          || (session.readCommittedSnapshot && session.isolation === 'READ COMMITTED'));
+        const failure = session.failure || (incompatibleReadPast
           ? Object.assign(new Error('READPAST requires READ COMMITTED or REPEATABLE READ.'), { code: 650, sqlstate: '42000', severity: 16 }) : null);
         session.failure = null;
         if (failure) query.emit('error', failure, false);
@@ -70,37 +77,46 @@ async function stack(t) {
 }
 
 for (const end of ['commit', 'rollback']) {
-  test(`gerçek mssql ${end} sonrası devralınan SERIALIZABLE boş Outlook turunu bozmaz`, async (t) => {
-    const { pool, session } = await stack(t);
-    const transaction = new driver.Transaction(pool);
-    await transaction.begin(driver.ISOLATION_LEVEL.SERIALIZABLE);
-    await transaction[end]();
-    assert.equal(session.isolation, 'SERIALIZABLE');
-    const result = await runOutlookCalendarOutbox(pool);
-    assert.equal(result.ok, true);
-    assert.equal(result.claimed, 0);
-    assert.equal(result.failed, 0);
-    const revalidate = session.commands.find(({ text }) => /WITH unchecked/.test(text));
-    assert.match(revalidate.text, /declare @limit int;set @limit=\?/i);
-    assert.deepEqual(revalidate.parameters, [25]);
-    const claim = session.commands.find(({ text }) => /WITH due/.test(text));
-    assert.match(claim.text, /@leaseToken uniqueidentifier/i);
-    assert.equal(claim.parameters.length, 4);
-  });
+  for (const readCommittedSnapshot of [false, true]) {
+    test(`gerçek mssql ${end} sonrası devralınan SERIALIZABLE boş Outlook turunu bozmaz (RCSI=${readCommittedSnapshot ? 'ON' : 'OFF'})`, async (t) => {
+      const { pool, session } = await stack(t, { readCommittedSnapshot });
+      const transaction = new driver.Transaction(pool);
+      await transaction.begin(driver.ISOLATION_LEVEL.SERIALIZABLE);
+      await transaction[end]();
+      assert.equal(session.isolation, 'SERIALIZABLE');
+      const result = await runOutlookCalendarOutbox(pool);
+      assert.equal(result.ok, true);
+      assert.equal(result.claimed, 0);
+      assert.equal(result.failed, 0);
+      const revalidate = session.commands.find(({ text }) => /WITH unchecked/.test(text));
+      assert.match(revalidate.text, /declare @limit int;set @limit=\?/i);
+      assert.match(revalidate.text, /SET TRANSACTION ISOLATION LEVEL REPEATABLE READ/i);
+      assert.match(revalidate.text, /READPAST,\s*UPDLOCK,\s*ROWLOCK/i);
+      assert.deepEqual(revalidate.parameters, [25]);
+      const claim = session.commands.find(({ text }) => /WITH due/.test(text));
+      assert.match(claim.text, /@leaseToken uniqueidentifier/i);
+      assert.match(claim.text, /SET TRANSACTION ISOLATION LEVEL REPEATABLE READ/i);
+      assert.match(claim.text, /READPAST,\s*UPDLOCK,\s*ROWLOCK/i);
+      assert.equal(claim.parameters.length, 4);
+    });
+  }
 }
 
-for (const operation of [
-  (pool) => revalidateOutlookSubscriptions(pool, 25),
-  (pool) => claimOutlookDeliveries(pool, { limit: 1, maxAttempts: 6 })
+for (const [name, operation] of [
+  ['yeniden doğrulama', (pool) => revalidateOutlookSubscriptions(pool, 25)],
+  ['sahiplenme', (pool) => claimOutlookDeliveries(pool, { limit: 1, maxAttempts: 6 })]
 ]) {
-  test('her READPAST sorgusu kendi ödünç aldığı oturumda çalışır', async (t) => {
-    const { pool, session } = await stack(t);
-    const transaction = new driver.Transaction(pool);
-    await transaction.begin(driver.ISOLATION_LEVEL.SERIALIZABLE);
-    await transaction.commit();
-    assert.equal(session.isolation, 'SERIALIZABLE');
-    await operation(pool);
-  });
+  for (const readCommittedSnapshot of [false, true]) {
+    test(`her READPAST ${name} sorgusu kendi ödünç aldığı oturumda çalışır (RCSI=${readCommittedSnapshot ? 'ON' : 'OFF'})`, async (t) => {
+      const { pool, session } = await stack(t, { readCommittedSnapshot });
+      const transaction = new driver.Transaction(pool);
+      await transaction.begin(driver.ISOLATION_LEVEL.SERIALIZABLE);
+      await transaction.commit();
+      assert.equal(session.isolation, 'SERIALIZABLE');
+      await operation(pool);
+      assert.equal(session.isolation, 'REPEATABLE READ');
+    });
+  }
 }
 
 for (const [metadata, reason] of [
@@ -124,6 +140,48 @@ for (const [metadata, reason] of [
     assert.equal((await runOutlookCalendarOutbox(pool)).ok, true);
   });
 }
+
+test('iç içe eksik Outlook şeması hata sarmalayıcılarından bulunur; tur iptali önceliğini korur', () => {
+  for (const nested of [
+    { cause: { originalError: { info: { message: "Invalid column name 'PendingDate'." } } } },
+    { originalError: { cause: { message: "Invalid object name 'dbo.MR_TaskOutlookSubscriptions'." } } },
+    { precedingErrors: [{ cause: { message: "Invalid column name 'LeaseToken'." } }] }
+  ]) {
+    assert.equal(outlookFailureCode({ code: 'EREQUEST', ...nested }), 'OUTLOOK_SCHEMA_MISSING');
+  }
+  const controller = new AbortController();
+  controller.abort({ code: 'OUTLOOK_RUN_TIMEOUT' });
+  assert.equal(outlookFailureCode({
+    code: 'EREQUEST', cause: { originalError: { info: { message: "Invalid column name 'PendingDate'." } } }
+  }, controller.signal), 'OUTLOOK_RUN_TIMEOUT');
+});
+
+test('çalışan aynı hata kodunu farklı aşamada yeniden günlüğe yazar; tam yineleneni bastırır', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const logs = [];
+  const results = [
+    { ok: false, reason: 'DATABASE_QUERY_FAILED', failureStage: 'revalidate' },
+    { ok: false, reason: 'DATABASE_QUERY_FAILED', failureStage: 'claim' },
+    { ok: false, reason: 'DATABASE_QUERY_FAILED', failureStage: 'claim' }
+  ];
+  const worker = createOutlookWorker({
+    run: async () => results.shift() || { ok: true }, enabled: () => true, intervalMs: 1000,
+    log: (result) => logs.push(result)
+  });
+  const advance = async (ms) => {
+    t.mock.timers.tick(ms);
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+  };
+  worker.start();
+  await advance(0);
+  await advance(1000);
+  await advance(1000);
+  assert.deepEqual(logs.map(({ reason, failureStage }) => ({ reason, failureStage })), [
+    { reason: 'DATABASE_QUERY_FAILED', failureStage: 'revalidate' },
+    { reason: 'DATABASE_QUERY_FAILED', failureStage: 'claim' }
+  ]);
+  await worker.stop();
+});
 
 test('iptal edilen gerçek mssql isteği sonrası aynı havuzda sonraki tur başarılıdır', async (t) => {
   const { pool, session } = await stack(t);

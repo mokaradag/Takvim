@@ -39,6 +39,7 @@ export function createOutlookWorker({
   let lastFinishedAt = null;
   let lastResult = null;
   let lastFailure = null;
+  let lastFailureStage = null;
 
   const schedule = (delay) => {
     timer = setTimeout(tick, delay);
@@ -57,8 +58,12 @@ export function createOutlookWorker({
         lastResult = result;
         lastFinishedAt = new Date().toISOString();
         const failure = result.ok === false ? result.reason || 'UNEXPECTED_ERROR' : null;
-        if (failure && failure !== lastFailure) log({ reason: failure, failureStage: result.failureStage, failureCodes: result.failureCodes || {} });
+        const failureStage = failure ? result.failureStage || null : null;
+        if (failure && (failure !== lastFailure || failureStage !== lastFailureStage)) {
+          log({ reason: failure, failureStage: result.failureStage, failureCodes: result.failureCodes || {} });
+        }
         lastFailure = failure;
+        lastFailureStage = failureStage;
       }).finally(() => {
         running = null;
         runStartedAt = null;
