@@ -1324,6 +1324,7 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
   position: absolute;
   /* Üst dolgunun tamamını örter; içerik şeridin üstünden sızmaz. */
   inset: calc(-1 * var(--workspace-padding-top, 24px)) calc(-1 * var(--workspace-padding-inline, 28px)) -10px;
+  top: calc(-1 * var(--workspace-padding-top, 24px) - 1px);
   background: var(--bg-elev);
   z-index: -1;
   pointer-events: none;

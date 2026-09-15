@@ -160,6 +160,8 @@ test('yapışkan çalışma alanı şeridi uygulama katmanındadır ve kaydırı
   assert.equal(backdrop.background, 'var(--bg-elev)');
   assert.equal(backdrop['z-index'], '-1');
   assert.equal(backdrop.inset, 'calc(-1 * var(--workspace-padding-top, 24px)) calc(-1 * var(--workspace-padding-inline, 28px)) -10px');
+  // Üst kenar 1 px bindirilir; ölçeklemede saç teli boşluğu kalmaz.
+  assert.equal(backdrop.top, 'calc(-1 * var(--workspace-padding-top, 24px) - 1px)');
   const content = declarationsFor(read('src/app/globals.css'), '.content');
   assert.equal(content['--workspace-padding-top'], '24px');
   assert.equal(content['--workspace-padding-inline'], '28px');
