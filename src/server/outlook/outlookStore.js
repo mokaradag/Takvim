@@ -324,10 +324,20 @@ export async function settleOutlookDelivery(executor, { subscriptionId, queueSeq
   return Boolean((await request.query(OUTLOOK_SETTLE_SQL)).recordset?.length);
 }
 
-export async function failOutlookDelivery(executor, { subscriptionId, failureCode, retrySeconds, queueSeq, leaseToken, clearProvisional = false }) {
+/** Kesin gönderilmeyen revizyonu geri alır; önceki belirsiz teslimatı ve kuyruğu korur. */
+export async function failOutlookDelivery(executor, {
+  subscriptionId, failureCode, retrySeconds, queueSeq, leaseToken, clearProvisional = false, previousRevision = null
+}) {
   const request = executor.request();
+  const pending = previousRevision?.deliveryMayHaveEscaped && previousRevision.pendingSequence != null
+    && (previousRevision.deliveredSequence == null || previousRevision.pendingSequence > previousRevision.deliveredSequence)
+    ? previousRevision : null;
   request.input('subscriptionId', sql.BigInt, subscriptionId);
   request.input('clearProvisional', sql.Bit, clearProvisional);
+  request.input('restorePendingRevision', sql.Bit, previousRevision != null);
+  request.input('previousPendingDate', sql.Date, pending?.pendingDate ?? null);
+  request.input('previousPendingSequence', sql.Int, pending?.pendingSequence ?? null);
+  request.input('previousPendingPayloadHash', sql.Char(64), pending?.pendingPayloadHash ?? null);
   request.input('failureCode', sql.VarChar(60), String(failureCode || 'UNKNOWN').slice(0, 60));
   request.input('retrySeconds', sql.Int, Math.max(60, Math.trunc(Number(retrySeconds) || 60)));
   request.input('queueSeq', sql.BigInt, queueSeq);

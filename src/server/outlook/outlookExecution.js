@@ -12,10 +12,15 @@ export async function abortableOutlookOperation(operation, signal, cancel = () =
   signal.throwIfAborted();
   let onAbort;
   const aborted = new Promise((resolve, reject) => {
-    onAbort = () => { try { cancel(); } finally { reject(signal.reason); } };
+    onAbort = () => {
+      reject(signal.reason);
+      try { cancel(); } catch { /* İptal hatası asıl süre sınırını değiştirmez. */ }
+    };
     signal.addEventListener('abort', onAbort, { once: true });
   });
-  try { return await Promise.race([Promise.resolve().then(operation), aborted]); }
+  try {
+    return await Promise.race([Promise.resolve().then(() => { signal.throwIfAborted(); return operation(); }), aborted]);
+  }
   finally { signal.removeEventListener('abort', onAbort); }
 }
 

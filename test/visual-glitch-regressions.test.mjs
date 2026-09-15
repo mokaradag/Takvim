@@ -159,7 +159,11 @@ test('yapışkan çalışma alanı şeridi uygulama katmanındadır ve kaydırı
   // Yığılma bağlamında bu zemin şeridin üstüne boyanır; yükseltilmiş tonu korur.
   assert.equal(backdrop.background, 'var(--bg-elev)');
   assert.equal(backdrop['z-index'], '-1');
-  assert.match(backdrop.inset, /^-\d+px\s+-\d+px$/);
+  assert.equal(backdrop.inset, 'calc(-1 * var(--workspace-padding-top, 24px)) calc(-1 * var(--workspace-padding-inline, 28px)) -10px');
+  const content = declarationsFor(read('src/app/globals.css'), '.content');
+  assert.equal(content['--workspace-padding-top'], '24px');
+  assert.equal(content['--workspace-padding-inline'], '28px');
+  assert.match(content.padding, /var\(--workspace-padding-top\) var\(--workspace-padding-inline\)/);
 });
 
 test('rapor sekmeleri donar ve tarih şeridi sekmelerin altına yapışır', () => {
@@ -169,7 +173,8 @@ test('rapor sekmeleri donar ve tarih şeridi sekmelerin altına yapışır', () 
   assert.equal(tabs['z-index'], 'calc(var(--z-chrome) + 1)');
 
   const strip = declarationsFor(features, '.reports-module .workspace-sticky:not(.request-tabs)');
-  assert.equal(strip.top, 'var(--reports-tabs-height)');
+  assert.equal(strip.top, 'calc(var(--reports-tabs-height) + 12px)');
+  assert.equal(declarationsFor(features, '.reports-module .workspace-sticky:not(.request-tabs)::before').top, '-12px');
   assert.equal(declarationsFor(features, '.reports-module')['--reports-tabs-height'] != null, true);
 
   // Sekme yüksekliği yazı ölçeğiyle değişir; sabit değer yerine ölçülür.
@@ -190,6 +195,21 @@ test('hatırlatma sonucu satır akışına girmez; görev satırının yüksekli
   assert.equal(result.width, 'max-content');
   assert.equal(result['white-space'], 'normal');
   assert.equal(result['z-index'], 'var(--z-popover)');
+  const cell = declarationsFor(features, '.tasks-actions-cell:has(.task-reminder-result)');
+  const ordinaryCell = declarationsFor(read('src/app/styles/components.css'), '.tasks-actions-cell');
+  assert.ok(Number(cell['z-index']) > Number(ordinaryCell['z-index']));
+  assert.equal(declarationsFor(features, '.simple-tasks-table .tasks-actions-cell:has(.task-reminder-result)').position, 'relative');
+});
+
+test('Sistem Yönetimi şeridi ve sekmeleri kaydırma alanının dışında kalır', () => {
+  const styles = read('src/app/styles/system-admin.css');
+  assert.equal(declarationsFor(styles, '.content-sistem').overflow, 'hidden');
+  assert.equal(declarationsFor(styles, '.sysadmin-page').height, '100%');
+  assert.equal(declarationsFor(styles, '.sysadmin-page > :not(.sysadmin-panel)').flex, '0 0 auto');
+  const panel = declarationsFor(styles, '.sysadmin-panel');
+  assert.equal(panel.flex, '1 1 0');
+  assert.equal(panel['min-height'], '0');
+  assert.equal(panel.overflow, 'auto');
 });
 
 test('hatırlatma gönderim geçmişi kendi kaydırma sınırında durur', () => {

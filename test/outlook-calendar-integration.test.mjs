@@ -140,6 +140,92 @@ async function withOutlookStack(seed, run, { sicil = OWNER } = {}) {
 
 const service = () => import('../src/server/outlook/outlookCalendarService.js');
 
+for (const [stage, key, occurrence] of [
+  ['revalidate', 'OUTLOOK_REVALIDATE_SQL', 1],
+  ['health-before-claim', 'OUTLOOK_HEALTH_SQL', 1],
+  ['claim', 'OUTLOOK_CLAIM_SQL', 1],
+  ['health-after-delivery', 'OUTLOOK_HEALTH_SQL', 2],
+  ['delivery', 'OUTLOOK_TASK_SQL', 1]
+]) {
+  test(`${stage} SQL hatası güvenli tanıyla doğru aşamada bildirilir`, async (t) => {
+    await withOutlookStack(outlookSeed(), async ({ pool }) => {
+      const api = await service();
+      if (stage === 'delivery') await api.addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, queueOnly: true });
+      const queries = await import('../src/server/outlook/outlookQueries.js');
+      const original = pool.request.bind(pool);
+      let count = 0;
+      pool.request = () => {
+        const request = original();
+        const query = request.query.bind(request);
+        request.query = (text) => {
+          if (text === queries[key] && ++count === occurrence) {
+            throw Object.assign(new Error('secret SQL connection credentials recipient UID title name SicilNo'), {
+              code: 'EREQUEST', number: 650, state: '42000', class: 16,
+              serverName: 'private host', parameters: { password: 'private' }
+            });
+          }
+          return query(text);
+        };
+        return request;
+      };
+      const logs = [];
+      t.mock.method(console, 'error', (...args) => logs.push(args));
+      const result = await api.runOutlookCalendarOutbox(pool, { send: recordingMailer().send });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'DATABASE_QUERY_FAILED');
+      assert.equal(result.failureStage, stage);
+      assert.equal(result.failed, stage === 'delivery' ? 1 : 0);
+      assert.deepEqual(logs, [[
+        stage === 'delivery' ? '[outlook] teslimat tamamlanamadı' : '[outlook] kuyruk sorgusu tamamlanamadı',
+        { stage, code: 'DATABASE_QUERY_FAILED', driverCode: 'EREQUEST', number: 650, sqlState: '42000', severity: 16 }
+      ]]);
+    });
+  });
+}
+
+test('boş ve sağlıklı kuyruk posta göndermeden başarılı tur döndürür', async () => {
+  await withOutlookStack(outlookSeed(), async ({ pool }) => {
+    const mailer = recordingMailer();
+    const result = await (await service()).runOutlookCalendarOutbox(pool, { send: mailer.send });
+    assert.equal(result.ok, true);
+    assert.equal(result.claimed, 0);
+    assert.equal(result.failed, 0);
+    assert.deepEqual(result.failureCodes, {});
+    assert.equal(result.failureStage, undefined);
+    assert.equal(mailer.sent.length, 0);
+  });
+});
+
+test('otomatik gönderim sürerken yönetici turu aynı daveti tekrar sahiplenmez', async () => {
+  await withOutlookStack(outlookSeed({ systemAdminSicils: [OWNER] }), async ({ pool }) => {
+    const api = await service();
+    const { POST } = await import('../src/app/api/mergen-rota/admin/system/queues/route.js');
+    await api.addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, queueOnly: true });
+    let started;
+    let finish;
+    const sending = new Promise((resolve) => { started = resolve; });
+    const release = new Promise((resolve) => { finish = resolve; });
+    const mailer = recordingMailer();
+    const automatic = api.runOutlookCalendarOutbox(pool, { send: async (message) => {
+      started();
+      await release;
+      return mailer.send(message);
+    } });
+    try {
+      await sending;
+      const response = await POST(new Request('http://localhost/queues', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'outlook-run' })
+      }));
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.ok, true);
+      assert.equal(body.result.claimed, 0);
+    } finally { finish(); }
+    assert.equal((await automatic).sent, 1);
+    assert.equal(mailer.sent.length, 1);
+  });
+});
+
 /** Gönderilen iletideki iCalendar parçasının alanları. */
 function calendarFields(message) {
   const content = message.calendar.content;
@@ -389,12 +475,171 @@ test('kaldırma iptal daveti gönderir ve aboneliği kapatır', async () => {
     assert.equal(cancel.method, 'CANCEL');
     assert.equal(cancel.sequence, 2);
     assert.equal(cancel.uid, calendarFields(mailer.sent[0]).uid);
+    assert.equal(cancel.summary, calendarFields(mailer.sent[0]).summary);
+    assert.equal(cancel.start, '20260915');
+    assert.equal(cancel.end, '20260916');
+    assert.match(mailer.sent[1].subject, /Teklif dosyasının hazırlanması/);
+    assert.match(mailer.sent[1].text, /Termin: 15\.09\.2026/);
     assert.equal(db.taskOutlookSubscriptions[0].IsActive, 0);
 
     // Kapalı abonelik ikinci kez kaldırılamaz.
     const again = await removeTaskFromOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
     assert.equal(again.status, 'NOT_SUBSCRIBED');
     assert.equal(mailer.sent.length, 2);
+  });
+});
+
+test('iptal son gönderilen künyeyi ve Exchange uyumlu tek takvim parçasını taşır', async () => {
+  await withOutlookStack(outlookSeed(), async ({ db, pool }) => {
+    const api = await service();
+    const { buildMimeMessage } = await import('../src/server/mail/mimeMessage.js');
+    const mailer = recordingMailer();
+    await api.addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
+    db.tasks[0].Title = 'Henüz gönderilmemiş yeni başlık';
+    db.tasks[0].TargetFinish = '2026-10-01';
+    await api.removeTaskFromOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
+    const cancel = mailer.sent[1];
+    const mime = buildMimeMessage({ from: 'mergen-rota@example.internal', ...cancel });
+    assert.equal((mime.match(/Content-Type: text\/calendar/g) || []).length, 1);
+    assert.doesNotMatch(mime, /Content-Disposition: attachment|application\/ics/);
+    const encoded = /Content-Type: text\/calendar;[^\r\n]*method=CANCEL\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)/.exec(mime)?.[1];
+    assert.ok(encoded);
+    const calendar = Buffer.from(encoded.replace(/\s/g, ''), 'base64').toString('utf8');
+    assert.equal(calendar, cancel.calendar.content);
+    assert.match(calendar, /DTSTART;VALUE=DATE:20260915\r\nDTEND;VALUE=DATE:20260916/);
+    assert.match(calendar, /TRANSP:TRANSPARENT/);
+    assert.match(calendar, /X-MICROSOFT-CDO-BUSYSTATUS:FREE/);
+    assert.doesNotMatch(JSON.stringify(cancel), /Henüz gönderilmemiş/);
+    assert.equal(calendarFields(cancel).summary, calendarFields(mailer.sent[0]).summary);
+  });
+});
+
+for (const uncertainRevision of [false, true]) {
+  for (const nextAction of ['cancel', 'retry']) {
+    test(`kesin gönderilmeyen tarih değişikliği önceki ${uncertainRevision ? 'belirsiz' : 'başarılı'} teslimatı korur: ${nextAction}`, async () => {
+      await withOutlookStack(outlookSeed(), async ({ db, pool }) => {
+        const api = await service();
+        const store = await import('../src/server/outlook/outlookStore.js');
+        const mailer = recordingMailer();
+        await api.addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
+        const row = db.taskOutlookSubscriptions[0];
+        if (uncertainRevision) {
+          db.tasks[0].TargetFinish = '2026-09-18';
+          await store.enqueueOutlookTaskUpdate(pool, TASK_ID);
+          await api.runOutlookCalendarOutbox(pool, { send: async (message) => {
+            await mailer.send(message);
+            return { ok: false, code: 'SMTP_TIMEOUT', deliveryMayHaveEscaped: true };
+          } });
+        }
+        const previous = { date: row.PendingDate, sequence: row.PendingSequence, hash: row.PendingPayloadHash };
+        const attendee = row.CalendarAttendee;
+        const organizer = row.CalendarOrganizer;
+        db.tasks[0].TargetFinish = '2026-09-21';
+        await store.enqueueOutlookTaskUpdate(pool, TASK_ID);
+        const failed = await api.runOutlookCalendarOutbox(pool, {
+          send: recordingMailer({ failWith: 'SMTP_NO_RECIPIENTS' }).send
+        });
+        assert.equal(failed.failed, 1);
+        assert.equal(row.PendingDate, previous.date);
+        assert.equal(row.PendingSequence, previous.sequence);
+        assert.equal(row.PendingPayloadHash, previous.hash);
+        assert.equal(row.DeliveredDate, '2026-09-15');
+        assert.equal(row.CalendarAttendee, attendee);
+        assert.equal(row.CalendarOrganizer, organizer);
+        assert.equal(row.PendingMethod, 'REQUEST');
+        assert.equal(row.IsActive, 1);
+        assert.equal(row.AttemptCount, 1);
+        assert.ok(new Date(row.NextAttemptAt).getTime() > Date.now());
+        assert.equal(row.LeaseToken, null);
+        const failedSequence = row.Sequence;
+        if (nextAction === 'cancel') {
+          const removed = await api.removeTaskFromOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
+          assert.equal(removed.status, 'REMOVED');
+          assert.equal(row.IsActive, 0);
+        } else {
+          row.NextAttemptAt = null;
+          const retried = await api.runOutlookCalendarOutbox(pool, { send: mailer.send });
+          assert.equal(retried.sent, 1);
+          assert.equal(row.DeliveredDate, '2026-09-21');
+        }
+        const last = calendarFields(mailer.sent.at(-1));
+        assert.equal(last.method, nextAction === 'cancel' ? 'CANCEL' : 'REQUEST');
+        assert.equal(last.start, nextAction === 'retry' ? '20260921' : uncertainRevision ? '20260918' : '20260915');
+        assert.equal(last.uid, calendarFields(mailer.sent[0]).uid);
+        assert.ok(last.sequence > failedSequence);
+        assert.equal(row.PendingMethod, null);
+      });
+    });
+  }
+}
+
+test('tarih değişikliği gönderilirken kuyruğa alınan iptal kesin ret sonrası eski tarihi kullanır', async () => {
+  await withOutlookStack(outlookSeed(), async ({ db, pool }) => {
+    const api = await service();
+    const store = await import('../src/server/outlook/outlookStore.js');
+    const mailer = recordingMailer();
+    await api.addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
+    const row = db.taskOutlookSubscriptions[0];
+    db.tasks[0].TargetFinish = '2026-09-21';
+    await store.enqueueOutlookTaskUpdate(pool, TASK_ID);
+    await api.runOutlookCalendarOutbox(pool, { limit: 1, send: async () => {
+      await api.removeTaskFromOutlook(pool, { taskId: TASK_ID, sicil: OWNER, queueOnly: true });
+      return { ok: false, code: 'SMTP_NO_RECIPIENTS', deliveryMayHaveEscaped: false };
+    } });
+    assert.equal(row.PendingMethod, 'CANCEL');
+    assert.equal(row.PendingDate, null);
+    assert.equal(row.AttemptCount, 0);
+    assert.equal(row.LastFailureCode, null);
+    const cancelled = await api.runOutlookCalendarOutbox(pool, { send: mailer.send });
+    assert.equal(cancelled.cancelled, 1);
+    assert.equal(calendarFields(mailer.sent.at(-1)).start, '20260915');
+  });
+});
+
+test('sonucu belirsiz ilk davetin iptali silinen görevden bağımsız aynı tarihle yeniden denenir', async () => {
+  await withOutlookStack(outlookSeed(), async ({ db, pool }) => {
+    const api = await service();
+    const mailer = recordingMailer();
+    const uncertain = async (message) => {
+      await mailer.send(message);
+      return { ok: false, code: 'SMTP_TIMEOUT', deliveryMayHaveEscaped: true };
+    };
+    await api.addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: uncertain });
+    const row = db.taskOutlookSubscriptions[0];
+    assert.equal(row.DeliveredDate, null);
+    assert.equal(row.PendingDate, '2026-09-15');
+    db.tasks = [];
+    await api.removeTaskFromOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: uncertain });
+    assert.equal(row.PendingDate, '2026-09-15');
+    row.NextAttemptAt = null;
+    const result = await api.runOutlookCalendarOutbox(pool, { send: mailer.send });
+    assert.equal(result.cancelled, 1);
+    assert.equal(row.IsActive, 0);
+    const [request, cancel, retry] = mailer.sent.map(calendarFields);
+    assert.deepEqual([request.method, cancel.method, retry.method], ['REQUEST', 'CANCEL', 'CANCEL']);
+    assert.equal(cancel.sequence, retry.sequence);
+    assert.ok(cancel.sequence > request.sequence);
+    for (const item of [cancel, retry]) {
+      assert.equal(item.uid, request.uid);
+      assert.equal(item.start, request.start);
+      assert.equal(item.end, request.end);
+    }
+  });
+});
+
+test('eski kayıtta iptal tarihi yoksa hatalı takvim iletisi gönderilmez ve neden saklanır', async () => {
+  await withOutlookStack(outlookSeed(), async ({ db, pool }) => {
+    const api = await service();
+    const mailer = recordingMailer();
+    await api.addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
+    const row = db.taskOutlookSubscriptions[0];
+    row.DeliveredDate = null;
+    const result = await api.removeTaskFromOutlook(pool, { taskId: TASK_ID, sicil: OWNER, send: mailer.send });
+    assert.equal(result.status, 'FAILED');
+    assert.equal(result.code, 'OUTLOOK_CANCELLATION_DATE_MISSING');
+    assert.equal(row.LastFailureCode, 'OUTLOOK_CANCELLATION_DATE_MISSING');
+    assert.equal(row.IsActive, 1);
+    assert.equal(mailer.sent.length, 1);
   });
 });
 
@@ -448,7 +693,8 @@ test('görev silindiğinde iptal kuyruğa girer ve künye satırdan okunur', asy
     const cancel = calendarFields(mailer.sent[1]);
     assert.equal(cancel.method, 'CANCEL');
     assert.equal(cancel.summary, 'MERGEN Rota takvim kaydı');
-    assert.equal(cancel.start, undefined);
+    assert.equal(cancel.start, '20260915');
+    assert.equal(cancel.end, '20260916');
     assert.equal(db.taskOutlookSubscriptions[0].IsActive, 0);
   });
 });
@@ -1072,8 +1318,10 @@ for (const [source, value] of [
       assert.equal(result.cancelled, 1);
       const cancel = mailer.sent[1];
       assert.equal(calendarFields(cancel).uid, calendarFields(mailer.sent[0]).uid);
-      assert.doesNotMatch(JSON.stringify(cancel), /Teklif|hazırlanması|İHA|P4417041|20260915|2026-09-15|15\.09\.2026/);
-      assert.doesNotMatch(cancel.calendar.content, /DESCRIPTION|DTSTART|DTEND|URL:/);
+      assert.doesNotMatch(JSON.stringify(cancel), /Teklif|hazırlanması|İHA|P4417041/);
+      assert.doesNotMatch(cancel.calendar.content, /DESCRIPTION|URL:/);
+      assert.equal(calendarFields(cancel).start, calendarFields(mailer.sent[0]).start);
+      assert.equal(calendarFields(cancel).end, calendarFields(mailer.sent[0]).end);
       assert.equal(db.taskOutlookSubscriptions[0].IsActive, 0);
     });
   });
@@ -1613,7 +1861,8 @@ for (const action of ['remove', 'delete', 'access']) {
       assert.equal(mailer.sent.length, count + (action === 'access' ? 1 : 0));
       if (action === 'access') {
         assert.equal(calendarFields(mailer.sent.at(-1)).method, 'CANCEL');
-        assert.doesNotMatch(mailer.sent.at(-1).calendar.content, /DESCRIPTION|DTSTART|DTEND|URL:/);
+        assert.doesNotMatch(mailer.sent.at(-1).calendar.content, /DESCRIPTION|URL:/);
+        assert.equal(calendarFields(mailer.sent.at(-1)).start, '20260915');
       }
       assert.equal(row.IsActive, 0);
       if (action === 'access') assert.equal(row.LastCancellationReason, 'FORBIDDEN');

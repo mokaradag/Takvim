@@ -106,6 +106,12 @@ Pages whose table "runs the show" (Görevler, Ekip, Proje Yapısı → İş Dağ
 
 `position: sticky` resolves against the nearest scroll container, so the header row must live inside the element that actually scrolls — an `overflow-x: auto` wrapper without a height constraint silently breaks sticky headers. Sticky header cells also need an opaque background, otherwise rows show through during horizontal scrolling.
 
+Özet and Proje Yapısı → Proje Tanımı use the shared `.workspace-sticky` backdrop. Its upper and side coverage follow `.content`'s `--workspace-padding-top` and `--workspace-padding-inline` tokens; the lower edge covers an additional 10px. Covering only 10px above a strip leaves part of the 24px content padding exposed during scrolling. Raporlar keeps its tabs above the date/organization strip, using the measured tab height plus a 12px gap. The date strip's backdrop covers that gap without covering the tabs.
+
+Sistem Yönetimi delegates vertical scrolling to `.sysadmin-panel` in every tab. Its health strip and tab list remain non-shrinking siblings outside that scroll area. The panel is focusable and remounts on tab changes so a previous tab's scroll position does not hide the next tab's heading.
+
+Task reminder feedback raises the containing action cell above adjacent body cells while remaining below table headers. In Temel Kip that cell becomes relatively positioned only while feedback is visible; the ordinary column remains static. Raising only the feedback bubble cannot escape a sticky cell's stacking context.
+
 ## 3. Rules for adding styles
 
 Start from ownership: identify the component or feature that owns the behavior, then edit that owner. Prefer an existing semantic class over increasing selector specificity. Add a new semantic class when CSS would otherwise need to infer meaning from DOM position, inline-style text or unrelated descendants.

@@ -870,6 +870,8 @@
 .task-reminder-result.success { color: var(--status-done); }
 .task-reminder-result.warning { color: var(--c-amber); }
 .task-reminder-result.error { color: var(--status-overdue); }
+.tasks-actions-cell:has(.task-reminder-result) { z-index: 3; }
+.simple-tasks-table .tasks-actions-cell:has(.task-reminder-result) { position: relative; }
 
 /* ── Outlook takvim eylemi ───────────────────────────────────── */
 /* Eylem, MERGEN Rota'nın kendi düğme dilini kullanır: ayrı bir kart, marka
@@ -1320,8 +1322,8 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
 .workspace-sticky::before {
   content: '';
   position: absolute;
-  /* Yanlarda `.content` yatay dolgusu, altta ve üstte nefes payı. */
-  inset: -10px -28px;
+  /* Üst dolgunun tamamını örter; içerik şeridin üstünden sızmaz. */
+  inset: calc(-1 * var(--workspace-padding-top, 24px)) calc(-1 * var(--workspace-padding-inline, 28px)) -10px;
   background: var(--bg-elev);
   z-index: -1;
   pointer-events: none;
@@ -1337,7 +1339,8 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
   z-index: calc(var(--z-chrome) + 1);
   background: var(--bg-elev);
 }
-.reports-module .workspace-sticky:not(.request-tabs) { top: var(--reports-tabs-height); }
+.reports-module .workspace-sticky:not(.request-tabs) { top: calc(var(--reports-tabs-height) + 12px); }
+.reports-module .workspace-sticky:not(.request-tabs)::before { top: -12px; }
 
 .content-rapor:has([data-report-tab="activities"]) { overflow: hidden; min-height: 0; padding-bottom: 16px; }
 .reports-module[data-report-tab="activities"] { height: 100%; min-height: 0; }

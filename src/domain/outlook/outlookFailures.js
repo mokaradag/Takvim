@@ -11,6 +11,7 @@ const MESSAGES = Object.freeze({
   SMTP_TIMEOUT: 'E-posta sunucusu zamanında yanıt vermedi.',
   SMTP_SEND_FAILED: 'E-posta gönderilemedi.',
   NO_RECIPIENT_ADDRESS: 'Kurumsal e-posta adresi çözülemedi.',
+  OUTLOOK_CANCELLATION_DATE_MISSING: 'Önceki Outlook kaydının tarihi bulunamadı; takvim iptali gönderilemedi.',
   OUTLOOK_RUN_TIMEOUT: 'Outlook turunun süre sınırına ulaşıldı; kuyruk otomatik yeniden denenecek.',
   OUTLOOK_LEASE_LOST: 'Outlook teslimat sahipliği kaybedildi; kalıcı kuyruk yeniden değerlendirilecek.',
   OUTLOOK_SCHEMA_MISSING: 'Outlook veritabanı şeması eksik; güncel 0010 ve 0011 yükseltmelerini uygulayın.',

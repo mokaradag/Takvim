@@ -9,6 +9,14 @@ MERGEN Rota artık iki tümüyle yalıtılmış **Veri Kipi** sunar:
 
 Veri Kipi, **Temel Kip / Kapsamlı Kip** kullanım seçiminden bağımsızdır. Veri Kipi değiştiğinde application-state provider yeniden kurulur; Demo ve Gerçek Sistem snapshot'ları birleştirilmez. Demo etkin olduğunda sürekli görünen `DEMO` göstergesi vardır.
 
+## Sabit çalışma alanları ve Outlook iptali
+
+Özet ve Proje Yapısı → Proje Tanımı şeritleri, kaydırılan içeriği üst boşluk boyunca örten opak zemin ve altta 10 piksel nefes payı kullanır. Raporlar'da sekmeler ile tarih/organizasyon şeridi birlikte sabit kalır; Sistem Yönetimi'nde sağlık şeridi ve sekmelerin altındaki panel kayar. Görev hatırlatma sonucu komşu satır simgelerinin önünde görünür. Outlook iptalleri Exchange'in zorunlu tuttuğu tüm gün tarihini önceki davetten korur. Ayrıntılar: [arayüz yerleşimi](docs/UI-STYLING-ARCHITECTURE.md), [Sistem Yönetimi](docs/SYSTEM-ADMINISTRATION.md), [Outlook ileti biçimi](docs/OUTLOOK-CALENDAR.md#ileti-biçimi-mime).
+
+Kesin gönderilmeyen Outlook tarih değişiklikleri iptal tarihini değiştirmez; yeniden deneme kuyruğu ve önceki belirsiz teslimat bilgileri korunur.
+
+Outlook kuyruk sorguları, `msnodesqlv8` havuzundan önceki işlemin `SERIALIZABLE` oturum ayarını devralsa da kendi `READ COMMITTED` sözleşmesini kurar. Boş kuyruk başarılı tamamlanır; gerçek SQL hataları aşama, güvenli hata kodu ve sınırlı sürücü künyesiyle bildirilir. [Kuyruk yürütme tanısı](docs/OUTLOOK-CALENDAR.md#kuyruk-yürütme-tanısı) üretim doğrulamasını açıklar.
+
 ## Otomatik veri yenileme
 
 Gerçek Sistem verisi, sekme görünürken varsayılan olarak **60 saniyede bir** uygulamanın mevcut `reloadData()`/snapshot yaşam döngüsüyle yenilenir. Bu bir tarayıcı sayfası yenilemesi değildir: çalışma alanı, arama, görev tablosu süzgeçleri ve Direktörlük/Müdürlük/Birim seçimi korunur; seçili proje ile açık görev çekmecesi ise dayandıkları kayıtlar yetkili snapshot'ta geçerli kaldığı sürece korunur. Proje artık geçerli değilse Portföy kipine dönülür, seçili görev artık geçerli değilse çekmece kapatılır. Eşdeğer snapshot'larda değişmeyen nesne ve koleksiyon referansları yeniden kullanılır. Yenilenen yetkili kişi/görev projeksiyonunda kurumsal yol gerçekten kaybolmuşsa yalnızca geçersiz alt seçim en yakın geçerli üst kapsama indirilir. Manuel yenileme denetimi de kullanılabilir durumda kalır.

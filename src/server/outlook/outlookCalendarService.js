@@ -1,7 +1,7 @@
 import 'server-only';
 import { outlookCompletionNeedsCancellation } from '../../domain/outlook/outlookCompletion.js';
 import { abortableOutlookOperation, keepOutlookLease, outlookDeadline, outlookExecutor } from './outlookExecution.js';
-import { outlookFailureCode } from './outlookFailure.js';
+import { outlookFailureCode, outlookFailureDiagnostic } from './outlookFailure.js';
 import { outlookFailureMessage, safeOutlookFailureCode } from '../../domain/outlook/outlookFailures.js';
 import { isValidEmailAddress } from '../../domain/reminders/emailAddress.js';
 import {
@@ -102,7 +102,7 @@ function organizerFrom(config) {
 }
 
 function caughtOutlookFailureCode(error, signal) {
-  const caughtCode = outlookFailureCode(error);
+  const caughtCode = outlookFailureCode(error, signal);
   if (caughtCode !== 'UNEXPECTED_ERROR') return caughtCode;
   return outlookFailureCode(signal?.aborted ? signal.reason : error);
 }
@@ -116,6 +116,7 @@ async function resolveTaskPayload(executor, { taskId, sicil, link }) {
   return { taskState, payload };
 }
 
+/** Kuyruktaki daveti gönderir; teslimat ve yeniden deneme durumunu kalıcılaştırır. */
 async function deliverSubscription(baseExecutor, { subscription, link, send, now = new Date(), signal = null }) {
   const execution = outlookDeadline(signal ? 240000 : outlookRunBudgetMs(), signal);
   const executor = outlookExecutor(baseExecutor, execution.signal);
@@ -134,19 +135,21 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
     queueSeq: subscription.queueSeq,
     leaseToken: subscription.leaseToken
   };
-  const failed = async (code, clearProvisional = false) => {
+  const failed = async (code, definitivelyNotSent = false) => {
     try {
       await finish((cleanup) => failOutlookDelivery(cleanup, {
-        ...claim, failureCode: code, clearProvisional,
+        ...claim, failureCode: code,
+        clearProvisional: definitivelyNotSent && !subscription.deliveryMayHaveEscaped && subscription.deliveredSequence == null,
+        previousRevision: definitivelyNotSent && (subscription.deliveredSequence != null || subscription.deliveryMayHaveEscaped)
+          ? subscription : null,
         retrySeconds: outlookRetryDelaySeconds(subscription.attemptCount)
       }));
     } catch (cleanupError) {
       // Asıl teslimat hatası kullanıcıya korunur. Hata kaydını kalıcılaştırma
       // geçici olarak başarısızsa kira süresi dolunca kuyruk tekrar alınabilir.
       console.error('[outlook] teslimat hata kaydı kalıcılaştırılamadı', {
-        subscriptionId: subscription.subscriptionId,
-        code,
-        cleanupCode: caughtOutlookFailureCode(cleanupError, null)
+        ...outlookFailureDiagnostic(cleanupError, 'delivery'),
+        deliveryCode: code
       });
     }
     return { status: 'FAILED', code, message: outlookMessage(code) };
@@ -170,14 +173,18 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
     const cancellationCode = cancellationReason === 'USER_REMOVED' ? 'REMOVED' : cancellationReason;
     const mustCancel = Boolean(cancellationReason);
     const method = mustCancel ? 'CANCEL' : 'REQUEST';
-    const summary = mustCancel ? 'MERGEN Rota takvim kaydı' : payload.summary;
-    const calendarDate = mustCancel ? null : payload.date;
+    const cancellationSummary = subscription.cancelRequested || (!unavailable && payload.ok)
+      ? subscription.deliveredSummary : null;
+    const summary = mustCancel ? cancellationSummary || 'MERGEN Rota takvim kaydı' : payload.summary;
+    // Exchange iptalde de DTSTART ister; yalnızca önceden gönderilen tarih kullanılır.
+    const calendarDate = mustCancel ? subscription.pendingDate || subscription.deliveredDate : payload.date;
 
     if (mustCancel && subscription.deliveredSequence == null && !subscription.deliveryMayHaveEscaped) {
       const removed = await deactivateOutlookSubscription(executor, { ...claim, cancellationReason });
       if (!removed) await settleOutlookDelivery(executor, claim);
       return { status: removed ? 'CANCELLED' : 'IN_PROGRESS', code: cancellationCode };
     }
+    if (mustCancel && !calendarDate) return await failed('OUTLOOK_CANCELLATION_DATE_MISSING');
     const payloadHash = mustCancel
       ? outlookCancellationHash({ summary, date: calendarDate }) : outlookPayloadHash(payload);
     if (!mustCancel && !force && !subscription.completionSuspended && subscription.deliveredMethod !== 'CANCEL'
@@ -225,8 +232,7 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
       calendar: { method, content: invitation },
       signal: execution.signal
     }), execution.signal);
-    if (!sent.ok) return await failed(safeOutlookFailureCode(sent.code, 'SMTP_SEND_FAILED'),
-      sent.deliveryMayHaveEscaped === false && !subscription.deliveryMayHaveEscaped && subscription.deliveredSequence == null);
+    if (!sent.ok) return await failed(safeOutlookFailureCode(sent.code, 'SMTP_SEND_FAILED'), sent.deliveryMayHaveEscaped === false);
     const completed = await finish((cleanup) => completeOutlookDelivery(cleanup, {
       ...claim, method, sequence: allocated.sequence, payloadHash, summary, calendarDate,
       completionSuspended: completedTask, cancellationReason
@@ -236,7 +242,7 @@ async function deliverSubscription(baseExecutor, { subscription, link, send, now
   } catch (error) {
     if (isMissingOutlookSchema(error)) throw error;
     const code = caughtOutlookFailureCode(error, execution.signal);
-    console.error('[outlook] teslimat tamamlanamadı', { subscriptionId: subscription.subscriptionId, code });
+    console.error('[outlook] teslimat tamamlanamadı', outlookFailureDiagnostic(error, 'delivery', execution.signal));
     return await failed(code);
   } finally {
     await stopRenewal();
@@ -437,42 +443,50 @@ export async function runOutlookCalendarOutbox(executor, {
   const summary = { ok: true, schemaReady: true, claimed: 0, sent: 0, cancelled: 0, unchanged: 0, inProgress: 0, failed: 0, exhausted: 0, failureCodes: {} };
   const execution = outlookDeadline(Math.max(1, Math.min(240000, Number(budgetMs) || outlookRunBudgetMs())));
   const bounded = outlookExecutor(executor, execution.signal);
-  let deliveryInProgress = false;
+  let stage = 'revalidate';
   try {
     await revalidateOutlookSubscriptions(bounded, limit);
+    stage = 'health-before-claim';
     summary.exhausted = await outlookOutboxHealth(bounded, maxAttempts);
     for (let index = 0; index < limit && !execution.signal.aborted; index += 1) {
+      stage = 'claim';
       const [subscription] = await claimOutlookDeliveries(bounded, { limit: 1, maxAttempts });
       if (!subscription) break;
       summary.claimed += 1;
-      deliveryInProgress = true;
+      stage = 'delivery';
       const delivery = await deliverSubscription(executor, { subscription, link, send, now, signal: execution.signal });
-      deliveryInProgress = false;
       if (delivery.status === 'SENT') summary.sent += 1;
       else if (delivery.status === 'CANCELLED') summary.cancelled += 1;
       else if (delivery.status === 'UNCHANGED') summary.unchanged += 1;
       else if (delivery.status === 'IN_PROGRESS') summary.inProgress += 1;
       else {
         summary.failed += 1;
+        summary.failureStage = 'delivery';
         const code = safeOutlookFailureCode(delivery.code);
         summary.failureCodes[code] = (summary.failureCodes[code] || 0) + 1;
       }
     }
-    if (!execution.signal.aborted) summary.exhausted = await outlookOutboxHealth(bounded, maxAttempts);
+    if (!execution.signal.aborted) {
+      stage = 'health-after-delivery';
+      summary.exhausted = await outlookOutboxHealth(bounded, maxAttempts);
+    }
     summary.ok = summary.failed === 0 && summary.exhausted === 0 && !execution.signal.aborted;
-    if (execution.signal.aborted) summary.reason = 'OUTLOOK_RUN_TIMEOUT';
+    if (execution.signal.aborted) {
+      summary.reason = 'OUTLOOK_RUN_TIMEOUT';
+      summary.failureStage = stage;
+    }
     else if (summary.exhausted) summary.reason = 'OUTLOOK_RETRY_EXHAUSTED';
     else if (summary.failed) summary.reason = Object.keys(summary.failureCodes)[0];
     return summary;
   } catch (error) {
-    if (deliveryInProgress) {
+    const diagnostic = outlookFailureDiagnostic(error, stage, execution.signal);
+    summary.failureStage = stage;
+    if (stage === 'delivery') {
       summary.failed += 1;
       const code = caughtOutlookFailureCode(error, execution.signal);
       summary.failureCodes[code] = (summary.failureCodes[code] || 0) + 1;
     }
-    if (isMissingOutlookSchema(error)) return { ...summary, ok: false, schemaReady: false, reason: 'OUTLOOK_SCHEMA_MISSING' };
-    if (execution.signal.aborted) return { ...summary, ok: false, reason: 'OUTLOOK_RUN_TIMEOUT' };
-    console.error('[outlook] kuyruk sorgusu tamamlanamadı', { code: outlookFailureCode(error) });
-    return { ...summary, ok: false, reason: outlookFailureCode(error) };
+    console.error(stage === 'delivery' ? '[outlook] teslimat tamamlanamadı' : '[outlook] kuyruk sorgusu tamamlanamadı', diagnostic);
+    return { ...summary, ok: false, schemaReady: diagnostic.code !== 'OUTLOOK_SCHEMA_MISSING', reason: diagnostic.code };
   } finally { execution.close(); }
 }

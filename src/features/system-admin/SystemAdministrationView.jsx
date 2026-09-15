@@ -146,11 +146,12 @@ export function SystemAdministrationView() {
       </div>
 
       <div
+        key={active}
         id={systemAdminPanelId(active)}
         role="tabpanel"
         aria-labelledby={systemAdminTabId(active)}
         className="sysadmin-panel"
-        tabIndex={-1}
+        tabIndex={0}
       >
         {active === ADMIN_TABS.OVERVIEW && (
           <SystemOverviewTab
