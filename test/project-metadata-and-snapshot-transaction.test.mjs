@@ -152,12 +152,14 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   // Kurumsal katalog tazelemesi bilinçli olarak serileştirilebilir işlemin dışındadır.
   assert.match(projectionSource, /await baseRepository\.refreshCorporateCatalog\(\{ waitForColdStart: true \}\);[\s\S]*const projected = await withSqlTransaction\(/);
   assert.match(projectionSource, /const projected = await withSqlTransaction[\s\S]*if \(catalogSync === 'background-after'\) \{\s*await baseRepository\.refreshCorporateCatalog\(\{ waitForColdStart: false \}\);/);
-  // Tamamlama aynı işlemde ve YETKİ BAĞLAMIYLA çalışır: satır düzeyinde
-  // görünürlük süzgeci olmadan, kısmi anlık görüntünün gizlediği eş sorumlular
-  // geri getiriliyordu.
-  assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds, auth\)/);
-  assert.match(projectionSource, /SELECT CAST\(CASE WHEN @isAdmin = 1/);
-  assert.match(projectionSource, /WHERE auth\.IdentityVisible = 1/);
-  assert.match(projectionSource, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @sicil AND es\.EmployeeSicil = ta\.Sicil/);
+  // Tamamlama aynı işlemde kalır; ancak proje erişimi yeniden sorgulanmaz.
+  // Yetkili snapshot'ın görev kapsamı SQL'deki Sicil maskelemesini besler.
+  assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, snapshot\.tasks, auth\)/);
+  assert.match(projectionSource, /identityVisibleTaskIds/);
+  assert.match(projectionSource, /coAssigneeTaskIds/);
+  assert.match(projectionSource, /CASE WHEN visibility\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
+  assert.match(projectionSource, /FROM dbo\.MR_V_ExecutiveScope\s+WHERE @isExecutive = 1 AND ManagerSicil = @sicil/s);
+  assert.doesNotMatch(projectionSource, /MR_V_CorporateProjectAccess/);
+  assert.doesNotMatch(projectionSource, /MR_ProjectAccess/);
   assert.match(projectionSource, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });
