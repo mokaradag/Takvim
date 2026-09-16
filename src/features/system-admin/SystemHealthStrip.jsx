@@ -34,6 +34,7 @@ export function SystemHealthStrip({
 }) {
   const state = normalizeHealthState(overview?.state);
   const counts = overview?.counts || {};
+  const alertCounts = counts.alerts || {};
   const notice = stalenessNotice({ stale, lastUpdatedAt, error });
   const byKey = new Map((overview?.components || []).map((component) => [component.key, component]));
 
@@ -78,8 +79,13 @@ export function SystemHealthStrip({
           );
         })}
         <span className="sysadmin-strip-counts">
-          <span className="sysadmin-strip-count sysadmin-strip-count-crit">{counts.critical || 0} kritik</span>
-          <span className="sysadmin-strip-count sysadmin-strip-count-warn">{counts.warning || 0} uyarı</span>
+          <span className="sysadmin-strip-count sysadmin-strip-count-crit">{counts.critical || 0} kritik bileşen</span>
+          <span className="sysadmin-strip-count sysadmin-strip-count-warn">{counts.warning || 0} dikkat bileşeni</span>
+          {alertCounts.total > 0 && (
+            <span className={`sysadmin-strip-count sysadmin-strip-count-${alertCounts.critical ? 'crit' : 'warn'}`}>
+              {alertCounts.total} açık uyarı
+            </span>
+          )}
         </span>
       </div>
 
