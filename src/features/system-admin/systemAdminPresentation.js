@@ -49,11 +49,24 @@ export function alertStateLabel(state) {
 export function healthNarrative({ state, counts = {}, attentionCount = 0 } = {}) {
   const normalized = normalizeHealthState(state);
   const measured = (counts.healthy || 0) + (counts.warning || 0) + (counts.critical || 0) + (counts.unknown || 0);
+  const activeAlerts = Number(counts.alerts?.total || 0);
   if (normalized === HEALTH_STATES.CRITICAL) {
-    return `${counts.critical || 0} bileşen kritik durumda. Öncelikli ${attentionCount} kaydı inceleyin.`;
+    if (counts.critical) {
+      return activeAlerts
+        ? `${counts.critical} bileşen kritik durumda; ${activeAlerts} açık uyarı bulunuyor.`
+        : `${counts.critical} bileşen kritik durumda. Öncelikli ${attentionCount} kaydı inceleyin.`;
+    }
+    if (activeAlerts) return `Bileşenlerde şu anda kritik durum yok; ${activeAlerts} açık uyarı kritik öncelikte.`;
+    return 'Sistem kritik durumda; ayrıntıları inceleyin.';
   }
   if (normalized === HEALTH_STATES.WARNING) {
-    return `${counts.warning || 0} bileşen dikkat istiyor; kritik bileşen yok.`;
+    if (counts.warning) {
+      return activeAlerts
+        ? `${counts.warning} bileşen dikkat istiyor; ${activeAlerts} açık uyarı bulunuyor.`
+        : `${counts.warning} bileşen dikkat istiyor; kritik bileşen yok.`;
+    }
+    if (activeAlerts) return `Bileşenlerde şu anda uyarı durumu yok; ${activeAlerts} açık uyarı bulunuyor.`;
+    return 'Sistem dikkat gerektiriyor; ayrıntıları inceleyin.';
   }
   if (normalized === HEALTH_STATES.UNKNOWN) {
     return `${counts.unknown || 0} bileşenin durumu ölçülemedi. Ölçülemeyen bileşen sağlıklı sayılmaz.`;

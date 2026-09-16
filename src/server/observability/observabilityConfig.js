@@ -1,4 +1,5 @@
 import 'server-only';
+import { hostname as osHostname } from 'node:os';
 
 /**
  * Gözlemlenebilirlik yapılandırması.
@@ -89,13 +90,12 @@ export function corporateSyncStaleHours() {
  * karışmaz. Değer verilmezse makine adı ve süreç numarasından türetilir; süreç
  * boyunca DEĞİŞMEZ.
  */
-export function applicationInstanceId() {
-  const configured = String(process.env.MERGEN_ROTA_INSTANCE_ID ?? '').trim();
+export function applicationInstanceId({ env = process.env, pid = process.pid } = {}) {
+  const configured = String(env.MERGEN_ROTA_INSTANCE_ID ?? '').trim();
   if (configured) return configured.slice(0, 64);
-  const host = typeof process.env.HOSTNAME === 'string' && process.env.HOSTNAME.trim()
-    ? process.env.HOSTNAME.trim()
-    : 'node';
-  const suffix = `-${process.pid}`;
+  const host = [env.HOSTNAME, env.COMPUTERNAME, osHostname()]
+    .find((value) => typeof value === 'string' && value.trim())?.trim() || 'node';
+  const suffix = `-${pid}`;
   return `${host.slice(0, 64 - suffix.length)}${suffix}`;
 }
 

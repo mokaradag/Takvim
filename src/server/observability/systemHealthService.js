@@ -5,7 +5,6 @@ import {
   componentTab,
   eventAction,
   normalizeSeverity,
-  severityToHealthState,
   severityWeight
 } from '../../domain/observability/eventModel.js';
 import {
@@ -21,6 +20,7 @@ import {
   resolveOperationalAlert,
   upsertOperationalAlert
 } from './operationalEventsRepository.js';
+import { loadActiveAlertSummary } from './activeAlertSummaryRepository.js';
 import {
   deriveAlertConditions,
   deriveUnmeasuredAlertKeys,
@@ -28,6 +28,7 @@ import {
   parseAlertKey
 } from './alertRules.js';
 import { MEMORY_PRESSURE_RATIO, observabilityConfiguration } from './observabilityConfig.js';
+import { supersededProcessAlertKeys } from './processAlertLifecycle.js';
 import {
   probeApplication,
   probeAuthentication,
@@ -54,6 +55,7 @@ export const OVERVIEW_WINDOW_MS = 15 * 60 * 1000;
 
 /** API özetine giren işlem ön eki. */
 const API_OPERATION_PREFIX = 'api.';
+const OVERVIEW_ALERT_LIMIT = 50;
 
 function apiRows(rows) {
   return rows.filter((row) => String(row.operation || '').startsWith(API_OPERATION_PREFIX));
@@ -125,6 +127,22 @@ export async function loadSystemHealth(executor, { now = Date.now() } = {}) {
   return { ...summarizeHealth(components), components, generatedAt: new Date(now).toISOString() };
 }
 
+async function resolveAlertKeys(executor, keys, resolvedAt) {
+  const resolved = [];
+  for (const key of keys) {
+    const parsed = parseAlertKey(key);
+    const result = await resolveOperationalAlert(executor, {
+      component: parsed.component,
+      code: parsed.code,
+      scope: parsed.scope,
+      resolvedAt
+    });
+    if (!result.schemaReady) return { schemaReady: false, resolved };
+    if (result.resolved) resolved.push(key);
+  }
+  return { schemaReady: true, resolved };
+}
+
 /**
  * Uyarıları değerlendirir: koşul açılır/güncellenir, düzelen koşul çözülür.
  *
@@ -137,12 +155,12 @@ export async function evaluateSystemAlerts(executor, { components = [], apiSumma
   // Kalıcı açık küme izleyiciye tohumlanır: süreç yeniden başladığında bile
   // düzelen bir koşul çözüm anahtarını üretebilmelidir.
   const active = await loadActiveAlertKeys(executor);
+  const superseded = new Set(supersededProcessAlertKeys(active.keys));
   const { open, resolve, pending } = evaluateAlertTransitions(conditions, {
-    activeKeys: active.keys,
+    activeKeys: active.keys.filter((key) => !superseded.has(key)),
     unmeasuredKeys: deriveUnmeasuredAlertKeys({ components, apiSummary })
   });
   const opened = [];
-  const resolved = [];
 
   for (const item of open) {
     const result = await upsertOperationalAlert(executor, {
@@ -155,23 +173,16 @@ export async function evaluateSystemAlerts(executor, { components = [], apiSumma
       context: item.context,
       observedAt: now
     });
-    if (!result.schemaReady) return { schemaReady: false, opened, resolved, pending: pending.length };
+    if (!result.schemaReady) return { schemaReady: false, opened, resolved: [], pending: pending.length };
     if (result.created) opened.push(item.key);
   }
 
-  for (const key of resolve) {
-    const parsed = parseAlertKey(key);
-    const result = await resolveOperationalAlert(executor, {
-      component: parsed.component,
-      code: parsed.code,
-      scope: parsed.scope,
-      resolvedAt: now
-    });
-    if (!result.schemaReady) return { schemaReady: false, opened, resolved, pending: pending.length };
-    if (result.resolved) resolved.push(key);
+  const resolvedResult = await resolveAlertKeys(executor, [...new Set([...resolve, ...superseded])], now);
+  if (!resolvedResult.schemaReady) {
+    return { schemaReady: false, opened, resolved: resolvedResult.resolved, pending: pending.length };
   }
 
-  return { schemaReady: true, opened, resolved, pending: pending.length };
+  return { schemaReady: true, opened, resolved: resolvedResult.resolved, pending: pending.length };
 }
 
 function alertToAttentionItem(alert) {
@@ -245,6 +256,36 @@ export function buildAttentionItems({ alerts = [], components = [] } = {}) {
   });
 }
 
+/** Aggregate sayaçlarını sağlık durumuyla birleştirir. */
+export function summarizeActionableAlertCounts(counts = {}) {
+  const normalizedCounts = {
+    total: Number(counts.total || 0),
+    open: Number(counts.open || 0),
+    acknowledged: Number(counts.acknowledged || 0),
+    info: Number(counts.info || 0),
+    warning: Number(counts.warning || 0),
+    error: Number(counts.error || 0),
+    critical: Number(counts.critical || 0)
+  };
+  const state = normalizedCounts.critical > 0
+    ? HEALTH_STATES.CRITICAL
+    : (normalizedCounts.error > 0 || normalizedCounts.warning > 0 ? HEALTH_STATES.WARNING : HEALTH_STATES.HEALTHY);
+  return { state, counts: normalizedCounts };
+}
+
+export function summarizeActionableAlerts(alerts = []) {
+  const counts = { total: 0, open: 0, acknowledged: 0, info: 0, warning: 0, error: 0, critical: 0 };
+  for (const alert of alerts) {
+    if (alert.state === 'RESOLVED') continue;
+    counts.total += 1;
+    if (alert.state === 'ACKNOWLEDGED') counts.acknowledged += 1;
+    else counts.open += 1;
+    const severity = normalizeSeverity(alert.severity);
+    counts[severity.toLowerCase()] += 1;
+  }
+  return summarizeActionableAlertCounts(counts);
+}
+
 /**
  * Genel bakış yanıtını derler.
  *
@@ -254,25 +295,36 @@ export function buildAttentionItems({ alerts = [], components = [] } = {}) {
 export async function loadSystemOverview(executor, { now = Date.now() } = {}) {
   const health = await loadSystemHealth(executor, { now });
   const apiSummary = summarizeApiWindow({ now });
+  const active = await loadActiveAlertKeys(executor);
+  const superseded = supersededProcessAlertKeys(active.keys);
+  let lifecycleSchemaReady = active.schemaReady;
+  if (superseded.length) {
+    const resolved = await resolveAlertKeys(executor, superseded, new Date(now));
+    lifecycleSchemaReady = lifecycleSchemaReady && resolved.schemaReady;
+  }
+
   const alertResult = await loadOperationalAlerts(executor, {
     activeOnly: true,
     since: new Date(now - 7 * 24 * 60 * 60 * 1000),
-    limit: 50
+    limit: OVERVIEW_ALERT_LIMIT
   });
-
-  const alertSeverityState = alertResult.alerts.reduce(
-    (state, alert) => worseHealthState(state, severityToHealthState(normalizeSeverity(alert.severity))),
-    HEALTH_STATES.HEALTHY
-  );
+  const actionableAlerts = alertResult.alerts;
+  let alertSummary = summarizeActionableAlerts(actionableAlerts);
+  let aggregateSchemaReady = true;
+  if (alertResult.schemaReady && actionableAlerts.length === OVERVIEW_ALERT_LIMIT) {
+    const aggregate = await loadActiveAlertSummary(executor);
+    aggregateSchemaReady = aggregate.schemaReady;
+    if (aggregate.schemaReady) alertSummary = summarizeActionableAlertCounts(aggregate.counts);
+  }
 
   return {
     generatedAt: health.generatedAt,
     // Genel durum, bileşen sağlıkları İLE açık uyarıların ağırlığından türetilir.
-    state: worseHealthState(health.state, alertSeverityState),
-    counts: health.counts,
+    state: worseHealthState(health.state, alertSummary.state),
+    counts: { ...health.counts, alerts: alertSummary.counts },
     components: health.components,
-    attention: buildAttentionItems({ alerts: alertResult.alerts, components: health.components }),
-    alertsSchemaReady: alertResult.schemaReady,
+    attention: buildAttentionItems({ alerts: actionableAlerts, components: health.components }),
+    alertsSchemaReady: lifecycleSchemaReady && alertResult.schemaReady && aggregateSchemaReady,
     api: apiSummary,
     trends: memoryTrendSeries({ now }),
     feed: recentFeed(15),
