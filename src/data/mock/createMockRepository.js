@@ -40,6 +40,7 @@ function normalizeMockProject(project = {}) {
 function normalizeMockTask(task = {}) {
   const persistentTask = { ...task };
   delete persistentTask.assigneeMutation;
+  delete persistentTask.dependencyMutation;
   return persistentTask;
 }
 function normalizeMockSnapshot(seed) {

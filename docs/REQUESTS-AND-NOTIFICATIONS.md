@@ -38,7 +38,7 @@ Mevcut kurulumda **0007** yüklü olmalıdır. Uygulama dağıtımından önce a
 
 `MR_ScheduleRequestNotifications` tablosu `(RequestId, Sicil)` anahtarını, `ReadVersion`, `DismissedVersion` ve `UpdatedAt` alanlarını taşır. `MR_TaskScheduleChangeRequests` ek olarak görev başlığı ve proje kimliği/adı/kodu künyesini saklar. 0008 mevcut kayıtların künyesini doldurur ve görev silinince talepleri de silen yabancı anahtarı kaldırır. Önceden silinmiş kayıtlar bu yükseltmeyle geri getirilemez. Görev silme akışı açık talepleri güncelliğini yitirmiş olarak işaretler; tamamlanmış taleplere dokunmaz.
 
-`GET /api/mergen-rota/schedule-changes` parametreleri: `tab`, sıfır tabanlı `page`, `pageSize`, `search`, `projectId`, `taskId`, `requester`, `status`, `from`, `to`. `PATCH` aynı adrese `action: read|dismiss` ve `notifications: [{id, version}]` gönderir. Mevcut talep oluşturma `POST` ve karar `PATCH /schedule-changes/{requestId}` uçları korunur. Kullanıcı kimliği istemciden alınmaz; tüm sorgular parametrelidir ve yanıtlar önbelleğe alınmaz.
+`GET /api/mergen-rota/schedule-changes` parametreleri: `tab`, sıfır tabanlı `page`, `pageSize`, `search`, `projectId`, `taskId`, `requester`, `status`, `from`, `to`. `projectId` ve `taskId`, düz Gerçek Sistem UUID'sini veya kendi istemci kimliği biçimini (`project-<uuid>` / `task-<uuid>`) kabul eder ve sunucuda küçük harfli UUID'ye kanonikleştirilir; yanlış türde önekler ve geçersiz metinler reddedilir. `PATCH` aynı adrese `action: read|dismiss` ve `notifications: [{id, version}]` gönderir. Mevcut talep oluşturma `POST` ve karar `PATCH /schedule-changes/{requestId}` uçları korunur. Kullanıcı kimliği istemciden alınmaz; tüm sorgular parametrelidir ve yanıtlar önbelleğe alınmaz.
 
 ## Klavye ve görünüm
 

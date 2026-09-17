@@ -486,17 +486,26 @@ export function createStateMutationOrchestrator({
     // izin vermez.
     if (action.type === 'task/update') {
       const assigneeMutation = Object.prototype.hasOwnProperty.call(action.patch || {}, 'assigneeIds');
+      const dependencyMutation = Object.prototype.hasOwnProperty.call(action.patch || {}, 'deps')
+        || Object.prototype.hasOwnProperty.call(action.patch || {}, 'projectId');
       changes.taskUpserts = changes.taskUpserts.map((task) => (
-        String(task.id) === String(action.id) ? { ...task, assigneeMutation, resetActualDates: action.patch?.resetActualDates === true } : task
+        String(task.id) === String(action.id)
+          ? { ...task, assigneeMutation, dependencyMutation, resetActualDates: action.patch?.resetActualDates === true }
+          : task
       ));
     }
     if (action.type === 'task/save-draft') {
       const byId = new Map(action.updates.map((update) => [String(update.id), update.patch]));
-      changes.taskUpserts = changes.taskUpserts.map((task) => ({
-        ...task,
-        assigneeMutation: Object.prototype.hasOwnProperty.call(byId.get(String(task.id)) || {}, 'assigneeIds'),
-        resetActualDates: byId.get(String(task.id))?.resetActualDates === true
-      }));
+      changes.taskUpserts = changes.taskUpserts.map((task) => {
+        const patch = byId.get(String(task.id)) || {};
+        return {
+          ...task,
+          assigneeMutation: Object.prototype.hasOwnProperty.call(patch, 'assigneeIds'),
+          dependencyMutation: Object.prototype.hasOwnProperty.call(patch, 'deps')
+            || Object.prototype.hasOwnProperty.call(patch, 'projectId'),
+          resetActualDates: patch.resetActualDates === true
+        };
+      });
     }
     if (isEmptyChangeSet(changes)) {
       applyStateAction(action);
