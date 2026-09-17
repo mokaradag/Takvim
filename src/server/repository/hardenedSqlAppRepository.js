@@ -247,6 +247,31 @@ async function loadProjectDependencyEdgesForUpdate(executor, projectId) {
   }));
 }
 
+async function loadTaskDependenciesForUpdate(executor, projectId, taskId) {
+  const req = request(executor);
+  req.input('projectId', sql.UniqueIdentifier, projectId);
+  req.input('taskId', sql.UniqueIdentifier, taskId);
+  const result = await req.query(`
+    SELECT TaskId, PredecessorTaskId
+    FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
+    WHERE ProjectId = @projectId AND TaskId = @taskId
+    ORDER BY TaskId, PredecessorTaskId;
+  `);
+  return (result.recordset || [])
+    .filter((row) => rowId(row.TaskId) === taskId)
+    .map((row) => ({ predecessorId: rowId(row.PredecessorTaskId) }));
+}
+
+function dependencySignature(dependency) {
+  return uuid(dependency?.predecessorId, 'Öncül görev kimliği');
+}
+
+function sameDependencies(left = [], right = []) {
+  const a = left.map(dependencySignature).sort();
+  const b = right.map(dependencySignature).sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 function taskReferenceMessage(issue) {
   const messages = {
     TASK_IDENTITY_REQUIRED: 'Görev ve proje kimlikleri zorunludur.',
@@ -263,7 +288,7 @@ function taskReferenceMessage(issue) {
 }
 
 async function planTaskCommits(executor, changes) {
-  const taskUpserts = changes.taskUpserts.map((task) => ({
+  const normalizedUpserts = changes.taskUpserts.map((task) => ({
     ...task,
     id: uuid(task.id, 'Görev kimliği'),
     projectId: uuid(task.projectId, 'Proje kimliği'),
@@ -280,10 +305,9 @@ async function planTaskCommits(executor, changes) {
     id: uuid(entry.id, 'Görev kimliği')
   }));
   const referencedTaskIds = new Set([
-    ...taskUpserts.map((task) => task.id),
+    ...normalizedUpserts.map((task) => task.id),
     ...taskDeletes.map((entry) => entry.id),
-    ...taskUpserts.flatMap((task) => task.deps.map((dependency) => dependency.predecessorId)),
-    ...taskUpserts
+    ...normalizedUpserts
       .filter((task) => task.recurrenceParentId)
       .map((task) => task.recurrenceParentId)
   ]);
@@ -294,9 +318,33 @@ async function planTaskCommits(executor, changes) {
     if (row) existingTaskProjects.set(taskId, rowId(row.ProjectId));
   }
 
+  const taskUpserts = [];
+  for (const task of normalizedUpserts) {
+    const exists = existingTaskProjects.has(task.id);
+    const moved = exists && existingTaskProjects.get(task.id) !== task.projectId;
+    let dependencyMutation = !exists || task.dependencyMutation !== false || moved;
+    if (!dependencyMutation) {
+      dependencyMutation = !sameDependencies(
+        await loadTaskDependenciesForUpdate(executor, task.projectId, task.id),
+        task.deps
+      );
+    }
+    taskUpserts.push({ ...task, dependencyMutation });
+  }
+  const validatedUpserts = taskUpserts.map((task) => (
+    task.dependencyMutation === false ? { ...task, deps: [] } : task
+  ));
+
+  for (const predecessorId of [...new Set(validatedUpserts
+    .flatMap((task) => task.deps.map((dependency) => dependency.predecessorId)))].sort()) {
+    if (existingTaskProjects.has(predecessorId)) continue;
+    const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', predecessorId, 'Görev kimliği');
+    if (row) existingTaskProjects.set(predecessorId, rowId(row.ProjectId));
+  }
+
   const issue = findFinalTaskReferenceIssue({
     existingTaskProjects,
-    taskUpserts,
+    taskUpserts: validatedUpserts,
     taskDeletes
   });
   if (issue) {
@@ -311,10 +359,13 @@ async function planTaskCommits(executor, changes) {
 }
 
 async function assertAcyclicTaskDependencies(executor, changes) {
+  const dependencyUpserts = changes.taskUpserts.filter((task) => task.dependencyMutation !== false);
+  if (!dependencyUpserts.length && !changes.taskDeletes.length) return;
+
   const changedTaskRows = new Map();
   const affectedProjectIds = new Set();
   const changedIds = new Set([
-    ...changes.taskUpserts.map((task) => uuid(task.id, 'Görev kimliği')),
+    ...dependencyUpserts.map((task) => uuid(task.id, 'Görev kimliği')),
     ...changes.taskDeletes.map((entry) => uuid(entry.id, 'Görev kimliği'))
   ]);
 
@@ -325,14 +376,14 @@ async function assertAcyclicTaskDependencies(executor, changes) {
       affectedProjectIds.add(rowId(row.ProjectId));
     }
   }
-  for (const task of changes.taskUpserts) affectedProjectIds.add(uuid(task.projectId, 'Proje kimliği'));
+  for (const task of dependencyUpserts) affectedProjectIds.add(uuid(task.projectId, 'Proje kimliği'));
 
   const projectEdges = new Map();
   for (const projectId of [...affectedProjectIds].sort()) {
     projectEdges.set(projectId, await loadProjectDependencyEdgesForUpdate(executor, projectId));
   }
 
-  for (const task of changes.taskUpserts) {
+  for (const task of dependencyUpserts) {
     const taskId = uuid(task.id, 'Görev kimliği');
     const nextProjectId = uuid(task.projectId, 'Proje kimliği');
     const previousProjectId = changedTaskRows.has(taskId) ? rowId(changedTaskRows.get(taskId).ProjectId) : null;
@@ -357,7 +408,7 @@ async function assertAcyclicTaskDependencies(executor, changes) {
     projectEdges.set(projectId, removeTaskEdges(projectEdges.get(projectId) || [], taskId));
   }
 
-  for (const task of changes.taskUpserts) {
+  for (const task of dependencyUpserts) {
     const taskId = uuid(task.id, 'Görev kimliği');
     const projectId = uuid(task.projectId, 'Proje kimliği');
     const nextEdges = projectEdges.get(projectId) || [];
