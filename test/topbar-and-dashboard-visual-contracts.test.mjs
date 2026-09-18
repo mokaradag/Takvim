@@ -75,6 +75,7 @@ test('Durum dağılımı uses semantic dashboard structure with the exact accept
   assert.match(dashboard, /className="dashboard-status-body"/);
   assert.match(dashboard, /className="dashboard-status-chart"/);
   assert.match(dashboard, /className="col dashboard-status-legend"/);
+  assert.match(dashboard, /\{tasks\.length > 0 && \(\s*<div className="dashboard-status-center">/s);
 
   assert.match(css, /\.dashboard-status-body\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(168px, 1fr\) minmax\(132px, 188px\);[^}]*min-height:\s*214px;/s);
   assert.match(css, /\.dashboard-status-chart\s*\{[^}]*width:\s*clamp\(174px, 13vw, 190px\);[^}]*height:\s*clamp\(174px, 13vw, 190px\);/s);
