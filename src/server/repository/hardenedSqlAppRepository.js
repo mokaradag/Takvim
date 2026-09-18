@@ -255,18 +255,30 @@ async function loadTaskDependenciesForUpdate(executor, projectId, taskId) {
   req.input('projectId', sql.UniqueIdentifier, projectId);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   const result = await req.query(`
-    SELECT TaskId, PredecessorTaskId
+    SELECT TaskId, PredecessorTaskId, DependencyType, LagDays, LagValue, LagUnit
     FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
     WHERE ProjectId = @projectId AND TaskId = @taskId
     ORDER BY TaskId, PredecessorTaskId;
   `);
   return (result.recordset || [])
     .filter((row) => rowId(row.TaskId) === taskId)
-    .map((row) => ({ predecessorId: rowId(row.PredecessorTaskId) }));
+    .map((row) => ({
+      predecessorId: rowId(row.PredecessorTaskId),
+      type: row.DependencyType,
+      lagDays: row.LagDays,
+      lagValue: row.LagValue,
+      lagUnit: row.LagUnit
+    }));
 }
 
 function dependencySignature(dependency) {
-  return uuid(dependency?.predecessorId, 'Öncül görev kimliği');
+  return JSON.stringify([
+    uuid(dependency?.predecessorId, 'Öncül görev kimliği'),
+    dependency?.type,
+    Number(dependency?.lagDays || 0),
+    dependency?.lagValue == null ? null : Number(dependency.lagValue),
+    dependency?.lagUnit || null
+  ]);
 }
 
 function sameDependencies(left = [], right = []) {

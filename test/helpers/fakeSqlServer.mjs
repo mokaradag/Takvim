@@ -1908,7 +1908,14 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('SELECT TaskId, PredecessorTaskId')) {
     return result([db.taskDependencies
       .filter((entry) => sameGuid(entry.ProjectId, params.projectId))
-      .map((entry) => ({ TaskId: entry.TaskId, PredecessorTaskId: entry.PredecessorTaskId }))]);
+      .map((entry) => ({
+        TaskId: entry.TaskId,
+        PredecessorTaskId: entry.PredecessorTaskId,
+        DependencyType: entry.DependencyType,
+        LagDays: entry.LagDays,
+        LagValue: entry.LagValue,
+        LagUnit: entry.LagUnit
+      }))]);
   }
   if (sqlText.includes('SELECT DISTINCT dependency.TaskId')) {
     return result([db.taskDependencies

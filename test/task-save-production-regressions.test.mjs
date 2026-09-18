@@ -295,6 +295,57 @@ test('bağımlılık düzenlenmediyse tam yetkili içerik kaydı mevcut bağıml
   }
 });
 
+test('aynı öncülün bağımlılık öznitelikleri değiştiğinde satır yeniden yazılır', async () => {
+  const cases = [
+    ['type', { type: 'SS' }],
+    ['lagDays', { lagDays: 2 }],
+    ['lagValue', { lagValue: 3 }],
+    ['lagUnit', { lagUnit: 'day' }]
+  ];
+
+  for (const [field, patch] of cases) {
+    const stack = await createActualStack(actualSeed(), { sicil: SICIL, corporateWbsSource: false });
+    try {
+      const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+      const statementStart = stack.db.statements.length;
+      await stack.repository.commitChanges({
+        taskUpserts: [{
+          ...task,
+          deps: task.deps.map((dependency) => ({ ...dependency, ...patch })),
+          assigneeMutation: false,
+          dependencyMutation: false
+        }]
+      });
+
+      const statements = stack.db.statements.slice(statementStart).map((entry) => entry.sql);
+      assert.equal(
+        statements.filter((sql) => sql.includes('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId')).length,
+        1,
+        `${field} değişikliği bağımlılık satırını yeniden yazmalıdır`
+      );
+      assert.equal(
+        statements.filter((sql) => sql.includes('INSERT dbo.MR_TaskDependencies(')).length,
+        1,
+        `${field} değişikliği yeni bağımlılık satırını eklemelidir`
+      );
+      const persisted = stack.db.taskDependencies.find((entry) => (
+        String(entry.TaskId).toLowerCase() === TASK_ID
+        && String(entry.PredecessorTaskId).toLowerCase() === PREDECESSOR_ID
+      ));
+      assert.ok(persisted);
+      const column = {
+        type: 'DependencyType',
+        lagDays: 'LagDays',
+        lagValue: 'LagValue',
+        lagUnit: 'LagUnit'
+      }[field];
+      assert.equal(persisted[column], patch[field]);
+    } finally {
+      await stack.dispose();
+    }
+  }
+});
+
 test('kısmi yetkili içerik kaydı gizli bağımlılığı açığa çıkarmadan veya silmeden tamamlanır', async () => {
   const stack = await createActualStack(actualSeed(), { sicil: PARTIAL_SICIL, corporateWbsSource: false });
   try {
