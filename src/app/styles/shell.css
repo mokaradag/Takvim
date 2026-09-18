@@ -273,11 +273,16 @@
   transform: none;
   opacity: 0.42;
   pointer-events: none;
-  filter: drop-shadow(0 0 7px color-mix(in oklab, var(--accent) 24%, transparent));
+}
+.topbar-emblem-clip .hept-topbar::before {
+  content: '';
+  position: absolute;
+  inset: 16%;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in oklab, var(--accent) 34%, transparent) 0%, color-mix(in oklab, var(--accent) 16%, transparent) 38%, transparent 72%);
 }
 .theme-light .topbar-emblem-clip .hept-topbar {
   opacity: 0.24;
-  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 18%, transparent));
 }
 body.no-emblem .topbar-emblem-clip .hept-topbar {
   display: none;

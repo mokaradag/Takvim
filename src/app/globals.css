@@ -2800,14 +2800,20 @@ body.reduce-motion .brand-mark .logo-compass-needle { animation: none; }
 /* ── Heptagon emblem (decorative, partial reveal) ───────── */
 .hept-emblem {
   position: absolute;
+  display: block;
   pointer-events: none;
   overflow: visible;
   z-index: 0;
 }
 .hept-emblem .hept-spin {
-  transform-box: fill-box;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  transform-box: border-box;
   transform-origin: center;
   animation: heptSpin 120s linear infinite;
+  will-change: transform;
 }
 @keyframes heptSpin { to { transform: rotate(360deg); } }
 .hept-p {
@@ -2838,10 +2844,20 @@ body.reduce-motion .brand-mark .logo-compass-needle { animation: none; }
 
 /* Preference toggles */
 body.no-emblem .hept-emblem { display: none; }
+body.no-emblem .hept-emblem .hept-spin,
 body.reduce-motion .hept-emblem .hept-spin,
 body.reduce-motion .brand-dot { animation: none !important; }
+body.no-emblem .hept-emblem .hept-spin,
+body.reduce-motion .hept-emblem .hept-spin {
+  transform: none;
+  will-change: auto;
+}
 @media (prefers-reduced-motion: reduce) {
-  .hept-emblem .hept-spin { animation: none; }
+  .hept-emblem .hept-spin {
+    animation: none;
+    transform: none;
+    will-change: auto;
+  }
 }
 
 /* ── Calendar: large day buckets ────────────────────────── */

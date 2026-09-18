@@ -432,13 +432,13 @@ const HEPT_PATHS = [
 ];
 export function Heptagon({ variant = '', style }) {
   return (
-    <svg className={`hept-emblem ${variant}`} viewBox="-147.15 5.9 266.39 264.03" fill="none" aria-hidden="true" style={style}>
-      <g className="hept-spin">
+    <span className={`hept-emblem ${variant}`} aria-hidden="true" style={style}>
+      <svg className="hept-spin" viewBox="-147.15 5.9 266.39 264.03" fill="none" focusable="false">
         {HEPT_PATHS.map((p, i) => (
           <path key={i} className={`hept-p hept-${p.tone}`} d={p.d} />
         ))}
-      </g>
-    </svg>
+      </svg>
+    </span>
   );
 }
 
