@@ -530,10 +530,35 @@ test('server-generated fallback project roots are included in commit WBS respons
   assert.match(source, /return \{ created: true, consumedRootId: authoritativeRoot\.id, tagPlan \}/);
 });
 
-test('persisted Sicil validation rejects values above SQL Server int maximum', () => {
-  const source = read('src/server/repository/sqlAppRepository.js');
-  assert.match(source, /sicil <= 0 \|\| sicil > 2147483647/);
-  assert.ok(source.indexOf('sicil > 2147483647') < source.indexOf("req.input('sicil', sql.Int, sicil)"));
+test('persisted Sicil validation rejects values above SQL Server int maximum before batch binding', async () => {
+  const { createActualStack, corporateSeed } = await import('./helpers/actualStack.mjs');
+  const stack = await createActualStack(corporateSeed(), {
+    sicil: 900001,
+    corporateWbsSource: false
+  });
+
+  try {
+    const project = stack.state.projects.find((entry) => entry.code === 'P4417041');
+    assert.ok(project, 'test projesi yüklenmelidir');
+    const statementStart = stack.db.statements.length;
+    const { createSqlAppRepository } = await import('../src/server/repository/sqlAppRepository.js');
+
+    await assert.rejects(
+      createSqlAppRepository().commitChanges({
+        projectUpserts: [{ ...project, leadId: '2147483648' }]
+      }),
+      (error) => error.code === 'MUTATION_FAILED' && /2147483648/.test(error.message)
+    );
+
+    const statements = stack.db.statements.slice(statementStart).map((entry) => entry.sql);
+    assert.equal(
+      statements.filter((sqlText) => sqlText.includes('STRING_SPLIT(@sicils')).length,
+      0,
+      'geçersiz Sicil batch rehber sorgusu bağlanmadan reddedilmelidir'
+    );
+  } finally {
+    await stack.dispose();
+  }
 });
 
 test('project-level READ grants expose project tasks, WBS, assignees, and required people without enabling complete scheduling data', () => {

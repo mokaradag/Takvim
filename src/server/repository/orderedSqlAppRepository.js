@@ -2,6 +2,7 @@ import 'server-only';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
+import { observePhase } from '../observability/observeOperation.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
 import { assertTaskDependencyReconciliationCovered } from './dependencyReconciliationValidation.js';
@@ -76,25 +77,29 @@ export function createOrderedSqlAppRepository() {
         wbsUpserts: orderWbsUpsertsByParents(canonicalChanges.wbsUpserts || [])
       };
 
-      return withSqlTransaction(async (transaction) => {
+      return observePhase('phase.commit.transaction', () => withSqlTransaction(async (transaction) => {
         // Proje varlığı/sürümü sorgulanmadan önce rol denetlenir. Aksi hâlde
         // yönetici olmayan kullanıcı etkin, etkin olmayan ve bilinmeyen proje
         // kimlikleri için farklı hata alarak kayıt varlığını yoklayabilirdi.
         // `projectDeletes` isteğe bağlıdır ve kanonikleştirme onu `undefined`
         // olarak korur: doğrudan `.length` okuması, alanı hiç göndermeyen
         // (tamamen geçerli) bir istekte işlem başlamadan TypeError üretiyordu.
-        if ((orderedChanges.projectDeletes || []).length) {
-          const actor = await loadAuthorizationContext(transaction);
-          if (!actor.isSystemAdmin) {
-            throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
+        await observePhase('phase.commit.intent-validation', async () => {
+          if ((orderedChanges.projectDeletes || []).length) {
+            const actor = await loadAuthorizationContext(transaction);
+            if (!actor.isSystemAdmin) {
+              throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
+            }
           }
-        }
-        await assertUpsertIntentMatchesPersistence(transaction, orderedChanges);
-        await assertManualProjectCodesAvailable(transaction, orderedChanges);
-        await assertDeleteIntentMatchesPersistence(transaction, orderedChanges);
-        await assertTaskDependencyReconciliationCovered(transaction, orderedChanges);
+          await assertUpsertIntentMatchesPersistence(transaction, orderedChanges);
+          await assertManualProjectCodesAvailable(transaction, orderedChanges);
+          await assertDeleteIntentMatchesPersistence(transaction, orderedChanges);
+        });
+        await observePhase('phase.commit.dependency-reconciliation', async () => {
+          await assertTaskDependencyReconciliationCovered(transaction, orderedChanges);
+        });
         return repository.commitChanges(orderedChanges);
-      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE }));
     }
   };
 }

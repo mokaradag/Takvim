@@ -284,6 +284,7 @@ export function DashboardView({ onNavigate }) {
                 selected={selectedSegmentIndex < 0 ? null : selectedSegmentIndex}
                 onSegmentClick={(i) => toggleSegment(statusDonut[i]?.id)}
               />
+              {tasks.length > 0 && (
               <div className="dashboard-status-center">
                 <div>
                   {!selectedSegment ? (
@@ -303,6 +304,7 @@ export function DashboardView({ onNavigate }) {
                   )}
                 </div>
               </div>
+              )}
             </div>
             <div className="col dashboard-status-legend">
               {statusDonut.map((s) => (

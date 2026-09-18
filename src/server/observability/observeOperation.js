@@ -64,6 +64,23 @@ export async function observeOperation(operation, work, { component = COMPONENTS
 }
 
 /**
+ * Alt faz sürelerini mevcut rota ölçümünü ve olay günlüğünü değiştirmeden toplar.
+ */
+export async function observePhase(operation, work) {
+  const startedAt = Date.now();
+  try {
+    const result = await work();
+    safely(() => recordOperation({ operation, durationMs: Date.now() - startedAt, ok: true, at: startedAt }));
+    return result;
+  } catch (error) {
+    safely(() => recordOperation({
+      operation, durationMs: Date.now() - startedAt, ok: false, code: failureCode(error), at: startedAt
+    }));
+    throw error;
+  }
+}
+
+/**
  * Sonucu HATA FIRLATMADAN bildiren turlar için ölçüm.
  *
  * Outlook ve hatırlatma turları `{ ok: false, reason }` döner; başarısızlık

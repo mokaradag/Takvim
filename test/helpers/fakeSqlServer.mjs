@@ -1857,6 +1857,10 @@ function runQuery(db, statement, params, { database }) {
     const person = db.people.find((entry) => entry.Sicil === params.sicil);
     return result([person ? [{ Sicil: person.Sicil }] : []]);
   }
+  if (sqlText.includes('STRING_SPLIT(@sicils') && sqlText.includes('FROM dbo.MR_V_PeopleDirectory directory')) {
+    const requested = new Set(String(params.sicils || '').split(',').map((value) => Number(value.trim())).filter(Number.isSafeInteger));
+    return result([db.people.filter((entry) => requested.has(Number(entry.Sicil))).map((entry) => ({ Sicil: entry.Sicil }))]);
+  }
   if (sqlText.includes('SELECT TOP (1) reserved.ProjectCode')) {
     const code = String(params.projectCode || '').toUpperCase();
     const reserved = db.corporateProjects.some((entry) => String(entry.ProjectCode).toUpperCase() === code)
@@ -1902,9 +1906,18 @@ function runQuery(db, statement, params, { database }) {
       .map((node) => ({ WbsId: node.WbsId, ProjectId: node.ProjectId, ParentWbsId: node.ParentWbsId }))]);
   }
   if (sqlText.includes('SELECT TaskId, PredecessorTaskId')) {
+    const isSingleTaskDependencyRead = sqlText.includes('AND TaskId = @taskId');
     return result([db.taskDependencies
-      .filter((entry) => sameGuid(entry.ProjectId, params.projectId))
-      .map((entry) => ({ TaskId: entry.TaskId, PredecessorTaskId: entry.PredecessorTaskId }))]);
+      .filter((entry) => sameGuid(entry.ProjectId, params.projectId)
+        && (!isSingleTaskDependencyRead || sameGuid(entry.TaskId, params.taskId)))
+      .map((entry) => ({
+        TaskId: entry.TaskId,
+        PredecessorTaskId: entry.PredecessorTaskId,
+        DependencyType: entry.DependencyType,
+        LagDays: entry.LagDays,
+        LagValue: entry.LagValue,
+        LagUnit: entry.LagUnit
+      }))]);
   }
   if (sqlText.includes('SELECT DISTINCT dependency.TaskId')) {
     return result([db.taskDependencies

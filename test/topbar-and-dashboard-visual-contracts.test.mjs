@@ -41,6 +41,24 @@ test('topbar keeps popovers visible while only the decorative emblem layer clips
   assert.ok(-205 + 320 / 2 < 0);
 });
 
+test('marka amblemi dönüşü filtreli SVG yerine tek transform katmanında çalışır', () => {
+  const ui = read('src/components/ui.jsx');
+  const globalCss = read('src/app/globals.css');
+  const shellCss = read('src/app/styles/shell.css');
+
+  assert.match(ui, /<span className=\{\`hept-emblem \$\{variant\}\`\} aria-hidden="true" style=\{style\}>/);
+  assert.match(ui, /<svg className="hept-spin"[^>]*focusable="false">/);
+  assert.doesNotMatch(ui, /<g className="hept-spin">/);
+
+  assert.match(globalCss, /\.hept-emblem \.hept-spin\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;[^}]*animation:\s*heptSpin 120s linear infinite;[^}]*will-change:\s*transform;/s);
+  assert.match(globalCss, /body\.no-emblem \.hept-emblem \.hept-spin,\s*body\.reduce-motion \.hept-emblem \.hept-spin,\s*body\.reduce-motion \.brand-dot\s*\{[^}]*animation:\s*none\s*!important;[^}]*\}/s);
+  assert.match(globalCss, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.hept-emblem \.hept-spin\s*\{[^}]*animation:\s*none;[^}]*will-change:\s*auto;/s);
+
+  assert.doesNotMatch(shellCss, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*filter:/s);
+  assert.doesNotMatch(shellCss, /\.theme-light \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*filter:/s);
+  assert.match(shellCss, /\.topbar-emblem-clip \.hept-topbar::before\s*\{[^}]*background:\s*radial-gradient\(/s);
+});
+
 test('marka amblemi preference hides the topbar emblem as well as the sidebar emblem', () => {
   const tweaks = read('src/hooks/useApplyTweaks.js');
   const css = read('src/app/styles/shell.css');
@@ -75,6 +93,7 @@ test('Durum dağılımı uses semantic dashboard structure with the exact accept
   assert.match(dashboard, /className="dashboard-status-body"/);
   assert.match(dashboard, /className="dashboard-status-chart"/);
   assert.match(dashboard, /className="col dashboard-status-legend"/);
+  assert.match(dashboard, /\{tasks\.length > 0 && \(\s*<div className="dashboard-status-center">/s);
 
   assert.match(css, /\.dashboard-status-body\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(168px, 1fr\) minmax\(132px, 188px\);[^}]*min-height:\s*214px;/s);
   assert.match(css, /\.dashboard-status-chart\s*\{[^}]*width:\s*clamp\(174px, 13vw, 190px\);[^}]*height:\s*clamp\(174px, 13vw, 190px\);/s);

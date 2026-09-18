@@ -8,7 +8,7 @@ import { findCommitProjectWbsIssue } from '../../../../server/repository/commitP
 import { canonicalizeCommitScalars } from '../../../../server/repository/commitScalarCanonicalization.js';
 import { findCommitScalarIssue } from '../../../../server/repository/commitScalarValidation.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
-import { withRouteObservability } from '../../../../server/observability/observeOperation.js';
+import { observePhase, withRouteObservability } from '../../../../server/observability/observeOperation.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -92,31 +92,35 @@ async function readBodyWithinLimit(request) {
 
 async function handleCommit(request) {
   try {
-    assertBodyWithinLimit(request);
-    const raw = await readBodyWithinLimit(request);
-    let body = null;
-    try {
-      body = raw == null ? null : JSON.parse(raw);
-    } catch {
-      body = null;
-    }
-    if (!body || typeof body !== 'object' || !body.changes || typeof body.changes !== 'object') {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
-    }
-    const changes = canonicalizeCommitScalars(canonicalizeCommitChanges(body.changes));
-    const issue = findCommitChangeIssue(changes)
-      || findNestedCommitCollectionIssue(changes)
-      || findCommitProjectWbsIssue(changes)
-      || findCommitScalarIssue(changes);
-    if (issue) {
-      throw new ServerPersistenceError('MUTATION_FAILED', issue.message, {
-        status: 400,
-        details: { code: issue.code, path: issue.path, ...(issue.details || {}) }
-      });
-    }
-    return Response.json(await createOrderedSqlAppRepository().commitChanges(changes), {
-      headers: { 'cache-control': 'no-store' }
+    const changes = await observePhase('phase.commit.request-validation', async () => {
+      assertBodyWithinLimit(request);
+      const raw = await readBodyWithinLimit(request);
+      let body = null;
+      try {
+        body = raw == null ? null : JSON.parse(raw);
+      } catch {
+        body = null;
+      }
+      if (!body || typeof body !== 'object' || !body.changes || typeof body.changes !== 'object') {
+        throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
+      }
+      const changes = canonicalizeCommitScalars(canonicalizeCommitChanges(body.changes));
+      const issue = findCommitChangeIssue(changes)
+        || findNestedCommitCollectionIssue(changes)
+        || findCommitProjectWbsIssue(changes)
+        || findCommitScalarIssue(changes);
+      if (issue) {
+        throw new ServerPersistenceError('MUTATION_FAILED', issue.message, {
+          status: 400,
+          details: { code: issue.code, path: issue.path, ...(issue.details || {}) }
+        });
+      }
+      return changes;
     });
+    const result = await createOrderedSqlAppRepository().commitChanges(changes);
+    return observePhase('phase.commit.response', async () => Response.json(result, {
+      headers: { 'cache-control': 'no-store' }
+    }));
   } catch (error) {
     return safeErrorResponse(error);
   }

@@ -183,6 +183,36 @@ Mekanizma genişletilebilir: yeni bir yol `withRouteObservability(...)` ya da
 `observeOperation(...)` ile kapsama alınır. HTTP `4xx` istemci kararıdır ve hata
 oranına yazılmaz; yalnızca `5xx` sunucu hatası sayılır.
 
+### Snapshot ve commit faz tanısı
+
+`api.snapshot` ve `api.commit` toplam süreleri korunur; bunlara ek olarak sabit
+adlı `phase.snapshot.*` ve `phase.commit.*` ölçümleri toplanır. Faz adları
+`api.` ile başlamadığı için Genel Durum API yüzdeliklerini ve hata oranını
+şişirmez. Ölçümler yalnız süre ve başarı/hata kodu taşır; görev, proje, Sicil,
+ad, e-posta veya açıklama içermez.
+
+Snapshot tarafında katalog çağrısı, SERIALIZABLE okuma işlemi, yetkilendirme,
+ana snapshot sorgusu, sorumlu projeksiyonu, varsayılan takvim, tarih değişikliği
+kutusu, oturum ve yanıt hazırlama ayrı görülebilir. Önceki eş-sorumlu
+projeksiyonu iyileştirmesi üretimde belirleyici olmadığından bu fazlardan biri
+ölçümle baskın çıkmadan yeni bir SQL veya dizin varsayımı yapılmaz.
+
+Commit tarafında istek doğrulama, SERIALIZABLE işlem, niyet doğrulama,
+bağımlılık uzlaştırması, bütünlük planlama, yetkilendirme, görev yazması,
+hedefli yetkili yanıt ve yanıt hazırlama ayrıştırılır. Normal görev kaydında
+bütünlük planlamasının doğruladığı `dependencyMutation=false` bağımlılıkları
+artık silinip yeniden eklenmez; aynı projedeki kaynak/hedef kapsam denetimi bir
+kez kullanılır. Sorumlu listesi gerçekten değiştiğinde personel doğrulaması da
+Sicil başına sorgu yerine tek, set tabanlı sorgudur.
+
+Bu değişiklikler yalıtım düzeyini, SQL zaman aşımını, havuz boyutunu veya
+veritabanı ayarlarını değiştirmez ve yeni dizin/göç eklemez. Üretim doğrulaması
+önce `api.snapshot` / `api.commit` P50-P95-P99 değerlerini, sonra aynı
+penceredeki `phase.*` kırılımını karşılaştırmalıdır. SERIALIZABLE işlem süresi
+iç fazların belirgin biçimde üstünde kalıyorsa sorgu süresinden çok
+kilit/işlem beklemesi ayrıca incelenmelidir; üretimde ölçülmemiş milisaniye
+kazancı varsayılmaz.
+
 ---
 
 ## 7. Kuyruklar ve İşler sekmesi

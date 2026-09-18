@@ -12,6 +12,7 @@ import { resolveAuthMode } from '../identity/keycloakConfig.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
+import { observePhase } from '../observability/observeOperation.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
@@ -26,6 +27,8 @@ import {
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
 import { CORPORATE_WBS_SYNC_WARMTH_SQL } from './corporateWbsQueries.js';
 import { synchronizeCorporateWbs } from './corporateWbsSync.js';
+
+const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
 
@@ -182,13 +185,23 @@ function normalizeSicils(sicils) {
 
 async function ensurePeople(executor, sicils) {
   const normalized = normalizeSicils(sicils);
-  for (const sicil of normalized) {
-    const req = request(executor);
-    req.input('sicil', sql.Int, sicil);
-    const result = await req.query('SELECT TOP (1) Sicil FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil;');
-    if (!result.recordset.length) {
-      throw new ServerPersistenceError('MUTATION_FAILED', `Geçersiz çalışan Sicil: ${sicil}`);
-    }
+  if (!normalized.length) return normalized;
+
+  const req = request(executor);
+  req.input('sicils', sql.NVarChar(sql.MAX), normalized.join(','));
+  const result = await req.query(`
+    SELECT DISTINCT directory.Sicil
+    FROM dbo.MR_V_PeopleDirectory directory
+    JOIN (
+      SELECT DISTINCT TRY_CONVERT(int, LTRIM(RTRIM(value))) AS Sicil
+      FROM STRING_SPLIT(@sicils, ',')
+    ) requested ON requested.Sicil = directory.Sicil
+    WHERE requested.Sicil IS NOT NULL;
+  `);
+  const existing = new Set((result.recordset || []).map((row) => Number(row.Sicil)));
+  const missing = normalized.find((sicil) => !existing.has(sicil));
+  if (missing != null) {
+    throw new ServerPersistenceError('MUTATION_FAILED', `Geçersiz çalışan Sicil: ${missing}`);
   }
   return normalized;
 }
@@ -1694,7 +1707,7 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
   }
 }
 
-async function commitTask(executor, actor, task, correlationId) {
+async function commitTask(executor, actor, task, correlationId, { dependencyPlanningVerified = false } = {}) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
   const before = await taskRow(executor, taskId);
@@ -1746,9 +1759,11 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   } else {
     if (beforeProjectId) sourceProjectScope = await assertTaskProjectScope(executor, actor, beforeProjectId);
-    destinationProjectScope = await assertTaskProjectScope(executor, actor, projectId, {
-      allowAssigneeCreate: !before
-    });
+    destinationProjectScope = beforeProjectId && sameActualId(beforeProjectId, projectId)
+      ? sourceProjectScope
+      : await assertTaskProjectScope(executor, actor, projectId, {
+        allowAssigneeCreate: !before
+      });
     if (before && !fullProjectWrite) assertControlledScheduleUnchanged(before, task);
   }
 
@@ -2135,7 +2150,8 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   }
 
-  if (fullProjectWrite) {
+  const rewriteDependencies = !dependencyPlanningVerified || task.dependencyMutation !== false;
+  if (fullProjectWrite && rewriteDependencies) {
     const clear = request(executor);
     clear.input('taskId', sql.UniqueIdentifier, taskId);
     await clear.query('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;');
@@ -2163,7 +2179,7 @@ async function commitTask(executor, actor, task, correlationId) {
       'Görev bağımlılıkları yalnızca tam proje yetkisiyle düzenlenebilir.'
     );
   }
-  for (const dependency of fullProjectWrite ? (task.deps || []) : []) {
+  for (const dependency of fullProjectWrite && rewriteDependencies ? (task.deps || []) : []) {
     const predecessorId = uuid(dependency.predecessorId);
     const predecessor = await taskRow(executor, predecessorId);
     if (!predecessor || !sameActualId(predecessor.ProjectId, projectId) || sameActualId(predecessorId, taskId)) {
@@ -2461,8 +2477,9 @@ async function refreshCorporateCatalog({ waitForColdStart = true } = {}) {
  */
 async function readSnapshotWithAuthorization(executor = null) {
   const connection = executor || await getSqlPool();
-  const auth = await loadAuthorizationContext(connection);
-  return { snapshot: await loadSnapshotFrom(connection, auth), auth };
+  const auth = await observePhase('phase.snapshot.authorization', () => loadAuthorizationContext(connection));
+  const snapshot = await observePhase('phase.snapshot.main-query', () => loadSnapshotFrom(connection, auth));
+  return { snapshot, auth };
 }
 
 /** Kurumsal katalog tazelemeden yalnızca yetkili anlık görüntüyü okur. */
@@ -2512,9 +2529,10 @@ export function createSqlAppRepository() {
     },
 
     async commitChanges(input) {
+      const dependencyPlanningVerified = input?.[DEPENDENCY_PLANNING_VERIFIED] === true;
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        const actor = await loadAuthorizationContext(transaction);
+        const actor = await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
         const correlationId = randomUUID();
         const consumedRootIds = new Set();
         const tagPlans = [];
@@ -2532,7 +2550,9 @@ export function createSqlAppRepository() {
           if (!consumedRootIds.has(id(node.id))) await commitWbs(transaction, actor, node, correlationId);
         }
         for (const task of changes.taskUpserts) {
-          const touched = await commitTask(transaction, actor, task, correlationId);
+          const touched = await observePhase('phase.commit.task-mutation', () => commitTask(
+            transaction, actor, task, correlationId, { dependencyPlanningVerified }
+          ));
           if (touched.projectId) touchedTaskProjects.add(touched.projectId);
           if (touched.beforeProjectId) touchedTaskProjects.add(touched.beforeProjectId);
           if (touched.wbsId) touchedTaskWbs.add(touched.wbsId);
@@ -2570,11 +2590,13 @@ export function createSqlAppRepository() {
           ...propagatedTaskIds,
           ...relatedTaskIds
         ]);
-        const authoritative = await loadAuthoritativeMutationRows(transaction, actor, {
-          projectIds: [...projectIds],
-          wbsIds: [...wbsIds],
-          taskIds: [...taskIds]
-        });
+        const authoritative = await observePhase('phase.commit.authoritative-response', () => loadAuthoritativeMutationRows(
+          transaction, actor, {
+            projectIds: [...projectIds],
+            wbsIds: [...wbsIds],
+            taskIds: [...taskIds]
+          }
+        ));
         const invisibleChangedProjectIds = [...projectIds]
           .filter((projectId) => !authoritative.projectUpserts.some((project) => sameActualId(project.id, projectId)));
         return {

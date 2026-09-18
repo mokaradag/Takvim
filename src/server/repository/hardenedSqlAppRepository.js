@@ -1,6 +1,7 @@
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ServerPersistenceError } from '../errors.js';
+import { observePhase } from '../observability/observeOperation.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { findDependencyCycle } from './dependencyGraphValidation.js';
@@ -9,6 +10,8 @@ import {
   orderTaskUpsertsByDependencies
 } from './taskCommitPlanning.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
+
+const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 
 // Kimlikler kanonik (küçük harf) biçime indirilir: SQL Server satırlarından okunan
 // büyük harfli GUID'ler ile istemciden gelen değerler aynı anahtar uzayında karşılaştırılır.
@@ -252,18 +255,30 @@ async function loadTaskDependenciesForUpdate(executor, projectId, taskId) {
   req.input('projectId', sql.UniqueIdentifier, projectId);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   const result = await req.query(`
-    SELECT TaskId, PredecessorTaskId
+    SELECT TaskId, PredecessorTaskId, DependencyType, LagDays, LagValue, LagUnit
     FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
     WHERE ProjectId = @projectId AND TaskId = @taskId
     ORDER BY TaskId, PredecessorTaskId;
   `);
   return (result.recordset || [])
     .filter((row) => rowId(row.TaskId) === taskId)
-    .map((row) => ({ predecessorId: rowId(row.PredecessorTaskId) }));
+    .map((row) => ({
+      predecessorId: rowId(row.PredecessorTaskId),
+      type: row.DependencyType,
+      lagDays: row.LagDays,
+      lagValue: row.LagValue,
+      lagUnit: row.LagUnit
+    }));
 }
 
 function dependencySignature(dependency) {
-  return uuid(dependency?.predecessorId, 'Öncül görev kimliği');
+  return JSON.stringify([
+    uuid(dependency?.predecessorId, 'Öncül görev kimliği'),
+    dependency?.type,
+    Number(dependency?.lagDays || 0),
+    dependency?.lagValue == null ? null : Number(dependency.lagValue),
+    dependency?.lagUnit || null
+  ]);
 }
 
 function sameDependencies(left = [], right = []) {
@@ -432,12 +447,15 @@ async function assertAcyclicTaskDependencies(executor, changes) {
 }
 
 async function planIntegrity(executor, changes) {
-  await assertActiveProjectMutationTargets(executor, changes);
-  await assertActiveCalendarReferences(executor, changes);
-  await assertSingleRootWbs(executor, changes);
-  const plannedChanges = await planTaskCommits(executor, changes);
-  await assertAcyclicTaskDependencies(executor, plannedChanges);
-  return plannedChanges;
+  return observePhase('phase.commit.integrity-planning', async () => {
+    await assertActiveProjectMutationTargets(executor, changes);
+    await assertActiveCalendarReferences(executor, changes);
+    await assertSingleRootWbs(executor, changes);
+    const plannedChanges = await planTaskCommits(executor, changes);
+    await assertAcyclicTaskDependencies(executor, plannedChanges);
+    Object.defineProperty(plannedChanges, DEPENDENCY_PLANNING_VERIFIED, { value: true });
+    return plannedChanges;
+  });
 }
 
 export function createHardenedSqlAppRepository() {
