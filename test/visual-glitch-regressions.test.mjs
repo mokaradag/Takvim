@@ -168,6 +168,13 @@ test('yapışkan çalışma alanı şeridi uygulama katmanındadır ve kaydırı
   assert.match(content.padding, /var\(--workspace-padding-top\) var\(--workspace-padding-inline\)/);
 });
 
+test('açık dışa aktar menüsü yapışkan çalışma alanı şeritlerinin üstünde kalır', () => {
+  const shell = read('src/app/styles/shell.css');
+  assert.equal(declarationsFor(shell, '.topbar')['z-index'], 'var(--z-chrome)');
+  assert.equal(declarationsFor(shell, '.topbar:has(.export-menu[open])')['z-index'], 'var(--z-popover)');
+  assert.equal(declarationsFor(shell, '.export-menu-pop')['z-index'], 'var(--z-popover)');
+});
+
 test('rapor sekmeleri donar ve tarih şeridi sekmelerin altına yapışır', () => {
   const features = read('src/app/styles/features.css');
   const tabs = declarationsFor(features, '.reports-module > .request-tabs.workspace-sticky');

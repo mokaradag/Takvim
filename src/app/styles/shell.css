@@ -216,6 +216,9 @@
   border-bottom: 1px solid var(--chrome-border);
   background: linear-gradient(180deg, var(--chrome-bg), var(--chrome-bg-soft));
 }
+.topbar:has(.export-menu[open]) {
+  z-index: var(--z-popover);
+}
 .topbar h1 {
   margin: 0;
   font-size: 18px;
