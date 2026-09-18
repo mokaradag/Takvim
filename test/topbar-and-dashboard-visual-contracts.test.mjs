@@ -51,7 +51,7 @@ test('marka amblemi dönüşü filtreli SVG yerine tek transform katmanında ça
   assert.doesNotMatch(ui, /<g className="hept-spin">/);
 
   assert.match(globalCss, /\.hept-emblem \.hept-spin\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;[^}]*animation:\s*heptSpin 120s linear infinite;[^}]*will-change:\s*transform;/s);
-  assert.match(globalCss, /body\.no-emblem \.hept-emblem \.hept-spin,[\s\S]*?body\.reduce-motion \.hept-emblem \.hept-spin[\s\S]*?animation:\s*none\s*!important;/s);
+  assert.match(globalCss, /body\.no-emblem \.hept-emblem \.hept-spin,\s*body\.reduce-motion \.hept-emblem \.hept-spin,\s*body\.reduce-motion \.brand-dot\s*\{[^}]*animation:\s*none\s*!important;[^}]*\}/s);
   assert.match(globalCss, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.hept-emblem \.hept-spin\s*\{[^}]*animation:\s*none;[^}]*will-change:\s*auto;/s);
 
   assert.doesNotMatch(shellCss, /\.topbar-emblem-clip \.hept-topbar\s*\{[^}]*filter:/s);

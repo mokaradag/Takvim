@@ -1906,8 +1906,10 @@ function runQuery(db, statement, params, { database }) {
       .map((node) => ({ WbsId: node.WbsId, ProjectId: node.ProjectId, ParentWbsId: node.ParentWbsId }))]);
   }
   if (sqlText.includes('SELECT TaskId, PredecessorTaskId')) {
+    const isSingleTaskDependencyRead = sqlText.includes('AND TaskId = @taskId');
     return result([db.taskDependencies
-      .filter((entry) => sameGuid(entry.ProjectId, params.projectId))
+      .filter((entry) => sameGuid(entry.ProjectId, params.projectId)
+        && (!isSingleTaskDependencyRead || sameGuid(entry.TaskId, params.taskId)))
       .map((entry) => ({
         TaskId: entry.TaskId,
         PredecessorTaskId: entry.PredecessorTaskId,
