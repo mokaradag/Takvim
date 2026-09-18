@@ -72,6 +72,7 @@ const {
   spoolUnpersistedBuckets,
   spooledBucketCount
 } = await import('../src/server/observability/telemetryRegistry.js');
+const { observePhase } = await import('../src/server/observability/observeOperation.js');
 const { buildAttentionItems } = await import('../src/server/observability/systemHealthService.js');
 const { boundedExecutor } = await import('../src/server/observability/boundedExecution.js');
 const { normalizeGauge, readResourceMetrics } = await import('../src/server/observability/resourceMetrics.js');
@@ -162,6 +163,19 @@ test('yüzdelikler en yakın sıra yöntemiyle hesaplanır', () => {
   assert.equal(summary.p50Ms, 20);
   assert.equal(summary.maxMs, 40);
   assert.equal(summary.avgMs, 25);
+});
+
+test('alt faz ölçümü kararlı bir işlem adıyla toplam rota ölçümünden ayrı tutulur', async (t) => {
+  resetTelemetryRegistryForTests();
+  t.after(resetTelemetryRegistryForTests);
+
+  const value = await observePhase('phase.snapshot.main-query', async () => 42);
+  assert.equal(value, 42);
+
+  const row = snapshotOperations().find((entry) => entry.operation === 'phase.snapshot.main-query');
+  assert.equal(row?.count, 1);
+  assert.equal(row?.errorCount, 0);
+  assert.equal(row?.operation.startsWith('api.'), false);
 });
 
 test('boş örnek kümesi sıfır değil "ölçüm yok" üretir', () => {

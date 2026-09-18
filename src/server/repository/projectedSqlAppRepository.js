@@ -5,6 +5,7 @@ import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRe
 import { applyDefaultCalendarProjection } from './calendarProjection.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 import { readScheduleInbox } from '../schedule-change/scheduleRequestQueries.js';
+import { observePhase } from '../observability/observeOperation.js';
 
 function missingScheduleRequestSchema(error) {
   const number = Number(error?.number);
@@ -93,15 +94,17 @@ async function loadVisibleTaskAssignees(executor, taskIds, auth) {
 }
 
 async function loadDefaultCalendarId(executor) {
-  const result = await executor.request().query(`
-    SELECT TOP (1) CalendarId
-    FROM dbo.MR_Calendars
-    WHERE IsDefault = 1 AND IsActive = 1
-    ORDER BY CreatedAt, CalendarId;
-  `);
-  return result.recordset?.[0]?.CalendarId == null
-    ? null
-    : (canonicalActualId(result.recordset[0].CalendarId) ?? String(result.recordset[0].CalendarId));
+  return observePhase('phase.snapshot.default-calendar', async () => {
+    const result = await executor.request().query(`
+      SELECT TOP (1) CalendarId
+      FROM dbo.MR_Calendars
+      WHERE IsDefault = 1 AND IsActive = 1
+      ORDER BY CreatedAt, CalendarId;
+    `);
+    return result.recordset?.[0]?.CalendarId == null
+      ? null
+      : (canonicalActualId(result.recordset[0].CalendarId) ?? String(result.recordset[0].CalendarId));
+  });
 }
 
 export function createProjectedSqlAppRepository() {
@@ -114,25 +117,25 @@ export function createProjectedSqlAppRepository() {
     // biriktiriyor ve tek bir anlık görüntü isteğini otuz saniyenin üzerine
     // çıkarıyordu. İşlemin içinde yalnızca okumalar kalır.
     if (catalogSync === 'blocking-before') {
-      await baseRepository.refreshCorporateCatalog({ waitForColdStart: true });
+      await observePhase('phase.snapshot.catalog', () => baseRepository.refreshCorporateCatalog({ waitForColdStart: true }));
     }
-    const projected = await withSqlTransaction(async (transaction) => {
+    const projected = await observePhase('phase.snapshot.transaction', () => withSqlTransaction(async (transaction) => {
       const { snapshot, auth } = await baseRepository.readSnapshotWithAuthorization(transaction);
       const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
-      const assigneeRows = await loadVisibleTaskAssignees(transaction, taskIds, auth);
+      const assigneeRows = await observePhase('phase.snapshot.assignees', () => loadVisibleTaskAssignees(transaction, taskIds, auth));
       const defaultCalendarId = await loadDefaultCalendarId(transaction);
-      const scheduleInbox = await loadScheduleChanges(transaction, auth);
+      const scheduleInbox = await observePhase('phase.snapshot.schedule-inbox', () => loadScheduleChanges(transaction, auth));
       Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
       return {
         snapshot: { ...applyTaskAssigneeProjection(snapshot, assigneeRows), scheduleRequests: scheduleInbox.items, scheduleRequestSummary: { unreadCount: scheduleInbox.unreadCount, pendingCount: scheduleInbox.pendingCount } },
         auth
       };
-    }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+    }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE }));
     // Manuel Refresh önce depodaki yetkili snapshot'ı okur; ancak bundan sonra
     // tazelik zamanlayıcısını dürter. Böylece bu isteğin SERIALIZABLE okuması,
     // kendi başlattığı 38 bin satırlık eşitlemeyle kilit yarışına girmez.
     if (catalogSync === 'background-after') {
-      await baseRepository.refreshCorporateCatalog({ waitForColdStart: false });
+      await observePhase('phase.snapshot.catalog', () => baseRepository.refreshCorporateCatalog({ waitForColdStart: false }));
     }
     return projected;
   }
@@ -152,7 +155,10 @@ export function createProjectedSqlAppRepository() {
      */
     async loadSnapshotWithSession(options = {}) {
       const { snapshot, auth } = await readProjectedSnapshot(options);
-      return { ...snapshot, session: await baseRepository.sessionContextFrom(auth) };
+      return observePhase('phase.snapshot.session', async () => ({
+        ...snapshot,
+        session: await baseRepository.sessionContextFrom(auth)
+      }));
     }
   };
 }

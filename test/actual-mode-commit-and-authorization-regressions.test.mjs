@@ -533,7 +533,9 @@ test('server-generated fallback project roots are included in commit WBS respons
 test('persisted Sicil validation rejects values above SQL Server int maximum', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /sicil <= 0 \|\| sicil > 2147483647/);
-  assert.ok(source.indexOf('sicil > 2147483647') < source.indexOf("req.input('sicil', sql.Int, sicil)"));
+  const validationIndex = source.indexOf('sicil > 2147483647');
+  const batchBindIndex = source.indexOf("req.input('sicils', sql.NVarChar(sql.MAX)");
+  assert.ok(validationIndex >= 0 && batchBindIndex > validationIndex);
 });
 
 test('project-level READ grants expose project tasks, WBS, assignees, and required people without enabling complete scheduling data', () => {

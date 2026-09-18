@@ -147,11 +147,11 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
 
   assert.match(poolSource, /const activeTransaction = transactionContext\.getStore\(\);\s*if \(activeTransaction\) return activeTransaction;/s);
   assert.match(poolSource, /withSqlTransaction\(work, \{\s*isolationLevel = sql\.ISOLATION_LEVEL\.READ_COMMITTED,\s*deadlockRetries = 0\s*\} = \{\}\)/);
-  assert.match(projectionSource, /const projected = await withSqlTransaction\(async \(transaction\) => \{/);
+  assert.match(projectionSource, /const projected = await observePhase\('phase\.snapshot\.transaction', \(\) => withSqlTransaction\(async \(transaction\) => \{/);
   assert.match(projectionSource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(transaction\);/);
   // Kurumsal katalog tazelemesi bilinçli olarak serileştirilebilir işlemin dışındadır.
-  assert.match(projectionSource, /await baseRepository\.refreshCorporateCatalog\(\{ waitForColdStart: true \}\);[\s\S]*const projected = await withSqlTransaction\(/);
-  assert.match(projectionSource, /const projected = await withSqlTransaction[\s\S]*if \(catalogSync === 'background-after'\) \{\s*await baseRepository\.refreshCorporateCatalog\(\{ waitForColdStart: false \}\);/);
+  assert.match(projectionSource, /refreshCorporateCatalog\(\{ waitForColdStart: true \}\)[\s\S]*const projected = await observePhase\('phase\.snapshot\.transaction'/);
+  assert.match(projectionSource, /const projected = await observePhase[\s\S]*if \(catalogSync === 'background-after'\) \{\s*await observePhase\('phase\.snapshot\.catalog'[\s\S]*refreshCorporateCatalog\(\{ waitForColdStart: false \}\)/);
   // Tamamlama aynı işlemde ve YETKİ BAĞLAMIYLA çalışır: satır düzeyinde
   // görünürlük süzgeci olmadan, kısmi anlık görüntünün gizlediği eş sorumlular
   // geri getiriliyordu.

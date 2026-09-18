@@ -1,6 +1,7 @@
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ServerPersistenceError } from '../errors.js';
+import { observePhase } from '../observability/observeOperation.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { findDependencyCycle } from './dependencyGraphValidation.js';
@@ -9,6 +10,8 @@ import {
   orderTaskUpsertsByDependencies
 } from './taskCommitPlanning.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
+
+const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 
 // Kimlikler kanonik (küçük harf) biçime indirilir: SQL Server satırlarından okunan
 // büyük harfli GUID'ler ile istemciden gelen değerler aynı anahtar uzayında karşılaştırılır.
@@ -432,12 +435,15 @@ async function assertAcyclicTaskDependencies(executor, changes) {
 }
 
 async function planIntegrity(executor, changes) {
-  await assertActiveProjectMutationTargets(executor, changes);
-  await assertActiveCalendarReferences(executor, changes);
-  await assertSingleRootWbs(executor, changes);
-  const plannedChanges = await planTaskCommits(executor, changes);
-  await assertAcyclicTaskDependencies(executor, plannedChanges);
-  return plannedChanges;
+  return observePhase('phase.commit.integrity-planning', async () => {
+    await assertActiveProjectMutationTargets(executor, changes);
+    await assertActiveCalendarReferences(executor, changes);
+    await assertSingleRootWbs(executor, changes);
+    const plannedChanges = await planTaskCommits(executor, changes);
+    await assertAcyclicTaskDependencies(executor, plannedChanges);
+    Object.defineProperty(plannedChanges, DEPENDENCY_PLANNING_VERIFIED, { value: true });
+    return plannedChanges;
+  });
 }
 
 export function createHardenedSqlAppRepository() {

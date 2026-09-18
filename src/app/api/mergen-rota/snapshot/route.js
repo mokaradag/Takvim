@@ -1,6 +1,6 @@
 import { createProjectedSqlAppRepository } from '../../../../server/repository/projectedSqlAppRepository.js';
 import { safeErrorResponse } from '../../../../server/errors.js';
-import { withRouteObservability } from '../../../../server/observability/observeOperation.js';
+import { observePhase, withRouteObservability } from '../../../../server/observability/observeOperation.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,9 +35,9 @@ async function handleSnapshot(request = null) {
   try {
     const repository = createProjectedSqlAppRepository();
     const body = await loadSnapshotForRequest(request, repository);
-    return Response.json(body, {
+    return observePhase('phase.snapshot.response', async () => Response.json(body, {
       headers: { 'cache-control': 'no-store' }
-    });
+    }));
   } catch (error) {
     return safeErrorResponse(error);
   }
