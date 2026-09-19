@@ -9,10 +9,10 @@ import {
 
 export { TASK_TABLE_PAGE_SIZE, paginateTaskRows } from './taskTablePagination.js';
 
-export function useTaskTablePagination(rows, resetKey) {
+export function useTaskTablePagination(rows, resetKey, pageSize) {
   const [pageState, setPageState] = useState(() => ({ page: 0, resetKey }));
   const requestedPage = taskTablePageForReset(pageState.page, pageState.resetKey, resetKey);
-  const result = useMemo(() => paginateTaskRows(rows, requestedPage), [rows, requestedPage]);
+  const result = useMemo(() => paginateTaskRows(rows, requestedPage, pageSize), [rows, requestedPage, pageSize]);
   useEffect(() => {
     setPageState((current) => synchronizeTaskTablePageState(current, resetKey, result.page));
   }, [resetKey, result.page]);

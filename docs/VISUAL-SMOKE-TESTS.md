@@ -311,3 +311,14 @@ Açık/koyu tema, normal/büyütülmüş yazı ve dar/geniş pencere için:
 - Sistem Yönetimi'nin altı sekmesinde sağlık şeridi ve sekmeler sabit kalmalı; yalnız alt panel kaymalı. Sekme değişince panel baştan açılmalı; Tab ve PageDown ile panel kaydırılabilmeli. Hatırlatma E-postaları'nın son düğmelerine ulaşılabilmeli.
 - Her iki Görevler kipinde, yetkili bir test görevinin hatırlatma sonucunu orta ve son satırlarda gösterin. Komşu zarf/silme simgeleri metni örtmemeli; yatay kaydırma ve tablo başlığı davranışı korunmalı. Demo Kip gerçek posta göndermemeli.
 - Kurumsal test posta kutusunda bir daveti iptal edin: tek takvim iletisi, önceki görev başlığı/tarihi, aynı UID ve yükselen SEQUENCE doğrulanmalı; `not supported calendar message.ics` görülmemeli. SMTP sonrası Outlook görünümü ayrıca kontrol edilmeli.
+
+## Summary filtering and space usage
+
+- Open **Tüm görevleri gör** from each of the five KPI cards; verify its initial count and category.
+- Combine text, multi-select, date and organization filters; clear them and verify that the parent summary scope/category is preserved.
+- Open column/date filters above the modal. Tab remains in the popup, Escape closes the popup first, and another Escape closes the modal.
+- Open a task and return: filters, sorting and page remain intact. Repeat in dark/light themes and at 1440/1280/760 px widths.
+- Page Projeler (5 per page) and Portföy sağlığı (6 per page) independently; filter down while on the last page and verify valid range/disabled controls.
+- Change both result selectors from 5 to 10/20/50. Verify independent results, unchanged ordering and empty states.
+- Proje Tanımı's browser and the expanded WBS tree reach the available bottom inset; controls remain reachable on short windows.
+- Temel Kip has a wider task title and narrower assignee, priority and deadline columns. Check long Turkish names, multiple assignees and action buttons.

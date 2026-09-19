@@ -1,4 +1,6 @@
 'use client';
+import { DashboardPagination, DashboardResultLimit } from './DashboardListControls.jsx';
+import { useTaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { KpiTaskModal } from './KpiTaskModal.jsx';
 import { useState as useState1, useMemo as useMemo1 } from 'react';
 import { Icons } from '../../components/icons';
@@ -39,6 +41,8 @@ export function DashboardView({ onNavigate }) {
   const [detailCategory, setDetailCategory] = useState1(null);
   const [detailOpener, setDetailOpener] = useState1(null);
   const showDetails = (id, opener) => { setDetailOpener(opener); setDetailCategory(id); };
+  const [workloadLimit, setWorkloadLimit] = useState1(5);
+  const [upcomingLimit, setUpcomingLimit] = useState1(5);
   const [donutSel, setDonutSel] = useState1(null);
 
   // Pano bütün çalışma alanını özetliyordu: kurulum yaşlandıkça kartlar ve
@@ -94,9 +98,9 @@ export function DashboardView({ onNavigate }) {
   // Fotoğraf kimliği genel kişi dizininden ada göre yeniden çözülmez. Görev
   // kapsamında yetkili olarak gelen Sicil iş yükü satırına kadar korunur.
   const workload = useMemo1(
-    () => selectDashboardWorkload(tasks, people, today_)
+    () => selectDashboardWorkload(tasks, people, today_, workloadLimit)
       .map((row) => ({ ...row, color: personColorVar(row.name) })),
-    [tasks, people, today_]
+    [tasks, people, today_, workloadLimit]
   );
 
   // Birikimli tamamlanma: bir görevin tamamlandığı gün GERÇEKLEŞEN bitiştir.
@@ -126,8 +130,8 @@ export function DashboardView({ onNavigate }) {
   const upcoming = useMemo1(() => tasks
     .filter(t => t.status !== 'done' && t.targetFinish && diffDays(t.targetFinish, today_) >= 0)
     .sort((a, b) => parseDate(a.targetFinish) - parseDate(b.targetFinish))
-    .slice(0, 5),
-    [tasks, today_]);
+    .slice(0, upcomingLimit),
+    [tasks, today_, upcomingLimit]);
 
   // Bağımlılık riski: bekleyen öncül SAYISI da burada hesaplanır. Kart daha
   // önce `deps.length` yazıyordu; bu, tamamlanmış öncülleri de sayan yanlış bir
@@ -191,6 +195,9 @@ export function DashboardView({ onNavigate }) {
   // referansları düşürür ve görev iş yükü tablosundan kaybolur).
   const hygiene = useMemo1(() => selectPlanHygiene(tasks, people), [tasks, people]);
 
+  const cardScope = JSON.stringify(dateRange);
+  const projectPage = useTaskTablePagination(byProject, cardScope, 5);
+  const healthPage = useTaskTablePagination(portfolioHealth.portfolio, cardScope, 6);
   const statusDonut = distribution.segments;
   // Seçim dilim SIRASI değil, kova KİMLİĞİ ile tutulur: görevler değiştiğinde
   // dilim listesi kısalabilir ve saklanan sıra numarası boşa düşerek çizimi
@@ -375,7 +382,7 @@ export function DashboardView({ onNavigate }) {
             right={<button className="btn ghost sm" onClick={() => onNavigate('veri')}>Tümü <Icons.ArrowRight size={12} /></button>}
           />
           <div className="col" style={{ gap: 12 }}>
-            {byProject.map(p => {
+            {projectPage.rows.map(p => {
               const pct = Math.round((p.done / p.value) * 100);
               return (
                 <Tooltip
@@ -405,17 +412,19 @@ export function DashboardView({ onNavigate }) {
               );
             })}
           </div>
+          <DashboardPagination label="Projeler" {...projectPage} total={byProject.length} />
         </div>
 
         <div className="card">
           <CardHead
+            right={<DashboardResultLimit label="Ekip iş yükü" value={workloadLimit} onChange={setWorkloadLimit} />}
             icon={<Icons.Users size={14} />}
             title="Ekip iş yükü"
-            subtitle="En yüklü 5 üye · görev kırılımı"
+            subtitle={`En yüklü ${workloadLimit} üye · görev kırılımı`}
             infoAccent="var(--c-cyan)"
             infoIcon={<Icons.Users size={12} />}
             info={<>
-              <p>Görev sayısına göre en yüklü 5 ekip üyesi. Aşırı yüklenmiş bir kişiyi tespit etmek için bakın.</p>
+              <p>Görev sayısına göre en yüklü ekip üyeleri. Aşırı yüklenmiş bir kişiyi tespit etmek için bakın.</p>
               <div className="rt-sep" />
               <div className="rt-row"><span className="rt-label">Toplam</span><span className="rt-val">Kişiye atanmış tüm görevler</span></div>
               <div className="rt-row"><span className="rt-label">Açık</span><span className="rt-val">Tamamlanmamış görevler</span></div>
@@ -460,11 +469,12 @@ export function DashboardView({ onNavigate }) {
           <CardHead
             icon={<Icons.Clock size={14} />}
             title="Yaklaşan teslimler"
-            subtitle="Hedef tarihi en yakın 5 görev"
+            right={<DashboardResultLimit label="Yaklaşan teslimler" value={upcomingLimit} onChange={setUpcomingLimit} />}
+            subtitle={`Hedef tarihi en yakın ${upcomingLimit} görev`}
             infoAccent="var(--status-overdue)"
             infoIcon={<Icons.Clock size={12} />}
             info={<>
-              <p>Hedef tarihi en yakın olan, henüz tamamlanmamış 5 görev. Acil işlere bakmak için kullanın.</p>
+              <p>Hedef tarihi en yakın olan, henüz tamamlanmamış görevler. Acil işlere bakmak için kullanın.</p>
               <div className="rt-sep" />
               <div className="rt-row"><span className="rt-label">Kırmızı sayı</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>≤ 3 gün</span></div>
               <div className="rt-row"><span className="rt-label">Tıklama</span><span className="rt-val">Detay panelini açar</span></div>
@@ -528,7 +538,7 @@ export function DashboardView({ onNavigate }) {
           }
         />
         <div className="rag-grid">
-          {portfolioHealth.portfolio.map(p => {
+          {healthPage.rows.map(p => {
             const ragColor = p.rag === 'green' ? 'var(--status-done)' : p.rag === 'amber' ? 'var(--c-amber)' : 'var(--status-overdue)';
             const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
             return (
@@ -563,6 +573,7 @@ export function DashboardView({ onNavigate }) {
             );
           })}
         </div>
+        <DashboardPagination label="Portföy sağlığı" {...healthPage} total={portfolioHealth.portfolio.length} />
       </div>
 
       {/* Haftalık tamamlanma kesiti */}
@@ -751,6 +762,7 @@ export function DashboardView({ onNavigate }) {
         </div>
       )}
       {detailCategory && <KpiTaskModal
+        referenceDay={today_}
         title={detailCategory === 'all' ? 'Toplam görev' : STATUS_DISTRIBUTION_BUCKETS.find((bucket) => bucket.id === detailCategory)?.label}
         tasks={detailCategory === 'all' ? tasks : bucketItems.get(detailCategory) || []}
         onClose={() => setDetailCategory(null)} onOpenTask={onOpenTask} restoreFocusRef={detailOpener}

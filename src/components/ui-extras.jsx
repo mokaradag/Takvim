@@ -237,13 +237,23 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   const ref = useRx(null);
 
   useEx(() => {
+    if (anchor?.closest('[data-focus-scope]')) ref.current?.querySelector('input, button')?.focus();
+  }, [anchor]);
+
+  useEx(() => {
     const onDown = (e) => {
       if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) onClose();
     };
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+      anchor?.focus();
+    };
     document.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+    window.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -331,6 +341,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     <div
       ref={ref}
       className="col-filter-pop"
+      data-modal-owner={anchor?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope')}
       style={{
         position: 'fixed',
         left: pos.left,

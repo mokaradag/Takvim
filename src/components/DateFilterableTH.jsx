@@ -67,6 +67,10 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
   // Yerleşim kutunun GERÇEK ölçüsüyle yapılır: sayfanın altına yakın açılan
   // süzgeç kutusunun alt kısmı daha önce ekranın dışında kalıyordu.
   useEffect(() => {
+    if (anchor?.closest('[data-focus-scope]')) ref.current?.querySelector('input, button')?.focus();
+  }, [anchor]);
+
+  useEffect(() => {
     if (!anchor) return undefined;
     const place = () => {
       const zoom = appZoom();
@@ -93,12 +97,18 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
       if (ref.current?.contains(event.target) || anchor?.contains(event.target)) return;
       onClose();
     };
-    const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      anchor?.focus();
+    };
     document.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
     };
   }, [anchor, onClose]);
 
@@ -123,6 +133,7 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
     <div
       ref={ref}
       className="col-filter-pop date-column-filter-pop"
+      data-modal-owner={anchor?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope')}
       // `?? undefined`: sıfır GEÇERLİ bir sınırdır, "sınır yok" demek değildir.
       style={{
         position: 'fixed',
