@@ -623,3 +623,13 @@ Kapsamlı Kipte Raporlar tek gezinme öğesi olarak kalır: Performans mevcut ra
 Durum, gerçekleşen tarihler ve ilerleme aynı işlemde tutarlı hâle gelir. Devam ediyor seçimi eksik gerçek başlangıcı; Tamamlandı seçimi eksik gerçek bitişi Rota takviminin bugünüyle doldurur. Tamamlanmada ilerleme %100 olur; başlangıç bilinmiyorsa bitiş günü kullanılır. Gerçek başlangıç Yapılacak görevini başlatır; gerçek bitiş tamamlar. Plan tarihleri gerçekleşen tarih olarak kullanılmaz. İlerleme %100 tek başına tamamlamaz; tamamlanmış görevde sürgü kapalıdır. Yeniden açma bitişi temizler, başlangıcı ve ilerlemeyi korur. Yapılacak durumuna dönüşte gerçek tarihler varsa kısa onay istenir; kabul edilince tarihler boşalır ve ilerleme %0 olur.
 
 Özet'in Genel bakış/tarih/sayı başlığı kaldırılmıştır. Özet ve Raporlar → Performans tarih/kurum filtreleri ile Proje Yapısı sekmeleri içerik çalışma alanı içinde yapışkandır; ana gezinmenin üstüne çıkmaz. Filtreleri Temizle mevcut kapsamı korur. Görev Hareketleri'nde denetimler ve sayfalama yerinde kalır; kalan yükseklikte yalnız tablo kayar, sütun başlıkları sabittir. Talepler'in bütün sekmeleri ve tabloları ile Görev Hareketleri aynı nötr, hafif vurgu renkli açık/koyu tema yüzeylerini kullanır.
+
+## Özet ayrıntı süzgeçleri ve kart sınırları
+
+KPI kartlarındaki **Tüm görevleri gör** penceresinde her sütun Görevler tablosunun ortak süzgeçlerini kullanır: görev metni; çoklu proje, Sicil tabanlı sorumlu ve durum; başlangıç, bitiş ve hedef için hızlı tarih seçenekleri, önce/sonra ve aralık. Başlangıç/bitiş süzme ve sıralaması hücredeki gerçekleşen tarih varsa onu, yoksa planlanan tarihi esas alır. Sütun seçenekleri diğer sütun seçimlerine göre daralır; kendi seçimlerini genişletmek mümkündür.
+
+Direktörlük/Müdürlük/Birim zinciri pencerenin mevcut görev kümesinden üretilir. **Filtreleri Temizle** arama, proje/sorumlu, sütun ve pencereye ait kurumsal seçimleri sıfırlar. Özet'in tarih/kurumsal kapsamı, seçilen KPI kategorisi ve görünürlük yetkileri korunur. Görev panelinden dönüşte pencere seçimleri ve sayfası korunur. Süzgeç/sıralama değişiminde ilk sayfaya dönülür; veri azalırsa geçerli son sayfaya alınır.
+
+**Projeler** kartı sayfada 5, **Portföy sağlığı** kartı 6 proje gösterir. Her birinin ilk/önceki/sonraki/son kontrolleri ve gösterilen kayıt aralığı bağımsızdır. RAG toplamları tüm süzülmüş portföyü kapsar. **Ekip iş yükü** ve **Yaklaşan teslimler** ayrı **Göster** seçimleriyle 5 (varsayılan), 10, 20 veya 50 sonuç sunar. Sıralama ve iş yükü hesapları korunur.
+
+Temel Kip görev tablosunda Görev sütunu alanın %34'ünü, Sorumlular %8, Öncelik %6 ve Termin %8'ini kullanır. Uzun metinler satıra sarılır; işlem düğmeleri kendi sütununda kalır.

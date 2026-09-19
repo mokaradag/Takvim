@@ -3,7 +3,7 @@
    Extra UI primitives — Tooltip, InfoButton, AnimatedNumber,
    ColumnFilter, AnimatedBar, ChartTooltip
    ============================================================ */
-import React, { useState as useSx, useEffect as useEx, useRef as useRx } from 'react';
+import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx } from 'react';
 import ReactDOM from 'react-dom';
 import { DateInput } from './DateInput';
 import { Icons } from './icons';
@@ -235,17 +235,29 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   // yoldu ve pratikte kullanılamıyordu.
   const [optionQuery, setOptionQuery] = useSx('');
   const ref = useRx(null);
+  const closeAndRestoreFocus = useCb(() => {
+    onClose();
+    anchor?.focus();
+  }, [anchor, onClose]);
+
+  useEx(() => {
+    if (anchor?.closest('[data-focus-scope]')) ref.current?.querySelector('input, button')?.focus();
+  }, [anchor]);
 
   useEx(() => {
     const onDown = (e) => {
-      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) onClose();
+      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) closeAndRestoreFocus();
     };
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeAndRestoreFocus();
+    };
     document.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    window.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true); };
+  }, [anchor, closeAndRestoreFocus]);
 
   // Çapaya göre yerleşim; kutu her zaman görünüm alanının içinde kalır.
   const [pos, setPos] = useSx({ left: 0, top: 0, maxWidth: null, maxHeight: null });
@@ -295,7 +307,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
       else if (numMode === 'equals' && e != null) onChange({ mode: 'equals', eq: e });
       else onChange(null);
     }
-    onClose();
+    closeAndRestoreFocus();
   };
   const clear = () => {
     if (type === 'text' || type === 'single') { setQ(''); onChange(''); }
@@ -308,7 +320,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
       setNumFrom(''); setNumTo(''); setNumEq('');
       onChange(null);
     }
-    onClose();
+    closeAndRestoreFocus();
   };
 
   // Sorted options for multi
@@ -331,6 +343,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     <div
       ref={ref}
       className="col-filter-pop"
+      data-modal-owner={anchor?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope')}
       style={{
         position: 'fixed',
         left: pos.left,
@@ -344,10 +357,10 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
       </div>
       {onSort && (
         <div className="col-filter-sort">
-          <button className={sort === 'asc' ? 'active' : ''} onClick={() => { onSort('asc'); onClose(); }}>
+          <button className={sort === 'asc' ? 'active' : ''} onClick={() => { onSort('asc'); closeAndRestoreFocus(); }}>
             <Icons.ChevronUp size={12} /> {type === 'date' ? 'Eskiden yeniye' : type === 'number' ? 'Küçükten büyüğe' : 'Artan'}
           </button>
-          <button className={sort === 'desc' ? 'active' : ''} onClick={() => { onSort('desc'); onClose(); }}>
+          <button className={sort === 'desc' ? 'active' : ''} onClick={() => { onSort('desc'); closeAndRestoreFocus(); }}>
             <Icons.ChevronDown size={12} /> {type === 'date' ? 'Yeniden eskiye' : type === 'number' ? 'Büyükten küçüğe' : 'Azalan'}
           </button>
         </div>
@@ -388,7 +401,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
                 const [only] = searchableOptions;
                 setQ(only.value);
                 onChange(only.value);
-                onClose();
+                closeAndRestoreFocus();
               }}
             />
             {optionQuery && (
@@ -439,7 +452,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
                     type="radio"
                     name={`col-filter-single-${label}`}
                     checked={checked}
-                    onChange={() => { setQ(o.value); onChange(o.value); onClose(); }}
+                    onChange={() => { setQ(o.value); onChange(o.value); closeAndRestoreFocus(); }}
                   />
                   {o.icon && <span style={{ display: 'inline-flex' }}>{o.icon}</span>}
                   <span style={{ minWidth: 0 }}>

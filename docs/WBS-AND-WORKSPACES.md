@@ -371,3 +371,7 @@ Project → WBS hierarchy → Activities
 Future adapters can map external Project, WBS and Activity identifiers to MERGEN Rota stable IDs without changing feature hierarchy semantics. The current design already preserves explicit Project ownership, parent relationships, arbitrary WBS depth and a separate Activity entity.
 
 Primavera-specific database identifiers, persistence rules, import conflict handling and synchronization metadata are intentionally deferred until a focused integration contract is designed. The async repository boundary can later sit in front of such server-side integration without exposing persistence implementation details to WBS feature components.
+
+## Available vertical space
+
+The Proje Tanımı project browser takes the remaining workspace height below the tabs, rather than using a fixed viewport subtraction. The heading and type filters stay above the independently scrolling project list. İş Dağılım Ağacı keeps its flexible tree viewport; both tabs use a compact 16 px bottom inset. Short windows allow page scrolling so controls remain reachable. Collapsed branches remain collapsed: spare space does not automatically expand a large corporate tree. Project definition forms remain page-scrollable.

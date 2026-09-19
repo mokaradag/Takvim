@@ -27,7 +27,7 @@ const CONTENT = {
   ozet: {
     title: 'Özet',
     intro: 'Seçili çalışma alanının genel durumunu tek bakışta izlemek için kullanılır. Proje seçildiğinde göstergeler yalnızca o projeyi, portföy seçildiğinde tüm projeleri temel alır.',
-    points: ['Filtreleri Temizle tarih ve kurumsal seçimleri sıfırlar; çalışma alanınız ve görünürlük yetkileriniz korunur.', 'Görev, gecikme ve ilerleme göstergelerini izleyin.', 'KPI zengin listesindeki Tüm görevleri gör, arama ve proje/sorumlu süzgeçleriyle geniş görev penceresini açar. Görev panelinden dönünce liste durumunuz korunur.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
+    points: ['Filtreleri Temizle tarih ve kurumsal seçimleri sıfırlar; çalışma alanınız ve görünürlük yetkileriniz korunur.', 'Görev, gecikme ve ilerleme göstergelerini izleyin.', 'KPI zengin listesindeki Tüm görevleri gör, sütun ve kurumsal süzgeçleriyle geniş görev penceresini açar. Penceredeki Filtreleri Temizle yalnızca pencere süzgeçlerini sıfırlar. Projeler ve Portföy sağlığı sayfalanır; iş yükü ve yaklaşan teslimlerde 5/10/20/50 sonuç seçilebilir. Görev panelinden dönünce liste durumunuz korunur.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
   },
   veri: {
     title: 'Görevler',

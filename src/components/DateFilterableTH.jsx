@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { appZoom } from '../lib/zoom';
 import { clampOverlayToViewport } from './overlayPlacement.js';
@@ -63,9 +63,17 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
   const [to, setTo] = useState(initial.to || '');
   const [pos, setPos] = useState({ left: 0, top: 0, maxWidth: null, maxHeight: null });
   const ref = useRef(null);
+  const closeAndRestoreFocus = useCallback(() => {
+    onClose();
+    anchor?.focus();
+  }, [anchor, onClose]);
 
   // Yerleşim kutunun GERÇEK ölçüsüyle yapılır: sayfanın altına yakın açılan
   // süzgeç kutusunun alt kısmı daha önce ekranın dışında kalıyordu.
+  useEffect(() => {
+    if (anchor?.closest('[data-focus-scope]')) ref.current?.querySelector('input, button')?.focus();
+  }, [anchor]);
+
   useEffect(() => {
     if (!anchor) return undefined;
     const place = () => {
@@ -91,23 +99,28 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
   useEffect(() => {
     const onPointerDown = (event) => {
       if (ref.current?.contains(event.target) || anchor?.contains(event.target)) return;
-      onClose();
+      closeAndRestoreFocus();
     };
-    const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeAndRestoreFocus();
+    };
     document.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
     };
-  }, [anchor, onClose]);
+  }, [anchor, closeAndRestoreFocus]);
 
   const clear = () => {
     setPreset('');
     setFrom('');
     setTo('');
     onChange(null);
-    onClose();
+    closeAndRestoreFocus();
   };
 
   const apply = () => {
@@ -116,13 +129,14 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
     else if (mode === 'before' && to) onChange({ mode: 'before', to });
     else if (mode === 'after' && from) onChange({ mode: 'after', from });
     else onChange(null);
-    onClose();
+    closeAndRestoreFocus();
   };
 
   return ReactDOM.createPortal(
     <div
       ref={ref}
       className="col-filter-pop date-column-filter-pop"
+      data-modal-owner={anchor?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope')}
       // `?? undefined`: sıfır GEÇERLİ bir sınırdır, "sınır yok" demek değildir.
       style={{
         position: 'fixed',
@@ -137,10 +151,10 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
       </div>
       {onSort && (
         <div className="col-filter-sort">
-          <button className={sort === 'asc' ? 'active' : ''} onClick={() => { onSort('asc'); onClose(); }}>
+          <button className={sort === 'asc' ? 'active' : ''} onClick={() => { onSort('asc'); closeAndRestoreFocus(); }}>
             <Icons.ChevronUp size={12} /> Eskiden yeniye
           </button>
-          <button className={sort === 'desc' ? 'active' : ''} onClick={() => { onSort('desc'); onClose(); }}>
+          <button className={sort === 'desc' ? 'active' : ''} onClick={() => { onSort('desc'); closeAndRestoreFocus(); }}>
             <Icons.ChevronDown size={12} /> Yeniden eskiye
           </button>
         </div>

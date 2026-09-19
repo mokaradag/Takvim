@@ -182,7 +182,7 @@ export function SimpleTasksView({ onNewTask }) {
         <div className="simple-tasks-scroll">
           <table className="tbl simple-tasks-table" aria-label="Temel Kip Görevler">
             <colgroup>
-              {[16, 23, 12, 12, 9, 10, 11, 7].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}
+              {[16, 34, 12, 8, 6, 10, 8, 6].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}
             </colgroup>
             <thead>
               <tr>
