@@ -3,7 +3,6 @@ import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 import { applyDefaultCalendarProjection } from './calendarProjection.js';
-import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 import { readScheduleInbox } from '../schedule-change/scheduleRequestQueries.js';
 import { observePhase } from '../observability/observeOperation.js';
 
@@ -30,67 +29,6 @@ async function loadScheduleChanges(executor, auth) {
     if (missingScheduleRequestSchema(error)) return { items: [], unreadCount: 0, pendingCount: 0 };
     throw error;
   }
-}
-
-/** Görünür görevlerin kimlik ve görev kapsamlı ad izdüşümü. */
-async function loadVisibleTaskAssignees(executor, taskIds, auth) {
-  if (!taskIds.length) return [];
-
-  const request = executor.request();
-  request.input('taskIds', sql.NVarChar(sql.MAX), taskIds.join(','));
-  request.input('sicil', sql.Int, auth?.sicil ?? null);
-  request.input('isAdmin', sql.Bit, Boolean(auth?.isSystemAdmin));
-  const result = await request.query(`
-    SELECT ta.TaskId,
-      -- AvatarEmployeeNo, Sicil maskeliyken de dolu gelir ve bu BILINCLIDIR:
-      -- goreve atanmis bir kullanici, ayni gorevdeki es sorumlunun adini ve
-      -- kurumsal fotografini gorur (asagidaki WHERE icindeki ownAssignment dali
-      -- tam olarak bunun icin vardir). Sicil YALNIZCA o gorev satirinda tasinir;
-      -- genel people dizinine hicbir es sorumlu eklenmez ve yazma yetkisi
-      -- dogmaz. Bkz. test/task-scoped-co-assignee-visibility.test.mjs.
-      CASE WHEN auth.IdentityVisible = 1 THEN ta.Sicil ELSE NULL END AS Sicil,
-      CASE
-        WHEN NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL THEN ta.Sicil
-        ELSE NULL
-      END AS AvatarEmployeeNo,
-      COALESCE(
-        NULLIF(LTRIM(RTRIM(pd.DisplayName)), ''),
-        CASE WHEN auth.IdentityVisible = 1 THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END
-      ) AS DisplayName
-    FROM dbo.MR_TaskAssignees ta
-    JOIN STRING_SPLIT(@taskIds, ',') visible
-      ON ta.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(visible.value)))
-    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
-    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
-    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = ta.Sicil
-    CROSS APPLY (
-      SELECT CAST(CASE WHEN @isAdmin = 1
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-        )
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_ProjectAccess pa
-          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-            AND pa.AccessLevel IN ('FULL', 'READ')
-        )
-        OR (p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil)
-        OR t.CreatedBySicil = @sicil
-        OR ta.Sicil = @sicil
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-        )
-      THEN 1 ELSE 0 END AS bit) AS IdentityVisible
-    ) auth
-    WHERE auth.IdentityVisible = 1
-       OR EXISTS (
-         SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
-         WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil
-       )
-    ORDER BY ta.TaskId, ta.Sicil;
-  `);
-  return result.recordset || [];
 }
 
 async function loadDefaultCalendarId(executor) {
@@ -121,13 +59,11 @@ export function createProjectedSqlAppRepository() {
     }
     const projected = await observePhase('phase.snapshot.transaction', () => withSqlTransaction(async (transaction) => {
       const { snapshot, auth } = await baseRepository.readSnapshotWithAuthorization(transaction);
-      const taskIds = [...new Set((snapshot.tasks || []).map((task) => String(task.id)).filter(Boolean))];
-      const assigneeRows = await observePhase('phase.snapshot.assignees', () => loadVisibleTaskAssignees(transaction, taskIds, auth));
       const defaultCalendarId = await loadDefaultCalendarId(transaction);
       const scheduleInbox = await observePhase('phase.snapshot.schedule-inbox', () => loadScheduleChanges(transaction, auth));
       Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
       return {
-        snapshot: { ...applyTaskAssigneeProjection(snapshot, assigneeRows), scheduleRequests: scheduleInbox.items, scheduleRequestSummary: { unreadCount: scheduleInbox.unreadCount, pendingCount: scheduleInbox.pendingCount } },
+        snapshot: { ...snapshot, scheduleRequests: scheduleInbox.items, scheduleRequestSummary: { unreadCount: scheduleInbox.unreadCount, pendingCount: scheduleInbox.pendingCount } },
         auth
       };
     }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE }));

@@ -16,7 +16,7 @@ function rowId(value) {
  *
  * `assigneeIds` bilinçli olarak `assigneeDisplayNames` dizisinden KISA olabilir:
  * göreve atanmış bir kullanıcı, kimliği kendisine kapalı olan eş sorumlunun
- * ADINI görür ama Sicil'ini görmez (bkz. loadVisibleTaskAssignees, maskelenen
+ * ADINI görür ama Sicil'ini görmez (bkz. loadSnapshotFrom, maskelenen
  * `Sicil` sütunu). Bu yüzden iki dizi konum konum EŞLENEMEZ; tüketiciler
  * kimliği ada göre çözer (bkz. workloadProjection).
  */
