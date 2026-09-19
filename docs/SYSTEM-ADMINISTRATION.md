@@ -192,10 +192,16 @@ adlı `phase.snapshot.*` ve `phase.commit.*` ölçümleri toplanır. Faz adları
 ad, e-posta veya açıklama içermez.
 
 Snapshot tarafında katalog çağrısı, SERIALIZABLE okuma işlemi, yetkilendirme,
-ana snapshot sorgusu, sorumlu projeksiyonu, varsayılan takvim, tarih değişikliği
-kutusu, oturum ve yanıt hazırlama ayrı görülebilir. Önceki eş-sorumlu
-projeksiyonu iyileştirmesi üretimde belirleyici olmadığından bu fazlardan biri
-ölçümle baskın çıkmadan yeni bir SQL veya dizin varsayımı yapılmaz.
+ana snapshot sorgusu, varsayılan takvim, tarih değişikliği kutusu, oturum ve
+yanıt hazırlama ayrı görülebilir. Sorumlu projeksiyonu artık ana SQL paketinin
+beşinci sonuç kümesinde döner; `phase.snapshot.assignees` için yeni örnek
+üretilmez. Bu iş ve JavaScript projeksiyonu `phase.snapshot.main-query`
+süresine dahildir. Eski sorumlu fazının sıfırlanması bir hızlanma ölçümü değildir;
+geçmiş örnekler saklama süresi boyunca ekranda kalabilir.
+
+`observePhase()` fırlatılan her hatayı başarısız faz sayar; API hata oranı ise
+yalnız HTTP 5xx yanıtlarını sayar. Bu yüzden faz ve API hata oranlarının eşit
+olması beklenmez. Bu anlamlar değiştirilmemiştir.
 
 Commit tarafında istek doğrulama, SERIALIZABLE işlem, niyet doğrulama,
 bağımlılık uzlaştırması, bütünlük planlama, yetkilendirme, görev yazması,
@@ -689,3 +695,66 @@ SELECT MigrationId, AppliedAt
 FROM dbo.MR_SchemaMigrations
 WHERE MigrationId = N'0012_system_observability';
 ```
+
+### Snapshot SQL birleştirmesi ve üretim doğrulaması
+
+Üretimde bildirilen yaklaşık başlangıç değerleri: `api.snapshot` P50 3,06 sn,
+P95 7,02 sn; işlem fazı P50 5,04 sn / P95 7,37 sn; sorumlu fazı
+2,96 / 4,41 sn; ana sorgu 2,41 / 2,97 sn. Fazlar farklı örnek sayılarına ve
+pencerelere sahip olabilir; yüzdelikler toplanarak toplam gecikme hesaplanmaz.
+Genel API P50/P95/P99 değerleri 144/385/623 ms olduğundan hedef snapshot SQL
+tekrarıdır. Bunlar dağıtım sonrası kazanım ölçümleri değildir.
+
+| Önce | Sonra |
+| --- | --- |
+| Ana sorgu yetkili sorumlu kimliklerini döndürür. | Aynı sonuç kümesi maskelenmiş kimlik, ad ve görev kapsamlı fotoğraf anahtarını döndürür. |
+| JavaScript görev kimliklerini CSV yapar; ikinci sorgu STRING_SPLIT ile tekrar açar. | Ana pakette `@VisibleTasks` hem görev hem sorumlu sonuçlarını sınırlar; ikinci gidiş-dönüş yoktur. |
+| İkinci sorgu kurumsal erişim, manuel erişim ve proje liderliğini yeniden okur. | Etkin projeler için hesaplanan FULL ve READ kümeleri tekrar kullanılır. |
+| Ana pakette yönetici görünümü yedi kez referans edilir. | Kullanıcının çalışan Sicilleri bir kez, DISTINCT ile `@ExecutiveScope` içine alınır; aynı pakette tekrar kullanılır. |
+
+`@ExecutiveScope` ve `@VisibleTasks` sorguya özel tablo değişkenleridir;
+istekler veya kullanıcılar arasında önbellek yoktur. Yönetici görünümü aynı
+çalışanı farklı ScopeType değerleriyle döndürebildiğinden çalışan kümesi
+tekilleştirilir. Görev görünürlüğü koşulu değişmeden bu görev kümesine
+aktarılmıştır. `canAssignAllCorporate` görev/proje okuma yetkisine eklenmez.
+
+Etkin projelerde FULL, SYSTEM_ADMIN, kurumsal rol, manuel lider veya FULL
+manuel hibe yollarının birleşimidir. READ ayrı tutulur; görev ataması bu
+seviyelerden hiçbirini kazandırmaz. Sorumlu kimliği FULL/READ, oluşturan,
+kendisi veya yönetici çalışan kümesi ile açılır. Yalnız kendi görevine atanmış
+kullanıcıya verilen ek eş-sorumlu adı/fotoğrafı genel rehbere ve `assigneeIds`
+alanına eklenmez. Mevcut sözleşmede görev kapsamlı `assigneeAvatarIdentities`
+fotoğraf için employeeNo taşır; bu alanın korunması, gizli Sicilin tüm JSON
+alanlarından kaldırıldığı anlamına gelmez. Rehber adı bulunmayan gizli eş
+sorumluya Sicilden ad veya fotoğraf üretilmez. Kimlikler ad-soyadla eşlenmez.
+Oluşturan, WBS, bağımlılık, baz plan, oturum ve RowVersion kuralları korunur.
+
+Mevcut MR_TaskAssignees `(TaskId, Sicil)` birincil anahtarı ve
+`IX_MR_TaskAssignees_Sicil_Task`, MR_ProjectAccess `(ProjectId, Sicil)` anahtarı
+ve `IX_MR_ProjectAccess_Sicil_Active_Level`, görevlerin proje/WBS dizinleri
+incelenmiştir. Yeni kalıcı dizin, şema veya göç eklenmez. SQL Server yürütme
+planı ve üretim veritabanı bu ortamda yoktur; kanıt SQL yapısı, sorgu sayısı,
+üretilen SQL sözleşmeleri ve sahte SQL sürücüsüyle gerçek API rota testleridir.
+Bu testler SQL Server sorgu planını, kilit davranışını veya gerçek süreyi ölçmez.
+Tablo değişkenlerinin gerçek veri hacmindeki planı dağıtımda incelenmelidir.
+
+SERIALIZABLE korunur. Yetki okuması, ana paket, varsayılan takvim ve talep
+kutusu aynı işlemde kalır; katalog eşitlemesi işlemin dışında kalır. SQL zaman
+aşımı, bağlantı havuzu, veritabanı yalıtım ayarları ve commit yolu değişmez.
+
+Dağıtım sonrasında aynı sürüm ve temsili trafik penceresinde:
+
+1. `api.snapshot` P50/P95/P99, hata oranı, örnek sayısı ve en büyük gözlemi
+   karşılaştırın; soğuk/manuel/otomatik yenilemeleri ayrıca kontrol edin.
+2. `phase.snapshot.transaction` ve `phase.snapshot.main-query` için aynı
+   değerleri izleyin. Yeni ana sorgu sorumlu işini de içerir; eski ana sorguyla
+   tek başına eşdeğer değildir. Eski faz yüzdeliklerini toplamayın.
+3. Normal kullanıcı, proje yöneticisi, yönetici ve SYSTEM_ADMIN ile FULL,
+   READ, PARTIAL, atama kapsamı ve gizli eş-sorumlulu görevleri doğrulayın.
+   Yetkili yük aynı kalmalı; genel rehber veya Sicil görünürlüğü genişlememeli.
+4. 38 bin üzeri CN43N satırı varken manuel/otomatik yenilemenin katalog
+   eşitlemesini SERIALIZABLE işleme taşımadığını doğrulayın. Hata oranı veya
+   maksimum gecikme artarsa gerçek planı ve kilit beklemelerini inceleyin.
+
+Başarı ölçütü aynı yetkili yükle daha düşük SQL/işlem gecikmesidir; üretim
+telemetrisi doğrulamadan milisaniye veya yüzde kazanım ilan edilmez.

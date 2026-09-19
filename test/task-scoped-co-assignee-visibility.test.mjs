@@ -253,8 +253,9 @@ test('genel personel sorgusu eş sorumluyu görev görünürlüğünden rehbere 
   assert.doesNotMatch(repositorySource, /visibilityGate\.TaskId = visibleTask\.TaskId/);
   assert.match(repositorySource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
   assert.match(repositorySource, /WHEN NULLIF\(LTRIM\(RTRIM\(pd\.DisplayName\)\), ''\) IS NOT NULL\s+THEN ta\.Sicil/);
-  assert.match(projectionSource, /END AS AvatarEmployeeNo/);
-  assert.match(projectionSource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
+  assert.match(repositorySource, /END AS AvatarEmployeeNo/);
+  assert.match(repositorySource, /JOIN @VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
+  assert.doesNotMatch(projectionSource, /STRING_SPLIT/);
 });
 
 test('SQL test doubles do not project assignees from inactive projects', () => {

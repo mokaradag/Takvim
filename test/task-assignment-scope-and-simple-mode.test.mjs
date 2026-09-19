@@ -181,16 +181,19 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
   const visibleBlock = snapshot.slice(snapshot.indexOf('INSERT @VisibleProjects'), snapshot.indexOf('DECLARE @HasFullScope'));
   assert.doesNotMatch(visibleBlock, /@canAssignAllCorporate/);
   // Görev ve iş dağılım ağacı görünürlüğü de bayraktan etkilenmez.
-  const taskBlock = snapshot.slice(snapshot.indexOf('SELECT t.*, v.AccessLevel'), snapshot.indexOf('SELECT ta.TaskId, ta.Sicil'));
+  const taskBlock = snapshot.slice(snapshot.indexOf('INSERT @VisibleTasks(TaskId)'), snapshot.indexOf('SELECT ta.TaskId,'));
+  assert.match(taskBlock, /SELECT t\.TaskId/);
+  assert.match(taskBlock, /SELECT t.\*, v.AccessLevel/);
   assert.doesNotMatch(taskBlock, /@canAssignAllCorporate/);
   const wbsBlock = snapshot.slice(snapshot.indexOf(';WITH RequiredPartialWbs'), snapshot.indexOf('SELECT t.*, v.AccessLevel'));
   assert.doesNotMatch(wbsBlock, /@canAssignAllCorporate/);
   // Rehber genişlemesi yalnızca yöneticinin kendi kapsamı kadardır.
   const peopleBlock = snapshot.slice(snapshot.indexOf('FROM dbo.MR_V_PeopleDirectory pd'), snapshot.indexOf('-- Görev ATAMA kapsamı: yöneticiler'));
-  assert.match(peopleBlock, /@canAssignAllCorporate = 1\s+AND EXISTS \(\s+SELECT 1 FROM dbo\.MR_V_ExecutiveScope es/);
+  assert.match(peopleBlock, /@canAssignAllCorporate = 1\s+AND EXISTS \(\s+SELECT 1 FROM @ExecutiveScope es/);
   // Atanabilir çalışan kümesi de yalnızca yöneticinin kendi kapsamıdır.
   const scopeBlock = snapshot.slice(snapshot.indexOf('SELECT es.EmployeeSicil'));
-  assert.match(scopeBlock, /WHERE @canAssignAllCorporate = 1 AND es\.ManagerSicil = @sicil/);
+  assert.match(snapshot, /INSERT @ExecutiveScope\(EmployeeSicil\)\s+SELECT DISTINCT EmployeeSicil\s+FROM dbo\.MR_V_ExecutiveScope\s+WHERE ManagerSicil = @sicil/);
+  assert.match(scopeBlock, /FROM @ExecutiveScope es\s+WHERE @canAssignAllCorporate = 1/);
 });
 
 /* ── 2. Temel Kip Görevler ──────────────────────────────────────── */

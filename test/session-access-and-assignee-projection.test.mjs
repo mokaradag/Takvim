@@ -45,15 +45,17 @@ test('snapshot API completes assignees only for already-authorized visible task 
   const routeSource = read('src/app/api/mergen-rota/snapshot/route.js');
 
   assert.match(repositorySource, /const \{ snapshot, auth \} = await baseRepository\.readSnapshotWithAuthorization\(transaction\);/);
-  assert.match(repositorySource, /taskIds = \[\.\.\.new Set\(\(snapshot\.tasks \|\| \[\]\)/);
-  assert.match(repositorySource, /request\.input\('taskIds', sql\.NVarChar\(sql\.MAX\), taskIds\.join\(','\)\);/);
-  assert.match(repositorySource, /JOIN STRING_SPLIT\(@taskIds, ','\) visible/);
-  assert.match(repositorySource, /ownAssignment\.TaskId = ta\.TaskId AND ownAssignment\.Sicil = @sicil/);
-  assert.match(repositorySource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
-  assert.equal((repositorySource.match(/MR_V_CorporateProjectAccess/g) || []).length, 1);
-  assert.match(repositorySource, /WHERE auth\.IdentityVisible = 1/);
-  assert.match(repositorySource, /LEFT JOIN dbo\.MR_V_PeopleDirectory pd ON pd\.Sicil = ta\.Sicil/);
-  assert.match(repositorySource, /snapshot: \{ \.\.\.applyTaskAssigneeProjection\(snapshot, assigneeRows\), scheduleRequests: scheduleInbox\.items, scheduleRequestSummary:/);
+  const snapshotSource = read('src/server/repository/sqlAppRepository.js')
+    .split('async function loadSnapshotFrom(')[1].split('async function loadAuthoritativeMutationRows(')[0];
+  assert.doesNotMatch(repositorySource, /loadVisibleTaskAssignees|STRING_SPLIT|taskIds/);
+  assert.match(snapshotSource, /JOIN @VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
+  assert.match(snapshotSource, /ownAssignment\.TaskId = ta\.TaskId AND ownAssignment\.Sicil = @sicil/);
+  assert.match(snapshotSource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
+  assert.equal((snapshotSource.match(/MR_V_CorporateProjectAccess/g) || []).length, 1);
+  assert.match(snapshotSource, /WHERE auth\.IdentityVisible = 1/);
+  assert.match(snapshotSource, /LEFT JOIN dbo\.MR_V_PeopleDirectory pd ON pd\.Sicil = ta\.Sicil/);
+  assert.match(snapshotSource, /return applyTaskAssigneeProjection/);
+  assert.match(repositorySource, /snapshot: \{ \.\.\.snapshot, scheduleRequests: scheduleInbox\.items, scheduleRequestSummary:/);
   assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
   assert.match(routeSource, /loadSnapshotForRequest\(request, repository\)/);
 

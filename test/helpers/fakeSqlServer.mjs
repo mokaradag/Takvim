@@ -452,9 +452,11 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
     }
   }
   const wbs = db.wbs
-    .filter((node) => visible.get(guid(node.ProjectId)) === 'FULL'
+    .filter((node) => visible.has(guid(node.ProjectId)) && (visible.get(guid(node.ProjectId)) === 'FULL'
+      || db.projectAccess.some((grant) => grant.IsActive && grant.Sicil === sicil
+        && grant.AccessLevel === 'READ' && sameGuid(grant.ProjectId, node.ProjectId))
       || creatorCatalogProjects.has(guid(node.ProjectId))
-      || requiredPartialWbs.has(guid(node.WbsId)))
+      || requiredPartialWbs.has(guid(node.WbsId))))
     .sort((left, right) => (left.SortOrder ?? 0) - (right.SortOrder ?? 0) || String(left.Code).localeCompare(String(right.Code)));
   // KISMİ projelerde yalnızca kendi/astının görevleri döner.
   const tasks = db.tasks
@@ -474,10 +476,8 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
         && entry.Sicil === sicil
         && entry.AccessLevel === 'READ'
         && sameGuid(entry.ProjectId, task.ProjectId));
-      const identityVisible = creatorIdentityVisible(db, task, sicil, {
-        hasFullScope: isAdmin || accessLevel === 'FULL' || readGranted,
-        canAssignAllCorporate
-      });
+      const identityVisible = accessLevel === 'FULL' || readGranted
+        || Number(task.CreatedBySicil) === Number(sicil) || directAssignee(db, task.TaskId, sicil);
       const creator = identityVisible
         ? db.people.find((person) => Number(person.Sicil) === Number(task.CreatedBySicil))
         : null;
@@ -559,8 +559,9 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
     tasks,
     assignees,
     dependencies,
-    db.baselines,
-    db.taskBaselineSnapshots,
+    db.baselines.filter((row) => visible.get(guid(row.ProjectId)) === 'FULL'),
+    db.taskBaselineSnapshots.filter((row) => db.baselines.some((baseline) => sameGuid(baseline.BaselineId, row.BaselineId)
+      && visible.get(guid(baseline.ProjectId)) === 'FULL')),
     calendarRows(db),
     people,
     assignable,
@@ -1230,7 +1231,14 @@ function runQuery(db, statement, params, { database }) {
     return result(authorizationRecordsets(db, sicil));
   }
   if (sqlText.includes('DECLARE @VisibleProjects TABLE')) {
-    return result(snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate)));
+    const rows = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
+    if (sqlText.includes('JOIN @VisibleTasks visible ON visible.TaskId = ta.TaskId')) {
+      const ids = new Set(rows[3].map((task) => String(task.TaskId).toUpperCase()));
+      rows[4] = taskScopedAssigneeRows(db, ids, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
+        .sort((left, right) => String(left.TaskId).localeCompare(String(right.TaskId))
+          || Number(left.AvatarEmployeeNo ?? left.Sicil) - Number(right.AvatarEmployeeNo ?? right.Sicil));
+    }
+    return result(rows);
   }
   if (sqlText.includes("THROW 51001")) {
     const before = new Map(db.projects.map((row) => [row.ProjectId, JSON.stringify(row)]));

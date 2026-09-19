@@ -13,6 +13,7 @@ import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
 import { observePhase } from '../observability/observeOperation.js';
+import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
@@ -235,6 +236,14 @@ async function loadSnapshotFrom(executor, auth) {
     DECLARE @VisibleProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY, AccessLevel varchar(10));
     DECLARE @ReadGrantedProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY);
     DECLARE @TaskScopedWbsProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY);
+    DECLARE @ExecutiveScope TABLE(EmployeeSicil int PRIMARY KEY);
+    DECLARE @VisibleTasks TABLE(TaskId uniqueidentifier PRIMARY KEY);
+
+    -- Aynı Sicil birden fazla yönetim kademesinde bulunabilir.
+    INSERT @ExecutiveScope(EmployeeSicil)
+    SELECT DISTINCT EmployeeSicil
+    FROM dbo.MR_V_ExecutiveScope
+    WHERE ManagerSicil = @sicil;
 
     INSERT @VisibleProjects(ProjectId, AccessLevel)
     SELECT ProjectId, 'FULL'
@@ -281,8 +290,8 @@ async function loadSnapshotFrom(executor, auth) {
           WHERE ta.TaskId = t.TaskId AND (
             ta.Sicil = @sicil
             OR EXISTS (
-              SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-              WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+              SELECT 1 FROM @ExecutiveScope es
+              WHERE es.EmployeeSicil = ta.Sicil
             )
           )
         )
@@ -329,8 +338,8 @@ async function loadSnapshotFrom(executor, auth) {
             AND (
               ta.Sicil = @sicil
               OR EXISTS (
-                SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-                WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+                SELECT 1 FROM @ExecutiveScope es
+                WHERE es.EmployeeSicil = ta.Sicil
               )
             )
         )
@@ -352,6 +361,26 @@ async function loadSnapshotFrom(executor, auth) {
     ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code
     OPTION (MAXRECURSION 1000);
 
+    INSERT @VisibleTasks(TaskId)
+    SELECT t.TaskId
+    FROM dbo.MR_Tasks t
+    JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
+    WHERE v.AccessLevel = 'FULL'
+       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
+       OR t.CreatedBySicil = @sicil
+       OR EXISTS (
+         SELECT 1
+         FROM dbo.MR_TaskAssignees ta
+         WHERE ta.TaskId = t.TaskId
+           AND (
+             ta.Sicil = @sicil
+             OR EXISTS (
+               SELECT 1 FROM @ExecutiveScope es
+               WHERE es.EmployeeSicil = ta.Sicil
+             )
+           )
+       );
+
     -- Sorumlu SAYISI da döner. PARTIAL anlık görüntü kapsam dışı bir eş
     -- sorumlunun satırını bilinçli olarak gizler; istemci yalnızca sayıyı
     -- karşılaştırarak "gizlenmiş sorumlu var" sonucuna varabilir ve sunucunun
@@ -366,6 +395,7 @@ async function loadSnapshotFrom(executor, auth) {
       CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
       NULLIF(LTRIM(RTRIM(creator.DisplayName)), '') AS CreatedByName
     FROM dbo.MR_Tasks t
+    JOIN @VisibleTasks visible ON visible.TaskId = t.TaskId
     JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
     CROSS APPLY (
       SELECT CAST(CASE WHEN v.AccessLevel = 'FULL'
@@ -380,38 +410,41 @@ async function loadSnapshotFrom(executor, auth) {
     ) creatorAuth
     LEFT JOIN dbo.MR_V_PeopleDirectory creator
       ON creator.Sicil = t.CreatedBySicil AND creatorAuth.IdentityVisible = 1
-    WHERE v.AccessLevel = 'FULL'
-       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
-       OR t.CreatedBySicil = @sicil
-       OR EXISTS (
-         SELECT 1
-         FROM dbo.MR_TaskAssignees ta
-         WHERE ta.TaskId = t.TaskId
-           AND (
-             ta.Sicil = @sicil
-             OR EXISTS (
-               SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-               WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-             )
-           )
-       )
     -- Sıralama tam belirlenimlidir: aynı seriden üretilen yinelemeler başlıkta ve
     -- sıra anahtarında eşitlenebilir; kararlı bir ek anahtar olmadan SQL bunları
     -- her yüklemede farklı sırada döndürebilir ve Kanban kendiliğinden karışırdı.
     ORDER BY t.ProjectId, t.SortOrder, t.Title, t.PlannedStart, t.TaskId;
 
-    SELECT ta.TaskId, ta.Sicil
+    SELECT ta.TaskId,
+      CASE WHEN auth.IdentityVisible = 1 THEN ta.Sicil ELSE NULL END AS Sicil,
+      CASE WHEN NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL
+        THEN ta.Sicil ELSE NULL END AS AvatarEmployeeNo,
+      COALESCE(
+        NULLIF(LTRIM(RTRIM(pd.DisplayName)), ''),
+        CASE WHEN auth.IdentityVisible = 1 THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END
+      ) AS DisplayName
     FROM dbo.MR_TaskAssignees ta
+    JOIN @VisibleTasks visible ON visible.TaskId = ta.TaskId
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
     JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
-    WHERE v.AccessLevel = 'FULL'
-       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
-       OR t.CreatedBySicil = @sicil
-       OR ta.Sicil = @sicil
+    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = ta.Sicil
+    CROSS APPLY (
+      SELECT CAST(CASE WHEN v.AccessLevel = 'FULL'
+        OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
+        OR t.CreatedBySicil = @sicil
+        OR ta.Sicil = @sicil
+        OR EXISTS (
+          SELECT 1 FROM @ExecutiveScope es
+          WHERE es.EmployeeSicil = ta.Sicil
+        )
+      THEN 1 ELSE 0 END AS bit) AS IdentityVisible
+    ) auth
+    WHERE auth.IdentityVisible = 1
        OR EXISTS (
-         SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-       );
+         SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
+         WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil
+       )
+    ORDER BY ta.TaskId, ta.Sicil;
 
     SELECT d.*
     FROM dbo.MR_TaskDependencies d
@@ -447,8 +480,8 @@ async function loadSnapshotFrom(executor, auth) {
        OR (
          @canAssignAllCorporate = 1
          AND EXISTS (
-           SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-           WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = pd.Sicil
+           SELECT 1 FROM @ExecutiveScope es
+           WHERE es.EmployeeSicil = pd.Sicil
          )
        )
        OR EXISTS (
@@ -470,8 +503,8 @@ async function loadSnapshotFrom(executor, auth) {
               )
               OR visibleAssignee.Sicil = @sicil
               OR EXISTS (
-                SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-                WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignee.Sicil
+                SELECT 1 FROM @ExecutiveScope es
+                WHERE es.EmployeeSicil = visibleAssignee.Sicil
               )
             )
         )
@@ -503,8 +536,8 @@ async function loadSnapshotFrom(executor, auth) {
     -- seçiciye bütün rehberi koyuyor ve seçilen kişi kaydı garanti reddediyordu.
     -- Küme yalnızca Sicil taşır ve kişi rehberi zaten bu kişileri içerir.
     SELECT es.EmployeeSicil
-    FROM dbo.MR_V_ExecutiveScope es
-    WHERE @canAssignAllCorporate = 1 AND es.ManagerSicil = @sicil
+    FROM @ExecutiveScope es
+    WHERE @canAssignAllCorporate = 1
     ORDER BY es.EmployeeSicil;
   `);
 
@@ -521,6 +554,7 @@ async function loadSnapshotFrom(executor, auth) {
     tags.get(key).push({ name: row.TagName, color: row.ColorToken || null, icon: row.IconKey || null });
   }
   for (const row of assigneeRows || []) {
+    if (row.Sicil == null) continue;
     const key = id(row.TaskId);
     if (!assignees.has(key)) assignees.set(key, []);
     assignees.get(key).push(String(row.Sicil));
@@ -554,7 +588,7 @@ async function loadSnapshotFrom(executor, auth) {
     }
   }
 
-  return {
+  return applyTaskAssigneeProjection({
     calendars: [...calendars.values()],
     projects: (projectRows || []).map((row) => ({
       id: id(row.ProjectId),
@@ -681,7 +715,7 @@ async function loadSnapshotFrom(executor, auth) {
     assignmentScopeSicils: [...new Set((assignmentScopeRows || [])
       .map((row) => (row.EmployeeSicil == null ? '' : String(row.EmployeeSicil)))
       .filter(Boolean))]
-  };
+  }, assigneeRows);
 }
 
 /**

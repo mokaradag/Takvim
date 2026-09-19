@@ -464,3 +464,9 @@ ve hatırlatma sağlığı ölçüm tazeliğini gözetir. Ayrıntılar için
 0012 yükseltmesinde Türkçe harmanlamalı veritabanlarının kısıt doğrulaması
 düzeltildi. 51012 hatası alan kurulumlar güncel yükseltme dosyasının tamamını
 mevcut veritabanında yeniden çalıştırabilir; tabloların silinmesi gerekmez.
+
+Snapshot SQL, yetkili görev ve sorumlu projeksiyonunu tek sorgu paketinde
+üretir; yönetici çalışan kapsamı aynı pakette tekrar kullanılır. Sorumlu işi
+artık `phase.snapshot.main-query` ölçümüne dahildir. Yetki sınırları, ölçüm
+karşılaştırması ve dağıtım kontrolü için
+[Snapshot SQL doğrulaması](docs/SYSTEM-ADMINISTRATION.md#snapshot-sql-birleştirmesi-ve-üretim-doğrulaması).

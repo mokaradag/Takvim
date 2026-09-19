@@ -152,12 +152,11 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   // Kurumsal katalog tazelemesi bilinçli olarak serileştirilebilir işlemin dışındadır.
   assert.match(projectionSource, /refreshCorporateCatalog\(\{ waitForColdStart: true \}\)[\s\S]*const projected = await observePhase\('phase\.snapshot\.transaction'/);
   assert.match(projectionSource, /const projected = await observePhase[\s\S]*if \(catalogSync === 'background-after'\) \{\s*await observePhase\('phase\.snapshot\.catalog'[\s\S]*refreshCorporateCatalog\(\{ waitForColdStart: false \}\)/);
-  // Tamamlama aynı işlemde ve YETKİ BAĞLAMIYLA çalışır: satır düzeyinde
-  // görünürlük süzgeci olmadan, kısmi anlık görüntünün gizlediği eş sorumlular
-  // geri getiriliyordu.
-  assert.match(projectionSource, /loadVisibleTaskAssignees\(transaction, taskIds, auth\)/);
-  assert.match(projectionSource, /SELECT CAST\(CASE WHEN @isAdmin = 1/);
-  assert.match(projectionSource, /WHERE auth\.IdentityVisible = 1/);
-  assert.match(projectionSource, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @sicil AND es\.EmployeeSicil = ta\.Sicil/);
+  const snapshotSource = read('src/server/repository/sqlAppRepository.js')
+    .split('async function loadSnapshotFrom(')[1].split('async function loadAuthoritativeMutationRows(')[0];
+  assert.doesNotMatch(projectionSource, /loadVisibleTaskAssignees/);
+  assert.match(snapshotSource, /JOIN @VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
+  assert.match(snapshotSource, /WHERE auth\.IdentityVisible = 1/);
+  assert.match(snapshotSource, /FROM @ExecutiveScope es\s+WHERE es\.EmployeeSicil = ta\.Sicil/);
   assert.match(projectionSource, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });
