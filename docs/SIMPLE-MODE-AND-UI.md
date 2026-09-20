@@ -2,6 +2,58 @@
 
 Bu belge, MERGEN Rota'daki Temel Kip akışını ve uygulama kabuğu/Özet yerleşimine ilişkin arayüz sözleşmelerini açıklar.
 
+## Temel Kip Özet
+
+Temel Kip **Özet** sayfasıyla açılır (`SIMPLE_LANDING_VIEW`). Kip seçimi ve kapsamlı bir sayfadan geri düşüş de buraya iner; seçili portföy/proje çalışma alanı korunur.
+
+Ayrı bir pano **yoktur**. Kapsamlı Kipteki `DashboardView` tek uygulamadır ve kip farkı `src/features/dashboard/dashboardVariant.js` profilinden gelir:
+
+```jsx
+<DashboardView variant={simpleMode ? 'simple' : 'advanced'} />
+```
+
+Sayfanın sağ üstündeki **+ Yeni Görev** düğmesi yeni bir akış açmaz; var olan gezinme niyetiyle Takvim → **Hızlı Görev Tanımı** sekmesine geçer (`onNavigate('takvim', 'entry')`).
+
+### Paylaşılan kartlar
+
+Toplam görev, Tamamlanan, Devam eden, Yapılacak, Geciken, Durum dağılımı, Projeler, Ekip iş yükü, Yaklaşan teslimler, Gecikme yaşlandırması, Tamamlanma eğilimi, Bu hafta tamamlanan ve proje sağlığı iki kipte de aynı seçicilerden beslenir.
+
+Portföy sağlığı kartı Temel Kipte **Proje durumu** adıyla, RAG/PMO diliyle değil görev sayılarıyla anlatılır; oran **Tamamlanma** olarak adlandırılır ve tamamlanan/toplam görevden hesaplanır (gizli `progress` alanından değil). Temel metinde Raporlar'a yönlendirme yoktur; Raporlar Temel gezinmede yer almaz.
+
+### Yalnızca Kapsamlı Kipte kalan kartlar
+
+**Plan bütünlüğü**, **Bağımlılık riski olan görevler**, planlanan başlangıç/bitiş, temel plan, kritik yol/Gantt açıklamaları ve iş dağılım ağacı denetimleri Temel Kipte hiç çizilmez. Temel Kip aynı yerde, aynı hesaptan beslenen **Görev kalitesi** kartını gösterir: yalnızca *Sorumlusuz görev* ve *Terminsiz görev* denetlenir (`SIMPLE_QUALITY_CHECK_IDS`). Kısa açıklama isteğe bağlı olduğu için eksiklik sayılmaz.
+
+### Termin temelli gecikme
+
+Temel Kip kendi durum algoritmasını kurmaz; uygulamanın tek doğruluk kaynağı olan `getStatus` üzerinden `statusDistribution.js` kovalarını kullanır:
+
+| Koşul | Kova |
+| --- | --- |
+| `status === 'done'` | Tamamlanan |
+| Termin var ve bugünden önce | Geciken |
+| `status === 'in_progress'` | Devam eden |
+| diğer | Yapılacak |
+
+Termini **bugün** olan görev gecikmiş sayılmaz; tamamlanmış görev geçmiş terminle de Tamamlanan kalır; terminsiz görev hiçbir zaman Geciken olmaz. Dört kova birbirini dışlar ve toplamları aynı süzülmüş kümedeki toplam görev sayısına eşittir.
+
+### Termin aralığı
+
+Temel Kipte tarih denetimi **Termin aralığı** adını taşır ve yalnızca `targetFinish` gününü okur (`taskTargetWindow`). Kapsamlı Kip `plannedStart`, `actualStart`, `plannedFinish`, `actualFinish` ve `targetFinish` değerlerinden türeyen etkinlik penceresini (`taskActivityWindow`) kullanmaya devam eder. Yalnızca gizli bir planlama tarihinin değişmesi Temel sonucunu değiştiremez. Terminsiz görev hiçbir aralıkta kaybolmaz. Ön ayarlar (Son 30 gün, Son 90 gün, Bu yıl, Tümü, Özel) ortaktır.
+
+Sıra şudur: yetkili/görünür görevler → çalışma alanı ve proje kapsamı → Direktörlük/Müdürlük/Birim → Termin aralığı → durum sınıflandırması ve pano ölçümleri. Kurumsal seçim yetkilendirme değildir; yalnızca daraltır.
+
+### KPI penceresi sütunları
+
+`KpiTaskModal` tek uygulamadır (`<KpiTaskModal variant="simple" />`). Arama, proje seçimi, Sicil temelli sorumlu seçimi, sütun süzgeçleri, sıralama, kurumsal zincir, sayfalama, süzgeç temizleme ve odak yönetimi iki kipte de aynıdır.
+
+| Kip | Sütunlar |
+| --- | --- |
+| Kapsamlı | Görev, Proje, Sorumlu, Durum, Başlangıç, Bitiş, Hedef |
+| Temel | Proje, Görev, Kısa açıklama, Sorumlular, Öncelik, Durum, Termin |
+
+Temel sütun kümesi `SIMPLE_TASK_COLUMNS` sözleşmesinden türetilir; Görevler sayfasıyla ayrışamaz. `ADVANCED_ONLY_TASK_FIELDS` alanlarının hiçbiri Temel DOM'una girmez — CSS ile gizlenmez, hiç çizilmez. Planlanan/gerçekleşen tarih açıklaması (**✓ Gerçekleşen tarih**) Temel Kipte gösterilmez.
+
 ## Temel Kip Takvim akışı
 
 Temel Kipte **Takvim** sayfası açıldığında varsayılan görünüm aylık Takvimdir. Hızlı kayıt formu Takvim ile aynı anda gösterilmez.
@@ -15,13 +67,13 @@ Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yen
 
 ## Kip sınırları ve komut arama
 
-Temel Kip gezinmesi Görevler, Takvim, Talepler, Kullanım Rehberi ve Ayarlar sayfalarını içerir. Gantt yalnızca Kapsamlı Kiptedir. Temel Kipte kenar çubuğu, komut sonuçları ve dolaylı yönlendirmeler Gantt veya diğer kapsamlı sayfaları açmaz. Rol kapılı yönetici sayfaları yalnızca sistem yöneticisine iki kipte de gösterilir.
+Temel Kip gezinmesi Özet, Görevler, Talepler, Takvim, Kullanım Rehberi ve Ayarlar sayfalarını içerir. Gantt yalnızca Kapsamlı Kiptedir. Temel Kipte kenar çubuğu, komut sonuçları ve dolaylı yönlendirmeler Gantt veya diğer kapsamlı sayfaları açmaz. Rol kapılı yönetici sayfaları yalnızca sistem yöneticisine iki kipte de gösterilir.
 
 **Ara veya komut çalıştır...** düğmesi ile Ctrl/Cmd+K iki kipte de çalışır. Komut paleti kenar çubuğuyla aynı kip/rol listesini kullanır. Görev araması mevcut çalışma alanını daraltır. Tab odağı paletin içinde kalır, ok tuşları sonucu seçer, Enter çalıştırır, Escape kapatır ve odağı geri verir.
 
 ## Temel Kipte Görevler
 
-Temel Kip gezinmesi `veri` (Görevler), `takvim`, `talepler`, `yardim` ve `ayarlar` sayfalarını içerir. Temel Kipte **Görevler** sayfası Kapsamlı Kipteki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
+Temel Kip gezinmesi `ozet` (Özet), `veri` (Görevler), `takvim`, `talepler`, `yardim` ve `ayarlar` sayfalarını içerir. Temel Kipte **Görevler** sayfası Kapsamlı Kipteki tabloyu göstermez; kendi sadeleştirilmiş görünümü vardır (`SimpleTasksView`).
 
 Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`src/features/tasks/simpleTaskColumns.js`):
 
@@ -223,7 +275,7 @@ Tema, **Temel Kip / Kapsamlı Kip** seçimi ve oturum kapatma eylemleri
 seçicisi `role="group"` ve `aria-pressed` ile etkin tercihi bildirir; seçili
 kipe yeniden basmak gezinmeyi sıfırlamaz. İç kimlikler (`simple`, `advanced`,
 `appMode`) ve kaydedilmiş tercihler korunur. Üst çubuk bu kontrolleri yinelemez.
-Temel Kipe geçiş `AppShell.chooseMode` üzerinden seçili çalışma alanını koruyarak Takvimi açar.
+Temel Kipe geçiş `AppShell.chooseMode` üzerinden seçili çalışma alanını koruyarak Özeti açar.
 
 Kenar çubuğu ilk kullanımda **sabitlenmiş ve açık** başlar. Gereksiz çalışma
 alanı başlıkları ve daraltma oku yoktur; proje seçicisi markanın hemen altında
@@ -597,7 +649,7 @@ Her iki kipte düz **Talepler** sayfasının Bekleyenler, Gönderdiklerim ve Ge�
 
 ## Özet KPI ayrıntı penceresi
 
-Toplam görev, Tamamlanan, Devam eden, Yapılacak ve Geciken kartlarının mevcut zengin açılır listeleri korunur. İçlerindeki **Tüm görevleri gör**, kartın aynı görev kümesiyle geniş bir pencere açar. Özet tarih aralığı ve çalışma alanı kapsamı korunur. Pencere görev/proje/sorumlu araması, proje ve Sicil temelli sorumlu seçimi, 100 kayıtlık sayfalama, başlık ve toplam/eşleşen sayısı içerir. Görev, Proje, Sorumlu, Durum, Başlangıç, Bitiş ve Hedef gösterilir. Görev başlığı mevcut paneli açar; panel kapatılınca liste ve süzgeçler geri gelir. Pencere kapanınca Özet yerinde kalır. Escape, Tab/Shift+Tab odak sınırı ve çağırana odak dönüşü desteklenir. Açık/koyu tema ve yazı ölçeği ortak tasarım değişkenlerini izler.
+Toplam görev, Tamamlanan, Devam eden, Yapılacak ve Geciken kartlarının mevcut zengin açılır listeleri korunur. İçlerindeki **Tüm görevleri gör**, kartın aynı görev kümesiyle geniş bir pencere açar. Özet tarih aralığı ve çalışma alanı kapsamı korunur. Pencere görev/proje/sorumlu araması, proje ve Sicil temelli sorumlu seçimi, 100 kayıtlık sayfalama, başlık ve toplam/eşleşen sayısı içerir. Kapsamlı Kipte Görev, Proje, Sorumlu, Durum, Başlangıç, Bitiş ve Hedef gösterilir; Temel Kipin sade sütun kümesi için [Temel Kip Özet](#temel-kip-özet) bölümüne bakın. Görev başlığı mevcut paneli açar; panel kapatılınca liste ve süzgeçler geri gelir. Pencere kapanınca Özet yerinde kalır. Escape, Tab/Shift+Tab odak sınırı ve çağırana odak dönüşü desteklenir. Açık/koyu tema ve yazı ölçeği ortak tasarım değişkenlerini izler.
 
 ## Durum, etkin tarihler ve alt gezinme satırı
 

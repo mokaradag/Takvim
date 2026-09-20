@@ -15,6 +15,11 @@ import { today } from '../../scheduling/dates/index.js';
  * dilimlerin toplamı her zaman görev sayısına eşittir.
  */
 
+/**
+ * Sınıflandırma iki kipte de aynıdır; değişen yalnızca sözcüktür. Kapsamlı Kip
+ * "hedef tarihi" der, Temel Kip kullanıcıya gösterilen tek ad olan "Termin".
+ * Yalnızca dili farklı olan kovalar `simpleExplain` taşır.
+ */
 export const STATUS_DISTRIBUTION_BUCKETS = Object.freeze([
   Object.freeze({
     id: 'done',
@@ -26,19 +31,22 @@ export const STATUS_DISTRIBUTION_BUCKETS = Object.freeze([
     id: 'in_progress',
     label: 'Devam eden',
     color: 'var(--status-progress)',
-    explain: 'Aktif olarak üzerinde çalışılan, hedef tarihi geçmemiş görevler.'
+    explain: 'Aktif olarak üzerinde çalışılan, hedef tarihi geçmemiş görevler.',
+    simpleExplain: 'Aktif olarak üzerinde çalışılan, termini geçmemiş görevler.'
   }),
   Object.freeze({
     id: 'todo',
     label: 'Yapılacak',
     color: 'var(--status-todo)',
-    explain: 'Henüz başlanmamış, hedef tarihi geçmemiş görevler.'
+    explain: 'Henüz başlanmamış, hedef tarihi geçmemiş görevler.',
+    simpleExplain: 'Henüz başlanmamış, termini geçmemiş görevler.'
   }),
   Object.freeze({
     id: 'overdue',
     label: 'Geciken',
     color: 'var(--status-overdue)',
-    explain: 'Hedef tarihi geçmiş ve hâlâ tamamlanmamış görevler.'
+    explain: 'Hedef tarihi geçmiş ve hâlâ tamamlanmamış görevler.',
+    simpleExplain: 'Termini geçmiş ve hâlâ tamamlanmamış görevler.'
   })
 ]);
 

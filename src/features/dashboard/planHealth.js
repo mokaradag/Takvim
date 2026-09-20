@@ -112,6 +112,7 @@ export const PLAN_HYGIENE_CHECKS = Object.freeze([
     id: 'targetFinish',
     label: 'Terminsiz görev',
     explain: 'Hedef bitişi olmayan görev ne gecikebilir ne de yaklaşan teslimlerde listelenebilir.',
+    simpleExplain: 'Termini olmayan görev ne gecikebilir ne de yaklaşan teslimlerde listelenebilir.',
     isMissing: (task) => !task.targetFinish
   }),
   Object.freeze({
@@ -129,22 +130,45 @@ export const PLAN_HYGIENE_CHECKS = Object.freeze([
 ]);
 
 /**
+ * Temel Kipin "Görev kalitesi" kartına giren denetimler.
+ *
+ * Temel Kip planlanan tarihleri ve dağılım ağacını hiç göstermez; kullanıcının
+ * düzeltebileceği tek eksik, gördüğü iki alandır. Kısa açıklama isteğe bağlı
+ * olduğu için denetlenmez.
+ */
+export const SIMPLE_QUALITY_CHECK_IDS = Object.freeze(['assignee', 'targetFinish']);
+
+/**
  * Açık (tamamlanmamış) görevler üzerinde plan bütünlüğü denetimlerini uygular.
  *
  * Tamamlanmış görevler DIŞARIDA bırakılır: kapanmış bir işin eksik terminini
  * bugün düzeltmek bir eylem üretmez, listeyi ise kullanılamaz hâle getirir.
  *
+ * `checkIds` verildiğinde yalnızca o denetimler uygulanır ve `cleanCount` de
+ * aynı alt kümeye göre sayılır.
+ *
  * @returns {{openCount: number, cleanCount: number, checks: Array<object>}}
  */
-export function selectPlanHygiene(tasks, people = null) {
+export function selectPlanHygiene(tasks, people = null, checkIds = null) {
   const open = (tasks || []).filter((task) => task && task.status !== 'done');
   const flagged = new Set();
   const context = { peopleIndex: buildPeopleIndex(people) };
+  const applied = checkIds
+    ? PLAN_HYGIENE_CHECKS.filter((check) => checkIds.includes(check.id))
+    : PLAN_HYGIENE_CHECKS;
 
-  const checks = PLAN_HYGIENE_CHECKS.map((check) => {
+  const checks = applied.map((check) => {
     const items = open.filter((task) => check.isMissing(task, context));
     for (const task of items) flagged.add(task.id);
-    return { id: check.id, label: check.label, explain: check.explain, value: items.length, items };
+    return {
+      id: check.id,
+      label: check.label,
+      explain: check.explain,
+      // Dili farklı olan denetimler Temel karşılığını taşır (bkz. simpleExplain).
+      simpleExplain: check.simpleExplain,
+      value: items.length,
+      items
+    };
   });
 
   return {

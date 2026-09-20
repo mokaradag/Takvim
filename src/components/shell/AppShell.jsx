@@ -1,5 +1,5 @@
 'use client';
-import { SIMPLE_NAV_IDS, navigationItems } from './navigation.js';
+import { SIMPLE_LANDING_VIEW, SIMPLE_NAV_IDS, navigationItems } from './navigation.js';
 import { ScheduleRequestsView } from '../../features/schedule-change/ScheduleRequestsView.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Icons } from '../icons';
@@ -67,6 +67,9 @@ import { useSignOut } from './useSignOut.js';
 // Görevler sayfası da Temel Kipte bulunur; ancak Kapsamlı Kipin tam tablosu
 // DEĞİL, Hızlı Görev Tanımı'yla toplanan alanları listeleyen sade sürümü
 // gösterilir (bkz. features/tasks/SimpleTasksView.jsx).
+//
+// Özet, Temel Kipin açılış sayfasıdır ve aynı panoyu sade profille çizer
+// (bkz. features/dashboard/dashboardVariant.js).
 const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 
 function projectDisplayName(project) {
@@ -186,7 +189,7 @@ export default function AppShell() {
     setModePickerOpen(false);
     if (mode === 'simple') {
       setSimpleCalendarTab('calendar');
-      navigate('takvim');
+      navigate(SIMPLE_LANDING_VIEW);
     }
   };
 
@@ -205,7 +208,7 @@ export default function AppShell() {
     // Rol kapılı yönetici sayfaları Temel Kip yönlendirmesinden MUAFTIR:
     // yalnızca sistem yöneticisine açılan yapılandırma ekranı, kullanıcı Temel
     // Kipte diye ulaşılamaz olmamalıdır.
-    if (!SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) navigate('takvim');
+    if (!SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) navigate(SIMPLE_LANDING_VIEW);
   }, [simpleMode, view]);
 
   // Yönetici sayfasında yetki kaybı (oturum tazelenmesi, rol kaldırılması)
@@ -277,7 +280,7 @@ export default function AppShell() {
     if (simpleMode && !SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) return null;
     switch (view) {
       case 'talepler': return <ScheduleRequestsView />;
-      case 'ozet': return <DashboardView onNavigate={navigate} />;
+      case 'ozet': return <DashboardView variant={simpleMode ? 'simple' : 'advanced'} onNavigate={navigate} />;
       case 'veri': return simpleMode
         ? <SimpleTasksView onNewTask={() => navigate('takvim', 'entry')} />
         : <TasksView />;

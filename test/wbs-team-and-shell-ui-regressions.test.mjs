@@ -198,7 +198,7 @@ test('açılış perdesi kabuk ızgarasını kullanmaz ve ekranın ortasında du
 
 test('Temel Kip gezinmesi Görevler ve Talepleri içerir, Gantt yalnızca Kapsamlı Kiptedir', () => {
   const source = read('src/components/shell/AppShell.jsx');
-  assert.match(read('src/components/shell/navigation.js'), /SIMPLE_NAV_IDS = new Set\(\['veri', 'takvim', 'talepler', 'yardim', 'ayarlar'\]\);/);
+  assert.match(read('src/components/shell/navigation.js'), /SIMPLE_NAV_IDS = new Set\(\['ozet', 'veri', 'takvim', 'talepler', 'yardim', 'ayarlar'\]\);/);
   assert.match(source, /case 'gantt': return simpleMode \? null : <WorkspaceGanttView \/>;/);
   // Görevler sayfası Temel Kipte SADE sürümle açılır; Kapsamlı Kip tablosu değişmez.
   const tasksCase = source.match(/case 'veri':([\s\S]*?)(?=\n\s*case 'wbs':)/)?.[1] || '';
