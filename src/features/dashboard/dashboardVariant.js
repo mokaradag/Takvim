@@ -81,7 +81,7 @@ const SIMPLE = Object.freeze({
   hygieneCheckIds: SIMPLE_QUALITY_CHECK_IDS,
   hygieneTitle: 'Görev kalitesi',
   hygieneIntro: 'Açık görevlerde eksik kalan alanlar. Kısa açıklama isteğe bağlıdır ve eksiklik sayılmaz.',
-  hygieneDetail: 'Sorumlusu veya termini olmayan görev, ekip iş yükü ve gecikme sayılarının dışında kalır.',
+  hygieneDetail: 'Sorumlusu olmayan görev ekip iş yükünde görünmez. Termini olmayan görev gecikme ve yaklaşan teslim hesaplarına girmez.',
   showDependencyRisks: false,
   showQuickTaskAction: true,
   projectCompletionLabel: 'Tamamlanma',

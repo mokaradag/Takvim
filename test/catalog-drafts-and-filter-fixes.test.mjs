@@ -282,7 +282,7 @@ test('süzgeç değerleri kararlı kimliktir', () => {
   assert.match(tasksView, /value: p\.id,/);
   // Satır süzmesi ile faset hesabı AYNI yüklemi paylaşır.
   const facets = read('src/features/tasks/taskTableFacets.js');
-  assert.match(facets, /filters\.proje\.includes\(task\.projectId\)/);
+  assert.match(facets, /filters\.proje\.includes\(String\(task\.projectId\)\)/);
   assert.match(facets, /\(task\.assigneeIds \|\| \[\]\)\.some\(\(id\) => filters\.sorumlu\.includes\(String\(id\)\)\)/);
 
   // Gantt de aynı paylaşılan yüklemi kullanır; kimlik karşılaştırması orada da

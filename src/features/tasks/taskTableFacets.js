@@ -46,7 +46,7 @@ function matchesSearch(task, query) {
 export function taskTableMatches(task, { search = '', filters = {}, dateMode = 'planned' } = {}, ignoredKey = null, referenceDay = today()) {
   if (!matchesSearch(task, String(search || '').trim().toLocaleLowerCase('tr-TR'))) return false;
 
-  if (ignoredKey !== 'proje' && filters.proje?.length && !filters.proje.includes(task.projectId)) return false;
+  if (ignoredKey !== 'proje' && filters.proje?.length && !filters.proje.includes(String(task.projectId))) return false;
   if (ignoredKey !== 'task' && filters.task) {
     const query = String(filters.task).toLocaleLowerCase('tr-TR');
     if (!String(task.task || '').toLocaleLowerCase('tr-TR').includes(query)) return false;
