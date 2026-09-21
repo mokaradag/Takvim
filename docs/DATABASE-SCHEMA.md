@@ -218,6 +218,8 @@ failing.
 
 Indexes are limited to demonstrated repository and UI query patterns rather than being created for every column.
 
+The snapshot main query was re-shaped so that its per-task authorization decision is computed once and carried in a temporary table instead of being re-derived per row. That change introduced no new persistent access path: `MR_Tasks.CreatedBySicil = @sicil` is served by `IX_MR_Tasks_CreatedBySicil`, `MR_TaskAssignees.Sicil = @sicil` and the executive-scope seeks by `IX_MR_TaskAssignees_Sicil_Task`, the `TaskId → ProjectId` lookup by the existing `UX_MR_Tasks_Id_Project` unique constraint (so no key lookup is needed), project grants by `IX_MR_ProjectAccess_Sicil_Active_Level`, and the partial-WBS ancestor walk by `PK_MR_WBS` plus `IX_MR_WBS_Project_Parent_Sort`. Every downstream lookup into the query's temporary tables goes through their primary keys, and `#Directory` keeps its `IX_Directory_Sicil` clustered index. No new index or migration was added, because none of the reshaped predicates lacks a supporting index — an index is not created on the chance that it might help. See `docs/SYSTEM-ADMINISTRATION.md` for the full analysis and the production verification procedure.
+
 ## Creation and rollback
 
 Remove existing MERGEN-owned objects with:

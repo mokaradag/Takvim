@@ -199,6 +199,43 @@ beşinci sonuç kümesinde döner; `phase.snapshot.assignees` için yeni örnek
 süresine dahildir. Eski sorumlu fazının sıfırlanması bir hızlanma ölçümü değildir;
 geçmiş örnekler saklama süresi boyunca ekranda kalabilir.
 
+#### Ana sorgunun alt ölçümleri
+
+`phase.snapshot.main-query` **adı ve kapsamı değişmedi**; altına iki iç ölçüm
+eklendi:
+
+| Ölçüm | Ne ölçer |
+| --- | --- |
+| `phase.snapshot.main-query.sql` | Tek SQL paketinin gönderilmesi, çalışması ve bütün sonuç kümelerinin okunması |
+| `phase.snapshot.main-query.projection` | Sonuç kümelerinin JavaScript anlık görüntü yüküne dönüştürülmesi |
+
+Bu ikisi `phase.snapshot.main-query` içinde ARDIŞIKtır ve toplamları ana
+ölçüme yaklaşır. İç içe fazlarla (`api.snapshot` → `phase.snapshot.transaction`
+→ `phase.snapshot.main-query`) **toplanmazlar**; iç içe süreler birbirini
+kapsar, yan yana toplanmaları toplam gecikmeyi iki kez saydırır.
+
+SQL süresi ayrıca paketin KENDİ içinde dört ardışık aşamaya ayrılır. Aşama
+saatleri toplu işin içindedir; ölçüm için ek gidiş-dönüş yapılmaz, toplu iş
+bölünmez. Değerler son (on üçüncü) sonuç kümesinde tek satır olarak döner ve
+yalnızca milisaniye taşır:
+
+| Ölçüm | Ne ölçer |
+| --- | --- |
+| `phase.snapshot.main-query.sql.scope` | Yönetim kapsamı, kişisel görev kapsamı ve görünür proje kümesi |
+| `phase.snapshot.main-query.sql.task-scope` | Görünür görev kümesi, sorumlu sayımı ve kısmi WBS ata zinciri |
+| `phase.snapshot.main-query.sql.directory` | Rehber Sicil kümesi ve kişi rehberi maddileştirmesi |
+| `phase.snapshot.main-query.sql.result-sets` | On iki sonuç kümesinin üretilmesi ve istemciye akıtılması |
+
+Bu dört aşama **birbirini kapsamaz**, ardışıktır: toplamları
+`phase.snapshot.main-query.sql` süresine yaklaşır (aradaki fark ağ ve sürücü
+payıdır). Hangi aşamanın baskın olduğunu okumak, sonraki iyileştirmenin nereye
+yapılacağını söyler; örneğin `directory` baskınsa darboğaz kurumsal HR02
+rehber görünümüdür, `result-sets` baskınsa sıralama ve satır aktarımıdır.
+
+Tanı satırı Sicil, ad, e-posta, proje, görev, açıklama ya da yetki ayrıntısı
+İÇERMEZ; yalnızca dört tam sayı taşır. Aşama ölçülemezse (değer boş dönerse)
+örnek üretilmez: eksik örnek, uydurma bir "0 ms" örneğinden dürüsttür.
+
 `observePhase()` fırlatılan her hatayı başarısız faz sayar; API hata oranı ise
 yalnız HTTP 5xx yanıtlarını sayar. Bu yüzden faz ve API hata oranlarının eşit
 olması beklenmez. Bu anlamlar değiştirilmemiştir.
@@ -758,3 +795,140 @@ Dağıtım sonrasında aynı sürüm ve temsili trafik penceresinde:
 
 Başarı ölçütü aynı yetkili yükle daha düşük SQL/işlem gecikmesidir; üretim
 telemetrisi doğrulamadan milisaniye veya yüzde kazanım ilan edilmez.
+
+### Ana sorgu görev kapsamı daraltması ve üretim doğrulaması
+
+Bu bölüm bir önceki birleştirmenin ÜSTÜNE gelir; orada anlatılan kararlar
+(sorumlu işinin ana pakete alınması, katalog eşitlemesinin işlem dışında
+kalması, SERIALIZABLE'in korunması) geri alınmamıştır.
+
+#### Başlangıç ölçümleri (üretim, dağıtımdan önce)
+
+| Ölçüm | Örnek | P50 | P95 | P99 | Hata |
+| --- | --- | --- | --- | --- | --- |
+| `api.snapshot` | 36 | ~2,65 sn | ~3,04 sn | ~3,04 sn | %0 |
+| `phase.snapshot.transaction` | 36 | ~2,42 sn | ~2,82 sn | ~2,82 sn | %0 |
+| `phase.snapshot.main-query` | 36 | ~2,25 sn | ~2,54 sn | ~2,54 sn | %0 |
+| `phase.snapshot.response` | — | ~213 ms | ~237 ms | — | — |
+| `phase.snapshot.schedule-inbox` | — | ~45 ms | ~188 ms | — | — |
+| `phase.snapshot.authorization` | — | ~38 ms | ~182 ms | — | — |
+
+Ana sorgu tek başına isteğin yaklaşık %85'ini tutuyordu. Yetkilendirme,
+talep kutusu ve yanıt hazırlama darboğaz DEĞİLDİR. Yüzdelikler farklı örnek
+kümelerinden gelir ve toplanmaz.
+
+#### Kök neden (yapısal olarak gösterilen)
+
+1. **Yetki kararı satır başına yeniden türetiliyordu.** `MR_Tasks`, tek pakette
+   on kez başvuruluyordu; görünür görev kümesi, ata zinciri, rehber kümesi,
+   sorumlu satırları ve görev sonuç kümesi aynı `AccessLevel`, READ hibesi ve
+   oluşturan kararını `#VisibleProjects` / `#ReadGrantedProjects` ile yeniden
+   birleştirerek çözüyordu.
+2. **KISMİ projelerin bütün görevleri pahalı hesaba giriyordu.** `#TaskAssigneeFacts`
+   görünür PROJEDEKİ her görev için toplama yapıyordu. Kullanıcının tek görevi
+   bulunduğu binlerce görevlik bir kurumsal projede bu, görünür kümeyle değil
+   proje büyüklüğüyle ölçeklenen bir maliyetti.
+3. **Yönetim kapsamı herkes için okunuyordu.** `MR_V_ExecutiveScope`, HR02
+   üzerinde üç taramanın UNION'ıdır ve yönetici olmayan kullanıcıda kanıtlanmış
+   biçimde boş döner (`hasTaskAssignmentScope` bu kişiye zaten kapsam vermez).
+4. **Tam kapsamlı kullanıcıda rehber kümeleri boşuna hesaplanıyordu.** İki
+   Sicil kümesi `@HasFullScope = 0` YÜKLEMİYLE korunuyordu; yüklem, işin
+   yapılmamasını garanti etmez.
+5. **Kısmi kapsam olmadan da özyinelemeli ata zinciri planlanıyordu.**
+6. **JavaScript aynı sorumlu satırlarını iki kez eşliyordu** ve görev/proje
+   başına kimlik kanonikleştirmesini birkaç kez yineliyordu.
+
+#### Yapılan iyileştirmeler
+
+| Önce | Sonra |
+| --- | --- |
+| `#TaskAssigneeFacts` görünür projedeki BÜTÜN görevleri toplar. | Kişisel kapsam (`#ScopedTasks`) dizin aramalarıyla kurulur; sayım yalnızca GÖRÜNÜR görevler için yapılır. |
+| Görünür görev kümesi MR_Tasks'i yeniden tarar. | Küme iki ayrık daldan kurulur: FULL/READ projeleri proje düzeyinde, KISMİ projeler hazır kişisel kapsamdan anahtar aramasıyla. |
+| `AccessLevel`, READ hibesi, oluşturan ve kimlik görünürlüğü satır başına yeniden türetilir. | Karar bir kez verilir ve `#VisibleTasks` satırında taşınır; `dbo.MR_Tasks` başvurusu 10'dan 6'ya iner. |
+| WBS seçimi üç EXISTS çalıştırır. | READ hibesi ve görev kapsamı `#VisibleProjects` satırında sütundur. |
+| Yönetim kapsamı her kullanıcıda okunur. | `IF @isExecutive = 1` ile yalnızca yöneticide okunur; bayrak aynı işlemdeki yetki okumasından gelir. |
+| Rehber Sicil kümeleri iki tabloda, sorumlu tablosu iki kez taranarak kurulur. | Tek `#DirectorySicils` tablosu, tek geçiş, `IsPublished` ayrımı. |
+| Kısmi/yönetici koşulları YÜKLEM ile atlanır. | Koşullar `IF`/`ELSE` dalıdır: iş gerçekten çalıştırılmaz. |
+| Atanabilir proje listesi yetenek kapalıyken de kök düğüm arar. | `IF @canAssignAllCorporate = 1 … ELSE SELECT TOP (0) …`; sonuç kümesi ve sırası korunur. |
+| JavaScript sorumlu satırlarını iki kez eşler. | Tek eşleme; kimlik kanonikleştirmesi kayıt başına bir kez. |
+
+#### Bilinçli olarak DEĞİŞTİRİLMEYENLER
+
+- SERIALIZABLE yalıtım düzeyi, SQL zaman aşımı ve bağlantı havuzu.
+- Katalog/CN43N tazelemesinin anlık görüntü işleminin DIŞINDA kalması.
+- `api.commit` yolu ve yetkili mutasyon yanıtı.
+- API yükü: alanlar, sıralama anahtarları ve on iki sonuç kümesinin sırası.
+- Var olan ölçüm adları.
+- Kalıcı şema: yeni dizin, tablo ya da göç eklenmedi (gerekçe aşağıda).
+- `SELECT t.*` / `SELECT w.*` alan listeleri: yükün tükettiği alanlar
+  doğrulanmış, yalnızca `UpdatedAt`/`UpdatedBySicil` gibi birkaç dar sütun
+  kullanılmıyor. Satır genişliği kazancı, sütun listesini elle sürdürme
+  riskini karşılamadığı için sözleşme daraltılmadı.
+- Bağımlılık/baz plan sonuç kümeleri: FULL projesi yokken `#VisibleProjects`
+  tarafı boştur, karma birleştirmenin sonda kalan tarafı okunmaz. Dal
+  eklemek ölçülebilir bir iş kaldırmayacağı için eklenmedi.
+
+#### Dizin incelemesi (yeni göç YOK)
+
+Yeni erişim yollarının tamamı var olan dizinlerle karşılanır:
+
+| Yüklem | Kullanılan dizin |
+| --- | --- |
+| `MR_Tasks.CreatedBySicil = @sicil` | `IX_MR_Tasks_CreatedBySicil (CreatedBySicil) INCLUDE (ProjectId)` — kapsayıcı |
+| `MR_TaskAssignees.Sicil = @sicil` / kapsam Sicilleri | `IX_MR_TaskAssignees_Sicil_Task (Sicil, TaskId)` — kapsayıcı |
+| `MR_Tasks t ON t.TaskId = ta.TaskId` (yalnız `ProjectId` gerekir) | `UX_MR_Tasks_Id_Project (TaskId, ProjectId)` — anahtar araması gerekmez |
+| `MR_ProjectAccess` Sicil/etkin/seviye | `IX_MR_ProjectAccess_Sicil_Active_Level` |
+| `MR_WBS` ata zinciri | `PK_MR_WBS (WbsId)` ve `IX_MR_WBS_Project_Parent_Sort` |
+
+Geçici tabloların bütün aşağı akış aramaları birincil anahtar üzerindedir
+(`#VisibleProjects.ProjectId`, `#ScopedTasks.TaskId`, `#VisibleTasks.TaskId`,
+`#DirectorySicils.Sicil`, `#RequiredPartialWbs.WbsId`); `#Directory` kümesi
+`IX_Directory_Sicil` ile kümelenir. Ek geçici dizin, yazma maliyetini
+karşılayacak bir arama yolu bulunmadığı için oluşturulmadı. "Dizin işe
+yarayabilir" gerekçesiyle göç üretilmez.
+
+#### Üretim doğrulaması (dağıtımdan sonra)
+
+Yukarıdaki kök nedenler SQL yapısıyla GÖSTERİLMİŞTİR; milisaniye kazancı
+GÖSTERİLMEMİŞTİR. Bu ortamda SQL Server yürütme planı ve üretim veritabanı
+yoktur. Aynı sürüm ve temsili trafik penceresinde şunlar karşılaştırılmalıdır:
+
+1. `api.snapshot` P50/P95/P99, hata oranı, örnek sayısı, en büyük gözlem.
+2. `phase.snapshot.transaction` P50/P95/P99.
+3. `phase.snapshot.main-query` P50/P95/P99 (ad ve kapsam değişmedi).
+4. `phase.snapshot.main-query.sql` P50/P95/P99 (yeni).
+5. `phase.snapshot.main-query.projection` P50/P95/P99 (yeni).
+6. Dört SQL aşaması: `…sql.scope`, `…sql.task-scope`, `…sql.directory`,
+   `…sql.result-sets`.
+7. `phase.snapshot.response`, `phase.snapshot.schedule-inbox`,
+   `phase.snapshot.authorization`.
+
+**İç içe süreler TOPLANMAZ.** `api.snapshot`, `phase.snapshot.transaction` ve
+`phase.snapshot.main-query` birbirini kapsar. `…sql` + `…projection` ana
+sorgunun içinde ardışıktır; dört SQL aşaması da kendi aralarında ardışıktır.
+Yalnızca aynı düzeydeki ardışık ölçümler toplanabilir.
+
+Karşılaştırma **aynı rol ve iş yükü** için yapılmalıdır. Aşağıdaki profillerin
+her biri ayrı ayrı ölçülmelidir; SYSTEM_ADMIN anlık görüntüsünü dar kapsamlı
+bir kullanıcınınkiyle karşılaştırmak iyileştirme değildir:
+
+- sıradan kullanıcı (görünür projesi olmayan ya da tek projesi olan),
+- oluşturan / kendi ataması ile KISMİ görünürlük kazanan kullanıcı,
+- READ hibesi olan kullanıcı,
+- FULL projesi olan kullanıcı,
+- yönetim kapsamı olan yönetici,
+- görev atama kapsamı (`canAssignAllCorporate`) olan yönetici,
+- SYSTEM_ADMIN.
+
+Beklenen yapısal etki profile göre değişir: en büyük daralma, büyük bir
+kurumsal projede az sayıda görevi bulunan KISMİ kullanıcıdadır; yönetici
+olmayan kullanıcıda ek olarak HR02 üzerindeki üç kapsam taraması tamamen
+düşer. Tam kapsamlı kullanıcıda görünür görev kümesi zaten yükün tamamıdır;
+oradaki kazanç rehber kümelerinin ve yinelenen birleştirmelerin düşmesiyle
+sınırlıdır. Bu beklentiler üretim ölçümüyle doğrulanana kadar kazanım olarak
+bildirilmez.
+
+Ayrıca doğrulanmalıdır: yetkili yük aynı kalmalı (proje/görev/WBS/sorumlu
+sayıları ve `assigneeCount` farkları), genel rehber ve Sicil görünürlüğü
+genişlememeli, gizli eş sorumlunun Sicili hiçbir alanda görünmemeli, katalog
+eşitlemesi SERIALIZABLE işleme taşınmamalı ve hata oranı artmamalıdır.

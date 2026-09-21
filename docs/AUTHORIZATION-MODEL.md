@@ -188,6 +188,14 @@ Task creator bylines do not create a second directory bypass. The creator's name
 
 FULL Project snapshots include the complete Task network, WBS, dependencies, baselines, and scheduling context. PARTIAL snapshots include only authorized Tasks and necessary Project/WBS context. Deny-by-default prevents unrelated A01 catalog Projects from appearing for ordinary employees.
 
+### Where the decision is made
+
+Each rule above is evaluated **once per row of the set it governs**, and the outcome is carried forward rather than re-derived. The snapshot query materializes the project-level outcome (`AccessLevel`, READ grant, own-task catalog scope) on the visible-project row, and the task-level outcome (creator, own assignee, subordinate assignee, and the creator-identity base) on the visible-task row. Every later set — WBS, tasks, assignee rows, the people directory — reads those columns instead of re-joining the tasks table and re-running the same `EXISTS` checks. This is a locality change only: the predicates, their inputs and their results are identical, and no rule was relaxed to make the query cheaper.
+
+Two consequences are worth stating because they look like shortcuts and are not. First, the visible-task set is built from two disjoint branches — all tasks of FULL/READ projects, and only personally scoped tasks of the remaining PARTIAL projects — which is exactly the union the rules already defined; a PARTIAL project's other tasks were never visible. Second, the executive-scope set is read only when the authorization context, loaded from `MR_V_ExecutiveScope` inside the same SERIALIZABLE transaction, already reports the caller as an executive. For a non-executive that query returns no rows by definition, so skipping it cannot change any decision; the scope itself is still re-read on every request and is never cached across requests or users.
+
+The people directory keeps two distinct membership levels. A Sicil is **published** to `people` only through the existing rules (the caller, project leads of visible projects, assignees reachable through a READ grant / the caller themselves / the caller's executive scope, and — when task-assignment scope is on — the caller's own subordinates). A Sicil that is merely needed to resolve a **display name** for a Task byline or an assignee row is marked unpublished and never reaches `people`. Display-name visibility is therefore still not identity visibility, and a hidden co-assignee's Sicil is still absent from every field of the payload.
+
 ## Partial visibility and CPM
 
 A filtered Task subset is not a complete network. The scheduling selector therefore marks partial Projects `suppressed-partial`, returns no complete Project CPM, and makes no critical-path claim. Portfolio statistics for partial users describe visible scope only.
