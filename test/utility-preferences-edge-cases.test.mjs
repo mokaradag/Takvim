@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 
 import { bodyClassesForTweaks, TWEAKS_BOOTSTRAP_SCRIPT } from '../src/lib/tweaksBootstrap.js';
+import { mergeTweakPreferences, TWEAK_DEFAULTS } from '../src/lib/tweaks-defaults.js';
 
 import {
   COLOR_MAP,
@@ -45,6 +46,9 @@ test('hareket azaltma ilk boyamada varsayılandır ve kayıtlı seçim korunur',
     ['{"theme":"light"}', true],
     ['{"reduceMotion":true}', true],
     ['{"reduceMotion":false}', false],
+    ['{"reduceMotion":null}', true],
+    ['{"reduceMotion":"false"}', true],
+    ['{"reduceMotion":0}', true],
     ['bozuk JSON', true],
     ['null', true],
     ['[]', true],
@@ -65,7 +69,53 @@ test('hareket azaltma ilk boyamada varsayılandır ve kayıtlı seçim korunur',
     if (raw === '{"theme":"light"}') assert.equal(classes.has('theme-light'), true);
   }
   assert.ok(bodyClassesForTweaks().includes('reduce-motion'));
+  assert.ok(bodyClassesForTweaks({ reduceMotion: undefined }).includes('reduce-motion'));
   assert.equal(bodyClassesForTweaks({ reduceMotion: false }).includes('reduce-motion'), false);
+});
+
+test('tercih yükleme yalnızca doğru türdeki tanımlı değerleri kabul eder', () => {
+  for (const invalid of [undefined, null, 'false', 0, [], {}]) {
+    const values = mergeTweakPreferences(TWEAK_DEFAULTS, {
+      reduceMotion: invalid, highContrast: invalid, showEmblem: invalid
+    });
+    assert.equal(values.reduceMotion, true);
+    assert.equal(values.highContrast, false);
+    assert.equal(values.showEmblem, true);
+    assert.ok(bodyClassesForTweaks({ reduceMotion: invalid }).includes('reduce-motion'));
+  }
+  for (const invalid of [null, [], 'false', 0]) {
+    assert.deepEqual(mergeTweakPreferences(TWEAK_DEFAULTS, invalid), TWEAK_DEFAULTS);
+  }
+  for (const invalid of [undefined, null, '1.25', NaN, Infinity]) {
+    assert.equal(mergeTweakPreferences(TWEAK_DEFAULTS, { fontScale: invalid }).fontScale, 1);
+  }
+  const overrides = { reduceMotion: false, highContrast: true, showEmblem: false, fontScale: 1.25, theme: 'light' };
+  assert.deepEqual(mergeTweakPreferences(TWEAK_DEFAULTS, overrides), { ...TWEAK_DEFAULTS, ...overrides });
+  assert.deepEqual(mergeTweakPreferences(TWEAK_DEFAULTS, { theme: null, unknown: true }), TWEAK_DEFAULTS);
+  assert.deepEqual(mergeTweakPreferences(TWEAK_DEFAULTS, Object.create(overrides)), TWEAK_DEFAULTS);
+});
+
+test('ilk boyama ve tercih yükleme bozuk alanlarda aynı varsayılanları kullanır', () => {
+  for (const preferences of [
+    { reduceMotion: null, highContrast: 'false', showEmblem: 0, fontScale: '1.25', theme: false },
+    { reduceMotion: false, highContrast: true, showEmblem: false, fontScale: 1.25, theme: 'light' }
+  ]) {
+    const classes = new Set();
+    const style = {};
+    runInNewContext(TWEAKS_BOOTSTRAP_SCRIPT, {
+      localStorage: { getItem() { return JSON.stringify(preferences); } },
+      document: {
+        body: {
+          classList: { toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } },
+          style
+        },
+        documentElement: { style: { setProperty() {} } }
+      }
+    });
+    const expected = mergeTweakPreferences(TWEAK_DEFAULTS, preferences);
+    assert.deepEqual([...classes], bodyClassesForTweaks(expected));
+    assert.equal(style.zoom, String(expected.fontScale));
+  }
 });
 
 test('COLOR_MAP is frozen and exposes all supported design tokens', () => {

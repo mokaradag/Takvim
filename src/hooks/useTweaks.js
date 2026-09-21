@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { TWEAKS_STORAGE_KEY } from '../lib/tweaksBootstrap.js';
+import { mergeTweakPreferences } from '../lib/tweaks-defaults.js';
 
 // Sürümlü depolama anahtarı `mergen_rota_tweaks_v1` tek yerde tanımlıdır: ilk
 // boyamadan önce çalışan bootstrap betiği de aynı girdiyi okur.
@@ -11,7 +12,7 @@ function loadStored(defaults) {
   if (typeof window === 'undefined') return defaults;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
+    return raw ? mergeTweakPreferences(defaults, JSON.parse(raw)) : defaults;
   } catch {
     return defaults;
   }
