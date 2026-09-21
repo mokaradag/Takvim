@@ -177,23 +177,46 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
   // kayıtlar ürettiriyordu.
   const usages = snapshot.match(/@canAssignAllCorporate/g) || [];
   assert.equal(usages.length, 3, 'atama bayrağı yalnızca seçilebilir proje, kişi ve kapsam sorgularında kullanılmalıdır');
-  // Görünür proje kümesi bayrağa bakmaz.
-  const visibleBlock = snapshot.slice(snapshot.indexOf('INSERT @VisibleProjects'), snapshot.indexOf('DECLARE @HasFullScope'));
-  assert.doesNotMatch(visibleBlock, /@canAssignAllCorporate/);
-  // Görev ve iş dağılım ağacı görünürlüğü de bayraktan etkilenmez.
-  const taskBlock = snapshot.slice(snapshot.indexOf('INSERT @VisibleTasks(TaskId)'), snapshot.indexOf('SELECT ta.TaskId,'));
-  assert.match(taskBlock, /SELECT t\.TaskId/);
-  assert.match(taskBlock, /SELECT t.\*, v.AccessLevel/);
-  assert.doesNotMatch(taskBlock, /@canAssignAllCorporate/);
-  const wbsBlock = snapshot.slice(snapshot.indexOf(';WITH RequiredPartialWbs'), snapshot.indexOf('SELECT t.*, v.AccessLevel'));
-  assert.doesNotMatch(wbsBlock, /@canAssignAllCorporate/);
+  // Deyim sınırlarında dilimleme: bayrağın sızmaması gereken kümeler tek tek
+  // sınanır, araya giren başka deyimler sonucu bozmaz.
+  const allStatements = (head) => {
+    const found = [];
+    for (let start = snapshot.indexOf(head); start >= 0; start = snapshot.indexOf(head, start + head.length)) {
+      const end = snapshot.indexOf(';', start + head.length);
+      assert.ok(end > start, `deyim sonu bulunmalıdır: ${head}`);
+      found.push(snapshot.slice(start, end));
+    }
+    assert.ok(found.length > 0, `deyim bulunmalıdır: ${head}`);
+    return found;
+  };
+  const statement = (head) => allStatements(head)[0];
+  // Görünür proje kümesi ve görev kapsamı bayrağa bakmaz.
+  for (const head of [
+    "INSERT #VisibleProjects(ProjectId, AccessLevel)",
+    "INSERT #OwnScopedProjects(ProjectId)",
+    "INSERT #ScopeAssignedProjects(ProjectId)",
+    "INSERT #TaskScopedWbsProjects(ProjectId)",
+    "INSERT #TaskAssigneeFacts(TaskId",
+    "INSERT #VisibleTasks(TaskId)",
+    ";WITH RequiredPartialWbs AS ("
+  ]) {
+    for (const sqlStatement of allStatements(head)) {
+      assert.doesNotMatch(sqlStatement, /@canAssignAllCorporate/, `${head} bayraktan etkilenmemelidir`);
+    }
+  }
+  assert.match(statement('INSERT #VisibleTasks(TaskId)'), /SELECT t\.TaskId/);
+  // Görev ve WBS seçimleri de bayrağı okumaz.
+  const taskSelect = snapshot.slice(snapshot.indexOf('SELECT t.*, v.AccessLevel'), snapshot.indexOf('SELECT ta.TaskId,'));
+  assert.match(taskSelect, /SELECT t\.\*, v\.AccessLevel/);
+  assert.doesNotMatch(taskSelect, /@canAssignAllCorporate/);
+  const wbsSelect = snapshot.slice(snapshot.indexOf('SELECT w.*'), snapshot.indexOf('SELECT t.*, v.AccessLevel'));
+  assert.doesNotMatch(wbsSelect, /@canAssignAllCorporate/);
   // Rehber genişlemesi yalnızca yöneticinin kendi kapsamı kadardır.
-  const peopleBlock = snapshot.slice(snapshot.indexOf('FROM dbo.MR_V_PeopleDirectory pd'), snapshot.indexOf('-- Görev ATAMA kapsamı: yöneticiler'));
-  assert.match(peopleBlock, /@canAssignAllCorporate = 1\s+AND EXISTS \(\s+SELECT 1 FROM @ExecutiveScope es/);
+  assert.match(statement('INSERT #DirectoryVisibleSicils(Sicil)'), /SELECT es\.EmployeeSicil FROM #ExecutiveScope es WHERE @canAssignAllCorporate = 1/);
   // Atanabilir çalışan kümesi de yalnızca yöneticinin kendi kapsamıdır.
-  const scopeBlock = snapshot.slice(snapshot.indexOf('SELECT es.EmployeeSicil'));
-  assert.match(snapshot, /INSERT @ExecutiveScope\(EmployeeSicil\)\s+SELECT DISTINCT EmployeeSicil\s+FROM dbo\.MR_V_ExecutiveScope\s+WHERE ManagerSicil = @sicil/);
-  assert.match(scopeBlock, /FROM @ExecutiveScope es\s+WHERE @canAssignAllCorporate = 1/);
+  const scopeBlock = snapshot.slice(snapshot.indexOf('SELECT es.EmployeeSicil\n    FROM #ExecutiveScope es'));
+  assert.match(snapshot, /INSERT #ExecutiveScope\(EmployeeSicil\)\s+SELECT DISTINCT EmployeeSicil\s+FROM dbo\.MR_V_ExecutiveScope\s+WHERE ManagerSicil = @sicil/);
+  assert.match(scopeBlock, /FROM #ExecutiveScope es\s+WHERE @canAssignAllCorporate = 1/);
 });
 
 /* ── 2. Temel Kip Görevler ──────────────────────────────────────── */

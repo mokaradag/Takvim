@@ -125,14 +125,20 @@ for (const mode of ['admin', 'lead', 'corporate', 'full', 'read', 'creator', 'ow
         assert.deepEqual(task.assigneeDisplayNames, ['Aynı Ad Soyad', 'Aynı Ad Soyad']);
         assert.deepEqual(task.assigneeAvatarIdentities.map((person) => person.employeeNo), [String(EMPLOYEE), String(OUTSIDER)]);
       }
-      const batches = stack.db.statements.filter((entry) => entry.sql.includes('DECLARE @VisibleProjects TABLE'));
+      const batches = stack.db.statements.filter((entry) => entry.sql.includes('CREATE TABLE #VisibleProjects'));
       assert.equal(batches.length, 1);
       assert.equal(stack.db.statements.some((entry) => entry.sql.includes('STRING_SPLIT(@taskIds')), false);
+      // Pahalı kurumsal görünümler toplu işte BİR KEZ okunur.
       assert.equal((batches[0].sql.match(/FROM dbo\.MR_V_ExecutiveScope\b/g) || []).length, 1);
       assert.equal((batches[0].sql.match(/dbo\.MR_V_CorporateProjectAccess\b/g) || []).length, 1);
+      assert.equal((batches[0].sql.match(/dbo\.MR_V_PeopleDirectory\b/g) || []).length, 1);
       assert.match(batches[0].sql, /SELECT DISTINCT EmployeeSicil\s+FROM dbo\.MR_V_ExecutiveScope\s+WHERE ManagerSicil = @sicil/);
-      assert.match(batches[0].sql, /JOIN @VisibleTasks visible ON visible\.TaskId = t\.TaskId/);
-      assert.match(batches[0].sql, /JOIN @VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
+      assert.match(batches[0].sql, /JOIN #VisibleTasks visible ON visible\.TaskId = t\.TaskId/);
+      assert.match(batches[0].sql, /JOIN #VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
+      // Sorumlu sayımı, kendi sorumluluğu ve yönetim kapsamı satır başına değil
+      // tek toplamada çözülür.
+      assert.equal((batches[0].sql.match(/SELECT COUNT\(\*\) FROM dbo\.MR_TaskAssignees/g) || []).length, 0);
+      assert.match(batches[0].sql, /INSERT #TaskAssigneeFacts\(TaskId, AssigneeCount, IsOwnAssignee, IsScopeAssignee\)/);
       assert.equal(stack.db.transactions.filter((entry) => entry.isolationLevel === sql.ISOLATION_LEVEL.SERIALIZABLE).length, 1);
     } finally { await stack.dispose(); }
   });

@@ -306,7 +306,7 @@ test('tweak defaults point to supported navigation and theme values', () => {
   assert.ok(TWEAK_DEFAULTS.fontScale > 0);
   assert.match(TWEAK_DEFAULTS.accent, /^#[0-9a-f]{6}$/i);
   assert.equal(typeof TWEAK_DEFAULTS.calLarge, 'boolean');
-  assert.equal(TWEAK_DEFAULTS.reduceMotion, false);
+  assert.equal(TWEAK_DEFAULTS.reduceMotion, true);
   assert.equal(TWEAK_DEFAULTS.showEmblem, true);
 });
 

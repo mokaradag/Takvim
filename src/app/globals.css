@@ -2493,11 +2493,16 @@ img.avatar-photo {
   .risk-matrix { grid-template-columns: 100px repeat(3, 1fr); }
 }
 .tag-cloud {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
+.tag-cloud > * {
+  min-width: 0;
+}
 .tag-chip {
+  min-width: 0;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 12px;

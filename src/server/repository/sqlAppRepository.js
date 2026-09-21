@@ -233,183 +233,266 @@ async function loadSnapshotFrom(executor, auth) {
   // WBS ve kişi görünürlüğü sorguları bu bayrağa hiç bakmaz.
   req.input('canAssignAllCorporate', sql.Bit, Boolean(auth.canAssignAllCorporateProjects));
   const result = await req.query(`
-    DECLARE @VisibleProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY, AccessLevel varchar(10));
-    DECLARE @ReadGrantedProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY);
-    DECLARE @TaskScopedWbsProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY);
-    DECLARE @ExecutiveScope TABLE(EmployeeSicil int PRIMARY KEY);
-    DECLARE @VisibleTasks TABLE(TaskId uniqueidentifier PRIMARY KEY);
+    SET NOCOUNT ON;
+
+    -- Toplu ara kümeler TABLO DEĞİŞKENİ değil GEÇİCİ TABLODUR. Tablo
+    -- değişkeni için iyileştirici tek satır tahmin eder; görünür görev kümesi
+    -- binlerce satıra ulaştığında bu tahmin sıralamaya çok küçük bellek
+    -- ayırtıyor ve sıralama tempdb'ye taşıyordu.
+    DROP TABLE IF EXISTS #VisibleProjects, #ReadGrantedProjects, #TaskScopedWbsProjects,
+      #ExecutiveScope, #OwnScopedProjects, #ScopeAssignedProjects, #VisibleTasks,
+      #TaskAssigneeFacts, #RequiredPartialWbs, #DirectoryVisibleSicils, #DirectoryNameSicils, #Directory;
+
+    CREATE TABLE #VisibleProjects(ProjectId uniqueidentifier PRIMARY KEY, AccessLevel varchar(10));
+    CREATE TABLE #ReadGrantedProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #TaskScopedWbsProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #ExecutiveScope(EmployeeSicil int PRIMARY KEY);
+    CREATE TABLE #OwnScopedProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #ScopeAssignedProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #VisibleTasks(TaskId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #TaskAssigneeFacts(
+      TaskId uniqueidentifier PRIMARY KEY,
+      AssigneeCount int NOT NULL,
+      IsOwnAssignee bit NOT NULL,
+      IsScopeAssignee bit NOT NULL
+    );
+    CREATE TABLE #RequiredPartialWbs(WbsId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #DirectoryVisibleSicils(Sicil int PRIMARY KEY);
+    CREATE TABLE #DirectoryNameSicils(Sicil int PRIMARY KEY);
 
     -- Aynı Sicil birden fazla yönetim kademesinde bulunabilir.
-    INSERT @ExecutiveScope(EmployeeSicil)
+    INSERT #ExecutiveScope(EmployeeSicil)
     SELECT DISTINCT EmployeeSicil
     FROM dbo.MR_V_ExecutiveScope
     WHERE ManagerSicil = @sicil;
 
-    INSERT @VisibleProjects(ProjectId, AccessLevel)
+    -- Kendi oluşturduğu ya da sorumlusu olduğu görevi bulunan projeler ile
+    -- astının sorumlu olduğu projeler ayrı kümelerdir: ilki iş dağılım ağacı
+    -- kataloğunu da açar, ikincisi yalnızca KISMİ görünürlük verir. İkisi de
+    -- dizin aramalarıyla toplanır; önceki biçim MR_Tasks tablosunun tamamını
+    -- tarayıp satır başına sorumlu ve yönetim kapsamı yoklaması yapıyordu.
+    INSERT #OwnScopedProjects(ProjectId)
+    SELECT DISTINCT scoped.ProjectId FROM (
+      SELECT t.ProjectId FROM dbo.MR_Tasks t WHERE t.CreatedBySicil = @sicil
+      UNION
+      SELECT t.ProjectId
+      FROM dbo.MR_TaskAssignees ta
+      JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+      WHERE ta.Sicil = @sicil
+    ) scoped
+    WHERE @isAdmin = 0;
+
+    INSERT #ScopeAssignedProjects(ProjectId)
+    SELECT DISTINCT t.ProjectId
+    FROM #ExecutiveScope es
+    JOIN dbo.MR_TaskAssignees ta ON ta.Sicil = es.EmployeeSicil
+    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+    WHERE @isAdmin = 0;
+
+    INSERT #VisibleProjects(ProjectId, AccessLevel)
     SELECT ProjectId, 'FULL'
     FROM dbo.MR_Projects
     WHERE @isAdmin = 1 AND IsActive = 1;
 
-    INSERT @VisibleProjects(ProjectId, AccessLevel)
+    INSERT #VisibleProjects(ProjectId, AccessLevel)
     SELECT DISTINCT p.ProjectId, 'FULL'
     FROM dbo.MR_Projects p
     JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = UPPER(p.ProjectCode)
     WHERE @isAdmin = 0 AND p.SourceType = 'CORPORATE' AND p.IsActive = 1 AND a.Sicil = @sicil
-      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = p.ProjectId);
+      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = p.ProjectId);
 
-    INSERT @ReadGrantedProjects(ProjectId)
+    INSERT #ReadGrantedProjects(ProjectId)
     SELECT pa.ProjectId
     FROM dbo.MR_ProjectAccess pa
     JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
     WHERE @isAdmin = 0 AND pa.Sicil = @sicil AND pa.IsActive = 1
       AND pa.AccessLevel = 'READ' AND p.IsActive = 1;
 
-    INSERT @VisibleProjects(ProjectId, AccessLevel)
+    INSERT #VisibleProjects(ProjectId, AccessLevel)
     SELECT p.ProjectId, 'FULL'
     FROM dbo.MR_Projects p
     WHERE @isAdmin = 0 AND p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil
-      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = p.ProjectId);
+      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = p.ProjectId);
 
-    INSERT @VisibleProjects(ProjectId, AccessLevel)
+    INSERT #VisibleProjects(ProjectId, AccessLevel)
     SELECT pa.ProjectId, CASE WHEN pa.AccessLevel = 'FULL' THEN 'FULL' ELSE 'PARTIAL' END
     FROM dbo.MR_ProjectAccess pa
     JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
     WHERE @isAdmin = 0 AND pa.Sicil = @sicil AND pa.IsActive = 1 AND p.IsActive = 1
-      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = pa.ProjectId);
+      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = pa.ProjectId);
 
-    INSERT @VisibleProjects(ProjectId, AccessLevel)
-    SELECT DISTINCT t.ProjectId, 'PARTIAL'
-    FROM dbo.MR_Tasks t
-    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+    INSERT #VisibleProjects(ProjectId, AccessLevel)
+    SELECT DISTINCT scoped.ProjectId, 'PARTIAL'
+    FROM (
+      SELECT own.ProjectId FROM #OwnScopedProjects own
+      UNION
+      SELECT team.ProjectId FROM #ScopeAssignedProjects team
+    ) scoped
+    JOIN dbo.MR_Projects p ON p.ProjectId = scoped.ProjectId
     WHERE @isAdmin = 0 AND p.IsActive = 1
-      AND (
-        t.CreatedBySicil = @sicil
-        OR EXISTS (
-          SELECT 1
-          FROM dbo.MR_TaskAssignees ta
-          WHERE ta.TaskId = t.TaskId AND (
-            ta.Sicil = @sicil
-            OR EXISTS (
-              SELECT 1 FROM @ExecutiveScope es
-              WHERE es.EmployeeSicil = ta.Sicil
-            )
-          )
-        )
-      )
-      AND NOT EXISTS (SELECT 1 FROM @VisibleProjects v WHERE v.ProjectId = t.ProjectId);
-
-    INSERT @TaskScopedWbsProjects(ProjectId)
-    SELECT DISTINCT t.ProjectId
-    FROM dbo.MR_Tasks t
-    JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'PARTIAL'
-    WHERE t.CreatedBySicil = @sicil
-       OR EXISTS (
-         SELECT 1
-         FROM dbo.MR_TaskAssignees ta
-         WHERE ta.TaskId = t.TaskId AND ta.Sicil = @sicil
-       );
+      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = scoped.ProjectId);
 
     DECLARE @HasFullScope bit = CASE
-      WHEN @isAdmin = 1 OR EXISTS (SELECT 1 FROM @VisibleProjects WHERE AccessLevel = 'FULL') THEN 1
+      WHEN @isAdmin = 1 OR EXISTS (SELECT 1 FROM #VisibleProjects WHERE AccessLevel = 'FULL') THEN 1
       ELSE 0
     END;
 
-    SELECT p.*, v.AccessLevel
-    FROM dbo.MR_Projects p
-    JOIN @VisibleProjects v ON v.ProjectId = p.ProjectId
-    WHERE p.IsActive = 1
-    ORDER BY p.ProjectName;
+    -- Kendi görevini oluşturan veya bu projede sorumlu olan kullanıcı, yeni
+    -- kendi görevi için var olan WBS kataloğunu salt okunur görür. Yönetim
+    -- kapsamı bu kümeyi GENİŞLETMEZ.
+    INSERT #TaskScopedWbsProjects(ProjectId)
+    SELECT own.ProjectId
+    FROM #OwnScopedProjects own
+    JOIN #VisibleProjects v ON v.ProjectId = own.ProjectId AND v.AccessLevel = 'PARTIAL';
 
-    SELECT pt.ProjectId, pt.TagName, pt.ColorToken, pt.IconKey, pt.SortOrder
-    FROM dbo.MR_ProjectTags pt
-    JOIN @VisibleProjects v ON v.ProjectId = pt.ProjectId
-    ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
+    -- Sorumlu sayımı, kendi sorumluluğu ve yönetim kapsamı görev başına TEK
+    -- toplamada çözülür; görünürlük, sayım ve künye kararları aynı kümeyi okur.
+    INSERT #TaskAssigneeFacts(TaskId, AssigneeCount, IsOwnAssignee, IsScopeAssignee)
+    SELECT t.TaskId,
+      COUNT(ta.Sicil),
+      CAST(MAX(CASE WHEN ta.Sicil = @sicil THEN 1 ELSE 0 END) AS bit),
+      CAST(MAX(CASE WHEN es.EmployeeSicil IS NOT NULL THEN 1 ELSE 0 END) AS bit)
+    FROM dbo.MR_Tasks t
+    JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
+    LEFT JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = t.TaskId
+    LEFT JOIN #ExecutiveScope es ON es.EmployeeSicil = ta.Sicil
+    GROUP BY t.TaskId;
 
+    INSERT #VisibleTasks(TaskId)
+    SELECT t.TaskId
+    FROM dbo.MR_Tasks t
+    JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
+    JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
+    WHERE v.AccessLevel = 'FULL'
+       OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
+       OR t.CreatedBySicil = @sicil
+       OR facts.IsOwnAssignee = 1
+       OR facts.IsScopeAssignee = 1;
+
+    -- Özyinelemeli ata zinciri TEK KEZ toplanır. Ortak tablo ifadesi doğrudan
+    -- WBS seçiminin OR zincirinde durduğunda, taranan her düğüm için yeniden
+    -- çalışma riski taşıyordu.
     ;WITH RequiredPartialWbs AS (
       SELECT DISTINCT w.WbsId, w.ParentWbsId, w.ProjectId
       FROM dbo.MR_WBS w
       JOIN dbo.MR_Tasks t ON t.WbsId = w.WbsId
-      JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
-      WHERE v.AccessLevel = 'PARTIAL'
-        AND EXISTS (
-          SELECT 1
-          FROM dbo.MR_TaskAssignees ta
-          WHERE ta.TaskId = t.TaskId
-            AND (
-              ta.Sicil = @sicil
-              OR EXISTS (
-                SELECT 1 FROM @ExecutiveScope es
-                WHERE es.EmployeeSicil = ta.Sicil
-              )
-            )
-        )
+      JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
+      JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
+      WHERE v.AccessLevel = 'PARTIAL' AND (facts.IsOwnAssignee = 1 OR facts.IsScopeAssignee = 1)
       UNION ALL
       SELECT parent.WbsId, parent.ParentWbsId, parent.ProjectId
       FROM dbo.MR_WBS parent
       JOIN RequiredPartialWbs child ON child.ParentWbsId = parent.WbsId
       WHERE parent.ProjectId = child.ProjectId
     )
-    SELECT w.*
-    FROM dbo.MR_WBS w
-    JOIN @VisibleProjects v ON v.ProjectId = w.ProjectId
-    WHERE v.AccessLevel = 'FULL'
-       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = w.ProjectId)
-       -- Kendi görevini oluşturan veya bu projede sorumlu olan kullanıcı,
-       -- yeni kendi görevi için var olan WBS kataloğunu salt okunur görür.
-       OR EXISTS (SELECT 1 FROM @TaskScopedWbsProjects scopedProject WHERE scopedProject.ProjectId = w.ProjectId)
-       OR EXISTS (SELECT 1 FROM RequiredPartialWbs r WHERE r.WbsId = w.WbsId)
-    ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code
+    INSERT #RequiredPartialWbs(WbsId)
+    SELECT DISTINCT WbsId FROM RequiredPartialWbs
     OPTION (MAXRECURSION 1000);
 
-    INSERT @VisibleTasks(TaskId)
-    SELECT t.TaskId
-    FROM dbo.MR_Tasks t
-    JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
+    -- Rehberde GÖRÜNEN kişiler küme olarak çözülür; yüklem kişi başına
+    -- çalıştığında bütün atama ve görev tabloları her satır için taranıyordu.
+    -- Görev ATAMA kapsamı açıkken yöneticinin KENDİ personeli de rehberde
+    -- görünür. Aksi hâlde görünür FULL projesi olmayan bir yönetici,
+    -- atayabileceği çalışanı seçicide hiç bulamıyordu. Kapsam yalnızca
+    -- MR_V_ExecutiveScope kadardır; görev/proje/WBS görünürlüğü değişmez.
+    -- Tam kapsamlı kullanıcıda rehber zaten bütünüyle döner; bu iki küme
+    -- yalnızca KISITLI kapsamda anlamlıdır ve orada hesaplanır.
+    INSERT #DirectoryVisibleSicils(Sicil)
+    SELECT DISTINCT candidate.Sicil FROM (
+      SELECT @sicil AS Sicil
+      UNION
+      SELECT es.EmployeeSicil FROM #ExecutiveScope es WHERE @canAssignAllCorporate = 1
+      UNION
+      SELECT p.LeadSicil
+      FROM dbo.MR_Projects p
+      JOIN #VisibleProjects v ON v.ProjectId = p.ProjectId
+      UNION
+      SELECT visibleAssignee.Sicil
+      FROM dbo.MR_TaskAssignees visibleAssignee
+      JOIN dbo.MR_Tasks visibleTask ON visibleTask.TaskId = visibleAssignee.TaskId
+      JOIN #VisibleProjects visibleProject ON visibleProject.ProjectId = visibleTask.ProjectId
+      WHERE EXISTS (
+          SELECT 1 FROM #ReadGrantedProjects readProject
+          WHERE readProject.ProjectId = visibleTask.ProjectId
+        )
+        OR visibleAssignee.Sicil = @sicil
+        OR EXISTS (
+          SELECT 1 FROM #ExecutiveScope es
+          WHERE es.EmployeeSicil = visibleAssignee.Sicil
+        )
+    ) candidate
+    WHERE @HasFullScope = 0 AND candidate.Sicil IS NOT NULL;
+
+    -- Görünür görevlerin oluşturan ve sorumluları rehberde YAYINLANMAZ; yalnızca
+    -- görev künyesi ve sorumlu satırı için ADLARI çözülür. Eş sorumlu gizliliği
+    -- bozulmaz: ad zaten yetkili sorumlu satırında dönen alandır.
+    INSERT #DirectoryNameSicils(Sicil)
+    SELECT DISTINCT needed.Sicil FROM (
+      SELECT t.CreatedBySicil AS Sicil
+      FROM dbo.MR_Tasks t
+      JOIN #VisibleTasks visible ON visible.TaskId = t.TaskId
+      UNION
+      SELECT ta.Sicil
+      FROM dbo.MR_TaskAssignees ta
+      JOIN #VisibleTasks visible ON visible.TaskId = ta.TaskId
+    ) needed
+    WHERE @HasFullScope = 0 AND needed.Sicil IS NOT NULL;
+
+    -- Kişi rehberi görünümü TEK KEZ okunur. Görünüm HR02 üzerinde pencere
+    -- işlevi çalıştırır; görev künyesi, sorumlu satırları ve rehber listesi
+    -- ayrı ayrı başvurduğunda aynı tarama üç kez yapılıyordu.
+    SELECT pd.Sicil, pd.DisplayName, pd.Username, pd.JobTitle, pd.Team,
+           pd.Sector, pd.Directorate, pd.Department, pd.Unit
+    INTO #Directory
+    FROM dbo.MR_V_PeopleDirectory pd
+    WHERE @HasFullScope = 1
+       OR EXISTS (SELECT 1 FROM #DirectoryVisibleSicils dv WHERE dv.Sicil = pd.Sicil)
+       OR EXISTS (SELECT 1 FROM #DirectoryNameSicils dn WHERE dn.Sicil = pd.Sicil);
+    CREATE CLUSTERED INDEX IX_Directory_Sicil ON #Directory(Sicil);
+
+    SELECT p.*, v.AccessLevel
+    FROM dbo.MR_Projects p
+    JOIN #VisibleProjects v ON v.ProjectId = p.ProjectId
+    WHERE p.IsActive = 1
+    ORDER BY p.ProjectName;
+
+    SELECT pt.ProjectId, pt.TagName, pt.ColorToken, pt.IconKey, pt.SortOrder
+    FROM dbo.MR_ProjectTags pt
+    JOIN #VisibleProjects v ON v.ProjectId = pt.ProjectId
+    ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
+
+    SELECT w.*
+    FROM dbo.MR_WBS w
+    JOIN #VisibleProjects v ON v.ProjectId = w.ProjectId
     WHERE v.AccessLevel = 'FULL'
-       OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
-       OR t.CreatedBySicil = @sicil
-       OR EXISTS (
-         SELECT 1
-         FROM dbo.MR_TaskAssignees ta
-         WHERE ta.TaskId = t.TaskId
-           AND (
-             ta.Sicil = @sicil
-             OR EXISTS (
-               SELECT 1 FROM @ExecutiveScope es
-               WHERE es.EmployeeSicil = ta.Sicil
-             )
-           )
-       );
+       OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = w.ProjectId)
+       OR EXISTS (SELECT 1 FROM #TaskScopedWbsProjects scopedProject WHERE scopedProject.ProjectId = w.ProjectId)
+       OR EXISTS (SELECT 1 FROM #RequiredPartialWbs r WHERE r.WbsId = w.WbsId)
+    ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code;
 
     -- Sorumlu SAYISI da döner. PARTIAL anlık görüntü kapsam dışı bir eş
     -- sorumlunun satırını bilinçli olarak gizler; istemci yalnızca sayıyı
     -- karşılaştırarak "gizlenmiş sorumlu var" sonucuna varabilir ve sunucunun
     -- reddedeceği bir düzenlemeyi baştan açmaz. Sayı kimlik taşımaz.
     SELECT t.*, v.AccessLevel,
-      (SELECT COUNT(*) FROM dbo.MR_TaskAssignees ta WHERE ta.TaskId = t.TaskId) AS AssigneeCount,
-      CASE WHEN EXISTS (
-        SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
-        WHERE ownAssignment.TaskId = t.TaskId AND ownAssignment.Sicil = @sicil
-      ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserAssignee,
+      facts.AssigneeCount,
+      facts.IsOwnAssignee AS IsCurrentUserAssignee,
       CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator,
       CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
-      NULLIF(LTRIM(RTRIM(creator.DisplayName)), '') AS CreatedByName
+      CASE WHEN creatorAuth.IdentityVisible = 1
+        THEN NULLIF(LTRIM(RTRIM(creator.DisplayName)), '') ELSE NULL END AS CreatedByName
     FROM dbo.MR_Tasks t
-    JOIN @VisibleTasks visible ON visible.TaskId = t.TaskId
-    JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
+    JOIN #VisibleTasks visible ON visible.TaskId = t.TaskId
+    JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
+    JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
     CROSS APPLY (
       SELECT CAST(CASE WHEN v.AccessLevel = 'FULL'
-        OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
+        OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
         OR t.CreatedBySicil = @sicil
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_TaskAssignees creatorViewerAssignment
-          WHERE creatorViewerAssignment.TaskId = t.TaskId
-            AND creatorViewerAssignment.Sicil = @sicil
-        )
+        OR facts.IsOwnAssignee = 1
       THEN 1 ELSE 0 END AS bit) AS IdentityVisible
     ) creatorAuth
-    LEFT JOIN dbo.MR_V_PeopleDirectory creator
-      ON creator.Sicil = t.CreatedBySicil AND creatorAuth.IdentityVisible = 1
+    LEFT JOIN #Directory creator ON creator.Sicil = t.CreatedBySicil
     -- Sıralama tam belirlenimlidir: aynı seriden üretilen yinelemeler başlıkta ve
     -- sıra anahtarında eşitlenebilir; kararlı bir ek anahtar olmadan SQL bunları
     -- her yüklemede farklı sırada döndürebilir ve Kanban kendiliğinden karışırdı.
@@ -424,42 +507,39 @@ async function loadSnapshotFrom(executor, auth) {
         CASE WHEN auth.IdentityVisible = 1 THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END
       ) AS DisplayName
     FROM dbo.MR_TaskAssignees ta
-    JOIN @VisibleTasks visible ON visible.TaskId = ta.TaskId
+    JOIN #VisibleTasks visible ON visible.TaskId = ta.TaskId
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
-    JOIN @VisibleProjects v ON v.ProjectId = t.ProjectId
-    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = ta.Sicil
+    JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
+    JOIN #TaskAssigneeFacts facts ON facts.TaskId = ta.TaskId
+    LEFT JOIN #Directory pd ON pd.Sicil = ta.Sicil
     CROSS APPLY (
       SELECT CAST(CASE WHEN v.AccessLevel = 'FULL'
-        OR EXISTS (SELECT 1 FROM @ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
+        OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
         OR t.CreatedBySicil = @sicil
         OR ta.Sicil = @sicil
         OR EXISTS (
-          SELECT 1 FROM @ExecutiveScope es
+          SELECT 1 FROM #ExecutiveScope es
           WHERE es.EmployeeSicil = ta.Sicil
         )
       THEN 1 ELSE 0 END AS bit) AS IdentityVisible
     ) auth
-    WHERE auth.IdentityVisible = 1
-       OR EXISTS (
-         SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
-         WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil
-       )
+    WHERE auth.IdentityVisible = 1 OR facts.IsOwnAssignee = 1
     ORDER BY ta.TaskId, ta.Sicil;
 
     SELECT d.*
     FROM dbo.MR_TaskDependencies d
-    JOIN @VisibleProjects v ON v.ProjectId = d.ProjectId
+    JOIN #VisibleProjects v ON v.ProjectId = d.ProjectId
     WHERE v.AccessLevel = 'FULL';
 
     SELECT b.*
     FROM dbo.MR_Baselines b
-    JOIN @VisibleProjects v ON v.ProjectId = b.ProjectId
+    JOIN #VisibleProjects v ON v.ProjectId = b.ProjectId
     WHERE v.AccessLevel = 'FULL';
 
     SELECT s.*
     FROM dbo.MR_TaskBaselineSnapshots s
     JOIN dbo.MR_Baselines b ON b.BaselineId = s.BaselineId
-    JOIN @VisibleProjects v ON v.ProjectId = b.ProjectId
+    JOIN #VisibleProjects v ON v.ProjectId = b.ProjectId
     WHERE v.AccessLevel = 'FULL';
 
     SELECT c.*, wd.Weekday, h.HolidayDate, h.Name AS HolidayName, h.ShortName
@@ -470,44 +550,9 @@ async function loadSnapshotFrom(executor, auth) {
     ORDER BY c.Name, wd.Weekday, h.HolidayDate;
 
     SELECT pd.Sicil, pd.DisplayName, pd.Username, pd.JobTitle, pd.Team, pd.Sector, pd.Directorate, pd.Department, pd.Unit
-    FROM dbo.MR_V_PeopleDirectory pd
+    FROM #Directory pd
     WHERE @HasFullScope = 1
-       OR pd.Sicil = @sicil
-       -- Görev ATAMA kapsamı açıkken yöneticinin KENDİ personeli rehberde
-       -- görünür. Aksi hâlde görünür FULL projesi olmayan bir yönetici,
-       -- atayabileceği çalışanı seçicide hiç bulamıyordu. Kapsam yalnızca
-       -- MR_V_ExecutiveScope kadardır; görev/proje/WBS görünürlüğü değişmez.
-       OR (
-         @canAssignAllCorporate = 1
-         AND EXISTS (
-           SELECT 1 FROM @ExecutiveScope es
-           WHERE es.EmployeeSicil = pd.Sicil
-         )
-       )
-       OR EXISTS (
-         SELECT 1
-         FROM dbo.MR_Projects p
-         JOIN @VisibleProjects v ON v.ProjectId = p.ProjectId
-         WHERE p.LeadSicil = pd.Sicil
-       )
-       OR EXISTS (
-         SELECT 1
-         FROM dbo.MR_TaskAssignees visibleAssignee
-         JOIN dbo.MR_Tasks visibleTask ON visibleTask.TaskId = visibleAssignee.TaskId
-         JOIN @VisibleProjects visibleProject ON visibleProject.ProjectId = visibleTask.ProjectId
-         WHERE visibleAssignee.Sicil = pd.Sicil
-            AND (
-              EXISTS (
-                SELECT 1 FROM @ReadGrantedProjects readProject
-                WHERE readProject.ProjectId = visibleTask.ProjectId
-              )
-              OR visibleAssignee.Sicil = @sicil
-              OR EXISTS (
-                SELECT 1 FROM @ExecutiveScope es
-                WHERE es.EmployeeSicil = visibleAssignee.Sicil
-              )
-            )
-        )
+       OR EXISTS (SELECT 1 FROM #DirectoryVisibleSicils dv WHERE dv.Sicil = pd.Sicil)
     ORDER BY pd.DisplayName, pd.Sicil;
 
     -- Görev ATAMA kapsamı: yöneticiler (direktör/müdür/birim yöneticisi) kendi
@@ -536,9 +581,13 @@ async function loadSnapshotFrom(executor, auth) {
     -- seçiciye bütün rehberi koyuyor ve seçilen kişi kaydı garanti reddediyordu.
     -- Küme yalnızca Sicil taşır ve kişi rehberi zaten bu kişileri içerir.
     SELECT es.EmployeeSicil
-    FROM @ExecutiveScope es
+    FROM #ExecutiveScope es
     WHERE @canAssignAllCorporate = 1
     ORDER BY es.EmployeeSicil;
+
+    DROP TABLE #VisibleProjects, #ReadGrantedProjects, #TaskScopedWbsProjects,
+      #ExecutiveScope, #OwnScopedProjects, #ScopeAssignedProjects, #VisibleTasks,
+      #TaskAssigneeFacts, #RequiredPartialWbs, #DirectoryVisibleSicils, #DirectoryNameSicils, #Directory;
   `);
 
   const [projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows, baselineRows, snapshotRows, calendarRows, peopleRows, assignableRows, assignmentScopeRows] = result.recordsets;
@@ -735,219 +784,272 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
   req.input('wbsIds', sql.NVarChar(sql.MAX), wbsIds.join(','));
   req.input('taskIds', sql.NVarChar(sql.MAX), taskIds.join(','));
   const result = await req.query(`
-    SELECT p.*, CASE
-      WHEN @isAdmin = 1
+    SET NOCOUNT ON;
+
+    DROP TABLE IF EXISTS #RequestedProjects, #RequestedWbs, #RequestedTasks, #ExecutiveScope,
+      #ScopeProjects, #ProjectRole, #TaskScopedProjects, #ProjectAuth, #TaskAssigneeFacts,
+      #CreatorReadScope, #DirectoryNames;
+
+    CREATE TABLE #RequestedProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #RequestedWbs(WbsId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #RequestedTasks(TaskId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #ExecutiveScope(EmployeeSicil int PRIMARY KEY);
+    CREATE TABLE #ScopeProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #ProjectRole(
+      ProjectId uniqueidentifier PRIMARY KEY,
+      IsRoleFull bit NOT NULL,
+      HasFullGrant bit NOT NULL,
+      HasReadGrant bit NOT NULL,
+      HasAnyGrant bit NOT NULL
+    );
+    CREATE TABLE #TaskScopedProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #ProjectAuth(
+      ProjectId uniqueidentifier PRIMARY KEY,
+      AccessLevel varchar(10) NOT NULL,
+      HasReadGrant bit NOT NULL,
+      IsTaskScoped bit NOT NULL,
+      IsVisible bit NOT NULL
+    );
+    CREATE TABLE #TaskAssigneeFacts(
+      TaskId uniqueidentifier PRIMARY KEY,
+      AssigneeCount int NOT NULL,
+      IsOwnAssignee bit NOT NULL,
+      IsScopeAssignee bit NOT NULL
+    );
+    CREATE TABLE #CreatorReadScope(Sicil int PRIMARY KEY);
+
+    -- Kimlik listeleri TEK KEZ ayrıştırılır. Her deyim kendi STRING_SPLIT
+    -- çağrısını yaptığında aynı metin altı kez bölünüyor ve dönüştürülmüş
+    -- değer üzerinden kurulan birleştirme her seferinde yeniden tahmin ediliyordu.
+    INSERT #RequestedProjects(ProjectId)
+    SELECT DISTINCT parsed.Id FROM (
+      SELECT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) AS Id FROM STRING_SPLIT(@projectIds, ',')
+    ) parsed WHERE parsed.Id IS NOT NULL;
+
+    INSERT #RequestedWbs(WbsId)
+    SELECT DISTINCT parsed.Id FROM (
+      SELECT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) AS Id FROM STRING_SPLIT(@wbsIds, ',')
+    ) parsed WHERE parsed.Id IS NOT NULL;
+
+    INSERT #RequestedTasks(TaskId)
+    SELECT DISTINCT parsed.Id FROM (
+      SELECT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) AS Id FROM STRING_SPLIT(@taskIds, ',')
+    ) parsed WHERE parsed.Id IS NOT NULL;
+
+    -- Yönetim kapsamı TEK KEZ okunur. Aynı Sicil birden fazla kademede bulunabilir.
+    INSERT #ExecutiveScope(EmployeeSicil)
+    SELECT DISTINCT EmployeeSicil
+    FROM dbo.MR_V_ExecutiveScope
+    WHERE ManagerSicil = @sicil;
+
+    INSERT #ScopeProjects(ProjectId)
+    SELECT DISTINCT scoped.ProjectId FROM (
+      SELECT rp.ProjectId FROM #RequestedProjects rp
+      UNION
+      SELECT w.ProjectId FROM dbo.MR_WBS w JOIN #RequestedWbs rw ON rw.WbsId = w.WbsId
+      UNION
+      SELECT t.ProjectId FROM dbo.MR_Tasks t JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+    ) scoped;
+
+    -- Rol ve açık yetki kararı proje başına TEK KEZ verilir.
+    INSERT #ProjectRole(ProjectId, IsRoleFull, HasFullGrant, HasReadGrant, HasAnyGrant)
+    SELECT p.ProjectId,
+      CASE WHEN @isAdmin = 1
         OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
         OR EXISTS (
           SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
           WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
         )
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_ProjectAccess fullGrant
-          WHERE fullGrant.ProjectId = p.ProjectId AND fullGrant.Sicil = @sicil
-            AND fullGrant.IsActive = 1 AND fullGrant.AccessLevel = 'FULL'
-        )
-      THEN CAST('FULL' AS varchar(10)) ELSE CAST('PARTIAL' AS varchar(10))
-    END AS AccessLevel
+      THEN 1 ELSE 0 END,
+      CASE WHEN accessGrant.AccessLevel = 'FULL' THEN 1 ELSE 0 END,
+      CASE WHEN accessGrant.AccessLevel = 'READ' THEN 1 ELSE 0 END,
+      CASE WHEN accessGrant.AccessLevel IS NOT NULL THEN 1 ELSE 0 END
     FROM dbo.MR_Projects p
-    JOIN STRING_SPLIT(@projectIds, ',') requested
-      ON p.ProjectId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
-    WHERE p.IsActive = 1 AND (
-      @isAdmin = 1
-      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-      )
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_ProjectAccess pa
-        WHERE pa.ProjectId = p.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-      )
-      OR EXISTS (
-        SELECT 1
-        FROM dbo.MR_Tasks visibleTask
-        WHERE visibleTask.ProjectId = p.ProjectId AND (
-          visibleTask.CreatedBySicil = @sicil
-          OR EXISTS (
-            SELECT 1 FROM dbo.MR_TaskAssignees visibleAssignment
-            WHERE visibleAssignment.TaskId = visibleTask.TaskId AND (
-              visibleAssignment.Sicil = @sicil
-              OR EXISTS (
-                SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-                WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignment.Sicil
-              )
-            )
-          )
-        )
-      )
+    JOIN #ScopeProjects sp ON sp.ProjectId = p.ProjectId
+    OUTER APPLY (
+      SELECT TOP (1) pa.AccessLevel
+      FROM dbo.MR_ProjectAccess pa
+      WHERE pa.ProjectId = p.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
+    ) accessGrant
+    WHERE p.IsActive = 1;
+
+    -- Görev tabanlı (KISMİ) görünürlük yalnızca daha ucuz kurallarla karara
+    -- bağlanamayan projeler için ve dizin aramalarıyla hesaplanır; önceki biçim
+    -- proje başına bütün görevleri tarayıp satır başına kapsam yoklaması yapıyordu.
+    INSERT #TaskScopedProjects(ProjectId)
+    SELECT DISTINCT scoped.ProjectId FROM (
+      SELECT t.ProjectId
+      FROM dbo.MR_Tasks t
+      JOIN #ProjectRole candidate ON candidate.ProjectId = t.ProjectId
+        AND candidate.IsRoleFull = 0 AND candidate.HasFullGrant = 0 AND candidate.HasReadGrant = 0
+      WHERE t.CreatedBySicil = @sicil
+      UNION
+      SELECT t.ProjectId
+      FROM dbo.MR_TaskAssignees ta
+      JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+      JOIN #ProjectRole candidate ON candidate.ProjectId = t.ProjectId
+        AND candidate.IsRoleFull = 0 AND candidate.HasFullGrant = 0 AND candidate.HasReadGrant = 0
+      WHERE ta.Sicil = @sicil
+      UNION
+      SELECT t.ProjectId
+      FROM #ExecutiveScope es
+      JOIN dbo.MR_TaskAssignees ta ON ta.Sicil = es.EmployeeSicil
+      JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+      JOIN #ProjectRole candidate ON candidate.ProjectId = t.ProjectId
+        AND candidate.IsRoleFull = 0 AND candidate.HasFullGrant = 0 AND candidate.HasReadGrant = 0
+    ) scoped;
+
+    INSERT #ProjectAuth(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped, IsVisible)
+    SELECT r.ProjectId,
+      CASE WHEN r.IsRoleFull = 1 OR r.HasFullGrant = 1 THEN 'FULL' ELSE 'PARTIAL' END,
+      r.HasReadGrant,
+      scoped.IsTaskScoped,
+      CASE WHEN r.IsRoleFull = 1 OR r.HasAnyGrant = 1 OR scoped.IsTaskScoped = 1 THEN 1 ELSE 0 END
+    FROM #ProjectRole r
+    CROSS APPLY (
+      SELECT CAST(CASE WHEN EXISTS (
+        SELECT 1 FROM #TaskScopedProjects ts WHERE ts.ProjectId = r.ProjectId
+      ) THEN 1 ELSE 0 END AS bit) AS IsTaskScoped
+    ) scoped;
+
+    -- Sorumlu sayısı, kendi sorumluluğu ve yönetim kapsamı görev başına TEK
+    -- toplamada çözülür; üç ayrı bağıntılı alt sorgu yerine tek geçiş yapılır.
+    INSERT #TaskAssigneeFacts(TaskId, AssigneeCount, IsOwnAssignee, IsScopeAssignee)
+    SELECT rt.TaskId,
+      COUNT(ta.Sicil),
+      CAST(MAX(CASE WHEN ta.Sicil = @sicil THEN 1 ELSE 0 END) AS bit),
+      CAST(MAX(CASE WHEN es.EmployeeSicil IS NOT NULL THEN 1 ELSE 0 END) AS bit)
+    FROM #RequestedTasks rt
+    LEFT JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = rt.TaskId
+    LEFT JOIN #ExecutiveScope es ON es.EmployeeSicil = ta.Sicil
+    GROUP BY rt.TaskId;
+
+    -- READ yetkisi üzerinden künye açılan OLUŞTURANLAR küme olarak çözülür.
+    -- Yüklem görev satırı başına çalıştığında, oluşturanın bütün atamaları ve
+    -- o atamaların projeleri her satır için yeniden taranıyordu.
+    INSERT #CreatorReadScope(Sicil)
+    SELECT candidate.Sicil
+    FROM (
+      SELECT DISTINCT t.CreatedBySicil AS Sicil
+      FROM dbo.MR_Tasks t
+      JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+      WHERE t.CreatedBySicil IS NOT NULL
+    ) candidate
+    WHERE EXISTS (
+      SELECT 1
+      FROM dbo.MR_TaskAssignees creatorAssignment
+      JOIN dbo.MR_Tasks creatorTask ON creatorTask.TaskId = creatorAssignment.TaskId
+      JOIN dbo.MR_ProjectAccess creatorReadGrant ON creatorReadGrant.ProjectId = creatorTask.ProjectId
+        AND creatorReadGrant.Sicil = @sicil
+        AND creatorReadGrant.IsActive = 1
+        AND creatorReadGrant.AccessLevel = 'READ'
+      WHERE creatorAssignment.Sicil = candidate.Sicil
     );
 
+    -- Kişi rehberi görünümü TEK KEZ, yalnızca gereken Siciller için okunur.
+    SELECT needed.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') AS DisplayName
+    INTO #DirectoryNames
+    FROM (
+      SELECT DISTINCT t.CreatedBySicil AS Sicil
+      FROM dbo.MR_Tasks t JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+      WHERE t.CreatedBySicil IS NOT NULL
+      UNION
+      SELECT DISTINCT ta.Sicil
+      FROM dbo.MR_TaskAssignees ta JOIN #RequestedTasks rt ON rt.TaskId = ta.TaskId
+    ) needed
+    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = needed.Sicil;
+    CREATE CLUSTERED INDEX IX_DirectoryNames_Sicil ON #DirectoryNames(Sicil);
+
+    SELECT p.*, pa.AccessLevel
+    FROM dbo.MR_Projects p
+    JOIN #RequestedProjects rp ON rp.ProjectId = p.ProjectId
+    JOIN #ProjectAuth pa ON pa.ProjectId = p.ProjectId
+    WHERE pa.IsVisible = 1;
+
+    -- Etiketler de yetkili proje kümesiyle sınırlanır: görünmeyen projenin
+    -- etiketleri istemciye hiç taşınmaz.
     SELECT pt.ProjectId, pt.TagName, pt.ColorToken, pt.IconKey, pt.SortOrder
     FROM dbo.MR_ProjectTags pt
-    JOIN STRING_SPLIT(@projectIds, ',') requested
-      ON pt.ProjectId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
+    JOIN #RequestedProjects rp ON rp.ProjectId = pt.ProjectId
+    JOIN #ProjectAuth pa ON pa.ProjectId = pt.ProjectId
+    WHERE pa.IsVisible = 1
     ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
 
     SELECT w.*
     FROM dbo.MR_WBS w
-    JOIN dbo.MR_Projects p ON p.ProjectId = w.ProjectId AND p.IsActive = 1
-    JOIN STRING_SPLIT(@wbsIds, ',') requested
-      ON w.WbsId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
-    WHERE @isAdmin = 1
-      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-      )
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_ProjectAccess pa
-        WHERE pa.ProjectId = w.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-          AND pa.AccessLevel IN ('FULL', 'READ')
-      )
-      OR EXISTS (
-        SELECT 1
-        FROM dbo.MR_Tasks visibleTask
-        WHERE visibleTask.ProjectId = w.ProjectId AND (
-          visibleTask.CreatedBySicil = @sicil
-          OR EXISTS (
-            SELECT 1 FROM dbo.MR_TaskAssignees visibleAssignment
-            WHERE visibleAssignment.TaskId = visibleTask.TaskId AND (
-              visibleAssignment.Sicil = @sicil
-              OR EXISTS (
-                SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-                WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignment.Sicil
-              )
-            )
-          )
-        )
-      );
+    JOIN #RequestedWbs rw ON rw.WbsId = w.WbsId
+    JOIN #ProjectAuth pa ON pa.ProjectId = w.ProjectId
+    WHERE pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1 OR pa.IsTaskScoped = 1;
 
     SELECT t.*,
-      (SELECT COUNT(*) FROM dbo.MR_TaskAssignees countAssignment WHERE countAssignment.TaskId = t.TaskId) AS AssigneeCount,
-      CASE WHEN EXISTS (
-        SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
-        WHERE ownAssignment.TaskId = t.TaskId AND ownAssignment.Sicil = @sicil
-      ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserAssignee,
+      facts.AssigneeCount,
+      facts.IsOwnAssignee AS IsCurrentUserAssignee,
       CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator,
       CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
-      NULLIF(LTRIM(RTRIM(creator.DisplayName)), '') AS CreatedByName
+      creator.DisplayName AS CreatedByName
     FROM dbo.MR_Tasks t
-    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+    JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+    JOIN #ProjectAuth pa ON pa.ProjectId = t.ProjectId
+    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+    JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
     CROSS APPLY (
       SELECT CAST(CASE WHEN @hasFullScope = 1
         OR t.CreatedBySicil = @sicil
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_TaskAssignees creatorViewerAssignment
-          WHERE creatorViewerAssignment.TaskId = t.TaskId
-            AND creatorViewerAssignment.Sicil = @sicil
-        )
+        OR facts.IsOwnAssignee = 1
         OR p.LeadSicil = t.CreatedBySicil
         OR (
           @canAssignAllCorporate = 1
           AND EXISTS (
-            SELECT 1 FROM dbo.MR_V_ExecutiveScope creatorScope
-            WHERE creatorScope.ManagerSicil = @sicil
-              AND creatorScope.EmployeeSicil = t.CreatedBySicil
+            SELECT 1 FROM #ExecutiveScope creatorScope
+            WHERE creatorScope.EmployeeSicil = t.CreatedBySicil
           )
         )
         OR EXISTS (
-          SELECT 1
-          FROM dbo.MR_TaskAssignees creatorAssignment
-          JOIN dbo.MR_Tasks creatorTask ON creatorTask.TaskId = creatorAssignment.TaskId
-          WHERE creatorAssignment.Sicil = t.CreatedBySicil
-            AND EXISTS (
-              SELECT 1 FROM dbo.MR_ProjectAccess creatorReadGrant
-              WHERE creatorReadGrant.ProjectId = creatorTask.ProjectId
-                AND creatorReadGrant.Sicil = @sicil
-                AND creatorReadGrant.IsActive = 1
-                AND creatorReadGrant.AccessLevel = 'READ'
-            )
+          SELECT 1 FROM #CreatorReadScope creatorRead WHERE creatorRead.Sicil = t.CreatedBySicil
         )
       THEN 1 ELSE 0 END AS bit) AS IdentityVisible
     ) creatorAuth
-    LEFT JOIN dbo.MR_V_PeopleDirectory creator
+    LEFT JOIN #DirectoryNames creator
       ON creator.Sicil = t.CreatedBySicil AND creatorAuth.IdentityVisible = 1
-    JOIN STRING_SPLIT(@taskIds, ',') requested
-      ON t.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
-    WHERE @isAdmin = 1
-      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-      )
+    WHERE pa.AccessLevel = 'FULL'
+      OR pa.HasReadGrant = 1
       OR t.CreatedBySicil = @sicil
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_ProjectAccess pa
-        WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-          AND pa.AccessLevel IN ('FULL', 'READ')
-      )
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_TaskAssignees visibleAssignment
-        WHERE visibleAssignment.TaskId = t.TaskId AND (
-          visibleAssignment.Sicil = @sicil
-          OR EXISTS (
-            SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = visibleAssignment.Sicil
-          )
-        )
-      );
+      OR facts.IsOwnAssignee = 1
+      OR facts.IsScopeAssignee = 1;
 
     SELECT ta.TaskId,
       CASE WHEN auth.IdentityVisible = 1 THEN ta.Sicil ELSE NULL END AS Sicil,
-      CASE
-        WHEN NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') IS NOT NULL
-        THEN ta.Sicil
-        ELSE NULL
-      END AS AvatarEmployeeNo,
-      COALESCE(NULLIF(LTRIM(RTRIM(pd.DisplayName)), ''), CASE WHEN auth.IdentityVisible = 1
+      CASE WHEN pd.DisplayName IS NOT NULL THEN ta.Sicil ELSE NULL END AS AvatarEmployeeNo,
+      COALESCE(pd.DisplayName, CASE WHEN auth.IdentityVisible = 1
         THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END) AS DisplayName
     FROM dbo.MR_TaskAssignees ta
+    JOIN #RequestedTasks rt ON rt.TaskId = ta.TaskId
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
-    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
-    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = ta.Sicil
+    JOIN #ProjectAuth pa ON pa.ProjectId = t.ProjectId
+    JOIN #TaskAssigneeFacts facts ON facts.TaskId = ta.TaskId
+    LEFT JOIN #DirectoryNames pd ON pd.Sicil = ta.Sicil
     CROSS APPLY (
-      SELECT CAST(CASE WHEN @isAdmin = 1
-        OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-          WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-        )
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_ProjectAccess pa
-          WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-            AND pa.AccessLevel IN ('FULL', 'READ')
-        )
+      SELECT CAST(CASE WHEN pa.AccessLevel = 'FULL'
+        OR pa.HasReadGrant = 1
         OR t.CreatedBySicil = @sicil
         OR ta.Sicil = @sicil
         OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-          WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
+          SELECT 1 FROM #ExecutiveScope es WHERE es.EmployeeSicil = ta.Sicil
         )
       THEN 1 ELSE 0 END AS bit) AS IdentityVisible
     ) auth
-    JOIN STRING_SPLIT(@taskIds, ',') requested
-      ON ta.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
-    WHERE auth.IdentityVisible = 1
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment
-        WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil
-      );
+    WHERE auth.IdentityVisible = 1 OR facts.IsOwnAssignee = 1
+    ORDER BY ta.TaskId, ta.Sicil;
 
     SELECT d.*
     FROM dbo.MR_TaskDependencies d
-    JOIN dbo.MR_Projects p ON p.ProjectId = d.ProjectId AND p.IsActive = 1
-    JOIN STRING_SPLIT(@taskIds, ',') requested
-      ON d.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(requested.value)))
-    WHERE @isAdmin = 1
-      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-      )
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_ProjectAccess pa
-        WHERE pa.ProjectId = d.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1 AND pa.AccessLevel = 'FULL'
-      );
+    JOIN #RequestedTasks rt ON rt.TaskId = d.TaskId
+    JOIN #ProjectAuth pa ON pa.ProjectId = d.ProjectId
+    WHERE pa.AccessLevel = 'FULL';
+
+    DROP TABLE #RequestedProjects, #RequestedWbs, #RequestedTasks, #ExecutiveScope,
+      #ScopeProjects, #ProjectRole, #TaskScopedProjects, #ProjectAuth, #TaskAssigneeFacts,
+      #CreatorReadScope, #DirectoryNames;
   `);
 
   const [projectRows = [], tagRows = [], wbsRows = [], taskRows = [], assigneeRows = [], dependencyRows = []] = result.recordsets || [];

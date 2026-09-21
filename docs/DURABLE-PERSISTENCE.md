@@ -161,6 +161,9 @@ Persistence errors are surfaced to the user verbatim. `PersistenceStatus` render
    6. `database/MR_Upgrade_0009_Task_Activity_Report.sql` — görev denetimi tarih aralığı dizini.
    7. `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` — `MR_TaskOutlookSubscriptions` and the current Outlook queue fields. Apply the current migration before deployment, stopping old workers first. Installations that already applied the current PR #72 version of `0010` do not need to rerun 0010; they must still apply 0011 below.
    8. `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` — completion suspension/date, cancellation reason, delivered method and reserved date. Required for all existing 0010 installations.
+   9. `database/MR_Upgrade_0012_System_Observability.sql` — Sistem Yönetimi telemetri toplamları, işletim olayları ve otomatik uyarılar.
+   10. `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql` — CN43N başarılı tur tazeliği.
+   11. `database/MR_Upgrade_0014_Task_Creator_Index.sql` — görev oluşturan Sicil dizini; yetki ve anlık görüntü sorgularında tam tablo taramasını kaldırır.
 
    Stopping at `0005` leaves `MR_TaskScheduleChangeRequests` absent, and every schedule-change request then fails when the application reaches that table. Stopping at `0009` leaves the Outlook subscription table absent; Outlook delivery reports `OUTLOOK_SCHEMA_MISSING`. Every upgrade script is idempotent and preserves existing data. Complete the required upgrades before deploying the application.
 3. Install Microsoft ODBC Driver 18 for SQL Server on the MERGEN Rota host.

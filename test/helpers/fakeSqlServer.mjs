@@ -354,7 +354,10 @@ function creatorIdentityVisible(db, task, sicil, { hasFullScope = false, canAssi
 }
 
 function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedAvatar = false } = {}) {
-  return db.taskAssignees.flatMap((entry) => {
+  // Üretim sorgusu ORDER BY ta.TaskId, ta.Sicil uygular.
+  const ordered = [...db.taskAssignees].sort((left, right) =>
+    String(left.TaskId).localeCompare(String(right.TaskId)) || Number(left.Sicil) - Number(right.Sicil));
+  return ordered.flatMap((entry) => {
     if (!taskIds.has(String(entry.TaskId).toUpperCase())) return [];
     const task = db.tasks.find((row) => sameGuid(row.TaskId, entry.TaskId));
     const project = task ? projectById(db, task.ProjectId) : null;
@@ -1230,9 +1233,9 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
     return result(authorizationRecordsets(db, sicil));
   }
-  if (sqlText.includes('DECLARE @VisibleProjects TABLE')) {
+  if (sqlText.includes('CREATE TABLE #VisibleProjects')) {
     const rows = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
-    if (sqlText.includes('JOIN @VisibleTasks visible ON visible.TaskId = ta.TaskId')) {
+    if (sqlText.includes('JOIN #VisibleTasks visible ON visible.TaskId = ta.TaskId')) {
       const ids = new Set(rows[3].map((task) => String(task.TaskId).toUpperCase()));
       rows[4] = taskScopedAssigneeRows(db, ids, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
         .sort((left, right) => String(left.TaskId).localeCompare(String(right.TaskId))
@@ -1245,7 +1248,7 @@ function runQuery(db, statement, params, { database }) {
     synchronizeCorporateProjects(db, params.actorSicil);
     return result([db.projects.filter((row) => before.has(row.ProjectId) && before.get(row.ProjectId) !== JSON.stringify(row)).map((row) => ({ ProjectId: row.ProjectId }))]);
   }
-  if (sqlText.includes('JOIN STRING_SPLIT(@projectIds') && sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
+  if (sqlText.includes('CREATE TABLE #RequestedTasks')) {
     const requested = (value) => new Set(String(value || '').split(',').map((entry) => entry.trim().toUpperCase()).filter(Boolean));
     const projectIds = requested(params.projectIds);
     const wbsIds = requested(params.wbsIds);
@@ -1267,7 +1270,7 @@ function runQuery(db, statement, params, { database }) {
           CreatedByName: creator?.DisplayName || null
         };
       });
-    const projectedAssignees = sqlText.includes('LEFT JOIN dbo.MR_V_PeopleDirectory pd')
+    const projectedAssignees = sqlText.includes('LEFT JOIN #DirectoryNames pd')
       ? taskScopedAssigneeRows(db, taskIds, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
       : snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()));
     return result([
@@ -1278,12 +1281,6 @@ function runQuery(db, statement, params, { database }) {
       projectedAssignees,
       snapshot[5].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()))
     ]);
-  }
-  if (sqlText.includes('JOIN STRING_SPLIT(@taskIds')) {
-    const ids = new Set(String(params.taskIds || '').split(',').map((value) => value.trim().toUpperCase()).filter(Boolean));
-    return result([taskScopedAssigneeRows(db, ids, sicil, Boolean(params.isAdmin), {
-      exposeTaskScopedAvatar: true
-    })]);
   }
   if (sqlText.includes('SELECT TOP (1) CalendarId') && sqlText.includes('IsDefault = 1 AND IsActive = 1') && !sqlText.includes('@calendarId')) {
     const calendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;

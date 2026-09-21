@@ -234,6 +234,11 @@ BEGIN TRY
     CREATE INDEX IX_MR_Tasks_Project_TargetFinish ON dbo.MR_Tasks(ProjectId, TargetFinish);
     CREATE INDEX IX_MR_Tasks_Project_PlannedRange ON dbo.MR_Tasks(ProjectId, PlannedStart, PlannedFinish);
     CREATE INDEX IX_MR_Tasks_WbsId ON dbo.MR_Tasks(WbsId, SortOrder);
+    -- Gorev OLUSTURAN yuklemi (CreatedBySicil = @sicil) yetki baglami, anlik
+    -- goruntu ve yetkili mutasyon yanitinda calisir. ProjectId ile baslayan
+    -- dizinler bu sutunu tasimadigi icin yuklem tablonun tamami kadar is
+    -- yapiyordu; dar dizin maliyeti kullanicinin kendi gorev sayisina baglar.
+    CREATE INDEX IX_MR_Tasks_CreatedBySicil ON dbo.MR_Tasks(CreatedBySicil) INCLUDE (ProjectId);
     CREATE INDEX IX_MR_Tasks_RecurrenceParent ON dbo.MR_Tasks(RecurrenceParentTaskId) WHERE RecurrenceParentTaskId IS NOT NULL;
     -- Ayni seri gunu icin iki yineleme olusturulamaz. Istemci tarafi denetim
     -- eszamanli iki yaziciyi durduramaz: her ikisi de gunu "eksik" gorup farkli
@@ -776,7 +781,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0010_outlook_calendar_subscriptions', N'Görev/Sicil Outlook takvim abonelikleri ve dayanıklı gönderim kuyruğu'),
            (N'0011_outlook_completion_lifecycle', N'Outlook tamamlanma, yeniden açılma ve iptal nedeni'),
            (N'0012_system_observability', N'Sistem Yönetimi telemetri toplamları, işletim olayları ve otomatik uyarılar'),
-           (N'0013_corporate_wbs_sync_freshness', N'CN43N başarılı tur tazeliği ile WBS içerik değişikliği zamanını ayırır');
+           (N'0013_corporate_wbs_sync_freshness', N'CN43N başarılı tur tazeliği ile WBS içerik değişikliği zamanını ayırır'),
+           (N'0014_task_creator_index', N'Görev oluşturan Sicil dizini: yetki ve anlık görüntü sorgularında tam tablo taramasını kaldırır');
 
     COMMIT TRANSACTION;
 END TRY
