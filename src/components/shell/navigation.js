@@ -62,7 +62,10 @@ export const PAGE_META = {
   sistem: { title: 'Sistem Yönetimi', sub: 'Sistem sağlığı, başarım, kuyruklar, olaylar ve entegrasyonlar' }
 };
 
-export const SIMPLE_NAV_IDS = new Set(['veri', 'takvim', 'talepler', 'yardim', 'ayarlar']);
+export const SIMPLE_NAV_IDS = new Set(['ozet', 'veri', 'takvim', 'talepler', 'yardim', 'ayarlar']);
+
+/** Temel Kipin açılış sayfası ve kapsamlı bir sayfadan dönüş hedefi. */
+export const SIMPLE_LANDING_VIEW = 'ozet';
 
 export function navigationItems(simple, isSystemAdmin) {
   return NAV_ITEMS.filter((item) => (!simple || SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))

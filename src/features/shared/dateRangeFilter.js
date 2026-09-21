@@ -49,14 +49,26 @@ export function taskActivityWindow(task) {
   return { start: candidates[0], end: candidates[candidates.length - 1] };
 }
 
-export function taskMatchesDateRange(task, range) {
+/**
+ * Temel Kipin TERMİN penceresi.
+ *
+ * Etkinlik penceresi planlanan/gerçekleşen tarihleri de tarar; bu alanlar Temel
+ * Kipte hiç gösterilmediği için kullanıcı, göremediği bir tarih yüzünden
+ * listeden düşen görevi açıklayamazdı. Temel aralığı yalnızca Termin'i okur.
+ */
+export function taskTargetWindow(task) {
+  const day = isoDay(task?.targetFinish);
+  return day ? { start: day, end: day } : null;
+}
+
+export function taskMatchesDateRange(task, range, taskWindow = taskActivityWindow) {
   if (!range?.start || !range?.end) return true;
-  const window = taskActivityWindow(task);
+  const window = taskWindow(task);
   if (!window) return true;
   return window.start <= range.end && window.end >= range.start;
 }
 
-export function filterTasksByDateRange(tasks, range) {
+export function filterTasksByDateRange(tasks, range, taskWindow = taskActivityWindow) {
   const source = tasks || [];
   const organizationIds = Array.isArray(range?.organizationTaskIds)
     ? new Set(range.organizationTaskIds.map((id) => String(id)))
@@ -65,7 +77,7 @@ export function filterTasksByDateRange(tasks, range) {
     ? source.filter((task) => organizationIds.has(String(task.id)))
     : source;
   if (!range?.start || !range?.end) return scoped;
-  return scoped.filter((task) => taskMatchesDateRange(task, range));
+  return scoped.filter((task) => taskMatchesDateRange(task, range, taskWindow));
 }
 
 function withOrganizationScope(selection, range) {

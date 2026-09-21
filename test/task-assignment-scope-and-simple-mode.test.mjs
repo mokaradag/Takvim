@@ -200,7 +200,7 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
 
 test('Görevler sayfası Temel Kipte ulaşılabilir', () => {
   const shell = read('src/components/shell/AppShell.jsx');
-  assert.match(read('src/components/shell/navigation.js'), /SIMPLE_NAV_IDS = new Set\(\['veri',/);
+  assert.match(read('src/components/shell/navigation.js'), /SIMPLE_NAV_IDS = new Set\(\['ozet', 'veri',/);
   assert.match(shell, /<SimpleTasksView onNewTask=/);
 });
 

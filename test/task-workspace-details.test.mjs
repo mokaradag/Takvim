@@ -74,7 +74,7 @@ test('tek alt satırdaki İlk/Önceki/Sonraki/Son ve uç sayfa kilitleri', () =>
 
 test('Temel Kip komutları Gantt ve diğer kapsamlı sayfaları içermez; yönetici süzgeci korunur', () => {
   const simple = navigationItems(true, false).map((item) => item.id);
-  assert.deepEqual(simple, ['veri', 'talepler', 'takvim', 'yardim', 'ayarlar']);
+  assert.deepEqual(simple, ['ozet', 'veri', 'talepler', 'takvim', 'yardim', 'ayarlar']);
   assert.ok(navigationItems(false, false).some((item) => item.id === 'gantt'));
   // Yönetim sayfası Temel Kipte de sistem yöneticisine açıktır; hatırlatma
   // yapılandırması artık bu sayfanın bir sekmesidir.

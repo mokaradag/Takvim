@@ -1,6 +1,8 @@
 /* MERGEN Rota · Dashboard ownership */
 
 .dashboard { gap: 20px; }
+/* Temel Kip Özet: birincil eylem satırı. */
+.dashboard-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .dashboard-kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

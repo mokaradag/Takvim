@@ -8,7 +8,8 @@ import {
   resolveDateRangePreset,
   resolveDateRangeSelection,
   taskActivityWindow,
-  taskMatchesDateRange
+  taskMatchesDateRange,
+  taskTargetWindow
 } from '../src/features/shared/dateRangeFilter.js';
 
 const REFERENCE = '2026-09-03';
@@ -108,9 +109,40 @@ test('Özet ve Raporlar aynı süzgeci ölçümlerin ÖNÜNDE uygular', async ()
     // Ham liste `allTasks`'e alınır ve türetilmiş `tasks` süzülmüş kümedir;
     // aksi hâlde kartların bir kısmı süzgeci yok sayardı.
     assert.match(source, /const allTasks = useTasks\(\);/, path);
-    assert.match(source, /filterTasksByDateRange\(allTasks, activeRange\)/, path);
+    assert.match(source, /filterTasksByDateRange\(allTasks, activeRange[^)]*\)/, path);
     assert.match(source, /<DateRangeFilter/, path);
   }
+});
+
+test('Temel Kip aralığı yalnızca Termin penceresini okur', () => {
+  // Gizli planlama alanları Temel Kipte hiç gösterilmez; bir görevin listeden
+  // düşmesi kullanıcının GÖREBİLDİĞİ tek tarihe bağlı olmalıdır.
+  assert.deepEqual(taskTargetWindow({ targetFinish: '2026-05-10' }), { start: '2026-05-10', end: '2026-05-10' });
+  assert.equal(taskTargetWindow({ plannedStart: '2026-05-01', plannedFinish: '2026-05-20' }), null);
+
+  const range = { start: '2026-05-01', end: '2026-05-31' };
+  const base = { id: 't1', targetFinish: '2026-05-10' };
+  for (const hidden of ['plannedStart', 'plannedFinish', 'actualStart', 'actualFinish']) {
+    assert.equal(
+      filterTasksByDateRange([{ ...base, [hidden]: '2020-01-01' }], range, taskTargetWindow).length,
+      1,
+      `${hidden} Temel üyeliği değiştirmemelidir`
+    );
+    assert.equal(
+      filterTasksByDateRange([{ id: 't2', targetFinish: '2026-09-09', [hidden]: '2026-05-15' }], range, taskTargetWindow).length,
+      0,
+      `${hidden} görevi Temel aralığa SOKMAMALIDIR`
+    );
+  }
+  // Termin'in kendisi üyeliği değiştirir; terminsiz görev ise kaybolmaz.
+  assert.equal(filterTasksByDateRange([{ ...base, targetFinish: '2026-07-01' }], range, taskTargetWindow).length, 0);
+  assert.equal(filterTasksByDateRange([{ id: 't3' }], range, taskTargetWindow).length, 1);
+  // Kurumsal kapsam Termin aralığıyla birlikte çalışır ve önce daraltır.
+  const scoped = { ...range, organizationTaskIds: ['t1'] };
+  assert.deepEqual(
+    filterTasksByDateRange([base, { id: 't9', targetFinish: '2026-05-11' }], scoped, taskTargetWindow).map((task) => task.id),
+    ['t1']
+  );
 });
 
 test('Görevler sütun süzgeci ETKİN seçimi menüde tutar', async () => {

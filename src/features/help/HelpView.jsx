@@ -26,8 +26,8 @@ const CONTENT = {
   },
   ozet: {
     title: 'Özet',
-    intro: 'Seçili çalışma alanının genel durumunu tek bakışta izlemek için kullanılır. Proje seçildiğinde göstergeler yalnızca o projeyi, portföy seçildiğinde tüm projeleri temel alır.',
-    points: ['Filtreleri Temizle tarih ve kurumsal seçimleri sıfırlar; çalışma alanınız ve görünürlük yetkileriniz korunur.', 'Görev, gecikme ve ilerleme göstergelerini izleyin.', 'KPI zengin listesindeki Tüm görevleri gör, sütun ve kurumsal süzgeçleriyle geniş görev penceresini açar. Penceredeki Filtreleri Temizle yalnızca pencere süzgeçlerini sıfırlar. Projeler ve Portföy sağlığı sayfalanır; iş yükü ve yaklaşan teslimlerde 5/10/20/50 sonuç seçilebilir. Görev panelinden dönünce liste durumunuz korunur.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
+    intro: 'Seçili çalışma alanının genel durumunu tek bakışta izlemek için kullanılır. Proje seçildiğinde göstergeler yalnızca o projeyi, portföy seçildiğinde tüm projeleri temel alır. Özet, Temel Kipin de açılış sayfasıdır.',
+    points: ['Filtreleri Temizle tarih ve kurumsal seçimleri sıfırlar; çalışma alanınız ve görünürlük yetkileriniz korunur.', 'Görev, gecikme ve ilerleme göstergelerini izleyin.', 'KPI zengin listesindeki Tüm görevleri gör, sütun ve kurumsal süzgeçleriyle geniş görev penceresini açar. Penceredeki Filtreleri Temizle yalnızca pencere süzgeçlerini sıfırlar. Projeler ve Portföy sağlığı sayfalanır; iş yükü ve yaklaşan teslimlerde 5/10/20/50 sonuç seçilebilir. Görev panelinden dönünce liste durumunuz korunur.', 'Temel Kipte aralık seçimi Termin aralığıdır ve yalnızca Termin gününü okur; KPI penceresi Proje, Görev, Kısa açıklama, Sorumlular, Öncelik, Durum ve Termin sütunlarını gösterir. Plan bütünlüğü ve bağımlılık kartları Kapsamlı Kiptedir.', 'Temel Kipteki + Yeni Görev düğmesi Takvim sayfasındaki Hızlı Görev Tanımı sekmesini açar.', 'Grafiklerdeki eğilimleri ayrıntılı sayfalara geçmeden önce kontrol edin.', 'Bir gösterge beklenmedik görünüyorsa önce üstteki seçili proje bilgisini doğrulayın.']
   },
   veri: {
     title: 'Görevler',
@@ -103,10 +103,10 @@ function ModeGuide() {
       <div className="help-mode-grid">
         <section className="card help-mode-card simple">
           <div className="help-mode-card-head"><Icons.Calendar size={20} /><div><small>Hızlı takip</small><h3>Temel Kip</h3></div></div>
-          <p className="muted">Görevler, Takvim ve Talepler ile çalışın. Ara veya komut çalıştır… ve Ctrl/Cmd+K kullanılabilir; Gantt Kapsamlı Kiptedir.</p>
+          <p className="muted">Özet, Görevler, Takvim ve Talepler ile çalışın. Ara veya komut çalıştır… ve Ctrl/Cmd+K kullanılabilir; Gantt Kapsamlı Kiptedir.</p>
           <Flow steps={[
-            { title: 'Takvimi izle', text: 'Takvim sayfası varsayılan olarak aylık görünümle açılır.' },
-            { title: 'Hızlı tanıma geç', text: 'Yeni kayıt için Hızlı Görev Tanımı sekmesini açın.' },
+            { title: 'Özeti gör', text: 'Temel Kip Özet sayfasıyla açılır; durum, gecikme ve ekip yükü buradadır.' },
+            { title: 'Hızlı tanıma geç', text: '+ Yeni Görev ile Hızlı Görev Tanımı sekmesini açın.' },
             { title: 'Sorumluyu ara', text: 'Ad veya personel numarasıyla bir ya da daha çok kişi seçin.' },
             { title: 'Termini ver', text: 'Termin tarihini belirleyip Takvime ekleyin.' }
           ]} />
@@ -126,7 +126,7 @@ function ModeGuide() {
         <div className="help-checks">
           <div><span>1</span><p><strong>Ayarlar</strong> sayfasını açın.</p></div>
           <div><span>2</span><p>Üstteki çalışma kipi kartlarından istediğiniz kipi seçin.</p></div>
-          <div><span>3</span><p>Temel Kip seçildiğinde uygulama Takvim odaklı sade görünüme geçer; Kapsamlı Kip seçildiğinde tüm görev yönetimi sayfaları yeniden açılır.</p></div>
+          <div><span>3</span><p>Temel Kip seçildiğinde uygulama Özet sayfasıyla açılan sade görünüme geçer; Kapsamlı Kip seçildiğinde tüm görev yönetimi sayfaları yeniden açılır.</p></div>
         </div>
       </section>
     </div>
@@ -144,8 +144,8 @@ function Summary() {
       <section className="card help-section-card">
         <h3>Temel Kip akışı</h3>
         <Flow steps={[
-          { title: 'Takvim', text: 'Temel Kip Takvim sayfasında aylık görünümle başlar.' },
-          { title: 'Hızlı Görev Tanımı', text: 'Yeni kayıt için ayrı sekmeye geçin.' },
+          { title: 'Özet', text: 'Temel Kip Özet sayfasıyla başlar; durum, gecikme ve ekip yükü buradadır.' },
+          { title: 'Hızlı Görev Tanımı', text: '+ Yeni Görev düğmesiyle Takvim sayfasındaki sekmeye geçin.' },
           { title: 'Proje ve görev', text: 'Projeyi belirleyip görevi ve kısa açıklamayı yazın.' },
           { title: 'Sorumlu', text: 'Ad veya personel numarasıyla kişileri arayıp seçin.' },
           { title: 'Termin', text: 'Termin tarihini girip kaydı Takvime ekleyin.' }

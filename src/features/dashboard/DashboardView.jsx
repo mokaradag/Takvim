@@ -17,6 +17,7 @@ import { STATUS_DISTRIBUTION_BUCKETS, selectStatusDistribution } from './statusD
 import { selectOverdueAging, selectPlanHygiene } from './planHealth.js';
 import { useTodayKey } from '../../hooks/useTodayKey.js';
 import { selectDashboardWorkload } from './workloadProjection.js';
+import { resolveDashboardVariant } from './dashboardVariant.js';
 import { DateRangeFilter } from '../../components/DateRangeFilter';
 import {
   DEFAULT_DATE_RANGE_PRESET,
@@ -26,7 +27,13 @@ import {
 } from '../shared/dateRangeFilter.js';
 
 /* ── Özet (Dashboard) ──────────────────────────────────── */
-export function DashboardView({ onNavigate }) {
+/**
+ * Tek pano, iki kip. Kartlar, hesaplar ve KPI penceresi ortaktır; Temel ve
+ * Kapsamlı Kip farkı yalnızca `dashboardVariant.js` profilinden gelir.
+ */
+export function DashboardView({ onNavigate, variant = 'advanced' }) {
+  const profile = resolveDashboardVariant(variant);
+  const copy = profile.text;
   const allTasks = useTasks();
   const people = useAllPeople();
   const { openTask: onOpenTask } = useTaskActions();
@@ -54,9 +61,11 @@ export function DashboardView({ onNavigate }) {
     () => resolveDateRangeSelection(dateRange, today_),
     [dateRange, today_]
   );
+  // Hangi tarihin okunduğu kipe bağlıdır: Kapsamlı Kip görevin bütün etkinlik
+  // penceresini, Temel Kip yalnızca Termin'i tarar.
   const tasks = useMemo1(
-    () => filterTasksByDateRange(allTasks, activeRange),
-    [allTasks, activeRange]
+    () => filterTasksByDateRange(allTasks, activeRange, profile.dateWindow),
+    [allTasks, activeRange, profile.dateWindow]
   );
 
   // Üst rozetler ve halka grafiği TEK kaynaktan beslenir: birbirini dışlayan
@@ -136,7 +145,9 @@ export function DashboardView({ onNavigate }) {
   // Bağımlılık riski: bekleyen öncül SAYISI da burada hesaplanır. Kart daha
   // önce `deps.length` yazıyordu; bu, tamamlanmış öncülleri de sayan yanlış bir
   // rakamdı ("3 bekleyen bağımlılık" derken yalnızca biri bekliyor olabiliyordu).
+  // Bağımlılık Temel Kipte hiç yoktur: kart çizilmez ve `deps` okunmaz.
   const risks = useMemo1(() => {
+    if (!profile.showDependencyRisks) return [];
     const byId = new Map(tasks.map((task) => [task.id, task]));
     return tasks
       .map((task) => {
@@ -150,7 +161,7 @@ export function DashboardView({ onNavigate }) {
       .filter(Boolean)
       .sort((left, right) => right.blockingCount - left.blockingCount)
       .slice(0, 4);
-  }, [tasks]);
+  }, [tasks, profile.showDependencyRisks]);
 
   // Proje RAG (red/amber/green) sağlık göstergeleri.
   const portfolioHealth = useMemo1(() => {
@@ -193,7 +204,10 @@ export function DashboardView({ onNavigate }) {
   // Sorumlu denetimi kişi dizinine göre ÇÖZÜLÜR: eşleşmeyen bir Sicil ya da
   // eski ad, alan dolu diye "sağlıklı" sayılmamalıdır (Ekip sayfası bu
   // referansları düşürür ve görev iş yükü tablosundan kaybolur).
-  const hygiene = useMemo1(() => selectPlanHygiene(tasks, people), [tasks, people]);
+  const hygiene = useMemo1(
+    () => selectPlanHygiene(tasks, people, profile.hygieneCheckIds),
+    [tasks, people, profile.hygieneCheckIds]
+  );
 
   const cardScope = JSON.stringify(dateRange);
   const projectPage = useTaskTablePagination(byProject, cardScope, 5);
@@ -211,6 +225,7 @@ export function DashboardView({ onNavigate }) {
     <div className="col stagger dashboard">
       <DateRangeFilter
         sticky
+        label={profile.dateRangeLabel}
         value={dateRange}
         onChange={setDateRange}
         summary={activeRange
@@ -218,19 +233,28 @@ export function DashboardView({ onNavigate }) {
           : `${allTasks.length} görev`}
       />
 
+      {/* Temel Kipte en sık istenen eylem: var olan Hızlı Görev Tanımı sekmesi. */}
+      {profile.showQuickTaskAction && (
+        <div className="dashboard-actions">
+          <button type="button" className="btn primary" onClick={() => onNavigate('takvim', 'entry')}>
+            <Icons.Plus size={14} /> Yeni Görev
+          </button>
+        </div>
+      )}
+
       <div className="dashboard-kpi-grid">
         <Stat icon={<Icons.Briefcase size={16} />} label="Toplam görev" value={tasks.length} accent="var(--text)" trend={`${compRate}% tamamlandı`} items={tasks} onViewAll={(opener) => showDetails('all', opener)} onOpenTask={onOpenTask}
-          tip="Sistemdeki tüm aktif ve kapanmış görevlerin sayısı. Projeler, sorumlular ve tarih aralıklarına göre filtrelenebilir." />
+          tip={copy.totalTip} />
         {/* Haftalık değer uydurulmaz: son 7 günde tamamlananların gerçek sayısıdır. */}
         <Stat icon={<Icons.Check size={16} />} label="Tamamlanan" value={done} accent="var(--status-done)" trend={`+${weeklyDelta.thisWeekDone} bu hafta`} trendUp={weeklyDelta.thisWeekDone > 0} items={doneTasks} onViewAll={(opener) => showDetails('done', opener)} onOpenTask={onOpenTask}
-          tip="Durumu 'Tamamlandı' olarak işaretlenmiş görev sayısı. Bu sayı tamamlanma oranını ve hız göstergelerini besler." />
+          tip={copy.doneTip} />
         <Stat icon={<Icons.Clock size={16} />} label="Devam eden" value={progress} accent="var(--status-progress)" trend="aktif" items={progressTasks} onViewAll={(opener) => showDetails('in_progress', opener)} onOpenTask={onOpenTask}
-          tip="Üzerinde çalışılan ve hedef tarihi henüz geçmemiş görevler. Hedefi geçmiş olanlar “Geciken” kartında sayılır; Yapılacak, Devam eden, Geciken ve Tamamlanan kartlarının toplamı her zaman toplam görev sayısına eşittir." />
+          tip={copy.progressTip} />
         <Stat icon={<Icons.Circle size={16} />} label="Yapılacak" value={todo} accent="var(--status-todo)" trend="başlanmadı" items={todoTasks} onViewAll={(opener) => showDetails('todo', opener)} onOpenTask={onOpenTask}
-          tip="Henüz başlanmamış ve hedef tarihi geçmemiş görevler. Halka grafiğindeki “Yapılacak” dilimiyle aynı kovadır." />
+          tip={copy.todoTip} />
         <Stat icon={<Icons.Alert size={16} />} label="Geciken" value={overdue} accent="var(--status-overdue)" trend={overdue > 0 ? 'müdahale gerekli' : 'tertip'} trendDown={overdue > 0} items={overdueTasks} onViewAll={(opener) => showDetails('overdue', opener)} onOpenTask={onOpenTask}
           tip={<>
-            <p>Hedef tarihi geçmiş ve hâlâ tamamlanmamış görevler.</p>
+            <p>{copy.overdueTip}</p>
             <div className="rt-sep" />
             <div className="rt-row"><Icons.Alert size={12} className="rt-ico" /><span>Bu listeyi sıfırda tutmaya çalışın.</span></div>
           </>} />
@@ -246,7 +270,7 @@ export function DashboardView({ onNavigate }) {
             infoAccent="var(--status-done)"
             infoIcon={<Icons.TrendUp size={12} />}
             info={<>
-              <p>Son 14 gün içinde tamamlanan görev sayısının birikimli değişimi. Bir görev, gerçekleşen bitiş tarihinde sayılır.</p>
+              <p>{copy.completionTrendInfo}</p>
               <div className="rt-sep" />
               <div className="rt-row"><span className="rt-label">Eğri dik</span><span className="rt-val" style={{ color: 'var(--status-done)' }}>İvmelenme</span></div>
               <div className="rt-row"><span className="rt-label">Eğri yatay</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>Duraklama</span></div>
@@ -328,7 +352,7 @@ export function DashboardView({ onNavigate }) {
                     <div className="rt-row"><span className="rt-label">Oran</span><span className="rt-val">{segmentShare(s.value)}%</span></div>
                     <div className="rt-bar"><div style={{ width: `${segmentShare(s.value)}%`, background: s.color }} /></div>
                     <div className="rt-sep" />
-                    <p>{s.explain}</p>
+                    <p>{(profile.simple && s.simpleExplain) || s.explain}</p>
                   </>}
                   renderItem={(t) => (
                     <button key={t.id} className="rt-list-item" onClick={() => onOpenTask(t)}>
@@ -393,7 +417,7 @@ export function DashboardView({ onNavigate }) {
                     <div className="rt-row"><span className="rt-label">Toplam görev</span><span className="rt-val">{p.value}</span></div>
                     <div className="rt-row"><span className="rt-label">Tamamlanan</span><span className="rt-val" style={{ color: 'var(--status-done)' }}>{p.done}</span></div>
                     <div className="rt-sep" />
-                    <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{pct}%</span></div>
+                    <div className="rt-row"><span className="rt-label">{profile.projectCompletionLabel}</span><span className="rt-val">{pct}%</span></div>
                   </>}
                 >
                   <div className="col" style={{ gap: 6, cursor: 'help', width: '100%' }}>
@@ -428,7 +452,7 @@ export function DashboardView({ onNavigate }) {
               <div className="rt-sep" />
               <div className="rt-row"><span className="rt-label">Toplam</span><span className="rt-val">Kişiye atanmış tüm görevler</span></div>
               <div className="rt-row"><span className="rt-label">Açık</span><span className="rt-val">Tamamlanmamış görevler</span></div>
-              <div className="rt-row"><span className="rt-label">Geciken</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>Hedef tarihi geçmiş görevler</span></div>
+              <div className="rt-row"><span className="rt-label">Geciken</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>{copy.lateTaskLabel}</span></div>
               <div className="rt-sep" />
               <div className="rt-row"><Icons.Alert size={12} className="rt-ico" /><span>5+ açık görev: yük dengelemeyi düşünün</span></div>
             </>}
@@ -439,7 +463,7 @@ export function DashboardView({ onNavigate }) {
               { key: 'total', label: 'Toplam', title: 'Kişiye atanmış tüm görevler' },
               { key: 'active', label: 'Açık', title: 'Tamamlanmamış görevler' },
               { key: 'done', label: 'Biten', title: 'Tamamlanan görevler' },
-              { key: 'late', label: 'Geciken', title: 'Hedef tarihi geçmiş görevler' }
+              { key: 'late', label: 'Geciken', title: copy.lateTaskLabel }
             ]}
             emptyText="Görev atanmış ekip üyesi yok."
             rows={workload.map((row) => ({
@@ -470,11 +494,11 @@ export function DashboardView({ onNavigate }) {
             icon={<Icons.Clock size={14} />}
             title="Yaklaşan teslimler"
             right={<DashboardResultLimit label="Yaklaşan teslimler" value={upcomingLimit} onChange={setUpcomingLimit} />}
-            subtitle={`Hedef tarihi en yakın ${upcomingLimit} görev`}
+            subtitle={copy.upcomingSubtitle(upcomingLimit)}
             infoAccent="var(--status-overdue)"
             infoIcon={<Icons.Clock size={12} />}
             info={<>
-              <p>Hedef tarihi en yakın olan, henüz tamamlanmamış görevler. Acil işlere bakmak için kullanın.</p>
+              <p>{copy.upcomingInfo}</p>
               <div className="rt-sep" />
               <div className="rt-row"><span className="rt-label">Kırmızı sayı</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>≤ 3 gün</span></div>
               <div className="rt-row"><span className="rt-label">Tıklama</span><span className="rt-val">Detay panelini açar</span></div>
@@ -513,21 +537,23 @@ export function DashboardView({ onNavigate }) {
         </div>
       </div>
 
-      {/* Portföy sağlığı (RAG) — PMO standardı özet */}
+      {/* Proje sağlığı: toplam / tamamlanan / geciken görevden türer. */}
       <div className="card">
         <CardHead
           icon={<Icons.Briefcase size={14} />}
-          title="Portföy sağlığı"
-          subtitle={`${portfolioHealth.portfolio.length} proje · RAG değerlendirmesi`}
+          title={profile.healthTitle}
+          subtitle={profile.healthSubtitle(portfolioHealth.portfolio.length)}
           infoAccent="var(--c-emerald)"
           infoIcon={<Icons.Briefcase size={12} />}
           info={<>
-            <p><strong>RAG</strong> (Red-Amber-Green) projelerin sağlık durumunu öz olarak gösteren PMO standardıdır.</p>
+            {profile.simple
+              ? <p>Projeler, geciken görev oranına göre renklendirilir.</p>
+              : <p><strong>RAG</strong> (Red-Amber-Green) projelerin sağlık durumunu öz olarak gösteren PMO standardıdır.</p>}
             <div className="rt-sep" />
             <div className="rt-row"><span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--status-done)' }} /><span><strong>Yeşil:</strong> &lt;%10 görev gecikmesi</span></div>
             <div className="rt-row"><span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--c-amber)' }} /><span><strong>Sarı:</strong> %10–30 görev gecikmesi</span></div>
             <div className="rt-row"><span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--status-overdue)' }} /><span><strong>Kırmızı:</strong> &gt;%30 görev gecikmesi</span></div>
-            <div className="rt-foot"><Icons.Sparkle size={11} /> Detaylar için Raporlar bölümüne bakın.</div>
+            {!profile.simple && <div className="rt-foot"><Icons.Sparkle size={11} /> Detaylar için Raporlar bölümüne bakın.</div>}
           </>}
           right={
             <div className="row" style={{ gap: 8 }}>
@@ -548,8 +574,8 @@ export function DashboardView({ onNavigate }) {
                 accent={p.color}
                 icon={<span style={{ width: 10, height: 10, borderRadius: 2, background: p.color, display: 'inline-block' }} />}
                 content={<>
-                  <div className="rt-row"><span className="rt-label">RAG</span><span className="rt-val" style={{ color: ragColor }}>{p.rag === 'green' ? 'Yeşil' : p.rag === 'amber' ? 'Sarı' : 'Kırmızı'}</span></div>
-                  <div className="rt-row"><span className="rt-label">İlerleme</span><span className="rt-val">{p.done} / {p.total} · {pct}%</span></div>
+                  <div className="rt-row"><span className="rt-label">{profile.healthStatusLabel}</span><span className="rt-val" style={{ color: ragColor }}>{p.rag === 'green' ? 'Yeşil' : p.rag === 'amber' ? 'Sarı' : 'Kırmızı'}</span></div>
+                  <div className="rt-row"><span className="rt-label">{profile.projectCompletionLabel}</span><span className="rt-val">{p.done} / {p.total} · {pct}%</span></div>
                   {p.overdue > 0 && <div className="rt-row"><span className="rt-label">Geciken</span><span className="rt-val" style={{ color: 'var(--status-overdue)' }}>{p.overdue}</span></div>}
                 </>}
               >
@@ -573,7 +599,7 @@ export function DashboardView({ onNavigate }) {
             );
           })}
         </div>
-        <DashboardPagination label="Portföy sağlığı" {...healthPage} total={portfolioHealth.portfolio.length} />
+        <DashboardPagination label={profile.healthTitle} {...healthPage} total={portfolioHealth.portfolio.length} />
       </div>
 
       {/* Haftalık tamamlanma kesiti */}
@@ -614,14 +640,14 @@ export function DashboardView({ onNavigate }) {
             infoAccent="var(--status-overdue)"
             infoIcon={<Icons.Alert size={12} />}
             info={<>
-              <p>Geciken görevler, hedef tarihinin ÜZERİNDEN geçen gün sayısına göre gruplanır.</p>
+              <p>{copy.agingInfo}</p>
               <div className="rt-sep" />
               <p>Tek bir gecikme sayısı, dün gecikmiş bir işle aylardır bekleyen bir işi aynı kefeye koyar. Yaşlandırma, önce hangi işe dönüleceğini gösterir.</p>
               <div className="rt-foot"><Icons.Sparkle size={11} /> Bir kovaya gelin: içindeki görevler listelenir.</div>
             </>}
           />
           {aging.total === 0 ? (
-            <div className="empty">Hedef tarihi geçmiş görev yok.</div>
+            <div className="empty">{copy.agingEmpty}</div>
           ) : (
             <div className="col" style={{ gap: 8 }}>
               {aging.buckets.map((bucket) => (
@@ -664,18 +690,19 @@ export function DashboardView({ onNavigate }) {
           )}
         </div>
 
-        {/* Plan bütünlüğü — eksik alan taşıyan görev hiçbir ölçüme girmez. */}
+        {/* Eksik alan taşıyan görev hiçbir ölçüme girmez. Temel Kip aynı
+            denetimlerin yalnızca kendi gösterdiği alanlara bakanını açar. */}
         <div className="card">
           <CardHead
             icon={<Icons.Check size={14} />}
-            title="Plan bütünlüğü"
+            title={profile.hygieneTitle}
             subtitle={`${hygiene.cleanCount} / ${hygiene.openCount} açık görev eksiksiz`}
             infoAccent="var(--c-emerald)"
             infoIcon={<Icons.Check size={12} />}
             info={<>
-              <p>Açık görevlerde eksik kalan planlama alanları. Yalnızca tamamlanmamış görevler denetlenir.</p>
+              <p>{profile.hygieneIntro}</p>
               <div className="rt-sep" />
-              <p>Sorumlusu, termini veya planlanan tarihi olmayan bir görev iş yükü, gecikme ve kritik yol hesaplarının hiçbirine girmez; sessizce kaybolur.</p>
+              <p>{profile.hygieneDetail}</p>
             </>}
             right={
               <span
@@ -702,7 +729,7 @@ export function DashboardView({ onNavigate }) {
                   summary={<>
                     <div className="rt-row"><span className="rt-label">Eksik</span><span className="rt-val">{check.value}</span></div>
                     <div className="rt-sep" />
-                    <p>{check.explain}</p>
+                    <p>{(profile.simple && check.simpleExplain) || check.explain}</p>
                   </>}
                   renderItem={(t) => (
                     <button key={t.id} className="rt-list-item" onClick={() => onOpenTask(t)}>
@@ -763,6 +790,7 @@ export function DashboardView({ onNavigate }) {
       )}
       {detailCategory && <KpiTaskModal
         referenceDay={today_}
+        variant={profile.id}
         title={detailCategory === 'all' ? 'Toplam görev' : STATUS_DISTRIBUTION_BUCKETS.find((bucket) => bucket.id === detailCategory)?.label}
         tasks={detailCategory === 'all' ? tasks : bucketItems.get(detailCategory) || []}
         onClose={() => setDetailCategory(null)} onOpenTask={onOpenTask} restoreFocusRef={detailOpener}

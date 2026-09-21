@@ -131,7 +131,7 @@ test('uygulama kabuğu yönetim sayfasını rol kapılı çizer ve rol kaybında
   // Rol kaybında güvenli yönlendirme korunur.
   assert.match(shell, /if \(ADMIN_NAV_IDS\.has\(view\) && !isSystemAdmin\) navigate\('ozet'\);/);
   // Temel Kip yönlendirmesi yönetici sayfasını dışarıda bırakır.
-  assert.match(shell, /if \(!SIMPLE_NAV_IDS\.has\(view\) && !ADMIN_NAV_IDS\.has\(view\)\) navigate\('takvim'\);/);
+  assert.match(shell, /if \(!SIMPLE_NAV_IDS\.has\(view\) && !ADMIN_NAV_IDS\.has\(view\)\) navigate\(SIMPLE_LANDING_VIEW\);/);
 });
 
 test('genel sayfalarda proje künyesi ve dışa aktarma gösterilmez', () => {
