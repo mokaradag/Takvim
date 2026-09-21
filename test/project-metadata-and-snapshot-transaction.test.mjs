@@ -155,8 +155,8 @@ test('snapshot and co-assignee projection reuse one serializable SQL transaction
   const snapshotSource = read('src/server/repository/sqlAppRepository.js')
     .split('async function loadSnapshotFrom(')[1].split('async function loadAuthoritativeMutationRows(')[0];
   assert.doesNotMatch(projectionSource, /loadVisibleTaskAssignees/);
-  assert.match(snapshotSource, /JOIN @VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
+  assert.match(snapshotSource, /JOIN #VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
   assert.match(snapshotSource, /WHERE auth\.IdentityVisible = 1/);
-  assert.match(snapshotSource, /FROM @ExecutiveScope es\s+WHERE es\.EmployeeSicil = ta\.Sicil/);
+  assert.match(snapshotSource, /FROM #ExecutiveScope es\s+WHERE es\.EmployeeSicil = ta\.Sicil/);
   assert.match(projectionSource, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });

@@ -197,9 +197,13 @@ test('project creation does not append the committed root WBS a second time', ()
 
 test('partial task visibility cannot add inactive projects to the visible project set', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
+  // Görev tabanlı KISMİ görünürlük iki dizin aramalı kümeden kurulur; her
+  // ikisi de ETKİN proje süzgecinden geçtikten sonra görünür kümeye yazılır.
+  assert.match(source, /INSERT #OwnScopedProjects\(ProjectId\)[\s\S]*t\.CreatedBySicil = @sicil[\s\S]*FROM dbo\.MR_TaskAssignees ta[\s\S]*ta\.Sicil = @sicil/);
+  assert.match(source, /INSERT #ScopeAssignedProjects\(ProjectId\)[\s\S]*FROM #ExecutiveScope es[\s\S]*JOIN dbo\.MR_TaskAssignees ta ON ta\.Sicil = es\.EmployeeSicil/);
   assert.match(
     source,
-    /SELECT DISTINCT t\.ProjectId, 'PARTIAL'\s+FROM dbo\.MR_Tasks t\s+JOIN dbo\.MR_Projects p ON p\.ProjectId = t\.ProjectId\s+WHERE @isAdmin = 0 AND p\.IsActive = 1[\s\S]*t\.CreatedBySicil = @sicil[\s\S]*FROM dbo\.MR_TaskAssignees ta/s
+    /SELECT DISTINCT scoped\.ProjectId, 'PARTIAL'[\s\S]*SELECT own\.ProjectId FROM #OwnScopedProjects own[\s\S]*SELECT team\.ProjectId FROM #ScopeAssignedProjects team[\s\S]*JOIN dbo\.MR_Projects p ON p\.ProjectId = scoped\.ProjectId\s+WHERE @isAdmin = 0 AND p\.IsActive = 1/s
   );
 });
 
@@ -396,12 +400,15 @@ test('snapshot HR09 FULL visibility applies only to corporate projects', () => {
 
 test('partial snapshots expose the WBS catalog only for a creator or assigned user while retaining ancestor fallback', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
-  assert.match(source, /DECLARE @TaskScopedWbsProjects TABLE\(ProjectId uniqueidentifier PRIMARY KEY\)/);
-  assert.match(source, /INSERT @TaskScopedWbsProjects\(ProjectId\)[\s\S]*t\.CreatedBySicil = @sicil[\s\S]*FROM dbo\.MR_TaskAssignees ta[\s\S]*ta\.Sicil = @sicil/);
+  assert.match(source, /CREATE TABLE #TaskScopedWbsProjects\(ProjectId uniqueidentifier PRIMARY KEY\)/);
+  // Katalog kümesi yalnızca KENDİ oluşturduğu/sorumlusu olduğu projelerden
+  // türer; yönetim kapsamı (#ScopeAssignedProjects) bu kümeyi genişletmez.
+  assert.match(source, /INSERT #TaskScopedWbsProjects\(ProjectId\)\s+SELECT own\.ProjectId\s+FROM #OwnScopedProjects own\s+JOIN #VisibleProjects v ON v\.ProjectId = own\.ProjectId AND v\.AccessLevel = 'PARTIAL'/);
   assert.match(source, /;WITH RequiredPartialWbs AS \(/);
   assert.match(source, /WHERE v\.AccessLevel = 'PARTIAL'[\s\S]*JOIN RequiredPartialWbs child ON child\.ParentWbsId = parent\.WbsId/);
-  assert.match(source, /WHERE v\.AccessLevel = 'FULL'[\s\S]*@TaskScopedWbsProjects scopedProject[\s\S]*OR EXISTS \(SELECT 1 FROM RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
-  assert.match(source, /OPTION \(MAXRECURSION 1000\)/);
+  // Özyinelemeli ata zinciri bir kez toplanır ve WBS seçimi hazır kümeyi okur.
+  assert.match(source, /INSERT #RequiredPartialWbs\(WbsId\)\s+SELECT DISTINCT WbsId FROM RequiredPartialWbs\s+OPTION \(MAXRECURSION 1000\)/);
+  assert.match(source, /WHERE v\.AccessLevel = 'FULL'[\s\S]*#TaskScopedWbsProjects scopedProject[\s\S]*OR EXISTS \(SELECT 1 FROM #RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
 });
 
 test('WBS reparent validation holds update and serializable locks across the ancestry walk', () => {
@@ -449,9 +456,12 @@ test('manual project codes cannot silently suppress or collide with corporate sy
 test('partial-only snapshots constrain the people directory to authorized project context', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /DECLARE @HasFullScope bit = CASE[\s\S]*AccessLevel = 'FULL'/);
-  assert.match(source, /FROM dbo\.MR_V_PeopleDirectory pd\s+WHERE @HasFullScope = 1\s+OR pd\.Sicil = @sicil/s);
-  assert.match(source, /WHERE p\.LeadSicil = pd\.Sicil/);
-  assert.match(source, /WHERE visibleAssignee\.Sicil = pd\.Sicil[\s\S]*visibleAssignee\.Sicil = @sicil/s);
+  // Rehber kümesi önceden toplanır; yayınlanan satırlar yine aynı iki kuralla
+  // sınırlanır: tam kapsam ya da yetkili kişi kümesinde olmak.
+  assert.match(source, /FROM #Directory pd\s+WHERE @HasFullScope = 1\s+OR EXISTS \(SELECT 1 FROM #DirectoryVisibleSicils dv WHERE dv\.Sicil = pd\.Sicil\)/s);
+  assert.match(source, /INSERT #DirectoryVisibleSicils\(Sicil\)[\s\S]*SELECT @sicil AS Sicil/);
+  assert.match(source, /SELECT p\.LeadSicil\s+FROM dbo\.MR_Projects p\s+JOIN #VisibleProjects v ON v\.ProjectId = p\.ProjectId/);
+  assert.match(source, /JOIN #VisibleProjects visibleProject ON visibleProject\.ProjectId = visibleTask\.ProjectId[\s\S]*visibleAssignee\.Sicil = @sicil/s);
   assert.match(source, /es\.EmployeeSicil = visibleAssignee\.Sicil/);
   assert.doesNotMatch(source, /visibilityGate\.TaskId = visibleTask\.TaskId/);
 });
@@ -563,13 +573,16 @@ test('persisted Sicil validation rejects values above SQL Server int maximum bef
 
 test('project-level READ grants expose project tasks, WBS, assignees, and required people without enabling complete scheduling data', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
-  assert.match(source, /DECLARE @ReadGrantedProjects TABLE\(ProjectId uniqueidentifier PRIMARY KEY\)/);
+  assert.match(source, /CREATE TABLE #ReadGrantedProjects\(ProjectId uniqueidentifier PRIMARY KEY\)/);
   assert.match(source, /pa\.AccessLevel = 'READ'/);
-  assert.match(source, /@ReadGrantedProjects readProject WHERE readProject\.ProjectId = w\.ProjectId/);
-  assert.match(source, /@ReadGrantedProjects readProject WHERE readProject\.ProjectId = t\.ProjectId/);
+  assert.match(source, /#ReadGrantedProjects readProject WHERE readProject\.ProjectId = w\.ProjectId/);
+  assert.match(source, /#ReadGrantedProjects readProject WHERE readProject\.ProjectId = t\.ProjectId/);
   assert.match(source, /readProject\.ProjectId = visibleTask\.ProjectId/);
-  assert.doesNotMatch(source, /\n {7}\)\n {4}ORDER BY pd\.DisplayName, pd\.Sicil/);
   assert.match(source, /SELECT d\.\*[\s\S]*WHERE v\.AccessLevel = 'FULL';/);
+  // Yetkili mutasyon yanıtında da READ yetkisi görev/WBS görünürlüğünü açar,
+  // bağımlılıkları AÇMAZ.
+  assert.match(source, /JOIN #ProjectAuth pa ON pa\.ProjectId = w\.ProjectId\s+WHERE pa\.AccessLevel = 'FULL' OR pa\.HasReadGrant = 1 OR pa\.IsTaskScoped = 1;/);
+  assert.match(source, /JOIN #ProjectAuth pa ON pa\.ProjectId = d\.ProjectId\s+WHERE pa\.AccessLevel = 'FULL';/);
 });
 
 test('root WBS deletion is rejected in both domain state and SQL persistence', () => {

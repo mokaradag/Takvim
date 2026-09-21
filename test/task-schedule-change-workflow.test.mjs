@@ -720,15 +720,18 @@ test('görev silme, yıkıcı deyimlerden önce görev ve ilişki aralıkların�
 
 test('WBS kataloğu görev kapsamlı projeleri satır başına görev sorgulamadan önceden hesaplar', () => {
   const source = readFileSync(new URL('../src/server/repository/sqlAppRepository.js', import.meta.url), 'utf8');
-  const start = source.indexOf('DECLARE @TaskScopedWbsProjects TABLE(ProjectId uniqueidentifier PRIMARY KEY)');
+  const start = source.indexOf('INSERT #TaskScopedWbsProjects(ProjectId)');
   const end = source.indexOf('-- Sorumlu SAYISI');
   assert.ok(start >= 0, 'WBS seçim sorgusu bulunmalıdır');
   assert.ok(end > start, 'görev seçim sorgusu WBS sorgusundan sonra bulunmalıdır');
   const wbsBody = source.slice(start, end);
-  assert.match(wbsBody, /DECLARE @TaskScopedWbsProjects TABLE\(ProjectId uniqueidentifier PRIMARY KEY\)/);
-  assert.match(wbsBody, /INSERT @TaskScopedWbsProjects\(ProjectId\)/);
-  assert.match(wbsBody, /@TaskScopedWbsProjects scopedProject/);
+  assert.match(source, /CREATE TABLE #TaskScopedWbsProjects\(ProjectId uniqueidentifier PRIMARY KEY\)/);
+  assert.match(wbsBody, /#TaskScopedWbsProjects scopedProject/);
   assert.doesNotMatch(wbsBody, /FROM dbo\.MR_Tasks scopedTask/);
+  // Katalog kümesi hazır proje kümesinden okunur; görev/sorumlu tabloları bu
+  // deyimde yeniden taranmaz.
+  const catalogStatement = source.slice(start, source.indexOf(';', start));
+  assert.doesNotMatch(catalogStatement, /dbo\.MR_Tasks|dbo\.MR_TaskAssignees/);
 });
 
 test('Temel Kip tarih talebi eylemini ve ortak modal erişilebilirlik sınırını kullanır', () => {

@@ -48,12 +48,14 @@ test('snapshot API completes assignees only for already-authorized visible task 
   const snapshotSource = read('src/server/repository/sqlAppRepository.js')
     .split('async function loadSnapshotFrom(')[1].split('async function loadAuthoritativeMutationRows(')[0];
   assert.doesNotMatch(repositorySource, /loadVisibleTaskAssignees|STRING_SPLIT|taskIds/);
-  assert.match(snapshotSource, /JOIN @VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
-  assert.match(snapshotSource, /ownAssignment\.TaskId = ta\.TaskId AND ownAssignment\.Sicil = @sicil/);
+  assert.match(snapshotSource, /JOIN #VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
+  // Kendi göreve atanmış kullanıcı, kimliği kapalı eş sorumlunun SATIRINI yine
+  // görür; bu karar önceden toplanan sorumlu gerçeklerinden okunur.
+  assert.match(snapshotSource, /WHERE auth\.IdentityVisible = 1 OR facts\.IsOwnAssignee = 1/);
   assert.match(snapshotSource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
   assert.equal((snapshotSource.match(/MR_V_CorporateProjectAccess/g) || []).length, 1);
-  assert.match(snapshotSource, /WHERE auth\.IdentityVisible = 1/);
-  assert.match(snapshotSource, /LEFT JOIN dbo\.MR_V_PeopleDirectory pd ON pd\.Sicil = ta\.Sicil/);
+  assert.equal((snapshotSource.match(/MR_V_PeopleDirectory/g) || []).length, 1);
+  assert.match(snapshotSource, /LEFT JOIN #Directory pd ON pd\.Sicil = ta\.Sicil/);
   assert.match(snapshotSource, /return applyTaskAssigneeProjection/);
   assert.match(repositorySource, /snapshot: \{ \.\.\.snapshot, scheduleRequests: scheduleInbox\.items, scheduleRequestSummary:/);
   assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);

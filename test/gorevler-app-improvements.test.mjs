@@ -181,7 +181,9 @@ test('görev künyesi oluşturanın adını görev satırından okur', () => {
   assert.match(byline, /Görevi tanımlayan/);
 
   const repository = read('src/server/repository/sqlAppRepository.js');
-  assert.match(repository, /creatorViewerAssignment\.Sicil = @sicil/);
+  // Künye yalnızca kendi sorumluluğu, oluşturuculuğu ya da yetkili proje
+  // erişimiyle açılır; bu karar önceden toplanan sorumlu gerçeklerinden okunur.
+  assert.match(repository, /facts\.IsOwnAssignee = 1/);
   assert.match(repository, /creatorAuth\.IdentityVisible = 1 THEN t\.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil/);
   assert.match(repository, /createdBySicil: row\.VisibleCreatedBySicil == null/);
 });
