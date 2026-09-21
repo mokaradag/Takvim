@@ -19,10 +19,13 @@
  * `localStorage` okuyup sınıf/stil yazmaktır.
  */
 
+import { TWEAK_DEFAULTS } from './tweaks-defaults.js';
+
 export const TWEAKS_STORAGE_KEY = 'mergen_rota_tweaks_v1';
 
 /** Gövde sınıflarını saklanan tercihlerden türetir. */
 export function bodyClassesForTweaks(tweaks = {}) {
+  tweaks = { ...TWEAK_DEFAULTS, ...tweaks };
   const classes = [tweaks.theme === 'light' ? 'theme-light' : 'theme-dark'];
   if (tweaks.reduceMotion) classes.push('reduce-motion');
   if (tweaks.highContrast) classes.push('high-contrast');
@@ -50,9 +53,12 @@ export function fontScaleStyleForTweaks(tweaks = {}) {
  * devam eder: erişilebilirlik ayarı bir hata yüzünden uygulamayı kilitlemez.
  */
 export const TWEAKS_BOOTSTRAP_SCRIPT = `(function(){try{
+var t=${JSON.stringify(TWEAK_DEFAULTS)};
+try{
 var raw=localStorage.getItem(${JSON.stringify(TWEAKS_STORAGE_KEY)});
 var p=raw?JSON.parse(raw):{};
-var t=p&&typeof p==='object'&&!Array.isArray(p)?p:{};
+if(p&&typeof p==='object'&&!Array.isArray(p))Object.assign(t,p);
+}catch(e){}
 var c=document.body.classList;
 c.toggle('theme-light',t.theme==='light');
 c.toggle('theme-dark',t.theme!=='light');

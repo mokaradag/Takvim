@@ -7,7 +7,7 @@ export const TWEAK_DEFAULTS = {
   showArchivedProjects: false,
   appMode: 'advanced',
   calLarge: false,
-  reduceMotion: false,
+  reduceMotion: true,
   showEmblem: true,
   // Tarih gösterimi kurumsal alışkanlığa göre seçilir; varsayılan gg/aa/yyyy.
   dateFormat: 'dd/mm/yyyy',

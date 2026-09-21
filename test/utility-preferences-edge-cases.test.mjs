@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
+
+import { bodyClassesForTweaks, TWEAKS_BOOTSTRAP_SCRIPT } from '../src/lib/tweaksBootstrap.js';
 
 import {
   COLOR_MAP,
@@ -34,6 +37,36 @@ function createStorage(initial = {}) {
     }
   };
 }
+
+test('hareket azaltma ilk boyamada varsayılandır ve kayıtlı seçim korunur', () => {
+  for (const [raw, expected] of [
+    [null, true],
+    ['{}', true],
+    ['{"theme":"light"}', true],
+    ['{"reduceMotion":true}', true],
+    ['{"reduceMotion":false}', false],
+    ['bozuk JSON', true],
+    ['null', true],
+    ['[]', true],
+    [new Error('Depolama kapalı'), true]
+  ]) {
+    const classes = new Set();
+    runInNewContext(TWEAKS_BOOTSTRAP_SCRIPT, {
+      localStorage: { getItem() { if (raw instanceof Error) throw raw; return raw; } },
+      document: {
+        body: {
+          classList: { toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } },
+          style: {}
+        },
+        documentElement: { style: { setProperty() {} } }
+      }
+    });
+    assert.equal(classes.has('reduce-motion'), expected, String(raw));
+    if (raw === '{"theme":"light"}') assert.equal(classes.has('theme-light'), true);
+  }
+  assert.ok(bodyClassesForTweaks().includes('reduce-motion'));
+  assert.equal(bodyClassesForTweaks({ reduceMotion: false }).includes('reduce-motion'), false);
+});
 
 test('COLOR_MAP is frozen and exposes all supported design tokens', () => {
   assert.equal(Object.isFrozen(COLOR_MAP), true);

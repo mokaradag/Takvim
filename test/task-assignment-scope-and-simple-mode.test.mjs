@@ -179,11 +179,17 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
   assert.equal(usages.length, 3, 'atama bayrağı yalnızca seçilebilir proje, kişi ve kapsam sorgularında kullanılmalıdır');
   // Deyim sınırlarında dilimleme: bayrağın sızmaması gereken kümeler tek tek
   // sınanır, araya giren başka deyimler sonucu bozmaz.
-  const statement = (head) => {
-    const start = snapshot.indexOf(head);
-    assert.ok(start >= 0, `deyim bulunmalıdır: ${head}`);
-    return snapshot.slice(start, snapshot.indexOf(';', start));
+  const allStatements = (head) => {
+    const found = [];
+    for (let start = snapshot.indexOf(head); start >= 0; start = snapshot.indexOf(head, start + head.length)) {
+      const end = snapshot.indexOf(';', start + head.length);
+      assert.ok(end > start, `deyim sonu bulunmalıdır: ${head}`);
+      found.push(snapshot.slice(start, end));
+    }
+    assert.ok(found.length > 0, `deyim bulunmalıdır: ${head}`);
+    return found;
   };
+  const statement = (head) => allStatements(head)[0];
   // Görünür proje kümesi ve görev kapsamı bayrağa bakmaz.
   for (const head of [
     "INSERT #VisibleProjects(ProjectId, AccessLevel)",
@@ -194,7 +200,9 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
     "INSERT #VisibleTasks(TaskId)",
     ";WITH RequiredPartialWbs AS ("
   ]) {
-    assert.doesNotMatch(statement(head), /@canAssignAllCorporate/, `${head} bayraktan etkilenmemelidir`);
+    for (const sqlStatement of allStatements(head)) {
+      assert.doesNotMatch(sqlStatement, /@canAssignAllCorporate/, `${head} bayraktan etkilenmemelidir`);
+    }
   }
   assert.match(statement('INSERT #VisibleTasks(TaskId)'), /SELECT t\.TaskId/);
   // Görev ve WBS seçimleri de bayrağı okumaz.
