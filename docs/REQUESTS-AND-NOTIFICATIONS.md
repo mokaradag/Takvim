@@ -117,6 +117,12 @@ görev işlemi → posta niyeti (MR_TaskMailOutbox) → commit başarılı
 
 Görev yazması SMTP'yi **beklemez** ve posta sunucusu erişilemez olsa da tamamlanır. Teslimat var olan SMTP altyapısını kullanır; ikinci bir SMTP istemcisi yazılmaz. Tekilleştirme anahtarı `(ilişkilendirme, görev, alıcı)` üçlüsünden üretilir: yeniden deneme aynı iletiyi ikinci kez göndermez. Alıcı adresi göreve kopyalanmaz, her teslimatta kurumsal dizinden okunur. Altı denemeden sonra kayıt `FAILED` olur ve yönetim konsolundan görülebilir.
 
+Tur, satırları **kiralayarak** alır ve kira turun tamamını kapsar: parti boyu SMTP zaman aşımından türetilir, kira üst sınırına sığmayan bir parti daraltılır. Her satır kirayı alan turun **sahiplik belirtecini** taşır; kira yine de dolar ve satırı başka bir uygulama örneği devralırsa, geciken turun durum yazması satıra dokunmaz. Böylece çok örnekli dağıtımda aynı ileti iki kez gönderilmez.
+
+Bağlantı ileti gövdesi aktarıldıktan sonra, kabul yanıtı okunmadan koparsa posta sunucusu iletiyi **kabul etmiş olabilir**. Böyle bir satır olağan yeniden deneme yoluna döndürülseydi alıcı aynı iletiyi ikinci kez alabilirdi; satır bu yüzden `FAILED` olarak, `MAIL_DELIVERY_UNCERTAIN` koduyla durur ve kendiliğinden bir daha gönderilmez. Kayıt kaybolmaz: yönetim konsolunda görünür ve gerekirse elle ele alınır.
+
+Yoklama aralığı `MERGEN_ROTA_TASK_MAIL_POLL_MS` ile ayarlanır. Değişken tanımsız, boş ya da geçersizse varsayılan **30000 ms** uygulanır; geçerli bir değer 5000–300000 aralığına kırpılır.
+
 ## Atama zil bildirimi
 
 Başka bir kullanıcı bir kişiyi göreve atadığında, atanan kişi sağ üstteki **aynı** zilde bildirim alır. Bildirim görevi, projeyi, atayanı, Hedef/Termin'i ve olay zamanını taşır. Tıklamak görevi açar; erişim olağan yetkili yükleme yolunda yeniden doğrulanır.

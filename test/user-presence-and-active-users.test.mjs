@@ -161,6 +161,63 @@ test('çok eski nabız listeden tümüyle düşer ve sorgu sınırlıdır', asyn
   } finally { await stack.dispose(); }
 });
 
+test('kurumsal sayaçlar liste sınırının ÖTESİNDEKİ aktif kullanıcıyı da sayar', async () => {
+  const now = Date.now();
+  const recent = (offsetMs) => new Date(now - offsetMs).toISOString();
+  // Liste sınırını aşacak kadar kullanıcı: sınırın ötesinde kalan direktörlük ve
+  // müdürlük, sayaçlardan düşmemelidir.
+  const extras = Array.from({ length: 220 }, (unused, index) => ({
+    Sicil: 971000 + index,
+    DisplayName: `Aktif ${index}`,
+    Username: `u971${String(index).padStart(3, '0')}`,
+    Directorate: `Direktörlük ${index % 7}`,
+    Department: `Müdürlük ${index % 11}`,
+    Unit: `Birim ${index % 3}`
+  }));
+  const stack = await createActualStack(seed({
+    people: [
+      { Sicil: ADMIN, DisplayName: 'Sistem Yöneticisi', Username: 'u970001', Directorate: 'Bilgi Teknolojileri', Department: 'Altyapı', Unit: 'İşletim' },
+      ...extras
+    ],
+    // En eski nabızlar listenin sonunda kalır; sınır onları keser.
+    userPresence: extras.map((entry, index) => ({
+      Sicil: entry.Sicil,
+      FirstSeenAt: recent(60000 + index),
+      SessionStartedAt: recent(60000 + index),
+      LastSeenAt: recent(1000 + index)
+    }))
+  }), { sicil: ADMIN, corporateWbsSource: false });
+  try {
+    const data = await store.loadActiveUsers();
+    assert.equal(data.metrics.activeCount, extras.length);
+    assert.equal(data.users.length, data.definition.listLimit);
+    assert.ok(data.users.length < extras.length, 'tablo sınırlı kalmalıdır');
+    // Sayaçlar gösterilen satırdan değil, aktif kümenin TAMAMINDAN gelir.
+    assert.equal(data.metrics.directorateCount, 7);
+    assert.equal(data.metrics.departmentCount, 11);
+  } finally { await stack.dispose(); }
+});
+
+test('nabız yazması işlem içindedir', async () => {
+  const stack = await createActualStack(seed(), { sicil: USER, corporateWbsSource: false });
+  try {
+    const before = stack.db.statements.length;
+    const openedBefore = stack.db.transactions.length;
+    await heartbeatRoute.POST(new Request('http://localhost/api/mergen-rota/presence/heartbeat', { method: 'POST' }));
+
+    const upsert = stack.db.statements
+      .findIndex((entry, index) => index >= before && entry.sql.includes('UPDATE dbo.MR_UserPresence'));
+    assert.ok(upsert >= 0, 'nabız yazması çalışmalıdır');
+    // Otomatik işlem kipinde `HOLDLOCK` aralık kilidi koşullu `INSERT`'ten önce
+    // bırakılabiliyor, eşzamanlı ilk nabız birincil anahtar hatasına düşüyordu.
+    assert.ok(
+      stack.db.transactions.slice(openedBefore).some((entry) => entry.statementIndex <= upsert),
+      'nabız yazması bir işlem içinde olmalıdır'
+    );
+    assert.deepEqual(stack.db.userPresence.map((row) => Number(row.Sicil)), [USER]);
+  } finally { await stack.dispose(); }
+});
+
 test('nabız ucu kimliği gövdeden almaz ve göç uygulanmamışken uygulamayı düşürmez', async () => {
   const stack = await createActualStack(seed({ assignmentCoordinationSchemaMissing: true }), { sicil: USER, corporateWbsSource: false });
   try {
@@ -205,7 +262,9 @@ test('Aktif Kullanıcılar sekmesi kalan yüksekliği doldurur ve başlığı sa
   const tab = read('src/features/system-admin/tabs/SystemPresenceTab.jsx');
   assert.match(tab, /useAdminResource\(load, \{ intervalMs: REFRESH_INTERVAL_MS, enabled \}\)/);
   assert.match(tab, /className="sysadmin-tile-grid sysadmin-presence-metrics"/);
-  assert.match(tab, /className="sysadmin-presence-scroll"/);
+  // Kaydırma kabı klavyeyle odaklanabilir olmalıdır: içinde etkileşimli öğe
+  // yoktur, odaklanamazsa klavye kullanan biri kalan satırlara ulaşamaz.
+  assert.match(tab, /className="sysadmin-presence-scroll" tabIndex=\{0\} role="region" aria-label="[^"]+"/);
 
   const css = read('src/app/styles/system-admin.css');
   // Sayfa gereksiz kaydırılmaz: panel taşmayı gizler, yalnızca tablo kaydırılır.
@@ -214,9 +273,28 @@ test('Aktif Kullanıcılar sekmesi kalan yüksekliği doldurur ve başlığı sa
   const scroll = css.slice(css.indexOf('.sysadmin-presence-scroll'), css.indexOf('.sysadmin-presence-table'));
   assert.match(scroll, /overflow: auto/);
   assert.match(scroll, /flex: 1 1 0/);
-  const header = css.slice(css.indexOf('.sysadmin-presence-table thead th'));
+  assert.match(scroll, /\.sysadmin-presence-scroll:focus-visible \{[^}]*outline:/);
+  // Dilim KURAL GÖVDESİYLE sınırlıdır: dosyanın ilerisindeki başka bir kural
+  // `position: sticky` bildirirse sav bu kural silinmiş olsa da geçerdi.
+  const headerStart = css.indexOf('.sysadmin-presence-table thead th');
+  const header = css.slice(headerStart, css.indexOf('}', headerStart));
   assert.match(header, /position: sticky/);
   assert.match(header, /top: 0/);
+});
+
+test('Aktif Kullanıcılar sekmesi Demo Kipinde sıfır aktif kullanıcı İDDİA ETMEZ', async () => {
+  const { CLIENT_STATE, findElement, mountComponent } = await import('./helpers/clientComponentHarness.mjs');
+  const { SystemPresenceTab } = await import('../src/features/system-admin/tabs/SystemPresenceTab.jsx');
+  globalThis[CLIENT_STATE] = { actions: {} };
+  const view = mountComponent(SystemPresenceTab, { enabled: false });
+  try {
+    // Demo Kipinde sorgu HİÇ çalışmaz; "etkin kullanıcı yok" bir saptama olurdu.
+    const rendered = JSON.stringify(view.output);
+    assert.equal(rendered.includes('Şu anda etkin kullanıcı görünmüyor.'), false);
+    assert.equal(rendered.includes('Demo Kipinde varlık verisi okunmaz.'), true);
+    // Ölçüm kutuları da çizilmez: tanımsız değerli kutu gösterilmez.
+    assert.equal(findElement(view.output, (node) => node.props?.className === 'sysadmin-tile-grid sysadmin-presence-metrics'), null);
+  } finally { view.unmount(); delete globalThis[CLIENT_STATE]; }
 });
 
 test('etkinlik süresi ve son görülme okunur biçimde yazılır', async () => {

@@ -82,14 +82,46 @@ function recipientsOf(db, coordinationId) {
   return db.assignmentCoordinationRecipients.filter((row) => sameGuid(row.CoordinationId, coordinationId));
 }
 
-function isParticipant(db, row, sicil) {
-  return Number(row.RequesterSicil) === Number(sicil)
-    || recipientsOf(db, row.CoordinationId).some((entry) => Number(entry.Sicil) === Number(sicil));
+/** `MR_V_ExecutiveScope` üzerinden GÜNCEL yönetim ilişkisi. */
+function liveManagerOfAssignee(db, row, sicil) {
+  return (db.executiveScope || []).some((scope) =>
+    Number(scope.ManagerSicil) === Number(sicil)
+    && Number(scope.EmployeeSicil) === Number(row.RequestedAssigneeSicil));
 }
 
-function isManager(db, row, sicil) {
-  return recipientsOf(db, row.CoordinationId)
-    .some((entry) => Number(entry.Sicil) === Number(sicil) && entry.RecipientRole === 'MANAGER');
+function recordProjectId(db, row) {
+  return row.ProjectIdSnapshot ?? taskOf(db, row.TaskId)?.ProjectId ?? null;
+}
+
+function liveFullProjectAccess(db, row, params) {
+  const projectId = recordProjectId(db, row);
+  return String(params.fullProjectIds ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .some((value) => sameGuid(value, projectId));
+}
+
+/**
+ * Sunucudaki `DECISION_AUTHORITY` yükleminin ikizi.
+ *
+ * Alıcı satırı yetki taşımaz: karar hakkı sistem yöneticiliğinden, güncel tam
+ * proje yetkisinden ya da güncel İK ilişkisinden gelir.
+ */
+function decisionAuthority(db, row, params) {
+  const sicil = Number(params.sicil);
+  if (Number(row.RequesterSicil) === sicil) return false;
+  if (Number(params.isSystemAdmin) === 1) return true;
+  return liveManagerOfAssignee(db, row, sicil) || liveFullProjectAccess(db, row, params);
+}
+
+/** Sistem yöneticiliği bilinçli olarak dışarıdadır (bkz. sunucudaki yüklem). */
+function isParticipant(db, row, params) {
+  const sicil = Number(params.sicil);
+  return Number(row.RequesterSicil) === sicil
+    || recipientsOf(db, row.CoordinationId).some((entry) => Number(entry.Sicil) === sicil)
+    || liveManagerOfAssignee(db, row, sicil)
+    || liveFullProjectAccess(db, row, params);
 }
 
 function taskAvailable(db, row) {
@@ -99,10 +131,10 @@ function taskAvailable(db, row) {
   return Boolean(project && project.IsActive);
 }
 
-function actionable(db, row, sicil) {
+function actionable(db, row, params) {
   if (!taskAvailable(db, row)) return false;
-  if (row.Status === 'PENDING') return isManager(db, row, sicil);
-  if (row.Status === 'CANCELLATION_REQUESTED') return Number(row.RequesterSicil) === Number(sicil);
+  if (row.Status === 'PENDING') return decisionAuthority(db, row, params);
+  if (row.Status === 'CANCELLATION_REQUESTED') return Number(row.RequesterSicil) === Number(params.sicil);
   return false;
 }
 
@@ -117,19 +149,20 @@ function isUnread(db, row, sicil) {
     || !state.ReadVersion.equals(row.RowVersion);
 }
 
-function isVisible(db, row, sicil) {
-  if (actionable(db, row, sicil)) return true;
-  const state = notificationState(db, row, sicil);
+function isVisible(db, row, params) {
+  if (actionable(db, row, params)) return true;
+  const state = notificationState(db, row, params.sicil);
   return !state?.DismissedVersion || !Buffer.isBuffer(state.DismissedVersion)
     || !state.DismissedVersion.equals(row.RowVersion);
 }
 
-function coordinationRow(db, row, sicil) {
+function coordinationRow(db, row, params) {
+  const sicil = Number(params.sicil);
   const task = taskOf(db, row.TaskId);
   const project = task ? projectOf(db, task.ProjectId) : null;
   return {
     ...row,
-    IsManager: isManager(db, row, sicil) ? 1 : 0,
+    IsManager: decisionAuthority(db, row, params) ? 1 : 0,
     TaskTitle: row.TaskTitleSnapshot ?? task?.Title ?? '',
     ProjectId: row.ProjectIdSnapshot ?? task?.ProjectId ?? null,
     ProjectName: row.ProjectNameSnapshot ?? project?.ProjectName ?? '',
@@ -145,9 +178,9 @@ function coordinationRow(db, row, sicil) {
   };
 }
 
-function coordinationOrder(db, sicil) {
+function coordinationOrder(db, params) {
   return (left, right) => {
-    const rank = Number(!actionable(db, left, sicil)) - Number(!actionable(db, right, sicil));
+    const rank = Number(!actionable(db, left, params)) - Number(!actionable(db, right, params));
     if (rank) return rank;
     const leftAt = Date.parse(left.DecidedAt || left.CreatedAt) || 0;
     const rightAt = Date.parse(right.DecidedAt || right.CreatedAt) || 0;
@@ -173,16 +206,16 @@ function coordinationInbox(db, params) {
   const sicil = Number(params.sicil);
   const limit = Number(params.limit || 8);
   const owned = db.taskAssignmentCoordinations
-    .filter((row) => isParticipant(db, row, sicil) && taskAvailable(db, row));
+    .filter((row) => isParticipant(db, row, params) && taskAvailable(db, row));
   const counts = {
-    UnreadCount: owned.filter((row) => isUnread(db, row, sicil) && isVisible(db, row, sicil)).length,
-    PendingCount: owned.filter((row) => actionable(db, row, sicil)).length
+    UnreadCount: owned.filter((row) => isUnread(db, row, sicil) && isVisible(db, row, params)).length,
+    PendingCount: owned.filter((row) => actionable(db, row, params)).length
   };
   const items = owned
-    .filter((row) => isVisible(db, row, sicil))
-    .sort(coordinationOrder(db, sicil))
+    .filter((row) => isVisible(db, row, params))
+    .sort(coordinationOrder(db, params))
     .slice(0, limit)
-    .map((row) => coordinationRow(db, row, sicil));
+    .map((row) => coordinationRow(db, row, params));
   return [[counts], items];
 }
 
@@ -206,8 +239,8 @@ function coordinationPage(db, params) {
   const pageSize = Number(params.pageSize || 25);
   const requestedPage = Number(params.page || 0);
   const matches = db.taskAssignmentCoordinations.filter((row) => {
-    if (!isParticipant(db, row, sicil)) return false;
-    const view = coordinationRow(db, row, sicil);
+    if (!isParticipant(db, row, params)) return false;
+    const view = coordinationRow(db, row, params);
     if (params.projectId && !sameGuid(view.ProjectId, params.projectId)) return false;
     if (params.taskId && !sameGuid(row.TaskId, params.taskId)) return false;
     if (params.status && row.Status !== params.status) return false;
@@ -228,23 +261,23 @@ function coordinationPage(db, params) {
   const history = (row) => !['PENDING', 'CANCELLATION_REQUESTED'].includes(row.Status) || !taskAvailable(db, row);
   const counts = {
     Total: matches.length,
-    PendingCount: matches.filter((row) => actionable(db, row, sicil)).length,
+    PendingCount: matches.filter((row) => actionable(db, row, params)).length,
     SentCount: matches.filter((row) => Number(row.RequesterSicil) === sicil).length,
     HistoryCount: matches.filter(history).length
   };
   const tab = params.tab || 'all';
   const tabbed = matches.filter((row) => {
     if (tab === 'all') return true;
-    if (tab === 'pending') return actionable(db, row, sicil);
+    if (tab === 'pending') return actionable(db, row, params);
     if (tab === 'sent') return Number(row.RequesterSicil) === sicil;
     return history(row);
   });
   const lastPage = tabbed.length === 0 ? 0 : Math.floor((tabbed.length - 1) / pageSize);
   const page = Math.min(requestedPage, lastPage);
   const items = tabbed
-    .sort(coordinationOrder(db, sicil))
+    .sort(coordinationOrder(db, params))
     .slice(page * pageSize, page * pageSize + pageSize)
-    .map((row) => coordinationRow(db, row, sicil));
+    .map((row) => coordinationRow(db, row, params));
   return [[counts], [{ Total: tabbed.length, Page: page }], items];
 }
 
@@ -310,7 +343,7 @@ function insertRecipient(db, params) {
 function markCoordinationNotification(db, params) {
   const row = db.taskAssignmentCoordinations.find((entry) =>
     sameGuid(entry.CoordinationId, params.coordinationId));
-  if (!row || !isParticipant(db, row, Number(params.sicil))) return [[]];
+  if (!row || !isParticipant(db, row, params)) return [[]];
   if (!Buffer.isBuffer(params.eventVersion) || !row.RowVersion.equals(params.eventVersion)) return [[]];
   const existing = db.assignmentCoordinationRecipients.find((entry) =>
     sameGuid(entry.CoordinationId, params.coordinationId) && Number(entry.Sicil) === Number(params.sicil));
@@ -377,6 +410,7 @@ function insertMailIntent(db, params) {
     AttemptCount: 0,
     NextAttemptAt: new Date(0).toISOString(),
     LeaseExpiresAt: null,
+    LeaseToken: null,
     LastFailureCode: null,
     DedupeKey: params.dedupeKey,
     CreatedAt: new Date().toISOString(),
@@ -410,6 +444,16 @@ function presenceList(db, params) {
     ActiveCount: db.userPresence.filter((row) => within(row, params.activeSeconds)).length,
     RecentCount: db.userPresence.filter((row) => within(row, params.recentSeconds)).length
   };
+  // Kurumsal sayaçlar AKTİF kümenin TAMAMI üzerindedir; liste sınırı buraya
+  // uygulanmaz.
+  const active = db.userPresence
+    .filter((row) => within(row, params.activeSeconds))
+    .map((row) => person(db, row.Sicil))
+    .filter(Boolean);
+  const organizations = {
+    DirectorateCount: new Set(active.map((entry) => entry.Directorate).filter(Boolean)).size,
+    DepartmentCount: new Set(active.map((entry) => entry.Department).filter(Boolean)).size
+  };
   const rows = db.userPresence
     .filter((row) => within(row, params.recentSeconds))
     .sort((left, right) => Date.parse(right.LastSeenAt) - Date.parse(left.LastSeenAt))
@@ -427,7 +471,7 @@ function presenceList(db, params) {
         Unit: directory?.Unit ?? null
       };
     });
-  return [[counts], rows];
+  return [[counts], [organizations], rows];
 }
 
 /* ── Posta kuyruğu ──────────────────────────────────────────── */
@@ -442,6 +486,7 @@ function claimMail(db, params) {
     .slice(0, Number(params.limit || 20));
   for (const row of due) {
     row.LeaseExpiresAt = new Date(now + Number(params.leaseSeconds || 120) * 1000).toISOString();
+    row.LeaseToken = guid(params.leaseToken);
     row.UpdatedAt = new Date(now).toISOString();
   }
   return [[], due.map((row) => ({
@@ -454,16 +499,24 @@ function claimMail(db, params) {
   }))];
 }
 
-function completeMail(db, params, { sent }) {
+function completeMail(db, params, { sent, uncertain = false }) {
   const row = db.taskMailOutbox.find((entry) => Number(entry.MailId) === Number(params.mailId));
   if (!row || row.Status !== 'PENDING') return [[]];
+  // Kira SAHİPLİĞİ: kira dolduktan sonra satırı başka bir tur devralmışsa bu
+  // turun durum yazması satıra dokunmaz.
+  if (params.leaseToken != null && !sameGuid(row.LeaseToken, params.leaseToken)) return [[]];
   row.AttemptCount += 1;
   row.LeaseExpiresAt = null;
+  row.LeaseToken = null;
   row.UpdatedAt = new Date().toISOString();
   if (sent) {
     row.Status = 'SENT';
     row.SentAt = new Date().toISOString();
     row.LastFailureCode = null;
+  } else if (uncertain) {
+    // Teslimat belirsizse satır bir daha GÖNDERİLMEZ; kaybolmaz da.
+    row.LastFailureCode = params.failureCode;
+    row.Status = 'FAILED';
   } else {
     row.LastFailureCode = params.failureCode;
     row.Status = row.AttemptCount >= Number(params.maxAttempts || 6) ? 'FAILED' : 'PENDING';
@@ -575,12 +628,13 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
   }
 
   if (sqlText.includes('SELECT DISTINCT candidate.Sicil')) {
+    // Görev OLUŞTURAN kişi aday DEĞİLDİR: görev oluşturmak tam proje yetkisi
+    // vermez, karar sunucuda her durumda reddedilirdi.
     const owners = new Set();
-    for (const task of db.tasks) {
-      if (sameGuid(task.ProjectId, params.projectId) && task.CreatedBySicil != null) owners.add(Number(task.CreatedBySicil));
-    }
     const project = projectOf(db, params.projectId);
-    if (project?.SourceType === 'MANUAL' && project.LeadSicil != null) owners.add(Number(project.LeadSicil));
+    if (project?.IsActive && project.SourceType === 'MANUAL' && project.LeadSicil != null) {
+      owners.add(Number(project.LeadSicil));
+    }
     for (const access of db.projectAccess) {
       if (sameGuid(access.ProjectId, params.projectId) && access.IsActive && access.AccessLevel === 'FULL') {
         owners.add(Number(access.Sicil));
@@ -610,6 +664,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     if (sqlText.includes('INSERT dbo.MR_TaskMailOutbox(')) return insertMailIntent(db, params);
     if (sqlText.includes('WITH due AS')) return claimMail(db, params);
     if (sqlText.includes("SET Status = 'SENT'")) return completeMail(db, params, { sent: true });
+    if (sqlText.includes("Status = 'FAILED',")) return completeMail(db, params, { sent: false, uncertain: true });
     if (sqlText.includes('SET AttemptCount = AttemptCount + 1')) return completeMail(db, params, { sent: false });
     if (sqlText.includes('AS PendingCount')) return mailQueueStatus(db);
   }
@@ -662,7 +717,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     return [[]];
   }
 
-  if (sqlText.includes('AS IsListedManager')) {
+  if (sqlText.includes('AS LiveTaskId')) {
     if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
     const row = db.taskAssignmentCoordinations.find((entry) =>
       sameGuid(entry.CoordinationId, params.coordinationId));
@@ -678,9 +733,30 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
       LiveTargetFinish: live?.TargetFinish ?? null,
       LivePriority: live?.Priority ?? null,
       LiveProjectName: live ? project.ProjectName : null,
-      LiveProjectCode: live ? project.ProjectCode : null,
-      IsListedManager: isManager(db, row, Number(params.sicil)) ? 1 : 0
+      LiveProjectCode: live ? project.ProjectCode : null
     }]];
+  }
+
+  // Aynı gönderimden doğan kardeş talepler (bayatlık denetimi).
+  if (sqlText.includes('SELECT RequestedAssigneeSicil FROM dbo.MR_TaskAssignmentCoordinations')) {
+    if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
+    return [db.taskAssignmentCoordinations
+      .filter((row) => sameGuid(row.CorrelationId, params.correlationId)
+        && sameGuid(row.TaskId, params.taskId)
+        && !sameGuid(row.CoordinationId, params.coordinationId))
+      .map((row) => ({ RequestedAssigneeSicil: Number(row.RequestedAssigneeSicil) }))];
+  }
+
+  // Sorumlu kümesi değiştiğinde görev SÜRÜMÜ ilerler; açık bir düzenleyicinin
+  // elindeki eski sürüm bayatlar ve yeni sorumluyu sessizce silemez.
+  if (sqlText.includes('SET UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil')) {
+    const task = taskOf(db, params.taskId);
+    if (task) {
+      task.UpdatedAt = new Date().toISOString();
+      task.UpdatedBySicil = params.actorSicil == null ? null : Number(params.actorSicil);
+      task.RowVersion = nextVersion();
+    }
+    return [[]];
   }
 
   if (sqlText.includes('AS IsActorAssignee')) {
@@ -714,7 +790,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     if (sqlText.includes('SELECT TOP (1)')) {
       const row = db.taskAssignmentCoordinations.find((entry) =>
         sameGuid(entry.CoordinationId, params.coordinationId)
-        && isParticipant(db, entry, Number(params.sicil)));
+        && isParticipant(db, entry, params));
       return [row ? [coordinationRow(db, row, Number(params.sicil))] : []];
     }
     return [...coordinationInbox(db, params)];

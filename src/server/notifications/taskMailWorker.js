@@ -17,10 +17,20 @@ import { runTaskMailOutbox } from './taskMailService.js';
 const WORKER_KEY = Symbol.for('mergen-rota.task-mail-worker');
 const DEFAULT_INTERVAL_MS = 30000;
 
+/**
+ * Yoklama aralığı.
+ *
+ * Değişken TANIMSIZ ya da boşken varsayılan uygulanır. Daha önce boş metin
+ * `Number('')` ile `0`'a düşüyor, `Number.isSafeInteger(0)` doğru olduğu için
+ * varsayılan hiç okunmuyor ve alt sınır kuralı aralığı 5 saniyeye çekiyordu:
+ * belgelenen 30 saniye yerine altı kat sık yoklanıyor, yönetim konsolu da
+ * yanlış aralığı gösteriyordu.
+ */
 export function taskMailPollIntervalMs() {
-  const raw = process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS;
-  const value = Number(String(raw ?? '').trim());
-  if (!Number.isSafeInteger(value)) return DEFAULT_INTERVAL_MS;
+  const raw = String(process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS ?? '').trim();
+  if (!raw) return DEFAULT_INTERVAL_MS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) return DEFAULT_INTERVAL_MS;
   return Math.min(300000, Math.max(5000, value));
 }
 

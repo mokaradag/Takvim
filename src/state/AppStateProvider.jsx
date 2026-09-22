@@ -783,6 +783,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       taskBaselineSnapshots: state.taskBaselineSnapshots,
       scheduleRequests: state.scheduleRequests,
       scheduleRequestSummary: state.scheduleRequestSummary,
+      // Zilin öteki iki kaynağı ve birleşik sayaç da bağlama TAŞINIR. Alanlar
+      // burada sayılmadığında `useAssignmentCoordinations`, `useTaskNotifications`
+      // ve `useNotificationSummary` her zaman boş yedeğe düşüyor, birleşik zil
+      // yalnızca tarih taleplerini gösteriyordu (bkz. state/hooks/index.js).
+      assignmentCoordinations: state.assignmentCoordinations,
+      taskNotifications: state.taskNotifications,
+      notificationSummary: state.notificationSummary,
       session: state.session,
       currentUser: state.currentUser,
       isSystemAdmin: state.isSystemAdmin,
@@ -811,6 +818,9 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     state.taskBaselineSnapshots,
     state.scheduleRequests,
     state.scheduleRequestSummary,
+    state.assignmentCoordinations,
+    state.taskNotifications,
+    state.notificationSummary,
     state.session,
     state.currentUser,
     state.isSystemAdmin,

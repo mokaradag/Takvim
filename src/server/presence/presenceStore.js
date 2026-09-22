@@ -5,7 +5,7 @@ import {
   PRESENCE_RECENT_WINDOW_MS,
   PRESENCE_SESSION_GAP_MS
 } from '../../domain/presence/presenceModel.js';
-import { getSqlPool, sql } from '../db/pool.js';
+import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertSystemAdmin } from '../authorization/authorization.js';
 
@@ -55,12 +55,23 @@ export async function recordPresenceHeartbeat(executor, sicil) {
   };
 }
 
-/** Oturum kullanıcısının nabzı. Yetki oturumdan türetilir, istemciden alınmaz. */
+/**
+ * Oturum kullanıcısının nabzı. Yetki oturumdan türetilir, istemciden alınmaz.
+ *
+ * Yazma bir İŞLEM içindedir: otomatik işlem kipinde `UPDATE`'in `HOLDLOCK`
+ * aralık kilidi koşullu `INSERT`'ten önce bırakılabiliyor, aynı Sicil için iki
+ * eşzamanlı ilk nabız da `INSERT`'e ulaşabiliyordu. İkincisi birincil anahtar
+ * hatasıyla (2627) düşüyor, bu hata `isMissingPresenceSchema` ile eşleşmediği
+ * için nabız isteği başarısız oluyordu.
+ */
 export async function submitPresenceHeartbeat() {
   const pool = await getSqlPool();
   const actor = await loadAuthorizationContext(pool);
   try {
-    const presence = await recordPresenceHeartbeat(pool, actor.sicil);
+    const presence = await withSqlTransaction(
+      (transaction) => recordPresenceHeartbeat(transaction, actor.sicil),
+      { deadlockRetries: 2 }
+    );
     return { ok: true, ...presence };
   } catch (error) {
     // Göç uygulanmadan açılan kurulumda nabız sessizce atlanır; uygulama
@@ -101,11 +112,22 @@ export async function loadActiveUsers() {
     request.input('activeSeconds', sql.Int, activeSeconds);
     request.input('recentSeconds', sql.Int, recentSeconds);
     request.input('limit', sql.Int, PRESENCE_LIST_LIMIT);
+    // Kurumsal sayaçlar AKTİF KÜMENİN TAMAMI üzerinden SQL'de çözülür. Daha
+    // önce gösterilen (en fazla `@limit`) satırdan türetiliyordu: sınırın
+    // ötesinde kalan bir direktörlük ya da müdürlük, doğru toplam aktif sayının
+    // yanında eksik sayılıyordu. Sınır yalnızca TABLOYA uygulanır.
     const result = await request.query(`
       SELECT
         COUNT(CASE WHEN DATEDIFF(second, LastSeenAt, SYSUTCDATETIME()) <= @activeSeconds THEN 1 END) AS ActiveCount,
         COUNT(CASE WHEN DATEDIFF(second, LastSeenAt, SYSUTCDATETIME()) <= @recentSeconds THEN 1 END) AS RecentCount
       FROM dbo.MR_UserPresence;
+
+      SELECT
+        COUNT(DISTINCT pd.Directorate) AS DirectorateCount,
+        COUNT(DISTINCT pd.Department) AS DepartmentCount
+      FROM dbo.MR_UserPresence p
+      JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = p.Sicil
+      WHERE DATEDIFF(second, p.LastSeenAt, SYSUTCDATETIME()) <= @activeSeconds;
 
       SELECT TOP (@limit) p.Sicil, p.FirstSeenAt, p.SessionStartedAt, p.LastSeenAt,
         pd.DisplayName, pd.Directorate, pd.Department, pd.Unit
@@ -115,13 +137,8 @@ export async function loadActiveUsers() {
       ORDER BY p.LastSeenAt DESC, p.Sicil;
     `);
     const counts = result.recordsets?.[0]?.[0] || {};
-    const users = (result.recordsets?.[1] || []).map(presenceRow);
-    const activeUsers = users.filter((user) => {
-      const seen = user.lastSeenAt ? Date.parse(user.lastSeenAt) : NaN;
-      return Number.isFinite(seen) && Date.now() - seen <= PRESENCE_ACTIVE_WINDOW_MS;
-    });
-    const directorates = new Set(activeUsers.map((user) => user.directorate).filter(Boolean));
-    const departments = new Set(activeUsers.map((user) => user.department).filter(Boolean));
+    const organizations = result.recordsets?.[1]?.[0] || {};
+    const users = (result.recordsets?.[2] || []).map(presenceRow);
     return {
       ok: true,
       enabled: true,
@@ -134,8 +151,8 @@ export async function loadActiveUsers() {
       metrics: {
         activeCount: Number(counts.ActiveCount || 0),
         recentCount: Number(counts.RecentCount || 0),
-        directorateCount: directorates.size,
-        departmentCount: departments.size
+        directorateCount: Number(organizations.DirectorateCount || 0),
+        departmentCount: Number(organizations.DepartmentCount || 0)
       },
       users
     };

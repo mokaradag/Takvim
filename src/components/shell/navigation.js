@@ -67,6 +67,28 @@ export const SIMPLE_NAV_IDS = new Set(['ozet', 'veri', 'takvim', 'talepler', 'ya
 /** Temel Kipin açılış sayfası ve kapsamlı bir sayfadan dönüş hedefi. */
 export const SIMPLE_LANDING_VIEW = 'ozet';
 
+/** Saklanan tercih kullanılamadığında açılacak sayfa. */
+const LANDING_FALLBACK_VIEW = 'ozet';
+
+/**
+ * Uygulamanın ilk karesinde açılacak sayfa.
+ *
+ * Kabuk daha önce bu değeri `TWEAK_DEFAULTS` üzerinden okuyordu: kullanıcının
+ * Ayarlar · Açılış sayfası seçimi kalıcılaşıyor, ama her açılışta ve her
+ * yenilemede yok sayılıyor, uygulama her zaman Özet ile açılıyordu. Seçim artık
+ * SAKLANAN tercihten türetilir.
+ *
+ * Temel Kip bu tercihi kullanmaz — ayarın açıklaması da Kapsamlı Kip der — ve
+ * yönetici sayfası hiçbir koşulda açılış hedefi olamaz: rol kaybedilmiş olabilir
+ * ve gezinme gizlemesi yetki sınırı değildir.
+ */
+export function initialLandingView(tweaks = {}) {
+  if (tweaks.appMode === 'simple') return SIMPLE_LANDING_VIEW;
+  const landing = String(tweaks.landingView || '').trim();
+  const known = NAV_ITEMS.some((item) => item.id === landing) && !ADMIN_NAV_IDS.has(landing);
+  return known ? landing : LANDING_FALLBACK_VIEW;
+}
+
 export function navigationItems(simple, isSystemAdmin) {
   return NAV_ITEMS.filter((item) => (!simple || SIMPLE_NAV_IDS.has(item.id) || ADMIN_NAV_IDS.has(item.id))
     && (!ADMIN_NAV_IDS.has(item.id) || isSystemAdmin));

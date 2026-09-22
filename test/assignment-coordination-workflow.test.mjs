@@ -305,6 +305,149 @@ test('sorumlu kümesi arada değişirse onay uygulanmaz ve kayıt güncelliğini
   } finally { await stack.dispose(); }
 });
 
+test('tek gönderimdeki KARDEŞ talepler birbirini bayatlatmaz', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    // Aynı gönderimde iki kişi istenir; her iki satır da aynı ön-talep
+    // sorumlu künyesini taşır.
+    const request = await store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL, SAME_NAME_B], message: 'İki kişilik destek'
+    });
+    assert.equal(request.items.length, 2);
+    const byAssignee = new Map(request.items.map((item) => [item.assigneeSicil, item.id]));
+
+    const first = await asUser(UNIT_MANAGER, () =>
+      store.decideAssignmentCoordination(byAssignee.get(String(EXTERNAL)), { decision: 'APPROVE' }));
+    assert.equal(first.outcome, 'APPROVED');
+
+    // İkinci satır yalnızca kardeşinin onayı yüzünden bayat sayılmamalıdır.
+    const second = await asUser(UNIT_MANAGER, () =>
+      store.decideAssignmentCoordination(byAssignee.get(String(SAME_NAME_B)), { decision: 'APPROVE' }));
+    assert.equal(second.outcome, 'APPROVED');
+    assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY, EXTERNAL, SAME_NAME_B].sort((a, b) => a - b));
+  } finally { await stack.dispose(); }
+});
+
+test('onay görev SÜRÜMÜNÜ ilerletir; açık duran düzenleyici sorumluyu silemez', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    // Düzenleyici görevi ONAYDAN ÖNCE yükler: elindeki sürüm ve sorumlu listesi
+    // eskiyecektir.
+    const staleTask = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+
+    const request = await asUser(ORDINARY, () => store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek'
+    }));
+    const approved = await asUser(UNIT_MANAGER, () =>
+      store.decideAssignmentCoordination(request.items[0].id, { decision: 'APPROVE' }));
+    assert.equal(approved.outcome, 'APPROVED');
+    assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY, EXTERNAL].sort((a, b) => a - b));
+
+    // Bayat sürümle yapılan kayıt reddedilir; onaylanan sorumlu yerinde kalır.
+    await assert.rejects(
+      stack.repository.commitChanges({
+        taskUpserts: [{ ...staleTask, task: 'Yeniden adlandırıldı', assigneeIds: [String(ORDINARY)], assigneeMutation: true }]
+      }),
+      (error) => error.code === 'CONFLICT'
+    );
+    assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY, EXTERNAL].sort((a, b) => a - b));
+  } finally { await stack.dispose(); }
+});
+
+test('okuma yüzeyi karar yetkisini CANLI veriden türetir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  const inboxOf = async (sicil) => asUser(sicil, async () => {
+    const { withSqlTransaction } = await import('../src/server/db/pool.js');
+    const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
+    return withSqlTransaction(async (transaction) =>
+      queries.readCoordinationInbox(transaction, await loadAuthorizationContext(transaction)));
+  });
+  try {
+    const request = await store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek'
+    });
+    const coordinationId = request.items[0].id;
+
+    // Personel başka bir birime geçer: eski birim yöneticisinin alıcı satırı
+    // durur ama karar yetkisi kalmaz.
+    stack.db.executiveScope = stack.db.executiveScope
+      .filter((scope) => Number(scope.ManagerSicil) !== UNIT_MANAGER
+        || Number(scope.EmployeeSicil) !== EXTERNAL);
+    stack.db.executiveScope.push({ ManagerSicil: DUAL_MANAGER, EmployeeSicil: EXTERNAL, ScopeType: 'UNIT' });
+
+    const stale = await inboxOf(UNIT_MANAGER);
+    const staleItem = stale.items.find((item) => item.id === coordinationId);
+    assert.ok(staleItem, 'eski alıcı kaydı geçmişte görmeyi sürdürür');
+    assert.equal(staleItem.isManager, false);
+    assert.equal(staleItem.actionable, false);
+    assert.deepEqual(staleItem.allowedDecisions, []);
+    await asUser(UNIT_MANAGER, () => assert.rejects(
+      store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }),
+      (error) => error.code === 'FORBIDDEN'
+    ));
+
+    // Yeni YETKİLİ yönetici alıcı satırı olmadan da kaydı bulur ve karar verir.
+    const fresh = await inboxOf(DUAL_MANAGER);
+    const freshItem = fresh.items.find((item) => item.id === coordinationId);
+    assert.ok(freshItem, 'güncel yetkili kaydı bulabilmelidir');
+    assert.equal(freshItem.actionable, true);
+    assert.equal(fresh.pendingCount, 1);
+
+    const decision = await asUser(DUAL_MANAGER, () =>
+      store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }));
+    assert.equal(decision.outcome, 'APPROVED');
+    // Karar veren aktör kendi kararını OKUYABİLMELİDİR.
+    assert.ok(decision.record, 'karar yanıtı kaydı taşımalıdır');
+    assert.equal(decision.record.status, 'APPROVED');
+  } finally { await stack.dispose(); }
+});
+
+test('alıcı satırı olmayan tam proje yetkilisi kararını okuyabilir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const request = await store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek'
+    });
+    const coordinationId = request.items[0].id;
+    // Tam proje yetkilisi alıcı kümesinde YOKTUR: alıcılar yönetim zinciridir.
+    assert.equal(recipientsOf(stack, coordinationId).some((row) => row.Sicil === PROJECT_MANAGER), false);
+
+    const decision = await asUser(PROJECT_MANAGER, () =>
+      store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }));
+    assert.equal(decision.outcome, 'APPROVED');
+    assert.ok(decision.record, 'karar veren kaydı okuyamıyorsa istemci sonucu çizemez');
+    assert.equal(decision.record.status, 'APPROVED');
+    // Kararla birlikte posta kutusu satırı açılır.
+    assert.equal(recipientsOf(stack, coordinationId).some((row) => row.Sicil === PROJECT_MANAGER), true);
+  } finally { await stack.dispose(); }
+});
+
+test('yönetici zinciri boşken karar YALNIZCA tam proje yetkilisine düşer', async () => {
+  // Talep edilen kişinin yönetim zinciri yoktur; projede görev oluşturmuş
+  // sıradan bir kullanıcı da vardır ve aday OLMAMALIDIR.
+  const stack = await createActualStack(seed({
+    executiveScope: executiveScope().filter((scope) => Number(scope.EmployeeSicil) !== SAME_NAME_A)
+  }), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const request = await store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [SAME_NAME_A], message: 'Destek'
+    });
+    const coordinationId = request.items[0].id;
+    const managers = recipientsOf(stack, coordinationId)
+      .filter((row) => row.RecipientRole === 'MANAGER').map((row) => row.Sicil);
+
+    // Yalnızca tam proje yetkilisi; görev oluşturan TEAM_MEMBER/EXECUTIVE değil.
+    assert.deepEqual(managers.sort((a, b) => a - b), [PROJECT_MANAGER]);
+    assert.equal(managers.includes(EXECUTIVE), false);
+
+    // Aday gerçekten karar verebilir: sunucu onu reddetmez.
+    const decision = await asUser(PROJECT_MANAGER, () =>
+      store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }));
+    assert.equal(decision.outcome, 'APPROVED');
+    assert.ok(decision.record);
+  } finally { await stack.dispose(); }
+});
+
 test('yönetici değişiklik isteyebilir; alternatif öneri yalnızca kendi personelinden olur', async () => {
   const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
   try {

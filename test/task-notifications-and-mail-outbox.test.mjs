@@ -43,6 +43,13 @@ function seed(overrides = {}) {
       IsActive: 1
     }],
     projectAccess: [{ ProjectId: PROJECT_ID, Sicil: OWNER, AccessLevel: 'FULL', GrantSource: 'OWNER' }],
+    // Kurumsal posta kutuları YALNIZCA okunur; teslimat turu adresi her seferinde
+    // buradan çözer, görev kaydına kopyalamaz.
+    corporateUsers: [
+      { Name: 'u960001', EmailAddress: 'sahibi@test.internal' },
+      { Name: 'u960002', EmailAddress: 'uye@test.internal' },
+      { Name: 'u960003', EmailAddress: 'ikinci@test.internal' }
+    ],
     wbs: [{ WbsId: ROOT_WBS_ID, ProjectId: PROJECT_ID, ParentWbsId: null, Code: '1', Name: 'Kök', SortOrder: 0 }],
     tasks: [
       {
@@ -355,4 +362,147 @@ test('toplama kuralı kendine atamayı eler ve alıcı başına tek satır üret
     [10, 'TASK_ASSIGNED', 2],
     [30, 'TASK_UNASSIGNED', 1]
   ]);
+});
+
+/* ── Teslimat turu · kira, sahiplik ve belirsiz teslimat ────────── */
+
+/** Teslimat turu ancak SMTP yapılandırıldığında çalışır. */
+function withSmtp(t) {
+  const previous = { SMTP_HOST: process.env.SMTP_HOST, SMTP_FROM: process.env.SMTP_FROM };
+  process.env.SMTP_HOST = 'smtp.test.internal';
+  process.env.SMTP_FROM = 'rota@test.internal';
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+}
+
+test('yoklama aralığı tanımsız ya da boş değişkende belgelenen varsayılana düşer', async () => {
+  const { taskMailPollIntervalMs } = await import('../src/server/notifications/taskMailWorker.js');
+  const previous = process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS;
+  try {
+    // Boş metin `Number('')` ile 0'a düşüyor, alt sınır kuralı da aralığı
+    // 5 saniyeye çekiyordu: belgelenen 30 saniye hiç uygulanmıyordu.
+    for (const value of [undefined, '', '   ', 'otuz', '0', '-5']) {
+      if (value === undefined) delete process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS;
+      else process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS = value;
+      assert.equal(taskMailPollIntervalMs(), 30000, String(value));
+    }
+    process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS = '45000';
+    assert.equal(taskMailPollIntervalMs(), 45000);
+    // Sınırlar korunur.
+    process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS = '1000';
+    assert.equal(taskMailPollIntervalMs(), 5000);
+    process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS = '999999';
+    assert.equal(taskMailPollIntervalMs(), 300000);
+  } finally {
+    if (previous == null) delete process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS;
+    else process.env.MERGEN_ROTA_TASK_MAIL_POLL_MS = previous;
+  }
+});
+
+test('kira, partinin tamamı SMTP zaman aşımına takılsa bile geçerli kalır', async () => {
+  const { taskMailBatchSize, taskMailLeaseSeconds } = await import('../src/server/notifications/taskMailOutbox.js');
+  // Sabit 120 saniyelik kira, 20 satırlık partiyi 300 saniyelik zaman aşımıyla
+  // taşıyamıyordu. Parti kiranın taşıyabileceği kadar daraltılır ve kira
+  // partinin en kötü durumunu kapsar.
+  for (const [limit, timeoutMs] of [[20, 300000], [20, 20000], [20, 60000], [1, 300000], [100, 20000]]) {
+    const batch = taskMailBatchSize(limit, timeoutMs);
+    assert.ok(batch >= 1 && batch <= limit, `parti boyu ${batch}`);
+    assert.ok(
+      taskMailLeaseSeconds(batch, timeoutMs) >= batch * Math.ceil(timeoutMs / 1000),
+      `kira ${limit}/${timeoutMs} için partiyi kapsamalıdır`
+    );
+  }
+  // Alt sınır korunur; üst sınır sınırsız büyümeyi engeller.
+  assert.equal(taskMailLeaseSeconds(1, 1000), 120);
+  assert.equal(taskMailLeaseSeconds(100, 300000), 3600);
+});
+
+test('teslimatı BELİRSİZ kalan satır yeniden gönderilmez ve kuyrukta kalır', async (t) => {
+  withSmtp(t);
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    await stack.repository.commitChanges(
+      { taskUpserts: [{ ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }] },
+      { notifyAssignees: true }
+    );
+    assert.equal(stack.db.taskMailOutbox.length, 1);
+
+    const { runTaskMailOutbox } = await import('../src/server/notifications/taskMailService.js');
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const pool = await getSqlPool();
+
+    let attempts = 0;
+    const outcome = await runTaskMailOutbox(pool, {
+      send: async () => {
+        attempts += 1;
+        // Gövde aktarıldı, kabul yanıtı okunamadı: posta sunucusu iletiyi
+        // KABUL ETMİŞ olabilir.
+        return { ok: false, code: 'SMTP_TIMEOUT', deliveryMayHaveEscaped: true };
+      }
+    });
+    assert.equal(attempts, 1);
+    assert.equal(outcome.uncertain, 1);
+    assert.equal(outcome.ok, false);
+
+    const row = stack.db.taskMailOutbox[0];
+    assert.equal(row.Status, 'FAILED', 'belirsiz teslimat yeniden deneme yoluna DÖNMEZ');
+    assert.equal(row.LastFailureCode, 'MAIL_DELIVERY_UNCERTAIN');
+
+    // Sonraki tur aynı iletiyi ikinci kez göndermez.
+    const second = await runTaskMailOutbox(pool, { send: async () => { attempts += 1; return { ok: true }; } });
+    assert.equal(attempts, 1);
+    assert.equal(second.claimed, 0);
+  } finally { await stack.dispose(); }
+});
+
+test('kesin başarısızlık geri çekilmeyle yeniden denenir', async (t) => {
+  withSmtp(t);
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    await stack.repository.commitChanges(
+      { taskUpserts: [{ ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }] },
+      { notifyAssignees: true }
+    );
+    const { runTaskMailOutbox } = await import('../src/server/notifications/taskMailService.js');
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const outcome = await runTaskMailOutbox(await getSqlPool(), {
+      send: async () => ({ ok: false, code: 'SMTP_SEND_FAILED', deliveryMayHaveEscaped: false })
+    });
+    assert.equal(outcome.failed, 1);
+    assert.equal(outcome.uncertain, 0);
+    assert.equal(stack.db.taskMailOutbox[0].Status, 'PENDING');
+    assert.equal(stack.db.taskMailOutbox[0].LastFailureCode, 'SMTP_SEND_FAILED');
+  } finally { await stack.dispose(); }
+});
+
+test('kira SAHİPLİĞİ: devralınan satırın durumunu eski tur ezemez', async () => {
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    await stack.repository.commitChanges(
+      { taskUpserts: [{ ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }] },
+      { notifyAssignees: true }
+    );
+    const outbox = await import('../src/server/notifications/taskMailOutbox.js');
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const pool = await getSqlPool();
+
+    const [firstClaim] = await outbox.claimDueTaskMail(pool, 20);
+    assert.ok(firstClaim.leaseToken, 'kiralama sahiplik belirteci taşımalıdır');
+
+    // Kira dolar ve satırı başka bir uygulama örneği devralır.
+    stack.db.taskMailOutbox[0].LeaseExpiresAt = new Date(Date.now() - 1000).toISOString();
+    const [secondClaim] = await outbox.claimDueTaskMail(pool, 20);
+    assert.notEqual(secondClaim.leaseToken, firstClaim.leaseToken);
+
+    // Geciken ilk tur artık satıra DOKUNAMAZ.
+    await outbox.markTaskMailSent(pool, firstClaim.mailId, firstClaim.leaseToken);
+    assert.equal(stack.db.taskMailOutbox[0].Status, 'PENDING');
+
+    // Kirayı elinde tutan tur yazabilir.
+    await outbox.markTaskMailSent(pool, secondClaim.mailId, secondClaim.leaseToken);
+    assert.equal(stack.db.taskMailOutbox[0].Status, 'SENT');
+  } finally { await stack.dispose(); }
 });

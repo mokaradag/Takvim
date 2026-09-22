@@ -188,6 +188,111 @@ test('koordinasyon penceresi izin verilen eylemleri ve Sicil künyesini gösteri
   } finally { view.unmount(); }
 });
 
+test('atama bildirimi künyesi boşsa tarih değişikliği metnine DÜŞMEZ', () => {
+  globalThis[CLIENT_STATE] = {
+    scheduleRequests: [],
+    scheduleRequestSummary: { unreadCount: 0, pendingCount: 0 },
+    assignmentCoordinations: [],
+    taskNotifications: [{
+      // Proje künyesi iki alanda da boş: `detail` boş metne iner.
+      source: NOTIFICATION_SOURCES.TASK_EVENT, id: 'n1', kind: 'TASK_ASSIGNED', taskCount: 1,
+      actorName: 'Atayan Kişi', taskTitle: 'Görev', projectCode: null, projectName: null,
+      unread: true, actionable: false, sortAt: '2026-09-19T09:00:00.000Z', taskId: 't1', taskAvailable: true
+    }],
+    notificationSummary: { unreadCount: 1, pendingCount: 0 },
+    actions: {}
+  };
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+  const view = mountComponent(ScheduleRequestCenter, {});
+  try {
+    findElement(view.output, (node) => node.props?.className === 'icon-btn schedule-request-toggle').props.onClick();
+    view.render();
+    const card = findElement(view.output, (node) => node.props?.className === 'schedule-request-list').props.children[0];
+    assert.equal(JSON.stringify(card).includes('Plan tarihleri için değişiklik'), false);
+  } finally { view.unmount(); delete globalThis.document; delete globalThis[CLIENT_STATE]; }
+});
+
+test('açılamayan görev bildirimi sessizce kapanmaz', async () => {
+  const opened = [];
+  globalThis[CLIENT_STATE] = {
+    scheduleRequests: [],
+    scheduleRequestSummary: { unreadCount: 0, pendingCount: 0 },
+    assignmentCoordinations: [],
+    taskNotifications: [{
+      source: NOTIFICATION_SOURCES.TASK_EVENT, id: 'n1', kind: 'TASK_UNASSIGNED', taskCount: 1,
+      actorName: 'Yönetici', taskTitle: 'Görev', projectCode: 'P1', projectName: 'Proje',
+      unread: true, actionable: false, sortAt: '2026-09-19T09:00:00.000Z', taskId: 't1', taskAvailable: true
+    }],
+    notificationSummary: { unreadCount: 1, pendingCount: 0 },
+    actions: {
+      // Sorumluluğu kaldırılan kişi görevi çoğu zaman artık göremez.
+      openTask: async (taskId) => { opened.push(taskId); return { ok: false, error: { message: 'Görev bulunamadı.' } }; },
+      reloadData: async () => {}
+    }
+  };
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+  const view = mountComponent(ScheduleRequestCenter, {});
+  try {
+    findElement(view.output, (node) => node.props?.className === 'icon-btn schedule-request-toggle').props.onClick();
+    view.render();
+    const card = findElement(view.output, (node) => node.props?.className === 'schedule-request-list').props.children[0];
+    await card.props.onClick();
+    view.render();
+    assert.deepEqual(opened, ['t1']);
+    // Panel AÇIK kalır: kapanmış olsaydı ileti hiç görünmezdi.
+    const alert = findElement(view.output, (node) => node.props?.role === 'alert');
+    assert.ok(alert, 'açma başarısızlığı bildirilmelidir');
+    assert.equal(alert.props.children, 'Görev bulunamadı.');
+  } finally { view.unmount(); delete globalThis.document; delete globalThis[CLIENT_STATE]; }
+});
+
+test('değişiklik isteği yanıt notu boşken gönderilemez', () => {
+  const record = {
+    id: 'c1', status: 'PENDING', mode: 'REQUEST', taskId: 't1', taskTitle: 'Saha kurulumu',
+    projectCode: 'P1', projectName: 'Proje', requesterName: 'Talep Eden', requesterSicil: '100',
+    assigneeName: 'Dış Personel', assigneeSicil: '900', assigneeOrganization: 'D / M / B',
+    createdAt: '2026-09-20T09:00:00.000Z', decidedAt: null, targetFinish: '2026-10-01',
+    requesterMessage: '', decisionMessage: '', suggestedAssigneeSicil: null, suggestedAssigneeName: null,
+    version: 'AAAAAAAAAAE=', taskAvailable: true,
+    allowedDecisions: ['APPROVE', 'REQUEST_CHANGE', 'REJECT'], isManager: true, isRequester: false
+  };
+  const decided = [];
+  const view = mountComponent(AssignmentCoordinationDialog, {
+    record, onClose() {}, onDecide: async (id, payload) => { decided.push(payload.decision); return { ok: true }; },
+    onOpenTask: async () => ({ ok: true })
+  });
+  try {
+    const buttonFor = (label) => {
+      const buttons = [];
+      const collect = (node) => {
+        if (Array.isArray(node)) { node.forEach(collect); return; }
+        if (!node || typeof node !== 'object') return;
+        if (node.type === 'button') buttons.push(node);
+        collect(node.props?.children);
+      };
+      collect(view.output);
+      return buttons.find((button) => JSON.stringify(button.props.children ?? '').includes(label));
+    };
+
+    // Etiket notu "değişiklik isteğinde zorunlu" der; düğme de aynı kuralı uygular.
+    assert.equal(buttonFor('Değişiklik İste').props.disabled, true);
+    assert.match(buttonFor('Değişiklik İste').props.title, /zorunlu/);
+    // Öteki kararlar not olmadan da verilebilir.
+    assert.equal(buttonFor('Onayla').props.disabled, false);
+    assert.equal(buttonFor('Reddet').props.disabled, false);
+
+    const note = findElement(view.output, (node) => node.props?.name === 'coordinationDecisionNote');
+    note.props.onChange({ target: { value: '   ' } });
+    view.render();
+    assert.equal(buttonFor('Değişiklik İste').props.disabled, true, 'yalnızca boşluk not sayılmaz');
+
+    findElement(view.output, (node) => node.props?.name === 'coordinationDecisionNote')
+      .props.onChange({ target: { value: 'Bu kişi uygun değil.' } });
+    view.render();
+    assert.equal(buttonFor('Değişiklik İste').props.disabled, false);
+  } finally { view.unmount(); }
+});
+
 test('kurum dışı personel anahtarı KAPALI başlar ve talebi açıkça duyurur', () => {
   const requested = [];
   const view = mountComponent(ExternalAssigneePicker, {
@@ -258,9 +363,13 @@ test('görev düzenleyicileri e-posta seçeneğini ve kurum dışı seçimi işl
     const source = read(file);
     assert.match(source, /<AssigneeMailToggle/, file);
     assert.match(source, /<ExternalAssigneePicker/, file);
-    assert.match(source, /useState\(false\)/, file);
-    assert.match(source, /notifyAssignees/, file);
-    assert.match(source, /assignmentRequest: assignmentRequests\.assignmentRequest/, file);
+    // Varsayılan KAPALI durum `notifyAssignees` ADINA bağlanır: dosyadaki başka
+    // bir `useState(false)` çağrısı (örneğin `scheduleDialogOpen`) bu savı
+    // karşılamamalı, durum silinirse sav düşmelidir.
+    assert.match(source, /\[notifyAssignees, setNotifyAssignees\] = useState\(false\)/, file);
+    assert.match(source, /<AssigneeMailToggle checked=\{notifyAssignees\}[^>]*onChange=\{setNotifyAssignees\}/, file);
+    // Seçim yalnızca BU kaydetme işlemine geçer.
+    assert.match(source, /notifyAssignees,\s*assignmentRequest: assignmentRequests\.assignmentRequest/, file);
     assert.equal(/localStorage/.test(source), false, file);
   }
   // Talep, görev kalıcılaştıktan SONRA ayrı uçtan gönderilir.
@@ -278,6 +387,44 @@ test('dizin araması en az iki karakterden sonra ve gecikmeli gönderilir', () =
   const client = read('src/data/api/directoryClient.js');
   assert.match(client, /DIRECTORY_MIN_QUERY_LENGTH = 2/);
   assert.ok(/DIRECTORY_SEARCH_DEBOUNCE_MS = (2\d\d|3\d\d)/.test(client));
+});
+
+test('sorgu kısalınca SÜREN isteğin yanıtı temizlenmiş listeye düşmez', () => {
+  // Kısa sorgu dalı sıra numarasını da ilerletmelidir; aksi hâlde önceki uzun
+  // sorgunun geç gelen yanıtı denetimden geçip artık görünmeyen bir listeyi
+  // dolduruyor ve oradan kişi seçilebiliyordu.
+  const source = read('src/features/assignment-coordination/DirectoryPersonSearch.jsx');
+  const shortBranch = source.slice(
+    source.indexOf('if (text.length < DIRECTORY_MIN_QUERY_LENGTH)'),
+    source.indexOf('setStatus(\'loading\')')
+  );
+  assert.match(shortBranch, /requestRef\.current \+= 1;/);
+  assert.ok(
+    shortBranch.indexOf('requestRef.current += 1;') < shortBranch.indexOf('return undefined;'),
+    'sıra, erken dönüşten ÖNCE ilerletilmelidir'
+  );
+});
+
+test('kurum dışı kişi Kapsamlı Kip çekmecesinde de doğrudan atanabilir', () => {
+  // Kurum dışı kişi anlık görüntü dizininde YOKTUR: `addAssignee` rehber
+  // aramasına düşüp sessizce çıkıyor, kişi ne atanıyor ne de talep açılıyordu.
+  const drawer = read('src/features/task-detail/TaskDrawer.jsx');
+  assert.match(drawer, /onAssignDirectly=\{\(person\) => addAssigneeSicil\(person\.sicil\)\}/);
+  assert.match(drawer, /const addAssigneeSicil = \(sicil\) => \{/);
+  // Anlık görüntüdeki seçici de aynı Sicil yolundan geçer.
+  assert.match(drawer, /const addAssignee = \(personId\) => \{[\s\S]*?addAssigneeSicil\(person\.id\);/);
+
+  // Temel Kip çekmecesi baştan beri sicili doğrudan yazar; davranış aynıdır.
+  const simple = read('src/features/task-detail/SimpleTaskDrawer.jsx');
+  assert.match(simple, /onAssignDirectly=\{\(person\) => setAssignees\(\[\.\.\.\(local\.assigneeIds \|\| \[\]\), String\(person\.sicil\)\]\)\}/);
+});
+
+test('sekme değişimi açık talep çekmecesini kapatır', () => {
+  // Seçim korunduğunda, Atama Koordinasyonu'na geçip geri dönen kullanıcının
+  // önüne çekmece kendiliğinden yeniden açılıyordu.
+  const source = read('src/features/schedule-change/ScheduleRequestsView.jsx');
+  const selectTab = source.slice(source.indexOf('const selectTab = (id) => {'), source.indexOf('const tabCount'));
+  assert.match(selectTab, /setSelected\(null\);/);
 });
 
 /* ── Marka ───────────────────────────────────────────────────── */

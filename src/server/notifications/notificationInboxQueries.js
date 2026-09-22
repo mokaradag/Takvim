@@ -2,6 +2,7 @@ import 'server-only';
 import { NOTIFICATION_PREVIEW_LIMIT } from '../../domain/notifications/notificationInbox.js';
 import {
   COORDINATION_INBOX_SQL,
+  bindCoordinationScope,
   mapCoordinationInbox,
   updateCoordinationNotifications
 } from '../assignment/assignmentCoordinationQueries.js';
@@ -23,8 +24,7 @@ import {
  * ile iki sayaç taşır. Geçmişin tamamı hiçbir zaman anlık görüntüye girmez.
  */
 export async function readNotificationInbox(executor, actor) {
-  const request = executor.request();
-  request.input('sicil', sql.Int, actor.sicil);
+  const request = bindCoordinationScope(executor.request(), actor);
   request.input('limit', sql.Int, NOTIFICATION_PREVIEW_LIMIT);
   const result = await request.query(`${COORDINATION_INBOX_SQL}\n${TASK_NOTIFICATION_INBOX_SQL}`);
   const sets = result.recordsets || [];

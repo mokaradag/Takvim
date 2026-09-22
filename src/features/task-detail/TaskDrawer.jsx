@@ -316,11 +316,25 @@ export function TaskDrawer({
     });
   };
 
+  /**
+   * Sicil ile DOĞRUDAN ekleme.
+   *
+   * Kurum dışı kişi anlık görüntü dizininde bulunmaz (bkz. directoryClient.js:
+   * "Dizin uygulama anlık görüntüsüne KONULMAZ"). Rehber aramasına düşen yol
+   * kişiyi bulamayıp sessizce çıkıyor, kişi ne atanıyor ne de talep açılıyordu;
+   * kullanıcı hiçbir geri bildirim almıyordu. Temel Kip çekmecesi baştan beri
+   * sicili doğrudan yazar; iki çekmece artık aynı davranıştadır.
+   */
+  const addAssigneeSicil = (sicil) => {
+    const assigneeIds = [...new Set([...(local.assigneeIds || []).map(String), String(sicil)])];
+    save(taskAssigneeMutationPatch(local, people, assigneeIds));
+  };
+
+  /** Anlık görüntüdeki kişi seçicisinden ekleme: kimlik yine Sicil'dir. */
   const addAssignee = (personId) => {
     const person = people.find((item) => String(item.id) === String(personId));
     if (!person) return;
-    const assigneeIds = [...new Set([...(local.assigneeIds || []).map(String), String(person.id)])];
-    save(taskAssigneeMutationPatch(local, people, assigneeIds));
+    addAssigneeSicil(person.id);
   };
 
   const removeAssignee = (record) => {
@@ -526,7 +540,7 @@ export function TaskDrawer({
                 disabled={isSaving}
                 assignedSicils={(local.assigneeIds || []).map(String)}
                 canAssignDirectly={assignmentRequests.canAssignDirectly}
-                onAssignDirectly={(person) => addAssignee(person.sicil)}
+                onAssignDirectly={(person) => addAssigneeSicil(person.sicil)}
                 requestedAssignees={assignmentRequests.requested}
                 onRequestAssignee={assignmentRequests.requestAssignee}
                 onCancelRequest={assignmentRequests.cancelRequest}

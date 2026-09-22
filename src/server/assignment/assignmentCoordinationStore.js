@@ -150,9 +150,18 @@ async function directoryPeople(executor, sicils) {
 }
 
 /**
- * Yönetim zinciri boşsa kararı PROJE yetkilisi verir.
+ * Yönetim zinciri boşsa kararı TAM PROJE YETKİLİSİ verir.
  *
  * Böylece yöneticisi tanımlı olmayan bir çalışan için talep sahipsiz kalmaz.
+ *
+ * Aday kümesi, `loadAuthorizationContext` içinde `FULL` yetki üreten kaynakların
+ * birebir aynısıdır: MANUAL projenin sorumlusu, `MR_ProjectAccess` üzerindeki
+ * etkin FULL kayıt ve CORPORATE projede kurumsal proje rolü. Görev OLUŞTURAN
+ * kişi bilinçli olarak dışarıdadır — görev oluşturmak `FULL` proje yetkisi
+ * vermez. Daha önce projedeki BÜTÜN görev sahipleri aday sayılıyordu; bu hem
+ * göreve erişimi olmayan kullanıcılara görev başlığını, proje künyesini ve
+ * talep edilen kişinin adı ile kurumsal yolunu açıyor, hem de sunucunun her
+ * zaman reddedeceği bir karar düğmesi gösteriyordu.
  */
 async function projectDecisionOwners(executor, task, requesterSicil) {
   const request = executor.request();
@@ -163,9 +172,8 @@ async function projectDecisionOwners(executor, task, requesterSicil) {
   const result = await request.query(`
     SELECT DISTINCT candidate.Sicil
     FROM (
-      SELECT t.CreatedBySicil AS Sicil FROM dbo.MR_Tasks t WHERE t.TaskId IS NOT NULL AND t.ProjectId = @projectId AND t.CreatedBySicil IS NOT NULL
-      UNION
-      SELECT p.LeadSicil FROM dbo.MR_Projects p WHERE p.ProjectId = @projectId AND p.SourceType = 'MANUAL'
+      SELECT p.LeadSicil AS Sicil FROM dbo.MR_Projects p
+      WHERE p.ProjectId = @projectId AND p.SourceType = 'MANUAL' AND p.IsActive = 1
       UNION
       SELECT pa.Sicil FROM dbo.MR_ProjectAccess pa
       WHERE pa.ProjectId = @projectId AND pa.IsActive = 1 AND pa.AccessLevel = 'FULL'
@@ -407,6 +415,27 @@ async function setCoordinationStatus(executor, coordinationId, status, {
   `);
 }
 
+/**
+ * Görev satırının SÜRÜMÜNÜ ilerletir.
+ *
+ * Sorumlu kümesi `MR_TaskAssignees` üzerinde değişir; görev satırına
+ * dokunulmadığında `MR_Tasks.RowVersion` aynı kalır. Kararla aynı anda görevi
+ * açık tutan bir düzenleyici, elindeki ESKİ sürüm ve ESKİ `assigneeIds` ile
+ * ilgisiz bir düzenlemeyi kaydedebiliyor; `commitTask` listeyi bilinçli bir
+ * değişiklik sayıp ilişkiyi yeniden yazıyor ve yeni onaylanan sorumluyu sessizce
+ * siliyordu. Sürüm ilerletildiğinde o kayıt bayat sürüm olarak reddedilir.
+ */
+async function touchTaskVersion(executor, taskId, actorSicil) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, taskId);
+  request.input('actorSicil', sql.Int, Number(actorSicil));
+  await request.query(`
+    UPDATE dbo.MR_Tasks
+    SET UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
+    WHERE TaskId = @taskId;
+  `);
+}
+
 /** Tek Sicil ekler; görevin öteki sorumlularına DOKUNMAZ. */
 async function addTaskAssignee(executor, taskId, sicil, actorSicil) {
   const request = executor.request();
@@ -421,16 +450,57 @@ async function addTaskAssignee(executor, taskId, sicil, actorSicil) {
     INSERT dbo.MR_TaskAssignees(TaskId, Sicil, AssignedBySicil)
     VALUES(@taskId, @sicil, @actorSicil);
   `);
+  await touchTaskVersion(executor, taskId, actorSicil);
 }
 
 /** Tek Sicil çıkarır; görevin öteki sorumlularına DOKUNMAZ. */
-async function removeTaskAssignee(executor, taskId, sicil) {
+async function removeTaskAssignee(executor, taskId, sicil, actorSicil) {
   const request = executor.request();
   request.input('taskId', sql.UniqueIdentifier, taskId);
   request.input('sicil', sql.Int, Number(sicil));
   await request.query(`
     DELETE dbo.MR_TaskAssignees WHERE TaskId = @taskId AND Sicil = @sicil;
   `);
+  await touchTaskVersion(executor, taskId, actorSicil);
+}
+
+/**
+ * Aynı gönderimden doğan KARDEŞ taleplerin Sicilleri.
+ *
+ * Çok kişilik tek bir talepte her satır aynı `OriginalAssigneeSicils` künyesini
+ * taşır. İlk satır onaylanınca sorumlu kümesi değişir ve kardeş satırlar — hiç
+ * kimse görevi düzenlememiş olmasına karşın — bayat sayılıyordu; bir gönderimden
+ * yalnızca tek kişi onaylanabiliyordu.
+ */
+async function siblingRequestedSicils(executor, row) {
+  if (!row.CorrelationId) return [];
+  const request = executor.request();
+  request.input('correlationId', sql.UniqueIdentifier, row.CorrelationId);
+  request.input('taskId', sql.UniqueIdentifier, row.TaskId);
+  request.input('coordinationId', sql.UniqueIdentifier, row.CoordinationId);
+  const result = await request.query(`
+    SELECT RequestedAssigneeSicil FROM dbo.MR_TaskAssignmentCoordinations
+    WHERE CorrelationId = @correlationId AND TaskId = @taskId
+      AND CoordinationId <> @coordinationId;
+  `);
+  return (result.recordset || []).map((sibling) => Number(sibling.RequestedAssigneeSicil));
+}
+
+/**
+ * Onay, kaydın oluşturulduğu andaki YETKİLİ sorumlu kümesine dayanır.
+ *
+ * Kümeden bir kişi düşmüş ya da kaydın kendi gönderimine ait olmayan bir Sicil
+ * eklenmişse plan bu arada değişmiştir ve karar uygulanmaz.
+ */
+function assigneeSetIsStale(currentAssignees, originalText, siblings = []) {
+  const current = new Set(currentAssignees.map(Number));
+  const original = String(originalText ?? '')
+    .split(',')
+    .map(Number)
+    .filter((value) => Number.isSafeInteger(value) && value > 0);
+  const allowed = new Set([...original, ...siblings.map(Number)]);
+  if (original.some((sicil) => !current.has(sicil))) return true;
+  return [...current].some((sicil) => !allowed.has(sicil));
 }
 
 function decisionStatus(decision, currentStatus) {
@@ -481,14 +551,12 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
     const lock = transaction.request();
     lock.input('coordinationId', sql.UniqueIdentifier, coordinationId);
     lock.input('sicil', sql.Int, actor.sicil);
+    // Alıcı satırı SORGULANMAZ: karar yetkisi yalnızca canlı veriden türetilir
+    // (aşağıdaki `isManager`), kayıttaki satır bir posta kutusu girdisidir.
     const locked = await lock.query(`
       SELECT TOP (1) c.*, t.TaskId AS LiveTaskId, t.Title AS LiveTaskTitle,
         t.ProjectId AS LiveProjectId, t.TargetFinish AS LiveTargetFinish, t.Priority AS LivePriority,
-        p.ProjectName AS LiveProjectName, p.ProjectCode AS LiveProjectCode,
-        CASE WHEN EXISTS (
-          SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
-          WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil AND r.RecipientRole = 'MANAGER'
-        ) THEN 1 ELSE 0 END AS IsListedManager
+        p.ProjectName AS LiveProjectName, p.ProjectCode AS LiveProjectCode
       FROM dbo.MR_TaskAssignmentCoordinations c WITH (UPDLOCK, HOLDLOCK)
       LEFT JOIN dbo.MR_Tasks t WITH (UPDLOCK, HOLDLOCK) ON t.TaskId = c.TaskId
       LEFT JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
@@ -518,6 +586,14 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
     const nextStatus = decisionStatus(decision, row.Status);
     if (!nextStatus) throw new ServerPersistenceError('CONFLICT', 'Bu kayıt için seçilen işlem uygulanabilir değil.');
 
+    // Karar veren aktör yetkisini CANLI veriden almış olabilir (sistem
+    // yöneticisi ya da tam proje yetkilisi); alıcı satırı yoksa kendi kararını
+    // okuyamıyor ve yanıtta `record: null` alıyordu. Satır bir POSTA KUTUSU
+    // kaydıdır, yetki belgesi değildir: karar yetkisi yine canlı veriden gelir.
+    if (isManager) {
+      await insertRecipients(transaction, coordinationId, [[Number(actor.sicil), 'MANAGER']]);
+    }
+
     // Yalnızca sorumlu kümesine DOKUNAN kararlar bayatlık denetiminden geçer.
     const applies = decision === COORDINATION_DECISIONS.APPROVE;
     if (applies && !row.LiveTaskId) {
@@ -536,12 +612,15 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
     let currentAssignees = null;
     if (applies) {
       currentAssignees = await lockedAssigneeSicils(transaction, row.TaskId);
-      // Onay, kaydın oluşturulduğu andaki YETKİLİ sorumlu kümesine dayanır.
-      // Kaldırma onayında ise ölçüt tekil üyeliktir: kişi arada zaten
-      // çıkarılmışsa kararın uygulayacağı bir şey kalmamıştır.
+      // Kaldırma onayında ölçüt tekil üyeliktir: kişi arada zaten çıkarılmışsa
+      // kararın uygulayacağı bir şey kalmamıştır.
       const stale = row.Status === COORDINATION_STATUSES.CANCELLATION_REQUESTED
         ? !currentAssignees.map(Number).includes(Number(row.RequestedAssigneeSicil))
-        : sortedSicilText(currentAssignees) !== String(row.OriginalAssigneeSicils ?? '');
+        : assigneeSetIsStale(
+          currentAssignees,
+          row.OriginalAssigneeSicils,
+          await siblingRequestedSicils(transaction, row)
+        );
       if (stale) {
         await setCoordinationStatus(transaction, coordinationId, COORDINATION_STATUSES.STALE, {
           actorSicil: actor.sicil, message: decisionMessage
@@ -589,7 +668,7 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       });
     } else if (nextStatus === COORDINATION_STATUSES.CANCELLED
       && row.Status === COORDINATION_STATUSES.CANCELLATION_REQUESTED) {
-      await removeTaskAssignee(transaction, row.TaskId, row.RequestedAssigneeSicil);
+      await removeTaskAssignee(transaction, row.TaskId, row.RequestedAssigneeSicil, actor.sicil);
       notificationChanges.push({
         taskId: String(row.TaskId).toLowerCase(),
         added: [],

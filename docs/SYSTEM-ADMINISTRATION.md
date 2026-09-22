@@ -57,7 +57,7 @@ yenilemeler arasında korunur.
 Sağlık şeridi ve sekmeler sayfanın üstünde sabit kalır. Yedi sekmenin tamamında dikey kaydırma yalnızca alt içerik paneline uygulanır; panel ile sekmeler arasında 14 piksel boşluk vardır. Sekme değiştiğinde yeni panel baştan açılır. Panel klavyeyle odaklanıp kaydırılabilir; uzun tablolardaki mevcut iç kaydırma alanları ve yapışkan tablo başlıkları korunur.
 
 Hatırlatma yönetimi **taşınmıştır, çatallanmamıştır**: var olan
-`ReminderSettingsView` olduğu gibi altıncı sekmeye gömülür. Yetki, şablon
+`ReminderSettingsView` olduğu gibi yedinci sekmeye gömülür. Yetki, şablon
 doğrulama, zamanlayıcı ve SMTP davranışı değişmemiştir
 (`docs/TASK-REMINDERS.md`).
 
@@ -407,7 +407,9 @@ Tarayıcı kapanışı, ağ kesintisi ve oturum düşmesi ayrıca ele alınmaz: 
 
 ### Ekran
 
-Üstte kompakt KPI kartları durur: **Şu anda aktif**, **Son 15 dk aktif**, **Aktif direktörlük**, **Aktif müdürlük**. Altındaki tablo Ad Soyad, Sicil, Direktörlük, Müdürlük, Birim, aktif olduğu süre ve son görülme sütunlarını taşır; yalnızca sistem yöneticisinin zaten görmeye yetkili olduğu künye gösterilir.
+Üstte kompakt KPI kartları durur: **Şu anda aktif**, **Son 15 dk aktif**, **Aktif direktörlük**, **Aktif müdürlük**. Kurumsal sayaçlar aktif kümenin **tamamı** üzerinden veritabanında çözülür; satır sınırı yalnızca tabloya uygulanır, böylece sınırın ötesinde kalan bir direktörlük ya da müdürlük doğru toplamın yanında eksik sayılmaz. Altındaki tablo Ad Soyad, Sicil, Direktörlük, Müdürlük, Birim, aktif olduğu süre ve son görülme sütunlarını taşır; yalnızca sistem yöneticisinin zaten görmeye yetkili olduğu künye gösterilir. Tablo kabı klavyeyle odaklanabilir: içinde etkileşimli öğe yoktur, uzun liste yalnızca böyle kaydırılabilir.
+
+Demo Kipinde varlık sorgusu **hiç çalışmaz**; sekme sıfır aktif kullanıcı bildirmek yerine verinin okunmadığını açıkça söyler.
 
 Yerleşim kalan yüksekliği doldurur: kartlar üstte sabit kalır, tablo alanı kalan alanı kaplar, altta kullanılmayan boşluk bırakılmaz, yalnızca tablo gövdesi kaydırılır ve tablo başlığı satırlar kayarken görünür kalır. Davranış var olan sabit sağlık şeridi / sekme yerleşimiyle uyumludur.
 
@@ -614,7 +616,7 @@ database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql
 
 Betik yinelenebilir ve veriye dokunmaz. Göç uygulanmadan açılan kurulumda zil, var olan tarih talebi akışıyla çalışmayı sürdürür; posta kuyruğu ve varlık sessizce kapalı davranır ve görev yazması etkilenmez. Geri alma betiği bu tabloları da düşürür.
 
-Posta kuyruğu `SMTP_HOST`/`SMTP_FROM` tanımlı olmadığında hiç çalışmaz ve niyetler kuyrukta bekler. `MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30000, 5000–300000 arası) tur aralığını belirler. Altı denemeden sonra kayıt `FAILED` olur; başarısızlık kodu satırda saklanır ve gizli bilgi taşımaz.
+Posta kuyruğu `SMTP_HOST`/`SMTP_FROM` tanımlı olmadığında hiç çalışmaz ve niyetler kuyrukta bekler. `MERGEN_ROTA_TASK_MAIL_POLL_MS` tur aralığını belirler: değişken tanımsız, boş ya da geçersizse varsayılan 30000 ms uygulanır, geçerli bir değer 5000–300000 aralığına kırpılır. Altı denemeden sonra kayıt `FAILED` olur; başarısızlık kodu satırda saklanır ve gizli bilgi taşımaz. Teslimatı belirsiz kalan (gövde aktarıldı, kabul yanıtı okunamadı) satır `MAIL_DELIVERY_UNCERTAIN` koduyla doğrudan `FAILED` olur ve kendiliğinden yeniden denenmez: alıcı aynı iletiyi ikinci kez almaz.
 
 ---
 

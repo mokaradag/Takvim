@@ -300,8 +300,9 @@ Kaydetme sırasında sunucu kararı yeniden verir:
 | Herhangi bir kullanıcı | kendisi | doğrudan atama (değişmedi) |
 | Sıradan kullanıcı | başka biri | **talep** (`REQUEST`) — sorumlu yazılmaz |
 | Yönetici | kendi kapsamındaki personel | doğrudan atama (değişmedi) |
-| Yönetici | kapsam dışı personel | doğrudan atama **+ kalıcı koordinasyon kaydı** (`NOTICE`) ve karşı yönetim zincirine bildirim |
-| `SYSTEM_ADMIN` / proje `FULL` | herhangi biri | doğrudan atama (değişmedi) |
+| Yönetici | kapsam dışı personel | **talep** (`REQUEST`) — sorumlu yazılmaz |
+| `SYSTEM_ADMIN` / proje `FULL` | kendi kurumsal biriminden personel | doğrudan atama (değişmedi) |
+| `SYSTEM_ADMIN` / proje `FULL` | kurum dışı personel | doğrudan atama **+ kalıcı koordinasyon kaydı** (`NOTICE`) ve karşı yönetim zincirine bildirim |
 
 Bekleyen bir talep **asla** `MR_TaskAssignees` satırı yazmaz: iş yükü, Özet,
 Kanban, hatırlatma ve Outlook yalnızca gerçek sorumluyu görür. Talep geçmişi de
@@ -435,6 +436,12 @@ dosya ve derleme adımı gerekmez.
 Ayarlar sayfası tema, yoğunluk, vurgu rengi ve yazı boyutunun yanında şunları da
 taşır:
 
+- **Açılış sayfası** — Kapsamlı Kip açıldığında gösterilecek sayfa. Seçim
+  **uygulanır**: oturum açıldığında ve tarayıcı yenilendiğinde uygulama bu
+  sayfayla açılır. (Daha önce tercih saklanıyor ama her açılışta yok sayılıyor,
+  uygulama her zaman Özet ile başlıyordu.) Saklanan değer gezinmede yoksa ya da
+  role bağlı yönetici sayfasıysa Özet'e düşülür; Temel Kip kendi açılış
+  sayfasını kullanır.
 - **Tarih biçimi** — `gg/aa/yyyy` veya `18 Ağu 2026`. Daha önce koda gömülüydü.
   Tercih gösterilen tarihlerin yanı sıra **düzenlenebilir** tarih kutularını da
   kapsar; okuma her iki biçimi de kabul eder.

@@ -4,12 +4,15 @@ import { isValidEmailAddress } from '../../domain/reminders/emailAddress.js';
 import { corporateUserEmailSql } from '../identity/corporateDirectory.js';
 import { sql } from '../db/pool.js';
 import { sendMail } from '../mail/mailService.js';
-import { isSmtpConfigured } from '../mail/smtpConfig.js';
+import { getSmtpConfig, isSmtpConfigured } from '../mail/smtpConfig.js';
 import {
   claimDueTaskMail,
   isMissingTaskMailSchema,
   markTaskMailFailed,
-  markTaskMailSent
+  markTaskMailSent,
+  markTaskMailUncertain,
+  taskMailBatchSize,
+  taskMailLeaseSeconds
 } from './taskMailOutbox.js';
 
 /**
@@ -40,28 +43,38 @@ async function resolveRecipientAddress(pool, sicil) {
  *
  * Tur ETKİSİZDİR (idempotent): kiralanan satır ancak SMTP kabul ettiğinde SENT
  * olur, aksi hâlde geri çekilmeyle yeniden denenir ve aynı ileti iki kez
- * gönderilmez.
+ * gönderilmez. Kira TURUN TAMAMINI kapsayacak biçimde ölçülür ve her durum
+ * yazması kiranın sahiplik belirtecini taşır: kira yine de dolarsa satırı başka
+ * bir örnek devralır, bu tur onun durumunu ezmez.
+ *
+ * Teslimatı belirsiz kalan satır (gövde aktarıldı, kabul yanıtı okunamadı)
+ * yeniden denenmez: alıcı aynı iletiyi ikinci kez almaz.
  */
-export async function runTaskMailOutbox(pool, { limit = MAX_BATCH, link = null } = {}) {
+export async function runTaskMailOutbox(pool, { limit = MAX_BATCH, link = null, send = sendMail } = {}) {
   if (!isSmtpConfigured()) return { ok: true, enabled: false, sent: 0, failed: 0 };
   let claimed;
+  const timeoutMs = getSmtpConfig()?.timeoutMs;
+  const batchSize = taskMailBatchSize(limit, timeoutMs);
   try {
-    claimed = await claimDueTaskMail(pool, limit);
+    claimed = await claimDueTaskMail(pool, batchSize, {
+      leaseSeconds: taskMailLeaseSeconds(batchSize, timeoutMs)
+    });
   } catch (error) {
     if (isMissingTaskMailSchema(error)) return { ok: true, enabled: false, sent: 0, failed: 0 };
     throw error;
   }
   let sent = 0;
   let failed = 0;
+  let uncertain = 0;
   for (const item of claimed) {
     const address = await resolveRecipientAddress(pool, item.recipientSicil);
     if (!address.ok) {
       failed += 1;
-      await markTaskMailFailed(pool, item.mailId, address.code);
+      await markTaskMailFailed(pool, item.mailId, address.code, item.leaseToken);
       continue;
     }
     const message = buildTaskAssignmentMail({ ...item.payload, link: item.payload?.link || link });
-    const delivery = await sendMail({
+    const delivery = await send({
       to: [address.email],
       subject: message.subject,
       html: message.html,
@@ -69,11 +82,21 @@ export async function runTaskMailOutbox(pool, { limit = MAX_BATCH, link = null }
     });
     if (delivery.ok) {
       sent += 1;
-      await markTaskMailSent(pool, item.mailId);
+      await markTaskMailSent(pool, item.mailId, item.leaseToken);
+    } else if (delivery.deliveryMayHaveEscaped) {
+      uncertain += 1;
+      await markTaskMailUncertain(pool, item.mailId, item.leaseToken);
     } else {
       failed += 1;
-      await markTaskMailFailed(pool, item.mailId, delivery.code);
+      await markTaskMailFailed(pool, item.mailId, delivery.code, item.leaseToken);
     }
   }
-  return { ok: failed === 0, enabled: true, sent, failed, claimed: claimed.length };
+  return {
+    ok: failed === 0 && uncertain === 0,
+    enabled: true,
+    sent,
+    failed,
+    uncertain,
+    claimed: claimed.length
+  };
 }

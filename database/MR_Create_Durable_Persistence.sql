@@ -412,6 +412,9 @@ BEGIN TRY
         NextAttemptAt datetime2(7) NOT NULL
             CONSTRAINT DF_MR_TaskMailOutbox_NextAttemptAt DEFAULT SYSUTCDATETIME(),
         LeaseExpiresAt datetime2(7) NULL,
+        /* Kiralama SAHİPLİK belirtecidir: tur biterken durum yazması yalnızca
+           kirayı hâlâ elinde tutan örnekten kabul edilir. */
+        LeaseToken uniqueidentifier NULL,
         LastFailureCode varchar(60) NULL,
         DedupeKey nvarchar(200) NOT NULL,
         CreatedAt datetime2(7) NOT NULL

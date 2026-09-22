@@ -262,19 +262,39 @@ export function ScheduleRequestCenter({ onNavigate }) {
                   ? scheduleDifferenceSummary(requestDates(item, 'original'), requestDates(item, 'proposed'))[0]
                   : null;
                 return (
-                  <button type="button" className="schedule-request-card" key={`${item.source}:${item.id}`} onClick={() => {
-                    setOpen(false);
+                  <button type="button" className="schedule-request-card" key={`${item.source}:${item.id}`} onClick={async () => {
+                    const taskEvent = item.source === NOTIFICATION_SOURCES.TASK_EVENT;
+                    if (!taskEvent) setOpen(false);
                     if (item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST) setSelected(item);
                     else if (item.source === NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION) setSelectedCoordination(item);
                     // Atama olayı bildirim kartıdır: tıklama görevi açar ve
                     // erişim olağan yetkili yükleme yolunda yeniden denetlenir.
-                    else if (item.taskId) openTask?.(item.taskId);
-                    mark([item]);
+                    // Sorumluluğu kaldırılan kişi görevi çoğu zaman artık
+                    // göremez; başarısızlık YUTULMAZ. Panel de ancak görev
+                    // gerçekten açıldığında kapanır, yoksa ileti görünmezdi.
+                    let openFailure = null;
+                    if (taskEvent && item.taskId) {
+                      try {
+                        const result = await openTask?.(item.taskId);
+                        if (result?.ok === false) openFailure = result.error?.message || 'Görev açılamadı.';
+                      } catch (openError) {
+                        openFailure = openError?.message || 'Görev açılamadı.';
+                      }
+                    }
+                    if (taskEvent && !openFailure) setOpen(false);
+                    // `mark` başlarken hatayı temizler; açma başarısızlığı bu
+                    // yüzden turdan SONRA yazılır.
+                    await mark([item]);
+                    if (openFailure) setNotificationError(openFailure);
                   }}>
                     <span className={`schedule-status ${item.statusClass}`}>{item.statusLabel}</span>
                     <strong>{item.headline}{item.unread && <span className="schedule-new-label">Yeni</span>}</strong>
                     <small>{item.subtitle}</small>
-                    <span>{scheduleSummary || item.detail || 'Plan tarihleri için değişiklik'}</span>
+                    {/* Yedek metin YALNIZCA tarih talebine aittir: künyesi boş
+                        bir atama bildirimi "Plan tarihleri için değişiklik"
+                        diyerek kendi başlığıyla çelişiyordu. */}
+                    <span>{scheduleSummary || item.detail
+                      || (item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST ? 'Plan tarihleri için değişiklik' : '')}</span>
                     <time>{item.sortAt ? new Date(item.sortAt).toLocaleString('tr-TR') : ''}</time>
                   </button>
                 );

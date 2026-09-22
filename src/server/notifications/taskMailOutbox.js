@@ -1,4 +1,5 @@
 import 'server-only';
+import { randomUUID } from 'node:crypto';
 import { sql } from '../db/pool.js';
 
 /**
@@ -25,7 +26,35 @@ export function isMissingTaskMailSchema(error) {
 /** Kaç deneme sonra kayıt BAŞARISIZ sayılır (yönetim konsolunda görünür). */
 export const TASK_MAIL_MAX_ATTEMPTS = 6;
 const RETRY_BASE_SECONDS = 60;
-const LEASE_SECONDS = 120;
+const MIN_LEASE_SECONDS = 120;
+const MAX_LEASE_SECONDS = 3600;
+/** Ağ ve dizin okuması için satır başına pay. */
+const LEASE_SLACK_SECONDS = 5;
+
+function leaseSecondsPerRow(smtpTimeoutMs) {
+  return Math.ceil(Math.max(1000, Number(smtpTimeoutMs) || 20000) / 1000) + LEASE_SLACK_SECONDS;
+}
+
+/**
+ * Parti boyu, kiranın TAŞIYABİLECEĞİ satır sayısını aşmaz.
+ *
+ * Sabit 120 saniyelik kira, bir turda en çok 20 satırın sırayla gönderildiği ve
+ * tek bir SMTP işleminin yapılandırılabilir zaman aşımının 300 saniyeye
+ * çıkabildiği düzende yetmiyordu: kira parti işlenirken dolduğunda başka bir
+ * uygulama örneği aynı satırı yeniden kiralayıp AYNI iletiyi ikinci kez
+ * gönderebiliyordu. Parti, kira üst sınırına sığacak biçimde daraltılır;
+ * sahiplik belirteci de tur sonundaki durum yazmasını kiranın sahibine kilitler.
+ */
+export function taskMailBatchSize(limit = 20, smtpTimeoutMs = 20000) {
+  const requested = Math.max(1, Math.min(100, Number(limit) || 20));
+  return Math.max(1, Math.min(requested, Math.floor(MAX_LEASE_SECONDS / leaseSecondsPerRow(smtpTimeoutMs))));
+}
+
+/** Kira, TURUN TAMAMINI kapsar. */
+export function taskMailLeaseSeconds(batchSize, smtpTimeoutMs = 20000) {
+  const rows = Math.max(1, Math.min(100, Number(batchSize) || 1));
+  return Math.min(MAX_LEASE_SECONDS, Math.max(MIN_LEASE_SECONDS, rows * leaseSecondsPerRow(smtpTimeoutMs)));
+}
 
 /**
  * Posta NİYETİNİ yazar.
@@ -61,12 +90,16 @@ export async function enqueueTaskAssignmentMail(executor, { correlationId, entri
  * Gönderilebilir satırları KİRALAR.
  *
  * Kiralama, birden fazla uygulama örneğinin aynı iletiyi göndermesini önler:
- * süresi dolmamış kiralı satır başka bir tura düşmez.
+ * süresi dolmamış kiralı satır başka bir tura düşmez. Kira süresi turun
+ * tamamını kapsar ve her satır kirayı alan turun BELİRTECİNİ taşır.
  */
-export async function claimDueTaskMail(executor, limit = 20) {
+export async function claimDueTaskMail(executor, limit = 20, { leaseSeconds } = {}) {
+  const batchSize = Math.max(1, Math.min(100, Number(limit) || 20));
+  const leaseToken = randomUUID();
   const request = executor.request();
-  request.input('limit', sql.Int, Math.max(1, Math.min(100, Number(limit) || 20)));
-  request.input('leaseSeconds', sql.Int, LEASE_SECONDS);
+  request.input('limit', sql.Int, batchSize);
+  request.input('leaseSeconds', sql.Int, Number(leaseSeconds) || taskMailLeaseSeconds(batchSize));
+  request.input('leaseToken', sql.UniqueIdentifier, leaseToken);
   const result = await request.query(`
     DECLARE @claimed TABLE(MailId bigint PRIMARY KEY);
     ;WITH due AS (
@@ -79,6 +112,7 @@ export async function claimDueTaskMail(executor, limit = 20) {
     )
     UPDATE o
     SET LeaseExpiresAt = DATEADD(second, @leaseSeconds, SYSUTCDATETIME()),
+        LeaseToken = @leaseToken,
         UpdatedAt = SYSUTCDATETIME()
     OUTPUT inserted.MailId INTO @claimed(MailId)
     FROM dbo.MR_TaskMailOutbox o JOIN due ON due.MailId = o.MailId;
@@ -94,6 +128,7 @@ export async function claimDueTaskMail(executor, limit = 20) {
     taskId: row.TaskId ? String(row.TaskId).toLowerCase() : null,
     recipientSicil: Number(row.RecipientSicil),
     attemptCount: Number(row.AttemptCount || 0),
+    leaseToken,
     payload: parsePayload(row.PayloadJson)
   }));
 }
@@ -107,20 +142,33 @@ function parsePayload(value) {
   }
 }
 
-export async function markTaskMailSent(executor, mailId) {
-  const request = executor.request();
+/**
+ * Kira SAHİPLİĞİ koşulu.
+ *
+ * Kira dolduktan sonra satırı başka bir örnek kiralamış olabilir; o durumda bu
+ * turun durum yazması satıra DOKUNMAZ.
+ */
+const OWNS_LEASE = '(@leaseToken IS NULL OR LeaseToken = @leaseToken)';
+
+function bindLease(request, leaseToken) {
+  request.input('leaseToken', sql.UniqueIdentifier, leaseToken || null);
+  return request;
+}
+
+export async function markTaskMailSent(executor, mailId, leaseToken = null) {
+  const request = bindLease(executor.request(), leaseToken);
   request.input('mailId', sql.BigInt, Number(mailId));
   await request.query(`
     UPDATE dbo.MR_TaskMailOutbox
-    SET Status = 'SENT', SentAt = SYSUTCDATETIME(), LeaseExpiresAt = NULL,
+    SET Status = 'SENT', SentAt = SYSUTCDATETIME(), LeaseExpiresAt = NULL, LeaseToken = NULL,
         LastFailureCode = NULL, AttemptCount = AttemptCount + 1, UpdatedAt = SYSUTCDATETIME()
-    WHERE MailId = @mailId AND Status = 'PENDING';
+    WHERE MailId = @mailId AND Status = 'PENDING' AND ${OWNS_LEASE};
   `);
 }
 
 /** Başarısız deneme: geri çekilme uygulanır, sınır aşılınca kayıt FAILED olur. */
-export async function markTaskMailFailed(executor, mailId, failureCode) {
-  const request = executor.request();
+export async function markTaskMailFailed(executor, mailId, failureCode, leaseToken = null) {
+  const request = bindLease(executor.request(), leaseToken);
   request.input('mailId', sql.BigInt, Number(mailId));
   request.input('failureCode', sql.VarChar(60), String(failureCode || 'MAIL_SEND_FAILED').slice(0, 60));
   request.input('maxAttempts', sql.Int, TASK_MAIL_MAX_ATTEMPTS);
@@ -130,10 +178,40 @@ export async function markTaskMailFailed(executor, mailId, failureCode) {
     SET AttemptCount = AttemptCount + 1,
         LastFailureCode = @failureCode,
         LeaseExpiresAt = NULL,
+        LeaseToken = NULL,
         Status = CASE WHEN AttemptCount + 1 >= @maxAttempts THEN 'FAILED' ELSE 'PENDING' END,
         NextAttemptAt = DATEADD(second, @retryBaseSeconds * POWER(2, CASE WHEN AttemptCount > 4 THEN 4 ELSE AttemptCount END), SYSUTCDATETIME()),
         UpdatedAt = SYSUTCDATETIME()
-    WHERE MailId = @mailId AND Status = 'PENDING';
+    WHERE MailId = @mailId AND Status = 'PENDING' AND ${OWNS_LEASE};
+  `);
+}
+
+/** Teslimatı BELİRSİZ kalan satırın kodu; kendiliğinden yeniden denenmez. */
+export const TASK_MAIL_UNCERTAIN_CODE = 'MAIL_DELIVERY_UNCERTAIN';
+
+/**
+ * Teslimatı BELİRSİZ kalan satır.
+ *
+ * Bağlantı ileti gövdesi aktarıldıktan sonra, SMTP kabul yanıtı okunmadan
+ * koptuğunda posta sunucusu iletiyi kabul etmiş olabilir
+ * (`sendMail` · `deliveryMayHaveEscaped`). Böyle bir satır olağan yeniden deneme
+ * yoluna döndürüldüğünde alıcı AYNI iletiyi ikinci kez alabiliyordu. Satır bu
+ * yüzden bir daha gönderilmez; kaybolmaz da, yönetim konsolunda kendi kodu ile
+ * görünür ve gerekirse elle ele alınır.
+ */
+export async function markTaskMailUncertain(executor, mailId, leaseToken = null) {
+  const request = bindLease(executor.request(), leaseToken);
+  request.input('mailId', sql.BigInt, Number(mailId));
+  request.input('failureCode', sql.VarChar(60), TASK_MAIL_UNCERTAIN_CODE);
+  await request.query(`
+    UPDATE dbo.MR_TaskMailOutbox
+    SET AttemptCount = AttemptCount + 1,
+        LastFailureCode = @failureCode,
+        LeaseExpiresAt = NULL,
+        LeaseToken = NULL,
+        Status = 'FAILED',
+        UpdatedAt = SYSUTCDATETIME()
+    WHERE MailId = @mailId AND Status = 'PENDING' AND ${OWNS_LEASE};
   `);
 }
 

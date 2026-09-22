@@ -30,18 +30,39 @@ const SOURCE = `
   LEFT JOIN dbo.MR_AssignmentCoordinationRecipients n
     ON n.CoordinationId = c.CoordinationId AND n.Sicil = @sicil
 `;
-// Katılım ALICI satırından türetilir. Talep edilen kişi yalnızca atama
-// yürürlüğe girdiğinde alıcı olur; onay beklerken kaydı görmez.
+/**
+ * Karar yetkisi CANLI veriden türetilir.
+ *
+ * Alıcı satırı yalnızca bir POSTA KUTUSU kaydıdır, yetki belgesi değildir:
+ * `decideAssignmentCoordination` kararı sistem yöneticiliğine, güncel tam proje
+ * yetkisine ya da güncel İK ilişkisine bakarak verir. Okuma yüzeyi aynı kuralı
+ * kullanmadığında iki hata birden çıkıyordu — personelin yöneticisi değişince
+ * yeni yetkili kaydı bulamıyor, eski alıcıya ise sunucunun her zaman reddedeceği
+ * karar düğmeleri gösteriliyordu.
+ */
+const LIVE_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+  WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil)`;
+const LIVE_FULL_PROJECT_ACCESS = `EXISTS (SELECT 1 FROM STRING_SPLIT(@fullProjectIds, ',') fp
+  WHERE TRY_CONVERT(uniqueidentifier, NULLIF(LTRIM(RTRIM(fp.value)), ''))
+    = COALESCE(c.ProjectIdSnapshot, t.ProjectId))`;
+const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
+  OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
+/**
+ * Katılım ALICI satırından ya da GÜNCEL karar yetkisinden türetilir.
+ *
+ * Talep edilen kişi yalnızca atama yürürlüğe girdiğinde alıcı olur; onay
+ * beklerken kaydı görmez. Sistem yöneticiliği bilinçli olarak DIŞARIDADIR:
+ * yönetici her kaydı karara bağlayabilir ama zili sistemdeki bütün kayıtlarla
+ * dolmaz (bkz. bindCoordinationScope · boş `@fullProjectIds`).
+ */
 const PARTICIPANT = `(c.RequesterSicil = @sicil
   OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
-    WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil))`;
-const IS_MANAGER = `CASE WHEN EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
-  WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil AND r.RecipientRole = 'MANAGER')
-  THEN 1 ELSE 0 END`;
+    WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil)
+  OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
+const IS_MANAGER = `CASE WHEN ${DECISION_AUTHORITY} THEN 1 ELSE 0 END`;
 const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
 const ACTIONABLE = `(${TASK_AVAILABLE} AND (
-  (c.Status = 'PENDING' AND EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
-     WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil AND r.RecipientRole = 'MANAGER'))
+  (c.Status = 'PENDING' AND ${DECISION_AUTHORITY})
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
 const UNREAD = '(n.ReadVersion IS NULL OR n.ReadVersion <> c.RowVersion)';
 const VISIBLE = `(${ACTIONABLE} OR n.DismissedVersion IS NULL OR n.DismissedVersion <> c.RowVersion)`;
@@ -58,6 +79,23 @@ const FIELDS = `c.*, ${IS_MANAGER} AS IsManager,
   CASE WHEN ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS TaskAvailable`;
 const ORDER = `CASE WHEN ${ACTIONABLE} THEN 0 ELSE 1 END,
   COALESCE(c.DecidedAt, c.CreatedAt) DESC, c.CoordinationId DESC`;
+
+/**
+ * Okuma yüzeyinin AKTÖR kapsamı.
+ *
+ * `PARTICIPANT`, `IS_MANAGER` ve `ACTIONABLE` bu üç parametreyi kullanır; hepsi
+ * oturum bağlamından gelir, hiçbiri istemciden okunmaz. Sistem yöneticisinde
+ * bit yeterlidir: bütün projelerin kimliğini listeye yazmak gereksizdir.
+ */
+export function bindCoordinationScope(request, actor) {
+  const fullProjectIds = actor.isSystemAdmin
+    ? ''
+    : [...(actor.effective?.fullProjectIds || [])].join(',');
+  request.input('sicil', sql.Int, actor.sicil);
+  request.input('isSystemAdmin', sql.Bit, actor.isSystemAdmin ? 1 : 0);
+  request.input('fullProjectIds', sql.NVarChar(sql.MAX), fullProjectIds);
+  return request;
+}
 
 /**
  * Zil önizlemesi: sekiz satır ve iki sayaç.
@@ -84,8 +122,7 @@ export function mapCoordinationInbox(countRows, itemRows, actorSicil) {
 }
 
 export async function readCoordinationInbox(executor, actor) {
-  const request = executor.request();
-  request.input('sicil', sql.Int, actor.sicil);
+  const request = bindCoordinationScope(executor.request(), actor);
   request.input('limit', sql.Int, NOTIFICATION_PREVIEW_LIMIT);
   const result = await request.query(COORDINATION_INBOX_SQL);
   return mapCoordinationInbox(result.recordsets?.[0], result.recordsets?.[1], actor.sicil);
@@ -140,8 +177,7 @@ export async function readCoordinationPage(executor, actor, input = {}) {
   const query = normalizeCoordinationQuery(input);
   const fromUtc = query.from ? activityDateRange({ period: 'custom', from: query.from, to: query.from }).startUtc : null;
   const toUtc = query.to ? activityDateRange({ period: 'custom', from: query.to, to: query.to }).endUtc : null;
-  const request = executor.request();
-  request.input('sicil', sql.Int, actor.sicil);
+  const request = bindCoordinationScope(executor.request(), actor);
   request.input('tab', sql.VarChar(10), query.tab);
   request.input('pageSize', sql.Int, query.pageSize);
   request.input('page', sql.Int, query.page);
@@ -209,8 +245,7 @@ export async function queryAssignmentCoordinations(input) {
 
 /** Tek kaydın güncel künyesi (karar sonrası yanıt ve açılan pencere için). */
 export async function readCoordination(executor, actor, coordinationId) {
-  const request = executor.request();
-  request.input('sicil', sql.Int, actor.sicil);
+  const request = bindCoordinationScope(executor.request(), actor);
   request.input('coordinationId', sql.UniqueIdentifier, coordinationId);
   const result = await request.query(`
     SELECT TOP (1) ${FIELDS} ${SOURCE}
@@ -227,13 +262,15 @@ export async function readCoordination(executor, actor, coordinationId) {
  */
 export async function updateCoordinationNotifications(executor, actor, notifications = [], action = 'read') {
   for (const item of notifications) {
-    const request = executor.request();
-    request.input('sicil', sql.Int, actor.sicil);
+    const request = bindCoordinationScope(executor.request(), actor);
     request.input('coordinationId', sql.UniqueIdentifier, item.id);
     request.input('eventVersion', sql.Binary(8), decodeVersion(item.version));
     request.input('dismiss', sql.Bit, action === 'dismiss');
+    // `PARTICIPANT` görev satırına bakar (tam proje yetkisi ölçütü); katılım
+    // burada da aynı yüklemle kurulur, ikinci bir kural yazılmaz.
     await request.query(`
       IF EXISTS (SELECT 1 FROM dbo.MR_TaskAssignmentCoordinations c WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN dbo.MR_Tasks t ON t.TaskId = c.TaskId
         WHERE c.CoordinationId = @coordinationId AND ${PARTICIPANT} AND c.RowVersion = @eventVersion)
       BEGIN
         UPDATE dbo.MR_AssignmentCoordinationRecipients WITH (UPDLOCK, HOLDLOCK)

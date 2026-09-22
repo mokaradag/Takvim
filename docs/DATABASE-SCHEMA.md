@@ -270,15 +270,21 @@ geç gelen eski bir işlem yeni bir olayı temizleyemez.
 dayanıklı kuyruğudur: `Kind`, `TaskId`, `RecipientSicil`, gönderim için gereken
 anlık künyeyi taşıyan `PayloadJson`, `DedupeKey`, `Status`
 (`PENDING`/`SENT`/`FAILED`), `AttemptCount`, `NextAttemptAt`, `LeaseExpiresAt`,
-`LastFailureCode`, `SentAt`. `UX_MR_TaskMailOutbox_DedupeKey`
+`LeaseToken`, `LastFailureCode`, `SentAt`. `UX_MR_TaskMailOutbox_DedupeKey`
 (`"<CorrelationId>:<TaskId>:<RecipientSicil>"`) aynı değişikliğin iki kez kuyruğa
 girmesini engeller; `IX_MR_TaskMailOutbox_Due` tarama maliyetini tüm tabloya
 değil kuyruktaki işe orantılı tutar. Satır commit işlemiyle **aynı transaction**
 içinde yazılır, SMTP ise ayrı bir çalışan tarafından tüketilir: `api.commit`
-hiçbir koşulda posta sunucusunu beklemez. Çalışan satırı `LeaseExpiresAt` ile
-kiralar, yeniden deneme üstel geri çekilme ile yapılır ve deneme eşiği
-dolduğunda satır `FAILED` olarak **kalır** — kaybolmaz, `LastFailureCode` ile
-incelenebilir.
+hiçbir koşulda posta sunucusunu beklemez. Çalışan satırı `LeaseExpiresAt` ve
+`LeaseToken` ile kiralar: kira süresi parti boyu × SMTP zaman aşımından
+türetilir, üst sınıra sığmayan parti daraltılır ve tur sonundaki durum yazması
+yalnızca kirayı hâlâ elinde tutan örnekten kabul edilir — böylece çok örnekli
+dağıtımda aynı ileti iki kez gönderilmez. Yeniden deneme üstel geri çekilme ile
+yapılır ve deneme eşiği dolduğunda satır `FAILED` olarak **kalır** — kaybolmaz,
+`LastFailureCode` ile incelenebilir. Bağlantı ileti gövdesi aktarıldıktan sonra
+kabul yanıtı okunmadan koparsa satır doğrudan `FAILED` /
+`MAIL_DELIVERY_UNCERTAIN` olur ve kendiliğinden yeniden denenmez: posta sunucusu
+iletiyi kabul etmiş olabilir.
 
 `MR_UserPresence` Sicil başına tek satır tutar: `FirstSeenAt`,
 `SessionStartedAt` ve `LastSeenAt`. Satır sayısı kullanıcı sayısıyla sınırlıdır,

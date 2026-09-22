@@ -43,6 +43,10 @@ export function AssignmentCoordinationDialog({
 
   const decisions = useMemo(() => record.allowedDecisions || [], [record.allowedDecisions]);
   const canSuggest = decisions.includes(COORDINATION_DECISIONS.REQUEST_CHANGE);
+  // Etiket yanıt notunu "değişiklik isteğinde zorunlu" diye bildirir; düğme de
+  // aynı kuralı uygular. Uygulanmadığında boş notlu istek gidiyor ve kullanıcı
+  // ya gidiş-dönüş sonrası geç bir hata alıyor ya da etiket yalan oluyordu.
+  const noteMissing = !message.trim();
 
   const decide = async (decision) => {
     setBusy(true);
@@ -184,7 +188,10 @@ export function AssignmentCoordinationDialog({
           </button>
           <div style={{ flex: 1 }} />
           {decisions.length ? decisions.map((decision) => (
-            <button key={decision} type="button" disabled={busy} aria-busy={busy}
+            <button key={decision} type="button" aria-busy={busy}
+              disabled={busy || (decision === COORDINATION_DECISIONS.REQUEST_CHANGE && noteMissing)}
+              title={decision === COORDINATION_DECISIONS.REQUEST_CHANGE && noteMissing
+                ? 'Değişiklik isteğinde yanıt notu zorunludur.' : undefined}
               className={`btn${PRIMARY_DECISIONS.has(decision) ? ' primary' : ''}${decision === COORDINATION_DECISIONS.REJECT ? ' schedule-reject' : ''}`}
               onClick={() => decide(decision)}>
               {PRIMARY_DECISIONS.has(decision) && <Icons.Check size={13} />} {COORDINATION_DECISION_LABELS[decision]}

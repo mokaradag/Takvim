@@ -649,7 +649,7 @@ Taslakta proje değişince alan yetkileri birikmiş düzenlemeye göre yeniden h
 
 ## Talepler ve bildirim önizlemesi
 
-Her iki kipte düz **Talepler** sayfasının Bekleyenler, Gönderdiklerim, Geçmiş ve **Atama Koordinasyonu** sekmeleri vardır; kurum dışı atama için ayrı bir kenar çubuğu sayfası açılmaz. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır ve tarih talepleri, atama koordinasyonu ile atama bildirimlerini **tek listede** birleştirir — ikinci bir zil yoktur. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+Her iki kipte düz **Talepler** sayfasının Gelenler, Gönderdiklerim, Geçmiş ve **Atama Koordinasyonu** sekmeleri vardır; kurum dışı atama için ayrı bir kenar çubuğu sayfası açılmaz. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır ve tarih talepleri, atama koordinasyonu ile atama bildirimlerini **tek listede** birleştirir — ikinci bir zil yoktur. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
 
 ## Özet KPI ayrıntı penceresi
 

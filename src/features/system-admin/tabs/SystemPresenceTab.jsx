@@ -28,6 +28,22 @@ export function SystemPresenceTab({ enabled = true }) {
   const activeWindowMs = data?.definition?.activeWindowMs || PRESENCE_ACTIVE_WINDOW_MS;
   const activeMinutes = Math.round(activeWindowMs / 60000);
 
+  // Demo Kipinde sorgu HİÇ çalışmaz. Dal olmadan sekme boş ölçüm kutuları ve
+  // "Şu anda etkin kullanıcı görünmüyor." iletisini çiziyor, yönetici bunu
+  // canlı varlık hakkında bir SAPTAMA olarak okuyordu (bkz. SystemQueuesTab).
+  if (!enabled) {
+    return (
+      <AdminSection
+        title="Aktif kullanıcılar"
+        icon="Users"
+        empty
+        emptyMessage="Demo Kipinde varlık verisi okunmaz."
+        emptyHint="Gerçek Sistem verisine geçerek son üç dakikada nabız görülen kullanıcıları izleyin."
+        className="sysadmin-presence-section"
+      />
+    );
+  }
+
   return (
     <div className="sysadmin-presence">
       <div className="sysadmin-tile-grid sysadmin-presence-metrics">
@@ -57,7 +73,10 @@ export function SystemPresenceTab({ enabled = true }) {
           </span>
         )}
       >
-        <div className="sysadmin-presence-scroll">
+        {/* Kaydırma `.sysadmin-presence-scroll` üzerindedir ve içinde
+            etkileşimli öğe yoktur: kap odaklanabilir olmazsa klavye kullanan
+            biri listenin kalan satırlarına ulaşamaz. */}
+        <div className="sysadmin-presence-scroll" tabIndex={0} role="region" aria-label="Aktif kullanıcılar listesi">
           <table className="table sysadmin-table sysadmin-presence-table">
             <caption className="sr-only">Aktif kullanıcılar</caption>
             <thead>

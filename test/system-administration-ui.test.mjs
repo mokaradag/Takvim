@@ -592,15 +592,21 @@ test('kuyruk eylemi başarısız olduğunda hata bildirilir ve düğme kilitli k
 
 test('atama postası kuyruğu sayılarıyla görünür; şema eksikken bölüm hata vermez', async (t) => {
   withDataMode(t, 'actual');
-  const mailSection = async (assignmentMail) => {
-    stubFetch(t, async () => Response.json({
-      ok: true,
-      generatedAt: '2026-09-12T10:00:00.000Z',
-      outlook: { enabled: false, worker: { started: false, enabled: false }, queue: null, age: null, items: [], maxAttempts: 6, pollIntervalMs: 5000 },
-      reminders: { automaticEnabled: false, schemaReady: true, history: [] },
-      corporateWbs: { configured: false },
-      assignmentMail
-    }));
+  // Vekil TEK kez kurulur. İki `stubFetch` çağrısı iki `t.after` kancası
+  // bırakıyor; `node:test` kancaları kayıt sırasıyla çalıştırdığı için ilki
+  // özgün `fetch`'i geri veriyor, ikincisi ÜZERİNE ilk vekili yazıyordu ve
+  // sonraki testler bu yükü görebiliyordu.
+  let assignmentMail = null;
+  stubFetch(t, async () => Response.json({
+    ok: true,
+    generatedAt: '2026-09-12T10:00:00.000Z',
+    outlook: { enabled: false, worker: { started: false, enabled: false }, queue: null, age: null, items: [], maxAttempts: 6, pollIntervalMs: 5000 },
+    reminders: { automaticEnabled: false, schemaReady: true, history: [] },
+    corporateWbs: { configured: false },
+    assignmentMail
+  }));
+  const mailSection = async (payload) => {
+    assignmentMail = payload;
     const view = mountComponent(SystemQueuesTab, { enabled: true });
     t.after(() => view.unmount());
     await immediate();

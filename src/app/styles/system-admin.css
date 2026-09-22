@@ -498,6 +498,9 @@
   border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
+/* Kap klavyeyle odaklanabilir: içinde etkileşimli öğe yoktur, odak halkası
+   kullanıcıya listeyi kaydırabileceğini söyler. */
+.sysadmin-presence-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Başlık satırı satırlar kayarken görünür kalır. */
 .sysadmin-presence-table thead th {
   position: sticky;

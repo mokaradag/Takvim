@@ -7,7 +7,7 @@ SET ANSI_NULLS ON;
     MERGEN Rota · 0015 — Atama koordinasyonu, görev bildirimleri, posta
     kuyruğu ve kullanıcı varlığı.
 
-    Dört kalıcı yapı eklenir:
+    Beş kalıcı yapı eklenir:
 
       · MR_TaskAssignmentCoordinations       — kurum dışı atama talebi/koordinasyonu
       · MR_AssignmentCoordinationRecipients  — alıcı (yönetici/sorumlu/talep eden)
@@ -178,6 +178,9 @@ BEGIN TRY
             NextAttemptAt datetime2(7) NOT NULL
                 CONSTRAINT DF_MR_TaskMailOutbox_NextAttemptAt DEFAULT SYSUTCDATETIME(),
             LeaseExpiresAt datetime2(7) NULL,
+            /* Kiralama SAHİPLİK belirtecidir: tur biterken durum yazması
+               yalnızca kirayı hâlâ elinde tutan örnekten kabul edilir. */
+            LeaseToken uniqueidentifier NULL,
             LastFailureCode varchar(60) NULL,
             DedupeKey nvarchar(200) NOT NULL,
             CreatedAt datetime2(7) NOT NULL
@@ -189,6 +192,11 @@ BEGIN TRY
             CONSTRAINT CK_MR_TaskMailOutbox_Status
                 CHECK (Status IN ('PENDING','SENT','FAILED'))
         );
+
+    /* Betik yinelenebilir: tablo daha önce oluşturulmuşsa sahiplik belirteci
+       sonradan eklenir. */
+    IF COL_LENGTH(N'dbo.MR_TaskMailOutbox', N'LeaseToken') IS NULL
+        ALTER TABLE dbo.MR_TaskMailOutbox ADD LeaseToken uniqueidentifier NULL;
 
     IF NOT EXISTS (
         SELECT 1 FROM sys.indexes

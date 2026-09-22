@@ -47,6 +47,10 @@ export function ScheduleRequestsView() {
   const change = (key, value) => setQuery((current) => ({ ...current, [key]: value, page: 0 }));
   const selectTab = (id) => {
     setActiveTab(id);
+    // Sekme değişimi açık talep ayrıntısını KAPATIR. Seçim korunduğunda,
+    // Atama Koordinasyonu'na geçip geri dönen kullanıcının önüne çekmece
+    // kendiliğinden yeniden açılıyordu.
+    setSelected(null);
     if (id !== COORDINATION_TAB) change('tab', id);
   };
   const tabCount = (id) => (id === COORDINATION_TAB ? notificationSummary.pendingCount : data.counts[id]);

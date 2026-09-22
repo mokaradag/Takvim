@@ -48,9 +48,9 @@ import { DataRefreshControl } from './DataRefreshControl';
 import {
   ADMIN_NAV_IDS,
   GLOBAL_NAV_IDS,
-  NAV_ITEMS,
   PAGE_META,
   contentClassName,
+  initialLandingView,
   nextSimpleCalendarTab,
   simpleCalendarPanelId,
   simpleCalendarTabForIntent,
@@ -151,10 +151,10 @@ export default function AppShell() {
   const [sidebarKeyboardOpen, setSidebarKeyboardOpen] = useState(false);
   const { pinned: sidebarPinned, collapsed: sidebarCollapsed } = sidebarPreference;
 
-  const [view, setView] = useState(() => {
-    const landing = TWEAK_DEFAULTS.landingView || 'ozet';
-    return NAV_ITEMS.some((item) => item.id === landing) ? landing : 'ozet';
-  });
+  // Açılış sayfası SAKLANAN tercihten gelir. `TWEAK_DEFAULTS` okunduğunda
+  // kullanıcının Ayarlar seçimi her yenilemede yok sayılıyor ve uygulama her
+  // zaman Özet ile açılıyordu (bkz. navigation.js · initialLandingView).
+  const [view, setView] = useState(() => initialLandingView(t));
   // Gezinme niyeti: bir sayfanın hangi alt görünümle açılacağını taşır.
   const [viewIntent, setViewIntent] = useState(null);
   const navigate = (nextView, intent = null) => {

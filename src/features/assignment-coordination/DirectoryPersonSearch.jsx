@@ -37,6 +37,11 @@ export function DirectoryPersonSearch({
   useEffect(() => {
     const text = query.trim();
     if (text.length < DIRECTORY_MIN_QUERY_LENGTH) {
+      // Süren isteğin sırası GEÇERSİZ kılınır. Sıra ilerletilmediğinde,
+      // kullanıcı kutuyu kısaltsa bile önceki uzun sorgunun geç gelen yanıtı
+      // aşağıdaki denetimden geçiyor, temizlenmiş listenin üzerine düşüyor ve
+      // artık görünmeyen bir sorgudan kişi seçilebiliyordu.
+      requestRef.current += 1;
       setItems([]);
       setStatus('idle');
       setError(null);
