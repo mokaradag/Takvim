@@ -791,7 +791,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
       const row = db.taskAssignmentCoordinations.find((entry) =>
         sameGuid(entry.CoordinationId, params.coordinationId)
         && isParticipant(db, entry, params));
-      return [row ? [coordinationRow(db, row, Number(params.sicil))] : []];
+      return [row ? [coordinationRow(db, row, params)] : []];
     }
     return [...coordinationInbox(db, params)];
   }

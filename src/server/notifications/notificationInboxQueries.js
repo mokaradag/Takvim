@@ -1,5 +1,8 @@
 import 'server-only';
-import { NOTIFICATION_PREVIEW_LIMIT } from '../../domain/notifications/notificationInbox.js';
+import {
+  NOTIFICATION_PREVIEW_LIMIT,
+  NOTIFICATION_SOURCES
+} from '../../domain/notifications/notificationInbox.js';
 import {
   COORDINATION_INBOX_SQL,
   bindCoordinationScope,
@@ -71,7 +74,12 @@ export async function markNotifications(input = {}) {
   for (const entry of entries) {
     const id = canonicalActualId(entry?.id);
     if (!id) invalid('Bildirim kimliği geçersiz.');
-    const target = entry?.source === 'TASK_EVENT' ? taskEvents : coordination;
+    const source = entry?.source;
+    if (source !== NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION
+      && source !== NOTIFICATION_SOURCES.TASK_EVENT) {
+      invalid('Bildirim kaynağı geçersiz.');
+    }
+    const target = source === NOTIFICATION_SOURCES.TASK_EVENT ? taskEvents : coordination;
     target.push({ id, version: entry?.version });
   }
   return withSqlTransaction(async (executor) => {

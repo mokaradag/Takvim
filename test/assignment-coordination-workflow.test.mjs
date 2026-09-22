@@ -399,6 +399,7 @@ test('okuma yüzeyi karar yetkisini CANLI veriden türetir', async () => {
     // Karar veren aktör kendi kararını OKUYABİLMELİDİR.
     assert.ok(decision.record, 'karar yanıtı kaydı taşımalıdır');
     assert.equal(decision.record.status, 'APPROVED');
+    assert.equal(decision.record.isManager, true, 'canlı karar yetkisi tek kayıt okumasında korunmalıdır');
   } finally { await stack.dispose(); }
 });
 
@@ -417,6 +418,7 @@ test('alıcı satırı olmayan tam proje yetkilisi kararını okuyabilir', async
     assert.equal(decision.outcome, 'APPROVED');
     assert.ok(decision.record, 'karar veren kaydı okuyamıyorsa istemci sonucu çizemez');
     assert.equal(decision.record.status, 'APPROVED');
+    assert.equal(decision.record.isManager, true, 'tam proje yetkisi tek kayıt okumasında korunmalıdır');
     // Kararla birlikte posta kutusu satırı açılır.
     assert.equal(recipientsOf(stack, coordinationId).some((row) => row.Sicil === PROJECT_MANAGER), true);
   } finally { await stack.dispose(); }
