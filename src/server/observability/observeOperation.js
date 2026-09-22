@@ -81,6 +81,22 @@ export async function observePhase(operation, work) {
 }
 
 /**
+ * Sunucuda ZATEN ÖLÇÜLMÜŞ bir alt faz süresini kaydeder.
+ *
+ * Tek kullanım yeri, SQL toplu işinin kendi içinde ölçtüğü aşama süreleridir:
+ * aşamaları ayrı ölçmek için toplu işi birden çok gidiş-dönüşe bölmek,
+ * tanıyı üretimde yeni bir gecikme kaynağına çevirirdi. Kayıt yolu ayrı bir
+ * telemetri sistemi açmaz; `observePhase` ile aynı kaydediciyi kullanır ve
+ * kendi hatasını yutar.
+ */
+export function recordPhaseDuration(operation, durationMs, { at = Date.now() } = {}) {
+  // Ölçülemeyen aşama SIFIR olarak kaydedilmez: eksik örnek, yanlış bir "0 ms"
+  // örneğinden daha dürüsttür ve yüzdelikleri aşağı çekmez.
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) return;
+  safely(() => recordOperation({ operation, durationMs: Math.max(0, durationMs), ok: true, at }));
+}
+
+/**
  * Sonucu HATA FIRLATMADAN bildiren turlar için ölçüm.
  *
  * Outlook ve hatırlatma turları `{ ok: false, reason }` döner; başarısızlık

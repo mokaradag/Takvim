@@ -197,14 +197,20 @@ test('project creation does not append the committed root WBS a second time', ()
 
 test('partial task visibility cannot add inactive projects to the visible project set', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
-  // Görev tabanlı KISMİ görünürlük iki dizin aramalı kümeden kurulur; her
+  // Görev tabanlı KISMİ görünürlük TEK geçişte toplanan kişisel kapsamdan
+  // türer; kendi kapsamı ile yönetim kapsamı ayrı bayraklarda kalır ve her
   // ikisi de ETKİN proje süzgecinden geçtikten sonra görünür kümeye yazılır.
-  assert.match(source, /INSERT #OwnScopedProjects\(ProjectId\)[\s\S]*t\.CreatedBySicil = @sicil[\s\S]*FROM dbo\.MR_TaskAssignees ta[\s\S]*ta\.Sicil = @sicil/);
-  assert.match(source, /INSERT #ScopeAssignedProjects\(ProjectId\)[\s\S]*FROM #ExecutiveScope es[\s\S]*JOIN dbo\.MR_TaskAssignees ta ON ta\.Sicil = es\.EmployeeSicil/);
+  assert.match(source, /INSERT #ScopedTasks\(TaskId, ProjectId, IsCreator, IsOwnAssignee, IsScopeAssignee\)[\s\S]*t\.CreatedBySicil = @sicil[\s\S]*FROM dbo\.MR_TaskAssignees ta[\s\S]*WHERE ta\.Sicil = @sicil[\s\S]*FROM #ExecutiveScope es[\s\S]*JOIN dbo\.MR_TaskAssignees ta ON ta\.Sicil = es\.EmployeeSicil/);
+  assert.match(source, /INSERT #OwnScopedProjects\(ProjectId\)\s+SELECT DISTINCT s\.ProjectId FROM #ScopedTasks s WHERE s\.IsCreator = 1 OR s\.IsOwnAssignee = 1/);
+  assert.match(source, /INSERT #ScopeAssignedProjects\(ProjectId\)\s+SELECT DISTINCT s\.ProjectId FROM #ScopedTasks s WHERE s\.IsScopeAssignee = 1/);
   assert.match(
     source,
-    /SELECT DISTINCT scoped\.ProjectId, 'PARTIAL'[\s\S]*SELECT own\.ProjectId FROM #OwnScopedProjects own[\s\S]*SELECT team\.ProjectId FROM #ScopeAssignedProjects team[\s\S]*JOIN dbo\.MR_Projects p ON p\.ProjectId = scoped\.ProjectId\s+WHERE @isAdmin = 0 AND p\.IsActive = 1/s
+    /SELECT DISTINCT scoped\.ProjectId, 'PARTIAL'[\s\S]*SELECT own\.ProjectId FROM #OwnScopedProjects own[\s\S]*SELECT team\.ProjectId FROM #ScopeAssignedProjects team[\s\S]*JOIN dbo\.MR_Projects p ON p\.ProjectId = scoped\.ProjectId\s+WHERE p\.IsActive = 1/s
   );
+  // Yönetici olmayan bütün proje kümeleri `IF @isAdmin = 1 ... ELSE` bloğunun
+  // ELSE dalındadır: yüklem yerine dal kullanmak kümeyi yöneticide hiç
+  // çalıştırmaz, yetki anlamı ise değişmez.
+  assert.match(source, /IF @isAdmin = 1\s+INSERT #VisibleProjects\(ProjectId, AccessLevel\)\s+SELECT ProjectId, 'FULL'\s+FROM dbo\.MR_Projects\s+WHERE IsActive = 1;\s+ELSE\s+BEGIN/);
 });
 
 test('Actual UUID normalization still strips only local creation prefixes', () => {
@@ -394,21 +400,23 @@ test('snapshot HR09 FULL visibility applies only to corporate projects', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(
     source,
-    /JOIN dbo\.MR_V_CorporateProjectAccess a ON a\.ProjectCode = UPPER\(p\.ProjectCode\)\s+WHERE @isAdmin = 0 AND p\.SourceType = 'CORPORATE' AND p\.IsActive = 1 AND a\.Sicil = @sicil/s
+    /JOIN dbo\.MR_V_CorporateProjectAccess a ON a\.ProjectCode = UPPER\(p\.ProjectCode\)\s+WHERE p\.SourceType = 'CORPORATE' AND p\.IsActive = 1 AND a\.Sicil = @sicil/s
   );
 });
 
 test('partial snapshots expose the WBS catalog only for a creator or assigned user while retaining ancestor fallback', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
-  assert.match(source, /CREATE TABLE #TaskScopedWbsProjects\(ProjectId uniqueidentifier PRIMARY KEY\)/);
   // Katalog kümesi yalnızca KENDİ oluşturduğu/sorumlusu olduğu projelerden
   // türer; yönetim kapsamı (#ScopeAssignedProjects) bu kümeyi genişletmez.
-  assert.match(source, /INSERT #TaskScopedWbsProjects\(ProjectId\)\s+SELECT own\.ProjectId\s+FROM #OwnScopedProjects own\s+JOIN #VisibleProjects v ON v\.ProjectId = own\.ProjectId AND v\.AccessLevel = 'PARTIAL'/);
+  // Karar proje satırında `IsTaskScoped` olarak taşınır.
+  const taskScopedFlag = source.slice(source.indexOf('IsTaskScoped = CASE'), source.indexOf('FROM #VisibleProjects v;'));
+  assert.match(taskScopedFlag, /^IsTaskScoped = CASE WHEN v\.AccessLevel = 'PARTIAL' AND EXISTS \(\s+SELECT 1 FROM #OwnScopedProjects own WHERE own\.ProjectId = v\.ProjectId\s+\) THEN 1 ELSE 0 END/);
+  assert.doesNotMatch(taskScopedFlag, /#ScopeAssignedProjects/);
   assert.match(source, /;WITH RequiredPartialWbs AS \(/);
-  assert.match(source, /WHERE v\.AccessLevel = 'PARTIAL'[\s\S]*JOIN RequiredPartialWbs child ON child\.ParentWbsId = parent\.WbsId/);
+  assert.match(source, /WHERE visible\.AccessLevel = 'PARTIAL'[\s\S]*JOIN RequiredPartialWbs child ON child\.ParentWbsId = parent\.WbsId/);
   // Özyinelemeli ata zinciri bir kez toplanır ve WBS seçimi hazır kümeyi okur.
   assert.match(source, /INSERT #RequiredPartialWbs\(WbsId\)\s+SELECT DISTINCT WbsId FROM RequiredPartialWbs\s+OPTION \(MAXRECURSION 1000\)/);
-  assert.match(source, /WHERE v\.AccessLevel = 'FULL'[\s\S]*#TaskScopedWbsProjects scopedProject[\s\S]*OR EXISTS \(SELECT 1 FROM #RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
+  assert.match(source, /WHERE v\.AccessLevel = 'FULL'\s+OR v\.HasReadGrant = 1\s+OR v\.IsTaskScoped = 1\s+OR EXISTS \(SELECT 1 FROM #RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
 });
 
 test('WBS reparent validation holds update and serializable locks across the ancestry walk', () => {
@@ -457,12 +465,14 @@ test('partial-only snapshots constrain the people directory to authorized projec
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /DECLARE @HasFullScope bit = CASE[\s\S]*AccessLevel = 'FULL'/);
   // Rehber kümesi önceden toplanır; yayınlanan satırlar yine aynı iki kuralla
-  // sınırlanır: tam kapsam ya da yetkili kişi kümesinde olmak.
-  assert.match(source, /FROM #Directory pd\s+WHERE @HasFullScope = 1\s+OR EXISTS \(SELECT 1 FROM #DirectoryVisibleSicils dv WHERE dv\.Sicil = pd\.Sicil\)/s);
-  assert.match(source, /INSERT #DirectoryVisibleSicils\(Sicil\)[\s\S]*SELECT @sicil AS Sicil/);
-  assert.match(source, /SELECT p\.LeadSicil\s+FROM dbo\.MR_Projects p\s+JOIN #VisibleProjects v ON v\.ProjectId = p\.ProjectId/);
-  assert.match(source, /JOIN #VisibleProjects visibleProject ON visibleProject\.ProjectId = visibleTask\.ProjectId[\s\S]*visibleAssignee\.Sicil = @sicil/s);
-  assert.match(source, /es\.EmployeeSicil = visibleAssignee\.Sicil/);
+  // sınırlanır: tam kapsam ya da YAYINLANAN kişi kümesinde olmak. Yalnızca adı
+  // çözülen kişiler (IsPublished = 0) genel rehbere GİRMEZ.
+  assert.match(source, /FROM #Directory pd\s+WHERE @HasFullScope = 1\s+OR EXISTS \(SELECT 1 FROM #DirectorySicils ds WHERE ds\.Sicil = pd\.Sicil AND ds\.IsPublished = 1\)/s);
+  assert.match(source, /INSERT #DirectorySicils\(Sicil, IsPublished\)[\s\S]*SELECT @sicil AS Sicil, 1 AS IsPublished/);
+  assert.match(source, /SELECT p\.LeadSicil, 1\s+FROM dbo\.MR_Projects p\s+JOIN #VisibleProjects v ON v\.ProjectId = p\.ProjectId/);
+  // Sorumlu kimliği yalnızca READ hibesi, kişinin kendisi ya da yönetim
+  // kapsamı ile yayınlanır; kapsam dışı eş sorumlu adı IsPublished = 0 kalır.
+  assert.match(source, /CASE WHEN visible\.HasReadGrant = 1\s+OR ta\.Sicil = @sicil\s+OR EXISTS \(SELECT 1 FROM #ExecutiveScope es WHERE es\.EmployeeSicil = ta\.Sicil\)\s+THEN 1 ELSE 0 END/s);
   assert.doesNotMatch(source, /visibilityGate\.TaskId = visibleTask\.TaskId/);
 });
 
@@ -575,9 +585,16 @@ test('project-level READ grants expose project tasks, WBS, assignees, and requir
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /CREATE TABLE #ReadGrantedProjects\(ProjectId uniqueidentifier PRIMARY KEY\)/);
   assert.match(source, /pa\.AccessLevel = 'READ'/);
-  assert.match(source, /#ReadGrantedProjects readProject WHERE readProject\.ProjectId = w\.ProjectId/);
-  assert.match(source, /#ReadGrantedProjects readProject WHERE readProject\.ProjectId = t\.ProjectId/);
-  assert.match(source, /readProject\.ProjectId = visibleTask\.ProjectId/);
+  // READ kararı proje ve görev satırlarında TAŞINIR; WBS, görev, sorumlu ve
+  // rehber kümeleri aynı kararı satır başına yeniden türetmez.
+  assert.match(source, /SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject\.ProjectId = v\.ProjectId/);
+  assert.match(source, /AND \(v\.AccessLevel = 'FULL' OR v\.HasReadGrant = 1\)/);
+  assert.match(source, /SELECT w\.\*[\s\S]*OR v\.HasReadGrant = 1/);
+  // FULL/READ dalında oluşturan kimliği zaten açıktır; KISMİ dalda yalnızca
+  // görevi oluşturan kullanıcı için açılır.
+  assert.match(source, /-- FULL ya da READ projesinde oluşturan kimliği zaten açıktır\.\s+1\s+FROM dbo\.MR_Tasks t/);
+  assert.match(source, /scoped\.IsOwnAssignee, scoped\.IsScopeAssignee,\s+CASE WHEN t\.CreatedBySicil = @sicil THEN 1 ELSE 0 END/);
+  assert.match(source, /CASE WHEN visible\.HasReadGrant = 1/);
   assert.match(source, /SELECT d\.\*[\s\S]*WHERE v\.AccessLevel = 'FULL';/);
   // Yetkili mutasyon yanıtında da READ yetkisi görev/WBS görünürlüğünü açar,
   // bağımlılıkları AÇMAZ.

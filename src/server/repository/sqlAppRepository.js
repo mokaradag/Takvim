@@ -12,7 +12,7 @@ import { resolveAuthMode } from '../identity/keycloakConfig.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
-import { observePhase } from '../observability/observeOperation.js';
+import { observePhase, recordPhaseDuration } from '../observability/observeOperation.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
@@ -225,218 +225,306 @@ async function assertManualProjectCodeAvailable(executor, projectCode) {
   }
 }
 
+/**
+ * Ana anlık görüntü sorgusunun SQL İÇİ aşama adları.
+ *
+ * Aşamalar ARDIŞIKTIR (iç içe DEĞİL): toplamları `phase.snapshot.main-query.sql`
+ * süresine yaklaşır. İç içe fazlarla (ör. `phase.snapshot.main-query`)
+ * toplanmazlar.
+ */
+const SNAPSHOT_SQL_STAGES = Object.freeze({
+  ScopeMs: 'phase.snapshot.main-query.sql.scope',
+  TaskScopeMs: 'phase.snapshot.main-query.sql.task-scope',
+  DirectoryMs: 'phase.snapshot.main-query.sql.directory',
+  ResultSetsMs: 'phase.snapshot.main-query.sql.result-sets'
+});
+
+/** Aşama satırı yalnızca milisaniye taşır; kişi, görev ya da proje verisi yoktur. */
+function recordSnapshotSqlStages(row, at) {
+  if (!row) return;
+  for (const [column, operation] of Object.entries(SNAPSHOT_SQL_STAGES)) {
+    recordPhaseDuration(operation, row[column], { at });
+  }
+}
+
 async function loadSnapshotFrom(executor, auth) {
   const req = request(executor);
   req.input('sicil', sql.Int, auth.sicil);
   req.input('isAdmin', sql.Bit, auth.isSystemAdmin);
+  // Yönetim kapsamı YALNIZCA yönetici için doludur. `isExecutive`, aynı
+  // SERIALIZABLE işlemde MR_V_ExecutiveScope üzerinde çalıştırılmış EXISTS
+  // sonucudur: 0 olduğunda kapsam sorgusu tanım gereği boş döner ve HR02
+  // taraması hiç yapılmaz. Kapsamın kendisi yine her istekte yeniden okunur.
+  req.input('isExecutive', sql.Bit, Boolean(auth.isExecutive));
   // Görev atama kapsamı yalnızca SEÇİLEBİLİR proje listesini genişletir; görev,
   // WBS ve kişi görünürlüğü sorguları bu bayrağa hiç bakmaz.
   req.input('canAssignAllCorporate', sql.Bit, Boolean(auth.canAssignAllCorporateProjects));
-  const result = await req.query(`
+  const sqlStartedAt = Date.now();
+  const result = await observePhase('phase.snapshot.main-query.sql', () => req.query(`
     SET NOCOUNT ON;
 
     -- Toplu ara kümeler TABLO DEĞİŞKENİ değil GEÇİCİ TABLODUR. Tablo
     -- değişkeni için iyileştirici tek satır tahmin eder; görünür görev kümesi
     -- binlerce satıra ulaştığında bu tahmin sıralamaya çok küçük bellek
     -- ayırtıyor ve sıralama tempdb'ye taşıyordu.
-    DROP TABLE IF EXISTS #VisibleProjects, #ReadGrantedProjects, #TaskScopedWbsProjects,
-      #ExecutiveScope, #OwnScopedProjects, #ScopeAssignedProjects, #VisibleTasks,
-      #TaskAssigneeFacts, #RequiredPartialWbs, #DirectoryVisibleSicils, #DirectoryNameSicils, #Directory;
+    --
+    -- Aşama saatleri yalnızca SÜRE taşır; hiçbir kişi/görev/proje verisi
+    -- toplamaz (bkz. son sonuç kümesi).
+    DECLARE @BatchStartedAt datetime2(7) = SYSUTCDATETIME();
+    DECLARE @ScopeResolvedAt datetime2(7), @TaskScopeResolvedAt datetime2(7), @DirectoryResolvedAt datetime2(7);
 
-    CREATE TABLE #VisibleProjects(ProjectId uniqueidentifier PRIMARY KEY, AccessLevel varchar(10));
+    DROP TABLE IF EXISTS #VisibleProjects, #ReadGrantedProjects, #ExecutiveScope,
+      #ScopedTasks, #OwnScopedProjects, #ScopeAssignedProjects, #VisibleTasks,
+      #TaskAssigneeFacts, #RequiredPartialWbs, #DirectorySicils, #Directory;
+
+    -- Proje yetkisi satırın KENDİSİNDE taşınır: READ hibesi ve kendi görev
+    -- kapsamı ayrı geçici tablolar olarak tutulduğunda görev ve WBS seçimleri
+    -- satır başına yeniden EXISTS çalıştırıyordu.
+    CREATE TABLE #VisibleProjects(
+      ProjectId uniqueidentifier PRIMARY KEY,
+      AccessLevel varchar(10) NOT NULL,
+      HasReadGrant bit NOT NULL DEFAULT (0),
+      IsTaskScoped bit NOT NULL DEFAULT (0)
+    );
     CREATE TABLE #ReadGrantedProjects(ProjectId uniqueidentifier PRIMARY KEY);
-    CREATE TABLE #TaskScopedWbsProjects(ProjectId uniqueidentifier PRIMARY KEY);
     CREATE TABLE #ExecutiveScope(EmployeeSicil int PRIMARY KEY);
-    CREATE TABLE #OwnScopedProjects(ProjectId uniqueidentifier PRIMARY KEY);
-    CREATE TABLE #ScopeAssignedProjects(ProjectId uniqueidentifier PRIMARY KEY);
-    CREATE TABLE #VisibleTasks(TaskId uniqueidentifier PRIMARY KEY);
-    CREATE TABLE #TaskAssigneeFacts(
+    CREATE TABLE #ScopedTasks(
       TaskId uniqueidentifier PRIMARY KEY,
-      AssigneeCount int NOT NULL,
+      ProjectId uniqueidentifier NOT NULL,
+      IsCreator bit NOT NULL,
       IsOwnAssignee bit NOT NULL,
       IsScopeAssignee bit NOT NULL
     );
+    CREATE TABLE #OwnScopedProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #ScopeAssignedProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    -- Görev düzeyi yetki kararı BİR KEZ verilir; aşağıdaki bütün kümeler bu
+    -- satırları okur ve MR_Tasks'i yeniden birleştirmez.
+    CREATE TABLE #VisibleTasks(
+      TaskId uniqueidentifier PRIMARY KEY,
+      ProjectId uniqueidentifier NOT NULL,
+      WbsId uniqueidentifier NULL,
+      CreatedBySicil int NULL,
+      AccessLevel varchar(10) NOT NULL,
+      HasReadGrant bit NOT NULL,
+      IsCreator bit NOT NULL,
+      IsOwnAssignee bit NOT NULL,
+      IsScopeAssignee bit NOT NULL,
+      IdentityBase bit NOT NULL
+    );
+    CREATE TABLE #TaskAssigneeFacts(TaskId uniqueidentifier PRIMARY KEY, AssigneeCount int NOT NULL);
     CREATE TABLE #RequiredPartialWbs(WbsId uniqueidentifier PRIMARY KEY);
-    CREATE TABLE #DirectoryVisibleSicils(Sicil int PRIMARY KEY);
-    CREATE TABLE #DirectoryNameSicils(Sicil int PRIMARY KEY);
+    CREATE TABLE #DirectorySicils(Sicil int PRIMARY KEY, IsPublished bit NOT NULL);
 
     -- Aynı Sicil birden fazla yönetim kademesinde bulunabilir.
-    INSERT #ExecutiveScope(EmployeeSicil)
-    SELECT DISTINCT EmployeeSicil
-    FROM dbo.MR_V_ExecutiveScope
-    WHERE ManagerSicil = @sicil;
+    IF @isExecutive = 1
+      INSERT #ExecutiveScope(EmployeeSicil)
+      SELECT DISTINCT EmployeeSicil
+      FROM dbo.MR_V_ExecutiveScope
+      WHERE ManagerSicil = @sicil;
 
-    -- Kendi oluşturduğu ya da sorumlusu olduğu görevi bulunan projeler ile
-    -- astının sorumlu olduğu projeler ayrı kümelerdir: ilki iş dağılım ağacı
-    -- kataloğunu da açar, ikincisi yalnızca KISMİ görünürlük verir. İkisi de
-    -- dizin aramalarıyla toplanır; önceki biçim MR_Tasks tablosunun tamamını
-    -- tarayıp satır başına sorumlu ve yönetim kapsamı yoklaması yapıyordu.
-    INSERT #OwnScopedProjects(ProjectId)
-    SELECT DISTINCT scoped.ProjectId FROM (
-      SELECT t.ProjectId FROM dbo.MR_Tasks t WHERE t.CreatedBySicil = @sicil
-      UNION
-      SELECT t.ProjectId
+    -- Kişisel kapsamdaki görevler TEK geçişte toplanır: oluşturan, kendi
+    -- ataması ve yönetim kapsamındaki atama aynı satırda işaretlenir. Önceki
+    -- biçim aynı dizin aramalarını proje kümeleri için ayrı ayrı yapıyor,
+    -- görünürlük kararını ise bütün görev kümesi üzerinde yeniden türetiyordu.
+    INSERT #ScopedTasks(TaskId, ProjectId, IsCreator, IsOwnAssignee, IsScopeAssignee)
+    SELECT scoped.TaskId, MIN(scoped.ProjectId),
+      CAST(MAX(scoped.IsCreator) AS bit),
+      CAST(MAX(scoped.IsOwnAssignee) AS bit),
+      CAST(MAX(scoped.IsScopeAssignee) AS bit)
+    FROM (
+      SELECT t.TaskId, t.ProjectId, 1 AS IsCreator, 0 AS IsOwnAssignee, 0 AS IsScopeAssignee
+      FROM dbo.MR_Tasks t
+      WHERE @isAdmin = 0 AND t.CreatedBySicil = @sicil
+      UNION ALL
+      SELECT t.TaskId, t.ProjectId, 0, 1, 0
       FROM dbo.MR_TaskAssignees ta
       JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
       WHERE ta.Sicil = @sicil
+      UNION ALL
+      SELECT t.TaskId, t.ProjectId, 0, 0, 1
+      FROM #ExecutiveScope es
+      JOIN dbo.MR_TaskAssignees ta ON ta.Sicil = es.EmployeeSicil
+      JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+      WHERE @isAdmin = 0
     ) scoped
-    WHERE @isAdmin = 0;
+    GROUP BY scoped.TaskId;
 
-    INSERT #ScopeAssignedProjects(ProjectId)
-    SELECT DISTINCT t.ProjectId
-    FROM #ExecutiveScope es
-    JOIN dbo.MR_TaskAssignees ta ON ta.Sicil = es.EmployeeSicil
-    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
-    WHERE @isAdmin = 0;
+    -- Kendi oluşturduğu ya da sorumlusu olduğu görevi bulunan projeler ile
+    -- astının sorumlu olduğu projeler ayrı kümelerdir: ilki iş dağılım ağacı
+    -- kataloğunu da açar, ikincisi yalnızca KISMİ görünürlük verir.
+    IF @isAdmin = 0
+    BEGIN
+      INSERT #OwnScopedProjects(ProjectId)
+      SELECT DISTINCT s.ProjectId FROM #ScopedTasks s WHERE s.IsCreator = 1 OR s.IsOwnAssignee = 1;
 
-    INSERT #VisibleProjects(ProjectId, AccessLevel)
-    SELECT ProjectId, 'FULL'
-    FROM dbo.MR_Projects
-    WHERE @isAdmin = 1 AND IsActive = 1;
+      INSERT #ScopeAssignedProjects(ProjectId)
+      SELECT DISTINCT s.ProjectId FROM #ScopedTasks s WHERE s.IsScopeAssignee = 1;
+    END
 
-    INSERT #VisibleProjects(ProjectId, AccessLevel)
-    SELECT DISTINCT p.ProjectId, 'FULL'
-    FROM dbo.MR_Projects p
-    JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = UPPER(p.ProjectCode)
-    WHERE @isAdmin = 0 AND p.SourceType = 'CORPORATE' AND p.IsActive = 1 AND a.Sicil = @sicil
-      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = p.ProjectId);
+    IF @isAdmin = 1
+      INSERT #VisibleProjects(ProjectId, AccessLevel)
+      SELECT ProjectId, 'FULL'
+      FROM dbo.MR_Projects
+      WHERE IsActive = 1;
+    ELSE
+    BEGIN
+      INSERT #VisibleProjects(ProjectId, AccessLevel)
+      SELECT DISTINCT p.ProjectId, 'FULL'
+      FROM dbo.MR_Projects p
+      JOIN dbo.MR_V_CorporateProjectAccess a ON a.ProjectCode = UPPER(p.ProjectCode)
+      WHERE p.SourceType = 'CORPORATE' AND p.IsActive = 1 AND a.Sicil = @sicil;
 
-    INSERT #ReadGrantedProjects(ProjectId)
-    SELECT pa.ProjectId
-    FROM dbo.MR_ProjectAccess pa
-    JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
-    WHERE @isAdmin = 0 AND pa.Sicil = @sicil AND pa.IsActive = 1
-      AND pa.AccessLevel = 'READ' AND p.IsActive = 1;
+      INSERT #ReadGrantedProjects(ProjectId)
+      SELECT pa.ProjectId
+      FROM dbo.MR_ProjectAccess pa
+      JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
+      WHERE pa.Sicil = @sicil AND pa.IsActive = 1
+        AND pa.AccessLevel = 'READ' AND p.IsActive = 1;
 
-    INSERT #VisibleProjects(ProjectId, AccessLevel)
-    SELECT p.ProjectId, 'FULL'
-    FROM dbo.MR_Projects p
-    WHERE @isAdmin = 0 AND p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil
-      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = p.ProjectId);
+      INSERT #VisibleProjects(ProjectId, AccessLevel)
+      SELECT p.ProjectId, 'FULL'
+      FROM dbo.MR_Projects p
+      WHERE p.SourceType = 'MANUAL' AND p.IsActive = 1 AND p.LeadSicil = @sicil
+        AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = p.ProjectId);
 
-    INSERT #VisibleProjects(ProjectId, AccessLevel)
-    SELECT pa.ProjectId, CASE WHEN pa.AccessLevel = 'FULL' THEN 'FULL' ELSE 'PARTIAL' END
-    FROM dbo.MR_ProjectAccess pa
-    JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
-    WHERE @isAdmin = 0 AND pa.Sicil = @sicil AND pa.IsActive = 1 AND p.IsActive = 1
-      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = pa.ProjectId);
+      INSERT #VisibleProjects(ProjectId, AccessLevel)
+      SELECT pa.ProjectId, CASE WHEN pa.AccessLevel = 'FULL' THEN 'FULL' ELSE 'PARTIAL' END
+      FROM dbo.MR_ProjectAccess pa
+      JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
+      WHERE pa.Sicil = @sicil AND pa.IsActive = 1 AND p.IsActive = 1
+        AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = pa.ProjectId);
 
-    INSERT #VisibleProjects(ProjectId, AccessLevel)
-    SELECT DISTINCT scoped.ProjectId, 'PARTIAL'
-    FROM (
-      SELECT own.ProjectId FROM #OwnScopedProjects own
-      UNION
-      SELECT team.ProjectId FROM #ScopeAssignedProjects team
-    ) scoped
-    JOIN dbo.MR_Projects p ON p.ProjectId = scoped.ProjectId
-    WHERE @isAdmin = 0 AND p.IsActive = 1
-      AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = scoped.ProjectId);
+      INSERT #VisibleProjects(ProjectId, AccessLevel)
+      SELECT DISTINCT scoped.ProjectId, 'PARTIAL'
+      FROM (
+        SELECT own.ProjectId FROM #OwnScopedProjects own
+        UNION
+        SELECT team.ProjectId FROM #ScopeAssignedProjects team
+      ) scoped
+      JOIN dbo.MR_Projects p ON p.ProjectId = scoped.ProjectId
+      WHERE p.IsActive = 1
+        AND NOT EXISTS (SELECT 1 FROM #VisibleProjects v WHERE v.ProjectId = scoped.ProjectId);
+
+      -- READ hibesi ve kendi görev kapsamı proje satırına yazılır. Kendi görevini
+      -- oluşturan veya bu projede sorumlu olan kullanıcı, var olan WBS kataloğunu
+      -- salt okunur görür; yönetim kapsamı bu kümeyi GENİŞLETMEZ.
+      UPDATE v
+      SET HasReadGrant = CASE WHEN EXISTS (
+            SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = v.ProjectId
+          ) THEN 1 ELSE 0 END,
+          IsTaskScoped = CASE WHEN v.AccessLevel = 'PARTIAL' AND EXISTS (
+            SELECT 1 FROM #OwnScopedProjects own WHERE own.ProjectId = v.ProjectId
+          ) THEN 1 ELSE 0 END
+      FROM #VisibleProjects v;
+    END
 
     DECLARE @HasFullScope bit = CASE
       WHEN @isAdmin = 1 OR EXISTS (SELECT 1 FROM #VisibleProjects WHERE AccessLevel = 'FULL') THEN 1
       ELSE 0
     END;
+    DECLARE @HasPartialScope bit = CASE
+      WHEN EXISTS (SELECT 1 FROM #VisibleProjects WHERE AccessLevel = 'PARTIAL') THEN 1
+      ELSE 0
+    END;
 
-    -- Kendi görevini oluşturan veya bu projede sorumlu olan kullanıcı, yeni
-    -- kendi görevi için var olan WBS kataloğunu salt okunur görür. Yönetim
-    -- kapsamı bu kümeyi GENİŞLETMEZ.
-    INSERT #TaskScopedWbsProjects(ProjectId)
-    SELECT own.ProjectId
-    FROM #OwnScopedProjects own
-    JOIN #VisibleProjects v ON v.ProjectId = own.ProjectId AND v.AccessLevel = 'PARTIAL';
+    SET @ScopeResolvedAt = SYSUTCDATETIME();
 
-    -- Sorumlu sayımı, kendi sorumluluğu ve yönetim kapsamı görev başına TEK
-    -- toplamada çözülür; görünürlük, sayım ve künye kararları aynı kümeyi okur.
-    INSERT #TaskAssigneeFacts(TaskId, AssigneeCount, IsOwnAssignee, IsScopeAssignee)
-    SELECT t.TaskId,
-      COUNT(ta.Sicil),
-      CAST(MAX(CASE WHEN ta.Sicil = @sicil THEN 1 ELSE 0 END) AS bit),
-      CAST(MAX(CASE WHEN es.EmployeeSicil IS NOT NULL THEN 1 ELSE 0 END) AS bit)
+    -- FULL ve READ projelerinde görünürlük PROJE düzeyinde kesinleşir; kişisel
+    -- kapsam hesabı bu görevler için görünürlük kararına hiç katılmaz.
+    INSERT #VisibleTasks(TaskId, ProjectId, WbsId, CreatedBySicil, AccessLevel, HasReadGrant,
+      IsCreator, IsOwnAssignee, IsScopeAssignee, IdentityBase)
+    SELECT t.TaskId, t.ProjectId, t.WbsId, t.CreatedBySicil, v.AccessLevel, v.HasReadGrant,
+      CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END,
+      COALESCE(scoped.IsOwnAssignee, 0), COALESCE(scoped.IsScopeAssignee, 0),
+      -- FULL ya da READ projesinde oluşturan kimliği zaten açıktır.
+      1
     FROM dbo.MR_Tasks t
     JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
-    LEFT JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = t.TaskId
-    LEFT JOIN #ExecutiveScope es ON es.EmployeeSicil = ta.Sicil
-    GROUP BY t.TaskId;
+      AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1)
+    LEFT JOIN #ScopedTasks scoped ON scoped.TaskId = t.TaskId;
 
-    INSERT #VisibleTasks(TaskId)
-    SELECT t.TaskId
-    FROM dbo.MR_Tasks t
-    JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
-    JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
-    WHERE v.AccessLevel = 'FULL'
-       OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
-       OR t.CreatedBySicil = @sicil
-       OR facts.IsOwnAssignee = 1
-       OR facts.IsScopeAssignee = 1;
+    -- KISMİ projede görünür küme yalnızca kişisel kapsamdır: görev tablosu
+    -- proje boyunca TARANMAZ, hazır kümeden anahtar aramasıyla okunur.
+    IF @HasPartialScope = 1
+      INSERT #VisibleTasks(TaskId, ProjectId, WbsId, CreatedBySicil, AccessLevel, HasReadGrant,
+        IsCreator, IsOwnAssignee, IsScopeAssignee, IdentityBase)
+      SELECT scoped.TaskId, scoped.ProjectId, t.WbsId, t.CreatedBySicil, v.AccessLevel, v.HasReadGrant,
+        CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END,
+        scoped.IsOwnAssignee, scoped.IsScopeAssignee,
+        CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END
+      FROM #ScopedTasks scoped
+      JOIN #VisibleProjects v ON v.ProjectId = scoped.ProjectId
+        AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0
+      JOIN dbo.MR_Tasks t ON t.TaskId = scoped.TaskId;
 
-    -- Özyinelemeli ata zinciri TEK KEZ toplanır. Ortak tablo ifadesi doğrudan
-    -- WBS seçiminin OR zincirinde durduğunda, taranan her düğüm için yeniden
-    -- çalışma riski taşıyordu.
-    ;WITH RequiredPartialWbs AS (
-      SELECT DISTINCT w.WbsId, w.ParentWbsId, w.ProjectId
-      FROM dbo.MR_WBS w
-      JOIN dbo.MR_Tasks t ON t.WbsId = w.WbsId
-      JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
-      JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
-      WHERE v.AccessLevel = 'PARTIAL' AND (facts.IsOwnAssignee = 1 OR facts.IsScopeAssignee = 1)
-      UNION ALL
-      SELECT parent.WbsId, parent.ParentWbsId, parent.ProjectId
-      FROM dbo.MR_WBS parent
-      JOIN RequiredPartialWbs child ON child.ParentWbsId = parent.WbsId
-      WHERE parent.ProjectId = child.ProjectId
-    )
-    INSERT #RequiredPartialWbs(WbsId)
-    SELECT DISTINCT WbsId FROM RequiredPartialWbs
-    OPTION (MAXRECURSION 1000);
+    -- Sorumlu SAYISI yalnızca GÖRÜNÜR görevler için toplanır. Önceki biçim
+    -- görünür projedeki BÜTÜN görevleri sayıyordu; kullanıcının tek görevi
+    -- bulunan kurumsal projede bu, binlerce satırlık gereksiz toplama demekti.
+    INSERT #TaskAssigneeFacts(TaskId, AssigneeCount)
+    SELECT ta.TaskId, COUNT(*)
+    FROM dbo.MR_TaskAssignees ta
+    JOIN #VisibleTasks visible ON visible.TaskId = ta.TaskId
+    GROUP BY ta.TaskId;
 
-    -- Rehberde GÖRÜNEN kişiler küme olarak çözülür; yüklem kişi başına
-    -- çalıştığında bütün atama ve görev tabloları her satır için taranıyordu.
-    -- Görev ATAMA kapsamı açıkken yöneticinin KENDİ personeli de rehberde
-    -- görünür. Aksi hâlde görünür FULL projesi olmayan bir yönetici,
-    -- atayabileceği çalışanı seçicide hiç bulamıyordu. Kapsam yalnızca
-    -- MR_V_ExecutiveScope kadardır; görev/proje/WBS görünürlüğü değişmez.
-    -- Tam kapsamlı kullanıcıda rehber zaten bütünüyle döner; bu iki küme
-    -- yalnızca KISITLI kapsamda anlamlıdır ve orada hesaplanır.
-    INSERT #DirectoryVisibleSicils(Sicil)
-    SELECT DISTINCT candidate.Sicil FROM (
-      SELECT @sicil AS Sicil
-      UNION
-      SELECT es.EmployeeSicil FROM #ExecutiveScope es WHERE @canAssignAllCorporate = 1
-      UNION
-      SELECT p.LeadSicil
-      FROM dbo.MR_Projects p
-      JOIN #VisibleProjects v ON v.ProjectId = p.ProjectId
-      UNION
-      SELECT visibleAssignee.Sicil
-      FROM dbo.MR_TaskAssignees visibleAssignee
-      JOIN dbo.MR_Tasks visibleTask ON visibleTask.TaskId = visibleAssignee.TaskId
-      JOIN #VisibleProjects visibleProject ON visibleProject.ProjectId = visibleTask.ProjectId
-      WHERE EXISTS (
-          SELECT 1 FROM #ReadGrantedProjects readProject
-          WHERE readProject.ProjectId = visibleTask.ProjectId
-        )
-        OR visibleAssignee.Sicil = @sicil
-        OR EXISTS (
-          SELECT 1 FROM #ExecutiveScope es
-          WHERE es.EmployeeSicil = visibleAssignee.Sicil
-        )
-    ) candidate
-    WHERE @HasFullScope = 0 AND candidate.Sicil IS NOT NULL;
+    -- Özyinelemeli ata zinciri TEK KEZ ve yalnızca KISMİ proje varken toplanır.
+    IF @HasPartialScope = 1
+    BEGIN
+      ;WITH RequiredPartialWbs AS (
+        SELECT DISTINCT w.WbsId, w.ParentWbsId, w.ProjectId
+        FROM dbo.MR_WBS w
+        JOIN #VisibleTasks visible ON visible.WbsId = w.WbsId
+        WHERE visible.AccessLevel = 'PARTIAL'
+          AND (visible.IsOwnAssignee = 1 OR visible.IsScopeAssignee = 1)
+        UNION ALL
+        SELECT parent.WbsId, parent.ParentWbsId, parent.ProjectId
+        FROM dbo.MR_WBS parent
+        JOIN RequiredPartialWbs child ON child.ParentWbsId = parent.WbsId
+        WHERE parent.ProjectId = child.ProjectId
+      )
+      INSERT #RequiredPartialWbs(WbsId)
+      SELECT DISTINCT WbsId FROM RequiredPartialWbs
+      OPTION (MAXRECURSION 1000);
+    END
 
-    -- Görünür görevlerin oluşturan ve sorumluları rehberde YAYINLANMAZ; yalnızca
-    -- görev künyesi ve sorumlu satırı için ADLARI çözülür. Eş sorumlu gizliliği
-    -- bozulmaz: ad zaten yetkili sorumlu satırında dönen alandır.
-    INSERT #DirectoryNameSicils(Sicil)
-    SELECT DISTINCT needed.Sicil FROM (
-      SELECT t.CreatedBySicil AS Sicil
-      FROM dbo.MR_Tasks t
-      JOIN #VisibleTasks visible ON visible.TaskId = t.TaskId
-      UNION
-      SELECT ta.Sicil
-      FROM dbo.MR_TaskAssignees ta
-      JOIN #VisibleTasks visible ON visible.TaskId = ta.TaskId
-    ) needed
-    WHERE @HasFullScope = 0 AND needed.Sicil IS NOT NULL;
+    SET @TaskScopeResolvedAt = SYSUTCDATETIME();
+
+    -- Rehberde YAYINLANAN kişiler ile yalnızca ADI çözülen kişiler tek geçişte
+    -- toplanır; IsPublished ikisini ayırır. Görünür görevlerin oluşturan ve
+    -- sorumluları rehberde YAYINLANMAZ: ad, görev künyesi ve sorumlu satırı
+    -- için çözülür, eş sorumlu gizliliği bozulmaz.
+    --
+    -- Görev ATAMA kapsamı açıkken yöneticinin KENDİ personeli de yayınlanır.
+    -- Aksi hâlde görünür FULL projesi olmayan bir yönetici, atayabileceği
+    -- çalışanı seçicide hiç bulamıyordu. Kapsam yalnızca MR_V_ExecutiveScope
+    -- kadardır; görev/proje/WBS görünürlüğü değişmez.
+    --
+    -- Tam kapsamlı kullanıcıda rehber zaten bütünüyle döner; küme yalnızca
+    -- KISITLI kapsamda anlamlıdır ve yalnızca orada hesaplanır.
+    IF @HasFullScope = 0
+      INSERT #DirectorySicils(Sicil, IsPublished)
+      SELECT candidate.Sicil, CAST(MAX(candidate.IsPublished) AS bit)
+      FROM (
+        SELECT @sicil AS Sicil, 1 AS IsPublished
+        UNION ALL
+        SELECT es.EmployeeSicil, 1 FROM #ExecutiveScope es WHERE @canAssignAllCorporate = 1
+        UNION ALL
+        SELECT p.LeadSicil, 1
+        FROM dbo.MR_Projects p
+        JOIN #VisibleProjects v ON v.ProjectId = p.ProjectId
+        UNION ALL
+        SELECT visible.CreatedBySicil, 0
+        FROM #VisibleTasks visible
+        UNION ALL
+        SELECT ta.Sicil,
+          CASE WHEN visible.HasReadGrant = 1
+            OR ta.Sicil = @sicil
+            OR EXISTS (SELECT 1 FROM #ExecutiveScope es WHERE es.EmployeeSicil = ta.Sicil)
+          THEN 1 ELSE 0 END
+        FROM dbo.MR_TaskAssignees ta
+        JOIN #VisibleTasks visible ON visible.TaskId = ta.TaskId
+      ) candidate
+      WHERE candidate.Sicil IS NOT NULL
+      GROUP BY candidate.Sicil;
 
     -- Kişi rehberi görünümü TEK KEZ okunur. Görünüm HR02 üzerinde pencere
     -- işlevi çalıştırır; görev künyesi, sorumlu satırları ve rehber listesi
@@ -446,9 +534,10 @@ async function loadSnapshotFrom(executor, auth) {
     INTO #Directory
     FROM dbo.MR_V_PeopleDirectory pd
     WHERE @HasFullScope = 1
-       OR EXISTS (SELECT 1 FROM #DirectoryVisibleSicils dv WHERE dv.Sicil = pd.Sicil)
-       OR EXISTS (SELECT 1 FROM #DirectoryNameSicils dn WHERE dn.Sicil = pd.Sicil);
+       OR EXISTS (SELECT 1 FROM #DirectorySicils ds WHERE ds.Sicil = pd.Sicil);
     CREATE CLUSTERED INDEX IX_Directory_Sicil ON #Directory(Sicil);
+
+    SET @DirectoryResolvedAt = SYSUTCDATETIME();
 
     SELECT p.*, v.AccessLevel
     FROM dbo.MR_Projects p
@@ -465,8 +554,8 @@ async function loadSnapshotFrom(executor, auth) {
     FROM dbo.MR_WBS w
     JOIN #VisibleProjects v ON v.ProjectId = w.ProjectId
     WHERE v.AccessLevel = 'FULL'
-       OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = w.ProjectId)
-       OR EXISTS (SELECT 1 FROM #TaskScopedWbsProjects scopedProject WHERE scopedProject.ProjectId = w.ProjectId)
+       OR v.HasReadGrant = 1
+       OR v.IsTaskScoped = 1
        OR EXISTS (SELECT 1 FROM #RequiredPartialWbs r WHERE r.WbsId = w.WbsId)
     ORDER BY w.ProjectId, w.ParentWbsId, w.SortOrder, w.Code;
 
@@ -474,24 +563,17 @@ async function loadSnapshotFrom(executor, auth) {
     -- sorumlunun satırını bilinçli olarak gizler; istemci yalnızca sayıyı
     -- karşılaştırarak "gizlenmiş sorumlu var" sonucuna varabilir ve sunucunun
     -- reddedeceği bir düzenlemeyi baştan açmaz. Sayı kimlik taşımaz.
-    SELECT t.*, v.AccessLevel,
-      facts.AssigneeCount,
-      facts.IsOwnAssignee AS IsCurrentUserAssignee,
-      CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator,
-      CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
-      CASE WHEN creatorAuth.IdentityVisible = 1
+    SELECT t.*, visible.AccessLevel,
+      COALESCE(facts.AssigneeCount, 0) AS AssigneeCount,
+      visible.IsOwnAssignee AS IsCurrentUserAssignee,
+      visible.IsCreator AS IsCurrentUserCreator,
+      CASE WHEN visible.IdentityBase = 1 OR visible.IsOwnAssignee = 1
+        THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
+      CASE WHEN visible.IdentityBase = 1 OR visible.IsOwnAssignee = 1
         THEN NULLIF(LTRIM(RTRIM(creator.DisplayName)), '') ELSE NULL END AS CreatedByName
     FROM dbo.MR_Tasks t
     JOIN #VisibleTasks visible ON visible.TaskId = t.TaskId
-    JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
-    JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
-    CROSS APPLY (
-      SELECT CAST(CASE WHEN v.AccessLevel = 'FULL'
-        OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
-        OR t.CreatedBySicil = @sicil
-        OR facts.IsOwnAssignee = 1
-      THEN 1 ELSE 0 END AS bit) AS IdentityVisible
-    ) creatorAuth
+    LEFT JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
     LEFT JOIN #Directory creator ON creator.Sicil = t.CreatedBySicil
     -- Sıralama tam belirlenimlidir: aynı seriden üretilen yinelemeler başlıkta ve
     -- sıra anahtarında eşitlenebilir; kararlı bir ek anahtar olmadan SQL bunları
@@ -508,14 +590,9 @@ async function loadSnapshotFrom(executor, auth) {
       ) AS DisplayName
     FROM dbo.MR_TaskAssignees ta
     JOIN #VisibleTasks visible ON visible.TaskId = ta.TaskId
-    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
-    JOIN #VisibleProjects v ON v.ProjectId = t.ProjectId
-    JOIN #TaskAssigneeFacts facts ON facts.TaskId = ta.TaskId
     LEFT JOIN #Directory pd ON pd.Sicil = ta.Sicil
     CROSS APPLY (
-      SELECT CAST(CASE WHEN v.AccessLevel = 'FULL'
-        OR EXISTS (SELECT 1 FROM #ReadGrantedProjects readProject WHERE readProject.ProjectId = t.ProjectId)
-        OR t.CreatedBySicil = @sicil
+      SELECT CAST(CASE WHEN visible.IdentityBase = 1
         OR ta.Sicil = @sicil
         OR EXISTS (
           SELECT 1 FROM #ExecutiveScope es
@@ -523,7 +600,7 @@ async function loadSnapshotFrom(executor, auth) {
         )
       THEN 1 ELSE 0 END AS bit) AS IdentityVisible
     ) auth
-    WHERE auth.IdentityVisible = 1 OR facts.IsOwnAssignee = 1
+    WHERE auth.IdentityVisible = 1 OR visible.IsOwnAssignee = 1
     ORDER BY ta.TaskId, ta.Sicil;
 
     SELECT d.*
@@ -552,7 +629,7 @@ async function loadSnapshotFrom(executor, auth) {
     SELECT pd.Sicil, pd.DisplayName, pd.Username, pd.JobTitle, pd.Team, pd.Sector, pd.Directorate, pd.Department, pd.Unit
     FROM #Directory pd
     WHERE @HasFullScope = 1
-       OR EXISTS (SELECT 1 FROM #DirectoryVisibleSicils dv WHERE dv.Sicil = pd.Sicil)
+       OR EXISTS (SELECT 1 FROM #DirectorySicils ds WHERE ds.Sicil = pd.Sicil AND ds.IsPublished = 1)
     ORDER BY pd.DisplayName, pd.Sicil;
 
     -- Görev ATAMA kapsamı: yöneticiler (direktör/müdür/birim yöneticisi) kendi
@@ -564,17 +641,25 @@ async function loadSnapshotFrom(executor, auth) {
     -- Proje takvimi de döner: görev, proje görünür olmadan önce takvimini bu
     -- kayıttan çözer ve CalendarId olmadan genel varsayılana düşerek çalışma
     -- günü hesaplarını yanlış takvimle yapardı.
-    SELECT p.ProjectId, p.ProjectCode, p.ProjectName, p.ProjectTypeCode, p.ProjectTypeName,
-           p.ColorToken, p.CalendarId, root.WbsId AS RootWbsId
-    FROM dbo.MR_Projects p
-    OUTER APPLY (
-      SELECT TOP (1) w.WbsId
-      FROM dbo.MR_WBS w
-      WHERE w.ProjectId = p.ProjectId AND w.ParentWbsId IS NULL
-      ORDER BY w.SortOrder, w.Code
-    ) root
-    WHERE @canAssignAllCorporate = 1 AND p.SourceType = 'CORPORATE' AND p.IsActive = 1
-    ORDER BY p.ProjectCode;
+    --
+    -- Yetenek kapalıyken küme BOŞ dönmek zorundadır; koşul yüklem olarak
+    -- yazıldığında kurumsal proje başına kök düğüm araması yine çalışıyordu.
+    IF @canAssignAllCorporate = 1
+      SELECT p.ProjectId, p.ProjectCode, p.ProjectName, p.ProjectTypeCode, p.ProjectTypeName,
+             p.ColorToken, p.CalendarId, root.WbsId AS RootWbsId
+      FROM dbo.MR_Projects p
+      OUTER APPLY (
+        SELECT TOP (1) w.WbsId
+        FROM dbo.MR_WBS w
+        WHERE w.ProjectId = p.ProjectId AND w.ParentWbsId IS NULL
+        ORDER BY w.SortOrder, w.Code
+      ) root
+      WHERE p.SourceType = 'CORPORATE' AND p.IsActive = 1
+      ORDER BY p.ProjectCode;
+    ELSE
+      SELECT TOP (0) p.ProjectId, p.ProjectCode, p.ProjectName, p.ProjectTypeCode, p.ProjectTypeName,
+             p.ColorToken, p.CalendarId, CAST(NULL AS uniqueidentifier) AS RootWbsId
+      FROM dbo.MR_Projects p;
 
     -- Atama kapsamındaki ÇALIŞANLAR. Sunucu, kapsam projelerinde görevin bütün
     -- sorumlularının bu kümede olmasını şart koşar; istemci kümeyi bilmeden
@@ -585,14 +670,44 @@ async function loadSnapshotFrom(executor, auth) {
     WHERE @canAssignAllCorporate = 1
     ORDER BY es.EmployeeSicil;
 
-    DROP TABLE #VisibleProjects, #ReadGrantedProjects, #TaskScopedWbsProjects,
-      #ExecutiveScope, #OwnScopedProjects, #ScopeAssignedProjects, #VisibleTasks,
-      #TaskAssigneeFacts, #RequiredPartialWbs, #DirectoryVisibleSicils, #DirectoryNameSicils, #Directory;
-  `);
+    -- SQL İÇİ aşama süreleri. Satır yalnızca milisaniye taşır; Sicil, ad,
+    -- proje, görev ya da yetki ayrıntısı İÇERMEZ. Aşamalar ardışıktır.
+    SELECT DATEDIFF(millisecond, @BatchStartedAt, @ScopeResolvedAt) AS ScopeMs,
+      DATEDIFF(millisecond, @ScopeResolvedAt, @TaskScopeResolvedAt) AS TaskScopeMs,
+      DATEDIFF(millisecond, @TaskScopeResolvedAt, @DirectoryResolvedAt) AS DirectoryMs,
+      DATEDIFF(millisecond, @DirectoryResolvedAt, SYSUTCDATETIME()) AS ResultSetsMs;
 
-  const [projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows, baselineRows, snapshotRows, calendarRows, peopleRows, assignableRows, assignmentScopeRows] = result.recordsets;
+    DROP TABLE #VisibleProjects, #ReadGrantedProjects, #ExecutiveScope,
+      #ScopedTasks, #OwnScopedProjects, #ScopeAssignedProjects, #VisibleTasks,
+      #TaskAssigneeFacts, #RequiredPartialWbs, #DirectorySicils, #Directory;
+  `));
+
+  const [projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows, baselineRows,
+    snapshotRows, calendarRows, peopleRows, assignableRows, assignmentScopeRows,
+    sqlStageRows] = result.recordsets;
+  recordSnapshotSqlStages(sqlStageRows?.[0], sqlStartedAt);
+
+  return observePhase(
+    'phase.snapshot.main-query.projection',
+    async () => projectSnapshotRecordsets({
+      projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows,
+      baselineRows, snapshotRows, calendarRows, peopleRows, assignableRows, assignmentScopeRows
+    })
+  );
+}
+
+/**
+ * SQL sonuç kümelerinden anlık görüntü yükünü kurar.
+ *
+ * Ayrı işlevdir: `phase.snapshot.main-query.sql` ile
+ * `phase.snapshot.main-query.projection` ölçümlerinin sınırı burada nettir ve
+ * SQL beklemesi ile JavaScript dönüşümü ayrı ayrı görülebilir.
+ */
+function projectSnapshotRecordsets({
+  projectRows, tagRows, wbsRows, taskRows, assigneeRows, dependencyRows,
+  baselineRows, snapshotRows, calendarRows, peopleRows, assignableRows, assignmentScopeRows
+}) {
   const tags = new Map();
-  const assignees = new Map();
   const dependencies = new Map();
   const calendars = new Map();
   for (const row of tagRows || []) {
@@ -601,12 +716,6 @@ async function loadSnapshotFrom(executor, auth) {
     // Renk/simge boş olabilir (eski kayıtlar); alan modeli ada göre kararlı bir
     // varsayılan türetir, bu yüzden burada uydurma bir değer yazılmaz.
     tags.get(key).push({ name: row.TagName, color: row.ColorToken || null, icon: row.IconKey || null });
-  }
-  for (const row of assigneeRows || []) {
-    if (row.Sicil == null) continue;
-    const key = id(row.TaskId);
-    if (!assignees.has(key)) assignees.set(key, []);
-    assignees.get(key).push(String(row.Sicil));
   }
   for (const row of dependencyRows || []) {
     const key = id(row.TaskId);
@@ -639,27 +748,31 @@ async function loadSnapshotFrom(executor, auth) {
 
   return applyTaskAssigneeProjection({
     calendars: [...calendars.values()],
-    projects: (projectRows || []).map((row) => ({
-      id: id(row.ProjectId),
-      source: row.SourceType.toLowerCase(),
-      code: row.ProjectCode || null,
-      name: row.ProjectName,
-      projectTypeCode: row.ProjectTypeCode || null,
-      projectTypeName: row.ProjectTypeName || null,
-      leadId: row.LeadSicil == null ? null : String(row.LeadSicil),
-      dataDate: isoDate(row.DataDate),
-      color: row.ColorToken || 'blue',
-      calendarId: id(row.CalendarId),
-      // İKİ alan bilinçlidir. `tags` eski sözleşmedeki düz metin listesidir:
-      // sürüm geçişi sırasında açık kalan eski istemci paketleri etiketi metin
-      // sanar ve nesne aldığında proje ekranı çöker. `tagCatalog` renk ve
-      // simgeyi taşıyan kanonik katalogdur; yeni arayüz bunu okur.
-      tags: projectTagNames(tags.get(id(row.ProjectId)) || []),
-      tagCatalog: tags.get(id(row.ProjectId)) || [],
-      version: encodeVersion(row.RowVersion),
-      accessLevel: row.AccessLevel,
-      schedulingCapability: row.AccessLevel === 'FULL' ? 'COMPLETE' : 'SUPPRESSED_PARTIAL'
-    })),
+    projects: (projectRows || []).map((row) => {
+      const projectId = id(row.ProjectId);
+      const tagCatalog = tags.get(projectId) || [];
+      return {
+        id: projectId,
+        source: row.SourceType.toLowerCase(),
+        code: row.ProjectCode || null,
+        name: row.ProjectName,
+        projectTypeCode: row.ProjectTypeCode || null,
+        projectTypeName: row.ProjectTypeName || null,
+        leadId: row.LeadSicil == null ? null : String(row.LeadSicil),
+        dataDate: isoDate(row.DataDate),
+        color: row.ColorToken || 'blue',
+        calendarId: id(row.CalendarId),
+        // İKİ alan bilinçlidir. `tags` eski sözleşmedeki düz metin listesidir:
+        // sürüm geçişi sırasında açık kalan eski istemci paketleri etiketi metin
+        // sanar ve nesne aldığında proje ekranı çöker. `tagCatalog` renk ve
+        // simgeyi taşıyan kanonik katalogdur; yeni arayüz bunu okur.
+        tags: projectTagNames(tagCatalog),
+        tagCatalog,
+        version: encodeVersion(row.RowVersion),
+        accessLevel: row.AccessLevel,
+        schedulingCapability: row.AccessLevel === 'FULL' ? 'COMPLETE' : 'SUPPRESSED_PARTIAL'
+      };
+    }),
     wbs: (wbsRows || []).map((row) => ({
       id: id(row.WbsId),
       projectId: id(row.ProjectId),
@@ -681,8 +794,11 @@ async function loadSnapshotFrom(executor, auth) {
       const visibleCreatorSicil = row.VisibleCreatedBySicil == null
         ? null
         : String(row.VisibleCreatedBySicil);
+      // Kimlik kanonikleştirmesi görev başına BİR KEZ yapılır; aynı dönüşüm
+      // alan başına yinelendiğinde binlerce görevde ölçülebilir iş oluyordu.
+      const taskId = id(row.TaskId);
       return {
-        id: id(row.TaskId),
+        id: taskId,
         projectId: id(row.ProjectId),
         wbsId: id(row.WbsId),
         calendarId: id(row.CalendarId),
@@ -710,10 +826,12 @@ async function loadSnapshotFrom(executor, auth) {
         recurrenceParentId: id(row.RecurrenceParentTaskId),
         recurrenceOccurrenceDate: isoDate(row.RecurrenceOccurrenceDate),
         sortOrder: row.SortOrder,
-        assigneeIds: assignees.get(id(row.TaskId)) || [],
+        // Sorumlu kimlikleri `applyTaskAssigneeProjection` tarafından aynı
+        // satırlardan kurulur; burada ikinci bir eşleme tutulmaz.
+        assigneeIds: [],
         // Yetkili sorumlu sayısı: `assigneeIds.length` ile farklıysa görevin
         // görünmeyen sorumluları vardır (bkz. yukarıdaki AssigneeCount).
-        assigneeCount: Number(row.AssigneeCount ?? (assignees.get(id(row.TaskId)) || []).length),
+        assigneeCount: Number(row.AssigneeCount ?? 0),
         // Kimlikleri açığa çıkarmadan görev düzeyi yazma kararını destekler.
         // Sunucu mutasyonda üyeliği yeniden, yetkili tablodan doğrular.
         isCurrentUserAssignee: Boolean(row.IsCurrentUserAssignee),
@@ -726,7 +844,7 @@ async function loadSnapshotFrom(executor, auth) {
           ? null
           : String(row.CreatedByName).trim() || null,
         createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
-        deps: dependencies.get(id(row.TaskId)) || [],
+        deps: dependencies.get(taskId) || [],
         version: encodeVersion(row.RowVersion)
       };
     }),

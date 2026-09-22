@@ -193,26 +193,26 @@ test('anlık görüntü sorgusu görünürlüğü değil yalnızca SEÇİLEBİL�
   // Görünür proje kümesi ve görev kapsamı bayrağa bakmaz.
   for (const head of [
     "INSERT #VisibleProjects(ProjectId, AccessLevel)",
+    "INSERT #ScopedTasks(TaskId",
     "INSERT #OwnScopedProjects(ProjectId)",
     "INSERT #ScopeAssignedProjects(ProjectId)",
-    "INSERT #TaskScopedWbsProjects(ProjectId)",
     "INSERT #TaskAssigneeFacts(TaskId",
-    "INSERT #VisibleTasks(TaskId)",
+    "INSERT #VisibleTasks(TaskId",
     ";WITH RequiredPartialWbs AS ("
   ]) {
     for (const sqlStatement of allStatements(head)) {
       assert.doesNotMatch(sqlStatement, /@canAssignAllCorporate/, `${head} bayraktan etkilenmemelidir`);
     }
   }
-  assert.match(statement('INSERT #VisibleTasks(TaskId)'), /SELECT t\.TaskId/);
+  assert.match(statement('INSERT #VisibleTasks(TaskId'), /SELECT t\.TaskId/);
   // Görev ve WBS seçimleri de bayrağı okumaz.
-  const taskSelect = snapshot.slice(snapshot.indexOf('SELECT t.*, v.AccessLevel'), snapshot.indexOf('SELECT ta.TaskId,'));
-  assert.match(taskSelect, /SELECT t\.\*, v\.AccessLevel/);
+  const taskSelect = statement('SELECT t.*, visible.AccessLevel');
+  assert.match(taskSelect, /SELECT t\.\*, visible\.AccessLevel/);
   assert.doesNotMatch(taskSelect, /@canAssignAllCorporate/);
-  const wbsSelect = snapshot.slice(snapshot.indexOf('SELECT w.*'), snapshot.indexOf('SELECT t.*, v.AccessLevel'));
+  const wbsSelect = statement('SELECT w.*');
   assert.doesNotMatch(wbsSelect, /@canAssignAllCorporate/);
   // Rehber genişlemesi yalnızca yöneticinin kendi kapsamı kadardır.
-  assert.match(statement('INSERT #DirectoryVisibleSicils(Sicil)'), /SELECT es\.EmployeeSicil FROM #ExecutiveScope es WHERE @canAssignAllCorporate = 1/);
+  assert.match(statement('INSERT #DirectorySicils(Sicil, IsPublished)'), /SELECT es\.EmployeeSicil, 1 FROM #ExecutiveScope es WHERE @canAssignAllCorporate = 1/);
   // Atanabilir çalışan kümesi de yalnızca yöneticinin kendi kapsamıdır.
   const scopeBlock = snapshot.slice(snapshot.indexOf('SELECT es.EmployeeSicil\n    FROM #ExecutiveScope es'));
   assert.match(snapshot, /INSERT #ExecutiveScope\(EmployeeSicil\)\s+SELECT DISTINCT EmployeeSicil\s+FROM dbo\.MR_V_ExecutiveScope\s+WHERE ManagerSicil = @sicil/);

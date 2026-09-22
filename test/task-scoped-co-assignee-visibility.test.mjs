@@ -248,8 +248,11 @@ test('rehber adı bulunmayan kapsam dışı eş sorumlunun Sicili ad yerine aç�
 test('genel personel sorgusu eş sorumluyu görev görünürlüğünden rehbere taşımaz', () => {
   const repositorySource = read('src/server/repository/sqlAppRepository.js');
   const projectionSource = read('src/server/repository/projectedSqlAppRepository.js');
-  assert.match(repositorySource, /OR visibleAssignee\.Sicil = @sicil/);
-  assert.match(repositorySource, /es\.EmployeeSicil = visibleAssignee\.Sicil/);
+  // Rehberde YAYINLANMA kararı sorumlu satırı başına verilir: READ hibesi,
+  // kişinin kendisi ya da yönetim kapsamı. Kapsam dışı eş sorumlu yalnızca
+  // ad çözümü için (IsPublished = 0) kümede kalır.
+  assert.match(repositorySource, /OR ta\.Sicil = @sicil\s+OR EXISTS \(SELECT 1 FROM #ExecutiveScope es WHERE es\.EmployeeSicil = ta\.Sicil\)\s+THEN 1 ELSE 0 END/);
+  assert.match(repositorySource, /ds\.Sicil = pd\.Sicil AND ds\.IsPublished = 1/);
   assert.doesNotMatch(repositorySource, /visibilityGate\.TaskId = visibleTask\.TaskId/);
   assert.match(repositorySource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
   assert.match(repositorySource, /WHEN NULLIF\(LTRIM\(RTRIM\(pd\.DisplayName\)\), ''\) IS NOT NULL\s+THEN ta\.Sicil/);

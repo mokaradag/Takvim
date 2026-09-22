@@ -1241,7 +1241,8 @@ function runQuery(db, statement, params, { database }) {
         .sort((left, right) => String(left.TaskId).localeCompare(String(right.TaskId))
           || Number(left.AvatarEmployeeNo ?? left.Sicil) - Number(right.AvatarEmployeeNo ?? right.Sicil));
     }
-    return result(rows);
+    // On üçüncü küme SQL içi aşama süreleridir; yalnızca milisaniye taşır.
+    return result([...rows, [{ ScopeMs: 0, TaskScopeMs: 0, DirectoryMs: 0, ResultSetsMs: 0 }]]);
   }
   if (sqlText.includes("THROW 51001")) {
     const before = new Map(db.projects.map((row) => [row.ProjectId, JSON.stringify(row)]));

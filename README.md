@@ -467,6 +467,10 @@ mevcut veritabanında yeniden çalıştırabilir; tabloların silinmesi gerekmez
 
 Snapshot SQL, yetkili görev ve sorumlu projeksiyonunu tek sorgu paketinde
 üretir; yönetici çalışan kapsamı aynı pakette tekrar kullanılır. Sorumlu işi
-artık `phase.snapshot.main-query` ölçümüne dahildir. Yetki sınırları, ölçüm
-karşılaştırması ve dağıtım kontrolü için
-[Snapshot SQL doğrulaması](docs/SYSTEM-ADMINISTRATION.md#snapshot-sql-birleştirmesi-ve-üretim-doğrulaması).
+artık `phase.snapshot.main-query` ölçümüne dahildir. Görev düzeyi yetki kararı
+pakette bir kez verilip taşınır: KISMİ projelerde görünür küme proje boyunca
+taranmaz, yönetim kapsamı yalnızca yöneticide okunur. `phase.snapshot.main-query`
+altında SQL beklemesi ile JavaScript izdüşümü ayrı ölçülür; iç içe süreler
+toplanmaz. Yetki sınırları, ölçüm karşılaştırması ve dağıtım kontrolü için
+[Snapshot SQL doğrulaması](docs/SYSTEM-ADMINISTRATION.md#snapshot-sql-birleştirmesi-ve-üretim-doğrulaması)
+ve [ana sorgu görev kapsamı daraltması](docs/SYSTEM-ADMINISTRATION.md#ana-sorgu-görev-kapsamı-daraltması-ve-üretim-doğrulaması).

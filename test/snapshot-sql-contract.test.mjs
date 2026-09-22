@@ -135,14 +135,47 @@ for (const mode of ['admin', 'lead', 'corporate', 'full', 'read', 'creator', 'ow
       assert.match(batches[0].sql, /SELECT DISTINCT EmployeeSicil\s+FROM dbo\.MR_V_ExecutiveScope\s+WHERE ManagerSicil = @sicil/);
       assert.match(batches[0].sql, /JOIN #VisibleTasks visible ON visible\.TaskId = t\.TaskId/);
       assert.match(batches[0].sql, /JOIN #VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
-      // Sorumlu sayımı, kendi sorumluluğu ve yönetim kapsamı satır başına değil
-      // tek toplamada çözülür.
+      // Sorumlu sayımı satır başına değil tek toplamada ve yalnızca GÖRÜNÜR
+      // görevler için çözülür.
       assert.equal((batches[0].sql.match(/SELECT COUNT\(\*\) FROM dbo\.MR_TaskAssignees/g) || []).length, 0);
-      assert.match(batches[0].sql, /INSERT #TaskAssigneeFacts\(TaskId, AssigneeCount, IsOwnAssignee, IsScopeAssignee\)/);
+      assert.match(batches[0].sql, /INSERT #TaskAssigneeFacts\(TaskId, AssigneeCount\)\s+SELECT ta\.TaskId, COUNT\(\*\)\s+FROM dbo\.MR_TaskAssignees ta\s+JOIN #VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
       assert.equal(stack.db.transactions.filter((entry) => entry.isolationLevel === sql.ISOLATION_LEVEL.SERIALIZABLE).length, 1);
     } finally { await stack.dispose(); }
   });
 }
+
+test('gerçek anlık görüntü isteği SQL ve izdüşüm alt fazlarını ayrı ayrı bildirir', async () => {
+  const { resetTelemetryRegistryForTests, snapshotOperations } =
+    await import('../src/server/observability/telemetryRegistry.js');
+  const stack = await createActualStack(seed('read'), { sicil: ACTOR, corporateWbsSource: false });
+  try {
+    resetTelemetryRegistryForTests();
+    await payload();
+    const names = new Set(snapshotOperations().map((entry) => entry.operation));
+    // Var olan üretim ölçümleri KORUNUR; yeni adlar onların altındadır.
+    for (const operation of [
+      'api.snapshot',
+      'phase.snapshot.transaction',
+      'phase.snapshot.main-query',
+      'phase.snapshot.main-query.sql',
+      'phase.snapshot.main-query.projection',
+      'phase.snapshot.main-query.sql.scope',
+      'phase.snapshot.main-query.sql.task-scope',
+      'phase.snapshot.main-query.sql.directory',
+      'phase.snapshot.main-query.sql.result-sets',
+      'phase.snapshot.authorization',
+      'phase.snapshot.response'
+    ]) {
+      assert.ok(names.has(operation), operation);
+    }
+    for (const entry of snapshotOperations()) {
+      if (entry.operation.startsWith('phase.snapshot.main-query')) assert.equal(entry.errorCount, 0);
+    }
+  } finally {
+    resetTelemetryRegistryForTests();
+    await stack.dispose();
+  }
+});
 
 test('yönetici kapsamı her snapshot içinde yeniden okunur', async () => {
   const stack = await createActualStack(seed('executive'), { sicil: ACTOR, corporateWbsSource: false });
@@ -170,4 +203,16 @@ test('sorumlu SQL işi ana faza taşınır; ölçüm sınırları ve hata anlam�
   assert.match(route, /phase.snapshot.response/);
   assert.match(route, /withRouteObservability\('api.snapshot'/);
   assert.doesNotMatch(projected, /phase.snapshot.assignees|STRING_SPLIT|taskIds/);
+
+  // Yeni alt ölçümler var olan ana ölçümün İÇİNDE kalır: SQL beklemesi ile
+  // JavaScript izdüşümü ayrı görülebilir, `phase.snapshot.main-query` adı ve
+  // kapsamı değişmez.
+  assert.match(main, /observePhase\('phase.snapshot.main-query.sql', \(\) => req.query\(/);
+  assert.match(main, /'phase.snapshot.main-query.projection',\s+async \(\) => projectSnapshotRecordsets\(/);
+  const loadBody = main.split('async function loadSnapshotFrom(')[1].split('function projectSnapshotRecordsets(')[0];
+  assert.ok(
+    loadBody.indexOf("observePhase('phase.snapshot.main-query.sql'")
+      < loadBody.indexOf("'phase.snapshot.main-query.projection'"),
+    'SQL ölçümü izdüşüm ölçümünden önce kapanmalıdır'
+  );
 });

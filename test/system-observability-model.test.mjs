@@ -72,7 +72,7 @@ const {
   spoolUnpersistedBuckets,
   spooledBucketCount
 } = await import('../src/server/observability/telemetryRegistry.js');
-const { observePhase } = await import('../src/server/observability/observeOperation.js');
+const { observePhase, recordPhaseDuration } = await import('../src/server/observability/observeOperation.js');
 const { buildAttentionItems } = await import('../src/server/observability/systemHealthService.js');
 const { boundedExecutor } = await import('../src/server/observability/boundedExecution.js');
 const { normalizeGauge, readResourceMetrics } = await import('../src/server/observability/resourceMetrics.js');
@@ -176,6 +176,29 @@ test('alt faz ölçümü kararlı bir işlem adıyla toplam rota ölçümünden 
   assert.equal(row?.count, 1);
   assert.equal(row?.errorCount, 0);
   assert.equal(row?.operation.startsWith('api.'), false);
+});
+
+test('sunucuda ölçülmüş alt faz süresi aynı toplayıcıya yazılır', async (t) => {
+  resetTelemetryRegistryForTests();
+  t.after(resetTelemetryRegistryForTests);
+
+  // SQL toplu işinin kendi ölçtüğü aşama süreleri: ölçüm ZATEN yapılmıştır,
+  // kayıt yolu yine `observePhase` ile aynı toplayıcıdır.
+  recordPhaseDuration('phase.snapshot.main-query.sql.scope', 12);
+  recordPhaseDuration('phase.snapshot.main-query.sql.scope', 8);
+  // Geçersiz ve eksi değerler ölçümü bozmaz.
+  recordPhaseDuration('phase.snapshot.main-query.sql.scope', null);
+  recordPhaseDuration('phase.snapshot.main-query.sql.directory', -5);
+
+  const scope = snapshotOperations().find((entry) => entry.operation === 'phase.snapshot.main-query.sql.scope');
+  assert.equal(scope?.count, 2);
+  assert.equal(scope?.errorCount, 0);
+  assert.equal(scope?.maxMs, 12);
+  const directory = snapshotOperations().find((entry) => entry.operation === 'phase.snapshot.main-query.sql.directory');
+  assert.equal(directory?.count, 1);
+  assert.equal(directory?.maxMs, 0);
+  // Adlar `api.` ile başlamaz: API yüzdeliklerini ve hata oranını şişirmezler.
+  for (const entry of snapshotOperations()) assert.equal(entry.operation.startsWith('api.'), false);
 });
 
 test('boş örnek kümesi sıfır değil "ölçüm yok" üretir', () => {

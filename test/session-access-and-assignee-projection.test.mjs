@@ -51,7 +51,7 @@ test('snapshot API completes assignees only for already-authorized visible task 
   assert.match(snapshotSource, /JOIN #VisibleTasks visible ON visible\.TaskId = ta\.TaskId/);
   // Kendi göreve atanmış kullanıcı, kimliği kapalı eş sorumlunun SATIRINI yine
   // görür; bu karar önceden toplanan sorumlu gerçeklerinden okunur.
-  assert.match(snapshotSource, /WHERE auth\.IdentityVisible = 1 OR facts\.IsOwnAssignee = 1/);
+  assert.match(snapshotSource, /WHERE auth\.IdentityVisible = 1 OR visible\.IsOwnAssignee = 1/);
   assert.match(snapshotSource, /CASE WHEN auth\.IdentityVisible = 1 THEN ta\.Sicil ELSE NULL END AS Sicil/);
   assert.equal((snapshotSource.match(/MR_V_CorporateProjectAccess/g) || []).length, 1);
   assert.equal((snapshotSource.match(/MR_V_PeopleDirectory/g) || []).length, 1);
