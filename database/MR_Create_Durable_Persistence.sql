@@ -305,6 +305,141 @@ BEGIN TRY
                 REFERENCES dbo.MR_TaskScheduleChangeRequests(RequestId)
         );
 
+    /* Kurum dışı atama koordinasyonu. Talep edilen sorumlu ONAYLANANA kadar
+       MR_TaskAssignees'e yazılmaz; iş yükü ve raporlar yalnızca gerçek
+       sorumluyu görür (bkz. docs/REQUESTS-AND-NOTIFICATIONS.md). */
+    CREATE TABLE dbo.MR_TaskAssignmentCoordinations (
+        CoordinationId uniqueidentifier NOT NULL
+            CONSTRAINT DF_MR_TaskAssignmentCoordinations_Id DEFAULT NEWSEQUENTIALID(),
+        TaskId uniqueidentifier NOT NULL,
+        RequesterSicil int NOT NULL,
+        RequestedAssigneeSicil int NOT NULL,
+        SuggestedAssigneeSicil int NULL,
+        Mode varchar(20) NOT NULL,
+        Status varchar(25) NOT NULL,
+        RequesterMessage nvarchar(2000) NULL,
+        DecisionMessage nvarchar(2000) NULL,
+        DecisionBySicil int NULL,
+        OriginalAssigneeSicils nvarchar(2000) NULL,
+        TaskTitleSnapshot nvarchar(1000) NULL,
+        ProjectIdSnapshot uniqueidentifier NULL,
+        ProjectNameSnapshot nvarchar(1000) NULL,
+        ProjectCodeSnapshot nvarchar(100) NULL,
+        AssigneeNameSnapshot nvarchar(1000) NULL,
+        AssigneeOrgSnapshot nvarchar(1000) NULL,
+        TargetFinishSnapshot date NULL,
+        CreatedAgainstTaskVersion binary(8) NULL,
+        CorrelationId uniqueidentifier NULL,
+        CreatedAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_TaskAssignmentCoordinations_CreatedAt DEFAULT SYSUTCDATETIME(),
+        DecidedAt datetime2(7) NULL,
+        RowVersion rowversion NOT NULL,
+        CONSTRAINT PK_MR_TaskAssignmentCoordinations PRIMARY KEY (CoordinationId),
+        CONSTRAINT CK_MR_TaskAssignmentCoordinations_Mode CHECK (Mode IN ('REQUEST','NOTICE')),
+        CONSTRAINT CK_MR_TaskAssignmentCoordinations_Status
+            CHECK (Status IN ('PENDING','APPROVED','REJECTED','CHANGE_REQUESTED',
+                              'CANCELLATION_REQUESTED','CANCELLED','STALE'))
+    );
+    CREATE UNIQUE INDEX UX_MR_TaskAssignmentCoordinations_OpenRequest
+        ON dbo.MR_TaskAssignmentCoordinations(TaskId, RequestedAssigneeSicil)
+        WHERE Status IN ('PENDING','CANCELLATION_REQUESTED');
+    CREATE INDEX IX_MR_TaskAssignmentCoordinations_TaskStatus
+        ON dbo.MR_TaskAssignmentCoordinations(TaskId, Status)
+        INCLUDE (RequestedAssigneeSicil, RequesterSicil);
+    CREATE INDEX IX_MR_TaskAssignmentCoordinations_RequesterStatus
+        ON dbo.MR_TaskAssignmentCoordinations(RequesterSicil, Status, CreatedAt DESC);
+
+    CREATE TABLE dbo.MR_AssignmentCoordinationRecipients (
+        CoordinationId uniqueidentifier NOT NULL,
+        Sicil int NOT NULL,
+        RecipientRole varchar(20) NOT NULL,
+        ReadVersion binary(8) NULL,
+        DismissedVersion binary(8) NULL,
+        UpdatedAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_AssignmentCoordinationRecipients_UpdatedAt DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_MR_AssignmentCoordinationRecipients PRIMARY KEY (CoordinationId, Sicil),
+        CONSTRAINT CK_MR_AssignmentCoordinationRecipients_Role
+            CHECK (RecipientRole IN ('MANAGER','ASSIGNEE','REQUESTER')),
+        CONSTRAINT FK_MR_AssignmentCoordinationRecipients_Coordination FOREIGN KEY (CoordinationId)
+            REFERENCES dbo.MR_TaskAssignmentCoordinations(CoordinationId)
+    );
+    CREATE INDEX IX_MR_AssignmentCoordinationRecipients_Sicil
+        ON dbo.MR_AssignmentCoordinationRecipients(Sicil, CoordinationId);
+
+    /* Zil bildirimleri. Kayıt YETKİLİ sorumlu kümesi değiştiğinde yazılır;
+       başlık/açıklama düzenlemesi bildirim üretmez. */
+    CREATE TABLE dbo.MR_TaskNotifications (
+        NotificationId uniqueidentifier NOT NULL
+            CONSTRAINT DF_MR_TaskNotifications_Id DEFAULT NEWSEQUENTIALID(),
+        RecipientSicil int NOT NULL,
+        Kind varchar(30) NOT NULL,
+        TaskId uniqueidentifier NULL,
+        ActorSicil int NULL,
+        ActorNameSnapshot nvarchar(1000) NULL,
+        TaskTitleSnapshot nvarchar(1000) NULL,
+        ProjectIdSnapshot uniqueidentifier NULL,
+        ProjectNameSnapshot nvarchar(1000) NULL,
+        ProjectCodeSnapshot nvarchar(100) NULL,
+        TargetFinishSnapshot date NULL,
+        PrioritySnapshot varchar(20) NULL,
+        TaskCount int NOT NULL CONSTRAINT DF_MR_TaskNotifications_TaskCount DEFAULT 1,
+        EventKey nvarchar(200) NOT NULL,
+        OccurredAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_TaskNotifications_OccurredAt DEFAULT SYSUTCDATETIME(),
+        /* Satır yazıldıktan sonra DEĞİŞMEZ; okundu/temizlendi işaretleri tek
+           yönlüdür ve bu yüzden sürüm kapısı gerektirmez. */
+        ReadAt datetime2(7) NULL,
+        DismissedAt datetime2(7) NULL,
+        RowVersion rowversion NOT NULL,
+        CONSTRAINT PK_MR_TaskNotifications PRIMARY KEY (NotificationId),
+        CONSTRAINT CK_MR_TaskNotifications_Kind CHECK (Kind IN ('TASK_ASSIGNED','TASK_UNASSIGNED'))
+    );
+    CREATE UNIQUE INDEX UX_MR_TaskNotifications_RecipientEvent
+        ON dbo.MR_TaskNotifications(RecipientSicil, EventKey);
+    CREATE INDEX IX_MR_TaskNotifications_RecipientOccurred
+        ON dbo.MR_TaskNotifications(RecipientSicil, OccurredAt DESC);
+
+    /* İsteğe bağlı e-posta NİYETİ. Görev işlemi SMTP'yi beklemez; teslimat
+       arka plan çalışanındadır (bkz. server/notifications/taskMailWorker.js). */
+    CREATE TABLE dbo.MR_TaskMailOutbox (
+        MailId bigint IDENTITY(1,1) NOT NULL,
+        Kind varchar(30) NOT NULL,
+        TaskId uniqueidentifier NULL,
+        RecipientSicil int NOT NULL,
+        PayloadJson nvarchar(max) NOT NULL,
+        Status varchar(20) NOT NULL CONSTRAINT DF_MR_TaskMailOutbox_Status DEFAULT 'PENDING',
+        AttemptCount int NOT NULL CONSTRAINT DF_MR_TaskMailOutbox_AttemptCount DEFAULT 0,
+        NextAttemptAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_TaskMailOutbox_NextAttemptAt DEFAULT SYSUTCDATETIME(),
+        LeaseExpiresAt datetime2(7) NULL,
+        LastFailureCode varchar(60) NULL,
+        DedupeKey nvarchar(200) NOT NULL,
+        CreatedAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_TaskMailOutbox_CreatedAt DEFAULT SYSUTCDATETIME(),
+        UpdatedAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_TaskMailOutbox_UpdatedAt DEFAULT SYSUTCDATETIME(),
+        SentAt datetime2(7) NULL,
+        CONSTRAINT PK_MR_TaskMailOutbox PRIMARY KEY (MailId),
+        CONSTRAINT CK_MR_TaskMailOutbox_Status CHECK (Status IN ('PENDING','SENT','FAILED'))
+    );
+    CREATE UNIQUE INDEX UX_MR_TaskMailOutbox_DedupeKey ON dbo.MR_TaskMailOutbox(DedupeKey);
+    CREATE INDEX IX_MR_TaskMailOutbox_Due ON dbo.MR_TaskMailOutbox(Status, NextAttemptAt)
+        INCLUDE (RecipientSicil, AttemptCount);
+
+    /* Sicil başına TEK nabız satırı: sekme, istek ve örnek sayısı tabloyu
+       büyütmez (bkz. docs/SYSTEM-ADMINISTRATION.md · Aktif Kullanıcılar). */
+    CREATE TABLE dbo.MR_UserPresence (
+        Sicil int NOT NULL,
+        FirstSeenAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_UserPresence_FirstSeenAt DEFAULT SYSUTCDATETIME(),
+        SessionStartedAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_UserPresence_SessionStartedAt DEFAULT SYSUTCDATETIME(),
+        LastSeenAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_UserPresence_LastSeenAt DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_MR_UserPresence PRIMARY KEY (Sicil)
+    );
+    CREATE INDEX IX_MR_UserPresence_LastSeenAt ON dbo.MR_UserPresence(LastSeenAt DESC) INCLUDE (Sicil);
+
     CREATE TABLE dbo.MR_TaskDependencies (
         TaskDependencyId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskDependencies_Id DEFAULT NEWSEQUENTIALID(),
         ProjectId uniqueidentifier NOT NULL,
@@ -782,7 +917,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0011_outlook_completion_lifecycle', N'Outlook tamamlanma, yeniden açılma ve iptal nedeni'),
            (N'0012_system_observability', N'Sistem Yönetimi telemetri toplamları, işletim olayları ve otomatik uyarılar'),
            (N'0013_corporate_wbs_sync_freshness', N'CN43N başarılı tur tazeliği ile WBS içerik değişikliği zamanını ayırır'),
-           (N'0014_task_creator_index', N'Görev oluşturan Sicil dizini: yetki ve anlık görüntü sorgularında tam tablo taramasını kaldırır');
+           (N'0014_task_creator_index', N'Görev oluşturan Sicil dizini: yetki ve anlık görüntü sorgularında tam tablo taramasını kaldırır'),
+           (N'0015_assignment_coordination_and_presence', N'Kurum dışı atama koordinasyonu, görev bildirimleri, dayanıklı posta kuyruğu ve kullanıcı varlığı');
 
     COMMIT TRANSACTION;
 END TRY

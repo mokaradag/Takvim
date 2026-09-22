@@ -163,7 +163,7 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
-2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql` ve `database/MR_Upgrade_0014_Task_Creator_Index.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
+2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql`, `database/MR_Upgrade_0014_Task_Creator_Index.sql` ve `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
 5. Outlook teslimatı veya elle/otomatik hatırlatma kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
@@ -266,7 +266,7 @@ enjeksiyonuna karşı nötrlenir ve dışarı yalnızca ekranda da görülen ala
 
 ## Sistem Yönetimi ve üretim gözlemlenebilirliği
 
-Kenar çubuğundaki **Sistem Yönetimi** sayfası yalnızca `SYSTEM_ADMIN` rolüne açıktır ve bir yapılandırma dökümü değil bir **işletim kokpitidir**: sistem sağlıklı mı, ne bozuk, ne zaman bozuldu, ne yapmalıyım. Altı sekme vardır: **Genel Durum**, **Performans**, **Kuyruklar ve İşler**, **Hatalar ve Olaylar**, **Entegrasyonlar** ve **Hatırlatma E-postaları**. Hatırlatma yönetimi bağımsız bir sayfa olmaktan çıkıp bu sayfanın sekmesine taşınmıştır; davranışı değişmemiştir.
+Kenar çubuğundaki **Sistem Yönetimi** sayfası yalnızca `SYSTEM_ADMIN` rolüne açıktır ve bir yapılandırma dökümü değil bir **işletim kokpitidir**: sistem sağlıklı mı, ne bozuk, ne zaman bozuldu, ne yapmalıyım. Yedi sekme vardır: **Genel Durum**, **Performans**, **Kuyruklar ve İşler**, **Hatalar ve Olaylar**, **Entegrasyonlar**, **Aktif Kullanıcılar** ve **Hatırlatma E-postaları**. Hatırlatma yönetimi bağımsız bir sayfa olmaktan çıkıp bu sayfanın sekmesine taşınmıştır; davranışı değişmemiştir.
 
 Gezinme öğesini gizlemek güvenlik değildir: `/api/mergen-rota/admin/system/*` uçlarının tümü yetkiyi her istekte yeniden denetler ve yetkisiz kullanıcıya `403 FORBIDDEN` döner. Sayfa Temel ve Kapsamlı Kipte aynı biçimde açılır, projeye değil sisteme aittir (üst çubukta proje künyesi ve dışa aktarma gösterilmez) ve rol kaybında kullanıcıyı güvenle Özet'e alır.
 
@@ -274,7 +274,79 @@ Durum modeli dürüsttür: **Sağlıklı · Dikkat · Kritik · Bilinmiyor** ve 
 
 Telemetri **üretim güvenlidir**: yüksek sıklıklı gözlemler bellekte beş dakikalık kovalarda toplanır, yalnızca kapanmış kovaların özeti SQL'e yazılır (`MR_TelemetryOperationSamples`, `MR_TelemetryGaugeSamples`), işletim olayları ve otomatik uyarılar yinelenenler toplanarak saklanır (`MR_OperationalEvents`, `MR_OperationalAlerts`). Saklama sınırlıdır (varsayılan 30 gün) ve temizlik küçük yığınlar hâlinde yapılır. Telemetri hatası çekirdek uygulamayı düşürmez; 0012 göçü uygulanmadığında konsol çalışmaya devam eder ve eksik şemayı açıkça bildirir.
 
+**Aktif Kullanıcılar** sekmesi yalnızca `SYSTEM_ADMIN` rolüne açıktır ve yetkiyi sunucuda her istekte yeniden denetler. Tanım açıktır ve arayüzde de yazar: **aktif = son 3 dakika içinde kimliği doğrulanmış bir nabız görülmüş kullanıcı**. Nabız 90 saniyede bir gönderilir ve aynı kullanıcının birden çok sekmesi varsa yalnızca kilidi tutan **tek sekme** gönderir; hiçbir olağan istek yan etki olarak varlık yazmaz. Tablo Sicil başına **tek** satır tutar; sayfa yoklaması yalnızca sekme etkinken sürer.
+
 Konsol yoklama ile tazelenir (varsayılan 10 sn): üst üste binen istek yoktur, gizli sekmede yoklama durur, dönüşte bayat veri hemen tazelenir ve geçici bir hata son geçerli bilgiyi silmez. Bu döngü normal görev verisi yenilemesinden bağımsızdır. Demo Kipinde üretim uçları hiç çağrılmaz. Yönetim yanıtları parola, jeton, çerez, bağlantı dizesi, SMTP kimlik bilgisi, iCalendar gövdesi ve gereksiz alıcı adresi taşımaz. Ayrıntılar: `docs/SYSTEM-ADMINISTRATION.md`.
+
+## Kurum dışı görev atama ve Atama Koordinasyonu
+
+Bir kişiyi **bulabilmek**, ona **doğrudan atayabilmek** ve onun için **resmî bir
+koordinasyon başlatmak** birbirinden ayrı üç yetkidir. Var olan atama kapsamı
+(`MR_V_ExecutiveScope`, `corporateprojectaccess`, `SYSTEM_ADMIN`) hiçbir yerde
+gevşetilmez; yeni olan yalnızca kapsam dışı kaldığında ne olacağıdır.
+
+Görev panelindeki **Diğer birimlerden personel göster** anahtarı varsayılan
+olarak **kapalıdır**. Açıldığında sorgu snapshot'tan değil sunucudaki hafif
+dizin aramasından gelir: en az iki karakter, gecikmeli (debounce) istek, sınırlı
+sonuç kümesi, adın yanında kurumsal yol. Üç binden fazla kişilik kurum rehberi
+snapshot'a **hiçbir koşulda** yüklenmez. Uç kimlik doğrular, hız sınırı uygular
+ve yalnızca ad/Sicil/kurumsal yol döner; yetki her zaman **SicilNo** ile
+kurulur, ad-soyad ile değil — aynı adlı iki çalışan ayrı kimliklerdir.
+
+Kaydetme sırasında sunucu kararı yeniden verir:
+
+| Atayan | Hedef | Sonuç |
+| --- | --- | --- |
+| Herhangi bir kullanıcı | kendisi | doğrudan atama (değişmedi) |
+| Sıradan kullanıcı | başka biri | **talep** (`REQUEST`) — sorumlu yazılmaz |
+| Yönetici | kendi kapsamındaki personel | doğrudan atama (değişmedi) |
+| Yönetici | kapsam dışı personel | doğrudan atama **+ kalıcı koordinasyon kaydı** (`NOTICE`) ve karşı yönetim zincirine bildirim |
+| `SYSTEM_ADMIN` / proje `FULL` | herhangi biri | doğrudan atama (değişmedi) |
+
+Bekleyen bir talep **asla** `MR_TaskAssignees` satırı yazmaz: iş yükü, Özet,
+Kanban, hatırlatma ve Outlook yalnızca gerçek sorumluyu görür. Talep geçmişi de
+görev görünürlüğü vermez.
+
+**Talepler** sayfasına yeni bir kenar çubuğu sayfası eklenmeden birinci sınıf bir
+**Atama Koordinasyonu** sekmesi eklenir: arama, durum, proje, talep eden,
+sorumlu, kurumsal yol ve tarih aralığı süzgeçleriyle sunucu tarafında
+sayfalanır. Karşı yönetim zinciri (birim ve müdürlük yöneticisi) kaydı kendi
+gelen kutusunda görür ve dört eylemden birini seçer: **Onayla**, **Değişiklik
+İste**, **Reddet**, **Atamanın Kaldırılmasını İste**. Karar görev düzenleme
+yetkisi vermez; yalnızca o Sicilin atanması/kaldırılması uygulanır ve görünmeyen
+diğer sorumlular sessizce silinmez. Onay anında yetki canlı veriden yeniden
+türetilir, sorumlu kümesi kilitlenmiş görevle karşılaştırılır ve plan bu arada
+değiştiyse kayıt `STALE` olur. Sonuç talep edene zil bildirimiyle döner.
+
+Ayrıntılar: [Talepler ve bildirimler](docs/REQUESTS-AND-NOTIFICATIONS.md),
+[yetki modeli](docs/AUTHORIZATION-MODEL.md).
+
+## Atama bildirimleri ve isteğe bağlı e-posta
+
+Bir göreve sorumlu eklendiğinde/çıkarıldığında var olan **zil** bildirim
+merkezine kalıcı bir kayıt yazılır — ikinci bir zil, ikinci bir bildirim sistemi
+yoktur. Bildirim hangi görev, hangi proje, kimin yaptığı, hedef tarih ve ne
+zaman bilgisini taşır; tıklanınca kullanıcının erişimi varsa görev açılır.
+Kullanıcı kendi yaptığı değişiklik için bildirim almaz, sorumlu kümesi gerçekten
+değişmediğinde (yalnızca açıklama/etiket düzenlemesi gibi) bildirim üretilmez ve
+toplu/tekrarlı kaydetme alıcı başına tek satır yazar. Kayıt `EventKey` ile
+tekilleştirilir, yeniden çalıştırma yinelenen bildirim doğurmaz ve sunucu
+yeniden başladığında bildirimler kaybolmaz.
+
+Her iki görev panelinde (Temel ve Kapsamlı) **Sorumlulara e-posta bildirimi
+gönder** kutusu vardır. Varsayılan **kapalıdır**, saklanan bir tercih değil
+**tek bir işlem için** geçerli bir seçimdir ve işaretlenmediğinde hiçbir posta
+üretilmez. İşaretlendiğinde kayıt işlemi **aynı transaction** içinde
+`MR_TaskMailOutbox` satırını yazar; SMTP'yi ayrı bir çalışan tüketir. Böylece
+`api.commit` hiçbir koşulda posta sunucusunu beklemez, geçici bir SMTP arızası
+görev kaydetmeyi düşürmez ve yeniden deneme yinelenen posta göndermez. Alıcı
+adresi var olan `Sicil → MR_V_PeopleDirectory.Username → DC01_userr.EmailAddress`
+zinciriyle sunucuda çözülür; tarayıcı alıcı belirleyemez. Çalışanın yoklama
+aralığı `MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30000 ms) ile ayarlanır.
+
+Rota bu üç akışın (koordinasyon, zil, e-posta) **tek doğruluk kaynağıdır**;
+e-posta bir taşıma katmanıdır, iş akışı durumu değildir. Bir postanın
+gönderilememesi kararı, bildirimi veya atamayı geçersiz kılmaz.
 
 ## Görev hatırlatma postaları
 
@@ -323,6 +395,40 @@ yapılır: görev kaydı hiçbir koşulda SMTP'ye bağlı değildir, bekleyen te
 otomatik Outlook çalışanında sınırlı yığınlar hâlinde yeniden denenir. Yönetici “Turu şimdi çalıştır” eylemi tanı içindir; hatırlatma ve Outlook sayaçları, HTTP 503 olsa da güvenli hata nedenleriyle ayrı gösterilir. Son otomatik tur yerel sürece, kuyruk sağlık sayıları ortak veritabanına aittir. Şema göçü
 `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` ve ardından `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`; ayrıntılar:
 `docs/OUTLOOK-CALENDAR.md`.
+
+## Kanban süzme ve sıralama
+
+Kanban araç çubuğunda Direktörlük/Müdürlük/Birim seçicileriyle **aynı satırda**
+bir **Sorumlu** süzgeci bulunur. Seçenekler o anda süzülmüş görev kümesinden
+türetilir ve **Sicil** ile eşleşir, ad ile değil; çok sorumlulu görevde en az bir
+sorumlunun seçilmiş olması yeterlidir. Süzgeç arama ve kurumsal seçimle birlikte
+çalışır, **Filtreleri temizle** ile sıfırlanır ve ek bir sunucu sorgusu
+başlatmaz. Dar ekranda denetimler aynı satırda sıkışarak sarmalanır.
+
+Her sütun başlığında, sayacın yanında küçük bir **hedef tarihe göre sırala**
+düğmesi vardır. Varsayılan artan (en yakın hedef üstte), tıklama yönü çevirir ve
+**yön sütun başınadır**: bir panoyu azalan yaparken diğerleri değişmez. Hedefi
+olmayan görev her iki yönde de en altta kalır, eşitlikte sıra kararlıdır. İşlem
+tümüyle istemci tarafındadır; yeni istek üretmez.
+
+## Özet · Tüm Görevleri Gör
+
+**Tüm görevleri gör** penceresi kanonik hedef bitiş alanına göre **eskiden
+yeniye** açılır (Kapsamlı Kipte **Hedef**, Temel Kipte **Termin** adıyla aynı
+alan). Tarihi olmayan görev her iki yönde de en altta kalır, sıralama
+deterministiktir ve kullanıcı istediği sütuna geçebilir. Pencere ayrıca var olan
+kanonik öncelik modelini kullanan bir **Öncelik** sütunu gösterir; ikinci bir
+öncelik kataloğu tanımlanmaz. Süzme, sıralama ve sayfalama var olan pencere
+altyapısını kullanır.
+
+## Sekme simgesi
+
+Sekme simgesi uygulama pusula logosunun sadeleştirilmiş hâlidir: aynı gövde
+çemberi, aynı ibre açısı ve aynı merkez. 16 ve 32 pikselde okunaklı kalması için
+derece çizgisi, gölge ve eğim yoktur; kendi zemini olduğundan açık ve koyu sekme
+çubuğunda aynı karşıtlıkta görünür. SVG veri URI'si olarak gömülür, yanında
+`alternate icon` ve `apple-touch-icon` bildirimleri vardır: ek ağ isteği, ayrı
+dosya ve derleme adımı gerekmez.
 
 ## Görünüm tercihleri
 

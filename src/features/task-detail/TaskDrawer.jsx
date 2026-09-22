@@ -62,6 +62,9 @@ import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
 import { scheduleDifferenceSummary, requestDates } from '../schedule-change/scheduleChangePresentation.js';
+import { ExternalAssigneePicker } from '../assignment-coordination/ExternalAssigneePicker.jsx';
+import { useAssignmentRequestDraft } from '../assignment-coordination/useAssignmentRequestDraft.js';
+import { AssigneeMailToggle } from '../assignment-coordination/AssigneeMailToggle.jsx';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 function legacyProjectTags(projectId, tasks) {
@@ -284,8 +287,17 @@ export function TaskDrawer({
     return onUpdate(task.id, patch);
   };
 
+  // Kurum dışı personel seçimi ve isteğe bağlı e-posta bildirimi bu kayıt
+  // işlemine aittir; kalıcı bir tercih oluşturmazlar.
+  const assignmentRequests = useAssignmentRequestDraft({ assignmentScopeOnly, canManageAssignees });
+  const [notifyAssignees, setNotifyAssignees] = useState(false);
+
   const dismiss = onClose;
-  const primaryAction = () => onSave?.({ ...local, task: titleDraft.trim() }, { generateSeries });
+  const primaryAction = () => onSave?.({ ...local, task: titleDraft.trim() }, {
+    generateSeries,
+    notifyAssignees,
+    assignmentRequest: assignmentRequests.assignmentRequest
+  });
 
   const changeProject = (projectId) => {
     const project = projects.find((item) => item.id === projectId)
@@ -508,6 +520,19 @@ export function TaskDrawer({
                     : ''}
                 </div>
               )}
+              {/* Anahtar KAPALIYKEN bugünkü izin verilen personel davranışı
+                  aynen sürer; açıkken dizin sunucuda aranır. */}
+              <ExternalAssigneePicker
+                disabled={isSaving}
+                assignedSicils={(local.assigneeIds || []).map(String)}
+                canAssignDirectly={assignmentRequests.canAssignDirectly}
+                onAssignDirectly={(person) => addAssignee(person.sicil)}
+                requestedAssignees={assignmentRequests.requested}
+                onRequestAssignee={assignmentRequests.requestAssignee}
+                onCancelRequest={assignmentRequests.cancelRequest}
+                requestNote={assignmentRequests.note}
+                onRequestNoteChange={assignmentRequests.setNote}
+              />
             </Section>
 
             <Section title="Güncel plan" icon={<Icons.Calendar size={13} />} tone="var(--accent)">
@@ -730,6 +755,7 @@ export function TaskDrawer({
             <Icons.Calendar size={13} /> {pendingScheduleRequest ? 'Öneriyi değiştir' : 'Yeni tarih öner'}
           </button>}
           <div style={{ flex: 1 }} />
+          <AssigneeMailToggle checked={notifyAssignees} disabled={isSaving} onChange={setNotifyAssignees} />
           <button className="btn primary" onClick={primaryAction} disabled={isSaving || !titleValid} aria-busy={isSaving}>
             {isSaving ? <Spinner size={13} /> : <Icons.Save size={14} />} {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>

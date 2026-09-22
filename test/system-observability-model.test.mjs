@@ -561,7 +561,7 @@ test('geçici hata son geçerli durumu silmez ve tazelik damgasını ilerletmez'
 test('sekme kimlikleri benzersizdir ve klavye gezinmesi uçlarda sarar', () => {
   const ids = SYSTEM_ADMIN_TABS.map((tab) => tab.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(ids.length, 6);
+  assert.equal(ids.length, 7);
   assert.equal(nextSystemAdminTab(ids[0], 'ArrowLeft'), ids[ids.length - 1]);
   assert.equal(nextSystemAdminTab(ids[ids.length - 1], 'ArrowRight'), ids[0]);
   assert.equal(nextSystemAdminTab(ids[2], 'Home'), ids[0]);

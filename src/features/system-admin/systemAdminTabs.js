@@ -12,6 +12,7 @@ export const SYSTEM_ADMIN_TABS = Object.freeze([
   { id: ADMIN_TABS.QUEUES, label: 'Kuyruklar ve İşler', icon: 'Layers' },
   { id: ADMIN_TABS.EVENTS, label: 'Hatalar ve Olaylar', icon: 'Alert' },
   { id: ADMIN_TABS.INTEGRATIONS, label: 'Entegrasyonlar', icon: 'Link' },
+  { id: ADMIN_TABS.PRESENCE, label: 'Aktif Kullanıcılar', icon: 'Users' },
   { id: ADMIN_TABS.REMINDERS, label: 'Hatırlatma E-postaları', icon: 'Mail' }
 ]);
 

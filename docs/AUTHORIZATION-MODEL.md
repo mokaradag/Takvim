@@ -90,6 +90,36 @@ Selecting a Project **for a new or reassigned Task** is a different question fro
 
 For an ordinary employee the server-side `assignableProjects` catalog remains empty. The client adds only visible Projects in which the snapshot contains at least one Task marked `isCurrentUserAssignee`; the server never trusts that derived list. Directors, managers, and team leaders (`isExecutive`, derived from HR02 exactly as executive visibility is — there is no hard-coded user list) receive the **entire active CN43N corporate Project catalog** in `assignableProjects`, so they can assign work to their own personnel under any corporate Project even where they hold no `corporateprojectaccess` of their own. SYSTEM_ADMIN already reaches every Project through precedence.
 
+## Cross-organizational assignment: direct assignment vs assignment request
+
+Working with personnel outside the user's own Direktörlük / Müdürlük / Birim does **not** relax the assignment-scope boundary. The design separates three distinct questions:
+
+1. **Who the user may find** — `GET /api/mergen-rota/directory/search`. The corporate population (3.000+ and growing) is never placed in `api.snapshot`. The endpoint authenticates the caller from the session, requires at least two characters, returns at most 25 rows from the indexed `MR_V_PeopleDirectory`, and discloses only what this workflow needs: Sicil, display name, job title, and the Direktörlük / Müdürlük / Birim path. Username, e-mail and manager relationships are not returned. A per-session window counter rejects probing bursts with HTTP 429.
+2. **Who the user may directly assign** — unchanged. `assertAssigneeScope` still governs every `MR_TaskAssignees` write: SYSTEM_ADMIN and non-executive FULL Project users may assign anyone in that Project, executives may assign personnel inside their `MR_V_ExecutiveScope`, and `ASSIGNEE_CREATE` accepts only the actor themselves. A forged direct request for anybody else receives `FORBIDDEN` and the persistent assignee set is untouched.
+3. **Who requires coordination** — everybody else. The requester submits a row in `MR_TaskAssignmentCoordinations`; the requested person is **not** written into `MR_TaskAssignees` until a manager approves.
+
+The client switch ("Diğer birimlerden personel göster", default OFF) and the "this will be a request" notice are UX only. The server decides both the mode and the outcome.
+
+### Creating a coordination record
+
+`POST /api/mergen-rota/assignment-coordination` requires the caller to hold an authoritative relationship with the Task: SYSTEM_ADMIN, FULL Project access, Task creator, or current assignee. An unrelated caller and a non-existent Task receive the **same** `FORBIDDEN` message, so record existence is not probed. Requesting yourself and requesting an unknown Sicil are rejected. One open record per `(TaskId, RequestedAssigneeSicil)` is active; a replacement cancels the earlier row without deleting history.
+
+A `NOTICE` record is written by the ordinary Task-commit path instead, whenever an already-authorized assigner adds somebody who is both outside their `MR_V_ExecutiveScope` and in a different Direktörlük / Müdürlük / Birim. That assignment is effective immediately — the assigner already had the authority — but the receiving management chain is notified and can ask for it to be removed. Nobody gains new direct-assignment authority from this.
+
+### Receiving management chain
+
+The chain is resolved set-wise from `MR_V_ExecutiveScope` with `ScopeType IN ('UNIT','DEPARTMENT')` — birim yöneticisi and müdürlük yöneticisi. Names are never used. Identities that are absent from `MR_V_PeopleDirectory` are dropped, the requester is excluded, and the primary key on `MR_AssignmentCoordinationRecipients` guarantees that a person holding two of those roles is notified once. When an employee has no such manager, the decision falls back to the Task's own Project authorities (creator, manual lead, FULL access, corporate access) excluding the requester; if none exists the request is refused rather than left ownerless.
+
+### Decision authority
+
+Decision authority is re-derived **at decision time** from the current HR relationship and current Project access; a stale recipient row grants nothing. A manager may approve, reject, or request a change on a `PENDING` record, and may ask for removal of an `APPROVED` one. The requester may withdraw their own `PENDING` record and answers a removal request, but can never approve their own. "Ahmet yerine Mehmet görevlendirilsin" is carried as `SuggestedAssigneeSicil`, and the suggestion is accepted only when the suggested employee is inside the responding manager's own authoritative scope.
+
+Receiving a coordination notification grants **no** task-editing authority. If the manager already has ordinary authorization for that Task, the normal editing flow stays available; otherwise the coordination workflow is the only mechanism.
+
+### Concurrency
+
+Approval runs in one transaction with the Task and assignee rows locked. Staleness is evaluated per transition: approving a `PENDING` request requires the authoritative assignee set to still match the set captured at request time, and approving a removal requires the person to still be an assignee. A mismatch marks the record `STALE` and writes nothing. Approval **inserts one Sicil** and removal **deletes one Sicil**; the assignee set is never rewritten, so hidden out-of-scope co-assignees cannot be silently dropped. An optional client `version` is compared against the record's `RowVersion`, so an old manager response cannot override a newer one.
+
 ## Assignee Task creation scope
 
 An ordinary employee who is the authoritative assignee of at least one Task in Project P may create a new Task in Project P. This is `ASSIGNEE_CREATE`, not FULL Project access and not executive assignment scope.
@@ -262,9 +292,13 @@ Sistem yöneticisi olmayan direktör, müdür veya birim yöneticisinin yeni/de�
 Kaydet işleminde görev/ardıl yamaları tek transaction ile uygulanır. Yerel taslak başlamasından sonra bilinen sürüm değişmişse istemci kaydı reddeder; sunucu mevcut rowversion denetimini ayrıca uygular. SQL şema değişikliği gerekmez.
 
 
+### Aktif Kullanıcılar ve nabız yetkisi
+
+`GET /api/mergen-rota/admin/system/presence` öteki yönetim uçlarıyla aynı kapıdan geçer: oturum okunur, `assertSystemAdmin` bağımsız olarak denetlenir ve yetkisiz kullanıcı FORBIDDEN alır. Gezinmeyi gizlemek sınır değildir. Nabız ucu (`POST /api/mergen-rota/presence/heartbeat`) kimliği **oturumdan** türetir; gövdeden gelen Sicil yok sayılır. Tablo yalnızca sistem yöneticisinin zaten görmeye yetkili olduğu künyeyi (ad, Sicil, Direktörlük / Müdürlük / Birim, ilk/son görülme) taşır. Ayrıntılar: [Sistem Yönetimi](SYSTEM-ADMINISTRATION.md).
+
 ### Talep geçmişi ve bildirim yetkisi
 
-Talepler GET sorguları ve bildirim okuma/temizleme işlemleri yalnızca oturum Sicilinin talep eden veya belirlenmiş karar sahibi olduğu kayıtlarla sınırlıdır. Kullanıcı kimliği ve rolü istemci parametresi değildir. Kişi/proje kataloğu genişletilmez. Kalıcı geçmiş silinen görevin künyesini taşıyabilir; bu, göreve güncel erişim vermez. Karar işlemi halen güncel görev/proje yetkisini ve sürümünü doğrular. Komut araması kenar çubuğuyla ortak kip/rol süzgecini kullanır; Temel Kipte Gantt gösterilmez. Ayrıntılar: [Talepler](REQUESTS-AND-NOTIFICATIONS.md).
+Talepler GET sorguları ve bildirim okuma/temizleme işlemleri yalnızca oturum Sicilinin talep eden veya belirlenmiş karar sahibi olduğu kayıtlarla sınırlıdır. Atama koordinasyonunda katılım ALICI satırından türetilir: talep edilen kişi, atama yürürlüğe girene kadar kaydı görmez. Zil bildirimi göreve erişim vermez; "Görevi aç" olağan yetkili görev yükleme yolundan geçer ve yetki orada yeniden doğrulanır. Kullanıcı kimliği ve rolü istemci parametresi değildir. Kişi/proje kataloğu genişletilmez. Kalıcı geçmiş silinen görevin künyesini taşıyabilir; bu, göreve güncel erişim vermez. Karar işlemi halen güncel görev/proje yetkisini ve sürümünü doğrular. Komut araması kenar çubuğuyla ortak kip/rol süzgecini kullanır; Temel Kipte Gantt gösterilmez. Ayrıntılar: [Talepler](REQUESTS-AND-NOTIFICATIONS.md).
 
 
 ### Görev Hareketleri gizlilik sınırı

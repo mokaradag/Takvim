@@ -119,7 +119,7 @@ test('strict project dates and valid task scalar values remain deterministic', (
 test('commit route invokes scalar validation before SQL persistence', () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const scalarPosition = route.indexOf('findCommitScalarIssue(changes)');
-  const commitPosition = route.indexOf('createOrderedSqlAppRepository().commitChanges(changes)');
+  const commitPosition = route.indexOf('createOrderedSqlAppRepository().commitChanges({ ...changes, notifyAssignees })');
 
   assert.match(route, /findNestedCommitCollectionIssue\(changes\)[\s\S]*findCommitScalarIssue\(changes\)/);
   assert.ok(scalarPosition >= 0);

@@ -35,7 +35,7 @@ export function resolveTaskEditorAccess(state, taskId, patch = {}) {
   } : access;
 }
 
-export async function commitTaskEditorEdits(persistence, getState, edits, { onRebase, ...options } = {}) {
+export async function commitTaskEditorEdits(persistence, getState, edits, { onRebase, notifyAssignees = false, ...options } = {}) {
   const before = getState();
   const ids = [...new Set(edits.map((edit) => edit.id))];
   const flushed = await persistence.flushTaskUpdates(ids);
@@ -56,7 +56,13 @@ export async function commitTaskEditorEdits(persistence, getState, edits, { onRe
     ok: false,
     error: { code: 'UNSAVED_TASK_CHANGES', message: 'Önceki görev değişiklikleri kaydedilemedi. Önce bu kayıtları yeniden deneyin.' }
   };
-  return persistence.mutate('task/save-draft', (current) => prepareTaskEditorCommit(current, rebased, options));
+  // E-posta tercihi KALICI modele girmez: yalnızca bu kaydetme isteğinin
+  // seçeneği olarak taşınır (bkz. data/api/createApiRepository.js).
+  return persistence.mutate(
+    'task/save-draft',
+    (current) => prepareTaskEditorCommit(current, rebased, options),
+    { notifyAssignees: notifyAssignees === true }
+  );
 }
 
 function taskKeywordCatalogUpdates(state, task) {

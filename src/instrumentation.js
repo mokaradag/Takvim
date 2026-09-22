@@ -6,5 +6,9 @@ export async function register() {
     // yazar ve otomatik uyarıları değerlendirir (bkz. server/observability).
     const { startTelemetryWorker } = await import('./server/observability/telemetryWorker.js');
     startTelemetryWorker();
+    // Görev bildirim postası: niyet görev işlemiyle kalıcılaşır, teslimat
+    // burada yapılır (bkz. server/notifications/taskMailWorker.js).
+    const { startTaskMailWorker } = await import('./server/notifications/taskMailWorker.js');
+    startTaskMailWorker();
   }
 }

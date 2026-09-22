@@ -38,6 +38,7 @@ import { projectTypeMeta, visibleProjects, isArchivedProject } from '../../domai
 import { useAppState } from '../../state/AppStateProvider';
 import { useTweaks } from '../../hooks/useTweaks';
 import { useApplyTweaks } from '../../hooks/useApplyTweaks';
+import { usePresenceHeartbeat } from '../../hooks/usePresenceHeartbeat.js';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { TaskOrganizationFilterProvider } from '../../features/tasks/TaskOrganizationFilterContext.jsx';
 import { AppLogo } from './AppLogo';
@@ -139,7 +140,10 @@ export default function AppShell() {
   const stats = useTaskStats();
   const portfolioStats = usePortfolioTaskStats();
   const currentUser = useCurrentUser();
-  const { isSystemAdmin } = useAppState();
+  const { isSystemAdmin, session } = useAppState();
+  // Nabız YALNIZCA Gerçek Sistem kipinde ve uygulama açıkken gönderilir; olağan
+  // API istekleri varlık yazmaz (bkz. hooks/usePresenceHeartbeat.js).
+  usePresenceHeartbeat(String(session?.dataMode || '').toLowerCase() === 'actual');
   const { openTask } = useTaskActions();
   const signOutState = useSignOut();
   const simpleMode = t.appMode === 'simple';

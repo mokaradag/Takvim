@@ -112,6 +112,7 @@ export function SystemQueuesTab({ enabled = true }) {
   const queue = outlook?.queue;
   const age = outlook?.age;
   const reminders = data?.reminders;
+  const assignmentMail = data?.assignmentMail;
   const wbs = data?.corporateWbs;
   const notice = stalenessNotice({ stale: resource.stale, lastUpdatedAt: resource.lastUpdatedAt, error: resource.error });
   // Hiç veri alınamadıysa bölümler BOŞ değil, ALINAMADI durumundadır.
@@ -303,6 +304,45 @@ export function SystemQueuesTab({ enabled = true }) {
                 </table>
               </div>
             ) : <p className="muted">Henüz hatırlatma turu kaydı yok.</p>}
+          </>
+        )}
+      </AdminSection>
+
+      <AdminSection
+        title="Atama bildirimi postaları"
+        icon="Mail"
+        description="Yalnızca görev panelindeki e-posta kutusu işaretlenerek kaydedilen işler kuyruğa girer; görev kaydı SMTP'yi beklemez."
+        loading={resource.loading}
+        error={requestError}
+      >
+        {assignmentMail && (
+          <>
+            <div className="sysadmin-worker-line">
+              <HealthDot state={workerState(assignmentMail.worker)} size={12} />
+              <span>
+                {assignmentMail.worker?.enabled
+                  ? `Çalışan ${assignmentMail.worker.started ? 'etkin' : 'durdu'} · tur aralığı ${formatDuration(assignmentMail.worker.intervalMs)}`
+                  : 'SMTP yapılandırılmamış; niyetler kuyrukta bekler.'}
+              </span>
+              {assignmentMail.schemaReady === false && <span className="sysadmin-chip sysadmin-chip-warn">şema eksik</span>}
+              {assignmentMail.worker?.lastResult?.reason && (
+                <span className="sysadmin-chip sysadmin-chip-warn">{assignmentMail.worker.lastResult.reason}</span>
+              )}
+            </div>
+            {assignmentMail.queue ? (
+              <div className="sysadmin-tile-grid">
+                <MetricTile label="Bekleyen" value={assignmentMail.queue.pending} unit="count" icon="Clock"
+                  tone={assignmentMail.queue.pending > 0 ? 'warn' : 'neutral'} />
+                {/* BAŞARISIZ kayıt kendiliğinden yeniden denenmez; sayının
+                    görünür kalması tek uyarı yoludur. */}
+                <MetricTile label="Başarısız" value={assignmentMail.queue.failed} unit="count" icon="Alert"
+                  tone={assignmentMail.queue.failed > 0 ? 'crit' : 'neutral'}
+                  hint={`${assignmentMail.queue.maxAttempts} denemeden sonra`} />
+                <MetricTile label="Gönderilen" value={assignmentMail.queue.sent} unit="count" icon="Mail" />
+                <MetricTile label="Sıradaki deneme" value={assignmentMail.queue.nextAttemptAt ? formatRelativeTime(assignmentMail.queue.nextAttemptAt) : '—'} unit="raw" icon="Refresh" />
+                <MetricTile label="Son gönderim" value={assignmentMail.queue.lastSentAt ? formatRelativeTime(assignmentMail.queue.lastSentAt) : 'henüz yok'} unit="raw" icon="Activity" />
+              </div>
+            ) : <p className="muted">Posta kuyruğu okunamadı; göç uygulanmamış olabilir.</p>}
           </>
         )}
       </AdminSection>

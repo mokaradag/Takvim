@@ -288,7 +288,7 @@ A manual smoke pass complements automated tests; it does not replace them. Any v
 
 Açık/koyu tema, normal/büyütülmüş yazı ve dar ekran için kontrol edin:
 
-- Her iki kipte Talepler düz menü öğesidir; üç sekme ok tuşlarıyla ve Home/End ile değişir. Arama/süzgeç sonrası sayfa başa döner.
+- Her iki kipte Talepler düz menü öğesidir; dört sekme ok tuşlarıyla ve Home/End ile değişir. Arama/süzgeç sonrası sayfa başa döner.
 - Zilde en fazla sekiz kart vardır; karar gerekenler belirgindir. Okundu/temizle geçmişi silmez; açık karar ve dikkat noktası kalır. Yeni karar yeniden okunmamış görünür.
 - Özetin beş KPI kartında zengin liste ve Tüm görevleri gör çalışır; pencere doğru küme/sayı ile açılır. Sorumlular Sicil ile ayrılır. Görev paneli kapanınca liste durumu, liste kapanınca Özet bağlamı korunur.
 - Temel Kipte Ctrl/Cmd+K ve arama düğmesi çalışır; Gantt sonucu yoktur. Kapsamlı Kipte Gantt vardır.
@@ -308,7 +308,7 @@ Açık/koyu tema, normal/büyütülmüş yazı ve dar/geniş pencere için:
 
 - Özet ve Proje Yapısı → Proje Tanımı'nı ortasına ve sonuna kaydırın. Üst çubuk ile sabit şerit arasında grafik/metin görünmemeli; şeridin altındaki 10 piksel boşluk korunmalı. Kurumsal filtre açılır menüleri ve proje sekmeleri tıklanabilmeli.
 - Raporlar → Performans'ta sekmeler ve tarih/organizasyon şeridi sabit kalmalı; aralarındaki 12 piksel boşlukta kaydırılan içerik görünmemeli. Özel tarih aralığında satır yüksekliği değişince sekmeler çakışmamalı. Görev Hareketleri'ne geçip sekme gezinmesini ve tablo kaydırmasını doğrulayın.
-- Sistem Yönetimi'nin altı sekmesinde sağlık şeridi ve sekmeler sabit kalmalı; yalnız alt panel kaymalı. Sekme değişince panel baştan açılmalı; Tab ve PageDown ile panel kaydırılabilmeli. Hatırlatma E-postaları'nın son düğmelerine ulaşılabilmeli.
+- Sistem Yönetimi'nin yedi sekmesinde sağlık şeridi ve sekmeler sabit kalmalı; yalnız alt panel kaymalı. Sekme değişince panel baştan açılmalı; Tab ve PageDown ile panel kaydırılabilmeli. Hatırlatma E-postaları'nın son düğmelerine ulaşılabilmeli.
 - Her iki Görevler kipinde, yetkili bir test görevinin hatırlatma sonucunu orta ve son satırlarda gösterin. Komşu zarf/silme simgeleri metni örtmemeli; yatay kaydırma ve tablo başlığı davranışı korunmalı. Demo Kip gerçek posta göndermemeli.
 - Kurumsal test posta kutusunda bir daveti iptal edin: tek takvim iletisi, önceki görev başlığı/tarihi, aynı UID ve yükselen SEQUENCE doğrulanmalı; `not supported calendar message.ics` görülmemeli. SMTP sonrası Outlook görünümü ayrıca kontrol edilmeli.
 
@@ -322,3 +322,71 @@ Açık/koyu tema, normal/büyütülmüş yazı ve dar/geniş pencere için:
 - Change both result selectors from 5 to 10/20/50. Verify independent results, unchanged ordering and empty states.
 - Proje Tanımı's browser and the expanded WBS tree reach the available bottom inset; controls remain reachable on short windows.
 - Temel Kip has a wider task title and narrower assignee, priority and deadline columns. Check long Turkish names, multiple assignees and action buttons.
+
+## Sekme simgesi ve marka
+
+- Uygulamayı açık ve koyu işletim sistemi temasında açın; tarayıcı sekmesindeki
+  pusula simgesi her ikisinde de okunaklı olmalı ve gövde çemberi ile ibre
+  seçilebilmeli.
+- Sekmeyi yer imlerine ekleyin ve 16 piksellik yer imi çubuğunda simgenin
+  bulanıklaşmadığını doğrulayın. Uygulama pusula logosu ile aynı biçim dilinde
+  olmalı; ilgisiz bir "M" harfi amblemi görünmemeli.
+- Ağ sekmesinde simge için ek bir dosya isteği görünmemeli.
+
+## Kurum dışı atama, koordinasyon ve bildirimler
+
+Açık/koyu tema, normal/büyütülmüş yazı ve 1440/1280/760 piksel genişliklerde:
+
+- Görev panelini açın: **Diğer birimlerden personel göster** anahtarı kapalı
+  gelmeli ve liste yalnızca kapsam içi personeli göstermeli. Anahtarı açın; iki
+  karakterden kısa yazıda istek gitmemeli, sonuçlar sınırlı kalmalı ve her satır
+  adın yanında kurumsal yolu göstermeli. Aynı adlı iki kişi ayrı satır olmalı.
+- Kapsam dışı bir kişi seçin: panel kaydetmenin **talep** oluşturacağını açıkça
+  söylemeli. Kaydedin; görev sorumlusu listesinde o kişinin **görünmediğini**,
+  Kanban/Özet/iş yükü sayılarının değişmediğini doğrulayın.
+- Yönetici hesabıyla **Talepler → Atama Koordinasyonu** sekmesini açın. Ok
+  tuşları ve Home/End ile dört sekme arasında gezinin. Arama, durum, proje,
+  talep eden, sorumlu, kurumsal yol ve tarih süzgeçlerini deneyin; süzgeç
+  değişince sayfa başa dönmeli.
+- Satırı açın: pencerede dört eylem bulunmalı (**Onayla**, **Değişiklik İste**,
+  **Reddet**, **Atamanın Kaldırılmasını İste**). Tab/Shift+Tab odağı içeride
+  tutmalı, Escape kapatmalı ve odak çağırana dönmeli. Onaylayın; sorumlunun
+  göreve gerçekten eklendiğini ve diğer sorumluların korunduğunu doğrulayın.
+- Talep edenin zilinde sonucun göründüğünü, en fazla sekiz önizleme kuralının
+  korunduğunu ve tarih talepleri ile atama bildirimlerinin **tek** listede
+  birleştiğini doğrulayın. İkinci bir zil olmamalı.
+- Bir göreve sorumlu ekleyin: eklenen kişinin zilinde bildirim çıkmalı, ekleyen
+  kişi kendi işlemi için bildirim almamalı. Yalnızca açıklama/etiket değiştirip
+  kaydedin; yeni bildirim çıkmamalı.
+- **Sorumlulara e-posta bildirimi gönder** kutusunun kapalı açıldığını, panel
+  kapatılıp yeniden açıldığında yine kapalı geldiğini ve işaretli kaydetmenin
+  gözle görülür bir bekleme yaratmadığını doğrulayın. Demo Kipte gerçek posta
+  gönderilmemeli.
+
+## Sistem Yönetimi → Aktif Kullanıcılar
+
+- Sekmeyi `SYSTEM_ADMIN` olmayan bir kullanıcıda görmemeli, adres satırından
+  zorlandığında da veri gelmemelidir.
+- Sekme kalan dikey alanı doldurmalı: sayfa gövdesi kaymamalı, yalnızca tablo
+  kaymalı ve sütun başlıkları sabit kalmalı. 760 piksel genişlikte de yatay
+  taşma olmamalı.
+- "Aktif" tanımı (son 3 dakika) ekranda yazmalı. KPI kartları ile tablo satır
+  sayısı tutarlı olmalı.
+- Aynı kullanıcıyla ikinci bir sekme açın: ağ sekmesinde nabzın yalnızca **bir**
+  sekmeden gittiğini ve tabloda kişinin **tek** satır olduğunu doğrulayın.
+  Nabız gönderen sekmeyi kapatın; kısa süre sonra diğer sekmenin devraldığını
+  görün.
+- Sekmeyi arka plana alın: yoklama durmalı, geri dönünce hemen tazelenmelidir.
+
+## Kanban sorumlu süzgeci ve hedef sıralaması
+
+- Sorumlu seçicisi Direktörlük/Müdürlük/Birim ile **aynı satırda** olmalı.
+  1280 ve 760 pikselde denetimler sıkışarak sarmalanmalı, hiçbiri kesilmemeli.
+- Aynı adlı iki çalışanın ayrı seçenek olduğunu doğrulayın. Arama ve kurumsal
+  seçimle birlikte çalıştığını, sütun sayaçlarının süzülmüş kümeyi saydığını ve
+  **Filtreleri temizle** ile sıfırlandığını kontrol edin.
+- Her sütun başlığında sıralama düğmesi sayacın yanında ve aynı satırda
+  olmalı. Varsayılan artan olmalı; tıklayınca yön değişmeli ve **yalnızca o
+  sütun** etkilenmeli. Hedefi olmayan görev her iki yönde de en altta kalmalı.
+  Düğmenin ipucu/erişilebilir adı yönü söylemeli; klavyeyle ulaşılabilmeli.
+- `prefers-reduced-motion` açıkken yeni denetimler animasyon üretmemeli.

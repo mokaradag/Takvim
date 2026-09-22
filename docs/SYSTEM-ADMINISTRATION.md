@@ -47,13 +47,14 @@ Hiyerarşi **tek düzeydir**; her sekme kendi içinde bölümlere ayrılır.
 | **Kuyruklar ve İşler** | Arka plan işleri akıyor mu, tıkanma var mı? |
 | **Hatalar ve Olaylar** | Ne oldu, kaç kez oldu, hâlâ sürüyor mu? |
 | **Entegrasyonlar** | Bağımlılıklara ulaşabiliyor muyuz? |
+| **Aktif Kullanıcılar** | Şu anda kimler uygulamayı kullanıyor? |
 | **Hatırlatma E-postaları** | Şablon, plan ve gönderim geçmişi |
 
 Sekmeler erişilebilir sekme anlamlarını kullanır (`role="tablist"/"tab"/
 "tabpanel"`, dolaşan `tabindex`, ok tuşları + `Home`/`End`). Etkin sekme
 yenilemeler arasında korunur.
 
-Sağlık şeridi ve sekmeler sayfanın üstünde sabit kalır. Altı sekmenin tamamında dikey kaydırma yalnızca alt içerik paneline uygulanır; panel ile sekmeler arasında 14 piksel boşluk vardır. Sekme değiştiğinde yeni panel baştan açılır. Panel klavyeyle odaklanıp kaydırılabilir; uzun tablolardaki mevcut iç kaydırma alanları ve yapışkan tablo başlıkları korunur.
+Sağlık şeridi ve sekmeler sayfanın üstünde sabit kalır. Yedi sekmenin tamamında dikey kaydırma yalnızca alt içerik paneline uygulanır; panel ile sekmeler arasında 14 piksel boşluk vardır. Sekme değiştiğinde yeni panel baştan açılır. Panel klavyeyle odaklanıp kaydırılabilir; uzun tablolardaki mevcut iç kaydırma alanları ve yapışkan tablo başlıkları korunur.
 
 Hatırlatma yönetimi **taşınmıştır, çatallanmamıştır**: var olan
 `ReminderSettingsView` olduğu gibi altıncı sekmeye gömülür. Yetki, şablon
@@ -279,6 +280,18 @@ kimliği ve ileti içeriği hiçbir koşulda gösterilmez.**
 Otomatik gönderimin açık/kapalı olması, okunur plan özeti ve son turların
 geçmişi (tür, durum, alıcı sayısı, aralık anahtarı, zaman).
 
+### Atama bildirimi postaları
+
+Görev panelindeki **Sorumlulara e-posta bildirimi gönder** kutusunun dayanıklı
+kuyruğu. Çalışan durumu ve tur aralığı, bekleyen · başarısız · gönderilen
+sayıları, sıradaki deneme ve son gönderim gösterilir. **Başarısız** sayısı ayrı
+ve vurgulu tutulur: deneme eşiği dolan kayıt kendiliğinden yeniden denenmez, bu
+yüzden sayının görünür kalması tek uyarı yoludur. Bölüm yalnızca sayı ve zaman
+taşır; **alıcı adresi, görev başlığı ve ileti gövdesi hiçbir koşulda
+gösterilmez.** `0015` göçü uygulanmamışsa bölüm sayı uydurmaz, "şema eksik" der.
+Kuyruk Outlook'tan bağımsızdır: kutu işaretlenmeden kaydedilen bir görev buraya
+hiç iş bırakmaz.
+
 ### CN43N / kurumsal WBS eşitlemesi
 
 Son eşitleme anı, eşitlenen proje ve düğüm sayısı, tazelik penceresi ve
@@ -371,6 +384,36 @@ pencereden eğilim çıkarılmaz.
 
 Bu kapsamda **e-posta uyarısı ya da dış çağrı sistemi yoktur**; uyarılar
 uygulama içindedir.
+
+---
+
+## 8b. Aktif Kullanıcılar sekmesi
+
+Sekme **yalnızca SYSTEM_ADMIN** içindir. Yetki, öteki yönetim uçlarıyla aynı kapıdan (`assertSystemAdmin`) sunucuda bağımsız olarak denetlenir; gezinmeyi gizlemek sınır değildir.
+
+### Tanım
+
+Bu liste "oturum açmış kullanıcılar" DEĞİLDİR. Tanım açıktır:
+
+> **Aktif = son 3 dakika içinde kimliği doğrulanmış bir nabız (heartbeat) görülmüş kullanıcı.**
+
+Nabız aralığı **90 saniyedir** — pencerenin yarısından kısadır, böylece tek bir kayıp nabız kişiyi listeden düşürmez. Nabız yalnızca uygulama açık, sekme görünür ve kullanıcı Gerçek Sistem kipindeyken gönderilir. **Olağan API istekleri varlık yazmaz** ve istek düzeyinde telemetri satırı üretilmez.
+
+### Sekmeler arası davranış
+
+Aynı tarayıcıdaki sekmeler paylaşılan bir kilit üzerinden **tek önder** seçer; yalnızca önder nabız gönderir. Önderin sekmesi kapanır ya da donarsa kilit bayatlar (iki nabız aralığı) ve başka bir sekme devralır. Paylaşılan depo kullanılamıyorsa (özel kip, engellenmiş site verisi) her sekme kendi nabzını gönderir; Sicil başına tek satır yazıldığı için maliyet yine sınırlıdır.
+
+Tarayıcı kapanışı, ağ kesintisi ve oturum düşmesi ayrıca ele alınmaz: nabız durur ve kullanıcı pencere dolunca listeden kendiliğinden çıkar. Birden çok uygulama örneği aynı satırı günceller; satır sayısı örnek sayısıyla büyümez.
+
+### Ekran
+
+Üstte kompakt KPI kartları durur: **Şu anda aktif**, **Son 15 dk aktif**, **Aktif direktörlük**, **Aktif müdürlük**. Altındaki tablo Ad Soyad, Sicil, Direktörlük, Müdürlük, Birim, aktif olduğu süre ve son görülme sütunlarını taşır; yalnızca sistem yöneticisinin zaten görmeye yetkili olduğu künye gösterilir.
+
+Yerleşim kalan yüksekliği doldurur: kartlar üstte sabit kalır, tablo alanı kalan alanı kaplar, altta kullanılmayan boşluk bırakılmaz, yalnızca tablo gövdesi kaydırılır ve tablo başlığı satırlar kayarken görünür kalır. Davranış var olan sabit sağlık şeridi / sekme yerleşimiyle uyumludur.
+
+### Başarım
+
+Veri **yalnızca bu sekme etkinken** 30 saniyede bir yoklanır; sekme gizliyken yoklama durur (`useAdminResource`). Varlık verisi ana uygulama anlık görüntüsüne hiçbir zaman girmez. Sorgu `IX_MR_UserPresence_LastSeenAt` dizinini kullanır, son 15 dakikayla sınırlıdır ve en fazla 200 satır döndürür.
 
 ---
 
@@ -552,6 +595,26 @@ yineleme yeni satır açar; iki gün arayla yaşanan iki kesinti geçmişte ayr�
 durmalıdır.
 
 Geri alma betiği (`MR_Rollback_Durable_Persistence.sql`) bu tabloları da düşürür.
+
+### 0015 · Atama koordinasyonu, bildirimler, posta kuyruğu ve varlık
+
+`0014` uygulandıktan **sonra** çalıştırılır:
+
+```
+database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql
+```
+
+| Tablo | İçerik | Anahtar / dizin |
+| --- | --- | --- |
+| `MR_TaskAssignmentCoordinations` | Kurum dışı atama talebi/bildirimi ve kararı | PK `CoordinationId`; **benzersiz** açık kayıt `(TaskId, RequestedAssigneeSicil)`; görev ve talep eden dizinleri |
+| `MR_AssignmentCoordinationRecipients` | Alıcı kümesi ve okundu/temizlendi sürümü | PK `(CoordinationId, Sicil)`; `IX_…_Sicil` |
+| `MR_TaskNotifications` | Zil olayları (atandı / kaldırıldı) | PK `NotificationId`; **benzersiz** `(RecipientSicil, EventKey)`; `IX_…_RecipientOccurred` |
+| `MR_TaskMailOutbox` | Dayanıklı e-posta niyeti ve teslimat durumu | PK `MailId`; **benzersiz** `DedupeKey`; `IX_…_Due` |
+| `MR_UserPresence` | Sicil başına TEK nabız satırı | PK `Sicil`; `IX_…_LastSeenAt` |
+
+Betik yinelenebilir ve veriye dokunmaz. Göç uygulanmadan açılan kurulumda zil, var olan tarih talebi akışıyla çalışmayı sürdürür; posta kuyruğu ve varlık sessizce kapalı davranır ve görev yazması etkilenmez. Geri alma betiği bu tabloları da düşürür.
+
+Posta kuyruğu `SMTP_HOST`/`SMTP_FROM` tanımlı olmadığında hiç çalışmaz ve niyetler kuyrukta bekler. `MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30000, 5000–300000 arası) tur aralığını belirler. Altı denemeden sonra kayıt `FAILED` olur; başarısızlık kodu satırda saklanır ve gizli bilgi taşımaz.
 
 ---
 

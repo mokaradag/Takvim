@@ -92,6 +92,7 @@ async function readBodyWithinLimit(request) {
 
 async function handleCommit(request) {
   try {
+    let notifyAssignees = false;
     const changes = await observePhase('phase.commit.request-validation', async () => {
       assertBodyWithinLimit(request);
       const raw = await readBodyWithinLimit(request);
@@ -104,6 +105,9 @@ async function handleCommit(request) {
       if (!body || typeof body !== 'object' || !body.changes || typeof body.changes !== 'object') {
         throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir değişiklik kümesi gönderilmelidir.', { status: 400 });
       }
+      // İsteğe bağlı e-posta bildirimi: yalnızca AÇIK `true` kabul edilir ve
+      // kalıcı bir tercihe dönüşmez (bkz. server/notifications/taskMailOutbox.js).
+      notifyAssignees = body.notifyAssignees === true;
       const changes = canonicalizeCommitScalars(canonicalizeCommitChanges(body.changes));
       const issue = findCommitChangeIssue(changes)
         || findNestedCommitCollectionIssue(changes)
@@ -117,7 +121,7 @@ async function handleCommit(request) {
       }
       return changes;
     });
-    const result = await createOrderedSqlAppRepository().commitChanges(changes);
+    const result = await createOrderedSqlAppRepository().commitChanges({ ...changes, notifyAssignees });
     return observePhase('phase.commit.response', async () => Response.json(result, {
       headers: { 'cache-control': 'no-store' }
     }));

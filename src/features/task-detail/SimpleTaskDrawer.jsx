@@ -15,6 +15,9 @@ import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
+import { ExternalAssigneePicker } from '../assignment-coordination/ExternalAssigneePicker.jsx';
+import { useAssignmentRequestDraft } from '../assignment-coordination/useAssignmentRequestDraft.js';
+import { AssigneeMailToggle } from '../assignment-coordination/AssigneeMailToggle.jsx';
 import { useAllProjects, useAllPeople, useAssignmentScopeSicils } from '../../state/hooks';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
@@ -73,7 +76,6 @@ export function SimpleTaskDrawer({
   };
 
   const dismiss = onClose;
-  const primaryAction = () => onSave?.({ ...local, task: titleDraft.trim(), keyword: String(local.keyword || '').trim() });
 
   const selectedAssignees = useMemo(() => {
     // Fotoğraf kimlikleri de taşınır: rehberde çözülemeyen eş sorumlular için
@@ -125,6 +127,15 @@ export function SimpleTaskDrawer({
     if (assignmentScopeOnly && !ids.length) return;
     save(taskAssigneeMutationPatch(local, people, ids));
   };
+
+  // Kurum dışı personel seçimi ve isteğe bağlı e-posta bildirimi Kapsamlı Kiple
+  // AYNI kuralları kullanır; ikinci bir uygulama yazılmaz.
+  const assignmentRequests = useAssignmentRequestDraft({ assignmentScopeOnly, canManageAssignees });
+  const [notifyAssignees, setNotifyAssignees] = useState(false);
+  const primaryAction = () => onSave?.(
+    { ...local, task: titleDraft.trim(), keyword: String(local.keyword || '').trim() },
+    { notifyAssignees, assignmentRequest: assignmentRequests.assignmentRequest }
+  );
 
   const priority = normalizePriorityId(local.priority);
   const pendingScheduleRequest = scheduleRequests.find(
@@ -218,6 +229,17 @@ export function SimpleTaskDrawer({
                   : ''}
               </small>
             )}
+            <ExternalAssigneePicker
+              disabled={isSaving}
+              assignedSicils={(local.assigneeIds || []).map(String)}
+              canAssignDirectly={assignmentRequests.canAssignDirectly}
+              onAssignDirectly={(person) => setAssignees([...(local.assigneeIds || []), String(person.sicil)])}
+              requestedAssignees={assignmentRequests.requested}
+              onRequestAssignee={assignmentRequests.requestAssignee}
+              onCancelRequest={assignmentRequests.cancelRequest}
+              requestNote={assignmentRequests.note}
+              onRequestNoteChange={assignmentRequests.setNote}
+            />
           </div>
 
           <label className="simple-field">
@@ -315,6 +337,7 @@ export function SimpleTaskDrawer({
             <Icons.Calendar size={13} /> {pendingScheduleRequest ? 'Öneriyi değiştir' : 'Yeni tarih öner'}
           </button>}
           <div style={{ flex: 1 }} />
+          <AssigneeMailToggle checked={notifyAssignees} disabled={isSaving} onChange={setNotifyAssignees} />
           <button className="btn primary" onClick={primaryAction} disabled={isSaving || !titleValid} aria-busy={isSaving}>
             {isSaving ? <Spinner size={13} /> : <Icons.Save size={14} />} {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>

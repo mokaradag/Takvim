@@ -4,6 +4,10 @@ import { sql, withSqlTransaction } from '../db/pool.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 import { applyDefaultCalendarProjection } from './calendarProjection.js';
 import { readScheduleInbox } from '../schedule-change/scheduleRequestQueries.js';
+import {
+  isMissingNotificationInboxSchema,
+  readNotificationInbox
+} from '../notifications/notificationInboxQueries.js';
 import { observePhase } from '../observability/observeOperation.js';
 
 function missingScheduleRequestSchema(error) {
@@ -27,6 +31,22 @@ async function loadScheduleChanges(executor, auth) {
     // Uygulama paketi göçten önce açılırsa eski kurulum kullanılabilir kalır;
     // başka bütün SQL hataları yine görünür biçimde yükseltilir.
     if (missingScheduleRequestSchema(error)) return { items: [], unreadCount: 0, pendingCount: 0 };
+    throw error;
+  }
+}
+
+const EMPTY_NOTIFICATION_INBOX = Object.freeze({
+  coordination: Object.freeze({ items: [], unreadCount: 0, pendingCount: 0 }),
+  taskEvents: Object.freeze({ items: [], unreadCount: 0, pendingCount: 0 }),
+  unreadCount: 0,
+  pendingCount: 0
+});
+
+async function loadNotificationInbox(executor, auth) {
+  try {
+    return await readNotificationInbox(executor, auth);
+  } catch (error) {
+    if (isMissingNotificationInboxSchema(error)) return EMPTY_NOTIFICATION_INBOX;
     throw error;
   }
 }
@@ -61,9 +81,29 @@ export function createProjectedSqlAppRepository() {
       const { snapshot, auth } = await baseRepository.readSnapshotWithAuthorization(transaction);
       const defaultCalendarId = await loadDefaultCalendarId(transaction);
       const scheduleInbox = await observePhase('phase.snapshot.schedule-inbox', () => loadScheduleChanges(transaction, auth));
+      // Zil ikinci bir altyapı değildir: atama koordinasyonu ve görev bildirimi
+      // aynı merkezde, TEK ek sorguyla ve yine sekizer satırlık önizlemeyle
+      // taşınır (bkz. server/notifications/notificationInboxQueries.js).
+      const notificationInbox = await observePhase(
+        'phase.snapshot.notification-inbox',
+        () => loadNotificationInbox(transaction, auth)
+      );
       Object.assign(snapshot, applyDefaultCalendarProjection(snapshot, defaultCalendarId));
       return {
-        snapshot: { ...snapshot, scheduleRequests: scheduleInbox.items, scheduleRequestSummary: { unreadCount: scheduleInbox.unreadCount, pendingCount: scheduleInbox.pendingCount } },
+        snapshot: {
+          ...snapshot,
+          scheduleRequests: scheduleInbox.items,
+          scheduleRequestSummary: {
+            unreadCount: scheduleInbox.unreadCount,
+            pendingCount: scheduleInbox.pendingCount
+          },
+          assignmentCoordinations: notificationInbox.coordination.items,
+          taskNotifications: notificationInbox.taskEvents.items,
+          notificationSummary: {
+            unreadCount: notificationInbox.unreadCount,
+            pendingCount: notificationInbox.pendingCount
+          }
+        },
         auth
       };
     }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE }));

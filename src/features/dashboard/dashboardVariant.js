@@ -20,6 +20,9 @@ const ADVANCED_KPI_COLUMNS = Object.freeze([
   Object.freeze({ key: 'proje', label: 'Proje', filterType: 'multi' }),
   Object.freeze({ key: 'sorumlu', label: 'Sorumlu', filterType: 'multi' }),
   Object.freeze({ key: 'status', label: 'Durum', filterType: 'multi' }),
+  // Öncelik, Görevler tablosuyla AYNI kanonik modeli ve görsel dili kullanır;
+  // ikinci bir öncelik uygulaması yoktur (bkz. domain/constants · PRIORITIES).
+  Object.freeze({ key: 'priority', label: 'Öncelik', filterType: 'multi' }),
   Object.freeze({ key: 'plannedStart', label: 'Başlangıç', filterType: 'date' }),
   Object.freeze({ key: 'plannedFinish', label: 'Bitiş', filterType: 'date' }),
   Object.freeze({ key: 'targetFinish', label: 'Hedef', filterType: 'date' })
@@ -43,6 +46,9 @@ const ADVANCED = Object.freeze({
   kpiColumns: ADVANCED_KPI_COLUMNS,
   kpiDateMode: 'effective',
   kpiDateLegend: true,
+  // Varsayılan sıralama HEDEF tarihe göre eskiden yeniye; tarihi olmayan görev
+  // en altta kalır (bkz. KpiTaskModal · KPI_DEFAULT_SORT).
+  kpiDefaultSortKey: 'targetFinish',
   kpiSearchPlaceholder: 'Görev, proje veya sorumlu…',
   hygieneCheckIds: null,
   hygieneTitle: 'Plan bütünlüğü',
@@ -77,6 +83,9 @@ const SIMPLE = Object.freeze({
   kpiColumns: SIMPLE_KPI_COLUMNS,
   kpiDateMode: 'planned',
   kpiDateLegend: false,
+  // Temel Kipte kanonik hedef bitiş alanı TERMİN olarak adlandırılır; sıralama
+  // anahtarı aynı alandır.
+  kpiDefaultSortKey: 'targetFinish',
   kpiSearchPlaceholder: 'Görev, proje, sorumlu veya kısa açıklama…',
   hygieneCheckIds: SIMPLE_QUALITY_CHECK_IDS,
   hygieneTitle: 'Görev kalitesi',

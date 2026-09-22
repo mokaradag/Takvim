@@ -59,8 +59,12 @@ test('Actual commits validate the final dependency graph under transaction locks
   assert.match(source, /const cycleTaskIds = findDependencyCycle\(projectEdges\.get\(projectId\) \|\| \[\]\);/);
   assert.match(
     source,
-    /return withSqlTransaction\(async \(transaction\) => \{\s+const plannedChanges = await planIntegrity\(transaction, changes\);\s+return baseRepository\.commitChanges\(plannedChanges\);/s
+    /return withSqlTransaction\(async \(transaction\) => \{\s+const plannedChanges = await planIntegrity\(transaction, changes\);[\s\S]*?return baseRepository\.commitChanges\(plannedChanges\);/s
   );
+  // İşlem başına e-posta tercihi taşınırken planlanan nesne KOPYALANMAZ:
+  // bağımlılık planlama işareti sayılamayan bir simgedir ve yayılma onu düşürür.
+  assert.match(source, /if \(input\?\.notifyAssignees === true\) plannedChanges\.notifyAssignees = true;/);
+  assert.doesNotMatch(source, /baseRepository\.commitChanges\(\{ \.\.\.plannedChanges/);
 });
 
 test('recurrence occurrence creation locks the template in the same hardened transaction', () => {

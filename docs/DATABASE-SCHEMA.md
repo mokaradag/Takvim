@@ -28,6 +28,11 @@ Identity values in `uniqueidentifier` columns are only required to be valid GUID
 | `MR_ReminderSettings` | Single-row reminder template and automatic policy | PK `SettingsId` with `CHECK (SettingsId = 1)`; rowversion |
 | `MR_TaskReminderLog` | Append-only reminder send history and duplicate-send claim | identity PK; `IX_MR_TaskReminderLog_Task_Created`; filtered unique `UX_MR_TaskReminderLog_AutomaticSlot` on `(TaskId, SlotKey)` where `ReminderKind = 'AUTOMATIC'` |
 | `MR_TaskOutlookSubscriptions` | Durable Task+Sicil Outlook calendar subscription and delivery outbox | identity PK; unique `UX_MR_TaskOutlookSubs_Task_User` on `(TaskId, UserSicil)`; filtered `IX_MR_TaskOutlookSubs_Pending`; `IX_MR_TaskOutlookSubs_User_Active`; rowversion |
+| `MR_TaskAssignmentCoordinations` | Durable cross-organizational assignment coordination record (request or notice) and its decision history | PK `CoordinationId`; filtered unique open `UX_…_OpenRequest` on `(TaskId, RequestedAssigneeSicil)`; `IX_…_TaskStatus`; `IX_…_RequesterStatus`; rowversion |
+| `MR_AssignmentCoordinationRecipients` | Per-Sicil coordination inbox state (manager, requester or assignee) | PK `(CoordinationId, Sicil)`; coordination FK; `IX_MR_AssignmentCoordinationRecipients_Sicil` |
+| `MR_TaskNotifications` | Durable per-Sicil task event notifications (assigned/unassigned) | PK `NotificationId`; unique `UX_…_RecipientEvent` on `(RecipientSicil, EventKey)`; `IX_…_RecipientOccurred`; rowversion |
+| `MR_TaskMailOutbox` | Durable optional assignment e-mail queue | identity PK `MailId`; unique `UX_MR_TaskMailOutbox_DedupeKey`; `IX_MR_TaskMailOutbox_Due` |
+| `MR_UserPresence` | One row per Sicil with the last authenticated heartbeat | PK `Sicil`; `IX_MR_UserPresence_LastSeenAt` |
 
 ## Rowversion
 
@@ -203,6 +208,88 @@ table lock, and it degrades quietly: when the migration has not been applied the
 application keeps running and the console reports the missing schema instead of
 failing.
 
+## Atama koordinasyonu şeması
+
+`MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql` beş tablo ekler. Ortak
+kural: **hiçbiri gerçek atama ilişkisinin yerine geçmez.** Bir görevin sorumlusu
+her zaman yalnızca `MR_TaskAssignees` satırıdır; koordinasyon kaydı beklemedeyken
+o satır yazılmaz, dolayısıyla iş yükü, Özet, Kanban, hatırlatma ve Outlook
+yalnızca gerçek sorumluyu görür.
+
+`MR_TaskAssignmentCoordinations` bir talebi (`Mode = 'REQUEST'`) ya da
+bilgilendirme kaydını (`Mode = 'NOTICE'`) taşır: `TaskId`, `RequesterSicil`,
+`RequestedAssigneeSicil`, `SuggestedAssigneeSicil` (yerine kimin önerildiği),
+`Status`, istek/karar mesajları, `DecisionBySicil`, `OriginalAssigneeSicils`,
+`CorrelationId`, `CreatedAt`/`DecidedAt`, `CreatedAgainstTaskVersion binary(8)`
+ve kendi `RowVersion` değeri. Karar penceresinin yeniden çözmek zorunda kalmaması
+için referans alanları da saklanır: `TaskTitleSnapshot`, `ProjectIdSnapshot`,
+`ProjectNameSnapshot`, `ProjectCodeSnapshot`, `TargetFinishSnapshot`,
+`AssigneeNameSnapshot` ve hedef kişinin o andaki birim/müdürlük/direktörlük yolu
+(`AssigneeOrgSnapshot`). Bu alanlar *kanıt*tır, yetki kaynağı değildir — karar
+anında hem yönetici yetkisi hem görev erişimi canlı veriden yeniden türetilir.
+`CreatedAgainstTaskVersion` de aynı biçimde yalnızca tanıdır; bayatlık kararı
+kilitlenmiş güncel görevin sorumlu kümesiyle karşılaştırılarak verilir.
+
+Durum kümesi `PENDING`, `APPROVED`, `REJECTED`, `CHANGE_REQUESTED`,
+`CANCELLATION_REQUESTED`, `CANCELLED`, `STALE` ile sınırlıdır.
+`UX_MR_TaskAssignmentCoordinations_OpenRequest`, `Status IN ('PENDING',
+'CANCELLATION_REQUESTED')` üzerinde filtrelidir: bir görev/kişi çifti için aynı
+anda en fazla bir **açık** kayıt bulunabilir, ama kapanmış kararların tamamı
+geçmişte kalır. Yinelenen bir talep eskisini `CANCELLED` yapar, silmez.
+`MR_TaskReminderLog`, `MR_TaskOutlookSubscriptions` ve 0008 sonrası
+`MR_TaskScheduleChangeRequests` ile aynı gerekçeyle görev tablosuna yabancı
+anahtar **yoktur**: görev silindikten sonra da koordinasyon geçmişi okunabilir
+kalmalıdır.
+
+`MR_AssignmentCoordinationRecipients` kaydın kimin gelen kutusunda göründüğünü
+tutar: `RecipientRole` (`MANAGER` / `REQUESTER` / `ASSIGNEE`), `ReadVersion`,
+`DismissedVersion` ve `UpdatedAt`. Bildirim durumu `MR_ScheduleRequestNotifications`
+ile aynı deseni kullanır — saklanan sürüm **koordinasyon satırının**
+`RowVersion` değeridir, alıcı satırının kendi sürümü değil; bu yüzden okundu
+işaretlemek satırı yeniden okunmamış yapmaz, ama yeni bir karar onu haklı olarak
+yeniden okunmamış yapar. Yönetici kümesi HR verisinden küme hâlinde çözülür
+(birim ve müdürlük yöneticisi) ve Sicil bazında tekilleştirilir; ad-soyad
+eşleşmesi hiçbir aşamada kullanılmaz ve var olmayan bir kimliğe satır yazılmaz.
+Bekleyen bir talebin hedefi alıcı satırı almaz: talep geçmişi görev görünürlüğü
+vermez.
+
+`MR_TaskNotifications` zil bildiriminin kalıcı kaydıdır: `RecipientSicil`,
+`Kind` (`TASK_ASSIGNED` / `TASK_UNASSIGNED`), `TaskId`, `ActorSicil`, görev ve
+proje künyesi anlık alanları, toplulaştırılmış olaylar için `TaskCount`,
+`EventKey`, `OccurredAt`, `ReadAt`, `DismissedAt`.
+`UX_MR_TaskNotifications_RecipientEvent` bu tablonun idempotanlık ilkelidir:
+`EventKey` `"<CorrelationId>:<Kind>"` olduğundan aynı commit'in yeniden
+yürütülmesi ikinci satır üretmez ve bir toplu/yinelenen kaydetme alıcı başına tek
+satır yazar. Okundu/temizlendi burada **zaman damgasıdır, sürüm değildir**: bu
+satırın karşılaştırabileceği bir üst kayıt yok, kendi `RowVersion` değerine karşı
+sürüm saklamak ise okundu işaretinin sürümü yükseltip satırı anında yeniden
+okunmamış yapmasına yol açardı. Güncellemeler `COALESCE` ile tek yönlüdür, böylece
+geç gelen eski bir işlem yeni bir olayı temizleyemez.
+
+`MR_TaskMailOutbox` isteğe bağlı "Sorumlulara e-posta bildirimi gönder" kutusunun
+dayanıklı kuyruğudur: `Kind`, `TaskId`, `RecipientSicil`, gönderim için gereken
+anlık künyeyi taşıyan `PayloadJson`, `DedupeKey`, `Status`
+(`PENDING`/`SENT`/`FAILED`), `AttemptCount`, `NextAttemptAt`, `LeaseExpiresAt`,
+`LastFailureCode`, `SentAt`. `UX_MR_TaskMailOutbox_DedupeKey`
+(`"<CorrelationId>:<TaskId>:<RecipientSicil>"`) aynı değişikliğin iki kez kuyruğa
+girmesini engeller; `IX_MR_TaskMailOutbox_Due` tarama maliyetini tüm tabloya
+değil kuyruktaki işe orantılı tutar. Satır commit işlemiyle **aynı transaction**
+içinde yazılır, SMTP ise ayrı bir çalışan tarafından tüketilir: `api.commit`
+hiçbir koşulda posta sunucusunu beklemez. Çalışan satırı `LeaseExpiresAt` ile
+kiralar, yeniden deneme üstel geri çekilme ile yapılır ve deneme eşiği
+dolduğunda satır `FAILED` olarak **kalır** — kaybolmaz, `LastFailureCode` ile
+incelenebilir.
+
+`MR_UserPresence` Sicil başına tek satır tutar: `FirstSeenAt`,
+`SessionStartedAt` ve `LastSeenAt`. Satır sayısı kullanıcı sayısıyla sınırlıdır,
+istek sayısıyla değil: nabız 90 saniyede bir ve yalnızca sekmeler arası kilidi
+tutan tek sekmeden gönderilir, hiçbir olağan istek yan etki olarak varlık
+yazmaz. `IX_MR_UserPresence_LastSeenAt` "son 3 dakika" penceresini sıralı okur ve
+sorgu sonuç sayısı da sınırlıdır.
+
+Beş tablonun tamamı yokken uygulama çalışmaya devam eder: sorgular eksik şemayı
+tanır, ilgili yüzey boş döner ve görev kaydetme etkilenmez.
+
 ## Index rationale
 
 - Project/status and Project/date indexes support Task lists, filters, Gantt, and target-date sorting.
@@ -215,6 +302,7 @@ failing.
 - The reminder log's Task/time index supports send history; its filtered unique slot index is the duplicate-send guard rather than a read optimization.
 - The Outlook subscription indexes are similarly split by purpose: the unique `(TaskId, UserSicil)` index is the duplicate-subscription guard, the filtered pending index keeps the outbox scan proportional to queued work rather than to the whole table, and the user/active index serves the drawer and task-table "added" state in one lookup.
 - Telemetry indexes follow the same split: `IX_MR_TelemetryOperationSamples_Bucket` and `IX_MR_TelemetryGaugeSamples_Metric` are read optimizations for bounded range queries, while `UX_MR_OperationalAlerts_ActiveKey` is a correctness constraint (one active alert per condition) rather than a read path. The operational-event indexes serve the two filters the console actually offers: newest-first time ranges and per-component drill-down.
+- The coordination, notification, mail and presence indexes keep the same split between guard and read path. `UX_MR_TaskAssignmentCoordinations_OpenRequest`, `UX_MR_TaskNotifications_RecipientEvent` and `UX_MR_TaskMailOutbox_DedupeKey` are correctness constraints — one open record per task and person, one notification per event and recipient, one queued mail per change and recipient. The remaining ones are read optimizations for bounded queries: `IX_…_TaskStatus` and `IX_…_RequesterStatus` plus `IX_MR_AssignmentCoordinationRecipients_Sicil` serve the Talepler page's server-side pagination and the coordination inbox, `IX_MR_TaskNotifications_RecipientOccurred` serves the bell preview, `IX_MR_TaskMailOutbox_Due` keeps the outbox drain proportional to queued work, and `IX_MR_UserPresence_LastSeenAt` serves the three-minute presence window. None of them is read on the snapshot or commit path.
 
 Indexes are limited to demonstrated repository and UI query patterns rather than being created for every column.
 
@@ -240,7 +328,9 @@ System administration telemetry is added by `database/MR_Upgrade_0012_System_Obs
 
 Schedule-change requests are added by `database/MR_Upgrade_0007_Task_Schedule_Change_Requests.sql`. The migration is idempotent, creates only the missing table/indexes, records `0007_task_schedule_change_requests`, and never rewrites existing Tasks. Fresh installations create the same object in `MR_Create_Durable_Persistence.sql`; rollback drops it before Task rows.
 
-The task-creator index is added by `database/MR_Upgrade_0014_Task_Creator_Index.sql`, the current head migration. It is idempotent, creates `IX_MR_Tasks_CreatedBySicil ON dbo.MR_Tasks(CreatedBySicil) INCLUDE (ProjectId)` only when absent, records `0014_task_creator_index`, and touches no data. It runs **after** `0013`. `MR_Tasks.CreatedBySicil = @sicil` is the predicate behind authorization context loading (every snapshot and every commit), the snapshot's own-scope project set and the authoritative mutation response's task-scoped project visibility; no other `MR_Tasks` index leads with or includes that column, so the predicate previously cost a full table scan whose price grew with the total task count rather than with the user's own tasks. The index is narrow (an `int` key plus `ProjectId`) and `MR_Tasks` is written by single-row interactive mutations, so the write overhead is bounded. Until the migration runs the queries stay correct and only lose the seek. Fresh installations create the same index in `MR_Create_Durable_Persistence.sql`; rollback drops it with the table.
+The task-creator index is added by `database/MR_Upgrade_0014_Task_Creator_Index.sql`. It is idempotent, creates `IX_MR_Tasks_CreatedBySicil ON dbo.MR_Tasks(CreatedBySicil) INCLUDE (ProjectId)` only when absent, records `0014_task_creator_index`, and touches no data. It runs **after** `0013`. `MR_Tasks.CreatedBySicil = @sicil` is the predicate behind authorization context loading (every snapshot and every commit), the snapshot's own-scope project set and the authoritative mutation response's task-scoped project visibility; no other `MR_Tasks` index leads with or includes that column, so the predicate previously cost a full table scan whose price grew with the total task count rather than with the user's own tasks. The index is narrow (an `int` key plus `ProjectId`) and `MR_Tasks` is written by single-row interactive mutations, so the write overhead is bounded. Until the migration runs the queries stay correct and only lose the seek. Fresh installations create the same index in `MR_Create_Durable_Persistence.sql`; rollback drops it with the table.
+
+Assignment coordination, task notifications, the assignment mail outbox and user presence are added by `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql`, the current head migration. It is idempotent, creates the five tables and their indexes only when absent, records `0015_assignment_coordination_and_presence`, and touches no existing data. It runs **after** `0014`. Fresh installations create the same objects in `MR_Create_Durable_Persistence.sql`; rollback drops them before the telemetry tables. Until the migration runs the application stays fully usable: cross-organizational assignment falls back to the existing direct-assignment rules, the bell shows only schedule-change requests, the optional assignment e-mail is a no-op and **Aktif Kullanıcılar** reports the missing schema instead of failing. See `docs/REQUESTS-AND-NOTIFICATIONS.md` and `docs/SYSTEM-ADMINISTRATION.md`.
 
 During the first corporate project synchronization, the repository fills `MR_Projects.LeadSicil` from the `PROJECT_MANAGER` role. No separate `0002` migration script is required while the application is being tested through clean database recreation.
 

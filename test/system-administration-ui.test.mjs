@@ -144,7 +144,7 @@ test('genel sayfalarda proje künyesi ve dışa aktarma gösterilmez', () => {
 
 /* ── Sekme yapısı ve erişilebilirlik ──────────────────────── */
 
-test('altı mantıksal sekme erişilebilir sekme anlamlarıyla çizilir', (t) => {
+test('yedi mantıksal sekme erişilebilir sekme anlamlarıyla çizilir', (t) => {
   withDataMode(t, 'demo');
   const view = mountComponent(SystemAdministrationView, {});
   t.after(() => view.unmount());
@@ -155,7 +155,8 @@ test('altı mantıksal sekme erişilebilir sekme anlamlarıyla çizilir', (t) =>
 
   const labels = SYSTEM_ADMIN_TABS.map((tab) => tab.label);
   assert.deepEqual(labels, [
-    'Genel Durum', 'Performans', 'Kuyruklar ve İşler', 'Hatalar ve Olaylar', 'Entegrasyonlar', 'Hatırlatma E-postaları'
+    'Genel Durum', 'Performans', 'Kuyruklar ve İşler', 'Hatalar ve Olaylar', 'Entegrasyonlar',
+    'Aktif Kullanıcılar', 'Hatırlatma E-postaları'
   ]);
 
   for (const tab of SYSTEM_ADMIN_TABS) {
@@ -587,6 +588,47 @@ test('kuyruk eylemi başarısız olduğunda hata bildirilir ve düğme kilitli k
     assert.equal(Boolean(action.props.busy), false, `${label} "çalışıyor" durumunda kalmamalıdır`);
     assert.equal(Boolean(action.props.disabled), false, `${label} yeniden kullanılabilir olmalıdır`);
   }
+});
+
+test('atama postası kuyruğu sayılarıyla görünür; şema eksikken bölüm hata vermez', async (t) => {
+  withDataMode(t, 'actual');
+  const mailSection = async (assignmentMail) => {
+    stubFetch(t, async () => Response.json({
+      ok: true,
+      generatedAt: '2026-09-12T10:00:00.000Z',
+      outlook: { enabled: false, worker: { started: false, enabled: false }, queue: null, age: null, items: [], maxAttempts: 6, pollIntervalMs: 5000 },
+      reminders: { automaticEnabled: false, schemaReady: true, history: [] },
+      corporateWbs: { configured: false },
+      assignmentMail
+    }));
+    const view = mountComponent(SystemQueuesTab, { enabled: true });
+    t.after(() => view.unmount());
+    await immediate();
+    view.render();
+    return findElement(view.output, (node) => node.props?.title === 'Atama bildirimi postaları');
+  };
+
+  const section = await mailSection({
+    schemaReady: true,
+    worker: { started: true, enabled: true, intervalMs: 30000, lastResult: { ok: true } },
+    queue: { pending: 3, failed: 1, sent: 12, nextAttemptAt: '2026-09-12T10:01:00.000Z', lastSentAt: '2026-09-12T09:55:00.000Z', maxAttempts: 6 }
+  });
+  assert.ok(section, 'posta kuyruğu bölümü çizilmelidir');
+  const tile = (label) => findElement(section, (node) => node.props?.label === label);
+  assert.equal(tile('Bekleyen').props.value, 3);
+  // BAŞARISIZ kayıt kendiliğinden yeniden denenmez; kritik tonla ayrılır.
+  assert.equal(tile('Başarısız').props.value, 1);
+  assert.equal(tile('Başarısız').props.tone, 'crit');
+  assert.equal(tile('Gönderilen').props.value, 12);
+
+  // Göç uygulanmamışken bölüm sayı UYDURMAZ; eksik şemayı söyler.
+  const degraded = await mailSection({
+    schemaReady: false,
+    worker: { started: true, enabled: true, intervalMs: 30000 },
+    queue: null
+  });
+  assert.equal(findElement(degraded, (node) => node.props?.label === 'Bekleyen'), null);
+  assert.match(JSON.stringify(degraded), /şema eksik/);
 });
 
 test('olay isteği başarısızken boş sonuç bildirilmez', async (t) => {

@@ -466,6 +466,10 @@ export function createHardenedSqlAppRepository() {
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
         const plannedChanges = await planIntegrity(transaction, changes);
+        // İşlem başına e-posta tercihi taşınır. Nesne KOPYALANMAZ: bağımlılık
+        // planlama işareti sayılamayan (non-enumerable) bir simge olarak durur
+        // ve yayılma (spread) onu düşürürdü.
+        if (input?.notifyAssignees === true) plannedChanges.notifyAssignees = true;
         return baseRepository.commitChanges(plannedChanges);
       });
     }

@@ -9,23 +9,50 @@ import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton, AnimatedNumber } from '../../components/ui-extras';
 import { useTasks, usePeople, useTaskActions } from '../../state/hooks';
 import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
+import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { TaskOrganizationFilterControls } from '../tasks/TaskOrganizationFilterControls.jsx';
 import { useSharedTaskOrganizationFilter } from '../tasks/TaskOrganizationFilterContext.jsx';
 import { useTaskOrganizationFilter } from '../tasks/useTaskOrganizationFilter.js';
 import { taskTableMatches } from '../tasks/taskTableFacets.js';
+import { useAllPeople } from '../../state/hooks';
+import {
+  KANBAN_SORT_LABELS,
+  createKanbanSortState,
+  kanbanAssigneeOptions,
+  matchesKanbanAssignee,
+  sortKanbanTasks,
+  toggleKanbanSort
+} from './kanbanBoardPolicy.js';
 
 /* ── Kanban (drag-and-drop, animated) ──────────────── */
 export function KanbanView() {
   const tasks = useTasks();
   const people = usePeople();
+  const directory = useAllPeople();
   const [search, setSearch] = useState2('');
+  const [assignee, setAssignee] = useState2('');
+  // Her pano kendi yönünü taşır; sıralama TÜMÜYLE istemcidedir.
+  const [sortState, setSortState] = useState2(createKanbanSortState);
   const { selection, setSelection } = useSharedTaskOrganizationFilter();
   const organization = useTaskOrganizationFilter(tasks, people, selection, setSelection);
-  const filteredTasks = useMemo2(
+  const searchedTasks = useMemo2(
     () => organization.filteredTasks.filter((task) => taskTableMatches(task, { search })),
     [organization.filteredTasks, search]
   );
-  const hasFilters = Boolean(search) || hasOrgSelection(organization.selection);
+  // Sorumlu seçenekleri O AN süzülmüş kümeden türetilir; seçim Sicil taşır.
+  const assigneeOptions = useMemo2(
+    () => kanbanAssigneeOptions(searchedTasks, directory),
+    [searchedTasks, directory]
+  );
+  const filteredTasks = useMemo2(
+    () => (assignee ? searchedTasks.filter((task) => matchesKanbanAssignee(task, assignee)) : searchedTasks),
+    [searchedTasks, assignee]
+  );
+  useEffect2(() => {
+    // Süzgeç daralınca artık seçilemeyen sorumlu kendiliğinden düşer.
+    if (assignee && !assigneeOptions.some((option) => option.value === assignee)) setAssignee('');
+  }, [assignee, assigneeOptions]);
+  const hasFilters = Boolean(search) || Boolean(assignee) || hasOrgSelection(organization.selection);
   const { openTask: onOpenTask, updateTask: onUpdateTask } = useTaskActions();
   const cols = [
     { id: 'todo', title: 'Yapılacak', icon: <Icons.Circle size={14} />, color: 'var(--status-todo)',
@@ -53,8 +80,9 @@ export function KanbanView() {
       const status = Object.prototype.hasOwnProperty.call(map, t.status) ? t.status : 'todo';
       map[status].push(t);
     });
+    for (const id of Object.keys(map)) map[id] = sortKanbanTasks(map[id], sortState[id]);
     return map;
-  }, [filteredTasks]);
+  }, [filteredTasks, sortState]);
 
   const onDragStart = (id) => setDragId(id);
   const onDragEnd = () => { setDragId(null); setDragOver(null); };
@@ -83,8 +111,33 @@ export function KanbanView() {
           <input aria-label="Kanban görevlerinde ara" placeholder="Görev, proje, sorumlu, etiket..." value={search} onChange={(event) => setSearch(event.target.value)} />
           {search && <button type="button" className="icon-btn" aria-label="Aramayı temizle" onClick={() => setSearch('')}><Icons.Close size={12} /></button>}
         </div>
-        <TaskOrganizationFilterControls organization={organization} />
-        {hasFilters && <button type="button" className="btn ghost sm" onClick={() => { setSearch(''); setSelection(createEmptyOrgFilter()); }}><Icons.Close size={12} /> Filtreleri temizle</button>}
+        {/* Sorumlu süzgeci kurumsal süzgeçlerle AYNI satırda durur; dar ekranda
+            aynı taşma paneline katlanır ve araç çubuğuna satır eklenmez. */}
+        <TaskOrganizationFilterControls
+          organization={organization}
+          extraControls={(
+            <SearchableSelect
+              className="task-org-select"
+              value={assignee}
+              options={[
+                { value: '', label: 'Tüm sorumlular', icon: <Icons.Users size={12} /> },
+                ...assigneeOptions.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                  description: option.value,
+                  keywords: [option.label, option.value],
+                  icon: <Icons.Users size={12} />
+                }))
+              ]}
+              onChange={setAssignee}
+              searchPlaceholder="Ad veya sicil ara"
+              ariaLabel="Sorumlu filtresi"
+              disabled={assigneeOptions.length === 0}
+              compact
+            />
+          )}
+        />
+        {hasFilters && <button type="button" className="btn ghost sm" onClick={() => { setSearch(''); setAssignee(''); setSelection(createEmptyOrgFilter()); }}><Icons.Close size={12} /> Filtreleri temizle</button>}
         <span className="muted tabular kanban-filter-count" role="status">{filteredTasks.length} / {tasks.length} görev</span>
       </div>
     <div className="kanban">
@@ -97,6 +150,17 @@ export function KanbanView() {
               <span style={{ display: 'inline-grid', placeItems: 'center', width: 22, height: 22, borderRadius: 5, color: c.color, background: `color-mix(in oklab, ${c.color} 14%, transparent)` }}>{c.icon}</span>
               <span style={{ fontWeight: 700, fontSize: 13.5, color: c.color, letterSpacing: '-0.005em' }}>{c.title}</span>
               <span className="count tabular" style={{ color: c.color, background: `color-mix(in oklab, ${c.color} 12%, transparent)`, padding: '1px 8px', borderRadius: 99, fontSize: 11.5, fontWeight: 600 }}><AnimatedNumber value={items.length} duration={500} /></span>
+              {/* Sıralama denetimi sayacın YANINDA, aynı satırda durur ve
+                  panoya dikey yükseklik eklemez. */}
+              <button
+                type="button"
+                className="kanban-sort-toggle"
+                aria-label={KANBAN_SORT_LABELS[sortState[c.id]]}
+                title={KANBAN_SORT_LABELS[sortState[c.id]]}
+                onClick={() => setSortState((current) => toggleKanbanSort(current, c.id))}
+              >
+                {sortState[c.id] === 'desc' ? <Icons.ChevronDown size={12} /> : <Icons.ChevronUp size={12} />}
+              </button>
               <InfoButton title={c.title} icon={c.icon}>
                 <p>{c.help}</p>
                 <div className="rt-sep" />

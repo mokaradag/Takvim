@@ -36,7 +36,14 @@ function optionList(options, allLabel) {
   ];
 }
 
-export function TaskOrganizationFilterControls({ organization }) {
+/**
+ * @param {object} props
+ * @param {object} props.organization kurumsal filtre durumu
+ * @param {import('react').ReactNode} [props.extraControls] aynı satırda duran ek
+ *   süzgeç (örn. Kanban · Sorumlu). Dar ekranda aynı taşma paneline katlanır;
+ *   araç çubuğuna ikinci bir satır eklenmez.
+ */
+export function TaskOrganizationFilterControls({ organization, extraControls = null }) {
   const compactLayout = useSyncExternalStore(
     subscribeToLayoutChange,
     compactLayoutSnapshot,
@@ -77,6 +84,7 @@ export function TaskOrganizationFilterControls({ organization }) {
         disabled={organization.unitOptions.length === 0}
         compact
       />
+      {extraControls}
     </div>
   );
 

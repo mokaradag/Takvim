@@ -42,6 +42,11 @@ export function acknowledgeAlertRequest(alertId, options = {}) {
   }, options);
 }
 
+/** Aktif kullanıcılar. YALNIZCA sekme etkinken yoklanır. */
+export function loadSystemPresenceRequest(options = {}) {
+  return requestJson(`${BASE}/presence`, { method: 'GET' }, options);
+}
+
 export function loadSystemIntegrationsRequest(options = {}) {
   return requestJson(`${BASE}/integrations`, { method: 'GET' }, options);
 }

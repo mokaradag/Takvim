@@ -57,7 +57,11 @@ test('snapshot API completes assignees only for already-authorized visible task 
   assert.equal((snapshotSource.match(/MR_V_PeopleDirectory/g) || []).length, 1);
   assert.match(snapshotSource, /LEFT JOIN #Directory pd ON pd\.Sicil = ta\.Sicil/);
   assert.match(snapshotSource, /return applyTaskAssigneeProjection/);
-  assert.match(repositorySource, /snapshot: \{ \.\.\.snapshot, scheduleRequests: scheduleInbox\.items, scheduleRequestSummary:/);
+  assert.match(repositorySource, /snapshot: \{\s+\.\.\.snapshot,\s+scheduleRequests: scheduleInbox\.items,\s+scheduleRequestSummary:/);
+  // Zil ikinci bir altyapı değildir: atama koordinasyonu ve görev bildirimi
+  // aynı işlemde, TEK ek sorguyla ve yine sınırlı önizlemeyle taşınır.
+  assert.match(repositorySource, /assignmentCoordinations: notificationInbox\.coordination\.items/);
+  assert.match(repositorySource, /taskNotifications: notificationInbox\.taskEvents\.items/);
   assert.match(routeSource, /const repository = createProjectedSqlAppRepository\(\);/);
   assert.match(routeSource, /loadSnapshotForRequest\(request, repository\)/);
 

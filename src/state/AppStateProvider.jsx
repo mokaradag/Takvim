@@ -429,9 +429,11 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       state: stateRef.current,
       input: taskInput,
       id: draft.task.id,
+      // E-posta tercihi işlem başınadır; kalıcı bir kullanıcı ayarı olarak
+      // saklanmaz (bkz. data/api/createApiRepository.js · notifyAssignees).
       mutate: (operation, action) => persistence.mutate(operation, (current) => {
         return prepareTaskCreationCommit(current, action(current), options);
-      })
+      }, { notifyAssignees: options.notifyAssignees === true })
     });
     if (!result.ok || !created) return result;
     // Yavaş kayıt sürerken kullanıcı A taslağını kapatıp B taslağını açmış

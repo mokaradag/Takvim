@@ -1,5 +1,6 @@
 import { taskActivityRecordsets } from './taskActivitySql.mjs';
 import { runObservabilityQuery } from './observabilitySql.mjs';
+import { runAssignmentCoordinationQuery } from './assignmentCoordinationSql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -137,6 +138,59 @@ export function createFakeDatabase(seed = {}) {
       AssignedBySicil: entry.AssignedBySicil ?? null
     })),
     scheduleNotifications: [],
+    // 0015 · atama koordinasyonu, zil bildirimi, posta kuyruğu ve varlık.
+    taskAssignmentCoordinations: (seed.taskAssignmentCoordinations || []).map((entry) => ({
+      ...entry,
+      CoordinationId: guid(entry.CoordinationId || newGuid()),
+      TaskId: guid(entry.TaskId),
+      ProjectIdSnapshot: guid(entry.ProjectIdSnapshot),
+      Mode: entry.Mode || 'REQUEST',
+      Status: entry.Status || 'PENDING',
+      OriginalAssigneeSicils: entry.OriginalAssigneeSicils ?? '',
+      SuggestedAssigneeSicil: entry.SuggestedAssigneeSicil ?? null,
+      DecisionBySicil: entry.DecisionBySicil ?? null,
+      DecisionMessage: entry.DecisionMessage ?? null,
+      CreatedAt: entry.CreatedAt || new Date().toISOString(),
+      DecidedAt: entry.DecidedAt ?? null,
+      RowVersion: nextVersion()
+    })),
+    assignmentCoordinationRecipients: (seed.assignmentCoordinationRecipients || []).map((entry) => ({
+      ...entry,
+      CoordinationId: guid(entry.CoordinationId),
+      Sicil: Number(entry.Sicil),
+      RecipientRole: entry.RecipientRole || 'MANAGER',
+      ReadVersion: entry.ReadVersion ?? null,
+      DismissedVersion: entry.DismissedVersion ?? null
+    })),
+    taskNotifications: (seed.taskNotifications || []).map((entry) => ({
+      ...entry,
+      NotificationId: guid(entry.NotificationId || newGuid()),
+      TaskId: guid(entry.TaskId),
+      ReadAt: entry.ReadAt ?? null,
+      DismissedAt: entry.DismissedAt ?? null,
+      TaskCount: entry.TaskCount ?? 1,
+      OccurredAt: entry.OccurredAt || new Date().toISOString(),
+      RowVersion: nextVersion()
+    })),
+    taskMailOutbox: (seed.taskMailOutbox || []).map((entry, index) => ({
+      ...entry,
+      MailId: entry.MailId ?? index + 1,
+      TaskId: guid(entry.TaskId),
+      Status: entry.Status || 'PENDING',
+      AttemptCount: entry.AttemptCount ?? 0,
+      NextAttemptAt: entry.NextAttemptAt || new Date(0).toISOString(),
+      LeaseExpiresAt: entry.LeaseExpiresAt ?? null,
+      CreatedAt: entry.CreatedAt || new Date().toISOString(),
+      UpdatedAt: entry.UpdatedAt || new Date().toISOString(),
+      SentAt: entry.SentAt ?? null
+    })),
+    userPresence: (seed.userPresence || []).map((entry) => ({
+      Sicil: Number(entry.Sicil),
+      FirstSeenAt: entry.FirstSeenAt || new Date().toISOString(),
+      SessionStartedAt: entry.SessionStartedAt || entry.FirstSeenAt || new Date().toISOString(),
+      LastSeenAt: entry.LastSeenAt || new Date().toISOString()
+    })),
+    assignmentCoordinationSchemaMissing: seed.assignmentCoordinationSchemaMissing === true,
     taskScheduleChangeRequests: (seed.taskScheduleChangeRequests || []).map((entry) => ({
       RequestId: guid(entry.RequestId || newGuid()),
       TaskId: guid(entry.TaskId),
@@ -1177,6 +1231,11 @@ function runQuery(db, statement, params, { database }) {
   // uyarılar ve sağlık yoklamaları) ayrı bir modülde karşılanır.
   const observability = runObservabilityQuery(db, sqlText, params);
   if (observability) return result(observability);
+
+  // Atama koordinasyonu, görev bildirimi, posta kuyruğu ve kullanıcı varlığı
+  // (0015) ayrı bir modülde karşılanır.
+  const coordination = runAssignmentCoordinationQuery(db, sqlText, params);
+  if (coordination) return result(coordination);
 
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));

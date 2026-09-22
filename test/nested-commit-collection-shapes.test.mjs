@@ -58,7 +58,7 @@ test('commit route applies every validation layer before SQL persistence', () =>
   const nestedPosition = route.indexOf('findNestedCommitCollectionIssue(changes)');
   const projectWbsPosition = route.indexOf('findCommitProjectWbsIssue(changes)');
   const scalarPosition = route.indexOf('findCommitScalarIssue(changes)');
-  const commitPosition = route.indexOf('createOrderedSqlAppRepository().commitChanges(changes)');
+  const commitPosition = route.indexOf('createOrderedSqlAppRepository().commitChanges({ ...changes, notifyAssignees })');
 
   assert.match(
     route,

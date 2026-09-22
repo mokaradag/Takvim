@@ -25,6 +25,15 @@ import {
   enqueueOutlookTaskChange,
   enqueueOutlookTaskRemoval
 } from '../outlook/outlookCommitHooks.js';
+import { classifyAssigneeOrganizations } from '../assignment/crossOrganization.js';
+import { resolveManagementChain } from '../assignment/managementChain.js';
+import { recordCrossOrganizationAssignments } from '../assignment/assignmentCoordinationStore.js';
+import {
+  assigneeSetDelta,
+  isMissingNotificationSchema,
+  writeAssignmentNotifications
+} from '../notifications/taskNotificationStore.js';
+import { enqueueTaskAssignmentMail } from '../notifications/taskMailOutbox.js';
 import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
 import { CORPORATE_WBS_SYNC_WARMTH_SQL } from './corporateWbsQueries.js';
 import { synchronizeCorporateWbs } from './corporateWbsSync.js';
@@ -2468,10 +2477,117 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
   await audit(executor, actor, correlationId, before ? 'UPDATE' : 'CREATE', 'TASK', taskId, projectId,
     before ? { ...before, assigneeIds: authoritativeAssigneeSicils } : null,
     { ...committed, ...projectIdentity, assigneeIds: assigneeSicils });
+  // Sorumlu kümesindeki YETKİLİ fark, zil bildirimi ve kurum dışı koordinasyon
+  // kaydı için taşınır. Başlık/açıklama düzenlemesi boş fark üretir ve hiçbir
+  // bildirim doğurmaz (bkz. server/notifications/taskNotificationStore.js).
+  const delta = assigneeSetDelta(authoritativeAssigneeSicils, assigneeSicils);
   return {
     taskId: id(taskId), projectId, beforeProjectId, wbsId: id(wbsId),
-    relatedTaskIds: [...relatedTaskIds]
+    relatedTaskIds: [...relatedTaskIds],
+    assignmentChange: delta.added.length || delta.removed.length ? {
+      taskId: id(taskId),
+      added: delta.added,
+      removed: delta.removed,
+      assigneeSicils,
+      task: {
+        title: committed?.Title ?? task.task ?? null,
+        projectId,
+        projectName: auditProject.ProjectName || null,
+        projectCode: auditProject.ProjectCode || null,
+        targetFinish: isoDate(committed?.TargetFinish),
+        priority: committed?.Priority || null
+      }
+    } : null
   };
+}
+
+/**
+ * Sorumlu değişikliklerinin YAYINI.
+ *
+ * Üç çıktı aynı olaydan türetilir ve aynı işlemde kalıcılaşır:
+ *   · zil bildirimi (kişi başına toplanmış, etkisiz/idempotent),
+ *   · kurum dışı atamanın koordinasyon kaydı ve karşı yönetim zinciri,
+ *   · kullanıcı açıkça istediyse e-posta NİYETİ (teslimat arka plandadır).
+ *
+ * Kişi ve yönetici çözümü KÜME tabanlıdır; sorumlu başına sorgu açılmaz.
+ * Göç uygulanmamış kurulumda yayın sessizce atlanır ve görev yazması etkilenmez.
+ */
+async function publishAssignmentChanges(executor, actor, correlationId, changes, { notifyAssignees = false } = {}) {
+  if (!changes.length) return;
+  const addedSicils = [...new Set(changes.flatMap((change) => change.added))];
+  const notifiedSicils = [...new Set(changes.flatMap((change) => [...change.added, ...change.removed]))]
+    .filter((sicil) => Number(sicil) !== Number(actor.sicil));
+  if (!notifiedSicils.length) return;
+
+  try {
+    const classified = addedSicils.length
+      ? await classifyAssigneeOrganizations(executor, actor.sicil, addedSicils)
+      : new Map();
+    const crossSicils = [...classified.values()].filter((person) => person.crossOrganization).map((person) => person.sicil);
+    const chains = crossSicils.length
+      ? await resolveManagementChain(executor, crossSicils, { excludeSicils: [actor.sicil] })
+      : new Map();
+    const crossAssignments = [];
+    for (const change of changes) {
+      for (const sicil of change.added) {
+        const person = classified.get(Number(sicil));
+        if (!person?.crossOrganization) continue;
+        const managerSicils = chains.get(Number(sicil)) || [];
+        if (!managerSicils.length) continue;
+        crossAssignments.push({
+          taskId: change.taskId,
+          assigneeSicil: sicil,
+          assigneeSicils: change.assigneeSicils,
+          assigneeName: person.name,
+          assigneeOrganization: person.organizationPath,
+          managerSicils,
+          taskTitle: change.task.title,
+          projectId: change.task.projectId,
+          projectName: change.task.projectName,
+          projectCode: change.task.projectCode,
+          targetFinish: change.task.targetFinish
+        });
+      }
+    }
+    if (crossAssignments.length) {
+      await recordCrossOrganizationAssignments(executor, actor, { correlationId, assignments: crossAssignments });
+    }
+
+    await writeAssignmentNotifications(executor, {
+      actorSicil: actor.sicil,
+      actorName: actor.currentUser?.name || null,
+      correlationId,
+      changes
+    });
+
+    if (notifyAssignees) {
+      const entries = [];
+      for (const change of changes) {
+        for (const [kind, sicils] of [['TASK_ASSIGNED', change.added], ['TASK_UNASSIGNED', change.removed]]) {
+          for (const sicil of sicils) {
+            if (Number(sicil) === Number(actor.sicil)) continue;
+            entries.push({
+              taskId: change.taskId,
+              recipientSicil: sicil,
+              payload: {
+                kind,
+                taskTitle: change.task.title,
+                projectName: change.task.projectName,
+                projectCode: change.task.projectCode,
+                actorName: actor.currentUser?.name || null,
+                priority: change.task.priority,
+                targetFinish: change.task.targetFinish,
+                changeSummary: kind === 'TASK_ASSIGNED' ? 'Göreve sorumlu olarak eklendiniz.' : 'Görev sorumluluğunuz kaldırıldı.'
+              }
+            });
+          }
+        }
+      }
+      await enqueueTaskAssignmentMail(executor, { correlationId, entries });
+    }
+  } catch (error) {
+    if (!isMissingNotificationSchema(error)) throw error;
+  }
 }
 
 async function deleteTask(executor, actor, entry, correlationId) {
@@ -2803,6 +2919,7 @@ export function createSqlAppRepository() {
         for (const node of changes.wbsUpserts) {
           if (!consumedRootIds.has(id(node.id))) await commitWbs(transaction, actor, node, correlationId);
         }
+        const assignmentChanges = [];
         for (const task of changes.taskUpserts) {
           const touched = await observePhase('phase.commit.task-mutation', () => commitTask(
             transaction, actor, task, correlationId, { dependencyPlanningVerified }
@@ -2811,7 +2928,15 @@ export function createSqlAppRepository() {
           if (touched.beforeProjectId) touchedTaskProjects.add(touched.beforeProjectId);
           if (touched.wbsId) touchedTaskWbs.add(touched.wbsId);
           for (const relatedTaskId of touched.relatedTaskIds || []) relatedTaskIds.add(relatedTaskId);
+          if (touched.assignmentChange) assignmentChanges.push(touched.assignmentChange);
         }
+        // Bildirim, kurum dışı koordinasyon kaydı ve isteğe bağlı posta NİYETİ
+        // aynı işlemde, TEK seferde ve küme tabanlı çözümle yazılır. Hiçbir SMTP
+        // çağrısı bu yolda yapılmaz (bkz. server/notifications/taskMailWorker.js).
+        await observePhase('phase.commit.assignment-notifications', () => publishAssignmentChanges(
+          transaction, actor, correlationId, assignmentChanges,
+          { notifyAssignees: input?.notifyAssignees === true }
+        ));
         // Etiket yayılımı görev yazmalarından SONRA çalışır: aynı işlemde
         // istemcinin gönderdiği görevler kendi sürüm anahtarlarıyla kaydedilir,
         // ardından katalog dışında kalan CANLI satırlar hizalanır.
