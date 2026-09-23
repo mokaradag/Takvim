@@ -6,6 +6,8 @@ import {
   PRESENCE_SESSION_GAP_MS
 } from '../../domain/presence/presenceModel.js';
 import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
+import { ServerPersistenceError } from '../errors.js';
+import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertSystemAdmin } from '../authorization/authorization.js';
 
@@ -65,11 +67,20 @@ export async function recordPresenceHeartbeat(executor, sicil) {
  * için nabız isteği başarısız oluyordu.
  */
 export async function submitPresenceHeartbeat() {
+  const sicil = await getTrustedCurrentSicil();
   const pool = await getSqlPool();
-  const actor = await loadAuthorizationContext(pool);
+  const check = pool.request();
+  check.input('sicil', sql.Int, sicil);
+  const known = await check.query(`
+    SELECT TOP (1) Sicil FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil;
+  `);
+  if (!known.recordset?.length) {
+    throw new ServerPersistenceError('UNAUTHORIZED', 'Yapılandırılmış Sicil kurumsal personel kaynağında bulunamadı.');
+  }
+
   try {
     const presence = await withSqlTransaction(
-      (transaction) => recordPresenceHeartbeat(transaction, actor.sicil),
+      (transaction) => recordPresenceHeartbeat(transaction, sicil),
       { deadlockRetries: 2 }
     );
     return { ok: true, ...presence };

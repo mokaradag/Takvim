@@ -643,6 +643,54 @@ test('doğrudan atama aynı kişinin bekleyen talebini kapatır; kaldırma iste�
   } finally { await stack.dispose(); }
 });
 
+test('yeni onay eski onaylı talebi kapatır; kaldırma isteği tek açık kayda iner', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    const first = await asUser(ORDINARY, () => store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'İlk destek'
+    }));
+    await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(
+      first.items[0].id, { decision: 'APPROVE' }
+    ));
+
+    await stack.reload();
+    const assignedTask = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...assignedTask, assigneeIds: [String(ORDINARY)], assigneeMutation: true }]
+    });
+    await stack.reload();
+
+    const second = await asUser(ORDINARY, () => store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'İkinci destek'
+    }));
+    const approved = await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(
+      second.items[0].id, { decision: 'APPROVE' }
+    ));
+    assert.equal(approved.outcome, 'APPROVED');
+
+    const firstRow = stack.db.taskAssignmentCoordinations
+      .find((row) => row.CoordinationId.toLowerCase() === first.items[0].id);
+    const secondRow = stack.db.taskAssignmentCoordinations
+      .find((row) => row.CoordinationId.toLowerCase() === second.items[0].id);
+    assert.equal(firstRow.Status, 'CANCELLED');
+    assert.equal(firstRow.DecisionMessage, 'Yeni onaylı atamayla değiştirildi.');
+    assert.equal(secondRow.Status, 'APPROVED');
+    assert.equal(stack.db.taskAssignmentCoordinations.filter((row) =>
+      row.TaskId.toLowerCase() === TASK_ID
+      && Number(row.RequestedAssigneeSicil) === EXTERNAL
+      && row.Status === 'APPROVED').length, 1);
+
+    const cancellation = await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(
+      second.items[0].id, { decision: 'REQUEST_CANCELLATION', message: 'Kapasite doldu.' }
+    ));
+    assert.equal(cancellation.outcome, 'CANCELLATION_REQUESTED');
+    assert.equal(stack.db.taskAssignmentCoordinations.filter((row) =>
+      row.TaskId.toLowerCase() === TASK_ID
+      && Number(row.RequestedAssigneeSicil) === EXTERNAL
+      && ['PENDING', 'CANCELLATION_REQUESTED'].includes(row.Status)).length, 1);
+  } finally { await stack.dispose(); }
+});
+
 test('yeniden doğrudan atama eski bildirimi kapatır; artık sorumlu olmayan kişi için kaldırma isteği bayatlar', async () => {
   const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
   try {

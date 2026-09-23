@@ -418,6 +418,25 @@ test('posta içeriği kaçırılarak üretilir ve görev künyesini taşır', as
   assert.match(message.html, /https:\/\/rota\.example\/rota\//);
   assert.match(message.text, /Atayan: Atayan Kişi/);
 
+  const bulk = buildTaskAssignmentMail({
+    kind: 'TASK_ASSIGNED',
+    taskCount: 2,
+    taskTitle: 'İlk görev',
+    projectCode: 'P1',
+    actorName: 'Atayan Kişi',
+    priority: 'high',
+    targetFinish: '2026-10-10',
+    changeSummary: '2 göreve sorumlu olarak eklendiniz.'
+  });
+  assert.match(bulk.subject, /2 göreve atandınız/);
+  assert.match(bulk.html, /2 göreve sorumlu olarak atandınız/);
+  assert.equal(bulk.html.includes('İlk görev'), false);
+  assert.equal(bulk.html.includes('Öncelik'), false);
+  assert.equal(bulk.html.includes('Hedef'), false);
+  assert.equal(bulk.text.includes('İlk görev'), false);
+  assert.equal(bulk.text.includes('Öncelik:'), false);
+  assert.equal(bulk.text.includes('Hedef:'), false);
+
   // Güvenilmeyen bağlantı şeması hiç yazılmaz.
   const unsafe = buildTaskAssignmentMail({ kind: 'TASK_ASSIGNED', taskTitle: 'X', link: 'javascript:alert(1)' });
   assert.equal(unsafe.html.includes('javascript:'), false);

@@ -35,37 +35,56 @@ function rows(entries) {
  */
 export function buildTaskAssignmentMail(payload = {}) {
   const taskTitle = String(payload.taskTitle || 'Görev');
+  const taskCount = Math.max(1, Number(payload.taskCount) || 1);
+  const many = taskCount > 1;
   const projectLabel = [payload.projectCode, payload.projectName].filter(Boolean).join(' · ');
   const priority = payload.priority ? resolvePriority(payload.priority).label : null;
   const targetLabel = payload.simpleMode ? 'Termin' : 'Hedef';
   const action = payload.kind === 'TASK_UNASSIGNED' ? 'kaldırıldı' : 'atandı';
-  const subject = payload.kind === 'TASK_UNASSIGNED'
-    ? `${APP_NAME} · Görev sorumluluğunuz kaldırıldı: ${taskTitle}`
-    : `${APP_NAME} · Size görev atandı: ${taskTitle}`;
+
+  let subject;
+  let intro;
+  if (many) {
+    subject = payload.kind === 'TASK_UNASSIGNED'
+      ? `${APP_NAME} · ${taskCount} görevde sorumluluğunuz kaldırıldı`
+      : `${APP_NAME} · ${taskCount} göreve atandınız`;
+    intro = payload.kind === 'TASK_UNASSIGNED'
+      ? `${taskCount} görevde sorumluluğunuz kaldırıldı.`
+      : `${taskCount} göreve sorumlu olarak atandınız.`;
+  } else {
+    subject = payload.kind === 'TASK_UNASSIGNED'
+      ? `${APP_NAME} · Görev sorumluluğunuz kaldırıldı: ${taskTitle}`
+      : `${APP_NAME} · Size görev atandı: ${taskTitle}`;
+    intro = `"${taskTitle}" görevinin sorumluluğu ${action}.`;
+  }
 
   const detail = rows([
-    ['Görev', taskTitle],
+    ...(many ? [] : [['Görev', taskTitle]]),
     ['Proje', projectLabel],
     [payload.kind === 'TASK_UNASSIGNED' ? 'Kaldıran' : 'Atayan', payload.actorName],
-    ['Öncelik', priority],
-    [targetLabel, payload.targetFinish ? formatDate(payload.targetFinish) : null],
+    ...(many ? [] : [
+      ['Öncelik', priority],
+      [targetLabel, payload.targetFinish ? formatDate(payload.targetFinish) : null]
+    ]),
     ['Değişiklik', payload.changeSummary]
   ]);
 
   const link = typeof payload.link === 'string' && /^https?:\/\//i.test(payload.link) ? payload.link : null;
   const html = `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#0f172a;">`
-    + `<p style="margin:0 0 12px;">${escapeHtml(`"${taskTitle}" görevinin sorumluluğu ${action}.`)}</p>`
+    + `<p style="margin:0 0 12px;">${escapeHtml(intro)}</p>`
     + `<table style="border-collapse:collapse;font-size:13px;">${detail}</table>`
     + (link ? `<p style="margin:14px 0 0;"><a href="${escapeHtml(link)}">${escapeHtml(APP_NAME)} uygulamasında aç</a></p>` : '')
     + `<p style="margin:16px 0 0;color:#94a3b8;font-size:12px;">Bu ileti ${escapeHtml(APP_NAME)} tarafından otomatik gönderildi.</p>`
     + `</div>`;
 
   const text = [
-    `"${taskTitle}" görevinin sorumluluğu ${action}.`,
+    intro,
     projectLabel ? `Proje: ${projectLabel}` : null,
     payload.actorName ? `${payload.kind === 'TASK_UNASSIGNED' ? 'Kaldıran' : 'Atayan'}: ${payload.actorName}` : null,
-    priority ? `Öncelik: ${priority}` : null,
-    payload.targetFinish ? `${targetLabel}: ${formatDate(payload.targetFinish)}` : null,
+    ...(many ? [] : [
+      priority ? `Öncelik: ${priority}` : null,
+      payload.targetFinish ? `${targetLabel}: ${formatDate(payload.targetFinish)}` : null
+    ]),
     payload.changeSummary ? `Değişiklik: ${payload.changeSummary}` : null,
     link
   ].filter(Boolean).join('\n');

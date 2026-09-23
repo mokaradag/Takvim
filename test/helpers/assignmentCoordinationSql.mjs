@@ -294,6 +294,21 @@ function coordinationPage(db, params) {
 
 /* ── Yazmalar ───────────────────────────────────────────────── */
 
+function closeApprovedCoordinations(db, params) {
+  for (const row of db.taskAssignmentCoordinations) {
+    if (sameGuid(row.TaskId, params.taskId)
+      && Number(row.RequestedAssigneeSicil) === Number(params.assigneeSicil)
+      && row.Status === 'APPROVED'
+      && !sameGuid(row.CoordinationId, params.coordinationId)) {
+      row.Status = 'CANCELLED';
+      row.DecidedAt = new Date().toISOString();
+      row.DecisionBySicil = Number(params.requesterSicil);
+      row.DecisionMessage = params.supersededNoticeMessage ?? null;
+      row.RowVersion = nextVersion();
+    }
+  }
+}
+
 function insertCoordination(db, sqlText, params) {
   // Aynı görev + kişi için AÇIK kayıt, YALNIZCA toplu komut kapatma
   // deyimini taşıdığında kapanır; ikiz sunucu sorgusunun yapmadığını yapmaz.
@@ -310,18 +325,10 @@ function insertCoordination(db, sqlText, params) {
       row.RowVersion = nextVersion();
     }
   }
-  const closesApprovedNotices = sqlText.includes("Mode = 'NOTICE' AND Status = 'APPROVED'");
-  for (const row of closesApprovedNotices ? db.taskAssignmentCoordinations : []) {
-    if (sameGuid(row.TaskId, params.taskId)
-      && Number(row.RequestedAssigneeSicil) === Number(params.assigneeSicil)
-      && row.Mode === 'NOTICE' && row.Status === 'APPROVED') {
-      row.Status = 'CANCELLED';
-      row.DecidedAt = new Date().toISOString();
-      row.DecisionBySicil = Number(params.requesterSicil);
-      row.DecisionMessage = params.supersededNoticeMessage ?? null;
-      row.RowVersion = nextVersion();
-    }
-  }
+  const closesApproved = sqlText.includes('DecisionMessage = @supersededNoticeMessage')
+    && sqlText.includes("AND Status = 'APPROVED'")
+    && sqlText.includes('CoordinationId <> @coordinationId');
+  if (closesApproved) closeApprovedCoordinations(db, params);
   // Benzersiz filtrelenmiş dizinin (UX_..._OpenRequest) karşılığı.
   if (OPEN_STATUSES.includes(params.status)
     && db.taskAssignmentCoordinations.some((row) => sameGuid(row.TaskId, params.taskId)
@@ -738,6 +745,15 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
   if (sqlText.includes('UPDATE dbo.MR_AssignmentCoordinationRecipients')) {
     if (missing) throw missingObject('MR_AssignmentCoordinationRecipients');
     return markCoordinationNotification(db, params);
+  }
+
+  if (sqlText.includes('UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)')
+    && sqlText.includes('DecisionMessage = @supersededNoticeMessage')
+    && sqlText.includes("AND Status = 'APPROVED'")
+    && sqlText.includes('CoordinationId <> @coordinationId')) {
+    if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
+    closeApprovedCoordinations(db, params);
+    return [[]];
   }
 
   if (sqlText.includes('UPDATE dbo.MR_TaskAssignmentCoordinations')

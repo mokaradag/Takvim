@@ -45,12 +45,13 @@ const CLOSE_OPEN_COORDINATIONS_SQL = `
     AND Status IN ('PENDING','CANCELLATION_REQUESTED');
 `;
 
-const CLOSE_APPROVED_NOTICES_SQL = `
+const CLOSE_APPROVED_COORDINATIONS_SQL = `
   UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)
   SET Status = 'CANCELLED', DecidedAt = SYSUTCDATETIME(), DecisionBySicil = @requesterSicil,
       DecisionMessage = @supersededNoticeMessage
   WHERE TaskId = @taskId AND RequestedAssigneeSicil = @assigneeSicil
-    AND Mode = 'NOTICE' AND Status = 'APPROVED';
+    AND Status = 'APPROVED'
+    AND CoordinationId <> @coordinationId;
 `;
 
 function canonicalId(value, label) {
@@ -401,7 +402,7 @@ export async function recordCrossOrganizationAssignments(executor, actor, {
     // benzersizlik kuralına (UX_..._OpenRequest) çarpıyor ve karar düşüyordu.
     await insert.query(`
       ${CLOSE_OPEN_COORDINATIONS_SQL}
-      ${CLOSE_APPROVED_NOTICES_SQL}
+      ${CLOSE_APPROVED_COORDINATIONS_SQL}
 
       INSERT dbo.MR_TaskAssignmentCoordinations(
         CoordinationId, TaskId, RequesterSicil, RequestedAssigneeSicil, Mode, Status,
@@ -700,6 +701,13 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
     };
 
     if (nextStatus === COORDINATION_STATUSES.APPROVED && row.Status === COORDINATION_STATUSES.PENDING) {
+      const supersede = transaction.request();
+      supersede.input('taskId', sql.UniqueIdentifier, row.TaskId);
+      supersede.input('assigneeSicil', sql.Int, Number(row.RequestedAssigneeSicil));
+      supersede.input('requesterSicil', sql.Int, actor.sicil);
+      supersede.input('coordinationId', sql.UniqueIdentifier, coordinationId);
+      supersede.input('supersededNoticeMessage', sql.NVarChar(2000), 'Yeni onaylı atamayla değiştirildi.');
+      await supersede.query(CLOSE_APPROVED_COORDINATIONS_SQL);
       await addTaskAssignee(transaction, row.TaskId, row.RequestedAssigneeSicil, actor.sicil);
       await insertRecipients(transaction, coordinationId, [[Number(row.RequestedAssigneeSicil), 'ASSIGNEE']]);
       notificationChanges.push({

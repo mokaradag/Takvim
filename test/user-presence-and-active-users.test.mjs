@@ -220,12 +220,25 @@ test('sekmeler arası önderlik kilidi tek nabız gönderir ve bayatlayınca dev
 test('nabız Sicil başına TEK satır yazar ve tekrarlayan nabız satır çoğaltmaz', async () => {
   const stack = await createActualStack(seed(), { sicil: USER, corporateWbsSource: false });
   try {
+    const statementStart = stack.db.statements.length;
     for (let index = 0; index < 5; index += 1) await store.submitPresenceHeartbeat();
     assert.equal(stack.db.userPresence.length, 1);
     assert.equal(Number(stack.db.userPresence[0].Sicil), USER);
 
     await asUser(ADMIN, () => store.submitPresenceHeartbeat());
     assert.equal(stack.db.userPresence.length, 2);
+
+    const heartbeatStatements = stack.db.statements.slice(statementStart);
+    assert.equal(heartbeatStatements.some((entry) => entry.sql.includes('FROM dbo.MR_UserRoles')), false,
+      'nabız tam yetkilendirme bağlamını yüklememelidir');
+    assert.equal(heartbeatStatements.filter((entry) =>
+      entry.sql.includes('SELECT TOP (1) Sicil FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')).length, 6,
+    'her nabız kurumsal dizin kaydını doğrulamalıdır');
+
+    await assert.rejects(
+      asUser(999999, () => store.submitPresenceHeartbeat()),
+      (error) => error.code === 'UNAUTHORIZED'
+    );
     // İstek düzeyinde telemetri satırı yazılmaz.
     assert.equal(stack.db.statements.some((entry) => entry.sql.includes('MR_TelemetryOperationSamples')), false);
   } finally { await stack.dispose(); }
