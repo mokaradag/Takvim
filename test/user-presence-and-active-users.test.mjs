@@ -421,9 +421,9 @@ test('Aktif Kullanıcılar sekmesi kalan yüksekliği doldurur ve başlığı sa
   assert.match(tab, /className="sysadmin-presence-scroll" tabIndex=\{0\} role="region" aria-label="[^"]+"/);
 
   const css = read('src/app/styles/system-admin.css');
-  // Sayfa gereksiz kaydırılmaz: panel taşmayı gizler, yalnızca tablo kaydırılır.
-  assert.match(css, /\.sysadmin-panel\.is-filled \{ overflow: hidden; display: flex; flex-direction: column; \}/);
-  assert.match(css, /\.sysadmin-presence-section \{ flex: 1 1 0; min-height: 0; overflow: hidden; \}/);
+  // Normal yükseklikte yalnızca tablo kayar; kısa görünümde panel de erişilebilir kalır.
+  assert.match(css, /\.sysadmin-panel\.is-filled \{ overflow: auto; display: flex; flex-direction: column; \}/);
+  assert.match(css, /\.sysadmin-presence-section \{ flex: 1 1 0; min-height: 240px; overflow: hidden; \}/);
   const scroll = css.slice(css.indexOf('.sysadmin-presence-scroll'), css.indexOf('.sysadmin-presence-table'));
   assert.match(scroll, /overflow: auto/);
   assert.match(scroll, /flex: 1 1 0/);

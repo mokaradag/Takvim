@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { registerHooks } from 'node:module';
+import { setImmediate } from 'node:timers/promises';
 
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
+import { mountComponent } from './helpers/clientComponentHarness.mjs';
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
+
+const providerUrl = new URL('../src/state/AppStateProvider.jsx', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === providerUrl) return { url: providerUrl, shortCircuit: true };
+    return nextResolve(specifier, context);
+  }
+});
+const { AppStateProvider } = await import(providerUrl);
 
 registerServerOnlyShim();
 
@@ -257,6 +269,20 @@ test('zil bildirimi görev erişimi VERMEZ; görev yalnızca yetkili yolla açı
     const notification = stack.state.taskNotifications.find((item) => item.taskId === TASK_ID);
     assert.ok(notification, 'bildirim zilde görünmelidir');
     assert.equal(stack.state.tasks.some((task) => task.id === notification.taskId), false);
+
+    // Zildeki gerçek tıklama yolunu çalıştır: sağlayıcının openTask eylemi
+    // yetkili snapshot'ı yeniler ve görev yine görünmüyorsa seçim yapmaz.
+    const provider = mountComponent(AppStateProvider, { repository: stack.repository });
+    try {
+      await setImmediate();
+      provider.render();
+      const result = await provider.output.props.value.actions.openTask(notification.taskId);
+      provider.render();
+      assert.equal(result.ok, false);
+      assert.equal(provider.output.props.value.selectedTaskId, null);
+      assert.equal(provider.output.props.value.tasks.some((task) => task.id === notification.taskId), false);
+    } finally { provider.unmount(); }
+
     await stack.reload({ refreshMode: 'manual' });
     assert.equal(stack.state.tasks.some((task) => task.id === notification.taskId), false,
       'bildirim görev erişimi vermemelidir');

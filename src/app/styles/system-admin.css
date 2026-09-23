@@ -479,7 +479,7 @@
 /* ── Aktif Kullanıcılar ──────────────────────────────────── */
 /* Sekme kalan yüksekliği DOLDURUR: kartlar üstte sabit kalır, yalnızca tablo
    gövdesi kaydırılır ve altta kullanılmayan boşluk bırakılmaz. */
-.sysadmin-panel.is-filled { overflow: hidden; display: flex; flex-direction: column; }
+.sysadmin-panel.is-filled { overflow: auto; display: flex; flex-direction: column; }
 .sysadmin-presence {
   display: flex;
   flex: 1 1 0;
@@ -488,7 +488,7 @@
   min-height: 0;
 }
 .sysadmin-presence-metrics { flex: 0 0 auto; }
-.sysadmin-presence-section { flex: 1 1 0; min-height: 0; overflow: hidden; }
+.sysadmin-presence-section { flex: 1 1 0; min-height: 240px; overflow: hidden; }
 .sysadmin-presence-scroll {
   flex: 1 1 0;
   min-height: 0;

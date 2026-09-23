@@ -175,7 +175,7 @@ test('Sorumlu süzgeci Sicil ile daraltır, çok sorumluyu kapsar ve Filtreleri 
   } finally { view.unmount(); }
 });
 
-test('Sorumlu ve kurumsal süzgeçler birlikte çalışır; seçilemeyen sorumlu kendiliğinden düşer', () => {
+test('Sorumlu ve kurumsal süzgeçler birlikte çalışır; geçici sonuçsuzluk seçimi bozmaz', () => {
   const view = mountKanban();
   try {
     const select = () => findElement(view.output, (node) => node.type === TaskOrganizationFilterControls).props.extraControls;
@@ -183,10 +183,19 @@ test('Sorumlu ve kurumsal süzgeçler birlikte çalışır; seçilemeyen sorumlu
     select().props.onChange('300'); view.render();
     assert.deepEqual(boardItems(view, 'in_progress'), ['d']);
 
-    // Kurumsal süzgeç D2'ye daralınca 300 numaralı sicil kümede kalmaz.
+    // Kurumsal süzgeç D2'ye daralınca 300 sonuç üretmez; seçim yine de korunur.
     organization().selectLevel('directorate', 'D2'); view.render();
+    assert.equal(select().props.value, '300');
+    assert.equal(select().props.options.some((option) => option.value === '300'), true);
+    assert.deepEqual(boardItems(view, 'todo'), []);
+    assert.deepEqual(boardItems(view, 'in_progress'), []);
+    assert.deepEqual(boardItems(view, 'done'), []);
+
+    const clear = findElement(view.output, (node) => node.type === 'button'
+      && Array.isArray(node.props.children) && node.props.children.includes(' Filtreleri temizle'));
+    clear.props.onClick(); view.render();
     assert.equal(select().props.value, '');
-    assert.deepEqual(boardItems(view, 'todo'), ['b']);
+    assert.deepEqual(boardItems(view, 'todo'), ['b', 'a', 'c']);
   } finally { view.unmount(); }
 });
 

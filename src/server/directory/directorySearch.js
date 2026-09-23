@@ -1,7 +1,7 @@
 import 'server-only';
 import { getSqlPool, sql } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
-import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
+import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
 
 /**
  * Kurum dışı personel arama.
@@ -91,8 +91,6 @@ function directoryPerson(row) {
  */
 export async function searchCorporateDirectory(input = {}, executor = null) {
   const query = normalizeQuery(input.query ?? input.q);
-  const pool = executor || await getSqlPool();
-  const actor = await loadAuthorizationContext(pool);
   if (query.length < MIN_DIRECTORY_QUERY_LENGTH) {
     throw new ServerPersistenceError(
       'MUTATION_FAILED',
@@ -100,7 +98,25 @@ export async function searchCorporateDirectory(input = {}, executor = null) {
       { status: 400 }
     );
   }
-  assertSearchRate(actor.sicil);
+
+  // Bu uç yalnızca güvenilir Sicil'e ihtiyaç duyar; tam proje/görev yetki
+  // bağlamını yüklemek her tuş aramasında gereksiz ve pahalıdır.
+  const sicil = await getTrustedCurrentSicil();
+  assertSearchRate(sicil);
+  const pool = executor || await getSqlPool();
+
+  // Tam yetki bağlamının koruduğu kimlik değişmezini ucuz bir varlık sorgusuyla
+  // sürdürürüz: yapılandırılmış Sicil kurumsal rehberde bulunmalıdır.
+  const identity = pool.request();
+  identity.input('sicil', sql.Int, sicil);
+  const identityResult = await identity.query(`
+    SELECT TOP (1) 1 AS ExistsInDirectory
+    FROM dbo.MR_V_PeopleDirectory
+    WHERE Sicil = @sicil;
+  `);
+  if (!identityResult.recordset?.length) {
+    throw new ServerPersistenceError('UNAUTHORIZED', 'Yapılandırılmış Sicil kurumsal personel kaynağında bulunamadı.');
+  }
 
   const numeric = /^\d{1,9}$/.test(query) ? Number(query) : null;
   const request = pool.request();

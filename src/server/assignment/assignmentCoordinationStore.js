@@ -151,7 +151,13 @@ async function lockedTask(executor, taskId, actorSicil) {
       p.ProjectName, p.ProjectCode, p.SourceType, p.LeadSicil,
       CASE WHEN EXISTS (
         SELECT 1 FROM dbo.MR_TaskAssignees ta WHERE ta.TaskId = t.TaskId AND ta.Sicil = @sicil
-      ) THEN 1 ELSE 0 END AS IsActorAssignee
+      ) THEN 1 ELSE 0 END AS IsActorAssignee,
+      CASE WHEN EXISTS (
+        SELECT 1
+        FROM dbo.MR_TaskAssignees ta
+        JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = ta.Sicil
+        WHERE ta.TaskId = t.TaskId AND es.ManagerSicil = @sicil
+      ) THEN 1 ELSE 0 END AS IsActorExecutiveScope
     FROM dbo.MR_Tasks t WITH (UPDLOCK, HOLDLOCK)
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     WHERE t.TaskId = @taskId;
@@ -268,7 +274,8 @@ export async function createAssignmentCoordination(input = {}) {
     const relatedToTask = actor.isSystemAdmin
       || (task && (hasFullProjectAccess(actor, task.ProjectId)
         || Number(task.CreatedBySicil) === Number(actor.sicil)
-        || Boolean(task.IsActorAssignee)));
+        || Boolean(task.IsActorAssignee)
+        || Boolean(task.IsActorExecutiveScope)));
     if (!task || !relatedToTask) {
       throw new ServerPersistenceError('FORBIDDEN', 'Bu görev için atama talebi oluşturamazsınız.');
     }

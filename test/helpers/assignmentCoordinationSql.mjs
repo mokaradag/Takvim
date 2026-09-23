@@ -594,6 +594,10 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
 
   // Kurumsal dizin araması ve yönetim zinciri çözümü mevcut görünümleri okur;
   // 0015 tabloları olmadan da çalışır.
+  if (sqlText.includes('AS ExistsInDirectory') && sqlText.includes('dbo.MR_V_PeopleDirectory')) {
+    return [person(db, params.sicil) ? [{ ExistsInDirectory: 1 }] : []];
+  }
+
   if (sqlText.includes('AS MatchRank')) {
     const query = String(params.query || '');
     const sicilQuery = params.sicilQuery == null ? null : Number(params.sicilQuery);
@@ -854,7 +858,10 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
       SourceType: project.SourceType,
       LeadSicil: project.LeadSicil,
       IsActorAssignee: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId)
-        && Number(entry.Sicil) === Number(params.sicil)) ? 1 : 0
+        && Number(entry.Sicil) === Number(params.sicil)) ? 1 : 0,
+      IsActorExecutiveScope: db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId)
+        && db.executiveScope.some((scope) => Number(scope.ManagerSicil) === Number(params.sicil)
+          && Number(scope.EmployeeSicil) === Number(entry.Sicil))) ? 1 : 0
     }]];
   }
 

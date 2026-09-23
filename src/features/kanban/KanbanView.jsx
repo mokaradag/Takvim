@@ -39,19 +39,21 @@ export function KanbanView() {
     () => organization.filteredTasks.filter((task) => taskTableMatches(task, { search })),
     [organization.filteredTasks, search]
   );
-  // Sorumlu seçenekleri O AN süzülmüş kümeden türetilir; seçim Sicil taşır.
+  // Seçenekler süzülmüş kümeden türetilir; ancak seçili Sicil başka bir
+  // süzgeç nedeniyle geçici olarak sonuçsuz kalsa da kullanıcı seçimi korunur.
   const assigneeOptions = useMemo2(
-    () => kanbanAssigneeOptions(searchedTasks, directory),
-    [searchedTasks, directory]
+    () => {
+      const options = kanbanAssigneeOptions(searchedTasks, directory);
+      if (!assignee || options.some((option) => option.value === assignee)) return options;
+      const person = directory.find((entry) => String(entry.id) === assignee);
+      return [...options, { value: assignee, label: person?.name || assignee }];
+    },
+    [searchedTasks, directory, assignee]
   );
   const filteredTasks = useMemo2(
     () => (assignee ? searchedTasks.filter((task) => matchesKanbanAssignee(task, assignee)) : searchedTasks),
     [searchedTasks, assignee]
   );
-  useEffect2(() => {
-    // Süzgeç daralınca artık seçilemeyen sorumlu kendiliğinden düşer.
-    if (assignee && !assigneeOptions.some((option) => option.value === assignee)) setAssignee('');
-  }, [assignee, assigneeOptions]);
   const hasFilters = Boolean(search) || Boolean(assignee) || hasOrgSelection(organization.selection);
   const { openTask: onOpenTask, updateTask: onUpdateTask } = useTaskActions();
   const cols = [

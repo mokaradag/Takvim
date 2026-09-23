@@ -705,6 +705,34 @@ test('aynı organizasyondaki doğrudan atama da bekleyen talebi kapatır', async
   } finally { await stack.dispose(); }
 });
 
+test('yeni görev ataması var olmayan koordinasyon kaydını kapatmak için sorgu açmaz', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    const statementStart = stack.db.statements.length;
+    await stack.repository.commitChanges({
+      taskUpserts: [{
+        id: '44444444-4444-4444-8444-000000000031',
+        projectId: PROJECT_ID,
+        wbsId: ROOT_WBS_ID,
+        task: 'Yeni görev',
+        status: 'todo',
+        priority: 'normal',
+        targetFinish: '2026-10-05',
+        assigneeIds: [String(ORDINARY)],
+        assigneeMutation: true,
+        plannedHours: null,
+        actualHours: null,
+        budget: null,
+        spent: null
+      }]
+    });
+    const closeQueries = stack.db.statements.slice(statementStart).filter((entry) =>
+      entry.sql.includes('UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)')
+      && entry.sql.includes("Status IN ('PENDING','CANCELLATION_REQUESTED')"));
+    assert.equal(closeQueries.length, 0, 'yeni görev için açık koordinasyon kaydı aranmaz');
+  } finally { await stack.dispose(); }
+});
+
 test('yeni onay eski onaylı talebi kapatır; kaldırma isteği tek açık kayda iner', async () => {
   const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
   try {
@@ -861,10 +889,15 @@ test('yinelemeler şablonun kurum dışı atamasını devralır; her yineleme ay
 });
 
 test('yönetici kapsamındaki doğrudan atama değişmez; kapsam dışı için talep açılır', async () => {
-  const stack = await createActualStack(seed(), { sicil: EXECUTIVE, corporateWbsSource: false });
+  const executiveSeed = seed();
+  executiveSeed.tasks = executiveSeed.tasks.map((task) => task.TaskId === OTHER_TASK_ID
+    ? { ...task, CreatedBySicil: ORDINARY }
+    : task);
+  const stack = await createActualStack(executiveSeed, { sicil: EXECUTIVE, corporateWbsSource: false });
   try {
     const task = stack.state.tasks.find((entry) => entry.id === OTHER_TASK_ID);
     assert.ok(task, 'yönetici kendi personelinin görevini görmelidir');
+    assert.equal(Boolean(task.isCurrentUserCreator), false, 'test görev oluşturucu kapsamına dayanmamalıdır');
 
     // Kapsam İÇİ doğrudan atama bugünkü gibi çalışır.
     const saved = await stack.repository.commitChanges({
@@ -937,6 +970,7 @@ test('dizin araması kısa sorguyu, sınırsız listeyi ve aşırı hızı redde
   const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
   try {
     directorySearch.resetDirectorySearchRateForTests();
+    const beforeShortQuery = stack.db.statements.length;
     await assert.rejects(
       directorySearch.searchCorporateDirectory({ query: 'A' }),
       (error) => error.code === 'MUTATION_FAILED' && error.status === 400
@@ -945,6 +979,7 @@ test('dizin araması kısa sorguyu, sınırsız listeyi ve aşırı hızı redde
       directorySearch.searchCorporateDirectory({ query: '' }),
       (error) => error.code === 'MUTATION_FAILED'
     );
+    assert.equal(stack.db.statements.length, beforeShortQuery, 'kısa sorgu SQL çalıştırmamalıdır');
     const bounded = await directorySearch.searchCorporateDirectory({ query: 'Yöneticisi' });
     assert.ok(bounded.items.length <= directorySearch.DIRECTORY_SEARCH_LIMIT);
     assert.equal(bounded.limit, directorySearch.DIRECTORY_SEARCH_LIMIT);
@@ -954,10 +989,12 @@ test('dizin araması kısa sorguyu, sınırsız listeyi ve aşırı hızı redde
     for (let index = 0; index < 30; index += 1) {
       await directorySearch.searchCorporateDirectory({ query: 'Kullanıcı' });
     }
+    const beforeRateLimit = stack.db.statements.length;
     await assert.rejects(
       directorySearch.searchCorporateDirectory({ query: 'Kullanıcı' }),
       (error) => error.status === 429
     );
+    assert.equal(stack.db.statements.length, beforeRateLimit, 'hız sınırı SQL çalıştırmadan uygulanmalıdır');
     directorySearch.resetDirectorySearchRateForTests();
   } finally { await stack.dispose(); }
 });

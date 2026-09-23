@@ -2498,6 +2498,7 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
     relatedTaskIds: [...relatedTaskIds],
     assignmentChange: delta.added.length || delta.removed.length ? {
       taskId: id(taskId),
+      created: !before,
       added: delta.added,
       removed: delta.removed,
       assigneeSicils,
@@ -2545,7 +2546,7 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
     for (const change of changes) {
       const inherited = new Set((change.templateAssigneeSicils || []).map(Number));
       for (const sicil of change.added) {
-        await closeOpenCoordinationsFor(executor, actor, change.taskId, sicil);
+        if (!change.created) await closeOpenCoordinationsFor(executor, actor, change.taskId, sicil);
         const person = classified.get(Number(sicil));
         if (!person?.crossOrganization) continue;
         // Yineleme, şablonun koordinasyon kaydını devralır.
