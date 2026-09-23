@@ -250,6 +250,21 @@ async function insertRecipients(executor, coordinationId, recipients) {
   }
 }
 
+/** Aktörün kendi ürettiği son koordinasyon sürümünü okunmuş sayar. */
+async function markActorRead(executor, coordinationId, actorSicil) {
+  const request = executor.request();
+  request.input('coordinationId', sql.UniqueIdentifier, coordinationId);
+  request.input('sicil', sql.Int, Number(actorSicil));
+  await request.query(`
+    UPDATE recipient
+    SET ReadVersion = coordination.RowVersion, UpdatedAt = SYSUTCDATETIME()
+    FROM dbo.MR_AssignmentCoordinationRecipients recipient
+    JOIN dbo.MR_TaskAssignmentCoordinations coordination
+      ON coordination.CoordinationId = recipient.CoordinationId
+    WHERE recipient.CoordinationId = @coordinationId AND recipient.Sicil = @sicil;
+  `);
+}
+
 /**
  * Yeni atama koordinasyonu oluşturur.
  *
@@ -363,6 +378,7 @@ export async function createAssignmentCoordination(input = {}) {
         ...managers.map((manager) => [manager, 'MANAGER']),
         [actor.sicil, 'REQUESTER']
       ]);
+      await markActorRead(transaction, coordinationId, actor.sicil);
       await audit(transaction, actor, 'CREATE', coordinationId, task.ProjectId, null, {
         taskId,
         requestedAssigneeSicil: sicil,
@@ -444,6 +460,7 @@ export async function recordCrossOrganizationAssignments(executor, actor, {
       [Number(assignment.assigneeSicil), 'ASSIGNEE'],
       [actor.sicil, 'REQUESTER']
     ]);
+    await markActorRead(executor, coordinationId, actor.sicil);
     created.push(coordinationId);
   }
   return created;
@@ -663,6 +680,7 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       await setCoordinationStatus(transaction, coordinationId, COORDINATION_STATUSES.STALE, {
         actorSicil: actor.sicil, message: decisionMessage
       });
+      await markActorRead(transaction, coordinationId, actor.sicil);
       await audit(transaction, actor, 'UPDATE', coordinationId, row.ProjectIdSnapshot,
         { status: row.Status }, { status: COORDINATION_STATUSES.STALE }, correlationId);
       return {
@@ -690,6 +708,7 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
         await setCoordinationStatus(transaction, coordinationId, COORDINATION_STATUSES.STALE, {
           actorSicil: actor.sicil, message: decisionMessage
         });
+        await markActorRead(transaction, coordinationId, actor.sicil);
         await audit(transaction, actor, 'UPDATE', coordinationId, row.LiveProjectId,
           { status: row.Status }, { status: COORDINATION_STATUSES.STALE }, correlationId);
         return {
@@ -771,6 +790,7 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       message: decisionMessage,
       suggestedAssigneeSicil
     });
+    await markActorRead(transaction, coordinationId, actor.sicil);
     if (notificationChanges.length) {
       await writeAssignmentNotifications(transaction, {
         actorSicil: actor.sicil,

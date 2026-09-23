@@ -481,6 +481,35 @@ test('toplama kuralı kendine atamayı eler ve alıcı başına tek satır üret
     [10, 'TASK_ASSIGNED', 2],
     [30, 'TASK_UNASSIGNED', 1]
   ]);
+
+  const mixedProjects = aggregateAssignmentNotifications([
+    { taskId: 't1', added: [MEMBER], removed: [], task: {
+      title: 'A', projectId: 'p1', projectName: 'Proje 1', projectCode: 'P1'
+    } },
+    { taskId: 't2', added: [MEMBER], removed: [], task: {
+      title: 'B', projectId: 'p2', projectName: 'Proje 2', projectCode: 'P2'
+    } }
+  ], OWNER);
+  assert.equal(mixedProjects.length, 1);
+  assert.deepEqual(
+    [mixedProjects[0].task.projectId, mixedProjects[0].task.projectName, mixedProjects[0].task.projectCode],
+    [null, null, null],
+    'farklı projeleri kapsayan toplu bildirim tek bir projeyi adlandırmamalıdır'
+  );
+
+  const sameProject = aggregateAssignmentNotifications([
+    { taskId: 't1', added: [MEMBER], removed: [], task: {
+      title: 'A', projectId: 'p1', projectName: 'Proje 1', projectCode: 'P1'
+    } },
+    { taskId: 't2', added: [MEMBER], removed: [], task: {
+      title: 'B', projectId: 'p1', projectName: 'Proje 1', projectCode: 'P1'
+    } }
+  ], OWNER);
+  assert.deepEqual(
+    [sameProject[0].task.projectId, sameProject[0].task.projectName, sameProject[0].task.projectCode],
+    ['p1', 'Proje 1', 'P1'],
+    'aynı proje içindeki toplu bildirim proje künyesini korumalıdır'
+  );
 });
 
 /* ── Teslimat turu · kira, sahiplik ve belirsiz teslimat ────────── */

@@ -250,6 +250,13 @@ test('yetkili yönetici onayı atamayı atomik yazar; ret ve iptal sorumluyu de�
     }));
     assert.equal(reject.outcome, 'REJECTED');
     assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY]);
+    const rejectedRow = stack.db.taskAssignmentCoordinations
+      .find((row) => row.CoordinationId.toLowerCase() === first.items[0].id);
+    const rejectingManager = recipientsOf(stack, first.items[0].id)
+      .find((row) => row.Sicil === UNIT_MANAGER && row.RecipientRole === 'MANAGER');
+    assert.ok(rejectingManager?.ReadVersion);
+    assert.equal(Buffer.compare(Buffer.from(rejectingManager.ReadVersion), Buffer.from(rejectedRow.RowVersion)), 0,
+      'karar veren yönetici kendi kararını okunmamış görmemelidir');
 
     const second = await store.createAssignmentCoordination({ taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Yeniden' });
     const approve = await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(second.items[0].id, {
@@ -587,6 +594,13 @@ test('kapatılmış projedeki görevin talebi onaylanamaz; kayıt güncelliğini
     const decision = await asUser(UNIT_MANAGER, () =>
       store.decideAssignmentCoordination(request.items[0].id, { decision: 'APPROVE' }));
     assert.equal(decision.outcome, 'STALE');
+    const staleRow = stack.db.taskAssignmentCoordinations
+      .find((row) => row.CoordinationId.toLowerCase() === request.items[0].id);
+    const staleActor = recipientsOf(stack, request.items[0].id)
+      .find((row) => row.Sicil === UNIT_MANAGER && row.RecipientRole === 'MANAGER');
+    assert.ok(staleActor?.ReadVersion);
+    assert.equal(Buffer.compare(Buffer.from(staleActor.ReadVersion), Buffer.from(staleRow.RowVersion)), 0,
+      'STALE kararını veren kullanıcı kendi eylemini okunmamış görmemelidir');
     assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY], 'kapatılmış projeye sorumlu yazılmamalıdır');
     const versionAfter = stack.db.tasks.find((task) => task.TaskId.toUpperCase() === TASK_ID.toUpperCase()).RowVersion;
     assert.equal(Buffer.compare(Buffer.from(versionAfter), versionBefore), 0, 'görev sürümü ilerlememelidir');
@@ -1000,6 +1014,11 @@ test('tam proje yetkilisinin kurum dışı ataması yürürlüğe girer ve koord
     // Atanan kişi de alıcıdır: atama yürürlüktedir.
     assert.equal(recipientsOf(stack, notices[0].CoordinationId)
       .some((row) => row.Sicil === EXTERNAL && row.RecipientRole === 'ASSIGNEE'), true);
+    const assigner = recipientsOf(stack, notices[0].CoordinationId)
+      .find((row) => row.Sicil === PROJECT_MANAGER && row.RecipientRole === 'REQUESTER');
+    assert.ok(assigner?.ReadVersion);
+    assert.equal(Buffer.compare(Buffer.from(assigner.ReadVersion), Buffer.from(notices[0].RowVersion)), 0,
+      'doğrudan atayan kişi kendi NOTICE kaydını okunmamış görmemelidir');
     // Kendi biriminden sorumlu için koordinasyon kaydı üretilmez.
     assert.equal(stack.db.taskAssignmentCoordinations.some((row) => Number(row.RequestedAssigneeSicil) === ORDINARY), false);
   } finally { await stack.dispose(); }
@@ -1166,7 +1185,8 @@ test('zil önizlemesi sınırlıdır ve tam geçmiş anlık görüntüye yüklen
     // Anlık görüntü yalnızca önizleme ve sayaç taşır; kurumsal dizin girmez.
     assert.equal(stack.state.assignmentCoordinations.length, 1);
     assert.equal(stack.state.notificationSummary.pendingCount, 0, 'talep eden kendi talebini karara bağlamaz');
-    assert.equal(stack.state.notificationSummary.unreadCount >= 0, true);
+    assert.equal(stack.state.notificationSummary.unreadCount, 0,
+      'talep eden kendi oluşturduğu koordinasyonu okunmamış görmemelidir');
     assert.equal(statements.some((sql) => sql.includes('AS MatchRank')), false, 'dizin araması anlık görüntüde çalışmaz');
   } finally { await stack.dispose(); }
 });

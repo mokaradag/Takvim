@@ -423,6 +423,18 @@ function markCoordinationNotification(db, params) {
   return [[]];
 }
 
+function markCoordinationActorRead(db, params) {
+  const row = db.taskAssignmentCoordinations.find((entry) =>
+    sameGuid(entry.CoordinationId, params.coordinationId));
+  const recipient = db.assignmentCoordinationRecipients.find((entry) =>
+    sameGuid(entry.CoordinationId, params.coordinationId) && Number(entry.Sicil) === Number(params.sicil));
+  if (row && recipient) {
+    recipient.ReadVersion = Buffer.from(row.RowVersion);
+    recipient.UpdatedAt = new Date().toISOString();
+  }
+  return [[]];
+}
+
 /** SQL Server `NEWSEQUENTIALID()` karşılığı: geçerli ve artan bir GUID. */
 let notificationSequence = 0;
 function nextNotificationId() {
@@ -779,6 +791,12 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     && sqlText.includes('IF NOT EXISTS')) {
     if (missing) throw missingObject('MR_AssignmentCoordinationRecipients');
     return insertRecipient(db, params);
+  }
+
+  if (sqlText.includes('UPDATE recipient')
+    && sqlText.includes('SET ReadVersion = coordination.RowVersion')) {
+    if (missing) throw missingObject('MR_AssignmentCoordinationRecipients');
+    return markCoordinationActorRead(db, params);
   }
 
   if (sqlText.includes('UPDATE dbo.MR_AssignmentCoordinationRecipients')) {

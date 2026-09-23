@@ -74,6 +74,10 @@ export function aggregateAssignmentNotifications(changes = [], actorSicil) {
           buckets.set(key, { recipientSicil: recipient, kind, taskCount: 0, task: change?.task || null, taskId: change?.taskId || null });
         }
         const bucket = buckets.get(key);
+        if (bucket.taskCount > 0 && bucket.task
+          && String(bucket.task.projectId || '') !== String(change?.task?.projectId || '')) {
+          bucket.task = { ...bucket.task, projectId: null, projectName: null, projectCode: null };
+        }
         bucket.taskCount += 1;
       }
     }
