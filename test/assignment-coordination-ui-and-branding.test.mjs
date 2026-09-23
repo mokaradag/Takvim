@@ -104,6 +104,25 @@ test('zil üç kaynağı tek listede birleştirir ve önizlemeyi sekizle sınır
   assert.equal(mergeNotificationPreviews([[], []]).length, 0);
 });
 
+test('çoklu görev bildirimi ilk görev başlığını tek görev gibi göstermez', () => {
+  const [item] = notificationCenterItems({
+    taskNotifications: [{
+      source: NOTIFICATION_SOURCES.TASK_EVENT,
+      id: 'n-many',
+      kind: 'TASK_ASSIGNED',
+      taskCount: 3,
+      actorName: 'Atayan',
+      taskTitle: 'İlk görev',
+      unread: true,
+      actionable: false,
+      sortAt: '2026-09-21T10:00:00.000Z'
+    }]
+  });
+  assert.equal(item.headline, '3 görev atandı');
+  assert.equal(item.subtitle, 'Atayan · 3 görev');
+  assert.equal(item.subtitle.includes('İlk görev'), false);
+});
+
 test('rozet sayısı bütün kaynakların toplamıdır', () => {
   assert.deepEqual(
     notificationCenterCounts({ unreadCount: 3, pendingCount: 1 }, { unreadCount: 2, pendingCount: 4 }),

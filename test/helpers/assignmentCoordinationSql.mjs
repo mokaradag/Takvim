@@ -309,12 +309,8 @@ function closeApprovedCoordinations(db, params) {
   }
 }
 
-function insertCoordination(db, sqlText, params) {
-  // Aynı görev + kişi için AÇIK kayıt, YALNIZCA toplu komut kapatma
-  // deyimini taşıdığında kapanır; ikiz sunucu sorgusunun yapmadığını yapmaz.
-  const closesOpen = sqlText.includes("SET Status = 'CANCELLED'")
-    && sqlText.includes("Status IN ('PENDING','CANCELLATION_REQUESTED')");
-  for (const row of closesOpen ? db.taskAssignmentCoordinations : []) {
+function closeOpenCoordinations(db, params) {
+  for (const row of db.taskAssignmentCoordinations) {
     if (sameGuid(row.TaskId, params.taskId)
       && Number(row.RequestedAssigneeSicil) === Number(params.assigneeSicil)
       && OPEN_STATUSES.includes(row.Status)) {
@@ -325,6 +321,14 @@ function insertCoordination(db, sqlText, params) {
       row.RowVersion = nextVersion();
     }
   }
+}
+
+function insertCoordination(db, sqlText, params) {
+  // Aynı görev + kişi için AÇIK kayıt, YALNIZCA toplu komut kapatma
+  // deyimini taşıdığında kapanır; ikiz sunucu sorgusunun yapmadığını yapmaz.
+  const closesOpen = sqlText.includes("SET Status = 'CANCELLED'")
+    && sqlText.includes("Status IN ('PENDING','CANCELLATION_REQUESTED')");
+  if (closesOpen) closeOpenCoordinations(db, params);
   const closesApproved = sqlText.includes('DecisionMessage = @supersededNoticeMessage')
     && sqlText.includes("AND Status = 'APPROVED'")
     && sqlText.includes('CoordinationId <> @coordinationId');
@@ -745,6 +749,13 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
   if (sqlText.includes('UPDATE dbo.MR_AssignmentCoordinationRecipients')) {
     if (missing) throw missingObject('MR_AssignmentCoordinationRecipients');
     return markCoordinationNotification(db, params);
+  }
+
+  if (sqlText.includes('UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)')
+    && sqlText.includes("Status IN ('PENDING','CANCELLATION_REQUESTED')")) {
+    if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
+    closeOpenCoordinations(db, params);
+    return [[]];
   }
 
   if (sqlText.includes('UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)')

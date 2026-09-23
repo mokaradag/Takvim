@@ -70,7 +70,9 @@ function taskEventItem(notification) {
     headline: many
       ? `${notification.taskCount} görev ${assigned ? 'atandı' : 'sorumluluğunuzdan çıkarıldı'}`
       : assigned ? 'Size görev atandı' : 'Görev sorumluluğunuz kaldırıldı',
-    subtitle: `${notification.actorName} · ${notification.taskTitle || 'Görev'}`,
+    subtitle: many
+      ? `${notification.actorName} · ${notification.taskCount} görev`
+      : `${notification.actorName} · ${notification.taskTitle || 'Görev'}`,
     detail: [notification.projectCode, notification.projectName].filter(Boolean).join(' · ')
   };
 }

@@ -13,6 +13,7 @@ import { loadAuthorizationContext } from '../authorization/loadAuthorizationCont
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { writeAssignmentNotifications } from '../notifications/taskNotificationStore.js';
+import { enqueueOutlookTaskChange } from '../outlook/outlookCommitHooks.js';
 import { decodeVersion } from '../repository/versionTokens.js';
 import { isAuthoritativeManagerOf, resolveManagementChain } from './managementChain.js';
 import { readCoordination } from './assignmentCoordinationQueries.js';
@@ -44,6 +45,21 @@ const CLOSE_OPEN_COORDINATIONS_SQL = `
   WHERE TaskId = @taskId AND RequestedAssigneeSicil = @assigneeSicil
     AND Status IN ('PENDING','CANCELLATION_REQUESTED');
 `;
+
+export async function closeOpenCoordinationsFor(
+  executor,
+  actor,
+  taskId,
+  assigneeSicil,
+  message = 'Doğrudan atamayla karşılandı.'
+) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, canonicalId(taskId, 'Görev'));
+  request.input('assigneeSicil', sql.Int, Number(assigneeSicil));
+  request.input('requesterSicil', sql.Int, Number(actor.sicil));
+  request.input('supersededMessage', sql.NVarChar(2000), message);
+  await request.query(CLOSE_OPEN_COORDINATIONS_SQL);
+}
 
 const CLOSE_APPROVED_COORDINATIONS_SQL = `
   UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)
@@ -649,8 +665,9 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       };
     }
 
+    let currentAssignees = null;
     if (checksAssignment) {
-      const currentAssignees = await lockedAssigneeSicils(transaction, row.TaskId);
+      currentAssignees = await lockedAssigneeSicils(transaction, row.TaskId);
       const requestedAssigneePresent = currentAssignees.map(Number)
         .includes(Number(row.RequestedAssigneeSicil));
       const stale = requestsCancellation
@@ -708,7 +725,14 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       supersede.input('coordinationId', sql.UniqueIdentifier, coordinationId);
       supersede.input('supersededNoticeMessage', sql.NVarChar(2000), 'Yeni onaylı atamayla değiştirildi.');
       await supersede.query(CLOSE_APPROVED_COORDINATIONS_SQL);
+      const nextAssignees = [...new Set([...currentAssignees, Number(row.RequestedAssigneeSicil)])];
       await addTaskAssignee(transaction, row.TaskId, row.RequestedAssigneeSicil, actor.sicil);
+      await enqueueOutlookTaskChange(
+        transaction,
+        row.TaskId,
+        { assigneeIds: currentAssignees },
+        { assigneeIds: nextAssignees }
+      );
       await insertRecipients(transaction, coordinationId, [[Number(row.RequestedAssigneeSicil), 'ASSIGNEE']]);
       notificationChanges.push({
         taskId: String(row.TaskId).toLowerCase(),
@@ -718,7 +742,15 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       });
     } else if (nextStatus === COORDINATION_STATUSES.CANCELLED
       && row.Status === COORDINATION_STATUSES.CANCELLATION_REQUESTED) {
+      const nextAssignees = currentAssignees
+        .filter((sicil) => Number(sicil) !== Number(row.RequestedAssigneeSicil));
       await removeTaskAssignee(transaction, row.TaskId, row.RequestedAssigneeSicil, actor.sicil);
+      await enqueueOutlookTaskChange(
+        transaction,
+        row.TaskId,
+        { assigneeIds: currentAssignees },
+        { assigneeIds: nextAssignees }
+      );
       notificationChanges.push({
         taskId: String(row.TaskId).toLowerCase(),
         added: [],

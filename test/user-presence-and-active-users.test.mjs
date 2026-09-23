@@ -413,6 +413,9 @@ test('Aktif Kullanıcılar sekmesi kalan yüksekliği doldurur ve başlığı sa
   const tab = read('src/features/system-admin/tabs/SystemPresenceTab.jsx');
   assert.match(tab, /useAdminResource\(load, \{ intervalMs: REFRESH_INTERVAL_MS, enabled \}\)/);
   assert.match(tab, /className="sysadmin-tile-grid sysadmin-presence-metrics"/);
+  assert.match(tab, /stalenessNotice\(\{/);
+  assert.match(tab, /error=\{!data && presence\.error \?/);
+  assert.match(tab, /className="sysadmin-stale-note"/);
   // Kaydırma kabı klavyeyle odaklanabilir olmalıdır: içinde etkileşimli öğe
   // yoktur, odaklanamazsa klavye kullanan biri kalan satırlara ulaşamaz.
   assert.match(tab, /className="sysadmin-presence-scroll" tabIndex=\{0\} role="region" aria-label="[^"]+"/);

@@ -30,6 +30,13 @@ const SOURCE = `
   LEFT JOIN dbo.MR_AssignmentCoordinationRecipients n
     ON n.CoordinationId = c.CoordinationId AND n.Sicil = @sicil
 `;
+const COUNT_SOURCE = `
+  FROM dbo.MR_TaskAssignmentCoordinations c
+  LEFT JOIN dbo.MR_Tasks t ON t.TaskId = c.TaskId
+  LEFT JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+  LEFT JOIN dbo.MR_AssignmentCoordinationRecipients n
+    ON n.CoordinationId = c.CoordinationId AND n.Sicil = @sicil
+`;
 /**
  * Karar yetkisi CANLI veriden türetilir.
  *
@@ -114,7 +121,7 @@ export function bindCoordinationScope(request, actor) {
 export const COORDINATION_INBOX_SQL = `
   SELECT COUNT(CASE WHEN ${UNREAD} AND ${VISIBLE} THEN 1 END) AS UnreadCount,
     COUNT(CASE WHEN ${ACTIONABLE} THEN 1 END) AS PendingCount
-  ${SOURCE} WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE};
+  ${COUNT_SOURCE} WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE};
   SELECT TOP (@limit) ${FIELDS} ${SOURCE}
   WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE} AND ${VISIBLE} ORDER BY ${ORDER};
 `;

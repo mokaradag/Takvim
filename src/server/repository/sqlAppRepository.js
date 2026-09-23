@@ -27,7 +27,10 @@ import {
 } from '../outlook/outlookCommitHooks.js';
 import { classifyAssigneeOrganizations } from '../assignment/crossOrganization.js';
 import { resolveManagementChain } from '../assignment/managementChain.js';
-import { recordCrossOrganizationAssignments } from '../assignment/assignmentCoordinationStore.js';
+import {
+  closeOpenCoordinationsFor,
+  recordCrossOrganizationAssignments
+} from '../assignment/assignmentCoordinationStore.js';
 import {
   aggregateAssignmentNotifications,
   assigneeSetDelta,
@@ -2542,6 +2545,7 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
     for (const change of changes) {
       const inherited = new Set((change.templateAssigneeSicils || []).map(Number));
       for (const sicil of change.added) {
+        await closeOpenCoordinationsFor(executor, actor, change.taskId, sicil);
         const person = classified.get(Number(sicil));
         if (!person?.crossOrganization) continue;
         // Yineleme, şablonun koordinasyon kaydını devralır.

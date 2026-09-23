@@ -6,7 +6,7 @@ import { AdminSection } from '../components/AdminSection.jsx';
 import { MetricTile } from '../components/MetricTile.jsx';
 import { loadSystemPresenceRequest } from '../systemAdminClient.js';
 import { useAdminResource } from '../useAdminResource.js';
-import { presenceDuration, presenceReferenceMs, presenceTimestamp } from '../systemAdminPresentation.js';
+import { presenceDuration, presenceReferenceMs, presenceTimestamp, stalenessNotice } from '../systemAdminPresentation.js';
 
 /**
  * Sistem Yönetimi · Aktif Kullanıcılar.
@@ -32,6 +32,11 @@ export function SystemPresenceTab({ enabled = true }) {
   // boşta görünüyor, geri saatte yeni oturumun süresi "—" yazıyordu; "Şu anda
   // aktif" kutusu ise sunucuda hesaplandığı için liste ile çelişiyordu.
   const referenceMs = presenceReferenceMs(data?.generatedAt);
+  const notice = stalenessNotice({
+    stale: presence.stale,
+    lastUpdatedAt: presence.lastUpdatedAt,
+    error: presence.error
+  });
 
   // Demo Kipinde sorgu HİÇ çalışmaz. Dal olmadan sekme boş ölçüm kutuları ve
   // "Şu anda etkin kullanıcı görünmüyor." iletisini çiziyor, yönetici bunu
@@ -67,15 +72,20 @@ export function SystemPresenceTab({ enabled = true }) {
         icon="Users"
         description={`Aktif = son ${activeMinutes} dakika içinde kimliği doğrulanmış nabız. Liste son 15 dakikayı kapsar.`}
         loading={presence.loading}
-        error={presence.error?.message || null}
-        empty={!presence.loading && !presence.error && users.length === 0}
+        error={!data && presence.error ? (presence.error.message || presence.error.code) : null}
+        empty={!presence.loading && Boolean(data) && users.length === 0}
         emptyMessage="Şu anda etkin kullanıcı görünmüyor."
         emptyHint={data?.enabled === false ? 'Varlık tablosu bu kurulumda henüz oluşturulmamış.' : null}
         className="sysadmin-presence-section"
-        actions={presence.lastUpdatedAt && (
-          <span className="sysadmin-updated tabular">
-            <Icons.Refresh size={11} aria-hidden="true" /> {new Date(presence.lastUpdatedAt).toLocaleTimeString('tr-TR')}
-          </span>
+        actions={(notice || presence.lastUpdatedAt) && (
+          <>
+            {notice && <span className="sysadmin-stale-note">{notice}</span>}
+            {presence.lastUpdatedAt && (
+              <span className="sysadmin-updated tabular">
+                <Icons.Refresh size={11} aria-hidden="true" /> {new Date(presence.lastUpdatedAt).toLocaleTimeString('tr-TR')}
+              </span>
+            )}
+          </>
         )}
       >
         {/* Kaydırma `.sysadmin-presence-scroll` üzerindedir ve içinde

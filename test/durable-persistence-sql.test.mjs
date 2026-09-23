@@ -155,7 +155,9 @@ test('filtrelenmiş dizin kuran betikler gerekli bütün oturum seçeneklerini s
   ];
   for (const [name, script] of [['0015', upgrade0015], ['create', createSql]]) {
     assert.match(script, /WHERE Status IN \('PENDING','CANCELLATION_REQUESTED'\)/, name);
-    const header = script.slice(0, script.indexOf('BEGIN TRY'));
+    const tryIndex = script.indexOf('BEGIN TRY');
+    assert.ok(tryIndex > 0, `${name}: BEGIN TRY bulunamadı`);
+    const header = script.slice(0, tryIndex);
     for (const option of required) assert.ok(header.includes(option), `${name}: ${option}`);
   }
 });

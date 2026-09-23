@@ -38,7 +38,7 @@ export function resolveTaskEditorAccess(state, taskId, patch = {}) {
 export async function commitTaskEditorEdits(persistence, getState, edits, { onRebase, notifyAssignees = false, ...options } = {}) {
   const before = getState();
   const ids = [...new Set(edits.map((edit) => edit.id))];
-  const flushed = await persistence.flushTaskUpdates(ids);
+  const flushed = await persistence.flushTaskUpdates(ids, { notifyAssignees: notifyAssignees === true });
   const failed = flushed.find((result) => result && !result.ok);
   // Yalnızca bu boşaltmada başarıyla yazılmış yerel sürümü ilerletiriz.
   // Daha önce eskimiş taslaklar ve dışarıdan gelen sürümler CONFLICT kalır.

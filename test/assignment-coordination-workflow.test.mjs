@@ -144,6 +144,12 @@ function recipientsOf(stack, coordinationId) {
     .filter((row) => row.CoordinationId.toUpperCase() === coordinationId.toUpperCase());
 }
 
+test('zil sayaç sorgusu kişi dizinini yalnız ayrıntı önizlemesinde birleştirir', () => {
+  const [countsSql, previewSql = ''] = queries.COORDINATION_INBOX_SQL.split(';');
+  assert.equal(countsSql.includes('MR_V_PeopleDirectory'), false);
+  assert.equal(previewSql.includes('MR_V_PeopleDirectory'), true);
+});
+
 test('sıradan kullanıcı kendini atayabilir; başkasını doğrudan atayamaz', async () => {
   const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
   try {
@@ -282,6 +288,42 @@ test('kaldırma onayı yalnızca tek Sicil siler; gizli eş sorumlular korunur',
     assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY]);
     assert.equal(stack.db.taskNotifications.some((row) => row.Kind === 'TASK_UNASSIGNED'
       && Number(row.RecipientSicil) === EXTERNAL), true);
+  } finally { await stack.dispose(); }
+});
+
+test('koordinasyon onayı ve kaldırması Outlook aboneliklerini yeniden kuyruğa alır', async () => {
+  const stack = await createActualStack(seed({
+    taskOutlookSubscriptions: [{
+      TaskId: TASK_ID,
+      ProjectId: PROJECT_ID,
+      UserSicil: ORDINARY,
+      CalendarUid: 'mergen-rota-coordination-test',
+      Sequence: 3,
+      DeliveredSequence: 3,
+      QueueSeq: 7,
+      IsActive: 1
+    }]
+  }), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const subscription = stack.db.taskOutlookSubscriptions[0];
+    const initialQueueSeq = subscription.QueueSeq;
+    const request = await store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Takvim görünürlüğü'
+    });
+
+    const approved = await asUser(UNIT_MANAGER, () =>
+      store.decideAssignmentCoordination(request.items[0].id, { decision: 'APPROVE' }));
+    assert.equal(approved.outcome, 'APPROVED');
+    assert.equal(subscription.QueueSeq, initialQueueSeq + 1);
+    assert.equal(subscription.PendingMethod, 'REQUEST');
+
+    const cancellation = await asUser(UNIT_MANAGER, () =>
+      store.decideAssignmentCoordination(request.items[0].id, { decision: 'REQUEST_CANCELLATION' }));
+    assert.equal(cancellation.outcome, 'CANCELLATION_REQUESTED');
+    const removed = await store.decideAssignmentCoordination(request.items[0].id, { decision: 'APPROVE' });
+    assert.equal(removed.outcome, 'CANCELLED');
+    assert.equal(subscription.QueueSeq, initialQueueSeq + 2);
+    assert.equal(subscription.PendingMethod, 'REQUEST');
   } finally { await stack.dispose(); }
 });
 
@@ -640,6 +682,26 @@ test('doğrudan atama aynı kişinin bekleyen talebini kapatır; kaldırma iste�
       notice.CoordinationId.toLowerCase(), { decision: 'REQUEST_CANCELLATION', message: 'Kapasite doldu.' }
     ));
     assert.equal(cancellation.outcome, 'CANCELLATION_REQUESTED');
+  } finally { await stack.dispose(); }
+});
+
+test('aynı organizasyondaki doğrudan atama da bekleyen talebi kapatır', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    const request = await asUser(ORDINARY, () => store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [SAME_NAME_A], message: 'Aynı birim desteği'
+    }));
+    const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, assigneeIds: [String(ORDINARY), String(SAME_NAME_A)], assigneeMutation: true }]
+    });
+
+    const pending = stack.db.taskAssignmentCoordinations
+      .find((row) => row.CoordinationId.toLowerCase() === request.items[0].id);
+    assert.equal(pending.Status, 'CANCELLED');
+    assert.equal(pending.DecisionMessage, 'Doğrudan atamayla karşılandı.');
+    assert.equal(stack.db.taskAssignmentCoordinations.some((row) =>
+      row.Mode === 'NOTICE' && Number(row.RequestedAssigneeSicil) === SAME_NAME_A), false);
   } finally { await stack.dispose(); }
 });
 

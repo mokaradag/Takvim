@@ -260,6 +260,24 @@ test('Kaydet eski birleştirilmiş yamaları önce yazar ve son taslak değeri k
   } finally { await stack.dispose(); }
 });
 
+test('Kaydet bekleyen sorumlu yamasını e-posta tercihiyle boşaltır', async () => {
+  const stack = await createActualStack(seed(), { sicil: manager, corporateWbsSource: false });
+  try {
+    const task = await createTask(stack);
+    const older = stack.persistence.updateTask(taskId, { assigneeIds: employees.map(String) });
+    const result = await commitTaskEditorEdits(
+      stack.persistence,
+      () => stack.state,
+      [{ id: taskId, version: task.version, patch: { description: 'Kaydet ile tamamlandı' } }],
+      { taskId, notifyAssignees: true }
+    );
+    assert.equal(result.ok, true, result.error?.message);
+    assert.equal((await older).ok, true);
+    assert.equal(stack.db.taskMailOutbox.length, 1);
+    assert.equal(Number(stack.db.taskMailOutbox[0].RecipientSicil), employees[1]);
+  } finally { await stack.dispose(); }
+});
+
 test('önceki yama reddedilirse Kaydet onu geçemez; dış sürüm çakışması korunur', async () => {
   const stack = await createActualStack(seed(), { sicil: manager, corporateWbsSource: false });
   try {
