@@ -108,7 +108,7 @@ Onay, görev ve sorumlu satırları kilitliyken tek işlemde çalışır. Bayatl
 
 Görev oluşturma ve düzenleme panellerinde, Kaydet düğmesinin yanında **"Sorumlulara e-posta bildirimi gönder"** kutusu bulunur. Varsayılan **KAPALI**dır ve kalıcı bir kullanıcı tercihi olarak saklanmaz: kullanıcı her işlemde ayrıca seçer, böylece olağan kayıtlar posta üretmez.
 
-Açıkken, sorumlu kümesine **gerçekten eklenen veya çıkarılan** her kişi için bir posta NİYETİ yazılır. Kendine atama posta üretmez. İleti kısadır: görev, proje, atayan, öncelik, Hedef/Termin, değişiklik özeti ve dağıtımda tanımlıysa Rota bağlantısı.
+Açıkken, sorumlu kümesine **gerçekten eklenen veya çıkarılan** her kişi için bir posta NİYETİ yazılır. Kullanıcı kendisini sorumlu olarak ekliyorsa da, kutuyu açıkça işaretlediği için kendi adresine posta üretilir; sağ üstteki zil bildirimi ise kendine atamada gereksiz gürültüyü önlemek için yine üretilmez. İleti kısadır: görev, proje, atayan, öncelik, Hedef/Termin, değişiklik özeti ve dağıtımda tanımlıysa Rota bağlantısı.
 
 Mimari dayanıklıdır ve `api.commit` süresini SMTP'ye bağlamaz:
 

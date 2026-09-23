@@ -273,6 +273,22 @@ test('data boundary presents user-facing Turkish status messages', () => {
   }
 });
 
+test('ilk yükleme perdesi zoom-düzeltilmiş görünüm alanında ortalanır ve durum animasyonları canlı kalır', () => {
+  const css = read('src/app/styles/shell.css');
+  const root = read('src/components/shell/ApplicationRoot.jsx');
+  const bootRule = css.match(/\.app-boot\s*\{[^}]*\}/)?.[0] || '';
+  assert.match(bootRule, /position:\s*fixed/);
+  assert.match(bootRule, /width:\s*var\(--app-viewport-w,\s*100vw\)/);
+  assert.match(bootRule, /height:\s*var\(--app-viewport-h,\s*100vh\)/);
+  assert.match(bootRule, /place-items:\s*center/);
+  assert.doesNotMatch(bootRule, /inset:\s*0/);
+  assert.doesNotMatch(css, /\.reduce-motion\s+\.app-boot-stars(?:\s|\{|,)/);
+  assert.doesNotMatch(css, /\.reduce-motion\s+\.app-boot-progress\s*>\s*span/);
+  assert.doesNotMatch(css, /\.reduce-motion\s+\.app-boot\s+\*/);
+  assert.match(css, /\.app-boot-progress\s*>\s*span\s*\{[^}]*animation:\s*app-boot-sweep/s);
+  assert.match(root, /<div className="app-boot-stars"[^>]*\/>[\s\S]*<div className="app-boot-nebula"[^>]*\/>[\s\S]*<div className="app-boot-orbit"[^>]*\/>/);
+});
+
 test('persistence status distinguishes saving, failure, and successful save states', () => {
   const source = read('src/components/shell/PersistenceStatus.jsx');
   for (const message of ['Kaydediliyor…', 'Kaydetme hatası', 'Kaydedildi']) {

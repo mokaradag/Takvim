@@ -56,9 +56,10 @@ export function assigneeSetDelta(before = [], after = []) {
  * sınanabilir.
  *
  * @param {Array} changes `{ taskId, added, removed, task }`
- * @param {number} actorSicil kendine atama bildirilmez
+ * @param {number} actorSicil zil için kendine atama bildirilmez
+ * @param {{includeActor?: boolean}} options açık e-posta niyetinde aktör de alıcı olabilir
  */
-export function aggregateAssignmentNotifications(changes = [], actorSicil) {
+export function aggregateAssignmentNotifications(changes = [], actorSicil, { includeActor = false } = {}) {
   const actor = Number(actorSicil);
   const buckets = new Map();
   for (const change of changes) {
@@ -68,7 +69,7 @@ export function aggregateAssignmentNotifications(changes = [], actorSicil) {
     ]) {
       for (const sicil of sicils) {
         const recipient = Number(sicil);
-        if (!Number.isSafeInteger(recipient) || recipient <= 0 || recipient === actor) continue;
+        if (!Number.isSafeInteger(recipient) || recipient <= 0 || (!includeActor && recipient === actor)) continue;
         const key = `${recipient}:${kind}`;
         if (!buckets.has(key)) {
           buckets.set(key, { recipientSicil: recipient, kind, taskCount: 0, task: change?.task || null, taskId: change?.taskId || null });

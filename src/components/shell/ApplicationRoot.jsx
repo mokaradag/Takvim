@@ -60,7 +60,9 @@ function CorporateSessionGate({ children, onUseDemo }) {
 
   return (
     <div className="app-boot">
-      <div className="app-boot-aura" aria-hidden="true" />
+      <div className="app-boot-stars" aria-hidden="true" />
+      <div className="app-boot-nebula" aria-hidden="true" />
+      <div className="app-boot-orbit" aria-hidden="true" />
       <div className="app-boot-card">
         <div className="app-boot-brand">
           <AppLogo size={46} />

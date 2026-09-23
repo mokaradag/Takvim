@@ -7,6 +7,7 @@ import {
   persistActualIdAliases
 } from '../src/data/api/actualIdAliasStorage.js';
 import { restoreActualSnapshotIds } from '../src/data/api/createApiRepository.js';
+import { sameActualReference } from '../src/domain/identity/actualId.js';
 import {
   canonicalizeCommitChanges,
   findCommitChangeIssue
@@ -54,6 +55,15 @@ test('Actual ID aliases survive repository recreation and restore a reloaded sna
 
   assert.equal(snapshot.projects[0].id, PROJECT_CLIENT_ID);
   assert.deepEqual([...reloadedAliases], [[PROJECT_UUID, PROJECT_CLIENT_ID]]);
+});
+
+test('çıplak sunucu UUIDsi önekli istemci görev kimliğiyle aynı kaydı gösterir', () => {
+  assert.equal(sameActualReference(TASK_UUID, `task-${TASK_UUID}`), true);
+  assert.equal(sameActualReference(TASK_UUID.toUpperCase(), `task-${TASK_UUID}`), true);
+  assert.equal(sameActualReference(`other-${TASK_UUID}`, `task-${TASK_UUID}`), false);
+  assert.equal(sameActualReference('demo-task', 'demo-task'), true);
+  assert.equal(sameActualReference('demo-Task', 'demo-task'), false);
+  assert.equal(sameActualReference('demo-task', 'other-task'), false);
 });
 
 test('Actual alias storage ignores malformed and mismatched entries', () => {

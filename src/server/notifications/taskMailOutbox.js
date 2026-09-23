@@ -129,11 +129,13 @@ export async function claimDueTaskMail(executor, limit = 20, { leaseSeconds } = 
   request.input('maxAttempts', sql.Int, TASK_MAIL_MAX_ATTEMPTS);
   request.input('attemptsExhaustedCode', sql.VarChar(60), TASK_MAIL_ATTEMPTS_EXHAUSTED_CODE);
   const result = await request.query(`
+    /* READPAST her oturumda kilit tabanlı READ COMMITTED ile çalışır. */
+    SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
     DECLARE @claimed TABLE(MailId bigint PRIMARY KEY);
 
     /* Deneme, satır KİRALANDIĞINDA sayılır. Böylece SMTP kabulünden sonra
        SENT yazımı kaybolsa bile her yeniden sahiplenme bütçeyi tüketir. */
-    UPDATE dbo.MR_TaskMailOutbox WITH (UPDLOCK, READPAST)
+    UPDATE dbo.MR_TaskMailOutbox WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
     SET Status = 'FAILED',
         LeaseExpiresAt = NULL,
         LeaseToken = NULL,
@@ -146,7 +148,7 @@ export async function claimDueTaskMail(executor, limit = 20, { leaseSeconds } = 
 
     ;WITH due AS (
       SELECT TOP (@limit) MailId
-      FROM dbo.MR_TaskMailOutbox WITH (UPDLOCK, READPAST)
+      FROM dbo.MR_TaskMailOutbox WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
       WHERE Status = 'PENDING'
         AND AttemptCount < @maxAttempts
         AND NextAttemptAt <= SYSUTCDATETIME()

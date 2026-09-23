@@ -128,9 +128,16 @@ export function bindCoordinationScope(request, actor) {
  * server/notifications/notificationInboxQueries.js).
  */
 export const COORDINATION_INBOX_SQL = `
-  SELECT COUNT(CASE WHEN ${UNREAD} AND ${VISIBLE} THEN 1 END) AS UnreadCount,
-    COUNT(CASE WHEN ${ACTIONABLE} THEN 1 END) AS PendingCount
-  ${COUNT_SOURCE} WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE};
+  WITH coordination_inbox_counts AS (
+    SELECT
+      CASE WHEN ${UNREAD} AND ${VISIBLE} THEN 1 ELSE 0 END AS IsUnread,
+      CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending
+    ${COUNT_SOURCE} WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE}
+  )
+  SELECT
+    COALESCE(SUM(IsUnread), 0) AS UnreadCount,
+    COALESCE(SUM(IsPending), 0) AS PendingCount
+  FROM coordination_inbox_counts;
   SELECT TOP (@limit) ${FIELDS} ${SOURCE}
   WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE} AND ${VISIBLE} ORDER BY ${ORDER};
 `;
@@ -234,11 +241,20 @@ export async function readCoordinationPage(executor, actor, input = {}) {
     OR (@tab = 'history' AND (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})))`;
 
   const result = await request.query(`
-    SELECT COUNT(*) AS Total,
-      COUNT(CASE WHEN ${ACTIONABLE} THEN 1 END) AS PendingCount,
-      COUNT(CASE WHEN c.RequesterSicil = @sicil THEN 1 END) AS SentCount,
-      COUNT(CASE WHEN (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE}) THEN 1 END) AS HistoryCount
-    ${SOURCE} WHERE ${filters};
+    WITH coordination_page_counts AS (
+      SELECT
+        CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending,
+        CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
+        CASE WHEN (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})
+          THEN 1 ELSE 0 END AS IsHistory
+      ${SOURCE} WHERE ${filters}
+    )
+    SELECT
+      COUNT(*) AS Total,
+      COALESCE(SUM(IsPending), 0) AS PendingCount,
+      COALESCE(SUM(IsSent), 0) AS SentCount,
+      COALESCE(SUM(IsHistory), 0) AS HistoryCount
+    FROM coordination_page_counts;
     DECLARE @total int = (SELECT COUNT(*) ${SOURCE} WHERE ${filters} AND ${tabFilter});
     DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
     DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;

@@ -150,6 +150,19 @@ test('zil sayaç sorgusu kişi dizinini yalnız ayrıntı önizlemesinde birleş
   assert.equal(previewSql.includes('MR_V_PeopleDirectory'), true);
 });
 
+test('koordinasyon sayaçları alt sorgulu yetki ifadelerini aggregate içinde çalıştırmaz', () => {
+  const source = readFileSync(new URL('../src/server/assignment/assignmentCoordinationQueries.js', import.meta.url), 'utf8');
+  assert.equal(source.includes('COUNT(CASE WHEN ${ACTIONABLE}'), false);
+  assert.equal(source.includes('COUNT(CASE WHEN ${UNREAD}'), false);
+  assert.match(queries.COORDINATION_INBOX_SQL, /WITH coordination_inbox_counts AS/);
+  assert.match(queries.COORDINATION_INBOX_SQL, /SUM\(IsUnread\)/);
+  assert.match(queries.COORDINATION_INBOX_SQL, /SUM\(IsPending\)/);
+  const pageCounts = source.match(/WITH coordination_page_counts AS \([\s\S]*?FROM coordination_page_counts;/)?.[0] || '';
+  assert.match(pageCounts, /COALESCE\(SUM\(IsPending\), 0\) AS PendingCount/);
+  assert.match(pageCounts, /COALESCE\(SUM\(IsSent\), 0\) AS SentCount/);
+  assert.match(pageCounts, /COALESCE\(SUM\(IsHistory\), 0\) AS HistoryCount/);
+});
+
 test('sıradan kullanıcı kendini atayabilir; başkasını doğrudan atayamaz', async () => {
   const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
   try {

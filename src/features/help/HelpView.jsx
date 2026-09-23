@@ -72,7 +72,7 @@ const CONTENT = {
   ayarlar: {
     title: 'Ayarlar',
     intro: 'Temel / Kapsamlı Kip seçimi ile tema, vurgu rengi, yoğunluk, yazı boyutu ve hareket tercihlerini yönetir. Bu sayfa proje seçiminden bağımsızdır.',
-    points: ['Çalışma Kipi kartlarından Temel veya Kapsamlı Kipi seçin.', 'Kip değiştirmek veriyi dönüştürmez veya silmez; aynı kayıtlar kullanılmaya devam eder.', 'Yazı boyutunu büyüttüğünüzde kenar çubuğu alt alanı görünür kalır.', 'Hareketi azalt seçeneği açıkken grafik ve arayüz animasyonları sınırlandırılır.']
+    points: ['Çalışma Kipi kartlarından Temel veya Kapsamlı Kipi seçin.', 'Kip değiştirmek veriyi dönüştürmez veya silmez; aynı kayıtlar kullanılmaya devam eder.', 'Yazı boyutunu büyüttüğünüzde kenar çubuğu alt alanı görünür kalır.', 'Hareketi azalt seçeneği açıkken grafik ve arayüz animasyonları sınırlandırılır; açılıştaki yıldızlar ve yükleme çubuğu durum geri bildirimi olarak çalışmaya devam eder.']
   }
 };
 
