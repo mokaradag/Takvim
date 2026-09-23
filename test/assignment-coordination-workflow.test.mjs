@@ -643,6 +643,22 @@ test('görev başka projeye taşınınca karar yetkisi GÜNCEL projeden gelir', 
     const currentItem = current.items.find((item) => item.id === coordinationId);
     assert.ok(currentItem, 'yeni projenin yetkilisi kaydı bulabilmelidir');
     assert.equal(currentItem.actionable, true);
+
+    const currentPage = await asUser(EXECUTIVE, async () => {
+      const { withSqlTransaction } = await import('../src/server/db/pool.js');
+      const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
+      return withSqlTransaction(async (transaction) => queries.readCoordinationPage(
+        transaction,
+        await loadAuthorizationContext(transaction),
+        { tab: 'all', projectId: NEW_PROJECT_ID, page: 0, pageSize: 25 }
+      ));
+    });
+    assert.equal(
+      currentPage.items.some((item) => item.id === coordinationId),
+      true,
+      'yeni proje filtresi taşınmış kaydı dışlamamalıdır'
+    );
+
     const decision = await asUser(EXECUTIVE, () =>
       store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }));
     assert.equal(decision.outcome, 'APPROVED');
@@ -682,6 +698,16 @@ test('doğrudan atama aynı kişinin bekleyen talebini kapatır; kaldırma iste�
       notice.CoordinationId.toLowerCase(), { decision: 'REQUEST_CANCELLATION', message: 'Kapasite doldu.' }
     ));
     assert.equal(cancellation.outcome, 'CANCELLATION_REQUESTED');
+
+    // Kişi doğrudan kaldırılırsa açık kaldırma talebi artık karar verilebilir
+    // görünmemelidir; özellikle REJECT eski APPROVED durumunu geri getiremez.
+    await stack.reload();
+    const assignedTask = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...assignedTask, assigneeIds: [String(ORDINARY)], assigneeMutation: true }]
+    });
+    assert.equal(notice.Status, 'CANCELLED');
+    assert.equal(notice.DecisionMessage, 'Doğrudan kaldırmayla karşılandı.');
   } finally { await stack.dispose(); }
 });
 

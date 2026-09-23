@@ -647,6 +647,34 @@ test('kira SAHİPLİĞİ: devralınan satırın durumunu eski tur ezemez', async
   } finally { await stack.dispose(); }
 });
 
+test('süresi dolan kira deneme sınırında yeniden sahiplenilmez', async () => {
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    await stack.repository.commitChanges(
+      { taskUpserts: [{ ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }] },
+      { notifyAssignees: true }
+    );
+    const outbox = await import('../src/server/notifications/taskMailOutbox.js');
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const pool = await getSqlPool();
+    const row = stack.db.taskMailOutbox[0];
+    row.AttemptCount = outbox.TASK_MAIL_MAX_ATTEMPTS - 1;
+
+    const [lastClaim] = await outbox.claimDueTaskMail(pool, 1);
+    assert.ok(lastClaim);
+    assert.equal(row.AttemptCount, outbox.TASK_MAIL_MAX_ATTEMPTS);
+
+    // SMTP kabulünden sonra SENT yazımı kaybolmuş gibi kira süresini geçir:
+    // yeni tur aynı satırı yeniden göndermemeli ve sayaç sınırı aşmamalıdır.
+    row.LeaseExpiresAt = new Date(Date.now() - 1000).toISOString();
+    const reclaimed = await outbox.claimDueTaskMail(pool, 1);
+    assert.deepEqual(reclaimed, []);
+    assert.equal(row.Status, 'FAILED');
+    assert.equal(row.AttemptCount, outbox.TASK_MAIL_MAX_ATTEMPTS);
+    assert.equal(row.LastFailureCode, outbox.TASK_MAIL_ATTEMPTS_EXHAUSTED_CODE);
+  } finally { await stack.dispose(); }
+});
+
 /** İki alıcılı tek kayıt: kuyrukta iki satır. */
 async function queueTwoRecipients(stack) {
   await stack.repository.commitChanges(
@@ -741,7 +769,7 @@ test('kira içinde bitemeyecek teslimat başlatılmaz; satır kiralı kalır', a
     assert.equal(outcome.deferred, 1);
     const deferred = stack.db.taskMailOutbox[1];
     assert.equal(deferred.Status, 'PENDING');
-    assert.equal(deferred.AttemptCount, 0, 'ertelenen satır deneme sayılmaz');
+    assert.equal(deferred.AttemptCount, 1, 'kiralanan satır teslimat başlamasa da deneme bütçesini tüketir');
     assert.ok(deferred.LeaseToken, 'kira dolana dek başka bir örnek satırı kiralayamaz');
   } finally {
     Date.now = realNow;

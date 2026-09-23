@@ -28,6 +28,7 @@ export function isMissingTaskMailSchema(error) {
 
 /** Kaç deneme sonra kayıt BAŞARISIZ sayılır (yönetim konsolunda görünür). */
 export const TASK_MAIL_MAX_ATTEMPTS = 6;
+export const TASK_MAIL_ATTEMPTS_EXHAUSTED_CODE = 'MAIL_ATTEMPTS_EXHAUSTED';
 const RETRY_BASE_SECONDS = 60;
 const MIN_LEASE_SECONDS = 120;
 const MAX_LEASE_SECONDS = 3600;
@@ -125,18 +126,36 @@ export async function claimDueTaskMail(executor, limit = 20, { leaseSeconds } = 
   request.input('limit', sql.Int, batchSize);
   request.input('leaseSeconds', sql.Int, Number(leaseSeconds) || taskMailLeaseSeconds(batchSize));
   request.input('leaseToken', sql.UniqueIdentifier, leaseToken);
+  request.input('maxAttempts', sql.Int, TASK_MAIL_MAX_ATTEMPTS);
+  request.input('attemptsExhaustedCode', sql.VarChar(60), TASK_MAIL_ATTEMPTS_EXHAUSTED_CODE);
   const result = await request.query(`
     DECLARE @claimed TABLE(MailId bigint PRIMARY KEY);
+
+    /* Deneme, satır KİRALANDIĞINDA sayılır. Böylece SMTP kabulünden sonra
+       SENT yazımı kaybolsa bile her yeniden sahiplenme bütçeyi tüketir. */
+    UPDATE dbo.MR_TaskMailOutbox WITH (UPDLOCK, READPAST)
+    SET Status = 'FAILED',
+        LeaseExpiresAt = NULL,
+        LeaseToken = NULL,
+        LastFailureCode = COALESCE(LastFailureCode, @attemptsExhaustedCode),
+        UpdatedAt = SYSUTCDATETIME()
+    WHERE Status = 'PENDING'
+      AND AttemptCount >= @maxAttempts
+      AND NextAttemptAt <= SYSUTCDATETIME()
+      AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt <= SYSUTCDATETIME());
+
     ;WITH due AS (
       SELECT TOP (@limit) MailId
       FROM dbo.MR_TaskMailOutbox WITH (UPDLOCK, READPAST)
       WHERE Status = 'PENDING'
+        AND AttemptCount < @maxAttempts
         AND NextAttemptAt <= SYSUTCDATETIME()
         AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt <= SYSUTCDATETIME())
       ORDER BY NextAttemptAt, MailId
     )
     UPDATE o
-    SET LeaseExpiresAt = DATEADD(second, @leaseSeconds, SYSUTCDATETIME()),
+    SET AttemptCount = AttemptCount + 1,
+        LeaseExpiresAt = DATEADD(second, @leaseSeconds, SYSUTCDATETIME()),
         LeaseToken = @leaseToken,
         UpdatedAt = SYSUTCDATETIME()
     OUTPUT inserted.MailId INTO @claimed(MailId)
@@ -186,7 +205,7 @@ export async function markTaskMailSent(executor, mailId, leaseToken = null) {
   await request.query(`
     UPDATE dbo.MR_TaskMailOutbox
     SET Status = 'SENT', SentAt = SYSUTCDATETIME(), LeaseExpiresAt = NULL, LeaseToken = NULL,
-        LastFailureCode = NULL, AttemptCount = AttemptCount + 1, UpdatedAt = SYSUTCDATETIME()
+        LastFailureCode = NULL, UpdatedAt = SYSUTCDATETIME()
     WHERE MailId = @mailId AND Status = 'PENDING' AND ${OWNS_LEASE};
   `);
 }
@@ -200,12 +219,13 @@ export async function markTaskMailFailed(executor, mailId, failureCode, leaseTok
   request.input('retryBaseSeconds', sql.Int, RETRY_BASE_SECONDS);
   await request.query(`
     UPDATE dbo.MR_TaskMailOutbox
-    SET AttemptCount = AttemptCount + 1,
-        LastFailureCode = @failureCode,
+    SET LastFailureCode = @failureCode,
         LeaseExpiresAt = NULL,
         LeaseToken = NULL,
-        Status = CASE WHEN AttemptCount + 1 >= @maxAttempts THEN 'FAILED' ELSE 'PENDING' END,
-        NextAttemptAt = DATEADD(second, @retryBaseSeconds * POWER(2, CASE WHEN AttemptCount > 4 THEN 4 ELSE AttemptCount END), SYSUTCDATETIME()),
+        Status = CASE WHEN AttemptCount >= @maxAttempts THEN 'FAILED' ELSE 'PENDING' END,
+        NextAttemptAt = DATEADD(second, @retryBaseSeconds * POWER(2,
+          CASE WHEN AttemptCount <= 1 THEN 0 WHEN AttemptCount > 5 THEN 4 ELSE AttemptCount - 1 END),
+          SYSUTCDATETIME()),
         UpdatedAt = SYSUTCDATETIME()
     WHERE MailId = @mailId AND Status = 'PENDING' AND ${OWNS_LEASE};
   `);
@@ -230,8 +250,7 @@ export async function markTaskMailUncertain(executor, mailId, leaseToken = null)
   request.input('failureCode', sql.VarChar(60), TASK_MAIL_UNCERTAIN_CODE);
   await request.query(`
     UPDATE dbo.MR_TaskMailOutbox
-    SET AttemptCount = AttemptCount + 1,
-        LastFailureCode = @failureCode,
+    SET LastFailureCode = @failureCode,
         LeaseExpiresAt = NULL,
         LeaseToken = NULL,
         Status = 'FAILED',

@@ -117,6 +117,7 @@ export function KanbanView() {
             aynı taşma paneline katlanır ve araç çubuğuna satır eklenmez. */}
         <TaskOrganizationFilterControls
           organization={organization}
+          extraActiveCount={assignee ? 1 : 0}
           extraControls={(
             <SearchableSelect
               className="task-org-select"

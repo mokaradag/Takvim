@@ -2532,7 +2532,10 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
   const addedSicils = [...new Set(changes.flatMap((change) => change.added))];
   const notifiedSicils = [...new Set(changes.flatMap((change) => [...change.added, ...change.removed]))]
     .filter((sicil) => Number(sicil) !== Number(actor.sicil));
-  if (!notifiedSicils.length) return;
+  const hasRemovedExistingAssignee = changes.some(
+    (change) => !change.created && change.removed.length
+  );
+  if (!notifiedSicils.length && !hasRemovedExistingAssignee) return;
 
   try {
     const classified = addedSicils.length
@@ -2545,6 +2548,17 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
     const crossAssignments = [];
     for (const change of changes) {
       const inherited = new Set((change.templateAssigneeSicils || []).map(Number));
+      if (!change.created) {
+        for (const sicil of change.removed) {
+          await closeOpenCoordinationsFor(
+            executor,
+            actor,
+            change.taskId,
+            sicil,
+            'Doğrudan kaldırmayla karşılandı.'
+          );
+        }
+      }
       for (const sicil of change.added) {
         if (!change.created) await closeOpenCoordinationsFor(executor, actor, change.taskId, sicil);
         const person = classified.get(Number(sicil));

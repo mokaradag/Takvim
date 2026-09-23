@@ -206,7 +206,7 @@ export async function readCoordinationPage(executor, actor, input = {}) {
   request.input('toUtc', sql.DateTime2, toUtc);
 
   const filters = `${PARTICIPANT}
-    AND (@projectId IS NULL OR COALESCE(c.ProjectIdSnapshot, t.ProjectId) = @projectId)
+    AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
     AND (@status IS NULL OR c.Status = @status)
     AND (@fromUtc IS NULL OR c.CreatedAt >= @fromUtc)

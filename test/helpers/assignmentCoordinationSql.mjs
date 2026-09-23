@@ -252,7 +252,7 @@ function coordinationPage(db, params) {
   const matches = db.taskAssignmentCoordinations.filter((row) => {
     if (!isParticipant(db, row, params)) return false;
     const view = coordinationRow(db, row, params);
-    if (params.projectId && !sameGuid(view.ProjectId, params.projectId)) return false;
+    if (params.projectId && !sameGuid(recordProjectId(db, row), params.projectId)) return false;
     if (params.taskId && !sameGuid(row.TaskId, params.taskId)) return false;
     if (params.status && row.Status !== params.status) return false;
     if (params.fromUtc && Date.parse(row.CreatedAt) < Date.parse(params.fromUtc)) return false;
@@ -523,13 +523,28 @@ function presenceList(db, params) {
 
 function claimMail(db, params) {
   const now = Date.now();
+  const maxAttempts = Number(params.maxAttempts || 6);
+  for (const row of db.taskMailOutbox) {
+    const due = row.Status === 'PENDING'
+      && Date.parse(row.NextAttemptAt) <= now
+      && (!row.LeaseExpiresAt || Date.parse(row.LeaseExpiresAt) <= now);
+    if (due && Number(row.AttemptCount || 0) >= maxAttempts) {
+      row.Status = 'FAILED';
+      row.LeaseExpiresAt = null;
+      row.LeaseToken = null;
+      row.LastFailureCode ||= params.attemptsExhaustedCode || 'MAIL_ATTEMPTS_EXHAUSTED';
+      row.UpdatedAt = new Date(now).toISOString();
+    }
+  }
   const due = db.taskMailOutbox
     .filter((row) => row.Status === 'PENDING'
+      && Number(row.AttemptCount || 0) < maxAttempts
       && Date.parse(row.NextAttemptAt) <= now
       && (!row.LeaseExpiresAt || Date.parse(row.LeaseExpiresAt) <= now))
     .sort((left, right) => Date.parse(left.NextAttemptAt) - Date.parse(right.NextAttemptAt) || left.MailId - right.MailId)
     .slice(0, Number(params.limit || 20));
   for (const row of due) {
+    row.AttemptCount = Number(row.AttemptCount || 0) + 1;
     row.LeaseExpiresAt = new Date(now + Number(params.leaseSeconds || 120) * 1000).toISOString();
     row.LeaseToken = guid(params.leaseToken);
     row.UpdatedAt = new Date(now).toISOString();
@@ -550,8 +565,7 @@ function completeMail(db, params, { sent, uncertain = false }) {
   // Kira SAHİPLİĞİ: kira dolduktan sonra satırı başka bir tur devralmışsa bu
   // turun durum yazması satıra dokunmaz.
   if (params.leaseToken != null && !sameGuid(row.LeaseToken, params.leaseToken)) return [[]];
-  const previousAttemptCount = Number(row.AttemptCount || 0);
-  row.AttemptCount = previousAttemptCount + 1;
+  const attemptCount = Number(row.AttemptCount || 0);
   row.LeaseExpiresAt = null;
   row.LeaseToken = null;
   row.UpdatedAt = new Date().toISOString();
@@ -565,9 +579,9 @@ function completeMail(db, params, { sent, uncertain = false }) {
     row.Status = 'FAILED';
   } else {
     row.LastFailureCode = params.failureCode;
-    row.Status = row.AttemptCount >= Number(params.maxAttempts || 6) ? 'FAILED' : 'PENDING';
+    row.Status = attemptCount >= Number(params.maxAttempts || 6) ? 'FAILED' : 'PENDING';
     const retryBaseSeconds = Number(params.retryBaseSeconds || 60);
-    const multiplier = 2 ** Math.min(previousAttemptCount, 4);
+    const multiplier = 2 ** Math.min(Math.max(attemptCount - 1, 0), 4);
     row.NextAttemptAt = new Date(Date.now() + retryBaseSeconds * multiplier * 1000).toISOString();
   }
   return [[]];
@@ -719,7 +733,9 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     if (sqlText.includes('WITH due AS')) return claimMail(db, params);
     if (sqlText.includes("SET Status = 'SENT'")) return completeMail(db, params, { sent: true });
     if (sqlText.includes("Status = 'FAILED',")) return completeMail(db, params, { sent: false, uncertain: true });
-    if (sqlText.includes('SET AttemptCount = AttemptCount + 1')) return completeMail(db, params, { sent: false });
+    if (sqlText.includes('Status = CASE WHEN AttemptCount >= @maxAttempts')) {
+      return completeMail(db, params, { sent: false });
+    }
     if (sqlText.includes('AS PendingCount')) return mailQueueStatus(db);
   }
 

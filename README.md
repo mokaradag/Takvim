@@ -342,8 +342,9 @@ gönder** kutusu vardır. Varsayılan **kapalıdır**, saklanan bir tercih deği
 `api.commit` hiçbir koşulda posta sunucusunu beklemez ve geçici bir SMTP arızası
 görev kaydetmeyi düşürmez. Tam olarak bir kez teslimat garanti edilmez: SMTP
 kabulünden sonra `SENT` yazılamadan çalışan durursa ya da durum yazması
-başarısız olursa aynı posta kira dolunca yeniden gönderilebilir. Alıcı
-adresi var olan `Sicil → MR_V_PeopleDirectory.Username → DC01_userr.EmailAddress`
+başarısız olursa aynı posta kira dolunca yeniden gönderilebilir; ancak her
+kiralama bir deneme sayılır ve yeniden sahiplenme `TASK_MAIL_MAX_ATTEMPTS`
+ile sınırlıdır. Alıcı adresi var olan `Sicil → MR_V_PeopleDirectory.Username → DC01_userr.EmailAddress`
 zinciriyle sunucuda çözülür; tarayıcı alıcı belirleyemez. Çalışanın yoklama
 aralığı `MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30000 ms) ile ayarlanır.
 

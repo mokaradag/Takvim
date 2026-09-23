@@ -39,8 +39,8 @@ function scheduleItem(request) {
         ? 'Tarih değişikliği talebi'
         : `Tarih değişikliği ${(SCHEDULE_STATUS_LABELS[request.status] || 'sonuçlandı').toLocaleLowerCase('tr-TR')}`,
     subtitle: request.isRequester
-      ? request.taskTitle
-      : `${request.requesterName} · ${request.taskTitle}`
+      ? request.taskTitle || 'Silinen görev'
+      : `${request.requesterName} · ${request.taskTitle || 'Silinen görev'}`
   };
 }
 

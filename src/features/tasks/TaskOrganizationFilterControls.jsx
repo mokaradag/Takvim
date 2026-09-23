@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from 'react';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { Icons } from '../../components/icons.jsx';
-import { hasOrgSelection, UNASSIGNED_DIRECTORATE } from '../../domain/organization/organizationHierarchy.js';
+import { UNASSIGNED_DIRECTORATE } from '../../domain/organization/organizationHierarchy.js';
 
 const COMPACT_LAYOUT_QUERY = '(max-width: 1280px)';
 
@@ -42,16 +42,23 @@ function optionList(options, allLabel) {
  * @param {import('react').ReactNode} [props.extraControls] aynı satırda duran ek
  *   süzgeç (örn. Kanban · Sorumlu). Dar ekranda aynı taşma paneline katlanır;
  *   araç çubuğuna ikinci bir satır eklenmez.
+ * @param {number} [props.extraActiveCount] dar ekranda özet rozeti için etkin
+ *   ek süzgeç sayısı
  */
-export function TaskOrganizationFilterControls({ organization, extraControls = null }) {
+export function TaskOrganizationFilterControls({
+  organization,
+  extraControls = null,
+  extraActiveCount = 0
+}) {
   const compactLayout = useSyncExternalStore(
     subscribeToLayoutChange,
     compactLayoutSnapshot,
     () => false
   );
-  const active = hasOrgSelection(organization.selection);
   const activeCount = ['directorate', 'department', 'unit']
-    .filter((level) => Boolean(organization.selection[level])).length;
+    .filter((level) => Boolean(organization.selection[level])).length
+    + Math.max(0, Number(extraActiveCount) || 0);
+  const active = activeCount > 0;
 
   const controls = (variant) => (
     <div className={`task-org-filters task-org-filters-${variant}`} aria-label="Kurumsal görev filtreleri">

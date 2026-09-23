@@ -148,6 +148,7 @@ test('Kanban araç çubuğu Sorumlu süzgecini kurumsal süzgeçlerle AYNI satı
     // Sorumlu seçimi aynı denetimin içine gömülür: araç çubuğuna ikinci satır eklenmez.
     const extra = organization.props.extraControls;
     assert.ok(extra, 'Sorumlu süzgeci kurumsal süzgeç satırında durmalıdır');
+    assert.equal(organization.props.extraActiveCount, 0);
     assert.equal(extra.props.ariaLabel, 'Sorumlu filtresi');
     assert.equal(extra.props.className, 'task-org-select');
     assert.deepEqual(extra.props.options.map((option) => option.value), ['', '100', '200', '300']);
@@ -161,6 +162,11 @@ test('Sorumlu süzgeci Sicil ile daraltır, çok sorumluyu kapsar ve Filtreleri 
     assert.deepEqual(boardItems(view, 'todo'), ['b', 'a', 'c']);
 
     select().props.onChange('300'); view.render();
+    assert.equal(
+      findElement(view.output, (node) => node.type === TaskOrganizationFilterControls).props.extraActiveCount,
+      1,
+      'dar görünüm özeti gizli Sorumlu süzgecini etkin saymalıdır'
+    );
     // Çok sorumlu görev de eşleşir.
     assert.deepEqual(boardItems(view, 'todo'), ['c']);
     assert.deepEqual(boardItems(view, 'in_progress'), ['d']);
@@ -197,6 +203,12 @@ test('Sorumlu ve kurumsal süzgeçler birlikte çalışır; geçici sonuçsuzluk
     assert.equal(select().props.value, '');
     assert.deepEqual(boardItems(view, 'todo'), ['b', 'a', 'c']);
   } finally { view.unmount(); }
+});
+
+test('kurumsal filtre özeti ek süzgeç sayısını etkin durumuna katar', () => {
+  const source = read('src/features/tasks/TaskOrganizationFilterControls.jsx');
+  assert.match(source, /Math\.max\(0, Number\(extraActiveCount\) \|\| 0\)/);
+  assert.match(source, /const active = activeCount > 0;/);
 });
 
 test('her pano kendi hedef sıralamasını taşır ve yön düğmesi erişilebilirdir', () => {

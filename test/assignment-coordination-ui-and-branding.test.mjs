@@ -23,7 +23,7 @@ import {
   notificationCenterCounts,
   notificationCenterItems
 } from '../src/features/notifications/notificationCenterItems.js';
-import { APP_FAVICON_DATA_URI } from '../src/lib/appFavicon.js';
+import { APP_FAVICON_DATA_URI, APP_FAVICON_PNG_DATA_URI } from '../src/lib/appFavicon.js';
 
 const { ScheduleRequestCenter } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
 const { AssignmentCoordinationDialog } = await import('../src/features/assignment-coordination/AssignmentCoordinationDialog.jsx');
@@ -102,6 +102,24 @@ test('zil üç kaynağı tek listede birleştirir ve önizlemeyi sekizle sınır
   }));
   assert.equal(notificationCenterItems({ scheduleRequests: many }).length, NOTIFICATION_PREVIEW_LIMIT);
   assert.equal(mergeNotificationPreviews([[], []]).length, 0);
+});
+
+test('silinen görev tarih talebi zilde null yerine yedek başlık gösterir', () => {
+  const [own] = notificationCenterItems({
+    scheduleRequests: [{
+      id: 'deleted-own', status: 'PENDING', isRequester: true, isDecisionOwner: false,
+      requesterName: 'Talep Eden', taskTitle: null, unread: true
+    }]
+  });
+  assert.equal(own.subtitle, 'Silinen görev');
+
+  const [other] = notificationCenterItems({
+    scheduleRequests: [{
+      id: 'deleted-other', status: 'PENDING', isRequester: false, isDecisionOwner: false,
+      requesterName: 'Talep Eden', taskTitle: null, unread: true
+    }]
+  });
+  assert.equal(other.subtitle, 'Talep Eden · Silinen görev');
 });
 
 test('çoklu görev bildirimi ilk görev başlığını tek görev gibi göstermez', () => {
@@ -532,6 +550,7 @@ test('sekme değişimi açık talep çekmecesini kapatır', () => {
 
 test('sekme simgesi pusula markasıdır ve açık/koyu bağlamda okunur kalır', () => {
   assert.match(APP_FAVICON_DATA_URI, /^data:image\/svg\+xml;utf8,<svg/);
+  assert.match(APP_FAVICON_PNG_DATA_URI, /^data:image\/png;base64,/);
   // Ana logoyla aynı biçim: gövde çemberi, ibre ve merkez noktası.
   assert.match(APP_FAVICON_DATA_URI, /<circle cx='16' cy='16' r='9'/);
   assert.match(APP_FAVICON_DATA_URI, /<path d='M21\.6 10\.4/);
@@ -543,7 +562,8 @@ test('sekme simgesi pusula markasıdır ve açık/koyu bağlamda okunur kalır',
   const layout = read('src/app/layout.js');
   assert.match(layout, /href=\{FAVICON\}/);
   assert.match(layout, /rel="icon" type="image\/svg\+xml"/);
-  assert.match(layout, /rel="alternate icon"/);
+  assert.match(layout, /rel="alternate icon" type="image\/png" href=\{FALLBACK_ICON\}/);
+  assert.match(layout, /rel="apple-touch-icon" href=\{FALLBACK_ICON\}/);
   // Simge ek bir ağ isteği doğurmaz: dış kaynak ya da gömülü resim yoktur
   // (tek `http` geçişi SVG ad alanıdır).
   assert.equal(/<image|xlink:href|url\(http/.test(APP_FAVICON_DATA_URI), false);
