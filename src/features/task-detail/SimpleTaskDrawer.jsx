@@ -10,7 +10,13 @@ import { SearchableSelect } from '../../components/SearchableSelect';
 import { Avatar, StatusIcon } from '../../components/ui';
 import { PRIORITIES, normalizePriorityId } from '../../domain/constants';
 import { ownsSimpleModePlan } from './simpleTaskPlan.js';
-import { filterTaskAssigneeCandidates, resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
+import {
+  directoryPersonRecord,
+  filterTaskAssigneeCandidates,
+  resolveTaskAssigneeDisplayRecords,
+  taskAssigneeMutationPatch,
+  withDirectoryPeople
+} from './taskAssigneeDisplay.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
@@ -77,6 +83,11 @@ export function SimpleTaskDrawer({
 
   const dismiss = onClose;
 
+  // Bu düzenlemede kurumsal dizinden DOĞRUDAN atanan kişiler. Anlık görüntü
+  // rehberinde bulunmadıkları için adları ve fotoğraf kimlikleri buradan gelir.
+  const [directoryPeople, setDirectoryPeople] = useState([]);
+  const displayPeople = useMemo(() => withDirectoryPeople(people, directoryPeople), [people, directoryPeople]);
+
   const selectedAssignees = useMemo(() => {
     // Fotoğraf kimlikleri de taşınır: rehberde çözülemeyen eş sorumlular için
     // görev satırındaki `assigneeAvatarIdentities` tek fotoğraf kaynağıdır.
@@ -87,9 +98,9 @@ export function SimpleTaskDrawer({
       assigneeDisplayNames: local.assigneeDisplayNames,
       assigneeAvatarIdentities: local.assigneeAvatarIdentities,
       sorumlu: local.sorumlu
-    }, people, !canManageAssignees);
+    }, displayPeople, !canManageAssignees);
   }, [
-    people,
+    displayPeople,
     local.assigneeIds,
     local.assigneeDisplayNames,
     local.assigneeAvatarIdentities,
@@ -123,9 +134,16 @@ export function SimpleTaskDrawer({
       }));
   }, [people, selectedAssignees, assignmentScopeOnly]);
 
-  const setAssignees = (ids) => {
+  const setAssignees = (ids, knownPeople = displayPeople) => {
     if (assignmentScopeOnly && !ids.length) return;
-    save(taskAssigneeMutationPatch(local, people, ids));
+    save(taskAssigneeMutationPatch(local, knownPeople, ids));
+  };
+
+  const addDirectoryAssignee = (person) => {
+    const record = directoryPersonRecord(person);
+    if (!record) return;
+    setDirectoryPeople((current) => [...current.filter((entry) => entry.id !== record.id), record]);
+    setAssignees([...(local.assigneeIds || []), record.id], withDirectoryPeople(displayPeople, [record]));
   };
 
   // Kurum dışı personel seçimi ve isteğe bağlı e-posta bildirimi Kapsamlı Kiple
@@ -233,7 +251,7 @@ export function SimpleTaskDrawer({
               disabled={isSaving}
               assignedSicils={(local.assigneeIds || []).map(String)}
               canAssignDirectly={assignmentRequests.canAssignDirectly}
-              onAssignDirectly={(person) => setAssignees([...(local.assigneeIds || []), String(person.sicil)])}
+              onAssignDirectly={addDirectoryAssignee}
               requestedAssignees={assignmentRequests.requested}
               onRequestAssignee={assignmentRequests.requestAssignee}
               onCancelRequest={assignmentRequests.cancelRequest}

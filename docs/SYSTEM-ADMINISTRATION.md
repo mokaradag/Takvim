@@ -288,7 +288,7 @@ sayıları, sıradaki deneme ve son gönderim gösterilir. **Başarısız** say�
 ve vurgulu tutulur: deneme eşiği dolan kayıt kendiliğinden yeniden denenmez, bu
 yüzden sayının görünür kalması tek uyarı yoludur. Bölüm yalnızca sayı ve zaman
 taşır; **alıcı adresi, görev başlığı ve ileti gövdesi hiçbir koşulda
-gösterilmez.** `0015` göçü uygulanmamışsa bölüm sayı uydurmaz, "şema eksik" der.
+gösterilmez.** `0015` göçü uygulanmamışsa bölüm sayı uydurmaz, "şema eksik" der. Kuyruk başka bir nedenle okunamazsa (ör. yeni tabloya izin verilmemiş) yalnızca bu bölüm `QUEUE_READ_FAILED` kodunu gösterir; Outlook, hatırlatma ve CN43N bölümleri etkilenmez.
 Kuyruk Outlook'tan bağımsızdır: kutu işaretlenmeden kaydedilen bir görev buraya
 hiç iş bırakmaz.
 
@@ -401,13 +401,13 @@ Nabız aralığı **90 saniyedir** — pencerenin yarısından kısadır, böyle
 
 ### Sekmeler arası davranış
 
-Aynı tarayıcıdaki sekmeler paylaşılan bir kilit üzerinden **tek önder** seçer; yalnızca önder nabız gönderir. Önderin sekmesi kapanır ya da donarsa kilit bayatlar (iki nabız aralığı) ve başka bir sekme devralır. Paylaşılan depo kullanılamıyorsa (özel kip, engellenmiş site verisi) her sekme kendi nabzını gönderir; Sicil başına tek satır yazıldığı için maliyet yine sınırlıdır.
+Aynı tarayıcıdaki sekmeler paylaşılan bir kilit üzerinden **tek önder** seçer; yalnızca önder nabız gönderir. Önder gizlendiğinde, kapandığında ya da uygulamadan çıkıldığında kilidini **bırakır**; görünür izleyici kilidi 15 saniyede bir yoklar ve boşalan önderliği hemen devralır, görünür olan sekme de beklemeden bir nabız gönderir. Önderin sekmesi donarsa kilit bir nabız aralığı + 30 saniye sonra bayatlar ve başka bir sekme devralır; en kötü durumda iki nabız arasındaki boşluk (2 dk 15 sn) aktiflik penceresinin içinde kalır. Paylaşılan depo kullanılamıyorsa (özel kip, engellenmiş site verisi) her sekme kendi nabzını gönderir; Sicil başına tek satır yazıldığı için maliyet yine sınırlıdır.
 
 Tarayıcı kapanışı, ağ kesintisi ve oturum düşmesi ayrıca ele alınmaz: nabız durur ve kullanıcı pencere dolunca listeden kendiliğinden çıkar. Birden çok uygulama örneği aynı satırı günceller; satır sayısı örnek sayısıyla büyümez.
 
 ### Ekran
 
-Üstte kompakt KPI kartları durur: **Şu anda aktif**, **Son 15 dk aktif**, **Aktif direktörlük**, **Aktif müdürlük**. Kurumsal sayaçlar aktif kümenin **tamamı** üzerinden veritabanında çözülür; satır sınırı yalnızca tabloya uygulanır, böylece sınırın ötesinde kalan bir direktörlük ya da müdürlük doğru toplamın yanında eksik sayılmaz. Altındaki tablo Ad Soyad, Sicil, Direktörlük, Müdürlük, Birim, aktif olduğu süre ve son görülme sütunlarını taşır; yalnızca sistem yöneticisinin zaten görmeye yetkili olduğu künye gösterilir. Tablo kabı klavyeyle odaklanabilir: içinde etkileşimli öğe yoktur, uzun liste yalnızca böyle kaydırılabilir.
+Üstte kompakt KPI kartları durur: **Şu anda aktif**, **Son 15 dk aktif**, **Aktif direktörlük**, **Aktif müdürlük**. Kurumsal sayaçlar aktif kümenin **tamamı** üzerinden veritabanında çözülür; satır sınırı yalnızca tabloya uygulanır, böylece sınırın ötesinde kalan bir direktörlük ya da müdürlük doğru toplamın yanında eksik sayılmaz. Altındaki tablo Ad Soyad, Sicil, Direktörlük, Müdürlük, Birim, aktif olduğu süre ve son görülme sütunlarını taşır; yalnızca sistem yöneticisinin zaten görmeye yetkili olduğu künye gösterilir. Tablo kabı klavyeyle odaklanabilir: içinde etkileşimli öğe yoktur, uzun liste yalnızca böyle kaydırılabilir. Satırdaki aktiflik noktası ve aktif süre, tarayıcı saatiyle değil yanıtın **sunucu** başvuru anıyla (`generatedAt`, SQL Server saati) hesaplanır: saati sapmış bir yönetici bilgisayarında liste, sunucuda hesaplanan KPI kartlarıyla çelişmez.
 
 Demo Kipinde varlık sorgusu **hiç çalışmaz**; sekme sıfır aktif kullanıcı bildirmek yerine verinin okunmadığını açıkça söyler.
 
@@ -616,7 +616,7 @@ database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql
 
 Betik yinelenebilir ve veriye dokunmaz. Göç uygulanmadan açılan kurulumda zil, var olan tarih talebi akışıyla çalışmayı sürdürür; posta kuyruğu ve varlık sessizce kapalı davranır ve görev yazması etkilenmez. Geri alma betiği bu tabloları da düşürür.
 
-Posta kuyruğu `SMTP_HOST`/`SMTP_FROM` tanımlı olmadığında hiç çalışmaz ve niyetler kuyrukta bekler. `MERGEN_ROTA_TASK_MAIL_POLL_MS` tur aralığını belirler: değişken tanımsız, boş ya da geçersizse varsayılan 30000 ms uygulanır, geçerli bir değer 5000–300000 aralığına kırpılır. Altı denemeden sonra kayıt `FAILED` olur; başarısızlık kodu satırda saklanır ve gizli bilgi taşımaz. Teslimatı belirsiz kalan (gövde aktarıldı, kabul yanıtı okunamadı) satır `MAIL_DELIVERY_UNCERTAIN` koduyla doğrudan `FAILED` olur ve kendiliğinden yeniden denenmez: alıcı aynı iletiyi ikinci kez almaz.
+Posta kuyruğu `SMTP_HOST`/`SMTP_FROM` tanımlı olmadığında hiç çalışmaz ve niyetler kuyrukta bekler. `MERGEN_ROTA_TASK_MAIL_POLL_MS` tur aralığını belirler: değişken tanımsız, boş ya da geçersizse varsayılan 30000 ms uygulanır, geçerli bir değer 5000–300000 aralığına kırpılır. Altı denemeden sonra kayıt `FAILED` olur; başarısızlık kodu satırda saklanır ve gizli bilgi taşımaz. Teslimatı belirsiz kalan (gövde aktarıldı, kabul yanıtı okunamadı) satır `MAIL_DELIVERY_UNCERTAIN` koduyla doğrudan `FAILED` olur ve kendiliğinden yeniden denenmez: alıcı aynı iletiyi ikinci kez almaz. Her teslimat uçtan uca bir bütçeyle (SMTP zaman aşımının iki katı) kesilir ve kira bu bütçe üzerinden ölçülür. Satıra özgü bir hata turu düşürmez: satır deneme olarak kaydedilir, öteki satırlar gönderilir. Tam olarak bir kez teslimat garanti edilmez: SMTP kabulü ile `SENT` yazımı arasında çalışan durursa satır kira dolunca yeniden gönderilebilir.
 
 ---
 

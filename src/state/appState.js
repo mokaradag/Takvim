@@ -316,7 +316,13 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
     ),
     scheduleRequestSummary: snapshot.scheduleRequestSummary || { unreadCount: 0, pendingCount: 0 },
     scheduleRequests: reconcileSnapshotCollection(previous.scheduleRequests, snapshot.scheduleRequests),
-    notificationSummary: snapshot.notificationSummary || { unreadCount: 0, pendingCount: 0 },
+    // Kimlik, sayaçlar değişmedikçe korunur: `useAssignmentCoordinationQuery`
+    // özeti etki bağımlılığı olarak izler ve her otomatik yenilemede sayfayı
+    // sunucudan yeniden çekip "Kayıtlar yükleniyor…" gösteriyordu.
+    notificationSummary: reuseSnapshotValue(
+      previous.notificationSummary,
+      snapshot.notificationSummary || { unreadCount: 0, pendingCount: 0 }
+    ),
     assignmentCoordinations: reconcileSnapshotCollection(
       previous.assignmentCoordinations,
       snapshot.assignmentCoordinations

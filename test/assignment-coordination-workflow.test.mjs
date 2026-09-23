@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
@@ -514,16 +515,202 @@ test('karar yetkisi güncel İK ilişkisinden gelir; talep eden ve ilgisiz kulla
 test('koordinasyon geçmişi göreve erişim VERMEZ', async () => {
   const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
   try {
-    await store.createAssignmentCoordination({ taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek' });
-  } finally { await stack.dispose(); }
+    const request = await store.createAssignmentCoordination({ taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek' });
+    // Kayıt ve yöneticinin alıcı satırı AYNI veritabanında durur.
+    assert.equal(recipientsOf(stack, request.items[0].id)
+      .some((row) => row.Sicil === UNIT_MANAGER && row.RecipientRole === 'MANAGER'), true);
 
-  const managerStack = await createActualStack(seed({
-    taskAssignees: [{ TaskId: TASK_ID, Sicil: ORDINARY }, { TaskId: OTHER_TASK_ID, Sicil: TEAM_MEMBER }]
-  }), { sicil: UNIT_MANAGER, corporateWbsSource: false });
+    process.env.MERGEN_ROTA_DEV_SICIL = String(UNIT_MANAGER);
+    await stack.reload();
+    // Yönetici kaydı zilde görür ama görev anlık görüntüsünde görünmez.
+    assert.equal(stack.state.assignmentCoordinations.some((item) => item.id === request.items[0].id), true);
+    assert.equal(stack.state.tasks.some((task) => task.id === TASK_ID), false);
+  } finally { await stack.dispose(); }
+});
+
+test('kapatılmış projedeki görevin talebi onaylanamaz; kayıt güncelliğini yitirir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
   try {
-    // Yönetici alıcı olabilir ama görev anlık görüntüsünde görünmez.
-    assert.equal(managerStack.state.tasks.some((task) => task.id === TASK_ID), false);
-  } finally { await managerStack.dispose(); }
+    const request = await store.createAssignmentCoordination({ taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek' });
+    // Talep beklerken proje kapatılır; görev satırı yerinde kalır.
+    stack.db.projects.find((project) => project.ProjectId.toUpperCase() === PROJECT_ID.toUpperCase()).IsActive = 0;
+    const versionBefore = Buffer.from(stack.db.tasks.find((task) => task.TaskId.toUpperCase() === TASK_ID.toUpperCase()).RowVersion);
+
+    const decision = await asUser(UNIT_MANAGER, () =>
+      store.decideAssignmentCoordination(request.items[0].id, { decision: 'APPROVE' }));
+    assert.equal(decision.outcome, 'STALE');
+    assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY], 'kapatılmış projeye sorumlu yazılmamalıdır');
+    const versionAfter = stack.db.tasks.find((task) => task.TaskId.toUpperCase() === TASK_ID.toUpperCase()).RowVersion;
+    assert.equal(Buffer.compare(Buffer.from(versionAfter), versionBefore), 0, 'görev sürümü ilerlememelidir');
+    assert.equal(stack.db.taskNotifications.length, 0);
+
+    // İkiz, gerçek sorgunun ETKİN proje birleşimini taklit eder; sorgu da
+    // projenin etkinliğini ayrı bir alanla taşımalıdır.
+    const source = readFileSync(new URL('../src/server/assignment/assignmentCoordinationStore.js', import.meta.url), 'utf8');
+    assert.match(source, /p\.ProjectId AS LiveActiveProjectId/);
+    assert.match(source, /if \(applies && \(!row\.LiveTaskId \|\| !row\.LiveActiveProjectId\)\)/);
+  } finally { await stack.dispose(); }
+});
+
+test('görev başka projeye taşınınca karar yetkisi GÜNCEL projeden gelir', async () => {
+  const NEW_PROJECT_ID = '44444444-4444-4444-8444-000000000021';
+  const NEW_ROOT_WBS_ID = '44444444-4444-4444-8444-000000000022';
+  const stack = await createActualStack(seed({
+    projects: [
+      ...seed().projects,
+      {
+        ProjectId: NEW_PROJECT_ID, SourceType: 'MANUAL', ProjectCode: 'YENI', ProjectName: 'Yeni Proje',
+        LeadSicil: EXECUTIVE, CalendarId: DEFAULT_CALENDAR_ID, IsActive: 1
+      }
+    ],
+    projectAccess: [{ ProjectId: NEW_PROJECT_ID, Sicil: EXECUTIVE, AccessLevel: 'FULL', GrantSource: 'OWNER' }],
+    wbs: [
+      ...seed().wbs,
+      { WbsId: NEW_ROOT_WBS_ID, ProjectId: NEW_PROJECT_ID, ParentWbsId: null, Code: '1', Name: 'Kök', SortOrder: 0 }
+    ],
+    // Yönetim zinciri yoktur: karar yalnızca tam proje yetkilisine düşer.
+    executiveScope: []
+  }), { sicil: ORDINARY, corporateWbsSource: false });
+  const inboxOf = async (sicil) => asUser(sicil, async () => {
+    const { withSqlTransaction } = await import('../src/server/db/pool.js');
+    const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
+    return withSqlTransaction(async (transaction) =>
+      queries.readCoordinationInbox(transaction, await loadAuthorizationContext(transaction)));
+  });
+  try {
+    const request = await store.createAssignmentCoordination({ taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek' });
+    const coordinationId = request.items[0].id;
+
+    // Görev yeni projeye taşınır; kaydın proje künyesi eski projede kalır.
+    const task = stack.db.tasks.find((row) => row.TaskId.toUpperCase() === TASK_ID.toUpperCase());
+    task.ProjectId = NEW_PROJECT_ID.toUpperCase();
+    task.WbsId = NEW_ROOT_WBS_ID.toUpperCase();
+
+    // Eski projenin tam yetkilisine sunucunun reddedeceği düğmeler gösterilmez.
+    const former = await inboxOf(PROJECT_MANAGER);
+    const formerItem = former.items.find((item) => item.id === coordinationId);
+    assert.equal(Boolean(formerItem?.actionable), false);
+    assert.equal(former.pendingCount, 0);
+    await asUser(PROJECT_MANAGER, () => assert.rejects(
+      store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }),
+      (error) => error.code === 'FORBIDDEN'
+    ));
+
+    // Yeni projenin tam yetkilisi kaydı bulur ve karara bağlar.
+    const current = await inboxOf(EXECUTIVE);
+    const currentItem = current.items.find((item) => item.id === coordinationId);
+    assert.ok(currentItem, 'yeni projenin yetkilisi kaydı bulabilmelidir');
+    assert.equal(currentItem.actionable, true);
+    const decision = await asUser(EXECUTIVE, () =>
+      store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }));
+    assert.equal(decision.outcome, 'APPROVED');
+    assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY, EXTERNAL].sort((a, b) => a - b));
+
+    // İkiz yüklemi JavaScript ile yeniden kurar; gerçek SQL de GÜNCEL projeyi
+    // öncelemelidir (künye yalnızca silinmiş görev için yedektir).
+    assert.ok(queries.COORDINATION_INBOX_SQL.includes('= COALESCE(t.ProjectId, c.ProjectIdSnapshot))'));
+    assert.equal(queries.COORDINATION_INBOX_SQL.includes('= COALESCE(c.ProjectIdSnapshot, t.ProjectId))'), false);
+  } finally { await stack.dispose(); }
+});
+
+test('doğrudan atama aynı kişinin bekleyen talebini kapatır; kaldırma isteği çakışmaz', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    const request = await asUser(ORDINARY, () => store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek'
+    }));
+
+    // Tam yetkili proje yöneticisi aynı kişiyi doğrudan atar.
+    const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, assigneeIds: [String(ORDINARY), String(EXTERNAL)], assigneeMutation: true }]
+    });
+    const pending = stack.db.taskAssignmentCoordinations
+      .find((row) => row.CoordinationId.toLowerCase() === request.items[0].id);
+    assert.equal(pending.Status, 'CANCELLED', 'karşılanan talep açık kalmamalıdır');
+    assert.equal(pending.DecisionMessage, 'Doğrudan atamayla karşılandı.');
+    const notice = stack.db.taskAssignmentCoordinations.find((row) => row.Mode === 'NOTICE');
+    assert.equal(notice.Status, 'APPROVED');
+    const open = stack.db.taskAssignmentCoordinations
+      .filter((row) => ['PENDING', 'CANCELLATION_REQUESTED'].includes(row.Status));
+    assert.equal(open.length, 0);
+
+    // Yöneticinin kaldırma isteği açık kayıt benzersizliğine çarpmaz.
+    const cancellation = await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(
+      notice.CoordinationId.toLowerCase(), { decision: 'REQUEST_CANCELLATION', message: 'Kapasite doldu.' }
+    ));
+    assert.equal(cancellation.outcome, 'CANCELLATION_REQUESTED');
+  } finally { await stack.dispose(); }
+});
+
+test('talep edenin kendi bekleyen talebi "kararınız bekleniyor" sayılmaz', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const request = await store.createAssignmentCoordination({ taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek' });
+    const own = request.items[0];
+    // Talep eden talebini geri çekebilir, ama bu bir karar beklemesi değildir.
+    assert.deepEqual(own.allowedDecisions, ['CANCEL']);
+    assert.equal(own.actionable, false);
+
+    const managerView = await asUser(UNIT_MANAGER, () => queries.queryAssignmentCoordinations({ tab: 'all' }));
+    assert.equal(managerView.items[0].actionable, true);
+    assert.equal(managerView.counts.pending, 1);
+  } finally { await stack.dispose(); }
+});
+
+test('yinelemeler şablonun kurum dışı atamasını devralır; her yineleme ayrı kayıt açmaz', async () => {
+  const TEMPLATE_ID = '44444444-4444-4444-8444-000000000031';
+  const FIRST_CHILD_ID = '44444444-4444-4444-8444-000000000032';
+  const SECOND_CHILD_ID = '44444444-4444-4444-8444-000000000033';
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  const seriesTask = (overrides = {}) => ({
+    id: TEMPLATE_ID,
+    projectId: PROJECT_ID,
+    wbsId: ROOT_WBS_ID,
+    task: 'Haftalık saha kontrolü',
+    status: 'todo',
+    priority: 'normal',
+    progress: 0,
+    plannedDurationDays: 1,
+    plannedStart: '2026-08-17',
+    plannedFinish: '2026-08-17',
+    targetFinish: '2026-08-17',
+    assigneeIds: [String(ORDINARY), String(EXTERNAL)],
+    assigneeMutation: true,
+    deps: [],
+    ...overrides
+  });
+  const occurrence = (id, date, overrides = {}) => seriesTask({
+    id,
+    recurrence: null,
+    recurrenceParentId: TEMPLATE_ID,
+    recurrenceOccurrenceDate: date,
+    plannedStart: date,
+    plannedFinish: date,
+    targetFinish: date,
+    ...overrides
+  });
+  const noticesFor = (sicil) => stack.db.taskAssignmentCoordinations
+    .filter((row) => row.Mode === 'NOTICE' && Number(row.RequestedAssigneeSicil) === sicil);
+  try {
+    await stack.repository.commitChanges({
+      taskUpserts: [seriesTask({ recurrence: 'FREQ=WEEKLY;BYDAY=MO;COUNT=3' })]
+    });
+    assert.equal(noticesFor(EXTERNAL).length, 1, 'şablon kendi koordinasyon kaydını açar');
+
+    await stack.repository.commitChanges({ taskUpserts: [occurrence(FIRST_CHILD_ID, '2026-08-24')] });
+    assert.deepEqual(assigneesOf(stack, FIRST_CHILD_ID), [ORDINARY, EXTERNAL].sort((a, b) => a - b));
+    assert.equal(noticesFor(EXTERNAL).length, 1, 'yineleme şablonun kaydını devralmalıdır');
+
+    // Şablonda OLMAYAN kurum dışı kişi yinelemede yine kendi kaydını açar.
+    await stack.repository.commitChanges({
+      taskUpserts: [occurrence(SECOND_CHILD_ID, '2026-08-31', {
+        assigneeIds: [String(ORDINARY), String(EXTERNAL), String(SAME_NAME_B)]
+      })]
+    });
+    assert.equal(noticesFor(EXTERNAL).length, 1);
+    assert.equal(noticesFor(SAME_NAME_B).length, 1);
+  } finally { await stack.dispose(); }
 });
 
 test('yönetici kapsamındaki doğrudan atama değişmez; kapsam dışı için talep açılır', async () => {
@@ -750,8 +937,22 @@ test('göç uygulanmamış kurulumda uygulama zil olmadan açılır', async () =
     assert.deepEqual(stack.state.assignmentCoordinations, []);
     assert.deepEqual(stack.state.taskNotifications, []);
     assert.deepEqual(stack.state.notificationSummary, { unreadCount: 0, pendingCount: 0 });
-    // Görev yazması da etkilenmez.
     const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
     assert.ok(task);
+
+    // Görev yazması da etkilenmez: sorumlu kümesini değiştiren ve e-posta
+    // isteyen kayıt, yayın yolunda eksik tabloya çarpsa da kalıcılaşır.
+    process.env.MERGEN_ROTA_DEV_SICIL = String(PROJECT_MANAGER);
+    await stack.reload();
+    const editable = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    const committed = await stack.repository.commitChanges(
+      { taskUpserts: [{ ...editable, assigneeIds: [String(ORDINARY), String(EXTERNAL)], assigneeMutation: true }] },
+      { notifyAssignees: true }
+    );
+    assert.equal(committed.taskUpserts.length, 1);
+    assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY, EXTERNAL].sort((a, b) => a - b));
+    assert.equal(stack.db.taskAssignmentCoordinations.length, 0);
+    assert.equal(stack.db.taskNotifications.length, 0);
+    assert.equal(stack.db.taskMailOutbox.length, 0);
   } finally { await stack.dispose(); }
 });

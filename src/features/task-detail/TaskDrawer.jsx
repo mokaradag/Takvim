@@ -56,7 +56,12 @@ import {
   selectSuccessors
 } from './taskSuccessorPolicy.js';
 import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
-import { resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
+import {
+  directoryPersonRecord,
+  resolveTaskAssigneeDisplayRecords,
+  taskAssigneeMutationPatch,
+  withDirectoryPeople
+} from './taskAssigneeDisplay.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
@@ -229,6 +234,11 @@ export function TaskDrawer({
     ];
   }, [projects, assignmentScopeProjects, selectedProject]);
 
+  // Bu düzenlemede kurumsal dizinden DOĞRUDAN atanan kişiler. Anlık görüntü
+  // rehberinde bulunmadıkları için adları ve fotoğraf kimlikleri buradan gelir.
+  const [directoryPeople, setDirectoryPeople] = useState([]);
+  const displayPeople = useMemo(() => withDirectoryPeople(people, directoryPeople), [people, directoryPeople]);
+
   const selectedAssignees = useMemo(() => {
     // Fotoğraf kimlikleri de taşınır: rehberde çözülemeyen eş sorumlular için
     // görev satırındaki `assigneeAvatarIdentities` tek fotoğraf kaynağıdır.
@@ -239,9 +249,9 @@ export function TaskDrawer({
       assigneeDisplayNames: local.assigneeDisplayNames,
       assigneeAvatarIdentities: local.assigneeAvatarIdentities,
       sorumlu: local.sorumlu
-    }, people, !canManageAssignees);
+    }, displayPeople, !canManageAssignees);
   }, [
-    people,
+    displayPeople,
     local.assigneeIds,
     local.assigneeDisplayNames,
     local.assigneeAvatarIdentities,
@@ -325,9 +335,17 @@ export function TaskDrawer({
    * kullanıcı hiçbir geri bildirim almıyordu. Temel Kip çekmecesi baştan beri
    * sicili doğrudan yazar; iki çekmece artık aynı davranıştadır.
    */
-  const addAssigneeSicil = (sicil) => {
+  const addAssigneeSicil = (sicil, knownPeople = displayPeople) => {
     const assigneeIds = [...new Set([...(local.assigneeIds || []).map(String), String(sicil)])];
-    save(taskAssigneeMutationPatch(local, people, assigneeIds));
+    save(taskAssigneeMutationPatch(local, knownPeople, assigneeIds));
+  };
+
+  /** Kurumsal dizinden doğrudan ekleme: kişinin görüntü kimliği de taşınır. */
+  const addDirectoryAssignee = (person) => {
+    const record = directoryPersonRecord(person);
+    if (!record) return;
+    setDirectoryPeople((current) => [...current.filter((entry) => entry.id !== record.id), record]);
+    addAssigneeSicil(record.id, withDirectoryPeople(displayPeople, [record]));
   };
 
   /** Anlık görüntüdeki kişi seçicisinden ekleme: kimlik yine Sicil'dir. */
@@ -340,7 +358,7 @@ export function TaskDrawer({
   const removeAssignee = (record) => {
     if (record.id == null || (assignmentScopeOnly && (local.assigneeIds || []).length <= 1)) return;
     const assigneeIds = (local.assigneeIds || []).filter((id) => String(id) !== String(record.id));
-    save(taskAssigneeMutationPatch(local, people, assigneeIds));
+    save(taskAssigneeMutationPatch(local, displayPeople, assigneeIds));
   };
 
   const today_ = today();
@@ -540,7 +558,7 @@ export function TaskDrawer({
                 disabled={isSaving}
                 assignedSicils={(local.assigneeIds || []).map(String)}
                 canAssignDirectly={assignmentRequests.canAssignDirectly}
-                onAssignDirectly={(person) => addAssigneeSicil(person.sicil)}
+                onAssignDirectly={addDirectoryAssignee}
                 requestedAssignees={assignmentRequests.requested}
                 onRequestAssignee={assignmentRequests.requestAssignee}
                 onCancelRequest={assignmentRequests.cancelRequest}

@@ -9,9 +9,12 @@ import { sql } from '../db/pool.js';
  * HİÇ yapılmaz. Görev kaydı posta sunucusu erişilemez olsa da tamamlanır ve
  * `api.commit` süresi SMTP'ye bağlı değildir.
  *
- * Teslimat arka plan çalışanındadır (bkz. taskMailWorker.js). Kiralama ve
- * tekilleştirme anahtarı sayesinde yeniden deneme aynı iletiyi ikinci kez
- * göndermez.
+ * Teslimat arka plan çalışanındadır (bkz. taskMailWorker.js). Tekilleştirme
+ * anahtarı aynı değişikliğin kuyruğa iki kez girmesini, kira ise aynı satırın
+ * iki örnekte aynı anda gönderilmesini önler. Tam olarak bir kez teslimat
+ * GARANTİ EDİLMEZ: SMTP kabulü ile `SENT` yazımı arasında çalışan durursa ya da
+ * durum yazması başarısız olursa satır kira dolunca yeniden kiralanır ve ileti
+ * yeniden gönderilebilir.
  */
 
 export const TASK_MAIL_KINDS = Object.freeze({ TASK_ASSIGNMENT: 'TASK_ASSIGNMENT' });
@@ -28,11 +31,32 @@ export const TASK_MAIL_MAX_ATTEMPTS = 6;
 const RETRY_BASE_SECONDS = 60;
 const MIN_LEASE_SECONDS = 120;
 const MAX_LEASE_SECONDS = 3600;
-/** Ağ ve dizin okuması için satır başına pay. */
-const LEASE_SLACK_SECONDS = 5;
+/** Dizin okuması ve durum yazması için satır başına pay. */
+export const TASK_MAIL_LEASE_SLACK_MS = 5000;
+/**
+ * Tek teslimatın uçtan uca bütçesi, SMTP zaman aşımının kaç katıdır.
+ *
+ * `SMTP_TIMEOUT_MS` diyaloğun TAMAMINA değil, bağlantıya, TLS'e ve HER komut
+ * yanıtına ayrı ayrı uygulanır; yavaş ama başarılı bir sunucuyla tek bir
+ * teslimat zaman aşımının birkaç katı sürebilir.
+ */
+const DELIVERY_BUDGET_TIMEOUT_FACTOR = 2;
+
+/**
+ * Tek teslimatın UÇTAN UCA süre sınırı.
+ *
+ * Teslimat bu süre dolunca kesilir (`sendMail` · `signal`). Kira bu sınır
+ * üzerinden ölçülür; sınır olmadan tek bir yavaş diyalog kirayı aşabiliyor,
+ * başka bir örnek satırı yeniden kiralayıp AYNI iletiyi ikinci kez
+ * gönderebiliyordu — sahiplik belirteci yalnızca geciken turun durum yazmasını
+ * engelliyor, ikinci gönderimi engellemiyordu.
+ */
+export function taskMailDeliveryBudgetMs(smtpTimeoutMs = 20000) {
+  return Math.max(1000, Number(smtpTimeoutMs) || 20000) * DELIVERY_BUDGET_TIMEOUT_FACTOR;
+}
 
 function leaseSecondsPerRow(smtpTimeoutMs) {
-  return Math.ceil(Math.max(1000, Number(smtpTimeoutMs) || 20000) / 1000) + LEASE_SLACK_SECONDS;
+  return Math.ceil((taskMailDeliveryBudgetMs(smtpTimeoutMs) + TASK_MAIL_LEASE_SLACK_MS) / 1000);
 }
 
 /**
@@ -43,7 +67,8 @@ function leaseSecondsPerRow(smtpTimeoutMs) {
  * çıkabildiği düzende yetmiyordu: kira parti işlenirken dolduğunda başka bir
  * uygulama örneği aynı satırı yeniden kiralayıp AYNI iletiyi ikinci kez
  * gönderebiliyordu. Parti, kira üst sınırına sığacak biçimde daraltılır;
- * sahiplik belirteci de tur sonundaki durum yazmasını kiranın sahibine kilitler.
+ * her teslimat uçtan uca bütçesiyle sınırlıdır ve sahiplik belirteci tur
+ * sonundaki durum yazmasını kiranın sahibine kilitler.
  */
 export function taskMailBatchSize(limit = 20, smtpTimeoutMs = 20000) {
   const requested = Math.max(1, Math.min(100, Number(limit) || 20));

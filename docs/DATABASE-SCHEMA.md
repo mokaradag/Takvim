@@ -276,10 +276,14 @@ girmesini engeller; `IX_MR_TaskMailOutbox_Due` tarama maliyetini tüm tabloya
 değil kuyruktaki işe orantılı tutar. Satır commit işlemiyle **aynı transaction**
 içinde yazılır, SMTP ise ayrı bir çalışan tarafından tüketilir: `api.commit`
 hiçbir koşulda posta sunucusunu beklemez. Çalışan satırı `LeaseExpiresAt` ve
-`LeaseToken` ile kiralar: kira süresi parti boyu × SMTP zaman aşımından
-türetilir, üst sınıra sığmayan parti daraltılır ve tur sonundaki durum yazması
-yalnızca kirayı hâlâ elinde tutan örnekten kabul edilir — böylece çok örnekli
-dağıtımda aynı ileti iki kez gönderilmez. Yeniden deneme üstel geri çekilme ile
+`LeaseToken` ile kiralar: her teslimat uçtan uca bir bütçeyle (SMTP zaman
+aşımının iki katı) kesilir, kira süresi parti boyu × bu bütçeden türetilir,
+üst sınıra sığmayan parti daraltılır, kira içinde bitemeyecek teslimat hiç
+başlatılmaz ve tur sonundaki durum yazması yalnızca kirayı hâlâ elinde tutan
+örnekten kabul edilir — böylece kira süresi içinde çok örnekli dağıtımda aynı
+ileti iki kez gönderilmez. Tam olarak bir kez teslimat garanti edilmez: SMTP
+kabulü ile `SENT` yazımı arasında çalışan durursa ya da durum yazması başarısız
+olursa satır kira dolunca yeniden kiralanır ve ileti yeniden gönderilebilir. Yeniden deneme üstel geri çekilme ile
 yapılır ve deneme eşiği dolduğunda satır `FAILED` olarak **kalır** — kaybolmaz,
 `LastFailureCode` ile incelenebilir. Bağlantı ileti gövdesi aktarıldıktan sonra
 kabul yanıtı okunmadan koparsa satır doğrudan `FAILED` /

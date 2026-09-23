@@ -119,7 +119,8 @@ export async function loadActiveUsers() {
     const result = await request.query(`
       SELECT
         COUNT(CASE WHEN DATEDIFF(second, LastSeenAt, SYSUTCDATETIME()) <= @activeSeconds THEN 1 END) AS ActiveCount,
-        COUNT(CASE WHEN DATEDIFF(second, LastSeenAt, SYSUTCDATETIME()) <= @recentSeconds THEN 1 END) AS RecentCount
+        COUNT(CASE WHEN DATEDIFF(second, LastSeenAt, SYSUTCDATETIME()) <= @recentSeconds THEN 1 END) AS RecentCount,
+        SYSUTCDATETIME() AS ServerNow
       FROM dbo.MR_UserPresence;
 
       SELECT
@@ -142,7 +143,9 @@ export async function loadActiveUsers() {
     return {
       ok: true,
       enabled: true,
-      generatedAt: new Date().toISOString(),
+      // Başvuru anı, `LastSeenAt` damgasını yazan SQL Server saatidir: tarayıcı
+      // aktiflik noktasını bu anla karşılaştırır, kendi saatiyle değil.
+      generatedAt: new Date(counts.ServerNow || Date.now()).toISOString(),
       definition: {
         activeWindowMs: PRESENCE_ACTIVE_WINDOW_MS,
         recentWindowMs: PRESENCE_RECENT_WINDOW_MS,

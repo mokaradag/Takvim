@@ -155,7 +155,11 @@ async function loadAssignmentMailSection(pool) {
     return { schemaReady: true, worker, queue: await taskMailQueueStatus(pool) };
   } catch (error) {
     if (isMissingTaskMailSchema(error)) return { schemaReady: false, worker, queue: null };
-    throw error;
+    // Yalnızca BU bölüm okunamadı (ör. yeni tabloya izin verilmemiş, geçici
+    // hata). Hata `Promise.all` üzerinden bütün yanıtı düşürüyor; okunabilen
+    // Outlook, hatırlatma ve CN43N bölümleri de "Kuyruk durumu alınamadı"
+    // gösteriyordu. Kod sabittir, ham hata iletisi dışarı taşınmaz.
+    return { schemaReady: true, worker, queue: null, failureCode: 'QUEUE_READ_FAILED' };
   }
 }
 

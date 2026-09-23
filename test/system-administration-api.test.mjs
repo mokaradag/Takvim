@@ -257,6 +257,29 @@ test('kuyruk ucu Outlook, hatırlatma ve CN43N bölümlerini güvenli künyeyle 
   assert.doesNotMatch(serialized, /CalendarUid|uid-1|@kurum\.local|BEGIN:VCALENDAR/);
 });
 
+test('posta kuyruğu okunamazsa yalnızca o bölüm düşer; öteki kuyruklar gösterilir', async (t) => {
+  const db = stack(t, { outlookEnabled: true, outlookRows: [pendingSubscription()] });
+  // Uygulama kullanıcısının yeni tabloya izni yoktur (SQL Server 229); hata
+  // eksik şema hatası DEĞİLDİR.
+  db.taskMailOutbox = {
+    filter() {
+      const error = new Error("The SELECT permission was denied on the object 'MR_TaskMailOutbox'.");
+      error.number = 229;
+      throw error;
+    }
+  };
+  const response = await queuesRoute.GET(request('http://localhost/queues'));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.outlook.queue.pending, 1, 'okunabilen bölüm yine gösterilmelidir');
+  assert.equal(body.assignmentMail.schemaReady, true);
+  assert.equal(body.assignmentMail.queue, null);
+  assert.equal(body.assignmentMail.failureCode, 'QUEUE_READ_FAILED');
+  // Ham hata iletisi dışarı taşınmaz.
+  assert.doesNotMatch(JSON.stringify(body), /permission was denied/);
+});
+
 test('başarısızları yeniden deneme kuyruk kuşağını ve takvim sürümünü korur', async (t) => {
   const db = stack(t, { outlookEnabled: true, outlookRows: [pendingSubscription()] });
   const before = { ...db.taskOutlookSubscriptions[0] };

@@ -30,6 +30,21 @@ import { readCoordination } from './assignmentCoordinationQueries.js';
  * alıcı satırı tek başına karar hakkı vermez.
  */
 
+/**
+ * Aynı görev + kişi için AÇIK kaydı kapatır; geçmiş silinmez.
+ *
+ * Yeni kayıt eklenmeden hemen önce, aynı toplu komutta çalışır:
+ * `UX_MR_TaskAssignmentCoordinations_OpenRequest` görev + kişi başına tek açık
+ * kayda izin verir. Metin `@supersededMessage` ile verilir.
+ */
+const CLOSE_OPEN_COORDINATIONS_SQL = `
+  UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)
+  SET Status = 'CANCELLED', DecidedAt = SYSUTCDATETIME(), DecisionBySicil = @requesterSicil,
+      DecisionMessage = @supersededMessage
+  WHERE TaskId = @taskId AND RequestedAssigneeSicil = @assigneeSicil
+    AND Status IN ('PENDING','CANCELLATION_REQUESTED');
+`;
+
 function canonicalId(value, label) {
   const normalized = canonicalActualId(value);
   if (!normalized) {
@@ -296,12 +311,9 @@ export async function createAssignmentCoordination(input = {}) {
       insert.input('targetFinish', sql.Date, isoDate(task.TargetFinish));
       insert.input('taskVersion', sql.Binary(8), task.RowVersion);
       insert.input('correlationId', sql.UniqueIdentifier, correlationId);
+      insert.input('supersededMessage', sql.NVarChar(2000), 'Yeni atama talebiyle değiştirildi.');
       await insert.query(`
-        UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)
-        SET Status = 'CANCELLED', DecidedAt = SYSUTCDATETIME(), DecisionBySicil = @requesterSicil,
-            DecisionMessage = N'Yeni atama talebiyle değiştirildi.'
-        WHERE TaskId = @taskId AND RequestedAssigneeSicil = @assigneeSicil
-          AND Status IN ('PENDING','CANCELLATION_REQUESTED');
+        ${CLOSE_OPEN_COORDINATIONS_SQL}
 
         INSERT dbo.MR_TaskAssignmentCoordinations(
           CoordinationId, TaskId, RequesterSicil, RequestedAssigneeSicil, Mode, Status,
@@ -372,7 +384,15 @@ export async function recordCrossOrganizationAssignments(executor, actor, {
     insert.input('assigneeOrg', sql.NVarChar(1000), assignment.assigneeOrganization || null);
     insert.input('targetFinish', sql.Date, assignment.targetFinish || null);
     insert.input('correlationId', sql.UniqueIdentifier, correlationId);
+    insert.input('supersededMessage', sql.NVarChar(2000), 'Doğrudan atamayla karşılandı.');
+    // Aynı kişi için AÇIK bir talep varsa doğrudan atama onu karşılamıştır ve
+    // kayıt aynı işlemde kapatılır. Kapatılmadığında görev + kişi için iki
+    // kayıt birden yaşıyordu: yönetici yürürlükteki atamanın kaldırılmasını
+    // istediğinde bildirim CANCELLATION_REQUESTED durumuna geçiyor, açık kayıt
+    // benzersizlik kuralına (UX_..._OpenRequest) çarpıyor ve karar düşüyordu.
     await insert.query(`
+      ${CLOSE_OPEN_COORDINATIONS_SQL}
+
       INSERT dbo.MR_TaskAssignmentCoordinations(
         CoordinationId, TaskId, RequesterSicil, RequestedAssigneeSicil, Mode, Status,
         OriginalAssigneeSicils, TaskTitleSnapshot, ProjectIdSnapshot,
@@ -553,9 +573,12 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
     lock.input('sicil', sql.Int, actor.sicil);
     // Alıcı satırı SORGULANMAZ: karar yetkisi yalnızca canlı veriden türetilir
     // (aşağıdaki `isManager`), kayıttaki satır bir posta kutusu girdisidir.
+    // `LiveProjectId` görev satırından gelir ve proje kapatılsa da dolu kalır;
+    // projenin ETKİN olduğunu yalnızca `LiveActiveProjectId` söyler.
     const locked = await lock.query(`
       SELECT TOP (1) c.*, t.TaskId AS LiveTaskId, t.Title AS LiveTaskTitle,
         t.ProjectId AS LiveProjectId, t.TargetFinish AS LiveTargetFinish, t.Priority AS LivePriority,
+        p.ProjectId AS LiveActiveProjectId,
         p.ProjectName AS LiveProjectName, p.ProjectCode AS LiveProjectCode
       FROM dbo.MR_TaskAssignmentCoordinations c WITH (UPDLOCK, HOLDLOCK)
       LEFT JOIN dbo.MR_Tasks t WITH (UPDLOCK, HOLDLOCK) ON t.TaskId = c.TaskId
@@ -596,7 +619,12 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
 
     // Yalnızca sorumlu kümesine DOKUNAN kararlar bayatlık denetiminden geçer.
     const applies = decision === COORDINATION_DECISIONS.APPROVE;
-    if (applies && !row.LiveTaskId) {
+    // Kapatılmış proje de bayatlık nedenidir: öteki bütün görev yazma yolları
+    // etkin olmayan projeyi reddeder (bkz. sqlAppRepository.js ·
+    // assertActiveProject). Denetim yalnızca görevin varlığına bakınca onay,
+    // kapatılmış projedeki göreve sorumlu yazıyor ve görev sürümünü
+    // ilerletiyordu; atama anlık görüntüde de görünmüyordu.
+    if (applies && (!row.LiveTaskId || !row.LiveActiveProjectId)) {
       await setCoordinationStatus(transaction, coordinationId, COORDINATION_STATUSES.STALE, {
         actorSicil: actor.sicil, message: decisionMessage
       });

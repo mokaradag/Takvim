@@ -166,7 +166,7 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql`, `database/MR_Upgrade_0014_Task_Creator_Index.sql` ve `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
-5. Outlook teslimatı veya elle/otomatik hatırlatma kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
+5. Outlook teslimatı, elle/otomatik hatırlatma veya atama e-postası (**Sorumlulara e-posta bildirimi gönder**) kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
 6. `npm ci`
 7. `npm run build`
 8. `npm run start -- -H 0.0.0.0 -p 8008`
@@ -339,8 +339,10 @@ gönder** kutusu vardır. Varsayılan **kapalıdır**, saklanan bir tercih deği
 **tek bir işlem için** geçerli bir seçimdir ve işaretlenmediğinde hiçbir posta
 üretilmez. İşaretlendiğinde kayıt işlemi **aynı transaction** içinde
 `MR_TaskMailOutbox` satırını yazar; SMTP'yi ayrı bir çalışan tüketir. Böylece
-`api.commit` hiçbir koşulda posta sunucusunu beklemez, geçici bir SMTP arızası
-görev kaydetmeyi düşürmez ve yeniden deneme yinelenen posta göndermez. Alıcı
+`api.commit` hiçbir koşulda posta sunucusunu beklemez ve geçici bir SMTP arızası
+görev kaydetmeyi düşürmez. Tam olarak bir kez teslimat garanti edilmez: SMTP
+kabulünden sonra `SENT` yazılamadan çalışan durursa ya da durum yazması
+başarısız olursa aynı posta kira dolunca yeniden gönderilebilir. Alıcı
 adresi var olan `Sicil → MR_V_PeopleDirectory.Username → DC01_userr.EmailAddress`
 zinciriyle sunucuda çözülür; tarayıcı alıcı belirleyemez. Çalışanın yoklama
 aralığı `MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30000 ms) ile ayarlanır.

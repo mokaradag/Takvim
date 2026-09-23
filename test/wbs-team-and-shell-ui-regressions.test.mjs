@@ -236,7 +236,10 @@ test('kabuk ilk görünümü saklanan tercihten türetir', () => {
 test('Ayarlar\'daki açılış sayfası seçenekleri gezinmede gerçekten bulunur', () => {
   const options = read('src/features/settings/SettingsView.jsx')
     .match(/const landingOpts = \[([\s\S]*?)\];/)?.[1] || '';
-  const ids = [...options.matchAll(/\['([a-z]+)',/g)].map((match) => match[1]);
+  // Her tırnaklı kimlik yakalanır: `foo-bar` gibi bir kimlik dar bir desenle
+  // atlanıp hem gezinme hem açılış denetiminden kaçabilirdi.
+  const ids = [...options.matchAll(/\['([^']+)',/g)].map((match) => match[1]);
+  assert.equal(ids.length, (options.match(/\[/g) || []).length, 'her seçenek satırı bir kimlik taşımalıdır');
   assert.ok(ids.length >= 7);
   for (const id of ids) {
     assert.equal(NAV_ITEMS.some((item) => item.id === id), true, id);

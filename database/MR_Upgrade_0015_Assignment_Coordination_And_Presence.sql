@@ -1,7 +1,15 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
+/* Filtrelenmiş dizinin (UX_MR_TaskAssignmentCoordinations_OpenRequest)
+   gerektirdiği oturum seçeneklerinin TAMAMI. İstemci aracı bunlardan birini
+   farklı açarsa (ör. ANSI_WARNINGS OFF) dizin oluşturulamaz ve göç geri alınır. */
 SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
+SET ANSI_PADDING ON;
+SET ANSI_WARNINGS ON;
+SET ARITHABORT ON;
+SET CONCAT_NULL_YIELDS_NULL ON;
+SET NUMERIC_ROUNDABORT OFF;
 
 /*
     MERGEN Rota · 0015 — Atama koordinasyonu, görev bildirimleri, posta

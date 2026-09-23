@@ -121,6 +121,18 @@ export function baselineNarrative(comparison, { unit = 'ms' } = {}) {
 }
 
 /**
+ * Varlık tablosunun başvuru anı: sunucunun yanıt anı, yoksa tarayıcı saati.
+ *
+ * `lastSeenAt` ve `sessionStartedAt` SQL Server saatiyle yazılır; aynı saatle
+ * karşılaştırılmadıklarında istemci saat sapması aktiflik noktasını ve süreyi
+ * bozar.
+ */
+export function presenceReferenceMs(generatedAt, fallback = Date.now()) {
+  const reference = generatedAt ? Date.parse(generatedAt) : NaN;
+  return Number.isFinite(reference) ? reference : fallback;
+}
+
+/**
  * Kesintisiz etkinlik süresi.
  *
  * Damga okunamazsa "—" döner; saat/dakika ayrımı bilinçli olarak kabadır,

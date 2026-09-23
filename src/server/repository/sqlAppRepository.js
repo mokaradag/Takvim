@@ -2481,6 +2481,14 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
   // kaydı için taşınır. Başlık/açıklama düzenlemesi boş fark üretir ve hiçbir
   // bildirim doğurmaz (bkz. server/notifications/taskNotificationStore.js).
   const delta = assigneeSetDelta(authoritativeAssigneeSicils, assigneeSicils);
+  // Yinelemenin şablonu aynı kişiyi zaten taşıyorsa kurum dışı koordinasyon
+  // kaydı ŞABLONDA açılmıştır: seri üretimi her yineleme için karşı yönetim
+  // zincirine ayrı bir NOTICE yazıyor, zil ve Atama Koordinasyonu sekmesi
+  // aynı atamanın kopyalarıyla doluyordu. Şablon aynı işlemde yazıldıysa da
+  // kümesi burada zaten güncel okunur.
+  const templateAssigneeSicils = recurrenceParentId && delta.added.length
+    ? await taskAssigneeSicils(executor, recurrenceParentId)
+    : [];
   return {
     taskId: id(taskId), projectId, beforeProjectId, wbsId: id(wbsId),
     relatedTaskIds: [...relatedTaskIds],
@@ -2489,6 +2497,8 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
       added: delta.added,
       removed: delta.removed,
       assigneeSicils,
+      recurrenceParentId: recurrenceParentId ? id(recurrenceParentId) : null,
+      templateAssigneeSicils,
       task: {
         title: committed?.Title ?? task.task ?? null,
         projectId,
@@ -2529,9 +2539,12 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
       : new Map();
     const crossAssignments = [];
     for (const change of changes) {
+      const inherited = new Set((change.templateAssigneeSicils || []).map(Number));
       for (const sicil of change.added) {
         const person = classified.get(Number(sicil));
         if (!person?.crossOrganization) continue;
+        // Yineleme, şablonun koordinasyon kaydını devralır.
+        if (inherited.has(Number(sicil))) continue;
         const managerSicils = chains.get(Number(sicil)) || [];
         if (!managerSicils.length) continue;
         crossAssignments.push({

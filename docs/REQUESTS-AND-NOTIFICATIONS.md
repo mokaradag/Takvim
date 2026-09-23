@@ -71,6 +71,8 @@ Sonuç satırı ad, Sicil ve kurumsal künyeyi birlikte gösterir. Kimlik her za
 | Yönetici → kapsam dışı çalışan | **Atama talebi** |
 | SYSTEM_ADMIN / tam proje yetkilisi → kurum dışı çalışan | Doğrudan atama **ve** koordinasyon bildirimi |
 
+Doğrudan atanan kişi için aynı görevde bekleyen bir talep varsa talep aynı işlemde `CANCELLED` ("Doğrudan atamayla karşılandı.") olur. Tekrar serisinin yinelemesi, şablonunda zaten bulunan kurum dışı sorumlu için ayrı bir koordinasyon kaydı açmaz; kayıt şablondadır.
+
 Talep gerektiren bir kişi seçildiğinde panel bunu açıkça söyler: *"Bu kişi doğrudan atama yetkinizin dışında. Kaydettiğinizde ilgili yöneticiye atama talebi gönderilecektir."* İstemci anahtarı yalnızca arayüzdür; yetki her çağrıda sunucuda yeniden doğrulanır ve doğrudan API isteği kuralları atlayamaz.
 
 ### Gerçek sorumlu ile talep edilen sorumlu
@@ -92,11 +94,11 @@ Karşı taraftaki yönetim zinciri yetkili İK ilişkisinden (`MR_V_ExecutiveSco
 | Talebi Geri Çek | `PENDING` · talep eden | Kayıt `CANCELLED` |
 | Onayla / Reddet | `CANCELLATION_REQUESTED` · talep eden | Sorumlu kaldırılır (`CANCELLED`) ya da atama korunur (`APPROVED`) |
 
-Alternatif öneri ("Ahmet yerine Mehmet görevlendirilsin") yalnızca yanıtlayan yöneticinin **kendi** kapsamındaki bir çalışan için kabul edilir ve Sicil ile kaydedilir. Koordinasyon bildirimi almak, göreve geniş bir düzenleme yetkisi VERMEZ: yöneticinin olağan yetkisi varsa normal görev düzenleme akışı açık kalır, yoksa tek yol koordinasyon iş akışıdır. Karar yetkisi karar anında güncel İK ilişkisinden ve güncel proje yetkisinden yeniden türetilir; eski bir alıcı satırı tek başına yetki taşımaz. Talep eden kendi talebini onaylayamaz.
+Alternatif öneri ("Ahmet yerine Mehmet görevlendirilsin") yalnızca yanıtlayan yöneticinin **kendi** kapsamındaki bir çalışan için kabul edilir ve Sicil ile kaydedilir. Koordinasyon bildirimi almak, göreve geniş bir düzenleme yetkisi VERMEZ: yöneticinin olağan yetkisi varsa normal görev düzenleme akışı açık kalır, yoksa tek yol koordinasyon iş akışıdır. Karar yetkisi karar anında güncel İK ilişkisinden ve güncel proje yetkisinden yeniden türetilir; eski bir alıcı satırı tek başına yetki taşımaz. Proje ölçütü görevin **güncel** projesidir: görev başka projeye taşınırsa kaydı yeni projenin tam yetkilisi bulur ve karara bağlar. Talep eden kendi talebini onaylayamaz; kendi bekleyen talebini geri çekebilir ama bu kayıt ona "Kararınız bekleniyor" diye gösterilmez ve bekleyen karar sayacına girmez.
 
 ### Eşzamanlılık
 
-Onay, görev ve sorumlu satırları kilitliyken tek işlemde çalışır. Bayatlık geçişe göre değerlendirilir: `PENDING` onayı için yetkili sorumlu kümesi talep anındaki kümeyle aynı olmalı, kaldırma onayı için kişi hâlâ sorumlu olmalıdır. Uymazsa kayıt `STALE` olur ve hiçbir şey yazılmaz. Onay **tek Sicil ekler**, kaldırma **tek Sicil siler**; sorumlu kümesi yeniden yazılmaz, bu yüzden görünmeyen eş sorumlular sessizce düşmez. İstemci sürüm göndermişse kaydın `RowVersion` değeriyle karşılaştırılır: eski bir yönetici yanıtı daha yenisini ezemez.
+Onay, görev ve sorumlu satırları kilitliyken tek işlemde çalışır. Bayatlık geçişe göre değerlendirilir: `PENDING` onayı için yetkili sorumlu kümesi talep anındaki kümeyle aynı olmalı, kaldırma onayı için kişi hâlâ sorumlu olmalıdır. Uymazsa kayıt `STALE` olur ve hiçbir şey yazılmaz. Görev silinmiş ya da projesi kapatılmışsa da kayıt `STALE` olur: kapatılmış projedeki göreve sorumlu yazılmaz. Onay **tek Sicil ekler**, kaldırma **tek Sicil siler**; sorumlu kümesi yeniden yazılmaz, bu yüzden görünmeyen eş sorumlular sessizce düşmez. İstemci sürüm göndermişse kaydın `RowVersion` değeriyle karşılaştırılır: eski bir yönetici yanıtı daha yenisini ezemez.
 
 ### Sekme ve süzgeçler
 
@@ -115,9 +117,11 @@ görev işlemi → posta niyeti (MR_TaskMailOutbox) → commit başarılı
             → arka plan çalışanı → SMTP → SENT / geri çekilmeli yeniden deneme
 ```
 
-Görev yazması SMTP'yi **beklemez** ve posta sunucusu erişilemez olsa da tamamlanır. Teslimat var olan SMTP altyapısını kullanır; ikinci bir SMTP istemcisi yazılmaz. Tekilleştirme anahtarı `(ilişkilendirme, görev, alıcı)` üçlüsünden üretilir: yeniden deneme aynı iletiyi ikinci kez göndermez. Alıcı adresi göreve kopyalanmaz, her teslimatta kurumsal dizinden okunur. Altı denemeden sonra kayıt `FAILED` olur ve yönetim konsolundan görülebilir.
+Görev yazması SMTP'yi **beklemez** ve posta sunucusu erişilemez olsa da tamamlanır. Teslimat var olan SMTP altyapısını kullanır; ikinci bir SMTP istemcisi yazılmaz. Tekilleştirme anahtarı `(ilişkilendirme, görev, alıcı)` üçlüsünden üretilir: aynı değişiklik kuyruğa iki kez girmez. Tam olarak bir kez teslimat **garanti edilmez**: SMTP iletiyi kabul ettikten sonra, `SENT` yazılamadan çalışan durursa ya da durum yazması başarısız olursa satır kira dolunca yeniden kiralanır ve aynı ileti yeniden gönderilebilir. Alıcı adresi göreve kopyalanmaz, her teslimatta kurumsal dizinden okunur. Altı denemeden sonra kayıt `FAILED` olur ve yönetim konsolundan görülebilir.
 
-Tur, satırları **kiralayarak** alır ve kira turun tamamını kapsar: parti boyu SMTP zaman aşımından türetilir, kira üst sınırına sığmayan bir parti daraltılır. Her satır kirayı alan turun **sahiplik belirtecini** taşır; kira yine de dolar ve satırı başka bir uygulama örneği devralırsa, geciken turun durum yazması satıra dokunmaz. Böylece çok örnekli dağıtımda aynı ileti iki kez gönderilmez.
+Tur, satırları **kiralayarak** alır ve kira turun tamamını kapsar. `SMTP_TIMEOUT_MS` diyaloğun tamamına değil her SMTP adımına ayrı uygulandığı için her teslimat **uçtan uca** bir bütçeyle (zaman aşımının iki katı) kesilir; kira, parti boyu × bu bütçe üzerinden ölçülür ve üst sınıra sığmayan parti daraltılır. Kira bitmeden tamamlanamayacak bir teslimat hiç başlatılmaz; satır kira dolunca yeniden kiralanır. Her satır kirayı alan turun **sahiplik belirtecini** taşır; kira yine de dolar ve satırı başka bir uygulama örneği devralırsa, geciken turun durum yazması satıra dokunmaz. Böylece kira süresi içinde çok örnekli dağıtımda aynı ileti iki kez gönderilmez; SMTP kabulü ile `SENT` yazımı arasındaki arıza penceresi yukarıda anlatıldığı gibi açık kalır.
+
+Satıra özgü bir hata (dizin okuması, ileti kurulumu) yalnızca o satırı etkiler: deneme olarak sayılır ve geri çekilmeyle yeniden denenir, partideki öteki satırlar işlenmeye devam eder. Gönderici beklenmedik biçimde hata fırlatırsa iletinin sunucuya ulaşıp ulaşmadığı bilinemez; satır `MAIL_DELIVERY_UNCERTAIN` olarak durur.
 
 Bağlantı ileti gövdesi aktarıldıktan sonra, kabul yanıtı okunmadan koparsa posta sunucusu iletiyi **kabul etmiş olabilir**. Böyle bir satır olağan yeniden deneme yoluna döndürülseydi alıcı aynı iletiyi ikinci kez alabilirdi; satır bu yüzden `FAILED` olarak, `MAIL_DELIVERY_UNCERTAIN` koduyla durur ve kendiliğinden bir daha gönderilmez. Kayıt kaybolmaz: yönetim konsolunda görünür ve gerekirse elle ele alınır.
 

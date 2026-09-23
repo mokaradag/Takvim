@@ -3,9 +3,11 @@ import { useEffect, useRef } from 'react';
 import { PRESENCE_HEARTBEAT_INTERVAL_MS } from '../domain/presence/presenceModel.js';
 import {
   PRESENCE_LEADER_STORAGE_KEY,
+  nextPresenceTickDelay,
   parsePresenceLock,
   serializePresenceLock,
-  shouldClaimPresenceLeadership
+  shouldClaimPresenceLeadership,
+  shouldReleasePresenceLock
 } from '../domain/presence/presenceLeader.js';
 import { sendPresenceHeartbeat } from '../data/api/presenceClient.js';
 
@@ -14,8 +16,13 @@ import { sendPresenceHeartbeat } from '../data/api/presenceClient.js';
  *
  * Nabız OLAĞAN İSTEKLERE bağlı değildir: yalnızca uygulama açık, sekme görünür
  * ve kullanıcı Gerçek Sistem kipinde oturum açmışken, sabit aralıkla gönderilir.
- * Aynı tarayıcıdaki sekmeler paylaşılan bir kilitle tek önder seçer; kapanan ya
- * da donan önderin kilidi bayatlayınca başka bir sekme devralır.
+ * Aynı tarayıcıdaki sekmeler paylaşılan bir kilitle tek önder seçer.
+ *
+ * Önder gizlendiğinde, kapandığında ya da etki söküldüğünde kilidini BIRAKIR;
+ * görünür izleyici kilidi sık yoklar ve boşalan önderliği hemen devralır.
+ * Görünür olan sekme beklemeden bir tur başlatır. Donan önderin kilidi ise
+ * bayatlayınca devralınır; en kötü durum aktiflik penceresinin içinde kalır
+ * (bkz. domain/presence/presenceLeader.js).
  *
  * Tarayıcı kapanışı, ağ kesintisi ve oturum düşmesi ayrıca ele alınmaz: nabız
  * durur ve kullanıcı aktiflik penceresi dolunca listeden kendiliğinden çıkar.
@@ -55,29 +62,49 @@ export function usePresenceHeartbeat(enabled, { intervalMs = PRESENCE_HEARTBEAT_
         return true;
       }
     };
+    const release = () => {
+      const store = storage();
+      if (!store) return;
+      try {
+        const lock = parsePresenceLock(store.getItem(PRESENCE_LEADER_STORAGE_KEY));
+        if (shouldReleasePresenceLock(lock, tabIdRef.current)) store.removeItem(PRESENCE_LEADER_STORAGE_KEY);
+      } catch { /* kilit en iyi çabadır */ }
+    };
 
-    const tick = async () => {
+    const schedule = (delay) => {
+      clearTimeout(timer);
+      timer = setTimeout(tick, delay);
+    };
+    async function tick() {
+      clearTimeout(timer);
       timer = null;
       if (cancelled || inFlight) return;
-      if (!hidden() && leads()) {
+      const isHidden = hidden();
+      const leader = !isHidden && leads();
+      if (leader) {
         inFlight = true;
         try { await sendPresenceHeartbeat(); } catch { /* nabız en iyi çabadır */ }
         finally { inFlight = false; }
       }
-      if (!cancelled) schedule();
-    };
-    const schedule = () => {
-      clearTimeout(timer);
-      timer = setTimeout(tick, intervalMs);
-    };
+      if (!cancelled) schedule(nextPresenceTickDelay({ leader, hidden: isHidden, intervalMs }));
+    }
 
     tick();
-    const onVisibility = () => { if (!hidden() && !timer && !inFlight) tick(); };
+    const onVisibility = () => {
+      if (hidden()) {
+        release();
+        return;
+      }
+      if (!inFlight) tick();
+    };
     document?.addEventListener?.('visibilitychange', onVisibility);
+    window.addEventListener?.('pagehide', release);
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      release();
       document?.removeEventListener?.('visibilitychange', onVisibility);
+      window.removeEventListener?.('pagehide', release);
     };
   }, [enabled, intervalMs]);
 }

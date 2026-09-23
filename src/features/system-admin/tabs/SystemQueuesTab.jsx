@@ -325,6 +325,7 @@ export function SystemQueuesTab({ enabled = true }) {
                   : 'SMTP yapılandırılmamış; niyetler kuyrukta bekler.'}
               </span>
               {assignmentMail.schemaReady === false && <span className="sysadmin-chip sysadmin-chip-warn">şema eksik</span>}
+              {assignmentMail.failureCode && <span className="sysadmin-chip sysadmin-chip-warn">{assignmentMail.failureCode}</span>}
               {assignmentMail.worker?.lastResult?.reason && (
                 <span className="sysadmin-chip sysadmin-chip-warn">{assignmentMail.worker.lastResult.reason}</span>
               )}
@@ -342,7 +343,9 @@ export function SystemQueuesTab({ enabled = true }) {
                 <MetricTile label="Sıradaki deneme" value={assignmentMail.queue.nextAttemptAt ? formatRelativeTime(assignmentMail.queue.nextAttemptAt) : '—'} unit="raw" icon="Refresh" />
                 <MetricTile label="Son gönderim" value={assignmentMail.queue.lastSentAt ? formatRelativeTime(assignmentMail.queue.lastSentAt) : 'henüz yok'} unit="raw" icon="Activity" />
               </div>
-            ) : <p className="muted">Posta kuyruğu okunamadı; göç uygulanmamış olabilir.</p>}
+            ) : <p className="muted">{assignmentMail.failureCode
+              ? 'Posta kuyruğu şu anda okunamadı; öteki kuyruk bölümleri etkilenmez.'
+              : 'Posta kuyruğu okunamadı; göç uygulanmamış olabilir.'}</p>}
           </>
         )}
       </AdminSection>

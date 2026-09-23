@@ -30,10 +30,15 @@ const {
   isPresenceActive
 } = await import('../src/domain/presence/presenceModel.js');
 const {
+  PRESENCE_FOLLOWER_POLL_MS,
+  PRESENCE_LEADER_STORAGE_KEY,
   PRESENCE_LEADER_TTL_MS,
+  PRESENCE_WORST_CASE_GAP_MS,
+  nextPresenceTickDelay,
   parsePresenceLock,
   serializePresenceLock,
-  shouldClaimPresenceLeadership
+  shouldClaimPresenceLeadership,
+  shouldReleasePresenceLock
 } = await import('../src/domain/presence/presenceLeader.js');
 
 function seed(overrides = {}) {
@@ -73,6 +78,129 @@ test('varlık tanımı ve nabız aralığı açıkça belirlidir', () => {
   assert.equal(isPresenceActive(new Date(now - 60000).toISOString(), now), true);
   assert.equal(isPresenceActive(new Date(now - 400000).toISOString(), now), false);
   assert.equal(isPresenceActive(null, now), false);
+});
+
+test('donan önderin devri aktiflik penceresinin içinde kalır', () => {
+  // Önder kilidi her nabızda tazeler: süre bir aralıktan uzun olmalıdır.
+  assert.ok(PRESENCE_LEADER_TTL_MS > PRESENCE_HEARTBEAT_INTERVAL_MS);
+  assert.equal(PRESENCE_WORST_CASE_GAP_MS, PRESENCE_LEADER_TTL_MS + PRESENCE_FOLLOWER_POLL_MS);
+  assert.ok(PRESENCE_WORST_CASE_GAP_MS < PRESENCE_ACTIVE_WINDOW_MS,
+    'devralma gecikmesi etkin kullanıcıyı listeden düşürmemelidir');
+  // Önder ve gizli sekme nabız aralığıyla, görünür izleyici daha sık yoklar.
+  assert.equal(nextPresenceTickDelay({ leader: true, hidden: false }), PRESENCE_HEARTBEAT_INTERVAL_MS);
+  assert.equal(nextPresenceTickDelay({ leader: false, hidden: true }), PRESENCE_HEARTBEAT_INTERVAL_MS);
+  assert.equal(nextPresenceTickDelay({ leader: false, hidden: false }), PRESENCE_FOLLOWER_POLL_MS);
+  // Kilit yalnızca SAHİBİ tarafından bırakılır.
+  const lock = parsePresenceLock(serializePresenceLock('a', 1));
+  assert.equal(shouldReleasePresenceLock(lock, 'a'), true);
+  assert.equal(shouldReleasePresenceLock(lock, 'b'), false);
+  assert.equal(shouldReleasePresenceLock(null, 'a'), false);
+});
+
+/**
+ * Nabız kancasını tarayıcı olmadan çalıştırır: paylaşılan yerel depo,
+ * görünürlük olayları ve sahte saat. Her `mountTab` ayrı bir sekmedir.
+ */
+async function presenceTabs(t) {
+  const { mountComponent } = await import('./helpers/clientComponentHarness.mjs');
+  const { usePresenceHeartbeat } = await import('../src/hooks/usePresenceHeartbeat.js');
+  const values = new Map();
+  const localStorage = {
+    getItem: (key) => (values.has(key) ? values.get(key) : null),
+    setItem: (key, value) => { values.set(key, String(value)); },
+    removeItem: (key) => { values.delete(key); }
+  };
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch };
+  globalThis.window = Object.assign(new EventTarget(), { localStorage });
+  globalThis.document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+  const heartbeats = [];
+  globalThis.fetch = async (url) => {
+    heartbeats.push(String(url));
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-09-22T10:00:00.000Z') });
+  const mounted = [];
+  t.after(() => {
+    for (const view of mounted) view.unmount();
+    t.mock.timers.reset();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete globalThis[key]; else globalThis[key] = value;
+    }
+  });
+  const flush = async () => { for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setImmediate(resolve)); };
+  return {
+    heartbeats,
+    flush,
+    lock: () => parsePresenceLock(localStorage.getItem(PRESENCE_LEADER_STORAGE_KEY)),
+    setLock: (tabId) => localStorage.setItem(PRESENCE_LEADER_STORAGE_KEY, serializePresenceLock(tabId, Date.now())),
+    async mountTab() {
+      const view = mountComponent(function PresenceProbe() { usePresenceHeartbeat(true); return null; }, {});
+      mounted.push(view);
+      await flush();
+      return { unmount() { mounted.splice(mounted.indexOf(view), 1); view.unmount(); } };
+    },
+    async setVisibility(state) {
+      globalThis.document.visibilityState = state;
+      globalThis.document.dispatchEvent(new Event('visibilitychange'));
+      await flush();
+    },
+    async advance(ms) {
+      t.mock.timers.tick(ms);
+      await flush();
+    }
+  };
+}
+
+test('önder sekme gizlenince kilidi bırakır; görünür olan sekme beklemeden nabız gönderir', async (t) => {
+  const tabs = await presenceTabs(t);
+  const tab = await tabs.mountTab();
+  assert.equal(tabs.heartbeats.length, 1);
+  assert.ok(tabs.lock(), 'önder kilidi almalıdır');
+
+  await tabs.setVisibility('hidden');
+  assert.equal(tabs.lock(), null, 'gizlenen önder kilidi bırakmalıdır');
+
+  // Zamanlayıcı beklenmez: görünür olan sekme hemen bir tur başlatır.
+  await tabs.setVisibility('visible');
+  assert.equal(tabs.heartbeats.length, 2);
+  assert.ok(tabs.lock());
+
+  // Sayfa kapanırken ve etki sökülürken de kilit bırakılır.
+  globalThis.window.dispatchEvent(new Event('pagehide'));
+  assert.equal(tabs.lock(), null);
+  await tabs.setVisibility('visible');
+  assert.ok(tabs.lock());
+  tab.unmount();
+  assert.equal(tabs.lock(), null);
+});
+
+test('kapanan önderin yerine görünür sekme bir yoklama aralığında geçer', async (t) => {
+  const tabs = await presenceTabs(t);
+  const leader = await tabs.mountTab();
+  await tabs.mountTab();
+  // Aynı tarayıcıda TEK nabız gider.
+  assert.equal(tabs.heartbeats.length, 1);
+
+  leader.unmount();
+  await tabs.advance(PRESENCE_FOLLOWER_POLL_MS);
+  assert.equal(tabs.heartbeats.length, 2, 'izleyici boşalan önderliği hemen devralmalıdır');
+});
+
+test('donan önderin yerine görünür sekme aktiflik penceresi dolmadan geçer', async (t) => {
+  const tabs = await presenceTabs(t);
+  // Kilidi bırakamadan donan bir sekme.
+  tabs.setLock('donmus-sekme');
+  await tabs.mountTab();
+  assert.equal(tabs.heartbeats.length, 0);
+
+  let elapsed = 0;
+  while (tabs.heartbeats.length === 0 && elapsed < PRESENCE_ACTIVE_WINDOW_MS * 2) {
+    await tabs.advance(PRESENCE_FOLLOWER_POLL_MS);
+    elapsed += PRESENCE_FOLLOWER_POLL_MS;
+  }
+  assert.equal(tabs.heartbeats.length, 1);
+  assert.ok(elapsed <= PRESENCE_WORST_CASE_GAP_MS, `devralma ${elapsed} ms sürdü`);
+  assert.ok(elapsed < PRESENCE_ACTIVE_WINDOW_MS);
 });
 
 test('sekmeler arası önderlik kilidi tek nabız gönderir ve bayatlayınca devreder', () => {
@@ -142,6 +270,11 @@ test('bayat nabız aktif eşiğinden düşer ama son 15 dakika listesinde kalır
     assert.equal(data.metrics.recentCount, 2);
     assert.equal(data.users.length, 2);
     assert.equal(data.definition.activeWindowMs, PRESENCE_ACTIVE_WINDOW_MS);
+    // Başvuru anı, `LastSeenAt` damgasını yazan saatten (SQL Server) okunur.
+    const presenceSql = stack.db.statements.map((entry) => entry.sql)
+      .find((sql) => sql.includes('AS ActiveCount'));
+    assert.match(presenceSql, /SYSUTCDATETIME\(\) AS ServerNow/);
+    assert.ok(Number.isFinite(Date.parse(data.generatedAt)));
   } finally { await stack.dispose(); }
 });
 
@@ -295,6 +428,50 @@ test('Aktif Kullanıcılar sekmesi Demo Kipinde sıfır aktif kullanıcı İDDİ
     // Ölçüm kutuları da çizilmez: tanımsız değerli kutu gösterilmez.
     assert.equal(findElement(view.output, (node) => node.props?.className === 'sysadmin-tile-grid sysadmin-presence-metrics'), null);
   } finally { view.unmount(); delete globalThis[CLIENT_STATE]; }
+});
+
+test('Aktif Kullanıcılar tablosu tarayıcı saatini değil SUNUCU başvuru anını kullanır', async (t) => {
+  const { CLIENT_STATE, findElement, mountComponent } = await import('./helpers/clientComponentHarness.mjs');
+  const { SystemPresenceTab } = await import('../src/features/system-admin/tabs/SystemPresenceTab.jsx');
+  // Sunucu saati tarayıcıdan günler öncesini gösterir: tarayıcı saati ileride.
+  const serverNow = Date.parse('2020-01-01T12:00:00.000Z');
+  const payload = {
+    ok: true,
+    enabled: true,
+    generatedAt: new Date(serverNow).toISOString(),
+    definition: { activeWindowMs: PRESENCE_ACTIVE_WINDOW_MS, recentWindowMs: PRESENCE_RECENT_WINDOW_MS, listLimit: 200 },
+    metrics: { activeCount: 1, recentCount: 1, directorateCount: 1, departmentCount: 1 },
+    users: [{
+      sicil: String(USER), name: 'Olağan Kullanıcı', directorate: 'Üretim', department: 'Montaj', unit: 'Hat 1',
+      sessionStartedAt: new Date(serverNow - 15 * 60000).toISOString(),
+      firstSeenAt: new Date(serverNow - 3600000).toISOString(),
+      lastSeenAt: new Date(serverNow - 60000).toISOString()
+    }]
+  };
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(payload), {
+    status: 200, headers: { 'content-type': 'application/json' }
+  });
+  globalThis[CLIENT_STATE] = { actions: {} };
+  const view = mountComponent(SystemPresenceTab, { enabled: true });
+  t.after(() => { view.unmount(); delete globalThis[CLIENT_STATE]; globalThis.fetch = previousFetch; });
+  for (let index = 0; index < 10; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  view.render({ enabled: true });
+
+  const row = findElement(view.output, (node) => node.type === 'tr' && node.key === String(USER));
+  assert.ok(row, 'kullanıcı satırı çizilmelidir');
+  const rendered = JSON.stringify(row);
+  // Sunucuya göre bir dakika önce görülen kullanıcı ETKİNDİR ve süresi 15 dk'dır.
+  assert.equal(row.props.className, undefined, 'satır boşta gösterilmemelidir');
+  assert.match(rendered, /sysadmin-dot-ok/);
+  assert.match(rendered, /15 dk/);
+});
+
+test('varlık başvuru anı sunucu yanıtından gelir; yoksa tarayıcı saatine düşer', async () => {
+  const { presenceReferenceMs } = await import('../src/features/system-admin/systemAdminPresentation.js');
+  assert.equal(presenceReferenceMs('2026-09-22T12:00:00.000Z', 5), Date.parse('2026-09-22T12:00:00.000Z'));
+  assert.equal(presenceReferenceMs(null, 5), 5);
+  assert.equal(presenceReferenceMs('bozuk', 5), 5);
 });
 
 test('etkinlik süresi ve son görülme okunur biçimde yazılır', async () => {

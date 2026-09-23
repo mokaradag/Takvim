@@ -1,12 +1,12 @@
 'use client';
 import { useCallback, useMemo } from 'react';
 import { Icons } from '../../../components/icons';
-import { PRESENCE_ACTIVE_WINDOW_MS } from '../../../domain/presence/presenceModel.js';
+import { PRESENCE_ACTIVE_WINDOW_MS, isPresenceActive } from '../../../domain/presence/presenceModel.js';
 import { AdminSection } from '../components/AdminSection.jsx';
 import { MetricTile } from '../components/MetricTile.jsx';
 import { loadSystemPresenceRequest } from '../systemAdminClient.js';
 import { useAdminResource } from '../useAdminResource.js';
-import { presenceDuration, presenceTimestamp } from '../systemAdminPresentation.js';
+import { presenceDuration, presenceReferenceMs, presenceTimestamp } from '../systemAdminPresentation.js';
 
 /**
  * Sistem Yönetimi · Aktif Kullanıcılar.
@@ -27,6 +27,11 @@ export function SystemPresenceTab({ enabled = true }) {
   const users = useMemo(() => data?.users || [], [data]);
   const activeWindowMs = data?.definition?.activeWindowMs || PRESENCE_ACTIVE_WINDOW_MS;
   const activeMinutes = Math.round(activeWindowMs / 60000);
+  // Başvuru anı SUNUCUNUN yanıt anıdır (bkz. SystemQueuesTab). Tarayıcı saati
+  // SQL Server saatinden birkaç dakika saparsa ileri saatte bütün satırlar
+  // boşta görünüyor, geri saatte yeni oturumun süresi "—" yazıyordu; "Şu anda
+  // aktif" kutusu ise sunucuda hesaplandığı için liste ile çelişiyordu.
+  const referenceMs = presenceReferenceMs(data?.generatedAt);
 
   // Demo Kipinde sorgu HİÇ çalışmaz. Dal olmadan sekme boş ölçüm kutuları ve
   // "Şu anda etkin kullanıcı görünmüyor." iletisini çiziyor, yönetici bunu
@@ -92,8 +97,7 @@ export function SystemPresenceTab({ enabled = true }) {
             </thead>
             <tbody>
               {users.map((user) => {
-                const stale = !user.lastSeenAt
-                  || Date.now() - Date.parse(user.lastSeenAt) > activeWindowMs;
+                const stale = !isPresenceActive(user.lastSeenAt, referenceMs, activeWindowMs);
                 return (
                   <tr key={user.sicil} className={stale ? 'is-idle' : undefined}>
                     <td>
@@ -106,7 +110,7 @@ export function SystemPresenceTab({ enabled = true }) {
                     <td>{user.directorate || '—'}</td>
                     <td>{user.department || '—'}</td>
                     <td>{user.unit || '—'}</td>
-                    <td className="tabular">{presenceDuration(user.sessionStartedAt)}</td>
+                    <td className="tabular">{presenceDuration(user.sessionStartedAt, referenceMs)}</td>
                     <td className="tabular">{presenceTimestamp(user.lastSeenAt)}</td>
                   </tr>
                 );

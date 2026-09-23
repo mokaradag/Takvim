@@ -93,7 +93,14 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
    * gönderilemezse görev kaydı korunur, panel açık kalır ve hata gösterilir.
    */
   const submitAssignmentRequest = async (taskId, request) => {
-    if (!request?.assigneeSicils?.length || !taskId) return { ok: true };
+    if (!request?.assigneeSicils?.length) return { ok: true };
+    // Kaydın kimliği alınamadıysa talep SESSİZCE atlanmaz: panel kapanıyor,
+    // kullanıcı talebin gittiğini sanıyordu.
+    if (!taskId) {
+      const message = 'Görev kimliği alınamadığı için atama talebi gönderilemedi.';
+      setSaveError(message);
+      return { ok: false, message };
+    }
     const result = await submitAssignmentCoordination({ taskId, ...request });
     if (!result.ok) setSaveError(result.message || 'Atama talebi gönderilemedi.');
     return result;

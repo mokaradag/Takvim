@@ -1,8 +1,7 @@
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import {
   COORDINATION_STATUSES,
-  allowedCoordinationDecisions,
-  isOpenCoordinationStatus
+  allowedCoordinationDecisions
 } from '../../domain/assignment/assignmentCoordination.js';
 import { NOTIFICATION_SOURCES } from '../../domain/notifications/notificationInbox.js';
 import { encodeVersion } from '../repository/versionTokens.js';
@@ -62,8 +61,15 @@ export function mapCoordination(row, actorSicil) {
     isRequester,
     isAssignee,
     isManager,
-    actionable: taskAvailable && isOpenCoordinationStatus(status)
-      && allowedCoordinationDecisions(status, { isManager, isRequester }).length > 0,
+    // Sunucudaki `ACTIONABLE` yüklemiyle AYNI kural: PENDING yalnızca karar
+    // yetkilisinin, CANCELLATION_REQUESTED yalnızca talep edenin bekleyen
+    // kararıdır. Talep edenin kendi PENDING kaydındaki "Talebi Geri Çek"
+    // seçeneği bir karar beklemesi değildir; o kayıt "Kararınız bekleniyor"
+    // gösterip sayaçla çelişiyor ve gerçek kararların üstüne sıralanıyordu.
+    actionable: taskAvailable && (
+      (status === COORDINATION_STATUSES.PENDING && isManager)
+      || (status === COORDINATION_STATUSES.CANCELLATION_REQUESTED && isRequester)
+    ),
     allowedDecisions: taskAvailable
       ? allowedCoordinationDecisions(status, { isManager, isRequester })
       : []

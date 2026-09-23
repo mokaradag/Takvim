@@ -144,3 +144,18 @@ test('0012 gerçek kısıt hatasını adlandırır ve başarı kaydından önce 
   assert.ok(observabilityUpgrade.indexOf('THROW 51012, @CheckError, 1') < observabilityUpgrade.indexOf('INSERT dbo.MR_SchemaMigrations'));
   assert.match(observabilityUpgrade, /BEGIN CATCH\s+IF XACT_STATE\(\) <> 0 ROLLBACK TRANSACTION;\s+THROW;/);
 });
+
+test('filtrelenmiş dizin kuran betikler gerekli bütün oturum seçeneklerini sabitler', () => {
+  const upgrade0015 = readFileSync(new URL('../database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql', import.meta.url), 'utf8');
+  // İstemci aracı bunlardan birini farklı açarsa filtrelenmiş dizin
+  // oluşturulamaz ve göç geri alınır.
+  const required = [
+    'SET QUOTED_IDENTIFIER ON;', 'SET ANSI_NULLS ON;', 'SET ANSI_PADDING ON;', 'SET ANSI_WARNINGS ON;',
+    'SET ARITHABORT ON;', 'SET CONCAT_NULL_YIELDS_NULL ON;', 'SET NUMERIC_ROUNDABORT OFF;'
+  ];
+  for (const [name, script] of [['0015', upgrade0015], ['create', createSql]]) {
+    assert.match(script, /WHERE Status IN \('PENDING','CANCELLATION_REQUESTED'\)/, name);
+    const header = script.slice(0, script.indexOf('BEGIN TRY'));
+    for (const option of required) assert.ok(header.includes(option), `${name}: ${option}`);
+  }
+});

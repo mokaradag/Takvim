@@ -409,14 +409,96 @@ test('kurum dışı kişi Kapsamlı Kip çekmecesinde de doğrudan atanabilir', 
   // Kurum dışı kişi anlık görüntü dizininde YOKTUR: `addAssignee` rehber
   // aramasına düşüp sessizce çıkıyor, kişi ne atanıyor ne de talep açılıyordu.
   const drawer = read('src/features/task-detail/TaskDrawer.jsx');
-  assert.match(drawer, /onAssignDirectly=\{\(person\) => addAssigneeSicil\(person\.sicil\)\}/);
-  assert.match(drawer, /const addAssigneeSicil = \(sicil\) => \{/);
+  assert.match(drawer, /onAssignDirectly=\{addDirectoryAssignee\}/);
+  assert.match(drawer, /const addAssigneeSicil = \(sicil, knownPeople = displayPeople\) => \{/);
+  assert.match(drawer, /const addDirectoryAssignee = \(person\) => \{[\s\S]*?addAssigneeSicil\(record\.id, withDirectoryPeople\(displayPeople, \[record\]\)\);/);
   // Anlık görüntüdeki seçici de aynı Sicil yolundan geçer.
   assert.match(drawer, /const addAssignee = \(personId\) => \{[\s\S]*?addAssigneeSicil\(person\.id\);/);
 
-  // Temel Kip çekmecesi baştan beri sicili doğrudan yazar; davranış aynıdır.
+  // Temel Kip çekmecesi de aynı kuralı izler.
   const simple = read('src/features/task-detail/SimpleTaskDrawer.jsx');
-  assert.match(simple, /onAssignDirectly=\{\(person\) => setAssignees\(\[\.\.\.\(local\.assigneeIds \|\| \[\]\), String\(person\.sicil\)\]\)\}/);
+  assert.match(simple, /onAssignDirectly=\{addDirectoryAssignee\}/);
+  assert.match(simple, /setAssignees\(\[\.\.\.\(local\.assigneeIds \|\| \[\]\), record\.id\], withDirectoryPeople\(displayPeople, \[record\]\)\)/);
+
+  // Sorumlu listesi ve adlar, kişi rehberde olmasa da kaydedilmeden görünür.
+  for (const source of [drawer, simple]) {
+    assert.match(source, /resolveTaskAssigneeDisplayRecords\(\{[\s\S]*?\}, displayPeople, !canManageAssignees\)/);
+  }
+});
+
+test('dizinden doğrudan atanan kişi adı ve kimliğiyle hemen görünür', async () => {
+  const {
+    directoryPersonRecord,
+    resolveTaskAssigneeDisplayRecords,
+    taskAssigneeMutationPatch,
+    withDirectoryPeople
+  } = await import('../src/features/task-detail/taskAssigneeDisplay.js');
+  const people = [{ id: '950001', employeeNo: '950001', name: 'Olağan Kullanıcı' }];
+  const task = { assigneeIds: ['950001'], sorumlu: ['Olağan Kullanıcı'], assigneeDisplayNames: ['Olağan Kullanıcı'] };
+  const external = directoryPersonRecord({
+    sicil: 950002,
+    name: 'Dış Birim Personeli',
+    jobTitle: 'Tekniker',
+    organization: { directorate: 'Üretim', department: 'Montaj', unit: 'Hat 1' }
+  });
+  assert.deepEqual(external, {
+    id: '950002',
+    employeeNo: '950002',
+    name: 'Dış Birim Personeli',
+    role: 'Tekniker',
+    organization: { directorate: 'Üretim', department: 'Montaj', unit: 'Hat 1' }
+  });
+  assert.equal(directoryPersonRecord({ name: 'Sicilsiz' }), null);
+
+  const known = withDirectoryPeople(people, [external]);
+  assert.equal(known.length, 2);
+  // Rehberde zaten olan kişi yinelenmez; ek yoksa dizi kimliği korunur.
+  assert.equal(withDirectoryPeople(known, [external]), known);
+  assert.equal(withDirectoryPeople(people, []), people);
+
+  const patch = taskAssigneeMutationPatch(task, known, ['950001', '950002']);
+  assert.deepEqual(patch.assigneeIds, ['950001', '950002']);
+  assert.deepEqual(patch.sorumlu, ['Olağan Kullanıcı', 'Dış Birim Personeli']);
+
+  const records = resolveTaskAssigneeDisplayRecords({ ...task, ...patch }, known, false);
+  assert.deepEqual(records.map((record) => [record.id, record.name]), [
+    ['950001', 'Olağan Kullanıcı'],
+    ['950002', 'Dış Birim Personeli']
+  ]);
+  assert.equal(records[1].person.employeeNo, '950002');
+
+  // Rehberde olmadan yalnızca Sicil yazıldığında kişi listeden düşüyordu.
+  const withoutIdentity = taskAssigneeMutationPatch(task, people, ['950001', '950002']);
+  assert.deepEqual(withoutIdentity.sorumlu, ['Olağan Kullanıcı']);
+});
+
+test('görev kimliği alınamazsa atama talebi sessizce atlanmaz', () => {
+  const source = read('src/features/task-detail/TaskDetailOverlay.jsx');
+  const body = source.slice(
+    source.indexOf('const submitAssignmentRequest = async (taskId, request) => {'),
+    source.indexOf('const onSave = (input, options = {}) => {')
+  );
+  // Boş talep başarıdır; kimliksiz görev ise görünür bir hatadır.
+  assert.match(body, /if \(!request\?\.assigneeSicils\?\.length\) return \{ ok: true \};/);
+  assert.match(body, /if \(!taskId\) \{[\s\S]*?setSaveError\(message\);[\s\S]*?return \{ ok: false, message \};/);
+  assert.ok(body.indexOf('if (!taskId)') < body.indexOf('submitAssignmentCoordination('),
+    'kimlik denetimi istekten önce yapılmalıdır');
+});
+
+test('bildirim özeti sayaçları değişmedikçe kimliğini korur', async () => {
+  // `useAssignmentCoordinationQuery` özeti etki bağımlılığı olarak izler; her
+  // yenilemede yeni nesne sayfayı yeniden çekip yükleme durumunu gösteriyordu.
+  const { appStateReducer, createInitialState } = await import('../src/state/appState.js');
+  const initial = createInitialState({ notificationSummary: { unreadCount: 2, pendingCount: 1 } });
+  const same = appStateReducer(initial, {
+    type: 'data/load-success', snapshot: { notificationSummary: { unreadCount: 2, pendingCount: 1 } }
+  });
+  assert.equal(same.notificationSummary, initial.notificationSummary);
+  const changed = appStateReducer(same, {
+    type: 'data/load-success', snapshot: { notificationSummary: { unreadCount: 3, pendingCount: 1 } }
+  });
+  assert.notEqual(changed.notificationSummary, same.notificationSummary);
+  assert.deepEqual(changed.notificationSummary, { unreadCount: 3, pendingCount: 1 });
 });
 
 test('sekme değişimi açık talep çekmecesini kapatır', () => {

@@ -143,17 +143,42 @@ test('sorumluluk kaldırıldığında ayrı bir bildirim üretilir', async () =>
 
 test('toplu atamada kişi başına TEK bildirim üretilir ve tekrar yazma kopya oluşturmaz', async () => {
   const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  const bulkAssignment = () => ({
+    taskUpserts: [
+      { ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true },
+      { ...taskOf(stack, SECOND_TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }
+    ]
+  });
+  const assignedRows = () => stack.db.taskNotifications.filter((row) => row.Kind === 'TASK_ASSIGNED');
   try {
-    await stack.repository.commitChanges({
-      taskUpserts: [
-        { ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true },
-        { ...taskOf(stack, SECOND_TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }
-      ]
-    });
-    const assigned = stack.db.taskNotifications.filter((row) => row.Kind === 'TASK_ASSIGNED');
+    await stack.repository.commitChanges(bulkAssignment());
+    const assigned = assignedRows();
     assert.equal(assigned.length, 1, 'iki görev tek bildirimde toplanmalıdır');
     assert.equal(assigned[0].TaskCount, 2);
     assert.equal(Number(assigned[0].RecipientSicil), MEMBER);
+
+    // Aynı toplu kayıt güncel sürümlerle YENİDEN yazılır: sorumlu kümesi
+    // değişmediği için ikinci bir bildirim doğmaz.
+    await stack.reload();
+    await stack.repository.commitChanges(bulkAssignment());
+    assert.equal(assignedRows().length, 1, 'tekrar yazma kopya bildirim üretmemelidir');
+
+    // Aynı olayın yayını yeniden oynatılır (aynı ilişkilendirme kimliği):
+    // `EventKey` tekilleştirir.
+    const { writeAssignmentNotifications } = await import('../src/server/notifications/taskNotificationStore.js');
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const [correlationId] = String(assigned[0].EventKey).split(':');
+    const replay = await writeAssignmentNotifications(await getSqlPool(), {
+      actorSicil: OWNER,
+      actorName: 'Proje Sahibi',
+      correlationId,
+      changes: [TASK_ID, SECOND_TASK_ID].map((taskId) => ({
+        taskId, added: [MEMBER], removed: [], task: { title: 'Yeniden oynatma' }
+      }))
+    });
+    assert.equal(replay.length, 1, 'yeniden oynatma aynı tek olayı üretir');
+    assert.equal(assignedRows().length, 1, 'yeniden oynatılan olay kopya satır yazmamalıdır');
+    assert.equal(assignedRows()[0].TaskTitleSnapshot, 'Entegrasyon denemesi');
   } finally { await stack.dispose(); }
 });
 
@@ -210,16 +235,33 @@ test('bildirim işaretleme bilinmeyen veya yanlış uç kaynağını reddeder', 
 test('zil bildirimi görev erişimi VERMEZ; görev yalnızca yetkili yolla açılır', async () => {
   const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
   try {
+    // İkinci üye önce atanır, sonra çıkarılır: elinde görevi gösteren bir
+    // "sorumluluğunuz kaldırıldı" bildirimi kalır ama görev erişimi kalmaz.
     await stack.repository.commitChanges({
-      taskUpserts: [{ ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }]
+      taskUpserts: [{ ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(OTHER_MEMBER)], assigneeMutation: true }]
     });
-  } finally { await stack.dispose(); }
+    await stack.reload();
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER)], assigneeMutation: true }]
+    });
+    const removal = stack.db.taskNotifications
+      .find((row) => row.Kind === 'TASK_UNASSIGNED' && Number(row.RecipientSicil) === OTHER_MEMBER);
+    assert.ok(removal, 'kaldırılan kişi bildirim almalıdır');
+    assert.equal(String(removal.TaskId).toLowerCase(), TASK_ID);
 
-  // Bildirimi olmayan üçüncü kişi görevi anlık görüntüde göremez.
-  const outsider = await createActualStack(seed(), { sicil: OTHER_MEMBER, corporateWbsSource: false });
-  try {
-    assert.equal(outsider.state.tasks.some((task) => task.id === TASK_ID), false);
-  } finally { await outsider.dispose(); }
+    // Bildirim sahibi olarak açılış yolu: `openTask` görevi anlık görüntüde
+    // arar, yoksa YETKİLİ yoldan yeniden yükler ve yine arar
+    // (bkz. AppStateProvider · openTask). Bildirim bu yolu kısaltmaz.
+    process.env.MERGEN_ROTA_DEV_SICIL = String(OTHER_MEMBER);
+    await stack.reload();
+    const notification = stack.state.taskNotifications.find((item) => item.taskId === TASK_ID);
+    assert.ok(notification, 'bildirim zilde görünmelidir');
+    assert.equal(stack.state.tasks.some((task) => task.id === notification.taskId), false);
+    await stack.reload({ refreshMode: 'manual' });
+    assert.equal(stack.state.tasks.some((task) => task.id === notification.taskId), false,
+      'bildirim görev erişimi vermemelidir');
+    assert.equal(stack.state.tasks.some((task) => task.id === SECOND_TASK_ID), false);
+  } finally { await stack.dispose(); }
 });
 
 /* ── Dayanıklı posta kuyruğu ─────────────────────────────────── */
@@ -415,7 +457,11 @@ test('yoklama aralığı tanımsız ya da boş değişkende belgelenen varsayıl
 });
 
 test('kira, partinin tamamı SMTP zaman aşımına takılsa bile geçerli kalır', async () => {
-  const { taskMailBatchSize, taskMailLeaseSeconds } = await import('../src/server/notifications/taskMailOutbox.js');
+  const {
+    taskMailBatchSize,
+    taskMailDeliveryBudgetMs,
+    taskMailLeaseSeconds
+  } = await import('../src/server/notifications/taskMailOutbox.js');
   // Sabit 120 saniyelik kira, 20 satırlık partiyi 300 saniyelik zaman aşımıyla
   // taşıyamıyordu. Parti kiranın taşıyabileceği kadar daraltılır ve kira
   // partinin en kötü durumunu kapsar.
@@ -425,6 +471,13 @@ test('kira, partinin tamamı SMTP zaman aşımına takılsa bile geçerli kalır
     assert.ok(
       taskMailLeaseSeconds(batch, timeoutMs) >= batch * Math.ceil(timeoutMs / 1000),
       `kira ${limit}/${timeoutMs} için partiyi kapsamalıdır`
+    );
+    // Zaman aşımı her SMTP adımına AYRI uygulanır; kira tek adımı değil,
+    // teslimatın uçtan uca bütçesini kapsar.
+    assert.ok(taskMailDeliveryBudgetMs(timeoutMs) > timeoutMs);
+    assert.ok(
+      taskMailLeaseSeconds(batch, timeoutMs) * 1000 >= batch * taskMailDeliveryBudgetMs(timeoutMs),
+      `kira ${limit}/${timeoutMs} için teslimat bütçelerinin toplamını kapsamalıdır`
     );
   }
   // Alt sınır korunur; üst sınır sınırsız büyümeyi engeller.
@@ -516,5 +569,128 @@ test('kira SAHİPLİĞİ: devralınan satırın durumunu eski tur ezemez', async
     // Kirayı elinde tutan tur yazabilir.
     await outbox.markTaskMailSent(pool, secondClaim.mailId, secondClaim.leaseToken);
     assert.equal(stack.db.taskMailOutbox[0].Status, 'SENT');
+  } finally { await stack.dispose(); }
+});
+
+/** İki alıcılı tek kayıt: kuyrukta iki satır. */
+async function queueTwoRecipients(stack) {
+  await stack.repository.commitChanges(
+    { taskUpserts: [{
+      ...taskOf(stack, TASK_ID),
+      assigneeIds: [String(OWNER), String(MEMBER), String(OTHER_MEMBER)],
+      assigneeMutation: true
+    }] },
+    { notifyAssignees: true }
+  );
+  assert.equal(stack.db.taskMailOutbox.length, 2);
+  const { runTaskMailOutbox } = await import('../src/server/notifications/taskMailService.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  return { runTaskMailOutbox, pool: await getSqlPool() };
+}
+
+test('satıra özgü hazırlık hatası turu düşürmez; deneme sayılır ve sonraki satır gönderilir', async (t) => {
+  withSmtp(t);
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    const { runTaskMailOutbox, pool } = await queueTwoRecipients(stack);
+    const [poisoned, healthy] = stack.db.taskMailOutbox;
+    // İlk alıcının dizin okuması beklenmedik biçimde düşer.
+    const person = stack.db.people.find((entry) => Number(entry.Sicil) === Number(poisoned.RecipientSicil));
+    Object.defineProperty(person, 'Username', { get() { throw new Error('dizin okunamadı'); } });
+
+    const recipients = [];
+    const outcome = await runTaskMailOutbox(pool, {
+      send: async (message) => { recipients.push(message.to[0]); return { ok: true }; }
+    });
+    assert.equal(outcome.claimed, 2);
+    assert.equal(outcome.failed, 1);
+    assert.equal(outcome.sent, 1, 'sonraki satır işlenmeye devam etmelidir');
+    assert.equal(recipients.length, 1);
+
+    // Hatalı satır deneme olarak kaydedilir: sonsuza dek ilk sırada kalmaz.
+    assert.equal(poisoned.Status, 'PENDING');
+    assert.equal(poisoned.AttemptCount, 1);
+    assert.equal(poisoned.LastFailureCode, 'MAIL_PREPARE_FAILED');
+    assert.equal(poisoned.LeaseToken, null);
+    assert.equal(healthy.Status, 'SENT');
+  } finally { await stack.dispose(); }
+});
+
+test('gönderici fırlatırsa satır belirsiz teslimat olur, tur sürer', async (t) => {
+  withSmtp(t);
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    const { runTaskMailOutbox, pool } = await queueTwoRecipients(stack);
+    const signals = [];
+    const outcome = await runTaskMailOutbox(pool, {
+      send: async (message) => {
+        signals.push(message.signal);
+        if (signals.length === 1) throw new Error('bağlantı koptu');
+        return { ok: true };
+      }
+    });
+    assert.equal(outcome.uncertain, 1);
+    assert.equal(outcome.sent, 1);
+    const [first, second] = stack.db.taskMailOutbox;
+    // İletinin sunucuya ulaşıp ulaşmadığı bilinmez: yeniden GÖNDERİLMEZ.
+    assert.equal(first.Status, 'FAILED');
+    assert.equal(first.LastFailureCode, 'MAIL_DELIVERY_UNCERTAIN');
+    assert.equal(second.Status, 'SENT');
+    // Her teslimat uçtan uca bir süre sınırıyla çağrılır.
+    assert.equal(signals.length, 2);
+    for (const signal of signals) assert.ok(signal instanceof AbortSignal);
+  } finally { await stack.dispose(); }
+});
+
+test('kira içinde bitemeyecek teslimat başlatılmaz; satır kiralı kalır', async (t) => {
+  withSmtp(t);
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  const realNow = Date.now;
+  try {
+    const { runTaskMailOutbox, pool } = await queueTwoRecipients(stack);
+    const { taskMailBatchSize, taskMailLeaseSeconds } = await import('../src/server/notifications/taskMailOutbox.js');
+    const leaseMs = taskMailLeaseSeconds(taskMailBatchSize(20, 20000), 20000) * 1000;
+    let offset = 0;
+    Date.now = () => realNow() + offset;
+    let sends = 0;
+    const outcome = await runTaskMailOutbox(pool, {
+      send: async () => {
+        sends += 1;
+        // İlk teslimat kiranın neredeyse tamamını tüketir.
+        offset += leaseMs - 1000;
+        return { ok: true };
+      }
+    });
+    assert.equal(sends, 1, 'kira bitmeden tamamlanamayacak ikinci gönderim başlamamalıdır');
+    assert.equal(outcome.sent, 1);
+    assert.equal(outcome.deferred, 1);
+    const deferred = stack.db.taskMailOutbox[1];
+    assert.equal(deferred.Status, 'PENDING');
+    assert.equal(deferred.AttemptCount, 0, 'ertelenen satır deneme sayılmaz');
+    assert.ok(deferred.LeaseToken, 'kira dolana dek başka bir örnek satırı kiralayamaz');
+  } finally {
+    Date.now = realNow;
+    await stack.dispose();
+  }
+});
+
+test('kuyruk künyesi ekleme sırasını değil EN ERKEN denemeyi bildirir', async () => {
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    await stack.repository.commitChanges(
+      { taskUpserts: [{
+        ...taskOf(stack, TASK_ID),
+        assigneeIds: [String(OWNER), String(MEMBER), String(OTHER_MEMBER)],
+        assigneeMutation: true
+      }] },
+      { notifyAssignees: true }
+    );
+    const [first, second] = stack.db.taskMailOutbox;
+    first.NextAttemptAt = '2026-09-23T12:00:00.000Z';
+    second.NextAttemptAt = '2026-09-23T08:00:00.000Z';
+    const { taskMailQueueStatus } = await import('../src/server/notifications/taskMailOutbox.js');
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const status = await taskMailQueueStatus(await getSqlPool());
+    assert.equal(status.nextAttemptAt, '2026-09-23T08:00:00.000Z');
   } finally { await stack.dispose(); }
 });

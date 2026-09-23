@@ -42,9 +42,16 @@ const SOURCE = `
  */
 const LIVE_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil)`;
+/**
+ * Proje ölçütü görevin GÜNCEL projesidir; künye yalnızca silinmiş görev için
+ * yedektir. Görev başka projeye taşındığında `decideAssignmentCoordination`
+ * yetkiyi canlı projeye göre verir: künyeyi önceleyen yüklem eski projenin FULL
+ * yetkilisine sunucunun reddedeceği düğmeleri gösteriyor, yeni projenin
+ * yetkilisi ise kaydı hiç bulamıyordu.
+ */
 const LIVE_FULL_PROJECT_ACCESS = `EXISTS (SELECT 1 FROM STRING_SPLIT(@fullProjectIds, ',') fp
   WHERE TRY_CONVERT(uniqueidentifier, NULLIF(LTRIM(RTRIM(fp.value)), ''))
-    = COALESCE(c.ProjectIdSnapshot, t.ProjectId))`;
+    = COALESCE(t.ProjectId, c.ProjectIdSnapshot))`;
 const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
 /**

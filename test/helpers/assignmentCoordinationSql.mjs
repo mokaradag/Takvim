@@ -15,6 +15,16 @@ function missingObject(name) {
   return error;
 }
 
+/** `UX_MR_TaskAssignmentCoordinations_OpenRequest` ihlali (SQL Server 2601). */
+function duplicateOpenCoordination() {
+  const error = new Error("Cannot insert duplicate key row in object 'dbo.MR_TaskAssignmentCoordinations' "
+    + "with unique index 'UX_MR_TaskAssignmentCoordinations_OpenRequest'.");
+  error.number = 2601;
+  return error;
+}
+
+const OPEN_STATUSES = ['PENDING', 'CANCELLATION_REQUESTED'];
+
 function guid(value) {
   return value == null ? null : String(value).toUpperCase();
 }
@@ -89,8 +99,9 @@ function liveManagerOfAssignee(db, row, sicil) {
     && Number(scope.EmployeeSicil) === Number(row.RequestedAssigneeSicil));
 }
 
+/** Sunucudaki `COALESCE(t.ProjectId, c.ProjectIdSnapshot)` karşılığı. */
 function recordProjectId(db, row) {
-  return row.ProjectIdSnapshot ?? taskOf(db, row.TaskId)?.ProjectId ?? null;
+  return taskOf(db, row.TaskId)?.ProjectId ?? row.ProjectIdSnapshot ?? null;
 }
 
 function liveFullProjectAccess(db, row, params) {
@@ -283,18 +294,28 @@ function coordinationPage(db, params) {
 
 /* ── Yazmalar ───────────────────────────────────────────────── */
 
-function insertCoordination(db, params) {
-  // Aynı görev + kişi için AÇIK kayıt yeni talebe yer bırakır.
-  for (const row of db.taskAssignmentCoordinations) {
+function insertCoordination(db, sqlText, params) {
+  // Aynı görev + kişi için AÇIK kayıt, YALNIZCA toplu komut kapatma
+  // deyimini taşıdığında kapanır; ikiz sunucu sorgusunun yapmadığını yapmaz.
+  const closesOpen = sqlText.includes("SET Status = 'CANCELLED'")
+    && sqlText.includes("Status IN ('PENDING','CANCELLATION_REQUESTED')");
+  for (const row of closesOpen ? db.taskAssignmentCoordinations : []) {
     if (sameGuid(row.TaskId, params.taskId)
       && Number(row.RequestedAssigneeSicil) === Number(params.assigneeSicil)
-      && ['PENDING', 'CANCELLATION_REQUESTED'].includes(row.Status)) {
+      && OPEN_STATUSES.includes(row.Status)) {
       row.Status = 'CANCELLED';
       row.DecidedAt = new Date().toISOString();
       row.DecisionBySicil = Number(params.requesterSicil);
-      row.DecisionMessage = 'Yeni atama talebiyle değiştirildi.';
+      row.DecisionMessage = params.supersededMessage ?? null;
       row.RowVersion = nextVersion();
     }
+  }
+  // Benzersiz filtrelenmiş dizinin (UX_..._OpenRequest) karşılığı.
+  if (OPEN_STATUSES.includes(params.status)
+    && db.taskAssignmentCoordinations.some((row) => sameGuid(row.TaskId, params.taskId)
+      && Number(row.RequestedAssigneeSicil) === Number(params.assigneeSicil)
+      && OPEN_STATUSES.includes(row.Status))) {
+    throw duplicateOpenCoordination();
   }
   db.taskAssignmentCoordinations.push({
     CoordinationId: guid(params.coordinationId),
@@ -442,7 +463,8 @@ function presenceList(db, params) {
   const within = (row, seconds) => (now - Date.parse(row.LastSeenAt)) / 1000 <= Number(seconds);
   const counts = {
     ActiveCount: db.userPresence.filter((row) => within(row, params.activeSeconds)).length,
-    RecentCount: db.userPresence.filter((row) => within(row, params.recentSeconds)).length
+    RecentCount: db.userPresence.filter((row) => within(row, params.recentSeconds)).length,
+    ServerNow: new Date(now).toISOString()
   };
   // Kurumsal sayaçlar AKTİF kümenin TAMAMI üzerindedir; liste sınırı buraya
   // uygulanmaz.
@@ -531,7 +553,9 @@ function mailQueueStatus(db) {
     PendingCount: pending.length,
     FailedCount: db.taskMailOutbox.filter((row) => row.Status === 'FAILED').length,
     SentCount: db.taskMailOutbox.filter((row) => row.Status === 'SENT').length,
-    NextAttemptAt: pending.length ? pending[0].NextAttemptAt : null,
+    // `MIN(NextAttemptAt)` karşılığı: ekleme sırası değil, EN ERKEN deneme.
+    NextAttemptAt: pending.reduce((earliest, row) => (earliest == null
+      || Date.parse(row.NextAttemptAt) < Date.parse(earliest) ? row.NextAttemptAt : earliest), null),
     LastSentAt: db.taskMailOutbox.filter((row) => row.SentAt).map((row) => row.SentAt).sort().pop() || null
   }]];
 }
@@ -687,7 +711,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
 
   if (sqlText.includes('INSERT dbo.MR_TaskAssignmentCoordinations(')) {
     if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
-    return insertCoordination(db, params);
+    return insertCoordination(db, sqlText, params);
   }
 
   if (sqlText.includes('INSERT dbo.MR_AssignmentCoordinationRecipients(')
@@ -706,6 +730,13 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
     const row = db.taskAssignmentCoordinations.find((entry) =>
       sameGuid(entry.CoordinationId, params.coordinationId));
+    if (row && OPEN_STATUSES.includes(params.status)
+      && db.taskAssignmentCoordinations.some((entry) => entry !== row
+        && sameGuid(entry.TaskId, row.TaskId)
+        && Number(entry.RequestedAssigneeSicil) === Number(row.RequestedAssigneeSicil)
+        && OPEN_STATUSES.includes(entry.Status))) {
+      throw duplicateOpenCoordination();
+    }
     if (row) {
       row.Status = params.status;
       row.DecidedAt = new Date().toISOString();
@@ -722,18 +753,22 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     const row = db.taskAssignmentCoordinations.find((entry) =>
       sameGuid(entry.CoordinationId, params.coordinationId));
     if (!row) return [[]];
+    // Sunucu sorgusunun birebir karşılığı: görev alanları `LEFT JOIN MR_Tasks`
+    // satırından gelir ve proje kapatılsa da DOLU kalır; proje alanları
+    // yalnızca `p.IsActive = 1` birleşiminden gelir.
     const task = taskOf(db, row.TaskId);
     const project = task ? projectOf(db, task.ProjectId) : null;
-    const live = project?.IsActive ? task : null;
+    const activeProject = project?.IsActive ? project : null;
     return [[{
       ...row,
-      LiveTaskId: live ? live.TaskId : null,
-      LiveTaskTitle: live?.Title ?? null,
-      LiveProjectId: live ? live.ProjectId : null,
-      LiveTargetFinish: live?.TargetFinish ?? null,
-      LivePriority: live?.Priority ?? null,
-      LiveProjectName: live ? project.ProjectName : null,
-      LiveProjectCode: live ? project.ProjectCode : null
+      LiveTaskId: task ? task.TaskId : null,
+      LiveTaskTitle: task?.Title ?? null,
+      LiveProjectId: task ? task.ProjectId : null,
+      LiveTargetFinish: task?.TargetFinish ?? null,
+      LivePriority: task?.Priority ?? null,
+      LiveActiveProjectId: activeProject ? activeProject.ProjectId : null,
+      LiveProjectName: activeProject ? activeProject.ProjectName : null,
+      LiveProjectCode: activeProject ? activeProject.ProjectCode : null
     }]];
   }
 
