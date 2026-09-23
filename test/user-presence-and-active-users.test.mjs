@@ -344,8 +344,13 @@ test('nabız yazması işlem içindedir', async () => {
     // Otomatik işlem kipinde `HOLDLOCK` aralık kilidi koşullu `INSERT`'ten önce
     // bırakılabiliyor, eşzamanlı ilk nabız birincil anahtar hatasına düşüyordu.
     assert.ok(
-      stack.db.transactions.slice(openedBefore).some((entry) => entry.statementIndex <= upsert),
-      'nabız yazması bir işlem içinde olmalıdır'
+      stack.db.transactions.slice(openedBefore).some((entry) => {
+        const completedAt = entry.commitStatementIndex ?? entry.rollbackStatementIndex;
+        return entry.statementIndex <= upsert
+          && Number.isSafeInteger(completedAt)
+          && completedAt > upsert;
+      }),
+      'nabız yazması işlem kapanmadan önce çalışmalıdır'
     );
     assert.deepEqual(stack.db.userPresence.map((row) => Number(row.Sicil)), [USER]);
   } finally { await stack.dispose(); }

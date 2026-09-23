@@ -29,6 +29,7 @@ import { classifyAssigneeOrganizations } from '../assignment/crossOrganization.j
 import { resolveManagementChain } from '../assignment/managementChain.js';
 import { recordCrossOrganizationAssignments } from '../assignment/assignmentCoordinationStore.js';
 import {
+  aggregateAssignmentNotifications,
   assigneeSetDelta,
   isMissingNotificationSchema,
   writeAssignmentNotifications
@@ -2574,28 +2575,27 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
     });
 
     if (notifyAssignees) {
-      const entries = [];
-      for (const change of changes) {
-        for (const [kind, sicils] of [['TASK_ASSIGNED', change.added], ['TASK_UNASSIGNED', change.removed]]) {
-          for (const sicil of sicils) {
-            if (Number(sicil) === Number(actor.sicil)) continue;
-            entries.push({
-              taskId: change.taskId,
-              recipientSicil: sicil,
-              payload: {
-                kind,
-                taskTitle: change.task.title,
-                projectName: change.task.projectName,
-                projectCode: change.task.projectCode,
-                actorName: actor.currentUser?.name || null,
-                priority: change.task.priority,
-                targetFinish: change.task.targetFinish,
-                changeSummary: kind === 'TASK_ASSIGNED' ? 'Göreve sorumlu olarak eklendiniz.' : 'Görev sorumluluğunuz kaldırıldı.'
-              }
-            });
-          }
+      const entries = aggregateAssignmentNotifications(changes, actor.sicil).map((bucket) => ({
+        taskId: bucket.taskId,
+        recipientSicil: bucket.recipientSicil,
+        payload: {
+          kind: bucket.kind,
+          taskCount: bucket.taskCount,
+          taskTitle: bucket.task?.title,
+          projectName: bucket.task?.projectName,
+          projectCode: bucket.task?.projectCode,
+          actorName: actor.currentUser?.name || null,
+          priority: bucket.task?.priority,
+          targetFinish: bucket.task?.targetFinish,
+          changeSummary: bucket.taskCount > 1
+            ? bucket.kind === 'TASK_ASSIGNED'
+              ? `${bucket.taskCount} göreve sorumlu olarak eklendiniz.`
+              : `${bucket.taskCount} görevdeki sorumluluğunuz kaldırıldı.`
+            : bucket.kind === 'TASK_ASSIGNED'
+              ? 'Göreve sorumlu olarak eklendiniz.'
+              : 'Görev sorumluluğunuz kaldırıldı.'
         }
-      }
+      }));
       await enqueueTaskAssignmentMail(executor, { correlationId, entries });
     }
   } catch (error) {

@@ -548,7 +548,7 @@ test('kapatılmış projedeki görevin talebi onaylanamaz; kayıt güncelliğini
     // projenin etkinliğini ayrı bir alanla taşımalıdır.
     const source = readFileSync(new URL('../src/server/assignment/assignmentCoordinationStore.js', import.meta.url), 'utf8');
     assert.match(source, /p\.ProjectId AS LiveActiveProjectId/);
-    assert.match(source, /if \(applies && \(!row\.LiveTaskId \|\| !row\.LiveActiveProjectId\)\)/);
+    assert.match(source, /if \(checksAssignment && \(!row\.LiveTaskId \|\| !row\.LiveActiveProjectId\)\)/);
   } finally { await stack.dispose(); }
 });
 
@@ -640,6 +640,43 @@ test('doğrudan atama aynı kişinin bekleyen talebini kapatır; kaldırma iste�
       notice.CoordinationId.toLowerCase(), { decision: 'REQUEST_CANCELLATION', message: 'Kapasite doldu.' }
     ));
     assert.equal(cancellation.outcome, 'CANCELLATION_REQUESTED');
+  } finally { await stack.dispose(); }
+});
+
+test('yeniden doğrudan atama eski bildirimi kapatır; artık sorumlu olmayan kişi için kaldırma isteği bayatlar', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    const updateAssignees = async (sicils) => {
+      const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+      await stack.repository.commitChanges({
+        taskUpserts: [{ ...task, assigneeIds: sicils.map(String), assigneeMutation: true }]
+      });
+      await stack.reload();
+    };
+
+    await updateAssignees([ORDINARY, EXTERNAL]);
+    const firstNotice = stack.db.taskAssignmentCoordinations.find((row) => row.Mode === 'NOTICE');
+    assert.ok(firstNotice);
+    assert.equal(firstNotice.Status, 'APPROVED');
+
+    await updateAssignees([ORDINARY]);
+    await updateAssignees([ORDINARY, EXTERNAL]);
+
+    const notices = stack.db.taskAssignmentCoordinations.filter((row) => row.Mode === 'NOTICE');
+    assert.equal(notices.length, 2);
+    assert.equal(notices[0].Status, 'CANCELLED');
+    assert.equal(notices[0].DecisionMessage, 'Yeni doğrudan atama kaydıyla değiştirildi.');
+    assert.equal(notices[1].Status, 'APPROVED');
+    assert.equal(notices.filter((row) => row.Status === 'APPROVED').length, 1);
+
+    await updateAssignees([ORDINARY]);
+    const cancellation = await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(
+      notices[1].CoordinationId.toLowerCase(),
+      { decision: 'REQUEST_CANCELLATION', message: 'Kapasite doldu.' }
+    ));
+    assert.equal(cancellation.outcome, 'STALE');
+    assert.equal(cancellation.message, 'Kişi artık görevin sorumlusu değil; kayıt güncelliğini yitirdi.');
+    assert.equal(notices[1].Status, 'STALE');
   } finally { await stack.dispose(); }
 });
 

@@ -300,6 +300,26 @@ test('seçenek açıkken tam olarak bir dayanıklı posta niyeti yazılır; kend
   } finally { await stack.dispose(); }
 });
 
+test('toplu atama postası kişi ve tür başına tek niyette toplanır', async () => {
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    await stack.repository.commitChanges({
+      taskUpserts: [
+        { ...taskOf(stack, TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true },
+        { ...taskOf(stack, SECOND_TASK_ID), assigneeIds: [String(OWNER), String(MEMBER)], assigneeMutation: true }
+      ]
+    }, { notifyAssignees: true });
+
+    assert.equal(stack.db.taskMailOutbox.length, 1, 'iki görev tek posta niyetinde toplanmalıdır');
+    const intent = stack.db.taskMailOutbox[0];
+    assert.equal(Number(intent.RecipientSicil), MEMBER);
+    const payload = JSON.parse(intent.PayloadJson);
+    assert.equal(payload.kind, 'TASK_ASSIGNED');
+    assert.equal(payload.taskCount, 2);
+    assert.equal(payload.changeSummary, '2 göreve sorumlu olarak eklendiniz.');
+  } finally { await stack.dispose(); }
+});
+
 test('görev yazması SMTP çağırmaz; tekilleştirme anahtarı kopya niyeti engeller', async () => {
   const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
   try {
@@ -511,6 +531,7 @@ test('teslimatı BELİRSİZ kalan satır yeniden gönderilmez ve kuyrukta kalır
     assert.equal(attempts, 1);
     assert.equal(outcome.uncertain, 1);
     assert.equal(outcome.ok, false);
+    assert.equal(outcome.reason, 'MAIL_DELIVERY_UNCERTAIN');
 
     const row = stack.db.taskMailOutbox[0];
     assert.equal(row.Status, 'FAILED', 'belirsiz teslimat yeniden deneme yoluna DÖNMEZ');
@@ -533,13 +554,22 @@ test('kesin başarısızlık geri çekilmeyle yeniden denenir', async (t) => {
     );
     const { runTaskMailOutbox } = await import('../src/server/notifications/taskMailService.js');
     const { getSqlPool } = await import('../src/server/db/pool.js');
+    stack.db.taskMailOutbox[0].AttemptCount = 2;
+    const beforeFailure = Date.now();
     const outcome = await runTaskMailOutbox(await getSqlPool(), {
       send: async () => ({ ok: false, code: 'SMTP_SEND_FAILED', deliveryMayHaveEscaped: false })
     });
     assert.equal(outcome.failed, 1);
     assert.equal(outcome.uncertain, 0);
+    assert.equal(outcome.reason, 'MAIL_DELIVERY_FAILED');
     assert.equal(stack.db.taskMailOutbox[0].Status, 'PENDING');
+    assert.equal(stack.db.taskMailOutbox[0].AttemptCount, 3);
     assert.equal(stack.db.taskMailOutbox[0].LastFailureCode, 'SMTP_SEND_FAILED');
+    const retryAt = Date.parse(stack.db.taskMailOutbox[0].NextAttemptAt);
+    assert.ok(retryAt > Date.now(), 'sonraki deneme gelecekte olmalıdır');
+    const retryDelay = retryAt - beforeFailure;
+    assert.ok(retryDelay >= 230000 && retryDelay <= 260000,
+      'üçüncü deneme öncesi geri çekilme yaklaşık 240 saniye olmalıdır');
   } finally { await stack.dispose(); }
 });
 

@@ -139,8 +139,14 @@ export async function runTaskMailOutbox(pool, { limit = MAX_BATCH, link = null, 
       : await deliverClaimedTaskMail(pool, item, { link, send, deliveryBudgetMs, leaseDeadlineMs });
     outcomes[outcome] += 1;
   }
+  const reason = outcomes.uncertain
+    ? 'MAIL_DELIVERY_UNCERTAIN'
+    : outcomes.failed
+      ? 'MAIL_DELIVERY_FAILED'
+      : null;
   return {
-    ok: outcomes.failed === 0 && outcomes.uncertain === 0,
+    ok: !reason,
+    ...(reason ? { reason } : {}),
     enabled: true,
     ...outcomes,
     claimed: claimed.length

@@ -2404,16 +2404,22 @@ export function createFakeSqlServerDriver(db) {
       this.began = true;
       this.savedTables = deserialize(serialize(Object.fromEntries(Object.entries(db)
         .filter(([key, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(key)))));
-      db.transactions.push({ isolationLevel, statementIndex: db.statements.length });
+      this.transactionRecord = { isolationLevel, statementIndex: db.statements.length };
+      db.transactions.push(this.transactionRecord);
     }
     releaseLocks() {
       for (const [key, owner] of db.adminActionLocks) {
         if (owner === this) db.adminActionLocks.delete(key);
       }
     }
-    async commit() { this.committed = true; this.releaseLocks(); }
+    async commit() {
+      this.committed = true;
+      if (this.transactionRecord) this.transactionRecord.commitStatementIndex = db.statements.length;
+      this.releaseLocks();
+    }
     async rollback() {
       this.rolledBack = true;
+      if (this.transactionRecord) this.transactionRecord.rollbackStatementIndex = db.statements.length;
       this.releaseLocks();
       if (this.savedTables && !this.lockOnly) Object.assign(db, this.savedTables);
     }

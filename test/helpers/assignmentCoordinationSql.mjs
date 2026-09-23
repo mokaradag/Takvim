@@ -310,6 +310,18 @@ function insertCoordination(db, sqlText, params) {
       row.RowVersion = nextVersion();
     }
   }
+  const closesApprovedNotices = sqlText.includes("Mode = 'NOTICE' AND Status = 'APPROVED'");
+  for (const row of closesApprovedNotices ? db.taskAssignmentCoordinations : []) {
+    if (sameGuid(row.TaskId, params.taskId)
+      && Number(row.RequestedAssigneeSicil) === Number(params.assigneeSicil)
+      && row.Mode === 'NOTICE' && row.Status === 'APPROVED') {
+      row.Status = 'CANCELLED';
+      row.DecidedAt = new Date().toISOString();
+      row.DecisionBySicil = Number(params.requesterSicil);
+      row.DecisionMessage = params.supersededNoticeMessage ?? null;
+      row.RowVersion = nextVersion();
+    }
+  }
   // Benzersiz filtrelenmiş dizinin (UX_..._OpenRequest) karşılığı.
   if (OPEN_STATUSES.includes(params.status)
     && db.taskAssignmentCoordinations.some((row) => sameGuid(row.TaskId, params.taskId)
@@ -527,7 +539,8 @@ function completeMail(db, params, { sent, uncertain = false }) {
   // Kira SAHİPLİĞİ: kira dolduktan sonra satırı başka bir tur devralmışsa bu
   // turun durum yazması satıra dokunmaz.
   if (params.leaseToken != null && !sameGuid(row.LeaseToken, params.leaseToken)) return [[]];
-  row.AttemptCount += 1;
+  const previousAttemptCount = Number(row.AttemptCount || 0);
+  row.AttemptCount = previousAttemptCount + 1;
   row.LeaseExpiresAt = null;
   row.LeaseToken = null;
   row.UpdatedAt = new Date().toISOString();
@@ -542,7 +555,9 @@ function completeMail(db, params, { sent, uncertain = false }) {
   } else {
     row.LastFailureCode = params.failureCode;
     row.Status = row.AttemptCount >= Number(params.maxAttempts || 6) ? 'FAILED' : 'PENDING';
-    row.NextAttemptAt = new Date(Date.now() + 60000).toISOString();
+    const retryBaseSeconds = Number(params.retryBaseSeconds || 60);
+    const multiplier = 2 ** Math.min(previousAttemptCount, 4);
+    row.NextAttemptAt = new Date(Date.now() + retryBaseSeconds * multiplier * 1000).toISOString();
   }
   return [[]];
 }

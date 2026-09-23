@@ -45,6 +45,14 @@ const CLOSE_OPEN_COORDINATIONS_SQL = `
     AND Status IN ('PENDING','CANCELLATION_REQUESTED');
 `;
 
+const CLOSE_APPROVED_NOTICES_SQL = `
+  UPDATE dbo.MR_TaskAssignmentCoordinations WITH (UPDLOCK, HOLDLOCK)
+  SET Status = 'CANCELLED', DecidedAt = SYSUTCDATETIME(), DecisionBySicil = @requesterSicil,
+      DecisionMessage = @supersededNoticeMessage
+  WHERE TaskId = @taskId AND RequestedAssigneeSicil = @assigneeSicil
+    AND Mode = 'NOTICE' AND Status = 'APPROVED';
+`;
+
 function canonicalId(value, label) {
   const normalized = canonicalActualId(value);
   if (!normalized) {
@@ -385,6 +393,7 @@ export async function recordCrossOrganizationAssignments(executor, actor, {
     insert.input('targetFinish', sql.Date, assignment.targetFinish || null);
     insert.input('correlationId', sql.UniqueIdentifier, correlationId);
     insert.input('supersededMessage', sql.NVarChar(2000), 'Doğrudan atamayla karşılandı.');
+    insert.input('supersededNoticeMessage', sql.NVarChar(2000), 'Yeni doğrudan atama kaydıyla değiştirildi.');
     // Aynı kişi için AÇIK bir talep varsa doğrudan atama onu karşılamıştır ve
     // kayıt aynı işlemde kapatılır. Kapatılmadığında görev + kişi için iki
     // kayıt birden yaşıyordu: yönetici yürürlükteki atamanın kaldırılmasını
@@ -392,6 +401,7 @@ export async function recordCrossOrganizationAssignments(executor, actor, {
     // benzersizlik kuralına (UX_..._OpenRequest) çarpıyor ve karar düşüyordu.
     await insert.query(`
       ${CLOSE_OPEN_COORDINATIONS_SQL}
+      ${CLOSE_APPROVED_NOTICES_SQL}
 
       INSERT dbo.MR_TaskAssignmentCoordinations(
         CoordinationId, TaskId, RequesterSicil, RequestedAssigneeSicil, Mode, Status,
@@ -617,14 +627,15 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       await insertRecipients(transaction, coordinationId, [[Number(actor.sicil), 'MANAGER']]);
     }
 
-    // Yalnızca sorumlu kümesine DOKUNAN kararlar bayatlık denetiminden geçer.
+    // Sorumlu kümesine dokunan ya da kaldırma süreci başlatan kararlar güncel
+    // görev ve sorumlu üyeliği üzerinden doğrulanır.
     const applies = decision === COORDINATION_DECISIONS.APPROVE;
+    const requestsCancellation = decision === COORDINATION_DECISIONS.REQUEST_CANCELLATION;
+    const checksAssignment = applies || requestsCancellation;
     // Kapatılmış proje de bayatlık nedenidir: öteki bütün görev yazma yolları
     // etkin olmayan projeyi reddeder (bkz. sqlAppRepository.js ·
-    // assertActiveProject). Denetim yalnızca görevin varlığına bakınca onay,
-    // kapatılmış projedeki göreve sorumlu yazıyor ve görev sürümünü
-    // ilerletiyordu; atama anlık görüntüde de görünmüyordu.
-    if (applies && (!row.LiveTaskId || !row.LiveActiveProjectId)) {
+    // assertActiveProject).
+    if (checksAssignment && (!row.LiveTaskId || !row.LiveActiveProjectId)) {
       await setCoordinationStatus(transaction, coordinationId, COORDINATION_STATUSES.STALE, {
         actorSicil: actor.sicil, message: decisionMessage
       });
@@ -637,18 +648,19 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
       };
     }
 
-    let currentAssignees = null;
-    if (applies) {
-      currentAssignees = await lockedAssigneeSicils(transaction, row.TaskId);
-      // Kaldırma onayında ölçüt tekil üyeliktir: kişi arada zaten çıkarılmışsa
-      // kararın uygulayacağı bir şey kalmamıştır.
-      const stale = row.Status === COORDINATION_STATUSES.CANCELLATION_REQUESTED
-        ? !currentAssignees.map(Number).includes(Number(row.RequestedAssigneeSicil))
-        : assigneeSetIsStale(
-          currentAssignees,
-          row.OriginalAssigneeSicils,
-          await siblingRequestedSicils(transaction, row)
-        );
+    if (checksAssignment) {
+      const currentAssignees = await lockedAssigneeSicils(transaction, row.TaskId);
+      const requestedAssigneePresent = currentAssignees.map(Number)
+        .includes(Number(row.RequestedAssigneeSicil));
+      const stale = requestsCancellation
+        ? !requestedAssigneePresent
+        : row.Status === COORDINATION_STATUSES.CANCELLATION_REQUESTED
+          ? !requestedAssigneePresent
+          : assigneeSetIsStale(
+            currentAssignees,
+            row.OriginalAssigneeSicils,
+            await siblingRequestedSicils(transaction, row)
+          );
       if (stale) {
         await setCoordinationStatus(transaction, coordinationId, COORDINATION_STATUSES.STALE, {
           actorSicil: actor.sicil, message: decisionMessage
@@ -658,7 +670,9 @@ export async function decideAssignmentCoordination(coordinationIdValue, input = 
         return {
           record: await readCoordination(transaction, actor, coordinationId),
           outcome: COORDINATION_STATUSES.STALE,
-          message: 'Görevin sorumluları bu kayıt oluşturulduktan sonra değişti. Talebi güncel durumla yeniden oluşturun.'
+          message: requestsCancellation
+            ? 'Kişi artık görevin sorumlusu değil; kayıt güncelliğini yitirdi.'
+            : 'Görevin sorumluları bu kayıt oluşturulduktan sonra değişti. Talebi güncel durumla yeniden oluşturun.'
         };
       }
     }
