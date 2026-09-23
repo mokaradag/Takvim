@@ -142,12 +142,12 @@ Record browser, OS, build commit and viewport dimensions with the result.
 
 ## Boot curtain (first data load)
 
-- While the first snapshot loads, the card is centered horizontally and vertically — not clipped into a narrow left column.
-- Brand row, title, description, progress sweep and step chips all render in both themes.
+- While the first snapshot loads, the card is centered horizontally and vertically, including non-100% font scale — not clipped into a narrow column or shifted below the visible center.
+- Brand row, title, description and progress sweep render in both themes.
 - `MERGEN Rota` reads as the card's identity (logo plus a full-size wordmark), not
   as a small caption. The same holds for the Veri Kipi and Nasıl çalışmak
   istersiniz? dialogs.
-- Step chips highlight in sequence; with `Hareketi azalt` on, they stop animating.
+- The application-level `Hareketi azalt` preference does not freeze the startup stars or progress sweep; they are loading/status feedback. The operating system's `prefers-reduced-motion` preference still suppresses startup animation.
 - The load-failure state shows `Yeniden Dene` and, outside Demo mode, the Demo escape button.
 
 ## Team (Ekip)

@@ -117,6 +117,30 @@ test('yeni sorumlu okunmamış zil bildirimi alır; atayan kendine bildirim alma
   } finally { await stack.dispose(); }
 });
 
+test('açık e-posta seçimi kendine atamada posta kuyruğu üretir; zil yine üretilmez', async () => {
+  const NEW_TASK_ID = '55555555-5555-4555-8555-000000000099';
+  const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
+  try {
+    const template = taskOf(stack, TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{
+        ...template,
+        id: NEW_TASK_ID,
+        task: 'Kendime e-posta denemesi',
+        assigneeIds: [String(OWNER)],
+        assigneeMutation: true,
+        version: null
+      }]
+    }, { notifyAssignees: true });
+
+    assert.equal(stack.db.taskNotifications.some((row) => Number(row.RecipientSicil) === OWNER), false,
+      'kendine atama zil bildirimi üretmemelidir');
+    assert.equal(stack.db.taskMailOutbox.length, 1, 'açık e-posta seçimi posta niyeti üretmelidir');
+    assert.equal(Number(stack.db.taskMailOutbox[0].RecipientSicil), OWNER);
+    assert.equal(stack.db.taskMailOutbox[0].Status, 'PENDING');
+  } finally { await stack.dispose(); }
+});
+
 test('ilgisiz alan düzenlemesi atama bildirimini yeniden göndermez', async () => {
   const stack = await createActualStack(seed(), { sicil: OWNER, corporateWbsSource: false });
   try {

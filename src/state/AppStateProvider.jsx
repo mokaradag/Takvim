@@ -30,7 +30,7 @@ import { createRecurringTasks } from './recurringTaskCreation.js';
 import { executeTaskCreation } from './taskCreationPolicy.js';
 import { commitTaskEditorEdits, prepareTaskCreationCommit } from './taskEditorCommit.js';
 import { createTaskEditorDraftRegistry, unsavedTaskEditorResult } from './taskEditorDrafts.js';
-import { canonicalActualId } from '../domain/identity/actualId.js';
+import { sameActualReference } from '../domain/identity/actualId.js';
 import {
   createDataRefreshRequestGuard,
   createDataRefreshSingleFlight
@@ -176,12 +176,12 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
 
   const openTask = useCallback(async (taskOrId) => {
     const rawId = typeof taskOrId === 'string' ? taskOrId : taskOrId?.id;
-    const id = canonicalActualId(rawId) || rawId;
-    let task = stateRef.current.tasks.find((item) => item.id === id);
+    const findTask = () => stateRef.current.tasks.find((item) => sameActualReference(item.id, rawId));
+    let task = findTask();
     if (!task) {
       const refreshed = await reloadData({ refreshMode: 'manual' });
       if (refreshed?.ok === false) return refreshed;
-      task = stateRef.current.tasks.find((item) => item.id === id);
+      task = findTask();
     }
     if (!task) return { ok: false, error: { message: 'Görev bulunamadı veya artık görüntüleme yetkiniz yok.' } };
     taskCreationDraftRef.current = null;

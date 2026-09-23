@@ -260,7 +260,7 @@ export function SettingsView({ t, setTweak }) {
 
           <div className="set-sep" />
 
-          <SettingsRow title="Hareketi azalt" desc="Süslemeli ve sürekli animasyonları kapatır.">
+          <SettingsRow title="Hareketi azalt" desc="Uygulama içindeki süslemeli ve sürekli animasyonları azaltır; açılıştaki yükleme yıldızları ve ilerleme çubuğu çalışmaya devam eder.">
             <ToggleSeg value={!!t.reduceMotion} onChange={(v) => setTweak('reduceMotion', v)} />
           </SettingsRow>
 

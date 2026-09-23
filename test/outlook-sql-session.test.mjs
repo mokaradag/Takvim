@@ -17,6 +17,7 @@ const { revalidateOutlookSubscriptions, claimOutlookDeliveries } = await import(
 const { abortableOutlookOperation } = await import('../src/server/outlook/outlookExecution.js');
 const { outlookFailureCode } = await import('../src/server/outlook/outlookFailure.js');
 const { createOutlookWorker } = await import('../src/server/outlook/outlookWorker.js');
+const { claimDueTaskMail } = await import('../src/server/notifications/taskMailOutbox.js');
 
 // Yalnız yerel taşıma taklittir; havuz, tip bağlama ve işlem sınıfları gerçek mssql'dir.
 async function stack(t, { readCommittedSnapshot = false } = {}) {
@@ -44,11 +45,19 @@ async function stack(t, { readCommittedSnapshot = false } = {}) {
       setImmediate(() => {
         if (session.hanging) { session.hanging = false; return; }
         const text = command.query_str;
-        const isolation = /set transaction isolation level (READ COMMITTED|REPEATABLE READ|SERIALIZABLE)/i.exec(text);
-        if (isolation) session.isolation = isolation[1].toUpperCase();
-        const readPast = /\bREADPAST\b/i.test(text);
-        const incompatibleReadPast = readPast && (session.isolation === 'SERIALIZABLE'
-          || (session.readCommittedSnapshot && session.isolation === 'READ COMMITTED'));
+        const executable = text.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        let incompatibleReadPast = false;
+        const usesReadCommittedLock = /\bREADCOMMITTEDLOCK\b/i.test(executable);
+        const isolationOrReadPast = /SET TRANSACTION ISOLATION LEVEL (READ COMMITTED|REPEATABLE READ|SERIALIZABLE)|\bREADPAST\b/ig;
+        for (const match of executable.matchAll(isolationOrReadPast)) {
+          if (match[1]) {
+            session.isolation = match[1].toUpperCase();
+          } else if (session.isolation === 'SERIALIZABLE'
+            || (session.readCommittedSnapshot && session.isolation === 'READ COMMITTED' && !usesReadCommittedLock)) {
+            incompatibleReadPast = true;
+            break;
+          }
+        }
         const failure = session.failure || (incompatibleReadPast
           ? Object.assign(new Error('READPAST requires READ COMMITTED or REPEATABLE READ.'), { code: 650, sqlstate: '42000', severity: 16 }) : null);
         session.failure = null;
@@ -98,6 +107,34 @@ for (const end of ['commit', 'rollback']) {
       assert.match(claim.text, /SET TRANSACTION ISOLATION LEVEL REPEATABLE READ/i);
       assert.match(claim.text, /READPAST,\s*UPDLOCK,\s*ROWLOCK/i);
       assert.equal(claim.parameters.length, 4);
+    });
+  }
+}
+
+for (const end of ['commit', 'rollback']) {
+  for (const readCommittedSnapshot of [false, true]) {
+    test(`gerçek mssql ${end} sonrası devralınan SERIALIZABLE görev postası turunu bozmaz (RCSI=${readCommittedSnapshot ? 'ON' : 'OFF'})`, async (t) => {
+      const { pool, session } = await stack(t, { readCommittedSnapshot });
+      const transaction = new driver.Transaction(pool);
+      await transaction.begin(driver.ISOLATION_LEVEL.SERIALIZABLE);
+      await transaction[end]();
+      assert.equal(session.isolation, 'SERIALIZABLE');
+
+      const claimed = await claimDueTaskMail(pool, 1, { leaseSeconds: 120 });
+      assert.deepEqual(claimed, []);
+      assert.equal(session.isolation, 'READ COMMITTED');
+
+      const claim = session.commands.find(({ text }) =>
+        /MR_TaskMailOutbox/.test(text) && /WITH due AS/.test(text));
+      assert.ok(claim, 'görev postası sahiplenme sorgusu çalışmalıdır');
+      const executable = claim.text.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      const readCommittedAt = executable.search(/SET TRANSACTION ISOLATION LEVEL READ COMMITTED/i);
+      const readPastAt = executable.search(/\bREADPAST\b/i);
+      assert.ok(readCommittedAt >= 0 && readCommittedAt < readPastAt,
+        'READ COMMITTED, READPAST kullanan ilk deyimden önce kurulmalıdır');
+      assert.doesNotMatch(executable, /SET TRANSACTION ISOLATION LEVEL REPEATABLE READ/i);
+      assert.equal((executable.match(/\bREADPAST\b/gi) || []).length, 2);
+      assert.equal((executable.match(/\bREADCOMMITTEDLOCK\b/gi) || []).length, 2);
     });
   }
 }

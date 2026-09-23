@@ -484,7 +484,10 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
    üst çubuk ya da kalıcılık göstergesi yoktur. */
 .app-boot {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: var(--app-viewport-w, 100vw);
+  height: var(--app-viewport-h, 100vh);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -580,14 +583,17 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 }
 @media (prefers-reduced-motion: reduce) {
   .app-boot-card,
-  .app-boot-stars { animation: none; }
+  .app-boot-stars,
+  .app-boot-stars::before,
+  .app-boot-stars::after,
+  .app-boot-nebula { animation: none; }
   .app-boot-progress > span { animation: none; left: 30%; }
 }
+/* Uygulama içi "Hareketi azalt" kabuk ve içerik hareketlerini sınırlar.
+   İlk yüklemedeki yıldızlar ve ilerleme çubuğu ise yüklemenin sürdüğünü
+   gösteren durum geri bildirimidir; bu iki animasyon burada bilinçli olarak korunur. */
 .reduce-motion .app-boot-card,
-.reduce-motion .app-boot-stars { animation: none; }
-/* Uygulama içi "Hareketi azalt" ayarı, işletim sistemi tercihiyle AYNI şeyi
-   kapsamalıdır: süpürme animasyonu sınıf yolunda tam hızda kalıyordu. */
-.reduce-motion .app-boot-progress > span { animation: none; left: 30%; }
+.reduce-motion .app-boot-nebula { animation: none; }
 
 .export-menu-error {
   margin: 6px 8px 2px;
@@ -605,4 +611,4 @@ body.no-emblem .topbar-emblem-clip .hept-topbar {
 @media (prefers-reduced-motion: reduce) { .sidebar * { transition: none !important; } }
 
 @media (prefers-reduced-motion: reduce) { .app-boot *, .app-boot *::before, .app-boot *::after { animation: none !important; } }
-.reduce-motion .app-boot *, .reduce-motion .app-boot *::before, .reduce-motion .app-boot *::after { animation: none !important; }
+

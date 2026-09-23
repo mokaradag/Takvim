@@ -19,6 +19,7 @@
 export const ACTUAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ACTUAL_ID_SUFFIX_PATTERN = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const TASK_REFERENCE_PATTERN = /^(?:task-)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 function text(value) {
   return value == null ? '' : String(value).trim();
@@ -57,6 +58,22 @@ export function extractActualId(value) {
   const normalized = text(value);
   const match = normalized.match(ACTUAL_ID_SUFFIX_PATTERN);
   return canonicalActualId(match ? match[1] : normalized);
+}
+
+/**
+ * Sunucudan gelen çıplak UUID ile istemcide korunan önekli kimliği aynı kayıt
+ * olarak karşılaştırır. Demo/yerel kimliklerde ise olağan metin eşitliği korunur.
+ */
+export function sameActualReference(left, right) {
+  const firstMatch = text(left).match(TASK_REFERENCE_PATTERN);
+  const secondMatch = text(right).match(TASK_REFERENCE_PATTERN);
+  const first = firstMatch ? canonicalActualId(firstMatch[1]) : null;
+  const second = secondMatch ? canonicalActualId(secondMatch[1]) : null;
+  if (first && second) return first === second;
+  const leftText = text(left);
+  const rightText = text(right);
+  if (!leftText || !rightText) return false;
+  return leftText === rightText;
 }
 
 /**

@@ -2537,7 +2537,9 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
   const touchesExistingAssignees = changes.some(
     (change) => !change.created && (change.added.length || change.removed.length)
   );
-  if (!notifiedSicils.length && !touchesExistingAssignees) return;
+  const hasExplicitMailRecipients = notifyAssignees
+    && changes.some((change) => change.added.length || change.removed.length);
+  if (!notifiedSicils.length && !touchesExistingAssignees && !hasExplicitMailRecipients) return;
 
   try {
     const classified = addedSicils.length
@@ -2596,7 +2598,7 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
     });
 
     if (notifyAssignees) {
-      const entries = aggregateAssignmentNotifications(changes, actor.sicil).map((bucket) => ({
+      const entries = aggregateAssignmentNotifications(changes, actor.sicil, { includeActor: true }).map((bucket) => ({
         taskId: bucket.taskId,
         recipientSicil: bucket.recipientSicil,
         payload: {
