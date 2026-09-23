@@ -56,12 +56,20 @@ import {
   selectSuccessors
 } from './taskSuccessorPolicy.js';
 import { planTemplateStartAlignment } from './recurrenceTemplateAlignment.js';
-import { resolveTaskAssigneeDisplayRecords, taskAssigneeMutationPatch } from './taskAssigneeDisplay.js';
+import {
+  directoryPersonRecord,
+  resolveTaskAssigneeDisplayRecords,
+  taskAssigneeMutationPatch,
+  withDirectoryPeople
+} from './taskAssigneeDisplay.js';
 import { simpleAssigneeNumber } from '../simple/simpleAssigneeSearch.js';
 import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { TaskReminderButton } from '../reminders/TaskReminderButton';
 import { ScheduleChangeDialog } from '../schedule-change/ScheduleChangeDialog.jsx';
 import { scheduleDifferenceSummary, requestDates } from '../schedule-change/scheduleChangePresentation.js';
+import { ExternalAssigneePicker } from '../assignment-coordination/ExternalAssigneePicker.jsx';
+import { useAssignmentRequestDraft } from '../assignment-coordination/useAssignmentRequestDraft.js';
+import { AssigneeMailToggle } from '../assignment-coordination/AssigneeMailToggle.jsx';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 function legacyProjectTags(projectId, tasks) {
@@ -226,6 +234,11 @@ export function TaskDrawer({
     ];
   }, [projects, assignmentScopeProjects, selectedProject]);
 
+  // Bu düzenlemede kurumsal dizinden DOĞRUDAN atanan kişiler. Anlık görüntü
+  // rehberinde bulunmadıkları için adları ve fotoğraf kimlikleri buradan gelir.
+  const [directoryPeople, setDirectoryPeople] = useState([]);
+  const displayPeople = useMemo(() => withDirectoryPeople(people, directoryPeople), [people, directoryPeople]);
+
   const selectedAssignees = useMemo(() => {
     // Fotoğraf kimlikleri de taşınır: rehberde çözülemeyen eş sorumlular için
     // görev satırındaki `assigneeAvatarIdentities` tek fotoğraf kaynağıdır.
@@ -236,9 +249,9 @@ export function TaskDrawer({
       assigneeDisplayNames: local.assigneeDisplayNames,
       assigneeAvatarIdentities: local.assigneeAvatarIdentities,
       sorumlu: local.sorumlu
-    }, people, !canManageAssignees);
+    }, displayPeople, !canManageAssignees);
   }, [
-    people,
+    displayPeople,
     local.assigneeIds,
     local.assigneeDisplayNames,
     local.assigneeAvatarIdentities,
@@ -284,8 +297,17 @@ export function TaskDrawer({
     return onUpdate(task.id, patch);
   };
 
+  // Kurum dışı personel seçimi ve isteğe bağlı e-posta bildirimi bu kayıt
+  // işlemine aittir; kalıcı bir tercih oluşturmazlar.
+  const assignmentRequests = useAssignmentRequestDraft({ assignmentScopeOnly, canManageAssignees });
+  const [notifyAssignees, setNotifyAssignees] = useState(false);
+
   const dismiss = onClose;
-  const primaryAction = () => onSave?.({ ...local, task: titleDraft.trim() }, { generateSeries });
+  const primaryAction = () => onSave?.({ ...local, task: titleDraft.trim() }, {
+    generateSeries,
+    notifyAssignees,
+    assignmentRequest: assignmentRequests.assignmentRequest
+  });
 
   const changeProject = (projectId) => {
     const project = projects.find((item) => item.id === projectId)
@@ -304,17 +326,39 @@ export function TaskDrawer({
     });
   };
 
+  /**
+   * Sicil ile DOĞRUDAN ekleme.
+   *
+   * Kurum dışı kişi anlık görüntü dizininde bulunmaz (bkz. directoryClient.js:
+   * "Dizin uygulama anlık görüntüsüne KONULMAZ"). Rehber aramasına düşen yol
+   * kişiyi bulamayıp sessizce çıkıyor, kişi ne atanıyor ne de talep açılıyordu;
+   * kullanıcı hiçbir geri bildirim almıyordu. Temel Kip çekmecesi baştan beri
+   * sicili doğrudan yazar; iki çekmece artık aynı davranıştadır.
+   */
+  const addAssigneeSicil = (sicil, knownPeople = displayPeople) => {
+    const assigneeIds = [...new Set([...(local.assigneeIds || []).map(String), String(sicil)])];
+    save(taskAssigneeMutationPatch(local, knownPeople, assigneeIds));
+  };
+
+  /** Kurumsal dizinden doğrudan ekleme: kişinin görüntü kimliği de taşınır. */
+  const addDirectoryAssignee = (person) => {
+    const record = directoryPersonRecord(person);
+    if (!record) return;
+    setDirectoryPeople((current) => [...current.filter((entry) => entry.id !== record.id), record]);
+    addAssigneeSicil(record.id, withDirectoryPeople(displayPeople, [record]));
+  };
+
+  /** Anlık görüntüdeki kişi seçicisinden ekleme: kimlik yine Sicil'dir. */
   const addAssignee = (personId) => {
     const person = people.find((item) => String(item.id) === String(personId));
     if (!person) return;
-    const assigneeIds = [...new Set([...(local.assigneeIds || []).map(String), String(person.id)])];
-    save(taskAssigneeMutationPatch(local, people, assigneeIds));
+    addAssigneeSicil(person.id);
   };
 
   const removeAssignee = (record) => {
     if (record.id == null || (assignmentScopeOnly && (local.assigneeIds || []).length <= 1)) return;
     const assigneeIds = (local.assigneeIds || []).filter((id) => String(id) !== String(record.id));
-    save(taskAssigneeMutationPatch(local, people, assigneeIds));
+    save(taskAssigneeMutationPatch(local, displayPeople, assigneeIds));
   };
 
   const today_ = today();
@@ -508,6 +552,19 @@ export function TaskDrawer({
                     : ''}
                 </div>
               )}
+              {/* Anahtar KAPALIYKEN bugünkü izin verilen personel davranışı
+                  aynen sürer; açıkken dizin sunucuda aranır. */}
+              <ExternalAssigneePicker
+                disabled={isSaving}
+                assignedSicils={(local.assigneeIds || []).map(String)}
+                canAssignDirectly={assignmentRequests.canAssignDirectly}
+                onAssignDirectly={addDirectoryAssignee}
+                requestedAssignees={assignmentRequests.requested}
+                onRequestAssignee={assignmentRequests.requestAssignee}
+                onCancelRequest={assignmentRequests.cancelRequest}
+                requestNote={assignmentRequests.note}
+                onRequestNoteChange={assignmentRequests.setNote}
+              />
             </Section>
 
             <Section title="Güncel plan" icon={<Icons.Calendar size={13} />} tone="var(--accent)">
@@ -730,6 +787,7 @@ export function TaskDrawer({
             <Icons.Calendar size={13} /> {pendingScheduleRequest ? 'Öneriyi değiştir' : 'Yeni tarih öner'}
           </button>}
           <div style={{ flex: 1 }} />
+          <AssigneeMailToggle checked={notifyAssignees} disabled={isSaving} onChange={setNotifyAssignees} />
           <button className="btn primary" onClick={primaryAction} disabled={isSaving || !titleValid} aria-busy={isSaving}>
             {isSaving ? <Spinner size={13} /> : <Icons.Save size={14} />} {isSaving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>

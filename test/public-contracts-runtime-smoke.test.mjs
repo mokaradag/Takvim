@@ -219,6 +219,45 @@ test('application root composes provider, data boundary, shell, and persistence 
   assert.match(source, /<PersistenceStatus\s*\/>/);
 });
 
+/**
+ * Bağlam değeri ile kancaların OKUDUĞU alanlar birlikte yürür.
+ *
+ * `appState` yeni bir alan üretip sağlayıcı onu `value` içine taşımadığında
+ * kanca sessizce yedeğine düşer ve arayüz "veri yok" der; birleşik zil tam da
+ * böyle üç alanı (koordinasyon, görev bildirimi, birleşik sayaç) kaybetmişti.
+ * Alan memo bağımlılıklarında da sayılmalıdır: kimliği değişmeyen bir değer
+ * tüketicileri tazelemez.
+ */
+test('provider context carries every field the state hooks read', () => {
+  const provider = read('src/state/AppStateProvider.jsx');
+  const hooks = read('src/state/hooks/index.js');
+
+  const applicationState = provider.match(/const applicationState = \{([\s\S]*?)\n {4}\};/)?.[1];
+  assert.ok(applicationState, 'applicationState nesnesi bulunamalıdır');
+  const spread = provider.match(/return \{ \.\.\.applicationState,([^}]*)\};/)?.[1] || '';
+  const dependencies = provider
+    .slice(provider.indexOf('return { ...applicationState,'))
+    .match(/\}, \[([\s\S]*?)\n {2}\]\);/)?.[1] || '';
+
+  const provided = new Set([
+    ...[...applicationState.matchAll(/^\s{6}([A-Za-z_$][\w$]*)\s*[:,]/gm)].map((match) => match[1]),
+    ...spread.split(',').map((entry) => entry.trim()).filter(Boolean)
+  ]);
+  // `state` bu dosyada her zaman `useAppState()` sonucudur.
+  const required = new Set([
+    ...[...hooks.matchAll(/useAppState\(\)\.([A-Za-z_$][\w$]*)/g)].map((match) => match[1]),
+    ...[...hooks.matchAll(/\bstate\.([A-Za-z_$][\w$]*)/g)].map((match) => match[1])
+  ]);
+
+  for (const field of required) {
+    assert.ok(provided.has(field), `bağlam değeri ${field} alanını taşımalıdır`);
+  }
+  for (const field of ['assignmentCoordinations', 'taskNotifications', 'notificationSummary']) {
+    assert.ok(provided.has(field), field);
+    assert.match(dependencies, new RegExp(`state\\.${field}\\b`), `${field} memo bağımlılığı olmalıdır`);
+  }
+});
+
 test('data boundary has explicit loading, error, retry, and ready branches', () => {
   const source = read('src/components/shell/AppDataBoundary.jsx');
   assert.match(source, /dataStatus\s*===\s*['"]loading['"]/);

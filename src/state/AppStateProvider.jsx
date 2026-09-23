@@ -429,9 +429,11 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       state: stateRef.current,
       input: taskInput,
       id: draft.task.id,
+      // E-posta tercihi işlem başınadır; kalıcı bir kullanıcı ayarı olarak
+      // saklanmaz (bkz. data/api/createApiRepository.js · notifyAssignees).
       mutate: (operation, action) => persistence.mutate(operation, (current) => {
         return prepareTaskCreationCommit(current, action(current), options);
-      })
+      }, { notifyAssignees: options.notifyAssignees === true })
     });
     if (!result.ok || !created) return result;
     // Yavaş kayıt sürerken kullanıcı A taslağını kapatıp B taslağını açmış
@@ -781,6 +783,13 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       taskBaselineSnapshots: state.taskBaselineSnapshots,
       scheduleRequests: state.scheduleRequests,
       scheduleRequestSummary: state.scheduleRequestSummary,
+      // Zilin öteki iki kaynağı ve birleşik sayaç da bağlama TAŞINIR. Alanlar
+      // burada sayılmadığında `useAssignmentCoordinations`, `useTaskNotifications`
+      // ve `useNotificationSummary` her zaman boş yedeğe düşüyor, birleşik zil
+      // yalnızca tarih taleplerini gösteriyordu (bkz. state/hooks/index.js).
+      assignmentCoordinations: state.assignmentCoordinations,
+      taskNotifications: state.taskNotifications,
+      notificationSummary: state.notificationSummary,
       session: state.session,
       currentUser: state.currentUser,
       isSystemAdmin: state.isSystemAdmin,
@@ -809,6 +818,9 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     state.taskBaselineSnapshots,
     state.scheduleRequests,
     state.scheduleRequestSummary,
+    state.assignmentCoordinations,
+    state.taskNotifications,
+    state.notificationSummary,
     state.session,
     state.currentUser,
     state.isSystemAdmin,

@@ -32,6 +32,8 @@ WBS is a separate structural domain entity. Shared pure selectors own hierarchy 
 
 WBS rollups exist in two shapes: `selectWbsTaskRollup` for a single node, and `selectWbsRollupIndex` for every node in one pass. Anything that renders many rows uses the index; per-row calls to the single-node selector are quadratic in the node count.
 
+`assignment/assignmentCoordination.js`, `notifications/notificationInbox.js`, `notifications/taskAssignmentMail.js` and `presence/` own the new collaboration rules as pure modules. The first holds the coordination status/mode catalogs, the decision matrix (`allowedCoordinationDecisions`) and the organization-path comparison that decides whether an assignee is outside the actor's organization; the second holds the bell inbox merge — one ordering across schedule-change requests and task events, one preview limit, one counter derivation — so the bell cannot grow a second, divergent sort; the third renders the optional assignment e-mail with the same HTML escaping the reminder templates use. `presence/presenceModel.js` owns the heartbeat interval, the *active* window and the list bound, and `presence/presenceLeader.js` owns the cross-tab lock arithmetic. Keeping these pure is what lets the whole decision surface — who may approve, what a stale record is, which tab heartbeats — be tested without a database, a clock or a browser.
+
 `reminders/` owns task-reminder rules with no I/O of any kind. `reminderTemplate.js` holds the placeholder catalog, the allowlist HTML sanitizer, placeholder substitution with HTML escaping, plain-text derivation and the default Turkish subject/body. `reminderPolicy.js` holds the automatic policy: settings normalization, remaining-duration description, window/frequency evaluation and the deterministic *slot key* used for duplicate-send prevention. `reminderRecipients.js` and `emailAddress.js` own address validation, normalization and de-duplication; `reminderValues.js` maps a Task onto placeholder values. Because these modules are pure, the whole reminder decision surface is tested without a clock, a database or an SMTP server.
 
 ### `src/scheduling`
@@ -144,6 +146,10 @@ The scheduler is server-side: `POST /api/mergen-rota/reminders/run` runs one aut
 
 `outlook/` owns calendar subscriptions and their durable outbox. `src/instrumentation.js` starts one Outlook loop per long-lived Next.js Node process using the enabled Next.js 14 instrumentation hook; build and Edge executions do not start delivery. The first pass is scheduled at startup and subsequent passes wait `MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS` (default 5 seconds) after completion. It uses the existing bounded outbox service, SQL row leases, revision reservation and persisted retry times. The loop continues after connection/query/SMTP failures and never consults the automatic-reminder setting. Multiple instances and the optional manual/scheduler endpoint share SQL ownership protection. No browser or OS scheduler is required for Outlook; OS scheduling still drives automatic reminder e-mails.
 
+`directory/`, `assignment/`, `notifications/` and `presence/` own the cross-organizational collaboration boundary. `directory/directorySearch.js` is the only corporate directory search path: it enforces the minimum query length, a bounded result count, an in-process rate limit and a minimal projection (name, Sicil, organization path), so the search cannot become a directory-probing endpoint and the 3000-row corporate directory never enters the snapshot. `assignment/managementChain.js` resolves the receiving unit and department managers **set-wise** from authoritative HR data and de-duplicates by Sicil; `assignment/crossOrganization.js` classifies which requested assignees fall outside the actor's executive scope; `assignment/assignmentCoordinationStore.js` owns creation, the decision transitions and their per-transition staleness checks, and `assignment/assignmentCoordinationQueries.js` owns the SQL text and the server-side paged inbox. `notifications/taskNotificationStore.js` derives the authoritative assignee-set delta and aggregates it per recipient, `notifications/notificationInboxQueries.js` reads schedule-change requests, coordination records and task notifications in **one** query with four recordsets, and `notifications/taskMailOutbox.js`/`taskMailService.js`/`taskMailWorker.js` are the durable mail outbox, its SMTP consumer and its loop. `presence/presenceStore.js` records the heartbeat and serves the SYSTEM_ADMIN-only active-user list.
+
+The direction of that split is deliberate. A notification is written in the **same transaction** as the assignee change that justifies it, so it cannot describe a change that was rolled back; the e-mail is only an *intent* row in the same transaction, so `api.commit` never waits for SMTP and a mail-server outage cannot fail a task save. `src/instrumentation.js` starts the task-mail loop beside the Outlook loop, on the same Next.js Node instrumentation hook and with the same restart semantics (`MERGEN_ROTA_TASK_MAIL_POLL_MS`, default 30 seconds).
+
 The admin run endpoint starts the reminder and Outlook passes independently and preserves both summaries on HTTP 503 with safe failure codes. Its GET exposes shared database queue counts and clearly process-local last-run diagnostics to SYSTEM_ADMIN only. The admin view polls status without replacing reminder drafts; task Outlook state retains its safe 30-second/focus refresh. See [Outlook calendar delivery](OUTLOOK-CALENDAR.md) for budgets, deployment and recovery.
 
 ### Presentation and styling ownership
@@ -164,6 +170,8 @@ Shared layer tokens define sticky, chrome, popover, drawer, modal and tooltip or
 - Reminder rules, templates and policy: `src/domain/reminders`
 - SMTP transport, reminder persistence and the reminder service: `src/server/mail` and `src/server/reminders`
 - Health states, event/alert model, metric math and diagnostic sanitization: `src/domain/observability`
+- Coordination statuses, decision authority, bell inbox merge rules and presence windows: `src/domain/assignment`, `src/domain/notifications` and `src/domain/presence`
+- Corporate directory search, cross-organizational classification, management-chain resolution, coordination persistence, task notifications, the assignment mail outbox and presence: `src/server/directory`, `src/server/assignment`, `src/server/notifications` and `src/server/presence`
 - Telemetry collection, health probes, alert rules, structured logging and administration endpoints: `src/server/observability` (see `docs/SYSTEM-ADMINISTRATION.md`)
 - Feature UI and feature-only helpers: the relevant `src/features/<feature>` folder
 - Generic visual primitives: `src/components/ui*`
@@ -244,6 +252,33 @@ A future persistence schema should preserve Project → WBS → Activity as sepa
 
 Genel snapshot `scheduleRequests` içinde en fazla sekiz önizleme, `scheduleRequestSummary` içinde sayaçlar taşır. Talepler sayfası ve görevdeki bekleyen öneri `schedule-changes` GET sorgularıyla ayrı yüklenir; geçmiş büyüklüğü uygulama bağlamını büyütmez. SQL okuma/temizleme ayrı bildirim tablosuna gider. KPI modalı zaten yetkilendirilmiş ve Özet tarafından daraltılmış görevleri yerel olarak arar/sayfalar. İki görev panelinde ikinci bir alan kopyası bulunmaz; `TaskEditor` taslağı tek kaynaktır. [Akış ve API](REQUESTS-AND-NOTIFICATIONS.md), [arayüz sözleşmesi](SIMPLE-MODE-AND-UI.md).
 
+
+### Atama koordinasyonu ve birleşik bildirim mimarisi
+
+Kurum dışı atama, zil bildirimi ve isteğe bağlı e-posta **tek bir mimaridir**,
+üç ayrı özellik değil. Rota doğruluk kaynağıdır; e-posta yalnızca bir taşıma
+katmanıdır ve iş akışı durumu taşımaz.
+
+Gerçek atama ilişkisi ile *talep edilmiş* atama kesin olarak ayrıdır: onay
+gelene kadar `MR_TaskAssignees` yazılmaz, dolayısıyla hiçbir mevcut görünürlük,
+iş yükü, hatırlatma veya Outlook davranışı bekleyen bir talepten etkilenmez.
+Koordinasyon kaydı kendi tablosunda yaşar ve karar geçmişini korur; kararı veren
+yönetici görev düzenleme yetkisi kazanmaz, yalnızca o Sicilin eklenmesi/
+kaldırılması uygulanır ve görünmeyen ortak sorumlular sessizce silinmez.
+
+Her üç akış da **dayanıklı ve idempotanttır**. Bildirim `EventKey`, posta
+`DedupeKey` ile tekilleştirilir; yeniden çalıştırılan bir commit ikinci kayıt
+üretmez. Bildirim sürümlenir: yeni bir karar kaydı haklı olarak yeniden
+okunmamış yapar, ama **eski bir eylem daha yeni bir sürümü temizleyemez**
+(koordinasyon alıcıları sürüm kapısı, görev bildirimleri tek yönlü `COALESCE`
+kullanır). Karar geçmişi hiçbir akışta silinmez.
+
+Maliyet sınırları da mimarinin parçasıdır. Snapshot yalnızca **bir** ek sorgu
+alır ve yalnızca sınırlı önizleme taşır: dizin araması, koordinasyon geçmişi ve
+bildirim geçmişi snapshot'a girmez, sayfalama sunucudadır. `api.commit` SMTP
+beklemez. Varlık nabzı istek başına değil, kullanıcı başına ve 90 saniyede
+birdir. Ayrıntılar: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md),
+[yetki modeli](AUTHORIZATION-MODEL.md), [şema](DATABASE-SCHEMA.md).
 
 ### Görev hareket raporu
 

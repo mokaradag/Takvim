@@ -539,6 +539,10 @@ hata koduyla listelenir. Alıcı adresleri maskelenmiştir.
 | `src/features/reminders/TaskReminderButton.jsx` | Elle gönderim eylemi |
 | `src/features/reminders/ReminderSettingsView.jsx` | Yönetici sayfası |
 | `src/features/reminders/RichTextEditor.jsx` | Zengin metin gövde düzenleyicisi |
+| `src/domain/notifications/taskAssignmentMail.js` | Atama bildirimi konu/gövde üretimi (saf) |
+| `src/server/notifications/taskMailOutbox.js` | Dayanıklı atama postası kuyruğu (yazma, kiralama, geri çekilme) |
+| `src/server/notifications/taskMailService.js` | Kuyruğu tüketen gönderim; aynı `mailService` taşımasını kullanır |
+| `src/server/notifications/taskMailWorker.js` | Node başlangıcıyla açılan yoklama döngüsü |
 
 Outlook kullanıcı eylemleri kalıcı kuyruğa yazılır ve uygulamayla başlayan otomatik Outlook çalışanı tarafından gönderilir; turlar arasında varsayılan 5 saniye beklenir (`MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS`). Geçici SMTP/SQL kesintilerinde kuyruk korunur ve otomatik geri çekilmeyle tekrar denenir. İşletim sistemi zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir. Hatırlatma sorgusu hata verse de Outlook kuyruğu denenir; iki işten biri başarısızsa uç HTTP 503 döndürür. Eksik Outlook şeması, geçersiz SMTP yapılandırması, deneme eşiğini aşmış bekleyen işler ve Outlook tur bütçesinin dolması sağlık hatasıdır. `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` varsayılanı 45.000 ms; ayrıntılar için [Outlook takvimi](OUTLOOK-CALENDAR.md).
 
@@ -549,3 +553,35 @@ Outlook teslimatı etkinse SMTP zorunludur: en az `SMTP_HOST` ve geçerli `SMTP_
 `runAutomaticReminders()` herhangi bir gerçek başarısız teslimatta `ok:false` döndürür. Birleşik `/reminders/run` sonucu, `reminders.ok`, pozitif başarısız sayısı ve `results[].status=FAILED` değerlerini birlikte değerlendirir; Outlook başarısı bu hatayı gizlemez. Başarısız birleşik tur HTTP 503 üretir; arayüz ayrı sayaçları ve hatırlatmaya özgü güvenli hata kodlarını gösterir. Kısmi alıcı çözümü uyarıları korunur; SMTP’ye hiç iletilmeyen uygunluk nedeniyle atlamalar teslimat hatası sayılmaz.
 
 Outlook tamamlanma/açılma davranışı için mevcut 0010 kurulumuna da `MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanır. Günlük FREE termin gösterimi, tek yönlü bağlantı ve Exchange kabul kontrolü [OUTLOOK-CALENDAR.md](OUTLOOK-CALENDAR.md) içindedir. Outlook kabul/ret/elle silme durumu okunmaz; bu durumlar hatırlatma politikasını değiştirmez.
+
+## Atama bildirimi postaları (isteğe bağlı)
+
+Hatırlatmadan ayrı, **ikinci** bir isteğe bağlı posta akışı vardır: görev
+panelindeki **Sorumlulara e-posta bildirimi gönder** kutusu. İkisi aynı SMTP
+taşımasını (`src/server/mail`) ve aynı `Sicil → MR_V_PeopleDirectory.Username →
+DC01_userr.Name → DC01_userr.EmailAddress` alıcı zincirini kullanır; ayrı bir
+posta altyapısı kurulmaz.
+
+Farkları bilinçlidir:
+
+| | Hatırlatma | Atama bildirimi |
+| --- | --- | --- |
+| Tetikleyici | elle zarf düğmesi veya otomatik pencere/sıklık | yalnızca sorumlu kümesini değiştiren bir kaydetme, kutu işaretliyse |
+| Tercih | `MR_ReminderSettings` içinde saklanır | **saklanmaz**; yalnızca o işlem için geçerlidir, varsayılan kapalı |
+| Şablon | yöneticinin düzenlediği şablon | sabit, kısa atama bildirimi |
+| Kuyruk | `MR_TaskReminderLog` aralık sahiplenmesi | `MR_TaskMailOutbox` dayanıklı kuyruğu |
+| Zamanlayıcı | otomatik gönderim için OS zamanlayıcısı gerekir | gerekmez; çalışan Node ile başlar |
+
+Kutu işaretlendiğinde kaydetme SMTP'yi **beklemez**: posta niyeti görev
+değişikliğiyle **aynı transaction** içinde kuyruğa yazılır, gönderimi
+`MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30.000 ms) aralığıyla çalışan ayrı
+bir döngü yapar. Böylece posta sunucusundaki bir arıza görev kaydetmeyi
+düşürmez. Kuyruk satırı `DedupeKey` ile tekilleştirilir; yeniden denenen bir
+commit ikinci posta üretmez. Başarısız gönderim üstel geri çekilmeyle yeniden
+denenir ve deneme eşiği dolduğunda satır `FAILED` olarak kalır — sessizce
+kaybolmaz. Şema (`0015`) uygulanmadıysa kutu işaretlenmiş olsa bile posta
+üretilmez ve görev kaydetme etkilenmez.
+
+SMTP yapılandırılmamışsa bu akış da hatırlatmalarla aynı biçimde çalışmaz;
+kuyruk teslim edilmemiş kalır. Ayrıntılar: [Talepler ve
+bildirimler](REQUESTS-AND-NOTIFICATIONS.md).

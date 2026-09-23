@@ -1,5 +1,6 @@
 'use client';
 import { prepareTaskLifecycleIntent } from '../../state/appState.js';
+import { submitAssignmentCoordination } from '../../data/api/assignmentCoordinationClient.js';
 import { scheduleRequestItems } from '../schedule-change/scheduleRequestQueryState.js';
 import { useScheduleRequestQuery } from '../schedule-change/useScheduleRequestQuery.js';
 import { useEffect, useRef, useState } from 'react';
@@ -15,7 +16,7 @@ import { TaskDrawer } from './TaskDrawer';
 import { normalizeTaskAssigneePatch } from './taskAssigneePatch.js';
 
 function TaskEditor({ task, simple, creationDraft, tasks, projects, assignableProjects, people, currentUser, scheduleRequests }) {
-  const { closeTask, saveTaskEdits, deleteTask, submitScheduleChange, updateTaskDraft, cancelTaskDraft, saveTaskDraft, registerTaskEditorDraft } = useTaskActions();
+  const { closeTask, saveTaskEdits, deleteTask, submitScheduleChange, updateTaskDraft, cancelTaskDraft, saveTaskDraft, registerTaskEditorDraft, reloadData } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -84,20 +85,42 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
     return Promise.resolve({ ok: true, value: entry, staged: true });
   };
 
+  /**
+   * Kaydetmeden SONRA gönderilen atama talebi.
+   *
+   * Talep edilen kişi görev yazmasına hiç girmez: görev kalıcılaştıktan sonra
+   * ayrı ve yetkisi sunucuda yeniden doğrulanan bir uç çağrılır. Talep
+   * gönderilemezse görev kaydı korunur, panel açık kalır ve hata gösterilir.
+   */
+  const submitAssignmentRequest = async (taskId, request) => {
+    if (!request?.assigneeSicils?.length) return { ok: true };
+    // Kaydın kimliği alınamadıysa talep SESSİZCE atlanmaz: panel kapanıyor,
+    // kullanıcı talebin gittiğini sanıyordu.
+    if (!taskId) {
+      const message = 'Görev kimliği alınamadığı için atama talebi gönderilemedi.';
+      setSaveError(message);
+      return { ok: false, message };
+    }
+    const result = await submitAssignmentCoordination({ taskId, ...request });
+    if (!result.ok) setSaveError(result.message || 'Atama talebi gönderilemedi.');
+    return result;
+  };
+
   const onSave = (input, options = {}) => {
     if (saveRef.current) return saveRef.current;
     setSaving(true);
     setSaveError(null);
+    const { assignmentRequest = null, ...saveOptions } = options;
     const pending = (async () => {
       let result;
       if (isCreating) {
-        result = await saveTaskDraft(input, { generateSeries: seriesRef.current, ...options, syncKeywordCatalog: simple, relatedEdits: [...pendingRef.current.values()] });
+        result = await saveTaskDraft(input, { generateSeries: seriesRef.current, ...saveOptions, syncKeywordCatalog: simple, relatedEdits: [...pendingRef.current.values()] });
       } else {
         const previous = pendingRef.current.get(task.id);
         const edits = new Map(pendingRef.current);
         edits.set(task.id, { id: task.id, version: previous?.version || task.version, patch: taskEditorPatch(task, input) });
         result = await saveTaskEdits([...edits.values()], {
-          generateSeries: seriesRef.current, ...options, taskId: task.id, syncKeywordCatalog: simple,
+          generateSeries: seriesRef.current, ...saveOptions, taskId: task.id, syncKeywordCatalog: simple,
           onRebase: (rebased) => {
             for (const edit of rebased) {
               const staged = pendingRef.current.get(edit.id);
@@ -111,6 +134,12 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
         seriesRef.current = false;
         setDirty(false);
         setGenerateSeries(false);
+        const requestResult = await submitAssignmentRequest(
+          isCreating ? result.value?.id : task.id,
+          assignmentRequest
+        );
+        if (!requestResult.ok) return { ok: false, error: { message: requestResult.message } };
+        if (assignmentRequest) await reloadData?.({ preserveFailedTaskUpdates: true });
         if (mountedRef.current) await closeTask();
       } else {
         setSaveError(result?.error?.message || 'Görev kaydedilemedi.');

@@ -137,12 +137,17 @@ test('zil en fazla sekiz kart gösterir, kalıcı geçmişe yönlendirir ve aç�
   } finally { view.unmount(); delete globalThis.document; delete globalThis[CLIENT_STATE]; }
 });
 
-test('Talepler tek sayfada üç erişilebilir sekme sunar ve ok tuşlarıyla gezinir', () => {
+test('Talepler tek sayfada dört erişilebilir sekme sunar ve ok tuşlarıyla gezinir', () => {
   globalThis[CLIENT_STATE] = { projects: [], actions: {}, session: { dataMode: 'demo' } };
   const view = mountComponent(ScheduleRequestsView, {});
   try {
     const tabs = findElement(view.output, (node) => node.props?.role === 'tablist').props.children;
-    assert.equal(tabs.length, 3);
+    // Atama Koordinasyonu birinci sınıf sekmedir; ayrı bir kenar çubuğu sayfası
+    // açılmaz ve var olan üç sekme korunur.
+    assert.equal(tabs.length, 4);
+    assert.deepEqual(tabs.map((tab) => tab.props.id), [
+      'requests-pending-tab', 'requests-sent-tab', 'requests-history-tab', 'requests-coordination-tab'
+    ]);
     assert.equal(tabs[0].props['aria-selected'], true);
     tabs[0].props.onKeyDown({ key: 'ArrowRight', preventDefault() {} }); view.render();
     assert.equal(findElement(view.output, (node) => node.props?.id === 'requests-sent-tab').props['aria-selected'], true);

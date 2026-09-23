@@ -81,6 +81,41 @@ export function filterTaskAssigneeCandidates(people = [], selectedAssignees = []
 }
 
 /**
+ * Kurumsal dizin aramasından seçilen kişinin rehber kaydı biçimi.
+ *
+ * Kurum dışı kişi anlık görüntü rehberinde BULUNMAZ (bkz. directoryClient.js).
+ * Yalnızca Sicili yamaya yazmak kişiyi ekliyor ama adını ve fotoğraf kimliğini
+ * düşürüyordu: `resolveTaskAssigneeDisplayRecords` bilinmeyen kimliği atlıyor,
+ * kişi hem arama sonuçlarından hem sorumlu listesinden kaydedip yeniden
+ * yükleyene kadar kayboluyordu. Kimlik yine Sicil'dir; ad yalnızca gösterilir.
+ */
+export function directoryPersonRecord(person = {}) {
+  const sicil = String(person?.sicil ?? '').trim();
+  if (!sicil) return null;
+  const organization = person.organization || {};
+  return {
+    id: sicil,
+    employeeNo: sicil,
+    name: String(person.name || '').trim() || sicil,
+    role: person.jobTitle || '',
+    organization: {
+      directorate: organization.directorate || null,
+      department: organization.department || null,
+      unit: organization.unit || null
+    }
+  };
+}
+
+/** Rehbere, bu düzenlemede dizinden seçilen kişileri (yinelemeden) ekler. */
+export function withDirectoryPeople(people = [], directoryPeople = []) {
+  const base = people || [];
+  if (!directoryPeople?.length) return base;
+  const known = new Set(base.map((person) => String(person.id)));
+  const extra = directoryPeople.filter((person) => person && !known.has(String(person.id)));
+  return extra.length ? [...base, ...extra] : base;
+}
+
+/**
  * Sorumlu kimlikleri düzenlenirken rehberde çözülemeyen mevcut kimlik ve adlar
  * korunur. Yalnızca çağıranın açıkça çıkardığı kimlik listeden düşer.
  */

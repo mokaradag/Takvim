@@ -446,10 +446,15 @@ export function createApiRepository({
      * boşaltırken sıradan bir `fetch` iptal edilebilir, bu bayrakla isteğin
      * tamamlanması garanti altına alınır.
      */
-    async commitChanges(changes, { keepalive = false } = {}) {
+    async commitChanges(changes, { keepalive = false, notifyAssignees = false } = {}) {
       collectClientIds(changes, clientIdAliases);
       persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey);
-      const body = JSON.stringify({ changes: normalizeActualChanges(changes) });
+      // `notifyAssignees` işlem BAŞINA bir tercihtir: kalıcı bir kullanıcı ayarı
+      // olarak saklanmaz ve yalnızca kullanıcı açıkça seçtiğinde gönderilir.
+      const body = JSON.stringify({
+        changes: normalizeActualChanges(changes),
+        ...(notifyAssignees === true ? { notifyAssignees: true } : {})
+      });
       // Büyük gövde `keepalive` sınırını aşar ve istek hiç gönderilmez; sıradan
       // isteğe düşmek, değişikliği sessizce kaybetmekten iyidir.
       const useKeepalive = keepalive && bodyByteLength(body) <= KEEPALIVE_BODY_LIMIT_BYTES;

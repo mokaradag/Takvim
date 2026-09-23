@@ -11,6 +11,7 @@ import { SystemPerformanceTab } from './tabs/SystemPerformanceTab.jsx';
 import { SystemQueuesTab } from './tabs/SystemQueuesTab.jsx';
 import { SystemEventsTab } from './tabs/SystemEventsTab.jsx';
 import { SystemIntegrationsTab } from './tabs/SystemIntegrationsTab.jsx';
+import { SystemPresenceTab } from './tabs/SystemPresenceTab.jsx';
 import { loadSystemOverviewRequest } from './systemAdminClient.js';
 import { useAdminResource } from './useAdminResource.js';
 import {
@@ -150,7 +151,9 @@ export function SystemAdministrationView() {
         id={systemAdminPanelId(active)}
         role="tabpanel"
         aria-labelledby={systemAdminTabId(active)}
-        className="sysadmin-panel"
+        // Aktif Kullanıcılar sekmesi kalan yüksekliği DOLDURUR: kartlar üstte
+        // sabit kalır, yalnızca tablo gövdesi kaydırılır ve altta boşluk kalmaz.
+        className={`sysadmin-panel${active === ADMIN_TABS.PRESENCE ? ' is-filled' : ''}`}
         tabIndex={0}
       >
         {active === ADMIN_TABS.OVERVIEW && (
@@ -168,6 +171,9 @@ export function SystemAdministrationView() {
         {active === ADMIN_TABS.QUEUES && <SystemQueuesTab enabled={actualMode} focusedComponent={focusedComponent} />}
         {active === ADMIN_TABS.EVENTS && <SystemEventsTab enabled={actualMode} focusedComponent={focusedComponent} navigationToken={navigationToken} />}
         {active === ADMIN_TABS.INTEGRATIONS && <SystemIntegrationsTab enabled={actualMode} />}
+        {/* Varlık verisi YALNIZCA bu sekme etkinken yoklanır; anlık görüntüye
+            hiçbir zaman girmez. */}
+        {active === ADMIN_TABS.PRESENCE && <SystemPresenceTab enabled={actualMode} />}
         {/* Hatırlatma yönetimi TAŞINIR, çatallanmaz: var olan görünüm olduğu
             gibi bu sekmeye gömülür ve davranışı değişmez. */}
         {active === ADMIN_TABS.REMINDERS && <ReminderSettingsView />}

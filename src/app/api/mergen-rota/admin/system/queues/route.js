@@ -28,6 +28,8 @@ import {
 import { outlookQueueStatus, retryFailedOutlookDeliveries } from '../../../../../../server/outlook/outlookStore.js';
 import { outlookWorkerStatus } from '../../../../../../server/outlook/outlookWorker.js';
 import { loadReminderHistory, loadReminderSettings } from '../../../../../../server/reminders/reminderStore.js';
+import { isMissingTaskMailSchema, taskMailQueueStatus } from '../../../../../../server/notifications/taskMailOutbox.js';
+import { taskMailWorkerStatus } from '../../../../../../server/notifications/taskMailWorker.js';
 import { COMPONENTS, EVENT_SEVERITIES } from '../../../../../../domain/observability/eventModel.js';
 
 export const runtime = 'nodejs';
@@ -140,14 +142,36 @@ async function loadReminderSection(pool) {
   };
 }
 
+/**
+ * Atama bildirimi posta kuyruğu.
+ *
+ * Kuyruk Outlook'tan AYRIDIR: yalnızca görev panelindeki e-posta kutusu
+ * işaretlenerek kaydedilen işler buraya girer. Göç uygulanmamışsa bölüm
+ * "şema eksik" der; kuyruk okunamaması kuyruklar sayfasını düşürmez.
+ */
+async function loadAssignmentMailSection(pool) {
+  const worker = taskMailWorkerStatus();
+  try {
+    return { schemaReady: true, worker, queue: await taskMailQueueStatus(pool) };
+  } catch (error) {
+    if (isMissingTaskMailSchema(error)) return { schemaReady: false, worker, queue: null };
+    // Yalnızca BU bölüm okunamadı (ör. yeni tabloya izin verilmemiş, geçici
+    // hata). Hata `Promise.all` üzerinden bütün yanıtı düşürüyor; okunabilen
+    // Outlook, hatırlatma ve CN43N bölümleri de "Kuyruk durumu alınamadı"
+    // gösteriyordu. Kod sabittir, ham hata iletisi dışarı taşınmaz.
+    return { schemaReady: true, worker, queue: null, failureCode: 'QUEUE_READ_FAILED' };
+  }
+}
+
 /** Sistem Yönetimi · Kuyruklar ve İşler — YALNIZCA sistem yöneticisi. */
 export const GET = withRouteObservability('api.admin.system.queues', async () => {
   try {
     const { pool } = await loadSystemAdminContext();
-    const [outlook, corporateWbs, reminders] = await Promise.all([
+    const [outlook, corporateWbs, reminders, assignmentMail] = await Promise.all([
       loadOutlookSection(pool),
       loadCorporateWbsSection(pool),
-      loadReminderSection(pool)
+      loadReminderSection(pool),
+      loadAssignmentMailSection(pool)
     ]);
     return Response.json({
       ok: true,
@@ -156,6 +180,7 @@ export const GET = withRouteObservability('api.admin.system.queues', async () =>
       configuration: { thresholds: { queueAgeMinutes: queueAgeAlertMinutes() } },
       corporateWbs,
       reminders,
+      assignmentMail,
       telemetryWorker: telemetryWorkerStatus()
     }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {

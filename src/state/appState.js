@@ -239,6 +239,11 @@ function emptyApplicationData() {
     taskBaselineSnapshots: [],
     scheduleRequests: [],
     scheduleRequestSummary: { unreadCount: 0, pendingCount: 0 },
+    // Zil merkezinin öteki iki kaynağı. Her ikisi de yalnızca SINIRLI önizleme
+    // taşır; geçmiş Talepler sayfasında ayrıca sayfalanır.
+    assignmentCoordinations: [],
+    taskNotifications: [],
+    notificationSummary: { unreadCount: 0, pendingCount: 0 },
     // Görev atama kapsamındaki (görünür OLMAYAN) kurumsal projeler.
     assignableProjects: [],
     assignmentScopeSicils: [],
@@ -310,7 +315,19 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
       (value) => value?.id || `${value?.baselineId || ''}:${value?.taskId || ''}`
     ),
     scheduleRequestSummary: snapshot.scheduleRequestSummary || { unreadCount: 0, pendingCount: 0 },
-    scheduleRequests: reconcileSnapshotCollection(previous.scheduleRequests, snapshot.scheduleRequests)
+    scheduleRequests: reconcileSnapshotCollection(previous.scheduleRequests, snapshot.scheduleRequests),
+    // Kimlik, sayaçlar değişmedikçe korunur: `useAssignmentCoordinationQuery`
+    // özeti etki bağımlılığı olarak izler ve her otomatik yenilemede sayfayı
+    // sunucudan yeniden çekip "Kayıtlar yükleniyor…" gösteriyordu.
+    notificationSummary: reuseSnapshotValue(
+      previous.notificationSummary,
+      snapshot.notificationSummary || { unreadCount: 0, pendingCount: 0 }
+    ),
+    assignmentCoordinations: reconcileSnapshotCollection(
+      previous.assignmentCoordinations,
+      snapshot.assignmentCoordinations
+    ),
+    taskNotifications: reconcileSnapshotCollection(previous.taskNotifications, snapshot.taskNotifications)
   };
   // Bağlam görev BAŞINA değil, bir kez kurulur: birleştirilmiş `projects`,
   // `wbs` ve `people` dizileri her görev için yeniden ayrılınca maliyet

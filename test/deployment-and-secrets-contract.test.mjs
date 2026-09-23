@@ -215,7 +215,10 @@ test('korunan veri uçları sunucu tarafı yetkilendirmeyi korur', () => {
     read('src/server/repository/projectedSqlAppRepository.js'),
     /session: await baseRepository\.sessionContextFrom\(auth\)/
   );
-  assert.match(read('src/app/api/mergen-rota/commit/route.js'), /createOrderedSqlAppRepository\(\)\.commitChanges\(changes\)/);
+  assert.match(
+    read('src/app/api/mergen-rota/commit/route.js'),
+    /createOrderedSqlAppRepository\(\)\.commitChanges\(\{ \.\.\.changes, notifyAssignees \}\)/
+  );
 
   // Yetki kararı React bileşenlerine taşınmadı.
   const authorization = read('src/server/authorization/loadAuthorizationContext.js');

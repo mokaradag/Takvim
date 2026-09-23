@@ -9,6 +9,7 @@ const { DashboardView } = await import('../src/features/dashboard/DashboardView.
 const { ReportsView, PerformanceReportsView } = await import('../src/features/reports/ReportsView.jsx');
 const { TaskActivitiesView } = await import('../src/features/reports/TaskActivitiesView.jsx');
 const { ScheduleRequestsView } = await import('../src/features/schedule-change/ScheduleRequestsView.jsx');
+const { AssignmentCoordinationView } = await import('../src/features/assignment-coordination/AssignmentCoordinationView.jsx');
 const { DateRangeFilter } = await import('../src/components/DateRangeFilter.jsx');
 const { TaskOrganizationFilterProvider } = await import('../src/features/tasks/TaskOrganizationFilterContext.jsx');
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -99,9 +100,16 @@ test('Talepler bütün sekmelerinde Görev Hareketleri ile aynı tema tablosunu 
   const tabs = findElement(requests.output, (node) => node.props?.role === 'tablist').props.children;
   for (const tab of tabs) {
     tab.props.onClick(); requests.render();
+    // Atama Koordinasyonu sekmesi kendi görünümünü çizer; sığ çizimde ayrı
+    // bileşen olarak görünür ve aynı tema tablosu orada doğrulanır.
     const table = findElement(requests.output, (node) => node.type === 'table');
-    assert.ok(table.props.className.split(' ').includes('enterprise-table'));
+    if (table) assert.ok(table.props.className.split(' ').includes('enterprise-table'));
+    else assert.ok(findElement(requests.output, (node) => node.type === AssignmentCoordinationView));
   }
+  const coordination = mountComponent(AssignmentCoordinationView, {});
+  t.after(() => coordination.unmount());
+  assert.ok(findElement(coordination.output, (node) => node.type === 'table')
+    .props.className.split(' ').includes('enterprise-table'));
   assert.ok(findElement(activities.output, (node) => node.type === 'table').props.className.split(' ').includes('enterprise-table'));
   assert.equal(declaration('.enterprise-table thead th', 'background'), 'var(--enterprise-header)');
   assert.equal(declaration('.request-tabs button[aria-selected="true"]', 'background'), 'var(--enterprise-selected)');

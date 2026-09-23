@@ -1,20 +1,32 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { markScheduleNotifications } from '../../data/api/scheduleChangeClient.js';
+import {
+  decideAssignmentCoordinationRequest,
+  markNotificationItems
+} from '../../data/api/assignmentCoordinationClient.js';
 import { Icons } from '../../components/icons.jsx';
 import { fmt } from '../../scheduling/dates/index.js';
-import { useScheduleRequests, useScheduleRequestSummary, useTaskActions } from '../../state/hooks/index.js';
+import {
+  useAssignmentCoordinations,
+  useNotificationSummary,
+  useScheduleRequests,
+  useScheduleRequestSummary,
+  useTaskActions,
+  useTaskNotifications
+} from '../../state/hooks/index.js';
+import { AssignmentCoordinationDialog } from '../assignment-coordination/AssignmentCoordinationDialog.jsx';
+import {
+  NOTIFICATION_SOURCES,
+  SCHEDULE_STATUS_LABELS,
+  notificationCenterCounts,
+  notificationCenterItems
+} from '../notifications/notificationCenterItems.js';
 import { SCHEDULE_DATE_ROWS, requestDates, scheduleDifferenceSummary } from './scheduleChangePresentation.js';
 import { reduceScheduleRequestCenterOpen, scheduleRequestCenterViewState } from './scheduleRequestCenterState.js';
 import { useModalFocusTrap } from './useModalFocusTrap.js';
 
-export const STATUS_LABELS = Object.freeze({
-  PENDING: 'Bekliyor',
-  ACCEPTED: 'Kabul edildi',
-  REJECTED: 'Reddedildi',
-  CANCELLED: 'Değiştirildi',
-  STALE: 'Güncelliğini yitirdi'
-});
+export const STATUS_LABELS = SCHEDULE_STATUS_LABELS;
 
 function requestHeadline(request) {
   if (request.status === 'PENDING') return 'Tarih değişikliği talebi';
@@ -146,28 +158,53 @@ export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask,
 }
 
 /**
- * Tarih değişikliği taleplerini ve kalıcı karar bildirimlerini sunar.
+ * BİRLEŞİK bildirim merkezi.
+ *
+ * Zil tektir: tarih değişikliği talebi, atama koordinasyonu ve atama olayı aynı
+ * panelde, aynı okundu/temizlendi anlambilimiyle görünür. İkinci bir bildirim
+ * altyapısı yoktur; her kaynak yalnızca sınırlı bir önizleme taşır ve tam
+ * geçmiş Talepler sayfasında ayrıca sayfalanır.
  */
 export function ScheduleRequestCenter({ onNavigate }) {
   const requests = useScheduleRequests();
+  const coordinations = useAssignmentCoordinations();
+  const taskEvents = useTaskNotifications();
   const { decideScheduleChange, openTask, reloadData } = useTaskActions();
   const summary = useScheduleRequestSummary();
+  const notificationSummary = useNotificationSummary();
   const [notificationError, setNotificationError] = useState(null);
   const [marking, setMarking] = useState(false);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [selectedCoordination, setSelectedCoordination] = useState(null);
   const rootRef = useRef(null);
   const toggleRef = useRef(null);
   const popoverRef = useRef(null);
-  const pendingCount = summary.pendingCount;
-  const unreadCount = summary.unreadCount;
-  const listed = requests.slice(0, 8);
+  const counts = notificationCenterCounts(summary, notificationSummary);
+  const pendingCount = counts.pendingCount;
+  const unreadCount = counts.unreadCount;
+  const listed = useMemo(
+    () => notificationCenterItems({
+      scheduleRequests: requests,
+      assignmentCoordinations: coordinations,
+      taskNotifications: taskEvents
+    }),
+    [requests, coordinations, taskEvents]
+  );
   const mark = async (items, action = 'read') => {
     if (!items.length || marking) return;
     setMarking(true); setNotificationError(null);
     try {
-      const result = await markScheduleNotifications(items, action);
-      if (!result.ok) setNotificationError(result.message);
+      // Kayıtlar kaynağına göre kendi ucuna gider; sürüm ve sahiplik kuralları
+      // her kaynakta ayrı uygulanır.
+      const scheduleItems = items.filter((item) => item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST);
+      const otherItems = items.filter((item) => item.source !== NOTIFICATION_SOURCES.SCHEDULE_REQUEST);
+      const results = await Promise.all([
+        scheduleItems.length ? markScheduleNotifications(scheduleItems, action) : { ok: true },
+        otherItems.length ? markNotificationItems(otherItems, action) : { ok: true }
+      ]);
+      const failure = results.find((result) => !result.ok);
+      if (failure) setNotificationError(failure.message);
       else await reloadData?.({ preserveFailedTaskUpdates: true });
     } catch (error) { setNotificationError(error.message || 'Bildirim güncellenemedi.'); }
     finally { setMarking(false); }
@@ -176,7 +213,7 @@ export function ScheduleRequestCenter({ onNavigate }) {
     hasRequests,
     isOpen: requestCenterOpen,
     disabled: requestToggleDisabled
-  } = scheduleRequestCenterViewState(requests, open);
+  } = scheduleRequestCenterViewState(listed, open);
 
   useModalFocusTrap({ containerRef: popoverRef, initialFocusRef: popoverRef, restoreFocusRef: toggleRef,
     onClose: () => setOpen(false), enabled: requestCenterOpen });
@@ -203,35 +240,62 @@ export function ScheduleRequestCenter({ onNavigate }) {
           ref={toggleRef}
           className="icon-btn schedule-request-toggle"
           type="button"
-          aria-label={`${unreadCount} okunmamış bildirim, ${pendingCount} bekleyen tarih talebi`}
+          aria-label={`${unreadCount} okunmamış bildirim, ${pendingCount} kararınızı bekleyen kayıt`}
           aria-expanded={requestCenterOpen}
           disabled={requestToggleDisabled}
           onClick={() => setOpen((current) => reduceScheduleRequestCenterOpen(current, { type: 'toggle', hasRequests }))}
-          title={hasRequests ? 'Tarih talepleri' : 'Tarih talebi bulunmuyor'}
+          title={hasRequests ? 'Bildirimler' : 'Bildirim bulunmuyor'}
         >
           <Icons.Bell size={15} />
           {unreadCount > 0 && <span className="schedule-request-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
-          {pendingCount > 0 && <span className="schedule-action-dot" title="Kararınızı bekleyen talepler var" />}
+          {pendingCount > 0 && <span className="schedule-action-dot" title="Kararınızı bekleyen kayıtlar var" />}
         </button>
         {requestCenterOpen && (
-          <section ref={popoverRef} tabIndex={-1} className="schedule-request-popover" role="dialog" aria-label="Tarih talepleri">
+          <section ref={popoverRef} tabIndex={-1} className="schedule-request-popover" role="dialog" aria-label="Bildirimler">
             <header>
-              <div><strong>Bildirimler</strong><small>{pendingCount ? `${pendingCount} talep kararınızı bekliyor` : 'Son tarih talebi bildirimleri'}</small></div>
+              <div><strong>Bildirimler</strong><small>{pendingCount ? `${pendingCount} kayıt kararınızı bekliyor` : 'Son bildirimler'}</small></div>
               <span>{unreadCount} yeni</span>
             </header>
             <div className="schedule-request-list">
-              {listed.map((request) => {
-                const summary = scheduleDifferenceSummary(
-                  requestDates(request, 'original'),
-                  requestDates(request, 'proposed')
-                )[0];
+              {listed.map((item) => {
+                const scheduleSummary = item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST
+                  ? scheduleDifferenceSummary(requestDates(item, 'original'), requestDates(item, 'proposed'))[0]
+                  : null;
                 return (
-                  <button type="button" className="schedule-request-card" key={request.id} onClick={() => { setSelected(request); setOpen(false); mark([request]); }}>
-                    <span className={`schedule-status ${request.status.toLowerCase()}`}>{STATUS_LABELS[request.status] || request.status}</span>
-                    <strong>{request.isDecisionOwner && request.status === 'PENDING' ? 'Kararınız bekleniyor' : requestHeadline(request)}{request.unread && <span className="schedule-new-label">Yeni</span>}</strong>
-                    <small>{request.isRequester ? request.taskTitle : `${request.requesterName} · ${request.taskTitle}`}</small>
-                    <span>{summary || 'Plan tarihleri için değişiklik'}</span>
-                    <time>{request.createdAt ? new Date(request.createdAt).toLocaleString('tr-TR') : ''}</time>
+                  <button type="button" className="schedule-request-card" key={`${item.source}:${item.id}`} onClick={async () => {
+                    const taskEvent = item.source === NOTIFICATION_SOURCES.TASK_EVENT;
+                    if (!taskEvent) setOpen(false);
+                    if (item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST) setSelected(item);
+                    else if (item.source === NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION) setSelectedCoordination(item);
+                    // Atama olayı bildirim kartıdır: tıklama görevi açar ve
+                    // erişim olağan yetkili yükleme yolunda yeniden denetlenir.
+                    // Sorumluluğu kaldırılan kişi görevi çoğu zaman artık
+                    // göremez; başarısızlık YUTULMAZ. Panel de ancak görev
+                    // gerçekten açıldığında kapanır, yoksa ileti görünmezdi.
+                    let openFailure = null;
+                    if (taskEvent && item.taskId) {
+                      try {
+                        const result = await openTask?.(item.taskId);
+                        if (result?.ok === false) openFailure = result.error?.message || 'Görev açılamadı.';
+                      } catch (openError) {
+                        openFailure = openError?.message || 'Görev açılamadı.';
+                      }
+                    }
+                    if (taskEvent && !openFailure) setOpen(false);
+                    // `mark` başlarken hatayı temizler; açma başarısızlığı bu
+                    // yüzden turdan SONRA yazılır.
+                    await mark([item]);
+                    if (openFailure) setNotificationError(openFailure);
+                  }}>
+                    <span className={`schedule-status ${item.statusClass}`}>{item.statusLabel}</span>
+                    <strong>{item.headline}{item.unread && <span className="schedule-new-label">Yeni</span>}</strong>
+                    <small>{item.subtitle}</small>
+                    {/* Yedek metin YALNIZCA tarih talebine aittir: künyesi boş
+                        bir atama bildirimi "Plan tarihleri için değişiklik"
+                        diyerek kendi başlığıyla çelişiyordu. */}
+                    <span>{scheduleSummary || item.detail
+                      || (item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST ? 'Plan tarihleri için değişiklik' : '')}</span>
+                    <time>{item.sortAt ? new Date(item.sortAt).toLocaleString('tr-TR') : ''}</time>
                   </button>
                 );
               })}
@@ -251,6 +315,19 @@ export function ScheduleRequestCenter({ onNavigate }) {
           onClose={() => setSelected(null)}
           onDecide={decideScheduleChange}
           onOpenTask={openTask}
+          restoreFocusRef={toggleRef}
+        />
+      )}
+      {selectedCoordination && (
+        <AssignmentCoordinationDialog
+          record={coordinations.find((item) => item.id === selectedCoordination.id) || selectedCoordination}
+          onClose={() => setSelectedCoordination(null)}
+          onOpenTask={openTask}
+          onDecide={async (coordinationId, payload) => {
+            const result = await decideAssignmentCoordinationRequest(coordinationId, payload);
+            if (result.ok) await reloadData?.({ preserveFailedTaskUpdates: true });
+            return result;
+          }}
           restoreFocusRef={toggleRef}
         />
       )}

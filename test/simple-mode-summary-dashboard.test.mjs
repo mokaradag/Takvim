@@ -174,7 +174,9 @@ test('Temel KPI penceresi yalnızca Temel sütunlarını çizer', () => withSimp
 }));
 
 test('Temel KPI penceresi sütun süzgeçlerini, Sicil ayrımını ve sayfalamayı korur', () => withSimpleModal((view) => {
-  assert.deepEqual(rows(view).map((row) => row.key), ['a', 'b']);
+  // Varsayılan sıralama TERMİN alanına göre eskiden yeniye: 'b' (15 Eylül)
+  // 'a'dan (25 Eylül) önce gelir.
+  assert.deepEqual(rows(view).map((row) => row.key), ['b', 'a']);
 
   column(view, 'Kısa açıklama').props.onFilter(['Teklif']); view.render();
   assert.deepEqual(rows(view).map((row) => row.key), ['a']);
@@ -237,8 +239,9 @@ test('Temel KPI penceresi kurumsal süzgeci, temizlemeyi ve görev açmayı koru
     assert.equal(rows(view).length, 2);
     assert.equal(organization().selection.directorate, '');
 
+    // Temizleme varsayılan sıralamaya döner: en yakın terminli görev başta.
     findElement(view.output, (node) => node.props?.className === 'detail-task-link').props.onClick();
-    assert.equal(opened.id, 'a');
+    assert.equal(opened.id, 'b');
   } finally { view.unmount(); delete globalThis[CLIENT_STATE]; }
 });
 
@@ -266,7 +269,7 @@ test('Kapsamlı KPI penceresi zengin sütunlarını ve etkin tarih açıklaması
     title: 'Toplam görev', tasks, referenceDay: REFERENCE_DAY, onClose() {}, onOpenTask() {}
   });
   try {
-    assert.deepEqual(headerLabels(view), ['Görev', 'Proje', 'Sorumlu', 'Durum', 'Başlangıç', 'Bitiş', 'Hedef']);
+    assert.deepEqual(headerLabels(view), ['Görev', 'Proje', 'Sorumlu', 'Durum', 'Öncelik', 'Başlangıç', 'Bitiş', 'Hedef']);
     assert.equal(findElement(view.output, (node) => node.type === TaskTablePagination).props.showDateLegend, true);
     // Gerçekleşen başlangıç planı ezer: etkin tarih davranışı sürer.
     column(view, 'Başlangıç').props.onFilter({ mode: 'range', from: '2013-03-07', to: '2013-03-07' }); view.render();

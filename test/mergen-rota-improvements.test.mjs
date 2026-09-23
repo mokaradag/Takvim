@@ -794,7 +794,7 @@ test('sekme kapatılırken bekleyen düzenlemeler kaybolmaz', () => {
   assert.match(guard, /const isSaving = pendingMutationCount > 0;/);
   // Son yazma sayfa boşaltılırken iptal edilmemelidir.
   assert.match(guard, /flushPendingChanges\(\{ keepalive: true \}\)/);
-  assert.match(read('src/data/api/createApiRepository.js'), /async commitChanges\(changes, \{ keepalive = false \} = \{\}\)/);
+  assert.match(read('src/data/api/createApiRepository.js'), /async commitChanges\(changes, \{ keepalive = false, notifyAssignees = false \} = \{\}\)/);
   assert.match(root, /<UnsavedChangesGuard \/>/);
 });
 

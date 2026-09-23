@@ -1119,6 +1119,15 @@
 .schedule-status.cancelled,
 .schedule-status.modified,
 .schedule-status.stale { color: var(--text-dim); }
+/* Atama koordinasyonu durumları aynı rozet dilini kullanır; ikinci bir görsel
+   sözlük tanımlanmaz. */
+.schedule-status.coordination-pending { color: var(--c-amber); }
+.schedule-status.coordination-approved { color: var(--status-done); }
+.schedule-status.coordination-rejected { color: var(--status-overdue); }
+.schedule-status.coordination-change_requested { color: var(--accent); }
+.schedule-status.coordination-cancellation_requested { color: var(--c-amber); }
+.schedule-status.coordination-cancelled,
+.schedule-status.coordination-stale { color: var(--text-dim); }
 .schedule-request-center { position: relative; }
 .schedule-request-toggle { position: relative; }
 .schedule-request-badge { position: absolute; top: -4px; right: -5px; display: grid; min-width: 15px; height: 15px; place-items: center; padding: 0 3px; border: 2px solid var(--bg-elev); border-radius: 999px; background: var(--c-amber); color: #211600; font-size: 8px; font-weight: 800; }
@@ -1220,6 +1229,23 @@
 .kanban-page > .tasks-toolbar { flex-shrink: 0; }
 .kanban-page > .kanban { height: auto; flex: 1; min-height: 0; }
 .kanban-filter-count { margin-left: auto; font-size: 12px; white-space: nowrap; }
+/* Pano başlığındaki sıralama düğmesi sayacın yanında durur ve panoya dikey
+   yükseklik EKLEMEZ: yükseklik başlık satırının kendi yüksekliğidir. */
+.kanban-sort-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.kanban-sort-toggle:hover { color: var(--text); background: var(--bg-hover); }
+.kanban-sort-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .gantt-assignee-row { align-items: flex-start; }
 .gantt-assignee-list { display: grid; gap: 6px; min-width: 0; }
 .gantt-assignee { display: flex; align-items: center; gap: 7px; text-align: left; }
@@ -1274,6 +1300,161 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
 .request-tabs button span { background: var(--bg-hover); border-radius: 10px; padding: 1px 6px; font-size: 10px; }
 .requests-panel { padding: 0 18px 14px; }
 .request-filters label { flex-basis: 140px; }
+
+/* ── Atama koordinasyonu ──────────────────────────────────── */
+.coordination-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.coordination-project-filter {
+  display: flex;
+  flex: 1 1 160px;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.coordination-table td small { display: block; margin-top: 3px; font-size: 10.5px; }
+.coordination-modal { width: min(640px, calc(var(--app-viewport-w, 100vw) * .94)); }
+.coordination-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 18px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elev-2);
+}
+.coordination-facts > div { display: grid; gap: 2px; min-width: 0; }
+.coordination-facts dt { color: var(--text-dim); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; }
+.coordination-facts dd { margin: 0; display: grid; gap: 1px; min-width: 0; }
+.coordination-facts strong { color: var(--text); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.coordination-facts small { color: var(--text-dim); font-size: 10.5px; }
+.coordination-suggestion { display: grid; gap: 6px; margin-top: 14px; }
+.coordination-suggestion .label { color: var(--text-muted); font-size: 11.5px; font-weight: 650; }
+.coordination-suggestion p { margin: 0; font-size: 10.5px; }
+
+/* ── Kurum dışı personel seçimi ───────────────────────────── */
+.external-assignee { display: grid; gap: 8px; margin-top: 8px; }
+.external-assignee-body { display: grid; gap: 6px; }
+.external-assignee-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.external-assignee-pending { display: grid; gap: 6px; }
+.external-assignee-pending .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--c-amber);
+  font-size: 11px;
+  font-weight: 650;
+}
+.external-assignee-pending p { margin: 0; font-size: 10.5px; }
+.external-assignee-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 9px;
+  border: 1px dashed color-mix(in oklab, var(--c-amber) 55%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-amber) 8%, transparent);
+  font-size: 11.5px;
+}
+.external-assignee-chip small { color: var(--text-dim); font-size: 10px; }
+
+/* ── Kurumsal dizin araması ───────────────────────────────── */
+.directory-search { display: grid; gap: 6px; min-width: 0; }
+.directory-search-input { width: 100%; }
+.directory-selected {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 9px;
+  border: 1px solid color-mix(in oklab, var(--status-done) 45%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--status-done) 8%, transparent);
+  color: var(--text);
+  font-size: 11.5px;
+  width: fit-content;
+}
+.directory-selected small { color: var(--text-dim); font-size: 10px; }
+.directory-results { display: grid; gap: 2px; max-height: 208px; overflow-y: auto; scrollbar-gutter: stable; }
+.directory-results p { margin: 2px 0; font-size: 11.5px; }
+.directory-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 10px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.directory-result:hover { background: var(--bg-hover); }
+.directory-result:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.directory-result[aria-selected="true"] { border-color: var(--accent); }
+.directory-result-name { font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+.directory-result-sicil { color: var(--text-dim); font-size: 10.5px; }
+.directory-result-org { grid-column: 1 / -1; color: var(--text-dim); font-size: 10.5px; overflow-wrap: anywhere; }
+
+/* ── Anahtar (switch) ─────────────────────────────────────── */
+.switch-field { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.switch-field input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.switch-track {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--bg-elev-2);
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 140ms ease, background 140ms ease;
+}
+.switch-field input:checked + .switch-track { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 30%, transparent); }
+.switch-field input:checked + .switch-track .switch-thumb { transform: translateX(13px); background: var(--accent); }
+.switch-field input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch-field input:disabled + .switch-track { opacity: .5; }
+.switch-label { color: var(--text-muted); font-size: 11.5px; font-weight: 600; }
+
+/* ── Kaydet yanındaki e-posta seçeneği ────────────────────── */
+.assignee-mail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.assignee-mail-toggle input { accent-color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-track, .switch-thumb { transition: none; }
+}
 .schedule-inbox-actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 12px; border-top: 1px solid var(--border); }
 .schedule-inbox-actions > :last-child { width: 100%; justify-content: space-between; }
 .schedule-action-dot { position: absolute; bottom: 3px; right: 3px; width: 5px; height: 5px; background: var(--accent); border-radius: 50%; }

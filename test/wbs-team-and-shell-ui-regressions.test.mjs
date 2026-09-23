@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { NAV_ITEMS, SIMPLE_LANDING_VIEW, initialLandingView } from '../src/components/shell/navigation.js';
 import { buildWbsTree, flattenWbsTree, selectWbsRollupIndex, selectWbsTaskRollup } from '../src/domain/selectors/index.js';
 import { DEFAULT_WBS_DEPTH, WBS_DEPTH_OPTIONS, expandedIdsForDepth } from '../src/features/wbs/wbsTreeViewPolicy.js';
 import {
@@ -204,6 +205,46 @@ test('Temel Kip gezinmesi Görevler ve Talepleri içerir, Gantt yalnızca Kapsam
   const tasksCase = source.match(/case 'veri':([\s\S]*?)(?=\n\s*case 'wbs':)/)?.[1] || '';
   assert.match(tasksCase, /return\s+simpleMode\s*\?\s*<SimpleTasksView\b[^>]*onNewTask=/);
   assert.match(tasksCase, /:\s*<TasksView\s*\/>/);
+});
+
+/* ── Kabuk · Ayarlar'daki açılış sayfası ─────────────────────────── */
+
+test('açılış sayfası SAKLANAN tercihten gelir; Özet\'e sabitlenmez', () => {
+  // Kabuk `TWEAK_DEFAULTS.landingView` okuyordu: kullanıcı Ayarlar'dan başka
+  // bir sayfa seçse de her açılış ve her yenileme Özet ile başlıyordu.
+  assert.equal(initialLandingView({ appMode: 'advanced', landingView: 'kanban' }), 'kanban');
+  assert.equal(initialLandingView({ appMode: 'advanced', landingView: 'gantt' }), 'gantt');
+  assert.equal(initialLandingView({ appMode: 'advanced', landingView: 'kisi' }), 'kisi');
+});
+
+test('açılış sayfası tercihi geçersiz, boş ya da yönetici sayfasıysa Özet\'e düşer', () => {
+  for (const landingView of ['', null, undefined, 'bilinmeyen', 'sistem']) {
+    assert.equal(initialLandingView({ appMode: 'advanced', landingView }), 'ozet');
+  }
+  // Temel Kip bu tercihi kullanmaz; ayarın açıklaması da Kapsamlı Kip der.
+  assert.equal(initialLandingView({ appMode: 'simple', landingView: 'gantt' }), SIMPLE_LANDING_VIEW);
+  assert.equal(initialLandingView(), 'ozet');
+});
+
+test('kabuk ilk görünümü saklanan tercihten türetir', () => {
+  const source = read('src/components/shell/AppShell.jsx');
+  assert.match(source, /useState\(\(\) => initialLandingView\(t\)\)/);
+  assert.equal(/TWEAK_DEFAULTS\.landingView/.test(source), false,
+    'açılış sayfası varsayılandan değil, saklanan tercihten okunmalıdır');
+});
+
+test('Ayarlar\'daki açılış sayfası seçenekleri gezinmede gerçekten bulunur', () => {
+  const options = read('src/features/settings/SettingsView.jsx')
+    .match(/const landingOpts = \[([\s\S]*?)\];/)?.[1] || '';
+  // Her tırnaklı kimlik yakalanır: `foo-bar` gibi bir kimlik dar bir desenle
+  // atlanıp hem gezinme hem açılış denetiminden kaçabilirdi.
+  const ids = [...options.matchAll(/\['([^']+)',/g)].map((match) => match[1]);
+  assert.equal(ids.length, (options.match(/\[/g) || []).length, 'her seçenek satırı bir kimlik taşımalıdır');
+  assert.ok(ids.length >= 7);
+  for (const id of ids) {
+    assert.equal(NAV_ITEMS.some((item) => item.id === id), true, id);
+    assert.equal(initialLandingView({ appMode: 'advanced', landingView: id }), id);
+  }
 });
 
 test('vurgu rengi kataloğu Türkçe "Kehribar" adını kullanır', () => {

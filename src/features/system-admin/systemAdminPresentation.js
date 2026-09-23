@@ -120,6 +120,41 @@ export function baselineNarrative(comparison, { unit = 'ms' } = {}) {
   return `${base} · ${direction}${change}%`;
 }
 
+/**
+ * Varlık tablosunun başvuru anı: sunucunun yanıt anı, yoksa tarayıcı saati.
+ *
+ * `lastSeenAt` ve `sessionStartedAt` SQL Server saatiyle yazılır; aynı saatle
+ * karşılaştırılmadıklarında istemci saat sapması aktiflik noktasını ve süreyi
+ * bozar.
+ */
+export function presenceReferenceMs(generatedAt, fallback = Date.now()) {
+  const reference = generatedAt ? Date.parse(generatedAt) : NaN;
+  return Number.isFinite(reference) ? reference : fallback;
+}
+
+/**
+ * Kesintisiz etkinlik süresi.
+ *
+ * Damga okunamazsa "—" döner; saat/dakika ayrımı bilinçli olarak kabadır,
+ * saniye gösterilmez.
+ */
+export function presenceDuration(startedAt, now = Date.now()) {
+  const started = startedAt ? Date.parse(startedAt) : NaN;
+  if (!Number.isFinite(started) || started > now) return '—';
+  const minutes = Math.max(0, Math.round((now - started) / 60000));
+  if (minutes < 60) return `${minutes} dk`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} sa ${remainder} dk` : `${hours} sa`;
+}
+
+/** Son görülme damgası (yerel saat). */
+export function presenceTimestamp(value) {
+  if (!value) return '—';
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toLocaleTimeString('tr-TR') : '—';
+}
+
 /** Bileşen/uyarı ağırlığına göre sıralama anahtarı (büyük değer önce gösterilir). */
 export function attentionSortKey(item) {
   const severity = normalizeSeverity(item?.severity);

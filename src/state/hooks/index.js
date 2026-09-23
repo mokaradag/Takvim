@@ -49,6 +49,10 @@ export function useCalendars() { return useAppState().calendars; }
 const EMPTY_SCHEDULE_SUMMARY = Object.freeze({ unreadCount: 0, pendingCount: 0 });
 export function useScheduleRequestSummary() { return useAppState().scheduleRequestSummary || EMPTY_SCHEDULE_SUMMARY; }
 export function useScheduleRequests() { return useAppState().scheduleRequests || []; }
+/** Zilin öteki iki kaynağı: atama koordinasyonu ve görev bildirimi. */
+export function useAssignmentCoordinations() { return useAppState().assignmentCoordinations || []; }
+export function useTaskNotifications() { return useAppState().taskNotifications || []; }
+export function useNotificationSummary() { return useAppState().notificationSummary || EMPTY_SCHEDULE_SUMMARY; }
 /**
  * Oturum açmış kullanıcı. Gerçek Sistem'de sunucunun doğruladığı Keycloak
  * oturumundan gelir; tarayıcı bu değeri uyduramaz.

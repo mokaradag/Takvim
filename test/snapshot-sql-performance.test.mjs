@@ -317,7 +317,7 @@ test('görev oluşturan dizini hem kurulumda hem göçte tanımlıdır ve göç 
   // Yeni kurulum ile yükseltilen kurulum AYNI dizini alır.
   assert.match(createSql, definition);
   assert.match(upgrade, definition);
-  assert.match(createSql, /\(N'0014_task_creator_index', N'[^']+'\);/);
+  assert.match(createSql, /\(N'0014_task_creator_index', N'[^']+'\),/);
 
   // Göç yinelenebilir ve sıralıdır: 0013 uygulanmadan çalışmaz.
   assert.match(upgrade, /IF NOT EXISTS \(\s+SELECT 1 FROM sys\.indexes\s+WHERE object_id = OBJECT_ID\(N'dbo\.MR_Tasks'\) AND name = N'IX_MR_Tasks_CreatedBySicil'\s+\)\s+CREATE INDEX/);

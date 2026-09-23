@@ -28,13 +28,22 @@ export function filterKpiTasks(tasks, { search = '', project = '', assignee = ''
     && taskTableMatches(task, { search, filters, dateMode }, null, referenceDay));
 }
 
+/**
+ * Varsayılan sıralama: kanonik hedef bitiş alanına göre ESKİDEN YENİYE.
+ *
+ * Alan iki kipte de aynıdır; yalnızca adı değişir (Kapsamlı "Hedef", Temel
+ * "Termin"). Tarihi olmayan görev her yönde en altta kalır ve eşitlikte başlık
+ * ile kimlik kararlı bir sıra üretir. Kullanıcı sıralamayı değiştirebilir.
+ */
+export const KPI_DEFAULT_SORT_KEY = 'targetFinish';
+
 export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRef, referenceDay = today(), variant = 'advanced' }) {
   const profile = resolveDashboardVariant(variant);
   const tableColumns = profile.kpiColumns;
   const [filters, setFilters] = useState({ search: '', project: '', assignee: '' });
   const [columnFilters, setColumnFilters] = useState({});
   const [organizationSelection, setOrganizationSelection] = useState(createEmptyOrgFilter);
-  const [sort, setSort] = useState({ key: '', dir: 'asc' });
+  const [sort, setSort] = useState({ key: profile.kpiDefaultSortKey || KPI_DEFAULT_SORT_KEY, dir: 'asc' });
   const [error, setError] = useState(null);
   const selectedTask = useSelectedTask();
   const directory = useAllPeople();
@@ -81,15 +90,18 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
   };
   const filtered = useMemo(() => {
     const result = filterKpiTasks(candidates, { filters: columnFilters, dateMode: profile.kpiDateMode }, referenceDay);
-    if (!sort.key) return result;
     const value = (task) => {
       if (sort.key === 'sorumlu') return (task.sorumlu || []).join(', ');
       if (sort.key === 'status') return getStatus(task, referenceDay).label;
       if (sort.key === 'priority') return resolvePriority(task.priority).order;
       return taskSortValue(task, sort.key, profile.kpiDateMode);
     };
+    // Sıralama KARARLIDIR: eşit değerler kaynak sıradaki (belirlenimci) yerini
+    // korur, çünkü `Array.prototype.sort` ES2019'dan beri kararlıdır. Ek bir
+    // ayraç anahtarı, eşit tarihli görevleri başlığa göre yeniden dizerdi.
     return result.sort((left, right) => {
       const a = value(left), b = value(right);
+      // Değeri olmayan görev her iki yönde de EN ALTTA kalır.
       if (a == null || a === '') return b == null || b === '' ? 0 : 1;
       if (b == null || b === '') return -1;
       const delta = typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), 'tr');
@@ -108,6 +120,7 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
     setFilters({ search: '', project: '', assignee: '' });
     setColumnFilters({});
     setOrganizationSelection(createEmptyOrgFilter());
+    setSort({ key: profile.kpiDefaultSortKey || KPI_DEFAULT_SORT_KEY, dir: 'asc' });
   };
   const openTask = async (task) => {
     setError(null);

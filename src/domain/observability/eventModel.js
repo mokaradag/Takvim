@@ -75,6 +75,7 @@ export const ADMIN_TABS = Object.freeze({
   QUEUES: 'kuyruklar',
   EVENTS: 'olaylar',
   INTEGRATIONS: 'entegrasyonlar',
+  PRESENCE: 'aktif-kullanicilar',
   REMINDERS: 'hatirlatma'
 });
 

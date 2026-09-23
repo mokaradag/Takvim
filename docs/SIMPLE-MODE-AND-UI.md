@@ -49,8 +49,12 @@ Sıra şudur: yetkili/görünür görevler → çalışma alanı ve proje kapsam
 
 | Kip | Sütunlar |
 | --- | --- |
-| Kapsamlı | Görev, Proje, Sorumlu, Durum, Başlangıç, Bitiş, Hedef |
+| Kapsamlı | Görev, Proje, Sorumlu, Durum, **Öncelik**, Başlangıç, Bitiş, Hedef |
 | Temel | Proje, Görev, Kısa açıklama, Sorumlular, Öncelik, Durum, Termin |
+
+**Öncelik** sütunu iki kipte de bulunur ve `domain/constants · PRIORITIES` kanonik kataloğunu kullanır; süzme ve sıralama Görevler tablosuyla aynı modeldir, ikinci bir öncelik uygulaması yoktur.
+
+Pencere **kanonik hedef bitiş alanına göre eskiden yeniye** açılır. Alan iki kipte aynıdır, yalnızca adı değişir (Kapsamlı **Hedef**, Temel **Termin**). Tarihi olmayan görev her iki yönde de en altta kalır, eşitlikte sıra kararlıdır ve kullanıcı istediği sütuna geçebilir. **Filtreleri Temizle** sıralamayı da bu varsayılana döndürür.
 
 Temel sütun kümesi `SIMPLE_TASK_COLUMNS` sözleşmesinden türetilir; Görevler sayfasıyla ayrışamaz. `ADVANCED_ONLY_TASK_FIELDS` alanlarının hiçbiri Temel DOM'una girmez — CSS ile gizlenmez, hiç çizilmez. Planlanan/gerçekleşen tarih açıklaması (**✓ Gerçekleşen tarih**) Temel Kipte gösterilmez.
 
@@ -645,7 +649,7 @@ Taslakta proje değişince alan yetkileri birikmiş düzenlemeye göre yeniden h
 
 ## Talepler ve bildirim önizlemesi
 
-Her iki kipte düz **Talepler** sayfasının Bekleyenler, Gönderdiklerim ve Geçmiş sekmeleri vardır. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+Her iki kipte düz **Talepler** sayfasının Gelenler, Gönderdiklerim, Geçmiş ve **Atama Koordinasyonu** sekmeleri vardır; kurum dışı atama için ayrı bir kenar çubuğu sayfası açılmaz. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır ve tarih talepleri, atama koordinasyonu ile atama bildirimlerini **tek listede** birleştirir — ikinci bir zil yoktur. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
 
 ## Özet KPI ayrıntı penceresi
 
@@ -685,3 +689,53 @@ Direktörlük/Müdürlük/Birim zinciri pencerenin mevcut görev kümesinden ür
 **Projeler** kartı sayfada 5, **Portföy sağlığı** kartı 6 proje gösterir. Her birinin ilk/önceki/sonraki/son kontrolleri ve gösterilen kayıt aralığı bağımsızdır. RAG toplamları tüm süzülmüş portföyü kapsar. **Ekip iş yükü** ve **Yaklaşan teslimler** ayrı **Göster** seçimleriyle 5 (varsayılan), 10, 20 veya 50 sonuç sunar. Sıralama ve iş yükü hesapları korunur.
 
 Temel Kip görev tablosunda Görev sütunu alanın %34'ünü, Sorumlular %8, Öncelik %6 ve Termin %8'ini kullanır. Uzun metinler satıra sarılır; işlem düğmeleri kendi sütununda kalır.
+
+## Atama koordinasyonu arayüzü
+
+Görev panelinin sorumlu bölümünde **Diğer birimlerden personel göster** anahtarı
+vardır. Varsayılan **kapalıdır**: liste eskisi gibi yalnızca atama kapsamındaki
+personeli gösterir. Açıldığında arama kutusu en az iki karakterden sonra
+gecikmeli olarak sunucudaki hafif dizin aramasını çağırır; sonuçlar sınırlıdır ve
+her satır adın yanında kurumsal yolu gösterir, böylece aynı adlı iki çalışan
+ayırt edilebilir. Seçim her zaman **Sicil** ile yapılır.
+
+Kapsam dışı bir kişi seçildiğinde panel bunu gizlemez: seçim, kaydetmenin
+doğrudan atama değil **koordinasyon talebi** oluşturacağını söyleyen kısa bir
+satırla birlikte gösterilir ve isteğe bağlı bir açıklama kutusu açılır. Kaydet
+düğmesinin dili değişmez; talep, görev kaydı başarılı olduktan sonra aynı akış
+içinde gönderilir.
+
+**Talepler → Atama Koordinasyonu** sekmesi kayıtları sunucuda sayfalar. Süzgeçler
+arama, durum, proje, talep eden, sorumlu, kurumsal yol ve tarih aralığıdır;
+tablo Talepler sayfasının diğer sekmeleriyle aynı nötr yüzeyleri, aynı yapışkan
+başlığı ve aynı boş durum dilini kullanır. Satır, kararı veren yönetici için dört
+eylem taşıyan sade bir pencere açar: **Onayla**, **Değişiklik İste**, **Reddet**,
+**Atamanın Kaldırılmasını İste**. Değişiklik isterken yerine önerilecek kişi
+seçilebilir. Pencere mevcut kip sözleşmesini izler: Escape kapatır, odak içeride
+tutulur, çağırana geri verilir ve açık/koyu tema ile yazı ölçeği ortak
+değişkenlerden gelir.
+
+## Sorumlulara e-posta bildirimi
+
+Her iki görev panelinin alt bölümünde **Sorumlulara e-posta bildirimi gönder**
+kutusu bulunur. Varsayılan **kapalıdır** ve saklanan bir tercih değildir:
+yalnızca o kaydetme işlemi için geçerlidir, panel yeniden açıldığında yine kapalı
+gelir. İşaretlenmediğinde hiçbir posta üretilmez. İşaretlendiğinde kaydetme SMTP'yi
+beklemez; posta niyeti aynı işlemde dayanıklı kuyruğa yazılır ve arka planda
+gönderilir, böylece posta sunucusundaki bir arıza görev kaydetmeyi düşürmez.
+
+## Kanban sorumlu süzgeci ve hedef sıralaması
+
+Kanban araç çubuğunda Direktörlük/Müdürlük/Birim seçicileriyle **aynı satırda**
+bir **Sorumlu** seçicisi bulunur. Seçenekler o anda süzülmüş görev kümesinden
+türetilir ve **Sicil** ile eşleşir; çok sorumlulu görevde bir eşleşme yeterlidir.
+Arama ve kurumsal seçimle birlikte çalışır, **Filtreleri temizle** ile sıfırlanır
+ve ek sunucu isteği başlatmaz. Dar ekranda denetimler aynı satırda sıkışıp
+sarılır.
+
+Her sütun başlığında, görev sayacının **yanında ve aynı satırda** küçük bir
+sıralama düğmesi vardır: hedef tarihe göre artan (varsayılan) veya azalan. Yön
+**sütun başınadır** — bir panoyu azalan yapmak diğerlerini etkilemez. Hedefi
+olmayan görev her iki yönde de en altta kalır ve eşitlikte sıra kararlıdır.
+Düğme yalnızca simge taşır; erişilebilir adı ve ipucu hangi yönde sıralandığını
+söyler. İşlem tümüyle istemci tarafındadır.

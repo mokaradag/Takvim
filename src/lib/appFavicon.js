@@ -1,0 +1,29 @@
+/**
+ * MERGEN Rota sekme simgesi — pusula.
+ *
+ * Simge ana pusula logosunun (bkz. components/shell/AppLogo.jsx) sadeleşmiş
+ * hâlidir: aynı gövde çemberi, aynı ibre açısı ve aynı merkez noktası. 16 ve 32
+ * piksel boyutlarında okunaklı kalması için ayrıntı bilinçli olarak azdır:
+ * derece çizgisi, gölge ve eğim yoktur.
+ *
+ * Kendi zemini olduğu için açık ve koyu sekme çubuğunda da aynı karşıtlıkla
+ * görünür. Veri URI'si olarak gömülür: ek ağ isteği, ayrı dosya ve derleme
+ * adımı gerekmez.
+ */
+const COMPASS_SVG = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>`
+  + `<defs><linearGradient id='rotaMark' x1='0' y1='0' x2='1' y2='1'>`
+  + `<stop offset='0' stop-color='%234f8bf9'/><stop offset='1' stop-color='%232c5fd9'/>`
+  + `</linearGradient></defs>`
+  + `<rect width='32' height='32' rx='8' fill='url(%23rotaMark)'/>`
+  + `<circle cx='16' cy='16' r='9' fill='none' stroke='white' stroke-width='2'/>`
+  + `<path d='M21.6 10.4 17.7 18.3 9.8 21.2 13.7 13.3Z' fill='white'/>`
+  + `<circle cx='16' cy='16' r='1.7' fill='%232c5fd9'/>`
+  + `</svg>`;
+
+export const APP_FAVICON_DATA_URI = `data:image/svg+xml;utf8,${COMPASS_SVG}`;
+
+/**
+ * SVG favicon desteği olmayan istemciler ve iOS ana ekranı için 180×180 PNG.
+ * Veri URI'si gömülüdür; uygulama dış ağa ya da ayrı bir dosyaya ihtiyaç duymaz.
+ */
+export const APP_FAVICON_PNG_DATA_URI = 'data:image/png;base64,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';
