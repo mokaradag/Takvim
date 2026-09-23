@@ -99,6 +99,13 @@ function liveManagerOfAssignee(db, row, sicil) {
     && Number(scope.EmployeeSicil) === Number(row.RequestedAssigneeSicil));
 }
 
+function liveNotificationManagerOfAssignee(db, row, sicil) {
+  return (db.executiveScope || []).some((scope) =>
+    Number(scope.ManagerSicil) === Number(sicil)
+    && Number(scope.EmployeeSicil) === Number(row.RequestedAssigneeSicil)
+    && ['UNIT', 'DEPARTMENT'].includes(String(scope.ScopeType)));
+}
+
 /** Sunucudaki `COALESCE(t.ProjectId, c.ProjectIdSnapshot)` karşılığı. */
 function recordProjectId(db, row) {
   return taskOf(db, row.TaskId)?.ProjectId ?? row.ProjectIdSnapshot ?? null;
@@ -126,12 +133,19 @@ function decisionAuthority(db, row, params) {
   return liveManagerOfAssignee(db, row, sicil) || liveFullProjectAccess(db, row, params);
 }
 
+function notificationDecisionAuthority(db, row, params) {
+  const sicil = Number(params.sicil);
+  if (Number(row.RequesterSicil) === sicil) return false;
+  if (Number(params.isSystemAdmin) === 1) return true;
+  return liveNotificationManagerOfAssignee(db, row, sicil) || liveFullProjectAccess(db, row, params);
+}
+
 /** Sistem yöneticiliği bilinçli olarak dışarıdadır (bkz. sunucudaki yüklem). */
 function isParticipant(db, row, params) {
   const sicil = Number(params.sicil);
   return Number(row.RequesterSicil) === sicil
     || recipientsOf(db, row.CoordinationId).some((entry) => Number(entry.Sicil) === sicil)
-    || liveManagerOfAssignee(db, row, sicil)
+    || liveNotificationManagerOfAssignee(db, row, sicil)
     || liveFullProjectAccess(db, row, params);
 }
 
@@ -144,7 +158,7 @@ function taskAvailable(db, row) {
 
 function actionable(db, row, params) {
   if (!taskAvailable(db, row)) return false;
-  if (row.Status === 'PENDING') return decisionAuthority(db, row, params);
+  if (row.Status === 'PENDING') return notificationDecisionAuthority(db, row, params);
   if (row.Status === 'CANCELLATION_REQUESTED') return Number(row.RequesterSicil) === Number(params.sicil);
   return false;
 }
@@ -174,6 +188,7 @@ function coordinationRow(db, row, params) {
   return {
     ...row,
     IsManager: decisionAuthority(db, row, params) ? 1 : 0,
+    IsActionable: actionable(db, row, params) ? 1 : 0,
     TaskTitle: row.TaskTitleSnapshot ?? task?.Title ?? '',
     ProjectId: row.ProjectIdSnapshot ?? task?.ProjectId ?? null,
     ProjectName: row.ProjectNameSnapshot ?? project?.ProjectName ?? '',

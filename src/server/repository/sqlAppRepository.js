@@ -2532,10 +2532,12 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
   const addedSicils = [...new Set(changes.flatMap((change) => change.added))];
   const notifiedSicils = [...new Set(changes.flatMap((change) => [...change.added, ...change.removed]))]
     .filter((sicil) => Number(sicil) !== Number(actor.sicil));
-  const hasRemovedExistingAssignee = changes.some(
-    (change) => !change.created && change.removed.length
+  // Var olan görevde eklenen/kaldırılan HER sicil açık koordinasyonu kapatabilir;
+  // aktör kendini eklediğinde bildirim alıcısı olmasa bile bu bakım çalışmalıdır.
+  const touchesExistingAssignees = changes.some(
+    (change) => !change.created && (change.added.length || change.removed.length)
   );
-  if (!notifiedSicils.length && !hasRemovedExistingAssignee) return;
+  if (!notifiedSicils.length && !touchesExistingAssignees) return;
 
   try {
     const classified = addedSicils.length

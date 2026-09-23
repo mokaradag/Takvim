@@ -49,6 +49,12 @@ const COUNT_SOURCE = `
  */
 const LIVE_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil)`;
+// Zil ve bekleyen sayaç yalnız yazma yolunun bildirdiği yönetim zincirini
+// keşfeder. Direktörlük ilişkisi karar yetkisini korur ama otomatik bildirim
+// kapsamına girmez.
+const LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+  WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil
+    AND es.ScopeType IN ('UNIT','DEPARTMENT'))`;
 /**
  * Proje ölçütü görevin GÜNCEL projesidir; künye yalnızca silinmiş görev için
  * yedektir. Görev başka projeye taşındığında `decideAssignmentCoordination`
@@ -61,6 +67,8 @@ const LIVE_FULL_PROJECT_ACCESS = `EXISTS (SELECT 1 FROM STRING_SPLIT(@fullProjec
     = COALESCE(t.ProjectId, c.ProjectIdSnapshot))`;
 const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
+const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
+  OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
 /**
  * Katılım ALICI satırından ya da GÜNCEL karar yetkisinden türetilir.
  *
@@ -72,15 +80,16 @@ const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
 const PARTICIPANT = `(c.RequesterSicil = @sicil
   OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
     WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil)
-  OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
+  OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
 const IS_MANAGER = `CASE WHEN ${DECISION_AUTHORITY} THEN 1 ELSE 0 END`;
 const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
 const ACTIONABLE = `(${TASK_AVAILABLE} AND (
-  (c.Status = 'PENDING' AND ${DECISION_AUTHORITY})
+  (c.Status = 'PENDING' AND ${NOTIFICATION_DECISION_AUTHORITY})
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
 const UNREAD = '(n.ReadVersion IS NULL OR n.ReadVersion <> c.RowVersion)';
 const VISIBLE = `(${ACTIONABLE} OR n.DismissedVersion IS NULL OR n.DismissedVersion <> c.RowVersion)`;
 const FIELDS = `c.*, ${IS_MANAGER} AS IsManager,
+  CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsActionable,
   COALESCE(c.TaskTitleSnapshot, t.Title) AS TaskTitle,
   COALESCE(c.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
   COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,

@@ -411,6 +411,12 @@ test('okuma yüzeyi karar yetkisini CANLI veriden türetir', async () => {
     });
     const coordinationId = request.items[0].id;
 
+    // Direktörlük ilişkisi karar yetkisini korur ama bildirim zincirinde
+    // değildir: zil ve bekleyen sayaç bu kaydı otomatik keşfetmemelidir.
+    const directorateInbox = await inboxOf(DIRECTORATE_MANAGER);
+    assert.equal(directorateInbox.items.some((item) => item.id === coordinationId), false);
+    assert.equal(directorateInbox.pendingCount, 0);
+
     // Personel başka bir birime geçer: eski birim yöneticisinin alıcı satırı
     // durur ama karar yetkisi kalmaz.
     stack.db.executiveScope = stack.db.executiveScope
@@ -708,6 +714,33 @@ test('doğrudan atama aynı kişinin bekleyen talebini kapatır; kaldırma iste�
     });
     assert.equal(notice.Status, 'CANCELLED');
     assert.equal(notice.DecisionMessage, 'Doğrudan kaldırmayla karşılandı.');
+  } finally { await stack.dispose(); }
+});
+
+test('tam proje yetkilisi kendini doğrudan atadığında kendi açık talebi de kapanır', async () => {
+  const stack = await createActualStack(seed({
+    projectAccess: [{
+      ProjectId: PROJECT_ID,
+      Sicil: EXTERNAL,
+      AccessLevel: 'FULL',
+      GrantSource: 'MANUAL',
+      IsActive: 1
+    }]
+  }), { sicil: EXTERNAL, corporateWbsSource: false });
+  try {
+    const request = await asUser(ORDINARY, () => store.createAssignmentCoordination({
+      taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek'
+    }));
+    const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, assigneeIds: [String(ORDINARY), String(EXTERNAL)], assigneeMutation: true }]
+    });
+
+    assert.deepEqual(assigneesOf(stack, TASK_ID), [ORDINARY, EXTERNAL].sort((a, b) => a - b));
+    const pending = stack.db.taskAssignmentCoordinations
+      .find((row) => row.CoordinationId.toLowerCase() === request.items[0].id);
+    assert.equal(pending.Status, 'CANCELLED');
+    assert.equal(pending.DecisionMessage, 'Doğrudan atamayla karşılandı.');
   } finally { await stack.dispose(); }
 });
 
