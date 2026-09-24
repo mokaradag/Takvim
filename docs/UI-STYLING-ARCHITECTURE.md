@@ -37,7 +37,7 @@ Current root sequence:
 | Sticky workspace strips (`.workspace-sticky`) | `src/app/styles/features.css` |
 | Simple Mode | `src/app/styles/simple-mode.css` |
 | Shared component chrome | `src/app/styles/components.css` |
-| Mode chooser/settings/help presentation | `src/app/styles/experience.css` |
+| Mode chooser/settings/help presentation, including the AI access card (`.ai-*`) | `src/app/styles/experience.css` |
 | Loading indicators (`.app-spinner`, `.saving-overlay`) | `src/app/styles/components.css` |
 | Toggle switch (`.toggle-field`, `.toggle-switch`) | `src/app/styles/components.css` |
 | Gantt outline controls (`.gantt-outline-*`, `.gantt-level-*`) | `src/app/styles/components.css` |

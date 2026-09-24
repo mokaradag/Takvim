@@ -52,7 +52,8 @@ export const COMPONENTS = Object.freeze({
   OUTLOOK: 'OUTLOOK',
   REMINDER: 'REMINDER',
   API: 'API',
-  RESOURCES: 'RESOURCES'
+  RESOURCES: 'RESOURCES',
+  AI: 'AI'
 });
 
 export const COMPONENT_LABELS = Object.freeze({
@@ -65,7 +66,8 @@ export const COMPONENT_LABELS = Object.freeze({
   [COMPONENTS.OUTLOOK]: 'Outlook takvim teslimatı',
   [COMPONENTS.REMINDER]: 'Hatırlatma hizmeti',
   [COMPONENTS.API]: 'Uygulama uçları',
-  [COMPONENTS.RESOURCES]: 'Süreç kaynakları'
+  [COMPONENTS.RESOURCES]: 'Süreç kaynakları',
+  [COMPONENTS.AI]: 'Yapay zekâ hizmeti'
 });
 
 /** Sistem Yönetimi sekme kimlikleri; olay/bileşen tıklaması buraya götürür. */
@@ -89,7 +91,8 @@ const COMPONENT_TABS = Object.freeze({
   [COMPONENTS.OUTLOOK]: ADMIN_TABS.QUEUES,
   [COMPONENTS.REMINDER]: ADMIN_TABS.REMINDERS,
   [COMPONENTS.API]: ADMIN_TABS.PERFORMANCE,
-  [COMPONENTS.RESOURCES]: ADMIN_TABS.PERFORMANCE
+  [COMPONENTS.RESOURCES]: ADMIN_TABS.PERFORMANCE,
+  [COMPONENTS.AI]: ADMIN_TABS.INTEGRATIONS
 });
 
 /**

@@ -31,7 +31,9 @@ export const GAUGE_KEYS = Object.freeze({
   EVENT_LOOP_DELAY: 'process.event_loop_delay_ms',
   OUTLOOK_QUEUE_PENDING: 'outlook.queue_pending',
   OUTLOOK_QUEUE_FAILED: 'outlook.queue_failed',
-  OUTLOOK_QUEUE_OLDEST_MINUTES: 'outlook.queue_oldest_minutes'
+  OUTLOOK_QUEUE_OLDEST_MINUTES: 'outlook.queue_oldest_minutes',
+  AI_ACTIVE_REQUESTS: 'ai.active_requests',
+  AI_QUEUED_REQUESTS: 'ai.queued_requests'
 });
 
 export const GAUGE_LABELS = Object.freeze({
@@ -42,7 +44,9 @@ export const GAUGE_LABELS = Object.freeze({
   [GAUGE_KEYS.EVENT_LOOP_DELAY]: 'Olay döngüsü gecikmesi',
   [GAUGE_KEYS.OUTLOOK_QUEUE_PENDING]: 'Outlook kuyruk derinliği',
   [GAUGE_KEYS.OUTLOOK_QUEUE_FAILED]: 'Outlook hatalı teslimat',
-  [GAUGE_KEYS.OUTLOOK_QUEUE_OLDEST_MINUTES]: 'En eski bekleyen (dk)'
+  [GAUGE_KEYS.OUTLOOK_QUEUE_OLDEST_MINUTES]: 'En eski bekleyen (dk)',
+  [GAUGE_KEYS.AI_ACTIVE_REQUESTS]: 'Etkin yapay zekâ isteği',
+  [GAUGE_KEYS.AI_QUEUED_REQUESTS]: 'Sıradaki yapay zekâ isteği'
 });
 
 /**

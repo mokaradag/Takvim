@@ -449,6 +449,32 @@ BEGIN TRY
     );
     CREATE INDEX IX_MR_UserPresence_LastSeenAt ON dbo.MR_UserPresence(LastSeenAt DESC) INCLUDE (Sicil);
 
+    /* Sicil başına EN FAZLA bir kişisel yapay zekâ anahtarı; yalnızca şifreli
+       hâli saklanır (bkz. docs/AI-PLATFORM.md · Kişisel anahtarın güvenliği). */
+    CREATE TABLE dbo.MR_AiUserCredentials (
+        Sicil int NOT NULL,
+        EncryptionVersion tinyint NOT NULL,
+        MasterKeyId char(16) NOT NULL,
+        Nonce varbinary(12) NOT NULL,
+        Ciphertext varbinary(1024) NOT NULL,
+        AuthTag varbinary(16) NOT NULL,
+        KeyHint varchar(4) NOT NULL,
+        CreatedAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_AiUserCredentials_CreatedAt DEFAULT SYSUTCDATETIME(),
+        UpdatedAt datetime2(7) NOT NULL
+            CONSTRAINT DF_MR_AiUserCredentials_UpdatedAt DEFAULT SYSUTCDATETIME(),
+        LastValidatedAt datetime2(7) NULL,
+        LastValidationStatus varchar(20) NULL,
+        RowVersion rowversion NOT NULL,
+        CONSTRAINT PK_MR_AiUserCredentials PRIMARY KEY (Sicil),
+        CONSTRAINT CK_MR_AiUserCredentials_EncryptionVersion CHECK (EncryptionVersion IN (1)),
+        CONSTRAINT CK_MR_AiUserCredentials_Nonce CHECK (DATALENGTH(Nonce) = 12),
+        CONSTRAINT CK_MR_AiUserCredentials_AuthTag CHECK (DATALENGTH(AuthTag) = 16),
+        CONSTRAINT CK_MR_AiUserCredentials_Ciphertext CHECK (DATALENGTH(Ciphertext) BETWEEN 16 AND 1024),
+        CONSTRAINT CK_MR_AiUserCredentials_ValidationStatus
+            CHECK (LastValidationStatus IS NULL OR LastValidationStatus IN ('VALID','REJECTED','FORBIDDEN'))
+    );
+
     CREATE TABLE dbo.MR_TaskDependencies (
         TaskDependencyId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskDependencies_Id DEFAULT NEWSEQUENTIALID(),
         ProjectId uniqueidentifier NOT NULL,
@@ -927,7 +953,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0012_system_observability', N'Sistem Yönetimi telemetri toplamları, işletim olayları ve otomatik uyarılar'),
            (N'0013_corporate_wbs_sync_freshness', N'CN43N başarılı tur tazeliği ile WBS içerik değişikliği zamanını ayırır'),
            (N'0014_task_creator_index', N'Görev oluşturan Sicil dizini: yetki ve anlık görüntü sorgularında tam tablo taramasını kaldırır'),
-           (N'0015_assignment_coordination_and_presence', N'Kurum dışı atama koordinasyonu, görev bildirimleri, dayanıklı posta kuyruğu ve kullanıcı varlığı');
+           (N'0015_assignment_coordination_and_presence', N'Kurum dışı atama koordinasyonu, görev bildirimleri, dayanıklı posta kuyruğu ve kullanıcı varlığı'),
+           (N'0016_ai_user_credentials', N'Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM, düz metin saklanmaz)');
 
     COMMIT TRANSACTION;
 END TRY

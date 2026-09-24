@@ -7,6 +7,7 @@ import { smtpConfigurationProblem } from '../mail/smtpConfig.js';
 import { isOutlookCalendarEnabled } from '../outlook/outlookConfig.js';
 import { AUTH_MODES, keycloakConfigurationIssues, readKeycloakConfig, resolveAuthMode } from '../identity/keycloakConfig.js';
 import { boundedExecutor, probeDeadline } from './boundedExecution.js';
+import { aiIntegrationCard, testAiProviderConnection } from '../ai/aiHealth.js';
 import {
   CORPORATE_PROJECT_PROBE_SQL,
   CORPORATE_RESPONSIBILITY_PROBE_SQL,
@@ -34,7 +35,8 @@ export const INTEGRATIONS = Object.freeze({
   PROJECT_RESPONSIBILITY: 'project-responsibility',
   AUTHENTICATION: 'authentication',
   SMTP: 'smtp',
-  OUTLOOK: 'outlook'
+  OUTLOOK: 'outlook',
+  AI: 'ai-provider'
 });
 
 const CACHE_KEY = Symbol.for('mergen-rota.integration-cache');
@@ -277,6 +279,14 @@ function outlookCard() {
   });
 }
 
+function aiCard() {
+  return card(INTEGRATIONS.AI, {
+    label: 'Yapay zekâ sağlayıcısı',
+    kind: 'OpenAI uyumlu kurum içi uç',
+    ...aiIntegrationCard()
+  });
+}
+
 /** Bütün entegrasyon kartları. */
 export async function loadIntegrations(executor) {
   const [database, corporateWbs, directory, projects, responsibility] = await Promise.all([
@@ -298,7 +308,7 @@ export async function loadIntegrations(executor) {
       statement: CORPORATE_RESPONSIBILITY_PROBE_SQL
     })
   ]);
-  return [database, corporateWbs, directory, projects, responsibility, authenticationCard(), smtpCard(), outlookCard()];
+  return [database, corporateWbs, directory, projects, responsibility, authenticationCard(), smtpCard(), outlookCard(), aiCard()];
 }
 
 async function probeSmtpConnection() {
@@ -334,6 +344,8 @@ const TESTS = Object.freeze({
     if (!isOutlookCalendarEnabled()) return { ok: false, code: 'OUTLOOK_DISABLED', durationMs: 0 };
     return probeSmtpConnection();
   },
+  // Yapay zekâ testi model ÜRETMEZ: süre sınırlı `GET /models` isteğidir.
+  [INTEGRATIONS.AI]: () => testAiProviderConnection(),
   // Kimlik erişilebilirliği YIKICI OLMAYAN biçimde yoklanır: yalnızca ortak
   // anahtar kümesi (JWKS) okunur; oturum açma denenmez, kimlik bilgisi
   // gönderilmez, hesap kilitlenmez.

@@ -1,6 +1,7 @@
 import { taskActivityRecordsets } from './taskActivitySql.mjs';
 import { runObservabilityQuery } from './observabilitySql.mjs';
 import { runAssignmentCoordinationQuery } from './assignmentCoordinationSql.mjs';
+import { runAiCredentialQuery } from './aiCredentialSql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -1236,6 +1237,10 @@ function runQuery(db, statement, params, { database }) {
   // (0015) ayrı bir modülde karşılanır.
   const coordination = runAssignmentCoordinationQuery(db, sqlText, params);
   if (coordination) return result(coordination);
+
+  // Kişisel yapay zekâ anahtarları (0016) ayrı bir modülde karşılanır.
+  const aiCredential = runAiCredentialQuery(db, sqlText, params);
+  if (aiCredential) return result(aiCredential);
 
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));

@@ -119,7 +119,8 @@ bayatlamadığı. Sorunlu bir bileşene tıklamak ilgili sekmeye götürür.
    sürmediğini ve **önerilen eylemi** söyler.
 3. **Bileşen sağlığı** — uygulama, ana SQL Server, CN43N/kurumsal WBS, kurumsal
    personel/proje kaynağı, kimlik doğrulama, SMTP, Outlook teslimatı, hatırlatma
-   hizmeti ve süreç kaynakları. Kart tıklanınca güvenli teknik künye açılır.
+   hizmeti, yapay zekâ hizmeti ve süreç kaynakları. Kart tıklanınca güvenli
+   teknik künye açılır.
 4. **İşletim göstergeleri** — API P95, hata oranı, bekleyen/hatalı Outlook
    teslimatı, en eski bekleyen kayıt, son CN43N eşitlemesi, son hatırlatma turu,
    süreç belleği, çalışma süresi.
@@ -433,6 +434,7 @@ Kartlar tek soruyu yanıtlar: **MERGEN Rota bağımlılıklarına ulaşabiliyor 
 | Kimlik doğrulama (Keycloak) | Kurumsal oturum açma |
 | SMTP posta sunucusu | Kurumsal posta |
 | **Outlook takvim teslimatı** | **SMTP + iCalendar** |
+| Yapay zekâ sağlayıcısı | OpenAI uyumlu kurum içi uç |
 
 > Outlook tümleştirmesi Microsoft Graph ya da EWS **değildir**; davetler kurum
 > içi SMTP üzerinden iCalendar (`METHOD:REQUEST`/`CANCEL`) olarak gönderilir.
@@ -455,6 +457,11 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   denemeler kurumsal hesabı kilitleyebilir.
 - **Kimlik testi oturum açmaz**: yalnızca ortak anahtar kümesi (JWKS) adresi
   okunur; kimlik bilgisi gönderilmez, hesap kilitlenmez.
+- **Yapay zekâ testi model çalıştırmaz**: 6 saniye süre sınırlı `GET /models`
+  isteğidir; kurumsal anahtar tanımlıysa o kullanılır ve yanıtın yalnızca HTTP
+  durumu okunur. Yapay zekâ bileşeninin sağlığı ağ beklemez; süreç belleğindeki
+  kapasite ve son sağlayıcı temaslarından türetilir ve hiçbir zaman *Kritik*
+  olmaz (bkz. `docs/AI-PLATFORM.md`).
 
 Aynı anda **tek test** çalışır: ikinci bir test başlatılabilseydi ilkinin bitişi
 bütün düğmeleri erken açar ve yinelenen yoklamalar gönderilebilirdi.
@@ -618,6 +625,25 @@ Betik yinelenebilir ve veriye dokunmaz. Göç uygulanmadan açılan kurulumda zi
 
 Posta kuyruğu `SMTP_HOST`/`SMTP_FROM` tanımlı olmadığında hiç çalışmaz ve niyetler kuyrukta bekler. `MERGEN_ROTA_TASK_MAIL_POLL_MS` tur aralığını belirler: değişken tanımsız, boş ya da geçersizse varsayılan 30000 ms uygulanır, geçerli bir değer 5000–300000 aralığına kırpılır. Altı denemeden sonra kayıt `FAILED` olur; başarısızlık kodu satırda saklanır ve gizli bilgi taşımaz. Teslimatı belirsiz kalan (gövde aktarıldı, kabul yanıtı okunamadı) satır `MAIL_DELIVERY_UNCERTAIN` koduyla doğrudan `FAILED` olur ve kendiliğinden yeniden denenmez: alıcı aynı iletiyi ikinci kez almaz. Her teslimat uçtan uca bir bütçeyle (SMTP zaman aşımının iki katı) kesilir ve kira bu bütçe üzerinden ölçülür. Satıra özgü bir hata turu düşürmez: satır deneme olarak kaydedilir, öteki satırlar gönderilir. Tam olarak bir kez teslimat garanti edilmez: SMTP kabulü ile `SENT` yazımı arasında çalışan durursa satır kira dolunca yeniden gönderilebilir.
 
+
+### 0016 · Kişisel yapay zekâ anahtarları
+
+`0015` uygulandıktan **sonra** çalıştırılır:
+
+```
+database/MR_Upgrade_0016_Ai_User_Credentials.sql
+```
+
+| Tablo | İçerik | Anahtar / dizin |
+| --- | --- | --- |
+| `MR_AiUserCredentials` | Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM zarfı, son dört karakter, son doğrulama sonucu) | PK `Sicil`; rowversion |
+
+Betik yinelenebilir ve veriye dokunmaz; anahtarın kendisi, konuşma geçmişi,
+istem ve yanıt saklanmaz. Göç uygulanmadan açılan kurulumda kişisel anahtar
+kaydı açıkça reddedilir, kurumsal varsayılan anahtar çalışmaya devam eder. Geri
+alma betiği tabloyu da düşürür. Yapay zekâ ortam değişkenleri ve dağıtım sırası:
+`docs/AI-PLATFORM.md`.
+
 ---
 
 ## 15. Yapılandırma
@@ -700,6 +726,7 @@ Yönetim konsolu üretimde yeni bir yük kaynağı olmamalıdır:
 - `docs/OUTLOOK-CALENDAR.md` — takvim teslimatı ve kuyruk semantiği
 - `docs/DATABASE-SCHEMA.md` — tablo ve dizin künyesi
 - `docs/DURABLE-PERSISTENCE.md` — kalıcılaştırma sınırları
+- `docs/AI-PLATFORM.md` — yapay zekâ altyapısı, sağlık bileşeni ve bağlantı testi
 
 ### İnceleme sonrası doğruluk güvenceleri
 

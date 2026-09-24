@@ -78,6 +78,7 @@ export const Icons = {
   Activity: (p) => <Icon {...p} d='<path d="M3 12h4l3-8 4 16 3-8h4"/>' />,
   Server: (p) => <Icon {...p} d='<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>' />,
   Shield: (p) => <Icon {...p} d='<path d="M12 3l8 3v6c0 4.4-3.2 7.9-8 9-4.8-1.1-8-4.6-8-9V6l8-3z"/>' />,
+  Key: (p) => <Icon {...p} d='<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M18.5 4.5l2 2"/>' />,
   Pause: (p) => <Icon {...p} d='<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>' />,
   Play: (p) => <Icon {...p} d='<path d="M7 4.5v15l12-7.5-12-7.5z"/>' />,
 

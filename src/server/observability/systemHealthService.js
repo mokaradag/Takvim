@@ -30,6 +30,7 @@ import {
 import { MEMORY_PRESSURE_RATIO, observabilityConfiguration } from './observabilityConfig.js';
 import { supersededProcessAlertKeys } from './processAlertLifecycle.js';
 import {
+  probeAi,
   probeApplication,
   probeAuthentication,
   probeCorporateDirectory,
@@ -121,6 +122,7 @@ export async function loadSystemHealth(executor, { now = Date.now() } = {}) {
     probeSmtp({ now }),
     outlook,
     reminders,
+    probeAi({ now }),
     probeResources({ memoryPressureRatio: MEMORY_PRESSURE_RATIO })
   ].map((component) => describeComponent(component, { now }));
 

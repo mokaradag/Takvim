@@ -1,0 +1,157 @@
+/**
+ * Yapay zekâ testleri için ortak yığın.
+ *
+ * Gerçek rota gövdeleri, gerçek kimlik sağlayıcısı (geliştirme kipi), gerçek
+ * SQL deposu kodu ve bellek içi SQL Server ikizi kullanılır; yalnızca yapay
+ * zekâ sağlayıcısı belirlenimci ikizle değiştirilir. Kimlik ortam değişkeniyle
+ * değiştirilir, tıpkı sunucudaki gibi yalnızca sunucu tarafında.
+ */
+import { createHash } from 'node:crypto';
+import { createFakeAiProvider } from './fakeAiProvider.mjs';
+import { createFakeDatabase, createFakeSqlServerDriver } from './fakeSqlServer.mjs';
+import { registerServerOnlyShim } from './serverOnlyShim.mjs';
+
+registerServerOnlyShim();
+
+export const SICIL_A = 900001;
+export const SICIL_B = 900002;
+export const SICIL_UNKNOWN = 900099;
+
+export const PERSONAL_KEY_A = 'rota-test-personal-alpha-9f3Kq2Lm';
+export const PERSONAL_KEY_B = 'rota-test-personal-bravo-4Hn8Zt6W';
+export const DEFAULT_KEY = 'rota-test-corporate-default-Xy7Pq3Rs';
+export const MASTER_KEY = createHash('sha256').update('mergen-rota/ai-test-master-key').digest('base64url');
+export const OTHER_MASTER_KEY = createHash('sha256').update('mergen-rota/ai-test-master-key-rotated').digest('base64url');
+
+const pool = await import('../../src/server/db/pool.js');
+const { setCurrentUserProvider } = await import('../../src/server/identity/currentUserProvider.js');
+const { resetAiRuntimeForTests, setAiProviderForTests } = await import('../../src/server/ai/aiRuntime.js');
+const { resetAiConfigCacheForTests } = await import('../../src/server/ai/aiConfig.js');
+const { resetAiModelRegistryForTests } = await import('../../src/server/ai/modelRegistryLoader.js');
+const { resetAiTelemetryForTests } = await import('../../src/server/ai/aiTelemetry.js');
+const { resetTelemetryRegistryForTests } = await import('../../src/server/observability/telemetryRegistry.js');
+const { resetOperationalEventBufferForTests } = await import('../../src/server/observability/operationalEventsRepository.js');
+
+export const credentialRoute = await import('../../src/app/api/mergen-rota/ai/credential/route.js');
+export const validationRoute = await import('../../src/app/api/mergen-rota/ai/credential/validation/route.js');
+export const probeRoute = await import('../../src/app/api/mergen-rota/ai/probe/route.js');
+
+const BASE_ENV = Object.freeze({
+  MERGEN_ROTA_DB_SERVER: 'sql.test.internal',
+  MERGEN_ROTA_DB_DATABASE: 'MERGEN_Rota',
+  MERGEN_ROTA_AUTH_MODE: 'development',
+  MERGEN_ROTA_DEV_IDENTITY_ENABLED: 'true',
+  MERGEN_ROTA_AI_ENABLED: 'true',
+  MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1:9/v1',
+  MERGEN_ROTA_AI_DEFAULT_API_KEY: DEFAULT_KEY,
+  MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: MASTER_KEY
+});
+
+function resetAi() {
+  resetAiRuntimeForTests();
+  resetAiConfigCacheForTests();
+  resetAiModelRegistryForTests();
+  resetAiTelemetryForTests();
+  resetTelemetryRegistryForTests();
+  resetOperationalEventBufferForTests();
+}
+
+export function defaultPeople() {
+  return [
+    { Sicil: SICIL_A, DisplayName: 'Deneme Kullanıcı A', Username: 'denemea' },
+    { Sicil: SICIL_B, DisplayName: 'Deneme Kullanıcı B', Username: 'denemeb' }
+  ];
+}
+
+/**
+ * Ortamı hazırlar; `env` içindeki `null` değerler değişkeni SİLER.
+ * Test bitince ortam, sürücü ve bütün yapay zekâ durumları geri alınır.
+ */
+export function createAiStack(t, { env = {}, sicil = SICIL_A, seed = {}, provider = null } = {}) {
+  const previousEnv = { ...process.env };
+  for (const [key, value] of Object.entries({ ...BASE_ENV, MERGEN_ROTA_DEV_SICIL: String(sicil), ...env })) {
+    if (value == null) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+  const db = createFakeDatabase({ people: defaultPeople(), systemAdminSicils: [SICIL_A], ...seed });
+  pool.setSqlDriverForTests(createFakeSqlServerDriver(db));
+  pool.resetSqlPoolForTests();
+  setCurrentUserProvider(null);
+  resetAi();
+  const fake = provider || createFakeAiProvider();
+  setAiProviderForTests(fake);
+
+  t.after(() => {
+    setAiProviderForTests(null);
+    resetAi();
+    pool.setSqlDriverForTests(null);
+    pool.resetSqlPoolForTests();
+    setCurrentUserProvider(null);
+    for (const key of Object.keys(process.env)) {
+      if (!(key in previousEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, previousEnv);
+  });
+
+  return {
+    db,
+    provider: fake,
+    useSicil(next) {
+      process.env.MERGEN_ROTA_DEV_SICIL = String(next);
+    },
+    setEnv(values) {
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null) delete process.env[key];
+        else process.env[key] = String(value);
+      }
+    }
+  };
+}
+
+export function aiRequest(path, { method = 'GET', body, headers = {}, signal } = {}) {
+  return new Request(`http://localhost/api/mergen-rota/ai${path}`, {
+    method,
+    headers: { 'content-type': 'application/json', ...headers },
+    ...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
+    ...(signal ? { signal } : {})
+  });
+}
+
+export async function readJson(response) {
+  const text = await response.text();
+  return { status: response.status, text, body: text ? JSON.parse(text) : null, headers: response.headers };
+}
+
+export async function saveKey(apiKey, options = {}) {
+  return readJson(await credentialRoute.PUT(aiRequest('/credential', { method: 'PUT', body: { apiKey }, ...options })));
+}
+
+export async function credentialStatus() {
+  return readJson(await credentialRoute.GET(aiRequest('/credential')));
+}
+
+export async function removeKey() {
+  return readJson(await credentialRoute.DELETE(aiRequest('/credential', { method: 'DELETE' })));
+}
+
+export async function validateKey(options = {}) {
+  return readJson(await validationRoute.POST(aiRequest('/credential/validation', { method: 'POST', ...options })));
+}
+
+export async function runProbe(options = {}) {
+  return readJson(await probeRoute.POST(aiRequest('/probe', { method: 'POST', ...options })));
+}
+
+/** Konsola yazılan her satırı yakalar; test sonunda özgün yöntemler geri gelir. */
+export function captureConsole(t) {
+  const lines = [];
+  const originals = {};
+  for (const method of ['log', 'info', 'warn', 'error', 'debug']) {
+    originals[method] = console[method];
+    console[method] = (...args) => {
+      lines.push(args.map((value) => (typeof value === 'string' ? value : JSON.stringify(value))).join(' '));
+    };
+  }
+  t.after(() => Object.assign(console, originals));
+  return lines;
+}
