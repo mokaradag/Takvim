@@ -386,6 +386,15 @@ export function isTestableIntegration(id) {
 }
 
 /**
+ * Testin örnekler arası SQL kilidiyle mi korunacağı. Yapay zekâ testi
+ * veritabanı gerektirmeyen bir dış istektir: sağlayıcı beklenirken yönetim
+ * kilidinin SQL işlemi ve havuz bağlantısı tutulmaz (yapay zekâ yalıtımı).
+ */
+export function integrationTestNeedsDatabaseLock(id) {
+  return String(id) !== INTEGRATIONS.AI;
+}
+
+/**
  * Bağlantı testi — HİÇBİRİ yıkıcı değildir.
  *
  * Veritabanı testleri `SELECT 1` düzeyindedir; SMTP testi ileti göndermeden

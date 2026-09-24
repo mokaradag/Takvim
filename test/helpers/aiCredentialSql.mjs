@@ -32,22 +32,40 @@ function metadataRow(row) {
   }] : [];
 }
 
-export function runAiCredentialQuery(db, sqlText, params) {
-  if (!sqlText.includes('MR_AiUserCredentials')) return null;
-  if (db.aiCredentialSchemaMissing) throw missingSchemaError();
-  db.aiUserCredentials ||= [];
+function logStatement(db, sqlText, params) {
   // Günlük dizi DEĞİLDİR: işlem geri alındığında sahte veritabanının tablo
   // anlık görüntüsüne girmez, geri alınan deyimler de denetlenebilir kalır.
   db.aiCredentialLog ||= { statements: [] };
   db.aiCredentialLog.statements.push({ sql: sqlText, params: { ...params } });
+}
 
+export function runAiCredentialQuery(db, sqlText, params) {
   const sicil = Number(params.sicil);
   const knownSicil = [{ KnownSicil: db.people.some((person) => Number(person.Sicil) === sicil) ? 1 : 0 }];
+  // Yalnızca rehber üyeliği: anahtar tablosuna dokunmaz, 0016 yokken de çalışır.
+  if (sqlText.includes('AS KnownSicil') && !sqlText.includes('MR_AiUserCredentials')) {
+    logStatement(db, sqlText, params);
+    return [knownSicil];
+  }
+  if (!sqlText.includes('MR_AiUserCredentials')) return null;
+  if (sqlText.includes('AS SchemaReady')) {
+    logStatement(db, sqlText, params);
+    return [[{ SchemaReady: db.aiCredentialSchemaMissing ? 0 : 1 }]];
+  }
+  if (db.aiCredentialSchemaMissing) throw missingSchemaError();
+  db.aiUserCredentials ||= [];
+  logStatement(db, sqlText, params);
+
   const find = () => db.aiUserCredentials.find((row) => row.Sicil === sicil) || null;
+  const sameVersion = (row) => row && Buffer.isBuffer(params.rowVersion) && row.RowVersion.equals(params.rowVersion);
 
   if (sqlText.includes('SELECT TOP (1) EncryptionVersion')) {
     const row = find();
     return [knownSicil, row ? [{ ...row }] : []];
+  }
+  if (sqlText.includes('SELECT TOP (1) MasterKeyId')) {
+    const row = find();
+    return [knownSicil, row ? [{ MasterKeyId: row.MasterKeyId, ...metadataRow(row)[0] }] : []];
   }
   if (sqlText.includes('UPDATE dbo.MR_AiUserCredentials WITH (UPDLOCK, HOLDLOCK)')) {
     const now = new Date();
@@ -69,19 +87,22 @@ export function runAiCredentialQuery(db, sqlText, params) {
     return [metadataRow(find())];
   }
   if (sqlText.includes('DELETE FROM dbo.MR_AiUserCredentials')) {
+    // Test kancası: okuma ile silme arasına başka bir oturumun kaydı girebilir.
+    db.aiCredentialHooks?.beforeDelete?.(find(), { nextRowVersion });
+    // Yalnızca okunan satır sürümü silinir; araya giren yeni kayıt korunur.
     const before = db.aiUserCredentials.length;
-    db.aiUserCredentials = db.aiUserCredentials.filter((row) => row.Sicil !== sicil);
+    db.aiUserCredentials = db.aiUserCredentials.filter((row) => !(row.Sicil === sicil && sameVersion(row)));
     return [[{ Deleted: before - db.aiUserCredentials.length }]];
   }
   if (sqlText.includes('SET LastValidatedAt = SYSUTCDATETIME()')) {
     const row = find();
-    if (row && Buffer.isBuffer(params.rowVersion) && row.RowVersion.equals(params.rowVersion)) {
+    const recorded = sameVersion(row) ? 1 : 0;
+    if (recorded) {
       row.LastValidatedAt = new Date();
       row.LastValidationStatus = params.status;
       row.RowVersion = nextRowVersion();
     }
-    return [metadataRow(find())];
+    return [[{ Recorded: recorded }], metadataRow(find())];
   }
-  if (sqlText.includes('SELECT TOP (1) KeyHint')) return [knownSicil, metadataRow(find())];
   throw new Error(`Fake SQL Server: desteklenmeyen yapay zekâ anahtarı deyimi: ${sqlText.trim().slice(0, 120)}`);
 }

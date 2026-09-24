@@ -43,8 +43,20 @@ function createState() {
     retries: 0,
     lastSuccessAt: null,
     lastFailure: null,
+    // Paylaşılan kapasitenin dolması (küresel ya da model sınırı); sağlığı etkiler.
     lastBusyAt: null,
-    provider: { lastContactAt: null, lastFailureAt: null, lastFailureCode: null, lastLatencyMs: null }
+    lastQueueTimeoutAt: null,
+    // Tek kullanıcının kendi sınırı; hizmet sağlığı değildir, yalnızca izlenir.
+    lastUserLimitAt: null,
+    provider: {
+      lastContactAt: null,
+      lastFailureAt: null,
+      lastFailureCode: null,
+      lastLatencyMs: null,
+      // Milisaniye damgaları eşitlenebilir; sıra tekdüze sayaçla tutulur.
+      sequence: 0,
+      lastOutcome: null
+    }
   };
 }
 
@@ -75,10 +87,16 @@ function outcomeOf(code, serviceFailure) {
   return { code: String(code).slice(0, 60), serviceFailure: Boolean(serviceFailure) };
 }
 
+/** Paylaşılan kurumsal anahtarın bozuk olduğunu gösteren sonuçlar. */
+const CORPORATE_KEY_FAILURES = new Set([AI_ERROR_CODES.AI_KEY_INVALID, AI_ERROR_CODES.AI_UNAUTHORIZED]);
+
 function logFailure({ outcome, source, profile, model, durationMs, attempts, details }) {
   if (QUIET_CODES.has(outcome.code)) return;
-  // Kullanıcının kendi anahtarı ya da isteği kaynaklı sonuçlar hizmet sorunu değildir.
-  if (!outcome.serviceFailure && source !== AI_CREDENTIAL_SOURCES.DEFAULT) return;
+  // Kullanıcının kendi anahtarı ya da isteği kaynaklı sonuçlar hizmet sorunu
+  // değildir. Tek istisna reddedilen KURUMSAL anahtardır: herkesi etkiler. Kurumsal
+  // anahtarla yapılmış olsa da geçersiz istek (400/413/422) işletim günlüğüne girmez.
+  const corporateKeyRejected = source === AI_CREDENTIAL_SOURCES.DEFAULT && CORPORATE_KEY_FAILURES.has(outcome.code);
+  if (!outcome.serviceFailure && !corporateKeyRejected) return;
   const severe = outcome.code === AI_ERROR_CODES.AI_CONFIGURATION_ERROR || outcome.code === AI_ERROR_CODES.AI_INTERNAL_ERROR;
   logEvent({
     severity: severe ? EVENT_SEVERITIES.ERROR : EVENT_SEVERITIES.WARNING,
@@ -102,6 +120,18 @@ function logFailure({ outcome, source, profile, model, durationMs, attempts, det
 }
 
 /**
+ * Kapasite reddi ya da sıra süre aşımı PAYLAŞILAN kapasiteyi mi anlatıyor?
+ *
+ * Yalnızca kullanıcının kendi etkin/sıra sınırına takılan istek hizmetin dolu
+ * olduğunu göstermez; küresel sıra, küresel etkin sınır ya da model sınırı
+ * gösterir.
+ */
+function sharedCapacityPressure(details) {
+  if (details?.scope === 'global') return true;
+  return details?.saturation !== 'user';
+}
+
+/**
  * Uçtan uca istek sonucu (sıra beklemesi dâhil). `code` yoksa istek başarılıdır;
  * `serviceFailure` yalnızca yapay zekâ kataloğu dışındaki sunucu kodları için okunur.
  */
@@ -121,11 +151,15 @@ export function recordAiRequest({
     } else {
       current.outcomes[outcome.code] = (current.outcomes[outcome.code] || 0) + 1;
       if (outcome.serviceFailure) current.lastFailure = { code: outcome.code, at: now };
-      if (outcome.code === AI_ERROR_CODES.AI_BUSY) current.lastBusyAt = now;
+      const capacityOutcome = outcome.code === AI_ERROR_CODES.AI_BUSY || outcome.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT;
+      if (capacityOutcome && !sharedCapacityPressure(details)) current.lastUserLimitAt = now;
+      else if (outcome.code === AI_ERROR_CODES.AI_BUSY) current.lastBusyAt = now;
+      else if (outcome.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT) current.lastQueueTimeoutAt = now;
     }
     if (Object.hasOwn(current.bySource, source)) current.bySource[source] += 1;
     if (isKnownAiProfile(profile)) current.byProfile[profile] = (current.byProfile[profile] || 0) + 1;
     if (attempts > 1) current.retries += attempts - 1;
+    // Sırada süresi dolan istek de beklemiştir: en kötü beklemeler özetten düşmez.
     pushSample(current.queueWaitMs, queueWaitMs);
     recordOperation({
       operation: 'ai.request',
@@ -133,7 +167,15 @@ export function recordAiRequest({
       ok: !outcome?.serviceFailure,
       code: outcome?.serviceFailure ? outcome.code : null
     });
-    if (queueWaitMs != null) recordOperation({ operation: 'ai.queue.wait', durationMs: queueWaitMs, ok: true });
+    if (queueWaitMs != null) {
+      const timedOut = outcome?.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT;
+      recordOperation({
+        operation: 'ai.queue.wait',
+        durationMs: queueWaitMs,
+        ok: !timedOut,
+        code: timedOut ? AI_ERROR_CODES.AI_QUEUE_TIMEOUT : null
+      });
+    }
   });
   if (outcome) safely(() => logFailure({ outcome, source, profile, model, durationMs, attempts, details }));
 }
@@ -154,23 +196,33 @@ export function recordAiValidation({ code = null, serviceFailure = false, durati
 /**
  * Sağlayıcı çağrısının süresi ve erişilebilirlik izi.
  *
- * HTTP yanıtı alınan her çağrı (401 dâhil) ERİŞİM sayılır; iptal edilen çağrı
- * sağlayıcının başarımını anlatmadığı için kaydedilmez.
+ * Varsayılan olarak HTTP yanıtı alınan her çağrı (401 dâhil) ERİŞİM sayılır;
+ * yalnızca `PROVIDER_HEALTH_FAILURES` kodları sağlık hatasıdır. Çağıran,
+ * sonucun PAYLAŞILAN sağlığı anlatıp anlatmadığını bildiğinde `healthFailure`
+ * ile bunu açıkça belirtir: reddedilen KURUMSAL anahtar herkesi etkilediği için
+ * hatadır, KİŞİSEL anahtarın oran sınırı ise yalnızca o anahtarı anlatır.
+ *
+ * Gecikme, sağlık sınıfından bağımsız olarak tamamlanan her çağrı için
+ * örneklenir: en yavaş (süre aşımına uğrayan) çağrılar P95'ten düşmez. İptal
+ * edilen çağrı sağlayıcının başarımını anlatmadığı için kaydedilmez.
  */
-export function recordProviderCall({ operation, latencyMs, code = null }) {
+export function recordProviderCall({ operation, latencyMs, code = null, healthFailure = null }) {
   if (code === AI_ERROR_CODES.AI_CANCELLED) return;
   safely(() => {
     const current = state();
-    const unhealthy = code != null && PROVIDER_HEALTH_FAILURES.has(code);
+    const unhealthy = typeof healthFailure === 'boolean' ? healthFailure : code != null && PROVIDER_HEALTH_FAILURES.has(code);
     const now = new Date().toISOString();
     recordOperation({ operation, durationMs: latencyMs, ok: !unhealthy, code: unhealthy ? code : null });
+    current.provider.sequence += 1;
+    current.provider.lastLatencyMs = Math.max(0, Math.round(latencyMs));
+    pushSample(current.providerLatencyMs, latencyMs);
     if (unhealthy) {
       current.provider.lastFailureAt = now;
       current.provider.lastFailureCode = code;
+      current.provider.lastOutcome = 'failure';
     } else {
       current.provider.lastContactAt = now;
-      current.provider.lastLatencyMs = Math.max(0, Math.round(latencyMs));
-      pushSample(current.providerLatencyMs, latencyMs);
+      current.provider.lastOutcome = 'contact';
     }
   });
 }
@@ -218,6 +270,8 @@ export function aiTelemetrySnapshot() {
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
     lastBusyAt: current.lastBusyAt,
+    lastQueueTimeoutAt: current.lastQueueTimeoutAt,
+    lastUserLimitAt: current.lastUserLimitAt,
     provider: { ...current.provider }
   };
 }

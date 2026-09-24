@@ -10,17 +10,20 @@ import { getSqlPool, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
 import { boundedExecutor } from '../observability/boundedExecution.js';
-import { readAiConfig } from './aiConfig.js';
+import { readAiConfig, requireAiAvailable } from './aiConfig.js';
 import { AiError } from './aiErrors.js';
+import { describeAiProbe } from './aiProbeProfile.js';
 import {
   deleteCredential,
   isMissingAiCredentialSchema,
+  readCredentialSchema,
   readCredentialSecret,
   readCredentialStatus,
+  readDirectoryMembership,
   recordCredentialValidation,
   upsertCredential
 } from './aiCredentialStore.js';
-import { CredentialVaultError, decryptCredential, encryptCredential } from './credentialVault.js';
+import { CredentialVaultError, decryptCredential, encryptCredential, masterKeyId } from './credentialVault.js';
 
 /**
  * Kişisel yapay zekâ anahtarı hizmeti.
@@ -35,8 +38,55 @@ function unknownSicil() {
   return new ServerPersistenceError('UNAUTHORIZED', 'Yapılandırılmış Sicil kurumsal personel kaynağında bulunamadı.');
 }
 
-function statusView(config, { schemaReady, credential }) {
-  const personalKeyStored = Boolean(credential);
+function replacedConcurrently() {
+  return new ServerPersistenceError(
+    'CONFLICT',
+    'Kişisel anahtar bu arada başka bir oturumda değiştirildi; yeni anahtar kaldırılmadı. Güncel durumu görüp yeniden deneyin.'
+  );
+}
+
+function executorFor(pool, signal) {
+  return signal ? boundedExecutor(pool, signal) : pool;
+}
+
+/** Rehber üyeliği; anahtar tablosuna dokunmaz, 0016 yokken de çalışır. */
+async function requireDirectoryMember(executor, sicil) {
+  if (!(await readDirectoryMembership(executor, sicil))) throw unknownSicil();
+}
+
+/**
+ * Güvenilir Sicil'in kurumsal rehberde bulunduğunu doğrular.
+ *
+ * Ağ geçidi bunu yapılandırma, profil ve gövde kararlarından ÖNCE çağırır:
+ * rehberde olmayan bir kimlik dağıtımın durumunu (kapalı, hatalı yapılandırma,
+ * profil) öğrenemez ve kapasite ya da kayıt işi tetikleyemez.
+ */
+export async function assertAiDirectoryMember(sicil, { signal = null } = {}) {
+  const pool = await getSqlPool();
+  await requireDirectoryMember(executorFor(pool, signal), sicil);
+}
+
+/** Ana anahtar kaldırıldıysa kişisel anahtar kullanımı kapalıdır; eski satır kurumsal anahtarı engellemez. */
+function personalKeyInUse(config, stored) {
+  return Boolean(stored) && config.personalKeysSupported;
+}
+
+/**
+ * Tarayıcıya giden anahtar künyesi.
+ *
+ * Satır başka bir ana anahtarla yazılmışsa çözülemez: künye `readable: false`
+ * taşır ve eski doğrulama sonucu gösterilmez (o sonuç artık kullanılamayan bir
+ * anahtarı anlatır). Ana anahtar kimliği tarayıcıya gitmez.
+ */
+function credentialView(config, record) {
+  if (!record?.credential) return { configured: false };
+  const readable = !config.masterKey || !record.masterKeyId || record.masterKeyId === masterKeyId(config.masterKey);
+  return readable
+    ? { configured: true, ...record.credential, readable: true }
+    : { configured: true, ...record.credential, lastValidatedAt: null, lastValidationStatus: null, readable: false };
+}
+
+async function statusView(config, { schemaReady, record }) {
   return {
     enabled: config.enabled,
     available: config.available,
@@ -44,10 +94,14 @@ function statusView(config, { schemaReady, credential }) {
     defaultKeyConfigured: config.enabled && config.defaultKeyConfigured,
     schemaReady,
     effectiveSource: config.available
-      ? selectCredentialSource({ personalKeyStored, defaultKeyConfigured: config.defaultKeyConfigured })
+      ? selectCredentialSource({
+        personalKeyStored: personalKeyInUse(config, record?.credential),
+        defaultKeyConfigured: config.defaultKeyConfigured
+      })
       : AI_CREDENTIAL_SOURCES.MISSING,
-    credential: credential ? { configured: true, ...credential } : { configured: false },
-    timeouts: { queueTimeoutMs: config.queueTimeoutMs, requestTimeoutMs: config.requestTimeoutMs }
+    credential: credentialView(config, record),
+    timeouts: { queueTimeoutMs: config.queueTimeoutMs, requestTimeoutMs: config.requestTimeoutMs },
+    probe: await describeAiProbe(config)
   };
 }
 
@@ -60,10 +114,12 @@ export async function loadAiCredentialStatus() {
     status = await readCredentialStatus(pool, sicil);
   } catch (error) {
     if (!isMissingAiCredentialSchema(error)) throw error;
-    return statusView(config, { schemaReady: false, credential: null });
+    // Tablo yokken de kimlik değişmezi korunur.
+    await requireDirectoryMember(pool, sicil);
+    return statusView(config, { schemaReady: false, record: null });
   }
   if (!status.knownSicil) throw unknownSicil();
-  return statusView(config, { schemaReady: true, credential: status.credential });
+  return statusView(config, { schemaReady: true, record: status });
 }
 
 /**
@@ -73,9 +129,10 @@ export async function loadAiCredentialStatus() {
  */
 export async function saveAiPersonalCredential({ apiKey }) {
   const sicil = await getTrustedCurrentSicil();
-  const config = readAiConfig();
-  if (!config.enabled) throw new AiError(AI_ERROR_CODES.AI_DISABLED);
-  if (!config.available || !config.personalKeysSupported) {
+  // Rehberde olmayan kimlik yapılandırmayı ve anahtar biçimi kararlarını öğrenemez.
+  await requireDirectoryMember(await getSqlPool(), sicil);
+  const config = requireAiAvailable(readAiConfig());
+  if (!config.personalKeysSupported) {
     throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'PERSONAL_KEYS_UNSUPPORTED' } });
   }
   const normalized = normalizeApiKeyInput(apiKey);
@@ -83,34 +140,46 @@ export async function saveAiPersonalCredential({ apiKey }) {
     throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { message: normalized.message, details: { reason: normalized.reason } });
   }
   const encrypted = encryptCredential({ masterKey: config.masterKey, sicil, apiKey: normalized.value });
+  let credential;
   try {
-    const credential = await withSqlTransaction(async (transaction) => {
+    credential = await withSqlTransaction(async (transaction) => {
       const status = await readCredentialStatus(transaction, sicil);
       if (!status.knownSicil) throw unknownSicil();
       return upsertCredential(transaction, sicil, { encrypted, hint: apiKeyHint(normalized.value) });
     }, { deadlockRetries: 2 });
-    return statusView(config, { schemaReady: true, credential });
   } catch (error) {
     if (isMissingAiCredentialSchema(error)) {
       throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'SCHEMA_MISSING' } });
     }
     throw error;
   }
+  return statusView(config, { schemaReady: true, record: { credential, masterKeyId: encrypted.masterKeyId } });
 }
 
+/**
+ * Kişisel anahtarı kaldırır.
+ *
+ * Yalnızca OKUNAN satır silinir. Okuma ile silme arasında başka bir oturumda
+ * kaydedilen yeni anahtar silinmez; çağıran `CONFLICT` alır.
+ */
 export async function removeAiPersonalCredential() {
   const sicil = await getTrustedCurrentSicil();
   const config = readAiConfig();
   const pool = await getSqlPool();
+  let status;
   try {
-    const status = await readCredentialStatus(pool, sicil);
-    if (!status.knownSicil) throw unknownSicil();
-    if (status.credential) await deleteCredential(pool, sicil);
+    status = await readCredentialStatus(pool, sicil);
   } catch (error) {
     if (!isMissingAiCredentialSchema(error)) throw error;
-    return statusView(config, { schemaReady: false, credential: null });
+    await requireDirectoryMember(pool, sicil);
+    return statusView(config, { schemaReady: false, record: null });
   }
-  return statusView(config, { schemaReady: true, credential: null });
+  if (!status.knownSicil) throw unknownSicil();
+  if (status.credential) {
+    const { deleted } = await deleteCredential(pool, sicil, { rowVersion: status.rowVersion });
+    if (!deleted && (await readCredentialStatus(pool, sicil)).credential) throw replacedConcurrently();
+  }
+  return statusView(config, { schemaReady: true, record: null });
 }
 
 function unreadablePersonalKey() {
@@ -121,15 +190,17 @@ function unreadablePersonalKey() {
 }
 
 async function readSecretRecord(sicil, signal) {
-  const pool = await getSqlPool();
+  const executor = executorFor(await getSqlPool(), signal);
   try {
-    const lookup = await readCredentialSecret(signal ? boundedExecutor(pool, signal) : pool, sicil);
+    const lookup = await readCredentialSecret(executor, sicil);
     if (!lookup.knownSicil) throw unknownSicil();
     return lookup;
   } catch (error) {
-    // Tablo yoksa hiç kimsenin kişisel anahtarı olamaz.
-    if (isMissingAiCredentialSchema(error)) return { record: null, credential: null };
-    throw error;
+    if (!isMissingAiCredentialSchema(error)) throw error;
+    // Tablo yoksa hiç kimsenin kişisel anahtarı olamaz; kimlik değişmezi yine
+    // de ayrı ve tabloya dokunmayan bir sorguyla korunur.
+    await requireDirectoryMember(executor, sicil);
+    return { record: null, credential: null };
   }
 }
 
@@ -152,12 +223,13 @@ function decryptPersonal(config, sicil, record) {
  *
  * Kişisel anahtar KAYITLIYSA yalnızca o döner; çözülemezse hata verilir ve
  * kurumsal anahtara GEÇİLMEZ. Kurumsal anahtar yalnızca kişisel kayıt hiç
- * yokken kullanılır.
+ * yokken ya da kişisel anahtar kullanımı yapılandırmayla kapatıldığında
+ * (ana anahtar tanımsız) kullanılır.
  */
 export async function resolveAiCredential({ sicil, config, signal = null }) {
   const lookup = await readSecretRecord(sicil, signal);
   const source = selectCredentialSource({
-    personalKeyStored: Boolean(lookup.record),
+    personalKeyStored: personalKeyInUse(config, lookup.record),
     defaultKeyConfigured: config.defaultKeyConfigured
   });
   if (source === AI_CREDENTIAL_SOURCES.PERSONAL) {
@@ -179,7 +251,12 @@ export async function readPersonalCredentialForValidation({ sicil, config, signa
   return { apiKey: decryptPersonal(config, sicil, lookup.record), rowVersion: lookup.record.rowVersion };
 }
 
-export async function storeCredentialValidation({ sicil, rowVersion, status }) {
-  const pool = await getSqlPool();
-  return recordCredentialValidation(pool, sicil, { rowVersion, status });
+/** Doğrulama sonucunu yazar; `recorded: false` sonucun bu arada değişen anahtara uygulanmadığını söyler. */
+export async function storeCredentialValidation({ sicil, rowVersion, status, signal = null }) {
+  return recordCredentialValidation(executorFor(await getSqlPool(), signal), sicil, { rowVersion, status });
+}
+
+/** Yönetici bağlantı testi için: anahtar tablosu kurulu mu (satır okumadan)? */
+export async function checkAiCredentialSchema({ signal = null } = {}) {
+  return readCredentialSchema(executorFor(await getSqlPool(), signal));
 }

@@ -1,5 +1,7 @@
 import 'server-only';
 import { normalizeApiKeyInput } from '../../domain/ai/aiCredentialPolicy.js';
+import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
+import { AiError } from './aiErrors.js';
 
 /**
  * Yapay zekâ yapılandırması — YALNIZCA sunucu tarafı.
@@ -94,11 +96,20 @@ function parseBaseUrl(env, allowInsecureHttp, issues) {
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
 }
 
+/** Örnek dosyadaki `<AD>` biçimli yer tutucu; gerçek anahtar yerine bırakılmış demektir. */
+const PLACEHOLDER_PATTERN = /^<[^<>]*>$/;
+
+/**
+ * Kurumsal anahtar, kişisel anahtarla AYNI biçim kuralından geçer; ayrıca
+ * yalnızca bütünüyle yer tutucu olan değer reddedilir. İkinci bir anahtar
+ * dilbilgisi, kişisel olarak kabul edilen bir anahtarı kurumsal olarak
+ * reddedip bütün yapılandırmayı kullanılamaz kılardı.
+ */
 function parseDefaultApiKey(env, issues) {
   const raw = text(env, NAMES.DEFAULT_API_KEY);
   if (!raw) return null;
   const normalized = normalizeApiKeyInput(raw);
-  if (!normalized.ok || /[<>]/.test(raw)) {
+  if (!normalized.ok || PLACEHOLDER_PATTERN.test(normalized.value)) {
     issues.push(NAMES.DEFAULT_API_KEY);
     return null;
   }
@@ -196,6 +207,26 @@ export function parseAiConfig(env = process.env) {
     queueTimeoutMs,
     requestTimeoutMs
   });
+}
+
+/**
+ * Yapay zekâ kullanılabilir mi? Değilse kararlı hata fırlatır.
+ *
+ * Bilinçli olarak kapatılmış özellik `AI_DISABLED` olur; geçersiz bir
+ * `MERGEN_ROTA_AI_ENABLED` değeri (ör. `tru`) ise kapalı sayılır ama
+ * yapılandırma hatasıdır ve öyle bildirilir.
+ */
+export function requireAiAvailable(config) {
+  if (!config.enabled) {
+    if (config.issues.length) {
+      throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CONFIGURATION_INVALID' } });
+    }
+    throw new AiError(AI_ERROR_CODES.AI_DISABLED);
+  }
+  if (!config.available) {
+    throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CONFIGURATION_INVALID' } });
+  }
+  return config;
 }
 
 let cachedSignature = null;

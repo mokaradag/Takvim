@@ -2,6 +2,7 @@ import 'server-only';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { COMPONENTS, EVENT_SEVERITIES } from '../../domain/observability/eventModel.js';
 import { safeErrorResponse, ServerPersistenceError } from '../errors.js';
+import { isSameOriginRequest } from '../identity/sameOriginRequest.js';
 import { logEvent } from '../observability/structuredLogger.js';
 import { AiError, isAiError } from './aiErrors.js';
 
@@ -25,10 +26,26 @@ function invalidBody(reason) {
 }
 
 /**
+ * Durum değiştiren her yapay zekâ isteği aynı kaynaktan gelmelidir.
+ *
+ * Gövdesiz `POST /probe` ve `POST /credential/validation` basit (ön denetimsiz)
+ * isteklerdir: `SameSite=Lax` çerezi aynı sitedeki kardeş bir kaynağın
+ * formuyla da gider ve kullanıcının anahtarıyla sağlayıcı çağrısı ya da kapasite
+ * tüketimi tetiklenebilirdi. Denetim oturum çözümünden ÖNCE yapılır.
+ */
+export function assertSameOriginAiRequest(request) {
+  if (!isSameOriginRequest(request)) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Yapay zekâ isteği aynı kaynaktan gelmelidir.');
+  }
+}
+
+/**
  * JSON gövdesini SINIRLI okur.
  *
  * Ayrıştırma hatası günlüğe yazılmaz ve yanıta taşınmaz: çalışma zamanının
  * JSON hata iletisi gövdenin bir parçasını (ör. bir API anahtarını) içerebilir.
+ * İstemcinin gövde gönderirken bağlantıyı kesmesi iç hata değil, kararlı bir
+ * istek sonucudur.
  */
 export async function readJsonBody(request, { maxBytes = MAX_BODY_BYTES } = {}) {
   if (!/^application\/json\b/i.test(String(request.headers.get('content-type') || ''))) throw invalidBody('CONTENT_TYPE');
@@ -37,7 +54,13 @@ export async function readJsonBody(request, { maxBytes = MAX_BODY_BYTES } = {}) 
   const chunks = [];
   let total = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let step;
+    try {
+      step = await reader.read();
+    } catch {
+      throw invalidBody('BODY_INTERRUPTED');
+    }
+    const { done, value } = step;
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
@@ -66,8 +89,13 @@ export function aiErrorResponse(error) {
     if (error.retryAfterMs) headers['retry-after'] = String(Math.max(1, Math.ceil(error.retryAfterMs / 1000)));
     return Response.json(aiErrorBody(error), { status: error.status, headers });
   }
-  // Oturum, yetki ve veritabanı hataları var olan sözleşmeyle döner.
-  if (error instanceof ServerPersistenceError) return safeErrorResponse(error);
+  // Oturum, yetki ve veritabanı hataları var olan sözleşmeyle döner; önbellek
+  // anlamı öteki yapay zekâ yanıtlarıyla aynıdır.
+  if (error instanceof ServerPersistenceError) {
+    const response = safeErrorResponse(error);
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  }
   logEvent({
     severity: EVENT_SEVERITIES.ERROR,
     component: COMPONENTS.AI,

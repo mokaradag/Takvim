@@ -216,3 +216,109 @@ test('iş kodu somut model adı içermez; model adları yalnızca kayıt verisin
     for (const id of modelIds) assert.equal(source.includes(`'${id}'`), false, `${path.relative(root, file)} → ${id}`);
   }
 });
+
+test('tanınmayan alan yazım hatası sayılır: güvenlik sınırı sessizce kalkmaz', () => {
+  const typo = validateModelRegistry(registry({
+    models: [
+      { id: 'hizli-model', capabilities: ['chat', 'tools'], maxConcurreny: 1 },
+      { id: 'gomme-model', capabilities: ['embedding'] }
+    ],
+    profiles: {
+      'chat.fast': { model: 'hizli-model', timeoutMS: 5000, maxOutputToken: 64 },
+      embedding: { model: 'gomme-model' }
+    }
+  }));
+  assert.equal(typo.ok, false);
+  const text = typo.issues.join('\n');
+  assert.match(text, /models\[0\]: tanınmayan alan "maxConcurreny"/);
+  assert.match(text, /profiles\.chat\.fast: tanınmayan alan "timeoutMS"/);
+  assert.match(text, /profiles\.chat\.fast: tanınmayan alan "maxOutputToken"/);
+  const topLevel = validateModelRegistry({ ...registry(), modeller: [] });
+  assert.match(topLevel.issues.join('\n'), /\$: tanınmayan alan "modeller"/);
+  // Alan adı değer gibi yansıtılmaz; biçimsiz ad gizlenir.
+  const odd = validateModelRegistry(registry({ models: [{ id: 'hizli-model', capabilities: ['chat'], 'sk anahtar?': 1 }] }));
+  assert.match(odd.issues.join('\n'), /tanınmayan alan \(geçersiz ad\)/);
+  // Güncel kurum içi katalog ve varsayılan kayıt yalnızca tanınan alanları kullanır.
+  assert.equal(validateModelRegistry(DEFAULT_AI_MODEL_REGISTRY).ok, true);
+});
+
+test('etkin profilin çıktı sınırı modelin bağlam penceresini aşamaz', () => {
+  const tooLarge = validateModelRegistry(registry({
+    models: [{ id: 'kucuk-model', capabilities: ['chat'], contextTokens: 32 }],
+    profiles: { 'chat.fast': { model: 'kucuk-model', maxOutputTokens: 512 } }
+  }));
+  assert.equal(tooLarge.ok, false);
+  assert.match(tooLarge.issues.join('\n'), /profiles\.chat\.fast\.maxOutputTokens: modelin bağlam penceresinden/);
+  const disabled = validateModelRegistry(registry({
+    models: [{ id: 'kucuk-model', capabilities: ['chat'], contextTokens: 32 }],
+    profiles: { 'chat.fast': { model: 'kucuk-model', maxOutputTokens: 512, enabled: false } }
+  }));
+  assert.equal(disabled.ok, true, 'kapalı profil istek üretmez');
+  const fits = validateModelRegistry(registry({
+    models: [{ id: 'kucuk-model', capabilities: ['chat'], contextTokens: 512 }],
+    profiles: { 'chat.fast': { model: 'kucuk-model', maxOutputTokens: 512 } }
+  }));
+  assert.equal(fits.ok, true);
+});
+
+test('UTF-8 BOM ile kaydedilmiş geçerli kayıt dosyası okunur', async (t) => {
+  const file = await tempRegistryFile(t, `﻿${JSON.stringify(registry())}`);
+  resetAiModelRegistryForTests();
+  t.after(() => resetAiModelRegistryForTests());
+  const loaded = await loadAiModelRegistry({ path: file });
+  assert.equal(resolveModelProfile(loaded, 'chat.fast').route.model, 'hizli-model');
+});
+
+test('boyut sınırı okunan baytlara uygulanır: boyutunu bildirmeyen büyük dosya da reddedilir', async (t) => {
+  resetAiModelRegistryForTests();
+  t.after(() => resetAiModelRegistryForTests());
+  const tooLarge = await tempRegistryFile(t, JSON.stringify({ ...registry(), padding: 'x'.repeat(300 * 1024) }));
+  await assert.rejects(loadAiModelRegistry({ path: tooLarge }), { code: 'AI_CONFIGURATION_ERROR' });
+  assert.match(aiModelRegistryState().issues[0], /okunamadı/);
+
+  // `/proc` dosyaları `stat` ile 0 bayt görünür ama okunduğunda çok daha
+  // büyüktür: sınır yalnızca `stat` sonucuna dayansaydı bu dosya okunurdu.
+  const { existsSync, statSync } = await import('node:fs');
+  const procFile = '/proc/kallsyms';
+  if (!existsSync(procFile) || statSync(procFile).size !== 0) {
+    t.diagnostic('`/proc/kallsyms` bu ortamda yok; okunan bayt sınırı dolaylı sınanmadı.');
+    return;
+  }
+  resetAiModelRegistryForTests();
+  await assert.rejects(loadAiModelRegistry({ path: procFile }), { code: 'AI_CONFIGURATION_ERROR' });
+  assert.match(aiModelRegistryState().issues[0], /okunamadı/);
+});
+
+test('süre aşımına uğrayan dosya okuması bitmeden yeni okuma başlatılmaz', { skip: process.platform === 'win32' }, async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const { open: openFile, unlink } = await import('node:fs/promises');
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-registry-fifo-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'ai-models.json');
+  // Yazıcısı olmayan FIFO'yu açmak, erişilemeyen bir UNC paylaşımı gibi askıda kalır.
+  execFileSync('mkfifo', [file]);
+  resetAiModelRegistryForTests();
+  t.after(() => resetAiModelRegistryForTests());
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 1000;
+  const first = loadAiModelRegistry({ path: file, now: () => now });
+  t.mock.timers.tick(5000);
+  await assert.rejects(first, { code: 'AI_CONFIGURATION_ERROR' });
+  assert.match(aiModelRegistryState().issues[0], /süre sınırında yanıt vermedi/);
+
+  // Bekleme süresi dolsa bile alttaki açma işlemi sürdükçe yeni okuma başlamaz.
+  now += 60000;
+  await assert.rejects(loadAiModelRegistry({ path: file, now: () => now }), { code: 'AI_CONFIGURATION_ERROR' });
+  assert.equal(aiModelRegistryState().status, 'error');
+
+  // Takılı okuma çözülünce işaret kalkar; dosya düzelince yeniden okunur.
+  const writer = await openFile(file, 'w');
+  await writer.writeFile(JSON.stringify(registry()));
+  await writer.close();
+  for (let round = 0; round < 50; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  await unlink(file);
+  await writeFile(file, JSON.stringify(registry()), 'utf8');
+  now += 60000;
+  const loaded = await loadAiModelRegistry({ path: file, now: () => now });
+  assert.equal(resolveModelProfile(loaded, 'chat.fast').route.model, 'hizli-model');
+});

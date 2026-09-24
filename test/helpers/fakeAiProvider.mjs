@@ -4,9 +4,10 @@
  * Gerçek bir dil modeli olmadan ağ geçidinin bütün yollarını sınamak için
  * sağlayıcı sözleşmesini (`chatCompletion`, `listModels`) uygular. Davranış
  * çağrı başına sıraya konur: normal yanıt, gecikmeli yanıt, takılı kalma,
- * HTTP durumu, ağ hatası, bozuk yanıt ya da testin elle çözdüğü ertelenmiş
- * yanıt. Takılı ve gecikmeli davranışlar sinyale uyar; `ignoreAbort` ile
- * sinyali yok sayan (kötü davranan) bir sağlayıcı da taklit edilir.
+ * HTTP durumu, ağ hatası, bozuk yanıt, metinsiz yanıt ya da testin elle
+ * çözdüğü ertelenmiş yanıt. Takılı ve gecikmeli davranışlar sinyale uyar;
+ * `ignoreAbort` ile sinyali yok sayan (kötü davranan) bir sağlayıcı da
+ * taklit edilir. Sırada davranış yoksa anahtarsız model listesi 401 döner.
  *
  * Duvar saati beklenmez: testler `waitForActive()` ile çağrının gerçekten
  * sağlayıcıya ulaştığını bekler.
@@ -74,9 +75,12 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     const { signal, model } = input;
     switch (behavior.type) {
       case 'reply':
-        return Promise.resolve(call.kind === 'models' ? { status: 200 } : chatResult(behavior.text ?? defaultText, model));
+        return Promise.resolve(call.kind === 'models' ? { status: 200, retryAfter: null } : chatResult(behavior.text ?? defaultText, model));
+      case 'empty':
+        // Araç istenmemiş sohbette metin taşımayan (`content: null`) yanıt.
+        return Promise.resolve(parseChatCompletion({ model, choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'stop' }] }));
       case 'status':
-        if (call.kind === 'models') return Promise.resolve({ status: behavior.status });
+        if (call.kind === 'models') return Promise.resolve({ status: behavior.status, retryAfter: behavior.retryAfter ?? null });
         return Promise.reject(classifyProviderStatus(behavior.status, behavior.retryAfter ?? null));
       case 'network':
         return Promise.reject(classifyNetworkFailure({ cause: { code: behavior.code } }));
@@ -108,7 +112,9 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
   }
 
   async function execute(kind, input) {
-    const behavior = queue.shift() || { type: 'reply' };
+    // Gerçek ağ geçitleri gibi anahtarsız model listesi varsayılan olarak 401 döner.
+    const fallback = kind === 'models' && !input.apiKey ? { type: 'status', status: 401 } : { type: 'reply' };
+    const behavior = queue.shift() || fallback;
     const call = {
       kind,
       model: input.model ?? null,

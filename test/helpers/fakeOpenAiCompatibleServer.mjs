@@ -2,8 +2,8 @@
  * OpenAI uyumlu yapay zekâ ağ geçidinin yerel HTTP ikizi.
  *
  * Gerçek `fetch` bağdaştırıcısını gerçek soketlerle sınar: normal yanıt,
- * HTTP hata durumları, oran sınırı, bozuk ve aşırı büyük gövde, yönlendirme,
- * gecikme ve hiç yanıt vermeme. Hata gövdeleri bilerek `Authorization`
+ * HTTP hata durumları, oran sınırı, bozuk ve aşırı büyük gövde, model listesi
+ * yerine HTML sayfası, yönlendirme, gecikme ve hiç yanıt vermeme. Hata gövdeleri bilerek `Authorization`
  * başlığını yankılar; bağdaştırıcının gövdeyi hiçbir yere taşımadığı böylece
  * doğrulanır. İstemcinin kestiği bağlantılar sayılır.
  *
@@ -79,6 +79,12 @@ export async function startFakeOpenAiCompatibleServer({ port = 0, host = '127.0.
           return;
         }
         if (request.url.endsWith('/models')) {
+          if (scenario.modelsHtml) {
+            // Yanlış adrese yönelmiş ters vekilin 200 dönen varsayılan sayfası.
+            response.writeHead(200, { 'content-type': 'text/html' });
+            response.end('<!doctype html><title>Hoş geldiniz</title>');
+            return;
+          }
           json(response, 200, { object: 'list', data: [{ id: 'fake-model', object: 'model' }] });
           return;
         }

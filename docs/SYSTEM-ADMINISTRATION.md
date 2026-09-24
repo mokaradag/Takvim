@@ -140,9 +140,10 @@ Zaman aralığı **sunucuda sınırlanır**; yalnızca tanımlı dört pencere g
 
 - **Özet** — istek sayısı, hata oranı, ortalama, P50/P95/P99, en yavaş gözlem ve
   güncel pencere.
-- **Grafikler** — yüzdelik dağılımı, hata oranı, istek hacmi, süreç belleği ve
-  Outlook kuyruk derinliği. Ölçüm bulunmayan kovada çizgi **kesilir**; eksik
-  veri sıfır gibi çizilmez.
+- **Grafikler** — yüzdelik dağılımı, hata oranı, istek hacmi, süreç belleği,
+  Outlook kuyruk derinliği ve **yapay zekâ yükü** (etkin ve sıradaki yapay zekâ
+  istekleri). Ölçüm bulunmayan kovada çizgi **kesilir**; eksik veri sıfır gibi
+  çizilmez.
 - **Yavaş İşlemler** — işlem adı, sayı, P50/P95/P99, hata oranı ve son görülme;
   başlıktan sıralanır. Listeye giren işlemler **ortalama gecikmeye** göre
   seçilir: toplam süre ölçüt olsaydı yoğun ama hızlı bir uç, düşük hacimli ama
@@ -458,10 +459,17 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
 - **Kimlik testi oturum açmaz**: yalnızca ortak anahtar kümesi (JWKS) adresi
   okunur; kimlik bilgisi gönderilmez, hesap kilitlenmez.
 - **Yapay zekâ testi model çalıştırmaz**: 6 saniye süre sınırlı `GET /models`
-  isteğidir; kurumsal anahtar tanımlıysa o kullanılır ve yanıtın yalnızca HTTP
-  durumu okunur. Yapay zekâ bileşeninin sağlığı ağ beklemez; süreç belleğindeki
-  kapasite ve son sağlayıcı temaslarından türetilir ve hiçbir zaman *Kritik*
-  olmaz (bkz. `docs/AI-PLATFORM.md`).
+  isteğidir; kurumsal anahtar tanımlıysa o kullanılır, hata yanıtının yalnızca
+  HTTP durumu okunur ve başarılı yanıtın bir model listesi olduğu doğrulanır.
+  Reddedilen kurumsal anahtar, 404/3xx ya da geçersiz istek sağlık hatası
+  sayılır; kart önceki başarıya rağmen *Dikkat* gösterir. Uca ulaşıldıktan
+  sonra yapılandırılmış model kaydı okunur ve kurumsal anahtar yoksa kişisel
+  anahtar tablosu (0016) doğrulanır. Test veritabanı gerektirmediği için
+  sağlayıcı beklenirken yönetim kilidinin SQL işlemi tutulmaz; aynı süreçte
+  tek test kuralı korunur. Yapay zekâ bileşeninin sağlığı ağ beklemez; süreç
+  belleğindeki kapasite ve son sağlayıcı sonuçlarından türetilir, yalnızca
+  paylaşılan kapasitenin dolmasını uyarı sayar ve hiçbir zaman *Kritik* olmaz
+  (bkz. `docs/AI-PLATFORM.md`).
 
 Aynı anda **tek test** çalışır: ikinci bir test başlatılabilseydi ilkinin bitişi
 bütün düğmeleri erken açar ve yinelenen yoklamalar gönderilebilirdi.

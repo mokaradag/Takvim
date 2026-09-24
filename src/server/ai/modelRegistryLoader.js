@@ -1,5 +1,5 @@
 import 'server-only';
-import { readFile, stat } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { describeModelRegistry, validateModelRegistry } from '../../domain/ai/aiModelRegistry.js';
 import { AiError } from './aiErrors.js';
@@ -16,12 +16,17 @@ import { DEFAULT_AI_MODEL_REGISTRY } from './defaultModelRegistry.js';
  */
 
 const STATE_KEY = Symbol.for('mergen-rota.ai-model-registry');
-const FILE_READ_TIMEOUT_MS = 5000;
+/** Dosya kaydının okunma bütçesi; istemci süre hesabı da bu değeri kullanır. */
+export const AI_MODEL_REGISTRY_READ_TIMEOUT_MS = 5000;
 const FILE_RETRY_AFTER_FAILURE_MS = 30000;
 const MAX_FILE_BYTES = 256 * 1024;
+const UTF8_BOM = '﻿';
 
 function emptyState() {
-  return { key: null, source: null, status: 'idle', registry: null, issues: [], loadedAt: null, retryAt: 0, inFlight: null };
+  return {
+    key: null, source: null, status: 'idle', registry: null, issues: [], loadedAt: null, retryAt: 0,
+    inFlight: null, fileOperation: null
+  };
 }
 
 function state() {
@@ -35,27 +40,58 @@ function registryUnavailable(source) {
   });
 }
 
-async function readRegistryFile(path) {
+/**
+ * Boyut sınırı OKUNAN BAYTLARA uygulanır: `stat` ile okuma arasında büyüyen ya
+ * da değiştirilen dosya sınırı aşamaz. Denetim ve okuma aynı dosya tanıtıcısı
+ * üzerinden yapılır; sınırın bir bayt fazlası okunursa dosya reddedilir.
+ */
+async function readBoundedFile(path, signal) {
+  const handle = await open(path, 'r');
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > MAX_FILE_BYTES) throw new Error('REGISTRY_FILE_INVALID');
+    const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      if (signal.aborted) throw new Error('REGISTRY_FILE_TIMEOUT');
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > MAX_FILE_BYTES) throw new Error('REGISTRY_FILE_INVALID');
+    const text = buffer.subarray(0, total).toString('utf8');
+    // Windows düzenleyicilerinin eklediği UTF-8 BOM geçerli bir belgeyi bozmaz.
+    return text.startsWith(UTF8_BOM) ? text.slice(UTF8_BOM.length) : text;
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+/**
+ * Süre sınırlı okuma.
+ *
+ * Süre dolunca çağıran hemen serbest kalır; ancak açma/okuma sistem çağrısı
+ * iptal edilemez. Alttaki işlem GERÇEKTEN bitene kadar `fileOperation`
+ * işareti durur ve yeni okuma başlatılmaz: erişilemeyen bir paylaşımda takılı
+ * işlemler iş parçacığı havuzunda (SQL sürücüsünün de kullandığı) birikmez.
+ */
+function readRegistryFile(current, path) {
   const controller = new AbortController();
   let timer;
-  const read = (async () => {
-    const info = await stat(path);
-    if (!info.isFile() || info.size > MAX_FILE_BYTES) throw new Error('REGISTRY_FILE_INVALID');
-    return readFile(path, { encoding: 'utf8', signal: controller.signal });
-  })();
-  // Süre dolduktan sonra gelen ret sahipsiz kalmaz.
-  read.catch(() => {});
+  const read = readBoundedFile(path, controller.signal);
+  current.fileOperation = read;
+  // Süre dolduktan sonra gelen ret sahipsiz kalmaz; işaret ancak işlem bitince kalkar.
+  read.catch(() => {}).finally(() => {
+    const holder = state();
+    if (holder.fileOperation === read) holder.fileOperation = null;
+  });
   const timeout = new Promise((resolve, reject) => {
     timer = setTimeout(() => {
       controller.abort();
       reject(new Error('REGISTRY_FILE_TIMEOUT'));
-    }, FILE_READ_TIMEOUT_MS);
+    }, AI_MODEL_REGISTRY_READ_TIMEOUT_MS);
   });
-  try {
-    return await Promise.race([read, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return Promise.race([read, timeout]).finally(() => clearTimeout(timer));
 }
 
 function settle(current, { source, registry = null, issues = [], now }) {
@@ -70,7 +106,7 @@ function settle(current, { source, registry = null, issues = [], now }) {
 async function loadFromFile(current, path, now) {
   let document;
   try {
-    document = JSON.parse(await readRegistryFile(path));
+    document = JSON.parse(await readRegistryFile(current, path));
   } catch (error) {
     const unreadable = error instanceof SyntaxError ? 'JSON olarak ayrıştırılamadı' : 'okunamadı ya da süre sınırında yanıt vermedi';
     settle(current, { source: 'file', issues: [`$: kayıt dosyası ${unreadable}`], now: now() });
@@ -87,7 +123,8 @@ export async function loadAiModelRegistry({ path = null, now = Date.now } = {}) 
   let current = state();
   const key = path ? `file:${path}` : 'default';
   if (current.key !== key) {
-    globalThis[STATE_KEY] = { ...emptyState(), key };
+    // Önceki yolun hâlâ süren dosya işlemi unutulmaz.
+    globalThis[STATE_KEY] = { ...emptyState(), key, fileOperation: current.fileOperation };
     current = globalThis[STATE_KEY];
   }
   if (current.status === 'ready') return current.registry;
@@ -99,6 +136,8 @@ export async function loadAiModelRegistry({ path = null, now = Date.now } = {}) 
     return validated.registry;
   }
   if (current.status === 'error' && now() < current.retryAt) throw registryUnavailable('file');
+  // Süre aşımına uğramış önceki okuma hâlâ sürüyorsa yenisi başlatılmaz.
+  if (current.fileOperation) throw registryUnavailable('file');
   const job = loadFromFile(current, path, now).finally(() => {
     current.inFlight = null;
   });

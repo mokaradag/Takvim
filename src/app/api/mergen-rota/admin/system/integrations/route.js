@@ -1,10 +1,12 @@
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../../server/errors.js';
 import {
   loadSystemAdminContext,
-  withAdminActionLock
+  withAdminActionLock,
+  withLocalAdminActionLock
 } from '../../../../../../server/observability/adminRequestContext.js';
 import { withRouteObservability } from '../../../../../../server/observability/observeOperation.js';
 import {
+  integrationTestNeedsDatabaseLock,
   isTestableIntegration,
   loadIntegrations,
   testIntegration
@@ -48,7 +50,12 @@ export const POST = withRouteObservability('api.admin.system.integrations.test',
     if (!isTestableIntegration(id)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Bu entegrasyon için bağlantı testi tanımlı değil.', { status: 400 });
     }
-    const result = await withAdminActionLock(`integration-test:${id}`, () => testIntegration(pool, id), pool);
+    const lockId = `integration-test:${id}`;
+    const run = () => testIntegration(pool, id);
+    // Dış uca giden ve veritabanına dokunmayan test, SQL kilidi tutmadan çalışır.
+    const result = integrationTestNeedsDatabaseLock(id)
+      ? await withAdminActionLock(lockId, run, pool)
+      : await withLocalAdminActionLock(lockId, run);
     return Response.json({ ok: true, integrationId: id, result }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     return safeErrorResponse(error);

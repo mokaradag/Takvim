@@ -134,6 +134,13 @@ test('yapılandırma kapalı kalacak biçimde doğrulanır ve özet gizli değer
   assert.equal(invalidSwitch.enabled, false);
   assert.deepEqual(invalidSwitch.issues, ['MERGEN_ROTA_AI_ENABLED']);
   assert.equal(parseAiConfig({}).enabled, false, 'varsayılan kapalıdır');
+
+  // Kurumsal anahtar kişisel anahtarla aynı biçim kuralından geçer; yalnızca
+  // bütünüyle yer tutucu olan değer reddedilir.
+  const angleKey = 'kurum<anahtar>degeri-9f3Kq2Lm';
+  assert.equal(normalizeApiKeyInput(angleKey).ok, true);
+  assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_DEFAULT_API_KEY: angleKey }), []);
+  assert.equal(parseAiConfig({ ...base, MERGEN_ROTA_AI_DEFAULT_API_KEY: angleKey }).defaultApiKey, angleKey);
 });
 
 test('anahtar biçimi tek kuraldan denetlenir; kaynak seçimi yalnızca varlığa bakar', () => {
@@ -415,8 +422,10 @@ test('doğrulama yalnızca kişisel anahtarı sınar ve sonucu zaman damgasıyla
   assert.equal(inconclusive.status, 502);
   assert.equal((await credentialStatus()).body.ai.credential.lastValidationStatus, 'FORBIDDEN');
 
+  // `VALID` ancak uç anahtarsız isteği reddediyorsa verilir: ilk sonuçtan sonra
+  // anahtarsız bir denetim yapılır (kurumsal anahtar hiç kullanılmaz).
   assert.deepEqual(provider.calls.map((call) => [call.kind, call.apiKey]), [
-    ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A]
+    ['models', PERSONAL_KEY_A], ['models', null], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A]
   ]);
 
   // Anahtar değişince eski doğrulama sonucu taşınmaz.
@@ -466,6 +475,180 @@ test('ana anahtar yokken kişisel anahtar saklanmaz; kurumsal anahtar kullanılm
   assert.equal(saved.body.error.details.reason, 'PERSONAL_KEYS_UNSUPPORTED');
   assert.equal((await runProbe()).body.result.credentialSource, 'default');
   assert.deepEqual(provider.calls.map((call) => call.apiKey), [DEFAULT_KEY]);
+});
+
+test('ana anahtar kaldırıldığında kayıtlı kişisel satır kurumsal anahtarı engellemez', async (t) => {
+  const { db, provider, setEnv } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  setEnv({ MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: null });
+  const status = await credentialStatus();
+  assert.equal(status.body.ai.personalKeysSupported, false);
+  assert.equal(status.body.ai.effectiveSource, 'default', 'kullanılamayan kayıt etkin kaynak gösterilmez');
+  assert.equal(status.body.ai.credential.configured, true, 'kayıt yine de kaldırılabilir');
+  const probe = await runProbe();
+  assert.equal(probe.status, 200);
+  assert.equal(probe.body.result.credentialSource, 'default');
+  assert.deepEqual(provider.calls.map((call) => call.apiKey), [DEFAULT_KEY]);
+  assert.equal((await removeKey()).status, 200);
+  assert.equal(db.aiUserCredentials.length, 0);
+});
+
+test('ana anahtar değişince durum, kayıtlı anahtarı okunamaz gösterir ve eski doğrulama sonucunu taşımaz', async (t) => {
+  const { provider, setEnv } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'reply' });
+  assert.equal((await validateKey()).body.validation.status, 'VALID');
+  assert.equal((await credentialStatus()).body.ai.credential.readable, true);
+
+  setEnv({ MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: OTHER_MASTER_KEY });
+  const status = await credentialStatus();
+  assert.equal(status.body.ai.credential.configured, true);
+  assert.equal(status.body.ai.credential.readable, false);
+  assert.equal(status.body.ai.credential.lastValidationStatus, null, 'eski VALID sonucu gösterilmez');
+  assert.equal(status.body.ai.effectiveSource, 'personal', 'kural değişmez: kurumsal anahtara geçilmez');
+  assert.equal('masterKeyId' in status.body.ai.credential, false);
+  assertNoSecret(status.text, [MASTER_KEY, OTHER_MASTER_KEY, masterKeyId(masterBytes(MASTER_KEY))], 'durum yanıtı');
+});
+
+test('kaldırma, okuma ile silme arasında başka oturumda kaydedilen yeni anahtarı silmez', async (t) => {
+  const { db } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  db.aiCredentialHooks = {
+    beforeDelete(row, { nextRowVersion }) {
+      db.aiCredentialHooks = null;
+      // Başka sekmede yeni anahtar kaydedildi: satır sürümü değişir.
+      Object.assign(row, { KeyHint: PERSONAL_KEY_B.slice(-4), RowVersion: nextRowVersion() });
+    }
+  };
+  const removed = await removeKey();
+  assert.equal(removed.status, 409);
+  assert.equal(removed.body.error.code, 'CONFLICT');
+  assert.equal(removed.headers.get('cache-control'), 'no-store');
+  assert.equal(db.aiUserCredentials.length, 1, 'yeni anahtar korunur');
+  assert.equal(db.aiUserCredentials[0].KeyHint, PERSONAL_KEY_B.slice(-4));
+  // Çakışma olmadan kaldırma olağan biçimde çalışır.
+  assert.equal((await removeKey()).status, 200);
+  assert.equal(db.aiUserCredentials.length, 0);
+});
+
+test('0016 yokken rehberde olmayan Sicil kurumsal anahtarı kullanamaz ve durum öğrenemez', async (t) => {
+  const { db, provider, useSicil } = createAiStack(t, { sicil: SICIL_UNKNOWN });
+  db.aiCredentialSchemaMissing = true;
+  for (const response of [await credentialStatus(), await removeKey(), await runProbe(), await validateKey()]) {
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error.code, 'UNAUTHORIZED');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  }
+  assert.equal(provider.calls.length, 0, 'kurumsal anahtar kullanılmaz');
+  // Rehberdeki Sicil için tablo yokluğu olağan davranışını korur.
+  useSicil(SICIL_A);
+  assert.equal((await credentialStatus()).status, 200);
+  assert.equal((await runProbe()).body.result.credentialSource, 'default');
+});
+
+test('rehberde olmayan Sicil yapılandırma, profil ve biçim kararlarından önce reddedilir', async (t) => {
+  const { provider, setEnv } = createAiStack(t, { sicil: SICIL_UNKNOWN });
+  for (const env of [{ MERGEN_ROTA_AI_ENABLED: 'false' }, { MERGEN_ROTA_AI_ENABLED: 'true', MERGEN_ROTA_AI_BASE_URL: 'http://ai.example.internal/v1' }]) {
+    setEnv(env);
+    for (const response of [await runProbe(), await validateKey(), await saveKey('kisa'), await saveKey(PERSONAL_KEY_A)]) {
+      assert.equal(response.status, 401, JSON.stringify(env));
+      assert.equal(response.body.error.code, 'UNAUTHORIZED');
+    }
+  }
+  assert.equal(provider.calls.length, 0);
+});
+
+test('doğrulama sürerken anahtar değiştirilirse sonuç yeni anahtara yazılmaz ve bayat olarak bildirilir', async (t) => {
+  const { db, provider } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'deferred' });
+  const pending = validateKey();
+  await provider.waitForActive(1);
+  await saveKey(PERSONAL_KEY_B);
+  provider.calls[0].resolve();
+  const validation = await pending;
+  assert.equal(validation.status, 200);
+  assert.deepEqual(
+    { status: validation.body.validation.status, stale: validation.body.validation.stale, hint: validation.body.validation.credential.hint },
+    { status: null, stale: true, hint: PERSONAL_KEY_B.slice(-4) }
+  );
+  assert.equal(db.aiUserCredentials[0].LastValidationStatus, null, 'yeni anahtar doğrulanmış görünmez');
+});
+
+test('anahtarsız da model listesi veren uçta anahtar VALID sayılmaz ve sonuç kaydedilmez', async (t) => {
+  const { db, provider } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'reply' }, { type: 'reply' });
+  const validation = await validateKey();
+  assert.equal(validation.status, 503);
+  assert.equal(validation.body.error.code, 'AI_CONFIGURATION_ERROR');
+  assert.equal(validation.body.error.details.reason, 'MODELS_ENDPOINT_UNAUTHENTICATED');
+  assert.equal(db.aiUserCredentials[0].LastValidationStatus, null);
+  assert.deepEqual(provider.calls.map((call) => call.apiKey), [PERSONAL_KEY_A, null]);
+});
+
+test('doğrulamada oran sınırının Retry-After değeri korunur; bağlantı kurulamazsa bir kez yeniden denenir', async (t) => {
+  const { provider } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'status', status: 429, retryAfter: '30' });
+  const limited = await validateKey();
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, 'AI_RATE_LIMITED');
+  assert.equal(limited.body.error.details.retryAfterMs, 30000);
+  assert.equal(limited.headers.get('retry-after'), '30');
+
+  provider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'reply' });
+  const recovered = await validateKey();
+  assert.equal(recovered.status, 200);
+  assert.equal(recovered.body.validation.status, 'VALID');
+  assert.deepEqual(provider.calls.slice(1).map((call) => call.apiKey), [PERSONAL_KEY_A, PERSONAL_KEY_A, null]);
+});
+
+/* ── İstek güvenliği ──────────────────────────────────────── */
+
+test('durum değiştiren yapay zekâ istekleri yalnızca aynı kaynaktan kabul edilir', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const crossSite = [
+    { origin: 'https://kardes.example.internal' },
+    { 'sec-fetch-site': 'same-site' },
+    { 'sec-fetch-site': 'cross-site', origin: 'https://baska.example' }
+  ];
+  for (const headers of crossSite) {
+    for (const response of [
+      await runProbe({ headers }),
+      await validateKey({ headers }),
+      await saveKey(PERSONAL_KEY_A, { headers }),
+      await readJson(await credentialRoute.DELETE(aiRequest('/credential', { method: 'DELETE', headers })))
+    ]) {
+      assert.equal(response.status, 403, JSON.stringify(headers));
+      assert.equal(response.body.error.code, 'FORBIDDEN');
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+    }
+  }
+  assert.equal(provider.calls.length, 0);
+  assert.equal((db.aiUserCredentials || []).length, 0);
+
+  const sameOrigin = { origin: 'http://localhost', 'sec-fetch-site': 'same-origin' };
+  assert.equal((await saveKey(PERSONAL_KEY_A, { headers: sameOrigin })).status, 200);
+  assert.equal((await runProbe({ headers: sameOrigin })).status, 200);
+});
+
+test('gövde gönderilirken kesilen bağlantı kararlı istek hatasıdır, iç hata olarak kaydedilmez', async (t) => {
+  createAiStack(t);
+  const logs = captureConsole(t);
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.error(new Error('istemci bağlantıyı kesti'));
+    }
+  });
+  const request = new Request('http://localhost/api/mergen-rota/ai/credential', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body, duplex: 'half'
+  });
+  const response = await readJson(await credentialRoute.PUT(request));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'AI_REQUEST_INVALID');
+  assert.equal(response.body.error.details.reason, 'BODY_INTERRUPTED');
+  assert.equal(logs.some((line) => line.includes('AI_INTERNAL_ERROR')), false);
 });
 
 /* ── Gizlilik ─────────────────────────────────────────────── */

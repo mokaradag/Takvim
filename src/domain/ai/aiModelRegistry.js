@@ -56,10 +56,22 @@ const MAX_MODELS = 200;
 const MAX_ISSUES = 25;
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
 const SAFE_NAME_PATTERN = /^[a-z0-9._-]{1,40}$/;
+const SAFE_FIELD_PATTERN = /^[A-Za-z0-9._-]{1,40}$/;
+/**
+ * Tanınan alanlar. Kayıt KAPALI kalacak biçimde doğrulanır: `maxConcurreny`
+ * gibi bir yazım hatası sessizce yok sayılsaydı eşzamanlılık ya da süre sınırı
+ * fark edilmeden kalkardı.
+ */
+const DOCUMENT_FIELDS = new Set(['version', 'models', 'profiles']);
+const MODEL_FIELDS = new Set(['id', 'provider', 'capabilities', 'contextTokens', 'maxConcurrency', 'enabled']);
+const PROFILE_FIELDS = new Set(['model', 'enabled', 'maxOutputTokens', 'timeoutMs']);
+/** Tek istekte istenebilecek en büyük çıktı belirteci (profil sınırı ve çağrı sınırı için ortak). */
+export const AI_MAX_OUTPUT_TOKENS = 131072;
+
 const NUMBER_BOUNDS = Object.freeze({
   contextTokens: [1, 10000000],
   maxConcurrency: [1, 1000],
-  maxOutputTokens: [1, 131072],
+  maxOutputTokens: [1, AI_MAX_OUTPUT_TOKENS],
   timeoutMs: [1000, 600000]
 });
 
@@ -102,6 +114,14 @@ function safeName(value) {
   return SAFE_NAME_PATTERN.test(String(value)) ? `"${value}"` : '(geçersiz ad)';
 }
 
+function rejectUnknownFields(entry, allowed, path, add) {
+  for (const field of Object.keys(entry)) {
+    if (!allowed.has(field)) {
+      add(path, `tanınmayan alan ${SAFE_FIELD_PATTERN.test(field) ? `"${field}"` : '(geçersiz ad)'}`);
+    }
+  }
+}
+
 function validateModels(entries, add) {
   const models = new Map();
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -118,6 +138,7 @@ function validateModels(entries, add) {
       add(path, 'model tanımı bir nesne olmalıdır');
       return;
     }
+    rejectUnknownFields(entry, MODEL_FIELDS, path, add);
     const id = typeof entry.id === 'string' ? entry.id.trim() : '';
     if (!MODEL_ID_PATTERN.test(id)) {
       add(`${path}.id`, 'geçerli bir model kimliği olmalıdır');
@@ -169,6 +190,7 @@ function validateProfiles(entries, models, add) {
       add(path, 'profil tanımı bir nesne olmalıdır');
       continue;
     }
+    rejectUnknownFields(entry, PROFILE_FIELDS, path, add);
     const enabled = optionalBoolean(entry.enabled, true);
     if (!enabled.ok) add(`${path}.enabled`, 'true ya da false olmalıdır');
     const maxOutputTokens = optionalInteger(entry.maxOutputTokens, NUMBER_BOUNDS.maxOutputTokens);
@@ -185,6 +207,12 @@ function validateProfiles(entries, models, add) {
     if (profileEnabled && !model.enabled) add(`${path}.model`, 'etkin profil kapalı bir modele bağlanamaz');
     const missing = aiProfileRequirements(profileId).filter((capability) => !model.capabilities.includes(capability));
     if (profileEnabled && missing.length) add(`${path}.model`, `model gerekli yeteneği taşımıyor (${missing.join(', ')})`);
+    // Çıktı sınırı modelin bağlam penceresine sığmayan etkin profil, her
+    // isteği sağlayıcıya reddettirirdi; çelişki kayıtta yakalanır.
+    if (profileEnabled && maxOutputTokens.value != null && model.contextTokens != null
+      && maxOutputTokens.value > model.contextTokens) {
+      add(`${path}.maxOutputTokens`, 'modelin bağlam penceresinden (contextTokens) büyük olamaz');
+    }
     profiles.set(profileId, Object.freeze({
       id: profileId,
       model: modelId,
@@ -211,6 +239,7 @@ export function validateModelRegistry(document) {
     if (issues.length < MAX_ISSUES) issues.push(`${path}: ${problem}`);
   };
   if (!isPlainObject(document)) return { ok: false, issues: ['$: kayıt belgesi bir nesne olmalıdır'] };
+  rejectUnknownFields(document, DOCUMENT_FIELDS, '$', add);
   if (document.version !== 1) add('version', 'desteklenen tek sürüm 1');
   const models = validateModels(document.models, add);
   const profiles = validateProfiles(document.profiles, models, add);

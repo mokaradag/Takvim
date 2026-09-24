@@ -17,8 +17,8 @@ dayanabileceği küçük ama sağlam bir altyapıdır. Kapsam dışı bırakıla
 Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleksiz)
                │
                ▼
-          aiGateway  ── güvenilir Sicil → yapılandırma → profil → kapasite kirası
-               │                     → kimlik bilgisi → sağlayıcı
+          aiGateway  ── güvenilir Sicil → rehber üyeliği → yapılandırma → profil
+               │         → kapasite kirası → kimlik bilgisi → sağlayıcı
                ▼
    OpenAI uyumlu kurum içi yapay zekâ ağ geçidi
 ```
@@ -60,8 +60,8 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
 | `src/server/ai/aiGateway.js` | Sohbet tamamlama ve kişisel anahtar doğrulaması |
 | `src/server/ai/modelRegistryLoader.js`, `defaultModelRegistry.js` | Model kaydının yüklenmesi ve varsayılan eşleme (veri) |
 | `src/server/ai/aiTelemetry.js`, `aiHealth.js` | Telemetri, sağlık bileşeni ve entegrasyon kartı |
-| `src/server/ai/aiDiagnosticProbe.js` | Sabit istemli Aşama 1 bağlantı sınaması |
-| `src/server/ai/aiRouteSupport.js`, `aiRuntime.js`, `aiErrors.js` | Uç yardımcıları, süreç tekilleri, `AiError` |
+| `src/server/ai/aiDiagnosticProbe.js`, `aiProbeProfile.js` | Sabit istemli Aşama 1 bağlantı sınaması; sınama profilinin kullanılabilirliği ve sunucu süre bütçesi |
+| `src/server/ai/aiRouteSupport.js`, `aiRuntime.js`, `aiErrors.js` | Uç yardımcıları (aynı kaynak denetimi dâhil), süreç tekilleri, `AiError` |
 | `src/features/ai/*` | Ayarlar kartı, istemci sarmalayıcısı ve saf sunum kuralları |
 
 ---
@@ -76,11 +76,22 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
   oturumdan türetilir. Kullanıcı adla eşleştirilmez.
 - Kimlik her denetimden **önce** doğrulanır: oturumu olmayan çağıran,
   yapay zekânın açık olup olmadığını ya da yapılandırma durumunu öğrenemez.
+- Oturumdaki Sicil'in kurumsal personel kaynağında (`MR_V_PeopleDirectory`)
+  bulunduğu da yapılandırma, profil, gövde ve anahtar biçimi kararlarından
+  **önce** denetlenir. Bu denetim anahtar tablosuna dokunmayan ayrı bir
+  sorguyla yapılır; 0016 uygulanmamış kurulumda da rehberde olmayan Sicil
+  kurumsal anahtarı kullanamaz.
 - Her SQL deyimi yalnızca `@sicil` satırına dokunur (`WHERE Sicil = @sicil`).
   Başka bir Sicil'in satırını okuyan, değiştiren ya da silen bir yol yoktur;
   A kullanıcısının anahtarı B kullanıcısına hiçbir koşulda ulaşmaz (ayrıca
   şifre, Sicil'e bağlıdır — §4).
 - Kurumsal personel kaynağında bulunmayan Sicil `UNAUTHORIZED` alır.
+- Durum değiştiren uçlar (`PUT`/`DELETE /credential`, `POST /credential/validation`,
+  `POST /probe`) yalnızca **aynı kaynaktan** gelen isteği kabul eder
+  (`Origin` ve `Sec-Fetch-Site` denetimi; oturum kapatma ucuyla aynı kural).
+  Oturum çerezi `SameSite=Lax` olduğundan, aynı sitedeki kardeş bir kaynağın
+  basit bir formu gövdesiz `POST` uçlarına kullanıcının anahtarıyla istek
+  gönderip kapasite tüketebilirdi. Aykırı istek `FORBIDDEN` (403) alır.
 
 ---
 
@@ -114,6 +125,16 @@ tahmin edilip doğrulanabildiği bir kâhine dönüşürdü.
 Kişisel anahtarı olmayan kullanıcı için kurumsal anahtar, ayrıca bir işlem
 gerekmeden kullanılır. Kullanıcı kişisel anahtarını kaldırdığında sonraki
 istekler — kurumsal anahtar tanımlıysa — kurumsal anahtarla yapılır.
+
+Ana anahtar (`MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY`) boş bırakılarak kişisel
+anahtar kullanımı **yapılandırmayla kapatıldıysa** daha önce kaydedilmiş satırlar
+yok sayılır ve istekler kurumsal anahtarla yapılır; eski satır kullanıcıyı
+yapay zekâdan mahrum bırakmaz. Ayarlar kartı durumu açıkça yazar ve kayıt yine
+kaldırılabilir.
+
+Kaldırma yalnızca **okunan** satırı siler (satır sürümü koşulu): okuma ile
+silme arasında başka bir oturumda yeni anahtar kaydedildiyse yeni anahtar
+silinmez ve istek `CONFLICT` (409) alır; kart güncel durumu yeniden okur.
 
 ---
 
@@ -167,11 +188,18 @@ görünmeyen karakter yok. Baştaki/sondaki boşluk (kopyalama artığı) kırp�
 
 - Yalnızca sunucu ortamında (`.env.local` ya da hizmet ortamı) durur; depoya
   girmez. Güvenli biçimde yedeklenmelidir.
-- **Değiştirilirse** kayıtlı kişisel anahtarlar çözülemez. Kullanıcılar
+- **Değiştirilirse** kayıtlı kişisel anahtarlar çözülemez. Durum okuması
+  satırdaki ana anahtar kimliğini sunucuda geçerli anahtarla karşılaştırır:
+  Ayarlar kartı anahtarı *okunamıyor* olarak gösterir, eski doğrulama sonucunu
+  göstermez, doğrulama ve bağlantı denemesini kapatır. İstekler
   "Kayıtlı kişisel anahtarınız okunamadı. Anahtarı yeniden kaydedin."
-  iletisini görür ve anahtarlarını yeniden kaydeder; bu sırada istekler
-  kurumsal anahtara **geçmez**. Aşama 1'de toplu yeniden şifreleme aracı yoktur.
-- Boşsa kişisel anahtar saklama kapalıdır; yalnızca kurumsal anahtar kullanılabilir.
+  iletisiyle döner; bu sırada istekler kurumsal anahtara **geçmez**. Ana
+  anahtar kimliği tarayıcıya gitmez. Aşama 1'de toplu yeniden şifreleme aracı
+  yoktur.
+- Boşsa kişisel anahtar saklama ve kullanımı kapalıdır; yalnızca kurumsal
+  anahtar kullanılabilir (kayıtlı eski satırlar yok sayılır, §3). Yalnızca
+  kurumsal anahtarla çalışan kurulumda boş bırakılmalıdır: yer tutucu ya da
+  geçersiz değer bütün yapılandırmayı kullanılamaz kılar.
 
 ### Açık doğrulama
 
@@ -180,14 +208,24 @@ görünmeyen karakter yok. Baştaki/sondaki boşluk (kopyalama artığı) kırp�
 
 | Sağlayıcı yanıtı | Kaydedilen sonuç |
 | --- | --- |
-| 2xx | `VALID` |
+| 2xx, gövde geçerli bir model listesi **ve** anahtarsız istek 401/403 alıyor | `VALID` |
 | 401 | `REJECTED` |
 | 403 | `FORBIDDEN` |
-| Diğer, süre aşımı, erişilemeyen uç | Sonuç yazılmaz; hata kodu döner |
+| 2xx ama anahtarsız istek de 2xx alıyor | Sonuç yazılmaz; `AI_CONFIGURATION_ERROR` (`MODELS_ENDPOINT_UNAUTHENTICATED`) |
+| 2xx ama gövde model listesi değil (ör. HTML) | Sonuç yazılmaz; `AI_PROVIDER_RESPONSE_INVALID` |
+| Diğer, süre aşımı, erişilemeyen uç | Sonuç yazılmaz; hata kodu döner (429'da `Retry-After` iletilir) |
+
+`VALID` yalnızca uç anahtarı gerçekten denetliyorsa verilir: yanlış adrese
+yönelmiş bir ters vekilin 200 dönen sayfası ya da model listesini herkese açan
+bir ağ geçidi, rastgele bir anahtarı "kabul edildi" gösteremez. Sağlayıcı
+çağrısı sohbet yolundaki dar yineleme kuralına tabidir (§7).
 
 Sonuç yalnızca doğrulanan anahtar hâlâ kayıtlıysa yazılır (satır sürümü
 denetimi): doğrulama sürerken anahtar değiştirildiyse eski sonuç yeni anahtara
-yapışmaz. Yeni anahtar kaydedildiğinde önceki doğrulama sonucu silinir.
+yapışmaz; yanıt `{ status: null, stale: true }` döner ve kart güncel durumu
+yeniden okur. Sonucun yazımı da doğrulamanın süre sınırı ve iptal kapsamındadır;
+süre dolduktan sonra yazılan bir sonuç başarılı yanıt olarak bildirilmez. Yeni
+anahtar kaydedildiğinde önceki doğrulama sonucu silinir.
 
 ---
 
@@ -261,22 +299,34 @@ görebilir.
 
 Doğrulama kuralları:
 
+- Belge, model ve profil nesnelerinde yalnızca tanınan alanlar bulunabilir
+  (belge: `version`, `models`, `profiles`; model: `id`, `provider`,
+  `capabilities`, `contextTokens`, `maxConcurrency`, `enabled`; profil: `model`,
+  `enabled`, `maxOutputTokens`, `timeoutMs`). `maxConcurreny` gibi bir yazım
+  hatası sessizce yok sayılmaz; kayıt reddedilir, çünkü aksi hâlde güvenlik
+  sınırı fark edilmeden kalkardı.
 - `version` yalnızca `1`; en fazla 200 model; model kimlikleri benzersiz.
 - `provider` yalnızca `onprem` (varsayılan). `capabilities` bilinen
   yeteneklerden en az biri.
 - `contextTokens` boş ya da pozitif tam sayı; `maxConcurrency` boş ya da
   1–1000 (model başına eşzamanlı istek üst sınırı, §6); `enabled` boolean.
 - Profil kayıttaki **etkin** bir modele bağlanmalı ve profilin gerektirdiği
-  yetenekleri taşımalıdır. `maxOutputTokens` 1–131072; `timeoutMs`
+  yetenekleri taşımalıdır. `maxOutputTokens` 1–131072 ve bağlıysa modelin
+  `contextTokens` değerinden büyük olamaz (etkin profil için); `timeoutMs`
   1000–600000 (profilin istek süre sınırı; yoksa genel sınır).
 - Sorunlar birlikte, belge yoluyla bildirilir; değerler yansıtılmaz.
 
 Yükleme: dosya mutlak bir yol olmalı ve `.json` ile bitmelidir (UNC ve Windows
-yolları desteklenir), en fazla 256 KiB olabilir, **5 sn süre sınırıyla** ve tek
-uçuş olarak okunur, süreç başına bir kez yüklenir (değişiklik yeniden
-başlatmayla geçerli olur). Bozuk ya da okunamayan dosya sessizce varsayılana
-DÜŞMEZ: istekler `AI_CONFIGURATION_ERROR` (`MODEL_REGISTRY_INVALID`) alır,
-Sistem Yönetimi sorunları gösterir ve dosya 30 sn sonra yeniden denenir.
+yolları desteklenir), en fazla 256 KiB olabilir (sınır **okunan baytlara**
+uygulanır; denetim ile okuma arasında büyüyen dosya da reddedilir), UTF-8 BOM
+kabul edilir, **5 sn süre sınırıyla** ve tek uçuş olarak okunur, süreç başına
+bir kez yüklenir (değişiklik yeniden başlatmayla geçerli olur). Süre dolduğunda
+çağıran serbest kalır ama iptal edilemeyen açma/okuma sistem çağrısı gerçekten
+bitene kadar yeni okuma başlatılmaz: erişilemeyen bir paylaşımda takılı
+işlemler iş parçacığı havuzunda birikmez. Bozuk ya da okunamayan dosya
+sessizce varsayılana DÜŞMEZ: istekler `AI_CONFIGURATION_ERROR`
+(`MODEL_REGISTRY_INVALID`) alır, Sistem Yönetimi sorunları gösterir ve dosya
+30 sn sonra yeniden denenir.
 
 ---
 
@@ -306,8 +356,14 @@ Davranış:
 - İstemci bağlantıyı keserse sıradaki istek sıradan çıkar.
 - Kapasite kirası başarı, hata, süre aşımı ve iptal dâhil **her yolda** bir kez
   bırakılır.
-- Kişisel anahtar doğrulaması ayrı bir model anahtarıyla (`provider:models`)
-  aynı kullanıcı ve küresel sınırlara tabidir.
+- Kişisel anahtar doğrulaması aynı kullanıcı ve küresel sınırlara tabidir ama
+  model sayacına **girmez**: kayıttaki hiçbir model kimliği (ör. adı
+  `provider:models` olan sınırlı bir model) doğrulama işiyle aynı sayacı
+  paylaşamaz.
+- Reddedilen ya da sırada süresi dolan istek neyin dolduğunu `details.saturation`
+  ile bildirir: `global` ya da `model` paylaşılan kapasitedir, `user` yalnızca
+  o kullanıcının kendi etkin sınırıdır. Sistem Yönetimi yalnızca paylaşılan
+  kapasitenin dolmasını uyarı sayar (§9).
 
 Sınırlar **süreç başınadır**; birden çok uygulama örneğinde toplam kapasite örnek
 sayısıyla çarpılır. Sınırı değiştirmek yeniden başlatma gerektirir: süren
@@ -327,14 +383,28 @@ isteklerin kiraları unutulup kapasite aşılamaz.
   kesilir, kapasite hemen bırakılır ve yanıt `AI_CANCELLED` (499) olur.
 - Süre dolduktan ya da iptalden sonra gelen yanıt **uygulanmaz**.
 - Zamanlayıcılar ve dinleyiciler her yolda temizlenir.
-- Tarayıcıdaki süre sınırı sunucunun sıra + istek sınırlarından uzundur: sonucu
-  her zaman sunucu belirler.
+- Tarayıcıdaki süre sınırı sunucunun GERÇEK bütçesinden uzundur: sonucu her
+  zaman sunucu belirler. Bağlantı sınaması için bütçe sunucudan gelir
+  (dosya kaydının okunması + sıra + `chat.fast` profilinin, yoksa genel süre
+  sınırı; `probe.budgetMs`).
+- Uç, gövde gönderilirken bağlantısı kesilen isteği iç hata değil
+  `AI_REQUEST_INVALID` (`BODY_INTERRUPTED`) olarak bildirir.
+- İstem, modelin `contextTokens` değerine göre kapasite kirası alınmadan
+  denetlenir. Belirteçleyici bilinmediğinden tahmin bilinçli olarak düşüktür
+  (ileti başına 4 + her 6 karakter için 1 belirteç): yalnızca KESİNLİKLE
+  sığmayan istem `AI_REQUEST_INVALID` (`PROMPT_TOO_LONG`) ile reddedilir.
+- Çağıranın istediği çıktı sınırı profil sınırıyla, istemden sonra bağlamda
+  kalan yerle ve genel üst sınırla (131072) daraltılır; profil sınırı tanımsız
+  olsa bile bağlamı aşan bir değer sağlayıcıya gitmez.
 
 **Yeniden deneme bilinçli olarak dardır.** Yalnızca isteğin sağlayıcıya HİÇ
 ulaşmadığı bağlantı hataları (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`,
 `EAI_AGAIN`) bir kez, 200–600 ms titreşimli beklemeden sonra ve kalan süre
 bekleme + 1 sn'yi karşılıyorsa yinelenir. Geçersiz anahtar, yetki, oran sınırı,
-istek doğrulama hatası, süre aşımı ve iptal **yinelenmez**.
+istek doğrulama hatası, süre aşımı ve iptal **yinelenmez**. Kural sohbet
+tamamlamada da kişisel anahtar doğrulamasındaki `GET /models` çağrısında da
+aynıdır. Yineleme, ikinci deneme gerçekten başlarken kaydedilir: bekleme
+sırasında iptal edilen istek yinelenmiş sayılmaz.
 
 ---
 
@@ -376,15 +446,31 @@ yapılandırılmış günlüğü ve kanonik temizleyiciyi kullanır.
   `ai.provider.chat`, `ai.provider.models`, `ai.credential.validate`. Adlar
   `api.` ile başlamaz: yavaş model yanıtları olağan uç gecikmesi uyarılarını
   (API P95) kirletmez.
-- **Anlık ölçümler:** etkin ve sıradaki yapay zekâ isteği.
+- **Anlık ölçümler:** etkin ve sıradaki yapay zekâ isteği (`ai.active_requests`,
+  `ai.queued_requests`); Performans sekmesinde **Yapay zekâ yükü** grafiğinde
+  gösterilir.
 - `ai.*` işlemleri kalıcı telemetriye yazılır ve **Performans** sekmesinin işlem
   dökümüne (toplam süreye göre ilk 25 işlem) girebilir; API P95 ve hata oranı
   uyarılarına katılmaz. Aşama 1'de yapay zekâya özgü otomatik uyarı yoktur.
 - **Süreç özeti:** istek/başarı sayıları, sonuç kodları, anahtar kaynağına
   (`personal`/`default`/`missing`) ve profile göre dağılım, sağlayıcı gecikmesi
   ve sıra beklemesi yüzdelikleri, yineleme sayısı, son başarı/başarısızlık.
-- **Yapılandırılmış günlük:** hizmet hataları ve kurumsal anahtarla alınan
-  retler `component: AI` ile yazılır; bağlamda profil, model kimliği, anahtar
+  Anahtar çözülemeden düşen istek (`AI_KEY_MISSING`, okunamayan kişisel anahtar)
+  da kaynağıyla sayılır. Sağlayıcı gecikmesi tamamlanan **her** çağrıyı
+  (süre aşımına uğrayan dâhil) kapsar; sıra beklemesi sırada süresi dolan
+  istekleri de kapsar (`ai.queue.wait` bu istekler için başarısızdır).
+- **Sağlayıcı sağlığı:** HTTP yanıtı alınan çağrı erişim sayılır; bağlantı,
+  süre aşımı, bozuk yanıt ve 5xx hatadır. Kaynak bilindiğinde sınıf açıkça
+  belirlenir: **kurumsal** anahtarın 401/403 reddi ve oran sınırı herkesi
+  etkilediği için hatadır; **kişisel** anahtarın 401/403/429 sonucu yalnızca o
+  anahtarı anlatır, paylaşılan sağlığı düşürmez. Metin beklenen deneme isteğine
+  metinsiz (`content: null`) yanıt ve `assistant` rolünde olmayan ileti (ör.
+  isteği yankılayan bir vekil) geçersiz sağlayıcı yanıtıdır. Son sonuç milisaniye
+  damgalarıyla değil tekdüze bir sıra sayacıyla belirlenir; hata da başarı gibi
+  yalnızca 15 dakika taze sayılır.
+- **Yapılandırılmış günlük:** hizmet hataları ve kurumsal anahtarın reddi
+  (401/403) `component: AI` ile yazılır; kurumsal anahtarla yapılmış olsa da
+  geçersiz istek (400/413/422) yazılmaz; bağlamda profil, model kimliği, anahtar
   kaynağı (`keySource`), deneme sayısı, sağlayıcı HTTP durumu ve ağ kodu
   bulunur. Yoğunluk, sıra süresi ve iptal tek tek yazılmaz, sayaçlarda izlenir.
   Kullanıcının kendi anahtarı ya da isteği kaynaklı sonuçlar hizmet sorunu
@@ -399,18 +485,33 @@ yapılandırılmış günlüğü ve kanonik temizleyiciyi kullanır.
 - **Genel Durum** yeni bir **Yapay zekâ hizmeti** bileşeni gösterir. Sağlık
   hesabı **hiçbir ağ ya da dosya işlemi beklemez**: yapılandırma, kapasite ve son
   sağlayıcı temasları süreç belleğinden okunur; yanıt vermeyen bir uç sayfayı
-  askıda bırakamaz. Durumlar: kapalıysa *Yapılandırılmamış*; yapılandırma ya da
-  model kaydı hatalıysa, sıra %80 dolduysa, son 5 dakikada kapasite nedeniyle
-  istek geri çevrildiyse ya da son sağlayıcı çağrısı başarısızsa *Dikkat*; son
-  15 dakikada başarılı temas varsa *Sağlıklı*; aksi hâlde *Bilinmiyor*. Yapay
-  zekâ isteğe bağlı bir yetenek olduğundan hiçbir zaman *Kritik* bildirilmez.
+  askıda bırakamaz. Durumlar: bilinçli olarak kapalıysa *Yapılandırılmamış*;
+  etkinleştirme değeri geçersizse (ör. `tru`), yapılandırma ya da model kaydı
+  hatalıysa, kurumsal anahtar yokken kişisel anahtar tablosu (0016) kurulmamışsa,
+  son 5 dakikada **paylaşılan** kapasite nedeniyle istek geri çevrildiyse ya da
+  sırada süresi dolduysa, sıra %80 dolduysa ("henüz geri çevrilen istek yok")
+  ya da son 15 dakikadaki son sağlayıcı sonucu başarısızsa *Dikkat* (bayat hata
+  uyarı olarak kalmaz); yapılandırılmış dosya kaydı
+  henüz okunmadıysa ya da kurumsal anahtar yokken kişisel anahtar tablosu henüz
+  doğrulanmadıysa *Bilinmiyor*; son 15 dakikada başarılı temas varsa
+  *Sağlıklı*; aksi hâlde *Bilinmiyor*. Tek kullanıcının kendi sınırına takılması
+  uyarı değildir; telemetride ayrıca izlenir. Yapay zekâ isteğe bağlı bir yetenek
+  olduğundan hiçbir zaman *Kritik* bildirilmez.
   Ayrıntı çekmecesi etkin/sıradaki istekleri, sınırları, geri çevrilen ve süresi
   dolan istekleri, sağlayıcı P95 gecikmesini ve anahtar kaynağı dağılımını
   gösterir.
 - **Entegrasyonlar** yeni bir **Yapay zekâ sağlayıcısı** kartı gösterir.
   **Bağlantıyı Test Et** yıkıcı değildir: 6 sn süre sınırlı, model üretmeyen
-  `GET /models` çağrısıdır; kurumsal anahtar tanımlıysa o kullanılır ve yanıtın
-  HTTP durumu dışında hiçbir şeyi okunmaz.
+  `GET /models` çağrısıdır; kurumsal anahtar tanımlıysa o kullanılır, hata
+  yanıtının HTTP durumu dışında hiçbir şeyi okunmaz ve 2xx gövdesinin bir model
+  listesi olduğu doğrulanır. Test PAYLAŞILAN yolu sınadığından reddedilen
+  kurumsal anahtar, 404/3xx ya da geçersiz istek sağlık hatası olarak
+  kaydedilir; kart önceki başarıya rağmen *Dikkat* gösterir. Uca ulaşıldıktan
+  sonra yapılandırılmış dosya kaydı okunur ve kurumsal anahtar yoksa kişisel
+  anahtar tablosunun kurulu olduğu doğrulanır. Tanımlı ama biçimi geçersiz
+  kurumsal anahtar "anahtar yok" sayılıp anahtarsız sınanmaz; test
+  `DEFAULT_KEY_INVALID` ile başarısız olur. Sağlayıcı beklenirken yönetim
+  eyleminin SQL kilidi ve işlemi **tutulmaz** (süreç içi tekillik yeterlidir).
 - Yanıtlar adres, yol ya da anahtar taşımaz; yapılandırma yalnızca
   "Yapılandırılmış / Yapılandırılmamış" ve eksik ayarların **adlarıyla**
   bildirilir.
@@ -419,8 +520,10 @@ yapılandırılmış günlüğü ve kanonik temizleyiciyi kullanır.
 
 ## 10. Uçlar
 
-Hepsi Node çalışma zamanında, önbelleksiz çalışır ve kimliği yalnızca
-güvenilir oturumdan alır.
+Hepsi Node çalışma zamanında, önbelleksiz çalışır (oturum, yetki ve veritabanı
+hataları dâhil her yanıt `Cache-Control: no-store` taşır) ve kimliği yalnızca
+güvenilir oturumdan alır. Durum değiştiren istekler yalnızca aynı kaynaktan
+kabul edilir (§2).
 
 | Uç | Yöntem | İşlev |
 | --- | --- | --- |
@@ -434,8 +537,15 @@ güvenilir oturumdan alır.
 bilgisi → profil → kapasite → süre sınırı → sağlayıcı → telemetri) tek, küçük
 bir istekle kanıtlar. İstem **sabittir**, kullanıcı içeriği modele gönderilmez;
 uç bir sohbet ucuna dönüşemez. `chat.fast` profili ve en fazla 64 çıktı
-belirteci kullanılır; yanıtta kısaltılmış metin, profil, model, anahtar kaynağı,
-süre ve sıra beklemesi döner.
+belirteci kullanılır; yanıtta kısaltılmış metin, profil, yanıtı **gerçekten
+üreten** model (sağlayıcının bildirdiği; yapılandırılandan farklıysa
+`configuredModel` ayrıca döner), anahtar kaynağı, süre ve sıra beklemesi
+döner. Metinsiz yanıt geçersiz sağlayıcı yanıtıdır.
+
+Durum yanıtı (`GET /credential`) sınamanın kullanılabilirliğini ve sunucu
+bütçesini de taşır (`probe: { available, reason, timeoutMs, budgetMs }`):
+`chat.fast` yapılandırılmamış, kapalı ya da kayıt okunamıyorsa deneme düğmesi
+kapalıdır ve neden yazılır.
 
 ---
 
@@ -448,16 +558,33 @@ süre ve sıra beklemesi döner.
 - Kayıtlı anahtar yalnızca `••••` + son dört karakterle, kayıt tarihiyle ve son
   doğrulama sonucuyla gösterilir. **Doğrula**, **Değiştir** ve **Kaldır**
   eylemleri vardır; kaldırma satır içi onay ister ve sonucunu (kurumsal anahtara
-  dönüş ya da yapay zekânın kullanılamaması) açıkça yazar.
+  dönüş ya da yapay zekânın kullanılamaması) açıkça yazar. Kurumsal anahtara
+  dönüş yalnızca yapılandırma kullanılabilir ve kurumsal anahtar tanımlıysa
+  vaat edilir. Düzenleme sürerken kaldırma sunulmaz; yeni anahtar kaydedilince
+  açık kalan kaldırma onayı kapanır (eski onay yeni anahtarı silemez).
+- Kayıtlı anahtar okunamıyorsa (ana anahtar değişti) ya da kişisel anahtar
+  kullanımı yapılandırmayla kapatıldıysa bu durum açıkça yazılır; doğrulama
+  sunulmaz.
 - Anahtar alanı parola türündedir; otomatik doldurma kapatılır ve parola
   yöneticilerine alanı yok sayma işareti verilir. Taslak yalnızca bileşen
   belleğinde durur; kayıttan sonra silinir ve anahtar bir daha gösterilmez.
-  Biçim hatası istek atılmadan gösterilir.
+  Biçim hatası istek atılmadan gösterilir. Kayıt sürerken **Esc** formu
+  kapatmaz; hata aynı formda, yazılan anahtar korunarak gösterilir.
 - **Bağlantı denemesi** geçen süreyi sayar ve **İptal** ile kesilebilir;
-  sonuç anahtar kaynağını, profili, modeli ve süreyi gösterir. Yerine yenisi
-  başlatılan ya da iptal edilen denemenin geç gelen sonucu uygulanmaz; anahtar
-  değişince önceki sonuç temizlenir; kart kapanınca süren deneme iptal edilir.
-- **Demo Kipinde** hiçbir istek atılmaz ve anahtar kaydedilmez.
+  sonuç anahtar kaynağını, profili, yanıtı üreten modeli (yapılandırılandan
+  farklıysa ikisini de) ve süreyi gösterir. Yerine yenisi başlatılan ya da
+  iptal edilen denemenin geç gelen sonucu uygulanmaz; anahtar kaydedilince ya
+  da kaldırılınca süren deneme de kesilir ve sonucu uygulanmaz; kart kapanınca
+  süren deneme iptal edilir. `chat.fast` profili çözülemiyorsa deneme kapalıdır
+  ve neden yazılır.
+- Hata iletilerinde istemci tarafı sonuçlar (süre aşımı, iptal, ağ) kendi
+  Türkçe karşılığıyla, sunucunun özgül iletisi olduğu gibi, gövdesiz hata ise
+  katalogdaki karşılığıyla gösterilir. Beklenen biçimi taşımayan 2xx yanıtı
+  (ör. bir vekilin 200 dönen HTML sayfası) başarı sayılmaz: kart çökmez,
+  yeniden denenebilir bir hata gösterir.
+- **Demo Kipinde** hiçbir istek atılmaz ve anahtar kaydedilmez. Kart açıkken
+  Demo Kipine geçilirse kart sıfırlanır, süren istekler kesilir ve önceki
+  kipte başlamış isteklerin geç gelen sonuçları uygulanmaz.
 
 ---
 
@@ -470,11 +597,11 @@ olur). Değerler hiçbir tanı çıktısına taşınmaz.
 
 | Değişken | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `MERGEN_ROTA_AI_ENABLED` | `false` | Özelliği açar |
+| `MERGEN_ROTA_AI_ENABLED` | `false` | Özelliği açar. Geçersiz değer (ör. `tru`) kapalı sayılır ama bilinçli kapatmadan ayrılır: Sistem Yönetimi yapılandırma hatası gösterir, istekler `AI_CONFIGURATION_ERROR` alır |
 | `MERGEN_ROTA_AI_BASE_URL` | — | OpenAI uyumlu ağ geçidinin taban adresi (genellikle `/v1` ile biter). HTTPS zorunlu; düz HTTP yalnız geri döngü adresinde ya da açık onayla. Adreste kullanıcı bilgisi, sorgu ya da parça bulunamaz |
 | `MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP` | `false` | Düz HTTP'ye açık onay; üretimde kapalı kalmalıdır |
-| `MERGEN_ROTA_AI_DEFAULT_API_KEY` | boş | Kurumsal anahtar; yalnızca kişisel anahtarı olmayanlar için |
-| `MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY` | boş | Kişisel anahtarları şifreleyen 32 baytlık ana anahtar (§4) |
+| `MERGEN_ROTA_AI_DEFAULT_API_KEY` | boş | Kurumsal anahtar; yalnızca kişisel anahtarı olmayanlar için. Kişisel anahtarla aynı biçim kuralından geçer; yalnızca bütünüyle `<…>` yer tutucu olan değer reddedilir |
+| `MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY` | boş | Kişisel anahtarları şifreleyen 32 baytlık ana anahtar (§4); yalnızca kurumsal anahtarla çalışan kurulumda boş kalır |
 | `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` | boş | İsteğe bağlı model kaydı JSON dosyası (§5) |
 | `MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS` … `_QUEUE_TIMEOUT_MS` | bkz. §6 | Kapasite sınırları |
 | `MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS` | `90000` | Sağlayıcı yanıtı süre sınırı (§7) |

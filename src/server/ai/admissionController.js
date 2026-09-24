@@ -49,16 +49,31 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
     }
   }
 
+  const modelSaturated = (modelKey, modelLimit) => modelKey != null && modelLimit != null
+    && (activeByModel.get(modelKey) || 0) >= modelLimit;
+
   function hasCapacity(userKey, modelKey, modelLimit) {
     if (active >= maxActive) return false;
     if ((activeByUser.get(userKey) || 0) >= maxActivePerUser) return false;
-    return modelLimit == null || (activeByModel.get(modelKey) || 0) < modelLimit;
+    return !modelSaturated(modelKey, modelLimit);
+  }
+
+  /**
+   * İsteği hemen başlatmayan sınır: `global` ya da `model` paylaşılan
+   * kapasitedir; `user` yalnızca o kullanıcının kendi etkin sınırıdır.
+   */
+  function saturationOf(userKey, modelKey, modelLimit) {
+    if (active >= maxActive) return 'global';
+    if (modelSaturated(modelKey, modelLimit)) return 'model';
+    if ((activeByUser.get(userKey) || 0) >= maxActivePerUser) return 'user';
+    return 'global';
   }
 
   function start(userKey, modelKey, queueWaitMs) {
     active += 1;
     increment(activeByUser, userKey);
-    increment(activeByModel, modelKey);
+    // Model kimliği olmayan iş (ör. anahtar doğrulaması) model sayacına girmez.
+    if (modelKey != null) increment(activeByModel, modelKey);
     counters.admitted += 1;
     let released = false;
     return {
@@ -68,7 +83,7 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
         released = true;
         active -= 1;
         decrement(activeByUser, userKey);
-        decrement(activeByModel, modelKey);
+        if (modelKey != null) decrement(activeByModel, modelKey);
         drain();
         notify();
       }
@@ -98,10 +113,13 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
   /**
    * Kapasite ister. Söz, `release()` taşıyan bir kira ile çözülür; kira her
    * yolda (başarı, hata, süre aşımı, iptal) çağıran tarafından bırakılmalıdır.
+   *
+   * `modelKey` verilmezse (`null`) istek model sayacına hiç girmez: kayıttaki
+   * hiçbir model kimliği, sağlayıcı düzeyindeki işle aynı sayacı paylaşamaz.
    */
-  function acquire({ userKey, modelKey = 'default', modelLimit = null, signal = null, timeoutMs }) {
+  function acquire({ userKey, modelKey = null, modelLimit = null, signal = null, timeoutMs }) {
     const user = String(userKey);
-    const model = String(modelKey);
+    const model = modelKey == null ? null : String(modelKey);
     if (signal?.aborted) return Promise.reject(new AiError(AI_ERROR_CODES.AI_CANCELLED));
     if (hasCapacity(user, model, modelLimit)) {
       const lease = start(user, model, 0);
@@ -111,7 +129,10 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
     const busy = (scope) => {
       counters.rejectedBusy += 1;
       notify();
-      return Promise.reject(new AiError(AI_ERROR_CODES.AI_BUSY, { retryAfterMs: BUSY_RETRY_AFTER_MS, details: { scope } }));
+      return Promise.reject(new AiError(AI_ERROR_CODES.AI_BUSY, {
+        retryAfterMs: BUSY_RETRY_AFTER_MS,
+        details: { scope, saturation: saturationOf(user, model, modelLimit) }
+      }));
     };
     if ((queuedByUser.get(user) || 0) >= maxQueuedPerUser) return busy('user');
     if (waiters.length >= maxQueued) return busy('global');
@@ -125,10 +146,14 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
         reject(new AiError(AI_ERROR_CODES.AI_CANCELLED));
       };
       waiter.timer = setTimeout(() => {
+        const saturation = saturationOf(waiter.userKey, waiter.modelKey, waiter.modelLimit);
         leaveQueue(waiter);
         counters.queueTimeouts += 1;
         notify();
-        reject(new AiError(AI_ERROR_CODES.AI_QUEUE_TIMEOUT, { retryAfterMs: BUSY_RETRY_AFTER_MS, details: { queueTimeoutMs: timeoutMs } }));
+        reject(new AiError(AI_ERROR_CODES.AI_QUEUE_TIMEOUT, {
+          retryAfterMs: BUSY_RETRY_AFTER_MS,
+          details: { queueTimeoutMs: timeoutMs, queueWaitMs: Math.max(0, now() - waiter.enqueuedAt), saturation }
+        }));
       }, Math.max(1, Number(timeoutMs) || 1));
       signal?.addEventListener?.('abort', waiter.onAbort, { once: true });
       waiters.push(waiter);

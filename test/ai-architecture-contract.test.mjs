@@ -96,7 +96,12 @@ test('kişisel anahtar uçları kimliği yalnızca güvenilir oturumdan çözer'
     const block = service.slice(start, next < 0 ? undefined : next);
     assert.match(block, /const sicil = await getTrustedCurrentSicil\(\);/, operation);
   }
-  assert.match(read('src/server/ai/aiGateway.js'), /currentSicil = getTrustedCurrentSicil/);
+  const gateway = read('src/server/ai/aiGateway.js');
+  assert.match(gateway, /currentSicil = getTrustedCurrentSicil/);
+  // Rehber üyeliği, yapılandırma ve profil kararlarından ÖNCE doğrulanır.
+  assert.match(gateway, /verifySicil = assertAiDirectoryMember/);
+  const trusted = gateway.indexOf('const sicil = await trustedSicil(signal);');
+  assert.ok(trusted > 0 && trusted < gateway.indexOf('requireAiAvailable(loadConfig())'));
 });
 
 /* ── Katman sınırları ────────────────────────────────────── */
@@ -149,6 +154,7 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
     'src/server/db/pool.js',
     'src/server/errors.js',
     'src/server/identity/currentUserProvider.js',
+    'src/server/identity/sameOriginRequest.js',
     'src/server/observability/boundedExecution.js',
     'src/server/observability/structuredLogger.js',
     'src/server/observability/telemetryRegistry.js'
@@ -196,14 +202,25 @@ test('kişisel anahtar tablosuna yalnızca depo modülü, sabit ve Sicil ile sı
   const touching = statements.filter(([, statement]) => statement.includes('MR_AiUserCredentials'));
   assert.ok(touching.length >= 6);
   for (const [name, statement] of touching) {
-    if (/^IF @@ROWCOUNT = 0 INSERT /.test(statement)) {
+    if (name === 'AI_CREDENTIAL_SCHEMA_SQL') {
+      // Şema denetimi yalnızca nesnenin varlığına bakar; satır okumaz.
+      assert.match(statement, /^SELECT CAST\(CASE WHEN OBJECT_ID\(N'dbo\.MR_AiUserCredentials', N'U'\) IS NULL/, name);
+      assert.doesNotMatch(statement, /\bFROM\b/i, name);
+    } else if (/^IF @@ROWCOUNT = 0 INSERT /.test(statement)) {
       assert.match(statement, /VALUES \(@sicil, /, name);
     } else {
       assert.match(statement, /WHERE Sicil = @sicil(?: AND RowVersion = @rowVersion)?$/, `${name}: ${statement}`);
     }
   }
-  // Durum sorgusu şifreli alanları hiç okumaz.
-  assert.doesNotMatch(queries.AI_CREDENTIAL_STATUS_SQL, /Ciphertext|Nonce|AuthTag|MasterKeyId/);
+  // Durum sorgusu şifreli alanları hiç okumaz (ana anahtar KİMLİĞİ gizli
+  // değildir; uyuşmazlığı sunucuda saptamak için okunur, tarayıcıya gitmez).
+  assert.doesNotMatch(queries.AI_CREDENTIAL_STATUS_SQL, /Ciphertext|Nonce|AuthTag/);
+  // Rehber denetimi anahtar tablosuna dokunmaz: 0016 yokken de kimlik korunur.
+  assert.doesNotMatch(queries.AI_CREDENTIAL_DIRECTORY_SQL, /MR_AiUserCredentials/);
+  assert.match(queries.AI_CREDENTIAL_DIRECTORY_SQL, /FROM dbo\.MR_V_PeopleDirectory WHERE Sicil = @sicil/);
+  // Silme ve doğrulama yalnızca okunan satır sürümüne uygulanır.
+  assert.match(queries.AI_CREDENTIAL_DELETE_SQL, /WHERE Sicil = @sicil AND RowVersion = @rowVersion;/);
+  assert.match(queries.AI_CREDENTIAL_VALIDATION_SQL, /RowVersion = @rowVersion;\s+SELECT @@ROWCOUNT AS Recorded;/);
 });
 
 test('0016 göçü sıralı, yinelenebilir ve düz metin anahtar sütunu içermez', () => {
@@ -253,7 +270,9 @@ test('ortam örneği yapay zekâ ayarlarını yalnızca sunucu tarafında ve yer
   }
   assert.match(env, /^MERGEN_ROTA_AI_ENABLED=false$/m, 'özellik varsayılan olarak kapalıdır');
   assert.match(env, /^MERGEN_ROTA_AI_DEFAULT_API_KEY=$/m);
-  assert.match(env, /^MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY=<[A-Z0-9_]+>$/m);
+  // Yer tutucu bırakılırsa yalnızca kurumsal anahtarla çalışan kurulum da
+  // kullanılamaz olurdu; ana anahtar boş gelir.
+  assert.match(env, /^MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY=$/m);
   assert.match(env, /^MERGEN_ROTA_AI_BASE_URL=https:\/\/<[A-Z_]+>\/v1$/m);
   assert.doesNotMatch(env, /NEXT_PUBLIC_[A-Z0-9_]*AI_/);
   for (const file of sourceFiles('src')) {

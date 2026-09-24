@@ -29,6 +29,7 @@ const { resetAiRuntimeForTests, setAiProviderForTests } = await import('../../sr
 const { resetAiConfigCacheForTests } = await import('../../src/server/ai/aiConfig.js');
 const { resetAiModelRegistryForTests } = await import('../../src/server/ai/modelRegistryLoader.js');
 const { resetAiTelemetryForTests } = await import('../../src/server/ai/aiTelemetry.js');
+const { resetAiCredentialSchemaStateForTests } = await import('../../src/server/ai/aiCredentialStore.js');
 const { resetTelemetryRegistryForTests } = await import('../../src/server/observability/telemetryRegistry.js');
 const { resetOperationalEventBufferForTests } = await import('../../src/server/observability/operationalEventsRepository.js');
 
@@ -52,6 +53,7 @@ function resetAi() {
   resetAiConfigCacheForTests();
   resetAiModelRegistryForTests();
   resetAiTelemetryForTests();
+  resetAiCredentialSchemaStateForTests();
   resetTelemetryRegistryForTests();
   resetOperationalEventBufferForTests();
 }

@@ -234,6 +234,18 @@ export function SystemPerformanceTab({ enabled = true }) {
             ]}
           />
         </AdminSection>
+        {/* Etkin ve sıradaki yapay zekâ istekleri aynı birimi (istek) taşır. */}
+        <AdminSection title="Yapay zekâ yükü" icon="Sparkles" loading={resource.loading}>
+          <TrendChart
+            label="Etkin ve sıradaki yapay zekâ istekleri"
+            unit="count"
+            bucketSeconds={bucketSeconds}
+            series={[
+              { id: 'ai-active', label: GAUGE_LABELS[GAUGE_KEYS.AI_ACTIVE_REQUESTS], color: 'var(--accent)', points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_ACTIVE_REQUESTS) },
+              { id: 'ai-queued', label: GAUGE_LABELS[GAUGE_KEYS.AI_QUEUED_REQUESTS], color: 'var(--status-blocked)', dashed: true, points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_QUEUED_REQUESTS) }
+            ]}
+          />
+        </AdminSection>
       </div>
 
       <AdminSection

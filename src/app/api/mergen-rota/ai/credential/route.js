@@ -3,7 +3,12 @@ import {
   removeAiPersonalCredential,
   saveAiPersonalCredential
 } from '../../../../../server/ai/aiCredentialService.js';
-import { aiErrorResponse, aiJson, readJsonBody } from '../../../../../server/ai/aiRouteSupport.js';
+import {
+  aiErrorResponse,
+  aiJson,
+  assertSameOriginAiRequest,
+  readJsonBody
+} from '../../../../../server/ai/aiRouteSupport.js';
 import { withRouteObservability } from '../../../../../server/observability/observeOperation.js';
 
 export const runtime = 'nodejs';
@@ -16,6 +21,7 @@ export const fetchCache = 'force-no-store';
  *
  * Sahip her zaman oturumdaki Sicil'dir; gövdede, sorguda ya da başlıkta gelen
  * hiçbir kimlik okunmaz. Yanıt anahtarı ya da şifreli hâlini asla taşımaz.
+ * Durum değiştiren istekler yalnızca aynı kaynaktan kabul edilir.
  */
 export const GET = withRouteObservability('ai.api.credential.status', async () => {
   try {
@@ -27,6 +33,7 @@ export const GET = withRouteObservability('ai.api.credential.status', async () =
 
 export const PUT = withRouteObservability('ai.api.credential.save', async (request) => {
   try {
+    assertSameOriginAiRequest(request);
     const body = await readJsonBody(request);
     return aiJson({ ok: true, ai: await saveAiPersonalCredential({ apiKey: body.apiKey }) });
   } catch (error) {
@@ -34,8 +41,9 @@ export const PUT = withRouteObservability('ai.api.credential.save', async (reque
   }
 });
 
-export const DELETE = withRouteObservability('ai.api.credential.delete', async () => {
+export const DELETE = withRouteObservability('ai.api.credential.delete', async (request) => {
   try {
+    assertSameOriginAiRequest(request);
     return aiJson({ ok: true, ai: await removeAiPersonalCredential() });
   } catch (error) {
     return aiErrorResponse(error);

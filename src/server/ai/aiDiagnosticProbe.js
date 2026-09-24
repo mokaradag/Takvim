@@ -1,5 +1,5 @@
 import 'server-only';
-import { AI_PROFILES } from '../../domain/ai/aiModelRegistry.js';
+import { AI_PROBE_PROFILE } from './aiProbeProfile.js';
 import { getAiGateway } from './aiRuntime.js';
 
 /**
@@ -8,7 +8,9 @@ import { getAiGateway } from './aiRuntime.js';
  * Alt sistemin bütün zincirini (güvenilir Sicil → kimlik bilgisi → profil →
  * sağlayıcı → kapasite → süre sınırı → telemetri) tek, küçük bir istekle
  * kanıtlar. İstem SABİTTİR: kullanıcı içeriği modele gönderilmez ve bu uç bir
- * sohbet ucuna dönüşemez. Somut model değil `chat.fast` profili istenir.
+ * sohbet ucuna dönüşemez. Somut model değil `chat.fast` profili istenir. Araç
+ * istenmediği için boş (`content: null`) yanıt sınama sonucu değil, geçersiz
+ * sağlayıcı yanıtıdır.
  */
 
 const PROBE_MAX_OUTPUT_TOKENS = 64;
@@ -24,16 +26,18 @@ const PROBE_MESSAGES = Object.freeze([
 
 export async function runAiDiagnosticProbe({ signal = null } = {}) {
   const result = await getAiGateway().completeChat({
-    profile: AI_PROFILES.CHAT_FAST,
+    profile: AI_PROBE_PROFILE,
     messages: PROBE_MESSAGES,
     maxOutputTokens: PROBE_MAX_OUTPUT_TOKENS,
-    signal
+    signal,
+    requireText: true
   });
   return {
     text: String(result.text || '').trim().slice(0, PROBE_TEXT_LIMIT),
     finishReason: result.finishReason,
     profile: result.profile,
     model: result.model,
+    configuredModel: result.configuredModel,
     credentialSource: result.credentialSource,
     durationMs: result.durationMs,
     queueWaitMs: result.queueWaitMs,

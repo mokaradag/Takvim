@@ -110,11 +110,17 @@ function tokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-/** Yanıt biçimini doğrular; beklenmeyen biçim sessizce kabul edilmez. */
+/**
+ * Yanıt biçimini doğrular; beklenmeyen biçim sessizce kabul edilmez.
+ *
+ * Seçeneğin iletisi `assistant` rolünde olmalıdır: isteği yankılayan yanlış
+ * yapılandırılmış bir vekilin `user` iletisi model yanıtı sayılmaz.
+ */
 export function parseChatCompletion(payload) {
   const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
   const message = choice?.message;
   if (!message || typeof message !== 'object') throw invalidResponse('MISSING_CHOICE');
+  if (message.role !== 'assistant') throw invalidResponse('INVALID_ROLE');
   if (message.content != null && typeof message.content !== 'string') throw invalidResponse('INVALID_CONTENT');
   return {
     text: message.content ?? '',
@@ -126,6 +132,12 @@ export function parseChatCompletion(payload) {
       totalTokens: tokenCount(payload.usage?.total_tokens)
     }
   };
+}
+
+/** OpenAI uyumlu `GET /models` biçimi: `{ data: [{ id }, ...] }`. */
+function isModelList(payload) {
+  return Array.isArray(payload?.data)
+    && payload.data.every((entry) => entry != null && typeof entry === 'object' && typeof entry.id === 'string');
 }
 
 function requestHeaders(apiKey, { json = false } = {}) {
@@ -163,11 +175,23 @@ export function createOpenAiCompatibleProvider({ fetchImpl = null, maxResponseBy
       return parseChatCompletion(await readBoundedJson(response, maxResponseBytes, signal));
     },
 
-    /** Üretim yapmayan hafif erişim/anahtar denetimi; yalnızca HTTP durumu döner. */
+    /**
+     * Üretim yapmayan hafif erişim/anahtar denetimi.
+     *
+     * Hata yanıtında yalnızca HTTP durumu ve `Retry-After` döner; gövde
+     * okunmaz. 2xx yanıtı ancak gövde SINIRLI ve geçerli bir model listesiyse
+     * kabul edilir: yanlış adrese yönelmiş bir ters vekilin 200 dönen HTML
+     * sayfası bir anahtarı "geçerli" gösteremez.
+     */
     async listModels({ baseUrl, apiKey = null, signal }) {
       const response = await send(`${baseUrl}/models`, { method: 'GET', headers: requestHeaders(apiKey) }, signal);
-      await discardBody(response);
-      return { status: response.status };
+      if (!response.ok) {
+        await discardBody(response);
+        return { status: response.status, retryAfter: response.headers.get('retry-after') };
+      }
+      const payload = await readBoundedJson(response, maxResponseBytes, signal);
+      if (!isModelList(payload)) throw invalidResponse('MODEL_LIST_INVALID');
+      return { status: response.status, retryAfter: null };
     }
   };
 }

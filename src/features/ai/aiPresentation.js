@@ -4,7 +4,7 @@ import {
   credentialSourceLabel
 } from '../../domain/ai/aiCredentialPolicy.js';
 import { aiErrorMessage, isAiErrorCode } from '../../domain/ai/aiErrorCatalog.js';
-import { aiProfileLabel } from '../../domain/ai/aiModelRegistry.js';
+import { AI_PROFILE_RESOLUTION_FAILURES, aiProfileLabel } from '../../domain/ai/aiModelRegistry.js';
 
 /**
  * Yapay zekâ ayarlarının saf sunum kuralları.
@@ -17,19 +17,45 @@ import { aiProfileLabel } from '../../domain/ai/aiModelRegistry.js';
 const CLIENT_FAILURES = Object.freeze({
   REQUEST_TIMEOUT: 'Sunucudan süre sınırında yanıt alınamadı.',
   REQUEST_CANCELLED: 'İstek iptal edildi.',
-  NETWORK: 'Sunucuya ulaşılamadı. Bağlantınızı denetleyip yeniden deneyin.'
+  NETWORK: 'Sunucuya ulaşılamadı. Bağlantınızı denetleyip yeniden deneyin.',
+  INVALID_RESPONSE: 'Sunucudan beklenmeyen bir yanıt alındı. Yeniden deneyin.'
 });
+/** İstek sarmalayıcısının gövdesiz hata yanıtına koyduğu genel yedek metin. */
+const GENERIC_FAILURE = 'İşlem tamamlanamadı.';
 
 /** Sunucu yanıtı beklenirken payı; sunucu kendi süre sınırını her zaman önce uygular. */
 const CLIENT_MARGIN_MS = 5000;
 const VALIDATION_BUDGET_MS = 15000;
+/** Sunucu bütçeyi bildirmediyse dosya kaydının okunma bütçesi de hesaba katılır. */
+const REGISTRY_READ_BUDGET_MS = 5000;
 const FALLBACK_TIMEOUTS = Object.freeze({ queueTimeoutMs: 20000, requestTimeoutMs: 90000 });
 
+const PROBE_UNAVAILABLE_MESSAGES = Object.freeze({
+  [AI_PROFILE_RESOLUTION_FAILURES.PROFILE_NOT_CONFIGURED]: 'Hızlı sohbet profili bu kurulumda tanımlı değil; deneme isteği gönderilemez.',
+  [AI_PROFILE_RESOLUTION_FAILURES.PROFILE_DISABLED]: 'Hızlı sohbet profili bu kurulumda kapalı; deneme isteği gönderilemez.',
+  [AI_PROFILE_RESOLUTION_FAILURES.MODEL_UNAVAILABLE]: 'Hızlı sohbet profilinin modeli kapalı; deneme isteği gönderilemez.',
+  MODEL_REGISTRY_INVALID: 'Model kaydı okunamadı; deneme isteği gönderilemez. Sistem yöneticinize başvurun.'
+});
+
+/**
+ * Kullanıcıya gösterilecek hata metni.
+ *
+ * İstemci tarafı sonuçlar (süre aşımı, iptal, ağ) her zaman kendi karşılığıyla
+ * gösterilir: istek sarmalayıcısının ham iletisi (ör. `REQUEST_TIMEOUT: …`)
+ * kullanıcıya taşınmaz. Sunucunun özgül iletisi korunur; yalnızca genel yedek
+ * metin katalogdaki karşılığa bırakılır.
+ */
 export function aiFailureMessage(response) {
-  if (response?.message) return response.message;
-  const code = response?.code;
-  if (Object.hasOwn(CLIENT_FAILURES, String(code))) return CLIENT_FAILURES[code];
-  return isAiErrorCode(code) ? aiErrorMessage(code) : 'İşlem tamamlanamadı.';
+  const code = String(response?.code ?? '');
+  if (Object.hasOwn(CLIENT_FAILURES, code)) return CLIENT_FAILURES[code];
+  const message = typeof response?.message === 'string' ? response.message.trim() : '';
+  if (message && message !== GENERIC_FAILURE) return message;
+  return isAiErrorCode(code) ? aiErrorMessage(code) : GENERIC_FAILURE;
+}
+
+/** Kurumsal anahtara dönüş ancak yapılandırma kullanılabilir ve anahtar tanımlıysa vaat edilir. */
+function corporateFallbackAvailable(status) {
+  return Boolean(status?.available && status.defaultKeyConfigured);
 }
 
 /** Başlıktaki durum çipi: hangi anahtarın kullanılacağını tek bakışta söyler. */
@@ -45,19 +71,41 @@ export function aiAccessChip(status) {
 /** Kişisel anahtar yokken kullanıcıya ne olacağını anlatan cümle. */
 export function missingKeyDescription(status) {
   if (!status?.personalKeysSupported) {
-    return status?.defaultKeyConfigured
+    return corporateFallbackAvailable(status)
       ? 'Kişisel anahtar saklama bu kurulumda etkin değil; istekler kurumsal anahtarla yapılır.'
       : 'Kişisel anahtar saklama bu kurulumda etkin değil.';
   }
-  return status.defaultKeyConfigured
+  return corporateFallbackAvailable(status)
     ? 'Tanımlı değil. İstekleriniz kurumsal varsayılan anahtarla yapılır.'
     : 'Tanımlı değil. Yapay zekâ özelliklerini kullanmak için kişisel anahtarınızı ekleyin.';
 }
 
 export function removalConsequence(status) {
-  return status?.defaultKeyConfigured
-    ? 'Kaldırıldıktan sonra istekleriniz kurumsal varsayılan anahtarla yapılır.'
-    : 'Kaldırıldıktan sonra yeni bir anahtar ekleyene kadar yapay zekâ özellikleri kullanılamaz.';
+  if (corporateFallbackAvailable(status)) return 'Kaldırıldıktan sonra istekleriniz kurumsal varsayılan anahtarla yapılır.';
+  if (status?.enabled && !status.available) {
+    return 'Kaldırıldıktan sonra da yapay zekâ, yapılandırma düzeltilene kadar kullanılamaz.';
+  }
+  return 'Kaldırıldıktan sonra yeni bir anahtar ekleyene kadar yapay zekâ özellikleri kullanılamaz.';
+}
+
+/**
+ * Kayıtlı kişisel anahtarın kullanılamadığı durumun açıklaması; kullanılıyorsa `null`.
+ *
+ * Ana anahtar değiştiyse kayıt çözülemez; kişisel anahtar kullanımı
+ * kapatıldıysa (ana anahtar tanımsız) kayıt yok sayılır.
+ */
+export function storedKeyNotice(status) {
+  const credential = status?.credential;
+  if (!credential?.configured || !status?.enabled) return null;
+  if (credential.readable === false) {
+    return 'Kayıtlı anahtar okunamıyor (sunucunun şifreleme anahtarı değişti). Anahtarı yeniden kaydedin.';
+  }
+  if (status.available && status.schemaReady !== false && !status.personalKeysSupported) {
+    return corporateFallbackAvailable(status)
+      ? 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor, istekler kurumsal anahtarla yapılır.'
+      : 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor.';
+  }
+  return null;
 }
 
 export function formatAiTimestamp(value) {
@@ -87,19 +135,27 @@ export function validationSummary(credential) {
   }
 }
 
-export function validationNotice(status) {
-  if (status === AI_CREDENTIAL_VALIDATION.VALID) return { tone: 'ok', text: 'Anahtar yapay zekâ hizmeti tarafından kabul edildi.' };
-  if (status === AI_CREDENTIAL_VALIDATION.REJECTED) {
+/** Doğrulama yanıtının bildirimi; `validation` sunucunun `{ status, stale }` yanıtıdır. */
+export function validationNotice(validation) {
+  if (validation?.stale || !validation?.status) {
+    return { tone: 'neutral', text: 'Anahtar doğrulama sırasında değiştirildi; sonuç yeni anahtara uygulanmadı. Gerekirse yeniden doğrulayın.' };
+  }
+  if (validation.status === AI_CREDENTIAL_VALIDATION.VALID) return { tone: 'ok', text: 'Anahtar yapay zekâ hizmeti tarafından kabul edildi.' };
+  if (validation.status === AI_CREDENTIAL_VALIDATION.REJECTED) {
     return { tone: 'fail', text: 'Anahtar reddedildi. Geçerli bir anahtarla değiştirin; istekler kurumsal anahtara aktarılmaz.' };
   }
   return { tone: 'warn', text: 'Anahtar tanındı ancak yetkisi yetersiz. Anahtarın yetkilerini denetleyin.' };
 }
 
 export function probeSummary(result) {
+  const model = String(result?.model || '—');
+  const configured = result?.configuredModel ? String(result.configuredModel) : null;
   return {
     source: credentialSourceLabel(result?.credentialSource),
     profile: aiProfileLabel(result?.profile),
-    model: String(result?.model || '—'),
+    model,
+    // Ağ geçidi isteği başka bir modele yönlendirdiyse bu açıkça görünür.
+    configuredModel: configured && configured !== model ? configured : null,
     duration: formatAiSeconds(result?.durationMs),
     queueWait: Number(result?.queueWaitMs) > 0 ? formatAiSeconds(result.queueWaitMs) : null
   };
@@ -109,10 +165,16 @@ function timeoutsOf(status) {
   return { ...FALLBACK_TIMEOUTS, ...(status?.timeouts || {}) };
 }
 
-/** İstemci süresi sunucu sınırlarının toplamından uzundur: sonucu sunucu belirler. */
+/**
+ * İstemci süresi sunucunun GERÇEK sınama bütçesinden uzundur: sonucu sunucu
+ * belirler. Bütçe (kayıt okuması + sıra + `chat.fast` süre sınırı) sunucudan
+ * gelir; bilinmiyorsa en kötü durum varsayılır.
+ */
 export function probeTimeoutMs(status) {
+  const budget = Number(status?.probe?.budgetMs);
+  if (Number.isFinite(budget) && budget > 0) return budget + CLIENT_MARGIN_MS;
   const { queueTimeoutMs, requestTimeoutMs } = timeoutsOf(status);
-  return queueTimeoutMs + requestTimeoutMs + CLIENT_MARGIN_MS;
+  return REGISTRY_READ_BUDGET_MS + queueTimeoutMs + requestTimeoutMs + CLIENT_MARGIN_MS;
 }
 
 export function validationTimeoutMs(status) {
@@ -120,6 +182,16 @@ export function validationTimeoutMs(status) {
   return queueTimeoutMs + Math.min(VALIDATION_BUDGET_MS, requestTimeoutMs) + CLIENT_MARGIN_MS;
 }
 
+/** Sınama yalnızca kullanılabilir bir anahtar ve çözülebilen `chat.fast` profili varken açılır. */
 export function canRunAiProbe(status) {
-  return Boolean(status?.available) && status.effectiveSource !== AI_CREDENTIAL_SOURCES.MISSING;
+  return Boolean(status?.available)
+    && status.effectiveSource !== AI_CREDENTIAL_SOURCES.MISSING
+    && status.probe?.available !== false
+    && !(status.effectiveSource === AI_CREDENTIAL_SOURCES.PERSONAL && status.credential?.readable === false);
+}
+
+/** Sınama profile bağlı bir nedenle kapalıysa açıklaması; değilse `null`. */
+export function probeUnavailableMessage(status) {
+  if (!status?.available || status.probe?.available !== false) return null;
+  return PROBE_UNAVAILABLE_MESSAGES[status.probe.reason] || 'Deneme isteği bu kurulumda kullanılamıyor. Sistem yöneticinize başvurun.';
 }

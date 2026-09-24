@@ -20,7 +20,9 @@ import {
   missingKeyDescription,
   probeSummary,
   probeTimeoutMs,
+  probeUnavailableMessage,
   removalConsequence,
+  storedKeyNotice,
   validationNotice,
   validationSummary,
   validationTimeoutMs
@@ -33,6 +35,10 @@ import {
  * Kaydedilen anahtar bir daha gösterilmez; ekranda yalnızca son dört karakter
  * ve tarihler görünür. Anahtar taslağı yalnızca bileşen belleğinde durur:
  * tarayıcı deposuna, adrese ya da günlüğe yazılmaz ve kayıttan sonra silinir.
+ *
+ * Veri kipi değişince (Gerçek Sistem ↔ Demo) kart sıfırlanır ve önceki kipte
+ * başlamış her işin (durum, kayıt, doğrulama, kaldırma, deneme) geç gelen
+ * sonucu yok sayılır: Demo Kipinde hiçbir gerçek anahtar denetimi görünmez.
  */
 export function AiAccessSettings() {
   const { dataMode } = useDataMode();
@@ -52,15 +58,27 @@ export function AiAccessSettings() {
   const [probe, setProbe] = useState({ phase: 'idle' });
   const [clock, setClock] = useState(() => Date.now());
   const probeRef = useRef({ token: 0, controller: null });
+  // Kip değişiminde artar; eski oturumda başlamış işin sonucu uygulanmaz.
+  const sessionRef = useRef(0);
   const mountedRef = useRef(true);
   const inputRef = useRef(null);
   const confirmRef = useRef(null);
 
+  // Süren denemeyi geçersiz kılar: geç gelen sonucu artık hiçbir anahtarı anlatmaz.
+  const invalidateProbe = useCallback(() => {
+    const probeState = probeRef.current;
+    probeState.token += 1;
+    probeState.controller?.abort();
+    probeState.controller = null;
+    setProbe({ phase: 'idle' });
+  }, []);
+
   const load = useCallback(async () => {
     if (!actualMode) return;
+    const session = sessionRef.current;
     setPhase('loading');
     const response = await loadAiCredentialStatusRequest();
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || sessionRef.current !== session) return;
     if (!response.ok) {
       setLoadError(aiFailureMessage(response));
       setPhase('error');
@@ -80,7 +98,20 @@ export function AiAccessSettings() {
     };
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    sessionRef.current += 1;
+    invalidateProbe();
+    setStatus(null);
+    setLoadError(null);
+    setEditing(false);
+    setDraft('');
+    setDraftError(null);
+    setBusy(null);
+    setConfirmingRemoval(false);
+    setNotice(null);
+    if (actualMode) load();
+    else setPhase('demo');
+  }, [actualMode, load, invalidateProbe]);
 
   useEffect(() => {
     if (probe.phase !== 'running') return undefined;
@@ -104,9 +135,6 @@ export function AiAccessSettings() {
     setConfirmingRemoval(false);
   };
 
-  // Anahtar değişince önceki denemenin sonucu artık geçerli anahtarı anlatmaz.
-  const clearFinishedProbe = () => setProbe((current) => (current.phase === 'running' ? current : { phase: 'idle' }));
-
   const cancelEditing = () => {
     setEditing(false);
     setDraft('');
@@ -119,9 +147,10 @@ export function AiAccessSettings() {
       setDraftError(normalized.message);
       return;
     }
+    const session = sessionRef.current;
     setBusy('save');
     const response = await saveAiCredentialRequest(normalized.value);
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || sessionRef.current !== session) return;
     setBusy(null);
     if (!response.ok) {
       setDraftError(aiFailureMessage(response));
@@ -130,39 +159,53 @@ export function AiAccessSettings() {
     setStatus(response.ai);
     setDraft('');
     setEditing(false);
-    clearFinishedProbe();
+    // Eski anahtar için açılmış kaldırma onayı yeni anahtarı silemez.
+    setConfirmingRemoval(false);
+    // Anahtar değişince süren ya da biten deneme artık geçerli anahtarı anlatmaz.
+    invalidateProbe();
     setNotice({ tone: 'ok', text: 'Kişisel anahtar şifrelenerek kaydedildi. Bundan sonra istekleriniz bu anahtarla yapılır.' });
   };
 
   const validate = async () => {
+    const session = sessionRef.current;
     setBusy('validate');
     setNotice(null);
     const response = await validateAiCredentialRequest({ timeoutMs: validationTimeoutMs(status) });
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || sessionRef.current !== session) return;
     setBusy(null);
     if (!response.ok) {
       setNotice({ tone: 'fail', text: aiFailureMessage(response) });
       return;
     }
     const { validation } = response;
-    if (validation?.credential) {
-      setStatus((current) => (current ? { ...current, credential: { configured: true, ...validation.credential } } : current));
+    setNotice(validationNotice(validation));
+    // Anahtar doğrulama sürerken başka bir oturumda değiştiyse sonuç ona ait
+    // değildir; güncel durum yeniden okunur.
+    if (validation?.stale) {
+      invalidateProbe();
+      load();
+      return;
     }
-    setNotice(validationNotice(validation?.status));
+    if (validation?.credential) {
+      setStatus((current) => (current ? { ...current, credential: { configured: true, readable: true, ...validation.credential } } : current));
+    }
   };
 
   const remove = async () => {
+    const session = sessionRef.current;
     setBusy('remove');
     const response = await removeAiCredentialRequest();
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || sessionRef.current !== session) return;
     setBusy(null);
     setConfirmingRemoval(false);
     if (!response.ok) {
       setNotice({ tone: 'fail', text: aiFailureMessage(response) });
+      // Anahtar bu arada başka bir oturumda değiştirildiyse güncel durum gösterilir.
+      if (response.code === 'CONFLICT') load();
       return;
     }
     setStatus(response.ai);
-    clearFinishedProbe();
+    invalidateProbe();
     setNotice({ tone: 'neutral', text: `Kişisel anahtar kaldırıldı. ${removalConsequence(response.ai)}` });
   };
 
@@ -191,7 +234,10 @@ export function AiAccessSettings() {
   const credential = status?.credential;
   const configured = Boolean(credential?.configured);
   const lastValidation = configured ? validationSummary(credential) : null;
+  const keyNotice = storedKeyNotice(status);
+  const probeUnavailable = probeUnavailableMessage(status);
   const canEdit = Boolean(status?.personalKeysSupported);
+  const canValidate = configured && Boolean(status?.available) && canEdit && credential?.readable !== false;
 
   let body;
   if (phase === 'demo') {
@@ -228,13 +274,14 @@ export function AiAccessSettings() {
                   <span className="mono" aria-label={`Son dört karakter ${credential.hint}`}>••••{credential.hint}</span>
                   <span>{formatAiTimestamp(credential.updatedAt)} tarihinde kaydedildi</span>
                   {lastValidation && <span className={`ai-key-validation is-${lastValidation.tone}`}>{lastValidation.text}</span>}
+                  {keyNotice && <span className="ai-key-validation is-warn">{keyNotice}</span>}
                 </span>
               ) : (
                 <span className="ai-key-meta">{missingKeyDescription(status)}</span>
               )}
             </div>
             <div className="ai-key-actions">
-              {configured && status.available && (
+              {canValidate && (
                 <button type="button" className="btn sm" onClick={validate} disabled={busy != null}>
                   {busy === 'validate' ? <Spinner size={12} /> : <Icons.Check size={13} />} Doğrula
                 </button>
@@ -244,7 +291,7 @@ export function AiAccessSettings() {
                   {configured ? <Icons.Edit size={13} /> : <Icons.Plus size={13} />} {configured ? 'Değiştir' : 'Anahtar ekle'}
                 </button>
               )}
-              {configured && !confirmingRemoval && (
+              {configured && !confirmingRemoval && !editing && (
                 <button type="button" className="btn sm ghost" onClick={() => setConfirmingRemoval(true)} disabled={busy != null}>
                   <Icons.Trash size={13} /> Kaldır
                 </button>
@@ -294,7 +341,8 @@ export function AiAccessSettings() {
                     if (busy == null) save();
                   } else if (event.key === 'Escape') {
                     event.preventDefault();
-                    cancelEditing();
+                    // Kayıt sürerken form kapatılmaz: sonuç (ya da hata) görünür kalmalıdır.
+                    if (busy !== 'save') cancelEditing();
                   }
                 }}
               />
@@ -325,6 +373,7 @@ export function AiAccessSettings() {
                 <div className="set-row-desc">
                   Kısa ve sabit bir deneme isteğiyle yapay zekâ hizmetine ulaşıldığını doğrular. Görev verisi gönderilmez.
                 </div>
+                {probeUnavailable && <div className="set-row-desc">{probeUnavailable}</div>}
               </div>
               <div className="ai-probe-actions">
                 {probe.phase === 'running' ? (
@@ -350,7 +399,7 @@ export function AiAccessSettings() {
             <Icons.Info size={12} aria-hidden="true" />
             <span>
               Kişisel anahtar tanımlıysa istekler yalnızca bu anahtarla yapılır; anahtar reddedilirse istek kurumsal anahtara aktarılmaz.
-              {status.defaultKeyConfigured ? ' Kişisel anahtar yoksa kurumsal varsayılan anahtar kullanılır.' : ''}
+              {status.available && status.defaultKeyConfigured ? ' Kişisel anahtar yoksa kurumsal varsayılan anahtar kullanılır.' : ''}
             </span>
           </p>
         )}
@@ -382,6 +431,7 @@ function ProbeResult({ probe }) {
           <div><dt>Anahtar</dt><dd>{summary.source}</dd></div>
           <div><dt>Profil</dt><dd>{summary.profile}</dd></div>
           <div><dt>Model</dt><dd className="mono">{summary.model}</dd></div>
+          {summary.configuredModel && <div><dt>Yapılandırılan model</dt><dd className="mono">{summary.configuredModel}</dd></div>}
           {summary.queueWait && <div><dt>Sırada bekleme</dt><dd>{summary.queueWait}</dd></div>}
         </dl>
         {probe.result?.text && <blockquote className="ai-probe-text">{probe.result.text}</blockquote>}

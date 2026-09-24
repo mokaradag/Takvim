@@ -66,6 +66,25 @@ export async function withAdminActionLock(actionId, work, pool = null) {
   }
 }
 
+/**
+ * Yalnızca bu süreçte tekil çalışan yönetim eylemi; SQL kilidi ALMAZ.
+ *
+ * Veritabanına dokunmayan ve yalnızca dış bir uca süre sınırlı istek gönderen
+ * eylemler (ör. yapay zekâ bağlantı testi) için kullanılır: dış uç beklenirken
+ * bir SQL işlemi ve havuz bağlantısı tutulmaz. Eylemin yan etkisi olmadığı için
+ * örnekler arası tekillik gerekmez.
+ */
+export async function withLocalAdminActionLock(actionId, work) {
+  const key = String(actionId);
+  if (locks().get(key)) throw new ServerPersistenceError('CONFLICT', 'Bu işlem şu anda çalışıyor. Tamamlanmasını bekleyin.');
+  locks().set(key, true);
+  try {
+    return await work();
+  } finally {
+    locks().delete(key);
+  }
+}
+
 export function isAdminActionRunning(actionId) {
   return Boolean(locks().get(String(actionId)));
 }
