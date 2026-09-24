@@ -63,9 +63,17 @@ test('varsayılan kayıt geçerlidir ve her profil gerekli yetenekleri taşıyan
   const fast = resolveModelProfile(validated.registry, AI_PROFILES.CHAT_FAST).route;
   assert.equal(fast.provider, 'onprem');
   assert.equal(fast.maxOutputTokens, 512);
-  // Aşama 1 en büyük modele ya da en büyük bağlama göre kurulmaz.
-  assert.notEqual(fast.model, 'Qwen3.5-397B-A17B-FP8');
-  assert.equal(fast.contextTokens, null);
+  // Hızlı profil düşünme kipine sahip olmayan güncel kurum içi modele bağlıdır.
+  assert.equal(fast.model, 'Qwen3-Next-80B-A3B-Instruct');
+  assert.equal(fast.contextTokens, 262144);
+  for (const retiring of [
+    'Qwen3-30B-A3B-Instruct-2507',
+    'Qwen3-Coder-30B-A3B-Instruct',
+    'Qwen2.5-VL-7B-Instruct',
+    'Qwen3-VL-30B-A3B-Instruct'
+  ]) {
+    assert.equal(DEFAULT_AI_MODEL_REGISTRY.models.some((model) => model.id === retiring), false, retiring);
+  }
 });
 
 test('profil yapılandırılmış modele çözülür; bilinmeyen, eksik ya da kapalı profil kararlı nedenle reddedilir', () => {

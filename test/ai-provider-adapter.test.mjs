@@ -142,7 +142,7 @@ test('uçtan uca sınama gerçek bağdaştırıcıyla yanıt alır; reddedilen k
   const withDefault = await runProbe();
   assert.equal(withDefault.status, 200);
   assert.equal(withDefault.body.result.credentialSource, 'default');
-  assert.equal(withDefault.body.result.model, 'Qwen3-30B-A3B-Instruct-2507');
+  assert.equal(withDefault.body.result.model, 'Qwen3-Next-80B-A3B-Instruct');
   assert.equal(server.state.requests[0].body.max_tokens, 64);
 
   await saveKey(PERSONAL_KEY_A);

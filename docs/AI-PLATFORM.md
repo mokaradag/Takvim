@@ -216,23 +216,48 @@ bağlıdır ve bilinmedikçe boş bırakılır.
 Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Öteki profiller
 sonraki aşamaların sözleşmesidir; yürütme yolu yoktur.
 
-Varsayılan eşleme `src/server/ai/defaultModelRegistry.js` dosyasındadır. Kurulum
-aynı biçimdeki bir JSON belgesini `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` ile
-gösterip eşlemenin **tamamını** değiştirebilir:
+Varsayılan eşleme `src/server/ai/defaultModelRegistry.js` dosyasındadır. Depoda
+ayrıca **mevcut kurum içi sunucu kataloğunun operasyonel anlık görüntüsü**
+`config/ai-model-registry.onprem.json` olarak tutulur. Üretimde bu dosyanın
+dağıtılmış kopyası mutlak bir yolda tutulur ve
+`MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` o dosyayı gösterir. Böylece model adı,
+yetenek, bağlam boyutu ya da profil tercihi değiştiğinde uygulama iş kodu
+değişmez; JSON güncellenir ve Rota yeniden başlatılır.
+
+24.09.2026 kataloğunda hız gerektiren `chat.fast`, `chat.general` ve
+`chat.tools` profilleri düşünme kipine sahip olmayan
+`Qwen3-Next-80B-A3B-Instruct` modeline; `chat.reasoning`
+`DeepSeek-V4-Flash-0731` modeline; `vision` ise düşünme kipine sahip olmayan
+`Qwen3-VL-8B-Instruct` modeline bağlıdır. Dört model sunucudan kaldırılacağı
+bildirildiği için hem varsayılan kayıttan hem de operasyonel JSON'dan bilinçli
+olarak çıkarılmıştır: `Qwen3-30B-A3B-Instruct-2507`,
+`Qwen3-Coder-30B-A3B-Instruct`, `Qwen2.5-VL-7B-Instruct` ve
+`Qwen3-VL-30B-A3B-Instruct`.
+
+Kısaltılmış örnek:
 
 ```json
 {
   "version": 1,
   "models": [
-    { "id": "Qwen3-30B-A3B-Instruct-2507", "provider": "onprem", "capabilities": ["chat", "tools"], "contextTokens": null, "maxConcurrency": 4 },
-    { "id": "openai/gpt-oss-120b", "capabilities": ["chat", "tools", "reasoning"], "enabled": true }
+    { "id": "Qwen3-Next-80B-A3B-Instruct", "provider": "onprem", "capabilities": ["chat", "tools"], "contextTokens": 262144, "enabled": true },
+    { "id": "DeepSeek-V4-Flash-0731", "provider": "onprem", "capabilities": ["chat", "tools", "reasoning"], "contextTokens": 1048576, "enabled": true },
+    { "id": "Qwen3-VL-8B-Instruct", "provider": "onprem", "capabilities": ["chat", "vision"], "contextTokens": 32768, "enabled": true }
   ],
   "profiles": {
-    "chat.fast": { "model": "Qwen3-30B-A3B-Instruct-2507", "maxOutputTokens": 512 },
-    "chat.reasoning": { "model": "openai/gpt-oss-120b", "maxOutputTokens": 2048, "timeoutMs": 180000 }
+    "chat.fast": { "model": "Qwen3-Next-80B-A3B-Instruct", "maxOutputTokens": 512 },
+    "chat.reasoning": { "model": "DeepSeek-V4-Flash-0731", "maxOutputTokens": 2048, "timeoutMs": 180000 },
+    "vision": { "model": "Qwen3-VL-8B-Instruct", "maxOutputTokens": 1024 }
   }
 }
 ```
+
+Depodaki JSON bir **referans ve dağıtım kaynağıdır**; çalışma zamanı yine yalnız
+`MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` ile verilen mutlak yolu okur. Gerçek
+sunucu kataloğu değiştiğinde önce bu dosya ve varsayılan kayıt birlikte
+güncellenmelidir; böylece sonraki geliştirme oturumları hangi modellerin kurum
+içinde mevcut olduğunu ve hangi profillerin seçildiğini doğrudan depodan
+görebilir.
 
 Doğrulama kuralları:
 
@@ -493,12 +518,15 @@ kaydı açıkça reddedilir (`SCHEMA_MISSING`) ve kurumsal anahtar çalışır.
 2. `0015` uygulanmış bir veritabanında
    `database/MR_Upgrade_0016_Ai_User_Credentials.sql` betiğini çalıştırın.
 3. Ana anahtarı üretin ve güvenli biçimde yedekleyin (§4).
-4. `.env.local` ya da hizmet ortamında §12'deki değişkenleri ayarlayın;
+4. `config/ai-model-registry.onprem.json` dosyasını sunucuda kalıcı bir mutlak
+   yola kopyalayın ve `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` değerini bu yola
+   verin. Sunucu kataloğu değiştiğinde depodaki referans JSON'u da güncelleyin.
+5. `.env.local` ya da hizmet ortamında §12'deki diğer değişkenleri ayarlayın;
    `MERGEN_ROTA_AI_ENABLED=true` en son açılır.
-5. Uygulamayı yeniden başlatın (`npm run build` ve olağan başlatma).
-6. **Sistem Yönetimi → Entegrasyonlar → Yapay zekâ sağlayıcısı → Bağlantıyı
+6. Uygulamayı yeniden başlatın (`npm run build` ve olağan başlatma).
+7. **Sistem Yönetimi → Entegrasyonlar → Yapay zekâ sağlayıcısı → Bağlantıyı
    Test Et** ile uca ulaşıldığını doğrulayın.
-7. §15'teki elle kabul listesini uygulayın.
+8. §15'teki elle kabul listesini uygulayın.
 
 Özelliği kapatmak için `MERGEN_ROTA_AI_ENABLED=false` yeterlidir; tablo ve
 kayıtlı anahtarlar korunur.
