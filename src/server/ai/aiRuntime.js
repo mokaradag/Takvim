@@ -28,7 +28,7 @@ function runtime() {
  */
 function getAiAdmission(config = readAiConfig()) {
   const current = runtime();
-  current.admission ||= createAiAdmissionController({ limits: config.limits, onChange: recordAiLoad });
+  current.admission ||= createAiAdmissionController({ limits: config.limits });
   return current.admission;
 }
 
@@ -48,6 +48,20 @@ export function getAiGateway() {
 /** Kapasite durumu; çalışma zamanı henüz kurulmadıysa `null`. */
 export function aiRuntimeLoad() {
   return runtime().admission?.status() ?? null;
+}
+
+/**
+ * Yük ölçümü telemetri turunun ritminde örneklenir.
+ *
+ * Yalnızca durum değişiminde yazılan örnekler boşta geçen kovalarda veri
+ * boşluğu bırakır ve ortalamayı olay anlarına göre çarpıtırdı. Her tur, hiçbir
+ * istek yokken de (henüz kurulmamış çalışma zamanı dâhil) sıfır değerle
+ * örneklenir; yapay zekâ kapalıysa örnek yazılmaz.
+ */
+export function sampleAiLoad(now = Date.now()) {
+  if (!readAiConfig().enabled) return;
+  const load = aiRuntimeLoad();
+  recordAiLoad({ active: load?.active ?? 0, queued: load?.queued ?? 0 }, now);
 }
 
 /** Yalnızca testler: gerçek ağ yerine belirlenimci sağlayıcı bağlar. */

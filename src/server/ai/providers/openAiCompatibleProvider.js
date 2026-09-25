@@ -13,8 +13,25 @@ import { AiError } from '../aiErrors.js';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RETRY_AFTER_SECONDS = 300;
-/** Bağlantı hiç kurulamadı: istek sağlayıcıya ulaşmadı, yinelemek iş çoğaltmaz. */
-const CONNECT_FAILURE_CODES = new Set(['ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'EAI_AGAIN']);
+const MAX_MODEL_IDS = 2000;
+const MAX_MODEL_ID_LENGTH = 200;
+/**
+ * Bağlantı hiç kurulamadı: istek sağlayıcıya ulaşmadı, yinelemek iş çoğaltmaz.
+ * Ad çözümü, yönlendirme/arabirim ve bağlantı kurma hataları bu sınıftadır.
+ * Bağlantı kurulduktan SONRA oluşabilen belirsiz hatalar (`ECONNRESET`,
+ * `ETIMEDOUT`, `EPIPE`) bilinçli olarak dışarıda kalır.
+ */
+const CONNECT_FAILURE_CODES = new Set([
+  'ECONNREFUSED',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ENETDOWN',
+  'EHOSTDOWN',
+  'EADDRNOTAVAIL'
+]);
 const NETWORK_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,40}$/;
 
 function invalidResponse(reason) {
@@ -125,7 +142,8 @@ export function parseChatCompletion(payload) {
   return {
     text: message.content ?? '',
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason.slice(0, 40) : null,
-    model: typeof payload.model === 'string' ? payload.model.slice(0, 200) : null,
+    // Sağlayıcı modeli bildirmediyse `null` kalır; yapılandırılan model yerine konmaz.
+    model: typeof payload.model === 'string' && payload.model.trim() ? payload.model.trim().slice(0, 200) : null,
     usage: {
       promptTokens: tokenCount(payload.usage?.prompt_tokens),
       completionTokens: tokenCount(payload.usage?.completion_tokens),
@@ -134,10 +152,20 @@ export function parseChatCompletion(payload) {
   };
 }
 
-/** OpenAI uyumlu `GET /models` biçimi: `{ data: [{ id }, ...] }`. */
-function isModelList(payload) {
-  return Array.isArray(payload?.data)
-    && payload.data.every((entry) => entry != null && typeof entry === 'object' && typeof entry.id === 'string');
+/**
+ * OpenAI uyumlu `GET /models` biçimi: `{ data: [{ id }, ...] }`.
+ *
+ * Liste en az bir BOŞ OLMAYAN model kimliği taşımalıdır: boş liste ya da boş
+ * kimlikler kullanılabilir bir uç göstermez. Dönen kimlikler sınırlıdır ve
+ * yalnızca sunucuda (yapılandırılan modelin uçta bulunduğunu doğrulamak için)
+ * kullanılır. Geçersiz biçimde `null` döner.
+ */
+function modelIdsOf(payload) {
+  if (!Array.isArray(payload?.data)) return null;
+  if (!payload.data.every((entry) => entry != null && typeof entry === 'object' && typeof entry.id === 'string')) return null;
+  const ids = payload.data.map((entry) => entry.id.trim()).filter(Boolean);
+  if (!ids.length) return null;
+  return ids.slice(0, MAX_MODEL_IDS).map((id) => id.slice(0, MAX_MODEL_ID_LENGTH));
 }
 
 function requestHeaders(apiKey, { json = false } = {}) {
@@ -179,9 +207,10 @@ export function createOpenAiCompatibleProvider({ fetchImpl = null, maxResponseBy
      * Üretim yapmayan hafif erişim/anahtar denetimi.
      *
      * Hata yanıtında yalnızca HTTP durumu ve `Retry-After` döner; gövde
-     * okunmaz. 2xx yanıtı ancak gövde SINIRLI ve geçerli bir model listesiyse
-     * kabul edilir: yanlış adrese yönelmiş bir ters vekilin 200 dönen HTML
-     * sayfası bir anahtarı "geçerli" gösteremez.
+     * okunmaz. 2xx yanıtı ancak gövde SINIRLI ve boş olmayan geçerli bir model
+     * listesiyse kabul edilir: yanlış adrese yönelmiş bir ters vekilin 200
+     * dönen HTML sayfası ya da boş liste bir anahtarı "geçerli" gösteremez.
+     * Başarılı yanıt, sınırlı model kimliklerini (`models`) de taşır.
      */
     async listModels({ baseUrl, apiKey = null, signal }) {
       const response = await send(`${baseUrl}/models`, { method: 'GET', headers: requestHeaders(apiKey) }, signal);
@@ -189,9 +218,9 @@ export function createOpenAiCompatibleProvider({ fetchImpl = null, maxResponseBy
         await discardBody(response);
         return { status: response.status, retryAfter: response.headers.get('retry-after') };
       }
-      const payload = await readBoundedJson(response, maxResponseBytes, signal);
-      if (!isModelList(payload)) throw invalidResponse('MODEL_LIST_INVALID');
-      return { status: response.status, retryAfter: null };
+      const models = modelIdsOf(await readBoundedJson(response, maxResponseBytes, signal));
+      if (!models) throw invalidResponse('MODEL_LIST_INVALID');
+      return { status: response.status, retryAfter: null, models };
     }
   };
 }

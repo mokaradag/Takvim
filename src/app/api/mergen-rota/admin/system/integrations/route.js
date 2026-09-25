@@ -1,4 +1,5 @@
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../../server/errors.js';
+import { isSameOriginRequest } from '../../../../../../server/identity/sameOriginRequest.js';
 import {
   loadSystemAdminContext,
   withAdminActionLock,
@@ -40,10 +41,17 @@ export const GET = withRouteObservability('api.admin.system.integrations', async
  * Bağlantı testi.
  *
  * Testlerin tümü YIKICI DEĞİLDİR ve SMTP testi ileti GÖNDERMEZ: yalnızca
- * bağlantı ve el sıkışma denenir.
+ * bağlantı ve el sıkışma denenir. İstek yalnızca aynı kaynaktan kabul edilir:
+ * `SameSite=Lax` çerezi aynı sitedeki kardeş bir kaynağın basit (`text/plain`)
+ * POST'uyla da gider ve yöneticinin oturumuyla kurumsal anahtarlı bir sağlayıcı
+ * çağrısı tetiklenebilirdi. Yöneticinin isteği kesilirse (`request.signal`)
+ * yapay zekâ testi de iptal edilir.
  */
 export const POST = withRouteObservability('api.admin.system.integrations.test', async (request) => {
   try {
+    if (!isSameOriginRequest(request)) {
+      throw new ServerPersistenceError('FORBIDDEN', 'Bağlantı testi isteği aynı kaynaktan gelmelidir.');
+    }
     const { pool } = await loadSystemAdminContext();
     const body = await request.json().catch(() => null);
     const id = String(body?.integrationId || '');
@@ -51,7 +59,7 @@ export const POST = withRouteObservability('api.admin.system.integrations.test',
       throw new ServerPersistenceError('MUTATION_FAILED', 'Bu entegrasyon için bağlantı testi tanımlı değil.', { status: 400 });
     }
     const lockId = `integration-test:${id}`;
-    const run = () => testIntegration(pool, id);
+    const run = () => testIntegration(pool, id, { signal: request.signal });
     // Dış uca giden ve veritabanına dokunmayan test, SQL kilidi tutmadan çalışır.
     const result = integrationTestNeedsDatabaseLock(id)
       ? await withAdminActionLock(lockId, run, pool)

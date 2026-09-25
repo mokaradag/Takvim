@@ -344,8 +344,9 @@ const TESTS = Object.freeze({
     if (!isOutlookCalendarEnabled()) return { ok: false, code: 'OUTLOOK_DISABLED', durationMs: 0 };
     return probeSmtpConnection();
   },
-  // Yapay zekâ testi model ÜRETMEZ: süre sınırlı `GET /models` isteğidir.
-  [INTEGRATIONS.AI]: () => testAiProviderConnection(),
+  // Yapay zekâ testi model ÜRETMEZ: süre sınırlı `GET /models` isteğidir ve
+  // yöneticinin isteği kesilirse iptal edilir.
+  [INTEGRATIONS.AI]: (executor, { signal } = {}) => testAiProviderConnection({ signal }),
   // Kimlik erişilebilirliği YIKICI OLMAYAN biçimde yoklanır: yalnızca ortak
   // anahtar kümesi (JWKS) okunur; oturum açma denenmez, kimlik bilgisi
   // gönderilmez, hesap kilitlenmez.
@@ -398,16 +399,17 @@ export function integrationTestNeedsDatabaseLock(id) {
  * Bağlantı testi — HİÇBİRİ yıkıcı değildir.
  *
  * Veritabanı testleri `SELECT 1` düzeyindedir; SMTP testi ileti göndermeden
- * yalnızca el sıkışmayı dener.
+ * yalnızca el sıkışmayı dener. `signal` yöneticinin isteğidir; iptal edilen
+ * test (`cancelled`) bir bağlantı sonucu olmadığı için geçmişe yazılmaz.
  */
-export async function testIntegration(executor, id) {
+export async function testIntegration(executor, id, { signal = null } = {}) {
   const run = TESTS[String(id)];
   if (!run) return { ok: false, code: 'UNKNOWN_INTEGRATION', message: 'Tanınmayan entegrasyon.' };
   // Yoklamanın kendisi FIRLATABİLİR (ör. ikincil havuz kurulamadığında). Bu,
   // testin sonucudur; ucun iç hatası değil. Sonuç sınırlı bir kodla bildirilir.
   let outcome;
   try {
-    outcome = await run(executor);
+    outcome = await run(executor, { signal });
   } catch (error) {
     outcome = {
       ok: false,
@@ -415,7 +417,7 @@ export async function testIntegration(executor, id) {
       code: String(error?.code || error?.name || 'PROBE_FAILED').slice(0, 60)
     };
   }
-  remember(String(id), { ok: outcome.ok, durationMs: outcome.durationMs, code: outcome.code || null });
+  if (!outcome.cancelled) remember(String(id), { ok: outcome.ok, durationMs: outcome.durationMs, code: outcome.code || null });
   return {
     ok: Boolean(outcome.ok),
     durationMs: outcome.durationMs ?? null,

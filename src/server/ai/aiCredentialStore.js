@@ -98,17 +98,29 @@ export async function readDirectoryMembership(executor, sicil) {
   return knownSicil(result);
 }
 
-/** Anahtar tablosu kurulu mu? Satır okumaz; sonuç şema gözlemi olarak saklanır. */
+/**
+ * Anahtar tablosu kurulu mu? Satır okumaz; sonuç şema gözlemi olarak saklanır.
+ *
+ * Doğrulama BAŞARISIZ olursa (yetki, bağlantı, süre aşımı) önceki başarılı
+ * gözlem korunmaz: durum "bilinmiyor"a döner ki sağlık görünümü eski bir
+ * `ready: true` ile sağlıklı demesin.
+ */
 export async function readCredentialSchema(executor) {
-  const result = await executor.request().query(AI_CREDENTIAL_SCHEMA_SQL);
+  let result;
+  try {
+    result = await executor.request().query(AI_CREDENTIAL_SCHEMA_SQL);
+  } catch (error) {
+    noteSchema(null);
+    throw error;
+  }
   const ready = Boolean(result.recordset?.[0]?.SchemaReady ?? result.recordsets?.[0]?.[0]?.SchemaReady);
   noteSchema(ready);
   return ready;
 }
 
 /**
- * Durum künyesi. `rowVersion` ve `masterKeyId` yalnızca sunucuda kullanılır
- * (koşullu silme ve ana anahtar uyuşmazlığı); künyeye girmez.
+ * Durum künyesi. `keyNonce` (anahtar kimliği; koşullu silme) ve `masterKeyId`
+ * (ana anahtar uyuşmazlığı) yalnızca sunucuda kullanılır; künyeye girmez.
  */
 export async function readCredentialStatus(executor, sicil) {
   const result = await observeSchema(sicilRequest(executor, sicil).query(AI_CREDENTIAL_STATUS_SQL));
@@ -116,7 +128,7 @@ export async function readCredentialStatus(executor, sicil) {
   return {
     knownSicil: knownSicil(result),
     credential: credentialMetadata(row),
-    rowVersion: row?.RowVersion ?? null,
+    keyNonce: row?.KeyNonce ?? null,
     masterKeyId: row ? String(row.MasterKeyId || '') : null
   };
 }
@@ -131,8 +143,7 @@ export async function readCredentialSecret(executor, sicil) {
       masterKeyId: String(row.MasterKeyId || ''),
       nonce: row.Nonce,
       ciphertext: row.Ciphertext,
-      authTag: row.AuthTag,
-      rowVersion: row.RowVersion
+      authTag: row.AuthTag
     } : null,
     credential: credentialMetadata(row)
   };
@@ -151,10 +162,10 @@ export async function upsertCredential(executor, sicil, { encrypted, hint }) {
   return credentialMetadata(recordsets[recordsets.length - 1]?.[0] || null);
 }
 
-/** Yalnızca `rowVersion` ile okunan satırı siler; araya giren yeni kayıt korunur. */
-export async function deleteCredential(executor, sicil, { rowVersion }) {
+/** Yalnızca okunan anahtarı (`keyNonce`) siler; araya giren yeni kayıt korunur. */
+export async function deleteCredential(executor, sicil, { keyNonce }) {
   const request = sicilRequest(executor, sicil);
-  request.input('rowVersion', sql.Binary(8), rowVersion);
+  request.input('keyNonce', sql.VarBinary(12), keyNonce);
   const result = await observeSchema(request.query(AI_CREDENTIAL_DELETE_SQL));
   const recordsets = result.recordsets || [];
   return { deleted: Number(recordsets[recordsets.length - 1]?.[0]?.Deleted || 0) > 0 };
@@ -162,16 +173,16 @@ export async function deleteCredential(executor, sicil, { rowVersion }) {
 
 /**
  * Doğrulama sonucunu yazar. `recorded: false`, doğrulanan anahtarın bu arada
- * değiştirildiğini ya da kaldırıldığını söyler; dönen künye güncel satırındır.
+ * değiştirildiğini ya da kaldırıldığını söyler ve dönen künye güncel satırındır.
+ * `recorded: true` ise künye, sonucun GERÇEKTEN yazıldığı satırdan (`OUTPUT`)
+ * gelir.
  */
-export async function recordCredentialValidation(executor, sicil, { rowVersion, status }) {
+export async function recordCredentialValidation(executor, sicil, { keyNonce, status }) {
   const request = sicilRequest(executor, sicil);
-  request.input('rowVersion', sql.Binary(8), rowVersion);
+  request.input('keyNonce', sql.VarBinary(12), keyNonce);
   request.input('status', sql.VarChar(20), status);
   const result = await observeSchema(request.query(AI_CREDENTIAL_VALIDATION_SQL));
-  const recordsets = result.recordsets || [];
-  return {
-    recorded: Number(recordsets[0]?.[0]?.Recorded || 0) > 0,
-    credential: credentialMetadata(recordsets[recordsets.length - 1]?.[0] || null)
-  };
+  const [written = [], current = []] = result.recordsets || [];
+  const recorded = written.length > 0;
+  return { recorded, credential: credentialMetadata((recorded ? written[0] : current[0]) || null) };
 }

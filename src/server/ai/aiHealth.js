@@ -1,15 +1,16 @@
 import 'server-only';
+import { AI_CREDENTIAL_SOURCES } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { HEALTH_STATES } from '../../domain/observability/healthModel.js';
-import { probeDeadline } from '../observability/boundedExecution.js';
 import { AI_CONFIG_NAMES, aiConfigurationSummary, readAiConfig } from './aiConfig.js';
 import { checkAiCredentialSchema } from './aiCredentialService.js';
 import { aiCredentialSchemaState } from './aiCredentialStore.js';
-import { raceWithAbort } from './aiDeadline.js';
+import { createAiDeadline, raceWithAbort } from './aiDeadline.js';
 import { isAiError } from './aiErrors.js';
+import { resolveAiProbeRoute } from './aiProbeProfile.js';
 import { aiRuntimeLoad, getAiProvider } from './aiRuntime.js';
 import { aiTelemetrySnapshot, recordProviderCall } from './aiTelemetry.js';
-import { aiModelRegistryState, loadAiModelRegistry } from './modelRegistryLoader.js';
+import { aiModelRegistryState, cachedAiModelRegistry, loadAiModelRegistry } from './modelRegistryLoader.js';
 import { classifyProviderStatus } from './providers/openAiCompatibleProvider.js';
 
 /**
@@ -69,9 +70,13 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   const credentialSchema = aiCredentialSchemaState();
   const detail = { configuration, registry, load, telemetry, credentialSchema: { ready: credentialSchema.ready } };
   const loadText = `Etkin ${load.active}/${load.limits.maxActive}, sırada ${load.queued}/${load.limits.maxQueued}.`;
+  // Sağlayıcıya ERİŞİM (reddedilen çağrı dâhil) başarılı işlem değildir:
+  // bileşenin "son başarılı işlem" alanı uçtan uca başarılı yapay zekâ
+  // isteğinin anıdır; erişim anı ayrıntıda (`telemetry.provider`) kalır.
   const lastContactAt = telemetry.provider.lastContactAt;
-  const warning = (message) => ({ state: HEALTH_STATES.WARNING, message, detail, lastSuccessAt: lastContactAt });
-  const unknown = (message) => ({ state: HEALTH_STATES.UNKNOWN, message, detail, lastSuccessAt: lastContactAt });
+  const lastSuccessAt = telemetry.lastSuccessAt;
+  const warning = (message) => ({ state: HEALTH_STATES.WARNING, message, detail, lastSuccessAt });
+  const unknown = (message) => ({ state: HEALTH_STATES.UNKNOWN, message, detail, lastSuccessAt });
 
   if (config.issues.length) {
     return { state: HEALTH_STATES.WARNING, message: 'Yapay zekâ yapılandırması eksik ya da hatalı.', detail };
@@ -79,8 +84,12 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (registry.status === 'error') {
     return { state: HEALTH_STATES.WARNING, message: 'Model kaydı geçersiz ya da okunamadı.', detail };
   }
-  if (personalKeysOnly(config) && credentialSchema.ready === false) {
-    return warning('Kişisel anahtar tablosu (0016) kurulmamış ve kurumsal anahtar tanımlı değil; yapay zekâ kullanılamıyor.');
+  // Kişisel anahtar saklama açıksa tablosu, kurumsal anahtar istekleri
+  // yürütebilse de ayrıca doğrulanır: tablo yoksa kullanıcılar anahtar ekleyemez.
+  if (config.personalKeysSupported && credentialSchema.ready === false) {
+    return warning(personalKeysOnly(config)
+      ? 'Kişisel anahtar tablosu (0016) kurulmamış ve kurumsal anahtar tanımlı değil; yapay zekâ kullanılamıyor.'
+      : 'Kişisel anahtar tablosu (0016) kurulmamış; kişisel anahtar kaydedilemiyor, istekler yalnızca kurumsal anahtarla yapılabiliyor.');
   }
   // Yalnızca PAYLAŞILAN kapasitenin dolması uyarıdır; tek kullanıcının kendi
   // sınırı telemetride sayılır ama hizmetin dolu olduğunu göstermez.
@@ -92,6 +101,16 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (recent(telemetry.lastQueueTimeoutAt)) return warning(`Kapasite yetersiz; bazı istekler sırada beklerken süre doldu. ${loadText}`);
   const queuePressure = load.limits.maxQueued > 0 && load.queued >= Math.ceil(load.limits.maxQueued * QUEUE_PRESSURE_RATIO);
   if (queuePressure) return warning(`Sıra dolmak üzere; henüz geri çevrilen istek yok. ${loadText}`);
+  // Kurumsal anahtarın reddi ayrı izlenir: kişisel anahtarla yapılan başarılı
+  // bir çağrı, kurumsal anahtara bağlı kullanıcıların sorununu gizlemez. Yalnızca
+  // kurumsal anahtarla yapılan başarılı bir çağrı bu uyarıyı kaldırır.
+  const defaultKey = telemetry.provider.defaultKey || {};
+  const defaultKeyFailureAt = epoch(defaultKey.lastFailureAt);
+  if (config.defaultKeyConfigured && defaultKeyFailureAt != null && now - defaultKeyFailureAt <= CONTACT_FRESHNESS_MS) {
+    return warning(defaultKey.lastFailureCode === AI_ERROR_CODES.AI_RATE_LIMITED
+      ? `Kurumsal anahtar sağlayıcının istek sınırına ulaştı (${defaultKey.lastFailureCode}). ${loadText}`
+      : `Kurumsal anahtar son kullanımında reddedildi (${defaultKey.lastFailureCode}); kişisel anahtarı olmayan kullanıcıların istekleri başarısız olur. ${loadText}`);
+  }
   // Son sonuç damgalarla değil sıra sayacıyla belirlenir: aynı milisaniyedeki
   // başarı ve hata sırası karışmaz. Hata da başarı gibi yalnızca tazeyken
   // kanıttır: bayat bir hata süreç ömrü boyunca uyarı olarak kalmaz, durum
@@ -103,12 +122,18 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (registry.status !== 'ready') {
     return unknown(`Model kaydı henüz yüklenmedi; ilk yapay zekâ isteğinde ya da bağlantı testinde okunur. ${loadText}`);
   }
-  if (personalKeysOnly(config) && credentialSchema.ready !== true) {
+  // Kayıt geçerli olsa da `chat.fast` çıkarılmış ya da kapatılmış olabilir:
+  // Aşama 1'in tek yürütme yolu çalışmazken bileşen sağlıklı görünmez.
+  const probeRoute = resolveAiProbeRoute(cachedAiModelRegistry());
+  if (!probeRoute.ok) {
+    return warning(`Hızlı sohbet profili (chat.fast) kullanılamıyor (${probeRoute.reason}); bağlantı sınaması çalışmaz. ${loadText}`);
+  }
+  if (config.personalKeysSupported && credentialSchema.ready !== true) {
     return unknown(`Kişisel anahtar tablosu henüz doğrulanmadı; Entegrasyonlar sekmesinden bağlantıyı sınayın. ${loadText}`);
   }
   const contactAt = epoch(lastContactAt);
   if (contactAt != null && now - contactAt <= CONTACT_FRESHNESS_MS) {
-    return { state: HEALTH_STATES.HEALTHY, message: `Sağlayıcı yanıt veriyor. ${loadText}`, detail, lastSuccessAt: lastContactAt };
+    return { state: HEALTH_STATES.HEALTHY, message: `Sağlayıcı yanıt veriyor. ${loadText}`, detail, lastSuccessAt };
   }
   return unknown(`Sağlayıcıya yakın zamanda erişilmedi; Entegrasyonlar sekmesinden bağlantıyı sınayın. ${loadText}`);
 }
@@ -138,42 +163,115 @@ export function aiIntegrationCard() {
 }
 
 /**
- * Uca ulaşıldıktan sonra kurulumun kullanılabilirliğini tamamlar: dosya
- * kaydı okunur (kendi süre sınırıyla) ve kurumsal anahtar yoksa kişisel
- * anahtar tablosunun kurulu olduğu doğrulanır. Sonuç önbelleğe yazılır; sağlık
- * görünümü bunu G/Ç yapmadan okur.
+ * Uca ulaşıldıktan sonra kurulumun kullanılabilirliğini tamamlar: kalan ayar
+ * sorunları bildirilir, model kaydı okunur, sınama profili (`chat.fast`)
+ * çözülmeli ve uç model listesini verdiyse modeli listede bulunmalıdır;
+ * kişisel anahtar saklama açıksa (kurumsal anahtar tanımlı olsa da) anahtar
+ * tablosunun kurulu olduğu doğrulanır. Hepsi testin TEK süre sınırı
+ * altındadır; sonuç önbelleğe yazılır, sağlık görünümü bunu G/Ç yapmadan okur.
  */
-async function verifySetup(config, timeoutMs) {
-  if (config.registryPath) {
-    try {
-      await loadAiModelRegistry({ path: config.registryPath });
-    } catch {
-      return { code: 'MODEL_REGISTRY_INVALID', message: 'Uca ulaşıldı ancak model kaydı geçersiz ya da okunamadı.' };
-    }
+async function verifySetup(config, deadline, models) {
+  // Kurumsal anahtarın biçimi sağlayıcı çağrısından önce sınandı; kalan her
+  // ayar sorunu (ör. geçersiz sınır, yer tutucu ana anahtar) kurulumu
+  // kullanılamaz kılar: istekler AI_CONFIGURATION_ERROR alır.
+  if (config.issues.length) {
+    return { code: 'CONFIGURATION_INVALID', message: 'Uca ulaşıldı ancak yapay zekâ yapılandırması eksik ya da hatalı.' };
   }
-  if (!personalKeysOnly(config)) return null;
-  const deadline = probeDeadline(timeoutMs);
+  let registry;
+  try {
+    registry = await raceWithAbort(() => loadAiModelRegistry({ path: config.registryPath }), deadline.signal);
+  } catch (error) {
+    if (deadline.failure()) throw deadline.failure();
+    return { code: 'MODEL_REGISTRY_INVALID', message: 'Uca ulaşıldı ancak model kaydı geçersiz ya da okunamadı.' };
+  }
+  const probeRoute = resolveAiProbeRoute(registry);
+  if (!probeRoute.ok) {
+    return {
+      code: 'PROBE_PROFILE_UNAVAILABLE',
+      message: `Uca ulaşıldı ancak hızlı sohbet profili (chat.fast) kullanılamıyor (${probeRoute.reason}); bağlantı sınaması çalışmaz.`
+    };
+  }
+  if (models && !models.includes(probeRoute.route.model)) {
+    return {
+      code: 'PROBE_MODEL_MISSING',
+      modelMissing: true,
+      message: `Uca ulaşıldı ancak hızlı sohbet profilinin modeli (${probeRoute.route.model}) uçtaki model listesinde yok.`
+    };
+  }
+  // Kişisel anahtar saklama açıksa tablo, kurumsal anahtar tanımlı olsa da doğrulanır.
+  if (!config.personalKeysSupported) return null;
   try {
     const ready = await raceWithAbort(() => checkAiCredentialSchema({ signal: deadline.signal }), deadline.signal);
     return ready ? null : {
       code: 'CREDENTIAL_SCHEMA_MISSING',
-      message: 'Uca ulaşıldı ancak kişisel anahtar tablosu (0016) kurulmamış; kurumsal anahtar da tanımlı değil.'
+      message: personalKeysOnly(config)
+        ? 'Uca ulaşıldı ancak kişisel anahtar tablosu (0016) kurulmamış; kurumsal anahtar da tanımlı değil.'
+        : 'Uca ulaşıldı ancak kişisel anahtar tablosu (0016) kurulmamış; kişisel anahtarlar kaydedilemez.'
     };
   } catch {
+    if (deadline.failure()) throw deadline.failure();
     return { code: 'CREDENTIAL_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak kişisel anahtar tablosu doğrulanamadı.' };
-  } finally {
-    deadline.close();
   }
 }
 
+function listModels(config, apiKey, deadline) {
+  return raceWithAbort(
+    () => getAiProvider().listModels({ baseUrl: config.baseUrl, apiKey, signal: deadline.signal }),
+    deadline.signal
+  );
+}
+
 /**
- * Yıkıcı olmayan bağlantı testi: model üretmeyen, süre sınırlı `GET /models`.
+ * Anahtarsız istek model listesini veriyor mu? Yalnızca 2xx ve geçerli liste
+ * "evet"tir; anahtarsız isteğe dönen her başka yanıt (401, 404, oturum açma
+ * sayfası) ucun anahtarı denetlediğini gösterir.
+ */
+async function servesWithoutKey(config, deadline) {
+  try {
+    const { status } = await listModels(config, null, deadline);
+    return status >= 200 && status < 300;
+  } catch (error) {
+    if (!deadline.failure() && isAiError(error) && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID) return false;
+    throw error;
+  }
+}
+
+/** Uca ulaşılamadı, süre doldu ya da test iptal edildi: sonuç ve sağlık izi. */
+function unreachable(error, deadline, latencyMs, source) {
+  const failure = deadline.failure();
+  if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) {
+    return { ok: false, cancelled: true, code: 'PROBE_CANCELLED', message: 'Bağlantı testi iptal edildi.' };
+  }
+  if (failure) {
+    recordProviderCall({ operation: 'ai.provider.models', latencyMs, code: AI_ERROR_CODES.AI_TIMEOUT, source });
+    return { ok: false, code: 'PROBE_TIMEOUT', message: 'Uç süre sınırında yanıt vermedi.' };
+  }
+  if (isAiError(error) && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID) {
+    recordProviderCall({ operation: 'ai.provider.models', latencyMs, code: error.code, healthFailure: true, source });
+    return { ok: false, code: 'MODEL_LIST_INVALID', message: 'Uç geçerli bir model listesi döndürmedi.' };
+  }
+  recordProviderCall({ operation: 'ai.provider.models', latencyMs, code: AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE, source });
+  const code = String(error?.details?.networkCode || error?.code || 'PROBE_FAILED').slice(0, 60);
+  return { ok: false, code, message: 'Uca ulaşılamadı.' };
+}
+
+/**
+ * Yıkıcı olmayan bağlantı testi: model üretmeyen `GET /models`.
+ *
+ * Testin TAMAMI (sağlayıcı çağrıları, kayıt okuması, şema denetimi) tek bir süre
+ * sınırı altındadır ve yöneticinin isteğini (`signal`) izler: sayfadan ayrılan
+ * yöneticinin testi sağlayıcı işini ve süreç içi kilidi bekletmez; iptal edilen
+ * test sonuç olarak kaydedilmez. Bildirilen süre kurulum doğrulamasını da
+ * kapsar; sağlayıcı gecikmesi ayrıca ölçülür.
  *
  * Kurumsal anahtar tanımlıysa o kullanılır; hata yanıtının HTTP durumu dışında
  * hiçbir bilgisi okunmaz. Bu test PAYLAŞILAN yolu sınar: reddedilen kurumsal
  * anahtar, bulunamayan uç ya da geçersiz istek sağlık hatası olarak kaydedilir.
+ * Kurumsal anahtarla alınan liste ancak uç anahtarsız isteği reddediyorsa
+ * anahtarın kanıtıdır; liste herkese açıksa anahtar bu testle doğrulanamaz ve
+ * test başarılı sayılmaz.
  */
-export async function testAiProviderConnection({ timeoutMs = CONNECTION_TEST_TIMEOUT_MS } = {}) {
+export async function testAiProviderConnection({ timeoutMs = CONNECTION_TEST_TIMEOUT_MS, signal = null } = {}) {
   const config = readAiConfig();
   if (!config.enabled) {
     return config.issues.length
@@ -187,50 +285,61 @@ export async function testAiProviderConnection({ timeoutMs = CONNECTION_TEST_TIM
   if (config.issues.includes(AI_CONFIG_NAMES.DEFAULT_API_KEY)) {
     return { ok: false, durationMs: 0, code: 'DEFAULT_KEY_INVALID', message: 'Kurumsal anahtarın biçimi geçersiz; bağlantı sınanmadı.' };
   }
-  const deadline = probeDeadline(timeoutMs);
   const startedAt = Date.now();
-  let durationMs;
-  let outcome = null;
+  const finish = (result) => ({ ...result, durationMs: Date.now() - startedAt });
+  const source = config.defaultKeyConfigured ? AI_CREDENTIAL_SOURCES.DEFAULT : null;
+  const deadline = createAiDeadline({ timeoutMs, parentSignal: signal });
+  let latencyMs = 0;
   try {
-    const { status } = await raceWithAbort(
-      () => getAiProvider().listModels({ baseUrl: config.baseUrl, apiKey: config.defaultApiKey, signal: deadline.signal }),
-      deadline.signal
-    );
-    durationMs = Date.now() - startedAt;
+    let listed;
+    let success;
+    try {
+      listed = await listModels(config, config.defaultApiKey, deadline);
+      latencyMs = Date.now() - startedAt;
+      if (listed.status >= 200 && listed.status < 300 && config.defaultKeyConfigured && await servesWithoutKey(config, deadline)) {
+        recordProviderCall({ operation: 'ai.provider.models', latencyMs, source, contact: false });
+        return finish({
+          ok: false,
+          code: 'DEFAULT_KEY_UNVERIFIED',
+          message: 'Uca ulaşıldı ancak model listesi anahtarsız da verildiği için kurumsal anahtar bu testle doğrulanamadı. Anahtarı Ayarlar sayfasındaki deneme isteğiyle sınayın.'
+        });
+      }
+    } catch (error) {
+      return finish(unreachable(error, deadline, latencyMs || Date.now() - startedAt, source));
+    }
+    const { status } = listed;
     if (status >= 200 && status < 300) {
-      recordProviderCall({ operation: 'ai.provider.models', latencyMs: durationMs });
-      outcome = { ok: true, durationMs, code: null, message: `Bağlantı doğrulandı (${durationMs} ms).` };
+      success = { ok: true, code: null, models: listed.models ?? [] };
     } else if ((status === 401 || status === 403) && !config.defaultKeyConfigured) {
-      recordProviderCall({ operation: 'ai.provider.models', latencyMs: durationMs });
-      outcome = { ok: true, durationMs, code: 'AUTHENTICATION_REQUIRED', message: 'Uca ulaşıldı; kurumsal anahtar tanımlı olmadığından anahtar sınanmadı.' };
+      success = { ok: true, code: 'AUTHENTICATION_REQUIRED', models: null, message: 'Uca ulaşıldı; kurumsal anahtar tanımlı olmadığından anahtar sınanmadı.' };
     } else {
-      recordProviderCall({
-        operation: 'ai.provider.models',
-        latencyMs: durationMs,
-        code: classifyProviderStatus(status).code,
-        healthFailure: true
-      });
-      return status === 401 || status === 403
-        ? { ok: false, durationMs, code: 'DEFAULT_KEY_REJECTED', message: 'Uca ulaşıldı ancak kurumsal anahtar reddedildi.' }
-        : { ok: false, durationMs, code: `HTTP_${status}`, message: 'Uç beklenmeyen bir yanıt verdi.' };
+      recordProviderCall({ operation: 'ai.provider.models', latencyMs, code: classifyProviderStatus(status).code, healthFailure: true, source });
+      return finish(status === 401 || status === 403
+        ? { ok: false, code: 'DEFAULT_KEY_REJECTED', message: 'Uca ulaşıldı ancak kurumsal anahtar reddedildi.' }
+        : { ok: false, code: `HTTP_${status}`, message: 'Uç beklenmeyen bir yanıt verdi.' });
     }
-  } catch (error) {
-    durationMs = Date.now() - startedAt;
-    const timedOut = deadline.signal.aborted;
-    if (!timedOut && isAiError(error) && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID) {
-      recordProviderCall({ operation: 'ai.provider.models', latencyMs: durationMs, code: error.code, healthFailure: true });
-      return { ok: false, durationMs, code: 'MODEL_LIST_INVALID', message: 'Uç geçerli bir model listesi döndürmedi.' };
+    let setupProblem;
+    try {
+      setupProblem = await verifySetup(config, deadline, success.models);
+    } catch {
+      recordProviderCall({ operation: 'ai.provider.models', latencyMs, source: status >= 200 && status < 300 ? source : null });
+      return finish(deadline.failure()?.code === AI_ERROR_CODES.AI_CANCELLED
+        ? { ok: false, cancelled: true, code: 'PROBE_CANCELLED', message: 'Bağlantı testi iptal edildi.' }
+        : { ok: false, code: 'PROBE_TIMEOUT', message: 'Uca ulaşıldı ancak kurulum doğrulaması süre sınırında tamamlanamadı.' });
     }
-    recordProviderCall({
-      operation: 'ai.provider.models',
-      latencyMs: durationMs,
-      code: timedOut ? AI_ERROR_CODES.AI_TIMEOUT : AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE
+    if (setupProblem?.modelMissing) {
+      // Uç yanıt veriyor ama tek Aşama 1 yolu (chat.fast) kullanılamıyor: sağlıklı temas sayılmaz.
+      recordProviderCall({ operation: 'ai.provider.models', latencyMs, code: AI_ERROR_CODES.AI_CONFIGURATION_ERROR, healthFailure: true });
+      return finish({ ok: false, code: setupProblem.code, message: setupProblem.message });
+    }
+    recordProviderCall({ operation: 'ai.provider.models', latencyMs, source: status >= 200 && status < 300 ? source : null });
+    if (setupProblem) return finish({ ok: false, code: setupProblem.code, message: setupProblem.message });
+    return finish({
+      ok: true,
+      code: success.code,
+      message: success.message || `Bağlantı doğrulandı (${Date.now() - startedAt} ms).`
     });
-    const code = timedOut ? 'PROBE_TIMEOUT' : String(error?.details?.networkCode || error?.code || 'PROBE_FAILED').slice(0, 60);
-    return { ok: false, durationMs, code, message: 'Uca ulaşılamadı.' };
   } finally {
-    deadline.close();
+    deadline.dispose();
   }
-  const setupProblem = await verifySetup(config, timeoutMs);
-  return setupProblem ? { ok: false, durationMs, ...setupProblem } : outcome;
 }

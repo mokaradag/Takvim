@@ -139,13 +139,18 @@ test('olağan Rota akışı yapay zekâ alt sistemine bağımlı değildir', () 
     if (isAiPath(name)) continue;
     if (importsOf(file).some(({ target }) => target && isAiPath(target))) importers.push(name);
   }
-  // Ayarlar kartı ve sağlık/entegrasyon gözlemi dışında hiçbir modül (anlık
-  // görüntü, kayıt, görev, rapor) yapay zekâya bağlanmaz.
+  // Ayarlar kartı ve sağlık/entegrasyon/telemetri gözlemi dışında hiçbir modül
+  // (anlık görüntü, kayıt, görev, rapor) yapay zekâya bağlanmaz. Telemetri turu
+  // yalnızca yük ölçümünü örnekler.
   assert.deepEqual(importers.sort(), [
     'src/features/settings/SettingsView.jsx',
     'src/server/observability/healthProbes.js',
-    'src/server/observability/integrationsService.js'
+    'src/server/observability/integrationsService.js',
+    'src/server/observability/telemetryWorker.js'
   ]);
+  const worker = code(read('src/server/observability/telemetryWorker.js'));
+  assert.deepEqual([...worker.matchAll(/from '\.\.\/ai\/([^']+)'/g)].map((match) => match[1]), ['aiRuntime.js']);
+  assert.match(worker, /import \{ sampleAiLoad \} from '\.\.\/ai\/aiRuntime\.js';/);
   assert.match(read('src/features/settings/SettingsView.jsx'), /<AiAccessSettings \/>/);
 });
 
@@ -209,18 +214,24 @@ test('kişisel anahtar tablosuna yalnızca depo modülü, sabit ve Sicil ile sı
     } else if (/^IF @@ROWCOUNT = 0 INSERT /.test(statement)) {
       assert.match(statement, /VALUES \(@sicil, /, name);
     } else {
-      assert.match(statement, /WHERE Sicil = @sicil(?: AND RowVersion = @rowVersion)?$/, `${name}: ${statement}`);
+      assert.match(statement, /WHERE Sicil = @sicil(?: AND Nonce = @keyNonce)?$/, `${name}: ${statement}`);
     }
   }
-  // Durum sorgusu şifreli alanları hiç okumaz (ana anahtar KİMLİĞİ gizli
-  // değildir; uyuşmazlığı sunucuda saptamak için okunur, tarayıcıya gitmez).
-  assert.doesNotMatch(queries.AI_CREDENTIAL_STATUS_SQL, /Ciphertext|Nonce|AuthTag/);
+  // Durum sorgusu şifreli metni ve doğrulama etiketini hiç okumaz. Ana anahtar
+  // KİMLİĞİ ve nonce gizli değildir (nonce AES-GCM'nin açık parametresidir ve
+  // her kayıtta yenilendiği için anahtar malzemesinin kimliğidir); ikisi de
+  // yalnızca sunucuda kullanılır, tarayıcıya gitmez.
+  assert.doesNotMatch(queries.AI_CREDENTIAL_STATUS_SQL, /Ciphertext|AuthTag/);
+  assert.match(queries.AI_CREDENTIAL_STATUS_SQL, /Nonce AS KeyNonce/);
   // Rehber denetimi anahtar tablosuna dokunmaz: 0016 yokken de kimlik korunur.
   assert.doesNotMatch(queries.AI_CREDENTIAL_DIRECTORY_SQL, /MR_AiUserCredentials/);
   assert.match(queries.AI_CREDENTIAL_DIRECTORY_SQL, /FROM dbo\.MR_V_PeopleDirectory WHERE Sicil = @sicil/);
-  // Silme ve doğrulama yalnızca okunan satır sürümüne uygulanır.
-  assert.match(queries.AI_CREDENTIAL_DELETE_SQL, /WHERE Sicil = @sicil AND RowVersion = @rowVersion;/);
-  assert.match(queries.AI_CREDENTIAL_VALIDATION_SQL, /RowVersion = @rowVersion;\s+SELECT @@ROWCOUNT AS Recorded;/);
+  // Silme ve doğrulama yalnızca okunan anahtara (nonce) uygulanır; künye
+  // yazımıyla ilerleyen satır sürümüne bağlanmaz. Doğrulama yazımı künyeyi
+  // aynı deyimden (`OUTPUT`) döndürür.
+  assert.match(queries.AI_CREDENTIAL_DELETE_SQL, /WHERE Sicil = @sicil AND Nonce = @keyNonce;/);
+  assert.match(queries.AI_CREDENTIAL_VALIDATION_SQL, /OUTPUT inserted\.KeyHint[^;]*WHERE Sicil = @sicil AND Nonce = @keyNonce;/);
+  for (const text of Object.values(queries)) assert.doesNotMatch(text, /@rowVersion/);
 });
 
 test('0016 göçü sıralı, yinelenebilir ve düz metin anahtar sütunu içermez', () => {
@@ -234,6 +245,13 @@ test('0016 göçü sıralı, yinelenebilir ve düz metin anahtar sütunu içerme
   assert.match(upgrade, /IF OBJECT_ID\(N'dbo\.MR_AiUserCredentials', N'U'\) IS NULL\s+CREATE TABLE dbo\.MR_AiUserCredentials \(/);
   assert.match(upgrade, /IF NOT EXISTS \(\s*SELECT 1 FROM dbo\.MR_SchemaMigrations\s*WHERE MigrationId = N'0016_ai_user_credentials'\s*\)\s*INSERT dbo\.MR_SchemaMigrations/);
   assert.match(upgrade, /BEGIN CATCH\s+IF XACT_STATE\(\) <> 0 ROLLBACK TRANSACTION;\s+THROW;/);
+  // Önceden var olan tablo yapısı doğrulanmadan göç işaretlenmez.
+  const verification = upgrade.indexOf('DECLARE @RequiredColumns TABLE');
+  assert.ok(verification > upgrade.indexOf('CREATE TABLE dbo.MR_AiUserCredentials ('));
+  assert.ok(verification < upgrade.indexOf("INSERT dbo.MR_SchemaMigrations"));
+  for (const check of ['sys.columns', 'is_primary_key = 1', 'sys.check_constraints', 'default_object_id = 0']) {
+    assert.ok(upgrade.slice(verification).includes(check), check);
+  }
   assert.doesNotMatch(upgrade, /\b(?:UPDATE|DELETE)\s+(?:FROM\s+)?dbo\.MR_(?!SchemaMigrations)/i, 'göç veriye dokunmaz');
 
   const tableOf = (script) => {

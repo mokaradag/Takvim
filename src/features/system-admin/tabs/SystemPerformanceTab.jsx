@@ -33,6 +33,21 @@ function gaugePoints(gauges, key) {
   return (gauges?.[key] || []).map((point) => ({ bucketStart: point.bucketStart, value: point.value }));
 }
 
+/**
+ * Anlık ölçümü yazan en fazla uygulama örneği sayısı. Birden çok örnekte değer
+ * SÜREÇLER ARASI ortalamadır; yapay zekâ kapasite sınırları da süreç başına
+ * olduğu için grafik bunu açıkça söyler.
+ */
+export function gaugeInstanceCount(gauges, keys) {
+  return keys.reduce((highest, key) => (gauges?.[key] || [])
+    .reduce((max, point) => Math.max(max, Number(point.instanceCount) || 1), highest), 1);
+}
+
+export function aiLoadDescription(instanceCount) {
+  const base = 'Değerler uygulama örneği (süreç) başına ortalamadır; kapasite sınırları da süreç başınadır.';
+  return instanceCount > 1 ? `${base} Bu aralıkta ${instanceCount} örnek ölçüm yazdı; toplam yük yaklaşık ${instanceCount} katıdır.` : base;
+}
+
 function resourceValue(metric, format) {
   if (!metric?.available) return 'ölçülemiyor';
   return format(metric.value);
@@ -235,14 +250,19 @@ export function SystemPerformanceTab({ enabled = true }) {
           />
         </AdminSection>
         {/* Etkin ve sıradaki yapay zekâ istekleri aynı birimi (istek) taşır. */}
-        <AdminSection title="Yapay zekâ yükü" icon="Sparkles" loading={resource.loading}>
+        <AdminSection
+          title="Yapay zekâ yükü"
+          icon="Sparkles"
+          loading={resource.loading}
+          description={aiLoadDescription(gaugeInstanceCount(data?.gauges, [GAUGE_KEYS.AI_ACTIVE_REQUESTS, GAUGE_KEYS.AI_QUEUED_REQUESTS]))}
+        >
           <TrendChart
-            label="Etkin ve sıradaki yapay zekâ istekleri"
+            label="Süreç başına etkin ve sıradaki yapay zekâ istekleri (ortalama)"
             unit="count"
             bucketSeconds={bucketSeconds}
             series={[
-              { id: 'ai-active', label: GAUGE_LABELS[GAUGE_KEYS.AI_ACTIVE_REQUESTS], color: 'var(--accent)', points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_ACTIVE_REQUESTS) },
-              { id: 'ai-queued', label: GAUGE_LABELS[GAUGE_KEYS.AI_QUEUED_REQUESTS], color: 'var(--status-blocked)', dashed: true, points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_QUEUED_REQUESTS) }
+              { id: 'ai-active', label: `${GAUGE_LABELS[GAUGE_KEYS.AI_ACTIVE_REQUESTS]} (süreç başı)`, color: 'var(--accent)', points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_ACTIVE_REQUESTS) },
+              { id: 'ai-queued', label: `${GAUGE_LABELS[GAUGE_KEYS.AI_QUEUED_REQUESTS]} (süreç başı)`, color: 'var(--status-blocked)', dashed: true, points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_QUEUED_REQUESTS) }
             ]}
           />
         </AdminSection>

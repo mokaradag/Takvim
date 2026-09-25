@@ -1,5 +1,5 @@
 import 'server-only';
-import { AI_PROBE_PROFILE } from './aiProbeProfile.js';
+import { AI_PROBE_MAX_OUTPUT_TOKENS, AI_PROBE_MESSAGES, AI_PROBE_PROFILE } from './aiProbeProfile.js';
 import { getAiGateway } from './aiRuntime.js';
 
 /**
@@ -10,27 +10,21 @@ import { getAiGateway } from './aiRuntime.js';
  * kanıtlar. İstem SABİTTİR: kullanıcı içeriği modele gönderilmez ve bu uç bir
  * sohbet ucuna dönüşemez. Somut model değil `chat.fast` profili istenir. Araç
  * istenmediği için boş (`content: null`) yanıt sınama sonucu değil, geçersiz
- * sağlayıcı yanıtıdır.
+ * sağlayıcı yanıtıdır. İstek sunucunun ürettiği sabit bir istek olduğu için
+ * sağlayıcının "geçersiz istek" yanıtı (400/413/422) kullanıcı hatası değil,
+ * yapılandırma hatası olarak bildirilir.
  */
 
-const PROBE_MAX_OUTPUT_TOKENS = 64;
 const PROBE_TEXT_LIMIT = 600;
-
-const PROBE_MESSAGES = Object.freeze([
-  Object.freeze({
-    role: 'system',
-    content: 'MERGEN Rota bağlantı sınamasına yanıt veriyorsun. Yalnızca tek kısa Türkçe cümleyle yanıt ver.'
-  }),
-  Object.freeze({ role: 'user', content: 'Bağlantı sınaması: kısa bir selam yaz.' })
-]);
 
 export async function runAiDiagnosticProbe({ signal = null } = {}) {
   const result = await getAiGateway().completeChat({
     profile: AI_PROBE_PROFILE,
-    messages: PROBE_MESSAGES,
-    maxOutputTokens: PROBE_MAX_OUTPUT_TOKENS,
+    messages: AI_PROBE_MESSAGES,
+    maxOutputTokens: AI_PROBE_MAX_OUTPUT_TOKENS,
     signal,
-    requireText: true
+    requireText: true,
+    callerInput: false
   });
   return {
     text: String(result.text || '').trim().slice(0, PROBE_TEXT_LIMIT),

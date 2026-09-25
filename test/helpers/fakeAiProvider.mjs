@@ -8,15 +8,27 @@
  * çözdüğü ertelenmiş yanıt. Takılı ve gecikmeli davranışlar sinyale uyar;
  * `ignoreAbort` ile sinyali yok sayan (kötü davranan) bir sağlayıcı da
  * taklit edilir. Sırada davranış yoksa anahtarsız model listesi 401 döner.
+ * Başarılı model listesi, gerçek bağdaştırıcı gibi model kimliklerini taşır
+ * (varsayılan olarak depo içindeki varsayılan kaydın modelleri).
  *
  * Duvar saati beklenmez: testler `waitForActive()` ile çağrının gerçekten
- * sağlayıcıya ulaştığını bekler.
+ * sağlayıcıya ulaştığını bekler. Bekleme yine de SINIRLIDIR: istek sağlayıcıya
+ * hiç ulaşmazsa (tam da iptal testlerinin yakalaması gereken gerileme) test
+ * askıda kalmaz, açıklayıcı bir hatayla düşer. Sınır, sahte saatten etkilenmeyen
+ * gerçek zamanlayıcıyla ölçülür.
  */
 import { registerServerOnlyShim } from './serverOnlyShim.mjs';
 
 registerServerOnlyShim();
 
 const { classifyNetworkFailure, classifyProviderStatus, parseChatCompletion } = await import('../../src/server/ai/providers/openAiCompatibleProvider.js');
+const { DEFAULT_AI_MODEL_REGISTRY } = await import('../../src/server/ai/defaultModelRegistry.js');
+
+// Testler `t.mock.timers` ile setTimeout'u değiştirse de bekleme sınırı işler.
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+const WAIT_LIMIT_MS = 10000;
+const DEFAULT_MODELS = Object.freeze(DEFAULT_AI_MODEL_REGISTRY.models.map((model) => model.id));
 
 function chatResult(text, model) {
   return parseChatCompletion({
@@ -26,7 +38,7 @@ function chatResult(text, model) {
   });
 }
 
-export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalışıyor.' } = {}) {
+export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalışıyor.', models = DEFAULT_MODELS } = {}) {
   const calls = [];
   const queue = [];
   const active = new Set();
@@ -37,17 +49,25 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     for (const listener of [...listeners]) listener();
   };
 
-  function waitFor(predicate) {
+  function waitFor(predicate, description) {
     if (predicate()) return Promise.resolve();
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      const timer = realSetTimeout(() => {
+        listeners.delete(listener);
+        reject(new Error(`Sahte sağlayıcı ${WAIT_LIMIT_MS} ms içinde beklenen duruma ulaşmadı: ${description} (çağrı ${calls.length}, etkin ${active.size}).`));
+      }, WAIT_LIMIT_MS);
+      timer.unref?.();
       const listener = () => {
         if (!predicate()) return;
         listeners.delete(listener);
+        realClearTimeout(timer);
         resolve();
       };
       listeners.add(listener);
     });
   }
+
+  const modelList = (behavior = {}) => ({ status: 200, retryAfter: null, models: [...(behavior.models ?? models)] });
 
   function abortable(signal, call, work) {
     return new Promise((resolve, reject) => {
@@ -75,7 +95,7 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     const { signal, model } = input;
     switch (behavior.type) {
       case 'reply':
-        return Promise.resolve(call.kind === 'models' ? { status: 200, retryAfter: null } : chatResult(behavior.text ?? defaultText, model));
+        return Promise.resolve(call.kind === 'models' ? modelList(behavior) : chatResult(behavior.text ?? defaultText, model));
       case 'empty':
         // Araç istenmemiş sohbette metin taşımayan (`content: null`) yanıt.
         return Promise.resolve(parseChatCompletion({ model, choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'stop' }] }));
@@ -89,7 +109,10 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
       case 'delay': {
         let timer;
         return abortable(signal, call, {
-          start: (resolve) => { timer = setTimeout(() => resolve(chatResult(behavior.text ?? defaultText, model)), behavior.ms); },
+          // Gecikmeli model listesi de model listesi sonucu döner (sohbet sonucu değil).
+          start: (resolve) => {
+            timer = setTimeout(() => resolve(call.kind === 'models' ? modelList(behavior) : chatResult(behavior.text ?? defaultText, model)), behavior.ms);
+          },
           cancel: () => clearTimeout(timer)
         });
       }
@@ -97,7 +120,7 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
         return abortable(signal, call, { start: () => {} });
       case 'deferred':
         return new Promise((resolve, reject) => {
-          call.resolve = (text = defaultText) => resolve(call.kind === 'models' ? { status: 200 } : chatResult(text, model));
+          call.resolve = (text = defaultText) => resolve(call.kind === 'models' ? modelList(behavior) : chatResult(text, model));
           call.reject = reject;
           if (!behavior.ignoreAbort) {
             signal?.addEventListener('abort', () => {
@@ -149,10 +172,10 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
       return this;
     },
     waitForActive(count) {
-      return waitFor(() => active.size >= count);
+      return waitFor(() => active.size >= count, `${count} etkin çağrı`);
     },
     waitForCalls(count) {
-      return waitFor(() => calls.length >= count);
+      return waitFor(() => calls.length >= count, `${count} çağrı`);
     },
     chatCompletion(input) {
       return execute('chat', input);

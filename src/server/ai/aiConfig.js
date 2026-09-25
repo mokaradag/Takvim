@@ -67,9 +67,10 @@ function parseInteger(env, name, issues) {
   return value;
 }
 
+/** `localhost`, IPv4 geri döngü bloğunun tamamı (127.0.0.0/8) ya da IPv6 `::1`. */
 function isLoopbackHost(hostname) {
   const host = String(hostname || '').toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+  return host === 'localhost' || /^127(?:\.\d{1,3}){3}$/.test(host) || host === '[::1]' || host === '::1';
 }
 
 /**

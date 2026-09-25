@@ -3,6 +3,7 @@ import { AI_CREDENTIAL_SOURCES, AI_CREDENTIAL_VALIDATION } from '../../domain/ai
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { AI_CAPABILITIES, AI_MAX_OUTPUT_TOKENS, resolveModelProfile } from '../../domain/ai/aiModelRegistry.js';
 import { isWithinSqlTransaction } from '../db/pool.js';
+import { ServerPersistenceError } from '../errors.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
 import { readAiConfig, requireAiAvailable } from './aiConfig.js';
 import {
@@ -11,8 +12,14 @@ import {
   resolveAiCredential,
   storeCredentialValidation
 } from './aiCredentialService.js';
-import { abortableDelay, createAiDeadline, raceWithAbort } from './aiDeadline.js';
-import { AiError, toAiFailure } from './aiErrors.js';
+import {
+  AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS,
+  AI_VALIDATION_TIMEOUT_MS,
+  abortableDelay,
+  createAiDeadline,
+  raceWithAbort
+} from './aiDeadline.js';
+import { AiError, isAiError, toAiFailure } from './aiErrors.js';
 import { recordAiRequest, recordAiRetry, recordAiValidation, recordProviderCall } from './aiTelemetry.js';
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
 import { classifyProviderStatus, isConnectFailure } from './providers/openAiCompatibleProvider.js';
@@ -20,30 +27,27 @@ import { classifyProviderStatus, isConnectFailure } from './providers/openAiComp
 /**
  * Yapay zekâ ağ geçidi — alt sistemin TEK yürütme yolu.
  *
- * Sıra şudur: güvenilir Sicil → kurumsal rehber üyeliği → yapılandırma →
- * profil çözümü → kapasite kirası → kimlik bilgisi (kira ALTINDA ve süre
- * sınırıyla) → sağlayıcı. Kira ve süre sınırı her yolda bırakılır. Ağ geçidi
- * açık bir SQL işlemi içinde çalışmayı reddeder; sağlayıcı yanıtı beklenirken
- * hiçbir SQL bağlantısı ya da işlemi tutulmaz. Olağan Rota uçları bu yola hiç
- * girmez.
+ * Sıra şudur: güvenilir Sicil → kurumsal rehber üyeliği (kendi süre sınırıyla
+ * ve sınırlı eşzamanlılıkla) → yapılandırma → profil çözümü → kapasite kirası
+ * → kimlik bilgisi (kira ALTINDA ve süre sınırıyla) → sağlayıcı. Kira ve süre
+ * sınırı her yolda bırakılır. Ağ geçidi açık bir SQL işlemi içinde çalışmayı
+ * reddeder; sağlayıcı yanıtı beklenirken hiçbir SQL bağlantısı ya da işlemi
+ * tutulmaz. Olağan Rota uçları bu yola hiç girmez.
  */
 
 const MAX_PROVIDER_ATTEMPTS = 2;
 const RETRY_BASE_DELAY_MS = 200;
 const RETRY_JITTER_MS = 400;
 const MIN_ATTEMPT_BUDGET_MS = 1000;
-const VALIDATION_TIMEOUT_MS = 15000;
 const MAX_MESSAGES = 50;
 const MAX_MESSAGE_CHARS = 32000;
 const MESSAGE_ROLES = new Set(['system', 'user', 'assistant']);
 /**
- * Belirteç TAHMİNİ. Sağlayıcının belirteçleyicisi bilinmez; tahmin bilinçli
- * olarak düşük tutulur (belirteç başına çok karakter) ki bağlama sığan bir
- * istek yanlışlıkla reddedilmesin. Yalnızca KESİNLİKLE sığmayan istek
- * kapasite ve sağlayıcı harcanmadan reddedilir.
+ * Ne çağıranın ne de profilin çıktı sınırı verdiği sohbette kullanılan sınır.
+ * İstek her zaman bir `max_tokens` taşır: sağlayıcının kendi (bağlamın
+ * tamamına varabilen) varsayılanı genel üst sınırı aşamaz.
  */
-const CHARS_PER_TOKEN_ESTIMATE = 6;
-const MESSAGE_OVERHEAD_TOKENS = 4;
+const DEFAULT_OUTPUT_TOKENS = 1024;
 const KNOWN_SOURCES = new Set(Object.values(AI_CREDENTIAL_SOURCES));
 
 const DEFAULT_KEY_MESSAGES = Object.freeze({
@@ -54,6 +58,29 @@ const DEFAULT_KEY_MESSAGES = Object.freeze({
 function assertOutsideSqlTransaction() {
   if (isWithinSqlTransaction()) {
     throw new AiError(AI_ERROR_CODES.AI_INTERNAL_ERROR, { details: { reason: 'SQL_TRANSACTION_ACTIVE' } });
+  }
+}
+
+function directoryTimeout() {
+  return new ServerPersistenceError(
+    'DATABASE_UNAVAILABLE',
+    'Kurumsal personel kaynağı süre sınırında yanıt vermedi. Biraz sonra yeniden deneyin.',
+    { details: { reason: 'DIRECTORY_PREFLIGHT_TIMEOUT' } }
+  );
+}
+
+/**
+ * Kapasite kirasından önceki iş (ör. dosya kaydının okunması) istemcinin
+ * iptalini izler: bağlantısını kesen istemci, alttaki G/Ç iptal edilemese bile
+ * hemen `AI_CANCELLED` alır.
+ */
+async function untilCancelled(work, signal) {
+  if (!signal) return work();
+  try {
+    return await raceWithAbort(work, signal);
+  } catch (error) {
+    if (signal.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
+    throw error;
   }
 }
 
@@ -79,29 +106,23 @@ function requireMessages(messages) {
   return messages.map(({ role, content }) => ({ role, content }));
 }
 
-function estimatePromptTokens(messages) {
-  return messages.reduce((total, message) => total + MESSAGE_OVERHEAD_TOKENS
-    + Math.ceil(message.content.length / CHARS_PER_TOKEN_ESTIMATE), 0);
-}
-
 /**
- * İstenen çıktı sınırı: çağıranın değeri profil sınırıyla, modelin bağlam
- * penceresinde istemden sonra kalan yerle ve genel üst sınırla daraltılır.
- * Profil sınırı tanımsız olsa bile çağıran bağlamı aşan bir değer isteyemez;
- * istem bağlama hiç sığmıyorsa istek sağlayıcıya gitmeden reddedilir.
+ * İstenen çıktı sınırı. Sağlayıcının belirteçleyicisi bilinmediği için istem
+ * uzunluğu TAHMİN edilmez ve bu tahminle kabul/ret ya da bağlam ayırma kararı
+ * verilmez: bağlama sığmayan istemi sağlayıcı kendi belirteçleyicisiyle
+ * reddeder. Sınır yalnızca KESİN değerlerle daraltılır: çağıranın değeri, profil
+ * sınırı, modelin bağlam penceresi ve genel üst sınır. Çağıran da profil de
+ * sınır vermediyse sınırlı bir varsayılan kullanılır; istek hiçbir zaman
+ * sınırsız gitmez.
  */
-function outputTokenLimit(requested, route, promptTokens) {
-  const remaining = route.contextTokens == null ? null : route.contextTokens - promptTokens;
-  if (remaining != null && remaining < 1) {
-    throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, {
-      message: 'İstek, seçilen modelin bağlam penceresine sığmıyor.',
-      details: { reason: 'PROMPT_TOO_LONG' }
-    });
-  }
+function outputTokenLimit(requested, route) {
   const asked = Number.isSafeInteger(requested) && requested > 0 ? requested : null;
-  const base = asked ?? route.maxOutputTokens ?? null;
-  if (base == null) return null;
-  return Math.min(base, route.maxOutputTokens ?? Infinity, remaining ?? Infinity, AI_MAX_OUTPUT_TOKENS);
+  return Math.min(
+    asked ?? route.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
+    route.maxOutputTokens ?? Infinity,
+    route.contextTokens ?? Infinity,
+    AI_MAX_OUTPUT_TOKENS
+  );
 }
 
 /** Anahtar kaynaklı sonuçlar hangi anahtarın reddedildiğini söyler; kurumsal anahtar için kullanıcıya yönlendirme yapılır. */
@@ -144,6 +165,18 @@ function healthFailureFor(source) {
   };
 }
 
+/**
+ * Sabit (sunucunun ürettiği) istek sağlayıcıca geçersiz sayıldıysa (400/413/422)
+ * bu kullanıcı girdisi değil, model ya da uç yapılandırmasının sorunudur
+ * (kaldırılmış model, desteklenmeyen parametre, uyumsuz ağ geçidi).
+ */
+function fixedRequestRejected(error) {
+  return new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, {
+    message: 'Yapay zekâ hizmeti sabit deneme isteğini reddetti. Model ve uç yapılandırmasını denetleyin.',
+    details: { reason: 'PROVIDER_REJECTED_FIXED_REQUEST', providerStatus: error.details?.providerStatus ?? null }
+  });
+}
+
 function modelsEndpointUnauthenticated() {
   return new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, {
     message: 'Yapay zekâ ucu model listesini anahtarsız da verdiği için anahtar bu yolla doğrulanamıyor. Anahtarı deneme isteğiyle sınayın.',
@@ -164,15 +197,24 @@ export function createAiGateway({
   now = Date.now,
   random = Math.random
 }) {
-  /** Güvenilir Sicil; kurumsal rehberde yoksa hiçbir yapılandırma kararına varılmadan UNAUTHORIZED. */
+  /**
+   * Güvenilir Sicil; kurumsal rehberde yoksa hiçbir yapılandırma kararına
+   * varılmadan UNAUTHORIZED. Denetim kira öncesinde yapıldığı için kendi süre
+   * sınırıyla çalışır (istemci süreleri bu bütçeyi de kapsar).
+   */
   async function trustedSicil(signal) {
     const sicil = await currentSicil();
+    const preflight = createAiDeadline({ timeoutMs: AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS, parentSignal: signal, now });
     try {
-      await verifySicil(sicil, { signal });
+      await raceWithAbort(() => verifySicil(sicil, { signal: preflight.signal }), preflight.signal);
     } catch (error) {
+      const failure = preflight.failure();
       // Rehber sorgusu sürerken bağlantıyı kesen istemci iç hata değil, iptaldir.
-      if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
+      if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
+      if (failure) throw directoryTimeout();
       throw error;
+    } finally {
+      preflight.dispose();
     }
     return sicil;
   }
@@ -183,17 +225,17 @@ export function createAiGateway({
    * yinelenir. Anahtar, yetki, oran sınırı, zaman aşımı ve iptal yinelenmez.
    * Yineleme, ikinci deneme GERÇEKTEN başlarken kaydedilir.
    */
-  async function callProvider({ operation, deadline, invoke, context = null, healthFailure = () => null }) {
+  async function callProvider({ operation, deadline, invoke, source = null, context = null, healthFailure = () => null }) {
     for (let attempt = 1; ; attempt += 1) {
       if (context) context.attempts = attempt;
       const startedAt = now();
       try {
         const result = await raceWithAbort(() => invoke(deadline.signal), deadline.signal);
-        recordProviderCall({ operation, latencyMs: now() - startedAt });
+        recordProviderCall({ operation, latencyMs: now() - startedAt, source });
         return result;
       } catch (error) {
         const failure = deadline.failure() || toAiFailure(error);
-        recordProviderCall({ operation, latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure) });
+        recordProviderCall({ operation, latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
         const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
           && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
@@ -212,8 +254,11 @@ export function createAiGateway({
    * edilir ve kapasite hemen bırakılır. Süre dolduktan ya da iptal edildikten
    * sonra gelen yanıt UYGULANMAZ. `requireText`, metin beklenen çağrıda boş
    * yanıtı sağlayıcı hatası sayar (sağlık izine de öyle yazılır).
+   * `callerInput: false`, iletilerin sunucunun ürettiği sabit bir istek
+   * olduğunu söyler: sağlayıcının 400/413/422 yanıtı kullanıcı hatası değil,
+   * yapılandırma hatasıdır.
    */
-  async function completeChat({ profile, messages, maxOutputTokens = null, signal = null, requireText = false }) {
+  async function completeChat({ profile, messages, maxOutputTokens = null, signal = null, requireText = false, callerInput = true }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -224,10 +269,9 @@ export function createAiGateway({
       const sicil = await trustedSicil(signal);
       const config = requireAiAvailable(loadConfig());
       const safeMessages = requireMessages(messages);
-      const route = requireRoute(await loadRegistry(config), profile, AI_CAPABILITIES.CHAT);
+      const route = requireRoute(await untilCancelled(() => loadRegistry(config), signal), profile, AI_CAPABILITIES.CHAT);
       context.model = route.model;
-      // Bağlama sığmayan istek kapasite kirası alınmadan reddedilir.
-      const outputLimit = outputTokenLimit(maxOutputTokens, route, estimatePromptTokens(safeMessages));
+      const outputLimit = outputTokenLimit(maxOutputTokens, route);
       lease = await getAdmission(config).acquire({
         userKey: sicil,
         modelKey: route.model,
@@ -246,16 +290,23 @@ export function createAiGateway({
         operation: 'ai.provider.chat',
         deadline,
         context,
+        source: credential.source,
         healthFailure: healthFailureFor(credential.source),
         invoke: async (attemptSignal) => {
-          const completion = await getProvider().chatCompletion({
-            baseUrl: config.baseUrl,
-            apiKey: credential.apiKey,
-            model: route.model,
-            messages: safeMessages,
-            maxOutputTokens: outputLimit,
-            signal: attemptSignal
-          });
+          let completion;
+          try {
+            completion = await getProvider().chatCompletion({
+              baseUrl: config.baseUrl,
+              apiKey: credential.apiKey,
+              model: route.model,
+              messages: safeMessages,
+              maxOutputTokens: outputLimit,
+              signal: attemptSignal
+            });
+          } catch (error) {
+            if (!callerInput && isAiError(error) && error.code === AI_ERROR_CODES.AI_REQUEST_INVALID) throw fixedRequestRejected(error);
+            throw error;
+          }
           if (requireText && !String(completion.text ?? '').trim()) {
             throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason: 'EMPTY_COMPLETION' } });
           }
@@ -270,9 +321,10 @@ export function createAiGateway({
         finishReason: result.finishReason,
         usage: result.usage,
         profile: route.profile,
-        // Yanıtı GERÇEKTEN üreten model: ağ geçidi sessizce başka modele
-        // yönlendirdiyse yapılandırılan modelden ayrı görünür.
-        model: result.model || route.model,
+        // Yanıtı GERÇEKTEN üreten model, yalnızca sağlayıcının bildirdiğidir:
+        // bildirmediyse `null` kalır ve yapılandırılan model onun yerine
+        // yazılmaz. Ağ geçidi sessizce başka modele yönlendirdiyse ikisi ayrışır.
+        model: result.model ?? null,
         configuredModel: route.model,
         credentialSource: credential.source,
         durationMs,
@@ -304,11 +356,14 @@ export function createAiGateway({
    * Yalnızca KİŞİSEL anahtar denenir; kurumsal anahtara hiç dokunulmaz.
    * Erişilemeyen sağlayıcı ya da süre aşımı anahtar hakkında sonuç üretmez ve
    * kayda yazılmaz. `VALID` ancak uç anahtarı GERÇEKTEN denetliyorsa verilir:
-   * aynı liste anahtarsız da dönüyorsa sonuç yapılandırma hatasıdır. Sonucun
-   * yazımı da aynı süre sınırı ve iptal kapsamındadır.
+   * aynı liste anahtarsız da (2xx ve geçerli liste olarak) dönüyorsa sonuç
+   * yapılandırma hatasıdır; anahtarsız isteğe dönen her başka yanıt anahtarın
+   * denetlendiğini gösterir. Sonucun yazımı da aynı süre sınırı ve iptal
+   * kapsamındadır. Kapasite reddi ve sıra beklemesi sohbetteki gibi ölçülür.
    */
   async function validatePersonalCredential({ signal = null } = {}) {
     const startedAt = now();
+    const personalSource = AI_CREDENTIAL_SOURCES.PERSONAL;
     let lease = null;
     let deadline = null;
     try {
@@ -321,7 +376,7 @@ export function createAiGateway({
       // Sağlayıcı düzeyindeki iş model sayacına girmez (kayıttaki hiçbir model kimliğiyle çakışmaz).
       lease = await getAdmission(config).acquire({ userKey: sicil, modelKey: null, signal, timeoutMs: config.queueTimeoutMs });
       deadline = createAiDeadline({
-        timeoutMs: Math.min(VALIDATION_TIMEOUT_MS, config.requestTimeoutMs),
+        timeoutMs: Math.min(AI_VALIDATION_TIMEOUT_MS, config.requestTimeoutMs),
         parentSignal: signal,
         now
       });
@@ -329,37 +384,60 @@ export function createAiGateway({
         () => readPersonalCredential({ sicil, config, signal: deadline.signal }),
         deadline.signal
       );
-      const listModels = (apiKey) => async (attemptSignal) => {
-        const { status, retryAfter = null } = await getProvider().listModels({ baseUrl: config.baseUrl, apiKey, signal: attemptSignal });
-        if (status >= 200 && status < 300) return AI_CREDENTIAL_VALIDATION.VALID;
-        if (status === 401) return AI_CREDENTIAL_VALIDATION.REJECTED;
-        if (status === 403) return AI_CREDENTIAL_VALIDATION.FORBIDDEN;
-        throw classifyProviderStatus(status, retryAfter);
-      };
-      const probe = (apiKey) => callProvider({
+      const baseUrl = config.baseUrl;
+      const outcome = await callProvider({
         operation: 'ai.provider.models',
         deadline,
-        healthFailure: healthFailureFor(AI_CREDENTIAL_SOURCES.PERSONAL),
-        invoke: listModels(apiKey)
+        source: personalSource,
+        healthFailure: healthFailureFor(personalSource),
+        invoke: async (attemptSignal) => {
+          const { status, retryAfter = null } = await getProvider().listModels({ baseUrl, apiKey: personal.apiKey, signal: attemptSignal });
+          if (status >= 200 && status < 300) return AI_CREDENTIAL_VALIDATION.VALID;
+          if (status === 401) return AI_CREDENTIAL_VALIDATION.REJECTED;
+          if (status === 403) return AI_CREDENTIAL_VALIDATION.FORBIDDEN;
+          throw classifyProviderStatus(status, retryAfter);
+        }
       });
-      const outcome = await probe(personal.apiKey);
-      if (outcome === AI_CREDENTIAL_VALIDATION.VALID && await probe(null) === AI_CREDENTIAL_VALIDATION.VALID) {
-        throw modelsEndpointUnauthenticated();
+      if (outcome === AI_CREDENTIAL_VALIDATION.VALID) {
+        const servedWithoutKey = await callProvider({
+          operation: 'ai.provider.models',
+          deadline,
+          healthFailure: healthFailureFor(personalSource),
+          invoke: async (attemptSignal) => {
+            try {
+              const { status } = await getProvider().listModels({ baseUrl, apiKey: null, signal: attemptSignal });
+              return status >= 200 && status < 300;
+            } catch (error) {
+              // Anahtarsız isteğe dönen geçersiz 2xx (ör. oturum açma sayfası) listeyi vermemiştir.
+              if (isAiError(error) && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID) return false;
+              throw error;
+            }
+          }
+        });
+        if (servedWithoutKey) throw modelsEndpointUnauthenticated();
       }
       if (deadline.failure()) throw deadline.failure();
       const stored = await raceWithAbort(
-        () => storeValidation({ sicil, rowVersion: personal.rowVersion, status: outcome, signal: deadline.signal }),
+        () => storeValidation({ sicil, keyNonce: personal.keyNonce, status: outcome, signal: deadline.signal }),
         deadline.signal
       );
       if (deadline.failure()) throw deadline.failure();
-      recordAiValidation({ durationMs: now() - startedAt });
+      recordAiValidation({ durationMs: now() - startedAt, queueWaitMs: lease.queueWaitMs });
       // Anahtar doğrulama sürerken değiştirildiyse sonuç yeni anahtara ait değildir.
       return stored.recorded
         ? { status: outcome, stale: false, credential: stored.credential }
         : { status: null, stale: true, credential: stored.credential };
     } catch (error) {
-      const failure = annotateCredentialFailure(deadline?.failure() || toAiFailure(error), AI_CREDENTIAL_SOURCES.PERSONAL);
-      recordAiValidation({ code: failure.code, serviceFailure: isServiceFailure(failure), durationMs: now() - startedAt });
+      const failure = annotateCredentialFailure(deadline?.failure() || toAiFailure(error), personalSource);
+      const queueWaitMs = lease?.queueWaitMs
+        ?? (failure.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT ? failure.details?.queueWaitMs ?? null : null);
+      recordAiValidation({
+        code: failure.code,
+        serviceFailure: isServiceFailure(failure),
+        details: failure.details,
+        queueWaitMs,
+        durationMs: now() - startedAt
+      });
       throw failure;
     } finally {
       deadline?.dispose();

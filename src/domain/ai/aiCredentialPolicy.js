@@ -29,6 +29,19 @@ export const AI_CREDENTIAL_VALIDATION = Object.freeze({
 export const API_KEY_MIN_LENGTH = 16;
 export const API_KEY_MAX_LENGTH = 512;
 
+/**
+ * Anahtar durumunu okuma, kaydetme ve kaldırma işlemlerinin sunucudaki
+ * uçtan uca süre sınırı (SQL + model kaydı). İstemci süresi bundan uzundur:
+ * sonucu sunucu belirler, tarayıcı sunucudan önce vazgeçmez.
+ */
+export const AI_CREDENTIAL_OPERATION_TIMEOUT_MS = 15000;
+
+/** Kayıtlı anahtar okunamıyorsa nedeni; tarayıcı doğru açıklamayı seçer. */
+export const AI_CREDENTIAL_UNREADABLE_REASONS = Object.freeze({
+  PERSONAL_KEYS_DISABLED: 'PERSONAL_KEYS_DISABLED',
+  MASTER_KEY_CHANGED: 'MASTER_KEY_CHANGED'
+});
+
 const API_KEY_FORMAT_MESSAGES = Object.freeze({
   EMPTY: 'API anahtarı boş olamaz.',
   TOO_SHORT: `API anahtarı en az ${API_KEY_MIN_LENGTH} karakter olmalıdır.`,

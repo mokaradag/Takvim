@@ -6,6 +6,7 @@
  * başarısızlığı hiçbir koşulda kurumsal anahtara aktarılmaz.
  */
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import {
   DEFAULT_KEY,
@@ -118,6 +119,12 @@ test('yapılandırma kapalı kalacak biçimde doğrulanır ve özet gizli değer
   assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://ai-gateway.example.internal/v1' }), ['MERGEN_ROTA_AI_BASE_URL']);
   assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://ai-gateway.example.internal/v1', MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP: 'true' }), []);
   assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1:8099/v1' }), []);
+  // IPv4 geri döngü bloğunun tamamı (127.0.0.0/8) yereldir; blok dışı düz HTTP değildir.
+  assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.2:8099/v1' }), []);
+  assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://127.254.1.9/v1' }), []);
+  assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://[::1]:8099/v1' }), []);
+  assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://128.0.0.1/v1' }), ['MERGEN_ROTA_AI_BASE_URL']);
+  assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1.example.com/v1' }), ['MERGEN_ROTA_AI_BASE_URL']);
   assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: 'https://kullanici:parola@ai.example.internal/v1' }), ['MERGEN_ROTA_AI_BASE_URL']);
   assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_BASE_URL: '' }), ['MERGEN_ROTA_AI_BASE_URL']);
   assert.deepEqual(issuesFor({ MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: '<32_BAYT_BASE64URL_ANAHTAR>' }), ['MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY']);
@@ -442,6 +449,7 @@ test('0016 uygulanmamışsa ayarlar çökmez, kişisel anahtar kaydı açıkça 
   assert.equal(status.status, 200);
   assert.equal(status.body.ai.schemaReady, false);
   assert.equal(status.body.ai.personalKeysSupported, false);
+  assert.equal(status.body.ai.personalKeysConfigured, true, 'eksik tablo bilinçli kapatmadan ayrılır');
   const saved = await saveKey(PERSONAL_KEY_A);
   assert.equal(saved.status, 503);
   assert.equal(saved.body.error.details.reason, 'SCHEMA_MISSING');
@@ -470,6 +478,7 @@ test('ana anahtar yokken kişisel anahtar saklanmaz; kurumsal anahtar kullanılm
   const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: null } });
   const status = await credentialStatus();
   assert.equal(status.body.ai.personalKeysSupported, false);
+  assert.equal(status.body.ai.personalKeysConfigured, false);
   const saved = await saveKey(PERSONAL_KEY_A);
   assert.equal(saved.status, 503);
   assert.equal(saved.body.error.details.reason, 'PERSONAL_KEYS_UNSUPPORTED');
@@ -480,11 +489,18 @@ test('ana anahtar yokken kişisel anahtar saklanmaz; kurumsal anahtar kullanılm
 test('ana anahtar kaldırıldığında kayıtlı kişisel satır kurumsal anahtarı engellemez', async (t) => {
   const { db, provider, setEnv } = createAiStack(t);
   await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'reply' });
+  assert.equal((await validateKey()).body.validation.status, 'VALID');
+  provider.calls.length = 0;
   setEnv({ MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: null });
   const status = await credentialStatus();
   assert.equal(status.body.ai.personalKeysSupported, false);
   assert.equal(status.body.ai.effectiveSource, 'default', 'kullanılamayan kayıt etkin kaynak gösterilmez');
   assert.equal(status.body.ai.credential.configured, true, 'kayıt yine de kaldırılabilir');
+  // Ana anahtar olmadan şifreli kayıt çözülemez: okunur ve doğrulanmış görünmez.
+  assert.equal(status.body.ai.credential.readable, false);
+  assert.equal(status.body.ai.credential.unreadableReason, 'PERSONAL_KEYS_DISABLED');
+  assert.equal(status.body.ai.credential.lastValidationStatus, null, 'eski VALID sonucu gösterilmez');
   const probe = await runProbe();
   assert.equal(probe.status, 200);
   assert.equal(probe.body.result.credentialSource, 'default');
@@ -504,6 +520,7 @@ test('ana anahtar değişince durum, kayıtlı anahtarı okunamaz gösterir ve e
   const status = await credentialStatus();
   assert.equal(status.body.ai.credential.configured, true);
   assert.equal(status.body.ai.credential.readable, false);
+  assert.equal(status.body.ai.credential.unreadableReason, 'MASTER_KEY_CHANGED');
   assert.equal(status.body.ai.credential.lastValidationStatus, null, 'eski VALID sonucu gösterilmez');
   assert.equal(status.body.ai.effectiveSource, 'personal', 'kural değişmez: kurumsal anahtara geçilmez');
   assert.equal('masterKeyId' in status.body.ai.credential, false);
@@ -516,8 +533,8 @@ test('kaldırma, okuma ile silme arasında başka oturumda kaydedilen yeni anaht
   db.aiCredentialHooks = {
     beforeDelete(row, { nextRowVersion }) {
       db.aiCredentialHooks = null;
-      // Başka sekmede yeni anahtar kaydedildi: satır sürümü değişir.
-      Object.assign(row, { KeyHint: PERSONAL_KEY_B.slice(-4), RowVersion: nextRowVersion() });
+      // Başka sekmede yeni anahtar kaydedildi: yeni nonce ile yeniden şifrelendi.
+      Object.assign(row, { KeyHint: PERSONAL_KEY_B.slice(-4), Nonce: randomBytes(12), RowVersion: nextRowVersion() });
     }
   };
   const removed = await removeKey();
@@ -690,4 +707,147 @@ test('şifreleme ana anahtarı yapılandırmadan başka yere taşınmaz', async 
   const status = await credentialStatus();
   assertNoSecret(status.text, [MASTER_KEY, masterBytes(MASTER_KEY).toString('hex')], 'durum');
   assert.equal(JSON.stringify(Object.keys(status.body.ai)).includes('master'), false);
+});
+
+/* ── İnceleme düzeltmeleri: anahtar kimliği, iptal, kimlik sırası ── */
+
+test('eşzamanlı iki doğrulama birbirini bayat göstermez; araya giren doğrulama kaldırmayı engellemez', async (t) => {
+  const { db, provider } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'deferred' }, { type: 'deferred' });
+  const first = validateKey();
+  const second = validateKey();
+  // İkisi de aynı anahtarı (aynı nonce) okuyup sağlayıcıyı bekliyor.
+  await provider.waitForActive(2);
+  provider.calls[0].resolve();
+  const one = await first;
+  assert.equal(one.body.validation.stale, false);
+  provider.calls[1].resolve();
+  const two = await second;
+  assert.equal(two.status, 200);
+  assert.deepEqual({ status: two.body.validation.status, stale: two.body.validation.stale }, { status: 'VALID', stale: false },
+    'künye yazımı anahtar kimliğini değiştirmez');
+
+  db.aiCredentialHooks = {
+    beforeDelete(row, { nextRowVersion }) {
+      db.aiCredentialHooks = null;
+      // Aynı anahtarın doğrulama sonucu yazıldı: satır sürümü ilerler, anahtar aynıdır.
+      Object.assign(row, { LastValidationStatus: 'VALID', LastValidatedAt: new Date(), RowVersion: nextRowVersion() });
+    }
+  };
+  const removed = await removeKey();
+  assert.equal(removed.status, 200, 'yalnızca künyesi değişen anahtar kaldırılabilir');
+  assert.equal(db.aiUserCredentials.length, 0);
+});
+
+test('doğrulama sonucunun künyesi sonucun yazıldığı satırdan gelir; ardından kaydedilen anahtar doğrulanmış görünmez', async (t) => {
+  const { db, provider } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  db.aiCredentialHooks = {
+    afterValidationUpdate(row, { nextRowVersion }) {
+      db.aiCredentialHooks = null;
+      // Güncelleme ile sonraki okuma arasında başka oturum B'yi kaydetti.
+      Object.assign(row, {
+        KeyHint: PERSONAL_KEY_B.slice(-4), Nonce: randomBytes(12), LastValidatedAt: null, LastValidationStatus: null, RowVersion: nextRowVersion()
+      });
+    }
+  };
+  provider.enqueue({ type: 'reply' });
+  const validation = await validateKey();
+  assert.equal(validation.status, 200);
+  assert.equal(validation.body.validation.status, 'VALID');
+  assert.equal(validation.body.validation.credential.hint, PERSONAL_KEY_A.slice(-4), 'künye doğrulanan anahtarındır');
+  assert.equal(db.aiUserCredentials[0].LastValidationStatus, null, 'yeni anahtar doğrulanmış kaydedilmez');
+});
+
+test('kişisel anahtar kullanımı kapalıyken istek isteğe bağlı anahtar tablosuna hiç gitmez', async (t) => {
+  const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: null } });
+  db.aiCredentialPermissionDenied = true;
+  const probe = await runProbe();
+  assert.equal(probe.status, 200, 'tablodaki yetki sorunu kurumsal anahtarla çalışan kurulumu durdurmaz');
+  assert.equal(probe.body.result.credentialSource, 'default');
+  assert.deepEqual(provider.calls.map((call) => call.apiKey), [DEFAULT_KEY]);
+  assert.equal(db.statements.some((entry) => entry.sql.includes('MR_AiUserCredentials')), false);
+  // Rehber üyeliği yine de doğrulanır.
+  assert.ok(db.statements.some((entry) => entry.sql.includes('MR_V_PeopleDirectory')));
+});
+
+test('başarısız şema doğrulaması önceki "kurulu" gözlemini korumaz', async () => {
+  const { aiCredentialSchemaState, readCredentialSchema, resetAiCredentialSchemaStateForTests } = await import('../src/server/ai/aiCredentialStore.js');
+  resetAiCredentialSchemaStateForTests();
+  const executor = (behavior) => ({ request: () => ({ query: behavior }) });
+  assert.equal(await readCredentialSchema(executor(async () => ({ recordset: [{ SchemaReady: 1 }] }))), true);
+  assert.equal(aiCredentialSchemaState().ready, true);
+  await assert.rejects(readCredentialSchema(executor(async () => { throw new Error('izin yok'); })), /izin yok/);
+  assert.equal(aiCredentialSchemaState().ready, null, 'durum bilinmiyora döner');
+  resetAiCredentialSchemaStateForTests();
+});
+
+test('kimliği doğrulanmamış ya da rehberde olmayan çağıran, gövde ve biçim kararlarından önce reddedilir', async (t) => {
+  const { useSicil, setEnv } = createAiStack(t, { env: { MERGEN_ROTA_DEV_SICIL: null } });
+  const malformed = async () => readJson(await credentialRoute.PUT(aiRequest('/credential', { method: 'PUT', body: '{"apiKey": bozuk' })));
+  const plainText = async () => readJson(await credentialRoute.PUT(aiRequest('/credential', {
+    method: 'PUT', body: JSON.stringify({ apiKey: PERSONAL_KEY_A }), headers: { 'content-type': 'text/plain' }
+  })));
+  const oversized = async () => readJson(await credentialRoute.PUT(aiRequest('/credential', { method: 'PUT', body: { apiKey: PERSONAL_KEY_A, pad: 'x'.repeat(9000) } })));
+  for (const response of await Promise.all([malformed(), plainText(), oversized()])) {
+    assert.equal(response.status, 401, 'oturumsuz çağıran gövde doğrulamasını yoklayamaz');
+    assert.equal(response.body.error.code, 'UNAUTHORIZED');
+  }
+  setEnv({ MERGEN_ROTA_DEV_SICIL: String(SICIL_UNKNOWN) });
+  useSicil(SICIL_UNKNOWN);
+  for (const response of await Promise.all([malformed(), plainText(), oversized()])) {
+    assert.equal(response.status, 401, 'rehberde olmayan çağıran da');
+  }
+  useSicil(SICIL_A);
+  assert.equal((await malformed()).body.error.details.reason, 'MALFORMED_JSON', 'rehberdeki çağıran gövde hatasını görür');
+});
+
+test('istemcinin vazgeçtiği ilk anahtar kaydı geri alınır; sonraki yeniden deneme ezilmez', async (t) => {
+  const { db } = createAiStack(t);
+  const client = new AbortController();
+  db.aiCredentialHooks = {
+    afterUpsert() {
+      db.aiCredentialHooks = null;
+      // Yazım yapıldı ama işlem kapanmadan istemci bağlantıyı kesti.
+      client.abort();
+    }
+  };
+  const abandoned = await saveKey(PERSONAL_KEY_A, { signal: client.signal });
+  assert.equal(abandoned.status, 499);
+  assert.equal(abandoned.body.error.code, 'AI_CANCELLED');
+  assert.equal(db.aiUserCredentials.length, 0, 'ilk kayıt da işlem anlık görüntüsüyle geri alınır');
+
+  const retried = await saveKey(PERSONAL_KEY_B);
+  assert.equal(retried.status, 200);
+  assert.equal(db.aiUserCredentials[0].KeyHint, PERSONAL_KEY_B.slice(-4));
+});
+
+test('iptal edilen kaldırma, okunmadan önce durur ve yeni anahtarı silemez', async (t) => {
+  const { db } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  const client = new AbortController();
+  client.abort();
+  const removed = await readJson(await credentialRoute.DELETE(aiRequest('/credential', { method: 'DELETE', signal: client.signal })));
+  assert.equal(removed.status, 499);
+  assert.equal(db.aiUserCredentials.length, 1);
+});
+
+test('aynı kaynak denetimi şemayı da karşılaştırır ve vekil zincirindeki ilk ana bilgisayarı kullanır', async () => {
+  const { isSameOriginRequest } = await import('../src/server/identity/sameOriginRequest.js');
+  const request = (url, headers) => new Request(url, { method: 'POST', headers });
+  // Vekil zinciri: istemciye dönük ana bilgisayar ilk değerdir.
+  assert.equal(isSameOriginRequest(request('http://upstream.internal:8008/api', {
+    origin: 'https://rota.example.com', host: 'upstream.internal:8008', 'x-forwarded-host': 'rota.example.com, lb.internal', 'x-forwarded-proto': 'https'
+  })), true);
+  // https hedefe http kaynağı (şema düşürme) aynı kaynak değildir.
+  assert.equal(isSameOriginRequest(request('http://upstream.internal:8008/api', {
+    origin: 'http://rota.example.com', host: 'rota.example.com', 'x-forwarded-proto': 'https'
+  })), false);
+  assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'http://rota.example.com' })), false);
+  // `X-Forwarded-Proto` iletmeyen TLS sonlandırıcı: tarayıcının https kaynağı kabul edilir.
+  assert.equal(isSameOriginRequest(request('http://rota.example.com/api', { origin: 'https://rota.example.com', host: 'rota.example.com' })), true);
+  assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'https://rota.example.com:443' })), true);
+  assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'https://kardes.example.com' })), false);
+  assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'null' })), false);
 });

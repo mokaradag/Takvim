@@ -315,10 +315,86 @@ test('süre aşımına uğrayan dosya okuması bitmeden yeni okuma başlatılmaz
   const writer = await openFile(file, 'w');
   await writer.writeFile(JSON.stringify(registry()));
   await writer.close();
-  for (let round = 0; round < 50; round += 1) await new Promise((resolve) => setImmediate(resolve));
   await unlink(file);
   await writeFile(file, JSON.stringify(registry()), 'utf8');
-  now += 60000;
-  const loaded = await loadAiModelRegistry({ path: file, now: () => now });
+  // Takılı işlemin kapanışı iş parçacığı havuzunda (açma, stat, kapatma)
+  // tamamlanır; sabit sayıda olay döngüsü turu yerine gözlenen sonuca kadar,
+  // duvar saatiyle sınırlı beklenir (`Date.now` sahte değildir).
+  const waitUntil = Date.now() + 5000;
+  let loaded = null;
+  while (!loaded) {
+    now += 60000;
+    try {
+      loaded = await loadAiModelRegistry({ path: file, now: () => now });
+    } catch (error) {
+      if (Date.now() > waitUntil) throw error;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
   assert.equal(resolveModelProfile(loaded, 'chat.fast').route.model, 'hizli-model');
+});
+
+test('sabit sınamayı alamayacak kadar küçük bağlamlı `chat.fast` modeli için deneme sunulmaz', async () => {
+  const { AI_PROBE_CONTEXT_TOKENS, describeAiProbe, resolveAiProbeRoute } = await import('../src/server/ai/aiProbeProfile.js');
+  const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
+  const tiny = validateModelRegistry({
+    version: 1,
+    models: [{ id: 'kucuk-model', capabilities: ['chat'], contextTokens: 16 }],
+    profiles: { 'chat.fast': { model: 'kucuk-model' } }
+  });
+  assert.equal(tiny.ok, true, 'kayıt geçerlidir');
+  assert.deepEqual(resolveAiProbeRoute(tiny.registry), { ok: false, reason: 'CONTEXT_TOO_SMALL' });
+  const roomy = validateModelRegistry({
+    version: 1,
+    models: [{ id: 'yeterli-model', capabilities: ['chat'], contextTokens: AI_PROBE_CONTEXT_TOKENS }],
+    profiles: { 'chat.fast': { model: 'yeterli-model' } }
+  });
+  assert.equal(resolveAiProbeRoute(roomy.registry).ok, true);
+  assert.ok(AI_PROBE_CONTEXT_TOKENS > 64 && AI_PROBE_CONTEXT_TOKENS < 1024, `sabit sınamanın üst sınırı küçüktür: ${AI_PROBE_CONTEXT_TOKENS}`);
+
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-probe-context-'));
+  try {
+    const file = path.join(directory, 'ai-models.json');
+    await writeFile(file, JSON.stringify({
+      version: 1,
+      models: [{ id: 'kucuk-model', capabilities: ['chat'], contextTokens: 16 }],
+      profiles: { 'chat.fast': { model: 'kucuk-model' } }
+    }), 'utf8');
+    resetAiModelRegistryForTests();
+    const config = parseAiConfig({
+      MERGEN_ROTA_AI_ENABLED: 'true',
+      MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1:9/v1',
+      MERGEN_ROTA_AI_DEFAULT_API_KEY: 'rota-test-corporate-default-Xy7Pq3Rs',
+      MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file
+    });
+    const probe = await describeAiProbe(config);
+    assert.equal(probe.available, false);
+    assert.equal(probe.reason, 'CONTEXT_TOO_SMALL');
+  } finally {
+    resetAiModelRegistryForTests();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('kayıt dosyasında aynı nesnede yinelenen alan adı sessizce son değere düşmez; kayıt reddedilir', async (t) => {
+  const { findDuplicateJsonKey } = await import('../src/server/ai/modelRegistryLoader.js');
+  assert.equal(findDuplicateJsonKey('{"a":1,"b":{"a":2},"c":[{"a":3},{"a":4}]}'), null, 'farklı nesnelerdeki aynı ad yinelenme değildir');
+  assert.equal(findDuplicateJsonKey('{"a":"{\\"a\\":1}","b":"x,\\"a\\""}'), null, 'metin değerlerinin içeriği alan adı sayılmaz');
+  assert.equal(findDuplicateJsonKey('{"p":{"chat.fast":{"model":"m"},"chat.fast":{"model":"n"}}}'), 'chat.fast');
+  assert.equal(findDuplicateJsonKey('{"x\\"y":1,"x\\"y":2}'), 'x"y');
+
+  resetAiModelRegistryForTests();
+  t.after(() => resetAiModelRegistryForTests());
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-registry-duplicate-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'ai-models.json');
+  // Birleştirme hatası: güvenlik sınırı ikinci değerle sessizce kalkardı.
+  await writeFile(file, `{
+    "version": 1,
+    "models": [{ "id": "hizli-model", "capabilities": ["chat"], "maxConcurrency": 1, "maxConcurrency": 1000 }],
+    "profiles": { "chat.fast": { "model": "hizli-model" } }
+  }`, 'utf8');
+  await assert.rejects(loadAiModelRegistry({ path: file }), (error) => error.code === 'AI_CONFIGURATION_ERROR'
+    && error.details.reason === 'MODEL_REGISTRY_INVALID');
+  assert.match(aiModelRegistryState().issues[0], /yinelenen alan adı: "maxConcurrency"/);
 });

@@ -1,3 +1,8 @@
+import {
+  AI_CREDENTIAL_OPERATION_TIMEOUT_MS,
+  AI_CREDENTIAL_SOURCES,
+  AI_CREDENTIAL_VALIDATION
+} from '../../domain/ai/aiCredentialPolicy.js';
 import { requestJson } from '../shared/jsonRequest.js';
 
 /**
@@ -10,27 +15,67 @@ import { requestJson } from '../shared/jsonRequest.js';
  * Başarılı (2xx) yanıt ancak beklenen biçimi taşıyorsa başarı sayılır: istek
  * sarmalayıcısı çözülemeyen gövdeyi `{}` olarak döndürür ve bir vekilin 200
  * dönen HTML sayfası ya da kesilmiş gövde aksi hâlde kartı çökertir ya da
- * sahte bir başarı gösterirdi.
+ * sahte bir başarı gösterirdi. Eylemleri yöneten alanlar (etkin kaynak, deneme
+ * durumu, anahtar künyesi) eksikse yanıt reddedilir: kart kapalı kalır.
  */
 
 const BASE = '/api/mergen-rota/ai';
+/** Sunucu anahtar işlemlerini kendi süre sınırıyla bitirir; tarayıcı ondan sonra vazgeçer. */
+const CREDENTIAL_CLIENT_MARGIN_MS = 5000;
+export const AI_CREDENTIAL_REQUEST_TIMEOUT_MS = AI_CREDENTIAL_OPERATION_TIMEOUT_MS + CREDENTIAL_CLIENT_MARGIN_MS;
 
 /** Beklenen biçimde olmayan başarılı yanıt; ileti sunum katmanında seçilir. */
 export const AI_INVALID_RESPONSE = 'INVALID_RESPONSE';
+
+const SOURCES = new Set(Object.values(AI_CREDENTIAL_SOURCES));
+const PROBE_SOURCES = new Set([AI_CREDENTIAL_SOURCES.PERSONAL, AI_CREDENTIAL_SOURCES.DEFAULT]);
+const VALIDATION_RESULTS = new Set(Object.values(AI_CREDENTIAL_VALIDATION));
 
 function isPlainObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isStatusPayload(ai) {
-  return isPlainObject(ai) && typeof ai.enabled === 'boolean' && typeof ai.available === 'boolean'
-    && isPlainObject(ai.credential);
+function nonEmptyText(value) {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isCredentialView(credential) {
+  if (!isPlainObject(credential) || typeof credential.configured !== 'boolean') return false;
+  return !credential.configured || (typeof credential.readable === 'boolean' && typeof credential.hint === 'string');
+}
+
+function isStatusPayload(ai) {
+  return isPlainObject(ai)
+    && typeof ai.enabled === 'boolean'
+    && typeof ai.available === 'boolean'
+    && typeof ai.personalKeysSupported === 'boolean'
+    && typeof ai.defaultKeyConfigured === 'boolean'
+    && SOURCES.has(ai.effectiveSource)
+    && isCredentialView(ai.credential)
+    && isPlainObject(ai.probe) && typeof ai.probe.available === 'boolean';
+}
+
+/** Yalnızca sunucunun üç kalıcı sonucu ya da açıkça bayat sonuç kabul edilir. */
 function isValidationPayload(validation) {
-  return isPlainObject(validation)
-    && (validation.status == null || typeof validation.status === 'string')
-    && (validation.status != null || validation.stale === true);
+  if (!isPlainObject(validation)) return false;
+  if (validation.credential != null && !isPlainObject(validation.credential)) return false;
+  if (validation.stale === true) return validation.status == null;
+  return VALIDATION_RESULTS.has(validation.status);
+}
+
+/**
+ * Deneme sonucu ancak kaynağı, profili, yapılandırılan modeli, süresi ve metni
+ * taşıyorsa başarıdır. Yanıtlayan model (`model`) sağlayıcı bildirmediyse
+ * `null` olabilir; varsa boş olmayan metindir.
+ */
+function isProbeResult(result) {
+  return isPlainObject(result)
+    && PROBE_SOURCES.has(result.credentialSource)
+    && nonEmptyText(result.profile)
+    && nonEmptyText(result.configuredModel)
+    && (result.model == null || nonEmptyText(result.model))
+    && Number.isFinite(result.durationMs) && result.durationMs >= 0
+    && nonEmptyText(result.text);
 }
 
 async function expectPayload(pending, key, isValid) {
@@ -39,16 +84,24 @@ async function expectPayload(pending, key, isValid) {
   return { ok: false, code: AI_INVALID_RESPONSE, message: null };
 }
 
+function credentialOptions(options) {
+  return { timeoutMs: AI_CREDENTIAL_REQUEST_TIMEOUT_MS, ...options };
+}
+
 export function loadAiCredentialStatusRequest(options = {}) {
-  return expectPayload(requestJson(`${BASE}/credential`, { method: 'GET' }, options), 'ai', isStatusPayload);
+  return expectPayload(requestJson(`${BASE}/credential`, { method: 'GET' }, credentialOptions(options)), 'ai', isStatusPayload);
 }
 
 export function saveAiCredentialRequest(apiKey, options = {}) {
-  return expectPayload(requestJson(`${BASE}/credential`, { method: 'PUT', body: JSON.stringify({ apiKey }) }, options), 'ai', isStatusPayload);
+  return expectPayload(
+    requestJson(`${BASE}/credential`, { method: 'PUT', body: JSON.stringify({ apiKey }) }, credentialOptions(options)),
+    'ai',
+    isStatusPayload
+  );
 }
 
 export function removeAiCredentialRequest(options = {}) {
-  return expectPayload(requestJson(`${BASE}/credential`, { method: 'DELETE' }, options), 'ai', isStatusPayload);
+  return expectPayload(requestJson(`${BASE}/credential`, { method: 'DELETE' }, credentialOptions(options)), 'ai', isStatusPayload);
 }
 
 export function validateAiCredentialRequest(options = {}) {
@@ -56,5 +109,5 @@ export function validateAiCredentialRequest(options = {}) {
 }
 
 export function runAiProbeRequest(options = {}) {
-  return expectPayload(requestJson(`${BASE}/probe`, { method: 'POST' }, options), 'result', isPlainObject);
+  return expectPayload(requestJson(`${BASE}/probe`, { method: 'POST' }, options), 'result', isProbeResult);
 }

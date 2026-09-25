@@ -7,6 +7,7 @@
  * değiştirilir, tıpkı sunucudaki gibi yalnızca sunucu tarafında.
  */
 import { createHash } from 'node:crypto';
+import { inspect } from 'node:util';
 import { createFakeAiProvider } from './fakeAiProvider.mjs';
 import { createFakeDatabase, createFakeSqlServerDriver } from './fakeSqlServer.mjs';
 import { registerServerOnlyShim } from './serverOnlyShim.mjs';
@@ -30,6 +31,7 @@ const { resetAiConfigCacheForTests } = await import('../../src/server/ai/aiConfi
 const { resetAiModelRegistryForTests } = await import('../../src/server/ai/modelRegistryLoader.js');
 const { resetAiTelemetryForTests } = await import('../../src/server/ai/aiTelemetry.js');
 const { resetAiCredentialSchemaStateForTests } = await import('../../src/server/ai/aiCredentialStore.js');
+const { resetAiDirectoryGateForTests } = await import('../../src/server/ai/aiCredentialService.js');
 const { resetTelemetryRegistryForTests } = await import('../../src/server/observability/telemetryRegistry.js');
 const { resetOperationalEventBufferForTests } = await import('../../src/server/observability/operationalEventsRepository.js');
 
@@ -54,6 +56,7 @@ function resetAi() {
   resetAiModelRegistryForTests();
   resetAiTelemetryForTests();
   resetAiCredentialSchemaStateForTests();
+  resetAiDirectoryGateForTests();
   resetTelemetryRegistryForTests();
   resetOperationalEventBufferForTests();
 }
@@ -144,14 +147,20 @@ export async function runProbe(options = {}) {
   return readJson(await probeRoute.POST(aiRequest('/probe', { method: 'POST', ...options })));
 }
 
-/** Konsola yazılan her satırı yakalar; test sonunda özgün yöntemler geri gelir. */
+/**
+ * Konsola yazılan her satırı yakalar; test sonunda özgün yöntemler geri gelir.
+ *
+ * Değerler gerçek konsolun yazdığı biçimde (`util.inspect`) kaydedilir: `Error`
+ * nesnelerinin iletisi ve yığın izi (JSON'da görünmez) sızıntı denetimine
+ * girer; döngüsel nesne ya da BigInt yakalayıcıyı düşürmez.
+ */
 export function captureConsole(t) {
   const lines = [];
   const originals = {};
   for (const method of ['log', 'info', 'warn', 'error', 'debug']) {
     originals[method] = console[method];
     console[method] = (...args) => {
-      lines.push(args.map((value) => (typeof value === 'string' ? value : JSON.stringify(value))).join(' '));
+      lines.push(args.map((value) => (typeof value === 'string' ? value : inspect(value, { depth: 10, breakLength: Infinity }))).join(' '));
     };
   }
   t.after(() => Object.assign(console, originals));

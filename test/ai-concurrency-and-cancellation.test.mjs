@@ -571,6 +571,12 @@ test('yanıtı gerçekten üreten model bildirilir; yapılandırılan modelden a
   const result = await chat();
   assert.equal(result.model, 'yedek-model');
   assert.equal(result.configuredModel, 'Qwen3-Next-80B-A3B-Instruct');
+
+  // Sağlayıcı modeli bildirmediyse yanıtlayan model bilinmez; yapılandırılan model onun yerine konmaz.
+  provider.chatCompletion = async (input) => ({ ...(await chatCompletion(input)), model: null });
+  const unreported = await chat();
+  assert.equal(unreported.model, null);
+  assert.equal(unreported.configuredModel, 'Qwen3-Next-80B-A3B-Instruct');
 });
 
 test('başarısız sağlayıcı çağrıları da gecikme özetine girer', async (t) => {
@@ -631,25 +637,27 @@ function contextGateway({ provider, contextTokens, maxOutputTokens = null }) {
   return { gateway, admission };
 }
 
-test('modelin bağlam penceresine kesinlikle sığmayan istem kapasite ve sağlayıcı harcanmadan reddedilir', async () => {
+test('istem uzunluğu TAHMİNLE reddedilmez; bağlama sığmayan istemi sağlayıcı kendi belirteçleyicisiyle reddeder', async () => {
   const provider = createFakeAiProvider();
   const { gateway, admission } = contextGateway({ provider, contextTokens: 100 });
+  // Karakter/belirteç oranı dile ve içeriğe göre değişir: tahmin ne alt ne üst
+  // sınırdır. Yerel ret yerine istek sağlayıcıya gider; kira her yolda bırakılır.
+  const repetitive = [{ role: 'user', content: ' '.repeat(1200) }];
+  provider.enqueue({ type: 'reply' }, { type: 'status', status: 400 });
+  assert.equal((await gateway.completeChat({ profile: 'chat.fast', messages: repetitive })).text.length > 0, true);
   await assert.rejects(
-    gateway.completeChat({ profile: 'chat.fast', messages: [{ role: 'user', content: 'x'.repeat(1200) }] }),
-    (error) => error.code === 'AI_REQUEST_INVALID' && error.details.reason === 'PROMPT_TOO_LONG'
+    gateway.completeChat({ profile: 'chat.fast', messages: [{ role: 'user', content: 'ç'.repeat(1200) }] }),
+    (error) => error.code === 'AI_REQUEST_INVALID' && error.details.providerStatus === 400
   );
-  assert.equal(admission.status().counters.admitted, 0, 'kapasite kirası alınmaz');
-  assert.equal(provider.calls.length, 0);
-  // Tahmin bilinçli olarak düşüktür: sığan kısa istem reddedilmez.
-  assert.equal((await gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES })).text.length > 0, true);
+  assert.equal(provider.calls.length, 2);
+  assert.equal(admission.status().active, 0);
 });
 
-test('profil sınırı tanımsızken de çağıran bağlamı ya da genel üst sınırı aşan çıktı isteyemez', async () => {
+test('çıktı sınırı yalnızca kesin değerlerle daraltılır ve istek hiçbir zaman sınırsız gitmez', async () => {
   const provider = createFakeAiProvider();
   const bounded = contextGateway({ provider, contextTokens: 1000 });
   await bounded.gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES, maxOutputTokens: 1_000_000 });
-  assert.ok(provider.calls[0].maxOutputTokens <= 1000 - 4, `istem sonrası kalan bağlamla sınırlanır: ${provider.calls[0].maxOutputTokens}`);
-  assert.ok(provider.calls[0].maxOutputTokens > 900);
+  assert.equal(provider.calls[0].maxOutputTokens, 1000, 'modelin bağlam penceresi kesin üst sınırdır');
 
   const unbounded = contextGateway({ provider, contextTokens: null });
   await unbounded.gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES, maxOutputTokens: 9_000_000 });
@@ -660,6 +668,14 @@ test('profil sınırı tanımsızken de çağıran bağlamı ya da genel üst s�
   assert.equal(provider.calls[2].maxOutputTokens, 64, 'profil sınırı korunur');
   await capped.gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
   assert.equal(provider.calls[3].maxOutputTokens, 64);
+
+  // Ne çağıran ne profil sınır verdiyse sağlayıcının varsayılanı (bağlamın
+  // tamamına varabilir) kullanılmaz: sınırlı varsayılan gider.
+  await unbounded.gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+  assert.equal(provider.calls[4].maxOutputTokens, 1024);
+  const tiny = contextGateway({ provider, contextTokens: 512 });
+  await tiny.gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+  assert.equal(provider.calls[5].maxOutputTokens, 512);
 });
 
 test('kurumsal anahtarla yapılmış geçersiz istek işletim günlüğüne girmez; reddedilen kurumsal anahtar girer', async (t) => {
@@ -674,4 +690,254 @@ test('kurumsal anahtarla yapılmış geçersiz istek işletim günlüğüne girm
   await assert.rejects(chat(), { code: 'AI_KEY_INVALID' });
   assert.equal(aiWarnings().length, 1);
   assert.match(aiWarnings()[0], /"code":"AI_KEY_INVALID"/);
+});
+
+/* ── Kira öncesi iş, doğrulama telemetrisi ve sağlık ayrımı ─ */
+
+function isolatedGateway({ provider, config, ...overrides }) {
+  const admission = createAiAdmissionController({ limits: config.limits });
+  const gateway = createAiGateway({
+    getProvider: () => provider,
+    getAdmission: () => admission,
+    loadConfig: () => config,
+    loadRegistry: async () => REGISTRY,
+    resolveCredential: async () => ({ source: 'default', apiKey: DEFAULT_KEY }),
+    readPersonalCredential: async () => ({ apiKey: PERSONAL_KEY_A, keyNonce: Buffer.alloc(12, 1) }),
+    storeValidation: async () => ({ recorded: true, credential: null }),
+    currentSicil: async () => 900001,
+    verifySicil: async () => {},
+    random: () => 0,
+    ...overrides
+  });
+  return { gateway, admission };
+}
+
+const PERSONAL_CONFIG = () => parseAiConfig({
+  MERGEN_ROTA_AI_ENABLED: 'true',
+  MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1:9/v1',
+  MERGEN_ROTA_AI_DEFAULT_API_KEY: DEFAULT_KEY,
+  MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: Buffer.alloc(32, 7).map((value, index) => value + index).toString('base64url')
+});
+
+test('model kaydı okunurken bağlantısını kesen istemci, takılı okumayı beklemeden AI_CANCELLED alır', async (t) => {
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  const provider = createFakeAiProvider();
+  let registryStarted = false;
+  const { gateway, admission } = isolatedGateway({
+    provider,
+    config: PERSONAL_CONFIG(),
+    // Erişilemeyen UNC paylaşımı: okuma hiç bitmez.
+    loadRegistry: () => { registryStarted = true; return new Promise(() => {}); }
+  });
+  const client = new AbortController();
+  const pending = gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES, signal: client.signal });
+  for (let round = 0; round < 10 && !registryStarted; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(registryStarted);
+  client.abort();
+  await assert.rejects(pending, (error) => error.code === 'AI_CANCELLED' && error.status === 499);
+  assert.equal(admission.status().counters.admitted, 0);
+  assert.equal(provider.calls.length, 0);
+});
+
+test('kira öncesi rehber denetimi kendi süre sınırıyla çalışır; takılan denetim veritabanı hatası olarak döner', async (t) => {
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const provider = createFakeAiProvider();
+  let preflightSignal = null;
+  const { gateway, admission } = isolatedGateway({
+    provider,
+    config: PERSONAL_CONFIG(),
+    verifySicil: (sicil, { signal }) => { preflightSignal = signal; return new Promise(() => {}); }
+  });
+  const pending = gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+  for (let round = 0; round < 10 && !preflightSignal; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(preflightSignal, 'rehber denetimi sınırlı bir sinyal alır');
+  t.mock.timers.tick(4999);
+  assert.equal(preflightSignal.aborted, false);
+  t.mock.timers.tick(1);
+  await assert.rejects(pending, (error) => error.code === 'DATABASE_UNAVAILABLE' && error.status === 503
+    && error.details.reason === 'DIRECTORY_PREFLIGHT_TIMEOUT');
+  assert.equal(preflightSignal.aborted, true, 'takılan SQL sorgusu da iptal edilir');
+  assert.equal(admission.status().counters.admitted, 0);
+  assert.equal(provider.calls.length, 0);
+});
+
+test('doğrulamada paylaşılan kapasite reddi ve sıra beklemesi sohbetteki gibi izlenir; kullanıcı sınırı hizmet hatası değildir', async (t) => {
+  resetTelemetryRegistryForTests();
+  resetAiTelemetryForTests();
+  t.after(() => { resetTelemetryRegistryForTests(); resetAiTelemetryForTests(); });
+  const provider = createFakeAiProvider();
+  const config = parseAiConfig({
+    MERGEN_ROTA_AI_ENABLED: 'true',
+    MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1:9/v1',
+    MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: Buffer.alloc(32, 7).map((value, index) => value + index).toString('base64url'),
+    MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: '1',
+    MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1',
+    MERGEN_ROTA_AI_MAX_QUEUED_REQUESTS: '0',
+    MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0'
+  });
+  const sicils = [900001, 900002, 900001];
+  const { gateway } = isolatedGateway({ provider, config, currentSicil: async () => sicils.shift() });
+  provider.enqueue({ type: 'deferred' });
+  const holder = gateway.validatePersonalCredential();
+  await provider.waitForActive(1);
+  // Başka kullanıcı, dolu KÜRESEL kapasiteye takılır: paylaşılan baskı.
+  await assert.rejects(gateway.validatePersonalCredential(), (error) => error.code === 'AI_BUSY' && error.details.saturation === 'global');
+  let snapshot = aiTelemetrySnapshot();
+  assert.ok(snapshot.lastBusyAt, 'doğrulama reddi de kapasite baskısı olarak işaretlenir');
+  assert.equal(snapshot.lastFailure.code, 'AI_BUSY');
+  provider.calls[0].resolve();
+  await holder;
+  const waits = snapshotOperations().find((row) => row.operation === 'ai.queue.wait');
+  assert.ok(waits.sampleCount >= 1, 'doğrulamanın sıra beklemesi ölçülür');
+
+  // Aynı kullanıcının kendi sınırı: hizmet hatası değildir.
+  resetAiTelemetryForTests();
+  resetTelemetryRegistryForTests();
+  const own = createAiAdmissionController({ limits: { ...config.limits, maxActive: 4 } });
+  const ownGateway = isolatedGateway({ provider, config, getAdmission: () => own }).gateway;
+  provider.enqueue({ type: 'deferred' });
+  const first = ownGateway.validatePersonalCredential();
+  await provider.waitForActive(1);
+  await assert.rejects(ownGateway.validatePersonalCredential(), (error) => error.code === 'AI_BUSY' && error.details.saturation === 'user');
+  snapshot = aiTelemetrySnapshot();
+  assert.ok(snapshot.lastUserLimitAt);
+  assert.equal(snapshot.lastBusyAt, null);
+  assert.equal(snapshot.lastFailure, null);
+  const validate = snapshotOperations().find((row) => row.operation === 'ai.credential.validate');
+  assert.equal(validate.errorCount, 0, 'kullanıcının kendi sınırı doğrulama hatası sayılmaz');
+  provider.calls.at(-1).resolve();
+  await first;
+});
+
+test('doğrulamada bağlantı kurulamayınca yapılan yineleme sayaca girer; sohbette çift sayılmaz', async (t) => {
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  const provider = createFakeAiProvider();
+  const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG() });
+  provider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'reply' });
+  assert.equal((await gateway.validatePersonalCredential()).status, 'VALID');
+  assert.equal(aiTelemetrySnapshot().retries, 1);
+  provider.enqueue({ type: 'network', code: 'EHOSTUNREACH' }, { type: 'reply' });
+  await gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+  assert.equal(aiTelemetrySnapshot().retries, 2, 'ağ arabirimi hatası da bağlantı öncesi hatadır ve bir kez yinelenir');
+});
+
+test('anahtarsız model listesine dönen 2xx dışı her yanıt, anahtarın denetlendiğini gösterir', async (t) => {
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  for (const keyless of [{ type: 'status', status: 404 }, { type: 'status', status: 429 }, { type: 'status', status: 503 }, { type: 'malformed' }]) {
+    const provider = createFakeAiProvider();
+    // `malformed` model listesinde geçersiz 2xx gövdesini (ör. oturum açma sayfası) taklit eder.
+    const listModels = provider.listModels.bind(provider);
+    provider.listModels = async (input) => {
+      if (!input.apiKey && keyless.type === 'malformed') {
+        const { AiError } = await import('../src/server/ai/aiErrors.js');
+        throw new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'MODEL_LIST_INVALID' } });
+      }
+      return listModels(input);
+    };
+    provider.enqueue({ type: 'reply' }, keyless);
+    const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG() });
+    assert.equal((await gateway.validatePersonalCredential()).status, 'VALID', JSON.stringify(keyless));
+  }
+});
+
+test('kişisel anahtarın oran sınırı istek ve doğrulamada hizmet hatası sayılmaz; reddedilen çağrı işlem ölçümünde başarısızdır', async (t) => {
+  resetTelemetryRegistryForTests();
+  resetAiTelemetryForTests();
+  t.after(() => { resetTelemetryRegistryForTests(); resetAiTelemetryForTests(); });
+  const logs = captureConsole(t);
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'status', status: 429 }, { type: 'status', status: 401 });
+  const { chat } = gatewayFor(t, { provider });
+  await assert.rejects(chat(), { code: 'AI_RATE_LIMITED' });
+  await assert.rejects(chat(), { code: 'AI_KEY_INVALID' });
+  const snapshot = aiTelemetrySnapshot();
+  assert.equal(snapshot.lastFailure, null, 'kişisel oran sınırı hizmet hatası değildir');
+  assert.equal(snapshot.provider.lastOutcome, 'contact');
+  const request = snapshotOperations().find((row) => row.operation === 'ai.request');
+  assert.equal(request.errorCount, 0);
+  assert.equal(logs.filter((line) => line.includes('"operation":"ai.request"')).length, 0, 'işletim günlüğüne uyarı yazılmaz');
+  const providerCalls = snapshotOperations().find((row) => row.operation === 'ai.provider.chat');
+  assert.equal(providerCalls.errorCount, 2, 'sağlayıcının reddettiği çağrılar başarılı sayılmaz');
+
+  provider.enqueue({ type: 'status', status: 429 });
+  const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG() });
+  await assert.rejects(gateway.validatePersonalCredential(), { code: 'AI_RATE_LIMITED' });
+  const validate = snapshotOperations().find((row) => row.operation === 'ai.credential.validate');
+  assert.equal(validate.errorCount, 0);
+  assert.equal(aiTelemetrySnapshot().lastFailure, null);
+});
+
+test('kişisel anahtarla yapılan başarılı çağrı, kurumsal anahtarın reddini gizlemez', async (t) => {
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'status', status: 401 });
+  const corporate = gatewayFor(t, { provider, credential: { source: 'default', apiKey: DEFAULT_KEY } });
+  await assert.rejects(corporate.chat(), { code: 'AI_KEY_INVALID' });
+  const { chat: personalChat } = createAiGatewayForSource(provider, 'personal');
+  await personalChat();
+  let snapshot = aiTelemetrySnapshot();
+  assert.equal(snapshot.provider.lastOutcome, 'contact', 'sağlayıcıya erişim var');
+  assert.equal(snapshot.provider.defaultKey.lastFailureCode, 'AI_KEY_INVALID', 'kurumsal anahtarın reddi korunur');
+  // Yalnızca kurumsal anahtarla yapılan başarılı çağrı kaydı temizler.
+  const { chat: corporateChat } = createAiGatewayForSource(provider, 'default');
+  await corporateChat();
+  snapshot = aiTelemetrySnapshot();
+  assert.equal(snapshot.provider.defaultKey.lastFailureCode, null);
+});
+
+function createAiGatewayForSource(provider, source) {
+  const config = PERSONAL_CONFIG();
+  const { gateway } = isolatedGateway({
+    provider,
+    config,
+    resolveCredential: async () => ({ source, apiKey: source === 'default' ? DEFAULT_KEY : PERSONAL_KEY_A })
+  });
+  return { chat: () => gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES }) };
+}
+
+test('sağlayıcının bulunamayan uç/model yanıtı sohbet yolunda da sağlık hatasıdır', async (t) => {
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'status', status: 404 }, { type: 'status', status: 302 });
+  const { chat } = gatewayFor(t, { provider, credential: { source: 'default', apiKey: DEFAULT_KEY } });
+  await assert.rejects(chat(), { code: 'AI_CONFIGURATION_ERROR' });
+  assert.equal(aiTelemetrySnapshot().provider.lastOutcome, 'failure');
+  assert.equal(aiTelemetrySnapshot().provider.lastFailureCode, 'AI_CONFIGURATION_ERROR');
+  await assert.rejects(chat(), { code: 'AI_CONFIGURATION_ERROR' });
+  assert.equal(aiTelemetrySnapshot().provider.lastContactAt, null, 'başarısız HTTP yanıtı erişim sayılmaz');
+});
+
+test('sabit deneme isteğinin sağlayıcıca reddi kullanıcı hatası değil, yapılandırma ve sağlık hatasıdır', async (t) => {
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'status', status: 400 }, { type: 'status', status: 400 });
+  const { chat } = gatewayFor(t, { provider, credential: { source: 'default', apiKey: DEFAULT_KEY } });
+  await assert.rejects(chat({ callerInput: false }), (error) => error.code === 'AI_CONFIGURATION_ERROR'
+    && error.details.reason === 'PROVIDER_REJECTED_FIXED_REQUEST' && error.details.providerStatus === 400);
+  assert.equal(aiTelemetrySnapshot().provider.lastOutcome, 'failure');
+  // Çağıranın girdisiyle yapılan istekte aynı yanıt kullanıcı hatasıdır.
+  await assert.rejects(chat(), { code: 'AI_REQUEST_INVALID' });
+});
+
+test('reddedilen kurumsal anahtar uçtan uca istekte hizmet hatasıdır; kişisel anahtarın reddi değildir', async (t) => {
+  resetTelemetryRegistryForTests();
+  t.after(() => resetTelemetryRegistryForTests());
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'status', status: 403 });
+  const corporate = gatewayFor(t, { provider, credential: { source: 'default', apiKey: DEFAULT_KEY } });
+  await assert.rejects(corporate.chat(), { code: 'AI_UNAUTHORIZED' });
+  let request = snapshotOperations().find((row) => row.operation === 'ai.request');
+  assert.equal(request.errorCount, 1, 'kurumsal anahtara bağlı herkes etkilenir');
+  assert.equal(request.topFailureCode, 'AI_UNAUTHORIZED');
+  assert.equal(aiTelemetrySnapshot().lastFailure.code, 'AI_UNAUTHORIZED');
+
+  resetTelemetryRegistryForTests();
+  provider.enqueue({ type: 'status', status: 403 });
+  const personal = gatewayFor(t, { provider });
+  await assert.rejects(personal.chat(), { code: 'AI_UNAUTHORIZED' });
+  request = snapshotOperations().find((row) => row.operation === 'ai.request');
+  assert.equal(request.errorCount, 0, 'kişisel anahtarın yetkisi yalnızca o kullanıcıyı anlatır');
+  assert.equal(aiTelemetrySnapshot().lastFailure, null);
 });

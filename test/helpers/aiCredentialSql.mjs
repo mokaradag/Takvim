@@ -4,6 +4,9 @@
  * Gerçek sorgu metinleri (`src/server/ai/aiCredentialQueries.js`) tanınır ve
  * Sicil başına tek satır tutulur. Her deyimin parametreleri saklanır ki testler
  * düz metin anahtarın veritabanına hiçbir yoldan gitmediğini doğrulayabilsin.
+ * Tablo dizisi sahte veritabanı kurulurken açılır (`createFakeDatabase`): işlem
+ * anlık görüntüsü ilk kayıttan önce de tabloyu kapsar ve geri alma onu da geri
+ * alır. Anahtar kimliği, SQL Server'daki gibi her kayıtta yenilenen `Nonce`'tur.
  */
 
 let rowVersionCounter = 0;
@@ -53,11 +56,16 @@ export function runAiCredentialQuery(db, sqlText, params) {
     return [[{ SchemaReady: db.aiCredentialSchemaMissing ? 0 : 1 }]];
   }
   if (db.aiCredentialSchemaMissing) throw missingSchemaError();
-  db.aiUserCredentials ||= [];
+  // İsteğe bağlı tabloda eksik yetki (şema var ama erişilemiyor).
+  if (db.aiCredentialPermissionDenied) {
+    const error = new Error("The SELECT permission was denied on the object 'MR_AiUserCredentials'.");
+    error.number = 229;
+    throw error;
+  }
   logStatement(db, sqlText, params);
 
   const find = () => db.aiUserCredentials.find((row) => row.Sicil === sicil) || null;
-  const sameVersion = (row) => row && Buffer.isBuffer(params.rowVersion) && row.RowVersion.equals(params.rowVersion);
+  const sameKey = (row) => row && Buffer.isBuffer(params.keyNonce) && Buffer.from(row.Nonce).equals(params.keyNonce);
 
   if (sqlText.includes('SELECT TOP (1) EncryptionVersion')) {
     const row = find();
@@ -65,7 +73,7 @@ export function runAiCredentialQuery(db, sqlText, params) {
   }
   if (sqlText.includes('SELECT TOP (1) MasterKeyId')) {
     const row = find();
-    return [knownSicil, row ? [{ MasterKeyId: row.MasterKeyId, ...metadataRow(row)[0] }] : []];
+    return [knownSicil, row ? [{ MasterKeyId: row.MasterKeyId, KeyNonce: Buffer.from(row.Nonce), ...metadataRow(row)[0] }] : []];
   }
   if (sqlText.includes('UPDATE dbo.MR_AiUserCredentials WITH (UPDLOCK, HOLDLOCK)')) {
     const now = new Date();
@@ -84,25 +92,31 @@ export function runAiCredentialQuery(db, sqlText, params) {
     const existing = find();
     if (existing) Object.assign(existing, values);
     else db.aiUserCredentials.push({ Sicil: sicil, CreatedAt: now, ...values });
+    // Test kancası: yazımdan hemen sonra (işlem kapanmadan) istemci vazgeçebilir.
+    db.aiCredentialHooks?.afterUpsert?.(find());
     return [metadataRow(find())];
   }
   if (sqlText.includes('DELETE FROM dbo.MR_AiUserCredentials')) {
     // Test kancası: okuma ile silme arasına başka bir oturumun kaydı girebilir.
     db.aiCredentialHooks?.beforeDelete?.(find(), { nextRowVersion });
-    // Yalnızca okunan satır sürümü silinir; araya giren yeni kayıt korunur.
+    // Yalnızca okunan anahtar (nonce) silinir; araya giren yeni kayıt korunur.
     const before = db.aiUserCredentials.length;
-    db.aiUserCredentials = db.aiUserCredentials.filter((row) => !(row.Sicil === sicil && sameVersion(row)));
+    db.aiUserCredentials = db.aiUserCredentials.filter((row) => !(row.Sicil === sicil && sameKey(row)));
     return [[{ Deleted: before - db.aiUserCredentials.length }]];
   }
   if (sqlText.includes('SET LastValidatedAt = SYSUTCDATETIME()')) {
     const row = find();
-    const recorded = sameVersion(row) ? 1 : 0;
-    if (recorded) {
+    const written = [];
+    if (sameKey(row)) {
+      // Künye yazımı satır sürümünü ilerletir ama anahtar kimliğini (nonce) değiştirmez.
       row.LastValidatedAt = new Date();
       row.LastValidationStatus = params.status;
       row.RowVersion = nextRowVersion();
+      written.push(metadataRow(row)[0]);
     }
-    return [[{ Recorded: recorded }], metadataRow(find())];
+    // Test kancası: `OUTPUT` ile sonraki okuma arasına başka bir kayıt girebilir.
+    db.aiCredentialHooks?.afterValidationUpdate?.(find(), { nextRowVersion });
+    return [written, metadataRow(find())];
   }
   throw new Error(`Fake SQL Server: desteklenmeyen yapay zekâ anahtarı deyimi: ${sqlText.trim().slice(0, 120)}`);
 }

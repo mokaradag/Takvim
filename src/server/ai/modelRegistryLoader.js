@@ -103,13 +103,58 @@ function settle(current, { source, registry = null, issues = [], now }) {
   current.retryAt = registry ? 0 : now + FILE_RETRY_AFTER_FAILURE_MS;
 }
 
+/**
+ * Aynı nesnede yinelenen alan adı. `JSON.parse` yinelenen alanın yalnızca son
+ * değerini tutar: bir birleştirme/düzenleme hatası daha önceki bir güvenlik
+ * sınırını ya da profil eşlemesini sessizce değiştirebilirdi. Metin önceden
+ * `JSON.parse` ile doğrulandığı için tarayıcı yalnızca iyi biçimli JSON görür.
+ */
+export function findDuplicateJsonKey(text) {
+  const stack = [];
+  let expectKey = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '"') {
+      let end = index + 1;
+      while (text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (top && expectKey) {
+        const key = JSON.parse(text.slice(index, end + 1));
+        if (top.has(key)) return key;
+        top.add(key);
+        expectKey = false;
+      }
+      index = end;
+    } else if (char === '{') {
+      stack.push(new Set());
+      expectKey = true;
+    } else if (char === '[') {
+      stack.push(null);
+      expectKey = false;
+    } else if (char === '}' || char === ']') {
+      stack.pop();
+      expectKey = false;
+    } else if (char === ',') {
+      expectKey = stack[stack.length - 1] instanceof Set;
+    }
+  }
+  return null;
+}
+
 async function loadFromFile(current, path, now) {
   let document;
+  let text;
   try {
-    document = JSON.parse(await readRegistryFile(current, path));
+    text = await readRegistryFile(current, path);
+    document = JSON.parse(text);
   } catch (error) {
     const unreadable = error instanceof SyntaxError ? 'JSON olarak ayrıştırılamadı' : 'okunamadı ya da süre sınırında yanıt vermedi';
     settle(current, { source: 'file', issues: [`$: kayıt dosyası ${unreadable}`], now: now() });
+    throw registryUnavailable('file');
+  }
+  const duplicate = findDuplicateJsonKey(text);
+  if (duplicate != null) {
+    settle(current, { source: 'file', issues: [`$: aynı nesnede yinelenen alan adı: "${String(duplicate).slice(0, 60)}"`], now: now() });
     throw registryUnavailable('file');
   }
   const validated = validateModelRegistry(document);
@@ -143,6 +188,12 @@ export async function loadAiModelRegistry({ path = null, now = Date.now } = {}) 
   });
   current.inFlight = job;
   return job;
+}
+
+/** Yüklenmiş kayıt (G/Ç yapmaz); henüz hazır değilse `null`. Tarayıcıya gitmez. */
+export function cachedAiModelRegistry() {
+  const current = state();
+  return current.status === 'ready' ? current.registry : null;
 }
 
 /** Sağlık görünümü için ÖNBELLEKTEKİ durum; hiçbir G/Ç yapmaz. */

@@ -247,6 +247,9 @@ export function createFakeDatabase(seed = {}) {
     telemetryGaugeSamples: seed.telemetryGaugeSamples || [],
     operationalEvents: seed.operationalEvents || [],
     operationalAlerts: seed.operationalAlerts || [],
+    // Kişisel yapay zekâ anahtarları (0016). Dizi baştan açılır: işlem anlık
+    // görüntüsü ilk kayıttan önce alınsa da tabloyu kapsar ve geri alınır.
+    aiUserCredentials: seed.aiUserCredentials || [],
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
     corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
@@ -2365,6 +2368,12 @@ export function createFakeSqlServerDriver(db) {
     async query(statement) {
       const database = this.pool.config?.database || 'MERGEN_Rota';
       db.statements.push({ sql: String(statement), database });
+      // Test kancası: eşleşen sorgu, test bariyeri açana kadar bekler (ör. yavaş
+      // bir rehber sorgusunun ortak havuzu ne kadar meşgul ettiğini ölçmek için).
+      if (db.queryBarrier?.match(String(statement))) {
+        db.queryBarrier.entered += 1;
+        await db.queryBarrier.released;
+      }
       if (String(statement).includes('sys.sp_getapplock')) {
         if (!this.pool.began) throw new Error('Kilit bir SQL işlemi içinde alınmalıdır.');
         this.pool.lockOnly = true;

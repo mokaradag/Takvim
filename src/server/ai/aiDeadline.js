@@ -3,6 +3,21 @@ import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { AiError } from './aiErrors.js';
 
 /**
+ * Kapasite kirasından ÖNCEKİ rehber üyeliği denetiminin bütçesi. Denetim
+ * sınırlı sayıda eşzamanlı SQL sorgusuyla yapılır (bkz. aiCredentialService);
+ * bekleme ve sorgu bu süreyle sınırlıdır ve istemci süreleri bunu da kapsar.
+ */
+export const AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS = 5000;
+
+/** Kişisel anahtar doğrulamasının (kiradan sonra) üst süresi. */
+export const AI_VALIDATION_TIMEOUT_MS = 15000;
+
+/** Doğrulamanın sunucudaki uçtan uca bütçesi: rehber denetimi + sıra + doğrulama. */
+export function aiValidationBudgetMs(config) {
+  return AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS + config.queueTimeoutMs + Math.min(AI_VALIDATION_TIMEOUT_MS, config.requestTimeoutMs);
+}
+
+/**
  * Yapay zekâ işinin süre sınırı ve iptali.
  *
  * Tek bir `AbortSignal`, hem süre dolmasını hem de istemcinin iptalini taşır;

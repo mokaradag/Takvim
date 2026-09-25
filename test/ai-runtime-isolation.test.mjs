@@ -313,13 +313,15 @@ test('sağlık yoklaması sağlayıcıyı çağırmaz; durum son temaslardan ve 
 });
 
 test('paylaşılan kapasite dolunca ya da sırada süre dolunca uyarı verilir; yalnız sıra baskısı ret iddia etmez', async (t) => {
+  // Sıra süresi uzundur: sıra baskısı ve AI_BUSY adımları duvar saatine bağlı
+  // değildir. Sıra süre aşımı ayrıca sahte saatle üretilir.
   const { provider, useSicil } = createAiStack(t, {
     env: {
       MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: '1',
       MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1',
       MERGEN_ROTA_AI_MAX_QUEUED_REQUESTS: '1',
       MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '1',
-      MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS: '100'
+      MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS: '60000'
     }
   });
   adminReset(t);
@@ -340,10 +342,18 @@ test('paylaşılan kapasite dolunca ya da sırada süre dolunca uyarı verilir; 
   assert.equal(pressure.ai.state, HEALTH_STATES.WARNING);
   assert.match(pressure.ai.message, /Sıra dolmak üzere; henüz geri çevrilen istek yok/);
   assert.doesNotMatch(pressure.ai.message, /geri çevrildi/);
+  queuedClient.abort();
+  assert.equal((await queued.promise).status, 499);
 
   // Sırada süresi dolan istek paylaşılan kapasite baskısıdır.
-  const timedOut = await readJson(await queued.promise);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  useSicil(SICIL_B);
+  const expiring = probeInBackground();
+  await until(() => aiRuntimeLoad()?.queued === 1);
+  t.mock.timers.tick(60000);
+  const timedOut = await readJson(await expiring.promise);
   assert.equal(timedOut.body.error.code, 'AI_QUEUE_TIMEOUT');
+  useSicil(SICIL_A);
   const afterTimeout = await overviewAi();
   assert.equal(afterTimeout.ai.state, HEALTH_STATES.WARNING);
   assert.match(afterTimeout.ai.message, /sırada beklerken süre doldu/);
@@ -362,7 +372,6 @@ test('paylaşılan kapasite dolunca ya da sırada süre dolunca uyarı verilir; 
   assert.match(busy.ai.message, /Kapasite doldu; bazı istekler geri çevrildi/);
   waitingClient.abort();
   await waiting.promise;
-  queuedClient.abort();
   client.abort();
   assert.equal((await running.promise).status, 499);
 });
@@ -392,7 +401,9 @@ test('Entegrasyonlar kartı yapay zekâ sağlayıcısını listeler; bağlantı 
   }));
   const ok = await (await post()).json();
   assert.equal(ok.result.ok, true);
-  assert.deepEqual(provider.calls.map((call) => [call.kind, call.apiKey]), [['models', DEFAULT_KEY]]);
+  // Kurumsal anahtarla alınan liste, ucun anahtarsız isteği reddettiği
+  // görüldükten sonra anahtarın kanıtı sayılır.
+  assert.deepEqual(provider.calls.map((call) => [call.kind, call.apiKey]), [['models', DEFAULT_KEY], ['models', null]]);
 
   t.mock.timers.enable({ apis: ['setTimeout'] });
   provider.enqueue({ type: 'stall' });
@@ -402,7 +413,7 @@ test('Entegrasyonlar kartı yapay zekâ sağlayıcısını listeler; bağlantı 
   const timedOut = await (await pending).json();
   assert.equal(timedOut.result.ok, false);
   assert.equal(timedOut.result.code, 'PROBE_TIMEOUT');
-  assert.equal(provider.calls[1].aborted, true);
+  assert.equal(provider.calls.at(-1).aborted, true);
 });
 
 /* ── Sağlık doğruluğu ve bağlantı testi ───────────────────── */
@@ -415,6 +426,9 @@ function postIntegrationTest(integrationId) {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ integrationId })
   })).then((response) => response.json());
 }
+
+const stacks = new WeakMap();
+const stackOf = (t) => stacks.get(t);
 
 async function aiCard() {
   const list = await (await integrationsRoute.GET(new Request('http://localhost/integrations'))).json();
@@ -433,13 +447,16 @@ test('yapılandırılmış dosya kaydı okunmadan bileşen sağlıklı görünme
     models: [{ id: 'hizli-model', capabilities: ['chat'] }],
     profiles: { 'chat.fast': { model: 'hizli-model' } }
   }), 'utf8');
-  createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  stacks.set(t, createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } }));
   adminReset(t);
   recordProviderCall({ operation: 'ai.provider.models', latencyMs: 5 });
   const idle = await overviewAi();
   assert.equal(idle.ai.state, HEALTH_STATES.UNKNOWN, 'taze temas, okunmamış kaydı sağlıklı göstermez');
   assert.match(idle.ai.message, /Model kaydı henüz yüklenmedi/);
 
+  const { provider } = stackOf(t);
+  // Uç, kayıttaki `chat.fast` modelini listeler.
+  provider.enqueue({ type: 'reply', models: ['hizli-model'] });
   const tested = await postIntegrationTest('ai-provider');
   assert.equal(tested.result.ok, true);
   const ready = await overviewAi();
@@ -523,7 +540,8 @@ test('olağan istekte reddedilen kurumsal anahtar uyarıdır; kişisel anahtarı
 });
 
 test('aynı milisaniyede önce başarı sonra hata kaydedilirse son sonuç hatadır', async (t) => {
-  createAiStack(t);
+  // Yalnızca kurumsal anahtar: kişisel anahtar tablosunun doğrulanması bu sınamanın konusu değildir.
+  createAiStack(t, { env: { MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: null } });
   adminReset(t);
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-24T10:00:00.000Z') });
   recordProviderCall({ operation: 'ai.provider.chat', latencyMs: 5 });
@@ -575,7 +593,7 @@ test('araç istenmeyen deneme isteğine metinsiz yanıt geçersiz sağlayıcı y
 });
 
 test('bayat sağlayıcı hatası süreç ömrü boyunca uyarı olarak kalmaz', async (t) => {
-  createAiStack(t);
+  createAiStack(t, { env: { MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: null } });
   adminReset(t);
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-24T10:00:00.000Z') });
   recordProviderCall({ operation: 'ai.provider.chat', latencyMs: 5, code: 'AI_PROVIDER_UNAVAILABLE' });
@@ -595,4 +613,225 @@ test('geçersiz kurumsal anahtar "anahtar yok" sayılıp anahtarsız sınanmaz; 
   assert.equal(result.result.ok, false);
   assert.equal(result.result.code, 'DEFAULT_KEY_INVALID');
   assert.equal(provider.calls.length, 0, 'anahtarsız istek gönderilmez');
+});
+
+/* ── İnceleme düzeltmeleri: sağlık, bağlantı testi, yük ölçümü ── */
+
+const { sampleAiLoad } = await import('../src/server/ai/aiRuntime.js');
+const { snapshotGauges } = await import('../src/server/observability/telemetryRegistry.js');
+
+function postIntegration(integrationId, { headers = {}, signal } = {}) {
+  return integrationsRoute.POST(new Request('http://localhost/integrations', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify({ integrationId }),
+    ...(signal ? { signal } : {})
+  }));
+}
+
+test('kişisel anahtarla yapılan başarılı istek kurumsal anahtarın reddini gizlemez', async (t) => {
+  const { provider, useSicil } = createAiStack(t);
+  adminReset(t);
+  // B kurumsal anahtarla çalışır ve anahtar reddedilir.
+  useSicil(SICIL_B);
+  provider.enqueue({ type: 'status', status: 401 });
+  assert.equal((await runProbe()).body.error.code, 'AI_KEY_INVALID');
+  // A kişisel anahtarla başarılı olur: sağlayıcıya erişim var, sorun sürüyor.
+  useSicil(SICIL_A);
+  await saveKey(PERSONAL_KEY_A);
+  assert.equal((await runProbe()).status, 200);
+  const masked = await overviewAi();
+  assert.equal(masked.ai.state, HEALTH_STATES.WARNING);
+  assert.match(masked.ai.message, /Kurumsal anahtar son kullanımında reddedildi \(AI_KEY_INVALID\)/);
+  // Yalnızca kurumsal anahtarla yapılan başarılı çağrı uyarıyı kaldırır.
+  useSicil(SICIL_B);
+  const recovered = await runProbe();
+  assert.equal(recovered.status, 200, JSON.stringify(recovered.body));
+  useSicil(SICIL_A);
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
+});
+
+test('boşta bekleyen isteğe bağlı yapay zekâ bileşeninin "bilinmiyor" durumu genel başlığı düşürmez', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  const idle = await overviewAi();
+  assert.equal(idle.ai.state, HEALTH_STATES.UNKNOWN, 'bileşen listede görünür kalır');
+  const others = idle.body.components.filter((component) => component.key !== COMPONENTS.AI && component.state !== HEALTH_STATES.NOT_CONFIGURED);
+  const { aggregateHealthState } = await import('../src/domain/observability/healthModel.js');
+  assert.equal(idle.body.state, aggregateHealthState(others), 'başlık yalnızca öteki bileşenlerden türetilir');
+  // Uyarı ise başlığa yansır.
+  provider.enqueue({ type: 'status', status: 503 });
+  await runProbe();
+  const warned = await overviewAi();
+  assert.equal(warned.ai.state, HEALTH_STATES.WARNING);
+  assert.notEqual(warned.body.state, HEALTH_STATES.HEALTHY);
+});
+
+test('kişisel anahtar saklama açıkken tablo, kurumsal anahtar tanımlı olsa da doğrulanır', async (t) => {
+  const { db } = createAiStack(t);
+  adminReset(t);
+  db.aiCredentialSchemaMissing = true;
+  const tested = await (await postIntegration('ai-provider')).json();
+  assert.equal(tested.result.ok, false);
+  assert.equal(tested.result.code, 'CREDENTIAL_SCHEMA_MISSING');
+  assert.match(tested.result.message, /kişisel anahtarlar kaydedilemez/);
+  const { ai } = await overviewAi();
+  assert.equal(ai.state, HEALTH_STATES.WARNING);
+  assert.match(ai.message, /kişisel anahtar kaydedilemiyor, istekler yalnızca kurumsal anahtarla/);
+});
+
+test('bağlantı testi yapılandırma sorunlarını, herkese açık model listesini ve eksik sınama modelini başarı saymaz', async (t) => {
+  const { provider, setEnv } = createAiStack(t, { env: { MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: 'çok' } });
+  adminReset(t);
+  const invalid = await (await postIntegration('ai-provider')).json();
+  assert.equal(invalid.result.ok, false);
+  assert.equal(invalid.result.code, 'CONFIGURATION_INVALID');
+
+  setEnv({ MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: null });
+  // Anahtarsız istek de listeyi alıyor: kurumsal anahtar bu testle doğrulanamaz.
+  provider.enqueue({ type: 'reply' }, { type: 'reply' });
+  const open = await (await postIntegration('ai-provider')).json();
+  assert.equal(open.result.ok, false);
+  assert.equal(open.result.code, 'DEFAULT_KEY_UNVERIFIED');
+  assert.equal((await overviewAi()).ai.state === HEALTH_STATES.HEALTHY, false, 'doğrulanamayan anahtar sağlıklı temas sayılmaz');
+
+  // Uç yanıt veriyor ama `chat.fast` modeli listede yok.
+  provider.enqueue({ type: 'reply', models: ['baska-model'] });
+  const missing = await (await postIntegration('ai-provider')).json();
+  assert.equal(missing.result.code, 'PROBE_MODEL_MISSING');
+  assert.match(missing.result.message, /Qwen3-Next-80B-A3B-Instruct/);
+  const { ai } = await overviewAi();
+  assert.equal(ai.state, HEALTH_STATES.WARNING);
+});
+
+test('chat.fast profili kapatılmışsa sağlayıcı yanıt verse de bileşen sağlıklı değildir', async (t) => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-profile-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'ai-models.json');
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    models: [{ id: 'hizli-model', capabilities: ['chat'] }],
+    profiles: { 'chat.fast': { model: 'hizli-model', enabled: false }, 'chat.general': { model: 'hizli-model' } }
+  }), 'utf8');
+  const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  adminReset(t);
+  provider.enqueue({ type: 'reply', models: ['hizli-model'] });
+  const tested = await (await postIntegration('ai-provider')).json();
+  assert.equal(tested.result.ok, false);
+  assert.equal(tested.result.code, 'PROBE_PROFILE_UNAVAILABLE');
+  const { ai } = await overviewAi();
+  assert.equal(ai.state, HEALTH_STATES.WARNING);
+  assert.match(ai.message, /Hızlı sohbet profili \(chat\.fast\) kullanılamıyor/);
+});
+
+test('bağlantı testinin tamamı tek süre sınırındadır; bildirilen süre kurulum doğrulamasını kapsar', async (t) => {
+  const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_DEFAULT_API_KEY: null } });
+  adminReset(t);
+  // Kurulum doğrulaması (şema denetimi) gerçek zamanda yavaş.
+  let release;
+  db.queryBarrier = { match: (sql) => sql.includes('AS SchemaReady'), entered: 0, released: new Promise((resolve) => { release = resolve; }) };
+  const pending = postIntegration('ai-provider');
+  await until(() => db.queryBarrier.entered === 1);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  release();
+  const slow = await (await pending).json();
+  assert.equal(slow.result.ok, true);
+  assert.ok(slow.result.durationMs >= 50, `kurulum doğrulaması süreye dâhildir: ${slow.result.durationMs}`);
+
+  // Sağlayıcı bütçenin çoğunu harcarsa şema denetimi YENİ bir süre almaz.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  db.queryBarrier = { match: (sql) => sql.includes('AS SchemaReady'), entered: 0, released: new Promise(() => {}) };
+  provider.enqueue({ type: 'delay', ms: 5000 });
+  const budgeted = postIntegration('ai-provider');
+  await provider.waitForActive(1);
+  t.mock.timers.tick(5000);
+  await until(() => db.queryBarrier.entered === 1);
+  t.mock.timers.tick(1000);
+  const timedOut = await (await budgeted).json();
+  assert.equal(timedOut.result.ok, false);
+  assert.equal(timedOut.result.code, 'PROBE_TIMEOUT');
+  db.queryBarrier = null;
+});
+
+test('yönetici isteği kesilince yapay zekâ bağlantı testi iptal edilir, sonuç yazılmaz ve kilit bırakılır', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  provider.enqueue({ type: 'stall' });
+  const client = new AbortController();
+  const pending = postIntegration('ai-provider', { signal: client.signal });
+  await provider.waitForActive(1);
+  client.abort();
+  const cancelled = await (await pending).json();
+  assert.equal(cancelled.result.code, 'PROBE_CANCELLED');
+  assert.equal(provider.calls[0].aborted, true, 'kurumsal anahtarlı sağlayıcı isteği kesilir');
+  assert.equal((await aiCard()).lastFailureAt, null, 'iptal bağlantı sonucu olarak kaydedilmez');
+  const retried = await (await postIntegration('ai-provider')).json();
+  assert.equal(retried.result.ok, true, 'süreç içi kilit hemen bırakılır');
+});
+
+test('bağlantı testi aynı sitedeki kardeş kaynaktan tetiklenemez', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  for (const headers of [{ origin: 'https://kardes.example.internal' }, { 'sec-fetch-site': 'same-site' }]) {
+    const response = await postIntegration('ai-provider', { headers: { ...headers, 'content-type': 'text/plain' } });
+    assert.equal(response.status, 403, JSON.stringify(headers));
+  }
+  assert.equal(provider.calls.length, 0, 'kurumsal anahtarlı çağrı yapılmaz');
+  assert.equal((await postIntegration('ai-provider', { headers: { origin: 'http://localhost' } })).status, 200);
+});
+
+test('yapay zekâ yükü telemetri turunun ritminde, boştayken sıfır olarak örneklenir; kapalıyken yazılmaz', async (t) => {
+  const { setEnv } = createAiStack(t);
+  const at = Date.now();
+  sampleAiLoad(at);
+  sampleAiLoad(at + 1);
+  const gauges = snapshotGauges({ sinceMs: at - 60000 });
+  const active = gauges.filter((row) => row.metricKey === 'ai.active_requests');
+  assert.equal(active.reduce((sum, row) => sum + row.count, 0), 2, 'çalışma zamanı kurulmadan da örneklenir');
+  assert.ok(active.every((row) => row.max === 0));
+  resetTelemetryRegistryForTests();
+  setEnv({ MERGEN_ROTA_AI_ENABLED: 'false' });
+  sampleAiLoad(at + 2);
+  assert.equal(snapshotGauges({ sinceMs: at - 60000 }).filter((row) => row.metricKey.startsWith('ai.')).length, 0);
+});
+
+test('kira öncesi rehber denetimi ortak SQL havuzunda sınırlı eşzamanlılıkla çalışır', async (t) => {
+  const { db, provider, useSicil } = createAiStack(t);
+  let release;
+  db.queryBarrier = {
+    match: (sql) => sql.includes('MR_V_PeopleDirectory') && !sql.includes('MR_AiUserCredentials'),
+    entered: 0,
+    released: new Promise((resolve) => { release = resolve; })
+  };
+  const requests = [];
+  for (const sicil of [SICIL_A, SICIL_B, SICIL_A]) {
+    useSicil(sicil);
+    requests.push(runProbe());
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await until(() => db.queryBarrier.entered === 2);
+  for (let round = 0; round < 20; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(db.queryBarrier.entered, 2, 'en fazla iki rehber sorgusu aynı anda havuzu kullanır');
+  db.queryBarrier = null;
+  release();
+  for (const response of await Promise.all(requests)) assert.equal(response.status, 200);
+  assert.equal(provider.calls.length, 3);
+});
+
+test('bileşenin "son başarılı işlem" anı sağlayıcıya erişim değil, uçtan uca başarılı istektir', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'status', status: 401 });
+  assert.equal((await runProbe()).body.error.code, 'AI_KEY_INVALID');
+  const rejected = await overviewAi();
+  assert.ok(rejected.ai.detail.telemetry.provider.lastContactAt, 'sağlayıcıya erişildi');
+  assert.equal(rejected.ai.lastSuccessAt, null, 'reddedilen istek başarılı işlem olarak gösterilmez');
+  assert.equal((await runProbe()).status, 200);
+  const succeeded = await overviewAi();
+  assert.equal(succeeded.ai.lastSuccessAt, succeeded.ai.detail.telemetry.lastSuccessAt);
+  assert.ok(succeeded.ai.lastSuccessAt);
 });

@@ -1,5 +1,6 @@
 import {
   AI_CREDENTIAL_SOURCES,
+  AI_CREDENTIAL_UNREADABLE_REASONS,
   AI_CREDENTIAL_VALIDATION,
   credentialSourceLabel
 } from '../../domain/ai/aiCredentialPolicy.js';
@@ -26,15 +27,20 @@ const GENERIC_FAILURE = 'İşlem tamamlanamadı.';
 /** Sunucu yanıtı beklenirken payı; sunucu kendi süre sınırını her zaman önce uygular. */
 const CLIENT_MARGIN_MS = 5000;
 const VALIDATION_BUDGET_MS = 15000;
-/** Sunucu bütçeyi bildirmediyse dosya kaydının okunma bütçesi de hesaba katılır. */
+/** Sunucu bütçeyi bildirmediyse kira öncesi rehber denetimi ve dosya kaydının okunması da hesaba katılır. */
+const DIRECTORY_PREFLIGHT_BUDGET_MS = 5000;
 const REGISTRY_READ_BUDGET_MS = 5000;
 const FALLBACK_TIMEOUTS = Object.freeze({ queueTimeoutMs: 20000, requestTimeoutMs: 90000 });
+/** Sonucu bilinmeyen (süre aşımı ya da ağ kesintisi) anahtar kaydı/kaldırması. */
+const AMBIGUOUS_MUTATION_CODES = new Set(['REQUEST_TIMEOUT', 'NETWORK']);
 
 const PROBE_UNAVAILABLE_MESSAGES = Object.freeze({
   [AI_PROFILE_RESOLUTION_FAILURES.PROFILE_NOT_CONFIGURED]: 'Hızlı sohbet profili bu kurulumda tanımlı değil; deneme isteği gönderilemez.',
   [AI_PROFILE_RESOLUTION_FAILURES.PROFILE_DISABLED]: 'Hızlı sohbet profili bu kurulumda kapalı; deneme isteği gönderilemez.',
   [AI_PROFILE_RESOLUTION_FAILURES.MODEL_UNAVAILABLE]: 'Hızlı sohbet profilinin modeli kapalı; deneme isteği gönderilemez.',
-  MODEL_REGISTRY_INVALID: 'Model kaydı okunamadı; deneme isteği gönderilemez. Sistem yöneticinize başvurun.'
+  MODEL_REGISTRY_INVALID: 'Model kaydı okunamadı; deneme isteği gönderilemez. Sistem yöneticinize başvurun.',
+  CONTEXT_TOO_SMALL: 'Hızlı sohbet profilinin modelinin bağlam penceresi sabit deneme isteğine yetmiyor; deneme isteği gönderilemez.',
+  CAPABILITY_MISMATCH: 'Hızlı sohbet profilinin modeli sohbet yeteneği taşımıyor; deneme isteği gönderilemez.'
 });
 
 /**
@@ -53,10 +59,19 @@ export function aiFailureMessage(response) {
   return isAiErrorCode(code) ? aiErrorMessage(code) : GENERIC_FAILURE;
 }
 
-/** Kurumsal anahtara dönüş ancak yapılandırma kullanılabilir ve anahtar tanımlıysa vaat edilir. */
-function corporateFallbackAvailable(status) {
-  return Boolean(status?.available && status.defaultKeyConfigured);
+/**
+ * Kurumsal anahtara dönüşün durumu. Anahtar SEÇİMİ yalnızca yapılandırmaya ve
+ * anahtarın tanımlı olmasına bağlıdır; isteklerin gerçekten ÇALIŞACAĞI ise
+ * model kaydı ve sınama profili de kullanılabiliyorsa vaat edilir:
+ * `ready` (vaat edilir), `blocked` (anahtar seçilir ama yapılandırma şu anda
+ * kullanılamıyor) ya da `none`.
+ */
+function corporateFallback(status) {
+  if (!status?.available || !status.defaultKeyConfigured) return 'none';
+  return status.probe?.available === true ? 'ready' : 'blocked';
 }
+
+const RUNTIME_BLOCKED = 'ancak yapay zekâ yapılandırması (model kaydı) şu anda kullanılamıyor.';
 
 /** Başlıktaki durum çipi: hangi anahtarın kullanılacağını tek bakışta söyler. */
 export function aiAccessChip(status) {
@@ -70,18 +85,30 @@ export function aiAccessChip(status) {
 
 /** Kişisel anahtar yokken kullanıcıya ne olacağını anlatan cümle. */
 export function missingKeyDescription(status) {
-  if (!status?.personalKeysSupported) {
-    return corporateFallbackAvailable(status)
-      ? 'Kişisel anahtar saklama bu kurulumda etkin değil; istekler kurumsal anahtarla yapılır.'
-      : 'Kişisel anahtar saklama bu kurulumda etkin değil.';
+  const fallback = corporateFallback(status);
+  // Saklama yapılandırılmış ama tablo (0016) yok: bilinçli kapatma değil, eksik kurulum.
+  if (status?.personalKeysConfigured && status.schemaReady === false) {
+    const base = 'Kişisel anahtar tablosu kurulmamış (veritabanı göçü 0016 eksik); kişisel anahtar kaydedilemiyor. Sistem yöneticinize başvurun.';
+    if (fallback === 'ready') return `${base} İstekler şimdilik kurumsal anahtarla yapılır.`;
+    if (fallback === 'blocked') return `${base} Kurumsal anahtar seçilir; ${RUNTIME_BLOCKED}`;
+    return base;
   }
-  return corporateFallbackAvailable(status)
-    ? 'Tanımlı değil. İstekleriniz kurumsal varsayılan anahtarla yapılır.'
-    : 'Tanımlı değil. Yapay zekâ özelliklerini kullanmak için kişisel anahtarınızı ekleyin.';
+  if (!status?.personalKeysSupported) {
+    if (fallback === 'ready') return 'Kişisel anahtar saklama bu kurulumda etkin değil; istekler kurumsal anahtarla yapılır.';
+    if (fallback === 'blocked') return `Kişisel anahtar saklama bu kurulumda etkin değil; kurumsal anahtar seçilir ${RUNTIME_BLOCKED}`;
+    return 'Kişisel anahtar saklama bu kurulumda etkin değil.';
+  }
+  if (fallback === 'ready') return 'Tanımlı değil. İstekleriniz kurumsal varsayılan anahtarla yapılır.';
+  if (fallback === 'blocked') return `Tanımlı değil. Kurumsal varsayılan anahtar seçilir; ${RUNTIME_BLOCKED}`;
+  return 'Tanımlı değil. Yapay zekâ özelliklerini kullanmak için kişisel anahtarınızı ekleyin.';
 }
 
 export function removalConsequence(status) {
-  if (corporateFallbackAvailable(status)) return 'Kaldırıldıktan sonra istekleriniz kurumsal varsayılan anahtarla yapılır.';
+  // Özellik kapalıyken anahtar eklenemez ve eklenen anahtar özelliği açmaz.
+  if (status && !status.enabled) return 'Yapay zekâ özellikleri bu kurulumda kapalı; anahtar kaldırılır ve özellikler kapalı kalır.';
+  const fallback = corporateFallback(status);
+  if (fallback === 'ready') return 'Kaldırıldıktan sonra istekleriniz kurumsal varsayılan anahtarla yapılır.';
+  if (fallback === 'blocked') return `Kaldırıldıktan sonra kurumsal varsayılan anahtar seçilir; ${RUNTIME_BLOCKED}`;
   if (status?.enabled && !status.available) {
     return 'Kaldırıldıktan sonra da yapay zekâ, yapılandırma düzeltilene kadar kullanılamaz.';
   }
@@ -91,21 +118,30 @@ export function removalConsequence(status) {
 /**
  * Kayıtlı kişisel anahtarın kullanılamadığı durumun açıklaması; kullanılıyorsa `null`.
  *
- * Ana anahtar değiştiyse kayıt çözülemez; kişisel anahtar kullanımı
- * kapatıldıysa (ana anahtar tanımsız) kayıt yok sayılır.
+ * Kişisel anahtar kullanımı kapatıldıysa (ana anahtar tanımsız) kayıt yok
+ * sayılır; ana anahtar değiştiyse kayıt çözülemez ve yeniden kaydedilmelidir.
  */
 export function storedKeyNotice(status) {
   const credential = status?.credential;
   if (!credential?.configured || !status?.enabled) return null;
-  if (credential.readable === false) {
-    return 'Kayıtlı anahtar okunamıyor (sunucunun şifreleme anahtarı değişti). Anahtarı yeniden kaydedin.';
-  }
-  if (status.available && status.schemaReady !== false && !status.personalKeysSupported) {
-    return corporateFallbackAvailable(status)
+  if (credential.readable !== false) return null;
+  if (credential.unreadableReason === AI_CREDENTIAL_UNREADABLE_REASONS.PERSONAL_KEYS_DISABLED) {
+    return corporateFallback(status) === 'ready'
       ? 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor, istekler kurumsal anahtarla yapılır.'
       : 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor.';
   }
-  return null;
+  return 'Kayıtlı anahtar okunamıyor (sunucunun şifreleme anahtarı değişti). Anahtarı yeniden kaydedin.';
+}
+
+/** Anahtar kaydı ya da kaldırması sonucu bilinmeden mi bitti (süre aşımı, ağ)? */
+export function isAmbiguousMutation(response) {
+  return AMBIGUOUS_MUTATION_CODES.has(String(response?.code ?? ''));
+}
+
+/** Sonucu bilinmeyen işlemden sonra güncel durum yeniden okunur; kullanıcıya bunu söyler. */
+export function ambiguousMutationNotice(action) {
+  const subject = action === 'remove' ? 'Anahtarın kaldırılıp kaldırılmadığı' : 'Anahtarın kaydedilip kaydedilmediği';
+  return { tone: 'warn', text: `Sunucudan süre sınırında yanıt alınamadı. ${subject} doğrulanamadı; güncel durum yeniden yüklendi.` };
 }
 
 export function formatAiTimestamp(value) {
@@ -148,14 +184,18 @@ export function validationNotice(validation) {
 }
 
 export function probeSummary(result) {
-  const model = String(result?.model || '—');
+  const reported = result?.model ? String(result.model) : null;
   const configured = result?.configuredModel ? String(result.configuredModel) : null;
   return {
     source: credentialSourceLabel(result?.credentialSource),
     profile: aiProfileLabel(result?.profile),
-    model,
-    // Ağ geçidi isteği başka bir modele yönlendirdiyse bu açıkça görünür.
-    configuredModel: configured && configured !== model ? configured : null,
+    // Yalnızca sağlayıcının bildirdiği model "yanıtlayan" sayılır; bildirilmediyse
+    // yapılandırılan model onun yerine yazılmaz.
+    model: reported ?? 'Sağlayıcı bildirmedi',
+    modelReported: reported != null,
+    // Ağ geçidi isteği başka bir modele yönlendirdiyse ya da yanıtlayan model
+    // bilinmiyorsa yapılandırılan model ayrıca görünür.
+    configuredModel: configured && configured !== reported ? configured : null,
     duration: formatAiSeconds(result?.durationMs),
     queueWait: Number(result?.queueWaitMs) > 0 ? formatAiSeconds(result.queueWaitMs) : null
   };
@@ -174,20 +214,27 @@ export function probeTimeoutMs(status) {
   const budget = Number(status?.probe?.budgetMs);
   if (Number.isFinite(budget) && budget > 0) return budget + CLIENT_MARGIN_MS;
   const { queueTimeoutMs, requestTimeoutMs } = timeoutsOf(status);
-  return REGISTRY_READ_BUDGET_MS + queueTimeoutMs + requestTimeoutMs + CLIENT_MARGIN_MS;
+  return DIRECTORY_PREFLIGHT_BUDGET_MS + REGISTRY_READ_BUDGET_MS + queueTimeoutMs + requestTimeoutMs + CLIENT_MARGIN_MS;
 }
 
+/** Doğrulamanın bütçesi (rehber denetimi + sıra + doğrulama) sunucudan gelir; bilinmiyorsa en kötü durum varsayılır. */
 export function validationTimeoutMs(status) {
+  const budget = Number(status?.timeouts?.validationBudgetMs);
+  if (Number.isFinite(budget) && budget > 0) return budget + CLIENT_MARGIN_MS;
   const { queueTimeoutMs, requestTimeoutMs } = timeoutsOf(status);
-  return queueTimeoutMs + Math.min(VALIDATION_BUDGET_MS, requestTimeoutMs) + CLIENT_MARGIN_MS;
+  return DIRECTORY_PREFLIGHT_BUDGET_MS + queueTimeoutMs + Math.min(VALIDATION_BUDGET_MS, requestTimeoutMs) + CLIENT_MARGIN_MS;
 }
 
-/** Sınama yalnızca kullanılabilir bir anahtar ve çözülebilen `chat.fast` profili varken açılır. */
+/**
+ * Sınama yalnızca kullanılabilir bir anahtar ve çözülebildiği sunucuca
+ * BİLDİRİLMİŞ `chat.fast` profili varken açılır; eksik alan kapalı sayılır.
+ */
 export function canRunAiProbe(status) {
+  const source = status?.effectiveSource;
   return Boolean(status?.available)
-    && status.effectiveSource !== AI_CREDENTIAL_SOURCES.MISSING
-    && status.probe?.available !== false
-    && !(status.effectiveSource === AI_CREDENTIAL_SOURCES.PERSONAL && status.credential?.readable === false);
+    && (source === AI_CREDENTIAL_SOURCES.PERSONAL || source === AI_CREDENTIAL_SOURCES.DEFAULT)
+    && status.probe?.available === true
+    && !(source === AI_CREDENTIAL_SOURCES.PERSONAL && status.credential?.readable !== true);
 }
 
 /** Sınama profile bağlı bir nedenle kapalıysa açıklaması; değilse `null`. */

@@ -12,6 +12,7 @@ import { startFakeOpenAiCompatibleServer } from './helpers/fakeOpenAiCompatibleS
 import { DEFAULT_KEY, PERSONAL_KEY_A, PERSONAL_KEY_B, captureConsole, createAiStack, runProbe, saveKey, validateKey } from './helpers/aiStack.mjs';
 
 const {
+  classifyNetworkFailure,
   classifyProviderStatus,
   createOpenAiCompatibleProvider,
   isConnectFailure,
@@ -116,7 +117,8 @@ test('iptal süren isteği sağlayıcı tarafında da kapatır', async (t) => {
   server.setScenario({ stall: true });
   const controller = new AbortController();
   const pending = chat(createOpenAiCompatibleProvider(), server, { signal: controller.signal });
-  while (server.state.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+  // Sınırlı bekleme: istek sağlayıcıya hiç ulaşmazsa test askıda kalmaz, düşer.
+  await server.waitForRequests(1);
   controller.abort(new Error('istemci ayrıldı'));
   await assert.rejects(pending, /istemci ayrıldı/);
   await server.waitForClosedRequests(1);
@@ -124,10 +126,10 @@ test('iptal süren isteği sağlayıcı tarafında da kapatır', async (t) => {
 });
 
 test('model listesi HTTP durumunu ve Retry-After değerini döndürür; hata gövdesi okunmaz', async (t) => {
-  const server = await fakeServer(t, { validKeys: [PERSONAL_KEY_A] });
+  const server = await fakeServer(t, { validKeys: [PERSONAL_KEY_A], models: ['fake-model'] });
   const provider = createOpenAiCompatibleProvider();
   const signal = new AbortController().signal;
-  assert.deepEqual(await provider.listModels({ baseUrl: server.baseUrl, apiKey: PERSONAL_KEY_A, signal }), { status: 200, retryAfter: null });
+  assert.deepEqual(await provider.listModels({ baseUrl: server.baseUrl, apiKey: PERSONAL_KEY_A, signal }), { status: 200, retryAfter: null, models: ['fake-model'] });
   assert.deepEqual(await provider.listModels({ baseUrl: server.baseUrl, apiKey: DEFAULT_KEY, signal }), { status: 401, retryAfter: null });
   assert.deepEqual(await provider.listModels({ baseUrl: server.baseUrl, signal }), { status: 401, retryAfter: null });
   assert.equal(server.state.requests[2].bearer, '', 'anahtar yoksa Authorization gönderilmez');
@@ -143,6 +145,14 @@ test('yanıt iletisi assistant rolünde değilse (isteği yankılayan vekil) ge�
       (error) => error.code === 'AI_PROVIDER_RESPONSE_INVALID' && error.details.reason === 'INVALID_ROLE');
   }
   assert.equal(parseChatCompletion({ choices: [{ message: { role: 'assistant', content: 'Merhaba.' } }] }).text, 'Merhaba.');
+});
+
+test('yanıtta model kimliği yoksa ya da boşsa yanıtlayan model bilinmez (null) kalır', () => {
+  const reply = { choices: [{ message: { role: 'assistant', content: 'Merhaba.' } }] };
+  for (const model of [undefined, null, '', '   ', 42]) {
+    assert.equal(parseChatCompletion({ ...reply, model }).model, null, String(model));
+  }
+  assert.equal(parseChatCompletion({ ...reply, model: ' yedek-model ' }).model, 'yedek-model');
 });
 
 test('200 dönen ama model listesi olmayan yanıt (yanlış uçtaki HTML sayfası) kabul edilmez', async (t) => {
@@ -194,7 +204,7 @@ test('uçtan uca doğrulama: anahtarı denetleyen uçta VALID; anahtarsız da ya
   assert.equal(valid.body.validation.status, 'VALID');
   assert.deepEqual(guarded.state.requests.map((request) => request.bearer), [PERSONAL_KEY_A, '']);
 
-  const open = await fakeServer(t);
+  const open = await fakeServer(t, { publicModels: true });
   setEnv({ MERGEN_ROTA_AI_BASE_URL: open.baseUrl });
   await saveKey(PERSONAL_KEY_B);
   const unauthenticated = await validateKey();
@@ -216,10 +226,50 @@ test('istemci bağlantıyı kesince uçtan uca istek sağlayıcıda da kapanır 
   setAiProviderForTests(null);
   const client = new AbortController();
   const pending = runProbe({ signal: client.signal });
-  while (server.state.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+  await server.waitForRequests(1);
   client.abort();
   const cancelled = await pending;
   assert.equal(cancelled.status, 499);
   assert.equal(cancelled.body.error.code, 'AI_CANCELLED');
   await server.waitForClosedRequests(1);
+});
+
+/* ── İnceleme düzeltmeleri ─────────────────────────────────── */
+
+test('boş model listesi ya da boş kimlikli girdiler kullanılabilir uç sayılmaz', async () => {
+  const provider = (body) => createOpenAiCompatibleProvider({
+    fetchImpl: async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  });
+  const signal = new AbortController().signal;
+  for (const body of [{ data: [] }, { data: [{ id: '' }] }, { data: [{ id: '   ' }, { id: '' }] }, { data: [{ id: 'm' }, { name: 'kimliksiz' }] }]) {
+    await assert.rejects(provider(body).listModels({ baseUrl: 'http://127.0.0.1:9/v1', apiKey: PERSONAL_KEY_A, signal }),
+      (error) => error.code === 'AI_PROVIDER_RESPONSE_INVALID' && error.details.reason === 'MODEL_LIST_INVALID', JSON.stringify(body));
+  }
+  const listed = await provider({ data: [{ id: ' hizli-model ' }, { id: '' }, { id: 'derin-model' }] })
+    .listModels({ baseUrl: 'http://127.0.0.1:9/v1', apiKey: PERSONAL_KEY_A, signal });
+  assert.deepEqual(listed.models, ['hizli-model', 'derin-model']);
+});
+
+test('bağlantı kurulmadan oluşan bütün ağ hataları tek güvenli yinelemeye uygundur; bağlantı sonrası belirsiz hatalar değildir', () => {
+  const failure = (code) => classifyNetworkFailure({ cause: { code } });
+  for (const code of ['ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'EAI_AGAIN', 'ENOTFOUND', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'EHOSTDOWN', 'EADDRNOTAVAIL']) {
+    assert.equal(isConnectFailure(failure(code)), true, code);
+  }
+  for (const code of ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET']) {
+    assert.equal(isConnectFailure(failure(code)), false, code);
+  }
+});
+
+test('sahte ağ geçidi varsayılan olarak anahtarsız isteği reddeder; herkese açık liste açıkça seçilir', async (t) => {
+  const guarded = await fakeServer(t);
+  const provider = createOpenAiCompatibleProvider();
+  const signal = new AbortController().signal;
+  assert.equal((await provider.listModels({ baseUrl: guarded.baseUrl, apiKey: PERSONAL_KEY_B, signal })).status, 200, 'boş olmayan her anahtar kabul edilir');
+  assert.equal((await provider.listModels({ baseUrl: guarded.baseUrl, signal })).status, 401);
+  const open = await fakeServer(t, { publicModels: true });
+  assert.equal((await provider.listModels({ baseUrl: open.baseUrl, signal })).status, 200);
+  // Varsayılan liste depodaki kurum içi katalogun modellerini de taşır.
+  assert.ok((await provider.listModels({ baseUrl: guarded.baseUrl, apiKey: PERSONAL_KEY_B, signal })).models.includes('Qwen3-Next-80B-A3B-Instruct'));
+  // Kapanmayan bağlantı beklemesi sınırlıdır: gerileme testi askıda bırakmaz.
+  await assert.rejects(guarded.waitForClosedRequests(1, { limitMs: 50 }), /kapanmadı: kapanan 0, beklenen 1/);
 });

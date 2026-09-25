@@ -32,7 +32,8 @@ function statusFixture(overrides = {}) {
     schemaReady: true,
     effectiveSource: 'default',
     credential: { configured: false },
-    timeouts: { queueTimeoutMs: 20000, requestTimeoutMs: 90000 },
+    timeouts: { queueTimeoutMs: 20000, requestTimeoutMs: 90000, validationBudgetMs: 40000 },
+    probe: { available: true, reason: null, timeoutMs: 90000, budgetMs: 115000 },
     ...overrides
   };
 }
@@ -42,6 +43,7 @@ function personalStatus(credential = {}, overrides = {}) {
     effectiveSource: 'personal',
     credential: {
       configured: true,
+      readable: true,
       hint: 'Vx9b',
       updatedAt: '2026-09-20T08:30:00.000Z',
       lastValidatedAt: null,
@@ -55,15 +57,23 @@ function personalStatus(credential = {}, overrides = {}) {
 /**
  * Yapay zekâ uçlarının ikizi. Yanıtlar kuyruğa alınır; `defer` ile verilen
  * yanıt test çözene kadar askıda kalır ve (gerçek fetch gibi) iptal edilince
- * AbortError ile reddedilir.
+ * AbortError ile reddedilir; `fail` ağ hatası üretir. Kuyrukta karşılığı
+ * olmayan istek kaydedilir ve test sonunda başarısızlıktır: `requestJson`
+ * fırlatan fetch'i ağ hatasına çevirdiği için beklenmeyen istek aksi hâlde
+ * gözden kaçabilirdi.
  */
 function stubAiServer(t) {
   const previous = globalThis.fetch;
   const calls = [];
+  const unexpected = [];
   const queued = new Map();
   const reply = (route, body, status = 200) => {
     if (!queued.has(route)) queued.set(route, []);
     queued.get(route).push({ body, status });
+  };
+  const fail = (route) => {
+    if (!queued.has(route)) queued.set(route, []);
+    queued.get(route).push({ error: new TypeError('fetch failed') });
   };
   const defer = (route, { honorAbort = true } = {}) => {
     const pending = {};
@@ -81,7 +91,11 @@ function stubAiServer(t) {
     const call = { url: String(url), path, method: init.method || 'GET', body: init.body ?? null, signal: init.signal };
     calls.push(call);
     const next = queued.get(`${call.method} ${path}`)?.shift();
-    assert.ok(next, `beklenmeyen istek: ${call.method} ${path}`);
+    if (!next) {
+      unexpected.push(`${call.method} ${path}`);
+      throw new Error(`beklenmeyen istek: ${call.method} ${path}`);
+    }
+    if (next.error) throw next.error;
     if (!next.pending) return Response.json(next.body, { status: next.status });
     if (next.pending.honorAbort && init.signal) {
       const abort = () => next.pending.reject(new DOMException('İstek iptal edildi.', 'AbortError'));
@@ -90,8 +104,14 @@ function stubAiServer(t) {
     }
     return next.pending.promise;
   };
-  t.after(() => { globalThis.fetch = previous; });
-  return { calls, reply, defer };
+  t.after(() => {
+    try {
+      assert.deepEqual(unexpected, [], 'beklenmeyen istek yapılmamalıdır');
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+  return { calls, reply, defer, fail };
 }
 
 /** Tarayıcı depolarına hiç dokunulmadığını kanıtlamak için erişimi kaydeder. */
@@ -192,8 +212,16 @@ test('kullanılamayan kayıtlı anahtar dürüstçe anlatılır', () => {
   assert.equal(storedKeyNotice(personalStatus()), null);
   assert.match(storedKeyNotice(personalStatus({ readable: false })), /okunamıyor.*yeniden kaydedin/);
   // Ana anahtar kaldırıldıysa kayıtlı anahtar kullanılmaz; kurumsal anahtar kullanılır.
-  const disabled = personalStatus({}, { personalKeysSupported: false, effectiveSource: 'default' });
+  const disabled = personalStatus({ readable: false, unreadableReason: 'PERSONAL_KEYS_DISABLED' }, { personalKeysSupported: false, effectiveSource: 'default' });
   assert.match(storedKeyNotice(disabled), /kayıtlı anahtarınız kullanılmıyor, istekler kurumsal anahtarla/);
+  assert.doesNotMatch(storedKeyNotice(disabled), /şifreleme anahtarı değişti/, 'kapalı kullanım, değişen ana anahtar gibi anlatılmaz');
+  // Kurumsal anahtara dönüş yoksa ya da yapılandırma kullanılamıyorsa dönüş vaat edilmez.
+  const disabledUnavailable = personalStatus({ readable: false, unreadableReason: 'PERSONAL_KEYS_DISABLED' }, {
+    available: false, personalKeysSupported: false, effectiveSource: 'missing'
+  });
+  assert.match(storedKeyNotice(disabledUnavailable), /kayıtlı anahtarınız kullanılmıyor\.$/);
+  const rotated = personalStatus({ readable: false, unreadableReason: 'MASTER_KEY_CHANGED' });
+  assert.match(storedKeyNotice(rotated), /şifreleme anahtarı değişti/);
 });
 
 test('doğrulama özeti ve bildirimi üç kalıcı sonucu ayırır', () => {
@@ -286,6 +314,12 @@ test('deneme isteği yalnızca kullanılabilir bir anahtar varken açılır; öz
   // Ağ geçidi başka bir modele yönlendirdiyse yapılandırılan model ayrıca gösterilir.
   const rerouted = probeSummary({ model: 'yedek-model', configuredModel: 'hizli-model', durationMs: 10 });
   assert.deepEqual([rerouted.model, rerouted.configuredModel], ['yedek-model', 'hizli-model']);
+  // Sağlayıcı modeli bildirmediyse yapılandırılan model "yanıtlayan" diye gösterilmez.
+  const unreported = probeSummary({ model: null, configuredModel: 'hizli-model', durationMs: 10 });
+  assert.deepEqual(
+    [unreported.model, unreported.modelReported, unreported.configuredModel],
+    ['Sağlayıcı bildirmedi', false, 'hizli-model']
+  );
 });
 
 /* ── Kart davranışı ──────────────────────────────────────── */
@@ -488,7 +522,7 @@ test('başarılı deneme anahtar kaynağını, profili, modeli ve süreyi göste
   const view = await mountActual(t);
   server.reply('POST /probe', {
     ok: true,
-    result: { credentialSource: 'personal', profile: 'chat.fast', model: 'hizli-model', durationMs: 900, queueWaitMs: 1200, text: 'Merhaba.' }
+    result: { credentialSource: 'personal', profile: 'chat.fast', model: 'hizli-model', configuredModel: 'hizli-model', durationMs: 900, queueWaitMs: 1200, text: 'Merhaba.' }
   });
   findButton(view.output, 'Deneme isteği gönder').props.onClick();
   await settle(view);
@@ -525,11 +559,11 @@ test('yerine yenisi başlatılan denemenin geç gelen sonucu uygulanmaz', async 
   assert.equal(firstCall.signal.aborted, true);
   assert.equal(secondCall.signal.aborted, false);
 
-  second.resolve({ ok: true, result: { credentialSource: 'default', profile: 'chat.fast', model: 'ikinci-model', durationMs: 400 } });
+  second.resolve({ ok: true, result: { credentialSource: 'default', profile: 'chat.fast', model: 'ikinci-model', configuredModel: 'ikinci-model', durationMs: 400, text: 'İkinci.' } });
   await settle(view);
   assert.match(probeText(view.output), /ikinci-model/);
 
-  first.resolve({ ok: true, result: { credentialSource: 'default', profile: 'chat.fast', model: 'ilk-model', durationMs: 900 } });
+  first.resolve({ ok: true, result: { credentialSource: 'default', profile: 'chat.fast', model: 'ilk-model', configuredModel: 'ilk-model', durationMs: 900, text: 'İlk.' } });
   await settle(view);
   assert.match(probeText(view.output), /ikinci-model/);
   assert.equal(probeText(view.output).includes('ilk-model'), false);
@@ -635,7 +669,7 @@ test('Demo Kipine geçince kart sıfırlanır; süren isteklerin geç sonucu uyg
   assert.equal(text.includes('••••'), false, 'gerçek anahtar künyesi gösterilmez');
 
   // Önceki kipte başlamış isteklerin geç gelen sonuçları kartı geri getirmez.
-  probe.resolve({ ok: true, result: { credentialSource: 'personal', profile: 'chat.fast', model: 'gec-model', durationMs: 5 } });
+  probe.resolve({ ok: true, result: { credentialSource: 'personal', profile: 'chat.fast', model: 'gec-model', configuredModel: 'gec-model', durationMs: 5, text: 'Geç.' } });
   validation.resolve({ ok: true, validation: { status: 'VALID', stale: false, credential: { hint: 'Vx9b', lastValidationStatus: 'VALID' } } });
   await settle(view);
   text = textOf(view.output);
@@ -687,7 +721,7 @@ test('anahtar değişince süren denemenin sonucu yeni anahtara yazılmaz', asyn
   assert.equal(probeCall.signal.aborted, true, 'eski anahtarla süren deneme kesilir');
   assert.ok(hasButton(view.output, 'Deneme isteği gönder'), 'deneme yeniden başlatılabilir');
 
-  probe.resolve({ ok: true, result: { credentialSource: 'personal', profile: 'chat.fast', model: 'eski-anahtar-modeli', durationMs: 5 } });
+  probe.resolve({ ok: true, result: { credentialSource: 'personal', profile: 'chat.fast', model: 'eski-anahtar-modeli', configuredModel: 'eski-anahtar-modeli', durationMs: 5, text: 'Eski.' } });
   await settle(view);
   assert.equal(probeText(view.output), '', 'eski anahtarın geç sonucu gösterilmez');
 });
@@ -834,4 +868,322 @@ test('2xx ama beklenen biçimde olmayan yanıt kartı çökertmez ve başarı gi
   assert.doesNotMatch(textOf(view.output), /şifrelenerek kaydedildi/);
   assert.ok(findElement(view.output, (node) => node.type === 'input'));
   assert.match(textOf(findElement(view.output, (node) => node.props?.role === 'alert')), /beklenmeyen bir yanıt/);
+});
+
+/* ── İnceleme düzeltmeleri ─────────────────────────────────── */
+
+test('özellik kapalıyken kaldırma onayı anahtar eklemeyi bir çıkış yolu olarak göstermez', () => {
+  const { removalConsequence } = presentation;
+  const disabled = personalStatus({}, { enabled: false, available: false, personalKeysSupported: false, defaultKeyConfigured: false, effectiveSource: 'missing' });
+  const text = removalConsequence(disabled);
+  assert.match(text, /kapalı/);
+  assert.doesNotMatch(text, /yeni bir anahtar ekleyene kadar/);
+});
+
+test('dekoratif bilgi simgesi erişilebilirlik niteliklerini SVG’ye aktarır', async () => {
+  const { Icons } = await import('../src/components/icons.jsx');
+  const element = Icons.Info({ size: 12, 'aria-hidden': 'true' });
+  const svg = element.type(element.props);
+  assert.equal(svg.type, 'svg');
+  assert.equal(svg.props['aria-hidden'], 'true');
+  assert.equal(svg.props.width, 12);
+});
+
+test('eylemleri yöneten alanları eksik ya da tanınmayan başarılı yanıtlar başarı sayılmaz', async (t) => {
+  const client = await import('../src/features/ai/aiClient.js');
+  const previous = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previous; });
+  const respond = (body) => { globalThis.fetch = async () => Response.json(body); };
+
+  // Durum: etkin kaynak ya da deneme bilgisi olmadan sınama açılamaz.
+  for (const ai of [
+    { enabled: true, available: true, credential: {} },
+    { ...statusFixture(), effectiveSource: undefined },
+    { ...statusFixture(), probe: undefined },
+    { ...statusFixture(), credential: { configured: true } }
+  ]) {
+    respond({ ok: true, ai });
+    assert.equal((await client.loadAiCredentialStatusRequest()).code, client.AI_INVALID_RESPONSE, JSON.stringify(ai));
+  }
+  assert.equal(presentation.canRunAiProbe({ ...statusFixture(), probe: undefined }), false, 'bilinmeyen deneme durumu kapalıdır');
+  assert.equal(presentation.canRunAiProbe({ ...statusFixture(), effectiveSource: undefined }), false);
+
+  // Doğrulama: yalnızca sunucunun üç kalıcı sonucu ya da açık bayat sonuç.
+  for (const validation of [{ status: 'UNKNOWN' }, { status: 'VALID', credential: 'x' }, { status: null }]) {
+    respond({ ok: true, validation });
+    assert.equal((await client.validateAiCredentialRequest()).code, client.AI_INVALID_RESPONSE, JSON.stringify(validation));
+  }
+  respond({ ok: true, validation: { status: 'FORBIDDEN', stale: false, credential: null } });
+  assert.equal((await client.validateAiCredentialRequest()).ok, true);
+
+  // Deneme: kaynak, profil, yapılandırılan model, süre ve metin olmadan "Yanıt alındı" gösterilmez.
+  const probeResult = { credentialSource: 'personal', profile: 'chat.fast', model: 'm', configuredModel: 'm', durationMs: 5, text: 'x' };
+  for (const result of [
+    {},
+    { ...probeResult, text: undefined },
+    { ...probeResult, credentialSource: 'missing' },
+    { ...probeResult, configuredModel: undefined },
+    { ...probeResult, model: '  ' }
+  ]) {
+    respond({ ok: true, result });
+    assert.equal((await client.runAiProbeRequest()).code, client.AI_INVALID_RESPONSE, JSON.stringify(result));
+  }
+  // Yanıtlayan modeli bildirmeyen sağlayıcı geçerli bir sonuçtur; model `null` kalır.
+  respond({ ok: true, result: { ...probeResult, model: null } });
+  assert.equal((await client.runAiProbeRequest()).ok, true);
+  globalThis.fetch = previous;
+
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  const view = await mountActual(t);
+  server.reply('POST /probe', { ok: true, result: {} });
+  findButton(view.output, 'Deneme isteği gönder').props.onClick();
+  await settle(view);
+  assert.doesNotMatch(probeText(view.output), /Yanıt alındı/);
+  assert.match(probeText(view.output), /beklenmeyen bir yanıt/);
+});
+
+test('Strict Mode etkileri yeniden kurduğunda kart yüklemede takılmaz ve eylem sonuçları uygulanır', async (t) => {
+  const server = stubAiServer(t);
+  withDataMode(t, 'actual');
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  const view = mountComponent(AiAccessSettings, {});
+  t.after(() => view.unmount());
+  view.remountEffects();
+  await settle(view);
+  assert.match(textOf(view.output), /Kurumsal anahtar/);
+  server.reply('POST /probe', { ok: true, result: { credentialSource: 'default', profile: 'chat.fast', model: 'hizli-model', configuredModel: 'hizli-model', durationMs: 5, text: 'Merhaba.' } });
+  findButton(view.output, 'Deneme isteği gönder').props.onClick();
+  await settle(view);
+  assert.match(probeText(view.output), /Yanıt alındı/);
+});
+
+test('istemci süreleri sunucunun rehber denetimi dâhil bütçesinden uzundur; anahtar işlemleri kendi süresini kullanır', async () => {
+  const { probeTimeoutMs, validationTimeoutMs } = presentation;
+  assert.equal(validationTimeoutMs(statusFixture({ timeouts: { queueTimeoutMs: 1000, requestTimeoutMs: 4000, validationBudgetMs: 10000 } })), 15000);
+  assert.ok(validationTimeoutMs(statusFixture({ timeouts: { queueTimeoutMs: 1000, requestTimeoutMs: 4000 } })) >= 5000 + 1000 + 4000 + 5000,
+    'sunucu bütçesi bilinmiyorsa kira öncesi rehber denetimi de hesaba katılır');
+  assert.ok(probeTimeoutMs(null) >= 5000 + 5000 + 20000 + 90000 + 5000);
+  const { AI_CREDENTIAL_REQUEST_TIMEOUT_MS } = await import('../src/features/ai/aiClient.js');
+  const { AI_CREDENTIAL_OPERATION_TIMEOUT_MS } = await import('../src/domain/ai/aiCredentialPolicy.js');
+  assert.ok(AI_CREDENTIAL_REQUEST_TIMEOUT_MS > AI_CREDENTIAL_OPERATION_TIMEOUT_MS, 'tarayıcı sunucudan önce vazgeçmez');
+});
+
+test('sonucu bilinmeyen kayıt ve kaldırma sonrasında güncel durum okunur ve belirsizlik söylenir', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  const view = await mountActual(t);
+  findButton(view.output, 'Anahtar ekle').props.onClick();
+  view.render();
+  keyInput(view.output).props.onChange({ target: { value: TYPED_KEY } });
+  view.render();
+  server.fail('PUT /credential');
+  // Kayıt aslında sunucuda tamamlanmıştı: güncel durum yeni anahtarı gösterir.
+  server.reply('GET /credential', { ok: true, ai: personalStatus({ hint: '7Qm2' }) });
+  findButton(view.output, 'Kaydet').props.onClick();
+  await settle(view);
+  let text = textOf(view.output);
+  assert.match(text, /kaydedilip kaydedilmediği doğrulanamadı; güncel durum yeniden yüklendi/);
+  assert.match(text, /••••7Qm2/);
+  assert.equal(server.calls.filter((call) => call.method === 'GET').length, 2);
+
+  findButton(view.output, 'Vazgeç').props.onClick();
+  view.render();
+  findButton(view.output, 'Kaldır').props.onClick();
+  view.render();
+  server.fail('DELETE /credential');
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  findButton(view.output, 'Anahtarı kaldır').props.onClick();
+  await settle(view);
+  text = textOf(view.output);
+  assert.match(text, /kaldırılıp kaldırılmadığı doğrulanamadı/);
+  assert.equal(text.includes('••••'), false);
+});
+
+test('güncel anahtarın doğrulama sonucu önceki deneme sonucunun yerini alır', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  server.reply('POST /probe', { ok: true, result: { credentialSource: 'personal', profile: 'chat.fast', model: 'hizli-model', configuredModel: 'hizli-model', durationMs: 5, text: 'Merhaba.' } });
+  findButton(view.output, 'Deneme isteği gönder').props.onClick();
+  await settle(view);
+  assert.match(probeText(view.output), /Yanıt alındı/);
+  server.reply('POST /credential/validation', {
+    ok: true,
+    validation: { status: 'REJECTED', stale: false, credential: { hint: 'Vx9b', lastValidationStatus: 'REJECTED', lastValidatedAt: '2026-09-21T10:00:00.000Z' } }
+  });
+  findButton(view.output, 'Doğrula').props.onClick();
+  await settle(view);
+  assert.equal(probeText(view.output), '', 'reddedilen anahtar için eski "Yanıt alındı" sonucu kalmaz');
+  assert.match(textOf(view.output), /Anahtar reddedildi/);
+});
+
+test('deneme sürerken canlı bölge yalnızca sabit metni duyurur; saniye sayacı okunmaz', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  const view = await mountActual(t);
+  server.defer('POST /probe');
+  findButton(view.output, 'Deneme isteği gönder').props.onClick();
+  view.render();
+  const live = findElement(view.output, (node) => node.props?.role === 'status' && textOf(node).includes('Yanıt bekleniyor'));
+  assert.equal(textOf(live), 'Yanıt bekleniyor');
+  const counter = findElement(view.output, (node) => node.props?.['aria-hidden'] === 'true' && /sn$/.test(textOf(node)));
+  assert.ok(counter, 'sayaç görünür ama yardımcı teknolojiden gizlidir');
+  findButton(view.output, 'İptal').props.onClick();
+  await settle(view);
+});
+
+test('Demo Kipine geçiş süren kayıt, kaldırma ve doğrulama isteklerini keser', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  server.defer('POST /credential/validation');
+  findButton(view.output, 'Doğrula').props.onClick();
+  view.render();
+  const validationCall = server.calls.find((call) => call.path === '/credential/validation');
+
+  DataModeContext._currentValue = { dataMode: 'demo', async setDataMode() {} };
+  view.render();
+  await settle(view);
+  assert.equal(validationCall.signal.aborted, true, 'doğrulama isteği kesilir; sunucu sağlayıcı çağrısını durdurur');
+
+  // Gerçek Sisteme dönüp kayıt ve kaldırmayı başlatır, sonra yeniden Demo'ya geçer.
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  DataModeContext._currentValue = { dataMode: 'actual', async setDataMode() {} };
+  view.render();
+  await settle(view);
+  findButton(view.output, 'Değiştir').props.onClick();
+  view.render();
+  keyInput(view.output).props.onChange({ target: { value: TYPED_KEY } });
+  view.render();
+  server.defer('PUT /credential');
+  findButton(view.output, 'Kaydet').props.onClick();
+  view.render();
+  const saveCall = server.calls.find((call) => call.method === 'PUT');
+  DataModeContext._currentValue = { dataMode: 'demo', async setDataMode() {} };
+  view.render();
+  await settle(view);
+  assert.equal(saveCall.signal.aborted, true, 'kayıt isteği kesilir; sunucu iptal edilen kaydı geri alır');
+
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  DataModeContext._currentValue = { dataMode: 'actual', async setDataMode() {} };
+  view.render();
+  await settle(view);
+  findButton(view.output, 'Kaldır').props.onClick();
+  view.render();
+  server.defer('DELETE /credential');
+  findButton(view.output, 'Anahtarı kaldır').props.onClick();
+  view.render();
+  const deleteCall = server.calls.find((call) => call.method === 'DELETE');
+  DataModeContext._currentValue = { dataMode: 'demo', async setDataMode() {} };
+  view.render();
+  await settle(view);
+  assert.equal(deleteCall.signal.aborted, true, 'kaldırma isteği kesilir');
+  assert.match(textOf(view.output), /yalnızca Gerçek Sistem verisiyle yönetilir/);
+});
+
+test('satır içi denetimler kapanınca odak onları açan düğmeye döner', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  const focused = [];
+  const attach = (label, name) => {
+    const button = findButton(view.output, label);
+    button.ref.current = { focus: () => focused.push(name) };
+  };
+  attach('Değiştir', 'edit');
+  attach('Kaldır', 'remove');
+
+  findButton(view.output, 'Değiştir').props.onClick();
+  view.render();
+  keyInput(view.output).props.onKeyDown({ key: 'Escape', preventDefault() {} });
+  view.render();
+  assert.deepEqual(focused, ['edit'], 'Esc ile kapanan form odağı Değiştir düğmesine bırakır');
+
+  findButton(view.output, 'Kaldır').props.onClick();
+  view.render();
+  findButton(view.output, 'Vazgeç').props.onClick();
+  view.render();
+  assert.deepEqual(focused, ['edit', 'remove'], 'vazgeçilen kaldırma onayı odağı Kaldır düğmesine bırakır');
+
+  findButton(view.output, 'Değiştir').props.onClick();
+  view.render();
+  keyInput(view.output).props.onChange({ target: { value: TYPED_KEY } });
+  view.render();
+  server.reply('PUT /credential', { ok: true, ai: personalStatus({ hint: '7Qm2' }) });
+  findButton(view.output, 'Kaydet').props.onClick();
+  await settle(view);
+  assert.deepEqual(focused, ['edit', 'remove', 'edit'], 'kayıttan sonra odak Değiştir düğmesine döner');
+});
+
+test('yeni anahtar taslağı yazılırken kayıtlı anahtarın doğrulaması sunulmaz', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  assert.ok(hasButton(view.output, 'Doğrula'));
+  findButton(view.output, 'Değiştir').props.onClick();
+  view.render();
+  assert.equal(hasButton(view.output, 'Doğrula'), false, 'taslağın doğrulandığı sanılmaz');
+  keyInput(view.output).props.onKeyDown({ key: 'Escape', preventDefault() {} });
+  view.render();
+  assert.ok(hasButton(view.output, 'Doğrula'));
+});
+
+test('Performans · yapay zekâ yükü süreç başına ortalama olarak ve örnek sayısıyla anlatılır', async () => {
+  const { aiLoadDescription, gaugeInstanceCount } = await import('../src/features/system-admin/tabs/SystemPerformanceTab.jsx');
+  const gauges = {
+    'ai.active_requests': [{ bucketStart: '2026-09-25T09:00:00.000Z', value: 8, instanceCount: 1 }, { bucketStart: '2026-09-25T09:05:00.000Z', value: 8, instanceCount: 2 }],
+    'ai.queued_requests': [{ bucketStart: '2026-09-25T09:00:00.000Z', value: 0 }]
+  };
+  assert.equal(gaugeInstanceCount(gauges, ['ai.active_requests', 'ai.queued_requests']), 2);
+  assert.equal(gaugeInstanceCount({}, ['ai.active_requests']), 1);
+  assert.match(aiLoadDescription(1), /süreç\) başına ortalamadır; kapasite sınırları da süreç başınadır/);
+  assert.match(aiLoadDescription(2), /2 örnek ölçüm yazdı; toplam yük yaklaşık 2 katıdır/);
+});
+
+test('model kaydı kullanılamıyorsa kurumsal anahtarla isteklerin çalışacağı vaat edilmez', () => {
+  const { missingKeyDescription, removalConsequence, storedKeyNotice } = presentation;
+  const blocked = statusFixture({ probe: { available: false, reason: 'MODEL_REGISTRY_INVALID', timeoutMs: 90000, budgetMs: 120000 } });
+  assert.doesNotMatch(missingKeyDescription(blocked), /İstekleriniz kurumsal varsayılan anahtarla yapılır/);
+  assert.match(missingKeyDescription(blocked), /Kurumsal varsayılan anahtar seçilir; ancak yapay zekâ yapılandırması/);
+  assert.doesNotMatch(removalConsequence(blocked), /istekleriniz kurumsal varsayılan anahtarla yapılır/);
+  assert.match(removalConsequence(blocked), /şu anda kullanılamıyor/);
+  const disabledKey = personalStatus({ readable: false, unreadableReason: 'PERSONAL_KEYS_DISABLED' }, {
+    personalKeysSupported: false, effectiveSource: 'default', probe: blocked.probe
+  });
+  assert.doesNotMatch(storedKeyNotice(disabledKey), /istekler kurumsal anahtarla yapılır/);
+  // Kullanılabilir kurulumda vaat korunur.
+  assert.match(missingKeyDescription(statusFixture()), /İstekleriniz kurumsal varsayılan anahtarla yapılır/);
+  assert.match(presentation.probeUnavailableMessage(statusFixture({ probe: { available: false, reason: 'CONTEXT_TOO_SMALL' } })), /bağlam penceresi/);
+});
+
+test('kaldırma çakışmasında yeni anahtar gösterilirken eski anahtarın deneme sonucu kaldırılır', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  server.reply('POST /probe', { ok: true, result: { credentialSource: 'personal', profile: 'chat.fast', model: 'hizli-model', configuredModel: 'hizli-model', durationMs: 5, text: 'Merhaba.' } });
+  findButton(view.output, 'Deneme isteği gönder').props.onClick();
+  await settle(view);
+  assert.match(probeText(view.output), /Yanıt alındı/);
+  findButton(view.output, 'Kaldır').props.onClick();
+  view.render();
+  server.reply('DELETE /credential', {
+    error: { code: 'CONFLICT', message: 'Kişisel anahtar bu arada başka bir oturumda değiştirildi; yeni anahtar kaldırılmadı.', details: null }
+  }, 409);
+  server.reply('GET /credential', { ok: true, ai: personalStatus({ hint: '7Qm2' }) });
+  findButton(view.output, 'Anahtarı kaldır').props.onClick();
+  await settle(view);
+  assert.match(textOf(view.output), /••••7Qm2/);
+  assert.equal(probeText(view.output), '', 'değiştirilen anahtarın deneme sonucu gösterilmez');
+});
+
+test('eksik 0016 tablosu bilinçli kapatılmış kişisel anahtar gibi anlatılmaz', () => {
+  const { missingKeyDescription } = presentation;
+  const schemaMissing = statusFixture({ personalKeysSupported: false, personalKeysConfigured: true, schemaReady: false });
+  assert.match(missingKeyDescription(schemaMissing), /veritabanı göçü 0016 eksik/);
+  assert.match(missingKeyDescription(schemaMissing), /İstekler şimdilik kurumsal anahtarla yapılır/);
+  assert.doesNotMatch(missingKeyDescription(schemaMissing), /bu kurulumda etkin değil/);
+  const disabled = statusFixture({ personalKeysSupported: false, personalKeysConfigured: false, schemaReady: true });
+  assert.match(missingKeyDescription(disabled), /bu kurulumda etkin değil/);
 });

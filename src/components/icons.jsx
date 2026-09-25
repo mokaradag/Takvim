@@ -82,11 +82,9 @@ export const Icons = {
   Pause: (p) => <Icon {...p} d='<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>' />,
   Play: (p) => <Icon {...p} d='<path d="M7 4.5v15l12-7.5-12-7.5z"/>' />,
 
-  Info: (p) => (
-    <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={p.className || ''} style={p.style}>
-      <circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><circle cx="12" cy="8" r="0.6" fill="currentColor" />
-    </svg>
-  ),
+  // Ortak `Icon` üzerinden çizilir: dekoratif kullanımda verilen `aria-hidden`
+  // gibi nitelikler SVG'ye ulaşır.
+  Info: (p) => <Icon {...p} d='<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/>' />,
   Grip: (p) => (
     <svg xmlns="http://www.w3.org/2000/svg" width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="currentColor" className={p.className || ''} style={p.style}>
       <circle cx="9" cy="6" r="1.4" /><circle cx="15" cy="6" r="1.4" /><circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" /><circle cx="9" cy="18" r="1.4" /><circle cx="15" cy="18" r="1.4" />
