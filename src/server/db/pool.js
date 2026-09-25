@@ -115,6 +115,16 @@ export async function withSqlTransaction(work, {
   }
 }
 
+/**
+ * Çağrı etkin bir `withSqlTransaction` kapsamında mı?
+ *
+ * Uzun süren dış işler (ör. yapay zekâ sağlayıcı çağrısı) açık bir SQL işlemi
+ * içinde başlatılmamalıdır; bu denetim onların sınır kapısıdır.
+ */
+export function isWithinSqlTransaction() {
+  return Boolean(transactionContext.getStore());
+}
+
 /** Testlerde bağlantı havuzunu sıfırlar; enjekte edilen sürücüye yeniden bağlanılır. */
 export function resetSqlPoolForTests() {
   poolPromise = undefined;

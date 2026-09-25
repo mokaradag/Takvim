@@ -3,6 +3,7 @@ import { Icons } from '../../components/icons';
 import { DataModeIndicator } from '../../components/shell/DataModeIndicator';
 import { HeroHeader } from '../../components/ui';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
+import { AiAccessSettings } from '../ai/AiAccessSettings.jsx';
 
 const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 
@@ -333,6 +334,8 @@ export function SettingsView({ t, setTweak }) {
             </button>
           </SettingsRow>
         </div>
+
+        <AiAccessSettings />
       </div>
     </div>
   );

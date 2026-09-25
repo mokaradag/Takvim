@@ -69,7 +69,7 @@ export function mountComponent(Component, initialProps) {
       const index = position++;
       if (!slots[index] || !sameDeps(slots[index].deps, deps)) {
         const prior = slots[index];
-        slots[index] = { deps, cleanup: prior?.cleanup };
+        slots[index] = { deps, cleanup: prior?.cleanup, effect };
         effects.push(() => { slots[index].cleanup?.(); slots[index].cleanup = effect(); });
       }
     },
@@ -94,8 +94,17 @@ export function mountComponent(Component, initialProps) {
     }
     return output;
   }
+  /**
+   * React 18 geliştirme Strict Mode'u gibi: bileşen durumu (ve ref'ler)
+   * korunarak bütün etkiler temizlenir ve yeniden kurulur.
+   */
+  function remountEffects() {
+    for (const slot of slots) if (slot?.effect) slot.cleanup?.();
+    for (const slot of slots) if (slot?.effect) slot.cleanup = slot.effect();
+    if (dirty) render();
+  }
   render();
-  return { render, frames, get output() { return output; }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
+  return { render, remountEffects, frames, get output() { return output; }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
 }
 
 export function findElement(tree, predicate) {

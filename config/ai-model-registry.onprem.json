@@ -1,0 +1,234 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "VoxCPM2",
+      "provider": "onprem",
+      "capabilities": [
+        "speech.tts"
+      ],
+      "contextTokens": null,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "DeepSeek-V4-Flash-0731",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "tools",
+        "reasoning"
+      ],
+      "contextTokens": 1048576,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "Qwen3.8-27B",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "tools",
+        "reasoning",
+        "vision"
+      ],
+      "contextTokens": 262144,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "intfloat/multilingual-e5-large",
+      "provider": "onprem",
+      "capabilities": [
+        "embedding"
+      ],
+      "contextTokens": null,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "tts-1-hd",
+      "provider": "onprem",
+      "capabilities": [
+        "speech.tts"
+      ],
+      "contextTokens": null,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "dall-e-3",
+      "provider": "onprem",
+      "capabilities": [
+        "image.generation"
+      ],
+      "contextTokens": null,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "whisper-large-v3",
+      "provider": "onprem",
+      "capabilities": [
+        "speech.stt"
+      ],
+      "contextTokens": null,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "tools",
+        "reasoning"
+      ],
+      "contextTokens": 131072,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "Qwen3-Next-80B-A3B-Instruct",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "tools"
+      ],
+      "contextTokens": 262144,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "tts-1",
+      "provider": "onprem",
+      "capabilities": [
+        "speech.tts"
+      ],
+      "contextTokens": null,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "Qwen3-Embedding-8B",
+      "provider": "onprem",
+      "capabilities": [
+        "embedding"
+      ],
+      "contextTokens": null,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "Qwen3.5-397B-A17B-FP8",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "tools",
+        "reasoning",
+        "vision"
+      ],
+      "contextTokens": 262144,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "bge-reranker-v2-m3",
+      "provider": "onprem",
+      "capabilities": [
+        "rerank"
+      ],
+      "contextTokens": 8192,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "Qwen3-Reranker-8B",
+      "provider": "onprem",
+      "capabilities": [
+        "rerank"
+      ],
+      "contextTokens": 32768,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "gemma-4-31B-it",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "tools",
+        "reasoning",
+        "vision"
+      ],
+      "contextTokens": 131072,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "Qwen3.6-35B-A3B",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "tools",
+        "reasoning",
+        "vision"
+      ],
+      "contextTokens": 262144,
+      "maxConcurrency": null,
+      "enabled": true
+    },
+    {
+      "id": "Qwen3-VL-8B-Instruct",
+      "provider": "onprem",
+      "capabilities": [
+        "chat",
+        "vision"
+      ],
+      "contextTokens": 32768,
+      "maxConcurrency": null,
+      "enabled": true
+    }
+  ],
+  "profiles": {
+    "chat.fast": {
+      "model": "Qwen3-Next-80B-A3B-Instruct",
+      "maxOutputTokens": 512
+    },
+    "chat.general": {
+      "model": "Qwen3-Next-80B-A3B-Instruct",
+      "maxOutputTokens": 1024
+    },
+    "chat.reasoning": {
+      "model": "DeepSeek-V4-Flash-0731",
+      "maxOutputTokens": 2048,
+      "timeoutMs": 180000
+    },
+    "chat.tools": {
+      "model": "Qwen3-Next-80B-A3B-Instruct",
+      "maxOutputTokens": 1024
+    },
+    "vision": {
+      "model": "Qwen3-VL-8B-Instruct",
+      "maxOutputTokens": 1024
+    },
+    "embedding": {
+      "model": "intfloat/multilingual-e5-large"
+    },
+    "rerank": {
+      "model": "bge-reranker-v2-m3"
+    },
+    "speech.stt": {
+      "model": "whisper-large-v3"
+    },
+    "speech.tts.fast": {
+      "model": "tts-1"
+    },
+    "speech.tts.quality": {
+      "model": "tts-1-hd"
+    },
+    "image.generation": {
+      "model": "dall-e-3"
+    }
+  }
+}

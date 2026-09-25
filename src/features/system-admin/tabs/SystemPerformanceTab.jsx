@@ -33,6 +33,28 @@ function gaugePoints(gauges, key) {
   return (gauges?.[key] || []).map((point) => ({ bucketStart: point.bucketStart, value: point.value }));
 }
 
+/**
+ * Anlık ölçümü yazan en fazla uygulama örneği sayısı. Birden çok örnekte değer
+ * SÜREÇLER ARASI ortalamadır; yapay zekâ kapasite sınırları da süreç başına
+ * olduğu için grafik bunu açıkça söyler.
+ */
+export function gaugeInstanceCount(gauges, keys) {
+  return keys.reduce((highest, key) => (gauges?.[key] || [])
+    .reduce((max, point) => Math.max(max, Number(point.instanceCount) || 1), highest), 1);
+}
+
+/**
+ * Değer SÜREÇ BAŞINA ortalamadır. Örnek sayısı yalnızca bilgi olarak verilir:
+ * süreçler aralığın tamamında birlikte çalışmamış ya da eşit sayıda örnek
+ * yazmamış olabilir; "örnek sayısı × ortalama" toplam yükü doğru anlatmaz.
+ */
+export function aiLoadDescription(instanceCount) {
+  const base = 'Değerler uygulama örneği (süreç) başına zaman ağırlıklı ortalamadır; kapasite sınırları da süreç başınadır.';
+  return instanceCount > 1
+    ? `${base} Bu aralıkta ${instanceCount} uygulama örneği ölçüm yazdı; örnekler aynı sürede çalışmamış olabileceği için toplam yük bu değerden türetilemez.`
+    : base;
+}
+
 function resourceValue(metric, format) {
   if (!metric?.available) return 'ölçülemiyor';
   return format(metric.value);
@@ -231,6 +253,23 @@ export function SystemPerformanceTab({ enabled = true }) {
             bucketSeconds={bucketSeconds}
             series={[
               { id: 'oldest', label: 'En eski (dk)', color: 'var(--status-blocked)', points: gaugePoints(data?.gauges, GAUGE_KEYS.OUTLOOK_QUEUE_OLDEST_MINUTES) }
+            ]}
+          />
+        </AdminSection>
+        {/* Etkin ve sıradaki yapay zekâ istekleri aynı birimi (istek) taşır. */}
+        <AdminSection
+          title="Yapay zekâ yükü"
+          icon="Sparkles"
+          loading={resource.loading}
+          description={aiLoadDescription(gaugeInstanceCount(data?.gauges, [GAUGE_KEYS.AI_ACTIVE_REQUESTS, GAUGE_KEYS.AI_QUEUED_REQUESTS]))}
+        >
+          <TrendChart
+            label="Süreç başına etkin ve sıradaki yapay zekâ istekleri (ortalama)"
+            unit="count"
+            bucketSeconds={bucketSeconds}
+            series={[
+              { id: 'ai-active', label: `${GAUGE_LABELS[GAUGE_KEYS.AI_ACTIVE_REQUESTS]} (süreç başı)`, color: 'var(--accent)', points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_ACTIVE_REQUESTS) },
+              { id: 'ai-queued', label: `${GAUGE_LABELS[GAUGE_KEYS.AI_QUEUED_REQUESTS]} (süreç başı)`, color: 'var(--status-blocked)', dashed: true, points: gaugePoints(data?.gauges, GAUGE_KEYS.AI_QUEUED_REQUESTS) }
             ]}
           />
         </AdminSection>

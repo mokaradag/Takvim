@@ -2,6 +2,7 @@ import 'server-only';
 import { COMPONENTS, EVENT_SEVERITIES } from '../../domain/observability/eventModel.js';
 import { GAUGE_KEYS } from '../../domain/observability/metrics.js';
 import { getSqlPool } from '../db/pool.js';
+import { sampleAiLoad } from '../ai/aiRuntime.js';
 import { logEvent } from './structuredLogger.js';
 import { newCorrelationId, withCorrelation } from './correlation.js';
 import { isTelemetryEnabled, RETENTION_BATCH_SIZE, TELEMETRY_FLUSH_INTERVAL_MS, telemetryRetentionDays } from './observabilityConfig.js';
@@ -54,6 +55,10 @@ function sampleResources(now = Date.now()) {
   if (metrics.heapUsedRatio.available) recordGauge(GAUGE_KEYS.PROCESS_HEAP_RATIO, metrics.heapUsedRatio.value, now);
   if (metrics.cpuPercent.available) recordGauge(GAUGE_KEYS.PROCESS_CPU, metrics.cpuPercent.value, now);
   if (metrics.eventLoopDelayMs.available) recordGauge(GAUGE_KEYS.EVENT_LOOP_DELAY, metrics.eventLoopDelayMs.value, now);
+  // Yapay zekâ yükü de aynı ritimde örneklenir; ölçüm hatası turu bozmaz.
+  try {
+    sampleAiLoad(now);
+  } catch { /* yapay zekâ ölçümü isteğe bağlıdır */ }
   resetEventLoopSample();
   return metrics;
 }

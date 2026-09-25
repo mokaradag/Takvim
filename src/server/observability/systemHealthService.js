@@ -9,6 +9,7 @@ import {
 } from '../../domain/observability/eventModel.js';
 import {
   HEALTH_STATES,
+  aggregateHealthState,
   describeComponent,
   summarizeHealth,
   worseHealthState
@@ -30,6 +31,7 @@ import {
 import { MEMORY_PRESSURE_RATIO, observabilityConfiguration } from './observabilityConfig.js';
 import { supersededProcessAlertKeys } from './processAlertLifecycle.js';
 import {
+  probeAi,
   probeApplication,
   probeAuthentication,
   probeCorporateDirectory,
@@ -121,10 +123,17 @@ export async function loadSystemHealth(executor, { now = Date.now() } = {}) {
     probeSmtp({ now }),
     outlook,
     reminders,
+    probeAi({ now }),
     probeResources({ memoryPressureRatio: MEMORY_PRESSURE_RATIO })
   ].map((component) => describeComponent(component, { now }));
 
-  return { ...summarizeHealth(components), components, generatedAt: new Date(now).toISOString() };
+  // İsteğe bağlı yapay zekâ bileşeninin "bilinmiyor" durumu (ör. yakın zamanda
+  // hiç istek yok) genel başlığı düşürmez; bileşen listede görünür kalır ve
+  // uyarısı genel duruma yansır.
+  const headline = aggregateHealthState(components.filter((component) => !(
+    component.key === COMPONENTS.AI && component.state === HEALTH_STATES.UNKNOWN
+  )));
+  return { ...summarizeHealth(components), state: headline, components, generatedAt: new Date(now).toISOString() };
 }
 
 async function resolveAlertKeys(executor, keys, resolvedAt) {

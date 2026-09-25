@@ -7,6 +7,7 @@ import {
   clearedCookieHeader,
   jsonResponse
 } from '../../../../../server/identity/authRouteSupport.js';
+import { isSameOriginRequest } from '../../../../../server/identity/sameOriginRequest.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,43 +35,12 @@ function fallbackPostLogoutRedirect(config, requestUrl) {
   return new URL(APP_ROOT_PATH, new URL(requestUrl).origin).toString();
 }
 
-function hostOf(value) {
-  try {
-    return new URL(String(value)).host.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * İSTEĞİN aynı kaynaktan geldiğini doğrular.
- *
+/*
  * Üçüncü taraf bir sayfa, çerez temizleyen bu uca form gönderip kullanıcıyı
- * zorla oturumdan düşürebiliyordu. Tarayıcı `POST` isteklerinde `Origin`
- * başlığını her zaman gönderir; başlık varsa isteğin kendi kaynağıyla
- * eşleşmelidir. Başlık hiç yoksa istek tarayıcıdan gelmiyordur (betik, test,
- * sunucudan sunucuya) ve CSRF vektörü oluşmaz.
- *
- * Çerez temizleyen bir `GET` ucu BULUNMAZ: bağlantıya tıklatmak ya da
- * `<img src>` ile istemek yeterdi.
+ * zorla oturumdan düşürebiliyordu; istek aynı kaynaktan gelmelidir (bkz.
+ * `isSameOriginRequest`). Çerez temizleyen bir `GET` ucu BULUNMAZ: bağlantıya
+ * tıklatmak ya da `<img src>` ile istemek yeterdi.
  */
-function isSameOriginRequest(request) {
-  const site = request.headers.get('sec-fetch-site');
-  if (site && site !== 'same-origin' && site !== 'none') return false;
-
-  const origin = request.headers.get('origin');
-  if (!origin) return true;
-  const originHost = hostOf(origin);
-  if (!originHost) return false;
-
-  const expected = new Set([
-    request.headers.get('x-forwarded-host'),
-    request.headers.get('host'),
-    hostOf(request.url)
-  ].filter(Boolean).map((value) => String(value).toLowerCase()));
-  return expected.has(originHost);
-}
-
 export async function POST(request) {
   if (!isSameOriginRequest(request)) {
     return jsonResponse(

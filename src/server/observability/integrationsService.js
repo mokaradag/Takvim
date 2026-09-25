@@ -7,6 +7,7 @@ import { smtpConfigurationProblem } from '../mail/smtpConfig.js';
 import { isOutlookCalendarEnabled } from '../outlook/outlookConfig.js';
 import { AUTH_MODES, keycloakConfigurationIssues, readKeycloakConfig, resolveAuthMode } from '../identity/keycloakConfig.js';
 import { boundedExecutor, probeDeadline } from './boundedExecution.js';
+import { aiIntegrationCard, testAiProviderConnection } from '../ai/aiHealth.js';
 import {
   CORPORATE_PROJECT_PROBE_SQL,
   CORPORATE_RESPONSIBILITY_PROBE_SQL,
@@ -34,7 +35,8 @@ export const INTEGRATIONS = Object.freeze({
   PROJECT_RESPONSIBILITY: 'project-responsibility',
   AUTHENTICATION: 'authentication',
   SMTP: 'smtp',
-  OUTLOOK: 'outlook'
+  OUTLOOK: 'outlook',
+  AI: 'ai-provider'
 });
 
 const CACHE_KEY = Symbol.for('mergen-rota.integration-cache');
@@ -277,6 +279,31 @@ function outlookCard() {
   });
 }
 
+/**
+ * Yapay zekâ kartının durumu sağlık bileşeninden gelir; ancak son bağlantı
+ * testi, ondan sonra başarılı bir test olmadan ve tazeyken BAŞARISIZ olduysa
+ * kart sağlıklı ya da bilinmiyor görünmez (ör. kurumsal anahtar doğrulanamadı).
+ * Gecikme alanı son bağlantı testinin süresidir.
+ */
+function aiCard({ now = Date.now() } = {}) {
+  const base = aiIntegrationCard();
+  const entry = history(INTEGRATIONS.AI);
+  const failureAt = entry.lastFailureAt ? new Date(entry.lastFailureAt).getTime() : null;
+  const failedRecently = entry.lastProbeOk === false && Number.isFinite(failureAt) && now - failureAt <= REACHABILITY_FRESHNESS_MS;
+  const downgrade = base.configured && failedRecently
+    && (base.state === HEALTH_STATES.HEALTHY || base.state === HEALTH_STATES.UNKNOWN);
+  return card(INTEGRATIONS.AI, {
+    label: 'Yapay zekâ sağlayıcısı',
+    kind: 'OpenAI uyumlu kurum içi uç',
+    ...base,
+    ...(downgrade ? {
+      state: HEALTH_STATES.WARNING,
+      message: `${base.message} Son bağlantı testi başarısız oldu${entry.lastFailureCode ? ` (${entry.lastFailureCode})` : ''}.`
+    } : {}),
+    durationMs: entry.lastDurationMs ?? null
+  });
+}
+
 /** Bütün entegrasyon kartları. */
 export async function loadIntegrations(executor) {
   const [database, corporateWbs, directory, projects, responsibility] = await Promise.all([
@@ -298,7 +325,7 @@ export async function loadIntegrations(executor) {
       statement: CORPORATE_RESPONSIBILITY_PROBE_SQL
     })
   ]);
-  return [database, corporateWbs, directory, projects, responsibility, authenticationCard(), smtpCard(), outlookCard()];
+  return [database, corporateWbs, directory, projects, responsibility, authenticationCard(), smtpCard(), outlookCard(), aiCard()];
 }
 
 async function probeSmtpConnection() {
@@ -334,6 +361,9 @@ const TESTS = Object.freeze({
     if (!isOutlookCalendarEnabled()) return { ok: false, code: 'OUTLOOK_DISABLED', durationMs: 0 };
     return probeSmtpConnection();
   },
+  // Yapay zekâ testi model ÜRETMEZ: süre sınırlı `GET /models` isteğidir ve
+  // yöneticinin isteği kesilirse iptal edilir.
+  [INTEGRATIONS.AI]: (executor, { signal } = {}) => testAiProviderConnection({ signal }),
   // Kimlik erişilebilirliği YIKICI OLMAYAN biçimde yoklanır: yalnızca ortak
   // anahtar kümesi (JWKS) okunur; oturum açma denenmez, kimlik bilgisi
   // gönderilmez, hesap kilitlenmez.
@@ -374,19 +404,29 @@ export function isTestableIntegration(id) {
 }
 
 /**
+ * Testin örnekler arası SQL kilidiyle mi korunacağı. Yapay zekâ testi
+ * veritabanı gerektirmeyen bir dış istektir: sağlayıcı beklenirken yönetim
+ * kilidinin SQL işlemi ve havuz bağlantısı tutulmaz (yapay zekâ yalıtımı).
+ */
+export function integrationTestNeedsDatabaseLock(id) {
+  return String(id) !== INTEGRATIONS.AI;
+}
+
+/**
  * Bağlantı testi — HİÇBİRİ yıkıcı değildir.
  *
  * Veritabanı testleri `SELECT 1` düzeyindedir; SMTP testi ileti göndermeden
- * yalnızca el sıkışmayı dener.
+ * yalnızca el sıkışmayı dener. `signal` yöneticinin isteğidir; iptal edilen
+ * test (`cancelled`) bir bağlantı sonucu olmadığı için geçmişe yazılmaz.
  */
-export async function testIntegration(executor, id) {
+export async function testIntegration(executor, id, { signal = null } = {}) {
   const run = TESTS[String(id)];
   if (!run) return { ok: false, code: 'UNKNOWN_INTEGRATION', message: 'Tanınmayan entegrasyon.' };
   // Yoklamanın kendisi FIRLATABİLİR (ör. ikincil havuz kurulamadığında). Bu,
   // testin sonucudur; ucun iç hatası değil. Sonuç sınırlı bir kodla bildirilir.
   let outcome;
   try {
-    outcome = await run(executor);
+    outcome = await run(executor, { signal });
   } catch (error) {
     outcome = {
       ok: false,
@@ -394,7 +434,7 @@ export async function testIntegration(executor, id) {
       code: String(error?.code || error?.name || 'PROBE_FAILED').slice(0, 60)
     };
   }
-  remember(String(id), { ok: outcome.ok, durationMs: outcome.durationMs, code: outcome.code || null });
+  if (!outcome.cancelled) remember(String(id), { ok: outcome.ok, durationMs: outcome.durationMs, code: outcome.code || null });
   return {
     ok: Boolean(outcome.ok),
     durationMs: outcome.durationMs ?? null,

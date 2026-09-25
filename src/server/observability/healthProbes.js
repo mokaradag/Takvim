@@ -20,6 +20,7 @@ import {
 } from './observabilityConfig.js';
 import { boundedExecutor, probeDeadline } from './boundedExecution.js';
 import { readResourceMetrics } from './resourceMetrics.js';
+import { aiHealthComponent } from '../ai/aiHealth.js';
 import {
   CORPORATE_PROJECT_PROBE_SQL,
   CORPORATE_WBS_STATE_SQL,
@@ -399,6 +400,19 @@ export async function probeReminders(executor, { now = Date.now(), timeoutMs = 4
   } finally {
     deadline.close();
   }
+}
+
+/**
+ * Yapay zekâ hizmeti: yapılandırma, kapasite ve son sağlayıcı teması.
+ *
+ * Yoklama bellekten okunur; yapay zekâ ucuna istek GÖNDERMEZ.
+ */
+export function probeAi({ now = Date.now() } = {}) {
+  const health = aiHealthComponent({ now });
+  return component(COMPONENTS.AI, health.state, health.message, {
+    detail: health.detail,
+    lastSuccessAt: health.lastSuccessAt ?? null
+  });
 }
 
 /** Süreç kaynakları: bellek baskısı ölçülebiliyorsa değerlendirilir. */

@@ -30,6 +30,28 @@ function outlookQueueOf(overview) {
   return overview?.outlook?.queue || null;
 }
 
+/** Yapay zekâ bileşeninin okunur künyesi; sayılar sunucu belleğinden gelir. */
+function AiDrawerFields({ detail }) {
+  const load = detail?.load;
+  if (!load) return null;
+  const telemetry = detail.telemetry || {};
+  const sources = telemetry.bySource || {};
+  return (
+    <>
+      <DrawerField label="Etkin istek" value={`${load.active} / ${load.limits.maxActive}`} mono />
+      <DrawerField label="Sıradaki istek" value={`${load.queued} / ${load.limits.maxQueued}`} mono />
+      <DrawerField label="Kullanıcı başına sınır" value={`${load.limits.maxActivePerUser} etkin · ${load.limits.maxQueuedPerUser} sırada`} />
+      <DrawerField label="Kapasite nedeniyle geri çevrilen" value={load.counters?.rejectedBusy ?? 0} mono />
+      <DrawerField label="Sırada süresi dolan" value={load.counters?.queueTimeouts ?? 0} mono />
+      <DrawerField label="Sağlayıcı P95" value={formatDuration(telemetry.latency?.provider?.p95Ms)} />
+      <DrawerField
+        label="Anahtar kaynağı"
+        value={`Kişisel ${sources.personal ?? 0} · Kurumsal ${sources.default ?? 0} · Anahtarsız ${sources.missing ?? 0}`}
+      />
+    </>
+  );
+}
+
 export function SystemOverviewTab({
   overview = null,
   loading = false,
@@ -275,6 +297,7 @@ export function SystemOverviewTab({
                   <DrawerField label="WBS düğümü" value={detail.item.detail?.nodeCount ?? 0} mono />
                 </>
               )}
+              {detail.item.key === COMPONENTS.AI && <AiDrawerFields detail={detail.item.detail} />}
               {detail.item.detail && (
                 <pre className="sysadmin-drawer-json">{JSON.stringify(detail.item.detail, null, 2)}</pre>
               )}
