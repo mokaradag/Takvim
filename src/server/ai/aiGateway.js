@@ -22,7 +22,7 @@ import {
 import { AiError, isAiError, toAiFailure } from './aiErrors.js';
 import { recordAiRequest, recordAiRetry, recordAiValidation, recordProviderCall } from './aiTelemetry.js';
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
-import { classifyProviderStatus, isConnectFailure } from './providers/openAiCompatibleProvider.js';
+import { classifyProviderStatus, createControlApiKey, isConnectFailure } from './providers/openAiCompatibleProvider.js';
 
 /**
  * Yapay zekâ ağ geçidi — alt sistemin TEK yürütme yolu.
@@ -172,16 +172,29 @@ function healthFailureFor(source) {
  */
 function fixedRequestRejected(error) {
   return new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, {
-    message: 'Yapay zekâ hizmeti sabit deneme isteğini reddetti. Model ve uç yapılandırmasını denetleyin.',
+    message: 'Yapay zekâ hizmeti sunucunun ürettiği sabit isteği reddetti. Model ve uç yapılandırmasını denetleyin.',
     details: { reason: 'PROVIDER_REJECTED_FIXED_REQUEST', providerStatus: error.details?.providerStatus ?? null }
   });
 }
 
+/** Sabit `GET /models` isteğinin 2xx/401/403 dışı yanıtı; 400/413/422 yapılandırma hatasıdır. */
+function fixedModelsFailure(status, retryAfter) {
+  const failure = classifyProviderStatus(status, retryAfter);
+  return failure.code === AI_ERROR_CODES.AI_REQUEST_INVALID ? fixedRequestRejected(failure) : failure;
+}
+
 function modelsEndpointUnauthenticated() {
   return new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, {
-    message: 'Yapay zekâ ucu model listesini anahtarsız da verdiği için anahtar bu yolla doğrulanamıyor. Anahtarı deneme isteğiyle sınayın.',
+    message: 'Yapay zekâ ucu model listesini geçersiz bir anahtarla da verdiği için anahtar bu yolla doğrulanamıyor. Anahtarı deneme isteğiyle sınayın.',
     details: { reason: 'MODELS_ENDPOINT_UNAUTHENTICATED' }
   });
+}
+
+/** Doğrulama sonucu sağlayıcı açısından BAŞARISIZ bir HTTP işlemidir (401/403). */
+function validationFailureCode(outcome) {
+  if (outcome === AI_CREDENTIAL_VALIDATION.REJECTED) return AI_ERROR_CODES.AI_KEY_INVALID;
+  if (outcome === AI_CREDENTIAL_VALIDATION.FORBIDDEN) return AI_ERROR_CODES.AI_UNAUTHORIZED;
+  return null;
 }
 
 export function createAiGateway({
@@ -224,14 +237,26 @@ export function createAiGateway({
    * hatalarında, kalan süre yetiyorsa ve titreşimli beklemeden sonra bir kez
    * yinelenir. Anahtar, yetki, oran sınırı, zaman aşımı ve iptal yinelenmez.
    * Yineleme, ikinci deneme GERÇEKTEN başlarken kaydedilir.
+   *
+   * `failureCodeOf(result)`, sonucu anlamlı olsa da sağlayıcı açısından
+   * başarısız olan bir HTTP işlemini (ör. doğrulamada 401) bildirir: işlem
+   * ölçümü o kodla başarısız kaydedilir, sonuç yine çağırana döner.
    */
-  async function callProvider({ operation, deadline, invoke, source = null, context = null, healthFailure = () => null }) {
+  async function callProvider({
+    operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null
+  }) {
     for (let attempt = 1; ; attempt += 1) {
       if (context) context.attempts = attempt;
       const startedAt = now();
       try {
         const result = await raceWithAbort(() => invoke(deadline.signal), deadline.signal);
-        recordProviderCall({ operation, latencyMs: now() - startedAt, source });
+        const code = failureCodeOf(result);
+        recordProviderCall({
+          operation,
+          latencyMs: now() - startedAt,
+          source,
+          ...(code ? { code, healthFailure: healthFailure({ code }) } : {})
+        });
         return result;
       } catch (error) {
         const failure = deadline.failure() || toAiFailure(error);
@@ -355,11 +380,15 @@ export function createAiGateway({
    *
    * Yalnızca KİŞİSEL anahtar denenir; kurumsal anahtara hiç dokunulmaz.
    * Erişilemeyen sağlayıcı ya da süre aşımı anahtar hakkında sonuç üretmez ve
-   * kayda yazılmaz. `VALID` ancak uç anahtarı GERÇEKTEN denetliyorsa verilir:
-   * aynı liste anahtarsız da (2xx ve geçerli liste olarak) dönüyorsa sonuç
-   * yapılandırma hatasıdır; anahtarsız isteğe dönen her başka yanıt anahtarın
-   * denetlendiğini gösterir. Sonucun yazımı da aynı süre sınırı ve iptal
-   * kapsamındadır. Kapasite reddi ve sıra beklemesi sohbetteki gibi ölçülür.
+   * kayda yazılmaz. `VALID` ancak uç GÖNDERİLEN anahtarı gerçekten denetliyorsa
+   * verilir: aynı istek rastgele bir denetim anahtarıyla yinelenir. Yalnızca
+   * kimlik doğrulamaya özgü ret (401/403) denetimi kanıtlar; denetim anahtarıyla
+   * da geçerli liste dönüyorsa sonuç yapılandırma hatasıdır; geri kalan her
+   * yanıt (408, 429, 5xx, geçersiz gövde…) sonucu belirsiz bırakır ve kayda
+   * yazılmaz. Sabit isteğin 400/413/422 ile reddi yapılandırma hatasıdır.
+   * Sonucun yazımı da aynı süre sınırı ve iptal kapsamındadır. Kapasite reddi ve
+   * sıra beklemesi sohbetteki gibi ölçülür; sağlayıcının reddettiği her HTTP
+   * işlemi (401/403 dâhil) başarısız işlem olarak ölçülür.
    */
   async function validatePersonalCredential({ signal = null } = {}) {
     const startedAt = now();
@@ -390,31 +419,34 @@ export function createAiGateway({
         deadline,
         source: personalSource,
         healthFailure: healthFailureFor(personalSource),
+        failureCodeOf: validationFailureCode,
         invoke: async (attemptSignal) => {
           const { status, retryAfter = null } = await getProvider().listModels({ baseUrl, apiKey: personal.apiKey, signal: attemptSignal });
           if (status >= 200 && status < 300) return AI_CREDENTIAL_VALIDATION.VALID;
           if (status === 401) return AI_CREDENTIAL_VALIDATION.REJECTED;
           if (status === 403) return AI_CREDENTIAL_VALIDATION.FORBIDDEN;
-          throw classifyProviderStatus(status, retryAfter);
+          throw fixedModelsFailure(status, retryAfter);
         }
       });
       if (outcome === AI_CREDENTIAL_VALIDATION.VALID) {
-        const servedWithoutKey = await callProvider({
+        const control = await callProvider({
           operation: 'ai.provider.models',
           deadline,
           healthFailure: healthFailureFor(personalSource),
+          // Denetim anahtarının reddi beklenen sonuçtur ama HTTP işlemi başarısızdır.
+          failureCodeOf: (result) => (result.enforced ? classifyProviderStatus(result.status).code : null),
           invoke: async (attemptSignal) => {
-            try {
-              const { status } = await getProvider().listModels({ baseUrl, apiKey: null, signal: attemptSignal });
-              return status >= 200 && status < 300;
-            } catch (error) {
-              // Anahtarsız isteğe dönen geçersiz 2xx (ör. oturum açma sayfası) listeyi vermemiştir.
-              if (isAiError(error) && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID) return false;
-              throw error;
-            }
+            const { status, retryAfter = null } = await getProvider().listModels({
+              baseUrl,
+              apiKey: createControlApiKey(),
+              signal: attemptSignal
+            });
+            if (status === 401 || status === 403) return { enforced: true, status };
+            if (status >= 200 && status < 300) return { enforced: false, status };
+            throw fixedModelsFailure(status, retryAfter);
           }
         });
-        if (servedWithoutKey) throw modelsEndpointUnauthenticated();
+        if (!control.enforced) throw modelsEndpointUnauthenticated();
       }
       if (deadline.failure()) throw deadline.failure();
       const stored = await raceWithAbort(

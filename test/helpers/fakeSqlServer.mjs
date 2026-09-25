@@ -2427,6 +2427,8 @@ export function createFakeSqlServerDriver(db) {
       }
     }
     async commit() {
+      // Test kancası: commit sürerken (ör. istemci vazgeçerken) olanı sınamak için.
+      await db.commitHook?.(this);
       this.committed = true;
       if (this.transactionRecord) this.transactionRecord.commitStatementIndex = db.statements.length;
       this.releaseLocks();

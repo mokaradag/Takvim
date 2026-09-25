@@ -420,6 +420,38 @@ test('entegrasyon kartı yapılandırma durumunu gizli değer olmadan gösterir'
   assert.match(serialized, /ileti göndermeden/);
 });
 
+test('sekmeden ayrılınca süren bağlantı testinin isteği kesilir', async (t) => {
+  let testSignal = null;
+  stubFetch(t, async (url, init = {}) => {
+    if (init.method === 'POST') {
+      testSignal = init.signal;
+      return new Promise((resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('İstek iptal edildi.', 'AbortError')), { once: true });
+      });
+    }
+    return Response.json({
+      ok: true,
+      generatedAt: '2026-09-12T10:00:00.000Z',
+      integrations: [{
+        id: 'ai-provider', label: 'Yapay zekâ sağlayıcısı', kind: 'OpenAI uyumlu kurum içi uç', configured: true,
+        state: HEALTH_STATES.UNKNOWN, message: 'Sağlayıcıya yakın zamanda erişilmedi.', testable: true, durationMs: null,
+        lastSuccessAt: null, lastFailureAt: null, lastFailureCode: null
+      }]
+    });
+  });
+  const view = mountComponent(SystemIntegrationsTab, { enabled: true });
+  await immediate();
+  view.render();
+  findButtonWithText(view.output, 'Bağlantıyı Test Et').props.onClick();
+  await immediate();
+  view.render();
+  assert.ok(testSignal, 'bağlantı testi isteği gönderildi');
+  assert.equal(testSignal.aborted, false);
+  view.unmount();
+  assert.equal(testSignal.aborted, true, 'sunucu da testi (ör. yapay zekâ GET /models) iptal eder');
+  await immediate();
+});
+
 test('olay sekmesi süzgeçleri ve sayfalamayı isteğe yansıtır', async (t) => {
   const calls = stubFetch(t, async () => Response.json({
     ok: true,

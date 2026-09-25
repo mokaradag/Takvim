@@ -43,9 +43,16 @@ export function gaugeInstanceCount(gauges, keys) {
     .reduce((max, point) => Math.max(max, Number(point.instanceCount) || 1), highest), 1);
 }
 
+/**
+ * Değer SÜREÇ BAŞINA ortalamadır. Örnek sayısı yalnızca bilgi olarak verilir:
+ * süreçler aralığın tamamında birlikte çalışmamış ya da eşit sayıda örnek
+ * yazmamış olabilir; "örnek sayısı × ortalama" toplam yükü doğru anlatmaz.
+ */
 export function aiLoadDescription(instanceCount) {
-  const base = 'Değerler uygulama örneği (süreç) başına ortalamadır; kapasite sınırları da süreç başınadır.';
-  return instanceCount > 1 ? `${base} Bu aralıkta ${instanceCount} örnek ölçüm yazdı; toplam yük yaklaşık ${instanceCount} katıdır.` : base;
+  const base = 'Değerler uygulama örneği (süreç) başına zaman ağırlıklı ortalamadır; kapasite sınırları da süreç başınadır.';
+  return instanceCount > 1
+    ? `${base} Bu aralıkta ${instanceCount} uygulama örneği ölçüm yazdı; örnekler aynı sürede çalışmamış olabileceği için toplam yük bu değerden türetilemez.`
+    : base;
 }
 
 function resourceValue(metric, format) {

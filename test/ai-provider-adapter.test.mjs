@@ -152,7 +152,13 @@ test('yanıtta model kimliği yoksa ya da boşsa yanıtlayan model bilinmez (nul
   for (const model of [undefined, null, '', '   ', 42]) {
     assert.equal(parseChatCompletion({ ...reply, model }).model, null, String(model));
   }
-  assert.equal(parseChatCompletion({ ...reply, model: ' yedek-model ' }).model, 'yedek-model');
+  // Bildirilen model OLDUĞU GİBİ korunur: kırpılmış ya da kısaltılmış bir değer
+  // yapılandırılan modelle yanlışlıkla eşleşip sessiz yönlendirmeyi gizlerdi.
+  assert.equal(parseChatCompletion({ ...reply, model: ' yedek-model ' }).model, ' yedek-model ');
+  const configured = 'm'.repeat(200);
+  assert.equal(parseChatCompletion({ ...reply, model: `${configured}-yonlendirildi` }).model, `${configured}-yonlendirildi`);
+  assert.throws(() => parseChatCompletion({ ...reply, model: 'x'.repeat(513) }),
+    (error) => error.code === 'AI_PROVIDER_RESPONSE_INVALID' && error.details.reason === 'MODEL_ID_TOO_LONG');
 });
 
 test('200 dönen ama model listesi olmayan yanıt (yanlış uçtaki HTML sayfası) kabul edilmez', async (t) => {
@@ -194,7 +200,8 @@ test('uçtan uca sınama gerçek bağdaştırıcıyla yanıt alır; reddedilen k
   }
 });
 
-test('uçtan uca doğrulama: anahtarı denetleyen uçta VALID; anahtarsız da yanıt veren ya da HTML dönen uçta sonuç kaydedilmez', async (t) => {
+test('uçtan uca doğrulama: anahtarı denetleyen uçta VALID; her anahtarı kabul eden, herkese açık ya da HTML dönen uçta sonuç kaydedilmez', async (t) => {
+  const { AI_CONTROL_KEY_PREFIX } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
   const guarded = await fakeServer(t, { validKeys: [PERSONAL_KEY_A] });
   const { db, setEnv } = createAiStack(t, { env: { MERGEN_ROTA_AI_BASE_URL: guarded.baseUrl } });
   setAiProviderForTests(null);
@@ -202,7 +209,19 @@ test('uçtan uca doğrulama: anahtarı denetleyen uçta VALID; anahtarsız da ya
   const valid = await validateKey();
   assert.equal(valid.status, 200);
   assert.equal(valid.body.validation.status, 'VALID');
-  assert.deepEqual(guarded.state.requests.map((request) => request.bearer), [PERSONAL_KEY_A, '']);
+  const bearers = guarded.state.requests.map((request) => request.bearer);
+  assert.equal(bearers.length, 2);
+  assert.equal(bearers[0], PERSONAL_KEY_A);
+  assert.ok(bearers[1].startsWith(AI_CONTROL_KEY_PREFIX), 'denetim isteği rastgele, geçersiz bir anahtar taşır');
+
+  // Yalnızca başlığın varlığına bakan (boş olmayan her anahtarı kabul eden) uç
+  // gönderilen anahtarı doğrulamaz.
+  const anyKey = await fakeServer(t);
+  setEnv({ MERGEN_ROTA_AI_BASE_URL: anyKey.baseUrl });
+  const headerOnly = await validateKey();
+  assert.equal(headerOnly.status, 503);
+  assert.equal(headerOnly.body.error.details.reason, 'MODELS_ENDPOINT_UNAUTHENTICATED');
+  assert.equal(db.aiUserCredentials[0].LastValidationStatus, 'VALID', 'önceki sonuç bu denemeyle değişmez');
 
   const open = await fakeServer(t, { publicModels: true });
   setEnv({ MERGEN_ROTA_AI_BASE_URL: open.baseUrl });
@@ -247,7 +266,21 @@ test('boş model listesi ya da boş kimlikli girdiler kullanılabilir uç sayıl
   }
   const listed = await provider({ data: [{ id: ' hizli-model ' }, { id: '' }, { id: 'derin-model' }] })
     .listModels({ baseUrl: 'http://127.0.0.1:9/v1', apiKey: PERSONAL_KEY_A, signal });
-  assert.deepEqual(listed.models, ['hizli-model', 'derin-model']);
+  // Kimlikler kırpılmaz ve kısaltılmaz: bire bir karşılaştırılır.
+  assert.deepEqual(listed.models, [' hizli-model ', 'derin-model']);
+});
+
+test('model listesinin tamamı döner; uzun kimlikler kısaltılmadığı için önekleri başka modelle eşleşmez', async () => {
+  const signal = new AbortController().signal;
+  const configured = 'c'.repeat(200);
+  const ids = [...Array.from({ length: 2500 }, (unused, index) => `m${index}`), `${configured}-baska`, 'hizli-model'];
+  const provider = createOpenAiCompatibleProvider({
+    fetchImpl: async () => new Response(JSON.stringify({ data: ids.map((id) => ({ id })) }), { status: 200, headers: { 'content-type': 'application/json' } })
+  });
+  const { models } = await provider.listModels({ baseUrl: 'http://127.0.0.1:9/v1', apiKey: PERSONAL_KEY_A, signal });
+  assert.equal(models.length, ids.length, 'ilk 2000 kayıttan sonraki model de listede kalır');
+  assert.ok(models.includes('hizli-model'));
+  assert.equal(models.includes(configured), false, '200 karakterlik öneki yapılandırılan modelle eşleşmez');
 });
 
 test('bağlantı kurulmadan oluşan bütün ağ hataları tek güvenli yinelemeye uygundur; bağlantı sonrası belirsiz hatalar değildir', () => {
@@ -260,7 +293,7 @@ test('bağlantı kurulmadan oluşan bütün ağ hataları tek güvenli yinelemey
   }
 });
 
-test('sahte ağ geçidi varsayılan olarak anahtarsız isteği reddeder; herkese açık liste açıkça seçilir', async (t) => {
+test('sahte ağ geçidi varsayılan olarak anahtarsız isteği reddeder; her anahtarı kabul eden ve herkese açık liste açıkça seçilir', async (t) => {
   const guarded = await fakeServer(t);
   const provider = createOpenAiCompatibleProvider();
   const signal = new AbortController().signal;

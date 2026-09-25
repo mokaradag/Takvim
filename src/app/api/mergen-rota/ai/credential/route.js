@@ -22,9 +22,9 @@ export const fetchCache = 'force-no-store';
  * Sahip her zaman oturumdaki Sicil'dir; gövdede, sorguda ya da başlıkta gelen
  * hiçbir kimlik okunmaz. Yanıt anahtarı ya da şifreli hâlini asla taşımaz.
  * Durum değiştiren istekler yalnızca aynı kaynaktan kabul edilir. Gövde, kimlik
- * ve rehber üyeliği doğrulandıktan SONRA okunur. İstemci bağlantıyı keserse
- * (`request.signal`) süren işlem iptal edilir; bırakılmış bir kayıt sonradan
- * uygulanmaz.
+ * ve rehber üyeliği doğrulandıktan SONRA ve işlemin süre sınırıyla okunur.
+ * İstemci bağlantıyı keserse (`request.signal`) süren işlem iptal edilir;
+ * bırakılmış bir kayıt sonradan uygulanmaz.
  */
 export const GET = withRouteObservability('ai.api.credential.status', async (request) => {
   try {
@@ -38,7 +38,7 @@ export const PUT = withRouteObservability('ai.api.credential.save', async (reque
   try {
     assertSameOriginAiRequest(request);
     const ai = await saveAiPersonalCredential({
-      readApiKey: async () => (await readJsonBody(request)).apiKey,
+      readApiKey: async (signal) => (await readJsonBody(request, { signal })).apiKey,
       signal: request.signal
     });
     return aiJson({ ok: true, ai });

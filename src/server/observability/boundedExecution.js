@@ -40,13 +40,24 @@ async function raceWithSignal(operation, signal, cancel = () => {}) {
   }
 }
 
-/** Verilen yürütücünün sorgularını süre sınırına bağlar. */
-export function boundedExecutor(executor, signal) {
+/**
+ * Verilen yürütücünün sorgularını süre sınırına bağlar.
+ *
+ * Süre dolunca çağıran beklemeden hata alır; sürücüdeki sorgu ise iptal
+ * edilmeye çalışılır ama hemen durmayabilir. `track` verilirse sürücüdeki
+ * GERÇEK sorgu sözü ona bildirilir: kaynağı (ör. sınırlı bir bağlantı kapısını)
+ * sorgu gerçekten bitene kadar tutmak isteyen çağıran bunu kullanır.
+ */
+export function boundedExecutor(executor, signal, { track = null } = {}) {
   return {
     request() {
       const request = executor.request();
       const query = request.query.bind(request);
-      request.query = (text) => raceWithSignal(() => query(text), signal, () => request.cancel?.());
+      request.query = (text) => raceWithSignal(() => {
+        const running = query(text);
+        track?.(running);
+        return running;
+      }, signal, () => request.cancel?.());
       return request;
     }
   };

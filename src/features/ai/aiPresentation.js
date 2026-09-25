@@ -31,15 +31,25 @@ const VALIDATION_BUDGET_MS = 15000;
 const DIRECTORY_PREFLIGHT_BUDGET_MS = 5000;
 const REGISTRY_READ_BUDGET_MS = 5000;
 const FALLBACK_TIMEOUTS = Object.freeze({ queueTimeoutMs: 20000, requestTimeoutMs: 90000 });
-/** Sonucu bilinmeyen (süre aşımı ya da ağ kesintisi) anahtar kaydı/kaldırması. */
-const AMBIGUOUS_MUTATION_CODES = new Set(['REQUEST_TIMEOUT', 'NETWORK']);
+/**
+ * Sonucu bilinmeyen anahtar kaydı/kaldırması: tarayıcı süre aşımı, ağ kesintisi,
+ * beklenen biçimi taşımayan (ör. vekilin kestiği) 2xx yanıtı ya da sunucunun
+ * kendi işlem süre sınırı. Hepsinde değişiklik sunucuda uygulanmış olabilir.
+ */
+const AMBIGUOUS_MUTATION_CODES = new Set(['REQUEST_TIMEOUT', 'NETWORK', 'INVALID_RESPONSE']);
+const SERVER_OPERATION_TIMEOUT = 'CREDENTIAL_OPERATION_TIMEOUT';
+const AMBIGUOUS_CAUSES = Object.freeze({
+  REQUEST_TIMEOUT: 'Sunucudan süre sınırında yanıt alınamadı.',
+  NETWORK: 'Sunucuyla bağlantı kesildi.',
+  INVALID_RESPONSE: 'Sunucudan beklenmeyen bir yanıt alındı.',
+  [SERVER_OPERATION_TIMEOUT]: 'Anahtar işlemi sunucunun süre sınırında tamamlanamadı.'
+});
 
 const PROBE_UNAVAILABLE_MESSAGES = Object.freeze({
   [AI_PROFILE_RESOLUTION_FAILURES.PROFILE_NOT_CONFIGURED]: 'Hızlı sohbet profili bu kurulumda tanımlı değil; deneme isteği gönderilemez.',
   [AI_PROFILE_RESOLUTION_FAILURES.PROFILE_DISABLED]: 'Hızlı sohbet profili bu kurulumda kapalı; deneme isteği gönderilemez.',
   [AI_PROFILE_RESOLUTION_FAILURES.MODEL_UNAVAILABLE]: 'Hızlı sohbet profilinin modeli kapalı; deneme isteği gönderilemez.',
   MODEL_REGISTRY_INVALID: 'Model kaydı okunamadı; deneme isteği gönderilemez. Sistem yöneticinize başvurun.',
-  CONTEXT_TOO_SMALL: 'Hızlı sohbet profilinin modelinin bağlam penceresi sabit deneme isteğine yetmiyor; deneme isteği gönderilemez.',
   CAPABILITY_MISMATCH: 'Hızlı sohbet profilinin modeli sohbet yeteneği taşımıyor; deneme isteği gönderilemez.'
 });
 
@@ -125,23 +135,41 @@ export function storedKeyNotice(status) {
   const credential = status?.credential;
   if (!credential?.configured || !status?.enabled) return null;
   if (credential.readable !== false) return null;
-  if (credential.unreadableReason === AI_CREDENTIAL_UNREADABLE_REASONS.PERSONAL_KEYS_DISABLED) {
-    return corporateFallback(status) === 'ready'
-      ? 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor, istekler kurumsal anahtarla yapılır.'
-      : 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor.';
+  switch (credential.unreadableReason) {
+    case AI_CREDENTIAL_UNREADABLE_REASONS.PERSONAL_KEYS_DISABLED:
+      return corporateFallback(status) === 'ready'
+        ? 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor, istekler kurumsal anahtarla yapılır.'
+        : 'Kişisel anahtar kullanımı bu kurulumda kapalı; kayıtlı anahtarınız kullanılmıyor.';
+    case AI_CREDENTIAL_UNREADABLE_REASONS.RECORD_INVALID:
+      return 'Kayıtlı anahtar okunamıyor (şifreli kayıt doğrulanamadı). Anahtarı yeniden kaydedin.';
+    default:
+      return 'Kayıtlı anahtar okunamıyor (sunucunun şifreleme anahtarı değişti). Anahtarı yeniden kaydedin.';
   }
-  return 'Kayıtlı anahtar okunamıyor (sunucunun şifreleme anahtarı değişti). Anahtarı yeniden kaydedin.';
 }
 
-/** Anahtar kaydı ya da kaldırması sonucu bilinmeden mi bitti (süre aşımı, ağ)? */
+/** Sonucu bilinmeyen işlemin nedeni; sonucu belli işlemde `null`. */
+function ambiguousCause(response) {
+  const code = String(response?.code ?? '');
+  if (AMBIGUOUS_MUTATION_CODES.has(code)) return code;
+  return response?.error?.details?.reason === SERVER_OPERATION_TIMEOUT ? SERVER_OPERATION_TIMEOUT : null;
+}
+
+/** Anahtar kaydı ya da kaldırması sonucu bilinmeden mi bitti (süre aşımı, ağ, bozuk yanıt)? */
 export function isAmbiguousMutation(response) {
-  return AMBIGUOUS_MUTATION_CODES.has(String(response?.code ?? ''));
+  return ambiguousCause(response) != null;
 }
 
-/** Sonucu bilinmeyen işlemden sonra güncel durum yeniden okunur; kullanıcıya bunu söyler. */
-export function ambiguousMutationNotice(action) {
+/**
+ * Sonucu bilinmeyen işlemden sonra güncel durum yeniden okunur; bildirim
+ * gerçek nedeni ve okumanın sonucunu söyler. Güncel durum da okunamadıysa
+ * kart "yüklendi" demez; `null` döner ve kart durumu çözülmemiş gösterir.
+ */
+export function ambiguousMutationNotice(action, response, { reconciled = true } = {}) {
   const subject = action === 'remove' ? 'Anahtarın kaldırılıp kaldırılmadığı' : 'Anahtarın kaydedilip kaydedilmediği';
-  return { tone: 'warn', text: `Sunucudan süre sınırında yanıt alınamadı. ${subject} doğrulanamadı; güncel durum yeniden yüklendi.` };
+  const cause = AMBIGUOUS_CAUSES[ambiguousCause(response)] || AMBIGUOUS_CAUSES.REQUEST_TIMEOUT;
+  return reconciled
+    ? { tone: 'warn', text: `${cause} ${subject} doğrulanamadı; güncel durum yeniden yüklendi.` }
+    : { tone: 'fail', text: `${cause} ${subject} doğrulanamadı ve güncel durum da okunamadı. Yeniden deneyin.` };
 }
 
 export function formatAiTimestamp(value) {

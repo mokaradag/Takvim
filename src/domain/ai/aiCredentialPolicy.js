@@ -36,10 +36,16 @@ export const API_KEY_MAX_LENGTH = 512;
  */
 export const AI_CREDENTIAL_OPERATION_TIMEOUT_MS = 15000;
 
-/** Kayıtlı anahtar okunamıyorsa nedeni; tarayıcı doğru açıklamayı seçer. */
+/**
+ * Kayıtlı anahtar kullanılamıyorsa nedeni; tarayıcı doğru açıklamayı seçer.
+ * `AI_DISABLED`: özellik kapalıyken okunabilirlik sınanmaz (künye korunur).
+ * `RECORD_INVALID`: şifreli kayıt doğrulama etiketinden geçmedi (bozuk kayıt).
+ */
 export const AI_CREDENTIAL_UNREADABLE_REASONS = Object.freeze({
+  AI_DISABLED: 'AI_DISABLED',
   PERSONAL_KEYS_DISABLED: 'PERSONAL_KEYS_DISABLED',
-  MASTER_KEY_CHANGED: 'MASTER_KEY_CHANGED'
+  MASTER_KEY_CHANGED: 'MASTER_KEY_CHANGED',
+  RECORD_INVALID: 'RECORD_INVALID'
 });
 
 const API_KEY_FORMAT_MESSAGES = Object.freeze({

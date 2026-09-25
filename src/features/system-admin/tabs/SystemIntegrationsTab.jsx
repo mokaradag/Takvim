@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icons } from '../../../components/icons';
 import { formatDuration, formatRelativeTime } from '../../../domain/observability/metrics.js';
 import { AdminSection } from '../components/AdminSection.jsx';
@@ -24,15 +24,30 @@ export function SystemIntegrationsTab({ enabled = true }) {
   const resource = useAdminResource(loader, { intervalMs: INTEGRATIONS_REFRESH_MS, enabled });
   const [testing, setTesting] = useState(null);
   const [results, setResults] = useState({});
+  // Süren bağlantı testinin isteği: sekmeden ayrılınca (ya da Demo Kipine
+  // geçilince) kesilir; sunucu da testi (ör. yapay zekâ `GET /models`) iptal eder.
+  const testRef = useRef(null);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    return () => {
+      testRef.current?.abort();
+      testRef.current = null;
+    };
+  }, [enabled]);
 
   const runTest = async (id) => {
     // Aynı anda TEK test çalışır. Yalnızca seçilen düğme kapatılsaydı, ikinci
     // bir test başlatıldığında ilkinin bitişi `testing` değerini temizler ve
     // bütün düğmeler yeniden açılır: yinelenen yoklamalar gönderilebilirdi.
     if (testing) return;
+    const controller = new AbortController();
+    testRef.current = controller;
     setTesting(id);
     try {
-      const response = await testIntegrationRequest(id);
+      const response = await testIntegrationRequest(id, { signal: controller.signal });
+      // Kesilen testin sonucu (bileşen kapanmış ya da kip değişmiştir) uygulanmaz.
+      if (controller.signal.aborted) return;
       setResults((current) => ({
         ...current,
         [id]: response?.ok
@@ -41,12 +56,15 @@ export function SystemIntegrationsTab({ enabled = true }) {
       }));
       await resource.refresh();
     } catch (error) {
+      if (controller.signal.aborted) return;
       setResults((current) => ({
         ...current,
         [id]: { ok: false, message: `Test çalıştırılamadı (${String(error?.code || error?.name || 'REQUEST_FAILED')}).` }
       }));
     } finally {
-      setTesting(null);
+      // Yerine yeni bir test başlamadıysa düğmeler yeniden açılır (kesilen test dâhil).
+      if (testRef.current === controller) testRef.current = null;
+      if (testRef.current === null) setTesting(null);
     }
   };
 

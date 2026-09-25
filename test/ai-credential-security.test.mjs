@@ -429,11 +429,13 @@ test('doğrulama yalnızca kişisel anahtarı sınar ve sonucu zaman damgasıyla
   assert.equal(inconclusive.status, 502);
   assert.equal((await credentialStatus()).body.ai.credential.lastValidationStatus, 'FORBIDDEN');
 
-  // `VALID` ancak uç anahtarsız isteği reddediyorsa verilir: ilk sonuçtan sonra
-  // anahtarsız bir denetim yapılır (kurumsal anahtar hiç kullanılmaz).
-  assert.deepEqual(provider.calls.map((call) => [call.kind, call.apiKey]), [
-    ['models', PERSONAL_KEY_A], ['models', null], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A]
+  // `VALID` ancak uç GÖNDERİLEN anahtarı denetliyorsa verilir: ilk sonuçtan
+  // sonra rastgele bir denetim anahtarıyla istek yapılır (kurumsal anahtar hiç
+  // kullanılmaz).
+  assert.deepEqual(provider.calls.map((call) => [call.kind, call.control ? 'control' : call.apiKey]), [
+    ['models', PERSONAL_KEY_A], ['models', 'control'], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A], ['models', PERSONAL_KEY_A]
   ]);
+  assert.ok(provider.calls.every((call) => call.apiKey && call.apiKey !== DEFAULT_KEY));
 
   // Anahtar değişince eski doğrulama sonucu taşınmaz.
   const replaced = await saveKey(PERSONAL_KEY_B);
@@ -592,7 +594,7 @@ test('doğrulama sürerken anahtar değiştirilirse sonuç yeni anahtara yazılm
   assert.equal(db.aiUserCredentials[0].LastValidationStatus, null, 'yeni anahtar doğrulanmış görünmez');
 });
 
-test('anahtarsız da model listesi veren uçta anahtar VALID sayılmaz ve sonuç kaydedilmez', async (t) => {
+test('geçersiz anahtarla da model listesi veren uçta anahtar VALID sayılmaz ve sonuç kaydedilmez', async (t) => {
   const { db, provider } = createAiStack(t);
   await saveKey(PERSONAL_KEY_A);
   provider.enqueue({ type: 'reply' }, { type: 'reply' });
@@ -601,7 +603,7 @@ test('anahtarsız da model listesi veren uçta anahtar VALID sayılmaz ve sonuç
   assert.equal(validation.body.error.code, 'AI_CONFIGURATION_ERROR');
   assert.equal(validation.body.error.details.reason, 'MODELS_ENDPOINT_UNAUTHENTICATED');
   assert.equal(db.aiUserCredentials[0].LastValidationStatus, null);
-  assert.deepEqual(provider.calls.map((call) => call.apiKey), [PERSONAL_KEY_A, null]);
+  assert.deepEqual(provider.calls.map((call) => (call.control ? 'control' : call.apiKey)), [PERSONAL_KEY_A, 'control']);
 });
 
 test('doğrulamada oran sınırının Retry-After değeri korunur; bağlantı kurulamazsa bir kez yeniden denenir', async (t) => {
@@ -618,7 +620,7 @@ test('doğrulamada oran sınırının Retry-After değeri korunur; bağlantı ku
   const recovered = await validateKey();
   assert.equal(recovered.status, 200);
   assert.equal(recovered.body.validation.status, 'VALID');
-  assert.deepEqual(provider.calls.slice(1).map((call) => call.apiKey), [PERSONAL_KEY_A, PERSONAL_KEY_A, null]);
+  assert.deepEqual(provider.calls.slice(1).map((call) => (call.control ? 'control' : call.apiKey)), [PERSONAL_KEY_A, PERSONAL_KEY_A, 'control']);
 });
 
 /* ── İstek güvenliği ──────────────────────────────────────── */
@@ -847,7 +849,279 @@ test('aynı kaynak denetimi şemayı da karşılaştırır ve vekil zincirindeki
   assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'http://rota.example.com' })), false);
   // `X-Forwarded-Proto` iletmeyen TLS sonlandırıcı: tarayıcının https kaynağı kabul edilir.
   assert.equal(isSameOriginRequest(request('http://rota.example.com/api', { origin: 'https://rota.example.com', host: 'rota.example.com' })), true);
+  // Vekil şemayı AÇIKÇA bildiriyorsa şema bire bir eşleşmelidir: http hedefe https kaynağı da aynı kaynak değildir.
+  assert.equal(isSameOriginRequest(request('http://rota.example.com/api', {
+    origin: 'https://rota.example.com', host: 'rota.example.com', 'x-forwarded-proto': 'http'
+  })), false);
+  assert.equal(isSameOriginRequest(request('http://rota.example.com/api', {
+    origin: 'http://rota.example.com', host: 'rota.example.com', 'x-forwarded-proto': 'http'
+  })), true);
+  assert.equal(isSameOriginRequest(request('http://upstream.internal/api', {
+    origin: 'https://rota.example.com', host: 'rota.example.com', 'x-forwarded-proto': 'https, http'
+  })), true, 'zincirde istemciye dönük ilk değer kullanılır');
   assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'https://rota.example.com:443' })), true);
   assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'https://kardes.example.com' })), false);
   assert.equal(isSameOriginRequest(request('https://rota.example.com/api', { origin: 'null' })), false);
+});
+
+/* ── İnceleme düzeltmeleri: commit sınırı, sınırlı SQL kapısı, kimlik sırası ── */
+
+const sqlPool = await import('../src/server/db/pool.js');
+const credentialService = await import('../src/server/ai/aiCredentialService.js');
+
+async function waitFor(predicate, rounds = 400) {
+  for (let round = 0; round < rounds && !predicate(); round += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(predicate(), 'beklenen durum oluşmadı');
+}
+
+function directoryBarrier(db) {
+  let release;
+  db.queryBarrier = {
+    match: (sql) => sql.includes('MR_V_PeopleDirectory') && !sql.includes('MR_AiUserCredentials'),
+    entered: 0,
+    released: new Promise((resolve) => { release = resolve; })
+  };
+  return () => {
+    db.queryBarrier = null;
+    release();
+  };
+}
+
+test('commit başladıktan sonra vazgeçen istemci ya da dolan süre, uygulanmış kaydı hata olarak bildirtmez', async (t) => {
+  const { db } = createAiStack(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const client = new AbortController();
+  db.commitHook = async () => {
+    db.commitHook = null;
+    // Commit sürerken istemci vazgeçer ve sunucunun 15 sn'lik süresi de dolar.
+    client.abort();
+    t.mock.timers.tick(20000);
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  const saved = await saveKey(PERSONAL_KEY_A, { signal: client.signal });
+  assert.equal(saved.status, 200, 'yanıt, veritabanındaki gerçek sonucu söyler');
+  assert.equal(saved.body.ai.credential.hint, PERSONAL_KEY_A.slice(-4));
+  assert.equal(db.aiUserCredentials.length, 1);
+  assert.equal(db.aiUserCredentials[0].KeyHint, PERSONAL_KEY_A.slice(-4));
+});
+
+test('anahtar uçlarının SQL işleri sınırlı ve Sicil başına adil bir kapıdan geçer', async (t) => {
+  const { db, useSicil } = createAiStack(t);
+  const release = directoryBarrier(db);
+  t.after(release);
+  const pending = [];
+  const issue = async (sicil) => {
+    useSicil(sicil);
+    pending.push(credentialStatus());
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  for (const sicil of [SICIL_A, SICIL_B, SICIL_A, SICIL_A, SICIL_A, SICIL_A, SICIL_B]) await issue(sicil);
+  await waitFor(() => db.queryBarrier.entered === 2);
+  for (let round = 0; round < 20; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(db.queryBarrier.entered, 2, 'ortak havuzda aynı anda en fazla iki anahtar sorgusu çalışır');
+  assert.deepEqual(credentialService.aiSqlGateStatusForTests().credential, { active: 2, queued: 5, users: 2 });
+
+  // A'nın kendi sırası dolu (1 etkin + 4 bekleyen): ötekileri değil yalnızca A'yı geri çevirir.
+  useSicil(SICIL_A);
+  const own = await credentialStatus();
+  assert.equal(own.status, 503);
+  assert.equal(own.body.error.code, 'AI_BUSY');
+  assert.deepEqual([own.body.error.details.scope, own.body.error.details.saturation], ['user', 'user']);
+  assert.ok(own.headers.get('retry-after'));
+  useSicil(SICIL_B);
+  pending.push(credentialStatus());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(credentialService.aiSqlGateStatusForTests().credential.queued, 6, 'öteki kullanıcı hâlâ sıraya girer');
+
+  release();
+  for (const response of await Promise.all(pending)) assert.equal(response.status, 200);
+  assert.deepEqual(credentialService.aiSqlGateStatusForTests().credential, { active: 0, queued: 0, users: 0 });
+});
+
+test('kira öncesi rehber kapısında tek kullanıcı sırayı doldurup ötekileri geri çevirtemez', async (t) => {
+  const { db, useSicil } = createAiStack(t);
+  const release = directoryBarrier(db);
+  t.after(release);
+  const requests = [];
+  useSicil(SICIL_A);
+  for (let index = 0; index < 9; index += 1) {
+    requests.push(runProbe());
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  // 1 etkin + 8 bekleyen: onuncu istek kullanıcının kendi sınırıdır.
+  const own = await runProbe();
+  assert.equal(own.status, 503);
+  assert.deepEqual([own.body.error.details.scope, own.body.error.details.saturation], ['user', 'user']);
+  useSicil(SICIL_B);
+  const other = runProbe();
+  await waitFor(() => db.queryBarrier.entered === 2);
+  assert.equal(credentialService.aiSqlGateStatusForTests().directory.active, 2, 'öteki kullanıcı boş yeri alır');
+  release();
+  assert.equal((await other).status, 200);
+  // Rehber denetimini geçen istekler kapasite denetimine ulaşır; orada da
+  // yalnızca kullanıcının kendi sınırı uygulanır.
+  for (const response of await Promise.all(requests)) {
+    assert.ok(response.status === 200 || (response.status === 503 && response.body.error.details.saturation === 'user'),
+      JSON.stringify(response.body));
+  }
+});
+
+test('bağlantı havuzu kurulurken takılan rehber denetimi kapıda yer tutmaz', async (t) => {
+  createAiStack(t);
+  class HangingPool {
+    on() { return this; }
+    connect() { return new Promise(() => {}); }
+    close() { return Promise.resolve(); }
+  }
+  sqlPool.setSqlDriverForTests({ ConnectionPool: HangingPool, Transaction: class {} });
+  sqlPool.resetSqlPoolForTests();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const pending = credentialService.assertAiDirectoryMember(SICIL_A, { signal: controller.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort(new Error('ön denetim süresi doldu'));
+    await assert.rejects(pending, /ön denetim süresi doldu/);
+  }
+  assert.deepEqual(credentialService.aiSqlGateStatusForTests().directory, { active: 0, queued: 0, users: 0 },
+    'terk edilen çağrılar kapıyı kilitlemez');
+});
+
+test('iptal edilen rehber sorgusu sürücüde bitene kadar kapıdaki yeri tutar', async (t) => {
+  const { db } = createAiStack(t);
+  const release = directoryBarrier(db);
+  t.after(release);
+  const attempts = [SICIL_A, SICIL_B].map((sicil) => {
+    const controller = new AbortController();
+    return { controller, pending: credentialService.assertAiDirectoryMember(sicil, { signal: controller.signal }) };
+  });
+  await waitFor(() => db.queryBarrier.entered === 2);
+  for (const { controller } of attempts) controller.abort(new Error('süre doldu'));
+  for (const { pending } of attempts) await assert.rejects(pending, /süre doldu/);
+  // Çağıranlar serbest kaldı ama sorgular hâlâ çalışıyor: yeni sorgu başlamaz.
+  assert.equal(credentialService.aiSqlGateStatusForTests().directory.active, 2);
+  const next = credentialService.assertAiDirectoryMember(SICIL_A);
+  for (let round = 0; round < 20; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(db.queryBarrier.entered, 2, 'bırakılmış sorgular sürerken üçüncü sorgu havuza gitmez');
+  release();
+  await next;
+  await waitFor(() => credentialService.aiSqlGateStatusForTests().directory.active === 0);
+});
+
+test('anahtar gövdesini yavaşça gönderen istemci kaydı süre sınırının ötesinde tutamaz', async (t) => {
+  const { db } = createAiStack(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let pulled = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{"apiKey":"')); },
+    pull() { pulled += 1; return new Promise(() => {}); },
+    cancel() { cancelled = true; }
+  });
+  const pending = credentialRoute.PUT(new Request('http://localhost/api/mergen-rota/ai/credential', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body, duplex: 'half'
+  }));
+  await waitFor(() => pulled > 0);
+  t.mock.timers.tick(15000);
+  const response = await readJson(await pending);
+  assert.equal(response.status, 503);
+  assert.equal(response.body.error.details.reason, 'CREDENTIAL_OPERATION_TIMEOUT');
+  await waitFor(() => cancelled);
+  assert.equal(db.aiUserCredentials.length, 0);
+});
+
+test('kurumsal kipte isteğe bağlı anahtar tablosunun yetki sorunu anahtar durumunu bozmaz', async (t) => {
+  const { db } = createAiStack(t, { env: { MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: null } });
+  db.aiCredentialPermissionDenied = true;
+  const status = await credentialStatus();
+  assert.equal(status.status, 200);
+  assert.equal(status.body.ai.schemaReady, false, 'okunamayan tablo hazır sayılmaz');
+  assert.equal(status.body.ai.credential.configured, false);
+  assert.equal(status.body.ai.effectiveSource, 'default');
+});
+
+test('rehberde olmayan Sicil, anahtar tablosunun durumunu (yetki, şema) öğrenemez', async (t) => {
+  const { db } = createAiStack(t, { sicil: SICIL_UNKNOWN });
+  db.aiCredentialPermissionDenied = true;
+  for (const response of [await credentialStatus(), await removeKey(), await saveKey(PERSONAL_KEY_A)]) {
+    assert.equal(response.status, 401, 'yetki hatası değil kimlik reddi');
+    assert.equal(response.body.error.code, 'UNAUTHORIZED');
+  }
+  assert.equal(db.statements.some((entry) => entry.sql.includes('MR_AiUserCredentials')), false, 'anahtar tablosuna hiç gidilmez');
+});
+
+test('kaldırmada okunan anahtar yokken araya giren kayıt "anahtar yok" yanıtıyla gizlenmez', async (t) => {
+  const { db } = createAiStack(t);
+  db.aiCredentialHooks = {
+    beforeDelete(row) {
+      db.aiCredentialHooks = null;
+      assert.equal(row, null, 'okumada anahtar yoktu');
+      // Başka sekmede ilk anahtar kaydedildi.
+      db.aiUserCredentials.push({
+        Sicil: SICIL_A, EncryptionVersion: 1, MasterKeyId: 'x'.repeat(16), Nonce: randomBytes(12), Ciphertext: randomBytes(32),
+        AuthTag: randomBytes(16), KeyHint: PERSONAL_KEY_B.slice(-4), CreatedAt: new Date(), UpdatedAt: new Date(),
+        LastValidatedAt: null, LastValidationStatus: null, RowVersion: Buffer.alloc(8)
+      });
+    }
+  };
+  const removed = await removeKey();
+  assert.equal(removed.status, 409);
+  assert.equal(removed.body.error.code, 'CONFLICT');
+  assert.equal(db.aiUserCredentials.length, 1, 'yeni anahtar korunur');
+});
+
+test('silmeden hemen sonra kaydedilen anahtar, kaldırma yanıtında "anahtar yok" olarak gösterilmez', async (t) => {
+  const { db } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  db.aiCredentialHooks = {
+    afterDelete({ deleted }) {
+      db.aiCredentialHooks = null;
+      assert.equal(deleted, 1, 'okunan anahtar silindi');
+      db.aiUserCredentials.push({
+        Sicil: SICIL_A, EncryptionVersion: 1, MasterKeyId: 'x'.repeat(16), Nonce: randomBytes(12), Ciphertext: randomBytes(32),
+        AuthTag: randomBytes(16), KeyHint: PERSONAL_KEY_B.slice(-4), CreatedAt: new Date(), UpdatedAt: new Date(),
+        LastValidatedAt: null, LastValidationStatus: null, RowVersion: Buffer.alloc(8)
+      });
+    }
+  };
+  const removed = await removeKey();
+  assert.equal(removed.status, 409);
+  assert.match(removed.body.error.message, /yeni bir kişisel anahtar kaydedildi/);
+  assert.equal(db.aiUserCredentials[0].KeyHint, PERSONAL_KEY_B.slice(-4));
+});
+
+test('özellik yalnızca kapatıldığında kayıtlı anahtarın künyesi ve doğrulama sonucu korunur', async (t) => {
+  const { provider, setEnv } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'reply' });
+  assert.equal((await validateKey()).body.validation.status, 'VALID');
+  setEnv({ MERGEN_ROTA_AI_ENABLED: 'false' });
+  const status = await credentialStatus();
+  assert.equal(status.status, 200);
+  assert.equal(status.body.ai.enabled, false);
+  const { credential } = status.body.ai;
+  assert.equal(credential.configured, true);
+  assert.equal(credential.unreadableReason, 'AI_DISABLED', 'kapalı özellik "kişisel anahtar kapalı" diye anlatılmaz');
+  assert.equal(credential.lastValidationStatus, 'VALID', 'gerçek doğrulama künyesi gizlenmez');
+  assert.ok(credential.lastValidatedAt);
+});
+
+test('şifreli kaydı bozulmuş anahtar okunabilir ve doğrulanmış gösterilmez', async (t) => {
+  const { db, provider } = createAiStack(t);
+  await saveKey(PERSONAL_KEY_A);
+  provider.enqueue({ type: 'reply' });
+  assert.equal((await validateKey()).body.validation.status, 'VALID');
+  assert.equal((await credentialStatus()).body.ai.credential.readable, true);
+  // Doğrulama etiketi bozuldu (ör. yedekten yanlış geri yükleme).
+  const tag = Buffer.from(db.aiUserCredentials[0].AuthTag);
+  tag[0] ^= 0xff;
+  db.aiUserCredentials[0].AuthTag = tag;
+  const status = await credentialStatus();
+  assert.equal(status.body.ai.credential.readable, false);
+  assert.equal(status.body.ai.credential.unreadableReason, 'RECORD_INVALID');
+  assert.equal(status.body.ai.credential.lastValidationStatus, null, 'eski VALID sonucu gösterilmez');
+  assertNoSecret(status.text, [PERSONAL_KEY_A], 'durum yanıtı');
+  provider.calls.length = 0;
+  const probe = await runProbe();
+  assert.equal(probe.body.error.code, 'AI_KEY_INVALID');
+  assert.equal(provider.calls.length, 0);
 });

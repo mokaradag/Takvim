@@ -4,7 +4,7 @@ import { Icons } from '../../components/icons';
 import { Spinner } from '../../components/Loader';
 import { useDataMode } from '../../components/shell/DataModeContext.jsx';
 import { DATA_MODES } from '../../data/dataMode.js';
-import { API_KEY_MAX_LENGTH, normalizeApiKeyInput } from '../../domain/ai/aiCredentialPolicy.js';
+import { AI_CREDENTIAL_VALIDATION, API_KEY_MAX_LENGTH, normalizeApiKeyInput } from '../../domain/ai/aiCredentialPolicy.js';
 import {
   loadAiCredentialStatusRequest,
   removeAiCredentialRequest,
@@ -38,10 +38,16 @@ import {
  * ve tarihler görünür. Anahtar taslağı yalnızca bileşen belleğinde durur:
  * tarayıcı deposuna, adrese ya da günlüğe yazılmaz ve kayıttan sonra silinir.
  *
- * Veri kipi değişince (Gerçek Sistem ↔ Demo) kart sıfırlanır; önceki kipte
- * başlamış kayıt, kaldırma, doğrulama ve deneme istekleri İPTAL edilir (sunucu
- * iptal edilen kaydı geri alır) ve geç gelen her sonuç yok sayılır: Demo
- * Kipinde hiçbir gerçek anahtar işlemi sürmez ya da görünmez.
+ * Veri kipi değişince (Gerçek Sistem ↔ Demo) ya da kart kapanınca (sayfadan
+ * ayrılma) önceki durum okumaları, kayıt, kaldırma, doğrulama ve deneme
+ * istekleri İPTAL edilir (sunucu commit'ten önce iptal edilen kaydı geri alır)
+ * ve geç gelen her sonuç yok sayılır: Demo Kipinde hiçbir gerçek anahtar işlemi
+ * sürmez ya da görünmez.
+ *
+ * Sonucu bilinmeyen bir kayıt/kaldırmadan sonra güncel durum okunur; bu okuma
+ * bitene kadar eylemler kapalı kalır ve okuma yalnızca kendisinden sonra yeni
+ * bir işlem başlamadıysa uygulanır. Okuma da başarısızsa kart "yüklendi" demez;
+ * durumu çözülmemiş gösterir.
  *
  * Satır içi denetimler (anahtar formu, kaldırma onayı) kapanınca odak onları
  * açan düğmeye döner; klavye kullanıcısı kartın başına düşmez.
@@ -67,7 +73,10 @@ export function AiAccessSettings() {
   const probeRef = useRef({ token: 0, controller: null });
   // Kip değişiminde artar; eski oturumda başlamış işin sonucu uygulanmaz.
   const sessionRef = useRef(0);
-  // Kayıt, kaldırma ve doğrulama isteklerinin iptal denetimleri (denetim → tür).
+  // Her anahtar işleminde (kayıt, kaldırma, doğrulama) artar; eski bir işlemin
+  // ardından yapılan durum okuması daha yeni bir işlemin sonucunu ezemez.
+  const mutationRef = useRef(0);
+  // Durum okuması, kayıt, kaldırma ve doğrulama isteklerinin iptal denetimleri (denetim → tür).
   const actionsRef = useRef(new Map());
   const mountedRef = useRef(true);
   const sectionRef = useRef(null);
@@ -86,15 +95,14 @@ export function AiAccessSettings() {
   }, []);
 
   /**
-   * Süren eylem isteklerini keser; `kinds` verilmezse hepsini. Kip değişiminde
-   * kayıt ve kaldırma da kesilir (sunucu iptal edilen kaydı geri alır). Kart
-   * kapanırken yalnızca doğrulama kesilir: kullanıcının başlattığı kayıt ya da
-   * kaldırma sayfadan ayrılınca yarıda bırakılmaz.
+   * Süren bütün istekleri keser (durum okuması, kayıt, kaldırma, doğrulama).
+   * Kip değişiminde ve kart kapanırken çağrılır: sunucu, commit'ten önce iptal
+   * edilen kaydı geri alır; terk edilmiş bir sayfanın isteği sonradan
+   * uygulanmaz.
    */
-  const abortActions = useCallback((kinds = null) => {
+  const abortActions = useCallback(() => {
     const actions = actionsRef.current;
-    for (const [controller, kind] of [...actions]) {
-      if (kinds && !kinds.includes(kind)) continue;
+    for (const controller of [...actions.keys()]) {
       controller.abort();
       actions.delete(controller);
     }
@@ -116,7 +124,7 @@ export function AiAccessSettings() {
     if (!actualMode) return;
     const session = sessionRef.current;
     setPhase('loading');
-    const response = await loadAiCredentialStatusRequest();
+    const response = await trackAction('status', (signal) => loadAiCredentialStatusRequest({ signal }));
     if (!mountedRef.current || sessionRef.current !== session) return;
     if (!response.ok) {
       setLoadError(aiFailureMessage(response));
@@ -126,14 +134,36 @@ export function AiAccessSettings() {
     setStatus(response.ai);
     setLoadError(null);
     setPhase('ready');
-  }, [actualMode]);
+  }, [actualMode, trackAction]);
 
-  /** Sonucu bilinmeyen işlemden sonra kartı yükleme ekranına düşürmeden güncel durumu okur. */
-  const reconcile = useCallback(async (session) => {
-    const response = await loadAiCredentialStatusRequest();
-    if (!mountedRef.current || sessionRef.current !== session) return;
-    if (response.ok) setStatus(response.ai);
-  }, []);
+  /**
+   * Kartı yükleme ekranına düşürmeden güncel durumu okur. `true`: okundu ve
+   * uygulandı; `false`: okunamadı; `null`: bu arada kip değişti, kart kapandı
+   * ya da yeni bir anahtar işlemi başladı (sonuç uygulanmadı).
+   */
+  const reconcile = useCallback(async (session, mutation) => {
+    const response = await trackAction('status', (signal) => loadAiCredentialStatusRequest({ signal }));
+    if (!mountedRef.current || sessionRef.current !== session || mutationRef.current !== mutation) return null;
+    if (!response.ok) return false;
+    setStatus(response.ai);
+    return true;
+  }, [trackAction]);
+
+  /** Sonucu bilinmeyen işlemden sonra güncel durum okunur; okunamazsa kart çözülmemiş gösterilir. */
+  const settleAmbiguous = useCallback(async (action, response, session, mutation) => {
+    const reconciled = await reconcile(session, mutation);
+    if (reconciled === null) return false;
+    setBusy(null);
+    const notice = ambiguousMutationNotice(action, response, { reconciled });
+    if (reconciled) {
+      setNotice(notice);
+      return true;
+    }
+    setNotice(null);
+    setLoadError(notice.text);
+    setPhase('error');
+    return false;
+  }, [reconcile]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -141,7 +171,7 @@ export function AiAccessSettings() {
     return () => {
       mountedRef.current = false;
       probeState.controller?.abort();
-      abortActions(['validate']);
+      abortActions();
     };
   }, [abortActions]);
 
@@ -214,18 +244,19 @@ export function AiAccessSettings() {
       return;
     }
     const session = sessionRef.current;
+    const mutation = ++mutationRef.current;
     setBusy('save');
     const response = await trackAction('save', (signal) => saveAiCredentialRequest(normalized.value, { signal }));
     if (!mountedRef.current || sessionRef.current !== session) return;
+    if (!response.ok && isAmbiguousMutation(response)) {
+      // Anahtar kaydedilmiş olabilir: sonuç tahmin edilmez, güncel durum okunur.
+      // Okuma bitene kadar eylemler kapalı kalır.
+      invalidateProbe();
+      await settleAmbiguous('save', response, session, mutation);
+      return;
+    }
     setBusy(null);
     if (!response.ok) {
-      if (isAmbiguousMutation(response)) {
-        // Anahtar kaydedilmiş olabilir: sonuç tahmin edilmez, güncel durum okunur.
-        setNotice(ambiguousMutationNotice('save'));
-        invalidateProbe();
-        await reconcile(session);
-        return;
-      }
       setDraftError(aiFailureMessage(response));
       return;
     }
@@ -242,26 +273,38 @@ export function AiAccessSettings() {
 
   const validate = async () => {
     const session = sessionRef.current;
+    const mutation = ++mutationRef.current;
     setBusy('validate');
     setNotice(null);
     const response = await trackAction('validate', (signal) => validateAiCredentialRequest({ signal, timeoutMs: validationTimeoutMs(status) }));
     if (!mountedRef.current || sessionRef.current !== session) return;
-    setBusy(null);
     if (!response.ok) {
+      setBusy(null);
       setNotice({ tone: 'fail', text: aiFailureMessage(response) });
       return;
     }
     const { validation } = response;
-    setNotice(validationNotice(validation));
     // Anahtar doğrulama sürerken başka bir oturumda değiştiyse sonuç ona ait
-    // değildir; güncel durum yeniden okunur.
+    // değildir; güncel durum kart yükleme ekranına düşmeden yeniden okunur ve
+    // bildirim görünür kalır.
     if (validation.stale) {
       invalidateProbe();
-      load();
+      const reconciled = await reconcile(session, mutation);
+      if (reconciled === null) return;
+      setBusy(null);
+      setNotice(reconciled ? validationNotice(validation) : {
+        tone: 'fail',
+        text: 'Anahtar doğrulama sırasında değiştirildi ve güncel durum okunamadı. Sayfayı yenileyip yeniden deneyin.'
+      });
       return;
     }
+    setBusy(null);
+    setNotice(validationNotice(validation));
     // Güncel anahtarın yeni sonucu, ondan önceki deneme sonucunun yerini alır.
-    clearFinishedProbe();
+    // Anahtar reddedildiyse ya da yetkisi yetersizse süren (daha eski) deneme de
+    // kesilir: sonradan gelen "Yanıt alındı" yeni sonucu çürütemez.
+    if (validation.status === AI_CREDENTIAL_VALIDATION.VALID) clearFinishedProbe();
+    else invalidateProbe();
     if (validation.credential) {
       setStatus((current) => (current ? { ...current, credential: { configured: true, readable: true, ...validation.credential } } : current));
     }
@@ -269,26 +312,34 @@ export function AiAccessSettings() {
 
   const remove = async () => {
     const session = sessionRef.current;
+    const mutation = ++mutationRef.current;
     setBusy('remove');
     const response = await trackAction('remove', (signal) => removeAiCredentialRequest({ signal }));
     if (!mountedRef.current || sessionRef.current !== session) return;
-    setBusy(null);
     setConfirmingRemoval(false);
+    if (!response.ok && isAmbiguousMutation(response)) {
+      invalidateProbe();
+      if (await settleAmbiguous('remove', response, session, mutation)) setFocusReturn('remove');
+      return;
+    }
+    if (!response.ok && response.code === 'CONFLICT') {
+      // Anahtar bu arada başka bir oturumda kaydedildi: güncel durum kart
+      // yükleme ekranına düşmeden okunur ve çakışma bildirimi görünür kalır;
+      // önceki denemenin sonucu artık geçerli anahtarı anlatmaz.
+      invalidateProbe();
+      const reconciled = await reconcile(session, mutation);
+      if (reconciled === null) return;
+      setBusy(null);
+      setNotice({
+        tone: 'fail',
+        text: reconciled ? aiFailureMessage(response) : `${aiFailureMessage(response)} Güncel durum okunamadı; sayfayı yenileyin.`
+      });
+      setFocusReturn('remove');
+      return;
+    }
+    setBusy(null);
     if (!response.ok) {
-      if (isAmbiguousMutation(response)) {
-        setNotice(ambiguousMutationNotice('remove'));
-        invalidateProbe();
-        await reconcile(session);
-        setFocusReturn('remove');
-        return;
-      }
       setNotice({ tone: 'fail', text: aiFailureMessage(response) });
-      // Anahtar bu arada başka bir oturumda değiştirildiyse güncel durum
-      // gösterilir; önceki denemenin sonucu artık geçerli anahtarı anlatmaz.
-      if (response.code === 'CONFLICT') {
-        invalidateProbe();
-        load();
-      }
       setFocusReturn('remove');
       return;
     }

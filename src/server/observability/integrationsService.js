@@ -279,11 +279,28 @@ function outlookCard() {
   });
 }
 
-function aiCard() {
+/**
+ * Yapay zekâ kartının durumu sağlık bileşeninden gelir; ancak son bağlantı
+ * testi, ondan sonra başarılı bir test olmadan ve tazeyken BAŞARISIZ olduysa
+ * kart sağlıklı ya da bilinmiyor görünmez (ör. kurumsal anahtar doğrulanamadı).
+ * Gecikme alanı son bağlantı testinin süresidir.
+ */
+function aiCard({ now = Date.now() } = {}) {
+  const base = aiIntegrationCard();
+  const entry = history(INTEGRATIONS.AI);
+  const failureAt = entry.lastFailureAt ? new Date(entry.lastFailureAt).getTime() : null;
+  const failedRecently = entry.lastProbeOk === false && Number.isFinite(failureAt) && now - failureAt <= REACHABILITY_FRESHNESS_MS;
+  const downgrade = base.configured && failedRecently
+    && (base.state === HEALTH_STATES.HEALTHY || base.state === HEALTH_STATES.UNKNOWN);
   return card(INTEGRATIONS.AI, {
     label: 'Yapay zekâ sağlayıcısı',
     kind: 'OpenAI uyumlu kurum içi uç',
-    ...aiIntegrationCard()
+    ...base,
+    ...(downgrade ? {
+      state: HEALTH_STATES.WARNING,
+      message: `${base.message} Son bağlantı testi başarısız oldu${entry.lastFailureCode ? ` (${entry.lastFailureCode})` : ''}.`
+    } : {}),
+    durationMs: entry.lastDurationMs ?? null
   });
 }
 

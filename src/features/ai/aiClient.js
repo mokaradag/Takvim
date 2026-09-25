@@ -44,23 +44,48 @@ function isCredentialView(credential) {
   return !credential.configured || (typeof credential.readable === 'boolean' && typeof credential.hint === 'string');
 }
 
+/**
+ * Durum yanıtı. Saklama durumu alanları (`schemaReady`, `personalKeysConfigured`)
+ * da zorunludur: eksik göç (0016) ile bilinçli kapatılmış saklamayı ayıran
+ * açıklama onlardan seçilir.
+ */
 function isStatusPayload(ai) {
   return isPlainObject(ai)
     && typeof ai.enabled === 'boolean'
     && typeof ai.available === 'boolean'
     && typeof ai.personalKeysSupported === 'boolean'
+    && typeof ai.personalKeysConfigured === 'boolean'
     && typeof ai.defaultKeyConfigured === 'boolean'
+    && typeof ai.schemaReady === 'boolean'
     && SOURCES.has(ai.effectiveSource)
     && isCredentialView(ai.credential)
     && isPlainObject(ai.probe) && typeof ai.probe.available === 'boolean';
 }
 
-/** Yalnızca sunucunun üç kalıcı sonucu ya da açıkça bayat sonuç kabul edilir. */
+/** Kayıtlı anahtarın künyesi: son dört karakter ve tarihler (tarayıcıya giden tek bilgi). */
+function isCredentialMetadata(credential) {
+  return isPlainObject(credential)
+    && typeof credential.hint === 'string'
+    && (credential.lastValidatedAt == null || nonEmptyText(credential.lastValidatedAt))
+    && (credential.lastValidationStatus == null || VALIDATION_RESULTS.has(credential.lastValidationStatus));
+}
+
+/**
+ * Doğrulama yanıtı. Bayat olmayan sonuç `stale: false`, sunucunun üç kalıcı
+ * sonucundan biri ve o sonucun YAZILDIĞI anahtarın künyesini (aynı sonuç ve
+ * doğrulama zamanıyla) taşımalıdır. Bayat sonuç `status` taşımaz; künye güncel
+ * anahtarındır ya da anahtar kaldırıldıysa yoktur.
+ */
 function isValidationPayload(validation) {
   if (!isPlainObject(validation)) return false;
-  if (validation.credential != null && !isPlainObject(validation.credential)) return false;
-  if (validation.stale === true) return validation.status == null;
-  return VALIDATION_RESULTS.has(validation.status);
+  if (validation.stale === true) {
+    return validation.status == null && (validation.credential == null || isCredentialMetadata(validation.credential));
+  }
+  return validation.stale === false
+    && VALIDATION_RESULTS.has(validation.status)
+    && isCredentialMetadata(validation.credential)
+    && validation.credential.lastValidationStatus === validation.status
+    && nonEmptyText(validation.credential.lastValidatedAt);
 }
 
 /**

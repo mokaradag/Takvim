@@ -208,21 +208,26 @@ test('kişisel anahtar tablosuna yalnızca depo modülü, sabit ve Sicil ile sı
   assert.ok(touching.length >= 6);
   for (const [name, statement] of touching) {
     if (name === 'AI_CREDENTIAL_SCHEMA_SQL') {
-      // Şema denetimi yalnızca nesnenin varlığına bakar; satır okumaz.
-      assert.match(statement, /^SELECT CAST\(CASE WHEN OBJECT_ID\(N'dbo\.MR_AiUserCredentials', N'U'\) IS NULL/, name);
-      assert.doesNotMatch(statement, /\bFROM\b/i, name);
+      // Şema denetimi tablonun satırlarını okumaz: nesnenin varlığı, 0016 göç
+      // kaydı ve uygulamanın kullandığı sütunların yapısı denetlenir.
+      assert.match(statement, /^SELECT CAST\(CASE WHEN OBJECT_ID\(N'dbo\.MR_AiUserCredentials', N'U'\) IS NOT NULL/, name);
+      assert.doesNotMatch(statement, /FROM dbo\.MR_AiUserCredentials/i, name);
+      assert.match(statement, /FROM dbo\.MR_SchemaMigrations WHERE MigrationId = N'0016_ai_user_credentials'/, name);
+      assert.match(statement, /LEFT JOIN sys\.columns c ON c\.object_id = OBJECT_ID\(N'dbo\.MR_AiUserCredentials', N'U'\)/, name);
+      assert.match(statement, /c\.is_identity <> 0/, name);
     } else if (/^IF @@ROWCOUNT = 0 INSERT /.test(statement)) {
       assert.match(statement, /VALUES \(@sicil, /, name);
     } else {
       assert.match(statement, /WHERE Sicil = @sicil(?: AND Nonce = @keyNonce)?$/, `${name}: ${statement}`);
     }
   }
-  // Durum sorgusu şifreli metni ve doğrulama etiketini hiç okumaz. Ana anahtar
-  // KİMLİĞİ ve nonce gizli değildir (nonce AES-GCM'nin açık parametresidir ve
-  // her kayıtta yenilendiği için anahtar malzemesinin kimliğidir); ikisi de
-  // yalnızca sunucuda kullanılır, tarayıcıya gitmez.
-  assert.doesNotMatch(queries.AI_CREDENTIAL_STATUS_SQL, /Ciphertext|AuthTag/);
-  assert.match(queries.AI_CREDENTIAL_STATUS_SQL, /Nonce AS KeyNonce/);
+  // Durum sorgusu YALNIZCA anahtar tablosuna gider: rehber üyeliği ondan önce
+  // ayrı sorguyla doğrulanır (rehberde olmayan Sicil tablonun durumunu
+  // öğrenemez). Şifreli alanlar kaydın bütünlüğünü (AES-GCM etiketi) sunucuda
+  // sınamak için okunur; ana anahtar KİMLİĞİ ve nonce gizli değildir. Hiçbiri
+  // tarayıcıya gitmez (bkz. kimlik bilgisi güvenliği testleri).
+  assert.doesNotMatch(queries.AI_CREDENTIAL_STATUS_SQL, /MR_V_PeopleDirectory|KnownSicil/);
+  assert.match(queries.AI_CREDENTIAL_STATUS_SQL, /SELECT TOP \(1\) EncryptionVersion, MasterKeyId, Nonce, Ciphertext, AuthTag, /);
   // Rehber denetimi anahtar tablosuna dokunmaz: 0016 yokken de kimlik korunur.
   assert.doesNotMatch(queries.AI_CREDENTIAL_DIRECTORY_SQL, /MR_AiUserCredentials/);
   assert.match(queries.AI_CREDENTIAL_DIRECTORY_SQL, /FROM dbo\.MR_V_PeopleDirectory WHERE Sicil = @sicil/);
@@ -230,6 +235,9 @@ test('kişisel anahtar tablosuna yalnızca depo modülü, sabit ve Sicil ile sı
   // yazımıyla ilerleyen satır sürümüne bağlanmaz. Doğrulama yazımı künyeyi
   // aynı deyimden (`OUTPUT`) döndürür.
   assert.match(queries.AI_CREDENTIAL_DELETE_SQL, /WHERE Sicil = @sicil AND Nonce = @keyNonce;/);
+  // Silmeden sonraki güncel satır aynı gidiş-dönüşte okunur: araya giren kayıt
+  // "anahtar yok" yanıtıyla gizlenmez.
+  assert.match(queries.AI_CREDENTIAL_DELETE_SQL, /SELECT @@ROWCOUNT AS Deleted;\s+SELECT TOP \(1\) Nonce AS KeyNonce, /);
   assert.match(queries.AI_CREDENTIAL_VALIDATION_SQL, /OUTPUT inserted\.KeyHint[^;]*WHERE Sicil = @sicil AND Nonce = @keyNonce;/);
   for (const text of Object.values(queries)) assert.doesNotMatch(text, /@rowVersion/);
 });
@@ -249,9 +257,26 @@ test('0016 göçü sıralı, yinelenebilir ve düz metin anahtar sütunu içerme
   const verification = upgrade.indexOf('DECLARE @RequiredColumns TABLE');
   assert.ok(verification > upgrade.indexOf('CREATE TABLE dbo.MR_AiUserCredentials ('));
   assert.ok(verification < upgrade.indexOf("INSERT dbo.MR_SchemaMigrations"));
-  for (const check of ['sys.columns', 'is_primary_key = 1', 'sys.check_constraints', 'default_object_id = 0']) {
-    assert.ok(upgrade.slice(verification).includes(check), check);
+  for (const check of [
+    'sys.columns', 'is_primary_key = 1', 'i.is_disabled = 0', 'sys.check_constraints', 'default_object_id = 0',
+    'c.is_identity <> 0', 'NOT EXISTS (SELECT 1 FROM @RequiredColumns r WHERE r.ColumnName = c.name)',
+    'k.definition COLLATE Latin1_General_BIN2 <> e.definition', 'd.definition COLLATE Latin1_General_BIN2 <> ed.definition'
+  ]) {
+    assert.ok(upgrade.slice(verification, upgrade.indexOf('INSERT dbo.MR_SchemaMigrations')).includes(check), check);
   }
+  // Beklenen kısıt ve varsayılan tanımları, tablonun kendi tanımıyla aynı
+  // ifadelerden (aynı sunucu normalleştirmesiyle) üretilir.
+  const expected = upgrade.slice(upgrade.indexOf('CREATE TABLE #MR_AiUserCredentials_Expected ('));
+  for (const expression of [
+    'CHECK (EncryptionVersion IN (1))', 'CHECK (DATALENGTH(Nonce) = 12)', 'CHECK (DATALENGTH(AuthTag) = 16)',
+    'CHECK (DATALENGTH(Ciphertext) BETWEEN 16 AND 1024)',
+    "CHECK (LastValidationStatus IS NULL OR LastValidationStatus IN ('VALID','REJECTED','FORBIDDEN'))",
+    'DEFAULT SYSUTCDATETIME()'
+  ]) {
+    assert.ok(upgrade.slice(0, verification).includes(expression), `tablo: ${expression}`);
+    assert.ok(expected.slice(0, expected.indexOf(');')).includes(expression), `beklenen: ${expression}`);
+  }
+  assert.ok(upgrade.indexOf('DROP TABLE #MR_AiUserCredentials_Expected;') < upgrade.indexOf('INSERT dbo.MR_SchemaMigrations'));
   assert.doesNotMatch(upgrade, /\b(?:UPDATE|DELETE)\s+(?:FROM\s+)?dbo\.MR_(?!SchemaMigrations)/i, 'göç veriye dokunmaz');
 
   const tableOf = (script) => {

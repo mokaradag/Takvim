@@ -296,6 +296,10 @@ test('iptalden sonra gelen geç yanıt uygulanmaz; kapasite sağlayıcıyı bekl
   provider.calls[0].resolve('geç gelen yanıt');
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(admission.status().active, 0);
+  // Geç yanıt hiçbir yerde başarı olarak işlenmez (`gatewayFor` telemetriyi sıfırlar).
+  const { aiTelemetrySnapshot: snapshot } = await import('../src/server/ai/aiTelemetry.js');
+  assert.equal(snapshot().succeeded, 0, 'geç yanıt başarı olarak kaydedilmez');
+  assert.equal(snapshot().provider.lastContactAt, null, 'geç yanıt sağlayıcı erişimi olarak kaydedilmez');
 });
 
 test('süre dolduktan sonra gelen yanıt uygulanmaz', async (t) => {
@@ -308,7 +312,12 @@ test('süre dolduktan sonra gelen yanıt uygulanmaz', async (t) => {
   t.mock.timers.tick(2000);
   await assert.rejects(pending, { code: 'AI_TIMEOUT' });
   provider.calls[0].resolve('çok geç');
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(admission.status().active, 0);
+  const { aiTelemetrySnapshot: snapshot } = await import('../src/server/ai/aiTelemetry.js');
+  assert.equal(snapshot().succeeded, 0, 'geç yanıt başarı olarak kaydedilmez');
+  assert.equal(snapshot().provider.lastContactAt, null, 'geç yanıt sağlayıcı erişimi olarak kaydedilmez');
+  assert.equal(snapshot().provider.lastFailureCode, 'AI_TIMEOUT');
 });
 
 /* ── Yeniden deneme politikası ────────────────────────────── */
@@ -825,23 +834,110 @@ test('doğrulamada bağlantı kurulamayınca yapılan yineleme sayaca girer; soh
   assert.equal(aiTelemetrySnapshot().retries, 2, 'ağ arabirimi hatası da bağlantı öncesi hatadır ve bir kez yinelenir');
 });
 
-test('anahtarsız model listesine dönen 2xx dışı her yanıt, anahtarın denetlendiğini gösterir', async (t) => {
+test('denetim anahtarına yalnızca kimlik doğrulamaya özgü ret (401/403) anahtarın denetlendiğini kanıtlar', async (t) => {
   resetAiTelemetryForTests();
   t.after(() => resetAiTelemetryForTests());
-  for (const keyless of [{ type: 'status', status: 404 }, { type: 'status', status: 429 }, { type: 'status', status: 503 }, { type: 'malformed' }]) {
+  const { AI_CONTROL_KEY_PREFIX } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
+  for (const status of [401, 403]) {
+    const provider = createFakeAiProvider();
+    let stored = 0;
+    provider.enqueue({ type: 'reply' }, { type: 'status', status });
+    const { gateway } = isolatedGateway({
+      provider,
+      config: PERSONAL_CONFIG(),
+      storeValidation: async () => { stored += 1; return { recorded: true, credential: null }; }
+    });
+    assert.equal((await gateway.validatePersonalCredential()).status, 'VALID', String(status));
+    assert.equal(stored, 1);
+    // Denetim isteği başlıksız DEĞİL, hiçbir hesaba ait olamayacak rastgele bir anahtarla gider.
+    const control = provider.calls[1];
+    assert.ok(control.apiKey.startsWith(AI_CONTROL_KEY_PREFIX), control.apiKey);
+    assert.notEqual(control.apiKey, PERSONAL_KEY_A);
+  }
+});
+
+test('denetim anahtarına dönen geçici ya da yönlendirme yanıtı sonucu belirsiz bırakır; doğrulama yazılmaz', async (t) => {
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  const cases = [
+    [{ type: 'status', status: 404 }, 'AI_CONFIGURATION_ERROR'],
+    [{ type: 'status', status: 408 }, 'AI_TIMEOUT'],
+    [{ type: 'status', status: 429 }, 'AI_RATE_LIMITED'],
+    [{ type: 'status', status: 503 }, 'AI_PROVIDER_UNAVAILABLE'],
+    [{ type: 'status', status: 400 }, 'AI_CONFIGURATION_ERROR'],
+    [{ type: 'malformed' }, 'AI_PROVIDER_RESPONSE_INVALID']
+  ];
+  for (const [control, code] of cases) {
     const provider = createFakeAiProvider();
     // `malformed` model listesinde geçersiz 2xx gövdesini (ör. oturum açma sayfası) taklit eder.
     const listModels = provider.listModels.bind(provider);
     provider.listModels = async (input) => {
-      if (!input.apiKey && keyless.type === 'malformed') {
+      if (input.apiKey !== PERSONAL_KEY_A && control.type === 'malformed') {
         const { AiError } = await import('../src/server/ai/aiErrors.js');
         throw new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'MODEL_LIST_INVALID' } });
       }
       return listModels(input);
     };
-    provider.enqueue({ type: 'reply' }, keyless);
-    const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG() });
-    assert.equal((await gateway.validatePersonalCredential()).status, 'VALID', JSON.stringify(keyless));
+    provider.enqueue({ type: 'reply' }, control);
+    let stored = 0;
+    const { gateway } = isolatedGateway({
+      provider,
+      config: PERSONAL_CONFIG(),
+      storeValidation: async () => { stored += 1; return { recorded: true, credential: null }; }
+    });
+    await assert.rejects(gateway.validatePersonalCredential(), (error) => error.code === code, JSON.stringify(control));
+    assert.equal(stored, 0, `${JSON.stringify(control)}: belirsiz sonuç kayda yazılmaz`);
+  }
+});
+
+test('her boş olmayan anahtarı kabul eden uçta anahtar VALID sayılmaz', async (t) => {
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  const provider = createFakeAiProvider();
+  // Uç yalnızca başlığın varlığına bakıyor: rastgele denetim anahtarına da liste döner.
+  provider.enqueue({ type: 'reply' }, { type: 'reply' });
+  let stored = 0;
+  const { gateway } = isolatedGateway({
+    provider,
+    config: PERSONAL_CONFIG(),
+    storeValidation: async () => { stored += 1; return { recorded: true, credential: null }; }
+  });
+  await assert.rejects(gateway.validatePersonalCredential(), (error) => error.code === 'AI_CONFIGURATION_ERROR'
+    && error.details.reason === 'MODELS_ENDPOINT_UNAUTHENTICATED');
+  assert.equal(stored, 0);
+});
+
+test('doğrulamanın sağlayıcıca reddedilen HTTP işlemleri başarısız ölçülür; sabit isteğin 400/413/422 reddi yapılandırma hatasıdır', async (t) => {
+  resetTelemetryRegistryForTests();
+  resetAiTelemetryForTests();
+  t.after(() => { resetTelemetryRegistryForTests(); resetAiTelemetryForTests(); });
+  const provider = createFakeAiProvider();
+  const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG() });
+  provider.enqueue({ type: 'status', status: 401 }, { type: 'status', status: 403 });
+  assert.equal((await gateway.validatePersonalCredential()).status, 'REJECTED');
+  assert.equal((await gateway.validatePersonalCredential()).status, 'FORBIDDEN');
+  let models = snapshotOperations().find((row) => row.operation === 'ai.provider.models');
+  assert.equal(models.count, 2);
+  assert.equal(models.errorCount, 2, 'reddedilen kişisel anahtar başarılı sağlayıcı çağrısı sayılmaz');
+  assert.equal(aiTelemetrySnapshot().provider.lastOutcome, 'contact', 'kişisel anahtarın reddi sağlık hatası değildir');
+
+  // Geçerli anahtar + denetim anahtarının beklenen reddi: iki işlem, biri başarısız.
+  resetTelemetryRegistryForTests();
+  provider.enqueue({ type: 'reply' });
+  assert.equal((await gateway.validatePersonalCredential()).status, 'VALID');
+  models = snapshotOperations().find((row) => row.operation === 'ai.provider.models');
+  assert.equal(models.count, 2);
+  assert.equal(models.errorCount, 1, 'denetim isteğinin 401 yanıtı başarısız HTTP işlemidir');
+  assert.equal(aiTelemetrySnapshot().provider.lastOutcome, 'contact');
+
+  for (const status of [400, 413, 422]) {
+    resetAiTelemetryForTests();
+    provider.enqueue({ type: 'status', status });
+    await assert.rejects(gateway.validatePersonalCredential(), (error) => error.code === 'AI_CONFIGURATION_ERROR'
+      && error.details.reason === 'PROVIDER_REJECTED_FIXED_REQUEST' && error.details.providerStatus === status);
+    const snapshot = aiTelemetrySnapshot();
+    assert.equal(snapshot.provider.lastOutcome, 'failure', `${status}: sabit isteğin reddi sağlık hatasıdır`);
+    assert.equal(snapshot.lastFailure.code, 'AI_CONFIGURATION_ERROR');
   }
 });
 

@@ -45,11 +45,16 @@ function registryUnavailable(source) {
  * da değiştirilen dosya sınırı aşamaz. Denetim ve okuma aynı dosya tanıtıcısı
  * üzerinden yapılır; sınırın bir bayt fazlası okunursa dosya reddedilir.
  */
+function fileTooLarge() {
+  return Object.assign(new Error('REGISTRY_FILE_TOO_LARGE'), { code: 'REGISTRY_FILE_TOO_LARGE' });
+}
+
 async function readBoundedFile(path, signal) {
   const handle = await open(path, 'r');
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size > MAX_FILE_BYTES) throw new Error('REGISTRY_FILE_INVALID');
+    if (!info.isFile()) throw new Error('REGISTRY_FILE_INVALID');
+    if (info.size > MAX_FILE_BYTES) throw fileTooLarge();
     const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
     let total = 0;
     while (total < buffer.length) {
@@ -58,7 +63,7 @@ async function readBoundedFile(path, signal) {
       if (bytesRead === 0) break;
       total += bytesRead;
     }
-    if (total > MAX_FILE_BYTES) throw new Error('REGISTRY_FILE_INVALID');
+    if (total > MAX_FILE_BYTES) throw fileTooLarge();
     const text = buffer.subarray(0, total).toString('utf8');
     // Windows düzenleyicilerinin eklediği UTF-8 BOM geçerli bir belgeyi bozmaz.
     return text.startsWith(UTF8_BOM) ? text.slice(UTF8_BOM.length) : text;
@@ -148,7 +153,12 @@ async function loadFromFile(current, path, now) {
     text = await readRegistryFile(current, path);
     document = JSON.parse(text);
   } catch (error) {
-    const unreadable = error instanceof SyntaxError ? 'JSON olarak ayrıştırılamadı' : 'okunamadı ya da süre sınırında yanıt vermedi';
+    // Boyut sınırı ayrıca söylenir: yönetici dosyanın neden reddedildiğini bilir.
+    const unreadable = error instanceof SyntaxError
+      ? 'JSON olarak ayrıştırılamadı'
+      : error?.code === 'REGISTRY_FILE_TOO_LARGE'
+        ? `izin verilen boyutu (${MAX_FILE_BYTES / 1024} KiB) aşıyor`
+        : 'okunamadı ya da süre sınırında yanıt vermedi';
     settle(current, { source: 'file', issues: [`$: kayıt dosyası ${unreadable}`], now: now() });
     throw registryUnavailable('file');
   }

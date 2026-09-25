@@ -25,36 +25,26 @@ export const AI_PROBE_MESSAGES = Object.freeze([
   Object.freeze({ role: 'user', content: 'Bağlantı sınaması: kısa bir selam yaz.' })
 ]);
 
-/**
- * Sabit sınamanın bağlamda gerektirdiği yerin ÜST sınırı. Bayt düzeyinde
- * çalışan belirteçleyicilerde her belirteç en az bir bayttır; sohbet şablonunun
- * ileti başına eklediği belirteçler için cömert bir pay bırakılır. İstem sabit
- * olduğundan bu bir tahmin değil, kesin bir üst sınırdır: bağlam penceresi
- * bundan küçük bir modelde sınama sunulmaz.
- */
-const MESSAGE_TEMPLATE_TOKENS = 16;
-export const AI_PROBE_CONTEXT_TOKENS = AI_PROBE_MESSAGES
-  .reduce((total, message) => total + Buffer.byteLength(message.content, 'utf8') + MESSAGE_TEMPLATE_TOKENS, 0)
-  + AI_PROBE_MAX_OUTPUT_TOKENS;
-
 function budgetMs(config, timeoutMs) {
   return AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS + (config.registryPath ? AI_MODEL_REGISTRY_READ_TIMEOUT_MS : 0)
     + config.queueTimeoutMs + timeoutMs;
 }
 
 /**
- * Sınamanın rotası: `chat.fast` çözülmeli, sohbet yeteneği taşımalı ve
- * modelin bilinen bağlam penceresi sabit sınamayı alabilmelidir. Sağlık
- * görünümü ve bağlantı testi de aynı kuralı kullanır; profil kullanılamıyorsa
- * Aşama 1'in tek yürütme yolu çalışmaz.
+ * Sınamanın rotası: `chat.fast` çözülmeli ve sohbet yeteneği taşımalıdır.
+ * Sağlık görünümü ve bağlantı testi de aynı kuralı kullanır; profil
+ * kullanılamıyorsa Aşama 1'in tek yürütme yolu çalışmaz.
+ *
+ * Sabit istemin modelin bağlamına sığıp sığmadığı burada TAHMİN EDİLMEZ:
+ * belirteç sayısı modelin belirteçleyicisine ve sohbet şablonunun eklediği
+ * belirteçlere bağlıdır; ikisi de kayıtta yoktur. Çıktı sınırı bağlam
+ * penceresine göre daraltılır; sığmayan sabit istemi sağlayıcı reddeder ve bu
+ * ret yapılandırma hatası olarak bildirilir.
  */
 export function resolveAiProbeRoute(registry) {
   const resolved = resolveModelProfile(registry, AI_PROBE_PROFILE);
   if (!resolved.ok) return resolved;
   if (!resolved.route.capabilities.includes(AI_CAPABILITIES.CHAT)) return { ok: false, reason: 'CAPABILITY_MISMATCH' };
-  if (resolved.route.contextTokens != null && resolved.route.contextTokens < AI_PROBE_CONTEXT_TOKENS) {
-    return { ok: false, reason: 'CONTEXT_TOO_SMALL' };
-  }
   return resolved;
 }
 

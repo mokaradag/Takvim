@@ -1,4 +1,5 @@
 import 'server-only';
+import { randomBytes } from 'node:crypto';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { AiError } from '../aiErrors.js';
 
@@ -13,8 +14,12 @@ import { AiError } from '../aiErrors.js';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RETRY_AFTER_SECONDS = 300;
-const MAX_MODEL_IDS = 2000;
-const MAX_MODEL_ID_LENGTH = 200;
+/**
+ * Sağlayıcının bildirdiği model kimliği bu uzunluğu aşarsa yanıt geçersizdir.
+ * Kimlik kısaltılmaz: kısaltılmış bir kimlik yapılandırılan modelle yanlışlıkla
+ * eşleşir ve sessiz yönlendirmeyi gizlerdi.
+ */
+const MAX_REPORTED_MODEL_LENGTH = 512;
 /**
  * Bağlantı hiç kurulamadı: istek sağlayıcıya ulaşmadı, yinelemek iş çoğaltmaz.
  * Ad çözümü, yönlendirme/arabirim ve bağlantı kurma hataları bu sınıftadır.
@@ -128,6 +133,18 @@ function tokenCount(value) {
 }
 
 /**
+ * Sağlayıcının bildirdiği model, OLDUĞU GİBİ (kırpılmadan, kısaltılmadan)
+ * döner: yapılandırılan modelle karşılaştırma bire bir yapılır. Boş ya da
+ * yalnızca boşluktan oluşan değer "bildirilmedi" (`null`) sayılır; aşırı uzun
+ * değer yanıtı geçersiz kılar.
+ */
+function reportedModel(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  if (value.length > MAX_REPORTED_MODEL_LENGTH) throw invalidResponse('MODEL_ID_TOO_LONG');
+  return value;
+}
+
+/**
  * Yanıt biçimini doğrular; beklenmeyen biçim sessizce kabul edilmez.
  *
  * Seçeneğin iletisi `assistant` rolünde olmalıdır: isteği yankılayan yanlış
@@ -143,7 +160,7 @@ export function parseChatCompletion(payload) {
     text: message.content ?? '',
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason.slice(0, 40) : null,
     // Sağlayıcı modeli bildirmediyse `null` kalır; yapılandırılan model yerine konmaz.
-    model: typeof payload.model === 'string' && payload.model.trim() ? payload.model.trim().slice(0, 200) : null,
+    model: reportedModel(payload.model),
     usage: {
       promptTokens: tokenCount(payload.usage?.prompt_tokens),
       completionTokens: tokenCount(payload.usage?.completion_tokens),
@@ -156,16 +173,29 @@ export function parseChatCompletion(payload) {
  * OpenAI uyumlu `GET /models` biçimi: `{ data: [{ id }, ...] }`.
  *
  * Liste en az bir BOŞ OLMAYAN model kimliği taşımalıdır: boş liste ya da boş
- * kimlikler kullanılabilir bir uç göstermez. Dönen kimlikler sınırlıdır ve
- * yalnızca sunucuda (yapılandırılan modelin uçta bulunduğunu doğrulamak için)
- * kullanılır. Geçersiz biçimde `null` döner.
+ * kimlikler kullanılabilir bir uç göstermez. Kimlikler kırpılmadan ve
+ * kısaltılmadan, listenin TAMAMI döner (yanıt boyutu zaten sınırlıdır): yalnızca
+ * sunucuda, yapılandırılan modelin uçta bulunduğunu BİRE BİR eşleşmeyle
+ * doğrulamak için kullanılır; ilk N kayıttan sonraki model de bulunur, uzun bir
+ * kimliğin öneki başka bir modelle eşleşmez. Geçersiz biçimde `null` döner.
  */
 function modelIdsOf(payload) {
   if (!Array.isArray(payload?.data)) return null;
   if (!payload.data.every((entry) => entry != null && typeof entry === 'object' && typeof entry.id === 'string')) return null;
-  const ids = payload.data.map((entry) => entry.id.trim()).filter(Boolean);
-  if (!ids.length) return null;
-  return ids.slice(0, MAX_MODEL_IDS).map((id) => id.slice(0, MAX_MODEL_ID_LENGTH));
+  const ids = payload.data.map((entry) => entry.id).filter((id) => id.trim().length > 0);
+  return ids.length ? ids : null;
+}
+
+/**
+ * Anahtarın GERÇEKTEN denetlendiğini sınamak için gönderilen denetim anahtarı:
+ * rastgele, hiçbir hesaba ait olamayacak bir değer. Uç yalnızca başlığın
+ * varlığına bakıp her boş olmayan anahtarı kabul ediyorsa bu anahtarla da
+ * model listesini verir; o durumda asıl anahtarın kabulü bir şey kanıtlamaz.
+ */
+export const AI_CONTROL_KEY_PREFIX = 'mergen-rota-key-check-';
+
+export function createControlApiKey() {
+  return `${AI_CONTROL_KEY_PREFIX}${randomBytes(24).toString('base64url')}`;
 }
 
 function requestHeaders(apiKey, { json = false } = {}) {
@@ -210,7 +240,7 @@ export function createOpenAiCompatibleProvider({ fetchImpl = null, maxResponseBy
      * okunmaz. 2xx yanıtı ancak gövde SINIRLI ve boş olmayan geçerli bir model
      * listesiyse kabul edilir: yanlış adrese yönelmiş bir ters vekilin 200
      * dönen HTML sayfası ya da boş liste bir anahtarı "geçerli" gösteremez.
-     * Başarılı yanıt, sınırlı model kimliklerini (`models`) de taşır.
+     * Başarılı yanıt, model kimliklerinin tamamını (`models`) da taşır.
      */
     async listModels({ baseUrl, apiKey = null, signal }) {
       const response = await send(`${baseUrl}/models`, { method: 'GET', headers: requestHeaders(apiKey) }, signal);

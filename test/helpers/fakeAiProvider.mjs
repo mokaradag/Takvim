@@ -7,7 +7,8 @@
  * HTTP durumu, ağ hatası, bozuk yanıt, metinsiz yanıt ya da testin elle
  * çözdüğü ertelenmiş yanıt. Takılı ve gecikmeli davranışlar sinyale uyar;
  * `ignoreAbort` ile sinyali yok sayan (kötü davranan) bir sağlayıcı da
- * taklit edilir. Sırada davranış yoksa anahtarsız model listesi 401 döner.
+ * taklit edilir. Sırada davranış yoksa anahtarsız ya da denetim anahtarıyla
+ * (hiçbir hesaba ait olmayan rastgele anahtar) istenen model listesi 401 döner.
  * Başarılı model listesi, gerçek bağdaştırıcı gibi model kimliklerini taşır
  * (varsayılan olarak depo içindeki varsayılan kaydın modelleri).
  *
@@ -21,7 +22,12 @@ import { registerServerOnlyShim } from './serverOnlyShim.mjs';
 
 registerServerOnlyShim();
 
-const { classifyNetworkFailure, classifyProviderStatus, parseChatCompletion } = await import('../../src/server/ai/providers/openAiCompatibleProvider.js');
+const {
+  AI_CONTROL_KEY_PREFIX,
+  classifyNetworkFailure,
+  classifyProviderStatus,
+  parseChatCompletion
+} = await import('../../src/server/ai/providers/openAiCompatibleProvider.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../../src/server/ai/defaultModelRegistry.js');
 
 // Testler `t.mock.timers` ile setTimeout'u değiştirse de bekleme sınırı işler.
@@ -135,13 +141,17 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
   }
 
   async function execute(kind, input) {
-    // Gerçek ağ geçitleri gibi anahtarsız model listesi varsayılan olarak 401 döner.
-    const fallback = kind === 'models' && !input.apiKey ? { type: 'status', status: 401 } : { type: 'reply' };
+    // Gerçek ağ geçitleri gibi anahtarsız ya da geçersiz anahtarlı model listesi
+    // varsayılan olarak 401 döner.
+    const rejectedKey = !input.apiKey || String(input.apiKey).startsWith(AI_CONTROL_KEY_PREFIX);
+    const fallback = kind === 'models' && rejectedKey ? { type: 'status', status: 401 } : { type: 'reply' };
     const behavior = queue.shift() || fallback;
     const call = {
       kind,
       model: input.model ?? null,
       apiKey: input.apiKey ?? null,
+      // Doğrulamanın denetim isteği (rastgele, geçersiz anahtar).
+      control: String(input.apiKey ?? '').startsWith(AI_CONTROL_KEY_PREFIX),
       baseUrl: input.baseUrl,
       messages: input.messages ?? null,
       maxOutputTokens: input.maxOutputTokens ?? null,

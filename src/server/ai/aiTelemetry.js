@@ -57,10 +57,18 @@ function createState() {
     queueWaitMs: [],
     retries: 0,
     lastSuccessAt: null,
+    // Hizmet hatası (sağlayıcı öncesi de olabilir: rehber, anahtar tablosu, iç
+    // hata). Sıra sayacı taşır: daha sonraki başarılı bir istek onu geride bırakır.
     lastFailure: null,
-    // Paylaşılan kapasitenin dolması (küresel ya da model sınırı); sağlığı etkiler.
+    // Uçtan uca istek ve doğrulama sonuçlarının tekdüze sırası.
+    requestSequence: 0,
+    lastOkSequence: 0,
+    // Paylaşılan yapay zekâ kapasitesinin dolması (küresel ya da model sınırı); sağlığı etkiler.
     lastBusyAt: null,
     lastQueueTimeoutAt: null,
+    // Kira ÖNCESİ rehber denetiminin (SQL) sınırlı kapısının dolması: yapay zekâ
+    // kapasitesinden ayrı bir darboğazdır, ayrı bildirilir.
+    lastDirectoryBusyAt: null,
     // Tek kullanıcının kendi sınırı; hizmet sağlığı değildir, yalnızca izlenir.
     lastUserLimitAt: null,
     provider: {
@@ -133,12 +141,24 @@ function outcomeOf(code, serviceFailure, { source = null, details = null } = {})
   return { code: definition.code, serviceFailure: definition.serviceFailure };
 }
 
-/** Kapasite sonucunu paylaşılan baskı ya da kullanıcının kendi sınırı olarak işaretler. */
+/**
+ * Kapasite sonucunu paylaşılan baskı ya da kullanıcının kendi sınırı olarak
+ * işaretler. Rehber denetimi kapısının dolması yapay zekâ kapasitesiyle
+ * karıştırılmaz: o istekler kapasite denetimine hiç ulaşmamıştır.
+ */
 function noteCapacityOutcome(current, code, details, at) {
   if (!CAPACITY_CODES.has(code)) return;
   if (!sharedCapacityPressure(details)) current.lastUserLimitAt = at;
+  else if (details?.saturation === 'directory') current.lastDirectoryBusyAt = at;
   else if (code === AI_ERROR_CODES.AI_BUSY) current.lastBusyAt = at;
   else current.lastQueueTimeoutAt = at;
+}
+
+/** Uçtan uca sonucu sıraya yazar; hizmet hatası sıra numarasıyla saklanır. */
+function noteServiceOutcome(current, outcome, at) {
+  current.requestSequence += 1;
+  if (!outcome) current.lastOkSequence = current.requestSequence;
+  else if (outcome.serviceFailure) current.lastFailure = { code: outcome.code, at, sequence: current.requestSequence };
 }
 
 /** Sıra beklemesi (süresi dolan bekleme dâhil) özet ve işlem ölçümüne girer. */
@@ -199,12 +219,12 @@ export function recordAiRequest({
     const current = state();
     const now = new Date().toISOString();
     current.requests += 1;
+    noteServiceOutcome(current, outcome, now);
     if (!outcome) {
       current.succeeded += 1;
       current.lastSuccessAt = now;
     } else {
       current.outcomes[outcome.code] = (current.outcomes[outcome.code] || 0) + 1;
-      if (outcome.serviceFailure) current.lastFailure = { code: outcome.code, at: now };
       noteCapacityOutcome(current, outcome.code, details, now);
     }
     if (Object.hasOwn(current.bySource, source)) current.bySource[source] += 1;
@@ -230,11 +250,9 @@ export function recordAiValidation({ code = null, serviceFailure = false, detail
   safely(() => {
     const current = state();
     const outcome = code ? outcomeOf(code, serviceFailure, { source: AI_CREDENTIAL_SOURCES.PERSONAL, details }) : null;
-    if (outcome) {
-      const now = new Date().toISOString();
-      if (outcome.serviceFailure) current.lastFailure = { code: outcome.code, at: now };
-      noteCapacityOutcome(current, outcome.code, details, now);
-    }
+    const now = new Date().toISOString();
+    noteServiceOutcome(current, outcome, now);
+    if (outcome) noteCapacityOutcome(current, outcome.code, details, now);
     recordOperation({
       operation: 'ai.credential.validate',
       durationMs,
@@ -257,16 +275,21 @@ export function recordAiValidation({ code = null, serviceFailure = false, detail
  * hatadır, KİŞİSEL anahtarın oran sınırı ise yalnızca o anahtarı anlatır.
  *
  * `source` kurumsal anahtarsa sonuç kurumsal anahtarın izine de yazılır; o iz
- * yalnızca kurumsal anahtarla yapılan başarılı bir çağrıyla temizlenir.
+ * yalnızca kurumsal anahtarın KABUL EDİLDİĞİ bir çağrıyla temizlenir.
  * `contact: false`, yanıtın paylaşılan yolun çalıştığını KANITLAMADIĞINI söyler
- * (ör. anahtarsız da verilen model listesi): gecikme örneklenir ama erişim
- * kaydedilmez.
+ * (ör. geçersiz anahtarla da verilen model listesi): gecikme örneklenir ama
+ * erişim kaydedilmez. `keyAccepted` anahtarın kabulünü erişimden ayrı bildirir
+ * (varsayılanı: başarılı ve erişim sayılan çağrı); `healthCode`, HTTP işlemi
+ * başarılı olsa da paylaşılan yolu bozan sorunun (ör. modelin uçta olmaması)
+ * sağlık izine yazılacak kodudur.
  *
  * Gecikme, sağlık sınıfından bağımsız olarak tamamlanan her çağrı için
  * örneklenir: en yavaş (süre aşımına uğrayan) çağrılar P95'ten düşmez. İptal
  * edilen çağrı sağlayıcının başarımını anlatmadığı için kaydedilmez.
  */
-export function recordProviderCall({ operation, latencyMs, code = null, healthFailure = null, source = null, contact = true }) {
+export function recordProviderCall({
+  operation, latencyMs, code = null, healthFailure = null, healthCode = null, source = null, contact = true, keyAccepted = null
+}) {
   if (code === AI_ERROR_CODES.AI_CANCELLED) return;
   safely(() => {
     const current = state();
@@ -277,12 +300,12 @@ export function recordProviderCall({ operation, latencyMs, code = null, healthFa
     current.provider.lastLatencyMs = Math.max(0, Math.round(latencyMs));
     pushSample(current.providerLatencyMs, latencyMs);
     if (source === AI_CREDENTIAL_SOURCES.DEFAULT) {
-      if (code == null && contact) current.provider.defaultKey = { lastFailureAt: null, lastFailureCode: null };
+      if (keyAccepted ?? (code == null && contact)) current.provider.defaultKey = { lastFailureAt: null, lastFailureCode: null };
       else if (DEFAULT_KEY_FAILURES.has(code)) current.provider.defaultKey = { lastFailureAt: now, lastFailureCode: code };
     }
     if (unhealthy) {
       current.provider.lastFailureAt = now;
-      current.provider.lastFailureCode = code;
+      current.provider.lastFailureCode = healthCode ?? code;
       current.provider.lastOutcome = 'failure';
     } else if (contact) {
       current.provider.lastContactAt = now;
@@ -308,7 +331,7 @@ export function recordAiRetry({ networkCode = null } = {}) {
   });
 }
 
-/** Etkin ve sıradaki istek sayısı; telemetri turunun ritminde örneklenir (bkz. aiRuntime.sampleAiLoad). */
+/** Etkin ve sıradaki istek sayısı (tur aralığının zaman ağırlıklı ortalaması; bkz. aiRuntime.sampleAiLoad). */
 export function recordAiLoad({ active, queued }, at = Date.now()) {
   safely(() => {
     recordGauge(GAUGE_KEYS.AI_ACTIVE_REQUESTS, active, at);
@@ -338,8 +361,11 @@ export function aiTelemetrySnapshot() {
     },
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
+    requestSequence: current.requestSequence,
+    lastOkSequence: current.lastOkSequence,
     lastBusyAt: current.lastBusyAt,
     lastQueueTimeoutAt: current.lastQueueTimeoutAt,
+    lastDirectoryBusyAt: current.lastDirectoryBusyAt,
     lastUserLimitAt: current.lastUserLimitAt,
     provider: { ...current.provider, defaultKey: { ...current.provider.defaultKey } }
   };

@@ -142,9 +142,12 @@ Zaman aralığı **sunucuda sınırlanır**; yalnızca tanımlı dört pencere g
   güncel pencere.
 - **Grafikler** — yüzdelik dağılımı, hata oranı, istek hacmi, süreç belleği,
   Outlook kuyruk derinliği ve **yapay zekâ yükü** (etkin ve sıradaki yapay zekâ
-  istekleri; telemetri turunda dakikada bir, boştayken sıfır olarak örneklenir
-  ve **süreç başına ortalama** gösterilir — birden çok uygulama örneği ölçüm
-  yazdıysa örnek sayısı belirtilir). Ölçüm bulunmayan kovada çizgi **kesilir**;
+  istekleri; telemetri turunda dakikada bir, son turdan bu yana kapasite
+  değişimleriyle biriken zaman ağırlıklı ortalama olarak yazılır — tur arasında
+  başlayıp biten yük de görünür, boştayken sıfırdır — ve **süreç başına
+  ortalama** gösterilir; birden çok uygulama örneği ölçüm yazdıysa örnek sayısı
+  yalnızca bilgi olarak belirtilir, toplam yük diye çarpılmaz). Ölçüm
+  bulunmayan kovada çizgi **kesilir**;
   eksik veri sıfır gibi çizilmez.
 - **Yavaş İşlemler** — işlem adı, sayı, P50/P95/P99, hata oranı ve son görülme;
   başlıktan sıralanır. Listeye giren işlemler **ortalama gecikmeye** göre
@@ -465,11 +468,16 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   başarılı yanıtın boş olmayan bir model listesi olduğu doğrulanır. Testin
   tamamı (sağlayıcı çağrıları, model kaydı ve şema doğrulaması) **tek bir 6 sn
   süre sınırı** altındadır; bildirilen süre kurulum doğrulamasını da kapsar.
-  Yönetici sayfadan ayrılırsa test iptal edilir ve sonuç olarak yazılmaz.
+  Yönetici sekmeden ayrılırsa (ya da Demo Kipine geçerse) tarayıcıdaki test
+  isteği kesilir, sunucu da testi iptal eder ve sonuç olarak yazılmaz.
   Reddedilen kurumsal anahtar, 404/3xx ya da geçersiz istek sağlık hatası
-  sayılır; kart önceki başarıya rağmen *Dikkat* gösterir. Model listesi
-  anahtarsız da veriliyorsa kurumsal anahtar doğrulanamaz ve test başarısız olur
-  (`DEFAULT_KEY_UNVERIFIED`). Uca ulaşıldıktan sonra kalan yapılandırma
+  sayılır; kart önceki başarıya rağmen *Dikkat* gösterir. Kurumsal anahtarla
+  alınan liste ancak uç rastgele bir denetim anahtarını 401/403 ile
+  reddediyorsa anahtarın kanıtıdır; değilse test başarısız olur
+  (`DEFAULT_KEY_UNVERIFIED`) ve kart, ondan sonra başarılı bir test olmadan 15
+  dakika boyunca sağlıklı görünmez. Kurumsal anahtar tanımlı değilken
+  anahtarsız isteğe dönen 403 başarı sayılmaz (`ACCESS_FORBIDDEN`). Kartın
+  gecikme alanı son testin süresidir. Uca ulaşıldıktan sonra kalan yapılandırma
   sorunları, model kaydı, `chat.fast` profili ve modelinin uçta bulunması ile —
   kişisel anahtar saklama açıksa, kurumsal anahtar tanımlı olsa da — kişisel
   anahtar tablosu (0016) doğrulanır. Şema doğrulaması SQL havuzunu kısa süre
@@ -477,10 +485,12 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   tutulmaz ve aynı süreçte tek test kuralı korunur. Bütün bağlantı testleri
   yalnızca aynı kaynaktan başlatılabilir.
 - Yapay zekâ bileşeninin sağlığı ağ beklemez; yapılandırma, model kaydı
-  (`chat.fast` dâhil), kişisel anahtar tablosu, süreç belleğindeki kapasite,
-  kurumsal anahtarın son reddi ve son sağlayıcı sonuçlarından türetilir.
-  Kapasite için yalnızca paylaşılan kapasitenin dolması (kullanıcı sınırı
-  değil) uyarı sayılır; bileşen hiçbir zaman *Kritik* olmaz ve boştayken
+  (`chat.fast` dâhil), kişisel anahtar tablosu (son 15 dakikadaki gözlem),
+  süreç belleğindeki kapasite, kira öncesi rehber denetiminin kapısı, kurumsal
+  anahtarın son reddi (yaşlanarak kalkmaz), sağlayıcıya ulaşmadan düşen son
+  hizmet hatası ve son sağlayıcı sonuçlarından türetilir. Kapasite için
+  yalnızca paylaşılan kapasitenin dolması (kullanıcı sınırı değil) uyarı
+  sayılır; bileşen hiçbir zaman *Kritik* olmaz ve boştayken
   *Bilinmiyor* durumu genel başlığı düşürmez (bkz. `docs/AI-PLATFORM.md`).
 
 Aynı anda **tek test** çalışır: ikinci bir test başlatılabilseydi ilkinin bitişi

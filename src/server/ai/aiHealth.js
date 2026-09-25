@@ -11,7 +11,7 @@ import { resolveAiProbeRoute } from './aiProbeProfile.js';
 import { aiRuntimeLoad, getAiProvider } from './aiRuntime.js';
 import { aiTelemetrySnapshot, recordProviderCall } from './aiTelemetry.js';
 import { aiModelRegistryState, cachedAiModelRegistry, loadAiModelRegistry } from './modelRegistryLoader.js';
-import { classifyProviderStatus } from './providers/openAiCompatibleProvider.js';
+import { classifyProviderStatus, createControlApiKey } from './providers/openAiCompatibleProvider.js';
 
 /**
  * Yapay zekâ sağlığı — Sistem Yönetimi için.
@@ -23,7 +23,11 @@ import { classifyProviderStatus } from './providers/openAiCompatibleProvider.js'
  */
 
 const CONTACT_FRESHNESS_MS = 15 * 60 * 1000;
+/** Tablonun kurulu olduğunu gösteren olumlu gözlem bu süreden eskiyse kanıt sayılmaz. */
+const SCHEMA_FRESHNESS_MS = 15 * 60 * 1000;
 const BUSY_ATTENTION_WINDOW_MS = 5 * 60 * 1000;
+/** Kapasite sonuçları kendi pencerelerinde bildirilir; hizmet hatası denetimine girmez. */
+const CAPACITY_CODES = new Set([AI_ERROR_CODES.AI_BUSY, AI_ERROR_CODES.AI_QUEUE_TIMEOUT]);
 const QUEUE_PRESSURE_RATIO = 0.8;
 const CONNECTION_TEST_TIMEOUT_MS = 6000;
 
@@ -68,7 +72,13 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   const load = aiRuntimeLoad() || idleLoad(config);
   const telemetry = aiTelemetrySnapshot();
   const credentialSchema = aiCredentialSchemaState();
-  const detail = { configuration, registry, load, telemetry, credentialSchema: { ready: credentialSchema.ready } };
+  const detail = {
+    configuration,
+    registry,
+    load,
+    telemetry,
+    credentialSchema: { ready: credentialSchema.ready, observedAt: credentialSchema.observedAt }
+  };
   const loadText = `Etkin ${load.active}/${load.limits.maxActive}, sırada ${load.queued}/${load.limits.maxQueued}.`;
   // Sağlayıcıya ERİŞİM (reddedilen çağrı dâhil) başarılı işlem değildir:
   // bileşenin "son başarılı işlem" alanı uçtan uca başarılı yapay zekâ
@@ -97,19 +107,28 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
     const at = epoch(value);
     return at != null && now - at <= BUSY_ATTENTION_WINDOW_MS;
   };
+  // Rehber denetimi kapısı yapay zekâ kapasitesinden ÖNCE gelir: geri çevrilen
+  // istekler etkin/sıra sayaçlarına hiç girmediği için o sayaçlar gösterilmez.
+  if (recent(telemetry.lastDirectoryBusyAt)) {
+    return warning('Kurumsal personel denetiminin (SQL) sınırlı kapasitesi doldu; bazı yapay zekâ istekleri kapasite denetimine ulaşmadan geri çevrildi. Veritabanı yanıt sürelerini denetleyin.');
+  }
   if (recent(telemetry.lastBusyAt)) return warning(`Kapasite doldu; bazı istekler geri çevrildi. ${loadText}`);
   if (recent(telemetry.lastQueueTimeoutAt)) return warning(`Kapasite yetersiz; bazı istekler sırada beklerken süre doldu. ${loadText}`);
   const queuePressure = load.limits.maxQueued > 0 && load.queued >= Math.ceil(load.limits.maxQueued * QUEUE_PRESSURE_RATIO);
   if (queuePressure) return warning(`Sıra dolmak üzere; henüz geri çevrilen istek yok. ${loadText}`);
   // Kurumsal anahtarın reddi ayrı izlenir: kişisel anahtarla yapılan başarılı
-  // bir çağrı, kurumsal anahtara bağlı kullanıcıların sorununu gizlemez. Yalnızca
-  // kurumsal anahtarla yapılan başarılı bir çağrı bu uyarıyı kaldırır.
+  // bir çağrı, kurumsal anahtara bağlı kullanıcıların sorununu gizlemez. Ret
+  // (401/403) YAŞLANARAK kalkmaz; yalnızca kurumsal anahtarın kabul edildiği bir
+  // çağrı bu uyarıyı kaldırır. Geçici olan oran sınırı (429) ise tazeyken uyarıdır.
   const defaultKey = telemetry.provider.defaultKey || {};
   const defaultKeyFailureAt = epoch(defaultKey.lastFailureAt);
-  if (config.defaultKeyConfigured && defaultKeyFailureAt != null && now - defaultKeyFailureAt <= CONTACT_FRESHNESS_MS) {
-    return warning(defaultKey.lastFailureCode === AI_ERROR_CODES.AI_RATE_LIMITED
-      ? `Kurumsal anahtar sağlayıcının istek sınırına ulaştı (${defaultKey.lastFailureCode}). ${loadText}`
-      : `Kurumsal anahtar son kullanımında reddedildi (${defaultKey.lastFailureCode}); kişisel anahtarı olmayan kullanıcıların istekleri başarısız olur. ${loadText}`);
+  if (config.defaultKeyConfigured && defaultKeyFailureAt != null) {
+    if (defaultKey.lastFailureCode !== AI_ERROR_CODES.AI_RATE_LIMITED) {
+      return warning(`Kurumsal anahtar son kullanımında reddedildi (${defaultKey.lastFailureCode}); kişisel anahtarı olmayan kullanıcıların istekleri başarısız olur. ${loadText}`);
+    }
+    if (now - defaultKeyFailureAt <= CONTACT_FRESHNESS_MS) {
+      return warning(`Kurumsal anahtar sağlayıcının istek sınırına ulaştı (${defaultKey.lastFailureCode}). ${loadText}`);
+    }
   }
   // Son sonuç damgalarla değil sıra sayacıyla belirlenir: aynı milisaniyedeki
   // başarı ve hata sırası karışmaz. Hata da başarı gibi yalnızca tazeyken
@@ -118,6 +137,16 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   const failureAt = epoch(telemetry.provider.lastFailureAt);
   if (telemetry.provider.lastOutcome === 'failure' && failureAt != null && now - failureAt <= CONTACT_FRESHNESS_MS) {
     return warning(`Son sağlayıcı çağrısı başarısız (${telemetry.provider.lastFailureCode}). ${loadText}`);
+  }
+  // Sağlayıcıya ulaşmadan düşen hizmet hataları (rehber sorgusu, anahtar
+  // tablosu, iç hata) da sağlıklı görünmez: ondan sonra başarılı bir istek ya da
+  // doğrulama gelmediyse ve hata tazeyse uyarıdır.
+  const serviceFailure = telemetry.lastFailure;
+  const serviceFailureAt = epoch(serviceFailure?.at);
+  if (serviceFailure && !CAPACITY_CODES.has(serviceFailure.code)
+    && Number(serviceFailure.sequence) > Number(telemetry.lastOkSequence || 0)
+    && serviceFailureAt != null && now - serviceFailureAt <= CONTACT_FRESHNESS_MS) {
+    return warning(`Son yapay zekâ isteği hizmet hatasıyla sonuçlandı (${serviceFailure.code}). ${loadText}`);
   }
   if (registry.status !== 'ready') {
     return unknown(`Model kaydı henüz yüklenmedi; ilk yapay zekâ isteğinde ya da bağlantı testinde okunur. ${loadText}`);
@@ -128,8 +157,14 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (!probeRoute.ok) {
     return warning(`Hızlı sohbet profili (chat.fast) kullanılamıyor (${probeRoute.reason}); bağlantı sınaması çalışmaz. ${loadText}`);
   }
-  if (config.personalKeysSupported && credentialSchema.ready !== true) {
-    return unknown(`Kişisel anahtar tablosu henüz doğrulanmadı; Entegrasyonlar sekmesinden bağlantıyı sınayın. ${loadText}`);
+  // Tablonun kurulu olduğu gözlemi de kalıcı değildir: tablo sonradan
+  // kaldırılabilir ya da yetkisi alınabilir. Eski bir olumlu gözlem kanıt sayılmaz.
+  const schemaObservedAt = epoch(credentialSchema.observedAt);
+  const schemaFresh = schemaObservedAt != null && now - schemaObservedAt <= SCHEMA_FRESHNESS_MS;
+  if (config.personalKeysSupported && (credentialSchema.ready !== true || !schemaFresh)) {
+    return unknown(credentialSchema.ready === true
+      ? `Kişisel anahtar tablosu yakın zamanda doğrulanmadı; Entegrasyonlar sekmesinden bağlantıyı sınayın. ${loadText}`
+      : `Kişisel anahtar tablosu henüz doğrulanmadı; Entegrasyonlar sekmesinden bağlantıyı sınayın. ${loadText}`);
   }
   const contactAt = epoch(lastContactAt);
   if (contactAt != null && now - contactAt <= CONTACT_FRESHNESS_MS) {
@@ -221,20 +256,18 @@ function listModels(config, apiKey, deadline) {
   );
 }
 
-/**
- * Anahtarsız istek model listesini veriyor mu? Yalnızca 2xx ve geçerli liste
- * "evet"tir; anahtarsız isteğe dönen her başka yanıt (401, 404, oturum açma
- * sayfası) ucun anahtarı denetlediğini gösterir.
- */
-async function servesWithoutKey(config, deadline) {
+/** Tek `GET /models` çağrısı ve KENDİ gecikmesi; hata fırlatılmaz, sonuçla döner. */
+async function timedListModels(config, apiKey, deadline) {
+  const startedAt = Date.now();
   try {
-    const { status } = await listModels(config, null, deadline);
-    return status >= 200 && status < 300;
+    const listed = await listModels(config, apiKey, deadline);
+    return { listed, error: null, latencyMs: Date.now() - startedAt };
   } catch (error) {
-    if (!deadline.failure() && isAiError(error) && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID) return false;
-    throw error;
+    return { listed: null, error, latencyMs: Date.now() - startedAt };
   }
 }
+
+const isSuccess = (status) => status >= 200 && status < 300;
 
 /** Uca ulaşılamadı, süre doldu ya da test iptal edildi: sonuç ve sağlık izi. */
 function unreachable(error, deadline, latencyMs, source) {
@@ -256,20 +289,64 @@ function unreachable(error, deadline, latencyMs, source) {
 }
 
 /**
+ * Kurumsal anahtarla alınan liste GÖNDERİLEN anahtarın kanıtı mı? Aynı istek
+ * rastgele bir denetim anahtarıyla yinelenir. Yalnızca kimlik doğrulamaya özgü
+ * ret (401/403) anahtarın denetlendiğini kanıtlar; denetim anahtarıyla da liste
+ * dönüyorsa uç anahtarı denetlemiyordur; geri kalan her yanıt sonucu belirsiz
+ * bırakır. Denetim çağrısı kendi gecikmesi ve gerçek HTTP sonucuyla ölçülür;
+ * beklenen reddi sağlık hatası değildir. `null`, denetimin kanıtladığını söyler.
+ */
+async function verifyKeyEnforced(config, deadline) {
+  const control = await timedListModels(config, createControlApiKey(), deadline);
+  if (control.error) return { result: unreachable(control.error, deadline, control.latencyMs, null) };
+  const { status } = control.listed;
+  if (status === 401 || status === 403) {
+    recordProviderCall({
+      operation: 'ai.provider.models',
+      latencyMs: control.latencyMs,
+      code: classifyProviderStatus(status).code,
+      healthFailure: false
+    });
+    return null;
+  }
+  if (isSuccess(status)) {
+    recordProviderCall({ operation: 'ai.provider.models', latencyMs: control.latencyMs, contact: false });
+    return {
+      result: {
+        ok: false,
+        code: 'DEFAULT_KEY_UNVERIFIED',
+        message: 'Uca ulaşıldı ancak model listesi geçersiz bir anahtarla da verildiği için kurumsal anahtar bu testle doğrulanamadı. Anahtarı Ayarlar sayfasındaki deneme isteğiyle sınayın.'
+      }
+    };
+  }
+  recordProviderCall({ operation: 'ai.provider.models', latencyMs: control.latencyMs, code: classifyProviderStatus(status).code });
+  return {
+    result: {
+      ok: false,
+      code: 'DEFAULT_KEY_UNVERIFIED',
+      message: `Uca ulaşıldı ancak anahtar denetimi sınanamadı (HTTP ${status}); kurumsal anahtar bu testle doğrulanamadı. Biraz sonra yeniden deneyin.`
+    }
+  };
+}
+
+/**
  * Yıkıcı olmayan bağlantı testi: model üretmeyen `GET /models`.
  *
  * Testin TAMAMI (sağlayıcı çağrıları, kayıt okuması, şema denetimi) tek bir süre
  * sınırı altındadır ve yöneticinin isteğini (`signal`) izler: sayfadan ayrılan
  * yöneticinin testi sağlayıcı işini ve süreç içi kilidi bekletmez; iptal edilen
  * test sonuç olarak kaydedilmez. Bildirilen süre kurulum doğrulamasını da
- * kapsar; sağlayıcı gecikmesi ayrıca ölçülür.
+ * kapsar; her sağlayıcı çağrısı kendi gecikmesi ve GERÇEK HTTP sonucuyla ayrıca
+ * ölçülür.
  *
  * Kurumsal anahtar tanımlıysa o kullanılır; hata yanıtının HTTP durumu dışında
  * hiçbir bilgisi okunmaz. Bu test PAYLAŞILAN yolu sınar: reddedilen kurumsal
  * anahtar, bulunamayan uç ya da geçersiz istek sağlık hatası olarak kaydedilir.
- * Kurumsal anahtarla alınan liste ancak uç anahtarsız isteği reddediyorsa
- * anahtarın kanıtıdır; liste herkese açıksa anahtar bu testle doğrulanamaz ve
- * test başarılı sayılmaz.
+ * Kurumsal anahtarla alınan liste ancak uç geçersiz bir denetim anahtarını
+ * 401/403 ile reddediyorsa anahtarın kanıtıdır. Kurumsal anahtar yokken
+ * anahtarsız isteğe dönen 401 ucun erişilebilir olduğunu ve kimlik istediğini
+ * gösterir; 403 ise bir erişim/ağ politikası reddi olabileceği için başarı
+ * sayılmaz.
  */
 export async function testAiProviderConnection({ timeoutMs = CONNECTION_TEST_TIMEOUT_MS, signal = null } = {}) {
   const config = readAiConfig();
@@ -288,51 +365,58 @@ export async function testAiProviderConnection({ timeoutMs = CONNECTION_TEST_TIM
   const startedAt = Date.now();
   const finish = (result) => ({ ...result, durationMs: Date.now() - startedAt });
   const source = config.defaultKeyConfigured ? AI_CREDENTIAL_SOURCES.DEFAULT : null;
+  const operation = 'ai.provider.models';
   const deadline = createAiDeadline({ timeoutMs, parentSignal: signal });
-  let latencyMs = 0;
   try {
-    let listed;
+    const keyed = await timedListModels(config, config.defaultApiKey, deadline);
+    if (keyed.error) return finish(unreachable(keyed.error, deadline, keyed.latencyMs, source));
+    const { status } = keyed.listed;
+    const listedOk = isSuccess(status);
     let success;
-    try {
-      listed = await listModels(config, config.defaultApiKey, deadline);
-      latencyMs = Date.now() - startedAt;
-      if (listed.status >= 200 && listed.status < 300 && config.defaultKeyConfigured && await servesWithoutKey(config, deadline)) {
-        recordProviderCall({ operation: 'ai.provider.models', latencyMs, source, contact: false });
-        return finish({
-          ok: false,
-          code: 'DEFAULT_KEY_UNVERIFIED',
-          message: 'Uca ulaşıldı ancak model listesi anahtarsız da verildiği için kurumsal anahtar bu testle doğrulanamadı. Anahtarı Ayarlar sayfasındaki deneme isteğiyle sınayın.'
-        });
+    if (listedOk) {
+      if (config.defaultKeyConfigured) {
+        const unverified = await verifyKeyEnforced(config, deadline);
+        if (unverified) {
+          // Kurumsal anahtarın kabulü kanıtlanmadı: erişim de anahtar kabulü de kaydedilmez.
+          recordProviderCall({ operation, latencyMs: keyed.latencyMs, source, contact: false, keyAccepted: false });
+          return finish(unverified.result);
+        }
       }
-    } catch (error) {
-      return finish(unreachable(error, deadline, latencyMs || Date.now() - startedAt, source));
-    }
-    const { status } = listed;
-    if (status >= 200 && status < 300) {
-      success = { ok: true, code: null, models: listed.models ?? [] };
-    } else if ((status === 401 || status === 403) && !config.defaultKeyConfigured) {
+      success = { ok: true, code: null, models: keyed.listed.models ?? [] };
+    } else if (status === 401 && !config.defaultKeyConfigured) {
+      // Uç erişilebilir ve kimlik istiyor: HTTP işlemi başarısızdır, sağlık izi erişimdir.
+      recordProviderCall({ operation, latencyMs: keyed.latencyMs, code: classifyProviderStatus(status).code, healthFailure: false });
       success = { ok: true, code: 'AUTHENTICATION_REQUIRED', models: null, message: 'Uca ulaşıldı; kurumsal anahtar tanımlı olmadığından anahtar sınanmadı.' };
     } else {
-      recordProviderCall({ operation: 'ai.provider.models', latencyMs, code: classifyProviderStatus(status).code, healthFailure: true, source });
-      return finish(status === 401 || status === 403
-        ? { ok: false, code: 'DEFAULT_KEY_REJECTED', message: 'Uca ulaşıldı ancak kurumsal anahtar reddedildi.' }
-        : { ok: false, code: `HTTP_${status}`, message: 'Uç beklenmeyen bir yanıt verdi.' });
+      recordProviderCall({ operation, latencyMs: keyed.latencyMs, code: classifyProviderStatus(status).code, healthFailure: true, source });
+      if (status === 401 || status === 403) {
+        return finish(config.defaultKeyConfigured
+          ? { ok: false, code: 'DEFAULT_KEY_REJECTED', message: 'Uca ulaşıldı ancak kurumsal anahtar reddedildi.' }
+          : { ok: false, code: 'ACCESS_FORBIDDEN', message: 'Uç anahtarsız isteği 403 ile reddetti; bu bir erişim ya da ağ politikası reddi olabilir. Kişisel anahtarla deneme isteği gönderip doğrulayın.' });
+      }
+      return finish({ ok: false, code: `HTTP_${status}`, message: 'Uç beklenmeyen bir yanıt verdi.' });
     }
+    // Kurumsal anahtarla alınan (ve denetimi kanıtlanan) liste: HTTP işlemi başarılıdır.
+    const recordKeyed = (extra = {}) => {
+      if (listedOk) recordProviderCall({ operation, latencyMs: keyed.latencyMs, source, ...extra });
+    };
     let setupProblem;
     try {
       setupProblem = await verifySetup(config, deadline, success.models);
     } catch {
-      recordProviderCall({ operation: 'ai.provider.models', latencyMs, source: status >= 200 && status < 300 ? source : null });
+      recordKeyed();
       return finish(deadline.failure()?.code === AI_ERROR_CODES.AI_CANCELLED
         ? { ok: false, cancelled: true, code: 'PROBE_CANCELLED', message: 'Bağlantı testi iptal edildi.' }
         : { ok: false, code: 'PROBE_TIMEOUT', message: 'Uca ulaşıldı ancak kurulum doğrulaması süre sınırında tamamlanamadı.' });
     }
     if (setupProblem?.modelMissing) {
-      // Uç yanıt veriyor ama tek Aşama 1 yolu (chat.fast) kullanılamıyor: sağlıklı temas sayılmaz.
-      recordProviderCall({ operation: 'ai.provider.models', latencyMs, code: AI_ERROR_CODES.AI_CONFIGURATION_ERROR, healthFailure: true });
+      // Uç yanıt veriyor ve kurumsal anahtar kabul edildi, ama tek Aşama 1 yolu
+      // (chat.fast) kullanılamıyor: anahtarın eski reddi temizlenir, sağlıklı
+      // temas ise sayılmaz; sağlık izi asıl sorunu (yapılandırma) gösterir.
+      recordKeyed({ keyAccepted: true, healthFailure: true, healthCode: AI_ERROR_CODES.AI_CONFIGURATION_ERROR });
       return finish({ ok: false, code: setupProblem.code, message: setupProblem.message });
     }
-    recordProviderCall({ operation: 'ai.provider.models', latencyMs, source: status >= 200 && status < 300 ? source : null });
+    recordKeyed();
     if (setupProblem) return finish({ ok: false, code: setupProblem.code, message: setupProblem.message });
     return finish({
       ok: true,

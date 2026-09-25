@@ -274,7 +274,7 @@ test('boyut sınırı okunan baytlara uygulanır: boyutunu bildirmeyen büyük d
   t.after(() => resetAiModelRegistryForTests());
   const tooLarge = await tempRegistryFile(t, JSON.stringify({ ...registry(), padding: 'x'.repeat(300 * 1024) }));
   await assert.rejects(loadAiModelRegistry({ path: tooLarge }), { code: 'AI_CONFIGURATION_ERROR' });
-  assert.match(aiModelRegistryState().issues[0], /okunamadı/);
+  assert.match(aiModelRegistryState().issues[0], /izin verilen boyutu \(256 KiB\) aşıyor/);
 
   // `/proc` dosyaları `stat` ile 0 bayt görünür ama okunduğunda çok daha
   // büyüktür: sınır yalnızca `stat` sonucuna dayansaydı bu dosya okunurdu.
@@ -286,7 +286,8 @@ test('boyut sınırı okunan baytlara uygulanır: boyutunu bildirmeyen büyük d
   }
   resetAiModelRegistryForTests();
   await assert.rejects(loadAiModelRegistry({ path: procFile }), { code: 'AI_CONFIGURATION_ERROR' });
-  assert.match(aiModelRegistryState().issues[0], /okunamadı/);
+  // Genel okuma hatası değil, OKUNAN bayt sınırı reddetti.
+  assert.match(aiModelRegistryState().issues[0], /izin verilen boyutu \(256 KiB\) aşıyor/);
 });
 
 test('süre aşımına uğrayan dosya okuması bitmeden yeni okuma başlatılmaz', { skip: process.platform === 'win32' }, async (t) => {
@@ -334,23 +335,19 @@ test('süre aşımına uğrayan dosya okuması bitmeden yeni okuma başlatılmaz
   assert.equal(resolveModelProfile(loaded, 'chat.fast').route.model, 'hizli-model');
 });
 
-test('sabit sınamayı alamayacak kadar küçük bağlamlı `chat.fast` modeli için deneme sunulmaz', async () => {
-  const { AI_PROBE_CONTEXT_TOKENS, describeAiProbe, resolveAiProbeRoute } = await import('../src/server/ai/aiProbeProfile.js');
+test('sabit sınamanın bağlama sığıp sığmadığı tahminle kapatılmaz; çıktı sınırı bağlam penceresiyle daraltılır', async () => {
+  const probeProfile = await import('../src/server/ai/aiProbeProfile.js');
+  const { describeAiProbe, resolveAiProbeRoute } = probeProfile;
   const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
+  assert.equal('AI_PROBE_CONTEXT_TOKENS' in probeProfile, false, 'belirteç sayısı için sabit bir "üst sınır" iddiası yoktur');
   const tiny = validateModelRegistry({
     version: 1,
     models: [{ id: 'kucuk-model', capabilities: ['chat'], contextTokens: 16 }],
     profiles: { 'chat.fast': { model: 'kucuk-model' } }
   });
   assert.equal(tiny.ok, true, 'kayıt geçerlidir');
-  assert.deepEqual(resolveAiProbeRoute(tiny.registry), { ok: false, reason: 'CONTEXT_TOO_SMALL' });
-  const roomy = validateModelRegistry({
-    version: 1,
-    models: [{ id: 'yeterli-model', capabilities: ['chat'], contextTokens: AI_PROBE_CONTEXT_TOKENS }],
-    profiles: { 'chat.fast': { model: 'yeterli-model' } }
-  });
-  assert.equal(resolveAiProbeRoute(roomy.registry).ok, true);
-  assert.ok(AI_PROBE_CONTEXT_TOKENS > 64 && AI_PROBE_CONTEXT_TOKENS < 1024, `sabit sınamanın üst sınırı küçüktür: ${AI_PROBE_CONTEXT_TOKENS}`);
+  // Sığıp sığmadığına sağlayıcı kendi belirteçleyicisi ve şablonuyla karar verir.
+  assert.equal(resolveAiProbeRoute(tiny.registry).ok, true);
 
   const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-probe-context-'));
   try {
@@ -368,8 +365,8 @@ test('sabit sınamayı alamayacak kadar küçük bağlamlı `chat.fast` modeli i
       MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file
     });
     const probe = await describeAiProbe(config);
-    assert.equal(probe.available, false);
-    assert.equal(probe.reason, 'CONTEXT_TOO_SMALL');
+    assert.equal(probe.available, true);
+    assert.equal(probe.reason, null);
   } finally {
     resetAiModelRegistryForTests();
     await rm(directory, { recursive: true, force: true });

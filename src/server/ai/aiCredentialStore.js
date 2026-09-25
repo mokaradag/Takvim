@@ -118,18 +118,34 @@ export async function readCredentialSchema(executor) {
   return ready;
 }
 
+function secretRecord(row) {
+  return row ? {
+    encryptionVersion: Number(row.EncryptionVersion),
+    masterKeyId: String(row.MasterKeyId || ''),
+    nonce: row.Nonce,
+    ciphertext: row.Ciphertext,
+    authTag: row.AuthTag
+  } : null;
+}
+
+function lastRow(result) {
+  const recordsets = result.recordsets || [];
+  return recordsets[recordsets.length - 1]?.[0] || null;
+}
+
 /**
- * Durum künyesi. `keyNonce` (anahtar kimliği; koşullu silme) ve `masterKeyId`
- * (ana anahtar uyuşmazlığı) yalnızca sunucuda kullanılır; künyeye girmez.
+ * Durum künyesi; yalnızca anahtar tablosunu okur (rehber üyeliği önceden
+ * doğrulanır). `keyNonce` (anahtar kimliği; koşullu silme), `masterKeyId` (ana
+ * anahtar uyuşmazlığı) ve `secret` (kaydın bütünlüğünü sınamak için) yalnızca
+ * sunucuda kullanılır; künyeye girmez.
  */
 export async function readCredentialStatus(executor, sicil) {
-  const result = await observeSchema(sicilRequest(executor, sicil).query(AI_CREDENTIAL_STATUS_SQL));
-  const row = result.recordsets?.[1]?.[0] || null;
+  const row = lastRow(await observeSchema(sicilRequest(executor, sicil).query(AI_CREDENTIAL_STATUS_SQL)));
   return {
-    knownSicil: knownSicil(result),
     credential: credentialMetadata(row),
-    keyNonce: row?.KeyNonce ?? null,
-    masterKeyId: row ? String(row.MasterKeyId || '') : null
+    keyNonce: row?.Nonce ?? null,
+    masterKeyId: row ? String(row.MasterKeyId || '') : null,
+    secret: secretRecord(row)
   };
 }
 
@@ -138,13 +154,7 @@ export async function readCredentialSecret(executor, sicil) {
   const row = result.recordsets?.[1]?.[0] || null;
   return {
     knownSicil: knownSicil(result),
-    record: row ? {
-      encryptionVersion: Number(row.EncryptionVersion),
-      masterKeyId: String(row.MasterKeyId || ''),
-      nonce: row.Nonce,
-      ciphertext: row.Ciphertext,
-      authTag: row.AuthTag
-    } : null,
+    record: secretRecord(row),
     credential: credentialMetadata(row)
   };
 }
@@ -162,13 +172,17 @@ export async function upsertCredential(executor, sicil, { encrypted, hint }) {
   return credentialMetadata(recordsets[recordsets.length - 1]?.[0] || null);
 }
 
-/** Yalnızca okunan anahtarı (`keyNonce`) siler; araya giren yeni kayıt korunur. */
+/**
+ * Yalnızca okunan anahtarı (`keyNonce`; yoksa hiçbir satırı) siler; araya giren
+ * yeni kayıt korunur. `current`, silmeden sonra aynı gidiş-dönüşte okunan
+ * güncel satırın künyesidir (yoksa `null`).
+ */
 export async function deleteCredential(executor, sicil, { keyNonce }) {
   const request = sicilRequest(executor, sicil);
-  request.input('keyNonce', sql.VarBinary(12), keyNonce);
+  request.input('keyNonce', sql.VarBinary(12), keyNonce ?? null);
   const result = await observeSchema(request.query(AI_CREDENTIAL_DELETE_SQL));
-  const recordsets = result.recordsets || [];
-  return { deleted: Number(recordsets[recordsets.length - 1]?.[0]?.Deleted || 0) > 0 };
+  const [deleted = [], current = []] = result.recordsets || [];
+  return { deleted: Number(deleted[0]?.Deleted || 0) > 0, current: credentialMetadata(current[0] || null) };
 }
 
 /**

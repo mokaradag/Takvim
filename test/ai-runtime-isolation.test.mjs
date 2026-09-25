@@ -401,9 +401,14 @@ test('Entegrasyonlar kartı yapay zekâ sağlayıcısını listeler; bağlantı 
   }));
   const ok = await (await post()).json();
   assert.equal(ok.result.ok, true);
-  // Kurumsal anahtarla alınan liste, ucun anahtarsız isteği reddettiği
-  // görüldükten sonra anahtarın kanıtı sayılır.
-  assert.deepEqual(provider.calls.map((call) => [call.kind, call.apiKey]), [['models', DEFAULT_KEY], ['models', null]]);
+  // Kurumsal anahtarla alınan liste, ucun rastgele bir denetim anahtarını
+  // reddettiği görüldükten sonra GÖNDERİLEN anahtarın kanıtı sayılır.
+  assert.deepEqual(provider.calls.map((call) => [call.kind, call.control ? 'control' : call.apiKey]), [['models', DEFAULT_KEY], ['models', 'control']]);
+  // Kart, son bağlantı testinin süresini gösterir.
+  const tested = (await (await integrationsRoute.GET(new Request('http://localhost/integrations'))).json())
+    .integrations.find((integration) => integration.id === 'ai-provider');
+  assert.equal(typeof tested.durationMs, 'number');
+  assert.equal(tested.durationMs, ok.result.durationMs);
 
   t.mock.timers.enable({ apis: ['setTimeout'] });
   provider.enqueue({ type: 'stall' });
@@ -806,6 +811,11 @@ test('kira öncesi rehber denetimi ortak SQL havuzunda sınırlı eşzamanlılı
     entered: 0,
     released: new Promise((resolve) => { release = resolve; })
   };
+  // Bir doğrulama düşse bile bariyer açılır: bekleyen istekler test sürecini askıda bırakmaz.
+  t.after(() => {
+    db.queryBarrier = null;
+    release();
+  });
   const requests = [];
   for (const sicil of [SICIL_A, SICIL_B, SICIL_A]) {
     useSicil(sicil);
@@ -834,4 +844,156 @@ test('bileşenin "son başarılı işlem" anı sağlayıcıya erişim değil, u�
   const succeeded = await overviewAi();
   assert.equal(succeeded.ai.lastSuccessAt, succeeded.ai.detail.telemetry.lastSuccessAt);
   assert.ok(succeeded.ai.lastSuccessAt);
+});
+
+/* ── İnceleme düzeltmeleri: sağlık kararları ve ölçüm doğruluğu ── */
+
+const { recordAiRequest, aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
+const { testAiProviderConnection } = await import('../src/server/ai/aiHealth.js');
+
+test('reddedilen kurumsal anahtar yaşlanarak sağlıklı görünmez; yalnızca kurumsal anahtarın kabulü uyarıyı kaldırır', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  provider.enqueue({ type: 'status', status: 401 });
+  assert.equal((await runProbe()).body.error.code, 'AI_KEY_INVALID');
+  t.mock.timers.tick(20 * 60 * 1000);
+  // Kişisel anahtarla yapılan başarılı istek sağlayıcıya erişimi tazeler.
+  await saveKey(PERSONAL_KEY_A);
+  assert.equal((await runProbe()).status, 200);
+  const stale = await overviewAi();
+  assert.equal(stale.ai.state, HEALTH_STATES.WARNING);
+  assert.match(stale.ai.message, /Kurumsal anahtar son kullanımında reddedildi \(AI_KEY_INVALID\)/);
+  // Kurumsal anahtarın kabul edildiği bağlantı testi uyarıyı kaldırır.
+  assert.equal((await postIntegrationTest('ai-provider')).result.ok, true);
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
+});
+
+test('sağlayıcıya ulaşmadan düşen hizmet hatası sağlıklı görünmez; sonraki başarılı istek uyarıyı kaldırır', async (t) => {
+  const { db } = createAiStack(t);
+  adminReset(t);
+  await saveKey(PERSONAL_KEY_A);
+  assert.equal((await runProbe()).status, 200);
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
+  // Anahtar tablosunun yetkisi alındı: istekler sağlayıcıya ulaşmadan düşer.
+  db.aiCredentialPermissionDenied = true;
+  const failed = await runProbe();
+  assert.equal(failed.status, 500);
+  assert.equal(failed.body.error.code, 'AI_INTERNAL_ERROR');
+  const warned = await overviewAi();
+  assert.equal(warned.ai.state, HEALTH_STATES.WARNING, 'taze sağlayıcı erişimi hizmet hatasını gizlemez');
+  assert.match(warned.ai.message, /hizmet hatasıyla sonuçlandı \(AI_INTERNAL_ERROR\)/);
+  db.aiCredentialPermissionDenied = false;
+  assert.equal((await runProbe()).status, 200);
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
+});
+
+test('rehber denetimi kapısının dolması yapay zekâ kapasitesi gibi anlatılmaz', async (t) => {
+  createAiStack(t);
+  adminReset(t);
+  await saveKey(PERSONAL_KEY_A);
+  assert.equal((await runProbe()).status, 200);
+  recordAiRequest({ profile: 'chat.fast', code: 'AI_BUSY', details: { scope: 'global', saturation: 'directory' }, durationMs: 1 });
+  const { ai } = await overviewAi();
+  assert.equal(ai.state, HEALTH_STATES.WARNING);
+  assert.match(ai.message, /Kurumsal personel denetiminin \(SQL\) sınırlı kapasitesi doldu/);
+  assert.doesNotMatch(ai.message, /Kapasite doldu|Etkin \d+\/\d+/, 'boştaki yapay zekâ sayaçları gösterilmez');
+  assert.ok(ai.detail.telemetry.lastDirectoryBusyAt);
+  assert.equal(ai.detail.telemetry.lastBusyAt, null);
+});
+
+test('kişisel anahtar tablosunun eski olumlu gözlemi sağlıklı demek için yetmez', async (t) => {
+  createAiStack(t);
+  adminReset(t);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await saveKey(PERSONAL_KEY_A);
+  assert.equal((await runProbe()).status, 200);
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
+  t.mock.timers.tick(16 * 60 * 1000);
+  // Sağlayıcıya erişim taze, ama tablo 16 dakikadır gözlenmedi.
+  recordProviderCall({ operation: 'ai.provider.models', latencyMs: 5 });
+  const { ai } = await overviewAi();
+  assert.equal(ai.state, HEALTH_STATES.UNKNOWN);
+  assert.match(ai.message, /Kişisel anahtar tablosu yakın zamanda doğrulanmadı/);
+});
+
+test('önceki sağlıklı teması olan kart, başarısız bağlantı testinden (DEFAULT_KEY_UNVERIFIED) sonra sağlıklı görünmez', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  assert.equal((await postIntegrationTest('ai-provider')).result.ok, true);
+  assert.equal((await aiCard()).state, HEALTH_STATES.HEALTHY);
+  provider.enqueue({ type: 'reply' }, { type: 'reply' });
+  const unverified = await postIntegrationTest('ai-provider');
+  assert.equal(unverified.result.code, 'DEFAULT_KEY_UNVERIFIED');
+  const card = await aiCard();
+  assert.equal(card.state, HEALTH_STATES.WARNING);
+  assert.match(card.message, /Son bağlantı testi başarısız oldu \(DEFAULT_KEY_UNVERIFIED\)/);
+  assert.equal(card.lastFailureCode, 'DEFAULT_KEY_UNVERIFIED');
+  // Başarılı yeni test kartı yeniden sağlıklı gösterir.
+  assert.equal((await postIntegrationTest('ai-provider')).result.ok, true);
+  assert.equal((await aiCard()).state, HEALTH_STATES.HEALTHY);
+});
+
+test('kurumsal anahtar kabul edilip model eksikse eski anahtar reddi değil asıl yapılandırma sorunu bildirilir', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  provider.enqueue({ type: 'status', status: 401 });
+  assert.equal((await postIntegrationTest('ai-provider')).result.code, 'DEFAULT_KEY_REJECTED');
+  assert.match((await overviewAi()).ai.message, /Kurumsal anahtar son kullanımında reddedildi/);
+  provider.enqueue({ type: 'reply', models: ['baska-model'] });
+  assert.equal((await postIntegrationTest('ai-provider')).result.code, 'PROBE_MODEL_MISSING');
+  const { ai } = await overviewAi();
+  assert.equal(ai.state, HEALTH_STATES.WARNING);
+  assert.doesNotMatch(ai.message, /Kurumsal anahtar/);
+  assert.match(ai.message, /AI_CONFIGURATION_ERROR/);
+  assert.equal(ai.detail.telemetry.provider.defaultKey.lastFailureAt, null, 'kabul edilen anahtarın eski reddi temizlenir');
+});
+
+test('bağlantı testinin denetim isteği kendi gecikmesi ve sonucuyla ölçülür', async (t) => {
+  const { provider } = createAiStack(t);
+  adminReset(t);
+  // Anahtarlı liste hızlı; denetim isteği süre sınırına kadar takılı kalır.
+  provider.enqueue({ type: 'reply' }, { type: 'stall' });
+  const result = await testAiProviderConnection({ timeoutMs: 300 });
+  assert.equal(result.code, 'PROBE_TIMEOUT');
+  const snapshot = aiTelemetrySnapshot();
+  assert.equal(snapshot.latency.provider.count, 2, 'iki HTTP çağrısı ayrı ayrı örneklenir');
+  assert.ok(snapshot.latency.provider.p95Ms >= 250, `süre aşımı denetim isteğinin gerçek süresiyle kaydedilir: ${snapshot.latency.provider.p95Ms}`);
+  const models = snapshotOperations().find((row) => row.operation === 'ai.provider.models');
+  assert.equal(models.count, 2);
+  assert.equal(models.errorCount, 1);
+});
+
+test('kurumsal anahtar yokken 403 başarılı bağlantı sayılmaz; 401 erişimdir ama HTTP işlemi başarısız ölçülür', async (t) => {
+  const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_DEFAULT_API_KEY: null } });
+  adminReset(t);
+  provider.enqueue({ type: 'status', status: 403 });
+  const forbidden = await postIntegrationTest('ai-provider');
+  assert.equal(forbidden.result.ok, false);
+  assert.equal(forbidden.result.code, 'ACCESS_FORBIDDEN');
+  const warned = await overviewAi();
+  assert.equal(warned.ai.state, HEALTH_STATES.WARNING, 'erişim/ağ politikası reddi sağlıklı temas değildir');
+
+  resetTelemetryRegistryForTests();
+  const authRequired = await postIntegrationTest('ai-provider');
+  assert.equal(authRequired.result.ok, true);
+  assert.equal(authRequired.result.code, 'AUTHENTICATION_REQUIRED');
+  const models = snapshotOperations().find((row) => row.operation === 'ai.provider.models');
+  assert.equal(models.count, 1);
+  assert.equal(models.errorCount, 1, 'anahtarsız 401 başarılı HTTP işlemi sayılmaz');
+  assert.equal(aiTelemetrySnapshot().provider.lastOutcome, 'contact', 'sağlık izi erişimdir');
+});
+
+test('iki telemetri turu arasında başlayıp biten yük de örneklenir', async (t) => {
+  const { provider } = createAiStack(t);
+  const startedAt = Date.now();
+  sampleAiLoad(startedAt);
+  provider.enqueue({ type: 'delay', ms: 40 });
+  assert.equal((await runProbe()).status, 200);
+  assert.equal(aiRuntimeLoad().active, 0, 'örnek anında etkin istek yok');
+  sampleAiLoad(Date.now());
+  const active = snapshotGauges({ sinceMs: startedAt - 60000 }).filter((row) => row.metricKey === 'ai.active_requests');
+  assert.equal(active.reduce((sum, row) => sum + row.count, 0), 2);
+  assert.ok(active.some((row) => row.max > 0), 'tur arasındaki yük zaman ağırlıklı ortalamaya girer');
+  assert.ok(active.every((row) => row.max <= 1));
 });

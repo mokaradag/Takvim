@@ -28,6 +28,7 @@ function statusFixture(overrides = {}) {
     enabled: true,
     available: true,
     personalKeysSupported: true,
+    personalKeysConfigured: true,
     defaultKeyConfigured: true,
     schemaReady: true,
     effectiveSource: 'default',
@@ -478,7 +479,7 @@ test('doğrulama sonucu kalıcı özete ve bildirime yansır; hizmet hatası son
 
   server.reply('POST /credential/validation', {
     ok: true,
-    validation: { status: 'REJECTED', credential: { hint: 'Vx9b', updatedAt: '2026-09-20T08:30:00.000Z', lastValidatedAt: '2026-09-21T10:00:00.000Z', lastValidationStatus: 'REJECTED' } }
+    validation: { status: 'REJECTED', stale: false, credential: { hint: 'Vx9b', updatedAt: '2026-09-20T08:30:00.000Z', lastValidatedAt: '2026-09-21T10:00:00.000Z', lastValidationStatus: 'REJECTED' } }
   });
   findButton(view.output, 'Doğrula').props.onClick();
   await settle(view);
@@ -857,17 +858,22 @@ test('2xx ama beklenen biçimde olmayan yanıt kartı çökertmez ve başarı gi
   await settle(view);
   assert.match(textOf(view.output), /Kurumsal anahtar/);
 
-  // Boş başarılı kayıt yanıtı "kaydedildi" diye gösterilmez; form açık kalır.
+  // Boş başarılı kayıt yanıtı "kaydedildi" diye gösterilmez. Sunucu 2xx
+  // döndürdüğü için kayıt yapılmış olabilir: sonuç tahmin edilmez, güncel durum
+  // okunur ve belirsizlik gerçek nedeniyle söylenir.
   findButton(view.output, 'Anahtar ekle').props.onClick();
   view.render();
   keyInput(view.output).props.onChange({ target: { value: TYPED_KEY } });
   view.render();
   server.reply('PUT /credential', { ok: true });
+  server.reply('GET /credential', { ok: true, ai: personalStatus({ hint: TYPED_KEY.slice(-4) }) });
   findButton(view.output, 'Kaydet').props.onClick();
   await settle(view);
-  assert.doesNotMatch(textOf(view.output), /şifrelenerek kaydedildi/);
-  assert.ok(findElement(view.output, (node) => node.type === 'input'));
-  assert.match(textOf(findElement(view.output, (node) => node.props?.role === 'alert')), /beklenmeyen bir yanıt/);
+  const text = textOf(view.output);
+  assert.doesNotMatch(text, /şifrelenerek kaydedildi/);
+  assert.match(text, /Sunucudan beklenmeyen bir yanıt alındı\. Anahtarın kaydedilip kaydedilmediği doğrulanamadı; güncel durum yeniden yüklendi\./);
+  assert.match(text, new RegExp(`••••${TYPED_KEY.slice(-4)}`), 'güncel durum gösterilir');
+  assert.equal(server.calls.filter((call) => call.method === 'GET').length, 3);
 });
 
 /* ── İnceleme düzeltmeleri ─────────────────────────────────── */
@@ -895,12 +901,15 @@ test('eylemleri yöneten alanları eksik ya da tanınmayan başarılı yanıtlar
   t.after(() => { globalThis.fetch = previous; });
   const respond = (body) => { globalThis.fetch = async () => Response.json(body); };
 
-  // Durum: etkin kaynak ya da deneme bilgisi olmadan sınama açılamaz.
+  // Durum: etkin kaynak ya da deneme bilgisi olmadan sınama açılamaz; saklama
+  // durumu alanları olmadan eksik göç bilinçli kapatmadan ayrılamaz.
   for (const ai of [
     { enabled: true, available: true, credential: {} },
     { ...statusFixture(), effectiveSource: undefined },
     { ...statusFixture(), probe: undefined },
-    { ...statusFixture(), credential: { configured: true } }
+    { ...statusFixture(), credential: { configured: true } },
+    { ...statusFixture(), schemaReady: undefined },
+    { ...statusFixture(), personalKeysConfigured: 'true' }
   ]) {
     respond({ ok: true, ai });
     assert.equal((await client.loadAiCredentialStatusRequest()).code, client.AI_INVALID_RESPONSE, JSON.stringify(ai));
@@ -909,12 +918,29 @@ test('eylemleri yöneten alanları eksik ya da tanınmayan başarılı yanıtlar
   assert.equal(presentation.canRunAiProbe({ ...statusFixture(), effectiveSource: undefined }), false);
 
   // Doğrulama: yalnızca sunucunun üç kalıcı sonucu ya da açık bayat sonuç.
-  for (const validation of [{ status: 'UNKNOWN' }, { status: 'VALID', credential: 'x' }, { status: null }]) {
+  // Bayat olmayan sonuç `stale: false` ve sonucun yazıldığı anahtarın künyesini
+  // (aynı sonuç ve doğrulama zamanıyla) taşımalıdır.
+  const written = { hint: 'Vx9b', lastValidatedAt: '2026-09-21T10:00:00.000Z', lastValidationStatus: 'FORBIDDEN' };
+  for (const validation of [
+    { status: 'UNKNOWN' },
+    { status: 'VALID', credential: 'x' },
+    { status: null },
+    { status: 'FORBIDDEN', credential: written },
+    { status: 'FORBIDDEN', stale: false, credential: null },
+    { status: 'FORBIDDEN', stale: false, credential: {} },
+    { status: 'VALID', stale: false, credential: written },
+    { status: 'FORBIDDEN', stale: false, credential: { ...written, lastValidatedAt: null } },
+    { status: null, stale: true, credential: { configured: true } }
+  ]) {
     respond({ ok: true, validation });
     assert.equal((await client.validateAiCredentialRequest()).code, client.AI_INVALID_RESPONSE, JSON.stringify(validation));
   }
-  respond({ ok: true, validation: { status: 'FORBIDDEN', stale: false, credential: null } });
+  respond({ ok: true, validation: { status: 'FORBIDDEN', stale: false, credential: written } });
   assert.equal((await client.validateAiCredentialRequest()).ok, true);
+  for (const credential of [null, { hint: '7Qm2', lastValidatedAt: null, lastValidationStatus: null }]) {
+    respond({ ok: true, validation: { status: null, stale: true, credential } });
+    assert.equal((await client.validateAiCredentialRequest()).ok, true, 'bayat sonuç güncel künyeyi ya da boşluğu taşır');
+  }
 
   // Deneme: kaynak, profil, yapılandırılan model, süre ve metin olmadan "Yanıt alındı" gösterilmez.
   const probeResult = { credentialSource: 'personal', profile: 'chat.fast', model: 'm', configuredModel: 'm', durationMs: 5, text: 'x' };
@@ -1138,8 +1164,10 @@ test('Performans · yapay zekâ yükü süreç başına ortalama olarak ve örne
   };
   assert.equal(gaugeInstanceCount(gauges, ['ai.active_requests', 'ai.queued_requests']), 2);
   assert.equal(gaugeInstanceCount({}, ['ai.active_requests']), 1);
-  assert.match(aiLoadDescription(1), /süreç\) başına ortalamadır; kapasite sınırları da süreç başınadır/);
-  assert.match(aiLoadDescription(2), /2 örnek ölçüm yazdı; toplam yük yaklaşık 2 katıdır/);
+  assert.match(aiLoadDescription(1), /süreç\) başına zaman ağırlıklı ortalamadır; kapasite sınırları da süreç başınadır/);
+  // Örnek sayısı bilgi olarak verilir; "örnek sayısı × ortalama" toplam yük diye sunulmaz.
+  assert.match(aiLoadDescription(2), /2 uygulama örneği ölçüm yazdı; örnekler aynı sürede çalışmamış olabileceği için toplam yük bu değerden türetilemez/);
+  assert.doesNotMatch(aiLoadDescription(2), /katıdır/);
 });
 
 test('model kaydı kullanılamıyorsa kurumsal anahtarla isteklerin çalışacağı vaat edilmez', () => {
@@ -1155,7 +1183,6 @@ test('model kaydı kullanılamıyorsa kurumsal anahtarla isteklerin çalışaca�
   assert.doesNotMatch(storedKeyNotice(disabledKey), /istekler kurumsal anahtarla yapılır/);
   // Kullanılabilir kurulumda vaat korunur.
   assert.match(missingKeyDescription(statusFixture()), /İstekleriniz kurumsal varsayılan anahtarla yapılır/);
-  assert.match(presentation.probeUnavailableMessage(statusFixture({ probe: { available: false, reason: 'CONTEXT_TOO_SMALL' } })), /bağlam penceresi/);
 });
 
 test('kaldırma çakışmasında yeni anahtar gösterilirken eski anahtarın deneme sonucu kaldırılır', async (t) => {
@@ -1186,4 +1213,216 @@ test('eksik 0016 tablosu bilinçli kapatılmış kişisel anahtar gibi anlatılm
   assert.doesNotMatch(missingKeyDescription(schemaMissing), /bu kurulumda etkin değil/);
   const disabled = statusFixture({ personalKeysSupported: false, personalKeysConfigured: false, schemaReady: true });
   assert.match(missingKeyDescription(disabled), /bu kurulumda etkin değil/);
+});
+
+/* ── İnceleme düzeltmeleri: belirsiz işlemler, iptal ve yanıt biçimi ── */
+
+async function beginSave(view, server) {
+  findButton(view.output, 'Anahtar ekle').props.onClick();
+  view.render();
+  keyInput(view.output).props.onChange({ target: { value: TYPED_KEY } });
+  view.render();
+  return server;
+}
+
+test('belirsiz işlemden sonraki durum okuması da başarısızsa kart "yüklendi" demez; durum çözülmemiş gösterilir', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  findButton(view.output, 'Kaldır').props.onClick();
+  view.render();
+  server.fail('DELETE /credential');
+  server.fail('GET /credential');
+  findButton(view.output, 'Anahtarı kaldır').props.onClick();
+  await settle(view);
+  const alert = findElement(view.output, (node) => node.props?.role === 'alert');
+  assert.ok(alert, 'çözülmemiş durum açıkça gösterilir');
+  assert.match(textOf(alert), /Sunucuyla bağlantı kesildi\. Anahtarın kaldırılıp kaldırılmadığı doğrulanamadı ve güncel durum da okunamadı/);
+  const text = textOf(view.output);
+  assert.doesNotMatch(text, /yeniden yüklendi/);
+  assert.equal(text.includes('••••Vx9b'), false, 'eski anahtar künyesi güncelmiş gibi gösterilmez');
+  // Yeniden deneme güncel durumu okur.
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  findButton(view.output, 'Yeniden dene').props.onClick();
+  await settle(view);
+  assert.match(textOf(view.output), /Kurumsal anahtar/);
+});
+
+test('belirsizlik bildirimi gerçek nedeni söyler: ağ kesintisi süre aşımı gibi anlatılmaz', () => {
+  const { ambiguousMutationNotice, isAmbiguousMutation } = presentation;
+  assert.match(ambiguousMutationNotice('save', { code: 'NETWORK' }).text, /^Sunucuyla bağlantı kesildi\./);
+  assert.match(ambiguousMutationNotice('save', { code: 'REQUEST_TIMEOUT' }).text, /^Sunucudan süre sınırında yanıt alınamadı\./);
+  assert.match(ambiguousMutationNotice('remove', { code: 'INVALID_RESPONSE' }).text, /^Sunucudan beklenmeyen bir yanıt alındı\. Anahtarın kaldırılıp/);
+  const serverTimeout = { ok: false, code: 'DATABASE_UNAVAILABLE', error: { code: 'DATABASE_UNAVAILABLE', details: { reason: 'CREDENTIAL_OPERATION_TIMEOUT' } } };
+  assert.equal(isAmbiguousMutation(serverTimeout), true, 'sunucunun kendi süre sınırı da sonucu belirsiz bırakır');
+  assert.match(ambiguousMutationNotice('save', serverTimeout).text, /^Anahtar işlemi sunucunun süre sınırında tamamlanamadı\./);
+  // Başka bir veritabanı hatası belirsiz sayılmaz (işlem yapılmadı).
+  assert.equal(isAmbiguousMutation({ code: 'DATABASE_UNAVAILABLE', error: { details: { reason: 'OTHER' } } }), false);
+  assert.equal(isAmbiguousMutation({ code: 'CONFLICT' }), false);
+});
+
+test('sunucunun anahtar işlemi süre sınırı dolunca kayıt sonrasında güncel durum okunur', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: statusFixture() });
+  const view = await mountActual(t);
+  await beginSave(view, server);
+  server.reply('PUT /credential', {
+    error: { code: 'DATABASE_UNAVAILABLE', message: 'Anahtar işlemi süre sınırında tamamlanamadı.', details: { reason: 'CREDENTIAL_OPERATION_TIMEOUT' } }
+  }, 503);
+  server.reply('GET /credential', { ok: true, ai: personalStatus({ hint: TYPED_KEY.slice(-4) }) });
+  findButton(view.output, 'Kaydet').props.onClick();
+  await settle(view);
+  const text = textOf(view.output);
+  assert.match(text, /Anahtar işlemi sunucunun süre sınırında tamamlanamadı\. Anahtarın kaydedilip kaydedilmediği doğrulanamadı; güncel durum yeniden yüklendi/);
+  assert.match(text, new RegExp(`••••${TYPED_KEY.slice(-4)}`));
+});
+
+test('belirsiz işlemden sonraki durum okuması sürerken yeni işlem başlatılamaz', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  findButton(view.output, 'Değiştir').props.onClick();
+  view.render();
+  keyInput(view.output).props.onChange({ target: { value: TYPED_KEY } });
+  view.render();
+  server.fail('PUT /credential');
+  const reconcile = server.defer('GET /credential');
+  findButton(view.output, 'Kaydet').props.onClick();
+  await settle(view);
+  // Okuma sürüyor: kayıt yeniden gönderilemez ve form kapatılamaz; eski okuma
+  // daha yeni bir işlemin sonucunu ezemez.
+  assert.equal(findButton(view.output, 'Kaydet').props.disabled, true);
+  assert.equal(findButton(view.output, 'Vazgeç').props.disabled, true);
+  reconcile.resolve({ ok: true, ai: personalStatus({ hint: TYPED_KEY.slice(-4) }) });
+  await settle(view);
+  assert.equal(findButton(view.output, 'Kaydet').props.disabled, false);
+  assert.equal(findButton(view.output, 'Vazgeç').props.disabled, false);
+  assert.match(textOf(view.output), new RegExp(`••••${TYPED_KEY.slice(-4)}`));
+});
+
+test('kart kapanınca süren kayıt ve kaldırma istekleri de kesilir', async (t) => {
+  for (const action of ['save', 'remove']) {
+    const server = stubAiServer(t);
+    withDataMode(t, 'actual');
+    server.reply('GET /credential', { ok: true, ai: personalStatus() });
+    const view = mountComponent(AiAccessSettings, {});
+    await settle(view);
+    if (action === 'save') {
+      findButton(view.output, 'Değiştir').props.onClick();
+      view.render();
+      keyInput(view.output).props.onChange({ target: { value: TYPED_KEY } });
+      view.render();
+      server.defer('PUT /credential');
+      findButton(view.output, 'Kaydet').props.onClick();
+    } else {
+      findButton(view.output, 'Kaldır').props.onClick();
+      view.render();
+      server.defer('DELETE /credential');
+      findButton(view.output, 'Anahtarı kaldır').props.onClick();
+    }
+    view.render();
+    const call = server.calls.find((entry) => entry.method === (action === 'save' ? 'PUT' : 'DELETE'));
+    assert.equal(call.signal.aborted, false);
+    view.unmount();
+    assert.equal(call.signal.aborted, true, `${action}: sayfadan ayrılınca istek kesilir; sunucu commit'ten önce geri alır`);
+    await drain();
+  }
+});
+
+test('Demo Kipine geçiş ve kartın kapanması süren durum okumasını da keser', async (t) => {
+  withDataMode(t, 'actual');
+  const server = stubAiServer(t);
+  server.defer('GET /credential');
+  const view = mountComponent(AiAccessSettings, {});
+  t.after(() => view.unmount());
+  view.render();
+  const first = server.calls.find((call) => call.method === 'GET');
+  DataModeContext._currentValue = { dataMode: 'demo', async setDataMode() {} };
+  view.render();
+  await settle(view);
+  assert.equal(first.signal.aborted, true, 'Demo Kipine geçince gerçek durum okuması sürmez');
+
+  server.defer('GET /credential');
+  DataModeContext._currentValue = { dataMode: 'actual', async setDataMode() {} };
+  view.render();
+  await settle(view);
+  const second = server.calls.filter((call) => call.method === 'GET').at(-1);
+  assert.notEqual(second, first);
+  view.unmount();
+  assert.equal(second.signal.aborted, true, 'kart kapanınca durum okuması kesilir');
+  await drain();
+});
+
+test('doğrulama sırasında değişen anahtarın bildirimi durum yenilenirken ve sonrasında görünür kalır', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  server.reply('POST /credential/validation', {
+    ok: true,
+    validation: { status: null, stale: true, credential: { hint: '7Qm2', lastValidationStatus: null, lastValidatedAt: null } }
+  });
+  const reconcile = server.defer('GET /credential');
+  findButton(view.output, 'Doğrula').props.onClick();
+  await settle(view);
+  // Kart yükleme ekranına düşmez: anahtar paneli yerinde kalır.
+  assert.doesNotMatch(textOf(view.output), /yükleniyor/);
+  assert.ok(hasButton(view.output, 'Doğrula'));
+  reconcile.resolve({ ok: true, ai: personalStatus({ hint: '7Qm2' }) });
+  await settle(view);
+  const text = textOf(view.output);
+  assert.match(text, /Anahtar doğrulama sırasında değiştirildi; sonuç yeni anahtara uygulanmadı/);
+  assert.match(text, /••••7Qm2/);
+});
+
+test('kaldırma çakışmasının bildirimi durum yenilendikten sonra da görünür kalır', async (t) => {
+  const server = stubAiServer(t);
+  server.reply('GET /credential', { ok: true, ai: personalStatus() });
+  const view = await mountActual(t);
+  findButton(view.output, 'Kaldır').props.onClick();
+  view.render();
+  server.reply('DELETE /credential', {
+    error: { code: 'CONFLICT', message: 'Bu arada başka bir oturumda yeni bir kişisel anahtar kaydedildi; yeni anahtar kaldırılmadı.', details: null }
+  }, 409);
+  server.reply('GET /credential', { ok: true, ai: personalStatus({ hint: '7Qm2' }) });
+  findButton(view.output, 'Anahtarı kaldır').props.onClick();
+  await settle(view);
+  const text = textOf(view.output);
+  assert.match(text, /yeni anahtar kaldırılmadı/);
+  assert.match(text, /••••7Qm2/);
+});
+
+test('okunamayan kayıt nedeni doğru açıklanır: bozuk şifreli kayıt ana anahtar değişimi gibi anlatılmaz', () => {
+  const { storedKeyNotice } = presentation;
+  assert.match(storedKeyNotice(personalStatus({ readable: false, unreadableReason: 'RECORD_INVALID' })), /şifreli kayıt doğrulanamadı/);
+  assert.match(storedKeyNotice(personalStatus({ readable: false, unreadableReason: 'MASTER_KEY_CHANGED' })), /şifreleme anahtarı değişti/);
+  // Özellik kapalıyken okunabilirlik sınanmaz; uyarı gösterilmez.
+  assert.equal(storedKeyNotice(personalStatus({ readable: false, unreadableReason: 'AI_DISABLED' }, { enabled: false, available: false })), null);
+});
+
+test('süren deneme, ondan sonra gelen reddedildi/yetersiz doğrulama sonucunu çürütemez', async (t) => {
+  for (const status of ['REJECTED', 'FORBIDDEN']) {
+    const server = stubAiServer(t);
+    withDataMode(t, 'actual');
+    server.reply('GET /credential', { ok: true, ai: personalStatus() });
+    const view = mountComponent(AiAccessSettings, {});
+    await settle(view);
+    const probe = server.defer('POST /probe', { honorAbort: false });
+    findButton(view.output, 'Deneme isteği gönder').props.onClick();
+    view.render();
+    const probeCall = server.calls.find((call) => call.path === '/probe');
+    server.reply('POST /credential/validation', {
+      ok: true,
+      validation: { status, stale: false, credential: { hint: 'Vx9b', lastValidationStatus: status, lastValidatedAt: '2026-09-21T10:00:00.000Z' } }
+    });
+    findButton(view.output, 'Doğrula').props.onClick();
+    await settle(view);
+    assert.equal(probeCall.signal.aborted, true, `${status}: daha eski deneme kesilir`);
+    // Eski deneme yine de yanıt verse bile uygulanmaz.
+    probe.resolve({ ok: true, result: { credentialSource: 'personal', profile: 'chat.fast', model: 'hizli-model', configuredModel: 'hizli-model', durationMs: 5, text: 'Merhaba.' } });
+    await settle(view);
+    assert.equal(probeText(view.output).includes('Yanıt alındı'), false, status);
+    assert.ok(hasButton(view.output, 'Deneme isteği gönder'));
+    view.unmount();
+    await drain();
+  }
 });

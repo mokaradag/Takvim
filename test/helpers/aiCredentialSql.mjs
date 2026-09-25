@@ -69,11 +69,10 @@ export function runAiCredentialQuery(db, sqlText, params) {
 
   if (sqlText.includes('SELECT TOP (1) EncryptionVersion')) {
     const row = find();
-    return [knownSicil, row ? [{ ...row }] : []];
-  }
-  if (sqlText.includes('SELECT TOP (1) MasterKeyId')) {
-    const row = find();
-    return [knownSicil, row ? [{ MasterKeyId: row.MasterKeyId, KeyNonce: Buffer.from(row.Nonce), ...metadataRow(row)[0] }] : []];
+    const rows = row ? [{ ...row, Nonce: Buffer.from(row.Nonce) }] : [];
+    // Çalışma zamanındaki gizli kayıt okuması rehber denetimini aynı gidiş-dönüşte
+    // yineler; durum okuması yalnızca anahtar tablosuna gider.
+    return sqlText.includes('AS KnownSicil') ? [knownSicil, rows] : [rows];
   }
   if (sqlText.includes('UPDATE dbo.MR_AiUserCredentials WITH (UPDLOCK, HOLDLOCK)')) {
     const now = new Date();
@@ -102,7 +101,12 @@ export function runAiCredentialQuery(db, sqlText, params) {
     // Yalnızca okunan anahtar (nonce) silinir; araya giren yeni kayıt korunur.
     const before = db.aiUserCredentials.length;
     db.aiUserCredentials = db.aiUserCredentials.filter((row) => !(row.Sicil === sicil && sameKey(row)));
-    return [[{ Deleted: before - db.aiUserCredentials.length }]];
+    const deleted = before - db.aiUserCredentials.length;
+    // Test kancası: silme ile aynı gidiş-dönüşteki güncel satır okuması arasına
+    // başka bir oturumun kaydı girebilir.
+    db.aiCredentialHooks?.afterDelete?.({ deleted, nextRowVersion });
+    const current = find();
+    return [[{ Deleted: deleted }], current ? [{ KeyNonce: Buffer.from(current.Nonce), ...metadataRow(current)[0] }] : []];
   }
   if (sqlText.includes('SET LastValidatedAt = SYSUTCDATETIME()')) {
     const row = find();

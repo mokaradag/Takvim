@@ -46,28 +46,44 @@ export function assertSameOriginAiRequest(request) {
  * JSON hata iletisi gövdenin bir parçasını (ör. bir API anahtarını) içerebilir.
  * İstemcinin gövde gönderirken bağlantıyı kesmesi iç hata değil, kararlı bir
  * istek sonucudur.
+ *
+ * `signal` işlemin süre sınırıdır: gövdeyi yavaşça damlatan istemci, okumayı
+ * sınırın ötesinde tutamaz. Sinyal kesilince okuyucu iptal edilir ve
+ * `signal.reason` fırlatılır.
  */
-export async function readJsonBody(request, { maxBytes = MAX_BODY_BYTES } = {}) {
+export async function readJsonBody(request, { maxBytes = MAX_BODY_BYTES, signal = null } = {}) {
   if (!/^application\/json\b/i.test(String(request.headers.get('content-type') || ''))) throw invalidBody('CONTENT_TYPE');
+  signal?.throwIfAborted();
   const reader = request.body?.getReader();
   if (!reader) throw invalidBody('EMPTY_BODY');
+  const onAbort = () => {
+    reader.cancel(signal.reason).catch(() => {});
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   const chunks = [];
   let total = 0;
-  for (;;) {
-    let step;
-    try {
-      step = await reader.read();
-    } catch {
-      throw invalidBody('BODY_INTERRUPTED');
+  try {
+    for (;;) {
+      let step;
+      try {
+        step = await reader.read();
+      } catch {
+        signal?.throwIfAborted();
+        throw invalidBody('BODY_INTERRUPTED');
+      }
+      // İptal edilen okuyucu bekleyen okumayı `done` ile bitirir; bu bir gövde sonu değildir.
+      signal?.throwIfAborted();
+      const { done, value } = step;
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw invalidBody('BODY_TOO_LARGE');
+      }
+      chunks.push(value);
     }
-    const { done, value } = step;
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
-      throw invalidBody('BODY_TOO_LARGE');
-    }
-    chunks.push(value);
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
   }
   let parsed = null;
   try {

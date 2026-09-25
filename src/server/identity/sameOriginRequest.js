@@ -11,13 +11,15 @@ import 'server-only';
  * kabul edilir. İki başlık da yoksa istek tarayıcıdan gelmiyordur (betik,
  * test, sunucudan sunucuya) ve CSRF vektörü oluşmaz.
  *
- * Kaynak ŞEMA + ana bilgisayar olarak karşılaştırılır. İsteğin istemciye
- * dönük şeması `X-Forwarded-Proto` (yoksa isteğin kendi adresi) ile bilinir:
- * `https` hedefe `http` kaynağından gelen istek aynı kaynak değildir. TLS'i
- * sonlandıran ve bu başlığı iletmeyen bir vekilin arkasında uygulama isteği
- * `http` olarak görür; bu durumda tarayıcının `https` kaynağı kabul edilir
- * (yalnızca şema düşürme reddedilir). Vekil zincirinde virgülle eklenen
- * başlıkların yalnızca ilk (istemciye dönük) değeri kullanılır.
+ * Kaynak ŞEMA + ana bilgisayar olarak karşılaştırılır. Vekil
+ * `X-Forwarded-Proto` ile istemciye dönük şemayı AÇIKÇA bildiriyorsa şema
+ * bire bir eşleşmelidir (`http` bildirilen hedefe `https` kaynağı da aynı
+ * kaynak değildir). Başlık yoksa şema isteğin kendi adresinden bilinir:
+ * `https` hedefe `http` kaynağından gelen istek reddedilir; TLS'i sonlandıran
+ * ve başlığı iletmeyen bir vekilin arkasında uygulama isteği `http` olarak
+ * gördüğü için yalnızca bu durumda tarayıcının `https` kaynağı da kabul
+ * edilir. Vekil zincirinde virgülle eklenen başlıkların yalnızca ilk
+ * (istemciye dönük) değeri kullanılır.
  */
 
 const WEB_PROTOCOLS = new Set(['http:', 'https:']);
@@ -55,9 +57,12 @@ export function isSameOriginRequest(request) {
 
   const target = parseOrigin(request.url);
   const forwardedProto = firstValue(request.headers.get('x-forwarded-proto')).toLowerCase();
-  const targetProtocol = forwardedProto ? `${forwardedProto}:` : target?.protocol;
-  if (!WEB_PROTOCOLS.has(targetProtocol)) return false;
-  if (targetProtocol === 'https:' && claimed.protocol !== 'https:') return false;
+  if (forwardedProto) {
+    if (claimed.protocol !== `${forwardedProto}:`) return false;
+  } else {
+    if (!WEB_PROTOCOLS.has(target?.protocol)) return false;
+    if (target.protocol === 'https:' && claimed.protocol !== 'https:') return false;
+  }
 
   const expected = new Set([
     firstValue(request.headers.get('x-forwarded-host')),

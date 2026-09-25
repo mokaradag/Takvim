@@ -16,6 +16,7 @@ import { readAiConfig, requireAiAvailable } from './aiConfig.js';
 import { aiValidationBudgetMs, createAiDeadline, raceWithAbort } from './aiDeadline.js';
 import { AiError } from './aiErrors.js';
 import { describeAiProbe } from './aiProbeProfile.js';
+import { createAiSqlGate } from './aiSqlGate.js';
 import {
   deleteCredential,
   isMissingAiCredentialSchema,
@@ -37,9 +38,17 @@ import { CredentialVaultError, decryptCredential, encryptCredential, masterKeyId
  * zaman damgaları döner.
  *
  * Durum okuma, kaydetme ve kaldırma tek bir uçtan uca süre sınırı altında
- * çalışır ve istemcinin iptalini (`request.signal`) izler: istemcinin
- * vazgeçtiği bir kayıt işlemi geri alınır, sonradan gelen bir yeniden denemeyi
- * ezemez.
+ * çalışır ve istemcinin iptalini (`request.signal`) izler. İptal ve süre
+ * dolması yalnızca kalıcı değişikliğin başlangıç noktasına (commit ya da
+ * silme) kadar etkilidir: o noktadan önce vazgeçilen iş geri alınır, sonra
+ * vazgeçilen iş ise tamamlanır ve GERÇEK sonucu bildirilir. Böylece hata yanıtı
+ * alan bir kayıt sonradan uygulanmaz, uygulanan bir kayıt da hata olarak
+ * bildirilmez. Değişiklikten sonra G/Ç yapılmaz: yanıt, değişikliği yapan
+ * gidiş-dönüşün sonucundan kurulur.
+ *
+ * Bu uçların SQL işleri ortak havuzu sınırlı bir kapıdan kullanır (Sicil
+ * başına adil); yapay zekâ ayarları trafiği olağan Rota SQL işlerini
+ * tüketemez.
  */
 
 function unknownSicil() {
@@ -49,7 +58,7 @@ function unknownSicil() {
 function replacedConcurrently() {
   return new ServerPersistenceError(
     'CONFLICT',
-    'Kişisel anahtar bu arada başka bir oturumda değiştirildi; yeni anahtar kaldırılmadı. Güncel durumu görüp yeniden deneyin.'
+    'Bu arada başka bir oturumda yeni bir kişisel anahtar kaydedildi; yeni anahtar kaldırılmadı. Güncel durumu görüp yeniden deneyin.'
   );
 }
 
@@ -61,23 +70,52 @@ function credentialOperationTimeout() {
   );
 }
 
-function executorFor(pool, signal) {
-  return signal ? boundedExecutor(pool, signal) : pool;
+/** Hiç kesilmeyen sinyal: süre sınırı dışında kalan ama kapıya bağlanan sorgular için. */
+const NEVER_ABORTED = new AbortController().signal;
+
+function executorFor(pool, signal, track = null) {
+  return signal || track ? boundedExecutor(pool, signal || NEVER_ABORTED, { track }) : pool;
 }
 
 /**
- * Anahtar işleminin uçtan uca süre sınırı. İş, süre ve istemci iptalini
- * taşıyan sinyali alır; SQL sorguları bu sinyalle sınırlanır.
+ * Anahtar işleminin uçtan uca süre sınırı.
+ *
+ * İş `scope` alır: `scope.signal` süre ve istemci iptalini taşır;
+ * `scope.enterCommit()` kalıcı değişiklik başlamadan hemen önce (arada G/Ç
+ * olmadan) çağrılır. O
+ * anda sinyal kesilmişse işlem fırlatır (iş geri alınır); kesilmemişse bundan
+ * sonraki süre dolması ya da iptal, işi yarıda bırakıp hata YANITI üretmez:
+ * değişikliğin gerçek sonucu beklenir ve bildirilir.
  */
 async function withCredentialDeadline(signal, work) {
   const deadline = createAiDeadline({ timeoutMs: AI_CREDENTIAL_OPERATION_TIMEOUT_MS, parentSignal: signal });
+  let committing = false;
+  const scope = {
+    signal: deadline.signal,
+    enterCommit() {
+      deadline.signal.throwIfAborted();
+      committing = true;
+    }
+  };
+  const pending = Promise.resolve().then(() => work(scope));
+  let onAbort = null;
   try {
-    return await raceWithAbort(() => work(deadline.signal), deadline.signal);
+    return await new Promise((resolve, reject) => {
+      onAbort = () => {
+        if (!committing) reject(deadline.signal.reason);
+      };
+      if (deadline.signal.aborted) onAbort();
+      else deadline.signal.addEventListener('abort', onAbort, { once: true });
+      pending.then(resolve, reject);
+    });
   } catch (error) {
+    // Commit noktasından sonra süre dolması sonucu değiştirmez: asıl hata
+    // bildirilir (işlem yinelenirken commit noktası yeniden sınanırsa hariç).
     const failure = deadline.failure();
-    if (!failure) throw error;
+    if (!failure || (committing && error !== failure)) throw error;
     throw failure.code === AI_ERROR_CODES.AI_TIMEOUT ? credentialOperationTimeout() : failure;
   } finally {
+    if (onAbort) deadline.signal.removeEventListener('abort', onAbort);
     deadline.dispose();
   }
 }
@@ -87,61 +125,49 @@ async function requireDirectoryMember(executor, sicil) {
   if (!(await readDirectoryMembership(executor, sicil))) throw unknownSicil();
 }
 
-/* ── Kira öncesi rehber denetimi ─────────────────────────────── */
+/* ── Sınırlı SQL kapıları ────────────────────────────────────── */
 
 /**
  * Sohbet ve doğrulama istekleri kapasite kirasından ÖNCE rehber üyeliğini
  * denetler. Bu denetim uygulamanın ortak SQL havuzunu kullandığı için
- * eşzamanlılığı sınırlıdır: en fazla `DIRECTORY_SLOTS` sorgu aynı anda çalışır,
- * sıra `DIRECTORY_QUEUE` ile sınırlıdır ve dolunca istek beklemeden `AI_BUSY`
- * alır. Böylece bir yapay zekâ isteği yığını, kapasite denetimine ulaşmadan
- * olağan anlık görüntü ve kayıt işlerinin SQL bağlantılarını tüketemez.
+ * eşzamanlılığı sınırlıdır: en fazla iki sorgu aynı anda çalışır, sıra 64 ile
+ * sınırlıdır ve dolunca istek beklemeden `AI_BUSY` alır. Tek bir Sicil aynı
+ * anda bir sorgu çalıştırır ve sırada en fazla sekiz isteği bekler: sırayı tek
+ * başına doldurup ötekileri geri çevirtemez. Böylece bir yapay zekâ isteği
+ * yığını, kapasite denetimine ulaşmadan olağan anlık görüntü ve kayıt
+ * işlerinin SQL bağlantılarını tüketemez.
  */
-const DIRECTORY_GATE_KEY = Symbol.for('mergen-rota.ai-directory-gate');
-const DIRECTORY_SLOTS = 2;
-const DIRECTORY_QUEUE = 64;
-const DIRECTORY_BUSY_RETRY_AFTER_MS = 2000;
+const directoryGate = createAiSqlGate({
+  name: 'directory',
+  slots: 2,
+  queue: 64,
+  perUserActive: 1,
+  perUserQueued: 8,
+  saturation: 'directory'
+});
 
-function directoryGate() {
-  globalThis[DIRECTORY_GATE_KEY] ||= { active: 0, waiters: [] };
-  return globalThis[DIRECTORY_GATE_KEY];
-}
+/**
+ * Anahtar durumu, kaydı ve kaldırması (Ayarlar kartı) da ortak havuzu kendi
+ * sınırlı kapısından kullanır: çok sayıda eşzamanlı GET/PUT/DELETE, yavaş bir
+ * veritabanında havuz bağlantılarını tutamaz.
+ */
+const credentialGate = createAiSqlGate({
+  name: 'credential',
+  slots: 2,
+  queue: 32,
+  perUserActive: 1,
+  perUserQueued: 4,
+  saturation: 'credential'
+});
 
-function acquireDirectorySlot(signal) {
-  const gate = directoryGate();
-  if (signal?.aborted) return Promise.reject(signal.reason);
-  if (gate.active < DIRECTORY_SLOTS) {
-    gate.active += 1;
-    return Promise.resolve(gate);
-  }
-  if (gate.waiters.length >= DIRECTORY_QUEUE) {
-    return Promise.reject(new AiError(AI_ERROR_CODES.AI_BUSY, {
-      retryAfterMs: DIRECTORY_BUSY_RETRY_AFTER_MS,
-      details: { scope: 'global', saturation: 'directory' }
-    }));
-  }
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      const index = gate.waiters.indexOf(waiter);
-      if (index >= 0) gate.waiters.splice(index, 1);
-      reject(signal.reason);
-    };
-    // Serbest kalan yer doğrudan bu bekleyene devredilir; sayaç değişmez.
-    const waiter = {
-      admit() {
-        signal?.removeEventListener?.('abort', onAbort);
-        resolve(gate);
-      }
-    };
-    signal?.addEventListener?.('abort', onAbort, { once: true });
-    gate.waiters.push(waiter);
-  });
-}
-
-function releaseDirectorySlot(gate) {
-  const next = gate.waiters.shift();
-  if (next) next.admit();
-  else gate.active -= 1;
+/**
+ * Kapıdan geçen SQL işi. Havuz kapıya girmeden (yer tutmadan ve sinyali
+ * izleyerek) alınır: takılı bir bağlantı kurulumu kapıyı kilitleyemez. Yer, iş
+ * ve sürücüdeki sorguları gerçekten bitene kadar tutulur.
+ */
+async function throughGate(gate, sicil, signal, work) {
+  const pool = signal ? await raceWithAbort(() => getSqlPool(), signal) : await getSqlPool();
+  return gate.run(sicil, signal, (track) => work(executorFor(pool, signal, track), { pool, track }));
 }
 
 /**
@@ -153,16 +179,17 @@ function releaseDirectorySlot(gate) {
  * tetikleyemez.
  */
 export async function assertAiDirectoryMember(sicil, { signal = null } = {}) {
-  const gate = await acquireDirectorySlot(signal);
-  try {
-    await requireDirectoryMember(executorFor(await getSqlPool(), signal), sicil);
-  } finally {
-    releaseDirectorySlot(gate);
-  }
+  await throughGate(directoryGate, sicil, signal, (executor) => requireDirectoryMember(executor, sicil));
 }
 
 export function resetAiDirectoryGateForTests() {
-  globalThis[DIRECTORY_GATE_KEY] = { active: 0, waiters: [] };
+  directoryGate.resetForTests();
+  credentialGate.resetForTests();
+}
+
+/** Yalnızca testler: kapıların doluluğu (etkin, sıradaki, kullanıcı sayısı). */
+export function aiSqlGateStatusForTests() {
+  return { directory: directoryGate.status(), credential: credentialGate.status() };
 }
 
 /* ── Durum künyesi ───────────────────────────────────────────── */
@@ -172,28 +199,48 @@ function personalKeyInUse(config, stored) {
   return Boolean(stored) && config.personalKeysSupported;
 }
 
+/** Şifreli kayıt bu Sicil ve ana anahtarla GERÇEKTEN çözülüyor mu (AES-GCM etiketi)? Düz metin tutulmaz. */
+function recordAuthenticates(config, sicil, secret) {
+  if (!secret) return false;
+  try {
+    decryptCredential({ masterKey: config.masterKey, sicil, record: secret });
+    return true;
+  } catch (error) {
+    if (error instanceof CredentialVaultError) return false;
+    throw error;
+  }
+}
+
 /**
  * Tarayıcıya giden anahtar künyesi.
  *
- * Kayıt çözülemiyorsa künye `readable: false` ve nedenini taşır: ana anahtar
- * hiç tanımlı değilse kişisel anahtar kullanımı kapalıdır, başka bir ana
- * anahtarla yazılmışsa ana anahtar değişmiştir. İki durumda da eski doğrulama
- * sonucu gösterilmez (o sonuç artık kullanılamayan bir anahtarı anlatır). Ana
- * anahtar kimliği tarayıcıya gitmez.
+ * Özellik kapalıyken okunabilirlik sınanmaz: ana anahtar okunmaz ve künye
+ * (doğrulama sonucu dâhil) olduğu gibi gösterilir. Açıkken kayıt ancak ana
+ * anahtar tanımlı, kimliği eşleşiyor ve şifreli kayıt doğrulama etiketinden
+ * GEÇİYORSA okunabilirdir; değilse künye `readable: false` ve nedenini taşır
+ * ve eski doğrulama sonucu gösterilmez (o sonuç artık kullanılamayan bir
+ * anahtarı anlatır). `verified`, kaydın bu istekte şifrelendiğini söyler. Ana
+ * anahtar kimliği ve şifreli alanlar tarayıcıya gitmez.
  */
-function credentialView(config, record) {
+function credentialView(config, record, sicil) {
   if (!record?.credential) return { configured: false };
+  if (!config.enabled) {
+    return { configured: true, ...record.credential, readable: false, unreadableReason: AI_CREDENTIAL_UNREADABLE_REASONS.AI_DISABLED };
+  }
   let unreadableReason = null;
   if (!config.masterKey) unreadableReason = AI_CREDENTIAL_UNREADABLE_REASONS.PERSONAL_KEYS_DISABLED;
   else if (record.masterKeyId && record.masterKeyId !== masterKeyId(config.masterKey)) {
     unreadableReason = AI_CREDENTIAL_UNREADABLE_REASONS.MASTER_KEY_CHANGED;
+  } else if (!record.verified && !recordAuthenticates(config, sicil, record.secret)) {
+    unreadableReason = AI_CREDENTIAL_UNREADABLE_REASONS.RECORD_INVALID;
   }
   return unreadableReason
     ? { configured: true, ...record.credential, lastValidatedAt: null, lastValidationStatus: null, readable: false, unreadableReason }
     : { configured: true, ...record.credential, readable: true };
 }
 
-async function statusView(config, { schemaReady, record }) {
+/** Eşzamanlı: `probe` G/Ç'den önce hazırlanır, künye değişiklikten sonra G/Ç yapmadan kurulur. */
+function statusView(config, { schemaReady, record, probe }, sicil) {
   return {
     enabled: config.enabled,
     available: config.available,
@@ -209,32 +256,35 @@ async function statusView(config, { schemaReady, record }) {
         defaultKeyConfigured: config.defaultKeyConfigured
       })
       : AI_CREDENTIAL_SOURCES.MISSING,
-    credential: credentialView(config, record),
+    credential: credentialView(config, record, sicil),
     timeouts: {
       queueTimeoutMs: config.queueTimeoutMs,
       requestTimeoutMs: config.requestTimeoutMs,
       validationBudgetMs: aiValidationBudgetMs(config)
     },
-    probe: await describeAiProbe(config)
+    probe
   };
 }
 
 export async function loadAiCredentialStatus({ signal = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
   const config = readAiConfig();
-  return withCredentialDeadline(signal, async (bounded) => {
-    const executor = executorFor(await getSqlPool(), bounded);
-    let status;
-    try {
-      status = await readCredentialStatus(executor, sicil);
-    } catch (error) {
-      if (!isMissingAiCredentialSchema(error)) throw error;
-      // Tablo yokken de kimlik değişmezi korunur.
+  return withCredentialDeadline(signal, async (scope) => {
+    // Kimlik ve rehber üyeliği anahtar tablosuna dokunulmadan ÖNCE doğrulanır:
+    // rehberde olmayan Sicil tablonun durumunu (yetki, şema) öğrenemez.
+    const observed = await throughGate(credentialGate, sicil, scope.signal, async (executor) => {
       await requireDirectoryMember(executor, sicil);
-      return statusView(config, { schemaReady: false, record: null });
-    }
-    if (!status.knownSicil) throw unknownSicil();
-    return statusView(config, { schemaReady: true, record: status });
+      try {
+        return { schemaReady: true, record: await readCredentialStatus(executor, sicil) };
+      } catch (error) {
+        // Tablo yoksa kimsenin kişisel anahtarı yoktur. Kişisel anahtar
+        // kullanımı kapalıyken (kurumsal kip, özellik kapalı) bu isteğe bağlı
+        // tablonun HİÇBİR sorunu (ör. yetki) durumu bozmaz: tablo okunamadı sayılır.
+        if (!isMissingAiCredentialSchema(error) && config.personalKeysSupported) throw error;
+        return { schemaReady: false, record: null };
+      }
+    });
+    return statusView(config, { ...observed, probe: await describeAiProbe(config) }, sicil);
   });
 }
 
@@ -242,71 +292,100 @@ export async function loadAiCredentialStatus({ signal = null } = {}) {
  * Kişisel anahtarı kaydeder.
  *
  * Kimlik ve rehber üyeliği gövde OKUNMADAN doğrulanır: `readApiKey` gövdeyi
- * ancak bu denetimlerden sonra okur, böylece kimliği doğrulanmamış çağıran
- * gövde ve biçim kararlarını yoklayamaz. Gönderilen anahtar kurumsal anahtarla
- * KARŞILAŞTIRILMAZ: ret yanıtı, kurumsal anahtarın tahmin edilip
- * doğrulanabildiği bir kâhine dönüşürdü.
+ * ancak bu denetimlerden sonra ve işlemin süre sınırıyla (`signal`) okur;
+ * kimliği doğrulanmamış çağıran gövde ve biçim kararlarını yoklayamaz, gövdeyi
+ * yavaşça gönderen istemci işi süre sınırının ötesinde tutamaz. Gönderilen
+ * anahtar kurumsal anahtarla KARŞILAŞTIRILMAZ: ret yanıtı, kurumsal anahtarın
+ * tahmin edilip doğrulanabildiği bir kâhine dönüşürdü.
+ *
+ * Commit'ten önce vazgeçilen kayıt geri alınır; commit başladıktan sonra
+ * sonucu beklenir. Yanıt, kaydı yazan deyimin döndürdüğü künyeden kurulur.
  */
 export async function saveAiPersonalCredential({ readApiKey, signal = null }) {
   const sicil = await getTrustedCurrentSicil();
-  return withCredentialDeadline(signal, async (bounded) => {
-    await requireDirectoryMember(executorFor(await getSqlPool(), bounded), sicil);
+  return withCredentialDeadline(signal, async (scope) => {
+    await throughGate(credentialGate, sicil, scope.signal, (executor) => requireDirectoryMember(executor, sicil));
     const config = requireAiAvailable(readAiConfig());
     if (!config.personalKeysSupported) {
       throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'PERSONAL_KEYS_UNSUPPORTED' } });
     }
-    const normalized = normalizeApiKeyInput(await readApiKey());
+    const normalized = normalizeApiKeyInput(await readApiKey(scope.signal));
     if (!normalized.ok) {
       throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { message: normalized.message, details: { reason: normalized.reason } });
     }
+    // Yanıtın kayıt dışı kısmı değişiklikten ÖNCE hazırlanır: commit'ten sonra
+    // başarısız olabilecek bir iş kalmaz.
+    const probe = await describeAiProbe(config);
     const encrypted = encryptCredential({ masterKey: config.masterKey, sicil, apiKey: normalized.value });
     let credential;
     try {
-      credential = await withSqlTransaction(async (transaction) => {
-        const executor = boundedExecutor(transaction, bounded);
-        const status = await readCredentialStatus(executor, sicil);
-        if (!status.knownSicil) throw unknownSicil();
-        const saved = await upsertCredential(executor, sicil, { encrypted, hint: apiKeyHint(normalized.value) });
-        // İstemci vazgeçtiyse ya da süre dolduysa işlem geri alınır: bırakılmış
-        // bir kayıt, sonradan gelen yeniden denemeyi ezemez.
-        bounded.throwIfAborted();
+      // İstemci vazgeçtiyse ya da süre dolduysa işlem commit'ten hemen önce geri
+      // alınır; değilse commit başlar ve artık iptal edilmez.
+      credential = await throughGate(credentialGate, sicil, scope.signal, (_executor, { track }) => withSqlTransaction(async (transaction) => {
+        const running = [];
+        const executor = boundedExecutor(transaction, scope.signal, {
+          track: (query) => {
+            running.push(query);
+            track(query);
+          }
+        });
+        let saved;
+        try {
+          saved = await upsertCredential(executor, sicil, { encrypted, hint: apiKeyHint(normalized.value) });
+        } catch (error) {
+          // Geri alma, sürücüde hâlâ çalışan (iptal edilmeye çalışılan) deyim
+          // bitmeden denenmez.
+          await Promise.allSettled(running);
+          throw error;
+        }
+        // Commit noktası: işlev döner dönmez (arada G/Ç olmadan) commit başlar.
+        scope.enterCommit();
         return saved;
-      }, { deadlockRetries: 2 });
+      }, { deadlockRetries: 2 }));
     } catch (error) {
       if (isMissingAiCredentialSchema(error)) {
         throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'SCHEMA_MISSING' } });
       }
       throw error;
     }
-    return statusView(config, { schemaReady: true, record: { credential, masterKeyId: encrypted.masterKeyId } });
+    return statusView(config, {
+      schemaReady: true,
+      record: { credential, masterKeyId: encrypted.masterKeyId, verified: true },
+      probe
+    }, sicil);
   });
 }
 
 /**
  * Kişisel anahtarı kaldırır.
  *
- * Yalnızca OKUNAN anahtar silinir. Okuma ile silme arasında başka bir oturumda
- * kaydedilen yeni anahtar silinmez; çağıran `CONFLICT` alır.
+ * Yalnızca OKUNAN anahtar silinir. Silme ve ardından güncel satırın okunması
+ * tek gidiş-dönüştür: okumadan önce ya da silmeden hemen sonra başka bir
+ * oturumda kaydedilen anahtar varsa çağıran `CONFLICT` alır; yanıt "anahtar
+ * yok" derken yeni anahtar sessizce etkin kalmaz. Silme deyimi gönderildikten
+ * sonra iptal ya da süre dolması sonucu değiştirmez; gerçek sonuç bildirilir.
  */
 export async function removeAiPersonalCredential({ signal = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
   const config = readAiConfig();
-  return withCredentialDeadline(signal, async (bounded) => {
-    const executor = executorFor(await getSqlPool(), bounded);
-    let status;
-    try {
-      status = await readCredentialStatus(executor, sicil);
-    } catch (error) {
-      if (!isMissingAiCredentialSchema(error)) throw error;
-      await requireDirectoryMember(executor, sicil);
-      return statusView(config, { schemaReady: false, record: null });
-    }
-    if (!status.knownSicil) throw unknownSicil();
-    if (status.credential) {
-      const { deleted } = await deleteCredential(executor, sicil, { keyNonce: status.keyNonce });
-      if (!deleted && (await readCredentialStatus(executor, sicil)).credential) throw replacedConcurrently();
-    }
-    return statusView(config, { schemaReady: true, record: null });
+  return withCredentialDeadline(signal, async (scope) => {
+    await throughGate(credentialGate, sicil, scope.signal, (executor) => requireDirectoryMember(executor, sicil));
+    const probe = await describeAiProbe(config);
+    const outcome = await throughGate(credentialGate, sicil, scope.signal, async (executor, { pool, track }) => {
+      let status;
+      try {
+        status = await readCredentialStatus(executor, sicil);
+      } catch (error) {
+        if (!isMissingAiCredentialSchema(error)) throw error;
+        return { schemaReady: false, current: null };
+      }
+      scope.enterCommit();
+      // Silme gönderildikten sonra süre sınırı sonucu kesmez; deyim yine de kapıya bağlıdır.
+      const { current } = await deleteCredential(executorFor(pool, null, track), sicil, { keyNonce: status.keyNonce });
+      return { schemaReady: true, current };
+    });
+    if (outcome.current) throw replacedConcurrently();
+    return statusView(config, { schemaReady: outcome.schemaReady, record: null, probe }, sicil);
   });
 }
 
