@@ -36,6 +36,8 @@ function AiDrawerFields({ detail }) {
   if (!load) return null;
   const telemetry = detail.telemetry || {};
   const sources = telemetry.bySource || {};
+  const streams = telemetry.streams || null;
+  const profiles = Object.entries(telemetry.byProfile || {});
   return (
     <>
       <DrawerField label="Etkin istek" value={`${load.active} / ${load.limits.maxActive}`} mono />
@@ -44,6 +46,17 @@ function AiDrawerFields({ detail }) {
       <DrawerField label="Kapasite nedeniyle geri çevrilen" value={load.counters?.rejectedBusy ?? 0} mono />
       <DrawerField label="Sırada süresi dolan" value={load.counters?.queueTimeouts ?? 0} mono />
       <DrawerField label="Sağlayıcı P95" value={formatDuration(telemetry.latency?.provider?.p95Ms)} />
+      {/* Rota AI akışı: ilk görünür metne kadar geçen süre ve akışların sonucu (içerik taşımaz). */}
+      <DrawerField label="İlk metin P95" value={formatDuration(telemetry.latency?.firstToken?.p95Ms)} />
+      {streams && (
+        <DrawerField
+          label="Akış sonuçları"
+          value={`Tamamlanan ${streams.completed ?? 0} · Durdurulan ${streams.cancelled ?? 0} · Yarıda kalan ${streams.interrupted ?? 0} · Süre aşımı ${streams.timeout ?? 0} · Başlamadan başarısız ${streams.failed ?? 0}`}
+        />
+      )}
+      {profiles.length > 0 && (
+        <DrawerField label="Profil dağılımı" value={profiles.map(([profile, count]) => `${profile} ${count}`).join(' · ')} mono />
+      )}
       <DrawerField
         label="Anahtar kaynağı"
         value={`Kişisel ${sources.personal ?? 0} · Kurumsal ${sources.default ?? 0} · Anahtarsız ${sources.missing ?? 0}`}

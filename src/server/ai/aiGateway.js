@@ -20,9 +20,9 @@ import {
   raceWithAbort
 } from './aiDeadline.js';
 import { AiError, isAiError, toAiFailure } from './aiErrors.js';
-import { recordAiRequest, recordAiRetry, recordAiValidation, recordProviderCall } from './aiTelemetry.js';
+import { recordAiRequest, recordAiRetry, recordAiStream, recordAiValidation, recordProviderCall } from './aiTelemetry.js';
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
-import { classifyProviderStatus, createControlApiKey, isConnectFailure } from './providers/openAiCompatibleProvider.js';
+import { classifyProviderStatus, createControlApiKey, isConnectFailure, streamInterrupted } from './providers/openAiCompatibleProvider.js';
 
 /**
  * Yapay zekâ ağ geçidi — alt sistemin TEK yürütme yolu.
@@ -188,6 +188,35 @@ function modelsEndpointUnauthenticated() {
     message: 'Yapay zekâ ucu model listesini geçersiz bir anahtarla da verdiği için anahtar bu yolla doğrulanamıyor. Anahtarı deneme isteğiyle sınayın.',
     details: { reason: 'MODELS_ENDPOINT_UNAUTHENTICATED' }
   });
+}
+
+/** Akışın sonucu (telemetri): tamamlandı, iptal, süre aşımı, yarıda kesildi ya da başlamadan başarısız. */
+function streamOutcome(failure, emitted) {
+  if (!failure) return 'completed';
+  if (failure.code === AI_ERROR_CODES.AI_CANCELLED) return 'cancelled';
+  if (failure.code === AI_ERROR_CODES.AI_TIMEOUT) return 'timeout';
+  return emitted ? 'interrupted' : 'failed';
+}
+
+/**
+ * Sağlayıcı çağrısının sinyali: süre sınırını/iptali izler ve akış hangi yolla
+ * biterse bitsin kesilir. Böylece hiç okunmamış ya da yarıda bırakılmış bir
+ * yanıt gövdesi bağlantıyı açık tutamaz.
+ */
+function linkAbort(signal, controller) {
+  const onAbort = () => controller.abort(signal.reason);
+  if (signal.aborted) onAbort();
+  else signal.addEventListener('abort', onAbort, { once: true });
+  return () => signal.removeEventListener('abort', onAbort);
+}
+
+/** Bildirim geri çağrısının hatası akışı bozmaz. */
+function notify(callback, value) {
+  try {
+    callback?.(value);
+  } catch {
+    // Gözlemci hatası üretimi etkilemez.
+  }
 }
 
 /** Doğrulama sonucu sağlayıcı açısından BAŞARISIZ bir HTTP işlemidir (401/403). */
@@ -376,6 +405,191 @@ export function createAiGateway({
   }
 
   /**
+   * Akışlı sağlayıcı bağlantısı. Yalnızca BAĞLANTI evresi yinelenebilir ve kural
+   * `callProvider` ile aynıdır: isteğin sağlayıcıya hiç ulaşmadığı bağlantı
+   * hataları, bir kez, kalan süre yetiyorsa. Bu evrede kullanıcıya henüz metin
+   * gitmemiştir; yanıt başladıktan sonraki hiçbir hata yinelenmez (aynı yanıt
+   * baştan ikinci kez üretilmez).
+   */
+  async function connectStream({ deadline, context, source, healthFailure, invoke }) {
+    for (let attempt = 1; ; attempt += 1) {
+      context.attempts = attempt;
+      const startedAt = now();
+      try {
+        return { opened: await raceWithAbort(invoke, deadline.signal), startedAt };
+      } catch (error) {
+        const failure = deadline.failure() || toAiFailure(error);
+        recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
+        const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
+        const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
+          && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
+        if (!retry) throw failure;
+        await abortableDelay(delayMs, deadline.signal);
+        recordAiRetry({ networkCode: failure.details?.networkCode ?? null });
+      }
+    }
+  }
+
+  /**
+   * Bir sohbet profiliyle yanıtı AKIŞ olarak üretir.
+   *
+   * `completeChat` ile aynı sıra ve güvenceler geçerlidir: güvenilir Sicil →
+   * rehber üyeliği → yapılandırma → profil → kapasite kirası → süre sınırı →
+   * kimlik bilgisi → sağlayıcı. Kapasite kirası akış BOYUNCA tutulur ve akış
+   * tamamlandığında, hata verdiğinde, süresi dolduğunda ya da iptal edildiğinde
+   * tam bir kez bırakılır. Görünür her metin parçası `onText` ile iletilir;
+   * çağıranın geri basıncı (`onText` sözü) süre sınırına bağlıdır. `onStatus`
+   * yalnızca gerçek evre geçişlerini bildirir (`generating`, `thinking`).
+   *
+   * Yanıt başladıktan sonra oluşan hata `details.partial: true` taşır; bu
+   * yanıt otomatik olarak yeniden istenmez. Sonuç tam metni döndürür; süre
+   * dolduktan ya da iptal edildikten sonra gelen parça uygulanmaz.
+   */
+  async function streamChat({ profile, messages, maxOutputTokens = null, signal = null, onStatus = null, onText }) {
+    const startedAt = now();
+    const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
+    const progress = { emitted: false, reasoning: false, firstTokenMs: null, providerStartMs: null, providerStartedAt: null, recorded: false };
+    const providerScope = new AbortController();
+    let lease = null;
+    let deadline = null;
+    let unlink = null;
+    try {
+      assertOutsideSqlTransaction();
+      const sicil = await trustedSicil(signal);
+      const config = requireAiAvailable(loadConfig());
+      const safeMessages = requireMessages(messages);
+      const route = requireRoute(await untilCancelled(() => loadRegistry(config), signal), profile, AI_CAPABILITIES.CHAT);
+      context.model = route.model;
+      const outputLimit = outputTokenLimit(maxOutputTokens, route);
+      lease = await getAdmission(config).acquire({
+        userKey: sicil,
+        modelKey: route.model,
+        modelLimit: route.maxConcurrency,
+        signal,
+        timeoutMs: config.queueTimeoutMs
+      });
+      context.queueWaitMs = lease.queueWaitMs;
+      deadline = createAiDeadline({ timeoutMs: route.timeoutMs ?? config.requestTimeoutMs, parentSignal: signal, now });
+      unlink = linkAbort(deadline.signal, providerScope);
+      const credential = await raceWithAbort(
+        () => resolveCredential({ sicil, config, signal: deadline.signal }),
+        deadline.signal
+      );
+      context.source = credential.source;
+      const { opened, startedAt: providerStartedAt } = await connectStream({
+        deadline,
+        context,
+        source: credential.source,
+        healthFailure: healthFailureFor(credential.source),
+        invoke: () => getProvider().streamChatCompletion({
+          baseUrl: config.baseUrl,
+          apiKey: credential.apiKey,
+          model: route.model,
+          messages: safeMessages,
+          maxOutputTokens: outputLimit,
+          signal: providerScope.signal
+        })
+      });
+      progress.providerStartedAt = providerStartedAt;
+      progress.providerStartMs = now() - providerStartedAt;
+      notify(onStatus, { phase: 'generating' });
+      const chunks = [];
+      let final = null;
+      const iterator = opened.events[Symbol.asyncIterator]();
+      try {
+        for (;;) {
+          const step = await raceWithAbort(() => iterator.next(), deadline.signal);
+          if (step.done) break;
+          const event = step.value;
+          if (event.type === 'text') {
+            if (!progress.emitted) {
+              progress.emitted = true;
+              progress.firstTokenMs = now() - startedAt;
+            }
+            chunks.push(event.text);
+            await raceWithAbort(() => onText(event.text), deadline.signal);
+          } else if (event.type === 'reasoning' && !progress.reasoning) {
+            progress.reasoning = true;
+            notify(onStatus, { phase: 'thinking' });
+          } else if (event.type === 'done') {
+            final = event;
+            break;
+          }
+        }
+      } finally {
+        // Beklenmez: sinyale uymayan bir sağlayıcı kapasiteyi ve çağıranı tutamaz.
+        iterator.return?.()?.catch?.(() => {});
+      }
+      if (!final && deadline.failure()) throw deadline.failure();
+      if (!final) throw streamInterrupted('STREAM_TRUNCATED');
+      const text = chunks.join('').trim();
+      if (!text) {
+        throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
+          details: { reason: 'EMPTY_COMPLETION', finishReason: final.finishReason ?? null }
+        });
+      }
+      const generationMs = now() - providerStartedAt;
+      recordProviderCall({ operation: 'ai.provider.stream', latencyMs: generationMs, source: credential.source });
+      progress.recorded = true;
+      const durationMs = now() - startedAt;
+      recordAiRequest({ ...context, durationMs });
+      recordAiStream({
+        outcome: streamOutcome(null, true),
+        firstTokenMs: progress.firstTokenMs,
+        providerStartMs: progress.providerStartMs,
+        generationMs
+      });
+      return {
+        text,
+        finishReason: final.finishReason ?? null,
+        usage: final.usage ?? null,
+        profile: route.profile,
+        // Yanıtı GERÇEKTEN üreten model yalnızca sağlayıcının bildirdiğidir.
+        model: final.model ?? null,
+        configuredModel: route.model,
+        credentialSource: credential.source,
+        durationMs,
+        queueWaitMs: context.queueWaitMs,
+        firstTokenMs: progress.firstTokenMs
+      };
+    } catch (error) {
+      const failure = annotateCredentialFailure(deadline?.failure() || toAiFailure(error), context.source);
+      context.source ??= failureSource(failure);
+      if (failure.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT && context.queueWaitMs == null) {
+        context.queueWaitMs = failure.details?.queueWaitMs ?? null;
+      }
+      if (progress.providerStartedAt != null && !progress.recorded) {
+        recordProviderCall({
+          operation: 'ai.provider.stream',
+          latencyMs: now() - progress.providerStartedAt,
+          code: failure.code,
+          healthFailure: healthFailureFor(context.source)(failure),
+          source: context.source
+        });
+      }
+      recordAiRequest({
+        ...context,
+        code: failure.code,
+        serviceFailure: isServiceFailure(failure),
+        details: failure.details,
+        durationMs: now() - startedAt
+      });
+      recordAiStream({
+        outcome: streamOutcome(failure, progress.emitted),
+        firstTokenMs: progress.firstTokenMs,
+        providerStartMs: progress.providerStartMs
+      });
+      if (progress.emitted && isAiError(failure)) failure.details = { ...failure.details, partial: true };
+      throw failure;
+    } finally {
+      unlink?.();
+      providerScope.abort();
+      deadline?.dispose();
+      lease?.release();
+    }
+  }
+
+  /**
    * Kişisel anahtarı üretim yapmayan hafif bir çağrıyla sınar.
    *
    * Yalnızca KİŞİSEL anahtar denenir; kurumsal anahtara hiç dokunulmaz.
@@ -477,5 +691,5 @@ export function createAiGateway({
     }
   }
 
-  return { completeChat, validatePersonalCredential };
+  return { completeChat, streamChat, validatePersonalCredential };
 }

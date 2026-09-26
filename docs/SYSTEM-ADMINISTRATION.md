@@ -492,6 +492,13 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   yalnızca paylaşılan kapasitenin dolması (kullanıcı sınırı değil) uyarı
   sayılır; bileşen hiçbir zaman *Kritik* olmaz ve boştayken
   *Bilinmiyor* durumu genel başlığı düşürmez (bkz. `docs/AI-PLATFORM.md`).
+- Yapay zekâ hizmeti ayrıntısı Rota AI akışlarını da özetler: *İlk metin P95*
+  (isteğin ağ geçidine girişinden ilk görünür metne kadar geçen süre) ve *Akış
+  sonuçları* (tamamlanan, durdurulan, yarıda kalan, süre aşımı, başlamadan
+  başarısız); *Profil dağılımı* profil başına istek sayısını (ör.
+  `chat.general`, `chat.reasoning`) gösterir. İşlem ölçümleri `ai.provider.stream`, `ai.stream.first_token`,
+  `ai.stream.provider_start` ve `ai.api.assistant.*` adlarıyla yazılır; olağan
+  API gecikme özetine karışmaz. Hiçbiri soru, yanıt ya da başlık taşımaz.
 
 Aynı anda **tek test** çalışır: ikinci bir test başlatılabilseydi ilkinin bitişi
 bütün düğmeleri erken açar ve yinelenen yoklamalar gönderilebilirdi.
@@ -673,6 +680,26 @@ istem ve yanıt saklanmaz. Göç uygulanmadan açılan kurulumda kişisel anahta
 kaydı açıkça reddedilir, kurumsal varsayılan anahtar çalışmaya devam eder. Geri
 alma betiği tabloyu da düşürür. Yapay zekâ ortam değişkenleri ve dağıtım sırası:
 `docs/AI-PLATFORM.md`.
+
+### 0017 · Rota AI konuşma geçmişi
+
+`0016` uygulandıktan **sonra** çalıştırılır:
+
+```
+database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql
+```
+
+| Tablo | İçerik | Anahtar / dizin |
+| --- | --- | --- |
+| `MR_AiConversations` | Sicil'e ait Rota AI konuşması (başlık, ilk tur, ileti sayısı, son etkinlik) | PK `ConversationId`; **benzersiz** `(OwnerSicil, OriginTurnId)`; `IX_…_OwnerRecent` |
+| `MR_AiConversationMessages` | Konuşmanın sıralı kullanıcı/asistan iletileri; yalnızca görünen metin | PK `MessageId`; **benzersiz** `(ConversationId, Sequence)`; süzgeçli benzersiz tur ve yanıt dizinleri; konuşmayla birlikte silinir |
+
+Betik yinelenebilir ve veriye dokunmaz; akıl yürütme, ham akış ve istek
+nesnesi saklanmaz. Göç uygulanmadan açılan kurulumda yalnızca Rota AI uçları
+anlaşılır bir yapılandırma hatası döner; uygulamanın geri kalanı etkilenmez.
+Yönetici konsolunda konuşma içeriği gösterilmez ve yöneticinin kullanıcı
+konuşmalarına erişen bir ucu yoktur. Geri alma betiği iki tabloyu da düşürür.
+Ayrıntı: `docs/AI-PLATFORM.md` §18.
 
 ---
 

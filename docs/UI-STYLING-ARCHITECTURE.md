@@ -14,8 +14,9 @@ Current root sequence:
 4. `src/app/styles/dashboard.css` — Dashboard/Özet structural layout and status-donut presentation.
 5. `src/app/styles/features.css` — Gantt, WBS and Task Detail feature layout contracts.
 6. `src/app/styles/system-admin.css` — Sistem Yönetimi console: health strip, tabs, section cards, metric tiles, charts and detail drawer.
-7. `src/app/styles/simple-mode.css` — Temel Kip quick-entry and calendar-tab presentation.
-8. `src/app/styles/experience.css` — mode chooser, settings-mode cards and help/onboarding surfaces.
+7. `src/app/styles/assistant.css` — Rota AI: top-bar launcher, assistant panel/sheet, thread, composer and the safe Markdown answer presentation.
+8. `src/app/styles/simple-mode.css` — Temel Kip quick-entry and calendar-tab presentation.
+9. `src/app/styles/experience.css` — mode chooser, settings-mode cards and help/onboarding surfaces.
 
 ## 2. Ownership map
 
@@ -42,6 +43,7 @@ Current root sequence:
 | Toggle switch (`.toggle-field`, `.toggle-switch`) | `src/app/styles/components.css` |
 | Gantt outline controls (`.gantt-outline-*`, `.gantt-level-*`) | `src/app/styles/components.css` |
 | Sidebar hover/keyboard expansion, pin and segmented kip selector (`.sidebar-mode-toggle`) | `src/app/styles/shell.css` |
+| Rota AI launcher, panel, thread, composer and answer Markdown (`.rota-assistant*`, `.assistant-md*`) | `src/app/styles/assistant.css` |
 
 A feature may use shared tokens and primitives, but its structural layout remains owned by the feature's stylesheet section.
 
@@ -179,6 +181,7 @@ Global layer tokens live in `globals.css`:
 - `--z-base`: ordinary content.
 - `--z-sticky`: sticky table/header content.
 - `--z-chrome`: application chrome and persistent floating chrome.
+- `--z-assistant`: the non-modal Rota AI panel docked below the topbar.
 - `--z-popover`: dropdowns, filters and non-modal popovers.
 - `--z-drawer-backdrop`: drawer backdrop.
 - `--z-drawer`: Task Detail drawer.
@@ -189,6 +192,8 @@ Global layer tokens live in `globals.css`:
 Small local z-index values are acceptable inside an isolated component for internal paint order. Do not solve a stacking problem by escalating to unexplained values such as `10020` or `10050`.
 
 The topbar itself keeps `overflow: visible`; only `.topbar-emblem-clip` clips the rotating decorative emblem. Filter popovers use the shared popover layer, while the Task Detail drawer remains above popovers.
+
+The Rota AI panel is a deliberate semantic layer (`--z-assistant: 150`). It sits above ordinary content, sticky workspace strips (`--z-chrome`) and the sidebar so it is never painted over while docked, and below every popover, the Task Detail drawer, the command palette and modal dialogs, so opening any of those still wins. Topbar popovers live inside the topbar's stacking context; like the export menu, the open notification popover raises the topbar to `--z-popover` (`.topbar:has(.schedule-request-popover)`) so the docked panel cannot cover it. The transient persistence status stays above the panel. On narrow screens (≤ 760 px, shared with `ASSISTANT_SHEET_QUERY`) the panel becomes a full-screen modal sheet on the drawer layer (`--z-drawer`) with a focus trap. The panel's top offset equals the topbar height and its height uses `var(--app-viewport-h, 100vh)`; `test/ai-architecture-contract.test.mjs` guards the layer order and the absence of numeric z-index values in `assistant.css`.
 
 ## 10. Shared visual primitive ownership
 

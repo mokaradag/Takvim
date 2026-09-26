@@ -1,13 +1,20 @@
-# Yapay Zekâ Altyapısı (Aşama 1)
+# Yapay Zekâ Altyapısı ve Rota AI
 
-Bu belge MERGEN Rota'nın yapay zekâ **temelini** anlatır: kişisel ve kurumsal
-API anahtarının yönetimi, sağlayıcı soyutlaması, model/yetenek kaydı, sınırlı
-eşzamanlılık, iptal ve süre sınırları, hata sınıflandırması, gözlemlenebilirlik
-ve tek bir uçtan uca bağlantı sınaması.
+Bu belge MERGEN Rota'nın yapay zekâ **temelini** (Aşama 1) ve bu temelin
+üzerine kurulan **Rota AI akışlı sohbet yardımcısını** (Aşama 2) anlatır.
 
-Aşama 1 bir sohbet ürünü **değildir**. Amaç, sonraki aşamaların güvenle
-dayanabileceği küçük ama sağlam bir altyapıdır. Kapsam dışı bırakılanlar
+Aşama 1: kişisel ve kurumsal API anahtarının yönetimi, sağlayıcı soyutlaması,
+model/yetenek kaydı, sınırlı eşzamanlılık, iptal ve süre sınırları, hata
+sınıflandırması, gözlemlenebilirlik ve tek bir uçtan uca bağlantı sınaması
+(§1–§17). Aşama 1 kapsam dışı bırakılanlar
 [§16](#16-aşama-1-kapsamı-dışında-kalanlar)'da listelenir.
+
+Aşama 2: uygulama kabuğundaki **Rota AI** paneli; gerçek (sağlayıcıdan
+tarayıcıya) akışlı yanıt, Durdur, yeniden deneme, standart ve derin düşünme
+kipleri, Sicil'e ait kalıcı konuşma geçmişi (0017) ve güvenli yanıt çizimi
+([§18](#18-rota-ai-akışlı-sohbet-aşama-2)). Aşama 2 de Aşama 1 mimarisini
+değiştirmez: her istek aynı `aiGateway` yolundan, aynı kimlik, anahtar,
+kapasite, süre sınırı ve telemetri kurallarıyla geçer.
 
 ---
 
@@ -30,9 +37,10 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
   modeli değil **profili** ister (§5).
 - **Olağan Rota akışı yapay zekâya bağımlı değildir.** Anlık görüntü, kayıt,
   görev düzenleme, gezinme ve raporlar `src/server/ai` modüllerini içe
-  aktarmaz; alt sisteme yalnızca Ayarlar kartı, Sistem Yönetimi'nin sağlık ve
-  entegrasyon gözlemi ile telemetri turunun yük örneklemesi bağlanır. Bu sınır
-  `test/ai-architecture-contract.test.mjs` ile korunur.
+  aktarmaz; alt sisteme yalnızca Ayarlar kartı, uygulama kabuğundaki Rota AI
+  paneli (yalnızca `RotaAssistant.jsx` bileşen sınırından), Sistem Yönetimi'nin
+  sağlık ve entegrasyon gözlemi ile telemetri turunun yük örneklemesi bağlanır.
+  Bu sınır `test/ai-architecture-contract.test.mjs` ile korunur.
 - **Kira öncesi iş de sınırlıdır.** Rehber üyeliği kapasite kirasından önce,
   kendi 5 sn süre sınırıyla ve süreç başına en fazla iki eşzamanlı SQL
   sorgusuyla denetlenir (sıra 64; dolunca istek beklemeden `AI_BUSY` alır,
@@ -79,6 +87,10 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
 | `src/server/ai/aiDiagnosticProbe.js`, `aiProbeProfile.js` | Sabit istemli Aşama 1 bağlantı sınaması; sınama profilinin kullanılabilirliği ve sunucu süre bütçesi |
 | `src/server/ai/aiRouteSupport.js`, `aiRuntime.js`, `aiErrors.js` | Uç yardımcıları (aynı kaynak denetimi dâhil), süreç tekilleri, `AiError` |
 | `src/features/ai/*` | Ayarlar kartı, istemci sarmalayıcısı ve saf sunum kuralları |
+| `src/server/ai/providers/openAiCompatibleStream.js` | Sağlayıcı akışının (SSE) sınırlı çözümü, `<think>` ve akıl yürütme alanlarının ayıklanması (Aşama 2) |
+| `src/domain/ai/eventStreamParser.js`, `assistantContract.js` | Sunucu ve tarayıcının ortak olay akışı çözücüsü; Rota AI protokol sabitleri, sınırlar, ileti normalleştirme ve başlık (saf) |
+| `src/server/ai/assistant/*` | Rota AI hizmeti, konuşma deposu (0017), sunucuya ait yönerge ve bağlam, tek üretim kaydı, akış yanıtı |
+| `src/features/ai/assistant/*` | Rota AI paneli, istemci ve akış çözücüsü, durum makinesi, güvenli Markdown, sunum ve etkileşim kuralları |
 
 ---
 
@@ -666,6 +678,7 @@ kabul edilir (§2).
 | `/api/mergen-rota/ai/credential` | `DELETE` | Kişisel anahtarı kaldırır |
 | `/api/mergen-rota/ai/credential/validation` | `POST` | Kişisel anahtarın açık doğrulaması |
 | `/api/mergen-rota/ai/probe` | `POST` | Aşama 1 bağlantı sınaması |
+| `/api/mergen-rota/ai/assistant…` | — | Rota AI uçları (Aşama 2): bkz. [§18.2](#182-uçlar) |
 
 **Bağlantı sınaması** alt sistemin bütün zincirini (güvenilir Sicil → kimlik
 bilgisi → profil → kapasite → süre sınırı → sağlayıcı → telemetri) tek, küçük
@@ -782,6 +795,8 @@ sayılan `.env.local` dosyasında ya da hizmet ortamında bulunur.
 ---
 
 ## 13. Veritabanı: 0016
+
+> Rota AI konuşma geçmişi (0017) için bkz. [§18.7](#187-konuşma-geçmişi-ve-sicil-sahipliği) ve [§18.14](#1814-dağıtım).
 
 `database/MR_Upgrade_0016_Ai_User_Credentials.sql` tek bir tablo ekler:
 
@@ -939,12 +954,13 @@ sahte ağ geçidi `test/helpers/fakeOpenAiCompatibleServer.mjs` dosyasındadır.
 
 Bilinçli olarak **yapılmayanlar**:
 
-- sohbet arayüzü, konuşma geçmişi ve istem/yanıt saklama (Aşama 2);
+- sohbet arayüzü, konuşma geçmişi ve istem/yanıt saklama (Aşama 2'de
+  eklendi, bkz. §18);
 - alan araçları, görev/proje verisine erişen yapay zekâ eylemleri (Aşama 3);
 - kritik yol (CPM) yorumlama ve planlama önerileri;
 - ses (konuşmadan metne, metinden konuşmaya), görsel anlama ve görsel üretimi;
 - RAG, anlamsal gösterim ve yeniden sıralama yürütmesi;
-- akış (streaming) yanıtlar;
+- akış (streaming) yanıtlar (Aşama 2'de eklendi, bkz. §18);
 - ana anahtar için toplu yeniden şifreleme aracı;
 - birden çok uygulama örneği arasında paylaşılan kapasite.
 
@@ -958,6 +974,511 @@ Bilinçli olarak **yapılmayanlar**:
   çözümlemesi seyrektir. Ad çözümlemesinin yavaşlayabileceği ortamlarda
   yapay zekâ ucunun adı güvenilir biçimde çözülmeli ve gerekirse hizmet
   ortamında `UV_THREADPOOL_SIZE` artırılmalıdır.
-- **Birden çok örnek:** kapasite sınırları ve sağlık özeti süreç başınadır.
+- **Aşama 2 dağıtım şartı:** aynı konuşma veritabanına hizmet veren Rota AI uçları
+  tek bir Node.js sürecine yönlendirilmelidir; ayrıntılar §18.14. Kapasite ve sağlık özeti süreç başınadır.
 - **Ana anahtar yedeği:** kaybedilirse kişisel anahtarlar kurtarılamaz;
   kullanıcılar anahtarlarını yeniden kaydeder.
+
+---
+
+## 18. Rota AI: akışlı sohbet (Aşama 2)
+
+Rota AI, uygulama kabuğundaki genel yardımcıdır: üst çubuktaki **Rota AI**
+düğmesiyle (ya da Ctrl K → *Rota AI'ye sor*) açılır, kullanıcıyı çalıştığı
+sayfadan ayırmaz. Yanıt, sağlayıcı ürettikçe tarayıcıya akar. Bu aşamada Rota
+verisine (görev, proje, kişi, takvim) **erişmez**; genel sorularda, yazım,
+özetleme ve açıklama işlerinde yardımcı olur.
+
+### 18.1 Mimari ve akış yolu
+
+```
+Tarayıcı (RotaAssistant.jsx → assistantController.js → assistantClient.js)
+   │  POST /api/mergen-rota/ai/assistant/turns   { conversationId, turnId, message, mode }
+   ▼
+turns/route.js ── aynı kaynak denetimi (Aşama 1 kuralı, gevşetilmez)
+   ▼
+assistantService.prepareAssistantTurn
+   güvenilir Sicil → rehber üyeliği → sınırlı gövde → yapılandırma ve kip
+   → konuşmada tek üretim hakkı → KISA SQL işlemi (kullanıcı iletisi)
+   → sunucuda kurulan sınırlı bağlam            (işlem ve bağlantı bırakılır)
+   ▼
+assistantStreamResponse ── accepted olayı; canlı tutma
+   ▼
+generateAssistantAnswer → aiGateway.streamChat
+   güvenilir Sicil → rehber → yapılandırma → profil → KAPASİTE KİRASI (akış
+   boyunca) → süre sınırı → anahtar (Aşama 1 çözümü) → sağlayıcı
+   ▼
+openAiCompatibleProvider.streamChatCompletion (stream: true)
+   → openAiCompatibleStream.readChatCompletionStream (sınırlı SSE çözümü)
+   → görünür metin parçaları → delta olayları → tarayıcı
+   ▼
+tamamlanınca KISA SQL işlemi (yanıt) → done olayı
+```
+
+- Tarayıcı yalnızca Rota sunucusuyla ve yalnızca Rota akış protokolüyle
+  konuşur; sağlayıcının tel biçimini, adresini, model adını ya da anahtarını
+  hiç görmez.
+- Sahte akış yoktur: tamamlanmış yanıt tarayıcıda harf harf "oynatılmaz".
+  Tarayıcı parçaları en fazla 40 ms aralıkla birleştirerek çizer (ilk parça
+  beklemeden görünür); bu yalnızca yeniden çizim sayısını sınırlar.
+- Model üretimi süresince hiçbir SQL işlemi ya da bağlantısı tutulmaz; ağ
+  geçidi açık işlem içinde çağrılırsa yine reddeder (`SQL_TRANSACTION_ACTIVE`).
+
+### 18.2 Uçlar
+
+Hepsi Node çalışma zamanında, önbelleksiz çalışır (`ai.api.assistant.*`
+işlem adlarıyla ölçülür) ve kimliği yalnızca güvenilir oturumdan alır.
+Sicil hiçbir zaman istek gövdesinden, sorgu dizesinden, özel başlıktan ya da
+arayüzün gönderdiği konuşma bilgisinden alınmaz.
+
+| Uç | Yöntem | İşlev |
+| --- | --- | --- |
+| `/api/mergen-rota/ai/assistant` | `GET` | Hazırlık durumu: kullanılabilirlik, neden, kipler, sınırlar (adres, anahtar, model adı yok) |
+| `/api/mergen-rota/ai/assistant/conversations` | `GET` | Son konuşmalar (ilk sayfa, 30 kayıt) |
+| `/api/mergen-rota/ai/assistant/conversations/before/{imleç}` | `GET` | Sonraki sayfa (anahtar kümesi imleci; sorgu dizesi kullanılmaz) |
+| `/api/mergen-rota/ai/assistant/conversations/{id}` | `GET` | Konuşma ve iletileri (en fazla 100 ileti) |
+| `/api/mergen-rota/ai/assistant/conversations/{id}` | `DELETE` | Konuşmayı iletileriyle siler (aynı kaynak) |
+| `/api/mergen-rota/ai/assistant/turns` | `POST` | Yeni tur, aynı turun yeniden gönderimi ya da yanıtsız son turun yeniden denenmesi; yanıt akıştır (aynı kaynak) |
+
+Yeni konuşma ayrı bir uçla açılmaz: `conversationId: null` ile gönderilen ilk
+tur konuşmayı açar. Tur gövdesi yalnızca `conversationId`, `turnId` (istemcinin
+ürettiği UUID), `message` (en fazla 8.000 karakter) ve `mode` taşır; tanınmayan
+her alan (`model`, `profile`, `sicil`, `messages`, `system`, `apiKey` …)
+`AI_REQUEST_INVALID` (`UNKNOWN_FIELD`) ile reddedilir. Gövde en fazla 64 KiB'tır
+ve 10 sn içinde okunmalıdır.
+
+### 18.3 Akış protokolü (sürüm 1)
+
+`POST /turns` yanıtı `text/event-stream; charset=utf-8` biçiminde Server-Sent
+Events'tir ve `fetch` ile okunur (POST gövdesi gerektiği için `EventSource`
+kullanılmaz). Akış başlamadan önceki hatalar (oturum, yetki, gövde, kip,
+konuşma, çakışma) olağan JSON hata yanıtıyla döner. Akış başladıktan sonra
+HTTP durumu değişemeyeceği için her akış **tam olarak bir** sonlandırıcı olayla
+(`done` ya da `error`) biter.
+
+| Olay | Yük | Anlam |
+| --- | --- | --- |
+| `accepted` | `{ v: 1, conversation, userMessage, mode, replay, context: { trimmed, omittedMessages } }` | İstek kabul edildi; kullanıcı iletisi kaydedildi (ilk olay) |
+| `status` | `{ phase: 'generating' \| 'thinking' }` | Gerçek evre geçişi (sağlayıcı yanıt vermeye başladı / model düşünüyor) |
+| `delta` | `{ text }` | Görünür yanıt metninin sıradaki parçası |
+| `done` | `{ conversation, assistantMessage (metinsiz, uzunluklu), replayed }` | Yanıt tamamlandı VE kaydedildi |
+| `error` | `{ code, message, reason, retryable, retryAfterMs, credentialSource, partial }` | Sonlandırıcı hata; `partial: true` metin başladıktan sonra kesildiğini söyler |
+
+Yanıt başlıkları: `Cache-Control: no-cache, no-store, no-transform`,
+`X-Accel-Buffering: no`, `X-Content-Type-Options: nosniff` ve
+`X-Mergen-Rota-Assistant-Protocol: 1`. Tarayıcı çözücüsü
+(`createAssistantStreamDecoder`) ilk olayın `accepted` (ya da doğrudan
+`error`) olmasını, sonlandırıcının tek olmasını, yanıt metninin 64.000
+karakteri aşmamasını ve olayların bozuk olmamasını zorunlu tutar; tanınmayan
+olay ve evre ileriye uyumluluk için yok sayılır. Sağlayıcının ham olayı, model
+adı, anahtar, adres ya da akıl yürütme metni hiçbir olaya girmez.
+
+**Canlı tutma:** yavaş bir model ilk metni üretirken bağlantı ve ters vekil
+sessiz kalmasın diye sunucu 15 sn'de bir SSE **yorum** satırı (`: keepalive`)
+gönderir. Yorum veri taşımaz, gösterilen metni etkilemez ve ilerleme sayılmaz;
+akış bitince, iptal edilince ya da istemci okumayı bırakınca zamanlayıcı durur
+(tarayıcının okumadığı kuyruğa yazılmaz). Tarayıcı 45 sn boyunca hiç bayt
+(canlı tutma dâhil) almazsa bağlantıyı kopmuş sayar (`STREAM_STALLED`).
+
+**Geri basınç:** sunucu kuyruğunda en fazla 32 olay bekler; yavaş istemcide
+sonraki metin parçası yer açılana kadar bekletilir (bu bekleme de ağ geçidinin
+süre sınırına bağlıdır). Okunmamış çıktı sunucu belleğinde sınırsız birikmez.
+
+### 18.4 Kipler ve profiller
+
+| Kip (arayüz) | Sunucu profili | Not |
+| --- | --- | --- |
+| `standard` — *Standart* | `chat.general` | Genel sohbet |
+| `deep` — *Derin düşünme* | `chat.reasoning` | Profilin kendi süre sınırı (varsayılan 180 sn) ve çıktı sınırı |
+
+Tarayıcı yalnızca kipi gönderir; kip → profil eşlemesi sunucudadır
+(`assistantService.js`), profil → model eşlemesi Aşama 1 model kaydındadır.
+İş kodunda ve arayüzde model adı geçmez. Tanınmayan kip `MODE_UNSUPPORTED`,
+kurulumda kapalı profil `AI_CONFIGURATION_ERROR` (`MODE_UNAVAILABLE`) alır;
+hazırlık durumu kiplerin açık olup olmadığını bildirir ve arayüz kapalı kipi
+seçtirmez. `chat.tools` bu aşamada kullanılmaz.
+
+**Akıl yürütme metni gösterilmez ve saklanmaz.** Sağlayıcının
+`reasoning_content`/`reasoning` alanları ve yanıtın başındaki
+`<think>…</think>` bloğu görünür metne girmez; yalnızca `status: thinking`
+evresi bildirilir. Görünür metin üretmeden biten yanıt
+`AI_PROVIDER_RESPONSE_INVALID` (`EMPTY_COMPLETION`) olur.
+
+### 18.5 Sunucuya ait yönerge ve sınırlı bağlam
+
+Sistem yönergesi sunucudadır (`assistantPrompt.js`): Rota AI'nin Rota
+verisine erişimi olmadığını, veri uydurmayacağını, işlem yapamayacağını,
+internete erişmediğini ve Markdown kullanacağını söyler. Tarayıcı yönerge ya
+da geçmiş ileti gönderemez; bağlam, güvenilir Sicil'e ait konuşmanın KAYITLI
+iletilerinden sunucuda kurulur. Rota anlık görüntüsü modele verilmez.
+
+Bağlam belirlenimci ve sınırlıdır (belirteç sayısı tahmin edilmez):
+
+| Sınır | Değer |
+| --- | --- |
+| Veritabanından okunan önceki ileti | en fazla 40 |
+| Modele giden önceki ileti | en fazla 20 (10 tamamlanmış soru/yanıt çifti) |
+| Önceki iletiler + yeni ileti | en fazla 48.000 karakter |
+| Bağlama giren tek önceki ileti | en fazla 12.000 karakter (uzunsa kısaltılır ve işaretlenir) |
+
+Yanıtı olmayan (durdurulan, kesilen, başarısız) turlar bağlama girmez. Eski
+iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
+(`context.trimmed`) ve arayüz kullanıcıya küçük bir notla gösterir.
+
+### 18.6 Tek üretim, iptal ve yeniden deneme
+
+- **Konuşmada tek üretim.** Aynı konuşmada ikinci tur, süren üretim bitmeden
+  `CONFLICT` (`GENERATION_IN_PROGRESS`) alır; arayüz yanıt sürerken taslak
+  yazdırır ama göndertmez (Durdur ya da tamamlanmayı bekler). Kayıt süreç
+  başınadır ve anahtarları Sicil içerir. Bu nedenle §18.14 tek süreç şartı
+  zorunludur. Tur başına veritabanı tekilliği farklı turların eşzamanlı
+  üretimini engellemez. Farklı konuşmalar ve farklı
+  kullanıcılar Aşama 1 kapasite sınırları içinde birlikte yürür.
+- **Durdur.** Tarayıcı isteği keser → `request.signal` → akış iptali →
+  ağ geçidinin süre sınırı sinyali → sağlayıcı bağlantısı kapanır. Kapasite
+  kirası ve üretim hakkı tam bir kez bırakılır, yarım yanıt YAZILMAZ; kullanıcı
+  iletisi kalır ve tur yeniden denenebilir. Arayüzde kısmi metin "tamamlanmadı"
+  notuyla görünür kalır.
+- **Bayat sonuç koruması.** Tarayıcı durum makinesi her üretime ve her
+  konuşma/liste okumasına belirteç verir: durdurulan ya da yerine yenisi
+  başlatılan üretimin geç olayı, sonradan açılan konuşmanın yerine geçen eski
+  okuma ve veri kipi değişiminden sonra gelen sonuç uygulanmaz. Başka konuşmaya
+  geçilince süren üretim arka planda tamamlanır ve kaydedilir; konuşmaya geri
+  dönülünce süren metin yeniden bağlanır.
+- **Yeniden deneme.** Yalnızca konuşmanın SON ve yanıtsız turu, AYNI `turnId`
+  ile yeniden denenir; ikinci kullanıcı iletisi oluşmaz (ilk turda
+  `(OwnerSicil, OriginTurnId)`, sonrakilerde `(ConversationId, ClientTurnId)`
+  tekilliği). Aynı tur kimliği farklı içerikle `TURN_ID_REUSED`, son olmayan
+  tur `TURN_NOT_LATEST` alır. Yanıtı yazılmış turun yeniden gönderimi modeli
+  çağırmaz, kayıtlı yanıtı tek parça olarak oynatır (`replayed: true`).
+- **Sağlayıcı yinelemesi** Aşama 1 kuralıyla sınırlıdır: yalnızca isteğin
+  sağlayıcıya hiç ulaşmadığı bağlantı hatası, bir kez ve kalan süre yetiyorsa
+  yinelenir. İlk metin tarayıcıya gittikten sonraki hiçbir hata otomatik
+  yinelenmez (aynı yanıt ikinci kez üretilmez); hata `partial: true` taşır.
+- **Tamamlanan yanıt kaybolmaz.** Model yanıtı tamamladıktan sonra istemci
+  ayrılsa da yanıtın yazımı (kendi 10 sn süre sınırıyla) sürer.
+
+### 18.7 Konuşma geçmişi ve Sicil sahipliği
+
+`database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` iki tablo ekler
+(ayrıntı: `docs/DATABASE-SCHEMA.md`):
+
+- `MR_AiConversations`: `ConversationId`, `OwnerSicil`, `Title`,
+  `OriginTurnId`, `MessageCount`, `CreatedAt`, `UpdatedAt`.
+- `MR_AiConversationMessages`: `MessageId`, `ConversationId`, `Sequence`,
+  `Role` (`user`/`assistant`), `Content`, `ClientTurnId`,
+  `ReplyToMessageId`, `Mode`, `FinishReason`, `CreatedAt`; konuşma silinince
+  iletiler de silinir (`ON DELETE CASCADE`).
+
+Kalıcılık anlamı:
+
+- Kullanıcı iletisi üretimden **önce**, kısa bir işlemle yazılır.
+- Asistan iletisi yalnızca yanıt **tamamlandığında** yazılır; durdurulan,
+  kesilen, süresi dolan ya da başarısız yanıt yazılmaz.
+- Yalnızca kullanıcıya görünen metin saklanır: akıl yürütme, sağlayıcı hata
+  ayrıntısı, ham akış olayı, istek nesnesi ve anahtar saklanmaz.
+- Başlık belirlenimcidir: ilk iletiden biçim işaretleri atılır, 60 karakterde
+  kelime sınırında kısaltılır; boş kalırsa *Yeni konuşma*. Başlık için ayrıca
+  model çağrılmaz.
+- Liste son etkinliğe göre sıralıdır ve 30'arlık anahtar kümesi sayfalarıyla
+  gelir; panel açılırken yalnızca ilk sayfa okunur, iletiler yalnızca açılan
+  konuşma için yüklenir. Bir konuşma en fazla 100 ileti taşır; dolunca yeni tur
+  `CONFLICT` (`CONVERSATION_FULL`) alır ve arayüz yeni konuşma önerir.
+
+**Sicil sahipliği.** Her sorgu `OwnerSicil = @sicil` ile sınırlıdır ve
+sabit metindir (`conversationQueries.js`). Başka Sicil'in konuşmasını okuma,
+listeleme, ekleme, yeniden deneme ve silme girişimi var olmayan konuşmayla
+**aynı** `404 NOT_FOUND` yanıtını alır; konuşmanın varlığı öğrenilemez. Rehberde
+olmayan Sicil hiçbir satıra dokunamaz. Yönetici erişimi yoktur.
+
+**Konuşma SQL işleri sınırlıdır:** ortak havuzu kendi kapısından kullanır
+(en fazla 4 eşzamanlı iş, sıra 64; Sicil başına 2 etkin + 4 bekleyen; dolunca
+`AI_BUSY`), her iş 10 sn süre sınırlıdır ve yer, sürücüdeki sorgu gerçekten
+bitene kadar tutulur. Model üretimi olağan Rota SQL işlerini tüketemez.
+
+### 18.8 Kapasite ve yalıtım
+
+- Kapasite kirası akış **boyunca** tutulur ve tamamlanma, hata, süre aşımı ve
+  iptal yollarının her birinde tam bir kez bırakılır (`finally`). Sinyale uymayan
+  bir sağlayıcı kirayı tutamaz.
+- Süre sınırı akışın ortasında da geçerlidir; yavaş istemcinin geri basıncı da
+  bu sınıra bağlıdır.
+- Olağan Rota (anlık görüntü, kayıt, görevler, raporlar, gezinme, tarih
+  değişikliği, Outlook ve telemetri işçileri, CN43N tazelemesi) Rota AI
+  çalışma zamanına bağlı değildir; süren bir akış bunları bekletmez
+  (`test/ai-assistant-isolation.test.mjs`).
+
+### 18.9 Hatalar
+
+Arayüz, Aşama 1 kararlı kodlarını kullanıcı diline çevirir
+(`assistantPresentation.js`): anahtar yok (*Ayarlar'ı aç*), kişisel anahtar
+reddedildi (*Ayarlar'ı aç*), kurumsal anahtar reddedildi, oran sınırı, geçici
+yoğunluk (`AI_BUSY`, `AI_QUEUE_TIMEOUT`: çökme değil geçici uyarı), süre aşımı,
+hizmete ulaşılamıyor, yarıda kesilen yanıt, kullanıcının durdurması, bağlantı
+sorunu, durgun bağlantı, beklenmeyen yanıt ve genel hata. Yeniden deneme
+yalnızca işe yarayacağı durumda önerilir. Yığın izi, sağlayıcı gövdesi,
+adres, SQL hatası ve anahtar hiçbir metinde yoktur. Kişisel anahtarın hatası
+kurumsal anahtara **düşmez** (Aşama 1 kuralı, `aiGateway` uygular).
+
+### 18.10 Telemetri
+
+Mevcut telemetri alt sistemi genişletildi (ikinci bir sistem yoktur):
+
+| Ölçüm | Anlam |
+| --- | --- |
+| `ai.request` | Sohbet isteğinin tamamı (profil, anahtar kaynağı, süre, sonuç kodu) |
+| `ai.provider.stream` | Sağlayıcı akış çağrısı (bağlantıdan akışın sonuna) |
+| `ai.stream.first_token` | İsteğin ağ geçidine girişinden ilk GÖRÜNÜR metne kadar |
+| `ai.stream.provider_start` | Sağlayıcı çağrısından başarılı HTTP yanıtına kadar |
+| `ai.queue.wait` | Kapasite sırasında bekleme |
+| `ai.api.assistant.*` | Rota AI uçları |
+
+Yapay zekâ sağlık ayrıntısı ayrıca ilk metin ve akış üretim sürelerinin
+P50/P95 özetini (`latency.firstToken`, `latency.streamGeneration`) ve akış
+sonuç sayaçlarını (`streams`: tamamlanan, durdurulan, süre aşımı, yarıda kalan,
+başlamadan başarısız) taşır; Sistem Yönetimi → Genel Durum → Yapay zekâ
+hizmeti ayrıntısında *İlk metin P95*, *Akış sonuçları* ve profil başına istek
+sayısı (*Profil dağılımı*) olarak görünür.
+Hiçbir ölçüm ve günlük satırı soru, yanıt, başlık, yönerge ya da anahtar
+taşımaz; istek gövdeleri günlüğe yazılmaz.
+
+### 18.11 Ters vekil gereksinimleri
+
+Uygulama akış için gereken başlıkları kendisi gönderir (§18.3). Ters vekilde
+(Nginx; ör. `/rota` ya da TEST `/bilge` ön eki) ayrıca:
+
+- yanıt ara belleğe alınmamalıdır: `proxy_buffering off;` (uygulamanın
+  `X-Accel-Buffering: no` başlığı Nginx'te bunu yanıt başına zaten sağlar),
+  `text/event-stream` sıkıştırılmamalıdır (`gzip_types` içinde olmamalı);
+- HTTP/1.1 ile iletilmelidir (`proxy_http_version 1.1;`);
+- `proxy_read_timeout` canlı tutma aralığından (15 sn) büyük olmalıdır; en uzun
+  meşru üretim (derin düşünme 180 sn + sıra 20 sn + hazırlık) için bağlantının
+  toplam ömrünü sınırlayan başka bir zaman aşımı en az 300 sn olmalıdır;
+- özgün ana makine ve şema iletilmelidir: `proxy_set_header Host $host;`,
+  `proxy_set_header X-Forwarded-Host $host;`,
+  `proxy_set_header X-Forwarded-Proto $scheme;`.
+
+Durum değiştiren istekler (tur, silme) Aşama 1'in aynı kaynak denetiminden
+geçer ve bu denetim vekil için **gevşetilmemiştir**: vekil `Origin`'in ana
+makinesini ve şemasını iletmiyorsa istek `403 FORBIDDEN` alır. Çözüm vekil
+yapılandırmasıdır (ör. TEST `/bilge` yolunda yukarıdaki başlıklar), uygulamanın
+güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
+
+### 18.12 Arayüz
+
+- **Yerleşim:** masaüstünde üst çubuğun altında, sağa yaslı, **kipsiz**
+  yardımcı panel (`role="complementary"`, odak tuzağı yok; Esc kapatır ve
+  odak Rota AI düğmesine döner). Katmanı `--z-assistant`'tır: kabuğun ve
+  yapışkan şeritlerin üstünde; açılır paneller, görev çekmecesi, komut paleti ve
+  kipli pencereler onun üstündedir (`docs/UI-STYLING-ARCHITECTURE.md` §9). Dar
+  ekranda (≤ 760 px) tam ekran, kipli bir sayfa olur (`role="dialog"`, odak
+  tuzağı); ekran klavyesi açılınca yükseklik görünür alana eşitlenir.
+- **Durum korunur:** panel kapanıp açılınca açık konuşma, taslak ve süren yanıt
+  kaybolmaz (denetleyici kabukla birlikte yaşar); sayfa yenilenince konuşmalar
+  sunucudan okunur. Tarayıcı deposuna (`localStorage`, `sessionStorage`)
+  hiçbir şey yazılmaz.
+- **Demo Kipi:** panel açılır ama hiçbir istek gönderilmez, konuşma saklanmaz,
+  yapılandırma durumu okunmaz; Rota AI'nin Gerçek Sistem'de kullanılabildiği
+  açıklanır.
+- **Yazma alanı:** çok satırlı; Enter gönderir, Shift+Enter satır ekler, giriş
+  yöntemi (IME) birleştirmesi gönderim sayılmaz; boş ileti ve 8.000 karakteri
+  aşan ileti gönderilmez; çift gönderim engellenir. Yanıt sürerken gönder
+  düğmesinin yerini Durdur alır.
+- **Güvenli biçim:** yanıt `assistantMarkdown.js` ile veri ağacına çözülür ve
+  yalnızca React öğeleriyle çizilir (`dangerouslySetInnerHTML` yok). Paragraf,
+  liste, vurgu, satır içi kod, kod bloğu, tablo ve bağlantı desteklenir; model
+  çıktısındaki HTML metin olarak görünür, görsel yüklenmez (açık bir bağlantı
+  olur), bağlantı yalnızca mutlak `http`, `https` ve `mailto` adreslerine verilir
+  ve yeni sekmede yönlendiren bilgisi olmadan açılır. Çözücü doğrusal
+  zamanlıdır ve derinlik/ayırıcı sınırları taşır. Olgun bir Markdown
+  bağımlılığı (onlarca geçişli paket) yerine bu küçük, HTML üretmeyen çözücü
+  seçildi: kurum içi kurulumun bağımlılık yüzeyi büyümez ve güvenlik sınırı
+  (yalnızca React metin düğümleri) denetlenebilir kalır.
+- **Kopyalama:** yalnızca tamamlanmış yanıtta küçük bir düğme; görünen metni
+  kopyalar (düz HTTP ile açılan kurulumda da çalışır).
+- **Kaydırma:** kullanıcı en alttaysa yeni metin izlenir; yukarı kaydıran
+  kullanıcı geri çekilmez, *En yeni* düğmesiyle döner.
+- **Erişilebilirlik:** akan metin canlı bölge değildir; tek, nazik canlı bölge
+  yalnızca anlamlı durumları duyurur (gönderildi, tamamlandı, durduruldu,
+  hata). Bütün denetimler etiketli ve klavyeyle kullanılabilir; kip seçimi
+  radyo grubudur; hareketi azalt tercihi, iki tema ve yüksek karşıtlık
+  desteklenir.
+
+### 18.13 Güvenlik ve gizlilik
+
+- Tarayıcı kişisel anahtarı (kayıttan sonra), kurumsal anahtarı, ana anahtarı,
+  şifreli anahtar alanlarını ve sağlayıcının `Authorization` başlığını hiçbir
+  zaman almaz. Tur isteği adres, sorgu dizesi ya da tarayıcı deposu üzerinden
+  sır taşımaz.
+- Konuşma metni olağan işletim günlüğüne, Sistem Yönetimi telemetrisine ya da
+  hata ayrıntısına girmez.
+- Sınırlar: tur gövdesi 64 KiB, ileti 8.000 karakter; sağlayıcı akışında tek
+  olay/satır 256 K karakter, ham akış 8 MiB, yanıt metni 64.000 karakter;
+  tarayıcıda tek olay 1 MiB, yanıt metni 64.000 karakter.
+
+### 18.14 Dağıtım
+
+**Zorunlu topoloji:** aynı konuşma veritabanı için bütün Rota AI uçları
+(hazırlık, liste, okuma, tur ve silme) **tek bir Node.js sürecine** gitmelidir.
+PM2 cluster, birden çok worker, replica veya aynı veritabanını kullanan ikinci
+TEST/üretim örneğine AI trafiği dağıtmak desteklenmez. Yalnız tarayıcı oturumuna
+yapışkan yönlendirme yeterli değildir: aynı Sicil başka tarayıcıdan bağlanabilir.
+İkinci örnek gerekiyorsa ayrı konuşma veritabanı kullanın veya bütün assistant
+uçlarını tek AI sürecine yönlendirin. Yeniden dağıtımda yeni AI sürecine trafik
+vermeden önce eski süreçteki üretimleri bitirin/iptal edin ve eski süreci durdurun;
+AI trafiğinde rolling overlap veya etkin-etkin failover kullanmayın.
+Bu şart, süreç içi üretim hakkı ve silme iptalinin aynı yerde uygulanmasını sağlar;
+çok örnekli destek için önce paylaşılan üretim kirası ve iptal koordinasyonu gerekir.
+
+1. 0016 uygulanmış veritabanının yedeğini alın.
+2. `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` betiğini
+   çalıştırın (yinelenebilir; 0016 yoksa durur; var olan tabloların yapısını
+   doğrular).
+3. Ters vekili §18.11'e göre denetleyin.
+4. Uygulamayı yeniden derleyip başlatın.
+5. §18.15'teki elle kabul listesini uygulayın.
+
+**0017 uygulanmadan** açılan kurulumda uygulama çalışmaya devam eder; yalnızca
+Rota AI uçları anlaşılır bir yapılandırma hatası döner
+(`AI_CONFIGURATION_ERROR`, `CONVERSATION_SCHEMA_MISSING`) ve model çağrılmaz.
+`MERGEN_ROTA_AI_ENABLED=false` Rota AI'yi de kapatır; konuşmalar korunur.
+
+### 18.15 Aşama 2 elle kabul listesi
+
+Yavaş/kesilen akış senaryoları için yerel sahte ağ geçidi akışı da destekler
+(`stream: true` isteklerine parça parça SSE yanıtı döner):
+
+```bash
+node test/helpers/fakeOpenAiCompatibleServer.mjs --serve --port 8099
+node test/helpers/fakeOpenAiCompatibleServer.mjs --serve --port 8099 --delay-ms 20000
+```
+
+**A. Temel konuşma**
+
+1. Gerçek Sistem kipine geçin.
+2. Üst çubuktan **Rota AI**'yi açın.
+3. Yeni bir konuşma başlatın (başlıktaki *Yeni konuşma*).
+4. Basit bir Türkçe soru gönderin.
+5. Metnin, yanıtın tamamı bitmeden parça parça göründüğünü doğrulayın.
+6. Yanıtın kaydedildiğini doğrulayın (geçmişte konuşma ve yanıt görünür).
+7. Rota AI'yi kapatın.
+8. Yeniden açın.
+9. Konuşmanın yerinde olduğunu doğrulayın.
+10. Tarayıcıyı yenileyin.
+11. Konuşmanın geçmişte durduğunu ve açılınca iletilerin geldiğini doğrulayın.
+
+**B. Standart ve derin düşünme**
+
+1. Uygun bir soruyu *Standart* kipte sorun.
+2. **Sistem Yönetimi → Genel Durum → Yapay zekâ hizmeti** ayrıntısındaki
+   *Profil dağılımı* satırında `chat.general` sayacının arttığını doğrulayın
+   (sağlayıcı tarafı günlüklerinde de profilin modeli görünür).
+3. *Derin düşünme* kipine geçin ve aynı soruyu sorun.
+4. Aynı satırda `chat.reasoning` sayacının arttığını doğrulayın.
+5. Tarayıcının ağ sekmesinde tur gövdesinin yalnızca `conversationId`,
+   `turnId`, `message`, `mode` taşıdığını, model adı gönderilmediğini doğrulayın.
+6. Akıl yürütme (düşünce) metninin hiçbir yerde görünmediğini doğrulayın;
+   yalnızca *Derin düşünülüyor…* evresi görünür.
+
+**C. Durdur**
+
+1. Geciken ya da yavaş akan sahte uç kullanın.
+2. Bir istek gönderin.
+3. Metin akarken **Durdur**'a basın.
+4. Metnin durduğunu doğrulayın.
+5. Yapay zekâ hizmeti ayrıntısında etkin istek sayısının hemen düştüğünü
+   doğrulayın.
+6. Turda **Yeniden dene**'nin göründüğünü doğrulayın.
+7. Sonraki istekte durdurulan istekten bayat metin gelmediğini doğrulayın.
+
+**D. Kalıcılık**
+
+1. İki konuşma açın.
+2. Aralarında geçiş yapın.
+3. Sayfayı yenileyin.
+4. Başlıkları, sırayı (son etkinlik en üstte) ve iletileri doğrulayın.
+5. Birini silin (onay istenir).
+6. Yalnızca o konuşmanın kalktığını doğrulayın.
+
+**E. Sicil yalıtımı** (iki TEST kullanıcısı)
+
+1. A kullanıcısı bir konuşma açar.
+2. B kullanıcısı geçmişi listeler.
+3. A'nın konuşması görünmez.
+4. B, A'nın konuşma kimliğiyle doğrudan `GET …/conversations/{id}` dener.
+5. Yanıt var olmayan konuşmayla aynıdır (`404`); içerik ya da varlık bilgisi
+   sızmaz.
+6. B, A'nın konuşmasına tur gönderemez ve silemez (`404`).
+
+**F. Kişisel ve kurumsal anahtar** (Aşama 1 Nginx iletimi düzeltildikten sonra)
+
+1. Kişisel anahtar yokken sohbet kurumsal anahtarı kullanır.
+2. Geçerli kişisel anahtar kaydedin.
+3. Sohbet kişisel anahtarı kullanır (Yapay zekâ hizmeti ayrıntısında *Kişisel*
+   sayacı artar).
+4. Kişisel anahtarı reddedilecek biçimde yapılandırın.
+5. Sohbetin *Kişisel anahtar kabul edilmedi* ile başarısız olduğunu doğrulayın.
+6. Kurumsal anahtara **sessizce geçilmediğini** doğrulayın.
+7. Kişisel anahtarı kaldırın.
+8. Sonraki sohbetin kurumsal anahtarı kullandığını doğrulayın.
+
+**G. Yavaş sağlayıcı yalıtımı**
+
+Kasıtlı olarak yavaş bir akış sürerken anlık görüntüyü yenileyin, görev
+listesini açın, bir görevi düzenleyip kaydedin, sayfalar arasında gezinin,
+raporları açın ve varlık nabzının sürdüğünü görün. Olağan Rota'nın bekletilmeden
+yanıt verdiğini doğrulayın.
+
+**H. Kapasite** (TEST sınırlarını geçici olarak küçültün)
+
+Kullanıcı başına etkin sınırı, küresel etkin sınırı, sıra sınırını, sıra süre
+aşımını ve `AI_BUSY`'yi deneyin. Arayüzün *Rota AI şu anda yoğun* uyarısıyla,
+çökmeden davrandığını doğrulayın.
+
+**I. Sağlayıcı hataları**
+
+401, 403, 429, süre aşımı, bağlantı reddi, yarıda kesilen akış ve bozuk akışı
+deneyin. Kararlı hata iletilerini ve hiçbir yerde anahtar sızmadığını
+doğrulayın.
+
+**J. Tarayıcı ve vekil üzerinden akış** (yönetici yapılandırmasından sonra,
+gerçek TEST `/bilge` Nginx yolu üzerinden)
+
+1. Tur ve silme isteklerinin aynı kaynak denetiminden geçtiğini doğrulayın.
+2. Akışın yanıt tamamlanmadan başladığını doğrulayın.
+3. Nginx'in yanıtın tamamını ara belleğe almadığını doğrulayın (metin parça
+   parça gelir).
+4. Uzun ama geçerli bir üretimin bağlantıyı koruduğunu doğrulayın (canlı tutma).
+5. Durdur'un sağlayıcıya kadar ulaştığını doğrulayın.
+
+**K. Sır ve gizlilik denetimi**
+
+Local Storage, Session Storage, istek adresleri, tarayıcının gördüğü başlıklar,
+yanıtlar, sunucu konsolu ve Sistem Yönetimi telemetrisini inceleyin. API
+anahtarı, ana anahtar, şifreli anahtar alanları ve `Authorization` başlığı
+bulunmadığını, telemetride konuşma metni geçmediğini doğrulayın.
+
+### 18.16 Otomatik sınamalar
+
+| Dosya | Kapsam |
+| --- | --- |
+| `test/ai-provider-streaming.test.mjs` | Olay akışı çözücüsü, parça sınırları, UTF-8, `[DONE]`, bozuk olay, erken bitiş, sınırlar, akıl yürütme ayıklama; gerçek soketlerle akış isteği, hata durumları, yarıda kopma ve iptal |
+| `test/ai-gateway-streaming.test.mjs` | Profiller, kiranın akış boyunca tutulması ve her yolda bırakılması, süre sınırı, sıra, anahtar çözümü ve geri düşmeme, ilk metinden önce yineleme, telemetri |
+| `test/ai-assistant-conversations.test.mjs` | Sicil sahipliği, başka Sicil'in erişememesi, silme, yinelenmeyen yeniden deneme, liste ve sayfalar, başlık, sınırlar, bağlam, SQL'in üretimden bağımsızlığı, 0017 eksikliği |
+| `test/ai-assistant-routes.test.mjs` | Kimlik, aynı kaynak (vekil başlıkları dâhil), girdi doğrulaması, kipler, akış başlıkları ve olayları, sonlandırıcı hata, iptal, canlı tutma, geri basınç, sızıntı |
+| `test/ai-assistant-client.test.mjs` | Tarayıcı akış çözücüsü ve istek sarmalayıcısı |
+| `test/ai-assistant-ui.test.mjs` | Durum makinesi, sunum, yazma alanı, kaydırma, güvenli Markdown, panel, Demo Kipi |
+| `test/ai-assistant-isolation.test.mjs` | Süren akış sırasında olağan Rota; iki kullanıcının eşzamanlı ve yalıtılmış üretimi |
+| `test/ai-architecture-contract.test.mjs` | Aşama 1 sözleşmeleri + Rota AI sınırları, 0017, katman ve stil sahipliği |
+
+### 18.17 Aşama 2 kapsamı dışında kalanlar
+
+- Rota verisine erişen alan araçları (görev arama, proje özeti, gecikmiş
+  görevler, iş yükü, hareket arama, SQL aracı, işlev çağırma) — Aşama 3;
+- anlamsal gösterim, vektör arama, yeniden sıralama, RAG — Aşama 4;
+- yapay zekâ eliyle görev oluşturma, düzenleme, atama, durum/tarih değiştirme,
+  onay ya da kayıt — Aşama 5;
+- ses (STT/TTS), görsel girdi ve görsel üretimi — Aşama 6;
+- kritik yol (CPM) yorumlama; genel internet araması;
+- konuşmayı yeniden adlandırma, yönetici erişimi, konuşma dışa aktarma;
+- birden çok uygulama örneği arasında paylaşılan kapasite ve üretim kaydı.

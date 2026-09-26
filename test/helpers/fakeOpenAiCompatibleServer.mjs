@@ -39,6 +39,59 @@ function completion(model, text) {
 
 const CLOSED_REQUEST_WAIT_LIMIT_MS = 10000;
 
+/** Olağan akışlı yanıt: rol, iki metin parçası, bitiş nedeni, kullanım ve `[DONE]`. */
+export function sseChunksFor(model, text) {
+  const half = Math.ceil(text.length / 2);
+  const event = (payload) => `data: ${JSON.stringify(payload)}\n\n`;
+  return [
+    event({ id: 'chatcmpl-fake', object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { role: 'assistant' } }] }),
+    event({ id: 'chatcmpl-fake', object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { content: text.slice(0, half) } }] }),
+    event({ id: 'chatcmpl-fake', object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { content: text.slice(half) } }] }),
+    event({ id: 'chatcmpl-fake', object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+    event({ id: 'chatcmpl-fake', object: 'chat.completion.chunk', model, choices: [], usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 } }),
+    'data: [DONE]\n\n'
+  ];
+}
+
+/**
+ * Akışlı yanıt (`stream: true`). Parçalar ayrı yazılır; `gapMs` parçalar arası
+ * beklemedir. `destroyAfter` verilen sayıda parçadan sonra soketi keser
+ * (yanıt ortasında kopan bağlantı), `hangAfter` bağlantıyı açık bırakır.
+ */
+function streamResponse(response, scenario, model, text, state) {
+  const stream = scenario.stream || {};
+  const chunks = stream.chunks ?? sseChunksFor(model, scenario.text || text);
+  response.writeHead(200, {
+    'content-type': stream.contentType ?? 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache'
+  });
+  let index = 0;
+  let timer = null;
+  const finished = () => {
+    state.streamsCompleted += 1;
+  };
+  response.on('close', () => {
+    clearTimeout(timer);
+    if (!response.writableFinished) state.streamsClosedByClient += 1;
+  });
+  const next = () => {
+    if (response.destroyed) return;
+    if (stream.destroyAfter != null && index >= stream.destroyAfter) {
+      response.socket?.destroy();
+      return;
+    }
+    if (stream.hangAfter != null && index >= stream.hangAfter) return;
+    if (index >= chunks.length) {
+      response.end(finished);
+      return;
+    }
+    response.write(chunks[index]);
+    index += 1;
+    timer = setTimeout(next, stream.gapMs ?? 1);
+  };
+  next();
+}
+
 /**
  * Model listesi, depodaki kurum içi katalogun model kimliklerini de taşır:
  * bağlantı testi `chat.fast` modelinin uçta bulunduğunu doğrular ve elle kabul
@@ -68,6 +121,8 @@ export async function startFakeOpenAiCompatibleServer({
     scenario: null,
     requests: [],
     closedBeforeResponse: 0,
+    streamsCompleted: 0,
+    streamsClosedByClient: 0,
     delayMs,
     validKeys: validKeys ? new Set(validKeys) : null,
     publicModels
@@ -140,6 +195,10 @@ export async function startFakeOpenAiCompatibleServer({
           response.end(`{"padding":"${'x'.repeat(scenario.oversizedBytes)}"}`);
           return;
         }
+        if (body?.stream === true && !scenario.jsonForStream) {
+          streamResponse(response, scenario, body?.model || 'fake-model', text, state);
+          return;
+        }
         json(response, 200, completion(body?.model || 'fake-model', scenario.text || text));
       };
       if (scenario.stall) return;
@@ -177,6 +236,20 @@ export async function startFakeOpenAiCompatibleServer({
           if (state.closedBeforeResponse >= count) return resolve();
           if (Date.now() >= deadline) {
             return reject(new Error(`Aşağı akış bağlantısı ${limitMs} ms içinde kapanmadı: kapanan ${state.closedBeforeResponse}, beklenen ${count}.`));
+          }
+          return setTimeout(check, 5);
+        };
+        check();
+      });
+    },
+    /** İstemcinin yarıda bıraktığı akış sayısı `count`'a ulaşana kadar sınırlı bekler. */
+    waitForClosedStreams(count, { limitMs = CLOSED_REQUEST_WAIT_LIMIT_MS } = {}) {
+      const deadline = Date.now() + limitMs;
+      return new Promise((resolve, reject) => {
+        const check = () => {
+          if (state.streamsClosedByClient >= count) return resolve();
+          if (Date.now() >= deadline) {
+            return reject(new Error(`Akış ${limitMs} ms içinde istemci tarafından kapatılmadı: kapanan ${state.streamsClosedByClient}, beklenen ${count}.`));
           }
           return setTimeout(check, 5);
         };
