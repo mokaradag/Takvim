@@ -22,6 +22,7 @@ import { SettingsView } from '../../features/settings/SettingsView';
 import { SimpleModePanel } from '../../features/simple/SimpleModePanel';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
 import { ScheduleRequestCenter } from '../../features/schedule-change/ScheduleRequestCenter.jsx';
+import { RotaAssistantLauncher, RotaAssistantPanel, useRotaAssistant } from '../../features/ai/assistant/RotaAssistant.jsx';
 import {
   useAllPeople,
   useAllProjects,
@@ -146,6 +147,9 @@ export default function AppShell() {
   usePresenceHeartbeat(String(session?.dataMode || '').toLowerCase() === 'actual');
   const { openTask } = useTaskActions();
   const signOutState = useSignOut();
+  // Rota AI kabukla birlikte yaşar: panel kapanıp açılınca konuşma ve süren
+  // yanıt korunur; veri kipi değişince kabukla birlikte yeniden kurulur.
+  const assistant = useRotaAssistant();
   const simpleMode = t.appMode === 'simple';
   const [sidebarPreference, setSidebarPreference] = useState(readSidebarPreference);
   const [sidebarKeyboardOpen, setSidebarKeyboardOpen] = useState(false);
@@ -462,6 +466,7 @@ export default function AppShell() {
           )}
           <div className="topbar-spacer" />
           <div className="topbar-actions">
+            <RotaAssistantLauncher assistant={assistant} />
             <ScheduleRequestCenter onNavigate={navigate} />
             <DataRefreshControl />
             {exportVisible && (
@@ -496,6 +501,7 @@ export default function AppShell() {
       </div>
 
       <TaskDetailOverlay simple={simpleMode} />
+      <RotaAssistantPanel assistant={assistant} onOpenSettings={() => navigate('ayarlar')} />
       {cmdOpen && (
         <CommandPalette
           navItems={visibleNavItems}
@@ -503,6 +509,7 @@ export default function AppShell() {
           onNavigate={navigate}
           onOpenTask={openTask}
           onSetTheme={(theme) => setTweak('theme', theme)}
+          onOpenAssistant={assistant.openPanel}
           tasks={tasks}
         />
       )}

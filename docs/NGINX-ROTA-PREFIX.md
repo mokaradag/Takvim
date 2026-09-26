@@ -54,6 +54,42 @@ Examples:
 /rota/api/mergen-rota/auth/implicit-session  -> /api/mergen-rota/auth/implicit-session
 ```
 
+## Streaming and origin forwarding (Rota AI)
+
+Rota AI answers stream from `POST /api/mergen-rota/ai/assistant/turns` as
+`text/event-stream`. The application already sends `Cache-Control: no-cache,
+no-store, no-transform` and `X-Accel-Buffering: no`, which disables Nginx
+response buffering for that response. It also sends an SSE comment every 15
+seconds while a slow model has not produced text yet, so an idle-read timeout
+larger than 15 seconds never cuts a legitimate answer. Recommended additions to
+the `location ^~ /rota/` block (the same applies to any other prefix, e.g. the
+TEST `/bilge` route):
+
+```nginx
+    proxy_http_version 1.1;
+    # Streaming: forward each chunk immediately.
+    proxy_buffering off;
+    proxy_cache off;
+    # Keep text/event-stream out of gzip_types (compression buffers the stream).
+    # Longest legitimate generation: deep reasoning 180 s + queue 20 s + setup.
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    # Original host and scheme: the same-origin check of state-changing AI
+    # requests (turns, deletes, key management) compares them with `Origin`.
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Longer existing timeouts (such as the `100000` values above) are compatible.
+The application's own AI timeouts are not relaxed to accommodate a proxy: a
+proxy that buffers the whole answer or cuts the connection early must be fixed in
+the proxy. Likewise, if the proxy does not forward the original host and scheme,
+state-changing AI requests are rejected with `403 FORBIDDEN` by design; the fix
+is the forwarding headers above, never a weaker same-origin check. See
+`docs/AI-PLATFORM.md` §18.11.
+
 ## Production `.env.local`
 
 Use masked values as a template:

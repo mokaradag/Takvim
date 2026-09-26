@@ -55,6 +55,10 @@ function createState() {
     byProfile: {},
     providerLatencyMs: [],
     queueWaitMs: [],
+    // Akışlı yanıtlar: algılanan hız (ilk metin) ve üretim süresi örnekleri ile sonuç sayaçları.
+    firstTokenMs: [],
+    streamGenerationMs: [],
+    streams: { completed: 0, cancelled: 0, timeout: 0, interrupted: 0, failed: 0 },
     retries: 0,
     lastSuccessAt: null,
     // Hizmet hatası (sağlayıcı öncesi de olabilir: rehber, anahtar tablosu, iç
@@ -314,6 +318,34 @@ export function recordProviderCall({
   });
 }
 
+/**
+ * Akışlı yanıtın algılanan hızı ve sonucu. Ölçümler içerik TAŞIMAZ.
+ *
+ * - `firstTokenMs`: isteğin ağ geçidine girişinden ilk GÖRÜNÜR metin parçasına
+ *   kadar (rehber denetimi, sıra ve sağlayıcının ilk yanıtı dâhil) —
+ *   `ai.stream.first_token`.
+ * - `providerStartMs`: sağlayıcı çağrısından başarılı HTTP yanıtına kadar —
+ *   `ai.stream.provider_start`.
+ * - `generationMs`: sağlayıcı çağrısından akışın tamamlanmasına kadar (yalnızca
+ *   tamamlanan akışlar; işlem ölçümü `ai.provider.stream` ile ayrıca yazılır).
+ * - `outcome`: `completed`, `cancelled`, `timeout`, `interrupted` (metin
+ *   başladıktan sonra kesildi) ya da `failed` (metin başlamadan başarısız).
+ */
+export function recordAiStream({ outcome, firstTokenMs = null, providerStartMs = null, generationMs = null }) {
+  safely(() => {
+    const current = state();
+    if (Object.hasOwn(current.streams, outcome)) current.streams[outcome] += 1;
+    if (firstTokenMs != null && Number.isFinite(firstTokenMs)) {
+      pushSample(current.firstTokenMs, firstTokenMs);
+      recordOperation({ operation: 'ai.stream.first_token', durationMs: firstTokenMs, ok: true });
+    }
+    if (providerStartMs != null && Number.isFinite(providerStartMs)) {
+      recordOperation({ operation: 'ai.stream.provider_start', durationMs: providerStartMs, ok: true });
+    }
+    if (generationMs != null) pushSample(current.streamGenerationMs, generationMs);
+  });
+}
+
 /** Yineleme GERÇEKTEN başlarken sayılır ve günlüğe yazılır (sohbet ve doğrulama için aynı). */
 export function recordAiRetry({ networkCode = null } = {}) {
   safely(() => {
@@ -357,8 +389,11 @@ export function aiTelemetrySnapshot() {
     retries: current.retries,
     latency: {
       provider: percentiles(current.providerLatencyMs),
-      queueWait: percentiles(current.queueWaitMs)
+      queueWait: percentiles(current.queueWaitMs),
+      firstToken: percentiles(current.firstTokenMs),
+      streamGeneration: percentiles(current.streamGenerationMs)
     },
+    streams: { ...current.streams },
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
     requestSequence: current.requestSequence,

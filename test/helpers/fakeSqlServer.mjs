@@ -2,6 +2,7 @@ import { taskActivityRecordsets } from './taskActivitySql.mjs';
 import { runObservabilityQuery } from './observabilitySql.mjs';
 import { runAssignmentCoordinationQuery } from './assignmentCoordinationSql.mjs';
 import { runAiCredentialQuery } from './aiCredentialSql.mjs';
+import { runAiConversationQuery } from './aiConversationSql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -250,6 +251,10 @@ export function createFakeDatabase(seed = {}) {
     // Kişisel yapay zekâ anahtarları (0016). Dizi baştan açılır: işlem anlık
     // görüntüsü ilk kayıttan önce alınsa da tabloyu kapsar ve geri alınır.
     aiUserCredentials: seed.aiUserCredentials || [],
+    // Rota AI konuşma geçmişi (0017); işlem anlık görüntüsüne baştan girer.
+    aiConversations: seed.aiConversations || [],
+    aiConversationMessages: seed.aiConversationMessages || [],
+    aiConversationSchemaMissing: seed.aiConversationSchemaMissing === true,
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
     corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
@@ -1240,6 +1245,11 @@ function runQuery(db, statement, params, { database }) {
   // (0015) ayrı bir modülde karşılanır.
   const coordination = runAssignmentCoordinationQuery(db, sqlText, params);
   if (coordination) return result(coordination);
+
+  // Rota AI konuşma geçmişi (0017) ayrı bir modülde karşılanır. Rehber
+  // denetimini aynı toplu işte taşıdığı için anahtar modülünden önce tanınır.
+  const aiConversation = runAiConversationQuery(db, sqlText, params);
+  if (aiConversation) return result(aiConversation);
 
   // Kişisel yapay zekâ anahtarları (0016) ayrı bir modülde karşılanır.
   const aiCredential = runAiCredentialQuery(db, sqlText, params);

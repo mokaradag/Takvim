@@ -60,6 +60,11 @@ const isAiPath = (relativePath) => AI_DIRECTORIES.some((directory) => relativePa
 test('yapay zekâ uçları Node çalışma zamanında, önbelleksiz ve ai.api. işlem adlarıyla çalışır', () => {
   const routes = sourceFiles('src/app/api/mergen-rota/ai').filter((file) => path.basename(file) === 'route.js');
   assert.deepEqual(routes.map(toRelative).sort(), [
+    'src/app/api/mergen-rota/ai/assistant/conversations/[conversationId]/route.js',
+    'src/app/api/mergen-rota/ai/assistant/conversations/before/[cursor]/route.js',
+    'src/app/api/mergen-rota/ai/assistant/conversations/route.js',
+    'src/app/api/mergen-rota/ai/assistant/route.js',
+    'src/app/api/mergen-rota/ai/assistant/turns/route.js',
     'src/app/api/mergen-rota/ai/credential/route.js',
     'src/app/api/mergen-rota/ai/credential/validation/route.js',
     'src/app/api/mergen-rota/ai/probe/route.js'
@@ -143,11 +148,15 @@ test('olağan Rota akışı yapay zekâ alt sistemine bağımlı değildir', () 
   // (anlık görüntü, kayıt, görev, rapor) yapay zekâya bağlanmaz. Telemetri turu
   // yalnızca yük ölçümünü örnekler.
   assert.deepEqual(importers.sort(), [
+    'src/components/shell/AppShell.jsx',
     'src/features/settings/SettingsView.jsx',
     'src/server/observability/healthProbes.js',
     'src/server/observability/integrationsService.js',
     'src/server/observability/telemetryWorker.js'
   ]);
+  // Kabuk yardımcıyı YALNIZCA bileşen sınırından bağlar (istemci, denetleyici ya da sunucu modülü değil).
+  const shellAiImports = importsOf(path.join(ROOT, 'src/components/shell/AppShell.jsx')).filter(({ target }) => target && isAiPath(target));
+  assert.deepEqual(shellAiImports.map(({ target }) => target), ['src/features/ai/assistant/RotaAssistant.jsx']);
   const worker = code(read('src/server/observability/telemetryWorker.js'));
   assert.deepEqual([...worker.matchAll(/from '\.\.\/ai\/([^']+)'/g)].map((match) => match[1]), ['aiRuntime.js']);
   assert.match(worker, /import \{ sampleAiLoad \} from '\.\.\/ai\/aiRuntime\.js';/);
@@ -179,10 +188,13 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
   }
   // Sağlayıcı, ağ geçidi ve sınama veritabanına erişemez; ağ geçidi yalnızca
   // "işlem içinde miyim" sorusunu sorar.
+  // Konuşma geçmişi hizmeti kısa işlemleri açar; deposu yalnızca parametre türlerini kullanır.
   assert.deepEqual(poolImports, {
     'src/server/ai/aiCredentialService.js': ['getSqlPool', 'withSqlTransaction'],
     'src/server/ai/aiCredentialStore.js': ['sql'],
-    'src/server/ai/aiGateway.js': ['isWithinSqlTransaction']
+    'src/server/ai/aiGateway.js': ['isWithinSqlTransaction'],
+    'src/server/ai/assistant/assistantService.js': ['getSqlPool', 'withSqlTransaction'],
+    'src/server/ai/assistant/conversationStore.js': ['sql']
   });
 });
 
@@ -198,6 +210,11 @@ test('kişisel anahtar tablosuna yalnızca depo modülü, sabit ve Sicil ile sı
   }
   assert.ok(queryCalls.length > 0);
   for (const [file, argument] of queryCalls) {
+    if (file === 'src/server/ai/assistant/conversationStore.js') {
+      // Konuşma geçmişi deposu da yalnızca sabit metinleri çalıştırır (sayfa imleci için iki sabitten biri seçilir).
+      assert.match(argument, /^(?:[a-z]+ \? )?AI_CONVERSATION_[A-Z_]+_SQL(?: : AI_CONVERSATION_[A-Z_]+_SQL)?$/, 'SQL metni hiçbir zaman çalışma anında birleştirilmez');
+      continue;
+    }
     assert.equal(file, 'src/server/ai/aiCredentialStore.js');
     assert.match(argument, /^AI_CREDENTIAL_[A-Z_]+_SQL$/, 'SQL metni hiçbir zaman çalışma anında birleştirilmez');
   }
@@ -244,7 +261,8 @@ test('kişisel anahtar tablosuna yalnızca depo modülü, sabit ve Sicil ile sı
 
 test('0016 göçü sıralı, yinelenebilir ve düz metin anahtar sütunu içermez', () => {
   const upgrades = fs.readdirSync(path.join(ROOT, 'database')).filter((name) => /^MR_Upgrade_\d{4}_/.test(name)).sort();
-  assert.equal(upgrades.at(-1), 'MR_Upgrade_0016_Ai_User_Credentials.sql');
+  // 0016 sıradaki yerini korur: kendisinden sonra yalnızca 0017 (Rota AI konuşma geçmişi) gelir.
+  assert.deepEqual(upgrades.slice(-2), ['MR_Upgrade_0016_Ai_User_Credentials.sql', 'MR_Upgrade_0017_Ai_Assistant_Conversations.sql']);
   assert.equal(upgrades.filter((name) => name.startsWith('MR_Upgrade_0016_')).length, 1);
 
   const upgrade = read('database/MR_Upgrade_0016_Ai_User_Credentials.sql');
@@ -320,5 +338,239 @@ test('ortam örneği yapay zekâ ayarlarını yalnızca sunucu tarafında ve yer
   assert.doesNotMatch(env, /NEXT_PUBLIC_[A-Z0-9_]*AI_/);
   for (const file of sourceFiles('src')) {
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /NEXT_PUBLIC_MERGEN_ROTA_AI/, toRelative(file));
+  }
+});
+
+/* ── Rota AI sohbeti (akış, konuşma geçmişi, yardımcı panel) ── */
+
+const ASSISTANT_SOURCES = [
+  ...sourceFiles('src/features/ai/assistant'),
+  ...sourceFiles('src/server/ai/assistant'),
+  ...sourceFiles('src/app/api/mergen-rota/ai/assistant'),
+  path.join(ROOT, 'src/domain/ai/assistantContract.js'),
+  path.join(ROOT, 'src/domain/ai/eventStreamParser.js')
+];
+
+test('Rota AI kodu sağlayıcı bağdaştırıcısına bağlanmaz; sağlayıcı yalnızca ağ geçidi arkasındadır', () => {
+  for (const file of ASSISTANT_SOURCES) {
+    const name = toRelative(file);
+    for (const { target, specifier } of importsOf(file)) {
+      assert.equal(target?.startsWith('src/server/ai/providers/') ?? false, false, `${name} → ${specifier}`);
+    }
+    const body = code(fs.readFileSync(file, 'utf8'));
+    assert.doesNotMatch(body, /streamChatCompletion|chatCompletion\(|\/chat\/completions/, name);
+  }
+  // Akışlı sağlayıcı çağrısını yalnızca ağ geçidi yapar; hizmet ağ geçidini çağırır.
+  const callers = sourceFiles('src').filter((file) => code(fs.readFileSync(file, 'utf8')).includes('.streamChatCompletion(')).map(toRelative);
+  assert.deepEqual(callers, ['src/server/ai/aiGateway.js']);
+  assert.match(code(read('src/server/ai/assistant/assistantService.js')), /getAiGateway\(\)\.streamChat\(\{/);
+  // Tarayıcıdan ya da özellik kodundan sağlayıcıya doğrudan fetch yoktur.
+  for (const file of sourceFiles('src/features/ai')) {
+    for (const match of code(fs.readFileSync(file, 'utf8')).matchAll(/fetch\(\s*([^,)]+)/g)) {
+      assert.match(match[1], /^publicRotaPath\(`\$\{BASE\}\//, `${toRelative(file)} yalnızca Rota uçlarına istek atar`);
+    }
+  }
+});
+
+test('Rota AI özellik ve iş kodunda kurulu model adı, profil kimliği ya da sağlayıcı ayarı geçmez', async () => {
+  const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
+  const catalog = JSON.parse(read('config/ai-model-registry.onprem.json'));
+  const models = new Set([...DEFAULT_AI_MODEL_REGISTRY.models, ...catalog.models].map((model) => model.id));
+  for (const file of ASSISTANT_SOURCES) {
+    const name = toRelative(file);
+    const body = code(fs.readFileSync(file, 'utf8'));
+    for (const model of models) assert.equal(body.includes(model), false, `${name} → ${model}`);
+    assert.doesNotMatch(body, /MERGEN_ROTA_AI_|process\.env/, name);
+    assert.doesNotMatch(body, /'chat\.tools'|CHAT_TOOLS/, `${name}: araç profili bu aşamada kullanılmaz`);
+  }
+  // Tarayıcı katmanı profil kimliği de bilmez: kip → profil eşlemesi sunucudadır.
+  for (const file of sourceFiles('src/features/ai/assistant')) {
+    assert.doesNotMatch(code(fs.readFileSync(file, 'utf8')), /chat\.(?:general|reasoning|fast)|AI_PROFILES/, toRelative(file));
+  }
+  const service = code(read('src/server/ai/assistant/assistantService.js'));
+  assert.match(service, /\[ASSISTANT_MODES\.STANDARD\]: AI_PROFILES\.CHAT_GENERAL,\s*\[ASSISTANT_MODES\.DEEP\]: AI_PROFILES\.CHAT_REASONING/);
+});
+
+test('sohbet Sicil’i yalnızca güvenilir oturumdan alır; tur gövdesi yalnızca dört alan kabul eder', () => {
+  const service = code(read('src/server/ai/assistant/assistantService.js'));
+  assert.match(service, /const TURN_FIELDS = new Set\(\['conversationId', 'turnId', 'message', 'mode'\]\);/);
+  for (const operation of ['listAssistantConversations', 'loadAssistantConversation', 'deleteAssistantConversation', 'prepareAssistantTurn']) {
+    const start = service.indexOf(`export async function ${operation}(`);
+    assert.ok(start >= 0, operation);
+    const firstStatement = service.slice(service.indexOf('{', service.indexOf(')', start)) + 1).trim().split('\n')[0];
+    assert.equal(firstStatement, 'const sicil = await getTrustedCurrentSicil();', operation);
+  }
+  // Hazırlık durumu da kimliği Phase 1 durum okumasıyla (güvenilir Sicil + rehber) doğrular.
+  assert.match(service, /export async function loadAssistantReadiness\(\{ signal = null \} = \{\}\) \{\s*const status = await loadAiCredentialStatus\(\{ signal \}\);/);
+  // Rehber üyeliği gövde okunmadan önce doğrulanır.
+  const prepare = service.slice(service.indexOf('export async function prepareAssistantTurn('));
+  assert.ok(prepare.indexOf('verifyDirectoryMember(sicil, signal)') < prepare.indexOf('readBody(scoped)'));
+  for (const file of sourceFiles('src/features/ai/assistant')) {
+    assert.doesNotMatch(code(fs.readFileSync(file, 'utf8')), /\bsicil\b|apiKey|authorization/i, toRelative(file));
+  }
+});
+
+test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliğiyle sınırlı sorgularla erişir', async () => {
+  const tableUsers = sourceFiles('src').filter((file) => /MR_AiConversation/.test(fs.readFileSync(file, 'utf8'))).map(toRelative).sort();
+  assert.deepEqual(tableUsers, ['src/server/ai/assistant/conversationQueries.js', 'src/server/ai/assistant/conversationStore.js']);
+  // Depo tablo adını yalnızca "0017 uygulanmamış" hatasını tanımak için anar; SQL metni sorgu modülündedir.
+  const store = code(read('src/server/ai/assistant/conversationStore.js'));
+  assert.deepEqual(store.split('\n').filter((line) => line.includes('MR_AiConversation')),
+    ["const CONVERSATION_TABLES = ['MR_AiConversations', 'MR_AiConversationMessages'];"]);
+  assert.match(store, /CONVERSATION_TABLES\.some\(\(table\) => String\(entry\.message \|\| ''\)\.includes\(table\)\)/);
+  assert.doesNotMatch(store, /\b(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:TOP|INTO|FROM|dbo)\b/);
+  const queries = await import('../src/server/ai/assistant/conversationQueries.js');
+  const names = Object.keys(queries).sort();
+  assert.deepEqual(names, [
+    'AI_CONVERSATION_APPEND_ANSWER_SQL',
+    'AI_CONVERSATION_DELETE_SQL',
+    'AI_CONVERSATION_LIST_BEFORE_SQL',
+    'AI_CONVERSATION_LIST_SQL',
+    'AI_CONVERSATION_LOAD_SQL',
+    'AI_CONVERSATION_PREPARE_TURN_SQL'
+  ]);
+  for (const [name, text] of Object.entries(queries)) {
+    // Her deyim konuşmayı güvenilir Sicil'in sahipliğiyle sınırlar; ileti tabloları sahip konuşma üzerinden okunur.
+    assert.match(text, /OwnerSicil = @sicil/, name);
+    assert.doesNotMatch(text, /\$\{|EXEC\s*\(|sp_executesql/i, `${name}: dinamik SQL yoktur`);
+    for (const statement of text.split(';').map((part) => part.replace(/\s+/g, ' ').trim()).filter((part) => /MR_AiConversationMessages/.test(part) && /^(?:SELECT|UPDATE|DELETE)/.test(part))) {
+      assert.match(statement, /OwnerSicil = @sicil|c\.ConversationId = @conversationId|ConversationId = @conversationId/, `${name}: ${statement.slice(0, 80)}`);
+    }
+  }
+  // Sayfalar sınırlıdır: liste TOP (@limit), okuma TOP (@maxMessages), geçmiş TOP (@historyLimit).
+  assert.match(queries.AI_CONVERSATION_LIST_SQL, /SELECT TOP \(@limit\)/);
+  assert.match(queries.AI_CONVERSATION_LIST_BEFORE_SQL, /SELECT TOP \(@limit\)/);
+  assert.match(queries.AI_CONVERSATION_LOAD_SQL, /SELECT TOP \(@maxMessages\)/);
+  assert.match(queries.AI_CONVERSATION_PREPARE_TURN_SQL, /SELECT TOP \(@historyLimit\)/);
+  // Liste iletileri yüklemez.
+  assert.doesNotMatch(queries.AI_CONVERSATION_LIST_SQL, /MR_AiConversationMessages/);
+});
+
+test('0017 göçü sıralı, yinelenebilir, yapıyı doğrular ve yalnızca görünür ileti metnini saklar', () => {
+  const upgrade = read('database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql');
+  assert.match(upgrade, /^SET XACT_ABORT ON;$/m);
+  // Süzgeçli tekil dizinler bu oturum seçeneklerinin tamamını ister.
+  for (const option of ['QUOTED_IDENTIFIER ON', 'ANSI_NULLS ON', 'ANSI_PADDING ON', 'ANSI_WARNINGS ON', 'ARITHABORT ON', 'CONCAT_NULL_YIELDS_NULL ON', 'NUMERIC_ROUNDABORT OFF']) {
+    assert.match(upgrade, new RegExp(`^SET ${option};$`, 'm'), option);
+  }
+  assert.match(upgrade, /WHERE MigrationId = N'0016_ai_user_credentials'\s*\)\s*THROW 51017,/);
+  assert.match(upgrade, /IF OBJECT_ID\(N'dbo\.MR_AiConversations', N'U'\) IS NULL\s+CREATE TABLE dbo\.MR_AiConversations \(/);
+  assert.match(upgrade, /IF OBJECT_ID\(N'dbo\.MR_AiConversationMessages', N'U'\) IS NULL\s+CREATE TABLE dbo\.MR_AiConversationMessages \(/);
+  assert.match(upgrade, /IF NOT EXISTS \(\s*SELECT 1 FROM dbo\.MR_SchemaMigrations\s*WHERE MigrationId = N'0017_ai_assistant_conversations'\s*\)\s*INSERT dbo\.MR_SchemaMigrations/);
+  assert.match(upgrade, /BEGIN CATCH\s+IF XACT_STATE\(\) <> 0 ROLLBACK TRANSACTION;\s+THROW;/);
+  assert.match(upgrade, /REFERENCES dbo\.MR_AiConversations\(ConversationId\) ON DELETE CASCADE/);
+  assert.match(upgrade, /CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Turn\s+ON dbo\.MR_AiConversationMessages\(ConversationId, ClientTurnId\)\s+WHERE ClientTurnId IS NOT NULL;/);
+  assert.match(upgrade, /CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Reply\s+ON dbo\.MR_AiConversationMessages\(ReplyToMessageId\)\s+WHERE ReplyToMessageId IS NOT NULL;/);
+  assert.match(upgrade, /CREATE UNIQUE INDEX UX_MR_AiConversations_OwnerOrigin\s+ON dbo\.MR_AiConversations\(OwnerSicil, OriginTurnId\);/);
+  // Yapı doğrulaması göç kaydından ÖNCE yapılır.
+  const verification = upgrade.indexOf('DECLARE @RequiredColumns TABLE');
+  const marker = upgrade.indexOf('INSERT dbo.MR_SchemaMigrations');
+  assert.ok(verification > upgrade.indexOf('CREATE TABLE dbo.MR_AiConversationMessages ('));
+  for (const check of [
+    'c.is_identity <> 0', 'c.is_computed <> 0', 'DECLARE @RequiredIndexColumns TABLE', 'ic.is_descending_key <> r.IsDescending',
+    'f.delete_referential_action = 1', 'f.is_not_trusted = 0', 'k.definition COLLATE Latin1_General_BIN2 <> e.definition',
+    'i.filter_definition COLLATE Latin1_General_BIN2 <> e.filter_definition', 'd.definition COLLATE Latin1_General_BIN2 <> ed.definition'
+  ]) {
+    const at = upgrade.indexOf(check, verification);
+    assert.ok(at > verification && at < marker, check);
+  }
+  assert.doesNotMatch(upgrade, /\b(?:UPDATE|DELETE)\s+(?:FROM\s+)?dbo\.MR_(?!SchemaMigrations)/i, 'göç veriye dokunmaz');
+  // Akıl yürütme, ham akış, istek nesnesi ya da anahtar için sütun yoktur.
+  assert.doesNotMatch(upgrade, /\b(?:Reasoning|Thinking|RawStream|RequestJson|ApiKey|Prompt|SystemPrompt)\w*\s+(?:n?varchar|varbinary|nvarchar)/i);
+
+  const tableOf = (script, table) => {
+    const start = script.indexOf(`CREATE TABLE dbo.${table} (`);
+    assert.ok(start >= 0, table);
+    const lines = script.slice(start).split('\n').map((line) => line.trim());
+    return lines.slice(0, lines.indexOf(');'));
+  };
+  const createSql = read('database/MR_Create_Durable_Persistence.sql');
+  for (const table of ['MR_AiConversations', 'MR_AiConversationMessages']) {
+    assert.deepEqual(tableOf(createSql, table), tableOf(upgrade, table), `yeni kurulum ile göç aynı ${table} tablosunu kurar`);
+  }
+  for (const index of ['UX_MR_AiConversations_OwnerOrigin', 'IX_MR_AiConversations_OwnerRecent', 'UX_MR_AiConversationMessages_Turn', 'UX_MR_AiConversationMessages_Reply']) {
+    assert.ok(createSql.includes(index), `yeni kurulum ${index} dizinini kurar`);
+  }
+  assert.match(createSql, /\(N'0017_ai_assistant_conversations', N'[^']+'\)/);
+  // Geri alma betiği iletileri konuşmalardan ÖNCE kaldırır (yabancı anahtar).
+  const rollback = read('database/MR_Rollback_Durable_Persistence.sql');
+  const messagesDrop = rollback.indexOf("IF OBJECT_ID(N'dbo.MR_AiConversationMessages', N'U') IS NOT NULL DROP TABLE dbo.MR_AiConversationMessages;");
+  const conversationsDrop = rollback.indexOf("IF OBJECT_ID(N'dbo.MR_AiConversations', N'U') IS NOT NULL DROP TABLE dbo.MR_AiConversations;");
+  assert.ok(messagesDrop >= 0 && conversationsDrop > messagesDrop);
+});
+
+test('olağan anlık görüntü, kayıt ve depo yolları Rota AI çalışma zamanına bağlanmaz', () => {
+  const ordinary = [
+    ...sourceFiles('src/server/repository'),
+    ...sourceFiles('src/app/api/mergen-rota/snapshot'),
+    ...sourceFiles('src/app/api/mergen-rota/commit'),
+    ...sourceFiles('src/state'),
+    ...sourceFiles('src/data')
+  ];
+  assert.ok(ordinary.length > 10);
+  for (const file of ordinary) {
+    for (const { target, specifier } of importsOf(file)) {
+      assert.equal(Boolean(target && isAiPath(target)), false, `${toRelative(file)} → ${specifier}`);
+    }
+  }
+  // Konuşma SQL işleri kendi sınırlı kapısından geçer; model üretimi olağan SQL havuzunu tüketemez.
+  const service = code(read('src/server/ai/assistant/assistantService.js'));
+  assert.match(service, /const conversationGate = createAiSqlGate\(\{/);
+  assert.match(service, /conversationGate\.run\(sicil, scoped,/);
+  // SQL sürücüsüne doğrudan bağlanan Rota AI modülü yoktur.
+  for (const file of [...sourceFiles('src/server/ai'), ...sourceFiles('src/features/ai')]) {
+    for (const { specifier } of importsOf(file)) {
+      assert.equal(['mssql', 'msnodesqlv8', 'mssql/msnodesqlv8'].includes(specifier), false, toRelative(file));
+    }
+  }
+});
+
+test('yanıt çizimi güvenlidir: HTML enjeksiyonu, görsel ve betik şemalı bağlantı üretilmez', () => {
+  for (const file of sourceFiles('src/features/ai/assistant')) {
+    const name = toRelative(file);
+    const body = code(fs.readFileSync(file, 'utf8'));
+    assert.doesNotMatch(body, /dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|createContextualFragment|DOMParser|new Function|eval\(/, name);
+    assert.doesNotMatch(body, /<img\b|<iframe\b|<script\b/, name);
+  }
+  const renderer = code(read('src/features/ai/assistant/AssistantMarkdown.jsx'));
+  // Bağlantı hedefi yalnızca çözücünün güvenli adres denetiminden geçmiş değerdir.
+  assert.match(renderer, /<a key=\{key\} href=\{node\.href\} target="_blank" rel="noopener noreferrer nofollow" referrerPolicy="no-referrer" title=\{node\.href\}>/);
+  const parser = code(read('src/features/ai/assistant/assistantMarkdown.js'));
+  assert.match(parser, /const SAFE_PROTOCOLS = new Set\(\['http:', 'https:', 'mailto:'\]\);/);
+  assert.match(parser, /tokens\.push\(\{ type: 'link', href, image/);
+});
+
+test('yardımcı panel katman sözleşmesine bağlıdır ve ölçekli görünüm değişkenlerini kullanır', async () => {
+  const globals = read('src/app/globals.css');
+  const tokens = Object.fromEntries([...globals.matchAll(/--z-([a-z-]+):\s*(\d+);/g)].map((match) => [match[1], Number(match[2])]));
+  assert.ok(tokens.chrome < tokens.assistant && tokens.assistant < tokens.popover, 'yardımcı kabuğun üstünde, açılır panellerin altında');
+  assert.ok(tokens.assistant < tokens['drawer-backdrop'] && tokens.assistant < tokens.command && tokens.assistant < tokens.modal);
+  const css = read('src/app/styles/assistant.css');
+  const zIndexes = [...css.matchAll(/z-index:\s*([^;]+);/g)].map((match) => match[1].trim());
+  assert.deepEqual([...new Set(zIndexes)].sort(), ['var(--z-assistant)', 'var(--z-drawer)']);
+  const stripped = css.replaceAll('var(--app-viewport-h, 100vh)', 'var(--app-viewport-h)').replaceAll('var(--app-viewport-w, 100vw)', 'var(--app-viewport-w)');
+  assert.deepEqual(stripped.match(/\b(?:height|max-height|min-height|width|max-width|min-width|top|padding-top):[^;]*\d+v[hw]\b/g) || [], []);
+  assert.doesNotMatch(css, /text-transform:\s*uppercase/);
+  const { ASSISTANT_SHEET_QUERY } = await import('../src/features/ai/assistant/assistantInteraction.js');
+  assert.ok(css.includes(`@media ${ASSISTANT_SHEET_QUERY} {`), 'dar ekran sorgusu bileşenle ortaktır');
+  assert.match(read('src/app/layout.js'), /^import '\.\/styles\/assistant\.css';$/m);
+  // Panelin üst konumu üst çubuğun yüksekliğidir.
+  const topbarHeight = read('src/app/styles/shell.css').match(/\.topbar \{\s*height: (\d+px);/)[1];
+  assert.match(css, new RegExp(`--assistant-top: ${topbarHeight};`));
+  // Bildirim paneli açıkken üst çubuk açılır panel katmanına çıkar; yardımcı paneli onu örtmez.
+  assert.match(read('src/app/styles/shell.css'), /\.topbar:has\(\.schedule-request-popover\) \{\s*z-index: var\(--z-popover\);\s*\}/);
+  for (const file of cssFilesOutside('src/app/styles/assistant.css')) {
+    assert.doesNotMatch(read(file), /\.rota-assistant|\.assistant-md/, `${file} yardımcı panelin stil sahibi değildir`);
+  }
+});
+
+function cssFilesOutside(owner) {
+  return ['src/app/globals.css', ...fs.readdirSync(path.join(ROOT, 'src/app/styles')).map((name) => `src/app/styles/${name}`)]
+    .filter((file) => file.endsWith('.css') && file !== owner);
+}
+
+test('kullanıcıya dönük Rota AI metinleri aşama numarası ya da iç yol haritası terimi içermez', () => {
+  for (const file of [...sourceFiles('src/features/ai/assistant'), path.join(ROOT, 'src/server/ai/assistant/assistantPrompt.js')]) {
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /Phase\s*\d|Faz\s*\d|Aşama\s*\d/i, toRelative(file));
   }
 });

@@ -475,6 +475,60 @@ BEGIN TRY
             CHECK (LastValidationStatus IS NULL OR LastValidationStatus IN ('VALID','REJECTED','FORBIDDEN'))
     );
 
+    /* Rota AI konuşma geçmişi; sahibi güvenilir Sicil'dir. Yalnızca kullanıcıya
+       görünen ileti metni saklanır (bkz. docs/AI-PLATFORM.md · Konuşma geçmişi). */
+    CREATE TABLE dbo.MR_AiConversations (
+        ConversationId uniqueidentifier NOT NULL,
+        OwnerSicil int NOT NULL,
+        Title nvarchar(120) NOT NULL,
+        OriginTurnId uniqueidentifier NOT NULL,
+        MessageCount int NOT NULL
+            CONSTRAINT DF_MR_AiConversations_MessageCount DEFAULT (0),
+        CreatedAt datetime2(3) NOT NULL
+            CONSTRAINT DF_MR_AiConversations_CreatedAt DEFAULT SYSUTCDATETIME(),
+        UpdatedAt datetime2(3) NOT NULL
+            CONSTRAINT DF_MR_AiConversations_UpdatedAt DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_MR_AiConversations PRIMARY KEY (ConversationId),
+        CONSTRAINT CK_MR_AiConversations_Title CHECK (LEN(Title) > 0),
+        CONSTRAINT CK_MR_AiConversations_MessageCount CHECK (MessageCount >= 0)
+    );
+    CREATE UNIQUE INDEX UX_MR_AiConversations_OwnerOrigin
+        ON dbo.MR_AiConversations(OwnerSicil, OriginTurnId);
+    CREATE INDEX IX_MR_AiConversations_OwnerRecent
+        ON dbo.MR_AiConversations(OwnerSicil, UpdatedAt DESC, ConversationId DESC)
+        INCLUDE (Title, CreatedAt, MessageCount);
+
+    CREATE TABLE dbo.MR_AiConversationMessages (
+        MessageId uniqueidentifier NOT NULL,
+        ConversationId uniqueidentifier NOT NULL,
+        Sequence int NOT NULL,
+        Role varchar(10) NOT NULL,
+        Content nvarchar(max) NOT NULL,
+        ClientTurnId uniqueidentifier NULL,
+        ReplyToMessageId uniqueidentifier NULL,
+        Mode varchar(10) NULL,
+        FinishReason varchar(40) NULL,
+        CreatedAt datetime2(3) NOT NULL
+            CONSTRAINT DF_MR_AiConversationMessages_CreatedAt DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_MR_AiConversationMessages PRIMARY KEY NONCLUSTERED (MessageId),
+        CONSTRAINT UX_MR_AiConversationMessages_Sequence UNIQUE CLUSTERED (ConversationId, Sequence),
+        CONSTRAINT FK_MR_AiConversationMessages_Conversation FOREIGN KEY (ConversationId)
+            REFERENCES dbo.MR_AiConversations(ConversationId) ON DELETE CASCADE,
+        CONSTRAINT CK_MR_AiConversationMessages_Role CHECK (Role IN ('user','assistant')),
+        CONSTRAINT CK_MR_AiConversationMessages_Mode CHECK (Mode IS NULL OR Mode IN ('standard','deep')),
+        CONSTRAINT CK_MR_AiConversationMessages_Content CHECK (DATALENGTH(Content) BETWEEN 2 AND 128000),
+        CONSTRAINT CK_MR_AiConversationMessages_Sequence CHECK (Sequence > 0),
+        CONSTRAINT CK_MR_AiConversationMessages_Shape CHECK (
+            (Role = 'user' AND ClientTurnId IS NOT NULL AND ReplyToMessageId IS NULL AND Mode IS NULL AND FinishReason IS NULL)
+            OR (Role = 'assistant' AND ClientTurnId IS NULL AND ReplyToMessageId IS NOT NULL))
+    );
+    CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Turn
+        ON dbo.MR_AiConversationMessages(ConversationId, ClientTurnId)
+        WHERE ClientTurnId IS NOT NULL;
+    CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Reply
+        ON dbo.MR_AiConversationMessages(ReplyToMessageId)
+        WHERE ReplyToMessageId IS NOT NULL;
+
     CREATE TABLE dbo.MR_TaskDependencies (
         TaskDependencyId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskDependencies_Id DEFAULT NEWSEQUENTIALID(),
         ProjectId uniqueidentifier NOT NULL,
@@ -954,7 +1008,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0013_corporate_wbs_sync_freshness', N'CN43N başarılı tur tazeliği ile WBS içerik değişikliği zamanını ayırır'),
            (N'0014_task_creator_index', N'Görev oluşturan Sicil dizini: yetki ve anlık görüntü sorgularında tam tablo taramasını kaldırır'),
            (N'0015_assignment_coordination_and_presence', N'Kurum dışı atama koordinasyonu, görev bildirimleri, dayanıklı posta kuyruğu ve kullanıcı varlığı'),
-           (N'0016_ai_user_credentials', N'Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM, düz metin saklanmaz)');
+           (N'0016_ai_user_credentials', N'Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM, düz metin saklanmaz)'),
+           (N'0017_ai_assistant_conversations', N'Rota AI konuşma geçmişi: Sicil sahipli konuşmalar ve sıralı iletiler (akıl yürütme ve ham akış saklanmaz)');
 
     COMMIT TRANSACTION;
 END TRY

@@ -5,7 +5,7 @@ import { Icons } from '../icons';
 import { navigationItems, PAGE_META } from './navigation';
 
 /* ── Command palette (Cmd+K) ────────────────────────── */
-export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, tasks, navItems = navigationItems(false, false) }) {
+export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, onOpenAssistant = null, tasks, navItems = navigationItems(false, false) }) {
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef(null);
@@ -41,6 +41,8 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, ta
       action: () => { onNavigate(n.id); onClose(); }
     }));
     const themes = [
+      // Paleti kapatmak odağı açana geri verir; panel odağı yazma alanına kendisi taşır.
+      ...(onOpenAssistant ? [{ kind: 'cmd', icon: 'Sparkles', label: 'Rota AI’ye sor', sub: 'Yardımcı paneli aç', action: () => { onClose(); onOpenAssistant(); } }] : []),
       { kind: 'cmd', icon: 'Sun', label: 'Tema: Açık', action: () => { onSetTheme('light'); onClose(); } },
       { kind: 'cmd', icon: 'Moon', label: 'Tema: Koyu', action: () => { onSetTheme('dark'); onClose(); } }
     ];
