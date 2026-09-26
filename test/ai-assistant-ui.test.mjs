@@ -527,7 +527,7 @@ test('Demo Kipinde panel açılır ama hiçbir istek gönderilmez; açıklama g�
   assert.equal(findElement(panel.output, (node) => node.props?.['aria-label'] === 'Yeni konuşma'), null);
 });
 
-test('panel açılıp kapanınca durum korunur; kapalı panel hiçbir şey çizmez; Gerçek Sistem’de hazırlık ve liste bir kez okunur', async (t) => {
+test('panel açılıp kapanınca durum korunur; kapalı panel hiçbir şey çizmez; Gerçek Sistem’de hazırlık yeniden, liste bir kez okunur', async (t) => {
   withDataMode(t, 'actual');
   const calls = stubFetch(t, (call) => {
     if (call.url.endsWith('/assistant')) return Response.json({ assistant: READINESS });
@@ -557,7 +557,8 @@ test('panel açılıp kapanınca durum korunur; kapalı panel hiçbir şey çizm
   probe.render();
   await drain();
   assert.equal(probe.output.assistant.controller, controller, 'denetleyici (konuşma durumu) korunur');
-  assert.equal(calls.length, 2, 'yeniden açılış hazırlık ve listeyi yeniden okumaz');
+  assert.equal(calls.length, 3, 'yeniden açılış hazırlığı doğrular, listeyi korur');
+  assert.equal(calls.filter((call) => call.url.endsWith('/conversations')).length, 1);
 });
 
 test('gönderim yalnızca konuşma, tur, ileti ve kipi taşır; model adı, profil ya da anahtar göndermez', async (t) => {
@@ -765,4 +766,204 @@ test('panel başlığındaki eylemler etiketlidir; geçmiş görünümü düğme
   assert.equal(controller.getState().view, 'history');
   assert.ok(findElement(panel.output, (node) => node.props?.['aria-live'] === 'polite'), 'tek, nazik canlı bölge vardır');
   assert.ok(React.isValidElement(panel.output));
+});
+
+test('geciken konuşma okuması tamamlanan yanıtı yanıtsız göstermez', async () => {
+  let resolveRead;
+  let reads = 0;
+  const api = fakeApi({ loadAssistantConversationRequest: () => {
+    reads += 1;
+    if (reads === 1) return new Promise((resolve) => { resolveRead = resolve; });
+    return Promise.resolve({ ok: true, conversation: { id: CONVERSATION_A, title: 'Güncel' }, messages: [
+      { id: 'user', role: 'user', sequence: 1, content: 'Soru', turnId: api.turns[0].input.turnId },
+      { id: 'answer', role: 'assistant', sequence: 2, replyToId: 'user', content: 'Tam yanıt' }
+    ] });
+  } });
+  const { controller, state } = await readyController({ api });
+  controller.send('Soru');
+  const [turn] = api.turns;
+  turn.emit('accepted', acceptedData(CONVERSATION_A, turn, 'Soru'));
+  controller.newConversation();
+  const opening = controller.openConversation(CONVERSATION_A);
+  turn.emit('delta', { text: 'Tam yanıt' });
+  turn.resolve(doneResult(CONVERSATION_A));
+  await drain();
+  resolveRead({ ok: true, conversation: { id: CONVERSATION_A, title: 'Eski' }, messages: [
+    { id: 'user', role: 'user', sequence: 1, content: 'Soru', turnId: turn.input.turnId }
+  ] });
+  await opening;
+  assert.equal(reads, 2);
+  assert.equal(state().active.turns[0].answer.status, 'complete');
+  assert.equal(state().active.turns[0].answer.content, 'Tam yanıt');
+});
+
+test('geciken ilk liste yeni konuşmayı ve güncel başlığı korur', async () => {
+  let resolveList;
+  const api = fakeApi({ listAssistantConversationsRequest: () => new Promise((resolve) => { resolveList = resolve; }) });
+  const controller = createAssistantController({ api, createId });
+  const activation = controller.activate();
+  await drain();
+  controller.send('Yeni');
+  const [turn] = api.turns;
+  turn.emit('accepted', acceptedData(CONVERSATION_A, turn, 'Yeni'));
+  turn.resolve(doneResult(CONVERSATION_A));
+  await drain();
+  resolveList({ ok: true, conversations: [{ id: CONVERSATION_A, title: 'Eski' }, { id: CONVERSATION_B, title: 'Diğer' }], nextCursor: 'cursor' });
+  await activation;
+  assert.deepEqual(controller.getState().list.items.map((item) => item.title), ['Başlık', 'Diğer']);
+  assert.equal(controller.getState().list.nextCursor, 'cursor');
+});
+
+test('bağlanmamış başarısız taslaktan yeni ileti eski turu taşımaz', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Eski');
+  api.turns[0].resolve({ ok: false, code: 'NETWORK', retryable: true });
+  await drain();
+  assert.equal(controller.send('Yeni').ok, true);
+  assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Yeni']);
+});
+
+test('Durdur sonrasında istek bitene kadar yeniden gönderilemez; geç çatışma yeniden denenebilir', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [turn] = api.turns;
+  turn.emit('accepted', acceptedData(CONVERSATION_A, turn, 'Soru'));
+  controller.stop();
+  assert.equal(controller.canSend(), false);
+  assert.equal(controller.retry(turn.input.turnId).ok, false);
+  turn.resolve({ ok: false, cancelled: true });
+  await drain();
+  assert.equal(controller.retry(turn.input.turnId).ok, true);
+  api.turns[1].resolve({ ok: false, code: 'CONFLICT', reason: 'GENERATION_IN_PROGRESS' });
+  await drain();
+  assert.equal(state().active.turns[0].answer.error.retryable, true);
+});
+
+test('silme sürerken gönderim engellenir ve eski liste silineni geri getiremez', async () => {
+  let finishDelete;
+  let finishList;
+  const api = fakeApi({ deleteAssistantConversationRequest: () => new Promise((resolve) => { finishDelete = resolve; }) });
+  const { controller, state } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  api.listAssistantConversationsRequest = () => new Promise((resolve) => { finishList = resolve; });
+  const listing = controller.refreshList();
+  const deletion = controller.deleteConversation(CONVERSATION_A);
+  assert.equal(controller.send('Silinen konuşmaya').ok, false);
+  finishDelete({ ok: true });
+  await deletion;
+  finishList({ ok: true, conversations: [{ id: CONVERSATION_A, title: 'Silindi' }], nextCursor: null });
+  await listing;
+  assert.deepEqual(state().list.items, []);
+});
+
+test('yalnız derin kip kullanılabiliyorsa gönderim o kiple yapılır', async () => {
+  const api = fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: {
+    ...READINESS, modes: [{ id: 'standard', available: false }, { id: 'deep', available: true }]
+  } }) });
+  const { controller } = await readyController({ api });
+  controller.send('Soru');
+  assert.equal(api.turns[0].input.mode, 'deep');
+});
+
+test('hazırlık yenilemesi anahtar kaldırılınca gönderimi kapatır', async () => {
+  const { controller, api } = await readyController();
+  api.loadAssistantReadinessRequest = async () => ({ ok: true, assistant: { ...READINESS, available: false, reason: 'AI_KEY_MISSING' } });
+  await controller.activate({ refresh: true });
+  assert.equal(controller.canSend(), false);
+});
+
+test('artan Markdown çözümlemesi tam çözümle eşleşir ve biten blokları yeniden kullanır', async () => {
+  const { createAssistantMarkdownParser } = await import('../src/features/ai/assistant/assistantMarkdown.js');
+  const parse = createAssistantMarkdownParser();
+  const source = '# Başlık\n\nBir **paragraf**.\n\n- bir\n  - alt\n\n- iki\n\n> alıntı\n> devam\n\n|a|b|\n|-|-|\n|1|2|\n\n```js\nconst a = 1;\n```\n\nSon <https://example.com>.';
+  for (let size = 1; size <= source.length; size += 1) {
+    assert.deepEqual(parse(source.slice(0, size)), parseAssistantMarkdown(source.slice(0, size)), `uzunluk ${size}`);
+  }
+  const first = parse(source)[0];
+  assert.equal(parse(source + '\n\nYeni paragraf')[0], first);
+  assert.deepEqual(parse('Yeni yanıt'), parseAssistantMarkdown('Yeni yanıt'));
+});
+
+test('açısal bağlantı taraması eksik veya çok uzaktaki kapanışta doğrusal kalır', () => {
+  const original = String.prototype.indexOf;
+  let searched = 0;
+  String.prototype.indexOf = function (needle, from) {
+    if (needle === '>') searched += this.length - (from || 0);
+    return original.call(this, needle, from);
+  };
+  try {
+    for (const suffix of ['', '>']) {
+      const text = '<'.repeat(64000) + suffix;
+      assert.equal(parseInline(text).map((node) => node.value).join(''), text);
+    }
+    assert.ok(searched <= 128002, `taranan karakter ${searched}`);
+  } finally {
+    String.prototype.indexOf = original;
+  }
+});
+
+test('masaüstünde panel dışındaki Escape kapatır; IME ve önlenen olaylar kapatmaz', async (t) => {
+  const previous = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousObserver = globalThis.MutationObserver;
+  globalThis.document = { body: { classList: { contains: () => false } } };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  t.after(() => { globalThis.document = previousDocument; globalThis.MutationObserver = previousObserver; });
+  const events = new EventTarget();
+  globalThis.window = events;
+  t.after(() => { globalThis.window = previous; });
+  const { controller } = await readyController();
+  let closed = 0;
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close: () => { closed += 1; } };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  t.after(() => panel.unmount());
+  const escape = (extra = {}) => {
+    const event = new Event('keydown', { cancelable: true });
+    Object.assign(event, { key: 'Escape', ...extra });
+    return event;
+  };
+  events.dispatchEvent(escape({ isComposing: true }));
+  events.dispatchEvent(escape({ keyCode: 229 }));
+  const prevented = escape();
+  prevented.preventDefault();
+  events.dispatchEvent(prevented);
+  assert.equal(closed, 0);
+  events.dispatchEvent(escape());
+  assert.equal(closed, 1);
+  panel.render({ assistant: { ...assistant, open: false } });
+  events.dispatchEvent(escape());
+  assert.equal(closed, 1, 'kapalı panel dinleyiciyi bırakır');
+});
+
+test('modal odak tuzağı gezinme kapanışında odağı geri almaz', async (t) => {
+  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+  const previous = globalThis.document;
+  let restored = 0;
+  const opener = { isConnected: true, focus() { restored += 1; } };
+  globalThis.document = { activeElement: opener, addEventListener() {}, removeEventListener() {} };
+  t.after(() => { globalThis.document = previous; });
+  const restoreFocusEnabledRef = { current: true };
+  const props = { containerRef: { current: null }, initialFocusRef: { current: null }, restoreFocusRef: { current: opener }, restoreFocusEnabledRef, enabled: true };
+  const probe = mountComponent((input) => { useModalFocusTrap(input); return null; }, props);
+  t.after(() => probe.unmount());
+  restoreFocusEnabledRef.current = false;
+  probe.render({ ...props, enabled: false });
+  assert.equal(restored, 0);
+  restoreFocusEnabledRef.current = true;
+  probe.render(props);
+  probe.render({ ...props, enabled: false });
+  assert.equal(restored, 1, 'olağan kapanış hâlâ odağı geri verir');
+});
+
+test('anahtar değişiminde son hazırlık okuması kazanır', async () => {
+  const { controller, api } = await readyController();
+  const pending = [];
+  api.loadAssistantReadinessRequest = () => new Promise((resolve) => pending.push(resolve));
+  const first = controller.activate({ refresh: true });
+  const second = controller.activate({ refresh: true });
+  pending[1]({ ok: true, assistant: { ...READINESS, available: false, reason: 'AI_KEY_MISSING' } });
+  await second;
+  pending[0]({ ok: true, assistant: READINESS });
+  await first;
+  assert.equal(controller.canSend(), false);
 });

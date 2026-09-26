@@ -447,14 +447,16 @@ test('konuşma tabloları kurulmamışsa (0017 uygulanmamış) anlaşılır yap�
 
 test('model yanıtı tamamladıktan sonra istemci ayrılsa da yanıt kaybolmaz', async (t) => {
   const { db, provider } = createAiStack(t);
-  let releaseAppend;
-  db.aiConversationHooks = { beforeAppend: () => { releaseAppend?.(); } };
+  let unblock;
+  const blocked = new Promise((resolve) => { unblock = resolve; });
+  db.queryBarrier = { match: (sql) => sql.includes('AS AnswerPersisted'), entered: 0, released: blocked };
   provider.enqueue({ type: 'stream', text: 'Tamamlanmış yanıt' });
   const controller = new AbortController();
-  const appended = new Promise((resolve) => { releaseAppend = resolve; });
   const response = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: 'Soru', mode: 'standard', conversationId: null }, { signal: controller.signal }));
-  await appended;
+  await until(() => db.queryBarrier.entered === 1);
+  assert.deepEqual(db.aiConversationMessages.map((row) => row.Role), ['user']);
   controller.abort();
+  unblock();
   await response.text().catch(() => {});
   await until(() => activeAssistantGenerationCountForTests() === 0);
   assert.deepEqual(db.aiConversationMessages.map((row) => row.Role), ['user', 'assistant']);

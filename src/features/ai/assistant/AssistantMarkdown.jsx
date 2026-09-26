@@ -2,7 +2,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Icons } from '../../../components/icons';
 import { copyTextToClipboard } from './assistantInteraction.js';
-import { parseAssistantMarkdown } from './assistantMarkdown.js';
+import { createAssistantMarkdownParser } from './assistantMarkdown.js';
 
 /**
  * Rota AI yanıtının çizimi. Ağaç `assistantMarkdown.js` tarafından üretilir;
@@ -137,7 +137,8 @@ const MarkdownBlock = memo(
 );
 
 export function AssistantMarkdown({ text }) {
-  const blocks = useMemo(() => parseAssistantMarkdown(text), [text]);
+  const parse = useMemo(() => createAssistantMarkdownParser(), []);
+  const blocks = useMemo(() => parse(text), [parse, text]);
   return (
     <div className="assistant-md">
       {blocks.map((block, index) => <MarkdownBlock key={index} blockKey={`b${index}`} block={block} />)}

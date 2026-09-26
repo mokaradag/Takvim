@@ -127,3 +127,11 @@ http://<ROTA_SERVER>:8008/rota/
 ```
 
 The canonical production address remains the external HTTPS URL.
+
+### Rota AI için tek süreç zorunluluğu
+
+Aynı konuşma veritabanına bağlı `/api/mergen-rota/ai/assistant` ve tüm alt
+uçlarını tek bir Node.js sürecine yönlendirin. Bu uçlarda çok sunuculu upstream,
+PM2 cluster veya worker dağıtımı kullanmayın; yalnız oturum yapışkanlığı yeterli
+değildir. Silme ve tur istekleri farklı süreçlere gidemez. Dağıtım geçişinde eski
+süreci durdurmadan yeni sürece AI trafiği açmayın. Ayrıntılar: `AI-PLATFORM.md` §18.14.

@@ -46,7 +46,7 @@ export function resolveFocusTrapTarget({ focusableCount, activeIndex, containsAc
  * arkadaki uygulama kabuğuna sekme ile çıkabiliyordu. Bu kanca paylaşımlıdır ki
  * her modal aynı davranışı yeniden yazmak zorunda kalmasın.
  */
-export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, onClose, blocked = false, enabled = true }) {
+export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, restoreFocusEnabledRef = null, onClose, blocked = false, enabled = true }) {
   const scopeId = useId();
   const openerRef = useRef(null);
   const closeRef = useRef(onClose);
@@ -61,12 +61,14 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
     if (!enabled || typeof document === 'undefined') return undefined;
     openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
     const restoreFocus = restoreFocusRef?.current;
+    const shouldRestoreFocus = () => restoreFocusEnabledRef?.current !== false;
     initialFocusRef.current?.focus();
     return () => {
+      if (!shouldRestoreFocus()) return;
       const opener = openerRef.current?.isConnected ? openerRef.current : restoreFocus;
       if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
     };
-  }, [initialFocusRef, restoreFocusRef, enabled]);
+  }, [initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled]);
 
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;
@@ -77,6 +79,7 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
     const handleKeyDown = (event) => {
       if (activeTraps[activeTraps.length - 1] !== token || event.defaultPrevented) return;
       if (event.key === 'Escape') {
+        if (event.isComposing || event.keyCode === 229) return;
         if (!event.defaultPrevented && !blockedRef.current) {
           event.preventDefault();
           closeRef.current?.();

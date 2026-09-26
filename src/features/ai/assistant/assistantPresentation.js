@@ -126,9 +126,9 @@ export function assistantFailureView(result) {
         tone: 'warn',
         title: result?.reason === 'CONVERSATION_FULL' ? 'Konuşma çok uzadı' : 'İşlem şu anda yapılamıyor',
         message: result?.reason === 'GENERATION_IN_PROGRESS'
-          ? 'Bu konuşmada başka bir pencerede yanıt üretiliyor. Tamamlanmasını bekleyip konuşmayı yeniden açın.'
+          ? 'Bu konuşmada başka bir pencerede yanıt üretiliyor. Tamamlanmasını bekleyip yeniden deneyin.'
           : serverMessage(result, 'İşlem şu anda yapılamıyor.'),
-        retryable: false,
+        retryable: result?.reason === 'GENERATION_IN_PROGRESS',
         action: result?.reason === 'CONVERSATION_FULL' ? 'new-conversation' : null
       };
     case 'NOT_FOUND':

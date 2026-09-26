@@ -974,7 +974,8 @@ Bilinçli olarak **yapılmayanlar**:
   çözümlemesi seyrektir. Ad çözümlemesinin yavaşlayabileceği ortamlarda
   yapay zekâ ucunun adı güvenilir biçimde çözülmeli ve gerekirse hizmet
   ortamında `UV_THREADPOOL_SIZE` artırılmalıdır.
-- **Birden çok örnek:** kapasite sınırları ve sağlık özeti süreç başınadır.
+- **Aşama 2 dağıtım şartı:** aynı konuşma veritabanına hizmet veren Rota AI uçları
+  tek bir Node.js sürecine yönlendirilmelidir; ayrıntılar §18.14. Kapasite ve sağlık özeti süreç başınadır.
 - **Ana anahtar yedeği:** kaybedilirse kişisel anahtarlar kurtarılamaz;
   kullanıcılar anahtarlarını yeniden kaydeder.
 
@@ -1129,8 +1130,9 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
 - **Konuşmada tek üretim.** Aynı konuşmada ikinci tur, süren üretim bitmeden
   `CONFLICT` (`GENERATION_IN_PROGRESS`) alır; arayüz yanıt sürerken taslak
   yazdırır ama göndertmez (Durdur ya da tamamlanmayı bekler). Kayıt süreç
-  başınadır ve anahtarları Sicil içerir; birden çok örnekte de aynı tura ikinci
-  yanıt yazılamaz (veritabanı tekilliği). Farklı konuşmalar ve farklı
+  başınadır ve anahtarları Sicil içerir. Bu nedenle §18.14 tek süreç şartı
+  zorunludur. Tur başına veritabanı tekilliği farklı turların eşzamanlı
+  üretimini engellemez. Farklı konuşmalar ve farklı
   kullanıcılar Aşama 1 kapasite sınırları içinde birlikte yürür.
 - **Durdur.** Tarayıcı isteği keser → `request.signal` → akış iptali →
   ağ geçidinin süre sınırı sinyali → sağlayıcı bağlantısı kapanır. Kapasite
@@ -1315,6 +1317,18 @@ güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
   tarayıcıda tek olay 1 MiB, yanıt metni 64.000 karakter.
 
 ### 18.14 Dağıtım
+
+**Zorunlu topoloji:** aynı konuşma veritabanı için bütün Rota AI uçları
+(hazırlık, liste, okuma, tur ve silme) **tek bir Node.js sürecine** gitmelidir.
+PM2 cluster, birden çok worker, replica veya aynı veritabanını kullanan ikinci
+TEST/üretim örneğine AI trafiği dağıtmak desteklenmez. Yalnız tarayıcı oturumuna
+yapışkan yönlendirme yeterli değildir: aynı Sicil başka tarayıcıdan bağlanabilir.
+İkinci örnek gerekiyorsa ayrı konuşma veritabanı kullanın veya bütün assistant
+uçlarını tek AI sürecine yönlendirin. Yeniden dağıtımda yeni AI sürecine trafik
+vermeden önce eski süreçteki üretimleri bitirin/iptal edin ve eski süreci durdurun;
+AI trafiğinde rolling overlap veya etkin-etkin failover kullanmayın.
+Bu şart, süreç içi üretim hakkı ve silme iptalinin aynı yerde uygulanmasını sağlar;
+çok örnekli destek için önce paylaşılan üretim kirası ve iptal koordinasyonu gerekir.
 
 1. 0016 uygulanmış veritabanının yedeğini alın.
 2. `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` betiğini

@@ -230,7 +230,13 @@ export async function loadAssistantReadiness({ signal = null } = {}) {
     label: assistantModeLabel(mode),
     available: routeAvailable(registry, mode)
   }));
-  const available = modes[0].available;
+  const sicil = await getTrustedCurrentSicil();
+  // İçerik okumadan her iki konuşma tablosunu doğrula.
+  const schema = await withConversationSql(sicil, signal, (scope) => loadConversation(directExecutor(scope), sicil, {
+    conversationId: '00000000-0000-0000-0000-000000000000', maxMessages: 0
+  }));
+  if (!schema.knownSicil) throw unknownSicil();
+  const available = modes.some((mode) => mode.available);
   return {
     available,
     reason: available ? null : 'PROFILE_UNAVAILABLE',

@@ -259,3 +259,15 @@ test('JSON uçları beklenen biçimi doğrular; biçimsiz başarılı yanıt ba�
   assert.equal((await deleteAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE);
   for (const call of calls) assert.doesNotMatch(call.url, /\?/);
 });
+
+test('JSON olmayan geçici HTTP hataları yeniden denenebilir', async (t) => {
+  const previous = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previous; });
+  for (const status of [429, 500, 502, 503, 504, 403]) {
+    globalThis.fetch = async () => new Response('<html>Proxy</html>', { status });
+    const result = await streamAssistantTurnRequest({ turnId: TURN_ID, message: 'Soru', mode: 'standard' });
+    assert.equal(result.retryable, status !== 403, String(status));
+  }
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'REQUEST_FAILED', details: { retryable: false } } }), { status: 503 });
+  assert.equal((await streamAssistantTurnRequest({ turnId: TURN_ID, message: 'Soru', mode: 'standard' })).retryable, false);
+});

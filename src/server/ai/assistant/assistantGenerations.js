@@ -14,8 +14,9 @@ import { ServerPersistenceError } from '../../errors.js';
  * kayıttan öğrenemez. Her kaydın kendi iptal sinyali vardır; konuşma silinirken
  * süren üretimi durdurmak için kullanılır.
  *
- * Kayıt süreç başınadır; birden çok uygulama örneğinde aynı tura ikinci yanıt
- * yine de yazılamaz (veritabanında tur başına tek yanıt tekilliği).
+ * Dağıtım şartı: aynı konuşma veritabanının tüm AI uçları tek Node.js
+ * sürecine gider (docs/AI-PLATFORM.md §18.14). Tur tekilliği süreçler arası
+ * üretim kilidi değildir; çok örnekli AI dağıtımı desteklenmez.
  */
 
 const STATE_KEY = Symbol.for('mergen-rota.ai-assistant-generations');

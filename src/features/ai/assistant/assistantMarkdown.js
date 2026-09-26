@@ -193,6 +193,7 @@ function tokenizeInline(text, { links, budget }) {
   const tokens = [];
   const runs = backtickRuns(text);
   const pairs = links && text.includes('[') ? bracketPairs(text, runs) : null;
+  let nextAngleClose = -2;
   let index = 0;
   while (index < text.length) {
     const char = text[index];
@@ -240,8 +241,10 @@ function tokenizeInline(text, { links, budget }) {
       }
     }
     if (links && char === '<') {
-      const end = text.indexOf('>', index + 1);
-      const href = end > index ? safeLinkHref(text.slice(index + 1, end)) : null;
+      if (nextAngleClose !== -1 && nextAngleClose <= index) nextAngleClose = text.indexOf('>', index + 1);
+      const end = nextAngleClose;
+      const href = end > index && end - index <= MARKDOWN_LIMITS.maxLinkChars + 1
+        ? safeLinkHref(text.slice(index + 1, end)) : null;
       if (href) {
         tokens.push({ type: 'link', href, image: false, children: [textNode(text.slice(index + 1, end))] });
         index = end + 1;
@@ -586,4 +589,28 @@ export function inlineText(nodes = []) {
     if (node.type === 'break') return '\n';
     return inlineText(node.children);
   }).join('');
+}
+
+/** Tamamlanan blokları korur; son iki blok ileri bakış için yeniden çözülür. */
+export function createAssistantMarkdownParser() {
+  let previous = '';
+  let blocks = [];
+  let starts = [];
+  return (text) => {
+    const normalized = String(text ?? '').replace(/\r\n?/g, '\n').split('\n').map(expandLeadingTabs).join('\n');
+    if (normalized === previous) return blocks;
+    const keep = normalized.startsWith(previous) ? Math.max(0, blocks.length - 2) : 0;
+    const offset = keep ? starts[keep] : 0;
+    const tail = parseBlockLines(normalized.slice(offset).split('\n'), 0);
+    let cursor = offset;
+    const tailStarts = tail.map((block) => {
+      const start = normalized.indexOf(block.source, cursor);
+      cursor = start + block.source.length;
+      return start;
+    });
+    blocks = [...blocks.slice(0, keep), ...tail];
+    starts = [...starts.slice(0, keep), ...tailStarts];
+    previous = normalized;
+    return blocks;
+  };
 }

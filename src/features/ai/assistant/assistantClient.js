@@ -267,7 +267,11 @@ export async function streamAssistantTurnRequest({
       }
     }
     cleanup();
-    return { ...failure('REQUEST_FAILED'), ...errorFields(body), status: response.status, phase: 'request' };
+    const fields = errorFields(body);
+    if (typeof body?.error?.details?.retryable !== 'boolean') {
+      fields.retryable = response.status >= 500 || response.status === 429;
+    }
+    return { ...failure('REQUEST_FAILED'), ...fields, status: response.status, phase: 'request' };
   }
 
   const type = String(response.headers.get('content-type') || '').toLowerCase();

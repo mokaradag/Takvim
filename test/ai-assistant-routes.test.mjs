@@ -449,3 +449,22 @@ test('konuşma okuma ve silme uçları kimlik biçimini doğrular', async (t) =>
     assert.equal(response.body.error.details.reason, 'CONVERSATION_ID_INVALID');
   }
 });
+
+test('0017 eksikken hazırlık açık görünmez ve model çağrılmaz', async (t) => {
+  const { provider } = createAiStack(t, { seed: { aiConversationSchemaMissing: true } });
+  const result = await assistantReadiness();
+  assert.equal(result.body.error.code, 'AI_CONFIGURATION_ERROR');
+  assert.equal(result.body.error.details.reason, 'CONVERSATION_SCHEMA_MISSING');
+  assert.equal(provider.calls.length, 0);
+});
+
+test('Standart kapalıyken kullanılabilir derin kip genel hazırlığı açar', async (t) => {
+  const file = await tempRegistry(t, { ...DEFAULT_AI_MODEL_REGISTRY, profiles: {
+    ...DEFAULT_AI_MODEL_REGISTRY.profiles,
+    'chat.general': { ...DEFAULT_AI_MODEL_REGISTRY.profiles['chat.general'], enabled: false }
+  } });
+  createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  const result = await assistantReadiness();
+  assert.equal(result.body.assistant.available, true);
+  assert.deepEqual(result.body.assistant.modes.map((mode) => mode.available), [false, true]);
+});

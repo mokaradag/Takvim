@@ -108,10 +108,15 @@ export function createAssistantController({
   let session = 0;
   let viewToken = 0;
   let listToken = 0;
+  let readinessToken = 0;
+  let readinessLoad = null;
   let runCounter = 0;
   let announcementCounter = 0;
   let viewLoad = null;
   const loads = new Set();
+  const completedVersions = new Map();
+  const listMutations = new Map();
+  let mutationVersion = 0;
 
   const draft = () => ({ key: `draft:${createId()}`, id: null, title: ASSISTANT_DEFAULT_TITLE, loading: false, failure: null, turns: [] });
   state.active = draft();
@@ -144,6 +149,7 @@ export function createAssistantController({
 
   function withListConversation(current, conversation) {
     if (!conversation?.id) return current;
+    listMutations.set(conversation.id, ++mutationVersion);
     const others = current.items.filter((item) => item.id !== conversation.id);
     return { ...current, items: [conversation, ...others] };
   }
@@ -209,7 +215,7 @@ export function createAssistantController({
   }
 
   function onRunEvent(run, event) {
-    if (!alive(run)) return;
+    if (!alive(run) || run.stopping) return;
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
       if (run.key !== conversation.id) rekey(run, conversation);
@@ -241,6 +247,8 @@ export function createAssistantController({
     runs.delete(run.token);
     run.cancelFlush?.();
     const text = run.text;
+    completedVersions.set(run.key, (completedVersions.get(run.key) || 0) + 1);
+    if (run.stopping) result = { ok: false, code: 'REQUEST_CANCELLED', cancelled: true };
     if (result.ok) {
       const { assistantMessage, conversation } = result.done;
       update((current) => ({
@@ -335,7 +343,8 @@ export function createAssistantController({
 
   function canSend() {
     return state.status === 'ready' && Boolean(state.readiness?.available)
-      && !state.active.loading && !state.active.failure && !state.running[state.active.key];
+      && !state.active.loading && !state.active.failure && !state.running[state.active.key]
+      && !state.deleting[state.active.id];
   }
 
   /** Yeni ileti; boş/yalnızca boşluk ve sınırı aşan ileti gönderilmez, çift gönderim engellenir. */
@@ -343,6 +352,9 @@ export function createAssistantController({
     const normalized = normalizeAssistantMessage(rawText);
     if (!normalized.ok) return { ok: false, reason: normalized.reason, message: normalized.message };
     if (!canSend()) return { ok: false, reason: 'NOT_READY', message: null };
+    if (!state.active.id && state.active.turns.length) {
+      update((current) => ({ ...current, active: { ...current.active, turns: [] } }));
+    }
     startRun({ content: normalized.value, turnId: createId() });
     return { ok: true };
   }
@@ -359,15 +371,15 @@ export function createAssistantController({
   function stop(key = state.active.key) {
     const entry = state.running[key];
     const run = entry ? runs.get(entry.token) : null;
-    if (!run) return false;
-    runs.delete(run.token);
+    if (!run || run.stopping) return false;
+    run.stopping = true;
     run.cancelFlush?.();
     run.controller.abort();
     const text = run.text;
     const failure = assistantFailureView({ code: 'REQUEST_CANCELLED' });
     update((current) => ({
       ...current,
-      running: setRunning(current, key, null),
+      running: setRunning(current, key, { ...current.running[key], phase: 'stopping' }),
       active: patchTurn(current, run, (turn) => ({
         ...turn,
         user: { ...turn.user, pending: false },
@@ -405,7 +417,7 @@ export function createAssistantController({
     const entry = state.running[key];
     const run = entry ? runs.get(entry.token) : null;
     if (!run) return turns;
-    const status = run.phase === 'streaming' ? 'streaming' : 'waiting';
+    const status = run.stopping ? 'stopped' : run.phase === 'streaming' ? 'streaming' : 'waiting';
     const exists = turns.some((turn) => turn.key === run.turnKey);
     const live = (turn) => ({ ...turn, answer: { status, content: run.text, error: null, mode: run.mode } });
     return exists
@@ -429,7 +441,13 @@ export function createAssistantController({
     }));
     const load = trackLoad();
     viewLoad = load;
-    const result = await api.loadAssistantConversationRequest(conversationId, { signal: load.signal });
+    let result;
+    let version;
+    do {
+      version = completedVersions.get(conversationId) || 0;
+      result = await api.loadAssistantConversationRequest(conversationId, { signal: load.signal });
+      if (token !== viewToken || ownSession !== session) break;
+    } while (result.ok && version !== (completedVersions.get(conversationId) || 0));
     load.done();
     if (token !== viewToken || ownSession !== session) return;
     viewLoad = null;
@@ -465,6 +483,7 @@ export function createAssistantController({
     const token = listToken;
     const ownSession = session;
     const cursor = more ? state.list.nextCursor : null;
+    const startedVersion = mutationVersion;
     update((current) => ({ ...current, list: { ...current.list, loading: !more, loadingMore: more, error: null } }));
     const load = trackLoad();
     const result = await api.listAssistantConversationsRequest({ cursor, signal: load.signal });
@@ -475,12 +494,14 @@ export function createAssistantController({
       return;
     }
     update((current) => {
-      const seen = new Set(more ? current.list.items.map((item) => item.id) : []);
-      const incoming = result.conversations.filter((item) => !seen.has(item.id));
+      const preserved = more ? current.list.items : current.list.items.filter((item) => (listMutations.get(item.id) || 0) > startedVersion);
+      const seen = new Set(preserved.map((item) => item.id));
+      const incoming = result.conversations.filter((item) => !seen.has(item.id)
+        && !((listMutations.get(item.id) || 0) > startedVersion));
       return {
         ...current,
         list: {
-          items: more ? [...current.list.items, ...incoming] : result.conversations,
+          items: [...preserved, ...incoming],
           nextCursor: result.nextCursor,
           loaded: true,
           loading: false,
@@ -496,17 +517,21 @@ export function createAssistantController({
    * okunur; Rota AI kullanılamıyorsa her açılışta hazırlık durumu yeniden
    * okunur (ör. kullanıcı Ayarlar'dan anahtar ekledi).
    */
-  async function activate() {
-    if (state.status === 'loading') return;
-    if (state.status === 'ready' && state.readiness?.available) return;
+  async function activate({ refresh = false } = {}) {
+    if (!refresh && state.status === 'loading') return;
+    if (!refresh && state.status === 'ready' && state.readiness?.available) return;
     const ownSession = session;
     const firstLoad = state.status !== 'ready';
+    const token = ++readinessToken;
+    readinessLoad?.abort();
     update((current) => ({ ...current, status: firstLoad ? 'loading' : current.status, failure: null }));
     const load = trackLoad();
-    const listing = firstLoad ? loadList() : Promise.resolve();
+    readinessLoad = load;
+    const listing = firstLoad && !state.list.loading ? loadList() : Promise.resolve();
     const readiness = await api.loadAssistantReadinessRequest({ signal: load.signal });
     load.done();
-    if (ownSession !== session) return;
+    if (ownSession !== session || token !== readinessToken) return;
+    readinessLoad = null;
     if (!readiness.ok) {
       update((current) => ({ ...current, status: 'error', failure: assistantFailureView(readiness) }));
       return;
@@ -516,7 +541,7 @@ export function createAssistantController({
       ...current,
       status: 'ready',
       readiness: readiness.assistant,
-      mode: modes.find((item) => item.id === current.mode)?.available ? current.mode : ASSISTANT_MODES.STANDARD
+      mode: modes.find((item) => item.id === current.mode)?.available ? current.mode : modes.find((item) => item.available)?.id || ASSISTANT_MODES.STANDARD
     }));
     await listing;
   }
@@ -532,6 +557,7 @@ export function createAssistantController({
     if (ownSession !== session) return { ok: false };
     const removed = result.ok || result.code === 'NOT_FOUND';
     const failure = removed ? null : assistantFailureView(result);
+    if (removed) listMutations.set(conversationId, ++mutationVersion);
     if (removed && state.active.id === conversationId) newConversation();
     update((current) => {
       const deleting = { ...current.deleting };
@@ -549,6 +575,8 @@ export function createAssistantController({
   /** Bütün istekleri keser ve sonraki geç sonuçları geçersiz kılar. */
   function dispose() {
     session += 1;
+    readinessToken += 1;
+    readinessLoad = null;
     viewToken += 1;
     listToken += 1;
     for (const run of runs.values()) {
@@ -556,6 +584,8 @@ export function createAssistantController({
       run.controller.abort();
     }
     runs.clear();
+    completedVersions.clear();
+    listMutations.clear();
     for (const controller of loads) controller.abort();
     loads.clear();
     viewLoad = null;

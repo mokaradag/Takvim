@@ -159,6 +159,7 @@ test('kapasite kirası akış BOYUNCA tutulur ve tamamlanınca bırakılır', as
   const result = await pending;
   assert.equal(result.text, 'ilk parça ve devamı');
   assert.equal(admission.status().active, 0);
+  await until(() => provider.calls[0].streamClosed);
   assert.equal(provider.calls[0].streamClosed, true);
 });
 
@@ -380,4 +381,26 @@ test('ilk metin gecikmesi, toplam istek ve akış sonucu ölçülür; ölçümle
   for (const secret of [PROMPT, ANSWER, ANSWER.slice(10), PERSONAL_KEY_A, DEFAULT_KEY, 'Kısa yanıt ver.']) {
     assert.equal(serialized.includes(secret), false, `telemetri/günlük içerik taşımamalı: ${secret.slice(0, 12)}…`);
   }
+});
+
+test('sağlayıcı done olayından sonra iptal biten yanıtı kaybettirmez', async (t) => {
+  const controller = new AbortController();
+  let reads = 0;
+  const provider = { streamChatCompletion: async () => ({ events: {
+    [Symbol.asyncIterator]() { return {
+      async next() {
+        reads += 1;
+        if (reads === 1) return { value: { type: 'text', text: 'Tam yanıt' }, done: false };
+        if (reads === 2) return { value: { type: 'done', finishReason: 'stop' }, done: false };
+        controller.abort();
+        return { done: true };
+      },
+      async return() { controller.abort(); return { done: true }; }
+    }; }
+  } }) };
+  const { stream, admission } = gatewayFor(t, { provider });
+  const result = await stream({ signal: controller.signal });
+  assert.equal(result.text, 'Tam yanıt');
+  assert.equal(reads, 2);
+  assert.equal(admission.status().active, 0);
 });

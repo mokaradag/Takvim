@@ -513,13 +513,14 @@ export function createAiGateway({
             notify(onStatus, { phase: 'thinking' });
           } else if (event.type === 'done') {
             final = event;
+            break;
           }
         }
       } finally {
         // Beklenmez: sinyale uymayan bir sağlayıcı kapasiteyi ve çağıranı tutamaz.
         iterator.return?.()?.catch?.(() => {});
       }
-      if (deadline.failure()) throw deadline.failure();
+      if (!final && deadline.failure()) throw deadline.failure();
       if (!final) throw streamInterrupted('STREAM_TRUNCATED');
       const text = chunks.join('').trim();
       if (!text) {

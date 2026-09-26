@@ -4,6 +4,7 @@ import { Icons } from '../../../components/icons';
 import { Spinner } from '../../../components/Loader';
 import { useDataMode } from '../../../components/shell/DataModeContext.jsx';
 import { DATA_MODES } from '../../../data/dataMode.js';
+import { AI_CREDENTIAL_CHANGED_EVENT } from '../aiClient.js';
 import { ASSISTANT_DEFAULT_TITLE } from '../../../domain/ai/assistantContract.js';
 import { useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
 import { useReducedMotion } from '../../../hooks/useReducedMotion.js';
@@ -55,7 +56,14 @@ export function useRotaAssistant() {
 
   useEffect(() => () => controller.dispose(), [controller]);
   useEffect(() => {
-    if (open && actual) controller.activate();
+    if (open && actual) controller.activate({ refresh: true });
+  }, [open, actual, controller]);
+
+  useEffect(() => {
+    if (!open || !actual) return undefined;
+    const refresh = () => controller.activate({ refresh: true });
+    globalThis.window?.addEventListener?.(AI_CREDENTIAL_CHANGED_EVENT, refresh);
+    return () => globalThis.window?.removeEventListener?.(AI_CREDENTIAL_CHANGED_EVENT, refresh);
   }, [open, actual, controller]);
 
   const openPanel = useCallback(() => {
@@ -200,18 +208,33 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const headingRef = useRef(null);
   const inputRef = useRef(null);
   const [draft, setDraft] = useState('');
+  const restoreFocusEnabledRef = useRef(true);
+  if (open) restoreFocusEnabledRef.current = true;
   const focusTargetRef = useMemo(() => ({
     get current() {
       return inputRef.current || headingRef.current;
     }
   }), []);
 
-  useModalFocusTrap({ containerRef: panelRef, initialFocusRef: focusTargetRef, restoreFocusRef: launcherRef, onClose: close, enabled: open && sheet });
+  useModalFocusTrap({ containerRef: panelRef, initialFocusRef: focusTargetRef, restoreFocusRef: launcherRef, restoreFocusEnabledRef, onClose: close, enabled: open && sheet });
   useVisualViewportFit(panelRef, open && sheet);
 
+  const composerAvailable = actual && state.status === 'ready' && state.readiness?.available
+    && state.view !== 'history' && !state.active.failure;
   useEffect(() => {
-    if (open && !sheet) focusTargetRef.current?.focus?.();
-  }, [open, sheet, focusRequest, focusTargetRef]);
+    if (open && (!sheet || composerAvailable)) focusTargetRef.current?.focus?.();
+  }, [open, sheet, focusRequest, focusTargetRef, composerAvailable]);
+
+  useEffect(() => {
+    if (!open || sheet) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      close();
+    };
+    globalThis.window?.addEventListener?.('keydown', onKeyDown);
+    return () => globalThis.window?.removeEventListener?.('keydown', onKeyDown);
+  }, [open, sheet, close]);
 
   if (!open) return null;
 
@@ -222,7 +245,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const generating = Boolean(running);
   const historyView = ready && state.view === 'history';
   const canCompose = available && !historyView && !active.failure;
-  const retryKey = available && !generating && !active.loading ? retryableTurnKey(active.turns) : null;
+  const retryKey = available && !generating && !active.loading && !state.deleting[active.id] ? retryableTurnKey(active.turns) : null;
   const title = historyView ? 'Geçmiş konuşmalar' : (active.id ? active.title : ASSISTANT_DEFAULT_TITLE);
   const announcement = state.announcement ? `${state.announcement.text}${state.announcement.id % 2 ? '\u200b' : ''}` : '';
 
@@ -230,8 +253,9 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
 
   const runAction = (action) => {
     if (action === 'settings') {
+      restoreFocusEnabledRef.current = false;
+      close({ restoreFocus: false });
       onOpenSettings?.();
-      if (sheet) close({ restoreFocus: false });
     } else if (action === 'new-conversation') {
       controller.newConversation();
       focusInput();
@@ -244,12 +268,6 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
     const result = controller.send(text);
     if (result.ok) setDraft('');
     return result;
-  };
-
-  const onKeyDown = (event) => {
-    if (sheet || event.key !== 'Escape' || event.defaultPrevented) return;
-    event.preventDefault();
-    close();
   };
 
   const recent = ready && list.items.length > 0 && !active.turns.length ? (
@@ -350,7 +368,6 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       role={sheet ? 'dialog' : 'complementary'}
       aria-modal={sheet ? 'true' : undefined}
       aria-labelledby={titleId}
-      onKeyDown={onKeyDown}
     >
       <header className="rota-assistant-head">
         <div className="rota-assistant-heading">
@@ -402,7 +419,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             focusInput();
           }}
           generating={generating}
-          disabled={active.loading}
+          disabled={active.loading || Boolean(state.deleting[active.id])}
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}
