@@ -106,7 +106,7 @@ export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
       FROM dbo.MR_AiConversations c WITH (UPDLOCK, HOLDLOCK)
       WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil;
 
-    IF @conversation IS NULL AND @conversationId IS NULL AND @content IS NOT NULL
+    IF @conversation IS NULL AND @conversationId IS NULL AND @content IS NOT NULL AND @readOnly = 0
     BEGIN
       INSERT dbo.MR_AiConversations(ConversationId, OwnerSicil, Title, OriginTurnId)
       VALUES (@newConversationId, @sicil, @title, @turnId);
@@ -126,7 +126,7 @@ export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
 
       IF @turnMessageId IS NOT NULL
         SET @outcome = 'EXISTING';
-      ELSE IF @content IS NULL
+      ELSE IF @content IS NULL OR @readOnly = 1
         SET @outcome = 'TURN_NOT_FOUND';
       ELSE IF EXISTS (
         SELECT 1 FROM dbo.MR_AiConversations c
@@ -171,10 +171,10 @@ export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
  * varsa ve tura daha önce yanıt yazılmadıysa yazılır; aksi hâlde
  * `Persisted = 0` döner (ör. konuşma bu arada silindi).
  */
-export const AI_CONVERSATION_APPEND_ANSWER_SQL = `
+export const AI_CONVERSATION_APPEND_ANSWER_SQL = `${KNOWN_SICIL}
   DECLARE @persisted bit = 0;
   DECLARE @sequence int = NULL;
-  IF EXISTS (
+  IF @knownSicil = 1 AND EXISTS (
       SELECT 1 FROM dbo.MR_AiConversations c WITH (UPDLOCK, HOLDLOCK)
       WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil
     )
@@ -197,14 +197,20 @@ export const AI_CONVERSATION_APPEND_ANSWER_SQL = `
     VALUES (@messageId, @conversationId, @sequence, 'assistant', @content, @replyToMessageId, @mode, @finishReason);
     UPDATE c SET c.MessageCount = c.MessageCount + 1, c.UpdatedAt = SYSUTCDATETIME()
     FROM dbo.MR_AiConversations c
-    WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil;
+    WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;
     SET @persisted = 1;
   END
-  SELECT @persisted AS AnswerPersisted;
+  IF @knownSicil = 1 AND EXISTS (
+    SELECT 1 FROM dbo.MR_AiConversationMessages m
+    JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+    WHERE m.MessageId = @messageId AND m.ReplyToMessageId = @replyToMessageId
+      AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil
+  ) SET @persisted = 1;
+  SELECT @knownSicil AS KnownSicil, @persisted AS AnswerPersisted;
   SELECT ${CONVERSATION_COLUMNS}
   FROM dbo.MR_AiConversations c
-  WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil;
+  WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;
   SELECT ${MESSAGE_COLUMNS}
   FROM dbo.MR_AiConversationMessages m
   JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
-  WHERE m.MessageId = @messageId AND c.OwnerSicil = @sicil;`;
+  WHERE m.MessageId = @messageId AND c.OwnerSicil = @sicil AND @knownSicil = 1;`;

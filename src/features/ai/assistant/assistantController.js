@@ -159,7 +159,7 @@ export function createAssistantController({
     if (current.active?.key !== run.key) return current.active;
     return {
       ...current.active,
-      turns: current.active.turns.map((turn) => (turn.key === run.turnKey ? recipe(turn) : turn))
+      turns: current.active.turns.map((turn) => (turn.key === run.turnKey && turn.answer?.status !== 'complete' ? recipe(turn) : turn))
     };
   }
 
@@ -215,9 +215,10 @@ export function createAssistantController({
   }
 
   function onRunEvent(run, event) {
-    if (!alive(run) || run.stopping) return;
+    if (!alive(run) || (run.stopping && event.type !== ASSISTANT_STREAM_EVENTS.ACCEPTED && event.type !== ASSISTANT_STREAM_EVENTS.DELTA)) return;
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
+      run.contextTrimmed = Boolean(context?.trimmed);
       if (run.key !== conversation.id) rekey(run, conversation);
       update((current) => ({
         ...current,
@@ -228,11 +229,12 @@ export function createAssistantController({
           contextTrimmed: Boolean(context?.trimmed)
         }))
       }));
-      setPhase(run, 'accepted');
+      if (!run.stopping) setPhase(run, 'accepted');
     } else if (event.type === ASSISTANT_STREAM_EVENTS.STATUS) {
       if (run.phase !== 'streaming') setPhase(run, event.data.phase);
     } else if (event.type === ASSISTANT_STREAM_EVENTS.DELTA) {
       run.text += event.data.text;
+      if (run.stopping) return;
       if (run.phase !== 'streaming') {
         setPhase(run, 'streaming');
         flushText(run);
@@ -246,9 +248,9 @@ export function createAssistantController({
     if (!alive(run)) return;
     runs.delete(run.token);
     run.cancelFlush?.();
-    const text = run.text;
+    const text = run.stopping && !result.ok ? run.stoppedText : run.text;
     completedVersions.set(run.key, (completedVersions.get(run.key) || 0) + 1);
-    if (run.stopping) result = { ok: false, code: 'REQUEST_CANCELLED', cancelled: true };
+    if (run.stopping && !result.ok) result = { ok: false, code: 'REQUEST_CANCELLED', cancelled: true };
     if (result.ok) {
       const { assistantMessage, conversation } = result.done;
       update((current) => ({
@@ -352,8 +354,8 @@ export function createAssistantController({
     const normalized = normalizeAssistantMessage(rawText);
     if (!normalized.ok) return { ok: false, reason: normalized.reason, message: normalized.message };
     if (!canSend()) return { ok: false, reason: 'NOT_READY', message: null };
-    if (!state.active.id && state.active.turns.length) {
-      update((current) => ({ ...current, active: { ...current.active, turns: [] } }));
+    if (state.active.turns.some((turn) => !turn.user.id)) {
+      update((current) => ({ ...current, active: { ...current.active, turns: current.active.turns.filter((turn) => turn.user.id) } }));
     }
     startRun({ content: normalized.value, turnId: createId() });
     return { ok: true };
@@ -373,6 +375,7 @@ export function createAssistantController({
     const run = entry ? runs.get(entry.token) : null;
     if (!run || run.stopping) return false;
     run.stopping = true;
+    run.stoppedText = run.text;
     run.cancelFlush?.();
     run.controller.abort();
     const text = run.text;
@@ -419,7 +422,8 @@ export function createAssistantController({
     if (!run) return turns;
     const status = run.stopping ? 'stopped' : run.phase === 'streaming' ? 'streaming' : 'waiting';
     const exists = turns.some((turn) => turn.key === run.turnKey);
-    const live = (turn) => ({ ...turn, answer: { status, content: run.text, error: null, mode: run.mode } });
+    const live = (turn) => ({ ...turn, contextTrimmed: Boolean(run.contextTrimmed), answer: turn.answer?.status === 'complete'
+      ? turn.answer : { status, content: run.text, error: null, mode: run.mode } });
     return exists
       ? turns.map((turn) => (turn.key === run.turnKey ? live(turn) : turn))
       : [...turns, live({ key: run.turnKey, turnId: run.turnId, user: { id: null, content: run.content, createdAt: null, pending: false }, contextTrimmed: false })];
@@ -548,7 +552,6 @@ export function createAssistantController({
 
   async function deleteConversation(conversationId) {
     if (state.deleting[conversationId]) return { ok: false };
-    stop(conversationId);
     const ownSession = session;
     update((current) => ({ ...current, deleting: { ...current.deleting, [conversationId]: true } }));
     const load = trackLoad();
@@ -557,7 +560,16 @@ export function createAssistantController({
     if (ownSession !== session) return { ok: false };
     const removed = result.ok || result.code === 'NOT_FOUND';
     const failure = removed ? null : assistantFailureView(result);
-    if (removed) listMutations.set(conversationId, ++mutationVersion);
+    if (removed) {
+      const entry = state.running[conversationId];
+      const run = entry ? runs.get(entry.token) : null;
+      if (run) {
+        runs.delete(run.token);
+        run.cancelFlush?.();
+        run.controller.abort();
+      }
+      listMutations.set(conversationId, ++mutationVersion);
+    }
     if (removed && state.active.id === conversationId) newConversation();
     update((current) => {
       const deleting = { ...current.deleting };
@@ -565,6 +577,7 @@ export function createAssistantController({
       return {
         ...current,
         deleting,
+        running: removed ? setRunning(current, conversationId, null) : current.running,
         list: removed ? { ...current.list, items: current.list.items.filter((item) => item.id !== conversationId) } : current.list,
         announcement: removed ? announce('Konuşma silindi.') : announce(failure.title)
       };

@@ -429,8 +429,8 @@ test('SQL işleri model üretiminden bağımsızdır: üretim sırasında işlem
     return streamChatCompletion(input);
   };
   await startConversation('SQL bağımsızlık sorusu');
-  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare'], userMessages: 1, answers: 0 }]);
-  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : 'prepare')), ['prepare', 'append']);
+  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare', 'prepare'], userMessages: 1, answers: 0 }]);
+  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : 'prepare')), ['prepare', 'prepare', 'append']);
 });
 
 test('konuşma tabloları kurulmamışsa (0017 uygulanmamış) anlaşılır yapılandırma hatası döner; model çağrılmaz', async (t) => {
@@ -460,4 +460,101 @@ test('model yanıtı tamamladıktan sonra istemci ayrılsa da yanıt kaybolmaz',
   await response.text().catch(() => {});
   await until(() => activeAssistantGenerationCountForTests() === 0);
   assert.deepEqual(db.aiConversationMessages.map((row) => row.Role), ['user', 'assistant']);
+});
+
+test('kayıtlı yanıt AI kapalıyken ve başka tur üretilirken yeniden oynatılır', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const first = await startConversation('İlk');
+  provider.enqueue({ type: 'deferred-stream' });
+  const reader = sseReader(await turnsRoute.POST(turnRequest({ conversationId: first.conversationId, turnId: randomUUID(), message: 'İkinci', mode: 'standard' })));
+  await reader.next();
+  await provider.waitForActive(1);
+  process.env.MERGEN_ROTA_AI_ENABLED = 'false';
+  for (const conversationId of [first.conversationId, null]) {
+    const replayed = await sendTurn({ conversationId, turnId: first.turnId, message: 'İlk' });
+    assert.equal(terminal(replayed).event, 'done', replayed.text);
+    assert.equal(terminal(replayed).data.replayed, true);
+    assert.equal(answerText(replayed), answerText(first.result));
+  }
+  assert.equal(provider.calls.length, 2);
+  assert.equal(db.aiConversationMessages.length, 3);
+  provider.calls[1].emit('İkinci yanıt');
+  provider.calls[1].complete();
+  assert.equal((await reader.rest()).at(-1).event, 'done');
+});
+
+test('başarısız silme devam eden üretimi kesmez', async (t) => {
+  const { db, provider } = createAiStack(t);
+  provider.enqueue({ type: 'deferred-stream' });
+  const reader = sseReader(await turnsRoute.POST(turnRequest({ conversationId: null, turnId: randomUUID(), message: 'Soru', mode: 'standard' })));
+  const { conversation } = (await reader.next()).data;
+  await provider.waitForActive(1);
+  db.aiConversationHooks = { beforeDelete() { throw Object.assign(new Error('Geçici hata'), { code: 'DATABASE_UNAVAILABLE' }); } };
+  const deleted = await deleteAssistantConversation(conversation.id);
+  assert.notEqual(deleted.status, 200);
+  assert.equal(provider.calls[0].signal.aborted, false);
+  provider.calls[0].emit('Korunan yanıt');
+  provider.calls[0].complete();
+  assert.equal((await reader.rest()).at(-1).event, 'done');
+  assert.equal(db.aiConversationMessages.at(-1).Content, 'Korunan yanıt');
+});
+
+test('üretim sırasında rehberden çıkarılan Sicil yanıt yazamaz', async (t) => {
+  const { db, provider } = createAiStack(t);
+  provider.enqueue({ type: 'deferred-stream' });
+  const reader = sseReader(await turnsRoute.POST(turnRequest({ conversationId: null, turnId: randomUUID(), message: 'Soru', mode: 'standard' })));
+  await reader.next();
+  await provider.waitForActive(1);
+  db.people = db.people.filter((person) => person.Sicil !== SICIL_A);
+  provider.calls[0].emit('Yazılmamalı');
+  provider.calls[0].complete();
+  const events = await reader.rest();
+  assert.equal(events.at(-1).event, 'error');
+  assert.equal(events.at(-1).data.code, 'UNAUTHORIZED');
+  assert.deepEqual(db.aiConversationMessages.map((row) => row.Role), ['user']);
+});
+
+test('yanıt yazımı geçici hatalarda aynı kimlikle sınırlı sayıda yinelenir', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const ids = [];
+  db.aiConversationHooks = { beforeAppend(params) {
+    ids.push(params.messageId);
+    if (ids.length <= 2) throw Object.assign(new Error('Geçici hata'), { code: ids.length === 1 ? 'AI_BUSY' : 'DATABASE_UNAVAILABLE' });
+  } };
+  const first = await startConversation('Soru');
+  assert.equal(terminal(first.result).event, 'done');
+  assert.equal(ids.length, 3);
+  assert.equal(new Set(ids).size, 1);
+  assert.equal(provider.calls.length, 1);
+  assert.equal(db.aiConversationMessages.length, 2);
+});
+
+test('yanıt yazımı kalıcı hatada üç denemeyi aşmaz', async (t) => {
+  const { db } = createAiStack(t);
+  let attempts = 0;
+  db.aiConversationHooks = { beforeAppend() {
+    attempts += 1;
+    throw Object.assign(new Error('Geçici hata'), { code: 'DATABASE_UNAVAILABLE' });
+  } };
+  const first = await startConversation('Soru');
+  assert.equal(terminal(first.result).event, 'error');
+  assert.equal(attempts, 3);
+  assert.deepEqual(db.aiConversationMessages.map((row) => row.Role), ['user']);
+});
+
+test('aynı tamamlanmış yanıtın yazımı tekrarlandığında ikinci satır eklenmez', async (t) => {
+  const { db } = createAiStack(t);
+  const first = await startConversation('Soru');
+  const answer = db.aiConversationMessages.find((row) => row.Role === 'assistant');
+  const { appendConversationAnswer } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const result = await appendConversationAnswer(await getSqlPool(), SICIL_A, {
+    conversationId: first.conversationId, messageId: answer.MessageId,
+    replyToMessageId: answer.ReplyToMessageId, content: answer.Content,
+    mode: answer.Mode, finishReason: answer.FinishReason
+  });
+  assert.equal(result.persisted, true);
+  assert.equal(result.message.id, answer.MessageId.toLowerCase());
+  assert.equal(db.aiConversationMessages.length, 2);
+  assert.equal(db.aiConversations[0].MessageCount, 2);
 });

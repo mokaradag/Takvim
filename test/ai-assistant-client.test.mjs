@@ -271,3 +271,14 @@ test('JSON olmayan geçici HTTP hataları yeniden denenebilir', async (t) => {
   globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'REQUEST_FAILED', details: { retryable: false } } }), { status: 503 });
   assert.equal((await streamAssistantTurnRequest({ turnId: TURN_ID, message: 'Soru', mode: 'standard' })).retryable, false);
 });
+
+test('olay sözleşmesi kullanıcı ve yanıt rollerini karıştırmaz', () => {
+  assert.throws(() => createAssistantStreamDecoder().push(frame('accepted', {
+    v: 1, conversation, userMessage: { ...userMessage, role: 'assistant' }
+  })), /MALFORMED_EVENT/);
+  const decoder = createAssistantStreamDecoder();
+  decoder.push(ACCEPTED);
+  assert.throws(() => decoder.push(frame('done', {
+    conversation, assistantMessage: { ...assistantMessage, role: 'user' }
+  })), /MALFORMED_EVENT/);
+});

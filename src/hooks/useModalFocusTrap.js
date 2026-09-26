@@ -48,7 +48,7 @@ export function resolveFocusTrapTarget({ focusableCount, activeIndex, containsAc
  */
 export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, restoreFocusEnabledRef = null, onClose, blocked = false, enabled = true }) {
   const scopeId = useId();
-  const openerRef = useRef(null);
+  const focusEpochRef = useRef(0);
   const closeRef = useRef(onClose);
   const blockedRef = useRef(blocked);
 
@@ -59,15 +59,17 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
 
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;
-    openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
+    const epoch = ++focusEpochRef.current;
+    const openedFrom = document.activeElement;
     const restoreFocus = restoreFocusRef?.current;
     const shouldRestoreFocus = () => restoreFocusEnabledRef?.current !== false;
     initialFocusRef.current?.focus();
-    return () => {
-      if (!shouldRestoreFocus()) return;
-      const opener = openerRef.current?.isConnected ? openerRef.current : restoreFocus;
+    const restore = () => {
+      if (!shouldRestoreFocus() || focusEpochRef.current !== epoch) return;
+      const opener = openedFrom?.isConnected ? openedFrom : restoreFocus;
       if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
     };
+    return () => { (globalThis.requestAnimationFrame || setTimeout)(restore); };
   }, [initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled]);
 
   useEffect(() => {

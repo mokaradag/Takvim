@@ -293,16 +293,16 @@ export async function loadAssistantConversation({ conversationId, signal = null 
 }
 
 /**
- * Konuşmayı iletileriyle siler. Bu kullanıcının o konuşmada süren üretimi önce
+ * Konuşmayı iletileriyle siler. Başarılı silmeden sonra süren üretim
  * durdurulur; başka Sicil'in konuşması silinmez ve varlığı öğrenilemez.
  */
 export async function deleteAssistantConversation({ conversationId, signal = null }) {
   const sicil = await getTrustedCurrentSicil();
   const id = requireConversationId(conversationId);
-  abortAssistantGeneration({ sicil, conversationId: id });
   const result = await withConversationSql(sicil, signal, (scope) => deleteConversation(directExecutor(scope), sicil, { conversationId: id }));
   if (!result.knownSicil) throw unknownSicil();
   if (!result.deleted) throw conversationNotFound();
+  abortAssistantGeneration({ sicil, conversationId: id });
   return { deleted: true, conversationId: id };
 }
 
@@ -359,7 +359,8 @@ function outcomeFailure(prepared, input) {
  * Turu hazırlar (akış başlamadan önce; hatalar olağan JSON yanıtıyla döner).
  *
  * Sıra: aynı kaynak (uçta) → güvenilir Sicil → rehber üyeliği → gövde (sınırlı
- * ve süre sınırlı) → yapılandırma ve kip → konuşmada tek üretim hakkı → kısa SQL
+ * ve süre sınırlı) → kayıtlı yanıtı salt okunur arama → yapılandırma ve kip →
+ * konuşmada tek üretim hakkı → kısa SQL
  * işlemi (kullanıcı iletisi ya da var olan tur) → sunucuda kurulan sınırlı
  * bağlam. Aynı turun yeniden gönderimi ikinci ileti üretmez; yanıtı zaten
  * yazılmış tur yeniden üretilmez, kayıtlı yanıtı oynatılır.
@@ -369,6 +370,29 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   await verifyDirectoryMember(sicil, signal);
   const body = await withinDeadline(TURN_BODY_TIMEOUT_MS, signal, (scoped) => readBody(scoped), () => invalidRequest('BODY_TIMEOUT'));
   const input = parseTurnInput(body);
+  const prepare = (readOnly) => withConversationSql(sicil, signal, (scope) => inTransaction(scope, (executor) => prepareConversationTurn(executor, sicil, {
+    conversationId: input.conversationId,
+    newConversationId: randomUUID(),
+    userMessageId: randomUUID(),
+    turnId: input.turnId,
+    content: input.message,
+    title: conversationTitleFrom(input.message),
+    maxMessages: ASSISTANT_LIMITS.maxConversationMessages,
+    historyLimit: readOnly ? 0 : ASSISTANT_CONTEXT_POLICY.historyWindow,
+    readOnly
+  })));
+  // Kayıtlı yanıt için yapılandırma ya da üretim hakkı gerekmez.
+  const existing = await prepare(true);
+  if (!existing.knownSicil) throw unknownSicil();
+  if (existing.answer) {
+    const failure = outcomeFailure(existing, input);
+    if (failure) throw failure;
+    return {
+      sicil, claim: null, mode: input.mode, profile: assistantProfileForMode(input.mode),
+      conversation: existing.conversation, userMessage: existing.turn.message,
+      replay: existing.answer, modelMessages: [], context: { trimmed: false, omittedMessages: 0 }
+    };
+  }
   const config = requireAiAvailable(readAiConfig());
   const profile = assistantProfileForMode(input.mode);
   const registry = await withinDeadline(AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS, signal, () => loadAiModelRegistry({ path: config.registryPath }), () => (
@@ -382,16 +406,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   }
   const claim = claimAssistantGeneration({ sicil, conversationId: input.conversationId, turnId: input.turnId });
   try {
-    const prepared = await withConversationSql(sicil, signal, (scope) => inTransaction(scope, (executor) => prepareConversationTurn(executor, sicil, {
-      conversationId: input.conversationId,
-      newConversationId: randomUUID(),
-      userMessageId: randomUUID(),
-      turnId: input.turnId,
-      content: input.message,
-      title: conversationTitleFrom(input.message),
-      maxMessages: ASSISTANT_LIMITS.maxConversationMessages,
-      historyLimit: ASSISTANT_CONTEXT_POLICY.historyWindow
-    })));
+    const prepared = await prepare(false);
     if (!prepared.knownSicil) throw unknownSicil();
     const failure = outcomeFailure(prepared, input);
     if (failure) throw failure;
@@ -434,14 +449,27 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
     onStatus,
     onText
   });
-  const stored = await withConversationSql(turn.sicil, null, (scope) => inTransaction(scope, (executor) => appendConversationAnswer(executor, turn.sicil, {
+  const messageId = randomUUID();
+  const persist = () => withConversationSql(turn.sicil, null, (scope) => inTransaction(scope, (executor) => appendConversationAnswer(executor, turn.sicil, {
     conversationId: turn.conversation.id,
-    messageId: randomUUID(),
+    messageId,
     replyToMessageId: turn.userMessage.id,
     content: result.text,
     mode: turn.mode,
     finishReason: result.finishReason
   })));
+  let stored;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      stored = await persist();
+      break;
+    } catch (error) {
+      const transient = error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';
+      if (!transient || attempt >= 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
+  if (!stored.knownSicil) throw unknownSicil();
   if (!stored.persisted || !stored.message) {
     throw conversationNotFound('ANSWER_NOT_PERSISTED');
   }

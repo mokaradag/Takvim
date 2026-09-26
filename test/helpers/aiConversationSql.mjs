@@ -145,7 +145,7 @@ function prepare(db, params, sicil, known) {
     conversation = params.conversationId == null
       ? db.aiConversations.find((row) => row.OwnerSicil === sicil && sameGuid(row.OriginTurnId, params.turnId)) || null
       : ownedConversation(db, sicil, params.conversationId);
-    if (!conversation && params.conversationId == null && params.content != null) {
+    if (!conversation && params.conversationId == null && params.content != null && !params.readOnly) {
       const at = now();
       conversation = {
         ConversationId: guid(params.newConversationId),
@@ -163,7 +163,7 @@ function prepare(db, params, sicil, known) {
       turn = messages.find((row) => sameGuid(row.ClientTurnId, params.turnId)) || null;
       lastSequence = messages.length ? messages[messages.length - 1].Sequence : null;
       if (turn) outcome = 'EXISTING';
-      else if (params.content == null) outcome = 'TURN_NOT_FOUND';
+      else if (params.content == null || params.readOnly) outcome = 'TURN_NOT_FOUND';
       else if (conversation.MessageCount > Number(params.maxMessages) - 2) outcome = 'FULL';
       else {
         const at = now();
@@ -212,6 +212,7 @@ function prepare(db, params, sicil, known) {
 
 function append(db, params, sicil) {
   db.aiConversationHooks?.beforeAppend?.(params);
+  if (!knownSicil(db, sicil)) return [[{ KnownSicil: 0, AnswerPersisted: 0 }]];
   const conversation = ownedConversation(db, sicil, params.conversationId);
   const question = conversation && messagesOf(db, conversation.ConversationId)
     .find((row) => sameGuid(row.MessageId, params.replyToMessageId) && row.Role === 'user');
@@ -236,9 +237,10 @@ function append(db, params, sicil) {
     conversation.UpdatedAt = at;
     persisted = 1;
   }
-  const written = persisted ? db.aiConversationMessages.find((row) => sameGuid(row.MessageId, params.messageId)) : null;
+  const written = conversation && db.aiConversationMessages.find((row) => sameGuid(row.MessageId, params.messageId) && sameGuid(row.ReplyToMessageId, params.replyToMessageId) && sameGuid(row.ConversationId, params.conversationId));
+  if (written) persisted = 1;
   return [
-    [{ AnswerPersisted: persisted }],
+    [{ KnownSicil: 1, AnswerPersisted: persisted }],
     conversation ? [conversationRow(conversation)] : [],
     written ? [messageRow(written)] : []
   ];

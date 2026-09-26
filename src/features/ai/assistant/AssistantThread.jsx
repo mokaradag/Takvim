@@ -135,6 +135,7 @@ function scrollToEnd(node, smooth = false) {
 export function AssistantThread({ conversationKey, turns, phase = null, retryKey = null, onRetry, onAction, reducedMotion = false, children = null }) {
   const scrollRef = useRef(null);
   const followingRef = useRef(true);
+  const lastTopRef = useRef(0);
   const [following, setFollowing] = useState(true);
   const last = turns[turns.length - 1];
   const growth = `${last?.answer?.status || ''}:${last?.answer?.content?.length || 0}`;
@@ -155,7 +156,11 @@ export function AssistantThread({ conversationKey, turns, phase = null, retryKey
   }, [growth]);
 
   const onScroll = (event) => {
-    const next = followState({ following: followingRef.current, reason: 'scroll', metrics: event.currentTarget });
+    const node = event.currentTarget;
+    const scrolledUp = node.scrollTop < lastTopRef.current;
+    lastTopRef.current = node.scrollTop;
+    const near = followState({ following: followingRef.current, reason: 'scroll', metrics: node });
+    const next = near || (!scrolledUp && followingRef.current);
     if (next !== followingRef.current) setFollow(next);
   };
 

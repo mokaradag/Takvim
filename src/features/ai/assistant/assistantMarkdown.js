@@ -352,7 +352,7 @@ export function parseInline(text, { links = true } = {}) {
 
 /* ── Blok çözümleme ──────────────────────────────────────────── */
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)/;
+const FENCE = /^ {0,3}(`{3,}(?!`)(?=[^`]*$)|~{3,})[ \t]*([^\s`]*)/;
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
 const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const QUOTE = /^ {0,3}> ?/;
@@ -503,7 +503,7 @@ function parseBlockLines(lines, depth) {
       index += 1;
       while (index < lines.length) {
         const candidate = lines[index];
-        const closing = candidate.trim();
+        const closing = /^ {0,3}[`~]/.test(candidate) ? candidate.trim() : '';
         if (closing.length >= run.length && closing === run[0].repeat(closing.length)) {
           closed = true;
           index += 1;

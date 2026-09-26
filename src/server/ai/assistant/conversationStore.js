@@ -116,7 +116,7 @@ export async function deleteConversation(executor, sicil, { conversationId }) {
  * `content: null` yeniden denemedir (yeni ileti yazılmaz).
  */
 export async function prepareConversationTurn(executor, sicil, {
-  conversationId, newConversationId, userMessageId, turnId, content, title, maxMessages, historyLimit
+  conversationId, newConversationId, userMessageId, turnId, content, title, maxMessages, historyLimit, readOnly = false
 }) {
   const request = sicilRequest(executor, sicil);
   request.input('conversationId', sql.UniqueIdentifier, conversationId);
@@ -127,6 +127,7 @@ export async function prepareConversationTurn(executor, sicil, {
   request.input('title', sql.NVarChar(120), title);
   request.input('maxMessages', sql.Int, maxMessages);
   request.input('historyLimit', sql.Int, historyLimit);
+  request.input('readOnly', sql.Bit, readOnly);
   const [[state] = [], conversations = [], history = [], turnRows = []] = recordsetsOf(await request.query(AI_CONVERSATION_PREPARE_TURN_SQL));
   const turnMessages = turnRows.map(messageRow);
   return {
@@ -157,6 +158,7 @@ export async function appendConversationAnswer(executor, sicil, {
   request.input('finishReason', sql.VarChar(40), finishReason);
   const [[state] = [], conversations = [], messages = []] = recordsetsOf(await request.query(AI_CONVERSATION_APPEND_ANSWER_SQL));
   return {
+    knownSicil: Boolean(state?.KnownSicil),
     persisted: Boolean(state?.AnswerPersisted),
     conversation: conversationRow(conversations[0]),
     message: messageRow(messages[0])

@@ -71,10 +71,13 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => {
-      if (event.key === 'Escape' && !saving) onClose();
+      if (event.key === 'Escape' && !saving) {
+        event.preventDefault();
+        onClose();
+      }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [open, saving, onClose]);
 
   if (!open) return null;

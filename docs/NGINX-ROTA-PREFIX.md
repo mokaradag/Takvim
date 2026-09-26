@@ -77,7 +77,7 @@ TEST `/bilge` route):
     # Original host and scheme: the same-origin check of state-changing AI
     # requests (turns, deletes, key management) compares them with `Origin`.
     proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```

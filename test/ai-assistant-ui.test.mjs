@@ -952,6 +952,8 @@ test('modal odak tuzağı gezinme kapanışında odağı geri almaz', async (t) 
   restoreFocusEnabledRef.current = true;
   probe.render(props);
   probe.render({ ...props, enabled: false });
+  assert.equal(restored, 0, 'odak DOM temizlenmeden geri verilmez');
+  await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(restored, 1, 'olağan kapanış hâlâ odağı geri verir');
 });
 
@@ -966,4 +968,166 @@ test('anahtar değişiminde son hazırlık okuması kazanır', async () => {
   pending[0]({ ok: true, assistant: READINESS });
   await first;
   assert.equal(controller.canSend(), false);
+});
+
+test('Durdur ile yarışan kabul konuşmayı bağlar ve tamamlanan yanıt kazanır', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [run] = api.turns;
+  controller.stop();
+  run.emit('accepted', acceptedData(CONVERSATION_A, run, 'Soru'));
+  assert.equal(state().active.id, CONVERSATION_A);
+  assert.equal(state().list.items[0].id, CONVERSATION_A);
+  assert.equal(state().running[CONVERSATION_A].phase, 'stopping');
+  run.emit('delta', { text: 'Tam yanıt' });
+  run.resolve(doneResult(CONVERSATION_A));
+  await drain();
+  assert.equal(state().active.turns[0].answer.status, 'complete');
+  assert.equal(state().active.turns[0].answer.content, 'Tam yanıt');
+  assert.equal(Object.keys(state().running).length, 0);
+});
+
+test('SQL yanıtı canlı metin, Durdur ve geç hata tarafından değiştirilemez', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [run] = api.turns;
+  const accepted = acceptedData(CONVERSATION_A, run, 'Soru');
+  accepted.context.trimmed = true;
+  run.emit('accepted', accepted);
+  run.emit('delta', { text: 'Kısmi' });
+  api.loadAssistantConversationRequest = async (id) => ({ ok: true, conversation: { id, title: 'Soru' }, messages: [
+    { ...accepted.userMessage, role: 'user', sequence: 1 },
+    { id: createId(), role: 'assistant', sequence: 2, replyToId: accepted.userMessage.id, content: 'SQL tam yanıtı', mode: 'standard' }
+  ] });
+  controller.newConversation();
+  await controller.openConversation(CONVERSATION_A);
+  assert.equal(state().active.turns[0].answer.status, 'complete');
+  assert.equal(state().active.turns[0].contextTrimmed, true);
+  run.emit('delta', { text: ' geç metin' });
+  controller.stop();
+  run.resolve({ ok: false, code: 'REQUEST_CANCELLED', cancelled: true });
+  await drain();
+  assert.equal(state().active.turns[0].answer.status, 'complete');
+  assert.equal(state().active.turns[0].answer.content, 'SQL tam yanıtı');
+});
+
+test('başarısız silme istemci üretimini kesmez; başarılı silme geç sonucu geri getirmez', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [run] = api.turns;
+  run.emit('accepted', acceptedData(CONVERSATION_A, run, 'Soru'));
+  api.deleteAssistantConversationRequest = async () => ({ ok: false, code: 'DATABASE_UNAVAILABLE' });
+  assert.equal((await controller.deleteConversation(CONVERSATION_A)).ok, false);
+  assert.equal(run.input.signal.aborted, false);
+  assert.ok(state().running[CONVERSATION_A]);
+  api.deleteAssistantConversationRequest = async () => ({ ok: true });
+  await controller.deleteConversation(CONVERSATION_A);
+  assert.equal(run.input.signal.aborted, true);
+  run.resolve(doneResult(CONVERSATION_A));
+  await drain();
+  assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), false);
+  assert.equal(Object.keys(state().running).length, 0);
+});
+
+test('var olan konuşmada kabul edilmemiş tur yeni iletiye taşınmaz', async () => {
+  const { controller, api, state } = await readyController();
+  await controller.openConversation(CONVERSATION_A);
+  controller.send('Kaydedilmeyen');
+  api.turns[0].resolve({ ok: false, code: 'CONFLICT' });
+  await drain();
+  controller.send('Yeni soru');
+  assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Yeni soru']);
+});
+
+test('canlı tura dönüşte kısaltılmış bağlam uyarısı korunur', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [run] = api.turns;
+  const accepted = acceptedData(CONVERSATION_A, run, 'Soru');
+  accepted.context.trimmed = true;
+  run.emit('accepted', accepted);
+  api.loadAssistantConversationRequest = async (id) => ({ ok: true, conversation: { id, title: 'Soru' }, messages: [{ ...accepted.userMessage, role: 'user', sequence: 1 }] });
+  controller.newConversation();
+  await controller.openConversation(CONVERSATION_A);
+  assert.equal(state().active.turns[0].contextTrimmed, true);
+});
+
+test('aynı satırdaki ters tırnak kodu çit açmaz; dört boşluklu çit kod içinde kalır', () => {
+  for (const inline of ['```x```', '```npm install``` komutunu çalıştırın']) {
+    const blocks = parseAssistantMarkdown(`${inline}\n\n# Başlık`);
+    assert.equal(blocks[0].type, 'paragraph');
+    assert.equal(blocks.at(-1).type, 'heading');
+  }
+  for (const indent of ['    ', '\t']) {
+    const blocks = parseAssistantMarkdown('```js\n' + indent + '```\n# kod\n```\n\n# Başlık');
+    assert.equal(blocks[0].type, 'code');
+    assert.match(blocks[0].text ?? blocks[0].content ?? '', /# kod/);
+    assert.equal(blocks.at(-1).type, 'heading');
+  }
+});
+
+test('taslak panel kapanışında korunur ve konuşma değişiminde temizlenir', async (t) => {
+  const { controller } = await readyController();
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  t.after(() => panel.unmount());
+  const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+  composer().props.onChange('A taslağı');
+  panel.render();
+  panel.render({ assistant: { ...assistant, open: false } });
+  panel.render({ assistant });
+  assert.equal(composer().props.value, 'A taslağı');
+  await controller.openConversation(CONVERSATION_B);
+  panel.render();
+  assert.equal(composer().props.value, '');
+});
+
+test('En yeni kaydırmasının ara olayları izlemeyi kapatmaz; yukarı kaydırmak kapatır', () => {
+  const turns = [{ key: 'tur', user: { content: 'Soru' }, answer: { status: 'streaming', content: 'Yanıt' } }];
+  const view = mountComponent(AssistantThread, { conversationKey: 'a', turns });
+  const node = { scrollTop: 100, scrollHeight: 1000, clientHeight: 200, scrollTo() {} };
+  const scroll = () => findElement(view.output, (element) => element.props?.className === 'rota-assistant-thread');
+  const jump = () => findElement(view.output, (element) => element.props?.className === 'rota-assistant-jump');
+  scroll().ref.current = node;
+  scroll().props.onScroll({ currentTarget: node });
+  node.scrollTop = 50;
+  scroll().props.onScroll({ currentTarget: node });
+  view.render();
+  assert.ok(jump());
+  jump().props.onClick();
+  view.render();
+  node.scrollTop = 150;
+  scroll().props.onScroll({ currentTarget: node });
+  view.render();
+  assert.equal(jump(), null);
+  node.scrollTop = 100;
+  scroll().props.onScroll({ currentTarget: node });
+  view.render();
+  assert.ok(jump());
+  view.unmount();
+});
+
+test('proje penceresinin Escape olayı önce açılmış yardımcıyı kapatmaz', async (t) => {
+  const { ProjectCreateDialog } = await import('../src/components/shell/ProjectCreateDialog.jsx');
+  const previous = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousObserver = globalThis.MutationObserver;
+  globalThis.document = { body: { classList: { contains: () => false } } };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  t.after(() => { globalThis.document = previousDocument; globalThis.MutationObserver = previousObserver; });
+  const listeners = [];
+  globalThis.window = {
+    addEventListener(type, fn, capture = false) { listeners.push({ type, fn, capture }); },
+    removeEventListener(type, fn) { const i = listeners.findIndex((item) => item.type === type && item.fn === fn); if (i >= 0) listeners.splice(i, 1); }
+  };
+  const { controller } = await readyController();
+  const closed = [];
+  const panel = mountComponent(RotaAssistantPanel, { assistant: {
+    controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() { closed.push('assistant'); }
+  } });
+  const dialog = mountComponent(ProjectCreateDialog, { open: true, onClose() { closed.push('project'); } });
+  t.after(() => { dialog.unmount(); panel.unmount(); globalThis.window = previous; });
+  const event = { key: 'Escape', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  for (const { fn } of [...listeners].filter((item) => item.type === 'keydown').sort((a, b) => Number(b.capture) - Number(a.capture))) fn(event);
+  assert.deepEqual(closed, ['project']);
 });

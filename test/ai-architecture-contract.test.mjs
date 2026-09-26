@@ -432,6 +432,7 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   for (const [name, text] of Object.entries(queries)) {
     // Her deyim konuşmayı güvenilir Sicil'in sahipliğiyle sınırlar; ileti tabloları sahip konuşma üzerinden okunur.
     assert.match(text, /OwnerSicil = @sicil/, name);
+    assert.match(text, /DECLARE @knownSicil bit/, name);
     assert.doesNotMatch(text, /\$\{|EXEC\s*\(|sp_executesql/i, `${name}: dinamik SQL yoktur`);
     for (const statement of text.split(';').map((part) => part.replace(/\s+/g, ' ').trim()).filter((part) => /MR_AiConversationMessages/.test(part) && /^(?:SELECT|UPDATE|DELETE)/.test(part))) {
       assert.match(statement, /OwnerSicil = @sicil|c\.ConversationId = @conversationId|ConversationId = @conversationId/, `${name}: ${statement.slice(0, 80)}`);
@@ -477,6 +478,8 @@ test('0017 göçü sıralı, yinelenebilir, yapıyı doğrular ve yalnızca gör
   assert.doesNotMatch(upgrade, /\b(?:UPDATE|DELETE)\s+(?:FROM\s+)?dbo\.MR_(?!SchemaMigrations)/i, 'göç veriye dokunmaz');
   // Akıl yürütme, ham akış, istek nesnesi ya da anahtar için sütun yoktur.
   assert.doesNotMatch(upgrade, /\b(?:Reasoning|Thinking|RawStream|RequestJson|ApiKey|Prompt|SystemPrompt)\w*\s+(?:n?varchar|varbinary|nvarchar)/i);
+
+  assert.match(upgrade, /r\.IndexName NOT IN \(N'UX_MR_AiConversationMessages_Turn', N'UX_MR_AiConversationMessages_Reply'\)\s+AND \(i\.has_filter = 1 OR i\.filter_definition IS NOT NULL\)/);
 
   const tableOf = (script, table) => {
     const start = script.indexOf(`CREATE TABLE dbo.${table} (`);

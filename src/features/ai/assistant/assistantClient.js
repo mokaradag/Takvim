@@ -114,7 +114,7 @@ function interpret({ event, data }) {
   switch (event) {
     case ASSISTANT_STREAM_EVENTS.ACCEPTED:
       if (payload.v !== ASSISTANT_PROTOCOL_VERSION) throw new AssistantProtocolError('PROTOCOL_VERSION');
-      if (!isConversation(payload.conversation) || !isStoredMessage(payload.userMessage)) throw new AssistantProtocolError('MALFORMED_EVENT');
+      if (!isConversation(payload.conversation) || (!isStoredMessage(payload.userMessage) || payload.userMessage.role !== 'user')) throw new AssistantProtocolError('MALFORMED_EVENT');
       break;
     case ASSISTANT_STREAM_EVENTS.STATUS:
       if (typeof payload.phase !== 'string') throw new AssistantProtocolError('MALFORMED_EVENT');
@@ -124,7 +124,7 @@ function interpret({ event, data }) {
       if (typeof payload.text !== 'string') throw new AssistantProtocolError('MALFORMED_EVENT');
       break;
     case ASSISTANT_STREAM_EVENTS.DONE:
-      if (!isConversation(payload.conversation) || !isMessage(payload.assistantMessage)) throw new AssistantProtocolError('MALFORMED_EVENT');
+      if (!isConversation(payload.conversation) || (!isMessage(payload.assistantMessage) || payload.assistantMessage.role !== 'assistant')) throw new AssistantProtocolError('MALFORMED_EVENT');
       break;
     default:
       if (typeof payload.code !== 'string' || typeof payload.message !== 'string') throw new AssistantProtocolError('MALFORMED_EVENT');

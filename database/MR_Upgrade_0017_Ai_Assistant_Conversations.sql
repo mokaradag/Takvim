@@ -195,6 +195,8 @@ BEGIN TRY
         LEFT JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
         WHERE i.index_id IS NULL OR i.is_disabled = 1 OR i.is_hypothetical = 1 OR i.is_unique <> r.IsUnique
             OR c.name IS NULL OR c.name <> r.ColumnName OR ic.is_descending_key <> r.IsDescending
+            OR (r.IndexName NOT IN (N'UX_MR_AiConversationMessages_Turn', N'UX_MR_AiConversationMessages_Reply')
+                AND (i.has_filter = 1 OR i.filter_definition IS NOT NULL))
     )
         THROW 51017, N'0017: Konuşma tablolarının anahtarları ya da dizinleri eksik, devre dışı ya da beklenen tanımda değil.', 1;
 

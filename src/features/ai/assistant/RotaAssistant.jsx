@@ -207,7 +207,10 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const panelRef = useRef(null);
   const headingRef = useRef(null);
   const inputRef = useRef(null);
-  const [draft, setDraft] = useState('');
+  const [draftState, setDraftState] = useState({ key: state.active.key, text: '' });
+  const draft = draftState.key === state.active.key ? draftState.text : '';
+  if (draftState.key !== state.active.key) setDraftState({ key: state.active.key, text: '' });
+  const setDraft = (text) => setDraftState({ key: state.active.key, text });
   const restoreFocusEnabledRef = useRef(true);
   if (open) restoreFocusEnabledRef.current = true;
   const focusTargetRef = useMemo(() => ({

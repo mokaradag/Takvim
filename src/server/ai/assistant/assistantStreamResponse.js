@@ -120,7 +120,7 @@ export function assistantStreamResponse(turn, {
   generate = generateAssistantAnswer
 } = {}) {
   const cancelled = new AbortController();
-  const generationSignal = AbortSignal.any([cancelled.signal, turn.claim.signal, ...(signal ? [signal] : [])]);
+  const generationSignal = AbortSignal.any([cancelled.signal, ...(turn.claim ? [turn.claim.signal] : []), ...(signal ? [signal] : [])]);
   let controller = null;
   let closed = false;
   let waiting = null;
@@ -191,7 +191,7 @@ export function assistantStreamResponse(turn, {
     } finally {
       clearInterval(keepalive);
       generationSignal.removeEventListener('abort', onAbort);
-      turn.claim.release();
+      turn.claim?.release();
       if (!closed) {
         closed = true;
         try {
