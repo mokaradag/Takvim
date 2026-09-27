@@ -675,8 +675,9 @@ database/MR_Upgrade_0016_Ai_User_Credentials.sql
 | --- | --- | --- |
 | `MR_AiUserCredentials` | Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM zarfı, son dört karakter, son doğrulama sonucu) | PK `Sicil`; rowversion |
 
-Betik yinelenebilir ve veriye dokunmaz; anahtarın kendisi, konuşma geçmişi,
-istem ve yanıt saklanmaz. Göç uygulanmadan açılan kurulumda kişisel anahtar
+Betik yinelenebilir ve veriye dokunmaz; `MR_AiUserCredentials` tablosunda açık
+anahtar, konuşma geçmişi, istem ve yanıt saklanmaz. İleti metinlerinin kalıcılığı
+aşağıdaki **0017 · Rota AI konuşma geçmişi** bölümünde açıklanır. Göç uygulanmadan açılan kurulumda kişisel anahtar
 kaydı açıkça reddedilir, kurumsal varsayılan anahtar çalışmaya devam eder. Geri
 alma betiği tabloyu da düşürür. Yapay zekâ ortam değişkenleri ve dağıtım sırası:
 `docs/AI-PLATFORM.md`.

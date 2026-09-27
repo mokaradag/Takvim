@@ -164,9 +164,9 @@ const BARE_URL = /(?:https?:\/\/|mailto:)[^\s<>"'`]{1,2048}/iy;
 
 /** Çıplak adresin sonundaki noktalama ve dengesiz kapanış ayraçları adrese dâhil edilmez. */
 function trimBareUrl(candidate) {
-  let url = candidate.replace(/[.,;:!?*_~]+$/, '');
+  let url = candidate.replace(/[.,;:!?]+$/, '');
   while (url.endsWith(')') && (url.match(/\)/g) || []).length > (url.match(/\(/g) || []).length) {
-    url = url.slice(0, -1).replace(/[.,;:!?*_~]+$/, '');
+    url = url.slice(0, -1).replace(/[.,;:!?]+$/, '');
   }
   return url;
 }
@@ -230,7 +230,7 @@ function tokenizeInline(text, { links, budget }) {
       if (destination) {
         const label = text.slice(open + 1, close);
         const href = safeLinkHref(destination.href);
-        const children = parseInline(label, { links: false });
+        const children = parseInline(label, { links: false, budget });
         if (href) {
           tokens.push({ type: 'link', href, image, children: image && !label.trim() ? [textNode('Görsel')] : children });
         } else {
@@ -346,8 +346,7 @@ function resolveEmphasis(tokens) {
 }
 
 /** Satır içi Markdown → düğüm listesi. */
-export function parseInline(text, { links = true } = {}) {
-  const budget = { delimiters: 0 };
+export function parseInline(text, { links = true, budget = { delimiters: 0 } } = {}) {
   return resolveEmphasis(tokenizeInline(String(text ?? ''), { links, budget }));
 }
 
@@ -621,4 +620,18 @@ export function createAssistantMarkdownParser() {
     previous = normalized;
     return blocks;
   };
+}
+
+/** Görünen yanıt metni; biçim işaretleri ve araç düğmeleri kopyalanmaz. */
+export function assistantMarkdownText(text) {
+  const inline = (nodes) => nodes.map((node) => node.type === 'break' ? '\n'
+    : node.children ? `${node.image ? 'Görsel: ' : ''}${inline(node.children)}` : node.value || '').join('');
+  const blocks = (items) => items.map((block) => {
+    if (block.type === 'code') return block.text;
+    if (block.type === 'quote') return blocks(block.children);
+    if (block.type === 'list') return block.items.map(blocks).join('\n');
+    if (block.type === 'table') return [block.header, ...block.rows].map((row) => row.map(inline).join('\t')).join('\n');
+    return block.children ? inline(block.children) : '';
+  }).join('\n\n');
+  return blocks(parseAssistantMarkdown(text));
 }

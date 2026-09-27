@@ -115,7 +115,7 @@ function HierarchyMenu({ depth, onChoose }) {
     const onPointerDown = (event) => {
       if (!hostRef.current?.contains(event.target)) setOpen(false);
     };
-    const onKeyDown = (event) => { if (event.key === 'Escape') setOpen(false); };
+    const onKeyDown = (event) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); setOpen(false); } };
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {

@@ -73,6 +73,7 @@ export function createSseEventParser({ maxEventChars = AI_STREAM_LIMITS.maxEvent
  */
 export function createLeadingThinkFilter() {
   let phase = 'start';
+  let sawThinking = false;
   let buffer = '';
 
   function visible(text) {
@@ -86,6 +87,7 @@ export function createLeadingThinkFilter() {
   }
 
   return {
+    get sawThinking() { return sawThinking; },
     get thinking() {
       return phase === 'thinking';
     },
@@ -103,6 +105,7 @@ export function createLeadingThinkFilter() {
           return trimmed;
         }
         phase = 'thinking';
+        sawThinking = true;
         buffer = trimmed.slice(THINK_OPEN.length);
       }
       const close = buffer.indexOf(THINK_CLOSE);
@@ -173,9 +176,13 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
   const think = createLeadingThinkFilter();
   const state = { model: null, usage: null, finishReason: null, bytes: 0, textChars: 0 };
   let completed = false;
+  let reasoningSent = false;
 
   const emit = function* (text, reasoning) {
-    if (reasoning || think.thinking) yield { type: 'reasoning' };
+    if (!reasoningSent && (reasoning || think.sawThinking)) {
+      reasoningSent = true;
+      yield { type: 'reasoning' };
+    }
     if (!text) return;
     state.textChars += text.length;
     if (state.textChars > limits.maxTextChars) throw invalid('STREAM_TEXT_TOO_LARGE');

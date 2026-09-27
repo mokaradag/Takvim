@@ -28,6 +28,20 @@ export function isMissingConversationSchema(error) {
     && CONVERSATION_TABLES.some((table) => String(entry.message || '').includes(table)));
 }
 
+const SCHEMA_STATE_KEY = Symbol.for('mergen-rota.ai-conversation-schema');
+
+export function conversationSchemaState() {
+  return { ...(globalThis[SCHEMA_STATE_KEY] || { ready: null, observedAt: null }) };
+}
+
+export function noteConversationSchema(ready) {
+  globalThis[SCHEMA_STATE_KEY] = { ready, observedAt: new Date().toISOString() };
+}
+
+export function resetConversationSchemaForTests() {
+  delete globalThis[SCHEMA_STATE_KEY];
+}
+
 function isoOrNull(value) {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);

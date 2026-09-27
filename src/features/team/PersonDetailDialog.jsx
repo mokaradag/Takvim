@@ -69,7 +69,8 @@ export function PersonDetailDialog({ member, onClose, onOpenTask }) {
   // arkadaki TeamView denetimlerine geçebiliyordu.
   useEffect(() => {
     const onKey = (event) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault();
         closeHandlerRef.current?.();
         return;
       }
@@ -96,8 +97,8 @@ export function PersonDetailDialog({ member, onClose, onOpenTask }) {
         first.focus();
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   }, []);
 
   const person = member?.person || null;

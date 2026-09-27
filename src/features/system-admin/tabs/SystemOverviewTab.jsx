@@ -48,9 +48,12 @@ function AiDrawerFields({ detail }) {
       <DrawerField label="Sağlayıcı P95" value={formatDuration(telemetry.latency?.provider?.p95Ms)} />
       {/* Rota AI akışı: ilk görünür metne kadar geçen süre ve akışların sonucu (içerik taşımaz). */}
       <DrawerField label="İlk metin P95" value={formatDuration(telemetry.latency?.firstToken?.p95Ms)} />
+      {telemetry.assistantTurns && (
+        <DrawerField label="Rota AI tur sonuçları" value={`Tamamlanan ${telemetry.assistantTurns.completed} · Başarısız ${telemetry.assistantTurns.failed} · Durdurulan ${telemetry.assistantTurns.cancelled}`} />
+      )}
       {streams && (
         <DrawerField
-          label="Akış sonuçları"
+          label="Sağlayıcı akış sonuçları"
           value={`Tamamlanan ${streams.completed ?? 0} · Durdurulan ${streams.cancelled ?? 0} · Yarıda kalan ${streams.interrupted ?? 0} · Süre aşımı ${streams.timeout ?? 0} · Başlamadan başarısız ${streams.failed ?? 0}`}
         />
       )}

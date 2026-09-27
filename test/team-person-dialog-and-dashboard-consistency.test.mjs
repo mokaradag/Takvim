@@ -57,8 +57,8 @@ test('personel penceresi kimlikle açılır: süzgeç değişince eski satır ek
 test('personel penceresi yalnızca AÇIK görevleri listeler ve Esc ile kapanır', () => {
   const dialog = read('src/features/team/PersonDetailDialog.jsx');
   assert.match(dialog, /\(member\?\.tasks \|\| \[\]\)\.filter\(\(task\) => task\.status !== 'done'\)/);
-  assert.match(dialog, /if \(event\.key === 'Escape'\) \{\s*\n\s*closeHandlerRef\.current\?\.\(\);/);
-  assert.match(dialog, /window\.removeEventListener\('keydown', onKey\)/);
+  assert.match(dialog, /if \(event\.key === 'Escape' && !event\.defaultPrevented\) \{\s*event\.preventDefault\(\);\s*closeHandlerRef\.current\?\.\(\);/);
+  assert.match(dialog, /document\.removeEventListener\('keydown', onKey\)/);
   assert.match(dialog, /aria-modal="true"/);
 });
 

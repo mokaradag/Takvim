@@ -221,6 +221,7 @@ async function* completionAsStream(completion, limits) {
   const think = createLeadingThinkFilter();
   const text = `${think.push(completion.text)}${think.end()}`;
   if (text.length > limits.maxTextChars) throw invalidResponse('STREAM_TEXT_TOO_LARGE');
+  if (think.sawThinking) yield { type: 'reasoning' };
   if (text) yield { type: 'text', text };
   yield { type: 'done', finishReason: completion.finishReason, model: completion.model, usage: completion.usage };
 }

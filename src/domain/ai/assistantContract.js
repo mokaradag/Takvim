@@ -103,12 +103,14 @@ export function conversationTitleFrom(message) {
   const plain = String(message ?? '')
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001F\u007F]+/g, ' ')
-    .replace(/[`*_#>|~]+/g, ' ')
+    .replace(/(^|\n)[ \t]{0,3}(?:#{1,6}(?:[ \t]+|$)|>[ \t]?)/g, '$1')
+    .replace(/(`+|\*\*|__|~~)(?=\S)(.+?)\1/g, '$2')
     .replace(/\s+/g, ' ')
     .trim();
   if (!plain) return ASSISTANT_DEFAULT_TITLE;
   if (plain.length <= limit) return plain;
-  const cut = plain.slice(0, limit - 1);
+  let cut = plain.slice(0, limit - 1);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
   const boundary = cut.lastIndexOf(' ');
   return `${(boundary >= limit / 2 ? cut.slice(0, boundary) : cut).trimEnd()}…`;
 }

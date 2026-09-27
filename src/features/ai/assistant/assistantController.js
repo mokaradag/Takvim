@@ -226,6 +226,7 @@ export function createAssistantController({
     if (!alive(run) || (run.stopping && event.type !== ASSISTANT_STREAM_EVENTS.ACCEPTED && event.type !== ASSISTANT_STREAM_EVENTS.DELTA)) return;
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
+      run.accepted = true;
       run.contextTrimmed = Boolean(context?.trimmed);
       if (run.key !== conversation.id) rekey(run, conversation);
       update((current) => ({
@@ -283,6 +284,22 @@ export function createAssistantController({
       return;
     }
     const failure = assistantFailureView(result);
+    if (result.phase === 'request' && !failure.retryable && !run.accepted && run.newTurn) {
+      update((current) => ({
+        ...current,
+        running: setRunning(current, run.key, null),
+        status: isSessionFailure(result) ? 'error' : current.status,
+        failure: isSessionFailure(result) ? failure : current.failure,
+        active: current.active?.key === run.key ? {
+          ...current.active,
+          turns: current.active.turns.filter((turn) => turn.key !== run.turnKey || turn.user.id),
+          recoveredDraft: { token: run.token, text: run.content },
+          notice: failure
+        } : current.active,
+        announcement: current.active?.key === run.key ? announce(failure.title) : current.announcement
+      }));
+      return;
+    }
     const status = result.cancelled ? 'stopped' : result.partial ? 'interrupted' : 'failed';
     update((current) => ({
       ...current,
@@ -308,6 +325,7 @@ export function createAssistantController({
       conversationId: active.id,
       turnId,
       turnKey: turnId,
+      newTurn: !active.turns.some((turn) => turn.key === turnId),
       content,
       mode: state.mode,
       controller: new AbortController(),
@@ -333,7 +351,7 @@ export function createAssistantController({
       return {
         ...current,
         running: setRunning(current, run.key, { token: run.token, turnKey: turnId, phase: 'sending' }),
-        active: { ...current.active, turns },
+        active: { ...current.active, turns, recoveredDraft: null, notice: null },
         announcement: announce('İleti gönderildi, yanıt hazırlanıyor.')
       };
     });

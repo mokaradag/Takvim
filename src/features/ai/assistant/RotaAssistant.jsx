@@ -212,8 +212,13 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const draft = draftState.key === draftKey ? draftState.text : '';
   if (draftState.key !== draftKey) setDraftState({ key: draftKey, text: '' });
   const setDraft = (text) => setDraftState({ key: draftKey, text });
+  const recoveredDraft = state.active.recoveredDraft;
+  useEffect(() => {
+    if (recoveredDraft) setDraftState((current) => current.key === draftKey && current.text
+      ? current : { key: draftKey, text: recoveredDraft.text });
+  }, [draftKey, recoveredDraft]);
   const restoreFocusEnabledRef = useRef(true);
-  if (open) restoreFocusEnabledRef.current = true;
+  if (open) restoreFocusEnabledRef.current = sheet;
   const focusTargetRef = useMemo(() => ({
     get current() {
       return inputRef.current || headingRef.current;
@@ -231,7 +236,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
     if (!open || !pendingFocusRef.current) return;
     const focused = globalThis.document?.activeElement;
     if (focused && focused !== globalThis.document?.body && focused !== launcherRef.current
-      && !panelRef.current?.contains?.(focused) && !focused.closest?.('[role="dialog"]')) {
+      && !panelRef.current?.contains?.(focused)) {
       pendingFocusRef.current = false;
       return;
     }
@@ -284,7 +289,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
     return result;
   };
 
-  const recent = ready && list.items.length > 0 && !active.turns.length ? (
+  const recent = ready && (list.items.length > 0 || list.error || list.loading) && !active.turns.length ? (
     <div className="rota-assistant-recent">
       <div className="rota-assistant-recent-head">
         <h4>Son konuşmalar</h4>
@@ -422,7 +427,10 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           </button>
         </div>
       </header>
-      <div className="rota-assistant-body">{body}</div>
+      <div className="rota-assistant-body">
+        {active.notice && <Notice notice={active.notice} onAction={runAction} />}
+        {body}
+      </div>
       {(canCompose || (actual && generating)) && (
         <AssistantComposer
           value={draft}

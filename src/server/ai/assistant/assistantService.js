@@ -31,7 +31,9 @@ import {
   isMissingConversationSchema,
   listConversations,
   loadConversation,
-  prepareConversationTurn
+  prepareConversationTurn,
+  noteConversationSchema,
+  resetConversationSchemaForTests
 } from './conversationStore.js';
 
 /**
@@ -77,6 +79,7 @@ const conversationGate = createAiSqlGate({
 
 export function resetAssistantConversationGateForTests() {
   conversationGate.resetForTests();
+  resetConversationSchemaForTests();
 }
 
 /** Yalnızca testler: konuşma SQL kapısının doluluğu. */
@@ -158,7 +161,10 @@ function withConversationSql(sicil, signal, work) {
     try {
       return await conversationGate.run(sicil, scoped, (track) => work({ pool, track, signal: scoped }));
     } catch (error) {
-      if (isMissingConversationSchema(error)) throw conversationSchemaMissing();
+      if (isMissingConversationSchema(error)) {
+        noteConversationSchema(false);
+        throw conversationSchemaMissing();
+      }
       throw error;
     }
   }, conversationTimeout);
@@ -230,12 +236,7 @@ export async function loadAssistantReadiness({ signal = null } = {}) {
     label: assistantModeLabel(mode),
     available: routeAvailable(registry, mode)
   }));
-  const sicil = await getTrustedCurrentSicil();
-  // İçerik okumadan her iki konuşma tablosunu doğrula.
-  const schema = await withConversationSql(sicil, signal, (scope) => loadConversation(directExecutor(scope), sicil, {
-    conversationId: '00000000-0000-0000-0000-000000000000', maxMessages: 0
-  }));
-  if (!schema.knownSicil) throw unknownSicil();
+  await checkAssistantConversationSchema({ signal });
   const available = modes.some((mode) => mode.available);
   return {
     available,
@@ -244,6 +245,21 @@ export async function loadAssistantReadiness({ signal = null } = {}) {
     modes,
     limits: READINESS_LIMITS
   };
+}
+
+/** İçerik okumadan iki tabloyu doğrular; sağlık görünümüne gözlem bırakır. */
+export async function checkAssistantConversationSchema({ signal = null } = {}) {
+  const sicil = await getTrustedCurrentSicil();
+  try {
+    const schema = await withConversationSql(sicil, signal, (scope) => loadConversation(directExecutor(scope), sicil, {
+      conversationId: '00000000-0000-0000-0000-000000000000', maxMessages: 0
+    }));
+    if (!schema.knownSicil) throw unknownSicil();
+    noteConversationSchema(true);
+  } catch (error) {
+    if (!signal?.aborted && error.code !== 'UNAUTHORIZED') noteConversationSchema(false);
+    throw error;
+  }
 }
 
 /* ── Konuşma listesi, okuma ve silme ─────────────────────────── */
@@ -299,7 +315,17 @@ export async function loadAssistantConversation({ conversationId, signal = null 
 export async function deleteAssistantConversation({ conversationId, signal = null }) {
   const sicil = await getTrustedCurrentSicil();
   const id = requireConversationId(conversationId);
-  const result = await withConversationSql(sicil, signal, (scope) => deleteConversation(directExecutor(scope), sicil, { conversationId: id }));
+  const result = await withConversationSql(sicil, signal, (scope) => {
+    const executor = boundedExecutor(scope.pool, scope.signal, {
+      track: scope.track,
+      // HTTP iptal edilse bile sürücünün başarılı silme sonucu üretimi durdurur.
+      onResult: (result) => {
+        const row = result.recordsets?.[0]?.[0];
+        if (row?.KnownSicil && Number(row.Deleted) > 0) abortAssistantGeneration({ sicil, conversationId: id });
+      }
+    });
+    return deleteConversation(executor, sicil, { conversationId: id });
+  });
   if (!result.knownSicil) throw unknownSicil();
   if (!result.deleted) throw conversationNotFound();
   abortAssistantGeneration({ sicil, conversationId: id });

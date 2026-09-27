@@ -1273,14 +1273,15 @@ test('kapanan modal daha yeni bir yüzeyin odağını geri almaz', async (t) => 
   let restores = 0;
   const opener = { isConnected: true, focus() { restores += 1; } };
   globalThis.document = { activeElement: opener, body: {}, addEventListener() {}, removeEventListener() {} };
+  t.after(() => { globalThis.document = previous; });
   const props = { containerRef: { current: null }, initialFocusRef: { current: null }, enabled: true };
   const probe = mountComponent((input) => { useModalFocusTrap(input); return null; }, props);
+  t.after(() => probe.unmount());
   probe.render({ ...props, enabled: false });
   globalThis.document.activeElement = { isConnected: true };
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(restores, 0);
-  probe.unmount();
-  globalThis.document = previous;
+
 });
 
 test('geçmiş zaman etiketleri dakika geçince yenilenir ve zamanlayıcı temizlenir', (t) => {
@@ -1326,4 +1327,119 @@ test('hazırlık veya görünüm değişimi odak isteği olmadan odağı çalmaz
   panel.render({ assistant: { ...assistant, focusRequest: 2 } });
   assert.equal(focused, 1);
   panel.unmount();
+});
+
+
+test('yanıt kopyası görünen metindir; geçerli URL sonları korunur', async () => {
+  const { assistantMarkdownText } = await import('../src/features/ai/assistant/assistantMarkdown.js');
+  assert.equal(assistantMarkdownText('**Önemli** [doküman](https://example.com)'), 'Önemli doküman');
+  assert.equal(assistantMarkdownText('```js\na_b > 3\n```'), 'a_b > 3');
+  for (const end of ['_', '~', '*']) {
+    const url = `https://example.com/item${end}`;
+    const link = parseInline(url).find((node) => node.type === 'link');
+    assert.equal(link.href, url);
+  }
+  const turn = { key: 'a', user: { content: 'Soru' }, answer: { status: 'complete', content: '**Önemli** [doküman](https://example.com)' } };
+  const view = mountComponent(AssistantTurn, { turn });
+  assert.equal(findElement(view.output, (node) => node.type?.name === 'CopyAnswerButton').props.text, 'Önemli doküman');
+  view.unmount();
+});
+
+test('bağlantı etiketleri ortak biçim belirteci bütçesini aşamaz', () => {
+  const budget = { delimiters: 398 };
+  const nodes = parseInline('[**bir**](https://example.com) [**iki**](https://example.com)', { budget });
+  assert.equal(budget.delimiters, 400);
+  const links = nodes.filter((node) => node.type === 'link');
+  assert.equal(links[0].children[0].type, 'strong');
+  assert.equal(links[1].children.some((node) => node.type === 'strong'), false);
+});
+
+test('kabul öncesi kesin ret taslağı korur ve yeni iletiyi kilitlemez', async () => {
+  for (const existing of [false, true]) {
+    const { controller, api, state } = await readyController();
+    if (existing) await controller.openConversation(CONVERSATION_A);
+    controller.send('Korunacak soru');
+    api.turns[0].resolve({ ok: false, phase: 'request', code: 'AI_CONFIGURATION_ERROR', reason: 'MODE_UNAVAILABLE' });
+    await drain();
+    assert.equal(state().active.turns.length, 0);
+    assert.equal(state().active.recoveredDraft.text, 'Korunacak soru');
+    assert.ok(state().active.notice);
+    assert.equal(controller.send('Yeni soru').ok, true);
+    controller.dispose();
+  }
+});
+
+test('ilk geçmiş hatası boş karşılama ekranında gösterilir', async () => {
+  const { controller } = await readyController({ api: fakeApi({ listAssistantConversationsRequest: async () => ({ ok: false, code: 'DATABASE_UNAVAILABLE' }) }) });
+  await drain();
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+  const welcome = findElement(panel.output, (node) => node.type?.name === 'Welcome');
+  const list = findElement(welcome.props.recent, (node) => node.type === AssistantConversationList);
+  assert.ok(list.props.list.error);
+  panel.unmount();
+});
+
+test('hazırlık beklerken başka modalın odağı korunur', async (t) => {
+  const previous = globalThis.document;
+  const body = {};
+  globalThis.document = { activeElement: body, body };
+  t.after(() => { globalThis.document = previous; });
+  let ready;
+  const controller = createAssistantController({ api: fakeApi({ loadAssistantReadinessRequest: () => new Promise((resolve) => { ready = resolve; }) }) });
+  const pending = controller.activate();
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  t.after(() => { panel.unmount(); controller.dispose(); });
+  globalThis.document.activeElement = { isConnected: true, closest: () => ({ role: 'dialog' }) };
+  ready({ ok: true, assistant: READINESS });
+  await pending;
+  panel.render();
+  let focused = 0;
+  findElement(panel.output, (node) => node.type === AssistantComposer).props.inputRef.current = { focus() { focused += 1; } };
+  panel.render();
+  assert.equal(focused, 0);
+});
+
+test('açık panel mobil düzenden masaüstüne geçince yazma odağını korur', async (t) => {
+  const previous = { window: globalThis.window, document: globalThis.document, observer: globalThis.MutationObserver };
+  const media = { matches: false, addEventListener(_event, fn) { this.change = fn; }, removeEventListener() {} };
+  const body = { classList: { contains: () => false } };
+  globalThis.document = { body, activeElement: body, addEventListener() {}, removeEventListener() {} };
+  globalThis.window = { matchMedia: (query) => query.includes('760') ? media : null, addEventListener() {}, removeEventListener() {} };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  const { controller } = await readyController();
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  t.after(() => { panel.unmount(); controller.dispose(); globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer; });
+  let restored = 0;
+  const heading = { isConnected: true, focus() { restored += 1; globalThis.document.activeElement = heading; } };
+  const input = { isConnected: true, focus() { globalThis.document.activeElement = input; } };
+  panel.output.ref.current = { contains: (node) => node === heading || node === input, setAttribute() {}, removeAttribute() {} };
+  findElement(panel.output, (node) => node.type === AssistantComposer).props.inputRef.current = input;
+  globalThis.document.activeElement = heading;
+  media.matches = true;
+  media.change();
+  panel.render();
+  assert.equal(globalThis.document.activeElement, input);
+  media.matches = false;
+  media.change();
+  panel.render();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(restored, 0);
+  assert.equal(globalThis.document.activeElement, input);
+});
+
+
+test('yeniden denemedeki kesin ret önceki belirsiz teslimatı silmez', async () => {
+  const { controller, api, state } = await readyController();
+  await controller.openConversation(CONVERSATION_A);
+  controller.send('Teslim edilmiş olabilir');
+  api.turns[0].resolve({ ok: false, code: 'NETWORK_ERROR' });
+  await drain();
+  controller.retry(state().active.turns[0].key);
+  api.turns[1].resolve({ ok: false, phase: 'request', code: 'AI_CONFIGURATION_ERROR' });
+  await drain();
+  assert.equal(state().active.turns.length, 1);
+  assert.equal(state().active.turns[0].answer.status, 'failed');
+  controller.dispose();
 });

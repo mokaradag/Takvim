@@ -59,7 +59,10 @@ export function assistantSystemPrompt(now = new Date()) {
 function clip(content) {
   const text = String(content ?? '');
   const limit = ASSISTANT_CONTEXT_POLICY.maxMessageChars;
-  return text.length <= limit ? text : `${text.slice(0, limit - CLIPPED_SUFFIX.length)}${CLIPPED_SUFFIX}`;
+  if (text.length <= limit) return text;
+  let cut = text.slice(0, limit - CLIPPED_SUFFIX.length);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut}${CLIPPED_SUFFIX}`;
 }
 
 /**

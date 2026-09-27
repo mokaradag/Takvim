@@ -59,6 +59,7 @@ function createState() {
     firstTokenMs: [],
     streamGenerationMs: [],
     streams: { completed: 0, cancelled: 0, timeout: 0, interrupted: 0, failed: 0 },
+    assistantTurns: { completed: 0, failed: 0, cancelled: 0, lastFailure: null },
     retries: 0,
     lastSuccessAt: null,
     // Hizmet hatası (sağlayıcı öncesi de olabilir: rehber, anahtar tablosu, iç
@@ -394,6 +395,7 @@ export function aiTelemetrySnapshot() {
       streamGeneration: percentiles(current.streamGenerationMs)
     },
     streams: { ...current.streams },
+    assistantTurns: { ...current.assistantTurns, lastFailure: current.assistantTurns.lastFailure ? { ...current.assistantTurns.lastFailure } : null },
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
     requestSequence: current.requestSequence,
@@ -408,4 +410,20 @@ export function aiTelemetrySnapshot() {
 
 export function resetAiTelemetryForTests() {
   globalThis[STATE_KEY] = createState();
+}
+
+/** Model üretimi ve yanıt kalıcılığı birlikte sonuçlandıktan sonra çağrılır. */
+export function recordAssistantTurn({ code = null, durationMs = 0 }) {
+  safely(() => {
+    const turns = state().assistantTurns;
+    const cancelled = code === AI_ERROR_CODES.AI_CANCELLED;
+    turns[code ? (cancelled ? 'cancelled' : 'failed') : 'completed'] += 1;
+    if (!code) turns.lastFailure = null;
+    else if (!cancelled) turns.lastFailure = { code, at: new Date().toISOString() };
+    recordOperation({ operation: 'ai.assistant.turn', durationMs, ok: !code || cancelled, code });
+    if (code && !cancelled) logEvent({
+      severity: EVENT_SEVERITIES.ERROR, component: COMPONENTS.AI,
+      operation: 'ai.assistant.turn', code, message: 'Rota AI turu tamamlanamadı.'
+    });
+  });
 }

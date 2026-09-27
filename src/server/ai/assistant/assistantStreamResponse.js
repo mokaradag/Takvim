@@ -8,6 +8,7 @@ import {
 import { COMPONENTS, EVENT_SEVERITIES } from '../../../domain/observability/eventModel.js';
 import { ServerPersistenceError } from '../../errors.js';
 import { logEvent } from '../../observability/structuredLogger.js';
+import { recordAssistantTurn } from '../aiTelemetry.js';
 import { generateAssistantAnswer } from './assistantService.js';
 
 /**
@@ -152,10 +153,12 @@ export function assistantStreamResponse(turn, {
         waiting = resolve;
       });
     }
+    if (generationSignal.aborted) return false;
     return send(event, data);
   }
 
   async function run() {
+    const startedAt = Date.now();
     const keepalive = setInterval(() => {
       if (!closed && controller.desiredSize > 0) enqueue(KEEPALIVE);
     }, keepaliveMs);
@@ -171,6 +174,7 @@ export function assistantStreamResponse(turn, {
           assistantMessage: messageView(turn.replay, { includeContent: false }),
           replayed: true
         });
+        recordAssistantTurn({ durationMs: Date.now() - startedAt });
         return;
       }
       const result = await generate(turn, {
@@ -186,8 +190,11 @@ export function assistantStreamResponse(turn, {
         assistantMessage: messageView(result.answer, { includeContent: false }),
         replayed: false
       });
+      recordAssistantTurn({ durationMs: Date.now() - startedAt });
     } catch (error) {
-      send(ASSISTANT_STREAM_EVENTS.ERROR, assistantStreamErrorPayload(error, { partial: textSent }));
+      const payload = assistantStreamErrorPayload(error, { partial: textSent });
+      recordAssistantTurn({ code: payload.code, durationMs: Date.now() - startedAt });
+      send(ASSISTANT_STREAM_EVENTS.ERROR, payload);
     } finally {
       clearInterval(keepalive);
       generationSignal.removeEventListener('abort', onAbort);

@@ -331,7 +331,7 @@ test('liste son etkinliğe göre sıralıdır, sayfalıdır ve sayfalar örtüş
 });
 
 test('başlık ilk iletiden belirlenimci üretilir: biçim işaretleri atılır, uzun metin kelime sınırında kısalır', async (t) => {
-  assert.equal(conversationTitleFrom('## **Proje** `planı` > hazırla'), 'Proje planı hazırla');
+  assert.equal(conversationTitleFrom('## **Proje** `planı` > hazırla'), 'Proje planı > hazırla');
   assert.equal(conversationTitleFrom('   \n\t '), ASSISTANT_DEFAULT_TITLE);
   assert.equal(conversationTitleFrom('###'), ASSISTANT_DEFAULT_TITLE);
   const long = conversationTitleFrom('Çok uzun bir soru metni ki başlığa sığmaması gerekir ve kelime sınırında kesilmesi beklenir');
@@ -576,4 +576,39 @@ test('kayıtlı yanıtın akış kurulumu hata verirse kararlı hata yanıtı d�
   } finally {
     AbortSignal.any = original;
   }
+});
+
+
+test('başlık gerçek noktalama işaretlerini ve Unicode sınırını korur', () => {
+  assert.equal(conversationTitleFrom('C# için 5 > 3 koşulunu açıkla'), 'C# için 5 > 3 koşulunu açıkla');
+  assert.equal(conversationTitleFrom('task_id ~ * değeri'), 'task_id ~ * değeri');
+  const prefix = 'x'.repeat(ASSISTANT_LIMITS.maxTitleChars - 2);
+  assert.equal(conversationTitleFrom(`${prefix}😀abc`), `${prefix}…`);
+});
+
+test('bağlam kısaltması emoji çiftini bölmez', () => {
+  const suffix = '\n[…ileti bağlam için kısaltıldı]';
+  const prefix = 'x'.repeat(ASSISTANT_CONTEXT_POLICY.maxMessageChars - suffix.length - 1);
+  const context = buildAssistantContext({ history: [
+    { id: 'u', role: 'user', content: 'soru' },
+    { role: 'assistant', replyToId: 'u', content: `${prefix}😀${'y'.repeat(100)}` }
+  ], userContent: 'devam' });
+  assert.equal(context.messages[2].content, `${prefix}${suffix}`);
+});
+
+test('silme SQL sonucuyla yarışan HTTP iptali süren üretimi yine durdurur', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const { conversationId } = await startConversation('İlk');
+  provider.enqueue({ type: 'deferred-stream' });
+  const response = await turnsRoute.POST(turnRequest({ conversationId, turnId: randomUUID(), message: 'Uzun', mode: 'standard' }));
+  const reader = sseReader(response);
+  await reader.next();
+  await provider.waitForActive(1);
+  const client = new AbortController();
+  db.aiConversationHooks = { beforeDelete: () => client.abort() };
+  await deleteAssistantConversation(conversationId, { signal: client.signal });
+  await until(() => activeAssistantGenerationCountForTests() === 0);
+  assert.equal(db.aiConversations.length, 0);
+  assert.equal(provider.calls[1].aborted, true);
+  assert.equal((await reader.rest()).at(-1).data.code, 'AI_CANCELLED');
 });

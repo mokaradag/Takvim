@@ -468,3 +468,45 @@ test('Standart kapalıyken kullanılabilir derin kip genel hazırlığı açar',
   assert.equal(result.body.assistant.available, true);
   assert.deepEqual(result.body.assistant.modes.map((mode) => mode.available), [false, true]);
 });
+
+
+test('geri basınçta bekleyen parça üretim iptalinden sonra gönderilmez', async () => {
+  const aborted = new AbortController();
+  const { turn } = fakeTurn({ claim: { signal: aborted.signal, release() {} } });
+  let produced = 0;
+  const response = assistantStreamResponse(turn, { generate: async (_turn, { onText }) => {
+    for (let index = 0; index < 40; index += 1) {
+      await onText(`parça ${index}`);
+      aborted.signal.throwIfAborted();
+      produced += 1;
+    }
+  } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(produced, 31);
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  aborted.abort(new AiError('AI_CANCELLED'));
+  const parsed = parseSseText(await response.text());
+  assert.equal(parsed.events.filter((event) => event.event === 'delta').length, 31);
+  assert.equal(parsed.events.at(-1).data.code, 'AI_CANCELLED');
+});
+
+test('akış sonrası kalıcılık hatası tur telemetrisine ve işletim günlüğüne girer', async (t) => {
+  const { aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  const { ServerPersistenceError } = await import('../src/server/errors.js');
+  resetAiTelemetryForTests();
+  const logs = captureConsole(t);
+  const { turn } = fakeTurn();
+  const response = assistantStreamResponse(turn, { generate: async (_turn, { onText }) => {
+    await onText('Gizli yanıt içeriği');
+    throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Veritabanı yok');
+  } });
+  assert.equal(response.status, 200);
+  const events = parseSseText(await response.text()).events;
+  assert.equal(events.at(-1).event, 'error');
+  const turns = aiTelemetrySnapshot().assistantTurns;
+  assert.equal(turns.completed, 0);
+  assert.equal(turns.failed, 1);
+  assert.equal(turns.lastFailure.code, 'DATABASE_UNAVAILABLE');
+  assert.ok(logs.some((line) => line.includes('ai.assistant.turn') && line.includes('DATABASE_UNAVAILABLE')));
+  assert.ok(logs.every((line) => !line.includes('Gizli yanıt içeriği')));
+});

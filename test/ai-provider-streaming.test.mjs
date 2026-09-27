@@ -334,7 +334,7 @@ test('SSE olmayan yanıt reddedilir; akışı yok sayıp JSON dönen uyumlu ağ 
   await rejectsWithReason(stream(provider, server), 'AI_PROVIDER_RESPONSE_INVALID', 'STREAM_CONTENT_TYPE');
   server.setScenario({ jsonForStream: true, text: '<think>gizli</think>JSON yanıtı' });
   const received = await collect((await stream(provider, server)).events);
-  assert.deepEqual(received.map((event) => event.type), ['text', 'done']);
+  assert.deepEqual(received.map((event) => event.type), ['reasoning', 'text', 'done']);
   assert.equal(textOf(received), 'JSON yanıtı');
 });
 
@@ -363,4 +363,13 @@ test('iptal süren akışı sağlayıcı tarafında da kapatır; okuma iptal ned
   await assert.rejects(pending, (error) => error === reason);
   await server.waitForClosedStreams(1);
   assert.equal(server.state.streamsCompleted, 0);
+});
+
+
+test('düşünme evresi aynı mantıksal içeriğin parça sınırından bağımsızdır', async () => {
+  for (const pieces of [['<think>gizli</think>Yanıt'], ['<think>', 'gizli', '</think>', 'Yanıt']]) {
+    const events = await collect(readChatCompletionStream(bodyFrom([...pieces.map((text) => delta(text)), finish(), 'data: [DONE]\n\n']).stream));
+    assert.deepEqual(events.map((event) => event.type), ['reasoning', 'text', 'done']);
+    assert.equal(textOf(events), 'Yanıt');
+  }
 });

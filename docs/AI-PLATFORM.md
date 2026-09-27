@@ -313,8 +313,9 @@ bağlıdır ve bilinmedikçe boş bırakılır.
 | `speech.tts.quality` | Metinden konuşmaya (yüksek kalite) | `speech.tts` |
 | `image.generation` | Görsel üretimi | `image.generation` |
 
-Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Öteki profiller
-sonraki aşamaların sözleşmesidir; yürütme yolu yoktur.
+Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Aşama 2'de
+`chat.general` Standart, `chat.reasoning` Derin düşünme kipini çalıştırır.
+Diğer profiller sonraki aşamaların sözleşmesidir.
 
 Varsayılan eşleme `src/server/ai/defaultModelRegistry.js` dosyasındadır. Depoda
 ayrıca **mevcut kurum içi sunucu kataloğunun operasyonel anlık görüntüsü**
@@ -813,7 +814,8 @@ sayılan `.env.local` dosyasında ya da hizmet ortamında bulunur.
 | `LastValidatedAt`, `LastValidationStatus` | `datetime2(7)`, `varchar(20)` | `VALID` / `REJECTED` / `FORBIDDEN` |
 | `RowVersion` | `rowversion` | Satır sürümü; künye yazımıyla da ilerlediği için anahtar kimliği olarak kullanılmaz |
 
-Konuşma geçmişi, istem ya da yanıt **saklanmaz**. Betik yinelenebilirdir,
+`MR_AiUserCredentials` tablosunda konuşma geçmişi, istem ya da yanıt **saklanmaz**.
+0017 ile ileti metinlerinin saklanması için §18.7’ye bakın. Betik yinelenebilirdir,
 veriye dokunmaz, `0015_assignment_coordination_and_presence` kaydı yoksa hata
 verir ve `0016_ai_user_credentials` kaydını yazar. Tablo önceden (ör. elle)
 oluşturulmuşsa sütunları (tür, uzunluk, boş olabilirlik; `IDENTITY` ya da
@@ -1228,6 +1230,7 @@ Mevcut telemetri alt sistemi genişletildi (ikinci bir sistem yoktur):
 | --- | --- |
 | `ai.request` | Sohbet isteğinin tamamı (profil, anahtar kaynağı, süre, sonuç kodu) |
 | `ai.provider.stream` | Sağlayıcı akış çağrısı (bağlantıdan akışın sonuna) |
+| `ai.assistant.turn` | Yanıt kalıcılığı dâhil Rota AI tur sonucu |
 | `ai.stream.first_token` | İsteğin ağ geçidine girişinden ilk GÖRÜNÜR metne kadar |
 | `ai.stream.provider_start` | Sağlayıcı çağrısından başarılı HTTP yanıtına kadar |
 | `ai.queue.wait` | Kapasite sırasında bekleme |
@@ -1237,8 +1240,12 @@ Yapay zekâ sağlık ayrıntısı ayrıca ilk metin ve akış üretim sürelerin
 P50/P95 özetini (`latency.firstToken`, `latency.streamGeneration`) ve akış
 sonuç sayaçlarını (`streams`: tamamlanan, durdurulan, süre aşımı, yarıda kalan,
 başlamadan başarısız) taşır; Sistem Yönetimi → Genel Durum → Yapay zekâ
-hizmeti ayrıntısında *İlk metin P95*, *Akış sonuçları* ve profil başına istek
-sayısı (*Profil dağılımı*) olarak görünür.
+hizmeti ayrıntısında *İlk metin P95*, *Sağlayıcı akış sonuçları* ve profil başına istek
+sayısı (*Profil dağılımı*) olarak görünür. *Rota AI tur sonuçları* (`assistantTurns`)
+yanıtın kaydedilmesini de kapsar; HTTP 200 sonrasındaki kalıcılık hataları başarısız
+tur olarak kaydedilir ve sağlık görünümünde bildirilir. Sağlıklı durum için en az
+bir sohbet profili (`chat.general` / `chat.reasoning`) ve son 15 dakika içinde
+doğrulanmış 0017 konuşma şeması gerekir. Yönetici bağlantı testi bu şemayı da denetler.
 Hiçbir ölçüm ve günlük satırı soru, yanıt, başlık, yönerge ya da anahtar
 taşımaz; istek gövdeleri günlüğe yazılmaz.
 

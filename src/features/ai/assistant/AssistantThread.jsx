@@ -1,4 +1,5 @@
 'use client';
+import { assistantMarkdownText } from './assistantMarkdown.js';
 import { useEffect, useRef, useState } from 'react';
 import { Icons } from '../../../components/icons';
 import { ASSISTANT_MODES, assistantModeLabel } from '../../../domain/ai/assistantContract.js';
@@ -117,7 +118,7 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, onRetry, o
         )}
         {status === 'complete' && (
           <div className="rota-assistant-answer-meta">
-            <CopyAnswerButton text={answer.content} />
+            <CopyAnswerButton text={assistantMarkdownText(answer.content)} />
             {deep && <span className="rota-assistant-mode-badge">{assistantModeLabel(ASSISTANT_MODES.DEEP)}</span>}
             {note && <small className="rota-assistant-finish-note">{note}</small>}
           </div>

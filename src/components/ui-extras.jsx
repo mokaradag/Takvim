@@ -92,7 +92,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
       enter({ clientX: lastMouse.current.x, clientY: lastMouse.current.y });
     },
     onBlur: leave,
-    onKeyDown: (e) => { if (e.key === 'Escape') leave(); }
+    onKeyDown: (e) => { if (e.key === 'Escape') { e.preventDefault(); leave(); } }
   };
 
   const tip = show && ReactDOM.createPortal(
@@ -718,12 +718,12 @@ export function HoverListCard({
       if (wrapRef.current?.contains(event.target) || cardRef.current?.contains(event.target)) return;
       closeNow();
     };
-    const onKey = (event) => { if (event.key === 'Escape') closeNow(); };
+    const onKey = (event) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); closeNow(); } };
     document.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinned]);
@@ -787,6 +787,7 @@ export function HoverListCard({
             event.preventDefault();
             toggle();
           } else if (event.key === 'Escape') {
+            event.preventDefault();
             closeNow();
           }
         }}

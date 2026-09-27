@@ -173,6 +173,38 @@ BEGIN TRY
     )
         THROW 51017, N'0017: Konuşma tablolarında uygulamanın dolduramayacağı fazladan zorunlu sütun var.', 1;
 
+    -- Dizin türü ve kısıt sahipliği de kurulum sözleşmesinin parçasıdır.
+    DECLARE @RequiredIndexes TABLE (TableName sysname, IndexName sysname, IndexType tinyint, IsPrimaryKey bit, IsUniqueConstraint bit);
+    INSERT @RequiredIndexes VALUES
+        (N'MR_AiConversations', N'PK_MR_AiConversations', 1, 1, 0),
+        (N'MR_AiConversations', N'UX_MR_AiConversations_OwnerOrigin', 2, 0, 0),
+        (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerRecent', 2, 0, 0),
+        (N'MR_AiConversationMessages', N'PK_MR_AiConversationMessages', 2, 1, 0),
+        (N'MR_AiConversationMessages', N'UX_MR_AiConversationMessages_Sequence', 1, 0, 1),
+        (N'MR_AiConversationMessages', N'UX_MR_AiConversationMessages_Turn', 2, 0, 0),
+        (N'MR_AiConversationMessages', N'UX_MR_AiConversationMessages_Reply', 2, 0, 0);
+    IF EXISTS (
+        SELECT 1 FROM @RequiredIndexes r
+        LEFT JOIN sys.indexes i ON i.object_id = OBJECT_ID(N'dbo.' + r.TableName, N'U') AND i.name = r.IndexName
+        WHERE i.index_id IS NULL OR i.type <> r.IndexType OR i.is_primary_key <> r.IsPrimaryKey
+            OR i.is_unique_constraint <> r.IsUniqueConstraint
+    )
+        THROW 51017, N'0017: Konuşma dizinlerinin depolama türü ya da kısıt sahipliği beklenen yapıda değil.', 1;
+
+    DECLARE @RequiredIncludedColumns TABLE (ColumnName sysname);
+    INSERT @RequiredIncludedColumns VALUES (N'Title'), (N'CreatedAt'), (N'MessageCount');
+    IF EXISTS (
+        SELECT 1 FROM @RequiredIncludedColumns r
+        WHERE NOT EXISTS (
+            SELECT 1 FROM sys.indexes i
+            JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID(N'dbo.MR_AiConversations', N'U')
+                AND i.name = N'IX_MR_AiConversations_OwnerRecent' AND ic.is_included_column = 1 AND c.name = r.ColumnName
+        )
+    )
+        THROW 51017, N'0017: Son konuşmalar dizininin INCLUDE sütunları eksik.', 1;
+
     -- Anahtarlar ve dizinler: tekillik, anahtar sütunlarının sırası ve yönü.
     DECLARE @RequiredIndexColumns TABLE (TableName sysname, IndexName sysname, IsUnique bit, KeyOrdinal tinyint, ColumnName sysname, IsDescending bit);
     INSERT @RequiredIndexColumns VALUES
