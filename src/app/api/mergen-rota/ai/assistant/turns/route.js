@@ -27,7 +27,7 @@ export const POST = withRouteObservability('ai.api.assistant.turn', async (reque
     });
     return assistantStreamResponse(turn, { signal: request.signal });
   } catch (error) {
-    turn?.claim.release();
+    turn?.claim?.release();
     return aiErrorResponse(error);
   }
 });

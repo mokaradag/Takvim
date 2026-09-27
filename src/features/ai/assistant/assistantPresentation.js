@@ -36,7 +36,7 @@ function serverMessage(result, fallback) {
  * `{ tone, title, message, retryable, action }`; `action` önerilen yönlendirmedir
  * (`settings`, `new-conversation`, `reload`).
  */
-export function assistantFailureView(result) {
+export function assistantFailureView(result, now = Date.now()) {
   const code = String(result?.code ?? '');
   if (code === AI_ERROR_CODES.AI_CANCELLED) return { ...CLIENT_FAILURES.REQUEST_CANCELLED, retryable: true, action: null };
   if (Object.hasOwn(CLIENT_FAILURES, code)) return { ...CLIENT_FAILURES[code], retryable: true, action: null };
@@ -61,6 +61,7 @@ export function assistantFailureView(result) {
       };
     case AI_ERROR_CODES.AI_RATE_LIMITED:
       return {
+        retryAt: now + (Number.isFinite(result?.retryAfterMs) ? Math.max(0, result.retryAfterMs) : 0),
         tone: 'warn',
         title: 'İstek sınırına ulaşıldı',
         message: serverMessage(result, aiErrorMessage(code)),

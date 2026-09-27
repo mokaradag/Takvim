@@ -408,9 +408,13 @@ test('uzun konuşmada bağlamın kısaldığı ilk olayda bildirilir', async (t)
   for (let index = 1; index <= 11; index += 1) {
     await sendTurn({ conversationId, turnId: randomUUID(), message: `Soru ${index}` });
   }
-  const last = await sendTurn({ conversationId, turnId: randomUUID(), message: 'Son soru' });
+  const lastTurnId = randomUUID();
+  const last = await sendTurn({ conversationId, turnId: lastTurnId, message: 'Son soru' });
   assert.deepEqual(accepted(last).context, { trimmed: true, omittedMessages: 4 });
   assert.equal(provider.calls.at(-1).messages.length, 1 + ASSISTANT_CONTEXT_POLICY.maxHistoryMessages + 1);
+  const replay = await sendTurn({ conversationId, turnId: lastTurnId, message: 'Son soru' });
+  assert.deepEqual(accepted(replay).context, accepted(last).context);
+  assert.equal(terminal(replay).data.replayed, true);
 });
 
 /* ── SQL ve model üretimi ─────────────────────────────────── */
@@ -557,4 +561,19 @@ test('aynı tamamlanmış yanıtın yazımı tekrarlandığında ikinci satır e
   assert.equal(result.message.id, answer.MessageId.toLowerCase());
   assert.equal(db.aiConversationMessages.length, 2);
   assert.equal(db.aiConversations[0].MessageCount, 2);
+});
+
+test('kayıtlı yanıtın akış kurulumu hata verirse kararlı hata yanıtı döner', async (t) => {
+  createAiStack(t);
+  const { conversationId, turnId } = await startConversation('Soru');
+  const original = AbortSignal.any;
+  AbortSignal.any = () => { throw new Error('Akış kurulamadı'); };
+  try {
+    const response = await turnsRoute.POST(turnRequest({ conversationId, turnId, message: 'Soru', mode: 'standard' }));
+    assert.equal(response.status, 500);
+    const body = await response.json();
+    assert.ok(body.error.code);
+  } finally {
+    AbortSignal.any = original;
+  }
 });

@@ -71,13 +71,13 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => {
-      if (event.key === 'Escape' && !saving) {
+      if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 && !saving) {
         event.preventDefault();
         onClose();
       }
     };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   }, [open, saving, onClose]);
 
   if (!open) return null;

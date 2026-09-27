@@ -378,7 +378,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     content: input.message,
     title: conversationTitleFrom(input.message),
     maxMessages: ASSISTANT_LIMITS.maxConversationMessages,
-    historyLimit: readOnly ? 0 : ASSISTANT_CONTEXT_POLICY.historyWindow,
+    historyLimit: ASSISTANT_CONTEXT_POLICY.historyWindow,
     readOnly
   })));
   // Kayıtlı yanıt için yapılandırma ya da üretim hakkı gerekmez.
@@ -387,10 +387,11 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   if (existing.answer) {
     const failure = outcomeFailure(existing, input);
     if (failure) throw failure;
+    const context = buildAssistantContext({ history: existing.history, userContent: existing.turn.content, priorMessageCount: Math.max(0, existing.turn.sequence - 1) });
     return {
       sicil, claim: null, mode: input.mode, profile: assistantProfileForMode(input.mode),
       conversation: existing.conversation, userMessage: existing.turn.message,
-      replay: existing.answer, modelMessages: [], context: { trimmed: false, omittedMessages: 0 }
+      replay: existing.answer, modelMessages: [], context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
     };
   }
   const config = requireAiAvailable(readAiConfig());

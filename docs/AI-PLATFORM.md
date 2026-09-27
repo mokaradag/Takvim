@@ -1254,8 +1254,8 @@ Uygulama akış için gereken başlıkları kendisi gönderir (§18.3). Ters vek
 - `proxy_read_timeout` canlı tutma aralığından (15 sn) büyük olmalıdır; en uzun
   meşru üretim (derin düşünme 180 sn + sıra 20 sn + hazırlık) için bağlantının
   toplam ömrünü sınırlayan başka bir zaman aşımı en az 300 sn olmalıdır;
-- özgün ana makine ve şema iletilmelidir: `proxy_set_header Host $host;`,
-  `proxy_set_header X-Forwarded-Host $host;`,
+- özgün ana makine ve şema iletilmelidir: `proxy_set_header Host $http_host;`,
+  `proxy_set_header X-Forwarded-Host $http_host;`,
   `proxy_set_header X-Forwarded-Proto $scheme;`.
 
 Durum değiştiren istekler (tur, silme) Aşama 1'in aynı kaynak denetiminden

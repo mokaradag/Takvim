@@ -22,7 +22,8 @@ export const MARKDOWN_LIMITS = Object.freeze({
   maxDelimiters: 400,
   maxLinkChars: 2048,
   maxLinkLabelChars: 1000,
-  maxTableColumns: 24
+  maxTableColumns: 24,
+  maxTableRows: 200
 });
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
@@ -548,6 +549,7 @@ function parseBlockLines(lines, depth) {
       const rows = [];
       index += 2;
       while (index < lines.length && !isBlank(lines[index]) && lines[index].includes('|')) {
+        if (rows.length >= MARKDOWN_LIMITS.maxTableRows) break;
         const cells = splitTableRow(lines[index]).slice(0, header.length);
         while (cells.length < header.length) cells.push('');
         rows.push(cells.map((cell) => parseInline(cell)));
@@ -560,6 +562,12 @@ function parseBlockLines(lines, depth) {
         rows,
         source: lines.slice(start, index).join('\n')
       });
+      const overflow = index;
+      while (index < lines.length && !isBlank(lines[index]) && lines[index].includes('|')) index += 1;
+      if (index > overflow) {
+        const text = lines.slice(overflow, index).join('\n');
+        blocks.push({ type: 'paragraph', children: [textNode(text)], source: text });
+      }
       continue;
     }
     const paragraph = [line.trim()];

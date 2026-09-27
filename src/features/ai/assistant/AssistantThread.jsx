@@ -47,6 +47,19 @@ function CopyAnswerButton({ text }) {
 }
 
 function AnswerNotice({ failure, retryable, onRetry, onAction }) {
+  const [now, setNow] = useState(Date.now);
+  const remaining = Math.max(0, Math.ceil(((failure.retryAt || 0) - now) / 1000));
+  useEffect(() => {
+    setNow(Date.now());
+    if (!retryable || !(failure.retryAt > Date.now())) return undefined;
+    const timer = setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (current >= failure.retryAt) clearInterval(timer);
+    }, 1000);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }, [failure.retryAt, retryable]);
   return (
     <div className={`rota-assistant-notice is-${failure.tone}`}>
       <Icons.Alert size={14} aria-hidden="true" />
@@ -57,8 +70,8 @@ function AnswerNotice({ failure, retryable, onRetry, onAction }) {
       {(retryable || failure.action) && (
         <div className="rota-assistant-notice-actions">
           {retryable && (
-            <button type="button" className="btn sm" onClick={onRetry}>
-              <Icons.Refresh size={12} aria-hidden="true" /> Yeniden dene
+            <button type="button" className="btn sm" onClick={onRetry} disabled={remaining > 0}>
+              <Icons.Refresh size={12} aria-hidden="true" /> {remaining > 0 ? `${remaining} sn sonra yeniden dene` : 'Yeniden dene'}
             </button>
           )}
           {failure.action && (

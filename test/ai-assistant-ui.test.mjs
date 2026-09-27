@@ -527,7 +527,7 @@ test('Demo Kipinde panel açılır ama hiçbir istek gönderilmez; açıklama g�
   assert.equal(findElement(panel.output, (node) => node.props?.['aria-label'] === 'Yeni konuşma'), null);
 });
 
-test('panel açılıp kapanınca durum korunur; kapalı panel hiçbir şey çizmez; Gerçek Sistem’de hazırlık yeniden, liste bir kez okunur', async (t) => {
+test('panel açılıp kapanınca durum korunur; kapalı panel hiçbir şey çizmez; Gerçek Sistem’de hazırlık ve liste yeniden okunur', async (t) => {
   withDataMode(t, 'actual');
   const calls = stubFetch(t, (call) => {
     if (call.url.endsWith('/assistant')) return Response.json({ assistant: READINESS });
@@ -557,8 +557,8 @@ test('panel açılıp kapanınca durum korunur; kapalı panel hiçbir şey çizm
   probe.render();
   await drain();
   assert.equal(probe.output.assistant.controller, controller, 'denetleyici (konuşma durumu) korunur');
-  assert.equal(calls.length, 3, 'yeniden açılış hazırlığı doğrular, listeyi korur');
-  assert.equal(calls.filter((call) => call.url.endsWith('/conversations')).length, 1);
+  assert.equal(calls.length, 4, 'yeniden açılış hazırlığı ve listeyi yeniler');
+  assert.equal(calls.filter((call) => call.url.endsWith('/conversations')).length, 2);
 });
 
 test('gönderim yalnızca konuşma, tur, ileti ve kipi taşır; model adı, profil ya da anahtar göndermez', async (t) => {
@@ -814,13 +814,15 @@ test('geciken ilk liste yeni konuşmayı ve güncel başlığı korur', async ()
   assert.equal(controller.getState().list.nextCursor, 'cursor');
 });
 
-test('bağlanmamış başarısız taslaktan yeni ileti eski turu taşımaz', async () => {
+test('bağlanmamış başarısız tur yeniden denenmeden atılmaz', async () => {
   const { controller, api, state } = await readyController();
   controller.send('Eski');
   api.turns[0].resolve({ ok: false, code: 'NETWORK', retryable: true });
   await drain();
-  assert.equal(controller.send('Yeni').ok, true);
-  assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Yeni']);
+  assert.equal(controller.send('Yeni').ok, false);
+  assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Eski']);
+  assert.equal(controller.retry(api.turns[0].input.turnId).ok, true);
+  assert.equal(api.turns[1].input.turnId, api.turns[0].input.turnId);
 });
 
 test('Durdur sonrasında istek bitene kadar yeniden gönderilemez; geç çatışma yeniden denenebilir', async () => {
@@ -1029,14 +1031,14 @@ test('başarısız silme istemci üretimini kesmez; başarılı silme geç sonuc
   assert.equal(Object.keys(state().running).length, 0);
 });
 
-test('var olan konuşmada kabul edilmemiş tur yeni iletiye taşınmaz', async () => {
+test('var olan konuşmada kabul edilmemiş tur korunur', async () => {
   const { controller, api, state } = await readyController();
   await controller.openConversation(CONVERSATION_A);
   controller.send('Kaydedilmeyen');
   api.turns[0].resolve({ ok: false, code: 'CONFLICT' });
   await drain();
-  controller.send('Yeni soru');
-  assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Yeni soru']);
+  assert.equal(controller.send('Yeni soru').ok, false);
+  assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Kaydedilmeyen']);
 });
 
 test('canlı tura dönüşte kısaltılmış bağlam uyarısı korunur', async () => {
@@ -1114,20 +1116,214 @@ test('proje penceresinin Escape olayı önce açılmış yardımcıyı kapatmaz'
   const previousObserver = globalThis.MutationObserver;
   globalThis.document = { body: { classList: { contains: () => false } } };
   globalThis.MutationObserver = class { observe() {} disconnect() {} };
-  t.after(() => { globalThis.document = previousDocument; globalThis.MutationObserver = previousObserver; });
   const listeners = [];
   globalThis.window = {
     addEventListener(type, fn, capture = false) { listeners.push({ type, fn, capture }); },
     removeEventListener(type, fn) { const i = listeners.findIndex((item) => item.type === type && item.fn === fn); if (i >= 0) listeners.splice(i, 1); }
   };
+  globalThis.document.addEventListener = (type, fn) => listeners.push({ type, fn, document: true });
+  globalThis.document.removeEventListener = globalThis.window.removeEventListener;
   const { controller } = await readyController();
   const closed = [];
   const panel = mountComponent(RotaAssistantPanel, { assistant: {
     controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() { closed.push('assistant'); }
   } });
   const dialog = mountComponent(ProjectCreateDialog, { open: true, onClose() { closed.push('project'); } });
-  t.after(() => { dialog.unmount(); panel.unmount(); globalThis.window = previous; });
+  t.after(() => { dialog.unmount(); panel.unmount(); globalThis.window = previous; globalThis.document = previousDocument; globalThis.MutationObserver = previousObserver; });
   const event = { key: 'Escape', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
-  for (const { fn } of [...listeners].filter((item) => item.type === 'keydown').sort((a, b) => Number(b.capture) - Number(a.capture))) fn(event);
+  for (const { fn } of [...listeners].filter((item) => item.type === 'keydown').sort((a, b) => Number(Boolean(b.document)) - Number(Boolean(a.document)))) fn(event);
   assert.deepEqual(closed, ['project']);
+  closed.length = 0;
+  const consumed = { ...event, defaultPrevented: true };
+  for (const { fn } of listeners.filter((item) => item.type === 'keydown')) fn(consumed);
+  assert.deepEqual(closed, [], 'alt seçicinin tükettiği Escape üst pencereleri kapatmaz');
+});
+
+test('hazırlık yenilenirken gönderim kapanır, çalışan turun Durdur eylemi kalır', async () => {
+  const { controller, api } = await readyController();
+  controller.send('Soru');
+  let resolve;
+  api.loadAssistantReadinessRequest = () => new Promise((done) => { resolve = done; });
+  const refresh = controller.activate({ refresh: true });
+  assert.equal(controller.canSend(), false);
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  let composer = findElement(panel.output, (node) => node.type === AssistantComposer);
+  assert.equal(composer.props.generating, true);
+  assert.equal(composer.props.disabled, true);
+  resolve({ ok: true, assistant: { ...READINESS, available: false, reason: 'AI_KEY_MISSING' } });
+  await refresh;
+  panel.render();
+  composer = findElement(panel.output, (node) => node.type === AssistantComposer);
+  assert.equal(composer.props.generating, true);
+  composer.props.onStop();
+  assert.equal(api.turns[0].input.signal.aborted, true);
+  panel.unmount();
+  controller.dispose();
+});
+
+test('kabul edilen taslağın görünüm anahtarı ve sonraki ileti metni korunur', async () => {
+  const { controller, api, state } = await readyController();
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, launcherRef: { current: null }, close() {} } });
+  const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+  controller.send('İlk');
+  panel.render();
+  composer().props.onChange('Sonraki taslak');
+  panel.render();
+  const key = state().active.viewKey;
+  api.turns[0].emit('accepted', acceptedData(CONVERSATION_A, api.turns[0], 'İlk'));
+  panel.render();
+  assert.equal(state().active.viewKey, key);
+  assert.equal(composer().props.value, 'Sonraki taslak');
+  panel.unmount();
+  controller.dispose();
+});
+
+test('geçmiş yenilemesi, etkin konuşmanın yeniden okunması ve oturum hatası', async () => {
+  let reads = 0;
+  const api = fakeApi({ loadAssistantConversationRequest: async (id) => ({ ok: true, conversation: { id, title: `Okuma ${++reads}` }, messages: [] }) });
+  const { controller, state } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  await controller.openConversation(CONVERSATION_A);
+  assert.equal(reads, 2);
+  api.listAssistantConversationsRequest = async () => ({ ok: true, conversations: [{ id: CONVERSATION_B, title: 'Başka pencere' }], nextCursor: null });
+  await controller.activate({ refresh: true });
+  assert.equal(state().list.items[0].id, CONVERSATION_B);
+  api.listAssistantConversationsRequest = async () => ({ ok: false, code: 'SESSION_REQUIRED' });
+  await controller.activate({ refresh: true });
+  assert.equal(controller.canSend(), false);
+  assert.equal(state().failure.action, 'reload');
+});
+
+test('sayfalama güncellenip başa taşınan konuşmayı atlamaz', async () => {
+  const a = { id: CONVERSATION_A, updatedAt: '2026-09-26T10:00:00Z' };
+  const b = { id: CONVERSATION_B, updatedAt: '2026-09-26T09:00:00Z' };
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [a], nextCursor: 'old' }) });
+  const { controller, state } = await readyController({ api });
+  const cursors = [];
+  api.listAssistantConversationsRequest = async ({ cursor }) => {
+    cursors.push(cursor);
+    return cursor == null ? { ok: true, conversations: [{ ...b, updatedAt: '2026-09-26T11:00:00Z' }], nextCursor: 'new' }
+      : { ok: true, conversations: [a], nextCursor: null };
+  };
+  await controller.loadMore();
+  assert.deepEqual(cursors, [null, 'new']);
+  assert.deepEqual(state().list.items.map((item) => item.id), [b.id, a.id]);
+});
+
+test('yeniden oynatılan eski konuşma etkinlik sırasını bozmaz', async () => {
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [{ id: CONVERSATION_B, updatedAt: '2026-09-27' }], nextCursor: null }) });
+  const { controller, state } = await readyController({ api });
+  controller.send('Soru');
+  const data = acceptedData(CONVERSATION_A, api.turns[0], 'Soru');
+  data.conversation.updatedAt = '2026-09-26';
+  api.turns[0].emit('accepted', data);
+  assert.equal(state().list.items[0].id, CONVERSATION_B);
+  controller.dispose();
+});
+
+test('silme hatası son konuşmalarda da görünür', async () => {
+  const api = fakeApi({
+    listAssistantConversationsRequest: async () => ({ ok: true, conversations: [{ id: CONVERSATION_A, title: 'Başlık' }], nextCursor: null }),
+    deleteAssistantConversationRequest: async () => ({ ok: false, code: 'NETWORK' })
+  });
+  const { controller, state } = await readyController({ api });
+  await controller.deleteConversation(CONVERSATION_A);
+  const list = mountComponent(AssistantConversationList, { list: state().list, limit: 4 });
+  assert.match(textOf(list.output), /Bağlantı sorunu/);
+  list.unmount();
+});
+
+test('tablo satırları sınırlanır, kalan içerik tek metin düğümünde korunur', () => {
+  const source = '| başlık |\n| --- |\n' + '|x|\n'.repeat(15000);
+  const blocks = parseAssistantMarkdown(source);
+  assert.equal(blocks[0].rows.length, 200);
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[1].children.length, 1);
+  assert.equal(blocks[1].children[0].value.split('\n').length, 14800);
+});
+
+test('Retry-After dolmadan denetleyici ve düğme yeniden denemeyi engeller', async (t) => {
+  const oldNow = Date.now;
+  let now = 1000;
+  Date.now = () => now;
+  t.after(() => { Date.now = oldNow; });
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  api.turns[0].resolve({ ok: false, code: 'AI_RATE_LIMITED', retryAfterMs: 30000 });
+  await drain();
+  const turn = state().active.turns[0];
+  assert.equal(turn.answer.error.retryAt, 31000);
+  assert.equal(controller.retry(turn.key).ok, false);
+  const view = mountComponent(AssistantTurn, { turn, canRetry: true });
+  const notice = findElement(view.output, (node) => node.props?.failure);
+  const rendered = mountComponent(notice.type, notice.props);
+  assert.equal(findElement(rendered.output, (node) => node.type === 'button').props.disabled, true);
+  assert.match(textOf(rendered.output), /30 sn/);
+  now = 31000;
+  assert.equal(controller.retry(turn.key).ok, true);
+  rendered.unmount();
+  view.unmount();
+  controller.dispose();
+});
+
+test('kapanan modal daha yeni bir yüzeyin odağını geri almaz', async (t) => {
+  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+  const previous = globalThis.document;
+  let restores = 0;
+  const opener = { isConnected: true, focus() { restores += 1; } };
+  globalThis.document = { activeElement: opener, body: {}, addEventListener() {}, removeEventListener() {} };
+  const props = { containerRef: { current: null }, initialFocusRef: { current: null }, enabled: true };
+  const probe = mountComponent((input) => { useModalFocusTrap(input); return null; }, props);
+  probe.render({ ...props, enabled: false });
+  globalThis.document.activeElement = { isConnected: true };
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(restores, 0);
+  probe.unmount();
+  globalThis.document = previous;
+});
+
+test('geçmiş zaman etiketleri dakika geçince yenilenir ve zamanlayıcı temizlenir', (t) => {
+  const previous = { now: Date.now, setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval };
+  let now = Date.parse('2026-09-27T10:00:00Z');
+  let tick;
+  let cleared = false;
+  Date.now = () => now;
+  globalThis.setInterval = (fn, ms) => { assert.equal(ms, 60000); tick = fn; return 1; };
+  globalThis.clearInterval = () => { cleared = true; };
+  t.after(() => { Date.now = previous.now; globalThis.setInterval = previous.setInterval; globalThis.clearInterval = previous.clearInterval; });
+  const list = mountComponent(AssistantConversationList, { list: { items: [{ id: CONVERSATION_A, updatedAt: new Date(now).toISOString() }] } });
+  const row = () => findElement(list.output, (node) => node.props?.item);
+  assert.equal(presentation.relativeTimeLabel(row().props.item.updatedAt, row().props.now), 'şimdi');
+  now += 120000;
+  tick();
+  list.render();
+  assert.equal(presentation.relativeTimeLabel(row().props.item.updatedAt, row().props.now), '2 dk önce');
+  list.unmount();
+  assert.equal(cleared, true);
+});
+
+test('hazırlık veya görünüm değişimi odak isteği olmadan odağı çalmaz', async (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { activeElement: null };
+  t.after(() => { globalThis.document = previous; });
+  const { controller, api } = await readyController();
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  let focused = 0;
+  const composer = findElement(panel.output, (node) => node.type === AssistantComposer);
+  composer.props.inputRef.current = { focus() { focused += 1; } };
+  panel.render({ assistant: { ...assistant, focusRequest: 1 } });
+  focused = 0;
+  controller.setView('history');
+  panel.render();
+  controller.setView('chat');
+  panel.render();
+  api.loadAssistantReadinessRequest = async () => ({ ok: true, assistant: { ...READINESS, available: false } });
+  await controller.activate({ refresh: true });
+  panel.render();
+  assert.equal(focused, 0);
+  panel.render({ assistant: { ...assistant, focusRequest: 2 } });
+  assert.equal(focused, 1);
+  panel.unmount();
 });

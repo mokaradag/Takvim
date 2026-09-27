@@ -207,10 +207,11 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const panelRef = useRef(null);
   const headingRef = useRef(null);
   const inputRef = useRef(null);
-  const [draftState, setDraftState] = useState({ key: state.active.key, text: '' });
-  const draft = draftState.key === state.active.key ? draftState.text : '';
-  if (draftState.key !== state.active.key) setDraftState({ key: state.active.key, text: '' });
-  const setDraft = (text) => setDraftState({ key: state.active.key, text });
+  const draftKey = state.active.viewKey || state.active.key;
+  const [draftState, setDraftState] = useState({ key: draftKey, text: '' });
+  const draft = draftState.key === draftKey ? draftState.text : '';
+  if (draftState.key !== draftKey) setDraftState({ key: draftKey, text: '' });
+  const setDraft = (text) => setDraftState({ key: draftKey, text });
   const restoreFocusEnabledRef = useRef(true);
   if (open) restoreFocusEnabledRef.current = true;
   const focusTargetRef = useMemo(() => ({
@@ -222,11 +223,21 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   useModalFocusTrap({ containerRef: panelRef, initialFocusRef: focusTargetRef, restoreFocusRef: launcherRef, restoreFocusEnabledRef, onClose: close, enabled: open && sheet });
   useVisualViewportFit(panelRef, open && sheet);
 
-  const composerAvailable = actual && state.status === 'ready' && state.readiness?.available
+  const composerAvailable = actual && state.status === 'ready' && !state.refreshing && !state.active.loading && state.readiness?.available
     && state.view !== 'history' && !state.active.failure;
+  const pendingFocusRef = useRef(false);
+  useEffect(() => { pendingFocusRef.current = open; }, [open, focusRequest]);
   useEffect(() => {
-    if (open && (!sheet || composerAvailable)) focusTargetRef.current?.focus?.();
-  }, [open, sheet, focusRequest, focusTargetRef, composerAvailable]);
+    if (!open || !pendingFocusRef.current) return;
+    const focused = globalThis.document?.activeElement;
+    if (focused && focused !== globalThis.document?.body && focused !== launcherRef.current
+      && !panelRef.current?.contains?.(focused) && !focused.closest?.('[role="dialog"]')) {
+      pendingFocusRef.current = false;
+      return;
+    }
+    focusTargetRef.current?.focus?.();
+    if ((composerAvailable && inputRef.current) || state.status === 'error' || (state.status === 'ready' && !state.readiness?.available) || !actual) pendingFocusRef.current = false;
+  }, [open, focusRequest, focusTargetRef, composerAvailable, state.status, state.readiness, actual, launcherRef]);
 
   useEffect(() => {
     if (!open || sheet) return undefined;
@@ -243,7 +254,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
 
   const { readiness, active, list } = state;
   const ready = actual && state.status === 'ready';
-  const available = ready && Boolean(readiness?.available);
+  const available = ready && !state.refreshing && Boolean(readiness?.available);
   const running = state.running[active.key] || null;
   const generating = Boolean(running);
   const historyView = ready && state.view === 'history';
@@ -412,7 +423,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         </div>
       </header>
       <div className="rota-assistant-body">{body}</div>
-      {canCompose && (
+      {(canCompose || (actual && generating)) && (
         <AssistantComposer
           value={draft}
           onChange={setDraft}
@@ -422,7 +433,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             focusInput();
           }}
           generating={generating}
-          disabled={active.loading || Boolean(state.deleting[active.id])}
+          disabled={!canCompose || state.refreshing || active.loading || Boolean(state.deleting[active.id])}
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}

@@ -60,17 +60,21 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;
     const epoch = ++focusEpochRef.current;
-    const openedFrom = document.activeElement;
+    const focusDocument = document;
+    const openedFrom = focusDocument.activeElement;
+    const owner = containerRef.current;
     const restoreFocus = restoreFocusRef?.current;
     const shouldRestoreFocus = () => restoreFocusEnabledRef?.current !== false;
     initialFocusRef.current?.focus();
     const restore = () => {
       if (!shouldRestoreFocus() || focusEpochRef.current !== epoch) return;
+      const focused = focusDocument.activeElement;
+      if (focused?.isConnected && focused !== focusDocument.body && focused !== openedFrom && !owner?.contains?.(focused)) return;
       const opener = openedFrom?.isConnected ? openedFrom : restoreFocus;
       if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
     };
     return () => { (globalThis.requestAnimationFrame || setTimeout)(restore); };
-  }, [initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled]);
+  }, [containerRef, initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled]);
 
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;

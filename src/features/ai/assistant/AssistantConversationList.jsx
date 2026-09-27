@@ -76,8 +76,16 @@ export function AssistantConversationList({
   onLoadMore,
   onReload,
   limit = null,
-  now = Date.now()
+  now: suppliedNow
 }) {
+  const [clock, setClock] = useState(Date.now);
+  useEffect(() => {
+    if (suppliedNow != null) return undefined;
+    const timer = setInterval(() => setClock(Date.now()), 60000);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }, [suppliedNow]);
+  const now = suppliedNow ?? clock;
   const [confirmingId, setConfirmingId] = useState(null);
   const items = limit ? list.items.slice(0, limit) : list.items;
 
@@ -118,8 +126,8 @@ export function AssistantConversationList({
           />
         ))}
       </ul>
-      {!limit && list.error && list.items.length > 0 && (
-        <p className="rota-assistant-history-state is-warn" role="status">{list.error.title}.</p>
+      {list.error && list.items.length > 0 && (
+        <p className="rota-assistant-history-state is-warn" role="status">{list.error.title}. {list.error.message}</p>
       )}
       {!limit && list.nextCursor && (
         <button type="button" className="btn ghost sm rota-assistant-history-more" onClick={onLoadMore} disabled={list.loadingMore} aria-busy={list.loadingMore || undefined}>
