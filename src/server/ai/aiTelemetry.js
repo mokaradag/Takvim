@@ -412,18 +412,31 @@ export function resetAiTelemetryForTests() {
   globalThis[STATE_KEY] = createState();
 }
 
-/** Model üretimi ve yanıt kalıcılığı birlikte sonuçlandıktan sonra çağrılır. */
-export function recordAssistantTurn({ code = null, durationMs = 0 }) {
+/**
+ * Model üretimi ve yanıt kalıcılığı birlikte sonuçlandıktan sonra çağrılır.
+ *
+ * Her sonuç sayılır; ancak yalnızca HİZMET hatası (paylaşılan anahtarın reddi,
+ * sağlayıcı/kalıcılık arızası, iç hata) sağlık görünümüne "son tur hatası"
+ * olarak girer ve işletim günlüğüne yazılır. Kullanıcının kendi anahtarı ya da
+ * isteği kaynaklı sonuçlar (geçersiz kişisel anahtar, kişisel oran sınırı,
+ * reddedilen istek, silinmiş konuşma) herkese hizmet sorunu gibi görünmez;
+ * sınıflandırma `recordAiRequest` ile aynıdır (`outcomeOf`).
+ */
+export function recordAssistantTurn({ code = null, source = null, details = null, serviceFailure = false, durationMs = 0 }) {
+  let outcome = null;
   safely(() => {
     const turns = state().assistantTurns;
     const cancelled = code === AI_ERROR_CODES.AI_CANCELLED;
+    outcome = code && !cancelled ? outcomeOf(code, serviceFailure, { source, details }) : null;
     turns[code ? (cancelled ? 'cancelled' : 'failed') : 'completed'] += 1;
     if (!code) turns.lastFailure = null;
-    else if (!cancelled) turns.lastFailure = { code, at: new Date().toISOString() };
-    recordOperation({ operation: 'ai.assistant.turn', durationMs, ok: !code || cancelled, code });
-    if (code && !cancelled) logEvent({
-      severity: EVENT_SEVERITIES.ERROR, component: COMPONENTS.AI,
-      operation: 'ai.assistant.turn', code, message: 'Rota AI turu tamamlanamadı.'
-    });
+    else if (outcome?.serviceFailure) turns.lastFailure = { code: outcome.code, at: new Date().toISOString() };
+    recordOperation({ operation: 'ai.assistant.turn', durationMs, ok: !outcome?.serviceFailure, code: outcome?.serviceFailure ? outcome.code : null });
   });
+  if (outcome?.serviceFailure && !QUIET_CODES.has(outcome.code)) {
+    safely(() => logEvent({
+      severity: EVENT_SEVERITIES.ERROR, component: COMPONENTS.AI,
+      operation: 'ai.assistant.turn', code: outcome.code, message: 'Rota AI turu tamamlanamadı.'
+    }));
+  }
 }

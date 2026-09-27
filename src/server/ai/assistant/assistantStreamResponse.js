@@ -174,15 +174,15 @@ export function assistantStreamResponse(turn, {
           assistantMessage: messageView(turn.replay, { includeContent: false }),
           replayed: true
         });
-        recordAssistantTurn({ durationMs: Date.now() - startedAt });
+        // Kayıtlı yanıtın yeniden oynatılması yeni bir tur değildir: tur sayaçlarına girmez.
         return;
       }
       const result = await generate(turn, {
         signal: generationSignal,
         onStatus: (status) => send(ASSISTANT_STREAM_EVENTS.STATUS, { phase: status.phase }),
         onText: async (text) => {
-          textSent = true;
-          await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text });
+          // Yanıt yalnızca metin gerçekten kuyruğa girdiyse "kısmi" sayılır.
+          if (await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text })) textSent = true;
         }
       });
       send(ASSISTANT_STREAM_EVENTS.DONE, {
@@ -193,7 +193,13 @@ export function assistantStreamResponse(turn, {
       recordAssistantTurn({ durationMs: Date.now() - startedAt });
     } catch (error) {
       const payload = assistantStreamErrorPayload(error, { partial: textSent });
-      recordAssistantTurn({ code: payload.code, durationMs: Date.now() - startedAt });
+      recordAssistantTurn({
+        code: payload.code,
+        source: payload.credentialSource,
+        details: error?.details ?? null,
+        serviceFailure: payload.code === 'DATABASE_UNAVAILABLE',
+        durationMs: Date.now() - startedAt
+      });
       send(ASSISTANT_STREAM_EVENTS.ERROR, payload);
     } finally {
       clearInterval(keepalive);

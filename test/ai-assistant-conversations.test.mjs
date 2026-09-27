@@ -572,7 +572,7 @@ test('kayıtlı yanıtın akış kurulumu hata verirse kararlı hata yanıtı d�
     const response = await turnsRoute.POST(turnRequest({ conversationId, turnId, message: 'Soru', mode: 'standard' }));
     assert.equal(response.status, 500);
     const body = await response.json();
-    assert.ok(body.error.code);
+    assert.equal(body.error.code, 'AI_INTERNAL_ERROR');
   } finally {
     AbortSignal.any = original;
   }
@@ -611,4 +611,86 @@ test('silme SQL sonucuyla yarışan HTTP iptali süren üretimi yine durdurur', 
   assert.equal(db.aiConversations.length, 0);
   assert.equal(provider.calls[1].aborted, true);
   assert.equal((await reader.rest()).at(-1).data.code, 'AI_CANCELLED');
+});
+
+test('takvimde olmayan ya da SQL aralığı dışındaki imleç zamanı reddedilir', async (t) => {
+  createAiStack(t);
+  const cursor = (value) => Buffer.from(`${value}|${randomUUID()}`, 'utf8').toString('base64url');
+  for (const value of ['2026-02-31T00:00:00.000Z', '0000-01-01T00:00:00.000Z', '2026-13-01T00:00:00.000Z', '2026-09-26T24:00:00.000Z']) {
+    const response = await listAssistantConversations(cursor(value));
+    assert.equal(response.status, 400, value);
+    assert.equal(response.body.error.details.reason, 'CURSOR_INVALID', value);
+  }
+  assert.equal((await listAssistantConversations(cursor('2026-09-26T10:00:00.000Z'))).status, 200);
+});
+
+test('yarım uygulanmış 0017 (eksik sütun) de anlaşılır yapılandırma hatasıdır; başka sütun hatası değildir', async () => {
+  const { isMissingConversationSchema } = await import('../src/server/ai/assistant/conversationStore.js');
+  const columnError = (name) => Object.assign(new Error(`Invalid column name '${name}'.`), { number: 207 });
+  assert.equal(isMissingConversationSchema(columnError('OriginTurnId')), true);
+  assert.equal(isMissingConversationSchema({ originalError: { info: columnError('ClientTurnId') } }), true);
+  assert.equal(isMissingConversationSchema(columnError('BaskaSutun')), false);
+  assert.equal(isMissingConversationSchema(Object.assign(new Error("Invalid object name 'dbo.MR_Tasks'."), { number: 208 })), false);
+});
+
+test('kayıtlı yanıt araması salt okunurdur: kilit almaz ve işlem açmaz', async (t) => {
+  const { AI_CONVERSATION_PREPARE_TURN_SQL } = await import('../src/server/ai/assistant/conversationQueries.js');
+  const readOnly = AI_CONVERSATION_PREPARE_TURN_SQL.slice(
+    AI_CONVERSATION_PREPARE_TURN_SQL.indexOf('IF @readOnly = 1 AND @conversationId IS NULL'),
+    AI_CONVERSATION_PREPARE_TURN_SQL.indexOf('ELSE IF @conversationId IS NULL')
+  );
+  assert.ok(readOnly.includes('SELECT @conversation = c.ConversationId'));
+  assert.doesNotMatch(readOnly, /UPDLOCK|HOLDLOCK/);
+  assert.match(AI_CONVERSATION_PREPARE_TURN_SQL.slice(AI_CONVERSATION_PREPARE_TURN_SQL.indexOf('ELSE IF @conversationId IS NULL')), /WITH \(UPDLOCK, HOLDLOCK\)/);
+  const { db } = createAiStack(t);
+  const { conversationId, turnId } = await startConversation('Soru');
+  db.aiConversationLog.statements.length = 0;
+  const replay = await sendTurn({ conversationId, turnId, message: 'Soru' });
+  assert.equal(terminal(replay).data.replayed, true);
+  assert.deepEqual(db.aiConversationLog.statements.map((entry) => entry.params.readOnly), [true], 'yeniden oynatma yalnızca salt okunur aramayla yanıtlanır');
+});
+
+test('başlık her satırdaki başlık ve alıntı işaretini atar', () => {
+  assert.equal(conversationTitleFrom('Giriş\n# Başlık'), 'Giriş Başlık');
+  assert.equal(conversationTitleFrom('> alıntı\r\n## İkinci\n#\nson'), 'alıntı İkinci son');
+});
+
+test('kısaltılarak bağlama giren önceki ileti bağlamı kısaltılmış sayar', () => {
+  const long = 'x'.repeat(ASSISTANT_CONTEXT_POLICY.maxMessageChars + 500);
+  const context = buildAssistantContext({ history: [
+    { id: 'u1', role: 'user', content: long },
+    { id: 'a1', role: 'assistant', content: 'Kısa yanıt', replyToId: 'u1' }
+  ], userContent: 'devam' });
+  assert.equal(context.includedMessages, 2);
+  assert.equal(context.clippedMessages, 1);
+  assert.equal(context.trimmed, true);
+  const short = buildAssistantContext({ history: [
+    { id: 'u1', role: 'user', content: 'Kısa soru' },
+    { id: 'a1', role: 'assistant', content: 'Kısa yanıt', replyToId: 'u1' }
+  ], userContent: 'devam' });
+  assert.equal(short.trimmed, false);
+});
+
+test('sonuç gözlemcisinin hatası sonuçlanmış sorguyu başarısız yapmaz', async () => {
+  const { boundedExecutor } = await import('../src/server/observability/boundedExecution.js');
+  const executor = boundedExecutor({ request: () => ({ query: async () => ({ recordsets: [[{ Deleted: 1 }]] }) }) }, new AbortController().signal, {
+    onResult: () => { throw new Error('gözlemci düştü'); }
+  });
+  const result = await executor.request().query('SELECT 1');
+  assert.deepEqual(result.recordsets, [[{ Deleted: 1 }]]);
+});
+
+test('geçici SQL hatası konuşma tablolarını eksik göstermez; yalnızca eksik yapı gösterir', async (t) => {
+  const { db } = createAiStack(t);
+  const { checkAssistantConversationSchema } = await import('../src/server/ai/assistant/assistantService.js');
+  const { conversationSchemaState } = await import('../src/server/ai/assistant/conversationStore.js');
+  await checkAssistantConversationSchema();
+  assert.equal(conversationSchemaState().ready, true);
+  db.aiConversationHooks = { beforeLoad() { throw Object.assign(new Error('Bağlantı koptu'), { code: 'ESOCKET' }); } };
+  await assert.rejects(checkAssistantConversationSchema());
+  assert.equal(conversationSchemaState().ready, true, 'geçici hata yapı kanıtı değildir');
+  db.aiConversationHooks = {};
+  db.aiConversationSchemaMissing = true;
+  await assert.rejects(checkAssistantConversationSchema());
+  assert.equal(conversationSchemaState().ready, false);
 });

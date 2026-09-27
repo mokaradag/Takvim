@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { modalTrapDepth } from '../../hooks/useModalFocusTrap.js';
 import { Icons } from '../../components/icons';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import {
@@ -115,7 +116,11 @@ function HierarchyMenu({ depth, onChoose }) {
     const onPointerDown = (event) => {
       if (!hostRef.current?.contains(event.target)) setOpen(false);
     };
-    const onKeyDown = (event) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); setOpen(false); } };
+    // Menü açıldıktan sonra üstte açılan kipli pencere Esc'in sahibidir.
+    const depth = modalTrapDepth();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && modalTrapDepth() <= depth) { event.preventDefault(); setOpen(false); }
+    };
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {

@@ -362,7 +362,7 @@ test('hazırlık, evre, bitiş nedeni, sayaç ve göreli zaman metinleri', () =>
   assert.equal(presentation.readinessNotice({ available: false, reason: 'AI_KEY_MISSING' }).action, 'settings');
   assert.equal(presentation.readinessNotice({ available: false, reason: 'BİLİNMEYEN' }).title, 'Rota AI yapılandırılmadı');
   assert.equal(presentation.generationPhaseLabel('sending', 'standard'), 'Gönderiliyor…');
-  assert.equal(presentation.generationPhaseLabel('generating', 'deep'), 'Derin düşünülüyor…');
+  assert.equal(presentation.generationPhaseLabel('generating', 'deep'), 'Yanıt oluşturuluyor…');
   assert.equal(presentation.generationPhaseLabel('thinking', 'standard'), 'Derin düşünülüyor…');
   assert.equal(presentation.generationPhaseLabel('streaming', 'standard'), null);
   assert.match(presentation.finishReasonNote('length'), /uzunluk sınırına/);
@@ -1207,7 +1207,8 @@ test('sayfalama güncellenip başa taşınan konuşmayı atlamaz', async () => {
       : { ok: true, conversations: [a], nextCursor: null };
   };
   await controller.loadMore();
-  assert.deepEqual(cursors, [null, 'new']);
+  // Baş sayfa yeniden okunur; eski sayfalar var olan imleçten sürer (tüm geçmiş yeniden oynatılmaz).
+  assert.deepEqual(cursors, [null, 'old']);
   assert.deepEqual(state().list.items.map((item) => item.id), [b.id, a.id]);
 });
 
@@ -1341,7 +1342,21 @@ test('yanıt kopyası görünen metindir; geçerli URL sonları korunur', async 
   }
   const turn = { key: 'a', user: { content: 'Soru' }, answer: { status: 'complete', content: '**Önemli** [doküman](https://example.com)' } };
   const view = mountComponent(AssistantTurn, { turn });
-  assert.equal(findElement(view.output, (node) => node.type?.name === 'CopyAnswerButton').props.text, 'Önemli doküman');
+  const copyButton = findElement(view.output, (node) => node.type?.name === 'CopyAnswerButton');
+  // Kopya metni çizimde değil tıklamada çıkarılır; kopyalanan metin görünen metindir.
+  assert.equal(copyButton.props.source, turn.answer.content);
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const written = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (text) => written.push(text) } } });
+  try {
+    const button = mountComponent(copyButton.type, copyButton.props);
+    await findElement(button.output, (node) => node.type === 'button').props.onClick();
+    button.unmount();
+  } finally {
+    if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator);
+    else delete globalThis.navigator;
+  }
+  assert.deepEqual(written, ['Önemli doküman']);
   view.unmount();
 });
 
@@ -1442,4 +1457,353 @@ test('yeniden denemedeki kesin ret önceki belirsiz teslimatı silmez', async ()
   assert.equal(state().active.turns.length, 1);
   assert.equal(state().active.turns[0].answer.status, 'failed');
   controller.dispose();
+});
+
+/* ── İnceleme bulgularının gerilemeleri ───────────────────── */
+
+test('sunum: sunucu iptali Durdur değildir; geçersiz sağlayıcı yanıtı yinelenemez; olağan dışı bitiş nedeni açıklanır', () => {
+  const cancelled = presentation.assistantFailureView({ code: 'AI_CANCELLED' });
+  assert.doesNotMatch(cancelled.message, /durdurdunuz/);
+  assert.match(cancelled.message, /sunucuda durduruldu/);
+  assert.match(presentation.assistantFailureView({ code: 'REQUEST_CANCELLED' }).message, /durdurdunuz/);
+  assert.equal(presentation.assistantFailureView({ code: 'AI_PROVIDER_RESPONSE_INVALID', retryable: false }).retryable, false);
+  assert.equal(presentation.assistantFailureView({ code: 'AI_PROVIDER_RESPONSE_INVALID' }).retryable, false);
+  assert.match(presentation.finishReasonNote('content_filter'), /içerik süzgeci/);
+  assert.match(presentation.finishReasonNote('tool_calls'), /eksik olabilir/);
+  assert.equal(presentation.finishReasonNote(null), null);
+  assert.equal(presentation.assistantFailureView({ code: 'AI_KEY_INVALID', credentialSource: 'personal' }).credential, true);
+});
+
+test('eşit zamanlı konuşmalar sunucunun kimlik sırasını (SQL Server uniqueidentifier) izler', async () => {
+  const at = '2026-09-26T10:00:00.000Z';
+  // Metin olarak küçük ama SQL Server sırasında büyük (son grup en anlamlıdır).
+  const high = { id: '00000000-0000-4000-8000-000000000001', title: 'Yüksek', updatedAt: at };
+  const low = { id: 'ffffffff-0000-4000-8000-000000000000', title: 'Düşük', updatedAt: at };
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [low, high], nextCursor: null }) });
+  const { state } = await readyController({ api });
+  assert.deepEqual(state().list.items.map((item) => item.title), ['Yüksek', 'Düşük']);
+});
+
+test('kabul öncesi belirsiz hata (akış kurulamadı) turu atmaz; aynı kimlikle yeniden denenir', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Belki kaydedildi');
+  api.turns[0].resolve({ ok: false, phase: 'request', code: 'AI_INTERNAL_ERROR', status: 500, retryable: false });
+  await drain();
+  assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Belki kaydedildi']);
+  assert.equal(state().active.turns[0].answer.error.retryable, true);
+  assert.equal(controller.send('Yeni').ok, false);
+  assert.equal(controller.retry(api.turns[0].input.turnId).ok, true);
+  assert.equal(api.turns[1].input.turnId, api.turns[0].input.turnId);
+});
+
+test('kimliği doğrulanmamış turun yeniden denemesi kesin retle de kilitlenmez', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  api.turns[0].resolve({ ok: false, code: 'NETWORK', retryable: true });
+  await drain();
+  controller.retry(state().active.turns[0].key);
+  api.turns[1].resolve({ ok: false, phase: 'request', code: 'AI_DISABLED' });
+  await drain();
+  assert.equal(state().active.turns[0].answer.error.retryable, true);
+  assert.equal(retryableTurnKey(state().active.turns), api.turns[0].input.turnId);
+});
+
+test('dolan ya da silinmiş konuşmaya yeni ileti gönderilemez; taslak korunur', async () => {
+  for (const failure of [{ code: 'CONFLICT', reason: 'CONVERSATION_FULL' }, { code: 'NOT_FOUND' }]) {
+    const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [{ id: CONVERSATION_A, title: 'A', updatedAt: '2026-09-26T10:00:00.000Z' }], nextCursor: null }) });
+    const { controller, state } = await readyController({ api });
+    await controller.openConversation(CONVERSATION_A);
+    controller.send('Sığmayan soru');
+    api.turns[0].resolve({ ok: false, phase: 'request', ...failure });
+    await drain();
+    assert.equal(state().active.closed, true, failure.code);
+    assert.equal(state().active.recoveredDraft.text, 'Sığmayan soru');
+    assert.equal(controller.canSend(), false);
+    assert.equal(controller.send('Tekrar').ok, false);
+    assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), failure.code !== 'NOT_FOUND');
+    controller.newConversation();
+    assert.equal(controller.canSend(), true, 'yeni konuşmada gönderim açılır');
+    controller.dispose();
+  }
+});
+
+test('kabul öncesi oturum hatası panel düzeyinde bir kez gösterilir', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  api.turns[0].resolve({ ok: false, phase: 'request', code: 'SESSION_REQUIRED' });
+  await drain();
+  assert.equal(state().status, 'error');
+  assert.equal(state().failure.action, 'reload');
+  assert.equal(state().active.notice, null);
+});
+
+test('Geçmiş’te açık konuşma silinince liste görünümü korunur', async () => {
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [{ id: CONVERSATION_A, title: 'A' }, { id: CONVERSATION_B, title: 'B' }], nextCursor: null }) });
+  const { controller, state } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  controller.setView('history');
+  await controller.deleteConversation(CONVERSATION_A);
+  assert.equal(state().view, 'history');
+  assert.equal(state().active.id, null);
+  assert.deepEqual(state().list.items.map((item) => item.id), [CONVERSATION_B]);
+});
+
+test('Durdur ya da kopan akıştan sonra konuşma sunucuyla uzlaştırılır; kaydedilen yanıt tamamlanmış görünür', async () => {
+  for (const outcome of ['stop', 'network']) {
+    let release;
+    const api = fakeApi();
+    const { controller, state } = await readyController({ api });
+    controller.send('Soru');
+    const [run] = api.turns;
+    const data = acceptedData(CONVERSATION_A, run, 'Soru');
+    run.emit('accepted', data);
+    run.emit('delta', { text: 'Kısmi' });
+    api.loadAssistantConversationRequest = (id) => new Promise((resolve) => { release = () => resolve({ ok: true, conversation: { id, title: 'Soru' }, messages: [
+      { ...data.userMessage, role: 'user', sequence: 1 },
+      { id: createId(), role: 'assistant', sequence: 2, replyToId: data.userMessage.id, content: 'Kaydedilmiş tam yanıt', mode: 'standard', finishReason: 'stop' }
+    ] }); });
+    if (outcome === 'stop') {
+      controller.stop();
+      run.resolve({ ok: false, code: 'REQUEST_CANCELLED', cancelled: true, partial: true });
+    } else {
+      run.resolve({ ok: false, code: 'NETWORK', retryable: true, partial: true });
+    }
+    await drain();
+    assert.equal(controller.canSend(), false, `${outcome}: uzlaştırma bitmeden yeni tur başlamaz`);
+    assert.equal(controller.retry(run.input.turnId).ok, false);
+    release();
+    await drain();
+    assert.equal(state().active.turns[0].answer.status, 'complete', outcome);
+    assert.equal(state().active.turns[0].answer.content, 'Kaydedilmiş tam yanıt');
+    assert.equal(controller.canSend(), true);
+    controller.dispose();
+  }
+});
+
+test('uzlaştırma yanıt bulamazsa kısmi metin ve yeniden deneme korunur', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [run] = api.turns;
+  run.emit('accepted', acceptedData(CONVERSATION_A, run, 'Soru'));
+  run.emit('delta', { text: 'Kısmi' });
+  run.resolve({ ok: false, code: 'STREAM_INTERRUPTED', retryable: true, partial: true });
+  await drain();
+  assert.equal(state().active.turns[0].answer.status, 'interrupted');
+  assert.equal(state().active.turns[0].answer.content, 'Kısmi');
+  assert.equal(controller.retry(run.input.turnId).ok, true);
+});
+
+test('yeniden deneme yeni metin üretmeden biterse önceki kısmi yanıt korunur', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [first] = api.turns;
+  first.emit('accepted', acceptedData(CONVERSATION_A, first, 'Soru'));
+  first.emit('delta', { text: 'Önceki kısmi yanıt' });
+  controller.stop();
+  first.resolve({ ok: false, code: 'REQUEST_CANCELLED', cancelled: true, partial: true });
+  await drain();
+  assert.equal(controller.retry(first.input.turnId).ok, true);
+  api.turns[1].resolve({ ok: false, phase: 'request', code: 'DATABASE_UNAVAILABLE', retryable: true });
+  await drain();
+  assert.equal(state().active.turns[0].answer.content, 'Önceki kısmi yanıt');
+  controller.retry(first.input.turnId);
+  controller.stop();
+  assert.equal(state().active.turns[0].answer.content, 'Önceki kısmi yanıt', 'metin gelmeden durdurulan deneme de korur');
+});
+
+test('yerini yeni okumaya bırakan liste okuması kesilir', async () => {
+  const signals = [];
+  const pending = [];
+  const { controller, api } = await readyController();
+  api.listAssistantConversationsRequest = ({ signal }) => new Promise((resolve) => { signals.push(signal); pending.push(resolve); });
+  const first = controller.refreshList();
+  const second = controller.refreshList();
+  assert.equal(signals[0].aborted, true);
+  assert.equal(signals[1].aborted, false);
+  pending.forEach((resolve) => resolve({ ok: true, conversations: [], nextCursor: null }));
+  await Promise.all([first, second]);
+});
+
+test('açık paneldeki geçici hazırlık hatası konuşmayı gizlemez; bildirim olarak gösterilir ve sonra temizlenir', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  api.loadAssistantReadinessRequest = async () => ({ ok: false, code: 'NETWORK', retryable: true });
+  await controller.activate({ refresh: true });
+  assert.equal(state().status, 'ready');
+  assert.equal(state().active.turns.length, 1);
+  assert.equal(state().active.notice.title, 'Bağlantı sorunu');
+  api.loadAssistantReadinessRequest = async () => ({ ok: true, assistant: READINESS });
+  await controller.activate({ refresh: true });
+  assert.equal(state().active.notice, null);
+  controller.dispose();
+});
+
+test('anahtar düzeltilip hazırlık yenilenince anahtar hatasıyla biten tur yeniden denenebilir olur', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [run] = api.turns;
+  run.emit('accepted', acceptedData(CONVERSATION_A, run, 'Soru'));
+  run.resolve({ ok: false, phase: 'stream', code: 'AI_KEY_INVALID', credentialSource: 'personal' });
+  await drain();
+  assert.equal(state().active.turns[0].answer.error.retryable, false);
+  await controller.activate({ refresh: true });
+  assert.equal(state().active.turns[0].answer.error.retryable, true);
+  assert.equal(controller.retry(run.input.turnId).ok, true);
+});
+
+test('kopya metni liste işaretlerini ve sıra numaralarını korur', async () => {
+  const { assistantMarkdownText } = await import('../src/features/ai/assistant/assistantMarkdown.js');
+  assert.equal(assistantMarkdownText('1. Birinci\n2. İkinci\n   - alt\n\n- a\n- b'), '1. Birinci\n2. İkinci\n   • alt\n\n• a\n• b');
+  assert.equal(assistantMarkdownText('3. Üç\n4. Dört'), '3. Üç\n4. Dört');
+});
+
+test('Markdown blok ve liste maddesi sayısı sınırlıdır; kalan içerik düz metin olarak korunur', async () => {
+  const { MARKDOWN_LIMITS, createAssistantMarkdownParser } = await import('../src/features/ai/assistant/assistantMarkdown.js');
+  const source = '- x\n'.repeat(16000);
+  const blocks = parseAssistantMarkdown(source);
+  const count = (items) => items.reduce((sum, block) => sum + 1 + (block.items ? block.items.reduce((inner, item) => inner + count(item), 0) : 0) + (block.type === 'quote' ? count(block.children) : 0), 0);
+  assert.ok(count(blocks) <= MARKDOWN_LIMITS.maxBlocks + blocks[0].items.length + 1);
+  assert.ok(blocks[0].items.length < 16000);
+  assert.equal(blocks.at(-1).type, 'paragraph');
+  assert.equal(blocks.at(-1).children.length, 1);
+  const parse = createAssistantMarkdownParser();
+  for (const size of [4000, 9000, source.length]) assert.deepEqual(parse(source.slice(0, size)), parseAssistantMarkdown(source.slice(0, size)));
+});
+
+test('yanıt bitince "yanıt sürerken gönderilemez" açıklaması kalkar', () => {
+  const { props } = composerProps({ generating: true });
+  const view = mountComponent(AssistantComposer, props);
+  keyDown(findElement(view.output, (node) => node.type === 'textarea'), {});
+  view.render();
+  assert.match(textOf(view.output), /Önce yanıtı durdurun/);
+  view.render({ ...props, generating: false });
+  assert.doesNotMatch(textOf(view.output), /Önce yanıtı durdurun/);
+  view.unmount();
+});
+
+test('panel dışındaki Escape odağı başlatıcıya taşımaz; panel içindeki Escape taşır', async (t) => {
+  const previous = { window: globalThis.window, document: globalThis.document, observer: globalThis.MutationObserver };
+  const events = new EventTarget();
+  const outside = { isConnected: true };
+  const inside = { isConnected: true };
+  globalThis.window = events;
+  globalThis.document = { body: { classList: { contains: () => false } }, activeElement: outside };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  t.after(() => { globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer; });
+  const { controller } = await readyController();
+  const closes = [];
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close: (options) => closes.push(options) };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  t.after(() => { panel.unmount(); controller.dispose(); });
+  panel.output.ref.current = { contains: (node) => node === inside, setAttribute() {}, removeAttribute() {} };
+  const escape = () => Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
+  events.dispatchEvent(escape());
+  globalThis.document.activeElement = inside;
+  events.dispatchEvent(escape());
+  assert.deepEqual(closes, [{ restoreFocus: false }, { restoreFocus: true }]);
+});
+
+test('yeni taslak yazılmışken reddedilen ileti kaybolmaz; geri alınabilir', async () => {
+  const { controller, api } = await readyController();
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+  const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+  controller.send('Reddedilen ileti');
+  panel.render();
+  composer().props.onChange('Yeni taslak');
+  panel.render();
+  api.turns[0].resolve({ ok: false, phase: 'request', code: 'AI_CONFIGURATION_ERROR', reason: 'MODE_UNAVAILABLE' });
+  await drain();
+  panel.render();
+  assert.equal(composer().props.value, 'Yeni taslak', 'yazılan taslak ezilmez');
+  const restore = findElement(panel.output, (node) => node.type === 'button' && textOf(node).includes('İletiyi geri al'));
+  assert.ok(restore, 'reddedilen ileti geri alınabilir');
+  restore.props.onClick();
+  panel.render();
+  assert.equal(composer().props.value, 'Reddedilen ileti\n\nYeni taslak');
+  assert.equal(findElement(panel.output, (node) => node.type === 'button' && textOf(node).includes('İletiyi geri al')), null);
+  panel.unmount();
+  controller.dispose();
+});
+
+test('geçici konuşma yükleme hatası yeniden deneme eylemi sunar', async () => {
+  let reads = 0;
+  const api = fakeApi({ loadAssistantConversationRequest: async (id) => (++reads === 1
+    ? { ok: false, code: 'DATABASE_UNAVAILABLE', message: 'Ulaşılamadı.' }
+    : { ok: true, conversation: { id, title: 'A' }, messages: [] }) });
+  const { controller, state } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+  const retry = findElement(panel.output, (node) => node.type === 'button' && textOf(node).includes('Yeniden dene'));
+  assert.ok(retry);
+  await retry.props.onClick();
+  await drain();
+  assert.equal(reads, 2);
+  assert.equal(state().active.failure, null);
+  panel.unmount();
+  controller.dispose();
+});
+
+test('silinen konuşma satırından sonra odak kalan satıra taşınır', async () => {
+  const items = [{ id: CONVERSATION_A, title: 'A', updatedAt: new Date().toISOString() }, { id: CONVERSATION_B, title: 'B', updatedAt: new Date().toISOString() }];
+  const list = { items, nextCursor: null, loading: false, loadingMore: false, error: null };
+  let focused = null;
+  const view = mountComponent(AssistantConversationList, { list, onOpen() {}, onDelete: async () => ({ ok: true }), onLoadMore() {}, onReload() {} });
+  const row = (id) => findElement(view.output, (node) => node.props?.item?.id === id);
+  row(CONVERSATION_B).props.openRef({ focus: () => { focused = CONVERSATION_B; } });
+  row(CONVERSATION_A).props.onAskDelete();
+  view.render();
+  const confirm = row(CONVERSATION_A).props.onConfirmDelete();
+  view.render({ list: { ...list, items: [items[1]] }, onOpen() {}, onDelete: async () => ({ ok: true }), onLoadMore() {}, onReload() {} });
+  await confirm;
+  view.render({ list: { ...list, items: [items[1]] }, onOpen() {}, onDelete: async () => ({ ok: true }), onLoadMore() {}, onReload() {} });
+  assert.equal(focused, CONVERSATION_B);
+  view.unmount();
+});
+
+test('arkadaki pencere, sonradan üstte açılan kipli pencerenin Escape olayını tüketmez', async (t) => {
+  const { ProjectCreateDialog } = await import('../src/components/shell/ProjectCreateDialog.jsx');
+  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+  const previous = { window: globalThis.window, document: globalThis.document };
+  const listeners = [];
+  globalThis.document = {
+    activeElement: null,
+    body: {},
+    addEventListener(type, fn) { listeners.push({ type, fn }); },
+    removeEventListener(type, fn) { const i = listeners.findIndex((item) => item.type === type && item.fn === fn); if (i >= 0) listeners.splice(i, 1); }
+  };
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  t.after(() => { globalThis.window = previous.window; globalThis.document = previous.document; });
+  const closed = [];
+  const dialog = mountComponent(ProjectCreateDialog, { open: true, onClose() { closed.push('project'); } });
+  const palette = mountComponent((input) => { useModalFocusTrap(input); return null; }, {
+    containerRef: { current: null }, initialFocusRef: { current: null }, onClose: () => closed.push('palette')
+  });
+  const escape = () => ({ key: 'Escape', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
+  const fire = () => { const event = escape(); for (const { fn } of listeners.filter((item) => item.type === 'keydown')) fn(event); };
+  fire();
+  assert.deepEqual(closed, ['palette'], 'Escape en üstteki pencereyi kapatır');
+  palette.unmount();
+  fire();
+  assert.deepEqual(closed, ['palette', 'project']);
+  dialog.unmount();
+});
+
+test('kapalı ipucu Escape olayını tüketmez; açılmayı bekleyen ipucu tüketir', async (t) => {
+  const { Tooltip } = await import('../src/components/ui-extras.jsx');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const view = mountComponent(Tooltip, { content: 'Açıklama', children: 'Tetik' });
+  const trigger = () => findElement(view.output, (node) => typeof node.props?.onKeyDown === 'function');
+  const escape = () => ({ key: 'Escape', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
+  const closed = escape();
+  trigger().props.onKeyDown(closed);
+  assert.equal(closed.defaultPrevented, false, 'kapalı ipucu Escape’i üstteki pencereye bırakır');
+  trigger().props.onFocus({ currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 10, bottom: 10 }) } });
+  const pending = escape();
+  trigger().props.onKeyDown(pending);
+  assert.equal(pending.defaultPrevented, true, 'açılmayı bekleyen ipucu iptal edilir');
+  view.render();
+  const again = escape();
+  trigger().props.onKeyDown(again);
+  assert.equal(again.defaultPrevented, false, 'kapatılan ipucu sonraki Escape’i tüketmez');
+  view.unmount();
 });

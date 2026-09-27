@@ -30,12 +30,16 @@ const UNANSWERED_NOTICE = Object.freeze({
   action: null
 });
 
-function CopyAnswerButton({ text }) {
+/**
+ * Kopyalanan metin (görünen yanıt) yalnızca tıklanınca çıkarılır: akış
+ * sürerken her çizimde önceki bütün yanıtlar yeniden çözümlenmez.
+ */
+function CopyAnswerButton({ source }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef(null);
   useEffect(() => () => clearTimeout(timerRef.current), []);
   const copy = async () => {
-    const ok = await copyTextToClipboard(text);
+    const ok = await copyTextToClipboard(assistantMarkdownText(source));
     setCopied(ok);
     clearTimeout(timerRef.current);
     if (ok) timerRef.current = setTimeout(() => setCopied(false), 2000);
@@ -109,7 +113,7 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, onRetry, o
         {status === 'waiting' && (
           <p className="rota-assistant-phase">
             <span className="rota-assistant-pulse" aria-hidden="true" />
-            {generationPhaseLabel(phase || 'sending', answer?.mode) || 'Yanıt bekleniyor…'}
+            {generationPhaseLabel(phase || 'sending') || 'Yanıt bekleniyor…'}
           </p>
         )}
         {hasText && <AssistantMarkdown text={answer.content} />}
@@ -118,7 +122,7 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, onRetry, o
         )}
         {status === 'complete' && (
           <div className="rota-assistant-answer-meta">
-            <CopyAnswerButton text={assistantMarkdownText(answer.content)} />
+            <CopyAnswerButton source={answer.content} />
             {deep && <span className="rota-assistant-mode-badge">{assistantModeLabel(ASSISTANT_MODES.DEEP)}</span>}
             {note && <small className="rota-assistant-finish-note">{note}</small>}
           </div>

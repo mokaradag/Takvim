@@ -58,6 +58,8 @@ const MODE_PROFILES = Object.freeze({
 
 /** Konuşma SQL işlerinin süre sınırı (havuz, kapı sırası ve sorgu dâhil). */
 export const AI_CONVERSATION_SQL_TIMEOUT_MS = 10000;
+/** Tamamlanmış yanıtın yazımı için yinelemeler dâhil toplam süre. */
+const ANSWER_PERSIST_BUDGET_MS = 2 * AI_CONVERSATION_SQL_TIMEOUT_MS;
 /** Tur isteği gövdesinin en büyük boyutu ve okunma süresi. */
 export const ASSISTANT_TURN_BODY_BYTES = 64 * 1024;
 const TURN_BODY_TIMEOUT_MS = 10000;
@@ -250,16 +252,13 @@ export async function loadAssistantReadiness({ signal = null } = {}) {
 /** İçerik okumadan iki tabloyu doğrular; sağlık görünümüne gözlem bırakır. */
 export async function checkAssistantConversationSchema({ signal = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
-  try {
-    const schema = await withConversationSql(sicil, signal, (scope) => loadConversation(directExecutor(scope), sicil, {
-      conversationId: '00000000-0000-0000-0000-000000000000', maxMessages: 0
-    }));
-    if (!schema.knownSicil) throw unknownSicil();
-    noteConversationSchema(true);
-  } catch (error) {
-    if (!signal?.aborted && error.code !== 'UNAUTHORIZED') noteConversationSchema(false);
-    throw error;
-  }
+  // Eksik yapı `withConversationSql` içinde kaydedilir; kapı doluluğu, süre
+  // aşımı ya da bağlantı hatası yapının yokluğuna kanıt değildir.
+  const schema = await withConversationSql(sicil, signal, (scope) => loadConversation(directExecutor(scope), sicil, {
+    conversationId: '00000000-0000-0000-0000-000000000000', maxMessages: 0
+  }));
+  if (!schema.knownSicil) throw unknownSicil();
+  noteConversationSchema(true);
 }
 
 /* ── Konuşma listesi, okuma ve silme ─────────────────────────── */
@@ -272,9 +271,20 @@ function decodeCursor(cursor) {
   const invalid = () => invalidRequest('CURSOR_INVALID');
   if (typeof cursor !== 'string' || cursor.length > 200 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalid();
   const [updatedAt, id, extra] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
-  if (extra !== undefined || !isAssistantId(id) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(updatedAt || '')
-    || Number.isNaN(Date.parse(updatedAt))) throw invalid();
+  if (extra !== undefined || !isAssistantId(id) || !isCanonicalCursorInstant(updatedAt)) throw invalid();
   return { updatedAt, id: id.toLowerCase() };
+}
+
+/**
+ * İmleç zamanı gerçek ve kanonik bir an olmalıdır: `2026-02-31` gibi takvimde
+ * olmayan değer (JavaScript onu Mart'a kaydırır) ya da SQL Server `datetime2`
+ * aralığı dışındaki yıl (0000) reddedilir.
+ */
+function isCanonicalCursorInstant(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value || '')) return false;
+  if (Number(value.slice(0, 4)) < 1) return false;
+  const time = Date.parse(value);
+  return !Number.isNaN(time) && new Date(time).toISOString() === value;
 }
 
 /** Son etkinliğe göre sıralı, sayfalı konuşma listesi (yalnızca kendi konuşmaları). */
@@ -315,17 +325,31 @@ export async function loadAssistantConversation({ conversationId, signal = null 
 export async function deleteAssistantConversation({ conversationId, signal = null }) {
   const sicil = await getTrustedCurrentSicil();
   const id = requireConversationId(conversationId);
-  const result = await withConversationSql(sicil, signal, (scope) => {
-    const executor = boundedExecutor(scope.pool, scope.signal, {
-      track: scope.track,
-      // HTTP iptal edilse bile sürücünün başarılı silme sonucu üretimi durdurur.
-      onResult: (result) => {
-        const row = result.recordsets?.[0]?.[0];
-        if (row?.KnownSicil && Number(row.Deleted) > 0) abortAssistantGeneration({ sicil, conversationId: id });
-      }
+  let submitted = null;
+  let result;
+  try {
+    result = await withConversationSql(sicil, signal, (scope) => {
+      const executor = boundedExecutor(scope.pool, scope.signal, {
+        track: (query) => {
+          submitted = scope.signal;
+          scope.track(query);
+        },
+        // HTTP iptal edilse bile sürücünün başarılı silme sonucu üretimi durdurur.
+        onResult: (result) => {
+          const row = result.recordsets?.[0]?.[0];
+          if (row?.KnownSicil && Number(row.Deleted) > 0) abortAssistantGeneration({ sicil, conversationId: id });
+        }
+      });
+      return deleteConversation(executor, sicil, { conversationId: id });
     });
-    return deleteConversation(executor, sicil, { conversationId: id });
-  });
+  } catch (error) {
+    // Gönderilen silme İPTAL edildi (istemci ya da süre sınırı): sürücü sonucu
+    // bildirmeden DELETE işlenmiş olabilir. Kullanıcı konuşmanın silinmesini
+    // istedi; süren üretim durdurulur (silme işlenmediyse tur yanıtsız ve yeniden
+    // denenebilir kalır). Sürücünün bildirdiği kesin hata silme değildir.
+    if (submitted?.aborted) abortAssistantGeneration({ sicil, conversationId: id });
+    throw error;
+  }
   if (!result.knownSicil) throw unknownSicil();
   if (!result.deleted) throw conversationNotFound();
   abortAssistantGeneration({ sicil, conversationId: id });
@@ -396,7 +420,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   await verifyDirectoryMember(sicil, signal);
   const body = await withinDeadline(TURN_BODY_TIMEOUT_MS, signal, (scoped) => readBody(scoped), () => invalidRequest('BODY_TIMEOUT'));
   const input = parseTurnInput(body);
-  const prepare = (readOnly) => withConversationSql(sicil, signal, (scope) => inTransaction(scope, (executor) => prepareConversationTurn(executor, sicil, {
+  const prepareWith = (executor, readOnly) => prepareConversationTurn(executor, sicil, {
     conversationId: input.conversationId,
     newConversationId: randomUUID(),
     userMessageId: randomUUID(),
@@ -406,7 +430,11 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     maxMessages: ASSISTANT_LIMITS.maxConversationMessages,
     historyLimit: ASSISTANT_CONTEXT_POLICY.historyWindow,
     readOnly
-  })));
+  });
+  // Salt okunur geçiş hiçbir satır yazmaz ve kilit almaz: işlem açılmaz.
+  const prepare = (readOnly) => withConversationSql(sicil, signal, (scope) => (readOnly
+    ? prepareWith(directExecutor(scope), true)
+    : inTransaction(scope, (executor) => prepareWith(executor, false))));
   // Kayıtlı yanıt için yapılandırma ya da üretim hakkı gerekmez.
   const existing = await prepare(true);
   if (!existing.knownSicil) throw unknownSicil();
@@ -477,7 +505,13 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
     onText
   });
   const messageId = randomUUID();
-  const persist = () => withConversationSql(turn.sicil, null, (scope) => inTransaction(scope, (executor) => appendConversationAnswer(executor, turn.sicil, {
+  const persist = (launched) => withConversationSql(turn.sicil, null, (scope) => inTransaction({
+    ...scope,
+    track: (query) => {
+      launched.push(query);
+      scope.track(query);
+    }
+  }, (executor) => appendConversationAnswer(executor, turn.sicil, {
     conversationId: turn.conversation.id,
     messageId,
     replyToMessageId: turn.userMessage.id,
@@ -485,15 +519,22 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
     mode: turn.mode,
     finishReason: result.finishReason
   })));
+  // Yinelemeler TEK kalıcılık bütçesini paylaşır ve süresi dolan bir denemenin
+  // sürücüde hâlâ çalışan sorgusuyla örtüşmez (aynı yanıt iki kapı yeri tutmaz).
+  const persistStartedAt = Date.now();
   let stored;
   for (let attempt = 1; ; attempt += 1) {
+    const launched = [];
     try {
-      stored = await persist();
+      stored = await persist(launched);
       break;
     } catch (error) {
       const transient = error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';
       if (!transient || attempt >= 3) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      await Promise.allSettled(launched);
+      const delayMs = 250 * attempt;
+      if (Date.now() - persistStartedAt + delayMs >= ANSWER_PERSIST_BUDGET_MS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
   if (!stored.knownSicil) throw unknownSicil();

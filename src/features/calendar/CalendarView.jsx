@@ -9,6 +9,7 @@ import { AvatarStack, StatusPill } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton } from '../../components/ui-extras';
 import { appZoom } from '../../lib/zoom';
+import { modalTrapDepth } from '../../hooks/useModalFocusTrap.js';
 import { usePeople, useTasks, useTaskActions } from '../../state/hooks';
 import { bucketCalendarTasks, taskCalendarDate } from './calendarTaskBucketing.js';
 import { TaskOrganizationFilterControls } from '../tasks/TaskOrganizationFilterControls.jsx';
@@ -264,7 +265,9 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
   const isWeekend_ = isWeekend(d);
 
   useEffect2(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); } };
+    // Sonradan üstte açılan kipli pencere (ör. komut paleti) Esc'in sahibidir.
+    const depth = modalTrapDepth();
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented && modalTrapDepth() <= depth) { e.preventDefault(); onClose(); } };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -340,7 +343,9 @@ function DateJumpPopover({ anchor, onClose, onJump }) {
     const onDown = (e) => {
       if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) onClose();
     };
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); } };
+    // Sonradan üstte açılan kipli pencere (ör. komut paleti) Esc'in sahibidir.
+    const depth = modalTrapDepth();
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented && modalTrapDepth() <= depth) { e.preventDefault(); onClose(); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };

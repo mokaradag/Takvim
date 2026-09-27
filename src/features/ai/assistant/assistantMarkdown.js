@@ -13,8 +13,9 @@
  * açık bir bağlantı olarak gösterilir.
  *
  * Çalışma süresi sınırlıdır: iç içe blok derinliği, satır içi vurgu
- * ayırıcılarının sayısı ve bağlantı adresinin uzunluğu üst sınırlıdır; akış
- * sırasında yarım kalan yapı (kapanmamış kod bloğu) güvenle çizilir.
+ * ayırıcılarının sayısı, bağlantı adresinin uzunluğu ve yanıttaki toplam blok /
+ * liste maddesi sayısı üst sınırlıdır (sınırdan sonrası tek düz metin olarak
+ * korunur); akış sırasında yarım kalan yapı (kapanmamış kod bloğu) güvenle çizilir.
  */
 
 export const MARKDOWN_LIMITS = Object.freeze({
@@ -23,7 +24,9 @@ export const MARKDOWN_LIMITS = Object.freeze({
   maxLinkChars: 2048,
   maxLinkLabelChars: 1000,
   maxTableColumns: 24,
-  maxTableRows: 200
+  maxTableRows: 200,
+  /** Tüm yanıttaki blok ve liste maddesi sayısı (iç içe olanlar dâhil). */
+  maxBlocks: 2000
 });
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
@@ -438,12 +441,13 @@ function interruptsParagraph(lines, index) {
   return Boolean(marker && marker.content.trim() && (!marker.ordered || marker.start === 1));
 }
 
-function parseList(lines, start, depth) {
+function parseList(lines, start, depth, budget) {
   const first = listMarker(lines[start]);
   const list = { type: 'list', ordered: first.ordered, start: first.start, tight: true, items: [] };
   let index = start;
   let marker = first;
-  while (marker) {
+  while (marker && budget.blocks < MARKDOWN_LIMITS.maxBlocks) {
+    budget.blocks += 1;
     const itemLines = [marker.content];
     let sawBlank = false;
     index += 1;
@@ -468,7 +472,7 @@ function parseList(lines, start, depth) {
       index += 1;
     }
     while (itemLines.length && isBlank(itemLines[itemLines.length - 1])) itemLines.pop();
-    list.items.push(parseBlockLines(itemLines, depth + 1));
+    list.items.push(parseBlockLines(itemLines, depth + 1, budget));
     const next = index < lines.length ? listMarker(lines[index]) : null;
     const sameKind = next && next.ordered === first.ordered && (first.ordered || next.bullet === first.bullet)
       && indentOf(lines[index]) < first.offset;
@@ -479,13 +483,18 @@ function parseList(lines, start, depth) {
   return { block: list, next: index };
 }
 
-function parseBlockLines(lines, depth) {
+function parseBlockLines(lines, depth, budget = { blocks: 0 }) {
   const blocks = [];
   if (depth > MARKDOWN_LIMITS.maxDepth) {
     const text = lines.join('\n').trim();
     if (text) blocks.push({ type: 'paragraph', children: parseInline(text) });
     return blocks;
   }
+  // Her blok, kendisinden sonra kullanılmış bütçeyi taşır: artan çözümleme
+  // korunan bloklardan sonra aynı bütçeyle sürer (tam çözümle aynı sonuç).
+  const stamp = () => {
+    for (let last = blocks.length - 1; last >= 0 && blocks[last].blockBudget == null; last -= 1) blocks[last].blockBudget = budget.blocks;
+  };
   let index = 0;
   while (index < lines.length) {
     const line = lines[index];
@@ -493,6 +502,15 @@ function parseBlockLines(lines, depth) {
       index += 1;
       continue;
     }
+    if (budget.blocks >= MARKDOWN_LIMITS.maxBlocks) {
+      stamp();
+      // Blok bütçesi doldu: kalan içerik tek bir düz metin düğümünde korunur.
+      const text = lines.slice(index).join('\n');
+      blocks.push({ type: 'paragraph', children: [textNode(text)], source: text });
+      break;
+    }
+    stamp();
+    budget.blocks += 1;
     const start = index;
     const fence = line.match(FENCE);
     if (fence) {
@@ -533,11 +551,11 @@ function parseBlockLines(lines, depth) {
         quoted.push(lines[index].replace(QUOTE, ''));
         index += 1;
       }
-      blocks.push({ type: 'quote', children: parseBlockLines(quoted, depth + 1), source: lines.slice(start, index).join('\n') });
+      blocks.push({ type: 'quote', children: parseBlockLines(quoted, depth + 1, budget), source: lines.slice(start, index).join('\n') });
       continue;
     }
     if (listMarker(line)) {
-      const { block, next } = parseList(lines, index, depth);
+      const { block, next } = parseList(lines, index, depth, budget);
       index = next;
       blocks.push({ ...block, source: lines.slice(start, index).join('\n') });
       continue;
@@ -577,6 +595,7 @@ function parseBlockLines(lines, depth) {
     }
     blocks.push({ type: 'paragraph', children: parseInline(paragraph.join('\n')), source: lines.slice(start, index).join('\n') });
   }
+  stamp();
   return blocks;
 }
 
@@ -608,7 +627,7 @@ export function createAssistantMarkdownParser() {
     if (normalized === previous) return blocks;
     const keep = normalized.startsWith(previous) ? Math.max(0, blocks.length - 2) : 0;
     const offset = keep ? starts[keep] : 0;
-    const tail = parseBlockLines(normalized.slice(offset).split('\n'), 0);
+    const tail = parseBlockLines(normalized.slice(offset).split('\n'), 0, { blocks: keep ? blocks[keep - 1].blockBudget : 0 });
     let cursor = offset;
     const tailStarts = tail.map((block) => {
       const start = normalized.indexOf(block.source, cursor);
@@ -622,16 +641,28 @@ export function createAssistantMarkdownParser() {
   };
 }
 
-/** Görünen yanıt metni; biçim işaretleri ve araç düğmeleri kopyalanmaz. */
+/**
+ * Görünen yanıt metni; biçim işaretleri ve araç düğmeleri kopyalanmaz. Liste
+ * maddeleri görünen madde işaretini ya da sıra numarasını taşır; iç içe
+ * maddeler girintiyle korunur.
+ */
 export function assistantMarkdownText(text) {
   const inline = (nodes) => nodes.map((node) => node.type === 'break' ? '\n'
     : node.children ? `${node.image ? 'Görsel: ' : ''}${inline(node.children)}` : node.value || '').join('');
-  const blocks = (items) => items.map((block) => {
+  const listItem = (marker, content) => content.split('\n')
+    .map((line, index) => (index === 0 ? `${marker} ${line}` : line ? `${' '.repeat(marker.length + 1)}${line}` : line))
+    .join('\n');
+  const blocks = (items, separator = '\n\n') => items.map((block) => {
     if (block.type === 'code') return block.text;
     if (block.type === 'quote') return blocks(block.children);
-    if (block.type === 'list') return block.items.map(blocks).join('\n');
+    if (block.type === 'list') {
+      return block.items.map((item, index) => listItem(
+        block.ordered ? `${(block.start ?? 1) + index}.` : '•',
+        blocks(item, block.tight ? '\n' : '\n\n')
+      )).join(block.tight ? '\n' : '\n\n');
+    }
     if (block.type === 'table') return [block.header, ...block.rows].map((row) => row.map(inline).join('\t')).join('\n');
     return block.children ? inline(block.children) : '';
-  }).join('\n\n');
+  }).join(separator);
   return blocks(parseAssistantMarkdown(text));
 }

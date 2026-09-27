@@ -1,11 +1,12 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../DateInput';
 import { Icons } from '../icons';
 import { SearchableSelect } from '../SearchableSelect';
 import { Avatar } from '../ui';
 import { ProjectColorPicker } from '../project/ProjectColorPicker';
 import { fmtISO, today } from '../../scheduling/dates';
+import { modalTrapDepth } from '../../hooks/useModalFocusTrap.js';
 
 function initialForm(people) {
   return {
@@ -68,9 +69,17 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
     setForm((current) => (current.leadId ? current : { ...current, leadId: people[0]?.id || '' }));
   }, [open, people]);
 
+  // Pencere açılırken kaydedilir: sonradan üstte açılan kipli pencere (ör. komut
+  // paleti) Esc'in sahibidir ve kaydedilmemiş form arkada kapanmaz.
+  const trapDepthRef = useRef(0);
+  useEffect(() => {
+    if (open) trapDepthRef.current = modalTrapDepth();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => {
+      if (modalTrapDepth() > trapDepthRef.current) return;
       if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 && !saving) {
         event.preventDefault();
         onClose();

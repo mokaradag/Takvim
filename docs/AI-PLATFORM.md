@@ -1068,12 +1068,20 @@ HTTP durumu değişemeyeceği için her akış **tam olarak bir** sonlandırıc�
 
 Yanıt başlıkları: `Cache-Control: no-cache, no-store, no-transform`,
 `X-Accel-Buffering: no`, `X-Content-Type-Options: nosniff` ve
-`X-Mergen-Rota-Assistant-Protocol: 1`. Tarayıcı çözücüsü
-(`createAssistantStreamDecoder`) ilk olayın `accepted` (ya da doğrudan
-`error`) olmasını, sonlandırıcının tek olmasını, yanıt metninin 64.000
-karakteri aşmamasını ve olayların bozuk olmamasını zorunlu tutar; tanınmayan
-olay ve evre ileriye uyumluluk için yok sayılır. Sağlayıcının ham olayı, model
-adı, anahtar, adres ya da akıl yürütme metni hiçbir olaya girmez.
+`X-Mergen-Rota-Assistant-Protocol: 1`. Tarayıcı bu başlığı taşımayan ya da
+başka sürüm bildiren akışı çözmeden reddeder (`PROTOCOL_ERROR`,
+`PROTOCOL_VERSION`). Tarayıcı çözücüsü (`createAssistantStreamDecoder`) ilk
+olayın `accepted` (ya da doğrudan `error`) olmasını, sonlandırıcının tek
+olmasını, yanıt metninin 64.000 karakteri aşmamasını ve olayların bozuk
+olmamasını zorunlu tutar; sonlandırıcıdan sonraki her şey okunmadan yok
+sayılır. Olaylar isteğe bağlıdır: `accepted` isteği açan `turnId`'ye (ve
+verildiyse `conversationId`'ye), `done` kabul edilen konuşmaya ve kullanıcı
+iletisine (`replyToId`) ait olmalı ve bildirdiği kayıtlı yanıt uzunluğu alınan
+metnin (baş/son boşluk atılmış) uzunluğuna eşit olmalıdır; aksi hâlde
+`PROTOCOL_ERROR` döner ve tur yeniden denenebilir kalır (yeniden deneme kayıtlı
+yanıtı oynatır). Tanınmayan olay ve evre ileriye uyumluluk için yok sayılır.
+Sağlayıcının ham olayı, model adı, anahtar, adres ya da akıl yürütme metni
+hiçbir olaya girmez.
 
 **Canlı tutma:** yavaş bir model ilk metni üretirken bağlantı ve ters vekil
 sessiz kalmasın diye sunucu 15 sn'de bir SSE **yorum** satırı (`: keepalive`)
@@ -1141,6 +1149,19 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
   kirası ve üretim hakkı tam bir kez bırakılır, yarım yanıt YAZILMAZ; kullanıcı
   iletisi kalır ve tur yeniden denenebilir. Arayüzde kısmi metin "tamamlanmadı"
   notuyla görünür kalır.
+- **Uzlaştırma.** Kabul edilmiş ama `done` almadan biten tur (Durdur, kopan
+  bağlantı, protokol hatası) belirsizdir: sağlayıcı yanıtı tamamlamış ve sunucu
+  onu kaydetmiş olabilir. Arayüz konuşmayı sunucudan okuyana kadar o konuşmada
+  yeni tur ya da yeniden deneme başlatmaz; kayıtlı yanıt bulunursa tur
+  tamamlanmış gösterilir, bulunmazsa kısmi metin ve **Yeniden dene** kalır.
+- **Kabul öncesi hatalar.** Sunucunun iletiyi yazmadan verdiği kesin retler
+  (oturum, geçersiz istek, kapalı/yapılandırılmamış hizmet, `CONFLICT`,
+  `NOT_FOUND`) yerel turu atar ve metni taslağa geri koyar; yazma alanında yeni
+  bir taslak varsa reddedilen ileti "Gönderilemeyen ileti" bildirimiyle geri
+  alınabilir kalır. Dolan (`CONVERSATION_FULL`) ya da silinmiş konuşmada yazma
+  alanı kapanır ve yeni konuşma önerilir (taslak yeni konuşmaya taşınır).
+  İletinin kaydedilip kaydedilmediğini söylemeyen kabul öncesi hata (ör. akış
+  kurulamadı, beklenmeyen 5xx) turu atmaz: tur aynı kimlikle yeniden denenir.
 - **Bayat sonuç koruması.** Tarayıcı durum makinesi her üretime ve her
   konuşma/liste okumasına belirteç verir: durdurulan ya da yerine yenisi
   başlatılan üretimin geç olayı, sonradan açılan konuşmanın yerine geçen eski
@@ -1182,9 +1203,12 @@ Kalıcılık anlamı:
 - Başlık belirlenimcidir: ilk iletiden biçim işaretleri atılır, 60 karakterde
   kelime sınırında kısaltılır; boş kalırsa *Yeni konuşma*. Başlık için ayrıca
   model çağrılmaz.
-- Liste son etkinliğe göre sıralıdır ve 30'arlık anahtar kümesi sayfalarıyla
-  gelir; panel açılırken yalnızca ilk sayfa okunur, iletiler yalnızca açılan
-  konuşma için yüklenir. Bir konuşma en fazla 100 ileti taşır; dolunca yeni tur
+- Liste son etkinliğe göre sıralıdır (eşit zamanda `ConversationId`, SQL Server
+  `uniqueidentifier` sırasıyla; tarayıcı aynı sırayı uygular) ve 30'arlık
+  anahtar kümesi sayfalarıyla gelir; panel açılırken yalnızca ilk sayfa okunur,
+  iletiler yalnızca açılan konuşma için yüklenir. *Daha eski konuşmalar* sabit
+  sayıda istekle çalışır: başa taşınan konuşmalar için ilk sayfa yeniden
+  okunur, eski sayfalar var olan imleçten sürer (geçmiş baştan oynatılmaz). Bir konuşma en fazla 100 ileti taşır; dolunca yeni tur
   `CONFLICT` (`CONVERSATION_FULL`) alır ve arayüz yeni konuşma önerir.
 
 **Sicil sahipliği.** Her sorgu `OwnerSicil = @sicil` ile sınırlıdır ve
@@ -1243,9 +1267,17 @@ başlamadan başarısız) taşır; Sistem Yönetimi → Genel Durum → Yapay ze
 hizmeti ayrıntısında *İlk metin P95*, *Sağlayıcı akış sonuçları* ve profil başına istek
 sayısı (*Profil dağılımı*) olarak görünür. *Rota AI tur sonuçları* (`assistantTurns`)
 yanıtın kaydedilmesini de kapsar; HTTP 200 sonrasındaki kalıcılık hataları başarısız
-tur olarak kaydedilir ve sağlık görünümünde bildirilir. Sağlıklı durum için en az
-bir sohbet profili (`chat.general` / `chat.reasoning`) ve son 15 dakika içinde
-doğrulanmış 0017 konuşma şeması gerekir. Yönetici bağlantı testi bu şemayı da denetler.
+tur olarak kaydedilir ve sağlık görünümünde bildirilir. Her tur sonucu sayılır;
+ancak yalnızca HİZMET hatası (kurumsal anahtarın reddi, sağlayıcı/kalıcılık
+arızası, iç hata) sağlık uyarısı ve işletim günlüğü üretir. Kullanıcıya özgü
+sonuçlar (geçersiz ya da oran sınırına ulaşmış kişisel anahtar, reddedilen
+istek, silinmiş konuşma) herkese hizmet sorunu gibi görünmez; sınıflandırma
+`ai.request` ile aynıdır. Kayıtlı yanıtın yeniden oynatılması yeni tur sayılmaz.
+Sağlıklı durum için en az bir sohbet profili (`chat.general` / `chat.reasoning`)
+ve son 15 dakika içinde doğrulanmış 0017 konuşma şeması gerekir; geçici SQL
+hatası şemayı "eksik" göstermez. Yönetici bağlantı testi bu şemayı da denetler;
+uç model listesini verdiyse Rota AI kiplerinden en az birinin modeli listede
+olmalıdır (`ASSISTANT_MODEL_MISSING`).
 Hiçbir ölçüm ve günlük satırı soru, yanıt, başlık, yönerge ya da anahtar
 taşımaz; istek gövdeleri günlüğe yazılmaz.
 
@@ -1297,12 +1329,14 @@ güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
   çıktısındaki HTML metin olarak görünür, görsel yüklenmez (açık bir bağlantı
   olur), bağlantı yalnızca mutlak `http`, `https` ve `mailto` adreslerine verilir
   ve yeni sekmede yönlendiren bilgisi olmadan açılır. Çözücü doğrusal
-  zamanlıdır ve derinlik/ayırıcı sınırları taşır. Olgun bir Markdown
+  zamanlıdır ve derinlik/ayırıcı sınırları ile yanıt başına en fazla 2.000 blok
+  ve liste maddesi sınırı taşır (sonrası tek düz metin olarak korunur). Olgun bir Markdown
   bağımlılığı (onlarca geçişli paket) yerine bu küçük, HTML üretmeyen çözücü
   seçildi: kurum içi kurulumun bağımlılık yüzeyi büyümez ve güvenlik sınırı
   (yalnızca React metin düğümleri) denetlenebilir kalır.
 - **Kopyalama:** yalnızca tamamlanmış yanıtta küçük bir düğme; görünen metni
-  kopyalar (düz HTTP ile açılan kurulumda da çalışır).
+  (liste işaretleri ve sıra numaralarıyla) kopyalar, metin yalnızca tıklanınca
+  çıkarılır (düz HTTP ile açılan kurulumda da çalışır).
 - **Kaydırma:** kullanıcı en alttaysa yeni metin izlenir; yukarı kaydıran
   kullanıcı geri çekilmez, *En yeni* düğmesiyle döner.
 - **Erişilebilirlik:** akan metin canlı bölge değildir; tek, nazik canlı bölge
@@ -1385,7 +1419,8 @@ node test/helpers/fakeOpenAiCompatibleServer.mjs --serve --port 8099 --delay-ms 
 5. Tarayıcının ağ sekmesinde tur gövdesinin yalnızca `conversationId`,
    `turnId`, `message`, `mode` taşıdığını, model adı gönderilmediğini doğrulayın.
 6. Akıl yürütme (düşünce) metninin hiçbir yerde görünmediğini doğrulayın;
-   yalnızca *Derin düşünülüyor…* evresi görünür.
+   model akıl yürütme bildirdiğinde yalnızca *Derin düşünülüyor…* evresi,
+   bildirmediğinde *Yanıt oluşturuluyor…* görünür.
 
 **C. Durdur**
 

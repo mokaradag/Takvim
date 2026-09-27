@@ -66,22 +66,6 @@ BEGIN TRY
             CONSTRAINT CK_MR_AiConversations_MessageCount CHECK (MessageCount >= 0)
         );
 
-    IF NOT EXISTS (
-        SELECT 1 FROM sys.indexes
-        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversations') AND name = N'UX_MR_AiConversations_OwnerOrigin'
-    )
-        CREATE UNIQUE INDEX UX_MR_AiConversations_OwnerOrigin
-            ON dbo.MR_AiConversations(OwnerSicil, OriginTurnId);
-
-    /* Son konuşmalar listesi (anahtar kümesi sayfalaması) tam tablo taraması yapmaz. */
-    IF NOT EXISTS (
-        SELECT 1 FROM sys.indexes
-        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversations') AND name = N'IX_MR_AiConversations_OwnerRecent'
-    )
-        CREATE INDEX IX_MR_AiConversations_OwnerRecent
-            ON dbo.MR_AiConversations(OwnerSicil, UpdatedAt DESC, ConversationId DESC)
-            INCLUDE (Title, CreatedAt, MessageCount);
-
     IF OBJECT_ID(N'dbo.MR_AiConversationMessages', N'U') IS NULL
         CREATE TABLE dbo.MR_AiConversationMessages (
             MessageId uniqueidentifier NOT NULL,
@@ -107,24 +91,6 @@ BEGIN TRY
                 (Role = 'user' AND ClientTurnId IS NOT NULL AND ReplyToMessageId IS NULL AND Mode IS NULL AND FinishReason IS NULL)
                 OR (Role = 'assistant' AND ClientTurnId IS NULL AND ReplyToMessageId IS NOT NULL))
         );
-
-    /* Aynı tur (yeniden gönderim, çift tıklama) ikinci kullanıcı iletisi üretmez. */
-    IF NOT EXISTS (
-        SELECT 1 FROM sys.indexes
-        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversationMessages') AND name = N'UX_MR_AiConversationMessages_Turn'
-    )
-        CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Turn
-            ON dbo.MR_AiConversationMessages(ConversationId, ClientTurnId)
-            WHERE ClientTurnId IS NOT NULL;
-
-    /* Bir kullanıcı turuna en fazla bir tamamlanmış yanıt. */
-    IF NOT EXISTS (
-        SELECT 1 FROM sys.indexes
-        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversationMessages') AND name = N'UX_MR_AiConversationMessages_Reply'
-    )
-        CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Reply
-            ON dbo.MR_AiConversationMessages(ReplyToMessageId)
-            WHERE ReplyToMessageId IS NOT NULL;
 
     -- Tablolar bu betikten ÖNCE (elle ya da yarım kalmış bir kurulumla)
     -- oluşturulmuş olabilir. Yapısı doğrulanmadan göç uygulanmış sayılmaz:
@@ -172,6 +138,76 @@ BEGIN TRY
             AND TYPE_NAME(c.user_type_id) <> N'timestamp'
     )
         THROW 51017, N'0017: Konuşma tablolarında uygulamanın dolduramayacağı fazladan zorunlu sütun var.', 1;
+
+    -- Dizinler YALNIZCA sütun yapısı doğrulandıktan sonra eklenir: elle ya da
+    -- yarım kurulmuş bir tabloda eksik sütun ya da yinelenen satır, SQL Server'ın
+    -- genel dizin hatası yerine göçün açıklayıcı hatasıyla bildirilir. Yineleme
+    -- sorguları sütunlar doğrulandıktan SONRA derlensin diye sabit metinli
+    -- sp_executesql ile çalışır (toplu iş derlenirken eksik sütun hatası vermez).
+    DECLARE @Duplicates bit = 0;
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversations') AND name = N'UX_MR_AiConversations_OwnerOrigin'
+    )
+        EXEC sys.sp_executesql
+            N'SET @Found = CASE WHEN EXISTS (SELECT 1 FROM dbo.MR_AiConversations GROUP BY OwnerSicil, OriginTurnId HAVING COUNT(*) > 1) THEN 1 ELSE 0 END;',
+            N'@Found bit OUTPUT', @Found = @Duplicates OUTPUT;
+    IF @Duplicates = 1
+        THROW 51017, N'0017: MR_AiConversations aynı Sicil ve ilk tur için birden çok konuşma içeriyor; tekillik dizini eklenemez.', 1;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversationMessages') AND name = N'UX_MR_AiConversationMessages_Turn'
+    )
+        EXEC sys.sp_executesql
+            N'SET @Found = CASE WHEN EXISTS (SELECT 1 FROM dbo.MR_AiConversationMessages WHERE ClientTurnId IS NOT NULL GROUP BY ConversationId, ClientTurnId HAVING COUNT(*) > 1) THEN 1 ELSE 0 END;',
+            N'@Found bit OUTPUT', @Found = @Duplicates OUTPUT;
+    IF @Duplicates = 1
+        THROW 51017, N'0017: MR_AiConversationMessages aynı tur için birden çok kullanıcı iletisi içeriyor; tekillik dizini eklenemez.', 1;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversationMessages') AND name = N'UX_MR_AiConversationMessages_Reply'
+    )
+        EXEC sys.sp_executesql
+            N'SET @Found = CASE WHEN EXISTS (SELECT 1 FROM dbo.MR_AiConversationMessages WHERE ReplyToMessageId IS NOT NULL GROUP BY ReplyToMessageId HAVING COUNT(*) > 1) THEN 1 ELSE 0 END;',
+            N'@Found bit OUTPUT', @Found = @Duplicates OUTPUT;
+    IF @Duplicates = 1
+        THROW 51017, N'0017: MR_AiConversationMessages bir tura birden çok yanıt içeriyor; tekillik dizini eklenemez.', 1;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversations') AND name = N'UX_MR_AiConversations_OwnerOrigin'
+    )
+        CREATE UNIQUE INDEX UX_MR_AiConversations_OwnerOrigin
+            ON dbo.MR_AiConversations(OwnerSicil, OriginTurnId);
+
+    /* Son konuşmalar listesi (anahtar kümesi sayfalaması) tam tablo taraması yapmaz. */
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversations') AND name = N'IX_MR_AiConversations_OwnerRecent'
+    )
+        CREATE INDEX IX_MR_AiConversations_OwnerRecent
+            ON dbo.MR_AiConversations(OwnerSicil, UpdatedAt DESC, ConversationId DESC)
+            INCLUDE (Title, CreatedAt, MessageCount);
+
+    /* Aynı tur (yeniden gönderim, çift tıklama) ikinci kullanıcı iletisi üretmez. */
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversationMessages') AND name = N'UX_MR_AiConversationMessages_Turn'
+    )
+        CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Turn
+            ON dbo.MR_AiConversationMessages(ConversationId, ClientTurnId)
+            WHERE ClientTurnId IS NOT NULL;
+
+    /* Bir kullanıcı turuna en fazla bir tamamlanmış yanıt. */
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversationMessages') AND name = N'UX_MR_AiConversationMessages_Reply'
+    )
+        CREATE UNIQUE INDEX UX_MR_AiConversationMessages_Reply
+            ON dbo.MR_AiConversationMessages(ReplyToMessageId)
+            WHERE ReplyToMessageId IS NOT NULL;
 
     -- Dizin türü ve kısıt sahipliği de kurulum sözleşmesinin parçasıdır.
     DECLARE @RequiredIndexes TABLE (TableName sysname, IndexName sysname, IndexType tinyint, IsPrimaryKey bit, IsUniqueConstraint bit);

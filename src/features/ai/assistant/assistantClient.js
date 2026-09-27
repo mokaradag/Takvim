@@ -1,9 +1,11 @@
 import {
   ASSISTANT_LIMITS,
+  ASSISTANT_PROTOCOL_HEADER,
   ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_STREAM_EVENTS,
   ASSISTANT_STREAM_PHASES,
-  isAssistantId
+  isAssistantId,
+  isAssistantMode
 } from '../../../domain/ai/assistantContract.js';
 import { createEventStreamParser } from '../../../domain/ai/eventStreamParser.js';
 import { publicRotaPath } from '../../../lib/publicPath.js';
@@ -37,14 +39,24 @@ function isPlainObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isConversation(value) {
-  return isPlainObject(value) && isAssistantId(value.id) && typeof value.title === 'string';
+function isTimestamp(value) {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
+function isConversation(value) {
+  return isPlainObject(value) && isAssistantId(value.id) && typeof value.title === 'string'
+    && isTimestamp(value.updatedAt) && (value.createdAt == null || isTimestamp(value.createdAt));
+}
+
+/**
+ * İleti ve rolüne özgü bağı: kullanıcı iletisi kendi tur kimliğini, yanıt
+ * yanıtladığı kullanıcı iletisini taşır; karşı alan boştur.
+ */
 function isMessage(value) {
-  return isPlainObject(value) && isAssistantId(value.id)
-    && (value.role === 'user' || value.role === 'assistant')
-    && Number.isFinite(value.sequence);
+  if (!isPlainObject(value) || !isAssistantId(value.id) || !Number.isFinite(value.sequence)) return false;
+  if (value.role === 'user') return isAssistantId(value.turnId) && value.replyToId == null;
+  if (value.role === 'assistant') return isAssistantId(value.replyToId) && value.turnId == null;
+  return false;
 }
 
 function isStoredMessage(value) {
@@ -53,9 +65,12 @@ function isStoredMessage(value) {
 
 function isReadiness(value) {
   return isPlainObject(value) && typeof value.available === 'boolean' && Array.isArray(value.modes)
-    && value.modes.every((mode) => isPlainObject(mode) && typeof mode.id === 'string' && typeof mode.available === 'boolean')
+    && value.modes.every((mode) => isPlainObject(mode) && isAssistantMode(mode.id) && typeof mode.label === 'string'
+      && typeof mode.available === 'boolean')
     && isPlainObject(value.limits) && Number.isFinite(value.limits.maxMessageChars);
 }
+
+const sameId = (left, right) => typeof left === 'string' && typeof right === 'string' && left.toLowerCase() === right.toLowerCase();
 
 async function expectPayload(pending, isValid) {
   const response = await pending;
@@ -87,7 +102,8 @@ export function loadAssistantConversationRequest(conversationId, options = {}) {
 export function deleteAssistantConversationRequest(conversationId, options = {}) {
   return expectPayload(
     requestJson(`${BASE}/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' }, options),
-    (response) => response.deleted === true
+    // Başarı yalnızca İSTENEN konuşmanın silindiğini söyleyen yanıttır.
+    (response) => response.deleted === true && sameId(response.conversationId, conversationId)
   );
 }
 
@@ -139,26 +155,55 @@ function interpret({ event, data }) {
  * `accepted` (ya da doğrudan `error`) olmalıdır; `done`/`error`
  * sonlandırıcıdır ve sonrasındaki her şey yok sayılır; yanıt metni üst sınırı
  * aşamaz. Bozuk olay `AssistantProtocolError` fırlatır.
+ *
+ * Kimlik bağı: `turnId` / `conversationId` verilirse `accepted` isteği açan
+ * tura (ve konuşmaya) ait olmalıdır; `done` kabul edilen konuşmanın ve
+ * kullanıcı iletisinin yanıtıdır ve bildirdiği kayıtlı yanıt uzunluğu alınan
+ * metinle (kalıcılıktaki gibi baş/son boşluk atılarak) aynıdır.
  */
-export function createAssistantStreamDecoder({ maxEventChars = MAX_STREAM_EVENT_CHARS, maxAnswerChars = ASSISTANT_LIMITS.maxAnswerChars } = {}) {
+export function createAssistantStreamDecoder({
+  maxEventChars = MAX_STREAM_EVENT_CHARS,
+  maxAnswerChars = ASSISTANT_LIMITS.maxAnswerChars,
+  turnId = null,
+  conversationId = null
+} = {}) {
   const parser = createEventStreamParser({ maxEventChars, tooLarge: () => new AssistantProtocolError('EVENT_TOO_LARGE') });
-  const state = { accepted: false, terminal: null, answerChars: 0 };
+  const state = { accepted: null, terminal: null, answerChars: 0, answer: '' };
+
+  function checkAccepted({ conversation, userMessage }) {
+    if (turnId != null && !sameId(userMessage.turnId, turnId)) throw new AssistantProtocolError('TURN_MISMATCH');
+    if (conversationId != null && !sameId(conversation.id, conversationId)) throw new AssistantProtocolError('CONVERSATION_MISMATCH');
+  }
+
+  function checkDone({ conversation, assistantMessage }) {
+    if (!sameId(conversation.id, state.accepted.conversation.id) || !sameId(assistantMessage.replyToId, state.accepted.userMessage.id)) {
+      throw new AssistantProtocolError('TURN_MISMATCH');
+    }
+    if (!Number.isSafeInteger(assistantMessage.length) || assistantMessage.length < 0) throw new AssistantProtocolError('MALFORMED_EVENT');
+    if (assistantMessage.length !== state.answer.trim().length) throw new AssistantProtocolError('ANSWER_LENGTH_MISMATCH');
+  }
 
   function accept(raw) {
+    // Sonlandırıcıdan sonraki her şey (bozuk olay dâhil) okunmadan yok sayılır:
+    // sonuç ağ parçalarının nasıl bölündüğüne bağlı olmaz.
+    if (state.terminal) return null;
     const event = interpret(raw);
-    if (!event || state.terminal) return null;
+    if (!event) return null;
     const terminal = event.type === ASSISTANT_STREAM_EVENTS.DONE || event.type === ASSISTANT_STREAM_EVENTS.ERROR;
     if (!state.accepted && event.type !== ASSISTANT_STREAM_EVENTS.ACCEPTED && event.type !== ASSISTANT_STREAM_EVENTS.ERROR) {
       throw new AssistantProtocolError('UNEXPECTED_EVENT');
     }
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       if (state.accepted) throw new AssistantProtocolError('UNEXPECTED_EVENT');
-      state.accepted = true;
+      checkAccepted(event.data);
+      state.accepted = event.data;
     }
     if (event.type === ASSISTANT_STREAM_EVENTS.DELTA) {
       state.answerChars += event.data.text.length;
       if (state.answerChars > maxAnswerChars) throw new AssistantProtocolError('ANSWER_TOO_LARGE');
+      state.answer += event.data.text;
     }
+    if (event.type === ASSISTANT_STREAM_EVENTS.DONE) checkDone(event.data);
     if (terminal) state.terminal = event;
     return event;
   }
@@ -168,7 +213,7 @@ export function createAssistantStreamDecoder({ maxEventChars = MAX_STREAM_EVENT_
       return state.terminal;
     },
     get accepted() {
-      return state.accepted;
+      return Boolean(state.accepted);
     },
     push(text) {
       return parser.push(text).map(accept).filter(Boolean);
@@ -280,10 +325,17 @@ export async function streamAssistantTurnRequest({
     cleanup();
     return failure(ASSISTANT_INVALID_RESPONSE, { retryable: true });
   }
+  // Protokol sürümü yanıt başlığıyla da bağlanır: doğrudan `error` ile biten
+  // (sürüm taşımayan) akış da eski/uyumsuz bir sunucudan kabul edilmez.
+  if (response.headers.get(ASSISTANT_PROTOCOL_HEADER) !== String(ASSISTANT_PROTOCOL_VERSION)) {
+    response.body.cancel().catch(() => {});
+    cleanup();
+    return failure('PROTOCOL_ERROR', { reason: 'PROTOCOL_VERSION', retryable: true });
+  }
 
   const reader = response.body.getReader();
   const textDecoder = new TextDecoder();
-  const decoder = createAssistantStreamDecoder();
+  const decoder = createAssistantStreamDecoder({ turnId, conversationId });
   try {
     while (!decoder.terminal) {
       let step;

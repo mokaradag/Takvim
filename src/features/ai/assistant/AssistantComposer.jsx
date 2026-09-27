@@ -68,7 +68,12 @@ export function AssistantComposer({
   const inputId = useId();
   const hintId = useId();
   const counterId = useId();
-  const [hint, setHint] = useState(null);
+  const [storedHint, setHint] = useState(null);
+  // "Yanıt sürerken gönderilemez" açıklaması yalnızca yanıt sürerken geçerlidir.
+  const hint = storedHint === BUSY_HINT && !generating ? null : storedHint;
+  useEffect(() => {
+    if (!generating) setHint((current) => (current === BUSY_HINT ? null : current));
+  }, [generating]);
   const overLimit = value.length > maxChars;
   const blank = !value.trim();
   const canSubmit = !disabled && !generating && !blank && !overLimit;

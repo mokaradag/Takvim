@@ -83,9 +83,10 @@ export const AI_CONVERSATION_DELETE_SQL = `${KNOWN_SICIL}
  * - Tur ve son ileti sırası, modelin bağlamı için tur ÖNCESİ son iletiler, turun
  *   kendisi ve var olan yanıtı (yeniden oynatma için) aynı gidiş-dönüşte döner.
  *
- * Konuşma satırı `UPDLOCK, HOLDLOCK` ile kilitlenir: aynı konuşmadaki eşzamanlı
- * turlar sıra numarasında çakışmaz, aynı ilk turun çift gönderimi iki konuşma
- * açmaz.
+ * Yazan geçişte konuşma satırı `UPDLOCK, HOLDLOCK` ile kilitlenir: aynı
+ * konuşmadaki eşzamanlı turlar sıra numarasında çakışmaz, aynı ilk turun çift
+ * gönderimi iki konuşma açmaz. Salt okunur geçiş (`@readOnly = 1`: kayıtlı
+ * yanıt araması) kilit almaz ve hiçbir satır yazmaz.
  */
 export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
   DECLARE @conversation uniqueidentifier = NULL;
@@ -97,7 +98,15 @@ export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
   IF @knownSicil = 1
   BEGIN
     SET @outcome = 'NOT_FOUND';
-    IF @conversationId IS NULL
+    IF @readOnly = 1 AND @conversationId IS NULL
+      SELECT @conversation = c.ConversationId
+      FROM dbo.MR_AiConversations c
+      WHERE c.OwnerSicil = @sicil AND c.OriginTurnId = @turnId;
+    ELSE IF @readOnly = 1
+      SELECT @conversation = c.ConversationId
+      FROM dbo.MR_AiConversations c
+      WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil;
+    ELSE IF @conversationId IS NULL
       SELECT @conversation = c.ConversationId
       FROM dbo.MR_AiConversations c WITH (UPDLOCK, HOLDLOCK)
       WHERE c.OwnerSicil = @sicil AND c.OriginTurnId = @turnId;

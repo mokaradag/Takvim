@@ -30,6 +30,8 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
   const tipRef = useRx(null);
   const timer = useRx(null);
+  // Gösterilmeyi bekleyen ipucu da Esc ile iptal edilir; kapalı ipucu Esc'i tüketmez.
+  const pending = useRx(false);
   const lastMouse = useRx({ x: 0, y: 0 });
 
   const place = (x, y) => {
@@ -65,7 +67,9 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     clearTimeout(timer.current);
     const x = e.clientX, y = e.clientY;
     lastMouse.current = { x, y };
+    pending.current = true;
     timer.current = setTimeout(() => {
+      pending.current = false;
       setShow(true);
     }, delay);
   };
@@ -73,7 +77,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     lastMouse.current = { x: e.clientX, y: e.clientY };
     if (show) place(e.clientX, e.clientY);
   };
-  const leave = () => { clearTimeout(timer.current); setShow(false); setPos(p => ({ ...p, ready: false })); };
+  const leave = () => { clearTimeout(timer.current); pending.current = false; setShow(false); setPos(p => ({ ...p, ready: false })); };
 
   useEx(() => {
     if (show && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
@@ -92,7 +96,10 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
       enter({ clientX: lastMouse.current.x, clientY: lastMouse.current.y });
     },
     onBlur: leave,
-    onKeyDown: (e) => { if (e.key === 'Escape') { e.preventDefault(); leave(); } }
+    onKeyDown: (e) => {
+      // Yalnızca açık ya da açılmayı bekleyen ipucu Esc'i tüketir; aksi hâlde Esc üstteki pencereye ulaşır.
+      if (e.key === 'Escape' && (show || pending.current)) { e.preventDefault(); leave(); }
+    }
   };
 
   const tip = show && ReactDOM.createPortal(
@@ -681,24 +688,30 @@ export function HoverListCard({
   // ulaşabilmesinin tek yolu budur.
   const [pinned, setPinned] = useSx(false);
 
+  // Açılmayı bekleyen kart da Esc ile iptal edilir; kapalı kart Esc'i tüketmez.
+  const openPending = useRx(false);
   const open = () => {
     clearTimeout(closeT.current);
     if (show) return;
-    openT.current = setTimeout(() => setShow(true), 90);
+    openPending.current = true;
+    openT.current = setTimeout(() => { openPending.current = false; setShow(true); }, 90);
   };
   const openNow = () => {
     clearTimeout(closeT.current);
     clearTimeout(openT.current);
+    openPending.current = false;
     setShow(true);
   };
   const closeNow = () => {
     clearTimeout(openT.current);
     clearTimeout(closeT.current);
+    openPending.current = false;
     setPinned(false);
     setShow(false);
   };
   const scheduleClose = () => {
     clearTimeout(openT.current);
+    openPending.current = false;
     if (pinned) return;
     closeT.current = setTimeout(() => setShow(false), 160);
   };
@@ -786,7 +799,7 @@ export function HoverListCard({
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             toggle();
-          } else if (event.key === 'Escape') {
+          } else if (event.key === 'Escape' && (show || openPending.current)) {
             event.preventDefault();
             closeNow();
           }

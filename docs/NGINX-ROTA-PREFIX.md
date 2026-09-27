@@ -76,7 +76,8 @@ TEST `/bilge` route):
     proxy_send_timeout 300s;
     # Original host and scheme: the same-origin check of state-changing AI
     # requests (turns, deletes, key management) compares them with `Origin`.
-    proxy_set_header Host $host;
+    # `$http_host` keeps a non-default public port (`$host` drops it).
+    proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

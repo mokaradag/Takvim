@@ -52,6 +52,9 @@ export function createEventStreamParser({ maxEventChars, tooLarge, onComment = n
     /** Yeni metni işler; tamamlanan olayları `{ event, data }` olarak döndürür. */
     push(chunk) {
       const events = [];
+      // Boş parça (ör. yalnızca yarım UTF-8 dizisi taşıyan ağ parçası) bekleyen
+      // `\r` durumunu tüketmez: sonraki parçanın `\n`'i aynı satır sonudur.
+      if (!chunk) return events;
       let position = 0;
       if (afterCr) {
         afterCr = false;

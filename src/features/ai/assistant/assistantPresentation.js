@@ -1,6 +1,6 @@
 import { AI_CREDENTIAL_SOURCES } from '../../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES, aiErrorMessage, isAiErrorCode } from '../../../domain/ai/aiErrorCatalog.js';
-import { ASSISTANT_MODES, ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js';
+import { ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js';
 
 /**
  * Rota AI'nin saf sunum kuralları: hata ve durum metinleri, tonları, yeniden
@@ -24,6 +24,12 @@ const CLIENT_FAILURES = Object.freeze({
   INVALID_RESPONSE: { tone: 'fail', title: 'Beklenmeyen yanıt', message: 'Sunucudan beklenmeyen bir yanıt alındı. Yeniden deneyin.' }
 });
 
+const SERVER_CANCELLED = Object.freeze({
+  tone: 'muted',
+  title: 'Yanıt durduruldu',
+  message: 'Yanıt sunucuda durduruldu ve kaydedilmedi. Konuşma başka bir pencerede silinmiş olabilir.'
+});
+
 const SESSION_CODES = new Set(['UNAUTHORIZED', 'SESSION_REQUIRED']);
 
 function serverMessage(result, fallback) {
@@ -38,7 +44,8 @@ function serverMessage(result, fallback) {
  */
 export function assistantFailureView(result, now = Date.now()) {
   const code = String(result?.code ?? '');
-  if (code === AI_ERROR_CODES.AI_CANCELLED) return { ...CLIENT_FAILURES.REQUEST_CANCELLED, retryable: true, action: null };
+  // Sunucuda durdurulan üretim (ör. konuşma başka pencerede silindi) kullanıcının Durdur'u değildir.
+  if (code === AI_ERROR_CODES.AI_CANCELLED) return { ...SERVER_CANCELLED, retryable: true, action: null };
   if (Object.hasOwn(CLIENT_FAILURES, code)) return { ...CLIENT_FAILURES[code], retryable: true, action: null };
   if (SESSION_CODES.has(code)) {
     return {
@@ -74,6 +81,7 @@ export function assistantFailureView(result, now = Date.now()) {
         title: 'API anahtarı gerekli',
         message: 'Rota AI için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
         retryable: false,
+        credential: true,
         action: 'settings'
       };
     case AI_ERROR_CODES.AI_KEY_INVALID:
@@ -83,6 +91,8 @@ export function assistantFailureView(result, now = Date.now()) {
         title: result?.credentialSource === AI_CREDENTIAL_SOURCES.DEFAULT ? 'Kurumsal anahtar kabul edilmedi' : 'Kişisel anahtar kabul edilmedi',
         message: serverMessage(result, aiErrorMessage(code)),
         retryable: false,
+        // Anahtar düzeltilince (hazırlık yeniden kullanılabilir olunca) tur yeniden denenebilir olur.
+        credential: true,
         action: result?.credentialSource === AI_CREDENTIAL_SOURCES.DEFAULT ? null : 'settings'
       };
     case AI_ERROR_CODES.AI_TIMEOUT:
@@ -106,7 +116,8 @@ export function assistantFailureView(result, now = Date.now()) {
         message: result?.reason === 'EMPTY_COMPLETION'
           ? 'Model görünür bir yanıt üretmeden durdu. Soruyu daraltıp yeniden deneyin.'
           : 'Yapay zekâ hizmetinden geçersiz bir yanıt alındı.',
-        retryable: true,
+        // Katalog bu kodu yinelenemez sayar; sunucunun sınıflandırması korunur.
+        retryable: result?.retryable === true,
         action: null
       };
     case AI_ERROR_CODES.AI_REQUEST_INVALID:
@@ -200,7 +211,7 @@ export const DEMO_NOTICE = Object.freeze({
 });
 
 /** Üretim evresinin kısa metni; metin akmaya başlayınca gösterilmez. */
-export function generationPhaseLabel(phase, mode) {
+export function generationPhaseLabel(phase) {
   switch (phase) {
     case 'sending':
       return 'Gönderiliyor…';
@@ -208,18 +219,23 @@ export function generationPhaseLabel(phase, mode) {
       return 'Hazırlanıyor…';
     case ASSISTANT_STREAM_PHASES.THINKING:
       return 'Derin düşünülüyor…';
+    // Akıl yürütme yalnızca sağlayıcı bildirdiğinde (`thinking`) gösterilir; kip bunu uydurmaz.
     case ASSISTANT_STREAM_PHASES.GENERATING:
-      return mode === ASSISTANT_MODES.DEEP ? 'Derin düşünülüyor…' : 'Yanıt oluşturuluyor…';
+      return 'Yanıt oluşturuluyor…';
     default:
       return null;
   }
 }
 
+/** Olağan bitiş nedenleri; bunların dışındaki her neden yanıtın eksik olabileceğini söyler. */
+const COMPLETE_FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequence']);
+
 /** Yanıtın bitiş nedeni kullanıcıya not olarak gösterilmeli mi? */
 export function finishReasonNote(finishReason) {
-  return finishReason === 'length'
-    ? 'Yanıt uzunluk sınırına ulaştığı için sonu eksik olabilir.'
-    : null;
+  if (!finishReason || COMPLETE_FINISH_REASONS.has(finishReason)) return null;
+  if (finishReason === 'length') return 'Yanıt uzunluk sınırına ulaştığı için sonu eksik olabilir.';
+  if (finishReason === 'content_filter') return 'Yanıt içerik süzgeci nedeniyle durduruldu; sonu eksik olabilir.';
+  return 'Yanıt olağan dışı bir nedenle sonlandı; sonu eksik olabilir.';
 }
 
 /** Konuşma listesi için göreli zaman ("şimdi", "5 dk önce", "dün", tarih). */

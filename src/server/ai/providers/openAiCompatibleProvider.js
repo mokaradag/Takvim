@@ -2,7 +2,7 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { AiError } from '../aiErrors.js';
-import { AI_STREAM_LIMITS, createLeadingThinkFilter, readChatCompletionStream } from './openAiCompatibleStream.js';
+import { AI_STREAM_LIMITS, createLeadingThinkFilter, primaryChoice, readChatCompletionStream } from './openAiCompatibleStream.js';
 
 export { streamInterrupted } from './openAiCompatibleStream.js';
 
@@ -154,7 +154,7 @@ function reportedModel(value) {
  * yapılandırılmış bir vekilin `user` iletisi model yanıtı sayılmaz.
  */
 export function parseChatCompletion(payload) {
-  const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
+  const choice = Array.isArray(payload?.choices) ? primaryChoice(payload.choices) : null;
   const message = choice?.message;
   if (!message || typeof message !== 'object') throw invalidResponse('MISSING_CHOICE');
   if (message.role !== 'assistant') throw invalidResponse('INVALID_ROLE');
@@ -214,14 +214,23 @@ function mediaType(response) {
 }
 
 /**
+ * Tek JSON yanıtın akıl yürütme alanları (`reasoning_content`, `reasoning`)
+ * var mı? Metni okunmaz, yalnızca "düşünüyor" evresi için varlığı bildirilir.
+ */
+function completionReasoning(payload) {
+  const message = primaryChoice(payload.choices)?.message;
+  return [message?.reasoning_content, message?.reasoning].some((value) => typeof value === 'string' && value.length > 0);
+}
+
+/**
  * `stream: true` isteğini yok sayıp tek JSON yanıt dönen uyumlu ağ geçidi:
  * yanıt aynı olay biçimine çevrilir (akıl yürütme bloğu yine ayıklanır).
  */
-async function* completionAsStream(completion, limits) {
+async function* completionAsStream(completion, limits, { reasoning = false } = {}) {
   const think = createLeadingThinkFilter();
   const text = `${think.push(completion.text)}${think.end()}`;
   if (text.length > limits.maxTextChars) throw invalidResponse('STREAM_TEXT_TOO_LARGE');
-  if (think.sawThinking) yield { type: 'reasoning' };
+  if (reasoning || think.sawThinking) yield { type: 'reasoning' };
   if (text) yield { type: 'text', text };
   yield { type: 'done', finishReason: completion.finishReason, model: completion.model, usage: completion.usage };
 }
@@ -278,10 +287,12 @@ export function createOpenAiCompatibleProvider({
       }
       const type = mediaType(response);
       if (type === 'application/json') {
-        const completion = parseChatCompletion(await readBoundedJson(response, maxResponseBytes, signal));
-        return { events: completionAsStream(completion, streamLimits) };
+        const payload = await readBoundedJson(response, maxResponseBytes, signal);
+        const completion = parseChatCompletion(payload);
+        return { events: completionAsStream(completion, streamLimits, { reasoning: completionReasoning(payload) }) };
       }
-      if (type && type !== 'text/event-stream') {
+      // İçerik türü bildirilmeyen 2xx yanıt da (ör. vekilin varsayılan sayfası) akış değildir.
+      if (type !== 'text/event-stream') {
         await discardBody(response);
         throw invalidResponse('STREAM_CONTENT_TYPE');
       }

@@ -72,7 +72,8 @@ function clip(content) {
  * `history` tur ÖNCESİ kayıtlı iletilerdir (sıra numarasına göre artan).
  * `priorMessageCount` tur öncesindeki bütün iletilerin sayısıdır (okunan
  * pencerenin dışında kalanlar dâhil). `trimmed`, önceki konuşmanın bir kısmının
- * bu yanıtın bağlamına girmediğini söyler.
+ * (bütün bir çiftin ya da uzun bir iletinin bir bölümünün) bu yanıtın bağlamına
+ * girmediğini söyler; `clippedMessages` kısaltılarak giren ileti sayısıdır.
  */
 export function buildAssistantContext({ history = [], userContent, priorMessageCount = history.length, now = new Date() }) {
   const answers = new Map(history.filter((message) => message.role === 'assistant').map((message) => [message.replyToId, message]));
@@ -82,6 +83,7 @@ export function buildAssistantContext({ history = [], userContent, priorMessageC
   const current = String(userContent ?? '');
   let budget = ASSISTANT_CONTEXT_POLICY.maxContextChars - current.length;
   const included = [];
+  let clippedMessages = 0;
   for (let index = pairs.length - 1; index >= 0; index -= 1) {
     if ((included.length + 1) * 2 > ASSISTANT_CONTEXT_POLICY.maxHistoryMessages) break;
     const [question, answer] = pairs[index];
@@ -90,6 +92,7 @@ export function buildAssistantContext({ history = [], userContent, priorMessageC
     if (size > budget) break;
     budget -= size;
     included.unshift(pair);
+    clippedMessages += Number(pair[0] !== String(question.content ?? '')) + Number(pair[1] !== String(answer.content ?? ''));
   }
   const messages = [
     { role: 'system', content: assistantSystemPrompt(now) },
@@ -100,8 +103,9 @@ export function buildAssistantContext({ history = [], userContent, priorMessageC
   const completedMessages = pairs.length * 2;
   return {
     messages,
-    trimmed: included.length < pairs.length || priorMessageCount > history.length,
+    trimmed: included.length < pairs.length || priorMessageCount > history.length || clippedMessages > 0,
     includedMessages,
+    clippedMessages,
     omittedMessages: Math.max(0, completedMessages - includedMessages) + Math.max(0, priorMessageCount - history.length)
   };
 }

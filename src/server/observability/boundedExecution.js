@@ -55,7 +55,11 @@ export function boundedExecutor(executor, signal, { track = null, onResult = nul
       const query = request.query.bind(request);
       request.query = (text) => raceWithSignal(() => {
         const running = Promise.resolve(query(text)).then((result) => {
-          onResult?.(result);
+          try {
+            onResult?.(result);
+          } catch {
+            // Gözlemcinin hatası, veritabanında zaten sonuçlanmış sorgunun sonucunu değiştirmez.
+          }
           return result;
         });
         track?.(running);

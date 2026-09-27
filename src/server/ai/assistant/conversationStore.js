@@ -17,15 +17,34 @@ import {
  * harfle döner; uygulama içinde küçük harfle karşılaştırılır.
  */
 
-const MISSING_TABLE_NUMBERS = new Set([207, 208]);
+const MISSING_TABLE_NUMBER = 208;
+const MISSING_COLUMN_NUMBER = 207;
 const CONVERSATION_TABLES = ['MR_AiConversations', 'MR_AiConversationMessages'];
+/** 0017 tablolarının sütunları; SQL Server "Invalid column name" iletisinde tablo adını vermez. */
+const CONVERSATION_COLUMN_NAMES = new Set([
+  'ConversationId', 'OwnerSicil', 'Title', 'OriginTurnId', 'CreatedAt', 'UpdatedAt', 'MessageCount',
+  'MessageId', 'Sequence', 'Role', 'Content', 'ClientTurnId', 'ReplyToMessageId', 'Mode', 'FinishReason'
+]);
 
-/** 0017 uygulanmamış kurulumda konuşma tabloları yoktur; uygulamanın geri kalanı çalışır. */
+function missingConversationTable(entry) {
+  return (Number(entry.number) === MISSING_TABLE_NUMBER || /Invalid object name/i.test(String(entry.message || '')))
+    && CONVERSATION_TABLES.some((table) => String(entry.message || '').includes(table));
+}
+
+function missingConversationColumn(entry) {
+  if (Number(entry.number) !== MISSING_COLUMN_NUMBER && !/Invalid column name/i.test(String(entry.message || ''))) return false;
+  const match = /Invalid column name '([^']+)'/i.exec(String(entry.message || ''));
+  return match != null && CONVERSATION_COLUMN_NAMES.has(match[1]);
+}
+
+/**
+ * 0017 uygulanmamış (ya da yarım uygulanmış) kurulumda konuşma tabloları ya da
+ * sütunları yoktur; uygulamanın geri kalanı çalışır. Yalnızca konuşma
+ * sorgularının hatası için çağrılır.
+ */
 export function isMissingConversationSchema(error) {
   const candidates = [error, error?.originalError, error?.originalError?.info, error?.cause, ...(error?.precedingErrors || [])];
-  return candidates.some((entry) => entry
-    && (MISSING_TABLE_NUMBERS.has(Number(entry.number)) || /Invalid object name/i.test(String(entry.message || '')))
-    && CONVERSATION_TABLES.some((table) => String(entry.message || '').includes(table)));
+  return candidates.some((entry) => entry && (missingConversationTable(entry) || missingConversationColumn(entry)));
 }
 
 const SCHEMA_STATE_KEY = Symbol.for('mergen-rota.ai-conversation-schema');

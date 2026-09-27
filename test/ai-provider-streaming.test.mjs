@@ -373,3 +373,85 @@ test('düşünme evresi aynı mantıksal içeriğin parça sınırından bağım
     assert.equal(textOf(events), 'Yanıt');
   }
 });
+
+/* ── Tel biçimi doğrulaması: bozuk alanlar sessizce kabul edilmez ── */
+
+test('olay çözücü: boş parça bekleyen CR durumunu tüketmez (bölünmüş CRLF tek satır sonudur)', () => {
+  const events = [];
+  const parser = createEventStreamParser({ maxEventChars: 1024, tooLarge: () => new Error('büyük') });
+  events.push(...parser.push('data: bir\r'));
+  events.push(...parser.push(''));
+  events.push(...parser.push('\ndata: iki\r\n\r\n'));
+  assert.deepEqual(events, [{ event: 'message', data: 'bir\niki' }]);
+});
+
+test('hata olayı verisi [DONE] olsa da hatadır; açıkça sıfırdan farklı seçenek yanıt sayılmaz', async () => {
+  await rejectsWithReason(
+    collect(readChatCompletionStream(bodyFrom([delta('Metin'), 'event: error\ndata: [DONE]\n\n']).stream)),
+    'AI_PROVIDER_UNAVAILABLE',
+    'STREAM_ERROR_EVENT'
+  );
+  const other = sse({ model: 'akis-modeli', choices: [{ index: 1, delta: { content: 'başka seçenek' } }] });
+  const events = await collect(readChatCompletionStream(bodyFrom([other, delta('asıl'), finish(), 'data: [DONE]\n\n']).stream));
+  assert.equal(textOf(events), 'asıl');
+  // Dizin bildirmeyen uyumlu ağ geçidi: ilk seçenek kullanılır.
+  const unindexed = sse({ model: 'akis-modeli', choices: [{ delta: { content: 'dizinsiz' } }] });
+  assert.equal(textOf(await collect(readChatCompletionStream(bodyFrom([unindexed, finish(), 'data: [DONE]\n\n']).stream))), 'dizinsiz');
+});
+
+test('yanlış türdeki bitiş nedeni, model, akıl yürütme ve kullanım alanı olayı bozuk yapar', async () => {
+  const cases = [
+    [sse({ model: 'akis-modeli', choices: [{ index: 0, delta: {}, finish_reason: 7 }] }), 'STREAM_EVENT_MALFORMED'],
+    [sse({ model: 42, choices: [{ index: 0, delta: { content: 'x' } }] }), 'STREAM_EVENT_MALFORMED'],
+    [delta('x') + sse({ model: 'baska-model', choices: [{ index: 0, delta: { content: 'y' } }] }), 'MODEL_CHANGED'],
+    [delta('x') + sse({ model: 'm'.repeat(600), choices: [] }), 'MODEL_ID_TOO_LONG'],
+    [sse({ model: 'akis-modeli', choices: [{ index: 0, delta: { reasoning_content: { metin: 'x' } } }] }), 'STREAM_EVENT_MALFORMED'],
+    [sse({ model: 'akis-modeli', choices: [{ index: 0, delta: { reasoning: 5 } }] }), 'STREAM_EVENT_MALFORMED'],
+    [sse({ model: 'akis-modeli', choices: [], usage: { prompt_tokens: '20' } }), 'STREAM_EVENT_MALFORMED'],
+    [sse({ model: 'akis-modeli', choices: [], usage: { completion_tokens: -1 } }), 'STREAM_EVENT_MALFORMED'],
+    [sse({ model: 'akis-modeli', choices: [], usage: { total_tokens: 1.5 } }), 'STREAM_EVENT_MALFORMED']
+  ];
+  for (const [raw, reason] of cases) {
+    await rejectsWithReason(collect(readChatCompletionStream(bodyFrom([raw, finish(), 'data: [DONE]\n\n']).stream)), 'AI_PROVIDER_RESPONSE_INVALID', reason);
+  }
+  // Bildirilmeyen sayaç `null` kalır.
+  const events = await collect(readChatCompletionStream(bodyFrom([delta('x'), sse({ model: 'akis-modeli', choices: [], usage: { prompt_tokens: 3 } }), 'data: [DONE]\n\n']).stream));
+  assert.deepEqual(events.at(-1).usage, { promptTokens: 3, completionTokens: null, totalTokens: null });
+});
+
+test('bitiş nedeninden sonra gelen yanıt metni kabul edilmez; kullanım kuyruğu kabul edilir', async () => {
+  await rejectsWithReason(
+    collect(readChatCompletionStream(bodyFrom([delta('Tamam'), finish(), delta(' fazladan'), 'data: [DONE]\n\n']).stream)),
+    'AI_PROVIDER_RESPONSE_INVALID',
+    'CONTENT_AFTER_FINISH'
+  );
+  const events = await collect(readChatCompletionStream(bodyFrom([delta('Tamam', { finish_reason: 'stop' }), sse({ model: 'akis-modeli', choices: [], usage: { total_tokens: 4 } }), 'data: [DONE]\n\n']).stream));
+  assert.equal(textOf(events), 'Tamam');
+});
+
+test('bozuk UTF-8 yerine U+FFFD saklanmaz; yanıt geçersiz sayılır', async () => {
+  const prefix = encoder.encode('data: {"model":"akis-modeli","choices":[{"index":0,"delta":{"content":"a');
+  const suffix = encoder.encode('b"}}]}\n\n');
+  const broken = new Uint8Array([...prefix, 0xff, ...suffix]);
+  await rejectsWithReason(collect(readChatCompletionStream(bodyFrom([broken, 'data: [DONE]\n\n']).stream)), 'AI_PROVIDER_RESPONSE_INVALID', 'STREAM_ENCODING_INVALID');
+});
+
+test('içerik türü bildirmeyen başarılı yanıt akış sayılmaz; JSON yedeği sıfırıncı seçeneği ve akıl yürütme işaretini kullanır', async () => {
+  const responses = [
+    () => new Response(encoder.encode(delta('vekil')), { status: 200 }),
+    () => Response.json({
+      model: 'akis-modeli',
+      choices: [
+        { index: 1, message: { role: 'assistant', content: 'yanlış seçenek' }, finish_reason: 'stop' },
+        { index: 0, message: { role: 'assistant', content: 'doğru seçenek', reasoning_content: 'gizli düşünce' }, finish_reason: 'stop' }
+      ]
+    })
+  ];
+  const provider = createOpenAiCompatibleProvider({ fetchImpl: async () => responses.shift()() });
+  const request = { baseUrl: 'http://127.0.0.1:1/v1', apiKey: PERSONAL_KEY_A, model: 'akis-modeli', messages: MESSAGES, signal: new AbortController().signal };
+  await rejectsWithReason(provider.streamChatCompletion(request), 'AI_PROVIDER_RESPONSE_INVALID', 'STREAM_CONTENT_TYPE');
+  const events = await collect((await provider.streamChatCompletion(request)).events);
+  assert.deepEqual(events.map((event) => event.type), ['reasoning', 'text', 'done']);
+  assert.equal(textOf(events), 'doğru seçenek');
+  assert.equal(JSON.stringify(events).includes('gizli düşünce'), false);
+});

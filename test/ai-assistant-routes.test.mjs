@@ -510,3 +510,58 @@ test('akış sonrası kalıcılık hatası tur telemetrisine ve işletim günlü
   assert.ok(logs.some((line) => line.includes('ai.assistant.turn') && line.includes('DATABASE_UNAVAILABLE')));
   assert.ok(logs.every((line) => !line.includes('Gizli yanıt içeriği')));
 });
+
+test('kayıtlı yanıtın yeniden oynatılması tur sayaçlarını artırmaz', async () => {
+  const { aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  resetAiTelemetryForTests();
+  const { turn } = fakeTurn();
+  const replay = { id: randomUUID(), sequence: 2, role: 'assistant', content: 'Kayıtlı yanıt', turnId: null, replyToId: turn.userMessage.id, mode: 'standard', finishReason: 'stop', createdAt: 'x' };
+  const response = assistantStreamResponse({ ...turn, replay });
+  const events = parseSseText(await response.text()).events;
+  assert.equal(events.at(-1).event, 'done');
+  assert.equal(events.at(-1).data.replayed, true);
+  const turns = aiTelemetrySnapshot().assistantTurns;
+  assert.deepEqual([turns.completed, turns.failed, turns.cancelled], [0, 0, 0]);
+});
+
+test('kullanıcıya özgü tur hatası (kişisel anahtar, istek) hizmet hatası sayılmaz; kurumsal anahtar reddi sayılır', async (t) => {
+  const { aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  resetAiTelemetryForTests();
+  const logs = captureConsole(t);
+  const fail = async (error) => {
+    const { turn } = fakeTurn();
+    const response = assistantStreamResponse(turn, { generate: async () => { throw error; } });
+    return parseSseText(await response.text()).events.at(-1);
+  };
+  for (const error of [
+    new AiError('AI_KEY_INVALID', { details: { credentialSource: 'personal' } }),
+    new AiError('AI_RATE_LIMITED', { details: { credentialSource: 'personal' } }),
+    new AiError('AI_REQUEST_INVALID')
+  ]) {
+    assert.equal((await fail(error)).event, 'error');
+  }
+  let turns = aiTelemetrySnapshot().assistantTurns;
+  assert.equal(turns.failed, 3, 'her sonuç sayılır');
+  assert.equal(turns.lastFailure, null, 'kullanıcıya özgü hata sağlık uyarısı üretmez');
+  assert.equal(logs.some((line) => line.includes('ai.assistant.turn')), false, 'kullanıcıya özgü hata sistem hatası olarak günlüğe yazılmaz');
+  await fail(new AiError('AI_KEY_INVALID', { details: { credentialSource: 'default' } }));
+  turns = aiTelemetrySnapshot().assistantTurns;
+  assert.equal(turns.lastFailure.code, 'AI_KEY_INVALID');
+  assert.ok(logs.some((line) => line.includes('ai.assistant.turn') && line.includes('AI_KEY_INVALID')));
+});
+
+test('kuyruğa girmeyen metin parçası yanıtı kısmi yapmaz', async () => {
+  const { turn } = fakeTurn();
+  const stop = new AbortController();
+  const response = assistantStreamResponse({ ...turn, claim: { ...turn.claim, signal: stop.signal } }, {
+    generate: async (_turn, { onText }) => {
+      stop.abort();
+      await onText('Gönderilemeyen metin');
+      throw new (await import('../src/server/ai/aiErrors.js')).AiError('AI_CANCELLED');
+    }
+  });
+  const events = parseSseText(await response.text()).events;
+  assert.equal(events.some((event) => event.event === 'delta'), false);
+  assert.equal(events.at(-1).data.partial, false);
+});

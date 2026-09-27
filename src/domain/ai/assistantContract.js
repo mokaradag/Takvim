@@ -101,9 +101,11 @@ export function normalizeAssistantMessage(value) {
 export function conversationTitleFrom(message) {
   const limit = ASSISTANT_LIMITS.maxTitleChars;
   const plain = String(message ?? '')
+    .replace(/\r\n?/g, '\n')
+    // Satır başı işaretleri (başlık, alıntı) satır sınırları henüz korunurken HER satırda atılır.
+    .replace(/(^|\n)[ \t]{0,3}(?:#{1,6}(?:[ \t]+|(?=\n)|$)|>[ \t]?)/g, '$1')
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001F\u007F]+/g, ' ')
-    .replace(/(^|\n)[ \t]{0,3}(?:#{1,6}(?:[ \t]+|$)|>[ \t]?)/g, '$1')
     .replace(/(`+|\*\*|__|~~)(?=\S)(.+?)\1/g, '$2')
     .replace(/\s+/g, ' ')
     .trim();

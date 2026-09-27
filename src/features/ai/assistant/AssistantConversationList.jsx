@@ -7,10 +7,12 @@ import { relativeTimeLabel } from './assistantPresentation.js';
 /**
  * Son konuşmalar: son etkinliğe göre sıralı, sayfalı liste. Silme açık onay
  * ister; onay satırı açılınca odak "Vazgeç"e gider, kapanınca silme düğmesine
- * döner. Silinen konuşma yalnızca sunucu onayından sonra listeden düşer.
+ * döner. Silinen konuşma yalnızca sunucu onayından sonra listeden düşer; odak
+ * silinen satırın yerine gelen (ya da bir önceki) satıra, liste boşaldıysa
+ * boş liste açıklamasına taşınır.
  */
 
-function ConversationRow({ item, active, generating, deleting, confirming, onOpen, onAskDelete, onCancelDelete, onConfirmDelete, now }) {
+function ConversationRow({ item, active, generating, deleting, confirming, onOpen, onAskDelete, onCancelDelete, onConfirmDelete, openRef, now }) {
   const cancelRef = useRef(null);
   const deleteRef = useRef(null);
   const wasConfirming = useRef(false);
@@ -45,7 +47,7 @@ function ConversationRow({ item, active, generating, deleting, confirming, onOpe
 
   return (
     <li className={`rota-assistant-history-item${active ? ' is-active' : ''}`}>
-      <button type="button" className="rota-assistant-history-open" onClick={() => onOpen(item.id)} aria-current={active ? 'true' : undefined}>
+      <button ref={openRef} type="button" className="rota-assistant-history-open" onClick={() => onOpen(item.id)} aria-current={active ? 'true' : undefined}>
         <span className="rota-assistant-history-title">{item.title}</span>
         <span className="rota-assistant-history-meta">
           {generating ? <span className="rota-assistant-history-live">Yanıt hazırlanıyor…</span> : relativeTimeLabel(item.updatedAt, now)}
@@ -88,6 +90,16 @@ export function AssistantConversationList({
   const now = suppliedNow ?? clock;
   const [confirmingId, setConfirmingId] = useState(null);
   const items = limit ? list.items.slice(0, limit) : list.items;
+  const openButtons = useRef(new Map());
+  const emptyRef = useRef(null);
+  const pendingFocus = useRef(null);
+  useEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending || items.some((item) => item.id === pending.removedId)) return;
+    pendingFocus.current = null;
+    const target = items[Math.min(pending.index, items.length - 1)];
+    (target ? openButtons.current.get(target.id) : emptyRef.current)?.focus?.();
+  });
 
   if (list.loading && !list.items.length) {
     return <p className="rota-assistant-history-state"><Spinner size={13} /> Konuşmalar yükleniyor…</p>;
@@ -101,16 +113,20 @@ export function AssistantConversationList({
     );
   }
   if (!items.length) {
-    return limit ? null : <p className="rota-assistant-history-state">Henüz kaydedilmiş bir konuşma yok.</p>;
+    return limit ? null : <p ref={emptyRef} tabIndex={-1} className="rota-assistant-history-state">Henüz kaydedilmiş bir konuşma yok.</p>;
   }
 
   return (
     <>
       <ul className="rota-assistant-history" aria-label="Son konuşmalar">
-        {items.map((item) => (
+        {items.map((item, index) => (
           <ConversationRow
             key={item.id}
             item={item}
+            openRef={(node) => {
+              if (node) openButtons.current.set(item.id, node);
+              else openButtons.current.delete(item.id);
+            }}
             now={now}
             active={item.id === activeId}
             generating={Boolean(running[item.id])}
@@ -121,7 +137,10 @@ export function AssistantConversationList({
             onCancelDelete={() => setConfirmingId(null)}
             onConfirmDelete={async () => {
               const result = await onDelete(item.id);
-              if (result?.ok !== false) setConfirmingId(null);
+              if (result?.ok !== false) {
+                pendingFocus.current = { removedId: item.id, index };
+                setConfirmingId(null);
+              }
             }}
           />
         ))}

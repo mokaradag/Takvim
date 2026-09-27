@@ -5,6 +5,7 @@ import { Avatar, StatusPill } from '../../components/ui';
 import { PRIORITIES, resolvePriority } from '../../domain/constants/index.js';
 import { projectColorVar } from '../../lib/colors';
 import { fmt, today } from '../../scheduling/dates';
+import { modalTrapDepth } from '../../hooks/useModalFocusTrap.js';
 import { organizationValue } from './teamDirectoryPolicy.js';
 import { dueTone } from './upcomingTaskPolicy.js';
 
@@ -68,7 +69,10 @@ export function PersonDetailDialog({ member, onClose, onOpenTask }) {
   // tek başına odağı hapsetmez: sekmeyle ilerleyen kullanıcı pencere açıkken
   // arkadaki TeamView denetimlerine geçebiliyordu.
   useEffect(() => {
+    // Sonradan açılan kipli pencere (ör. komut paleti) Esc ve Tab'ın sahibidir.
+    const depth = modalTrapDepth();
     const onKey = (event) => {
+      if (modalTrapDepth() > depth) return;
       if (event.key === 'Escape' && !event.defaultPrevented) {
         event.preventDefault();
         closeHandlerRef.current?.();

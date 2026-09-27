@@ -31,11 +31,64 @@ import { assistantFailureView, isSessionFailure } from './assistantPresentation.
 
 export const ASSISTANT_FLUSH_INTERVAL_MS = 40;
 
+/**
+ * SQL Server `uniqueidentifier` sıralama anahtarı (SqlGuid karşılaştırması:
+ * bellek düzenindeki 10–15, 8–9, 6–7, 4–5, 0–3. baytlar). Liste sunucuda
+ * `UpdatedAt DESC, ConversationId DESC` ile sıralanır; eşit zamanlı
+ * konuşmalar istemcide de aynı sırada kalır.
+ */
+function guidSortKey(id) {
+  const hex = String(id || '').replace(/-/g, '').toLowerCase();
+  if (hex.length !== 32) return hex;
+  return [10, 11, 12, 13, 14, 15, 8, 9, 7, 6, 5, 4, 3, 2, 1, 0].map((index) => hex.slice(index * 2, index * 2 + 2)).join('');
+}
+
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function sortConversations(items) {
-  return items.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  return items.sort((a, b) => compareText(b.updatedAt || '', a.updatedAt || '')
+    || (a.updatedAt && b.updatedAt ? compareText(guidSortKey(b.id), guidSortKey(a.id)) : 0));
 }
 
 const RETRYABLE_STATUSES = new Set(['failed', 'interrupted', 'stopped', 'unanswered']);
+
+/**
+ * Kabulden önce, sunucu kullanıcı iletisini YAZMADAN verdiği kesin retler.
+ * Bunların dışındaki kabul öncesi hata (ör. akış kurulamadı, beklenmeyen 5xx)
+ * iletinin kaydedilip kaydedilmediğini söylemez: tur aynı kimlikle yeniden
+ * denenebilir kalır, atılmaz.
+ */
+const PRE_PERSISTENCE_REJECTIONS = new Set([
+  'UNAUTHORIZED',
+  'SESSION_REQUIRED',
+  'FORBIDDEN',
+  'AI_REQUEST_INVALID',
+  'AI_DISABLED',
+  'AI_CONFIGURATION_ERROR',
+  'AI_KEY_MISSING',
+  'CONFLICT',
+  'NOT_FOUND'
+]);
+
+/** Konuşmanın artık kullanılamadığını söyleyen ret: silinmiş ya da azami uzunlukta. */
+function closesConversation(result) {
+  return result.code === 'NOT_FOUND' || (result.code === 'CONFLICT' && result.reason === 'CONVERSATION_FULL');
+}
+
+/** Anahtar sorunu giderilince (hazırlık yeniden kullanılabilir) tur yeniden denenebilir olur. */
+function reviveCredentialFailures(active) {
+  if (!active?.turns?.length) return active;
+  let changed = false;
+  const turns = active.turns.map((turn) => {
+    const error = turn.answer?.error;
+    if (!error?.credential || error.retryable !== false) return turn;
+    changed = true;
+    return { ...turn, answer: { ...turn.answer, error: { ...error, retryable: true, action: null } } };
+  });
+  return changed ? { ...active, turns } : active;
+}
 
 function defaultSchedule(callback, delayMs) {
   const timer = setTimeout(callback, delayMs);
@@ -58,7 +111,8 @@ function initialState() {
     active: null,
     running: {},
     announcement: null,
-    deleting: {}
+    deleting: {},
+    reconciling: {}
   };
 }
 
@@ -118,6 +172,7 @@ export function createAssistantController({
   let runCounter = 0;
   let announcementCounter = 0;
   let viewLoad = null;
+  let listLoad = null;
   const loads = new Set();
   const completedVersions = new Map();
   const listMutations = new Map();
@@ -227,6 +282,7 @@ export function createAssistantController({
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
       run.accepted = true;
+      run.userMessageId = userMessage.id;
       run.contextTrimmed = Boolean(context?.trimmed);
       if (run.key !== conversation.id) rekey(run, conversation);
       update((current) => ({
@@ -284,39 +340,117 @@ export function createAssistantController({
       return;
     }
     const failure = assistantFailureView(result);
-    if (result.phase === 'request' && !failure.retryable && !run.accepted && run.newTurn) {
+    const sessionFailure = isSessionFailure(result);
+    const unaccepted = result.phase === 'request' && !run.accepted;
+    const closed = unaccepted && Boolean(run.conversationId) && closesConversation(result);
+    const dropList = (current) => (closed && result.code === 'NOT_FOUND'
+      ? { ...current.list, items: current.list.items.filter((item) => item.id !== run.conversationId) }
+      : current.list);
+    if (unaccepted && !failure.retryable && run.newTurn && PRE_PERSISTENCE_REJECTIONS.has(String(result.code))) {
+      // Sunucu iletiyi yazmadan reddetti: yerel tur atılır, metin taslağa döner.
       update((current) => ({
         ...current,
         running: setRunning(current, run.key, null),
-        status: isSessionFailure(result) ? 'error' : current.status,
-        failure: isSessionFailure(result) ? failure : current.failure,
+        status: sessionFailure ? 'error' : current.status,
+        failure: sessionFailure ? failure : current.failure,
+        list: dropList(current),
         active: current.active?.key === run.key ? {
           ...current.active,
           turns: current.active.turns.filter((turn) => turn.key !== run.turnKey || turn.user.id),
           recoveredDraft: { token: run.token, text: run.content },
-          notice: failure
+          // Oturum hatası panel düzeyinde bir kez gösterilir.
+          notice: sessionFailure ? null : failure,
+          closed: closed || current.active.closed
         } : current.active,
         announcement: current.active?.key === run.key ? announce(failure.title) : current.announcement
       }));
       return;
     }
     const status = result.cancelled ? 'stopped' : result.partial ? 'interrupted' : 'failed';
+    // Yeniden denemenin yeni metin üretmeden biten sonucu önceki kısmi yanıtı silmez.
+    const previous = !text && run.previousAnswer?.content ? run.previousAnswer.content : null;
+    // Kabul edilmiş ama `done` almadan biten üretimin yanıtı sunucuda yazılmış olabilir:
+    // sonraki tur, konuşma sunucuyla uzlaştırılana kadar başlatılmaz.
+    const reconcile = run.accepted && Boolean(run.userMessageId);
     update((current) => ({
       ...current,
       running: setRunning(current, run.key, null),
-      failure: isSessionFailure(result) ? failure : current.failure,
-      status: isSessionFailure(result) ? 'error' : current.status,
-      active: patchTurn(current, run, (turn) => ({
-        ...turn,
-        user: { ...turn.user, pending: false },
-        answer: { ...turn.answer, content: text, status, error: failure, mode: run.mode }
-      })),
+      reconciling: reconcile ? { ...current.reconciling, [run.key]: run.token } : current.reconciling,
+      failure: sessionFailure ? failure : current.failure,
+      status: sessionFailure ? 'error' : current.status,
+      list: dropList(current),
+      active: (() => {
+        const active = patchTurn(current, run, (turn) => ({
+          ...turn,
+          user: { ...turn.user, pending: false },
+          answer: {
+            ...turn.answer,
+            content: previous ?? text,
+            status,
+            // Kaydı doğrulanmamış tur (kimliksiz kullanıcı iletisi) her zaman aynı kimlikle yeniden denenebilir.
+            error: !turn.user.id && !closed && !sessionFailure ? { ...failure, retryable: true } : failure,
+            mode: run.mode
+          }
+        }));
+        return closed && current.active?.key === run.key ? { ...active, closed: true } : active;
+      })(),
       announcement: current.active?.key === run.key ? announce(failure.title) : current.announcement
     }));
+    if (reconcile) reconcileRun(run);
+  }
+
+  /**
+   * Durdurulan ya da `done` almadan kesilen üretimin sonucunu sunucudan okur:
+   * sağlayıcı yanıtı tamamlamış ve sunucu onu kaydetmişse tur tamamlanmış
+   * gösterilir. Okuma bitene kadar bu konuşmada yeni tur başlatılmaz.
+   */
+  async function reconcileRun(run) {
+    const ownSession = session;
+    const key = run.key;
+    const load = trackLoad();
+    let result = null;
+    try {
+      result = await api.loadAssistantConversationRequest(run.conversationId, { signal: load.signal });
+    } catch {
+      result = null;
+    }
+    load.done();
+    if (ownSession !== session) return;
+    const answer = result?.ok
+      ? result.messages.find((message) => message.role === 'assistant' && message.replyToId === run.userMessageId)
+      : null;
+    update((current) => {
+      if (current.reconciling[key] !== run.token) return current;
+      const reconciling = { ...current.reconciling };
+      delete reconciling[key];
+      if (!answer || current.active?.key !== key) return { ...current, reconciling };
+      return {
+        ...current,
+        reconciling,
+        list: result.conversation ? withListConversation(current.list, result.conversation) : current.list,
+        active: {
+          ...current.active,
+          turns: current.active.turns.map((turn) => (turn.key === run.turnKey && turn.answer?.status !== 'complete' ? {
+            ...turn,
+            answer: {
+              id: answer.id,
+              content: answer.content,
+              status: 'complete',
+              mode: answer.mode || run.mode,
+              finishReason: answer.finishReason || null,
+              createdAt: answer.createdAt,
+              error: null
+            }
+          } : turn))
+        },
+        announcement: announce('Yanıt tamamlanmış ve kaydedilmiş.')
+      };
+    });
   }
 
   function startRun({ content, turnId }) {
     const active = state.active;
+    const existing = active.turns.find((turn) => turn.key === turnId);
     runCounter += 1;
     const run = {
       token: runCounter,
@@ -325,7 +459,9 @@ export function createAssistantController({
       conversationId: active.id,
       turnId,
       turnKey: turnId,
-      newTurn: !active.turns.some((turn) => turn.key === turnId),
+      newTurn: !existing,
+      // Yeniden denemede önceki kısmi yanıt, yeni metin gelene kadar geri alınabilir kalır.
+      previousAnswer: existing?.answer?.content ? existing.answer : null,
       content,
       mode: state.mode,
       controller: new AbortController(),
@@ -371,8 +507,8 @@ export function createAssistantController({
 
   function canSend() {
     return state.status === 'ready' && !state.refreshing && Boolean(state.readiness?.available)
-      && !state.active.loading && !state.active.failure && !state.running[state.active.key]
-      && !state.deleting[state.active.id];
+      && !state.active.loading && !state.active.failure && !state.active.closed && !state.running[state.active.key]
+      && !state.reconciling[state.active.key] && !state.deleting[state.active.id];
   }
 
   /** Yeni ileti; boş/yalnızca boşluk ve sınırı aşan ileti gönderilmez, çift gönderim engellenir. */
@@ -402,10 +538,11 @@ export function createAssistantController({
     const run = entry ? runs.get(entry.token) : null;
     if (!run || run.stopping) return false;
     run.stopping = true;
-    run.stoppedText = run.text;
+    // Yeni metin gelmeden durdurulan yeniden deneme önceki kısmi yanıtı korur.
+    run.stoppedText = run.text || run.previousAnswer?.content || '';
     run.cancelFlush?.();
     run.controller.abort();
-    const text = run.text;
+    const text = run.stoppedText;
     const failure = assistantFailureView({ code: 'REQUEST_CANCELLED' });
     update((current) => ({
       ...current,
@@ -506,46 +643,57 @@ export function createAssistantController({
     }));
   }
 
+  /**
+   * Konuşma listesi. Yenileme ilk sayfayı okur. "Daha eski" SABİT sayıda istekle
+   * çalışır: güncellenip başa taşınan konuşmalar için baş sayfa yeniden okunur,
+   * eski sayfalar ise var olan anahtar kümesi imlecinden sürdürülür (imleç
+   * (UpdatedAt, ConversationId) çiftidir; başa taşınan konuşma atlanmaz).
+   * Yerini yeni bir okuma alan eski okuma kesilir.
+   */
   async function loadList({ more = false } = {}) {
     if (more && (!state.list.nextCursor || state.list.loadingMore)) return;
     listToken += 1;
     const token = listToken;
     const ownSession = session;
-    const loadedCount = state.list.items.length;
+    const cursor = more ? state.list.nextCursor : null;
     const startedVersion = mutationVersion;
+    listLoad?.abort();
     update((current) => ({ ...current, list: { ...current.list, loading: !more, loadingMore: more, error: null } }));
     const load = trackLoad();
-    let result = await api.listAssistantConversationsRequest({ cursor: null, signal: load.signal });
-    // Değişen etkinlik sırası için görünen aralığı baştan birleştir.
-    const conversations = result.ok ? [...result.conversations] : [];
-    const targetCount = loadedCount + conversations.length;
-    const cursors = new Set();
-    while (more && result.ok && result.nextCursor && conversations.length < targetCount) {
-      if (token !== listToken || ownSession !== session || cursors.has(result.nextCursor)) break;
-      cursors.add(result.nextCursor);
-      result = await api.listAssistantConversationsRequest({ cursor: result.nextCursor, signal: load.signal });
-      if (result.ok) conversations.push(...result.conversations);
-    }
-    if (result.ok) result = { ...result, conversations };
+    listLoad = load;
+    const current = () => token === listToken && ownSession === session;
+    const head = await api.listAssistantConversationsRequest({ cursor: null, signal: load.signal });
+    const older = more && head.ok && current()
+      ? await api.listAssistantConversationsRequest({ cursor, signal: load.signal })
+      : null;
     load.done();
-    if (token !== listToken || ownSession !== session) return;
-    if (!result.ok) {
-      update((current) => ({ ...current, status: isSessionFailure(result) ? 'error' : current.status, failure: isSessionFailure(result) ? assistantFailureView(result) : current.failure, list: { ...current.list, loading: false, loadingMore: false, error: assistantFailureView(result) } }));
+    if (listLoad === load) listLoad = null;
+    if (!current()) return;
+    const failed = !head.ok ? head : older && !older.ok ? older : null;
+    if (failed) {
+      update((state_) => ({ ...state_, status: isSessionFailure(failed) ? 'error' : state_.status, failure: isSessionFailure(failed) ? assistantFailureView(failed) : state_.failure, list: { ...state_.list, loading: false, loadingMore: false, error: assistantFailureView(failed) } }));
       return;
     }
-    update((current) => {
-      const preserved = current.list.items.filter((item) => (listMutations.get(item.id) || 0) > startedVersion);
+    update((state_) => {
+      const mutated = (id) => (listMutations.get(id) || 0) > startedVersion;
+      const preserved = state_.list.items.filter((item) => mutated(item.id));
       const seen = new Set(preserved.map((item) => item.id));
-      const incoming = result.conversations.filter((item) => {
-        if (seen.has(item.id) || (listMutations.get(item.id) || 0) > startedVersion) return false;
+      const merged = [...preserved];
+      const add = (item) => {
+        if (seen.has(item.id) || mutated(item.id)) return;
         seen.add(item.id);
-        return true;
-      });
+        merged.push(item);
+      };
+      head.conversations.forEach(add);
+      if (more) {
+        older.conversations.forEach(add);
+        state_.list.items.forEach(add);
+      }
       return {
-        ...current,
+        ...state_,
         list: {
-          items: sortConversations([...preserved, ...incoming]),
-          nextCursor: result.nextCursor,
+          items: sortConversations(merged),
+          nextCursor: more ? older.nextCursor : head.nextCursor,
           loaded: true,
           loading: false,
           loadingMore: false,
@@ -576,7 +724,13 @@ export function createAssistantController({
     if (ownSession !== session || token !== readinessToken) return;
     readinessLoad = null;
     if (!readiness.ok) {
-      update((current) => ({ ...current, status: 'error', refreshing: false, failure: assistantFailureView(readiness) }));
+      const failure = assistantFailureView(readiness);
+      // Çalışan panelin yenilemesi geçici olarak başarısızsa açık konuşma ve
+      // süren yanıt görünür kalır; hata bildirim olarak gösterilir. Panel düzeyi
+      // hata yalnızca ilk yüklemede ya da oturum hatasında gösterilir.
+      update((current) => (firstLoad || isSessionFailure(readiness)
+        ? { ...current, status: 'error', refreshing: false, failure }
+        : { ...current, refreshing: false, active: { ...current.active, notice: { ...failure, readiness: true } } }));
       return;
     }
     const modes = readiness.assistant.modes;
@@ -585,7 +739,12 @@ export function createAssistantController({
       status: current.failure?.action === 'reload' ? 'error' : 'ready',
       refreshing: false,
       readiness: readiness.assistant,
-      mode: modes.find((item) => item.id === current.mode)?.available ? current.mode : modes.find((item) => item.available)?.id || ASSISTANT_MODES.STANDARD
+      mode: modes.find((item) => item.id === current.mode)?.available ? current.mode : modes.find((item) => item.available)?.id || ASSISTANT_MODES.STANDARD,
+      active: (() => {
+        const notice = current.active.notice?.readiness ? null : current.active.notice;
+        const active = notice === current.active.notice ? current.active : { ...current.active, notice };
+        return readiness.assistant.available ? reviveCredentialFailures(active) : active;
+      })()
     }));
     await listing;
   }
@@ -610,7 +769,11 @@ export function createAssistantController({
       }
       listMutations.set(conversationId, ++mutationVersion);
     }
-    if (removed && state.active.id === conversationId) newConversation();
+    // Açık konuşma silinince yerine taslak gelir; kullanıcı Geçmiş listesindeyse orada kalır.
+    if (removed && state.active.id === conversationId) {
+      cancelViewLoad();
+      update((current) => ({ ...current, active: draft() }));
+    }
     update((current) => {
       const deleting = { ...current.deleting };
       delete deleting[conversationId];
@@ -634,6 +797,7 @@ export function createAssistantController({
     readinessLoad = null;
     viewToken += 1;
     listToken += 1;
+    listLoad = null;
     for (const run of runs.values()) {
       run.cancelFlush?.();
       run.controller.abort();

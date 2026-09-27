@@ -738,6 +738,39 @@ test('chat.fast profili kapatılmışsa sağlayıcı yanıt verse de bileşen sa
   assert.match(ai.message, /Hızlı sohbet profili \(chat\.fast\) kullanılamıyor/);
 });
 
+test('uç yalnızca chat.fast modelini listeliyorsa Rota AI kip modelleri eksik sayılır', async (t) => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-assistant-model-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'ai-models.json');
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    models: [
+      { id: 'hizli-model', capabilities: ['chat'] },
+      { id: 'genel-model', capabilities: ['chat'] },
+      { id: 'derin-model', capabilities: ['chat', 'reasoning'] }
+    ],
+    profiles: {
+      'chat.fast': { model: 'hizli-model' },
+      'chat.general': { model: 'genel-model' },
+      'chat.reasoning': { model: 'derin-model' }
+    }
+  }), 'utf8');
+  const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  adminReset(t);
+  provider.enqueue({ type: 'reply', models: ['hizli-model'] });
+  const missing = await (await postIntegration('ai-provider')).json();
+  assert.equal(missing.result.ok, false);
+  assert.equal(missing.result.code, 'ASSISTANT_MODEL_MISSING');
+  assert.match(missing.result.message, /genel-model, derin-model/);
+  assert.equal((await overviewAi()).ai.state === HEALTH_STATES.HEALTHY, false);
+  // Kiplerden birinin modeli listedeyse Rota AI kullanılabilir.
+  provider.enqueue({ type: 'reply', models: ['hizli-model', 'derin-model'] });
+  assert.equal((await (await postIntegration('ai-provider')).json()).result.ok, true);
+});
+
 test('bağlantı testinin tamamı tek süre sınırındadır; bildirilen süre kurulum doğrulamasını kapsar', async (t) => {
   const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_DEFAULT_API_KEY: null } });
   adminReset(t);

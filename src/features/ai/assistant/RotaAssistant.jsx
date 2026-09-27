@@ -31,6 +31,13 @@ import { DEMO_NOTICE, readinessNotice } from './assistantPresentation.js';
 
 export const ROTA_ASSISTANT_PANEL_ID = 'rota-assistant-panel';
 
+const HELD_DRAFT_NOTICE = Object.freeze({
+  tone: 'muted',
+  title: 'Gönderilemeyen ileti',
+  message: 'Önceki iletiniz gönderilemedi. Yazdığınız taslak korunarak iletiyi geri alabilirsiniz.',
+  action: null
+});
+
 const SUGGESTIONS = Object.freeze([
   'Bir toplantı gündemi taslağı hazırlamama yardım et.',
   'Bu metni daha resmî ve kısa bir dille yeniden yaz: ',
@@ -213,10 +220,17 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   if (draftState.key !== draftKey) setDraftState({ key: draftKey, text: '' });
   const setDraft = (text) => setDraftState({ key: draftKey, text });
   const recoveredDraft = state.active.recoveredDraft;
+  const draftTextRef = useRef(draft);
+  draftTextRef.current = draft;
+  // Yazma alanında yeni bir taslak varken reddedilen ileti kaybolmaz: geri alınabilir bildirim olarak tutulur.
+  const [heldDraft, setHeldDraft] = useState(null);
   useEffect(() => {
-    if (recoveredDraft) setDraftState((current) => current.key === draftKey && current.text
-      ? current : { key: draftKey, text: recoveredDraft.text });
+    if (!recoveredDraft) return;
+    const current = draftTextRef.current;
+    if (!current || current === recoveredDraft.text) setDraftState({ key: draftKey, text: recoveredDraft.text });
+    else setHeldDraft({ key: draftKey, token: recoveredDraft.token, text: recoveredDraft.text });
   }, [draftKey, recoveredDraft]);
+  const held = heldDraft?.key === draftKey ? heldDraft : null;
   const restoreFocusEnabledRef = useRef(true);
   if (open) restoreFocusEnabledRef.current = sheet;
   const focusTargetRef = useMemo(() => ({
@@ -249,7 +263,9 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
     const onKeyDown = (event) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
-      close();
+      // Odak panelin dışındaysa (kullanıcı Rota'da çalışıyorsa) yerinde kalır; başlatıcıya taşınmaz.
+      const focused = globalThis.document?.activeElement;
+      close({ restoreFocus: Boolean(focused && panelRef.current?.contains?.(focused)) });
     };
     globalThis.window?.addEventListener?.('keydown', onKeyDown);
     return () => globalThis.window?.removeEventListener?.('keydown', onKeyDown);
@@ -264,7 +280,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const generating = Boolean(running);
   const historyView = ready && state.view === 'history';
   const canCompose = available && !historyView && !active.failure;
-  const retryKey = available && !generating && !active.loading && !state.deleting[active.id] ? retryableTurnKey(active.turns) : null;
+  const retryKey = available && !generating && !active.loading && !active.closed && !state.reconciling[active.key]
+    && !state.deleting[active.id] ? retryableTurnKey(active.turns) : null;
   const title = historyView ? 'Geçmiş konuşmalar' : (active.id ? active.title : ASSISTANT_DEFAULT_TITLE);
   const announcement = state.announcement ? `${state.announcement.text}${state.announcement.id % 2 ? '\u200b' : ''}` : '';
 
@@ -276,7 +293,13 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       close({ restoreFocus: false });
       onOpenSettings?.();
     } else if (action === 'new-conversation') {
+      // Kapanan (dolan ya da silinen) konuşmada yazılmış taslak yeni konuşmaya taşınır.
+      const carried = state.active.closed ? draft : '';
       controller.newConversation();
+      if (carried) {
+        const next = controller.getState().active;
+        setDraftState({ key: next.viewKey || next.key, text: carried });
+      }
       focusInput();
     } else if (action === 'reload') {
       globalThis.location?.reload();
@@ -344,7 +367,17 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   } else if (active.loading) {
     body = <p className="rota-assistant-state"><Spinner size={14} /> Konuşma yükleniyor…</p>;
   } else if (active.failure) {
-    body = <div className="rota-assistant-scroll"><Notice notice={active.failure} onAction={runAction} /></div>;
+    body = (
+      <div className="rota-assistant-scroll">
+        <Notice notice={active.failure} onAction={runAction}>
+          {active.failure.retryable && active.id && (
+            <button type="button" className="btn ghost sm" onClick={() => controller.openConversation(active.id)}>
+              <Icons.Refresh size={12} aria-hidden="true" /> Yeniden dene
+            </button>
+          )}
+        </Notice>
+      </div>
+    );
   } else if (!active.turns.length) {
     const notice = readinessNotice(readiness);
     body = (
@@ -429,6 +462,22 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       </header>
       <div className="rota-assistant-body">
         {active.notice && <Notice notice={active.notice} onAction={runAction} />}
+        {held && (
+          <Notice notice={HELD_DRAFT_NOTICE} onAction={runAction}>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => {
+                setDraft(draft ? `${held.text}\n\n${draft}` : held.text);
+                setHeldDraft(null);
+                focusInput();
+              }}
+            >
+              İletiyi geri al
+            </button>
+            <button type="button" className="btn ghost sm" onClick={() => setHeldDraft(null)}>Kapat</button>
+          </Notice>
+        )}
         {body}
       </div>
       {(canCompose || (actual && generating)) && (
@@ -441,7 +490,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             focusInput();
           }}
           generating={generating}
-          disabled={!canCompose || state.refreshing || active.loading || Boolean(state.deleting[active.id])}
+          disabled={!canCompose || state.refreshing || active.loading || Boolean(active.closed)
+            || Boolean(state.reconciling[active.key]) || Boolean(state.deleting[active.id])}
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}

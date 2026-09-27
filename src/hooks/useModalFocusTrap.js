@@ -3,6 +3,16 @@ import { useEffect, useId, useRef } from 'react';
 
 const activeTraps = [];
 
+/**
+ * Açık odak tuzaklarının (kipli pencerelerin) sayısı. Kendi Esc dinleyicisini
+ * kuran bir yüzey açılırken bu sayıyı kaydeder; sayı sonradan arttıysa (ör.
+ * Ctrl/Cmd+K ile üstte açılan komut paleti) Esc'in sahibi o daha yeni penceredir
+ * ve alttaki yüzey olayı tüketmez.
+ */
+export function modalTrapDepth() {
+  return activeTraps.length;
+}
+
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',

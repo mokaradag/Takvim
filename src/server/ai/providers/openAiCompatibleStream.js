@@ -50,14 +50,41 @@ function isPlainObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** Bildirilen sayaç: yoksa `null`; varsa negatif olmayan tam sayı olmalıdır. */
 function tokenCount(value) {
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  if (value == null) return null;
+  if (!Number.isSafeInteger(value) || value < 0) throw invalid('STREAM_EVENT_MALFORMED');
+  return value;
 }
 
+/** Bildirilen model: yoksa ya da boşsa `null`; varsa metin olmalı ve sınırı aşmamalıdır. */
 function reportedModel(value) {
-  if (typeof value !== 'string' || !value.trim()) return null;
+  if (value == null) return null;
+  if (typeof value !== 'string') throw invalid('STREAM_EVENT_MALFORMED');
+  if (!value.trim()) return null;
   if (value.length > MAX_REPORTED_MODEL_LENGTH) throw invalid('MODEL_ID_TOO_LONG');
   return value;
+}
+
+/**
+ * Yanıtın seçeneği: `index === 0` olan giriş. Dizin bildirmeyen uyumlu ağ
+ * geçitleri için yalnızca İLK giriş dizinsizse o kullanılır; açıkça sıfırdan
+ * farklı dizin taşıyan seçenek asıl yanıt sayılmaz.
+ */
+export function primaryChoice(choices) {
+  const indexed = choices.find((entry) => isPlainObject(entry) && entry.index === 0);
+  if (indexed) return indexed;
+  const first = choices[0];
+  if (first == null) return null;
+  if (isPlainObject(first) && first.index != null) return null;
+  return first;
+}
+
+/** Akıl yürütme alanı: yoksa `false`; varsa metin olmalıdır. */
+function reasoningPresent(value) {
+  if (value == null) return false;
+  if (typeof value !== 'string') throw invalid('STREAM_EVENT_MALFORMED');
+  return value.length > 0;
 }
 
 /** Sağlayıcı akışının SSE çözücüsü; satır/olay kuralları ortak saf modüldedir. */
@@ -138,7 +165,12 @@ function interpretChunk(payload, state) {
   if (!isPlainObject(payload)) throw invalid('STREAM_EVENT_MALFORMED');
   // Bazı ağ geçitleri akış ortasındaki hatayı veri olayı olarak gönderir; gövde okunmaz.
   if (payload.error != null) throw streamInterrupted('STREAM_ERROR_EVENT');
-  if (state.model == null) state.model = reportedModel(payload.model);
+  // Model her olayda doğrulanır; akış ortasında başka bir modele geçiş gizlenmez.
+  const model = reportedModel(payload.model);
+  if (model != null) {
+    if (state.model != null && state.model !== model) throw invalid('MODEL_CHANGED');
+    state.model = model;
+  }
   if (payload.usage != null) {
     if (!isPlainObject(payload.usage)) throw invalid('STREAM_EVENT_MALFORMED');
     state.usage = {
@@ -149,7 +181,7 @@ function interpretChunk(payload, state) {
   }
   if (payload.choices == null) return { content: null, reasoning: false };
   if (!Array.isArray(payload.choices)) throw invalid('STREAM_EVENT_MALFORMED');
-  const choice = payload.choices.find((entry) => entry?.index === 0) ?? payload.choices[0];
+  const choice = primaryChoice(payload.choices);
   if (choice == null) return { content: null, reasoning: false };
   if (!isPlainObject(choice)) throw invalid('STREAM_EVENT_MALFORMED');
   const delta = choice.delta ?? null;
@@ -157,8 +189,11 @@ function interpretChunk(payload, state) {
   // İsteği yankılayan bir vekilin `user` iletisi model yanıtı sayılmaz.
   if (delta?.role != null && delta.role !== 'assistant') throw invalid('INVALID_ROLE');
   if (delta?.content != null && typeof delta.content !== 'string') throw invalid('STREAM_EVENT_MALFORMED');
-  if (typeof choice.finish_reason === 'string' && choice.finish_reason) state.finishReason = choice.finish_reason.slice(0, 40);
-  const reasoning = [delta?.reasoning_content, delta?.reasoning].some((value) => typeof value === 'string' && value.length > 0);
+  if (choice.finish_reason != null && typeof choice.finish_reason !== 'string') throw invalid('STREAM_EVENT_MALFORMED');
+  const reasoning = [reasoningPresent(delta?.reasoning_content), reasoningPresent(delta?.reasoning)].some(Boolean);
+  // Bitiş nedeni bildirildikten sonra gelen yanıt metni kabul edilmez (yalnızca kullanım gibi kuyruk olayları).
+  if (state.finishReason && delta?.content) throw invalid('CONTENT_AFTER_FINISH');
+  if (choice.finish_reason) state.finishReason = choice.finish_reason.slice(0, 40);
   return { content: delta?.content ?? null, reasoning };
 }
 
@@ -171,7 +206,15 @@ function interpretChunk(payload, state) {
 export async function* readChatCompletionStream(body, { signal = null, limits = AI_STREAM_LIMITS } = {}) {
   const reader = body?.getReader?.();
   if (!reader) throw invalid('EMPTY_RESPONSE');
-  const decoder = new TextDecoder('utf-8');
+  // Bozuk UTF-8 sessizce U+FFFD'ye çevrilip yanıt olarak saklanmaz.
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const decode = (bytes) => {
+    try {
+      return decoder.decode(bytes, { stream: true });
+    } catch {
+      throw invalid('STREAM_ENCODING_INVALID');
+    }
+  };
   const parser = createSseEventParser({ maxEventChars: limits.maxEventChars });
   const think = createLeadingThinkFilter();
   const state = { model: null, usage: null, finishReason: null, bytes: 0, textChars: 0 };
@@ -191,11 +234,12 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
 
   function* handle(events) {
     for (const event of events) {
+      // Hata olayı, verisi `[DONE]` olsa da hatadır.
+      if (event.event === 'error') throw streamInterrupted('STREAM_ERROR_EVENT');
       if (event.data === '[DONE]') {
         completed = true;
         return;
       }
-      if (event.event === 'error') throw streamInterrupted('STREAM_ERROR_EVENT');
       let payload;
       try {
         payload = JSON.parse(event.data);
@@ -219,10 +263,17 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
       if (step.done) break;
       state.bytes += step.value.byteLength;
       if (state.bytes > limits.maxStreamBytes) throw invalid('STREAM_TOO_LARGE');
-      yield* handle(parser.push(decoder.decode(step.value, { stream: true })));
+      yield* handle(parser.push(decode(step.value)));
     }
     if (!completed) {
-      yield* handle(parser.push(decoder.decode()));
+      let tail;
+      try {
+        tail = decoder.decode();
+      } catch {
+        // Akış çok baytlı bir karakterin ortasında bitti: yanıt kesilmiştir.
+        throw streamInterrupted('STREAM_TRUNCATED');
+      }
+      yield* handle(parser.push(tail));
       // Son boş satırı göndermeden kapanan akışın bekleyen verisi yalnızca `[DONE]` olabilir.
       if (!completed && parser.end() === '[DONE]') completed = true;
       if (!completed && state.finishReason) completed = true;

@@ -115,6 +115,7 @@ function list(db, params, sicil, known) {
 }
 
 function load(db, params, sicil, known) {
+  db.aiConversationHooks?.beforeLoad?.(params);
   if (!known) return [[{ KnownSicil: 0 }]];
   const conversation = ownedConversation(db, sicil, params.conversationId);
   const messages = conversation ? messagesOf(db, conversation.ConversationId).reverse().slice(0, Number(params.maxMessages)) : [];

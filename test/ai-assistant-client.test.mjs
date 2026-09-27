@@ -28,7 +28,7 @@ const encoder = new TextEncoder();
 
 const conversation = { id: CONVERSATION_ID, title: 'Deneme', createdAt: '2026-09-26T10:00:00.000Z', updatedAt: '2026-09-26T10:00:00.000Z', messageCount: 1 };
 const userMessage = { id: USER_ID, sequence: 1, role: 'user', content: 'Soru', turnId: TURN_ID, replyToId: null, mode: null, finishReason: null, createdAt: 'x', length: 4 };
-const assistantMessage = { id: ANSWER_ID, sequence: 2, role: 'assistant', turnId: null, replyToId: USER_ID, mode: 'standard', finishReason: 'stop', createdAt: 'x', length: 7 };
+const assistantMessage = { id: ANSWER_ID, sequence: 2, role: 'assistant', turnId: null, replyToId: USER_ID, mode: 'standard', finishReason: 'stop', createdAt: 'x', length: 13 };
 
 function frame(event, data) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -36,6 +36,9 @@ function frame(event, data) {
 
 const ACCEPTED = frame('accepted', { v: 1, conversation, userMessage, mode: 'standard', replay: false, context: { trimmed: false, omittedMessages: 0 } });
 const DONE = frame('done', { conversation: { ...conversation, messageCount: 2 }, assistantMessage, replayed: false });
+/** Alınan metnin (kalıcılıktaki gibi kırpılmış) uzunluğunu taşıyan `done`. */
+const doneFor = (text) => frame('done', { conversation: { ...conversation, messageCount: 2 }, assistantMessage: { ...assistantMessage, length: text.trim().length }, replayed: false });
+const STREAM_HEADERS = Object.freeze({ 'content-type': 'text/event-stream; charset=utf-8', 'x-mergen-rota-assistant-protocol': '1' });
 
 function types(events) {
   return events.map((event) => event.type);
@@ -105,7 +108,7 @@ test('çözücü: yanıt metni ve tek olay büyüklüğü sınırlıdır', () =>
 /* ── Akış isteği ──────────────────────────────────────────── */
 
 /** Parçaları sırayla (ya da test elle ilerletince) veren sahte akış yanıtı. */
-function streamResponse(chunks, { status = 200, headers = { 'content-type': 'text/event-stream; charset=utf-8' }, manual = false } = {}) {
+function streamResponse(chunks, { status = 200, headers = STREAM_HEADERS, manual = false } = {}) {
   const queue = [...chunks];
   let push = null;
   let cancelled = false;
@@ -138,7 +141,7 @@ function stubFetch(t, handler) {
 }
 
 test('tur isteği yalnızca konuşma kimliği, tur kimliği, ileti ve kip taşır; olaylar sırayla bildirilir', async (t) => {
-  const calls = stubFetch(t, () => streamResponse([ACCEPTED, frame('status', { phase: 'generating' }), frame('delta', { text: 'Yanıt ' }), frame('delta', { text: 'metni' }), DONE]).response);
+  const calls = stubFetch(t, () => streamResponse([ACCEPTED, frame('status', { phase: 'generating' }), frame('delta', { text: 'Yanıt ' }), frame('delta', { text: 'metni' }), doneFor('Yanıt metni')]).response);
   const seen = [];
   const result = await streamAssistantTurnRequest({ conversationId: CONVERSATION_ID, turnId: TURN_ID, message: 'Soru', mode: 'deep', onEvent: (event) => seen.push(event.type) });
   assert.equal(result.ok, true);
@@ -237,13 +240,13 @@ test('protokol hatasında okuma bırakılır ve istek kesilir', async (t) => {
 
 test('JSON uçları beklenen biçimi doğrular; biçimsiz başarılı yanıt başarı sayılmaz', async (t) => {
   const replies = [
-    { assistant: { available: true, modes: [{ id: 'standard', available: true }], limits: { maxMessageChars: 8000 } } },
+    { assistant: { available: true, modes: [{ id: 'standard', label: 'Standart', available: true }], limits: { maxMessageChars: 8000 } } },
     { assistant: { available: 'evet' } },
     { conversations: [conversation], nextCursor: 'abc' },
     { conversations: [{ id: 'kimlik-değil', title: 'x' }] },
     { conversation, messages: [userMessage] },
     { conversation: { ...conversation, id: '22222222-2222-4222-8222-222222222222' }, messages: [] },
-    { deleted: true },
+    { deleted: true, conversationId: CONVERSATION_ID },
     { ok: true }
   ];
   const calls = stubFetch(t, () => Response.json(replies.shift()));
@@ -281,4 +284,60 @@ test('olay sözleşmesi kullanıcı ve yanıt rollerini karıştırmaz', () => {
   assert.throws(() => decoder.push(frame('done', {
     conversation, assistantMessage: { ...assistantMessage, role: 'user' }
   })), /MALFORMED_EVENT/);
+});
+
+test('çözücü: kabul ve sonuç olayı isteği açan tura, konuşmaya ve alınan metne bağlıdır', () => {
+  const OTHER_ID = '22222222-2222-4222-8222-222222222222';
+  const bound = () => createAssistantStreamDecoder({ turnId: TURN_ID, conversationId: CONVERSATION_ID });
+  const reason = (fn) => { try { fn(); } catch (error) { return error.reason; } return null; };
+  assert.equal(reason(() => bound().push(ACCEPTED + frame('delta', { text: 'Merhaba dünya' }) + DONE)), null);
+  assert.equal(reason(() => bound().push(frame('accepted', { v: 1, conversation, userMessage: { ...userMessage, turnId: OTHER_ID } }))), 'TURN_MISMATCH');
+  assert.equal(reason(() => bound().push(frame('accepted', { v: 1, conversation: { ...conversation, id: OTHER_ID }, userMessage }))), 'CONVERSATION_MISMATCH');
+  // Yeni konuşmada konuşma kimliği yoktur; tur kimliği yine bağlanır.
+  assert.equal(reason(() => createAssistantStreamDecoder({ turnId: TURN_ID }).push(frame('accepted', { v: 1, conversation: { ...conversation, id: OTHER_ID }, userMessage }))), null);
+  assert.equal(reason(() => bound().push(ACCEPTED + frame('delta', { text: 'Merhaba dünya' })
+    + frame('done', { conversation: { ...conversation, id: OTHER_ID }, assistantMessage, replayed: false }))), 'TURN_MISMATCH');
+  assert.equal(reason(() => bound().push(ACCEPTED + frame('delta', { text: 'Merhaba dünya' })
+    + frame('done', { conversation, assistantMessage: { ...assistantMessage, replyToId: OTHER_ID }, replayed: false }))), 'TURN_MISMATCH');
+  assert.equal(reason(() => bound().push(ACCEPTED + frame('delta', { text: 'Merhaba' }) + DONE)), 'ANSWER_LENGTH_MISMATCH');
+  assert.equal(reason(() => bound().push(ACCEPTED + frame('delta', { text: 'Merhaba dünya' })
+    + frame('done', { conversation, assistantMessage: { ...assistantMessage, length: -1 }, replayed: false }))), 'MALFORMED_EVENT');
+  // Kalıcılıktaki gibi baş/son boşluk sayılmaz.
+  assert.equal(reason(() => bound().push(ACCEPTED + frame('delta', { text: '  Merhaba dünya \n' }) + DONE)), null);
+});
+
+test('çözücü: sonlandırıcıdan sonraki bozuk olay parça bölünmesinden bağımsız olarak yok sayılır', () => {
+  const tail = 'event: delta\ndata: {bozuk\n\n';
+  const together = createAssistantStreamDecoder();
+  assert.deepEqual(types(together.push(ACCEPTED + frame('error', { code: 'AI_TIMEOUT', message: 'Süre doldu.' }) + tail)), ['accepted', 'error']);
+  const split = createAssistantStreamDecoder();
+  split.push(ACCEPTED + frame('error', { code: 'AI_TIMEOUT', message: 'Süre doldu.' }));
+  assert.deepEqual(split.push(tail), []);
+});
+
+test('protokol sürümü başlığı olmayan ya da uyuşmayan akış kabul edilmez', async (t) => {
+  const headers = [{ 'content-type': 'text/event-stream' }, { 'content-type': 'text/event-stream', 'x-mergen-rota-assistant-protocol': '2' }];
+  stubFetch(t, () => streamResponse([frame('error', { code: 'AI_BUSY', message: 'Yoğun.' })], { headers: headers.shift() }).response);
+  for (let index = 0; index < 2; index += 1) {
+    const result = await streamAssistantTurnRequest({ turnId: TURN_ID, message: 'Soru', mode: 'standard' });
+    assert.deepEqual([result.code, result.reason], ['PROTOCOL_ERROR', 'PROTOCOL_VERSION']);
+  }
+});
+
+test('JSON uçları kimlik, rol bağı, zaman damgası ve kip sözleşmesini doğrular', async (t) => {
+  const replies = [
+    { assistant: { available: true, modes: [{ id: 'chat.general', label: 'Genel', available: true }], limits: { maxMessageChars: 8000 } } },
+    { assistant: { available: true, modes: [{ id: 'standard', available: true }], limits: { maxMessageChars: 8000 } } },
+    { conversations: [{ ...conversation, updatedAt: 123 }], nextCursor: null },
+    { conversation, messages: [{ ...userMessage, turnId: null }] },
+    { conversation, messages: [{ ...assistantMessage, content: 'Yanıt', replyToId: null }] },
+    { deleted: true, conversationId: '22222222-2222-4222-8222-222222222222' }
+  ];
+  stubFetch(t, () => Response.json(replies.shift()));
+  assert.equal((await loadAssistantReadinessRequest()).code, ASSISTANT_INVALID_RESPONSE, 'bilinmeyen kip');
+  assert.equal((await loadAssistantReadinessRequest()).code, ASSISTANT_INVALID_RESPONSE, 'etiketsiz kip');
+  assert.equal((await listAssistantConversationsRequest()).code, ASSISTANT_INVALID_RESPONSE, 'metin olmayan zaman damgası');
+  assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'tur kimliği olmayan kullanıcı iletisi');
+  assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'bağı olmayan yanıt');
+  assert.equal((await deleteAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'başka konuşmanın silinmesi');
 });

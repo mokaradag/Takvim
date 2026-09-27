@@ -61,11 +61,16 @@ function personalKeysOnly(config) {
   return config.personalKeysSupported && !config.defaultKeyConfigured;
 }
 
+/** Rota AI kiplerinin (chat.general / chat.reasoning) kullanılabilir yolları. */
+function assistantRoutes(registry) {
+  return [AI_PROFILES.CHAT_GENERAL, AI_PROFILES.CHAT_REASONING]
+    .map((profile) => resolveModelProfile(registry, profile))
+    .filter((resolved) => resolved.ok && resolved.route.capabilities.includes(AI_CAPABILITIES.CHAT))
+    .map((resolved) => resolved.route);
+}
+
 function assistantProfilesAvailable(registry) {
-  return [AI_PROFILES.CHAT_GENERAL, AI_PROFILES.CHAT_REASONING].some((profile) => {
-    const resolved = resolveModelProfile(registry, profile);
-    return resolved.ok && resolved.route.capabilities.includes(AI_CAPABILITIES.CHAT);
-  });
+  return assistantRoutes(registry).length > 0;
 }
 
 /** Bileşen durumu + güvenli ayrıntı; `state`, `message`, `detail`, `lastSuccessAt` döner. */
@@ -256,8 +261,19 @@ async function verifySetup(config, deadline, models) {
       message: `Uca ulaşıldı ancak hızlı sohbet profilinin modeli (${probeRoute.route.model}) uçtaki model listesinde yok.`
     };
   }
-  if (!assistantProfilesAvailable(registry)) {
+  const routes = assistantRoutes(registry);
+  if (!routes.length) {
     return { code: 'ASSISTANT_PROFILE_UNAVAILABLE', message: 'Uca ulaşıldı ancak Rota AI sohbet profilleri kullanılamıyor.' };
+  }
+  // Uç model listesini verdiyse Rota AI kiplerinden en az birinin modeli listede olmalıdır:
+  // yalnızca chat.fast modelini sunan uç "sağlıklı" görünüp her Rota AI turunda düşmez.
+  if (models && !routes.some((route) => models.includes(route.model))) {
+    const missing = [...new Set(routes.map((route) => route.model))].join(', ');
+    return {
+      code: 'ASSISTANT_MODEL_MISSING',
+      modelMissing: true,
+      message: `Uca ulaşıldı ancak Rota AI sohbet profillerinin modeli (${missing}) uçtaki model listesinde yok.`
+    };
   }
   try {
     await checkAssistantConversationSchema({ signal: deadline.signal });
