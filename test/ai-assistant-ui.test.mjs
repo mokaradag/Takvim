@@ -26,6 +26,7 @@ const { createAssistantController, retryableTurnKey, turnsFromMessages } = await
 const presentation = await import('../src/features/ai/assistant/assistantPresentation.js');
 const interaction = await import('../src/features/ai/assistant/assistantInteraction.js');
 const { parseAssistantMarkdown, parseInline, safeLinkHref } = await import('../src/features/ai/assistant/assistantMarkdown.js');
+const { conversationTitleFrom, normalizeAssistantMessage } = await import('../src/domain/ai/assistantContract.js');
 const { DataModeContext } = await import('../src/components/shell/DataModeContext.jsx');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 
@@ -651,6 +652,21 @@ function keyDown(textarea, init) {
   return prevented;
 }
 
+test('ileti sınırı kanonik metne uygulanır; konuşma başlığında bağlantı hedefi gösterilmez', () => {
+  const raw = `${'x'.repeat(7995)}${'\n'.repeat(10)}`;
+  const normalized = normalizeAssistantMessage(raw);
+  assert.equal(normalized.ok, true);
+  assert.equal(normalized.value.length, 7995);
+  assert.equal(conversationTitleFrom('[Bütçe raporu](https://intranet/reports/123) hakkında'), 'Bütçe raporu hakkında');
+  assert.equal(conversationTitleFrom('![Grafik](https://intranet/chart.png) özeti'), 'Grafik özeti');
+
+  const padded = mountComponent(AssistantComposer, composerProps({ value: raw }).props);
+  assert.equal(findElement(padded.output, (node) => node.props?.type === 'submit').props.disabled, false);
+  assert.equal(findElement(padded.output, (node) => node.type === 'textarea').props['aria-invalid'], undefined);
+  assert.match(textOf(padded.output), /7\.995 \/ 8\.000/);
+  padded.unmount();
+});
+
 test('yazma alanı: Enter gönderir, Shift+Enter ve IME göndermez; boş ileti gönderilemez; sınır aşımı açıklanır', () => {
   const { submitted, props } = composerProps();
   const view = mountComponent(AssistantComposer, props);
@@ -717,6 +733,12 @@ test('yanıt eylemleri yalnızca uygun durumda görünür: kopyalama tamamlanmı
   assert.equal(find({ turn: turn('failed', { error: keyMissing }), canRetry: true }, notice).props.retryable, false,
     'yeniden denemenin işe yaramayacağı hata için düğme gösterilmez');
   assert.ok(find({ turn: turn('unanswered', { content: '' }), canRetry: true }, notice));
+  const checking = mountComponent(AssistantTurn, { turn: turn('interrupted'), reconciling: true, onRetry() {}, onAction() {} }).output;
+  assert.match(textOf(checking), /sonucu kontrol ediliyor/);
+  assert.doesNotMatch(textOf(checking), /kaydedilmedi/);
+  const settledPartial = mountComponent(AssistantTurn, { turn: turn('interrupted'), onRetry() {}, onAction() {} }).output;
+  assert.match(textOf(settledPartial), /tamamlanmadı/);
+  assert.doesNotMatch(textOf(settledPartial), /kaydedilmedi/);
   const waiting = mountComponent(AssistantTurn, { turn: turn('waiting'), phase: 'thinking', onRetry() {}, onAction() {} }).output;
   assert.match(textOf(waiting), /Derin düşünülüyor/);
   assert.equal(findElement(waiting, (node) => node.props?.['aria-busy'] === true) != null, true);
@@ -1898,16 +1920,45 @@ test('birden fazla konuşmanın reddedilen iletileri ayrı tutulur', async () =>
   panel.unmount(); controller.dispose();
 });
 
-test('başlıktaki yeni konuşma eylemi yazılmış taslağı taşır', async () => {
+test('başlıktaki yeni konuşma eylemi açık konuşmanın taslağını yeni konuşmaya taşımaz', async () => {
   const { controller } = await readyController();
   await controller.openConversation(CONVERSATION_A);
   const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
   const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
-  composer().props.onChange('Sonraki soru'); panel.render();
+  composer().props.onChange('A konuşmasının taslağı'); panel.render();
   findElement(panel.output, (node) => node.props?.['aria-label'] === 'Yeni konuşma').props.onClick(); panel.render();
   assert.equal(controller.getState().active.id, null);
-  assert.equal(composer().props.value, 'Sonraki soru');
+  assert.equal(composer().props.value, '', 'yeni konuşma boş başlar');
+  await controller.openConversation(CONVERSATION_A); panel.render();
+  assert.equal(composer().props.value, 'A konuşmasının taslağı', 'kaynak konuşmanın taslağı kendi konuşmasında kalır');
   panel.unmount(); controller.dispose();
+});
+
+test('konuşma silinince süren uzlaştırma iptal edilir ve geç okuma konuşmayı diriltmez', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const run = api.turns[0];
+  const data = acceptedData(CONVERSATION_A, run, 'Soru');
+  run.emit('accepted', data);
+  run.emit('delta', { text: 'kısmi' });
+  const user = { ...data.userMessage, role: 'user', sequence: 1 };
+  const answer = { id: createId(), role: 'assistant', sequence: 2, replyToId: user.id, content: 'Geç yanıt' };
+  let releaseRead;
+  api.loadAssistantConversationRequest = (_id, options = {}) => new Promise((resolve) => {
+    releaseRead = () => resolve({ ok: true, conversation: data.conversation, messages: [user, answer] });
+    assert.equal(options.signal.aborted, false);
+  });
+  run.resolve({ ok: false, code: 'STREAM_INTERRUPTED', partial: true, retryable: true });
+  await drain();
+  assert.ok(releaseRead);
+  assert.equal(Boolean(state().reconciling[CONVERSATION_A]), true);
+  assert.deepEqual(await controller.deleteConversation(CONVERSATION_A), { ok: true });
+  assert.equal(state().reconciling[CONVERSATION_A], undefined);
+  releaseRead();
+  await drain();
+  assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), false);
+  assert.equal(state().active.id, null);
+  controller.dispose();
 });
 
 test('uzlaştırma tamamlanınca daha önce başlamış tarihçe okuması yanıtı silemez', async () => {
@@ -2001,6 +2052,55 @@ test('uzlaştırma silinmiş konuşmayı kapatır ve oturum hatasını panel dü
     }
     controller.dispose();
   }
+});
+
+test('açma sırasında NOT_FOUND ile kaldırılan konuşmayı eski liste yenilemesi geri getirmez', async () => {
+  const row = { id: CONVERSATION_A, title: 'Silinmiş', updatedAt: '2026-09-28T10:00:00.000Z' };
+  let listCall = 0;
+  let releaseList;
+  const api = fakeApi({
+    listAssistantConversationsRequest: async () => {
+      listCall += 1;
+      if (listCall === 1) return { ok: true, conversations: [row], nextCursor: null };
+      return new Promise((resolve) => { releaseList = () => resolve({ ok: true, conversations: [row], nextCursor: null }); });
+    },
+    loadAssistantConversationRequest: async () => ({ ok: false, code: 'NOT_FOUND' })
+  });
+  const { controller, state } = await readyController({ api });
+  const refresh = controller.refreshList();
+  assert.ok(releaseList);
+  await controller.openConversation(CONVERSATION_A);
+  assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), false);
+  releaseList();
+  await refresh;
+  assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), false);
+  controller.dispose();
+});
+
+test('tur isteğindeki NOT_FOUND ile kaldırılan konuşmayı eski liste yenilemesi geri getirmez', async () => {
+  const row = { id: CONVERSATION_A, title: 'Silinmiş', updatedAt: '2026-09-28T10:00:00.000Z', messageCount: 0 };
+  let listCall = 0;
+  let releaseList;
+  const api = fakeApi({
+    listAssistantConversationsRequest: async () => {
+      listCall += 1;
+      if (listCall === 1) return { ok: true, conversations: [row], nextCursor: null };
+      return new Promise((resolve) => { releaseList = () => resolve({ ok: true, conversations: [row], nextCursor: null }); });
+    },
+    loadAssistantConversationRequest: async () => ({ ok: true, conversation: row, messages: [] })
+  });
+  const { controller, state } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  const refresh = controller.refreshList();
+  assert.ok(releaseList);
+  assert.equal(controller.send('Soru').ok, true);
+  api.turns[0].resolve({ ok: false, phase: 'request', code: 'NOT_FOUND' });
+  await drain();
+  assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), false);
+  releaseList();
+  await refresh;
+  assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), false);
+  controller.dispose();
 });
 
 test('sayfalama başka pencerede silinmiş eski satırı yeniden eklemez', async () => {

@@ -91,7 +91,7 @@ function AnswerNotice({ failure, retryable, onRetry, onAction }) {
 }
 
 /** Tek tur: kullanıcı iletisi ve yanıtın o anki durumu. */
-export function AssistantTurn({ turn, phase = null, canRetry = false, onRetry, onAction }) {
+export function AssistantTurn({ turn, phase = null, canRetry = false, reconciling = false, onRetry, onAction }) {
   const { user, answer } = turn;
   const status = answer?.status || 'waiting';
   const active = status === 'waiting' || status === 'streaming';
@@ -118,7 +118,11 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, onRetry, o
         )}
         {hasText && <AssistantMarkdown text={answer.content} />}
         {hasText && (status === 'stopped' || status === 'interrupted' || status === 'failed') && (
-          <p className="rota-assistant-partial-note">Yanıtın bu bölümü tamamlanmadı ve kaydedilmedi.</p>
+          <p className="rota-assistant-partial-note">
+            {reconciling
+              ? 'Yanıtın sonucu kontrol ediliyor; tamamlanmış yanıt sunucuda kaydedilmiş olabilir.'
+              : 'Yanıtın bu bölümü tamamlanmadı.'}
+          </p>
         )}
         {status === 'complete' && (
           <div className="rota-assistant-answer-meta">
@@ -150,7 +154,7 @@ function scrollToEnd(node, smooth = false) {
  * Konuşma akışı. `conversationKey` değişince (konuşma değişimi) ve yeni tur
  * eklenince en alta gidilir; akan metin yalnızca izleme sürerken kaydırır.
  */
-export function AssistantThread({ conversationKey, turns, phase = null, retryKey = null, onRetry, onAction, reducedMotion = false, children = null }) {
+export function AssistantThread({ conversationKey, turns, phase = null, retryKey = null, reconciling = false, onRetry, onAction, reducedMotion = false, children = null }) {
   const scrollRef = useRef(null);
   const followingRef = useRef(true);
   const lastTopRef = useRef(0);
@@ -193,6 +197,7 @@ export function AssistantThread({ conversationKey, turns, phase = null, retryKey
             turn={turn}
             phase={turn === last ? phase : null}
             canRetry={retryKey === turn.key}
+            reconciling={turn === last && reconciling}
             onRetry={onRetry}
             onAction={onAction}
           />

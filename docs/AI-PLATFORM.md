@@ -1194,7 +1194,9 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
 - **Uzlaştırma.** Kabul edilmiş ama `done` almadan biten tur (Durdur, kopan
   bağlantı, protokol hatası) belirsizdir: sağlayıcı yanıtı tamamlamış ve sunucu
   onu kaydetmiş olabilir. Arayüz konuşmayı sunucudan okuyana kadar o konuşmada
-  yeni tur ya da yeniden deneme başlatmaz; kayıtlı yanıt bulunursa tur
+  yeni tur başlatmaz. Aynı `turnId` ile kimlik koruyan **Yeniden dene** ise
+  beklemeden kullanılabilir; yeni deneme süren uzlaştırmayı geçersiz kılar ve
+  gerekirse kendi sonucundan sonra yeniden başlatır. Kayıtlı yanıt bulunursa tur
   tamamlanmış gösterilir, bulunmazsa kısmi metin ve **Yeniden dene** kalır.
 - **Kabul öncesi hatalar.** Sunucunun iletiyi yazmadan verdiği kesin retler
   (oturum, geçersiz istek, kapalı/yapılandırılmamış hizmet, `CONFLICT`,

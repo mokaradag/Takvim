@@ -502,12 +502,12 @@ export function createAiGateway({
           if (step.done) break;
           const event = step.value;
           if (event.type === 'text') {
+            chunks.push(event.text);
+            await raceWithAbort(() => onText(event.text), deadline.signal);
             if (!progress.emitted) {
               progress.emitted = true;
               progress.firstTokenMs = now() - startedAt;
             }
-            chunks.push(event.text);
-            await raceWithAbort(() => onText(event.text), deadline.signal);
           } else if (event.type === 'reasoning' && !progress.reasoning) {
             progress.reasoning = true;
             notify(onStatus, { phase: 'thinking' });

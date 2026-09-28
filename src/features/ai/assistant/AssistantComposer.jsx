@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useId, useState } from 'react';
 import { Icons } from '../../../components/icons';
+import { normalizeAssistantMessageText } from '../../../domain/ai/assistantContract.js';
 import { composerKeyAction } from './assistantInteraction.js';
 import { characterCountLabel } from './assistantPresentation.js';
 
@@ -75,10 +76,12 @@ export function AssistantComposer({
   useEffect(() => {
     if (!generating) setHint((current) => (current === BUSY_HINT ? null : current));
   }, [generating]);
-  const overLimit = value.length > maxChars;
-  const blank = !value.trim();
+  const normalizedValue = normalizeAssistantMessageText(value);
+  const normalizedLength = normalizedValue.length;
+  const overLimit = normalizedLength > maxChars;
+  const blank = !normalizedValue;
   const canSubmit = !disabled && !submitDisabled && !generating && !blank && !overLimit;
-  const counter = characterCountLabel(value.length, maxChars);
+  const counter = characterCountLabel(normalizedLength, maxChars);
 
   // Alan içeriğe göre büyür; üst sınır CSS'tedir (sonrası kendi içinde kayar).
   useEffect(() => {

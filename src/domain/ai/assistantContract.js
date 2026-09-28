@@ -78,11 +78,16 @@ export function isAssistantId(value) {
  *
  * @returns {{ok: true, value: string} | {ok: false, reason: string, message: string}}
  */
+export function normalizeAssistantMessageText(value) {
+  if (typeof value !== 'string') return '';
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
+}
+
 export function normalizeAssistantMessage(value) {
   if (typeof value !== 'string') return { ok: false, reason: 'MESSAGE_REQUIRED', message: 'İleti boş olamaz.' };
-  // eslint-disable-next-line no-control-regex
-  const text = value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
-  if (!text.trim()) return { ok: false, reason: 'MESSAGE_REQUIRED', message: 'İleti boş olamaz.' };
+  const text = normalizeAssistantMessageText(value);
+  if (!text) return { ok: false, reason: 'MESSAGE_REQUIRED', message: 'İleti boş olamaz.' };
   if (text.length > ASSISTANT_LIMITS.maxMessageChars) {
     return {
       ok: false,
@@ -90,7 +95,7 @@ export function normalizeAssistantMessage(value) {
       message: `İleti en fazla ${ASSISTANT_LIMITS.maxMessageChars.toLocaleString('tr-TR')} karakter olabilir.`
     };
   }
-  return { ok: true, value: text.trim() };
+  return { ok: true, value: text };
 }
 
 /**
@@ -104,6 +109,8 @@ export function conversationTitleFrom(message) {
     .replace(/\r\n?/g, '\n')
     // Satır başı işaretleri (başlık, alıntı) satır sınırları henüz korunurken HER satırda atılır.
     .replace(/(^|\n)[ \t]{0,3}(?:#{1,6}(?:[ \t]+|(?=\n)|$)|>[ \t]?)/g, '$1')
+    // Bağlantı/görsel hedefini başlığa taşımadan yalnızca görünür etiketi koru.
+    .replace(/!?\[([^\r\n]*?)\]\((?:[^()\r\n]|\([^()\r\n]*\))*\)/g, '$1')
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001F\u007F]+/g, ' ')
     .replace(/(`+|\*\*|__|~~)(?=\S)(.+?)\1/g, '$2')

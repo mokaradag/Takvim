@@ -298,10 +298,15 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       close({ restoreFocus: false });
       onOpenSettings?.();
     } else if (action === 'new-conversation') {
-      // Kapanan (dolan ya da silinen) konuşmada yazılmış taslak yeni konuşmaya taşınır.
-      const carried = [held?.text, draft].filter(Boolean).join('\n\n');
+      // Yalnız kapanmış konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
+      const carry = Boolean(active.closed || held);
+      const carried = carry ? [held?.text, draft].filter(Boolean).join('\n\n') : '';
+      const sourceKey = draftKey;
       if (controller.newConversation() === false) return;
-      setHeldDraft(null);
+      if (carry) {
+        setHeldDrafts((current) => ({ ...current, [sourceKey]: null }));
+        setDrafts((current) => ({ ...current, [sourceKey]: '' }));
+      }
       if (carried) {
         const next = controller.getState().active;
         setDraftState({ key: next.viewKey || next.key, text: carried });
@@ -406,6 +411,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         turns={active.turns}
         phase={running?.phase || null}
         retryKey={retryKey}
+        reconciling={Boolean(state.reconciling[active.key])}
         reducedMotion={reducedMotion}
         onRetry={(key) => {
           controller.retry(key);

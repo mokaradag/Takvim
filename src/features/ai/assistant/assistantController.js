@@ -352,6 +352,7 @@ export function createAssistantController({
     const sessionFailure = isSessionFailure(result);
     const unaccepted = result.phase === 'request' && !run.accepted;
     const closed = unaccepted && Boolean(run.conversationId) && closesConversation(result);
+    if (closed && result.code === 'NOT_FOUND') listMutations.set(run.conversationId, ++mutationVersion);
     const dropList = (current) => (closed && result.code === 'NOT_FOUND'
       ? { ...current.list, items: current.list.items.filter((item) => item.id !== run.conversationId) }
       : current.list);
@@ -671,6 +672,7 @@ export function createAssistantController({
     viewLoad = null;
     if (!result.ok) {
       const failure = assistantFailureView(result);
+      if (result.code === 'NOT_FOUND') listMutations.set(conversationId, ++mutationVersion);
       update((current) => ({
         ...current,
         status: isSessionFailure(result) ? 'error' : current.status,
@@ -832,6 +834,9 @@ export function createAssistantController({
     const removed = result.ok || result.code === 'NOT_FOUND';
     const failure = removed ? null : assistantFailureView(result);
     if (removed) {
+      const reconciliation = reconciliations.get(conversationId);
+      reconciliation?.abort();
+      reconciliations.delete(conversationId);
       const entry = state.running[conversationId];
       const run = entry ? runs.get(entry.token) : null;
       if (run) {
@@ -849,9 +854,12 @@ export function createAssistantController({
     update((current) => {
       const deleting = { ...current.deleting };
       delete deleting[conversationId];
+      const reconciling = { ...current.reconciling };
+      if (removed) delete reconciling[conversationId];
       return {
         ...current,
         deleting,
+        reconciling,
         status: isSessionFailure(result) ? 'error' : current.status,
         failure: isSessionFailure(result) ? failure : current.failure,
         running: removed ? setRunning(current, conversationId, null) : current.running,

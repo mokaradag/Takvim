@@ -324,11 +324,14 @@ test('protokol sürümü başlığı olmayan ya da uyuşmayan akış kabul edilm
   }
 });
 
-test('JSON uçları kimlik, rol bağı, zaman damgası ve kip sözleşmesini doğrular', async (t) => {
+test('JSON uçları kimlik, rol bağı, kanonik zaman damgası ve kip sözleşmesini doğrular', async (t) => {
   const replies = [
     { assistant: { available: true, modes: [{ id: 'chat.general', label: 'Genel', available: true }], limits: { maxMessageChars: 8000, maxConversationMessages: 100 } } },
     { assistant: { available: true, modes: [{ id: 'standard', available: true }], limits: { maxMessageChars: 8000, maxConversationMessages: 100 } } },
     { conversations: [{ ...conversation, updatedAt: 123 }], nextCursor: null },
+    { conversations: [{ ...conversation, updatedAt: '2026-09-26T13:00:00+03:00' }], nextCursor: null },
+    { conversations: [{ ...conversation, updatedAt: '2026-02-30T10:00:00.000Z' }], nextCursor: null },
+    { conversations: [{ ...conversation, updatedAt: '2026-09-26T10:00:00Z' }], nextCursor: null },
     { conversation, messages: [{ ...userMessage, turnId: null }] },
     { conversation, messages: [{ ...assistantMessage, content: 'Yanıt', replyToId: null }] },
     { deleted: true, conversationId: '22222222-2222-4222-8222-222222222222' }
@@ -337,6 +340,9 @@ test('JSON uçları kimlik, rol bağı, zaman damgası ve kip sözleşmesini do�
   assert.equal((await loadAssistantReadinessRequest()).code, ASSISTANT_INVALID_RESPONSE, 'bilinmeyen kip');
   assert.equal((await loadAssistantReadinessRequest()).code, ASSISTANT_INVALID_RESPONSE, 'etiketsiz kip');
   assert.equal((await listAssistantConversationsRequest()).code, ASSISTANT_INVALID_RESPONSE, 'metin olmayan zaman damgası');
+  assert.equal((await listAssistantConversationsRequest()).code, ASSISTANT_INVALID_RESPONSE, 'UTC olmayan zaman damgası');
+  assert.equal((await listAssistantConversationsRequest()).code, ASSISTANT_INVALID_RESPONSE, 'takvim dışı zaman damgası');
+  assert.equal((await listAssistantConversationsRequest()).code, ASSISTANT_INVALID_RESPONSE, 'milisaniyesiz zaman damgası');
   assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'tur kimliği olmayan kullanıcı iletisi');
   assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'bağı olmayan yanıt');
   assert.equal((await deleteAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'başka konuşmanın silinmesi');

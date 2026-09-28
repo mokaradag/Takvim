@@ -196,6 +196,30 @@ test('istemci iptali akışı sağlayıcıya kadar keser, kirayı bırakır ve d
   assert.equal(aiTelemetrySnapshot().streams.cancelled, 1);
 });
 
+test('ilk metin telemetrisi parça aşağı akışa ulaşmadan iptal olursa örnek yazmaz', async (t) => {
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'deferred-stream' });
+  const { stream } = gatewayFor(t, { provider });
+  const client = new AbortController();
+  let reached;
+  const downstream = new Promise((resolve) => { reached = resolve; });
+  const pending = stream({
+    signal: client.signal,
+    onText: () => {
+      reached();
+      return new Promise(() => {});
+    }
+  });
+  await provider.waitForActive(1);
+  provider.calls[0].emit('geri basınçta');
+  await downstream;
+  client.abort();
+  await assert.rejects(pending, { code: 'AI_CANCELLED' });
+  const snapshot = aiTelemetrySnapshot();
+  assert.equal(snapshot.latency.firstToken.count, 0);
+  assert.equal(snapshot.streams.cancelled, 1);
+});
+
 test('iptalden sonra gelen parça uygulanmaz; sinyale uymayan sağlayıcı kirayı tutamaz', async (t) => {
   const provider = createFakeAiProvider();
   provider.enqueue({ type: 'deferred-stream', ignoreAbort: true });
