@@ -61,9 +61,12 @@ Rota AI answers stream from `POST /api/mergen-rota/ai/assistant/turns` as
 no-store, no-transform` and `X-Accel-Buffering: no`, which disables Nginx
 response buffering for that response. It also sends an SSE comment every 15
 seconds while a slow model has not produced text yet, so an idle-read timeout
-larger than 15 seconds never cuts a legitimate answer. Recommended additions to
-the `location ^~ /rota/` block (the same applies to any other prefix, e.g. the
-TEST `/bilge` route):
+larger than 15 seconds allows heartbeats to keep the connection open. Merge the
+following into the `location ^~ /rota/` block (also for TEST `/bilge` or other
+prefixes). REPLACE existing directives, rather than appending duplicates,
+including `proxy_http_version`, `proxy_read_timeout`, `proxy_send_timeout` and
+all matching `proxy_set_header` names (especially `Host`). nginx rejects duplicate
+single-value directives and repeated Host headers break forwarding:
 
 ```nginx
     proxy_http_version 1.1;
@@ -71,7 +74,7 @@ TEST `/bilge` route):
     proxy_buffering off;
     proxy_cache off;
     # Keep text/event-stream out of gzip_types (compression buffers the stream).
-    # Longest legitimate generation: deep reasoning 180 s + queue 20 s + setup.
+    # Idle timeouts, not a total stream lifetime limit.
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
     # Original host and scheme: the same-origin check of state-changing AI

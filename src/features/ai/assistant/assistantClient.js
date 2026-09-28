@@ -165,12 +165,14 @@ export function createAssistantStreamDecoder({
   maxEventChars = MAX_STREAM_EVENT_CHARS,
   maxAnswerChars = ASSISTANT_LIMITS.maxAnswerChars,
   turnId = null,
-  conversationId = null
+  conversationId = null,
+  mode = null
 } = {}) {
   const parser = createEventStreamParser({ maxEventChars, tooLarge: () => new AssistantProtocolError('EVENT_TOO_LARGE') });
   const state = { accepted: null, terminal: null, answerChars: 0, answer: '' };
 
-  function checkAccepted({ conversation, userMessage }) {
+  function checkAccepted({ conversation, userMessage, mode: acceptedMode }) {
+    if (mode != null && acceptedMode !== mode) throw new AssistantProtocolError('MODE_MISMATCH');
     if (turnId != null && !sameId(userMessage.turnId, turnId)) throw new AssistantProtocolError('TURN_MISMATCH');
     if (conversationId != null && !sameId(conversation.id, conversationId)) throw new AssistantProtocolError('CONVERSATION_MISMATCH');
   }
@@ -334,8 +336,11 @@ export async function streamAssistantTurnRequest({
   }
 
   const reader = response.body.getReader();
-  const textDecoder = new TextDecoder();
-  const decoder = createAssistantStreamDecoder({ turnId, conversationId });
+  const textDecoder = new TextDecoder('utf-8', { fatal: true });
+  const decode = (bytes, options) => {
+    try { return textDecoder.decode(bytes, options); } catch { throw new AssistantProtocolError('ENCODING_INVALID'); }
+  };
+  const decoder = createAssistantStreamDecoder({ turnId, conversationId, mode });
   try {
     while (!decoder.terminal) {
       let step;
@@ -346,13 +351,13 @@ export async function streamAssistantTurnRequest({
       }
       if (step.done) break;
       arm();
-      for (const event of decoder.push(textDecoder.decode(step.value, { stream: true }))) {
+      for (const event of decoder.push(decode(step.value, { stream: true }))) {
         if (event.type === ASSISTANT_STREAM_EVENTS.DELTA && event.data.text) partial = true;
         onEvent?.(event);
       }
     }
     if (!decoder.terminal) {
-      for (const event of decoder.push(textDecoder.decode())) onEvent?.(event);
+      for (const event of decoder.push(decode())) onEvent?.(event);
       decoder.end();
     }
   } catch (error) {

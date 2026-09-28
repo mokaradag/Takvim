@@ -1291,8 +1291,12 @@ Uygulama akış için gereken başlıkları kendisi gönderir (§18.3). Ters vek
   `text/event-stream` sıkıştırılmamalıdır (`gzip_types` içinde olmamalı);
 - HTTP/1.1 ile iletilmelidir (`proxy_http_version 1.1;`);
 - `proxy_read_timeout` canlı tutma aralığından (15 sn) büyük olmalıdır; en uzun
-  meşru üretim (derin düşünme 180 sn + sıra 20 sn + hazırlık) için bağlantının
-  toplam ömrünü sınırlayan başka bir zaman aşımı en az 300 sn olmalıdır;
+  meşru üretim için toplam bağlantı ömrü sınırı, yapılandırılmış en büyük profil
+  `timeoutMs` değerini (600.000 ms'ye kadar; profil değeri yoksa
+  `MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS`), `MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS` sıra
+  süresini ve hazırlık, yanıt yazımı ile ağ payını birlikte aşmalıdır. Sabit
+  300 sn yeterli değildir; örneğin 600 sn profil + 120 sn sıra için 720 sn'den
+  büyük, hazırlık ve yazım payını da içeren bir sınır gerekir;
 - özgün ana makine ve şema iletilmelidir: `proxy_set_header Host $http_host;`,
   `proxy_set_header X-Forwarded-Host $http_host;`,
   `proxy_set_header X-Forwarded-Proto $scheme;`.

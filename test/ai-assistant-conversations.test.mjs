@@ -694,3 +694,51 @@ test('geçici SQL hatası konuşma tablolarını eksik göstermez; yalnızca eks
   await assert.rejects(checkAssistantConversationSchema());
   assert.equal(conversationSchemaState().ready, false);
 });
+
+test('yerelleştirilmiş eksik sütun hatası göç hatası olarak tanınır', async () => {
+  const { isMissingConversationSchema } = await import('../src/server/ai/assistant/conversationStore.js');
+  assert.equal(isMissingConversationSchema({ number: 207, message: "Geçersiz sütun adı 'OriginTurnId'." }), true);
+  assert.equal(isMissingConversationSchema({ number: 207, message: "Ungültiger Spaltenname 'ClientTurnId'." }), true);
+  assert.equal(isMissingConversationSchema({ number: 207, message: "Geçersiz sütun adı 'BaskaSutun'." }), false);
+});
+
+test('başarılı konuşma sorgusu eski şema gözlemini yeniler', async (t) => {
+  createAiStack(t);
+  const { conversationSchemaState } = await import('../src/server/ai/assistant/conversationStore.js');
+  globalThis[Symbol.for('mergen-rota.ai-conversation-schema')] = { ready: true, observedAt: '2020-01-01T00:00:00.000Z' };
+  assert.equal((await listAssistantConversations()).status, 200);
+  const observed = conversationSchemaState();
+  assert.equal(observed.ready, true);
+  assert.ok(Date.now() - Date.parse(observed.observedAt) < 1000);
+});
+
+for (const phase of ['begin', 'commit', 'rollback']) {
+  test(`yanıt yazımı ${phase} beklerken ikinci işlem açılmaz ve toplam süre aşılmaz`, { timeout: 3000 }, async (t) => {
+    const { db, provider } = createAiStack(t);
+    provider.enqueue({ type: 'deferred-stream' });
+    const response = await turnsRoute.POST(turnRequest({ conversationId: null, turnId: randomUUID(), message: 'Soru', mode: 'standard' }));
+    const reader = sseReader(response);
+    await reader.next();
+    await provider.waitForActive(1);
+    let release;
+    const blocked = new Promise((resolve) => { release = resolve; });
+    let entered = 0;
+    db[`${phase}Hook`] = async () => { entered += 1; await blocked; };
+    if (phase === 'rollback') db.aiConversationHooks = { beforeAppend() { throw Object.assign(new Error('Geçici'), { code: 'DATABASE_UNAVAILABLE' }); } };
+    const originalTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (callback, delay, ...args) => originalTimeout(callback, delay === 10000 ? 30 : delay === 20000 ? 70 : delay, ...args);
+    t.after(() => { globalThis.setTimeout = originalTimeout; release(); });
+    provider.calls[0].emit('Yanıt');
+    provider.calls[0].complete();
+    await until(() => entered === 1);
+    const result = await reader.rest();
+    assert.equal(result.at(-1).event, 'error');
+    assert.equal(result.at(-1).data.code, 'DATABASE_UNAVAILABLE');
+    assert.equal(entered, 1, 'önceki işlem tamamlanmadan yeniden denenmedi');
+    const { assistantConversationGateStatusForTests } = await import('../src/server/ai/assistant/assistantService.js');
+    // Kapı sürücü işi gerçekten bitene kadar tutulur.
+    assert.equal(assistantConversationGateStatusForTests().active, 1);
+    release();
+    await until(() => assistantConversationGateStatusForTests().active === 0);
+  });
+}

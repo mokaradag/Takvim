@@ -78,6 +78,7 @@ async function readyController(options = {}) {
   const controller = createAssistantController({
     api,
     createId,
+    reconciliationDelaysMs: options.reconciliationDelaysMs || [],
     schedule: (callback) => {
       flushes.push(callback);
       return () => { const index = flushes.indexOf(callback); if (index >= 0) flushes.splice(index, 1); };
@@ -1208,7 +1209,7 @@ test('sayfalama güncellenip başa taşınan konuşmayı atlamaz', async () => {
   };
   await controller.loadMore();
   // Baş sayfa yeniden okunur; eski sayfalar var olan imleçten sürer (tüm geçmiş yeniden oynatılmaz).
-  assert.deepEqual(cursors, [null, 'old']);
+  assert.deepEqual(cursors, [null, 'new', 'old']);
   assert.deepEqual(state().list.items.map((item) => item.id), [b.id, a.id]);
 });
 
@@ -1806,4 +1807,144 @@ test('kapalı ipucu Escape olayını tüketmez; açılmayı bekleyen ipucu tüke
   trigger().props.onKeyDown(again);
   assert.equal(again.defaultPrevented, false, 'kapatılan ipucu sonraki Escape’i tüketmez');
   view.unmount();
+});
+
+test('kabul beklenirken konuşma değişimi reddedilen metni kaybettirmez', async () => {
+  const { controller, api, state } = await readyController();
+  await controller.openConversation(CONVERSATION_A);
+  controller.send('Kaybolmamalı');
+  controller.setView('history');
+  assert.equal(controller.newConversation(), false);
+  assert.equal(await controller.openConversation(CONVERSATION_B), false);
+  api.turns[0].resolve({ ok: false, phase: 'request', code: 'CONFLICT', reason: 'CONVERSATION_FULL', retryable: false });
+  await drain();
+  assert.equal(state().active.id, CONVERSATION_A);
+  assert.equal(state().active.recoveredDraft.text, 'Kaybolmamalı');
+  assert.equal(controller.newConversation(), true);
+  controller.dispose();
+});
+
+test('uzlaştırma ilk olumsuz okumadan sonra geç kaydedilen yanıtı bulur', async () => {
+  const { controller, api, state } = await readyController({ reconciliationDelaysMs: [1, 1] });
+  controller.send('Soru');
+  const run = api.turns[0];
+  const data = acceptedData(CONVERSATION_A, run, 'Soru');
+  run.emit('accepted', data);
+  let reads = 0;
+  let release;
+  api.loadAssistantConversationRequest = async () => {
+    if (++reads === 1) return { ok: true, conversation: data.conversation, messages: [] };
+    return new Promise((resolve) => { release = () => resolve({ ok: true, conversation: data.conversation, messages: [
+      { id: createId(), role: 'assistant', sequence: 2, replyToId: data.userMessage.id, content: 'Geç kayıt' }
+    ] }); });
+  };
+  run.resolve({ ok: false, code: 'STREAM_INTERRUPTED', retryable: true });
+  await drain();
+  assert.equal(controller.canSend(), false);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(reads, 2);
+  assert.equal(controller.canSend(), false);
+  release();
+  await drain();
+  assert.equal(state().active.turns[0].answer.content, 'Geç kayıt');
+  assert.equal(state().active.turns[0].answer.status, 'complete');
+  assert.equal(controller.canSend(), true);
+  controller.dispose();
+});
+
+test('tam konuşma baştan gönderime kapanır ama yanıtsız son tur yinelenebilir', async () => {
+  const user = { id: createId(), turnId: createId(), role: 'user', content: 'Son soru', sequence: 99 };
+  const api = fakeApi({ loadAssistantConversationRequest: async (id) => ({ ok: true, conversation: { id, title: 'Dolu', messageCount: 99 }, messages: [user] }) });
+  const { controller, state } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  assert.equal(state().active.messageCount, 99);
+  assert.equal(controller.canSend(), false);
+  assert.equal(controller.send('Yeni').ok, false);
+  assert.equal(controller.retry(user.turnId).ok, true);
+  controller.dispose();
+});
+
+test('bir baş sayfasından fazla taşınan konuşmalar sayfalamada atlanmaz', async () => {
+  const boundary = { id: CONVERSATION_A, title: 'Sınır', updatedAt: '2026-09-26T10:00:00Z' };
+  const moved = Array.from({ length: 31 }, (_, i) => ({ id: createId(), title: `Taşınan ${i}`, updatedAt: '2026-09-27T10:00:00Z' }));
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [boundary], nextCursor: 'old' }) });
+  const { controller, state } = await readyController({ api });
+  api.listAssistantConversationsRequest = async ({ cursor }) => cursor == null
+    ? { ok: true, conversations: moved.slice(0, 30), nextCursor: 'bridge' }
+    : cursor === 'bridge' ? { ok: true, conversations: [...moved.slice(30), boundary], nextCursor: 'old' }
+      : { ok: true, conversations: [], nextCursor: null };
+  await controller.loadMore();
+  assert.equal(state().list.items.length, 32);
+  assert.ok(moved.every((item) => state().list.items.some((row) => row.id === item.id)));
+  controller.dispose();
+});
+
+test('birden fazla konuşmanın reddedilen iletileri ayrı tutulur', async () => {
+  const { controller, api } = await readyController();
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+  const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+  for (const id of [CONVERSATION_A, CONVERSATION_B]) {
+    await controller.openConversation(id); panel.render();
+    controller.send(`Ret ${id}`); panel.render();
+    composer().props.onChange(`Taslak ${id}`); panel.render();
+    api.turns.at(-1).resolve({ ok: false, phase: 'request', code: 'AI_CONFIGURATION_ERROR', retryable: false });
+    await drain(); panel.render();
+  }
+  await controller.openConversation(CONVERSATION_A); panel.render();
+  findElement(panel.output, (node) => node.type === 'button' && textOf(node).includes('İletiyi geri al')).props.onClick(); panel.render();
+  assert.equal(composer().props.value, `Ret ${CONVERSATION_A}\n\nTaslak ${CONVERSATION_A}`);
+  panel.unmount(); controller.dispose();
+});
+
+test('başlıktaki yeni konuşma eylemi yazılmış taslağı taşır', async () => {
+  const { controller } = await readyController();
+  await controller.openConversation(CONVERSATION_A);
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+  const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+  composer().props.onChange('Sonraki soru'); panel.render();
+  findElement(panel.output, (node) => node.props?.['aria-label'] === 'Yeni konuşma').props.onClick(); panel.render();
+  assert.equal(controller.getState().active.id, null);
+  assert.equal(composer().props.value, 'Sonraki soru');
+  panel.unmount(); controller.dispose();
+});
+
+test('uzlaştırma tamamlanınca daha önce başlamış tarihçe okuması yanıtı silemez', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const run = api.turns[0];
+  const data = acceptedData(CONVERSATION_A, run, 'Soru');
+  run.emit('accepted', data);
+  const user = { ...data.userMessage, role: 'user', sequence: 1 };
+  const answer = { id: createId(), role: 'assistant', sequence: 2, replyToId: user.id, content: 'Kaydedilen' };
+  let reconcile;
+  let stale;
+  let reads = 0;
+  api.loadAssistantConversationRequest = async () => {
+    reads += 1;
+    if (reads === 1) return new Promise((resolve) => { reconcile = () => resolve({ ok: true, conversation: data.conversation, messages: [user, answer] }); });
+    if (reads === 2) return new Promise((resolve) => { stale = () => resolve({ ok: true, conversation: data.conversation, messages: [user] }); });
+    return { ok: true, conversation: data.conversation, messages: [user, answer] };
+  };
+  run.resolve({ ok: false, code: 'STREAM_INTERRUPTED', retryable: true });
+  await drain();
+  const loading = controller.openConversation(CONVERSATION_A);
+  reconcile(); await drain();
+  stale(); await loading;
+  assert.equal(reads, 3);
+  assert.equal(state().active.turns[0].answer.content, 'Kaydedilen');
+  controller.dispose();
+});
+
+test('ilk turdan sonra konuşmaya geri dönmek taslak anahtarını değiştirmez', async () => {
+  const { controller, api, state } = await readyController();
+  const key = state().active.viewKey;
+  controller.send('İlk soru');
+  const run = api.turns[0];
+  run.emit('accepted', acceptedData(CONVERSATION_A, run, 'İlk soru'));
+  run.resolve(doneResult(CONVERSATION_A));
+  await drain();
+  await controller.openConversation(CONVERSATION_B);
+  await controller.openConversation(CONVERSATION_A);
+  assert.equal(state().active.viewKey, key);
+  controller.dispose();
 });

@@ -141,7 +141,7 @@ function stubFetch(t, handler) {
 }
 
 test('tur isteği yalnızca konuşma kimliği, tur kimliği, ileti ve kip taşır; olaylar sırayla bildirilir', async (t) => {
-  const calls = stubFetch(t, () => streamResponse([ACCEPTED, frame('status', { phase: 'generating' }), frame('delta', { text: 'Yanıt ' }), frame('delta', { text: 'metni' }), doneFor('Yanıt metni')]).response);
+  const calls = stubFetch(t, () => streamResponse([frame('accepted', { v: 1, conversation, userMessage, mode: 'deep' }), frame('status', { phase: 'generating' }), frame('delta', { text: 'Yanıt ' }), frame('delta', { text: 'metni' }), frame('done', { conversation, assistantMessage: { ...assistantMessage, mode: 'deep', length: 11 } })]).response);
   const seen = [];
   const result = await streamAssistantTurnRequest({ conversationId: CONVERSATION_ID, turnId: TURN_ID, message: 'Soru', mode: 'deep', onEvent: (event) => seen.push(event.type) });
   assert.equal(result.ok, true);
@@ -340,4 +340,19 @@ test('JSON uçları kimlik, rol bağı, zaman damgası ve kip sözleşmesini do�
   assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'tur kimliği olmayan kullanıcı iletisi');
   assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'bağı olmayan yanıt');
   assert.equal((await deleteAssistantConversationRequest(CONVERSATION_ID)).code, ASSISTANT_INVALID_RESPONSE, 'başka konuşmanın silinmesi');
+});
+
+test('istenen kipten farklı kabul olayı protokol hatasıdır', async (t) => {
+  stubFetch(t, () => streamResponse([ACCEPTED, frame('delta', { text: 'Yanıt' }), doneFor('Yanıt')]).response);
+  const result = await streamAssistantTurnRequest({ conversationId: CONVERSATION_ID, turnId: TURN_ID, message: 'Soru', mode: 'deep' });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'MODE_MISMATCH');
+});
+
+test('asistan protokolünde bozuk UTF-8 metin olarak kabul edilmez', async (t) => {
+  const bytes = Buffer.concat([Buffer.from(ACCEPTED + 'event: delta\ndata: {"text":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}\n\n' + doneFor('xx'))]);
+  stubFetch(t, () => new Response(bytes, { headers: STREAM_HEADERS }));
+  const result = await streamAssistantTurnRequest({ conversationId: CONVERSATION_ID, turnId: TURN_ID, message: 'Soru', mode: 'standard' });
+  assert.equal(result.code, 'PROTOCOL_ERROR');
+  assert.equal(result.reason, 'ENCODING_INVALID');
 });

@@ -125,7 +125,7 @@ async function readBoundedJson(response, maxBytes, signal) {
     throw new AiError(AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE, { details: { reason: 'RESPONSE_INTERRUPTED' } });
   }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
   } catch {
     throw invalidResponse('MALFORMED_JSON');
   }
@@ -219,7 +219,9 @@ function mediaType(response) {
  */
 function completionReasoning(payload) {
   const message = primaryChoice(payload.choices)?.message;
-  return [message?.reasoning_content, message?.reasoning].some((value) => typeof value === 'string' && value.length > 0);
+  const values = [message?.reasoning_content, message?.reasoning];
+  if (values.some((value) => value != null && typeof value !== 'string')) throw invalidResponse('STREAM_EVENT_MALFORMED');
+  return values.some((value) => typeof value === 'string' && value.length > 0);
 }
 
 /**
@@ -288,6 +290,13 @@ export function createOpenAiCompatibleProvider({
       const type = mediaType(response);
       if (type === 'application/json') {
         const payload = await readBoundedJson(response, maxResponseBytes, signal);
+        const choice = Array.isArray(payload?.choices) ? primaryChoice(payload.choices) : null;
+        if ((payload?.model != null && typeof payload.model !== 'string')
+          || (choice?.finish_reason != null && typeof choice.finish_reason !== 'string')
+          || (payload?.usage != null && (typeof payload.usage !== 'object' || Array.isArray(payload.usage)))
+          || ['prompt_tokens', 'completion_tokens', 'total_tokens'].some((key) => payload?.usage?.[key] != null && tokenCount(payload.usage[key]) == null)) {
+          throw invalidResponse('STREAM_EVENT_MALFORMED');
+        }
         const completion = parseChatCompletion(payload);
         return { events: completionAsStream(completion, streamLimits, { reasoning: completionReasoning(payload) }) };
       }

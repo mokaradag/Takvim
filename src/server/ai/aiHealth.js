@@ -265,10 +265,10 @@ async function verifySetup(config, deadline, models) {
   if (!routes.length) {
     return { code: 'ASSISTANT_PROFILE_UNAVAILABLE', message: 'Uca ulaşıldı ancak Rota AI sohbet profilleri kullanılamıyor.' };
   }
-  // Uç model listesini verdiyse Rota AI kiplerinden en az birinin modeli listede olmalıdır:
+  // Uç model listesini verdiyse kullanılabilir tüm Rota AI kiplerinin modeli listede olmalıdır:
   // yalnızca chat.fast modelini sunan uç "sağlıklı" görünüp her Rota AI turunda düşmez.
-  if (models && !routes.some((route) => models.includes(route.model))) {
-    const missing = [...new Set(routes.map((route) => route.model))].join(', ');
+  if (models && !routes.every((route) => models.includes(route.model))) {
+    const missing = [...new Set(routes.filter((route) => !models.includes(route.model)).map((route) => route.model))].join(', ');
     return {
       code: 'ASSISTANT_MODEL_MISSING',
       modelMissing: true,

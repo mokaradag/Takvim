@@ -455,3 +455,31 @@ test('içerik türü bildirmeyen başarılı yanıt akış sayılmaz; JSON yede�
   assert.equal(textOf(events), 'doğru seçenek');
   assert.equal(JSON.stringify(events).includes('gizli düşünce'), false);
 });
+
+test('JSON akış uyarlaması bozuk akıl yürütme ve üstveriyi reddeder', async () => {
+  const base = { model: 'm', choices: [{ message: { role: 'assistant', content: 'Yanıt' }, finish_reason: 'stop' }] };
+  const bad = [
+    { ...base, model: 5 },
+    { ...base, usage: [] },
+    ...['prompt_tokens', 'completion_tokens', 'total_tokens'].flatMap((key) => [-1, 1.5, '2'].map((value) => ({ ...base, usage: { [key]: value } }))),
+    { ...base, choices: [{ ...base.choices[0], finish_reason: 3 }] },
+    ...['reasoning', 'reasoning_content'].map((key) => ({ ...base, choices: [{ ...base.choices[0], message: { ...base.choices[0].message, [key]: {} } }] }))
+  ];
+  for (const payload of bad) {
+    const provider = createOpenAiCompatibleProvider({ fetchImpl: async () => Response.json(payload) });
+    await assert.rejects(provider.streamChatCompletion({ baseUrl: 'http://local', model: 'm', messages: MESSAGES }), (error) => error.details.reason === 'STREAM_EVENT_MALFORMED');
+  }
+});
+
+test('JSON akış uyarlaması bozuk UTF-8 dizisini reddeder', async () => {
+  const bytes = Buffer.concat([Buffer.from('{"choices":[{"message":{"role":"assistant","content":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}}]}')]);
+  const provider = createOpenAiCompatibleProvider({ fetchImpl: async () => new Response(bytes, { headers: { 'content-type': 'application/json' } }) });
+  await assert.rejects(provider.streamChatCompletion({ baseUrl: 'http://local', model: 'm', messages: MESSAGES }), (error) => error.details.reason === 'MALFORMED_JSON');
+});
+
+test('bitiş nedeninden sonra akıl yürütme çıktısı kabul edilmez', async () => {
+  for (const key of ['reasoning', 'reasoning_content']) {
+    const body = bodyFrom([delta('Yanıt'), finish(), sse({ choices: [{ delta: { [key]: 'geç çıktı' } }] }), 'data: [DONE]\n\n']);
+    await assert.rejects(collect(readChatCompletionStream(body.stream)), (error) => error.details.reason === 'CONTENT_AFTER_FINISH');
+  }
+});

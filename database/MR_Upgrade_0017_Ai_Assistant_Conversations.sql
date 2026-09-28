@@ -381,6 +381,29 @@ BEGIN TRY
     )
         THROW 51017, N'0017: Konuşma tablolarının varsayılan değerleri eksik ya da beklenen tanımda değil.', 1;
 
+    -- Önceden oluşturulmuş tablolarda kayıtların ilişkileri de doğrulanır.
+    IF EXISTS (
+        SELECT 1 FROM dbo.MR_AiConversations c
+        WHERE c.MessageCount <> (SELECT COUNT_BIG(*) FROM dbo.MR_AiConversationMessages m WHERE m.ConversationId = c.ConversationId)
+    )
+        THROW 51017, N'0017: Konuşma ileti sayacı kayıtlarla tutarsız.', 1;
+
+    IF EXISTS (
+        SELECT 1 FROM dbo.MR_AiConversations c
+        CROSS APPLY (SELECT TOP (1) m.ClientTurnId FROM dbo.MR_AiConversationMessages m
+            WHERE m.ConversationId = c.ConversationId AND m.Role = N'user' ORDER BY m.Sequence) firstTurn
+        WHERE c.OriginTurnId <> firstTurn.ClientTurnId
+    )
+        THROW 51017, N'0017: Konuşmanın başlangıç turu ilk kullanıcı iletisiyle tutarsız.', 1;
+
+    IF EXISTS (
+        SELECT 1 FROM dbo.MR_AiConversationMessages a
+        LEFT JOIN dbo.MR_AiConversationMessages u ON u.MessageId = a.ReplyToMessageId
+            AND u.ConversationId = a.ConversationId AND u.Role = N'user'
+        WHERE a.Role = N'assistant' AND u.MessageId IS NULL
+    )
+        THROW 51017, N'0017: Yanıt aynı konuşmadaki bir kullanıcı iletisine bağlı değil.', 1;
+
     DROP TABLE #MR_AiConversations_Expected;
     DROP TABLE #MR_AiConversationMessages_Expected;
     DROP TABLE #MR_AiConversationMessages_Shape;

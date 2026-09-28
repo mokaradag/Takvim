@@ -18,7 +18,7 @@ import { getTrustedCurrentSicil } from '../../identity/currentUserProvider.js';
 import { boundedExecutor } from '../../observability/boundedExecution.js';
 import { readAiConfig, requireAiAvailable } from '../aiConfig.js';
 import { assertAiDirectoryMember, loadAiCredentialStatus } from '../aiCredentialService.js';
-import { AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS, createAiDeadline, raceWithAbort } from '../aiDeadline.js';
+import { abortableDelay, AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS, createAiDeadline, raceWithAbort } from '../aiDeadline.js';
 import { AiError } from '../aiErrors.js';
 import { getAiGateway } from '../aiRuntime.js';
 import { createAiSqlGate } from '../aiSqlGate.js';
@@ -157,18 +157,24 @@ function verifyDirectoryMember(sicil, signal) {
  * Konuşma SQL işi: havuz kapıya girmeden (yer tutmadan) alınır, iş kapıdan ve
  * süre sınırıyla geçer; yer, sürücüdeki sorgu GERÇEKTEN bitene kadar tutulur.
  */
-function withConversationSql(sicil, signal, work) {
-  return withinDeadline(AI_CONVERSATION_SQL_TIMEOUT_MS, signal, async (scoped) => {
-    const pool = await getSqlPool();
-    try {
-      return await conversationGate.run(sicil, scoped, (track) => work({ pool, track, signal: scoped }));
-    } catch (error) {
-      if (isMissingConversationSchema(error)) {
-        noteConversationSchema(false);
-        throw conversationSchemaMissing();
+function withConversationSql(sicil, signal, work, { trackLifecycle = null } = {}) {
+  return withinDeadline(AI_CONVERSATION_SQL_TIMEOUT_MS, signal, (scoped) => {
+    const lifecycle = (async () => {
+      const pool = await getSqlPool();
+      try {
+        const result = await conversationGate.run(sicil, scoped, (track) => work({ pool, track, signal: scoped }));
+        noteConversationSchema(true);
+        return result;
+      } catch (error) {
+        if (isMissingConversationSchema(error)) {
+          noteConversationSchema(false);
+          throw conversationSchemaMissing();
+        }
+        throw error;
       }
-      throw error;
-    }
+    })();
+    trackLifecycle?.(lifecycle);
+    return lifecycle;
   }, conversationTimeout);
 }
 
@@ -505,38 +511,28 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
     onText
   });
   const messageId = randomUUID();
-  const persist = (launched) => withConversationSql(turn.sicil, null, (scope) => inTransaction({
-    ...scope,
-    track: (query) => {
-      launched.push(query);
-      scope.track(query);
+  const stored = await withinDeadline(ANSWER_PERSIST_BUDGET_MS, null, async (budgetSignal) => {
+    for (let attempt = 1; ; attempt += 1) {
+      let lifecycle;
+      try {
+        return await withConversationSql(turn.sicil, budgetSignal, (scope) => inTransaction(scope,
+          (executor) => appendConversationAnswer(executor, turn.sicil, {
+            conversationId: turn.conversation.id,
+            messageId,
+            replyToMessageId: turn.userMessage.id,
+            content: result.text,
+            mode: turn.mode,
+            finishReason: result.finishReason
+          })), { trackLifecycle: (pending) => { lifecycle = pending; } });
+      } catch (error) {
+        const transient = error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';
+        if (!transient || attempt >= 3) throw error;
+        // BEGIN, COMMIT ve ROLLBACK dahil önceki iş tamamen bitmeden yinelenmez.
+        await raceWithAbort(() => Promise.allSettled([lifecycle]), budgetSignal);
+        await abortableDelay(250 * attempt, budgetSignal);
+      }
     }
-  }, (executor) => appendConversationAnswer(executor, turn.sicil, {
-    conversationId: turn.conversation.id,
-    messageId,
-    replyToMessageId: turn.userMessage.id,
-    content: result.text,
-    mode: turn.mode,
-    finishReason: result.finishReason
-  })));
-  // Yinelemeler TEK kalıcılık bütçesini paylaşır ve süresi dolan bir denemenin
-  // sürücüde hâlâ çalışan sorgusuyla örtüşmez (aynı yanıt iki kapı yeri tutmaz).
-  const persistStartedAt = Date.now();
-  let stored;
-  for (let attempt = 1; ; attempt += 1) {
-    const launched = [];
-    try {
-      stored = await persist(launched);
-      break;
-    } catch (error) {
-      const transient = error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';
-      if (!transient || attempt >= 3) throw error;
-      await Promise.allSettled(launched);
-      const delayMs = 250 * attempt;
-      if (Date.now() - persistStartedAt + delayMs >= ANSWER_PERSIST_BUDGET_MS) throw error;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
+  }, conversationTimeout);
   if (!stored.knownSicil) throw unknownSicil();
   if (!stored.persisted || !stored.message) {
     throw conversationNotFound('ANSWER_NOT_PERSISTED');

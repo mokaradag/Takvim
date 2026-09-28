@@ -766,8 +766,13 @@ test('uç yalnızca chat.fast modelini listeliyorsa Rota AI kip modelleri eksik 
   assert.equal(missing.result.code, 'ASSISTANT_MODEL_MISSING');
   assert.match(missing.result.message, /genel-model, derin-model/);
   assert.equal((await overviewAi()).ai.state === HEALTH_STATES.HEALTHY, false);
-  // Kiplerden birinin modeli listedeyse Rota AI kullanılabilir.
+  // Tek kullanılabilir kip, diğer kipin eksik modelini gizlemez.
   provider.enqueue({ type: 'reply', models: ['hizli-model', 'derin-model'] });
+  const partial = (await (await postIntegration('ai-provider')).json()).result;
+  assert.equal(partial.ok, false);
+  assert.equal(partial.code, 'ASSISTANT_MODEL_MISSING');
+  assert.match(partial.message, /genel-model/);
+  provider.enqueue({ type: 'reply', models: ['hizli-model', 'genel-model', 'derin-model'] });
   assert.equal((await (await postIntegration('ai-provider')).json()).result.ok, true);
 });
 

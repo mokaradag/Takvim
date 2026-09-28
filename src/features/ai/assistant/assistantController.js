@@ -159,7 +159,8 @@ export function createAssistantController({
   api = assistantApi,
   createId = createUuidV4,
   schedule = defaultSchedule,
-  flushIntervalMs = ASSISTANT_FLUSH_INTERVAL_MS
+  flushIntervalMs = ASSISTANT_FLUSH_INTERVAL_MS,
+  reconciliationDelaysMs = [250, 500, 1000, 2000, 4000, 8000, 10000]
 } = {}) {
   let state = initialState();
   const listeners = new Set();
@@ -175,6 +176,7 @@ export function createAssistantController({
   let listLoad = null;
   const loads = new Set();
   const completedVersions = new Map();
+  const viewKeys = new Map();
   const listMutations = new Map();
   let mutationVersion = 0;
 
@@ -222,6 +224,7 @@ export function createAssistantController({
     if (current.active?.key !== run.key) return current.active;
     return {
       ...current.active,
+      messageCount: run.messageCount ?? current.active.messageCount,
       turns: current.active.turns.map((turn) => (turn.key === run.turnKey && turn.answer?.status !== 'complete' ? recipe(turn) : turn))
     };
   }
@@ -267,6 +270,7 @@ export function createAssistantController({
     const from = run.key;
     run.key = conversation.id;
     run.conversationId = conversation.id;
+    viewKeys.set(conversation.id, run.viewKey);
     update((current) => {
       const running = setRunning(current, from, null);
       running[conversation.id] = { ...current.running[from], token: run.token };
@@ -282,6 +286,7 @@ export function createAssistantController({
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
       run.accepted = true;
+      run.messageCount = conversation.messageCount;
       run.userMessageId = userMessage.id;
       run.contextTrimmed = Boolean(context?.trimmed);
       if (run.key !== conversation.id) rekey(run, conversation);
@@ -318,6 +323,7 @@ export function createAssistantController({
     if (run.stopping && !result.ok) result = { ok: false, code: 'REQUEST_CANCELLED', cancelled: true };
     if (result.ok) {
       const { assistantMessage, conversation } = result.done;
+      run.messageCount = conversation.messageCount;
       update((current) => ({
         ...current,
         running: setRunning(current, run.key, null),
@@ -410,7 +416,18 @@ export function createAssistantController({
     const load = trackLoad();
     let result = null;
     try {
-      result = await api.loadAssistantConversationRequest(run.conversationId, { signal: load.signal });
+      for (let attempt = 0; ; attempt += 1) {
+        result = await api.loadAssistantConversationRequest(run.conversationId, { signal: load.signal });
+        if (ownSession !== session || load.signal.aborted) break;
+        const found = result?.ok && result.messages.some((message) => message.role === 'assistant' && message.replyToId === run.userMessageId);
+        if (found || result?.code === 'NOT_FOUND' || isSessionFailure(result || {}) || attempt >= reconciliationDelaysMs.length) break;
+        await new Promise((resolve) => {
+          const finish = () => { clearTimeout(timer); load.signal.removeEventListener('abort', finish); resolve(); };
+          const timer = setTimeout(finish, reconciliationDelaysMs[attempt]);
+          load.signal.addEventListener('abort', finish, { once: true });
+        });
+        if (load.signal.aborted) break;
+      }
     } catch {
       result = null;
     }
@@ -419,17 +436,21 @@ export function createAssistantController({
     const answer = result?.ok
       ? result.messages.find((message) => message.role === 'assistant' && message.replyToId === run.userMessageId)
       : null;
+    if (answer) completedVersions.set(key, (completedVersions.get(key) || 0) + 1);
     update((current) => {
       if (current.reconciling[key] !== run.token) return current;
       const reconciling = { ...current.reconciling };
       delete reconciling[key];
-      if (!answer || current.active?.key !== key) return { ...current, reconciling };
+      if (!answer) return { ...current, reconciling };
+      const list = result.conversation ? withListConversation(current.list, result.conversation) : current.list;
+      if (current.active?.key !== key) return { ...current, reconciling, list };
       return {
         ...current,
         reconciling,
-        list: result.conversation ? withListConversation(current.list, result.conversation) : current.list,
+        list,
         active: {
           ...current.active,
+          messageCount: result.conversation?.messageCount ?? current.active.messageCount,
           turns: current.active.turns.map((turn) => (turn.key === run.turnKey && turn.answer?.status !== 'complete' ? {
             ...turn,
             answer: {
@@ -456,6 +477,7 @@ export function createAssistantController({
       token: runCounter,
       session,
       key: active.key,
+      viewKey: active.viewKey || active.key,
       conversationId: active.id,
       turnId,
       turnKey: turnId,
@@ -505,8 +527,9 @@ export function createAssistantController({
 
   /* ── Dışa açık işlemler ─────────────────────────────────────── */
 
-  function canSend() {
+  function canSend({ retry = false } = {}) {
     return state.status === 'ready' && !state.refreshing && Boolean(state.readiness?.available)
+      && (retry || (state.active.messageCount || 0) <= (state.readiness?.limits?.maxConversationMessages || ASSISTANT_LIMITS.maxConversationMessages) - 2)
       && !state.active.loading && !state.active.failure && !state.active.closed && !state.running[state.active.key]
       && !state.reconciling[state.active.key] && !state.deleting[state.active.id];
   }
@@ -525,7 +548,7 @@ export function createAssistantController({
 
   /** Yanıtı tamamlanmamış SON turu aynı tur kimliği ve içerikle yeniden dener; ikinci kullanıcı iletisi oluşmaz. */
   function retry(turnKey) {
-    if (!canSend() || retryableTurnKey(state.active.turns) !== turnKey) return { ok: false };
+    if (!canSend({ retry: true }) || retryableTurnKey(state.active.turns) !== turnKey) return { ok: false };
     const turn = state.active.turns.find((item) => item.key === turnKey);
     if (turn.answer?.error?.retryAt > Date.now()) return { ok: false };
     startRun({ content: turn.user.content, turnId: turn.turnId });
@@ -574,9 +597,15 @@ export function createAssistantController({
     viewLoad = null;
   }
 
+  function awaitingAcceptance() {
+    return [...runs.values()].some((run) => run.key === state.active.key && !run.accepted);
+  }
+
   function newConversation() {
+    if (awaitingAcceptance()) return false;
     cancelViewLoad();
     update((current) => ({ ...current, view: 'chat', active: draft() }));
+    return true;
   }
 
   /** Süren üretimin metnini yeniden açılan konuşmanın turuna bağlar. */
@@ -594,10 +623,11 @@ export function createAssistantController({
   }
 
   async function openConversation(conversationId) {
+    if (awaitingAcceptance()) return false;
     cancelViewLoad();
     const token = viewToken;
     const ownSession = session;
-    const viewKey = state.active.id === conversationId ? state.active.viewKey : conversationId;
+    const viewKey = viewKeys.get(conversationId) || conversationId;
     const known = state.list.items.find((item) => item.id === conversationId);
     update((current) => ({
       ...current,
@@ -636,6 +666,7 @@ export function createAssistantController({
         viewKey,
         id: conversationId,
         title: result.conversation.title,
+        messageCount: result.conversation.messageCount,
         loading: false,
         failure: null,
         turns: attachLiveRun(conversationId, turnsFromMessages(result.messages))
@@ -644,8 +675,8 @@ export function createAssistantController({
   }
 
   /**
-   * Konuşma listesi. Yenileme ilk sayfayı okur. "Daha eski" SABİT sayıda istekle
-   * çalışır: güncellenip başa taşınan konuşmalar için baş sayfa yeniden okunur,
+   * Konuşma listesi. Yenileme ilk sayfayı okur. "Daha eski" önce kayıtlı
+   * sınıra kadar tüm yeni baş sayfalarını okuyarak taşınan konuşmaları toplar;
    * eski sayfalar ise var olan anahtar kümesi imlecinden sürdürülür (imleç
    * (UpdatedAt, ConversationId) çiftidir; başa taşınan konuşma atlanmaz).
    * Yerini yeni bir okuma alan eski okuma kesilir.
@@ -656,6 +687,7 @@ export function createAssistantController({
     const token = listToken;
     const ownSession = session;
     const cursor = more ? state.list.nextCursor : null;
+    const boundary = more ? state.list.boundary : null;
     const startedVersion = mutationVersion;
     listLoad?.abort();
     update((current) => ({ ...current, list: { ...current.list, loading: !more, loadingMore: more, error: null } }));
@@ -663,13 +695,28 @@ export function createAssistantController({
     listLoad = load;
     const current = () => token === listToken && ownSession === session;
     const head = await api.listAssistantConversationsRequest({ cursor: null, signal: load.signal });
-    const older = more && head.ok && current()
+    const refreshed = [...(head.conversations || [])];
+    let page = head;
+    const visited = new Set();
+    const beforeBoundary = (item) => boundary && (compareText(item.updatedAt || '', boundary.updatedAt || '')
+      || compareText(guidSortKey(item.id), guidSortKey(boundary.id))) <= 0;
+    while (more && boundary && page.ok && page.nextCursor && current()
+      && !page.conversations.some(beforeBoundary)) {
+      if (visited.has(page.nextCursor) || visited.size >= 100) {
+        page = { ok: false, code: 'INVALID_RESPONSE' };
+        break;
+      }
+      visited.add(page.nextCursor);
+      page = await api.listAssistantConversationsRequest({ cursor: page.nextCursor, signal: load.signal });
+      refreshed.push(...(page.conversations || []));
+    }
+    const older = more && head.ok && page.ok && current()
       ? await api.listAssistantConversationsRequest({ cursor, signal: load.signal })
       : null;
     load.done();
     if (listLoad === load) listLoad = null;
     if (!current()) return;
-    const failed = !head.ok ? head : older && !older.ok ? older : null;
+    const failed = !head.ok ? head : !page.ok ? page : older && !older.ok ? older : null;
     if (failed) {
       update((state_) => ({ ...state_, status: isSessionFailure(failed) ? 'error' : state_.status, failure: isSessionFailure(failed) ? assistantFailureView(failed) : state_.failure, list: { ...state_.list, loading: false, loadingMore: false, error: assistantFailureView(failed) } }));
       return;
@@ -684,7 +731,7 @@ export function createAssistantController({
         seen.add(item.id);
         merged.push(item);
       };
-      head.conversations.forEach(add);
+      refreshed.forEach(add);
       if (more) {
         older.conversations.forEach(add);
         state_.list.items.forEach(add);
@@ -694,6 +741,7 @@ export function createAssistantController({
         list: {
           items: sortConversations(merged),
           nextCursor: more ? older.nextCursor : head.nextCursor,
+          boundary: (more ? older : head).conversations.at(-1) || state_.list.boundary,
           loaded: true,
           loading: false,
           loadingMore: false,
@@ -750,7 +798,7 @@ export function createAssistantController({
   }
 
   async function deleteConversation(conversationId) {
-    if (state.deleting[conversationId]) return { ok: false };
+    if (state.deleting[conversationId] || (state.active.id === conversationId && awaitingAcceptance())) return { ok: false };
     const ownSession = session;
     update((current) => ({ ...current, deleting: { ...current.deleting, [conversationId]: true }, list: { ...current.list, error: null } }));
     const load = trackLoad();
@@ -804,6 +852,7 @@ export function createAssistantController({
     }
     runs.clear();
     completedVersions.clear();
+    viewKeys.clear();
     listMutations.clear();
     for (const controller of loads) controller.abort();
     loads.clear();

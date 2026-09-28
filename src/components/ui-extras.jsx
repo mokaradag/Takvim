@@ -5,6 +5,7 @@
    ============================================================ */
 import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx } from 'react';
 import ReactDOM from 'react-dom';
+import { modalTrapDepth } from '../hooks/useModalFocusTrap.js';
 import { DateInput } from './DateInput';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
@@ -727,11 +728,12 @@ export function HoverListCard({
   // Sabitlenmiş kart dışarı tıklamayla ve Esc ile kapanır.
   useEx(() => {
     if (!pinned) return undefined;
+    const depth = modalTrapDepth();
     const onPointerDown = (event) => {
       if (wrapRef.current?.contains(event.target) || cardRef.current?.contains(event.target)) return;
       closeNow();
     };
-    const onKey = (event) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); closeNow(); } };
+    const onKey = (event) => { if (event.key === 'Escape' && !event.defaultPrevented && modalTrapDepth() <= depth) { event.preventDefault(); closeNow(); } };
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKey);
     return () => {

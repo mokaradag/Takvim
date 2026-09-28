@@ -69,6 +69,7 @@ export function PersonDetailDialog({ member, onClose, onOpenTask }) {
   // tek başına odağı hapsetmez: sekmeyle ilerleyen kullanıcı pencere açıkken
   // arkadaki TeamView denetimlerine geçebiliyordu.
   useEffect(() => {
+    if (!personId) return undefined;
     // Sonradan açılan kipli pencere (ör. komut paleti) Esc ve Tab'ın sahibidir.
     const depth = modalTrapDepth();
     const onKey = (event) => {
@@ -103,7 +104,7 @@ export function PersonDetailDialog({ member, onClose, onOpenTask }) {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, []);
+  }, [personId]);
 
   const person = member?.person || null;
   const openTasks = useMemo(

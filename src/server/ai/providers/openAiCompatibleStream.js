@@ -192,7 +192,7 @@ function interpretChunk(payload, state) {
   if (choice.finish_reason != null && typeof choice.finish_reason !== 'string') throw invalid('STREAM_EVENT_MALFORMED');
   const reasoning = [reasoningPresent(delta?.reasoning_content), reasoningPresent(delta?.reasoning)].some(Boolean);
   // Bitiş nedeni bildirildikten sonra gelen yanıt metni kabul edilmez (yalnızca kullanım gibi kuyruk olayları).
-  if (state.finishReason && delta?.content) throw invalid('CONTENT_AFTER_FINISH');
+  if (state.finishReason && (delta?.content || reasoning)) throw invalid('CONTENT_AFTER_FINISH');
   if (choice.finish_reason) state.finishReason = choice.finish_reason.slice(0, 40);
   return { content: delta?.content ?? null, reasoning };
 }

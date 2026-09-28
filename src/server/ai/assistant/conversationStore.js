@@ -33,7 +33,7 @@ function missingConversationTable(entry) {
 
 function missingConversationColumn(entry) {
   if (Number(entry.number) !== MISSING_COLUMN_NUMBER && !/Invalid column name/i.test(String(entry.message || ''))) return false;
-  const match = /Invalid column name '([^']+)'/i.exec(String(entry.message || ''));
+  const match = /['"‘’]([^'"‘’]+)['"‘’]/.exec(String(entry.message || ''));
   return match != null && CONVERSATION_COLUMN_NAMES.has(match[1]);
 }
 

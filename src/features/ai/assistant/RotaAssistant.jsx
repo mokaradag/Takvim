@@ -14,7 +14,7 @@ import { AssistantConversationList } from './AssistantConversationList.jsx';
 import { AssistantThread, FAILURE_ACTION_LABELS } from './AssistantThread.jsx';
 import { createAssistantController, retryableTurnKey } from './assistantController.js';
 import { ASSISTANT_SHEET_QUERY } from './assistantInteraction.js';
-import { DEMO_NOTICE, readinessNotice } from './assistantPresentation.js';
+import { assistantFailureView, DEMO_NOTICE, readinessNotice } from './assistantPresentation.js';
 
 /**
  * Rota AI — uygulama kabuğundaki genel yardımcı.
@@ -215,27 +215,30 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const headingRef = useRef(null);
   const inputRef = useRef(null);
   const draftKey = state.active.viewKey || state.active.key;
-  const [draftState, setDraftState] = useState({ key: draftKey, text: '' });
-  const draft = draftState.key === draftKey ? draftState.text : '';
-  if (draftState.key !== draftKey) setDraftState({ key: draftKey, text: '' });
+  const [drafts, setDrafts] = useState({});
+  const draft = drafts[draftKey] || '';
+  const setDraftState = ({ key, text }) => setDrafts((current) => ({ ...current, [key]: text }));
   const setDraft = (text) => setDraftState({ key: draftKey, text });
   const recoveredDraft = state.active.recoveredDraft;
   const draftTextRef = useRef(draft);
   draftTextRef.current = draft;
   // Yazma alanında yeni bir taslak varken reddedilen ileti kaybolmaz: geri alınabilir bildirim olarak tutulur.
-  const [heldDraft, setHeldDraft] = useState(null);
+  const [heldDrafts, setHeldDrafts] = useState({});
+  const setHeldDraft = (value) => setHeldDrafts((current) => ({ ...current, [draftKey]: value }));
+  const recoveredTokens = useRef(new Set());
   useEffect(() => {
-    if (!recoveredDraft) return;
+    if (!recoveredDraft || recoveredTokens.current.has(recoveredDraft.token)) return;
+    recoveredTokens.current.add(recoveredDraft.token);
     const current = draftTextRef.current;
     if (!current || current === recoveredDraft.text) setDraftState({ key: draftKey, text: recoveredDraft.text });
-    else setHeldDraft({ key: draftKey, token: recoveredDraft.token, text: recoveredDraft.text });
+    else setHeldDrafts((currentHeld) => ({ ...currentHeld, [draftKey]: { key: draftKey, token: recoveredDraft.token, text: [currentHeld[draftKey]?.text, recoveredDraft.text].filter(Boolean).join('\n\n') } }));
   }, [draftKey, recoveredDraft]);
-  const held = heldDraft?.key === draftKey ? heldDraft : null;
+  const held = heldDrafts[draftKey] || null;
   const restoreFocusEnabledRef = useRef(true);
   if (open) restoreFocusEnabledRef.current = sheet;
   const focusTargetRef = useMemo(() => ({
     get current() {
-      return inputRef.current || headingRef.current;
+      return inputRef.current && !inputRef.current.disabled ? inputRef.current : headingRef.current;
     }
   }), []);
 
@@ -255,7 +258,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       return;
     }
     focusTargetRef.current?.focus?.();
-    if ((composerAvailable && inputRef.current) || state.status === 'error' || (state.status === 'ready' && !state.readiness?.available) || !actual) pendingFocusRef.current = false;
+    if ((composerAvailable && focusTargetRef.current) || state.status === 'error' || (state.status === 'ready' && !state.readiness?.available) || !actual) pendingFocusRef.current = false;
   }, [open, focusRequest, focusTargetRef, composerAvailable, state.status, state.readiness, actual, launcherRef]);
 
   useEffect(() => {
@@ -282,6 +285,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const canCompose = available && !historyView && !active.failure;
   const retryKey = available && !generating && !active.loading && !active.closed && !state.reconciling[active.key]
     && !state.deleting[active.id] ? retryableTurnKey(active.turns) : null;
+  const capacityFull = (active.messageCount || 0) > (readiness?.limits?.maxConversationMessages || controller.limits.maxConversationMessages) - 2;
+  const capacityNotice = capacityFull ? assistantFailureView({ code: 'CONFLICT', reason: 'CONVERSATION_FULL' }) : null;
   const title = historyView ? 'Geçmiş konuşmalar' : (active.id ? active.title : ASSISTANT_DEFAULT_TITLE);
   const announcement = state.announcement ? `${state.announcement.text}${state.announcement.id % 2 ? '\u200b' : ''}` : '';
 
@@ -294,8 +299,9 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       onOpenSettings?.();
     } else if (action === 'new-conversation') {
       // Kapanan (dolan ya da silinen) konuşmada yazılmış taslak yeni konuşmaya taşınır.
-      const carried = state.active.closed ? draft : '';
-      controller.newConversation();
+      const carried = [held?.text, draft].filter(Boolean).join('\n\n');
+      if (controller.newConversation() === false) return;
+      setHeldDraft(null);
       if (carried) {
         const next = controller.getState().active;
         setDraftState({ key: next.viewKey || next.key, text: carried });
@@ -312,7 +318,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
     return result;
   };
 
-  const recent = ready && (list.items.length > 0 || list.error || list.loading) && !active.turns.length ? (
+  const recent = ready && !active.turns.length ? (
     <div className="rota-assistant-recent">
       <div className="rota-assistant-recent-head">
         <h4>Son konuşmalar</h4>
@@ -447,10 +453,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
               className="icon-btn"
               aria-label="Yeni konuşma"
               title="Yeni konuşma"
-              onClick={() => {
-                controller.newConversation();
-                focusInput();
-              }}
+              onClick={() => runAction('new-conversation')}
             >
               <Icons.MessagePlus size={15} aria-hidden="true" />
             </button>
@@ -461,7 +464,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         </div>
       </header>
       <div className="rota-assistant-body">
-        {active.notice && <Notice notice={active.notice} onAction={runAction} />}
+        {(active.notice || capacityNotice) && <Notice notice={active.notice || capacityNotice} onAction={runAction} />}
         {held && (
           <Notice notice={HELD_DRAFT_NOTICE} onAction={runAction}>
             <button
@@ -490,7 +493,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             focusInput();
           }}
           generating={generating}
-          disabled={!canCompose || state.refreshing || active.loading || Boolean(active.closed)
+          disabled={!canCompose || capacityFull || state.refreshing || active.loading || Boolean(active.closed)
             || Boolean(state.reconciling[active.key]) || Boolean(state.deleting[active.id])}
           mode={state.mode}
           modes={readiness?.modes || []}

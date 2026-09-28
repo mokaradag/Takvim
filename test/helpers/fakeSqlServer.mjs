@@ -2425,6 +2425,7 @@ export function createFakeSqlServerDriver(db) {
     }
 
     async begin(isolationLevel) {
+      await db.beginHook?.(this);
       this.began = true;
       this.savedTables = deserialize(serialize(Object.fromEntries(Object.entries(db)
         .filter(([key, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(key)))));
@@ -2444,6 +2445,7 @@ export function createFakeSqlServerDriver(db) {
       this.releaseLocks();
     }
     async rollback() {
+      await db.rollbackHook?.(this);
       this.rolledBack = true;
       if (this.transactionRecord) this.transactionRecord.rollbackStatementIndex = db.statements.length;
       this.releaseLocks();
