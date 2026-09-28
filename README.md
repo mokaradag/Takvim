@@ -284,6 +284,16 @@ Yapay zekâ özellikleri varsayılan olarak kapalıdır (`MERGEN_ROTA_AI_ENABLED
 
 Kişisel anahtarlar Sicil'e bağlı olarak AES-256-GCM ile şifrelenir (`MR_AiUserCredentials`, göç `0016`) ve kaydedildikten sonra bir daha gösterilmez. İstekler sınırlı eşzamanlılık, sıra, süre sınırı ve iptal altında yürür; yavaş ya da yanıt vermeyen bir yapay zekâ ucu olağan görev akışını, anlık görüntüyü ve kaydı bekletmez. Sistem Yönetimi'nde **Yapay zekâ hizmeti** sağlık bileşeni ve **Yapay zekâ sağlayıcısı** entegrasyon kartı bulunur. Güncel kurum içi model kataloğunun sürümlenen referansı `config/ai-model-registry.onprem.json` dosyasındadır; üretimde `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` bunun sunucuya dağıtılmış mutlak yolunu gösterir. Ayrıntılar, ortam değişkenleri, model profilleri, dağıtım sırası ve elle kabul listesi: `docs/AI-PLATFORM.md`.
 
+**Aşama 1 gerçek ortam kabulü (28.09.2026):** Windows/SQL Server/Keycloak ve
+gerçek kurum içi model zincirinde kişisel/kurumsal anahtar akışları, Sicil
+yalıtımı, şifreli saklama, reddedilen kişisel anahtarda kurumsal anahtara
+düşmeme, model kaydı, gizli değer sızıntısı ve 20 saniyelik sağlayıcı
+gecikmesinde Rota çalışma yolu yalıtımı doğrulandı. TEST sırasında durum
+değiştiren AI uçlarında görülen aynı-kaynak 403'ünün nedeni ters vekilin özgün
+ana makine/şema bilgisini iletmemesiydi; `Host`, `X-Forwarded-Host` ve
+`X-Forwarded-Proto` iletimi düzeltilince uçtan uca sınama geçti. Ayrıntılar:
+`docs/AI-PLATFORM.md` §15 ve `docs/NGINX-ROTA-PREFIX.md`.
+
 ### Rota AI (Aşama 2)
 
 Üst çubuktaki **Rota AI** düğmesi (ya da Ctrl K → *Rota AI'ye sor*) uygulamanın her yerinden açılan yardımcı paneli getirir. Yanıtlar kurum içi modelden sunucu üzerinden tarayıcıya **akarak** gelir; **Durdur**, yeniden deneme, *Standart* ve *Derin düşünme* kipleri, kopyalama ve güvenli biçimli (Markdown) yanıt desteklenir. Konuşmalar Sicil'e aittir ve kalıcıdır (`MR_AiConversations`, `MR_AiConversationMessages`, göç `0017`); başka bir kullanıcı ne listeleyebilir ne açabilir. Rota AI bu aşamada Rota verisine erişmez ve işlem yapmaz; Demo Kipinde istek göndermez. Her istek Aşama 1'in aynı ağ geçidi, anahtar, kapasite ve süre sınırı kurallarıyla yürür. Ters vekilde akışın ara belleğe alınmaması ve özgün ana makine/şemanın iletilmesi gerekir (`docs/NGINX-ROTA-PREFIX.md`). Mimari, akış protokolü, kalıcılık, iptal ve yeniden deneme kuralları ile elle kabul listesi: `docs/AI-PLATFORM.md` §18.

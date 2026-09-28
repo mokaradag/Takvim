@@ -94,6 +94,35 @@ state-changing AI requests are rejected with `403 FORBIDDEN` by design; the fix
 is the forwarding headers above, never a weaker same-origin check. See
 `docs/AI-PLATFORM.md` §18.11.
 
+### Sahada doğrulanan aynı-kaynak tanısı — 28 Eylül 2026
+
+TEST dağıtımında `/bilge` → 8009 yönlendirmesinde `GET
+/api/mergen-rota/ai/credential` 200 dönerken `PUT /credential` ve `POST
+/probe` istekleri `403 FORBIDDEN` ile reddedildi. Tarayıcıdaki `Origin` ve
+`Host` aynı kaynağı gösteriyordu. Nginx atlanıp 8009'a doğrudan, özgün
+`Host`/`Origin` ile birlikte `X-Forwarded-Host` ve
+`X-Forwarded-Proto` verilerek yapılan tanı isteği aynı-kaynak denetimini geçti
+ve beklenen `401 SESSION_REQUIRED` sonucuna ulaştı. Bu karşılaştırma sorunun
+uygulama kodunda değil vekilin kaynak bilgisini eksik iletmesinde olduğunu
+kanıtladı.
+
+Yönetici TEST bloğuna özgün ana makine ve şema iletimini ekledikten sonra
+tarayıcıdan kurumsal anahtarlı gerçek `chat.fast` sınaması başarıyla
+tamamlandı; ardından kişisel anahtar kaydetme/doğrulama/kaldırma akışları da
+çalıştı. Bu nedenle `/rota`, `/bilge` veya gelecekteki başka bir önek için
+aşağıdaki başlıklar **zorunlu dağıtım sözleşmesi** olarak ele alınmalıdır:
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+Aynı belirti görülürse önce vekil başlıklarını doğrulayın; çözüm
+`isSameOriginRequest` denetimini gevşetmek veya kaldırmak değildir. Tanı,
+üretim 8008/`/rota` örneğine dokunmadan TEST 8009/`/bilge` üzerinde
+tamamlanmıştır.
+
 ## Production `.env.local`
 
 Use masked values as a template:

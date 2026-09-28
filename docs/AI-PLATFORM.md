@@ -935,6 +935,48 @@ senaryosu için sınırları küçültün (ör. `MERGEN_ROTA_AI_MAX_ACTIVE_REQUE
     yanıtlarında ve tarayıcı deposunda (`localStorage`, `sessionStorage`)
     anahtarın geçmediğini doğrulayın.
 
+### 28 Eylül 2026 gerçek ortam kabul sonucu
+
+Aşama 1, TEST dağıtımında gerçek Windows/SQL Server/Keycloak/kurum içi yapay
+zekâ zinciriyle kabul edildi. TEST örneği dışarıdan `/bilge`, içeride 8009
+üzerinden çalıştırıldı; üretim `/rota`/8008 tanı sırasında değiştirilmedi.
+
+Kabul sırasında önemli bir ters vekil bulgusu doğrulandı: `GET
+/api/mergen-rota/ai/credential` başarılıyken durum değiştiren `PUT
+/credential` ve `POST /probe` istekleri `403 FORBIDDEN` /
+*Yapay zekâ isteği aynı kaynaktan gelmelidir.* dönüyordu. Tarayıcıdaki
+`Origin` ve `Host` doğruydu. Aynı istek doğrudan 8009'a özgün
+`Host`, `Origin`, `X-Forwarded-Host` ve `X-Forwarded-Proto` başlıklarıyla
+gönderildiğinde aynı-kaynak denetimini geçip oturum olmadığı için
+`401 SESSION_REQUIRED` döndü. Böylece uygulama denetiminin doğru, eksikliğin
+ters vekilin özgün ana makine/şema bilgisini iletmemesi olduğu ayrıştırıldı.
+
+Nginx'e aşağıdaki başlıklar eklendikten sonra tarayıcıdan kurumsal anahtarlı
+`chat.fast` sınaması gerçek kurum içi modelle başarıyla tamamlandı:
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+Kalan kabul maddeleri de gerçek ortamda tamamlandı: kişisel anahtar kaydı ve
+yalnız son dört karakterin gösterimi; `MR_AiUserCredentials` içinde düz metin
+yerine nonce/şifreli metin/doğrulama etiketiyle saklama; geçerli ve reddedilen
+anahtar doğrulaması; reddedilen kişisel anahtarın kurumsal anahtara
+**düşmemesi**; kaldırma sonrası kurumsal anahtara dönüş; birden çok Sicil ile
+kullanıcı yalıtımı; dağıtılmış model kaydının doğrulanması; tarayıcı,
+günlükler ve Sistem Yönetimi'nde anahtar sızıntısı olmaması. Ayrıca 20 saniye
+geciktirilen sahte sağlayıcı isteği sürerken `snapshot`, görev işlemleri ve
+`commit` çağrıları olağan biçimde tamamlandı; yapay zekâ gecikmesinin Rota
+çalışma yolunu bloklamadığı doğrulandı.
+
+**Sonuç:** Aşama 1 gerçek ortam kabulü tamamlanmıştır ve temel sözleşme
+dondurulmuştur. Bundan sonraki Aşama 1 değişiklikleri genel yeniden inceleme
+döngüsü için değil, yalnızca somut ve yeniden üretilebilir bir kusur bulunduğunda
+cerrahi düzeltme olarak yapılmalıdır. Ters vekil başlıkları yeni bir dağıtım
+önkoşuludur; güvenlik denetimi gevşetilmemelidir.
+
 ### Otomatik sınamalar
 
 | Dosya | Kapsam |
