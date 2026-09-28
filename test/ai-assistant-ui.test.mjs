@@ -1151,7 +1151,9 @@ test('hazırlık yenilenirken gönderim kapanır, çalışan turun Durdur eylemi
   const panel = mountComponent(RotaAssistantPanel, { assistant });
   let composer = findElement(panel.output, (node) => node.type === AssistantComposer);
   assert.equal(composer.props.generating, true);
-  assert.equal(composer.props.disabled, true);
+  assert.equal(composer.props.disabled, false, 'yenileme yazma odağını kaybettirmez');
+  assert.equal(composer.props.submitDisabled, true);
+  assert.equal(controller.canSend(), false);
   resolve({ ok: true, assistant: { ...READINESS, available: false, reason: 'AI_KEY_MISSING' } });
   await refresh;
   panel.render();
@@ -1571,7 +1573,7 @@ test('Durdur ya da kopan akıştan sonra konuşma sunucuyla uzlaştırılır; ka
     }
     await drain();
     assert.equal(controller.canSend(), false, `${outcome}: uzlaştırma bitmeden yeni tur başlamaz`);
-    assert.equal(controller.retry(run.input.turnId).ok, false);
+    assert.equal(controller.canSend({ retry: true }), true, 'aynı tur uzlaştırma sırasında yinelenebilir');
     release();
     await drain();
     assert.equal(state().active.turns[0].answer.status, 'complete', outcome);
@@ -1946,5 +1948,147 @@ test('ilk turdan sonra konuşmaya geri dönmek taslak anahtarını değiştirmez
   await controller.openConversation(CONVERSATION_B);
   await controller.openConversation(CONVERSATION_A);
   assert.equal(state().active.viewKey, key);
+  controller.dispose();
+});
+
+test('uzlaştırma sürerken aynı tur yinelenir ve eski okuma yeni üretimi değiştiremez', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const first = api.turns[0];
+  const accepted = acceptedData(CONVERSATION_A, first, 'Soru');
+  first.emit('accepted', accepted);
+  let release;
+  let signal;
+  api.loadAssistantConversationRequest = (_id, options) => {
+    signal = options.signal;
+    return new Promise((resolve) => { release = resolve; });
+  };
+  controller.stop();
+  first.resolve({ ok: false, code: 'REQUEST_CANCELLED', cancelled: true });
+  await drain();
+  assert.equal(controller.canSend(), false);
+  assert.equal(controller.retry(first.input.turnId).ok, true);
+  assert.equal(api.turns[1].input.turnId, first.input.turnId);
+  assert.equal(signal.aborted, true);
+  release({ ok: false, code: 'NOT_FOUND' });
+  await drain();
+  assert.equal(Boolean(state().active.closed), false);
+  assert.ok(state().running[CONVERSATION_A]);
+  api.turns[1].resolve(doneResult(CONVERSATION_A));
+  await drain();
+  assert.equal(state().active.turns[0].answer.status, 'complete');
+  assert.equal(controller.canSend(), true);
+  controller.dispose();
+});
+
+test('uzlaştırma silinmiş konuşmayı kapatır ve oturum hatasını panel düzeyine taşır', async () => {
+  for (const code of ['NOT_FOUND', 'UNAUTHORIZED', 'SESSION_REQUIRED']) {
+    const { controller, api, state } = await readyController();
+    controller.send('Soru');
+    const first = api.turns[0];
+    first.emit('accepted', acceptedData(CONVERSATION_A, first, 'Soru'));
+    api.loadAssistantConversationRequest = async () => ({ ok: false, code });
+    first.resolve({ ok: false, code: 'NETWORK', partial: true });
+    await drain();
+    assert.equal(controller.canSend(), false, code);
+    assert.equal(controller.retry(first.input.turnId).ok, false, code);
+    if (code === 'NOT_FOUND') {
+      assert.equal(state().active.closed, true);
+      assert.equal(state().list.items.some((item) => item.id === CONVERSATION_A), false);
+    } else {
+      assert.equal(state().status, 'error');
+      assert.ok(state().failure);
+    }
+    controller.dispose();
+  }
+});
+
+test('sayfalama başka pencerede silinmiş eski satırı yeniden eklemez', async () => {
+  const removed = { id: CONVERSATION_A, title: 'Silinen', updatedAt: '2026-09-28T10:00:00Z' };
+  const boundary = { id: CONVERSATION_B, title: 'Sınır', updatedAt: '2026-09-27T10:00:00Z' };
+  const older = { id: createId(), title: 'Eski', updatedAt: '2026-09-26T10:00:00Z' };
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [removed, boundary], nextCursor: 'old' }) });
+  const { controller, state } = await readyController({ api });
+  api.listAssistantConversationsRequest = async ({ cursor }) => ({ ok: true, conversations: cursor ? [older] : [boundary], nextCursor: cursor ? null : 'old' });
+  await controller.loadMore();
+  assert.deepEqual(state().list.items.map((item) => item.id), [boundary.id, older.id]);
+  controller.dispose();
+});
+
+test('kanonik GUID ilk grupları SQL sıralamasında ikinci kez ters çevrilmez', async () => {
+  for (const [highId, lowId] of [
+    ['00000000-0000-4100-8000-000000000000', '00000000-0000-4001-8000-000000000000'],
+    ['00000000-0100-4000-8000-000000000000', '00000000-0001-4000-8000-000000000000'],
+    ['01000000-0000-4000-8000-000000000000', '00000001-0000-4000-8000-000000000000']
+  ]) {
+    const rows = [lowId, highId].map((id) => ({ id, title: id, updatedAt: '2026-09-28T10:00:00Z' }));
+    const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: rows, nextCursor: null }) });
+    const { controller, state } = await readyController({ api });
+    assert.deepEqual(state().list.items.map((row) => row.id), [highId, lowId]);
+    controller.dispose();
+  }
+});
+
+test('hazırlık yenilenirken yazma alanı monte ve etkin kalır', async () => {
+  const { controller, api } = await readyController();
+  const props = { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } };
+  const panel = mountComponent(RotaAssistantPanel, props);
+  const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+  composer().props.onChange('Korunan taslak'); panel.render();
+  let release;
+  api.loadAssistantReadinessRequest = () => new Promise((resolve) => { release = resolve; });
+  const pending = controller.activate({ refresh: true }); panel.render();
+  assert.ok(composer());
+  assert.equal(composer().props.disabled, false);
+  assert.equal(composer().props.value, 'Korunan taslak');
+  assert.equal(controller.send('Gönderilmez').ok, false);
+  release({ ok: true, assistant: READINESS }); await pending; panel.render();
+  assert.equal(composer().props.value, 'Korunan taslak');
+  panel.unmount(); controller.dispose();
+});
+
+test('son yakın konuşma silinince boş görünüm odak hedefi sunar', async () => {
+  const item = { id: CONVERSATION_A, title: 'Son', updatedAt: new Date().toISOString() };
+  const props = { limit: 3, list: { items: [item] }, onOpen() {}, onDelete: async () => ({ ok: true }) };
+  const view = mountComponent(AssistantConversationList, props);
+  const row = () => findElement(view.output, (node) => node.props?.item?.id === item.id);
+  row().props.onAskDelete(); view.render();
+  await row().props.onConfirmDelete();
+  view.render({ ...props, list: { items: [] } });
+  const empty = findElement(view.output, (node) => node.type === 'p' && node.props.tabIndex === -1);
+  assert.ok(empty);
+  assert.ok(empty.ref);
+  view.unmount();
+});
+
+test('yalnız gönderim engeli yazmayı açık tutar ama Enter ve düğmeden göndermez', () => {
+  let sent = 0;
+  const view = mountComponent(AssistantComposer, { value: 'Taslak', maxChars: 8000, submitDisabled: true, onSubmit() { sent += 1; }, onChange() {} });
+  const input = findElement(view.output, (node) => node.type === 'textarea');
+  assert.equal(input.props.disabled, false);
+  input.props.onKeyDown({ key: 'Enter', preventDefault() {} });
+  view.output.props.onSubmit({ preventDefault() {} });
+  assert.equal(sent, 0);
+  assert.ok(findElement(view.output, (node) => node.type === 'button' && node.props.type === 'submit').props.disabled);
+  view.unmount();
+});
+
+test('yeniden deneme kabul edilmeden reddedilirse kayıtlı turun uzlaştırması sürer', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const first = api.turns[0];
+  const data = acceptedData(CONVERSATION_A, first, 'Soru');
+  first.emit('accepted', data);
+  const releases = [];
+  api.loadAssistantConversationRequest = () => new Promise((resolve) => releases.push(resolve));
+  first.resolve({ ok: false, code: 'NETWORK', retryable: true }); await drain();
+  assert.equal(controller.retry(first.input.turnId).ok, true);
+  api.turns[1].resolve({ ok: false, phase: 'request', code: 'CONFLICT', reason: 'GENERATION_IN_PROGRESS' }); await drain();
+  assert.equal(controller.canSend(), false);
+  releases[0]({ ok: false, code: 'NOT_FOUND' }); await drain();
+  assert.equal(Boolean(state().active.closed), false);
+  releases[1]({ ok: true, conversation: data.conversation, messages: [{ id: createId(), role: 'assistant', replyToId: data.userMessage.id, content: 'Kaydedildi' }] });
+  await drain();
+  assert.equal(state().active.turns[0].answer.status, 'complete');
   controller.dispose();
 });

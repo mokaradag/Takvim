@@ -89,17 +89,18 @@ export function createEventStreamParser({ maxEventChars, tooLarge, onComment = n
      * Akış sonu: satır sonu gelmemiş son satır işlenir. Boş satırla
      * yayımlanmamış olay YAYIMLANMAZ; yalnızca bekleyen verisi döner (yoksa `null`).
      */
-    end() {
+    end({ includeEvent = false } = {}) {
       if (pending) {
         const text = pending;
         pending = '';
         line(text, []);
       }
       const trailing = data.length ? data.join('\n') : null;
+      const trailingEvent = { event: eventName || 'message', data: trailing };
       data = [];
       dataChars = 0;
       eventName = '';
-      return trailing;
+      return includeEvent ? trailingEvent : trailing;
     }
   };
 }

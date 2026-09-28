@@ -570,6 +570,7 @@ export function createAiGateway({
       recordAiRequest({
         ...context,
         code: failure.code,
+        error: failure,
         serviceFailure: isServiceFailure(failure),
         details: failure.details,
         durationMs: now() - startedAt

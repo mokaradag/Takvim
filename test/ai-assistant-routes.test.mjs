@@ -565,3 +565,17 @@ test('kuyruğa girmeyen metin parçası yanıtı kısmi yapmaz', async () => {
   assert.equal(events.some((event) => event.event === 'delta'), false);
   assert.equal(events.at(-1).data.partial, false);
 });
+
+test('ağ geçidinin kaydettiği tur hatası ikinci bir işletim olayı üretmez', async (t) => {
+  const { recordAiRequest, aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  resetAiTelemetryForTests();
+  const logs = captureConsole(t);
+  const error = new AiError('AI_TIMEOUT');
+  recordAiRequest({ code: error.code, error, durationMs: 100 });
+  const { turn } = fakeTurn();
+  await assistantStreamResponse(turn, { generate: async () => { throw error; } }).text();
+  assert.equal(logs.filter((line) => line.includes('ai.request')).length, 1);
+  assert.equal(logs.filter((line) => line.includes('ai.assistant.turn')).length, 0);
+  assert.equal(aiTelemetrySnapshot().assistantTurns.failed, 1);
+});

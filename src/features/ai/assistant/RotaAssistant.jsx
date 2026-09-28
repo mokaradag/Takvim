@@ -221,7 +221,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const setDraft = (text) => setDraftState({ key: draftKey, text });
   const recoveredDraft = state.active.recoveredDraft;
   const draftTextRef = useRef(draft);
-  draftTextRef.current = draft;
+  useEffect(() => { draftTextRef.current = draft; }, [draft]);
   // Yazma alanında yeni bir taslak varken reddedilen ileti kaybolmaz: geri alınabilir bildirim olarak tutulur.
   const [heldDrafts, setHeldDrafts] = useState({});
   const setHeldDraft = (value) => setHeldDrafts((current) => ({ ...current, [draftKey]: value }));
@@ -235,7 +235,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   }, [draftKey, recoveredDraft]);
   const held = heldDrafts[draftKey] || null;
   const restoreFocusEnabledRef = useRef(true);
-  if (open) restoreFocusEnabledRef.current = sheet;
+  useEffect(() => { if (open) restoreFocusEnabledRef.current = sheet; }, [open, sheet]);
   const focusTargetRef = useMemo(() => ({
     get current() {
       return inputRef.current && !inputRef.current.disabled ? inputRef.current : headingRef.current;
@@ -282,8 +282,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const running = state.running[active.key] || null;
   const generating = Boolean(running);
   const historyView = ready && state.view === 'history';
-  const canCompose = available && !historyView && !active.failure;
-  const retryKey = available && !generating && !active.loading && !active.closed && !state.reconciling[active.key]
+  const canCompose = ready && Boolean(readiness?.available) && !historyView && !active.failure;
+  const retryKey = available && !generating && !active.loading && !active.closed
     && !state.deleting[active.id] ? retryableTurnKey(active.turns) : null;
   const capacityFull = (active.messageCount || 0) > (readiness?.limits?.maxConversationMessages || controller.limits.maxConversationMessages) - 2;
   const capacityNotice = capacityFull ? assistantFailureView({ code: 'CONFLICT', reason: 'CONVERSATION_FULL' }) : null;
@@ -493,7 +493,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             focusInput();
           }}
           generating={generating}
-          disabled={!canCompose || capacityFull || state.refreshing || active.loading || Boolean(active.closed)
+          submitDisabled={state.refreshing}
+          disabled={!canCompose || capacityFull || active.loading || Boolean(active.closed)
             || Boolean(state.reconciling[active.key]) || Boolean(state.deleting[active.id])}
           mode={state.mode}
           modes={readiness?.modes || []}

@@ -113,7 +113,7 @@ export function AssistantConversationList({
     );
   }
   if (!items.length) {
-    return limit ? null : <p ref={emptyRef} tabIndex={-1} className="rota-assistant-history-state">Henüz kaydedilmiş bir konuşma yok.</p>;
+    return <p ref={emptyRef} tabIndex={-1} className="rota-assistant-history-state">Henüz kaydedilmiş bir konuşma yok.</p>;
   }
 
   return (

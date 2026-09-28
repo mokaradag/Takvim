@@ -193,7 +193,7 @@ function interpretChunk(payload, state) {
   const reasoning = [reasoningPresent(delta?.reasoning_content), reasoningPresent(delta?.reasoning)].some(Boolean);
   // Bitiş nedeni bildirildikten sonra gelen yanıt metni kabul edilmez (yalnızca kullanım gibi kuyruk olayları).
   if (state.finishReason && (delta?.content || reasoning)) throw invalid('CONTENT_AFTER_FINISH');
-  if (choice.finish_reason) state.finishReason = choice.finish_reason.slice(0, 40);
+  if (choice.finish_reason && !state.finishReason) state.finishReason = choice.finish_reason.slice(0, 40);
   return { content: delta?.content ?? null, reasoning };
 }
 
@@ -275,7 +275,11 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
       }
       yield* handle(parser.push(tail));
       // Son boş satırı göndermeden kapanan akışın bekleyen verisi yalnızca `[DONE]` olabilir.
-      if (!completed && parser.end() === '[DONE]') completed = true;
+      if (!completed) {
+        const trailing = parser.end({ includeEvent: true });
+        if (trailing.event === 'error') throw streamInterrupted('STREAM_ERROR_EVENT');
+        if (trailing.data === '[DONE]') completed = true;
+      }
       if (!completed && state.finishReason) completed = true;
       if (!completed) throw streamInterrupted('STREAM_TRUNCATED');
     }

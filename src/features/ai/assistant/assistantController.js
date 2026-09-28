@@ -33,14 +33,14 @@ export const ASSISTANT_FLUSH_INTERVAL_MS = 40;
 
 /**
  * SQL Server `uniqueidentifier` sıralama anahtarı (SqlGuid karşılaştırması:
- * bellek düzenindeki 10–15, 8–9, 6–7, 4–5, 0–3. baytlar). Liste sunucuda
+ * kanonik metindeki 10–15, 8–9, 6–7, 4–5, 0–3. baytlar). Liste sunucuda
  * `UpdatedAt DESC, ConversationId DESC` ile sıralanır; eşit zamanlı
  * konuşmalar istemcide de aynı sırada kalır.
  */
 function guidSortKey(id) {
   const hex = String(id || '').replace(/-/g, '').toLowerCase();
   if (hex.length !== 32) return hex;
-  return [10, 11, 12, 13, 14, 15, 8, 9, 7, 6, 5, 4, 3, 2, 1, 0].map((index) => hex.slice(index * 2, index * 2 + 2)).join('');
+  return [10, 11, 12, 13, 14, 15, 8, 9, 6, 7, 4, 5, 0, 1, 2, 3].map((index) => hex.slice(index * 2, index * 2 + 2)).join('');
 }
 
 function compareText(left, right) {
@@ -176,6 +176,7 @@ export function createAssistantController({
   let listLoad = null;
   const loads = new Set();
   const completedVersions = new Map();
+  const reconciliations = new Map();
   const viewKeys = new Map();
   const listMutations = new Map();
   let mutationVersion = 0;
@@ -286,6 +287,7 @@ export function createAssistantController({
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
       run.accepted = true;
+      run.mode = event.data.mode || run.mode;
       run.messageCount = conversation.messageCount;
       run.userMessageId = userMessage.id;
       run.contextTrimmed = Boolean(context?.trimmed);
@@ -296,6 +298,7 @@ export function createAssistantController({
         active: patchTurn(current, run, (turn) => ({
           ...turn,
           user: { id: userMessage.id, content: userMessage.content, createdAt: userMessage.createdAt, pending: false },
+          answer: { ...turn.answer, mode: run.mode },
           contextTrimmed: Boolean(context?.trimmed)
         }))
       }));
@@ -377,7 +380,7 @@ export function createAssistantController({
     const previous = !text && run.previousAnswer?.content ? run.previousAnswer.content : null;
     // Kabul edilmiş ama `done` almadan biten üretimin yanıtı sunucuda yazılmış olabilir:
     // sonraki tur, konuşma sunucuyla uzlaştırılana kadar başlatılmaz.
-    const reconcile = run.accepted && Boolean(run.userMessageId);
+    const reconcile = Boolean(run.userMessageId) && !sessionFailure && !closed;
     update((current) => ({
       ...current,
       running: setRunning(current, run.key, null),
@@ -414,6 +417,8 @@ export function createAssistantController({
     const ownSession = session;
     const key = run.key;
     const load = trackLoad();
+    reconciliations.get(key)?.abort();
+    reconciliations.set(key, load);
     let result = null;
     try {
       for (let attempt = 0; ; attempt += 1) {
@@ -432,7 +437,8 @@ export function createAssistantController({
       result = null;
     }
     load.done();
-    if (ownSession !== session) return;
+    if (reconciliations.get(key) === load) reconciliations.delete(key);
+    if (ownSession !== session || load.signal.aborted || state.reconciling[key] !== run.token) return;
     const answer = result?.ok
       ? result.messages.find((message) => message.role === 'assistant' && message.replyToId === run.userMessageId)
       : null;
@@ -441,7 +447,20 @@ export function createAssistantController({
       if (current.reconciling[key] !== run.token) return current;
       const reconciling = { ...current.reconciling };
       delete reconciling[key];
-      if (!answer) return { ...current, reconciling };
+      if (!answer) {
+        const missing = result?.code === 'NOT_FOUND';
+        const sessionFailure = isSessionFailure(result || {});
+        if (!missing && !sessionFailure) return { ...current, reconciling };
+        const failure = assistantFailureView(result);
+        if (missing) listMutations.set(run.conversationId, ++mutationVersion);
+        return {
+          ...current, reconciling,
+          status: sessionFailure ? 'error' : current.status,
+          failure: sessionFailure ? failure : current.failure,
+          list: missing ? { ...current.list, items: current.list.items.filter((item) => item.id !== run.conversationId) } : current.list,
+          active: missing && current.active?.key === key ? { ...current.active, closed: true, failure } : current.active
+        };
+      }
       const list = result.conversation ? withListConversation(current.list, result.conversation) : current.list;
       if (current.active?.key !== key) return { ...current, reconciling, list };
       return {
@@ -471,6 +490,8 @@ export function createAssistantController({
 
   function startRun({ content, turnId }) {
     const active = state.active;
+    reconciliations.get(active.key)?.abort();
+    reconciliations.delete(active.key);
     const existing = active.turns.find((turn) => turn.key === turnId);
     runCounter += 1;
     const run = {
@@ -482,6 +503,7 @@ export function createAssistantController({
       turnId,
       turnKey: turnId,
       newTurn: !existing,
+      userMessageId: existing?.user.id || null,
       // Yeniden denemede önceki kısmi yanıt, yeni metin gelene kadar geri alınabilir kalır.
       previousAnswer: existing?.answer?.content ? existing.answer : null,
       content,
@@ -509,6 +531,7 @@ export function createAssistantController({
       return {
         ...current,
         running: setRunning(current, run.key, { token: run.token, turnKey: turnId, phase: 'sending' }),
+        reconciling: { ...current.reconciling, [run.key]: undefined },
         active: { ...current.active, turns, recoveredDraft: null, notice: null },
         announcement: announce('İleti gönderildi, yanıt hazırlanıyor.')
       };
@@ -531,7 +554,7 @@ export function createAssistantController({
     return state.status === 'ready' && !state.refreshing && Boolean(state.readiness?.available)
       && (retry || (state.active.messageCount || 0) <= (state.readiness?.limits?.maxConversationMessages || ASSISTANT_LIMITS.maxConversationMessages) - 2)
       && !state.active.loading && !state.active.failure && !state.active.closed && !state.running[state.active.key]
-      && !state.reconciling[state.active.key] && !state.deleting[state.active.id];
+      && (retry || !state.reconciling[state.active.key]) && !state.deleting[state.active.id];
   }
 
   /** Yeni ileti; boş/yalnızca boşluk ve sınırı aşan ileti gönderilmez, çift gönderim engellenir. */
@@ -734,7 +757,8 @@ export function createAssistantController({
       refreshed.forEach(add);
       if (more) {
         older.conversations.forEach(add);
-        state_.list.items.forEach(add);
+        // Başlangıç sınırına kadar yeniden okunan aralıktaki silinmiş kayıtlar geri eklenmez.
+        state_.list.items.filter((item) => beforeBoundary(item) && item.id !== boundary?.id).forEach(add);
       }
       return {
         ...state_,
@@ -856,6 +880,7 @@ export function createAssistantController({
     listMutations.clear();
     for (const controller of loads) controller.abort();
     loads.clear();
+    reconciliations.clear();
     viewLoad = null;
     state = { ...initialState(), active: draft() };
     emit();

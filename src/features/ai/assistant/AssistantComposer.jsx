@@ -59,6 +59,7 @@ export function AssistantComposer({
   onStop,
   generating = false,
   disabled = false,
+  submitDisabled = false,
   mode,
   modes = [],
   onModeChange,
@@ -76,7 +77,7 @@ export function AssistantComposer({
   }, [generating]);
   const overLimit = value.length > maxChars;
   const blank = !value.trim();
-  const canSubmit = !disabled && !generating && !blank && !overLimit;
+  const canSubmit = !disabled && !submitDisabled && !generating && !blank && !overLimit;
   const counter = characterCountLabel(value.length, maxChars);
 
   // Alan içeriğe göre büyür; üst sınır CSS'tedir (sonrası kendi içinde kayar).
@@ -104,7 +105,7 @@ export function AssistantComposer({
       altKey: event.altKey,
       keyCode: event.keyCode,
       isComposing: event.nativeEvent?.isComposing
-    }, { canSubmit: !generating && !disabled });
+    }, { canSubmit: !generating && !disabled && !submitDisabled });
     if (action === 'send') {
       event.preventDefault();
       submit();

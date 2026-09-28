@@ -577,3 +577,16 @@ test('kullanıcıya dönük Rota AI metinleri aşama numarası ya da iç yol har
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /Phase\s*\d|Faz\s*\d|Aşama\s*\d/i, toRelative(file));
   }
 });
+
+test('konuşma göçü veri ilişkilerini sütun doğrulamasından sonra ve sıralı olarak denetler', () => {
+  const upgrade = fs.readFileSync(path.join(ROOT, 'database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql'), 'utf8');
+  const checks = [...upgrade.matchAll(/EXEC sys\.sp_executesql\s+N'((?:[^']|'')*)', N'@Found bit OUTPUT', @Found = @Inconsistent OUTPUT;/g)].map((match) => match[1].replaceAll("''", "'"));
+  assert.equal(checks.length, 3, 'eksik sütunlar veri denetimleri derlenmeden önce raporlanır');
+  assert.match(checks[0], /MIN\(m\.Sequence\).*FirstSequence/s);
+  assert.match(checks[0], /MAX\(m\.Sequence\).*LastSequence/s);
+  assert.match(checks[0], /FirstSequence <> 1 OR counts\.LastSequence <> counts\.Total/);
+  assert.match(checks[1], /OUTER APPLY/);
+  assert.match(checks[1], /firstTurn\.ClientTurnId IS NULL/);
+  assert.match(checks[2], /u\.MessageId IS NULL OR a\.Sequence <= u\.Sequence/);
+  assert.ok(upgrade.indexOf('DECLARE @Inconsistent') > upgrade.indexOf('sys.columns'));
+});

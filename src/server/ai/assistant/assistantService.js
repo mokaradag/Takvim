@@ -449,7 +449,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     if (failure) throw failure;
     const context = buildAssistantContext({ history: existing.history, userContent: existing.turn.content, priorMessageCount: Math.max(0, existing.turn.sequence - 1) });
     return {
-      sicil, claim: null, mode: input.mode, profile: assistantProfileForMode(input.mode),
+      sicil, claim: null, mode: existing.answer.mode, profile: assistantProfileForMode(existing.answer.mode),
       conversation: existing.conversation, userMessage: existing.turn.message,
       replay: existing.answer, modelMessages: [], context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
     };

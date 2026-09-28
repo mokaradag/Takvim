@@ -214,9 +214,11 @@ function logFailure({ outcome, source, profile, model, durationMs, attempts, det
  * okunur. Yinelemeler burada değil, gerçekleştikleri anda (`recordAiRetry`)
  * sayılır.
  */
+const recordedFailures = new WeakSet();
+
 export function recordAiRequest({
   profile, model = null, source = null, code = null, serviceFailure = false, details = null,
-  durationMs, queueWaitMs = null, attempts = 1
+  durationMs, queueWaitMs = null, attempts = 1, error = null
 }) {
   let outcome = null;
   safely(() => {
@@ -243,7 +245,10 @@ export function recordAiRequest({
     // Sırada süresi dolan istek de beklemiştir: en kötü beklemeler özetten düşmez.
     recordQueueWait(current, { queueWaitMs, code: outcome?.code });
   });
-  if (outcome) safely(() => logFailure({ outcome, source, profile, model, durationMs, attempts, details }));
+  if (outcome) safely(() => {
+    logFailure({ outcome, source, profile, model, durationMs, attempts, details });
+    if (error && typeof error === 'object') recordedFailures.add(error);
+  });
 }
 
 /**
@@ -422,7 +427,7 @@ export function resetAiTelemetryForTests() {
  * reddedilen istek, silinmiş konuşma) herkese hizmet sorunu gibi görünmez;
  * sınıflandırma `recordAiRequest` ile aynıdır (`outcomeOf`).
  */
-export function recordAssistantTurn({ code = null, source = null, details = null, serviceFailure = false, durationMs = 0 }) {
+export function recordAssistantTurn({ code = null, source = null, details = null, serviceFailure = false, durationMs = 0, error = null }) {
   let outcome = null;
   safely(() => {
     const turns = state().assistantTurns;
@@ -433,9 +438,10 @@ export function recordAssistantTurn({ code = null, source = null, details = null
     else if (outcome?.serviceFailure) turns.lastFailure = { code: outcome.code, at: new Date().toISOString() };
     recordOperation({ operation: 'ai.assistant.turn', durationMs, ok: !outcome?.serviceFailure, code: outcome?.serviceFailure ? outcome.code : null });
   });
-  if (outcome?.serviceFailure && !QUIET_CODES.has(outcome.code)) {
+  if (outcome?.serviceFailure && !QUIET_CODES.has(outcome.code) && !recordedFailures.has(error)) {
     safely(() => logEvent({
-      severity: EVENT_SEVERITIES.ERROR, component: COMPONENTS.AI,
+      severity: [AI_ERROR_CODES.AI_CONFIGURATION_ERROR, AI_ERROR_CODES.AI_INTERNAL_ERROR, 'DATABASE_UNAVAILABLE'].includes(outcome.code)
+        ? EVENT_SEVERITIES.ERROR : EVENT_SEVERITIES.WARNING, component: COMPONENTS.AI,
       operation: 'ai.assistant.turn', code: outcome.code, message: 'Rota AI turu tamamlanamadı.'
     }));
   }

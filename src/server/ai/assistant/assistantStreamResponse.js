@@ -195,6 +195,7 @@ export function assistantStreamResponse(turn, {
       const payload = assistantStreamErrorPayload(error, { partial: textSent });
       recordAssistantTurn({
         code: payload.code,
+        error,
         source: payload.credentialSource,
         details: error?.details ?? null,
         serviceFailure: payload.code === 'DATABASE_UNAVAILABLE',

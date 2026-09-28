@@ -45,6 +45,7 @@ function isTimestamp(value) {
 
 function isConversation(value) {
   return isPlainObject(value) && isAssistantId(value.id) && typeof value.title === 'string'
+    && Number.isSafeInteger(value.messageCount) && value.messageCount >= 0
     && isTimestamp(value.updatedAt) && (value.createdAt == null || isTimestamp(value.createdAt));
 }
 
@@ -53,7 +54,7 @@ function isConversation(value) {
  * yanıtladığı kullanıcı iletisini taşır; karşı alan boştur.
  */
 function isMessage(value) {
-  if (!isPlainObject(value) || !isAssistantId(value.id) || !Number.isFinite(value.sequence)) return false;
+  if (!isPlainObject(value) || !isAssistantId(value.id) || (!Number.isSafeInteger(value.sequence) || value.sequence <= 0)) return false;
   if (value.role === 'user') return isAssistantId(value.turnId) && value.replyToId == null;
   if (value.role === 'assistant') return isAssistantId(value.replyToId) && value.turnId == null;
   return false;
@@ -67,7 +68,10 @@ function isReadiness(value) {
   return isPlainObject(value) && typeof value.available === 'boolean' && Array.isArray(value.modes)
     && value.modes.every((mode) => isPlainObject(mode) && isAssistantMode(mode.id) && typeof mode.label === 'string'
       && typeof mode.available === 'boolean')
-    && isPlainObject(value.limits) && Number.isFinite(value.limits.maxMessageChars);
+    && value.available === value.modes.some((mode) => mode.available)
+    && isPlainObject(value.limits)
+    && Number.isSafeInteger(value.limits.maxMessageChars) && value.limits.maxMessageChars > 0
+    && Number.isSafeInteger(value.limits.maxConversationMessages) && value.limits.maxConversationMessages > 0;
 }
 
 const sameId = (left, right) => typeof left === 'string' && typeof right === 'string' && left.toLowerCase() === right.toLowerCase();
@@ -94,7 +98,7 @@ export function listAssistantConversationsRequest({ cursor = null, ...options } 
 export function loadAssistantConversationRequest(conversationId, options = {}) {
   return expectPayload(
     requestJson(`${BASE}/conversations/${encodeURIComponent(conversationId)}`, { method: 'GET' }, options),
-    (response) => isConversation(response.conversation) && response.conversation.id === conversationId
+    (response) => isConversation(response.conversation) && sameId(response.conversation.id, conversationId)
       && Array.isArray(response.messages) && response.messages.every(isStoredMessage)
   );
 }
@@ -171,8 +175,8 @@ export function createAssistantStreamDecoder({
   const parser = createEventStreamParser({ maxEventChars, tooLarge: () => new AssistantProtocolError('EVENT_TOO_LARGE') });
   const state = { accepted: null, terminal: null, answerChars: 0, answer: '' };
 
-  function checkAccepted({ conversation, userMessage, mode: acceptedMode }) {
-    if (mode != null && acceptedMode !== mode) throw new AssistantProtocolError('MODE_MISMATCH');
+  function checkAccepted({ conversation, userMessage, mode: acceptedMode, replay }) {
+    if (replay !== true && mode != null && acceptedMode !== mode) throw new AssistantProtocolError('MODE_MISMATCH');
     if (turnId != null && !sameId(userMessage.turnId, turnId)) throw new AssistantProtocolError('TURN_MISMATCH');
     if (conversationId != null && !sameId(conversation.id, conversationId)) throw new AssistantProtocolError('CONVERSATION_MISMATCH');
   }
@@ -298,6 +302,7 @@ export async function streamAssistantTurnRequest({
       body: JSON.stringify({ conversationId, turnId, message, mode }),
       signal: controller.signal
     });
+    arm();
   } catch {
     cleanup();
     return connectionFailure();

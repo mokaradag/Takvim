@@ -240,7 +240,7 @@ test('protokol hatasında okuma bırakılır ve istek kesilir', async (t) => {
 
 test('JSON uçları beklenen biçimi doğrular; biçimsiz başarılı yanıt başarı sayılmaz', async (t) => {
   const replies = [
-    { assistant: { available: true, modes: [{ id: 'standard', label: 'Standart', available: true }], limits: { maxMessageChars: 8000 } } },
+    { assistant: { available: true, modes: [{ id: 'standard', label: 'Standart', available: true }], limits: { maxMessageChars: 8000, maxConversationMessages: 100 } } },
     { assistant: { available: 'evet' } },
     { conversations: [conversation], nextCursor: 'abc' },
     { conversations: [{ id: 'kimlik-değil', title: 'x' }] },
@@ -326,8 +326,8 @@ test('protokol sürümü başlığı olmayan ya da uyuşmayan akış kabul edilm
 
 test('JSON uçları kimlik, rol bağı, zaman damgası ve kip sözleşmesini doğrular', async (t) => {
   const replies = [
-    { assistant: { available: true, modes: [{ id: 'chat.general', label: 'Genel', available: true }], limits: { maxMessageChars: 8000 } } },
-    { assistant: { available: true, modes: [{ id: 'standard', available: true }], limits: { maxMessageChars: 8000 } } },
+    { assistant: { available: true, modes: [{ id: 'chat.general', label: 'Genel', available: true }], limits: { maxMessageChars: 8000, maxConversationMessages: 100 } } },
+    { assistant: { available: true, modes: [{ id: 'standard', available: true }], limits: { maxMessageChars: 8000, maxConversationMessages: 100 } } },
     { conversations: [{ ...conversation, updatedAt: 123 }], nextCursor: null },
     { conversation, messages: [{ ...userMessage, turnId: null }] },
     { conversation, messages: [{ ...assistantMessage, content: 'Yanıt', replyToId: null }] },
@@ -355,4 +355,70 @@ test('asistan protokolünde bozuk UTF-8 metin olarak kabul edilmez', async (t) =
   const result = await streamAssistantTurnRequest({ conversationId: CONVERSATION_ID, turnId: TURN_ID, message: 'Soru', mode: 'standard' });
   assert.equal(result.code, 'PROTOCOL_ERROR');
   assert.equal(result.reason, 'ENCODING_INVALID');
+});
+
+test('ileti sayacı, sıra ve hazırlık sınırları pozitif tamsayı sözleşmesini korur', async (t) => {
+  let payload;
+  stubFetch(t, () => Response.json(payload));
+  for (const count of [undefined, -1, 0.5, '2', Number.MAX_SAFE_INTEGER + 1]) {
+    payload = { conversations: [{ ...conversation, messageCount: count }] };
+    assert.equal((await listAssistantConversationsRequest()).code, 'INVALID_RESPONSE');
+    const decoder = createAssistantStreamDecoder();
+    assert.throws(() => decoder.push(frame('accepted', { v: 1, conversation: payload.conversations[0], userMessage, mode: 'standard' })));
+  }
+  for (const sequence of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    payload = { conversation, messages: [{ ...userMessage, sequence }] };
+    assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID)).code, 'INVALID_RESPONSE');
+    const decoder = createAssistantStreamDecoder();
+    decoder.push(ACCEPTED);
+    assert.throws(() => decoder.push(frame('done', { conversation, assistantMessage: { ...assistantMessage, sequence } })));
+  }
+  const readiness = { available: true, modes: [{ id: 'standard', label: 'Standart', available: true }], limits: { maxMessageChars: 8000, maxConversationMessages: 100 } };
+  for (const field of ['maxMessageChars', 'maxConversationMessages']) {
+    for (const value of [undefined, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      payload = { assistant: { ...readiness, limits: { ...readiness.limits, [field]: value } } };
+      assert.equal((await loadAssistantReadinessRequest()).code, 'INVALID_RESPONSE');
+    }
+  }
+  for (const assistant of [{ ...readiness, available: false }, { ...readiness, modes: [] }]) {
+    payload = { assistant };
+    assert.equal((await loadAssistantReadinessRequest()).code, 'INVALID_RESPONSE');
+  }
+  payload = { conversation, messages: [userMessage] };
+  assert.equal((await loadAssistantConversationRequest(CONVERSATION_ID.toUpperCase())).ok, true);
+});
+
+test('HTTP başlıkları geldiğinde durgunluk sayacı yeniden başlar', async (t) => {
+  const timers = new Map();
+  let clock = 0;
+  let nextId = 0;
+  t.mock.method(globalThis, 'setTimeout', (callback, delay) => { const id = ++nextId; timers.set(id, { callback, at: clock + delay }); return id; });
+  t.mock.method(globalThis, 'clearTimeout', (id) => timers.delete(id));
+  let headers;
+  let signal;
+  stubFetch(t, (call) => {
+    signal = call.init.signal;
+    return new Promise((resolve) => { headers = resolve; });
+  });
+  const pending = streamAssistantTurnRequest({ turnId: TURN_ID, message: 'Soru', mode: 'standard', inactivityMs: 45000 });
+  clock = 44000;
+  const body = streamResponse([], { manual: true });
+  headers(body.response);
+  await new Promise((resolve) => setImmediate(resolve));
+  clock = 46000;
+  for (const timer of timers.values()) if (timer.at <= clock) timer.callback();
+  assert.equal(signal.aborted, false);
+  body.push(ACCEPTED + frame('delta', { text: 'Yanıt' }) + doneFor('Yanıt'));
+  assert.equal((await pending).ok, true);
+  assert.equal(timers.size, 0);
+});
+
+test('kayıtlı yanıt yeniden oynatılırken istek kipinden farklı kayıtlı kip kabul edilir', async (t) => {
+  stubFetch(t, () => streamResponse([
+    frame('accepted', { v: 1, conversation, userMessage, mode: 'standard', replay: true }),
+    frame('delta', { text: 'Yanıt' }), doneFor('Yanıt')
+  ]).response);
+  const result = await streamAssistantTurnRequest({ conversationId: CONVERSATION_ID, turnId: TURN_ID, message: 'Soru', mode: 'deep' });
+  assert.equal(result.ok, true);
+  assert.equal(result.done.assistantMessage.mode, 'standard');
 });

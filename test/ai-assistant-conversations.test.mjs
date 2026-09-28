@@ -742,3 +742,12 @@ for (const phase of ['begin', 'commit', 'rollback']) {
     await until(() => assistantConversationGateStatusForTests().active === 0);
   });
 }
+
+test('tamamlanan tur başka kip istense de kayıtlı kipiyle yeniden oynatılır', async (t) => {
+  const { provider } = createAiStack(t);
+  const { conversationId, turnId } = await startConversation('Soru');
+  const result = await sendTurn({ conversationId, turnId, message: 'Soru', mode: 'deep' });
+  assert.equal(accepted(result).mode, 'standard');
+  assert.equal(terminal(result).data.assistantMessage.mode, 'standard');
+  assert.equal(provider.calls.length, 1);
+});

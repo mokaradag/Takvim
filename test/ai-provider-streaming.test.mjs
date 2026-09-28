@@ -483,3 +483,16 @@ test('bitiş nedeninden sonra akıl yürütme çıktısı kabul edilmez', async 
     await assert.rejects(collect(readChatCompletionStream(body.stream)), (error) => error.details.reason === 'CONTENT_AFTER_FINISH');
   }
 });
+
+test('ilk bitiş nedeni daha sonraki bitiş olayıyla değiştirilmez', async () => {
+  const body = bodyFrom([delta('Kesilmiş yanıt') + finish('length') + finish('stop') + 'data: [DONE]\n\n']);
+  const events = await collect(readChatCompletionStream(body.stream));
+  assert.equal(events.at(-1).finishReason, 'length');
+});
+
+test('son boş satırı olmayan hata olayı DONE verisiyle başarıya dönüşmez', async () => {
+  for (const suffix of ['', '\n', '\r\n']) {
+    const body = bodyFrom([delta('Yanıt') + finish() + 'event: error\ndata: [DONE]' + suffix]);
+    await rejectsWithReason(collect(readChatCompletionStream(body.stream)), 'AI_PROVIDER_UNAVAILABLE', 'STREAM_ERROR_EVENT');
+  }
+});

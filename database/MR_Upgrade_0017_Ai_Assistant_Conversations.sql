@@ -381,27 +381,38 @@ BEGIN TRY
     )
         THROW 51017, N'0017: Konuşma tablolarının varsayılan değerleri eksik ya da beklenen tanımda değil.', 1;
 
-    -- Önceden oluşturulmuş tablolarda kayıtların ilişkileri de doğrulanır.
-    IF EXISTS (
-        SELECT 1 FROM dbo.MR_AiConversations c
-        WHERE c.MessageCount <> (SELECT COUNT_BIG(*) FROM dbo.MR_AiConversationMessages m WHERE m.ConversationId = c.ConversationId)
-    )
+    -- Sütunlar doğrulandıktan sonra veri ilişkileri dinamik SQL ile denetlenir.
+    DECLARE @Inconsistent bit = 0;
+    EXEC sys.sp_executesql
+        N'SET @Found = CASE WHEN EXISTS (
+            SELECT 1 FROM dbo.MR_AiConversations c
+            OUTER APPLY (SELECT COUNT_BIG(*) AS Total, MIN(m.Sequence) AS FirstSequence,
+                MAX(m.Sequence) AS LastSequence FROM dbo.MR_AiConversationMessages m
+                WHERE m.ConversationId = c.ConversationId) counts
+            WHERE c.MessageCount <> counts.Total
+                OR (counts.Total > 0 AND (counts.FirstSequence <> 1 OR counts.LastSequence <> counts.Total))
+        ) THEN 1 ELSE 0 END;', N'@Found bit OUTPUT', @Found = @Inconsistent OUTPUT;
+    IF @Inconsistent = 1
         THROW 51017, N'0017: Konuşma ileti sayacı kayıtlarla tutarsız.', 1;
 
-    IF EXISTS (
-        SELECT 1 FROM dbo.MR_AiConversations c
-        CROSS APPLY (SELECT TOP (1) m.ClientTurnId FROM dbo.MR_AiConversationMessages m
-            WHERE m.ConversationId = c.ConversationId AND m.Role = N'user' ORDER BY m.Sequence) firstTurn
-        WHERE c.OriginTurnId <> firstTurn.ClientTurnId
-    )
+    EXEC sys.sp_executesql
+        N'SET @Found = CASE WHEN EXISTS (
+            SELECT 1 FROM dbo.MR_AiConversations c
+            OUTER APPLY (SELECT TOP (1) m.ClientTurnId FROM dbo.MR_AiConversationMessages m
+                WHERE m.ConversationId = c.ConversationId AND m.Role = N''user'' ORDER BY m.Sequence) firstTurn
+            WHERE firstTurn.ClientTurnId IS NULL OR c.OriginTurnId <> firstTurn.ClientTurnId
+        ) THEN 1 ELSE 0 END;', N'@Found bit OUTPUT', @Found = @Inconsistent OUTPUT;
+    IF @Inconsistent = 1
         THROW 51017, N'0017: Konuşmanın başlangıç turu ilk kullanıcı iletisiyle tutarsız.', 1;
 
-    IF EXISTS (
-        SELECT 1 FROM dbo.MR_AiConversationMessages a
-        LEFT JOIN dbo.MR_AiConversationMessages u ON u.MessageId = a.ReplyToMessageId
-            AND u.ConversationId = a.ConversationId AND u.Role = N'user'
-        WHERE a.Role = N'assistant' AND u.MessageId IS NULL
-    )
+    EXEC sys.sp_executesql
+        N'SET @Found = CASE WHEN EXISTS (
+            SELECT 1 FROM dbo.MR_AiConversationMessages a
+            LEFT JOIN dbo.MR_AiConversationMessages u ON u.MessageId = a.ReplyToMessageId
+                AND u.ConversationId = a.ConversationId AND u.Role = N''user''
+            WHERE a.Role = N''assistant'' AND (u.MessageId IS NULL OR a.Sequence <= u.Sequence)
+        ) THEN 1 ELSE 0 END;', N'@Found bit OUTPUT', @Found = @Inconsistent OUTPUT;
+    IF @Inconsistent = 1
         THROW 51017, N'0017: Yanıt aynı konuşmadaki bir kullanıcı iletisine bağlı değil.', 1;
 
     DROP TABLE #MR_AiConversations_Expected;
