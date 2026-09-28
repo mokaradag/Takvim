@@ -945,7 +945,7 @@ Kabul sırasında önemli bir ters vekil bulgusu doğrulandı: `GET
 /api/mergen-rota/ai/credential` başarılıyken durum değiştiren `PUT
 /credential` ve `POST /probe` istekleri `403 FORBIDDEN` /
 *Yapay zekâ isteği aynı kaynaktan gelmelidir.* dönüyordu. Tarayıcıdaki
-`Origin` ve `Host` doğruydu. Aynı istek doğrudan 8009'a özgün
+`Origin` ve `Host` doğruydu. Aynı istek doğrudan MERGEN Bilge'ye ayrılmış 8009 portuna özgün
 `Host`, `Origin`, `X-Forwarded-Host` ve `X-Forwarded-Proto` başlıklarıyla
 gönderildiğinde aynı-kaynak denetimini geçip oturum olmadığı için
 `401 SESSION_REQUIRED` döndü. Böylece uygulama denetiminin doğru, eksikliğin
