@@ -182,7 +182,7 @@ BEGIN TRY
         CREATE UNIQUE INDEX UX_MR_AiConversations_OwnerOrigin
             ON dbo.MR_AiConversations(OwnerSicil, OriginTurnId);
 
-    /* Son konuşmalar listesi (anahtar kümesi sayfalaması) tam tablo taraması yapmaz. */
+    /* Son konuşmalar listesi tam tablo taraması yapmaz. */
     IF NOT EXISTS (
         SELECT 1 FROM sys.indexes
         WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversations') AND name = N'IX_MR_AiConversations_OwnerRecent'
@@ -190,6 +190,15 @@ BEGIN TRY
         CREATE INDEX IX_MR_AiConversations_OwnerRecent
             ON dbo.MR_AiConversations(OwnerSicil, UpdatedAt DESC, ConversationId DESC)
             INCLUDE (Title, CreatedAt, MessageCount);
+
+    /* Değişmez CreatedAt imleciyle devam taraması da dizinden yürür. */
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.MR_AiConversations') AND name = N'IX_MR_AiConversations_OwnerCreated'
+    )
+        CREATE INDEX IX_MR_AiConversations_OwnerCreated
+            ON dbo.MR_AiConversations(OwnerSicil, CreatedAt DESC, ConversationId DESC)
+            INCLUDE (Title, UpdatedAt, MessageCount);
 
     /* Aynı tur (yeniden gönderim, çift tıklama) ikinci kullanıcı iletisi üretmez. */
     IF NOT EXISTS (
@@ -215,6 +224,7 @@ BEGIN TRY
         (N'MR_AiConversations', N'PK_MR_AiConversations', 1, 1, 0),
         (N'MR_AiConversations', N'UX_MR_AiConversations_OwnerOrigin', 2, 0, 0),
         (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerRecent', 2, 0, 0),
+        (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerCreated', 2, 0, 0),
         (N'MR_AiConversationMessages', N'PK_MR_AiConversationMessages', 2, 1, 0),
         (N'MR_AiConversationMessages', N'UX_MR_AiConversationMessages_Sequence', 1, 0, 1),
         (N'MR_AiConversationMessages', N'UX_MR_AiConversationMessages_Turn', 2, 0, 0),
@@ -227,8 +237,14 @@ BEGIN TRY
     )
         THROW 51017, N'0017: Konuşma dizinlerinin depolama türü ya da kısıt sahipliği beklenen yapıda değil.', 1;
 
-    DECLARE @RequiredIncludedColumns TABLE (ColumnName sysname);
-    INSERT @RequiredIncludedColumns VALUES (N'Title'), (N'CreatedAt'), (N'MessageCount');
+    DECLARE @RequiredIncludedColumns TABLE (IndexName sysname, ColumnName sysname);
+    INSERT @RequiredIncludedColumns VALUES
+        (N'IX_MR_AiConversations_OwnerRecent', N'Title'),
+        (N'IX_MR_AiConversations_OwnerRecent', N'CreatedAt'),
+        (N'IX_MR_AiConversations_OwnerRecent', N'MessageCount'),
+        (N'IX_MR_AiConversations_OwnerCreated', N'Title'),
+        (N'IX_MR_AiConversations_OwnerCreated', N'UpdatedAt'),
+        (N'IX_MR_AiConversations_OwnerCreated', N'MessageCount');
     IF EXISTS (
         SELECT 1 FROM @RequiredIncludedColumns r
         WHERE NOT EXISTS (
@@ -236,10 +252,10 @@ BEGIN TRY
             JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
             JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
             WHERE i.object_id = OBJECT_ID(N'dbo.MR_AiConversations', N'U')
-                AND i.name = N'IX_MR_AiConversations_OwnerRecent' AND ic.is_included_column = 1 AND c.name = r.ColumnName
+                AND i.name = r.IndexName AND ic.is_included_column = 1 AND c.name = r.ColumnName
         )
     )
-        THROW 51017, N'0017: Son konuşmalar dizininin INCLUDE sütunları eksik.', 1;
+        THROW 51017, N'0017: Konuşma listeleme dizinlerinin INCLUDE sütunları eksik.', 1;
 
     -- Anahtarlar ve dizinler: tekillik, anahtar sütunlarının sırası ve yönü.
     DECLARE @RequiredIndexColumns TABLE (TableName sysname, IndexName sysname, IsUnique bit, KeyOrdinal tinyint, ColumnName sysname, IsDescending bit);
@@ -250,6 +266,9 @@ BEGIN TRY
         (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerRecent', 0, 1, N'OwnerSicil', 0),
         (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerRecent', 0, 2, N'UpdatedAt', 1),
         (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerRecent', 0, 3, N'ConversationId', 1),
+        (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerCreated', 0, 1, N'OwnerSicil', 0),
+        (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerCreated', 0, 2, N'CreatedAt', 1),
+        (N'MR_AiConversations', N'IX_MR_AiConversations_OwnerCreated', 0, 3, N'ConversationId', 1),
         (N'MR_AiConversationMessages', N'PK_MR_AiConversationMessages', 1, 1, N'MessageId', 0),
         (N'MR_AiConversationMessages', N'UX_MR_AiConversationMessages_Sequence', 1, 1, N'ConversationId', 0),
         (N'MR_AiConversationMessages', N'UX_MR_AiConversationMessages_Sequence', 1, 2, N'Sequence', 0),
@@ -407,13 +426,17 @@ BEGIN TRY
 
     EXEC sys.sp_executesql
         N'SET @Found = CASE WHEN EXISTS (
-            SELECT 1 FROM dbo.MR_AiConversationMessages a
-            LEFT JOIN dbo.MR_AiConversationMessages u ON u.MessageId = a.ReplyToMessageId
-                AND u.ConversationId = a.ConversationId AND u.Role = N''user''
-            WHERE a.Role = N''assistant'' AND (u.MessageId IS NULL OR a.Sequence <= u.Sequence)
+            SELECT 1 FROM dbo.MR_AiConversationMessages m
+            LEFT JOIN dbo.MR_AiConversationMessages previous
+                ON previous.ConversationId = m.ConversationId AND previous.Sequence = m.Sequence - 1
+            WHERE (m.Role = N''user'' AND m.Sequence % 2 = 0)
+                OR (m.Role = N''assistant'' AND (
+                    m.Sequence % 2 <> 0 OR previous.MessageId IS NULL OR previous.Role <> N''user''
+                    OR m.ReplyToMessageId <> previous.MessageId
+                ))
         ) THEN 1 ELSE 0 END;', N'@Found bit OUTPUT', @Found = @Inconsistent OUTPUT;
     IF @Inconsistent = 1
-        THROW 51017, N'0017: Yanıt aynı konuşmadaki bir kullanıcı iletisine bağlı değil.', 1;
+        THROW 51017, N'0017: İleti sırası kullanıcı/yanıt çiftleri biçiminde değil ya da yanıt hemen önceki kullanıcı iletisine bağlı değil.', 1;
 
     DROP TABLE #MR_AiConversations_Expected;
     DROP TABLE #MR_AiConversationMessages_Expected;

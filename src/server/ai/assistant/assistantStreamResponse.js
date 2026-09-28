@@ -5,9 +5,7 @@ import {
   ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_STREAM_EVENTS
 } from '../../../domain/ai/assistantContract.js';
-import { COMPONENTS, EVENT_SEVERITIES } from '../../../domain/observability/eventModel.js';
 import { ServerPersistenceError } from '../../errors.js';
-import { logEvent } from '../../observability/structuredLogger.js';
 import { recordAssistantTurn } from '../aiTelemetry.js';
 import { generateAssistantAnswer } from './assistantService.js';
 
@@ -74,14 +72,8 @@ export function assistantStreamErrorPayload(error, { partial = false } = {}) {
     details = error.details || {};
     retryable = isAiErrorCode(code) ? aiErrorDefinition(code).retryable : RETRYABLE_SERVER_CODES.has(code);
   } else {
-    logEvent({
-      severity: EVENT_SEVERITIES.ERROR,
-      component: COMPONENTS.AI,
-      operation: 'ai.assistant.turn',
-      code: AI_ERROR_CODES.AI_INTERNAL_ERROR,
-      message: 'Rota AI akışında beklenmeyen hata.',
-      error
-    });
+    // Beklenmeyen hata burada yalnızca güvenli kullanıcı sonucuna çevrilir.
+    // İşletim günlüğünü recordAssistantTurn tek kez yazar.
     const definition = aiErrorDefinition(AI_ERROR_CODES.AI_INTERNAL_ERROR);
     code = definition.code;
     message = definition.message;

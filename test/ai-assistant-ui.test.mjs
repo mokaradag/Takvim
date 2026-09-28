@@ -325,6 +325,19 @@ test('kayıtlı iletiler turlara çevrilir; yanıtı olmayan kullanıcı iletisi
   assert.equal(retryableTurnKey(turns.slice(0, 1)), null);
 });
 
+test('kayıtlı konuşma yeniden açılınca bağlam kısaltma uyarısı yeniden kurulur', () => {
+  const messages = [];
+  for (let index = 0; index < 11; index += 1) {
+    const userId = `u-${index}`;
+    messages.push({ id: userId, sequence: index * 2 + 1, role: 'user', content: `Soru ${index}`, turnId: `t-${index}` });
+    messages.push({ id: `a-${index}`, sequence: index * 2 + 2, role: 'assistant', content: `Yanıt ${index}`, replyToId: userId });
+  }
+  messages.push({ id: 'u-last', sequence: 23, role: 'user', content: 'Devam', turnId: 't-last' });
+  const turns = turnsFromMessages(messages);
+  assert.equal(turns.at(-2).contextTrimmed, false, 'on tamamlanmış çift bütçeye sığar');
+  assert.equal(turns.at(-1).contextTrimmed, true, 'on birinci eski çift bağlam dışında kalır');
+});
+
 /* ── Sunum ────────────────────────────────────────────────── */
 
 test('hata görünümü kategorileri ayırır; kapasite yoğunluğu çökme gibi değil geçici uyarı olarak anlatılır', () => {
@@ -345,7 +358,9 @@ test('hata görünümü kategorileri ayırır; kapasite yoğunluğu çökme gibi
   assert.equal(view({ code: 'NETWORK' }).title, 'Bağlantı sorunu');
   assert.equal(view({ code: 'STREAM_STALLED' }).title, 'Bağlantı yanıt vermiyor');
   assert.match(view({ code: 'AI_PROVIDER_RESPONSE_INVALID', reason: 'EMPTY_COMPLETION' }).message, /görünür bir yanıt üretmeden/);
+  assert.equal(view({ code: 'AI_PROVIDER_RESPONSE_INVALID', reason: 'EMPTY_COMPLETION' }).action, 'new-conversation');
   assert.equal(view({ code: 'CONFLICT', reason: 'CONVERSATION_FULL', message: 'Dolu.' }).action, 'new-conversation');
+  assert.equal(view({ code: 'CONFLICT', reason: 'TURN_UNANSWERED' }).action, 'new-conversation');
   assert.match(view({ code: 'CONFLICT', reason: 'GENERATION_IN_PROGRESS' }).message, /başka bir pencerede/);
   assert.equal(view({ code: 'NOT_FOUND' }).action, 'new-conversation');
   assert.equal(view({ code: 'UNAUTHORIZED' }).action, 'reload');
@@ -853,6 +868,21 @@ test('bağlanmamış başarısız tur yeniden denenmeden atılmaz', async () => 
   assert.deepEqual(state().active.turns.map((turn) => turn.user.content), ['Eski']);
   assert.equal(controller.retry(api.turns[0].input.turnId).ok, true);
   assert.equal(api.turns[1].input.turnId, api.turns[0].input.turnId);
+});
+
+test('kaydı doğrulanmamış yeniden deneme kesin kapanışta iletiyi taslağa geri verir', async () => {
+  const { controller, api, state } = await readyController();
+  await controller.openConversation(CONVERSATION_A);
+  controller.send('Korunacak ileti');
+  api.turns[0].resolve({ ok: false, phase: 'request', code: 'NETWORK', retryable: true });
+  await drain();
+  const turnKey = state().active.turns[0].key;
+  assert.equal(controller.retry(turnKey).ok, true);
+  api.turns[1].resolve({ ok: false, phase: 'request', code: 'NOT_FOUND', retryable: false });
+  await drain();
+  assert.equal(state().active.closed, true);
+  assert.equal(state().active.recoveredDraft.text, 'Korunacak ileti');
+  assert.equal(state().active.turns.length, 0);
 });
 
 test('Durdur sonrasında istek bitene kadar yeniden gönderilemez; geç çatışma yeniden denenebilir', async () => {
@@ -1916,46 +1946,43 @@ test('tam konuşma baştan gönderime kapanır ama yanıtsız son tur yinelenebi
   controller.dispose();
 });
 
-test('bir baş sayfasından fazla taşınan konuşmalar sayfalamada atlanmaz', async () => {
+test('değişmez tarama imleci güncel baş sayfayı tek turda birleştirir', async () => {
   const boundary = { id: CONVERSATION_A, title: 'Sınır', updatedAt: '2026-09-26T10:00:00Z' };
-  const moved = Array.from({ length: 31 }, (_, i) => ({ id: createId(), title: `Taşınan ${i}`, updatedAt: '2026-09-27T10:00:00Z' }));
-  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [boundary], nextCursor: 'old' }) });
+  const moved = { id: createId(), title: 'Başa taşınan', updatedAt: '2026-09-28T10:00:00Z' };
+  const older = { id: createId(), title: 'Daha eski', updatedAt: '2026-09-20T10:00:00Z' };
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [boundary], nextCursor: 'legacy', scanCursor: 'scan-start' }) });
   const { controller, state } = await readyController({ api });
-  api.listAssistantConversationsRequest = async ({ cursor }) => cursor == null
-    ? { ok: true, conversations: moved.slice(0, 30), nextCursor: 'bridge' }
-    : cursor === 'bridge' ? { ok: true, conversations: [...moved.slice(30), boundary], nextCursor: 'old' }
-      : { ok: true, conversations: [], nextCursor: null };
+  const calls = [];
+  api.listAssistantConversationsRequest = async ({ cursor }) => {
+    calls.push(cursor);
+    if (cursor == null) return { ok: true, conversations: [moved, boundary], nextCursor: 'legacy', scanCursor: 'scan-start' };
+    assert.equal(cursor, 'scan-start');
+    return { ok: true, conversations: [boundary, older], nextCursor: 'scan-next' };
+  };
   await controller.loadMore();
-  assert.equal(state().list.items.length, 32);
-  assert.ok(moved.every((item) => state().list.items.some((row) => row.id === item.id)));
+  assert.deepEqual(calls, [null, 'scan-start']);
+  assert.deepEqual(new Set(state().list.items.map((item) => item.id)), new Set([moved.id, boundary.id, older.id]));
+  assert.equal(state().list.nextCursor, 'scan-next');
   controller.dispose();
 });
 
-test('yüz sayfadan derin geçerli tarihçe yenilemesi protokol hatası sayılmaz', async () => {
-  const boundary = { id: CONVERSATION_A, title: 'Eski sınır', updatedAt: '2026-09-26T10:00:00Z' };
-  const moved = Array.from({ length: 101 }, (_, index) => ({
-    id: createId(),
-    title: `Taşınan ${index}`,
-    updatedAt: '2026-09-27T10:00:00Z'
-  }));
-  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [boundary], nextCursor: 'old' }) });
-  const { controller, state } = await readyController({ api });
-  let bridgeReads = 0;
+test('ardışık Daha eski çağrıları önceki tarama sayfalarını yeniden okumaz', async () => {
+  const boundary = { id: CONVERSATION_A, title: 'Sınır', updatedAt: '2026-09-26T10:00:00Z' };
+  const olderA = { id: createId(), title: 'Eski A', updatedAt: '2026-09-25T10:00:00Z' };
+  const olderB = { id: createId(), title: 'Eski B', updatedAt: '2026-09-24T10:00:00Z' };
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [boundary], nextCursor: 'legacy', scanCursor: 'scan-start' }) });
+  const { controller } = await readyController({ api });
+  const scans = [];
   api.listAssistantConversationsRequest = async ({ cursor }) => {
-    if (cursor == null) return { ok: true, conversations: [moved[0]], nextCursor: 'bridge-1' };
-    if (cursor.startsWith('bridge-')) {
-      const index = Number(cursor.slice('bridge-'.length));
-      bridgeReads += 1;
-      return index < 101
-        ? { ok: true, conversations: [moved[index]], nextCursor: `bridge-${index + 1}` }
-        : { ok: true, conversations: [boundary], nextCursor: 'old' };
-    }
-    return { ok: true, conversations: [], nextCursor: null };
+    if (cursor == null) return { ok: true, conversations: [boundary], nextCursor: 'legacy', scanCursor: 'scan-start' };
+    scans.push(cursor);
+    if (cursor === 'scan-start') return { ok: true, conversations: [olderA], nextCursor: 'scan-2' };
+    if (cursor === 'scan-2') return { ok: true, conversations: [olderB], nextCursor: null };
+    throw new Error(`beklenmeyen imleç: ${cursor}`);
   };
   await controller.loadMore();
-  assert.equal(bridgeReads, 101);
-  assert.equal(state().list.error, null);
-  assert.ok(moved.every((item) => state().list.items.some((row) => row.id === item.id)));
+  await controller.loadMore();
+  assert.deepEqual(scans, ['scan-start', 'scan-2']);
   controller.dispose();
 });
 

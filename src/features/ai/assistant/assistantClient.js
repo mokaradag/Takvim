@@ -94,7 +94,8 @@ export function listAssistantConversationsRequest({ cursor = null, ...options } 
   const path = cursor ? `${BASE}/conversations/before/${encodeURIComponent(cursor)}` : `${BASE}/conversations`;
   return expectPayload(requestJson(path, { method: 'GET' }, options), (response) => Array.isArray(response.conversations)
     && response.conversations.every(isConversation)
-    && (response.nextCursor == null || typeof response.nextCursor === 'string'));
+    && (response.nextCursor == null || typeof response.nextCursor === 'string')
+    && (response.scanCursor == null || typeof response.scanCursor === 'string'));
 }
 
 export function loadAssistantConversationRequest(conversationId, options = {}) {

@@ -87,7 +87,8 @@ export async function readJsonBody(request, { maxBytes = MAX_BODY_BYTES, signal 
   }
   let parsed = null;
   try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+    parsed = JSON.parse(text);
   } catch {
     parsed = null;
   }

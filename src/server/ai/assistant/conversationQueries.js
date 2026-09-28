@@ -42,6 +42,22 @@ export const AI_CONVERSATION_LIST_BEFORE_SQL = `${KNOWN_SICIL}
         OR (c.UpdatedAt = @beforeUpdatedAt AND c.ConversationId < @beforeConversationId))
     ORDER BY c.UpdatedAt DESC, c.ConversationId DESC;`;
 
+/**
+ * Arayüzün "Daha eski" taraması için DEĞİŞMEZ anahtar kümesi.
+ * İlk scan imlecinde tarih NULL'dır; sonraki sayfalar (CreatedAt, ConversationId)
+ * çiftinden sürer. UpdatedAt değişse bile satır atlanmaz.
+ */
+export const AI_CONVERSATION_SCAN_SQL = `${KNOWN_SICIL}
+  SELECT @knownSicil AS KnownSicil;
+  IF @knownSicil = 1
+    SELECT TOP (@limit) ${CONVERSATION_COLUMNS}
+    FROM dbo.MR_AiConversations c
+    WHERE c.OwnerSicil = @sicil
+      AND (@beforeCreatedAt IS NULL
+        OR c.CreatedAt < @beforeCreatedAt
+        OR (c.CreatedAt = @beforeCreatedAt AND c.ConversationId < @beforeConversationId))
+    ORDER BY c.CreatedAt DESC, c.ConversationId DESC;`;
+
 /** Tek konuşma ve iletileri (konuşma başına ileti sayısı sınırlıdır; `TOP` ayrıca korur). */
 export const AI_CONVERSATION_LOAD_SQL = `${KNOWN_SICIL}
   SELECT @knownSicil AS KnownSicil;

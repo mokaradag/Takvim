@@ -1,4 +1,7 @@
 import 'server-only';
+import { ASSISTANT_CONTEXT_POLICY, selectAssistantContextHistory } from '../../../domain/ai/assistantContract.js';
+
+export { ASSISTANT_CONTEXT_POLICY } from '../../../domain/ai/assistantContract.js';
 
 /**
  * Rota AI'nin SUNUCUYA AİT sistem yönergesi ve modelin göreceği bağlamın
@@ -17,19 +20,6 @@ import 'server-only';
  * Yanıtı olmayan (durdurulan, kesilen, başarısız) turlar bağlama girmez; bağlam
  * her zaman kullanıcı/asistan çiftleriyle ilerler.
  */
-
-export const ASSISTANT_CONTEXT_POLICY = Object.freeze({
-  /** Veritabanından okunan en fazla önceki ileti (tur öncesi). */
-  historyWindow: 40,
-  /** Modele verilen en fazla önceki ileti (çift sayısı × 2). */
-  maxHistoryMessages: 20,
-  /** Önceki iletiler + yeni ileti için toplam karakter bütçesi. */
-  maxContextChars: 48000,
-  /** Bağlama giren tek bir önceki iletinin en büyük uzunluğu; uzunsa baştan kısaltılır. */
-  maxMessageChars: 12000
-});
-
-const CLIPPED_SUFFIX = '\n[…ileti bağlam için kısaltıldı]';
 
 function todayText(now) {
   try {
@@ -56,15 +46,6 @@ export function assistantSystemPrompt(now = new Date()) {
   ].join('\n');
 }
 
-function clip(content) {
-  const text = String(content ?? '');
-  const limit = ASSISTANT_CONTEXT_POLICY.maxMessageChars;
-  if (text.length <= limit) return text;
-  let cut = text.slice(0, limit - CLIPPED_SUFFIX.length);
-  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
-  return `${cut}${CLIPPED_SUFFIX}`;
-}
-
 /**
  * Modele gidecek iletiler: sistem yönergesi + en yeni tamamlanmış çiftler
  * (bütçeye sığdığı kadar) + yeni kullanıcı iletisi.
@@ -76,36 +57,18 @@ function clip(content) {
  * girmediğini söyler; `clippedMessages` kısaltılarak giren ileti sayısıdır.
  */
 export function buildAssistantContext({ history = [], userContent, priorMessageCount = history.length, now = new Date() }) {
-  const answers = new Map(history.filter((message) => message.role === 'assistant').map((message) => [message.replyToId, message]));
-  const pairs = history
-    .filter((message) => message.role === 'user' && answers.has(message.id))
-    .map((message) => [message, answers.get(message.id)]);
+  const selected = selectAssistantContextHistory({ history, userContent, priorMessageCount });
   const current = String(userContent ?? '');
-  let budget = ASSISTANT_CONTEXT_POLICY.maxContextChars - current.length;
-  const included = [];
-  let clippedMessages = 0;
-  for (let index = pairs.length - 1; index >= 0; index -= 1) {
-    if ((included.length + 1) * 2 > ASSISTANT_CONTEXT_POLICY.maxHistoryMessages) break;
-    const [question, answer] = pairs[index];
-    const pair = [clip(question.content), clip(answer.content)];
-    const size = pair[0].length + pair[1].length;
-    if (size > budget) break;
-    budget -= size;
-    included.unshift(pair);
-    clippedMessages += Number(pair[0] !== String(question.content ?? '')) + Number(pair[1] !== String(answer.content ?? ''));
-  }
   const messages = [
     { role: 'system', content: assistantSystemPrompt(now) },
-    ...included.flatMap(([question, answer]) => [{ role: 'user', content: question }, { role: 'assistant', content: answer }]),
+    ...selected.pairs.flatMap(([question, answer]) => [{ role: 'user', content: question }, { role: 'assistant', content: answer }]),
     { role: 'user', content: current }
   ];
-  const includedMessages = included.length * 2;
-  const completedMessages = pairs.length * 2;
   return {
     messages,
-    trimmed: included.length < pairs.length || priorMessageCount > history.length || clippedMessages > 0,
-    includedMessages,
-    clippedMessages,
-    omittedMessages: Math.max(0, completedMessages - includedMessages) + Math.max(0, priorMessageCount - history.length)
+    trimmed: selected.trimmed,
+    includedMessages: selected.includedMessages,
+    clippedMessages: selected.clippedMessages,
+    omittedMessages: selected.omittedMessages
   };
 }

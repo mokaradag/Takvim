@@ -427,7 +427,8 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
     'AI_CONVERSATION_LIST_BEFORE_SQL',
     'AI_CONVERSATION_LIST_SQL',
     'AI_CONVERSATION_LOAD_SQL',
-    'AI_CONVERSATION_PREPARE_TURN_SQL'
+    'AI_CONVERSATION_PREPARE_TURN_SQL',
+    'AI_CONVERSATION_SCAN_SQL'
   ]);
   for (const [name, text] of Object.entries(queries)) {
     // Her deyim konuşmayı güvenilir Sicil'in sahipliğiyle sınırlar; ileti tabloları sahip konuşma üzerinden okunur.
@@ -441,6 +442,7 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   // Sayfalar sınırlıdır: liste TOP (@limit), okuma TOP (@maxMessages), geçmiş TOP (@historyLimit).
   assert.match(queries.AI_CONVERSATION_LIST_SQL, /SELECT TOP \(@limit\)/);
   assert.match(queries.AI_CONVERSATION_LIST_BEFORE_SQL, /SELECT TOP \(@limit\)/);
+  assert.match(queries.AI_CONVERSATION_SCAN_SQL, /ORDER BY c\.CreatedAt DESC, c\.ConversationId DESC/);
   assert.match(queries.AI_CONVERSATION_LOAD_SQL, /SELECT TOP \(@maxMessages\)/);
   assert.match(queries.AI_CONVERSATION_PREPARE_TURN_SQL, /SELECT TOP \(@historyLimit\)/);
   // Liste iletileri yüklemez.
@@ -491,7 +493,7 @@ test('0017 göçü sıralı, yinelenebilir, yapıyı doğrular ve yalnızca gör
   for (const table of ['MR_AiConversations', 'MR_AiConversationMessages']) {
     assert.deepEqual(tableOf(createSql, table), tableOf(upgrade, table), `yeni kurulum ile göç aynı ${table} tablosunu kurar`);
   }
-  for (const index of ['UX_MR_AiConversations_OwnerOrigin', 'IX_MR_AiConversations_OwnerRecent', 'UX_MR_AiConversationMessages_Turn', 'UX_MR_AiConversationMessages_Reply']) {
+  for (const index of ['UX_MR_AiConversations_OwnerOrigin', 'IX_MR_AiConversations_OwnerRecent', 'IX_MR_AiConversations_OwnerCreated', 'UX_MR_AiConversationMessages_Turn', 'UX_MR_AiConversationMessages_Reply']) {
     assert.ok(createSql.includes(index), `yeni kurulum ${index} dizinini kurar`);
   }
   assert.match(createSql, /\(N'0017_ai_assistant_conversations', N'[^']+'\)/);
@@ -500,6 +502,11 @@ test('0017 göçü sıralı, yinelenebilir, yapıyı doğrular ve yalnızca gör
   const messagesDrop = rollback.indexOf("IF OBJECT_ID(N'dbo.MR_AiConversationMessages', N'U') IS NOT NULL DROP TABLE dbo.MR_AiConversationMessages;");
   const conversationsDrop = rollback.indexOf("IF OBJECT_ID(N'dbo.MR_AiConversations', N'U') IS NOT NULL DROP TABLE dbo.MR_AiConversations;");
   assert.ok(messagesDrop >= 0 && conversationsDrop > messagesDrop);
+});
+
+test('yönetici bağlantı testinde konuşma şeması denetimi ortak süre bütçesine bağlıdır', () => {
+  const health = code(read('src/server/ai/aiHealth.js'));
+  assert.match(health, /raceWithAbort\(\(\) => checkAssistantConversationSchema\(\{ signal: deadline\.signal \}\), deadline\.signal\)/);
 });
 
 test('olağan anlık görüntü, kayıt ve depo yolları Rota AI çalışma zamanına bağlanmaz', () => {
@@ -587,6 +594,7 @@ test('konuşma göçü veri ilişkilerini sütun doğrulamasından sonra ve sır
   assert.match(checks[0], /FirstSequence <> 1 OR counts\.LastSequence <> counts\.Total/);
   assert.match(checks[1], /OUTER APPLY/);
   assert.match(checks[1], /firstTurn\.ClientTurnId IS NULL/);
-  assert.match(checks[2], /u\.MessageId IS NULL OR a\.Sequence <= u\.Sequence/);
+  assert.match(checks[2], /m\.Role = N'user' AND m\.Sequence % 2 = 0/);
+  assert.match(checks[2], /m\.Role = N'assistant'.*m\.ReplyToMessageId <> previous\.MessageId/s);
   assert.ok(upgrade.indexOf('DECLARE @Inconsistent') > upgrade.indexOf('sys.columns'));
 });

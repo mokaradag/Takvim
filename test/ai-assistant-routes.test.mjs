@@ -157,6 +157,22 @@ test('bozuk, eksik ya da tanınmayan alan taşıyan tur isteği sağlayıcıya g
   assert.equal(db.aiConversations.length, 0);
 });
 
+test('bozuk UTF-8 JSON gövdesi metin ikamesiyle kabul edilmez', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const turnId = randomUUID();
+  const body = Buffer.concat([
+    Buffer.from(`{"turnId":"${turnId}","message":"`, 'utf8'),
+    Buffer.from([0xc3, 0x28]),
+    Buffer.from('","mode":"standard"}', 'utf8')
+  ]);
+  const response = await rawTurn(body);
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'AI_REQUEST_INVALID');
+  assert.equal(response.body.error.details.reason, 'MALFORMED_JSON');
+  assert.equal(provider.calls.length, 0);
+  assert.equal(db.aiConversations.length, 0);
+});
+
 test('aşırı büyük gövde okunmadan reddedilir', async (t) => {
   const { provider } = createAiStack(t);
   const response = await sendTurn({ turnId: randomUUID(), message: 'x', padding: 'y'.repeat(70 * 1024) });
@@ -400,7 +416,8 @@ test('beklenmeyen iç hata genel iletiyle bildirilir; hata ayrıntısı akışa 
   assert.equal(error.data.code, 'AI_INTERNAL_ERROR');
   assert.doesNotMatch(JSON.stringify(parsed.events), /SELECT|iç_tablo/);
   assert.equal(released(), 1);
-  assert.ok(logs.some((line) => line.includes('ai.assistant.turn')), 'beklenmeyen hata işletim günlüğüne yazılır');
+  const turnLogs = logs.filter((line) => line.includes('ai.assistant.turn') && line.includes('AI_INTERNAL_ERROR'));
+  assert.equal(turnLogs.length, 1, 'beklenmeyen hata işletim günlüğüne yalnızca bir kez yazılır');
   assert.equal(assistantStreamErrorPayload(new Error('x')).retryable, false);
 });
 

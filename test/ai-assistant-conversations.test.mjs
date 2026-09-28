@@ -627,6 +627,31 @@ test('takvimde olmayan ya da SQL aralığı dışındaki imleç zamanı reddedil
   assert.equal((await listAssistantConversations(cursor('2026-09-26T10:00:00.000Z'))).status, 200);
 });
 
+test('CreatedAt devam imleci konuşma başa taşınsa da onu atlamaz', async (t) => {
+  const { db } = createAiStack(t);
+  const base = Date.parse('2026-09-20T10:00:00.000Z');
+  for (let index = 0; index < 65; index += 1) {
+    db.aiConversations.push({
+      ConversationId: randomUUID().toUpperCase(),
+      OwnerSicil: SICIL_A,
+      Title: `Konuşma ${index}`,
+      OriginTurnId: randomUUID().toUpperCase(),
+      MessageCount: 0,
+      CreatedAt: new Date(base + index),
+      UpdatedAt: new Date(base + index)
+    });
+  }
+  const head = await listAssistantConversations();
+  assert.ok(head.body.nextCursor);
+  assert.ok(head.body.scanCursor);
+  const firstScan = await listAssistantConversations(head.body.scanCursor);
+  assert.ok(firstScan.body.nextCursor);
+  const target = db.aiConversations[34];
+  target.UpdatedAt = new Date(base + 100000);
+  const nextScan = await listAssistantConversations(firstScan.body.nextCursor);
+  assert.ok(nextScan.body.conversations.some((item) => item.id === target.ConversationId.toLowerCase()));
+});
+
 test('yarım uygulanmış 0017 (eksik sütun) de anlaşılır yapılandırma hatasıdır; başka sütun hatası değildir', async () => {
   const { isMissingConversationSchema } = await import('../src/server/ai/assistant/conversationStore.js');
   const columnError = (name) => Object.assign(new Error(`Invalid column name '${name}'.`), { number: 207 });

@@ -4,6 +4,7 @@ import {
   AI_CONVERSATION_APPEND_ANSWER_SQL,
   AI_CONVERSATION_DELETE_SQL,
   AI_CONVERSATION_LIST_BEFORE_SQL,
+  AI_CONVERSATION_SCAN_SQL,
   AI_CONVERSATION_LIST_SQL,
   AI_CONVERSATION_LOAD_SQL,
   AI_CONVERSATION_PREPARE_TURN_SQL
@@ -107,14 +108,20 @@ const recordsetsOf = (result) => result.recordsets || [];
 const knownSicilOf = (recordset) => Boolean(recordset?.[0]?.KnownSicil);
 
 /** Son etkinliğe göre sıralı, SINIRLI konuşma listesi (`limit` + 1 satır okunur). */
-export async function listConversations(executor, sicil, { limit, before = null }) {
+export async function listConversations(executor, sicil, { limit, before = null, scan = null }) {
   const request = sicilRequest(executor, sicil);
   request.input('limit', sql.Int, limit + 1);
-  if (before) {
+  if (scan) {
+    request.input('beforeCreatedAt', sql.DateTime2(3), scan.createdAt ? new Date(scan.createdAt) : null);
+    request.input('beforeConversationId', sql.UniqueIdentifier, scan.id || null);
+  } else if (before) {
     request.input('beforeUpdatedAt', sql.DateTime2(3), new Date(before.updatedAt));
     request.input('beforeConversationId', sql.UniqueIdentifier, before.id);
   }
-  const [known, rows = []] = recordsetsOf(await request.query(before ? AI_CONVERSATION_LIST_BEFORE_SQL : AI_CONVERSATION_LIST_SQL));
+  const result = scan
+    ? await request.query(AI_CONVERSATION_SCAN_SQL)
+    : await request.query(before ? AI_CONVERSATION_LIST_BEFORE_SQL : AI_CONVERSATION_LIST_SQL);
+  const [known, rows = []] = recordsetsOf(result);
   const conversations = rows.map(conversationRow);
   return {
     knownSicil: knownSicilOf(known),

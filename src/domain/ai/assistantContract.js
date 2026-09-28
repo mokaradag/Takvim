@@ -54,6 +54,57 @@ export const ASSISTANT_LIMITS = Object.freeze({
   maxTitleChars: 60
 });
 
+export const ASSISTANT_CONTEXT_POLICY = Object.freeze({
+  historyWindow: 40,
+  maxHistoryMessages: 20,
+  maxContextChars: 48000,
+  maxMessageChars: 12000
+});
+
+const ASSISTANT_CONTEXT_CLIPPED_SUFFIX = '\n[…ileti bağlam için kısaltıldı]';
+
+function clipAssistantContextMessage(content) {
+  const text = String(content ?? '');
+  const limit = ASSISTANT_CONTEXT_POLICY.maxMessageChars;
+  if (text.length <= limit) return text;
+  let cut = text.slice(0, limit - ASSISTANT_CONTEXT_CLIPPED_SUFFIX.length);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut}${ASSISTANT_CONTEXT_CLIPPED_SUFFIX}`;
+}
+
+/** Sunucu ve istemcinin aynı bağlam-kısaltma kararını üretmesi için saf seçim. */
+export function selectAssistantContextHistory({
+  history = [], userContent, priorMessageCount = history.length
+} = {}) {
+  const answers = new Map(history.filter((message) => message.role === 'assistant').map((message) => [message.replyToId, message]));
+  const pairs = history
+    .filter((message) => message.role === 'user' && answers.has(message.id))
+    .map((message) => [message, answers.get(message.id)]);
+  const current = String(userContent ?? '');
+  let budget = ASSISTANT_CONTEXT_POLICY.maxContextChars - current.length;
+  const included = [];
+  let clippedMessages = 0;
+  for (let index = pairs.length - 1; index >= 0; index -= 1) {
+    if ((included.length + 1) * 2 > ASSISTANT_CONTEXT_POLICY.maxHistoryMessages) break;
+    const [question, answer] = pairs[index];
+    const pair = [clipAssistantContextMessage(question.content), clipAssistantContextMessage(answer.content)];
+    const size = pair[0].length + pair[1].length;
+    if (size > budget) break;
+    budget -= size;
+    included.unshift(pair);
+    clippedMessages += Number(pair[0] !== String(question.content ?? '')) + Number(pair[1] !== String(answer.content ?? ''));
+  }
+  const includedMessages = included.length * 2;
+  const completedMessages = pairs.length * 2;
+  return {
+    pairs: included,
+    trimmed: included.length < pairs.length || priorMessageCount > history.length || clippedMessages > 0,
+    includedMessages,
+    clippedMessages,
+    omittedMessages: Math.max(0, completedMessages - includedMessages) + Math.max(0, priorMessageCount - history.length)
+  };
+}
+
 export const ASSISTANT_DEFAULT_TITLE = 'Yeni konuşma';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

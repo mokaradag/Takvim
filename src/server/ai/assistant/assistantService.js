@@ -269,16 +269,34 @@ export async function checkAssistantConversationSchema({ signal = null } = {}) {
 
 /* ── Konuşma listesi, okuma ve silme ─────────────────────────── */
 
+const SCAN_CURSOR_PREFIX = 'scan-v1';
+
 function encodeCursor(conversation) {
   return Buffer.from(`${conversation.updatedAt}|${conversation.id}`, 'utf8').toString('base64url');
+}
+
+function encodeScanCursor(conversation = null) {
+  const value = conversation
+    ? `${SCAN_CURSOR_PREFIX}|${conversation.createdAt}|${conversation.id}`
+    : `${SCAN_CURSOR_PREFIX}|start`;
+  return Buffer.from(value, 'utf8').toString('base64url');
 }
 
 function decodeCursor(cursor) {
   const invalid = () => invalidRequest('CURSOR_INVALID');
   if (typeof cursor !== 'string' || cursor.length > 200 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalid();
-  const [updatedAt, id, extra] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+  const parts = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+  if (parts.length === 2 && parts[0] === SCAN_CURSOR_PREFIX && parts[1] === 'start') {
+    return { kind: 'scan', createdAt: null, id: null };
+  }
+  if (parts[0] === SCAN_CURSOR_PREFIX) {
+    const [prefix, createdAt, id, extra] = parts;
+    if (prefix !== SCAN_CURSOR_PREFIX || extra !== undefined || !isAssistantId(id) || !isCanonicalCursorInstant(createdAt)) throw invalid();
+    return { kind: 'scan', createdAt, id: id.toLowerCase() };
+  }
+  const [updatedAt, id, extra] = parts;
   if (extra !== undefined || !isAssistantId(id) || !isCanonicalCursorInstant(updatedAt)) throw invalid();
-  return { updatedAt, id: id.toLowerCase() };
+  return { kind: 'recent', updatedAt, id: id.toLowerCase() };
 }
 
 /**
@@ -293,17 +311,31 @@ function isCanonicalCursorInstant(value) {
   return !Number.isNaN(time) && new Date(time).toISOString() === value;
 }
 
-/** Son etkinliğe göre sıralı, sayfalı konuşma listesi (yalnızca kendi konuşmaları). */
+/**
+ * Genel API'nin nextCursor alanı mevcut UpdatedAt sırasını korur. İlk sayfa
+ * ayrıca arayüze değişmez CreatedAt taraması için scanCursor verir; böylece
+ * derin geçmiş yeniden baştan oynatılmaz ve UpdatedAt sıçraması satır atlatmaz.
+ */
 export async function listAssistantConversations({ cursor = null, signal = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
-  const before = cursor == null ? null : decodeCursor(cursor);
+  const decoded = cursor == null ? null : decodeCursor(cursor);
+  const scan = decoded?.kind === 'scan' ? decoded : null;
+  const before = decoded?.kind === 'recent' ? decoded : null;
   const result = await withConversationSql(sicil, signal, (scope) => listConversations(directExecutor(scope), sicil, {
     limit: ASSISTANT_LIMITS.conversationPageSize,
-    before
+    before,
+    scan
   }));
   if (!result.knownSicil) throw unknownSicil();
   const last = result.conversations[result.conversations.length - 1];
-  return { conversations: result.conversations, nextCursor: result.hasMore && last ? encodeCursor(last) : null };
+  const nextCursor = result.hasMore && last
+    ? (scan ? encodeScanCursor(last) : encodeCursor(last))
+    : null;
+  return {
+    conversations: result.conversations,
+    nextCursor,
+    ...(cursor == null ? { scanCursor: result.hasMore ? encodeScanCursor() : null } : {})
+  };
 }
 
 function requireConversationId(value) {

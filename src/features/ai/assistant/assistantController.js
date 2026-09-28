@@ -1,10 +1,12 @@
 import { createUuidV4 } from '../../../data/clientEntityId.js';
 import {
+  ASSISTANT_CONTEXT_POLICY,
   ASSISTANT_DEFAULT_TITLE,
   ASSISTANT_LIMITS,
   ASSISTANT_MODES,
   ASSISTANT_STREAM_EVENTS,
-  normalizeAssistantMessage
+  normalizeAssistantMessage,
+  selectAssistantContextHistory
 } from '../../../domain/ai/assistantContract.js';
 import * as assistantApi from './assistantClient.js';
 import { assistantFailureView, isSessionFailure } from './assistantPresentation.js';
@@ -96,7 +98,7 @@ function defaultSchedule(callback, delayMs) {
 }
 
 function emptyList() {
-  return { items: [], nextCursor: null, loaded: false, loading: false, loadingMore: false, error: null };
+  return { items: [], nextCursor: null, scanCursor: null, boundary: null, headIds: [], loaded: false, loading: false, loadingMore: false, error: null };
 }
 
 function initialState() {
@@ -120,14 +122,21 @@ function initialState() {
 export function turnsFromMessages(messages = []) {
   const turns = [];
   const byUserMessage = new Map();
+  const prior = [];
   for (const message of [...messages].sort((left, right) => left.sequence - right.sequence)) {
     if (message.role === 'user') {
+      const history = prior.slice(-ASSISTANT_CONTEXT_POLICY.historyWindow);
+      const context = selectAssistantContextHistory({
+        history,
+        userContent: message.content,
+        priorMessageCount: Math.max(0, Number(message.sequence) - 1)
+      });
       const turn = {
         key: message.turnId || message.id,
         turnId: message.turnId || null,
         user: { id: message.id, content: message.content, createdAt: message.createdAt, pending: false },
         answer: null,
-        contextTrimmed: false
+        contextTrimmed: context.trimmed
       };
       turns.push(turn);
       byUserMessage.set(message.id, turn);
@@ -145,6 +154,7 @@ export function turnsFromMessages(messages = []) {
         };
       }
     }
+    prior.push(message);
   }
   return turns.map((turn) => (turn.answer ? turn : { ...turn, answer: { status: 'unanswered', content: '', error: null } }));
 }
@@ -356,7 +366,7 @@ export function createAssistantController({
     const dropList = (current) => (closed && result.code === 'NOT_FOUND'
       ? { ...current.list, items: current.list.items.filter((item) => item.id !== run.conversationId) }
       : current.list);
-    if (unaccepted && !failure.retryable && run.newTurn && PRE_PERSISTENCE_REJECTIONS.has(String(result.code))) {
+    if (unaccepted && !failure.retryable && !run.userMessageId && PRE_PERSISTENCE_REJECTIONS.has(String(result.code)) && (run.newTurn || closed)) {
       // Sunucu iletiyi yazmadan reddetti: yerel tur atılır, metin taslağa döner.
       update((current) => ({
         ...current,
@@ -700,11 +710,11 @@ export function createAssistantController({
   }
 
   /**
-   * Konuşma listesi. Yenileme ilk sayfayı okur. "Daha eski" önce kayıtlı
-   * sınıra kadar tüm yeni baş sayfalarını okuyarak taşınan konuşmaları toplar;
-   * eski sayfalar ise var olan anahtar kümesi imlecinden sürdürülür (imleç
-   * (UpdatedAt, ConversationId) çiftidir; başa taşınan konuşma atlanmaz).
-   * Yerini yeni bir okuma alan eski okuma kesilir.
+   * İlk sayfa son etkinliğe göre yenilenir. Sunucu `scanCursor` sağlıyorsa
+   * "Daha eski" değişmez (CreatedAt, ConversationId) taramasından sürer;
+   * böylece UpdatedAt sıçraması satır atlatmaz ve önceki sayfalar yeniden
+   * oynatılmaz. Eski/fake istemcilerde scanCursor yoksa önceki köprü davranışı
+   * geriye uyumluluk için korunur.
    */
   async function loadList({ more = false } = {}) {
     if (more && (!state.list.nextCursor || state.list.loadingMore)) return;
@@ -712,8 +722,11 @@ export function createAssistantController({
     const token = listToken;
     const ownSession = session;
     const cursor = more ? state.list.nextCursor : null;
+    const scanCursor = more ? state.list.scanCursor : null;
     const boundary = more ? state.list.boundary : null;
+    const previousHeadIds = new Set(more ? (state.list.headIds || []) : []);
     const startedVersion = mutationVersion;
+    const knownAtStart = new Set(state.list.items.map((item) => item.id));
     listLoad?.abort();
     update((current) => ({ ...current, list: { ...current.list, loading: !more, loadingMore: more, error: null } }));
     const load = trackLoad();
@@ -722,32 +735,81 @@ export function createAssistantController({
     const head = await api.listAssistantConversationsRequest({ cursor: null, signal: load.signal });
     const refreshed = [...(head.conversations || [])];
     let page = head;
+    let older = null;
+    let nextScanCursor = scanCursor;
     const visited = new Set();
-    const beforeBoundary = (item) => boundary && (compareText(item.updatedAt || '', boundary.updatedAt || '')
-      || compareText(guidSortKey(item.id), guidSortKey(boundary.id))) <= 0;
-    while (more && boundary && page.ok && page.nextCursor && current()
-      && !page.conversations.some(beforeBoundary)) {
-      if (visited.has(page.nextCursor)) {
-        page = { ok: false, code: 'INVALID_RESPONSE' };
-        break;
+    const freshHeadIds = new Set((head.conversations || []).map((item) => item.id));
+
+    if (more && scanCursor && head.ok) {
+      page = null;
+      while (nextScanCursor && current()) {
+        if (visited.has(nextScanCursor)) {
+          page = { ok: false, code: 'INVALID_RESPONSE' };
+          break;
+        }
+        visited.add(nextScanCursor);
+        page = await api.listAssistantConversationsRequest({ cursor: nextScanCursor, signal: load.signal });
+        if (!page.ok) break;
+        refreshed.push(...(page.conversations || []));
+        const foundNew = page.conversations.some((item) => !knownAtStart.has(item.id) && !freshHeadIds.has(item.id));
+        nextScanCursor = page.nextCursor;
+        if (foundNew || !nextScanCursor) break;
       }
-      visited.add(page.nextCursor);
-      page = await api.listAssistantConversationsRequest({ cursor: page.nextCursor, signal: load.signal });
-      refreshed.push(...(page.conversations || []));
+    } else if (more && boundary && head.ok) {
+      const beforeBoundary = (item) => boundary && (compareText(item.updatedAt || '', boundary.updatedAt || '')
+        || compareText(guidSortKey(item.id), guidSortKey(boundary.id))) <= 0;
+      while (page.ok && page.nextCursor && current() && !page.conversations.some(beforeBoundary)) {
+        if (visited.has(page.nextCursor)) {
+          page = { ok: false, code: 'INVALID_RESPONSE' };
+          break;
+        }
+        visited.add(page.nextCursor);
+        page = await api.listAssistantConversationsRequest({ cursor: page.nextCursor, signal: load.signal });
+        refreshed.push(...(page.conversations || []));
+      }
+      older = page.ok && current()
+        ? await api.listAssistantConversationsRequest({ cursor, signal: load.signal })
+        : null;
     }
-    const older = more && head.ok && page.ok && current()
-      ? await api.listAssistantConversationsRequest({ cursor, signal: load.signal })
-      : null;
+
     load.done();
     if (listLoad === load) listLoad = null;
     if (!current()) return;
-    const failed = !head.ok ? head : !page.ok ? page : older && !older.ok ? older : null;
+    const failed = !head.ok ? head : page && !page.ok ? page : older && !older.ok ? older : null;
     if (failed) {
       update((state_) => ({ ...state_, status: isSessionFailure(failed) ? 'error' : state_.status, failure: isSessionFailure(failed) ? assistantFailureView(failed) : state_.failure, list: { ...state_.list, loading: false, loadingMore: false, error: assistantFailureView(failed) } }));
       return;
     }
+
     update((state_) => {
       const mutated = (id) => (listMutations.get(id) || 0) > startedVersion;
+      if (more && scanCursor) {
+        const merged = new Map(
+          state_.list.items
+            .filter((item) => mutated(item.id) || !previousHeadIds.has(item.id) || freshHeadIds.has(item.id))
+            .map((item) => [item.id, item])
+        );
+        for (const item of refreshed) {
+          if (!mutated(item.id)) merged.set(item.id, item);
+        }
+        return {
+          ...state_,
+          list: {
+            items: sortConversations([...merged.values()]),
+            nextCursor: nextScanCursor,
+            scanCursor: nextScanCursor,
+            boundary: state_.list.boundary,
+            headIds: [...freshHeadIds],
+            loaded: true,
+            loading: false,
+            loadingMore: false,
+            error: null
+          }
+        };
+      }
+
+      const beforeBoundary = (item) => boundary && (compareText(item.updatedAt || '', boundary.updatedAt || '')
+        || compareText(guidSortKey(item.id), guidSortKey(boundary.id))) <= 0;
       const preserved = state_.list.items.filter((item) => mutated(item.id));
       const seen = new Set(preserved.map((item) => item.id));
       const merged = [...preserved];
@@ -757,17 +819,20 @@ export function createAssistantController({
         merged.push(item);
       };
       refreshed.forEach(add);
-      if (more) {
+      if (more && older) {
         older.conversations.forEach(add);
-        // Başlangıç sınırına kadar yeniden okunan aralıktaki silinmiş kayıtlar geri eklenmez.
         state_.list.items.filter((item) => beforeBoundary(item) && item.id !== boundary?.id).forEach(add);
       }
+      const source = more && older ? older : head;
+      const initialScan = !more && typeof head.scanCursor === 'string' ? head.scanCursor : null;
       return {
         ...state_,
         list: {
           items: sortConversations(merged),
-          nextCursor: more ? older.nextCursor : head.nextCursor,
-          boundary: (more ? older : head).conversations.at(-1) || state_.list.boundary,
+          nextCursor: more ? older?.nextCursor ?? null : initialScan || head.nextCursor,
+          scanCursor: more ? null : initialScan,
+          boundary: source.conversations.at(-1) || state_.list.boundary,
+          headIds: [...freshHeadIds],
           loaded: true,
           loading: false,
           loadingMore: false,

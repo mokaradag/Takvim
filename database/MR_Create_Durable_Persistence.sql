@@ -498,6 +498,10 @@ BEGIN TRY
         ON dbo.MR_AiConversations(OwnerSicil, UpdatedAt DESC, ConversationId DESC)
         INCLUDE (Title, CreatedAt, MessageCount);
 
+    CREATE INDEX IX_MR_AiConversations_OwnerCreated
+        ON dbo.MR_AiConversations(OwnerSicil, CreatedAt DESC, ConversationId DESC)
+        INCLUDE (Title, UpdatedAt, MessageCount);
+
     CREATE TABLE dbo.MR_AiConversationMessages (
         MessageId uniqueidentifier NOT NULL,
         ConversationId uniqueidentifier NOT NULL,

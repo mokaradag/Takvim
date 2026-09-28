@@ -118,7 +118,7 @@ export function assistantFailureView(result, now = Date.now()) {
           : 'Yapay zekâ hizmetinden geçersiz bir yanıt alındı.',
         // Katalog bu kodu yinelenemez sayar; sunucunun sınıflandırması korunur.
         retryable: result?.retryable === true,
-        action: null
+        action: 'new-conversation'
       };
     case AI_ERROR_CODES.AI_REQUEST_INVALID:
       return {
@@ -141,7 +141,7 @@ export function assistantFailureView(result, now = Date.now()) {
           ? 'Bu konuşmada başka bir pencerede yanıt üretiliyor. Tamamlanmasını bekleyip yeniden deneyin.'
           : serverMessage(result, 'İşlem şu anda yapılamıyor.'),
         retryable: result?.reason === 'GENERATION_IN_PROGRESS',
-        action: result?.reason === 'CONVERSATION_FULL' ? 'new-conversation' : null
+        action: ['CONVERSATION_FULL', 'TURN_UNANSWERED'].includes(result?.reason) ? 'new-conversation' : null
       };
     case 'NOT_FOUND':
       return {

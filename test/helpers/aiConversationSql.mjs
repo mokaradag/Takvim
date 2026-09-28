@@ -103,15 +103,25 @@ function sortRecent(rows) {
   return [...rows].sort((left, right) => (right.UpdatedAt - left.UpdatedAt) || compareGuid(right.ConversationId, left.ConversationId));
 }
 
+function sortCreated(rows) {
+  return [...rows].sort((left, right) => (right.CreatedAt - left.CreatedAt) || compareGuid(right.ConversationId, left.ConversationId));
+}
+
 function list(db, params, sicil, known) {
   if (!known) return [[{ KnownSicil: 0 }]];
   let rows = db.aiConversations.filter((row) => row.OwnerSicil === sicil);
-  if (params.beforeUpdatedAt != null) {
+  const scanning = Object.hasOwn(params, 'beforeCreatedAt');
+  if (scanning && params.beforeCreatedAt != null) {
+    const before = new Date(params.beforeCreatedAt).getTime();
+    rows = rows.filter((row) => row.CreatedAt.getTime() < before
+      || (row.CreatedAt.getTime() === before && compareGuid(row.ConversationId, params.beforeConversationId) < 0));
+  } else if (!scanning && params.beforeUpdatedAt != null) {
     const before = new Date(params.beforeUpdatedAt).getTime();
     rows = rows.filter((row) => row.UpdatedAt.getTime() < before
       || (row.UpdatedAt.getTime() === before && compareGuid(row.ConversationId, params.beforeConversationId) < 0));
   }
-  return [[{ KnownSicil: 1 }], sortRecent(rows).slice(0, Number(params.limit)).map(conversationRow)];
+  const sorted = scanning ? sortCreated(rows) : sortRecent(rows);
+  return [[{ KnownSicil: 1 }], sorted.slice(0, Number(params.limit)).map(conversationRow)];
 }
 
 function load(db, params, sicil, known) {
@@ -258,6 +268,7 @@ export function runAiConversationQuery(db, sqlText, params) {
   if (sqlText.includes('AS AnswerPersisted')) return append(db, params, sicil);
   if (sqlText.includes('DELETE c FROM dbo.MR_AiConversations c')) return remove(db, params, sicil, known);
   if (sqlText.includes('TOP (@maxMessages)')) return load(db, params, sicil, known);
+  if (sqlText.includes('ORDER BY c.CreatedAt DESC, c.ConversationId DESC')) return list(db, params, sicil, known);
   if (sqlText.includes('ORDER BY c.UpdatedAt DESC, c.ConversationId DESC')) return list(db, params, sicil, known);
   throw new Error(`Fake SQL Server: desteklenmeyen konuşma deyimi: ${sqlText.trim().slice(0, 120)}`);
 }

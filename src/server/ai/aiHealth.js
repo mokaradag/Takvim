@@ -276,7 +276,7 @@ async function verifySetup(config, deadline, models) {
     };
   }
   try {
-    await checkAssistantConversationSchema({ signal: deadline.signal });
+    await raceWithAbort(() => checkAssistantConversationSchema({ signal: deadline.signal }), deadline.signal);
   } catch {
     if (deadline.failure()) throw deadline.failure();
     return { code: 'CONVERSATION_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak Rota AI konuşma tabloları (0017) doğrulanamadı.' };
