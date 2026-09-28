@@ -117,7 +117,7 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, reconcilin
           </p>
         )}
         {hasText && <AssistantMarkdown text={answer.content} />}
-        {hasText && (status === 'stopped' || status === 'interrupted' || status === 'failed') && (
+        {(reconciling || (hasText && (status === 'stopped' || status === 'interrupted' || status === 'failed'))) && (
           <p className="rota-assistant-partial-note">
             {reconciling
               ? 'Yanıtın sonucu kontrol ediliyor; tamamlanmış yanıt sunucuda kaydedilmiş olabilir.'
@@ -131,7 +131,7 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, reconcilin
             {note && <small className="rota-assistant-finish-note">{note}</small>}
           </div>
         )}
-        {failure && !active && (
+        {failure && !active && !reconciling && (
           <AnswerNotice
             failure={failure}
             retryable={canRetry && failure.retryable !== false}

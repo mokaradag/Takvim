@@ -165,6 +165,7 @@ function prepare(db, params, sicil, known) {
       lastSequence = messages.length ? messages[messages.length - 1].Sequence : null;
       if (turn) outcome = 'EXISTING';
       else if (params.content == null || params.readOnly) outcome = 'TURN_NOT_FOUND';
+      else if (messages.at(-1)?.Role === 'user') outcome = 'UNANSWERED';
       else if (conversation.MessageCount > Number(params.maxMessages) - 2) outcome = 'FULL';
       else {
         const at = now();

@@ -79,6 +79,7 @@ export const AI_CONVERSATION_DELETE_SQL = `${KNOWN_SICIL}
  *   `(OwnerSicil, OriginTurnId)` ile önceki konuşmayı bulur, ikincisini açmaz.
  * - Aynı `@turnId` ikinci kullanıcı iletisi üretmez (`EXISTING`); `@content`
  *   boşsa (yeniden deneme) yalnızca var olan tur kullanılabilir.
+ * - Son kayıt yanıtı olmayan bir kullanıcı iletisiyse yeni tur `UNANSWERED` ile reddedilir.
  * - Konuşma ileti sınırına yaklaştıysa (kullanıcı + yanıt için yer yoksa) `FULL`.
  * - Tur ve son ileti sırası, modelin bağlamı için tur ÖNCESİ son iletiler, turun
  *   kendisi ve var olan yanıtı (yeniden oynatma için) aynı gidiş-dönüşte döner.
@@ -95,6 +96,7 @@ export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
   DECLARE @turnSequence int = NULL;
   DECLARE @turnContent nvarchar(max) = NULL;
   DECLARE @lastSequence int = NULL;
+  DECLARE @lastRole varchar(10) = NULL;
   IF @knownSicil = 1
   BEGIN
     SET @outcome = 'NOT_FOUND';
@@ -128,15 +130,18 @@ export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
       FROM dbo.MR_AiConversationMessages m
       JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
       WHERE m.ConversationId = @conversation AND c.OwnerSicil = @sicil AND m.ClientTurnId = @turnId;
-      SELECT @lastSequence = MAX(m.Sequence)
+      SELECT TOP (1) @lastSequence = m.Sequence, @lastRole = m.Role
       FROM dbo.MR_AiConversationMessages m
       JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
-      WHERE m.ConversationId = @conversation AND c.OwnerSicil = @sicil;
+      WHERE m.ConversationId = @conversation AND c.OwnerSicil = @sicil
+      ORDER BY m.Sequence DESC;
 
       IF @turnMessageId IS NOT NULL
         SET @outcome = 'EXISTING';
       ELSE IF @content IS NULL OR @readOnly = 1
         SET @outcome = 'TURN_NOT_FOUND';
+      ELSE IF @lastRole = 'user'
+        SET @outcome = 'UNANSWERED';
       ELSE IF EXISTS (
         SELECT 1 FROM dbo.MR_AiConversations c
         WHERE c.ConversationId = @conversation AND c.OwnerSicil = @sicil AND c.MessageCount > @maxMessages - 2

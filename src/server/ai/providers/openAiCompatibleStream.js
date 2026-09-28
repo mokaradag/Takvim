@@ -279,6 +279,7 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
         const trailing = parser.end({ includeEvent: true });
         if (trailing.event === 'error') throw streamInterrupted('STREAM_ERROR_EVENT');
         if (trailing.data === '[DONE]') completed = true;
+        else if (trailing.data != null) throw streamInterrupted('STREAM_TRUNCATED');
       }
       if (!completed && state.finishReason) completed = true;
       if (!completed) throw streamInterrupted('STREAM_TRUNCATED');

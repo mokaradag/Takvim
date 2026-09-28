@@ -1320,8 +1320,8 @@ istek, silinmiş konuşma) herkese hizmet sorunu gibi görünmez; sınıflandır
 Sağlıklı durum için en az bir sohbet profili (`chat.general` / `chat.reasoning`)
 ve son 15 dakika içinde doğrulanmış 0017 konuşma şeması gerekir; geçici SQL
 hatası şemayı "eksik" göstermez. Yönetici bağlantı testi bu şemayı da denetler;
-uç model listesini verdiyse Rota AI kiplerinden en az birinin modeli listede
-olmalıdır (`ASSISTANT_MODEL_MISSING`).
+uç model listesini verdiyse kullanılabilir TÜM Rota AI kiplerinin modeli
+listede olmalıdır (`ASSISTANT_MODEL_MISSING`).
 Hiçbir ölçüm ve günlük satırı soru, yanıt, başlık, yönerge ya da anahtar
 taşımaz; istek gövdeleri günlüğe yazılmaz.
 

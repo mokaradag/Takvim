@@ -20,7 +20,8 @@ export function createEventStreamParser({ maxEventChars, tooLarge, onComment = n
   let eventName = '';
 
   function dispatch(events) {
-    if (data.length) events.push({ event: eventName || 'message', data: data.join('\n') });
+    const joined = data.join('\n');
+    if (joined !== '') events.push({ event: eventName || 'message', data: joined });
     data = [];
     dataChars = 0;
     eventName = '';
@@ -95,7 +96,8 @@ export function createEventStreamParser({ maxEventChars, tooLarge, onComment = n
         pending = '';
         line(text, []);
       }
-      const trailing = data.length ? data.join('\n') : null;
+      const joined = data.length ? data.join('\n') : null;
+      const trailing = joined === '' ? null : joined;
       const trailingEvent = { event: eventName || 'message', data: trailing };
       data = [];
       dataChars = 0;

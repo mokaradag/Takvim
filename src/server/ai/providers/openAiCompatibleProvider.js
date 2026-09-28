@@ -159,6 +159,12 @@ export function parseChatCompletion(payload) {
   if (!message || typeof message !== 'object') throw invalidResponse('MISSING_CHOICE');
   if (message.role !== 'assistant') throw invalidResponse('INVALID_ROLE');
   if (message.content != null && typeof message.content !== 'string') throw invalidResponse('INVALID_CONTENT');
+  if ((payload?.model != null && typeof payload.model !== 'string')
+    || (choice?.finish_reason != null && typeof choice.finish_reason !== 'string')
+    || (payload?.usage != null && (typeof payload.usage !== 'object' || Array.isArray(payload.usage)))
+    || ['prompt_tokens', 'completion_tokens', 'total_tokens'].some((key) => payload?.usage?.[key] != null && tokenCount(payload.usage[key]) == null)) {
+    throw invalidResponse('COMPLETION_METADATA_INVALID');
+  }
   return {
     text: message.content ?? '',
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason.slice(0, 40) : null,

@@ -271,13 +271,16 @@ test('aynı tur kimliği farklı içerikle kullanılamaz; yalnızca son yanıts�
   const failed = await sendTurn({ conversationId: first.conversationId, turnId: unanswered, message: 'Yanıtsız kalacak' });
   assert.equal(terminal(failed).event, 'error');
   assert.equal(terminal(failed).data.code, 'AI_PROVIDER_UNAVAILABLE');
-  await sendTurn({ conversationId: first.conversationId, turnId: randomUUID(), message: 'Sonraki soru' });
-  const stale = await sendTurn({ conversationId: first.conversationId, turnId: unanswered, message: null });
-  assert.equal(stale.status, 409);
-  assert.equal(stale.body.error.details.reason, 'TURN_NOT_LATEST');
+  const blocked = await sendTurn({ conversationId: first.conversationId, turnId: randomUUID(), message: 'Sonraki soru' });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.error.details.reason, 'TURN_UNANSWERED');
+  provider.enqueue({ type: 'stream', text: 'Yeniden denenen yanıt' });
+  const retried = await sendTurn({ conversationId: first.conversationId, turnId: unanswered, message: null });
+  assert.equal(terminal(retried).event, 'done');
+  assert.equal(answerText(retried), 'Yeniden denenen yanıt');
   const unknownTurn = await sendTurn({ conversationId: first.conversationId, turnId: randomUUID(), message: null });
   assert.equal(unknownTurn.status, 404);
-  assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'user').length, 3);
+  assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'user').length, 2);
 });
 
 test('konuşmada aynı anda tek yanıt üretilir; ikinci tur süren üretim bitene kadar reddedilir', async (t) => {

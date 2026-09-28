@@ -111,12 +111,17 @@ test('olay çözücü CRLF, CR ve LF satır sonlarını parçalar arasında da t
   ]);
 });
 
-test('olay çözücü yorumları (canlı tutma) veri saymaz; boş satırla yayımlanmamış olay sonda yayımlanmaz', () => {
+test('olay çözücü yorumları veri saymaz; boş veri olayı yayımlanmaz; yarım olay yalnız sonda döner', () => {
   const comments = [];
   const parser = createEventStreamParser({ maxEventChars: 1024, tooLarge: () => new Error('büyük'), onComment: (text) => comments.push(text) });
-  assert.deepEqual(parser.push(': keepalive\n\n:\n\ndata: yarım'), []);
+  assert.deepEqual(parser.push(': keepalive\n\n:\n\ndata:\n\ndata: \n\n'), []);
   assert.deepEqual(comments, ['keepalive', '']);
+  assert.deepEqual(parser.push('data:\ndata:\n\n'), [{ event: 'message', data: '\n' }]);
+  assert.deepEqual(parser.push('data: yarım'), []);
   assert.equal(parser.end(), 'yarım');
+  const emptyTail = createEventStreamParser({ maxEventChars: 1024, tooLarge: () => new Error('büyük') });
+  emptyTail.push('data:');
+  assert.equal(emptyTail.end(), null);
 });
 
 test('olay çözücü tamamlanmamış satırı ve tek olayı sınırlar; sınır aşılınca üretilen hata fırlar', () => {
@@ -247,6 +252,16 @@ test('[DONE] ya da bitiş nedeni olmadan kapanan akış kesilmiştir; bitiş ned
   // Son boş satırı gönderilmeden kapanan `[DONE]` de sonlandırıcıdır.
   const unterminated = await collect(readChatCompletionStream(bodyFrom([delta('son'), 'data: [DONE]']).stream));
   assert.equal(textOf(unterminated), 'son');
+  for (const tail of [
+    'data: not-json',
+    `data: ${JSON.stringify({ model: 'akis-modeli', choices: [], usage: { total_tokens: 4 } })}`
+  ]) {
+    await rejectsWithReason(
+      collect(readChatCompletionStream(bodyFrom([delta('tam'), finish(), tail]).stream)),
+      'AI_PROVIDER_UNAVAILABLE',
+      'STREAM_TRUNCATED'
+    );
+  }
 });
 
 test('sınırlar: ham akış, biriken metin ve tek olay büyüklüğü aşılınca akış kesilir', async () => {
@@ -468,6 +483,23 @@ test('JSON akış uyarlaması bozuk akıl yürütme ve üstveriyi reddeder', asy
   for (const payload of bad) {
     const provider = createOpenAiCompatibleProvider({ fetchImpl: async () => Response.json(payload) });
     await assert.rejects(provider.streamChatCompletion({ baseUrl: 'http://local', model: 'm', messages: MESSAGES }), (error) => error.details.reason === 'STREAM_EVENT_MALFORMED');
+  }
+});
+
+test('normal JSON tamamlama yolu bozuk üstveriyi başarı saymaz', async () => {
+  const base = { model: 'm', choices: [{ message: { role: 'assistant', content: 'Yanıt' }, finish_reason: 'stop' }] };
+  const bad = [
+    { ...base, model: 5 },
+    { ...base, usage: [] },
+    ...['prompt_tokens', 'completion_tokens', 'total_tokens'].flatMap((key) => [-1, 1.5, '2'].map((value) => ({ ...base, usage: { [key]: value } }))),
+    { ...base, choices: [{ ...base.choices[0], finish_reason: 3 }] }
+  ];
+  for (const payload of bad) {
+    const provider = createOpenAiCompatibleProvider({ fetchImpl: async () => Response.json(payload) });
+    await assert.rejects(
+      provider.chatCompletion({ baseUrl: 'http://local', model: 'm', messages: MESSAGES }),
+      (error) => error.code === 'AI_PROVIDER_RESPONSE_INVALID' && error.details.reason === 'COMPLETION_METADATA_INVALID'
+    );
   }
 });
 

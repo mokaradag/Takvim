@@ -727,7 +727,7 @@ export function createAssistantController({
       || compareText(guidSortKey(item.id), guidSortKey(boundary.id))) <= 0;
     while (more && boundary && page.ok && page.nextCursor && current()
       && !page.conversations.some(beforeBoundary)) {
-      if (visited.has(page.nextCursor) || visited.size >= 100) {
+      if (visited.has(page.nextCursor)) {
         page = { ok: false, code: 'INVALID_RESPONSE' };
         break;
       }

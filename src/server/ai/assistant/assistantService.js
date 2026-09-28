@@ -396,6 +396,8 @@ function outcomeFailure(prepared, input) {
       return conversationNotFound('TURN_NOT_FOUND');
     case 'FULL':
       return conflict('CONVERSATION_FULL', 'Bu konuşma azami uzunluğa ulaştı. Devam etmek için yeni bir konuşma başlatın.');
+    case 'UNANSWERED':
+      return conflict('TURN_UNANSWERED', 'Önce yanıtı tamamlanmamış son iletiyi yeniden deneyin veya yeni bir konuşma başlatın.');
     case 'EXISTING':
       if (input.message != null && prepared.turn.content !== input.message) {
         return conflict('TURN_ID_REUSED', 'Bu ileti kimliği farklı bir içerikle kullanılmış. Sayfayı yenileyip yeniden gönderin.');

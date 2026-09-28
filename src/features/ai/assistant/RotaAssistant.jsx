@@ -298,8 +298,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       close({ restoreFocus: false });
       onOpenSettings?.();
     } else if (action === 'new-conversation') {
-      // Yalnız kapanmış konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
-      const carry = Boolean(active.closed || held);
+      // Kapanmış/dolmuş konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
+      const carry = Boolean(active.closed || held || capacityFull);
       const carried = carry ? [held?.text, draft].filter(Boolean).join('\n\n') : '';
       const sourceKey = draftKey;
       if (controller.newConversation() === false) return;
@@ -499,9 +499,9 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             focusInput();
           }}
           generating={generating}
-          submitDisabled={state.refreshing}
+          submitDisabled={state.refreshing || Boolean(state.reconciling[active.key])}
           disabled={!canCompose || capacityFull || active.loading || Boolean(active.closed)
-            || Boolean(state.reconciling[active.key]) || Boolean(state.deleting[active.id])}
+            || Boolean(state.deleting[active.id])}
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}

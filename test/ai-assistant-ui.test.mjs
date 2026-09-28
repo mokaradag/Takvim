@@ -733,9 +733,16 @@ test('yanıt eylemleri yalnızca uygun durumda görünür: kopyalama tamamlanmı
   assert.equal(find({ turn: turn('failed', { error: keyMissing }), canRetry: true }, notice).props.retryable, false,
     'yeniden denemenin işe yaramayacağı hata için düğme gösterilmez');
   assert.ok(find({ turn: turn('unanswered', { content: '' }), canRetry: true }, notice));
-  const checking = mountComponent(AssistantTurn, { turn: turn('interrupted'), reconciling: true, onRetry() {}, onAction() {} }).output;
+  const checkingFailure = presentation.assistantFailureView({ code: 'STREAM_INTERRUPTED' });
+  const checking = mountComponent(AssistantTurn, {
+    turn: turn('interrupted', { content: '', error: checkingFailure }),
+    reconciling: true,
+    onRetry() {},
+    onAction() {}
+  }).output;
   assert.match(textOf(checking), /sonucu kontrol ediliyor/);
   assert.doesNotMatch(textOf(checking), /kaydedilmedi/);
+  assert.equal(findElement(checking, (node) => typeof node.type === 'function' && node.type.name === 'AnswerNotice'), null);
   const settledPartial = mountComponent(AssistantTurn, { turn: turn('interrupted'), onRetry() {}, onAction() {} }).output;
   assert.match(textOf(settledPartial), /tamamlanmadı/);
   assert.doesNotMatch(textOf(settledPartial), /kaydedilmedi/);
@@ -1876,6 +1883,27 @@ test('uzlaştırma ilk olumsuz okumadan sonra geç kaydedilen yanıtı bulur', a
   controller.dispose();
 });
 
+test('uzlaştırma sürerken yazma alanı açık kalır ama yeni gönderim engellenir', async () => {
+  const { controller, api } = await readyController({ reconciliationDelaysMs: [1000] });
+  controller.send('Soru');
+  const run = api.turns[0];
+  const data = acceptedData(CONVERSATION_A, run, 'Soru');
+  run.emit('accepted', data);
+  api.loadAssistantConversationRequest = (_id, options = {}) => new Promise((resolve) => {
+    options.signal?.addEventListener('abort', () => resolve({ ok: false, code: 'REQUEST_CANCELLED' }), { once: true });
+  });
+  run.resolve({ ok: false, code: 'STREAM_INTERRUPTED', partial: true, retryable: true });
+  await drain();
+  const panel = mountComponent(RotaAssistantPanel, {
+    assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} }
+  });
+  const composer = findElement(panel.output, (node) => node.type === AssistantComposer);
+  assert.equal(composer.props.disabled, false);
+  assert.equal(composer.props.submitDisabled, true);
+  panel.unmount();
+  controller.dispose();
+});
+
 test('tam konuşma baştan gönderime kapanır ama yanıtsız son tur yinelenebilir', async () => {
   const user = { id: createId(), turnId: createId(), role: 'user', content: 'Son soru', sequence: 99 };
   const api = fakeApi({ loadAssistantConversationRequest: async (id) => ({ ok: true, conversation: { id, title: 'Dolu', messageCount: 99 }, messages: [user] }) });
@@ -1903,6 +1931,34 @@ test('bir baş sayfasından fazla taşınan konuşmalar sayfalamada atlanmaz', a
   controller.dispose();
 });
 
+test('yüz sayfadan derin geçerli tarihçe yenilemesi protokol hatası sayılmaz', async () => {
+  const boundary = { id: CONVERSATION_A, title: 'Eski sınır', updatedAt: '2026-09-26T10:00:00Z' };
+  const moved = Array.from({ length: 101 }, (_, index) => ({
+    id: createId(),
+    title: `Taşınan ${index}`,
+    updatedAt: '2026-09-27T10:00:00Z'
+  }));
+  const api = fakeApi({ listAssistantConversationsRequest: async () => ({ ok: true, conversations: [boundary], nextCursor: 'old' }) });
+  const { controller, state } = await readyController({ api });
+  let bridgeReads = 0;
+  api.listAssistantConversationsRequest = async ({ cursor }) => {
+    if (cursor == null) return { ok: true, conversations: [moved[0]], nextCursor: 'bridge-1' };
+    if (cursor.startsWith('bridge-')) {
+      const index = Number(cursor.slice('bridge-'.length));
+      bridgeReads += 1;
+      return index < 101
+        ? { ok: true, conversations: [moved[index]], nextCursor: `bridge-${index + 1}` }
+        : { ok: true, conversations: [boundary], nextCursor: 'old' };
+    }
+    return { ok: true, conversations: [], nextCursor: null };
+  };
+  await controller.loadMore();
+  assert.equal(bridgeReads, 101);
+  assert.equal(state().list.error, null);
+  assert.ok(moved.every((item) => state().list.items.some((row) => row.id === item.id)));
+  controller.dispose();
+});
+
 test('birden fazla konuşmanın reddedilen iletileri ayrı tutulur', async () => {
   const { controller, api } = await readyController();
   const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
@@ -1918,6 +1974,40 @@ test('birden fazla konuşmanın reddedilen iletileri ayrı tutulur', async () =>
   findElement(panel.output, (node) => node.type === 'button' && textOf(node).includes('İletiyi geri al')).props.onClick(); panel.render();
   assert.equal(composer().props.value, `Ret ${CONVERSATION_A}\n\nTaslak ${CONVERSATION_A}`);
   panel.unmount(); controller.dispose();
+});
+
+test('yanıt kabulüyle dolan konuşmanın önceden yazılmış taslağı yeni konuşmaya taşınır', async () => {
+  const api = fakeApi({
+    loadAssistantConversationRequest: async (id) => ({
+      ok: true,
+      conversation: { id, title: 'Sınıra yakın', messageCount: 98 },
+      messages: []
+    })
+  });
+  const { controller } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  const panel = mountComponent(RotaAssistantPanel, {
+    assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} }
+  });
+  let composer = findElement(panel.output, (node) => node.type === AssistantComposer);
+  assert.equal(composer.props.onSubmit('Son soru').ok, true);
+  panel.render();
+  composer = findElement(panel.output, (node) => node.type === AssistantComposer);
+  composer.props.onChange('Sonraki konuşmanın taslağı');
+  panel.render();
+  const run = api.turns[0];
+  const accepted = acceptedData(CONVERSATION_A, run, 'Son soru');
+  accepted.conversation.messageCount = 99;
+  run.emit('accepted', accepted);
+  panel.render();
+  const newConversation = findElement(panel.output, (node) => node.type === 'button' && node.props?.['aria-label'] === 'Yeni konuşma');
+  assert.ok(newConversation);
+  newConversation.props.onClick();
+  panel.render();
+  assert.equal(controller.getState().active.id, null);
+  assert.equal(findElement(panel.output, (node) => node.type === AssistantComposer).props.value, 'Sonraki konuşmanın taslağı');
+  panel.unmount();
+  controller.dispose();
 });
 
 test('başlıktaki yeni konuşma eylemi açık konuşmanın taslağını yeni konuşmaya taşımaz', async () => {
