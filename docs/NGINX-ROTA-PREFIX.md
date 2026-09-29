@@ -168,3 +168,18 @@ uçlarını tek bir Node.js sürecine yönlendirin. Bu uçlarda çok sunuculu up
 PM2 cluster veya worker dağıtımı kullanmayın; yalnız oturum yapışkanlığı yeterli
 değildir. Silme ve tur istekleri farklı süreçlere gidemez. Dağıtım geçişinde eski
 süreci durdurmadan yeni sürece AI trafiği açmayın. Ayrıntılar: `AI-PLATFORM.md` §18.14.
+
+## Aşama 2 gerçek akış kabulü — 29.09.2026
+
+PR #92 sonrasında gerçek TEST `/bilge` yolu üzerinden Rota AI kullanıcı kabulü
+tamamlandı. Tarayıcıda yanıt, model üretimi bitmeden parça parça görünmeye
+başladı; Nginx yanıtı sonuna kadar ara belleğe almadı. Uzun ama geçerli
+üretimlerde bağlantı canlı kaldı ve **Durdur** işlemi sağlayıcı akışını
+sonlandırdı. Aynı sırada olağan Rota anlık görüntü, görev ve kayıt işlemleri
+beklemedi.
+
+Bu kabul, Aşama 1'de doğrulanan özgün başlık iletimine ek olarak Aşama 2 için şu
+vekil sözleşmesini dondurur: `Host`, `X-Forwarded-Host` ve
+`X-Forwarded-Proto` korunur; AI akışında `proxy_buffering off` uygulanır ve
+okuma zaman aşımı geçerli uzun üretimleri kesecek kadar kısa tutulmaz.
+

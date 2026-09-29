@@ -1552,6 +1552,45 @@ yanıtlar, sunucu konsolu ve Sistem Yönetimi telemetrisini inceleyin. API
 anahtarı, ana anahtar, şifreli anahtar alanları ve `Authorization` başlığı
 bulunmadığını, telemetride konuşma metni geçmediğini doğrulayın.
 
+### 18.15.1 Aşama 2 gerçek TEST kabulü — 29.09.2026
+
+PR #92 `main` dalına birleştirildikten sonra §18.15'teki elle kabul kapsamı,
+gerçek TEST ortamında kullanıcı tarafından uçtan uca uygulandı ve **tamamı
+başarılı** sonuçlandı.
+
+Doğrulanan başlıca davranışlar:
+
+- gerçek `/bilge` Nginx yolu üzerinden yanıtın tamamlanması beklenmeden gerçek
+  akış ve ara belleksiz vekil davranışı;
+- *Standart* ve *Derin düşünme* kipleri, düşünce içeriğinin kullanıcıya
+  gösterilmemesi;
+- **Durdur**, **Yeniden dene** ve sonraki turda bayat akış parçası kalmaması;
+- konuşma geçmişinin panel kapatma/açma ve tam tarayıcı yenilemesi sonrasında
+  korunması, doğru sıralama ve yalnız seçilen konuşmanın silinmesi;
+- konuşma değiştirirken gönderilmemiş taslağın korunması;
+- iki sekmede bayat konuşma dizisinin sessizce üzerine yazılmaması ve yenileme
+  sonrası güvenli devam;
+- iki farklı Sicil arasında konuşma listesi, okuma, tur gönderme ve silmede tam
+  yalıtım;
+- kişisel anahtar, kurumsal anahtar ve reddedilen kişisel anahtarda kurumsal
+  anahtara sessiz düşmeme sözleşmesi;
+- uzun/yavaş yapay zekâ üretimi sürerken anlık görüntü, görev açma/kaydetme,
+  sayfa geçişleri ve raporların olağan hızda çalışması;
+- güvenli Markdown, kopyalama, izleyen kaydırma, *En yeni* dönüşü, klavye/odak
+  ve kipli pencere etkileşimleri;
+- uzun üretimde bağlantının korunması, **Durdur** iptalinin uçtan uca işlemesi;
+- tarayıcı depoları, istek/yanıt yüzeyi, sunucu günlüğü ve Sistem Yönetimi
+  telemetrisinde API anahtarı, `Authorization`, şifreli anahtar alanı veya
+  konuşma metni sızıntısı olmaması;
+- Aşama 2 kapsam sınırı: yardımcı Rota iş verisine erişiyormuş gibi davranmaz ve
+  görev/proje verisini araç olmadan uydurmaz.
+
+Kullanıcı kabulünde yanıt akışı **hızlı**, arayüz davranışı **temiz ve kararlı**
+olarak raporlandı. Bu kabulden sonra **Aşama 1 ve Aşama 2 dondurulmuş temel
+sözleşmedir**: yalnız somut, yeniden üretilebilir bir kusur bulunursa cerrahi
+olarak değiştirilir. **Aşama 3** alan araçları/işlev çağırma yeteneklerini bu
+temeli gevşetmeden eklemelidir.
+
 ### 18.16 Otomatik sınamalar
 
 | Dosya | Kapsam |

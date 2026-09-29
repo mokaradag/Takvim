@@ -500,6 +500,14 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   `ai.stream.provider_start` ve `ai.api.assistant.*` adlarıyla yazılır; olağan
   API gecikme özetine karışmaz. Hiçbiri soru, yanıt ya da başlık taşımaz.
 
+**Aşama 2 gerçek TEST kabulü (29.09.2026):** Rota AI'nin gerçek `/bilge`
+yolu üzerinden akış, durdurma/yeniden deneme, profil dağılımı, konuşma
+kalıcılığı, iki Sicil yalıtımı, kişisel/kurumsal anahtar seçimi ve yavaş
+sağlayıcı sırasında olağan Rota işlemlerinin yalıtımı kullanıcı kabulünde
+başarıyla doğrulandı. Uzun üretimde bağlantı sürdü; gizli değerler ve konuşma
+metni yönetim telemetrisinde görünmedi. Aşama 3'e geçişte bu davranışlar
+gerileme sözleşmesi olarak korunmalıdır.
+
 Aynı anda **tek test** çalışır: ikinci bir test başlatılabilseydi ilkinin bitişi
 bütün düğmeleri erken açar ve yinelenen yoklamalar gönderilebilirdi.
 
