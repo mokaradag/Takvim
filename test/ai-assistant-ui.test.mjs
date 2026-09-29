@@ -133,6 +133,23 @@ test('gönderim: boş ve yalnızca boşluk içeren ileti gönderilmez; yanıt s�
   assert.equal(api.turns[0].input.message, 'İlk soru');
 });
 
+test('kayıtlı bağlam uyarısı üretim zamanındaki metadata ile korunur; yanıtsız tur uyarı almaz', () => {
+  const turns = turnsFromMessages([
+    { id: 'u1', sequence: 99, role: 'user', content: 'Eski soru', turnId: createId(), createdAt: '2026-09-20T10:00:00.000Z' },
+    { id: 'a1', sequence: 100, role: 'assistant', content: 'Eski yanıt', replyToId: 'u1', mode: 'standard', finishReason: 'stop', contextTrimmed: false, createdAt: '2026-09-20T10:00:01.000Z' },
+    { id: 'u2', sequence: 101, role: 'user', content: 'Yanıtsız soru', turnId: createId(), createdAt: '2026-09-20T10:00:02.000Z' }
+  ]);
+  assert.equal(turns[0].contextTrimmed, false, 'bugünün politikası eski yanıtı yeniden sınıflandırmaz');
+  assert.equal(turns[1].answer.status, 'unanswered');
+  assert.equal(turns[1].contextTrimmed, false, 'yanıt yoksa bağlam uyarısı gösterilmez');
+
+  const trimmed = turnsFromMessages([
+    { id: 'u3', sequence: 1, role: 'user', content: 'Soru', turnId: createId(), createdAt: '2026-09-20T11:00:00.000Z' },
+    { id: 'a3', sequence: 2, role: 'assistant', content: 'Yanıt', replyToId: 'u3', mode: 'deep', finishReason: 'stop', contextTrimmed: true, contextOmittedMessages: 3, createdAt: '2026-09-20T11:00:01.000Z' }
+  ]);
+  assert.equal(trimmed[0].contextTrimmed, true);
+});
+
 test('akan parçalar TEK yanıtı günceller; ilk parça beklemeden, sonrakiler birleştirilerek çizilir', async () => {
   const { controller, api, flushes, state } = await readyController();
   controller.send('Soru');
@@ -325,17 +342,21 @@ test('kayıtlı iletiler turlara çevrilir; yanıtı olmayan kullanıcı iletisi
   assert.equal(retryableTurnKey(turns.slice(0, 1)), null);
 });
 
-test('kayıtlı konuşma yeniden açılınca bağlam kısaltma uyarısı yeniden kurulur', () => {
+test('kayıtlı konuşma yalnız tamamlanmış yanıta kaydedilen bağlam uyarısını gösterir', () => {
   const messages = [];
   for (let index = 0; index < 11; index += 1) {
     const userId = `u-${index}`;
     messages.push({ id: userId, sequence: index * 2 + 1, role: 'user', content: `Soru ${index}`, turnId: `t-${index}` });
-    messages.push({ id: `a-${index}`, sequence: index * 2 + 2, role: 'assistant', content: `Yanıt ${index}`, replyToId: userId });
+    messages.push({
+      id: `a-${index}`, sequence: index * 2 + 2, role: 'assistant', content: `Yanıt ${index}`, replyToId: userId,
+      contextTrimmed: index === 10, contextOmittedMessages: index === 10 ? 2 : 0
+    });
   }
   messages.push({ id: 'u-last', sequence: 23, role: 'user', content: 'Devam', turnId: 't-last' });
   const turns = turnsFromMessages(messages);
-  assert.equal(turns.at(-2).contextTrimmed, false, 'on tamamlanmış çift bütçeye sığar');
-  assert.equal(turns.at(-1).contextTrimmed, true, 'on birinci eski çift bağlam dışında kalır');
+  assert.equal(turns.at(-3).contextTrimmed, false);
+  assert.equal(turns.at(-2).contextTrimmed, true, 'üretim zamanında kısaltılan tamamlanmış yanıt uyarıyı korur');
+  assert.equal(turns.at(-1).contextTrimmed, false, 'yanıtsız tur uyarı almaz');
 });
 
 /* ── Sunum ────────────────────────────────────────────────── */

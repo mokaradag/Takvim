@@ -102,6 +102,8 @@ test('ilk tur güvenilir Sicil adına konuşma açar; kullanıcı iletisi ve tam
   const [question, answer] = db.aiConversationMessages;
   assert.deepEqual([question.Sequence, question.Role, question.Content, question.ClientTurnId.toLowerCase()], [1, 'user', 'Bir toplantı gündemi hazırlar mısın?', turnId]);
   assert.deepEqual([answer.Sequence, answer.Role, answer.Content, answer.Mode, answer.FinishReason], [2, 'assistant', 'Merhaba, bağlantı çalışıyor.', 'standard', 'stop']);
+  assert.equal(answer.ContextTrimmed, false);
+  assert.equal(answer.ContextOmittedMessages, 0);
   assert.equal(answer.ReplyToMessageId, question.MessageId);
   const done = terminal(result).data;
   assert.equal(done.assistantMessage.id, answer.MessageId.toLowerCase());
@@ -124,6 +126,7 @@ test('konuşmaya eklenen tur önceki TAMAMLANMIŞ çiftleri bağlam olarak alır
   const loaded = await loadAssistantConversation(conversationId);
   assert.equal(loaded.status, 200);
   assert.deepEqual(loaded.body.messages.map((message) => message.content), ['İlk soru', 'Merhaba, bağlantı çalışıyor.', 'İkinci soru', 'İkinci yanıt']);
+  assert.deepEqual(loaded.body.messages.filter((message) => message.role === 'assistant').map((message) => [message.contextTrimmed, message.contextOmittedMessages]), [[false, 0], [false, 0]]);
 });
 
 test('liste ve okuma yalnızca kendi konuşmalarını döndürür; başkasının konuşması YOK gibi yanıtlanır', async (t) => {

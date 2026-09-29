@@ -512,6 +512,8 @@ BEGIN TRY
         ReplyToMessageId uniqueidentifier NULL,
         Mode varchar(10) NULL,
         FinishReason varchar(40) NULL,
+        ContextTrimmed bit NULL,
+        ContextOmittedMessages int NULL,
         CreatedAt datetime2(3) NOT NULL
             CONSTRAINT DF_MR_AiConversationMessages_CreatedAt DEFAULT SYSUTCDATETIME(),
         CONSTRAINT PK_MR_AiConversationMessages PRIMARY KEY NONCLUSTERED (MessageId),

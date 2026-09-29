@@ -486,11 +486,10 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   if (existing.answer) {
     const failure = outcomeFailure(existing, input);
     if (failure) throw failure;
-    const context = buildAssistantContext({ history: existing.history, userContent: existing.turn.content, priorMessageCount: Math.max(0, existing.turn.sequence - 1) });
     return {
       sicil, claim: null, mode: existing.answer.mode, profile: assistantProfileForMode(existing.answer.mode),
       conversation: existing.conversation, userMessage: existing.turn.message,
-      replay: existing.answer, modelMessages: [], context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
+      replay: existing.answer, modelMessages: [], context: { trimmed: Boolean(existing.answer.contextTrimmed), omittedMessages: Math.max(0, Number(existing.answer.contextOmittedMessages) || 0) }
     };
   }
   const config = requireAiAvailable(readAiConfig());
@@ -561,7 +560,9 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
             replyToMessageId: turn.userMessage.id,
             content: result.text,
             mode: turn.mode,
-            finishReason: result.finishReason
+            finishReason: result.finishReason,
+            contextTrimmed: turn.context.trimmed,
+            contextOmittedMessages: turn.context.omittedMessages
           })), { trackLifecycle: (pending) => { lifecycle = pending; } });
       } catch (error) {
         const transient = error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';

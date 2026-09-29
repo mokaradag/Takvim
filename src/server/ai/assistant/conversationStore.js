@@ -24,7 +24,7 @@ const CONVERSATION_TABLES = ['MR_AiConversations', 'MR_AiConversationMessages'];
 /** 0017 tablolarının sütunları; SQL Server "Invalid column name" iletisinde tablo adını vermez. */
 const CONVERSATION_COLUMN_NAMES = new Set([
   'ConversationId', 'OwnerSicil', 'Title', 'OriginTurnId', 'CreatedAt', 'UpdatedAt', 'MessageCount',
-  'MessageId', 'Sequence', 'Role', 'Content', 'ClientTurnId', 'ReplyToMessageId', 'Mode', 'FinishReason'
+  'MessageId', 'Sequence', 'Role', 'Content', 'ClientTurnId', 'ReplyToMessageId', 'Mode', 'FinishReason', 'ContextTrimmed', 'ContextOmittedMessages'
 ]);
 
 function missingConversationTable(entry) {
@@ -94,6 +94,8 @@ function messageRow(row) {
     replyToId: idOrNull(row.ReplyToMessageId),
     mode: row.Mode || null,
     finishReason: row.FinishReason || null,
+    contextTrimmed: row.ContextTrimmed == null ? null : Boolean(row.ContextTrimmed),
+    contextOmittedMessages: row.ContextOmittedMessages == null ? null : Number(row.ContextOmittedMessages),
     createdAt: isoOrNull(row.CreatedAt)
   };
 }
@@ -188,7 +190,7 @@ export async function prepareConversationTurn(executor, sicil, {
 
 /** Tamamlanmış yanıtı yazar; `persisted: false` yanıtın yazılmadığını söyler (konuşma silinmiş olabilir). */
 export async function appendConversationAnswer(executor, sicil, {
-  conversationId, messageId, replyToMessageId, content, mode, finishReason
+  conversationId, messageId, replyToMessageId, content, mode, finishReason, contextTrimmed, contextOmittedMessages
 }) {
   const request = sicilRequest(executor, sicil);
   request.input('conversationId', sql.UniqueIdentifier, conversationId);
@@ -197,6 +199,8 @@ export async function appendConversationAnswer(executor, sicil, {
   request.input('content', sql.NVarChar(sql.MAX), content);
   request.input('mode', sql.VarChar(10), mode);
   request.input('finishReason', sql.VarChar(40), finishReason);
+  request.input('contextTrimmed', sql.Bit, Boolean(contextTrimmed));
+  request.input('contextOmittedMessages', sql.Int, Math.max(0, Number(contextOmittedMessages) || 0));
   const [[state] = [], conversations = [], messages = []] = recordsetsOf(await request.query(AI_CONVERSATION_APPEND_ANSWER_SQL));
   return {
     knownSicil: Boolean(state?.KnownSicil),

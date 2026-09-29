@@ -20,7 +20,7 @@ const KNOWN_SICIL = `
   ) THEN 1 ELSE 0 END;`;
 
 const CONVERSATION_COLUMNS = 'c.ConversationId, c.Title, c.CreatedAt, c.UpdatedAt, c.MessageCount';
-const MESSAGE_COLUMNS = 'm.MessageId, m.Sequence, m.Role, m.Content, m.ClientTurnId, m.ReplyToMessageId, m.Mode, m.FinishReason, m.CreatedAt';
+const MESSAGE_COLUMNS = 'm.MessageId, m.Sequence, m.Role, m.Content, m.ClientTurnId, m.ReplyToMessageId, m.Mode, m.FinishReason, m.ContextTrimmed, m.ContextOmittedMessages, m.CreatedAt';
 
 /** Son etkinliğe göre sıralı ilk sayfa (`@limit` = sayfa + 1; fazlası "daha var" demektir). */
 export const AI_CONVERSATION_LIST_SQL = `${KNOWN_SICIL}
@@ -225,8 +225,8 @@ export const AI_CONVERSATION_APPEND_ANSWER_SQL = `${KNOWN_SICIL}
     FROM dbo.MR_AiConversationMessages m
     JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
     WHERE m.ConversationId = @conversationId AND c.OwnerSicil = @sicil;
-    INSERT dbo.MR_AiConversationMessages(MessageId, ConversationId, Sequence, Role, Content, ReplyToMessageId, Mode, FinishReason)
-    VALUES (@messageId, @conversationId, @sequence, 'assistant', @content, @replyToMessageId, @mode, @finishReason);
+    INSERT dbo.MR_AiConversationMessages(MessageId, ConversationId, Sequence, Role, Content, ReplyToMessageId, Mode, FinishReason, ContextTrimmed, ContextOmittedMessages)
+    VALUES (@messageId, @conversationId, @sequence, 'assistant', @content, @replyToMessageId, @mode, @finishReason, @contextTrimmed, @contextOmittedMessages);
     UPDATE c SET c.MessageCount = c.MessageCount + 1, c.UpdatedAt = SYSUTCDATETIME()
     FROM dbo.MR_AiConversations c
     WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;

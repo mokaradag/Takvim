@@ -73,6 +73,8 @@ function messageRow(row) {
     ReplyToMessageId: row.ReplyToMessageId,
     Mode: row.Mode,
     FinishReason: row.FinishReason,
+    ContextTrimmed: row.ContextTrimmed ?? null,
+    ContextOmittedMessages: row.ContextOmittedMessages ?? null,
     CreatedAt: row.CreatedAt
   };
 }
@@ -190,6 +192,8 @@ function prepare(db, params, sicil, known) {
           ReplyToMessageId: null,
           Mode: null,
           FinishReason: null,
+          ContextTrimmed: null,
+          ContextOmittedMessages: null,
           CreatedAt: at
         };
         insertMessage(db, turn);
@@ -244,6 +248,8 @@ function append(db, params, sicil) {
       ReplyToMessageId: guid(params.replyToMessageId),
       Mode: params.mode ?? null,
       FinishReason: params.finishReason ?? null,
+      ContextTrimmed: Boolean(params.contextTrimmed),
+      ContextOmittedMessages: Math.max(0, Number(params.contextOmittedMessages) || 0),
       CreatedAt: at
     });
     conversation.MessageCount += 1;

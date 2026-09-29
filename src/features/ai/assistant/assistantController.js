@@ -1,12 +1,10 @@
 import { createUuidV4 } from '../../../data/clientEntityId.js';
 import {
-  ASSISTANT_CONTEXT_POLICY,
   ASSISTANT_DEFAULT_TITLE,
   ASSISTANT_LIMITS,
   ASSISTANT_MODES,
   ASSISTANT_STREAM_EVENTS,
-  normalizeAssistantMessage,
-  selectAssistantContextHistory
+  normalizeAssistantMessage
 } from '../../../domain/ai/assistantContract.js';
 import * as assistantApi from './assistantClient.js';
 import { assistantFailureView, isSessionFailure } from './assistantPresentation.js';
@@ -122,21 +120,14 @@ function initialState() {
 export function turnsFromMessages(messages = []) {
   const turns = [];
   const byUserMessage = new Map();
-  const prior = [];
   for (const message of [...messages].sort((left, right) => left.sequence - right.sequence)) {
     if (message.role === 'user') {
-      const history = prior.slice(-ASSISTANT_CONTEXT_POLICY.historyWindow);
-      const context = selectAssistantContextHistory({
-        history,
-        userContent: message.content,
-        priorMessageCount: Math.max(0, Number(message.sequence) - 1)
-      });
       const turn = {
         key: message.turnId || message.id,
         turnId: message.turnId || null,
         user: { id: message.id, content: message.content, createdAt: message.createdAt, pending: false },
         answer: null,
-        contextTrimmed: context.trimmed
+        contextTrimmed: false
       };
       turns.push(turn);
       byUserMessage.set(message.id, turn);
@@ -152,9 +143,9 @@ export function turnsFromMessages(messages = []) {
           createdAt: message.createdAt,
           error: null
         };
+        turn.contextTrimmed = Boolean(message.contextTrimmed);
       }
     }
-    prior.push(message);
   }
   return turns.map((turn) => (turn.answer ? turn : { ...turn, answer: { status: 'unanswered', content: '', error: null } }));
 }

@@ -77,6 +77,8 @@ BEGIN TRY
             ReplyToMessageId uniqueidentifier NULL,
             Mode varchar(10) NULL,
             FinishReason varchar(40) NULL,
+            ContextTrimmed bit NULL,
+            ContextOmittedMessages int NULL,
             CreatedAt datetime2(3) NOT NULL
                 CONSTRAINT DF_MR_AiConversationMessages_CreatedAt DEFAULT SYSUTCDATETIME(),
             CONSTRAINT PK_MR_AiConversationMessages PRIMARY KEY NONCLUSTERED (MessageId),
@@ -91,6 +93,16 @@ BEGIN TRY
                 (Role = 'user' AND ClientTurnId IS NOT NULL AND ReplyToMessageId IS NULL AND Mode IS NULL AND FinishReason IS NULL)
                 OR (Role = 'assistant' AND ClientTurnId IS NULL AND ReplyToMessageId IS NOT NULL))
         );
+
+    /* 0017 daha önce uygulanmış bir TEST kurulumunda da yeni metadata sütununu
+       veriye dokunmadan ekle; eski yanıtlar NULL kalır ve tarihsel uyarı
+       sonradan bugünün bağlam politikasıyla yeniden sınıflandırılmaz. */
+    IF OBJECT_ID(N'dbo.MR_AiConversationMessages', N'U') IS NOT NULL
+       AND COL_LENGTH(N'dbo.MR_AiConversationMessages', N'ContextTrimmed') IS NULL
+        ALTER TABLE dbo.MR_AiConversationMessages ADD ContextTrimmed bit NULL;
+    IF OBJECT_ID(N'dbo.MR_AiConversationMessages', N'U') IS NOT NULL
+       AND COL_LENGTH(N'dbo.MR_AiConversationMessages', N'ContextOmittedMessages') IS NULL
+        ALTER TABLE dbo.MR_AiConversationMessages ADD ContextOmittedMessages int NULL;
 
     -- Tablolar bu betikten ÖNCE (elle ya da yarım kalmış bir kurulumla)
     -- oluşturulmuş olabilir. Yapısı doğrulanmadan göç uygulanmış sayılmaz:
@@ -114,6 +126,8 @@ BEGIN TRY
         (N'MR_AiConversationMessages', N'ReplyToMessageId', N'uniqueidentifier', 16, 0, 1),
         (N'MR_AiConversationMessages', N'Mode', N'varchar', 10, 0, 1),
         (N'MR_AiConversationMessages', N'FinishReason', N'varchar', 40, 0, 1),
+        (N'MR_AiConversationMessages', N'ContextTrimmed', N'bit', 1, 0, 1),
+        (N'MR_AiConversationMessages', N'ContextOmittedMessages', N'int', 4, 0, 1),
         (N'MR_AiConversationMessages', N'CreatedAt', N'datetime2', 7, 3, 0);
     -- Uygulama kimlikleri ve öteki sütunları kendisi yazar: IDENTITY ya da
     -- hesaplanan bir sütun ilk kayıtta INSERT'i düşürür.
