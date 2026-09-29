@@ -133,6 +133,10 @@ test('yönetim kapsamı: yönetici yalnızca astının görevini ve onun iş da�
   const design = full.result.data.nodes.find((node) => node.wbsId === WBS.FULL_DESIGN);
   assert.equal(design.subtreeTasks, 2);
   assert.equal(design.subtreeOverdue, 1);
+  const shallow = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 1 });
+  assert.equal(shallow.result.complete, false);
+  assert.equal(shallow.result.truncated, true);
+  assert.match(shallow.result.data.notes.join(' '), /derinlikte kesildi/);
 });
 
 /* ── Belirlenimci hesaplar ────────────────────────────────── */
@@ -230,6 +234,22 @@ test('proje ve kişi araması tahmin etmez: belirsizlik, aynı adlı kişiler ve
   assert.match(people.result.data.guidance, /Sicil/);
 });
 
+test('dizin araması kaynak sınırına ulaşırsa kesin toplam bilinmiyor olarak döner', async (t) => {
+  const base = rotaToolSeed();
+  const people = [
+    ...base.people,
+    ...Array.from({ length: 30 }, (_, index) => ({
+      Sicil: 90000 + index, DisplayName: `Test Kişi ${index + 1}`, Username: `test${index + 1}`
+    }))
+  ];
+  const stack = stackFor(t, { people });
+  const capped = await callRotaTool(stack, AYSE, 'rota_person_search', { text: 'Test Kişi', limit: 25 });
+  assert.equal(capped.result.returnedCount, 25);
+  assert.equal(capped.result.totalCount, null);
+  assert.equal(capped.result.complete, false);
+  assert.equal(capped.result.truncated, true);
+});
+
 test('proje künyesi erişim nedenini açıklar; READ bağımlılık ve baz planı açmaz', async (t) => {
   const stack = stackFor(t);
   const read = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.READ });
@@ -251,6 +271,18 @@ test('proje künyesi erişim nedenini açıklar; READ bağımlılık ve baz plan
   assert.equal(full.result.data.visibleTasks.overdue, 2);
   const hidden = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.HIDDEN });
   assert.equal(hidden.result.error.code, 'NOT_FOUND');
+});
+
+test('proje etiketi önizleme sınırına ulaşırsa ayrıntı sonucu eksik işaretlenir', async (t) => {
+  const projectTags = Array.from({ length: 21 }, (_, index) => ({
+    ProjectId: PROJECTS.FULL, TagName: `Etiket ${index + 1}`, SortOrder: index + 1
+  }));
+  const stack = stackFor(t, { projectTags });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.FULL });
+  assert.equal(result.data.project.tags.length, 20);
+  assert.equal(result.data.project.tagCount, 21);
+  assert.equal(result.complete, false);
+  assert.equal(result.truncated, true);
 });
 
 /* ── Plan araçları ────────────────────────────────────────── */
@@ -348,6 +380,9 @@ test('bildirimler yalnızca okunur: okundu/temizlendi işareti değişmez', asyn
   assert.equal(result.ok, true);
   assert.equal(result.data.taskEvents.unread, 1);
   assert.equal(result.data.scheduleRequests.awaitingYourDecision, 1);
+  assert.equal(result.complete, false);
+  assert.equal(result.truncated, true);
+  assert.equal(result.totalCount, null);
   assert.match(result.data.note, /okundu olarak işaretlemez/);
   assert.equal(JSON.stringify({ notifications: stack.db.taskNotifications, schedule: stack.db.scheduleNotifications }), before);
   const requests = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { tab: 'pending' });

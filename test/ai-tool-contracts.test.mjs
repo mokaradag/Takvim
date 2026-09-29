@@ -312,13 +312,14 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   assert.match(evidence.groundingRepairInstruction(invented.issues), /^SUNUCU DOĞRULAMASI:/);
 });
 
-test('kısmi kapsamlı kanıta dayanan yanıt kapsamı söylemiyorsa sunucu belirlenimci notu ekler', () => {
+test('kısmi kapsamlı kanıta dayanan yanıta sunucu belirlenimci kapsam notunu her zaman ekler', () => {
   const partial = [{ id: 'R1', partial: true }];
   const plain = evidence.withScopeDisclosure('Projede 2 görev gecikmiş. 【R1】', partial);
   assert.equal(plain.disclosed, true);
   assert.ok(plain.text.endsWith(evidence.SCOPE_DISCLOSURE_TEXT));
   const stated = evidence.withScopeDisclosure('Görebildiğiniz görevler arasında 2 gecikmiş görev var. 【R1】', partial);
-  assert.equal(stated.disclosed, false);
+  assert.equal(stated.disclosed, true);
+  assert.ok(stated.text.endsWith(evidence.SCOPE_DISCLOSURE_TEXT));
   assert.equal(evidence.withScopeDisclosure('Tam proje. 【R1】', [{ id: 'R1', partial: false }]).disclosed, false);
 });
 

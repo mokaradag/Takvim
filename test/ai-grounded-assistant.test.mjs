@@ -313,7 +313,7 @@ test('düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir v
   assert.equal(aiTelemetrySnapshot().grounding.grounded, 1);
 });
 
-test('kısmi kapsam: yalnızca görülebilen görevlere dayanan yanıta sunucu kapsam notunu ekler; model belirttiyse eklemez', async (t) => {
+test('kısmi kapsam: sunucu kapsam notunu modelin kendi ifadesinden bağımsız olarak ekler', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => `Kısmi Proje’de ${result.totalCount} görev listeleniyor. 【${result.evidenceId}】`));
   const response = await sendTurn({ turnId: randomUUID(), message: 'Kısmi projede kaç görev var?' });
@@ -332,7 +332,7 @@ test('kısmi kapsam: yalnızca görülebilen görevlere dayanan yanıta sunucu k
 
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => `Görebildiğiniz görevler arasında ${result.totalCount} kayıt var. 【${result.evidenceId}】`));
   const explicit = await sendTurn({ turnId: randomUUID(), message: 'Tekrar sor' });
-  assert.equal(doneOf(explicit).assistantMessage.content, 'Görebildiğiniz görevler arasında 2 kayıt var. 【R1】');
+  assert.equal(doneOf(explicit).assistantMessage.content, `Görebildiğiniz görevler arasında 2 kayıt var. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
 });
 
 test('araç kullanılmayan genel yanıt gerçek zamanlı akar; kanıt işareti taşıyamaz', async (t) => {

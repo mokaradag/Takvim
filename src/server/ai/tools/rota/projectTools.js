@@ -136,6 +136,8 @@ const projectDetail = {
     const totals = taskTotals(detail.totals);
     const descriptor = describeTaskScope([access]);
     const name = dataText(row.ProjectName, 160);
+    const tagsTruncated = detail.tags.length > 20;
+    const tags = detail.tags.slice(0, 20).map((tag) => dataText(tag, 60));
     return {
       data: {
         project: {
@@ -147,7 +149,8 @@ const projectDetail = {
           lead: row.LeadName ? dataText(row.LeadName, 120) : null,
           calendar: row.CalendarName ? dataText(row.CalendarName, 120) : null,
           dataDate: sqlDay(row.DataDate),
-          tags: detail.tags.slice(0, 20).map((tag) => dataText(tag, 60)),
+          tags,
+          tagCount: detail.tags.length,
           wbsNodeCount: Number(row.WbsNodeCount || 0),
           dependencyCount: row.DependencyCount == null ? null : Number(row.DependencyCount),
           baselineCount: row.BaselineCount == null ? null : Number(row.BaselineCount)
@@ -157,8 +160,8 @@ const projectDetail = {
         definitions: { ...TOTAL_DEFINITIONS, today: call.today }
       },
       scope: descriptor,
-      complete: true,
-      truncated: false,
+      complete: !tagsTruncated,
+      truncated: tagsTruncated,
       returnedCount: 1,
       totalCount: 1,
       nextCursor: null,
@@ -329,6 +332,7 @@ const wbsInspect = {
     }
     const listed = [];
     let omitted = 0;
+    let depthTruncated = false;
     const walk = (node, depth) => {
       if (listed.length >= limit) {
         omitted += 1;
@@ -347,6 +351,7 @@ const wbsInspect = {
         subtreeOverdue: node.subtree.overdue
       });
       if (depth + 1 < depthLimit) node.children.forEach((child) => walk(child, depth + 1));
+      else if (node.children.length) depthTruncated = true;
     };
     start.forEach((node) => walk(node, 0));
     const catalogVisible = result.nodes.some((row) => Boolean(row.CatalogVisible)) || access.accessLevel === 'FULL' || access.readGrant || access.ownScoped;
@@ -360,12 +365,13 @@ const wbsInspect = {
         tasksWithoutWbs: unplacedTasks,
         notes: [
           'Görev sayıları yalnızca görünür görevler üzerindedir.',
-          ...(catalogVisible ? [] : ['Bu projede yalnızca yetkili görevlerinizin bağlı olduğu düğümler ve ataları görünür.'])
+          ...(catalogVisible ? [] : ['Bu projede yalnızca yetkili görevlerinizin bağlı olduğu düğümler ve ataları görünür.']),
+          ...(depthTruncated ? ['İş dağılım ağacı istenen derinlikte kesildi; daha derin düğümler bu sonuçta yer almaz.'] : [])
         ]
       },
       scope: descriptor,
-      complete: omitted === 0,
-      truncated: omitted > 0,
+      complete: omitted === 0 && !depthTruncated,
+      truncated: omitted > 0 || depthTruncated,
       returnedCount: listed.length,
       totalCount: nodes.size,
       nextCursor: null,

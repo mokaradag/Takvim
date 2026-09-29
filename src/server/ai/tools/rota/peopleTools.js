@@ -135,6 +135,7 @@ const personSearch = {
       byName.set(key, (byName.get(key) || 0) + 1);
     }
     const sameName = [...byName.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+    const directoryCapped = people.length >= result.limit;
     const page = people.slice(0, limit);
     return {
       data: {
@@ -146,13 +147,13 @@ const personSearch = {
           : (people.length === 0 ? 'Eşleşen kişi bulunamadı.' : null)
       },
       scope: { kind: 'directory', completeProjectView: false, note: `Dizin araması en fazla ${result.limit} satır döndürür.` },
-      complete: people.length < result.limit && page.length === people.length,
-      truncated: people.length >= result.limit || page.length < people.length,
+      complete: !directoryCapped && page.length === people.length,
+      truncated: directoryCapped || page.length < people.length,
       returnedCount: page.length,
-      totalCount: people.length,
+      totalCount: directoryCapped ? null : people.length,
       nextCursor: null,
       evidence: {
-        label: `Personel araması · ${people.length} kişi`,
+        label: directoryCapped ? `Personel araması · en az ${people.length} kişi` : `Personel araması · ${people.length} kişi`,
         entity: null,
         highlights: page.slice(0, 3).map((person) => person.name)
       }

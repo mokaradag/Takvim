@@ -383,10 +383,10 @@ const notifications = {
         note: 'Bu okuma bildirimleri okundu olarak işaretlemez. Liste zil önizlemesidir (kaynak başına en yeni kayıtlar).'
       },
       scope: currentUserScope('Yalnızca sizin bildirimleriniz.'),
-      complete: true,
-      truncated: false,
+      complete: false,
+      truncated: true,
       returnedCount: scheduleItems.length + coordinationItems.length + eventItems.length,
-      totalCount: scheduleItems.length + coordinationItems.length + eventItems.length,
+      totalCount: null,
       nextCursor: null,
       evidence: {
         label: `Bildirimler · ${unread} okunmamış`,

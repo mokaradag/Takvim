@@ -676,8 +676,12 @@ sınamaları değiştirilmeden geçer.
    görüldüğünü doğrulayın (tablo ilk turda ya da hazırlık okumasında denetlenir).
 7. §17 elle kabul listesini uygulayın.
 
-**Geri alma:** `MERGEN_ROTA_AI_TOOLS_ENABLED=false` yeterlidir; kanıt tablosu ve
-kayıtlar korunur, Rota AI genel sohbete döner. Tabloyu kaldırmak gerekirse
+**Özellik geri alma:** `MERGEN_ROTA_AI_TOOLS_ENABLED=false` yeterlidir; kanıt
+tablosu ve kayıtlar korunur, Rota AI genel sohbete döner. **Aşama 3 öncesi bir
+uygulama sürümüne dönülecekse**, eski süreç başlatılmadan önce model kaydı da
+önceki JSON'a döndürülmeli veya `chat.tools` / `chat.tools.reasoning`
+profilleri kaldırılmalıdır; eski kayıt doğrulayıcısı bu profil kimliklerini
+tanımaz. Tabloyu kaldırmak gerekirse
 geri alma betiği kanıtı iletilerden önce düşürür.
 
 ---

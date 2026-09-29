@@ -271,7 +271,7 @@ export function mentionsAuthorizedScope(text) {
  */
 export function withScopeDisclosure(text, citedEvidence = []) {
   const partial = citedEvidence.some((item) => item?.partial === true);
-  if (!partial || mentionsAuthorizedScope(text)) return { text, disclosed: false };
+  if (!partial) return { text, disclosed: false };
   return { text: `${String(text).trimEnd()}\n\n${SCOPE_DISCLOSURE_TEXT}`, disclosed: true };
 }
 
