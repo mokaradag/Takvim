@@ -57,21 +57,19 @@ test('personel penceresi kimlikle açılır: süzgeç değişince eski satır ek
 test('personel penceresi yalnızca AÇIK görevleri listeler ve Esc ile kapanır', () => {
   const dialog = read('src/features/team/PersonDetailDialog.jsx');
   assert.match(dialog, /\(member\?\.tasks \|\| \[\]\)\.filter\(\(task\) => task\.status !== 'done'\)/);
-  assert.match(dialog, /if \(event\.key === 'Escape' && !event\.defaultPrevented\) \{\s*event\.preventDefault\(\);\s*closeHandlerRef\.current\?\.\(\);/);
-  assert.match(dialog, /document\.removeEventListener\('keydown', onKey\)/);
+  assert.match(dialog, /useModalFocusTrap\(\{ containerRef: dialogRef, initialFocusRef: closeRef, onClose, enabled: Boolean\(personId\) \}\)/);
   assert.match(dialog, /aria-modal="true"/);
 });
 
 test('personel penceresi odağı içeride tutar ve kapanışta açana geri verir', () => {
   const dialog = read('src/features/team/PersonDetailDialog.jsx');
-  // `aria-modal` tek başına odağı hapsetmez: sekmeyle ilerleyen kullanıcı
-  // arkadaki TeamView denetimlerine geçebiliyordu.
-  assert.match(dialog, /if \(event\.key !== 'Tab'\) return;/);
-  assert.match(dialog, /event\.preventDefault\(\);\s*\n\s*last\.focus\(\);/);
-  // Odak yalnızca pencere AÇILDIĞINDA taşınır; üst bileşenin her çizimi odağı
-  // geri çalmaz.
-  assert.match(dialog, /\}, \[personId\]\);/);
-  assert.match(dialog, /opener\.focus\(\)/);
+  assert.match(dialog, /useModalFocusTrap/);
+  const trap = read('src/hooks/useModalFocusTrap.js');
+  assert.match(trap, /if \(event\.key !== 'Tab'\) return;/);
+  assert.match(trap, /focusable\[focusable\.length - 1\]\.focus\(\)/);
+  assert.match(trap, /opener\.focus\(\)/);
+  assert.match(trap, /document\.removeEventListener\('keydown', handleKeyDown\)/);
+
 });
 
 test('personel penceresi görünüm alanına sığar ve içeriği kendi içinde kayar', () => {

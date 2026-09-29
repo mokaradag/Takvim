@@ -43,6 +43,7 @@ import { usePresenceHeartbeat } from '../../hooks/usePresenceHeartbeat.js';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { TaskOrganizationFilterProvider } from '../../features/tasks/TaskOrganizationFilterContext.jsx';
 import { AppLogo } from './AppLogo';
+import { hasBlockingModal } from '../../hooks/useModalFocusTrap.js';
 import { CommandPalette } from './CommandPalette';
 import { ModeChooser } from './ModeChooser';
 import { DataRefreshControl } from './DataRefreshControl';
@@ -145,7 +146,7 @@ export default function AppShell() {
   // Nabız YALNIZCA Gerçek Sistem kipinde ve uygulama açıkken gönderilir; olağan
   // API istekleri varlık yazmaz (bkz. hooks/usePresenceHeartbeat.js).
   usePresenceHeartbeat(String(session?.dataMode || '').toLowerCase() === 'actual');
-  const { openTask } = useTaskActions();
+  const { openTask, closeTask } = useTaskActions();
   const signOutState = useSignOut();
   // Rota AI kabukla birlikte yaşar: panel kapanıp açılınca konuşma ve süren
   // yanıt korunur; veri kipi değişince kabukla birlikte yeniden kurulur.
@@ -235,7 +236,7 @@ export default function AppShell() {
     const onKey = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key?.toLowerCase() === 'k') {
         event.preventDefault();
-        setCmdOpen(true);
+        if (!hasBlockingModal()) setCmdOpen(true);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -409,7 +410,7 @@ export default function AppShell() {
           </div>
         </div>
 
-        <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
+        <button className="cmd-trigger" onClick={() => { if (!hasBlockingModal()) setCmdOpen(true); }}>
           <Icons.Search size={13} />
           <span>Ara veya komut çalıştır...</span>
           <span className="kbd">Ctrl K</span>
@@ -509,7 +510,7 @@ export default function AppShell() {
           onNavigate={navigate}
           onOpenTask={openTask}
           onSetTheme={(theme) => setTweak('theme', theme)}
-          onOpenAssistant={assistant.openPanel}
+          onOpenAssistant={async () => { await closeTask(); assistant.openPanel(); }}
           tasks={tasks}
         />
       )}

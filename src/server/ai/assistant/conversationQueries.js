@@ -156,6 +156,8 @@ export const AI_CONVERSATION_PREPARE_TURN_SQL = `${KNOWN_SICIL}
         SET @outcome = 'EXISTING';
       ELSE IF @content IS NULL OR @readOnly = 1
         SET @outcome = 'TURN_NOT_FOUND';
+      ELSE IF @expectedSequence IS NOT NULL AND @expectedSequence <> ISNULL(@lastSequence, 0)
+        SET @outcome = 'STALE';
       ELSE IF @lastRole = 'user'
         SET @outcome = 'UNANSWERED';
       ELSE IF EXISTS (
@@ -233,7 +235,7 @@ export const AI_CONVERSATION_APPEND_ANSWER_SQL = `${KNOWN_SICIL}
   IF @knownSicil = 1 AND EXISTS (
     SELECT 1 FROM dbo.MR_AiConversationMessages m
     JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
-    WHERE m.MessageId = @messageId AND m.ReplyToMessageId = @replyToMessageId
+    WHERE m.Role = 'assistant' AND m.ReplyToMessageId = @replyToMessageId
       AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil
   ) SET @persisted = 1;
   SELECT @knownSicil AS KnownSicil, @persisted AS AnswerPersisted;
@@ -243,4 +245,5 @@ export const AI_CONVERSATION_APPEND_ANSWER_SQL = `${KNOWN_SICIL}
   SELECT ${MESSAGE_COLUMNS}
   FROM dbo.MR_AiConversationMessages m
   JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
-  WHERE m.MessageId = @messageId AND c.OwnerSicil = @sicil AND @knownSicil = 1;`;
+  WHERE m.ReplyToMessageId = @replyToMessageId AND m.Role = 'assistant'
+    AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;`;

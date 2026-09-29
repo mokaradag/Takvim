@@ -6,7 +6,7 @@ import { useDataMode } from '../../../components/shell/DataModeContext.jsx';
 import { DATA_MODES } from '../../../data/dataMode.js';
 import { AI_CREDENTIAL_CHANGED_EVENT } from '../aiClient.js';
 import { ASSISTANT_DEFAULT_TITLE } from '../../../domain/ai/assistantContract.js';
-import { useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
+import { modalTrapDepth, useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
 import { useReducedMotion } from '../../../hooks/useReducedMotion.js';
 import { appZoom } from '../../../lib/zoom.js';
 import { AssistantComposer } from './AssistantComposer.jsx';
@@ -69,8 +69,16 @@ export function useRotaAssistant() {
   useEffect(() => {
     if (!open || !actual) return undefined;
     const refresh = () => controller.activate({ refresh: true });
+    let channel;
+    try {
+      const Channel = globalThis.window?.BroadcastChannel;
+      if (Channel) { channel = new Channel(AI_CREDENTIAL_CHANGED_EVENT); channel.onmessage = () => refresh(); }
+    } catch { /* Sekmeler arası bildirim desteklenmeyebilir. */ }
     globalThis.window?.addEventListener?.(AI_CREDENTIAL_CHANGED_EVENT, refresh);
-    return () => globalThis.window?.removeEventListener?.(AI_CREDENTIAL_CHANGED_EVENT, refresh);
+    return () => {
+      globalThis.window?.removeEventListener?.(AI_CREDENTIAL_CHANGED_EVENT, refresh);
+      channel?.close();
+    };
   }, [open, actual, controller]);
 
   const openPanel = useCallback(() => {
@@ -264,6 +272,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   useEffect(() => {
     if (!open || sheet) return undefined;
     const onKeyDown = (event) => {
+      if (modalTrapDepth() > 0) return;
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
       // Odak panelin dışındaysa (kullanıcı Rota'da çalışıyorsa) yerinde kalır; başlatıcıya taşınmaz.
@@ -299,7 +308,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       onOpenSettings?.();
     } else if (action === 'new-conversation') {
       // Kapanmış/dolmuş konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
-      const carry = Boolean(active.closed || held || capacityFull);
+      const carry = Boolean(!active.id || active.closed || held || capacityFull);
       const carried = carry ? [held?.text, draft].filter(Boolean).join('\n\n') : '';
       const sourceKey = draftKey;
       if (controller.newConversation() === false) return;
@@ -312,9 +321,23 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         setDraftState({ key: next.viewKey || next.key, text: carried });
       }
       focusInput();
+    } else if (action === 'refresh-conversation') {
+      if (active.id) controller.openConversation(active.id);
     } else if (action === 'reload') {
       globalThis.location?.reload();
     }
+  };
+
+  const openConversation = (id) => {
+    const carried = !active.id ? [held?.text, draft].filter(Boolean).join('\n\n') : '';
+    const pending = controller.openConversation(id);
+    const next = controller.getState().active;
+    if (carried && next.id === id) {
+      const targetKey = next.viewKey || next.key;
+      setDrafts((current) => ({ ...current, [draftKey]: '', [targetKey]: [current[targetKey], carried].filter(Boolean).join('\n\n') }));
+      setHeldDrafts((current) => ({ ...current, [draftKey]: null }));
+    }
+    return pending;
   };
 
   const send = (text) => {
@@ -335,7 +358,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         activeId={active.id}
         running={state.running}
         deleting={state.deleting}
-        onOpen={(id) => controller.openConversation(id)}
+        onOpen={openConversation}
         onDelete={(id) => controller.deleteConversation(id)}
         onLoadMore={controller.loadMore}
         onReload={controller.refreshList}
@@ -368,7 +391,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           activeId={active.id}
           running={state.running}
           deleting={state.deleting}
-          onOpen={(id) => controller.openConversation(id)}
+          onOpen={openConversation}
           onDelete={(id) => controller.deleteConversation(id)}
           onLoadMore={controller.loadMore}
           onReload={controller.refreshList}
@@ -499,7 +522,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             focusInput();
           }}
           generating={generating}
-          submitDisabled={state.refreshing || Boolean(state.reconciling[active.key])}
+          submitDisabled={state.refreshing || Boolean(state.reconciling[active.key]) || Boolean(retryableTurnKey(active.turns))}
           disabled={!canCompose || capacityFull || active.loading || Boolean(active.closed)
             || Boolean(state.deleting[active.id])}
           mode={state.mode}

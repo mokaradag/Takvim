@@ -1086,7 +1086,8 @@ arayüzün gönderdiği konuşma bilgisinden alınmaz.
 
 Yeni konuşma ayrı bir uçla açılmaz: `conversationId: null` ile gönderilen ilk
 tur konuşmayı açar. Tur gövdesi yalnızca `conversationId`, `turnId` (istemcinin
-ürettiği UUID), `message` (en fazla 8.000 karakter) ve `mode` taşır; tanınmayan
+ürettiği UUID), `message` (en fazla 8.000 karakter), `mode` ve son görülen
+ileti sırasını bildiren `expectedSequence` taşır; tanınmayan
 her alan (`model`, `profile`, `sicil`, `messages`, `system`, `apiKey` …)
 `AI_REQUEST_INVALID` (`UNKNOWN_FIELD`) ile reddedilir. Gövde en fazla 64 KiB'tır
 ve 10 sn içinde okunmalıdır.
@@ -1116,7 +1117,7 @@ başka sürüm bildiren akışı çözmeden reddeder (`PROTOCOL_ERROR`,
 olayın `accepted` (ya da doğrudan `error`) olmasını, sonlandırıcının tek
 olmasını, yanıt metninin 64.000 karakteri aşmamasını ve olayların bozuk
 olmamasını zorunlu tutar; sonlandırıcıdan sonraki her şey okunmadan yok
-sayılır. Olaylar isteğe bağlıdır: `accepted` isteği açan `turnId`'ye (ve
+sayılır. Olayların ilgili istekle eşleşmesi zorunludur: `accepted` isteği açan `turnId`'ye (ve
 verildiyse `conversationId`'ye), `done` kabul edilen konuşmaya ve kullanıcı
 iletisine (`replyToId`) ait olmalı ve bildirdiği kayıtlı yanıt uzunluğu alınan
 metnin (baş/son boşluk atılmış) uzunluğuna eşit olmalıdır; aksi hâlde
@@ -1465,7 +1466,7 @@ node test/helpers/fakeOpenAiCompatibleServer.mjs --serve --port 8099 --delay-ms 
 3. *Derin düşünme* kipine geçin ve aynı soruyu sorun.
 4. Aynı satırda `chat.reasoning` sayacının arttığını doğrulayın.
 5. Tarayıcının ağ sekmesinde tur gövdesinin yalnızca `conversationId`,
-   `turnId`, `message`, `mode` taşıdığını, model adı gönderilmediğini doğrulayın.
+   `turnId`, `message`, `mode`, `expectedSequence` taşıdığını, model adı gönderilmediğini doğrulayın.
 6. Akıl yürütme (düşünce) metninin hiçbir yerde görünmediğini doğrulayın;
    model akıl yürütme bildirdiğinde yalnızca *Derin düşünülüyor…* evresi,
    bildirmediğinde *Yanıt oluşturuluyor…* görünür.
@@ -1572,3 +1573,11 @@ bulunmadığını, telemetride konuşma metni geçmediğini doğrulayın.
 - kritik yol (CPM) yorumlama; genel internet araması;
 - konuşmayı yeniden adlandırma, yönetici erişimi, konuşma dışa aktarma;
 - birden çok uygulama örneği arasında paylaşılan kapasite ve üretim kaydı.
+
+### İnceleme düzeltmeleri — 29.09.2026
+
+- Tur isteği `expectedSequence` alanıyla son görülen ileti sırasını bildirir. Sunucu yeni turu eklemeden önce konuşma kilidi altında bu değeri denetler; bayat görünüm `CONVERSATION_STALE` ile reddedilir. Arayüz taslağı korur ve konuşmayı yenileme eylemi sunar. Eski istemciler için alan isteğe bağlıdır; kimlik ve bağlam yine sunucudan gelir.
+- Gecikmiş yazım yarışında aynı kullanıcı turuna önceden kaydedilmiş yanıt başarı olarak döner. `done.reconciled=true` yalnızca bu durumda kanonik `assistantMessage.content` alanını taşır; istemci uzunluk ve tur eşleşmesini doğrulayarak geçici akış metnini kayıtlı yanıtla değiştirir.
+- Geçmiş listesi, tarama imlecinin geçtiği satırları yalnızca baş sayfadan düştükleri için silmez. Sonraki sayfada değişmez oluşturma anahtarının üst aralığı da taranır; başka sekmede eklenen kayıtlar baş sayfadan düşseler bile bulunur.
+- Kipli proje, personel ve takvim günü pencereleri ortak odak tuzağına katılır. Komut paleti daha yüksek veya kayıt yapan kipli pencere altında açılmaz; görev panelinden yardımcıya geçiş panel kapandıktan sonra yapılır.
+- Kaydedilmemiş taslaklar konuşma geçişinde korunur. Anahtar değişikliği diğer sekmelere yalnızca gizli veri içermeyen bir değişim işaretiyle bildirilir.

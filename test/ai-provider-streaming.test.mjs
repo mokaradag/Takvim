@@ -363,6 +363,8 @@ test('ilk parçadan sonra kopan bağlantı: ilk metin iletilmiş olur, ardından
   // İki parça yazıldı: rol olayı ve metnin ilk yarısı.
   const text = 'Merhaba, sahte ağ geçidi yanıt veriyor.';
   assert.equal(textOf(received), text.slice(0, Math.ceil(text.length / 2)));
+  assert.equal(server.state.streamsClosedByClient, 0);
+  await assert.rejects(server.waitForClosedStreams(1, { limitMs: 30 }), /istemci tarafından kapatılmadı/);
 });
 
 test('iptal süren akışı sağlayıcı tarafında da kapatır; okuma iptal nedeniyle biter', async (t) => {

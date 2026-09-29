@@ -19,6 +19,7 @@ import { finishReasonNote, generationPhaseLabel } from './assistantPresentation.
 export const FAILURE_ACTION_LABELS = Object.freeze({
   settings: 'Ayarlar’ı aç',
   'new-conversation': 'Yeni konuşma başlat',
+  'refresh-conversation': 'Konuşmayı yenile',
   reload: 'Sayfayı yenile'
 });
 

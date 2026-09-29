@@ -120,7 +120,15 @@ export function loadAiCredentialStatusRequest(options = {}) {
 export const AI_CREDENTIAL_CHANGED_EVENT = 'mergen-rota-ai-credential-changed';
 
 function notifyCredentialChanged(result) {
-  if (result.ok) globalThis.window?.dispatchEvent?.(new Event(AI_CREDENTIAL_CHANGED_EVENT));
+  if (result.ok) {
+    globalThis.window?.dispatchEvent?.(new Event(AI_CREDENTIAL_CHANGED_EVENT));
+    let channel;
+    try {
+      const Channel = globalThis.window?.BroadcastChannel;
+      if (Channel) { channel = new Channel(AI_CREDENTIAL_CHANGED_EVENT); channel.postMessage('changed'); }
+    } catch { /* Sekmeler arası bildirim desteklenmeyebilir. */ }
+    finally { channel?.close(); }
+  }
   return result;
 }
 

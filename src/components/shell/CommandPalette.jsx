@@ -10,7 +10,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, on
   const [active, setActive] = useState(0);
   const inputRef = useRef(null);
   const dialogRef = useRef(null);
-  useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: inputRef, onClose });
+  useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: inputRef, onClose, priority: 400 });
 
   // Etkin satır DURUMUN KENDİSİNDE sınırlanır. `setActive((a) => a + 1)`
   // sınırsız artıyor, çizim ise `Math.min(active, items.length - 1)` ile

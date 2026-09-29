@@ -156,7 +156,7 @@ export async function deleteConversation(executor, sicil, { conversationId }) {
  * `content: null` yeniden denemedir (yeni ileti yazılmaz).
  */
 export async function prepareConversationTurn(executor, sicil, {
-  conversationId, newConversationId, userMessageId, turnId, content, title, maxMessages, historyLimit, readOnly = false
+  conversationId, newConversationId, userMessageId, turnId, content, title, maxMessages, historyLimit, expectedSequence = null, readOnly = false
 }) {
   const request = sicilRequest(executor, sicil);
   request.input('conversationId', sql.UniqueIdentifier, conversationId);
@@ -168,6 +168,7 @@ export async function prepareConversationTurn(executor, sicil, {
   request.input('maxMessages', sql.Int, maxMessages);
   request.input('historyLimit', sql.Int, historyLimit);
   request.input('readOnly', sql.Bit, readOnly);
+  request.input('expectedSequence', sql.Int, expectedSequence);
   const [[state] = [], conversations = [], history = [], turnRows = []] = recordsetsOf(await request.query(AI_CONVERSATION_PREPARE_TURN_SQL));
   const turnMessages = turnRows.map(messageRow);
   return {

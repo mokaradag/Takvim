@@ -31,7 +31,7 @@ import { generateAssistantAnswer } from './assistantService.js';
 
 export const ASSISTANT_KEEPALIVE_MS = 15000;
 /** Kuyruktaki en fazla olay (tek olay en fazla bir sağlayıcı parçası kadardır). */
-const QUEUE_HIGH_WATER_MARK = 32;
+export const QUEUE_HIGH_WATER_MARK = 32;
 const RETRYABLE_SERVER_CODES = new Set(['DATABASE_UNAVAILABLE']);
 
 const encoder = new TextEncoder();
@@ -179,7 +179,8 @@ export function assistantStreamResponse(turn, {
       });
       send(ASSISTANT_STREAM_EVENTS.DONE, {
         conversation: result.conversation,
-        assistantMessage: messageView(result.answer, { includeContent: false }),
+        assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true }),
+        ...(result.reconciled ? { reconciled: true } : {}),
         replayed: false
       });
       recordAssistantTurn({ durationMs: Date.now() - startedAt });

@@ -604,7 +604,7 @@ test('gönderim yalnızca konuşma, tur, ileti ve kipi taşır; model adı, prof
   const [call] = sent;
   assert.equal(call.method, 'POST');
   const body = JSON.parse(call.body);
-  assert.deepEqual(Object.keys(body).sort(), ['conversationId', 'message', 'mode', 'turnId']);
+  assert.deepEqual(Object.keys(body).sort(), ['conversationId', 'expectedSequence', 'message', 'mode', 'turnId']);
   assert.equal(body.mode, 'deep');
   for (const forbidden of [...MODEL_NAMES, 'chat.reasoning', 'chat.general', 'apiKey', 'Authorization', 'sicil']) {
     assert.equal(call.body.includes(forbidden), false, `gövde taşımamalı: ${forbidden}`);
@@ -1966,7 +1966,7 @@ test('değişmez tarama imleci güncel baş sayfayı tek turda birleştirir', as
   controller.dispose();
 });
 
-test('ardışık Daha eski çağrıları önceki tarama sayfalarını yeniden okumaz', async () => {
+test('ardışık Daha eski çağrıları yeni kayıt aralığını denetleyip eski imleçten sürer', async () => {
   const boundary = { id: CONVERSATION_A, title: 'Sınır', updatedAt: '2026-09-26T10:00:00Z' };
   const olderA = { id: createId(), title: 'Eski A', updatedAt: '2026-09-25T10:00:00Z' };
   const olderB = { id: createId(), title: 'Eski B', updatedAt: '2026-09-24T10:00:00Z' };
@@ -1982,7 +1982,7 @@ test('ardışık Daha eski çağrıları önceki tarama sayfalarını yeniden ok
   };
   await controller.loadMore();
   await controller.loadMore();
-  assert.deepEqual(scans, ['scan-start', 'scan-2']);
+  assert.deepEqual(scans, ['scan-start', 'scan-start', 'scan-2']);
   controller.dispose();
 });
 
@@ -2308,4 +2308,124 @@ test('yeniden deneme kabul edilmeden reddedilirse kayıtlı turun uzlaştırmas�
   await drain();
   assert.equal(state().active.turns[0].answer.status, 'complete');
   controller.dispose();
+});
+
+
+test('baş sayfadan düşen geçilmiş kayıt ve sonradan eklenen kayıt taramada kaybolmaz', async () => {
+  const row = (id, date) => ({ id, title: id, createdAt: date, updatedAt: date });
+  const a = row(CONVERSATION_A, '2026-09-26T10:00:00Z');
+  const b = row(CONVERSATION_B, '2026-09-25T10:00:00Z');
+  const old = row(createId(), '2026-09-24T10:00:00Z');
+  const fresh = row(createId(), '2026-09-27T10:00:00Z');
+  const promoted = { ...old, updatedAt: '2026-09-29T10:00:00Z' };
+  let round = 0;
+  const api = fakeApi({ listAssistantConversationsRequest: async ({ cursor }) => {
+    if (cursor == null) return { ok: true, conversations: [round ? promoted : a], nextCursor: 'legacy', scanCursor: 'scan-start' };
+    if (cursor === 'scan-start') return { ok: true, conversations: round ? [fresh] : [a, b], nextCursor: round ? 'newer-next' : 'older' };
+    if (cursor === 'newer-next') return { ok: true, conversations: [a, b], nextCursor: 'older' };
+    if (cursor === 'older') return { ok: true, conversations: [promoted], nextCursor: null };
+    throw new Error(cursor);
+  } });
+  const { controller, state } = await readyController({ api });
+  await controller.loadMore();
+  round = 1;
+  await controller.loadMore();
+  assert.deepEqual(new Set(state().list.items.map((item) => item.id)), new Set([a.id, b.id, old.id, fresh.id]));
+  assert.equal(state().list.nextCursor, null);
+  controller.dispose();
+});
+
+test('kaydedilmemiş taslak yeni konuşmada ve kayıtlı konuşmaya geçişte erişilebilir kalır', async () => {
+  const { controller } = await readyController();
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+  const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+  composer().props.onChange('Gönderilmemiş taslak'); panel.render();
+  findElement(panel.output, (node) => node.type === 'button' && node.props.title === 'Yeni konuşma').props.onClick(); panel.render();
+  assert.equal(composer().props.value, 'Gönderilmemiş taslak');
+  controller.setView('history'); panel.render();
+  const list = findElement(panel.output, (node) => node.type === AssistantConversationList);
+  await list.props.onOpen(CONVERSATION_A); panel.render();
+  assert.equal(composer().props.value, 'Gönderilmemiş taslak');
+  panel.unmount(); controller.dispose();
+});
+
+test('yanıtsız son tur yeni gönderimi kapatır ama yeniden deneme açık kalır', async () => {
+  const user = { id: createId(), turnId: createId(), role: 'user', content: 'Soru', sequence: 1 };
+  const api = fakeApi({ loadAssistantConversationRequest: async (id) => ({ ok: true, conversation: { id, title: 'Soru', messageCount: 1 }, messages: [user] }) });
+  const { controller } = await readyController({ api });
+  await controller.openConversation(CONVERSATION_A);
+  assert.equal(controller.canSend(), false);
+  assert.equal(controller.send('Başka soru').ok, false);
+  assert.equal(api.turns.length, 0);
+  assert.equal(controller.retry(user.turnId).ok, true);
+  controller.dispose();
+});
+
+test('uzlaştırılan kayıtlı yanıt geçici üretilen metnin yerini alır', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const run = api.turns[0];
+  run.emit('accepted', acceptedData(CONVERSATION_A, run, 'Soru'));
+  run.emit('delta', { text: 'Geçici metin' });
+  const result = doneResult(CONVERSATION_A);
+  result.done.reconciled = true;
+  result.done.assistantMessage.content = 'Kayıtlı metin';
+  run.resolve(result); await drain();
+  assert.equal(state().active.turns[0].answer.content, 'Kayıtlı metin');
+  controller.dispose();
+});
+
+
+
+test('başka sekmenin anahtar bildirimi açık panelin hazırlığını yeniler ve kanal kapanır', async (t) => {
+  withDataMode(t, 'actual');
+  const previousWindow = globalThis.window;
+  const channels = [];
+  class Channel {
+    constructor(name) { this.name = name; channels.push(this); }
+    close() { this.closed = true; }
+  }
+  globalThis.window = { BroadcastChannel: Channel, addEventListener() {}, removeEventListener() {} };
+  t.after(() => { globalThis.window = previousWindow; });
+  let available = false;
+  stubFetch(t, (call) => {
+    if (call.url.endsWith('/assistant')) return Response.json({ assistant: available ? READINESS : { ...READINESS, available: false, modes: READINESS.modes.map((mode) => ({ ...mode, available: false })) } });
+    return Response.json({ conversations: [], nextCursor: null });
+  });
+  const probe = mountComponent(Probe, {});
+  t.after(() => probe.unmount());
+  probe.output.assistant.openPanel(); probe.render(); await drain();
+  assert.equal(probe.output.assistant.controller.getState().readiness.available, false);
+  assert.equal(channels.length, 1);
+  available = true;
+  channels[0].onmessage({ data: 'changed' }); await drain();
+  assert.equal(probe.output.assistant.controller.getState().readiness.available, true);
+  probe.output.assistant.close({ restoreFocus: false }); probe.render();
+  assert.equal(channels[0].closed, true);
+});
+
+test('kayıt yapan kipli pencerenin Escape olayı masaüstü yardımcısını kapatmaz', async (t) => {
+  const { useModalFocusTrap, hasBlockingModal } = await import('../src/hooks/useModalFocusTrap.js');
+  const previous = { window: globalThis.window, document: globalThis.document, observer: globalThis.MutationObserver };
+  const events = new EventTarget();
+  const docEvents = new EventTarget();
+  globalThis.window = events;
+  globalThis.document = { body: { classList: { contains: () => false } }, activeElement: null,
+    addEventListener: docEvents.addEventListener.bind(docEvents), removeEventListener: docEvents.removeEventListener.bind(docEvents) };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  const { controller } = await readyController();
+  const closes = [];
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() { closes.push('assistant'); } } });
+  const trap = mountComponent((props) => { useModalFocusTrap(props); return null; }, {
+    containerRef: { current: null }, initialFocusRef: { current: null }, blocked: true, priority: 310, onClose() { closes.push('modal'); }
+  });
+  try {
+    assert.equal(hasBlockingModal(), true);
+    const event = Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
+    docEvents.dispatchEvent(event); events.dispatchEvent(event);
+    assert.deepEqual(closes, []);
+  } finally {
+    trap.unmount(); panel.unmount(); controller.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer;
+  }
 });

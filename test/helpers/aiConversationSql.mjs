@@ -175,6 +175,7 @@ function prepare(db, params, sicil, known) {
       lastSequence = messages.length ? messages[messages.length - 1].Sequence : null;
       if (turn) outcome = 'EXISTING';
       else if (params.content == null || params.readOnly) outcome = 'TURN_NOT_FOUND';
+      else if (params.expectedSequence != null && params.expectedSequence !== (lastSequence ?? 0)) outcome = 'STALE';
       else if (messages.at(-1)?.Role === 'user') outcome = 'UNANSWERED';
       else if (conversation.MessageCount > Number(params.maxMessages) - 2) outcome = 'FULL';
       else {
@@ -249,7 +250,7 @@ function append(db, params, sicil) {
     conversation.UpdatedAt = at;
     persisted = 1;
   }
-  const written = conversation && db.aiConversationMessages.find((row) => sameGuid(row.MessageId, params.messageId) && sameGuid(row.ReplyToMessageId, params.replyToMessageId) && sameGuid(row.ConversationId, params.conversationId));
+  const written = conversation && db.aiConversationMessages.find((row) => row.Role === 'assistant' && sameGuid(row.ReplyToMessageId, params.replyToMessageId) && sameGuid(row.ConversationId, params.conversationId));
   if (written) persisted = 1;
   return [
     [{ KnownSicil: 1, AnswerPersisted: persisted }],

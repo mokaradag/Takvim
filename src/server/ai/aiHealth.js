@@ -178,7 +178,7 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (!detail.assistantProfiles) return warning(`Rota AI sohbet profilleri (chat.general / chat.reasoning) kullanılamıyor. ${loadText}`);
   if (conversationSchema.ready === false) return warning(`Rota AI konuşma tabloları (0017) doğrulanamadı. ${loadText}`);
   const turnFailure = telemetry.assistantTurns?.lastFailure;
-  if (turnFailure && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
+  if (turnFailure && !CAPACITY_CODES.has(turnFailure.code) && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
     return warning(`Son Rota AI turu tamamlanamadı (${turnFailure.code}). ${loadText}`);
   }
   // Tablonun kurulu olduğu gözlemi de kalıcı değildir: tablo sonradan

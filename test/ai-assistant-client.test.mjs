@@ -428,3 +428,16 @@ test('kayıtlı yanıt yeniden oynatılırken istek kipinden farklı kayıtlı k
   assert.equal(result.ok, true);
   assert.equal(result.done.assistantMessage.mode, 'standard');
 });
+
+
+test('uzlaştırılmış done kayıtlı yanıtı doğrular; bozuk metin kabul edilmez', () => {
+  const canonical = 'Önceden kaydedilen yanıt';
+  const done = { conversation, reconciled: true, assistantMessage: { ...assistantMessage, content: canonical, length: canonical.length } };
+  const decoder = createAssistantStreamDecoder();
+  decoder.push(ACCEPTED + frame('delta', { text: 'Farklı yeni yanıt' }) + frame('done', done));
+  assert.equal(decoder.terminal.data.assistantMessage.content, canonical);
+  for (const broken of [undefined, 12, 'x'.repeat(64001)]) {
+    const invalid = createAssistantStreamDecoder();
+    assert.throws(() => invalid.push(ACCEPTED + frame('done', { ...done, assistantMessage: { ...done.assistantMessage, content: broken } })));
+  }
+});

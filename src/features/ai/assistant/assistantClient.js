@@ -17,7 +17,7 @@ import { requestJson } from '../../shared/jsonRequest.js';
  * Tarayıcı yalnızca MERGEN Rota sunucusuyla konuşur ve yalnızca Rota akış
  * protokolünü çözer; sağlayıcının tel biçimini hiç görmez. Model adı, profil,
  * Sicil ya da anahtar gönderilmez: tur isteği yalnızca konuşma kimliği, tur
- * kimliği, ileti ve kullanıcıya dönük kip taşır.
+ * kimliği, ileti, kullanıcıya dönük kip ve son görülen ileti sırasını taşır.
  *
  * Her sonuç aynı biçimdedir: başarıda `{ ok: true, ... }`, aksi hâlde
  * `{ ok: false, code, message, reason, retryable, partial, cancelled, ... }`.
@@ -184,12 +184,14 @@ export function createAssistantStreamDecoder({
     if (conversationId != null && !sameId(conversation.id, conversationId)) throw new AssistantProtocolError('CONVERSATION_MISMATCH');
   }
 
-  function checkDone({ conversation, assistantMessage }) {
+  function checkDone({ conversation, assistantMessage, reconciled }) {
     if (!sameId(conversation.id, state.accepted.conversation.id) || !sameId(assistantMessage.replyToId, state.accepted.userMessage.id)) {
       throw new AssistantProtocolError('TURN_MISMATCH');
     }
     if (!Number.isSafeInteger(assistantMessage.length) || assistantMessage.length < 0) throw new AssistantProtocolError('MALFORMED_EVENT');
-    if (assistantMessage.length !== state.answer.trim().length) throw new AssistantProtocolError('ANSWER_LENGTH_MISMATCH');
+    if (reconciled === true && (typeof assistantMessage.content !== 'string' || assistantMessage.content.length > maxAnswerChars)) throw new AssistantProtocolError('MALFORMED_EVENT');
+    const answer = reconciled === true ? assistantMessage.content : state.answer.trim();
+    if (assistantMessage.length !== answer.length) throw new AssistantProtocolError('ANSWER_LENGTH_MISMATCH');
   }
 
   function accept(raw) {
@@ -265,6 +267,7 @@ export async function streamAssistantTurnRequest({
   mode,
   signal = null,
   onEvent = null,
+  expectedSequence = null,
   inactivityMs = ASSISTANT_STREAM_INACTIVITY_MS
 }) {
   const controller = new AbortController();
@@ -302,7 +305,7 @@ export async function streamAssistantTurnRequest({
       method: 'POST',
       cache: 'no-store',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ conversationId, turnId, message, mode }),
+      body: JSON.stringify({ conversationId, turnId, message, mode, ...(expectedSequence == null ? {} : { expectedSequence }) }),
       signal: controller.signal
     });
     arm();

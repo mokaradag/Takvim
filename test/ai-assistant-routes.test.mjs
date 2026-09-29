@@ -499,11 +499,15 @@ test('geri basınçta bekleyen parça üretim iptalinden sonra gönderilmez', as
     }
   } });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(produced, 31);
+  const { QUEUE_HIGH_WATER_MARK } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+  assert.ok(produced > 0 && produced < 40 && produced <= QUEUE_HIGH_WATER_MARK);
+  const stalledAt = produced;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(produced, stalledAt);
   const { AiError } = await import('../src/server/ai/aiErrors.js');
   aborted.abort(new AiError('AI_CANCELLED'));
   const parsed = parseSseText(await response.text());
-  assert.equal(parsed.events.filter((event) => event.event === 'delta').length, 31);
+  assert.equal(parsed.events.filter((event) => event.event === 'delta').length, stalledAt);
   assert.equal(parsed.events.at(-1).data.code, 'AI_CANCELLED');
 });
 

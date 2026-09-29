@@ -67,16 +67,18 @@ function streamResponse(response, scenario, model, text, state) {
   });
   let index = 0;
   let timer = null;
+  let serverDestroyed = false;
   const finished = () => {
     state.streamsCompleted += 1;
   };
   response.on('close', () => {
     clearTimeout(timer);
-    if (!response.writableFinished) state.streamsClosedByClient += 1;
+    if (!serverDestroyed && !response.writableFinished) state.streamsClosedByClient += 1;
   });
   const next = () => {
     if (response.destroyed) return;
     if (stream.destroyAfter != null && index >= stream.destroyAfter) {
+      serverDestroyed = true;
       response.socket?.destroy();
       return;
     }

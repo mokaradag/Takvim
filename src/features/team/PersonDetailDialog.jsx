@@ -1,11 +1,11 @@
 'use client';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { Icons } from '../../components/icons';
 import { Avatar, StatusPill } from '../../components/ui';
 import { PRIORITIES, resolvePriority } from '../../domain/constants/index.js';
 import { projectColorVar } from '../../lib/colors';
 import { fmt, today } from '../../scheduling/dates';
-import { modalTrapDepth } from '../../hooks/useModalFocusTrap.js';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { organizationValue } from './teamDirectoryPolicy.js';
 import { dueTone } from './upcomingTaskPolicy.js';
 
@@ -42,69 +42,10 @@ function IdentityRow({ label, value }) {
 export function PersonDetailDialog({ member, onClose, onOpenTask }) {
   const closeRef = useRef(null);
   const dialogRef = useRef(null);
-  const openerRef = useRef(null);
-  const closeHandlerRef = useRef(onClose);
   const today_ = today();
   const personId = member?.person?.id || null;
 
-  // Kapatma geri çağırması her çizimde YENİ kimlikle gelir (`onClose={() =>
-  // setOpenPersonId(null)}`). Referansta tutulur, böylece odak/Esc etkisi bu
-  // kimliğe bağlı kalmaz.
-  closeHandlerRef.current = onClose;
-
-  // Odak YALNIZCA pencere açıldığında taşınır. Etki `onClose` kimliğine bağlı
-  // olduğunda, TeamView'in her yeniden çizimi odağı görev listesinden kapatma
-  // düğmesine geri çalıyordu. Kapanışta odak pencereyi AÇAN öğeye döner.
-  useEffect(() => {
-    if (!personId) return undefined;
-    openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
-    closeRef.current?.focus();
-    return () => {
-      const opener = openerRef.current;
-      if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
-    };
-  }, [personId]);
-
-  // Esc her zaman kapatır; Tab odağı pencerenin İÇİNDE tutar. `aria-modal`
-  // tek başına odağı hapsetmez: sekmeyle ilerleyen kullanıcı pencere açıkken
-  // arkadaki TeamView denetimlerine geçebiliyordu.
-  useEffect(() => {
-    if (!personId) return undefined;
-    // Sonradan açılan kipli pencere (ör. komut paleti) Esc ve Tab'ın sahibidir.
-    const depth = modalTrapDepth();
-    const onKey = (event) => {
-      if (modalTrapDepth() > depth) return;
-      if (event.key === 'Escape' && !event.defaultPrevented) {
-        event.preventDefault();
-        closeHandlerRef.current?.();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusable = [...dialog.querySelectorAll(
-        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      )].filter((element) => element.offsetParent !== null || element === document.activeElement);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (!dialog.contains(active)) {
-        event.preventDefault();
-        first.focus();
-        return;
-      }
-      if (event.shiftKey && active === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [personId]);
+  useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, onClose, enabled: Boolean(personId) });
 
   const person = member?.person || null;
   const openTasks = useMemo(
@@ -131,6 +72,7 @@ export function PersonDetailDialog({ member, onClose, onOpenTask }) {
     <div className="person-dialog-backdrop" role="presentation" onClick={onClose}>
       <section
         ref={dialogRef}
+        tabIndex={-1}
         className="person-dialog"
         role="dialog"
         aria-modal="true"

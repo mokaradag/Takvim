@@ -141,7 +141,7 @@ export function assistantFailureView(result, now = Date.now()) {
           ? 'Bu konuşmada başka bir pencerede yanıt üretiliyor. Tamamlanmasını bekleyip yeniden deneyin.'
           : serverMessage(result, 'İşlem şu anda yapılamıyor.'),
         retryable: result?.reason === 'GENERATION_IN_PROGRESS',
-        action: ['CONVERSATION_FULL', 'TURN_UNANSWERED'].includes(result?.reason) ? 'new-conversation' : null
+        action: result?.reason === 'CONVERSATION_STALE' ? 'refresh-conversation' : ['CONVERSATION_FULL', 'TURN_UNANSWERED'].includes(result?.reason) ? 'new-conversation' : null
       };
     case 'NOT_FOUND':
       return {

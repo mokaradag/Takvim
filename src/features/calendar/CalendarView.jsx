@@ -9,7 +9,7 @@ import { AvatarStack, StatusPill } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { Tooltip, InfoButton } from '../../components/ui-extras';
 import { appZoom } from '../../lib/zoom';
-import { modalTrapDepth } from '../../hooks/useModalFocusTrap.js';
+import { modalTrapDepth, useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { usePeople, useTasks, useTaskActions } from '../../state/hooks';
 import { bucketCalendarTasks, taskCalendarDate } from './calendarTaskBucketing.js';
 import { TaskOrganizationFilterControls } from '../tasks/TaskOrganizationFilterControls.jsx';
@@ -264,14 +264,9 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
   const hol = holidayFor(d);
   const isWeekend_ = isWeekend(d);
 
-  useEffect2(() => {
-    // Sonradan üstte açılan kipli pencere (ör. komut paleti) Esc'in sahibidir.
-    const depth = modalTrapDepth();
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented && modalTrapDepth() <= depth) { e.preventDefault(); onClose(); } };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const dialogRef = useRef2(null);
+  const closeRef = useRef2(null);
+  useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, onClose });
 
   const byProj = useMemo2(() => {
     const m = {};
@@ -281,7 +276,7 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
 
   return (
     <div className="day-expand-backdrop" onClick={onClose}>
-      <div className="day-expand-panel" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Günün görevleri" className="day-expand-panel" onClick={(e) => e.stopPropagation()}>
         <div className="day-expand-head">
           <div className="day-num">{d.getDate()}</div>
           <div className="col" style={{ flex: 1, gap: 2 }}>
@@ -292,7 +287,7 @@ function DayExpandModal({ iso, events, onClose, onOpenTask }) {
               {events.length} aktif görev{isWeekend_ ? ' · Hafta sonu' : ''}{hol ? ` · ${hol.name}` : ''}
             </div>
           </div>
-          <button className="icon-btn" onClick={onClose}><Icons.Close size={15} /></button>
+          <button ref={closeRef} aria-label="Kapat" className="icon-btn" onClick={onClose}><Icons.Close size={15} /></button>
         </div>
         <div className="day-expand-list">
           {byProj.length === 0 && <div className="empty" style={{ padding: 32 }}>Bu gün için görev yok.</div>}

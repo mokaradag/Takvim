@@ -153,18 +153,22 @@ function reportedModel(value) {
  * Seçeneğin iletisi `assistant` rolünde olmalıdır: isteği yankılayan yanlış
  * yapılandırılmış bir vekilin `user` iletisi model yanıtı sayılmaz.
  */
+function assertCompletionMetadata(payload, choice, reason) {
+  if ((payload?.model != null && typeof payload.model !== 'string')
+    || (choice?.finish_reason != null && typeof choice.finish_reason !== 'string')
+    || (payload?.usage != null && (typeof payload.usage !== 'object' || Array.isArray(payload.usage)))
+    || ['prompt_tokens', 'completion_tokens', 'total_tokens'].some((key) => payload?.usage?.[key] != null && tokenCount(payload.usage[key]) == null)) {
+    throw invalidResponse(reason);
+  }
+}
+
 export function parseChatCompletion(payload) {
   const choice = Array.isArray(payload?.choices) ? primaryChoice(payload.choices) : null;
   const message = choice?.message;
   if (!message || typeof message !== 'object') throw invalidResponse('MISSING_CHOICE');
   if (message.role !== 'assistant') throw invalidResponse('INVALID_ROLE');
   if (message.content != null && typeof message.content !== 'string') throw invalidResponse('INVALID_CONTENT');
-  if ((payload?.model != null && typeof payload.model !== 'string')
-    || (choice?.finish_reason != null && typeof choice.finish_reason !== 'string')
-    || (payload?.usage != null && (typeof payload.usage !== 'object' || Array.isArray(payload.usage)))
-    || ['prompt_tokens', 'completion_tokens', 'total_tokens'].some((key) => payload?.usage?.[key] != null && tokenCount(payload.usage[key]) == null)) {
-    throw invalidResponse('COMPLETION_METADATA_INVALID');
-  }
+  assertCompletionMetadata(payload, choice, 'COMPLETION_METADATA_INVALID');
   return {
     text: message.content ?? '',
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason.slice(0, 40) : null,
@@ -297,12 +301,7 @@ export function createOpenAiCompatibleProvider({
       if (type === 'application/json') {
         const payload = await readBoundedJson(response, maxResponseBytes, signal);
         const choice = Array.isArray(payload?.choices) ? primaryChoice(payload.choices) : null;
-        if ((payload?.model != null && typeof payload.model !== 'string')
-          || (choice?.finish_reason != null && typeof choice.finish_reason !== 'string')
-          || (payload?.usage != null && (typeof payload.usage !== 'object' || Array.isArray(payload.usage)))
-          || ['prompt_tokens', 'completion_tokens', 'total_tokens'].some((key) => payload?.usage?.[key] != null && tokenCount(payload.usage[key]) == null)) {
-          throw invalidResponse('STREAM_EVENT_MALFORMED');
-        }
+        assertCompletionMetadata(payload, choice, 'STREAM_EVENT_MALFORMED');
         const completion = parseChatCompletion(payload);
         return { events: completionAsStream(completion, streamLimits, { reasoning: completionReasoning(payload) }) };
       }

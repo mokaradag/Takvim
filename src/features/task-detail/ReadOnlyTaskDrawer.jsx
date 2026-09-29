@@ -30,7 +30,7 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
   const assigneeNames = taskAssigneeDisplayNames(task);
 
   const drawerRef = useRef(null);
-  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, onClose });
+  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, priority: 310, onClose });
 
   return (
     <>

@@ -63,7 +63,7 @@ const ANSWER_PERSIST_BUDGET_MS = 2 * AI_CONVERSATION_SQL_TIMEOUT_MS;
 /** Tur isteği gövdesinin en büyük boyutu ve okunma süresi. */
 export const ASSISTANT_TURN_BODY_BYTES = 64 * 1024;
 const TURN_BODY_TIMEOUT_MS = 10000;
-const TURN_FIELDS = new Set(['conversationId', 'turnId', 'message', 'mode']);
+const TURN_FIELDS = new Set(['conversationId', 'turnId', 'message', 'mode', 'expectedSequence']);
 
 /**
  * Konuşma geçmişinin ortak SQL havuzuna giden işleri: en fazla dört iş aynı
@@ -397,7 +397,7 @@ export async function deleteAssistantConversation({ conversationId, signal = nul
 /* ── Tur ─────────────────────────────────────────────────────── */
 
 /**
- * Tur isteği: yalnızca `conversationId`, `turnId`, `message` ve `mode`.
+ * Tur isteği: `conversationId`, `turnId`, `message`, `mode` ve `expectedSequence`.
  * Tanınmayan alan (ör. `model`, `profile`, `sicil`, `messages`, `system`)
  * reddedilir: tarayıcı model, profil, kimlik ya da geçmiş belirleyemez.
  */
@@ -415,7 +415,9 @@ function parseTurnInput(body) {
     message = normalized.value;
   }
   if (message == null && conversationId == null) throw invalidRequest('MESSAGE_REQUIRED', 'İleti boş olamaz.');
-  return { conversationId, turnId: body.turnId.toLowerCase(), mode: body.mode, message };
+  const expectedSequence = body.expectedSequence ?? null;
+  if (expectedSequence != null && (!Number.isSafeInteger(expectedSequence) || expectedSequence < 0 || expectedSequence > ASSISTANT_LIMITS.maxConversationMessages)) throw invalidRequest('SEQUENCE_INVALID');
+  return { conversationId, turnId: body.turnId.toLowerCase(), mode: body.mode, message, expectedSequence };
 }
 
 function outcomeFailure(prepared, input) {
@@ -426,6 +428,8 @@ function outcomeFailure(prepared, input) {
       return conversationNotFound();
     case 'TURN_NOT_FOUND':
       return conversationNotFound('TURN_NOT_FOUND');
+    case 'STALE':
+      return conflict('CONVERSATION_STALE', 'Bu konuşma başka bir pencerede değişti. Konuşmayı yenileyip iletinizi yeniden gönderin.');
     case 'FULL':
       return conflict('CONVERSATION_FULL', 'Bu konuşma azami uzunluğa ulaştı. Devam etmek için yeni bir konuşma başlatın.');
     case 'UNANSWERED':
@@ -466,6 +470,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     userMessageId: randomUUID(),
     turnId: input.turnId,
     content: input.message,
+    expectedSequence: input.expectedSequence,
     title: conversationTitleFrom(input.message),
     maxMessages: ASSISTANT_LIMITS.maxConversationMessages,
     historyLimit: ASSISTANT_CONTEXT_POLICY.historyWindow,
@@ -514,8 +519,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     return {
       sicil,
       claim,
-      mode: input.mode,
-      profile,
+      mode: prepared.answer?.mode || input.mode,
+      profile: prepared.answer ? assistantProfileForMode(prepared.answer.mode) : profile,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
       replay: prepared.answer,
@@ -574,7 +579,8 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
   return {
     conversation: stored.conversation,
     answer: stored.message,
-    finishReason: result.finishReason,
+    reconciled: stored.message.id !== messageId,
+    finishReason: stored.message.finishReason,
     firstTokenMs: result.firstTokenMs
   };
 }

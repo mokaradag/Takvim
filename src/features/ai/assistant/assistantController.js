@@ -346,7 +346,7 @@ export function createAssistantController({
           user: { ...turn.user, pending: false },
           answer: {
             id: assistantMessage.id,
-            content: text.trim(),
+            content: result.done.reconciled === true ? assistantMessage.content : text.trim(),
             status: 'complete',
             mode: assistantMessage.mode || run.mode,
             finishReason: assistantMessage.finishReason || null,
@@ -552,6 +552,7 @@ export function createAssistantController({
       turnId,
       message: content,
       mode: run.mode,
+      expectedSequence: active.messageCount || 0,
       signal: run.controller.signal,
       onEvent: (event) => onRunEvent(run, event)
     })).catch(() => ({ ok: false, code: 'PROTOCOL_ERROR', partial: Boolean(run.text) }))
@@ -565,6 +566,7 @@ export function createAssistantController({
     return state.status === 'ready' && !state.refreshing && Boolean(state.readiness?.available)
       && (retry || (state.active.messageCount || 0) <= (state.readiness?.limits?.maxConversationMessages || ASSISTANT_LIMITS.maxConversationMessages) - 2)
       && !state.active.loading && !state.active.failure && !state.active.closed && !state.running[state.active.key]
+      && (retry || !retryableTurnKey(state.active.turns))
       && (retry || !state.reconciling[state.active.key]) && !state.deleting[state.active.id];
   }
 
@@ -724,7 +726,6 @@ export function createAssistantController({
     const cursor = more ? state.list.nextCursor : null;
     const scanCursor = more ? state.list.scanCursor : null;
     const boundary = more ? state.list.boundary : null;
-    const previousHeadIds = new Set(more ? (state.list.headIds || []) : []);
     const startedVersion = mutationVersion;
     const knownAtStart = new Set(state.list.items.map((item) => item.id));
     listLoad?.abort();
@@ -737,12 +738,31 @@ export function createAssistantController({
     let page = head;
     let older = null;
     let nextScanCursor = scanCursor;
+    let scanHighWater = more ? state.list.scanHighWater : null;
+    const scanStart = head.scanCursor || state.list.scanStart;
     const visited = new Set();
     const freshHeadIds = new Set((head.conversations || []).map((item) => item.id));
 
     if (more && scanCursor && head.ok) {
       page = null;
-      while (nextScanCursor && current()) {
+      if (scanHighWater && scanStart) {
+        const oldHighWater = scanHighWater;
+        let newerCursor = scanStart;
+        const newerVisited = new Set();
+        while (newerCursor && current()) {
+          if (newerVisited.has(newerCursor)) { page = { ok: false, code: 'INVALID_RESPONSE' }; break; }
+          newerVisited.add(newerCursor);
+          page = await api.listAssistantConversationsRequest({ cursor: newerCursor, signal: load.signal });
+          if (!page.ok) break;
+          const rows = page.conversations || [];
+          if (newerCursor === scanStart && rows.length) scanHighWater = rows[0];
+          refreshed.push(...rows);
+          if (rows.some((item) => (compareText(item.createdAt || '', oldHighWater.createdAt || '')
+            || compareText(guidSortKey(item.id), guidSortKey(oldHighWater.id))) <= 0)) break;
+          newerCursor = page.nextCursor;
+        }
+      }
+      while ((!page || page.ok) && nextScanCursor && current()) {
         if (visited.has(nextScanCursor)) {
           page = { ok: false, code: 'INVALID_RESPONSE' };
           break;
@@ -750,6 +770,7 @@ export function createAssistantController({
         visited.add(nextScanCursor);
         page = await api.listAssistantConversationsRequest({ cursor: nextScanCursor, signal: load.signal });
         if (!page.ok) break;
+        if (!scanHighWater && page.conversations?.length) scanHighWater = page.conversations[0];
         refreshed.push(...(page.conversations || []));
         const foundNew = page.conversations.some((item) => !knownAtStart.has(item.id) && !freshHeadIds.has(item.id));
         nextScanCursor = page.nextCursor;
@@ -786,7 +807,6 @@ export function createAssistantController({
       if (more && scanCursor) {
         const merged = new Map(
           state_.list.items
-            .filter((item) => mutated(item.id) || !previousHeadIds.has(item.id) || freshHeadIds.has(item.id))
             .map((item) => [item.id, item])
         );
         for (const item of refreshed) {
@@ -798,6 +818,8 @@ export function createAssistantController({
             items: sortConversations([...merged.values()]),
             nextCursor: nextScanCursor,
             scanCursor: nextScanCursor,
+            scanStart,
+            scanHighWater,
             boundary: state_.list.boundary,
             headIds: [...freshHeadIds],
             loaded: true,
@@ -831,6 +853,8 @@ export function createAssistantController({
           items: sortConversations(merged),
           nextCursor: more ? older?.nextCursor ?? null : initialScan || head.nextCursor,
           scanCursor: more ? null : initialScan,
+          scanStart: initialScan,
+          scanHighWater: null,
           boundary: source.conversations.at(-1) || state_.list.boundary,
           headIds: [...freshHeadIds],
           loaded: true,

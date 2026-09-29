@@ -13,6 +13,11 @@ export function modalTrapDepth() {
   return activeTraps.length;
 }
 
+/** Daha yüksek veya kayıt yapan bir pencere komut paletini engeller. */
+export function hasBlockingModal() {
+  return activeTraps.some((token) => token.priority >= 500 || token.blockedRef.current);
+}
+
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -56,7 +61,7 @@ export function resolveFocusTrapTarget({ focusableCount, activeIndex, containsAc
  * arkadaki uygulama kabuğuna sekme ile çıkabiliyordu. Bu kanca paylaşımlıdır ki
  * her modal aynı davranışı yeniden yazmak zorunda kalmasın.
  */
-export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, restoreFocusEnabledRef = null, onClose, blocked = false, enabled = true }) {
+export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, restoreFocusEnabledRef = null, onClose, blocked = false, enabled = true, priority = 500 }) {
   const scopeId = useId();
   const focusEpochRef = useRef(0);
   const closeRef = useRef(onClose);
@@ -90,7 +95,7 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
     if (!enabled || typeof document === 'undefined') return undefined;
     const owner = containerRef.current;
     owner?.setAttribute('data-focus-scope', scopeId);
-    const token = {};
+    const token = { priority, blockedRef };
     activeTraps.push(token);
     const handleKeyDown = (event) => {
       if (activeTraps[activeTraps.length - 1] !== token || event.defaultPrevented) return;
@@ -129,5 +134,5 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       if (index >= 0) activeTraps.splice(index, 1);
       owner?.removeAttribute('data-focus-scope');
     };
-  }, [containerRef, enabled, scopeId]);
+  }, [containerRef, enabled, scopeId, priority]);
 }

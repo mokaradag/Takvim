@@ -1083,3 +1083,23 @@ test('yalnız chat.fast bulunan kayıt Rota AI sağlığını olumlu göstermez'
   assert.equal(result.result.code, 'ASSISTANT_PROFILE_UNAVAILABLE');
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.WARNING);
 });
+
+
+test('geçici tur kapasitesi hatası beş dakikalık uyarı penceresini uzatmaz', async (t) => {
+  createAiStack(t);
+  adminReset(t);
+  await saveKey(PERSONAL_KEY_A);
+  await runProbe();
+  await checkAssistantConversationSchema();
+  const { recordAssistantTurn, recordAiRequest } = await import('../src/server/ai/aiTelemetry.js');
+  const { aiHealthComponent } = await import('../src/server/ai/aiHealth.js');
+  for (const code of ['AI_BUSY', 'AI_QUEUE_TIMEOUT']) {
+    recordAiRequest({ profile: 'chat.general', code, details: { scope: 'global', saturation: 'model' }, durationMs: 1 });
+    recordAssistantTurn({ code, details: { scope: 'global', saturation: 'model' } });
+    assert.equal(aiHealthComponent().state, HEALTH_STATES.WARNING);
+    const later = aiHealthComponent({ now: Date.now() + 6 * 60 * 1000 });
+    assert.doesNotMatch(later.message, /Son Rota AI turu tamamlanamadı|Kapasite doldu|Kapasite yetersiz/);
+  }
+  recordAssistantTurn({ code: 'DATABASE_UNAVAILABLE', serviceFailure: true });
+  assert.match(aiHealthComponent({ now: Date.now() + 6 * 60 * 1000 }).message, /Son Rota AI turu tamamlanamadı/);
+});

@@ -779,3 +779,57 @@ test('tamamlanan tur başka kip istense de kayıtlı kipiyle yeniden oynatılır
   assert.equal(terminal(result).data.assistantMessage.mode, 'standard');
   assert.equal(provider.calls.length, 1);
 });
+
+
+test('bayat sekmenin yeni turu yazılmaz; aynı turun tekrar oynatılması korunur', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const first = await startConversation('İlk soru');
+  const before = provider.calls.length;
+  const rejected = await sendTurn({ conversationId: first.conversationId, turnId: randomUUID(), message: 'Bayat soru', expectedSequence: 0 });
+  assert.equal(rejected.status, 409);
+  assert.equal(rejected.body.error.details.reason, 'CONVERSATION_STALE');
+  assert.equal(db.aiConversationMessages.length, 2);
+  assert.equal(provider.calls.length, before);
+  const replay = await sendTurn({ conversationId: first.conversationId, turnId: first.turnId, message: 'İlk soru', expectedSequence: 0 });
+  assert.equal(terminal(replay).data.replayed, true);
+  const fresh = await sendTurn({ conversationId: first.conversationId, turnId: randomUUID(), message: 'Güncel soru', expectedSequence: 2 });
+  assert.equal(terminal(fresh).event, 'done');
+  assert.equal(db.aiConversationMessages.length, 4);
+});
+
+test('yazma geçişinde bulunan kayıtlı yanıtın kipi kabul olayında korunur', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const first = await startConversation('Soru');
+  const saved = db.aiConversationMessages.pop();
+  db.aiConversations[0].MessageCount = 1;
+  let prepares = 0;
+  db.aiConversationHooks = { afterPrepare() {
+    if (++prepares === 2) { db.aiConversationMessages.push(saved); db.aiConversations[0].MessageCount = 2; }
+  } };
+  const calls = provider.calls.length;
+  const replay = await sendTurn({ conversationId: first.conversationId, turnId: first.turnId, message: 'Soru', mode: 'deep' });
+  assert.equal(accepted(replay).mode, saved.Mode);
+  assert.equal(terminal(replay).data.assistantMessage.mode, saved.Mode);
+  assert.equal(terminal(replay).data.replayed, true);
+  assert.equal(provider.calls.length, calls);
+});
+
+test('gecikmiş yanıt yazımı yarışı kazanırsa kayıtlı metin başarıyla uzlaştırılır', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const first = await startConversation('Soru');
+  const saved = db.aiConversationMessages.pop();
+  db.aiConversations[0].MessageCount = 1;
+  db.aiConversationHooks = { beforeAppend() {
+    db.aiConversationMessages.push(saved);
+    db.aiConversations[0].MessageCount = 2;
+    db.aiConversationHooks = null;
+  } };
+  provider.enqueue({ type: 'stream', text: 'Yeni üretim, farklı metin.' });
+  const retry = await sendTurn({ conversationId: first.conversationId, turnId: first.turnId, message: 'Soru' });
+  const done = terminal(retry);
+  assert.equal(done.event, 'done');
+  assert.equal(done.data.reconciled, true);
+  assert.equal(done.data.assistantMessage.id, saved.MessageId.toLowerCase());
+  assert.equal(done.data.assistantMessage.content, saved.Content);
+  assert.equal(db.aiConversationMessages.length, 2);
+});
