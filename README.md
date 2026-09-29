@@ -298,6 +298,20 @@ ana makine/şema bilgisini iletmemesiydi; `Host`, `X-Forwarded-Host` ve
 
 Üst çubuktaki **Rota AI** düğmesi (ya da Ctrl K → *Rota AI'ye sor*) uygulamanın her yerinden açılan yardımcı paneli getirir. Yanıtlar kurum içi modelden sunucu üzerinden tarayıcıya **akarak** gelir; **Durdur**, yeniden deneme, *Standart* ve *Derin düşünme* kipleri, kopyalama ve güvenli biçimli (Markdown) yanıt desteklenir. Konuşmalar Sicil'e aittir ve kalıcıdır (`MR_AiConversations`, `MR_AiConversationMessages`, göç `0017`); başka bir kullanıcı ne listeleyebilir ne açabilir. Rota AI bu aşamada Rota verisine erişmez ve işlem yapmaz; Demo Kipinde istek göndermez. Her istek Aşama 1'in aynı ağ geçidi, anahtar, kapasite ve süre sınırı kurallarıyla yürür. Ters vekilde akışın ara belleğe alınmaması ve özgün ana makine/şemanın iletilmesi gerekir (`docs/NGINX-ROTA-PREFIX.md`). Mimari, akış protokolü, kalıcılık, iptal ve yeniden deneme kuralları ile elle kabul listesi: `docs/AI-PLATFORM.md` §18.
 
+**Aşama 2 gerçek TEST ortamı kabulü (29.09.2026):** PR #92 birleştirildikten sonra
+Rota AI, gerçek TEST ortamında kullanıcı kabul sınamalarından geçti. Gerçek
+`/bilge` Nginx yolu üzerinden akışlı yanıt, *Standart* / *Derin düşünme*,
+**Durdur** / **Yeniden dene**, konuşma kalıcılığı, tarayıcı yenileme, konuşmalar
+arası geçiş ve silme, taslak koruma, iki sekmede bayat konuşma koruması, iki
+Sicil arasında tam yalıtım, kişisel/kurumsal anahtar davranışı, yavaş sağlayıcı
+sırasında olağan Rota işlemlerinin yalıtımı, Markdown/kopyalama/kaydırma ve
+kipli pencere/odak davranışları doğrulandı. Ters vekilin akışı ara belleğe
+almadığı, uzun üretimde bağlantının sürdüğü ve gizli değer/konuşma içeriğinin
+telemetriye sızmadığı da kabul kapsamında doğrulandı. Kullanıcı kabulünde
+yanıtların hızlı, arayüzün temiz ve kararlı çalıştığı gözlendi. Aşama 2 bu
+kabul ile dondurulmuş temel kabul edilir; Aşama 3 çalışmaları bu tabanın üzerine
+eklemeli ilerlemelidir.
+
 ## Kurum dışı görev atama ve Atama Koordinasyonu
 
 Bir kişiyi **bulabilmek**, ona **doğrudan atayabilmek** ve onun için **resmî bir
