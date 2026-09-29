@@ -9,8 +9,8 @@
  * Doğrulama BELİRLENİMCİDİR; ikinci bir dil modeline sorulmaz:
  *  - her atıf bu turda üretilmiş bir kanıta işaret etmelidir;
  *  - kanıt varken yanıt en az bir geçerli atıf taşımalıdır;
- *  - sayı içeren her blok (paragraf) kendi içinde, liste/tablo/başlık ise kendisi
- *    ya da hemen komşu bloğu içinde geçerli bir atıf taşımalıdır;
+ *  - kanıta dayanan her paragraf kendi içinde geçerli bir atıf taşımalıdır;
+ *    liste/tablo/başlık/kod gibi yapısal bloklarda hemen komşu atıf da geçerlidir;
  *  - araç kullanılmadan üretilen (genel) yanıt hiçbir kanıt işareti taşıyamaz.
  */
 
@@ -211,9 +211,11 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [] } = {}) {
   const segments = answerSegments(answer);
   const attributed = segments.map((segment) => validCitationsIn(segment.text, available).length > 0);
   segments.forEach((segment, index) => {
-    if (!segmentHasNumericClaim(segment) || attributed[index]) return;
+    if (attributed[index]) return;
     const neighbour = segment.kind !== 'paragraph' && (attributed[index - 1] || attributed[index + 1]);
-    if (!neighbour) issues.push({ code: 'UNCITED_NUMERIC_BLOCK', detail: excerpt(segment.text) });
+    if (neighbour) return;
+    const code = segmentHasNumericClaim(segment) ? 'UNCITED_NUMERIC_BLOCK' : 'UNCITED_GROUNDED_BLOCK';
+    issues.push({ code, detail: excerpt(segment.text) });
   });
   return { ok: issues.length === 0, citedIds: valid, issues };
 }
@@ -281,6 +283,7 @@ const ISSUE_GUIDANCE = Object.freeze({
   MALFORMED_CITATION: 'Atıf biçimi hatalı: {detail}. Atıfları yalnızca 【R1】 biçiminde yaz.',
   MISSING_CITATION: 'Rota verisine dayanan her ifadeye ilgili kanıtın atfını 【R1】 biçiminde ekle.',
   UNCITED_NUMERIC_BLOCK: 'Şu bölüm sayı ya da tarih içeriyor ama kanıt atfı taşımıyor: "{detail}". Bu değeri destekleyen kanıtın atfını aynı paragrafa ekle; kanıtla desteklenemiyorsa değeri yazma.',
+  UNCITED_GROUNDED_BLOCK: 'Şu bölüm Rota yanıtında kanıt atfı taşımıyor: "{detail}". Rota verisine dayanmıyorsa bölümü çıkar; dayanıyorsa ilgili kanıtın atfını ekle.',
   CITATION_WITHOUT_EVIDENCE: 'Bu yanıtta hiçbir Rota kanıtı yok ama kanıt işareti kullandın. Rota verisi gerekiyorsa önce ilgili aracı çağır; gerekmiyorsa kanıt işareti kullanmadan yanıtla.',
   UNGROUNDED_NUMERIC_BLOCK: 'Rota verisi alınamadığı hâlde şu bölüm sayı ya da tarih içeriyor: "{detail}". Veriyi tahminle doldurma; verinin neden alınamadığını açıkla ya da ilgili aracı yeniden çağır.'
 });

@@ -143,7 +143,11 @@ const TASK_FACT_COLUMNS = `
     CAST(CASE WHEN EXISTS (
       SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil
     ) THEN 1 ELSE 0 END AS bit) AS IsOwnAssignee,
-    (SELECT COUNT(*) FROM dbo.MR_TaskAssignees counted WHERE counted.TaskId = t.TaskId) AS AssigneeCount`;
+    (SELECT COUNT(*) FROM dbo.MR_TaskAssignees counted WHERE counted.TaskId = t.TaskId) AS AssigneeCount,
+    (SELECT COUNT(DISTINCT counted.Sicil)
+      FROM dbo.MR_TaskAssignees counted
+      JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = counted.Sicil
+      WHERE counted.TaskId = t.TaskId) AS ResolvedAssigneeCount`;
 
 /**
  * Görev olguları: yetkili görev kümesi, yalnızca DARALTAN kaba süzgeçlerle

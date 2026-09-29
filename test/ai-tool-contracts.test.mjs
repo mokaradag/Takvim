@@ -158,7 +158,8 @@ test('durum, öncelik ve tarih alanları ürünün kanonik kurallarıyla okunur;
   assert.equal(facts.sqlDay('2026-09-30'), '2026-09-30');
   const row = facts.factFromRow({
     TaskId: TASK_ID.toUpperCase(), ProjectId: '11111111-1111-4111-8111-111111111111', Title: 'X', Status: 'in-progress', Priority: 'normal',
-    TargetFinish: null, PlannedFinish: new Date('2026-10-05T00:00:00Z'), PlannedHours: 0, ActualHours: null, AssigneeCount: 2, AccessLevel: 'FULL'
+    TargetFinish: null, PlannedFinish: new Date('2026-10-05T00:00:00Z'), PlannedHours: 0, ActualHours: null,
+    AssigneeCount: 2, ResolvedAssigneeCount: 1, AccessLevel: 'FULL'
   });
   assert.equal(row.id, TASK_ID);
   assert.equal(row.status, 'in_progress');
@@ -166,6 +167,8 @@ test('durum, öncelik ve tarih alanları ürünün kanonik kurallarıyla okunur;
   assert.equal(row.calendarDate, '2026-10-05', 'termin yoksa planlanan bitiş takvim günüdür');
   assert.equal(row.plannedHours, 0);
   assert.equal(row.actualHours, null, 'NULL sıfır sayılmaz');
+  assert.equal(row.assigneeCount, 2);
+  assert.equal(row.resolvedAssigneeCount, 1);
 });
 
 test('gecikme yalnızca tamamlanmamış ve termini bugünden önce olan görevdir; bugün Türkiye iş günüdür', () => {
@@ -300,6 +303,8 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   assert.equal(evidence.analyzeGroundedAnswer(table, { evidenceIds: ['R1'] }).ok, true);
   const orphan = 'Genel durum iyi. 【R1】\n\nAyrıca 12 görev daha var.';
   assert.deepEqual(evidence.analyzeGroundedAnswer(orphan, { evidenceIds: ['R1'] }).issues.map((issue) => issue.code), ['UNCITED_NUMERIC_BLOCK']);
+  const qualitative = 'Genel durum iyi. 【R1】\n\nSorumlu Ayşe Yılmaz.';
+  assert.deepEqual(evidence.analyzeGroundedAnswer(qualitative, { evidenceIds: ['R1'] }).issues.map((issue) => issue.code), ['UNCITED_GROUNDED_BLOCK']);
   // Madde ve başlık numarası sayı iddiası değildir.
   assert.equal(evidence.analyzeGroundedAnswer('## 1. Özet\n\nDurum iyi 【R1】', { evidenceIds: ['R1'] }).ok, true);
   // Araçsız genel yanıt kanıt işareti taşıyamaz; araç denenip kanıt alınamadıysa sayı da yazılamaz.

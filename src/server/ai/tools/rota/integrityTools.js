@@ -101,10 +101,10 @@ function deliveryLabel(state) {
 
 const CHECK_BY_ID = new Map(PLAN_HYGIENE_CHECKS.map((check) => [check.id, check]));
 
-/** Ürünün plan bütünlüğü kuralları (planHealth); sorumlu kuralı yetkili sorumlu SAYISIYLA uygulanır. */
+/** Ürünün plan bütünlüğü kuralları (planHealth); sorumlu kuralı dizinde çözülen Sicil sayısıyla uygulanır. */
 function missing(checkId, fact) {
   const planTask = { targetFinish: fact.targetFinish, plannedStart: fact.plannedStart, plannedFinish: fact.plannedFinish, wbsId: fact.wbsId };
-  if (checkId === 'assignee') return fact.assigneeCount === 0;
+  if (checkId === 'assignee') return fact.resolvedAssigneeCount === 0;
   return CHECK_BY_ID.get(checkId).isMissing(planTask, {});
 }
 
@@ -156,7 +156,7 @@ const dataQuality = {
         },
         notes: [
           'Denetimler yalnızca tamamlanmamış görevlere uygulanır (son madde hariç).',
-          'Sorumlu denetimi göreve atanmış sorumlu sayısına bakar; kimliği size kapalı sorumlu da atanmış sayılır.'
+          'Sorumlu denetimi atanmış Sicil’in kurumsal personel dizininde çözülebilmesini arar; çözülemeyen eski referanslar sorumlu sayılmaz.'
         ]
       },
       scope: descriptor,

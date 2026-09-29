@@ -84,6 +84,10 @@ function numberOrNull(value) {
 export function factFromRow(row) {
   const targetFinish = sqlDay(row.TargetFinish);
   const plannedFinish = sqlDay(row.PlannedFinish);
+  const assigneeCount = Math.max(0, Number(row.AssigneeCount) || 0);
+  const resolvedAssigneeCount = row.ResolvedAssigneeCount == null
+    ? assigneeCount
+    : Math.max(0, Number(row.ResolvedAssigneeCount) || 0);
   return {
     id: canonicalActualId(row.TaskId),
     projectId: canonicalActualId(row.ProjectId),
@@ -114,7 +118,8 @@ export function factFromRow(row) {
     identityBase: Boolean(row.IdentityBase),
     isCreator: Boolean(row.IsCreator),
     isOwnAssignee: Boolean(row.IsOwnAssignee),
-    assigneeCount: Math.max(0, Number(row.AssigneeCount) || 0)
+    assigneeCount,
+    resolvedAssigneeCount
   };
 }
 

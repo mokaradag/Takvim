@@ -352,6 +352,17 @@ test('tekrar serisi, çalışma takvimi ve plan veri kalitesi ürün kurallarıy
   assert.equal(quality.result.data.completedWithoutActualFinish.count, 0);
 });
 
+test('plan kalitesi kurumsal dizinde çözülemeyen sorumlu Sicilini sorumlu saymaz', async (t) => {
+  const seed = rotaToolSeed();
+  const stack = stackFor(t, {
+    taskAssignees: [...seed.taskAssignees, { TaskId: TASKS.UNASSIGNED, Sicil: 919999 }]
+  });
+  const quality = await callRotaTool(stack, AYSE, 'rota_data_quality', { projectId: PROJECTS.FULL });
+  const assignee = quality.result.data.checks.find((check) => check.id === 'assignee');
+  assert.equal(assignee.count, 1);
+  assert.ok(assignee.examples.some((item) => item.taskId === TASKS.UNASSIGNED));
+});
+
 /* ── İş akışları ve kişisel veriler ───────────────────────── */
 
 test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim durumudur', async (t) => {

@@ -125,7 +125,8 @@ function factRow(db, scope, entry) {
     IdentityBase: entry.IdentityBase,
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
     IsOwnAssignee: assignees.some((row) => row.Sicil === scope.sicil) ? 1 : 0,
-    AssigneeCount: assignees.length
+    AssigneeCount: assignees.length,
+    ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null).length
   };
 }
 

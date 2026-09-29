@@ -25,7 +25,7 @@ import { TOOL_LIMITS } from '../tools/toolLimits.js';
  * 2. Araçlar sunucuda, yetkiyle ve sınırlarla çalışır; başarılı sonuçlar
  *    kanıt olur (R1, R2 …).
  * 3. Son yanıt BELİRLENİMCİ olarak doğrulanır: atıflar bu turun kanıtlarına
- *    işaret etmeli, sayı/tarih içeren bloklar atıflı olmalı; kanıt yokken atıf
+ *    işaret etmeli, kanıta dayanan bloklar atıflı olmalı; kanıt yokken atıf
  *    kullanılamaz. İkinci bir dil modeli yargıç olarak kullanılmaz.
  * 4. Doğrulanamayan yanıt BİR kez düzeltilir; yine doğrulanamazsa kullanıcı
  *    sabit güvenli iletiyi görür (uydurma kanıtlı yanıt hiçbir zaman gösterilmez).
