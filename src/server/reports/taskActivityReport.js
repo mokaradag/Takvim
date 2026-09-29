@@ -19,9 +19,11 @@ export function normalizeActivityQuery(input = {}, actor, now) {
   if (input.projectId && !projectId) invalid('Proje filtresi geçersiz.');
   const person = input.person ? Number(input.person) : null;
   if (person != null && (!Number.isInteger(person) || person < 1 || person > 2147483647)) invalid('Kişi filtresi geçersiz.');
+  const taskId = input.taskId ? canonicalActualId(input.taskId) : null;
+  if (input.taskId && !taskId) invalid('Görev filtresi geçersiz.');
   const kind = input.kind || '';
   if (!['', 'created', 'updated', 'completed', 'deleted'].includes(kind)) invalid('Hareket türü geçersiz.');
-  return { ...range, scope, page, pageSize, projectId, person, kind,
+  return { ...range, scope, page, pageSize, projectId, taskId, person, kind,
     ...Object.fromEntries(['directorate', 'department', 'unit'].map((field) => [field, String(input[field] || '').slice(0, 1000)])) };
 }
 
@@ -74,6 +76,7 @@ export const TASK_ACTIVITY_SQL = `
     MAX(CASE WHEN Kind = 'created' THEN 1 ELSE 0 END) AS Created
   INTO #TaskActivityGroups FROM #TaskActivityScope
   WHERE (@person IS NULL OR ActorSicil = @person) AND (@projectId IS NULL OR ProjectId = @projectId)
+    AND (@taskId IS NULL OR TRY_CONVERT(uniqueidentifier, EntityId) = @taskId)
     AND (@directorate = '' OR COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__') = @directorate)
     AND (@department = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(Department))) = @department)
     AND (@unit = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(Department)), CHAR(31), LTRIM(RTRIM(Unit))) = @unit)
@@ -110,6 +113,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now) {
   for (const key of ['startUtc', 'endUtc']) request.input(key, sql.DateTime2, query[key]);
   for (const key of ['page', 'pageSize', 'person']) request.input(key, sql.Int, query[key]);
   request.input('projectId', sql.UniqueIdentifier, query.projectId);
+  request.input('taskId', sql.UniqueIdentifier, query.taskId);
   for (const key of ['scope', 'kind', 'directorate', 'department', 'unit']) request.input(key, sql.NVarChar(1000), query[key]);
   const result = await request.query(TASK_ACTIVITY_SQL);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];

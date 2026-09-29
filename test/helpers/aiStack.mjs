@@ -36,6 +36,7 @@ const { resetTelemetryRegistryForTests } = await import('../../src/server/observ
 const { resetOperationalEventBufferForTests } = await import('../../src/server/observability/operationalEventsRepository.js');
 const { resetAssistantGenerationsForTests } = await import('../../src/server/ai/assistant/assistantGenerations.js');
 const { resetAssistantConversationGateForTests } = await import('../../src/server/ai/assistant/assistantService.js');
+const { resetToolSqlGateForTests } = await import('../../src/server/ai/tools/toolSqlGate.js');
 
 export const credentialRoute = await import('../../src/app/api/mergen-rota/ai/credential/route.js');
 export const validationRoute = await import('../../src/app/api/mergen-rota/ai/credential/validation/route.js');
@@ -68,6 +69,7 @@ function resetAi() {
   resetOperationalEventBufferForTests();
   resetAssistantGenerationsForTests();
   resetAssistantConversationGateForTests();
+  resetToolSqlGateForTests();
 }
 
 export function defaultPeople() {

@@ -1,0 +1,496 @@
+/**
+ * Rota AI alan araçları · yetki, belirlenimci hesaplar ve güvenlik.
+ *
+ * Araçlar gerçek yetki bağlamı yükleyicisi, gerçek araç SQL kapısı, gerçek
+ * yürütücü ve bellek içi SQL Server ikiziyle çalışır; model yerine çağrılar
+ * modelin göndereceği biçimde (JSON metni) verilir.
+ */
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createAiStack } from './helpers/aiStack.mjs';
+import {
+  ADMIN, ALI_1, ALI_2, AYSE, BASELINE_ID, callRotaTool, callRotaTools, LEAD, MEHMET, NOW, OUTSIDER,
+  PARTIAL_OTHERS, PROJECTS, rotaToolSeed, TASKS, WBS, ZEYNEP
+} from './helpers/aiToolFixtures.mjs';
+
+const toolQueries = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+const { toolSqlGateStatus } = await import('../src/server/ai/tools/toolSqlGate.js');
+const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+const { createToolExecutor } = await import('../src/server/ai/tools/toolExecutor.js');
+const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
+
+function stackFor(t, overrides = {}, sicil = AYSE) {
+  return createAiStack(t, { sicil, seed: rotaToolSeed(overrides) });
+}
+
+async function visibleTaskIds(stack, sicil, args = {}) {
+  const { result } = await callRotaTool(stack, sicil, 'rota_task_search', { limit: 50, sort: 'title_asc', ...args });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  return new Set(result.data.tasks.map((task) => task.taskId));
+}
+
+/* ── Yetki matrisi ────────────────────────────────────────── */
+
+test('yetki matrisi: sistem yöneticisi, FULL, READ, kısmi, yönetim kapsamı, oluşturan ve ilgisiz kullanıcı yalnızca kendi kapsamını görür', async (t) => {
+  const stack = stackFor(t, {
+    corporateProjectAccess: [{ Sicil: MEHMET, ProjectCode: 'PRT' }],
+    projectAccess: [
+      { ProjectId: PROJECTS.READ, Sicil: AYSE, AccessLevel: 'READ', GrantSource: 'MANUAL_GRANT' },
+      { ProjectId: PROJECTS.FULL, Sicil: LEAD, AccessLevel: 'FULL', GrantSource: 'MANUAL_GRANT' }
+    ]
+  });
+  const all = [...Object.values(TASKS)].filter((id) => ![TASKS.ARCHIVED, TASKS.DELETED_BASELINE].includes(id));
+  // Sistem yöneticisi: bütün ETKİN projelerin bütün görevleri; etkin olmayan proje hiç görünmez.
+  const admin = await visibleTaskIds(stack, ADMIN);
+  assert.deepEqual([...admin].sort(), [...all, ...PARTIAL_OTHERS].sort());
+  // Proje lideri (FULL) + okuma hibesi (READ) + kendi görevleri (kısmi) + astın görevi (yönetim kapsamı).
+  const ayse = await visibleTaskIds(stack, AYSE);
+  assert.deepEqual([...ayse].sort(), [
+    TASKS.OVERDUE, TASKS.DUE_SOON, TASKS.DONE, TASKS.UNASSIGNED, TASKS.LITERAL, TASKS.SERIES, TASKS.OCCURRENCE_DONE,
+    TASKS.OCCURRENCE_OPEN, TASKS.READ_1, TASKS.READ_2, TASKS.PARTIAL_OWN, TASKS.PARTIAL_SHARED, TASKS.TEAM_VISIBLE
+  ].sort());
+  for (const hidden of [TASKS.HIDDEN, TASKS.TEAM_HIDDEN, TASKS.ARCHIVED, ...PARTIAL_OTHERS]) assert.equal(ayse.has(hidden), false, hidden);
+  // Kurumsal proje rolü FULL verir: MEHMET kısmi projenin 10 görevinin hepsini görür.
+  const mehmet = await visibleTaskIds(stack, MEHMET, { projectId: PROJECTS.PARTIAL });
+  assert.equal(mehmet.size, 10);
+  // Manuel FULL hibe projenin bütün görevlerini açar.
+  const lead = await visibleTaskIds(stack, LEAD, { projectId: PROJECTS.FULL });
+  assert.equal(lead.size, 8);
+  // Yalnızca sorumlu olduğu görevler (kısmi): ZEYNEP iki görev görür.
+  assert.deepEqual([...await visibleTaskIds(stack, ZEYNEP)].sort(), [TASKS.DUE_SOON, TASKS.TEAM_VISIBLE].sort());
+  // Oluşturan: ilgisiz kullanıcı yalnızca kendi açtığı görevi görür.
+  assert.deepEqual([...await visibleTaskIds(stack, OUTSIDER)], [TASKS.OUTSIDER_CREATED]);
+  // Görünmeyen görev ile var olmayan görev AYNI sonucu verir.
+  for (const taskId of [TASKS.HIDDEN, '20000000-0000-4000-8000-00000000abcd']) {
+    const { result } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'NOT_FOUND');
+    assert.equal(result.error.message, 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.');
+  }
+  const outsiderDetail = await callRotaTool(stack, OUTSIDER, 'rota_task_detail', { taskId: TASKS.OVERDUE });
+  assert.equal(outsiderDetail.result.error.code, 'NOT_FOUND');
+});
+
+test('kısmi kapsam: 10 görevin 2si görünürken toplamlar yalnızca 2 görevi sayar ve tam proje görünümü iddia edilmez', async (t) => {
+  const stack = stackFor(t);
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.PARTIAL });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.totals.total, 2);
+  assert.equal(result.totalCount, 2);
+  assert.deepEqual(result.scope.kind, 'authorized-task-subset');
+  assert.equal(result.scope.completeProjectView, false);
+  assert.equal(ledger.summaries()[0].partial, true, 'kanıt kısmi kapsamı taşır');
+  // Portföy de gizli görevleri sayıya katmaz ve projeyi kısmi olarak işaretler.
+  const portfolio = await callRotaTool(stack, AYSE, 'rota_portfolio_summary', { includeEmpty: true, limit: 25 });
+  const partial = portfolio.result.data.projects.find((project) => project.projectId === PROJECTS.PARTIAL);
+  assert.equal(partial.tasks.total, 2);
+  assert.equal(partial.completeTaskView, false);
+  assert.equal(portfolio.result.scope.kind, 'authorized-task-subset');
+  assert.equal(portfolio.result.data.projects.some((project) => project.projectId === PROJECTS.HIDDEN), false);
+  // Sistem yöneticisi aynı projede 10 görevi, tam kapsamla görür.
+  const admin = await callRotaTool(stack, ADMIN, 'rota_task_analytics', { projectId: PROJECTS.PARTIAL });
+  assert.equal(admin.result.data.totals.total, 10);
+  assert.equal(admin.result.scope.kind, 'complete-projects');
+  assert.equal(admin.ledger.summaries()[0].partial, false);
+});
+
+test('gizli eş sorumlu: adı yalnızca kendi görevinde görünür, Sicil’i hiç görünmez; kişi süzgeci onu ortaya çıkaramaz', async (t) => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.PARTIAL_SHARED });
+  assert.equal(result.ok, true);
+  const assignees = result.data.task.assignees;
+  assert.deepEqual(assignees.find((person) => person.name === 'Ayşe Yılmaz'), { name: 'Ayşe Yılmaz', sicil: AYSE });
+  assert.deepEqual(assignees.find((person) => person.name === 'Mehmet Demir'), { name: 'Mehmet Demir', identityHidden: true });
+  assert.equal(JSON.stringify(result).includes(String(MEHMET)), false, 'gizli eş sorumlunun Sicil’i hiçbir alanda yok');
+  // Kişi süzgeci yalnızca kimliği açık sorumluluklarla eşleşir: kısmi projedeki ortak görev dönmez.
+  const filtered = await visibleTaskIds(stack, AYSE, { personSicil: MEHMET });
+  assert.equal(filtered.has(TASKS.PARTIAL_SHARED), false);
+  assert.deepEqual([...filtered].sort(), [TASKS.DONE, TASKS.READ_1].sort());
+  // İş yükünde gizli eş sorumlu kişi olarak sayılmaz.
+  const workload = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.PARTIAL });
+  assert.deepEqual(workload.result.data.people.map((person) => person.sicil), [AYSE]);
+  assert.equal(workload.result.data.people[0].openTasks, 2);
+  // Oluşturan kimliği kısmi görevde kapalıdır.
+  assert.equal(result.data.task.createdBy, null);
+});
+
+test('yönetim kapsamı: yönetici yalnızca astının görevini ve onun iş dağılım zincirini görür', async (t) => {
+  const stack = stackFor(t);
+  const team = await visibleTaskIds(stack, AYSE, { projectId: PROJECTS.TEAM });
+  assert.deepEqual([...team], [TASKS.TEAM_VISIBLE]);
+  const wbs = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 });
+  assert.equal(wbs.result.ok, true);
+  assert.equal(wbs.result.data.catalogVisibility, 'ancestor-chain-of-visible-tasks');
+  assert.deepEqual(wbs.result.data.nodes.map((node) => node.wbsId).sort(), [WBS.TEAM_ROOT, WBS.TEAM_BRANCH, WBS.TEAM_LEAF].sort());
+  assert.equal(wbs.result.data.nodes.some((node) => node.wbsId === WBS.TEAM_OTHER), false);
+  // Tam projede katalog ve alt ağaç toplamları.
+  const full = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 3 });
+  assert.equal(full.result.data.catalogVisibility, 'full-catalog');
+  const root = full.result.data.nodes.find((node) => node.wbsId === WBS.FULL_ROOT);
+  assert.equal(root.subtreeTasks, 8);
+  assert.equal(root.directTasks, 6);
+  const design = full.result.data.nodes.find((node) => node.wbsId === WBS.FULL_DESIGN);
+  assert.equal(design.subtreeTasks, 2);
+  assert.equal(design.subtreeOverdue, 1);
+});
+
+/* ── Belirlenimci hesaplar ────────────────────────────────── */
+
+test('toplamlar belirlenimcidir: durum, gecikme, 7 gün, terminsiz, tamamlanma oranı ve saat kapsaması', async (t) => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'deadline' });
+  assert.equal(result.ok, true);
+  assert.deepEqual({ ...result.data.totals }, {
+    total: 8, todo: 5, inProgress: 1, done: 2, open: 6, overdue: 2, dueToday: 0, dueNext7Days: 2,
+    openWithoutTargetFinish: 1, doneWithoutActualFinish: 0, milestonesOpen: 0, completionRatePercent: 25
+  });
+  assert.deepEqual(result.data.hours.plannedHours, { total: 16, tasksWithValue: 2, tasksWithoutValue: 6 });
+  assert.deepEqual(result.data.hours.actualHours, { total: 12, tasksWithValue: 1, tasksWithoutValue: 7 });
+  const groups = Object.fromEntries(result.data.groups.map((group) => [group.key, group.count]));
+  assert.deepEqual(groups, { overdue: 2, done: 2, due_next_7_days: 2, due_next_30_days: 1, no_target_finish: 1 });
+  assert.equal(result.scope.kind, 'complete-projects');
+});
+
+test('Türkiye günü sınırı: UTC 21:30’da termini “dün” olan görev gecikmiştir, bir saat önce bugün terminlidir', async (t) => {
+  const stack = stackFor(t);
+  const after = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.PARTIAL, deadline: 'overdue' }, { now: NOW });
+  assert.deepEqual(after.result.data.tasks.map((task) => task.taskId), [TASKS.PARTIAL_OWN]);
+  assert.equal(after.result.data.tasks[0].overdueDays, 1);
+  const before = new Date('2026-09-29T20:30:00.000Z');
+  const dueToday = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.PARTIAL, deadline: 'due_today' }, { now: before });
+  assert.deepEqual(dueToday.result.data.tasks.map((task) => task.taskId), [TASKS.PARTIAL_OWN]);
+  const overdueBefore = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.PARTIAL, deadline: 'overdue' }, { now: before });
+  assert.equal(overdueBefore.result.totalCount, 0);
+});
+
+test('arama sıralı, sayfalı ve kesin toplamlıdır; imleç süzgece bağlıdır', async (t) => {
+  const stack = stackFor(t);
+  const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3 });
+  assert.equal(first.result.totalCount, 8);
+  assert.equal(first.result.returnedCount, 3);
+  assert.equal(first.result.complete, false);
+  assert.ok(first.result.nextCursor);
+  const second = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor });
+  assert.equal(second.result.returnedCount, 3);
+  assert.equal(new Set([...first.result.data.tasks, ...second.result.data.tasks].map((task) => task.taskId)).size, 6);
+  const mismatched = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.READ, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor });
+  assert.equal(mismatched.result.error.code, 'INVALID_ARGUMENTS');
+  // Gecikme süzgecinde varsayılan sıralama en çok geciken önce.
+  const overdue = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue' });
+  assert.deepEqual(overdue.result.data.tasks.map((task) => task.taskId), [TASKS.SERIES, TASKS.TEAM_VISIBLE, TASKS.OVERDUE, TASKS.READ_1, TASKS.PARTIAL_OWN]);
+  assert.equal(overdue.result.data.sort, 'overdue_days_desc');
+});
+
+/* ── SQL güvenliği ────────────────────────────────────────── */
+
+test('SQL enjeksiyonu ve joker karakterler yalnızca veridir; SQL metni hiçbir zaman birleştirilmez', async (t) => {
+  const stack = stackFor(t);
+  const constants = new Set(Object.values(toolQueries));
+  for (const [text, expected] of [["' OR 1=1 --", []], ['%', [TASKS.LITERAL]], ['_', [TASKS.LITERAL]], ['[', [TASKS.LITERAL]], ['[özel]', [TASKS.LITERAL]], ['%50', [TASKS.LITERAL]]]) {
+    const { result } = await callRotaTool(stack, AYSE, 'rota_task_search', { text });
+    assert.equal(result.ok, true, text);
+    assert.deepEqual(result.data.tasks.map((task) => task.taskId), expected, text);
+    const last = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').at(-2) || stack.db.aiToolLog.at(-1);
+    assert.equal(stack.db.aiToolLog.some((entry) => entry.params.text === text), true, 'metin parametre olarak gider');
+    void last;
+  }
+  const project = await callRotaTool(stack, AYSE, 'rota_project_search', { text: "x' UNION SELECT * FROM dbo.MR_Tasks --" });
+  assert.equal(project.result.ok, true);
+  assert.equal(project.result.totalCount, 0);
+  const executed = stack.db.statements.map((entry) => entry.sql).filter((sql) => sql.startsWith('/* rota-ai-tool:'));
+  assert.ok(executed.length > 0);
+  for (const sql of executed) assert.ok(constants.has(sql), 'çalışan metin sabitlerden biridir');
+  const injected = await callRotaTool(stack, AYSE, 'rota_task_search', { sort: "target_finish_asc; DROP TABLE dbo.MR_Tasks" });
+  assert.equal(injected.result.error.code, 'INVALID_ARGUMENTS');
+  const identity = await callRotaTool(stack, AYSE, 'rota_task_search', { sicil: ADMIN });
+  assert.equal(identity.result.error.code, 'INVALID_ARGUMENTS');
+  assert.deepEqual(identity.result.error.details, ['$.sicil:unknown']);
+});
+
+/* ── Varlık çözümü ────────────────────────────────────────── */
+
+test('proje ve kişi araması tahmin etmez: belirsizlik, aynı adlı kişiler ve görünmeyen proje ayrı bildirilir', async (t) => {
+  const stack = stackFor(t);
+  const exact = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'RDR' });
+  assert.equal(exact.result.data.matches[0].projectId, PROJECTS.FULL);
+  assert.equal(exact.result.data.matches[0].exactMatch, true);
+  assert.equal(exact.result.data.ambiguous, false);
+  const many = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Proje' });
+  assert.equal(many.result.data.ambiguous, true);
+  assert.ok(many.result.totalCount >= 3);
+  assert.equal(many.result.data.matches.some((match) => match.projectId === PROJECTS.HIDDEN), false);
+  const hidden = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Gizli' });
+  assert.equal(hidden.result.totalCount, 0);
+  const people = await callRotaTool(stack, AYSE, 'rota_person_search', { text: 'Ali Veli' });
+  assert.equal(people.result.ok, true);
+  assert.deepEqual(people.result.data.people.map((person) => person.sicil).sort(), [ALI_1, ALI_2]);
+  assert.equal(people.result.data.ambiguous, true);
+  assert.equal(people.result.data.sameNameCount, 1);
+  assert.match(people.result.data.guidance, /Sicil/);
+});
+
+test('proje künyesi erişim nedenini açıklar; READ bağımlılık ve baz planı açmaz', async (t) => {
+  const stack = stackFor(t);
+  const read = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.READ });
+  assert.equal(read.result.data.access.level, 'READ');
+  assert.deepEqual(read.result.data.access.reasons, ['Proje erişim hibesi']);
+  assert.equal(read.result.data.access.completeTaskView, true);
+  assert.equal(read.result.data.access.dependenciesAndBaselines, false);
+  assert.equal(read.result.data.visibleTasks.total, 2);
+  assert.equal(read.result.data.project.dependencyCount, null);
+  const partial = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.PARTIAL });
+  assert.equal(partial.result.data.access.level, 'PARTIAL');
+  assert.ok(partial.result.data.access.reasons.includes('Görev sorumlusu'));
+  assert.equal(partial.result.scope.kind, 'authorized-task-subset');
+  const full = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.FULL });
+  assert.deepEqual(full.result.data.access.reasons, ['Proje lideri']);
+  assert.equal(full.result.data.project.dependencyCount, 4);
+  assert.equal(full.result.data.project.baselineCount, 1);
+  assert.deepEqual(full.result.data.project.tags, ['Savunma']);
+  assert.equal(full.result.data.visibleTasks.overdue, 2);
+  const hidden = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.HIDDEN });
+  assert.equal(hidden.result.error.code, 'NOT_FOUND');
+});
+
+/* ── Plan araçları ────────────────────────────────────────── */
+
+test('baz plan karşılaştırması belirlenimci sapma verir; silinmiş görevin kaydı korunur; yalnızca FULL', async (t) => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.baseline.baselineId, BASELINE_ID);
+  assert.deepEqual(result.data.counts, {
+    snapshotTasks: 4, compared: 3, finishSlipped: 1, finishEarlier: 1, finishUnchanged: 1,
+    startSlipped: 0, missingDates: 0, removedSinceBaseline: 1, addedSinceBaseline: 5
+  });
+  assert.deepEqual(result.data.mostSlipped.map((item) => [item.taskId, item.varianceDays]), [[TASKS.OVERDUE, 5]]);
+  assert.deepEqual(result.data.finishVariance, { averageDays: 0.7, maxSlipDays: 5, maxEarlierDays: 3 });
+  const read = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.READ });
+  assert.equal(read.result.error.code, 'UNSUPPORTED_SCOPE');
+  const hidden = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.HIDDEN });
+  assert.equal(hidden.result.error.code, 'NOT_FOUND');
+});
+
+test('bağımlılıklar FS/SS/FF/SF ve gecikmeyle okunur; kritik yol hesaplanmaz; READ projede kapalıdır', async (t) => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data.predecessors.map((item) => [item.taskId, item.type, item.lag.label]), [[TASKS.OVERDUE, 'FS', '+2 gün']]);
+  assert.deepEqual(result.data.successors.map((item) => [item.taskId, item.type]), [[TASKS.UNASSIGNED, 'SS']]);
+  assert.match(result.data.notes.join(' '), /Kritik yol/);
+  const coverage = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId: PROJECTS.FULL });
+  assert.deepEqual(coverage.result.data.coverage, {
+    taskCount: 8, dependencyCount: 4, tasksWithPredecessor: 4, tasksWithSuccessor: 3, tasksWithoutAnyDependency: 3,
+    byType: { FS: 1, SS: 1, FF: 1, SF: 1 }, withPositiveLag: 1, withNegativeLag: 1
+  });
+  const lead = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.LITERAL });
+  assert.equal(lead.result.data.predecessors[0].lag.label, '−1 hafta');
+  const read = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId: PROJECTS.READ });
+  assert.equal(read.result.error.code, 'UNSUPPORTED_SCOPE');
+  const readTask = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.READ_2 });
+  assert.equal(readTask.result.error.code, 'UNSUPPORTED_SCOPE');
+  const missing = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', {});
+  assert.equal(missing.result.error.code, 'INVALID_ARGUMENTS');
+});
+
+test('tekrar serisi, çalışma takvimi ve plan veri kalitesi ürün kurallarıyla hesaplanır', async (t) => {
+  const stack = stackFor(t);
+  const series = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { taskId: TASKS.OCCURRENCE_OPEN });
+  assert.equal(series.result.ok, true);
+  assert.equal(series.result.data.series.templateTaskId, TASKS.SERIES);
+  assert.equal(series.result.data.series.visibleOccurrences, 2);
+  assert.equal(series.result.data.series.open, 1);
+  assert.equal(series.result.data.series.done, 1);
+  assert.match(series.result.data.series.ruleDescription, /hafta/i);
+  assert.deepEqual(series.result.data.series.next.map((item) => item.taskId), [TASKS.OCCURRENCE_OPEN]);
+  const calendar = await callRotaTool(stack, AYSE, 'rota_calendar_inspect', { projectId: PROJECTS.FULL, dateFrom: '2026-10-26', dateTo: '2026-10-30' });
+  assert.equal(calendar.result.ok, true);
+  assert.equal(calendar.result.data.workingDayCount, 4);
+  assert.deepEqual(calendar.result.data.holidays, [{ date: '2026-10-29', name: 'Cumhuriyet Bayramı' }]);
+  assert.deepEqual(calendar.result.data.calendar.workingWeekdays, ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma']);
+  const reversed = await callRotaTool(stack, AYSE, 'rota_calendar_inspect', { dateFrom: '2026-10-30', dateTo: '2026-10-26' });
+  assert.equal(reversed.result.error.code, 'INVALID_ARGUMENTS');
+  const tooLong = await callRotaTool(stack, AYSE, 'rota_calendar_inspect', { dateFrom: '2026-01-01', dateTo: '2027-06-01' });
+  assert.equal(tooLong.result.error.code, 'INVALID_ARGUMENTS');
+  const quality = await callRotaTool(stack, AYSE, 'rota_data_quality', { projectId: PROJECTS.FULL });
+  const counts = Object.fromEntries(quality.result.data.checks.map((check) => [check.id, check.count]));
+  assert.deepEqual(counts, { assignee: 1, targetFinish: 1, schedule: 3, wbs: 0 });
+  assert.equal(quality.result.data.openTaskCount, 6);
+  assert.equal(quality.result.data.completedWithoutActualFinish.count, 0);
+});
+
+/* ── İş akışları ve kişisel veriler ───────────────────────── */
+
+test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim durumudur', async (t) => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_outlook_status', {});
+  assert.equal(result.ok, true);
+  assert.equal(result.data.activeSubscriptions, 3);
+  assert.equal(result.data.subscriptionsForTasksNoLongerVisible, 1);
+  assert.deepEqual([result.returnedCount, result.totalCount, result.complete], [2, 2, true], 'liste yalnızca görünür görevleri kapsar');
+  const states = Object.fromEntries(result.data.items.map((item) => [item.task.taskId, item.state]));
+  assert.deepEqual(states, { [TASKS.OVERDUE]: 'delivered', [TASKS.DUE_SOON]: 'failed' });
+  const failed = result.data.items.find((item) => item.state === 'failed');
+  assert.equal(failed.failure.code, 'SMTP_TIMEOUT');
+  assert.equal(failed.failure.message, 'E-posta sunucusu zamanında yanıt vermedi.');
+  assert.match(result.data.note, /posta kutusu içeriğini bilmez/);
+  assert.equal(result.data.items.some((item) => item.task.taskId === TASKS.UNASSIGNED), false, 'başka kullanıcının aboneliği görünmez');
+});
+
+test('bildirimler yalnızca okunur: okundu/temizlendi işareti değişmez', async (t) => {
+  const stack = stackFor(t, {
+    taskNotifications: [{ RecipientSicil: AYSE, Kind: 'TASK_ASSIGNED', TaskId: TASKS.OVERDUE, ActorSicil: LEAD, TaskTitleSnapshot: 'Radar test planı', ProjectNameSnapshot: 'Radar Modernizasyonu', EventKey: 'e1' }],
+    taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, RequesterMessage: 'Termin kaysın', Status: 'PENDING', OriginalTargetFinish: '2026-09-20', ProposedTargetFinish: '2026-10-10' }]
+  });
+  const before = JSON.stringify({ notifications: stack.db.taskNotifications, schedule: stack.db.scheduleNotifications });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_notifications', {});
+  assert.equal(result.ok, true);
+  assert.equal(result.data.taskEvents.unread, 1);
+  assert.equal(result.data.scheduleRequests.awaitingYourDecision, 1);
+  assert.match(result.data.note, /okundu olarak işaretlemez/);
+  assert.equal(JSON.stringify({ notifications: stack.db.taskNotifications, schedule: stack.db.scheduleNotifications }), before);
+  const requests = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { tab: 'pending' });
+  assert.equal(requests.result.ok, true);
+  assert.equal(requests.result.totalCount, 1);
+  const item = requests.result.data.items[0];
+  assert.equal(item.yourRole, 'decision-owner');
+  assert.equal(item.awaitingYourDecision, true);
+  assert.deepEqual(item.proposedChanges, { targetFinish: { from: '2026-09-20', to: '2026-10-10' } });
+  const outsider = await callRotaTool(stack, OUTSIDER, 'rota_schedule_requests', {});
+  assert.equal(outsider.result.totalCount, 0, 'katılımcı olmayan talebi göremez');
+});
+
+test('hareket geçmişi görünür görevlerle sınırlıdır; ekip kapsamı yöneticiye açıktır; görev süzgeci çalışır', async (t) => {
+  const at = '2026-09-29T08:00:00.000Z';
+  const event = (id, taskId, projectId, actor, after) => ({
+    AuditId: id, OccurredAt: at, ActorSicil: actor, ActorDisplayName: 'Eski Ad', ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: taskId,
+    ProjectId: projectId, CorrelationId: `c-${id}`, BeforeJson: JSON.stringify({ Status: 'planned' }), AfterJson: JSON.stringify(after)
+  });
+  const stack = stackFor(t, {
+    auditLog: [
+      event(1, TASKS.OVERDUE, PROJECTS.FULL, ZEYNEP, { Status: 'in-progress' }),
+      event(2, TASKS.HIDDEN, PROJECTS.HIDDEN, MEHMET, { Status: 'done' }),
+      event(3, TASKS.DUE_SOON, PROJECTS.FULL, AYSE, { Status: 'done' })
+    ]
+  });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29' });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.summary.events, 2, 'görünmeyen görevin hareketi sayılmaz');
+  assert.equal(result.data.items.some((item) => item.task.title === 'Gizli görev'), false);
+  const filtered = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29', taskId: TASKS.OVERDUE });
+  assert.equal(filtered.result.totalCount, 1);
+  assert.ok(filtered.result.data.items[0].changes.some((line) => line.startsWith('Durum:')));
+  const team = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29', scope: 'team' });
+  assert.equal(team.result.ok, true);
+  const denied = await callRotaTool(stack, ZEYNEP, 'rota_activity_search', { scope: 'team' });
+  assert.equal(denied.result.error.code, 'UNSUPPORTED_SCOPE');
+  const range = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2024-01-01', dateTo: '2026-01-01' });
+  assert.equal(range.result.error.code, 'INVALID_ARGUMENTS');
+});
+
+/* ── Sınırlar, kanıt ve kaynak kullanımı ──────────────────── */
+
+test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınmayan araç, bozuk ve aşırı büyük bağımsız değişken güvenli hata alır', async (t) => {
+  const stack = stackFor(t);
+  const calls = [
+    ['rota_task_search', { projectId: PROJECTS.FULL }],
+    ['rota_task_search', { projectId: PROJECTS.FULL }],
+    ['execute_sql', { sql: 'SELECT 1' }],
+    ['rota_task_search', '{bozuk'],
+    ['rota_portfolio_summary', {}],
+    ['rota_task_analytics', {}],
+    ['rota_notifications', {}]
+  ];
+  const { results, ledger } = await callRotaTools(stack, AYSE, calls);
+  assert.equal(results.length, 7, 'her çağrı kimliğine bir sonuç');
+  assert.equal(results[0].ok, true);
+  assert.equal(results[1].evidenceId, results[0].evidenceId, 'aynı çağrı aynı kanıtı kullanır, SQL yinelenmez');
+  assert.equal(results[2].error.code, 'UNKNOWN_TOOL');
+  assert.equal(results[3].error.code, 'INVALID_ARGUMENTS');
+  assert.equal(results[4].ok, true);
+  assert.equal(results[5].error.code, 'LIMIT_EXCEEDED');
+  assert.equal(results[6].error.code, 'LIMIT_EXCEEDED');
+  assert.deepEqual(ledger.ids(), ['R1', 'R2'], 'kanıt kimlikleri çağrı sırasıyla verilir');
+  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 2, 'ilk arama + sayfa sorumluları; yinelenen çağrı yeniden çalışmaz');
+  const oversize = await callRotaTools(stack, AYSE, [['rota_task_search', JSON.stringify({ text: 'a', filler: 'x'.repeat(9000) })]]);
+  assert.equal(oversize.results[0].error.code, 'INVALID_ARGUMENTS');
+  assert.deepEqual(oversize.results[0].error.details, ['$:tooLarge']);
+});
+
+test('sonuç boyutu sınırlıdır: büyük liste kısaltılır ve bildirilir, sığmayan sonuç güvenli hata alır', async (t) => {
+  const stack = stackFor(t);
+  stack.useSicil(AYSE);
+  const big = {
+    name: 'rota_big_list', version: 1, topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000, parameters: { type: 'object', additionalProperties: false, properties: {} },
+    handler: async () => ({
+      data: { items: Array.from({ length: 400 }, (_, index) => ({ index, text: 'x'.repeat(100) })) },
+      scope: { kind: 'complete-projects', completeProjectView: true }, complete: true, truncated: false, returnedCount: 400, totalCount: 400, nextCursor: 'abc',
+      evidence: { label: 'Büyük liste', highlights: [] }
+    })
+  };
+  const blob = { ...big, name: 'rota_big_blob', handler: async () => ({ ...(await big.handler()), data: { blob: 'y'.repeat(40000) } }) };
+  const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+  const ledger = createEvidenceLedger();
+  const executor = createToolExecutor({ context, ledger, signal: new AbortController().signal, resolveTool: (name) => ({ rota_big_list: big, rota_big_blob: blob }[name] || null) });
+  const [list, huge] = await executor.runRound([{ id: 'a', name: 'rota_big_list', arguments: '{}' }, { id: 'b', name: 'rota_big_blob', arguments: '{}' }]);
+  const shrunk = JSON.parse(list.content);
+  assert.ok(Buffer.byteLength(list.content) <= TOOL_LIMITS.maxResultBytes);
+  assert.equal(shrunk.truncated, true);
+  assert.equal(shrunk.complete, false);
+  assert.equal(shrunk.nextCursor, null);
+  assert.ok(shrunk.data.items.length < 400);
+  assert.match(shrunk.data.sizeNote, /boyut sınırı/);
+  assert.equal(JSON.parse(huge.content).error.code, 'RESULT_TOO_LARGE');
+  assert.equal(ledger.summaries()[0].truncated, true);
+});
+
+test('kanıt defteri modele verilen güvenli sonucu saklar; veri içindeki talimat ve atıf işaretleri nötrlenir', async (t) => {
+  const stack = stackFor(t);
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.LITERAL });
+  assert.equal(result.ok, true);
+  assert.equal(result.evidenceId, 'R1');
+  assert.equal(result.data.task.description.includes('【'), false);
+  assert.match(result.data.task.description, /\(R7\)/);
+  const [row] = ledger.persistable(['R1']);
+  assert.equal(row.toolName, 'rota_task_detail');
+  assert.equal(row.evidenceType, 'task-detail');
+  assert.equal(row.entityType, 'task');
+  assert.equal(row.entityId, TASKS.LITERAL);
+  assert.deepEqual(JSON.parse(row.evidenceJson), result);
+  assert.doesNotMatch(row.evidenceJson + row.summaryJson, /@scope|#AiScope|STRING_SPLIT|isAdmin|scopeProjects/);
+  assert.equal(result.generatedAt.endsWith('Z'), true);
+  assert.equal(result.today, '2026-09-30');
+});
+
+test('araç SQL kapısı sorgu gerçekten bitince bırakılır; iptal edilen tur yer tutmaya devam etmez', async (t) => {
+  const stack = stackFor(t);
+  let release;
+  stack.db.queryBarrier = { match: (sql) => sql.includes('rota-ai-tool:task-facts'), entered: 0, released: new Promise((resolve) => { release = resolve; }) };
+  const cancel = new AbortController();
+  const pending = callRotaTools(stack, AYSE, [['rota_task_search', {}]], { signal: cancel.signal });
+  while (stack.db.queryBarrier.entered === 0) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(toolSqlGateStatus().active, 1);
+  cancel.abort();
+  await assert.rejects(pending, (error) => error.code === 'AI_CANCELLED');
+  assert.equal(toolSqlGateStatus().active, 1, 'sürücüdeki sorgu bitmeden yer bırakılmaz');
+  release();
+  for (let index = 0; index < 20 && toolSqlGateStatus().active; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(toolSqlGateStatus().active, 0);
+  stack.db.queryBarrier = null;
+  const after = await callRotaTool(stack, AYSE, 'rota_task_search', {});
+  assert.equal(after.result.ok, true);
+  assert.equal(toolSqlGateStatus().active, 0);
+});
+
+test('yetki bağlamı her araç kümesinde yeniden okunur ve kümedeki çağrılar arasında paylaşılır', async (t) => {
+  const stack = stackFor(t);
+  const { context } = await callRotaTools(stack, AYSE, [['rota_task_search', {}], ['rota_portfolio_summary', {}]]);
+  assert.equal(context.stats().authorizationLoads, 1);
+  // Yetki kaldırılınca sonraki küme yeni kapsamla çalışır.
+  stack.db.projectAccess = [];
+  const after = await visibleTaskIds(stack, AYSE, { projectId: PROJECTS.READ }).catch((error) => error);
+  assert.ok(after instanceof Error || after.size === 0);
+  const detail = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.READ });
+  assert.equal(detail.result.error.code, 'NOT_FOUND');
+});

@@ -1,6 +1,7 @@
 import { AI_CREDENTIAL_SOURCES } from '../../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES, aiErrorMessage, isAiErrorCode } from '../../../domain/ai/aiErrorCatalog.js';
 import { ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js';
+import { EVIDENCE_KINDS, GROUNDING_FAILED_FINISH_REASON } from '../../../domain/ai/evidenceContract.js';
 
 /**
  * Rota AI'nin saf sunum kuralları: hata ve durum metinleri, tonları, yeniden
@@ -210,8 +211,27 @@ export const DEMO_NOTICE = Object.freeze({
   message: 'Demo Kipinde yapay zekâ isteği gönderilmez ve konuşma kaydedilmez. Rota AI, kurumsal oturumla Gerçek Sistem verisinde çalışır.'
 });
 
+/** Rota verisi okunurken gösterilen konu metni; araç adı ya da bağımsız değişken gösterilmez. */
+const TOOL_TOPIC_LABELS = Object.freeze({
+  tasks: 'Görevler inceleniyor…',
+  projects: 'Proje bilgileri okunuyor…',
+  portfolio: 'Portföy özeti hazırlanıyor…',
+  wbs: 'İş dağılım yapısı inceleniyor…',
+  workload: 'İş yükü dağılımı hesaplanıyor…',
+  people: 'Personel aranıyor…',
+  activity: 'Hareket geçmişi okunuyor…',
+  requests: 'Talepler inceleniyor…',
+  notifications: 'Bildirimler okunuyor…',
+  baseline: 'Baz plan karşılaştırılıyor…',
+  dependencies: 'Bağımlılıklar inceleniyor…',
+  recurrence: 'Tekrar serileri inceleniyor…',
+  calendar: 'Çalışma takvimi okunuyor…',
+  outlook: 'Outlook durumu okunuyor…',
+  quality: 'Plan veri kalitesi denetleniyor…'
+});
+
 /** Üretim evresinin kısa metni; metin akmaya başlayınca gösterilmez. */
-export function generationPhaseLabel(phase) {
+export function generationPhaseLabel(phase, topic = null) {
   switch (phase) {
     case 'sending':
       return 'Gönderiliyor…';
@@ -222,9 +242,50 @@ export function generationPhaseLabel(phase) {
     // Akıl yürütme yalnızca sağlayıcı bildirdiğinde (`thinking`) gösterilir; kip bunu uydurmaz.
     case ASSISTANT_STREAM_PHASES.GENERATING:
       return 'Yanıt oluşturuluyor…';
+    case ASSISTANT_STREAM_PHASES.TOOLS:
+      return TOOL_TOPIC_LABELS[topic] || 'Rota verisi okunuyor…';
+    case ASSISTANT_STREAM_PHASES.VERIFYING:
+      return 'Yanıt kaynaklarla doğrulanıyor…';
     default:
       return null;
   }
+}
+
+/* ── Kanıtlar ────────────────────────────────────────────────── */
+
+/** "3 Rota kaynağı" gibi kısa özet; kanıt yoksa `null`. */
+export function evidenceSummaryLabel(evidence) {
+  const count = Array.isArray(evidence) ? evidence.length : 0;
+  if (!count) return null;
+  return `${count} Rota kaynağı`;
+}
+
+export function evidenceKindLabel(kind) {
+  return EVIDENCE_KINDS[kind] || 'Rota kaynağı';
+}
+
+/** Kanıtın veri zamanı (Türkiye saati): "Veri zamanı: 29 Eyl 2026 11:12". */
+export function evidenceTimeLabel(generatedAt) {
+  const at = generatedAt ? new Date(generatedAt) : null;
+  if (!at || Number.isNaN(at.getTime())) return null;
+  const text = at.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return `Veri zamanı: ${text}`;
+}
+
+/** Kanıtın kapsam ve tamlık notları (kısmi erişim, kısaltma). */
+export function evidenceNotes(item) {
+  const notes = [];
+  if (item?.partial) notes.push('Yalnızca yetkili kayıtlar');
+  if (item?.truncated) notes.push('Kısaltılmış sonuç');
+  if (item?.counts?.total != null && item?.counts?.returned != null && item.counts.total > item.counts.returned) {
+    notes.push(`${item.counts.returned} / ${item.counts.total} kayıt gösterildi`);
+  }
+  return notes;
+}
+
+/** Yanıt kanıtla doğrulanamadığında sunucunun kaydettiği güvenli ileti mi? */
+export function isGroundingFailure(finishReason) {
+  return finishReason === GROUNDING_FAILED_FINISH_REASON;
 }
 
 /** Olağan bitiş nedenleri; bunların dışındaki her neden yanıtın eksik olabileceğini söyler. */
@@ -233,6 +294,7 @@ const COMPLETE_FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequen
 /** Yanıtın bitiş nedeni kullanıcıya not olarak gösterilmeli mi? */
 export function finishReasonNote(finishReason) {
   if (!finishReason || COMPLETE_FINISH_REASONS.has(finishReason)) return null;
+  if (finishReason === GROUNDING_FAILED_FINISH_REASON) return 'Yanıt Rota verisiyle doğrulanamadığı için gösterilmedi; soruyu daha dar kapsamda yeniden sorabilirsiniz.';
   if (finishReason === 'length') return 'Yanıt uzunluk sınırına ulaştığı için sonu eksik olabilir.';
   if (finishReason === 'content_filter') return 'Yanıt içerik süzgeci nedeniyle durduruldu; sonu eksik olabilir.';
   return 'Yanıt olağan dışı bir nedenle sonlandı; sonu eksik olabilir.';

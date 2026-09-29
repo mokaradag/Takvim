@@ -65,6 +65,9 @@ export function renderInline(nodes = [], keyPrefix = 'i') {
         );
       case 'group':
         return <span key={key}>{renderInline(node.children, key)}</span>;
+      case 'cite':
+        // Kanıt atfı: yanıtın altındaki kaynak listesindeki aynı kimliğe işaret eder.
+        return <sup key={key} className="assistant-md-cite" title={`Kaynak ${node.id}`} aria-label={`Kaynak ${node.id}`}>{node.id}</sup>;
       default:
         return null;
     }

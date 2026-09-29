@@ -34,6 +34,7 @@ export function taskActivityRecordsets(db, params) {
   const groups = new Map();
   for (const row of rows) {
     if (params.person && row.ActorSicil !== params.person || params.projectId && key(row.ProjectId) !== key(params.projectId)) continue;
+    if (params.taskId && key(row.EntityId) !== key(params.taskId)) continue;
     if (!matchesOrgFilter({ organization: { directorate: row.Directorate, department: row.Department, unit: row.Unit } }, params)) continue;
     const group = `${row.ActionGroup}:${row.EntityId}:${row.ActorSicil}:${row.ProjectId}`;
     if (!groups.has(group)) groups.set(group, []);

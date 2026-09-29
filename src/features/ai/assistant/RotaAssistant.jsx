@@ -433,6 +433,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         conversationKey={active.key}
         turns={active.turns}
         phase={running?.phase || null}
+        topic={running?.topic || null}
         retryKey={retryKey}
         reconciling={Boolean(state.reconciling[active.key])}
         reducedMotion={reducedMotion}

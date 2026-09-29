@@ -60,6 +60,10 @@ function createState() {
     streamGenerationMs: [],
     streams: { completed: 0, cancelled: 0, timeout: 0, interrupted: 0, failed: 0 },
     assistantTurns: { completed: 0, failed: 0, cancelled: 0, lastFailure: null },
+    // Rota verisi araçları: yalnızca araç adı, sonuç sınıfı ve süre (içerik YOK).
+    tools: { calls: 0, byOutcome: {}, byTool: {}, latencyMs: [], lastFailure: null },
+    // Kanıta dayalı yanıtların sonucu: grounded (kanıtlı), direct (araçsız), failed (doğrulanamadı).
+    grounding: { grounded: 0, direct: 0, failed: 0, repaired: 0, disclosed: 0, rounds: [], evidence: [] },
     retries: 0,
     lastSuccessAt: null,
     // Hizmet hatası (sağlayıcı öncesi de olabilir: rehber, anahtar tablosu, iç
@@ -401,6 +405,22 @@ export function aiTelemetrySnapshot() {
     },
     streams: { ...current.streams },
     assistantTurns: { ...current.assistantTurns, lastFailure: current.assistantTurns.lastFailure ? { ...current.assistantTurns.lastFailure } : null },
+    tools: {
+      calls: current.tools.calls,
+      byOutcome: { ...current.tools.byOutcome },
+      byTool: Object.fromEntries(Object.entries(current.tools.byTool).map(([name, entry]) => [name, { ...entry }])),
+      latency: percentiles(current.tools.latencyMs),
+      lastFailure: current.tools.lastFailure ? { ...current.tools.lastFailure } : null
+    },
+    grounding: {
+      grounded: current.grounding.grounded,
+      direct: current.grounding.direct,
+      failed: current.grounding.failed,
+      repaired: current.grounding.repaired,
+      disclosed: current.grounding.disclosed,
+      rounds: percentiles(current.grounding.rounds),
+      evidence: percentiles(current.grounding.evidence)
+    },
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
     requestSequence: current.requestSequence,
@@ -445,4 +465,56 @@ export function recordAssistantTurn({ code = null, source = null, details = null
       operation: 'ai.assistant.turn', code: outcome.code, message: 'Rota AI turu tamamlanamadı.'
     }));
   }
+}
+
+/** Araç sonucu sınıfları: model ya da kullanıcı kaynaklı olanlar hizmet hatası değildir. */
+const TOOL_SERVICE_FAILURES = new Set(['TIMEOUT', 'BUSY', 'DATABASE_UNAVAILABLE', 'INTERNAL']);
+const MAX_TRACKED_TOOLS = 40;
+
+/**
+ * Tek araç çağrısı. Kayıt YALNIZCA araç adını, sonuç kodunu, süreyi ve sonuç
+ * boyutunu taşır; bağımsız değişken, sonuç içeriği, Sicil ya da SQL taşımaz.
+ */
+export function recordAiToolCall({ tool, code = null, durationMs = 0, resultBytes = 0 }) {
+  const failure = code != null && TOOL_SERVICE_FAILURES.has(code);
+  safely(() => {
+    const current = state().tools;
+    const name = /^rota_[a-z_]{3,60}$/.test(String(tool)) ? String(tool) : 'unknown';
+    current.calls += 1;
+    const outcome = code || 'OK';
+    current.byOutcome[outcome] = (current.byOutcome[outcome] || 0) + 1;
+    if (current.byTool[name] || Object.keys(current.byTool).length < MAX_TRACKED_TOOLS) {
+      const entry = current.byTool[name] ||= { calls: 0, failures: 0, lastLatencyMs: null, lastResultBytes: null };
+      entry.calls += 1;
+      if (failure) entry.failures += 1;
+      entry.lastLatencyMs = Math.max(0, Math.round(durationMs));
+      entry.lastResultBytes = Math.max(0, Math.round(resultBytes));
+    }
+    pushSample(current.latencyMs, durationMs);
+    if (failure) current.lastFailure = { tool: name, code, at: new Date().toISOString() };
+    recordOperation({ operation: 'ai.tool.call', durationMs, ok: !failure, code: failure ? code : null });
+  });
+  if (code === 'INTERNAL') {
+    safely(() => logEvent({
+      severity: EVENT_SEVERITIES.ERROR,
+      component: COMPONENTS.AI,
+      operation: 'ai.tool.call',
+      code: 'AI_TOOL_INTERNAL_ERROR',
+      message: 'Rota AI aracı beklenmeyen bir hatayla sonuçlandı.',
+      durationMs,
+      context: { tool: /^rota_[a-z_]{3,60}$/.test(String(tool)) ? String(tool) : 'unknown' }
+    }));
+  }
+}
+
+/** Kanıta dayalı yanıtın sonucu (içerik taşımaz). */
+export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repaired = false, disclosed = false }) {
+  safely(() => {
+    const current = state().grounding;
+    if (Object.hasOwn(current, outcome) && typeof current[outcome] === 'number') current[outcome] += 1;
+    if (repaired) current.repaired += 1;
+    if (disclosed) current.disclosed += 1;
+    pushSample(current.rounds, rounds);
+    pushSample(current.evidence, evidence);
+  });
 }

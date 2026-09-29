@@ -2,7 +2,13 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { AiError } from '../aiErrors.js';
-import { AI_STREAM_LIMITS, createLeadingThinkFilter, primaryChoice, readChatCompletionStream } from './openAiCompatibleStream.js';
+import {
+  AI_STREAM_LIMITS,
+  createLeadingThinkFilter,
+  finalizeToolCalls,
+  primaryChoice,
+  readChatCompletionStream
+} from './openAiCompatibleStream.js';
 
 export { streamInterrupted } from './openAiCompatibleStream.js';
 
@@ -247,6 +253,69 @@ async function* completionAsStream(completion, limits, { reasoning = false } = {
   yield { type: 'done', finishReason: completion.finishReason, model: completion.model, usage: completion.usage };
 }
 
+/**
+ * Sağlayıcıdan bağımsız ileti biçimi → OpenAI uyumlu tel biçimi. Araç çağrısı
+ * yapan asistan iletisi `tool_calls`, araç sonucu `role: tool` ve
+ * `tool_call_id` taşır. Tel biçimi bu modülün dışına çıkmaz.
+ */
+function wireMessages(messages) {
+  return messages.map((message) => {
+    if (message.role === 'tool') return { role: 'tool', tool_call_id: message.toolCallId, content: message.content };
+    if (message.role === 'assistant' && Array.isArray(message.toolCalls) && message.toolCalls.length) {
+      return {
+        role: 'assistant',
+        content: message.content ? message.content : null,
+        tool_calls: message.toolCalls.map((call) => ({
+          id: call.id,
+          type: 'function',
+          function: { name: call.name, arguments: call.arguments }
+        }))
+      };
+    }
+    return { role: message.role, content: message.content };
+  });
+}
+
+function wireTools(tools) {
+  return tools.map((tool) => ({
+    type: 'function',
+    function: { name: tool.name, description: tool.description, parameters: tool.parameters }
+  }));
+}
+
+/** Tek JSON yanıttaki (akışı yok sayan ağ geçidi) araç çağrıları; biçim akıştakiyle aynı sınırlardan geçer. */
+function completionToolCalls(payload, limits) {
+  const calls = primaryChoice(payload.choices)?.message?.tool_calls;
+  if (calls == null) return [];
+  if (!Array.isArray(calls) || calls.length > limits.maxToolCalls) throw invalidResponse('STREAM_TOOL_CALLS_TOO_MANY');
+  return finalizeToolCalls(calls.map((call, index) => {
+    const fn = call?.function;
+    if (call == null || typeof call !== 'object' || fn == null || typeof fn !== 'object' || typeof fn.name !== 'string'
+      || fn.name.length > limits.maxToolNameChars) {
+      throw invalidResponse('STREAM_TOOL_CALL_MALFORMED');
+    }
+    const args = typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments ?? {});
+    const oversize = args.length > limits.maxToolArgumentChars;
+    return {
+      index,
+      id: typeof call.id === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(call.id) ? call.id : null,
+      name: fn.name,
+      arguments: oversize ? '' : args,
+      oversize
+    };
+  }));
+}
+
+async function* toolCompletionAsStream(completion, toolCalls, limits, { reasoning = false } = {}) {
+  const think = createLeadingThinkFilter();
+  const text = `${think.push(completion.text)}${think.end()}`;
+  if (text.length > limits.maxTextChars) throw invalidResponse('STREAM_TEXT_TOO_LARGE');
+  if (reasoning || think.sawThinking) yield { type: 'reasoning' };
+  if (text) yield { type: 'text', text };
+  for (let index = 0; index < toolCalls.length; index += 1) yield { type: 'tool_call_started' };
+  yield { type: 'done', finishReason: completion.finishReason, model: completion.model, usage: completion.usage, toolCalls };
+}
+
 export function createOpenAiCompatibleProvider({
   fetchImpl = null,
   maxResponseBytes = MAX_RESPONSE_BYTES,
@@ -311,6 +380,51 @@ export function createOpenAiCompatibleProvider({
         throw invalidResponse('STREAM_CONTENT_TYPE');
       }
       return { events: readChatCompletionStream(response.body, { signal, limits: streamLimits }) };
+    },
+
+    /**
+     * Araç tanımlı akışlı sohbet turu (Rota verisi alan araçları).
+     *
+     * `streamChatCompletion` ile aynı güvenceler geçerlidir; ek olarak istek
+     * sunucunun sabit araç kataloğunu (`tools`) ve seçim kipini (`toolChoice`:
+     * `auto` ya da `none`) taşır. İletiler sağlayıcıdan bağımsız biçimdedir
+     * (asistanın `toolCalls` alanı, aracın `role: tool` + `toolCallId` yanıtı).
+     * Olaylar: `text`, `reasoning`, içerik taşımayan `tool_call_started` ve
+     * birleştirilmiş çağrıları taşıyan tek `done`. Bağımsız değişkenler burada
+     * çözülmez; doğrulama sunucunun araç kayıt defterinindir.
+     */
+    async streamToolCompletion({ baseUrl, apiKey, model, messages, tools = [], toolChoice = 'auto', maxOutputTokens = null, signal }) {
+      const withTools = Array.isArray(tools) && tools.length > 0;
+      const response = await send(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: requestHeaders(apiKey, { json: true, accept: 'text/event-stream' }),
+        body: JSON.stringify({
+          model,
+          messages: wireMessages(messages),
+          stream: true,
+          ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
+          ...(withTools ? { tools: wireTools(tools), tool_choice: toolChoice === 'none' ? 'none' : 'auto' } : {})
+        })
+      }, signal);
+      if (!response.ok) {
+        await discardBody(response);
+        throw classifyProviderStatus(response.status, response.headers.get('retry-after'));
+      }
+      const limits = { ...AI_STREAM_LIMITS, ...streamLimits };
+      const type = mediaType(response);
+      if (type === 'application/json') {
+        const payload = await readBoundedJson(response, maxResponseBytes, signal);
+        const choice = Array.isArray(payload?.choices) ? primaryChoice(payload.choices) : null;
+        assertCompletionMetadata(payload, choice, 'STREAM_EVENT_MALFORMED');
+        const completion = parseChatCompletion(payload);
+        const toolCalls = completionToolCalls(payload, limits);
+        return { events: toolCompletionAsStream(completion, toolCalls, limits, { reasoning: completionReasoning(payload) }) };
+      }
+      if (type !== 'text/event-stream') {
+        await discardBody(response);
+        throw invalidResponse('STREAM_CONTENT_TYPE');
+      }
+      return { events: readChatCompletionStream(response.body, { signal, limits, toolCalls: true }) };
     },
 
     /**

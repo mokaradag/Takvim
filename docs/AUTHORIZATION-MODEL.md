@@ -310,3 +310,14 @@ Ekip raporu, yetkili görev/proje kümesi ile `ActorSicil` üzerinden mevcut yö
 ### Self recurrence
 
 `canManageRecurrence` is separate from `canManageStructure`. An authoritative sole assignee who can already create tasks in that project may configure their own task’s recurrence. Hidden/co-assignees deny that narrow permission; all identity checks use Sicil. The SQL transaction checks the full authoritative assignment set, parent/project/WBS/calendar scope, occurrence count and duplicate identity. Existing series rules become immutable after occurrences exist. Client visibility never substitutes for server authorization.
+
+### Rota AI alan araçları (Aşama 3)
+
+Rota AI'nin Rota verisini okuyan 19 salt okunur aracı yeni bir yetki modeli kurmaz; bu belgedeki kuralları yeniden kullanır ([ayrıntı](AI-DOMAIN-TOOLS.md)):
+
+- Kimlik yalnızca oturumun güvenilir Sicil'idir. Araç şemaları kimlik, rol ya da yetki alanı (`sicil`, `currentUserSicil`, `actorSicil`, `isAdmin`, `accessLevel` …) ve SQL parçası taşıyamaz; kayıt defteri böyle bir aracı yüklemez. Kişi süzgeci Sicil'dir ve yalnızca süzgeçtir; ad eşleşmesi hiçbir koşulda kimlik ya da yetki kanıtı sayılmaz.
+- Yetki bağlamı `loadAuthorizationContext` ile her araç kümesinde (model yanıtı başına) yeniden okunur; sabit SQL görünür görev kümesini yetki süzgeçli anlık görüntüyle **aynı** iki daldan kurar (FULL/READ projelerin bütün görevleri + kalan kısmi projelerin yalnızca kişisel kapsamdaki görevleri). Sistem yöneticisi bütün etkin projeleri görür.
+- Eş sorumlu kimliği, oluşturan künyesi ve iş dağılım kataloğu anlık görüntüdeki kurallarla gösterilir; gizli eş sorumlu kişi olarak sayılmaz ve Sicil'i hiçbir alana çıkmaz. Bağımlılıklar ve baz planlar yalnızca FULL erişimde açıktır.
+- Kısmi kapsam kısmi kalır: toplamlar ve gruplar yalnızca görünür görevler üzerindedir, gizli görevin sayısı ya da varlığı sızmaz; yanıt kapsamı belirtmezse sunucu kapsam notunu ekler.
+- Görünmeyen kayıt, var olmayan kayıtla aynı yanıtı alır (`NOT_FOUND`).
+- Talepler, atama koordinasyonu, bildirimler ve Görev Hareketleri araçları ilgili ekranların var olan okuma hizmetlerini aynı yetkiyle çağırır; ekip hareketleri yalnızca yöneticilere açıktır. Hiçbir araç bildirimi okundu işaretlemez ve hiçbir araç yazma yapmaz.

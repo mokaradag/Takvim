@@ -64,6 +64,32 @@ function AiDrawerFields({ detail }) {
         label="Anahtar kaynağı"
         value={`Kişisel ${sources.personal ?? 0} · Kurumsal ${sources.default ?? 0} · Anahtarsız ${sources.missing ?? 0}`}
       />
+      <RotaDataDrawerFields rotaData={detail.rotaData} telemetry={telemetry} />
+    </>
+  );
+}
+
+/** Rota verisi araçları: yalnızca sayılar ve sonuç sınıfları (içerik, argüman ya da SQL taşımaz). */
+function RotaDataDrawerFields({ rotaData, telemetry }) {
+  if (!rotaData?.enabled) return <DrawerField label="Rota verisi araçları" value="Kapalı" />;
+  const tools = telemetry.tools || {};
+  const grounding = telemetry.grounding || {};
+  const evidence = rotaData.evidenceSchema?.ready === true ? 'Hazır' : rotaData.evidenceSchema?.ready === false ? 'Kurulmamış (0018)' : 'Henüz denetlenmedi';
+  const failures = Object.entries(tools.byOutcome || {}).filter(([code]) => code !== 'OK');
+  return (
+    <>
+      <DrawerField label="Rota verisi araçları" value={`Açık · Kanıt tablosu: ${evidence}`} />
+      <DrawerField label="Araç çağrıları" value={`${tools.calls ?? 0} çağrı · P95 ${formatDuration(tools.latency?.p95Ms)}`} />
+      {failures.length > 0 && (
+        <DrawerField label="Araç hata sınıfları" value={failures.map(([code, count]) => `${code} ${count}`).join(' · ')} mono />
+      )}
+      <DrawerField
+        label="Kanıta dayalı yanıtlar"
+        value={`Kanıtlı ${grounding.grounded ?? 0} · Genel ${grounding.direct ?? 0} · Doğrulanamayan ${grounding.failed ?? 0} · Düzeltilen ${grounding.repaired ?? 0}`}
+      />
+      {rotaData.toolGate && (
+        <DrawerField label="Araç SQL kapısı" value={`Etkin ${rotaData.toolGate.active} · Sırada ${rotaData.toolGate.queued}`} mono />
+      )}
     </>
   );
 }

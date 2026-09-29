@@ -16,6 +16,13 @@ kipleri, Sicil'e ait kalıcı konuşma geçmişi (0017) ve güvenli yanıt çizi
 değiştirmez: her istek aynı `aiGateway` yolundan, aynı kimlik, anahtar,
 kapasite, süre sınırı ve telemetri kurallarıyla geçer.
 
+Aşama 3: Rota AI'nin Rota verisini **yetkili, salt okunur ve kanıta dayalı**
+yanıtlaması — sunucuya ait 19 alan aracı, kanıt kimlikleri (`R1`, `R2` …) ve
+belirlenimci atıf doğrulaması, kanıt kaydı (0018). İsteğe bağlıdır
+(`MERGEN_ROTA_AI_TOOLS_ENABLED`); kapalıyken Aşama 2 davranışı değişmez. Özet
+[§19](#19-rota-ai-kanıta-dayalı-alan-araçları-aşama-3)'da, ayrıntı
+[AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md)'dedir.
+
 ---
 
 ## 1. Mimari sınır
@@ -91,6 +98,8 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
 | `src/domain/ai/eventStreamParser.js`, `assistantContract.js` | Sunucu ve tarayıcının ortak olay akışı çözücüsü; Rota AI protokol sabitleri, sınırlar, ileti normalleştirme ve başlık (saf) |
 | `src/server/ai/assistant/*` | Rota AI hizmeti, konuşma deposu (0017), sunucuya ait yönerge ve bağlam, tek üretim kaydı, akış yanıtı |
 | `src/features/ai/assistant/*` | Rota AI paneli, istemci ve akış çözücüsü, durum makinesi, güvenli Markdown, sunum ve etkileşim kuralları |
+| `src/server/ai/tools/*` | Aşama 3: araç kayıt defteri, katı bağımsız değişken doğrulaması, sınırlı yürütücü, araç SQL kapısı, kanıt defteri ve 19 salt okunur alan aracı (tek SQL sahibi `rota/rotaToolStore.js`) |
+| `src/domain/ai/evidenceContract.js`, `src/server/ai/assistant/grounded*.js` | Aşama 3: ortak kanıt/atıf sözleşmesi; sunucuya ait yönerge ve doğrulanan, sınırlı araç döngüsü |
 
 ---
 
@@ -305,6 +314,7 @@ bağlıdır ve bilinmedikçe boş bırakılır.
 | `chat.general` | Genel sohbet | `chat` |
 | `chat.reasoning` | Akıl yürütme | `chat`, `reasoning` |
 | `chat.tools` | Araç kullanımı | `chat`, `tools` |
+| `chat.tools.reasoning` | Araç kullanımı (akıl yürütme) | `chat`, `tools`, `reasoning` |
 | `vision` | Görsel anlama | `chat`, `vision` |
 | `embedding` | Anlamsal gösterim | `embedding` |
 | `rerank` | Yeniden sıralama | `rerank` |
@@ -315,7 +325,9 @@ bağlıdır ve bilinmedikçe boş bırakılır.
 
 Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Aşama 2'de
 `chat.general` Standart, `chat.reasoning` Derin düşünme kipini çalıştırır.
-Diğer profiller sonraki aşamaların sözleşmesidir.
+Aşama 3'te Rota verisi araçları açıkken Standart kip `chat.tools`, Derin
+düşünme `chat.tools.reasoning` ile çalışır; kipin araç profili yoksa o kip
+genel sohbet profiline döner. Diğer profiller sonraki aşamaların sözleşmesidir.
 
 Varsayılan eşleme `src/server/ai/defaultModelRegistry.js` dosyasındadır. Depoda
 ayrıca **mevcut kurum içi sunucu kataloğunun operasyonel anlık görüntüsü**
@@ -787,6 +799,7 @@ olur). Değerler hiçbir tanı çıktısına taşınmaz.
 | `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` | boş | İsteğe bağlı model kaydı JSON dosyası (§5) |
 | `MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS` … `_QUEUE_TIMEOUT_MS` | bkz. §6 | Kapasite sınırları |
 | `MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS` | `90000` | Sağlayıcı yanıtı süre sınırı (§7) |
+| `MERGEN_ROTA_AI_TOOLS_ENABLED` | `false` | Aşama 3 Rota verisi araçlarını açar (§19); 0018 ve araç profilleri de gerekir |
 
 Özellik açıkken en az bir anahtar kaynağı (kurumsal anahtar ya da ana anahtar)
 tanımlı olmalıdır. Kurumsal kök sertifika gerekiyorsa Node'a
@@ -797,7 +810,7 @@ sayılan `.env.local` dosyasında ya da hizmet ortamında bulunur.
 
 ## 13. Veritabanı: 0016
 
-> Rota AI konuşma geçmişi (0017) için bkz. [§18.7](#187-konuşma-geçmişi-ve-sicil-sahipliği) ve [§18.14](#1814-dağıtım).
+> Rota AI konuşma geçmişi (0017) için bkz. [§18.7](#187-konuşma-geçmişi-ve-sicil-sahipliği) ve [§18.14](#1814-dağıtım); kanıt kaydı (0018) için bkz. [AI-DOMAIN-TOOLS.md §13](AI-DOMAIN-TOOLS.md#13-veritabanı-0018).
 
 `database/MR_Upgrade_0016_Ai_User_Credentials.sql` tek bir tablo ekler:
 
@@ -858,9 +871,11 @@ kayıtlı anahtarlar korunur.
 
 Yapay zekâ sağlayıcısı **hiçbir zaman** SQL Server kimlik bilgisi almaz ve
 serbest SQL çalıştırmaz. "SQL çalıştır" ya da "yapay zekânın ürettiği sorguyu
-çalıştır" türünden genel bir yetenek yoktur ve eklenmeyecektir. Sonraki
-aşamalardaki alan araçları, var olan yetki denetimli sunucu hizmetleri ve
-depolar üzerinden çalışacaktır. Kişisel anahtar tablosuna yalnızca depo modülü,
+çalıştır" türünden genel bir yetenek yoktur ve eklenmeyecektir. Aşama 3'ün alan
+araçları bu kurala uyar: model yalnızca kayıtlı salt okunur bir aracı ve şemaya
+uyan bağımsız değişkenleri seçer; bütün SQL sabit, parametreli ve yetki
+denetimlidir (`src/server/ai/tools/rota/rotaToolQueries.js`) ya da var olan yetki
+denetimli okuma hizmetleridir (bkz. [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md)). Kişisel anahtar tablosuna yalnızca depo modülü,
 derleme anında sabit ve Sicil ile sınırlı sorgularla erişir.
 
 ---
@@ -1623,3 +1638,37 @@ temeli gevşetmeden eklemelidir.
 - Geçmiş listesi, tarama imlecinin geçtiği satırları yalnızca baş sayfadan düştükleri için silmez. Sonraki sayfada değişmez oluşturma anahtarının üst aralığı da taranır; başka sekmede eklenen kayıtlar baş sayfadan düşseler bile bulunur.
 - Kipli proje, personel ve takvim günü pencereleri ortak odak tuzağına katılır. Komut paleti daha yüksek veya kayıt yapan kipli pencere altında açılmaz; görev panelinden yardımcıya geçiş panel kapandıktan sonra yapılır.
 - Kaydedilmemiş taslaklar konuşma geçişinde korunur. Anahtar değişikliği diğer sekmelere yalnızca gizli veri içermeyen bir değişim işaretiyle bildirilir.
+
+---
+
+## 19. Rota AI: kanıta dayalı alan araçları (Aşama 3)
+
+Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
+
+- **Kapsam:** 19 salt okunur araç — görev arama/ayrıntı/toplamlar, proje
+  çözümü/künyesi, portföy, iş dağılım ağacı, iş yükü, kişi çözümü, hareket
+  geçmişi, tarih değişikliği talepleri, atama koordinasyonu, bildirimler, baz
+  plan, bağımlılıklar, tekrar serileri, çalışma takvimi, Outlook teslim durumu,
+  plan veri kalitesi. Genel SQL aracı yoktur; hiçbir araç yazma yapmaz.
+- **Kimlik ve yetki:** güvenilir Sicil; yetki bağlamı her araç kümesinde
+  yeniden okunur ve sabit SQL görünürlüğü anlık görüntüyle aynı kurallarla
+  hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz.
+- **Kanıt:** başarılı sonuçlar `R1`, `R2` … olur; yanıt `【R1】` ile atıf yapar.
+  Atıflar ikinci bir modele sorulmadan doğrulanır; uydurma atıf bir kez
+  düzeltilir, yine olmazsa sabit güvenli ileti kaydedilir (`grounding_failed`).
+- **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
+  çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
+  kapısı (2 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
+  sınırıyla yürür (`aiGateway.runToolSession`).
+- **Akış:** `accepted.rotaData`, `status` evreleri `tools` (+ veri alanı
+  konusu) ve `verifying`, `revise` olayı, `done.assistantMessage.content` ve
+  `evidence`. Kanıta dayanan yanıt doğrulanmadan gösterilmez; genel yanıt
+  gerçek zamanlı akmaya devam eder.
+- **Kalıcılık:** yalnızca atıf yapılan kanıtlar yanıtla aynı kısa işlemde
+  `MR_AiMessageEvidence` (0018) tablosuna yazılır; iletiyle birlikte silinir.
+- **Gözlem:** araç çağrıları ve kanıtlı yanıt sonuçları içeriksiz ölçülür;
+  sağlık bileşeni kayıt defteri, 0018, araç profilleri ve araç hizmet
+  hatalarında uyarır.
+- **Dağıtım:** 0018 → model kaydında `chat.tools` / `chat.tools.reasoning` →
+  bayrak kapalıyken yayın → `MERGEN_ROTA_AI_TOOLS_ENABLED=true` → Sistem
+  Yönetimi denetimi → elle kabul. Geri alma: bayrağı kapatmak yeterlidir.

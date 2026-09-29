@@ -21,6 +21,13 @@ export const ASSISTANT_STREAM_EVENTS = Object.freeze({
   ACCEPTED: 'accepted',
   STATUS: 'status',
   DELTA: 'delta',
+  /**
+   * O ana kadar gösterilen yanıt metni geçersizdir (ör. genel yanıt sanılan
+   * metnin ardından Rota verisi araçları çağrıldı ya da kanıt doğrulaması
+   * başarısız oldu). İstemci turun metnini siler; doğrulanmış yanıt ardından
+   * gelir. Sonlandırıcı değildir.
+   */
+  REVISE: 'revise',
   DONE: 'done',
   ERROR: 'error'
 });
@@ -28,8 +35,18 @@ export const ASSISTANT_STREAM_EVENTS = Object.freeze({
 /** `status` olayının evreleri; model ilerlemesi UYDURULMAZ, yalnızca gerçek geçişler bildirilir. */
 export const ASSISTANT_STREAM_PHASES = Object.freeze({
   GENERATING: 'generating',
-  THINKING: 'thinking'
+  THINKING: 'thinking',
+  /** Yetkili Rota verisi alan araçlarıyla okunuyor; `topic` hangi veri alanı olduğunu söyler. */
+  TOOLS: 'tools',
+  /** Taslak yanıt kanıt sözleşmesine göre doğrulanıyor. */
+  VERIFYING: 'verifying'
 });
+
+/** `tools` evresinin konu başlıkları; araç adı ya da bağımsız değişkeni tarayıcıya gitmez. */
+export const ASSISTANT_TOOL_TOPICS = Object.freeze([
+  'tasks', 'projects', 'portfolio', 'wbs', 'workload', 'people', 'activity', 'requests',
+  'notifications', 'baseline', 'dependencies', 'recurrence', 'calendar', 'outlook', 'quality'
+]);
 
 export const ASSISTANT_MODES = Object.freeze({
   STANDARD: 'standard',
@@ -63,9 +80,21 @@ export const ASSISTANT_CONTEXT_POLICY = Object.freeze({
 
 const ASSISTANT_CONTEXT_CLIPPED_SUFFIX = '\n[…ileti bağlam için kısaltıldı]';
 
-function clipAssistantContextMessage(content) {
+/**
+ * Rota verisi araçlarının kullanıldığı turda geçmiş için daha dar bütçe: araç
+ * sonuçları ve araç tanımları bağlamda yer tutar; geçmiş yanıtlar da güncel
+ * kanıt değildir (bkz. docs/AI-DOMAIN-TOOLS.md).
+ */
+export const ASSISTANT_GROUNDED_CONTEXT_POLICY = Object.freeze({
+  historyWindow: ASSISTANT_CONTEXT_POLICY.historyWindow,
+  maxHistoryMessages: 8,
+  maxContextChars: 16000,
+  maxMessageChars: 6000
+});
+
+function clipAssistantContextMessage(content, policy = ASSISTANT_CONTEXT_POLICY) {
   const text = String(content ?? '');
-  const limit = ASSISTANT_CONTEXT_POLICY.maxMessageChars;
+  const limit = policy.maxMessageChars;
   if (text.length <= limit) return text;
   let cut = text.slice(0, limit - ASSISTANT_CONTEXT_CLIPPED_SUFFIX.length);
   if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
@@ -74,20 +103,20 @@ function clipAssistantContextMessage(content) {
 
 /** Sunucu ve istemcinin aynı bağlam-kısaltma kararını üretmesi için saf seçim. */
 export function selectAssistantContextHistory({
-  history = [], userContent, priorMessageCount = history.length
+  history = [], userContent, priorMessageCount = history.length, policy = ASSISTANT_CONTEXT_POLICY
 } = {}) {
   const answers = new Map(history.filter((message) => message.role === 'assistant').map((message) => [message.replyToId, message]));
   const pairs = history
     .filter((message) => message.role === 'user' && answers.has(message.id))
     .map((message) => [message, answers.get(message.id)]);
   const current = String(userContent ?? '');
-  let budget = ASSISTANT_CONTEXT_POLICY.maxContextChars - current.length;
+  let budget = policy.maxContextChars - current.length;
   const included = [];
   let clippedMessages = 0;
   for (let index = pairs.length - 1; index >= 0; index -= 1) {
-    if ((included.length + 1) * 2 > ASSISTANT_CONTEXT_POLICY.maxHistoryMessages) break;
+    if ((included.length + 1) * 2 > policy.maxHistoryMessages) break;
     const [question, answer] = pairs[index];
-    const pair = [clipAssistantContextMessage(question.content), clipAssistantContextMessage(answer.content)];
+    const pair = [clipAssistantContextMessage(question.content, policy), clipAssistantContextMessage(answer.content, policy)];
     const size = pair[0].length + pair[1].length;
     if (size > budget) break;
     budget -= size;

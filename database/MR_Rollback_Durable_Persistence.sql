@@ -13,6 +13,7 @@ BEGIN TRY
     IF OBJECT_ID(N'dbo.MR_V_ExecutiveScope', N'V') IS NOT NULL DROP VIEW dbo.MR_V_ExecutiveScope;
     IF OBJECT_ID(N'dbo.MR_V_CorporateProjects', N'V') IS NOT NULL DROP VIEW dbo.MR_V_CorporateProjects;
 
+    IF OBJECT_ID(N'dbo.MR_AiMessageEvidence', N'U') IS NOT NULL DROP TABLE dbo.MR_AiMessageEvidence;
     IF OBJECT_ID(N'dbo.MR_AiConversationMessages', N'U') IS NOT NULL DROP TABLE dbo.MR_AiConversationMessages;
     IF OBJECT_ID(N'dbo.MR_AiConversations', N'U') IS NOT NULL DROP TABLE dbo.MR_AiConversations;
     IF OBJECT_ID(N'dbo.MR_AiUserCredentials', N'U') IS NOT NULL DROP TABLE dbo.MR_AiUserCredentials;

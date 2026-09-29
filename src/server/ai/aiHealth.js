@@ -2,7 +2,9 @@ import 'server-only';
 import { AI_CREDENTIAL_SOURCES } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_CAPABILITIES, AI_PROFILES, resolveModelProfile } from '../../domain/ai/aiModelRegistry.js';
 import { checkAssistantConversationSchema } from './assistant/assistantService.js';
-import { conversationSchemaState } from './assistant/conversationStore.js';
+import { conversationSchemaState, evidenceSchemaState } from './assistant/conversationStore.js';
+import { toolRegistryProblems } from './tools/toolRegistry.js';
+import { toolSqlGateStatus } from './tools/toolSqlGate.js';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { HEALTH_STATES } from '../../domain/observability/healthModel.js';
 import { AI_CONFIG_NAMES, aiConfigurationSummary, readAiConfig } from './aiConfig.js';
@@ -73,6 +75,23 @@ function assistantProfilesAvailable(registry) {
   return assistantRoutes(registry).length > 0;
 }
 
+/** Rota verisi araçlarının durumu (yalnızca özellik açıkken ayrıntı taşır). */
+const TOOL_SERVICE_FAILURES = new Set(['TIMEOUT', 'DATABASE_UNAVAILABLE', 'INTERNAL']);
+
+function rotaDataView(config, registry) {
+  if (!config.toolsEnabled) return { enabled: false };
+  const toolProfiles = [AI_PROFILES.CHAT_TOOLS, AI_PROFILES.CHAT_TOOLS_REASONING]
+    .map((profile) => resolveModelProfile(registry, profile))
+    .filter((resolved) => resolved.ok && resolved.route.capabilities.includes(AI_CAPABILITIES.TOOLS)).length;
+  return {
+    enabled: true,
+    toolProfiles,
+    registryValid: toolRegistryProblems().length === 0,
+    evidenceSchema: evidenceSchemaState(),
+    toolGate: toolSqlGateStatus()
+  };
+}
+
 /** Bileşen durumu + güvenli ayrıntı; `state`, `message`, `detail`, `lastSuccessAt` döner. */
 export function aiHealthComponent({ now = Date.now() } = {}) {
   const config = readAiConfig();
@@ -95,7 +114,8 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
     telemetry,
     conversationSchema,
     assistantProfiles: assistantProfilesAvailable(cachedAiModelRegistry()),
-    credentialSchema: { ready: credentialSchema.ready, observedAt: credentialSchema.observedAt }
+    credentialSchema: { ready: credentialSchema.ready, observedAt: credentialSchema.observedAt },
+    rotaData: rotaDataView(config, cachedAiModelRegistry())
   };
   const loadText = `Etkin ${load.active}/${load.limits.maxActive}, sırada ${load.queued}/${load.limits.maxQueued}.`;
   // Sağlayıcıya ERİŞİM (reddedilen çağrı dâhil) başarılı işlem değildir:
@@ -177,6 +197,21 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   }
   if (!detail.assistantProfiles) return warning(`Rota AI sohbet profilleri (chat.general / chat.reasoning) kullanılamıyor. ${loadText}`);
   if (conversationSchema.ready === false) return warning(`Rota AI konuşma tabloları (0017) doğrulanamadı. ${loadText}`);
+  // Rota verisi araçları açıkken araç yolu kullanılamıyorsa Rota AI genel
+  // sohbete düşer; yönetici bunu sağlık görünümünde görür.
+  if (detail.rotaData.enabled) {
+    if (!detail.rotaData.registryValid) return warning(`Rota verisi araç kayıt defteri geçersiz; Rota AI yalnızca genel sohbetle çalışıyor. ${loadText}`);
+    if (detail.rotaData.evidenceSchema.ready === false) {
+      return warning(`Rota verisi araçları açık ancak kanıt tablosu (0018) kurulmamış; Rota AI yalnızca genel sohbetle çalışıyor. ${loadText}`);
+    }
+    if (!detail.rotaData.toolProfiles) {
+      return warning(`Rota verisi araçları açık ancak araç yetenekli profiller (chat.tools / chat.tools.reasoning) kullanılamıyor. ${loadText}`);
+    }
+    const toolFailure = telemetry.tools?.lastFailure;
+    if (toolFailure && TOOL_SERVICE_FAILURES.has(toolFailure.code) && now - epoch(toolFailure.at) <= BUSY_ATTENTION_WINDOW_MS) {
+      return warning(`Son Rota verisi aracı hizmet hatasıyla sonuçlandı (${toolFailure.code}). ${loadText}`);
+    }
+  }
   const turnFailure = telemetry.assistantTurns?.lastFailure;
   if (turnFailure && !CAPACITY_CODES.has(turnFailure.code) && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
     return warning(`Son Rota AI turu tamamlanamadı (${turnFailure.code}). ${loadText}`);

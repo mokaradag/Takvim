@@ -3,6 +3,7 @@ import { runObservabilityQuery } from './observabilitySql.mjs';
 import { runAssignmentCoordinationQuery } from './assignmentCoordinationSql.mjs';
 import { runAiCredentialQuery } from './aiCredentialSql.mjs';
 import { runAiConversationQuery } from './aiConversationSql.mjs';
+import { runAiToolQuery } from './aiToolSql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -255,6 +256,9 @@ export function createFakeDatabase(seed = {}) {
     aiConversations: seed.aiConversations || [],
     aiConversationMessages: seed.aiConversationMessages || [],
     aiConversationSchemaMissing: seed.aiConversationSchemaMissing === true,
+    // Rota AI yanıt kanıtları (0018); yoksa kanıt yolu kapalıdır.
+    aiMessageEvidence: seed.aiMessageEvidence || [],
+    aiEvidenceSchemaMissing: seed.aiEvidenceSchemaMissing === true,
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
     corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
@@ -665,11 +669,12 @@ function authorizationRecordsets(db, sicil) {
     });
   }
 
+  // Gerçek sorguyla aynı neden: kendi ataması ASSIGNEE, astın ataması EXECUTIVE_SCOPE.
   const partialTasks = db.taskAssignees
     .filter((entry) => entry.Sicil === sicil || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil))
     .map((entry) => {
       const task = taskById(db, entry.TaskId);
-      return task ? { ProjectId: task.ProjectId, TaskId: task.TaskId, Reason: 'ASSIGNEE' } : null;
+      return task ? { ProjectId: task.ProjectId, TaskId: task.TaskId, Reason: entry.Sicil === sicil ? 'ASSIGNEE' : 'EXECUTIVE_SCOPE' } : null;
     })
     .filter(Boolean);
 
@@ -1235,6 +1240,10 @@ function runOutlookQuery(db, sqlText, params) {
 function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
+
+  // Rota AI alan araçlarının sabit SQL metinleri ayrı bir modülde karşılanır.
+  const aiTool = runAiToolQuery(db, sqlText, params);
+  if (aiTool) return result(aiTool);
 
   // Gözlemlenebilirlik yüzeyi (telemetri toplamları, işletim olayları,
   // uyarılar ve sağlık yoklamaları) ayrı bir modülde karşılanır.

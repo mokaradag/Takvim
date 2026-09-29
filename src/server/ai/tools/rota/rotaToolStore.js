@@ -1,0 +1,160 @@
+import 'server-only';
+import { sql } from '../../../db/pool.js';
+import { bindScope } from './rotaScope.js';
+import {
+  AI_TOOL_BASELINE_SQL,
+  AI_TOOL_CALENDAR_SQL,
+  AI_TOOL_DEPENDENCIES_SQL,
+  AI_TOOL_OUTLOOK_SQL,
+  AI_TOOL_PORTFOLIO_SQL,
+  AI_TOOL_PROJECT_DETAIL_SQL,
+  AI_TOOL_PROJECT_SEARCH_SQL,
+  AI_TOOL_TASK_DETAIL_SQL,
+  AI_TOOL_TASK_FACTS_SQL,
+  AI_TOOL_WBS_SQL
+} from './rotaToolQueries.js';
+import { assigneesByTask, factFromRow } from './taskFacts.js';
+
+/**
+ * Araç SQL'inin TEK yürütücüsü.
+ *
+ * Yalnızca `rotaToolQueries.js` içindeki sabit metinler çalıştırılır; her
+ * değer parametredir. Yürütücü çağıranın verdiği sınırlı yürütücüdür (araç
+ * SQL kapısı, süre sınırı ve iptal; bkz. toolContext.js).
+ */
+
+const recordsets = (result) => result?.recordsets || [];
+
+function scoped(executor, scope, options) {
+  return bindScope(executor.request(), sql, scope, options);
+}
+
+/** `rows.length > limit` ise sonuç kesilmiştir; en fazla `limit` satır döner. */
+function capped(rows = [], limit) {
+  return { rows: rows.slice(0, limit), truncated: rows.length > limit };
+}
+
+export async function readTaskFacts(executor, scope, {
+  projectId = null, taskIds = [], wbsId = null, seriesId = null, recurringOnly = false, text = '',
+  openOnly = false, targetFrom = null, targetTo = null, createdByMe = false,
+  assigneeMode = 'any', personSicil = null, withAssignees = false, maxRows
+}) {
+  const request = scoped(executor, scope, { projectId, taskIds });
+  request.input('maxRows', sql.Int, maxRows + 1);
+  request.input('wbsId', sql.UniqueIdentifier, wbsId);
+  request.input('seriesId', sql.UniqueIdentifier, seriesId);
+  request.input('recurringOnly', sql.Bit, recurringOnly ? 1 : 0);
+  request.input('text', sql.NVarChar(120), text || '');
+  request.input('openOnly', sql.Bit, openOnly ? 1 : 0);
+  request.input('targetFrom', sql.Date, targetFrom);
+  request.input('targetTo', sql.Date, targetTo);
+  request.input('createdByMe', sql.Bit, createdByMe ? 1 : 0);
+  request.input('assigneeMode', sql.VarChar(12), assigneeMode);
+  request.input('personSicil', sql.Int, personSicil);
+  request.input('withAssignees', sql.Bit, withAssignees ? 1 : 0);
+  const [factRows = [], projectRows = [], assigneeRows = []] = recordsets(await request.query(AI_TOOL_TASK_FACTS_SQL));
+  const { rows, truncated } = capped(factRows, maxRows);
+  return {
+    facts: rows.map(factFromRow),
+    truncated,
+    projects: projectRows,
+    assignees: assigneesByTask(assigneeRows)
+  };
+}
+
+export async function readTaskDetail(executor, scope, taskId) {
+  const request = scoped(executor, scope, { taskIds: [taskId] });
+  request.input('withAssignees', sql.Bit, 1);
+  const [detailRows = [], chainRows = [], assigneeRows = []] = recordsets(await request.query(AI_TOOL_TASK_DETAIL_SQL));
+  const row = detailRows[0] || null;
+  return {
+    row,
+    fact: row ? factFromRow(row) : null,
+    wbsChain: chainRows,
+    assignees: assigneesByTask(assigneeRows)
+  };
+}
+
+export async function readProjectSearch(executor, scope, { text, limit }) {
+  const request = scoped(executor, scope, {});
+  request.input('text', sql.NVarChar(120), text);
+  request.input('limit', sql.Int, limit);
+  const [[count] = [], rows = []] = recordsets(await request.query(AI_TOOL_PROJECT_SEARCH_SQL));
+  return { total: Number(count?.Total || 0), rows };
+}
+
+export async function readPortfolio(executor, scope, { today, soonEnd }) {
+  const request = scoped(executor, scope, {});
+  request.input('today', sql.Date, today);
+  request.input('soonEnd', sql.Date, soonEnd);
+  const [rows = []] = recordsets(await request.query(AI_TOOL_PORTFOLIO_SQL));
+  return rows;
+}
+
+export async function readProjectDetail(executor, scope, { projectId, today, soonEnd }) {
+  const request = scoped(executor, scope, { projectId });
+  request.input('today', sql.Date, today);
+  request.input('soonEnd', sql.Date, soonEnd);
+  const [projectRows = [], tagRows = [], [totals] = []] = recordsets(await request.query(AI_TOOL_PROJECT_DETAIL_SQL));
+  return { project: projectRows[0] || null, tags: tagRows.map((row) => String(row.TagName)), totals: totals || null };
+}
+
+export async function readWbs(executor, scope, { projectId, today, maxRows }) {
+  const request = scoped(executor, scope, { projectId });
+  request.input('today', sql.Date, today);
+  request.input('maxRows', sql.Int, maxRows + 1);
+  const [nodeRows = [], countRows = [], projectRows = []] = recordsets(await request.query(AI_TOOL_WBS_SQL));
+  const { rows, truncated } = capped(nodeRows, maxRows);
+  return { nodes: rows, truncated, counts: countRows, project: projectRows[0] || null };
+}
+
+export async function readDependencies(executor, scope, { projectId, focusTaskId = null, maxRows }) {
+  const request = scoped(executor, scope, { projectId });
+  request.input('focusTaskId', sql.UniqueIdentifier, focusTaskId);
+  request.input('maxRows', sql.Int, maxRows + 1);
+  const [dependencyRows = [], taskRows = [], [totals] = []] = recordsets(await request.query(AI_TOOL_DEPENDENCIES_SQL));
+  const { rows, truncated } = capped(dependencyRows, maxRows);
+  return { dependencies: rows, truncated, tasks: taskRows, totals: totals || { TaskCount: 0, OpenCount: 0 } };
+}
+
+export async function readBaseline(executor, scope, { projectId, baselineId = null, maxRows }) {
+  const request = scoped(executor, scope, { projectId });
+  request.input('baselineId', sql.UniqueIdentifier, baselineId);
+  request.input('maxRows', sql.Int, maxRows + 1);
+  const [baselineRows = [], [selection] = [], snapshotRows = [], [added] = []] = recordsets(await request.query(AI_TOOL_BASELINE_SQL));
+  const { rows, truncated } = capped(snapshotRows, maxRows);
+  return {
+    projectFull: Boolean(selection?.ProjectFull),
+    selectedBaselineId: selection?.SelectedBaselineId || null,
+    baselines: baselineRows,
+    snapshots: rows,
+    truncated,
+    addedSinceBaseline: Number(added?.AddedSinceBaseline || 0)
+  };
+}
+
+export async function readCalendar(executor, scope, { projectId = null, from, to }) {
+  const request = scoped(executor, scope, { projectId });
+  request.input('from', sql.Date, from);
+  request.input('to', sql.Date, to);
+  const [[calendar] = [], weekdayRows = [], holidayRows = []] = recordsets(await request.query(AI_TOOL_CALENDAR_SQL));
+  return {
+    projectVisible: Boolean(calendar?.ProjectVisible),
+    calendar: calendar?.CalendarId ? calendar : null,
+    workingDays: weekdayRows.map((row) => Number(row.Weekday)).filter((value) => Number.isInteger(value)),
+    holidays: holidayRows
+  };
+}
+
+export async function readOutlook(executor, scope, { taskIds = [], maxRows }) {
+  const request = scoped(executor, scope, { taskIds });
+  request.input('maxRows', sql.Int, maxRows + 1);
+  const [subscriptionRows = [], [counts] = []] = recordsets(await request.query(AI_TOOL_OUTLOOK_SQL));
+  const { rows, truncated } = capped(subscriptionRows, maxRows);
+  return {
+    subscriptions: rows,
+    truncated,
+    activeCount: Number(counts?.ActiveCount || 0),
+    notVisibleCount: Number(counts?.NotVisibleCount || 0)
+  };
+}

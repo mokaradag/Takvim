@@ -163,7 +163,7 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
-2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql`, `database/MR_Upgrade_0014_Task_Creator_Index.sql`, `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql`, `database/MR_Upgrade_0016_Ai_User_Credentials.sql` ve `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
+2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql`, `database/MR_Upgrade_0014_Task_Creator_Index.sql`, `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql`, `database/MR_Upgrade_0016_Ai_User_Credentials.sql`, `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` ve `database/MR_Upgrade_0018_Ai_Message_Evidence.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
 5. Outlook teslimatı, elle/otomatik hatırlatma veya atama e-postası (**Sorumlulara e-posta bildirimi gönder**) kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
@@ -311,6 +311,23 @@ telemetriye sızmadığı da kabul kapsamında doğrulandı. Kullanıcı kabulü
 yanıtların hızlı, arayüzün temiz ve kararlı çalıştığı gözlendi. Aşama 2 bu
 kabul ile dondurulmuş temel kabul edilir; Aşama 3 çalışmaları bu tabanın üzerine
 eklemeli ilerlemelidir.
+
+### Rota AI: kanıta dayalı Rota verisi (Aşama 3)
+
+`MERGEN_ROTA_AI_TOOLS_ENABLED=true` (varsayılan `false`) iken Rota AI görevler,
+projeler, iş dağılım ağacı, iş yükü, hareketler, talepler, bildirimler, baz plan,
+bağımlılıklar, tekrar serileri, takvim, Outlook durumu ve plan veri kalitesi
+hakkındaki soruları sunucunun **19 salt okunur alan aracıyla**, kullanıcının
+kendi yetkisi içinde yanıtlar. Genel bir SQL aracı yoktur; model SQL üretemez,
+kimlik ya da yetki bilgisi veremez. Rota verisine dayanan her ifade `【R1】`
+biçiminde kanıta atıf yapar ve sunucu atıfları belirlenimci olarak doğrular;
+doğrulanamayan yanıt yerine sabit güvenli ileti gösterilir. Yanıtın altında
+"N Rota kaynağı · Veri zamanı" paneli bulunur; atıf yapılan kanıtlar yanıtla
+birlikte kaydedilir (`MR_AiMessageEvidence`, göç `0018`). Kısmi yetkide sayılar
+yalnızca görülebilen kayıtları kapsar ve yanıt bunu belirtir. Özellik kapalıyken
+ya da 0018 uygulanmamışken Rota AI Aşama 2 gibi genel sohbetle çalışır. Araç
+kataloğu, yetki, kanıt sözleşmesi, sınırlar, belirlenimci tanımlar, dağıtım
+sırası ve elle kabul listesi: `docs/AI-DOMAIN-TOOLS.md`.
 
 ## Kurum dışı görev atama ve Atama Koordinasyonu
 

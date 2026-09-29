@@ -43,6 +43,15 @@ const MAX_MESSAGES = 50;
 const MAX_MESSAGE_CHARS = 32000;
 const MESSAGE_ROLES = new Set(['system', 'user', 'assistant']);
 /**
+ * Araç oturumunun iletileri: geçmiş + yeni soru + araç turlarının çağrıları ve
+ * sonuçları. Sağlayıcı her çağrı kimliği için bir sonuç beklediğinden, sınır en
+ * kötü durumu (dört araç turu × tek yanıtta 16 çağrı) karşılar.
+ */
+const MAX_TOOL_SESSION_MESSAGES = 96;
+const MAX_TOOL_CALLS_PER_MESSAGE = 16;
+const TOOL_MESSAGE_ROLES = new Set(['system', 'user', 'assistant', 'tool']);
+const TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,160}$/;
+/**
  * Ne çağıranın ne de profilin çıktı sınırı verdiği sohbette kullanılan sınır.
  * İstek her zaman bir `max_tokens` taşır: sağlayıcının kendi (bağlamın
  * tamamına varabilen) varsayılanı genel üst sınırı aşamaz.
@@ -104,6 +113,37 @@ function requireMessages(messages) {
       && typeof message.content === 'string' && message.content.length <= MAX_MESSAGE_CHARS);
   if (!valid) throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'MESSAGES_INVALID' } });
   return messages.map(({ role, content }) => ({ role, content }));
+}
+
+/**
+ * Araç oturumunun iletileri: sağlayıcıdan bağımsız biçim doğrulanır ve yalnızca
+ * tanınan alanlar sağlayıcıya geçer. Araç sonucu (`role: tool`) bir önceki
+ * asistan iletisinin çağrı kimliğine bağlıdır.
+ */
+function requireToolMessages(messages) {
+  const valid = Array.isArray(messages) && messages.length > 0 && messages.length <= MAX_TOOL_SESSION_MESSAGES;
+  if (!valid) throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'MESSAGES_INVALID' } });
+  return messages.map((message) => {
+    const role = message?.role;
+    const content = message?.content ?? '';
+    if (!TOOL_MESSAGE_ROLES.has(role) || typeof content !== 'string' || content.length > MAX_MESSAGE_CHARS) {
+      throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'MESSAGES_INVALID' } });
+    }
+    if (role === 'tool') {
+      if (!TOOL_CALL_ID.test(String(message.toolCallId ?? ''))) {
+        throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'MESSAGES_INVALID' } });
+      }
+      return { role, content, toolCallId: message.toolCallId };
+    }
+    if (role === 'assistant' && Array.isArray(message.toolCalls) && message.toolCalls.length) {
+      if (message.toolCalls.length > MAX_TOOL_CALLS_PER_MESSAGE || !message.toolCalls.every((call) => TOOL_CALL_ID.test(String(call?.id ?? ''))
+        && typeof call.name === 'string' && typeof call.arguments === 'string' && call.arguments.length <= MAX_MESSAGE_CHARS)) {
+        throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'MESSAGES_INVALID' } });
+      }
+      return { role, content, toolCalls: message.toolCalls.map(({ id, name, arguments: args }) => ({ id, name, arguments: args })) };
+    }
+    return { role, content };
+  });
 }
 
 /**
@@ -591,6 +631,172 @@ export function createAiGateway({
   }
 
   /**
+   * Rota verisi araçlarını kullanan tur için OTURUM.
+   *
+   * `streamChat` ile aynı sıra ve güvenceler geçerlidir: güvenilir Sicil →
+   * rehber üyeliği → yapılandırma → profil (sohbet + araç yeteneği) → kapasite
+   * kirası → süre sınırı → kimlik bilgisi. Kira, süre sınırı ve kimlik bilgisi
+   * TÜM tur boyunca (model turları ve aradaki salt okunur araç yürütmesi) tek
+   * kez alınır ve `run` hangi yolla biterse bitsin tam bir kez bırakılır: tur
+   * ortasında yeniden kuyruğa girilmez.
+   *
+   * `run(session)` turu yönetir; `session.round(...)` tek bir sağlayıcı
+   * çağrısıdır ve her çağrıdan önce açık bir SQL işlemi OLMADIĞI yeniden
+   * doğrulanır (araç SQL'i model beklenirken tutulamaz). Sağlayıcının tel
+   * biçimi, araç çağrısı parçaları ve kimliği bu katmanın dışına çıkmaz; tur
+   * yalnızca birleştirilmiş çağrıları (`{ id, name, arguments, oversize }`) görür.
+   */
+  async function runToolSession({ profile, signal = null, run }) {
+    const startedAt = now();
+    const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
+    const progress = { providerStartedAt: null, recorded: true, rounds: 0 };
+    const providerScope = new AbortController();
+    let lease = null;
+    let deadline = null;
+    let unlink = null;
+    try {
+      assertOutsideSqlTransaction();
+      const sicil = await trustedSicil(signal);
+      const config = requireAiAvailable(loadConfig());
+      const route = requireRoute(await untilCancelled(() => loadRegistry(config), signal), profile, AI_CAPABILITIES.CHAT);
+      if (!route.capabilities.includes(AI_CAPABILITIES.TOOLS)) {
+        throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CAPABILITY_MISMATCH', profile } });
+      }
+      context.model = route.model;
+      const outputLimit = outputTokenLimit(null, route);
+      lease = await getAdmission(config).acquire({
+        userKey: sicil,
+        modelKey: route.model,
+        modelLimit: route.maxConcurrency,
+        signal,
+        timeoutMs: config.queueTimeoutMs
+      });
+      context.queueWaitMs = lease.queueWaitMs;
+      deadline = createAiDeadline({ timeoutMs: route.timeoutMs ?? config.requestTimeoutMs, parentSignal: signal, now });
+      unlink = linkAbort(deadline.signal, providerScope);
+      const credential = await raceWithAbort(
+        () => resolveCredential({ sicil, config, signal: deadline.signal }),
+        deadline.signal
+      );
+      context.source = credential.source;
+      const healthFailure = healthFailureFor(credential.source);
+
+      const session = Object.freeze({
+        sicil,
+        signal: deadline.signal,
+        remainingMs: () => deadline.remainingMs(),
+        async round({ messages, tools = [], toolChoice = 'auto', onEvent = null }) {
+          // Araç SQL'i ya da kalıcılık işlemi model beklenirken açık kalamaz.
+          assertOutsideSqlTransaction();
+          if (deadline.failure()) throw deadline.failure();
+          const safeMessages = requireToolMessages(messages);
+          const roundScope = new AbortController();
+          const unlinkRound = linkAbort(providerScope.signal, roundScope);
+          progress.rounds += 1;
+          try {
+            const { opened, startedAt: providerStartedAt } = await connectStream({
+              deadline,
+              context,
+              source: credential.source,
+              healthFailure,
+              invoke: () => getProvider().streamToolCompletion({
+                baseUrl: config.baseUrl,
+                apiKey: credential.apiKey,
+                model: route.model,
+                messages: safeMessages,
+                tools,
+                toolChoice,
+                maxOutputTokens: outputLimit,
+                signal: roundScope.signal
+              })
+            });
+            progress.providerStartedAt = providerStartedAt;
+            progress.recorded = false;
+            notify(onEvent, { type: 'generating' });
+            const chunks = [];
+            let final = null;
+            let thinking = false;
+            const iterator = opened.events[Symbol.asyncIterator]();
+            try {
+              for (;;) {
+                const step = await raceWithAbort(() => iterator.next(), deadline.signal);
+                if (step.done) break;
+                const event = step.value;
+                if (event.type === 'text') {
+                  chunks.push(event.text);
+                  if (onEvent) await raceWithAbort(() => onEvent({ type: 'text', text: event.text }), deadline.signal);
+                } else if (event.type === 'reasoning' && !thinking) {
+                  thinking = true;
+                  notify(onEvent, { type: 'thinking' });
+                } else if (event.type === 'tool_call_started') {
+                  notify(onEvent, { type: 'tool_call_started' });
+                } else if (event.type === 'done') {
+                  final = event;
+                  break;
+                }
+              }
+            } finally {
+              iterator.return?.()?.catch?.(() => {});
+            }
+            if (!final && deadline.failure()) throw deadline.failure();
+            if (!final) throw streamInterrupted('STREAM_TRUNCATED');
+            const text = chunks.join('').trim();
+            const toolCalls = Array.isArray(final.toolCalls) ? final.toolCalls : [];
+            if (!text && !toolCalls.length) {
+              throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
+                details: { reason: 'EMPTY_COMPLETION', finishReason: final.finishReason ?? null }
+              });
+            }
+            recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - providerStartedAt, source: credential.source });
+            progress.recorded = true;
+            return { text, toolCalls, finishReason: final.finishReason ?? null, model: final.model ?? null, usage: final.usage ?? null };
+          } finally {
+            unlinkRound();
+            roundScope.abort();
+          }
+        }
+      });
+
+      const result = await run(session);
+      if (deadline.failure()) throw deadline.failure();
+      const durationMs = now() - startedAt;
+      recordAiRequest({ ...context, durationMs });
+      recordAiStream({ outcome: streamOutcome(null, false) });
+      return result;
+    } catch (error) {
+      const failure = annotateCredentialFailure(deadline?.failure() || toAiFailure(error), context.source);
+      context.source ??= failureSource(failure);
+      if (failure.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT && context.queueWaitMs == null) {
+        context.queueWaitMs = failure.details?.queueWaitMs ?? null;
+      }
+      if (progress.providerStartedAt != null && !progress.recorded) {
+        recordProviderCall({
+          operation: 'ai.provider.stream',
+          latencyMs: now() - progress.providerStartedAt,
+          code: failure.code,
+          healthFailure: healthFailureFor(context.source)(failure),
+          source: context.source
+        });
+      }
+      recordAiRequest({
+        ...context,
+        code: failure.code,
+        error: failure,
+        serviceFailure: isServiceFailure(failure),
+        details: failure.details,
+        durationMs: now() - startedAt
+      });
+      recordAiStream({ outcome: streamOutcome(failure, false) });
+      throw failure;
+    } finally {
+      unlink?.();
+      providerScope.abort();
+      deadline?.dispose();
+      lease?.release();
+    }
+  }
+
+  /**
    * Kişisel anahtarı üretim yapmayan hafif bir çağrıyla sınar.
    *
    * Yalnızca KİŞİSEL anahtar denenir; kurumsal anahtara hiç dokunulmaz.
@@ -692,5 +898,5 @@ export function createAiGateway({
     }
   }
 
-  return { completeChat, streamChat, validatePersonalCredential };
+  return { completeChat, streamChat, runToolSession, validatePersonalCredential };
 }

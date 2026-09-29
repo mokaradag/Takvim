@@ -247,3 +247,103 @@ export const AI_CONVERSATION_APPEND_ANSWER_SQL = `${KNOWN_SICIL}
   JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
   WHERE m.ReplyToMessageId = @replyToMessageId AND m.Role = 'assistant'
     AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;`;
+
+const EVIDENCE_READY = `
+  DECLARE @evidenceReady bit = CASE WHEN OBJECT_ID(N'dbo.MR_AiMessageEvidence', N'U') IS NOT NULL
+    AND EXISTS (SELECT 1 FROM dbo.MR_SchemaMigrations WHERE MigrationId = N'0018_ai_message_evidence')
+  THEN 1 ELSE 0 END;`;
+
+/**
+ * Konuşmadaki yanıtların kanıt özetleri (0018). 0018 uygulanmamışsa satır
+ * okunmaz (`EvidenceReady = 0`); kanıt tablosuna yalnızca Sicil'e ait konuşma
+ * ve iletisi üzerinden ulaşılır. `@messageId` verilirse yalnızca o yanıt.
+ */
+export const AI_CONVERSATION_EVIDENCE_SQL = `${KNOWN_SICIL}${EVIDENCE_READY}
+  SELECT @knownSicil AS KnownSicil, @evidenceReady AS EvidenceReady;
+  IF @knownSicil = 1 AND @evidenceReady = 1
+    SELECT TOP (@maxEvidence) e.MessageId, e.Ordinal, e.SummaryJson
+    FROM dbo.MR_AiMessageEvidence e
+    JOIN dbo.MR_AiConversationMessages m ON m.MessageId = e.MessageId
+    JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+    WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil
+      AND (@messageId IS NULL OR e.MessageId = @messageId)
+    ORDER BY m.Sequence, e.Ordinal;`;
+
+/**
+ * Kanıta dayalı yanıtı ve atıf yaptığı kanıtları AYNI kısa işlemde yazar
+ * (model çağrısından SONRA). Yanıt satırı `AI_CONVERSATION_APPEND_ANSWER_SQL`
+ * ile aynı koşullarla eklenir; kanıtlar yalnızca yanıt BU çağrıda eklendiyse
+ * yazılır (`@evidence` JSON dizisi, en fazla 16 satır, 0018 kısıtlarıyla).
+ * Tura daha önce yazılmış yanıt varsa o yanıt ve kendi kanıtları döner.
+ */
+export const AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL = `${KNOWN_SICIL}
+  DECLARE @persisted bit = 0;
+  DECLARE @inserted bit = 0;
+  DECLARE @sequence int = NULL;
+  IF @knownSicil = 1 AND EXISTS (
+      SELECT 1 FROM dbo.MR_AiConversations c WITH (UPDLOCK, HOLDLOCK)
+      WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil
+    )
+    AND EXISTS (
+      SELECT 1 FROM dbo.MR_AiConversationMessages m
+      JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+      WHERE m.MessageId = @replyToMessageId AND m.ConversationId = @conversationId
+        AND c.OwnerSicil = @sicil AND m.Role = 'user'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM dbo.MR_AiConversationMessages m
+      WHERE m.ReplyToMessageId = @replyToMessageId
+    )
+  BEGIN
+    SELECT @sequence = ISNULL(MAX(m.Sequence), 0) + 1
+    FROM dbo.MR_AiConversationMessages m
+    JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+    WHERE m.ConversationId = @conversationId AND c.OwnerSicil = @sicil;
+    INSERT dbo.MR_AiConversationMessages(MessageId, ConversationId, Sequence, Role, Content, ReplyToMessageId, Mode, FinishReason, ContextTrimmed, ContextOmittedMessages)
+    VALUES (@messageId, @conversationId, @sequence, 'assistant', @content, @replyToMessageId, @mode, @finishReason, @contextTrimmed, @contextOmittedMessages);
+    INSERT dbo.MR_AiMessageEvidence(MessageId, Ordinal, ToolName, EvidenceType, Label, EntityType, EntityId,
+      GeneratedAt, IsComplete, IsTruncated, SummaryJson, EvidenceJson)
+    SELECT TOP (16) @messageId, e.Ordinal, e.ToolName, e.EvidenceType, e.Label, e.EntityType, e.EntityId,
+      e.GeneratedAt, e.IsComplete, e.IsTruncated, e.SummaryJson, e.EvidenceJson
+    FROM OPENJSON(@evidence) WITH (
+      Ordinal tinyint '$.ordinal',
+      ToolName varchar(64) '$.toolName',
+      EvidenceType varchar(40) '$.evidenceType',
+      Label nvarchar(200) '$.label',
+      EntityType varchar(20) '$.entityType',
+      EntityId nvarchar(64) '$.entityId',
+      GeneratedAt datetime2(3) '$.generatedAt',
+      IsComplete bit '$.isComplete',
+      IsTruncated bit '$.isTruncated',
+      SummaryJson nvarchar(4000) '$.summaryJson',
+      EvidenceJson nvarchar(max) '$.evidenceJson'
+    ) e
+    ORDER BY e.Ordinal;
+    UPDATE c SET c.MessageCount = c.MessageCount + 1, c.UpdatedAt = SYSUTCDATETIME()
+    FROM dbo.MR_AiConversations c
+    WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;
+    SET @persisted = 1;
+    SET @inserted = 1;
+  END
+  IF @knownSicil = 1 AND EXISTS (
+    SELECT 1 FROM dbo.MR_AiConversationMessages m
+    JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+    WHERE m.Role = 'assistant' AND m.ReplyToMessageId = @replyToMessageId
+      AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil
+  ) SET @persisted = 1;
+  SELECT @knownSicil AS KnownSicil, @persisted AS AnswerPersisted, @inserted AS AnswerInserted;
+  SELECT ${CONVERSATION_COLUMNS}
+  FROM dbo.MR_AiConversations c
+  WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;
+  SELECT ${MESSAGE_COLUMNS}
+  FROM dbo.MR_AiConversationMessages m
+  JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+  WHERE m.ReplyToMessageId = @replyToMessageId AND m.Role = 'assistant'
+    AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1;
+  SELECT e.MessageId, e.Ordinal, e.SummaryJson
+  FROM dbo.MR_AiMessageEvidence e
+  JOIN dbo.MR_AiConversationMessages m ON m.MessageId = e.MessageId
+  JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+  WHERE m.ReplyToMessageId = @replyToMessageId AND m.Role = 'assistant'
+    AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1
+  ORDER BY e.Ordinal;`;

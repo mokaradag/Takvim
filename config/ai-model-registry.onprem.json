@@ -208,6 +208,11 @@
       "model": "Qwen3-Next-80B-A3B-Instruct",
       "maxOutputTokens": 1024
     },
+    "chat.tools.reasoning": {
+      "model": "DeepSeek-V4-Flash-0731",
+      "maxOutputTokens": 2048,
+      "timeoutMs": 180000
+    },
     "vision": {
       "model": "Qwen3-VL-8B-Instruct",
       "maxOutputTokens": 1024

@@ -266,6 +266,15 @@ function tokenizeInline(text, { links, budget }) {
         continue;
       }
     }
+    // Kanıt atfı (`【R1】`): yalnızca biçimi tam uyan işaret kaynak düğümü olur.
+    if (char === '【') {
+      const match = CITATION_TOKEN.exec(text.slice(index, index + 6));
+      if (match) {
+        tokens.push({ type: 'cite', id: `R${match[1]}` });
+        index += match[0].length;
+        continue;
+      }
+    }
     if (char === '*' || char === '_' || char === '~') {
       const length = runLength(text, index, char);
       // Yalnızca tam iki `~` üstü çizili yazıdır; "~5 gün" düz metin kalır.
@@ -280,12 +289,14 @@ function tokenizeInline(text, { links, budget }) {
       continue;
     }
     let next = index + 1;
-    while (next < text.length && !'\\\n`[!<*_~hHmM'.includes(text[next])) next += 1;
+    while (next < text.length && !'\\\n`[!<*_~hHmM【'.includes(text[next])) next += 1;
     pushText(tokens, text.slice(index, next));
     index = next;
   }
   return tokens;
 }
+
+const CITATION_TOKEN = /^【R([1-9]\d?)】/;
 
 function tokenToNode(token) {
   if (token.type === 'delim') return textNode(token.char.repeat(token.count));
@@ -613,6 +624,7 @@ export function inlineText(nodes = []) {
   return nodes.map((node) => {
     if (node.type === 'text' || node.type === 'code') return node.value;
     if (node.type === 'break') return '\n';
+    if (node.type === 'cite') return `[${node.id}]`;
     return inlineText(node.children);
   }).join('');
 }
@@ -648,7 +660,8 @@ export function createAssistantMarkdownParser() {
  */
 export function assistantMarkdownText(text) {
   const inline = (nodes) => nodes.map((node) => node.type === 'break' ? '\n'
-    : node.children ? `${node.image ? 'Görsel: ' : ''}${inline(node.children)}` : node.value || '').join('');
+    : node.type === 'cite' ? `[${node.id}]`
+      : node.children ? `${node.image ? 'Görsel: ' : ''}${inline(node.children)}` : node.value || '').join('');
   const listItem = (marker, content) => content.split('\n')
     .map((line, index) => (index === 0 ? `${marker} ${line}` : line ? `${' '.repeat(marker.length + 1)}${line}` : line))
     .join('\n');

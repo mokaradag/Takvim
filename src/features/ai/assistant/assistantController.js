@@ -4,6 +4,7 @@ import {
   ASSISTANT_LIMITS,
   ASSISTANT_MODES,
   ASSISTANT_STREAM_EVENTS,
+  ASSISTANT_STREAM_PHASES,
   normalizeAssistantMessage
 } from '../../../domain/ai/assistantContract.js';
 import * as assistantApi from './assistantClient.js';
@@ -141,6 +142,7 @@ export function turnsFromMessages(messages = []) {
           mode: message.mode || null,
           finishReason: message.finishReason || null,
           createdAt: message.createdAt,
+          evidence: Array.isArray(message.evidence) ? message.evidence : null,
           error: null
         };
         turn.contextTrimmed = Boolean(message.contextTrimmed);
@@ -256,12 +258,12 @@ export function createAssistantController({
     }, flushIntervalMs);
   }
 
-  function setPhase(run, phase) {
+  function setPhase(run, phase, topic = null) {
     run.phase = phase;
     update((current) => ({
       ...current,
       running: current.running[run.key]?.token === run.token
-        ? { ...current.running, [run.key]: { ...current.running[run.key], phase } }
+        ? { ...current.running, [run.key]: { ...current.running[run.key], phase, topic } }
         : current.running,
       active: patchTurn(current, run, (turn) => ({ ...turn, answer: { ...turn.answer, status: phase === 'streaming' ? 'streaming' : 'waiting' } }))
     }));
@@ -284,6 +286,17 @@ export function createAssistantController({
   }
 
   function onRunEvent(run, event) {
+    if (alive(run) && event.type === ASSISTANT_STREAM_EVENTS.REVISE) {
+      // Gösterilen taslak geçersiz (araç çağrısına dönüştü ya da doğrulanamadı):
+      // metin kaldırılır, sonraki evre ve metin yeni yanıtın başlangıcıdır.
+      run.text = '';
+      if (run.stopping) return;
+      run.cancelFlush?.();
+      run.cancelFlush = null;
+      setPhase(run, ASSISTANT_STREAM_PHASES.GENERATING);
+      flushText(run);
+      return;
+    }
     if (!alive(run) || (run.stopping && event.type !== ASSISTANT_STREAM_EVENTS.ACCEPTED && event.type !== ASSISTANT_STREAM_EVENTS.DELTA)) return;
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
@@ -305,7 +318,7 @@ export function createAssistantController({
       }));
       if (!run.stopping) setPhase(run, 'accepted');
     } else if (event.type === ASSISTANT_STREAM_EVENTS.STATUS) {
-      if (run.phase !== 'streaming') setPhase(run, event.data.phase);
+      if (run.phase !== 'streaming') setPhase(run, event.data.phase, event.data.topic || null);
     } else if (event.type === ASSISTANT_STREAM_EVENTS.DELTA) {
       run.text += event.data.text;
       if (run.stopping) return;
@@ -337,11 +350,13 @@ export function createAssistantController({
           user: { ...turn.user, pending: false },
           answer: {
             id: assistantMessage.id,
-            content: result.done.reconciled === true ? assistantMessage.content : text.trim(),
+            // Sunucunun kayıtlı metni (uzlaştırma ya da kanıta dayalı yanıt) esastır.
+            content: typeof assistantMessage.content === 'string' ? assistantMessage.content : text.trim(),
             status: 'complete',
             mode: assistantMessage.mode || run.mode,
             finishReason: assistantMessage.finishReason || null,
             createdAt: assistantMessage.createdAt,
+            evidence: Array.isArray(assistantMessage.evidence) ? assistantMessage.evidence : null,
             error: null
           }
         })),

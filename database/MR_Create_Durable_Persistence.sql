@@ -535,6 +535,32 @@ BEGIN TRY
         ON dbo.MR_AiConversationMessages(ReplyToMessageId)
         WHERE ReplyToMessageId IS NOT NULL;
 
+    /* Rota AI yanıt kanıtları: atıf yapılan GÜVENLİ araç sonucu görünümü; ileti
+       silinince birlikte silinir (bkz. docs/AI-DOMAIN-TOOLS.md §13). */
+    CREATE TABLE dbo.MR_AiMessageEvidence (
+        MessageId uniqueidentifier NOT NULL,
+        Ordinal tinyint NOT NULL,
+        ToolName varchar(64) NOT NULL,
+        EvidenceType varchar(40) NOT NULL,
+        Label nvarchar(200) NOT NULL,
+        EntityType varchar(20) NULL,
+        EntityId nvarchar(64) NULL,
+        GeneratedAt datetime2(3) NOT NULL,
+        IsComplete bit NOT NULL,
+        IsTruncated bit NOT NULL,
+        SummaryJson nvarchar(4000) NOT NULL,
+        EvidenceJson nvarchar(max) NOT NULL,
+        CreatedAt datetime2(3) NOT NULL
+            CONSTRAINT DF_MR_AiMessageEvidence_CreatedAt DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_MR_AiMessageEvidence PRIMARY KEY (MessageId, Ordinal),
+        CONSTRAINT FK_MR_AiMessageEvidence_Message FOREIGN KEY (MessageId)
+            REFERENCES dbo.MR_AiConversationMessages(MessageId) ON DELETE CASCADE,
+        CONSTRAINT CK_MR_AiMessageEvidence_Ordinal CHECK (Ordinal BETWEEN 1 AND 16),
+        CONSTRAINT CK_MR_AiMessageEvidence_ToolName CHECK (ToolName LIKE 'rota[_]%'),
+        CONSTRAINT CK_MR_AiMessageEvidence_SummaryJson CHECK (ISJSON(SummaryJson) = 1),
+        CONSTRAINT CK_MR_AiMessageEvidence_EvidenceJson CHECK (ISJSON(EvidenceJson) = 1 AND DATALENGTH(EvidenceJson) <= 65536)
+    );
+
     CREATE TABLE dbo.MR_TaskDependencies (
         TaskDependencyId uniqueidentifier NOT NULL CONSTRAINT DF_MR_TaskDependencies_Id DEFAULT NEWSEQUENTIALID(),
         ProjectId uniqueidentifier NOT NULL,
@@ -1015,7 +1041,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0014_task_creator_index', N'Görev oluşturan Sicil dizini: yetki ve anlık görüntü sorgularında tam tablo taramasını kaldırır'),
            (N'0015_assignment_coordination_and_presence', N'Kurum dışı atama koordinasyonu, görev bildirimleri, dayanıklı posta kuyruğu ve kullanıcı varlığı'),
            (N'0016_ai_user_credentials', N'Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM, düz metin saklanmaz)'),
-           (N'0017_ai_assistant_conversations', N'Rota AI konuşma geçmişi: Sicil sahipli konuşmalar ve sıralı iletiler (akıl yürütme ve ham akış saklanmaz)');
+           (N'0017_ai_assistant_conversations', N'Rota AI konuşma geçmişi: Sicil sahipli konuşmalar ve sıralı iletiler (akıl yürütme ve ham akış saklanmaz)'),
+           (N'0018_ai_message_evidence', N'Rota AI yanıt kanıtları: iletiye bağlı sınırlı ve güvenli araç sonucu görünümü (SQL, yetki ayrıntısı ve anahtar saklanmaz)');
 
     COMMIT TRANSACTION;
 END TRY

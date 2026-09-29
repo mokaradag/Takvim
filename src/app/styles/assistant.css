@@ -286,6 +286,53 @@
 .rota-assistant-icon-action:disabled { opacity: .5; cursor: not-allowed; }
 .rota-assistant-mode-badge { padding: 2px 8px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--text); font-size: 10.5px; font-weight: 700; }
 .rota-assistant-finish-note { color: var(--text-dim); font-size: 11px; }
+/* Rota kaynakları: yanıtın dayandığı kanıtlar (katlanabilir, içerik değil künye). */
+.rota-assistant-evidence { margin-top: 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-elev); font-size: 12px; }
+.rota-assistant-evidence > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+.rota-assistant-evidence > summary::-webkit-details-marker { display: none; }
+.rota-assistant-evidence > summary > span { color: var(--text); font-weight: 600; }
+.rota-assistant-evidence > summary > small { margin-left: auto; color: var(--text-dim); font-size: 11px; }
+.rota-assistant-evidence > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-md); }
+.rota-assistant-evidence-list { display: grid; gap: 8px; margin: 0; padding: 4px 10px 10px; list-style: none; }
+.rota-assistant-evidence-item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; }
+.rota-assistant-evidence-id {
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.rota-assistant-evidence-body { display: grid; gap: 2px; min-width: 0; }
+.rota-assistant-evidence-body > strong { overflow-wrap: anywhere; color: var(--text); font-weight: 600; }
+.rota-assistant-evidence-body > small { color: var(--text-dim); font-size: 11px; }
+.rota-assistant-evidence-note { color: var(--text-muted); }
+.rota-assistant-evidence-highlights { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 0; }
+.rota-assistant-evidence-highlights > div { display: inline-flex; gap: 4px; }
+.rota-assistant-evidence-highlights dt { color: var(--text-dim); }
+.rota-assistant-evidence-highlights dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+/* Yanıt içindeki kanıt atfı (R1) — kaynak listesindeki aynı kimlik. */
+.assistant-md-cite {
+  margin-left: 2px;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: .72em;
+  font-weight: 700;
+  vertical-align: super;
+  line-height: 1;
+}
 .rota-assistant-jump {
   position: absolute;
   bottom: 10px;
@@ -488,6 +535,9 @@ body.high-contrast .rota-assistant-input,
 body.high-contrast .assistant-md-code,
 body.high-contrast .assistant-md-table,
 body.high-contrast .assistant-md-inline-code { border-color: var(--border-strong); }
+body.high-contrast .rota-assistant-evidence { border-color: var(--border-strong); }
+body.high-contrast .assistant-md-cite,
+body.high-contrast .rota-assistant-evidence-id { outline: 1px solid var(--border-strong); }
 body.high-contrast .rota-assistant-history-meta,
 body.high-contrast .rota-assistant-context-note,
 body.high-contrast .rota-assistant-partial-note,

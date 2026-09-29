@@ -499,6 +499,17 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   `chat.general`, `chat.reasoning`) gösterir. İşlem ölçümleri `ai.provider.stream`, `ai.stream.first_token`,
   `ai.stream.provider_start` ve `ai.api.assistant.*` adlarıyla yazılır; olağan
   API gecikme özetine karışmaz. Hiçbiri soru, yanıt ya da başlık taşımaz.
+- `MERGEN_ROTA_AI_TOOLS_ENABLED=true` iken aynı ayrıntı **Rota verisi
+  araçlarını** da gösterir: özelliğin ve kanıt tablosunun (0018) durumu, araç
+  çağrı sayısı ve P95 gecikmesi, araç hata sınıfları (ör. `NOT_FOUND 2 ·
+  TIMEOUT 1`), kanıtlı / genel / doğrulanamayan / düzeltilen yanıt sayıları ve
+  araç SQL kapısının doluluğu. Bileşen şu durumlarda uyarır: araç kayıt defteri
+  geçersiz, 0018 kurulmamış (Rota AI genel sohbete düşer), araç yetenekli
+  profiller (`chat.tools`, `chat.tools.reasoning`) kullanılamıyor ya da son
+  beş dakikada bir araç hizmet hatası (`TIMEOUT`, `DATABASE_UNAVAILABLE`,
+  `INTERNAL`) oluştu. Araç ölçümleri `ai.tool.call` adıyla yazılır; yalnızca
+  araç adı, sonuç sınıfı, süre ve sonuç boyutu taşır — bağımsız değişken,
+  sonuç içeriği, soru, yanıt ya da SQL yazılmaz. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md`.
 
 **Aşama 2 gerçek TEST kabulü (29.09.2026):** Rota AI'nin gerçek `/bilge`
 yolu üzerinden akış, durdurma/yeniden deneme, profil dağılımı, konuşma
@@ -710,6 +721,25 @@ Yönetici konsolunda konuşma içeriği gösterilmez ve yöneticinin kullanıcı
 konuşmalarına erişen bir ucu yoktur. Geri alma betiği iki tabloyu da düşürür.
 Ayrıntı: `docs/AI-PLATFORM.md` §18.
 
+### 0018 · Rota AI kanıt kaydı
+
+`0017` uygulandıktan **sonra** çalıştırılır:
+
+```
+database/MR_Upgrade_0018_Ai_Message_Evidence.sql
+```
+
+| Tablo | İçerik | Anahtar / dizin |
+| --- | --- | --- |
+| `MR_AiMessageEvidence` | Kanıta dayalı yanıtın atıf yaptığı kanıtlar (`R1`, `R2` …): tarayıcıya giden güvenli künye ve modele verilen güvenli sonuç zarfı | PK `(MessageId, Ordinal)`; iletiye FK **ON DELETE CASCADE**; sıra 1–16; `ISJSON` kısıtları |
+
+Betik yinelenebilir ve veriye dokunmaz; SQL, anahtar, ham sağlayıcı akışı ya da
+düşünce zinciri saklanmaz. Kayıtlar yanıt iletisi ve konuşmayla birlikte silinir.
+Yönetici konsolu kanıt içeriği göstermez. Göç uygulanmadan
+`MERGEN_ROTA_AI_TOOLS_ENABLED=true` açılırsa Rota AI genel sohbetle çalışır ve
+yapay zekâ bileşeni 0018'in eksik olduğunu uyarır. Geri alma betiği tabloyu
+konuşma tablolarından önce düşürür. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md` §13.
+
 ---
 
 ## 15. Yapılandırma
@@ -793,6 +823,7 @@ Yönetim konsolu üretimde yeni bir yük kaynağı olmamalıdır:
 - `docs/DATABASE-SCHEMA.md` — tablo ve dizin künyesi
 - `docs/DURABLE-PERSISTENCE.md` — kalıcılaştırma sınırları
 - `docs/AI-PLATFORM.md` — yapay zekâ altyapısı, sağlık bileşeni ve bağlantı testi
+- `docs/AI-DOMAIN-TOOLS.md` — Rota AI alan araçları, kanıt kaydı (0018) ve araç gözlemi
 
 ### İnceleme sonrası doğruluk güvenceleri
 

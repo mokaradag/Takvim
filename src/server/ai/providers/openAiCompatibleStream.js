@@ -27,8 +27,16 @@ export const AI_STREAM_LIMITS = Object.freeze({
   /** Ham akışın toplam bayt sınırı. */
   maxStreamBytes: 8 * 1024 * 1024,
   /** Kullanıcıya dönen birikmiş yanıt metninin sınırı (karakter). */
-  maxTextChars: 64000
+  maxTextChars: 64000,
+  /** Tek yanıtta kabul edilen en fazla araç çağrısı (fazlası yanıtı geçersiz kılar). */
+  maxToolCalls: 16,
+  /** Araç adının en büyük uzunluğu. */
+  maxToolNameChars: 64,
+  /** Tek araç çağrısının bağımsız değişken metni; aşan çağrı "aşırı büyük" işaretlenir, metni saklanmaz. */
+  maxToolArgumentChars: 32 * 1024
 });
+
+const TOOL_CALL_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 const MAX_REPORTED_MODEL_LENGTH = 512;
 const THINK_OPEN = '<think>';
@@ -158,6 +166,84 @@ export function createLeadingThinkFilter() {
 }
 
 /**
+ * Araç çağrısı parçalarını birleştirir. OpenAI uyumlu akışta bir çağrının adı ve
+ * JSON bağımsız değişkeni birden çok olaya bölünebilir; aynı yanıtta birden çok
+ * çağrı `index` ile ayrılır. Parçalar yalnızca biriktirilir: bağımsız değişken
+ * burada ÇÖZÜLMEZ ve çağrı akış tamamlanmadan dışarı verilmez.
+ */
+function accumulateToolCalls(fragments, state, limits) {
+  if (!Array.isArray(fragments)) throw invalid('STREAM_EVENT_MALFORMED');
+  let started = 0;
+  for (const fragment of fragments) {
+    if (!isPlainObject(fragment)) throw invalid('STREAM_EVENT_MALFORMED');
+    if (fragment.type != null && fragment.type !== 'function') throw invalid('STREAM_TOOL_CALL_MALFORMED');
+    const id = fragment.id == null || fragment.id === '' ? null : fragment.id;
+    if (id != null && (typeof id !== 'string' || !TOOL_CALL_ID_PATTERN.test(id))) throw invalid('STREAM_TOOL_CALL_MALFORMED');
+    let slot;
+    if (Number.isSafeInteger(fragment.index) && fragment.index >= 0) {
+      slot = state.toolCalls.find((entry) => entry.index === fragment.index);
+    } else if (fragment.index != null) {
+      throw invalid('STREAM_TOOL_CALL_MALFORMED');
+    } else {
+      // Dizin bildirmeyen ağ geçidi: kimlik değişmedikçe son çağrının devamıdır.
+      const last = state.toolCalls[state.toolCalls.length - 1];
+      slot = last && (id == null || last.id === id) ? last : null;
+    }
+    if (!slot) {
+      if (state.toolCalls.length >= limits.maxToolCalls) throw invalid('STREAM_TOOL_CALLS_TOO_MANY');
+      slot = {
+        index: Number.isSafeInteger(fragment.index) ? fragment.index : state.toolCalls.length,
+        id: null,
+        name: '',
+        arguments: '',
+        oversize: false
+      };
+      state.toolCalls.push(slot);
+      started += 1;
+    }
+    if (id != null) {
+      if (slot.id != null && slot.id !== id) throw invalid('STREAM_TOOL_CALL_MALFORMED');
+      slot.id = id;
+    }
+    const fn = fragment.function;
+    if (fn == null) continue;
+    if (!isPlainObject(fn)) throw invalid('STREAM_TOOL_CALL_MALFORMED');
+    if (fn.name != null) {
+      if (typeof fn.name !== 'string') throw invalid('STREAM_TOOL_CALL_MALFORMED');
+      slot.name += fn.name;
+      if (slot.name.length > limits.maxToolNameChars) throw invalid('STREAM_TOOL_CALL_MALFORMED');
+    }
+    if (fn.arguments != null) {
+      if (typeof fn.arguments !== 'string') throw invalid('STREAM_TOOL_CALL_MALFORMED');
+      if (!slot.oversize) {
+        if (slot.arguments.length + fn.arguments.length > limits.maxToolArgumentChars) {
+          slot.oversize = true;
+          slot.arguments = '';
+        } else {
+          slot.arguments += fn.arguments;
+        }
+      }
+    }
+  }
+  return started;
+}
+
+/**
+ * Birleştirilmiş çağrılar: kimliği eksik olana kararlı bir kimlik verilir,
+ * yinelenen kimlik ayrıştırılır. Adı olmayan çağrı da döner (yürütücü onu
+ * tanınmayan araç olarak geri çevirir; model ona yanıt görmelidir).
+ */
+export function finalizeToolCalls(slots = []) {
+  const used = new Set();
+  return [...slots].sort((left, right) => left.index - right.index).map((slot, position) => {
+    let id = slot.id || `call_${position + 1}`;
+    while (used.has(id)) id = `${id}_${position + 1}`;
+    used.add(id);
+    return { id, name: slot.name.trim(), arguments: slot.arguments, oversize: slot.oversize };
+  });
+}
+
+/**
  * Tek bir akış olayının yükünü yorumlar. Tanınmayan alanlar zararsızdır ve yok
  * sayılır; beklenen alanların türü yanlışsa olay bozuktur.
  */
@@ -191,10 +277,14 @@ function interpretChunk(payload, state) {
   if (delta?.content != null && typeof delta.content !== 'string') throw invalid('STREAM_EVENT_MALFORMED');
   if (choice.finish_reason != null && typeof choice.finish_reason !== 'string') throw invalid('STREAM_EVENT_MALFORMED');
   const reasoning = [reasoningPresent(delta?.reasoning_content), reasoningPresent(delta?.reasoning)].some(Boolean);
+  const toolFragments = state.collectTools && delta?.tool_calls != null ? delta.tool_calls : null;
   // Bitiş nedeni bildirildikten sonra gelen yanıt metni kabul edilmez (yalnızca kullanım gibi kuyruk olayları).
-  if (state.finishReason && (delta?.content || reasoning)) throw invalid('CONTENT_AFTER_FINISH');
+  if (state.finishReason && (delta?.content || reasoning || (Array.isArray(toolFragments) && toolFragments.length))) {
+    throw invalid('CONTENT_AFTER_FINISH');
+  }
+  const started = toolFragments == null ? 0 : accumulateToolCalls(toolFragments, state, state.limits);
   if (choice.finish_reason && !state.finishReason) state.finishReason = choice.finish_reason.slice(0, 40);
-  return { content: delta?.content ?? null, reasoning };
+  return { content: delta?.content ?? null, reasoning, started };
 }
 
 /**
@@ -202,8 +292,13 @@ function interpretChunk(payload, state) {
  * `{ type: 'reasoning' }` ve en sonda tek `{ type: 'done', finishReason,
  * model, usage }`. `[DONE]` gelince okuma durur ve bağlantı bırakılır. Akış
  * `[DONE]` ya da bitiş nedeni olmadan biterse yanıt KESİLMİŞTİR.
+ *
+ * `toolCalls: true` araç çağrılarını da biriktirir: her yeni çağrının ilk
+ * parçasında içerik taşımayan `{ type: 'tool_call_started' }` olayı verilir,
+ * birleştirilmiş çağrılar yalnızca akış TAMAMLANDIĞINDA `done.toolCalls` içinde
+ * döner. Kesilen akışın yarım çağrısı hiçbir zaman dışarı verilmez.
  */
-export async function* readChatCompletionStream(body, { signal = null, limits = AI_STREAM_LIMITS } = {}) {
+export async function* readChatCompletionStream(body, { signal = null, limits = AI_STREAM_LIMITS, toolCalls = false } = {}) {
   const reader = body?.getReader?.();
   if (!reader) throw invalid('EMPTY_RESPONSE');
   // Bozuk UTF-8 sessizce U+FFFD'ye çevrilip yanıt olarak saklanmaz.
@@ -217,7 +312,10 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
   };
   const parser = createSseEventParser({ maxEventChars: limits.maxEventChars });
   const think = createLeadingThinkFilter();
-  const state = { model: null, usage: null, finishReason: null, bytes: 0, textChars: 0 };
+  const state = {
+    model: null, usage: null, finishReason: null, bytes: 0, textChars: 0,
+    collectTools: toolCalls === true, toolCalls: [], limits: { ...AI_STREAM_LIMITS, ...limits }
+  };
   let completed = false;
   let reasoningSent = false;
 
@@ -246,8 +344,9 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
       } catch {
         throw invalid('STREAM_EVENT_MALFORMED');
       }
-      const { content, reasoning } = interpretChunk(payload, state);
+      const { content, reasoning, started } = interpretChunk(payload, state);
       yield* emit(content == null ? '' : think.push(content), reasoning);
+      for (let index = 0; index < started; index += 1) yield { type: 'tool_call_started' };
     }
   }
 
@@ -285,7 +384,9 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
       if (!completed) throw streamInterrupted('STREAM_TRUNCATED');
     }
     yield* emit(think.end(), false);
-    yield { type: 'done', finishReason: state.finishReason, model: state.model, usage: state.usage };
+    yield state.collectTools
+      ? { type: 'done', finishReason: state.finishReason, model: state.model, usage: state.usage, toolCalls: finalizeToolCalls(state.toolCalls) }
+      : { type: 'done', finishReason: state.finishReason, model: state.model, usage: state.usage };
   } finally {
     // Erken bitişte (DONE, sınır aşımı, iptal) sağlayıcı bağlantısı bırakılır.
     reader.cancel().catch(() => {});
