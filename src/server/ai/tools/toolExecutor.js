@@ -222,6 +222,10 @@ export function createToolExecutor({
           state.cache.set(result.cacheKey, content);
         }
       }
+      if (repeated && state.resultBytes + byteLength(content) > limits.maxTotalResultBytes) {
+        code = TOOL_ERROR_CODES.LIMIT_EXCEEDED;
+        content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
+      }
       if (code) state.failures += 1;
       contents[index] = content;
       state.resultBytes += byteLength(content);

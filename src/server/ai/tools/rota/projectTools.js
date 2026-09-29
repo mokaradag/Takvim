@@ -151,7 +151,7 @@ const projectDetail = {
           dataDate: sqlDay(row.DataDate),
           tags,
           tagCount: detail.tags.length,
-          wbsNodeCount: Number(row.WbsNodeCount || 0),
+          wbsNodeCount: row.WbsNodeCount == null ? null : Number(row.WbsNodeCount),
           dependencyCount: row.DependencyCount == null ? null : Number(row.DependencyCount),
           baselineCount: row.BaselineCount == null ? null : Number(row.BaselineCount)
         },
@@ -207,17 +207,17 @@ const portfolioSummary = {
     const { scope } = await call.authorization();
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
     const rows = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd }));
-    const projects = rows
+    const filteredRows = rows
       .filter((row) => source === 'all' || (source === 'corporate') === (row.SourceType === 'CORPORATE'))
-      .map((row) => ({
-        projectId: canonicalActualId(row.ProjectId),
-        name: dataText(row.ProjectName, 160),
-        ...(row.ProjectCode ? { code: dataText(row.ProjectCode, 60) } : {}),
-        access: accessLevelOf(scopeAccess(row)),
-        completeTaskView: isCompleteTaskView(scopeAccess(row)),
-        tasks: taskTotals(row)
-      }))
-      .filter((project) => args.includeEmpty === true || project.tasks.total > 0);
+      .filter((row) => args.includeEmpty === true || taskTotals(row).total > 0);
+    const projects = filteredRows.map((row) => ({
+      projectId: canonicalActualId(row.ProjectId),
+      name: dataText(row.ProjectName, 160),
+      ...(row.ProjectCode ? { code: dataText(row.ProjectCode, 60) } : {}),
+      access: accessLevelOf(scopeAccess(row)),
+      completeTaskView: isCompleteTaskView(scopeAccess(row)),
+      tasks: taskTotals(row)
+    }));
     const compare = PORTFOLIO_SORTS[sort];
     projects.sort((left, right) => compare(left, right) || left.name.localeCompare(right.name, 'tr') || left.projectId.localeCompare(right.projectId));
     const totals = projects.reduce((sum, project) => ({
@@ -230,7 +230,7 @@ const portfolioSummary = {
       openWithoutTargetFinish: sum.openWithoutTargetFinish + project.tasks.openWithoutTargetFinish,
       projectsWithOverdue: sum.projectsWithOverdue + (project.tasks.overdue > 0 ? 1 : 0)
     }), { projects: 0, tasks: 0, open: 0, done: 0, overdue: 0, dueNext7Days: 0, openWithoutTargetFinish: 0, projectsWithOverdue: 0 });
-    const descriptor = describeTaskScope(rows.map(scopeAccess));
+    const descriptor = describeTaskScope(filteredRows.map(scopeAccess));
     const page = projects.slice(0, limit);
     return {
       data: {

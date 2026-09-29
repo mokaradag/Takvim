@@ -327,7 +327,9 @@ ${VISIBLE_TASKS}
     CASE WHEN v.AccessLevel = 'FULL' THEN (
       SELECT COUNT(*) FROM dbo.MR_Baselines b WHERE b.ProjectId = v.ProjectId
     ) ELSE NULL END AS BaselineCount,
-    (SELECT COUNT(*) FROM dbo.MR_WBS w WHERE w.ProjectId = v.ProjectId) AS WbsNodeCount
+    CASE WHEN v.AccessLevel = 'FULL' THEN (
+      SELECT COUNT(*) FROM dbo.MR_WBS w WHERE w.ProjectId = v.ProjectId
+    ) ELSE NULL END AS WbsNodeCount
   FROM #AiScopeProjects v
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
   LEFT JOIN dbo.MR_V_PeopleDirectory lead ON lead.Sicil = p.LeadSicil
@@ -457,18 +459,21 @@ ${SCOPE_PROJECTS}
     SELECT 1 FROM #AiScopeProjects v WHERE v.ProjectId = @projectId AND v.AccessLevel = 'FULL'
   ) THEN 1 ELSE 0 END;
 
-  SELECT TOP (10) b.BaselineId, b.Name, b.CreatedAt, b.IsPrimary,
-    (SELECT COUNT(*) FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = b.BaselineId) AS SnapshotCount
-  FROM dbo.MR_Baselines b
-  WHERE @projectFull = 1 AND b.ProjectId = @projectId
-  ORDER BY b.IsPrimary DESC, b.CreatedAt DESC, b.BaselineId;
-
   DECLARE @selectedBaseline uniqueidentifier = (
     SELECT TOP (1) b.BaselineId FROM dbo.MR_Baselines b
     WHERE @projectFull = 1 AND b.ProjectId = @projectId AND (@baselineId IS NULL OR b.BaselineId = @baselineId)
     ORDER BY b.IsPrimary DESC, b.CreatedAt DESC, b.BaselineId
   );
-  SELECT @projectFull AS ProjectFull, @selectedBaseline AS SelectedBaselineId;
+
+  SELECT TOP (10) b.BaselineId, b.Name, b.CreatedAt, b.IsPrimary,
+    (SELECT COUNT(*) FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = b.BaselineId) AS SnapshotCount
+  FROM dbo.MR_Baselines b
+  WHERE @projectFull = 1 AND b.ProjectId = @projectId
+  ORDER BY CASE WHEN b.BaselineId = @selectedBaseline THEN 0 ELSE 1 END,
+    b.IsPrimary DESC, b.CreatedAt DESC, b.BaselineId;
+
+  SELECT @projectFull AS ProjectFull, @selectedBaseline AS SelectedBaselineId,
+    (SELECT COUNT(*) FROM dbo.MR_Baselines b WHERE @projectFull = 1 AND b.ProjectId = @projectId) AS BaselineTotal;
 
   SELECT TOP (@maxRows) s.TaskId, s.PlannedStart AS BaselineStart, s.PlannedFinish AS BaselineFinish,
     s.PlannedDurationDays AS BaselineDuration,

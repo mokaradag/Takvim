@@ -43,6 +43,7 @@ export function createToolTurnContext({
     if (state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const pool = await raceWithAbort(() => getPool(), signal);
     return gate.run(sicil, signal, async (track) => {
+      if (state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
       const admittedAt = clock();
       state.queries += 1;
       try {

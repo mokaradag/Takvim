@@ -127,6 +127,7 @@ export async function readBaseline(executor, scope, { projectId, baselineId = nu
     projectFull: Boolean(selection?.ProjectFull),
     selectedBaselineId: selection?.SelectedBaselineId || null,
     baselines: baselineRows,
+    baselinesTruncated: Number(selection?.BaselineTotal || 0) > baselineRows.length,
     snapshots: rows,
     truncated,
     addedSinceBaseline: Number(added?.AddedSinceBaseline || 0)

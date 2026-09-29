@@ -270,6 +270,10 @@ async function groundedTurnAvailable({ config, registry, mode, sicil, signal }) 
   return evidenceSchemaReady(sicil, signal);
 }
 
+function isTransientEvidenceProbeFailure(error) {
+  return error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';
+}
+
 async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null }) {
   const result = await withConversationSql(sicil, signal, (scope) => loadConversationEvidence(directExecutor(scope), sicil, {
     conversationId, messageId, maxEvidence: MAX_CONVERSATION_EVIDENCE
@@ -335,7 +339,17 @@ async function rotaDataReadiness({ config, registry, signal }) {
   let reason = null;
   if (toolRegistryProblems().length) reason = 'TOOL_REGISTRY_INVALID';
   else if (!modes.some((mode) => mode.available)) reason = 'PROFILE_UNAVAILABLE';
-  else if (!await groundedTurnAvailable({ config, registry, mode: modes.find((mode) => mode.available).id, sicil, signal })) reason = 'EVIDENCE_SCHEMA_MISSING';
+  else {
+    try {
+      if (!await groundedTurnAvailable({ config, registry, mode: modes.find((mode) => mode.available).id, sicil, signal })) {
+        reason = 'EVIDENCE_SCHEMA_MISSING';
+      }
+    } catch (error) {
+      if (signal?.aborted || error?.code === AI_ERROR_CODES.AI_CANCELLED || error?.code === 'UNAUTHORIZED') throw error;
+      if (!isTransientEvidenceProbeFailure(error)) throw error;
+      reason = 'EVIDENCE_SCHEMA_UNKNOWN';
+    }
+  }
   return { enabled: true, available: reason == null, reason, modes };
 }
 
@@ -437,7 +451,6 @@ export async function loadAssistantConversation({ conversationId, signal = null 
   }));
   if (!result.knownSicil) throw unknownSicil();
   if (!result.conversation) throw conversationNotFound();
-  if (!readAiConfig().toolsEnabled) return { conversation: result.conversation, messages: result.messages };
   const evidence = await optionalEvidence(sicil, signal, { conversationId: id });
   return {
     conversation: result.conversation,
@@ -588,9 +601,10 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   if (existing.answer) {
     const failure = outcomeFailure(existing, input);
     if (failure) throw failure;
-    const replayEvidence = readAiConfig().toolsEnabled
-      ? (await optionalEvidence(sicil, signal, { conversationId: existing.conversation.id, messageId: existing.answer.id }))?.get(existing.answer.id)
-      : null;
+    const replayEvidence = (await optionalEvidence(sicil, signal, {
+      conversationId: existing.conversation.id,
+      messageId: existing.answer.id
+    }))?.get(existing.answer.id);
     return {
       sicil, claim: null, mode: existing.answer.mode, profile: assistantProfileForMode(existing.answer.mode), grounded: false,
       conversation: existing.conversation, userMessage: existing.turn.message,
@@ -611,7 +625,13 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   }
   // Rota verisi araçları: özellik açık, kipin araç profili kurulu ve 0018
   // uygulanmışsa tur kanıta dayalı yoldan yanıtlanır; aksi hâlde genel sohbet.
-  const grounded = await groundedTurnAvailable({ config, registry, mode: input.mode, sicil, signal });
+  let grounded = false;
+  try {
+    grounded = await groundedTurnAvailable({ config, registry, mode: input.mode, sicil, signal });
+  } catch (error) {
+    if (signal?.aborted || error?.code === AI_ERROR_CODES.AI_CANCELLED || error?.code === 'UNAUTHORIZED') throw error;
+    if (!isTransientEvidenceProbeFailure(error)) throw error;
+  }
   const claim = claimAssistantGeneration({ sicil, conversationId: input.conversationId, turnId: input.turnId });
   try {
     const prepared = await prepare(false);

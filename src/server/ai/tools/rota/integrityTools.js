@@ -69,7 +69,8 @@ const outlookStatus = {
     return {
       data: {
         activeSubscriptions: result.activeCount,
-        byState: counts,
+        byState: result.truncated ? null : counts,
+        byStateComplete: !result.truncated,
         subscriptionsForTasksNoLongerVisible: result.notVisibleCount,
         items: page,
         note: 'Rota yalnızca davetin gönderim durumunu bilir; Outlook\'ta kabul edilip edilmediğini ya da posta kutusu içeriğini bilmez.'
@@ -84,7 +85,9 @@ const outlookStatus = {
       evidence: {
         label: `Outlook teslim durumu · ${result.activeCount} abonelik`,
         entity: { type: 'user', id: 'me', name: 'Outlook abonelikleriniz' },
-        highlights: Object.entries(counts).slice(0, 4).map(([state, count]) => `${deliveryLabel(state)}: ${count}`)
+        highlights: result.truncated
+          ? ['Durum dağılımı: liste sınırı nedeniyle gösterilmedi']
+          : Object.entries(counts).slice(0, 4).map(([state, count]) => `${deliveryLabel(state)}: ${count}`)
       }
     };
   }

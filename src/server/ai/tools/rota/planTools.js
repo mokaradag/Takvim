@@ -116,6 +116,7 @@ const baselineCompare = {
       data: {
         baseline: selected,
         availableBaselines: baselines,
+        availableBaselinesTruncated: result.baselinesTruncated,
         counts,
         finishVariance: variances.length ? {
           averageDays: Math.round((total / variances.length) * 10) / 10,

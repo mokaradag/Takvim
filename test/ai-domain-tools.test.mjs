@@ -520,12 +520,24 @@ test('araç SQL kapısı sorgu gerçekten bitince bırakılır; iptal edilen tur
 
 test('yetki bağlamı her araç kümesinde yeniden okunur ve kümedeki çağrılar arasında paylaşılır', async (t) => {
   const stack = stackFor(t);
-  const { context } = await callRotaTools(stack, AYSE, [['rota_task_search', {}], ['rota_portfolio_summary', {}]]);
+  stack.useSicil(AYSE);
+  const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+  const executor = createToolExecutor({
+    context,
+    ledger: createEvidenceLedger(),
+    signal: new AbortController().signal
+  });
+  await executor.runRound([
+    { id: 'call_1', name: 'rota_task_search', arguments: '{}' },
+    { id: 'call_2', name: 'rota_portfolio_summary', arguments: '{}' }
+  ]);
   assert.equal(context.stats().authorizationLoads, 1);
-  // Yetki kaldırılınca sonraki küme yeni kapsamla çalışır.
   stack.db.projectAccess = [];
-  const after = await visibleTaskIds(stack, AYSE, { projectId: PROJECTS.READ }).catch((error) => error);
-  assert.ok(after instanceof Error || after.size === 0);
-  const detail = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.READ });
-  assert.equal(detail.result.error.code, 'NOT_FOUND');
+  const [detail] = await executor.runRound([{
+    id: 'call_3',
+    name: 'rota_project_detail',
+    arguments: JSON.stringify({ projectId: PROJECTS.READ })
+  }]);
+  assert.equal(JSON.parse(detail.content).error.code, 'NOT_FOUND');
+  assert.equal(context.stats().authorizationLoads, 2);
 });

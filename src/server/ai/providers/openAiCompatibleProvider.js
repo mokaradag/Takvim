@@ -269,7 +269,7 @@ function wireMessages(messages) {
           id: call.id,
           type: 'function',
           function: {
-            name: call.name,
+            name: typeof call.name === 'string' && call.name.trim() ? call.name : 'unknown_tool',
             arguments: typeof call.arguments === 'string' && call.arguments.trim() ? call.arguments : '{}'
           }
         }))
