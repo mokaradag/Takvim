@@ -54,6 +54,75 @@ Examples:
 /rota/api/mergen-rota/auth/implicit-session  -> /api/mergen-rota/auth/implicit-session
 ```
 
+## Streaming and origin forwarding (Rota AI)
+
+Rota AI answers stream from `POST /api/mergen-rota/ai/assistant/turns` as
+`text/event-stream`. The application already sends `Cache-Control: no-cache,
+no-store, no-transform` and `X-Accel-Buffering: no`, which disables Nginx
+response buffering for that response. It also sends an SSE comment every 15
+seconds while a slow model has not produced text yet, so an idle-read timeout
+larger than 15 seconds allows heartbeats to keep the connection open. Merge the
+following into the `location ^~ /rota/` block (also for TEST `/bilge` or other
+prefixes). REPLACE existing directives, rather than appending duplicates,
+including `proxy_http_version`, `proxy_read_timeout`, `proxy_send_timeout` and
+all matching `proxy_set_header` names (especially `Host`). nginx rejects duplicate
+single-value directives and repeated Host headers break forwarding:
+
+```nginx
+    proxy_http_version 1.1;
+    # Streaming: forward each chunk immediately.
+    proxy_buffering off;
+    proxy_cache off;
+    # Keep text/event-stream out of gzip_types (compression buffers the stream).
+    # Idle timeouts, not a total stream lifetime limit.
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    # Original host and scheme: the same-origin check of state-changing AI
+    # requests (turns, deletes, key management) compares them with `Origin`.
+    # `$http_host` keeps a non-default public port (`$host` drops it).
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Longer existing timeouts (such as the `100000` values above) are compatible.
+The application's own AI timeouts are not relaxed to accommodate a proxy: a
+proxy that buffers the whole answer or cuts the connection early must be fixed in
+the proxy. Likewise, if the proxy does not forward the original host and scheme,
+state-changing AI requests are rejected with `403 FORBIDDEN` by design; the fix
+is the forwarding headers above, never a weaker same-origin check. See
+`docs/AI-PLATFORM.md` §18.11.
+
+### Sahada doğrulanan aynı-kaynak tanısı — 28 Eylül 2026
+
+TEST dağıtımında `/bilge` → 8009 yönlendirmesinde `GET
+/api/mergen-rota/ai/credential` 200 dönerken `PUT /credential` ve `POST
+/probe` istekleri `403 FORBIDDEN` ile reddedildi. Tarayıcıdaki `Origin` ve
+`Host` aynı kaynağı gösteriyordu. Nginx atlanıp 8009'a doğrudan, özgün
+`Host`/`Origin` ile birlikte `X-Forwarded-Host` ve
+`X-Forwarded-Proto` verilerek yapılan tanı isteği aynı-kaynak denetimini geçti
+ve beklenen `401 SESSION_REQUIRED` sonucuna ulaştı. Bu karşılaştırma sorunun
+uygulama kodunda değil vekilin kaynak bilgisini eksik iletmesinde olduğunu
+kanıtladı.
+
+Yönetici TEST bloğuna özgün ana makine ve şema iletimini ekledikten sonra
+tarayıcıdan kurumsal anahtarlı gerçek `chat.fast` sınaması başarıyla
+tamamlandı; ardından kişisel anahtar kaydetme/doğrulama/kaldırma akışları da
+çalıştı. Bu nedenle `/rota`, `/bilge` veya gelecekteki başka bir önek için
+aşağıdaki başlıklar **zorunlu dağıtım sözleşmesi** olarak ele alınmalıdır:
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+Aynı belirti görülürse önce vekil başlıklarını doğrulayın; çözüm
+`isSameOriginRequest` denetimini gevşetmek veya kaldırmak değildir. Tanı,
+üretim 8008/`/rota` örneğine dokunmadan TEST 8009/`/bilge` üzerinde
+tamamlanmıştır.
+
 ## Production `.env.local`
 
 Use masked values as a template:
@@ -91,3 +160,11 @@ http://<ROTA_SERVER>:8008/rota/
 ```
 
 The canonical production address remains the external HTTPS URL.
+
+### Rota AI için tek süreç zorunluluğu
+
+Aynı konuşma veritabanına bağlı `/api/mergen-rota/ai/assistant` ve tüm alt
+uçlarını tek bir Node.js sürecine yönlendirin. Bu uçlarda çok sunuculu upstream,
+PM2 cluster veya worker dağıtımı kullanmayın; yalnız oturum yapışkanlığı yeterli
+değildir. Silme ve tur istekleri farklı süreçlere gidemez. Dağıtım geçişinde eski
+süreci durdurmadan yeni sürece AI trafiği açmayın. Ayrıntılar: `AI-PLATFORM.md` §18.14.

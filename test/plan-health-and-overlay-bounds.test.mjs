@@ -249,7 +249,8 @@ test('tam ekran kaplar ölçüler ölçekli görünüm değişkenlerini kullanı
     'src/app/styles/features.css',
     'src/app/styles/shell.css',
     'src/app/styles/experience.css',
-    'src/app/styles/components.css'
+    'src/app/styles/components.css',
+    'src/app/styles/assistant.css'
   ];
   for (const file of files) {
     // Yalnızca değişkenin yedeği olarak yazılan `100vh`/`100vw` kabul edilir;

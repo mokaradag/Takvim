@@ -278,6 +278,8 @@ test('project creation and editing UI use one corporate calendar and the combine
   assert.doesNotMatch(shell, /setProjectCreateOpen/);
   assert.doesNotMatch(shell, /useCalendars/);
   assert.match(dialog, /ProjectColorPicker/);
+  assert.match(dialog, /useModalFocusTrap\(\{ containerRef: dialogRef, initialFocusRef/);
+  assert.doesNotMatch(dialog, /\bautoFocus\b/);
   assert.doesNotMatch(dialog, /Proje takvimi/);
   assert.match(provider, /prepareProjectUpdateChanges/);
   assert.match(provider, /setProjectColorOverrides\(state\.projects\)/);

@@ -42,10 +42,13 @@
   --pad-cell-y: calc(10px * var(--density));
   --pad-cell-x: 14px;
 
-  /* Katman sözleşmesi: base < sticky < chrome < popover < drawer < modal < select < tooltip. */
+  /* Katman sözleşmesi: base < sticky < chrome < assistant < popover < drawer < modal < select < tooltip. */
   --z-base: 0;
   --z-sticky: 20;
   --z-chrome: 100;
+  /* Rota AI yardımcı paneli (kipsiz): kabuk ve yapışkan çalışma alanı şeritlerinin
+     üstünde; açılır paneller, görev çekmecesi ve kipli pencereler onun üstündedir. */
+  --z-assistant: 150;
   --z-popover: 200;
   --z-drawer-backdrop: 300;
   --z-drawer: 310;

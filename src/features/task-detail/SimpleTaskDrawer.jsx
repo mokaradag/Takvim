@@ -67,7 +67,7 @@ export function SimpleTaskDrawer({
   const local = task;
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const drawerRef = useRef(null);
-  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, onClose, blocked: isSaving, enabled: !scheduleDialogOpen });
+  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, priority: 310, onClose, blocked: isSaving, enabled: !scheduleDialogOpen });
   const titleDraft = local.task || '';
   const titleValid = Boolean(titleDraft.trim());
 

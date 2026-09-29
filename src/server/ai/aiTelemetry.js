@@ -55,6 +55,11 @@ function createState() {
     byProfile: {},
     providerLatencyMs: [],
     queueWaitMs: [],
+    // Akışlı yanıtlar: algılanan hız (ilk metin) ve üretim süresi örnekleri ile sonuç sayaçları.
+    firstTokenMs: [],
+    streamGenerationMs: [],
+    streams: { completed: 0, cancelled: 0, timeout: 0, interrupted: 0, failed: 0 },
+    assistantTurns: { completed: 0, failed: 0, cancelled: 0, lastFailure: null },
     retries: 0,
     lastSuccessAt: null,
     // Hizmet hatası (sağlayıcı öncesi de olabilir: rehber, anahtar tablosu, iç
@@ -209,9 +214,11 @@ function logFailure({ outcome, source, profile, model, durationMs, attempts, det
  * okunur. Yinelemeler burada değil, gerçekleştikleri anda (`recordAiRetry`)
  * sayılır.
  */
+const recordedFailures = new WeakSet();
+
 export function recordAiRequest({
   profile, model = null, source = null, code = null, serviceFailure = false, details = null,
-  durationMs, queueWaitMs = null, attempts = 1
+  durationMs, queueWaitMs = null, attempts = 1, error = null
 }) {
   let outcome = null;
   safely(() => {
@@ -238,7 +245,10 @@ export function recordAiRequest({
     // Sırada süresi dolan istek de beklemiştir: en kötü beklemeler özetten düşmez.
     recordQueueWait(current, { queueWaitMs, code: outcome?.code });
   });
-  if (outcome) safely(() => logFailure({ outcome, source, profile, model, durationMs, attempts, details }));
+  if (outcome) safely(() => {
+    logFailure({ outcome, source, profile, model, durationMs, attempts, details });
+    if (error && typeof error === 'object') recordedFailures.add(error);
+  });
 }
 
 /**
@@ -314,6 +324,34 @@ export function recordProviderCall({
   });
 }
 
+/**
+ * Akışlı yanıtın algılanan hızı ve sonucu. Ölçümler içerik TAŞIMAZ.
+ *
+ * - `firstTokenMs`: isteğin ağ geçidine girişinden ilk GÖRÜNÜR metin parçasına
+ *   kadar (rehber denetimi, sıra ve sağlayıcının ilk yanıtı dâhil) —
+ *   `ai.stream.first_token`.
+ * - `providerStartMs`: sağlayıcı çağrısından başarılı HTTP yanıtına kadar —
+ *   `ai.stream.provider_start`.
+ * - `generationMs`: sağlayıcı çağrısından akışın tamamlanmasına kadar (yalnızca
+ *   tamamlanan akışlar; işlem ölçümü `ai.provider.stream` ile ayrıca yazılır).
+ * - `outcome`: `completed`, `cancelled`, `timeout`, `interrupted` (metin
+ *   başladıktan sonra kesildi) ya da `failed` (metin başlamadan başarısız).
+ */
+export function recordAiStream({ outcome, firstTokenMs = null, providerStartMs = null, generationMs = null }) {
+  safely(() => {
+    const current = state();
+    if (Object.hasOwn(current.streams, outcome)) current.streams[outcome] += 1;
+    if (firstTokenMs != null && Number.isFinite(firstTokenMs)) {
+      pushSample(current.firstTokenMs, firstTokenMs);
+      recordOperation({ operation: 'ai.stream.first_token', durationMs: firstTokenMs, ok: true });
+    }
+    if (providerStartMs != null && Number.isFinite(providerStartMs)) {
+      recordOperation({ operation: 'ai.stream.provider_start', durationMs: providerStartMs, ok: true });
+    }
+    if (generationMs != null) pushSample(current.streamGenerationMs, generationMs);
+  });
+}
+
 /** Yineleme GERÇEKTEN başlarken sayılır ve günlüğe yazılır (sohbet ve doğrulama için aynı). */
 export function recordAiRetry({ networkCode = null } = {}) {
   safely(() => {
@@ -357,8 +395,12 @@ export function aiTelemetrySnapshot() {
     retries: current.retries,
     latency: {
       provider: percentiles(current.providerLatencyMs),
-      queueWait: percentiles(current.queueWaitMs)
+      queueWait: percentiles(current.queueWaitMs),
+      firstToken: percentiles(current.firstTokenMs),
+      streamGeneration: percentiles(current.streamGenerationMs)
     },
+    streams: { ...current.streams },
+    assistantTurns: { ...current.assistantTurns, lastFailure: current.assistantTurns.lastFailure ? { ...current.assistantTurns.lastFailure } : null },
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
     requestSequence: current.requestSequence,
@@ -373,4 +415,34 @@ export function aiTelemetrySnapshot() {
 
 export function resetAiTelemetryForTests() {
   globalThis[STATE_KEY] = createState();
+}
+
+/**
+ * Model üretimi ve yanıt kalıcılığı birlikte sonuçlandıktan sonra çağrılır.
+ *
+ * Her sonuç sayılır; ancak yalnızca HİZMET hatası (paylaşılan anahtarın reddi,
+ * sağlayıcı/kalıcılık arızası, iç hata) sağlık görünümüne "son tur hatası"
+ * olarak girer ve işletim günlüğüne yazılır. Kullanıcının kendi anahtarı ya da
+ * isteği kaynaklı sonuçlar (geçersiz kişisel anahtar, kişisel oran sınırı,
+ * reddedilen istek, silinmiş konuşma) herkese hizmet sorunu gibi görünmez;
+ * sınıflandırma `recordAiRequest` ile aynıdır (`outcomeOf`).
+ */
+export function recordAssistantTurn({ code = null, source = null, details = null, serviceFailure = false, durationMs = 0, error = null }) {
+  let outcome = null;
+  safely(() => {
+    const turns = state().assistantTurns;
+    const cancelled = code === AI_ERROR_CODES.AI_CANCELLED;
+    outcome = code && !cancelled ? outcomeOf(code, serviceFailure, { source, details }) : null;
+    turns[code ? (cancelled ? 'cancelled' : 'failed') : 'completed'] += 1;
+    if (!code) turns.lastFailure = null;
+    else if (outcome?.serviceFailure) turns.lastFailure = { code: outcome.code, at: new Date().toISOString() };
+    recordOperation({ operation: 'ai.assistant.turn', durationMs, ok: !outcome?.serviceFailure, code: outcome?.serviceFailure ? outcome.code : null });
+  });
+  if (outcome?.serviceFailure && !QUIET_CODES.has(outcome.code) && !recordedFailures.has(error)) {
+    safely(() => logEvent({
+      severity: [AI_ERROR_CODES.AI_CONFIGURATION_ERROR, AI_ERROR_CODES.AI_INTERNAL_ERROR, 'DATABASE_UNAVAILABLE'].includes(outcome.code)
+        ? EVENT_SEVERITIES.ERROR : EVENT_SEVERITIES.WARNING, component: COMPONENTS.AI,
+      operation: 'ai.assistant.turn', code: outcome.code, message: 'Rota AI turu tamamlanamadı.'
+    }));
+  }
 }

@@ -1,11 +1,12 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../DateInput';
 import { Icons } from '../icons';
 import { SearchableSelect } from '../SearchableSelect';
 import { Avatar } from '../ui';
 import { ProjectColorPicker } from '../project/ProjectColorPicker';
 import { fmtISO, today } from '../../scheduling/dates';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 
 function initialForm(people) {
   return {
@@ -68,14 +69,9 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
     setForm((current) => (current.leadId ? current : { ...current, leadId: people[0]?.id || '' }));
   }, [open, people]);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (event) => {
-      if (event.key === 'Escape' && !saving) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, saving, onClose]);
+  const dialogRef = useRef(null);
+  const initialFocusRef = useRef(null);
+  useModalFocusTrap({ containerRef: dialogRef, initialFocusRef, onClose, blocked: saving, enabled: open });
 
   if (!open) return null;
 
@@ -131,6 +127,8 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
       }}
     >
       <form
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-project-title"
@@ -154,12 +152,11 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, .7fr) minmax(260px, 1.3fr)', gap: 12 }}>
             <label className="col" style={{ gap: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 650 }}>Proje kodu <span className="muted">(isteğe bağlı)</span></span>
-              <input
+              <input ref={initialFocusRef}
                 className="input"
                 value={form.code}
                 onChange={setField('code')}
                 placeholder="Örn. PRJ-2026-041"
-                autoFocus
                 disabled={saving}
               />
             </label>

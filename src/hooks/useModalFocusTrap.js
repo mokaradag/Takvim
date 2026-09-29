@@ -3,6 +3,21 @@ import { useEffect, useId, useRef } from 'react';
 
 const activeTraps = [];
 
+/**
+ * Açık odak tuzaklarının (kipli pencerelerin) sayısı. Kendi Esc dinleyicisini
+ * kuran bir yüzey açılırken bu sayıyı kaydeder; sayı sonradan arttıysa (ör.
+ * Ctrl/Cmd+K ile üstte açılan komut paleti) Esc'in sahibi o daha yeni penceredir
+ * ve alttaki yüzey olayı tüketmez.
+ */
+export function modalTrapDepth() {
+  return activeTraps.length;
+}
+
+/** Daha yüksek veya kayıt yapan bir pencere komut paletini engeller. */
+export function hasBlockingModal() {
+  return activeTraps.some((token) => token.priority >= 500 || token.blockedRef.current);
+}
+
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -46,9 +61,9 @@ export function resolveFocusTrapTarget({ focusableCount, activeIndex, containsAc
  * arkadaki uygulama kabuğuna sekme ile çıkabiliyordu. Bu kanca paylaşımlıdır ki
  * her modal aynı davranışı yeniden yazmak zorunda kalmasın.
  */
-export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, onClose, blocked = false, enabled = true }) {
+export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, restoreFocusEnabledRef = null, onClose, blocked = false, enabled = true, priority = 500 }) {
   const scopeId = useId();
-  const openerRef = useRef(null);
+  const focusEpochRef = useRef(0);
   const closeRef = useRef(onClose);
   const blockedRef = useRef(blocked);
 
@@ -59,24 +74,33 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
 
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;
-    openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
+    const epoch = ++focusEpochRef.current;
+    const focusDocument = document;
+    const openedFrom = focusDocument.activeElement;
+    const owner = containerRef.current;
     const restoreFocus = restoreFocusRef?.current;
+    const shouldRestoreFocus = () => restoreFocusEnabledRef?.current !== false;
     initialFocusRef.current?.focus();
-    return () => {
-      const opener = openerRef.current?.isConnected ? openerRef.current : restoreFocus;
+    const restore = () => {
+      if (!shouldRestoreFocus() || focusEpochRef.current !== epoch) return;
+      const focused = focusDocument.activeElement;
+      if (focused?.isConnected && focused !== focusDocument.body && focused !== openedFrom && !owner?.contains?.(focused)) return;
+      const opener = openedFrom?.isConnected ? openedFrom : restoreFocus;
       if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
     };
-  }, [initialFocusRef, restoreFocusRef, enabled]);
+    return () => { (globalThis.requestAnimationFrame || setTimeout)(restore); };
+  }, [containerRef, initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled]);
 
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;
     const owner = containerRef.current;
     owner?.setAttribute('data-focus-scope', scopeId);
-    const token = {};
+    const token = { priority, blockedRef };
     activeTraps.push(token);
     const handleKeyDown = (event) => {
       if (activeTraps[activeTraps.length - 1] !== token || event.defaultPrevented) return;
       if (event.key === 'Escape') {
+        if (event.isComposing || event.keyCode === 229) return;
         if (!event.defaultPrevented && !blockedRef.current) {
           event.preventDefault();
           closeRef.current?.();
@@ -110,5 +134,5 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       if (index >= 0) activeTraps.splice(index, 1);
       owner?.removeAttribute('data-focus-scope');
     };
-  }, [containerRef, enabled, scopeId]);
+  }, [containerRef, enabled, scopeId, priority]);
 }

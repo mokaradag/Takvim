@@ -48,13 +48,20 @@ async function raceWithSignal(operation, signal, cancel = () => {}) {
  * GERÇEK sorgu sözü ona bildirilir: kaynağı (ör. sınırlı bir bağlantı kapısını)
  * sorgu gerçekten bitene kadar tutmak isteyen çağıran bunu kullanır.
  */
-export function boundedExecutor(executor, signal, { track = null } = {}) {
+export function boundedExecutor(executor, signal, { track = null, onResult = null } = {}) {
   return {
     request() {
       const request = executor.request();
       const query = request.query.bind(request);
       request.query = (text) => raceWithSignal(() => {
-        const running = query(text);
+        const running = Promise.resolve(query(text)).then((result) => {
+          try {
+            onResult?.(result);
+          } catch {
+            // Gözlemcinin hatası, veritabanında zaten sonuçlanmış sorgunun sonucunu değiştirmez.
+          }
+          return result;
+        });
         track?.(running);
         return running;
       }, signal, () => request.cancel?.());

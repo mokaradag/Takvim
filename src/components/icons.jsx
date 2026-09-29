@@ -81,6 +81,13 @@ export const Icons = {
   Key: (p) => <Icon {...p} d='<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M18.5 4.5l2 2"/>' />,
   Pause: (p) => <Icon {...p} d='<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>' />,
   Play: (p) => <Icon {...p} d='<path d="M7 4.5v15l12-7.5-12-7.5z"/>' />,
+  // Rota AI · sohbet paneli
+  Copy: (p) => <Icon {...p} d='<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>' />,
+  ArrowUp: (p) => <Icon {...p} d='<path d="M12 19V5M5 12l7-7 7 7"/>' />,
+  ArrowDown: (p) => <Icon {...p} d='<path d="M12 5v14M19 12l-7 7-7-7"/>' />,
+  Stop: (p) => <Icon {...p} d='<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/>' />,
+  History: (p) => <Icon {...p} d='<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/><path d="M12 7.5V12l3 2"/>' />,
+  MessagePlus: (p) => <Icon {...p} d='<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/>' />,
 
   // Ortak `Icon` üzerinden çizilir: dekoratif kullanımda verilen `aria-hidden`
   // gibi nitelikler SVG'ye ulaşır.

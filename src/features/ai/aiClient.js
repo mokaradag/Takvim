@@ -117,16 +117,31 @@ export function loadAiCredentialStatusRequest(options = {}) {
   return expectPayload(requestJson(`${BASE}/credential`, { method: 'GET' }, credentialOptions(options)), 'ai', isStatusPayload);
 }
 
+export const AI_CREDENTIAL_CHANGED_EVENT = 'mergen-rota-ai-credential-changed';
+
+function notifyCredentialChanged(result) {
+  if (result.ok) {
+    globalThis.window?.dispatchEvent?.(new Event(AI_CREDENTIAL_CHANGED_EVENT));
+    let channel;
+    try {
+      const Channel = globalThis.window?.BroadcastChannel;
+      if (Channel) { channel = new Channel(AI_CREDENTIAL_CHANGED_EVENT); channel.postMessage('changed'); }
+    } catch { /* Sekmeler arası bildirim desteklenmeyebilir. */ }
+    finally { channel?.close(); }
+  }
+  return result;
+}
+
 export function saveAiCredentialRequest(apiKey, options = {}) {
   return expectPayload(
     requestJson(`${BASE}/credential`, { method: 'PUT', body: JSON.stringify({ apiKey }) }, credentialOptions(options)),
     'ai',
     isStatusPayload
-  );
+  ).then(notifyCredentialChanged);
 }
 
 export function removeAiCredentialRequest(options = {}) {
-  return expectPayload(requestJson(`${BASE}/credential`, { method: 'DELETE' }, credentialOptions(options)), 'ai', isStatusPayload);
+  return expectPayload(requestJson(`${BASE}/credential`, { method: 'DELETE' }, credentialOptions(options)), 'ai', isStatusPayload).then(notifyCredentialChanged);
 }
 
 export function validateAiCredentialRequest(options = {}) {

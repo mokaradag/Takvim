@@ -219,6 +219,11 @@
 .topbar:has(.export-menu[open]) {
   z-index: var(--z-popover);
 }
+/* Bildirim paneli üst çubuğun yığılma bağlamındadır; açıkken üst çubuk da açılır
+   panel katmanına çıkar ki Rota AI paneli (`--z-assistant`) onu örtmesin. */
+.topbar:has(.schedule-request-popover) {
+  z-index: var(--z-popover);
+}
 .topbar h1 {
   margin: 0;
   font-size: 18px;

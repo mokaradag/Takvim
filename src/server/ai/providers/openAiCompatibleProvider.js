@@ -2,6 +2,9 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { AiError } from '../aiErrors.js';
+import { AI_STREAM_LIMITS, createLeadingThinkFilter, primaryChoice, readChatCompletionStream } from './openAiCompatibleStream.js';
+
+export { streamInterrupted } from './openAiCompatibleStream.js';
 
 /**
  * OpenAI uyumlu sağlayıcı bağdaştırıcısı (kurum içi yapay zekâ ağ geçidi).
@@ -122,7 +125,7 @@ async function readBoundedJson(response, maxBytes, signal) {
     throw new AiError(AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE, { details: { reason: 'RESPONSE_INTERRUPTED' } });
   }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
   } catch {
     throw invalidResponse('MALFORMED_JSON');
   }
@@ -150,12 +153,22 @@ function reportedModel(value) {
  * Seçeneğin iletisi `assistant` rolünde olmalıdır: isteği yankılayan yanlış
  * yapılandırılmış bir vekilin `user` iletisi model yanıtı sayılmaz.
  */
+function assertCompletionMetadata(payload, choice, reason) {
+  if ((payload?.model != null && typeof payload.model !== 'string')
+    || (choice?.finish_reason != null && typeof choice.finish_reason !== 'string')
+    || (payload?.usage != null && (typeof payload.usage !== 'object' || Array.isArray(payload.usage)))
+    || ['prompt_tokens', 'completion_tokens', 'total_tokens'].some((key) => payload?.usage?.[key] != null && tokenCount(payload.usage[key]) == null)) {
+    throw invalidResponse(reason);
+  }
+}
+
 export function parseChatCompletion(payload) {
-  const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
+  const choice = Array.isArray(payload?.choices) ? primaryChoice(payload.choices) : null;
   const message = choice?.message;
   if (!message || typeof message !== 'object') throw invalidResponse('MISSING_CHOICE');
   if (message.role !== 'assistant') throw invalidResponse('INVALID_ROLE');
   if (message.content != null && typeof message.content !== 'string') throw invalidResponse('INVALID_CONTENT');
+  assertCompletionMetadata(payload, choice, 'COMPLETION_METADATA_INVALID');
   return {
     text: message.content ?? '',
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason.slice(0, 40) : null,
@@ -198,15 +211,47 @@ export function createControlApiKey() {
   return `${AI_CONTROL_KEY_PREFIX}${randomBytes(24).toString('base64url')}`;
 }
 
-function requestHeaders(apiKey, { json = false } = {}) {
+function requestHeaders(apiKey, { json = false, accept = 'application/json' } = {}) {
   return {
-    accept: 'application/json',
+    accept,
     ...(json ? { 'content-type': 'application/json' } : {}),
     ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
   };
 }
 
-export function createOpenAiCompatibleProvider({ fetchImpl = null, maxResponseBytes = MAX_RESPONSE_BYTES } = {}) {
+function mediaType(response) {
+  return String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+}
+
+/**
+ * Tek JSON yanıtın akıl yürütme alanları (`reasoning_content`, `reasoning`)
+ * var mı? Metni okunmaz, yalnızca "düşünüyor" evresi için varlığı bildirilir.
+ */
+function completionReasoning(payload) {
+  const message = primaryChoice(payload.choices)?.message;
+  const values = [message?.reasoning_content, message?.reasoning];
+  if (values.some((value) => value != null && typeof value !== 'string')) throw invalidResponse('STREAM_EVENT_MALFORMED');
+  return values.some((value) => typeof value === 'string' && value.length > 0);
+}
+
+/**
+ * `stream: true` isteğini yok sayıp tek JSON yanıt dönen uyumlu ağ geçidi:
+ * yanıt aynı olay biçimine çevrilir (akıl yürütme bloğu yine ayıklanır).
+ */
+async function* completionAsStream(completion, limits, { reasoning = false } = {}) {
+  const think = createLeadingThinkFilter();
+  const text = `${think.push(completion.text)}${think.end()}`;
+  if (text.length > limits.maxTextChars) throw invalidResponse('STREAM_TEXT_TOO_LARGE');
+  if (reasoning || think.sawThinking) yield { type: 'reasoning' };
+  if (text) yield { type: 'text', text };
+  yield { type: 'done', finishReason: completion.finishReason, model: completion.model, usage: completion.usage };
+}
+
+export function createOpenAiCompatibleProvider({
+  fetchImpl = null,
+  maxResponseBytes = MAX_RESPONSE_BYTES,
+  streamLimits = AI_STREAM_LIMITS
+} = {}) {
   async function send(url, init, signal) {
     try {
       // Yönlendirme izlenmez: anahtar başka bir adrese taşınmamalıdır.
@@ -231,6 +276,41 @@ export function createOpenAiCompatibleProvider({ fetchImpl = null, maxResponseBy
         throw classifyProviderStatus(response.status, response.headers.get('retry-after'));
       }
       return parseChatCompletion(await readBoundedJson(response, maxResponseBytes, signal));
+    },
+
+    /**
+     * Akışlı sohbet tamamlama.
+     *
+     * Söz, bağlantı kurulup sağlayıcı BAŞARILI HTTP yanıtı döndürdüğünde
+     * `{ events }` ile çözülür; bağlantı hatası ve hata durumu bu noktada
+     * sınıflandırılmış hata olarak fırlatılır (kullanıcıya henüz hiçbir metin
+     * gitmemiştir). `events` sınırlı, normalleştirilmiş olay dizisidir; sağlayıcı
+     * tel biçimi bu modülün dışına çıkmaz. `signal` kesilince bağlantı kapanır.
+     */
+    async streamChatCompletion({ baseUrl, apiKey, model, messages, maxOutputTokens = null, signal }) {
+      const response = await send(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: requestHeaders(apiKey, { json: true, accept: 'text/event-stream' }),
+        body: JSON.stringify({ model, messages, stream: true, ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}) })
+      }, signal);
+      if (!response.ok) {
+        await discardBody(response);
+        throw classifyProviderStatus(response.status, response.headers.get('retry-after'));
+      }
+      const type = mediaType(response);
+      if (type === 'application/json') {
+        const payload = await readBoundedJson(response, maxResponseBytes, signal);
+        const choice = Array.isArray(payload?.choices) ? primaryChoice(payload.choices) : null;
+        assertCompletionMetadata(payload, choice, 'STREAM_EVENT_MALFORMED');
+        const completion = parseChatCompletion(payload);
+        return { events: completionAsStream(completion, streamLimits, { reasoning: completionReasoning(payload) }) };
+      }
+      // İçerik türü bildirilmeyen 2xx yanıt da (ör. vekilin varsayılan sayfası) akış değildir.
+      if (type !== 'text/event-stream') {
+        await discardBody(response);
+        throw invalidResponse('STREAM_CONTENT_TYPE');
+      }
+      return { events: readChatCompletionStream(response.body, { signal, limits: streamLimits }) };
     },
 
     /**

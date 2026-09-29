@@ -26,6 +26,7 @@ import {
 } from './helpers/aiStack.mjs';
 import { createNewTask } from '../src/state/appState.js';
 
+const { checkAssistantConversationSchema } = await import('../src/server/ai/assistant/assistantService.js');
 const { aiRuntimeLoad, getAiGateway, resetAiRuntimeForTests, setAiProviderForTests } = await import('../src/server/ai/aiRuntime.js');
 const { resetAiConfigCacheForTests } = await import('../src/server/ai/aiConfig.js');
 const { resetAiModelRegistryForTests } = await import('../src/server/ai/modelRegistryLoader.js');
@@ -283,6 +284,7 @@ test('sağlık yoklaması sağlayıcıyı çağırmaz; durum son temaslardan ve 
   assert.equal(provider.calls.length, 0);
 
   assert.equal((await runProbe()).status, 200);
+  await checkAssistantConversationSchema();
   const healthy = await overviewAi();
   assert.equal(healthy.ai.state, HEALTH_STATES.HEALTHY);
   assert.match(healthy.ai.message, /Etkin 0\/8, sırada 0\/0/);
@@ -450,7 +452,7 @@ test('yapılandırılmış dosya kaydı okunmadan bileşen sağlıklı görünme
   await writeFile(file, JSON.stringify({
     version: 1,
     models: [{ id: 'hizli-model', capabilities: ['chat'] }],
-    profiles: { 'chat.fast': { model: 'hizli-model' } }
+    profiles: { 'chat.fast': { model: 'hizli-model' }, 'chat.general': { model: 'hizli-model' } }
   }), 'utf8');
   stacks.set(t, createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } }));
   adminReset(t);
@@ -504,6 +506,7 @@ test('kurumsal anahtar yokken kişisel anahtar tablosu doğrulanmadan sağlıkl�
   const fixed = await postIntegrationTest('ai-provider');
   assert.equal(fixed.result.ok, true);
   assert.equal(fixed.result.code, 'AUTHENTICATION_REQUIRED');
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
 });
 
@@ -541,6 +544,7 @@ test('olağan istekte reddedilen kurumsal anahtar uyarıdır; kişisel anahtarı
   await saveKey(PERSONAL_KEY_A);
   provider.enqueue({ type: 'status', status: 429, retryAfter: '5' });
   assert.equal((await runProbe()).body.error.code, 'AI_RATE_LIMITED');
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
 });
 
@@ -555,6 +559,7 @@ test('aynı milisaniyede önce başarı sonra hata kaydedilirse son sonuç hatad
   assert.equal(ai.detail.telemetry.provider.lastContactAt, ai.detail.telemetry.provider.lastFailureAt, 'damgalar eşittir');
   assert.equal(ai.state, HEALTH_STATES.WARNING);
   recordProviderCall({ operation: 'ai.provider.chat', latencyMs: 5 });
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
 });
 
@@ -653,6 +658,7 @@ test('kişisel anahtarla yapılan başarılı istek kurumsal anahtarın reddini 
   const recovered = await runProbe();
   assert.equal(recovered.status, 200, JSON.stringify(recovered.body));
   useSicil(SICIL_A);
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
 });
 
@@ -730,6 +736,44 @@ test('chat.fast profili kapatılmışsa sağlayıcı yanıt verse de bileşen sa
   const { ai } = await overviewAi();
   assert.equal(ai.state, HEALTH_STATES.WARNING);
   assert.match(ai.message, /Hızlı sohbet profili \(chat\.fast\) kullanılamıyor/);
+});
+
+test('uç yalnızca chat.fast modelini listeliyorsa Rota AI kip modelleri eksik sayılır', async (t) => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-assistant-model-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'ai-models.json');
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    models: [
+      { id: 'hizli-model', capabilities: ['chat'] },
+      { id: 'genel-model', capabilities: ['chat'] },
+      { id: 'derin-model', capabilities: ['chat', 'reasoning'] }
+    ],
+    profiles: {
+      'chat.fast': { model: 'hizli-model' },
+      'chat.general': { model: 'genel-model' },
+      'chat.reasoning': { model: 'derin-model' }
+    }
+  }), 'utf8');
+  const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  adminReset(t);
+  provider.enqueue({ type: 'reply', models: ['hizli-model'] });
+  const missing = await (await postIntegration('ai-provider')).json();
+  assert.equal(missing.result.ok, false);
+  assert.equal(missing.result.code, 'ASSISTANT_MODEL_MISSING');
+  assert.match(missing.result.message, /genel-model, derin-model/);
+  assert.equal((await overviewAi()).ai.state === HEALTH_STATES.HEALTHY, false);
+  // Tek kullanılabilir kip, diğer kipin eksik modelini gizlemez.
+  provider.enqueue({ type: 'reply', models: ['hizli-model', 'derin-model'] });
+  const partial = (await (await postIntegration('ai-provider')).json()).result;
+  assert.equal(partial.ok, false);
+  assert.equal(partial.code, 'ASSISTANT_MODEL_MISSING');
+  assert.match(partial.message, /genel-model/);
+  provider.enqueue({ type: 'reply', models: ['hizli-model', 'genel-model', 'derin-model'] });
+  assert.equal((await (await postIntegration('ai-provider')).json()).result.ok, true);
 });
 
 test('bağlantı testinin tamamı tek süre sınırındadır; bildirilen süre kurulum doğrulamasını kapsar', async (t) => {
@@ -866,6 +910,7 @@ test('reddedilen kurumsal anahtar yaşlanarak sağlıklı görünmez; yalnızca 
   assert.match(stale.ai.message, /Kurumsal anahtar son kullanımında reddedildi \(AI_KEY_INVALID\)/);
   // Kurumsal anahtarın kabul edildiği bağlantı testi uyarıyı kaldırır.
   assert.equal((await postIntegrationTest('ai-provider')).result.ok, true);
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
 });
 
@@ -874,6 +919,7 @@ test('sağlayıcıya ulaşmadan düşen hizmet hatası sağlıklı görünmez; s
   adminReset(t);
   await saveKey(PERSONAL_KEY_A);
   assert.equal((await runProbe()).status, 200);
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
   // Anahtar tablosunun yetkisi alındı: istekler sağlayıcıya ulaşmadan düşer.
   db.aiCredentialPermissionDenied = true;
@@ -885,6 +931,7 @@ test('sağlayıcıya ulaşmadan düşen hizmet hatası sağlıklı görünmez; s
   assert.match(warned.ai.message, /hizmet hatasıyla sonuçlandı \(AI_INTERNAL_ERROR\)/);
   db.aiCredentialPermissionDenied = false;
   assert.equal((await runProbe()).status, 200);
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
 });
 
@@ -908,9 +955,11 @@ test('kişisel anahtar tablosunun eski olumlu gözlemi sağlıklı demek için y
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   await saveKey(PERSONAL_KEY_A);
   assert.equal((await runProbe()).status, 200);
+  await checkAssistantConversationSchema();
   assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
   t.mock.timers.tick(16 * 60 * 1000);
-  // Sağlayıcıya erişim taze, ama tablo 16 dakikadır gözlenmedi.
+  await checkAssistantConversationSchema();
+  // Sağlayıcıya erişim taze, ama 0016 tablosu 16 dakikadır gözlenmedi.
   recordProviderCall({ operation: 'ai.provider.models', latencyMs: 5 });
   const { ai } = await overviewAi();
   assert.equal(ai.state, HEALTH_STATES.UNKNOWN);
@@ -996,4 +1045,61 @@ test('iki telemetri turu arasında başlayıp biten yük de örneklenir', async 
   assert.equal(active.reduce((sum, row) => sum + row.count, 0), 2);
   assert.ok(active.some((row) => row.max > 0), 'tur arasındaki yük zaman ağırlıklı ortalamaya girer');
   assert.ok(active.every((row) => row.max <= 1));
+});
+
+
+test('0017 doğrulanmadan sağlık olumlu olmaz; eksik ve eski şema gözlemi görünür', async (t) => {
+  const { db } = createAiStack(t);
+  adminReset(t);
+  assert.equal((await runProbe()).status, 200);
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.UNKNOWN);
+  db.aiConversationSchemaMissing = true;
+  await assert.rejects(checkAssistantConversationSchema());
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.WARNING);
+  db.aiConversationSchemaMissing = false;
+  await checkAssistantConversationSchema();
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.HEALTHY);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  t.mock.timers.tick(16 * 60 * 1000);
+  await saveKey(PERSONAL_KEY_A);
+  recordProviderCall({ operation: 'ai.provider.models', latencyMs: 5 });
+  const stale = await overviewAi();
+  assert.equal(stale.ai.state, HEALTH_STATES.UNKNOWN);
+  assert.match(stale.ai.message, /0017/);
+});
+
+test('yalnız chat.fast bulunan kayıt Rota AI sağlığını olumlu göstermez', async (t) => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-ai-profile-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'ai-models.json');
+  await writeFile(file, JSON.stringify({ version: 1, models: [{ id: 'hizli-model', capabilities: ['chat'] }], profiles: { 'chat.fast': { model: 'hizli-model' } } }));
+  const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  adminReset(t);
+  provider.enqueue({ type: 'reply', models: ['hizli-model'] });
+  const result = await postIntegrationTest('ai-provider');
+  assert.equal(result.result.code, 'ASSISTANT_PROFILE_UNAVAILABLE');
+  assert.equal((await overviewAi()).ai.state, HEALTH_STATES.WARNING);
+});
+
+
+test('geçici tur kapasitesi hatası beş dakikalık uyarı penceresini uzatmaz', async (t) => {
+  createAiStack(t);
+  adminReset(t);
+  await saveKey(PERSONAL_KEY_A);
+  await runProbe();
+  await checkAssistantConversationSchema();
+  const { recordAssistantTurn, recordAiRequest } = await import('../src/server/ai/aiTelemetry.js');
+  const { aiHealthComponent } = await import('../src/server/ai/aiHealth.js');
+  for (const code of ['AI_BUSY', 'AI_QUEUE_TIMEOUT']) {
+    recordAiRequest({ profile: 'chat.general', code, details: { scope: 'global', saturation: 'model' }, durationMs: 1 });
+    recordAssistantTurn({ code, details: { scope: 'global', saturation: 'model' } });
+    assert.equal(aiHealthComponent().state, HEALTH_STATES.WARNING);
+    const later = aiHealthComponent({ now: Date.now() + 6 * 60 * 1000 });
+    assert.doesNotMatch(later.message, /Son Rota AI turu tamamlanamadı|Kapasite doldu|Kapasite yetersiz/);
+  }
+  recordAssistantTurn({ code: 'DATABASE_UNAVAILABLE', serviceFailure: true });
+  assert.match(aiHealthComponent({ now: Date.now() + 6 * 60 * 1000 }).message, /Son Rota AI turu tamamlanamadı/);
 });

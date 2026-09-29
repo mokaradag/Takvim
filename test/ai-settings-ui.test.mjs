@@ -1426,3 +1426,23 @@ test('süren deneme, ondan sonra gelen reddedildi/yetersiz doğrulama sonucunu �
     await drain();
   }
 });
+
+
+test('anahtar değişimi sekmeler arasında yalnızca içeriksiz işaret yayınlar', async (t) => {
+  const client = await import('../src/features/ai/aiClient.js');
+  const previousWindow = globalThis.window;
+  const messages = [];
+  let closed = 0;
+  globalThis.window = { dispatchEvent() {}, BroadcastChannel: class {
+    constructor(name) { assert.equal(name, client.AI_CREDENTIAL_CHANGED_EVENT); }
+    postMessage(message) { messages.push(message); }
+    close() { closed += 1; }
+  } };
+  t.after(() => { globalThis.window = previousWindow; });
+  const server = stubAiServer(t);
+  server.reply('PUT /credential', { ok: true, ai: statusFixture() });
+  const result = await client.saveAiCredentialRequest(TYPED_KEY);
+  assert.equal(result.ok, true);
+  assert.deepEqual(messages, ['changed']);
+  assert.equal(closed, 1);
+});

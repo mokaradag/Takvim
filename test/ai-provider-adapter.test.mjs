@@ -149,9 +149,11 @@ test('yanıt iletisi assistant rolünde değilse (isteği yankılayan vekil) ge�
 
 test('yanıtta model kimliği yoksa ya da boşsa yanıtlayan model bilinmez (null) kalır', () => {
   const reply = { choices: [{ message: { role: 'assistant', content: 'Merhaba.' } }] };
-  for (const model of [undefined, null, '', '   ', 42]) {
+  for (const model of [undefined, null, '', '   ']) {
     assert.equal(parseChatCompletion({ ...reply, model }).model, null, String(model));
   }
+  assert.throws(() => parseChatCompletion({ ...reply, model: 42 }),
+    (error) => error.code === 'AI_PROVIDER_RESPONSE_INVALID' && error.details.reason === 'COMPLETION_METADATA_INVALID');
   // Bildirilen model OLDUĞU GİBİ korunur: kırpılmış ya da kısaltılmış bir değer
   // yapılandırılan modelle yanlışlıkla eşleşip sessiz yönlendirmeyi gizlerdi.
   assert.equal(parseChatCompletion({ ...reply, model: ' yedek-model ' }).model, ' yedek-model ');

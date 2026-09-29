@@ -12,6 +12,12 @@
  * Başarılı model listesi, gerçek bağdaştırıcı gibi model kimliklerini taşır
  * (varsayılan olarak depo içindeki varsayılan kaydın modelleri).
  *
+ * Akışlı sohbet (`streamChatCompletion`) aynı sırayı kullanır: parça parça
+ * yanıt (`stream`), akıl yürütme evresi, ilk parçadan sonra kopan akış
+ * (`interrupt`) ya da testin parçaları elle ilettiği ve bitirdiği akış
+ * (`deferred-stream`). Akış tüketici bırakana ya da iptal edilene kadar
+ * çağrı etkin sayılır.
+ *
  * Duvar saati beklenmez: testler `waitForActive()` ile çağrının gerçekten
  * sağlayıcıya ulaştığını bekler. Bekleme yine de SINIRLIDIR: istek sağlayıcıya
  * hiç ulaşmazsa (tam da iptal testlerinin yakalaması gereken gerileme) test
@@ -26,7 +32,8 @@ const {
   AI_CONTROL_KEY_PREFIX,
   classifyNetworkFailure,
   classifyProviderStatus,
-  parseChatCompletion
+  parseChatCompletion,
+  streamInterrupted
 } = await import('../../src/server/ai/providers/openAiCompatibleProvider.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../../src/server/ai/defaultModelRegistry.js');
 
@@ -172,6 +179,129 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     }
   }
 
+  /**
+   * Akış olay kuyruğu. Sinyal kesilince bekleyen okuma `signal.reason` ile
+   * reddedilir (gerçek bağdaştırıcı gibi); `ignoreAbort` verilirse sinyale uymayan
+   * bir sağlayıcı taklit edilir. Akış bitince (tamamlanma, hata, iptal ya da
+   * tüketicinin bırakması) çağrı etkin sayılmaz.
+   */
+  function createFeed(signal, call, { ignoreAbort = false } = {}) {
+    const items = [];
+    let wake = null;
+    const push = (item) => {
+      items.push(item);
+      const resume = wake;
+      wake = null;
+      resume?.();
+    };
+    const onAbort = () => {
+      call.aborted = true;
+      if (!ignoreAbort) push({ error: signal.reason });
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    async function* iterate() {
+      try {
+        for (;;) {
+          while (!items.length) await new Promise((resolve) => { wake = resolve; });
+          const item = items.shift();
+          if (item.error) throw item.error;
+          if (item.end) return;
+          call.emitted.push(item.event);
+          yield item.event;
+        }
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+        call.streamClosed = true;
+      }
+    }
+    return {
+      push,
+      text: (text) => push({ event: { type: 'text', text } }),
+      reasoning: () => push({ event: { type: 'reasoning' } }),
+      done: ({ finishReason = 'stop', model = call.model, usage = null } = {}) => {
+        push({ event: { type: 'done', finishReason, model, usage } });
+        push({ end: true });
+      },
+      fail: (error) => push({ error }),
+      iterate
+    };
+  }
+
+  function openStream(behavior, call, input) {
+    const { signal } = input;
+    switch (behavior.type) {
+      case 'status':
+        return Promise.reject(classifyProviderStatus(behavior.status, behavior.retryAfter ?? null));
+      case 'network':
+        return Promise.reject(classifyNetworkFailure({ cause: { code: behavior.code } }));
+      case 'stall':
+        return abortable(signal, call, { start: () => {} });
+      default:
+        break;
+    }
+    const feed = createFeed(signal, call, { ignoreAbort: behavior.ignoreAbort });
+    if (behavior.type === 'deferred-stream') {
+      call.emit = feed.text;
+      call.think = feed.reasoning;
+      call.complete = feed.done;
+      call.fail = feed.fail;
+    } else if (behavior.type === 'reply' || behavior.type === 'stream' || behavior.type === 'interrupt') {
+      const text = behavior.text ?? defaultText;
+      const chunks = behavior.chunks ?? [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
+      for (let index = 0; index < (behavior.reasoning ?? 0); index += 1) feed.reasoning();
+      for (const chunk of chunks) feed.text(chunk);
+      if (behavior.type === 'interrupt') feed.fail(streamInterrupted());
+      else feed.done({ finishReason: behavior.finishReason ?? 'stop', model: behavior.model === undefined ? input.model : behavior.model });
+    } else {
+      return Promise.reject(new Error(`Tanınmayan sahte akış davranışı: ${behavior.type}`));
+    }
+    return Promise.resolve({ events: feed.iterate() });
+  }
+
+  async function executeStream(input) {
+    const behavior = queue.shift() || { type: 'reply' };
+    const call = {
+      kind: 'stream',
+      model: input.model ?? null,
+      apiKey: input.apiKey ?? null,
+      control: false,
+      baseUrl: input.baseUrl,
+      messages: input.messages ?? null,
+      maxOutputTokens: input.maxOutputTokens ?? null,
+      signal: input.signal ?? null,
+      aborted: false,
+      settled: false,
+      streamClosed: false,
+      emitted: []
+    };
+    calls.push(call);
+    active.add(call);
+    peakActive = Math.max(peakActive, active.size);
+    notify();
+    const settle = () => {
+      if (call.settled) return;
+      call.settled = true;
+      active.delete(call);
+      notify();
+    };
+    try {
+      const opened = await openStream(behavior, call, input);
+      return {
+        events: (async function* tracked() {
+          try {
+            yield* opened.events;
+          } finally {
+            settle();
+          }
+        })()
+      };
+    } catch (error) {
+      settle();
+      throw error;
+    }
+  }
+
   return {
     calls,
     get activeCount() { return active.size; },
@@ -189,6 +319,9 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     },
     chatCompletion(input) {
       return execute('chat', input);
+    },
+    streamChatCompletion(input) {
+      return executeStream(input);
     },
     listModels(input) {
       return execute('models', input);

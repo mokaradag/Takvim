@@ -34,10 +34,17 @@ const { resetAiCredentialSchemaStateForTests } = await import('../../src/server/
 const { resetAiDirectoryGateForTests } = await import('../../src/server/ai/aiCredentialService.js');
 const { resetTelemetryRegistryForTests } = await import('../../src/server/observability/telemetryRegistry.js');
 const { resetOperationalEventBufferForTests } = await import('../../src/server/observability/operationalEventsRepository.js');
+const { resetAssistantGenerationsForTests } = await import('../../src/server/ai/assistant/assistantGenerations.js');
+const { resetAssistantConversationGateForTests } = await import('../../src/server/ai/assistant/assistantService.js');
 
 export const credentialRoute = await import('../../src/app/api/mergen-rota/ai/credential/route.js');
 export const validationRoute = await import('../../src/app/api/mergen-rota/ai/credential/validation/route.js');
 export const probeRoute = await import('../../src/app/api/mergen-rota/ai/probe/route.js');
+export const assistantRoute = await import('../../src/app/api/mergen-rota/ai/assistant/route.js');
+export const conversationsRoute = await import('../../src/app/api/mergen-rota/ai/assistant/conversations/route.js');
+export const conversationPageRoute = await import('../../src/app/api/mergen-rota/ai/assistant/conversations/before/[cursor]/route.js');
+export const conversationRoute = await import('../../src/app/api/mergen-rota/ai/assistant/conversations/[conversationId]/route.js');
+export const turnsRoute = await import('../../src/app/api/mergen-rota/ai/assistant/turns/route.js');
 
 const BASE_ENV = Object.freeze({
   MERGEN_ROTA_DB_SERVER: 'sql.test.internal',
@@ -59,6 +66,8 @@ function resetAi() {
   resetAiDirectoryGateForTests();
   resetTelemetryRegistryForTests();
   resetOperationalEventBufferForTests();
+  resetAssistantGenerationsForTests();
+  resetAssistantConversationGateForTests();
 }
 
 export function defaultPeople() {
@@ -145,6 +154,65 @@ export async function validateKey(options = {}) {
 
 export async function runProbe(options = {}) {
   return readJson(await probeRoute.POST(aiRequest('/probe', { method: 'POST', ...options })));
+}
+
+/* ── Rota AI sohbet uçları ─────────────────────────────────── */
+
+/**
+ * Akış yanıtını olay dizisine çevirir (testin kendi, bağımsız ayrıştırıcısı).
+ * Yorum satırları (canlı tutma) ayrıca sayılır.
+ */
+export function parseSseText(text) {
+  const events = [];
+  let comments = 0;
+  for (const block of text.split('\n\n')) {
+    if (!block.trim()) continue;
+    const lines = block.split('\n');
+    if (lines.every((line) => line.startsWith(':'))) {
+      comments += 1;
+      continue;
+    }
+    const event = lines.find((line) => line.startsWith('event: '))?.slice(7) ?? 'message';
+    const data = lines.filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('\n');
+    events.push({ event, data: data ? JSON.parse(data) : null });
+  }
+  return { events, comments };
+}
+
+export async function readSse(response) {
+  const text = await response.text();
+  return { status: response.status, headers: response.headers, text, ...parseSseText(text) };
+}
+
+export function turnRequest(body, { headers = {}, signal } = {}) {
+  return aiRequest('/assistant/turns', { method: 'POST', body, headers, signal });
+}
+
+/** Tur gönderir; akış tamamlanınca olaylar döner (hata yanıtında JSON gövdesi). */
+export async function sendTurn(body, options = {}) {
+  const response = await turnsRoute.POST(turnRequest({ mode: 'standard', conversationId: null, ...body }, options));
+  if (String(response.headers.get('content-type') || '').startsWith('text/event-stream')) return readSse(response);
+  return readJson(response);
+}
+
+export async function listAssistantConversations(cursor = null) {
+  if (cursor == null) return readJson(await conversationsRoute.GET(aiRequest('/assistant/conversations')));
+  return readJson(await conversationPageRoute.GET(aiRequest(`/assistant/conversations/before/${cursor}`), { params: { cursor } }));
+}
+
+export async function loadAssistantConversation(conversationId) {
+  return readJson(await conversationRoute.GET(aiRequest(`/assistant/conversations/${conversationId}`), { params: { conversationId } }));
+}
+
+export async function deleteAssistantConversation(conversationId, options = {}) {
+  return readJson(await conversationRoute.DELETE(
+    aiRequest(`/assistant/conversations/${conversationId}`, { method: 'DELETE', ...options }),
+    { params: { conversationId } }
+  ));
+}
+
+export async function assistantReadiness() {
+  return readJson(await assistantRoute.GET(aiRequest('/assistant')));
 }
 
 /**

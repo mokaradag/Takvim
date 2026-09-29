@@ -87,6 +87,7 @@ test('iç içe pencerelerde Escape yalnızca üst pencereyi kapatır; portal tar
   try {
     press('Escape'); assert.deepEqual(closed, ['child']);
     child.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(document.activeElement, parentElement);
     const portal = element(), first = element(), last = element();
     portal.setAttribute('data-modal-owner', parentElement.getAttribute('data-focus-scope'));
@@ -94,5 +95,5 @@ test('iç içe pencerelerde Escape yalnızca üst pencereyi kapatır; portal tar
     last.closest = () => portal; document.activeElement = last;
     assert.equal(press('Tab').defaultPrevented, true); assert.equal(document.activeElement, first);
     press('Escape'); assert.deepEqual(closed, ['child', 'parent']);
-  } finally { parent.unmount(); delete globalThis.document; }
+  } finally { parent.unmount(); await new Promise((resolve) => setTimeout(resolve, 0)); delete globalThis.document; }
 });

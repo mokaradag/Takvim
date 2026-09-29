@@ -1,5 +1,8 @@
 import 'server-only';
 import { AI_CREDENTIAL_SOURCES } from '../../domain/ai/aiCredentialPolicy.js';
+import { AI_CAPABILITIES, AI_PROFILES, resolveModelProfile } from '../../domain/ai/aiModelRegistry.js';
+import { checkAssistantConversationSchema } from './assistant/assistantService.js';
+import { conversationSchemaState } from './assistant/conversationStore.js';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { HEALTH_STATES } from '../../domain/observability/healthModel.js';
 import { AI_CONFIG_NAMES, aiConfigurationSummary, readAiConfig } from './aiConfig.js';
@@ -58,6 +61,18 @@ function personalKeysOnly(config) {
   return config.personalKeysSupported && !config.defaultKeyConfigured;
 }
 
+/** Rota AI kiplerinin (chat.general / chat.reasoning) kullanılabilir yolları. */
+function assistantRoutes(registry) {
+  return [AI_PROFILES.CHAT_GENERAL, AI_PROFILES.CHAT_REASONING]
+    .map((profile) => resolveModelProfile(registry, profile))
+    .filter((resolved) => resolved.ok && resolved.route.capabilities.includes(AI_CAPABILITIES.CHAT))
+    .map((resolved) => resolved.route);
+}
+
+function assistantProfilesAvailable(registry) {
+  return assistantRoutes(registry).length > 0;
+}
+
 /** Bileşen durumu + güvenli ayrıntı; `state`, `message`, `detail`, `lastSuccessAt` döner. */
 export function aiHealthComponent({ now = Date.now() } = {}) {
   const config = readAiConfig();
@@ -72,11 +87,14 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   const load = aiRuntimeLoad() || idleLoad(config);
   const telemetry = aiTelemetrySnapshot();
   const credentialSchema = aiCredentialSchemaState();
+  const conversationSchema = conversationSchemaState();
   const detail = {
     configuration,
     registry,
     load,
     telemetry,
+    conversationSchema,
+    assistantProfiles: assistantProfilesAvailable(cachedAiModelRegistry()),
     credentialSchema: { ready: credentialSchema.ready, observedAt: credentialSchema.observedAt }
   };
   const loadText = `Etkin ${load.active}/${load.limits.maxActive}, sırada ${load.queued}/${load.limits.maxQueued}.`;
@@ -157,6 +175,12 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (!probeRoute.ok) {
     return warning(`Hızlı sohbet profili (chat.fast) kullanılamıyor (${probeRoute.reason}); bağlantı sınaması çalışmaz. ${loadText}`);
   }
+  if (!detail.assistantProfiles) return warning(`Rota AI sohbet profilleri (chat.general / chat.reasoning) kullanılamıyor. ${loadText}`);
+  if (conversationSchema.ready === false) return warning(`Rota AI konuşma tabloları (0017) doğrulanamadı. ${loadText}`);
+  const turnFailure = telemetry.assistantTurns?.lastFailure;
+  if (turnFailure && !CAPACITY_CODES.has(turnFailure.code) && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
+    return warning(`Son Rota AI turu tamamlanamadı (${turnFailure.code}). ${loadText}`);
+  }
   // Tablonun kurulu olduğu gözlemi de kalıcı değildir: tablo sonradan
   // kaldırılabilir ya da yetkisi alınabilir. Eski bir olumlu gözlem kanıt sayılmaz.
   const schemaObservedAt = epoch(credentialSchema.observedAt);
@@ -168,6 +192,10 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   }
   const contactAt = epoch(lastContactAt);
   if (contactAt != null && now - contactAt <= CONTACT_FRESHNESS_MS) {
+    const conversationObservedAt = epoch(conversationSchema.observedAt);
+    if (conversationSchema.ready !== true || conversationObservedAt == null || now - conversationObservedAt > SCHEMA_FRESHNESS_MS) {
+      return unknown(`Rota AI konuşma tabloları (0017) yakın zamanda doğrulanmadı; bağlantıyı sınayın. ${loadText}`);
+    }
     return { state: HEALTH_STATES.HEALTHY, message: `Sağlayıcı yanıt veriyor. ${loadText}`, detail, lastSuccessAt };
   }
   return unknown(`Sağlayıcıya yakın zamanda erişilmedi; Entegrasyonlar sekmesinden bağlantıyı sınayın. ${loadText}`);
@@ -232,6 +260,26 @@ async function verifySetup(config, deadline, models) {
       modelMissing: true,
       message: `Uca ulaşıldı ancak hızlı sohbet profilinin modeli (${probeRoute.route.model}) uçtaki model listesinde yok.`
     };
+  }
+  const routes = assistantRoutes(registry);
+  if (!routes.length) {
+    return { code: 'ASSISTANT_PROFILE_UNAVAILABLE', message: 'Uca ulaşıldı ancak Rota AI sohbet profilleri kullanılamıyor.' };
+  }
+  // Uç model listesini verdiyse kullanılabilir tüm Rota AI kiplerinin modeli listede olmalıdır:
+  // yalnızca chat.fast modelini sunan uç "sağlıklı" görünüp her Rota AI turunda düşmez.
+  if (models && !routes.every((route) => models.includes(route.model))) {
+    const missing = [...new Set(routes.filter((route) => !models.includes(route.model)).map((route) => route.model))].join(', ');
+    return {
+      code: 'ASSISTANT_MODEL_MISSING',
+      modelMissing: true,
+      message: `Uca ulaşıldı ancak Rota AI sohbet profillerinin modeli (${missing}) uçtaki model listesinde yok.`
+    };
+  }
+  try {
+    await raceWithAbort(() => checkAssistantConversationSchema({ signal: deadline.signal }), deadline.signal);
+  } catch {
+    if (deadline.failure()) throw deadline.failure();
+    return { code: 'CONVERSATION_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak Rota AI konuşma tabloları (0017) doğrulanamadı.' };
   }
   // Kişisel anahtar saklama açıksa tablo, kurumsal anahtar tanımlı olsa da doğrulanır.
   if (!config.personalKeysSupported) return null;
