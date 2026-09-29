@@ -16,7 +16,7 @@ export const TOOL_LIMITS = Object.freeze({
   /** Tek turdaki en fazla yürütülen çağrı. */
   maxTotalCalls: 12,
   /** Aynı turda aynı anda yürütülen çağrı (her biri ayrıca SQL kapısından geçer). */
-  roundConcurrency: 2,
+  roundConcurrency: 1,
   /** Tek çağrının varsayılan süre sınırı (kapı beklemesi ve sorgu dâhil). */
   callTimeoutMs: 8000,
   /** Tur boyunca araç SQL'inde geçirilebilecek toplam süre. */

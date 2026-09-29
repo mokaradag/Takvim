@@ -59,6 +59,7 @@ export const SCOPE_DISCLOSURE_TEXT = '_Not: Bu yanıt yalnızca görüntüleme y
 export const GROUNDING_FAILED_FINISH_REASON = 'grounding_failed';
 
 const CITATION = /【R([1-9]\d?)】/g;
+const EVIDENCE_BRACKETED = /【\s*R[1-9]\d?(?:\s*[,;]\s*R[1-9]\d?)*\s*】/g;
 const ANY_BRACKETED = /【[^】\n]{0,24}】/g;
 const EVIDENCE_ID = /^R([1-9]\d?)$/;
 
@@ -104,7 +105,7 @@ export function extractCitationIds(text) {
 
 /** Atıf işaretlerini kaldırır (ör. geçmiş yanıt modele bağlam olarak verilirken). */
 export function stripCitations(text) {
-  return String(text ?? '').replace(ANY_BRACKETED, '').replace(/[ \t]+([.,;:!?])/g, '$1').replace(/[ \t]+$/gm, '');
+  return String(text ?? '').replace(EVIDENCE_BRACKETED, '').replace(/[ \t]+([.,;:!?])/g, '$1').replace(/[ \t]+$/gm, '');
 }
 
 /* ── Blok çözümleme ─────────────────────────────────────────── */

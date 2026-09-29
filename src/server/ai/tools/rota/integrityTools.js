@@ -159,7 +159,7 @@ const dataQuality = {
       scope: descriptor,
       complete: true,
       truncated: false,
-      returnedCount: checks.length,
+      returnedCount: facts.length,
       totalCount: facts.length,
       nextCursor: null,
       evidence: {

@@ -496,6 +496,7 @@ export function createAssistantController({
               mode: answer.mode || run.mode,
               finishReason: answer.finishReason || null,
               createdAt: answer.createdAt,
+              evidence: Array.isArray(answer.evidence) ? answer.evidence : null,
               error: null
             }
           } : turn))

@@ -6,6 +6,7 @@ import { readCoordinationPage } from '../../../assignment/assignmentCoordination
 import { isMissingNotificationInboxSchema, readNotificationInbox } from '../../../notifications/notificationInboxQueries.js';
 import { readTaskActivityReport } from '../../../reports/taskActivityReport.js';
 import { readScheduleInbox, readSchedulePage } from '../../../schedule-change/scheduleRequestQueries.js';
+import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import {
   CURSOR_PROPERTY,
@@ -34,9 +35,13 @@ function pageOf(tool, key, cursor, pageSize) {
   return offset / pageSize;
 }
 
-function nextPageCursor(tool, key, page, pageSize, total) {
-  const offset = (page + 1) * pageSize;
-  return offset < total ? encodeCursor(tool, key, offset) : null;
+function pageWindow(tool, key, page, pageSize, total) {
+  const nextOffset = (page + 1) * pageSize;
+  const complete = nextOffset >= total;
+  const nextCursor = !complete && nextOffset <= TOOL_LIMITS.maxCursorOffset
+    ? encodeCursor(tool, key, nextOffset)
+    : null;
+  return { nextCursor, complete, truncated: !complete && !nextCursor };
 }
 
 function clippedLines(lines, max = 6) {
@@ -98,6 +103,7 @@ const activitySearch = {
       page,
       pageSize
     }, call.now));
+    if (report.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
     const items = report.items.map((item) => ({
       occurredAt: item.occurredAt,
       actor: dataText(item.actorName, 120),
@@ -109,9 +115,11 @@ const activitySearch = {
         available: Boolean(item.taskAvailable)
       },
       project: { name: dataText(item.projectName, 160), ...(item.projectCode ? { code: dataText(item.projectCode, 60) } : {}) },
-      ...clippedLines(item.changes)
+      ...clippedLines(item.changes),
+      ...(item.detailsLimited ? { detailsLimited: true } : {})
     }));
-    const nextCursor = report.page === page ? nextPageCursor('rota_activity_search', key, page, pageSize, report.total) : null;
+    const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
+    const detailsLimited = items.some((item) => item.detailsLimited);
     return {
       data: {
         range: report.range,
@@ -120,11 +128,11 @@ const activitySearch = {
         items
       },
       scope: searchedScope(scope, key.projectId),
-      complete: !nextCursor,
-      truncated: false,
+      complete: pageState.complete && !detailsLimited,
+      truncated: pageState.truncated || detailsLimited,
       returnedCount: items.length,
       totalCount: report.total,
-      nextCursor,
+      nextCursor: pageState.nextCursor,
       evidence: {
         label: `Hareket geçmişi · ${report.total} hareket`,
         entity: key.taskId ? { type: 'task', id: key.taskId, name: items[0]?.task.title || null } : (key.projectId ? { type: 'project', id: key.projectId, name: null } : null),
@@ -183,6 +191,7 @@ const scheduleRequests = {
       tab: key.tab, status: key.status, projectId: key.projectId, taskId: key.taskId, from: key.dateFrom, to: key.dateTo,
       search: key.text, page, pageSize
     }));
+    if (result.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
     const items = result.items.map((request) => {
       const awaiting = request.status === 'PENDING' && request.isDecisionOwner && request.taskAvailable;
       return {
@@ -202,15 +211,15 @@ const scheduleRequests = {
         ...(request.decidedAt ? { decidedAt: request.decidedAt } : {})
       };
     });
-    const nextCursor = result.page === page ? nextPageCursor('rota_schedule_requests', key, page, pageSize, result.total) : null;
+    const pageState = pageWindow('rota_schedule_requests', key, page, pageSize, result.total);
     return {
       data: { counts: { awaitingYourDecision: result.counts.pending, sent: result.counts.sent, history: result.counts.history }, tab: key.tab, items },
       scope: participantScope('Yalnızca talep eden ya da karar sahibi olduğunuz talepler.'),
-      complete: !nextCursor,
-      truncated: false,
+      complete: pageState.complete,
+      truncated: pageState.truncated,
       returnedCount: items.length,
       totalCount: result.total,
-      nextCursor,
+      nextCursor: pageState.nextCursor,
       evidence: {
         label: `Tarih değişikliği talepleri · ${result.total} talep`,
         entity: null,
@@ -261,6 +270,7 @@ const assignmentRequests = {
       if (isMissingNotificationInboxSchema(error)) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Atama koordinasyonu bu kurulumda etkin değil.' });
       throw error;
     }
+    if (result.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
     const items = result.items.map((record) => ({
       coordinationId: record.id,
       mode: record.mode,
@@ -282,7 +292,7 @@ const assignmentRequests = {
       createdAt: record.createdAt,
       ...(record.decidedAt ? { decidedAt: record.decidedAt } : {})
     }));
-    const nextCursor = result.page === page ? nextPageCursor('rota_assignment_requests', key, page, pageSize, result.total) : null;
+    const pageState = pageWindow('rota_assignment_requests', key, page, pageSize, result.total);
     return {
       data: {
         counts: { actionRequired: result.counts.pending, sent: result.counts.sent, history: result.counts.history },
@@ -291,11 +301,11 @@ const assignmentRequests = {
         note: 'Talep edilen sorumlu onaylanana kadar görevin sorumlusu değildir; iş yükü ve raporlar yalnızca gerçek sorumluyu sayar.'
       },
       scope: participantScope('Yalnızca katılımcısı olduğunuz ya da güncel karar yetkiniz bulunan kayıtlar.'),
-      complete: !nextCursor,
-      truncated: false,
+      complete: pageState.complete,
+      truncated: pageState.truncated,
       returnedCount: items.length,
       totalCount: result.total,
-      nextCursor,
+      nextCursor: pageState.nextCursor,
       evidence: {
         label: `Atama koordinasyonu · ${result.total} kayıt`,
         entity: null,

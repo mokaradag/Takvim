@@ -389,6 +389,7 @@ export async function streamAssistantTurnRequest({
       arm();
       for (const event of decoder.push(decode(step.value, { stream: true }))) {
         if (event.type === ASSISTANT_STREAM_EVENTS.DELTA && event.data.text) partial = true;
+        if (event.type === ASSISTANT_STREAM_EVENTS.REVISE) partial = false;
         onEvent?.(event);
       }
     }

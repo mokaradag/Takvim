@@ -131,10 +131,10 @@ const baselineCompare = {
         }
       },
       scope: describeTaskScope(project ? [project] : []),
-      complete: slipped.length === variances.filter((item) => item.varianceDays > 0).length,
-      truncated: false,
+      complete: slipped.length === counts.finishSlipped,
+      truncated: slipped.length < counts.finishSlipped,
       returnedCount: slipped.length,
-      totalCount: counts.compared,
+      totalCount: counts.finishSlipped,
       nextCursor: null,
       evidence: {
         label: selected ? `Baz plan karşılaştırması · ${selected.name}` : 'Baz plan karşılaştırması · baz plan yok',
@@ -273,7 +273,7 @@ const dependencyInspect = {
       scope: describeTaskScope([projectAccess(scope, projectId)]),
       complete: true,
       truncated: false,
-      returnedCount: mostConnected.length,
+      returnedCount: result.dependencies.length,
       totalCount: result.dependencies.length,
       nextCursor: null,
       evidence: {

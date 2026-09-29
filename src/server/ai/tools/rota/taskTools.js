@@ -2,7 +2,7 @@ import 'server-only';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
-import { projectAccess } from './rotaScope.js';
+import { describeTaskScope, projectAccess } from './rotaScope.js';
 import { readTaskDetail, readTaskFacts } from './rotaToolStore.js';
 import {
   accessExplanation,
@@ -163,7 +163,7 @@ const taskSearch = {
     const { scope } = await call.authorization();
     const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters);
     const sorted = sortFacts(facts, sort, call.today);
-    const { page, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null });
+    const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null });
     let pageAssignees = assignees;
     if (page.length && filters.assignee !== 'person') {
       const detail = await call.sql((executor) => readTaskFacts(executor, scope, {
@@ -178,8 +178,8 @@ const taskSearch = {
         sort
       },
       scope: descriptor,
-      complete: !nextCursor,
-      truncated: false,
+      complete: offset + page.length >= sorted.length,
+      truncated: !nextCursor && offset + page.length < sorted.length,
       returnedCount: page.length,
       totalCount: sorted.length,
       nextCursor,
@@ -235,7 +235,7 @@ const taskDetail = {
       taskId: fact.id,
       title: dataText(fact.title, 300),
       ...(fact.keyword ? { keyword: dataText(fact.keyword, 80) } : {}),
-      description: dataText(row.Description, 1500),
+      description: dataText(row.Description, 1600),
       ...(row.DescriptionClipped ? { descriptionClipped: true } : {}),
       project: projectRef({ projectId: fact.projectId, name: dataText(row.ProjectName, 160), code: row.ProjectCode ? dataText(row.ProjectCode, 60) : null }),
       wbsPath: detail.wbsChain.map((node) => dataText(node.Name, 120)),
@@ -281,7 +281,7 @@ const taskDetail = {
           ...(task.dependencies ? [] : ['Bağımlılıklar yalnızca projede tam erişimi olan kullanıcılara açıktır.'])
         ]
       },
-      scope: { kind: 'complete-projects', completeProjectView: true, note: 'Tek görevin ayrıntısıdır.' },
+      scope: describeTaskScope(access ? [access] : []),
       complete: true,
       truncated: false,
       returnedCount: 1,
@@ -401,7 +401,7 @@ const taskAnalytics = {
       scope: descriptor,
       complete: true,
       truncated: false,
-      returnedCount: groups ? groups.length : 1,
+      returnedCount: facts.length,
       totalCount: facts.length,
       nextCursor: null,
       evidence: {

@@ -268,7 +268,10 @@ function wireMessages(messages) {
         tool_calls: message.toolCalls.map((call) => ({
           id: call.id,
           type: 'function',
-          function: { name: call.name, arguments: call.arguments }
+          function: {
+            name: call.name,
+            arguments: typeof call.arguments === 'string' && call.arguments.trim() ? call.arguments : '{}'
+          }
         }))
       };
     }
