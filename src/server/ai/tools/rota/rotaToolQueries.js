@@ -243,7 +243,7 @@ ${VISIBLE_TASKS}
     JOIN chain ON chain.ParentWbsId = parentNode.WbsId AND chain.ProjectId = parentNode.ProjectId
     WHERE chain.Depth < 40
   )
-  SELECT WbsId, Code, Name, Depth FROM chain ORDER BY Depth DESC
+  SELECT WbsId, ParentWbsId, Code, Name, Depth FROM chain ORDER BY Depth DESC
   OPTION (MAXRECURSION 50);
 
 ${ASSIGNEE_ROWS}

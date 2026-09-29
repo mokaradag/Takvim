@@ -271,7 +271,7 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   assert.equal(stack.provider.calls.length, 3, 'araç turu + taslak + tek düzeltme');
   const repair = stack.provider.calls[2];
   assert.equal(repair.toolChoice, 'none', 'kanıt varken düzeltme yalnızca yeniden yazımdır');
-  assert.equal(repair.messages.at(-1).role, 'user');
+  assert.equal(repair.messages.at(-1).role, 'system');
   assert.match(repair.messages.at(-1).content, /^SUNUCU DOĞRULAMASI/);
   assert.match(repair.messages.at(-1).content, /R99/);
   assert.equal(response.text.includes('42 gecikmiş'), false, 'doğrulanamayan taslak hiçbir olayda gösterilmez');
@@ -441,7 +441,7 @@ test('araç turu sınırı: dördüncü turdan sonra araçlar kapanır, sınır 
   assert.equal(stack.provider.calls.length, 5);
   assert.deepEqual(stack.provider.calls.map((call) => call.toolChoice), ['auto', 'auto', 'auto', 'auto', 'none']);
   const last = stack.provider.calls[4].messages.at(-1);
-  assert.equal(last.role, 'user');
+  assert.equal(last.role, 'system');
   assert.match(last.content, /Araç çağrı sınırına ulaşıldı/);
   const done = doneOf(response);
   assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R1', 'R2', 'R3', 'R4']);

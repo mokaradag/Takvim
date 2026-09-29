@@ -126,7 +126,7 @@ export async function runGroundedTurn(session, {
       toolRounds += 1;
       transcript.push({ role: 'assistant', content: result.text || '', toolCalls: result.toolCalls });
       transcript.push(...await executor.runRound(result.toolCalls));
-      if (toolRounds >= limits.maxToolRounds) transcript.push({ role: 'user', content: roundLimitNote() });
+      if (toolRounds >= limits.maxToolRounds) transcript.push({ role: 'system', content: roundLimitNote() });
       continue;
     }
 
@@ -159,7 +159,7 @@ export async function runGroundedTurn(session, {
       repairsLeft -= 1;
       repaired = true;
       transcript.push({ role: 'assistant', content: text || '…' });
-      transcript.push({ role: 'user', content: groundingRepairInstruction(verdict.issues) });
+      transcript.push({ role: 'system', content: groundingRepairInstruction(verdict.issues) });
       // Kanıt varken düzeltme yalnızca yeniden yazımdır; kanıt yoksa model
       // gereken aracı çağırabilir (araç turu sınırı sürer).
       allowTools = ledger.size() === 0;

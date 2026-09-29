@@ -314,7 +314,7 @@ const wbsInspect = {
     const rollup = (node, guard = 0) => {
       node.children.sort(order);
       node.subtree = { ...node.direct };
-      if (guard > 200) return node.subtree;
+      if (guard > 200) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       for (const child of node.children) {
         const sub = rollup(child, guard + 1);
         node.subtree.tasks += sub.tasks;

@@ -231,6 +231,7 @@ const taskDetail = {
     const { fact, row } = detail;
     const access = projectAccess(scope, fact.projectId);
     const creatorVisible = row.VisibleCreatedBySicil != null;
+    const wbsPathTruncated = Boolean(detail.wbsChain[0]?.ParentWbsId);
     const task = {
       taskId: fact.id,
       title: dataText(fact.title, 300),
@@ -239,6 +240,7 @@ const taskDetail = {
       ...(row.DescriptionClipped ? { descriptionClipped: true } : {}),
       project: projectRef({ projectId: fact.projectId, name: dataText(row.ProjectName, 160), code: row.ProjectCode ? dataText(row.ProjectCode, 60) : null }),
       wbsPath: detail.wbsChain.map((node) => dataText(node.Name, 120)),
+      ...(wbsPathTruncated ? { wbsPathTruncated: true } : {}),
       status: fact.status,
       statusLabel: statusLabelOf(fact.status),
       priority: fact.priority,
@@ -278,12 +280,13 @@ const taskDetail = {
         notes: [
           'NULL saat/bütçe değeri bilinmiyor demektir, sıfır değildir. Rota para birimi tutmaz.',
           ...(creatorVisible ? [] : ['Oluşturan kişinin kimliği bu erişim düzeyinde gösterilmez.']),
-          ...(task.dependencies ? [] : ['Bağımlılıklar yalnızca projede tam erişimi olan kullanıcılara açıktır.'])
+          ...(task.dependencies ? [] : ['Bağımlılıklar yalnızca projede tam erişimi olan kullanıcılara açıktır.']),
+          ...(wbsPathTruncated ? ['İş dağılım yolu güvenlik derinliği nedeniyle kısaltıldı.'] : [])
         ]
       },
       scope: describeTaskScope(access ? [access] : []),
-      complete: true,
-      truncated: false,
+      complete: !wbsPathTruncated,
+      truncated: wbsPathTruncated,
       returnedCount: 1,
       totalCount: 1,
       nextCursor: null,
