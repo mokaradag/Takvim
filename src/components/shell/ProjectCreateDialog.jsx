@@ -157,7 +157,6 @@ export function ProjectCreateDialog({ open, people = [], onClose, onCreate }) {
                 value={form.code}
                 onChange={setField('code')}
                 placeholder="Örn. PRJ-2026-041"
-                autoFocus
                 disabled={saving}
               />
             </label>

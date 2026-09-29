@@ -1251,9 +1251,12 @@ Kalıcılık anlamı:
 - Liste son etkinliğe göre sıralıdır (eşit zamanda `ConversationId`, SQL Server
   `uniqueidentifier` sırasıyla; tarayıcı aynı sırayı uygular) ve 30'arlık
   anahtar kümesi sayfalarıyla gelir; panel açılırken yalnızca ilk sayfa okunur,
-  iletiler yalnızca açılan konuşma için yüklenir. *Daha eski konuşmalar* sabit
-  sayıda istekle çalışır: başa taşınan konuşmalar için ilk sayfa yeniden
-  okunur, eski sayfalar var olan imleçten sürer (geçmiş baştan oynatılmaz). Bir konuşma en fazla 100 ileti taşır; dolunca yeni tur
+  iletiler yalnızca açılan konuşma için yüklenir. *Daha eski konuşmalar*
+  seçildiğinde başa taşınan konuşmalar için yeni aralık ve yalnızca zaten
+  bilinen satırlardan oluşan sayfalar gerektiği kadar taranır; bu nedenle tek
+  tıklamadaki istek sayısı sabit değildir. İstek sayısı, yeni ya da zaten
+  bilinen satırların kaç sayfa boyunca geçilmesi gerektiğine bağlıdır; geçmiş
+  baştan oynatılmaz. Bir konuşma en fazla 100 ileti taşır; dolunca yeni tur
   `CONFLICT` (`CONVERSATION_FULL`) alır ve arayüz yeni konuşma önerir.
 
 **Sicil sahipliği.** Her sorgu `OwnerSicil = @sicil` ile sınırlıdır ve
