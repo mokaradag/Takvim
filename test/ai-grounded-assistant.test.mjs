@@ -359,6 +359,30 @@ test('araç kullanılmayan genel yanıt gerçek zamanlı akar; kanıt işareti t
   const fabricated = await sendTurn({ turnId: randomUUID(), message: 'Kaç görev var?' });
   assert.equal(doneOf(fabricated).assistantMessage.content, GROUNDING_FAILURE_TEXT);
   assert.equal(stack.provider.calls[2].toolChoice, 'auto', 'kanıt yokken düzeltme turunda araç çağrılabilir');
+
+  // Rota olgusu sorusunda model araç çağrısını atlarsa atıfsız metin de doğrudan kabul edilmez.
+  const before = stack.provider.calls.length;
+  stack.provider.enqueue({ type: 'answer', text: 'Atlas projesi gecikiyor.' }, { type: 'answer', text: 'Atlas projesi gecikiyor.' });
+  const skipped = await sendTurn({ turnId: randomUUID(), message: 'Atlas projesi gecikiyor mu?' });
+  assert.equal(doneOf(skipped).assistantMessage.content, GROUNDING_FAILURE_TEXT);
+  assert.equal(stack.provider.calls[before + 1].toolChoice, 'auto');
+  assert.equal(skipped.text.includes('Atlas projesi gecikiyor.'), false);
+});
+
+test('genel sohbete düşüş önceki kanıta dayalı Rota yanıtını model bağlamından çıkarır', async (t) => {
+  const stack = groundedStack(t);
+  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.FULL }));
+  const first = await sendTurn({ turnId: randomUUID(), message: 'Radar projesinde kaç görev var?' });
+  const conversationId = doneOf(first).conversation.id;
+
+  stack.setEnv({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' });
+  stack.provider.enqueue({ type: 'stream', text: 'Güncel Rota verisi olmadan bu soruyu yanıtlayamam.' });
+  await sendTurn({ conversationId, turnId: randomUUID(), message: 'Radar projesinin son durumu nedir?' });
+
+  const fallback = stack.provider.calls.at(-1);
+  assert.equal(fallback.kind, 'stream');
+  assert.equal(fallback.messages.some((message) => String(message.content).includes('Radar Modernizasyonu projesinde 8 görev')), false);
+  assert.equal(fallback.messages.some((message) => String(message.content).includes('Önceki Rota verisi yanıtı güncel kanıt olmadığı için')), true);
 });
 
 test('canlı gösterilen ön söz araç çağrısına dönüşürse revise gönderilir ve taslak yanıttan çıkarılır', async (t) => {

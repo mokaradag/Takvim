@@ -65,6 +65,13 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
     has(id) {
       return entries.some((entry) => entry.id === id);
     },
+    /** Belirlenimci yanıt doğrulaması için modele verilen güvenli yükler. */
+    payloads(ids = null) {
+      const wanted = ids ? new Set(ids) : null;
+      return entries
+        .filter((entry) => (!wanted || wanted.has(entry.id)) && entry.payload)
+        .map((entry) => ({ id: entry.id, payload: entry.payload }));
+    },
     /** Verilen kimliklerin özetleri, kanıt sırasına göre. */
     summaries(ids = null) {
       const wanted = ids ? new Set(ids) : null;

@@ -9,6 +9,7 @@ import {
   GROUNDING_FAILURE_TEXT,
   groundingRepairInstruction,
   normalizeCitations,
+  requiresRotaEvidence,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
 import { recordGroundedAnswer } from '../aiTelemetry.js';
@@ -45,11 +46,15 @@ function roundLimitNote() {
   return 'SUNUCU DOĞRULAMASI: Araç çağrı sınırına ulaşıldı. Yeni araç çağırma; yalnızca eldeki kanıtlarla yanıtla ve eksik kalan kısmı açıkça belirt.';
 }
 
-function analyze(text, { evidenceIds, toolsAttempted }) {
+function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidenceRequired }) {
   const normalized = normalizeCitations(text);
-  if (evidenceIds.length) return { normalized, kind: 'grounded', ...analyzeGroundedAnswer(normalized, { evidenceIds }) };
+  if (evidenceIds.length) return {
+    normalized,
+    kind: 'grounded',
+    ...analyzeGroundedAnswer(normalized, { evidenceIds, evidencePayloads })
+  };
   if (toolsAttempted) return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized) };
-  return { normalized, kind: 'direct', ...analyzeDirectAnswer(normalized) };
+  return { normalized, kind: 'direct', ...analyzeDirectAnswer(normalized, { evidenceRequired }) };
 }
 
 export async function runGroundedTurn(session, {
@@ -71,13 +76,15 @@ export async function runGroundedTurn(session, {
     onProgress: ({ topic }) => status(ASSISTANT_STREAM_PHASES.TOOLS, { topic })
   });
   const transcript = [...messages];
+  const currentUser = [...messages].reverse().find((message) => message.role === 'user');
+  const evidenceRequired = requiresRotaEvidence(currentUser?.content);
   let toolRounds = 0;
   let modelRounds = 0;
   let toolsAttempted = false;
   let repairsLeft = limits.maxRepairRounds;
   let repaired = false;
   let allowTools = true;
-  let liveAllowed = true;
+  let liveAllowed = !evidenceRequired;
   let streamed = false;
 
   const revise = () => {
@@ -132,7 +139,12 @@ export async function runGroundedTurn(session, {
 
     const text = String(result.text || '').trim();
     if (!streamed) status(ASSISTANT_STREAM_PHASES.VERIFYING);
-    const verdict = analyze(text, { evidenceIds: ledger.ids(), toolsAttempted });
+    const verdict = analyze(text, {
+      evidenceIds: ledger.ids(),
+      evidencePayloads: ledger.payloads(),
+      toolsAttempted,
+      evidenceRequired
+    });
     if (verdict.ok) {
       const cited = ledger.summaries(verdict.citedIds);
       const disclosure = verdict.kind === 'grounded' ? withScopeDisclosure(verdict.normalized, cited) : { text, disclosed: false };

@@ -471,6 +471,18 @@ async function optionalEvidence(sicil, signal, target) {
   }
 }
 
+const FALLBACK_GROUNDED_HISTORY_TEXT = '[Önceki Rota verisi yanıtı güncel kanıt olmadığı için bu tur bağlamına alınmadı.]';
+
+function fallbackAssistantHistory(history, evidence, { conservative = false } = {}) {
+  return history.map((message) => {
+    if (message.role !== 'assistant') return message;
+    if (evidence?.has(message.id) || (!evidence && conservative)) {
+      return { ...message, content: FALLBACK_GROUNDED_HISTORY_TEXT };
+    }
+    return message;
+  });
+}
+
 /**
  * Konuşmayı iletileriyle siler. Başarılı silmeden sonra süren üretim
  * durdurulur; başka Sicil'in konuşması silinmez ve varlığı öğrenilemez.
@@ -639,12 +651,17 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     const failure = outcomeFailure(prepared, input);
     if (failure) throw failure;
     claim.bindConversation(prepared.conversation.id);
+    const useTools = grounded && !prepared.answer;
+    let history = prepared.history;
+    if (!useTools && history.some((message) => message.role === 'assistant')) {
+      const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
+      history = fallbackAssistantHistory(history, priorEvidence, { conservative: config.toolsEnabled && priorEvidence == null });
+    }
     const contextInput = {
-      history: prepared.history,
+      history,
       userContent: prepared.turn.content,
       priorMessageCount: Math.max(0, prepared.turn.sequence - 1)
     };
-    const useTools = grounded && !prepared.answer;
     const context = useTools ? buildGroundedContext(contextInput) : buildAssistantContext(contextInput);
     return {
       sicil,

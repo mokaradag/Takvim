@@ -298,6 +298,22 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   assert.deepEqual(invented.issues.map((issue) => issue.code).sort(), ['MISSING_CITATION', 'UNCITED_NUMERIC_BLOCK', 'UNKNOWN_CITATION']);
   const cited = evidence.analyzeGroundedAnswer('Projede 3 gecikmiş görev var. 【R1】', { evidenceIds: ['R1'] });
   assert.deepEqual(cited, { ok: true, citedIds: ['R1'], issues: [] });
+  const payload = [{
+    id: 'R1',
+    payload: JSON.stringify({
+      evidenceId: 'R1',
+      totalCount: 3,
+      data: { status: 'in_progress', targetFinish: '2026-10-05' }
+    })
+  }];
+  assert.equal(evidence.analyzeGroundedAnswer(
+    'Projede 3 görev var, durum Devam ediyor ve termin 05.10.2026. 【R1】',
+    { evidenceIds: ['R1'], evidencePayloads: payload }
+  ).ok, true);
+  assert.deepEqual(evidence.analyzeGroundedAnswer(
+    'Projede 999 görev var. 【R1】',
+    { evidenceIds: ['R1'], evidencePayloads: payload }
+  ).issues.map((issue) => issue.code), ['UNSUPPORTED_EVIDENCE_VALUE']);
   // Liste ve tablo, hemen komşu paragraftaki atıfla desteklenebilir; paragraf kendi atfını taşımalıdır.
   const table = 'Gecikmiş görevler şunlar 【R1】:\n\n| Görev | Gün |\n|---|---|\n| A | 3 |';
   assert.equal(evidence.analyzeGroundedAnswer(table, { evidenceIds: ['R1'] }).ok, true);
@@ -309,6 +325,9 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   assert.equal(evidence.analyzeGroundedAnswer('## 1. Özet\n\nDurum iyi 【R1】', { evidenceIds: ['R1'] }).ok, true);
   // Araçsız genel yanıt kanıt işareti taşıyamaz; araç denenip kanıt alınamadıysa sayı da yazılamaz.
   assert.equal(evidence.analyzeDirectAnswer('Gantt şeması 3 bölümden oluşur.').ok, true);
+  assert.equal(evidence.requiresRotaEvidence('Atlas projesi gecikiyor mu?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Kritik yol yöntemini anlatır mısın?'), false);
+  assert.deepEqual(evidence.analyzeDirectAnswer('Atlas projesi gecikiyor.', { evidenceRequired: true }).issues.map((issue) => issue.code), ['ROTA_EVIDENCE_REQUIRED']);
   assert.deepEqual(evidence.analyzeDirectAnswer('Toplam 5 görev 【R1】').issues.map((issue) => issue.code), ['CITATION_WITHOUT_EVIDENCE']);
   assert.deepEqual(evidence.analyzeUngroundedAnswer('Muhtemelen 40 civarı görev var.').issues.map((issue) => issue.code), ['UNGROUNDED_NUMERIC_BLOCK']);
   assert.equal(evidence.analyzeUngroundedAnswer('Bu görevi bulamadım ya da görüntüleme yetkiniz yok.').ok, true);

@@ -181,19 +181,139 @@ function validCitationsIn(text, evidenceIds) {
   return extractCitationIds(text).filter((id) => evidenceIds.has(id));
 }
 
+const ROTA_DATA_TERMS = [
+  'görev', 'proje', 'portföy', 'wbs', 'iş dağılım', 'sorumlu', 'atama', 'bildirim',
+  'baz plan', 'bağımlılık', 'tekrar', 'takvim', 'outlook', 'termin', 'gerçekleşen',
+  'planlanan bitiş', 'ilerleme'
+];
+const ROTA_FACT_HINTS = [
+  'kaç', 'hangi', 'kim', 'ne zaman', 'var mı', 'yok mu', 'listele', 'göster', 'bul',
+  'ara', 'durum', 'gecik', 'tamamlan', 'başla', 'bitti', 'bitmiş', 'sorumlu', 'atan',
+  'bekleyen', 'onay', 'benim', 'bana', 'bizim', 'ekibim', 'bugün', 'yarın', 'bu hafta'
+];
+
+/** Kullanıcının iletisi güncel Rota olgusu gerektiriyor mu? Saf ve muhafazakâr kapı. */
+export function requiresRotaEvidence(text) {
+  const lower = String(text ?? '').toLocaleLowerCase('tr-TR');
+  return ROTA_DATA_TERMS.some((term) => lower.includes(term))
+    && ROTA_FACT_HINTS.some((hint) => lower.includes(hint));
+}
+
 function excerpt(text) {
   const plain = String(text).replace(/\s+/g, ' ').trim();
   return plain.length > 80 ? `${plain.slice(0, 77)}…` : plain;
+}
+
+function claimText(text) {
+  return String(text ?? '')
+    .replace(ANY_BRACKETED, ' ')
+    .split('\n')
+    .map((line) => line
+      .replace(/^\s{0,3}\d{1,3}[.)]\s/, '')
+      .replace(/^\s{0,3}#{1,6}\s+\d{1,3}(?:\.\d{1,3})*[.)]?\s/, ''))
+    .join('\n');
+}
+
+function canonicalNumber(value) {
+  const parsed = Number(String(value).replace(',', '.'));
+  return Number.isFinite(parsed) ? String(parsed) : null;
+}
+
+const STATUS_CLAIMS = [
+  { pattern: /tamamlandı/u, values: ['done', 'completed', 'complete'] },
+  { pattern: /devam ediyor/u, values: ['in_progress', 'in-progress'] },
+  { pattern: /yapılacak/u, values: ['todo', 'planned'] }
+];
+
+function claimsIn(text) {
+  let source = claimText(text);
+  const dates = [];
+  source = source
+    .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (token) => {
+      dates.push(token);
+      return ' ';
+    })
+    .replace(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/g, (_, day, month, year) => {
+      dates.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+      return ' ';
+    });
+  source = source
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, ' ')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b/g, ' ');
+  const numbers = [...source.matchAll(/(^|[^\p{L}\d])(\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)]
+    .map((match) => canonicalNumber(match[2]))
+    .filter(Boolean);
+  const lower = source.toLocaleLowerCase('tr-TR');
+  const statuses = STATUS_CLAIMS.filter((item) => item.pattern.test(lower)).map((item) => item.values);
+  return { dates: [...new Set(dates)], numbers: [...new Set(numbers)], statuses };
+}
+
+function collectEvidenceValues(value, result) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    result.numbers.add(String(value));
+    return;
+  }
+  if (typeof value === 'string') {
+    result.strings.add(value.toLocaleLowerCase('tr-TR'));
+    for (const match of value.matchAll(/(^|[^\p{L}\d])(\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)) {
+      const number = canonicalNumber(match[2]);
+      if (number) result.numbers.add(number);
+    }
+    const date = value.match(/(?:^|[^\d])(\d{4}-\d{2}-\d{2})(?:[^\d]|$)/);
+    if (date) result.dates.add(date[1]);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectEvidenceValues(item, result));
+    return;
+  }
+  if (value && typeof value === 'object') Object.values(value).forEach((item) => collectEvidenceValues(item, result));
+}
+
+function evidenceValueIndex(payloads) {
+  const byId = new Map();
+  for (const item of Array.isArray(payloads) ? payloads : []) {
+    if (!item || !isEvidenceId(item.id)) continue;
+    let payload = item.payload;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+    }
+    const values = { numbers: new Set(), dates: new Set(), strings: new Set() };
+    collectEvidenceValues(payload, values);
+    byId.set(item.id, values);
+  }
+  return byId;
+}
+
+function unsupportedEvidenceClaims(text, citationIds, byId) {
+  const indexes = citationIds.map((id) => byId.get(id)).filter(Boolean);
+  const claims = claimsIn(text);
+  const unsupported = [];
+  if (!indexes.length && (claims.numbers.length || claims.dates.length || claims.statuses.length)) return ['kanıt yükü'];
+  for (const value of claims.numbers) {
+    if (!indexes.some((index) => index.numbers.has(value))) unsupported.push(`sayı ${value}`);
+  }
+  for (const value of claims.dates) {
+    if (!indexes.some((index) => index.dates.has(value))) unsupported.push(`tarih ${value}`);
+  }
+  for (const aliases of claims.statuses) {
+    if (!indexes.some((index) => aliases.some((alias) => index.strings.has(alias)))) unsupported.push(`durum ${aliases[0]}`);
+  }
+  return unsupported;
 }
 
 /**
  * Kanıta dayanan (araç kullanılmış) yanıtın doğrulanması.
  *
  * @param {string} text  kanonikleştirilmiş yanıt
- * @param {{ evidenceIds: Iterable<string> }} context bu turda üretilen kanıt kimlikleri
+ * @param {{ evidenceIds: Iterable<string>, evidencePayloads?: Array<{id: string, payload: string}> }} context tur kanıtları
  * @returns {{ ok: boolean, citedIds: string[], issues: Array<{code: string, detail?: string}> }}
  */
-export function analyzeGroundedAnswer(text, { evidenceIds = [] } = {}) {
+export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads } = {}) {
   const available = new Set(evidenceIds);
   const answer = String(text ?? '');
   const issues = [];
@@ -209,11 +329,21 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [] } = {}) {
   if (available.size > 0 && valid.length === 0) issues.push({ code: 'MISSING_CITATION' });
 
   const segments = answerSegments(answer);
-  const attributed = segments.map((segment) => validCitationsIn(segment.text, available).length > 0);
+  const directCitations = segments.map((segment) => validCitationsIn(segment.text, available));
+  const valuesByEvidence = evidenceValueIndex(evidencePayloads);
+  const validatePayloadValues = Array.isArray(evidencePayloads);
   segments.forEach((segment, index) => {
-    if (attributed[index]) return;
-    const neighbour = segment.kind !== 'paragraph' && (attributed[index - 1] || attributed[index + 1]);
-    if (neighbour) return;
+    let citationIds = directCitations[index];
+    if (!citationIds.length && segment.kind !== 'paragraph') {
+      citationIds = [...new Set([...(directCitations[index - 1] || []), ...(directCitations[index + 1] || [])])];
+    }
+    if (citationIds.length) {
+      if (validatePayloadValues) {
+        const unsupported = unsupportedEvidenceClaims(segment.text, citationIds, valuesByEvidence);
+        if (unsupported.length) issues.push({ code: 'UNSUPPORTED_EVIDENCE_VALUE', detail: unsupported.slice(0, 4).join(', ') });
+      }
+      return;
+    }
     const code = segmentHasNumericClaim(segment) ? 'UNCITED_NUMERIC_BLOCK' : 'UNCITED_GROUNDED_BLOCK';
     issues.push({ code, detail: excerpt(segment.text) });
   });
@@ -224,10 +354,11 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [] } = {}) {
  * Araç kullanılmadan üretilen genel yanıt. Kanıt olmadığı için hiçbir kanıt
  * işareti taşıyamaz; taşıyorsa model kanıt uydurmuştur.
  */
-export function analyzeDirectAnswer(text) {
+export function analyzeDirectAnswer(text, { evidenceRequired = false } = {}) {
   const answer = String(text ?? '');
   const issues = [];
   if (!answer.trim()) issues.push({ code: 'EMPTY_ANSWER' });
+  if (evidenceRequired) issues.push({ code: 'ROTA_EVIDENCE_REQUIRED' });
   const tokens = answer.match(ANY_BRACKETED) || [];
   if (tokens.length) issues.push({ code: 'CITATION_WITHOUT_EVIDENCE', detail: tokens.slice(0, 3).join(' ') });
   return { ok: issues.length === 0, citedIds: [], issues };
@@ -284,6 +415,8 @@ const ISSUE_GUIDANCE = Object.freeze({
   MISSING_CITATION: 'Rota verisine dayanan her ifadeye ilgili kanıtın atfını 【R1】 biçiminde ekle.',
   UNCITED_NUMERIC_BLOCK: 'Şu bölüm sayı ya da tarih içeriyor ama kanıt atfı taşımıyor: "{detail}". Bu değeri destekleyen kanıtın atfını aynı paragrafa ekle; kanıtla desteklenemiyorsa değeri yazma.',
   UNCITED_GROUNDED_BLOCK: 'Şu bölüm Rota yanıtında kanıt atfı taşımıyor: "{detail}". Rota verisine dayanmıyorsa bölümü çıkar; dayanıyorsa ilgili kanıtın atfını ekle.',
+  UNSUPPORTED_EVIDENCE_VALUE: 'Şu değerler atıf yapılan araç sonuçlarında bulunmuyor: {detail}. Yalnızca ilgili kanıt yükünde gerçekten bulunan sayı, tarih ve durum değerlerini kullan.',
+  ROTA_EVIDENCE_REQUIRED: 'Kullanıcı güncel Rota verisi soruyor. Yanıt vermeden önce ilgili Rota aracını çağır ve sonucu kanıt olarak kullan.',
   CITATION_WITHOUT_EVIDENCE: 'Bu yanıtta hiçbir Rota kanıtı yok ama kanıt işareti kullandın. Rota verisi gerekiyorsa önce ilgili aracı çağır; gerekmiyorsa kanıt işareti kullanmadan yanıtla.',
   UNGROUNDED_NUMERIC_BLOCK: 'Rota verisi alınamadığı hâlde şu bölüm sayı ya da tarih içeriyor: "{detail}". Veriyi tahminle doldurma; verinin neden alınamadığını açıkla ya da ilgili aracı yeniden çağır.'
 });
@@ -296,7 +429,7 @@ export function groundingRepairInstruction(issues = []) {
   return [
     'SUNUCU DOĞRULAMASI: Önceki taslak kanıt sözleşmesini karşılamadı ve kullanıcıya gösterilmedi.',
     ...lines,
-    'Aynı kanıtları kullanarak yanıtı baştan, eksiksiz ve yalnızca kanıtlanmış bilgilerle yeniden yaz. Yeni sayı ya da tarih uydurma.'
+    'Rota verisi gerekiyorsa önce uygun aracı çağır. Kanıt varsa yalnızca o kanıtlarla yanıtı baştan yaz; yeni sayı, tarih ya da durum uydurma.'
   ].join('\n');
 }
 
