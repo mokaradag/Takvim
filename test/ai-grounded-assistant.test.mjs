@@ -443,7 +443,9 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   assert.equal(JSON.stringify(seen).includes('SELECT'), false, 'hata sonucu modelin gönderdiği SQL’i yansıtmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
   // Kanıt olmadan "12 görev" yazılamaz: düzeltme istenir, dürüst yanıt kaydedilir.
-  assert.match(stack.provider.calls[2].messages.at(-1).content, /Rota verisi alınamadığı hâlde/);
+  const repairSystem = stack.provider.calls[2].messages.find((message) => message.role === 'system');
+  assert.ok(repairSystem);
+  assert.match(repairSystem.content, /Rota verisi alınamadığı hâlde/);
   const done = doneOf(response);
   assert.equal(done.assistantMessage.content, 'Bu soruyu şu anda Rota verisiyle yanıtlayamıyorum; soruyu daha dar kapsamda yeniden deneyin.');
   assert.deepEqual(done.assistantMessage.evidence, []);

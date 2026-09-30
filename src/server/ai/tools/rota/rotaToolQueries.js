@@ -168,7 +168,10 @@ ${VISIBLE_TASKS}
   WHERE (@wbsId IS NULL OR t.WbsId = @wbsId)
     AND (@seriesId IS NULL OR t.TaskId = @seriesId OR t.RecurrenceParentTaskId = @seriesId)
     AND (@recurringOnly = 0 OR t.RecurrenceRule IS NOT NULL OR t.RecurrenceParentTaskId IS NOT NULL)
-    AND (LEN(@text) = 0 OR CHARINDEX(@text, CONCAT(t.Title, N' ', COALESCE(t.Keyword, N'')) COLLATE Turkish_100_CI_AI) > 0)
+    AND (LEN(@text) = 0 OR CHARINDEX(
+      TRANSLATE(@text, N'İIı', N'iii') COLLATE Latin1_General_100_CI_AI,
+      TRANSLATE(CONCAT(t.Title, N' ', COALESCE(t.Keyword, N'')), N'İIı', N'iii') COLLATE Latin1_General_100_CI_AI
+    ) > 0)
     AND (@openOnly = 0 OR t.Status <> 'done')
     AND (@targetFrom IS NULL OR t.TargetFinish >= @targetFrom)
     AND (@targetTo IS NULL OR t.TargetFinish <= @targetTo)

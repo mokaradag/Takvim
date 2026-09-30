@@ -17,6 +17,7 @@ const { TOOL_ERROR_CODES, ToolError, toToolError, isTurnFatal } = await import('
 const facts = await import('../src/server/ai/tools/rota/taskFacts.js');
 const { buildRotaScope, describeTaskScope, projectAccess } = await import('../src/server/ai/tools/rota/rotaScope.js');
 const { dataText } = await import('../src/server/ai/tools/rota/rotaToolSupport.js');
+const { AI_TOOL_TASK_FACTS_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
 const registry = await import('../src/server/ai/tools/toolRegistry.js');
 const evidence = await import('../src/domain/ai/evidenceContract.js');
 const { AI_ERROR_CODES } = await import('../src/domain/ai/aiErrorCatalog.js');
@@ -227,6 +228,8 @@ test('süzgeçler, sıralama ve imleç belirlenimcidir; ters aralık ve çakış
   assert.equal(facts.textMatches(fact({ title: 'IŞIK Çalışması' }), 'ışık calısma'), true);
   assert.equal(facts.textMatches(fact({ title: '100% bitti' }), '%'), true);
   assert.equal(facts.textMatches(fact({ title: 'abc' }), '%'), false, '% joker değildir');
+  assert.match(AI_TOOL_TASK_FACTS_SQL, /TRANSLATE\(@text, N'İIı', N'iii'\) COLLATE Latin1_General_100_CI_AI/);
+  assert.match(AI_TOOL_TASK_FACTS_SQL, /TRANSLATE\(CONCAT\(t\.Title,[\s\S]*N'İIı', N'iii'\) COLLATE Latin1_General_100_CI_AI/);
 });
 
 test('saat ve bütçe toplamı NULL değeri sıfır saymaz; durum toplamları tamamlanma tarihini ayrıca izler', () => {
