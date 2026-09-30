@@ -398,6 +398,10 @@ test('Rota olgu kapısı bağlamı korur; kanıt doğrulaması isim ve kayıt il
     evidence.analyzeGroundedAnswer('Görev Alfa termin 20.11.2026. 【R1】', context).issues.map((issue) => issue.code),
     ['UNSUPPORTED_EVIDENCE_VALUE']
   );
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Görev Alfa süresi 2 gün. 【R1】', context).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
 
   const dueCountContext = {
     evidenceIds: ['R1'],

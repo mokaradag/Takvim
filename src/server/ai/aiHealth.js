@@ -215,6 +215,13 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
     if (!detail.rotaData.toolProfiles) {
       return warning(`Rota verisi araçları açık ancak araç yetenekli profiller (chat.tools / chat.tools.reasoning) kullanılamıyor. ${loadText}`);
     }
+    const evidenceObservedAt = epoch(detail.rotaData.evidenceSchema.observedAt);
+    const evidenceFresh = evidenceObservedAt != null && now - evidenceObservedAt <= SCHEMA_FRESHNESS_MS;
+    if (detail.rotaData.evidenceSchema.ready !== true || !evidenceFresh) {
+      return unknown(detail.rotaData.evidenceSchema.ready === true
+        ? `Rota verisi kanıt tablosu (0018) yakın zamanda doğrulanmadı; bağlantıyı sınayın. ${loadText}`
+        : `Rota verisi kanıt tablosu (0018) henüz doğrulanmadı; bağlantıyı sınayın. ${loadText}`);
+    }
     const toolFailure = telemetry.tools?.lastFailure;
     if (toolFailure && TOOL_SERVICE_FAILURES.has(toolFailure.code) && now - epoch(toolFailure.at) <= BUSY_ATTENTION_WINDOW_MS) {
       return warning(`Son Rota verisi aracı hizmet hatasıyla sonuçlandı (${toolFailure.code}). ${loadText}`);

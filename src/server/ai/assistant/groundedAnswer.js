@@ -56,6 +56,18 @@ function appendServerInstruction(transcript, instruction) {
   transcript[systemIndex] = { ...current, content: `${current.content}\n\n${instruction}` };
 }
 
+function safeToolCallsForTranscript(toolCalls, toolMessages) {
+  return toolCalls.map((call, index) => {
+    let rejected = true;
+    try {
+      rejected = JSON.parse(String(toolMessages[index]?.content || '{}')).ok === false;
+    } catch {
+      rejected = true;
+    }
+    return rejected ? { ...call, arguments: '{}' } : call;
+  });
+}
+
 function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidenceRequired }) {
   const normalized = normalizeCitations(text);
   if (evidenceIds.length) return {
@@ -144,8 +156,9 @@ export async function runGroundedTurn(session, {
       liveAllowed = false;
       toolsAttempted = true;
       toolRounds += 1;
-      transcript.push({ role: 'assistant', content: result.text || '', toolCalls: result.toolCalls });
-      transcript.push(...await executor.runRound(result.toolCalls));
+      const toolMessages = await executor.runRound(result.toolCalls);
+      transcript.push({ role: 'assistant', content: result.text || '', toolCalls: safeToolCallsForTranscript(result.toolCalls, toolMessages) });
+      transcript.push(...toolMessages);
       if (toolRounds >= limits.maxToolRounds) appendServerInstruction(transcript, roundLimitNote());
       continue;
     }

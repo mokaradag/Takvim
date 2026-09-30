@@ -377,6 +377,7 @@ test('genel sohbete düşüş önceki kanıta dayalı Rota yanıtını model ba�
   const conversationId = doneOf(first).conversation.id;
 
   stack.setEnv({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' });
+  stack.db.aiEvidenceSchemaMissing = true;
   stack.provider.enqueue({ type: 'stream', text: 'Güncel Rota verisi olmadan bu soruyu yanıtlayamam.' });
   await sendTurn({ conversationId, turnId: randomUUID(), message: 'Radar projesinin son durumu nedir?' });
 
@@ -441,6 +442,9 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
     [false, 'UNKNOWN_TOOL'], [false, 'UNKNOWN_TOOL'], [false, 'INVALID_ARGUMENTS'], [false, 'INVALID_ARGUMENTS']
   ]);
   assert.equal(JSON.stringify(seen).includes('SELECT'), false, 'hata sonucu modelin gönderdiği SQL’i yansıtmaz');
+  const rejectedCalls = stack.provider.calls[1].messages.find((message) => Array.isArray(message.toolCalls))?.toolCalls || [];
+  assert.equal(rejectedCalls.length, 4);
+  assert.equal(rejectedCalls.every((call) => call.arguments === '{}'), true, 'reddedilen bağımsız değişkenler sonraki modele taşınmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
   // Kanıt olmadan "12 görev" yazılamaz: düzeltme istenir, dürüst yanıt kaydedilir.
   const repairSystem = stack.provider.calls[2].messages.find((message) => message.role === 'system');

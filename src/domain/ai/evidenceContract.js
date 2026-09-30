@@ -285,6 +285,7 @@ const FIELD_HINTS = Object.freeze([
   { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
   { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned'] },
   { kind: 'number', pattern: /(?:gerçekleşen\s+saat|actual\s+hours?)/iu, fields: ['actualhours', 'actual'] },
+  { kind: 'number', pattern: /(?:süre|duration)/iu, fields: ['planneddurationdays', 'remainingdurationdays', 'durationdays'] },
   { kind: 'number', pattern: /(?:bütçe|budget)/iu, fields: ['budget'] },
   { kind: 'number', pattern: /(?:harcanan|spent)/iu, fields: ['spent'] },
   { kind: 'date', pattern: /(?:planlanan\s+bitiş|planned\s+finish)/iu, fields: ['plannedfinish'] },

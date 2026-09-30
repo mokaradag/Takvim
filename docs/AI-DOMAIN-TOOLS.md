@@ -255,8 +255,9 @@ Bu yanıtın bitiş nedeni `grounding_failed`'dır ve hiçbir kanıtı kaydedilm
 
 ### 6.4 Kısmi kapsam notu
 
-Yanıt kısmi kapsamlı bir kanıta atıf yapıyorsa sunucu yanıta şu notu ekler;
-model kapsamı ayrıca belirtmiş olsa da not eklenir ve yanıtla birlikte kaydedilir:
+Yanıt kısmi kapsamlı bir kanıta atıf yapıyorsa ve model görünür kayıtlarla sınırlı
+kapsamı zaten açıkça belirtmiyorsa sunucu şu notu ekler; eklenen not yanıtla
+birlikte kaydedilir:
 
 > _Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._
 

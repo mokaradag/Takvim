@@ -227,10 +227,7 @@ function taskDetail(db, params) {
     || (task.CreatedBySicil != null && Number(project?.LeadSicil) === Number(task.CreatedBySicil))
     || (task.CreatedBySicil != null && Boolean(params.canAssignAllCorporate)
       && executiveOf(db, scope.sicil, Number(task.CreatedBySicil)))
-    || (task.CreatedBySicil != null && db.taskAssignees.some((assignment) => Number(assignment.Sicil) === Number(task.CreatedBySicil)
-      && db.tasks.some((candidate) => same(candidate.TaskId, assignment.TaskId)
-        && db.projectAccess.some((grant) => grant.IsActive && Number(grant.Sicil) === scope.sicil
-          && grant.AccessLevel === 'READ' && same(grant.ProjectId, candidate.ProjectId)))));
+;
   const parent = task.RecurrenceParentTaskId ? db.tasks.find((row) => same(row.TaskId, task.RecurrenceParentTaskId) && same(row.ProjectId, task.ProjectId)) : null;
   const scopedTasks = new Set(String(params.scopeTasks || '').split(',').map(upper));
   const parentVisible = parent && (entry.AccessLevel === 'FULL' || access.HasReadGrant || scopedTasks.has(upper(parent.TaskId)));

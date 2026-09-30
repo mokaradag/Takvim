@@ -259,13 +259,6 @@ ${VISIBLE_TASKS}
       OR (@canAssignAllCorporate = 1 AND EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es
         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = t.CreatedBySicil))
-      OR EXISTS (
-        SELECT 1
-        FROM dbo.MR_TaskAssignees creatorAssignment
-        JOIN dbo.MR_Tasks creatorTask ON creatorTask.TaskId = creatorAssignment.TaskId
-        JOIN dbo.MR_ProjectAccess creatorGrant ON creatorGrant.ProjectId = creatorTask.ProjectId
-          AND creatorGrant.Sicil = @sicil AND creatorGrant.IsActive = 1 AND creatorGrant.AccessLevel = 'READ'
-        WHERE creatorAssignment.Sicil = t.CreatedBySicil)
     THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
     CASE WHEN visible.AccessLevel = 'FULL' THEN (
       SELECT COUNT(*) FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.TaskId = t.TaskId

@@ -50,6 +50,7 @@ export const TASK_ACTIVITY_SQL = `
   ) deleted
   WHERE a.EntityType = 'TASK' AND a.ActionCode IN ('CREATE', 'UPDATE', 'DELETE')
     AND a.OccurredAt >= @startUtc AND a.OccurredAt < @endUtc
+    AND (@taskId IS NULL OR TRY_CONVERT(uniqueidentifier, a.EntityId) = @taskId)
     AND (@scope = 'visible' OR (@scope = 'mine' AND a.ActorSicil = @sicil)
       OR (@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil))))

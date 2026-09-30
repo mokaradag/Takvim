@@ -237,7 +237,8 @@ const taskDetail = {
     const detail = await call.sql((executor) => readTaskDetail(executor, scope, args.taskId));
     if (!detail.fact) throw notFound();
     const { fact, row } = detail;
-    const access = projectAccess(scope, fact.projectId);
+    const access = projectAccess(scope, fact.projectId)
+      || (scope.isAdmin ? { accessLevel: fact.accessLevel, readGrant: false, reasons: [] } : null);
     const creatorVisible = row.VisibleCreatedBySicil != null;
     const wbsPathTruncated = Boolean(detail.wbsChain[0]?.ParentWbsId);
     const task = {

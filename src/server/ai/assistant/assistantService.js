@@ -280,7 +280,7 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   }));
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
-  return result.byMessage;
+  return { ready: result.ready, byMessage: result.byMessage };
 }
 
 /* ── Hazırlık durumu ─────────────────────────────────────────── */
@@ -454,7 +454,7 @@ export async function loadAssistantConversation({ conversationId, signal = null 
   const evidence = await optionalEvidence(sicil, signal, { conversationId: id });
   return {
     conversation: result.conversation,
-    messages: result.messages.map((message) => (evidence?.has(message.id) ? { ...message, evidence: evidence.get(message.id) } : message))
+    messages: result.messages.map((message) => (evidence?.byMessage?.has(message.id) ? { ...message, evidence: evidence.byMessage.get(message.id) } : message))
   };
 }
 
@@ -616,7 +616,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     const replayEvidence = (await optionalEvidence(sicil, signal, {
       conversationId: existing.conversation.id,
       messageId: existing.answer.id
-    }))?.get(existing.answer.id);
+    }))?.byMessage?.get(existing.answer.id);
     return {
       sicil, claim: null, mode: existing.answer.mode, profile: assistantProfileForMode(existing.answer.mode), grounded: false,
       conversation: existing.conversation, userMessage: existing.turn.message,
@@ -655,7 +655,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     let history = prepared.history;
     if (!useTools && history.some((message) => message.role === 'assistant')) {
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
-      history = fallbackAssistantHistory(history, priorEvidence, { conservative: config.toolsEnabled && priorEvidence == null });
+      const usableEvidence = priorEvidence?.ready ? priorEvidence.byMessage : null;
+      history = fallbackAssistantHistory(history, usableEvidence, { conservative: usableEvidence == null });
     }
     const contextInput = {
       history,

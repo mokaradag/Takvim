@@ -44,6 +44,10 @@ test('yetki matrisi: sistem yöneticisi, FULL, READ, kısmi, yönetim kapsamı, 
   // Sistem yöneticisi: bütün ETKİN projelerin bütün görevleri; etkin olmayan proje hiç görünmez.
   const admin = await visibleTaskIds(stack, ADMIN);
   assert.deepEqual([...admin].sort(), [...all, ...PARTIAL_OTHERS].sort());
+  const adminDetail = await callRotaTool(stack, ADMIN, 'rota_task_detail', { taskId: TASKS.OVERDUE });
+  assert.equal(adminDetail.result.data.task.access.level, 'FULL');
+  assert.equal(adminDetail.result.data.task.access.dependenciesAndBaselines, true);
+  assert.equal(adminDetail.result.scope.kind, 'complete-projects');
   for (const projectId of [PROJECTS.ARCHIVED, '10000000-0000-4000-8000-00000000abcd']) {
     const missingProject = await callRotaTool(stack, ADMIN, 'rota_task_analytics', { projectId });
     assert.equal(missingProject.result.ok, false);

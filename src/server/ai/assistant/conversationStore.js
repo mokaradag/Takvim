@@ -261,7 +261,16 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   request.input('conversationId', sql.UniqueIdentifier, conversationId);
   request.input('messageId', sql.UniqueIdentifier, messageId);
   request.input('maxEvidence', sql.Int, maxEvidence);
-  const [[state] = [], rows = []] = recordsetsOf(await request.query(AI_CONVERSATION_EVIDENCE_SQL));
+  let result;
+  try {
+    result = await request.query(AI_CONVERSATION_EVIDENCE_SQL);
+  } catch (error) {
+    const number = Number(error?.number ?? error?.originalError?.info?.number);
+    const message = String(error?.message || error?.originalError?.message || '');
+    if (number !== 208 || !/MR_AiMessageEvidence/i.test(message)) throw error;
+    return { knownSicil: true, ready: false, byMessage: new Map() };
+  }
+  const [[state] = [], rows = []] = recordsetsOf(result);
   return {
     knownSicil: Boolean(state?.KnownSicil),
     ready: Boolean(state?.EvidenceReady),
