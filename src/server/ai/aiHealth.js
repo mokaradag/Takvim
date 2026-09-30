@@ -75,14 +75,19 @@ function assistantProfilesAvailable(registry) {
   return assistantRoutes(registry).length > 0;
 }
 
+function toolRoutes(registry) {
+  return [AI_PROFILES.CHAT_TOOLS, AI_PROFILES.CHAT_TOOLS_REASONING]
+    .map((profile) => resolveModelProfile(registry, profile))
+    .filter((resolved) => resolved.ok && resolved.route.capabilities.includes(AI_CAPABILITIES.TOOLS))
+    .map((resolved) => resolved.route);
+}
+
 /** Rota verisi araçlarının durumu (yalnızca özellik açıkken ayrıntı taşır). */
 const TOOL_SERVICE_FAILURES = new Set(['TIMEOUT', 'DATABASE_UNAVAILABLE', 'INTERNAL']);
 
 function rotaDataView(config, registry) {
-  if (!config.toolsEnabled) return { enabled: false };
-  const toolProfiles = [AI_PROFILES.CHAT_TOOLS, AI_PROFILES.CHAT_TOOLS_REASONING]
-    .map((profile) => resolveModelProfile(registry, profile))
-    .filter((resolved) => resolved.ok && resolved.route.capabilities.includes(AI_CAPABILITIES.TOOLS)).length;
+  if (!config.toolsEnabled) return { enabled: false, flagInvalid: Boolean(config.toolsFlagInvalid) };
+  const toolProfiles = toolRoutes(registry).length;
   return {
     enabled: true,
     toolProfiles,
@@ -128,6 +133,9 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
 
   if (config.issues.length) {
     return { state: HEALTH_STATES.WARNING, message: 'Yapay zekâ yapılandırması eksik ya da hatalı.', detail };
+  }
+  if (config.toolsFlagInvalid) {
+    return warning(`Rota verisi araçları etkinleştirme ayarı geçersiz; araçlar kapalı, genel sohbet kullanılabilir. ${loadText}`);
   }
   if (registry.status === 'error') {
     return { state: HEALTH_STATES.WARNING, message: 'Model kaydı geçersiz ya da okunamadı.', detail };
@@ -309,6 +317,20 @@ async function verifySetup(config, deadline, models) {
       modelMissing: true,
       message: `Uca ulaşıldı ancak Rota AI sohbet profillerinin modeli (${missing}) uçtaki model listesinde yok.`
     };
+  }
+  if (config.toolsEnabled) {
+    const routesWithTools = toolRoutes(registry);
+    if (!routesWithTools.length) {
+      return { code: 'TOOL_PROFILE_UNAVAILABLE', message: 'Uca ulaşıldı ancak Rota verisi araç profilleri kullanılamıyor.' };
+    }
+    if (models && !routesWithTools.every((route) => models.includes(route.model))) {
+      const missing = [...new Set(routesWithTools.filter((route) => !models.includes(route.model)).map((route) => route.model))].join(', ');
+      return {
+        code: 'TOOL_MODEL_MISSING',
+        modelMissing: true,
+        message: `Uca ulaşıldı ancak Rota verisi araç profillerinin modeli (${missing}) uçtaki model listesinde yok.`
+      };
+    }
   }
   try {
     await raceWithAbort(() => checkAssistantConversationSchema({ signal: deadline.signal }), deadline.signal);

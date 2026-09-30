@@ -23,6 +23,7 @@ import { AiError, isAiError, toAiFailure } from './aiErrors.js';
 import { recordAiRequest, recordAiRetry, recordAiStream, recordAiValidation, recordProviderCall } from './aiTelemetry.js';
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
 import { classifyProviderStatus, createControlApiKey, isConnectFailure, streamInterrupted } from './providers/openAiCompatibleProvider.js';
+import { TOOL_LIMITS } from './tools/toolLimits.js';
 
 /**
  * Yapay zekâ ağ geçidi — alt sistemin TEK yürütme yolu.
@@ -649,7 +650,7 @@ export function createAiGateway({
   async function runToolSession({ profile, signal = null, run }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
-    const progress = { providerStartedAt: null, recorded: true, rounds: 0 };
+    const progress = { providerStartedAt: null, recorded: true, rounds: 0, emitted: false };
     const providerScope = new AbortController();
     let lease = null;
     let deadline = null;
@@ -672,7 +673,11 @@ export function createAiGateway({
         timeoutMs: config.queueTimeoutMs
       });
       context.queueWaitMs = lease.queueWaitMs;
-      deadline = createAiDeadline({ timeoutMs: route.timeoutMs ?? config.requestTimeoutMs, parentSignal: signal, now });
+      const toolSessionTimeoutMs = Math.max(
+        route.timeoutMs ?? config.requestTimeoutMs,
+        config.requestTimeoutMs + TOOL_LIMITS.maxToolPhaseMs
+      );
+      deadline = createAiDeadline({ timeoutMs: toolSessionTimeoutMs, parentSignal: signal, now });
       unlink = linkAbort(deadline.signal, providerScope);
       const credential = await raceWithAbort(
         () => resolveCredential({ sicil, config, signal: deadline.signal }),
@@ -725,6 +730,7 @@ export function createAiGateway({
                 if (event.type === 'text') {
                   chunks.push(event.text);
                   if (onEvent) await raceWithAbort(() => onEvent({ type: 'text', text: event.text }), deadline.signal);
+                  if (event.text) progress.emitted = true;
                 } else if (event.type === 'reasoning' && !thinking) {
                   thinking = true;
                   notify(onEvent, { type: 'thinking' });
@@ -769,6 +775,7 @@ export function createAiGateway({
       if (failure.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT && context.queueWaitMs == null) {
         context.queueWaitMs = failure.details?.queueWaitMs ?? null;
       }
+      if (progress.emitted && isAiError(failure)) failure.details = { ...failure.details, partial: true };
       if (progress.providerStartedAt != null && !progress.recorded) {
         recordProviderCall({
           operation: 'ai.provider.stream',
@@ -786,7 +793,7 @@ export function createAiGateway({
         details: failure.details,
         durationMs: now() - startedAt
       });
-      recordAiStream({ outcome: streamOutcome(failure, false) });
+      recordAiStream({ outcome: streamOutcome(failure, progress.emitted) });
       throw failure;
     } finally {
       unlink?.();

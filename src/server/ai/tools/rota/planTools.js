@@ -292,12 +292,15 @@ function seriesSummary(template, occurrences, today) {
   const ordered = [...occurrences].sort((left, right) => String(left.recurrenceOccurrenceDate || '').localeCompare(String(right.recurrenceOccurrenceDate || '')));
   const upcoming = ordered.filter((fact) => fact.status !== 'done' && (fact.recurrenceOccurrenceDate || '') >= today);
   const lastDone = [...ordered].reverse().find((fact) => fact.status === 'done');
+  const previewLimit = 3;
   return {
     visibleOccurrences: occurrences.length,
     open: occurrences.filter((fact) => fact.status !== 'done').length,
     done: occurrences.filter((fact) => fact.status === 'done').length,
     overdue: occurrences.filter((fact) => isOverdue(fact, today)).length,
-    next: upcoming.slice(0, 3).map((fact) => ({
+    upcomingCount: upcoming.length,
+    nextTruncated: upcoming.length > previewLimit,
+    next: upcoming.slice(0, previewLimit).map((fact) => ({
       taskId: fact.id, occurrenceDate: fact.recurrenceOccurrenceDate, targetFinish: fact.targetFinish, statusLabel: statusLabelOf(fact.status)
     })),
     ...(lastDone ? { lastCompleted: { taskId: lastDone.id, occurrenceDate: lastDone.recurrenceOccurrenceDate, actualFinish: lastDone.actualFinish } } : {}),
@@ -342,19 +345,20 @@ const recurrenceInspect = {
       const template = result.facts.find((item) => item.id === seriesId && item.recurrenceRule) || null;
       const occurrences = result.facts.filter((item) => item.recurrenceParentId === seriesId);
       const access = projectAccess(scope, fact.projectId);
+      const summary = seriesSummary(template, occurrences, call.today);
       return {
         data: {
           series: {
             templateTaskId: seriesId,
             title: dataText(template?.title || fact.title, 160),
             ...(template ? { rule: dataText(template.recurrenceRule, 200), ruleDescription: describeRecurrenceRule(template.recurrenceRule) } : {}),
-            ...seriesSummary(template, occurrences, call.today)
+            ...summary
           },
           notes: ['Sayılar yalnızca görünür yinelemeler üzerindedir.']
         },
         scope: describeTaskScope(access ? [access] : []),
-        complete: true,
-        truncated: false,
+        complete: !summary.nextTruncated,
+        truncated: summary.nextTruncated,
         returnedCount: 1,
         totalCount: 1,
         nextCursor: null,
@@ -391,14 +395,15 @@ const recurrenceInspect = {
       };
     }).sort((left, right) => right.open - left.open || left.title.localeCompare(right.title, 'tr'));
     const page = list.slice(0, limit);
+    const previewTruncated = page.some((item) => item.nextTruncated);
     const descriptor = args.projectId
       ? describeTaskScope([projectAccess(scope, args.projectId)])
       : describeTaskScope(scope.isAdmin ? [] : [...scope.projects.values()]);
     return {
       data: { seriesCount: list.length, series: page, notes: ['Sayılar yalnızca görünür görevler üzerindedir.'] },
       scope: descriptor,
-      complete: page.length === list.length,
-      truncated: page.length < list.length,
+      complete: page.length === list.length && !previewTruncated,
+      truncated: page.length < list.length || previewTruncated,
       returnedCount: page.length,
       totalCount: list.length,
       nextCursor: null,

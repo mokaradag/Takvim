@@ -284,7 +284,7 @@ const assignmentRequests = {
       ...(record.assigneeOrganization ? { requestedAssigneeOrganization: dataText(record.assigneeOrganization, 160) } : {}),
       ...(record.suggestedAssigneeName ? { suggestedAssignee: dataText(record.suggestedAssigneeName, 120) } : {}),
       ...(record.targetFinish ? { targetFinish: record.targetFinish } : {}),
-      you: { requester: record.isRequester, requestedAssignee: record.isAssignee, canDecide: record.isManager && record.taskAvailable },
+      you: { requester: record.isRequester, requestedAssignee: record.isAssignee, canDecide: record.allowedDecisions.length > 0 },
       actionRequiredFromYou: record.actionable,
       ...(record.requesterMessage ? { requesterMessage: dataText(record.requesterMessage, 300) } : {}),
       ...(record.decisionMessage ? { decisionMessage: dataText(record.decisionMessage, 300) } : {}),

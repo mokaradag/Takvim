@@ -168,7 +168,8 @@ function disabledConfig(issues) {
     }),
     queueTimeoutMs: INTEGER_SETTINGS[NAMES.QUEUE_TIMEOUT_MS].fallback,
     requestTimeoutMs: INTEGER_SETTINGS[NAMES.REQUEST_TIMEOUT_MS].fallback,
-    toolsEnabled: false
+    toolsEnabled: false,
+    toolsFlagInvalid: false
   });
 }
 
@@ -193,7 +194,10 @@ export function parseAiConfig(env = process.env) {
   const queueTimeoutMs = parseInteger(env, NAMES.QUEUE_TIMEOUT_MS, issues);
   const requestTimeoutMs = parseInteger(env, NAMES.REQUEST_TIMEOUT_MS, issues);
   // Rota verisi araçları ayrı bir açık onaydır: 0018 göçü uygulanmadan açılmamalıdır.
-  const toolsEnabled = parseBoolean(env, NAMES.TOOLS_ENABLED, false, issues);
+  // Geçersiz değer araçları kapatır; genel sohbet yapılandırmasını bozmaz.
+  const toolIssues = [];
+  const toolsEnabled = parseBoolean(env, NAMES.TOOLS_ENABLED, false, toolIssues);
+  const toolsFlagInvalid = toolIssues.length > 0;
   if (!text(env, NAMES.DEFAULT_API_KEY) && !text(env, NAMES.MASTER_KEY)) issues.push(NO_CREDENTIAL_SOURCE);
   const uniqueIssues = Object.freeze([...new Set(issues)]);
 
@@ -211,7 +215,8 @@ export function parseAiConfig(env = process.env) {
     limits,
     queueTimeoutMs,
     requestTimeoutMs,
-    toolsEnabled
+    toolsEnabled,
+    toolsFlagInvalid
   });
 }
 

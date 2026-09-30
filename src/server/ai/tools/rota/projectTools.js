@@ -60,7 +60,7 @@ const projectSearch = {
       };
     });
     const exact = matches.filter((match) => match.exactMatch);
-    const ambiguous = exact.length !== 1 && result.total > 1;
+    const ambiguous = result.total > matches.length || (exact.length !== 1 && result.total > 1);
     return {
       data: {
         matches,
@@ -196,7 +196,7 @@ const portfolioSummary = {
     properties: {
       sort: { type: 'string', enum: Object.keys(PORTFOLIO_SORTS), description: 'overdue_desc (varsayılan), open_desc, due_soon_desc, name_asc.' },
       source: { type: 'string', enum: ['all', 'corporate', 'manual'], description: 'Proje kaynağı (varsayılan all).' },
-      includeEmpty: { type: 'boolean', description: 'Görünür görevi olmayan projeler de listelensin mi (varsayılan false).' },
+      includeEmpty: { type: 'boolean', description: 'Görünür görevi olmayan projeler de listelensin mi (varsayılan true; false ise hariç tutulur).' },
       limit: LIMIT_PROPERTY(25, 10)
     }
   },
@@ -209,7 +209,7 @@ const portfolioSummary = {
     const rows = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd }));
     const filteredRows = rows
       .filter((row) => source === 'all' || (source === 'corporate') === (row.SourceType === 'CORPORATE'))
-      .filter((row) => args.includeEmpty === true || taskTotals(row).total > 0);
+      .filter((row) => args.includeEmpty !== false || taskTotals(row).total > 0);
     const projects = filteredRows.map((row) => ({
       projectId: canonicalActualId(row.ProjectId),
       name: dataText(row.ProjectName, 160),
@@ -330,6 +330,14 @@ const wbsInspect = {
       if (!focus) throw notFound();
       start = [focus];
     }
+    const subtreeNodes = new Set();
+    const collectSubtree = (node) => {
+      if (subtreeNodes.has(node.id)) return;
+      subtreeNodes.add(node.id);
+      node.children.forEach(collectSubtree);
+    };
+    start.forEach(collectSubtree);
+    const nodeCount = subtreeNodes.size;
     const listed = [];
     let omitted = 0;
     let depthTruncated = false;
@@ -360,7 +368,7 @@ const wbsInspect = {
       data: {
         project: { projectId: canonicalActualId(args.projectId), name: result.project ? dataText(result.project.ProjectName, 160) : null },
         catalogVisibility: catalogVisible ? 'full-catalog' : 'ancestor-chain-of-visible-tasks',
-        nodeCount: nodes.size,
+        nodeCount,
         nodes: listed,
         tasksWithoutWbs: unplacedTasks,
         notes: [
@@ -373,10 +381,10 @@ const wbsInspect = {
       complete: omitted === 0 && !depthTruncated,
       truncated: omitted > 0 || depthTruncated,
       returnedCount: listed.length,
-      totalCount: nodes.size,
+      totalCount: nodeCount,
       nextCursor: null,
       evidence: {
-        label: `İş dağılım yapısı · ${nodes.size} düğüm`,
+        label: `İş dağılım yapısı · ${nodeCount} düğüm`,
         entity: { type: 'project', id: canonicalActualId(args.projectId), name: result.project ? dataText(result.project.ProjectName, 120) : null },
         highlights: listed.slice(0, 3).map((node) => `${node.code} · ${node.name}`)
       }

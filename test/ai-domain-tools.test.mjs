@@ -544,11 +544,13 @@ test('yetki bağlamı her araç kümesinde yeniden okunur ve kümedeki çağrıl
   ]);
   assert.equal(context.stats().authorizationLoads, 1);
   stack.db.projectAccess = [];
+  await executor.runRound([{ id: 'call_3', name: 'rota_task_search', arguments: '{}' }]);
+  assert.equal(context.stats().authorizationLoads, 2, 'aynı çağrı yeni turda önceki yetkiyle önbellekten dönmez');
   const [detail] = await executor.runRound([{
-    id: 'call_3',
+    id: 'call_4',
     name: 'rota_project_detail',
     arguments: JSON.stringify({ projectId: PROJECTS.READ })
   }]);
   assert.equal(JSON.parse(detail.content).error.code, 'NOT_FOUND');
-  assert.equal(context.stats().authorizationLoads, 2);
+  assert.equal(context.stats().authorizationLoads, 3);
 });

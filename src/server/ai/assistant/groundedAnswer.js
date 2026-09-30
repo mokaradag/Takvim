@@ -53,7 +53,7 @@ function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidence
     kind: 'grounded',
     ...analyzeGroundedAnswer(normalized, { evidenceIds, evidencePayloads })
   };
-  if (toolsAttempted) return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized) };
+  if (toolsAttempted) return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized, { evidenceRequired }) };
   return { normalized, kind: 'direct', ...analyzeDirectAnswer(normalized, { evidenceRequired }) };
 }
 

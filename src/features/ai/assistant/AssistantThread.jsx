@@ -169,7 +169,7 @@ export function AssistantTurn({ turn, phase = null, topic = null, canRetry = fal
             {generationPhaseLabel(phase || 'sending', topic) || 'Yanıt bekleniyor…'}
           </p>
         )}
-        {hasText && <AssistantMarkdown text={answer.content} />}
+        {hasText && <AssistantMarkdown text={answer.content} evidence={answer.evidence} />}
         {(reconciling || (hasText && (status === 'stopped' || status === 'interrupted' || status === 'failed'))) && (
           <p className="rota-assistant-partial-note">
             {reconciling

@@ -143,6 +143,7 @@ export function createToolExecutor({
   async function runRound(toolCalls = []) {
     if (state.startedAt == null) state.startedAt = clock();
     context.beginRound();
+    state.cache.clear();
     const plans = toolCalls.map((call, index) => {
       const tool = resolveTool(call.name);
       state.attempted += 1;

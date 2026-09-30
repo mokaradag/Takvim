@@ -331,6 +331,14 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   assert.deepEqual(evidence.analyzeDirectAnswer('Toplam 5 görev 【R1】').issues.map((issue) => issue.code), ['CITATION_WITHOUT_EVIDENCE']);
   assert.deepEqual(evidence.analyzeUngroundedAnswer('Muhtemelen 40 civarı görev var.').issues.map((issue) => issue.code), ['UNGROUNDED_NUMERIC_BLOCK']);
   assert.equal(evidence.analyzeUngroundedAnswer('Bu görevi bulamadım ya da görüntüleme yetkiniz yok.').ok, true);
+  assert.deepEqual(
+    evidence.analyzeUngroundedAnswer('Atlas projesinin sorumlusu Ayşe.', { evidenceRequired: true }).issues.map((issue) => issue.code),
+    ['ROTA_EVIDENCE_REQUIRED']
+  );
+  assert.equal(
+    evidence.analyzeUngroundedAnswer('Bu soruyu şu anda Rota verisiyle yanıtlayamıyorum; daha sonra yeniden deneyin.', { evidenceRequired: true }).ok,
+    true
+  );
   // Biçim düzeltmesi atıf uydurmaz; bağlantı sözdizimine dokunmaz.
   assert.equal(evidence.normalizeCitations('Toplam [R1] ve 【 R2 】 ile 【R3, R4】 [R1](https://x)'), 'Toplam 【R1】 ve 【R2】 ile 【R3】【R4】 [R1](https://x)');
   assert.match(evidence.groundingRepairInstruction(invented.issues), /^SUNUCU DOĞRULAMASI:/);

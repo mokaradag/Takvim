@@ -238,10 +238,12 @@ test('Markdown: geçerli atıf işareti kaynak düğümüdür; biçimsiz işaret
   const plain = tokens.filter((token) => token.type === 'text').map((token) => token.value).join('');
   assert.ok(plain.includes('【R0】'));
   assert.ok(plain.includes('【X】'));
-  const sup = findElement(renderInline(parseInline('Toplam 8 görev. 【R1】')), (node) => node.type === 'sup');
+  const sup = findElement(renderInline(parseInline('Toplam 8 görev. 【R1】'), 'i', new Set(['R1'])), (node) => node.type === 'sup');
   assert.equal(sup.props.className, 'assistant-md-cite');
   assert.equal(sup.props['aria-label'], 'Kaynak R1');
   assert.equal(sup.props.children, 'R1');
+  const fake = findElement(renderInline(parseInline('Genel yanıt 【R1】')), (node) => node.type === 'sup');
+  assert.equal(fake, null, 'sunucunun bağlamadığı atıf kaynak rozeti olamaz');
   const blocks = parseAssistantMarkdown('- Madde 【R2】');
   assert.equal(JSON.stringify(blocks).includes('"cite"'), true, 'liste maddesinde de atıf çözülür');
   assert.equal(assistantMarkdownText('Toplam **8** görev. 【R1】'), 'Toplam 8 görev. [R1]');

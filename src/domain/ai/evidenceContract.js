@@ -378,10 +378,16 @@ export function analyzeDirectAnswer(text, { evidenceRequired = false } = {}) {
  * Yanıt kanıt işareti taşıyamaz ve Rota verisi olarak okunabilecek sayı ya da
  * tarih içeremez: araç hatası, veriyi tahminle doldurma izni değildir.
  */
-export function analyzeUngroundedAnswer(text) {
-  const direct = analyzeDirectAnswer(text);
+const SAFE_UNGROUNDED_ANSWER = /(?:yanıtlayamıyorum|bulamadım|bulunamadı|ulaşılamıyor|erişemiyorum|görüntüleme yetkiniz yok|veri alınamadı)/i;
+
+export function analyzeUngroundedAnswer(text, { evidenceRequired = false } = {}) {
+  const value = String(text ?? '');
+  const direct = analyzeDirectAnswer(value);
   const issues = [...direct.issues];
-  for (const segment of answerSegments(String(text ?? ''))) {
+  if (evidenceRequired && !SAFE_UNGROUNDED_ANSWER.test(value)) {
+    issues.push({ code: 'ROTA_EVIDENCE_REQUIRED', detail: excerpt(value) });
+  }
+  for (const segment of answerSegments(value)) {
     if (segment.kind !== 'code' && segmentHasNumericClaim(segment)) {
       issues.push({ code: 'UNGROUNDED_NUMERIC_BLOCK', detail: excerpt(segment.text) });
     }
