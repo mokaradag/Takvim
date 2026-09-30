@@ -127,7 +127,8 @@ const ASSIGNEE_ROWS = `
     CASE WHEN a.IdentityVisible = 1 THEN a.Sicil ELSE NULL END AS Sicil,
     COALESCE(NULLIF(LTRIM(RTRIM(d.DirectoryName)), N''),
       CASE WHEN a.IdentityVisible = 1 THEN CONVERT(nvarchar(20), a.Sicil) ELSE NULL END) AS DisplayName,
-    a.IdentityVisible
+    a.IdentityVisible,
+    CAST(CASE WHEN d.Sicil IS NULL THEN 0 ELSE 1 END AS bit) AS Resolved
   FROM #AiAssignees a
   LEFT JOIN (SELECT Sicil, MIN(DisplayName) AS DirectoryName FROM #AiDirectory GROUP BY Sicil) d ON d.Sicil = a.Sicil
   ORDER BY a.TaskId;
@@ -258,10 +259,6 @@ ${VISIBLE_TASKS}
     CASE WHEN LEN(t.Description) > 1600 THEN 1 ELSE 0 END AS DescriptionClipped,
     CASE WHEN visible.IdentityBase = 1
       OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil)
-      OR p.LeadSicil = t.CreatedBySicil
-      OR (@canAssignAllCorporate = 1 AND EXISTS (
-        SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = t.CreatedBySicil))
     THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
     CASE WHEN visible.AccessLevel = 'FULL' THEN (
       SELECT COUNT(*) FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.TaskId = t.TaskId

@@ -341,7 +341,8 @@ export function assigneesByTask(rows = []) {
     const person = {
       sicil: identityVisible && row.Sicil != null ? Number(row.Sicil) : null,
       name: row.DisplayName ? String(row.DisplayName).trim() : null,
-      identityVisible
+      identityVisible,
+      resolved: row.Resolved == null ? true : Boolean(row.Resolved)
     };
     if (!person.name && person.sicil == null) continue;
     if (!byTask.has(taskId)) byTask.set(taskId, []);

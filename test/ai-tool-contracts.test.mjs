@@ -335,6 +335,10 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   // Araçsız genel yanıt kanıt işareti taşıyamaz; araç denenip kanıt alınamadıysa sayı da yazılamaz.
   assert.equal(evidence.analyzeDirectAnswer('Gantt şeması 3 bölümden oluşur.').ok, true);
   assert.equal(evidence.requiresRotaEvidence('Atlas projesi gecikiyor mu?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Bugün gecikmiş görevlerim kaç, ne önerirsin?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Görevlerimi listele'), true);
+  assert.equal(evidence.requiresRotaEvidence('Projelerimi göster'), true);
+  assert.equal(evidence.requiresRotaEvidence('List tasks in Atlas'), true);
   assert.equal(evidence.requiresRotaEvidence('Kritik yol yöntemini anlatır mısın?'), false);
   assert.deepEqual(evidence.analyzeDirectAnswer('Atlas projesi gecikiyor.', { evidenceRequired: true }).issues.map((issue) => issue.code), ['ROTA_EVIDENCE_REQUIRED']);
   assert.deepEqual(evidence.analyzeDirectAnswer('Toplam 5 görev 【R1】').issues.map((issue) => issue.code), ['CITATION_WITHOUT_EVIDENCE']);
@@ -451,6 +455,30 @@ test('Rota olgu kapısı bağlamı korur; kanıt doğrulaması isim ve kayıt il
   assert.equal(evidence.analyzeGroundedAnswer('Sorumlu olduğunuz 3 görev gecikmiş. 【R1】', phrasingContext).ok, true);
   assert.equal(evidence.analyzeGroundedAnswer('Sorumlusu Ayşe Yılmaz olan görev devam ediyor. 【R1】', phrasingContext).ok, true);
   assert.equal(evidence.analyzeGroundedAnswer('Şu anda Radar Modernizasyonu projesinde 3 görev var. 【R1】', phrasingContext).ok, true);
+
+  const workloadEnvelope = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({
+        tool: 'rota_workload_summary',
+        totalCount: 3,
+        data: { openTaskCount: 10, people: [{ name: 'Ayşe', openTasks: 10 }] }
+      })
+    }]
+  };
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Toplam görev 3. 【R1】', workloadEnvelope).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
+  const taskEnvelope = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({ tool: 'rota_task_search', totalCount: 3, data: { tasks: [] } })
+    }]
+  };
+  assert.equal(evidence.analyzeGroundedAnswer('Toplam görev 3. 【R1】', taskEnvelope).ok, true);
 });
 
 test('saat dilimi doğrulanamayan saat iddiası sessizce kanıtlanmış sayılmaz', () => {
@@ -474,8 +502,8 @@ test('kısmi kapsamlı kanıta dayanan yanıta sunucu kapsam notunu yalnızca ge
   assert.ok(plain.text.endsWith(evidence.SCOPE_DISCLOSURE_TEXT));
   const statedText = 'Görebildiğiniz görevler arasında 2 gecikmiş görev var. 【R1】';
   const stated = evidence.withScopeDisclosure(statedText, partial);
-  assert.equal(stated.disclosed, false);
-  assert.equal(stated.text, statedText);
+  assert.equal(stated.disclosed, true);
+  assert.equal(stated.text, `${statedText}\n\n${evidence.SCOPE_DISCLOSURE_TEXT}`);
   assert.equal(evidence.withScopeDisclosure('Tam proje. 【R1】', [{ id: 'R1', partial: false }]).disclosed, false);
 });
 

@@ -127,18 +127,24 @@ test('gizli eş sorumlu: adı yalnızca kendi görevinde görünür, Sicil’i h
   assert.equal(result.data.task.createdBy, null);
 });
 
-test('görev ayrıntısında oluşturan kimliği kanonik lider ve READ görünürlük kurallarını izler', async (t) => {
-  const leaderStack = stackFor(t);
-  const shared = leaderStack.db.tasks.find((task) => task.TaskId.toLowerCase() === TASKS.PARTIAL_SHARED.toLowerCase());
-  shared.CreatedBySicil = LEAD;
-  const leader = await callRotaTool(leaderStack, AYSE, 'rota_task_detail', { taskId: TASKS.PARTIAL_SHARED });
-  assert.deepEqual(leader.result.data.task.createdBy, { name: 'Proje Lideri', sicil: LEAD });
+test('görev ayrıntısında oluşturan kimliği anlık görüntünün READ, sorumluluk ve yönetim kapsamı sınırını izler', async (t) => {
+  const ownStack = stackFor(t);
+  const shared = ownStack.db.tasks.find((task) => task.TaskId.toLowerCase() === TASKS.PARTIAL_SHARED.toLowerCase());
+  shared.CreatedBySicil = MEHMET;
+  const viaAssignment = await callRotaTool(ownStack, AYSE, 'rota_task_detail', { taskId: TASKS.PARTIAL_SHARED });
+  assert.equal(viaAssignment.result.data.task.createdBy?.sicil, MEHMET, 'kendi sorumluluğundaki görevde oluşturan görünür');
+
+  const executiveStack = stackFor(t);
+  const team = executiveStack.db.tasks.find((task) => task.TaskId.toLowerCase() === TASKS.TEAM_VISIBLE.toLowerCase());
+  team.CreatedBySicil = LEAD;
+  const viaExecutive = await callRotaTool(executiveStack, AYSE, 'rota_task_detail', { taskId: TASKS.TEAM_VISIBLE });
+  assert.equal(viaExecutive.result.data.task.createdBy, null, 'yalnız yönetim kapsamı oluşturan kimliğini açmaz');
 
   const readStack = stackFor(t);
-  const readCreator = readStack.db.tasks.find((task) => task.TaskId.toLowerCase() === TASKS.PARTIAL_SHARED.toLowerCase());
-  readCreator.CreatedBySicil = MEHMET;
-  const viaReadAssignment = await callRotaTool(readStack, AYSE, 'rota_task_detail', { taskId: TASKS.PARTIAL_SHARED });
-  assert.deepEqual(viaReadAssignment.result.data.task.createdBy, { name: 'Mehmet Demir', sicil: MEHMET });
+  const readTask = readStack.db.tasks.find((task) => task.TaskId.toLowerCase() === TASKS.READ_1.toLowerCase());
+  readTask.CreatedBySicil = MEHMET;
+  const viaRead = await callRotaTool(readStack, AYSE, 'rota_task_detail', { taskId: TASKS.READ_1 });
+  assert.equal(viaRead.result.data.task.createdBy?.sicil, MEHMET, 'READ görünürlüğünde oluşturan görünür');
 });
 
 test('yönetim kapsamı: yönetici yalnızca astının görevini ve onun iş dağılım zincirini görür', async (t) => {
@@ -257,6 +263,24 @@ test('AI atama talepleri bildirim kapsamından bağımsız canlı karar yetkisin
 
 /* ── SQL güvenliği ────────────────────────────────────────── */
 
+test('tanınmayan araç denemeleri toplam çağrı sınırını tüketir', async (t) => {
+  const stack = stackFor(t);
+  const limits = { ...TOOL_LIMITS, maxTotalCalls: 2, maxCallsPerRound: 5 };
+  const { executor, results } = await callRotaTools(stack, AYSE, [
+    ['rota_bilinmeyen_bir', {}],
+    ['rota_bilinmeyen_iki', {}]
+  ], { limits });
+  assert.deepEqual(results.map((result) => result.error.code), ['UNKNOWN_TOOL', 'UNKNOWN_TOOL']);
+  const [message] = await executor.runRound([{
+    id: 'call_3',
+    name: 'rota_task_search',
+    arguments: '{}'
+  }]);
+  const third = JSON.parse(message.content);
+  assert.equal(third.error.code, 'LIMIT_EXCEEDED');
+  assert.equal((stack.db.aiToolLog || []).length, 0, 'sınırı aşan çağrı SQL çalıştırmaz');
+});
+
 test('SQL enjeksiyonu ve joker karakterler yalnızca veridir; SQL metni hiçbir zaman birleştirilmez', async (t) => {
   const stack = stackFor(t);
   const constants = new Set(Object.values(toolQueries));
@@ -327,6 +351,16 @@ test('dizin araması kaynak sınırına ulaşırsa kesin toplam bilinmiyor olara
   assert.equal(capped.result.totalCount, null);
   assert.equal(capped.result.complete, false);
   assert.equal(capped.result.truncated, true);
+
+  const exactPeople = [
+    ...base.people,
+    ...Array.from({ length: 25 }, (_, index) => ({
+      Sicil: 91000 + index, DisplayName: `Tam Kişi ${index + 1}`, Username: `tam${index + 1}`
+    }))
+  ];
+  const exactStack = stackFor(t, { people: exactPeople });
+  const exact = await callRotaTool(exactStack, AYSE, 'rota_person_search', { text: 'Tam Kişi', limit: 25 });
+  assert.deepEqual([exact.result.returnedCount, exact.result.totalCount, exact.result.complete, exact.result.truncated], [25, 25, true, false]);
 });
 
 test('proje künyesi erişim nedenini açıklar; READ bağımlılık ve baz planı açmaz', async (t) => {
@@ -442,6 +476,12 @@ test('plan kalitesi kurumsal dizinde çözülemeyen sorumlu Sicilini sorumlu say
   assert.ok(assignee.examples.some((item) => item.taskId === TASKS.UNASSIGNED));
   const unassigned = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, assignee: 'unassigned', limit: 50 });
   assert.ok(unassigned.result.data.tasks.some((item) => item.taskId === TASKS.UNASSIGNED), 'dizinde çözülemeyen Sicil görevi sorumlu saymaz');
+  const workload = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.FULL });
+  assert.equal(workload.result.data.unassignedOpenTasks, 1);
+  assert.equal(workload.result.data.people.some((person) => person.sicil === 919999), false);
+  const grouped = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee', limit: 25 });
+  const unassignedGroup = grouped.result.data.groups.find((group) => group.key === 'unassigned');
+  assert.equal(unassignedGroup?.count, 1);
 });
 
 /* ── İş akışları ve kişisel veriler ───────────────────────── */
@@ -452,7 +492,10 @@ test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim
   assert.equal(result.ok, true);
   assert.equal(result.data.activeSubscriptions, 3);
   assert.equal(result.data.subscriptionsForTasksNoLongerVisible, 1);
-  assert.deepEqual([result.returnedCount, result.totalCount, result.complete], [2, 2, true], 'liste yalnızca görünür görevleri kapsar');
+  assert.deepEqual([result.returnedCount, result.totalCount, result.complete], [2, null, false], 'görünmeyen abonelik varken dağılım ve toplam kesin değildir');
+  assert.equal(result.data.byState, null);
+  assert.equal(result.data.byStateComplete, false);
+  assert.equal(result.truncated, true);
   const states = Object.fromEntries(result.data.items.map((item) => [item.task.taskId, item.state]));
   assert.deepEqual(states, { [TASKS.OVERDUE]: 'delivered', [TASKS.DUE_SOON]: 'failed' });
   const failed = result.data.items.find((item) => item.state === 'failed');

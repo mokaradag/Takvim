@@ -196,7 +196,6 @@ export async function runGroundedTurn(session, {
     if (repairsLeft > 0) {
       repairsLeft -= 1;
       repaired = true;
-      transcript.push({ role: 'assistant', content: text || '…' });
       appendServerInstruction(transcript, groundingRepairInstruction(verdict.issues));
       // Kanıt varken düzeltme yalnızca yeniden yazımdır; kanıt yoksa model
       // gereken aracı çağırabilir (araç turu sınırı sürer).

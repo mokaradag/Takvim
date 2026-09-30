@@ -67,27 +67,29 @@ const outlookStatus = {
     });
     const counts = items.reduce((sum, item) => ({ ...sum, [item.state]: (sum[item.state] || 0) + 1 }), {});
     const page = items.slice(0, limit);
+    const hiddenSubscriptions = Number(result.notVisibleCount || 0);
+    const distributionComplete = !result.truncated && hiddenSubscriptions === 0;
     return {
       data: {
         activeSubscriptions: result.activeCount,
-        byState: result.truncated ? null : counts,
-        byStateComplete: !result.truncated,
-        subscriptionsForTasksNoLongerVisible: result.notVisibleCount,
+        byState: distributionComplete ? counts : null,
+        byStateComplete: distributionComplete,
+        subscriptionsForTasksNoLongerVisible: hiddenSubscriptions,
         items: page,
         note: 'Rota yalnızca davetin gönderim durumunu bilir; Outlook\'ta kabul edilip edilmediğini ya da posta kutusu içeriğini bilmez.'
       },
       scope: currentUserScope('Yalnızca sizin Outlook abonelikleriniz.'),
-      complete: page.length === items.length && !result.truncated,
-      truncated: page.length < items.length || result.truncated,
+      complete: page.length === items.length && distributionComplete,
+      truncated: page.length < items.length || !distributionComplete,
       returnedCount: page.length,
       // Liste yalnızca görünür görevlerin aboneliklerini kapsar; görünmeyenler ayrıca sayılır.
-      totalCount: result.truncated ? null : items.length,
+      totalCount: distributionComplete ? items.length : null,
       nextCursor: null,
       evidence: {
         label: `Outlook teslim durumu · ${result.activeCount} abonelik`,
         entity: { type: 'user', id: 'me', name: 'Outlook abonelikleriniz' },
-        highlights: result.truncated
-          ? ['Durum dağılımı: liste sınırı nedeniyle gösterilmedi']
+        highlights: !distributionComplete
+          ? ['Durum dağılımı: görünmeyen veya sınır dışı abonelikler nedeniyle gösterilmedi']
           : Object.entries(counts).slice(0, 4).map(([state, count]) => `${deliveryLabel(state)}: ${count}`)
       }
     };

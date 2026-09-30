@@ -33,11 +33,11 @@ const workloadSummary = {
     let unassigned = 0;
     let unattributed = 0;
     for (const fact of facts) {
-      if (fact.assigneeCount === 0) {
+      if (fact.resolvedAssigneeCount === 0) {
         unassigned += 1;
         continue;
       }
-      const visible = (assignees.get(fact.id) || []).filter((person) => person.identityVisible && person.sicil != null);
+      const visible = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
       if (!visible.length) {
         unattributed += 1;
         continue;
@@ -118,7 +118,11 @@ const personSearch = {
   },
   async handler(args, call) {
     const limit = args.limit ?? 10;
-    const result = await call.sql((executor) => searchCorporateDirectory({ query: args.text }, executor));
+    const result = await call.sql((executor) => searchCorporateDirectory(
+      { query: args.text },
+      executor,
+      { rateScope: 'ai', includeHasMore: true }
+    ));
     const people = result.items.map((person) => ({
       sicil: Number(person.sicil),
       name: dataText(person.name, 120),
@@ -135,7 +139,7 @@ const personSearch = {
       byName.set(key, (byName.get(key) || 0) + 1);
     }
     const sameName = [...byName.entries()].filter(([, count]) => count > 1).map(([name]) => name);
-    const directoryCapped = people.length >= result.limit;
+    const directoryCapped = result.hasMore === true;
     const page = people.slice(0, limit);
     return {
       data: {

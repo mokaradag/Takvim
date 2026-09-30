@@ -210,7 +210,9 @@ export function normalizeCoordinationQuery(input = {}) {
 
 export async function readCoordinationPage(executor, actor, input = {}, { decisionAuthority = false } = {}) {
   const query = normalizeCoordinationQuery(input);
-  const participant = decisionAuthority ? `(${PARTICIPANT} OR ${DECISION_AUTHORITY})` : PARTICIPANT;
+  const participant = decisionAuthority
+    ? `(${PARTICIPANT} OR (${DECISION_AUTHORITY} AND c.Status = 'PENDING' AND ${TASK_AVAILABLE}))`
+    : PARTICIPANT;
   const actionable = decisionAuthority ? DECISION_ACTIONABLE : ACTIONABLE;
   const fields = fieldsFor(actionable);
   const order = orderFor(actionable);

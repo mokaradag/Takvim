@@ -186,8 +186,12 @@ const taskSearch = {
       pageFacts = page.map((fact) => refreshed.get(fact.id)).filter((fact) => fact && matchesTaskFilters(fact, filters, {
         today: call.today, assignees: pageAssignees, sicil: call.sicil
       }));
-      pageChanged = pageFacts.length !== page.length;
+      pageChanged = pageFacts.length !== page.length
+        || pageFacts.some((fact, index) => JSON.stringify(fact) !== JSON.stringify(page[index]));
+      if (pageChanged) pageFacts = sortFacts(pageFacts, sort, call.today);
     }
+    const exactTotal = pageChanged ? null : sorted.length;
+    const stableNextCursor = pageChanged ? null : nextCursor;
     const descriptor = searchedScope(scope, filters.projectId);
     return {
       data: {
@@ -196,12 +200,12 @@ const taskSearch = {
       },
       scope: descriptor,
       complete: !pageChanged && offset + page.length >= sorted.length,
-      truncated: pageChanged || (!nextCursor && offset + page.length < sorted.length),
+      truncated: pageChanged || (!stableNextCursor && offset + page.length < sorted.length),
       returnedCount: pageFacts.length,
-      totalCount: sorted.length,
-      nextCursor,
+      totalCount: exactTotal,
+      nextCursor: stableNextCursor,
       evidence: {
-        label: `Görev listesi · ${sorted.length} görev`,
+        label: exactTotal == null ? `Görev listesi · ${pageFacts.length} görev gösterildi` : `Görev listesi · ${exactTotal} görev`,
         entity: projectEntity(scope, filters, projects),
         highlights: filterHighlights(filters)
       }
@@ -342,8 +346,8 @@ function groupKeys(fact, groupBy, { projects, assignees, today }) {
     case 'deadline': return [deadlineBucket(fact, today)];
     case 'target_month': return [fact.targetFinish ? [fact.targetFinish.slice(0, 7), fact.targetFinish.slice(0, 7)] : ['none', 'Termini yok']];
     case 'assignee': {
-      if (fact.assigneeCount === 0) return [['unassigned', 'Sorumlusuz']];
-      const people = (assignees.get(fact.id) || []).filter((person) => person.identityVisible && person.sicil != null);
+      if (fact.resolvedAssigneeCount === 0) return [['unassigned', 'Sorumlusuz']];
+      const people = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
       if (!people.length) return [['unattributed', 'Kimliği gösterilemeyen sorumlu']];
       return people.map((person) => [`sicil:${person.sicil}`, person.name || String(person.sicil)]);
     }

@@ -203,7 +203,8 @@ const ROTA_FACT_PATTERNS = [
 ];
 
 const ROTA_EXPLICIT_QUERY_PATTERNS = [
-  /(?:^|[^\p{L}])(?:görevleri|projeleri|bildirimleri|atamaları)\s+(?:listele|göster|bul)(?=$|[^\p{L}])/iu,
+  /(?:^|[^\p{L}])(?:görevleri|görevlerim|görevlerimi|görevlerimiz|görevlerimizi|projeleri|projelerim|projelerimi|projelerimiz|projelerimizi|bildirimleri|bildirimlerim|bildirimlerimi|bildirimlerimiz|bildirimlerimizi|atamaları|atamalarım|atamalarımı|atamalarımız|atamalarımızı)\s+(?:listele|göster|bul)(?=$|[^\p{L}])/iu,
+  /\b(?:list|show|find)\s+(?:my\s+|our\s+|the\s+)?(?:tasks?|projects?|assignments?|notifications?)\b/i,
   /(?:^|[^\p{L}])hangi\s+(?:görev|proje|atama|bildirim)\p{L}*(?=$|[^\p{L}])/iu,
   /(?:^|[^\p{L}])kim\s+sorumlu(?=$|[^\p{L}])/iu,
   /\bwho\s+(?:owns|is\s+(?:the\s+)?(?:owner|assignee|responsible))\b/i,
@@ -226,9 +227,9 @@ function directlyRequiresRotaEvidence(text) {
   const source = String(text ?? '');
   if (ROTA_EXPLICIT_QUERY_PATTERNS.some((pattern) => pattern.test(source))) return true;
   if (!ROTA_DATA_PATTERNS.some((pattern) => pattern.test(source))) return false;
+  if (ROTA_FACT_PATTERNS.some((pattern) => pattern.test(source))) return true;
   if (GENERAL_ADVICE_PATTERNS.some((pattern) => pattern.test(source))) return false;
-  return ROTA_FACT_PATTERNS.some((pattern) => pattern.test(source))
-    || ROTA_OPEN_FACT_PATTERNS.some((pattern) => pattern.test(source));
+  return ROTA_OPEN_FACT_PATTERNS.some((pattern) => pattern.test(source));
 }
 
 /**
@@ -286,10 +287,10 @@ const FIELD_HINTS = Object.freeze([
   { kind: 'number', pattern: /(?:tamamlanmış\s+görev(?:\s+say(?:ı|ısı))?|completed\s+(?:task\s+count|tasks?)|done\s+tasks?)/iu, fields: ['done', 'completed', 'closed', 'completedtasks'] },
   { kind: 'number', pattern: /(?:bu\s+hafta\s+termini|7\s+gün(?:\s+içinde)?\s+termin|due\s+soon|next\s+7\s+days?)/iu, fields: ['duenext7days', 'duesoon', 'duesooncount'] },
   { kind: 'number', pattern: /(?:sorumlusuz(?:\s+görev)?|unassigned(?:\s+tasks?)?)/iu, fields: ['unassigned', 'unassignedcount', 'unassignedopentasks'] },
-  { kind: 'number', pattern: /(?:proje\s+say(?:ı|ısı)|project\s+count|toplam\s+proje)/iu, fields: ['projects', 'projectcount', 'totalprojects', 'totalcount'] },
+  { kind: 'number', pattern: /(?:proje\s+say(?:ı|ısı)|project\s+count|toplam\s+proje)/iu, fields: ['projects', 'projectcount', 'totalprojects'] },
   { kind: 'number', pattern: /(?:(?:wbs|iş\s+dağılım)\s+(?:düğüm\s+)?say(?:ı|ısı)|wbs\s+node\s+count)/iu, fields: ['wbsnodecount', 'nodecount', 'totalnodes', 'nodes'] },
-  { kind: 'number', pattern: /(?:talep\s+say(?:ı|ısı)|request\s+count|toplam\s+talep)/iu, fields: ['requests', 'requestcount', 'totalcount'] },
-  { kind: 'number', pattern: /(?:toplam\s+görev|total\s+tasks?|tasks?\s+total)/iu, fields: ['total', 'totalcount', 'tasks', 'taskcount'] },
+  { kind: 'number', pattern: /(?:talep\s+say(?:ı|ısı)|request\s+count|toplam\s+talep)/iu, fields: ['requests', 'requestcount'] },
+  { kind: 'number', pattern: /(?:toplam\s+görev|total\s+tasks?|tasks?\s+total)/iu, fields: ['total', 'tasks', 'taskcount'] },
   { kind: 'number', pattern: /(?:tamamlanma\s+oran|completion\s+rate)/iu, fields: ['completionratepercent'] },
   { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
   { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned', 'plannedhoursonassignedtasks'] },
@@ -458,6 +459,13 @@ function collectEvidenceScopes(value, inherited = emptyEvidenceValues(), scopes 
   return scopes;
 }
 
+const ENVELOPE_TOTAL_FIELDS = Object.freeze({
+  rota_task_search: 'taskcount',
+  rota_project_search: 'projectcount',
+  rota_schedule_requests: 'requestcount',
+  rota_assignment_requests: 'requestcount'
+});
+
 function evidenceValueIndex(payloads) {
   const byId = new Map();
   for (const item of Array.isArray(payloads) ? payloads : []) {
@@ -470,7 +478,13 @@ function evidenceValueIndex(payloads) {
         continue;
       }
     }
-    byId.set(item.id, collectEvidenceScopes(payload));
+    const scopes = collectEvidenceScopes(payload);
+    const totalField = ENVELOPE_TOTAL_FIELDS[payload?.tool];
+    const totalValue = canonicalNumber(payload?.totalCount);
+    if (totalField && totalValue != null) {
+      for (const scope of scopes) fieldBucket(scope, totalField)?.numbers.add(totalValue);
+    }
+    byId.set(item.id, scopes);
   }
   return byId;
 }
@@ -681,7 +695,7 @@ export function mentionsAuthorizedScope(text) {
  */
 export function withScopeDisclosure(text, citedEvidence = []) {
   const partial = citedEvidence.some((item) => item?.partial === true);
-  if (!partial || mentionsAuthorizedScope(text)) return { text, disclosed: false };
+  if (!partial) return { text, disclosed: false };
   return { text: `${String(text).trimEnd()}\n\n${SCOPE_DISCLOSURE_TEXT}`, disclosed: true };
 }
 

@@ -140,7 +140,8 @@ function assigneeRows(db, scope, facts) {
         TaskId: fact.TaskId,
         Sicil: identityVisible ? assignment.Sicil : null,
         DisplayName: personName(db, assignment.Sicil) ?? (identityVisible ? String(assignment.Sicil) : null),
-        IdentityVisible: identityVisible ? 1 : 0
+        IdentityVisible: identityVisible ? 1 : 0,
+        Resolved: personName(db, assignment.Sicil) != null ? 1 : 0
       });
     }
   }
@@ -223,11 +224,7 @@ function taskDetail(db, params) {
   const { task } = entry;
   const project = projectRow(db, task.ProjectId);
   const access = scope.projects.get(upper(task.ProjectId));
-  const creatorVisible = entry.IdentityBase === 1 || fact.IsOwnAssignee === 1
-    || (task.CreatedBySicil != null && Number(project?.LeadSicil) === Number(task.CreatedBySicil))
-    || (task.CreatedBySicil != null && Boolean(params.canAssignAllCorporate)
-      && executiveOf(db, scope.sicil, Number(task.CreatedBySicil)))
-;
+  const creatorVisible = entry.IdentityBase === 1 || fact.IsOwnAssignee === 1;
   const parent = task.RecurrenceParentTaskId ? db.tasks.find((row) => same(row.TaskId, task.RecurrenceParentTaskId) && same(row.ProjectId, task.ProjectId)) : null;
   const scopedTasks = new Set(String(params.scopeTasks || '').split(',').map(upper));
   const parentVisible = parent && (entry.AccessLevel === 'FULL' || access.HasReadGrant || scopedTasks.has(upper(parent.TaskId)));

@@ -1659,7 +1659,7 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   düzeltilir, yine olmazsa sabit güvenli ileti kaydedilir (`grounding_failed`).
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
-  kapısı (2 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
+  kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
   sınırıyla yürür (`aiGateway.runToolSession`).
 - **Akış:** `accepted.rotaData`, `status` evreleri `tools` (+ veri alanı
   konusu) ve `verifying`, `revise` olayı, `done.assistantMessage.content` ve
