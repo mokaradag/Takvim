@@ -511,6 +511,31 @@ test('hareket geçmişi görünür görevlerle sınırlıdır; ekip kapsamı yö
   assert.equal(range.result.error.code, 'INVALID_ARGUMENTS');
 });
 
+
+test('hareket geçmişi kısmi kapsamda gizli eş sorumlu adını açığa çıkarmaz', async (t) => {
+  const at = '2026-09-29T08:00:00.000Z';
+  const stack = stackFor(t, {
+    auditLog: [{
+      AuditId: 41,
+      OccurredAt: at,
+      ActorSicil: AYSE,
+      ActorDisplayName: 'Ayşe Yılmaz',
+      ActionCode: 'UPDATE',
+      EntityType: 'TASK',
+      EntityId: TASKS.PARTIAL_SHARED,
+      ProjectId: PROJECTS.PARTIAL,
+      CorrelationId: 'c-hidden-assignee',
+      BeforeJson: JSON.stringify({ Status: 'planned', assigneeIds: [AYSE] }),
+      AfterJson: JSON.stringify({ Status: 'planned', assigneeIds: [AYSE, MEHMET] })
+    }]
+  });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29' });
+  assert.equal(result.ok, true);
+  assert.equal(result.totalCount, 1);
+  assert.ok(result.data.items[0].changes.includes('Sorumlu eklendi: Gizli sorumlu'));
+  assert.equal(JSON.stringify(result).includes('Mehmet Demir'), false);
+});
+
 /* ── Sınırlar, kanıt ve kaynak kullanımı ──────────────────── */
 
 test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınmayan araç, bozuk ve aşırı büyük bağımsız değişken güvenli hata alır', async (t) => {

@@ -1,7 +1,7 @@
 import 'server-only';
 import { AI_CREDENTIAL_SOURCES } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_CAPABILITIES, AI_PROFILES, resolveModelProfile } from '../../domain/ai/aiModelRegistry.js';
-import { checkAssistantConversationSchema } from './assistant/assistantService.js';
+import { checkAssistantConversationSchema, checkAssistantEvidenceSchema } from './assistant/assistantService.js';
 import { conversationSchemaState, evidenceSchemaState } from './assistant/conversationStore.js';
 import { toolRegistryProblems } from './tools/toolRegistry.js';
 import { toolSqlGateStatus } from './tools/toolSqlGate.js';
@@ -344,6 +344,17 @@ async function verifySetup(config, deadline, models) {
   } catch {
     if (deadline.failure()) throw deadline.failure();
     return { code: 'CONVERSATION_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak Rota AI konuşma tabloları (0017) doğrulanamadı.' };
+  }
+  if (config.toolsEnabled) {
+    try {
+      const ready = await raceWithAbort(() => checkAssistantEvidenceSchema({ signal: deadline.signal }), deadline.signal);
+      if (!ready) {
+        return { code: 'EVIDENCE_SCHEMA_MISSING', message: 'Uca ulaşıldı ancak Rota AI kanıt tablosu (0018) kurulmamış.' };
+      }
+    } catch {
+      if (deadline.failure()) throw deadline.failure();
+      return { code: 'EVIDENCE_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak Rota AI kanıt tablosu (0018) doğrulanamadı.' };
+    }
   }
   // Kişisel anahtar saklama açıksa tablo, kurumsal anahtar tanımlı olsa da doğrulanır.
   if (!config.personalKeysSupported) return null;

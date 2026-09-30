@@ -20,6 +20,7 @@ import {
   requireVisibleProject,
   searchedScope
 } from './rotaToolSupport.js';
+import { isCompleteTaskView, projectAccess } from './rotaScope.js';
 import { decodeCursor, encodeCursor } from './taskFacts.js';
 
 /**
@@ -44,8 +45,13 @@ function pageWindow(tool, key, page, pageSize, total) {
   return { nextCursor, complete, truncated: !complete && !nextCursor };
 }
 
-function clippedLines(lines, max = 6) {
-  const list = (lines || []).map((line) => dataText(line, 160));
+function clippedLines(lines, max = 6, { hideAssigneeNames = false } = {}) {
+  const list = (lines || []).map((line) => {
+    const value = hideAssigneeNames
+      ? String(line ?? '').replace(/^(Sorumlu (?:eklendi|çıkarıldı)):\s*.*$/u, '$1: Gizli sorumlu')
+      : line;
+    return dataText(value, 160);
+  });
   return { changes: list.slice(0, max), ...(list.length > max ? { moreChanges: list.length - max } : {}) };
 }
 
@@ -104,20 +110,24 @@ const activitySearch = {
       pageSize
     }, call.now));
     if (report.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
-    const items = report.items.map((item) => ({
-      occurredAt: item.occurredAt,
-      actor: dataText(item.actorName, 120),
-      kind: item.kind,
-      kindLabel: ACTIVITY_KIND_LABELS[item.kind] || item.kind,
-      task: {
-        ...(item.taskAvailable ? { taskId: item.taskId } : {}),
-        title: dataText(item.taskTitle, 160),
-        available: Boolean(item.taskAvailable)
-      },
-      project: { name: dataText(item.projectName, 160), ...(item.projectCode ? { code: dataText(item.projectCode, 60) } : {}) },
-      ...clippedLines(item.changes),
-      ...(item.detailsLimited ? { detailsLimited: true } : {})
-    }));
+    const items = report.items.map((item) => {
+      const access = item.projectId ? projectAccess(scope, item.projectId) : null;
+      const hideAssigneeNames = !scope.isAdmin && !isCompleteTaskView(access);
+      return {
+        occurredAt: item.occurredAt,
+        actor: dataText(item.actorName, 120),
+        kind: item.kind,
+        kindLabel: ACTIVITY_KIND_LABELS[item.kind] || item.kind,
+        task: {
+          ...(item.taskAvailable ? { taskId: item.taskId } : {}),
+          title: dataText(item.taskTitle, 160),
+          available: Boolean(item.taskAvailable)
+        },
+        project: { name: dataText(item.projectName, 160), ...(item.projectCode ? { code: dataText(item.projectCode, 60) } : {}) },
+        ...clippedLines(item.changes, 6, { hideAssigneeNames }),
+        ...(item.detailsLimited ? { detailsLimited: true } : {})
+      };
+    });
     const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
     const detailsLimited = items.some((item) => item.detailsLimited || Number(item.moreChanges || 0) > 0);
     return {

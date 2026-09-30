@@ -27,6 +27,7 @@ import {
 import { createNewTask } from '../src/state/appState.js';
 
 const { checkAssistantConversationSchema } = await import('../src/server/ai/assistant/assistantService.js');
+const { evidenceSchemaState } = await import('../src/server/ai/assistant/conversationStore.js');
 const { aiRuntimeLoad, getAiGateway, resetAiRuntimeForTests, setAiProviderForTests } = await import('../src/server/ai/aiRuntime.js');
 const { resetAiConfigCacheForTests } = await import('../src/server/ai/aiConfig.js');
 const { resetAiModelRegistryForTests } = await import('../src/server/ai/modelRegistryLoader.js');
@@ -421,6 +422,20 @@ test('Entegrasyonlar kartı yapay zekâ sağlayıcısını listeler; bağlantı 
   assert.equal(timedOut.result.ok, false);
   assert.equal(timedOut.result.code, 'PROBE_TIMEOUT');
   assert.equal(provider.calls.at(-1).aborted, true);
+});
+
+
+test('araçlar açıkken bağlantı testi 0018 kanıt şeması durumunu yeniler', async (t) => {
+  createAiStack(t, {
+    env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' },
+    seed: { aiEvidenceSchemaMissing: true }
+  });
+  adminReset(t);
+  assert.equal(evidenceSchemaState().ready, null);
+  const tested = await postIntegrationTest('ai-provider');
+  assert.equal(tested.result.ok, false);
+  assert.equal(tested.result.code, 'EVIDENCE_SCHEMA_MISSING');
+  assert.equal(evidenceSchemaState().ready, false);
 });
 
 /* ── Sağlık doğruluğu ve bağlantı testi ───────────────────── */

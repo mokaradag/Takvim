@@ -264,6 +264,12 @@ async function evidenceSchemaReady(sicil, signal) {
   return probe.ready;
 }
 
+/** 0018 kanıt şemasını bağlantı sınaması için güvenilir kullanıcıyla doğrular. */
+export async function checkAssistantEvidenceSchema({ signal = null } = {}) {
+  const sicil = await getTrustedCurrentSicil();
+  return evidenceSchemaReady(sicil, signal);
+}
+
 /** Rota verisi araçları bu kurulumda ve bu kipte kullanılabilir mi? */
 async function groundedTurnAvailable({ config, registry, mode, sicil, signal }) {
   if (!config.toolsEnabled || !toolRouteAvailable(registry, mode) || toolRegistryProblems().length) return false;
