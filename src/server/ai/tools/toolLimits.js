@@ -39,11 +39,12 @@ export const TOOL_LIMITS = Object.freeze({
 
 /**
  * Araç SQL kapısı: ortak havuzu yapay zekâ turları tüketemez. Dört eşzamanlı
- * kapıdan (rehber 2, anahtar 2, konuşma 4) sonra araç işleri için yalnızca iki
- * bağlantı ayrılır; tek bir Sicil aynı anda bir araç sorgusu çalıştırır.
+ * kapıdan (rehber 2, anahtar 2, konuşma 4) sonra araç işleri için yalnızca bir
+ * bağlantı ayrılır; 10 bağlantılı ortak havuzda olağan Rota trafiğine en az
+ * bir bağlantı kalır.
  */
 export const TOOL_SQL_GATE = Object.freeze({
-  slots: 2,
+  slots: 1,
   queue: 32,
   perUserActive: 1,
   perUserQueued: 6

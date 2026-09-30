@@ -292,7 +292,7 @@ const FIELD_HINTS = Object.freeze([
   { kind: 'number', pattern: /(?:toplam\s+görev|total\s+tasks?|tasks?\s+total)/iu, fields: ['total', 'totalcount', 'tasks', 'taskcount'] },
   { kind: 'number', pattern: /(?:tamamlanma\s+oran|completion\s+rate)/iu, fields: ['completionratepercent'] },
   { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
-  { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned'] },
+  { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned', 'plannedhoursonassignedtasks'] },
   { kind: 'number', pattern: /(?:gerçekleşen\s+saat|actual\s+hours?)/iu, fields: ['actualhours', 'actual'] },
   { kind: 'number', pattern: /(?:süre|duration)/iu, fields: ['planneddurationdays', 'remainingdurationdays', 'durationdays'] },
   { kind: 'number', pattern: /(?:bütçe|budget)/iu, fields: ['budget'] },
@@ -350,9 +350,13 @@ function claimsIn(text) {
       });
       return ' '.repeat(token.length);
     });
+  const clockTimes = [];
   source = source
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, ' ')
-    .replace(/\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b/g, ' ');
+    .replace(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\b/g, (token) => {
+      clockTimes.push(token);
+      return ' '.repeat(token.length);
+    });
   const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?))(?=$|[^\p{L}\d])/gu)]
     .map((match) => ({
       value: canonicalNumber(match[2]),
@@ -361,7 +365,7 @@ function claimsIn(text) {
     .filter((claim) => claim.value);
   const lower = source.toLocaleLowerCase('tr-TR');
   const statuses = STATUS_CLAIMS.filter((item) => item.pattern.test(lower)).map((item) => item.values);
-  return { dates, numbers, statuses };
+  return { dates, numbers, statuses, clockTimes };
 }
 
 function emptyEvidenceValues() {
@@ -529,7 +533,7 @@ function unsupportedEvidenceClaims(text, citationIds, byId) {
   const unsupported = [];
   if (!scopes.length) {
     const claims = claimsIn(text);
-    return claims.numbers.length || claims.dates.length || claims.statuses.length || entityClaimsIn(text).length ? ['kanıt yükü'] : [];
+    return claims.numbers.length || claims.dates.length || claims.statuses.length || claims.clockTimes.length || entityClaimsIn(text).length ? ['kanıt yükü'] : [];
   }
 
   for (const entity of entityClaimsIn(text)) {
@@ -538,6 +542,7 @@ function unsupportedEvidenceClaims(text, citationIds, byId) {
 
   for (const unit of claimUnits(text)) {
     const claims = claimsIn(unit);
+    for (const clockTime of claims.clockTimes) unsupported.push('saat ' + clockTime);
     if (!claims.numbers.length && !claims.dates.length && !claims.statuses.length) continue;
     const lowerUnit = normalizedText(unit);
     const anchors = [...new Set(scopes.flatMap((scope) => [...scope.strings])

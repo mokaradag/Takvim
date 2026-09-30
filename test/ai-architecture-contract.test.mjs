@@ -742,7 +742,7 @@ test('araç SQL işleri kendi sınırlı kapısından ve süre sınırıyla geç
   assert.match(context, /boundedExecutor\(pool, signal, \{ track \}\)/);
   assert.match(context, /if \(Number\(auth\?\.sicil\) !== Number\(sicil\)\)/);
   const limits = read('src/server/ai/tools/toolLimits.js');
-  for (const expected of ['maxToolRounds: 4', 'maxCallsPerRound: 5', 'maxTotalCalls: 12', 'maxRepairRounds: 1', 'slots: 2', 'perUserActive: 1']) {
+  for (const expected of ['maxToolRounds: 4', 'maxCallsPerRound: 5', 'maxTotalCalls: 12', 'maxRepairRounds: 1', 'slots: 1', 'perUserActive: 1']) {
     assert.ok(limits.includes(expected), expected);
   }
   // Model turu açık SQL işlemi içinde başlatılamaz (ağ geçidi her turda denetler).

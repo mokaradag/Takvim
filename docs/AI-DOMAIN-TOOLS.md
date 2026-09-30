@@ -329,9 +329,10 @@ gönderilir.
 | Analizde okunabilecek yetkili görev | 20 000 (aşarsa `RESULT_TOO_LARGE`: süzgeci daraltın) |
 | İmleç ötelemesi | 1000 |
 
-- **Araç SQL kapısı:** 2 eşzamanlı sorgu, sıra 32; Sicil başına 1 etkin + 6
-  bekleyen. Yer, sürücüdeki sorgu GERÇEKTEN bittiğinde bırakılır; iptal edilen
-  tur yer tutmaya devam etmez, bırakılmış sorgular sınırı aşamaz.
+- **Araç SQL kapısı:** 1 eşzamanlı sorgu, sıra 32; Sicil başına 1 etkin + 6
+  bekleyen. Böylece 10 bağlantılı ortak havuzda olağan Rota trafiği için en az
+  bir bağlantı ayrılmış kalır. Yer, sürücüdeki sorgu GERÇEKTEN bittiğinde
+  bırakılır; iptal edilen tur yer tutmaya devam etmez, bırakılmış sorgular sınırı aşamaz.
 - Liste döndüren sabit SQL'ler `TOP (@maxRows)` ile istenen sınırın bir fazlasını
   okur; fazladan satır kısaltma olarak bildirilir (`truncated`).
 - Sağlayıcı yanıtı en fazla 16 çağrı ve 64 karakterlik araç adı taşıyabilir;
@@ -363,7 +364,7 @@ Bütün hesaplar sunucuda, sabit kurallarla yapılır; model sayı hesaplamaz.
 | Baz plan sapması | Güncel planlanan bitiş − baz plandaki planlanan bitiş (takvim günü); silinen ve sonradan eklenen görevler ayrıca sayılır |
 | Bağımlılık | FS, SS, FF, SF ve gecikme (ör. "+2 gün", "−1 hafta") kayıtlı ilişkidir; kritik yol, bolluk ya da tarih hesabı yapılmaz |
 | İş günü | Rota takvim kuralı: çalışma günleri eksi resmi tatiller, iki uç dâhil |
-| İş yükü | Açık görev sayıları ve planlanan saat; kapasite ya da aşırı yük yargısı üretilmez |
+| İş yükü | Açık görev sayıları ve kişinin atandığı görevlerin task düzeyindeki planlanan saat toplamı; kişi-saat tahsisi, kapasite ya da aşırı yük yargısı değildir |
 
 ---
 
@@ -446,7 +447,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `projectId`, `personSicil`, `limit` (1–25).
 - **Yetki:** Yalnızca görünür açık görevler; kişiye atıf yalnızca kimliği açık sorumluluklarla.
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` + saf toplamlar.
-- **Çıktı:** `people[]` (açık, devam eden, gecikmiş, 7 gün, planlanan saat ve kapsaması), `unassignedOpenTasks`, `openTasksWithOnlyHiddenAssignees`, notlar (kapasite yargısı yok).
+- **Çıktı:** `people[]` (açık, devam eden, gecikmiş, 7 gün, `plannedHoursOnAssignedTasks` ve kapsaması; bu değer kişi-saat tahsisi değildir), `unassignedOpenTasks`, `openTasksWithOnlyHiddenAssignees`, notlar (kapasite yargısı yok).
 - **Örnek sorular:** "Ekipte kimde kaç açık iş var?"
 
 ### 10.9 `rota_person_search` — kişi çözümü

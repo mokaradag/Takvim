@@ -14,7 +14,7 @@ const workloadSummary = {
   topic: 'workload',
   evidenceKind: 'workload',
   authorization: 'Yalnızca görünür AÇIK görevler; kişiye atıf yalnızca kimliği kullanıcıya açık sorumluluklarla yapılır (gizli eş sorumlular kişi olarak sayılmaz).',
-  description: 'Açık görevlerin kişilere dağılımı: kişi başına açık, devam eden, gecikmiş ve 7 gün içinde terminli görev sayısı ile planlanan saat toplamı (kapsamasıyla). "Kimde kaç iş var", "en yoğun kişi kim" gibi sorularda kullanın. Kapasite ya da aşırı yük yargısı üretmez.',
+  description: 'Açık görevlerin kişilere dağılımı: kişi başına açık, devam eden, gecikmiş ve 7 gün içinde terminli görev sayısı ile atandığı görevlerin planlanan saat toplamı. Bu saat task düzeyindedir, kişi-saat tahsisi değildir. "Kimde kaç iş var", "en yoğun kişi kim" gibi sorularda kullanın. Kapasite ya da aşırı yük yargısı üretmez.',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -52,7 +52,7 @@ const workloadSummary = {
             inProgress: 0,
             overdue: 0,
             dueNext7Days: 0,
-            plannedHours: 0,
+            plannedHoursOnAssignedTasks: 0,
             tasksWithPlannedHours: 0
           });
         }
@@ -62,7 +62,7 @@ const workloadSummary = {
         if (isOverdue(fact, call.today)) entry.overdue += 1;
         if (isDueWithin(fact, call.today, DUE_SOON_DAYS)) entry.dueNext7Days += 1;
         if (fact.plannedHours != null) {
-          entry.plannedHours = Math.round((entry.plannedHours + fact.plannedHours) * 100) / 100;
+          entry.plannedHoursOnAssignedTasks = Math.round((entry.plannedHoursOnAssignedTasks + fact.plannedHours) * 100) / 100;
           entry.tasksWithPlannedHours += 1;
         }
       }
@@ -80,7 +80,7 @@ const workloadSummary = {
         notes: [
           WORKLOAD_NOTE,
           'Birden çok sorumlusu olan görev her sorumluda ayrı sayılır.',
-          'plannedHours yalnızca değeri girilmiş görevlerin toplamıdır (tasksWithPlannedHours); boş değer sıfır sayılmaz.'
+          'plannedHoursOnAssignedTasks, kişinin atandığı görevlerin task düzeyindeki planlanan saat toplamıdır; kişi-saat tahsisi değildir. Yalnızca değeri girilmiş görevler (tasksWithPlannedHours) toplanır; boş değer sıfır sayılmaz.'
         ]
       },
       scope: descriptor,

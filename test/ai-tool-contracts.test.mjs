@@ -23,10 +23,15 @@ const evidence = await import('../src/domain/ai/evidenceContract.js');
 const { AI_ERROR_CODES } = await import('../src/domain/ai/aiErrorCatalog.js');
 const { AiError } = await import('../src/server/ai/aiErrors.js');
 const { businessDate } = await import('../src/domain/calendar/businessDate.js');
+const { TOOL_SQL_GATE } = await import('../src/server/ai/tools/toolLimits.js');
 
 const SEARCH_SCHEMA = registry.toolCatalogForModel().find((tool) => tool.name === 'rota_task_search').parameters;
 const DETAIL_SCHEMA = registry.toolCatalogForModel().find((tool) => tool.name === 'rota_task_detail').parameters;
 const TASK_ID = '33333333-3333-4333-8333-333333333333';
+
+test('AI araç SQL kapısı olağan Rota trafiği için havuz kapasitesi bırakır', () => {
+  assert.equal(TOOL_SQL_GATE.slots, 1);
+});
 
 function detailsOf(work) {
   try {
@@ -446,6 +451,20 @@ test('Rota olgu kapısı bağlamı korur; kanıt doğrulaması isim ve kayıt il
   assert.equal(evidence.analyzeGroundedAnswer('Sorumlu olduğunuz 3 görev gecikmiş. 【R1】', phrasingContext).ok, true);
   assert.equal(evidence.analyzeGroundedAnswer('Sorumlusu Ayşe Yılmaz olan görev devam ediyor. 【R1】', phrasingContext).ok, true);
   assert.equal(evidence.analyzeGroundedAnswer('Şu anda Radar Modernizasyonu projesinde 3 görev var. 【R1】', phrasingContext).ok, true);
+});
+
+test('saat dilimi doğrulanamayan saat iddiası sessizce kanıtlanmış sayılmaz', () => {
+  const context = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({ data: { updatedAt: '2026-09-30T14:37:00.000Z' } })
+    }]
+  };
+  const verdict = evidence.analyzeGroundedAnswer('Son güncelleme 30.09.2026 14:37. 【R1】', context);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.issues.some((issue) => issue.code === 'UNSUPPORTED_EVIDENCE_VALUE'
+    && issue.detail.includes('saat 14:37')));
 });
 
 test('kısmi kapsamlı kanıta dayanan yanıta sunucu kapsam notunu yalnızca gerekirse ekler', () => {

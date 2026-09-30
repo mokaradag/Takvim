@@ -120,6 +120,9 @@ test('gizli eş sorumlu: adı yalnızca kendi görevinde görünür, Sicil’i h
   const workload = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.PARTIAL });
   assert.deepEqual(workload.result.data.people.map((person) => person.sicil), [AYSE]);
   assert.equal(workload.result.data.people[0].openTasks, 2);
+  assert.equal(Object.hasOwn(workload.result.data.people[0], 'plannedHours'), false, 'kişi-saat tahsisi izlenimi veren alan dönmez');
+  assert.equal(Object.hasOwn(workload.result.data.people[0], 'plannedHoursOnAssignedTasks'), true);
+  assert.match(workload.result.data.notes.join(' '), /kişi-saat tahsisi değildir/);
   // Oluşturan kimliği kısmi görevde kapalıdır.
   assert.equal(result.data.task.createdBy, null);
 });
