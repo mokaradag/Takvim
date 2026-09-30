@@ -660,7 +660,7 @@ sınamaları değiştirilmeden geçer.
 
 | Değişken | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `MERGEN_ROTA_AI_TOOLS_ENABLED` | `false` | Rota verisi araçlarını açar; geçersiz değer yapılandırma hatasıdır |
+| `MERGEN_ROTA_AI_TOOLS_ENABLED` | `false` | Rota verisi araçlarını açar; geçersiz değer araçları kapatır, genel sohbet sürer ve Sistem Yönetimi uyarı gösterir |
 
 1. Veritabanının yedeğini alın.
 2. `0017` uygulanmış veritabanında

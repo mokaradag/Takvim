@@ -162,15 +162,12 @@ export const OVERDUE_AGING = Object.freeze([
 
 /* ── Metin eşleşmesi ───────────────────────────────────────── */
 
-/** Türkçe büyük/küçük harf ve aksan duyarsız karşılaştırma anahtarı (SQL Turkish_100_CI_AI'den gevşek). */
+/** SQL Turkish_100_CI_AI ile aynı Türkçe I/İ gruplarını koruyan karşılaştırma anahtarı. */
 export function foldText(value) {
   return String(value ?? '')
-    .replace(/[İIı]/g, 'i')
     .toLocaleLowerCase('tr-TR')
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/[̀-ͯ]/g, '');
 }
 
 export function textMatches(fact, text) {

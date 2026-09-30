@@ -260,13 +260,23 @@ function taskNotificationInbox(db, params) {
   return [[counts], items];
 }
 
-function coordinationPage(db, params) {
+function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   const sicil = Number(params.sicil);
   const pageSize = Number(params.pageSize || 25);
   const requestedPage = Number(params.page || 0);
+  const pageParticipant = (row) => isParticipant(db, row, params)
+    || (decisionAuthorityScope && decisionAuthority(db, row, params));
+  const pageActionable = (row) => {
+    if (!taskAvailable(db, row)) return false;
+    if (row.Status === 'PENDING') {
+      return decisionAuthorityScope ? decisionAuthority(db, row, params) : notificationDecisionAuthority(db, row, params);
+    }
+    return row.Status === 'CANCELLATION_REQUESTED' && Number(row.RequesterSicil) === sicil;
+  };
+  const pageRow = (row) => ({ ...coordinationRow(db, row, params), IsActionable: pageActionable(row) ? 1 : 0 });
   const matches = db.taskAssignmentCoordinations.filter((row) => {
-    if (!isParticipant(db, row, params)) return false;
-    const view = coordinationRow(db, row, params);
+    if (!pageParticipant(row)) return false;
+    const view = pageRow(row);
     if (params.projectId && !sameGuid(recordProjectId(db, row), params.projectId)) return false;
     if (params.taskId && !sameGuid(row.TaskId, params.taskId)) return false;
     if (params.status && row.Status !== params.status) return false;
@@ -287,23 +297,30 @@ function coordinationPage(db, params) {
   const history = (row) => !['PENDING', 'CANCELLATION_REQUESTED'].includes(row.Status) || !taskAvailable(db, row);
   const counts = {
     Total: matches.length,
-    PendingCount: matches.filter((row) => actionable(db, row, params)).length,
+    PendingCount: matches.filter(pageActionable).length,
     SentCount: matches.filter((row) => Number(row.RequesterSicil) === sicil).length,
     HistoryCount: matches.filter(history).length
   };
   const tab = params.tab || 'all';
   const tabbed = matches.filter((row) => {
     if (tab === 'all') return true;
-    if (tab === 'pending') return actionable(db, row, params);
+    if (tab === 'pending') return pageActionable(row);
     if (tab === 'sent') return Number(row.RequesterSicil) === sicil;
     return history(row);
   });
   const lastPage = tabbed.length === 0 ? 0 : Math.floor((tabbed.length - 1) / pageSize);
   const page = Math.min(requestedPage, lastPage);
   const items = tabbed
-    .sort(coordinationOrder(db, params))
+    .sort((left, right) => {
+      const rank = Number(!pageActionable(left)) - Number(!pageActionable(right));
+      if (rank) return rank;
+      const leftAt = Date.parse(left.DecidedAt || left.CreatedAt) || 0;
+      const rightAt = Date.parse(right.DecidedAt || right.CreatedAt) || 0;
+      if (leftAt !== rightAt) return rightAt - leftAt;
+      return String(right.CoordinationId).localeCompare(String(left.CoordinationId));
+    })
     .slice(page * pageSize, page * pageSize + pageSize)
-    .map((row) => coordinationRow(db, row, params));
+    .map(pageRow);
   return [[counts], [{ Total: tabbed.length, Page: page }], items];
 }
 
@@ -919,7 +936,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     if (sqlText.includes('FROM dbo.MR_TaskNotifications n')) {
       return [...coordinationInbox(db, params), ...taskNotificationInbox(db, params)];
     }
-    if (sqlText.includes('DECLARE @safePage')) return coordinationPage(db, params);
+    if (sqlText.includes('DECLARE @safePage')) return coordinationPage(db, params, { decisionAuthorityScope: sqlText.includes('rota-ai-decision-authority') });
     if (sqlText.includes('SELECT TOP (1)')) {
       const row = db.taskAssignmentCoordinations.find((entry) =>
         sameGuid(entry.CoordinationId, params.coordinationId)

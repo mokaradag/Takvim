@@ -265,7 +265,7 @@ const assignmentRequests = {
       result = await call.sql((executor) => readCoordinationPage(executor, auth, {
         tab: key.tab, status: key.status, projectId: key.projectId, taskId: key.taskId, from: key.dateFrom, to: key.dateTo,
         search: key.text, page, pageSize
-      }));
+      }, { decisionAuthority: true }));
     } catch (error) {
       if (isMissingNotificationInboxSchema(error)) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Atama koordinasyonu bu kurulumda etkin değil.' });
       throw error;

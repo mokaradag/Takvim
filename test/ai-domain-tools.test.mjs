@@ -44,6 +44,11 @@ test('yetki matrisi: sistem yöneticisi, FULL, READ, kısmi, yönetim kapsamı, 
   // Sistem yöneticisi: bütün ETKİN projelerin bütün görevleri; etkin olmayan proje hiç görünmez.
   const admin = await visibleTaskIds(stack, ADMIN);
   assert.deepEqual([...admin].sort(), [...all, ...PARTIAL_OTHERS].sort());
+  for (const projectId of [PROJECTS.ARCHIVED, '10000000-0000-4000-8000-00000000abcd']) {
+    const missingProject = await callRotaTool(stack, ADMIN, 'rota_task_analytics', { projectId });
+    assert.equal(missingProject.result.ok, false);
+    assert.equal(missingProject.result.error.code, 'NOT_FOUND', 'sistem yöneticisi etkin olmayan veya var olmayan projeyi sentetik FULL kabul etmez');
+  }
   // Proje lideri (FULL) + okuma hibesi (READ) + kendi görevleri (kısmi) + astın görevi (yönetim kapsamı).
   const ayse = await visibleTaskIds(stack, AYSE);
   assert.deepEqual([...ayse].sort(), [
@@ -113,6 +118,20 @@ test('gizli eş sorumlu: adı yalnızca kendi görevinde görünür, Sicil’i h
   assert.equal(workload.result.data.people[0].openTasks, 2);
   // Oluşturan kimliği kısmi görevde kapalıdır.
   assert.equal(result.data.task.createdBy, null);
+});
+
+test('görev ayrıntısında oluşturan kimliği kanonik lider ve READ görünürlük kurallarını izler', async (t) => {
+  const leaderStack = stackFor(t);
+  const shared = leaderStack.db.tasks.find((task) => task.TaskId.toLowerCase() === TASKS.PARTIAL_SHARED.toLowerCase());
+  shared.CreatedBySicil = LEAD;
+  const leader = await callRotaTool(leaderStack, AYSE, 'rota_task_detail', { taskId: TASKS.PARTIAL_SHARED });
+  assert.deepEqual(leader.result.data.task.createdBy, { name: 'Proje Lideri', sicil: LEAD });
+
+  const readStack = stackFor(t);
+  const readCreator = readStack.db.tasks.find((task) => task.TaskId.toLowerCase() === TASKS.PARTIAL_SHARED.toLowerCase());
+  readCreator.CreatedBySicil = MEHMET;
+  const viaReadAssignment = await callRotaTool(readStack, AYSE, 'rota_task_detail', { taskId: TASKS.PARTIAL_SHARED });
+  assert.deepEqual(viaReadAssignment.result.data.task.createdBy, { name: 'Mehmet Demir', sicil: MEHMET });
 });
 
 test('yönetim kapsamı: yönetici yalnızca astının görevini ve onun iş dağılım zincirini görür', async (t) => {
@@ -186,6 +205,42 @@ test('arama sıralı, sayfalı ve kesin toplamlıdır; imleç süzgece bağlıd�
   assert.equal(overdue.result.data.sort, 'overdue_days_desc');
 });
 
+test('dar görev süzgeçleri SQL satır sınırından önce uygulanır', () => {
+  const sqlText = toolQueries.AI_TOOL_TASK_FACTS_SQL;
+  const order = sqlText.indexOf('ORDER BY t.TaskId');
+  for (const token of ['@statusCsv', '@priorityCsv', '@milestone', '@deadline', '@dateField']) {
+    const index = sqlText.indexOf(token);
+    assert.ok(index > 0 && index < order, `${token} TOP sınırından önce WHERE içinde uygulanır`);
+  }
+});
+
+test('AI atama talepleri bildirim kapsamından bağımsız canlı karar yetkisini kullanır', async (t) => {
+  const coordinationId = '60000000-0000-4000-8000-000000000001';
+  const stack = stackFor(t, {
+    executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType: 'DIRECTORATE' }],
+    taskAssignmentCoordinations: [{
+      CoordinationId: coordinationId,
+      TaskId: TASKS.TEAM_VISIBLE,
+      RequesterSicil: MEHMET,
+      RequestedAssigneeSicil: ZEYNEP,
+      Mode: 'REQUEST',
+      Status: 'PENDING',
+      TaskTitleSnapshot: 'Astın kurulum görevi',
+      ProjectIdSnapshot: PROJECTS.TEAM,
+      ProjectNameSnapshot: 'Ekip Projesi',
+      ProjectCodeSnapshot: 'EKP',
+      AssigneeNameSnapshot: 'Zeynep Kaya',
+      CreatedAt: '2026-09-29T10:00:00.000Z'
+    }]
+  });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_assignment_requests', { tab: 'pending' });
+  assert.equal(result.ok, true);
+  assert.equal(result.totalCount, 1);
+  assert.equal(result.data.items[0].coordinationId.toLowerCase(), coordinationId.toLowerCase());
+  assert.equal(result.data.items[0].you.canDecide, true);
+  assert.equal(result.data.items[0].actionRequiredFromYou, true);
+});
+
 /* ── SQL güvenliği ────────────────────────────────────────── */
 
 test('SQL enjeksiyonu ve joker karakterler yalnızca veridir; SQL metni hiçbir zaman birleştirilmez', async (t) => {
@@ -213,6 +268,16 @@ test('SQL enjeksiyonu ve joker karakterler yalnızca veridir; SQL metni hiçbir 
 });
 
 /* ── Varlık çözümü ────────────────────────────────────────── */
+
+test('görev metin araması SQL Turkish_100_CI_AI I/İ davranışıyla aynıdır', async (t) => {
+  const stack = stackFor(t);
+  const task = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === TASKS.OVERDUE.toLowerCase());
+  task.Title = 'Isparta radar testi';
+  const dotless = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, text: 'ısparta' });
+  assert.deepEqual(dotless.result.data.tasks.map((row) => row.taskId), [TASKS.OVERDUE]);
+  const dotted = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, text: 'isparta' });
+  assert.equal(dotted.result.totalCount, 0);
+});
 
 test('proje ve kişi araması tahmin etmez: belirsizlik, aynı adlı kişiler ve görünmeyen proje ayrı bildirilir', async (t) => {
   const stack = stackFor(t);

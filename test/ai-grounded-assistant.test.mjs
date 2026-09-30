@@ -271,9 +271,10 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   assert.equal(stack.provider.calls.length, 3, 'araç turu + taslak + tek düzeltme');
   const repair = stack.provider.calls[2];
   assert.equal(repair.toolChoice, 'none', 'kanıt varken düzeltme yalnızca yeniden yazımdır');
-  assert.equal(repair.messages.at(-1).role, 'system');
-  assert.match(repair.messages.at(-1).content, /^SUNUCU DOĞRULAMASI/);
-  assert.match(repair.messages.at(-1).content, /R99/);
+  assert.equal(repair.messages[0].role, 'system');
+  assert.match(repair.messages[0].content, /SUNUCU DOĞRULAMASI/);
+  assert.match(repair.messages[0].content, /R99/);
+  assert.equal(repair.messages.slice(1).some((message) => message.role === 'system'), false, 'sağlayıcı dizisinde ortada system rolü yoktur');
   assert.equal(response.text.includes('42 gecikmiş'), false, 'doğrulanamayan taslak hiçbir olayda gösterilmez');
   assert.deepEqual(eventsOf(response, 'delta').map((event) => event.data.text), [GROUNDING_FAILURE_TEXT]);
   const done = doneOf(response);
@@ -464,9 +465,10 @@ test('araç turu sınırı: dördüncü turdan sonra araçlar kapanır, sınır 
   const response = await sendTurn({ turnId: randomUUID(), message: 'Her şeyi incele' });
   assert.equal(stack.provider.calls.length, 5);
   assert.deepEqual(stack.provider.calls.map((call) => call.toolChoice), ['auto', 'auto', 'auto', 'auto', 'none']);
-  const last = stack.provider.calls[4].messages.at(-1);
-  assert.equal(last.role, 'system');
-  assert.match(last.content, /Araç çağrı sınırına ulaşıldı/);
+  const limited = stack.provider.calls[4].messages;
+  assert.equal(limited[0].role, 'system');
+  assert.match(limited[0].content, /Araç çağrı sınırına ulaşıldı/);
+  assert.equal(limited.slice(1).some((message) => message.role === 'system'), false);
   const done = doneOf(response);
   assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R1', 'R2', 'R3', 'R4']);
   assert.deepEqual(stack.db.aiMessageEvidence.map((row) => row.Ordinal).sort(), [1, 2, 3, 4]);
@@ -518,13 +520,14 @@ test('önceki yanıtın atıfları sonraki turun geçmişinden çıkarılır; es
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.FULL }));
   const first = await sendTurn({ turnId: randomUUID(), message: 'Radar projesinde kaç görev var?' });
   const conversationId = doneOf(first).conversation.id;
-  stack.provider.enqueue({ type: 'answer', text: 'Önceki yanıtı yineleyemem; güncel veri için yeniden sorgulamam gerekir.' });
+  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.FULL }));
   const second = await sendTurn({ turnId: randomUUID(), message: 'Bunu tekrar söyler misin?', conversationId, expectedSequence: 2 });
   assert.equal(second.status, 200);
   const history = stack.provider.calls[2].messages;
   const previous = history.find((message) => message.role === 'assistant');
   assert.equal(previous.content, 'Radar Modernizasyonu projesinde 8 görev görünüyor.');
   assert.equal(history.filter((message) => message.role !== 'system').some((message) => message.content.includes('【')), false);
+  assert.deepEqual(doneOf(second).assistantMessage.evidence.map((item) => item.id), ['R1']);
 });
 
 test('başka Sicil kanıtlı konuşmayı okuyamaz; kanıt yalnızca sahibinin konuşmasıyla döner', async (t) => {

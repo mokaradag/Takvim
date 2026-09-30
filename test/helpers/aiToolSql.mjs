@@ -24,7 +24,7 @@ const day = (value) => (value == null || value === '' ? null : String(value).sli
 
 /** Turkish_100_CI_AI yaklaşımı: büyük/küçük harf ve aksan duyarsız içerme. */
 function fold(value) {
-  return String(value ?? '').replace(/[İIı]/g, 'i').toLocaleLowerCase('tr-TR').normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return String(value ?? '').toLocaleLowerCase('tr-TR').normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
 function charindex(needle, haystack) {
@@ -150,6 +150,19 @@ function assigneeRows(db, scope, facts) {
 function taskFacts(db, params) {
   const scope = scopeOf(db, params);
   const text = String(params.text || '');
+  const statuses = new Set(String(params.statusCsv || '').split(',').filter(Boolean));
+  const priorities = new Set(String(params.priorityCsv || '').split(',').filter(Boolean));
+  const dateValue = (task) => {
+    switch (params.dateField) {
+      case 'targetFinish': return day(task.TargetFinish);
+      case 'calendarDate': return day(task.TargetFinish) || day(task.PlannedFinish);
+      case 'plannedStart': return day(task.PlannedStart);
+      case 'plannedFinish': return day(task.PlannedFinish);
+      case 'actualStart': return day(task.ActualStart);
+      case 'actualFinish': return day(task.ActualFinish);
+      default: return null;
+    }
+  };
   const matches = [...scope.visible.values()].filter(({ task, IdentityBase }) => {
     if (params.wbsId && !same(task.WbsId, params.wbsId)) return false;
     if (params.seriesId && !same(task.TaskId, params.seriesId) && !same(task.RecurrenceParentTaskId, params.seriesId)) return false;
@@ -159,6 +172,28 @@ function taskFacts(db, params) {
     const target = day(task.TargetFinish);
     if (params.targetFrom && !(target && target >= day(params.targetFrom))) return false;
     if (params.targetTo && !(target && target <= day(params.targetTo))) return false;
+    const status = task.Status === 'done' ? 'done' : task.Status === 'in-progress' ? 'in_progress' : 'todo';
+    if (statuses.size && !statuses.has(status)) return false;
+    const rawPriority = String(task.Priority || '').trim().toLocaleLowerCase('en-US');
+    const priority = ['critical', 'high', 'low'].includes(rawPriority) ? rawPriority : 'medium';
+    if (priorities.size && !priorities.has(priority)) return false;
+    if (params.milestone != null && Boolean(task.IsMilestone) !== Boolean(params.milestone)) return false;
+    if (params.deadline) {
+      const today = day(params.today);
+      const add = (count) => day(new Date(Date.parse(`${today}T00:00:00Z`) + count * 86400000));
+      const open = task.Status !== 'done';
+      if (params.deadline === 'overdue' && !(open && target && target < today)) return false;
+      if (params.deadline === 'due_today' && !(open && target === today)) return false;
+      if (params.deadline === 'due_next_7_days' && !(open && target && target >= today && target <= add(6))) return false;
+      if (params.deadline === 'due_next_30_days' && !(open && target && target >= today && target <= add(29))) return false;
+      if (params.deadline === 'no_target_finish' && !(open && !target)) return false;
+    }
+    if (params.dateField) {
+      const value = dateValue(task);
+      if (!value) return false;
+      if (params.dateFrom && value < day(params.dateFrom)) return false;
+      if (params.dateTo && value > day(params.dateTo)) return false;
+    }
     if (params.createdByMe && Number(task.CreatedBySicil) !== scope.sicil) return false;
     const assignments = assigneesOf(db, task.TaskId);
     switch (params.assigneeMode) {
@@ -188,7 +223,14 @@ function taskDetail(db, params) {
   const { task } = entry;
   const project = projectRow(db, task.ProjectId);
   const access = scope.projects.get(upper(task.ProjectId));
-  const creatorVisible = entry.IdentityBase === 1 || fact.IsOwnAssignee === 1;
+  const creatorVisible = entry.IdentityBase === 1 || fact.IsOwnAssignee === 1
+    || (task.CreatedBySicil != null && Number(project?.LeadSicil) === Number(task.CreatedBySicil))
+    || (task.CreatedBySicil != null && Boolean(params.canAssignAllCorporate)
+      && executiveOf(db, scope.sicil, Number(task.CreatedBySicil)))
+    || (task.CreatedBySicil != null && db.taskAssignees.some((assignment) => Number(assignment.Sicil) === Number(task.CreatedBySicil)
+      && db.tasks.some((candidate) => same(candidate.TaskId, assignment.TaskId)
+        && db.projectAccess.some((grant) => grant.IsActive && Number(grant.Sicil) === scope.sicil
+          && grant.AccessLevel === 'READ' && same(grant.ProjectId, candidate.ProjectId)))));
   const parent = task.RecurrenceParentTaskId ? db.tasks.find((row) => same(row.TaskId, task.RecurrenceParentTaskId) && same(row.ProjectId, task.ProjectId)) : null;
   const scopedTasks = new Set(String(params.scopeTasks || '').split(',').map(upper));
   const parentVisible = parent && (entry.AccessLevel === 'FULL' || access.HasReadGrant || scopedTasks.has(upper(parent.TaskId)));

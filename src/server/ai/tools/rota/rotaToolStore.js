@@ -37,6 +37,8 @@ function capped(rows = [], limit) {
 export async function readTaskFacts(executor, scope, {
   projectId = null, taskIds = [], wbsId = null, seriesId = null, recurringOnly = false, text = '',
   openOnly = false, targetFrom = null, targetTo = null, createdByMe = false,
+  statuses = [], priorities = [], milestone = null, deadline = null,
+  dateField = null, dateFrom = null, dateTo = null, today = null,
   assigneeMode = 'any', personSicil = null, withAssignees = false, maxRows
 }) {
   const request = scoped(executor, scope, { projectId, taskIds });
@@ -48,6 +50,14 @@ export async function readTaskFacts(executor, scope, {
   request.input('openOnly', sql.Bit, openOnly ? 1 : 0);
   request.input('targetFrom', sql.Date, targetFrom);
   request.input('targetTo', sql.Date, targetTo);
+  request.input('statusCsv', sql.VarChar(80), statuses.join(','));
+  request.input('priorityCsv', sql.VarChar(80), priorities.join(','));
+  request.input('milestone', sql.Bit, milestone);
+  request.input('deadline', sql.VarChar(24), deadline);
+  request.input('dateField', sql.VarChar(24), dateField);
+  request.input('dateFrom', sql.Date, dateFrom);
+  request.input('dateTo', sql.Date, dateTo);
+  request.input('today', sql.Date, today);
   request.input('createdByMe', sql.Bit, createdByMe ? 1 : 0);
   request.input('assigneeMode', sql.VarChar(12), assigneeMode);
   request.input('personSicil', sql.Int, personSicil);

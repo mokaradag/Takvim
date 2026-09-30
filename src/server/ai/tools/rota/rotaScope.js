@@ -80,6 +80,7 @@ export function buildRotaScope(auth) {
     sicil: Number(auth.sicil),
     isAdmin,
     isExecutive: Boolean(auth?.isExecutive),
+    canAssignAllCorporate: Boolean(auth?.canAssignAllCorporateProjects),
     projects,
     projectTokens: tokens.join(','),
     scopedTaskIds: [...new Set(scopedTaskIds)].join(',')
@@ -90,9 +91,6 @@ export function buildRotaScope(auth) {
 export function projectAccess(scope, projectId) {
   const id = canonicalActualId(projectId);
   if (!id) return null;
-  if (scope.isAdmin) {
-    return scope.projects.get(id) || { projectId: id, accessLevel: 'FULL', readGrant: false, ownScoped: false, reasons: [ACCESS_REASONS.SYSTEM_ADMIN] };
-  }
   return scope.projects.get(id) || null;
 }
 
@@ -130,6 +128,7 @@ export function describeTaskScope(projectRows = [], { emptyComplete = true } = {
 export function bindScope(request, sql, scope, { projectId = null, taskIds = [] } = {}) {
   request.input('sicil', sql.Int, scope.sicil);
   request.input('isAdmin', sql.Bit, scope.isAdmin ? 1 : 0);
+  request.input('canAssignAllCorporate', sql.Bit, scope.canAssignAllCorporate ? 1 : 0);
   request.input('scopeProjects', sql.NVarChar(sql.MAX), scope.projectTokens);
   request.input('scopeTasks', sql.NVarChar(sql.MAX), scope.scopedTaskIds);
   request.input('projectId', sql.UniqueIdentifier, projectId);

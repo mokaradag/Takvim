@@ -172,6 +172,46 @@ ${VISIBLE_TASKS}
     AND (@openOnly = 0 OR t.Status <> 'done')
     AND (@targetFrom IS NULL OR t.TargetFinish >= @targetFrom)
     AND (@targetTo IS NULL OR t.TargetFinish <= @targetTo)
+    AND (LEN(@statusCsv) = 0 OR EXISTS (
+      SELECT 1 FROM STRING_SPLIT(@statusCsv, ',') requestedStatus
+      WHERE (requestedStatus.value = 'done' AND t.Status = 'done')
+        OR (requestedStatus.value = 'in_progress' AND t.Status = 'in-progress')
+        OR (requestedStatus.value = 'todo' AND t.Status NOT IN ('done', 'in-progress'))))
+    AND (LEN(@priorityCsv) = 0 OR EXISTS (
+      SELECT 1 FROM STRING_SPLIT(@priorityCsv, ',') requestedPriority
+      WHERE requestedPriority.value = CASE
+        WHEN LOWER(LTRIM(RTRIM(COALESCE(t.Priority, '')))) IN ('critical','high','low')
+          THEN LOWER(LTRIM(RTRIM(t.Priority)))
+        ELSE 'medium' END))
+    AND (@milestone IS NULL OR ISNULL(t.IsMilestone, 0) = @milestone)
+    AND (@deadline IS NULL
+      OR (@deadline = 'overdue' AND t.Status <> 'done' AND t.TargetFinish < @today)
+      OR (@deadline = 'due_today' AND t.Status <> 'done' AND t.TargetFinish = @today)
+      OR (@deadline = 'due_next_7_days' AND t.Status <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 6, @today))
+      OR (@deadline = 'due_next_30_days' AND t.Status <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 29, @today))
+      OR (@deadline = 'no_target_finish' AND t.Status <> 'done' AND t.TargetFinish IS NULL))
+    AND (@dateField IS NULL OR (
+      (@dateFrom IS NULL OR CASE @dateField
+        WHEN 'targetFinish' THEN t.TargetFinish
+        WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
+        WHEN 'plannedStart' THEN t.PlannedStart
+        WHEN 'plannedFinish' THEN t.PlannedFinish
+        WHEN 'actualStart' THEN t.ActualStart
+        WHEN 'actualFinish' THEN t.ActualFinish END >= @dateFrom)
+      AND (@dateTo IS NULL OR CASE @dateField
+        WHEN 'targetFinish' THEN t.TargetFinish
+        WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
+        WHEN 'plannedStart' THEN t.PlannedStart
+        WHEN 'plannedFinish' THEN t.PlannedFinish
+        WHEN 'actualStart' THEN t.ActualStart
+        WHEN 'actualFinish' THEN t.ActualFinish END <= @dateTo)
+      AND CASE @dateField
+        WHEN 'targetFinish' THEN t.TargetFinish
+        WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
+        WHEN 'plannedStart' THEN t.PlannedStart
+        WHEN 'plannedFinish' THEN t.PlannedFinish
+        WHEN 'actualStart' THEN t.ActualStart
+        WHEN 'actualFinish' THEN t.ActualFinish END IS NOT NULL))
     AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND EXISTS (
@@ -210,9 +250,20 @@ ${VISIBLE_TASKS}
     t.CalendarId, t.RemainingDurationDays,
     LEFT(t.Description, 1600) AS Description,
     CASE WHEN LEN(t.Description) > 1600 THEN 1 ELSE 0 END AS DescriptionClipped,
-    CASE WHEN visible.IdentityBase = 1 OR EXISTS (
-      SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil
-    ) THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
+    CASE WHEN visible.IdentityBase = 1
+      OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil)
+      OR p.LeadSicil = t.CreatedBySicil
+      OR (@canAssignAllCorporate = 1 AND EXISTS (
+        SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = t.CreatedBySicil))
+      OR EXISTS (
+        SELECT 1
+        FROM dbo.MR_TaskAssignees creatorAssignment
+        JOIN dbo.MR_Tasks creatorTask ON creatorTask.TaskId = creatorAssignment.TaskId
+        JOIN dbo.MR_ProjectAccess creatorGrant ON creatorGrant.ProjectId = creatorTask.ProjectId
+          AND creatorGrant.Sicil = @sicil AND creatorGrant.IsActive = 1 AND creatorGrant.AccessLevel = 'READ'
+        WHERE creatorAssignment.Sicil = t.CreatedBySicil)
+    THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
     CASE WHEN visible.AccessLevel = 'FULL' THEN (
       SELECT COUNT(*) FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.TaskId = t.TaskId
     ) ELSE NULL END AS PredecessorCount,

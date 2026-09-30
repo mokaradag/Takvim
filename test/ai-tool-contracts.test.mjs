@@ -280,7 +280,8 @@ test('kapsam belirteçleri Rota yetki bağlamından türetilir; READ ve kişisel
   const admin = buildRotaScope({ sicil: 1, isSystemAdmin: true, effective: { access: new Map([[full, { accessLevel: 'FULL', reasons: ['SYSTEM_ADMIN'] }]]), partialTaskIds: new Set() } });
   assert.equal(admin.projectTokens, '');
   assert.equal(admin.scopedTaskIds, '');
-  assert.equal(projectAccess(admin, '11111111-1111-4111-8111-000000000009').accessLevel, 'FULL');
+  assert.equal(projectAccess(admin, full).accessLevel, 'FULL');
+  assert.equal(projectAccess(admin, '11111111-1111-4111-8111-000000000009'), null);
 });
 
 test('veri metni talimat ya da kanıt atfı taşıyamaz: işaretler nötrlenir, metin kısaltılır', () => {
@@ -342,6 +343,53 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   // Biçim düzeltmesi atıf uydurmaz; bağlantı sözdizimine dokunmaz.
   assert.equal(evidence.normalizeCitations('Toplam [R1] ve 【 R2 】 ile 【R3, R4】 [R1](https://x)'), 'Toplam 【R1】 ve 【R2】 ile 【R3】【R4】 [R1](https://x)');
   assert.match(evidence.groundingRepairInstruction(invented.issues), /^SUNUCU DOĞRULAMASI:/);
+});
+
+test('Rota olgu kapısı bağlamı korur; kanıt doğrulaması isim ve kayıt ilişkisini denetler', () => {
+  assert.equal(evidence.requiresRotaEvidence('Radar projesinde kaç görev var?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Who owns Atlas project?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Atlas projesi tamamlandı mı?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Atlas projesi gecikmiş mi?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Bir proje planında hangi aşamalar olmalı?'), false);
+  assert.equal(evidence.requiresRotaEvidence('Görev önceliklendirme yöntemlerini açıkla'), false);
+  assert.equal(evidence.requiresRotaEvidence('Peki kim?', {
+    priorUserMessages: ['Atlas projesinde kaç görev var?']
+  }), true);
+  assert.equal(evidence.requiresRotaEvidence('Aynı?', {
+    priorUserMessages: ['Atlas projesinde kaç görev var?']
+  }), true);
+
+  const payloads = [{
+    id: 'R1',
+    payload: JSON.stringify({
+      evidenceId: 'R1',
+      totalCount: 2,
+      data: {
+        tasks: [
+          { title: 'Görev Alfa', progressPercent: 80, targetFinish: '2026-10-10', assignees: [{ name: 'Ayşe Yılmaz' }] },
+          { title: 'Görev Beta', progressPercent: 20, targetFinish: '2026-11-20', assignees: [{ name: 'Mehmet Demir' }] }
+        ]
+      }
+    })
+  }];
+  const context = { evidenceIds: ['R1'], evidencePayloads: payloads };
+  assert.equal(evidence.analyzeGroundedAnswer('Görev Alfa ilerleme %80. 【R1】', context).ok, true);
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Görev Alfa ilerleme %20. 【R1】', context).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Görev Alfa sorumlusu Zeynep Kaya. 【R1】', context).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Hayali İş görevi ayrıntıda yer alıyor. 【R1】', context).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Görev Alfa termin 20.11.2026. 【R1】', context).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
 });
 
 test('kısmi kapsamlı kanıta dayanan yanıta sunucu belirlenimci kapsam notunu her zaman ekler', () => {

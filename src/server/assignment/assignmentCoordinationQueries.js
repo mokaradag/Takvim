@@ -86,10 +86,13 @@ const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
 const ACTIONABLE = `(${TASK_AVAILABLE} AND (
   (c.Status = 'PENDING' AND ${NOTIFICATION_DECISION_AUTHORITY})
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
+const DECISION_ACTIONABLE = `(${TASK_AVAILABLE} AND (
+  (c.Status = 'PENDING' AND ${DECISION_AUTHORITY})
+  OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
 const UNREAD = '(n.ReadVersion IS NULL OR n.ReadVersion <> c.RowVersion)';
 const VISIBLE = `(${ACTIONABLE} OR n.DismissedVersion IS NULL OR n.DismissedVersion <> c.RowVersion)`;
-const FIELDS = `c.*, ${IS_MANAGER} AS IsManager,
-  CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsActionable,
+const fieldsFor = (actionable) => `c.*, ${IS_MANAGER} AS IsManager,
+  CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsActionable,
   COALESCE(c.TaskTitleSnapshot, t.Title) AS TaskTitle,
   COALESCE(c.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
   COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
@@ -100,8 +103,10 @@ const FIELDS = `c.*, ${IS_MANAGER} AS IsManager,
   decidedBy.DisplayName AS DecisionByName,
   CASE WHEN ${UNREAD} THEN 1 ELSE 0 END AS IsUnread,
   CASE WHEN ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS TaskAvailable`;
-const ORDER = `CASE WHEN ${ACTIONABLE} THEN 0 ELSE 1 END,
+const orderFor = (actionable) => `CASE WHEN ${actionable} THEN 0 ELSE 1 END,
   COALESCE(c.DecidedAt, c.CreatedAt) DESC, c.CoordinationId DESC`;
+const FIELDS = fieldsFor(ACTIONABLE);
+const ORDER = orderFor(ACTIONABLE);
 
 /**
  * Okuma yüzeyinin AKTÖR kapsamı.
@@ -203,8 +208,12 @@ export function normalizeCoordinationQuery(input = {}) {
   return query;
 }
 
-export async function readCoordinationPage(executor, actor, input = {}) {
+export async function readCoordinationPage(executor, actor, input = {}, { decisionAuthority = false } = {}) {
   const query = normalizeCoordinationQuery(input);
+  const participant = decisionAuthority ? `(${PARTICIPANT} OR ${DECISION_AUTHORITY})` : PARTICIPANT;
+  const actionable = decisionAuthority ? DECISION_ACTIONABLE : ACTIONABLE;
+  const fields = fieldsFor(actionable);
+  const order = orderFor(actionable);
   const fromUtc = query.from ? activityDateRange({ period: 'custom', from: query.from, to: query.from }).startUtc : null;
   const toUtc = query.to ? activityDateRange({ period: 'custom', from: query.to, to: query.to }).endUtc : null;
   const request = bindCoordinationScope(executor.request(), actor);
@@ -221,7 +230,7 @@ export async function readCoordinationPage(executor, actor, input = {}) {
   request.input('fromUtc', sql.DateTime2, fromUtc);
   request.input('toUtc', sql.DateTime2, toUtc);
 
-  const filters = `${PARTICIPANT}
+  const filters = `${participant}
     AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
     AND (@status IS NULL OR c.Status = @status)
@@ -236,14 +245,15 @@ export async function readCoordinationPage(executor, actor, input = {}) {
       COALESCE(c.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(c.ProjectCodeSnapshot, p.ProjectCode), ' ',
       requester.DisplayName, ' ', COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot), ' ',
       c.RequesterMessage) COLLATE Turkish_100_CI_AI) > 0)`;
-  const tabFilter = `(@tab = 'all' OR (@tab = 'pending' AND ${ACTIONABLE})
+  const tabFilter = `(@tab = 'all' OR (@tab = 'pending' AND ${actionable})
     OR (@tab = 'sent' AND c.RequesterSicil = @sicil)
     OR (@tab = 'history' AND (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})))`;
 
   const result = await request.query(`
+    ${decisionAuthority ? '/* rota-ai-decision-authority */' : ''}
     WITH coordination_page_counts AS (
       SELECT
-        CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending,
+        CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsPending,
         CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
         CASE WHEN (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})
           THEN 1 ELSE 0 END AS IsHistory
@@ -259,8 +269,8 @@ export async function readCoordinationPage(executor, actor, input = {}) {
     DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
     DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
     SELECT @total AS Total, @safePage AS Page;
-    SELECT ${FIELDS} ${SOURCE} WHERE ${filters} AND ${tabFilter}
-    ORDER BY ${ORDER} OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+    SELECT ${fields} ${SOURCE} WHERE ${filters} AND ${tabFilter}
+    ORDER BY ${order} OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
   `);
   const counts = result.recordsets?.[0]?.[0] || {};
   const pagination = result.recordsets?.[1]?.[0] || {};

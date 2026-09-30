@@ -46,6 +46,16 @@ function roundLimitNote() {
   return 'SUNUCU DOĞRULAMASI: Araç çağrı sınırına ulaşıldı. Yeni araç çağırma; yalnızca eldeki kanıtlarla yanıtla ve eksik kalan kısmı açıkça belirt.';
 }
 
+function appendServerInstruction(transcript, instruction) {
+  const systemIndex = transcript.findIndex((message) => message.role === 'system');
+  if (systemIndex < 0) {
+    transcript.unshift({ role: 'system', content: instruction });
+    return;
+  }
+  const current = transcript[systemIndex];
+  transcript[systemIndex] = { ...current, content: `${current.content}\n\n${instruction}` };
+}
+
 function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidenceRequired }) {
   const normalized = normalizeCitations(text);
   if (evidenceIds.length) return {
@@ -76,8 +86,11 @@ export async function runGroundedTurn(session, {
     onProgress: ({ topic }) => status(ASSISTANT_STREAM_PHASES.TOOLS, { topic })
   });
   const transcript = [...messages];
-  const currentUser = [...messages].reverse().find((message) => message.role === 'user');
-  const evidenceRequired = requiresRotaEvidence(currentUser?.content);
+  const userMessages = messages.filter((message) => message.role === 'user');
+  const currentUser = userMessages.at(-1);
+  const evidenceRequired = requiresRotaEvidence(currentUser?.content, {
+    priorUserMessages: userMessages.slice(0, -1).map((message) => message.content)
+  });
   let toolRounds = 0;
   let modelRounds = 0;
   let toolsAttempted = false;
@@ -133,7 +146,7 @@ export async function runGroundedTurn(session, {
       toolRounds += 1;
       transcript.push({ role: 'assistant', content: result.text || '', toolCalls: result.toolCalls });
       transcript.push(...await executor.runRound(result.toolCalls));
-      if (toolRounds >= limits.maxToolRounds) transcript.push({ role: 'system', content: roundLimitNote() });
+      if (toolRounds >= limits.maxToolRounds) appendServerInstruction(transcript, roundLimitNote());
       continue;
     }
 
@@ -171,7 +184,7 @@ export async function runGroundedTurn(session, {
       repairsLeft -= 1;
       repaired = true;
       transcript.push({ role: 'assistant', content: text || '…' });
-      transcript.push({ role: 'system', content: groundingRepairInstruction(verdict.issues) });
+      appendServerInstruction(transcript, groundingRepairInstruction(verdict.issues));
       // Kanıt varken düzeltme yalnızca yeniden yazımdır; kanıt yoksa model
       // gereken aracı çağırabilir (araç turu sınırı sürer).
       allowTools = ledger.size() === 0;
