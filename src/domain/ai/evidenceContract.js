@@ -211,12 +211,24 @@ const ROTA_EXPLICIT_QUERY_PATTERNS = [
 ];
 
 const CONTEXT_FOLLOW_UP = /(?:^|[^\p{L}])(?:peki|bunu|şunu|aynı|tekrar|ya|kim|hangisi|ne zaman|what about|and what|who|when|which|again|same)(?=$|[^\p{L}])/iu;
+const GENERAL_ADVICE_PATTERNS = [
+  /(?:^|[^\p{L}])(?:yöntem\p{L}*|metot\p{L}*|açıkla\p{L}*|anlat\p{L}*|öner\p{L}*|\p{L}+(?:meli|malı|meliyim|malıyım|meliyiz|malıyız))(?=$|[^\p{L}])/iu,
+  /\b(?:should|how\s+(?:do|can|should)|explain|methods?|best\s+practices?)\b/i
+];
+const ROTA_OPEN_FACT_PATTERNS = [
+  /(?:^|[^\p{L}])(?:ne|nedir|hangi|kim)(?=$|[^\p{L}])/iu,
+  /\b(?:what|which|who)\b/i,
+  /(?:^|[^\p{L}])(?:öncelik|lider|sahip)\p{L}*(?=$|[^\p{L}])/iu,
+  /\b(?:priority|leader|owner)\b/i
+];
 
 function directlyRequiresRotaEvidence(text) {
   const source = String(text ?? '');
   if (ROTA_EXPLICIT_QUERY_PATTERNS.some((pattern) => pattern.test(source))) return true;
-  return ROTA_DATA_PATTERNS.some((pattern) => pattern.test(source))
-    && ROTA_FACT_PATTERNS.some((pattern) => pattern.test(source));
+  if (!ROTA_DATA_PATTERNS.some((pattern) => pattern.test(source))) return false;
+  if (GENERAL_ADVICE_PATTERNS.some((pattern) => pattern.test(source))) return false;
+  return ROTA_FACT_PATTERNS.some((pattern) => pattern.test(source))
+    || ROTA_OPEN_FACT_PATTERNS.some((pattern) => pattern.test(source));
 }
 
 /**
@@ -227,7 +239,14 @@ function directlyRequiresRotaEvidence(text) {
  */
 export function requiresRotaEvidence(text, { priorUserMessages = [] } = {}) {
   if (directlyRequiresRotaEvidence(text)) return true;
-  if (!CONTEXT_FOLLOW_UP.test(String(text ?? ''))) return false;
+  const source = String(text ?? '').trim();
+  const words = source.split(/\s+/u).filter(Boolean).length;
+  if (
+    words > 5
+    || /(?:^|[^\p{L}])ya da(?=$|[^\p{L}])/iu.test(source)
+    || GENERAL_ADVICE_PATTERNS.some((pattern) => pattern.test(source))
+    || !CONTEXT_FOLLOW_UP.test(source)
+  ) return false;
   return [...priorUserMessages].reverse().some((message) => directlyRequiresRotaEvidence(message));
 }
 
@@ -248,8 +267,8 @@ function claimText(text) {
 
 function canonicalNumber(value) {
   const raw = String(value).trim().replace(/−/g, '-');
-  const normalized = /^[+-]?\d{1,3}(?:\.\d{3})+$/.test(raw)
-    ? raw.replace(/\./g, '')
+  const normalized = /^[+-]?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(raw)
+    ? raw.replace(/\./g, '').replace(',', '.')
     : raw.replace(',', '.');
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? String(parsed) : null;
@@ -262,6 +281,7 @@ const STATUS_CLAIMS = [
 ];
 
 const FIELD_HINTS = Object.freeze([
+  { kind: 'number', pattern: /(?:tamamlanma\s+oran|completion\s+rate)/iu, fields: ['completionratepercent'] },
   { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
   { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned'] },
   { kind: 'number', pattern: /(?:gerçekleşen\s+saat|actual\s+hours?)/iu, fields: ['actualhours', 'actual'] },
@@ -275,15 +295,40 @@ const FIELD_HINTS = Object.freeze([
 ]);
 
 function hintedFields(source, start, end, kind = 'number') {
-  const around = source.slice(Math.max(0, start - 36), Math.min(source.length, end + 36));
-  const match = FIELD_HINTS.find((item) => item.kind === kind && item.pattern.test(around));
-  return match?.fields || null;
+  const from = Math.max(0, start - 36);
+  const around = source.slice(from, Math.min(source.length, end + 36));
+  const claimCenter = ((start + end) / 2) - from;
+  let best = null;
+  for (const item of FIELD_HINTS) {
+    if (item.kind !== kind) continue;
+    const flags = item.pattern.flags.includes('g') ? item.pattern.flags : item.pattern.flags + 'g';
+    const pattern = new RegExp(item.pattern.source, flags);
+    for (const match of around.matchAll(pattern)) {
+      const center = match.index + (match[0].length / 2);
+      const distance = Math.abs(center - claimCenter);
+      if (!best || distance < best.distance) best = { distance, fields: item.fields };
+    }
+  }
+  return best?.fields || null;
 }
+
+const TURKISH_MONTHS = Object.freeze({
+  ocak: '01', şubat: '02', mart: '03', nisan: '04', mayıs: '05', haziran: '06',
+  temmuz: '07', ağustos: '08', eylül: '09', ekim: '10', kasım: '11', aralık: '12'
+});
 
 function claimsIn(text) {
   let source = claimText(text);
   const dates = [];
   source = source
+    .replace(/\b(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+(\d{4})\b/giu, (token, day, monthName, year, offset) => {
+      const month = TURKISH_MONTHS[monthName.toLocaleLowerCase('tr-TR')];
+      dates.push({
+        value: year + '-' + month + '-' + String(day).padStart(2, '0'),
+        fields: hintedFields(source, offset, offset + token.length, 'date')
+      });
+      return ' '.repeat(token.length);
+    })
     .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (token, _year, _month, _day, offset) => {
       dates.push({ value: token, fields: hintedFields(source, offset, offset + token.length, 'date') });
       return ' '.repeat(token.length);
@@ -298,7 +343,7 @@ function claimsIn(text) {
   source = source
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, ' ')
     .replace(/\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b/g, ' ');
-  const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)]
+  const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?))(?=$|[^\p{L}\d])/gu)]
     .map((match) => ({
       value: canonicalNumber(match[2]),
       fields: hintedFields(source, match.index + match[1].length, match.index + match[0].length)
@@ -335,49 +380,50 @@ function fieldBucket(result, key) {
   return result.fields.get(normalized);
 }
 
-function addPrimitive(value, key, result) {
-  const bucket = fieldBucket(result, key);
+function addPrimitive(value, keys, result) {
+  const buckets = [...new Set((Array.isArray(keys) ? keys : [keys]).map((key) => fieldBucket(result, key)).filter(Boolean))];
   if (typeof value === 'number' && Number.isFinite(value)) {
     const number = String(value);
     result.numbers.add(number);
-    bucket?.numbers.add(number);
+    for (const bucket of buckets) bucket.numbers.add(number);
     return;
   }
   if (typeof value !== 'string') return;
   const lower = value.toLocaleLowerCase('tr-TR');
   result.strings.add(lower);
-  bucket?.strings.add(lower);
-  for (const match of value.matchAll(/(^|[^\p{L}\d])([+\-−]?\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)) {
+  for (const bucket of buckets) bucket.strings.add(lower);
+  for (const match of value.matchAll(/(^|[^\p{L}\d])([+\-−]?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?))(?=$|[^\p{L}\d])/gu)) {
     const number = canonicalNumber(match[2]);
     if (number) {
       result.numbers.add(number);
-      bucket?.numbers.add(number);
+      for (const bucket of buckets) bucket.numbers.add(number);
     }
   }
   for (const date of value.matchAll(/(?:^|[^\d])(\d{4}-\d{2}-\d{2})(?=[^\d]|$)/g)) {
     result.dates.add(date[1]);
-    bucket?.dates.add(date[1]);
+    for (const bucket of buckets) bucket.dates.add(date[1]);
   }
 }
 
-function collectLocalValues(value, result, key = null) {
+function collectLocalValues(value, result, keys = []) {
   if (Array.isArray(value)) {
     for (const item of value) {
-      if (item == null || typeof item !== 'object') addPrimitive(item, key, result);
+      if (item == null || typeof item !== 'object') addPrimitive(item, keys, result);
     }
     return;
   }
   if (value && typeof value === 'object') {
     for (const [childKey, item] of Object.entries(value)) {
+      const childKeys = [...keys, childKey];
       if (Array.isArray(item) && item.some((entry) => entry && typeof entry === 'object')) {
-        collectLocalValues(item.filter((entry) => entry == null || typeof entry !== 'object'), result, childKey);
+        collectLocalValues(item.filter((entry) => entry == null || typeof entry !== 'object'), result, childKeys);
       } else {
-        collectLocalValues(item, result, childKey);
+        collectLocalValues(item, result, childKeys);
       }
     }
     return;
   }
-  addPrimitive(value, key, result);
+  addPrimitive(value, keys, result);
 }
 
 function collectEvidenceScopes(value, inherited = emptyEvidenceValues(), scopes = []) {
@@ -456,12 +502,12 @@ function scopeContainsText(scope, value) {
   const needle = normalizedText(value);
   return [...scope.strings].some((candidate) => {
     const normalized = normalizedText(candidate);
-    return normalized === needle || (needle.length >= 4 && (normalized.includes(needle) || needle.includes(normalized)));
+    return normalized === needle || normalized.startsWith(`${needle} `);
   });
 }
 
 function claimUnits(text) {
-  return claimText(text).split(/[\n;,]+|(?<=[.!?])\s+/u).map((item) => item.trim()).filter(Boolean);
+  return claimText(text).split(/\n|;|,(?!\d)|(?<=[.!?])\s+/u).map((item) => item.trim()).filter(Boolean);
 }
 
 function unsupportedEvidenceClaims(text, citationIds, byId) {
@@ -563,13 +609,25 @@ export function analyzeDirectAnswer(text, { evidenceRequired = false } = {}) {
  * Yanıt kanıt işareti taşıyamaz ve Rota verisi olarak okunabilecek sayı ya da
  * tarih içeremez: araç hatası, veriyi tahminle doldurma izni değildir.
  */
-const SAFE_UNGROUNDED_ANSWER = /(?:yanıtlayamıyorum|bulamadım|bulunamadı|ulaşılamıyor|erişemiyorum|görüntüleme yetkiniz yok|veri alınamadı)/i;
+const SAFE_UNGROUNDED_FAILURE = /^(?:bu soruyu(?: şu anda)?(?: Rota verisiyle)? yanıtlayamıyorum|bu görevi bulamadım ya da görüntüleme yetkiniz yok|(?:Rota )?veri(?:si|sine|ye|lerine)?(?: şu anda)? (?:alınamadı|ulaşılamıyor|erişemiyorum)|(?:bu |ilgili )?veri (?:bulunamadı|bulamadım)|(?:bu |ilgili )?veriye erişemiyorum|görüntüleme yetkiniz yok)$/iu;
+const SAFE_UNGROUNDED_REMEDIATION = /^(?:(?:lütfen )?(?:(?:biraz|daha) sonra )?(?:yeniden|tekrar) deneyin|soruyu .*?(?:yeniden|tekrar) deneyin|(?:lütfen )?görüntüleme yetkinizi .*?kontrol edin)$/iu;
+
+function isSafeUngroundedAnswer(value) {
+  const clauses = stripCitations(String(value ?? ''))
+    .trim()
+    .replace(/[.!?]+$/u, '')
+    .split(/\s*;\s*/u)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  if (!clauses.length || !SAFE_UNGROUNDED_FAILURE.test(clauses[0])) return false;
+  return clauses.slice(1).every((clause) => SAFE_UNGROUNDED_REMEDIATION.test(clause));
+}
 
 export function analyzeUngroundedAnswer(text, { evidenceRequired = false } = {}) {
   const value = String(text ?? '');
   const direct = analyzeDirectAnswer(value);
   const issues = [...direct.issues];
-  if (evidenceRequired && !SAFE_UNGROUNDED_ANSWER.test(value)) {
+  if (evidenceRequired && !isSafeUngroundedAnswer(value)) {
     issues.push({ code: 'ROTA_EVIDENCE_REQUIRED', detail: excerpt(value) });
   }
   for (const segment of answerSegments(value)) {
