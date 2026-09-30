@@ -40,7 +40,7 @@ const RETRY_BASE_DELAY_MS = 200;
 const RETRY_JITTER_MS = 400;
 const MIN_ATTEMPT_BUDGET_MS = 1000;
 const MAX_MESSAGES = 50;
-const MAX_MESSAGE_CHARS = 32000;
+const MAX_MESSAGE_CHARS = 32 * 1024;
 const MESSAGE_ROLES = new Set(['system', 'user', 'assistant']);
 /**
  * Araç oturumunun iletileri: geçmiş + yeni soru + araç turlarının çağrıları ve

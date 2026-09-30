@@ -132,8 +132,8 @@ const baselineCompare = {
         }
       },
       scope: describeTaskScope(project ? [project] : []),
-      complete: slipped.length === counts.finishSlipped,
-      truncated: slipped.length < counts.finishSlipped,
+      complete: slipped.length === counts.finishSlipped && !result.baselinesTruncated,
+      truncated: slipped.length < counts.finishSlipped || result.baselinesTruncated,
       returnedCount: slipped.length,
       totalCount: counts.finishSlipped,
       nextCursor: null,
@@ -443,11 +443,14 @@ const calendarInspect = {
     if (args.projectId && !result.projectVisible) throw notFound();
     if (!result.calendar) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Etkin bir çalışma takvimi tanımlı değil.' });
     const holidays = result.holidays.map((row) => ({ date: sqlDay(row.HolidayDate), name: dataText(row.Name, 120) }));
+    const workingDays = Array.isArray(result.workingDays) && result.workingDays.length
+      ? result.workingDays
+      : [1, 2, 3, 4, 5];
     const calendar = {
       id: canonicalActualId(result.calendar.CalendarId),
       name: String(result.calendar.Name || ''),
       timezone: String(result.calendar.TimeZone || 'Europe/Istanbul'),
-      workingDays: result.workingDays,
+      workingDays,
       holidays: holidays.map((holiday) => ({ date: holiday.date, name: holiday.name, short: holiday.name }))
     };
     const workingDayCount = countWorkingDays(from, to, calendar);

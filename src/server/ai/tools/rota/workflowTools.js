@@ -119,7 +119,7 @@ const activitySearch = {
       ...(item.detailsLimited ? { detailsLimited: true } : {})
     }));
     const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
-    const detailsLimited = items.some((item) => item.detailsLimited);
+    const detailsLimited = items.some((item) => item.detailsLimited || Number(item.moreChanges || 0) > 0);
     return {
       data: {
         range: report.range,

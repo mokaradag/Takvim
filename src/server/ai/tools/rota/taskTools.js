@@ -285,8 +285,8 @@ const taskDetail = {
         ]
       },
       scope: describeTaskScope(access ? [access] : []),
-      complete: !wbsPathTruncated,
-      truncated: wbsPathTruncated,
+      complete: !wbsPathTruncated && !row.DescriptionClipped,
+      truncated: wbsPathTruncated || Boolean(row.DescriptionClipped),
       returnedCount: 1,
       totalCount: 1,
       nextCursor: null,
@@ -377,12 +377,13 @@ const taskAnalytics = {
         ? left.key.localeCompare(right.key)
         : right.count - left.count || left.label.localeCompare(right.label, 'tr')));
       groupCount = ordered.length;
-      groups = ordered.slice(0, limit);
-      if (ordered.length > limit) {
-        const rest = ordered.slice(limit).reduce((sum, group) => ({
+      const visibleGroupLimit = ordered.length > limit ? Math.max(0, limit - 1) : limit;
+      groups = ordered.slice(0, visibleGroupLimit);
+      if (ordered.length > visibleGroupLimit) {
+        const rest = ordered.slice(visibleGroupLimit).reduce((sum, group) => ({
           count: sum.count + group.count, open: sum.open + group.open, overdue: sum.overdue + group.overdue, done: sum.done + group.done
         }), { count: 0, open: 0, overdue: 0, done: 0 });
-        groups.push({ key: 'other', label: `Diğer ${ordered.length - limit} grup`, ...rest });
+        groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
     const totals = statusTotals(facts, call.today);

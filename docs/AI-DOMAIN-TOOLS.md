@@ -180,8 +180,8 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
 - **Kısmi kapsam kısmi kalır.** Toplamlar yalnızca görünür görevler üzerindedir;
   gizli görevlerin sayısı, adı ya da varlığı hiçbir alanda (toplam, sayfa,
   grup, "diğer" kovası) sızmaz. Sonuç `scope.kind = authorized-task-subset`
-  taşır; model bunu yanıtta belirtmezse sunucu yanıta sabit kapsam notunu ekler
-  (§6.4).
+  taşır; kısmi kapsamlı kanıta atıf yapan her yanıta sunucu sabit kapsam notunu
+  ekler (§6.4).
 
 ---
 
@@ -237,7 +237,7 @@ uydurulmaz ya da silinmez. Son yanıt **ikinci bir dil modeline sorulmadan**
 
 | Durum | Kural |
 | --- | --- |
-| Kanıt var | Her atıf bu turdaki bir kanıta işaret etmeli (`R99` gibi uydurma kimlik geçersiz); biçimsiz işaret geçersiz; en az bir geçerli atıf olmalı; **sayı içeren her paragraf kendi içinde**, her liste/tablo/başlık kendisinde ya da hemen komşu bloğunda geçerli atıf taşımalı |
+| Kanıt var | Her atıf bu turdaki bir kanıta işaret etmeli (`R99` gibi uydurma kimlik geçersiz); biçimsiz işaret geçersiz; en az bir geçerli atıf olmalı; **her paragraf kendi içinde**, her liste/tablo/başlık kendisinde ya da hemen komşu bloğunda geçerli atıf taşımalı; atıf yapılan sayı, tarih ve durum değerleri ilgili kanıt yükünde bulunmalı |
 | Araç kullanılmadı (genel sohbet) | Yanıt hiçbir kanıt işareti taşıyamaz |
 | Araç denendi ama kanıt yok (hata, bulunamadı) | Kanıt işareti yok **ve** Rota verisi olarak okunabilecek sayı/tarih yok (kod bloğu hariç); araç hatası tahminle doldurulamaz |
 
@@ -252,9 +252,8 @@ Bu yanıtın bitiş nedeni `grounding_failed`'dır ve hiçbir kanıtı kaydedilm
 
 ### 6.4 Kısmi kapsam notu
 
-Yanıt kısmi kapsamlı bir kanıta atıf yapıp kapsamı kendisi belirtmiyorsa
-("görebildiğiniz", "yetkili olduğunuz" …) sunucu yanıta şu notu ekler; not
-yanıtla birlikte kaydedilir:
+Yanıt kısmi kapsamlı bir kanıta atıf yapıyorsa sunucu yanıta şu notu ekler;
+model kapsamı ayrıca belirtmiş olsa da not eklenir ve yanıtla birlikte kaydedilir:
 
 > _Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._
 
@@ -315,7 +314,7 @@ gönderilir.
 | Araç turu | 4 |
 | Tek model yanıtında yürütülen çağrı | 5 (fazlası `LIMIT_EXCEEDED`) |
 | Tur başına toplam çağrı | 12 |
-| Tur içi eşzamanlı çağrı | 2 |
+| Tur içi eşzamanlı çağrı | 1 (aynı model yanıtındaki çağrılar sırayla yürütülür) |
 | Çağrı süre sınırı | 8 sn (kapı beklemesi ve sorgu dâhil) |
 | Tur boyunca araç SQL süresi | 25 sn |
 | Araç evresi duvar saati | 45 sn |

@@ -41,7 +41,8 @@ const outlookStatus = {
     try {
       result = await call.sql((executor) => readOutlook(executor, scope, { taskIds: args.taskId ? [args.taskId] : [], maxRows: 500 }));
     } catch (error) {
-      if (/MR_TaskOutlookSubscriptions/.test(String(error?.message || ''))) {
+      const message = String(error?.message || '');
+      if (Number(error?.number) === 208 || /Invalid object name[^\n]*MR_TaskOutlookSubscriptions/i.test(message)) {
         throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Outlook takvim tümleştirmesi bu kurulumda etkin değil.' });
       }
       throw error;
@@ -80,7 +81,7 @@ const outlookStatus = {
       truncated: page.length < items.length || result.truncated,
       returnedCount: page.length,
       // Liste yalnızca görünür görevlerin aboneliklerini kapsar; görünmeyenler ayrıca sayılır.
-      totalCount: items.length,
+      totalCount: result.truncated ? null : items.length,
       nextCursor: null,
       evidence: {
         label: `Outlook teslim durumu · ${result.activeCount} abonelik`,

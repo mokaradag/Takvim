@@ -290,7 +290,9 @@ function projectDetail(db, params) {
       CalendarName: calendar?.Name ?? null,
       DependencyCount: access.AccessLevel === 'FULL' ? db.taskDependencies.filter((dep) => same(dep.ProjectId, project.ProjectId)).length : null,
       BaselineCount: access.AccessLevel === 'FULL' ? db.baselines.filter((row) => same(row.ProjectId, project.ProjectId)).length : null,
-      WbsNodeCount: db.wbs.filter((node) => same(node.ProjectId, project.ProjectId)).length
+      WbsNodeCount: access.AccessLevel === 'FULL'
+        ? db.wbs.filter((node) => same(node.ProjectId, project.ProjectId)).length
+        : null
     }],
     db.projectTags.filter((tag) => same(tag.ProjectId, project.ProjectId)).map((tag) => ({ TagName: tag.TagName })),
     [aggregate(tasks, params)]

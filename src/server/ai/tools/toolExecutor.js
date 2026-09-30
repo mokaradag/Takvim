@@ -57,7 +57,9 @@ function shrinkToFit(envelope, maxBytes) {
       truncated: true,
       complete: false,
       nextCursor: null,
-      returnedCount: Math.ceil(data[largest].length / 2),
+      returnedCount: current.returnedCount === data[largest].length
+        ? Math.ceil(data[largest].length / 2)
+        : current.returnedCount,
       data: {
         ...data,
         [largest]: data[largest].slice(0, Math.ceil(data[largest].length / 2)),

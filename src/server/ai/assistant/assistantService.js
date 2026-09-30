@@ -476,9 +476,9 @@ const FALLBACK_GROUNDED_HISTORY_TEXT = '[Önceki Rota verisi yanıtı güncel ka
 function fallbackAssistantHistory(history, evidence, { conservative = false } = {}) {
   return history.map((message) => {
     if (message.role !== 'assistant') return message;
-    if (evidence?.has(message.id) || (!evidence && conservative)) {
-      return { ...message, content: FALLBACK_GROUNDED_HISTORY_TEXT };
-    }
+    const grounded = evidence?.has(message.id)
+      || (!evidence && conservative && /【R[1-9]\d?】/.test(String(message.content || '')));
+    if (grounded) return { ...message, content: FALLBACK_GROUNDED_HISTORY_TEXT };
     return message;
   });
 }

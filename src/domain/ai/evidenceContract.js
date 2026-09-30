@@ -88,6 +88,7 @@ export function citationToken(id) {
  */
 export function normalizeCitations(text) {
   return String(text ?? '')
+    .replace(/\[\s*R([1-9]\d?)\s*\](?=\s*\[\s*R[1-9]\d?\s*\])/g, '【R$1】')
     .replace(/(^|[^!\\[])\[\s*R([1-9]\d?)\s*\](?![([])/g, '$1【R$2】')
     .replace(/【\s*(R[1-9]\d?(?:\s*[,;]\s*R[1-9]\d?)+)\s*】/g, (_, list) => list.split(/\s*[,;]\s*/).map((id) => citationToken(id)).join(''))
     .replace(/【\s*R([1-9]\d?)\s*】/g, '【R$1】');
@@ -215,13 +216,17 @@ function claimText(text) {
 }
 
 function canonicalNumber(value) {
-  const parsed = Number(String(value).replace(',', '.'));
+  const raw = String(value).trim().replace(/−/g, '-');
+  const normalized = /^[+-]?\d{1,3}(?:\.\d{3})+$/.test(raw)
+    ? raw.replace(/\./g, '')
+    : raw.replace(',', '.');
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? String(parsed) : null;
 }
 
 const STATUS_CLAIMS = [
   { pattern: /tamamlandı/u, values: ['done', 'completed', 'complete'] },
-  { pattern: /devam ediyor/u, values: ['in_progress', 'in-progress'] },
+  { pattern: /devam ediyor/u, values: ['in_progress', 'in-progress', 'inprogress'] },
   { pattern: /yapılacak/u, values: ['todo', 'planned'] }
 ];
 
@@ -240,7 +245,7 @@ function claimsIn(text) {
   source = source
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, ' ')
     .replace(/\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b/g, ' ');
-  const numbers = [...source.matchAll(/(^|[^\p{L}\d])(\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)]
+  const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)]
     .map((match) => canonicalNumber(match[2]))
     .filter(Boolean);
   const lower = source.toLocaleLowerCase('tr-TR');
@@ -255,19 +260,23 @@ function collectEvidenceValues(value, result) {
   }
   if (typeof value === 'string') {
     result.strings.add(value.toLocaleLowerCase('tr-TR'));
-    for (const match of value.matchAll(/(^|[^\p{L}\d])(\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)) {
+    for (const match of value.matchAll(/(^|[^\p{L}\d])([+\-−]?\d+(?:[.,]\d+)?)(?=$|[^\p{L}\d])/gu)) {
       const number = canonicalNumber(match[2]);
       if (number) result.numbers.add(number);
     }
-    const date = value.match(/(?:^|[^\d])(\d{4}-\d{2}-\d{2})(?:[^\d]|$)/);
-    if (date) result.dates.add(date[1]);
+    for (const date of value.matchAll(/(?:^|[^\d])(\d{4}-\d{2}-\d{2})(?=[^\d]|$)/g)) result.dates.add(date[1]);
     return;
   }
   if (Array.isArray(value)) {
     value.forEach((item) => collectEvidenceValues(item, result));
     return;
   }
-  if (value && typeof value === 'object') Object.values(value).forEach((item) => collectEvidenceValues(item, result));
+  if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      result.strings.add(key.toLocaleLowerCase('tr-TR'));
+      collectEvidenceValues(item, result);
+    }
+  }
 }
 
 function evidenceValueIndex(payloads) {
