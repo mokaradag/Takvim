@@ -262,21 +262,21 @@ const STATUS_CLAIMS = [
 ];
 
 const FIELD_HINTS = Object.freeze([
-  { pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
-  { pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned'] },
-  { pattern: /(?:gerçekleşen\s+saat|actual\s+hours?)/iu, fields: ['actualhours', 'actual'] },
-  { pattern: /(?:bütçe|budget)/iu, fields: ['budget'] },
-  { pattern: /(?:harcanan|spent)/iu, fields: ['spent'] },
-  { pattern: /(?:planlanan\s+bitiş|planned\s+finish)/iu, fields: ['plannedfinish'] },
-  { pattern: /(?:gerçekleşen\s+bitiş|actual\s+finish)/iu, fields: ['actualfinish'] },
-  { pattern: /(?:gerçekleşen\s+başlangıç|actual\s+start)/iu, fields: ['actualstart'] },
-  { pattern: /(?:planlanan\s+başlangıç|planned\s+start)/iu, fields: ['plannedstart'] },
-  { pattern: /(?:termin|deadline|target\s+finish|due\s+date)/iu, fields: ['targetfinish', 'calendardate'] }
+  { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
+  { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned'] },
+  { kind: 'number', pattern: /(?:gerçekleşen\s+saat|actual\s+hours?)/iu, fields: ['actualhours', 'actual'] },
+  { kind: 'number', pattern: /(?:bütçe|budget)/iu, fields: ['budget'] },
+  { kind: 'number', pattern: /(?:harcanan|spent)/iu, fields: ['spent'] },
+  { kind: 'date', pattern: /(?:planlanan\s+bitiş|planned\s+finish)/iu, fields: ['plannedfinish'] },
+  { kind: 'date', pattern: /(?:gerçekleşen\s+bitiş|actual\s+finish)/iu, fields: ['actualfinish'] },
+  { kind: 'date', pattern: /(?:gerçekleşen\s+başlangıç|actual\s+start)/iu, fields: ['actualstart'] },
+  { kind: 'date', pattern: /(?:planlanan\s+başlangıç|planned\s+start)/iu, fields: ['plannedstart'] },
+  { kind: 'date', pattern: /(?:termin|deadline|target\s+finish|due\s+date)/iu, fields: ['targetfinish', 'calendardate'] }
 ]);
 
-function hintedFields(source, start, end) {
+function hintedFields(source, start, end, kind = 'number') {
   const around = source.slice(Math.max(0, start - 36), Math.min(source.length, end + 36));
-  const match = FIELD_HINTS.find((item) => item.pattern.test(around));
+  const match = FIELD_HINTS.find((item) => item.kind === kind && item.pattern.test(around));
   return match?.fields || null;
 }
 
@@ -285,13 +285,13 @@ function claimsIn(text) {
   const dates = [];
   source = source
     .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (token, _year, _month, _day, offset) => {
-      dates.push({ value: token, fields: hintedFields(source, offset, offset + token.length) });
+      dates.push({ value: token, fields: hintedFields(source, offset, offset + token.length, 'date') });
       return ' '.repeat(token.length);
     })
     .replace(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/g, (token, day, month, year, offset) => {
       dates.push({
         value: year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0'),
-        fields: hintedFields(source, offset, offset + token.length)
+        fields: hintedFields(source, offset, offset + token.length, 'date')
       });
       return ' '.repeat(token.length);
     });
@@ -604,28 +604,28 @@ export function mentionsAuthorizedScope(text) {
  */
 export function withScopeDisclosure(text, citedEvidence = []) {
   const partial = citedEvidence.some((item) => item?.partial === true);
-  if (!partial) return { text, disclosed: false };
+  if (!partial || mentionsAuthorizedScope(text)) return { text, disclosed: false };
   return { text: `${String(text).trimEnd()}\n\n${SCOPE_DISCLOSURE_TEXT}`, disclosed: true };
 }
 
 const ISSUE_GUIDANCE = Object.freeze({
   EMPTY_ANSWER: 'Yanıt boş kaldı; kanıtlara dayanan kısa bir yanıt yaz.',
-  UNKNOWN_CITATION: 'Bu turda üretilmemiş kanıt kimliklerine atıf yaptın: {detail}. Yalnızca araç sonuçlarındaki evidenceId değerlerini kullan.',
-  MALFORMED_CITATION: 'Atıf biçimi hatalı: {detail}. Atıfları yalnızca 【R1】 biçiminde yaz.',
+  UNKNOWN_CITATION: 'Bu turda üretilmemiş kanıt kimliği kullandın. Yalnızca araç sonuçlarındaki evidenceId değerlerini kullan.',
+  MALFORMED_CITATION: 'Atıf biçimi hatalı. Atıfları yalnızca 【R1】 biçiminde yaz.',
   MISSING_CITATION: 'Rota verisine dayanan her ifadeye ilgili kanıtın atfını 【R1】 biçiminde ekle.',
-  UNCITED_NUMERIC_BLOCK: 'Şu bölüm sayı ya da tarih içeriyor ama kanıt atfı taşımıyor: "{detail}". Bu değeri destekleyen kanıtın atfını aynı paragrafa ekle; kanıtla desteklenemiyorsa değeri yazma.',
-  UNCITED_GROUNDED_BLOCK: 'Şu bölüm Rota yanıtında kanıt atfı taşımıyor: "{detail}". Rota verisine dayanmıyorsa bölümü çıkar; dayanıyorsa ilgili kanıtın atfını ekle.',
-  UNSUPPORTED_EVIDENCE_VALUE: 'Şu değerler atıf yapılan araç sonuçlarında bulunmuyor: {detail}. Yalnızca ilgili kanıt yükünde gerçekten bulunan sayı, tarih ve durum değerlerini kullan.',
+  UNCITED_NUMERIC_BLOCK: 'Bir bölüm sayı ya da tarih içeriyor ama kanıt atfı taşımıyor. Değeri destekleyen kanıtın atfını aynı paragrafa ekle; kanıtla desteklenemiyorsa değeri yazma.',
+  UNCITED_GROUNDED_BLOCK: 'Bir bölüm Rota yanıtında kanıt atfı taşımıyor. Rota verisine dayanmıyorsa bölümü çıkar; dayanıyorsa ilgili kanıtın atfını ekle.',
+  UNSUPPORTED_EVIDENCE_VALUE: 'Taslakta atıf yapılan araç sonuçlarıyla desteklenmeyen değerler var. Yalnızca ilgili kanıt yükünde gerçekten bulunan sayı, tarih ve durum değerlerini kullan.',
   ROTA_EVIDENCE_REQUIRED: 'Kullanıcı güncel Rota verisi soruyor. Yanıt vermeden önce ilgili Rota aracını çağır ve sonucu kanıt olarak kullan.',
   CITATION_WITHOUT_EVIDENCE: 'Bu yanıtta hiçbir Rota kanıtı yok ama kanıt işareti kullandın. Rota verisi gerekiyorsa önce ilgili aracı çağır; gerekmiyorsa kanıt işareti kullanmadan yanıtla.',
-  UNGROUNDED_NUMERIC_BLOCK: 'Rota verisi alınamadığı hâlde şu bölüm sayı ya da tarih içeriyor: "{detail}". Veriyi tahminle doldurma; verinin neden alınamadığını açıkla ya da ilgili aracı yeniden çağır.'
+  UNGROUNDED_NUMERIC_BLOCK: 'Rota verisi alınamadığı hâlde taslak sayı ya da tarih içeriyor. Veriyi tahminle doldurma; verinin neden alınamadığını açıkla ya da ilgili aracı yeniden çağır.'
 });
 
 /** Tek düzeltme turunda modele verilen, sunucuya ait yönerge. */
 export function groundingRepairInstruction(issues = []) {
-  const lines = [...new Map(issues.map((issue) => [`${issue.code}:${issue.detail || ''}`, issue])).values()]
+  const lines = [...new Set(issues.map((issue) => issue?.code).filter(Boolean))]
     .slice(0, 6)
-    .map((issue) => `- ${(ISSUE_GUIDANCE[issue.code] || 'Yanıtı kanıt sözleşmesine uygun yeniden yaz.').replace('{detail}', issue.detail || '')}`);
+    .map((code) => `- ${ISSUE_GUIDANCE[code] || 'Yanıtı kanıt sözleşmesine uygun yeniden yaz.'}`);
   return [
     'SUNUCU DOĞRULAMASI: Önceki taslak kanıt sözleşmesini karşılamadı ve kullanıcıya gösterilmedi.',
     ...lines,

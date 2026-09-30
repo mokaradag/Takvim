@@ -173,6 +173,13 @@ test('toplamlar belirlenimcidir: durum, gecikme, 7 gün, terminsiz, tamamlanma o
   const groups = Object.fromEntries(result.data.groups.map((group) => [group.key, group.count]));
   assert.deepEqual(groups, { overdue: 2, done: 2, due_next_7_days: 2, due_next_30_days: 1, no_target_finish: 1 });
   assert.equal(result.scope.kind, 'complete-projects');
+
+  const limited = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'deadline', limit: 3 });
+  assert.equal(limited.result.data.groupCount, 5);
+  assert.equal(limited.result.data.groups.length, 3);
+  assert.equal(limited.result.data.groups.at(-1).key, 'other');
+  assert.equal(limited.result.complete, false);
+  assert.equal(limited.result.truncated, true);
 });
 
 test('Türkiye günü sınırı: UTC 21:30’da termini “dün” olan görev gecikmiştir, bir saat önce bugün terminlidir', async (t) => {

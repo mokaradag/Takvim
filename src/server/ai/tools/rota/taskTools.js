@@ -394,6 +394,7 @@ const taskAnalytics = {
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
+    const groupsTruncated = Boolean(groupBy && groupCount > limit);
     const totals = statusTotals(facts, call.today);
     const descriptor = searchedScope(scope, filters.projectId);
     return {
@@ -411,8 +412,8 @@ const taskAnalytics = {
         }
       },
       scope: descriptor,
-      complete: true,
-      truncated: false,
+      complete: !groupsTruncated,
+      truncated: groupsTruncated,
       returnedCount: facts.length,
       totalCount: facts.length,
       nextCursor: null,

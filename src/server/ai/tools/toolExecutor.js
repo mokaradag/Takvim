@@ -18,8 +18,8 @@ import { getRotaTool } from './toolRegistry.js';
  *
  * Her çağrı TAM BİR araç iletisi üretir (sağlayıcı her çağrı kimliği için bir
  * sonuç bekler). Başarılı sonuç kanıt defterine çağrı sırasıyla (R1, R2 …)
- * kaydedilir; aynı turda aynı araç ve aynı bağımsız değişkenlerle yinelenen
- * çağrı yeniden SQL çalıştırmaz, önceki sonucu (aynı kanıtı) alır.
+ * kaydedilir; aynı model yanıtında aynı araç ve aynı bağımsız değişkenlerle
+ * yinelenen çağrı yeniden SQL çalıştırmaz, önceki sonucu (aynı kanıtı) alır.
  *
  * Oturumun iptali ve kimlik hataları araç sonucu değildir: tur sonlandırılır.
  */
@@ -79,7 +79,7 @@ export function createToolExecutor({
   onProgress = null,
   clock = Date.now
 }) {
-  const state = { calls: 0, resultBytes: 0, startedAt: null, cache: new Map(), attempted: 0, failures: 0 };
+  const state = { calls: 0, resultBytes: 0, startedAt: null, attempted: 0, failures: 0 };
 
   function phaseRemainingMs() {
     if (state.startedAt == null) return limits.maxToolPhaseMs;
@@ -87,14 +87,13 @@ export function createToolExecutor({
   }
 
   /**
-   * Tek çağrı: doğrulama → yürütme. Sonuç `{ outcome }`, önceki kümeden
-   * `{ cached }` ya da aynı kümedeki özdeş çağrı için `{ sameAs }`dir.
+   * Tek çağrı: doğrulama → yürütme. Sonuç `{ outcome }` ya da aynı model
+   * yanıtındaki özdeş çağrı için `{ sameAs }`dir.
    */
   async function execute(call, tool, pending, index) {
     if (call.oversize) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$:tooLarge'] });
     const args = parseToolArguments(tool.parameters, call.arguments);
     const cacheKey = `${tool.name}\u0000${JSON.stringify(args)}`;
-    if (state.cache.has(cacheKey)) return { cached: state.cache.get(cacheKey) };
     // Çağrılar sırayla alınır: özdeş çağrının sahibi her zaman daha küçük sıradadır.
     if (pending.has(cacheKey)) return { sameAs: pending.get(cacheKey) };
     pending.set(cacheKey, index);
@@ -143,7 +142,6 @@ export function createToolExecutor({
   async function runRound(toolCalls = []) {
     if (state.startedAt == null) state.startedAt = clock();
     context.beginRound();
-    state.cache.clear();
     const plans = toolCalls.map((call, index) => {
       const tool = resolveTool(call.name);
       state.attempted += 1;
@@ -187,12 +185,10 @@ export function createToolExecutor({
     return plans.map((plan, index) => {
       const result = results[index];
       const name = plan.tool?.name || String(plan.call.name || 'unknown').slice(0, 64);
-      const repeated = Boolean(result.cached) || result.sameAs != null;
+      const repeated = result.sameAs != null;
       let content;
       let code = null;
-      if (result.cached) {
-        content = result.cached;
-      } else if (result.sameAs != null) {
+      if (result.sameAs != null) {
         content = contents[result.sameAs];
       } else if (result.error) {
         code = result.error.code;
@@ -222,7 +218,6 @@ export function createToolExecutor({
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);
-          state.cache.set(result.cacheKey, content);
         }
       }
       if (repeated && state.resultBytes + byteLength(content) > limits.maxTotalResultBytes) {

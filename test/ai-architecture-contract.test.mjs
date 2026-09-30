@@ -747,6 +747,7 @@ test('araç SQL işleri kendi sınırlı kapısından ve süre sınırıyla geç
   }
   // Model turu açık SQL işlemi içinde başlatılamaz (ağ geçidi her turda denetler).
   const gateway = code(read('src/server/ai/aiGateway.js'));
+  assert.match(gateway, /const toolSessionTimeoutMs = \(route\.timeoutMs \?\? config\.requestTimeoutMs\) \+ TOOL_LIMITS\.maxToolPhaseMs;/);
   const round = gateway.slice(gateway.indexOf('async round({ messages, tools = [], toolChoice'));
   assert.ok(round.indexOf('assertOutsideSqlTransaction();') >= 0 && round.indexOf('assertOutsideSqlTransaction();') < round.indexOf('streamToolCompletion'));
 });

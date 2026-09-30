@@ -258,7 +258,7 @@ function taskDetail(db, params) {
   let node = task.WbsId ? db.wbs.find((item) => same(item.WbsId, task.WbsId) && same(item.ProjectId, task.ProjectId)) : null;
   let depth = 0;
   while (node && depth <= 40) {
-    chain.push({ WbsId: node.WbsId, Code: node.Code, Name: node.Name, Depth: depth });
+    chain.push({ WbsId: node.WbsId, ParentWbsId: node.ParentWbsId ?? null, Code: node.Code, Name: node.Name, Depth: depth });
     node = node.ParentWbsId ? db.wbs.find((item) => same(item.WbsId, node.ParentWbsId) && same(item.ProjectId, node.ProjectId)) : null;
     depth += 1;
   }
@@ -417,7 +417,7 @@ function baseline(db, params) {
   return [
     ordered.slice(0, 10).map((row) => ({ BaselineId: row.BaselineId, Name: row.Name, CreatedAt: row.CreatedAt, IsPrimary: row.IsPrimary ? 1 : 0,
       SnapshotCount: db.taskBaselineSnapshots.filter((snapshot) => same(snapshot.BaselineId, row.BaselineId)).length })),
-    [{ ProjectFull: full ? 1 : 0, SelectedBaselineId: selected?.BaselineId ?? null }],
+    [{ ProjectFull: full ? 1 : 0, SelectedBaselineId: selected?.BaselineId ?? null, BaselineTotal: ordered.length }],
     snapshots,
     [{ AddedSinceBaseline: added }]
   ];

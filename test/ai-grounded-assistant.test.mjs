@@ -273,7 +273,7 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   assert.equal(repair.toolChoice, 'none', 'kanıt varken düzeltme yalnızca yeniden yazımdır');
   assert.equal(repair.messages[0].role, 'system');
   assert.match(repair.messages[0].content, /SUNUCU DOĞRULAMASI/);
-  assert.match(repair.messages[0].content, /R99/);
+  assert.doesNotMatch(repair.messages[0].content, /R99|42 gecikmiş/);
   assert.equal(repair.messages.slice(1).some((message) => message.role === 'system'), false, 'sağlayıcı dizisinde ortada system rolü yoktur');
   assert.equal(response.text.includes('42 gecikmiş'), false, 'doğrulanamayan taslak hiçbir olayda gösterilmez');
   assert.deepEqual(eventsOf(response, 'delta').map((event) => event.data.text), [GROUNDING_FAILURE_TEXT]);
@@ -314,7 +314,7 @@ test('düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir v
   assert.equal(aiTelemetrySnapshot().grounding.grounded, 1);
 });
 
-test('kısmi kapsam: sunucu kapsam notunu modelin kendi ifadesinden bağımsız olarak ekler', async (t) => {
+test('kısmi kapsam: sunucu kapsam notunu yalnızca model kapsamı açıklamadığında ekler', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => `Kısmi Proje’de ${result.totalCount} görev listeleniyor. 【${result.evidenceId}】`));
   const response = await sendTurn({ turnId: randomUUID(), message: 'Kısmi projede kaç görev var?' });
@@ -333,7 +333,7 @@ test('kısmi kapsam: sunucu kapsam notunu modelin kendi ifadesinden bağımsız 
 
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => `Görebildiğiniz görevler arasında ${result.totalCount} kayıt var. 【${result.evidenceId}】`));
   const explicit = await sendTurn({ turnId: randomUUID(), message: 'Tekrar sor' });
-  assert.equal(doneOf(explicit).assistantMessage.content, `Görebildiğiniz görevler arasında 2 kayıt var. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
+  assert.equal(doneOf(explicit).assistantMessage.content, 'Görebildiğiniz görevler arasında 2 kayıt var. 【R1】');
 });
 
 test('araç kullanılmayan genel yanıt gerçek zamanlı akar; kanıt işareti taşıyamaz', async (t) => {

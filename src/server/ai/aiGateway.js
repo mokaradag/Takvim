@@ -673,10 +673,7 @@ export function createAiGateway({
         timeoutMs: config.queueTimeoutMs
       });
       context.queueWaitMs = lease.queueWaitMs;
-      const toolSessionTimeoutMs = Math.max(
-        route.timeoutMs ?? config.requestTimeoutMs,
-        config.requestTimeoutMs + TOOL_LIMITS.maxToolPhaseMs
-      );
+      const toolSessionTimeoutMs = (route.timeoutMs ?? config.requestTimeoutMs) + TOOL_LIMITS.maxToolPhaseMs;
       deadline = createAiDeadline({ timeoutMs: toolSessionTimeoutMs, parentSignal: signal, now });
       unlink = linkAbort(deadline.signal, providerScope);
       const credential = await raceWithAbort(

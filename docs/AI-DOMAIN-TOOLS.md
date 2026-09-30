@@ -125,8 +125,9 @@ Hazırlık yanıtı (`GET /assistant`) özellik açıkken ek bir `rotaData` alan
   "modes": [{ "id": "standard", "available": true }, { "id": "deep", "available": true }] }
 ```
 
-`reason`: `TOOL_REGISTRY_INVALID`, `PROFILE_UNAVAILABLE` ya da
-`EVIDENCE_SCHEMA_MISSING`. Özellik kapalıyken alan hiç bulunmaz.
+`reason`: `TOOL_REGISTRY_INVALID`, `PROFILE_UNAVAILABLE`,
+`EVIDENCE_SCHEMA_MISSING` ya da geçici şema denetimi hatalarında
+`EVIDENCE_SCHEMA_UNKNOWN`. Özellik kapalıyken alan hiç bulunmaz.
 
 ---
 
@@ -180,8 +181,8 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
 - **Kısmi kapsam kısmi kalır.** Toplamlar yalnızca görünür görevler üzerindedir;
   gizli görevlerin sayısı, adı ya da varlığı hiçbir alanda (toplam, sayfa,
   grup, "diğer" kovası) sızmaz. Sonuç `scope.kind = authorized-task-subset`
-  taşır; kısmi kapsamlı kanıta atıf yapan her yanıta sunucu sabit kapsam notunu
-  ekler (§6.4).
+  taşır; kısmi kapsamlı kanıta atıf yapan yanıt kapsamı zaten açıklamıyorsa
+  sunucu sabit kapsam notunu ekler (§6.4).
 
 ---
 
@@ -223,8 +224,10 @@ Hata: `{ ok: false, tool, error: { code, message, details? } }` (§11).
 
 - Yalnızca **başarılı** araç sonuçları kanıt olur; kimlikler turda **çağrı
   sırasıyla** verilir (tamamlanma sırasıyla değil).
-- Aynı turda aynı araç aynı bağımsız değişkenlerle yeniden çağrılırsa SQL
-  yeniden çalışmaz; önceki sonuç (aynı kanıt kimliği) verilir.
+- Aynı **model yanıtında** aynı araç aynı bağımsız değişkenlerle birden fazla
+  kez çağrılırsa SQL yeniden çalışmaz; önceki sonuç (aynı kanıt kimliği) verilir.
+  Sonraki araç turunda aynı çağrı yeniden çalışır; yetki bağlamı yeniden okunur ve
+  başarılı sonuç yeni bir kanıt kimliği alır.
 - Turda en fazla 12 çağrı yürütüldüğünden bir yanıt en fazla 12 kanıta dayanır
   (kalıcı sıra numarası üst sınırı 16'dır).
 
