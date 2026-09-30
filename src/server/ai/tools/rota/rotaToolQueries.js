@@ -220,7 +220,10 @@ ${VISIBLE_TASKS}
       OR (@assigneeMode = 'me' AND EXISTS (
         SELECT 1 FROM dbo.MR_TaskAssignees mine WHERE mine.TaskId = t.TaskId AND mine.Sicil = @sicil))
       OR (@assigneeMode = 'unassigned' AND NOT EXISTS (
-        SELECT 1 FROM dbo.MR_TaskAssignees anyone WHERE anyone.TaskId = t.TaskId))
+        SELECT 1
+        FROM dbo.MR_TaskAssignees anyone
+        JOIN dbo.MR_V_PeopleDirectory resolved ON resolved.Sicil = anyone.Sicil
+        WHERE anyone.TaskId = t.TaskId))
       OR (@assigneeMode = 'person' AND EXISTS (
         SELECT 1 FROM dbo.MR_TaskAssignees person
         WHERE person.TaskId = t.TaskId AND person.Sicil = @personSicil

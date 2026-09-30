@@ -198,7 +198,7 @@ function taskFacts(db, params) {
     const assignments = assigneesOf(db, task.TaskId);
     switch (params.assigneeMode) {
       case 'me': return assignments.some((row) => row.Sicil === scope.sicil);
-      case 'unassigned': return assignments.length === 0;
+      case 'unassigned': return !assignments.some((row) => personName(db, row.Sicil) != null);
       case 'person': return assignments.some((row) => row.Sicil === Number(params.personSicil)
         && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
       default: return true;

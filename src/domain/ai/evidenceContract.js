@@ -281,6 +281,15 @@ const STATUS_CLAIMS = [
 ];
 
 const FIELD_HINTS = Object.freeze([
+  { kind: 'number', pattern: /(?:gecikmiş(?:\s+görev(?:\s+say(?:ı|ısı))?)?|overdue(?:\s+(?:task\s+count|tasks?))?)/iu, fields: ['overdue', 'overduecount', 'subtreeoverdue'] },
+  { kind: 'number', pattern: /(?:açık\s+görev(?:\s+say(?:ı|ısı))?|open\s+(?:task\s+count|tasks?))/iu, fields: ['open', 'opentasks', 'opentaskcount'] },
+  { kind: 'number', pattern: /(?:tamamlanmış\s+görev(?:\s+say(?:ı|ısı))?|completed\s+(?:task\s+count|tasks?)|done\s+tasks?)/iu, fields: ['done', 'completed', 'closed', 'completedtasks'] },
+  { kind: 'number', pattern: /(?:bu\s+hafta\s+termini|7\s+gün(?:\s+içinde)?\s+termin|due\s+soon|next\s+7\s+days?)/iu, fields: ['duenext7days', 'duesoon', 'duesooncount'] },
+  { kind: 'number', pattern: /(?:sorumlusuz(?:\s+görev)?|unassigned(?:\s+tasks?)?)/iu, fields: ['unassigned', 'unassignedcount', 'unassignedopentasks'] },
+  { kind: 'number', pattern: /(?:proje\s+say(?:ı|ısı)|project\s+count|toplam\s+proje)/iu, fields: ['projects', 'projectcount', 'totalprojects', 'totalcount'] },
+  { kind: 'number', pattern: /(?:(?:wbs|iş\s+dağılım)\s+(?:düğüm\s+)?say(?:ı|ısı)|wbs\s+node\s+count)/iu, fields: ['wbsnodecount', 'nodecount', 'totalnodes', 'nodes'] },
+  { kind: 'number', pattern: /(?:talep\s+say(?:ı|ısı)|request\s+count|toplam\s+talep)/iu, fields: ['requests', 'requestcount', 'totalcount'] },
+  { kind: 'number', pattern: /(?:toplam\s+görev|total\s+tasks?|tasks?\s+total)/iu, fields: ['total', 'totalcount', 'tasks', 'taskcount'] },
   { kind: 'number', pattern: /(?:tamamlanma\s+oran|completion\s+rate)/iu, fields: ['completionratepercent'] },
   { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
   { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned'] },
@@ -478,18 +487,22 @@ function entityClaimsIn(text) {
   const source = claimText(text);
   const claims = [];
   const patterns = [
-    /(?:sorumlu(?:su|ları)?|oluşturan|proje lideri|lideri)\s*(?:[:=–—-]\s*|\s+)([\p{L}][\p{L}\p{M}'’ -]{1,80})/giu,
-    /(?:assignee|owner|responsible person|created by|project lead)\s*(?:is\s+|[:=–—-]\s*)?([\p{L}][\p{L}\p{M}'’ -]{1,80})/giu,
-    /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+projesi(?:nde|nin)?\b/giu,
-    /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+görevi(?:nde|nin)?\b/giu,
-    /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+project\b/giu,
-    /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+task\b/giu,
-    /(?:görev|task)\s*[“"'‘’]([^”"'‘’]{2,120})[”"'‘’]/giu
+    { kind: 'person', pattern: /(?:sorumlu(?:su|ları)?|oluşturan|proje lideri|lideri)\s*(?:[:=–—-]\s*|\s+)([\p{L}][\p{L}\p{M}'’ -]{1,80})/giu },
+    { kind: 'person', pattern: /(?:assignee|owner|responsible person|created by|project lead)\s*(?:is\s+|[:=–—-]\s*)?([\p{L}][\p{L}\p{M}'’ -]{1,80})/giu },
+    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+projesi(?:nde|nin)?\b/giu },
+    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+görevi(?:nde|nin)?\b/giu },
+    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+project\b/giu },
+    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+task\b/giu },
+    { kind: 'exact', pattern: /(?:görev|task)\s*[“"'‘’]([^”"'‘’]{2,120})[”"'‘’]/giu }
   ];
-  for (const pattern of patterns) {
+  for (const { kind, pattern } of patterns) {
     for (const match of source.matchAll(pattern)) {
-      const value = match[1].trim().replace(/\s+/g, ' ');
-      if (!/^(?:bu|bir|ilgili|proje|görev|kişi|bilinmiyor|yok|the|this|a)$/iu.test(value)) claims.push(value);
+      let value = match[1].trim().replace(/\s+/g, ' ');
+      if (kind === 'person') value = value.replace(/\s+(?:olan|olarak)\b.*$/iu, '').trim();
+      if (kind === 'subject') value = value.replace(/^(?:şu\s+anda|şimdi|halen|currently|now)\s+/iu, '').trim();
+      const normalized = normalizedText(value);
+      if (/^(?:oldugunuz|oldugun|oldugu|olan|olarak)$/u.test(normalized)) continue;
+      if (!/^(?:bu|bir|ilgili|proje|görev|kişi|bilinmiyor|yok|the|this|a)$/iu.test(value) && value.length >= 2) claims.push(value);
     }
   }
   return [...new Set(claims)];

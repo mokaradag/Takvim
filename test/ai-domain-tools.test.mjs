@@ -437,6 +437,8 @@ test('plan kalitesi kurumsal dizinde çözülemeyen sorumlu Sicilini sorumlu say
   const assignee = quality.result.data.checks.find((check) => check.id === 'assignee');
   assert.equal(assignee.count, 1);
   assert.ok(assignee.examples.some((item) => item.taskId === TASKS.UNASSIGNED));
+  const unassigned = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, assignee: 'unassigned', limit: 50 });
+  assert.ok(unassigned.result.data.tasks.some((item) => item.taskId === TASKS.UNASSIGNED), 'dizinde çözülemeyen Sicil görevi sorumlu saymaz');
 });
 
 /* ── İş akışları ve kişisel veriler ───────────────────────── */

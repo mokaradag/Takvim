@@ -414,6 +414,38 @@ test('Rota olgu kapısı bağlamı korur; kanıt doğrulaması isim ve kayıt il
     }]
   };
   assert.equal(evidence.analyzeGroundedAnswer('Bu hafta termini olan 4 görev var. 【R1】', dueCountContext).ok, true);
+
+  const aggregateContext = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({ data: { totals: { total: 15, open: 12, overdue: 3 } } })
+    }]
+  };
+  assert.equal(evidence.analyzeGroundedAnswer('Gecikmiş görev sayısı 3. 【R1】', aggregateContext).ok, true);
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Gecikmiş görev sayısı 12. 【R1】', aggregateContext).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
+  assert.equal(evidence.analyzeGroundedAnswer('Açık görev sayısı 12. 【R1】', aggregateContext).ok, true);
+
+  const phrasingContext = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({
+        data: {
+          totals: { total: 3, overdue: 3 },
+          project: { name: 'Radar Modernizasyonu' },
+          assignee: { name: 'Ayşe Yılmaz' },
+          task: { status: 'in_progress' }
+        }
+      })
+    }]
+  };
+  assert.equal(evidence.analyzeGroundedAnswer('Sorumlu olduğunuz 3 görev gecikmiş. 【R1】', phrasingContext).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Sorumlusu Ayşe Yılmaz olan görev devam ediyor. 【R1】', phrasingContext).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Şu anda Radar Modernizasyonu projesinde 3 görev var. 【R1】', phrasingContext).ok, true);
 });
 
 test('kısmi kapsamlı kanıta dayanan yanıta sunucu kapsam notunu yalnızca gerekirse ekler', () => {

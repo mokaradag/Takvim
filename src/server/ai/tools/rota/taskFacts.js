@@ -235,7 +235,7 @@ export function coarseTargetRange(filters, today) {
 export function assigneeMatches(fact, filters, assignees, sicil) {
   switch (filters.assignee) {
     case 'me': return fact.isOwnAssignee;
-    case 'unassigned': return fact.assigneeCount === 0;
+    case 'unassigned': return fact.resolvedAssigneeCount === 0;
     case 'person': return (assignees.get(fact.id) || []).some((person) => person.identityVisible && person.sicil === filters.personSicil)
       || (filters.personSicil === sicil && fact.isOwnAssignee);
     default: return true;

@@ -173,22 +173,31 @@ const taskSearch = {
     const sorted = sortFacts(facts, sort, call.today);
     const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null });
     let pageAssignees = assignees;
+    let pageFacts = page;
+    let pageProjects = projects;
+    let pageChanged = false;
     if (page.length && filters.assignee !== 'person') {
       const detail = await call.sql((executor) => readTaskFacts(executor, scope, {
         taskIds: page.map((fact) => fact.id), withAssignees: true, maxRows: page.length
       }));
       pageAssignees = detail.assignees;
+      pageProjects = projectIndex(detail.projects);
+      const refreshed = new Map(detail.facts.map((fact) => [fact.id, fact]));
+      pageFacts = page.map((fact) => refreshed.get(fact.id)).filter((fact) => fact && matchesTaskFilters(fact, filters, {
+        today: call.today, assignees: pageAssignees, sicil: call.sicil
+      }));
+      pageChanged = pageFacts.length !== page.length;
     }
     const descriptor = searchedScope(scope, filters.projectId);
     return {
       data: {
-        tasks: page.map((fact) => taskItem(fact, { projects, assignees: pageAssignees, today: call.today })),
+        tasks: pageFacts.map((fact) => taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today })),
         sort
       },
       scope: descriptor,
-      complete: offset + page.length >= sorted.length,
-      truncated: !nextCursor && offset + page.length < sorted.length,
-      returnedCount: page.length,
+      complete: !pageChanged && offset + page.length >= sorted.length,
+      truncated: pageChanged || (!nextCursor && offset + page.length < sorted.length),
+      returnedCount: pageFacts.length,
       totalCount: sorted.length,
       nextCursor,
       evidence: {
