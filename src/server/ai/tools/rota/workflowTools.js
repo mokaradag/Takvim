@@ -96,7 +96,7 @@ const activitySearch = {
     if (key.scope === 'team' && !auth.isExecutive && !auth.isSystemAdmin) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
       message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.'
     });
-    if (key.projectId) requireVisibleProject(scope, key.projectId);
+    if (key.projectId) await requireVisibleProject(scope, key.projectId, call);
     const report = await call.sql((executor) => readTaskActivityReport(executor, auth, {
       period: ACTIVITY_PERIODS[period],
       from: key.dateFrom,

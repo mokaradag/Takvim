@@ -21,7 +21,7 @@ export const TOOL_LIMITS = Object.freeze({
   callTimeoutMs: 8000,
   /** Tur boyunca araç SQL'inde geçirilebilecek toplam süre. */
   maxCumulativeSqlMs: 25000,
-  /** Araç evresinin duvar saati sınırı (turun ilk aracından itibaren). */
+  /** Araç turlarında geçirilen toplam süre; aradaki model üretimi oturum süresine tabidir. */
   maxToolPhaseMs: 45000,
   /** Modele verilen tek araç sonucunun en büyük boyutu (UTF-8 bayt). */
   maxResultBytes: 16 * 1024,

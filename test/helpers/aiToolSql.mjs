@@ -56,7 +56,7 @@ function scopeOf(db, params, { restrictTasks = null } = {}) {
   const projects = new Map();
   const activeProject = (id) => {
     const project = projectRow(db, id);
-    return project && project.IsActive && (!projectFilter || same(project.ProjectId, projectFilter)) ? project : null;
+    return project && project.IsActive && (!params.sourceFilter || params.sourceFilter === 'all' || (params.sourceFilter === 'corporate') === (project.SourceType === 'CORPORATE')) && (!projectFilter || same(project.ProjectId, projectFilter)) ? project : null;
   };
   if (isAdmin) {
     for (const project of db.projects) {
@@ -410,7 +410,7 @@ function baseline(db, params) {
     : 0;
   return [
     ordered.slice(0, 10).map((row) => ({ BaselineId: row.BaselineId, Name: row.Name, CreatedAt: row.CreatedAt, IsPrimary: row.IsPrimary ? 1 : 0,
-      SnapshotCount: db.taskBaselineSnapshots.filter((snapshot) => same(snapshot.BaselineId, row.BaselineId)).length })),
+      SnapshotCount: (() => { const count = db.taskBaselineSnapshots.filter((snapshot) => same(snapshot.BaselineId, row.BaselineId)).length; return count >= Number(params.analysisMaxRows) ? null : count; })() })),
     [{ ProjectFull: full ? 1 : 0, SelectedBaselineId: selected?.BaselineId ?? null, BaselineTotal: ordered.length }],
     snapshots,
     [{ AddedSinceBaseline: added }]
@@ -470,6 +470,25 @@ export function runAiToolQuery(db, sqlText, params) {
   db.aiToolLog ||= [];
   db.aiToolLog.push({ query: marker[1], params: { ...params } });
   if (db.aiToolFailure?.[marker[1]]) throw db.aiToolFailure[marker[1]];
+  // Independently enforce the SQL population budget before computing result sets.
+  const boundedTaskQueries = new Set(['task-facts', 'task-detail', 'portfolio', 'project-detail', 'wbs', 'baseline']);
+  if (boundedTaskQueries.has(marker[1]) || (marker[1] === 'dependencies' && !params.focusTaskId)) {
+    const scope = scopeOf(db, params);
+    const cap = Number(params.analysisMaxRows);
+    const tooLarge = () => { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; };
+    if (scope.visible.size >= cap) tooLarge();
+    if (['task-facts', 'task-detail'].includes(marker[1])) {
+      const associations = db.taskAssignees.filter((row) => scope.visible.has(upper(row.TaskId)));
+      if (associations.length >= cap) tooLarge();
+    }
+    if (marker[1] === 'baseline') {
+      const access = scope.projects.get(upper(params.projectId));
+      const selected = db.baselines.filter((row) => access?.AccessLevel === 'FULL' && same(row.ProjectId, params.projectId)
+        && (!params.baselineId || same(row.BaselineId, params.baselineId)))
+        .sort((a, b) => Number(b.IsPrimary) - Number(a.IsPrimary) || String(b.CreatedAt).localeCompare(String(a.CreatedAt)))[0];
+      if (selected && db.taskBaselineSnapshots.filter((row) => same(row.BaselineId, selected.BaselineId)).length >= cap) tooLarge();
+    }
+  }
   const handler = HANDLERS[marker[1]];
   if (!handler) throw new Error(`Fake SQL Server: desteklenmeyen araç sorgusu: ${marker[1]}`);
   return handler(db, params);

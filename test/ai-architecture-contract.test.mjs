@@ -712,7 +712,7 @@ test('araç SQL metinleri sabit, parametreli, salt okunur ve yetki kapsamına ba
     assert.match(name, /^AI_TOOL_[A-Z_]+_SQL$/);
     assert.match(text, /^\/\* rota-ai-tool:[a-z-]+ \*\//, `${name}: işaret`);
     // Her toplu iş, oturumdan türetilen kapsam parametreleriyle başlar.
-    for (const fragment of ['#AiScopeProjects', '@isAdmin', '@scopeProjects', '@scopeTasks', 'p.IsActive = 1']) {
+    for (const fragment of ['#AiScopeProjects', '@isAdmin', '@scopeProjects', 'p.IsActive = 1']) {
       assert.ok(text.includes(fragment), `${name}: ${fragment}`);
     }
     assert.doesNotMatch(text, /\$\{|EXEC\s*\(|\bEXEC\s|sp_executesql/i, `${name}: dinamik SQL yoktur`);
@@ -726,6 +726,9 @@ test('araç SQL metinleri sabit, parametreli, salt okunur ve yetki kapsamına ba
     for (const line of text.split('\n').filter((candidate) => candidate.includes('CHARINDEX(@text'))) {
       assert.match(line, /CHARINDEX\(@text, .*COLLATE Turkish_100_CI_AI\)/, `${name}: ${line.trim()}`);
     }
+  }
+  for (const text of [queries.AI_TOOL_PROJECT_SEARCH_SQL, queries.AI_TOOL_CALENDAR_SQL]) {
+    assert.doesNotMatch(text, /STRING_SPLIT\(@scopeTasks/, 'metadata-only lookups do not stage partial-task scope');
   }
   // Kişi süzgeci yalnızca kimliği kullanıcıya açık sorumluluklarla eşleşir.
   assert.match(queries.AI_TOOL_TASK_FACTS_SQL, /person\.Sicil = @personSicil\s+AND \(visible\.IdentityBase = 1 OR person\.Sicil = @sicil OR EXISTS \(/);

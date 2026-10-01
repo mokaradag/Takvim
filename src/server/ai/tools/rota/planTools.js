@@ -58,7 +58,7 @@ const baselineCompare = {
   async handler(args, call) {
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
-    requireFullProject(scope, args.projectId);
+    await requireFullProject(scope, args.projectId, call);
     const result = await call.sql((executor) => readBaseline(executor, scope, {
       projectId: args.projectId, baselineId: args.baselineId ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
@@ -69,7 +69,7 @@ const baselineCompare = {
       name: dataText(row.Name, 120),
       createdAt: sqlInstant(row.CreatedAt),
       isPrimary: Boolean(row.IsPrimary),
-      taskCount: Number(row.SnapshotCount || 0)
+      taskCount: row.SnapshotCount == null ? null : Number(row.SnapshotCount)
     }));
     const selectedId = result.selectedBaselineId ? canonicalActualId(result.selectedBaselineId) : null;
     if (args.baselineId && selectedId !== args.baselineId) throw notFound();
@@ -187,7 +187,7 @@ const dependencyInspect = {
       if (projectId && projectId !== focus.projectId) throw notFound();
       projectId = focus.projectId;
     }
-    requireFullProject(scope, projectId);
+    await requireFullProject(scope, projectId, call);
     const result = await call.sql((executor) => readDependencies(executor, scope, {
       projectId, focusTaskId: focus?.id ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
@@ -370,7 +370,7 @@ const recurrenceInspect = {
         }
       };
     }
-    if (args.projectId) requireVisibleProject(scope, args.projectId);
+    if (args.projectId) await requireVisibleProject(scope, args.projectId, call);
     const result = await call.sql((executor) => readTaskFacts(executor, scope, {
       projectId: args.projectId ?? null, recurringOnly: true, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
@@ -444,7 +444,7 @@ const calendarInspect = {
     if (from > to) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateFrom:reversed'] });
     if (daysBetween(from, to) + 1 > MAX_CALENDAR_RANGE_DAYS) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateTo:range'] });
     const { scope } = await call.authorization();
-    if (args.projectId) requireVisibleProject(scope, args.projectId);
+    if (args.projectId) await requireVisibleProject(scope, args.projectId, call);
     const result = await call.sql((executor) => readCalendar(executor, scope, { projectId: args.projectId ?? null, from, to }));
     if (args.projectId && !result.projectVisible) throw notFound();
     if (!result.calendar) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Etkin bir çalışma takvimi tanımlı değil.' });

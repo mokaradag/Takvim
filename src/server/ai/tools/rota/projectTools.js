@@ -127,7 +127,7 @@ const projectDetail = {
   },
   async handler(args, call) {
     const { scope } = await call.authorization();
-    const access = requireVisibleProject(scope, args.projectId);
+    const access = await requireVisibleProject(scope, args.projectId, call);
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
     const detail = await call.sql((executor) => readProjectDetail(executor, scope, { projectId: args.projectId, today: call.today, soonEnd }));
     if (!detail.project) throw notFound();
@@ -206,7 +206,7 @@ const portfolioSummary = {
     const source = args.source || 'all';
     const { scope } = await call.authorization();
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
-    const rows = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd }));
+    const rows = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
     const filteredRows = rows
       .filter((row) => source === 'all' || (source === 'corporate') === (row.SourceType === 'CORPORATE'))
       .filter((row) => args.includeEmpty !== false || taskTotals(row).total > 0);
@@ -278,7 +278,7 @@ const wbsInspect = {
     const depthLimit = args.depth ?? 2;
     const limit = args.limit ?? 40;
     const { scope } = await call.authorization();
-    const access = requireVisibleProject(scope, args.projectId);
+    const access = await requireVisibleProject(scope, args.projectId, call);
     const result = await call.sql((executor) => readWbs(executor, scope, {
       projectId: args.projectId, today: call.today, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));

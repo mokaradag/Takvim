@@ -321,7 +321,7 @@ gönderilir.
 | Tur içi eşzamanlı çağrı | 1 (aynı model yanıtındaki çağrılar sırayla yürütülür) |
 | Çağrı süre sınırı | 8 sn (kapı beklemesi ve sorgu dâhil) |
 | Tur boyunca araç SQL süresi | 25 sn |
-| Araç evresi duvar saati | 45 sn |
+| Araç turlarının toplam yürütme süresi (model üretimi hariç) | 45 sn |
 | Tek sonuç | 16 KiB (büyük liste yarılanarak kısaltılır ve bildirilir; sığmazsa `RESULT_TOO_LARGE`) |
 | Tur boyunca sonuçlar | 96 KiB |
 | Bağımsız değişken | 8 KiB |
@@ -738,3 +738,22 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 - ses ve görsel girdi/üretim (Aşama 6);
 - kritik yol, bolluk, kapasite ve aşırı yük hesabı; genel internet araması;
 - birden çok uygulama örneği arasında paylaşılan araç SQL kapısı.
+
+
+### Yanıt dili ve araç amaç sınırı
+
+Kanıta dayalı yol Türkçe ve İngilizce yanıtları destekler. Sunucu soru dilinden
+(ve açık Türkçe/İngilizce isteğinden) yanıt dilini seçer; sayı doğrulaması,
+kapsam notu ve doğrulanamayan yanıt metni aynı dil sözleşmesini kullanır.
+Diğer dillerdeki sorular Türkçe yanıtlanır.
+
+Başarılı araç sonucu alındıktan sonra araç kataloğu, yalnızca güvenilir kullanıcı
+sorusu ve kısa takiplerde son kullanıcı sorusundan türetilen alanlarla sınırlanır.
+Araç verisindeki yönergeler yeni bir alan açamaz; izin dışı çağrı yürütülmez.
+Model üretimi 45 saniyelik araç yürütme bütçesine katılmaz; son ve düzeltme model
+turları da ağ geçidinin toplam oturum süre sınırına tabidir.
+
+Görev analizleri ilk geçici görev nüfusunda 20.001 satırlık taşma belirteciyle
+sınırlandırılır. Sorumluluk ilişkilerine ayrıca aynı satır bütçesi uygulanır;
+sınır aşımı `RESULT_TOO_LARGE` üretir. Proje araması ve çalışma takvimi gibi
+metaveri sorguları kısmi görev kapsamını geçici tabloda kurmaz.

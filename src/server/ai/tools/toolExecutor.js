@@ -14,7 +14,7 @@ import { getRotaTool } from './toolRegistry.js';
  * seçebilir. Yürütücü, bir model yanıtındaki çağrıları (en fazla
  * `maxCallsPerRound`) sınırlı eşzamanlılıkla, her biri kendi süre sınırıyla
  * çalıştırır; tur boyunca toplam çağrı, toplam sonuç boyutu ve araç evresinin
- * duvar saati sınırlıdır. Sınırı aşan çağrı yürütülmez, güvenli hata alır.
+ * toplam yürütme süresi sınırlıdır. Sınırı aşan çağrı yürütülmez, güvenli hata alır.
  *
  * Her çağrı TAM BİR araç iletisi üretir (sağlayıcı her çağrı kimliği için bir
  * sonuç bekler). Başarılı sonuç kanıt defterine çağrı sırasıyla (R1, R2 …)
@@ -79,11 +79,11 @@ export function createToolExecutor({
   onProgress = null,
   clock = Date.now
 }) {
-  const state = { calls: 0, resultBytes: 0, startedAt: null, attempted: 0, failures: 0 };
+  const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0 };
 
   function phaseRemainingMs() {
-    if (state.startedAt == null) return limits.maxToolPhaseMs;
-    return Math.max(0, limits.maxToolPhaseMs - (clock() - state.startedAt));
+    const running = state.roundStartedAt == null ? 0 : clock() - state.roundStartedAt;
+    return Math.max(0, limits.maxToolPhaseMs - state.toolMs - running);
   }
 
   function fitWithinResultBudget(content, name) {
@@ -148,8 +148,7 @@ export function createToolExecutor({
   }
 
   /** Bir model yanıtındaki araç çağrılarını yürütür; çağrı sırasıyla araç iletileri döner. */
-  async function runRound(toolCalls = []) {
-    if (state.startedAt == null) state.startedAt = clock();
+  async function executeRound(toolCalls = []) {
     context.beginRound();
     const plans = toolCalls.map((call, index) => {
       if (index >= limits.maxCallsPerRound || phaseRemainingMs() <= 0) {
@@ -211,7 +210,7 @@ export function createToolExecutor({
         if (!text) {
           code = TOOL_ERROR_CODES.RESULT_TOO_LARGE;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
-        } else if (state.resultBytes + byteLength(text) + 1 > limits.maxTotalResultBytes) {
+        } else if (fitWithinResultBudget(JSON.stringify({ ...JSON.parse(text), evidenceId: `R${ledger.size() + 1}` }), name).limited) {
           code = TOOL_ERROR_CODES.LIMIT_EXCEEDED;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
         } else {
@@ -243,6 +242,16 @@ export function createToolExecutor({
       }
       return { role: 'tool', toolCallId: plan.call.id, content };
     });
+  }
+
+  async function runRound(toolCalls = []) {
+    state.roundStartedAt = clock();
+    try {
+      return await executeRound(toolCalls);
+    } finally {
+      state.toolMs += Math.max(0, clock() - state.roundStartedAt);
+      state.roundStartedAt = null;
+    }
   }
 
   return Object.freeze({

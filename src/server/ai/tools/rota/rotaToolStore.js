@@ -1,4 +1,6 @@
 import 'server-only';
+import { TOOL_LIMITS } from '../toolLimits.js';
+import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { sql } from '../../../db/pool.js';
 import { bindScope } from './rotaScope.js';
 import {
@@ -26,7 +28,17 @@ import { assigneesByTask, factFromRow } from './taskFacts.js';
 const recordsets = (result) => result?.recordsets || [];
 
 function scoped(executor, scope, options) {
-  return bindScope(executor.request(), sql, scope, options);
+  const request = bindScope(executor.request(), sql, scope, options);
+  const query = request.query.bind(request);
+  request.query = async (statement) => {
+    try { return await query(statement); } catch (error) {
+      if (error?.number === 51001 || error?.originalError?.info?.number === 51001) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      throw error;
+    }
+  };
+  request.input('sourceFilter', sql.VarChar(12), options?.source || 'all');
+  request.input('analysisMaxRows', sql.Int, TOOL_LIMITS.maxAnalyzedTasks + 1);
+  return request;
 }
 
 /** `rows.length > limit` ise sonuç kesilmiştir; en fazla `limit` satır döner. */
@@ -85,16 +97,16 @@ export async function readTaskDetail(executor, scope, taskId) {
   };
 }
 
-export async function readProjectSearch(executor, scope, { text, limit }) {
-  const request = scoped(executor, scope, {});
+export async function readProjectSearch(executor, scope, { text, limit, projectId = null }) {
+  const request = scoped(executor, scope, { projectId });
   request.input('text', sql.NVarChar(120), text);
   request.input('limit', sql.Int, limit);
   const [[count] = [], rows = []] = recordsets(await request.query(AI_TOOL_PROJECT_SEARCH_SQL));
   return { total: Number(count?.Total || 0), rows };
 }
 
-export async function readPortfolio(executor, scope, { today, soonEnd }) {
-  const request = scoped(executor, scope, {});
+export async function readPortfolio(executor, scope, { today, soonEnd, source = 'all' }) {
+  const request = scoped(executor, scope, { source });
   request.input('today', sql.Date, today);
   request.input('soonEnd', sql.Date, soonEnd);
   const [rows = []] = recordsets(await request.query(AI_TOOL_PORTFOLIO_SQL));

@@ -85,7 +85,7 @@ function sqlAssigneeMode(filters) {
 
 /** Yetkili ve kaba süzgeçle daraltılmış görev olguları; sınır aşılırsa "çok büyük". */
 async function loadFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
-  if (filters.projectId) requireVisibleProject(scope, filters.projectId);
+  if (filters.projectId) await requireVisibleProject(scope, filters.projectId, call);
   const range = coarseTargetRange(filters, call.today);
   const result = await call.sql((executor) => readTaskFacts(executor, scope, {
     projectId: filters.projectId,
@@ -150,7 +150,7 @@ const taskSearch = {
   topic: 'tasks',
   evidenceKind: 'task-list',
   authorization: 'Görev görünürlüğü (anlık görüntüyle aynı): FULL/READ projede bütün görevler, kısmi projede yalnızca yetkili görevler.',
-  description: 'Kullanıcının görmeye yetkili olduğu görevleri süzgeçlerle arar. Sıralı ve sayfalı liste ile süzgece uyan KESİN toplam sayıyı döndürür. Sayı sorularında totalCount kullanın; liste yalnızca bir sayfadır.',
+  description: 'Kullanıcının görmeye yetkili olduğu görevleri süzgeçlerle arar. Tek olgu okumasından sıralı ve sayfalı liste ile süzgece uyan KESİN toplam sayıyı döndürür. Sayı sorularında totalCount kullanın; liste yalnızca bir sayfadır.',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -169,38 +169,24 @@ const taskSearch = {
     const sort = args.sort || (filters.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc');
     const limit = args.limit ?? 20;
     const { scope } = await call.authorization();
-    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters);
+    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const sorted = sortFacts(facts, sort, call.today);
     const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null });
-    let pageAssignees = assignees;
-    let pageFacts = page;
-    let pageProjects = projects;
-    let pageChanged = false;
-    if (page.length && filters.assignee !== 'person') {
-      const detail = await call.sql((executor) => readTaskFacts(executor, scope, {
-        taskIds: page.map((fact) => fact.id), withAssignees: true, maxRows: page.length
-      }));
-      pageAssignees = detail.assignees;
-      pageProjects = projectIndex(detail.projects);
-      const refreshed = new Map(detail.facts.map((fact) => [fact.id, fact]));
-      pageFacts = page.map((fact) => refreshed.get(fact.id)).filter((fact) => fact && matchesTaskFilters(fact, filters, {
-        today: call.today, assignees: pageAssignees, sicil: call.sicil
-      }));
-      pageChanged = pageFacts.length !== page.length
-        || pageFacts.some((fact, index) => JSON.stringify(fact) !== JSON.stringify(page[index]));
-      if (pageChanged) pageFacts = sortFacts(pageFacts, sort, call.today);
-    }
-    const exactTotal = pageChanged ? null : sorted.length;
-    const stableNextCursor = pageChanged ? null : nextCursor;
+    const pageAssignees = assignees;
+    const pageFacts = page;
+    const pageProjects = projects;
+    const exactTotal = sorted.length;
+    const stableNextCursor = nextCursor;
     const descriptor = searchedScope(scope, filters.projectId);
     return {
       data: {
+        ...(filters.projectId ? { project: projectRef(projects.get(filters.projectId), filters.projectId) } : {}),
         tasks: pageFacts.map((fact) => taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today })),
         sort
       },
       scope: descriptor,
-      complete: !pageChanged && offset + page.length >= sorted.length,
-      truncated: pageChanged || (!stableNextCursor && offset + page.length < sorted.length),
+      complete: offset + page.length >= sorted.length,
+      truncated: !stableNextCursor && offset + page.length < sorted.length,
       returnedCount: pageFacts.length,
       totalCount: exactTotal,
       nextCursor: stableNextCursor,

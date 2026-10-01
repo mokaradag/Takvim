@@ -3,7 +3,7 @@ import {
   ASSISTANT_GROUNDED_CONTEXT_POLICY,
   selectAssistantContextHistory
 } from '../../../domain/ai/assistantContract.js';
-import { stripCitations } from '../../../domain/ai/evidenceContract.js';
+import { replyLocale, stripCitations } from '../../../domain/ai/evidenceContract.js';
 
 /**
  * Rota verisi araçları açıkken SUNUCUYA AİT sistem yönergesi ve bağlam.
@@ -25,10 +25,10 @@ function todayText(now) {
   }
 }
 
-export function groundedSystemPrompt(now = new Date()) {
+export function groundedSystemPrompt(now = new Date(), locale = 'tr') {
   return [
     'Sen MERGEN Rota görev yönetimi uygulamasının yapay zekâ asistanı "Rota AI"sin.',
-    'Kullanıcıya Türkçe yanıt ver; kullanıcı başka bir dilde yazarsa o dilde yanıt ver. Açık, doğru, profesyonel ve gereksiz uzatmadan yaz.',
+    locale === 'en' ? 'Reply in English. Use English number formatting. Write clearly, accurately and concisely.' : 'Kullanıcıya Türkçe yanıt ver; sayılarda Türkçe yazımı kullan. Açık, doğru, profesyonel ve gereksiz uzatmadan yaz.',
     '',
     'ROTA VERİSİ',
     '- Görevler, projeler, iş dağılım ağacı, iş yükü, hareket geçmişi, talepler, bildirimler, baz plan, bağımlılıklar, tekrar serileri, takvim, Outlook durumu ve plan kalitesi hakkındaki soruları YALNIZCA sana verilen salt okunur Rota araçlarının sonuçlarıyla yanıtla.',
@@ -76,7 +76,7 @@ export function buildGroundedContext({ history = [], userContent, priorMessageCo
     policy: ASSISTANT_GROUNDED_CONTEXT_POLICY
   });
   const messages = [
-    { role: 'system', content: groundedSystemPrompt(now) },
+    { role: 'system', content: groundedSystemPrompt(now, replyLocale(userContent)) },
     ...selected.pairs.flatMap(([question, answer]) => [{ role: 'user', content: question }, { role: 'assistant', content: answer }]),
     { role: 'user', content: String(userContent ?? '') }
   ];

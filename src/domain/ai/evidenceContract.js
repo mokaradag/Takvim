@@ -56,6 +56,19 @@ export const GROUNDING_FAILURE_TEXT = 'Rota verilerine ilişkin yanıt doğrulan
 export const SCOPE_DISCLOSURE_TEXT = '_Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._';
 
 /** Yanıtın doğrulanamadığını söyleyen bitiş nedeni (kalıcı iletide saklanır). */
+export function replyLocale(text) {
+  const source = String(text || '');
+  if (/(?:in English|İngilizce|English please)/iu.test(source)) return 'en';
+  if (/(?:in Turkish|Türkçe)/iu.test(source)) return 'tr';
+  if (/(?:^|[^\p{L}])(?:görev|kaç|termin|sorumlu|toplam|saat|bugün|yarın|gecikmiş|bunu|peki)\p{L}*/iu.test(source)) return 'tr';
+  if (/\b(?:the|what|how|show|find|list|task|project|today|tomorrow|hours|total|status|please|English)\b/i.test(source)) return 'en';
+  return 'tr';
+}
+
+export function groundingFailureText(locale = 'tr') {
+  return locale === 'en' ? 'The answer about Rota data could not be verified. Please try a narrower question.' : GROUNDING_FAILURE_TEXT;
+}
+
 export const GROUNDING_FAILED_FINISH_REASON = 'grounding_failed';
 
 const CITATION = /【R([1-9]\d?)】/g;
@@ -208,12 +221,14 @@ const ROTA_EXPLICIT_QUERY_PATTERNS = [
   /\bwho\s+did\s+what\s+(?:today|yesterday)\b/i,
   /(?:^|[^\p{L}])(?:görevleri|görevlerim|görevlerimi|görevlerimiz|görevlerimizi|projeleri|projelerim|projelerimi|projelerimiz|projelerimizi|bildirimleri|bildirimlerim|bildirimlerimi|bildirimlerimiz|bildirimlerimizi|atamaları|atamalarım|atamalarımı|atamalarımız|atamalarımızı)\s+(?:listele|göster|bul)(?=$|[^\p{L}])/iu,
   /\b(?:list|show|find)\s+(?:my\s+|our\s+|the\s+)?(?:tasks?|projects?|assignments?|notifications?)\b/i,
+  /(?:^|[^\p{L}])(?:görev|proje)\p{L}*(?:\s+[^.!?\n]{0,120})?\s+(?:göster|bul|listele|özetle|incele|getir|aç)(?=$|[^\p{L}])/iu,
   /(?:^|[^\p{L}])hangi\s+(?:görev|proje|atama|bildirim)\p{L}*(?=$|[^\p{L}])/iu,
   /(?:^|[^\p{L}])kim\s+sorumlu(?=$|[^\p{L}])/iu,
   /\bwho\s+(?:owns|is\s+(?:the\s+)?(?:owner|assignee|responsible))\b/i,
   /\bwhat(?:'s| is)\s+(?:the\s+)?(?:status|deadline|due date)\b/i
 ];
 
+const CONTEXT_FIELD = /(?:^|[^\p{L}])(?:açıklama|önceli(?:k|ğ)|durum|planlanan|gerçekleşen|başlangıç|bitiş|termin|sorumlu|lider|takvim|kaynak|description|priority|status|planned|actual|start|finish|deadline|owner|assignee|source)\p{L}*(?=$|[^\p{L}])/iu;
 const CONTEXT_FOLLOW_UP = /(?:^|[^\p{L}])(?:peki|bunu|şunu|aynı|tekrar|ya|kim|hangisi|ne zaman|what about|and what|who|when|which|again|same)(?=$|[^\p{L}])/iu;
 const GENERAL_ADVICE_PATTERNS = [
   /(?:^|[^\p{L}])(?:yöntem\p{L}*|metot\p{L}*|açıkla\p{L}*|anlat\p{L}*|öner\p{L}*|\p{L}+(?:meli|malı|meliyim|malıyım|meliyiz|malıyız))(?=$|[^\p{L}])/iu,
@@ -248,8 +263,8 @@ export function requiresRotaEvidence(text, { priorUserMessages = [] } = {}) {
   if (
     words > 5
     || /(?:^|[^\p{L}])ya da(?=$|[^\p{L}])/iu.test(source)
-    || GENERAL_ADVICE_PATTERNS.some((pattern) => pattern.test(source))
-    || !CONTEXT_FOLLOW_UP.test(source)
+    || (GENERAL_ADVICE_PATTERNS.some((pattern) => pattern.test(source)) && !/^açıklama(?:sı)?\s*\??$/iu.test(source))
+    || !(CONTEXT_FOLLOW_UP.test(source) || CONTEXT_FIELD.test(source))
   ) return false;
   return [...priorUserMessages].reverse().some((message) => directlyRequiresRotaEvidence(message));
 }
@@ -269,11 +284,15 @@ function claimText(text) {
     .join('\n');
 }
 
-function canonicalNumber(value) {
+function canonicalNumber(value, locale = 'en') {
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
   const raw = String(value).trim().replace(/−/g, '-');
-  const normalized = /^[+-]?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(raw)
-    ? raw.replace(/\./g, '').replace(',', '.')
-    : raw.replace(',', '.');
+  const grouping = locale === 'tr' ? '.' : ',';
+  const decimal = locale === 'tr' ? ',' : '.';
+  const groupPattern = locale === 'tr' ? /^[+-]?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/ : /^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
+  if (raw.includes(grouping) && !groupPattern.test(raw)) return null;
+  const normalized = raw.split(grouping).join('').replace(decimal, '.');
+  if (!/^[+-]?\d+(?:\.\d+)?$/.test(normalized)) return null;
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? String(parsed) : null;
 }
@@ -289,11 +308,11 @@ const FIELD_HINTS = Object.freeze([
   { kind: 'number', pattern: /(?:açık\s+görev(?:\s+say(?:ı|ısı))?|open\s+(?:task\s+count|tasks?))/iu, fields: ['open', 'opentasks', 'opentaskcount'] },
   { kind: 'number', pattern: /(?:tamamlanmış\s+görev(?:\s+say(?:ı|ısı))?|completed\s+(?:task\s+count|tasks?)|done\s+tasks?)/iu, fields: ['done', 'completed', 'closed', 'completedtasks'] },
   { kind: 'number', pattern: /(?:bu\s+hafta\s+termini|7\s+gün(?:\s+içinde)?\s+termin|due\s+soon|next\s+7\s+days?)/iu, fields: ['duenext7days', 'duesoon', 'duesooncount'] },
-  { kind: 'number', pattern: /(?:sorumlusuz(?:\s+görev)?|unassigned(?:\s+tasks?)?)/iu, fields: ['unassigned', 'unassignedcount', 'unassignedopentasks'] },
+  { kind: 'number', pattern: /(?:sorumlusu\s+(?:atanmamış|olmayan|bulunmayan|belirsiz)|sorumlusuz(?:\s+görev)?|unassigned(?:\s+tasks?)?)/iu, fields: ['unassigned', 'unassignedcount', 'unassignedopentasks'] },
   { kind: 'number', pattern: /(?:proje\s+say(?:ı|ısı)|project\s+count|toplam\s+proje)/iu, fields: ['projects', 'projectcount', 'totalprojects'] },
   { kind: 'number', pattern: /(?:(?:wbs|iş\s+dağılım)\s+(?:düğüm\s+)?say(?:ı|ısı)|wbs\s+node\s+count)/iu, fields: ['wbsnodecount', 'nodecount', 'totalnodes', 'nodes'] },
   { kind: 'number', pattern: /(?:talep\s+say(?:ı|ısı)|request\s+count|toplam\s+talep)/iu, fields: ['requests', 'requestcount'] },
-  { kind: 'number', pattern: /(?:toplam\s+görev|total\s+tasks?|tasks?\s+total)/iu, fields: ['total', 'tasks', 'taskcount'] },
+  { kind: 'number', pattern: /(?:toplam\s+görev|görev\p{L}*\s+arasında|total\s+tasks?|tasks?\s+total)/iu, fields: ['total', 'tasks', 'taskcount'] },
   { kind: 'number', pattern: /(?:tamamlanma\s+oran|completion\s+rate)/iu, fields: ['completionratepercent'] },
   { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
   { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned', 'plannedhoursonassignedtasks'] },
@@ -303,8 +322,9 @@ const FIELD_HINTS = Object.freeze([
   { kind: 'number', pattern: /(?:harcanan|spent)/iu, fields: ['spent'] },
   { kind: 'date', pattern: /(?:planlanan\s+bitiş|planned\s+finish)/iu, fields: ['plannedfinish'] },
   { kind: 'date', pattern: /(?:gerçekleşen\s+bitiş|actual\s+finish)/iu, fields: ['actualfinish'] },
-  { kind: 'date', pattern: /(?:gerçekleşen\s+başlangıç|actual\s+start)/iu, fields: ['actualstart'] },
-  { kind: 'date', pattern: /(?:planlanan\s+başlangıç|planned\s+start)/iu, fields: ['plannedstart'] },
+  { kind: 'date', pattern: /(?:gerçekleşen\s+başlangı[çc]|actual\s+start)/iu, fields: ['actualstart'] },
+  { kind: 'date', pattern: /(?:planlanan\s+başlangı[çc]|planned\s+start)/iu, fields: ['plannedstart'] },
+  { kind: 'date', pattern: /(?:güncelleme|updated|update)/iu, fields: ['updatedat', 'lasttaskupdateat'] },
   { kind: 'date', pattern: /(?:termin|deadline|target\s+finish|due\s+date)/iu, fields: ['targetfinish', 'calendardate'] }
 ]);
 
@@ -333,7 +353,13 @@ function hintedFields(source, start, end, kind = 'number') {
       if (!best || distance < best.distance) best = { distance, fields: item.fields };
     }
   }
-  return best?.fields || null;
+  if (best) return best.fields;
+  if (kind === 'number') {
+    const after = source.slice(end, end + 40);
+    if (/^\s+(?:görev\p{L}*|tasks?)(?=$|[^\p{L}])/iu.test(after)) return ['total', 'tasks', 'taskcount'];
+    if (/^\s+(?:proje\p{L}*|projects?)(?=$|[^\p{L}])/iu.test(after)) return ['projects', 'projectcount', 'totalprojects'];
+  }
+  return null;
 }
 
 const TURKISH_MONTHS = Object.freeze({
@@ -341,7 +367,7 @@ const TURKISH_MONTHS = Object.freeze({
   temmuz: '07', ağustos: '08', eylül: '09', ekim: '10', kasım: '11', aralık: '12'
 });
 
-function claimsIn(text) {
+function claimsIn(text, locale = replyLocale(text)) {
   let source = claimText(text);
   const dates = [];
   const clockTimes = [];
@@ -376,7 +402,7 @@ function claimsIn(text) {
       clockTimes.push({ value: token, qualified: false });
       return ' '.repeat(token.length);
     });
-  const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?))(?=$|[^\p{L}\d])/gu)]
+  const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?\d+(?:[.,]\d+)*)(?=$|[^\p{L}\d])/gu)]
     .map((match) => {
       const start = match.index + match[1].length;
       const end = match.index + match[0].length;
@@ -387,32 +413,47 @@ function claimsIn(text) {
         || (/next\s+$/i.test(before) && /^\s+days?\b/i.test(after))
       );
       if (windowLiteral) return null;
-      return { value: canonicalNumber(match[2]), fields: hintedFields(source, start, end) };
+      return { value: canonicalNumber(match[2], locale) ?? `invalid:${match[2]}`, fields: hintedFields(source, start, end) };
     })
     .filter((claim) => claim?.value);
   const lower = source.toLocaleLowerCase('tr-TR');
   const statuses = STATUS_CLAIMS.filter((item) => item.pattern.test(lower)).map((item) => item.values);
-  return { dates, numbers, statuses, clockTimes };
+  const relativeDates = [...source.matchAll(/(?:^|[^\p{L}])(bugün|yarın|dün|today|tomorrow|yesterday)(?=$|[^\p{L}])/giu)]
+    .map((match) => ({ offset: ({ bugün: 0, today: 0, yarın: 1, tomorrow: 1, dün: -1, yesterday: -1 })[match[1].toLocaleLowerCase('tr-TR')], fields: hintedFields(source, match.index, match.index + match[0].length, 'date') })).filter((claim) => claim.fields);
+  const strings = [];
+  const recurrence = /(?:her\s+gün|günlük|daily|her\s+hafta|haftalık|weekly|her\s+ay|aylık|monthly|her\s+yıl|yıllık|yearly)/giu;
+  for (const match of source.matchAll(recurrence)) {
+    const word = match[0].toLocaleLowerCase('tr-TR');
+    const value = /gün|daily/u.test(word) ? 'daily' : /hafta|weekly/u.test(word) ? 'weekly' : /ay|monthly/u.test(word) ? 'monthly' : 'yearly';
+    strings.push({ values: [value], fields: ['recurrencefrequency'] });
+    strings.push({ values: ['1'], fields: ['recurrenceinterval'] });
+  }
+  const definitions = [
+    { pattern: /(?:önceli(?:ği|k)|priority)\s*(?:is\s+|[:=]\s*)?([\p{L}_-]+)/giu, fields: ['priority', 'prioritylabel'], aliases: { kritik: 'critical', yüksek: 'high', orta: 'medium', düşük: 'low' } },
+    { pattern: /(?:erişim(?:\s+düzeyi)?|access(?:\s+level)?)\s*(?:is\s+|[:=]\s*)?([\p{L}_-]+)/giu, fields: ['access', 'level', 'accesslevel', 'label'], aliases: { tam: 'full', okuma: 'read', kısmi: 'partial' } },
+    { pattern: /(?:kaynağı|source)\s*(?:is\s+|[:=]\s*)?([\p{L}_-]+)/giu, fields: ['source', 'sourcetype'], aliases: { kurumsal: 'corporate', manuel: 'manual' } },
+    { pattern: /(?:açıklaması|description)\s*(?:is\s+|[:=]\s*)?([^.!?;]+?)(?=\s+(?:ve|and)\s+|[.!?;]|$)/giu, fields: ['description'], aliases: {} },
+    { pattern: /(kritik|yüksek|orta|düşük|critical|high|medium|low)\s+(?:öncelik|priority)/giu, fields: ['priority', 'prioritylabel'], aliases: { kritik: 'critical', yüksek: 'high', orta: 'medium', düşük: 'low' } },
+    { pattern: /(kurumsal|manuel|corporate|manual)\s+(?:proje\p{L}*|project\p{L}*)/giu, fields: ['source', 'sourcetype'], aliases: { kurumsal: 'corporate', manuel: 'manual' } },
+    { pattern: /(?:tekrar(?:\s+kuralı)?|recurrence(?:\s+rule)?)\s*[:=]\s*([^.!?;]+)/giu, fields: ['recurrencerule', 'rule', 'label'], aliases: {} }
+  ];
+  for (const definition of definitions) {
+    for (const match of source.matchAll(definition.pattern)) {
+      const value = match[1].trim().toLocaleLowerCase('tr-TR');
+      strings.push({ values: [value, definition.aliases[value]].filter(Boolean), fields: definition.fields });
+    }
+  }
+  for (const match of source.matchAll(/(?:kilometre taşı|milestone)\s*(değil|değildir|dır|is not|is|true|false)?/giu)) {
+    const negative = /değil|not|false/iu.test(match[1] || '');
+    strings.push({ values: [negative ? 'false' : 'true'], fields: ['milestone', 'ismilestone'] });
+  }
+  return { dates, numbers, statuses, clockTimes, relativeDates, strings };
 }
 
 function emptyEvidenceValues() {
   return { numbers: new Set(), dates: new Set(), strings: new Set(), fields: new Map() };
 }
 
-function cloneEvidenceValues(source) {
-  const copy = emptyEvidenceValues();
-  for (const value of source.numbers) copy.numbers.add(value);
-  for (const value of source.dates) copy.dates.add(value);
-  for (const value of source.strings) copy.strings.add(value);
-  for (const [field, values] of source.fields) {
-    copy.fields.set(field, {
-      numbers: new Set(values.numbers),
-      dates: new Set(values.dates),
-      strings: new Set(values.strings)
-    });
-  }
-  return copy;
-}
 
 function fieldBucket(result, key) {
   const normalized = String(key || '').toLocaleLowerCase('en-US').replace(/[^a-z0-9]/g, '');
@@ -422,24 +463,32 @@ function fieldBucket(result, key) {
 }
 
 function addPrimitive(value, keys, result) {
-  const buckets = [...new Set((Array.isArray(keys) ? keys : [keys]).map((key) => fieldBucket(result, key)).filter(Boolean))];
+  // Only the leaf owns this value: a tasks.open value is not a tasks total.
+  const buckets = [fieldBucket(result, Array.isArray(keys) ? keys.at(-1) : keys)].filter(Boolean);
   if (typeof value === 'number' && Number.isFinite(value)) {
     const number = String(value);
     result.numbers.add(number);
     for (const bucket of buckets) bucket.numbers.add(number);
     return;
   }
+  if (typeof value === 'boolean') {
+    result.strings.add(String(value));
+    for (const bucket of buckets) bucket.strings.add(String(value));
+    return;
+  }
   if (typeof value !== 'string') return;
   const lower = value.toLocaleLowerCase('tr-TR');
-  result.strings.add(lower);
-  for (const bucket of buckets) bucket.strings.add(lower);
-  for (const match of value.matchAll(/(^|[^\p{L}\d])([+\-−]?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?))(?=$|[^\p{L}\d])/gu)) {
-    const number = canonicalNumber(match[2]);
-    if (number) {
-      result.numbers.add(number);
-      for (const bucket of buckets) bucket.numbers.add(number);
+  const leaf = Array.isArray(keys) ? keys.at(-1) : keys;
+  if (leaf === 'rule' || leaf === 'recurrenceRule') {
+    const frequency = /(?:^|;)FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(?:;|$)/i.exec(value)?.[1];
+    const interval = /(?:^|;)INTERVAL=(\d+)(?:;|$)/i.exec(value)?.[1] || '1';
+    if (frequency && Number(interval) > 0) {
+      fieldBucket(result, 'recurrencefrequency').strings.add(frequency.toLowerCase());
+      fieldBucket(result, 'recurrenceinterval').strings.add(String(Number(interval)));
     }
   }
+  result.strings.add(lower);
+  for (const bucket of buckets) bucket.strings.add(lower);
   for (const date of value.matchAll(/(?:^|[^\d])(\d{4}-\d{2}-\d{2})(?=[^\d]|$)/g)) {
     result.dates.add(date[1]);
     for (const bucket of buckets) bucket.dates.add(date[1]);
@@ -457,7 +506,9 @@ function collectLocalValues(value, result, keys = []) {
     for (const [childKey, item] of Object.entries(value)) {
       const childKeys = [...keys, childKey];
       if (Array.isArray(item) && item.some((entry) => entry && typeof entry === 'object')) {
-        collectLocalValues(item.filter((entry) => entry == null || typeof entry !== 'object'), result, childKeys);
+        if (childKey === 'assignees') {
+          for (const person of item) collectLocalValues(person, result, childKeys);
+        } else collectLocalValues(item.filter((entry) => entry == null || typeof entry !== 'object'), result, childKeys);
       } else {
         collectLocalValues(item, result, childKeys);
       }
@@ -467,14 +518,14 @@ function collectLocalValues(value, result, keys = []) {
   addPrimitive(value, keys, result);
 }
 
-function collectEvidenceScopes(value, inherited = emptyEvidenceValues(), scopes = []) {
-  const local = cloneEvidenceValues(inherited);
+function collectEvidenceScopes(value, scopes = []) {
+  const local = emptyEvidenceValues();
   collectLocalValues(value, local);
   if (local.numbers.size || local.dates.size || local.strings.size) scopes.push(local);
   const visitArrays = (node) => {
     if (Array.isArray(node)) {
       for (const child of node) {
-        if (child && typeof child === 'object') collectEvidenceScopes(child, local, scopes);
+        if (child && typeof child === 'object') collectEvidenceScopes(child, scopes);
       }
       return;
     }
@@ -505,18 +556,19 @@ function evidenceValueIndex(payloads) {
       }
     }
     const scopes = collectEvidenceScopes(payload);
-    const totalField = ENVELOPE_TOTAL_FIELDS[payload?.tool];
+    const totalField = ENVELOPE_TOTAL_FIELDS[payload?.tool] || (!payload?.tool ? 'taskcount' : null);
     const totalValue = canonicalNumber(payload?.totalCount);
     if (totalField && totalValue != null) {
-      for (const scope of scopes) fieldBucket(scope, totalField)?.numbers.add(totalValue);
+      if (scopes[0]) fieldBucket(scopes[0], totalField)?.numbers.add(totalValue);
     }
+    for (const scope of scopes) scope.today = payload?.today || payload?.data?.definitions?.today || null;
     byId.set(item.id, scopes);
   }
   return byId;
 }
 
 function fieldSupports(scope, fields, kind, value) {
-  if (!fields?.length) return scope[kind].has(value);
+  if (!fields?.length) return kind === 'dates' && scope[kind].has(value);
   return fields.some((field) => scope.fields.get(field)?.[kind]?.has(value));
 }
 
@@ -542,7 +594,10 @@ function entityClaimsIn(text) {
   for (const { kind, pattern } of patterns) {
     for (const match of source.matchAll(pattern)) {
       let value = match[1].trim().replace(/\s+/g, ' ');
-      if (kind === 'person') value = value.replace(/\s+(?:olan|olarak)\b.*$/iu, '').trim();
+      if (kind === 'person') {
+        value = value.replace(/(?:^|\s+)(?:olan|olarak|ve|ile|and)(?=$|[^\p{L}]).*$/iu, '').trim();
+        if (/^(?:atanmamış|atanmadı|olmayan|bulunmayan|belirsiz|belirlenmemiş|unassigned|none|not\s+assigned)(?=$|[^\p{L}])/iu.test(value)) continue;
+      }
       if (kind === 'subject') value = value.replace(/^(?:şu\s+anda|şimdi|halen|currently|now)\s+/iu, '').trim();
       const normalized = normalizedText(value);
       if (/^(?:oldugunuz|oldugun|oldugu|olan|olarak)$/u.test(normalized)) continue;
@@ -570,42 +625,71 @@ function scopeContainsQualifiedClock(scope, value) {
 }
 
 function claimUnits(text) {
-  return claimText(text).split(/\n|;|,(?!\d)|(?<=[.!?])\s+/u).map((item) => item.trim()).filter(Boolean);
+  const lines = claimText(text).split('\n');
+  const units = [];
+  let headers = null;
+  const cellsOf = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+  const separator = (line) => /^\s*\|/.test(line || '') && cellsOf(line).every((cell) => /^:?-+:?$/.test(cell));
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*\|/.test(line)) {
+      const cells = cellsOf(line);
+      if (separator(line)) continue;
+      if (separator(lines[index + 1])) { headers = cells; continue; }
+      if (cells.length < 2) { units.push(line); continue; }
+      for (let column = 1; column < cells.length; column += 1) {
+        if (cells[column]) units.push(`${cells[0]} ${headers?.[column] || ''}: ${cells[column]}`);
+      }
+      continue;
+    }
+    headers = null;
+    units.push(...line.split(/;|,(?!\d)|(?<=[.!?])\s+/u).map((item) => item.trim()).filter(Boolean));
+  }
+  return units;
 }
 
-function unsupportedEvidenceClaims(text, citationIds, byId) {
+function relativeDay(today, offset) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(today || '')) return null;
+  const date = new Date(`${today}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+function unsupportedEvidenceClaims(text, citationIds, byId, locale) {
   const scopes = citationIds.flatMap((id) => byId.get(id) || []);
   const unsupported = [];
+  const allClaims = claimsIn(text, locale);
+  const sharedHints = [...new Map(allClaims.numbers.filter((claim) => claim.fields).map((claim) => [claim.fields.join(','), claim.fields])).values()];
   if (!scopes.length) {
-    const claims = claimsIn(text);
-    return claims.numbers.length || claims.dates.length || claims.statuses.length || claims.clockTimes.length || entityClaimsIn(text).length ? ['kanıt yükü'] : [];
-  }
-
-  for (const entity of entityClaimsIn(text)) {
-    if (!scopes.some((scope) => scopeContainsText(scope, entity))) unsupported.push('metin ' + excerpt(entity));
+    return allClaims.numbers.length || allClaims.dates.length || allClaims.statuses.length || allClaims.clockTimes.length || allClaims.relativeDates.length || allClaims.strings.length || entityClaimsIn(text).length ? ['kanıt yükü'] : [];
   }
 
   for (const unit of claimUnits(text)) {
-    const claims = claimsIn(unit);
-    if (!claims.numbers.length && !claims.dates.length && !claims.statuses.length && !claims.clockTimes.length) continue;
+    const claims = claimsIn(unit, locale);
+    const entities = entityClaimsIn(unit);
     const lowerUnit = normalizedText(unit);
     const anchors = [...new Set(scopes.flatMap((scope) => [...scope.strings])
       .filter(meaningfulEvidenceString)
       .filter((value) => lowerUnit.includes(normalizedText(value))))];
-    const candidates = anchors.length
-      ? scopes.filter((scope) => anchors.some((anchor) => scope.strings.has(anchor)))
-      : scopes;
+    const candidates = scopes.filter((scope) => entities.every((entity) => scopeContainsText(scope, entity))
+      && anchors.every((anchor) => scope.strings.has(anchor)));
     const supported = candidates.some((scope) => (
-      claims.numbers.every((claim) => fieldSupports(scope, claim.fields, 'numbers', claim.value))
+      claims.numbers.every((claim) => fieldSupports(scope, claim.fields || (sharedHints.length === 1 ? sharedHints[0] : null), 'numbers', claim.value))
       && claims.dates.every((claim) => fieldSupports(scope, claim.fields, 'dates', claim.value))
-      && claims.statuses.every((aliases) => aliases.some((alias) => scope.strings.has(alias)))
+      && claims.relativeDates.every((claim) => claim.fields && fieldSupports(scope, claim.fields, 'dates', relativeDay(scope.today, claim.offset)))
+      && claims.strings.every((claim) => claim.values.some((value) => fieldSupports(scope, claim.fields, 'strings', value)))
+      && claims.statuses.every((aliases) => aliases.some((alias) => scope.fields.get('status')?.strings.has(alias)))
       && claims.clockTimes.every((claim) => claim.qualified && scopeContainsQualifiedClock(scope, claim.value))
     ));
     if (!supported) {
+      for (const entity of entities) unsupported.push('metin ' + excerpt(entity));
       for (const claim of claims.numbers) unsupported.push('sayı ' + claim.value);
       for (const claim of claims.dates) unsupported.push('tarih ' + claim.value);
+      for (const claim of claims.relativeDates) unsupported.push('göreli tarih');
+      for (const claim of claims.strings) unsupported.push('alan ' + excerpt(claim.values[0]));
       for (const aliases of claims.statuses) unsupported.push('durum ' + aliases[0]);
       for (const claim of claims.clockTimes) unsupported.push('saat ' + claim.value);
+      if (!entities.length && !claims.numbers.length && !claims.dates.length && !claims.relativeDates.length && !claims.strings.length && !claims.statuses.length && !claims.clockTimes.length && anchors.length) unsupported.push('kayıt ilişkisi');
     }
   }
   return [...new Set(unsupported)];
@@ -618,7 +702,7 @@ function unsupportedEvidenceClaims(text, citationIds, byId) {
  * @param {{ evidenceIds: Iterable<string>, evidencePayloads?: Array<{id: string, payload: string}> }} context tur kanıtları
  * @returns {{ ok: boolean, citedIds: string[], issues: Array<{code: string, detail?: string}> }}
  */
-export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads } = {}) {
+export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads, locale = replyLocale(text) } = {}) {
   const available = new Set(evidenceIds);
   const answer = String(text ?? '');
   const issues = [];
@@ -644,7 +728,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
     }
     if (citationIds.length) {
       if (validatePayloadValues) {
-        const unsupported = unsupportedEvidenceClaims(segment.text, citationIds, valuesByEvidence);
+        const unsupported = unsupportedEvidenceClaims(segment.text, citationIds, valuesByEvidence, locale);
         if (unsupported.length) issues.push({ code: 'UNSUPPORTED_EVIDENCE_VALUE', detail: unsupported.slice(0, 4).join(', ') });
       }
       return;
@@ -724,10 +808,10 @@ export function mentionsAuthorizedScope(text) {
  * belirlenimci notunu ekler. Not modelden gelmez; yanıt metnine eklenir ve
  * yanıtla birlikte kaydedilir.
  */
-export function withScopeDisclosure(text, citedEvidence = []) {
+export function withScopeDisclosure(text, citedEvidence = [], locale = replyLocale(text)) {
   const partial = citedEvidence.some((item) => item?.partial === true);
   if (!partial) return { text, disclosed: false };
-  return { text: `${String(text).trimEnd()}\n\n${SCOPE_DISCLOSURE_TEXT}`, disclosed: true };
+  return { text: `${String(text).trimEnd()}\n\n${locale === 'en' ? '_Note: This answer covers only records you are authorized to view and may not reflect the entire projects._' : SCOPE_DISCLOSURE_TEXT}`, disclosed: true };
 }
 
 const ISSUE_GUIDANCE = Object.freeze({

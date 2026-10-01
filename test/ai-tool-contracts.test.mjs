@@ -34,7 +34,7 @@ test('AI araç SQL kapısı olağan Rota trafiği için havuz kapasitesi bırak�
 });
 
 test('odaklı bağımlılık sorgusu proje geneli görev toplamını hesaplamaz', () => {
-  assert.match(AI_TOOL_DEPENDENCIES_SQL, /WHERE @focusTaskId IS NULL AND t\.ProjectId = @projectId;/);
+  assert.match(AI_TOOL_DEPENDENCIES_SQL, /WHERE @focusTaskId IS NULL AND t\.ProjectId = @projectId\s+AND EXISTS/);
 });
 
 test('kısmi WBS ata sorgusu bozuk döngüde aynı düğümü yeniden ziyaret etmez', () => {
@@ -628,4 +628,107 @@ test('yürütme hataları güvenli sınıflara iner; oturum ve iptal hataları t
   assert.equal(isTurnFatal(new AiError(AI_ERROR_CODES.AI_TIMEOUT)), false);
   const detailed = new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.limit:range', "'; DROP TABLE x --", 'x'.repeat(200)] });
   assert.deepEqual(detailed.details, ['$.limit:range']);
+});
+
+function groundingContext(...payloads) {
+  return {
+    evidenceIds: payloads.map((_, index) => `R${index + 1}`),
+    evidencePayloads: payloads.map((payload, index) => ({ id: `R${index + 1}`, payload: JSON.stringify(payload) }))
+  };
+}
+
+test('singular detail requests and elliptical field follow-ups require fresh Rota evidence', () => {
+  for (const question of ['Alfa görevini göster', 'Alfa görevinin açıklamasını göster', 'Radar projesini göster', 'Alfa görevini bul']) {
+    assert.equal(evidence.requiresRotaEvidence(question), true, question);
+  }
+  for (const question of ['Açıklaması?', 'Önceliği?', 'Planlanan başlangıcı?', 'Description?', 'Priority?']) {
+    assert.equal(evidence.requiresRotaEvidence(question, { priorUserMessages: ['Alfa görevinin durumu ne?'] }), true, question);
+    assert.equal(evidence.requiresRotaEvidence(question), false, 'a field without a Rota referent is not a data query');
+  }
+});
+
+test('qualitative fields and person relationships bind to the cited record', () => {
+  const context = groundingContext({ data: { tasks: [
+    { title: 'Alfa', priority: 'low', source: 'manual', access: 'READ', milestone: false, assignees: [{ name: 'Mehmet' }] },
+    { title: 'Beta', priority: 'critical', source: 'corporate', access: 'FULL', milestone: true, assignees: [{ name: 'Ayşe' }] }
+  ] } });
+  for (const answer of ['Alfa görevinin sorumlusu Ayşe.', 'Alfa görevinin önceliği kritik.', 'Alfa görevinin kaynağı kurumsal.', 'Alfa görevinin erişim düzeyi tam.', 'Alfa görevi kilometre taşıdır.']) {
+    assert.equal(evidence.analyzeGroundedAnswer(`${answer} 【R1】`, context).ok, false, answer);
+  }
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevinin sorumlusu Mehmet. 【R1】', context).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevinin önceliği düşük. 【R1】', context).ok, true);
+});
+
+test('portfolio totals cannot certify project-row values and numeric prose fails closed', () => {
+  const context = groundingContext({ data: { totals: { total: 10, open: 5, overdue: 12 }, projects: [{ name: 'Alfa', tasks: { total: 6, open: 5, overdue: 3 } }] } });
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa projesinde 12 gecikmiş görev var. 【R1】', context).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa projesinde 3 gecikmiş görev var. 【R1】', context).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Bu kapsamda 5 görev var. 【R1】', context).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer('Bu kapsamda 10 görev var. 【R1】', context).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Bu kapsamda 5 unsur var. 【R1】', context).ok, false);
+});
+
+test('table headers bind numeric cells to fields rather than any row value', () => {
+  const context = groundingContext({ data: { projects: [{ name: 'Alfa', tasks: { open: 5, overdue: 2 } }] } });
+  const table = (value) => `| Proje | Gecikmiş |\n|---|---|\n| Alfa | ${value} |【R1】`;
+  assert.equal(evidence.analyzeGroundedAnswer(table(5), context).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer(table(2), context).ok, true);
+});
+
+test('multiple cited records can support a comparison without permitting entity swaps', () => {
+  const context = groundingContext(
+    { data: { project: { name: 'Atlas' }, totals: { overdue: 5 } } },
+    { data: { project: { name: 'Beta' }, totals: { overdue: 7 } } }
+  );
+  assert.equal(evidence.analyzeGroundedAnswer("Atlas'ta 5, Beta'da 7 gecikmiş görev var. 【R1】【R2】", context).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer("Atlas'ta 7, Beta'da 5 gecikmiş görev var. 【R1】【R2】", context).ok, false);
+});
+
+test('relative deadlines use the envelope business day and selected date field', () => {
+  const context = groundingContext({ today: '2026-10-01', data: { task: { title: 'Alfa', targetFinish: '2026-10-02', plannedFinish: '2026-10-01' } } });
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevinin termini bugün. 【R1】', context).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevinin termini yarın. 【R1】', context).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevinin planlanan bitişi bugün. 【R1】', context).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa task deadline yesterday. 【R1】', context).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa task deadline tomorrow. 【R1】', context).ok, true);
+});
+
+test('numeric separators follow the reply locale and cannot turn English decimals into thousands', () => {
+  const context = groundingContext({ data: { totals: { plannedHours: 1234 } } });
+  assert.equal(evidence.analyzeGroundedAnswer('Planned hours 1.234. 【R1】', { ...context, locale: 'en' }).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer('Planned hours 1,234. 【R1】', { ...context, locale: 'en' }).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Planlanan saat 1.234. 【R1】', { ...context, locale: 'tr' }).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Planlanan saat 1,234. 【R1】', { ...context, locale: 'tr' }).ok, false);
+  const decimal = groundingContext({ data: { totals: { plannedHours: 1.234 } } });
+  assert.equal(evidence.analyzeGroundedAnswer('Planned hours 1.234. 【R1】', { ...decimal, locale: 'en' }).ok, true);
+});
+
+test('absence phrases do not become person names and conjunctions preserve the real assignee', () => {
+  const context = groundingContext({ data: { totals: { unassigned: 4 }, task: { assignees: [{ name: 'Ayşe Yılmaz' }], targetFinish: '2026-10-05' } } });
+  for (const phrase of ['atanmamış', 'olmayan', 'bulunmayan', 'belirsiz']) {
+    assert.equal(evidence.analyzeGroundedAnswer(`Sorumlusu ${phrase} 4 görev var. 【R1】`, context).ok, true, phrase);
+  }
+  assert.equal(evidence.analyzeGroundedAnswer('Görevin sorumlusu Ayşe Yılmaz ve termini 2026-10-05. 【R1】', context).ok, true);
+});
+
+test('server failure and partial-scope notes use the turn reply language', () => {
+  assert.match(evidence.groundingFailureText('en'), /^The answer/);
+  assert.match(evidence.withScopeDisclosure('There are tasks. 【R1】', [{ partial: true }], 'en').text, /Note: This answer/);
+  assert.equal(evidence.groundingFailureText('tr'), evidence.GROUNDING_FAILURE_TEXT);
+});
+
+
+test('recurrence descriptions and adjective-first finite fields cannot contradict their record', () => {
+  const context = groundingContext({ data: { task: { title: 'Alfa', priority: 'low', source: 'manual', recurrence: { rule: 'FREQ=WEEKLY;INTERVAL=1' } } } });
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevi her gün tekrarlanır. 【R1】', context).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevi her hafta tekrarlanır. 【R1】', context).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevi kritik öncelikli. 【R1】', context).ok, false);
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa projesi kurumsal projedir. 【R1】', context).ok, false);
+  const everyOtherWeek = groundingContext({ data: { task: { title: 'Alfa', recurrence: { rule: 'FREQ=WEEKLY;INTERVAL=2' } } } });
+  assert.equal(evidence.analyzeGroundedAnswer('Alfa görevi her hafta tekrarlanır. 【R1】', everyOtherWeek).ok, false);
+});
+
+test('a headerless table cannot hide an untyped numeric assertion', () => {
+  const context = groundingContext({ data: { projects: [{ name: 'Alfa', tasks: { open: 5, overdue: 2 } }] } });
+  assert.equal(evidence.analyzeGroundedAnswer('| Alfa | 5 |【R1】', context).ok, false);
 });

@@ -333,9 +333,8 @@ test('SQL enjeksiyonu ve joker karakterler yalnızca veridir; SQL metni hiçbir 
     const { result } = await callRotaTool(stack, AYSE, 'rota_task_search', { text });
     assert.equal(result.ok, true, text);
     assert.deepEqual(result.data.tasks.map((task) => task.taskId), expected, text);
-    const last = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').at(-2) || stack.db.aiToolLog.at(-1);
-    assert.equal(stack.db.aiToolLog.some((entry) => entry.params.text === text), true, 'metin parametre olarak gider');
-    void last;
+    const last = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').at(-1);
+    assert.equal(last?.params.text, text, 'bu çağrının metni parametre olarak gider');
   }
   const project = await callRotaTool(stack, AYSE, 'rota_project_search', { text: "x' UNION SELECT * FROM dbo.MR_Tasks --" });
   assert.equal(project.result.ok, true);
@@ -669,7 +668,7 @@ test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınm
   assert.equal(results[5].error.code, 'LIMIT_EXCEEDED');
   assert.equal(results[6].error.code, 'LIMIT_EXCEEDED');
   assert.deepEqual(ledger.ids(), ['R1', 'R2'], 'kanıt kimlikleri çağrı sırasıyla verilir');
-  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 2, 'ilk arama + sayfa sorumluları; yinelenen çağrı yeniden çalışmaz');
+  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 1, 'liste, toplam ve sorumlular aynı olgu okumasından gelir; yinelenen çağrı yeniden çalışmaz');
   const oversize = await callRotaTools(stack, AYSE, [['rota_task_search', JSON.stringify({ text: 'a', filler: 'x'.repeat(9000) })]]);
   assert.equal(oversize.results[0].error.code, 'INVALID_ARGUMENTS');
   assert.deepEqual(oversize.results[0].error.details, ['$:tooLarge']);
@@ -778,4 +777,97 @@ test('yetki bağlamı her araç kümesinde yeniden okunur ve kümedeki çağrıl
   }]);
   assert.equal(JSON.parse(detail.content).error.code, 'NOT_FOUND');
   assert.equal(context.stats().authorizationLoads, 3);
+});
+
+test('admins can use every explicit active-project gate while archived and unknown projects remain hidden', async (t) => {
+  const stack = stackFor(t);
+  for (const name of ['rota_task_search', 'rota_task_analytics', 'rota_project_detail', 'rota_wbs_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_calendar_inspect']) {
+    const { result } = await callRotaTool(stack, ADMIN, name, { projectId: PROJECTS.FULL });
+    assert.equal(result.ok, true, `${name}: ${JSON.stringify(result)}`);
+    const absent = await callRotaTool(stack, ADMIN, name, { projectId: PROJECTS.ARCHIVED });
+    assert.equal(absent.result.error.code, 'NOT_FOUND', name);
+  }
+});
+
+test('all task-population analysis paths fail closed before processing an oversized project', async (t) => {
+  const extraTasks = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
+    TaskId: `29000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`, ProjectId: PROJECTS.FULL,
+    Title: 'Budget sentinel', Status: 'planned', Priority: 'medium', CreatedBySicil: AYSE
+  }));
+  const stack = stackFor(t, { tasks: extraTasks });
+  for (const [name, args] of [
+    ['rota_task_search', { projectId: PROJECTS.FULL, text: 'a selective filter' }],
+    ['rota_task_analytics', { projectId: PROJECTS.FULL }],
+    ['rota_portfolio_summary', { limit: 1, source: 'manual' }],
+    ['rota_project_detail', { projectId: PROJECTS.FULL }],
+    ['rota_wbs_inspect', { projectId: PROJECTS.FULL }],
+    ['rota_baseline_compare', { projectId: PROJECTS.FULL }]
+  ]) {
+    const { result, ledger } = await callRotaTool(stack, ADMIN, name, args);
+    assert.equal(result.error?.code, 'RESULT_TOO_LARGE', `${name}: ${JSON.stringify(result)}`);
+    assert.equal(ledger.size(), 0);
+  }
+});
+
+test('assignment fan-out has its own analyzed-row sentinel', async (t) => {
+  const taskAssignees = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({ TaskId: TASKS.OVERDUE, Sicil: index + 50000 }));
+  const stack = stackFor(t, { taskAssignees });
+  const { result } = await callRotaTool(stack, ADMIN, 'rota_task_detail', { taskId: TASKS.OVERDUE });
+  assert.equal(result.error?.code, 'RESULT_TOO_LARGE');
+});
+
+test('oversized baseline snapshots stop before the added-task anti-join', async (t) => {
+  const taskBaselineSnapshots = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
+    BaselineId: BASELINE_ID, TaskId: `28000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`
+  }));
+  const stack = stackFor(t, { taskBaselineSnapshots });
+  const { result } = await callRotaTool(stack, ADMIN, 'rota_baseline_compare', { projectId: PROJECTS.FULL });
+  assert.equal(result.error?.code, 'RESULT_TOO_LARGE');
+});
+
+test('model generation between rounds does not consume the accumulated tool-execution budget', async () => {
+  let time = 0;
+  const tool = {
+    name: 'rota_timing', topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => { time += 1000; return { data: { tasks: [] }, complete: true, scope: { kind: 'complete-projects' }, evidence: { label: 'Timing' } }; }
+  };
+  const executor = createToolExecutor({
+    context: { sicil: AYSE, today: '2026-10-01', beginRound() {} }, ledger: createEvidenceLedger(),
+    signal: new AbortController().signal, clock: () => time, resolveTool: () => tool,
+    limits: { ...TOOL_LIMITS, maxToolPhaseMs: 2500 }
+  });
+  const invoke = async (id) => JSON.parse((await executor.runRound([{ id, name: tool.name, arguments: '{}' }]))[0].content);
+  assert.equal((await invoke('first')).ok, true);
+  time += 60000;
+  assert.equal((await invoke('second')).ok, true);
+  time += 60000;
+  // Tool time continues accumulating even when the model uses no tool budget.
+  assert.equal((await invoke('third')).ok, true);
+  assert.equal((await invoke('fourth')).error.code, 'LIMIT_EXCEEDED');
+});
+
+test('a cumulative-budget rejection cannot create an undisclosed ledger entry, including the exact boundary', async () => {
+  const tool = {
+    name: 'rota_budget', topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => ({ data: { value: 'x' }, complete: true, scope: { kind: 'complete-projects' }, evidence: { label: 'Budget' } })
+  };
+  const context = { sicil: AYSE, today: '2026-10-01', beginRound() {} };
+  const run = async (maxBytes) => {
+    const ledger = createEvidenceLedger();
+    const executor = createToolExecutor({ context, ledger, signal: new AbortController().signal, resolveTool: () => tool,
+      limits: { ...TOOL_LIMITS, maxTotalResultBytes: maxBytes } });
+    const [message] = await executor.runRound([{ id: 'budget', name: tool.name, arguments: '{}' }]);
+    return { ledger, message };
+  };
+  const accepted = await run(10000);
+  const bytes = Buffer.byteLength(accepted.message.content);
+  const rejected = await run(bytes - 1);
+  assert.equal(JSON.parse(rejected.message.content).error.code, 'LIMIT_EXCEEDED');
+  assert.deepEqual(rejected.ledger.ids(), []);
+  assert.deepEqual(rejected.ledger.payloads(), []);
+  const exact = await run(bytes);
+  assert.equal(JSON.parse(exact.message.content).evidenceId, 'R1');
+  assert.deepEqual(exact.ledger.ids(), ['R1']);
 });

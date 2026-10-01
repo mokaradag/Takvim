@@ -6,7 +6,8 @@ import {
   analyzeUngroundedAnswer,
   containsCitationMarker,
   GROUNDING_FAILED_FINISH_REASON,
-  GROUNDING_FAILURE_TEXT,
+  groundingFailureText,
+  replyLocale,
   groundingRepairInstruction,
   normalizeCitations,
   requiresRotaEvidence,
@@ -15,6 +16,7 @@ import {
 import { recordGroundedAnswer } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
+import { getRotaTool } from '../tools/toolRegistry.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 
 /**
@@ -68,12 +70,52 @@ function safeToolCallsForTranscript(toolCalls, toolMessages) {
   });
 }
 
-function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidenceRequired }) {
+/** This plan reads trusted user messages only, never tool-result text. */
+export function toolIntentAllowlist(text, catalog, priorUserMessages = []) {
+  const source = String(text || '');
+  const context = source.length < 80 ? `${priorUserMessages.slice(-1).join(' ')} ${source}` : source;
+  if (/(?:her şeyi|tüm alanları|everything|all domains)/iu.test(source)) return new Set(catalog.map((tool) => tool.name));
+  const names = new Set();
+  const add = (...tools) => tools.forEach((tool) => names.add(tool));
+  if (/(?:görev|task|termin|deadline|ilerleme|progress|gecik|overdue)/iu.test(context)) add('rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_project_search');
+  if (/(?:proje|project)/iu.test(context)) add('rota_project_search', 'rota_project_detail', 'rota_task_search', 'rota_task_detail', 'rota_task_analytics');
+  if (/(?:portföy|portfolio|hangi projede|en çok|most overdue)/iu.test(context)) add('rota_portfolio_summary', 'rota_project_search', 'rota_project_detail', 'rota_task_analytics');
+  if (/(?:iş yük|workload|personel|person|kişi|people|çalışan|employee)/iu.test(context)) add('rota_workload_summary', 'rota_person_search', 'rota_task_search', 'rota_task_analytics');
+  if (/(?:sorumlu|assignee|owner|kim|who)/iu.test(context)) add('rota_person_search', 'rota_task_search', 'rota_task_detail', 'rota_workload_summary');
+  if (/(?:wbs|iş dağılım)/iu.test(context)) add('rota_wbs_inspect', 'rota_project_search', 'rota_task_search');
+  if (/(?:hareket|activity|kim ne yaptı|who did what)/iu.test(context)) add('rota_activity_search', 'rota_task_search');
+  if (/(?:tarih değişikli|schedule request)/iu.test(context)) add('rota_schedule_requests', 'rota_task_detail');
+  if (/(?:atama|assignment)/iu.test(context)) add('rota_assignment_requests', 'rota_task_detail');
+  if (/(?:bildirim|notification)/iu.test(context)) add('rota_notifications');
+  if (/(?:baz plan|baseline)/iu.test(context)) add('rota_baseline_compare', 'rota_project_search', 'rota_project_detail');
+  if (/(?:bağımlılık|dependenc)/iu.test(context)) add('rota_dependency_inspect', 'rota_project_search', 'rota_task_detail');
+  if (/(?:tekrar|recurren)/iu.test(context)) add('rota_recurrence_inspect', 'rota_task_search', 'rota_task_detail');
+  if (/(?:takvim|calendar|çalışma günü|working day)/iu.test(context)) add('rota_calendar_inspect', 'rota_project_search');
+  if (/outlook/iu.test(context)) add('rota_outlook_status', 'rota_task_search');
+  if (/(?:veri kalite|data quality)/iu.test(context)) add('rota_data_quality', 'rota_project_search');
+  return names;
+}
+
+/** Keep system/current request and complete tool exchanges; drop oldest history first. */
+function boundTranscript(transcript) {
+  while (transcript.length > 96) {
+    const currentUserIndex = transcript.findLastIndex((message) => message.role === 'user');
+    const historyIndex = transcript.findIndex((message, index) => index < currentUserIndex && message.role !== 'system');
+    if (historyIndex >= 0) { transcript.splice(historyIndex, 1); continue; }
+    const exchangeIndex = transcript.findIndex((message) => message.role === 'assistant' && message.toolCalls?.length);
+    if (exchangeIndex < 0) break;
+    let end = exchangeIndex + 1;
+    while (transcript[end]?.role === 'tool') end += 1;
+    transcript.splice(exchangeIndex, end - exchangeIndex);
+  }
+}
+
+function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidenceRequired, locale }) {
   const normalized = normalizeCitations(text);
   if (evidenceIds.length) return {
     normalized,
     kind: 'grounded',
-    ...analyzeGroundedAnswer(normalized, { evidenceIds, evidencePayloads })
+    ...analyzeGroundedAnswer(normalized, { evidenceIds, evidencePayloads, locale })
   };
   if (toolsAttempted) return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized, { evidenceRequired }) };
   return { normalized, kind: 'direct', ...analyzeDirectAnswer(normalized, { evidenceRequired }) };
@@ -90,7 +132,9 @@ export async function runGroundedTurn(session, {
 }) {
   const ledger = createEvidenceLedger();
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
+  let permittedTools = null;
   const executor = createToolExecutor({
+    resolveTool: (name) => !permittedTools || permittedTools.has(name) ? getRotaTool(name) : null,
     context,
     ledger,
     signal: session.signal,
@@ -103,6 +147,9 @@ export async function runGroundedTurn(session, {
   const evidenceRequired = requiresRotaEvidence(currentUser?.content, {
     priorUserMessages: userMessages.slice(0, -1).map((message) => message.content)
   });
+  const priorUsers = userMessages.slice(0, -1).map((message) => message.content);
+  const locale = replyLocale(currentUser?.content);
+  const intentTools = toolIntentAllowlist(currentUser?.content, catalog, priorUsers);
   let toolRounds = 0;
   let modelRounds = 0;
   let toolsAttempted = false;
@@ -122,9 +169,10 @@ export async function runGroundedTurn(session, {
     const canCallTools = allowTools && toolRounds < limits.maxToolRounds;
     const live = { buffer: '', released: false, sawToolCall: false };
     modelRounds += 1;
+    boundTranscript(transcript);
     const result = await session.round({
       messages: transcript,
-      tools: catalog,
+      tools: permittedTools ? catalog.filter((tool) => permittedTools.has(tool.name)) : catalog,
       toolChoice: canCallTools ? 'auto' : 'none',
       onEvent: async (event) => {
         if (event.type === 'thinking') status(ASSISTANT_STREAM_PHASES.THINKING);
@@ -159,6 +207,7 @@ export async function runGroundedTurn(session, {
       const toolMessages = await executor.runRound(result.toolCalls);
       transcript.push({ role: 'assistant', content: result.text || '', toolCalls: safeToolCallsForTranscript(result.toolCalls, toolMessages) });
       transcript.push(...toolMessages);
+      if (ledger.size() > 0) permittedTools = intentTools;
       if (toolRounds >= limits.maxToolRounds) appendServerInstruction(transcript, roundLimitNote());
       continue;
     }
@@ -169,11 +218,12 @@ export async function runGroundedTurn(session, {
       evidenceIds: ledger.ids(),
       evidencePayloads: ledger.payloads(),
       toolsAttempted,
-      evidenceRequired
+      evidenceRequired,
+      locale
     });
     if (verdict.ok) {
       const cited = ledger.summaries(verdict.citedIds);
-      const disclosure = verdict.kind === 'grounded' ? withScopeDisclosure(verdict.normalized, cited) : { text, disclosed: false };
+      const disclosure = verdict.kind === 'grounded' ? withScopeDisclosure(verdict.normalized, cited, locale) : { text, disclosed: false };
       const finalText = verdict.kind === 'grounded' ? disclosure.text : text;
       if (!streamed) await onText(finalText);
       const outcome = verdict.kind === 'grounded' ? 'grounded' : 'direct';
@@ -203,10 +253,11 @@ export async function runGroundedTurn(session, {
       continue;
     }
 
-    await onText(GROUNDING_FAILURE_TEXT);
+    const failureText = groundingFailureText(locale);
+    await onText(failureText);
     recordGroundedAnswer({ outcome: 'failed', rounds: modelRounds, evidence: 0, repaired });
     return {
-      text: GROUNDING_FAILURE_TEXT,
+      text: failureText,
       finishReason: GROUNDING_FAILED_FINISH_REASON,
       outcome: 'failed',
       evidence: [],

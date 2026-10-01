@@ -42,7 +42,8 @@ const SCOPE_PROJECTS = `
     INSERT #AiScopeProjects(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped)
     SELECT p.ProjectId, 'FULL', 0, 0
     FROM dbo.MR_Projects p
-    WHERE p.IsActive = 1 AND (@projectId IS NULL OR p.ProjectId = @projectId);
+    WHERE p.IsActive = 1 AND (@projectId IS NULL OR p.ProjectId = @projectId)
+      AND (@sourceFilter = 'all' OR (@sourceFilter = 'corporate' AND p.SourceType = 'CORPORATE') OR (@sourceFilter = 'manual' AND COALESCE(p.SourceType, 'MANUAL') <> 'CORPORATE'));
   ELSE
   BEGIN
     INSERT #AiScopeProjects(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped)
@@ -56,12 +57,8 @@ const SCOPE_PROJECTS = `
       WHERE LEN(value) = 40
     ) grants
     JOIN dbo.MR_Projects p ON p.ProjectId = grants.ProjectId
-    WHERE p.IsActive = 1 AND (@projectId IS NULL OR p.ProjectId = @projectId);
-
-    INSERT #AiScopeTasks(TaskId)
-    SELECT DISTINCT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value)))
-    FROM STRING_SPLIT(@scopeTasks, ',')
-    WHERE TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) IS NOT NULL;
+    WHERE p.IsActive = 1 AND (@projectId IS NULL OR p.ProjectId = @projectId)
+      AND (@sourceFilter = 'all' OR (@sourceFilter = 'corporate' AND p.SourceType = 'CORPORATE') OR (@sourceFilter = 'manual' AND COALESCE(p.SourceType, 'MANUAL') <> 'CORPORATE'));
   END
 `;
 
@@ -72,26 +69,65 @@ const SCOPE_PROJECTS = `
  * Görev süzgeci verildiğinde yalnızca o görevler değerlendirilir.
  */
 const VISIBLE_TASKS = `
+  -- Task scope is materialized only by queries that actually consume tasks.
+  INSERT #AiScopeTasks(TaskId)
+  SELECT TOP (@analysisMaxRows) t.TaskId
+  FROM STRING_SPLIT(@scopeTasks, ',') token
+  JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(token.value)))
+  JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0
+  WHERE @AiTaskFilterActive = 0
+    OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = t.TaskId)
+    OR EXISTS (SELECT 1 FROM #AiTaskFilter f JOIN dbo.MR_Tasks child ON child.TaskId = f.TaskId WHERE child.RecurrenceParentTaskId = t.TaskId);
+  IF (SELECT COUNT(*) FROM #AiScopeTasks) >= @analysisMaxRows
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+
   IF @AiTaskFilterActive = 1
     INSERT #AiTasks(TaskId, ProjectId, AccessLevel, IdentityBase)
-    SELECT t.TaskId, t.ProjectId, v.AccessLevel, 1
+    SELECT TOP (@analysisMaxRows) t.TaskId, t.ProjectId, v.AccessLevel, 1
     FROM #AiTaskFilter f
     JOIN dbo.MR_Tasks t ON t.TaskId = f.TaskId
     JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId
     WHERE v.AccessLevel = 'FULL' OR v.HasReadGrant = 1;
   ELSE
     INSERT #AiTasks(TaskId, ProjectId, AccessLevel, IdentityBase)
-    SELECT t.TaskId, t.ProjectId, v.AccessLevel, 1
+    SELECT TOP (@analysisMaxRows) t.TaskId, t.ProjectId, v.AccessLevel, 1
     FROM #AiScopeProjects v
     JOIN dbo.MR_Tasks t ON t.ProjectId = v.ProjectId
     WHERE v.AccessLevel = 'FULL' OR v.HasReadGrant = 1;
+  IF (SELECT COUNT(*) FROM #AiTasks) >= @analysisMaxRows
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
 
+  DECLARE @AiRemainingRows int = @analysisMaxRows - (SELECT COUNT(*) FROM #AiTasks);
   INSERT #AiTasks(TaskId, ProjectId, AccessLevel, IdentityBase)
-  SELECT t.TaskId, t.ProjectId, 'PARTIAL', CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END
-  FROM #AiScopeTasks s
-  JOIN dbo.MR_Tasks t ON t.TaskId = s.TaskId
+  SELECT TOP (@AiRemainingRows) t.TaskId, t.ProjectId, 'PARTIAL', CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END
+  FROM #AiScopeTasks scopedTask
+  JOIN dbo.MR_Tasks t ON t.TaskId = scopedTask.TaskId
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0
   WHERE @AiTaskFilterActive = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = t.TaskId);
+  IF (SELECT COUNT(*) FROM #AiTasks) >= @analysisMaxRows
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+`;
+
+/** Bounded associations and one aggregate per task, shared by fact projections. */
+const ASSIGNMENT_FACTS = `
+  DROP TABLE IF EXISTS #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts;
+  SELECT TOP (@analysisMaxRows) ta.TaskId, ta.Sicil
+  INTO #AiAssignments
+  FROM #AiTasks visible
+  JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = visible.TaskId;
+  IF (SELECT COUNT(*) FROM #AiAssignments) >= @analysisMaxRows
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  CREATE UNIQUE CLUSTERED INDEX IX_AiAssignments ON #AiAssignments(TaskId, Sicil);
+  SELECT DISTINCT pd.Sicil INTO #AiResolvedPeople
+  FROM dbo.MR_V_PeopleDirectory pd
+  JOIN (SELECT DISTINCT Sicil FROM #AiAssignments) assigned ON assigned.Sicil = pd.Sicil;
+  SELECT a.TaskId, COUNT(*) AS AssigneeCount,
+    MAX(CASE WHEN a.Sicil = @sicil THEN 1 ELSE 0 END) AS IsOwnAssignee,
+    COUNT(resolved.Sicil) AS ResolvedAssigneeCount
+  INTO #AiAssignmentFacts
+  FROM #AiAssignments a
+  LEFT JOIN #AiResolvedPeople resolved ON resolved.Sicil = a.Sicil
+  GROUP BY a.TaskId;
 `;
 
 /**
@@ -115,7 +151,7 @@ const ASSIGNEE_ROWS = `
         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
       ) THEN 1 ELSE 0 END
     FROM #AiFacts f
-    JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = f.TaskId;
+    JOIN #AiAssignments ta ON ta.TaskId = f.TaskId;
   DELETE a FROM #AiAssignees a
   WHERE a.IdentityVisible = 0
     AND NOT EXISTS (SELECT 1 FROM #AiFacts f WHERE f.TaskId = a.TaskId AND f.IsOwnAssignee = 1);
@@ -141,14 +177,9 @@ const TASK_FACT_COLUMNS = `
     t.RecurrenceRule, t.RecurrenceParentTaskId, t.RecurrenceOccurrenceDate,
     t.CreatedAt, t.UpdatedAt, visible.AccessLevel, visible.IdentityBase,
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
-    CAST(CASE WHEN EXISTS (
-      SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil
-    ) THEN 1 ELSE 0 END AS bit) AS IsOwnAssignee,
-    (SELECT COUNT(*) FROM dbo.MR_TaskAssignees counted WHERE counted.TaskId = t.TaskId) AS AssigneeCount,
-    (SELECT COUNT(DISTINCT counted.Sicil)
-      FROM dbo.MR_TaskAssignees counted
-      JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = counted.Sicil
-      WHERE counted.TaskId = t.TaskId) AS ResolvedAssigneeCount`;
+    CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
+    COALESCE(assignment.AssigneeCount, 0) AS AssigneeCount,
+    COALESCE(assignment.ResolvedAssigneeCount, 0) AS ResolvedAssigneeCount`;
 
 /**
  * Görev olguları: yetkili görev kümesi, yalnızca DARALTAN kaba süzgeçlerle
@@ -161,11 +192,13 @@ const TASK_FACT_COLUMNS = `
 export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
 ${SCOPE_PROJECTS}
 ${VISIBLE_TASKS}
+${ASSIGNMENT_FACTS}
   DROP TABLE IF EXISTS #AiFacts;
   SELECT TOP (@maxRows) ${TASK_FACT_COLUMNS}
   INTO #AiFacts
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  LEFT JOIN #AiAssignmentFacts assignment ON assignment.TaskId = t.TaskId
   WHERE (@wbsId IS NULL OR t.WbsId = @wbsId)
     AND (@seriesId IS NULL OR t.TaskId = @seriesId OR t.RecurrenceParentTaskId = @seriesId)
     AND (@recurringOnly = 0 OR t.RecurrenceRule IS NOT NULL OR t.RecurrenceParentTaskId IS NOT NULL)
@@ -218,13 +251,8 @@ ${VISIBLE_TASKS}
         WHEN 'actualFinish' THEN t.ActualFinish END IS NOT NULL))
     AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
     AND (@assigneeMode = 'any'
-      OR (@assigneeMode = 'me' AND EXISTS (
-        SELECT 1 FROM dbo.MR_TaskAssignees mine WHERE mine.TaskId = t.TaskId AND mine.Sicil = @sicil))
-      OR (@assigneeMode = 'unassigned' AND NOT EXISTS (
-        SELECT 1
-        FROM dbo.MR_TaskAssignees anyone
-        JOIN dbo.MR_V_PeopleDirectory resolved ON resolved.Sicil = anyone.Sicil
-        WHERE anyone.TaskId = t.TaskId))
+      OR (@assigneeMode = 'me' AND COALESCE(assignment.IsOwnAssignee, 0) = 1)
+      OR (@assigneeMode = 'unassigned' AND COALESCE(assignment.ResolvedAssigneeCount, 0) = 0)
       OR (@assigneeMode = 'person' AND EXISTS (
         SELECT 1 FROM dbo.MR_TaskAssignees person
         WHERE person.TaskId = t.TaskId AND person.Sicil = @personSicil
@@ -240,7 +268,7 @@ ${VISIBLE_TASKS}
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
   WHERE @projectId IS NOT NULL OR EXISTS (SELECT 1 FROM #AiFacts f WHERE f.ProjectId = v.ProjectId);
 ${ASSIGNEE_ROWS}
-  DROP TABLE #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
 
 /**
  * Tek görevin ayrıntısı. Görev görünür değilse hiçbir satır dönmez (var olmayan
@@ -252,6 +280,7 @@ ${ASSIGNEE_ROWS}
 export const AI_TOOL_TASK_DETAIL_SQL = `/* rota-ai-tool:task-detail */
 ${SCOPE_PROJECTS}
 ${VISIBLE_TASKS}
+${ASSIGNMENT_FACTS}
   DROP TABLE IF EXISTS #AiFacts;
   SELECT TOP (1) ${TASK_FACT_COLUMNS},
     t.CalendarId, t.RemainingDurationDays,
@@ -274,6 +303,7 @@ ${VISIBLE_TASKS}
   INTO #AiFacts
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  LEFT JOIN #AiAssignmentFacts assignment ON assignment.TaskId = t.TaskId
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId
   JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
   LEFT JOIN dbo.MR_Tasks parent ON parent.TaskId = t.RecurrenceParentTaskId AND parent.ProjectId = t.ProjectId
@@ -298,7 +328,7 @@ ${VISIBLE_TASKS}
   OPTION (MAXRECURSION 50);
 
 ${ASSIGNEE_ROWS}
-  DROP TABLE #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
 
 /**
  * Yetkili projeler arasında ad ya da kod parçasıyla arama. Sıralama sabittir:
@@ -476,6 +506,10 @@ ${VISIBLE_TASKS}
  */
 export const AI_TOOL_DEPENDENCIES_SQL = `/* rota-ai-tool:dependencies */
 ${SCOPE_PROJECTS}
+  IF @focusTaskId IS NULL
+  BEGIN
+${VISIBLE_TASKS}
+  END
   DROP TABLE IF EXISTS #AiDependencies;
   SELECT TOP (@maxRows) d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit
   INTO #AiDependencies
@@ -498,7 +532,8 @@ ${SCOPE_PROJECTS}
     COALESCE(SUM(CASE WHEN t.Status <> 'done' THEN 1 ELSE 0 END), 0) AS OpenCount
   FROM dbo.MR_Tasks t
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'FULL'
-  WHERE @focusTaskId IS NULL AND t.ProjectId = @projectId;
+  WHERE @focusTaskId IS NULL AND t.ProjectId = @projectId
+    AND EXISTS (SELECT 1 FROM #AiTasks visible WHERE visible.TaskId = t.TaskId);
 
   DROP TABLE #AiDependencies, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
 
@@ -520,14 +555,22 @@ ${SCOPE_PROJECTS}
   );
 
   SELECT TOP (10) b.BaselineId, b.Name, b.CreatedAt, b.IsPrimary,
-    (SELECT COUNT(*) FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = b.BaselineId) AS SnapshotCount
+    CASE WHEN snapshotStats.RowCount >= @analysisMaxRows THEN NULL ELSE snapshotStats.RowCount END AS SnapshotCount
   FROM dbo.MR_Baselines b
+  OUTER APPLY (SELECT COUNT(*) AS RowCount FROM (
+    SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = b.BaselineId
+  ) bounded) snapshotStats
   WHERE @projectFull = 1 AND b.ProjectId = @projectId
   ORDER BY CASE WHEN b.BaselineId = @selectedBaseline THEN 0 ELSE 1 END,
     b.IsPrimary DESC, b.CreatedAt DESC, b.BaselineId;
 
   SELECT @projectFull AS ProjectFull, @selectedBaseline AS SelectedBaselineId,
     (SELECT COUNT(*) FROM dbo.MR_Baselines b WHERE @projectFull = 1 AND b.ProjectId = @projectId) AS BaselineTotal;
+
+  IF (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present
+    FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = @selectedBaseline) bounded) >= @analysisMaxRows
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+${VISIBLE_TASKS}
 
   SELECT TOP (@maxRows) s.TaskId, s.PlannedStart AS BaselineStart, s.PlannedFinish AS BaselineFinish,
     s.PlannedDurationDays AS BaselineDuration,
@@ -539,7 +582,8 @@ ${SCOPE_PROJECTS}
   ORDER BY s.TaskId;
 
   SELECT COUNT(*) AS AddedSinceBaseline
-  FROM dbo.MR_Tasks t
+  FROM #AiTasks visible
+  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
   WHERE @selectedBaseline IS NOT NULL AND t.ProjectId = @projectId
     AND NOT EXISTS (
       SELECT 1 FROM dbo.MR_TaskBaselineSnapshots s
