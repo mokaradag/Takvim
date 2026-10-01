@@ -158,7 +158,7 @@ const LAG_UNITS = Object.freeze({ day: 'gün', week: 'hafta', month: 'ay' });
 
 function lagView(row) {
   const value = row.LagValue == null ? Number(row.LagDays || 0) : Number(row.LagValue);
-  const unit = row.LagValue == null ? 'day' : (row.LagUnit || 'day');
+  const unit = row.LagUnit || 'day';
   return { value, unit, label: value === 0 ? 'Gecikme yok' : `${value > 0 ? '+' : '−'}${Math.abs(value)} ${LAG_UNITS[unit] || 'gün'}` };
 }
 

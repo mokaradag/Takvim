@@ -447,7 +447,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `projectId`, `personSicil`, `limit` (1–25).
 - **Yetki:** Yalnızca görünür açık görevler; kişiye atıf yalnızca kimliği açık sorumluluklarla.
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` + saf toplamlar.
-- **Çıktı:** `people[]` (açık, devam eden, gecikmiş, 7 gün, `plannedHoursOnAssignedTasks` ve kapsaması; bu değer kişi-saat tahsisi değildir), `unassignedOpenTasks`, `openTasksWithOnlyHiddenAssignees`, notlar (kapasite yargısı yok).
+- **Çıktı:** `people[]` (açık, devam eden, gecikmiş, 7 gün, `plannedHoursOnAssignedTasks` ve kapsaması; bu değer kişi-saat tahsisi değildir), `unassignedOpenTasks`, notlar (kapasite yargısı yok). Gizli sorumlu kimliklerinden ayrı bir adet/türemiş toplam üretilmez.
 - **Örnek sorular:** "Ekipte kimde kaç açık iş var?"
 
 ### 10.9 `rota_person_search` — kişi çözümü

@@ -143,8 +143,11 @@ export function createToolExecutor({
     if (state.startedAt == null) state.startedAt = clock();
     context.beginRound();
     const plans = toolCalls.map((call, index) => {
+      if (index >= limits.maxCallsPerRound || phaseRemainingMs() <= 0) {
+        return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED) };
+      }
       state.attempted += 1;
-      if (index >= limits.maxCallsPerRound || state.attempted > limits.maxTotalCalls || phaseRemainingMs() <= 0) {
+      if (state.attempted > limits.maxTotalCalls) {
         return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED) };
       }
       const tool = resolveTool(call.name);

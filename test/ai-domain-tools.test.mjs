@@ -123,6 +123,7 @@ test('gizli eş sorumlu: adı yalnızca kendi görevinde görünür, Sicil’i h
   assert.equal(Object.hasOwn(workload.result.data.people[0], 'plannedHours'), false, 'kişi-saat tahsisi izlenimi veren alan dönmez');
   assert.equal(Object.hasOwn(workload.result.data.people[0], 'plannedHoursOnAssignedTasks'), true);
   assert.match(workload.result.data.notes.join(' '), /kişi-saat tahsisi değildir/);
+  assert.equal(Object.hasOwn(workload.result.data, 'openTasksWithOnlyHiddenAssignees'), false);
   // Oluşturan kimliği kısmi görevde kapalıdır.
   assert.equal(result.data.task.createdBy, null);
 });
@@ -281,6 +282,24 @@ test('tanınmayan araç denemeleri toplam çağrı sınırını tüketir', async
   assert.equal((stack.db.aiToolLog || []).length, 0, 'sınırı aşan çağrı SQL çalıştırmaz');
 });
 
+test('tur sınırını aşan çağrılar sonraki turların toplam çağrı bütçesini tüketmez', async (t) => {
+  const stack = stackFor(t);
+  const limits = { ...TOOL_LIMITS, maxCallsPerRound: 2, maxTotalCalls: 3 };
+  const { executor, results } = await callRotaTools(stack, AYSE, [
+    ['rota_task_search', { projectId: PROJECTS.FULL, limit: 1 }],
+    ['rota_task_search', { projectId: PROJECTS.FULL, limit: 1 }],
+    ['rota_task_search', { projectId: PROJECTS.FULL, limit: 1 }]
+  ], { limits });
+  assert.equal(results[2].error.code, 'LIMIT_EXCEEDED');
+  const [message] = await executor.runRound([{
+    id: 'call_4',
+    name: 'rota_task_analytics',
+    arguments: JSON.stringify({ projectId: PROJECTS.FULL })
+  }]);
+  const next = JSON.parse(message.content);
+  assert.equal(next.ok, true, JSON.stringify(next));
+});
+
 test('SQL enjeksiyonu ve joker karakterler yalnızca veridir; SQL metni hiçbir zaman birleştirilmez', async (t) => {
   const stack = stackFor(t);
   const constants = new Set(Object.values(toolQueries));
@@ -431,6 +450,19 @@ test('bağımlılıklar FS/SS/FF/SF ve gecikmeyle okunur; kritik yol hesaplanmaz
   });
   const lead = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.LITERAL });
   assert.equal(lead.result.data.predecessors[0].lag.label, '−1 hafta');
+
+  const legacyStack = stackFor(t);
+  const legacyDependency = legacyStack.db.taskDependencies.find((row) => row.TaskId === TASKS.DUE_SOON
+    && row.PredecessorTaskId === TASKS.OVERDUE);
+  legacyDependency.LagValue = null;
+  legacyDependency.LagDays = 3;
+  legacyDependency.LagUnit = 'week';
+  const legacy = await callRotaTool(legacyStack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
+  assert.deepEqual(
+    [legacy.result.data.predecessors[0].lag.value, legacy.result.data.predecessors[0].lag.unit, legacy.result.data.predecessors[0].lag.label],
+    [3, 'week', '+3 hafta']
+  );
+
   const read = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId: PROJECTS.READ });
   assert.equal(read.result.error.code, 'UNSUPPORTED_SCOPE');
   const readTask = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.READ_2 });

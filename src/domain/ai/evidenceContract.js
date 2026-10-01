@@ -183,13 +183,13 @@ function validCitationsIn(text, evidenceIds) {
 }
 
 const ROTA_DATA_PATTERNS = [
-  /(?:^|[^\p{L}])görev(?:ler|leri|lerim|lerimiz|im|imiz|e|i|de|den|in)?(?=$|[^\p{L}])/iu,
-  /(?:^|[^\p{L}])proje(?:ler|leri|lerim|lerimiz|m|miz|si|sinde|sinin|de|den|ye|yi|nin)?(?=$|[^\p{L}])/iu,
+  /(?:^|[^\p{L}])görev\p{L}*(?=$|[^\p{L}])/iu,
+  /(?:^|[^\p{L}])proje\p{L}*(?=$|[^\p{L}])/iu,
   /(?:^|[^\p{L}])portföy(?:üm|ümüz|ü|de|den)?(?=$|[^\p{L}])/iu,
-  /\bwbs\b/iu, /(?:^|[^\p{L}])iş dağılım/iu, /(?:^|[^\p{L}])sorumlu(?:lar|su|ları)?(?=$|[^\p{L}])/iu,
+  /\bwbs\b/iu, /(?:^|[^\p{L}])[İi]ş dağılım/u, /(?:^|[^\p{L}])sorumlu(?:lar|su|ları)?(?=$|[^\p{L}])/iu,
   /\batama\b/u, /\bbildirim(?:ler)?\b/u, /\bbaz plan\b/u, /\bbağımlılık(?:lar)?\b/u,
   /\btekrar(?: serisi)?\b/u, /\btakvim\b/u, /\boutlook\b/u, /\btermin\b/u,
-  /\bgerçekleşen\b/u, /\bplanlanan bitiş\b/u, /\bilerleme\b/u,
+  /\bgerçekleşen\b/u, /(?:^|[^\p{L}])planlanan bitiş(?=$|[^\p{L}])/iu, /(?:^|[^\p{L}])[İi]lerleme(?=$|[^\p{L}])/u,
   /\btasks?\b/i, /\bprojects?\b/i, /\bportfolio\b/i, /\bassignee(?:s)?\b/i,
   /\bassignments?\b/i, /\bnotifications?\b/i, /\bbaseline\b/i, /\bdependencies\b/i,
   /\brecurrence\b/i, /\bcalendar\b/i, /\bdeadline\b/i, /\bprogress\b/i
@@ -203,6 +203,9 @@ const ROTA_FACT_PATTERNS = [
 ];
 
 const ROTA_EXPLICIT_QUERY_PATTERNS = [
+  /(?:^|[^\p{L}])(?:[İi]ş\s+yük\p{L}*|(?:tarih\s+değişikliğ\p{L}*|atama)\s+talep\p{L}*|(?:plan\s+)?veri\s+kalite\p{L}*|(?:dün|bugün)\s+kim\s+ne\s+yaptı)(?=$|[^\p{L}])/iu,
+  /\b(?:workload|data quality|schedule requests?|assignment requests?)\b/i,
+  /\bwho\s+did\s+what\s+(?:today|yesterday)\b/i,
   /(?:^|[^\p{L}])(?:görevleri|görevlerim|görevlerimi|görevlerimiz|görevlerimizi|projeleri|projelerim|projelerimi|projelerimiz|projelerimizi|bildirimleri|bildirimlerim|bildirimlerimi|bildirimlerimiz|bildirimlerimizi|atamaları|atamalarım|atamalarımı|atamalarımız|atamalarımızı)\s+(?:listele|göster|bul)(?=$|[^\p{L}])/iu,
   /\b(?:list|show|find)\s+(?:my\s+|our\s+|the\s+)?(?:tasks?|projects?|assignments?|notifications?)\b/i,
   /(?:^|[^\p{L}])hangi\s+(?:görev|proje|atama|bildirim)\p{L}*(?=$|[^\p{L}])/iu,
@@ -276,9 +279,9 @@ function canonicalNumber(value) {
 }
 
 const STATUS_CLAIMS = [
-  { pattern: /tamamlandı/u, values: ['done', 'completed', 'complete'] },
-  { pattern: /devam ediyor/u, values: ['in_progress', 'in-progress', 'inprogress'] },
-  { pattern: /yapılacak/u, values: ['todo', 'planned'] }
+  { pattern: /(?:tamamlandı|\bcompleted?\b|\bdone\b)/u, values: ['done', 'completed', 'complete'] },
+  { pattern: /(?:devam ediyor|\bin progress\b)/u, values: ['in_progress', 'in-progress', 'inprogress'] },
+  { pattern: /(?:yapılacak|\btodo\b|\bis planned\b|\bstatus(?: is|:)\s*planned\b)/u, values: ['todo', 'planned'] }
 ];
 
 const FIELD_HINTS = Object.freeze([
@@ -306,6 +309,16 @@ const FIELD_HINTS = Object.freeze([
 ]);
 
 function hintedFields(source, start, end, kind = 'number') {
+  if (kind === 'number') {
+    const before = source.slice(Math.max(0, start - 48), start);
+    const after = source.slice(end, Math.min(source.length, end + 32));
+    if (/(?:tamamlanma\s+oran[ıi]?|completion\s+rate)\s*[:=]?\s*%?\s*$/iu.test(before)) {
+      return ['completionratepercent'];
+    }
+    if (/^\s*(?:gün|days?)\s+(?:gecikmiş|overdue)(?=$|[^\p{L}])/iu.test(after)) {
+      return ['overduedays'];
+    }
+  }
   const from = Math.max(0, start - 36);
   const around = source.slice(from, Math.min(source.length, end + 36));
   const claimCenter = ((start + end) / 2) - from;
@@ -359,11 +372,19 @@ function claimsIn(text) {
       return ' '.repeat(token.length);
     });
   const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?))(?=$|[^\p{L}\d])/gu)]
-    .map((match) => ({
-      value: canonicalNumber(match[2]),
-      fields: hintedFields(source, match.index + match[1].length, match.index + match[0].length)
-    }))
-    .filter((claim) => claim.value);
+    .map((match) => {
+      const start = match.index + match[1].length;
+      const end = match.index + match[0].length;
+      const before = source.slice(Math.max(0, start - 16), start);
+      const after = source.slice(end, Math.min(source.length, end + 32));
+      const windowLiteral = match[2] === '7' && (
+        /^\s+gün(?:\s+içinde)?\s+termin/iu.test(after)
+        || (/next\s+$/i.test(before) && /^\s+days?\b/i.test(after))
+      );
+      if (windowLiteral) return null;
+      return { value: canonicalNumber(match[2]), fields: hintedFields(source, start, end) };
+    })
+    .filter((claim) => claim?.value);
   const lower = source.toLocaleLowerCase('tr-TR');
   const statuses = STATUS_CLAIMS.filter((item) => item.pattern.test(lower)).map((item) => item.values);
   return { dates, numbers, statuses, clockTimes };
@@ -642,15 +663,14 @@ export function analyzeDirectAnswer(text, { evidenceRequired = false } = {}) {
  * Yanıt kanıt işareti taşıyamaz ve Rota verisi olarak okunabilecek sayı ya da
  * tarih içeremez: araç hatası, veriyi tahminle doldurma izni değildir.
  */
-const SAFE_UNGROUNDED_FAILURE = /^(?:bu soruyu(?: şu anda)?(?: Rota verisiyle)? yanıtlayamıyorum|bu görevi bulamadım ya da görüntüleme yetkiniz yok|(?:Rota )?veri(?:si|sine|ye|lerine)?(?: şu anda)? (?:alınamadı|ulaşılamıyor|erişemiyorum)|(?:bu |ilgili )?veri (?:bulunamadı|bulamadım)|(?:bu |ilgili )?veriye erişemiyorum|görüntüleme yetkiniz yok)$/iu;
-const SAFE_UNGROUNDED_REMEDIATION = /^(?:(?:lütfen )?(?:(?:biraz|daha) sonra )?(?:yeniden|tekrar) deneyin|soruyu .*?(?:yeniden|tekrar) deneyin|(?:lütfen )?görüntüleme yetkinizi .*?kontrol edin)$/iu;
+const SAFE_UNGROUNDED_FAILURE = /^(?:bu soruyu(?: şu anda)?(?: Rota verisiyle)? yanıtlayamıyorum|bu görevi bulamadım ya da görüntüleme yetkiniz yok|kayıt bulunamadı(?: ya da bu kaydı görüntüleme yetkiniz yok)?|(?:Rota )?veri(?:si|sine|ye|lerine)?(?: şu anda| süre sınırında)? (?:alınamadı|ulaşılamıyor|erişemiyorum|yoğun)|(?:bu |ilgili )?veri (?:bulunamadı|bulamadım)|(?:bu |ilgili )?veriye erişemiyorum|görüntüleme yetkiniz yok)$/iu;
+const SAFE_UNGROUNDED_REMEDIATION = /^(?:(?:lütfen )?(?:(?:biraz|daha|kısa bir süre) sonra )?(?:yeniden|tekrar) deneyin|(?:soruyu|daha dar bir sorguyla) .*?(?:yeniden|tekrar) deneyin|daha dar bir sorguyla (?:yeniden|tekrar) deneyin|(?:lütfen )?görüntüleme yetkinizi .*?kontrol edin)$/iu;
 
 function isSafeUngroundedAnswer(value) {
   const clauses = stripCitations(String(value ?? ''))
     .trim()
-    .replace(/[.!?]+$/u, '')
-    .split(/\s*;\s*/u)
-    .map((clause) => clause.trim())
+    .split(/\s*;\s*|(?<=[.!?])\s+/u)
+    .map((clause) => clause.trim().replace(/[.!?]+$/u, ''))
     .filter(Boolean);
   if (!clauses.length || !SAFE_UNGROUNDED_FAILURE.test(clauses[0])) return false;
   return clauses.slice(1).every((clause) => SAFE_UNGROUNDED_REMEDIATION.test(clause));

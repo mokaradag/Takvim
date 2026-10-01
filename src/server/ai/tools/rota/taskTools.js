@@ -348,7 +348,7 @@ function groupKeys(fact, groupBy, { projects, assignees, today }) {
     case 'assignee': {
       if (fact.resolvedAssigneeCount === 0) return [['unassigned', 'Sorumlusuz']];
       const people = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
-      if (!people.length) return [['unattributed', 'Kimliği gösterilemeyen sorumlu']];
+      if (!people.length) return [];
       return people.map((person) => [`sicil:${person.sicil}`, person.name || String(person.sicil)]);
     }
     default: return [];
@@ -422,7 +422,7 @@ const taskAnalytics = {
           dueNext7Days: 'Tamamlanmamış ve termini bugün dahil 7 takvim günü içinde olan görev.',
           completionRatePercent: 'Tamamlanan görev / toplam görev.',
           today: call.today,
-          ...(groupBy === 'assignee' ? { assignee: 'Bir görev her görünür sorumlusunda ayrı sayılır; grupların toplamı görev sayısını aşabilir.' } : {})
+          ...(groupBy === 'assignee' ? { assignee: 'Yalnızca kimliği görünür sorumlular gruplandırılır; bir görev her görünür sorumlusunda ayrı sayılabilir.' } : {})
         }
       },
       scope: descriptor,

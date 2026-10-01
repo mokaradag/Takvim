@@ -78,7 +78,9 @@ function assistantProfilesAvailable(registry) {
 function toolRoutes(registry) {
   return [AI_PROFILES.CHAT_TOOLS, AI_PROFILES.CHAT_TOOLS_REASONING]
     .map((profile) => resolveModelProfile(registry, profile))
-    .filter((resolved) => resolved.ok && resolved.route.capabilities.includes(AI_CAPABILITIES.TOOLS))
+    .filter((resolved) => resolved.ok
+      && resolved.route.capabilities.includes(AI_CAPABILITIES.CHAT)
+      && resolved.route.capabilities.includes(AI_CAPABILITIES.TOOLS))
     .map((resolved) => resolved.route);
 }
 

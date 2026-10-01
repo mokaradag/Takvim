@@ -339,6 +339,14 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   assert.equal(evidence.requiresRotaEvidence('Görevlerimi listele'), true);
   assert.equal(evidence.requiresRotaEvidence('Projelerimi göster'), true);
   assert.equal(evidence.requiresRotaEvidence('List tasks in Atlas'), true);
+  assert.equal(evidence.requiresRotaEvidence('Görevlerimin durumları ne?'), true);
+  assert.equal(evidence.requiresRotaEvidence("Alfa'nın planlanan bitiş tarihi ne?"), true);
+  assert.equal(evidence.requiresRotaEvidence('İş yüküm nasıl?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Dün kim ne yaptı?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Tarih değişikliği taleplerim var mı?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Plan veri kalitesi nasıl?'), true);
+  assert.equal(evidence.requiresRotaEvidence("What's my workload?"), true);
+  assert.equal(evidence.requiresRotaEvidence('Who did what yesterday?'), true);
   assert.equal(evidence.requiresRotaEvidence('Kritik yol yöntemini anlatır mısın?'), false);
   assert.deepEqual(evidence.analyzeDirectAnswer('Atlas projesi gecikiyor.', { evidenceRequired: true }).issues.map((issue) => issue.code), ['ROTA_EVIDENCE_REQUIRED']);
   assert.deepEqual(evidence.analyzeDirectAnswer('Toplam 5 görev 【R1】').issues.map((issue) => issue.code), ['CITATION_WITHOUT_EVIDENCE']);
@@ -350,6 +358,22 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
   );
   assert.equal(
     evidence.analyzeUngroundedAnswer('Bu soruyu şu anda Rota verisiyle yanıtlayamıyorum; daha sonra yeniden deneyin.', { evidenceRequired: true }).ok,
+    true
+  );
+  assert.equal(
+    evidence.analyzeUngroundedAnswer('Bu soruyu şu anda Rota verisiyle yanıtlayamıyorum. Lütfen daha sonra yeniden deneyin.', { evidenceRequired: true }).ok,
+    true
+  );
+  assert.equal(
+    evidence.analyzeUngroundedAnswer('Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', { evidenceRequired: true }).ok,
+    true
+  );
+  assert.equal(
+    evidence.analyzeUngroundedAnswer('Veri süre sınırında alınamadı. Daha dar bir sorguyla yeniden deneyin.', { evidenceRequired: true }).ok,
+    true
+  );
+  assert.equal(
+    evidence.analyzeUngroundedAnswer('Rota verisi şu anda yoğun. Kısa bir süre sonra yeniden deneyin.', { evidenceRequired: true }).ok,
     true
   );
   // Biçim düzeltmesi atıf uydurmaz; bağlantı sözdizimine dokunmaz.
@@ -423,6 +447,43 @@ test('Rota olgu kapısı bağlamı korur; kanıt doğrulaması isim ve kayıt il
     }]
   };
   assert.equal(evidence.analyzeGroundedAnswer('Bu hafta termini olan 4 görev var. 【R1】', dueCountContext).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('7 gün içinde termini olan 4 görev var. 【R1】', dueCountContext).ok, true);
+  assert.equal(evidence.analyzeGroundedAnswer('There are 4 tasks due in the next 7 days. 【R1】', dueCountContext).ok, true);
+
+  const statusContext = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({ data: { task: { status: 'todo' } } })
+    }]
+  };
+  assert.equal(evidence.analyzeGroundedAnswer('Status is planned. 【R1】', statusContext).ok, true);
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Status is completed. 【R1】', statusContext).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
+
+  const rateContext = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({ data: { totals: { completionRatePercent: 25, progressPercent: 80 } } })
+    }]
+  };
+  assert.equal(evidence.analyzeGroundedAnswer('Tamamlanma oranı %25. 【R1】', rateContext).ok, true);
+  assert.deepEqual(
+    evidence.analyzeGroundedAnswer('Tamamlanma oranı %80. 【R1】', rateContext).issues.map((issue) => issue.code),
+    ['UNSUPPORTED_EVIDENCE_VALUE']
+  );
+
+  const overdueDaysContext = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({ data: { task: { title: 'Görev Alfa', overdueDays: 10 } } })
+    }]
+  };
+  assert.equal(evidence.analyzeGroundedAnswer('Görev Alfa 10 gün gecikmiş. 【R1】', overdueDaysContext).ok, true);
 
   const aggregateContext = {
     evidenceIds: ['R1'],

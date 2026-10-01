@@ -42,7 +42,7 @@ const outlookStatus = {
       result = await call.sql((executor) => readOutlook(executor, scope, { taskIds: args.taskId ? [args.taskId] : [], maxRows: 500 }));
     } catch (error) {
       const message = String(error?.message || '');
-      if (Number(error?.number) === 208 || /Invalid object name[^\n]*MR_TaskOutlookSubscriptions/i.test(message)) {
+      if (Number(error?.number) === 208 && /\bMR_TaskOutlookSubscriptions\b/i.test(message)) {
         throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Outlook takvim tümleştirmesi bu kurulumda etkin değil.' });
       }
       throw error;

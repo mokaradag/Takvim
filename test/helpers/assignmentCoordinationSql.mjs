@@ -265,7 +265,7 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   const pageSize = Number(params.pageSize || 25);
   const requestedPage = Number(params.page || 0);
   const pageParticipant = (row) => isParticipant(db, row, params)
-    || (decisionAuthorityScope && decisionAuthority(db, row, params));
+    || (decisionAuthorityScope && row.Status === 'PENDING' && taskAvailable(db, row) && decisionAuthority(db, row, params));
   const pageActionable = (row) => {
     if (!taskAvailable(db, row)) return false;
     if (row.Status === 'PENDING') {

@@ -31,17 +31,13 @@ const workloadSummary = {
     const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const people = new Map();
     let unassigned = 0;
-    let unattributed = 0;
     for (const fact of facts) {
       if (fact.resolvedAssigneeCount === 0) {
         unassigned += 1;
         continue;
       }
       const visible = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
-      if (!visible.length) {
-        unattributed += 1;
-        continue;
-      }
+      if (!visible.length) continue;
       for (const person of visible) {
         if (args.personSicil != null && person.sicil !== args.personSicil) continue;
         if (!people.has(person.sicil)) {
@@ -76,7 +72,6 @@ const workloadSummary = {
         openTaskCount: facts.length,
         people: page,
         unassignedOpenTasks: unassigned,
-        openTasksWithOnlyHiddenAssignees: unattributed,
         notes: [
           WORKLOAD_NOTE,
           'Birden çok sorumlusu olan görev her sorumluda ayrı sayılır.',

@@ -570,6 +570,17 @@ test('yönetici bağlantı testinde konuşma şeması denetimi ortak süre büt�
   assert.match(health, /raceWithAbort\(\(\) => checkAssistantConversationSchema\(\{ signal: deadline\.signal \}\), deadline\.signal\)/);
 });
 
+test('araç sağlık profilleri grounded-turn ile aynı CHAT ve TOOLS yeteneklerini ister', () => {
+  const health = code(read('src/server/ai/aiHealth.js'));
+  assert.match(health, /capabilities\.includes\(AI_CAPABILITIES\.CHAT\)[\s\S]{0,160}capabilities\.includes\(AI_CAPABILITIES\.TOOLS\)/);
+});
+
+test('Outlook 208 hatası yalnızca Outlook abonelik tablosu gerçekten eksikse UNSUPPORTED olur', () => {
+  const integrity = code(read('src/server/ai/tools/rota/integrityTools.js'));
+  assert.match(integrity, /Number\(error\?\.number\) === 208 && \/\\bMR_TaskOutlookSubscriptions\\b\/i\.test\(message\)/);
+  assert.doesNotMatch(integrity, /Number\(error\?\.number\) === 208 \|\|/);
+});
+
 test('olağan anlık görüntü, kayıt ve depo yolları Rota AI çalışma zamanına bağlanmaz', () => {
   const ordinary = [
     ...sourceFiles('src/server/repository'),

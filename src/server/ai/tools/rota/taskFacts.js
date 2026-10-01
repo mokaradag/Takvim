@@ -360,10 +360,7 @@ export function assigneeView(fact, assignees) {
   const people = visible.map((person) => (person.identityVisible
     ? { name: person.name || String(person.sicil), sicil: person.sicil }
     : { name: person.name, identityHidden: true }));
-  return {
-    assignees: people,
-    ...(fact.assigneeCount > people.length ? { otherAssigneeCount: fact.assigneeCount - people.length } : {})
-  };
+  return { assignees: people };
 }
 
 /* ── Toplamlar ─────────────────────────────────────────────── */
