@@ -149,7 +149,7 @@ Bağımsız değişkenler model metnidir ve **güvenilmez**:
 - hata ayrıntısı yalnızca alan yolunu ve nedeni taşır (`$.limit:range`,
   `$.dateFrom:reversed`); modelin gönderdiği değer geri yansıtılmaz;
 - serbest metin (ör. arama metni) SQL'e yalnızca **parametre** olarak girer ve
-  `LIKE` kullanılmaz (`CHARINDEX` ile Türkçe harmanlamada arama): `%`, `_`,
+  `LIKE` kullanılmaz (`CHARINDEX` ile büyük/küçük harf ve aksan duyarsız kaba arama; kesin eşleşmede noktasız `ı` ayrı kalır): `%`, `_`,
   `[` ve `' OR 1=1 --` gibi girdiler düz metindir.
 
 ---
@@ -381,7 +381,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` (yetki + daraltıcı kaba süzgeç) → tam süzgeç, sıralama ve sayfalama saf JS'de.
 - **Çıktı:** `tasks[]` (kimlik, başlık, proje, durum, öncelik, termin/plan/gerçekleşen tarihleri, gecikme günü, sorumlular), `sort`.
 - **Tamlık:** `totalCount` kesin toplam; liste bir sayfa; `nextCursor` aynı süzgeçle sonraki sayfa (imleç süzgeç özetine bağlıdır).
-- **Anlambilim:** §9; metin araması Rota'nın diğer aramalarıyla aynı kuraldır (`CHARINDEX` + `Turkish_100_CI_AI`: büyük/küçük harf duyarsız, Türkçe harfler ayrı harf sayılır; model Türkçe karakterleri doğru yazmaya yönlendirilir); `%`/`_`/`[` düz metindir.
+- **Anlambilim:** §9; metin araması büyük/küçük harf ve aksan duyarsızdır: `ş/ç/ğ/ö/ü` taban harfleriyle eşleşir, kesin JS eşleşmesinde noktasız `ı` ayrı kalır; SQL'deki `CHARINDEX` yalnızca kaba daraltmadır. `%`/`_`/`[` düz metindir.
 - **Örnek sorular:** "Bu hafta termini olan görevlerim neler?", "Radar projesinde gecikmiş kritik görevler hangileri?"
 
 ### 10.2 `rota_task_detail` — görev ayrıntısı

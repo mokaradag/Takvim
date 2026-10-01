@@ -251,11 +251,11 @@ function toolRouteAvailable(registry, mode) {
  * da süresi geçtiyse konuşma kapısından tek küçük sorguyla (satır okumadan)
  * denetlenir. Kapı doluluğu ya da süre aşımı şemanın yokluğuna kanıt değildir.
  */
-async function evidenceSchemaReady(sicil, signal) {
+async function evidenceSchemaReady(sicil, signal, { force = false } = {}) {
   const state = evidenceSchemaState();
   const age = state.observedAt ? Date.now() - Date.parse(state.observedAt) : Number.POSITIVE_INFINITY;
-  if (state.ready === true && age < EVIDENCE_SCHEMA_READY_TTL_MS) return true;
-  if (state.ready === false && age < EVIDENCE_SCHEMA_MISSING_TTL_MS) return false;
+  if (!force && state.ready === true && age < EVIDENCE_SCHEMA_READY_TTL_MS) return true;
+  if (!force && state.ready === false && age < EVIDENCE_SCHEMA_MISSING_TTL_MS) return false;
   const probe = await withConversationSql(sicil, signal, (scope) => loadConversationEvidence(directExecutor(scope), sicil, {
     conversationId: PROBE_CONVERSATION_ID, maxEvidence: 0
   }));
@@ -267,7 +267,7 @@ async function evidenceSchemaReady(sicil, signal) {
 /** 0018 kanıt şemasını bağlantı sınaması için güvenilir kullanıcıyla doğrular. */
 export async function checkAssistantEvidenceSchema({ signal = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
-  return evidenceSchemaReady(sicil, signal);
+  return evidenceSchemaReady(sicil, signal, { force: true });
 }
 
 /** Rota verisi araçları bu kurulumda ve bu kipte kullanılabilir mi? */

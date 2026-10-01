@@ -426,7 +426,7 @@ test('Entegrasyonlar kartı yapay zekâ sağlayıcısını listeler; bağlantı 
 
 
 test('araçlar açıkken bağlantı testi 0018 kanıt şeması durumunu yeniler', async (t) => {
-  createAiStack(t, {
+  const { db } = createAiStack(t, {
     env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' },
     seed: { aiEvidenceSchemaMissing: true }
   });
@@ -436,6 +436,17 @@ test('araçlar açıkken bağlantı testi 0018 kanıt şeması durumunu yeniler'
   assert.equal(tested.result.ok, false);
   assert.equal(tested.result.code, 'EVIDENCE_SCHEMA_MISSING');
   assert.equal(evidenceSchemaState().ready, false);
+
+  db.aiEvidenceSchemaMissing = false;
+  const installed = await postIntegrationTest('ai-provider');
+  assert.equal(installed.result.ok, true);
+  assert.equal(evidenceSchemaState().ready, true, 'bağlantı testi taze eksik önbelleğini atlar');
+
+  db.aiEvidenceSchemaMissing = true;
+  const removed = await postIntegrationTest('ai-provider');
+  assert.equal(removed.result.ok, false);
+  assert.equal(removed.result.code, 'EVIDENCE_SCHEMA_MISSING');
+  assert.equal(evidenceSchemaState().ready, false, 'bağlantı testi taze hazır önbelleğini atlar');
 });
 
 /* ── Sağlık doğruluğu ve bağlantı testi ───────────────────── */
