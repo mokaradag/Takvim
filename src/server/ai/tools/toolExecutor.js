@@ -86,6 +86,15 @@ export function createToolExecutor({
     return Math.max(0, limits.maxToolPhaseMs - (clock() - state.startedAt));
   }
 
+  function fitWithinResultBudget(content, name) {
+    const remaining = Math.max(0, limits.maxTotalResultBytes - state.resultBytes);
+    if (byteLength(content) <= remaining) return { content, limited: false };
+    const limited = JSON.stringify(errorEnvelope(name, new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED)));
+    if (byteLength(limited) <= remaining) return { content: limited, limited: true };
+    const compact = JSON.stringify({ ok: false, error: { code: TOOL_ERROR_CODES.LIMIT_EXCEEDED } });
+    return { content: byteLength(compact) <= remaining ? compact : '', limited: true };
+  }
+
   /**
    * Tek çağrı: doğrulama → yürütme. Sonuç `{ outcome }` ya da aynı model
    * yanıtındaki özdeş çağrı için `{ sameAs }`dir.
@@ -202,7 +211,7 @@ export function createToolExecutor({
         if (!text) {
           code = TOOL_ERROR_CODES.RESULT_TOO_LARGE;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
-        } else if (state.resultBytes + byteLength(text) > limits.maxTotalResultBytes) {
+        } else if (state.resultBytes + byteLength(text) + 1 > limits.maxTotalResultBytes) {
           code = TOOL_ERROR_CODES.LIMIT_EXCEEDED;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
         } else {
@@ -223,10 +232,9 @@ export function createToolExecutor({
           if (id) ledger.attachPayload(id, content);
         }
       }
-      if (repeated && state.resultBytes + byteLength(content) > limits.maxTotalResultBytes) {
-        code = TOOL_ERROR_CODES.LIMIT_EXCEEDED;
-        content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
-      }
+      const budgeted = fitWithinResultBudget(content, name);
+      if (budgeted.limited) code = TOOL_ERROR_CODES.LIMIT_EXCEEDED;
+      content = budgeted.content;
       if (code) state.failures += 1;
       contents[index] = content;
       state.resultBytes += byteLength(content);

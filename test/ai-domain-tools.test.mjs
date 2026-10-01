@@ -700,6 +700,20 @@ test('sonuç boyutu sınırlıdır: büyük liste kısaltılır ve bildirilir, s
   assert.match(shrunk.data.sizeNote, /boyut sınırı/);
   assert.equal(JSON.parse(huge.content).error.code, 'RESULT_TOO_LARGE');
   assert.equal(ledger.summaries()[0].truncated, true);
+
+  const hardLimits = { ...TOOL_LIMITS, maxTotalResultBytes: 140 };
+  const boundedExecutor = createToolExecutor({
+    context: createToolTurnContext({ sicil: AYSE, now: NOW, limits: hardLimits }),
+    ledger: createEvidenceLedger(),
+    signal: new AbortController().signal,
+    limits: hardLimits
+  });
+  const boundedMessages = await boundedExecutor.runRound(
+    Array.from({ length: 5 }, (_, index) => ({ id: `limit_${index}`, name: `unknown_${index}`, arguments: '{}' }))
+  );
+  const emittedBytes = boundedMessages.reduce((sum, message) => sum + Buffer.byteLength(message.content), 0);
+  assert.ok(emittedBytes <= hardLimits.maxTotalResultBytes);
+  assert.equal(boundedExecutor.stats().resultBytes, emittedBytes);
 });
 
 test('kanıt defteri modele verilen güvenli sonucu saklar; veri içindeki talimat ve atıf işaretleri nötrlenir', async (t) => {

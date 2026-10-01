@@ -343,12 +343,14 @@ const TURKISH_MONTHS = Object.freeze({
 
 function claimsIn(text) {
   let source = claimText(text);
-  const qualifiedClockTimes = new Set(
-    [...source.matchAll(/\b\d{4}-\d{2}-\d{2}T((?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?)(?:Z|[+\-]\d{2}:\d{2})\b/gi)]
-      .map((match) => match[1])
-  );
   const dates = [];
+  const clockTimes = [];
   source = source
+    .replace(/\b(\d{4}-\d{2}-\d{2})T((?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?)(?:Z|[+\-]\d{2}:\d{2})\b/gi, (token, day, clockTime, offset) => {
+      dates.push({ value: day, fields: hintedFields(source, offset, offset + token.length, 'date') });
+      clockTimes.push({ value: clockTime, qualified: true });
+      return ' '.repeat(token.length);
+    })
     .replace(/\b(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+(\d{4})\b/giu, (token, day, monthName, year, offset) => {
       const month = TURKISH_MONTHS[monthName.toLocaleLowerCase('tr-TR')];
       dates.push({
@@ -368,11 +370,10 @@ function claimsIn(text) {
       });
       return ' '.repeat(token.length);
     });
-  const clockTimes = [...qualifiedClockTimes].map((value) => ({ value, qualified: true }));
   source = source
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, ' ')
     .replace(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\b/g, (token) => {
-      clockTimes.push({ value: token, qualified: qualifiedClockTimes.has(token) });
+      clockTimes.push({ value: token, qualified: false });
       return ' '.repeat(token.length);
     });
   const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?))(?=$|[^\p{L}\d])/gu)]

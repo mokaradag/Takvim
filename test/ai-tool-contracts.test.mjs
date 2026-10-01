@@ -578,6 +578,20 @@ test('saat iddiası yalnızca saat dilimli kanıt zaman damgasıyla bire bir do�
   );
   const wrong = evidence.analyzeGroundedAnswer('Son güncelleme 2026-09-30T15:37:00.000Z. 【R1】', context);
   assert.equal(wrong.ok, false);
+  assert.ok(wrong.issues.some((issue) => issue.code === 'UNSUPPORTED_EVIDENCE_VALUE'
+    && issue.detail.includes('saat 15:37:00.000')));
+
+  const offsetContext = {
+    evidenceIds: ['R1'],
+    evidencePayloads: [{
+      id: 'R1',
+      payload: JSON.stringify({ data: { updatedAt: '2026-09-30T17:37:00.000+03:00' } })
+    }]
+  };
+  assert.equal(
+    evidence.analyzeGroundedAnswer('Son güncelleme 2026-09-30T17:37:00.000+03:00. 【R1】', offsetContext).ok,
+    true
+  );
 });
 
 test('kısmi kapsamlı kanıta dayanan yanıta sunucu kapsam notunu yalnızca gerekirse ekler', () => {
