@@ -489,13 +489,13 @@ test('yalnızca atfedilen kanıtlar kaydedilir; kanıt kimlikleri çağrı sıra
       type: 'script',
       respond: (call) => {
         const [, search] = toolResultsOf(call);
-        return { type: 'answer', text: `Radar projesinde ${search.totalCount} görev var. 【${search.evidenceId}】` };
+        return { type: 'answer', text: `Radar Modernizasyonu projesinde ${search.totalCount} görev var. 【${search.evidenceId}】` };
       }
     }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: 'Radar görevleri' });
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, 'Radar projesinde 8 görev var. 【R2】');
+  assert.equal(done.assistantMessage.content, 'Radar Modernizasyonu projesinde 8 görev var. 【R2】');
   assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R2']);
   assert.deepEqual(stack.db.aiMessageEvidence.map((row) => [row.Ordinal, row.ToolName]), [[2, 'rota_task_search']]);
 });

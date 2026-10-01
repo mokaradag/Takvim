@@ -481,6 +481,10 @@ test('tekrar serisi, çalışma takvimi ve plan veri kalitesi ürün kurallarıy
   assert.equal(series.result.data.series.done, 1);
   assert.match(series.result.data.series.ruleDescription, /hafta/i);
   assert.deepEqual(series.result.data.series.next.map((item) => item.taskId), [TASKS.OCCURRENCE_OPEN]);
+  const adminNonRecurring = await callRotaTool(stack, ADMIN, 'rota_recurrence_inspect', { taskId: TASKS.OVERDUE });
+  assert.equal(adminNonRecurring.result.ok, true);
+  assert.equal(adminNonRecurring.result.data.recurring, false);
+  assert.equal(adminNonRecurring.result.scope.kind, 'complete-projects');
   const calendar = await callRotaTool(stack, AYSE, 'rota_calendar_inspect', { projectId: PROJECTS.FULL, dateFrom: '2026-10-26', dateTo: '2026-10-30' });
   assert.equal(calendar.result.ok, true);
   assert.equal(calendar.result.data.workingDayCount, 4);

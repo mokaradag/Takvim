@@ -331,9 +331,10 @@ const recurrenceInspect = {
       const { fact } = await visibleTask(call, scope, args.taskId);
       const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId;
       if (!seriesId) {
+        const access = projectAccess(scope, fact.projectId);
         return {
           data: { task: { taskId: fact.id, title: dataText(fact.title, 160) }, recurring: false },
-          scope: describeTaskScope([projectAccess(scope, fact.projectId)]),
+          scope: describeTaskScope(access ? [access] : []),
           complete: true, truncated: false, returnedCount: 0, totalCount: 0, nextCursor: null,
           evidence: { label: `Tekrar serisi · ${dataText(fact.title, 60)}`, entity: { type: 'task', id: fact.id, name: dataText(fact.title, 120) }, highlights: ['Tekrarlayan görev değil'] }
         };

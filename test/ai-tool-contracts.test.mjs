@@ -17,7 +17,7 @@ const { TOOL_ERROR_CODES, ToolError, toToolError, isTurnFatal } = await import('
 const facts = await import('../src/server/ai/tools/rota/taskFacts.js');
 const { buildRotaScope, describeTaskScope, projectAccess } = await import('../src/server/ai/tools/rota/rotaScope.js');
 const { dataText } = await import('../src/server/ai/tools/rota/rotaToolSupport.js');
-const { AI_TOOL_TASK_FACTS_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+const { AI_TOOL_DEPENDENCIES_SQL, AI_TOOL_TASK_FACTS_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
 const registry = await import('../src/server/ai/tools/toolRegistry.js');
 const evidence = await import('../src/domain/ai/evidenceContract.js');
 const { AI_ERROR_CODES } = await import('../src/domain/ai/aiErrorCatalog.js');
@@ -31,6 +31,10 @@ const TASK_ID = '33333333-3333-4333-8333-333333333333';
 
 test('AI araç SQL kapısı olağan Rota trafiği için havuz kapasitesi bırakır', () => {
   assert.equal(TOOL_SQL_GATE.slots, 1);
+});
+
+test('odaklı bağımlılık sorgusu proje geneli görev toplamını hesaplamaz', () => {
+  assert.match(AI_TOOL_DEPENDENCIES_SQL, /WHERE @focusTaskId IS NULL AND t\.ProjectId = @projectId;/);
 });
 
 function detailsOf(work) {
@@ -323,6 +327,14 @@ test('uydurma kanıt atfı, atıfsız sayı ve atıfsız kanıta dayalı yanıt 
     'Projede 999 görev var. 【R1】',
     { evidenceIds: ['R1'], evidencePayloads: payload }
   ).issues.map((issue) => issue.code), ['UNSUPPORTED_EVIDENCE_VALUE']);
+  const prefixedEntityPayload = [{
+    id: 'R1',
+    payload: JSON.stringify({ evidenceId: 'R1', data: { project: { name: 'Atlas 2' }, overdue: 5 } })
+  }];
+  assert.equal(evidence.analyzeGroundedAnswer(
+    'Atlas projesinde 5 gecikmiş görev var. 【R1】',
+    { evidenceIds: ['R1'], evidencePayloads: prefixedEntityPayload }
+  ).ok, false);
   // Liste ve tablo, hemen komşu paragraftaki atıfla desteklenebilir; paragraf kendi atfını taşımalıdır.
   const table = 'Gecikmiş görevler şunlar 【R1】:\n\n| Görev | Gün |\n|---|---|\n| A | 3 |';
   assert.equal(evidence.analyzeGroundedAnswer(table, { evidenceIds: ['R1'] }).ok, true);

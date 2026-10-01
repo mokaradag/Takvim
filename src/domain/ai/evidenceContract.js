@@ -553,10 +553,7 @@ function normalizedText(value) {
 
 function scopeContainsText(scope, value) {
   const needle = normalizedText(value);
-  return [...scope.strings].some((candidate) => {
-    const normalized = normalizedText(candidate);
-    return normalized === needle || normalized.startsWith(`${needle} `);
-  });
+  return [...scope.strings].some((candidate) => normalizedText(candidate) === needle);
 }
 
 function claimUnits(text) {

@@ -495,7 +495,7 @@ ${SCOPE_PROJECTS}
     COALESCE(SUM(CASE WHEN t.Status <> 'done' THEN 1 ELSE 0 END), 0) AS OpenCount
   FROM dbo.MR_Tasks t
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'FULL'
-  WHERE t.ProjectId = @projectId;
+  WHERE @focusTaskId IS NULL AND t.ProjectId = @projectId;
 
   DROP TABLE #AiDependencies, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
 
