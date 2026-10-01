@@ -108,13 +108,16 @@ const VISIBLE_TASKS = `
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
 `;
 
-/** Bounded associations and one aggregate per task, shared by fact projections. */
+/** Görünebilir sorumluluk ilişkileri sınırlıdır; görev başına tek toplam üretilir. */
 const ASSIGNMENT_FACTS = `
   DROP TABLE IF EXISTS #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts;
   SELECT TOP (@analysisMaxRows) ta.TaskId, ta.Sicil
   INTO #AiAssignments
   FROM #AiTasks visible
-  JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = visible.TaskId;
+  JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = visible.TaskId
+  WHERE visible.IdentityBase = 1 OR ta.Sicil = @sicil
+    OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil)
+    OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil);
   IF (SELECT COUNT(*) FROM #AiAssignments) >= @analysisMaxRows
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
   CREATE UNIQUE CLUSTERED INDEX IX_AiAssignments ON #AiAssignments(TaskId, Sicil);
@@ -123,17 +126,21 @@ const ASSIGNMENT_FACTS = `
   JOIN (SELECT DISTINCT Sicil FROM #AiAssignments) assigned ON assigned.Sicil = pd.Sicil;
   SELECT a.TaskId, COUNT(*) AS AssigneeCount,
     MAX(CASE WHEN a.Sicil = @sicil THEN 1 ELSE 0 END) AS IsOwnAssignee,
-    COUNT(resolved.Sicil) AS ResolvedAssigneeCount
+    COUNT(CASE WHEN permitted.IdentityVisible = 1 THEN resolved.Sicil END) AS ResolvedAssigneeCount
   INTO #AiAssignmentFacts
   FROM #AiAssignments a
+  JOIN #AiTasks visible ON visible.TaskId = a.TaskId
   LEFT JOIN #AiResolvedPeople resolved ON resolved.Sicil = a.Sicil
+  OUTER APPLY (SELECT CASE WHEN visible.IdentityBase = 1 OR a.Sicil = @sicil OR EXISTS (
+    SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.Sicil
+  ) THEN 1 ELSE 0 END AS IdentityVisible) permitted
   GROUP BY a.TaskId;
 `;
 
 /**
  * Sorumlu satırları: kimlik görünürlüğü anlık görüntüyle aynıdır. Kimliği
  * kapalı eş sorumlu yalnızca kullanıcının KENDİSİNİN de sorumlu olduğu görevde
- * ADIYLA döner (Sicil'i dönmez); aksi hâlde hiç dönmez, yalnızca sayıya girer.
+ * ADIYLA döner (Sicil'i dönmez); aksi hâlde hiç dönmez ve toplamları etkilemez.
  */
 const ASSIGNEE_ROWS = `
   DROP TABLE IF EXISTS #AiAssignees, #AiDirectory;
@@ -350,7 +357,8 @@ ${SCOPE_PROJECTS}
   INTO #AiProjectMatches
   FROM #AiScopeProjects v
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
-  WHERE CHARINDEX(@text, CONCAT(COALESCE(p.ProjectCode, N''), N' ', p.ProjectName) COLLATE Turkish_100_CI_AI) > 0;
+  WHERE (LEN(@text) = 0 AND @projectId IS NOT NULL)
+    OR CHARINDEX(@text, CONCAT(COALESCE(p.ProjectCode, N''), N' ', p.ProjectName) COLLATE Turkish_100_CI_AI) > 0;
 
   SELECT COUNT(*) AS Total FROM #AiProjectMatches;
 
@@ -555,9 +563,9 @@ ${SCOPE_PROJECTS}
   );
 
   SELECT TOP (10) b.BaselineId, b.Name, b.CreatedAt, b.IsPrimary,
-    CASE WHEN snapshotStats.RowCount >= @analysisMaxRows THEN NULL ELSE snapshotStats.RowCount END AS SnapshotCount
+    CASE WHEN snapshotStats.SnapshotRows >= @analysisMaxRows THEN NULL ELSE snapshotStats.SnapshotRows END AS SnapshotCount
   FROM dbo.MR_Baselines b
-  OUTER APPLY (SELECT COUNT(*) AS RowCount FROM (
+  OUTER APPLY (SELECT COUNT(*) AS SnapshotRows FROM (
     SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = b.BaselineId
   ) bounded) snapshotStats
   WHERE @projectFull = 1 AND b.ProjectId = @projectId
@@ -570,6 +578,8 @@ ${SCOPE_PROJECTS}
   IF (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present
     FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = @selectedBaseline) bounded) >= @analysisMaxRows
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  IF @selectedBaseline IS NOT NULL
+  BEGIN
 ${VISIBLE_TASKS}
 
   SELECT TOP (@maxRows) s.TaskId, s.PlannedStart AS BaselineStart, s.PlannedFinish AS BaselineFinish,
@@ -589,6 +599,13 @@ ${VISIBLE_TASKS}
       SELECT 1 FROM dbo.MR_TaskBaselineSnapshots s
       WHERE s.BaselineId = @selectedBaseline AND s.TaskId = t.TaskId
     );
+
+  END
+  ELSE
+  BEGIN
+    SELECT CAST(NULL AS uniqueidentifier) AS TaskId WHERE 1 = 0;
+    SELECT 0 AS AddedSinceBaseline;
+  END
 
   DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
 
@@ -647,10 +664,11 @@ ${VISIBLE_TASKS}
   WHERE s.UserSicil = @sicil AND s.IsActive = 1
   ORDER BY COALESCE(t.TargetFinish, t.PlannedFinish), s.TaskId;
 
-  SELECT COUNT(*) AS ActiveCount, COUNT(*) - COUNT(visible.TaskId) AS NotVisibleCount
-  FROM dbo.MR_TaskOutlookSubscriptions s
-  LEFT JOIN #AiTasks visible ON visible.TaskId = s.TaskId
-  WHERE s.UserSicil = @sicil AND s.IsActive = 1
-    AND (LEN(@taskIds) = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = s.TaskId));
+  SELECT CAST(CASE WHEN EXISTS (
+    SELECT 1 FROM dbo.MR_TaskOutlookSubscriptions s
+    WHERE s.UserSicil = @sicil AND s.IsActive = 1
+      AND (LEN(@taskIds) = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = s.TaskId))
+      AND NOT EXISTS (SELECT 1 FROM #AiTasks visible WHERE visible.TaskId = s.TaskId)
+  ) THEN 1 ELSE 0 END AS bit) AS HasNonVisibleSubscriptions;
 
   DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;

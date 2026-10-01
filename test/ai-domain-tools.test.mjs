@@ -551,8 +551,8 @@ test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim
   const stack = stackFor(t);
   const { result } = await callRotaTool(stack, AYSE, 'rota_outlook_status', {});
   assert.equal(result.ok, true);
-  assert.equal(result.data.activeSubscriptions, 3);
-  assert.equal(result.data.subscriptionsForTasksNoLongerVisible, 1);
+  assert.equal(result.data.activeSubscriptions, 2);
+  assert.equal(result.data.subscriptionsForTasksNoLongerVisible, true);
   assert.deepEqual([result.returnedCount, result.totalCount, result.complete], [2, null, false], 'görünmeyen abonelik varken dağılım ve toplam kesin değildir');
   assert.equal(result.data.byState, null);
   assert.equal(result.data.byStateComplete, false);
@@ -870,4 +870,101 @@ test('a cumulative-budget rejection cannot create an undisclosed ledger entry, i
   const exact = await run(bytes);
   assert.equal(JSON.parse(exact.message.content).evidenceId, 'R1');
   assert.deepEqual(exact.ledger.ids(), ['R1']);
+});
+
+test('partial unassigned searches and quality metrics do not depend on hidden assignments', async (t) => {
+  const stack = stackFor(t);
+  const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({
+    sicil: AYSE, isExecutive: true,
+    effective: { access: new Map([[PROJECTS.TEAM, { accessLevel: 'PARTIAL', reasons: ['EXECUTIVE_SCOPE'] }]]),
+      partialTaskIds: new Set([TASKS.TEAM_VISIBLE]) }
+  }) });
+  const executor = createToolExecutor({ context, ledger: createEvidenceLedger(), signal: new AbortController().signal });
+  stack.db.taskAssignees = [];
+  const read = async () => (await executor.runRound([
+    { id: 'search', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.TEAM, assignee: 'unassigned' }) },
+    { id: 'analytics', name: 'rota_task_analytics', arguments: JSON.stringify({ projectId: PROJECTS.TEAM, assignee: 'unassigned' }) },
+    { id: 'quality', name: 'rota_data_quality', arguments: JSON.stringify({ projectId: PROJECTS.TEAM }) }
+  ])).map((message) => JSON.parse(message.content));
+  const before = await read();
+  stack.db.taskAssignees.push({ TaskId: TASKS.TEAM_VISIBLE, Sicil: MEHMET });
+  const after = await read();
+  before.forEach((result, index) => {
+    assert.equal(result.ok, true);
+    assert.equal(after[index].ok, true);
+    assert.deepEqual(after[index].data, result.data);
+    assert.equal(after[index].totalCount, result.totalCount);
+  });
+  assert.equal(after[0].totalCount, 1);
+  stack.db.taskAssignees = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({ TaskId: TASKS.TEAM_VISIBLE, Sicil: index + 50000 }));
+  const hiddenFanout = await read();
+  hiddenFanout.forEach((result, index) => {
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.data, before[index].data);
+  });
+  assert.match(toolQueries.AI_TOOL_TASK_FACTS_SQL, /COUNT\(CASE WHEN permitted.IdentityVisible = 1 THEN resolved.Sicil END\)/);
+});
+
+test('Outlook hidden membership is boolean and all exact counts and evidence metadata stay visible-only', async (t) => {
+  const stack = stackFor(t);
+  const first = await callRotaTool(stack, AYSE, 'rota_outlook_status');
+  for (let index = 0; index < 7; index += 1) {
+    const id = `2a000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
+    stack.db.tasks.push({ TaskId: id, ProjectId: PROJECTS.HIDDEN, Title: 'Hidden membership', Status: 'planned' });
+    stack.db.taskOutlookSubscriptions.push({ TaskId: id, ProjectId: PROJECTS.HIDDEN, UserSicil: AYSE, IsActive: true });
+  }
+  const second = await callRotaTool(stack, AYSE, 'rota_outlook_status');
+  assert.deepEqual(second.result.data, first.result.data);
+  assert.deepEqual(second.ledger.summaries()[0].counts, first.ledger.summaries()[0].counts);
+  assert.equal(second.ledger.summaries()[0].label, first.ledger.summaries()[0].label);
+  const hidden = await callRotaTool(stack, AYSE, 'rota_outlook_status', { taskId: TASKS.HIDDEN });
+  const absent = await callRotaTool(stack, AYSE, 'rota_outlook_status', { taskId: '20000000-0000-4000-8000-00000000ffff' });
+  assert.deepEqual(hidden.result, absent.result);
+  assert.equal(hidden.result.error.code, 'NOT_FOUND');
+});
+
+test('no baseline returns deterministically without staging an oversized task population', async (t) => {
+  const tasks = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
+    TaskId: `2b000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`,
+    ProjectId: PROJECTS.FULL, Title: 'Task', Status: 'planned'
+  }));
+  const stack = stackFor(t, { tasks, baselines: [], taskBaselineSnapshots: [] });
+  const { result } = await callRotaTool(stack, ADMIN, 'rota_baseline_compare', { projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.baseline, null);
+  const sql = toolQueries.AI_TOOL_BASELINE_SQL;
+  assert.doesNotMatch(sql, /\bRowCount\b/);
+  assert.ok(sql.indexOf('IF @selectedBaseline IS NOT NULL') < sql.indexOf('INSERT #AiScopeTasks'));
+  assert.match(toolQueries.AI_TOOL_PROJECT_SEARCH_SQL, /LEN\(@text\) = 0 AND @projectId IS NOT NULL/);
+});
+
+test('project source and activity changes expose canonical types alongside display labels', async (t) => {
+  const stack = stackFor(t, { auditLog: [{ AuditId: 99, OccurredAt: '2026-09-29T08:00:00Z',
+    ActorSicil: AYSE, ActorDisplayName: 'Ayşe Yılmaz', ActionCode: 'UPDATE', EntityType: 'TASK',
+    EntityId: TASKS.OVERDUE, ProjectId: PROJECTS.FULL, CorrelationId: 'typed-changes',
+    BeforeJson: JSON.stringify({ Title: 'Alfa', Progress: 20, TargetFinish: '2026-10-01', IsMilestone: false }),
+    AfterJson: JSON.stringify({ Title: 'Alfa', Progress: 30, TargetFinish: '2026-10-15', IsMilestone: true }) }] });
+  const search = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Kısmi' });
+  assert.equal(search.result.data.matches[0].sourceType, 'corporate');
+  const detail = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.PARTIAL });
+  assert.equal(detail.result.data.project.sourceType, 'corporate');
+  const activity = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29' });
+  assert.deepEqual(activity.result.data.items[0].structuredChanges, [
+    { field: 'progress', before: 20, after: 30 }, { field: 'targetFinish', before: '2026-10-01', after: '2026-10-15' },
+    { field: 'milestone', before: false, after: true }
+  ]);
+});
+
+test('AI completion rates share product rounding and empty-set semantics', async (t) => {
+  const { selectTaskStats } = await import('../src/scheduling/metrics/index.js');
+  const tasks = [TASKS.OVERDUE, TASKS.DUE_SOON, TASKS.DONE].map((id) => ({ TaskId: id, ProjectId: PROJECTS.FULL,
+    Title: 'Completion', Status: id === TASKS.DONE ? 'done' : 'planned' }));
+  const stack = stackFor(t, { tasks });
+  const product = selectTaskStats(tasks.map((task) => ({ status: task.Status === 'done' ? 'done' : 'todo' })));
+  const analytics = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL });
+  const project = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.FULL });
+  assert.equal(analytics.result.data.totals.completionRatePercent, product.compRate);
+  assert.equal(project.result.data.visibleTasks.completionRatePercent, product.compRate);
+  const empty = await callRotaTool(stack, AYSE, 'rota_task_analytics', { text: 'No matching title' });
+  assert.equal(empty.result.data.totals.completionRatePercent, selectTaskStats([]).compRate);
 });

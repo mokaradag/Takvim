@@ -1,4 +1,5 @@
 import 'server-only';
+import { randomBytes } from 'node:crypto';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -31,11 +32,13 @@ function highlightPairs(highlights = []) {
 
 export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceOrdinal } = {}) {
   const entries = [];
+  const turnKey = randomBytes(8).toString('hex');
 
   return Object.freeze({
+    factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
     register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [] }) {
-      if (entries.length >= maxEntries) return null;
+      if (entries.length >= Math.min(maxEntries, EVIDENCE_LIMITS.maxEvidencePerAnswer)) return null;
       const id = evidenceIdFor(entries.length + 1);
       const summary = normalizeEvidenceSummary({
         id, kind, label, entity, generatedAt, complete, truncated, partial, counts, highlights: highlightPairs(highlights)

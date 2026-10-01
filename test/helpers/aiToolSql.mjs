@@ -28,7 +28,7 @@ function fold(value) {
 }
 
 function charindex(needle, haystack) {
-  return fold(haystack).indexOf(fold(needle)) + 1;
+  return fold(needle) ? fold(haystack).indexOf(fold(needle)) + 1 : 0;
 }
 
 function executiveOf(db, manager, employee) {
@@ -126,7 +126,7 @@ function factRow(db, scope, entry) {
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
     IsOwnAssignee: assignees.some((row) => row.Sicil === scope.sicil) ? 1 : 0,
     AssigneeCount: assignees.length,
-    ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null).length
+    ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null && (entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil))).length
   };
 }
 
@@ -199,7 +199,7 @@ function taskFacts(db, params) {
     const assignments = assigneesOf(db, task.TaskId);
     switch (params.assigneeMode) {
       case 'me': return assignments.some((row) => row.Sicil === scope.sicil);
-      case 'unassigned': return !assignments.some((row) => personName(db, row.Sicil) != null);
+      case 'unassigned': return !assignments.some((row) => personName(db, row.Sicil) != null && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
       case 'person': return assignments.some((row) => row.Sicil === Number(params.personSicil)
         && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
       default: return true;
@@ -264,7 +264,7 @@ function projectSearch(db, params) {
   const scope = scopeOf(db, params);
   const text = String(params.text || '');
   const matches = [...scope.projects.entries()].map(([id, access]) => ({ project: projectRow(db, id), access }))
-    .filter(({ project }) => charindex(text, `${project.ProjectCode || ''} ${project.ProjectName}`) > 0)
+    .filter(({ project }) => (!text && params.projectId) || charindex(text, `${project.ProjectCode || ''} ${project.ProjectName}`) > 0)
     .map(({ project, access }) => {
       const code = String(project.ProjectCode || '');
       const rank = code.toLocaleUpperCase('tr-TR') === text.toLocaleUpperCase('tr-TR') || fold(project.ProjectName) === fold(text) ? 0
@@ -448,7 +448,7 @@ function outlook(db, params) {
       LastFailureCode: row.LastFailureCode ?? null, AttemptCount: row.AttemptCount, CompletionSuspended: row.CompletionSuspended, UpdatedAt: null
     };
   });
-  return [visibleRows, [{ ActiveCount: counted.length, NotVisibleCount: counted.filter((row) => !scope.visible.has(upper(row.TaskId))).length }]];
+  return [visibleRows, [{ HasNonVisibleSubscriptions: counted.some((row) => !scope.visible.has(upper(row.TaskId))) }]];
 }
 
 const HANDLERS = Object.freeze({
@@ -476,9 +476,16 @@ export function runAiToolQuery(db, sqlText, params) {
     const scope = scopeOf(db, params);
     const cap = Number(params.analysisMaxRows);
     const tooLarge = () => { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; };
-    if (scope.visible.size >= cap) tooLarge();
+    const hasSelectedBaseline = marker[1] !== 'baseline' || db.baselines.some((row) => scope.projects.get(upper(params.projectId))?.AccessLevel === 'FULL'
+      && same(row.ProjectId, params.projectId) && (!params.baselineId || same(row.BaselineId, params.baselineId)));
+    if (hasSelectedBaseline && scope.visible.size >= cap) tooLarge();
     if (['task-facts', 'task-detail'].includes(marker[1])) {
-      const associations = db.taskAssignees.filter((row) => scope.visible.has(upper(row.TaskId)));
+      const ownTasks = new Set(db.taskAssignees.filter((row) => row.Sicil === scope.sicil).map((row) => upper(row.TaskId)));
+      const associations = db.taskAssignees.filter((row) => {
+        const visible = scope.visible.get(upper(row.TaskId));
+        return visible && (visible.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)
+          || ownTasks.has(upper(row.TaskId)));
+      });
       if (associations.length >= cap) tooLarge();
     }
     if (marker[1] === 'baseline') {

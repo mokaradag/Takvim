@@ -659,6 +659,12 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     claim.bindConversation(prepared.conversation.id);
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
+    let priorGrounded = false;
+    if (useTools && history.some((message) => message.role === 'assistant')) {
+      const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
+      priorGrounded = !priorEvidence?.ready || history.some((message) => priorEvidence.byMessage.has(message.id));
+      history = fallbackAssistantHistory(history, priorEvidence?.ready ? priorEvidence.byMessage : null, { conservative: !priorEvidence?.ready });
+    }
     if (!useTools && history.some((message) => message.role === 'assistant')) {
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
       const usableEvidence = priorEvidence?.ready ? priorEvidence.byMessage : null;
@@ -680,6 +686,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       userMessage: prepared.turn.message,
       replay: prepared.answer,
       modelMessages: context.messages,
+      priorGrounded,
       context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
     };
   } catch (error) {
@@ -719,8 +726,8 @@ function persistAnswer(turn, write) {
  * Yanıtın yazımı istemcinin iptaline bağlı değildir: model yanıtı tamamladıysa
  * bağlantı o anda kesilse de yanıt kaybolmaz (yazım yine süre sınırlıdır).
  */
-export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onText, onRevise = null }) {
-  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onText, onRevise });
+export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onText }) {
+  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onText });
   const result = await getAiGateway().streamChat({
     profile: turn.profile,
     messages: turn.modelMessages,
@@ -765,7 +772,7 @@ function evidenceSchemaMissing() {
  * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
-async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText, onRevise }) {
+async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText }) {
   const grounded = await getAiGateway().runToolSession({
     profile: turn.profile,
     signal,
@@ -774,10 +781,10 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText,
       return runGroundedTurn(session, {
         messages: turn.modelMessages,
         catalog: toolCatalogForModel(),
+        priorGrounded: turn.priorGrounded,
         context: createToolTurnContext({ sicil: turn.sicil }),
         onStatus,
-        onText,
-        onRevise
+        onText
       });
     }
   });

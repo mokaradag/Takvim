@@ -1,3 +1,4 @@
+import { taskCompletionRate } from './taskCompletionRate.js';
 import { addDays, diffDays, parseDate, today } from '../dates/index.js';
 
 let ganttDateRangeOverride = null;
@@ -152,6 +153,6 @@ export function selectTaskStats(tasks, referenceDate = today()) {
     todo,
     done,
     overdue,
-    compRate: tasks.length ? Math.round((done / tasks.length) * 100) : 0
+    compRate: taskCompletionRate(done, tasks.length)
   };
 }

@@ -108,7 +108,7 @@ const activitySearch = {
       kind: key.kind || '',
       page,
       pageSize
-    }, call.now));
+    }, call.now, { includeStructuredChanges: true }));
     if (report.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
     const items = report.items.map((item) => {
       const access = item.projectId ? projectAccess(scope, item.projectId) : null;
@@ -125,6 +125,11 @@ const activitySearch = {
         },
         project: { name: dataText(item.projectName, 160), ...(item.projectCode ? { code: dataText(item.projectCode, 60) } : {}) },
         ...clippedLines(item.changes, 6, { hideAssigneeNames }),
+        structuredChanges: (item.structuredChanges || []).slice(0, 6).map((change) => ({
+          field: change.field,
+          before: typeof change.before === 'string' ? dataText(change.before, 500) : change.before,
+          after: typeof change.after === 'string' ? dataText(change.after, 500) : change.after
+        })),
         ...(item.detailsLimited ? { detailsLimited: true } : {})
       };
     });

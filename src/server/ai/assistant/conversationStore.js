@@ -265,9 +265,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   try {
     result = await request.query(AI_CONVERSATION_EVIDENCE_SQL);
   } catch (error) {
-    const number = Number(error?.number ?? error?.originalError?.info?.number);
-    const message = String(error?.message || error?.originalError?.message || '');
-    if (number !== 208 || !/MR_AiMessageEvidence/i.test(message)) throw error;
+    if (!isMissingEvidenceSchema(error)) throw error;
     return { knownSicil: true, ready: false, byMessage: new Map() };
   }
   const [[state] = [], rows = []] = recordsetsOf(result);

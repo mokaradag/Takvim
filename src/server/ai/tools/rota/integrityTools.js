@@ -4,7 +4,7 @@ import { outlookFailureMessage, safeOutlookFailureCode } from '../../../../domai
 import { PLAN_HYGIENE_CHECKS } from '../../../../features/dashboard/planHealth.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { readOutlook } from './rotaToolStore.js';
-import { currentUserScope, dataText, ID_PROPERTY, LIMIT_PROPERTY, searchedScope } from './rotaToolSupport.js';
+import { currentUserScope, dataText, ID_PROPERTY, LIMIT_PROPERTY, notFound, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
 import { normalizeTaskFilters, sqlDay, sqlInstant } from './taskFacts.js';
 
@@ -67,11 +67,12 @@ const outlookStatus = {
     });
     const counts = items.reduce((sum, item) => ({ ...sum, [item.state]: (sum[item.state] || 0) + 1 }), {});
     const page = items.slice(0, limit);
-    const hiddenSubscriptions = Number(result.notVisibleCount || 0);
-    const distributionComplete = !result.truncated && hiddenSubscriptions === 0;
+    if (args.taskId && !items.length) throw notFound();
+    const hiddenSubscriptions = result.hasNonVisibleSubscriptions;
+    const distributionComplete = !result.truncated && !hiddenSubscriptions;
     return {
       data: {
-        activeSubscriptions: result.activeCount,
+        activeSubscriptions: result.truncated ? null : items.length,
         byState: distributionComplete ? counts : null,
         byStateComplete: distributionComplete,
         subscriptionsForTasksNoLongerVisible: hiddenSubscriptions,
@@ -82,11 +83,11 @@ const outlookStatus = {
       complete: page.length === items.length && distributionComplete,
       truncated: page.length < items.length || !distributionComplete,
       returnedCount: page.length,
-      // Liste yalnızca görünür görevlerin aboneliklerini kapsar; görünmeyenler ayrıca sayılır.
+      // Toplam yalnızca görünür görevlerin aboneliklerini kapsar.
       totalCount: distributionComplete ? items.length : null,
       nextCursor: null,
       evidence: {
-        label: `Outlook teslim durumu · ${result.activeCount} abonelik`,
+        label: 'Outlook teslim durumu',
         entity: { type: 'user', id: 'me', name: 'Outlook abonelikleriniz' },
         highlights: !distributionComplete
           ? ['Durum dağılımı: görünmeyen veya sınır dışı abonelikler nedeniyle gösterilmedi']

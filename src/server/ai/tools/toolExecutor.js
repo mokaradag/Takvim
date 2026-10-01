@@ -41,10 +41,10 @@ function errorEnvelope(tool, error) {
 }
 
 /** En büyük listeyi yarılayarak sonucu boyut sınırına indirir; olmuyorsa `null`. */
-function shrinkToFit(envelope, maxBytes) {
+function shrinkToFit(envelope, maxBytes, factScope) {
   let current = envelope;
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const text = JSON.stringify(current);
+    const text = JSON.stringify({ ...current, factScope });
     if (byteLength(text) <= maxBytes) return text;
     const data = current.data;
     let largest = null;
@@ -143,6 +143,7 @@ export function createToolExecutor({
       returnedCount: outcome.returnedCount ?? null,
       totalCount: outcome.totalCount ?? null,
       nextCursor: outcome.nextCursor ?? null,
+      subject: outcome.evidence?.entity?.name || outcome.evidence?.label || 'Rota',
       data: outcome.data
     };
   }
@@ -206,7 +207,7 @@ export function createToolExecutor({
         content = JSON.stringify(errorEnvelope(name, result.error));
       } else {
         const envelope = envelopeFor(plan.tool, result.outcome, result.generatedAt);
-        const text = shrinkToFit(envelope, limits.maxResultBytes - 64);
+        const text = shrinkToFit(envelope, limits.maxResultBytes - 64, ledger.factPrefix());
         if (!text) {
           code = TOOL_ERROR_CODES.RESULT_TOO_LARGE;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));

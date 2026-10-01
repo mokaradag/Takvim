@@ -103,7 +103,7 @@ export const TASK_ACTIVITY_SQL = `
   DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
 `;
 
-export async function readTaskActivityReport(executor, actor, input = {}, now) {
+export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false } = {}) {
   const query = normalizeActivityQuery(input, actor, now);
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
@@ -136,13 +136,13 @@ export async function readTaskActivityReport(executor, actor, input = {}, now) {
   }
   const items = [...groups.entries()].map(([id, rows]) => {
     const last = rows[rows.length - 1];
-    const change = taskActivityChanges(rows, people);
+    const change = taskActivityChanges(rows, people, { includeStructuredChanges });
     return { id, occurredAt: new Date(last.GroupOccurredAt).toISOString(), actorId: String(last.ActorSicil),
       actorName: last.ActorDisplayName || last.CurrentActorName || `Çalışan ${last.ActorSicil}`,
       projectId: canonicalActualId(last.ProjectId), projectName: change.projectName || last.ProjectName || 'Geçmiş proje',
       projectCode: change.projectCode || last.ProjectCode || '', taskId: canonicalActualId(last.EntityId),
       taskTitle: change.title || last.CurrentTitle || 'Geçmiş görev', taskAvailable: Boolean(last.CurrentTaskId),
-      changes: change.changes, detailsLimited: Number(last.EventCount) > rows.length, kind: last.Deleted ? 'deleted' : last.Created ? 'created' : last.Completed ? 'completed' : 'updated' };
+      changes: change.changes, ...(includeStructuredChanges ? { structuredChanges: change.structuredChanges } : {}), detailsLimited: Number(last.EventCount) > rows.length, kind: last.Deleted ? 'deleted' : last.Created ? 'created' : last.Completed ? 'completed' : 'updated' };
   });
   const summary = counts[0] || {};
   return { items, total: Number(summary.Total || 0), page: Number(summary.Page || 0), pageSize: query.pageSize,

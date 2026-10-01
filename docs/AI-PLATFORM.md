@@ -1654,17 +1654,21 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
 - **Kimlik ve yetki:** güvenilir Sicil; yetki bağlamı her araç kümesinde
   yeniden okunur ve sabit SQL görünürlüğü anlık görüntüyle aynı kurallarla
   hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz.
-- **Kanıt:** başarılı sonuçlar `R1`, `R2` … olur; yanıt `【R1】` ile atıf yapar.
-  Atıflar ikinci bir modele sorulmadan doğrulanır; uydurma atıf bir kez
-  düzeltilir, yine olmazsa sabit güvenli ileti kaydedilir (`grounding_failed`).
+- **Kanıt:** başarılı sonuçlar `R1`, `R2` … ve tur için rastgele olgu öneki
+  taşır. Model doğal dili yorumlar, türlü JSON iddiaları seçer. Sunucu kayıt
+  yolu/alan/değer eşitliğini kendi yetkili yükünde denetler ve etiket/değer ile
+  `【R1】` atfını çizer; düzyazı regexleri veya ikinci bir model hakem değildir.
+  Uydurma/değiştirilmiş iddia bir kez düzeltilir, yine olmazsa sabit güvenli
+  ileti kaydedilir (`grounding_failed`). Genel yanıt açık niyet bildirimi
+  gerektirir; kanıtlı geçmişin metaverisi takiplerde yeni kanıt gerektirir.
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
   kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
   sınırıyla yürür (`aiGateway.runToolSession`).
 - **Akış:** `accepted.rotaData`, `status` evreleri `tools` (+ veri alanı
   konusu) ve `verifying`, `revise` olayı, `done.assistantMessage.content` ve
-  `evidence`. Kanıta dayanan yanıt doğrulanmadan gösterilmez; genel yanıt
-  gerçek zamanlı akmaya devam eder.
+  `evidence`. Aşama 3 model protokolü tamponlanır; yalnızca doğrulanmış son
+  metin gösterilir. Araç bayrağı kapalı Aşama 2 genel akışı değişmez.
 - **Kalıcılık:** yalnızca atıf yapılan kanıtlar yanıtla aynı kısa işlemde
   `MR_AiMessageEvidence` (0018) tablosuna yazılır; iletiyle birlikte silinir.
 - **Gözlem:** araç çağrıları ve kanıtlı yanıt sonuçları içeriksiz ölçülür;

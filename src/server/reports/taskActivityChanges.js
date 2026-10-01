@@ -41,7 +41,16 @@ function normalized(value, column) {
   if (column.endsWith('Start') || column.endsWith('Finish')) return value ? String(value).slice(0, 10) : '';
   return String(value ?? '');
 }
-export function taskActivityChanges(events, people = new Map()) {
+function canonicalChangeValue(value, column) {
+  if (value == null || value === '') return null;
+  if (column === 'Status') return { planned: 'todo', 'not-started': 'todo', 'in-progress': 'in_progress', completed: 'done' }[value] || String(value);
+  if (column === 'Priority') return normalizePriorityId(value);
+  if (column === 'IsMilestone') return Boolean(value);
+  if (['Progress', 'PlannedDurationDays', 'RemainingDurationDays'].includes(column)) return Number.isFinite(Number(value)) ? Number(value) : null;
+  if (column.endsWith('Start') || column.endsWith('Finish')) return String(value).slice(0, 10);
+  return String(value).slice(0, 500);
+}
+export function taskActivityChanges(events, people = new Map(), { includeStructuredChanges = false } = {}) {
   const changes = new Map();
   let created = false, deleted = false, completed = false;
   let title = '', projectName = '', projectCode = '';
@@ -61,7 +70,7 @@ export function taskActivityChanges(events, people = new Map()) {
       if (newValue === undefined || oldValue === undefined) continue;
       const existing = changes.get(column);
       const startValue = existing ? existing.before : oldValue;
-      changes.set(column, { column, label, before: startValue, after: newValue });
+      changes.set(column, { column, name, label, before: startValue, after: newValue });
     }
     if (Array.isArray(before.assigneeIds) && Array.isArray(after.assigneeIds)) {
       const oldIds = new Set(before.assigneeIds.map(String)), newIds = new Set(after.assigneeIds.map(String));
@@ -72,11 +81,13 @@ export function taskActivityChanges(events, people = new Map()) {
     }
   }
   const lines = [];
+  const structuredChanges = [];
   if (created) lines.push('Yeni görev oluşturuldu');
   if (deleted) lines.push('Görev silindi');
   if (completed) lines.push('Tamamlandı');
   for (const change of changes.values()) {
     if (normalized(change.before, change.column) === normalized(change.after, change.column)) continue;
+    if (includeStructuredChanges) structuredChanges.push({ field: change.name, before: canonicalChangeValue(change.before, change.column), after: canonicalChangeValue(change.after, change.column) });
     if (change.column === 'RecurrenceRule') lines.push('Yineleme düzeni değiştirildi');
     else lines.push(`${change.label}: ${display(change.before, change.column)} → ${display(change.after, change.column)}`);
   }
@@ -85,6 +96,7 @@ export function taskActivityChanges(events, people = new Map()) {
     lines.push(`Sorumlu ${change.after ? 'eklendi' : 'çıkarıldı'}: ${people.get(id) || `Çalışan ${id}`}`);
   }
   return { title, projectName, projectCode, changes: lines.length ? lines : ['Görev güncellendi'],
+    ...(includeStructuredChanges ? { structuredChanges } : {}),
     kind: deleted ? 'deleted' : created ? 'created' : completed ? 'completed' : 'updated' };
 }
 export function auditAssigneeIds(events) {

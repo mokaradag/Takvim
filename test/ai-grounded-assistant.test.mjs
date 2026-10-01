@@ -18,6 +18,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
 import {
   assistantReadiness,
   captureConsole,
@@ -79,7 +80,7 @@ async function tempRegistry(t, document) {
 }
 
 /** Görev aramasını çağırıp sonuçtaki toplamı atıflı yazan iki adımlı model senaryosu. */
-function searchThenCite(args, answer = (result) => `Radar Modernizasyonu projesinde ${result.totalCount} görev görünüyor. 【${result.evidenceId}】`) {
+function searchThenCite(args, answer = (result) => evidenceReply(claimFor(result, 'totalCount'))) {
   return [
     { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: args }] },
     { type: 'script', respond: (call) => ({ type: 'answer', text: answer(toolResultsOf(call).at(-1)) }) }
@@ -130,7 +131,7 @@ test('özellik açıkken hazırlık Rota verisi yolunu kip kip bildirir; araç p
   const partial = await assistantReadiness();
   assert.deepEqual(partial.body.assistant.rotaData.modes, [{ id: 'standard', available: true }, { id: 'deep', available: false }]);
   assert.equal(partial.body.assistant.rotaData.available, true);
-  stack.provider.enqueue({ type: 'stream', text: 'Derin kipte genel yanıt.' }, { type: 'answer', text: 'Standart kipte araçlı yol.' });
+  stack.provider.enqueue({ type: 'stream', text: 'Derin kipte genel yanıt.' }, { type: 'answer', text: JSON.stringify({ kind: 'general', text: 'Standart kipte araçlı yol.' }) });
   const deep = await sendTurn({ turnId: randomUUID(), message: 'Derin soru', mode: 'deep' });
   assert.equal(stack.provider.calls[0].kind, 'stream', 'araç profili olmayan kip Aşama 2 yolunu kullanır');
   assert.equal(Object.hasOwn(eventsOf(deep, 'accepted')[0].data, 'rotaData'), false);
@@ -185,7 +186,7 @@ test('atıflı yanıt: araç sonucu kanıt olur, yanıt doğrulanıp tek parça 
   const turnId = randomUUID();
   const response = await sendTurn({ turnId, message: 'Radar projesinde kaç görev var?' });
   assert.equal(response.status, 200);
-  const expected = 'Radar Modernizasyonu projesinde 8 görev görünüyor. 【R1】';
+  const expected = '- “Radar Modernizasyonu” · Eşleşen kayıt: 8. 【R1】';
 
   // Sağlayıcı: araç kataloğu, kipin araç profili, sunucuya ait yönerge.
   const [first, second] = stack.provider.calls;
@@ -301,13 +302,13 @@ test('düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir v
       type: 'script',
       respond: (call) => {
         const [analytics] = toolResultsOf(call);
-        return { type: 'answer', text: `Projede ${analytics.data.totals.overdue} gecikmiş görev var. 【${analytics.evidenceId}】` };
+        return { type: 'answer', text: evidenceReply(claimFor(analytics, 'data.totals.overdue')) };
       }
     }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: 'Kaç gecikmiş görev var?' });
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, 'Projede 2 gecikmiş görev var. 【R1】');
+  assert.equal(done.assistantMessage.content, '- “Radar Modernizasyonu” · Özet / Gecikmiş görev: 2. 【R1】');
   assert.equal(response.text.includes('42 gecikmiş'), false);
   assert.deepEqual(done.assistantMessage.evidence.map((item) => [item.id, item.kind]), [['R1', 'task-analytics']]);
   assert.equal(stack.db.aiMessageEvidence.length, 1);
@@ -317,10 +318,10 @@ test('düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir v
 
 test('kısmi kapsam: sunucu kapsam notunu model metninden bağımsız olarak her zaman ekler', async (t) => {
   const stack = groundedStack(t);
-  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => `Kısmi Proje’de ${result.totalCount} görev listeleniyor. 【${result.evidenceId}】`));
+  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => evidenceReply(claimFor(result, 'totalCount'))));
   const response = await sendTurn({ turnId: randomUUID(), message: 'Kısmi projede kaç görev var?' });
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, `Kısmi Proje’de 2 görev listeleniyor. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
+  assert.equal(done.assistantMessage.content, `- “Kısmi Proje” · Eşleşen kayıt: 2. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
   // `complete` sayfalama bütünlüğüdür (yetkili kapsamda başka sayfa yok); kısmilik `partial` ile taşınır.
   assert.equal(done.assistantMessage.evidence[0].partial, true);
   assert.equal(done.assistantMessage.evidence[0].complete, true);
@@ -332,22 +333,22 @@ test('kısmi kapsam: sunucu kapsam notunu model metninden bağımsız olarak her
   assert.equal(JSON.stringify(seen).includes('Kısmi başkasının görevi'), false);
   assert.equal(aiTelemetrySnapshot().grounding.disclosed, 1);
 
-  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => `Görebildiğiniz görevler arasında ${result.totalCount} kayıt var. 【${result.evidenceId}】`));
+  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => evidenceReply(claimFor(result, 'totalCount'))));
   const explicit = await sendTurn({ turnId: randomUUID(), message: 'Tekrar sor' });
-  assert.equal(doneOf(explicit).assistantMessage.content, `Görebildiğiniz görevler arasında 2 kayıt var. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
+  assert.equal(doneOf(explicit).assistantMessage.content, `- “Kısmi Proje” · Eşleşen kayıt: 2. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
 });
 
-test('araç kullanılmayan genel yanıt gerçek zamanlı akar; kanıt işareti taşıyamaz', async (t) => {
+test('araçsız genel karar doğrulanır; yalnızca doğal dil yanıtı gösterilir ve kanıt uydurulamaz', async (t) => {
   const stack = groundedStack(t);
   const text = [
     'Kritik yol yöntemi, bir projedeki görevlerin bağımlılıklarına göre en uzun süren zinciri bulur.',
     'Bu zincirdeki bir gecikme projenin bitişini doğrudan geciktirir; diğer görevlerin ise bir miktar esnekliği vardır.',
     'Planı gözden geçirirken önce bağımlılıkları doğrulayın, sonra süreleri ve kaynak varsayımlarını kontrol edin.'
   ].join(' ');
-  stack.provider.enqueue({ type: 'answer', text });
+  stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ kind: 'general', text }) });
   const response = await sendTurn({ turnId: randomUUID(), message: 'Kritik yol yöntemini anlatır mısın?' });
   const deltas = eventsOf(response, 'delta').map((event) => event.data.text);
-  assert.ok(deltas.length >= 2, 'yanıt tek parça beklenmeden akar');
+  assert.equal(deltas.length, 1, 'yapılandırılmış karar doğrulanmadan gösterilmez');
   assert.equal(deltas.join(''), text);
   assert.equal(eventsOf(response, 'revise').length, 0);
   const done = doneOf(response);
@@ -384,11 +385,11 @@ test('genel sohbete düşüş önceki kanıta dayalı Rota yanıtını model ba�
 
   const fallback = stack.provider.calls.at(-1);
   assert.equal(fallback.kind, 'stream');
-  assert.equal(fallback.messages.some((message) => String(message.content).includes('Radar Modernizasyonu projesinde 8 görev')), false);
+  assert.equal(fallback.messages.some((message) => String(message.content).includes('Radar Modernizasyonu” · Eşleşen kayıt: 8')), false);
   assert.equal(fallback.messages.some((message) => String(message.content).includes('Önceki Rota verisi yanıtı güncel kanıt olmadığı için')), true);
 });
 
-test('canlı gösterilen ön söz araç çağrısına dönüşürse revise gönderilir ve taslak yanıttan çıkarılır', async (t) => {
+test('araç ön sözü ve iç protokol hiçbir zaman kullanıcıya gösterilmez', async (t) => {
   const stack = groundedStack(t);
   const preface = 'Elbette, bunun için önce Rota verisindeki portföy özetine bakmam gerekiyor; birkaç saniye sürebilir. '.repeat(2);
   stack.provider.enqueue(
@@ -397,23 +398,20 @@ test('canlı gösterilen ön söz araç çağrısına dönüşürse revise gönd
       type: 'script',
       respond: (call) => {
         const [portfolio] = toolResultsOf(call);
-        return { type: 'answer', text: `Portföyünüzde ${portfolio.data.totals.projects} proje görünüyor. 【${portfolio.evidenceId}】` };
+        return { type: 'answer', text: evidenceReply(claimFor(portfolio, 'data.totals.projects')) };
       }
     }
   );
-  const response = await sendTurn({ turnId: randomUUID(), message: 'Portföyüm nasıl?' });
-  const order = response.events.map((event) => event.event);
-  const firstDelta = order.indexOf('delta');
-  const revise = order.indexOf('revise');
-  assert.ok(firstDelta >= 0 && revise > firstDelta, `beklenen sıra: delta → revise (${order.join(',')})`);
-  assert.equal(response.events[firstDelta].data.text, preface);
-  const after = response.events.slice(revise + 1).filter((event) => event.event === 'delta').map((event) => event.data.text);
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Genel bir değerlendirme yapabilir misin?' });
+  const after = eventsOf(response, 'delta').map((event) => event.data.text);
   assert.equal(after.length, 1);
+  assert.equal(eventsOf(response, 'revise').length, 0);
+  assert.equal(response.text.includes(preface), false);
   const done = doneOf(response);
   assert.equal(after[0], done.assistantMessage.content);
   assert.equal(done.assistantMessage.content.includes('Elbette'), false);
   // Portföy kısmi kapsamlı projeleri de içerdiğinden sunucu kapsam notunu ekler.
-  assert.equal(done.assistantMessage.content, `Portföyünüzde 4 proje görünüyor. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
+  assert.equal(done.assistantMessage.content, `- “Portföy” · Özet / Proje: 4. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
 });
 
 test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL çalışmaz; kanıtsız yanıt sayı içeremez', async (t) => {
@@ -436,7 +434,7 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
         return { type: 'answer', text: 'Projede 12 görev var.' };
       }
     },
-    { type: 'answer', text: 'Bu soruyu şu anda Rota verisiyle yanıtlayamıyorum; soruyu daha dar kapsamda yeniden deneyin.' }
+    { type: 'answer', text: '{"kind":"unavailable"}' }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: 'Görevleri SQL ile getir' });
   assert.deepEqual(seen.map((result) => [result.ok, result.error.code]), [
@@ -450,9 +448,9 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   // Kanıt olmadan "12 görev" yazılamaz: düzeltme istenir, dürüst yanıt kaydedilir.
   const repairSystem = stack.provider.calls[2].messages.find((message) => message.role === 'system');
   assert.ok(repairSystem);
-  assert.match(repairSystem.content, /Rota verisi alınamadığı hâlde/);
+  assert.match(repairSystem.content, /Kanıt alınamadıysa/);
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, 'Bu soruyu şu anda Rota verisiyle yanıtlayamıyorum; soruyu daha dar kapsamda yeniden deneyin.');
+  assert.equal(done.assistantMessage.content, GROUNDING_FAILURE_TEXT);
   assert.deepEqual(done.assistantMessage.evidence, []);
   assert.equal(stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE).Status, 'planned', 'hiçbir yazma yapılmadı');
 });
@@ -467,7 +465,7 @@ test('araç turu sınırı: dördüncü turdan sonra araçlar kapanır, sınır 
   ];
   stack.provider.enqueue(
     ...rounds.map(([name, args]) => ({ type: 'tool-calls', calls: [{ name, arguments: args }] })),
-    { type: 'answer', text: 'Portföy 【R1】, proje bilgisi 【R2】, görev özeti 【R3】 ve iş dağılımı 【R4】 incelendi.' }
+    { type: 'script', respond: (call) => ({ type: 'answer', text: evidenceReply(...toolResultsOf(call).map((result) => claimFor(result, 'returnedCount'))) }) }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: 'Her şeyi incele' });
   assert.equal(stack.provider.calls.length, 5);
@@ -489,13 +487,13 @@ test('yalnızca atfedilen kanıtlar kaydedilir; kanıt kimlikleri çağrı sıra
       type: 'script',
       respond: (call) => {
         const [, search] = toolResultsOf(call);
-        return { type: 'answer', text: `Radar Modernizasyonu projesinde ${search.totalCount} görev var. 【${search.evidenceId}】` };
+        return { type: 'answer', text: evidenceReply(claimFor(search, 'totalCount')) };
       }
     }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: 'Radar görevleri' });
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, 'Radar Modernizasyonu projesinde 8 görev var. 【R2】');
+  assert.equal(done.assistantMessage.content, '- “Radar Modernizasyonu” · Eşleşen kayıt: 8. 【R2】');
   assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R2']);
   assert.deepEqual(stack.db.aiMessageEvidence.map((row) => [row.Ordinal, row.ToolName]), [[2, 'rota_task_search']]);
 });
@@ -509,7 +507,7 @@ test('görev verisindeki talimat ve atıf işaretleri modele veri olarak, nötrl
       type: 'script',
       respond: (call) => {
         content = call.messages.find((message) => message.role === 'tool').content;
-        return { type: 'answer', text: 'Araçtaki metin veri olarak değerlendirildi. 【R1】' };
+        return { type: 'answer', text: evidenceReply(claimFor(toolResultsOf(call)[0], 'data.task.status')) };
       }
     }
   );
@@ -532,9 +530,45 @@ test('önceki yanıtın atıfları sonraki turun geçmişinden çıkarılır; es
   assert.equal(second.status, 200);
   const history = stack.provider.calls[2].messages;
   const previous = history.find((message) => message.role === 'assistant');
-  assert.equal(previous.content, 'Radar Modernizasyonu projesinde 8 görev görünüyor.');
+  assert.match(previous.content, /Önceki Rota verisi yanıtı güncel kanıt olmadığı için/);
   assert.equal(history.filter((message) => message.role !== 'system').some((message) => message.content.includes('【')), false);
   assert.deepEqual(doneOf(second).assistantMessage.evidence.map((item) => item.id), ['R1']);
+});
+
+test('kanıtlı geçmişte uzun ve tanınmayan takip ifadesi genel niyetle kanıtı atlayamaz', async (t) => {
+  const stack = groundedStack(t);
+  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.FULL }));
+  const first = await sendTurn({ turnId: randomUUID(), message: 'Radar projesinde kaç görev var?' });
+  const conversationId = doneOf(first).conversation.id;
+  stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ kind: 'general', text: 'Alfa kesin olarak bitti.' }) },
+    ...searchThenCite({ projectId: PROJECTS.FULL }));
+  const second = await sendTurn({ conversationId, expectedSequence: 2, turnId: randomUUID(), message: 'Peki o bahsettiğin şeyin ayrıntısını bir de başka türlü açabilir misin?' });
+  assert.equal(doneOf(second).assistantMessage.finishReason, 'stop');
+  assert.deepEqual(doneOf(second).assistantMessage.evidence.map((item) => item.id), ['R1']);
+  assert.equal(second.text.includes('Alfa kesin olarak bitti.'), false);
+  assert.equal(stack.provider.calls[3].toolChoice, 'auto');
+});
+
+test('soru sözcüklerinden bağımsız arama sonucu ayrıntı ve analiz araçlarını açık tutar', async (t) => {
+  const stack = groundedStack(t);
+  stack.provider.enqueue(
+    { type: 'tool-calls', calls: [{ name: 'rota_project_search', arguments: { text: 'Radar' } }] },
+    { type: 'script', respond: (call) => {
+      assert.ok(call.tools.some((tool) => tool.name === 'rota_project_detail'));
+      assert.ok(call.tools.some((tool) => tool.name === 'rota_task_analytics'));
+      const [result] = toolResultsOf(call);
+      return { type: 'tool-calls', calls: [{ name: 'rota_project_detail', arguments: { projectId: result.data.matches[0].projectId } }] };
+    } },
+    { type: 'script', respond: (call) => {
+      const result = toolResultsOf(call).at(-1);
+      return { type: 'answer', text: evidenceReply(claimFor(result, 'data.visibleTasks.total')) };
+    } }
+  );
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Radar’ın ne durumda olduğunu bir açar mısın?' });
+  const done = doneOf(response);
+  assert.equal(done.assistantMessage.finishReason, 'stop');
+  assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R2']);
+  assert.equal(stack.provider.calls.length, 3);
 });
 
 test('başka Sicil kanıtlı konuşmayı okuyamaz; kanıt yalnızca sahibinin konuşmasıyla döner', async (t) => {
@@ -584,7 +618,7 @@ test('gözlem kayıtları içerik taşımaz: soru, yanıt, görev adı, bağıms
   const question = 'Gizli-soru-7Q3 Radar test planı nerede?';
   stack.provider.enqueue(
     { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { text: 'Radar test' } }, { name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }] },
-    { type: 'answer', text: 'Radar test planı görevi gecikmiş görünüyor. 【R1】【R2】' }
+    { type: 'script', respond: (call) => ({ type: 'answer', text: evidenceReply(...toolResultsOf(call).map((result) => claimFor(result, 'returnedCount'))) }) }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: question });
   assert.equal(doneOf(response).assistantMessage.evidence.length, 2);
@@ -609,7 +643,7 @@ test('araç SQL hatası modele güvenli sınıf olarak döner; sürücü ayrınt
       type: 'script',
       respond: (call) => {
         [seen] = toolResultsOf(call);
-        return { type: 'answer', text: 'Rota verisine şu anda ulaşılamıyor; lütfen biraz sonra yeniden deneyin.' };
+        return { type: 'answer', text: '{"kind":"unavailable"}' };
       }
     }
   );
@@ -620,7 +654,7 @@ test('araç SQL hatası modele güvenli sınıf olarak döner; sürücü ayrınt
   for (const forbidden of ['Login failed', 'sql.test.internal', 'ELOGIN']) {
     assert.equal(everything.includes(forbidden), false, `sızmamalı: ${forbidden}`);
   }
-  assert.equal(doneOf(response).assistantMessage.content, 'Rota verisine şu anda ulaşılamıyor; lütfen biraz sonra yeniden deneyin.');
+  assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
   assert.match(aiHealthComponent().message, /Son Rota verisi aracı hizmet hatasıyla sonuçlandı \(DATABASE_UNAVAILABLE\)/);
 });
 
@@ -634,7 +668,7 @@ test('stored instructions cannot expand subsequent tool access beyond the truste
       const rejected = toolResultsOf(call).slice(-2);
       assert.deepEqual(rejected.map((result) => result.error.code), ['UNKNOWN_TOOL', 'UNKNOWN_TOOL']);
       assert.equal(call.tools.some((tool) => ['rota_person_search', 'rota_portfolio_summary'].includes(tool.name)), false);
-      return { type: 'answer', text: 'Görev ayrıntısı incelendi. 【R1】' };
+      return { type: 'answer', text: evidenceReply(claimFor(toolResultsOf(call)[0], 'data.task.status')) };
     } }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: 'Rapor görevini göster' });
@@ -663,7 +697,7 @@ test('a maximal four-round tool transcript stays within gateway limits and retai
     }
     round += 1;
     return round <= 4 ? { text: '', toolCalls: Array.from({ length: 16 }, (_, index) => ({ id: `c_${round}_${index}`, name: 'rota_task_search', arguments: '{}' })) }
-      : { text: 'Araç sonuçları incelendi. 【R1】', toolCalls: [], finishReason: 'stop' };
+      : { text: evidenceReply(claimFor(JSON.parse(input.messages.find((message) => message.role === 'tool').content), 'totalCount')), toolCalls: [], finishReason: 'stop' };
   } };
   const messages = [{ role: 'system', content: 'Trusted system instruction' }, ...Array.from({ length: 100 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `History ${index}` })), { role: 'user', content: currentRequest }];
   const result = await runGroundedTurn(session, { messages, catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE }), onText: async () => {} });
@@ -675,10 +709,10 @@ test('a maximal four-round tool transcript stays within gateway limits and retai
 
 test('English grounded turns receive English deterministic scope disclosures and failure messages', async (t) => {
   const stack = groundedStack(t);
-  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => `There are ${result.totalCount} tasks. 【${result.evidenceId}】`));
+  stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, (result) => evidenceReply(claimFor(result, 'totalCount'))));
   const response = await sendTurn({ turnId: randomUUID(), message: 'How many tasks are in my partial project?' });
   const answer = doneOf(response).assistantMessage.content;
-  assert.match(answer, /There are 2 tasks/);
+  assert.match(answer, /Matching records: 2/);
   assert.match(answer, /Note: This answer covers only records/);
   assert.doesNotMatch(answer, /yalnızca|doğrulanamadı/);
   assert.match(stack.provider.calls[0].messages[0].content, /Reply in English/);

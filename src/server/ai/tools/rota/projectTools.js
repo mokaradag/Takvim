@@ -1,4 +1,5 @@
 import 'server-only';
+import { taskCompletionRate } from '../../../../scheduling/metrics/taskCompletionRate.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
@@ -53,6 +54,7 @@ const projectSearch = {
         name: dataText(row.ProjectName, 160),
         ...(row.ProjectCode ? { code: dataText(row.ProjectCode, 60) } : {}),
         source: sourceLabel(row.SourceType),
+        sourceType: row.SourceType === 'CORPORATE' ? 'corporate' : 'manual',
         access: { level: access.level, label: access.label },
         ...(row.LeadName ? { lead: dataText(row.LeadName, 120) } : {}),
         exactMatch: Number(row.MatchRank) === 0
@@ -101,7 +103,7 @@ function taskTotals(row) {
     openMilestones: Number(row?.OpenMilestoneCount || 0),
     nextTargetFinish: sqlDay(row?.NextTargetFinish),
     lastTaskUpdateAt: sqlInstant(row?.LastTaskUpdateAt),
-    completionRatePercent: total ? Math.round((done / total) * 1000) / 10 : null
+    completionRatePercent: taskCompletionRate(done, total)
   };
 }
 
@@ -145,6 +147,7 @@ const projectDetail = {
           name,
           ...(row.ProjectCode ? { code: dataText(row.ProjectCode, 60) } : {}),
           source: sourceLabel(row.SourceType),
+          sourceType: row.SourceType === 'CORPORATE' ? 'corporate' : 'manual',
           ...(row.ProjectTypeName ? { type: dataText(row.ProjectTypeName, 120) } : {}),
           lead: row.LeadName ? dataText(row.LeadName, 120) : null,
           calendar: row.CalendarName ? dataText(row.CalendarName, 120) : null,

@@ -4,12 +4,10 @@ import {
   analyzeDirectAnswer,
   analyzeGroundedAnswer,
   analyzeUngroundedAnswer,
-  containsCitationMarker,
   GROUNDING_FAILED_FINISH_REASON,
   groundingFailureText,
   replyLocale,
   groundingRepairInstruction,
-  normalizeCitations,
   requiresRotaEvidence,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
@@ -17,6 +15,7 @@ import { recordGroundedAnswer } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool } from '../tools/toolRegistry.js';
+import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 
 /**
@@ -27,22 +26,13 @@ import { TOOL_LIMITS } from '../tools/toolLimits.js';
  *    yanıtlar).
  * 2. Araçlar sunucuda, yetkiyle ve sınırlarla çalışır; başarılı sonuçlar
  *    kanıt olur (R1, R2 …).
- * 3. Son yanıt BELİRLENİMCİ olarak doğrulanır: atıflar bu turun kanıtlarına
- *    işaret etmeli, kanıta dayanan bloklar atıflı olmalı; kanıt yokken atıf
- *    kullanılamaz. İkinci bir dil modeli yargıç olarak kullanılmaz.
+ * 3. Son iddiaların tur, kayıt, alan ve türlü değeri sunucuda doğrulanır.
+ *    İkinci bir dil modeli yargıç olarak kullanılmaz.
  * 4. Doğrulanamayan yanıt BİR kez düzeltilir; yine doğrulanamazsa kullanıcı
  *    sabit güvenli iletiyi görür (uydurma kanıtlı yanıt hiçbir zaman gösterilmez).
  *
- * Akış dürüsttür: kanıta dayanan yanıt doğrulanmadan gösterilmez ve tek
- * parça gönderilir (sahte karakter akışı yoktur). Araç kullanmayan genel
- * yanıt, ilk satırlar araç çağrısı ya da atıf işareti taşımadığı anlaşıldıktan
- * sonra gerçek zamanlı akar; sonradan araç çağrısı ya da düzeltme gerekirse
- * tarayıcıya `revise` gönderilir ve gösterilen taslak kaldırılır.
+ * Yapılandırılmış son karar doğrulanmadan hiçbir model metni gösterilmez.
  */
-
-/** Genel yanıtın canlı akışa açılması için gereken en küçük taslak. */
-export const LIVE_RELEASE_CHARS = 160;
-const LIVE_RELEASE_LINES = 2;
 
 function roundLimitNote() {
   return 'SUNUCU DOĞRULAMASI: Araç çağrı sınırına ulaşıldı. Yeni araç çağırma; yalnızca eldeki kanıtlarla yanıtla ve eksik kalan kısmı açıkça belirt.';
@@ -70,33 +60,34 @@ function safeToolCallsForTranscript(toolCalls, toolMessages) {
   });
 }
 
-/** This plan reads trusted user messages only, never tool-result text. */
-export function toolIntentAllowlist(text, catalog, priorUserMessages = []) {
-  const source = String(text || '');
-  const context = source.length < 80 ? `${priorUserMessages.slice(-1).join(' ')} ${source}` : source;
-  if (/(?:her şeyi|tüm alanları|everything|all domains)/iu.test(source)) return new Set(catalog.map((tool) => tool.name));
+const TOOL_FOLLOW_UPS = Object.freeze({
+  rota_task_search: ['rota_task_detail', 'rota_task_analytics', 'rota_project_search'],
+  rota_project_search: ['rota_project_detail', 'rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_wbs_inspect', 'rota_calendar_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_data_quality'],
+  rota_person_search: ['rota_workload_summary', 'rota_task_search', 'rota_task_analytics'],
+  rota_task_detail: ['rota_task_search', 'rota_task_analytics', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_activity_search'],
+  rota_portfolio_summary: ['rota_project_search', 'rota_project_detail', 'rota_task_analytics', 'rota_wbs_inspect'],
+  rota_workload_summary: ['rota_person_search', 'rota_task_search', 'rota_task_analytics'],
+  rota_baseline_compare: ['rota_project_search', 'rota_project_detail'],
+  rota_dependency_inspect: ['rota_project_search', 'rota_task_detail'],
+  rota_recurrence_inspect: ['rota_task_search', 'rota_task_detail'],
+  rota_calendar_inspect: ['rota_project_search'],
+  rota_activity_search: ['rota_task_search', 'rota_task_detail'],
+  rota_schedule_requests: ['rota_task_detail'], rota_assignment_requests: ['rota_task_detail'],
+  rota_outlook_status: ['rota_task_search', 'rota_task_detail'], rota_data_quality: ['rota_task_search']
+});
+
+export function toolsForInitialCalls(calls, catalog) {
+  const registered = new Set(catalog.map((tool) => tool.name));
   const names = new Set();
-  const add = (...tools) => tools.forEach((tool) => names.add(tool));
-  if (/(?:görev|task|termin|deadline|ilerleme|progress|gecik|overdue)/iu.test(context)) add('rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_project_search');
-  if (/(?:proje|project)/iu.test(context)) add('rota_project_search', 'rota_project_detail', 'rota_task_search', 'rota_task_detail', 'rota_task_analytics');
-  if (/(?:portföy|portfolio|hangi projede|en çok|most overdue)/iu.test(context)) add('rota_portfolio_summary', 'rota_project_search', 'rota_project_detail', 'rota_task_analytics');
-  if (/(?:iş yük|workload|personel|person|kişi|people|çalışan|employee)/iu.test(context)) add('rota_workload_summary', 'rota_person_search', 'rota_task_search', 'rota_task_analytics');
-  if (/(?:sorumlu|assignee|owner|kim|who)/iu.test(context)) add('rota_person_search', 'rota_task_search', 'rota_task_detail', 'rota_workload_summary');
-  if (/(?:wbs|iş dağılım)/iu.test(context)) add('rota_wbs_inspect', 'rota_project_search', 'rota_task_search');
-  if (/(?:hareket|activity|kim ne yaptı|who did what)/iu.test(context)) add('rota_activity_search', 'rota_task_search');
-  if (/(?:tarih değişikli|schedule request)/iu.test(context)) add('rota_schedule_requests', 'rota_task_detail');
-  if (/(?:atama|assignment)/iu.test(context)) add('rota_assignment_requests', 'rota_task_detail');
-  if (/(?:bildirim|notification)/iu.test(context)) add('rota_notifications');
-  if (/(?:baz plan|baseline)/iu.test(context)) add('rota_baseline_compare', 'rota_project_search', 'rota_project_detail');
-  if (/(?:bağımlılık|dependenc)/iu.test(context)) add('rota_dependency_inspect', 'rota_project_search', 'rota_task_detail');
-  if (/(?:tekrar|recurren)/iu.test(context)) add('rota_recurrence_inspect', 'rota_task_search', 'rota_task_detail');
-  if (/(?:takvim|calendar|çalışma günü|working day)/iu.test(context)) add('rota_calendar_inspect', 'rota_project_search');
-  if (/outlook/iu.test(context)) add('rota_outlook_status', 'rota_task_search');
-  if (/(?:veri kalite|data quality)/iu.test(context)) add('rota_data_quality', 'rota_project_search');
+  for (const call of calls) {
+    if (!registered.has(call.name)) continue;
+    names.add(call.name);
+    for (const name of TOOL_FOLLOW_UPS[call.name] || []) if (registered.has(name)) names.add(name);
+  }
   return names;
 }
 
-/** Keep system/current request and complete tool exchanges; drop oldest history first. */
+/** Sistem ve güncel isteği korur; önce eski geçmişi, sonra tam araç kümelerini atar. */
 function boundTranscript(transcript) {
   while (transcript.length > 96) {
     const currentUserIndex = transcript.findLastIndex((message) => message.role === 'user');
@@ -111,14 +102,22 @@ function boundTranscript(transcript) {
 }
 
 function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidenceRequired, locale }) {
-  const normalized = normalizeCitations(text);
+  const normalized = text;
   if (evidenceIds.length) return {
     normalized,
     kind: 'grounded',
     ...analyzeGroundedAnswer(normalized, { evidenceIds, evidencePayloads, locale })
   };
+  const response = parseEvidenceResponse(text);
+  if (toolsAttempted && response?.kind === 'unavailable' && Object.keys(response).length === 1) {
+    const safe = groundingFailureText(locale);
+    return { normalized: safe, kind: 'ungrounded', ...analyzeUngroundedAnswer(safe) };
+  }
   if (toolsAttempted) return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized, { evidenceRequired }) };
-  return { normalized, kind: 'direct', ...analyzeDirectAnswer(normalized, { evidenceRequired }) };
+  if (response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
+    return { normalized: response.text, kind: 'direct', ...analyzeDirectAnswer(response.text, { evidenceRequired }) };
+  }
+  return { normalized, kind: 'direct', ok: false, citedIds: [], issues: [{ code: 'ANSWER_INTENT_REQUIRED' }] };
 }
 
 export async function runGroundedTurn(session, {
@@ -126,9 +125,9 @@ export async function runGroundedTurn(session, {
   catalog,
   context,
   limits = TOOL_LIMITS,
+  priorGrounded = false,
   onStatus = null,
-  onText,
-  onRevise = null
+  onText
 }) {
   const ledger = createEvidenceLedger();
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
@@ -145,29 +144,17 @@ export async function runGroundedTurn(session, {
   const userMessages = messages.filter((message) => message.role === 'user');
   const currentUser = userMessages.at(-1);
   const evidenceRequired = requiresRotaEvidence(currentUser?.content, {
-    priorUserMessages: userMessages.slice(0, -1).map((message) => message.content)
+    priorGrounded
   });
-  const priorUsers = userMessages.slice(0, -1).map((message) => message.content);
   const locale = replyLocale(currentUser?.content);
-  const intentTools = toolIntentAllowlist(currentUser?.content, catalog, priorUsers);
   let toolRounds = 0;
   let modelRounds = 0;
   let toolsAttempted = false;
   let repairsLeft = limits.maxRepairRounds;
   let repaired = false;
   let allowTools = true;
-  let liveAllowed = !evidenceRequired;
-  let streamed = false;
-
-  const revise = () => {
-    if (!streamed) return;
-    streamed = false;
-    onRevise?.();
-  };
-
   for (;;) {
     const canCallTools = allowTools && toolRounds < limits.maxToolRounds;
-    const live = { buffer: '', released: false, sawToolCall: false };
     modelRounds += 1;
     boundTranscript(transcript);
     const result = await session.round({
@@ -177,43 +164,25 @@ export async function runGroundedTurn(session, {
       onEvent: async (event) => {
         if (event.type === 'thinking') status(ASSISTANT_STREAM_PHASES.THINKING);
         else if (event.type === 'generating') status(ASSISTANT_STREAM_PHASES.GENERATING);
-        else if (event.type === 'tool_call_started' && canCallTools) {
-          live.sawToolCall = true;
-          // Canlı gösterilen ön söz bir araç çağrısının girişiydi; kaldırılır.
-          if (live.released) revise();
-          liveAllowed = false;
-        } else if (event.type === 'text') {
-          if (!liveAllowed || live.sawToolCall) return;
-          if (live.released) {
-            await onText(event.text);
-            return;
-          }
-          live.buffer += event.text;
-          const lines = (live.buffer.match(/\n/g) || []).length;
-          if (!containsCitationMarker(live.buffer) && (live.buffer.length >= LIVE_RELEASE_CHARS || lines >= LIVE_RELEASE_LINES)) {
-            live.released = true;
-            streamed = true;
-            await onText(live.buffer);
-          }
-        }
       }
     });
 
     if (result.toolCalls.length && canCallTools) {
-      revise();
-      liveAllowed = false;
       toolsAttempted = true;
       toolRounds += 1;
+      if (!permittedTools) {
+        const selected = toolsForInitialCalls(result.toolCalls.slice(0, limits.maxCallsPerRound), catalog);
+        if (selected.size) permittedTools = selected;
+      }
       const toolMessages = await executor.runRound(result.toolCalls);
       transcript.push({ role: 'assistant', content: result.text || '', toolCalls: safeToolCallsForTranscript(result.toolCalls, toolMessages) });
       transcript.push(...toolMessages);
-      if (ledger.size() > 0) permittedTools = intentTools;
       if (toolRounds >= limits.maxToolRounds) appendServerInstruction(transcript, roundLimitNote());
       continue;
     }
 
     const text = String(result.text || '').trim();
-    if (!streamed) status(ASSISTANT_STREAM_PHASES.VERIFYING);
+    status(ASSISTANT_STREAM_PHASES.VERIFYING);
     const verdict = analyze(text, {
       evidenceIds: ledger.ids(),
       evidencePayloads: ledger.payloads(),
@@ -223,26 +192,24 @@ export async function runGroundedTurn(session, {
     });
     if (verdict.ok) {
       const cited = ledger.summaries(verdict.citedIds);
-      const disclosure = verdict.kind === 'grounded' ? withScopeDisclosure(verdict.normalized, cited, locale) : { text, disclosed: false };
-      const finalText = verdict.kind === 'grounded' ? disclosure.text : text;
-      if (!streamed) await onText(finalText);
-      const outcome = verdict.kind === 'grounded' ? 'grounded' : 'direct';
+      const disclosure = verdict.kind === 'grounded' ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
+      const finalText = verdict.kind === 'grounded' ? disclosure.text : verdict.normalized;
+      await onText(finalText);
+      const outcome = verdict.kind === 'grounded' ? 'grounded' : verdict.kind === 'ungrounded' ? 'failed' : 'direct';
       recordGroundedAnswer({ outcome, rounds: modelRounds, evidence: cited.length, repaired, disclosed: disclosure.disclosed });
       return {
         text: finalText,
-        finishReason: result.finishReason || 'stop',
+        finishReason: outcome === 'failed' ? GROUNDING_FAILED_FINISH_REASON : result.finishReason || 'stop',
         outcome,
         evidence: cited,
         evidenceRows: ledger.persistable(verdict.citedIds),
-        streamedLive: streamed,
+        streamedLive: false,
         repaired,
         disclosed: disclosure.disclosed,
         stats: { modelRounds, toolRounds, ...executor.stats(), ...context.stats() }
       };
     }
 
-    revise();
-    liveAllowed = false;
     if (repairsLeft > 0) {
       repairsLeft -= 1;
       repaired = true;

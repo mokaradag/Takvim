@@ -185,6 +185,7 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
     ['src/server/assignment/assignmentCoordinationQueries.js', ['readCoordinationPage']],
     ['src/server/notifications/notificationInboxQueries.js', ['isMissingNotificationInboxSchema', 'readNotificationInbox']],
     ['src/server/directory/directorySearch.js', ['searchCorporateDirectory']],
+    ['src/scheduling/metrics/taskCompletionRate.js', ['taskCompletionRate']],
     ['src/scheduling/recurrence/index.js', ['describeRecurrenceRule']],
     ['src/scheduling/calendars/index.js', ['countWorkingDays']],
     ['src/features/dashboard/planHealth.js', ['PLAN_HYGIENE_CHECKS']],

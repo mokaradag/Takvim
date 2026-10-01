@@ -177,7 +177,6 @@ export async function readOutlook(executor, scope, { taskIds = [], maxRows }) {
   return {
     subscriptions: rows,
     truncated,
-    activeCount: Number(counts?.ActiveCount || 0),
-    notVisibleCount: Number(counts?.NotVisibleCount || 0)
+    hasNonVisibleSubscriptions: Boolean(counts?.HasNonVisibleSubscriptions)
   };
 }

@@ -1,4 +1,5 @@
 import 'server-only';
+import { taskCompletionRate } from '../../../../scheduling/metrics/taskCompletionRate.js';
 import { createHash } from 'node:crypto';
 import { PRIORITIES, normalizePriorityId } from '../../../../domain/constants/index.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
@@ -408,7 +409,7 @@ export function statusTotals(facts, today) {
     if (!fact.targetFinish) totals.openWithoutTargetFinish += 1;
     if (fact.milestone) totals.milestonesOpen += 1;
   }
-  totals.completionRatePercent = facts.length ? Math.round((totals.done / facts.length) * 1000) / 10 : null;
+  totals.completionRatePercent = taskCompletionRate(totals.done, facts.length);
   return totals;
 }
 

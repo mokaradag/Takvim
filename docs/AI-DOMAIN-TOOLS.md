@@ -100,6 +100,8 @@ Tarayıcı ── POST /assistant/turns ──► assistantService.prepareAssist
 | `src/server/ai/tools/evidenceLedger.js` | Tur başına kanıt defteri ve kalıcılık satırları |
 | `src/server/ai/tools/rota/*` | 19 aracın işleyicileri, kapsam kuralları, sabit SQL ve tek SQL sahibi depo (`rotaToolStore.js`) |
 | `src/domain/ai/evidenceContract.js` | Sunucu ve tarayıcının ortak kanıt/atıf sözleşmesi (saf) |
+| `src/domain/ai/evidenceIntent.js` | Modelin niyet kararına karşı tutucu Rota veri gereksinimi ve kayıtlı kanıtlı geçmiş denetimi |
+| `src/domain/ai/evidenceFacts.js`, `evidenceVerification.js` | Türlü alan olguları, kayıt/alan/değer doğrulaması ve sunucuda güvenli yanıt çizimi |
 | `src/server/ai/assistant/groundedPrompt.js`, `groundedAnswer.js` | Sunucuya ait yönerge ve sınırlı, doğrulanan döngü |
 
 ---
@@ -181,8 +183,8 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
 - **Kısmi kapsam kısmi kalır.** Toplamlar yalnızca görünür görevler üzerindedir;
   gizli görevlerin sayısı, adı ya da varlığı hiçbir alanda (toplam, sayfa,
   grup, "diğer" kovası) sızmaz. Sonuç `scope.kind = authorized-task-subset`
-  taşır; kısmi kapsamlı kanıta atıf yapan yanıt kapsamı zaten açıklamıyorsa
-  sunucu sabit kapsam notunu ekler (§6.4).
+  taşır; kısmi kapsamlı kanıta atıf yapan her yanıta sunucu sabit kapsam
+  notunu ekler (§6.4).
 
 ---
 
@@ -196,11 +198,12 @@ Modele giden her başarılı sonuç:
 | --- | --- |
 | `ok` | `true` |
 | `evidenceId` | Bu turdaki kanıt kimliği (`R1`, `R2` …) |
+| `factScope`, `subject` | Tur için rastgele üretilen olgu öneki ve güvenli görünen kayıt adı; yalnızca model/sunucu protokolünde kullanılır |
 | `tool`, `generatedAt`, `today` | Araç adı, veri zamanı (UTC), Türkiye iş günü |
 | `scope` | `kind` ve açıklama (aşağıda) |
 | `complete` | Yetkili kapsamda eşleşen kayıtların tamamı döndü mü (başka sayfa/kısaltma yok) |
 | `truncated` | Liste sınır ya da boyut nedeniyle kısaltıldı mı |
-| `returnedCount`, `totalCount` | Döndürülen öğe ve eşleşen KESİN toplam |
+| `returnedCount`, `totalCount` | Döndürülen öğe ve yetkili kapsamda bilinen kesin toplam; tamamlanmayan/korunan toplam `null` olabilir |
 | `nextCursor` | Sonraki sayfanın imleci (yoksa `null`) |
 | `data` | Araca özgü veri (§10) |
 
@@ -233,16 +236,50 @@ Hata: `{ ok: false, tool, error: { code, message, details? } }` (§11).
 
 ### 6.3 Atıf ve belirlenimci doğrulama
 
-Atıf biçimi `【R1】`'dir (Markdown bağlantısıyla çakışmaz). Modelin küçük yazım
-farkları (`[R1]`, `【 R1 】`, `【R1, R2】`) kanonik biçime getirilir; atıf
-uydurulmaz ya da silinmez. Son yanıt **ikinci bir dil modeline sorulmadan**
-şu kurallarla doğrulanır:
+Doğal dildeki soruyu yorumlamak, araç seçmek ve ilgili alanları seçmek modelin
+işidir. Güvenlik katmanı Türkçe/İngilizce cümleleri, olumsuzlukları veya tarih
+ifadelerini anlamaya çalışmaz. Model kanıtlı yanıtı serbest düzyazı yerine
+kapalı bir JSON sözleşmesiyle verir:
+
+```json
+{"kind":"rota","claims":[{"evidenceId":"R1","factId":"0123456789abcdef_R1:data.task.status","subjectId":"data.task","field":"data.task.status","operator":"eq","value":"in_progress"}]}
+```
+
+`factId`, sunucunun verdiği `factScope` ile tam JSON alan yolunun birleşimidir.
+`subjectId` alanın sahibi olan nesnenin yoludur; liste indeksleri yolun
+parçasıdır (`data.items.0.status`); üst düzey sonuç metaverisinin sahibi
+`result`'tır. Sicil veya kayıt kimliği olgu kimliğine eklenmez. Her iddia tam
+olarak bu altı alanı taşır. Sunucu kendi yetkili kanıt yükünden alanı yeniden
+okur; aynı turdaki kanıt, olgu kimliği, kayıt yolu, alan yolu ve türüyle birlikte
+değerin birebir eşitliğini denetler. Yalnızca `eq` desteklenir; `null`, sayı,
+boole ve metin birbirine dönüştürülmez. Başka kaydın aynı değeri, termin yerine
+başlangıç tarihi veya planlanan süre yerine kalan süre kanıt sayılamaz.
+
+Doğrulanmış olguların Türkçe/İngilizce alan etiketi, değeri ve `【R1】` atfı
+sunucuda çizilir. Serbest model önsözü/sonucu veya başlık bulmaya dayalı bir
+nitel iddia gösterilmez. Veri metnindeki Markdown, bağlantı, denetim ve atıf
+işaretleri nötrlenir. Atıf yardımcıları kayıtlı yanıtların ortak sunum
+sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcısı değildir.
+İkinci bir model güvenlik hakemi olarak kullanılmaz.
 
 | Durum | Kural |
 | --- | --- |
-| Kanıt var | Her atıf bu turdaki bir kanıta işaret etmeli (`R99` gibi uydurma kimlik geçersiz); biçimsiz işaret geçersiz; en az bir geçerli atıf olmalı; **her paragraf kendi içinde**, her liste/tablo/başlık kendisinde ya da hemen komşu bloğunda geçerli atıf taşımalı; atıf yapılan sayı, tarih ve durum değerleri ilgili kanıt yükünde bulunmalı |
-| Araç kullanılmadı (genel sohbet) | Yanıt hiçbir kanıt işareti taşıyamaz |
-| Araç denendi ama kanıt yok (hata, bulunamadı) | Kanıt işareti yok **ve** Rota verisi olarak okunabilecek sayı/tarih yok (kod bloğu hariç); araç hatası tahminle doldurulamaz |
+| Kanıt var | `kind: rota` ve en az bir geçerli, kayıt/alan/değere bağlı iddia gerekir; bilinmeyen kanıt veya önceki turun olgu öneki reddedilir |
+| Araç kullanılmadı (genel sohbet) | Model açıkça `{"kind":"general","text":"…"}` bildirir; atıf yasaktır; Rota veri gereksinimi varsa genel yanıt reddedilir |
+| Araç denendi ama kanıt yok (hata, bulunamadı) | `{"kind":"unavailable"}` sabit doğrulanamama yanıtına dönüşür; yalnızca sabit güvenli bulunamadı/yetki belirsizliği iletisi de kabul edilir; modelin serbest hata yorumu kabul edilmez |
+
+Rota veri gereksinimi modelin niyet seçimine ek olarak tutucu alan ipuçları ve
+kayıtlı önceki kanıt metaverisiyle korunur. Kanıtlı konuşmada kısa/uzun,
+morfolojik veya dolaylı takipler yeni turda kanıt gerektirir; sözcük sayısı
+sınırı yoktur. Önceki kanıtlı yanıtın olguları model geçmişine taşınmaz.
+Doğal dil sınıflandırması olasılıksaldır; bu katman bütün olası ifadeleri
+anladığı iddiasında bulunmaz. Belirsizlikte yönerge araç kullanımını ister;
+alan ipuçları genel sorularda da tutucu ret üretebilir.
+
+Olgu yürüyüşü en fazla 12 derinlik ve 256 olgu, son yanıt en fazla 64 iddia ve
+24.000 karakterle sınırlıdır. Doğrulama yalnızca seçilen iddia yollarını yürür;
+uzun listedeki son kayıt da doğrulanabilir. Araç sonucu ayrıca 16 KiB sınırına
+tabidir; kısaltılan sonuçlar için daha dar sorgu/ayrıntı gerekebilir.
 
 Doğrulanamayan taslak **gösterilmez**; model **bir kez** sunucuya ait
 `SUNUCU DOĞRULAMASI` yönergesiyle düzeltmeye çağrılır (kanıt varken yalnızca
@@ -255,9 +292,8 @@ Bu yanıtın bitiş nedeni `grounding_failed`'dır ve hiçbir kanıtı kaydedilm
 
 ### 6.4 Kısmi kapsam notu
 
-Yanıt kısmi kapsamlı bir kanıta atıf yapıyorsa ve model görünür kayıtlarla sınırlı
-kapsamı zaten açıkça belirtmiyorsa sunucu şu notu ekler; eklenen not yanıtla
-birlikte kaydedilir:
+Yanıt kısmi kapsamlı bir kanıta atıf yapıyorsa sunucu her zaman şu notu ekler;
+eklenen not yanıtla birlikte kaydedilir:
 
 > _Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._
 
@@ -290,11 +326,11 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
 | `revise` | O ana kadar gösterilen taslak geçersiz (araç çağrısına dönüştü ya da doğrulanamadı); istemci metni siler |
 | `done` | Kanıta dayalı yolda `assistantMessage.content` (kayıtlı, esas metin) ve `assistantMessage.evidence` |
 
-Akış dürüsttür: **kanıta dayanan yanıt doğrulanmadan gösterilmez ve tek parça
-gönderilir** (sahte karakter akışı yoktur). Araç kullanmayan genel yanıt,
-taslak 160 karakteri ya da iki satırı geçip atıf işareti taşımadığı anlaşılınca
-gerçek zamanlı akar; ardından araç çağrısı ya da düzeltme gerekirse `revise`
-gönderilir.
+Aşama 3 yolunda model protokolü ve bütün taslaklar tamponlanır. Doğrulanan
+kanıtlı yanıt veya açıkça bildirilen geçerli genel yanıt tek parça gönderilir;
+JSON, doğrulanmamış önsöz veya sonradan silinecek olgular gösterilmez.
+`revise` istemci sözleşmesinde uyumluluk için korunur. Araç özelliği kapalı
+Aşama 2 yolu gerçek zamanlı akışını korur.
 
 ### 7.3 Arayüz
 
@@ -358,7 +394,7 @@ Bütün hesaplar sunucuda, sabit kurallarla yapılır; model sayı hesaplamaz.
 | Termini olmayan | Açık ve termini boş |
 | Takvim günü | Termin, yoksa planlanan bitiş |
 | Tamamlanma tarihi | Gerçekleşen bitiş (`actualFinish`) |
-| Tamamlanma oranı | Tamamlanan / toplam görünür görev, % bir ondalık |
+| Tamamlanma oranı | Normal Rota ile ortak `taskCompletionRate`: `Math.round(tamamlanan / toplam * 100)`; boş kümede `0` |
 | Gecikme yaşlandırması | 1–7, 8–30, 31–90, 91+ gün |
 | Saat ve bütçe | Boş değer 0 sayılmaz: toplamla birlikte "değeri olan / olmayan görev" sayısı; para birimi Rota'da tutulmadığı için belirtilmez |
 | Baz plan sapması | Güncel planlanan bitiş − baz plandaki planlanan bitiş (takvim günü); silinen ve sonradan eklenen görevler ayrıca sayılır |
@@ -410,7 +446,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `text` (zorunlu), `limit` (1–10).
 - **Yetki:** Yalnızca görmeye yetkili ETKİN projeler.
 - **Kaynak:** `AI_TOOL_PROJECT_SEARCH_SQL` (tam eşleşme önce).
-- **Çıktı:** `matches[]` (kimlik, ad, kod, kaynak, erişim, lider, tam eşleşme), `ambiguous`, `guidance`.
+- **Çıktı:** `matches[]` (kimlik, ad, kod, kaynak etiketi ve kanonik `sourceType: corporate/manual`, erişim, lider, tam eşleşme), `ambiguous`, `guidance`.
 - **Tamlık:** Tek tam eşleşme yoksa `ambiguous = true`; model tahmin etmez, sorar.
 - **Örnek sorular:** "RDR kodlu proje hangisi?"
 
@@ -420,7 +456,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `projectId` (zorunlu).
 - **Yetki:** Görünmeyen proje `NOT_FOUND`; erişim nedeni kullanıcının kendi yetkisidir (proje lideri, erişim hibesi, kurumsal rol, manuel sahip, sorumlu, oluşturan, yönetim kapsamı, sistem yöneticisi).
 - **Kaynak:** `AI_TOOL_PROJECT_DETAIL_SQL` + yetki bağlamı.
-- **Çıktı:** künye (kaynak, lider, takvim, etiketler, iş dağılım düğüm sayısı, FULL'da bağımlılık/baz plan sayısı), `access` (düzey, etiket, nedenler, tam görev görünümü), `visibleTasks` toplamları, `definitions`.
+- **Çıktı:** künye (kaynak etiketi ve kanonik `sourceType`, lider, takvim, etiketler, iş dağılım düğüm sayısı, FULL'da bağımlılık/baz plan sayısı), `access` (düzey, etiket, nedenler, tam görev görünümü), `visibleTasks` toplamları, `definitions`.
 - **Örnek sorular:** "Bu projede neden bütün görevleri göremiyorum?"
 
 ### 10.6 `rota_portfolio_summary` — portföy
@@ -464,8 +500,8 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Amaç:** Kim, ne zaman, neyi değiştirdi.
 - **Girdiler:** `period` (`today`, `yesterday`, `last_7_days`, `custom` + `dateFrom`/`dateTo`, en fazla 366 gün), `scope` (`visible`, `mine`, `team`), `projectId`, `taskId`, `personSicil`, `kind`, `limit` (1–20), `cursor`.
 - **Yetki:** Görev Hareketleri raporunun kuralı; `team` yalnızca yöneticilere (aksi `UNSUPPORTED_SCOPE`).
-- **Kaynak:** `readTaskActivityReport` (Aşama 3'te rapora isteğe bağlı `taskId` süzgeci eklendi; raporun kendisi değişmedi).
-- **Çıktı:** `range` (Türkiye günü), `summary`, `items[]` (iş diliyle değişiklikler).
+- **Kaynak:** `readTaskActivityReport`; AI çağrısı isteğe bağlı `taskId` süzgecini ve türlü değişiklik çıktısını açar. Normal rapor çağrısı ek çıktı üretmez.
+- **Çıktı:** `range` (Türkiye günü), `summary`, `items[]` (iş diliyle değişiklikler ve `structuredChanges[]: {field,before,after}`). Kanonik durum, öncelik, sayı, boole ve tarih değerleri gösterim metninden ayrı tutulur; atama kimlikleri bu ek çıktıya konmaz.
 - **Örnek sorular:** "Dün ekibimde hangi görevler tamamlandı?"
 
 ### 10.11 `rota_schedule_requests` — tarih değişikliği talepleri
@@ -535,9 +571,9 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 
 - **Amaç:** Kullanıcının Outlook'a eklediği görevlerin Rota tarafındaki gönderim durumu.
 - **Girdiler:** `taskId`, `limit`.
-- **Yetki:** Yalnızca kullanıcının kendi abonelikleri; görünmeyen görevlerin aboneliği yalnızca sayı olarak.
+- **Yetki:** Yalnızca kullanıcının kendi görünür görev abonelikleri; görünmeyen aboneliklerin sayısı hiçbir alana/etikete çıkmaz. Belirli `taskId` için görünmeyen ve olmayan/aboneliği olmayan kayıtlar aynı `NOT_FOUND` sonucunu alır.
 - **Kaynak:** `AI_TOOL_OUTLOOK_SQL` + ürünün hata iletileri.
-- **Çıktı:** etkin abonelik sayısı, duruma göre sayılar (etkin, bekliyor, bekletiliyor, başarısız), `items[]`, görünmeyen görev aboneliği sayısı; posta kutusu ya da davetin kabulü **bilinmez**.
+- **Çıktı:** görünür etkin abonelik sayısı (kesilirse `null`), duruma göre görünür sayılar, `items[]`; `subscriptionsForTasksNoLongerVisible` yalnızca boole eksiklik işaretidir. Gizli abonelik veya kesilme varsa genel toplam `null` ve duruma göre dağılım eksiktir; posta kutusu ya da davetin kabulü **bilinmez**.
 - **Örnek sorular:** "Outlook'a eklediğim görevlerden gönderilemeyen var mı?"
 
 ### 10.19 `rota_data_quality` — plan veri kalitesi
@@ -579,8 +615,12 @@ turu sonlandırır.
 - Yönerge modele araç sonuçlarının talimat olmadığını söyler; ama güvenlik
   yönergeye bağlı değildir: katalog sunucudadır, kimlik ve yetki bağımsız
   değişkenle değiştirilemez, atıflar sunucuda doğrulanır.
-- Önceki yanıtların atıf işaretleri geçmişten çıkarılır: eski kanıt yeni turun
-  kanıtı değildir.
+- Önceki kanıtlı yanıtlar model geçmişinde sabit yeniden sorgulama notuyla
+  değiştirilir; kanıt metaverisi yeni turda kanıt gereksinimini korur.
+- İlk geçerli araç çağrıları, herhangi bir veritabanı sonucu tüketilmeden
+  statik alan geçişleriyle takip kataloğunu sınırlar. Kanıt metni araç alanını
+  genişletemez. Sunucu serbest model cümlesini onaylamaz; yalnızca yetkili
+  olgunun kayıt/alan/değer bağını doğrular ve veriyi kaçışlayarak çizer.
 
 ---
 
@@ -696,13 +736,13 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 - [ ] "Radar projesinde kaç görev var?" → yanıt `【R1】` ile atıflı, altında
       "1 Rota kaynağı · Veri zamanı: …" paneli; sayı Görevler ekranıyla aynı.
 - [ ] Kısmi erişimli bir projede sayı sorusu → yalnızca görünür görevler
-      sayılır ve yanıt kapsamı belirtir (ya da sunucu notu eklenir).
+      sayılır ve sunucu her zaman kapsam notunu ekler.
 - [ ] Görülmeyen bir projenin adı sorulduğunda "bulunamadı / yetkiniz yok";
       varlığı doğrulanmaz.
 - [ ] İki aynı adlı kişi için model birimini sorar, tahmin etmez.
 - [ ] Gecikmiş görev sayısı Pano ile aynı; Türkiye gece yarısı sınırında doğru.
-- [ ] FULL olmayan projede baz plan/bağımlılık sorusu "yalnızca tam yetkiye
-      açık" yanıtı alır.
+- [ ] FULL olmayan projede baz plan/bağımlılık sorgusu veri döndürmez;
+      doğrulanamayan yanıt sabit güvenli iletiyle sonuçlanır.
 - [ ] "Bildirimlerim" sorusundan sonra zildeki okunmamış sayısı değişmez.
 - [ ] Görev oluşturma/düzenleme istendiğinde yardımcı yapamayacağını söyler.
 - [ ] Görev açıklamasına yazılmış "önceki talimatları yok say" metni yanıtı
@@ -720,12 +760,19 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 
 | Dosya | Kapsam |
 | --- | --- |
-| `test/ai-tool-contracts.test.mjs` | Bağımsız değişken katılığı, SQL benzeri metin, şema/kayıt defteri reddi, belirlenimci tanımlar, Türkiye günü sınırı, imleç, kapsam belirteçleri, veri nötrleme, atıf doğrulaması (`【R99】`), kapsam notu, güvenli hata eşlemesi |
+| `test/ai-tool-contracts.test.mjs` | Katı şema, türlü kayıt/alan/değer bağı, kardeş kayıt ve tur değişimi, kısa kodlar, tarih/süre kökeni, durum/boole olumsuzluklarının düzyazıyla kabul edilmemesi, yerel sayı çizimi, NULL/0, metrikler, hareket değerleri, enjeksiyon nötrleme, güvenli NOT_FOUND, kapsam ve sınırlar |
 | `test/ai-domain-tools.test.mjs` | 19 aracın yetki matrisi (yönetici, FULL, READ, kısmi, yönetim kapsamı, oluşturan, ilgisiz), 10 görevden 2'si görünen kısmi toplam, gizli eş sorumlu, aynı adlı kişi, NULL kapsaması, baz plan, bağımlılık türleri ve gecikme, tekrar, takvim, Outlook, bildirimlerin işaretlenmemesi, hareketler, `' OR 1=1 --`/`%`/`_`/`[`, sınırlar, sonuç boyutu, SQL kapısının bırakılması, küme başına yetki |
-| `test/ai-grounded-assistant.test.mjs` | Uçtan uca: özellik bayrağı, kip/profil, 0018 eksikliği, atıflı yanıt ve kalıcılık, oynatma, uydurma atıf ve düzeltme, güvenli ileti, kısmi kapsam notu, canlı genel yanıt ve `revise`, tanınmayan araç, tur sınırı, istem enjeksiyonu, geçmişten atıf ayıklama, Sicil yalıtımı, iptal, gözlemin içeriksizliği, sürücü hatası |
+| `test/ai-grounded-assistant.test.mjs` | Uçtan uca: özellik bayrağı, kip/profil, 0018 eksikliği, türlü yanıt ve kalıcılık, oynatma, uydurma atıf ve düzeltme, güvenli ileti, kısmi kapsam notu, genel niyet bildirimi ve protokol tamponlama, tanınmayan araç, tur sınırı, istem enjeksiyonu, geçmiş olgularını yeniden sorgulama, Sicil yalıtımı, iptal, içeriksiz gözlem, sürücü hatası |
 | `test/ai-provider-tool-calls.test.mjs` | Tel biçimi, parçalı çağrı birleştirme, sınırlar, bozuk/yarım çağrı, JSON yanıtı; tek kira, döküm doğrulaması, yetenek uyuşmazlığı, SQL işlemi |
 | `test/ai-assistant-evidence-ui.test.mjs` | Çözücü (`revise`, konu, yetkili metin, künye doğrulaması), denetleyici, atıf işareti, kanıt paneli, sunum |
 | `test/ai-architecture-contract.test.mjs` | Genel SQL aracı yok, araç SQL'i sabit ve salt okunur, kimlik alanı yok, tek SQL sahibi, 0018 |
+
+Yerel/CI doğrulaması: tüm Node sınamaları `--test-concurrency=1` ile,
+`npm run lint` ve `npm run build`. CI Node 24.14.0 kullanır; Node 22
+uyumluluğu da tam paketle doğrulanır. SQL ikizi davranış ve yetki matrisini
+sınar; gerçek SQL Server sözdizimi/yürütme planı testi yerine geçmez. Dağıtım
+öncesinde admin proje kapısı ve baz planın seçili/seçili olmayan dalları
+gerçek veritabanında elle kabul kapsamındadır.
 
 ---
 
@@ -743,17 +790,20 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 ### Yanıt dili ve araç amaç sınırı
 
 Kanıta dayalı yol Türkçe ve İngilizce yanıtları destekler. Sunucu soru dilinden
-(ve açık Türkçe/İngilizce isteğinden) yanıt dilini seçer; sayı doğrulaması,
+(ve açık Türkçe/İngilizce isteğinden) yanıt dilini seçer; türlü değerlerin çizimi,
 kapsam notu ve doğrulanamayan yanıt metni aynı dil sözleşmesini kullanır.
 Diğer dillerdeki sorular Türkçe yanıtlanır.
 
-Başarılı araç sonucu alındıktan sonra araç kataloğu, yalnızca güvenilir kullanıcı
-sorusu ve kısa takiplerde son kullanıcı sorusundan türetilen alanlarla sınırlanır.
+İlk geçerli model araç çağrılarından sonra, sonuçlar modele gitmeden önce
+katalog seçilen araçlara ve statik alan takiplerine sınırlanır; kullanıcı
+dilinin her biçimi için bir amaç regex listesi gerekmez.
 Araç verisindeki yönergeler yeni bir alan açamaz; izin dışı çağrı yürütülmez.
 Model üretimi 45 saniyelik araç yürütme bütçesine katılmaz; son ve düzeltme model
 turları da ağ geçidinin toplam oturum süre sınırına tabidir.
 
 Görev analizleri ilk geçici görev nüfusunda 20.001 satırlık taşma belirteciyle
-sınırlandırılır. Sorumluluk ilişkilerine ayrıca aynı satır bütçesi uygulanır;
+sınırlandırılır. Kullanıcıya kimliği veya eş sorumlu adı gösterilebilen
+sorumluluk ilişkilerine ayrıca aynı satır bütçesi uygulanır; gizli ilişkiler
+bu taşma davranışını değiştirmez;
 sınır aşımı `RESULT_TOO_LARGE` üretir. Proje araması ve çalışma takvimi gibi
 metaveri sorguları kısmi görev kapsamını geçici tabloda kurmaz.

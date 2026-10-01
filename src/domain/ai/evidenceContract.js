@@ -8,9 +8,8 @@
  *
  * Doğrulama BELİRLENİMCİDİR; ikinci bir dil modeline sorulmaz:
  *  - her atıf bu turda üretilmiş bir kanıta işaret etmelidir;
- *  - kanıt varken yanıt en az bir geçerli atıf taşımalıdır;
- *  - kanıta dayanan her paragraf kendi içinde geçerli bir atıf taşımalıdır;
- *    liste/tablo/başlık/kod gibi yapısal bloklarda hemen komşu atıf da geçerlidir;
+ *  - olgular kayıt ve alan kimliğine bağlı yapılandırılmış iddialarla doğrulanır;
+ *  - olgu metnini sunucu üretir; serbest model metni kanıt sayılmaz;
  *  - araç kullanılmadan üretilen (genel) yanıt hiçbir kanıt işareti taşıyamaz.
  */
 
@@ -52,7 +51,7 @@ const ENTITY_TYPES = new Set(['task', 'project', 'person', 'portfolio', 'user'])
 /** Kanıta dayanan yanıt doğrulanamadığında gösterilen ve kaydedilen SABİT metin. */
 export const GROUNDING_FAILURE_TEXT = 'Rota verilerine ilişkin yanıt doğrulanamadı. Soruyu daha dar kapsamda yeniden deneyin.';
 
-/** Kısmi kapsamlı kanıta dayanıp kapsamı belirtmeyen yanıta sunucunun eklediği not. */
+/** Kısmi kapsamlı kanıta dayanan her yanıta sunucunun eklediği not. */
 export const SCOPE_DISCLOSURE_TEXT = '_Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._';
 
 /** Yanıtın doğrulanamadığını söyleyen bitiş nedeni (kalıcı iletide saklanır). */
@@ -73,7 +72,6 @@ export const GROUNDING_FAILED_FINISH_REASON = 'grounding_failed';
 
 const CITATION = /【R([1-9]\d?)】/g;
 const EVIDENCE_BRACKETED = /【\s*R[1-9]\d?(?:\s*[,;]\s*R[1-9]\d?)*\s*】/g;
-const ANY_BRACKETED = /【[^】\n]{0,24}】/g;
 const EVIDENCE_ID = /^R([1-9]\d?)$/;
 
 export function evidenceIdFor(ordinal) {
@@ -178,664 +176,48 @@ export function answerSegments(text) {
   return segments;
 }
 
-/** Blokta atfı gerektiren bir sayı var mı? Liste/başlık numarası ve atıfın kendisi sayılmaz. */
-export function segmentHasNumericClaim(segment) {
-  const text = segment.text
-    .replace(ANY_BRACKETED, ' ')
-    .split('\n')
-    .map((line) => line
-      .replace(/^\s{0,3}\d{1,3}[.)]\s/, '')
-      .replace(/^\s{0,3}#{1,6}\s+\d{1,3}(?:\.\d{1,3})*[.)]?\s/, '')
-      .replace(/^\s{0,3}\|?[\s:|-]*-[\s:|-]*$/, ''))
-    .join('\n');
-  return /\d/.test(text);
-}
+export { requiresRotaEvidence } from './evidenceIntent.js';
+export { analyzeGroundedAnswer } from './evidenceVerification.js';
 
-function validCitationsIn(text, evidenceIds) {
-  return extractCitationIds(text).filter((id) => evidenceIds.has(id));
-}
-
-const ROTA_DATA_PATTERNS = [
-  /(?:^|[^\p{L}])görev\p{L}*(?=$|[^\p{L}])/iu,
-  /(?:^|[^\p{L}])proje\p{L}*(?=$|[^\p{L}])/iu,
-  /(?:^|[^\p{L}])portföy(?:üm|ümüz|ü|de|den)?(?=$|[^\p{L}])/iu,
-  /\bwbs\b/iu, /(?:^|[^\p{L}])[İi]ş dağılım/u, /(?:^|[^\p{L}])sorumlu(?:lar|su|ları)?(?=$|[^\p{L}])/iu,
-  /\batama\b/u, /\bbildirim(?:ler)?\b/u, /\bbaz plan\b/u, /\bbağımlılık(?:lar)?\b/u,
-  /\btekrar(?: serisi)?\b/u, /\btakvim\b/u, /\boutlook\b/u, /\btermin\b/u,
-  /\bgerçekleşen\b/u, /(?:^|[^\p{L}])planlanan bitiş(?=$|[^\p{L}])/iu, /(?:^|[^\p{L}])[İi]lerleme(?=$|[^\p{L}])/u,
-  /\btasks?\b/i, /\bprojects?\b/i, /\bportfolio\b/i, /\bassignee(?:s)?\b/i,
-  /\bassignments?\b/i, /\bnotifications?\b/i, /\bbaseline\b/i, /\bdependencies\b/i,
-  /\brecurrence\b/i, /\bcalendar\b/i, /\bdeadline\b/i, /\bprogress\b/i
-];
-
-const ROTA_FACT_PATTERNS = [
-  /(?:^|[^\p{L}])(?:kaç|ne zaman|var mı|yok mu|durum(?:u|ları)?|gecik\p{L}*|tamamlan\p{L}*|bitti|bitmiş|sorumlu(?:su|ları)?|atan\p{L}*|bekleyen|onay|benim|bizim|ekibim|bugün|yarın|bu hafta)(?=$|[^\p{L}])/iu,
-  /\bhow many\b/i, /\bwhen\b/i, /\bstatus\b/i, /\boverdue\b/i, /\bdue\b/i,
-  /\bcompleted?\b/i, /\bassigned?\b/i, /\bpending\b/i, /\bmy\b/i, /\bour\b/i,
-  /\btoday\b/i, /\btomorrow\b/i, /\bthis week\b/i
-];
-
-const ROTA_EXPLICIT_QUERY_PATTERNS = [
-  /(?:^|[^\p{L}])(?:[İi]ş\s+yük\p{L}*|(?:tarih\s+değişikliğ\p{L}*|atama)\s+talep\p{L}*|(?:plan\s+)?veri\s+kalite\p{L}*|(?:dün|bugün)\s+kim\s+ne\s+yaptı)(?=$|[^\p{L}])/iu,
-  /\b(?:workload|data quality|schedule requests?|assignment requests?)\b/i,
-  /\bwho\s+did\s+what\s+(?:today|yesterday)\b/i,
-  /(?:^|[^\p{L}])(?:görevleri|görevlerim|görevlerimi|görevlerimiz|görevlerimizi|projeleri|projelerim|projelerimi|projelerimiz|projelerimizi|bildirimleri|bildirimlerim|bildirimlerimi|bildirimlerimiz|bildirimlerimizi|atamaları|atamalarım|atamalarımı|atamalarımız|atamalarımızı)\s+(?:listele|göster|bul)(?=$|[^\p{L}])/iu,
-  /\b(?:list|show|find)\s+(?:my\s+|our\s+|the\s+)?(?:tasks?|projects?|assignments?|notifications?)\b/i,
-  /(?:^|[^\p{L}])(?:görev|proje)\p{L}*(?:\s+[^.!?\n]{0,120})?\s+(?:göster|bul|listele|özetle|incele|getir|aç)(?=$|[^\p{L}])/iu,
-  /(?:^|[^\p{L}])hangi\s+(?:görev|proje|atama|bildirim)\p{L}*(?=$|[^\p{L}])/iu,
-  /(?:^|[^\p{L}])kim\s+sorumlu(?=$|[^\p{L}])/iu,
-  /\bwho\s+(?:owns|is\s+(?:the\s+)?(?:owner|assignee|responsible))\b/i,
-  /\bwhat(?:'s| is)\s+(?:the\s+)?(?:status|deadline|due date)\b/i
-];
-
-const CONTEXT_FIELD = /(?:^|[^\p{L}])(?:açıklama|önceli(?:k|ğ)|durum|planlanan|gerçekleşen|başlangıç|bitiş|termin|sorumlu|lider|takvim|kaynak|description|priority|status|planned|actual|start|finish|deadline|owner|assignee|source)\p{L}*(?=$|[^\p{L}])/iu;
-const CONTEXT_FOLLOW_UP = /(?:^|[^\p{L}])(?:peki|bunu|şunu|aynı|tekrar|ya|kim|hangisi|ne zaman|what about|and what|who|when|which|again|same)(?=$|[^\p{L}])/iu;
-const GENERAL_ADVICE_PATTERNS = [
-  /(?:^|[^\p{L}])(?:yöntem\p{L}*|metot\p{L}*|açıkla\p{L}*|anlat\p{L}*|öner\p{L}*|\p{L}+(?:meli|malı|meliyim|malıyım|meliyiz|malıyız))(?=$|[^\p{L}])/iu,
-  /\b(?:should|how\s+(?:do|can|should)|explain|methods?|best\s+practices?)\b/i
-];
-const ROTA_OPEN_FACT_PATTERNS = [
-  /(?:^|[^\p{L}])(?:ne|nedir|hangi|kim)(?=$|[^\p{L}])/iu,
-  /\b(?:what|which|who)\b/i,
-  /(?:^|[^\p{L}])(?:öncelik|lider|sahip)\p{L}*(?=$|[^\p{L}])/iu,
-  /\b(?:priority|leader|owner)\b/i
-];
-
-function directlyRequiresRotaEvidence(text) {
-  const source = String(text ?? '');
-  if (ROTA_EXPLICIT_QUERY_PATTERNS.some((pattern) => pattern.test(source))) return true;
-  if (!ROTA_DATA_PATTERNS.some((pattern) => pattern.test(source))) return false;
-  if (ROTA_FACT_PATTERNS.some((pattern) => pattern.test(source))) return true;
-  if (GENERAL_ADVICE_PATTERNS.some((pattern) => pattern.test(source))) return false;
-  return ROTA_OPEN_FACT_PATTERNS.some((pattern) => pattern.test(source));
-}
-
-/**
- * Kullanıcının iletisi güncel Rota olgusu gerektiriyor mu?
- * Genel planlama soruları yalnızca proje/görev sözcüğü geçtiği için araçlara
- * zorlanmaz; kısa bağlamsal takipler ise önceki Rota veri sorusunun kapsamını
- * devralır.
- */
-export function requiresRotaEvidence(text, { priorUserMessages = [] } = {}) {
-  if (directlyRequiresRotaEvidence(text)) return true;
-  const source = String(text ?? '').trim();
-  const words = source.split(/\s+/u).filter(Boolean).length;
-  if (
-    words > 5
-    || /(?:^|[^\p{L}])ya da(?=$|[^\p{L}])/iu.test(source)
-    || (GENERAL_ADVICE_PATTERNS.some((pattern) => pattern.test(source)) && !/^açıklama(?:sı)?\s*\??$/iu.test(source))
-    || !(CONTEXT_FOLLOW_UP.test(source) || CONTEXT_FIELD.test(source))
-  ) return false;
-  return [...priorUserMessages].reverse().some((message) => directlyRequiresRotaEvidence(message));
-}
-
-function excerpt(text) {
-  const plain = String(text).replace(/\s+/g, ' ').trim();
-  return plain.length > 80 ? `${plain.slice(0, 77)}…` : plain;
-}
-
-function claimText(text) {
-  return String(text ?? '')
-    .replace(ANY_BRACKETED, ' ')
-    .split('\n')
-    .map((line) => line
-      .replace(/^\s{0,3}\d{1,3}[.)]\s/, '')
-      .replace(/^\s{0,3}#{1,6}\s+\d{1,3}(?:\.\d{1,3})*[.)]?\s/, ''))
-    .join('\n');
-}
-
-function canonicalNumber(value, locale = 'en') {
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
-  const raw = String(value).trim().replace(/−/g, '-');
-  const grouping = locale === 'tr' ? '.' : ',';
-  const decimal = locale === 'tr' ? ',' : '.';
-  const groupPattern = locale === 'tr' ? /^[+-]?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/ : /^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
-  if (raw.includes(grouping) && !groupPattern.test(raw)) return null;
-  const normalized = raw.split(grouping).join('').replace(decimal, '.');
-  if (!/^[+-]?\d+(?:\.\d+)?$/.test(normalized)) return null;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? String(parsed) : null;
-}
-
-const STATUS_CLAIMS = [
-  { pattern: /(?:tamamlandı|\bcompleted?\b|\bdone\b)/u, values: ['done', 'completed', 'complete'] },
-  { pattern: /(?:devam ediyor|\bin progress\b)/u, values: ['in_progress', 'in-progress', 'inprogress'] },
-  { pattern: /(?:yapılacak|\btodo\b|\bis planned\b|\bstatus(?: is|:)\s*planned\b)/u, values: ['todo', 'planned'] }
-];
-
-const FIELD_HINTS = Object.freeze([
-  { kind: 'number', pattern: /(?:gecikmiş(?:\s+görev(?:\s+say(?:ı|ısı))?)?|overdue(?:\s+(?:task\s+count|tasks?))?)/iu, fields: ['overdue', 'overduecount', 'subtreeoverdue'] },
-  { kind: 'number', pattern: /(?:açık\s+görev(?:\s+say(?:ı|ısı))?|open\s+(?:task\s+count|tasks?))/iu, fields: ['open', 'opentasks', 'opentaskcount'] },
-  { kind: 'number', pattern: /(?:tamamlanmış\s+görev(?:\s+say(?:ı|ısı))?|completed\s+(?:task\s+count|tasks?)|done\s+tasks?)/iu, fields: ['done', 'completed', 'closed', 'completedtasks'] },
-  { kind: 'number', pattern: /(?:bu\s+hafta\s+termini|7\s+gün(?:\s+içinde)?\s+termin|due\s+soon|next\s+7\s+days?)/iu, fields: ['duenext7days', 'duesoon', 'duesooncount'] },
-  { kind: 'number', pattern: /(?:sorumlusu\s+(?:atanmamış|olmayan|bulunmayan|belirsiz)|sorumlusuz(?:\s+görev)?|unassigned(?:\s+tasks?)?)/iu, fields: ['unassigned', 'unassignedcount', 'unassignedopentasks'] },
-  { kind: 'number', pattern: /(?:proje\s+say(?:ı|ısı)|project\s+count|toplam\s+proje)/iu, fields: ['projects', 'projectcount', 'totalprojects'] },
-  { kind: 'number', pattern: /(?:(?:wbs|iş\s+dağılım)\s+(?:düğüm\s+)?say(?:ı|ısı)|wbs\s+node\s+count)/iu, fields: ['wbsnodecount', 'nodecount', 'totalnodes', 'nodes'] },
-  { kind: 'number', pattern: /(?:talep\s+say(?:ı|ısı)|request\s+count|toplam\s+talep)/iu, fields: ['requests', 'requestcount'] },
-  { kind: 'number', pattern: /(?:toplam\s+görev|görev\p{L}*\s+arasında|total\s+tasks?|tasks?\s+total)/iu, fields: ['total', 'tasks', 'taskcount'] },
-  { kind: 'number', pattern: /(?:tamamlanma\s+oran|completion\s+rate)/iu, fields: ['completionratepercent'] },
-  { kind: 'number', pattern: /(?:%|ilerleme|progress)/iu, fields: ['progress', 'progresspercent'] },
-  { kind: 'number', pattern: /(?:planlanan\s+saat|planned\s+hours?)/iu, fields: ['plannedhours', 'planned', 'plannedhoursonassignedtasks'] },
-  { kind: 'number', pattern: /(?:gerçekleşen\s+saat|actual\s+hours?)/iu, fields: ['actualhours', 'actual'] },
-  { kind: 'number', pattern: /(?:süre|duration)/iu, fields: ['planneddurationdays', 'remainingdurationdays', 'durationdays'] },
-  { kind: 'number', pattern: /(?:bütçe|budget)/iu, fields: ['budget'] },
-  { kind: 'number', pattern: /(?:harcanan|spent)/iu, fields: ['spent'] },
-  { kind: 'date', pattern: /(?:planlanan\s+bitiş|planned\s+finish)/iu, fields: ['plannedfinish'] },
-  { kind: 'date', pattern: /(?:gerçekleşen\s+bitiş|actual\s+finish)/iu, fields: ['actualfinish'] },
-  { kind: 'date', pattern: /(?:gerçekleşen\s+başlangı[çc]|actual\s+start)/iu, fields: ['actualstart'] },
-  { kind: 'date', pattern: /(?:planlanan\s+başlangı[çc]|planned\s+start)/iu, fields: ['plannedstart'] },
-  { kind: 'date', pattern: /(?:güncelleme|updated|update)/iu, fields: ['updatedat', 'lasttaskupdateat'] },
-  { kind: 'date', pattern: /(?:termin|deadline|target\s+finish|due\s+date)/iu, fields: ['targetfinish', 'calendardate'] }
-]);
-
-function hintedFields(source, start, end, kind = 'number') {
-  if (kind === 'number') {
-    const before = source.slice(Math.max(0, start - 48), start);
-    const after = source.slice(end, Math.min(source.length, end + 32));
-    if (/(?:tamamlanma\s+oran[ıi]?|completion\s+rate)\s*[:=]?\s*%?\s*$/iu.test(before)) {
-      return ['completionratepercent'];
-    }
-    if (/^\s*(?:gün|days?)\s+(?:gecikmiş|overdue)(?=$|[^\p{L}])/iu.test(after)) {
-      return ['overduedays'];
-    }
-  }
-  const from = Math.max(0, start - 36);
-  const around = source.slice(from, Math.min(source.length, end + 36));
-  const claimCenter = ((start + end) / 2) - from;
-  let best = null;
-  for (const item of FIELD_HINTS) {
-    if (item.kind !== kind) continue;
-    const flags = item.pattern.flags.includes('g') ? item.pattern.flags : item.pattern.flags + 'g';
-    const pattern = new RegExp(item.pattern.source, flags);
-    for (const match of around.matchAll(pattern)) {
-      const center = match.index + (match[0].length / 2);
-      const distance = Math.abs(center - claimCenter);
-      if (!best || distance < best.distance) best = { distance, fields: item.fields };
-    }
-  }
-  if (best) return best.fields;
-  if (kind === 'number') {
-    const after = source.slice(end, end + 40);
-    if (/^\s+(?:görev\p{L}*|tasks?)(?=$|[^\p{L}])/iu.test(after)) return ['total', 'tasks', 'taskcount'];
-    if (/^\s+(?:proje\p{L}*|projects?)(?=$|[^\p{L}])/iu.test(after)) return ['projects', 'projectcount', 'totalprojects'];
-  }
-  return null;
-}
-
-const TURKISH_MONTHS = Object.freeze({
-  ocak: '01', şubat: '02', mart: '03', nisan: '04', mayıs: '05', haziran: '06',
-  temmuz: '07', ağustos: '08', eylül: '09', ekim: '10', kasım: '11', aralık: '12'
-});
-
-function claimsIn(text, locale = replyLocale(text)) {
-  let source = claimText(text);
-  const dates = [];
-  const clockTimes = [];
-  source = source
-    .replace(/\b(\d{4}-\d{2}-\d{2})T((?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?)(?:Z|[+\-]\d{2}:\d{2})\b/gi, (token, day, clockTime, offset) => {
-      dates.push({ value: day, fields: hintedFields(source, offset, offset + token.length, 'date') });
-      clockTimes.push({ value: clockTime, qualified: true });
-      return ' '.repeat(token.length);
-    })
-    .replace(/\b(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+(\d{4})\b/giu, (token, day, monthName, year, offset) => {
-      const month = TURKISH_MONTHS[monthName.toLocaleLowerCase('tr-TR')];
-      dates.push({
-        value: year + '-' + month + '-' + String(day).padStart(2, '0'),
-        fields: hintedFields(source, offset, offset + token.length, 'date')
-      });
-      return ' '.repeat(token.length);
-    })
-    .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (token, _year, _month, _day, offset) => {
-      dates.push({ value: token, fields: hintedFields(source, offset, offset + token.length, 'date') });
-      return ' '.repeat(token.length);
-    })
-    .replace(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/g, (token, day, month, year, offset) => {
-      dates.push({
-        value: year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0'),
-        fields: hintedFields(source, offset, offset + token.length, 'date')
-      });
-      return ' '.repeat(token.length);
-    });
-  source = source
-    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, ' ')
-    .replace(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\b/g, (token) => {
-      clockTimes.push({ value: token, qualified: false });
-      return ' '.repeat(token.length);
-    });
-  const numbers = [...source.matchAll(/(^|[^\p{L}\d])([+\-−]?\d+(?:[.,]\d+)*)(?=$|[^\p{L}\d])/gu)]
-    .map((match) => {
-      const start = match.index + match[1].length;
-      const end = match.index + match[0].length;
-      const before = source.slice(Math.max(0, start - 16), start);
-      const after = source.slice(end, Math.min(source.length, end + 32));
-      const windowLiteral = match[2] === '7' && (
-        /^\s+gün(?:\s+içinde)?\s+termin/iu.test(after)
-        || (/next\s+$/i.test(before) && /^\s+days?\b/i.test(after))
-      );
-      if (windowLiteral) return null;
-      return { value: canonicalNumber(match[2], locale) ?? `invalid:${match[2]}`, fields: hintedFields(source, start, end) };
-    })
-    .filter((claim) => claim?.value);
-  const lower = source.toLocaleLowerCase('tr-TR');
-  const statuses = STATUS_CLAIMS.filter((item) => item.pattern.test(lower)).map((item) => item.values);
-  const relativeDates = [...source.matchAll(/(?:^|[^\p{L}])(bugün|yarın|dün|today|tomorrow|yesterday)(?=$|[^\p{L}])/giu)]
-    .map((match) => ({ offset: ({ bugün: 0, today: 0, yarın: 1, tomorrow: 1, dün: -1, yesterday: -1 })[match[1].toLocaleLowerCase('tr-TR')], fields: hintedFields(source, match.index, match.index + match[0].length, 'date') })).filter((claim) => claim.fields);
-  const strings = [];
-  const recurrence = /(?:her\s+gün|günlük|daily|her\s+hafta|haftalık|weekly|her\s+ay|aylık|monthly|her\s+yıl|yıllık|yearly)/giu;
-  for (const match of source.matchAll(recurrence)) {
-    const word = match[0].toLocaleLowerCase('tr-TR');
-    const value = /gün|daily/u.test(word) ? 'daily' : /hafta|weekly/u.test(word) ? 'weekly' : /ay|monthly/u.test(word) ? 'monthly' : 'yearly';
-    strings.push({ values: [value], fields: ['recurrencefrequency'] });
-    strings.push({ values: ['1'], fields: ['recurrenceinterval'] });
-  }
-  const definitions = [
-    { pattern: /(?:önceli(?:ği|k)|priority)\s*(?:is\s+|[:=]\s*)?([\p{L}_-]+)/giu, fields: ['priority', 'prioritylabel'], aliases: { kritik: 'critical', yüksek: 'high', orta: 'medium', düşük: 'low' } },
-    { pattern: /(?:erişim(?:\s+düzeyi)?|access(?:\s+level)?)\s*(?:is\s+|[:=]\s*)?([\p{L}_-]+)/giu, fields: ['access', 'level', 'accesslevel', 'label'], aliases: { tam: 'full', okuma: 'read', kısmi: 'partial' } },
-    { pattern: /(?:kaynağı|source)\s*(?:is\s+|[:=]\s*)?([\p{L}_-]+)/giu, fields: ['source', 'sourcetype'], aliases: { kurumsal: 'corporate', manuel: 'manual' } },
-    { pattern: /(?:açıklaması|description)\s*(?:is\s+|[:=]\s*)?([^.!?;]+?)(?=\s+(?:ve|and)\s+|[.!?;]|$)/giu, fields: ['description'], aliases: {} },
-    { pattern: /(kritik|yüksek|orta|düşük|critical|high|medium|low)\s+(?:öncelik|priority)/giu, fields: ['priority', 'prioritylabel'], aliases: { kritik: 'critical', yüksek: 'high', orta: 'medium', düşük: 'low' } },
-    { pattern: /(kurumsal|manuel|corporate|manual)\s+(?:proje\p{L}*|project\p{L}*)/giu, fields: ['source', 'sourcetype'], aliases: { kurumsal: 'corporate', manuel: 'manual' } },
-    { pattern: /(?:tekrar(?:\s+kuralı)?|recurrence(?:\s+rule)?)\s*[:=]\s*([^.!?;]+)/giu, fields: ['recurrencerule', 'rule', 'label'], aliases: {} }
-  ];
-  for (const definition of definitions) {
-    for (const match of source.matchAll(definition.pattern)) {
-      const value = match[1].trim().toLocaleLowerCase('tr-TR');
-      strings.push({ values: [value, definition.aliases[value]].filter(Boolean), fields: definition.fields });
-    }
-  }
-  for (const match of source.matchAll(/(?:kilometre taşı|milestone)\s*(değil|değildir|dır|is not|is|true|false)?/giu)) {
-    const negative = /değil|not|false/iu.test(match[1] || '');
-    strings.push({ values: [negative ? 'false' : 'true'], fields: ['milestone', 'ismilestone'] });
-  }
-  return { dates, numbers, statuses, clockTimes, relativeDates, strings };
-}
-
-function emptyEvidenceValues() {
-  return { numbers: new Set(), dates: new Set(), strings: new Set(), fields: new Map() };
-}
-
-
-function fieldBucket(result, key) {
-  const normalized = String(key || '').toLocaleLowerCase('en-US').replace(/[^a-z0-9]/g, '');
-  if (!normalized) return null;
-  if (!result.fields.has(normalized)) result.fields.set(normalized, { numbers: new Set(), dates: new Set(), strings: new Set() });
-  return result.fields.get(normalized);
-}
-
-function addPrimitive(value, keys, result) {
-  // Only the leaf owns this value: a tasks.open value is not a tasks total.
-  const buckets = [fieldBucket(result, Array.isArray(keys) ? keys.at(-1) : keys)].filter(Boolean);
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const number = String(value);
-    result.numbers.add(number);
-    for (const bucket of buckets) bucket.numbers.add(number);
-    return;
-  }
-  if (typeof value === 'boolean') {
-    result.strings.add(String(value));
-    for (const bucket of buckets) bucket.strings.add(String(value));
-    return;
-  }
-  if (typeof value !== 'string') return;
-  const lower = value.toLocaleLowerCase('tr-TR');
-  const leaf = Array.isArray(keys) ? keys.at(-1) : keys;
-  if (leaf === 'rule' || leaf === 'recurrenceRule') {
-    const frequency = /(?:^|;)FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(?:;|$)/i.exec(value)?.[1];
-    const interval = /(?:^|;)INTERVAL=(\d+)(?:;|$)/i.exec(value)?.[1] || '1';
-    if (frequency && Number(interval) > 0) {
-      fieldBucket(result, 'recurrencefrequency').strings.add(frequency.toLowerCase());
-      fieldBucket(result, 'recurrenceinterval').strings.add(String(Number(interval)));
-    }
-  }
-  result.strings.add(lower);
-  for (const bucket of buckets) bucket.strings.add(lower);
-  for (const date of value.matchAll(/(?:^|[^\d])(\d{4}-\d{2}-\d{2})(?=[^\d]|$)/g)) {
-    result.dates.add(date[1]);
-    for (const bucket of buckets) bucket.dates.add(date[1]);
-  }
-}
-
-function collectLocalValues(value, result, keys = []) {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (item == null || typeof item !== 'object') addPrimitive(item, keys, result);
-    }
-    return;
-  }
-  if (value && typeof value === 'object') {
-    for (const [childKey, item] of Object.entries(value)) {
-      const childKeys = [...keys, childKey];
-      if (Array.isArray(item) && item.some((entry) => entry && typeof entry === 'object')) {
-        if (childKey === 'assignees') {
-          for (const person of item) collectLocalValues(person, result, childKeys);
-        } else collectLocalValues(item.filter((entry) => entry == null || typeof entry !== 'object'), result, childKeys);
-      } else {
-        collectLocalValues(item, result, childKeys);
-      }
-    }
-    return;
-  }
-  addPrimitive(value, keys, result);
-}
-
-function collectEvidenceScopes(value, scopes = []) {
-  const local = emptyEvidenceValues();
-  collectLocalValues(value, local);
-  if (local.numbers.size || local.dates.size || local.strings.size) scopes.push(local);
-  const visitArrays = (node) => {
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        if (child && typeof child === 'object') collectEvidenceScopes(child, scopes);
-      }
-      return;
-    }
-    if (!node || typeof node !== 'object') return;
-    for (const child of Object.values(node)) visitArrays(child);
-  };
-  visitArrays(value);
-  return scopes;
-}
-
-const ENVELOPE_TOTAL_FIELDS = Object.freeze({
-  rota_task_search: 'taskcount',
-  rota_project_search: 'projectcount',
-  rota_schedule_requests: 'requestcount',
-  rota_assignment_requests: 'requestcount'
-});
-
-function evidenceValueIndex(payloads) {
-  const byId = new Map();
-  for (const item of Array.isArray(payloads) ? payloads : []) {
-    if (!item || !isEvidenceId(item.id)) continue;
-    let payload = item.payload;
-    if (typeof payload === 'string') {
-      try {
-        payload = JSON.parse(payload);
-      } catch {
-        continue;
-      }
-    }
-    const scopes = collectEvidenceScopes(payload);
-    const totalField = ENVELOPE_TOTAL_FIELDS[payload?.tool] || (!payload?.tool ? 'taskcount' : null);
-    const totalValue = canonicalNumber(payload?.totalCount);
-    if (totalField && totalValue != null) {
-      if (scopes[0]) fieldBucket(scopes[0], totalField)?.numbers.add(totalValue);
-    }
-    for (const scope of scopes) scope.today = payload?.today || payload?.data?.definitions?.today || null;
-    byId.set(item.id, scopes);
-  }
-  return byId;
-}
-
-function fieldSupports(scope, fields, kind, value) {
-  if (!fields?.length) return kind === 'dates' && scope[kind].has(value);
-  return fields.some((field) => scope.fields.get(field)?.[kind]?.has(value));
-}
-
-function meaningfulEvidenceString(value) {
-  const text = String(value || '').trim();
-  if (text.length < 3 || text.length > 160) return false;
-  if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(text) || /^\d{4}-\d{2}-\d{2}/.test(text)) return false;
-  return !/^(?:true|false|null|done|todo|planned|in_progress|in-progress|full|partial|read)$/i.test(text);
-}
-
-function entityClaimsIn(text) {
-  const source = claimText(text);
-  const claims = [];
-  const patterns = [
-    { kind: 'person', pattern: /(?:sorumlu(?:su|ları)?|oluşturan|proje lideri|lideri)\s*(?:[:=–—-]\s*|\s+)([\p{L}][\p{L}\p{M}'’ -]{1,80})/giu },
-    { kind: 'person', pattern: /(?:assignee|owner|responsible person|created by|project lead)\s*(?:is\s+|[:=–—-]\s*)?([\p{L}][\p{L}\p{M}'’ -]{1,80})/giu },
-    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+projesi(?:nde|nin)?\b/giu },
-    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+görevi(?:nde|nin)?\b/giu },
-    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+project\b/giu },
-    { kind: 'subject', pattern: /([\p{L}\d][\p{L}\p{M}\d'’()/_ -]{2,80}?)\s+task\b/giu },
-    { kind: 'exact', pattern: /(?:görev|task)\s*[“"'‘’]([^”"'‘’]{2,120})[”"'‘’]/giu }
-  ];
-  for (const { kind, pattern } of patterns) {
-    for (const match of source.matchAll(pattern)) {
-      let value = match[1].trim().replace(/\s+/g, ' ');
-      if (kind === 'person') {
-        value = value.replace(/(?:^|\s+)(?:olan|olarak|ve|ile|and)(?=$|[^\p{L}]).*$/iu, '').trim();
-        if (/^(?:atanmamış|atanmadı|olmayan|bulunmayan|belirsiz|belirlenmemiş|unassigned|none|not\s+assigned)(?=$|[^\p{L}])/iu.test(value)) continue;
-      }
-      if (kind === 'subject') value = value.replace(/^(?:şu\s+anda|şimdi|halen|currently|now)\s+/iu, '').trim();
-      const normalized = normalizedText(value);
-      if (/^(?:oldugunuz|oldugun|oldugu|olan|olarak)$/u.test(normalized)) continue;
-      if (!/^(?:bu|bir|ilgili|proje|görev|kişi|bilinmiyor|yok|the|this|a)$/iu.test(value) && value.length >= 2) claims.push(value);
-    }
-  }
-  return [...new Set(claims)];
-}
-
-function normalizedText(value) {
-  return String(value || '').toLocaleLowerCase('tr-TR').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
-}
-
-function scopeContainsText(scope, value) {
-  const needle = normalizedText(value);
-  return [...scope.strings].some((candidate) => normalizedText(candidate) === needle);
-}
-
-function scopeContainsQualifiedClock(scope, value) {
-  const needle = String(value || '').toLocaleLowerCase('en-US');
-  return [...scope.strings].some((candidate) => {
-    const text = String(candidate || '').toLocaleLowerCase('en-US');
-    return text.includes(`t${needle}`) && /(?:z|[+\-]\d{2}:\d{2})$/.test(text);
-  });
-}
-
-function claimUnits(text) {
-  const lines = claimText(text).split('\n');
-  const units = [];
-  let headers = null;
-  const cellsOf = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
-  const separator = (line) => /^\s*\|/.test(line || '') && cellsOf(line).every((cell) => /^:?-+:?$/.test(cell));
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*\|/.test(line)) {
-      const cells = cellsOf(line);
-      if (separator(line)) continue;
-      if (separator(lines[index + 1])) { headers = cells; continue; }
-      if (cells.length < 2) { units.push(line); continue; }
-      for (let column = 1; column < cells.length; column += 1) {
-        if (cells[column]) units.push(`${cells[0]} ${headers?.[column] || ''}: ${cells[column]}`);
-      }
-      continue;
-    }
-    headers = null;
-    units.push(...line.split(/;|,(?!\d)|(?<=[.!?])\s+/u).map((item) => item.trim()).filter(Boolean));
-  }
-  return units;
-}
-
-function relativeDay(today, offset) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(today || '')) return null;
-  const date = new Date(`${today}T12:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + offset);
-  return date.toISOString().slice(0, 10);
-}
-
-function unsupportedEvidenceClaims(text, citationIds, byId, locale) {
-  const scopes = citationIds.flatMap((id) => byId.get(id) || []);
-  const unsupported = [];
-  const allClaims = claimsIn(text, locale);
-  const sharedHints = [...new Map(allClaims.numbers.filter((claim) => claim.fields).map((claim) => [claim.fields.join(','), claim.fields])).values()];
-  if (!scopes.length) {
-    return allClaims.numbers.length || allClaims.dates.length || allClaims.statuses.length || allClaims.clockTimes.length || allClaims.relativeDates.length || allClaims.strings.length || entityClaimsIn(text).length ? ['kanıt yükü'] : [];
-  }
-
-  for (const unit of claimUnits(text)) {
-    const claims = claimsIn(unit, locale);
-    const entities = entityClaimsIn(unit);
-    const lowerUnit = normalizedText(unit);
-    const anchors = [...new Set(scopes.flatMap((scope) => [...scope.strings])
-      .filter(meaningfulEvidenceString)
-      .filter((value) => lowerUnit.includes(normalizedText(value))))];
-    const candidates = scopes.filter((scope) => entities.every((entity) => scopeContainsText(scope, entity))
-      && anchors.every((anchor) => scope.strings.has(anchor)));
-    const supported = candidates.some((scope) => (
-      claims.numbers.every((claim) => fieldSupports(scope, claim.fields || (sharedHints.length === 1 ? sharedHints[0] : null), 'numbers', claim.value))
-      && claims.dates.every((claim) => fieldSupports(scope, claim.fields, 'dates', claim.value))
-      && claims.relativeDates.every((claim) => claim.fields && fieldSupports(scope, claim.fields, 'dates', relativeDay(scope.today, claim.offset)))
-      && claims.strings.every((claim) => claim.values.some((value) => fieldSupports(scope, claim.fields, 'strings', value)))
-      && claims.statuses.every((aliases) => aliases.some((alias) => scope.fields.get('status')?.strings.has(alias)))
-      && claims.clockTimes.every((claim) => claim.qualified && scopeContainsQualifiedClock(scope, claim.value))
-    ));
-    if (!supported) {
-      for (const entity of entities) unsupported.push('metin ' + excerpt(entity));
-      for (const claim of claims.numbers) unsupported.push('sayı ' + claim.value);
-      for (const claim of claims.dates) unsupported.push('tarih ' + claim.value);
-      for (const claim of claims.relativeDates) unsupported.push('göreli tarih');
-      for (const claim of claims.strings) unsupported.push('alan ' + excerpt(claim.values[0]));
-      for (const aliases of claims.statuses) unsupported.push('durum ' + aliases[0]);
-      for (const claim of claims.clockTimes) unsupported.push('saat ' + claim.value);
-      if (!entities.length && !claims.numbers.length && !claims.dates.length && !claims.relativeDates.length && !claims.strings.length && !claims.statuses.length && !claims.clockTimes.length && anchors.length) unsupported.push('kayıt ilişkisi');
-    }
-  }
-  return [...new Set(unsupported)];
-}
-
-/**
- * Kanıta dayanan (araç kullanılmış) yanıtın doğrulanması.
- *
- * @param {string} text  kanonikleştirilmiş yanıt
- * @param {{ evidenceIds: Iterable<string>, evidencePayloads?: Array<{id: string, payload: string}> }} context tur kanıtları
- * @returns {{ ok: boolean, citedIds: string[], issues: Array<{code: string, detail?: string}> }}
- */
-export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads, locale = replyLocale(text) } = {}) {
-  const available = new Set(evidenceIds);
-  const answer = String(text ?? '');
-  const issues = [];
-  if (!answer.trim()) {
-    return { ok: false, citedIds: [], issues: [{ code: 'EMPTY_ANSWER' }] };
-  }
-  const cited = extractCitationIds(answer);
-  const unknown = cited.filter((id) => !available.has(id));
-  if (unknown.length) issues.push({ code: 'UNKNOWN_CITATION', detail: unknown.join(', ') });
-  const malformed = (answer.match(ANY_BRACKETED) || []).filter((token) => !/^【R[1-9]\d?】$/.test(token));
-  if (malformed.length) issues.push({ code: 'MALFORMED_CITATION', detail: malformed.slice(0, 3).join(' ') });
-  const valid = cited.filter((id) => available.has(id));
-  if (available.size > 0 && valid.length === 0) issues.push({ code: 'MISSING_CITATION' });
-
-  const segments = answerSegments(answer);
-  const directCitations = segments.map((segment) => validCitationsIn(segment.text, available));
-  const valuesByEvidence = evidenceValueIndex(evidencePayloads);
-  const validatePayloadValues = Array.isArray(evidencePayloads);
-  segments.forEach((segment, index) => {
-    let citationIds = directCitations[index];
-    if (!citationIds.length && segment.kind !== 'paragraph') {
-      citationIds = [...new Set([...(directCitations[index - 1] || []), ...(directCitations[index + 1] || [])])];
-    }
-    if (citationIds.length) {
-      if (validatePayloadValues) {
-        const unsupported = unsupportedEvidenceClaims(segment.text, citationIds, valuesByEvidence, locale);
-        if (unsupported.length) issues.push({ code: 'UNSUPPORTED_EVIDENCE_VALUE', detail: unsupported.slice(0, 4).join(', ') });
-      }
-      return;
-    }
-    const code = segmentHasNumericClaim(segment) ? 'UNCITED_NUMERIC_BLOCK' : 'UNCITED_GROUNDED_BLOCK';
-    issues.push({ code, detail: excerpt(segment.text) });
-  });
-  return { ok: issues.length === 0, citedIds: valid, issues };
-}
-
-/**
- * Araç kullanılmadan üretilen genel yanıt. Kanıt olmadığı için hiçbir kanıt
- * işareti taşıyamaz; taşıyorsa model kanıt uydurmuştur.
- */
 export function analyzeDirectAnswer(text, { evidenceRequired = false } = {}) {
   const answer = String(text ?? '');
   const issues = [];
   if (!answer.trim()) issues.push({ code: 'EMPTY_ANSWER' });
   if (evidenceRequired) issues.push({ code: 'ROTA_EVIDENCE_REQUIRED' });
-  const tokens = answer.match(ANY_BRACKETED) || [];
-  if (tokens.length) issues.push({ code: 'CITATION_WITHOUT_EVIDENCE', detail: tokens.slice(0, 3).join(' ') });
+  if (containsCitationMarker(answer)) issues.push({ code: 'CITATION_WITHOUT_EVIDENCE' });
   return { ok: issues.length === 0, citedIds: [], issues };
 }
 
-/**
- * Araç denendi ama hiçbir kanıt üretilemedi (bulunamadı, süre aşımı, yoğunluk…).
- * Yanıt kanıt işareti taşıyamaz ve Rota verisi olarak okunabilecek sayı ya da
- * tarih içeremez: araç hatası, veriyi tahminle doldurma izni değildir.
- */
-const SAFE_UNGROUNDED_FAILURE = /^(?:bu soruyu(?: şu anda)?(?: Rota verisiyle)? yanıtlayamıyorum|bu görevi bulamadım ya da görüntüleme yetkiniz yok|kayıt bulunamadı(?: ya da bu kaydı görüntüleme yetkiniz yok)?|(?:Rota )?veri(?:si|sine|ye|lerine)?(?: şu anda| süre sınırında)? (?:alınamadı|ulaşılamıyor|erişemiyorum|yoğun)|(?:bu |ilgili )?veri (?:bulunamadı|bulamadım)|(?:bu |ilgili )?veriye erişemiyorum|görüntüleme yetkiniz yok)$/iu;
-const SAFE_UNGROUNDED_REMEDIATION = /^(?:(?:lütfen )?(?:(?:biraz|daha|kısa bir süre) sonra )?(?:yeniden|tekrar) deneyin|(?:soruyu|daha dar bir sorguyla) .*?(?:yeniden|tekrar) deneyin|daha dar bir sorguyla (?:yeniden|tekrar) deneyin|(?:lütfen )?görüntüleme yetkinizi .*?kontrol edin)$/iu;
+export const NON_ENUMERATING_FAILURE_TEXT = 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.';
 
-function isSafeUngroundedAnswer(value) {
-  const clauses = stripCitations(String(value ?? ''))
-    .trim()
-    .split(/\s*;\s*|(?<=[.!?])\s+/u)
-    .map((clause) => clause.trim().replace(/[.!?]+$/u, ''))
-    .filter(Boolean);
-  if (!clauses.length || !SAFE_UNGROUNDED_FAILURE.test(clauses[0])) return false;
-  return clauses.slice(1).every((clause) => SAFE_UNGROUNDED_REMEDIATION.test(clause));
-}
-
-export function analyzeUngroundedAnswer(text, { evidenceRequired = false } = {}) {
-  const value = String(text ?? '');
-  const direct = analyzeDirectAnswer(value);
-  const issues = [...direct.issues];
-  if (evidenceRequired && !isSafeUngroundedAnswer(value)) {
-    issues.push({ code: 'ROTA_EVIDENCE_REQUIRED', detail: excerpt(value) });
-  }
-  for (const segment of answerSegments(value)) {
-    if (segment.kind !== 'code' && segmentHasNumericClaim(segment)) {
-      issues.push({ code: 'UNGROUNDED_NUMERIC_BLOCK', detail: excerpt(segment.text) });
-    }
-  }
+export function analyzeUngroundedAnswer(text) {
+  const value = String(text ?? '').trim();
+  const safe = [NON_ENUMERATING_FAILURE_TEXT, GROUNDING_FAILURE_TEXT,
+    'The record was not found or you are not authorized to view it.', groundingFailureText('en')];
+  const issues = safe.includes(value) ? [] : [{ code: 'ROTA_EVIDENCE_REQUIRED' }];
   return { ok: issues.length === 0, citedIds: [], issues };
 }
 
-/** Satır, kanıt işaretine benzeyen bir parça taşıyor mu? (akış kapısı için) */
 export function containsCitationMarker(text) {
-  return /【/.test(String(text ?? '')) || /\[\s*R[1-9]\d?\s*\]/.test(String(text ?? ''));
+  return /【|\[\s*R\d+/i.test(String(text ?? ''));
 }
 
-const SCOPE_PHRASES = [
-  'görebildiğiniz', 'görüntüleyebildiğiniz', 'erişebildiğiniz', 'erişiminiz', 'erişim yetkiniz',
-  'yetkili olduğunuz', 'yetkinizdeki', 'yetkiniz bulunan', 'yetkinizin', 'size görünen', 'görünür kapsam',
-  'görünen kapsam', 'kısmi kapsam', 'görünürlüğünüz', 'görünürlük kapsamınız', 'yetki kapsamınız'
-];
-
-/** Yanıt, kapsamın yetkiyle sınırlı olduğunu söylüyor mu? */
-export function mentionsAuthorizedScope(text) {
-  const lower = String(text ?? '').toLocaleLowerCase('tr-TR');
-  return SCOPE_PHRASES.some((phrase) => lower.includes(phrase));
-}
-
-/**
- * Kısmi kapsamlı kanıta atıf yapan ama kapsamı belirtmeyen yanıta sunucunun
- * belirlenimci notunu ekler. Not modelden gelmez; yanıt metnine eklenir ve
- * yanıtla birlikte kaydedilir.
- */
 export function withScopeDisclosure(text, citedEvidence = [], locale = replyLocale(text)) {
-  const partial = citedEvidence.some((item) => item?.partial === true);
-  if (!partial) return { text, disclosed: false };
-  return { text: `${String(text).trimEnd()}\n\n${locale === 'en' ? '_Note: This answer covers only records you are authorized to view and may not reflect the entire projects._' : SCOPE_DISCLOSURE_TEXT}`, disclosed: true };
+  if (!citedEvidence.some((item) => item?.partial === true)) return { text, disclosed: false };
+  const note = locale === 'en'
+    ? '_Note: This answer covers only records you are authorized to view and may not reflect the entire projects._'
+    : SCOPE_DISCLOSURE_TEXT;
+  return { text: `${String(text).trimEnd()}\n\n${note}`, disclosed: true };
 }
 
-const ISSUE_GUIDANCE = Object.freeze({
-  EMPTY_ANSWER: 'Yanıt boş kaldı; kanıtlara dayanan kısa bir yanıt yaz.',
-  UNKNOWN_CITATION: 'Bu turda üretilmemiş kanıt kimliği kullandın. Yalnızca araç sonuçlarındaki evidenceId değerlerini kullan.',
-  MALFORMED_CITATION: 'Atıf biçimi hatalı. Atıfları yalnızca 【R1】 biçiminde yaz.',
-  MISSING_CITATION: 'Rota verisine dayanan her ifadeye ilgili kanıtın atfını 【R1】 biçiminde ekle.',
-  UNCITED_NUMERIC_BLOCK: 'Bir bölüm sayı ya da tarih içeriyor ama kanıt atfı taşımıyor. Değeri destekleyen kanıtın atfını aynı paragrafa ekle; kanıtla desteklenemiyorsa değeri yazma.',
-  UNCITED_GROUNDED_BLOCK: 'Bir bölüm Rota yanıtında kanıt atfı taşımıyor. Rota verisine dayanmıyorsa bölümü çıkar; dayanıyorsa ilgili kanıtın atfını ekle.',
-  UNSUPPORTED_EVIDENCE_VALUE: 'Taslakta atıf yapılan araç sonuçlarıyla desteklenmeyen değerler var. Yalnızca ilgili kanıt yükünde gerçekten bulunan sayı, tarih ve durum değerlerini kullan.',
-  ROTA_EVIDENCE_REQUIRED: 'Kullanıcı güncel Rota verisi soruyor. Yanıt vermeden önce ilgili Rota aracını çağır ve sonucu kanıt olarak kullan.',
-  CITATION_WITHOUT_EVIDENCE: 'Bu yanıtta hiçbir Rota kanıtı yok ama kanıt işareti kullandın. Rota verisi gerekiyorsa önce ilgili aracı çağır; gerekmiyorsa kanıt işareti kullanmadan yanıtla.',
-  UNGROUNDED_NUMERIC_BLOCK: 'Rota verisi alınamadığı hâlde taslak sayı ya da tarih içeriyor. Veriyi tahminle doldurma; verinin neden alınamadığını açıkla ya da ilgili aracı yeniden çağır.'
-});
-
-/** Tek düzeltme turunda modele verilen, sunucuya ait yönerge. */
 export function groundingRepairInstruction(issues = []) {
-  const lines = [...new Set(issues.map((issue) => issue?.code).filter(Boolean))]
-    .slice(0, 6)
-    .map((code) => `- ${ISSUE_GUIDANCE[code] || 'Yanıtı kanıt sözleşmesine uygun yeniden yaz.'}`);
+  const codes = [...new Set(issues.map((issue) => issue?.code).filter(Boolean))].slice(0, 6);
   return [
-    'SUNUCU DOĞRULAMASI: Önceki taslak kanıt sözleşmesini karşılamadı ve kullanıcıya gösterilmedi.',
-    ...lines,
-    'Rota verisi gerekiyorsa önce uygun aracı çağır. Kanıt varsa yalnızca o kanıtlarla yanıtı baştan yaz; yeni sayı, tarih ya da durum uydurma.'
+    'SUNUCU DOĞRULAMASI: Önceki taslak kullanıcıya gösterilmedi.',
+    `Sözleşme hataları: ${codes.join(', ')}`,
+    'Güncel Rota verisi gerekiyorsa uygun aracı çağır. Kanıt varsa yalnızca yapılandırılmış yanıt üret:',
+    '{"kind":"rota","claims":[{"evidenceId":"R1","factId":"araçtaki kimlik","subjectId":"araçtaki kimlik","field":"araçtaki alan","operator":"eq","value":"araçtaki türü korunmuş değer"}]}',
+    'Araçsız genel yanıt {"kind":"general","text":"yanıt"} olmalıdır. Serbest olgu metni, başlık veya ek alan yazma. Kanıt alınamadıysa {"kind":"unavailable"} yaz.'
   ].join('\n');
 }
 
