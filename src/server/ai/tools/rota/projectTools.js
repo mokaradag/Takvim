@@ -311,19 +311,40 @@ const wbsInspect = {
       else roots.push(node);
     }
     const order = (left, right) => left.sortOrder - right.sortOrder || left.code.localeCompare(right.code, 'tr') || left.id.localeCompare(right.id);
-    const rollup = (node, guard = 0) => {
+    const rollupState = new Map();
+    const cycleNodes = new Set();
+    const path = [];
+    const rollup = (node) => {
+      const state = rollupState.get(node.id);
+      if (state === 'done') return node.subtree;
+      if (state === 'visiting') {
+        const cycleStart = path.lastIndexOf(node.id);
+        for (const id of path.slice(Math.max(0, cycleStart))) cycleNodes.add(id);
+        cycleNodes.add(node.id);
+        return { tasks: 0, done: 0, overdue: 0 };
+      }
+      if (path.length > 200) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      rollupState.set(node.id, 'visiting');
+      path.push(node.id);
       node.children.sort(order);
       node.subtree = { ...node.direct };
-      if (guard > 200) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       for (const child of node.children) {
-        const sub = rollup(child, guard + 1);
+        const sub = rollup(child);
         node.subtree.tasks += sub.tasks;
         node.subtree.done += sub.done;
         node.subtree.overdue += sub.overdue;
       }
+      path.pop();
+      rollupState.set(node.id, 'done');
       return node.subtree;
     };
-    roots.sort(order).forEach((root) => rollup(root));
+    roots.sort(order);
+    roots.forEach((root) => rollup(root));
+    for (const node of [...nodes.values()].sort(order)) {
+      if (rollupState.get(node.id) === 'done') continue;
+      roots.push(node);
+      rollup(node);
+    }
     let start = roots;
     if (args.wbsId) {
       const focus = nodes.get(args.wbsId);
@@ -339,9 +360,12 @@ const wbsInspect = {
     start.forEach(collectSubtree);
     const nodeCount = subtreeNodes.size;
     const listed = [];
+    const walked = new Set();
     let omitted = 0;
     let depthTruncated = false;
     const walk = (node, depth) => {
+      if (walked.has(node.id)) return;
+      walked.add(node.id);
       if (listed.length >= limit) {
         omitted += 1;
         return;
@@ -352,6 +376,7 @@ const wbsInspect = {
         name: node.name,
         depth,
         ...(node.parentId ? { parentWbsId: node.parentId } : {}),
+        ...(cycleNodes.has(node.id) ? { malformedCycle: true } : {}),
         childCount: node.children.length,
         directTasks: node.direct.tasks,
         subtreeTasks: node.subtree.tasks,
@@ -374,6 +399,7 @@ const wbsInspect = {
         notes: [
           'Görev sayıları yalnızca görünür görevler üzerindedir.',
           ...(catalogVisible ? [] : ['Bu projede yalnızca yetkili görevlerinizin bağlı olduğu düğümler ve ataları görünür.']),
+          ...(cycleNodes.size ? ['WBS yapısında döngü algılandı; döngülü bağlantılar tekrar izlenmeden düğümler görünür tutuldu.'] : []),
           ...(depthTruncated ? ['İş dağılım ağacı istenen derinlikte kesildi; daha derin düğümler bu sonuçta yer almaz.'] : [])
         ]
       },

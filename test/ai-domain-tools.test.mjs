@@ -172,6 +172,32 @@ test('yönetim kapsamı: yönetici yalnızca astının görevini ve onun iş da�
   assert.match(shallow.result.data.notes.join(' '), /derinlikte kesildi/);
 });
 
+test('döngülü WBS bileşeni düşürülmez ve bozuk yapı açıkça işaretlenir', async (t) => {
+  const stack = stackFor(t);
+  const root = stack.db.wbs.find((node) => node.WbsId === WBS.FULL_ROOT);
+  root.ParentWbsId = WBS.FULL_DETAIL;
+
+  const result = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 4 });
+  assert.equal(result.result.ok, true);
+  assert.deepEqual(
+    result.result.data.nodes.map((node) => node.wbsId).sort(),
+    [WBS.FULL_ROOT, WBS.FULL_DESIGN, WBS.FULL_DETAIL].sort()
+  );
+  assert.equal(result.result.data.nodes.every((node) => node.malformedCycle === true), true);
+  assert.match(result.result.data.notes.join(' '), /döngü/i);
+
+  const focused = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', {
+    projectId: PROJECTS.FULL,
+    wbsId: WBS.FULL_DESIGN,
+    depth: 4
+  });
+  assert.equal(focused.result.ok, true);
+  assert.deepEqual(
+    focused.result.data.nodes.map((node) => node.wbsId).sort(),
+    [WBS.FULL_ROOT, WBS.FULL_DESIGN, WBS.FULL_DETAIL].sort()
+  );
+});
+
 /* ── Belirlenimci hesaplar ────────────────────────────────── */
 
 test('toplamlar belirlenimcidir: durum, gecikme, 7 gün, terminsiz, tamamlanma oranı ve saat kapsaması', async (t) => {

@@ -750,7 +750,9 @@ test('araç SQL işleri kendi sınırlı kapısından ve süre sınırıyla geç
   assert.match(gate, /createAiSqlGate\(\{\s*name: 'domain-tools',\s*\.\.\.TOOL_SQL_GATE,\s*saturation: 'tools'\s*\}\)/);
   const context = code(read('src/server/ai/tools/toolContext.js'));
   assert.match(context, /gate\.run\(sicil, signal, async \(track\) =>/);
-  assert.match(context, /boundedExecutor\(pool, signal, \{ track \}\)/);
+  assert.match(context, /const remainingMs = Math\.max\(1, limits\.maxCumulativeSqlMs - state\.sqlMs\)/);
+  assert.match(context, /createAiDeadline\(\{ timeoutMs: remainingMs, parentSignal: signal, now: clock \}\)/);
+  assert.match(context, /boundedExecutor\(pool, cumulativeDeadline\.signal, \{ track \}\)/);
   assert.match(context, /if \(Number\(auth\?\.sicil\) !== Number\(sicil\)\)/);
   const limits = read('src/server/ai/tools/toolLimits.js');
   for (const expected of ['maxToolRounds: 4', 'maxCallsPerRound: 5', 'maxTotalCalls: 12', 'maxRepairRounds: 1', 'slots: 1', 'perUserActive: 1']) {

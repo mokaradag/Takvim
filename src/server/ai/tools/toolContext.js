@@ -4,7 +4,7 @@ import { loadAuthorizationContext } from '../../authorization/loadAuthorizationC
 import { getSqlPool } from '../../db/pool.js';
 import { ServerPersistenceError } from '../../errors.js';
 import { boundedExecutor } from '../../observability/boundedExecution.js';
-import { raceWithAbort } from '../aiDeadline.js';
+import { createAiDeadline, raceWithAbort } from '../aiDeadline.js';
 import { buildRotaScope } from './rota/rotaScope.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
@@ -45,10 +45,17 @@ export function createToolTurnContext({
     return gate.run(sicil, signal, async (track) => {
       if (state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
       const admittedAt = clock();
+      const remainingMs = Math.max(1, limits.maxCumulativeSqlMs - state.sqlMs);
+      const cumulativeDeadline = createAiDeadline({ timeoutMs: remainingMs, parentSignal: signal, now: clock });
       state.queries += 1;
       try {
-        return await work(boundedExecutor(pool, signal, { track }));
+        return await work(boundedExecutor(pool, cumulativeDeadline.signal, { track }));
+      } catch (error) {
+        if (signal.aborted) throw signal.reason;
+        if (cumulativeDeadline.failure()) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
+        throw error;
       } finally {
+        cumulativeDeadline.dispose();
         state.sqlMs += Math.max(0, clock() - admittedAt);
       }
     });

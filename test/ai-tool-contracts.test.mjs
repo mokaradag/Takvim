@@ -17,7 +17,7 @@ const { TOOL_ERROR_CODES, ToolError, toToolError, isTurnFatal } = await import('
 const facts = await import('../src/server/ai/tools/rota/taskFacts.js');
 const { buildRotaScope, describeTaskScope, projectAccess } = await import('../src/server/ai/tools/rota/rotaScope.js');
 const { dataText } = await import('../src/server/ai/tools/rota/rotaToolSupport.js');
-const { AI_TOOL_DEPENDENCIES_SQL, AI_TOOL_TASK_FACTS_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+const { AI_TOOL_DEPENDENCIES_SQL, AI_TOOL_TASK_FACTS_SQL, AI_TOOL_WBS_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
 const registry = await import('../src/server/ai/tools/toolRegistry.js');
 const evidence = await import('../src/domain/ai/evidenceContract.js');
 const { AI_ERROR_CODES } = await import('../src/domain/ai/aiErrorCatalog.js');
@@ -35,6 +35,11 @@ test('AI araç SQL kapısı olağan Rota trafiği için havuz kapasitesi bırak�
 
 test('odaklı bağımlılık sorgusu proje geneli görev toplamını hesaplamaz', () => {
   assert.match(AI_TOOL_DEPENDENCIES_SQL, /WHERE @focusTaskId IS NULL AND t\.ProjectId = @projectId;/);
+});
+
+test('kısmi WBS ata sorgusu bozuk döngüde aynı düğümü yeniden ziyaret etmez', () => {
+  assert.match(AI_TOOL_WBS_SQL, /VisitedWbs/);
+  assert.match(AI_TOOL_WBS_SQL, /CHARINDEX\([^\n]+child\.VisitedWbs\)\s*=\s*0/);
 });
 
 function detailsOf(work) {
@@ -554,7 +559,7 @@ test('Rota olgu kapısı bağlamı korur; kanıt doğrulaması isim ve kayıt il
   assert.equal(evidence.analyzeGroundedAnswer('Toplam görev 3. 【R1】', taskEnvelope).ok, true);
 });
 
-test('saat dilimi doğrulanamayan saat iddiası sessizce kanıtlanmış sayılmaz', () => {
+test('saat iddiası yalnızca saat dilimli kanıt zaman damgasıyla bire bir doğrulanır', () => {
   const context = {
     evidenceIds: ['R1'],
     evidencePayloads: [{
@@ -562,10 +567,17 @@ test('saat dilimi doğrulanamayan saat iddiası sessizce kanıtlanmış sayılma
       payload: JSON.stringify({ data: { updatedAt: '2026-09-30T14:37:00.000Z' } })
     }]
   };
-  const verdict = evidence.analyzeGroundedAnswer('Son güncelleme 30.09.2026 14:37. 【R1】', context);
-  assert.equal(verdict.ok, false);
-  assert.ok(verdict.issues.some((issue) => issue.code === 'UNSUPPORTED_EVIDENCE_VALUE'
+  const unqualified = evidence.analyzeGroundedAnswer('Son güncelleme 30.09.2026 14:37. 【R1】', context);
+  assert.equal(unqualified.ok, false);
+  assert.ok(unqualified.issues.some((issue) => issue.code === 'UNSUPPORTED_EVIDENCE_VALUE'
     && issue.detail.includes('saat 14:37')));
+
+  assert.equal(
+    evidence.analyzeGroundedAnswer('Son güncelleme 2026-09-30T14:37:00.000Z. 【R1】', context).ok,
+    true
+  );
+  const wrong = evidence.analyzeGroundedAnswer('Son güncelleme 2026-09-30T15:37:00.000Z. 【R1】', context);
+  assert.equal(wrong.ok, false);
 });
 
 test('kısmi kapsamlı kanıta dayanan yanıta sunucu kapsam notunu yalnızca gerekirse ekler', () => {

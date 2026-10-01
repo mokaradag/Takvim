@@ -427,16 +427,19 @@ ${VISIBLE_TASKS}
   )
   BEGIN
     ;WITH RequiredWbs AS (
-      SELECT DISTINCT w.WbsId, w.ParentWbsId, w.ProjectId
+      SELECT DISTINCT w.WbsId, w.ParentWbsId, w.ProjectId,
+        CAST('|' + CONVERT(varchar(36), w.WbsId) + '|' AS varchar(max)) AS VisitedWbs
       FROM #AiTasks visible
       JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
       JOIN dbo.MR_WBS w ON w.WbsId = t.WbsId AND w.ProjectId = t.ProjectId
       WHERE visible.ProjectId = @projectId
       UNION ALL
-      SELECT parentNode.WbsId, parentNode.ParentWbsId, parentNode.ProjectId
+      SELECT parentNode.WbsId, parentNode.ParentWbsId, parentNode.ProjectId,
+        CAST(child.VisitedWbs + CONVERT(varchar(36), parentNode.WbsId) + '|' AS varchar(max)) AS VisitedWbs
       FROM dbo.MR_WBS parentNode
       JOIN RequiredWbs child ON child.ParentWbsId = parentNode.WbsId
       WHERE parentNode.ProjectId = child.ProjectId
+        AND CHARINDEX('|' + CONVERT(varchar(36), parentNode.WbsId) + '|', child.VisitedWbs) = 0
     )
     INSERT #AiRequiredWbs(WbsId)
     SELECT DISTINCT WbsId FROM RequiredWbs
