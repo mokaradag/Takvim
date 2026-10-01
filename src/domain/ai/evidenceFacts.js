@@ -47,6 +47,9 @@ const LABELS = Object.freeze({
   active: ['Etkin', 'Active'], pending: ['Bekleyen', 'Pending'], paused: ['Bekletilen', 'Paused'], failed: ['Başarısız', 'Failed'],
   checks: ['Kalite denetimi', 'Quality check'], examples: ['Örnek', 'Example'],
   completedWithoutActualFinish: ['Gerçekleşen bitişi eksik tamamlanan görev', 'Completed tasks without actual finish'],
+  access: ['Erişim', 'Access'], level: ['Erişim düzeyi', 'Access level'], reasons: ['Erişim nedeni', 'Access reason'],
+  completeTaskView: ['Tam görev görünümü', 'Complete task view'],
+  dependenciesAndBaselines: ['Bağımlılık ve baz plan erişimi', 'Dependency and baseline access'],
   title: ['Başlık', 'Title'], name: ['Ad', 'Name'], code: ['Kod', 'Code'], description: ['Açıklama', 'Description'],
   keyword: ['Etiket', 'Label'], status: ['Durum', 'Status'], priority: ['Öncelik', 'Priority'],
   milestone: ['Kilometre taşı', 'Milestone'], progress: ['İlerleme (%)', 'Progress (%)'],
@@ -111,7 +114,8 @@ export function createEvidenceFacts(envelope, { prefix, subject = 'Rota', fields
     } else if (value && typeof value === 'object') {
       const named = subjectName(value, null);
       for (const [key, item] of Object.entries(value)) {
-        if (OMIT.test(key)) continue;
+        const projectAccess = path === 'data' && key === 'access';
+        if (OMIT.test(key) && !projectAccess) continue;
         visit(item, `${path}.${key}`, named || name, depth + 1, Object.hasOwn(LABELS, value.field) ? value.field : null);
       }
     }
@@ -139,7 +143,7 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
   const leaf = fact.field.split('.').at(-1);
   const values = {
     status: { todo: ['Yapılacak', 'To do'], in_progress: ['Devam ediyor', 'In progress'], done: ['Tamamlandı', 'Done'] },
-    priority: { low: ['Düşük', 'Low'], medium: ['Normal', 'Medium'], high: ['Yüksek', 'High'], critical: ['Kritik', 'Critical'] },
+    priority: { low: ['Düşük', 'Low'], medium: ['Orta', 'Medium'], high: ['Yüksek', 'High'], critical: ['Kritik', 'Critical'] },
     sourceType: { corporate: ['Kurumsal', 'Corporate'], manual: ['Manuel', 'Manual'] }
   };
   let value = fact.value;

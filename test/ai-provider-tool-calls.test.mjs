@@ -119,6 +119,18 @@ test('istek: katalog "function" aracı, seçim kipi ve araçlı döküm OpenAI t
   assert.equal(Object.hasOwn(plain.requests[0].body, 'tool_choice'), false);
 });
 
+test('istek: geçersiz model araç adı sağlayıcıya yeniden oynatılırken güvenli ada çevrilir', async () => {
+  const invalid = providerWith(() => sseResponse([chunk({ content: 'Tamam' }), chunk({}, { finish_reason: 'stop' }), 'data: [DONE]\n\n']));
+  await collect(await toolStream(invalid.provider, {
+    messages: [
+      { role: 'system', content: 'Yönerge' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'bad', name: 'functions.rota_task_search', arguments: '{}' }] },
+      { role: 'tool', toolCallId: 'bad', content: '{"ok":false,"error":{"code":"UNKNOWN_TOOL"}}' }
+    ]
+  }));
+  assert.equal(invalid.requests[0].body.messages[1].tool_calls[0].function.name, 'unknown_tool');
+});
+
 test('akış: parçalara bölünmüş ad ve bağımsız değişkenler birleştirilir; çağrılar yalnızca sonda ve dizin sırasıyla verilir', async () => {
   const { provider } = providerWith(() => sseResponse([
     chunk({ content: 'Bakıyorum. ' }),

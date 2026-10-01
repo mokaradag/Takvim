@@ -190,10 +190,11 @@ export function analyzeDirectAnswer(text, { evidenceRequired = false } = {}) {
 
 export const NON_ENUMERATING_FAILURE_TEXT = 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.';
 
-export function analyzeUngroundedAnswer(text) {
+export function analyzeUngroundedAnswer(text, { allowNotFound = true } = {}) {
   const value = String(text ?? '').trim();
-  const safe = [NON_ENUMERATING_FAILURE_TEXT, GROUNDING_FAILURE_TEXT,
-    'The record was not found or you are not authorized to view it.', groundingFailureText('en')];
+  const unavailable = [GROUNDING_FAILURE_TEXT, groundingFailureText('en')];
+  const notFound = [NON_ENUMERATING_FAILURE_TEXT, 'The record was not found or you are not authorized to view it.'];
+  const safe = allowNotFound ? [...notFound, ...unavailable] : unavailable;
   const issues = safe.includes(value) ? [] : [{ code: 'ROTA_EVIDENCE_REQUIRED' }];
   return { ok: issues.length === 0, citedIds: [], issues };
 }

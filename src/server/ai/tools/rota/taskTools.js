@@ -206,10 +206,10 @@ function recurrenceView(fact, row) {
     return { role: 'series-template', rule: dataText(fact.recurrenceRule, 200), description: describeRecurrenceRule(fact.recurrenceRule) };
   }
   if (fact.recurrenceParentId) {
+    const seriesTitle = row.ParentTitle ? dataText(row.ParentTitle, 160) : null;
     return {
       role: 'occurrence',
-      seriesTaskId: fact.recurrenceParentId,
-      seriesTitle: row.ParentTitle ? dataText(row.ParentTitle, 160) : null,
+      ...(seriesTitle ? { seriesTaskId: fact.recurrenceParentId, seriesTitle } : {}),
       occurrenceDate: fact.recurrenceOccurrenceDate
     };
   }

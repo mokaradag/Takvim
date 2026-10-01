@@ -51,7 +51,7 @@ export const TASK_ACTIVITY_SQL = `
   WHERE a.EntityType = 'TASK' AND a.ActionCode IN ('CREATE', 'UPDATE', 'DELETE')
     AND a.OccurredAt >= @startUtc AND a.OccurredAt < @endUtc
     AND (@projectId IS NULL OR a.ProjectId = @projectId)
-    AND (@taskId IS NULL OR TRY_CONVERT(uniqueidentifier, a.EntityId) = @taskId)
+    AND (@taskIdText IS NULL OR a.EntityId = @taskIdText)
     AND (@scope = 'visible' OR (@scope = 'mine' AND a.ActorSicil = @sicil)
       OR (@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil))))
@@ -78,7 +78,7 @@ export const TASK_ACTIVITY_SQL = `
     MAX(CASE WHEN Kind = 'created' THEN 1 ELSE 0 END) AS Created
   INTO #TaskActivityGroups FROM #TaskActivityScope
   WHERE (@person IS NULL OR ActorSicil = @person) AND (@projectId IS NULL OR ProjectId = @projectId)
-    AND (@taskId IS NULL OR TRY_CONVERT(uniqueidentifier, EntityId) = @taskId)
+    AND (@taskIdText IS NULL OR EntityId = @taskIdText)
     AND (@directorate = '' OR COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__') = @directorate)
     AND (@department = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(Department))) = @department)
     AND (@unit = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(Department)), CHAR(31), LTRIM(RTRIM(Unit))) = @unit)
@@ -115,7 +115,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   for (const key of ['startUtc', 'endUtc']) request.input(key, sql.DateTime2, query[key]);
   for (const key of ['page', 'pageSize', 'person']) request.input(key, sql.Int, query[key]);
   request.input('projectId', sql.UniqueIdentifier, query.projectId);
-  request.input('taskId', sql.UniqueIdentifier, query.taskId);
+  request.input('taskIdText', sql.NVarChar(36), query.taskId);
   for (const key of ['scope', 'kind', 'directorate', 'department', 'unit']) request.input(key, sql.NVarChar(1000), query[key]);
   const result = await request.query(TASK_ACTIVITY_SQL);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];

@@ -416,7 +416,7 @@ ${VISIBLE_TASKS}
     CASE WHEN v.AccessLevel = 'FULL' THEN (
       SELECT COUNT(*) FROM dbo.MR_Baselines b WHERE b.ProjectId = v.ProjectId
     ) ELSE NULL END AS BaselineCount,
-    CASE WHEN v.AccessLevel = 'FULL' THEN (
+    CASE WHEN v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR v.IsTaskScoped = 1 THEN (
       SELECT COUNT(*) FROM dbo.MR_WBS w WHERE w.ProjectId = v.ProjectId
     ) ELSE NULL END AS WbsNodeCount
   FROM #AiScopeProjects v

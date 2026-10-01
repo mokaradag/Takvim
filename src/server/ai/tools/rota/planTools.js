@@ -347,10 +347,11 @@ const recurrenceInspect = {
       const occurrences = result.facts.filter((item) => item.recurrenceParentId === seriesId);
       const access = projectAccess(scope, fact.projectId);
       const summary = seriesSummary(template, occurrences, call.today);
+      const evidenceTask = template || fact;
       return {
         data: {
           series: {
-            templateTaskId: seriesId,
+            ...(template ? { templateTaskId: template.id } : {}),
             title: dataText(template?.title || fact.title, 160),
             ...(template ? { rule: dataText(template.recurrenceRule, 200), ruleDescription: describeRecurrenceRule(template.recurrenceRule) } : {}),
             ...summary
@@ -365,7 +366,7 @@ const recurrenceInspect = {
         nextCursor: null,
         evidence: {
           label: `Tekrar serisi · ${dataText(template?.title || fact.title, 60)}`,
-          entity: { type: 'task', id: seriesId, name: dataText(template?.title || fact.title, 120) },
+          entity: { type: 'task', id: evidenceTask.id, name: dataText(evidenceTask.title, 120) },
           highlights: [template ? describeRecurrenceRule(template.recurrenceRule) : 'Şablon görünmüyor', `Görünür yineleme: ${occurrences.length}`]
         }
       };
@@ -388,7 +389,7 @@ const recurrenceInspect = {
     const list = [...series.entries()].map(([seriesId, entry]) => {
       const title = entry.template?.title || entry.occurrences[0]?.title || 'Seri';
       return {
-        templateTaskId: seriesId,
+        ...(entry.template ? { templateTaskId: entry.template.id } : {}),
         title: dataText(title, 160),
         project: projects.get(entry.projectId)?.name || null,
         ...(entry.template ? { ruleDescription: describeRecurrenceRule(entry.template.recurrenceRule) } : {}),

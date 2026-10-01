@@ -86,8 +86,10 @@ export function taskActivityChanges(events, people = new Map(), { includeStructu
   if (deleted) lines.push('Görev silindi');
   if (completed) lines.push('Tamamlandı');
   for (const change of changes.values()) {
+    const before = canonicalChangeValue(change.before, change.column);
+    const after = canonicalChangeValue(change.after, change.column);
+    if (includeStructuredChanges && before !== after) structuredChanges.push({ field: change.name, before, after });
     if (normalized(change.before, change.column) === normalized(change.after, change.column)) continue;
-    if (includeStructuredChanges) structuredChanges.push({ field: change.name, before: canonicalChangeValue(change.before, change.column), after: canonicalChangeValue(change.after, change.column) });
     if (change.column === 'RecurrenceRule') lines.push('Yineleme düzeni değiştirildi');
     else lines.push(`${change.label}: ${display(change.before, change.column)} → ${display(change.after, change.column)}`);
   }

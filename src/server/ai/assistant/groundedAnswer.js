@@ -16,6 +16,7 @@ import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
+import { TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 
 /**
@@ -48,15 +49,19 @@ function appendServerInstruction(transcript, instruction) {
   transcript[systemIndex] = { ...current, content: `${current.content}\n\n${instruction}` };
 }
 
+function toolMessageBody(message) {
+  try {
+    const body = JSON.parse(String(message?.content || '{}'));
+    return body && typeof body === 'object' && !Array.isArray(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
 function safeToolCallsForTranscript(toolCalls, toolMessages) {
   return toolCalls.map((call, index) => {
-    let rejected = true;
-    try {
-      rejected = JSON.parse(String(toolMessages[index]?.content || '{}')).ok === false;
-    } catch {
-      rejected = true;
-    }
-    return rejected ? { ...call, arguments: '{}' } : call;
+    const body = toolMessageBody(toolMessages[index]);
+    return body?.ok === true ? call : { ...call, arguments: '{}' };
   });
 }
 
@@ -76,12 +81,14 @@ const TOOL_FOLLOW_UPS = Object.freeze({
   rota_outlook_status: ['rota_task_search', 'rota_task_detail'], rota_data_quality: ['rota_task_search']
 });
 
-export function toolsForInitialCalls(calls, catalog) {
+export function toolsForInitialCalls(calls, catalog, toolMessages = null) {
   const registered = new Set(catalog.map((tool) => tool.name));
   const names = new Set();
-  for (const call of calls) {
+  for (let index = 0; index < calls.length; index += 1) {
+    const call = calls[index];
     if (!registered.has(call.name)) continue;
     names.add(call.name);
+    if (toolMessages && toolMessageBody(toolMessages[index])?.ok !== true) continue;
     for (const name of TOOL_FOLLOW_UPS[call.name] || []) if (registered.has(name)) names.add(name);
   }
   return names;
@@ -101,7 +108,7 @@ function boundTranscript(transcript) {
   }
 }
 
-function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidenceRequired, locale }) {
+function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFailureCodes, evidenceRequired, locale }) {
   const normalized = text;
   if (evidenceIds.length) return {
     normalized,
@@ -113,7 +120,11 @@ function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, evidence
     const safe = groundingFailureText(locale);
     return { normalized: safe, kind: 'ungrounded', ...analyzeUngroundedAnswer(safe) };
   }
-  if (toolsAttempted) return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized, { evidenceRequired }) };
+  if (toolsAttempted) {
+    const notFoundOnly = toolFailureCodes.size > 0
+      && [...toolFailureCodes].every((code) => code === TOOL_ERROR_CODES.NOT_FOUND);
+    return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized, { allowNotFound: notFoundOnly }) };
+  }
   if (response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
     return { normalized: response.text, kind: 'direct', ...analyzeDirectAnswer(response.text, { evidenceRequired }) };
   }
@@ -150,6 +161,7 @@ export async function runGroundedTurn(session, {
   let toolRounds = 0;
   let modelRounds = 0;
   let toolsAttempted = false;
+  const toolFailureCodes = new Set();
   let repairsLeft = limits.maxRepairRounds;
   let repaired = false;
   let allowTools = true;
@@ -170,11 +182,15 @@ export async function runGroundedTurn(session, {
     if (result.toolCalls.length && canCallTools) {
       toolsAttempted = true;
       toolRounds += 1;
-      if (!permittedTools) {
-        const selected = toolsForInitialCalls(result.toolCalls.slice(0, limits.maxCallsPerRound), catalog);
-        if (selected.size) permittedTools = selected;
-      }
       const toolMessages = await executor.runRound(result.toolCalls);
+      for (const message of toolMessages) {
+        const body = toolMessageBody(message);
+        if (body?.ok === false && typeof body.error?.code === 'string') toolFailureCodes.add(body.error.code);
+      }
+      if (!permittedTools) {
+        const boundedCalls = result.toolCalls.slice(0, limits.maxCallsPerRound);
+        permittedTools = toolsForInitialCalls(boundedCalls, catalog, toolMessages.slice(0, boundedCalls.length));
+      }
       transcript.push({ role: 'assistant', content: result.text || '', toolCalls: safeToolCallsForTranscript(result.toolCalls, toolMessages) });
       transcript.push(...toolMessages);
       if (toolRounds >= limits.maxToolRounds) appendServerInstruction(transcript, roundLimitNote());
@@ -187,6 +203,7 @@ export async function runGroundedTurn(session, {
       evidenceIds: ledger.ids(),
       evidencePayloads: ledger.payloads(),
       toolsAttempted,
+      toolFailureCodes,
       evidenceRequired,
       locale
     });

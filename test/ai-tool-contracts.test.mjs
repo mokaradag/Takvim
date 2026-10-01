@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
-import { createEvidenceFacts, FACT_LIMITS } from '../src/domain/ai/evidenceFacts.js';
+import { createEvidenceFacts, FACT_LIMITS, renderEvidenceFact } from '../src/domain/ai/evidenceFacts.js';
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 
 registerServerOnlyShim();
@@ -357,6 +357,11 @@ function verify(context, ...claims) {
   return evidence.analyzeGroundedAnswer(evidenceReply(...claims), context);
 }
 
+test('bulunamadı ifadesi yalnızca çağıran izin verdiğinde güvenli kanıtsız sonuçtur', () => {
+  assert.equal(evidence.analyzeUngroundedAnswer(evidence.NON_ENUMERATING_FAILURE_TEXT).ok, true);
+  assert.equal(evidence.analyzeUngroundedAnswer(evidence.NON_ENUMERATING_FAILURE_TEXT, { allowNotFound: false }).ok, false);
+});
+
 test('raw qualitative, numeric, date, negation and table prose cannot become verified facts', () => {
   const context = groundingContext({ task: { title: 'Alfa', status: 'done', milestone: true, targetFinish: '2026-10-15' } });
   for (const text of ['Alfa iptal edildi. 【R1】', 'Alfa task is not done. 【R1】',
@@ -373,6 +378,20 @@ test('supported typed fields work and arbitrary prose cannot accompany a valid c
   answer.text = 'Alfa tamamlandı.';
   assert.equal(evidence.analyzeGroundedAnswer(JSON.stringify(answer), context).ok, false);
   assert.equal(verify(context, { ...answer.claims[0], text: 'Alfa tamamlandı.' }).ok, false);
+});
+
+test('proje erişim açıklaması olgu olarak doğrulanır; orta öncelik ürün etiketiyle çizilir', () => {
+  const context = groundingContext({
+    access: { level: 'READ', reasons: ['Proje erişim hibesi'], completeTaskView: true, dependenciesAndBaselines: false },
+    task: { title: 'Alfa', priority: 'medium' }
+  });
+  assert.equal(verify(context, claimFor(context.envelope, 'data.access.level')).ok, true);
+  const reason = verify(context, claimFor(context.envelope, 'data.access.reasons.0'));
+  assert.equal(reason.ok, true);
+  assert.match(reason.normalized, /Proje erişim hibesi/);
+  const priority = createEvidenceFacts(context.envelope, { prefix: context.envelope.factScope })
+    .find((fact) => fact.field === 'data.task.priority');
+  assert.match(renderEvidenceFact(priority, 'R1', 'tr'), /Öncelik: Orta/);
 });
 
 test('short codes, prefix collisions and sibling records cannot exchange metrics or subjects', () => {

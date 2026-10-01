@@ -269,7 +269,9 @@ function wireMessages(messages) {
           id: call.id,
           type: 'function',
           function: {
-            name: typeof call.name === 'string' && call.name.trim() ? call.name : 'unknown_tool',
+            name: typeof call.name === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(call.name.trim())
+              ? call.name.trim()
+              : 'unknown_tool',
             arguments: typeof call.arguments === 'string' && call.arguments.trim() ? call.arguments : '{}'
           }
         }))

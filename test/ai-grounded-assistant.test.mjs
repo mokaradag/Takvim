@@ -30,7 +30,7 @@ import {
 } from './helpers/aiStack.mjs';
 import { AYSE, MEHMET, PROJECTS, rotaToolSeed, TASKS } from './helpers/aiToolFixtures.mjs';
 
-const { GROUNDING_FAILURE_TEXT, SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
+const { GROUNDING_FAILURE_TEXT, NON_ENUMERATING_FAILURE_TEXT, SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 const { aiHealthComponent } = await import('../src/server/ai/aiHealth.js');
@@ -444,6 +444,8 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   const rejectedCalls = stack.provider.calls[1].messages.find((message) => Array.isArray(message.toolCalls))?.toolCalls || [];
   assert.equal(rejectedCalls.length, 4);
   assert.equal(rejectedCalls.every((call) => call.arguments === '{}'), true, 'reddedilen bağımsız değişkenler sonraki modele taşınmaz');
+  assert.deepEqual(stack.provider.calls[1].tools.map((tool) => tool.name), ['rota_task_search'],
+    'başarısız ilk çağrı takip araçlarını açmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
   // Kanıt olmadan "12 görev" yazılamaz: düzeltme istenir, dürüst yanıt kaydedilir.
   const repairSystem = stack.provider.calls[2].messages.find((message) => message.role === 'system');
@@ -453,6 +455,20 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   assert.equal(done.assistantMessage.content, GROUNDING_FAILURE_TEXT);
   assert.deepEqual(done.assistantMessage.evidence, []);
   assert.equal(stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE).Status, 'planned', 'hiçbir yazma yapılmadı');
+});
+
+test('bulunamadı yanıtı gerçek NOT_FOUND olmadan kabul edilmez', async (t) => {
+  const stack = groundedStack(t);
+  stack.provider.enqueue(
+    { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: '{bozuk' }] },
+    { type: 'answer', text: NON_ENUMERATING_FAILURE_TEXT },
+    { type: 'answer', text: '{"kind":"unavailable"}' }
+  );
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Görev ayrıntısını getir' });
+  const failedTool = toolResultsOf(stack.provider.calls[1])[0];
+  assert.equal(failedTool.error.code, 'INVALID_ARGUMENTS');
+  assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
+  assert.equal(response.text.includes(NON_ENUMERATING_FAILURE_TEXT), false);
 });
 
 test('araç turu sınırı: dördüncü turdan sonra araçlar kapanır, sınır notu eklenir ve yanıt eldeki kanıtla verilir', async (t) => {

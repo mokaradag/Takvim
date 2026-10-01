@@ -1676,4 +1676,7 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   hatalarında uyarır.
 - **Dağıtım:** 0018 → model kaydında `chat.tools` / `chat.tools.reasoning` →
   bayrak kapalıyken yayın → `MERGEN_ROTA_AI_TOOLS_ENABLED=true` → Sistem
-  Yönetimi denetimi → elle kabul. Geri alma: bayrağı kapatmak yeterlidir.
+  Yönetimi denetimi → elle kabul. Geri alma: yalnız Aşama 3 özelliği geri
+  alınacaksa bayrağı kapatmak yeterlidir; Aşama 3 öncesi uygulama sürümüne
+  dönülürse model kaydı da önceki JSON'a döndürülmeli veya `chat.tools` /
+  `chat.tools.reasoning` profilleri kaldırılmalıdır.

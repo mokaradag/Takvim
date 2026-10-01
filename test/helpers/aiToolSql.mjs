@@ -326,7 +326,7 @@ function projectDetail(db, params) {
       CalendarName: calendar?.Name ?? null,
       DependencyCount: access.AccessLevel === 'FULL' ? db.taskDependencies.filter((dep) => same(dep.ProjectId, project.ProjectId)).length : null,
       BaselineCount: access.AccessLevel === 'FULL' ? db.baselines.filter((row) => same(row.ProjectId, project.ProjectId)).length : null,
-      WbsNodeCount: access.AccessLevel === 'FULL'
+      WbsNodeCount: access.AccessLevel === 'FULL' || access.HasReadGrant || access.IsTaskScoped
         ? db.wbs.filter((node) => same(node.ProjectId, project.ProjectId)).length
         : null
     }],

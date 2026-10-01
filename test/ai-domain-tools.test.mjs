@@ -416,8 +416,10 @@ test('proje künyesi erişim nedenini açıklar; READ bağımlılık ve baz plan
   assert.equal(read.result.data.access.dependenciesAndBaselines, false);
   assert.equal(read.result.data.visibleTasks.total, 2);
   assert.equal(read.result.data.project.dependencyCount, null);
+  assert.equal(read.result.data.project.wbsNodeCount, 0, 'READ erişimi tam WBS kataloğu sayısını da görür');
   const partial = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.PARTIAL });
   assert.equal(partial.result.data.access.level, 'PARTIAL');
+  assert.equal(partial.result.data.project.wbsNodeCount, 0, 'kendi görev kapsamı da tam WBS kataloğu sayısını görür');
   assert.ok(partial.result.data.access.reasons.includes('Görev sorumlusu'));
   assert.equal(partial.result.scope.kind, 'authorized-task-subset');
   const full = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.FULL });
@@ -524,6 +526,30 @@ test('tekrar serisi, çalışma takvimi ve plan veri kalitesi ürün kurallarıy
   assert.deepEqual(counts, { assignee: 1, targetFinish: 1, schedule: 3, wbs: 0 });
   assert.equal(quality.result.data.openTaskCount, 6);
   assert.equal(quality.result.data.completedWithoutActualFinish.count, 0);
+});
+
+test('gizli tekrar şablonunun kimliği görünür yineleme üzerinden sızmaz', async (t) => {
+  const stack = stackFor(t);
+  const templateId = PARTIAL_OTHERS[0];
+  const template = stack.db.tasks.find((task) => task.TaskId === templateId);
+  const occurrence = stack.db.tasks.find((task) => task.TaskId === TASKS.PARTIAL_OWN);
+  template.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO';
+  occurrence.RecurrenceParentTaskId = templateId;
+  occurrence.RecurrenceOccurrenceDate = '2026-10-05';
+
+  const single = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { taskId: TASKS.PARTIAL_OWN });
+  assert.equal(single.result.ok, true);
+  assert.equal(Object.hasOwn(single.result.data.series, 'templateTaskId'), false);
+  assert.equal(single.ledger.summaries()[0].entity.id, TASKS.PARTIAL_OWN);
+
+  const detail = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.PARTIAL_OWN });
+  assert.equal(Object.hasOwn(detail.result.data.task.recurrence, 'seriesTaskId'), false);
+
+  const listing = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { projectId: PROJECTS.PARTIAL });
+  const listed = listing.result.data.series.find((item) => item.title === occurrence.Title);
+  assert.ok(listed);
+  assert.equal(Object.hasOwn(listed, 'templateTaskId'), false);
+  assert.equal(JSON.stringify([single.result, detail.result, listing.result, single.ledger.summaries()]).includes(templateId), false);
 });
 
 test('plan kalitesi kurumsal dizinde çözülemeyen sorumlu Sicilini sorumlu saymaz', async (t) => {
