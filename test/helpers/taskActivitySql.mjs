@@ -12,7 +12,7 @@ export function taskActivityRecordsets(db, params) {
     const id = `${key(event.EntityId)}:${key(event.ProjectId)}`;
     if (!deletions.has(id) || deletions.get(id).AuditId < event.AuditId) deletions.set(id, event);
   }
-  const rows = db.auditLog.filter((row) => row.EntityType === 'TASK' && ['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode))
+  let rows = db.auditLog.filter((row) => row.EntityType === 'TASK' && ['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode))
     .filter((row) => new Date(row.OccurredAt) >= params.startUtc && new Date(row.OccurredAt) < params.endUtc)
     .filter((row) => (!params.projectId || key(row.ProjectId) === key(params.projectId)) && (!params.taskIdText || key(row.EntityId) === key(params.taskIdText)))
     .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : params.isAdmin || inTeam(row.ActorSicil)))
@@ -29,13 +29,24 @@ export function taskActivityRecordsets(db, params) {
       if (!visible) return [];
       const person = db.people.find((person) => person.Sicil === row.ActorSicil);
       const before = json(row.BeforeJson), after = json(row.AfterJson);
-      const completed = ['done', 'completed'].includes(after.Status || after.status) && !['done', 'completed'].includes(before.Status || before.status);
+      const completed = ['done', 'completed', 'cancelled'].includes(after.Status || after.status) && !['done', 'completed', 'cancelled'].includes(before.Status || before.status);
       return [{ ...row, ActionGroup: row.CorrelationId || `audit:${row.AuditId}`, CurrentTaskId: task?.TaskId,
         CurrentTitle: task?.Title, ProjectName: project?.ProjectName, ProjectCode: project?.ProjectCode,
         CurrentActorName: person?.DisplayName, Directorate: person?.Directorate, Department: person?.Department, Unit: person?.Unit,
         Kind: row.ActionCode === 'DELETE' ? 'deleted' : row.ActionCode === 'CREATE' ? 'created' : completed ? 'completed' : 'updated', Completed: completed }];
     });
-  if (params.activityProbeRows && rows.length >= params.activityProbeRows) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
+  if (params.activityProbeRows) {
+    const groupKinds = new Map();
+    for (const row of rows) {
+      const group = `${row.ActionGroup}:${row.EntityId}:${row.ActorSicil}:${row.ProjectId}`;
+      const rank = { updated: 0, completed: 1, created: 2, deleted: 3 };
+      if (!groupKinds.has(group) || rank[row.Kind] > rank[groupKinds.get(group)]) groupKinds.set(group, row.Kind);
+    }
+    rows = rows.filter((row) => (!params.person || row.ActorSicil === params.person)
+      && matchesOrgFilter({ organization: { directorate: row.Directorate, department: row.Department, unit: row.Unit } }, params)
+      && (!params.kind || groupKinds.get(`${row.ActionGroup}:${row.EntityId}:${row.ActorSicil}:${row.ProjectId}`) === params.kind));
+    if (rows.length >= params.activityProbeRows) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
+  }
   const actors = [...new Map(rows.map((row) => [row.ActorSicil, { ...row, DisplayName: row.CurrentActorName || row.ActorDisplayName }])).values()];
   const projectOptions = [...new Map(rows.filter((row) => row.ProjectId).map((row) => [row.ProjectId, row])).values()];
   const groups = new Map();
@@ -61,5 +72,8 @@ export function taskActivityRecordsets(db, params) {
     ActorCount: new Set(grouped.map((g) => g.events[0].ActorSicil)).size,
     CompletedCount: new Set(grouped.filter((g) => g.Completed).map((g) => g.events[0].EntityId)).size };
   return [actors, projectOptions, [summary], grouped.slice(Page * params.pageSize, (Page + 1) * params.pageSize)
-    .flatMap(({ events, ...group }) => events.slice(0, 100).map((row) => ({ ...row, ...group })))];
+    .flatMap(({ events, ...group }) => (params.activityDetailLimit ? events.slice(-params.activityDetailLimit) : events.slice(0, 100)).map((row) => ({ ...row, ...group, ...(params.activityDetailLimit ? {
+      BeforeJson: row.BeforeJson?.slice(0, 8192), AfterJson: row.AfterJson?.slice(0, 8192),
+      DetailJsonClipped: (row.BeforeJson?.length || 0) > 8192 || (row.AfterJson?.length || 0) > 8192
+    } : {}) })))];
 }

@@ -15,6 +15,20 @@
  * gelir. GUID'ler SQL Server gibi BÜYÜK harfle döner.
  */
 
+const canonicalStatus = (value) => ['done', 'completed', 'cancelled'].includes(value) ? 'done'
+  : ['in-progress', 'in_progress', 'blocked'].includes(value) ? 'in_progress' : 'todo';
+
+function wbsSubtree(db, params) {
+  if (!params.wbsId) return null;
+  const ids = new Set([upper(params.wbsId)]);
+  let size;
+  do {
+    size = ids.size;
+    for (const node of db.wbs) if (same(node.ProjectId, params.projectId) && ids.has(upper(node.ParentWbsId))) ids.add(upper(node.WbsId));
+  } while (size !== ids.size);
+  return ids;
+}
+
 const MARKER = /^\/\* rota-ai-tool:([a-z-]+) \*\//;
 
 const upper = (value) => (value == null ? null : String(value).toUpperCase());
@@ -169,11 +183,11 @@ function taskFacts(db, params) {
     if (params.seriesId && !same(task.TaskId, params.seriesId) && !same(task.RecurrenceParentTaskId, params.seriesId)) return false;
     if (params.recurringOnly && !task.RecurrenceRule && !task.RecurrenceParentTaskId) return false;
     if (text && charindex(text, `${task.Title} ${task.Keyword || ''}`) === 0) return false;
-    if (params.openOnly && task.Status === 'done') return false;
+    if (params.openOnly && canonicalStatus(task.Status) === 'done') return false;
     const target = day(task.TargetFinish);
     if (params.targetFrom && !(target && target >= day(params.targetFrom))) return false;
     if (params.targetTo && !(target && target <= day(params.targetTo))) return false;
-    const status = task.Status === 'done' ? 'done' : task.Status === 'in-progress' ? 'in_progress' : 'todo';
+    const status = canonicalStatus(task.Status);
     if (statuses.size && !statuses.has(status)) return false;
     const rawPriority = String(task.Priority || '').trim().toLocaleLowerCase('en-US');
     const priority = ['critical', 'high', 'low'].includes(rawPriority) ? rawPriority : 'medium';
@@ -182,7 +196,7 @@ function taskFacts(db, params) {
     if (params.deadline) {
       const today = day(params.today);
       const add = (count) => day(new Date(Date.parse(`${today}T00:00:00Z`) + count * 86400000));
-      const open = task.Status !== 'done';
+      const open = canonicalStatus(task.Status) !== 'done';
       if (params.deadline === 'overdue' && !(open && target && target < today)) return false;
       if (params.deadline === 'due_today' && !(open && target === today)) return false;
       if (params.deadline === 'due_next_7_days' && !(open && target && target >= today && target <= add(6))) return false;
@@ -245,7 +259,8 @@ function taskDetail(db, params) {
     SourceType: project.SourceType,
     HasReadGrant: access.HasReadGrant,
     IsTaskScoped: access.IsTaskScoped,
-    CalendarName: (calendar(task.CalendarId) || calendar(project.CalendarId))?.Name ?? null,
+    CalendarName: (calendar(task.CalendarId) || calendar(project.CalendarId) || db.calendars.find((row) => row.IsActive && row.IsDefault))?.Name ?? null,
+    CalendarSource: calendar(task.CalendarId) ? 'task' : calendar(project.CalendarId) ? 'project' : db.calendars.some((row) => row.IsActive && row.IsDefault) ? 'default' : null,
     CreatedByName: creatorVisible && task.CreatedBySicil != null ? personName(db, task.CreatedBySicil) : null
   };
   const chain = [];
@@ -277,19 +292,19 @@ function projectSearch(db, params) {
       };
     })
     .sort((left, right) => left.MatchRank - right.MatchRank || left.ProjectName.localeCompare(right.ProjectName, 'tr') || left.ProjectId.localeCompare(right.ProjectId));
-  return [[{ Total: matches.length }], matches.slice(0, Number(params.limit)).map((row) => ({ ...row, LeadName: row.LeadSicil == null ? null : personName(db, row.LeadSicil) }))];
+  return [[{ Total: matches.length, ExactCount: matches.filter((row) => row.MatchRank === 0).length }], matches.slice(0, Number(params.limit)).map((row) => ({ ...row, LeadName: row.LeadSicil == null ? null : personName(db, row.LeadSicil) }))];
 }
 
 function aggregate(tasks, params) {
   const today = day(params.today);
   const soonEnd = day(params.soonEnd);
-  const open = (task) => task.Status !== 'done';
+  const open = (task) => canonicalStatus(task.Status) !== 'done';
   const targets = tasks.filter((task) => open(task) && day(task.TargetFinish) && day(task.TargetFinish) >= today).map((task) => day(task.TargetFinish)).sort();
   return {
     TaskCount: tasks.length,
-    DoneCount: tasks.filter((task) => task.Status === 'done').length,
-    InProgressCount: tasks.filter((task) => task.Status === 'in-progress').length,
-    TodoCount: tasks.filter((task) => task.Status !== 'done' && task.Status !== 'in-progress').length,
+    DoneCount: tasks.filter((task) => canonicalStatus(task.Status) === 'done').length,
+    InProgressCount: tasks.filter((task) => canonicalStatus(task.Status) === 'in_progress').length,
+    TodoCount: tasks.filter((task) => canonicalStatus(task.Status) !== 'done' && canonicalStatus(task.Status) !== 'in_progress').length,
     OverdueCount: tasks.filter((task) => open(task) && day(task.TargetFinish) && day(task.TargetFinish) < today).length,
     DueSoonCount: tasks.filter((task) => open(task) && day(task.TargetFinish) && day(task.TargetFinish) >= today && day(task.TargetFinish) <= soonEnd).length,
     NoTargetCount: tasks.filter((task) => open(task) && !day(task.TargetFinish)).length,
@@ -352,16 +367,18 @@ function wbs(db, params) {
       }
     }
   }
-  const nodes = db.wbs.filter((node) => same(node.ProjectId, params.projectId) && (catalog || required.has(upper(node.WbsId))))
+  const focused = wbsSubtree(db, params);
+  const nodes = db.wbs.filter((node) => same(node.ProjectId, params.projectId) && (catalog || required.has(upper(node.WbsId))) && (!focused || focused.has(upper(node.WbsId))))
     .slice(0, Number(params.maxRows))
     .map((node) => ({ ...node, CatalogVisible: catalog ? 1 : 0 }));
   const counts = new Map();
   for (const { task } of scope.visible.values()) {
+    if (focused && !focused.has(upper(task.WbsId))) continue;
     const key = task.WbsId ? upper(task.WbsId) : null;
     if (!counts.has(key)) counts.set(key, { WbsId: task.WbsId ?? null, TaskCount: 0, DoneCount: 0, OverdueCount: 0 });
     const entry = counts.get(key);
     entry.TaskCount += 1;
-    if (task.Status === 'done') entry.DoneCount += 1;
+    if (canonicalStatus(task.Status) === 'done') entry.DoneCount += 1;
     else if (day(task.TargetFinish) && day(task.TargetFinish) < day(params.today)) entry.OverdueCount += 1;
   }
   const project = projectRow(db, params.projectId);
@@ -385,7 +402,7 @@ function dependencies(db, params) {
       TaskId: task.TaskId, Title: task.Title, Status: task.Status, PlannedStart: task.PlannedStart, PlannedFinish: task.PlannedFinish,
       TargetFinish: task.TargetFinish, IsMilestone: task.IsMilestone
     })),
-    [{ TaskCount: projectTasks.length, OpenCount: projectTasks.filter((task) => task.Status !== 'done').length }]
+    [{ TaskCount: projectTasks.length, OpenCount: projectTasks.filter((task) => canonicalStatus(task.Status) !== 'done').length }]
   ];
 }
 
@@ -452,7 +469,8 @@ function outlook(db, params) {
       LastFailureCode: row.LastFailureCode ?? null, AttemptCount: row.AttemptCount, CompletionSuspended: row.CompletionSuspended, UpdatedAt: null
     };
   });
-  return [visibleRows, [{ HasNonVisibleSubscriptions: counted.some((row) => !scope.visible.has(upper(row.TaskId))) }]];
+  if ([...scope.visible.keys()].length >= params.analysisMaxRows) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
+  return [visibleRows];
 }
 
 const HANDLERS = Object.freeze({
@@ -482,9 +500,11 @@ export function runAiToolQuery(db, sqlText, params) {
     const tooLarge = () => { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; };
     const hasSelectedBaseline = marker[1] !== 'baseline' || db.baselines.some((row) => scope.projects.get(upper(params.projectId))?.AccessLevel === 'FULL'
       && same(row.ProjectId, params.projectId) && (!params.baselineId || same(row.BaselineId, params.baselineId)));
+    const focused = marker[1] === 'wbs' && params.wbsId ? wbsSubtree(db, params) : null;
     const analyzed = [...scope.visible.values()].filter(({ task }) => (!params.seriesId || same(task.TaskId, params.seriesId) || same(task.RecurrenceParentTaskId, params.seriesId))
-      && (!params.recurringOnly || task.RecurrenceRule || task.RecurrenceParentTaskId));
-    const staged = marker[1] === 'task-facts' ? taskFacts(db, { ...params, assigneeMode: 'any', personSicil: null })[0] : null;
+      && (!params.recurringOnly || task.RecurrenceRule || task.RecurrenceParentTaskId)
+      && (marker[1] !== 'wbs' || !params.wbsId || focused.has(upper(task.WbsId))));
+    const staged = marker[1] === 'task-facts' ? taskFacts(db, params)[0] : null;
     const analyzedCount = staged ? staged.length : analyzed.length;
     if (hasSelectedBaseline && analyzedCount >= cap) tooLarge();
     if (['task-facts', 'task-detail'].includes(marker[1])) {

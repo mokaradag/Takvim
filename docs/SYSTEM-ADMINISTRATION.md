@@ -502,9 +502,9 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
 - `MERGEN_ROTA_AI_TOOLS_ENABLED=true` iken aynı ayrıntı **Rota verisi
   araçlarını** da gösterir: özelliğin ve kanıt tablosunun (0018) durumu, araç
   çağrı sayısı ve P95 gecikmesi, araç hata sınıfları (ör. `NOT_FOUND 2 ·
-  TIMEOUT 1`), kanıtlı / genel / doğrulanamayan / düzeltilen yanıt sayıları ve
-  araç SQL kapısının doluluğu. Bileşen şu durumlarda uyarır: araç kayıt defteri
-  geçersiz, 0018 kurulmamış (Rota AI genel sohbete düşer), araç yetenekli
+  TIMEOUT 1`), kanıtlı / genel / aday seçimi / bulunamadı / hizmet kullanılamıyor / doğrulanamayan / düzeltilen yanıt sayıları ve
+  araç SQL kapısının doluluğu. `BUSY` de araç hizmeti sağlık uyarısına katılır. Bileşen şu durumlarda uyarır: araç kayıt defteri
+  geçersiz, 0018 kurulmamış (veri kaynağı unavailable verir), araç yetenekli
   profiller (`chat.tools`, `chat.tools.reasoning`) kullanılamıyor ya da son
   beş dakikada bir araç hizmet hatası (`TIMEOUT`, `DATABASE_UNAVAILABLE`,
   `INTERNAL`) oluştu. Araç ölçümleri `ai.tool.call` adıyla yazılır; yalnızca
@@ -736,7 +736,7 @@ database/MR_Upgrade_0018_Ai_Message_Evidence.sql
 Betik yinelenebilir ve veriye dokunmaz; SQL, anahtar, ham sağlayıcı akışı ya da
 düşünce zinciri saklanmaz. Kayıtlar yanıt iletisi ve konuşmayla birlikte silinir.
 Yönetici konsolu kanıt içeriği göstermez. Göç uygulanmadan
-`MERGEN_ROTA_AI_TOOLS_ENABLED=true` açılırsa Rota AI genel sohbetle çalışır ve
+`MERGEN_ROTA_AI_TOOLS_ENABLED=true` açılırsa veri kaynağı `unavailable` verir; kullanıcı Genel sohbet seçebilir ve
 yapay zekâ bileşeni 0018'in eksik olduğunu uyarır. Geri alma betiği tabloyu
 konuşma tablolarından önce düşürür. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md` §13.
 
@@ -748,10 +748,14 @@ olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları
 4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir.
 
 Elle kabul, FULL/READ/kısmi kullanıcılarla veri sonrası yetki iptalini,
-gizli tekrar/kişi sayılarının değişmezliğini, aday seçimini, kısa takipten
-sonra genel sohbeti, kesik çıktının kısa JSON ile onarılmasını ve canlı
+konuşma yeniden açma/tekrar ve oluşturucu hakkı iptalini, gizli tekrar/kişi
+sayılarının değişmezliğini, aday seçimini ve kısa aday takibini, kullanıcının
+Genel sohbet seçimini, kesik çıktının kısa JSON ile onarılmasını ve canlı
 sayfalamayı kapsamalıdır. Görev/baz plan 20 000, sorumluluk ilişkisi 200 000,
-ham hareket 20 000, iş akışı anlık görüntüsü 1000 kayıtla sınırlıdır; tam
+süzülmüş ham hareket 20 000, iş akışı/bildirim anlık görüntüsü 1000 kayıtla
+sınırlıdır. Hareket başına en yeni 2 ayrıntı, JSON başına 8192 karakter ve
+isteğe bağlı kişi çözümünde 2000 Sicil okunur; AI yetki kümeleri 200 000
+satırla sınırlıdır. Taşan bildirim geçmişinde sayaç null kalır; tam
 sınır kabul edilir. SQL ikizi sınamaları gerçek SQL Server sorgu planı
 kabulünün yerine geçmez. Bayrak kapalı normal Rota yollarında bu anlık
 görüntü/epoch/iddia maliyetleri çalışmaz.

@@ -1,4 +1,5 @@
 import 'server-only';
+import { PERSISTED_TASK_STATUSES } from '../../domain/constants/index.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ACCESS_REASONS } from '../authorization/authorization.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
@@ -27,17 +28,19 @@ export function normalizeActivityQuery(input = {}, actor, now) {
     ...Object.fromEntries(['directorate', 'department', 'unit'].map((field) => [field, String(input[field] || '').slice(0, 1000)])) };
 }
 
+const COMPLETED_STATUSES_SQL = Object.entries(PERSISTED_TASK_STATUSES).filter(([, status]) => status === 'done').map(([alias]) => `'${alias}'`).join(', ');
+
 export const TASK_ACTIVITY_SQL = `
   SELECT a.AuditId, a.OccurredAt, a.ActorSicil, a.ActorDisplayName, a.ActionCode, a.EntityId, a.ProjectId,
     COALESCE(CONVERT(varchar(36), a.CorrelationId), CONCAT('audit:', a.AuditId)) AS ActionGroup,
     t.Title AS CurrentTitle, t.TaskId AS CurrentTaskId, p.ProjectName, p.ProjectCode,
     pd.DisplayName AS CurrentActorName, pd.Directorate, pd.Department, pd.Unit,
     CASE WHEN a.ActionCode = 'DELETE' THEN 'deleted' WHEN a.ActionCode = 'CREATE' THEN 'created'
-      WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) IN ('done', 'completed')
-        AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') NOT IN ('done', 'completed')
+      WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_STATUSES_SQL})
+        AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_STATUSES_SQL})
       THEN 'completed' ELSE 'updated' END AS Kind,
-    CASE WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) IN ('done', 'completed')
-      AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') NOT IN ('done', 'completed') THEN 1 ELSE 0 END AS CompletionEvent
+    CASE WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_STATUSES_SQL})
+      AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_STATUSES_SQL}) THEN 1 ELSE 0 END AS CompletionEvent
   INTO #TaskActivityScope
   FROM dbo.MR_AuditLog a
   LEFT JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
@@ -103,7 +106,7 @@ export const TASK_ACTIVITY_SQL = `
   DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
 `;
 
-export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false, evidenceSnapshotLimit = null, analyzedActivityLimit = null } = {}) {
+export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false, evidenceSnapshotLimit = null, analyzedActivityLimit = null, includeChangeText = true, maxEvidencePeople = null } = {}) {
   const query = normalizeActivityQuery(input, actor, now);
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
@@ -120,17 +123,38 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   let statement = TASK_ACTIVITY_SQL;
   if (analyzedActivityLimit != null) {
     request.input('activityProbeRows', sql.Int, analyzedActivityLimit + 1);
+    const groupCompletion = `(COALESCE(JSON_VALUE(related.AfterJson, '$.Status'), JSON_VALUE(related.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_STATUSES_SQL})
+      AND COALESCE(JSON_VALUE(related.BeforeJson, '$.Status'), JSON_VALUE(related.BeforeJson, '$.status'), '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_STATUSES_SQL}))`;
+    const relatedEvent = (condition) => `EXISTS (SELECT 1 FROM dbo.MR_AuditLog related
+      WHERE related.EntityType = 'TASK' AND related.EntityId = a.EntityId AND related.ActorSicil = a.ActorSicil
+        AND (related.ProjectId = a.ProjectId OR (related.ProjectId IS NULL AND a.ProjectId IS NULL))
+        AND related.OccurredAt >= @startUtc AND related.OccurredAt < @endUtc
+        AND ((a.CorrelationId IS NOT NULL AND related.CorrelationId = a.CorrelationId) OR related.AuditId = a.AuditId)
+        AND ${condition})`;
+    const groupKind = `CASE WHEN ${relatedEvent("related.ActionCode = 'DELETE'")} THEN 'deleted'
+      WHEN ${relatedEvent("related.ActionCode = 'CREATE'")} THEN 'created'
+      WHEN ${relatedEvent(groupCompletion)} THEN 'completed' ELSE 'updated' END`;
+    const prefilter = `AND (@person IS NULL OR a.ActorSicil = @person)
+      AND (@directorate = '' OR COALESCE(NULLIF(LTRIM(RTRIM(pd.Directorate)), ''), '__unassigned__') = @directorate)
+      AND (@department = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(pd.Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(pd.Department))) = @department)
+      AND (@unit = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(pd.Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(pd.Department)), CHAR(31), LTRIM(RTRIM(pd.Unit))) = @unit)
+      AND (@kind = '' OR @kind = ${groupKind})`;
     statement = statement.replace('SELECT a.AuditId', 'SELECT TOP (@activityProbeRows) a.AuditId')
+      .replace("AND (@taskIdText IS NULL OR a.EntityId = @taskIdText)", `AND (@taskIdText IS NULL OR a.EntityId = @taskIdText) ${prefilter}`)
       .replace('SELECT DISTINCT ActorSicil', "IF (SELECT COUNT(*) FROM #TaskActivityScope) >= @activityProbeRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\n  SELECT DISTINCT ActorSicil");
   }
   if (evidenceSnapshotLimit != null) {
     request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+    request.input('activityDetailLimit', sql.Int, 2);
+    statement = statement.replace('SELECT TOP (100) s.*, detail.BeforeJson, detail.AfterJson', 'SELECT TOP (@activityDetailLimit) s.*, LEFT(detail.BeforeJson, 8192) AS BeforeJson, LEFT(detail.AfterJson, 8192) AS AfterJson, CASE WHEN DATALENGTH(detail.BeforeJson) > 16384 OR DATALENGTH(detail.AfterJson) > 16384 THEN 1 ELSE 0 END AS DetailJsonClipped')
+      .replace('ORDER BY s.AuditId) e', 'ORDER BY s.AuditId DESC) e');
     statement = statement.replace('DECLARE @lastPage int', "IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\n  DECLARE @lastPage int");
   }
   const result = await request.query(statement);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];
   const people = new Map();
-  const ids = auditAssigneeIds(events);
+  const ids = includeChangeText ? auditAssigneeIds(events) : [];
+  if (maxEvidencePeople != null && ids.length > maxEvidencePeople) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   if (ids.length) {
     const names = executor.request();
     names.input('activityAssignees', sql.NVarChar(sql.MAX), ids.join(','));
@@ -152,7 +176,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
       projectId: canonicalActualId(last.ProjectId), projectName: change.projectName || last.ProjectName || 'Geçmiş proje',
       projectCode: change.projectCode || last.ProjectCode || '', taskId: canonicalActualId(last.EntityId),
       taskTitle: change.title || last.CurrentTitle || 'Geçmiş görev', taskAvailable: Boolean(last.CurrentTaskId),
-      changes: change.changes, ...(includeStructuredChanges ? { structuredChanges: change.structuredChanges } : {}), detailsLimited: Number(last.EventCount) > rows.length, kind: last.Deleted ? 'deleted' : last.Created ? 'created' : last.Completed ? 'completed' : 'updated' };
+      changes: change.changes, ...(includeStructuredChanges ? { structuredChanges: change.structuredChanges } : {}), detailsLimited: Number(last.EventCount) > rows.length || rows.some((row) => row.DetailJsonClipped), kind: last.Deleted ? 'deleted' : last.Created ? 'created' : last.Completed ? 'completed' : 'updated' };
   });
   const summary = counts[0] || {};
   return { items, total: Number(summary.Total || 0), page: Number(summary.Page || 0), pageSize: query.pageSize,

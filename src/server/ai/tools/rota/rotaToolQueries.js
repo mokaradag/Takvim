@@ -1,4 +1,8 @@
 import 'server-only';
+import { PERSISTED_TASK_STATUSES, PRIORITIES, LEGACY_PRIORITY_ALIASES, DEFAULT_PRIORITY_ID } from '../../../../domain/constants/index.js';
+
+const STATUS_SQL = `CASE t.Status COLLATE Latin1_General_100_BIN2 ${Object.entries(PERSISTED_TASK_STATUSES).map(([alias, status]) => `WHEN '${alias}' THEN '${status}'`).join(' ')} ELSE 'todo' END`;
+const PRIORITY_SQL = `CASE LOWER(LTRIM(RTRIM(COALESCE(t.Priority, ''))) COLLATE Latin1_General_100_CI_AS) ${Object.entries({ ...Object.fromEntries(Object.keys(PRIORITIES).map((key) => [key, key])), ...LEGACY_PRIORITY_ALIASES }).map(([alias, priority]) => `WHEN '${alias}' THEN '${priority}'`).join(' ')} ELSE '${DEFAULT_PRIORITY_ID}' END`;
 
 /**
  * Rota AI alan araçlarının SABİT SQL metinleri.
@@ -40,14 +44,14 @@ const SCOPE_PROJECTS = `
 
   IF @isAdmin = 1
     INSERT #AiScopeProjects(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped)
-    SELECT p.ProjectId, 'FULL', 0, 0
+    SELECT TOP (@analysisMaxRows) p.ProjectId, 'FULL', 0, 0
     FROM dbo.MR_Projects p
     WHERE p.IsActive = 1 AND (@projectId IS NULL OR p.ProjectId = @projectId)
       AND (@sourceFilter = 'all' OR (@sourceFilter = 'corporate' AND p.SourceType = 'CORPORATE') OR (@sourceFilter = 'manual' AND COALESCE(p.SourceType, 'MANUAL') <> 'CORPORATE'));
   ELSE
   BEGIN
     INSERT #AiScopeProjects(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped)
-    SELECT p.ProjectId, grants.AccessLevel, grants.HasReadGrant, grants.IsTaskScoped
+    SELECT TOP (@analysisMaxRows) p.ProjectId, grants.AccessLevel, grants.HasReadGrant, grants.IsTaskScoped
     FROM (
       SELECT TRY_CONVERT(uniqueidentifier, LEFT(value, 36)) AS ProjectId,
         CASE WHEN SUBSTRING(value, 38, 1) = 'F' THEN 'FULL' ELSE 'PARTIAL' END AS AccessLevel,
@@ -60,6 +64,7 @@ const SCOPE_PROJECTS = `
     WHERE p.IsActive = 1 AND (@projectId IS NULL OR p.ProjectId = @projectId)
       AND (@sourceFilter = 'all' OR (@sourceFilter = 'corporate' AND p.SourceType = 'CORPORATE') OR (@sourceFilter = 'manual' AND COALESCE(p.SourceType, 'MANUAL') <> 'CORPORATE'));
   END
+  IF (SELECT COUNT(*) FROM #AiScopeProjects) >= @analysisMaxRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
 `;
 
 /**
@@ -69,7 +74,7 @@ const SCOPE_PROJECTS = `
  * Görev süzgeci verildiğinde yalnızca o görevler değerlendirilir.
  */
 const visibleTasks = (predicate = '1 = 1') => `
-  -- Task scope is materialized only by queries that actually consume tasks.
+  -- Görev kapsamı yalnızca görev okuyan sorgularda oluşturulur.
   INSERT #AiScopeTasks(TaskId)
   SELECT TOP (@analysisMaxRows) t.TaskId
   FROM STRING_SPLIT(@scopeTasks, ',') token
@@ -180,7 +185,7 @@ const ASSIGNEE_ROWS = `
 const TASK_FACT_COLUMNS = `
     t.TaskId, t.ProjectId, t.WbsId, t.Title, t.Keyword, t.Status, t.Priority, t.IsMilestone,
     t.PlannedStart, t.PlannedFinish, t.PlannedDurationDays, t.TargetFinish, t.ActualStart, t.ActualFinish,
-    t.Progress, t.PlannedHours, t.ActualHours, t.Budget, t.Spent,
+    t.Progress, t.PlannedHours, t.ActualHours, CONVERT(varchar(40), t.Budget) AS Budget, CONVERT(varchar(40), t.Spent) AS Spent,
     t.RecurrenceRule, t.RecurrenceParentTaskId, t.RecurrenceOccurrenceDate,
     t.CreatedAt, t.UpdatedAt, visible.AccessLevel, visible.IdentityBase,
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
@@ -203,27 +208,24 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
       TRANSLATE(@text, N'İIı', N'iii') COLLATE Latin1_General_100_CI_AI,
       TRANSLATE(CONCAT(t.Title, N' ', COALESCE(t.Keyword, N'')), N'İIı', N'iii') COLLATE Latin1_General_100_CI_AI
     ) > 0)
-    AND (@openOnly = 0 OR t.Status <> 'done')
+    AND (@openOnly = 0 OR ${STATUS_SQL} <> 'done')
     AND (@targetFrom IS NULL OR t.TargetFinish >= @targetFrom)
     AND (@targetTo IS NULL OR t.TargetFinish <= @targetTo)
     AND (LEN(@statusCsv) = 0 OR EXISTS (
       SELECT 1 FROM STRING_SPLIT(@statusCsv, ',') requestedStatus
-      WHERE (requestedStatus.value = 'done' AND t.Status = 'done')
-        OR (requestedStatus.value = 'in_progress' AND t.Status = 'in-progress')
-        OR (requestedStatus.value = 'todo' AND t.Status NOT IN ('done', 'in-progress'))))
+      WHERE (requestedStatus.value = 'done' AND ${STATUS_SQL} = 'done')
+        OR (requestedStatus.value = 'in_progress' AND ${STATUS_SQL} = 'in_progress')
+        OR (requestedStatus.value = 'todo' AND ${STATUS_SQL} NOT IN ('done', 'in_progress'))))
     AND (LEN(@priorityCsv) = 0 OR EXISTS (
       SELECT 1 FROM STRING_SPLIT(@priorityCsv, ',') requestedPriority
-      WHERE requestedPriority.value = CASE
-        WHEN LOWER(LTRIM(RTRIM(COALESCE(t.Priority, '')))) IN ('critical','high','low')
-          THEN LOWER(LTRIM(RTRIM(t.Priority)))
-        ELSE 'medium' END))
+      WHERE requestedPriority.value = ${PRIORITY_SQL}))
     AND (@milestone IS NULL OR ISNULL(t.IsMilestone, 0) = @milestone)
     AND (@deadline IS NULL
-      OR (@deadline = 'overdue' AND t.Status <> 'done' AND t.TargetFinish < @today)
-      OR (@deadline = 'due_today' AND t.Status <> 'done' AND t.TargetFinish = @today)
-      OR (@deadline = 'due_next_7_days' AND t.Status <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 6, @today))
-      OR (@deadline = 'due_next_30_days' AND t.Status <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 29, @today))
-      OR (@deadline = 'no_target_finish' AND t.Status <> 'done' AND t.TargetFinish IS NULL))
+      OR (@deadline = 'overdue' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish < @today)
+      OR (@deadline = 'due_today' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish = @today)
+      OR (@deadline = 'due_next_7_days' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 6, @today))
+      OR (@deadline = 'due_next_30_days' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 29, @today))
+      OR (@deadline = 'no_target_finish' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL))
     AND (@dateField IS NULL OR (
       (@dateFrom IS NULL OR CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
@@ -246,7 +248,18 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
         WHEN 'actualFinish' THEN t.ActualFinish END IS NOT NULL))
-    AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)`;
+    AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
+    AND (@assigneeMode = 'any'
+      OR (@assigneeMode = 'me' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil))
+      OR (@assigneeMode = 'person' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person
+        WHERE person.TaskId = t.TaskId AND person.Sicil = @personSicil AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1
+          OR t.CreatedBySicil = @sicil OR person.Sicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil))))
+      OR (@assigneeMode = 'unassigned' AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person
+        JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = person.Sicil
+        WHERE person.TaskId = t.TaskId AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR t.CreatedBySicil = @sicil
+          OR person.Sicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil)))))`;
 
 export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
 ${SCOPE_PROJECTS}
@@ -258,6 +271,7 @@ ${ASSIGNMENT_FACTS}
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
   LEFT JOIN #AiAssignmentFacts assignment ON assignment.TaskId = t.TaskId
+  JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId
   WHERE ${TASK_ROW_FILTER}
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND COALESCE(assignment.IsOwnAssignee, 0) = 1)
@@ -299,16 +313,17 @@ ${ASSIGNMENT_FACTS}
       OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil)
     THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
     CASE WHEN visible.AccessLevel = 'FULL' THEN (
-      SELECT COUNT(*) FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.TaskId = t.TaskId
+      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.TaskId = t.TaskId) bounded
     ) ELSE NULL END AS PredecessorCount,
     CASE WHEN visible.AccessLevel = 'FULL' THEN (
-      SELECT COUNT(*) FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.PredecessorTaskId = t.TaskId
+      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.PredecessorTaskId = t.TaskId) bounded
     ) ELSE NULL END AS SuccessorCount,
     CASE WHEN t.RecurrenceParentTaskId IS NOT NULL AND (visible.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR EXISTS (
       SELECT 1 FROM #AiScopeTasks s WHERE s.TaskId = t.RecurrenceParentTaskId
     )) THEN parent.Title ELSE NULL END AS ParentTitle,
     p.ProjectName, p.ProjectCode, p.SourceType, v.HasReadGrant, v.IsTaskScoped,
-    COALESCE(taskCalendar.Name, projectCalendar.Name) AS CalendarName
+    COALESCE(taskCalendar.Name, projectCalendar.Name, defaultCalendar.Name) AS CalendarName,
+    CASE WHEN taskCalendar.CalendarId IS NOT NULL THEN 'task' WHEN projectCalendar.CalendarId IS NOT NULL THEN 'project' WHEN defaultCalendar.CalendarId IS NOT NULL THEN 'default' ELSE NULL END AS CalendarSource
   INTO #AiFacts
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
@@ -317,7 +332,8 @@ ${ASSIGNMENT_FACTS}
   JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
   LEFT JOIN dbo.MR_Tasks parent ON parent.TaskId = t.RecurrenceParentTaskId AND parent.ProjectId = t.ProjectId
   LEFT JOIN dbo.MR_Calendars taskCalendar ON taskCalendar.CalendarId = t.CalendarId AND taskCalendar.IsActive = 1
-  LEFT JOIN dbo.MR_Calendars projectCalendar ON projectCalendar.CalendarId = p.CalendarId AND projectCalendar.IsActive = 1;
+  LEFT JOIN dbo.MR_Calendars projectCalendar ON projectCalendar.CalendarId = p.CalendarId AND projectCalendar.IsActive = 1
+  OUTER APPLY (SELECT TOP (1) c.CalendarId, c.Name FROM dbo.MR_Calendars c WHERE c.IsDefault = 1 AND c.IsActive = 1 ORDER BY c.CalendarId) defaultCalendar;
 
   SELECT f.*, NULLIF(LTRIM(RTRIM(creator.DisplayName)), N'') AS CreatedByName
   FROM #AiFacts f
@@ -366,7 +382,7 @@ ${SCOPE_PROJECTS}
   WHERE (LEN(@text) = 0 AND @projectId IS NOT NULL)
     OR CHARINDEX(@text, CONCAT(COALESCE(p.ProjectCode, N''), N' ', p.ProjectName) COLLATE Turkish_100_CI_AI) > 0;
 
-  SELECT COUNT(*) AS Total FROM #AiProjectMatches;
+  SELECT COUNT(*) AS Total, COUNT(CASE WHEN MatchRank = 0 THEN 1 END) AS ExactCount FROM #AiProjectMatches;
 
   SELECT TOP (@limit) m.*, NULLIF(LTRIM(RTRIM(lead.DisplayName)), N'') AS LeadName
   FROM (SELECT TOP (@limit) * FROM #AiProjectMatches ORDER BY MatchRank, ProjectName, ProjectId) m
@@ -387,14 +403,14 @@ ${visibleTasks()}
   SELECT v.ProjectId, p.ProjectName, p.ProjectCode, p.SourceType, p.LeadSicil, p.CalendarId,
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped,
     COUNT(t.TaskId) AS TaskCount,
-    COALESCE(SUM(CASE WHEN t.Status = 'done' THEN 1 ELSE 0 END), 0) AS DoneCount,
-    COALESCE(SUM(CASE WHEN t.Status = 'in-progress' THEN 1 ELSE 0 END), 0) AS InProgressCount,
-    COALESCE(SUM(CASE WHEN t.TaskId IS NOT NULL AND t.Status NOT IN ('done', 'in-progress') THEN 1 ELSE 0 END), 0) AS TodoCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.TargetFinish < @today THEN 1 ELSE 0 END), 0) AS OverdueCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.TargetFinish >= @today AND t.TargetFinish <= @soonEnd THEN 1 ELSE 0 END), 0) AS DueSoonCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.TargetFinish IS NULL THEN 1 ELSE 0 END), 0) AS NoTargetCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.IsMilestone = 1 THEN 1 ELSE 0 END), 0) AS OpenMilestoneCount,
-    MIN(CASE WHEN t.Status <> 'done' AND t.TargetFinish >= @today THEN t.TargetFinish END) AS NextTargetFinish,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} = 'done' THEN 1 ELSE 0 END), 0) AS DoneCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} = 'in_progress' THEN 1 ELSE 0 END), 0) AS InProgressCount,
+    COALESCE(SUM(CASE WHEN t.TaskId IS NOT NULL AND ${STATUS_SQL} NOT IN ('done', 'in_progress') THEN 1 ELSE 0 END), 0) AS TodoCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish < @today THEN 1 ELSE 0 END), 0) AS OverdueCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish >= @today AND t.TargetFinish <= @soonEnd THEN 1 ELSE 0 END), 0) AS DueSoonCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL THEN 1 ELSE 0 END), 0) AS NoTargetCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.IsMilestone = 1 THEN 1 ELSE 0 END), 0) AS OpenMilestoneCount,
+    MIN(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish >= @today THEN t.TargetFinish END) AS NextTargetFinish,
     MAX(t.UpdatedAt) AS LastTaskUpdateAt
   FROM #AiScopeProjects v
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
@@ -417,13 +433,13 @@ ${visibleTasks()}
     NULLIF(LTRIM(RTRIM(lead.DisplayName)), N'') AS LeadName,
     COALESCE(projectCalendar.Name, defaultCalendar.Name) AS CalendarName,
     CASE WHEN v.AccessLevel = 'FULL' THEN (
-      SELECT COUNT(*) FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = v.ProjectId
+      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = v.ProjectId) bounded
     ) ELSE NULL END AS DependencyCount,
     CASE WHEN v.AccessLevel = 'FULL' THEN (
-      SELECT COUNT(*) FROM dbo.MR_Baselines b WHERE b.ProjectId = v.ProjectId
+      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_Baselines b WHERE b.ProjectId = v.ProjectId) bounded
     ) ELSE NULL END AS BaselineCount,
     CASE WHEN v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR v.IsTaskScoped = 1 THEN (
-      SELECT COUNT(*) FROM dbo.MR_WBS w WHERE w.ProjectId = v.ProjectId
+      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_WBS w WHERE w.ProjectId = v.ProjectId) bounded
     ) ELSE NULL END AS WbsNodeCount
   FROM #AiScopeProjects v
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
@@ -434,20 +450,20 @@ ${visibleTasks()}
   ) defaultCalendar
   WHERE v.ProjectId = @projectId;
 
-  SELECT pt.TagName FROM dbo.MR_ProjectTags pt
+  SELECT TOP (@analysisMaxRows) pt.TagName FROM dbo.MR_ProjectTags pt
   WHERE pt.ProjectId = @projectId AND EXISTS (SELECT 1 FROM #AiScopeProjects v WHERE v.ProjectId = pt.ProjectId)
   ORDER BY pt.SortOrder, pt.TagName;
 
   SELECT
     COUNT(t.TaskId) AS TaskCount,
-    COALESCE(SUM(CASE WHEN t.Status = 'done' THEN 1 ELSE 0 END), 0) AS DoneCount,
-    COALESCE(SUM(CASE WHEN t.Status = 'in-progress' THEN 1 ELSE 0 END), 0) AS InProgressCount,
-    COALESCE(SUM(CASE WHEN t.Status NOT IN ('done', 'in-progress') THEN 1 ELSE 0 END), 0) AS TodoCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.TargetFinish < @today THEN 1 ELSE 0 END), 0) AS OverdueCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.TargetFinish >= @today AND t.TargetFinish <= @soonEnd THEN 1 ELSE 0 END), 0) AS DueSoonCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.TargetFinish IS NULL THEN 1 ELSE 0 END), 0) AS NoTargetCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' AND t.IsMilestone = 1 THEN 1 ELSE 0 END), 0) AS OpenMilestoneCount,
-    MIN(CASE WHEN t.Status <> 'done' AND t.TargetFinish >= @today THEN t.TargetFinish END) AS NextTargetFinish,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} = 'done' THEN 1 ELSE 0 END), 0) AS DoneCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} = 'in_progress' THEN 1 ELSE 0 END), 0) AS InProgressCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} NOT IN ('done', 'in_progress') THEN 1 ELSE 0 END), 0) AS TodoCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish < @today THEN 1 ELSE 0 END), 0) AS OverdueCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish >= @today AND t.TargetFinish <= @soonEnd THEN 1 ELSE 0 END), 0) AS DueSoonCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL THEN 1 ELSE 0 END), 0) AS NoTargetCount,
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.IsMilestone = 1 THEN 1 ELSE 0 END), 0) AS OpenMilestoneCount,
+    MIN(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish >= @today THEN t.TargetFinish END) AS NextTargetFinish,
     MAX(t.UpdatedAt) AS LastTaskUpdateAt
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId;
@@ -462,7 +478,36 @@ ${visibleTasks()}
  */
 export const AI_TOOL_WBS_SQL = `/* rota-ai-tool:wbs */
 ${SCOPE_PROJECTS}
-${visibleTasks()}
+  DROP TABLE IF EXISTS #AiWbsFocus;
+  CREATE TABLE #AiWbsFocus(WbsId uniqueidentifier PRIMARY KEY);
+  IF @wbsId IS NOT NULL
+  BEGIN
+    ;WITH AllowedWbs AS (
+      SELECT w.WbsId, w.ParentWbsId, CAST(CONCAT('|', CONVERT(varchar(36), w.WbsId), '|') AS varchar(max)) AS VisitedWbs, 0 AS Depth
+      FROM STRING_SPLIT(@scopeTasks, ',') permitted
+      JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, permitted.value) AND t.ProjectId = @projectId
+      JOIN dbo.MR_WBS w ON w.WbsId = t.WbsId AND w.ProjectId = t.ProjectId
+      UNION ALL
+      SELECT parent.WbsId, parent.ParentWbsId, CAST(CONCAT(child.VisitedWbs, CONVERT(varchar(36), parent.WbsId), '|') AS varchar(max)), child.Depth + 1
+      FROM AllowedWbs child JOIN dbo.MR_WBS parent ON parent.WbsId = child.ParentWbsId AND parent.ProjectId = @projectId
+      WHERE CHARINDEX(CONCAT('|', CONVERT(varchar(36), parent.WbsId), '|'), child.VisitedWbs) = 0
+    ), Focus AS (
+      SELECT w.WbsId, CAST(CONCAT('|', CONVERT(varchar(36), w.WbsId), '|') AS varchar(max)) AS VisitedWbs, 0 AS Depth
+      FROM dbo.MR_WBS w WHERE w.WbsId = @wbsId AND w.ProjectId = @projectId
+      UNION ALL
+      SELECT child.WbsId, CAST(CONCAT(parent.VisitedWbs, CONVERT(varchar(36), child.WbsId), '|') AS varchar(max)), parent.Depth + 1
+      FROM Focus parent JOIN dbo.MR_WBS child ON child.ParentWbsId = parent.WbsId AND child.ProjectId = @projectId
+      WHERE CHARINDEX(CONCAT('|', CONVERT(varchar(36), child.WbsId), '|'), parent.VisitedWbs) = 0
+    )
+    INSERT #AiWbsFocus(WbsId)
+    SELECT DISTINCT TOP (@analysisMaxRows) focus.WbsId FROM Focus focus
+    WHERE EXISTS (SELECT 1 FROM #AiScopeProjects v WHERE v.ProjectId = @projectId
+      AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR v.IsTaskScoped = 1))
+      OR EXISTS (SELECT 1 FROM AllowedWbs permitted WHERE permitted.WbsId = focus.WbsId)
+    OPTION (MAXRECURSION 201);
+    IF (SELECT COUNT(*) FROM #AiWbsFocus) >= @analysisMaxRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  END
+${visibleTasks("@wbsId IS NULL OR EXISTS (SELECT 1 FROM #AiWbsFocus focus WHERE focus.WbsId = t.WbsId)")}
   DROP TABLE IF EXISTS #AiRequiredWbs;
   CREATE TABLE #AiRequiredWbs(WbsId uniqueidentifier NOT NULL PRIMARY KEY);
   IF EXISTS (
@@ -495,14 +540,15 @@ ${visibleTasks()}
   FROM dbo.MR_WBS w
   JOIN #AiScopeProjects v ON v.ProjectId = w.ProjectId
   WHERE w.ProjectId = @projectId
+    AND (@wbsId IS NULL OR EXISTS (SELECT 1 FROM #AiWbsFocus focus WHERE focus.WbsId = w.WbsId))
     AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR v.IsTaskScoped = 1
       OR EXISTS (SELECT 1 FROM #AiRequiredWbs r WHERE r.WbsId = w.WbsId))
   ORDER BY w.ParentWbsId, w.SortOrder, w.Code, w.WbsId;
 
   SELECT t.WbsId,
     COUNT(*) AS TaskCount,
-    SUM(CASE WHEN t.Status = 'done' THEN 1 ELSE 0 END) AS DoneCount,
-    SUM(CASE WHEN t.Status <> 'done' AND t.TargetFinish < @today THEN 1 ELSE 0 END) AS OverdueCount
+    SUM(CASE WHEN ${STATUS_SQL} = 'done' THEN 1 ELSE 0 END) AS DoneCount,
+    SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish < @today THEN 1 ELSE 0 END) AS OverdueCount
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
   WHERE visible.ProjectId = @projectId
@@ -512,7 +558,7 @@ ${visibleTasks()}
   FROM #AiScopeProjects v JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
   WHERE v.ProjectId = @projectId;
 
-  DROP TABLE #AiRequiredWbs, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiWbsFocus, #AiRequiredWbs, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
 
 /**
  * Bağımlılık ilişkileri — yalnızca FULL projede (anlık görüntüyle aynı).
@@ -543,7 +589,7 @@ ${visibleTasks()}
       SELECT 1 FROM #AiDependencies d WHERE d.TaskId = t.TaskId OR d.PredecessorTaskId = t.TaskId));
 
   SELECT COUNT(*) AS TaskCount,
-    COALESCE(SUM(CASE WHEN t.Status <> 'done' THEN 1 ELSE 0 END), 0) AS OpenCount
+    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' THEN 1 ELSE 0 END), 0) AS OpenCount
   FROM dbo.MR_Tasks t
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'FULL'
   WHERE @focusTaskId IS NULL AND t.ProjectId = @projectId
@@ -579,7 +625,7 @@ ${SCOPE_PROJECTS}
     b.IsPrimary DESC, b.CreatedAt DESC, b.BaselineId;
 
   SELECT @projectFull AS ProjectFull, @selectedBaseline AS SelectedBaselineId,
-    (SELECT COUNT(*) FROM dbo.MR_Baselines b WHERE @projectFull = 1 AND b.ProjectId = @projectId) AS BaselineTotal;
+    (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_Baselines b WHERE @projectFull = 1 AND b.ProjectId = @projectId) bounded) AS BaselineTotal;
 
   IF (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present
     FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = @selectedBaseline) bounded) >= @analysisMaxRows
@@ -650,15 +696,19 @@ ${SCOPE_PROJECTS}
 /**
  * Kullanıcının KENDİ Outlook takvim aboneliklerinin Rota'daki teslim durumu.
  * Posta kutusu içeriği değildir; yalnızca görünür görevlerin abonelikleri
- * ayrıntılı döner, görünmeyen ya da silinmiş görevin aboneliği yalnızca sayıya
- * girer.
+ * sayılır ve ayrıntılı döner; görünmeyen ya da silinmiş görevler açıklanmaz.
  */
 export const AI_TOOL_OUTLOOK_SQL = `/* rota-ai-tool:outlook */
 ${SCOPE_PROJECTS}
   IF @AiTaskFilterActive = 0
     INSERT #AiTaskFilter(TaskId)
-    SELECT DISTINCT s.TaskId FROM dbo.MR_TaskOutlookSubscriptions s
-    WHERE s.UserSicil = @sicil AND s.IsActive = 1;
+    SELECT TOP (@analysisMaxRows) s.TaskId FROM dbo.MR_TaskOutlookSubscriptions s
+    JOIN dbo.MR_Tasks t ON t.TaskId = s.TaskId
+    JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId
+    WHERE s.UserSicil = @sicil AND s.IsActive = 1
+      AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR EXISTS (
+        SELECT 1 FROM STRING_SPLIT(@scopeTasks, ',') permitted WHERE TRY_CONVERT(uniqueidentifier, permitted.value) = t.TaskId));
+  IF (SELECT COUNT(*) FROM #AiTaskFilter) >= @analysisMaxRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
   SET @AiTaskFilterActive = 1;
 ${visibleTasks()}
   SELECT TOP (@maxRows) s.TaskId, t.Title, p.ProjectName, p.ProjectCode, t.TargetFinish, t.PlannedFinish, t.Status,
@@ -670,12 +720,5 @@ ${visibleTasks()}
   JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
   WHERE s.UserSicil = @sicil AND s.IsActive = 1
   ORDER BY COALESCE(t.TargetFinish, t.PlannedFinish), s.TaskId;
-
-  SELECT CAST(CASE WHEN EXISTS (
-    SELECT 1 FROM dbo.MR_TaskOutlookSubscriptions s
-    WHERE s.UserSicil = @sicil AND s.IsActive = 1
-      AND (LEN(@taskIds) = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = s.TaskId))
-      AND NOT EXISTS (SELECT 1 FROM #AiTasks visible WHERE visible.TaskId = s.TaskId)
-  ) THEN 1 ELSE 0 END AS bit) AS HasNonVisibleSubscriptions;
 
   DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;

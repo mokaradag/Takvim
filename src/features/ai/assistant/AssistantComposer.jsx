@@ -64,6 +64,9 @@ export function AssistantComposer({
   mode,
   modes = [],
   onModeChange,
+  source = 'rota',
+  dataEnabled = false,
+  onSourceChange,
   maxChars,
   inputRef
 }) {
@@ -145,6 +148,13 @@ export function AssistantComposer({
         onKeyDown={onKeyDown}
       />
       <div className="rota-assistant-composer-bar">
+        {dataEnabled && <label>
+          Yanıt kaynağı
+          <select aria-label="Yanıt kaynağı" value={source} disabled={disabled || generating} onChange={(event) => onSourceChange?.(event.target.value)}>
+            <option value="rota">Rota verisi · doğrulanmış kanıt</option>
+            <option value="general">Genel sohbet · Rota verisi okunmaz</option>
+          </select>
+        </label>}
         <ModeSwitch mode={mode} modes={modes} onChange={onModeChange} disabled={disabled} />
         <span className="rota-assistant-composer-status">
           <span id={hintId} className={`rota-assistant-composer-hint${hint || overLimit ? ' is-warn' : ''}`} aria-live="polite">

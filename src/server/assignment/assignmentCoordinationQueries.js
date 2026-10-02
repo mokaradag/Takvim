@@ -1,4 +1,5 @@
 import 'server-only';
+import { bindDisclosureScope, CURRENT_TASK_DISCLOSURE_SQL } from '../authorization/disclosureScope.js';
 import { canonicalActualId, extractActualId } from '../../domain/identity/actualId.js';
 import { COORDINATION_STATUSES } from '../../domain/assignment/assignmentCoordination.js';
 import { NOTIFICATION_PREVIEW_LIMIT } from '../../domain/notifications/notificationInbox.js';
@@ -147,12 +148,25 @@ export const COORDINATION_INBOX_SQL = `
   WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE} AND ${VISIBLE} ORDER BY ${ORDER};
 `;
 
+export const COORDINATION_EVIDENCE_INBOX_SQL = `
+  SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS},
+    CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending
+  INTO #CoordinationInboxEvidence ${SOURCE}
+  WHERE ${PARTICIPANT} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE} ORDER BY ${ORDER};
+  SELECT CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN NULL ELSE SUM(IsUnread) END AS UnreadCount,
+    CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN NULL ELSE SUM(IsPending) END AS PendingCount,
+    CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN 0 ELSE 1 END AS CountsComplete
+  FROM #CoordinationInboxEvidence;
+  SELECT TOP (@limit) * FROM #CoordinationInboxEvidence ORDER BY IsPending DESC, COALESCE(DecidedAt, CreatedAt) DESC, CoordinationId DESC;
+  DROP TABLE #CoordinationInboxEvidence;
+`;
+
 export function mapCoordinationInbox(countRows, itemRows, actorSicil) {
   const counts = countRows?.[0] || {};
   return {
     items: (itemRows || []).map((row) => mapCoordination(row, actorSicil)),
-    unreadCount: Number(counts.UnreadCount || 0),
-    pendingCount: Number(counts.PendingCount || 0)
+    unreadCount: counts.CountsComplete === 0 ? null : Number(counts.UnreadCount || 0),
+    pendingCount: counts.CountsComplete === 0 ? null : Number(counts.PendingCount || 0)
   };
 }
 
@@ -233,7 +247,8 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
   request.input('fromUtc', sql.DateTime2, fromUtc);
   request.input('toUtc', sql.DateTime2, toUtc);
 
-  const filters = `${participant}
+  if (evidenceSnapshotLimit != null) bindDisclosureScope(request, actor);
+  const filters = `${participant}${evidenceSnapshotLimit == null ? '' : ` AND ${CURRENT_TASK_DISCLOSURE_SQL}`}
     AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
     AND (@status IS NULL OR c.Status = @status)
@@ -252,7 +267,23 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     OR (@tab = 'sent' AND c.RequesterSicil = @sicil)
     OR (@tab = 'history' AND (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})))`;
 
-  const result = await request.query(`
+  const evidenceStatement = evidenceSnapshotLimit == null ? null : `
+    ${decisionAuthority ? '/* rota-ai-decision-authority */' : ''}
+    SELECT TOP (@evidenceSnapshotLimit + 1) ${fields},
+      CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsPending,
+      CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
+      CASE WHEN c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS IsHistory
+    INTO #CoordinationEvidenceSnapshot ${SOURCE} WHERE ${filters} AND ${tabFilter}
+    ORDER BY ${order};
+    DECLARE @total int = (SELECT COUNT(*) FROM #CoordinationEvidenceSnapshot);
+    IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    SELECT @total AS Total, SUM(IsPending) AS PendingCount, SUM(IsSent) AS SentCount, SUM(IsHistory) AS HistoryCount
+    FROM #CoordinationEvidenceSnapshot;
+    SELECT @total AS Total, 0 AS Page;
+    SELECT * FROM #CoordinationEvidenceSnapshot ORDER BY IsPending DESC, COALESCE(DecidedAt, CreatedAt) DESC, CoordinationId DESC;
+    DROP TABLE #CoordinationEvidenceSnapshot;
+  `;
+  const result = await request.query(evidenceStatement || `
     ${decisionAuthority ? '/* rota-ai-decision-authority */' : ''}
     WITH coordination_page_counts AS (
       SELECT

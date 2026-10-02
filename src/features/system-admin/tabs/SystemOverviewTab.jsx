@@ -85,7 +85,7 @@ function RotaDataDrawerFields({ rotaData, telemetry }) {
       )}
       <DrawerField
         label="Kanıta dayalı yanıtlar"
-        value={`Kanıtlı ${grounding.grounded ?? 0} · Genel ${grounding.direct ?? 0} · Doğrulanamayan ${grounding.failed ?? 0} · Düzeltilen ${grounding.repaired ?? 0}`}
+        value={`Kanıtlı ${grounding.grounded ?? 0} · Genel ${grounding.direct ?? 0} · Açıklama ${grounding.clarification ?? 0} · Bulunamadı ${grounding.not_found ?? 0} · Kullanılamıyor ${grounding.unavailable ?? 0} · Doğrulanamayan ${grounding.failed ?? 0} · Düzeltilen ${grounding.repaired ?? 0}`}
       />
       {rotaData.toolGate && (
         <DrawerField label="Araç SQL kapısı" value={`Etkin ${rotaData.toolGate.active} · Sırada ${rotaData.toolGate.queued}`} mono />

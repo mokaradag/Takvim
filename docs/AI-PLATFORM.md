@@ -327,7 +327,8 @@ Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Aşama 2
 `chat.general` Standart, `chat.reasoning` Derin düşünme kipini çalıştırır.
 Aşama 3'te Rota verisi araçları açıkken Standart kip `chat.tools`, Derin
 düşünme `chat.tools.reasoning` ile çalışır; kipin araç profili yoksa o kip
-genel sohbet profiline döner. Diğer profiller sonraki aşamaların sözleşmesidir.
+Rota verisi seçiliyken `unavailable` verir; kullanıcı Genel sohbet seçerse
+genel sohbet profilini kullanır. Diğer profiller sonraki aşamaların sözleşmesidir.
 
 Varsayılan eşleme `src/server/ai/defaultModelRegistry.js` dosyasındadır. Depoda
 ayrıca **mevcut kurum içi sunucu kataloğunun operasyonel anlık görüntüsü**
@@ -1653,23 +1654,26 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   plan veri kalitesi. Genel SQL aracı yoktur; hiçbir araç yazma yapmaz.
 - **Kimlik ve yetki:** güvenilir Sicil; yetki bağlamı her araç kümesinde
   yeniden okunur ve sabit SQL görünürlüğü anlık görüntüyle aynı kurallarla
-  hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz. Kanıt sunucu içi yetki epoch’una bağlıdır; sonraki küme ve son çizim öncesi okuma değişen erişimde eski kanıtı geçersiz yapar. Bu uygulama denetimi atomik SQL/model/teslim işlemi değildir.
+  hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz. Kanıt görev başına kimlik görünürlüğünü de temsil eden kalıcı yetki epoch’una bağlıdır; sonraki küme ve son çizim öncesi okuma değişen erişimde eski kanıtı geçersiz yapar. Bu uygulama denetimi atomik SQL/model/teslim işlemi değildir.
 - **Kanıt:** başarılı sonuçlar `R1`, `R2` … ve tur için rastgele olgu öneki
   taşır. Model doğal dili yorumlar, türlü JSON iddiaları seçer. Sunucu kayıt
   yolu/alan/değer eşitliğini kendi yetkili yükünde denetler ve etiket/değer ile
   `【R1】` atfını çizer; düzyazı regexleri veya ikinci bir model hakem değildir.
   Uydurma/değiştirilmiş iddia bir kez düzeltilir, yine olmazsa sabit güvenli
-  ileti kaydedilir (`grounding_failed`). Veri öncesi açık `undecided → general/rota` yönlendirmesi kullanılır; eski kanıt genel sohbeti kalıcı biçimde kilitlemez. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir.
+  ileti kaydedilir (`grounding_failed`). Modelin `general/rota` önerisi kanıt sınırını kapatamaz. `source: rota` varsayılanında yalnızca doğrulanmış olgular/güvenli son iletiler; kullanıcı `source: general` seçtiğinde veri okumayan genel akış kullanılır. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir ve seçilmemiş alanlar model/kanıt kaydından önce çıkarılır. Gecikme/saat/para birimleri ve null/tamlık anlamları sunucuda çizilir.
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
   kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
-  sınırıyla yürür (`aiGateway.runToolSession`). Görev/baz plan 20 000, sorumluluk ilişkisi 200 000, ham hareket 20 000 sınırı max+1 ile korunur. İş akışları tur başına 1000 kayıtlık anlık görüntü, görev listeleri veri özetine bağlı imleç kullanır. Araç profili çıktı sınırları 4096 / 8192 token; kesik JSON tek ortak onarım hakkıyla daha az iddiaya daraltılır.
+  sınırıyla yürür (`aiGateway.runToolSession`). Görev/baz plan/katalog 20 000, sorumluluk/yetki ilişkisi 200 000, süzülmüş ham hareket 20 000 sınırı max+1 ile korunur. Hareket başına en yeni 2 ayrıntı ve JSON başına 8192 karakter okunur; metin kişi çözümü 2000 Sicil ile sınırlıdır. Bildirim geçmişi kaynak başına 1000+1 yoklar, taşmada kesin sayaç yerine null verir. İş akışları tur başına 1000 kayıtlık anlık görüntü, görev listeleri veri özetine bağlı imleç kullanır. Araç profili çıktı sınırları 4096 / 8192 token; kesik JSON tek ortak onarım hakkıyla daha az iddiaya daraltılır.
 - **Akış:** `accepted.rotaData`, `status` evreleri `tools` (+ veri alanı
   konusu) ve `verifying`, `revise` olayı, `done.assistantMessage.content` ve
   `evidence`. Aşama 3 model protokolü tamponlanır; yalnızca doğrulanmış son
   metin gösterilir. Tamponlanan protokol teslim edilmiş metin sayılmaz; sağlık/partial hata bilgisi bunu korur. Araç bayrağı kapalı Aşama 2 genel akışı değişmez.
 - **Kalıcılık:** yalnızca atıf yapılan kanıtlar yanıtla aynı kısa işlemde
   `MR_AiMessageEvidence` (0018) tablosuna yazılır; iletiyle birlikte silinir.
+  Açma, tekrar ve uzlaştırmada güncel epoch kontrol edilir; uyuşmayan/eski
+  kanıtın metni ve özetleri açıklanmaz. Aday seçimi yalnızca yetkili minimal
+  yapılandırılmış referanslarla sonraki tura taşınır.
 - **Gözlem:** araç çağrıları ve kanıtlı yanıt sonuçları içeriksiz ölçülür;
   sağlık bileşeni kayıt defteri, 0018, araç profilleri ve araç hizmet
   hatalarında uyarır.

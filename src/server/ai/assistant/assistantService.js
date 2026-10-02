@@ -88,7 +88,7 @@ const ANSWER_PERSIST_BUDGET_MS = 2 * AI_CONVERSATION_SQL_TIMEOUT_MS;
 /** Tur isteği gövdesinin en büyük boyutu ve okunma süresi. */
 export const ASSISTANT_TURN_BODY_BYTES = 64 * 1024;
 const TURN_BODY_TIMEOUT_MS = 10000;
-const TURN_FIELDS = new Set(['conversationId', 'turnId', 'message', 'mode', 'expectedSequence']);
+const TURN_FIELDS = new Set(['conversationId', 'turnId', 'message', 'mode', 'expectedSequence', 'source']);
 
 /**
  * Konuşma geçmişinin ortak SQL havuzuna giden işleri: en fazla dört iş aynı
@@ -286,7 +286,7 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   }));
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
-  return { ready: result.ready, byMessage: result.byMessage };
+  return { ready: result.ready, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage, clarificationByMessage: result.clarificationByMessage };
 }
 
 /* ── Hazırlık durumu ─────────────────────────────────────────── */
@@ -460,21 +460,46 @@ export async function loadAssistantConversation({ conversationId, signal = null 
   const evidence = await optionalEvidence(sicil, signal, { conversationId: id });
   return {
     conversation: result.conversation,
-    messages: result.messages.map((message) => (evidence?.byMessage?.has(message.id) ? { ...message, evidence: evidence.byMessage.get(message.id) } : message))
+    messages: discloseSavedMessages(result.messages, evidence)
   };
 }
 
 /**
- * Kanıt özetleri ek bilgidir: okunamazlarsa (kapı dolu, süre aşımı) yanıt
- * metni yine döner; iptal ve kimlik hataları ise yukarı taşınır.
+ * Kalıcı Rota yanıtı yalnızca güncel yetki dönemi doğrulanırsa açıklanır.
+ * Kanıt ya da yetki okunamazsa korunan metin ve özetler birlikte gizlenir.
  */
 async function optionalEvidence(sicil, signal, target) {
   try {
-    return await loadEvidenceFor(sicil, signal, target);
+    const evidence = await loadEvidenceFor(sicil, signal, target);
+    if (evidence.byMessage.size) {
+      const context = createToolTurnContext({ sicil });
+      const deadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
+      try {
+        await context.revalidateAuthorization(deadline.signal);
+        const epoch = context.authorizationEpoch();
+        evidence.byMessage = new Map([...evidence.byMessage].filter(([id]) => {
+          const epochs = evidence.epochsByMessage?.get(id);
+          return epochs?.length && epochs.every((value) => value === epoch);
+        }));
+      } finally { deadline.dispose(); }
+    }
+    return evidence;
   } catch (error) {
     if (error?.code === 'UNAUTHORIZED' || error?.code === AI_ERROR_CODES.AI_CANCELLED || signal?.aborted) throw error;
     return null;
   }
+}
+
+function discloseSavedMessages(messages, evidence) {
+  return messages.map((message) => {
+    if (message.role !== 'assistant') return message;
+    const saved = evidence?.byMessage?.get(message.id);
+    if (saved?.length) return { ...message, evidence: saved };
+    if (evidence?.epochsByMessage?.has(message.id) || /【R[1-9]\d?】/.test(String(message.content || ''))) {
+      return { ...message, content: 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', evidence: [], finishReason: 'not_found' };
+    }
+    return message;
+  });
 }
 
 const FALLBACK_GROUNDED_HISTORY_TEXT = '[Önceki Rota verisi yanıtı güncel kanıt olmadığı için bu tur bağlamına alınmadı.]';
@@ -541,6 +566,8 @@ function parseTurnInput(body) {
   const conversationId = body.conversationId == null ? null : requireConversationId(body.conversationId);
   if (!isAssistantId(body.turnId)) throw invalidRequest('TURN_ID_INVALID');
   if (!isAssistantMode(body.mode)) throw invalidRequest('MODE_UNSUPPORTED', 'Seçilen yanıt kipi desteklenmiyor.');
+  const source = body.source ?? 'rota';
+  if (!['rota', 'general'].includes(source)) throw invalidRequest('SOURCE_UNSUPPORTED');
   let message = null;
   if (body.message != null) {
     const normalized = normalizeAssistantMessage(body.message);
@@ -550,7 +577,7 @@ function parseTurnInput(body) {
   if (message == null && conversationId == null) throw invalidRequest('MESSAGE_REQUIRED', 'İleti boş olamaz.');
   const expectedSequence = body.expectedSequence ?? null;
   if (expectedSequence != null && (!Number.isSafeInteger(expectedSequence) || expectedSequence < 0 || expectedSequence > ASSISTANT_LIMITS.maxConversationMessages)) throw invalidRequest('SEQUENCE_INVALID');
-  return { conversationId, turnId: body.turnId.toLowerCase(), mode: body.mode, message, expectedSequence };
+  return { conversationId, turnId: body.turnId.toLowerCase(), mode: body.mode, source, message, expectedSequence };
 }
 
 function outcomeFailure(prepared, input) {
@@ -619,14 +646,14 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   if (existing.answer) {
     const failure = outcomeFailure(existing, input);
     if (failure) throw failure;
-    const replayEvidence = (await optionalEvidence(sicil, signal, {
+    const replayEvidence = await optionalEvidence(sicil, signal, {
       conversationId: existing.conversation.id,
       messageId: existing.answer.id
-    }))?.byMessage?.get(existing.answer.id);
+    });
     return {
       sicil, claim: null, mode: existing.answer.mode, profile: assistantProfileForMode(existing.answer.mode), grounded: false,
       conversation: existing.conversation, userMessage: existing.turn.message,
-      replay: replayEvidence ? { ...existing.answer, evidence: replayEvidence } : existing.answer,
+      replay: discloseSavedMessages([existing.answer], replayEvidence)[0],
       modelMessages: [], context: { trimmed: Boolean(existing.answer.contextTrimmed), omittedMessages: Math.max(0, Number(existing.answer.contextOmittedMessages) || 0) }
     };
   }
@@ -645,7 +672,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   // uygulanmışsa tur kanıta dayalı yoldan yanıtlanır; aksi hâlde genel sohbet.
   let grounded = false;
   try {
-    grounded = await groundedTurnAvailable({ config, registry, mode: input.mode, sicil, signal });
+    grounded = input.source !== 'general' && await groundedTurnAvailable({ config, registry, mode: input.mode, sicil, signal });
   } catch (error) {
     if (signal?.aborted || error?.code === AI_ERROR_CODES.AI_CANCELLED || error?.code === 'UNAUTHORIZED') throw error;
     if (!isTransientEvidenceProbeFailure(error)) throw error;
@@ -662,6 +689,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     if (useTools && history.some((message) => message.role === 'assistant')) {
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
       history = fallbackAssistantHistory(history, priorEvidence?.ready ? priorEvidence.byMessage : null, { conservative: !priorEvidence?.ready });
+      history = history.map((message) => message.role === 'assistant' && priorEvidence?.byMessage?.has(message.id) && message.finishReason === 'clarification'
+        ? { ...message, clarificationContext: priorEvidence.clarificationByMessage?.get(message.id) } : message);
     }
     if (!useTools && history.some((message) => message.role === 'assistant')) {
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
@@ -680,9 +709,11 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       mode: prepared.answer?.mode || input.mode,
       profile: prepared.answer ? assistantProfileForMode(prepared.answer.mode) : (useTools ? assistantToolProfileForMode(input.mode) : profile),
       grounded: useTools,
+      general: input.source === 'general',
+      dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
-      replay: prepared.answer,
+      replay: prepared.answer ? discloseSavedMessages([prepared.answer], await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id, messageId: prepared.answer.id }))[0] : null,
       modelMessages: context.messages,
       context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
     };
@@ -725,13 +756,15 @@ function persistAnswer(turn, write) {
  */
 export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onText }) {
   if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onText });
-  const result = await getAiGateway().streamChat({
+  const result = turn.dataUnavailable ? { text: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', finishReason: 'unavailable' } : await getAiGateway().streamChat({
     profile: turn.profile,
     messages: turn.modelMessages,
     signal,
     onStatus,
     onText
   });
+  if (turn.dataUnavailable) await onText(result.text);
+  if (turn.general && result.finishReason === 'stop') result.finishReason = 'general';
   const messageId = randomUUID();
   const stored = await persistAnswer(turn, (executor) => appendConversationAnswer(executor, turn.sicil, {
     conversationId: turn.conversation.id,
@@ -747,11 +780,15 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
   if (!stored.persisted || !stored.message) {
     throw conversationNotFound('ANSWER_NOT_PERSISTED');
   }
+  const reconciled = stored.message.id !== messageId;
+  const answer = reconciled ? discloseSavedMessages([stored.message], await optionalEvidence(turn.sicil, signal, {
+    conversationId: turn.conversation.id, messageId: stored.message.id
+  }))[0] : stored.message;
   return {
     conversation: stored.conversation,
-    answer: stored.message,
-    reconciled: stored.message.id !== messageId,
-    finishReason: stored.message.finishReason,
+    answer,
+    reconciled,
+    finishReason: answer.finishReason,
     firstTokenMs: result.firstTokenMs
   };
 }
@@ -809,11 +846,14 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
   if (!stored.persisted || !stored.message) {
     throw conversationNotFound('ANSWER_NOT_PERSISTED');
   }
+  const answer = discloseSavedMessages([stored.message], await optionalEvidence(turn.sicil, signal, {
+    conversationId: turn.conversation.id, messageId: stored.message.id
+  }))[0];
   return {
     conversation: stored.conversation,
-    answer: { ...stored.message, evidence: stored.evidence },
+    answer: { ...answer, evidence: answer.evidence || [] },
     reconciled: stored.message.id !== messageId,
-    finishReason: stored.message.finishReason,
+    finishReason: answer.finishReason,
     contentAuthoritative: true,
     firstTokenMs: null
   };

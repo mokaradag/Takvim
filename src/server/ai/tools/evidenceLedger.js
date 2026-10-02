@@ -84,13 +84,24 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       return entries.filter((entry) => entry.valid && (!wanted || wanted.has(entry.id))).map((entry) => entry.summary);
     },
     /** Kalıcılık satırları (0018): yalnızca atfedilen kanıtlar. */
-    persistable(ids) {
+    persistable(ids, { clarification = false, candidates = null } = {}) {
       const wanted = new Set(ids);
       return entries
         .filter((entry) => entry.valid && wanted.has(entry.id) && entry.payload)
         .slice(0, EVIDENCE_LIMITS.maxEvidencePerAnswer)
         .map((entry) => {
           const summaryJson = JSON.stringify(entry.summary);
+          const payload = JSON.parse(entry.payload);
+          const sourceCandidates = payload.data?.matches || payload.data?.people || [];
+          const selection = candidates ? candidates.map((item, ordinal) => ({ ...item, ordinal })).filter((item) => item.evidenceId === entry.id)
+            : sourceCandidates.map((_, index) => ({ index, ordinal: index }));
+          const clarificationContext = clarification ? selection.slice(0, 10).map(({ index, ordinal }) => {
+            const item = sourceCandidates[index];
+            if (!item) return null;
+            return { ordinal, name: item.name, ...(item.code ? { code: item.code } : {}),
+              ...(item.sourceType ? { sourceType: item.sourceType } : {}), ...(item.organization ? { organization: item.organization } : {}),
+              ...(item.projectId ? { projectId: item.projectId } : {}), ...(item.sicil ? { personSicil: item.sicil } : {}) };
+          }).filter(Boolean) : null;
           return {
             ordinal: evidenceOrdinal(entry.id),
             toolName: entry.tool,
@@ -104,7 +115,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
             summaryJson: summaryJson.length <= MAX_SUMMARY_JSON_CHARS
               ? summaryJson
               : JSON.stringify({ ...entry.summary, highlights: [] }),
-            evidenceJson: entry.payload
+            evidenceJson: JSON.stringify({ ...payload, authorizationEpoch: entry.authorizationEpoch, ...(clarificationContext ? { clarificationContext } : {}) })
           };
         });
     }

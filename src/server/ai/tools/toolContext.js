@@ -42,17 +42,17 @@ export function createToolTurnContext({
   const snapshots = new Map();
   const today = businessDate(now);
 
-  async function withSql(signal, work) {
-    if (state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
+  async function withSql(signal, work, { authorizationOnly = false } = {}) {
+    if (!authorizationOnly && state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const pool = await raceWithAbort(() => getPool(), signal);
     let admitted = false;
     waiting.add(signal);
     try { return await gate.run(sicil, signal, async (track) => {
       admitted = true;
       waiting.delete(signal);
-      if (state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
+      if (!authorizationOnly && state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
       const admittedAt = clock();
-      const remainingMs = Math.max(1, limits.maxCumulativeSqlMs - state.sqlMs);
+      const remainingMs = authorizationOnly ? limits.callTimeoutMs : Math.max(1, limits.maxCumulativeSqlMs - state.sqlMs);
       const cumulativeDeadline = createAiDeadline({ timeoutMs: remainingMs, parentSignal: signal, now: clock });
       state.queries += 1;
       try {
@@ -63,7 +63,7 @@ export function createToolTurnContext({
         throw error;
       } finally {
         cumulativeDeadline.dispose();
-        state.sqlMs += Math.max(0, clock() - admittedAt);
+        if (!authorizationOnly) state.sqlMs += Math.max(0, clock() - admittedAt);
       }
     }); } catch (error) {
       if (!admitted && signal.reason?.code === 'AI_TIMEOUT') throw new ToolError(TOOL_ERROR_CODES.BUSY);
@@ -71,8 +71,14 @@ export function createToolTurnContext({
     } finally { waiting.delete(signal); }
   }
 
-  async function loadScope(signal) {
-    const auth = await withSql(signal, (executor) => loadAuthorization(executor, { includeScopeIdentities: true }));
+  async function loadScope(signal, authorizationOnly = false) {
+    let auth;
+    try {
+      auth = await withSql(signal, (executor) => loadAuthorization(executor, { includeScopeIdentities: true, maxScopeRows: limits.maxAuthorizationRows }), { authorizationOnly });
+    } catch (error) {
+      if (error?.code === 'AI_SCOPE_LIMIT_EXCEEDED') throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      throw error;
+    }
     state.authorizationLoads += 1;
     // Yükleyici kimliği yine oturumdan çözer; turun Sicil'iyle aynı olmalıdır.
     if (Number(auth?.sicil) !== Number(sicil)) {
@@ -83,7 +89,9 @@ export function createToolTurnContext({
     state.epoch = createHash('sha256').update(JSON.stringify({
       sicil: scope.sicil, admin: scope.isAdmin, executive: scope.isExecutive,
       projects: [...scope.projects].sort(([a], [b]) => a.localeCompare(b)),
-      tasks: scope.scopedTaskIds.split(',').sort(), people: [...(auth.scopeIdentities || [])].sort((a, b) => a - b), assignment: scope.canAssignAllCorporate
+      tasks: scope.scopedTaskIds.split(',').sort(),
+      taskRights: (auth.scopeTaskRights || []).map(({ projectId, taskId, reason }) => [projectId, taskId, reason]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+      people: [...(auth.scopeIdentities || [])].sort((a, b) => a - b), assignment: scope.canAssignAllCorporate
     })).digest('hex');
     if (previousEpoch && previousEpoch !== state.epoch) snapshots.clear();
     return Object.freeze({ auth, scope });
@@ -119,6 +127,7 @@ export function createToolTurnContext({
       return result;
     },
     authorizationEpoch() { return state.epoch; },
+    revalidateAuthorization(signal) { return loadScope(signal, true); },
     timeoutCode(signal) { return waiting.has(signal) ? TOOL_ERROR_CODES.BUSY : TOOL_ERROR_CODES.TIMEOUT; },
     stats() {
       return { sqlMs: state.sqlMs, queries: state.queries, authorizationLoads: state.authorizationLoads };

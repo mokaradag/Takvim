@@ -228,11 +228,19 @@ function taskNotificationRow(db, row) {
 
 /* ── Koordinasyon okumaları ─────────────────────────────────── */
 
+function disclosureAllowed(db, row, params) {
+  if (params.disclosureAdmin == null) return true;
+  const task = taskOf(db, row.TaskId);
+  if (!task || !projectOf(db, task.ProjectId)?.IsActive) return false;
+  return params.disclosureAdmin === 1 || String(params.disclosureProjects || '').split(',').some((id) => sameGuid(id, task.ProjectId))
+    || String(params.disclosureTasks || '').split(',').some((id) => sameGuid(id, task.TaskId));
+}
+
 function coordinationInbox(db, params) {
   const sicil = Number(params.sicil);
   const limit = Number(params.limit || 8);
   const owned = db.taskAssignmentCoordinations
-    .filter((row) => isParticipant(db, row, params) && taskAvailable(db, row));
+    .filter((row) => isParticipant(db, row, params) && taskAvailable(db, row) && disclosureAllowed(db, row, params));
   const counts = {
     UnreadCount: owned.filter((row) => isUnread(db, row, sicil) && isVisible(db, row, params)).length,
     PendingCount: owned.filter((row) => actionable(db, row, params)).length
@@ -242,6 +250,9 @@ function coordinationInbox(db, params) {
     .sort(coordinationOrder(db, params))
     .slice(0, limit)
     .map((row) => coordinationRow(db, row, params));
+  if (params.evidenceSnapshotLimit != null && owned.filter((row) => isVisible(db, row, params)).length > params.evidenceSnapshotLimit) {
+    counts.UnreadCount = null; counts.PendingCount = null; counts.CountsComplete = 0;
+  }
   return [[counts], items];
 }
 
@@ -251,12 +262,15 @@ function taskNotificationInbox(db, params) {
   const owned = db.taskNotifications
     .filter((row) => Number(row.RecipientSicil) === sicil)
     .map((row) => taskNotificationRow(db, row))
-    .filter((row) => row.TaskAvailable === 1);
+    .filter((row) => row.TaskAvailable === 1 && disclosureAllowed(db, row, params));
   const counts = { UnreadCount: owned.filter((row) => row.IsUnread === 1 && !row.DismissedAt).length };
   const items = owned
     .filter((row) => !row.DismissedAt)
     .sort((left, right) => (Date.parse(right.OccurredAt) || 0) - (Date.parse(left.OccurredAt) || 0))
     .slice(0, limit);
+  if (params.evidenceSnapshotLimit != null && owned.filter((row) => !row.DismissedAt).length > params.evidenceSnapshotLimit) {
+    counts.UnreadCount = null; counts.CountsComplete = 0;
+  }
   return [[counts], items];
 }
 
@@ -275,7 +289,7 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   };
   const pageRow = (row) => ({ ...coordinationRow(db, row, params), IsActionable: pageActionable(row) ? 1 : 0 });
   const matches = db.taskAssignmentCoordinations.filter((row) => {
-    if (!pageParticipant(row)) return false;
+    if (!pageParticipant(row) || !disclosureAllowed(db, row, params)) return false;
     const view = pageRow(row);
     if (params.projectId && !sameGuid(recordProjectId(db, row), params.projectId)) return false;
     if (params.taskId && !sameGuid(row.TaskId, params.taskId)) return false;
@@ -309,6 +323,11 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
     return history(row);
   });
   if (params.evidenceSnapshotLimit != null && tabbed.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
+  if (params.evidenceSnapshotLimit != null) {
+    counts.PendingCount = tabbed.filter(pageActionable).length;
+    counts.SentCount = tabbed.filter((row) => Number(row.RequesterSicil) === sicil).length;
+    counts.HistoryCount = tabbed.filter(history).length;
+  }
   const lastPage = tabbed.length === 0 ? 0 : Math.floor((tabbed.length - 1) / pageSize);
   const page = Math.min(requestedPage, lastPage);
   const items = tabbed
@@ -937,7 +956,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     if (sqlText.includes('FROM dbo.MR_TaskNotifications n')) {
       return [...coordinationInbox(db, params), ...taskNotificationInbox(db, params)];
     }
-    if (sqlText.includes('DECLARE @safePage')) return coordinationPage(db, params, { decisionAuthorityScope: sqlText.includes('rota-ai-decision-authority') });
+    if (sqlText.includes('DECLARE @safePage') || sqlText.includes('#CoordinationEvidenceSnapshot')) return coordinationPage(db, params, { decisionAuthorityScope: sqlText.includes('rota-ai-decision-authority') });
     if (sqlText.includes('SELECT TOP (1)')) {
       const row = db.taskAssignmentCoordinations.find((entry) =>
         sameGuid(entry.CoordinationId, params.coordinationId)

@@ -111,8 +111,12 @@ Tarayıcı ── POST /assistant/turns ──► assistantService.prepareAssist
 
 ## 3. Kanıta dayalı yol ne zaman kullanılır?
 
-Bir tur ancak **dördü birden** sağlanırsa kanıta dayalı yoldan yanıtlanır;
-aksi hâlde Aşama 2 genel sohbet yolu aynen kullanılır:
+Kaynak seçimi kullanıcıya aittir: **Rota verisi** (varsayılan) doğrulanmış
+olgular verir; **Genel sohbet** Rota verisi okumayan Aşama 2 akışını kullanır.
+İstek `source: rota|general` taşır; eksik değer `rota` kabul edilir. Araç
+bayrağı açıkken veri yolu hazır değilse sabit `unavailable` yanıtı verilir,
+model düzyazısına sessiz geçiş yapılmaz. Bayrak kapalıyken Aşama 2 değişmez.
+Veri yolunun dört önkoşulu vardır:
 
 1. `MERGEN_ROTA_AI_TOOLS_ENABLED=true`;
 2. seçilen kipin araç profili kurulu ve yetenekli: Standart → `chat.tools`,
@@ -275,19 +279,20 @@ sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcıs
 | Durum | Kural |
 | --- | --- |
 | Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general"}` / `rota` bildirir veya ilk araçları seçer |
-| Genel | `general` yönlendirmesinden sonra araçlar kapalıdır; yalnızca `{"kind":"general","text":"…"}` kabul edilir; atıf yasaktır |
+| Genel önerisi | Modelin ayrı rota ya da doğrudan `general` önerisi veri kipinde kanıt denetimini kapatmaz. Serbest metin gösterilmez; sunucu Genel sohbet seçimini isteyen güvenli açıklama verir. Kullanıcının `source: general` seçimi ayrı, veri okumayan akış ve `general` bitişidir. |
 | Rota | Araç çağrısı yönlendirmeyi `rota` yapar; geçerli iddialar sunucuda çizilir |
 | Aday seçimi | Belirsiz aramaya bağlı doğrulanmış aday iddiaları + `kind: clarification`; soruyu sunucu ekler |
-| Bulunamadı | Son araç kümesinin hataları yalnızca `NOT_FOUND` ise `kind: not_found` / güvenli eski ileti; sabit, varlık/yetki ayrımı yapmayan yanıt ve `not_found` bitişi |
+| Bulunamadı | Hiç başarılı kanıt yok ve son araç kümesinin hataları yalnızca `NOT_FOUND` ise `kind: not_found` / güvenli eski ileti; sabit, varlık/yetki ayrımı yapmayan yanıt ve `not_found` bitişi |
 | Veri hizmeti kullanılamıyor | Kullanılabilir kanıt yokken `kind: unavailable`; sabit hizmet iletisi, ayrı sonuç sayacı |
 | Gerçek doğrulama hatası | Tek düzeltme de geçmezse `grounding_failed`; kanıt kaydedilmez |
 | İptal | Ağ geçidi/istemci sinyali turu keser; yarım protokol veya yanıt kaydedilmez |
 | Sağlayıcı çıktısı kesildi | `finish_reason=length` tek ortak düzeltme bütçesinden kısa (en fazla 8 iddia), tam JSON ister; kesik JSON geçmişe eklenmez |
 
-Yönlendirme her tur yeniden yorumlanır. Eski kanıtlı yanıtlar güvenilir
-asistan talimatı olarak tekrar oynatılmaz; önceki kullanıcı soruları kısa ve
-dolaylı takipler için bağlam sağlar. Eski bir Rota turu genel sohbeti kalıcı
-olarak kanıt zorunluluğuna sokmaz. Türkçe/İngilizce ifade veya büyük-küçük
+Model her turun niyetini yorumlayabilir; kaynak seçiminin güvenlik sonucunu
+sunucu belirler. Eski asistan düzyazısı güvenilir talimat olarak tekrar
+oynatılmaz; önceki kullanıcı soruları ve güncel yetkiyle doğrulanan minimal
+aday adları/kimlikleri kısa takipler için bağlam sağlar. Aday seçimi metni
+yerine sunucunun yapılandırılmış `clarificationContext` referansları kullanılır. Türkçe/İngilizce ifade veya büyük-küçük
 harf regexleri bu sınırı belirlemez. Doğal dil sınıflandırması modelin
 olasılıksal yorumudur; sunucu her ifadenin doğru sınıflandırılacağını iddia
 etmez. Rota verisini edinme, kapsam ve son olgu doğrulaması sunucuya aittir.
@@ -296,7 +301,11 @@ etmez. Rota verisini edinme, kapsam ve son olgu doğrulaması sunucuya aittir.
 bilinmeyen veya yanlış konumdaki aynı adlı alan iddia değildir. Son yanıtta
 seçilen yollar yalnızca yürüyüşü daraltır, izin listesi oluşturmaz. Açıklama,
 talep/karar iletisi ve hareket metni ancak veri görülmeden `textFields` ile
-seçildiyse çizilebilir; veri sonradan bu izdüşümü genişletemez. Olgu anlamı
+seçildiyse modele verilir ve çizilebilir; seçilmemiş alanlar yürütücüde
+kanıt kaydı ve model tüketiminden **önce** çıkarılır. Hareketlerde açıklama
+önce/sonra değerleri de aynı seçime bağlıdır. Belirlenimci `ruleDescription`
+kullanıcı metni değildir; normal bir kanonik olgudur. Veri sonradan bu
+izdüşümü genişletemez. Olgu anlamı
 kanonik yol/araç kimliği, türlü değer, etiket, uygulanabilen birim, süzgeç ve
 gruplama, veri zamanı, Türkiye günü, tamlık ve null anlamını içerir. İç
 kimlikler ve kaynak yönergeleri iddia değildir. Kayıtlı model düzyazısı ve
@@ -353,7 +362,7 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
 | `done` | Kanıta dayalı yolda `assistantMessage.content` (kayıtlı, esas metin) ve `assistantMessage.evidence` |
 
 Aşama 3 yolunda model protokolü ve bütün taslaklar tamponlanır. Doğrulanan
-kanıtlı yanıt veya açıkça bildirilen geçerli genel yanıt tek parça gönderilir;
+kanıtlı yanıt veya güvenli son ileti tek parça gönderilir;
 JSON, doğrulanmamış önsöz veya sonradan silinecek olgular gösterilmez.
 `revise` istemci sözleşmesinde uyumluluk için korunur. Araç özelliği kapalı
 Aşama 2 yolu gerçek zamanlı akışını korur.
@@ -390,7 +399,11 @@ Aşama 2 yolu gerçek zamanlı akışını korur.
 | Düzeltme turu | 1 |
 | Analizde okunabilecek yetkili görev | 20 000 (aşarsa `RESULT_TOO_LARGE`: süzgeci daraltın) |
 | Analizde okunabilecek görünür sorumluluk ilişkisi | 200 000 (görev satırı bütçesinden ayrı) |
-| Ham hareket kaydı | 20 000 (gruplamadan önce max+1) |
+| Ham hareket kaydı | 20 000 (kişi/kurumsal yol ve grup türü süzgecinden sonra, gruplamadan önce max+1) |
+| AI yetki satırları | Her proje/görev/kişi sonuç kümesinde 200 000; taşmada açıklama yapılmaz |
+| Hareket ayrıntısı | Grup başına en yeni 2 kayıt; önce/sonra JSON başına 8192 karakter, taşmada eksik sonucu |
+| Hareket metni kişi çözümü | Yalnızca `changes` seçilmişse; en fazla 2000 ayrı Sicil |
+| Bildirim geçmişi sayımı | Kaynak başına 1000 görünür kayıt + 1 taşma yoklaması; taşmada sayı `null` |
 | İş akışı tur anlık görüntüsü / imleç ötelemesi | 1000 |
 
 - **Araç SQL kapısı:** 1 eşzamanlı sorgu, sıra 32; Sicil başına 1 etkin + 6
@@ -414,7 +427,7 @@ Bütün hesaplar sunucuda, sabit kurallarla yapılır; model sayı hesaplamaz.
 | Kavram | Tanım |
 | --- | --- |
 | Bugün | `Europe/Istanbul` iş günü (`businessDate`); UTC 21:30 → Türkiye'de ertesi gün |
-| Durum | `planned` → Yapılacak (`todo`), `in-progress` → Devam ediyor (`in_progress`), `done` → Tamamlandı |
+| Durum | Ortak `PERSISTED_TASK_STATUSES`: `planned/not-started/todo` → `todo`; `in-progress/in_progress/blocked` → `in_progress`; `done/completed/cancelled` → `done`; tanınmayan → `todo`. SQL/JS/rapor geçişleri bu tanımı kullanır. |
 | Açık görev | Durumu `done` olmayan |
 | Gecikmiş | Açık **ve** termini (`targetFinish`) bugünden önce; gecikme günü = bugün − termin |
 | Termini bugün | Açık ve termin = bugün |
@@ -601,7 +614,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `taskId`, `limit`.
 - **Yetki:** Yalnızca kullanıcının kendi görünür görev abonelikleri; görünmeyen aboneliklerin sayısı hiçbir alana/etikete çıkmaz. Belirli `taskId` için görünmeyen ve olmayan/aboneliği olmayan kayıtlar aynı `NOT_FOUND` sonucunu alır.
 - **Kaynak:** `AI_TOOL_OUTLOOK_SQL` + ürünün hata iletileri.
-- **Çıktı:** görünür etkin abonelik sayısı (kesilirse `null`), duruma göre görünür sayılar, `items[]`; `subscriptionsForTasksNoLongerVisible` yalnızca boole eksiklik işaretidir. Gizli abonelik veya kesilme varsa genel toplam `null` ve duruma göre dağılım eksiktir; posta kutusu ya da davetin kabulü **bilinmez**.
+- **Çıktı:** görünür etkin abonelik sayısı (kesilirse `null`), duruma göre görünür sayılar, `items[]`. Gizli abonelikler nüfusa, toplam/dağılıma, eksiklik ya da varlık işaretine katılmaz. Posta kutusu ya da davetin kabulü **bilinmez**.
 - **Örnek sorular:** "Outlook'a eklediğim görevlerden gönderilemeyen var mı?"
 
 ### 10.19 `rota_data_quality` — plan veri kalitesi
@@ -784,6 +797,8 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 | Dosya | Kapsam |
 | --- | --- |
 | `test/ai-tool-contracts.test.mjs` | Katı şema, türlü kayıt/alan/değer bağı, kardeş kayıt ve tur değişimi, kısa kodlar, tarih/süre kökeni, durum/boole olumsuzluklarının düzyazıyla kabul edilmemesi, yerel sayı çizimi, NULL/0, metrikler, hareket değerleri, enjeksiyon nötrleme, güvenli NOT_FOUND, kapsam ve sınırlar |
+| `test/ai-disclosure-invariants.test.mjs` | Kalıcı yanıt/tekrar/özet yetki iptali, görev kimlik hakkı değişimi, eski kanıt, güvenli aday bağlamı, güncel bildirim görünürlüğü ve taşma sayacı |
+| `test/ai-evidence-semantics.test.mjs` | Normalize takip kapsamı, 19 kökün kataloğu, metin izdüşümü, birim/null/tamlık, ondalık kesinlik, odaklı WBS ve süzgeçten sonra sınır |
 | `test/ai-domain-tools.test.mjs` | 19 aracın yetki matrisi (yönetici, FULL, READ, kısmi, yönetim kapsamı, oluşturan, ilgisiz), 10 görevden 2'si görünen kısmi toplam, gizli eş sorumlu, aynı adlı kişi, NULL kapsaması, baz plan, bağımlılık türleri ve gecikme, tekrar, takvim, Outlook, bildirimlerin işaretlenmemesi, hareketler, `' OR 1=1 --`/`%`/`_`/`[`, sınırlar, sonuç boyutu, SQL kapısının bırakılması, küme başına yetki |
 | `test/ai-grounded-assistant.test.mjs` | Uçtan uca: özellik bayrağı, kip/profil, 0018 eksikliği, türlü yanıt ve kalıcılık, oynatma, uydurma atıf ve düzeltme, güvenli ileti, kısmi kapsam notu, genel niyet bildirimi ve protokol tamponlama, tanınmayan araç, tur sınırı, istem enjeksiyonu, geçmiş olgularını yeniden sorgulama, Sicil yalıtımı, iptal, içeriksiz gözlem, sürücü hatası |
 | `test/ai-evidence-boundaries.test.mjs` | Yönlendirme, aday seçimi, yeniden deneme, varlık/metin sınırı, yetki iptali, null/hassasiyet, canlı imleçler, gizli sayı, kısaltma ve tam sınırlar |
@@ -836,11 +851,18 @@ kurmaz. Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süres
 ### Yetki kökeni ve kanıt ömrü
 
 Küme başına tek yetki okuması proje erişimi, kısmi görev kimlikleri, yönetici
-bayrakları ve yönetim kapsamındaki kişi üyeliklerinden sunucu içi bir epoch
+bayrakları, görev başına oluşturucu/sorumlu/yönetim nedenleri ve yönetim
+kapsamındaki kişi üyeliklerinden sunucu içi bir epoch
 üretir. Defter her kanıtı bu epoch'a bağlar. Sonraki küme farklı epoch görürse
 eski kanıt geçersiz olur; kaynak kimliği yeniden kullanılmaz. Son çizimden
 önce yetki bir kez daha kapı/süre sınırı içinde okunur; geçersiz kanıt ne
 çizilir ne yanıtla kaydedilir. Epoch modele/tarayıcıya yetki ayrıntısı taşımaz.
+Epoch `EvidenceJson` içinde kalıcıdır. Konuşma açma, tekrar oynatma ve
+yazma uzlaştırması aynı merkezi açıklama kapısından geçer: güncel epoch
+eşleşmiyorsa yanıt metni ve kaynak künyeleri birlikte gizlenir. Eski, epoch
+içermeyen kanıt güvenilir sayılmaz; kanıt/yetki okuma hatası açıklamayı açmaz.
+Son yetki okumasının ayrı 8 saniyelik bütçesi vardır; tüketilmiş araç SQL
+bütçesi başarılı kanıtı otomatik doğrulama hatasına çevirmez.
 Bu, gözlenen yetki değişimini kapatan uygulama denetimidir; SQL okuması,
 model üretimi ve yanıt teslimi atomik bir işlem değildir ve saklanmış geçmiş
 kanıtı güncel veri yerine kullanılamaz.
@@ -851,16 +873,39 @@ imleci reddedilir; epoch değişince anlık görüntü atılır. Görev listeler
 sıralı veri özeti değişince imleci reddeder. Normal UI/rapor OFFSET davranışı
 bu AI kuralları için değiştirilmez.
 
+Tarih ve atama sayfalarında sayaçlar **seçilen sekmedeki** yetkili/süzülmüş
+anlık görüntüyü sayar; sekmeler arası toplam gibi sunulmaz. Taşan nüfus
+`RESULT_TOO_LARGE` olur. Bildirim önizlemesi kaynak başına sınırlı canlı
+nüfustan kurulur; taşmada sayaçlar bilinmezdir. Geçmiş katılımcı/alıcı üyeliği
+tek başına AI açıklama yetkisi değildir: görev etkin projede halen FULL/READ
+ya da kişisel görev kapsamında olmalıdır. Normal rapor/bildirim SQL yolu
+`evidenceSnapshotLimit` verilmedikçe AI birleşimlerini/bütçelerini çalıştırmaz.
+
+Takip kökleri karşılaştırılmadan önce katı şemayla normalize edilir (null,
+GUID, metin boşluğu). Sayfalama/sunum değişebilir; filtreler daralabilir;
+metin araması dondurulur. İlk başarılı köklerin keşfettiği kimlikler ve açık
+`TOOL_FOLLOW_UPS` ilişkileri izin listesi oluşturur. Görevden ilgisiz projeye
+geçiş ve yeni serbest metin izdüşümü reddedilir. Kendi bildirim kökü kendi
+talep/atama listesini açabilir; analitik, proje ve WBS kökleri kayıtlı
+detay zincirlerini korur.
+
 ### Kanonik ölçüler ve kabul
 
 Yedi günlük termin toplamı bugün dahil `[bugün, bugün+6]` aralığıdır; ayrık
 gruplar `due_today`, `due_days_1_to_6`, `due_days_7_to_29` kullanır. Bilinen
 değer yoksa saat/bütçe toplamı ve kişi iş yükü saati null kalır; bilinen sıfır
-sıfırdır. Saat toplamları iki, bütçe/harcama dört ondalık ölçekle toplanır;
-para birimi varsayılmaz. Projeye seçilmiş varsayılan takvimin kökeni `project`,
-yalnızca geri düşüşün kökeni `default` olur. WBS döngüsü alt ağaç ölçülerini
-null ve sonucu eksik yapar. Gizli tekrar şablonu gruplama/sayı veya varlık
-boole değeri üretmez; görünür yinelemeler ayrı kayıt olarak kalır. Kısmi
+sıfırdır. Saat toplamları iki, bütçe/harcama dört ondalık ölçekle tamsayı tabanlı
+olarak toplanır. SQL `decimal(19,4)` bütçe/harcamayı metin olarak taşır;
+güvenli sayı aralığının dışında tam ondalık metin korunur ve yerel biçimde
+çizilir. Para birimi varsayılmaz. Gecikme büyüklüğü aynı olgunun birimiyle,
+saat ve parasal ölçüler kendi birimiyle çizilir. İç enum/süzgeç anahtarları
+kullanıcıya ham gösterilmez; bilinmeyen etiketler genel değer olarak çizilir. Projeye seçilmiş varsayılan takvimin kökeni `project`,
+yalnızca geri düşüşün kökeni `default` olur. WBS döngüsü yalnızca ona bağımlı alt ağaç ölçülerini
+null ve sonucu eksik yapar; bağımsız sağlıklı dal toplamları korunur. Odaklı
+WBS nüfusu yetkili alt ağaçla sınırlandırılır; odak geçişi 201 yinelemede
+güvenle kesilir. Gizli tekrar şablonları açıklanmaz; aynı gizli ebeveyne
+bağlı görünür yinelemeler sunucuda birlikte sayılır, dış kimlik görünür
+yinelemeden seçilir. Gizli şablonun kimliği veya toplam nüfusu açıklanmaz. Kısmi
 hareketlerde gizli sorumlu değişiklikleri tek genel işaretle temsil edilir.
 
 Otomatik sınamalar SQL/sağlayıcı ikizleriyle davranış güvencesi verir; gerçek
@@ -870,3 +915,10 @@ kısa Türkçe/İngilizce takip, ilgisiz genel soru, kesik çıktı, canlı sayf
 sınır nüfusları ve normal rapor gecikmesi elle kabul edilmelidir. Aşama 4
 semantik temsil/vektör arama/yeniden sıralama/RAG'yi bu yetkili kanıt
 sözleşmesine ekleyebilir; burada uygulanmaz. Aşama 5 yazma/işlem yetkisidir.
+
+Görev takvimi etkin görev → etkin proje → etkin varsayılan sırasıyla SQL’de
+çözülür; hiçbiri yoksa değer/köken null kalır. Tekrarda `lastCompleted`,
+gerçek bitişi bilinen tamamlanan yinelemelerden en yeni gün ve kararlı görev
+kimliğiyle seçilir; planlanan oluşum tarihi bitiş yerine kullanılamaz.
+Gerçek bitişi eksik tamamlanmış yineleme varsa `completionDatesComplete=false`
+ve sonuç eksiktir; bilinen gerçek bitiş yoksa `lastCompleted=null` olur.

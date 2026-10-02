@@ -85,7 +85,7 @@ function toolRoutes(registry) {
 }
 
 /** Rota verisi araçlarının durumu (yalnızca özellik açıkken ayrıntı taşır). */
-const TOOL_SERVICE_FAILURES = new Set(['TIMEOUT', 'DATABASE_UNAVAILABLE', 'INTERNAL']);
+const TOOL_SERVICE_FAILURES = new Set(['BUSY', 'TIMEOUT', 'DATABASE_UNAVAILABLE', 'INTERNAL']);
 
 function rotaDataView(config, registry) {
   if (!config.toolsEnabled) return { enabled: false, flagInvalid: Boolean(config.toolsFlagInvalid) };

@@ -288,13 +288,16 @@ const dependencyInspect = {
 
 /* ── rota_recurrence_inspect ──────────────────────────────── */
 
-function seriesSummary(template, occurrences, today) {
+function seriesSummary(occurrences, today) {
   const ordered = [...occurrences].sort((left, right) => String(left.recurrenceOccurrenceDate || '').localeCompare(String(right.recurrenceOccurrenceDate || '')));
   const upcoming = ordered.filter((fact) => fact.status !== 'done' && (fact.recurrenceOccurrenceDate || '') >= today);
-  const lastDone = [...ordered].reverse().find((fact) => fact.status === 'done');
+  const completed = occurrences.filter((fact) => fact.status === 'done');
+  const completionDatesComplete = completed.every((fact) => Boolean(fact.actualFinish));
+  const lastDone = completed.filter((fact) => fact.actualFinish).sort((left, right) => right.actualFinish.localeCompare(left.actualFinish) || right.id.localeCompare(left.id))[0] || null;
   const previewLimit = 3;
   return {
     visibleOccurrences: occurrences.length,
+    completionDatesComplete,
     open: occurrences.filter((fact) => fact.status !== 'done').length,
     done: occurrences.filter((fact) => fact.status === 'done').length,
     overdue: occurrences.filter((fact) => isOverdue(fact, today)).length,
@@ -303,7 +306,7 @@ function seriesSummary(template, occurrences, today) {
     next: upcoming.slice(0, previewLimit).map((fact) => ({
       taskId: fact.id, occurrenceDate: fact.recurrenceOccurrenceDate, targetFinish: fact.targetFinish, statusLabel: statusLabelOf(fact.status)
     })),
-    ...(lastDone ? { lastCompleted: { taskId: lastDone.id, occurrenceDate: lastDone.recurrenceOccurrenceDate, actualFinish: lastDone.actualFinish } } : {})
+    lastCompleted: lastDone ? { taskId: lastDone.id, occurrenceDate: lastDone.recurrenceOccurrenceDate, actualFinish: lastDone.actualFinish } : null
   };
 }
 
@@ -343,9 +346,9 @@ const recurrenceInspect = {
       }));
       if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       const template = result.facts.find((item) => item.id === seriesId && item.recurrenceRule) || null;
-      const occurrences = template ? result.facts.filter((item) => item.recurrenceParentId === seriesId) : [fact];
+      const occurrences = result.facts.filter((item) => item.recurrenceParentId === seriesId);
       const access = projectAccess(scope, fact.projectId);
-      const summary = seriesSummary(template, occurrences, call.today);
+      const summary = seriesSummary(occurrences, call.today);
       const evidenceTask = template || fact;
       return {
         data: {
@@ -355,11 +358,11 @@ const recurrenceInspect = {
             ...(template ? { rule: dataText(template.recurrenceRule, 200), ruleDescription: describeRecurrenceRule(template.recurrenceRule) } : {}),
             ...summary
           },
-          notes: ['Sayılar yalnızca görünür yinelemeler üzerindedir.']
+          notes: ['Sayılar yalnızca görünür yinelemeler üzerindedir. Son tamamlanan, gerçek bitişi bilinen kayıtlardan seçilir; tarih yoksa null kalır.']
         },
         scope: describeTaskScope(access ? [access] : []),
-        complete: !summary.nextTruncated,
-        truncated: summary.nextTruncated,
+        complete: !summary.nextTruncated && summary.completionDatesComplete,
+        truncated: summary.nextTruncated || !summary.completionDatesComplete,
         returnedCount: 1,
         totalCount: 1,
         nextCursor: null,
@@ -377,9 +380,8 @@ const recurrenceInspect = {
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     const projects = projectIndex(result.projects);
     const series = new Map();
-    const visibleTemplates = new Set(result.facts.filter((fact) => fact.recurrenceRule).map((fact) => fact.id));
     for (const fact of result.facts) {
-      const seriesId = fact.recurrenceRule || !visibleTemplates.has(fact.recurrenceParentId) ? fact.id : fact.recurrenceParentId;
+      const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId || fact.id;
       if (!seriesId) continue;
       if (!series.has(seriesId)) series.set(seriesId, { template: null, occurrences: [], projectId: fact.projectId });
       const entry = series.get(seriesId);
@@ -393,11 +395,11 @@ const recurrenceInspect = {
         title: dataText(title, 160),
         project: projects.get(entry.projectId)?.name || null,
         ...(entry.template ? { ruleDescription: describeRecurrenceRule(entry.template.recurrenceRule) } : {}),
-        ...seriesSummary(entry.template, entry.occurrences, call.today)
+        ...seriesSummary(entry.occurrences, call.today)
       };
     }).sort((left, right) => right.open - left.open || left.title.localeCompare(right.title, 'tr'));
     const page = list.slice(0, limit);
-    const previewTruncated = page.some((item) => item.nextTruncated);
+    const previewTruncated = page.some((item) => item.nextTruncated || !item.completionDatesComplete);
     const descriptor = args.projectId
       ? describeTaskScope([projectAccess(scope, args.projectId)])
       : describeTaskScope(scope.isAdmin ? [] : [...scope.projects.values()]);
@@ -449,7 +451,7 @@ const calendarInspect = {
     const result = await call.sql((executor) => readCalendar(executor, scope, { projectId: args.projectId ?? null, from, to }));
     if (args.projectId && !result.projectVisible) throw notFound();
     if (!result.calendar) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Etkin bir çalışma takvimi tanımlı değil.' });
-    const holidays = result.holidays.map((row) => ({ date: sqlDay(row.HolidayDate), name: dataText(row.Name, 120) }));
+    const holidays = result.holidays.map((row) => ({ date: sqlDay(row.HolidayDate), name: dataText(row.Name, 120), short: dataText(row.ShortName || row.Name, 120) }));
     const workingDays = Array.isArray(result.workingDays) && result.workingDays.length
       ? result.workingDays
       : [1, 2, 3, 4, 5];
@@ -458,7 +460,7 @@ const calendarInspect = {
       name: String(result.calendar.Name || ''),
       timezone: String(result.calendar.TimeZone || 'Europe/Istanbul'),
       workingDays,
-      holidays: holidays.map((holiday) => ({ date: holiday.date, name: holiday.name, short: holiday.name }))
+      holidays: holidays.map((holiday) => ({ date: holiday.date, name: holiday.name, short: holiday.short }))
     };
     const workingDayCount = countWorkingDays(from, to, calendar);
     return {

@@ -61,8 +61,7 @@ const projectSearch = {
           || foldText(row.ProjectName) === needle || foldText(row.ProjectCode || '') === needle
       };
     });
-    const exact = matches.filter((match) => match.exactMatch);
-    const uniqueExact = exact.length === 1 && (result.total === matches.length || matches.some((match) => !match.exactMatch));
+    const uniqueExact = result.exactCount === 1;
     const ambiguous = !uniqueExact && result.total > 1;
     return {
       data: {
@@ -101,7 +100,7 @@ function taskTotals(row) {
     overdue: Number(row?.OverdueCount || 0),
     dueNext7Days: Number(row?.DueSoonCount || 0),
     openWithoutTargetFinish: Number(row?.NoTargetCount || 0),
-    openMilestones: Number(row?.OpenMilestoneCount || 0),
+    milestonesOpen: Number(row?.OpenMilestoneCount || 0),
     nextTargetFinish: sqlDay(row?.NextTargetFinish),
     lastTaskUpdateAt: sqlInstant(row?.LastTaskUpdateAt),
     completionRatePercent: taskCompletionRate(done, total)
@@ -284,7 +283,7 @@ const wbsInspect = {
     const { scope } = await call.authorization();
     const access = await requireVisibleProject(scope, args.projectId, call);
     const result = await call.sql((executor) => readWbs(executor, scope, {
-      projectId: args.projectId, today: call.today, maxRows: TOOL_LIMITS.maxAnalyzedTasks
+      projectId: args.projectId, wbsId: args.wbsId ?? null, today: call.today, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     const nodes = new Map();
@@ -334,6 +333,7 @@ const wbsInspect = {
       node.subtree = { ...node.direct };
       for (const child of node.children) {
         const sub = rollup(child);
+        if (cycleNodes.has(child.id)) cycleNodes.add(node.id);
         node.subtree.tasks += sub.tasks;
         node.subtree.done += sub.done;
         node.subtree.overdue += sub.overdue;
@@ -383,9 +383,9 @@ const wbsInspect = {
         ...(cycleNodes.has(node.id) ? { malformedCycle: true } : {}),
         childCount: node.children.length,
         directTasks: node.direct.tasks,
-        subtreeTasks: cycleNodes.size ? null : node.subtree.tasks,
-        subtreeOpen: cycleNodes.size ? null : node.subtree.tasks - node.subtree.done,
-        subtreeOverdue: cycleNodes.size ? null : node.subtree.overdue
+        subtreeTasks: cycleNodes.has(node.id) ? null : node.subtree.tasks,
+        subtreeOpen: cycleNodes.has(node.id) ? null : node.subtree.tasks - node.subtree.done,
+        subtreeOverdue: cycleNodes.has(node.id) ? null : node.subtree.overdue
       });
       if (depth + 1 < depthLimit) node.children.forEach((child) => walk(child, depth + 1));
       else if (node.children.length) depthTruncated = true;

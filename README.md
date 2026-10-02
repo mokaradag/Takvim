@@ -324,8 +324,12 @@ biçiminde kanıta atıf yapar ve sunucu atıfları belirlenimci olarak doğrula
 doğrulanamayan yanıt yerine sabit güvenli ileti gösterilir. Yanıtın altında
 "N Rota kaynağı · Veri zamanı" paneli bulunur; atıf yapılan kanıtlar yanıtla
 birlikte kaydedilir (`MR_AiMessageEvidence`, göç `0018`). Kısmi yetkide sayılar
-yalnızca görülebilen kayıtları kapsar ve yanıt bunu belirtir. Özellik kapalıyken
-ya da 0018 uygulanmamışken Rota AI Aşama 2 gibi genel sohbetle çalışır. Araç
+yalnızca görülebilen kayıtları kapsar ve yanıt bunu belirtir. Kaynak seçimi **Rota verisi** (varsayılan) ve **Genel sohbet** olarak açıktır;
+modelin genel niyet önerisi kanıt denetimini kapatamaz. Veri hizmeti hazır
+değilse sabit kullanılamıyor yanıtı gösterilir; Genel sohbet kullanıcı seçimiyle
+veri okumayan akışı açar. Kalıcı yanıt/kanıt açma ve tekrar sırasında güncel
+yetkiyle doğrulanır; kaldırılmış yetkinin metni ve kaynakları gösterilmez.
+Özellik kapalıyken Rota AI Aşama 2 gibi genel sohbetle çalışır. Araç
 kataloğu, yetki, kanıt sözleşmesi, sınırlar, belirlenimci tanımlar, dağıtım
 sırası ve elle kabul listesi: `docs/AI-DOMAIN-TOOLS.md`.
 

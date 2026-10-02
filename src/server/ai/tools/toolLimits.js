@@ -34,7 +34,9 @@ export const TOOL_LIMITS = Object.freeze({
   /** Görev kümesi analizinde sunucuya okunabilecek en fazla yetkili görev satırı. */
   maxAnalyzedTasks: 20000,
   maxAnalyzedAssignments: 200000,
+  maxAuthorizationRows: 200000,
   maxAnalyzedActivities: 20000,
+  maxActivityAssignees: 2000,
   /** Liste araçlarının en fazla sayfa ötelemesi (imleç). */
   maxCursorOffset: 1000
 });

@@ -1,3 +1,4 @@
+import { bindDisclosureScope } from '../authorization/disclosureScope.js';
 import 'server-only';
 import {
   NOTIFICATION_PREVIEW_LIMIT,
@@ -5,6 +6,7 @@ import {
 } from '../../domain/notifications/notificationInbox.js';
 import {
   COORDINATION_INBOX_SQL,
+  COORDINATION_EVIDENCE_INBOX_SQL,
   bindCoordinationScope,
   mapCoordinationInbox,
   updateCoordinationNotifications
@@ -15,6 +17,7 @@ import { ServerPersistenceError } from '../errors.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import {
   TASK_NOTIFICATION_INBOX_SQL,
+  TASK_NOTIFICATION_EVIDENCE_INBOX_SQL,
   mapTaskNotificationInbox,
   updateTaskNotifications
 } from './taskNotificationQueries.js';
@@ -26,17 +29,23 @@ import {
  * görüntüye eklenen maliyet bir sorgudur ve iki kaynak da en fazla sekiz satır
  * ile iki sayaç taşır. Geçmişin tamamı hiçbir zaman anlık görüntüye girmez.
  */
-export async function readNotificationInbox(executor, actor) {
+export async function readNotificationInbox(executor, actor, { evidenceSnapshotLimit = null } = {}) {
   const request = bindCoordinationScope(executor.request(), actor);
   request.input('limit', sql.Int, NOTIFICATION_PREVIEW_LIMIT);
-  const result = await request.query(`${COORDINATION_INBOX_SQL}\n${TASK_NOTIFICATION_INBOX_SQL}`);
+  if (evidenceSnapshotLimit != null) {
+    bindDisclosureScope(request, actor);
+    request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+  }
+  const result = await request.query(evidenceSnapshotLimit == null
+    ? `${COORDINATION_INBOX_SQL}\n${TASK_NOTIFICATION_INBOX_SQL}`
+    : `${COORDINATION_EVIDENCE_INBOX_SQL}\n${TASK_NOTIFICATION_EVIDENCE_INBOX_SQL}`);
   const sets = result.recordsets || [];
   const coordination = mapCoordinationInbox(sets[0], sets[1], actor.sicil);
   const taskEvents = mapTaskNotificationInbox(sets[2], sets[3]);
   return {
     coordination,
     taskEvents,
-    unreadCount: coordination.unreadCount + taskEvents.unreadCount,
+    unreadCount: coordination.unreadCount == null || taskEvents.unreadCount == null ? null : coordination.unreadCount + taskEvents.unreadCount,
     pendingCount: coordination.pendingCount
   };
 }

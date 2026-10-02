@@ -515,7 +515,7 @@ test('tekrar serisi, çalışma takvimi ve plan veri kalitesi ürün kurallarıy
   const calendar = await callRotaTool(stack, AYSE, 'rota_calendar_inspect', { projectId: PROJECTS.FULL, dateFrom: '2026-10-26', dateTo: '2026-10-30' });
   assert.equal(calendar.result.ok, true);
   assert.equal(calendar.result.data.workingDayCount, 4);
-  assert.deepEqual(calendar.result.data.holidays, [{ date: '2026-10-29', name: 'Cumhuriyet Bayramı' }]);
+  assert.deepEqual(calendar.result.data.holidays, [{ date: '2026-10-29', name: 'Cumhuriyet Bayramı', short: '29 Ekim' }]);
   assert.deepEqual(calendar.result.data.calendar.workingWeekdays, ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma']);
   const reversed = await callRotaTool(stack, AYSE, 'rota_calendar_inspect', { dateFrom: '2026-10-30', dateTo: '2026-10-26' });
   assert.equal(reversed.result.error.code, 'INVALID_ARGUMENTS');
@@ -578,11 +578,11 @@ test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim
   const { result } = await callRotaTool(stack, AYSE, 'rota_outlook_status', {});
   assert.equal(result.ok, true);
   assert.equal(result.data.activeSubscriptions, 2);
-  assert.equal(result.data.subscriptionsForTasksNoLongerVisible, true);
-  assert.deepEqual([result.returnedCount, result.totalCount, result.complete], [2, null, false], 'görünmeyen abonelik varken dağılım ve toplam kesin değildir');
-  assert.equal(result.data.byState, null);
-  assert.equal(result.data.byStateComplete, false);
-  assert.equal(result.truncated, true);
+  assert.equal(Object.hasOwn(result.data, 'subscriptionsForTasksNoLongerVisible'), false);
+  assert.deepEqual([result.returnedCount, result.totalCount, result.complete], [2, 2, true], 'toplam ve dağılım yalnızca güncel görünür aboneliklerdir');
+  assert.deepEqual(result.data.byState, { delivered: 1, failed: 1 });
+  assert.equal(result.data.byStateComplete, true);
+  assert.equal(result.truncated, false);
   const states = Object.fromEntries(result.data.items.map((item) => [item.task.taskId, item.state]));
   assert.deepEqual(states, { [TASKS.OVERDUE]: 'delivered', [TASKS.DUE_SOON]: 'failed' });
   const failed = result.data.items.find((item) => item.state === 'failed');
@@ -635,7 +635,7 @@ test('hareket geçmişi görünür görevlerle sınırlıdır; ekip kapsamı yö
   assert.equal(result.ok, true);
   assert.equal(result.data.summary.events, 2, 'görünmeyen görevin hareketi sayılmaz');
   assert.equal(result.data.items.some((item) => item.task.title === 'Gizli görev'), false);
-  const filtered = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29', taskId: TASKS.OVERDUE });
+  const filtered = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29', taskId: TASKS.OVERDUE, textFields: ['changes'] });
   assert.equal(filtered.result.totalCount, 1);
   assert.ok(filtered.result.data.items[0].changes.some((line) => line.startsWith('Durum:')));
   const team = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29', scope: 'team' });
@@ -664,7 +664,7 @@ test('hareket geçmişi kısmi kapsamda gizli eş sorumlu adını açığa çık
       AfterJson: JSON.stringify({ Status: 'planned', assigneeIds: [AYSE, MEHMET] })
     }]
   });
-  const { result } = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29' });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29', textFields: ['changes'] });
   assert.equal(result.ok, true);
   assert.equal(result.totalCount, 1);
   assert.ok(result.data.items[0].changes.includes('Gizli sorumlu bilgisi değişti.'));
@@ -743,7 +743,7 @@ test('sonuç boyutu sınırlıdır: büyük liste kısaltılır ve bildirilir, s
 
 test('kanıt defteri modele verilen güvenli sonucu saklar; veri içindeki talimat ve atıf işaretleri nötrlenir', async (t) => {
   const stack = stackFor(t);
-  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.LITERAL });
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.LITERAL, textFields: ['description'] });
   assert.equal(result.ok, true);
   assert.equal(result.evidenceId, 'R1');
   assert.equal(result.data.task.description.includes('【'), false);
@@ -753,7 +753,10 @@ test('kanıt defteri modele verilen güvenli sonucu saklar; veri içindeki talim
   assert.equal(row.evidenceType, 'task-detail');
   assert.equal(row.entityType, 'task');
   assert.equal(row.entityId, TASKS.LITERAL);
-  assert.deepEqual(JSON.parse(row.evidenceJson), result);
+  const persisted = JSON.parse(row.evidenceJson);
+  assert.match(persisted.authorizationEpoch, /^[a-f0-9]{64}$/);
+  delete persisted.authorizationEpoch;
+  assert.deepEqual(persisted, result);
   assert.doesNotMatch(row.evidenceJson + row.summaryJson, /@scope|#AiScope|STRING_SPLIT|isAdmin|scopeProjects/);
   assert.equal(result.generatedAt.endsWith('Z'), true);
   assert.equal(result.today, '2026-09-30');
@@ -931,7 +934,7 @@ test('partial unassigned searches and quality metrics do not depend on hidden as
   assert.match(toolQueries.AI_TOOL_TASK_FACTS_SQL, /COUNT\(CASE WHEN permitted.IdentityVisible = 1 THEN resolved.Sicil END\)/);
 });
 
-test('Outlook hidden membership is boolean and all exact counts and evidence metadata stay visible-only', async (t) => {
+test('Outlook hidden membership never affects visible counts, completeness or evidence metadata', async (t) => {
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_outlook_status');
   for (let index = 0; index < 7; index += 1) {

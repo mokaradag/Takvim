@@ -90,6 +90,7 @@ export async function readTaskDetail(executor, scope, taskId) {
   request.input('withAssignees', sql.Bit, 1);
   const [detailRows = [], chainRows = [], assigneeRows = []] = recordsets(await request.query(AI_TOOL_TASK_DETAIL_SQL));
   const row = detailRows[0] || null;
+  if ([row?.PredecessorCount, row?.SuccessorCount].some((value) => Number(value) > TOOL_LIMITS.maxAnalyzedTasks)) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   return {
     row,
     fact: row ? factFromRow(row) : null,
@@ -103,7 +104,7 @@ export async function readProjectSearch(executor, scope, { text, limit, projectI
   request.input('text', sql.NVarChar(120), text);
   request.input('limit', sql.Int, limit);
   const [[count] = [], rows = []] = recordsets(await request.query(AI_TOOL_PROJECT_SEARCH_SQL));
-  return { total: Number(count?.Total || 0), rows };
+  return { total: Number(count?.Total || 0), exactCount: Number(count?.ExactCount || 0), rows };
 }
 
 export async function readPortfolio(executor, scope, { today, soonEnd, source = 'all' }) {
@@ -119,12 +120,14 @@ export async function readProjectDetail(executor, scope, { projectId, today, soo
   request.input('today', sql.Date, today);
   request.input('soonEnd', sql.Date, soonEnd);
   const [projectRows = [], tagRows = [], [totals] = []] = recordsets(await request.query(AI_TOOL_PROJECT_DETAIL_SQL));
+  if (tagRows.length > TOOL_LIMITS.maxAnalyzedTasks || [projectRows[0]?.DependencyCount, projectRows[0]?.BaselineCount, projectRows[0]?.WbsNodeCount].some((value) => Number(value) > TOOL_LIMITS.maxAnalyzedTasks)) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   return { project: projectRows[0] || null, tags: tagRows.map((row) => String(row.TagName)), totals: totals || null };
 }
 
-export async function readWbs(executor, scope, { projectId, today, maxRows }) {
+export async function readWbs(executor, scope, { projectId, wbsId = null, today, maxRows }) {
   const request = scoped(executor, scope, { projectId });
   request.input('today', sql.Date, today);
+  request.input('wbsId', sql.UniqueIdentifier, wbsId);
   request.input('maxRows', sql.Int, maxRows + 1);
   const [nodeRows = [], countRows = [], projectRows = []] = recordsets(await request.query(AI_TOOL_WBS_SQL));
   const { rows, truncated } = capped(nodeRows, maxRows);
@@ -145,6 +148,7 @@ export async function readBaseline(executor, scope, { projectId, baselineId = nu
   request.input('baselineId', sql.UniqueIdentifier, baselineId);
   request.input('maxRows', sql.Int, maxRows + 1);
   const [baselineRows = [], [selection] = [], snapshotRows = [], [added] = []] = recordsets(await request.query(AI_TOOL_BASELINE_SQL));
+  if (Number(selection?.BaselineTotal) > TOOL_LIMITS.maxAnalyzedTasks) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   const { rows, truncated } = capped(snapshotRows, maxRows);
   return {
     projectFull: Boolean(selection?.ProjectFull),
@@ -173,11 +177,10 @@ export async function readCalendar(executor, scope, { projectId = null, from, to
 export async function readOutlook(executor, scope, { taskIds = [], maxRows }) {
   const request = scoped(executor, scope, { taskIds });
   request.input('maxRows', sql.Int, maxRows + 1);
-  const [subscriptionRows = [], [counts] = []] = recordsets(await request.query(AI_TOOL_OUTLOOK_SQL));
+  const [subscriptionRows = []] = recordsets(await request.query(AI_TOOL_OUTLOOK_SQL));
   const { rows, truncated } = capped(subscriptionRows, maxRows);
   return {
     subscriptions: rows,
-    truncated,
-    hasNonVisibleSubscriptions: Boolean(counts?.HasNonVisibleSubscriptions)
+    truncated
   };
 }

@@ -204,11 +204,14 @@ export function containsCitationMarker(text) {
 }
 
 export function withScopeDisclosure(text, citedEvidence = [], locale = replyLocale(text)) {
-  if (!citedEvidence.some((item) => item?.partial === true)) return { text, disclosed: false };
-  const note = locale === 'en'
+  const notes = [];
+  if (citedEvidence.some((item) => item?.partial === true)) notes.push(locale === 'en'
     ? '_Note: This answer covers only records you are authorized to view and may not reflect the entire projects._'
-    : SCOPE_DISCLOSURE_TEXT;
-  return { text: `${String(text).trimEnd()}\n\n${note}`, disclosed: true };
+    : SCOPE_DISCLOSURE_TEXT);
+  if (citedEvidence.some((item) => item?.complete === false || item?.truncated === true)) notes.push(locale === 'en'
+    ? '_Note: Some records or details were omitted; this evidence is incomplete._'
+    : '_Not: Bazı kayıtlar veya ayrıntılar sonuçta yer almıyor; bu kanıt eksiktir._');
+  return { text: notes.length ? `${String(text).trimEnd()}\n\n${notes.join('\n\n')}` : text, disclosed: notes.length > 0 };
 }
 
 export function groundingRepairInstruction(issues = []) {
@@ -218,7 +221,7 @@ export function groundingRepairInstruction(issues = []) {
     `Sözleşme hataları: ${codes.join(', ')}`,
     'Güncel Rota verisi gerekiyorsa uygun aracı çağır. Kanıt varsa yalnızca yapılandırılmış yanıt üret:',
     '{"kind":"rota","claims":[{"evidenceId":"R1","factId":"araçtaki kimlik","subjectId":"araçtaki kimlik","field":"araçtaki alan","operator":"eq","value":"araçtaki türü korunmuş değer"}]}',
-    'Araçsız genel yanıt {"kind":"general","text":"yanıt"} olmalıdır. Serbest olgu metni, başlık veya ek alan yazma. Kanıt alınamadıysa {"kind":"unavailable"} yaz.'
+    'Genel niyet önerisi {"kind":"general","text":"yanıt"} olabilir; veri kipinde sunucu yalnızca Genel sohbet seçimi açıklamasını gösterir. Serbest olgu metni, başlık veya ek alan yazma. Kanıt alınamadıysa {"kind":"unavailable"} yaz.'
   ].join('\n');
 }
 

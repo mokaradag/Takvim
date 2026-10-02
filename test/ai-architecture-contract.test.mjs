@@ -441,7 +441,7 @@ test('Rota AI özellik ve iş kodunda kurulu model adı, profil kimliği ya da s
 
 test('sohbet Sicil’i yalnızca güvenilir oturumdan alır; tur gövdesi yalnızca ileti alanları ve beklenen sıra numarasını kabul eder', () => {
   const service = code(read('src/server/ai/assistant/assistantService.js'));
-  assert.match(service, /const TURN_FIELDS = new Set\(\['conversationId', 'turnId', 'message', 'mode', 'expectedSequence'\]\);/);
+  assert.match(service, /const TURN_FIELDS = new Set\(\['conversationId', 'turnId', 'message', 'mode', 'expectedSequence', 'source'\]\);/);
   for (const operation of ['listAssistantConversations', 'loadAssistantConversation', 'deleteAssistantConversation', 'prepareAssistantTurn']) {
     const start = service.indexOf(`export async function ${operation}(`);
     assert.ok(start >= 0, operation);
@@ -486,7 +486,9 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   assert.deepEqual(evidenceUsers, ['src/server/ai/assistant/conversationQueries.js', 'src/server/ai/assistant/conversationStore.js']);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /OBJECT_ID\(N'dbo\.MR_AiMessageEvidence', N'U'\) IS NOT NULL/);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /IF @knownSicil = 1 AND @evidenceReady = 1\s+SELECT TOP \(@maxEvidence\)/);
-  assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /EvidenceJson/, 'yükleme yalnızca güvenli özeti okur');
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE\(e\.EvidenceJson, '\$\.authorizationEpoch'\)/);
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_QUERY\(e\.EvidenceJson, '\$\.clarificationContext'\)/);
+  assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /SELECT[^;]*,\s*e\.EvidenceJson\s*(?:,|FROM)/, 'ham kanıt yükü açıklanmaz');
   const grounded = queries.AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL;
   const evidenceInsert = grounded.indexOf('INSERT dbo.MR_AiMessageEvidence');
   assert.ok(evidenceInsert > grounded.indexOf("VALUES (@messageId, @conversationId, @sequence, 'assistant'"), 'kanıt yanıtla aynı bloğa yazılır');
@@ -754,7 +756,7 @@ test('araç SQL işleri kendi sınırlı kapısından ve süre sınırıyla geç
   assert.match(gate, /createAiSqlGate\(\{\s*name: 'domain-tools',\s*\.\.\.TOOL_SQL_GATE,\s*saturation: 'tools'\s*\}\)/);
   const context = code(read('src/server/ai/tools/toolContext.js'));
   assert.match(context, /gate\.run\(sicil, signal, async \(track\) =>/);
-  assert.match(context, /const remainingMs = Math\.max\(1, limits\.maxCumulativeSqlMs - state\.sqlMs\)/);
+  assert.match(context, /const remainingMs = authorizationOnly \? limits\.callTimeoutMs : Math\.max\(1, limits\.maxCumulativeSqlMs - state\.sqlMs\)/);
   assert.match(context, /createAiDeadline\(\{ timeoutMs: remainingMs, parentSignal: signal, now: clock \}\)/);
   assert.match(context, /boundedExecutor\(pool, cumulativeDeadline\.signal, \{ track \}\)/);
   assert.match(context, /if \(Number\(auth\?\.sicil\) !== Number\(sicil\)\)/);

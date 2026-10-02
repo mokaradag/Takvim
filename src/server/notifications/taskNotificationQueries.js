@@ -1,4 +1,5 @@
 import 'server-only';
+import { CURRENT_TASK_DISCLOSURE_SQL } from '../authorization/disclosureScope.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { NOTIFICATION_SOURCES } from '../../domain/notifications/notificationInbox.js';
 import { sql } from '../db/pool.js';
@@ -65,11 +66,22 @@ export const TASK_NOTIFICATION_INBOX_SQL = `
   ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
 `;
 
+export const TASK_NOTIFICATION_EVIDENCE_INBOX_SQL = `
+  SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS}
+  INTO #TaskNotificationEvidence ${SOURCE}
+  WHERE ${OWNED} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE}
+  ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
+  SELECT CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN NULL ELSE SUM(IsUnread) END AS UnreadCount,
+    CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN 0 ELSE 1 END AS CountsComplete FROM #TaskNotificationEvidence;
+  SELECT TOP (@limit) * FROM #TaskNotificationEvidence ORDER BY OccurredAt DESC, NotificationId DESC;
+  DROP TABLE #TaskNotificationEvidence;
+`;
+
 export function mapTaskNotificationInbox(countRows, itemRows) {
   const counts = countRows?.[0] || {};
   return {
     items: (itemRows || []).map(mapTaskNotification),
-    unreadCount: Number(counts.UnreadCount || 0),
+    unreadCount: counts.CountsComplete === 0 ? null : Number(counts.UnreadCount || 0),
     pendingCount: 0
   };
 }

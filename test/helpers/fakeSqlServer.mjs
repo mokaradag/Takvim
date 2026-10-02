@@ -451,6 +451,14 @@ function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedA
   });
 }
 
+function disclosureAllowed(db, row, params) {
+  if (params.disclosureAdmin == null) return true;
+  const task = taskById(db, row.TaskId);
+  if (!task || !projectById(db, task.ProjectId)?.IsActive) return false;
+  return params.disclosureAdmin === 1 || String(params.disclosureProjects || '').split(',').some((id) => sameGuid(id, task.ProjectId))
+    || String(params.disclosureTasks || '').split(',').some((id) => sameGuid(id, task.TaskId));
+}
+
 function scheduleRequestRows(db, sicil, requestId = null) {
   const rows = db.taskScheduleChangeRequests
     .filter((entry) => (!requestId || sameGuid(entry.RequestId, requestId))
@@ -1318,9 +1326,10 @@ function runQuery(db, statement, params, { database }) {
   // ── Yetkilendirme ve anlık görüntü ─────────────────────────
   if (sqlText.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
     const sets = authorizationRecordsets(db, sicil);
-    if (sqlText.includes('SELECT DISTINCT EmployeeSicil FROM dbo.MR_V_ExecutiveScope')) {
+    if (sqlText.includes('ORDER BY EmployeeSicil;')) {
       sets.push(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil).map(({ EmployeeSicil }) => ({ EmployeeSicil })));
     }
+    if (params.authorizationMaxRows) for (const index of [3, 4, 5]) if (sets[index]) sets[index] = sets[index].slice(0, params.authorizationMaxRows);
     return result(sets);
   }
   if (sqlText.includes('CREATE TABLE #VisibleProjects')) {
@@ -1396,15 +1405,16 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('AS UnreadCount')) {
     throwIfScheduleChangeSchemaMissing(db);
-    const rows = scheduleRequestRows(db, params.sicil).filter((r) => r.TaskAvailable);
+    const rows = scheduleRequestRows(db, params.sicil).filter((r) => r.TaskAvailable && disclosureAllowed(db, r, params));
     const actionable = (r) => r.Status === 'PENDING' && r.DecisionOwnerSicil === params.sicil;
     const visible = rows.filter((r) => actionable(r) || !sameVersion(db.scheduleNotifications.find((n) => sameGuid(n.RequestId, r.RequestId) && n.Sicil === params.sicil)?.DismissedVersion, r.RowVersion));
-    return result([[{ UnreadCount: visible.filter((r) => r.IsUnread).length, PendingCount: rows.filter(actionable).length }], visible.slice(0, params.limit)]);
+    const complete = params.evidenceSnapshotLimit == null || visible.length <= params.evidenceSnapshotLimit;
+    return result([[{ CountsComplete: complete ? 1 : 0, UnreadCount: complete ? visible.filter((r) => r.IsUnread).length : null, PendingCount: complete ? rows.filter(actionable).length : null }], visible.slice(0, params.limit)]);
   }
-  if (sqlText.includes('DECLARE @safePage')) {
+  if (sqlText.includes('DECLARE @safePage') || sqlText.includes('#ScheduleEvidenceSnapshot')) {
     throwIfScheduleChangeSchemaMissing(db);
     const contains = (value, query) => String(value || '').toLocaleLowerCase('tr-TR').includes(String(query || '').toLocaleLowerCase('tr-TR'));
-    const rows = scheduleRequestRows(db, params.sicil).filter((r) => (!params.projectId || sameGuid(r.ProjectId, params.projectId))
+    const rows = scheduleRequestRows(db, params.sicil).filter((r) => disclosureAllowed(db, r, params) && (!params.projectId || sameGuid(r.ProjectId, params.projectId))
       && (!params.taskId || sameGuid(r.TaskId, params.taskId)) && (!params.status || r.Status === params.status)
       && (!params.from || isoDate(r.CreatedAt) >= params.from) && (!params.to || isoDate(r.CreatedAt) <= params.to)
       && (!params.requester || contains(r.RequesterName, params.requester) || String(r.RequesterSicil) === params.requester)
@@ -1415,7 +1425,7 @@ function runQuery(db, statement, params, { database }) {
     const filtered = { pending, sent, history, all: rows }[params.tab];
     if (params.evidenceSnapshotLimit != null && filtered.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
     const page = Math.min(params.page, Math.max(0, Math.ceil(filtered.length / params.pageSize) - 1));
-    return result([[{ Total: rows.length, PendingCount: pending.length, SentCount: sent.length, HistoryCount: history.length }],
+    return result([[{ Total: rows.length, PendingCount: params.evidenceSnapshotLimit == null ? pending.length : filtered.filter((r) => pending.includes(r)).length, SentCount: params.evidenceSnapshotLimit == null ? sent.length : filtered.filter((r) => sent.includes(r)).length, HistoryCount: params.evidenceSnapshotLimit == null ? history.length : filtered.filter((r) => history.includes(r)).length }],
       [{ Total: filtered.length, Page: page }], filtered.slice(page * params.pageSize, (page + 1) * params.pageSize)]);
   }
   if (sqlText.includes('FROM dbo.MR_TaskScheduleChangeRequests r WITH (UPDLOCK, HOLDLOCK)')

@@ -269,9 +269,22 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     return { knownSicil: true, ready: false, byMessage: new Map() };
   }
   const [[state] = [], rows = []] = recordsetsOf(result);
+  const epochsByMessage = new Map();
+  const clarificationByMessage = new Map();
+  for (const row of rows) {
+    const id = idOrNull(row.MessageId);
+    if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
+    epochsByMessage.get(id).push(row.AuthorizationEpoch ?? null);
+    try {
+      const candidates = JSON.parse(row.ClarificationContext || 'null');
+      if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));
+    } catch { /* Geçersiz açıklama durumu kullanılmaz. */ }
+  }
   return {
     knownSicil: Boolean(state?.KnownSicil),
     ready: Boolean(state?.EvidenceReady),
+    epochsByMessage,
+    clarificationByMessage,
     byMessage: evidenceByMessage(rows)
   };
 }

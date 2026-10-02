@@ -1,4 +1,5 @@
 import 'server-only';
+import { bindDisclosureScope, CURRENT_TASK_DISCLOSURE_SQL } from '../authorization/disclosureScope.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
@@ -35,11 +36,27 @@ const FIELDS = `r.*, COALESCE(r.TaskTitleSnapshot, t.Title) AS TaskTitle,
 const ORDER = `CASE WHEN ${ACTIONABLE} THEN 0 ELSE 1 END,
   COALESCE(r.DecidedAt, r.CreatedAt) DESC, r.RequestId DESC`;
 
-export async function readScheduleInbox(executor, actor) {
+export async function readScheduleInbox(executor, actor, { evidenceSnapshotLimit = null } = {}) {
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
   request.input('limit', sql.Int, SCHEDULE_INBOX_LIMIT);
-  const result = await request.query(`
+  if (evidenceSnapshotLimit != null) {
+    bindDisclosureScope(request, actor);
+    request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+  }
+  const evidenceStatement = evidenceSnapshotLimit == null ? null : `
+    SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS},
+      CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending
+    INTO #ScheduleInboxEvidence ${SOURCE}
+    WHERE ${PARTICIPANT} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND (${VISIBLE} OR ${ACTIONABLE}) ORDER BY ${ORDER};
+    SELECT CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN NULL ELSE SUM(CASE WHEN IsUnread = 1 THEN 1 ELSE 0 END) END AS UnreadCount,
+      CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN NULL ELSE SUM(IsPending) END AS PendingCount,
+      CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN 0 ELSE 1 END AS CountsComplete
+    FROM #ScheduleInboxEvidence;
+    SELECT TOP (@limit) * FROM #ScheduleInboxEvidence ORDER BY IsPending DESC, COALESCE(DecidedAt, CreatedAt) DESC, RequestId DESC;
+    DROP TABLE #ScheduleInboxEvidence;
+  `;
+  const result = await request.query(evidenceStatement || `
     SELECT COUNT(CASE WHEN ${UNREAD} AND ${VISIBLE} THEN 1 END) AS UnreadCount,
       COUNT(CASE WHEN ${ACTIONABLE} THEN 1 END) AS PendingCount
     ${SOURCE} WHERE ${PARTICIPANT} AND t.TaskId IS NOT NULL AND p.IsActive = 1;
@@ -48,7 +65,7 @@ export async function readScheduleInbox(executor, actor) {
   `);
   const counts = result.recordsets?.[0]?.[0] || {};
   return { items: (result.recordsets?.[1] || []).map((row) => mapRequest(row, actor.sicil)),
-    unreadCount: Number(counts.UnreadCount || 0), pendingCount: Number(counts.PendingCount || 0) };
+    unreadCount: counts.CountsComplete === 0 ? null : Number(counts.UnreadCount || 0), pendingCount: counts.CountsComplete === 0 ? null : Number(counts.PendingCount || 0) };
 }
 
 function invalid(message) { throw new ServerPersistenceError('MUTATION_FAILED', message, { status: 400 }); }
@@ -81,7 +98,8 @@ export async function readSchedulePage(executor, actor, input = {}, { evidenceSn
   for (const field of ['from', 'to']) request.input(field, sql.Date, query[field]);
   request.input('fromUtc', sql.DateTime2, fromUtc);
   request.input('toUtc', sql.DateTime2, toUtc);
-  const filters = `${PARTICIPANT}
+  if (evidenceSnapshotLimit != null) bindDisclosureScope(request, actor);
+  const filters = `${PARTICIPANT}${evidenceSnapshotLimit == null ? '' : ` AND ${CURRENT_TASK_DISCLOSURE_SQL}`}
     AND (@projectId IS NULL OR COALESCE(r.ProjectIdSnapshot, t.ProjectId) = @projectId)
     AND (@taskId IS NULL OR r.TaskId = @taskId)
     AND (@status IS NULL OR r.Status = @status)
@@ -94,7 +112,22 @@ export async function readSchedulePage(executor, actor, input = {}, { evidenceSn
       requester.DisplayName, ' ', r.RequesterMessage) COLLATE Turkish_100_CI_AI) > 0)`;
   const tabFilter = `(@tab = 'all' OR (@tab = 'pending' AND ${ACTIONABLE})
     OR (@tab = 'sent' AND r.RequesterSicil = @sicil) OR (@tab = 'history' AND (r.Status <> 'PENDING' OR t.TaskId IS NULL OR p.IsActive = 0)))`;
-  const result = await request.query(`
+  const evidenceStatement = evidenceSnapshotLimit == null ? null : `
+    SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS},
+      CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending,
+      CASE WHEN r.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
+      CASE WHEN r.Status <> 'PENDING' OR t.TaskId IS NULL OR p.IsActive = 0 THEN 1 ELSE 0 END AS IsHistory
+    INTO #ScheduleEvidenceSnapshot ${SOURCE} WHERE ${filters} AND ${tabFilter}
+    ORDER BY ${ORDER};
+    DECLARE @total int = (SELECT COUNT(*) FROM #ScheduleEvidenceSnapshot);
+    IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    SELECT @total AS Total, SUM(IsPending) AS PendingCount, SUM(IsSent) AS SentCount, SUM(IsHistory) AS HistoryCount
+    FROM #ScheduleEvidenceSnapshot;
+    SELECT @total AS Total, 0 AS Page;
+    SELECT * FROM #ScheduleEvidenceSnapshot ORDER BY IsPending DESC, COALESCE(DecidedAt, CreatedAt) DESC, RequestId DESC;
+    DROP TABLE #ScheduleEvidenceSnapshot;
+  `;
+  const result = await request.query(evidenceStatement || `
     SELECT COUNT(*) AS Total,
       COUNT(CASE WHEN ${ACTIONABLE} THEN 1 END) AS PendingCount,
       COUNT(CASE WHEN r.RequesterSicil = @sicil THEN 1 END) AS SentCount,

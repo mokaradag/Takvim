@@ -1,7 +1,6 @@
 import 'server-only';
 import { ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js';
 import {
-  analyzeDirectAnswer,
   analyzeGroundedAnswer,
   analyzeUngroundedAnswer,
   GROUNDING_FAILED_FINISH_REASON,
@@ -15,7 +14,7 @@ import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
-import { TOOL_ERROR_CODES } from '../tools/toolErrors.js';
+import { isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope } from '../tools/toolScope.js';
 import { parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
@@ -72,6 +71,10 @@ const TOOL_FOLLOW_UPS = Object.freeze({
   rota_project_search: ['rota_project_detail', 'rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_wbs_inspect', 'rota_calendar_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_data_quality'],
   rota_person_search: ['rota_workload_summary', 'rota_task_search', 'rota_task_analytics'],
   rota_task_detail: ['rota_task_search', 'rota_task_analytics', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_activity_search'],
+  rota_task_analytics: ['rota_task_search', 'rota_task_detail', 'rota_project_search', 'rota_project_detail'],
+  rota_project_detail: ['rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_wbs_inspect', 'rota_calendar_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_data_quality'],
+  rota_wbs_inspect: ['rota_task_search', 'rota_task_analytics', 'rota_project_detail'],
+  rota_notifications: ['rota_schedule_requests', 'rota_assignment_requests', 'rota_task_detail'],
   rota_portfolio_summary: ['rota_project_search', 'rota_project_detail', 'rota_task_analytics', 'rota_wbs_inspect'],
   rota_workload_summary: ['rota_person_search', 'rota_task_search', 'rota_task_analytics'],
   rota_baseline_compare: ['rota_project_search', 'rota_project_detail'],
@@ -112,7 +115,7 @@ function boundTranscript(transcript) {
 
 function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFailureCodes, route, locale }) {
   const response = parseEvidenceResponse(text);
-  const notFoundOnly = toolFailureCodes.size > 0 && [...toolFailureCodes].every((code) => code === TOOL_ERROR_CODES.NOT_FOUND);
+  const notFoundOnly = evidenceIds.length === 0 && toolFailureCodes.size > 0 && [...toolFailureCodes].every((code) => code === TOOL_ERROR_CODES.NOT_FOUND);
   if (toolsAttempted && notFoundOnly && (response?.kind === 'not_found' || response?.kind === 'unavailable' || analyzeUngroundedAnswer(text, { allowNotFound: true }).ok)) {
     return { ok: true, normalized: locale === 'en' ? 'The record was not found or is not accessible.' : 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', kind: 'not_found', citedIds: [], issues: [] };
   }
@@ -127,15 +130,17 @@ function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFail
       }
       const verdict = analyzeGroundedAnswer(JSON.stringify({ ...response, kind: 'rota' }), { evidenceIds, evidencePayloads, locale });
       const question = locale === 'en' ? 'Which candidate did you mean?' : 'Hangi adayı kastediyorsunuz?';
-      return { ...verdict, kind: 'clarification', normalized: `${verdict.normalized || ''}\n\n${question}` };
+      const candidateReferences = response.claims.map((claim) => ({ evidenceId: claim.evidenceId, index: Number(claim.field.split('.')[2]) }));
+      const candidates = candidateReferences.filter((candidate, index) => candidateReferences.findIndex((other) => other.evidenceId === candidate.evidenceId && other.index === candidate.index) === index);
+      return { ...verdict, kind: 'clarification', candidates, normalized: `${verdict.normalized || ''}\n\n${question}` };
     }
     return { kind: 'grounded', ...analyzeGroundedAnswer(text, { evidenceIds, evidencePayloads, locale }) };
   }
   if (toolsAttempted && response?.kind === 'unavailable' && Object.keys(response).length === 1) {
     return { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] };
   }
-  if (!toolsAttempted && route === TURN_ROUTES.GENERAL && response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
-    return { normalized: response.text, kind: 'direct', ...analyzeDirectAnswer(response.text, { evidenceRequired: false }) };
+  if (!toolsAttempted && [TURN_ROUTES.GENERAL, TURN_ROUTES.UNDECIDED].includes(route) && response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
+    return { ok: true, normalized: locale === 'en' ? 'Select General chat for a general explanation. Rota data answers require current evidence.' : 'Genel açıklama için Genel sohbet seçeneğini seçin. Rota verisi yanıtları güncel kanıt gerektirir.', kind: 'clarification', citedIds: [], issues: [] };
   }
   return { normalized: text, kind: 'direct', ok: false, citedIds: [], issues: [{ code: route === TURN_ROUTES.ROTA ? 'ROTA_EVIDENCE_REQUIRED' : 'ANSWER_INTENT_REQUIRED' }] };
 }
@@ -174,12 +179,12 @@ export async function runGroundedTurn(session, {
   let repaired = false;
   let allowTools = true;
   for (;;) {
-    const canCallTools = route !== TURN_ROUTES.GENERAL && allowTools && toolRounds < limits.maxToolRounds;
+    const canCallTools = allowTools && toolRounds < limits.maxToolRounds;
     modelRounds += 1;
     boundTranscript(transcript);
     const result = await session.round({
       messages: transcript,
-      tools: route === TURN_ROUTES.GENERAL ? [] : (permittedTools ? catalog.filter((tool) => permittedTools.has(tool.name)) : catalog),
+      tools: permittedTools ? catalog.filter((tool) => permittedTools.has(tool.name)) : catalog,
       toolChoice: canCallTools ? 'auto' : 'none',
       onEvent: async (event) => {
         if (event.type === 'thinking') status(ASSISTANT_STREAM_PHASES.THINKING);
@@ -225,17 +230,24 @@ export async function runGroundedTurn(session, {
       continue;
     }
 
+    let authorizationUnavailable = false;
     if (ledger.ids().length && context.authorizationEpoch) {
       const validationDeadline = createAiDeadline({ timeoutMs: limits.callTimeoutMs, parentSignal: session.signal });
       try {
         context.beginRound();
-        await context.authorization(validationDeadline.signal);
+        try {
+          await (context.revalidateAuthorization || context.authorization)(validationDeadline.signal);
+        } catch (error) {
+          if (isTurnFatal(error) || session.signal?.aborted) throw error;
+          authorizationUnavailable = true;
+          ledger.invalidateAuthorization(null);
+        }
         ledger.invalidateAuthorization(context.authorizationEpoch());
       } finally { validationDeadline.dispose(); }
     }
     const text = String(result.text || '').trim();
     status(ASSISTANT_STREAM_PHASES.VERIFYING);
-    const verdict = analyze(text, {
+    const verdict = authorizationUnavailable ? { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] } : analyze(text, {
       evidenceIds: ledger.ids(),
       evidencePayloads: ledger.payloads(),
       toolsAttempted,
@@ -255,7 +267,7 @@ export async function runGroundedTurn(session, {
         finishReason: ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : result.finishReason || 'stop',
         outcome,
         evidence: cited,
-        evidenceRows: ledger.persistable(verdict.citedIds),
+        evidenceRows: ledger.persistable(verdict.citedIds, { clarification: verdict.kind === 'clarification', candidates: verdict.candidates }),
         streamedLive: false,
         repaired,
         disclosed: disclosure.disclosed,

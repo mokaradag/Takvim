@@ -82,7 +82,7 @@ test('yapılandırılmış hareket gerçek durum geçişini görünüm etiketi a
     AfterJson: JSON.stringify({ Title: 'Radar testleri', Status: 'in_progress' })
   });
   const result = taskActivityChanges([transition], new Map(), { includeStructuredChanges: true });
-  assert.deepEqual(result.structuredChanges, [{ field: 'status', before: 'blocked', after: 'in_progress' }]);
+  assert.deepEqual(result.structuredChanges, [], 'aynı kanonik durum doğrulanabilir bir değişiklik değildir');
   assert.deepEqual(result.changes, ['Görev güncellendi']);
 });
 

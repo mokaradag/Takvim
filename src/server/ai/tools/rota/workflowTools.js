@@ -109,7 +109,7 @@ const activitySearch = {
       kind: key.kind || '',
       page,
       pageSize
-    }, call.now, { includeStructuredChanges: true, analyzedActivityLimit: TOOL_LIMITS.maxAnalyzedActivities, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+    }, call.now, { includeStructuredChanges: true, includeChangeText: args.textFields?.includes('changes') === true, maxEvidencePeople: TOOL_LIMITS.maxActivityAssignees, analyzedActivityLimit: TOOL_LIMITS.maxAnalyzedActivities, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
     const items = report.items.slice(page * pageSize, (page + 1) * pageSize).map((item) => {
       const access = item.projectId ? projectAccess(scope, item.projectId) : null;
       const hideAssigneeNames = !scope.isAdmin && !isCompleteTaskView(access);
@@ -227,7 +227,7 @@ const scheduleRequests = {
     });
     const pageState = pageWindow('rota_schedule_requests', key, page, pageSize, result.total);
     return {
-      data: { counts: { awaitingYourDecision: result.counts.pending, sent: result.counts.sent, history: result.counts.history }, tab: key.tab, items },
+      data: { countsScope: 'selected-tab', counts: { awaitingYourDecision: result.counts.pending, sent: result.counts.sent, history: result.counts.history }, tab: key.tab, items },
       scope: participantScope('Yalnızca talep eden ya da karar sahibi olduğunuz talepler.'),
       complete: pageState.complete,
       truncated: pageState.truncated,
@@ -308,7 +308,7 @@ const assignmentRequests = {
     const pageState = pageWindow('rota_assignment_requests', key, page, pageSize, result.total);
     return {
       data: {
-        counts: { actionRequired: result.counts.pending, sent: result.counts.sent, history: result.counts.history },
+        countsScope: 'selected-tab', counts: { actionRequired: result.counts.pending, sent: result.counts.sent, history: result.counts.history },
         tab: key.tab,
         items,
         note: 'Talep edilen sorumlu onaylanana kadar görevin sorumlusu değildir; iş yükü ve raporlar yalnızca gerçek sorumluyu sayar.'
@@ -346,10 +346,10 @@ const notifications = {
   async handler(args, call) {
     const { auth } = await call.authorization();
     const [schedule, inbox] = await call.sql(async (executor) => {
-      const scheduleInbox = await readScheduleInbox(executor, auth);
+      const scheduleInbox = await readScheduleInbox(executor, auth, { evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset });
       let combined = null;
       try {
-        combined = await readNotificationInbox(executor, auth);
+        combined = await readNotificationInbox(executor, auth, { evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset });
       } catch (error) {
         if (!isMissingNotificationInboxSchema(error)) throw error;
       }
@@ -357,6 +357,7 @@ const notifications = {
     });
     const scheduleItems = schedule.items.map((request) => ({
       source: 'schedule-request',
+      ...(request.taskAvailable ? { taskId: request.taskId } : {}),
       title: dataText(request.taskTitle, 160),
       project: dataText(request.projectName, 160),
       statusLabel: SCHEDULE_STATUS_LABELS[request.status] || request.status,
@@ -366,6 +367,7 @@ const notifications = {
     }));
     const coordinationItems = (inbox?.coordination.items || []).map((record) => ({
       source: 'assignment-coordination',
+      ...(record.taskAvailable ? { taskId: record.taskId } : {}),
       title: dataText(record.taskTitle, 160),
       project: dataText(record.projectName, 160),
       statusLabel: COORDINATION_STATUS_LABELS[record.status] || record.status,
@@ -376,16 +378,16 @@ const notifications = {
     }));
     const eventItems = (inbox?.taskEvents.items || []).map((event) => ({
       source: 'task-event',
+      ...(event.taskId ? { taskId: event.taskId } : {}),
       label: TASK_EVENT_LABELS[event.kind] || 'Görev bildirimi',
       title: dataText(event.taskTitle, 160),
       project: dataText(event.projectName, 160),
       ...(event.actorName ? { by: dataText(event.actorName, 120) } : {}),
-      ...(event.taskCount > 1 ? { taskCount: event.taskCount } : {}),
       unread: event.unread,
       at: event.occurredAt
     }));
-    const unread = schedule.unreadCount + (inbox?.unreadCount || 0);
-    const actionRequired = schedule.pendingCount + (inbox?.pendingCount || 0);
+    const unread = schedule.unreadCount == null || (inbox && inbox.unreadCount == null) ? null : schedule.unreadCount + (inbox?.unreadCount || 0);
+    const actionRequired = schedule.pendingCount == null || (inbox && inbox.pendingCount == null) ? null : schedule.pendingCount + (inbox?.pendingCount || 0);
     return {
       data: {
         unreadCount: unread,
@@ -402,9 +404,9 @@ const notifications = {
       totalCount: null,
       nextCursor: null,
       evidence: {
-        label: `Bildirimler · ${unread} okunmamış`,
+        label: unread == null ? 'Bildirimler' : `Bildirimler · ${unread} okunmamış`,
         entity: { type: 'user', id: 'me', name: 'Bildirimleriniz' },
-        highlights: [`Okunmamış: ${unread}`, `İşlem bekleyen: ${actionRequired}`]
+        highlights: [unread == null ? 'Okunmamış sayısı: belirlenemedi' : `Okunmamış: ${unread}`, actionRequired == null ? 'İşlem bekleyen sayısı: belirlenemedi' : `İşlem bekleyen: ${actionRequired}`]
       }
     };
   }

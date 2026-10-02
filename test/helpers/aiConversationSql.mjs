@@ -323,7 +323,9 @@ function evidenceRowsFor(db, messageIds) {
   const wanted = new Set(messageIds.map(guid));
   return (db.aiMessageEvidence || [])
     .filter((row) => wanted.has(guid(row.MessageId)))
-    .map((row) => ({ MessageId: row.MessageId, Ordinal: row.Ordinal, SummaryJson: row.SummaryJson }));
+    .map((row) => ({ MessageId: row.MessageId, Ordinal: row.Ordinal, SummaryJson: row.SummaryJson,
+      AuthorizationEpoch: JSON.parse(row.EvidenceJson || '{}').authorizationEpoch ?? null,
+      ClarificationContext: JSON.stringify(JSON.parse(row.EvidenceJson || '{}').clarificationContext ?? null) }));
 }
 
 function appendGrounded(db, params, sicil) {

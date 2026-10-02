@@ -68,14 +68,12 @@ const outlookStatus = {
     const counts = items.reduce((sum, item) => ({ ...sum, [item.state]: (sum[item.state] || 0) + 1 }), {});
     const page = items.slice(0, limit);
     if (args.taskId && !items.length) throw notFound();
-    const hiddenSubscriptions = result.hasNonVisibleSubscriptions;
-    const distributionComplete = !result.truncated && !hiddenSubscriptions;
+    const distributionComplete = !result.truncated;
     return {
       data: {
         activeSubscriptions: result.truncated ? null : items.length,
         byState: distributionComplete ? counts : null,
         byStateComplete: distributionComplete,
-        subscriptionsForTasksNoLongerVisible: hiddenSubscriptions,
         items: page,
         note: 'Rota yalnızca davetin gönderim durumunu bilir; Outlook\'ta kabul edilip edilmediğini ya da posta kutusu içeriğini bilmez.'
       },
@@ -90,7 +88,7 @@ const outlookStatus = {
         label: 'Outlook teslim durumu',
         entity: { type: 'user', id: 'me', name: 'Outlook abonelikleriniz' },
         highlights: !distributionComplete
-          ? ['Durum dağılımı: görünmeyen veya sınır dışı abonelikler nedeniyle gösterilmedi']
+          ? ['Durum dağılımı: sınır dışı abonelikler nedeniyle gösterilmedi']
           : Object.entries(counts).slice(0, 4).map(([state, count]) => `${deliveryLabel(state)}: ${count}`)
       }
     };

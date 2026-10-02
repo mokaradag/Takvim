@@ -181,6 +181,7 @@ export function AssistantTurn({ turn, phase = null, topic = null, canRetry = fal
         {status === 'complete' && (
           <div className="rota-assistant-answer-meta">
             {!isGroundingFailure(answer.finishReason) && <CopyAnswerButton source={answer.content} />}
+            {answer.finishReason === 'general' && <span className="rota-assistant-mode-badge">Genel sohbet · Rota verisi okunmadı</span>}
             {deep && <span className="rota-assistant-mode-badge">{assistantModeLabel(ASSISTANT_MODES.DEEP)}</span>}
             {note && <small className="rota-assistant-finish-note">{note}</small>}
           </div>

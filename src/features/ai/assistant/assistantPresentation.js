@@ -293,7 +293,7 @@ const COMPLETE_FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequen
 
 /** Yanıtın bitiş nedeni kullanıcıya not olarak gösterilmeli mi? */
 export function finishReasonNote(finishReason) {
-  if (!finishReason || COMPLETE_FINISH_REASONS.has(finishReason)) return null;
+  if (!finishReason || COMPLETE_FINISH_REASONS.has(finishReason) || ['not_found', 'clarification', 'unavailable', 'general'].includes(finishReason)) return null;
   if (finishReason === GROUNDING_FAILED_FINISH_REASON) return 'Yanıt Rota verisiyle doğrulanamadığı için gösterilmedi; soruyu daha dar kapsamda yeniden sorabilirsiniz.';
   if (finishReason === 'length') return 'Yanıt uzunluk sınırına ulaştığı için sonu eksik olabilir.';
   if (finishReason === 'content_filter') return 'Yanıt içerik süzgeci nedeniyle durduruldu; sonu eksik olabilir.';

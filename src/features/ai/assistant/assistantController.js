@@ -107,6 +107,7 @@ function initialState() {
     refreshing: false,
     failure: null,
     mode: ASSISTANT_MODES.STANDARD,
+    source: 'rota',
     view: 'chat',
     list: emptyList(),
     active: null,
@@ -526,6 +527,7 @@ export function createAssistantController({
       previousAnswer: existing?.answer?.content ? existing.answer : null,
       content,
       mode: state.mode,
+      source: state.source,
       controller: new AbortController(),
       text: '',
       phase: 'sending',
@@ -559,6 +561,7 @@ export function createAssistantController({
       turnId,
       message: content,
       mode: run.mode,
+      ...(run.source === 'general' ? { source: run.source } : {}),
       expectedSequence: active.messageCount || 0,
       signal: run.controller.signal,
       onEvent: (event) => onRunEvent(run, event)
@@ -621,6 +624,11 @@ export function createAssistantController({
       announcement: current.active?.key === run.key ? announce('Yanıt durduruldu.') : current.announcement
     }));
     return true;
+  }
+
+  function setSource(source) {
+    if (!['rota', 'general'].includes(source)) return;
+    update((current) => ({ ...current, source }));
   }
 
   function setMode(mode) {
@@ -1002,6 +1010,7 @@ export function createAssistantController({
     retry,
     stop,
     setMode,
+    setSource,
     setView,
     newConversation,
     openConversation,

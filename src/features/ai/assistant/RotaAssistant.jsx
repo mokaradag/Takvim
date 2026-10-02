@@ -529,6 +529,9 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}
+          source={state.source}
+          dataEnabled={state.readiness?.rotaData?.enabled === true}
+          onSourceChange={(source) => controller.setSource(source)}
           maxChars={readiness?.limits?.maxMessageChars || controller.limits.maxMessageChars}
           inputRef={inputRef}
         />

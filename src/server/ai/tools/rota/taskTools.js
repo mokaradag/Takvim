@@ -205,7 +205,7 @@ const taskSearch = {
 
 function recurrenceView(fact, row) {
   if (fact.recurrenceRule) {
-    return { role: 'series-template', rule: dataText(fact.recurrenceRule, 200), description: describeRecurrenceRule(fact.recurrenceRule) };
+    return { role: 'series-template', rule: dataText(fact.recurrenceRule, 200), ruleDescription: describeRecurrenceRule(fact.recurrenceRule) };
   }
   if (fact.recurrenceParentId) {
     const seriesTitle = row.ParentTitle ? dataText(row.ParentTitle, 160) : null;
@@ -279,7 +279,8 @@ const taskDetail = {
         : null,
       createdAt: fact.createdAt,
       updatedAt: fact.updatedAt,
-      calendar: row.CalendarName ? dataText(row.CalendarName, 120) : 'Varsayılan takvim',
+      calendar: row.CalendarName ? dataText(row.CalendarName, 120) : null,
+      calendarSource: row.CalendarSource || null,
       dependencies: fact.accessLevel === 'FULL'
         ? { predecessorCount: Number(row.PredecessorCount || 0), successorCount: Number(row.SuccessorCount || 0) }
         : null,

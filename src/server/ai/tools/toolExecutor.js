@@ -7,7 +7,7 @@ import { isTurnFatal, TOOL_ERROR_CODES, ToolError, toToolError } from './toolErr
 import { TOOL_LIMITS } from './toolLimits.js';
 import { getRotaTool } from './toolRegistry.js';
 import { fitToolResult } from './toolResultPolicy.js';
-import { claimableContract } from '../../../domain/ai/claimableEvidence.js';
+import { claimableContract, projectEvidenceData } from '../../../domain/ai/claimableEvidence.js';
 import { trackResultText } from './toolResultText.js';
 
 /**
@@ -123,7 +123,7 @@ export function createToolExecutor({
       nextCursor: outcome.nextCursor ?? null,
       subject: outcome.evidence?.entity?.name || outcome.evidence?.label || 'Rota',
       claimable: claimableContract(tool.name, args.textFields || []),
-      data: outcome.data
+      data: projectEvidenceData(outcome.data, args.textFields || [])
     };
   }
 

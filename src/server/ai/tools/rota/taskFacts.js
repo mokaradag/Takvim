@@ -1,10 +1,11 @@
 import 'server-only';
 import { taskCompletionRate } from '../../../../scheduling/metrics/taskCompletionRate.js';
 import { createHash } from 'node:crypto';
-import { PRIORITIES, normalizePriorityId } from '../../../../domain/constants/index.js';
+import { PRIORITIES, normalizePriorityId, normalizeTaskStatus } from '../../../../domain/constants/index.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { invalidArguments } from '../toolErrors.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
+import { fixedDecimal, scaledDecimal, decimalFromScaled } from '../../../../domain/numbers/fixedDecimal.js';
 
 /**
  * Görev olgularının BELİRLENİMCİ hesapları (SQL'siz, saf).
@@ -37,9 +38,7 @@ export const DUE_MONTH_DAYS = 30;
 const DAY_MS = 86400000;
 
 export function taskStatus(value) {
-  if (value === 'done') return 'done';
-  if (value === 'in-progress' || value === 'in_progress') return 'in_progress';
-  return 'todo';
+  return normalizeTaskStatus(value);
 }
 
 /** Veritabanı durum değeri (kaba SQL süzgeci için). */
@@ -108,8 +107,8 @@ export function factFromRow(row) {
     progress: numberOrNull(row.Progress),
     plannedHours: numberOrNull(row.PlannedHours),
     actualHours: numberOrNull(row.ActualHours),
-    budget: numberOrNull(row.Budget),
-    spent: numberOrNull(row.Spent),
+    budget: fixedDecimal(row.Budget, 4),
+    spent: fixedDecimal(row.Spent, 4),
     recurrenceRule: row.RecurrenceRule ? String(row.RecurrenceRule) : null,
     recurrenceParentId: row.RecurrenceParentTaskId ? canonicalActualId(row.RecurrenceParentTaskId) : null,
     recurrenceOccurrenceDate: sqlDay(row.RecurrenceOccurrenceDate),
@@ -371,8 +370,7 @@ export function assigneeView(fact, assignees) {
 export function hoursCoverage(facts) {
   const metric = (field, scale) => {
     const known = facts.filter((fact) => fact[field] != null);
-    const factor = 10 ** scale;
-    const total = known.length ? known.reduce((sum, fact) => sum + Math.round(fact[field] * factor), 0) / factor : null;
+    const total = known.length ? decimalFromScaled(known.reduce((sum, fact) => sum + scaledDecimal(fact[field], scale), 0n), scale) : null;
     return { total, tasksWithValue: known.length, tasksWithoutValue: facts.length - known.length };
   };
   return {

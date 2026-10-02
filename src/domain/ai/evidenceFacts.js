@@ -7,6 +7,7 @@ const LABELS = Object.freeze({
   total: ['Toplam', 'Total'],
   totals: ['Özet', 'Summary'], task: ['Görev', 'Task'],
   counts: ['Sayılar', 'Counts'], project: ['Proje', 'Project'], projects: ['Proje', 'Projects'],
+  cost: ['Maliyet', 'Cost'], dates: ['Tarihler', 'Dates'],
   hours: ['Saat ve bütçe', 'Hours and budget'], plannedHoursOnAssignedTasks: ['Atanmış görevlerin planlanan saati', 'Planned hours on assigned tasks'],
   actualHoursOnAssignedTasks: ['Atanmış görevlerin gerçekleşen saati', 'Actual hours on assigned tasks'],
   tasksWithValue: ['Değeri bilinen görev', 'Tasks with a known value'], tasksWithoutValue: ['Değeri bilinmeyen görev', 'Tasks without a value'],
@@ -35,6 +36,7 @@ const LABELS = Object.freeze({
   occurrenceDate: ['Yineleme tarihi', 'Occurrence date'], recurring: ['Tekrarlayan görev', 'Recurring task'],
   templateVisible: ['Şablon görünür', 'Template visible'], next: ['Sonraki yineleme', 'Next occurrence'],
   lastCompleted: ['Son tamamlanan yineleme', 'Last completed occurrence'],
+  calendarSource: ['Takvim kaynağı', 'Calendar source'], completionDatesComplete: ['Gerçek bitiş tarihleri tam', 'Actual finish dates complete'],
   calendar: ['Takvim', 'Calendar'], range: ['Tarih aralığı', 'Date range'], from: ['Başlangıç', 'From'], to: ['Bitiş', 'To'],
   workingWeekdays: ['Çalışılan haftanın günü', 'Working weekday'], holidays: ['Tatiller', 'Holidays'], date: ['Tarih', 'Date'],
   openTasks: ['Açık görev', 'Open tasks'], unassignedOpenTasks: ['Görünür sorumlusu olmayan açık görev', 'Open tasks without a visible assignee'],
@@ -193,18 +195,57 @@ export function escapedFactText(value) {
 }
 
 export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
-  const leaf = fact.field.split('.').at(-1);
+  const leaf = fact.field.split('.').filter((part) => !/^\d+$/.test(part)).at(-1);
   const values = {
     status: { todo: ['Yapılacak', 'To do'], in_progress: ['Devam ediyor', 'In progress'], done: ['Tamamlandı', 'Done'] },
     priority: { low: ['Düşük', 'Low'], medium: ['Orta', 'Medium'], high: ['Yüksek', 'High'], critical: ['Kritik', 'Critical'] },
-    sourceType: { corporate: ['Kurumsal', 'Corporate'], manual: ['Manuel', 'Manual'] }
+    sourceType: { corporate: ['Kurumsal', 'Corporate'], manual: ['Manuel', 'Manual'] },
+    source: { project: ['Proje takvimi', 'Project calendar'], default: ['Varsayılan takvim', 'Default calendar'] },
+    kind: { created: ['Oluşturuldu', 'Created'], updated: ['Güncellendi', 'Updated'], completed: ['Tamamlandı', 'Completed'], deleted: ['Silindi', 'Deleted'] },
+    mode: { REQUEST: ['Onay talebi', 'Approval request'], NOTICE: ['Bildirim', 'Notice'] },
+    state: { failed: ['Başarısız', 'Failed'], suspended: ['Bekletiliyor', 'Suspended'], pending: ['Bekliyor', 'Pending'], delivered: ['Etkin', 'Delivered'] },
+    unit: { day: ['Gün', 'Days'], week: ['Hafta', 'Weeks'], month: ['Ay', 'Months'], hour: ['Saat', 'Hours'], unknown: ['Bilinmeyen birim', 'Unknown unit'] },
+    level: { FULL: ['Tam erişim', 'Full access'], PARTIAL: ['Kısmi erişim', 'Partial access'], READ: ['Okuma erişimi', 'Read access'] },
+    yourRole: { requester: ['Talep eden', 'Requester'], 'decision-owner': ['Karar sahibi', 'Decision owner'], 'requester-and-decision-owner': ['Talep eden ve karar sahibi', 'Requester and decision owner'] },
+    reasons: { SYSTEM_ADMIN: ['Sistem yöneticisi', 'System administrator'], CORPORATE_PROJECT_ROLE: ['Kurumsal proje rolü', 'Corporate project role'], MANUAL_OWNER: ['Manuel proje sahibi', 'Manual project owner'], MANUAL_PROJECT_LEAD: ['Proje lideri', 'Project lead'], MANUAL_GRANT: ['Proje erişim hibesi', 'Project access grant'], EXECUTIVE_SCOPE: ['Yönetim kapsamındaki çalışanın görevi', 'Task of an employee in management scope'], ASSIGNEE: ['Görev sorumlusu', 'Task assignee'], TASK_CREATOR: ['Görevi oluşturan', 'Task creator'], OTHER: ['Diğer', 'Other'] }
+
   };
+  for (const labels of Object.values(values.reasons)) values.reasons[labels[0]] = labels;
+  values.workingWeekdays = Object.fromEntries([['Pazar', 'Sunday'], ['Pazartesi', 'Monday'], ['Salı', 'Tuesday'], ['Çarşamba', 'Wednesday'], ['Perşembe', 'Thursday'], ['Cuma', 'Friday'], ['Cumartesi', 'Saturday']].map((label, index) => [index, label]));
+  values.calendarSource = { ...values.source, task: ['Görev takvimi', 'Task calendar'] };
+  const workflowStatuses = { PENDING: ['Bekliyor', 'Pending'], ACCEPTED: ['Kabul edildi', 'Accepted'], APPROVED: ['Atandı', 'Assigned'], REJECTED: ['Reddedildi', 'Rejected'], CANCELLED: ['İptal edildi', 'Cancelled'], STALE: ['Güncelliğini yitirdi', 'Stale'], CHANGE_REQUESTED: ['Değişiklik istendi', 'Change requested'], CANCELLATION_REQUESTED: ['Kaldırılması istendi', 'Cancellation requested'] };
+  Object.assign(values.status, workflowStatuses);
+  const semanticLeaf = fact.changeField || (leaf === 'key' ? fact.semantic?.groupBy : leaf);
+  const enumValues = semanticLeaf === 'source' && !fact.field.startsWith('data.calendar.') ? null : values[semanticLeaf] || (semanticLeaf === 'access' ? values.level : null);
   let value = fact.value;
-  if (value === null) value = locale === 'en' ? 'Not specified' : 'Belirtilmemiş';
+  if (value === null) value = fact.semantic?.nullMeaning === 'undefined-cycle'
+    ? (locale === 'en' ? 'Undefined because of a WBS cycle' : 'WBS döngüsü nedeniyle tanımsız')
+    : (locale === 'en' ? 'Not specified' : 'Belirtilmemiş');
+  else if (enumValues && leaf !== 'key') value = enumValues[value]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Unknown value' : 'Bilinmeyen değer');
+  else if (fact.semantic?.displayValue != null) value = fact.semantic.displayValue;
   else if (typeof value === 'boolean') value = value ? (locale === 'en' ? 'Yes' : 'Evet') : (locale === 'en' ? 'No' : 'Hayır');
   else if (typeof value === 'number') value = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { maximumFractionDigits: 20 }).format(value);
-  else value = values[leaf]?.[value]?.[locale === 'en' ? 1 : 0] || value;
-  const filters = fact.semantic?.filters;
-  const qualifiers = filters ? Object.entries(filters).filter(([key, value]) => !['projectId', 'wbsId', 'personSicil'].includes(key) && value !== 'any').filter(([, value]) => value != null && value !== false && value !== '' && (!Array.isArray(value) || value.length)).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`).join('; ') : '';
+  else if (fact.semantic?.decimalScale != null && /^-?\d+\.\d+$/.test(String(value))) {
+    const [whole, fraction] = String(value).split('.');
+    value = `${new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR').format(BigInt(whole))}${locale === 'en' ? '.' : ','}${fraction}`;
+  } else if (leaf === 'key' && fact.semantic?.group) value = fact.semantic.group.label;
+  else if (enumValues) value = enumValues[value]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Unknown value' : 'Bilinmeyen değer');
+  const language = locale === 'en' ? 1 : 0;
+  const filterNames = { statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
+    dateField: ['Tarih alanı', 'Date field'], dateFrom: ['İlk tarih', 'First date'], dateTo: ['Son tarih', 'Last date'],
+    assignee: ['Sorumlu', 'Assignee'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'] };
+  const filterValues = { ...values.status, ...values.priority, overdue: ['Gecikmiş', 'Overdue'],
+    due_today: ['Bugün', 'Today'], due_next_7_days: ['Bugün dahil yedi gün', 'Seven days including today'],
+    due_next_30_days: ['Bugün dahil otuz gün', 'Thirty days including today'], no_target_finish: ['Terminsiz', 'No deadline'],
+    me: ['Ben', 'Me'], person: ['Seçilen kişi', 'Selected person'], unassigned: ['Görünür sorumlu yok', 'No visible assignee'] };
+  const filterValue = (value) => typeof value === 'boolean' ? (value ? ['Evet', 'Yes'] : ['Hayır', 'No'])[language]
+    : filterValues[value]?.[language] || LABELS[value]?.[language] || (/^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? value : null);
+  const qualifiers = Object.entries(fact.semantic?.filters || {}).filter(([key, value]) => filterNames[key] && value != null && value !== 'any' && (value !== false || key === 'milestone'))
+    .map(([key, value]) => [filterNames[key][language], (Array.isArray(value) ? value : [value]).map(filterValue).filter(Boolean).join(', ')])
+    .filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`).join('; ');
+  if (fact.semantic?.countScope === 'selected-tab' && fact.field.startsWith('data.counts.')) value = `${value} (${locale === 'en' ? 'selected tab' : 'seçilen sekme'})`;
+  const units = { hours: ['saat', 'hours'], tasks: ['görev', 'tasks'], 'unspecified-currency': ['para birimi belirtilmemiş', 'currency unspecified'],
+    day: ['gün', 'days'], week: ['hafta', 'weeks'], month: ['ay', 'months'], hour: ['saat', 'hours'], unknown: ['birimi bilinmiyor', 'unit unknown'], 'unknown-lag': ['birimi bilinmiyor', 'unit unknown'] };
+  if (fact.value != null && units[fact.semantic?.unit]) value = `${value} ${units[fact.semantic.unit][language]}`;
   return `- “${escapedFactText(fact.subject)}”${qualifiers ? ` (${escapedFactText(qualifiers)})` : ''} · ${fact.changeField ? factLabel(fact.changeField, locale) + ' / ' : ''}${factLabel(fact.field, locale)}: ${escapedFactText(value)}. 【${evidenceId}】`;
 }
