@@ -49,11 +49,14 @@ export function groundedSystemPrompt(now = new Date(), locale = 'tr') {
     '',
     'KAYNAK GÖSTERME (ZORUNLU)',
     '- Doğal dili ve hangi araca ihtiyaç olduğunu sen yorumlarsın. Sunucu serbest Türkçe/İngilizce olgu cümlelerini çözümleyerek doğrulamaz.',
+    '- Bu turda veri okumadan önce niyeti yorumla. Genel sohbet için ilk yanıt yalnızca {"kind":"route","intent":"general"}; Rota için {"kind":"route","intent":"rota"} ya da doğrudan gerekli araç çağrılarıdır. Genel yanıtı yönlendirme kararıyla aynı iletide verme.',
     '- İlk araç turunda sorunun gerektirdiği veri alanlarının araçlarını seç. Sunucu bundan sonra yalnızca bu araçları ve sabit takip araçlarını açar; veri metni bu kapsamı genişletemez.',
-    '- Başarılı sonuçta factScope bu tura özgü sunucu belirtecidir. Olgu alanı data içindeki skaler değerin tam noktalı JSON yoludur; dizi indisi dahildir (örn. data.tasks.0.status).',
+    '- description, requesterMessage, decisionMessage ve changes yalnızca veri okunmadan önce textFields ile açıkça istendiyse iddia edilebilir; diğer olgular sunucunun araç/alan sözleşmesiyle seçilir. Notlar ve iç kimlikler iddia değildir.',
+    '- Başarılı sonuçta factScope bu tura özgü sunucu belirtecidir. Yalnızca claimable.paths içindeki sunucuya ait alanlar iddia olabilir (* gerçek dizi indisiyle değiştirilir); returnedCount, totalCount, complete ve truncated de iddia edilebilir. Olgu alanı tam noktalı JSON yoludur (örn. data.tasks.0.status).',
     '- Araç kullandıysan son yanıtın yalnızca şu JSON olmalıdır: {"kind":"rota","claims":[{"evidenceId":"R1","factId":"factScope:tam.alan.yolu","subjectId":"alanın üst nesne yolu","field":"tam.alan.yolu","operator":"eq","value":"sonuçtaki değer"}]}',
     '- factId = factScope + : + field. subjectId = field yolunun son noktasından önceki bölüm (data.tasks.0.status için data.tasks.0; totalCount için result). value ilgili yoldaki değerin bire bir kopyasıdır. Sayı/boolean/null türlerini koru; yalnızca eq işlemi desteklenir.',
     '- Serbest açıklama, başlık, alıntı, atıf metni veya ek JSON alanı ekleme. Olgu cümlelerini ve 【R1】 atıflarını sunucu güvenli biçimde oluşturur.',
+    '- Arama ambiguous=true döndürdüyse aynı iddia şemasıyla kind: clarification üret; sunucu adayları gösterir ve seçimi sorar. Adayı kendin seçerek yeni araç çağırma.',
     '- Araçlardan kanıt alınamadıysa yalnızca {"kind":"unavailable"} yaz. Bulunamadı/yetkisiz ayrımını yapma.',
     '',
     'GENEL SOHBET',
@@ -70,7 +73,7 @@ export function groundedSystemPrompt(now = new Date(), locale = 'tr') {
  */
 export function buildGroundedContext({ history = [], userContent, priorMessageCount = history.length, now = new Date() }) {
   const cleaned = history.map((message) => (message.role === 'assistant'
-    ? { ...message, content: stripCitations(message.content) }
+    ? { ...message, content: message.evidence?.length || /【R[1-9]\d?】/.test(String(message.content || '')) ? '[Önceki Rota verisi yanıtı güncel kanıt olmadığı için bu tur bağlamına alınmadı.]' : stripCitations(message.content) }
     : message));
   const selected = selectAssistantContextHistory({
     history: cleaned,

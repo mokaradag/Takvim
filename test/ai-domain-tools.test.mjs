@@ -211,7 +211,7 @@ test('toplamlar belirlenimcidir: durum, gecikme, 7 gün, terminsiz, tamamlanma o
   assert.deepEqual(result.data.hours.plannedHours, { total: 16, tasksWithValue: 2, tasksWithoutValue: 6 });
   assert.deepEqual(result.data.hours.actualHours, { total: 12, tasksWithValue: 1, tasksWithoutValue: 7 });
   const groups = Object.fromEntries(result.data.groups.map((group) => [group.key, group.count]));
-  assert.deepEqual(groups, { overdue: 2, done: 2, due_next_7_days: 2, due_next_30_days: 1, no_target_finish: 1 });
+  assert.deepEqual(groups, { overdue: 2, done: 2, due_days_1_to_6: 2, due_days_7_to_29: 1, no_target_finish: 1 });
   assert.equal(result.scope.kind, 'complete-projects');
 
   const limited = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'deadline', limit: 3 });
@@ -667,7 +667,7 @@ test('hareket geçmişi kısmi kapsamda gizli eş sorumlu adını açığa çık
   const { result } = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29' });
   assert.equal(result.ok, true);
   assert.equal(result.totalCount, 1);
-  assert.ok(result.data.items[0].changes.includes('Sorumlu eklendi: Gizli sorumlu'));
+  assert.ok(result.data.items[0].changes.includes('Gizli sorumlu bilgisi değişti.'));
   assert.equal(JSON.stringify(result).includes('Mehmet Demir'), false);
 });
 
@@ -704,7 +704,7 @@ test('sonuç boyutu sınırlıdır: büyük liste kısaltılır ve bildirilir, s
   const stack = stackFor(t);
   stack.useSicil(AYSE);
   const big = {
-    name: 'rota_big_list', version: 1, topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000, parameters: { type: 'object', additionalProperties: false, properties: {} },
+    name: 'rota_big_list', resultPolicy: { rows: ['items'], trim: ['items'] }, version: 1, topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000, parameters: { type: 'object', additionalProperties: false, properties: {} },
     handler: async () => ({
       data: { items: Array.from({ length: 400 }, (_, index) => ({ index, text: 'x'.repeat(100) })) },
       scope: { kind: 'complete-projects', completeProjectView: true }, complete: true, truncated: false, returnedCount: 400, totalCount: 400, nextCursor: 'abc',
@@ -822,7 +822,7 @@ test('all task-population analysis paths fail closed before processing an oversi
   }));
   const stack = stackFor(t, { tasks: extraTasks });
   for (const [name, args] of [
-    ['rota_task_search', { projectId: PROJECTS.FULL, text: 'a selective filter' }],
+    ['rota_task_search', { projectId: PROJECTS.FULL }],
     ['rota_task_analytics', { projectId: PROJECTS.FULL }],
     ['rota_portfolio_summary', { limit: 1, source: 'manual' }],
     ['rota_project_detail', { projectId: PROJECTS.FULL }],
@@ -836,7 +836,7 @@ test('all task-population analysis paths fail closed before processing an oversi
 });
 
 test('assignment fan-out has its own analyzed-row sentinel', async (t) => {
-  const taskAssignees = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({ TaskId: TASKS.OVERDUE, Sicil: index + 50000 }));
+  const taskAssignees = Array.from({ length: TOOL_LIMITS.maxAnalyzedAssignments + 1 }, (_, index) => ({ TaskId: TASKS.OVERDUE, Sicil: index + 50000 }));
   const stack = stackFor(t, { taskAssignees });
   const { result } = await callRotaTool(stack, ADMIN, 'rota_task_detail', { taskId: TASKS.OVERDUE });
   assert.equal(result.error?.code, 'RESULT_TOO_LARGE');

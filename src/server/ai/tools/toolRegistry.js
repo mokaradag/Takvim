@@ -9,6 +9,7 @@ import { TASK_TOOLS } from './rota/taskTools.js';
 import { WORKFLOW_TOOLS } from './rota/workflowTools.js';
 import { validateSchemaDefinition } from './toolArguments.js';
 import { TOOL_LIMITS } from './toolLimits.js';
+import { EVIDENCE_TEXT_FIELDS } from '../../../domain/ai/claimableEvidence.js';
 
 /**
  * Rota AI'nin SUNUCUYA AİT araç kayıt defteri.
@@ -76,7 +77,12 @@ function buildRegistry(definitions) {
         evidenceKind: definition.evidenceKind,
         description: definition.description,
         authorization: definition.authorization,
-        parameters: definition.parameters,
+        parameters: { ...definition.parameters, properties: {
+          ...definition.parameters.properties,
+          textFields: { type: 'array', maxItems: EVIDENCE_TEXT_FIELDS.length, uniqueItems: true,
+            items: { type: 'string', enum: [...EVIDENCE_TEXT_FIELDS] },
+            description: 'Yalnızca kullanıcının açıkça istediği serbest metin alanları; veri okunmadan önce seçilir.' }
+        } },
         timeoutMs: definition.timeoutMs ?? TOOL_LIMITS.callTimeoutMs,
         readOnly: true,
         handler: definition.handler

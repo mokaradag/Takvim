@@ -1317,7 +1317,11 @@ function runQuery(db, statement, params, { database }) {
 
   // ── Yetkilendirme ve anlık görüntü ─────────────────────────
   if (sqlText.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
-    return result(authorizationRecordsets(db, sicil));
+    const sets = authorizationRecordsets(db, sicil);
+    if (sqlText.includes('SELECT DISTINCT EmployeeSicil FROM dbo.MR_V_ExecutiveScope')) {
+      sets.push(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil).map(({ EmployeeSicil }) => ({ EmployeeSicil })));
+    }
+    return result(sets);
   }
   if (sqlText.includes('CREATE TABLE #VisibleProjects')) {
     const rows = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
@@ -1330,7 +1334,7 @@ function runQuery(db, statement, params, { database }) {
     // On üçüncü küme SQL içi aşama süreleridir; yalnızca milisaniye taşır.
     return result([...rows, [{ ScopeMs: 0, TaskScopeMs: 0, DirectoryMs: 0, ResultSetsMs: 0 }]]);
   }
-  if (sqlText.includes("THROW 51001")) {
+  if (sqlText.includes("THROW 51001") && params.evidenceSnapshotLimit == null) {
     const before = new Map(db.projects.map((row) => [row.ProjectId, JSON.stringify(row)]));
     synchronizeCorporateProjects(db, params.actorSicil);
     return result([db.projects.filter((row) => before.has(row.ProjectId) && before.get(row.ProjectId) !== JSON.stringify(row)).map((row) => ({ ProjectId: row.ProjectId }))]);
@@ -1409,6 +1413,7 @@ function runQuery(db, statement, params, { database }) {
     const sent = rows.filter((r) => r.RequesterSicil === params.sicil);
     const history = rows.filter((r) => r.Status !== 'PENDING' || !r.TaskAvailable);
     const filtered = { pending, sent, history, all: rows }[params.tab];
+    if (params.evidenceSnapshotLimit != null && filtered.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
     const page = Math.min(params.page, Math.max(0, Math.ceil(filtered.length / params.pageSize) - 1));
     return result([[{ Total: rows.length, PendingCount: pending.length, SentCount: sent.length, HistoryCount: history.length }],
       [{ Total: filtered.length, Page: page }], filtered.slice(page * params.pageSize, (page + 1) * params.pageSize)]);

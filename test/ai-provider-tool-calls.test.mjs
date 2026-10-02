@@ -19,7 +19,7 @@ const { createAiGateway } = await import('../src/server/ai/aiGateway.js');
 const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
 const { validateModelRegistry } = await import('../src/domain/ai/aiModelRegistry.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
-const { resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+const { resetAiTelemetryForTests, aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 const { resetTelemetryRegistryForTests } = await import('../src/server/observability/telemetryRegistry.js');
 const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
 const { withSqlTransaction } = await import('../src/server/db/pool.js');
@@ -274,6 +274,27 @@ function gatewayFor(t, { provider = createFakeAiProvider(), registry = validateM
   });
   return { gateway, admission, provider };
 }
+
+test('buffered protocol text does not mark provider errors or health as partial delivery', async (t) => {
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'interrupt', text: '{"kind":"rota"}' });
+  const { gateway } = gatewayFor(t, { provider });
+  await assert.rejects(gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({
+    messages: TRANSCRIPT.slice(0, 2), tools: TOOLS, onEvent: async () => undefined
+  }) }), (error) => error.code === 'AI_PROVIDER_UNAVAILABLE' && !error.details?.partial);
+  assert.equal(aiTelemetrySnapshot().streams.interrupted, 0);
+  assert.equal(aiTelemetrySnapshot().streams.failed, 1);
+});
+
+test('explicitly delivered tool-session text still marks an interrupted response partial', async (t) => {
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'interrupt', text: 'Delivered text' });
+  const { gateway } = gatewayFor(t, { provider });
+  await assert.rejects(gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({
+    messages: TRANSCRIPT.slice(0, 2), tools: TOOLS, onEvent: async () => true
+  }) }), (error) => error.code === 'AI_PROVIDER_UNAVAILABLE' && error.details?.partial === true);
+  assert.equal(aiTelemetrySnapshot().streams.interrupted, 1);
+});
 
 test('araç oturumu tüm model turları boyunca TEK kapasite kirası tutar; iş bitince ya da hata verince kira bırakılır', async (t) => {
   const provider = createFakeAiProvider();

@@ -1653,22 +1653,21 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   plan veri kalitesi. Genel SQL aracı yoktur; hiçbir araç yazma yapmaz.
 - **Kimlik ve yetki:** güvenilir Sicil; yetki bağlamı her araç kümesinde
   yeniden okunur ve sabit SQL görünürlüğü anlık görüntüyle aynı kurallarla
-  hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz.
+  hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz. Kanıt sunucu içi yetki epoch’una bağlıdır; sonraki küme ve son çizim öncesi okuma değişen erişimde eski kanıtı geçersiz yapar. Bu uygulama denetimi atomik SQL/model/teslim işlemi değildir.
 - **Kanıt:** başarılı sonuçlar `R1`, `R2` … ve tur için rastgele olgu öneki
   taşır. Model doğal dili yorumlar, türlü JSON iddiaları seçer. Sunucu kayıt
   yolu/alan/değer eşitliğini kendi yetkili yükünde denetler ve etiket/değer ile
   `【R1】` atfını çizer; düzyazı regexleri veya ikinci bir model hakem değildir.
   Uydurma/değiştirilmiş iddia bir kez düzeltilir, yine olmazsa sabit güvenli
-  ileti kaydedilir (`grounding_failed`). Genel yanıt açık niyet bildirimi
-  gerektirir; kanıtlı geçmişin metaverisi takiplerde yeni kanıt gerektirir.
+  ileti kaydedilir (`grounding_failed`). Veri öncesi açık `undecided → general/rota` yönlendirmesi kullanılır; eski kanıt genel sohbeti kalıcı biçimde kilitlemez. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir.
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
   kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
-  sınırıyla yürür (`aiGateway.runToolSession`).
+  sınırıyla yürür (`aiGateway.runToolSession`). Görev/baz plan 20 000, sorumluluk ilişkisi 200 000, ham hareket 20 000 sınırı max+1 ile korunur. İş akışları tur başına 1000 kayıtlık anlık görüntü, görev listeleri veri özetine bağlı imleç kullanır. Araç profili çıktı sınırları 4096 / 8192 token; kesik JSON tek ortak onarım hakkıyla daha az iddiaya daraltılır.
 - **Akış:** `accepted.rotaData`, `status` evreleri `tools` (+ veri alanı
   konusu) ve `verifying`, `revise` olayı, `done.assistantMessage.content` ve
   `evidence`. Aşama 3 model protokolü tamponlanır; yalnızca doğrulanmış son
-  metin gösterilir. Araç bayrağı kapalı Aşama 2 genel akışı değişmez.
+  metin gösterilir. Tamponlanan protokol teslim edilmiş metin sayılmaz; sağlık/partial hata bilgisi bunu korur. Araç bayrağı kapalı Aşama 2 genel akışı değişmez.
 - **Kalıcılık:** yalnızca atıf yapılan kanıtlar yanıtla aynı kısa işlemde
   `MR_AiMessageEvidence` (0018) tablosuna yazılır; iletiyle birlikte silinir.
 - **Gözlem:** araç çağrıları ve kanıtlı yanıt sonuçları içeriksiz ölçülür;

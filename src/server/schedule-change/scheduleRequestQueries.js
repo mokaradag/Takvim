@@ -63,14 +63,15 @@ function requestDateBounds(query) {
   return { fromUtc, toUtc };
 }
 
-export async function readSchedulePage(executor, actor, input = {}) {
+export async function readSchedulePage(executor, actor, input = {}, { evidenceSnapshotLimit = null } = {}) {
   const query = normalizeScheduleQuery(input);
   const { fromUtc, toUtc } = requestDateBounds(query);
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
   request.input('tab', sql.VarChar(10), query.tab);
-  request.input('pageSize', sql.Int, query.pageSize);
-  request.input('page', sql.Int, query.page);
+  request.input('pageSize', sql.Int, evidenceSnapshotLimit == null ? query.pageSize : evidenceSnapshotLimit + 1);
+  if (evidenceSnapshotLimit != null) request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+  request.input('page', sql.Int, evidenceSnapshotLimit == null ? query.page : 0);
   request.input('search', sql.NVarChar(200), query.search);
   request.input('requester', sql.NVarChar(100), query.requester);
   for (const field of ['projectId', 'taskId']) request.input(field, sql.UniqueIdentifier, query[field]);
@@ -100,6 +101,7 @@ export async function readSchedulePage(executor, actor, input = {}) {
       COUNT(CASE WHEN (r.Status <> 'PENDING' OR t.TaskId IS NULL OR p.IsActive = 0) THEN 1 END) AS HistoryCount
     ${SOURCE} WHERE ${filters};
     DECLARE @total int = (SELECT COUNT(*) ${SOURCE} WHERE ${filters} AND ${tabFilter});
+    ${evidenceSnapshotLimit == null ? '' : "IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;"}
     DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
     DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
     SELECT @total AS Total, @safePage AS Page;

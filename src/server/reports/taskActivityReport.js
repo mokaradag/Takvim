@@ -103,7 +103,7 @@ export const TASK_ACTIVITY_SQL = `
   DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
 `;
 
-export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false } = {}) {
+export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false, evidenceSnapshotLimit = null, analyzedActivityLimit = null } = {}) {
   const query = normalizeActivityQuery(input, actor, now);
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
@@ -113,11 +113,21 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   request.input('visibleProjects', sql.NVarChar(sql.MAX), [...visibleProjects].join(','));
   request.input('partialTasks', sql.NVarChar(sql.MAX), [...actor.effective.partialTaskIds].join(','));
   for (const key of ['startUtc', 'endUtc']) request.input(key, sql.DateTime2, query[key]);
-  for (const key of ['page', 'pageSize', 'person']) request.input(key, sql.Int, query[key]);
+  for (const key of ['page', 'pageSize', 'person']) request.input(key, sql.Int, key === 'pageSize' && evidenceSnapshotLimit != null ? evidenceSnapshotLimit + 1 : key === 'page' && evidenceSnapshotLimit != null ? 0 : query[key]);
   request.input('projectId', sql.UniqueIdentifier, query.projectId);
   request.input('taskIdText', sql.NVarChar(36), query.taskId);
   for (const key of ['scope', 'kind', 'directorate', 'department', 'unit']) request.input(key, sql.NVarChar(1000), query[key]);
-  const result = await request.query(TASK_ACTIVITY_SQL);
+  let statement = TASK_ACTIVITY_SQL;
+  if (analyzedActivityLimit != null) {
+    request.input('activityProbeRows', sql.Int, analyzedActivityLimit + 1);
+    statement = statement.replace('SELECT a.AuditId', 'SELECT TOP (@activityProbeRows) a.AuditId')
+      .replace('SELECT DISTINCT ActorSicil', "IF (SELECT COUNT(*) FROM #TaskActivityScope) >= @activityProbeRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\n  SELECT DISTINCT ActorSicil");
+  }
+  if (evidenceSnapshotLimit != null) {
+    request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+    statement = statement.replace('DECLARE @lastPage int', "IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\n  DECLARE @lastPage int");
+  }
+  const result = await request.query(statement);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];
   const people = new Map();
   const ids = auditAssigneeIds(events);

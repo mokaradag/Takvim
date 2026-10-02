@@ -740,6 +740,22 @@ Yönetici konsolu kanıt içeriği göstermez. Göç uygulanmadan
 yapay zekâ bileşeni 0018'in eksik olduğunu uyarır. Geri alma betiği tabloyu
 konuşma tablolarından önce düşürür. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md` §13.
 
+Aşama 3 işletiminde `not_found`, aday seçimi ve hizmet kullanılamıyor sonucu
+gerçek `grounding_failed` hatasından ayrı ölçülür. Tamponlanan model JSON'u
+istemciye verilmiş metin değildir; kesilme sağlıkta yarım teslim sayılmaz.
+Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süresi `TIMEOUT`
+olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları
+4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir.
+
+Elle kabul, FULL/READ/kısmi kullanıcılarla veri sonrası yetki iptalini,
+gizli tekrar/kişi sayılarının değişmezliğini, aday seçimini, kısa takipten
+sonra genel sohbeti, kesik çıktının kısa JSON ile onarılmasını ve canlı
+sayfalamayı kapsamalıdır. Görev/baz plan 20 000, sorumluluk ilişkisi 200 000,
+ham hareket 20 000, iş akışı anlık görüntüsü 1000 kayıtla sınırlıdır; tam
+sınır kabul edilir. SQL ikizi sınamaları gerçek SQL Server sorgu planı
+kabulünün yerine geçmez. Bayrak kapalı normal Rota yollarında bu anlık
+görüntü/epoch/iddia maliyetleri çalışmaz.
+
 ---
 
 ## 15. Yapılandırma

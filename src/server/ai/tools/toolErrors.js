@@ -69,6 +69,7 @@ export function invalidArguments(details = []) {
  */
 export function toToolError(error) {
   if (error instanceof ToolError) return error;
+  if (error?.number === 51001 || error?.originalError?.info?.number === 51001) return new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   const code = String(error?.code || '');
   if (code === AI_ERROR_CODES.AI_BUSY || code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT) return new ToolError(TOOL_ERROR_CODES.BUSY);
   if (code === AI_ERROR_CODES.AI_TIMEOUT || code === 'ETIMEOUT') return new ToolError(TOOL_ERROR_CODES.TIMEOUT);

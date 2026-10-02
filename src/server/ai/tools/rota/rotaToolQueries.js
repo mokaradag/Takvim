@@ -68,16 +68,16 @@ const SCOPE_PROJECTS = `
  * görüntüdeki kimlik görünürlüğü tabanıdır (FULL/READ ya da görevi oluşturan).
  * Görev süzgeci verildiğinde yalnızca o görevler değerlendirilir.
  */
-const VISIBLE_TASKS = `
+const visibleTasks = (predicate = '1 = 1') => `
   -- Task scope is materialized only by queries that actually consume tasks.
   INSERT #AiScopeTasks(TaskId)
   SELECT TOP (@analysisMaxRows) t.TaskId
   FROM STRING_SPLIT(@scopeTasks, ',') token
   JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(token.value)))
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0
-  WHERE @AiTaskFilterActive = 0
+  WHERE (${predicate}) AND (@AiTaskFilterActive = 0
     OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = t.TaskId)
-    OR EXISTS (SELECT 1 FROM #AiTaskFilter f JOIN dbo.MR_Tasks child ON child.TaskId = f.TaskId WHERE child.RecurrenceParentTaskId = t.TaskId);
+    OR EXISTS (SELECT 1 FROM #AiTaskFilter f JOIN dbo.MR_Tasks child ON child.TaskId = f.TaskId WHERE child.RecurrenceParentTaskId = t.TaskId));
   IF (SELECT COUNT(*) FROM #AiScopeTasks) >= @analysisMaxRows
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
 
@@ -87,13 +87,13 @@ const VISIBLE_TASKS = `
     FROM #AiTaskFilter f
     JOIN dbo.MR_Tasks t ON t.TaskId = f.TaskId
     JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId
-    WHERE v.AccessLevel = 'FULL' OR v.HasReadGrant = 1;
+    WHERE (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1) AND (${predicate});
   ELSE
     INSERT #AiTasks(TaskId, ProjectId, AccessLevel, IdentityBase)
     SELECT TOP (@analysisMaxRows) t.TaskId, t.ProjectId, v.AccessLevel, 1
     FROM #AiScopeProjects v
     JOIN dbo.MR_Tasks t ON t.ProjectId = v.ProjectId
-    WHERE v.AccessLevel = 'FULL' OR v.HasReadGrant = 1;
+    WHERE (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1) AND (${predicate});
   IF (SELECT COUNT(*) FROM #AiTasks) >= @analysisMaxRows
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
 
@@ -103,7 +103,7 @@ const VISIBLE_TASKS = `
   FROM #AiScopeTasks scopedTask
   JOIN dbo.MR_Tasks t ON t.TaskId = scopedTask.TaskId
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0
-  WHERE @AiTaskFilterActive = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = t.TaskId);
+  WHERE (${predicate}) AND (@AiTaskFilterActive = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = t.TaskId));
   IF (SELECT COUNT(*) FROM #AiTasks) >= @analysisMaxRows
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
 `;
@@ -111,14 +111,14 @@ const VISIBLE_TASKS = `
 /** Görünebilir sorumluluk ilişkileri sınırlıdır; görev başına tek toplam üretilir. */
 const ASSIGNMENT_FACTS = `
   DROP TABLE IF EXISTS #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts;
-  SELECT TOP (@analysisMaxRows) ta.TaskId, ta.Sicil
+  SELECT TOP (@analysisAssignmentRows) ta.TaskId, ta.Sicil
   INTO #AiAssignments
   FROM #AiTasks visible
   JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = visible.TaskId
   WHERE visible.IdentityBase = 1 OR ta.Sicil = @sicil
     OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil)
     OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil);
-  IF (SELECT COUNT(*) FROM #AiAssignments) >= @analysisMaxRows
+  IF (SELECT COUNT(*) FROM #AiAssignments) >= @analysisAssignmentRows
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
   CREATE UNIQUE CLUSTERED INDEX IX_AiAssignments ON #AiAssignments(TaskId, Sicil);
   SELECT DISTINCT pd.Sicil INTO #AiResolvedPeople
@@ -196,17 +196,7 @@ const TASK_FACT_COLUMNS = `
  * Kişi süzgeci yalnızca kimliği kullanıcıya AÇIK sorumluluklarla eşleşir:
  * gizli eş sorumlu süzgeç yoluyla da ortaya çıkarılamaz.
  */
-export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
-${SCOPE_PROJECTS}
-${VISIBLE_TASKS}
-${ASSIGNMENT_FACTS}
-  DROP TABLE IF EXISTS #AiFacts;
-  SELECT TOP (@maxRows) ${TASK_FACT_COLUMNS}
-  INTO #AiFacts
-  FROM #AiTasks visible
-  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
-  LEFT JOIN #AiAssignmentFacts assignment ON assignment.TaskId = t.TaskId
-  WHERE (@wbsId IS NULL OR t.WbsId = @wbsId)
+const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
     AND (@seriesId IS NULL OR t.TaskId = @seriesId OR t.RecurrenceParentTaskId = @seriesId)
     AND (@recurringOnly = 0 OR t.RecurrenceRule IS NOT NULL OR t.RecurrenceParentTaskId IS NOT NULL)
     AND (LEN(@text) = 0 OR CHARINDEX(
@@ -256,7 +246,19 @@ ${ASSIGNMENT_FACTS}
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
         WHEN 'actualFinish' THEN t.ActualFinish END IS NOT NULL))
-    AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
+    AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)`;
+
+export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
+${SCOPE_PROJECTS}
+${visibleTasks(TASK_ROW_FILTER)}
+${ASSIGNMENT_FACTS}
+  DROP TABLE IF EXISTS #AiFacts;
+  SELECT TOP (@maxRows) ${TASK_FACT_COLUMNS}
+  INTO #AiFacts
+  FROM #AiTasks visible
+  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  LEFT JOIN #AiAssignmentFacts assignment ON assignment.TaskId = t.TaskId
+  WHERE ${TASK_ROW_FILTER}
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND COALESCE(assignment.IsOwnAssignee, 0) = 1)
       OR (@assigneeMode = 'unassigned' AND COALESCE(assignment.ResolvedAssigneeCount, 0) = 0)
@@ -286,7 +288,7 @@ ${ASSIGNEE_ROWS}
  */
 export const AI_TOOL_TASK_DETAIL_SQL = `/* rota-ai-tool:task-detail */
 ${SCOPE_PROJECTS}
-${VISIBLE_TASKS}
+${visibleTasks()}
 ${ASSIGNMENT_FACTS}
   DROP TABLE IF EXISTS #AiFacts;
   SELECT TOP (1) ${TASK_FACT_COLUMNS},
@@ -322,16 +324,20 @@ ${ASSIGNMENT_FACTS}
   LEFT JOIN dbo.MR_V_PeopleDirectory creator ON creator.Sicil = f.VisibleCreatedBySicil;
 
   ;WITH chain AS (
-    SELECT w.WbsId, w.ParentWbsId, w.ProjectId, w.Code, w.Name, 0 AS Depth
+    SELECT w.WbsId, w.ParentWbsId, w.ProjectId, w.Code, w.Name, 0 AS Depth, CAST(CONCAT('|', CONVERT(varchar(36), w.WbsId), '|') AS varchar(max)) AS VisitedWbs
     FROM #AiFacts f
     JOIN dbo.MR_WBS w ON w.WbsId = f.WbsId AND w.ProjectId = f.ProjectId
     UNION ALL
-    SELECT parentNode.WbsId, parentNode.ParentWbsId, parentNode.ProjectId, parentNode.Code, parentNode.Name, chain.Depth + 1
+    SELECT parentNode.WbsId, parentNode.ParentWbsId, parentNode.ProjectId, parentNode.Code, parentNode.Name, chain.Depth + 1, CAST(CONCAT(chain.VisitedWbs, CONVERT(varchar(36), parentNode.WbsId), '|') AS varchar(max))
     FROM dbo.MR_WBS parentNode
     JOIN chain ON chain.ParentWbsId = parentNode.WbsId AND chain.ProjectId = parentNode.ProjectId
-    WHERE chain.Depth < 40
+    WHERE chain.Depth < 40 AND CHARINDEX(CONCAT('|', CONVERT(varchar(36), parentNode.WbsId), '|'), chain.VisitedWbs) = 0
   )
-  SELECT WbsId, ParentWbsId, Code, Name, Depth FROM chain ORDER BY Depth DESC
+  SELECT WbsId, ParentWbsId, Code, Name, Depth,
+    CASE WHEN ParentWbsId IS NOT NULL AND CHARINDEX(CONCAT('|', CONVERT(varchar(36), ParentWbsId), '|'), VisitedWbs) > 0 THEN 'cycle'
+      WHEN ParentWbsId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dbo.MR_WBS parent WHERE parent.WbsId = chain.ParentWbsId AND parent.ProjectId = chain.ProjectId) THEN 'dangling'
+      WHEN Depth = 40 AND ParentWbsId IS NOT NULL THEN 'depth' ELSE NULL END AS PathIssue
+  FROM chain ORDER BY Depth DESC
   OPTION (MAXRECURSION 50);
 
 ${ASSIGNEE_ROWS}
@@ -377,7 +383,7 @@ ${SCOPE_PROJECTS}
  */
 export const AI_TOOL_PORTFOLIO_SQL = `/* rota-ai-tool:portfolio */
 ${SCOPE_PROJECTS}
-${VISIBLE_TASKS}
+${visibleTasks()}
   SELECT v.ProjectId, p.ProjectName, p.ProjectCode, p.SourceType, p.LeadSicil, p.CalendarId,
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped,
     COUNT(t.TaskId) AS TaskCount,
@@ -405,7 +411,7 @@ ${VISIBLE_TASKS}
  */
 export const AI_TOOL_PROJECT_DETAIL_SQL = `/* rota-ai-tool:project-detail */
 ${SCOPE_PROJECTS}
-${VISIBLE_TASKS}
+${visibleTasks()}
   SELECT v.ProjectId, p.ProjectName, p.ProjectCode, p.SourceType, p.ProjectTypeName, p.LeadSicil, p.DataDate,
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped,
     NULLIF(LTRIM(RTRIM(lead.DisplayName)), N'') AS LeadName,
@@ -456,7 +462,7 @@ ${VISIBLE_TASKS}
  */
 export const AI_TOOL_WBS_SQL = `/* rota-ai-tool:wbs */
 ${SCOPE_PROJECTS}
-${VISIBLE_TASKS}
+${visibleTasks()}
   DROP TABLE IF EXISTS #AiRequiredWbs;
   CREATE TABLE #AiRequiredWbs(WbsId uniqueidentifier NOT NULL PRIMARY KEY);
   IF EXISTS (
@@ -516,7 +522,7 @@ export const AI_TOOL_DEPENDENCIES_SQL = `/* rota-ai-tool:dependencies */
 ${SCOPE_PROJECTS}
   IF @focusTaskId IS NULL
   BEGIN
-${VISIBLE_TASKS}
+${visibleTasks()}
   END
   DROP TABLE IF EXISTS #AiDependencies;
   SELECT TOP (@maxRows) d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit
@@ -580,7 +586,7 @@ ${SCOPE_PROJECTS}
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
   IF @selectedBaseline IS NOT NULL
   BEGIN
-${VISIBLE_TASKS}
+${visibleTasks()}
 
   SELECT TOP (@maxRows) s.TaskId, s.PlannedStart AS BaselineStart, s.PlannedFinish AS BaselineFinish,
     s.PlannedDurationDays AS BaselineDuration,
@@ -624,10 +630,11 @@ ${SCOPE_PROJECTS}
     FROM dbo.MR_Projects p
     JOIN dbo.MR_Calendars c ON c.CalendarId = p.CalendarId AND c.IsActive = 1
     WHERE p.ProjectId = @projectId;
+  DECLARE @projectCalendarSelected bit = CASE WHEN @calendarId IS NULL THEN 0 ELSE 1 END;
   IF @calendarId IS NULL
     SELECT TOP (1) @calendarId = c.CalendarId FROM dbo.MR_Calendars c WHERE c.IsDefault = 1 AND c.IsActive = 1;
 
-  SELECT @projectVisible AS ProjectVisible, c.CalendarId, c.Name, c.TimeZone, c.IsDefault
+  SELECT @projectVisible AS ProjectVisible, @projectCalendarSelected AS ProjectCalendarSelected, c.CalendarId, c.Name, c.TimeZone, c.IsDefault
   FROM (SELECT 1 AS Anchor) anchor
   LEFT JOIN dbo.MR_Calendars c ON c.CalendarId = @calendarId;
 
@@ -653,7 +660,7 @@ ${SCOPE_PROJECTS}
     SELECT DISTINCT s.TaskId FROM dbo.MR_TaskOutlookSubscriptions s
     WHERE s.UserSicil = @sicil AND s.IsActive = 1;
   SET @AiTaskFilterActive = 1;
-${VISIBLE_TASKS}
+${visibleTasks()}
   SELECT TOP (@maxRows) s.TaskId, t.Title, p.ProjectName, p.ProjectCode, t.TargetFinish, t.PlannedFinish, t.Status,
     s.PendingMethod, s.DeliveredSequence, s.DeliveredMethod, s.DeliveredDate, s.LastDeliveredAt,
     s.LastFailureCode, s.AttemptCount, s.CompletionSuspended, s.UpdatedAt

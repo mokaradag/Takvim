@@ -1,6 +1,10 @@
-// Bu işaretler yalnızca ihtiyatlı yönlendirmedir; olgu doğrulaması değildir.
-const ROTA_CONTEXT = /rota|görev|proje|portföy|iş yük|sorumlu|termin|planlanan|gerçekleşen|bildirim|atama|baz plan|bağımlılık|takvim|outlook|wbs|task|project|portfolio|workload|assignee|deadline|baseline|notification|dependency|recurren|calendar|status/iu;
+export const TURN_ROUTES = Object.freeze({ UNDECIDED: 'undecided', GENERAL: 'general', ROTA: 'rota' });
 
-export function requiresRotaEvidence(text, { priorGrounded = false, dataIntent = false } = {}) {
-  return priorGrounded || dataIntent || ROTA_CONTEXT.test(String(text ?? ''));
+export function requiresRotaEvidence(_text, { route = TURN_ROUTES.UNDECIDED, dataIntent = false } = {}) {
+  return route === TURN_ROUTES.ROTA || dataIntent === true;
+}
+
+export function parseTurnRoute(response) {
+  return response && Object.keys(response).length === 2 && response.kind === 'route'
+    && [TURN_ROUTES.GENERAL, TURN_ROUTES.ROTA].includes(response.intent) ? response.intent : null;
 }

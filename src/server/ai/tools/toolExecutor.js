@@ -6,6 +6,9 @@ import { parseToolArguments } from './toolArguments.js';
 import { isTurnFatal, TOOL_ERROR_CODES, ToolError, toToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { getRotaTool } from './toolRegistry.js';
+import { fitToolResult } from './toolResultPolicy.js';
+import { claimableContract } from '../../../domain/ai/claimableEvidence.js';
+import { trackResultText } from './toolResultText.js';
 
 /**
  * Araç çağrılarının SINIRLI yürütücüsü.
@@ -40,36 +43,6 @@ function errorEnvelope(tool, error) {
   };
 }
 
-/** En büyük listeyi yarılayarak sonucu boyut sınırına indirir; olmuyorsa `null`. */
-function shrinkToFit(envelope, maxBytes, factScope) {
-  let current = envelope;
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const text = JSON.stringify({ ...current, factScope });
-    if (byteLength(text) <= maxBytes) return text;
-    const data = current.data;
-    let largest = null;
-    for (const [key, value] of Object.entries(data || {})) {
-      if (Array.isArray(value) && value.length > 1 && (!largest || value.length > data[largest].length)) largest = key;
-    }
-    if (!largest) return null;
-    current = {
-      ...current,
-      truncated: true,
-      complete: false,
-      nextCursor: null,
-      returnedCount: current.returnedCount === data[largest].length
-        ? Math.ceil(data[largest].length / 2)
-        : current.returnedCount,
-      data: {
-        ...data,
-        [largest]: data[largest].slice(0, Math.ceil(data[largest].length / 2)),
-        sizeNote: 'Sonuç boyut sınırı nedeniyle kısaltıldı; daha dar bir süzgeçle yeniden sorgulayın.'
-      }
-    };
-  }
-  return null;
-}
-
 export function createToolExecutor({
   context,
   ledger,
@@ -77,6 +50,7 @@ export function createToolExecutor({
   limits = TOOL_LIMITS,
   resolveTool = getRotaTool,
   onProgress = null,
+  validateCall = null,
   clock = Date.now
 }) {
   const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0 };
@@ -102,6 +76,7 @@ export function createToolExecutor({
   async function execute(call, tool, pending, index) {
     if (call.oversize) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$:tooLarge'] });
     const args = parseToolArguments(tool.parameters, call.arguments);
+    validateCall?.(tool.name, args);
     const cacheKey = `${tool.name}\u0000${JSON.stringify(args)}`;
     // Çağrılar sırayla alınır: özdeş çağrının sahibi her zaman daha küçük sıradadır.
     if (pending.has(cacheKey)) return { sameAs: pending.get(cacheKey) };
@@ -116,21 +91,24 @@ export function createToolExecutor({
         now: context.now,
         signal: deadline.signal,
         authorization: () => context.authorization(deadline.signal),
-        sql: (work) => context.sql(deadline.signal, work)
+        sql: (work) => context.sql(deadline.signal, work),
+        snapshot: (key, cursor, load) => context.snapshot(key, cursor, load)
       });
-      const outcome = await raceWithAbort(() => tool.handler(args, scoped), deadline.signal);
-      return { outcome, cacheKey };
+      await context.authorization?.(deadline.signal);
+      const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped)), deadline.signal);
+      return { outcome, cacheKey, args };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
-      if (failure) throw new ToolError(TOOL_ERROR_CODES.TIMEOUT);
+      if (error?.code === TOOL_ERROR_CODES.BUSY) throw error;
+      if (failure) throw new ToolError(context.timeoutCode?.(deadline.signal) || TOOL_ERROR_CODES.TIMEOUT);
       throw error;
     } finally {
       deadline.dispose();
     }
   }
 
-  function envelopeFor(tool, outcome, generatedAt) {
+  function envelopeFor(tool, outcome, generatedAt, args) {
     return {
       ok: true,
       evidenceId: null,
@@ -144,6 +122,7 @@ export function createToolExecutor({
       totalCount: outcome.totalCount ?? null,
       nextCursor: outcome.nextCursor ?? null,
       subject: outcome.evidence?.entity?.name || outcome.evidence?.label || 'Rota',
+      claimable: claimableContract(tool.name, args.textFields || []),
       data: outcome.data
     };
   }
@@ -192,6 +171,8 @@ export function createToolExecutor({
     const fatal = settled.find((item) => item.status === 'rejected');
     if (fatal) throw fatal.reason;
 
+    if (context.authorizationEpoch?.()) ledger.invalidateAuthorization(context.authorizationEpoch());
+
     // Kanıt kimlikleri tamamlanma sırasıyla değil ÇAĞRI sırasıyla verilir.
     const contents = new Array(plans.length);
     return plans.map((plan, index) => {
@@ -206,8 +187,8 @@ export function createToolExecutor({
         code = result.error.code;
         content = JSON.stringify(errorEnvelope(name, result.error));
       } else {
-        const envelope = envelopeFor(plan.tool, result.outcome, result.generatedAt);
-        const text = shrinkToFit(envelope, limits.maxResultBytes - 64, ledger.factPrefix());
+        const envelope = envelopeFor(plan.tool, result.outcome, result.generatedAt, result.args);
+        const text = fitToolResult(envelope, limits.maxResultBytes - 64, ledger.factPrefix(), plan.tool.resultPolicy);
         if (!text) {
           code = TOOL_ERROR_CODES.RESULT_TOO_LARGE;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
@@ -226,7 +207,8 @@ export function createToolExecutor({
             truncated: shrunk.truncated,
             partial: shrunk.scope?.kind === 'authorized-task-subset',
             counts: { returned: shrunk.returnedCount, total: shrunk.totalCount },
-            highlights: result.outcome.evidence?.highlights || []
+            highlights: shrunk.truncated ? [] : (result.outcome.evidence?.highlights || []),
+            authorizationEpoch: context.authorizationEpoch?.() ?? null
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);

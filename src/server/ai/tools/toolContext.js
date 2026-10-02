@@ -1,4 +1,5 @@
 import 'server-only';
+import { createHash } from 'node:crypto';
 import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { loadAuthorizationContext } from '../../authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../db/pool.js';
@@ -36,13 +37,19 @@ export function createToolTurnContext({
   loadAuthorization = loadAuthorizationContext,
   gate = toolSqlGate
 }) {
-  const state = { sqlMs: 0, queries: 0, authorization: null, authorizationLoads: 0 };
+  const state = { sqlMs: 0, queries: 0, authorization: null, authorizationLoads: 0, epoch: null };
+  const waiting = new WeakSet();
+  const snapshots = new Map();
   const today = businessDate(now);
 
   async function withSql(signal, work) {
     if (state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const pool = await raceWithAbort(() => getPool(), signal);
-    return gate.run(sicil, signal, async (track) => {
+    let admitted = false;
+    waiting.add(signal);
+    try { return await gate.run(sicil, signal, async (track) => {
+      admitted = true;
+      waiting.delete(signal);
       if (state.sqlMs >= limits.maxCumulativeSqlMs) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
       const admittedAt = clock();
       const remainingMs = Math.max(1, limits.maxCumulativeSqlMs - state.sqlMs);
@@ -58,17 +65,28 @@ export function createToolTurnContext({
         cumulativeDeadline.dispose();
         state.sqlMs += Math.max(0, clock() - admittedAt);
       }
-    });
+    }); } catch (error) {
+      if (!admitted && signal.reason?.code === 'AI_TIMEOUT') throw new ToolError(TOOL_ERROR_CODES.BUSY);
+      throw error;
+    } finally { waiting.delete(signal); }
   }
 
   async function loadScope(signal) {
-    const auth = await withSql(signal, (executor) => loadAuthorization(executor));
+    const auth = await withSql(signal, (executor) => loadAuthorization(executor, { includeScopeIdentities: true }));
     state.authorizationLoads += 1;
     // Yükleyici kimliği yine oturumdan çözer; turun Sicil'iyle aynı olmalıdır.
     if (Number(auth?.sicil) !== Number(sicil)) {
       throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum kimliği tur sırasında değişti.');
     }
-    return Object.freeze({ auth, scope: buildRotaScope(auth) });
+    const scope = buildRotaScope(auth);
+    const previousEpoch = state.epoch;
+    state.epoch = createHash('sha256').update(JSON.stringify({
+      sicil: scope.sicil, admin: scope.isAdmin, executive: scope.isExecutive,
+      projects: [...scope.projects].sort(([a], [b]) => a.localeCompare(b)),
+      tasks: scope.scopedTaskIds.split(',').sort(), people: [...(auth.scopeIdentities || [])].sort((a, b) => a - b), assignment: scope.canAssignAllCorporate
+    })).digest('hex');
+    if (previousEpoch && previousEpoch !== state.epoch) snapshots.clear();
+    return Object.freeze({ auth, scope });
   }
 
   return Object.freeze({
@@ -93,6 +111,15 @@ export function createToolTurnContext({
     },
     /** Sınırlı yürütücüyle tek SQL işi (kapı + süre sınırı + iptal). */
     sql: withSql,
+    async snapshot(key, cursor, load) {
+      if (snapshots.has(key)) return snapshots.get(key);
+      if (cursor) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
+      const result = await load();
+      snapshots.set(key, result);
+      return result;
+    },
+    authorizationEpoch() { return state.epoch; },
+    timeoutCode(signal) { return waiting.has(signal) ? TOOL_ERROR_CODES.BUSY : TOOL_ERROR_CODES.TIMEOUT; },
     stats() {
       return { sqlMs: state.sqlMs, queries: state.queries, authorizationLoads: state.authorizationLoads };
     }

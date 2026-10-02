@@ -48,11 +48,12 @@ function pageWindow(tool, key, page, pageSize, total) {
 function clippedLines(lines, max = 6, { hideAssigneeNames = false } = {}) {
   const list = (lines || []).map((line) => {
     const value = hideAssigneeNames
-      ? String(line ?? '').replace(/^(Sorumlu (?:eklendi|çıkarıldı)):\s*.*$/u, '$1: Gizli sorumlu')
+      ? String(line ?? '').replace(/^Sorumlu (?:eklendi|çıkarıldı):\s*.*$/u, 'Gizli sorumlu bilgisi değişti.')
       : line;
     return dataText(value, 160);
   });
-  return { changes: list.slice(0, max), ...(list.length > max ? { moreChanges: list.length - max } : {}) };
+  const redacted = hideAssigneeNames ? [...new Set(list)] : list;
+  return { changes: redacted.slice(0, max), ...(redacted.length > max ? { moreChanges: redacted.length - max } : {}) };
 }
 
 /* ── rota_activity_search ─────────────────────────────────── */
@@ -97,7 +98,7 @@ const activitySearch = {
       message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.'
     });
     if (key.projectId) await requireVisibleProject(scope, key.projectId, call);
-    const report = await call.sql((executor) => readTaskActivityReport(executor, auth, {
+    const report = await call.snapshot(JSON.stringify(['rota_activity_search', key]), args.cursor, () => call.sql((executor) => readTaskActivityReport(executor, auth, {
       period: ACTIVITY_PERIODS[period],
       from: key.dateFrom,
       to: key.dateTo || key.dateFrom,
@@ -108,9 +109,8 @@ const activitySearch = {
       kind: key.kind || '',
       page,
       pageSize
-    }, call.now, { includeStructuredChanges: true }));
-    if (report.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
-    const items = report.items.map((item) => {
+    }, call.now, { includeStructuredChanges: true, analyzedActivityLimit: TOOL_LIMITS.maxAnalyzedActivities, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+    const items = report.items.slice(page * pageSize, (page + 1) * pageSize).map((item) => {
       const access = item.projectId ? projectAccess(scope, item.projectId) : null;
       const hideAssigneeNames = !scope.isAdmin && !isCompleteTaskView(access);
       return {
@@ -130,7 +130,7 @@ const activitySearch = {
           before: typeof change.before === 'string' ? dataText(change.before, 500) : change.before,
           after: typeof change.after === 'string' ? dataText(change.after, 500) : change.after
         })),
-        ...(item.detailsLimited ? { detailsLimited: true } : {})
+        ...(item.detailsLimited || (item.structuredChanges || []).length > 6 ? { detailsLimited: true } : {})
       };
     });
     const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
@@ -202,12 +202,11 @@ const scheduleRequests = {
       dateFrom: args.dateFrom || null, dateTo: args.dateTo || null, text: args.text || '', pageSize };
     const page = pageOf('rota_schedule_requests', key, args.cursor, pageSize);
     const { auth } = await call.authorization();
-    const result = await call.sql((executor) => readSchedulePage(executor, auth, {
+    const result = await call.snapshot(JSON.stringify(['rota_schedule_requests', key]), args.cursor, () => call.sql((executor) => readSchedulePage(executor, auth, {
       tab: key.tab, status: key.status, projectId: key.projectId, taskId: key.taskId, from: key.dateFrom, to: key.dateTo,
-      search: key.text, page, pageSize
-    }));
-    if (result.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
-    const items = result.items.map((request) => {
+      search: key.text, page: 0, pageSize
+    }, { evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+    const items = result.items.slice(page * pageSize, (page + 1) * pageSize).map((request) => {
       const awaiting = request.status === 'PENDING' && request.isDecisionOwner && request.taskAvailable;
       return {
         requestId: request.id,
@@ -277,16 +276,15 @@ const assignmentRequests = {
     const { auth } = await call.authorization();
     let result;
     try {
-      result = await call.sql((executor) => readCoordinationPage(executor, auth, {
+      result = await call.snapshot(JSON.stringify(['rota_assignment_requests', key]), args.cursor, () => call.sql((executor) => readCoordinationPage(executor, auth, {
         tab: key.tab, status: key.status, projectId: key.projectId, taskId: key.taskId, from: key.dateFrom, to: key.dateTo,
         search: key.text, page, pageSize
-      }, { decisionAuthority: true }));
+      }, { decisionAuthority: true, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
     } catch (error) {
       if (isMissingNotificationInboxSchema(error)) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Atama koordinasyonu bu kurulumda etkin değil.' });
       throw error;
     }
-    if (result.page !== page) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
-    const items = result.items.map((record) => ({
+    const items = result.items.slice(page * pageSize, (page + 1) * pageSize).map((record) => ({
       coordinationId: record.id,
       mode: record.mode,
       modeLabel: record.mode === COORDINATION_MODES.NOTICE ? 'Bildirim (yürürlükte)' : 'Onay talebi',

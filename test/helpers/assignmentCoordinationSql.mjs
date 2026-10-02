@@ -265,7 +265,7 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   const pageSize = Number(params.pageSize || 25);
   const requestedPage = Number(params.page || 0);
   const pageParticipant = (row) => isParticipant(db, row, params)
-    || (decisionAuthorityScope && row.Status === 'PENDING' && taskAvailable(db, row) && decisionAuthority(db, row, params));
+    || (decisionAuthorityScope && ['PENDING', 'APPROVED'].includes(row.Status) && taskAvailable(db, row) && decisionAuthority(db, row, params));
   const pageActionable = (row) => {
     if (!taskAvailable(db, row)) return false;
     if (row.Status === 'PENDING') {
@@ -308,6 +308,7 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
     if (tab === 'sent') return Number(row.RequesterSicil) === sicil;
     return history(row);
   });
+  if (params.evidenceSnapshotLimit != null && tabbed.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   const lastPage = tabbed.length === 0 ? 0 : Math.floor((tabbed.length - 1) / pageSize);
   const page = Math.min(requestedPage, lastPage);
   const items = tabbed

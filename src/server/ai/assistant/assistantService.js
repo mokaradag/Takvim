@@ -659,10 +659,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     claim.bindConversation(prepared.conversation.id);
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
-    let priorGrounded = false;
     if (useTools && history.some((message) => message.role === 'assistant')) {
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
-      priorGrounded = !priorEvidence?.ready || history.some((message) => priorEvidence.byMessage.has(message.id));
       history = fallbackAssistantHistory(history, priorEvidence?.ready ? priorEvidence.byMessage : null, { conservative: !priorEvidence?.ready });
     }
     if (!useTools && history.some((message) => message.role === 'assistant')) {
@@ -686,7 +684,6 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       userMessage: prepared.turn.message,
       replay: prepared.answer,
       modelMessages: context.messages,
-      priorGrounded,
       context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
     };
   } catch (error) {
@@ -781,7 +778,6 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
       return runGroundedTurn(session, {
         messages: turn.modelMessages,
         catalog: toolCatalogForModel(),
-        priorGrounded: turn.priorGrounded,
         context: createToolTurnContext({ sicil: turn.sicil }),
         onStatus,
         onText

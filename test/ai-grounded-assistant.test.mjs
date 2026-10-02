@@ -131,7 +131,7 @@ test('özellik açıkken hazırlık Rota verisi yolunu kip kip bildirir; araç p
   const partial = await assistantReadiness();
   assert.deepEqual(partial.body.assistant.rotaData.modes, [{ id: 'standard', available: true }, { id: 'deep', available: false }]);
   assert.equal(partial.body.assistant.rotaData.available, true);
-  stack.provider.enqueue({ type: 'stream', text: 'Derin kipte genel yanıt.' }, { type: 'answer', text: JSON.stringify({ kind: 'general', text: 'Standart kipte araçlı yol.' }) });
+  stack.provider.enqueue({ type: 'stream', text: 'Derin kipte genel yanıt.' }, { type: 'answer', text: '{"kind":"route","intent":"general"}' }, { type: 'answer', text: JSON.stringify({ kind: 'general', text: 'Standart kipte araçlı yol.' }) });
   const deep = await sendTurn({ turnId: randomUUID(), message: 'Derin soru', mode: 'deep' });
   assert.equal(stack.provider.calls[0].kind, 'stream', 'araç profili olmayan kip Aşama 2 yolunu kullanır');
   assert.equal(Object.hasOwn(eventsOf(deep, 'accepted')[0].data, 'rotaData'), false);
@@ -345,7 +345,7 @@ test('araçsız genel karar doğrulanır; yalnızca doğal dil yanıtı gösteri
     'Bu zincirdeki bir gecikme projenin bitişini doğrudan geciktirir; diğer görevlerin ise bir miktar esnekliği vardır.',
     'Planı gözden geçirirken önce bağımlılıkları doğrulayın, sonra süreleri ve kaynak varsayımlarını kontrol edin.'
   ].join(' ');
-  stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ kind: 'general', text }) });
+  stack.provider.enqueue({ type: 'answer', text: '{"kind":"route","intent":"general"}' }, { type: 'answer', text: JSON.stringify({ kind: 'general', text }) });
   const response = await sendTurn({ turnId: randomUUID(), message: 'Kritik yol yöntemini anlatır mısın?' });
   const deltas = eventsOf(response, 'delta').map((event) => event.data.text);
   assert.equal(deltas.length, 1, 'yapılandırılmış karar doğrulanmadan gösterilmez');
@@ -354,14 +354,14 @@ test('araçsız genel karar doğrulanır; yalnızca doğal dil yanıtı gösteri
   const done = doneOf(response);
   assert.equal(done.assistantMessage.content, text);
   assert.deepEqual(done.assistantMessage.evidence, []);
-  assert.equal(stack.provider.calls.length, 1);
+  assert.equal(stack.provider.calls.length, 2);
   assert.equal(aiTelemetrySnapshot().grounding.direct, 1);
 
   // Araç kullanmadan kanıt işareti uyduran yanıt doğrulanmaz.
   stack.provider.enqueue({ type: 'answer', text: 'Projede 3 görev var. 【R1】' }, { type: 'answer', text: 'Projede 3 görev var. 【R1】' });
   const fabricated = await sendTurn({ turnId: randomUUID(), message: 'Kaç görev var?' });
   assert.equal(doneOf(fabricated).assistantMessage.content, GROUNDING_FAILURE_TEXT);
-  assert.equal(stack.provider.calls[2].toolChoice, 'auto', 'kanıt yokken düzeltme turunda araç çağrılabilir');
+  assert.equal(stack.provider.calls[3].toolChoice, 'auto', 'kanıt yokken düzeltme turunda araç çağrılabilir');
 
   // Rota olgusu sorusunda model araç çağrısını atlarsa atıfsız metin de doğrudan kabul edilmez.
   const before = stack.provider.calls.length;
@@ -444,15 +444,16 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   const rejectedCalls = stack.provider.calls[1].messages.find((message) => Array.isArray(message.toolCalls))?.toolCalls || [];
   assert.equal(rejectedCalls.length, 4);
   assert.equal(rejectedCalls.every((call) => call.arguments === '{}'), true, 'reddedilen bağımsız değişkenler sonraki modele taşınmaz');
-  assert.deepEqual(stack.provider.calls[1].tools.map((tool) => tool.name), ['rota_task_search'],
-    'başarısız ilk çağrı takip araçlarını açmaz');
+  assert.ok(stack.provider.calls[1].tools.some((tool) => tool.name === 'rota_task_detail'),
+    'veri alınmayan ilk tur kataloğu daraltmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
   // Kanıt olmadan "12 görev" yazılamaz: düzeltme istenir, dürüst yanıt kaydedilir.
   const repairSystem = stack.provider.calls[2].messages.find((message) => message.role === 'system');
   assert.ok(repairSystem);
   assert.match(repairSystem.content, /Kanıt alınamadıysa/);
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, GROUNDING_FAILURE_TEXT);
+  assert.equal(done.assistantMessage.content, 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.');
+  assert.equal(done.assistantMessage.finishReason, 'unavailable');
   assert.deepEqual(done.assistantMessage.evidence, []);
   assert.equal(stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE).Status, 'planned', 'hiçbir yazma yapılmadı');
 });
@@ -467,7 +468,7 @@ test('bulunamadı yanıtı gerçek NOT_FOUND olmadan kabul edilmez', async (t) =
   const response = await sendTurn({ turnId: randomUUID(), message: 'Görev ayrıntısını getir' });
   const failedTool = toolResultsOf(stack.provider.calls[1])[0];
   assert.equal(failedTool.error.code, 'INVALID_ARGUMENTS');
-  assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'unavailable');
   assert.equal(response.text.includes(NON_ENUMERATING_FAILURE_TEXT), false);
 });
 
@@ -670,7 +671,7 @@ test('araç SQL hatası modele güvenli sınıf olarak döner; sürücü ayrınt
   for (const forbidden of ['Login failed', 'sql.test.internal', 'ELOGIN']) {
     assert.equal(everything.includes(forbidden), false, `sızmamalı: ${forbidden}`);
   }
-  assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'unavailable');
   assert.match(aiHealthComponent().message, /Son Rota verisi aracı hizmet hatasıyla sonuçlandı \(DATABASE_UNAVAILABLE\)/);
 });
 

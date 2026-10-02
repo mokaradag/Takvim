@@ -320,12 +320,14 @@ export function decodeCursor(tool, filters, cursor) {
 }
 
 /** Sıralı dizinin sayfası ve bir sonraki imleç. */
-export function paginate(tool, filters, items, { limit, cursor }) {
-  const offset = decodeCursor(tool, filters, cursor);
+export function paginate(tool, filters, items, { limit, cursor, anchor = items }) {
+  const snapshot = createHash('sha256').update(JSON.stringify(anchor)).digest('base64url');
+  const anchoredFilters = { filters, snapshot };
+  const offset = decodeCursor(tool, anchoredFilters, cursor);
   const page = items.slice(offset, offset + limit);
   const nextOffset = offset + page.length;
   const nextCursor = nextOffset < items.length && nextOffset <= TOOL_LIMITS.maxCursorOffset
-    ? encodeCursor(tool, filters, nextOffset)
+    ? encodeCursor(tool, anchoredFilters, nextOffset)
     : null;
   return { page, offset, nextCursor };
 }
@@ -367,15 +369,18 @@ export function assigneeView(fact, assignees) {
 /* ── Toplamlar ─────────────────────────────────────────────── */
 
 export function hoursCoverage(facts) {
-  const sum = (field) => facts.reduce((total, fact) => total + (fact[field] ?? 0), 0);
-  const covered = (field) => facts.filter((fact) => fact[field] != null).length;
-  const round = (value) => Math.round(value * 100) / 100;
+  const metric = (field, scale) => {
+    const known = facts.filter((fact) => fact[field] != null);
+    const factor = 10 ** scale;
+    const total = known.length ? known.reduce((sum, fact) => sum + Math.round(fact[field] * factor), 0) / factor : null;
+    return { total, tasksWithValue: known.length, tasksWithoutValue: facts.length - known.length };
+  };
   return {
     taskCount: facts.length,
-    plannedHours: { total: round(sum('plannedHours')), tasksWithValue: covered('plannedHours'), tasksWithoutValue: facts.length - covered('plannedHours') },
-    actualHours: { total: round(sum('actualHours')), tasksWithValue: covered('actualHours'), tasksWithoutValue: facts.length - covered('actualHours') },
-    budget: { total: round(sum('budget')), tasksWithValue: covered('budget'), tasksWithoutValue: facts.length - covered('budget') },
-    spent: { total: round(sum('spent')), tasksWithValue: covered('spent'), tasksWithoutValue: facts.length - covered('spent') },
+    plannedHours: metric('plannedHours', 2),
+    actualHours: metric('actualHours', 2),
+    budget: metric('budget', 4),
+    spent: metric('spent', 4),
     note: 'Boş (NULL) değer sıfır sayılmaz; toplam yalnızca değeri girilmiş görevler üzerindedir. Rota para birimi tutmaz.'
   };
 }

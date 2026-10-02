@@ -303,8 +303,7 @@ function seriesSummary(template, occurrences, today) {
     next: upcoming.slice(0, previewLimit).map((fact) => ({
       taskId: fact.id, occurrenceDate: fact.recurrenceOccurrenceDate, targetFinish: fact.targetFinish, statusLabel: statusLabelOf(fact.status)
     })),
-    ...(lastDone ? { lastCompleted: { taskId: lastDone.id, occurrenceDate: lastDone.recurrenceOccurrenceDate, actualFinish: lastDone.actualFinish } } : {}),
-    ...(template ? {} : { templateVisible: false })
+    ...(lastDone ? { lastCompleted: { taskId: lastDone.id, occurrenceDate: lastDone.recurrenceOccurrenceDate, actualFinish: lastDone.actualFinish } } : {})
   };
 }
 
@@ -344,7 +343,7 @@ const recurrenceInspect = {
       }));
       if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       const template = result.facts.find((item) => item.id === seriesId && item.recurrenceRule) || null;
-      const occurrences = result.facts.filter((item) => item.recurrenceParentId === seriesId);
+      const occurrences = template ? result.facts.filter((item) => item.recurrenceParentId === seriesId) : [fact];
       const access = projectAccess(scope, fact.projectId);
       const summary = seriesSummary(template, occurrences, call.today);
       const evidenceTask = template || fact;
@@ -367,7 +366,7 @@ const recurrenceInspect = {
         evidence: {
           label: `Tekrar serisi · ${dataText(template?.title || fact.title, 60)}`,
           entity: { type: 'task', id: evidenceTask.id, name: dataText(evidenceTask.title, 120) },
-          highlights: [template ? describeRecurrenceRule(template.recurrenceRule) : 'Şablon görünmüyor', `Görünür yineleme: ${occurrences.length}`]
+          highlights: [template ? describeRecurrenceRule(template.recurrenceRule) : 'Görünür görev', `Görünür yineleme: ${occurrences.length}`]
         }
       };
     }
@@ -378,8 +377,9 @@ const recurrenceInspect = {
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     const projects = projectIndex(result.projects);
     const series = new Map();
+    const visibleTemplates = new Set(result.facts.filter((fact) => fact.recurrenceRule).map((fact) => fact.id));
     for (const fact of result.facts) {
-      const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId;
+      const seriesId = fact.recurrenceRule || !visibleTemplates.has(fact.recurrenceParentId) ? fact.id : fact.recurrenceParentId;
       if (!seriesId) continue;
       if (!series.has(seriesId)) series.set(seriesId, { template: null, occurrences: [], projectId: fact.projectId });
       const entry = series.get(seriesId);
@@ -402,7 +402,7 @@ const recurrenceInspect = {
       ? describeTaskScope([projectAccess(scope, args.projectId)])
       : describeTaskScope(scope.isAdmin ? [] : [...scope.projects.values()]);
     return {
-      data: { seriesCount: list.length, series: page, notes: ['Sayılar yalnızca görünür görevler üzerindedir.'] },
+      data: { visibleEntryCount: list.length, series: page, notes: ['Sayılar yalnızca görünür görevler üzerindedir.'] },
       scope: descriptor,
       complete: page.length === list.length && !previewTruncated,
       truncated: page.length < list.length || previewTruncated,
@@ -410,7 +410,7 @@ const recurrenceInspect = {
       totalCount: list.length,
       nextCursor: null,
       evidence: {
-        label: `Tekrar serileri · ${list.length} seri`,
+        label: `Tekrar kayıtları · ${list.length} görünür kayıt`,
         entity: args.projectId ? { type: 'project', id: args.projectId, name: null } : null,
         highlights: page.slice(0, 3).map((item) => item.title)
       }
@@ -466,7 +466,7 @@ const calendarInspect = {
         calendar: {
           name: dataText(calendar.name, 120),
           timeZone: calendar.timezone,
-          source: args.projectId && !result.calendar.IsDefault ? 'project' : 'default',
+          source: result.calendar.ProjectCalendarSelected ? 'project' : 'default',
           workingWeekdays: calendar.workingDays.map((day) => WEEKDAY_NAMES[day]).filter(Boolean)
         },
         range: { from, to, calendarDays: daysBetween(from, to) + 1 },

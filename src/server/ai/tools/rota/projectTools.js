@@ -62,7 +62,8 @@ const projectSearch = {
       };
     });
     const exact = matches.filter((match) => match.exactMatch);
-    const ambiguous = result.total > matches.length || (exact.length !== 1 && result.total > 1);
+    const uniqueExact = exact.length === 1 && (result.total === matches.length || matches.some((match) => !match.exactMatch));
+    const ambiguous = !uniqueExact && result.total > 1;
     return {
       data: {
         matches,
@@ -382,9 +383,9 @@ const wbsInspect = {
         ...(cycleNodes.has(node.id) ? { malformedCycle: true } : {}),
         childCount: node.children.length,
         directTasks: node.direct.tasks,
-        subtreeTasks: node.subtree.tasks,
-        subtreeOpen: node.subtree.tasks - node.subtree.done,
-        subtreeOverdue: node.subtree.overdue
+        subtreeTasks: cycleNodes.size ? null : node.subtree.tasks,
+        subtreeOpen: cycleNodes.size ? null : node.subtree.tasks - node.subtree.done,
+        subtreeOverdue: cycleNodes.size ? null : node.subtree.overdue
       });
       if (depth + 1 < depthLimit) node.children.forEach((child) => walk(child, depth + 1));
       else if (node.children.length) depthTruncated = true;
@@ -407,8 +408,8 @@ const wbsInspect = {
         ]
       },
       scope: descriptor,
-      complete: omitted === 0 && !depthTruncated,
-      truncated: omitted > 0 || depthTruncated,
+      complete: omitted === 0 && !depthTruncated && cycleNodes.size === 0,
+      truncated: omitted > 0 || depthTruncated || cycleNodes.size > 0,
       returnedCount: listed.length,
       totalCount: nodeCount,
       nextCursor: null,

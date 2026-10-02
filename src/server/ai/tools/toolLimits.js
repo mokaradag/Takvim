@@ -33,6 +33,8 @@ export const TOOL_LIMITS = Object.freeze({
   maxRepairRounds: 1,
   /** Görev kümesi analizinde sunucuya okunabilecek en fazla yetkili görev satırı. */
   maxAnalyzedTasks: 20000,
+  maxAnalyzedAssignments: 200000,
+  maxAnalyzedActivities: 20000,
   /** Liste araçlarının en fazla sayfa ötelemesi (imleç). */
   maxCursorOffset: 1000
 });

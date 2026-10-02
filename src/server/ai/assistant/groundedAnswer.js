@@ -8,7 +8,6 @@ import {
   groundingFailureText,
   replyLocale,
   groundingRepairInstruction,
-  requiresRotaEvidence,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
 import { recordGroundedAnswer } from '../aiTelemetry.js';
@@ -18,6 +17,9 @@ import { getRotaTool } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
+import { createToolScope } from '../tools/toolScope.js';
+import { parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
+import { createAiDeadline } from '../aiDeadline.js';
 
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
@@ -87,8 +89,8 @@ export function toolsForInitialCalls(calls, catalog, toolMessages = null) {
   for (let index = 0; index < calls.length; index += 1) {
     const call = calls[index];
     if (!registered.has(call.name)) continue;
-    names.add(call.name);
     if (toolMessages && toolMessageBody(toolMessages[index])?.ok !== true) continue;
+    names.add(call.name);
     for (const name of TOOL_FOLLOW_UPS[call.name] || []) if (registered.has(name)) names.add(name);
   }
   return names;
@@ -108,27 +110,34 @@ function boundTranscript(transcript) {
   }
 }
 
-function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFailureCodes, evidenceRequired, locale }) {
-  const normalized = text;
-  if (evidenceIds.length) return {
-    normalized,
-    kind: 'grounded',
-    ...analyzeGroundedAnswer(normalized, { evidenceIds, evidencePayloads, locale })
-  };
+function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFailureCodes, route, locale }) {
   const response = parseEvidenceResponse(text);
+  const notFoundOnly = toolFailureCodes.size > 0 && [...toolFailureCodes].every((code) => code === TOOL_ERROR_CODES.NOT_FOUND);
+  if (toolsAttempted && notFoundOnly && (response?.kind === 'not_found' || response?.kind === 'unavailable' || analyzeUngroundedAnswer(text, { allowNotFound: true }).ok)) {
+    return { ok: true, normalized: locale === 'en' ? 'The record was not found or is not accessible.' : 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', kind: 'not_found', citedIds: [], issues: [] };
+  }
+  if (evidenceIds.length) {
+    if (response?.kind === 'clarification' && Object.keys(response).length === 2 && Array.isArray(response.claims)) {
+      const ambiguousIds = new Set(evidencePayloads.filter((item) => {
+        try { return JSON.parse(item.payload).data?.ambiguous === true; } catch { return false; }
+      }).map((item) => item.id));
+      if (!response.claims.every((claim) => claim && typeof claim.field === 'string' && ambiguousIds.has(claim.evidenceId)
+        && (claim.field.startsWith('data.matches.') || claim.field.startsWith('data.people.')))) {
+        return { ok: false, issues: [{ code: 'CLARIFICATION_CANDIDATES_REQUIRED' }] };
+      }
+      const verdict = analyzeGroundedAnswer(JSON.stringify({ ...response, kind: 'rota' }), { evidenceIds, evidencePayloads, locale });
+      const question = locale === 'en' ? 'Which candidate did you mean?' : 'Hangi adayı kastediyorsunuz?';
+      return { ...verdict, kind: 'clarification', normalized: `${verdict.normalized || ''}\n\n${question}` };
+    }
+    return { kind: 'grounded', ...analyzeGroundedAnswer(text, { evidenceIds, evidencePayloads, locale }) };
+  }
   if (toolsAttempted && response?.kind === 'unavailable' && Object.keys(response).length === 1) {
-    const safe = groundingFailureText(locale);
-    return { normalized: safe, kind: 'ungrounded', ...analyzeUngroundedAnswer(safe) };
+    return { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] };
   }
-  if (toolsAttempted) {
-    const notFoundOnly = toolFailureCodes.size > 0
-      && [...toolFailureCodes].every((code) => code === TOOL_ERROR_CODES.NOT_FOUND);
-    return { normalized, kind: 'ungrounded', ...analyzeUngroundedAnswer(normalized, { allowNotFound: notFoundOnly }) };
+  if (!toolsAttempted && route === TURN_ROUTES.GENERAL && response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
+    return { normalized: response.text, kind: 'direct', ...analyzeDirectAnswer(response.text, { evidenceRequired: false }) };
   }
-  if (response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
-    return { normalized: response.text, kind: 'direct', ...analyzeDirectAnswer(response.text, { evidenceRequired }) };
-  }
-  return { normalized, kind: 'direct', ok: false, citedIds: [], issues: [{ code: 'ANSWER_INTENT_REQUIRED' }] };
+  return { normalized: text, kind: 'direct', ok: false, citedIds: [], issues: [{ code: route === TURN_ROUTES.ROTA ? 'ROTA_EVIDENCE_REQUIRED' : 'ANSWER_INTENT_REQUIRED' }] };
 }
 
 export async function runGroundedTurn(session, {
@@ -136,17 +145,19 @@ export async function runGroundedTurn(session, {
   catalog,
   context,
   limits = TOOL_LIMITS,
-  priorGrounded = false,
   onStatus = null,
   onText
 }) {
   const ledger = createEvidenceLedger();
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
   let permittedTools = null;
+  const containment = createToolScope();
+  let route = TURN_ROUTES.UNDECIDED;
   const executor = createToolExecutor({
     resolveTool: (name) => !permittedTools || permittedTools.has(name) ? getRotaTool(name) : null,
     context,
     ledger,
+    validateCall: containment.validate,
     signal: session.signal,
     limits,
     onProgress: ({ topic }) => status(ASSISTANT_STREAM_PHASES.TOOLS, { topic })
@@ -154,9 +165,6 @@ export async function runGroundedTurn(session, {
   const transcript = [...messages];
   const userMessages = messages.filter((message) => message.role === 'user');
   const currentUser = userMessages.at(-1);
-  const evidenceRequired = requiresRotaEvidence(currentUser?.content, {
-    priorGrounded
-  });
   const locale = replyLocale(currentUser?.content);
   let toolRounds = 0;
   let modelRounds = 0;
@@ -166,12 +174,12 @@ export async function runGroundedTurn(session, {
   let repaired = false;
   let allowTools = true;
   for (;;) {
-    const canCallTools = allowTools && toolRounds < limits.maxToolRounds;
+    const canCallTools = route !== TURN_ROUTES.GENERAL && allowTools && toolRounds < limits.maxToolRounds;
     modelRounds += 1;
     boundTranscript(transcript);
     const result = await session.round({
       messages: transcript,
-      tools: permittedTools ? catalog.filter((tool) => permittedTools.has(tool.name)) : catalog,
+      tools: route === TURN_ROUTES.GENERAL ? [] : (permittedTools ? catalog.filter((tool) => permittedTools.has(tool.name)) : catalog),
       toolChoice: canCallTools ? 'auto' : 'none',
       onEvent: async (event) => {
         if (event.type === 'thinking') status(ASSISTANT_STREAM_PHASES.THINKING);
@@ -179,15 +187,35 @@ export async function runGroundedTurn(session, {
       }
     });
 
+    if (result.finishReason === 'length') {
+      if (repairsLeft > 0) {
+        repairsLeft -= 1;
+        repaired = true;
+        allowTools = ledger.ids().length === 0;
+        appendServerInstruction(transcript, 'Çıktı sağlayıcı sınırında kesildi. Önceki kesik JSON geçersizdir. En fazla 8 iddiayla daha kısa ve tam bir JSON üret; gerekli ise listeyi daralt.');
+        continue;
+      }
+      result.text = '';
+      result.toolCalls = [];
+    }
+    const declaredRoute = parseTurnRoute(parseEvidenceResponse(result.text));
+    if (route === TURN_ROUTES.UNDECIDED && declaredRoute && !result.toolCalls.length) {
+      route = declaredRoute;
+      appendServerInstruction(transcript, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
+      continue;
+    }
     if (result.toolCalls.length && canCallTools) {
       toolsAttempted = true;
+      route = TURN_ROUTES.ROTA;
+      toolFailureCodes.clear();
       toolRounds += 1;
       const toolMessages = await executor.runRound(result.toolCalls);
       for (const message of toolMessages) {
         const body = toolMessageBody(message);
         if (body?.ok === false && typeof body.error?.code === 'string') toolFailureCodes.add(body.error.code);
       }
-      if (!permittedTools) {
+      containment.establish(result.toolCalls, toolMessages);
+      if (!permittedTools && toolMessages.some((message) => toolMessageBody(message)?.ok === true)) {
         const boundedCalls = result.toolCalls.slice(0, limits.maxCallsPerRound);
         permittedTools = toolsForInitialCalls(boundedCalls, catalog, toolMessages.slice(0, boundedCalls.length));
       }
@@ -197,6 +225,14 @@ export async function runGroundedTurn(session, {
       continue;
     }
 
+    if (ledger.ids().length && context.authorizationEpoch) {
+      const validationDeadline = createAiDeadline({ timeoutMs: limits.callTimeoutMs, parentSignal: session.signal });
+      try {
+        context.beginRound();
+        await context.authorization(validationDeadline.signal);
+        ledger.invalidateAuthorization(context.authorizationEpoch());
+      } finally { validationDeadline.dispose(); }
+    }
     const text = String(result.text || '').trim();
     status(ASSISTANT_STREAM_PHASES.VERIFYING);
     const verdict = analyze(text, {
@@ -204,19 +240,19 @@ export async function runGroundedTurn(session, {
       evidencePayloads: ledger.payloads(),
       toolsAttempted,
       toolFailureCodes,
-      evidenceRequired,
+      route,
       locale
     });
     if (verdict.ok) {
       const cited = ledger.summaries(verdict.citedIds);
-      const disclosure = verdict.kind === 'grounded' ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
-      const finalText = verdict.kind === 'grounded' ? disclosure.text : verdict.normalized;
+      const disclosure = ['grounded', 'clarification'].includes(verdict.kind) ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
+      const finalText = ['grounded', 'clarification'].includes(verdict.kind) ? disclosure.text : verdict.normalized;
       await onText(finalText);
-      const outcome = verdict.kind === 'grounded' ? 'grounded' : verdict.kind === 'ungrounded' ? 'failed' : 'direct';
+      const outcome = verdict.kind;
       recordGroundedAnswer({ outcome, rounds: modelRounds, evidence: cited.length, repaired, disclosed: disclosure.disclosed });
       return {
         text: finalText,
-        finishReason: outcome === 'failed' ? GROUNDING_FAILED_FINISH_REASON : result.finishReason || 'stop',
+        finishReason: ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : result.finishReason || 'stop',
         outcome,
         evidence: cited,
         evidenceRows: ledger.persistable(verdict.citedIds),
@@ -233,7 +269,7 @@ export async function runGroundedTurn(session, {
       appendServerInstruction(transcript, groundingRepairInstruction(verdict.issues));
       // Kanıt varken düzeltme yalnızca yeniden yazımdır; kanıt yoksa model
       // gereken aracı çağırabilir (araç turu sınırı sürer).
-      allowTools = ledger.size() === 0;
+      allowTools = ledger.ids().length === 0;
       continue;
     }
 

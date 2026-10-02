@@ -171,7 +171,8 @@ const taskSearch = {
     const { scope } = await call.authorization();
     const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const sorted = sortFacts(facts, sort, call.today);
-    const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null });
+    const anchor = sorted.map((fact) => taskItem(fact, { projects, assignees, today: call.today }));
+    const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null, anchor });
     const pageAssignees = assignees;
     const pageFacts = page;
     const pageProjects = projects;
@@ -182,7 +183,8 @@ const taskSearch = {
       data: {
         ...(filters.projectId ? { project: projectRef(projects.get(filters.projectId), filters.projectId) } : {}),
         tasks: pageFacts.map((fact) => taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today })),
-        sort
+        sort,
+        filters
       },
       scope: descriptor,
       complete: offset + page.length >= sorted.length,
@@ -239,7 +241,8 @@ const taskDetail = {
     const access = projectAccess(scope, fact.projectId)
       || (scope.isAdmin ? { accessLevel: fact.accessLevel, readGrant: false, reasons: [] } : null);
     const creatorVisible = row.VisibleCreatedBySicil != null;
-    const wbsPathTruncated = Boolean(detail.wbsChain[0]?.ParentWbsId);
+    const wbsPathIssue = detail.wbsChain.find((node) => node.PathIssue)?.PathIssue || (detail.wbsChain[0]?.ParentWbsId ? 'depth' : null);
+    const wbsPathTruncated = Boolean(wbsPathIssue);
     const task = {
       taskId: fact.id,
       title: dataText(fact.title, 300),
@@ -248,7 +251,7 @@ const taskDetail = {
       ...(row.DescriptionClipped ? { descriptionClipped: true } : {}),
       project: projectRef({ projectId: fact.projectId, name: dataText(row.ProjectName, 160), code: row.ProjectCode ? dataText(row.ProjectCode, 60) : null }),
       wbsPath: detail.wbsChain.map((node) => dataText(node.Name, 120)),
-      ...(wbsPathTruncated ? { wbsPathTruncated: true } : {}),
+      ...(wbsPathTruncated ? { wbsPathTruncated: true, wbsPathIssue } : {}),
       status: fact.status,
       statusLabel: statusLabelOf(fact.status),
       priority: fact.priority,
@@ -316,8 +319,8 @@ function deadlineBucket(fact, today) {
   if (isOverdue(fact, today)) return ['overdue', 'Gecikmiş'];
   if (!fact.targetFinish) return ['no_target_finish', 'Termini yok'];
   if (fact.targetFinish === today) return ['due_today', 'Termini bugün'];
-  if (isDueWithin(fact, today, DUE_SOON_DAYS)) return ['due_next_7_days', 'Termini 7 gün içinde'];
-  if (isDueWithin(fact, today, DUE_MONTH_DAYS)) return ['due_next_30_days', 'Termini 30 gün içinde'];
+  if (isDueWithin(fact, today, DUE_SOON_DAYS)) return ['due_days_1_to_6', 'Termini 1–6 gün sonra'];
+  if (isDueWithin(fact, today, DUE_MONTH_DAYS)) return ['due_days_7_to_29', 'Termini 7–29 gün sonra'];
   return ['later', 'Termini 30 günden sonra'];
 }
 
@@ -400,6 +403,7 @@ const taskAnalytics = {
     return {
       data: {
         totals,
+        filters,
         overdueAging: overdueAging(facts, call.today),
         hours: hoursCoverage(facts),
         ...(groups ? { groupBy, groups, groupCount } : {}),

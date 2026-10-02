@@ -6,14 +6,20 @@ export function taskActivityRecordsets(db, params) {
   const projects = new Set(params.visibleProjects.split(',').map(key));
   const tasks = new Set(params.partialTasks.split(',').map(key));
   const inTeam = (id) => Number(id) === params.sicil || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id));
+  const deletions = new Map();
+  for (const event of db.auditLog) {
+    if (event.EntityType !== 'TASK' || event.ActionCode !== 'DELETE') continue;
+    const id = `${key(event.EntityId)}:${key(event.ProjectId)}`;
+    if (!deletions.has(id) || deletions.get(id).AuditId < event.AuditId) deletions.set(id, event);
+  }
   const rows = db.auditLog.filter((row) => row.EntityType === 'TASK' && ['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode))
     .filter((row) => new Date(row.OccurredAt) >= params.startUtc && new Date(row.OccurredAt) < params.endUtc)
+    .filter((row) => (!params.projectId || key(row.ProjectId) === key(params.projectId)) && (!params.taskIdText || key(row.EntityId) === key(params.taskIdText)))
     .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : params.isAdmin || inTeam(row.ActorSicil)))
     .flatMap((row) => {
       const task = db.tasks.find((task) => key(task.TaskId) === key(row.EntityId));
       const project = db.projects.find((project) => key(project.ProjectId) === key(row.ProjectId));
-      const deletion = db.auditLog.filter((event) => event.EntityType === 'TASK' && event.ActionCode === 'DELETE' && key(event.EntityId) === key(row.EntityId) && key(event.ProjectId) === key(row.ProjectId))
-        .sort((a, b) => b.AuditId - a.AuditId)[0];
+      const deletion = deletions.get(`${key(row.EntityId)}:${key(row.ProjectId)}`);
       const historic = json(deletion?.BeforeJson);
       const visible = params.isAdmin || (project?.IsActive && (
         (projects.has(key(row.ProjectId)) && (!task || projects.has(key(task.ProjectId)) || tasks.has(key(task.TaskId))))
@@ -29,6 +35,7 @@ export function taskActivityRecordsets(db, params) {
         CurrentActorName: person?.DisplayName, Directorate: person?.Directorate, Department: person?.Department, Unit: person?.Unit,
         Kind: row.ActionCode === 'DELETE' ? 'deleted' : row.ActionCode === 'CREATE' ? 'created' : completed ? 'completed' : 'updated', Completed: completed }];
     });
+  if (params.activityProbeRows && rows.length >= params.activityProbeRows) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   const actors = [...new Map(rows.map((row) => [row.ActorSicil, { ...row, DisplayName: row.CurrentActorName || row.ActorDisplayName }])).values()];
   const projectOptions = [...new Map(rows.filter((row) => row.ProjectId).map((row) => [row.ProjectId, row])).values()];
   const groups = new Map();
@@ -48,6 +55,7 @@ export function taskActivityRecordsets(db, params) {
       kind: Deleted ? 'deleted' : Created ? 'created' : Completed ? 'completed' : 'updated' };
   }).filter((group) => !params.kind || group.kind === params.kind)
     .sort((a, b) => String(b.GroupOccurredAt).localeCompare(String(a.GroupOccurredAt)) || b.GroupId - a.GroupId);
+  if (params.evidenceSnapshotLimit != null && grouped.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   const Page = Math.min(params.page, Math.max(0, Math.ceil(grouped.length / params.pageSize) - 1));
   const summary = { Total: grouped.length, Page, TaskCount: new Set(grouped.map((g) => g.events[0].EntityId)).size,
     ActorCount: new Set(grouped.map((g) => g.events[0].ActorSicil)).size,

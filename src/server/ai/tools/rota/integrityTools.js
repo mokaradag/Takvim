@@ -147,6 +147,7 @@ const dataQuality = {
       };
     });
     const doneWithoutActual = facts.filter((fact) => fact.status === 'done' && !fact.actualFinish);
+    const examplesTruncated = checks.some((check) => check.examples.length < check.count) || doneWithoutActual.length > examplesPerCheck;
     const descriptor = searchedScope(scope, filters.projectId);
     return {
       data: {
@@ -164,8 +165,8 @@ const dataQuality = {
         ]
       },
       scope: descriptor,
-      complete: true,
-      truncated: false,
+      complete: !examplesTruncated,
+      truncated: examplesTruncated,
       returnedCount: facts.length,
       totalCount: facts.length,
       nextCursor: null,

@@ -48,7 +48,7 @@ const workloadSummary = {
             inProgress: 0,
             overdue: 0,
             dueNext7Days: 0,
-            plannedHoursOnAssignedTasks: 0,
+            plannedHoursOnAssignedTasks: null,
             tasksWithPlannedHours: 0
           });
         }
@@ -58,7 +58,7 @@ const workloadSummary = {
         if (isOverdue(fact, call.today)) entry.overdue += 1;
         if (isDueWithin(fact, call.today, DUE_SOON_DAYS)) entry.dueNext7Days += 1;
         if (fact.plannedHours != null) {
-          entry.plannedHoursOnAssignedTasks = Math.round((entry.plannedHoursOnAssignedTasks + fact.plannedHours) * 100) / 100;
+          entry.plannedHoursOnAssignedTasks = Math.round(((entry.plannedHoursOnAssignedTasks ?? 0) + fact.plannedHours) * 100) / 100;
           entry.tasksWithPlannedHours += 1;
         }
       }

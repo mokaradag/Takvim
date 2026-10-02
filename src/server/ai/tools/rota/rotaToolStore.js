@@ -38,6 +38,7 @@ function scoped(executor, scope, options) {
   };
   request.input('sourceFilter', sql.VarChar(12), options?.source || 'all');
   request.input('analysisMaxRows', sql.Int, TOOL_LIMITS.maxAnalyzedTasks + 1);
+  request.input('analysisAssignmentRows', sql.Int, TOOL_LIMITS.maxAnalyzedAssignments + 1);
   return request;
 }
 

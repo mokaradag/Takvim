@@ -251,8 +251,10 @@ function taskDetail(db, params) {
   const chain = [];
   let node = task.WbsId ? db.wbs.find((item) => same(item.WbsId, task.WbsId) && same(item.ProjectId, task.ProjectId)) : null;
   let depth = 0;
-  while (node && depth <= 40) {
-    chain.push({ WbsId: node.WbsId, ParentWbsId: node.ParentWbsId ?? null, Code: node.Code, Name: node.Name, Depth: depth });
+  const visited = new Set();
+  while (node && depth <= 40 && !visited.has(upper(node.WbsId))) {
+    visited.add(upper(node.WbsId));
+    chain.push({ WbsId: node.WbsId, ParentWbsId: node.ParentWbsId ?? null, Code: node.Code, Name: node.Name, Depth: depth, PathIssue: node.ParentWbsId && visited.has(upper(node.ParentWbsId)) ? 'cycle' : node.ParentWbsId && !db.wbs.some((parent) => same(parent.WbsId, node.ParentWbsId) && same(parent.ProjectId, node.ProjectId)) ? 'dangling' : depth === 40 && node.ParentWbsId ? 'depth' : null });
     node = node.ParentWbsId ? db.wbs.find((item) => same(item.WbsId, node.ParentWbsId) && same(item.ProjectId, node.ProjectId)) : null;
     depth += 1;
   }
@@ -394,9 +396,11 @@ function baseline(db, params) {
   const ordered = db.baselines.filter((row) => full && same(row.ProjectId, params.projectId))
     .sort((left, right) => (Number(right.IsPrimary) - Number(left.IsPrimary)) || String(right.CreatedAt).localeCompare(String(left.CreatedAt)));
   const selected = ordered.find((row) => !params.baselineId || same(row.BaselineId, params.baselineId)) || null;
+  const projectTasks = new Map(db.tasks.filter((task) => same(task.ProjectId, params.projectId)).map((task) => [upper(task.TaskId), task]));
+  const snapshotIds = new Set(db.taskBaselineSnapshots.filter((row) => selected && same(row.BaselineId, selected.BaselineId)).map((row) => upper(row.TaskId)));
   const snapshots = selected
     ? db.taskBaselineSnapshots.filter((row) => same(row.BaselineId, selected.BaselineId)).slice(0, Number(params.maxRows)).map((row) => {
-      const task = db.tasks.find((item) => same(item.TaskId, row.TaskId) && same(item.ProjectId, params.projectId));
+      const task = projectTasks.get(upper(row.TaskId));
       return {
         TaskId: row.TaskId, BaselineStart: row.PlannedStart, BaselineFinish: row.PlannedFinish, BaselineDuration: row.PlannedDurationDays,
         TaskExists: task ? 1 : 0, Title: task?.Title ?? null, Status: task?.Status ?? null, PlannedStart: task?.PlannedStart ?? null,
@@ -406,7 +410,7 @@ function baseline(db, params) {
     : [];
   const added = selected
     ? db.tasks.filter((task) => same(task.ProjectId, params.projectId)
-      && !db.taskBaselineSnapshots.some((row) => same(row.BaselineId, selected.BaselineId) && same(row.TaskId, task.TaskId))).length
+      && !snapshotIds.has(upper(task.TaskId))).length
     : 0;
   return [
     ordered.slice(0, 10).map((row) => ({ BaselineId: row.BaselineId, Name: row.Name, CreatedAt: row.CreatedAt, IsPrimary: row.IsPrimary ? 1 : 0,
@@ -424,7 +428,7 @@ function calendar(db, params) {
   const active = (id) => db.calendars.find((row) => same(row.CalendarId, id) && row.IsActive) || null;
   const chosen = (project && active(project.CalendarId)) || db.calendars.find((row) => row.IsDefault && row.IsActive) || null;
   return [
-    [{ ProjectVisible: projectVisible ? 1 : 0, CalendarId: chosen?.CalendarId ?? null, Name: chosen?.Name ?? null, TimeZone: chosen?.TimeZone ?? null, IsDefault: chosen?.IsDefault ? 1 : 0 }],
+    [{ ProjectVisible: projectVisible ? 1 : 0, ProjectCalendarSelected: project && active(project.CalendarId) ? 1 : 0, CalendarId: chosen?.CalendarId ?? null, Name: chosen?.Name ?? null, TimeZone: chosen?.TimeZone ?? null, IsDefault: chosen?.IsDefault ? 1 : 0 }],
     chosen ? chosen.WorkingDays.map((weekday) => ({ Weekday: weekday })) : [],
     chosen ? chosen.Holidays.filter((holiday) => holiday.date >= day(params.from) && holiday.date <= day(params.to))
       .map((holiday) => ({ HolidayDate: holiday.date, Name: holiday.name, ShortName: holiday.short ?? null })) : []
@@ -478,15 +482,20 @@ export function runAiToolQuery(db, sqlText, params) {
     const tooLarge = () => { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; };
     const hasSelectedBaseline = marker[1] !== 'baseline' || db.baselines.some((row) => scope.projects.get(upper(params.projectId))?.AccessLevel === 'FULL'
       && same(row.ProjectId, params.projectId) && (!params.baselineId || same(row.BaselineId, params.baselineId)));
-    if (hasSelectedBaseline && scope.visible.size >= cap) tooLarge();
+    const analyzed = [...scope.visible.values()].filter(({ task }) => (!params.seriesId || same(task.TaskId, params.seriesId) || same(task.RecurrenceParentTaskId, params.seriesId))
+      && (!params.recurringOnly || task.RecurrenceRule || task.RecurrenceParentTaskId));
+    const staged = marker[1] === 'task-facts' ? taskFacts(db, { ...params, assigneeMode: 'any', personSicil: null })[0] : null;
+    const analyzedCount = staged ? staged.length : analyzed.length;
+    if (hasSelectedBaseline && analyzedCount >= cap) tooLarge();
     if (['task-facts', 'task-detail'].includes(marker[1])) {
       const ownTasks = new Set(db.taskAssignees.filter((row) => row.Sicil === scope.sicil).map((row) => upper(row.TaskId)));
+      const stagedIds = staged ? new Set(staged.map((row) => upper(row.TaskId))) : null;
       const associations = db.taskAssignees.filter((row) => {
         const visible = scope.visible.get(upper(row.TaskId));
-        return visible && (visible.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)
+        return visible && (!stagedIds || stagedIds.has(upper(row.TaskId))) && (visible.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)
           || ownTasks.has(upper(row.TaskId)));
       });
-      if (associations.length >= cap) tooLarge();
+      if (associations.length >= Number(params.analysisAssignmentRows)) tooLarge();
     }
     if (marker[1] === 'baseline') {
       const access = scope.projects.get(upper(params.projectId));

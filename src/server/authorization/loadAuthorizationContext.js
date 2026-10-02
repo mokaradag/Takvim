@@ -30,7 +30,7 @@ function personFromRow(row) {
   };
 }
 
-export async function loadAuthorizationContext(executor = null) {
+export async function loadAuthorizationContext(executor = null, { includeScopeIdentities = false } = {}) {
   const sicil = await getTrustedCurrentSicil();
   const pool = executor || await getSqlPool();
   const request = pool.request();
@@ -90,6 +90,7 @@ export async function loadAuthorizationContext(executor = null) {
     FROM dbo.MR_Tasks t
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     WHERE t.CreatedBySicil = @sicil;
+    ${includeScopeIdentities ? 'SELECT DISTINCT EmployeeSicil FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil ORDER BY EmployeeSicil;' : ''}
   `);
 
   const personRow = result.recordsets[0]?.[0];
@@ -142,6 +143,7 @@ export async function loadAuthorizationContext(executor = null) {
     // CN43N projesi altında görev tanımlayabilir (bkz. authorization.js ·
     // hasTaskAssignmentScope). Görev görünürlüğü bundan etkilenmez.
     canAssignAllCorporateProjects: hasTaskAssignmentScope({ isSystemAdmin, isExecutive }),
-    effective
+    effective,
+    ...(includeScopeIdentities ? { scopeIdentities: (result.recordsets[5] || []).map((row) => Number(row.EmployeeSicil)) } : {})
   };
 }

@@ -1,3 +1,5 @@
+import { claimableField, evidenceSemantic } from './claimableEvidence.js';
+
 export const FACT_LIMITS = Object.freeze({ maxFacts: 256, maxClaims: 64, maxDepth: 12, maxAnswerChars: 24000 });
 
 const LABELS = Object.freeze({
@@ -85,9 +87,61 @@ const LABELS = Object.freeze({
   rule: ['Tekrar kuralı', 'Recurrence rule'], recurrenceRule: ['Tekrar kuralı', 'Recurrence rule'],
   state: ['Teslim durumu', 'Delivery state'], attempts: ['Gönderim denemesi', 'Delivery attempts'],
   openTaskCount: ['Açık görev sayısı', 'Open task count'], cleanOpenTaskCount: ['Eksiksiz açık görev', 'Clean open tasks'],
-  label: ['Etiket metni', 'Label text'], note: ['Kaynak notu', 'Source note'], guidance: ['Kaynak açıklaması', 'Source guidance']
+  label: ['Etiket metni', 'Label text'], note: ['Kaynak notu', 'Source note'], guidance: ['Kaynak açıklaması', 'Source guidance'],
+  wbsPath: ['İş dağılım yolu', 'WBS path'],
+  statusLabel: ['Durum', 'Status'],
+  priorityLabel: ['Öncelik', 'Priority'],
+  kindLabel: ['Hareket türü', 'Event kind'],
+  progressPercent: ['İlerleme (%)', 'Progress (%)'],
+  planned: ['Planlanan saat', 'Planned hours'],
+  actual: ['Gerçekleşen saat', 'Actual hours'],
+  directTasks: ['Doğrudan görev', 'Direct tasks'],
+  subtreeTasks: ['Alt ağaç görevleri', 'Subtree tasks'],
+  subtreeOpen: ['Alt ağaç açık görevleri', 'Subtree open tasks'],
+  subtreeOverdue: ['Alt ağaç gecikmiş görevleri', 'Subtree overdue tasks'],
+  childCount: ['Alt düğüm', 'Child nodes'],
+  visibleEntryCount: ['Görünür tekrar kaydı', 'Visible recurrence entries'],
+  ambiguous: ['Aday seçimi gerekli', 'Candidate selection required'],
+  availableBaselinesTruncated: ['Baz plan listesi kısaltıldı', 'Baseline list truncated'],
+  groupCount: ['Grup sayısı', 'Group count'],
+  key: ['Grup anahtarı', 'Group key'],
+  nodeCount: ['Düğüm sayısı', 'Node count'],
+  tasksWithoutWbs: ['İş dağılımı olmayan görev', 'Tasks without WBS'],
+  depth: ['Derinlik', 'Depth'],
+  worstOverdueDays: ['En büyük gecikme (gün)', 'Worst overdue days'],
+  jobTitle: ['Unvan', 'Job title'],
+  projectsWithOverdue: ['Gecikmiş görevi olan proje', 'Projects with overdue tasks'],
+  tags: ['Proje etiketleri', 'Project tags'],
+  dataDate: ['Veri tarihi', 'Data date'],
+  tagCount: ['Etiket sayısı', 'Tag count'],
+  wbsNodeCount: ['İş dağılım düğümü', 'WBS nodes'],
+  baselineCount: ['Baz plan sayısı', 'Baseline count'],
+  decisionMessage: ['Karar iletisi', 'Decision message'],
+  requestedAssignee: ['Talep edilen sorumlu', 'Requested assignee'],
+  requestedAssigneeOrganization: ['Talep edilen kişinin birimi', 'Requested assignee organization'],
+  suggestedAssignee: ['Önerilen sorumlu', 'Suggested assignee'],
+  decidedBy: ['Karar veren', 'Decided by'],
+  decidedAt: ['Karar zamanı', 'Decision time'],
+  yourRole: ['Talepteki rolünüz', 'Your request role'],
+  actionRequiredFromYou: ['İşleminiz bekleniyor', 'Your action required'],
+  mode: ['Talep kipi', 'Request mode'],
+  modeLabel: ['Talep kipi', 'Request mode'],
+  canDecide: ['Karar yetkiniz var', 'Can decide'],
+  ruleDescription: ['Tekrar kuralı açıklaması', 'Recurrence rule description'],
+  nextTruncated: ['Sonraki kayıtlar kısaltıldı', 'Upcoming records truncated'],
+  typeLabel: ['İlişki türü', 'Relationship type'],
+  timeZone: ['Saat dilimi', 'Time zone'],
+  short: ['Kısa ad', 'Short name'],
+  suspended: ['Bekletilen', 'Suspended'],
+  delivered: ['Gönderilen', 'Delivered'],
+  stateLabel: ['Teslim durumu', 'Delivery state'],
+  by: ['İşlemi yapan', 'Actor'],
+  at: ['Zaman', 'Time'],
+  deliveredCalendarDate: ['Son gönderilen takvim tarihi', 'Last delivered calendar date'],
+  lastDeliveredAt: ['Son gönderim zamanı', 'Last delivery time'],
+  message: ['Hizmet iletisi', 'Service message']
 });
-const OMIT = /^(?:.*Id|id|sicil|personSicil|tool|nextCursor|field|access|scope|semantics|filters|guidance|note|timeZone|.*Label)$/;
+const CANONICAL_FIELDS = new Set(Object.keys(LABELS).filter((key) => !['note', 'guidance', 'field'].includes(key)));
 
 function scalar(value) {
   return value === null || typeof value === 'string' || typeof value === 'boolean'
@@ -107,15 +161,14 @@ export function createEvidenceFacts(envelope, { prefix, subject = 'Rota', fields
     if (depth > FACT_LIMITS.maxDepth || facts.length >= FACT_LIMITS.maxFacts) return;
     if (selected && !selected.some((field) => field === path || field.startsWith(`${path}.`))) return;
     if (scalar(value)) {
-      facts.push({ factId: `${prefix}:${path}`, subjectId: path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : 'result',
+      if (!claimableField(envelope, path, CANONICAL_FIELDS, changeField)) return;
+      facts.push({ semantic: evidenceSemantic(envelope, path, value, factLabel(path)), factId: `${prefix}:${path}`, subjectId: path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : 'result',
         subject: name, field: path, ...(changeField ? { changeField } : {}), type: value === null ? 'null' : typeof value, value });
     } else if (Array.isArray(value)) {
       value.forEach((item, index) => visit(item, `${path}.${index}`, subjectName(item, name), depth + 1));
     } else if (value && typeof value === 'object') {
       const named = subjectName(value, null);
       for (const [key, item] of Object.entries(value)) {
-        const projectAccess = path === 'data' && key === 'access';
-        if (OMIT.test(key) && !projectAccess) continue;
         visit(item, `${path}.${key}`, named || name, depth + 1, Object.hasOwn(LABELS, value.field) ? value.field : null);
       }
     }
@@ -151,5 +204,7 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
   else if (typeof value === 'boolean') value = value ? (locale === 'en' ? 'Yes' : 'Evet') : (locale === 'en' ? 'No' : 'Hayır');
   else if (typeof value === 'number') value = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { maximumFractionDigits: 20 }).format(value);
   else value = values[leaf]?.[value]?.[locale === 'en' ? 1 : 0] || value;
-  return `- “${escapedFactText(fact.subject)}” · ${fact.changeField ? factLabel(fact.changeField, locale) + ' / ' : ''}${factLabel(fact.field, locale)}: ${escapedFactText(value)}. 【${evidenceId}】`;
+  const filters = fact.semantic?.filters;
+  const qualifiers = filters ? Object.entries(filters).filter(([key, value]) => !['projectId', 'wbsId', 'personSicil'].includes(key) && value !== 'any').filter(([, value]) => value != null && value !== false && value !== '' && (!Array.isArray(value) || value.length)).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`).join('; ') : '';
+  return `- “${escapedFactText(fact.subject)}”${qualifiers ? ` (${escapedFactText(qualifiers)})` : ''} · ${fact.changeField ? factLabel(fact.changeField, locale) + ' / ' : ''}${factLabel(fact.field, locale)}: ${escapedFactText(value)}. 【${evidenceId}】`;
 }

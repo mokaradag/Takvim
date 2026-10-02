@@ -347,8 +347,8 @@ test('yürütme hataları güvenli sınıflara iner; oturum ve iptal hataları t
 });
 
 
-function groundingContext(data, prefix = '1234567890abcdef_R1') {
-  const envelope = { ok: true, evidenceId: 'R1', factScope: prefix, subject: 'Rota',
+function groundingContext(data, prefix = '1234567890abcdef_R1', tool = data.task ? 'rota_task_detail' : data.projects ? 'rota_portfolio_summary' : data.nodes ? 'rota_wbs_inspect' : data.items ? 'rota_activity_search' : 'rota_baseline_compare') {
+  const envelope = { ok: true, tool, claimable: { version: 1, textFields: ['description', 'requesterMessage', 'decisionMessage', 'changes'] }, evidenceId: 'R1', factScope: prefix, subject: 'Rota',
     totalCount: 3, returnedCount: 2, complete: false, truncated: false, data };
   return { envelope, evidenceIds: ['R1'], evidencePayloads: [{ id: 'R1', payload: JSON.stringify(envelope) }] };
 }
@@ -382,11 +382,10 @@ test('supported typed fields work and arbitrary prose cannot accompany a valid c
 
 test('proje erişim açıklaması olgu olarak doğrulanır; orta öncelik ürün etiketiyle çizilir', () => {
   const context = groundingContext({
-    access: { level: 'READ', reasons: ['Proje erişim hibesi'], completeTaskView: true, dependenciesAndBaselines: false },
-    task: { title: 'Alfa', priority: 'medium' }
+    task: { title: 'Alfa', priority: 'medium', access: { level: 'READ', reasons: ['Proje erişim hibesi'], completeTaskView: true, dependenciesAndBaselines: false } }
   });
-  assert.equal(verify(context, claimFor(context.envelope, 'data.access.level')).ok, true);
-  const reason = verify(context, claimFor(context.envelope, 'data.access.reasons.0'));
+  assert.equal(verify(context, claimFor(context.envelope, 'data.task.access.level')).ok, true);
+  const reason = verify(context, claimFor(context.envelope, 'data.task.access.reasons.0'));
   assert.equal(reason.ok, true);
   assert.match(reason.normalized, /Proje erişim hibesi/);
   const priority = createEvidenceFacts(context.envelope, { prefix: context.envelope.factScope })
@@ -395,32 +394,34 @@ test('proje erişim açıklaması olgu olarak doğrulanır; orta öncelik ürün
 });
 
 test('short codes, prefix collisions and sibling records cannot exchange metrics or subjects', () => {
-  const context = groundingContext({ projects: [{ code: 'A1', name: 'Atlas', overdue: 1 },
-    { code: 'B2', name: 'Atlas 2', overdue: 9 }], wbs: [{ code: '1', overdue: 2 }, { code: '2', overdue: 8 }] });
-  for (const [first, second] of [['data.projects.0.overdue', 'data.projects.1.overdue'], ['data.wbs.0.overdue', 'data.wbs.1.overdue']]) {
-    const a = claimFor(context.envelope, first), b = claimFor(context.envelope, second);
-    assert.equal(verify(context, a, b).ok, true);
-    assert.equal(verify(context, { ...a, value: b.value }).ok, false);
-    assert.equal(verify(context, { ...a, factId: b.factId }).ok, false);
-    assert.equal(verify(context, { ...b, subjectId: a.subjectId }).ok, false);
+  const context = groundingContext({ projects: [{ code: 'A1', name: 'Atlas', tasks: { overdue: 1 } },
+    { code: 'B2', name: 'Atlas 2', tasks: { overdue: 9 } }] });
+  const wbsContext = groundingContext({ nodes: [{ code: '1', subtreeOverdue: 2 }, { code: '2', subtreeOverdue: 8 }] });
+  for (const [first, second] of [['data.projects.0.tasks.overdue', 'data.projects.1.tasks.overdue'], ['data.nodes.0.subtreeOverdue', 'data.nodes.1.subtreeOverdue']]) {
+    const current = first.startsWith('data.nodes') ? wbsContext : context;
+    const a = claimFor(current.envelope, first), b = claimFor(current.envelope, second);
+    assert.equal(verify(current, a, b).ok, true);
+    assert.equal(verify(current, { ...a, value: b.value }).ok, false);
+    assert.equal(verify(current, { ...a, factId: b.factId }).ok, false);
+    assert.equal(verify(current, { ...b, subjectId: a.subjectId }).ok, false);
   }
-  assert.match(verify(context, claimFor(context.envelope, 'data.wbs.0.overdue')).normalized, /“1”/);
+  assert.match(verify(wbsContext, claimFor(wbsContext.envelope, 'data.nodes.0.subtreeOverdue')).normalized, /“1”/);
 });
 
 test('dates and durations retain their canonical fields even when another field has the requested value', () => {
-  const context = groundingContext({ task: { title: 'Alfa', targetFinish: null, calendarDate: '2026-10-15',
-    plannedStart: '2026-10-01', plannedFinish: '2026-10-15', actualStart: '2026-10-02', plannedDurationDays: 10, remainingDurationDays: 3 } });
+  const context = groundingContext({ task: { title: 'Alfa', dates: { targetFinish: null, calendarDate: '2026-10-15',
+    plannedStart: '2026-10-01', plannedFinish: '2026-10-15', actualStart: '2026-10-02', plannedDurationDays: 10, remainingDurationDays: 3 } } });
   for (const [field, wrong] of [['targetFinish', '2026-10-15'], ['actualStart', '2026-10-15'],
     ['plannedStart', '2026-10-02'], ['plannedDurationDays', 3], ['remainingDurationDays', 10]]) {
-    const claim = claimFor(context.envelope, `data.task.${field}`);
+    const claim = claimFor(context.envelope, `data.task.dates.${field}`);
     assert.equal(verify(context, claim).ok, true);
     assert.equal(verify(context, { ...claim, value: wrong }).ok, false);
   }
 });
 
 test('status, milestone, priority, source and recurrence claims cannot invert their values', () => {
-  const context = groundingContext({ task: { status: 'done', milestone: false, priority: 'low', sourceType: 'corporate', rule: 'FREQ=WEEKLY;INTERVAL=2' } });
-  for (const [field, wrong] of [['status', 'in_progress'], ['milestone', true], ['priority', 'critical'], ['sourceType', 'manual'], ['rule', 'FREQ=WEEKLY;INTERVAL=1']]) {
+  const context = groundingContext({ task: { status: 'done', milestone: false, priority: 'low', project: { sourceType: 'corporate' }, recurrence: { rule: 'FREQ=WEEKLY;INTERVAL=2' } } });
+  for (const [field, wrong] of [['status', 'in_progress'], ['milestone', true], ['priority', 'critical'], ['project.sourceType', 'manual'], ['recurrence.rule', 'FREQ=WEEKLY;INTERVAL=1']]) {
     const claim = claimFor(context.envelope, `data.task.${field}`);
     assert.equal(verify(context, claim).ok, true);
     assert.equal(verify(context, { ...claim, value: wrong }).ok, false);
@@ -429,33 +430,42 @@ test('status, milestone, priority, source and recurrence claims cannot invert th
 });
 
 test('typed values preserve null, false, zero and locale-independent numeric identity', () => {
-  const context = groundingContext({ task: { hours: 1.234, budget: null, milestone: false, progress: 0 } });
-  for (const field of ['hours', 'budget', 'milestone', 'progress']) {
+  const context = groundingContext({ task: { hours: { planned: 1.234 }, cost: { budget: null }, milestone: false, progressPercent: 0 } });
+  for (const field of ['hours.planned', 'cost.budget', 'milestone', 'progressPercent']) {
     const claim = claimFor(context.envelope, `data.task.${field}`);
     assert.equal(verify(context, claim).ok, true);
     assert.equal(verify(context, { ...claim, value: String(claim.value) }).ok, false);
   }
-  const claim = claimFor(context.envelope, 'data.task.hours');
+  const claim = claimFor(context.envelope, 'data.task.hours.planned');
   assert.match(verify({ ...context, locale: 'tr' }, claim).normalized, /1,234/);
   assert.match(verify({ ...context, locale: 'en' }, claim).normalized, /1\\.234/);
 });
 
 test('aggregate totals, row totals, returned counts and activity before/after remain distinct', () => {
-  const context = groundingContext({ totals: { total: 10, overdue: 12, completionRatePercent: 33 },
-    projects: [{ name: 'Alfa', counts: { total: 6, overdue: 3 } }],
-    activities: [{ task: { title: 'Alfa' }, structuredChanges: [{ field: 'progress', before: 20, after: 30 }] }] });
-  for (const path of ['data.totals.total', 'data.projects.0.counts.overdue', 'totalCount', 'returnedCount',
-    'data.activities.0.structuredChanges.0.before', 'data.activities.0.structuredChanges.0.after']) {
-    const claim = claimFor(context.envelope, path);
-    assert.equal(verify(context, claim).ok, true);
-    assert.equal(verify(context, { ...claim, value: 999 }).ok, false);
+  const context = groundingContext({ totals: { tasks: 10, overdue: 12 },
+    projects: [{ name: 'Alfa', tasks: { total: 6, overdue: 3 } }] });
+  const activity = groundingContext({ items: [{ task: { title: 'Alfa' }, structuredChanges: [{ field: 'progress', before: 20, after: 30 }] }] });
+  for (const path of ['data.totals.tasks', 'data.projects.0.tasks.overdue', 'totalCount', 'returnedCount',
+    'data.items.0.structuredChanges.0.before', 'data.items.0.structuredChanges.0.after']) {
+    const current = path.startsWith('data.items') ? activity : context;
+    const claim = claimFor(current.envelope, path);
+    assert.equal(verify(current, claim).ok, true);
+    assert.equal(verify(current, { ...claim, value: 999 }).ok, false);
   }
 });
 
 test('all tool-specific scalar metrics are supported without natural-language field hints', () => {
-  const data = { counts: { finishSlipped: 5, dependencyCount: 2, coverage: 70, occurrenceCount: 4, workingDayCount: 7, activityEventCount: 3 } };
-  const context = groundingContext(data);
-  for (const key of Object.keys(data.counts)) assert.equal(verify(context, claimFor(context.envelope, `data.counts.${key}`)).ok, true);
+  const examples = [
+    ['rota_baseline_compare', { counts: { finishSlipped: 5 } }, 'data.counts.finishSlipped'],
+    ['rota_dependency_inspect', { coverage: { dependencyCount: 2 } }, 'data.coverage.dependencyCount'],
+    ['rota_recurrence_inspect', { series: { visibleOccurrences: 4 } }, 'data.series.visibleOccurrences'],
+    ['rota_calendar_inspect', { workingDayCount: 7 }, 'data.workingDayCount'],
+    ['rota_activity_search', { summary: { events: 3 } }, 'data.summary.events']
+  ];
+  for (const [tool, data, path] of examples) {
+    const context = groundingContext(data, '1234567890abcdef_R1', tool);
+    assert.equal(verify(context, claimFor(context.envelope, path)).ok, true);
+  }
 });
 
 test('same-turn facts reject previous-turn IDs, unknown citations and unavailable evidence', () => {
@@ -484,21 +494,21 @@ test('prompt-shaped database text stays quoted and cannot create citations, link
 });
 
 test('selected field verification reaches the last record in a bounded result', () => {
-  const context = groundingContext({ items: Array.from({ length: 100 }, (_, index) => ({ title: `Task ${index}`, status: 'done', progress: index })) });
+  const context = groundingContext({ tasks: Array.from({ length: 100 }, (_, index) => ({ title: `Task ${index}`, status: 'done', progressPercent: index })) }, '1234567890abcdef_R1', 'rota_task_search');
   assert.equal(createEvidenceFacts(context.envelope, { prefix: context.envelope.factScope }).length, FACT_LIMITS.maxFacts);
-  const claim = { evidenceId: 'R1', factId: '1234567890abcdef_R1:data.items.99.progress',
-    subjectId: 'data.items.99', field: 'data.items.99.progress', operator: 'eq', value: 99 };
+  const claim = { evidenceId: 'R1', factId: '1234567890abcdef_R1:data.tasks.99.progressPercent',
+    subjectId: 'data.tasks.99', field: 'data.tasks.99.progressPercent', operator: 'eq', value: 99 };
   const verdict = verify(context, claim);
   assert.equal(verdict.ok, true);
   assert.match(verdict.normalized, /Task 99.*99/);
-  assert.equal(verify(context, { ...claim, subjectId: 'data.items.98' }).ok, false);
+  assert.equal(verify(context, { ...claim, subjectId: 'data.tasks.98' }).ok, false);
 });
 
-test('structured context forces every follow-up to refresh evidence independent of wording length', () => {
+test('routing state decides evidence independently of wording and old grounded turns', () => {
   for (const question of ['Açıklaması?', 'Peki açıklamasında tam olarak ne yazıyor?', 'Alfa bitti mi?', 'unfamiliar wording']) {
-    assert.equal(evidence.requiresRotaEvidence(question, { priorGrounded: true }), true);
+    assert.equal(evidence.requiresRotaEvidence(question, { route: 'rota' }), true);
   }
-  assert.equal(evidence.requiresRotaEvidence('Alfa görevinin açıklaması nedir?'), true);
+  assert.equal(evidence.requiresRotaEvidence('Alfa görevinin açıklaması nedir?', { route: 'rota' }), true);
   assert.equal(evidence.requiresRotaEvidence('Alfa ne durumda?', { dataIntent: true }), true);
   assert.equal(evidence.requiresRotaEvidence('Kritik yol yöntemini anlatır mısın?'), false);
 });
@@ -517,7 +527,7 @@ test('fact depth, count, answer size, claim count and operator limits fail close
   const claim = claimFor(context.envelope, 'data.task.status');
   assert.equal(verify(context, ...Array(FACT_LIMITS.maxClaims + 1).fill(claim)).ok, false);
   assert.equal(evidence.analyzeGroundedAnswer('x'.repeat(FACT_LIMITS.maxAnswerChars + 1), context).ok, false);
-  const huge = groundingContext({ values: Array(1000).fill(0) });
+  const huge = groundingContext({ task: { wbsPath: Array(1000).fill('a') } });
   assert.equal(createEvidenceFacts(huge.envelope, { prefix: huge.envelope.factScope }).length, FACT_LIMITS.maxFacts);
   assert.equal(verify(context, { ...claim, operator: 'evaluate', value: 'process.exit()' }).ok, false);
 });

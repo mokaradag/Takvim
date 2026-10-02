@@ -208,10 +208,10 @@ export function normalizeCoordinationQuery(input = {}) {
   return query;
 }
 
-export async function readCoordinationPage(executor, actor, input = {}, { decisionAuthority = false } = {}) {
+export async function readCoordinationPage(executor, actor, input = {}, { decisionAuthority = false, evidenceSnapshotLimit = null } = {}) {
   const query = normalizeCoordinationQuery(input);
   const participant = decisionAuthority
-    ? `(${PARTICIPANT} OR (${DECISION_AUTHORITY} AND c.Status = 'PENDING' AND ${TASK_AVAILABLE}))`
+    ? `(${PARTICIPANT} OR (${DECISION_AUTHORITY} AND c.Status IN ('PENDING','APPROVED') AND ${TASK_AVAILABLE}))`
     : PARTICIPANT;
   const actionable = decisionAuthority ? DECISION_ACTIONABLE : ACTIONABLE;
   const fields = fieldsFor(actionable);
@@ -220,8 +220,9 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
   const toUtc = query.to ? activityDateRange({ period: 'custom', from: query.to, to: query.to }).endUtc : null;
   const request = bindCoordinationScope(executor.request(), actor);
   request.input('tab', sql.VarChar(10), query.tab);
-  request.input('pageSize', sql.Int, query.pageSize);
-  request.input('page', sql.Int, query.page);
+  request.input('pageSize', sql.Int, evidenceSnapshotLimit == null ? query.pageSize : evidenceSnapshotLimit + 1);
+  if (evidenceSnapshotLimit != null) request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+  request.input('page', sql.Int, evidenceSnapshotLimit == null ? query.page : 0);
   request.input('search', sql.NVarChar(200), query.search);
   request.input('requester', sql.NVarChar(100), query.requester);
   request.input('assignee', sql.NVarChar(100), query.assignee);
@@ -268,6 +269,7 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
       COALESCE(SUM(IsHistory), 0) AS HistoryCount
     FROM coordination_page_counts;
     DECLARE @total int = (SELECT COUNT(*) ${SOURCE} WHERE ${filters} AND ${tabFilter});
+    ${evidenceSnapshotLimit == null ? '' : "IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;"}
     DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
     DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
     SELECT @total AS Total, @safePage AS Page;

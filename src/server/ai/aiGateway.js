@@ -726,8 +726,10 @@ export function createAiGateway({
                 const event = step.value;
                 if (event.type === 'text') {
                   chunks.push(event.text);
-                  if (onEvent) await raceWithAbort(() => onEvent({ type: 'text', text: event.text }), deadline.signal);
-                  if (event.text) progress.emitted = true;
+                  if (onEvent) {
+                    const delivered = await raceWithAbort(() => onEvent({ type: 'text', text: event.text }), deadline.signal);
+                    if (event.text && delivered === true) progress.emitted = true;
+                  }
                 } else if (event.type === 'reasoning' && !thinking) {
                   thinking = true;
                   notify(onEvent, { type: 'thinking' });
