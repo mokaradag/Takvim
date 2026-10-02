@@ -156,7 +156,7 @@ export async function runGroundedTurn(session, {
   const ledger = createEvidenceLedger();
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
   let permittedTools = null;
-  const containment = createToolScope();
+  const containment = createToolScope({ today: context.today });
   let route = TURN_ROUTES.UNDECIDED;
   const executor = createToolExecutor({
     resolveTool: (name) => !permittedTools || permittedTools.has(name) ? getRotaTool(name) : null,
@@ -237,12 +237,13 @@ export async function runGroundedTurn(session, {
         context.beginRound();
         try {
           await (context.revalidateAuthorization || context.authorization)(validationDeadline.signal);
+          if (context.revalidateEvidence) ledger.retainAuthorized(await context.revalidateEvidence(ledger.authorizationEntries(), validationDeadline.signal));
         } catch (error) {
           if (isTurnFatal(error) || session.signal?.aborted) throw error;
           authorizationUnavailable = true;
           ledger.invalidateAuthorization(null);
         }
-        ledger.invalidateAuthorization(context.authorizationEpoch());
+        ledger.invalidateAuthorization(context.authorizationEpoch(), context.isEvidenceAuthorized);
       } finally { validationDeadline.dispose(); }
     }
     const text = String(result.text || '').trim();

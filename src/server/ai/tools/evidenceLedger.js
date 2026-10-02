@@ -1,5 +1,6 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
+import { evidenceTaskReferences } from './evidenceAuthorization.js';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -37,14 +38,14 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
   return Object.freeze({
     factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null }) {
       if (entries.length >= Math.min(maxEntries, EVIDENCE_LIMITS.maxEvidencePerAnswer)) return null;
       const id = evidenceIdFor(entries.length + 1);
       const summary = normalizeEvidenceSummary({
         id, kind, label, entity, generatedAt, complete, truncated, partial, counts, highlights: highlightPairs(highlights)
       });
       if (!summary) return null;
-      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, valid: true });
+      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true });
       return id;
     },
     /**
@@ -59,8 +60,12 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
         ? payload
         : JSON.stringify({ evidenceId: id, payloadOmitted: 'size' });
     },
-    invalidateAuthorization(epoch) {
-      for (const entry of entries) if (entry.authorizationEpoch !== epoch) entry.valid = false;
+    invalidateAuthorization(epoch, validate = null) {
+      for (const entry of entries) if (validate ? !validate(entry) : entry.authorizationEpoch !== epoch) entry.valid = false;
+    },
+    authorizationEntries() { return entries.filter((entry) => entry.valid && entry.payload); },
+    retainAuthorized(ids) {
+      for (const entry of entries) if (!ids.has(entry.id)) entry.valid = false;
     },
     ids() {
       return entries.filter((entry) => entry.valid).map((entry) => entry.id);
@@ -115,7 +120,9 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
             summaryJson: summaryJson.length <= MAX_SUMMARY_JSON_CHARS
               ? summaryJson
               : JSON.stringify({ ...entry.summary, highlights: [] }),
-            evidenceJson: JSON.stringify({ ...payload, authorizationEpoch: entry.authorizationEpoch, ...(clarificationContext ? { clarificationContext } : {}) })
+            evidenceJson: JSON.stringify({ ...payload, authorizationEpoch: entry.authorizationEpoch,
+              authorizationReferences: evidenceTaskReferences(payload),
+              ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {}), ...(clarificationContext ? { clarificationContext } : {}) })
           };
         });
     }

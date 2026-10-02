@@ -90,14 +90,14 @@ test('a successful NOT_FOUND retry supersedes earlier errors and has its own ter
   assert.equal(aiTelemetrySnapshot().grounding.failed, 0);
 });
 
-test('NOT_FOUND cannot discard successful relevant evidence', async (t) => {
+test('a confirmed deletion invalidates formerly successful evidence before final rendering', async (t) => {
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({ sicil: AYSE,
     effective: { access: new Map([[PROJECTS.FULL, { accessLevel: 'FULL', reasons: [] }]]), partialTaskIds: new Set() } }) });
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }), (_input, stack) => {
     stack.db.tasks = stack.db.tasks.filter((task) => task.TaskId !== TASKS.OVERDUE);
     return calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'removed');
-  }, reply('{"kind":"not_found"}'), reply('{"kind":"unavailable"}')], { context });
-  assert.equal(result.outcome, 'failed');
+  }, reply('{"kind":"not_found"}')], { context });
+  assert.equal(result.outcome, 'not_found');
   assert.deepEqual(result.evidenceRows, []);
 });
 

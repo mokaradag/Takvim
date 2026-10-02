@@ -325,6 +325,9 @@ function evidenceRowsFor(db, messageIds) {
     .filter((row) => wanted.has(guid(row.MessageId)))
     .map((row) => ({ MessageId: row.MessageId, Ordinal: row.Ordinal, SummaryJson: row.SummaryJson,
       AuthorizationEpoch: JSON.parse(row.EvidenceJson || '{}').authorizationEpoch ?? null,
+      ScopedAuthorization: JSON.stringify(JSON.parse(row.EvidenceJson || '{}').scopedAuthorization ?? null),
+      AuthorizationReferences: JSON.stringify(JSON.parse(row.EvidenceJson || '{}').authorizationReferences ?? null),
+      LegacyEvidenceJson: JSON.parse(row.EvidenceJson || '{}').authorizationReferences ? null : row.EvidenceJson,
       ClarificationContext: JSON.stringify(JSON.parse(row.EvidenceJson || '{}').clarificationContext ?? null) }));
 }
 

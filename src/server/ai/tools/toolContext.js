@@ -1,5 +1,4 @@
 import 'server-only';
-import { createHash } from 'node:crypto';
 import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { loadAuthorizationContext } from '../../authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../db/pool.js';
@@ -10,6 +9,8 @@ import { buildRotaScope } from './rota/rotaScope.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
+import { authorizationFingerprint, evidenceTaskReferences, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
+import { readTaskFacts } from './rota/rotaToolStore.js';
 
 /**
  * Bir Rota AI turunun araç bağlamı.
@@ -37,7 +38,7 @@ export function createToolTurnContext({
   loadAuthorization = loadAuthorizationContext,
   gate = toolSqlGate
 }) {
-  const state = { sqlMs: 0, queries: 0, authorization: null, authorizationLoads: 0, epoch: null };
+  const state = { sqlMs: 0, queries: 0, authorization: null, authorizationLoads: 0, epoch: null, current: null };
   const waiting = new WeakSet();
   const snapshots = new Map();
   const today = businessDate(now);
@@ -86,15 +87,33 @@ export function createToolTurnContext({
     }
     const scope = buildRotaScope(auth);
     const previousEpoch = state.epoch;
-    state.epoch = createHash('sha256').update(JSON.stringify({
-      sicil: scope.sicil, admin: scope.isAdmin, executive: scope.isExecutive,
-      projects: [...scope.projects].sort(([a], [b]) => a.localeCompare(b)),
-      tasks: scope.scopedTaskIds.split(',').sort(),
-      taskRights: (auth.scopeTaskRights || []).map(({ projectId, taskId, reason }) => [projectId, taskId, reason]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
-      people: [...(auth.scopeIdentities || [])].sort((a, b) => a - b), assignment: scope.canAssignAllCorporate
-    })).digest('hex');
+    state.epoch = authorizationFingerprint(auth, scope);
+    state.current = Object.freeze({ auth, scope });
     if (previousEpoch && previousEpoch !== state.epoch) snapshots.clear();
-    return Object.freeze({ auth, scope });
+    return state.current;
+  }
+
+  function isEvidenceAuthorized(entry) {
+    if (!entry.authorizationEpoch || !state.current) return false;
+    const proof = entry.scopedAuthorization;
+    return proof?.version === 1
+      ? proof.epoch === authorizationFingerprint(state.current.auth, state.current.scope, proof)
+      : entry.authorizationEpoch === state.epoch;
+  }
+
+  async function revalidateEvidence(entries, signal) {
+    const eligible = entries.filter(isEvidenceAuthorized);
+    const references = new Map(eligible.map((entry) => [entry.id, entry.taskReferences || evidenceTaskReferences(JSON.parse(entry.payload || '{}'))]));
+    const taskIds = [...new Set([...references.values()].flat().map((row) => row.taskId))];
+    if (taskIds.length > limits.maxAnalyzedTasks) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+    const current = new Map();
+    if (taskIds.length) {
+      const result = await withSql(signal, (executor) => readTaskFacts(executor, state.current.scope, { taskIds, maxRows: taskIds.length }), { authorizationOnly: true });
+      if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      for (const fact of result.facts) current.set(fact.id, fact.projectId);
+    }
+    return new Set(eligible.filter((entry) => references.get(entry.id).every(({ taskId, projectId }) =>
+      current.has(taskId) && (!projectId || current.get(taskId) === projectId))).map((entry) => entry.id));
   }
 
   return Object.freeze({
@@ -127,6 +146,9 @@ export function createToolTurnContext({
       return result;
     },
     authorizationEpoch() { return state.epoch; },
+    evidenceAuthorization(args, envelope) { return scopedEvidenceAuthorization(state.current.auth, state.current.scope, args, envelope); },
+    isEvidenceAuthorized,
+    revalidateEvidence,
     revalidateAuthorization(signal) { return loadScope(signal, true); },
     timeoutCode(signal) { return waiting.has(signal) ? TOOL_ERROR_CODES.BUSY : TOOL_ERROR_CODES.TIMEOUT; },
     stats() {

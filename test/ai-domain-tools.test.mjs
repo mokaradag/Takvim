@@ -755,7 +755,12 @@ test('kanıt defteri modele verilen güvenli sonucu saklar; veri içindeki talim
   assert.equal(row.entityId, TASKS.LITERAL);
   const persisted = JSON.parse(row.evidenceJson);
   assert.match(persisted.authorizationEpoch, /^[a-f0-9]{64}$/);
+  assert.deepEqual(persisted.authorizationReferences, [{ taskId: TASKS.LITERAL, projectId: PROJECTS.FULL }]);
+  assert.equal(persisted.scopedAuthorization.version, 1);
+  assert.match(persisted.scopedAuthorization.epoch, /^[a-f0-9]{64}$/);
   delete persisted.authorizationEpoch;
+  delete persisted.authorizationReferences;
+  delete persisted.scopedAuthorization;
   assert.deepEqual(persisted, result);
   assert.doesNotMatch(row.evidenceJson + row.summaryJson, /@scope|#AiScope|STRING_SPLIT|isAdmin|scopeProjects/);
   assert.equal(result.generatedAt.endsWith('Z'), true);

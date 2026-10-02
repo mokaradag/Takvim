@@ -71,6 +71,88 @@ test('legacy evidence without an authorization epoch is never disclosed', async 
   assert.equal(reopened.body.messages.find((message) => message.role === 'assistant').content, NON_ENUMERATING_FAILURE_TEXT);
 });
 
+test('revoked grounded text never reaches general-chat history even with a ready evidence table', async (t) => {
+  const stack = stackFor(t);
+  citeTask(stack, TASKS.OVERDUE);
+  const first = done(await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' }));
+  const title = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE).Title;
+  stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+  stack.provider.enqueue({ type: 'stream', text: 'Genel açıklama.' });
+  await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), source: 'general', message: 'Genel bir açıklama yap' });
+  const history = stack.provider.calls.at(-1).messages.filter((message) => message.role === 'assistant');
+  assert.ok(history.length);
+  assert.ok(history.every((message) => !message.content.includes(title) && !message.content.includes('【R1】')));
+});
+
+test('unrelated project grants do not hide a still-authorized saved task answer', async (t) => {
+  const stack = stackFor(t);
+  citeTask(stack, TASKS.OVERDUE);
+  const first = done(await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' }));
+  stack.db.projectAccess.push({ ProjectId: PROJECTS.HIDDEN, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
+  const loaded = await loadAssistantConversation(first.conversation.id);
+  const answer = loaded.body.messages.find((message) => message.role === 'assistant');
+  assert.equal(answer.content, first.assistantMessage.content);
+  assert.equal(answer.evidence.length, 1);
+});
+
+test('moving a cited task outside the current scope hides it on reopen and replay', async (t) => {
+  const stack = stackFor(t);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+  citeTask(stack, TASKS.OVERDUE);
+  const turnId = randomUUID();
+  const first = done(await sendTurn({ turnId, message: 'Görevi göster' }));
+  const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
+  const context = createToolTurnContext({ sicil: AYSE });
+  const signal = new AbortController().signal;
+  await context.revalidateAuthorization(signal);
+  const epoch = context.authorizationEpoch();
+  task.ProjectId = PROJECTS.HIDDEN;
+  await context.revalidateAuthorization(signal);
+  assert.equal(context.authorizationEpoch(), epoch, 'project move does not change the caller grant epoch');
+  const loaded = await loadAssistantConversation(first.conversation.id);
+  assert.equal(loaded.body.messages.find((message) => message.role === 'assistant').content, NON_ENUMERATING_FAILURE_TEXT);
+  assert.equal(deltas(await sendTurn({ conversationId: first.conversation.id, turnId, message: 'Görevi göster' })), NON_ENUMERATING_FAILURE_TEXT);
+});
+
+test('a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence', async (t) => {
+  const stack = stackFor(t);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+  const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
+  const title = task.Title;
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
+    { type: 'script', respond: (call) => {
+      const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
+      task.ProjectId = PROJECTS.HIDDEN;
+      return { type: 'answer', text: evidenceReply(claimFor(result, 'data.task.title')) };
+    } }, { type: 'answer', text: '{"kind":"unavailable"}' });
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' });
+  assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
+  assert.ok(!deltas(response).includes(title));
+  assert.deepEqual(stack.db.aiMessageEvidence, []);
+});
+
+test('a transient post-persist check preserves this turn, while reopen fails closed as unavailable', async (t) => {
+  const stack = stackFor(t);
+  citeTask(stack, TASKS.OVERDUE);
+  stack.db.aiConversationHooks = { beforeAppend() {
+    stack.db.aiToolFailure = { 'task-facts': Object.assign(new Error('temporary read failure'), { code: 'DATABASE_UNAVAILABLE' }) };
+  } };
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' });
+  const saved = done(response);
+  assert.equal(saved.assistantMessage.finishReason, 'stop');
+  assert.equal(saved.assistantMessage.content, deltas(response));
+  assert.equal(saved.assistantMessage.evidence.length, 1);
+  const busy = await loadAssistantConversation(saved.conversation.id);
+  const hidden = busy.body.messages.find((message) => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'unavailable');
+  assert.match(hidden.content, /şu anda ulaşılamıyor/);
+  assert.deepEqual(hidden.evidence, []);
+  delete stack.db.aiToolFailure;
+  const recovered = await loadAssistantConversation(saved.conversation.id);
+  assert.equal(recovered.body.messages.find((message) => message.role === 'assistant').content, saved.assistantMessage.content);
+});
+
 for (const source of ['rota', 'general']) {
   test(`write reconciliation uses the same disclosure gate for the ${source} generation path`, async (t) => {
     const stack = stackFor(t);

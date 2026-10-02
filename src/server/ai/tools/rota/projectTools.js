@@ -399,7 +399,7 @@ const wbsInspect = {
         catalogVisibility: catalogVisible ? 'full-catalog' : 'ancestor-chain-of-visible-tasks',
         nodeCount,
         nodes: listed,
-        tasksWithoutWbs: unplacedTasks,
+        tasksWithoutWbs: args.wbsId ? null : unplacedTasks,
         notes: [
           'Görev sayıları yalnızca görünür görevler üzerindedir.',
           ...(catalogVisible ? [] : ['Bu projede yalnızca yetkili görevlerinizin bağlı olduğu düğümler ve ataları görünür.']),

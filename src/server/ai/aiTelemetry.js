@@ -386,6 +386,11 @@ function percentiles(samples) {
   return { count: summary.count, p50Ms: summary.p50Ms, p95Ms: summary.p95Ms };
 }
 
+function countPercentiles(samples) {
+  const { count, p50Ms, p95Ms } = percentiles(samples);
+  return { count, p50Count: p50Ms, p95Count: p95Ms };
+}
+
 /** Sağlık görünümü için sınırlı özet; gizli bilgi taşımaz. */
 export function aiTelemetrySnapshot() {
   const current = state();
@@ -421,8 +426,8 @@ export function aiTelemetrySnapshot() {
       failed: current.grounding.failed,
       repaired: current.grounding.repaired,
       disclosed: current.grounding.disclosed,
-      rounds: percentiles(current.grounding.rounds),
-      evidence: percentiles(current.grounding.evidence)
+      rounds: countPercentiles(current.grounding.rounds),
+      evidence: countPercentiles(current.grounding.evidence)
     },
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,

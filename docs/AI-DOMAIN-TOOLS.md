@@ -853,14 +853,23 @@ kurmaz. Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süres
 Küme başına tek yetki okuması proje erişimi, kısmi görev kimlikleri, yönetici
 bayrakları, görev başına oluşturucu/sorumlu/yönetim nedenleri ve yönetim
 kapsamındaki kişi üyeliklerinden sunucu içi bir epoch
-üretir. Defter her kanıtı bu epoch'a bağlar. Sonraki küme farklı epoch görürse
-eski kanıt geçersiz olur; kaynak kimliği yeniden kullanılmaz. Son çizimden
-önce yetki bir kez daha kapı/süre sınırı içinde okunur; geçersiz kanıt ne
+üretir. Defter her kanıtı bu epoch'a bağlar. Yeni proje/görev odaklı kanıt
+ayrıca yalnızca ilgili proje ve görev nüfusunun yetki parmak izini taşır;
+ilgisiz bir projeye hibe verilmesi bu kanıtı tek başına iptal etmez. Global
+toplamlar ve eski kapsam parmak izi olmayan kanıtlar tam epoch kontrolünü
+korur. Son çizimden önce yetki bir kez daha kapı/süre sınırı içinde okunur;
+atıf yapılan görevlerin varlığı, güncel görünürlüğü ve proje üyeliği toplu,
+sınırlı bir okumayla yeniden doğrulanır. Geçersiz kanıt ne
 çizilir ne yanıtla kaydedilir. Epoch modele/tarayıcıya yetki ayrıntısı taşımaz.
 Epoch `EvidenceJson` içinde kalıcıdır. Konuşma açma, tekrar oynatma ve
-yazma uzlaştırması aynı merkezi açıklama kapısından geçer: güncel epoch
-eşleşmiyorsa yanıt metni ve kaynak künyeleri birlikte gizlenir. Eski, epoch
-içermeyen kanıt güvenilir sayılmaz; kanıt/yetki okuma hatası açıklamayı açmaz.
+yazma uzlaştırması aynı merkezi açıklama kapısından geçer: kanıt nüfusunun
+yetkisi veya atfedilen görev üyeliği doğrulanamıyorsa yanıt metni ve kaynak
+künyeleri birlikte gizlenir. Tek bir atıf iptal olsa bile kayıtlı yanıtın
+tamamı gizlenir; korunmuş metin genel sohbet geçmişine de alınmaz. Eski, epoch
+içermeyen kanıt güvenilir sayılmaz; geçici kanıt/yetki okuma hatası `unavailable`
+olarak gösterilir, yetki kaybı diye sunulmaz. Yeni doğrulanıp yazılan kendi
+yanıtının tekrar okuması geçici olarak başarısızsa doğrulanmış sonuç korunur;
+başka bir yazıcıyla uzlaştırılmış eski yanıt bu istisnayı kullanamaz.
 Son yetki okumasının ayrı 8 saniyelik bütçesi vardır; tüketilmiş araç SQL
 bütçesi başarılı kanıtı otomatik doğrulama hatasına çevirmez.
 Bu, gözlenen yetki değişimini kapatan uygulama denetimidir; SQL okuması,

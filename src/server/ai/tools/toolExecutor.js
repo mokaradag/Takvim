@@ -171,7 +171,7 @@ export function createToolExecutor({
     const fatal = settled.find((item) => item.status === 'rejected');
     if (fatal) throw fatal.reason;
 
-    if (context.authorizationEpoch?.()) ledger.invalidateAuthorization(context.authorizationEpoch());
+    if (context.authorizationEpoch?.()) ledger.invalidateAuthorization(context.authorizationEpoch(), context.isEvidenceAuthorized);
 
     // Kanıt kimlikleri tamamlanma sırasıyla değil ÇAĞRI sırasıyla verilir.
     const contents = new Array(plans.length);
@@ -208,7 +208,8 @@ export function createToolExecutor({
             partial: shrunk.scope?.kind === 'authorized-task-subset',
             counts: { returned: shrunk.returnedCount, total: shrunk.totalCount },
             highlights: shrunk.truncated ? [] : (result.outcome.evidence?.highlights || []),
-            authorizationEpoch: context.authorizationEpoch?.() ?? null
+            authorizationEpoch: context.authorizationEpoch?.() ?? null,
+            scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk) ?? null
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);

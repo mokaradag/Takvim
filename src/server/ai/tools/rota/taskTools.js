@@ -132,7 +132,9 @@ function filterHighlights(filters) {
   if (filters.assignee === 'unassigned') highlights.push('Sorumlusuz');
   if (filters.createdByMe) highlights.push('Oluşturduğunuz');
   if (filters.text) highlights.push(`Metin: ${dataText(filters.text, 40)}`);
-  if (filters.dateField) highlights.push(`${filters.dateField}: ${filters.dateFrom || '…'} – ${filters.dateTo || '…'}`);
+  const dateLabels = { targetFinish: 'Termin', calendarDate: 'Takvim günü', plannedStart: 'Planlanan başlangıç',
+    plannedFinish: 'Planlanan bitiş', actualStart: 'Gerçekleşen başlangıç', actualFinish: 'Gerçekleşen bitiş' };
+  if (dateLabels[filters.dateField]) highlights.push(`${dateLabels[filters.dateField]}: ${filters.dateFrom || '…'} – ${filters.dateTo || '…'}`);
   return highlights.slice(0, 4);
 }
 

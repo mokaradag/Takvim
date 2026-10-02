@@ -408,7 +408,7 @@ ${visibleTasks()}
     COALESCE(SUM(CASE WHEN t.TaskId IS NOT NULL AND ${STATUS_SQL} NOT IN ('done', 'in_progress') THEN 1 ELSE 0 END), 0) AS TodoCount,
     COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish < @today THEN 1 ELSE 0 END), 0) AS OverdueCount,
     COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish >= @today AND t.TargetFinish <= @soonEnd THEN 1 ELSE 0 END), 0) AS DueSoonCount,
-    COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL THEN 1 ELSE 0 END), 0) AS NoTargetCount,
+    COALESCE(SUM(CASE WHEN t.TaskId IS NOT NULL AND ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL THEN 1 ELSE 0 END), 0) AS NoTargetCount,
     COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.IsMilestone = 1 THEN 1 ELSE 0 END), 0) AS OpenMilestoneCount,
     MIN(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish >= @today THEN t.TargetFinish END) AS NextTargetFinish,
     MAX(t.UpdatedAt) AS LastTaskUpdateAt

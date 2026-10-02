@@ -39,6 +39,50 @@ test('all 19 tools retain their root and common analytical roots allow explicit 
   for (const [from, to] of Object.entries(graph)) assert.ok(toolsForInitialCalls([{ name: from }], catalog).has(to));
 });
 
+test('global analytics/search follow-ups preserve the canonical task population in both directions', async (t) => {
+  for (const [from, to] of [['rota_task_analytics', 'rota_task_search'], ['rota_task_search', 'rota_task_analytics']]) {
+    const scope = createToolScope();
+    const args = { deadline: 'overdue', status: ['todo', 'in_progress'] };
+    scope.establish([{ name: from, arguments: JSON.stringify(args) }], [{ content: '{"ok":true,"data":{}}' }]);
+    assert.doesNotThrow(() => scope.validate(to, { ...args, limit: 1 }));
+    assert.doesNotThrow(() => scope.validate(to, { ...args, status: ['todo'] }));
+    for (const broader of [{}, { ...args, deadline: undefined }, { ...args, status: ['done'] }, { ...args, text: 'injected' }]) {
+      assert.throws(() => scope.validate(to, broader), { code: 'UNSUPPORTED_SCOPE' });
+    }
+  }
+  stackFor(t);
+  const steps = [
+    { text: '', toolCalls: [{ id: 'count', name: 'rota_task_analytics', arguments: '{"deadline":"overdue"}' }] },
+    { text: '', toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] }
+  ];
+  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
+    if (steps.length) return steps.shift();
+    const results = input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+    assert.ok(results.every((item) => item.ok), JSON.stringify(results));
+    assert.equal(results[0].data.totals.total, results[1].totalCount);
+    return { text: evidenceReply(claimFor(results[0], 'data.totals.total'), claimFor(results[1], 'data.tasks.0.title')), toolCalls: [], finishReason: 'stop' };
+  } }, { messages: buildGroundedContext({ userContent: 'Kaç gecikmiş görevim var ve hangileri?', now: NOW }).messages,
+    catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {} });
+  assert.equal(result.outcome, 'grounded');
+  assert.equal(result.repaired, false);
+});
+
+test('omitted activity/calendar defaults cannot widen during same-tool follow-ups', () => {
+  const activity = createToolScope({ today: '2026-09-29' });
+  activity.establish([{ name: 'rota_activity_search', arguments: '{}' }], [{ content: '{"ok":true,"data":{}}' }]);
+  assert.doesNotThrow(() => activity.validate('rota_activity_search', { cursor: 'next' }));
+  assert.doesNotThrow(() => activity.validate('rota_activity_search', { period: 'custom', dateFrom: '2026-09-29' }));
+  assert.throws(() => activity.validate('rota_activity_search', { period: 'last_7_days' }), { code: 'UNSUPPORTED_SCOPE' });
+  const custom = createToolScope({ today: '2026-09-29' });
+  custom.establish([{ name: 'rota_activity_search', arguments: '{"dateFrom":"2026-09-20"}' }], [{ content: '{"ok":true,"data":{}}' }]);
+  assert.throws(() => custom.validate('rota_activity_search', { dateFrom: '2026-09-20', dateTo: '2026-09-29' }), { code: 'UNSUPPORTED_SCOPE' });
+  const calendar = createToolScope({ today: '2026-09-29' });
+  calendar.establish([{ name: 'rota_calendar_inspect', arguments: '{}' }], [{ content: '{"ok":true,"data":{}}' }]);
+  assert.doesNotThrow(() => calendar.validate('rota_calendar_inspect', { dateFrom: '2026-10-01', dateTo: '2026-10-05' }));
+  assert.throws(() => calendar.validate('rota_calendar_inspect', { dateFrom: '2026-09-28' }), { code: 'UNSUPPORTED_SCOPE' });
+  assert.throws(() => calendar.validate('rota_calendar_inspect', { dateTo: '2026-12-01' }), { code: 'UNSUPPORTED_SCOPE' });
+});
+
 test('a current-user notification root permits its workflow drill-down without arbitrary new search', () => {
   const scope = createToolScope();
   scope.establish([{ name: 'rota_notifications', arguments: '{}' }], [{ content: '{"ok":true,"data":{}}' }]);
@@ -55,6 +99,17 @@ test('person-filtered roots retain their identity even when results have names o
     assert.doesNotThrow(() => scope.validate(name, { ...args, cursor: 'next' }));
     assert.throws(() => scope.validate(name, { ...args, personSicil: MEHMET }), { code: 'UNSUPPORTED_SCOPE' });
   }
+});
+
+test('a capped page cannot make duplicate exact project matches appear unique', async (t) => {
+  const stack = stackFor(t);
+  const original = stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL);
+  stack.db.projects.push({ ...original, ProjectId: '12000000-0000-4000-8000-000000000999' });
+  const read = await callRotaTool(stack, AYSE, 'rota_project_search', { text: original.ProjectName, limit: 1 });
+  assert.equal(read.result.data.matches.length, 1);
+  assert.equal(read.result.data.matches[0].exactMatch, true);
+  assert.equal(read.result.totalCount, 2);
+  assert.equal(read.result.data.ambiguous, true);
 });
 
 test('task calendar evidence resolves active task, project and default calendars or remains unknown', async (t) => {
@@ -117,6 +172,39 @@ test('no-baseline, generated recurrence and WBS-without-node metrics have claima
   const wbs = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL });
   assert.equal(fact(wbs.result, 'data.tasksWithoutWbs.tasks').value, 1);
   assert.equal(fact(wbs.result, 'data.tasksWithoutWbs.overdue').value, 1);
+  const focused = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, wbsId: WBS.FULL_DESIGN });
+  assert.equal(focused.result.data.tasksWithoutWbs, null);
+});
+
+test('empty visible portfolio projects contribute zero tasks without a target finish', async (t) => {
+  const stack = stackFor(t, { tasks: [], taskAssignees: [] });
+  const read = await callRotaTool(stack, AYSE, 'rota_portfolio_summary');
+  assert.ok(read.result.data.projects.length > 0);
+  assert.ok(read.result.data.projects.every((project) => project.tasks.openWithoutTargetFinish === 0));
+  assert.equal(read.result.data.totals.openWithoutTargetFinish, 0);
+  const { AI_TOOL_PORTFOLIO_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  assert.match(AI_TOOL_PORTFOLIO_SQL, /CASE WHEN t.TaskId IS NOT NULL AND [^\n]+t.TargetFinish IS NULL[^\n]+AS NoTargetCount/);
+});
+
+test('grounding count percentiles keep their values without millisecond field names', async () => {
+  const { recordGroundedAnswer, aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  resetAiTelemetryForTests();
+  recordGroundedAnswer({ outcome: 'grounded', rounds: 3, evidence: 2, repaired: false, disclosed: false });
+  const snapshot = aiTelemetrySnapshot();
+  assert.deepEqual(snapshot.grounding.rounds, { count: 1, p50Count: 3, p95Count: 3 });
+  assert.deepEqual(snapshot.grounding.evidence, { count: 1, p50Count: 2, p95Count: 2 });
+  assert.ok(Object.hasOwn(snapshot.latency.provider, 'p50Ms'));
+});
+
+test('date-filter highlights do not expose internal field names in the evidence panel', async (t) => {
+  const stack = stackFor(t);
+  const read = await callRotaTool(stack, AYSE, 'rota_task_search', { dateField: 'calendarDate', dateFrom: '2026-09-01', dateTo: '2026-10-31' });
+  const summary = JSON.stringify(read.ledger.summaries());
+  assert.match(summary, /Takvim günü/);
+  assert.doesNotMatch(summary, /calendarDate|dateField|dateFrom|dateTo/);
+  const rendered = renderEvidenceFact(fact(read.result, 'totalCount'), 'R1');
+  assert.match(rendered, /Takvim tarihi/);
+  assert.doesNotMatch(rendered, /calendarDate|dateField|dateFrom|dateTo/);
 });
 
 test('lag, hours and exact currency values keep units in deterministic localized rendering', async (t) => {

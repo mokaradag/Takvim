@@ -365,7 +365,7 @@ Rota AI evidence is added by `database/MR_Upgrade_0018_Ai_Message_Evidence.sql`,
 - evidence is deleted with its message and conversation (`ON DELETE CASCADE`); there is no separate retention;
 - a grounding-failure answer (`FinishReason = 'grounding_failed'`) stores no evidence.
 
-Fresh installations create the same table in `MR_Create_Durable_Persistence.sql`; rollback drops it before the conversation tables. Until the migration runs the application stays fully usable and Rota AI answers through the Phase 2 general chat path even when `MERGEN_ROTA_AI_TOOLS_ENABLED=true`. See `docs/AI-DOMAIN-TOOLS.md` §13.
+Fresh installations create the same table in `MR_Create_Durable_Persistence.sql`; rollback drops it before the conversation tables. Until the migration runs the application stays fully usable. With `MERGEN_ROTA_AI_TOOLS_ENABLED=true`, the Rota data source returns a fixed unavailable response without calling the model; users can still explicitly select General chat. See `docs/AI-DOMAIN-TOOLS.md` §13.
 
 During the first corporate project synchronization, the repository fills `MR_Projects.LeadSicil` from the `PROJECT_MANAGER` role. No separate `0002` migration script is required while the application is being tested through clean database recreation.
 

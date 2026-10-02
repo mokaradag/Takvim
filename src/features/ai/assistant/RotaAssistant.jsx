@@ -198,7 +198,9 @@ function Welcome({ readiness, onSuggest, recent }) {
       <h3>Size nasıl yardımcı olabilirim?</h3>
       <p>
         Rota AI genel sorularınızda, yazım, özetleme ve açıklama işlerinde yardımcı olur.
-        Şu an Rota’daki görev, proje ve ekip verilerinize erişimi yoktur; bu bilgileri sorunuzda siz paylaşabilirsiniz.
+        {readiness?.rotaData?.enabled
+          ? ' Rota verisi seçeneğiyle görüntüleme yetkiniz olan görev, proje ve ekip verilerini kullanabilir.'
+          : ' Şu an Rota’daki görev, proje ve ekip verilerinize erişimi yoktur; bu bilgileri sorunuzda siz paylaşabilirsiniz.'}
       </p>
       {!notice && (
         <div className="rota-assistant-suggestions" role="group" aria-label="Örnek sorular">

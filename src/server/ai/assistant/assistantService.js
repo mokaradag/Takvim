@@ -67,8 +67,8 @@ const MODE_PROFILES = Object.freeze({
 
 /**
  * Rota verisi araçları açıkken (MERGEN_ROTA_AI_TOOLS_ENABLED) kip → araç
- * yetenekli profil. Profil kurulmamışsa ya da 0018 uygulanmamışsa tur genel
- * sohbet yoluyla (yukarıdaki eşleme) yanıtlanır ve Rota verisine erişmez.
+ * yetenekli profil. Araçlar açıkken profil kurulmamışsa ya da 0018
+ * uygulanmamışsa veri turu sabit unavailable yanıtı alır.
  */
 const MODE_TOOL_PROFILES = Object.freeze({
   [ASSISTANT_MODES.STANDARD]: AI_PROFILES.CHAT_TOOLS,
@@ -286,7 +286,8 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   }));
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
-  return { ready: result.ready, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage, clarificationByMessage: result.clarificationByMessage };
+  return { ready: result.ready, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
+    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage };
 }
 
 /* ── Hazırlık durumu ─────────────────────────────────────────── */
@@ -476,17 +477,17 @@ async function optionalEvidence(sicil, signal, target) {
       const deadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
       try {
         await context.revalidateAuthorization(deadline.signal);
-        const epoch = context.authorizationEpoch();
+        const authorized = await context.revalidateEvidence([...evidence.authorizationByMessage.values()].flat(), deadline.signal);
         evidence.byMessage = new Map([...evidence.byMessage].filter(([id]) => {
-          const epochs = evidence.epochsByMessage?.get(id);
-          return epochs?.length && epochs.every((value) => value === epoch);
+          const entries = evidence.authorizationByMessage.get(id);
+          return entries?.length && entries.every((entry) => authorized.has(entry.id));
         }));
       } finally { deadline.dispose(); }
     }
     return evidence;
   } catch (error) {
     if (error?.code === 'UNAUTHORIZED' || error?.code === AI_ERROR_CODES.AI_CANCELLED || signal?.aborted) throw error;
-    return null;
+    return { unavailable: true };
   }
 }
 
@@ -496,6 +497,9 @@ function discloseSavedMessages(messages, evidence) {
     const saved = evidence?.byMessage?.get(message.id);
     if (saved?.length) return { ...message, evidence: saved };
     if (evidence?.epochsByMessage?.has(message.id) || /【R[1-9]\d?】/.test(String(message.content || ''))) {
+      if (evidence?.unavailable || evidence?.ready === false) {
+        return { ...message, content: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', evidence: [], finishReason: 'unavailable' };
+      }
       return { ...message, content: 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', evidence: [], finishReason: 'not_found' };
     }
     return message;
@@ -508,7 +512,7 @@ function fallbackAssistantHistory(history, evidence, { conservative = false } = 
   return history.map((message) => {
     if (message.role !== 'assistant') return message;
     const grounded = evidence?.has(message.id)
-      || (!evidence && conservative && /【R[1-9]\d?】/.test(String(message.content || '')));
+      || (conservative && /【R[1-9]\d?】/.test(String(message.content || '')));
     if (grounded) return { ...message, content: FALLBACK_GROUNDED_HISTORY_TEXT };
     return message;
   });
@@ -669,7 +673,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     });
   }
   // Rota verisi araçları: özellik açık, kipin araç profili kurulu ve 0018
-  // uygulanmışsa tur kanıta dayalı yoldan yanıtlanır; aksi hâlde genel sohbet.
+  // uygulanmışsa tur kanıta dayalı yoldan yanıtlanır; araçlar açıkken eksik
+  // hazırlık durumu model çağırmadan unavailable sonucuna gider.
   let grounded = false;
   try {
     grounded = input.source !== 'general' && await groundedTurnAvailable({ config, registry, mode: input.mode, sicil, signal });
@@ -688,14 +693,13 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     let history = prepared.history;
     if (useTools && history.some((message) => message.role === 'assistant')) {
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
-      history = fallbackAssistantHistory(history, priorEvidence?.ready ? priorEvidence.byMessage : null, { conservative: !priorEvidence?.ready });
+      history = fallbackAssistantHistory(history, priorEvidence?.epochsByMessage, { conservative: true });
       history = history.map((message) => message.role === 'assistant' && priorEvidence?.byMessage?.has(message.id) && message.finishReason === 'clarification'
         ? { ...message, clarificationContext: priorEvidence.clarificationByMessage?.get(message.id) } : message);
     }
     if (!useTools && history.some((message) => message.role === 'assistant')) {
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
-      const usableEvidence = priorEvidence?.ready ? priorEvidence.byMessage : null;
-      history = fallbackAssistantHistory(history, usableEvidence, { conservative: usableEvidence == null });
+      history = fallbackAssistantHistory(history, priorEvidence?.epochsByMessage, { conservative: true });
     }
     const contextInput = {
       history,
@@ -846,9 +850,12 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
   if (!stored.persisted || !stored.message) {
     throw conversationNotFound('ANSWER_NOT_PERSISTED');
   }
-  const answer = discloseSavedMessages([stored.message], await optionalEvidence(turn.sicil, signal, {
+  const evidence = await optionalEvidence(turn.sicil, signal, {
     conversationId: turn.conversation.id, messageId: stored.message.id
-  }))[0];
+  });
+  const answer = evidence?.unavailable && stored.message.id === messageId
+    ? { ...stored.message, evidence: grounded.evidence }
+    : discloseSavedMessages([stored.message], evidence)[0];
   return {
     conversation: stored.conversation,
     answer: { ...answer, evidence: answer.evidence || [] },

@@ -254,7 +254,8 @@ export async function appendConversationAnswer(executor, sicil, {
 
 /**
  * Konuşmadaki yanıtların kanıt özetleri. 0018 yoksa `ready: false` ve boş
- * eşleme döner; kanıt metni (EvidenceJson) okunmaz, yalnızca güvenli özet.
+ * eşleme döner. Kanıt yükü yalnızca sunucuda güncel varlık yetkisini
+ * doğrulamak için okunur; tarayıcıya yalnızca güvenli özet gider.
  */
 export async function loadConversationEvidence(executor, sicil, { conversationId, messageId = null, maxEvidence }) {
   const request = sicilRequest(executor, sicil);
@@ -271,10 +272,21 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   const [[state] = [], rows = []] = recordsetsOf(result);
   const epochsByMessage = new Map();
   const clarificationByMessage = new Map();
+  const authorizationByMessage = new Map();
   for (const row of rows) {
     const id = idOrNull(row.MessageId);
     if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
     epochsByMessage.get(id).push(row.AuthorizationEpoch ?? null);
+    if (!authorizationByMessage.has(id)) authorizationByMessage.set(id, []);
+    let authorizationEpoch = row.AuthorizationEpoch ?? null;
+    let scopedAuthorization = null;
+    let taskReferences = null;
+    try {
+      scopedAuthorization = JSON.parse(row.ScopedAuthorization || 'null');
+      taskReferences = JSON.parse(row.AuthorizationReferences || 'null');
+    } catch { authorizationEpoch = null; }
+    authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.LegacyEvidenceJson || '{}',
+      authorizationEpoch, scopedAuthorization, taskReferences });
     try {
       const candidates = JSON.parse(row.ClarificationContext || 'null');
       if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));
@@ -284,6 +296,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     knownSicil: Boolean(state?.KnownSicil),
     ready: Boolean(state?.EvidenceReady),
     epochsByMessage,
+    authorizationByMessage,
     clarificationByMessage,
     byMessage: evidenceByMessage(rows)
   };
