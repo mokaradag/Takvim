@@ -66,6 +66,8 @@ export function AssistantComposer({
   onModeChange,
   source = 'rota',
   dataEnabled = false,
+  dataAvailable = true,
+  dataUnavailableMessage = null,
   onSourceChange,
   maxChars,
   inputRef
@@ -151,9 +153,10 @@ export function AssistantComposer({
         {dataEnabled && <label>
           Yanıt kaynağı
           <select aria-label="Yanıt kaynağı" value={source} disabled={disabled || generating} onChange={(event) => onSourceChange?.(event.target.value)}>
-            <option value="rota">Rota verisi · doğrulanmış kanıt</option>
+            <option value="rota" disabled={!dataAvailable}>Rota verisi · doğrulanmış kanıt</option>
             <option value="general">Genel sohbet · Rota verisi okunmaz</option>
           </select>
+          {dataUnavailableMessage && <span role="status">{dataUnavailableMessage}</span>}
         </label>}
         <ModeSwitch mode={mode} modes={modes} onChange={onModeChange} disabled={disabled} />
         <span className="rota-assistant-composer-status">

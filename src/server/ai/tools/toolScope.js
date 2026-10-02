@@ -62,17 +62,16 @@ export function createToolScope({ today = businessDate(new Date()) } = {}) {
       const successful = messages.map((message, index) => ({ body: JSON.parse(message.content || '{}'), call: calls[index] }))
         .filter((item) => item.body.ok === true);
       if (!successful.length) return;
-      if (established) {
-        successful.forEach(({ body }) => capture(body.data));
-        return;
-      }
+      const initialRound = !established;
       for (const { body, call } of successful) {
         let args;
         try { args = parseToolArguments(getRotaTool(call.name).parameters, call.arguments || '{}'); } catch { continue; }
         roots.set(call.name, [...(roots.get(call.name) || []), populationArguments(call.name, args, today)]);
-        for (const field of args.textFields || []) textFields.add(field);
-        if (call.name === 'rota_portfolio_summary') broadProjects = true;
-        if (args.projectId || ['rota_project_search', 'rota_portfolio_summary'].includes(call.name)) projectScope = true;
+        if (initialRound) {
+          for (const field of args.textFields || []) textFields.add(field);
+          if (call.name === 'rota_portfolio_summary') broadProjects = true;
+          if (args.projectId || ['rota_project_search', 'rota_portfolio_summary'].includes(call.name)) projectScope = true;
+        }
         if (body.data?.ambiguous === true) ambiguous = true;
         capture(args);
         capture(body.data);

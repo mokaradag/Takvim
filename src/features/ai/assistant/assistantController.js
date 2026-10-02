@@ -8,7 +8,7 @@ import {
   normalizeAssistantMessage
 } from '../../../domain/ai/assistantContract.js';
 import * as assistantApi from './assistantClient.js';
-import { assistantFailureView, isSessionFailure } from './assistantPresentation.js';
+import { assistantFailureView, effectiveAssistantSource, isSessionFailure } from './assistantPresentation.js';
 
 /**
  * Rota AI'nin durum makinesi — React'ten bağımsız, saf JavaScript.
@@ -291,7 +291,11 @@ export function createAssistantController({
       // Gösterilen taslak geçersiz (araç çağrısına dönüştü ya da doğrulanamadı):
       // metin kaldırılır, sonraki evre ve metin yeni yanıtın başlangıcıdır.
       run.text = '';
-      if (run.stopping) return;
+      if (run.stopping) {
+        run.stoppedText = '';
+        flushText(run);
+        return;
+      }
       run.cancelFlush?.();
       run.cancelFlush = null;
       setPhase(run, ASSISTANT_STREAM_PHASES.GENERATING);
@@ -527,7 +531,7 @@ export function createAssistantController({
       previousAnswer: existing?.answer?.content ? existing.answer : null,
       content,
       mode: state.mode,
-      source: state.source,
+      source: effectiveAssistantSource(state.readiness, state.mode, state.source),
       controller: new AbortController(),
       text: '',
       phase: 'sending',

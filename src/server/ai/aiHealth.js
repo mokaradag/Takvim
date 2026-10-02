@@ -207,6 +207,10 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   }
   if (!detail.assistantProfiles) return warning(`Rota AI sohbet profilleri (chat.general / chat.reasoning) kullanılamıyor. ${loadText}`);
   if (conversationSchema.ready === false) return warning(`Rota AI konuşma tabloları (0017) doğrulanamadı. ${loadText}`);
+  const turnFailure = telemetry.assistantTurns?.lastFailure;
+  if (turnFailure && !CAPACITY_CODES.has(turnFailure.code) && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
+    return warning(`Son Rota AI turu tamamlanamadı (${turnFailure.code}). ${loadText}`);
+  }
   // Rota verisi araçları açıkken araç yolu kullanılamıyorsa Rota AI genel
   // sohbete düşer; yönetici bunu sağlık görünümünde görür.
   if (detail.rotaData.enabled) {
@@ -217,6 +221,10 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
     if (!detail.rotaData.toolProfiles) {
       return warning(`Rota verisi araçları açık ancak araç yetenekli profiller (chat.tools / chat.tools.reasoning) kullanılamıyor. ${loadText}`);
     }
+    const toolFailure = telemetry.tools?.lastFailure;
+    if (toolFailure && TOOL_SERVICE_FAILURES.has(toolFailure.code) && now - epoch(toolFailure.at) <= BUSY_ATTENTION_WINDOW_MS) {
+      return warning(`Son Rota verisi aracı hizmet hatasıyla sonuçlandı (${toolFailure.code}). ${loadText}`);
+    }
     const evidenceObservedAt = epoch(detail.rotaData.evidenceSchema.observedAt);
     const evidenceFresh = evidenceObservedAt != null && now - evidenceObservedAt <= SCHEMA_FRESHNESS_MS;
     if (detail.rotaData.evidenceSchema.ready !== true || !evidenceFresh) {
@@ -224,14 +232,6 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
         ? `Rota verisi kanıt tablosu (0018) yakın zamanda doğrulanmadı; bağlantıyı sınayın. ${loadText}`
         : `Rota verisi kanıt tablosu (0018) henüz doğrulanmadı; bağlantıyı sınayın. ${loadText}`);
     }
-    const toolFailure = telemetry.tools?.lastFailure;
-    if (toolFailure && TOOL_SERVICE_FAILURES.has(toolFailure.code) && now - epoch(toolFailure.at) <= BUSY_ATTENTION_WINDOW_MS) {
-      return warning(`Son Rota verisi aracı hizmet hatasıyla sonuçlandı (${toolFailure.code}). ${loadText}`);
-    }
-  }
-  const turnFailure = telemetry.assistantTurns?.lastFailure;
-  if (turnFailure && !CAPACITY_CODES.has(turnFailure.code) && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
-    return warning(`Son Rota AI turu tamamlanamadı (${turnFailure.code}). ${loadText}`);
   }
   // Tablonun kurulu olduğu gözlemi de kalıcı değildir: tablo sonradan
   // kaldırılabilir ya da yetkisi alınabilir. Eski bir olumlu gözlem kanıt sayılmaz.

@@ -713,6 +713,10 @@ test('a maximal four-round tool transcript stays within gateway limits and retai
       }
     }
     round += 1;
+    if (round >= 2 && round <= 5) {
+      const resultIds = new Set(input.messages.filter((message) => message.role === 'tool').map((message) => message.toolCallId));
+      for (let index = 0; index < 16; index += 1) assert.ok(resultIds.has(`c_${round - 1}_${index}`));
+    }
     return round <= 4 ? { text: '', toolCalls: Array.from({ length: 16 }, (_, index) => ({ id: `c_${round}_${index}`, name: 'rota_task_search', arguments: '{}' })) }
       : { text: evidenceReply(claimFor(JSON.parse(input.messages.find((message) => message.role === 'tool').content), 'totalCount')), toolCalls: [], finishReason: 'stop' };
   } };

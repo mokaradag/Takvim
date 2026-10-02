@@ -103,8 +103,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
           const clarificationContext = clarification ? selection.slice(0, 10).map(({ index, ordinal }) => {
             const item = sourceCandidates[index];
             if (!item) return null;
-            return { ordinal, name: item.name, ...(item.code ? { code: item.code } : {}),
-              ...(item.sourceType ? { sourceType: item.sourceType } : {}), ...(item.organization ? { organization: item.organization } : {}),
+            return { ordinal,
               ...(item.projectId ? { projectId: item.projectId } : {}), ...(item.sicil ? { personSicil: item.sicil } : {}) };
           }).filter(Boolean) : null;
           return {

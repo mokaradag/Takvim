@@ -291,7 +291,7 @@ sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcıs
 Model her turun niyetini yorumlayabilir; kaynak seçiminin güvenlik sonucunu
 sunucu belirler. Eski asistan düzyazısı güvenilir talimat olarak tekrar
 oynatılmaz; önceki kullanıcı soruları ve güncel yetkiyle doğrulanan minimal
-aday adları/kimlikleri kısa takipler için bağlam sağlar. Aday seçimi metni
+aday sıra numaraları ve kimlikleri kısa takipler için bağlam sağlar; serbest aday adları/kodları ve birim metinleri modele yeniden verilmez. Aday seçimi metni
 yerine sunucunun yapılandırılmış `clarificationContext` referansları kullanılır. Türkçe/İngilizce ifade veya büyük-küçük
 harf regexleri bu sınırı belirlemez. Doğal dil sınıflandırması modelin
 olasılıksal yorumudur; sunucu her ifadenin doğru sınıflandırılacağını iddia

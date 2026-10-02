@@ -173,7 +173,8 @@ const taskSearch = {
     const { scope } = await call.authorization();
     const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const sorted = sortFacts(facts, sort, call.today);
-    const anchor = sorted.map((fact) => taskItem(fact, { projects, assignees, today: call.today }));
+    // Sıralı kimlikler nüfus ve sıra kaymasını yakalar; sorumlu izdüşümü yalnız sayfaya uygulanır.
+    const anchor = sorted.map((fact) => fact.id);
     const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null, anchor });
     const pageAssignees = assignees;
     const pageFacts = page;

@@ -32,7 +32,8 @@ function scoped(executor, scope, options) {
   const query = request.query.bind(request);
   request.query = async (statement) => {
     try { return await query(statement); } catch (error) {
-      if (error?.number === 51001 || error?.originalError?.info?.number === 51001) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      const number = error?.number ?? error?.originalError?.info?.number;
+      if (number === 51001 || (statement === AI_TOOL_WBS_SQL && number === 530)) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       throw error;
     }
   };

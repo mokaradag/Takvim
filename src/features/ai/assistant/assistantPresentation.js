@@ -15,6 +15,25 @@ import { EVIDENCE_KINDS, GROUNDING_FAILED_FINISH_REASON } from '../../../domain/
 
 const GENERIC_FAILURE = 'Yanıt alınamadı. Yeniden deneyebilirsiniz.';
 
+export function rotaDataAvailability(readiness, mode) {
+  const data = readiness?.rotaData;
+  if (!data?.enabled) return { available: false, message: null };
+  if (data.available === true && data.modes?.some((item) => item.id === mode && item.available === true)) {
+    return { available: true, message: null };
+  }
+  const messages = {
+    EVIDENCE_SCHEMA_MISSING: 'Rota verisi için gerekli hazırlık tamamlanmamış.',
+    EVIDENCE_SCHEMA_UNKNOWN: 'Rota verisine erişim şu anda doğrulanamıyor.',
+    PROFILE_UNAVAILABLE: 'Bu yanıt kipinde Rota verisi kullanılamıyor.',
+    TOOL_REGISTRY_INVALID: 'Rota verisi hizmeti şu anda kullanılamıyor.'
+  };
+  return { available: false, message: `${messages[data.reason] || messages.PROFILE_UNAVAILABLE} Genel sohbet kullanılabilir.` };
+}
+
+export function effectiveAssistantSource(readiness, mode, source) {
+  return source === 'rota' && rotaDataAvailability(readiness, mode).available ? 'rota' : 'general';
+}
+
 const CLIENT_FAILURES = Object.freeze({
   REQUEST_CANCELLED: { tone: 'muted', title: 'Yanıt durduruldu', message: 'Yanıtı durdurdunuz. İsterseniz yeniden deneyebilirsiniz.' },
   REQUEST_TIMEOUT: { tone: 'fail', title: 'Sunucu yanıt vermedi', message: 'Sunucudan süre sınırında yanıt alınamadı.' },

@@ -106,7 +106,7 @@ test('a capped page cannot make duplicate exact project matches appear unique', 
   const original = stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL);
   stack.db.projects.push({ ...original, ProjectId: '12000000-0000-4000-8000-000000000999' });
   const read = await callRotaTool(stack, AYSE, 'rota_project_search', { text: original.ProjectName, limit: 1 });
-  assert.equal(read.result.data.matches.length, 1);
+  assert.equal(read.result.data.matches.length, 2);
   assert.equal(read.result.data.matches[0].exactMatch, true);
   assert.equal(read.result.totalCount, 2);
   assert.equal(read.result.data.ambiguous, true);

@@ -3,6 +3,7 @@ import { searchCorporateDirectory } from '../../../directory/directorySearch.js'
 import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
 import { foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
+import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
 
 /* ── rota_workload_summary ────────────────────────────────── */
 
@@ -30,6 +31,7 @@ const workloadSummary = {
     const { scope } = await call.authorization();
     const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const people = new Map();
+    const hoursByPerson = new Map();
     let unassigned = 0;
     for (const fact of facts) {
       if (fact.resolvedAssigneeCount === 0) {
@@ -58,11 +60,12 @@ const workloadSummary = {
         if (isOverdue(fact, call.today)) entry.overdue += 1;
         if (isDueWithin(fact, call.today, DUE_SOON_DAYS)) entry.dueNext7Days += 1;
         if (fact.plannedHours != null) {
-          entry.plannedHoursOnAssignedTasks = Math.round(((entry.plannedHoursOnAssignedTasks ?? 0) + fact.plannedHours) * 100) / 100;
+          hoursByPerson.set(person.sicil, (hoursByPerson.get(person.sicil) ?? 0n) + scaledDecimal(fact.plannedHours, 2));
           entry.tasksWithPlannedHours += 1;
         }
       }
     }
+    for (const [sicil, hours] of hoursByPerson) people.get(sicil).plannedHoursOnAssignedTasks = decimalFromScaled(hours, 2);
     const ordered = [...people.values()].sort((left, right) => right.openTasks - left.openTasks
       || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr') || left.sicil - right.sicil);
     const page = ordered.slice(0, limit);
@@ -135,7 +138,7 @@ const personSearch = {
     }
     const sameName = [...byName.entries()].filter(([, count]) => count > 1).map(([name]) => name);
     const directoryCapped = result.hasMore === true;
-    const page = people.slice(0, limit);
+    const page = people.slice(0, people.length > 1 ? Math.max(2, limit) : limit);
     return {
       data: {
         people: page,

@@ -178,6 +178,21 @@ async function drain() {
   for (let round = 0; round < 6; round += 1) await immediate();
 }
 
+test('queued revise after stop clears invalidated text through cancellation', async () => {
+  const { controller, api, state } = await readyController();
+  controller.send('Soru');
+  const [turn] = api.turns;
+  accept(turn);
+  turn.emit('delta', { text: 'Invalid draft' });
+  controller.stop();
+  turn.emit('revise', {});
+  assert.equal(state().active.turns[0].answer.content, '');
+  turn.resolve({ ok: false, code: 'REQUEST_CANCELLED', cancelled: true });
+  await drain();
+  assert.equal(state().active.turns[0].answer.content, '');
+  assert.equal(state().active.turns[0].answer.status, 'stopped');
+});
+
 function accept(turn) {
   turn.emit('accepted', {
     conversation: { id: CONVERSATION_ID, title: 'Soru' },

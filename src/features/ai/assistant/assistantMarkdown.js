@@ -201,7 +201,7 @@ function tokenizeInline(text, { links, budget }) {
   let index = 0;
   while (index < text.length) {
     const char = text[index];
-    if (char === '\\' && index + 1 < text.length && isPunctuation(text[index + 1])) {
+    if (char === '\\' && index + 1 < text.length && (isPunctuation(text[index + 1]) || text[index + 1] === '【')) {
       pushText(tokens, text[index + 1]);
       index += 2;
       continue;

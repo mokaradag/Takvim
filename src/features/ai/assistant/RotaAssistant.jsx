@@ -14,7 +14,7 @@ import { AssistantConversationList } from './AssistantConversationList.jsx';
 import { AssistantThread, FAILURE_ACTION_LABELS } from './AssistantThread.jsx';
 import { createAssistantController, retryableTurnKey } from './assistantController.js';
 import { ASSISTANT_SHEET_QUERY } from './assistantInteraction.js';
-import { assistantFailureView, DEMO_NOTICE, readinessNotice } from './assistantPresentation.js';
+import { assistantFailureView, DEMO_NOTICE, effectiveAssistantSource, readinessNotice, rotaDataAvailability } from './assistantPresentation.js';
 
 /**
  * Rota AI — uygulama kabuğundaki genel yardımcı.
@@ -42,6 +42,11 @@ const SUGGESTIONS = Object.freeze([
   'Bir toplantı gündemi taslağı hazırlamama yardım et.',
   'Bu metni daha resmî ve kısa bir dille yeniden yaz: ',
   'Bir Excel formülünün nasıl çalıştığını adım adım açıkla.'
+]);
+const DATA_SUGGESTIONS = Object.freeze([
+  'Kaç gecikmiş görevim var ve hangileri?',
+  'Projelerimdeki açık görevleri özetle.',
+  'Bugün görevlerimde neler değişti?'
 ]);
 
 /**
@@ -190,21 +195,22 @@ function Notice({ notice, onAction, children = null }) {
   );
 }
 
-function Welcome({ readiness, onSuggest, recent }) {
+function Welcome({ readiness, mode, onSuggest, recent }) {
   const notice = readinessNotice(readiness);
+  const dataAvailable = rotaDataAvailability(readiness, mode).available;
   return (
     <div className="rota-assistant-welcome">
       <div className="rota-assistant-welcome-mark" aria-hidden="true"><Icons.Sparkles size={20} /></div>
       <h3>Size nasıl yardımcı olabilirim?</h3>
       <p>
         Rota AI genel sorularınızda, yazım, özetleme ve açıklama işlerinde yardımcı olur.
-        {readiness?.rotaData?.enabled
+        {dataAvailable
           ? ' Rota verisi seçeneğiyle görüntüleme yetkiniz olan görev, proje ve ekip verilerini kullanabilir.'
           : ' Şu an Rota’daki görev, proje ve ekip verilerinize erişimi yoktur; bu bilgileri sorunuzda siz paylaşabilirsiniz.'}
       </p>
       {!notice && (
         <div className="rota-assistant-suggestions" role="group" aria-label="Örnek sorular">
-          {SUGGESTIONS.map((text) => (
+          {(dataAvailable ? DATA_SUGGESTIONS : SUGGESTIONS).map((text) => (
             <button key={text} type="button" className="rota-assistant-suggestion" onClick={() => onSuggest(text)}>{text}</button>
           ))}
         </div>
@@ -292,6 +298,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const available = ready && !state.refreshing && Boolean(readiness?.available);
   const running = state.running[active.key] || null;
   const generating = Boolean(running);
+  const rotaData = rotaDataAvailability(readiness, state.mode);
   const historyView = ready && state.view === 'history';
   const canCompose = ready && Boolean(readiness?.available) && !historyView && !active.failure;
   const retryKey = available && !generating && !active.loading && !active.closed
@@ -421,6 +428,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         {notice && <Notice notice={notice} onAction={runAction} />}
         <Welcome
           readiness={readiness}
+          mode={state.mode}
           recent={recent}
           onSuggest={(text) => {
             setDraft(text);
@@ -531,8 +539,10 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}
-          source={state.source}
+          source={effectiveAssistantSource(readiness, state.mode, state.source)}
           dataEnabled={state.readiness?.rotaData?.enabled === true}
+          dataAvailable={rotaData.available}
+          dataUnavailableMessage={rotaData.message}
           onSourceChange={(source) => controller.setSource(source)}
           maxChars={readiness?.limits?.maxMessageChars || controller.limits.maxMessageChars}
           inputRef={inputRef}

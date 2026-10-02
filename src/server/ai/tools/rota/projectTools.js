@@ -45,9 +45,11 @@ const projectSearch = {
   async handler(args, call) {
     const limit = args.limit ?? 5;
     const { scope } = await call.authorization();
-    const result = await call.sql((executor) => readProjectSearch(executor, scope, { text: args.text, limit }));
+    const result = await call.sql((executor) => readProjectSearch(executor, scope, { text: args.text, limit: Math.max(2, limit) }));
     const needle = foldText(args.text);
-    const matches = result.rows.map((row) => {
+    const uniqueExact = result.exactCount === 1;
+    const ambiguous = !uniqueExact && result.total > 1;
+    const matches = result.rows.slice(0, ambiguous ? Math.max(2, limit) : limit).map((row) => {
       const access = accessExplanation({ ...scopeAccess(row), reasons: scope.projects.get(canonicalActualId(row.ProjectId))?.reasons || [] });
       return {
         projectId: canonicalActualId(row.ProjectId),
@@ -61,8 +63,6 @@ const projectSearch = {
           || foldText(row.ProjectName) === needle || foldText(row.ProjectCode || '') === needle
       };
     });
-    const uniqueExact = result.exactCount === 1;
-    const ambiguous = !uniqueExact && result.total > 1;
     return {
       data: {
         matches,
