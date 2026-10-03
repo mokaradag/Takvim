@@ -539,11 +539,13 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}
-          source={effectiveAssistantSource(readiness, state.mode, state.source)}
+          source={effectiveAssistantSource(readiness, state.mode, state.source) || 'rota'}
           dataEnabled={state.readiness?.rotaData?.enabled === true}
           dataAvailable={rotaData.available}
           dataUnavailableMessage={rotaData.message}
           onSourceChange={(source) => controller.setSource(source)}
+          includeText={state.includeText === true}
+          onIncludeTextChange={(value) => controller.setIncludeText(value)}
           maxChars={readiness?.limits?.maxMessageChars || controller.limits.maxMessageChars}
           inputRef={inputRef}
         />

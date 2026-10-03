@@ -69,6 +69,8 @@ export function AssistantComposer({
   dataAvailable = true,
   dataUnavailableMessage = null,
   onSourceChange,
+  includeText = false,
+  onIncludeTextChange,
   maxChars,
   inputRef
 }) {
@@ -157,6 +159,10 @@ export function AssistantComposer({
             <option value="general">Genel sohbet · Rota verisi okunmaz</option>
           </select>
           {dataUnavailableMessage && <span role="status">{dataUnavailableMessage}</span>}
+        </label>}
+        {dataEnabled && source === 'rota' && <label>
+          <input type="checkbox" checked={includeText} disabled={disabled || generating} onChange={(event) => onIncludeTextChange?.(event.target.checked)} />
+          Notları ve iletileri dahil et
         </label>}
         <ModeSwitch mode={mode} modes={modes} onChange={onModeChange} disabled={disabled} />
         <span className="rota-assistant-composer-status">

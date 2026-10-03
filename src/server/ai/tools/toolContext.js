@@ -29,6 +29,9 @@ import { readTaskFacts } from './rota/rotaToolStore.js';
  * gerçekten bitene kadar tutulur. Tur boyunca SQL'de geçen toplam süre
  * sınırlıdır; sınır dolunca yeni sorgu başlatılmaz.
  */
+/** Kanıt yeniden doğrulamasında okunabilecek en fazla görev kimliği parçası. */
+const MAX_REVALIDATION_CHUNKS = 8;
+
 export function createToolTurnContext({
   sicil,
   now = new Date(),
@@ -105,10 +108,14 @@ export function createToolTurnContext({
     const eligible = entries.filter(isEvidenceAuthorized);
     const references = new Map(eligible.map((entry) => [entry.id, entry.taskReferences || evidenceTaskReferences(JSON.parse(entry.payload || '{}'))]));
     const taskIds = [...new Set([...references.values()].flat().map((row) => row.taskId))];
-    if (taskIds.length > limits.maxAnalyzedTasks) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+    // Görev kimlikleri analiz sınırı büyüklüğünde parçalarla okunur: uzun bir
+    // konuşma ya da büyük bir toplam tek sorguyu aşmaz; parça sayısı sınırlıdır.
+    const chunkSize = limits.maxAnalyzedTasks;
+    if (taskIds.length > chunkSize * MAX_REVALIDATION_CHUNKS) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     const current = new Map();
-    if (taskIds.length) {
-      const result = await withSql(signal, (executor) => readTaskFacts(executor, state.current.scope, { taskIds, maxRows: taskIds.length }), { authorizationOnly: true });
+    for (let start = 0; start < taskIds.length; start += chunkSize) {
+      const chunk = taskIds.slice(start, start + chunkSize);
+      const result = await withSql(signal, (executor) => readTaskFacts(executor, state.current.scope, { taskIds: chunk, maxRows: chunk.length }), { authorizationOnly: true });
       if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       for (const fact of result.facts) current.set(fact.id, fact.projectId);
     }

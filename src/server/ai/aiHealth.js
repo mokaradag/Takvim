@@ -136,9 +136,6 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (config.issues.length) {
     return { state: HEALTH_STATES.WARNING, message: 'Yapay zekâ yapılandırması eksik ya da hatalı.', detail };
   }
-  if (config.toolsFlagInvalid) {
-    return warning(`Rota verisi araçları etkinleştirme ayarı geçersiz; araçlar kapalı, genel sohbet kullanılabilir. ${loadText}`);
-  }
   if (registry.status === 'error') {
     return { state: HEALTH_STATES.WARNING, message: 'Model kaydı geçersiz ya da okunamadı.', detail };
   }
@@ -210,6 +207,12 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   const turnFailure = telemetry.assistantTurns?.lastFailure;
   if (turnFailure && !CAPACITY_CODES.has(turnFailure.code) && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
     return warning(`Son Rota AI turu tamamlanamadı (${turnFailure.code}). ${loadText}`);
+  }
+  // Geçersiz araç bayrağı yalnızca genel yapay zekâ denetimleri temizken
+  // gösterilir: daha ağır bir arıza ("genel sohbet kullanılabilir" iddiasıyla)
+  // gizlenmez.
+  if (config.toolsFlagInvalid) {
+    return warning(`Rota verisi araçları etkinleştirme ayarı geçersiz; araçlar kapalı, genel sohbet kullanılabilir. ${loadText}`);
   }
   // Rota verisi araçları açıkken araç yolu kullanılamıyorsa Rota AI genel
   // sohbete düşer; yönetici bunu sağlık görünümünde görür.

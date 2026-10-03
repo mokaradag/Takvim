@@ -14,7 +14,7 @@ import {
   notFound,
   requireVisibleProject
 } from './rotaToolSupport.js';
-import { addDays, DUE_SOON_DAYS, foldText, sqlDay, sqlInstant } from './taskFacts.js';
+import { addDays, DUE_SOON_DAYS, sqlDay, sqlInstant } from './taskFacts.js';
 
 function sourceLabel(sourceType) {
   return sourceType === 'CORPORATE' ? 'Kurumsal (CN43N)' : 'Manuel';
@@ -46,10 +46,10 @@ const projectSearch = {
     const limit = args.limit ?? 5;
     const { scope } = await call.authorization();
     const result = await call.sql((executor) => readProjectSearch(executor, scope, { text: args.text, limit: Math.max(2, limit) }));
-    const needle = foldText(args.text);
     const uniqueExact = result.exactCount === 1;
     const ambiguous = !uniqueExact && result.total > 1;
-    const matches = result.rows.slice(0, ambiguous ? Math.max(2, limit) : limit).map((row) => {
+    // Belirsizlik için en az iki satır yoklanır; dönen liste `limit` sınırına uyar.
+    const matches = result.rows.slice(0, limit).map((row) => {
       const access = accessExplanation({ ...scopeAccess(row), reasons: scope.projects.get(canonicalActualId(row.ProjectId))?.reasons || [] });
       return {
         projectId: canonicalActualId(row.ProjectId),
@@ -59,8 +59,8 @@ const projectSearch = {
         sourceType: row.SourceType === 'CORPORATE' ? 'corporate' : 'manual',
         access: { level: access.level, label: access.label },
         ...(row.LeadName ? { lead: dataText(row.LeadName, 120) } : {}),
+        // Kesin eşleşme SQL'in ExactCount ölçüsüyle aynıdır (ad ya da kod, büyük/küçük harf ve aksan duyarsız).
         exactMatch: Number(row.MatchRank) === 0
-          || foldText(row.ProjectName) === needle || foldText(row.ProjectCode || '') === needle
       };
     });
     return {
@@ -240,6 +240,8 @@ const portfolioSummary = {
         totals,
         projects: page,
         sort,
+        // Nüfusu belirleyen seçiciler toplamların anlamının parçasıdır.
+        filters: { source, includeEmpty: args.includeEmpty !== false },
         definitions: { ...TOTAL_DEFINITIONS, today: call.today, completeTaskView: 'false ise projede yalnızca yetkili görevleriniz sayılmıştır.' }
       },
       scope: descriptor,

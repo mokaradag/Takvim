@@ -38,14 +38,15 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
   return Object.freeze({
     factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null }) {
       if (entries.length >= Math.min(maxEntries, EVIDENCE_LIMITS.maxEvidencePerAnswer)) return null;
       const id = evidenceIdFor(entries.length + 1);
       const summary = normalizeEvidenceSummary({
         id, kind, label, entity, generatedAt, complete, truncated, partial, counts, highlights: highlightPairs(highlights)
       });
       if (!summary) return null;
-      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true });
+      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
+        population: Array.isArray(populationReferences) && populationReferences.length ? populationReferences : null });
       return id;
     },
     /**
@@ -59,6 +60,13 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       entry.payload = payload.length <= MAX_EVIDENCE_TEXT_CHARS
         ? payload
         : JSON.stringify({ evidenceId: id, payloadOmitted: 'size' });
+      // Son yetki denetimi, toplamın dayandığı bütün görevleri (yalnızca yükte
+      // görünenleri değil) yeniden doğrular. Nüfus yalnızca bellekte tutulur.
+      if (entry.population) {
+        const references = new Map(evidenceTaskReferences(JSON.parse(entry.payload)).map((row) => [row.taskId, row]));
+        for (const row of entry.population) if (!references.has(row.taskId)) references.set(row.taskId, row);
+        entry.taskReferences = [...references.values()];
+      }
     },
     invalidateAuthorization(epoch, validate = null) {
       for (const entry of entries) if (validate ? !validate(entry) : entry.authorizationEpoch !== epoch) entry.valid = false;
@@ -97,14 +105,15 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
         .map((entry) => {
           const summaryJson = JSON.stringify(entry.summary);
           const payload = JSON.parse(entry.payload);
-          const sourceCandidates = payload.data?.matches || payload.data?.people || [];
+          const sourceCandidates = payload.data?.matches || payload.data?.people || payload.data?.tasks || [];
           const selection = candidates ? candidates.map((item, ordinal) => ({ ...item, ordinal })).filter((item) => item.evidenceId === entry.id)
             : sourceCandidates.map((_, index) => ({ index, ordinal: index }));
           const clarificationContext = clarification ? selection.slice(0, 10).map(({ index, ordinal }) => {
             const item = sourceCandidates[index];
             if (!item) return null;
             return { ordinal,
-              ...(item.projectId ? { projectId: item.projectId } : {}), ...(item.sicil ? { personSicil: item.sicil } : {}) };
+              ...(item.projectId ? { projectId: item.projectId } : {}), ...(item.sicil ? { personSicil: item.sicil } : {}),
+              ...(item.taskId && !item.projectId ? { taskId: item.taskId } : {}) };
           }).filter(Boolean) : null;
           return {
             ordinal: evidenceOrdinal(entry.id),

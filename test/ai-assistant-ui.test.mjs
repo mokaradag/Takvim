@@ -44,7 +44,7 @@ const READINESS = Object.freeze({
   limits: { maxMessageChars: 8000, maxConversationMessages: 100 }
 });
 
-test('controller dispatches general chat for unavailable Rota data and modes', async () => {
+test('controller keeps a selected Rota source when Rota data or the mode is unavailable', async () => {
   for (const rotaData of [
     { enabled: true, available: false, reason: 'EVIDENCE_SCHEMA_MISSING', modes: [{ id: 'standard', available: true }] },
     { enabled: true, available: true, modes: [{ id: 'standard', available: false }] }
@@ -53,7 +53,8 @@ test('controller dispatches general chat for unavailable Rota data and modes', a
     const { controller } = await readyController({ api });
     controller.send('Genel soru');
     await drain();
-    assert.equal(api.turns[0].input.source, 'general');
+    // Sunucu sabit "unavailable" sonucunu verir; genel sohbete yalnızca kullanıcı geçer.
+    assert.equal(api.turns[0].input.source, undefined);
     api.turns[0].resolve({ ok: false, code: 'REQUEST_CANCELLED', cancelled: true });
     await drain();
     controller.dispose();
@@ -650,8 +651,9 @@ test('gönderim yalnızca konuşma, tur, ileti ve kipi taşır; model adı, prof
   const [call] = sent;
   assert.equal(call.method, 'POST');
   const body = JSON.parse(call.body);
-  assert.deepEqual(Object.keys(body).sort(), ['conversationId', 'expectedSequence', 'message', 'mode', 'source', 'turnId']);
-  assert.equal(body.source, 'general');
+  // Rota verisi özelliği kapalıyken kaynak gönderilmez; yanıt "Genel sohbet" olarak işaretlenmez.
+  assert.deepEqual(Object.keys(body).sort(), ['conversationId', 'expectedSequence', 'message', 'mode', 'turnId']);
+  assert.equal(body.source, undefined);
   assert.equal(body.mode, 'deep');
   for (const forbidden of [...MODEL_NAMES, 'chat.reasoning', 'chat.general', 'apiKey', 'Authorization', 'sicil']) {
     assert.equal(call.body.includes(forbidden), false, `gövde taşımamalı: ${forbidden}`);

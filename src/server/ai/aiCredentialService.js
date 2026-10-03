@@ -161,6 +161,23 @@ const credentialGate = createAiSqlGate({
 });
 
 /**
+ * Çalışma zamanı anahtar okuması (her sohbet/araç isteğinde), doğrulama
+ * sonucunun yazımı ve şema yoklaması da ortak havuza kendi sınırlı kapısından
+ * gider: kabul edilen yapay zekâ istekleri aynı anda en fazla iki anahtar
+ * sorgusu çalıştırır; yavaş bir veritabanında olağan Rota trafiğinin
+ * bağlantılarını tüketemez. Ayarlar kartının kapısından ayrıdır: kart
+ * işlemleri sohbet isteklerinin önünü tıkamaz.
+ */
+const runtimeCredentialGate = createAiSqlGate({
+  name: 'credential-runtime',
+  slots: 2,
+  queue: 64,
+  perUserActive: 1,
+  perUserQueued: 8,
+  saturation: 'credential'
+});
+
+/**
  * Kapıdan geçen SQL işi. Havuz kapıya girmeden (yer tutmadan ve sinyali
  * izleyerek) alınır: takılı bir bağlantı kurulumu kapıyı kilitleyemez. Yer, iş
  * ve sürücüdeki sorguları gerçekten bitene kadar tutulur.
@@ -185,11 +202,12 @@ export async function assertAiDirectoryMember(sicil, { signal = null } = {}) {
 export function resetAiDirectoryGateForTests() {
   directoryGate.resetForTests();
   credentialGate.resetForTests();
+  runtimeCredentialGate.resetForTests();
 }
 
 /** Yalnızca testler: kapıların doluluğu (etkin, sıradaki, kullanıcı sayısı). */
 export function aiSqlGateStatusForTests() {
-  return { directory: directoryGate.status(), credential: credentialGate.status() };
+  return { directory: directoryGate.status(), credential: credentialGate.status(), runtimeCredential: runtimeCredentialGate.status() };
 }
 
 /* ── Durum künyesi ───────────────────────────────────────────── */
@@ -399,18 +417,19 @@ function unreadablePersonalKey() {
 }
 
 async function readSecretRecord(sicil, signal) {
-  const executor = executorFor(await getSqlPool(), signal);
-  try {
-    const lookup = await readCredentialSecret(executor, sicil);
-    if (!lookup.knownSicil) throw unknownSicil();
-    return lookup;
-  } catch (error) {
-    if (!isMissingAiCredentialSchema(error)) throw error;
-    // Tablo yoksa hiç kimsenin kişisel anahtarı olamaz; kimlik değişmezi yine
-    // de ayrı ve tabloya dokunmayan bir sorguyla korunur.
-    await requireDirectoryMember(executor, sicil);
-    return { record: null, credential: null };
-  }
+  return throughGate(runtimeCredentialGate, sicil, signal, async (executor) => {
+    try {
+      const lookup = await readCredentialSecret(executor, sicil);
+      if (!lookup.knownSicil) throw unknownSicil();
+      return lookup;
+    } catch (error) {
+      if (!isMissingAiCredentialSchema(error)) throw error;
+      // Tablo yoksa hiç kimsenin kişisel anahtarı olamaz; kimlik değişmezi yine
+      // de ayrı ve tabloya dokunmayan bir sorguyla korunur.
+      await requireDirectoryMember(executor, sicil);
+      return { record: null, credential: null };
+    }
+  });
 }
 
 function decryptPersonal(config, sicil, record) {
@@ -468,10 +487,10 @@ export async function readPersonalCredentialForValidation({ sicil, config, signa
 
 /** Doğrulama sonucunu yazar; `recorded: false` sonucun bu arada değişen anahtara uygulanmadığını söyler. */
 export async function storeCredentialValidation({ sicil, keyNonce, status, signal = null }) {
-  return recordCredentialValidation(executorFor(await getSqlPool(), signal), sicil, { keyNonce, status });
+  return throughGate(runtimeCredentialGate, sicil, signal, (executor) => recordCredentialValidation(executor, sicil, { keyNonce, status }));
 }
 
 /** Yönetici bağlantı testi için: anahtar tablosu kurulu mu (satır okumadan)? */
 export async function checkAiCredentialSchema({ signal = null } = {}) {
-  return readCredentialSchema(executorFor(await getSqlPool(), signal));
+  return throughGate(runtimeCredentialGate, 'schema-probe', signal, (executor) => readCredentialSchema(executor));
 }

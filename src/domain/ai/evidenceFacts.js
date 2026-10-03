@@ -211,9 +211,19 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
 
   };
   for (const labels of Object.values(values.reasons)) values.reasons[labels[0]] = labels;
-  values.workingWeekdays = Object.fromEntries([['Pazar', 'Sunday'], ['Pazartesi', 'Monday'], ['Salı', 'Tuesday'], ['Çarşamba', 'Wednesday'], ['Perşembe', 'Thursday'], ['Cuma', 'Friday'], ['Cumartesi', 'Saturday']].map((label, index) => [index, label]));
+  // Takvim aracı çalışılan günleri Türkçe adlarıyla döndürür; sayısal gün kimliği de desteklenir.
+  const weekdays = [['Pazar', 'Sunday'], ['Pazartesi', 'Monday'], ['Salı', 'Tuesday'], ['Çarşamba', 'Wednesday'], ['Perşembe', 'Thursday'], ['Cuma', 'Friday'], ['Cumartesi', 'Saturday']];
+  values.workingWeekdays = Object.fromEntries(weekdays.flatMap((label, index) => [[index, label], [label[0], label]]));
   values.calendarSource = { ...values.source, task: ['Görev takvimi', 'Task calendar'] };
-  const workflowStatuses = { PENDING: ['Bekliyor', 'Pending'], ACCEPTED: ['Kabul edildi', 'Accepted'], APPROVED: ['Atandı', 'Assigned'], REJECTED: ['Reddedildi', 'Rejected'], CANCELLED: ['İptal edildi', 'Cancelled'], STALE: ['Güncelliğini yitirdi', 'Stale'], CHANGE_REQUESTED: ['Değişiklik istendi', 'Change requested'], CANCELLATION_REQUESTED: ['Kaldırılması istendi', 'Cancellation requested'] };
+  // Aynı durum kodu iş akışına göre farklı anlam taşır (ör. APPROVED: tarih talebinde
+  // "Onaylandı", atama koordinasyonunda "Atandı"); tablo kanıtın aracından seçilir.
+  const scheduleStatuses = { PENDING: ['Bekliyor', 'Pending'], ACCEPTED: ['Kabul edildi', 'Accepted'], APPROVED: ['Onaylandı', 'Approved'], REJECTED: ['Reddedildi', 'Rejected'], CANCELLED: ['Değiştirildi', 'Superseded'], STALE: ['Güncelliğini yitirdi', 'Stale'] };
+  const coordinationStatuses = { PENDING: ['Onay bekliyor', 'Awaiting approval'], APPROVED: ['Atandı', 'Assigned'], REJECTED: ['Reddedildi', 'Rejected'], CANCELLED: ['İptal edildi', 'Cancelled'], STALE: ['Güncelliğini yitirdi', 'Stale'], CHANGE_REQUESTED: ['Değişiklik istendi', 'Change requested'], CANCELLATION_REQUESTED: ['Kaldırılması istendi', 'Cancellation requested'] };
+  const tool = fact.semantic?.provenance?.tool;
+  const statusDomain = tool === 'rota_schedule_requests' || (tool === 'rota_notifications' && fact.field.startsWith('data.scheduleRequests.')) ? 'schedule'
+    : tool === 'rota_assignment_requests' || (tool === 'rota_notifications' && fact.field.startsWith('data.assignmentCoordination.')) ? 'coordination' : null;
+  const workflowStatuses = statusDomain === 'schedule' ? scheduleStatuses : statusDomain === 'coordination' ? coordinationStatuses
+    : { ...scheduleStatuses, ...coordinationStatuses, PENDING: ['Bekliyor', 'Pending'] };
   Object.assign(values.status, workflowStatuses);
   const semanticLeaf = fact.changeField || (leaf === 'key' ? fact.semantic?.groupBy : leaf);
   const enumValues = semanticLeaf === 'source' && !fact.field.startsWith('data.calendar.') ? null : values[semanticLeaf] || (semanticLeaf === 'access' ? values.level : null);
@@ -231,17 +241,37 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
   } else if (leaf === 'key' && fact.semantic?.group) value = fact.semantic.group.label;
   else if (enumValues) value = enumValues[value]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Unknown value' : 'Bilinmeyen değer');
   const language = locale === 'en' ? 1 : 0;
-  const filterNames = { statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
+  // Sayımın nüfusunu belirleyen her süzgeç niteleyici olarak yazılır: farklı
+  // süzgeçlerle elde edilen eşit sayılar ayırt edilebilir kalır.
+  // Görev süzgecindeki proje, olgunun öznesinde (proje adı) zaten görünür; talep süzgecinin kimlikleri ayrıca yazılır.
+  const filterNames = { text: ['Arama metni', 'Search text'], requestProjectId: ['Proje kimliği', 'Project ID'], requestTaskId: ['Görev kimliği', 'Task ID'],
+    wbsId: ['İş dağılımı düğümü', 'WBS node'], tab: ['Sekme', 'Tab'], workflowStatus: ['Talep durumu', 'Request status'],
+    source: ['Proje kaynağı', 'Project source'], includeEmpty: ['Görünür görevi olmayan projeler', 'Projects without visible tasks'],
+    statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
     dateField: ['Tarih alanı', 'Date field'], dateFrom: ['İlk tarih', 'First date'], dateTo: ['Son tarih', 'Last date'],
-    assignee: ['Sorumlu', 'Assignee'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'] };
+    assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi (Sicil)', 'Person (Sicil)'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'] };
   const filterValues = { ...values.status, ...values.priority, overdue: ['Gecikmiş', 'Overdue'],
     due_today: ['Bugün', 'Today'], due_next_7_days: ['Bugün dahil yedi gün', 'Seven days including today'],
     due_next_30_days: ['Bugün dahil otuz gün', 'Thirty days including today'], no_target_finish: ['Terminsiz', 'No deadline'],
     me: ['Ben', 'Me'], person: ['Seçilen kişi', 'Selected person'], unassigned: ['Görünür sorumlu yok', 'No visible assignee'] };
+  const tabValues = { pending: ['Bekleyen', 'Pending'], sent: ['Gönderilen', 'Sent'], history: ['Geçmiş', 'History'], all: ['Tümü', 'All'] };
   const filterValue = (value) => typeof value === 'boolean' ? (value ? ['Evet', 'Yes'] : ['Hayır', 'No'])[language]
     : filterValues[value]?.[language] || LABELS[value]?.[language] || (/^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? value : null);
-  const qualifiers = Object.entries(fact.semantic?.filters || {}).filter(([key, value]) => filterNames[key] && value != null && value !== 'any' && (value !== false || key === 'milestone'))
-    .map(([key, value]) => [filterNames[key][language], (Array.isArray(value) ? value : [value]).map(filterValue).filter(Boolean).join(', ')])
+  const qualifierValue = (key, value) => {
+    if (value == null || value === '' || value === 'any' || (Array.isArray(value) && !value.length)) return null;
+    switch (key) {
+      case 'text': return `"${String(value)}"`;
+      case 'requestProjectId': case 'requestTaskId': case 'wbsId': case 'personSicil': return String(value);
+      case 'tab': return tabValues[value]?.[language] || null;
+      case 'workflowStatus': return workflowStatuses[value]?.[language] || null;
+      case 'source': return value === 'all' ? null : values.sourceType[value]?.[language] || null;
+      case 'includeEmpty': return value === false ? ['Hariç', 'Excluded'][language] : null;
+      case 'createdByMe': return value === true ? filterValue(true) : null;
+      default: return (Array.isArray(value) ? value : [value]).map(filterValue).filter(Boolean).join(', ') || null;
+    }
+  };
+  const qualifiers = Object.entries(fact.semantic?.filters || {}).filter(([key]) => filterNames[key])
+    .map(([key, value]) => [filterNames[key][language], qualifierValue(key, value)])
     .filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`).join('; ');
   if (fact.semantic?.countScope === 'selected-tab' && fact.field.startsWith('data.counts.')) value = `${value} (${locale === 'en' ? 'selected tab' : 'seçilen sekme'})`;
   const units = { hours: ['saat', 'hours'], tasks: ['görev', 'tasks'], 'unspecified-currency': ['para birimi belirtilmemiş', 'currency unspecified'],

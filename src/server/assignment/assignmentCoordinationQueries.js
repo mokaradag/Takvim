@@ -149,6 +149,7 @@ export const COORDINATION_INBOX_SQL = `
 `;
 
 export const COORDINATION_EVIDENCE_INBOX_SQL = `
+  DROP TABLE IF EXISTS #CoordinationInboxEvidence;
   SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS},
     CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending
   INTO #CoordinationInboxEvidence ${SOURCE}
@@ -269,6 +270,7 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
 
   const evidenceStatement = evidenceSnapshotLimit == null ? null : `
     ${decisionAuthority ? '/* rota-ai-decision-authority */' : ''}
+    DROP TABLE IF EXISTS #CoordinationEvidenceSnapshot;
     SELECT TOP (@evidenceSnapshotLimit + 1) ${fields},
       CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsPending,
       CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
@@ -276,7 +278,12 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     INTO #CoordinationEvidenceSnapshot ${SOURCE} WHERE ${filters} AND ${tabFilter}
     ORDER BY ${order};
     DECLARE @total int = (SELECT COUNT(*) FROM #CoordinationEvidenceSnapshot);
-    IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    IF @total > @evidenceSnapshotLimit
+    BEGIN
+      -- Paylaşılan havuz oturumunda geçici tablo kalmaz.
+      DROP TABLE #CoordinationEvidenceSnapshot;
+      THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    END
     SELECT @total AS Total, SUM(IsPending) AS PendingCount, SUM(IsSent) AS SentCount, SUM(IsHistory) AS HistoryCount
     FROM #CoordinationEvidenceSnapshot;
     SELECT @total AS Total, 0 AS Page;

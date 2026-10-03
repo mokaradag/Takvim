@@ -254,7 +254,9 @@ function linkAbort(signal, controller) {
 /** Bildirim geri çağrısının hatası akışı bozmaz. */
 function notify(callback, value) {
   try {
-    callback?.(value);
+    const result = callback?.(value);
+    // Zaman uyumsuz gözlemcinin reddi de yutulur; işlenmemiş ret süreci durdurmaz.
+    if (typeof result?.then === 'function') Promise.resolve(result).catch(() => {});
   } catch {
     // Gözlemci hatası üretimi etkilemez.
   }
@@ -747,7 +749,9 @@ export function createAiGateway({
             if (!final) throw streamInterrupted('STREAM_TRUNCATED');
             const text = chunks.join('').trim();
             const toolCalls = Array.isArray(final.toolCalls) ? final.toolCalls : [];
-            if (!text && !toolCalls.length) {
+            // Uzunluk sınırında boş biten tur (ör. bütçe akıl yürütmeye harcandı)
+            // çağırana döner; tur kısa çıktı onarımını kendisi uygular.
+            if (!text && !toolCalls.length && final.finishReason !== 'length') {
               throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
                 details: { reason: 'EMPTY_COMPLETION', finishReason: final.finishReason ?? null }
               });

@@ -3,7 +3,7 @@ import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { outlookFailureMessage, safeOutlookFailureCode } from '../../../../domain/outlook/outlookFailures.js';
 import { PLAN_HYGIENE_CHECKS } from '../../../../features/dashboard/planHealth.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
-import { readOutlook } from './rotaToolStore.js';
+import { readOutlook, readTaskFacts } from './rotaToolStore.js';
 import { currentUserScope, dataText, ID_PROPERTY, LIMIT_PROPERTY, notFound, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
 import { normalizeTaskFilters, sqlDay, sqlInstant } from './taskFacts.js';
@@ -67,7 +67,12 @@ const outlookStatus = {
     });
     const counts = items.reduce((sum, item) => ({ ...sum, [item.state]: (sum[item.state] || 0) + 1 }), {});
     const page = items.slice(0, limit);
-    if (args.taskId && !items.length) throw notFound();
+    // Görünür ama aboneliği olmayan görev geçerli bir sonuçtur (sıfır abonelik);
+    // "bulunamadı" yalnızca görev görünür değilse verilir.
+    if (args.taskId && !items.length) {
+      const visible = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [args.taskId], maxRows: 1 }));
+      if (!visible.facts.length) throw notFound();
+    }
     const distributionComplete = !result.truncated;
     return {
       data: {

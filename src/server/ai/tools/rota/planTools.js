@@ -304,7 +304,7 @@ function seriesSummary(occurrences, today) {
     upcomingCount: upcoming.length,
     nextTruncated: upcoming.length > previewLimit,
     next: upcoming.slice(0, previewLimit).map((fact) => ({
-      taskId: fact.id, occurrenceDate: fact.recurrenceOccurrenceDate, targetFinish: fact.targetFinish, statusLabel: statusLabelOf(fact.status)
+      taskId: fact.id, occurrenceDate: fact.recurrenceOccurrenceDate, targetFinish: fact.targetFinish, status: fact.status, statusLabel: statusLabelOf(fact.status)
     })),
     lastCompleted: lastDone ? { taskId: lastDone.id, occurrenceDate: lastDone.recurrenceOccurrenceDate, actualFinish: lastDone.actualFinish } : null
   };
@@ -380,8 +380,13 @@ const recurrenceInspect = {
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     const projects = projectIndex(result.projects);
     const series = new Map();
+    // Yinelemeler yalnızca şablonları GÖRÜNÜRSE bir seri altında toplanır: gizli
+    // şablon kimliği görünür kayıt sayısını (ve yinelemelerin aynı gizli seriye
+    // ait olup olmadığını) belirleyemez. Şablonu görünmeyen yineleme kendi kaydıdır.
+    const visibleTemplates = new Set(result.facts.filter((fact) => fact.recurrenceRule).map((fact) => fact.id));
     for (const fact of result.facts) {
-      const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId || fact.id;
+      const seriesId = fact.recurrenceRule ? fact.id
+        : (fact.recurrenceParentId && visibleTemplates.has(fact.recurrenceParentId) ? fact.recurrenceParentId : fact.id);
       if (!seriesId) continue;
       if (!series.has(seriesId)) series.set(seriesId, { template: null, occurrences: [], projectId: fact.projectId });
       const entry = series.get(seriesId);

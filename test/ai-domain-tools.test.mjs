@@ -333,7 +333,8 @@ test('SQL enjeksiyonu ve joker karakterler yalnızca veridir; SQL metni hiçbir 
     const { result } = await callRotaTool(stack, AYSE, 'rota_task_search', { text });
     assert.equal(result.ok, true, text);
     assert.deepEqual(result.data.tasks.map((task) => task.taskId), expected, text);
-    const last = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').at(-1);
+    // Nüfus okuması (sayfa sorumlu izdüşümü ayrı, görev kimlikleriyle okunur).
+    const last = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts' && !entry.params.taskIds).at(-1);
     assert.equal(last?.params.text, text, 'bu çağrının metni parametre olarak gider');
   }
   const project = await callRotaTool(stack, AYSE, 'rota_project_search', { text: "x' UNION SELECT * FROM dbo.MR_Tasks --" });
@@ -694,7 +695,11 @@ test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınm
   assert.equal(results[5].error.code, 'LIMIT_EXCEEDED');
   assert.equal(results[6].error.code, 'LIMIT_EXCEEDED');
   assert.deepEqual(ledger.ids(), ['R1', 'R2'], 'kanıt kimlikleri çağrı sırasıyla verilir');
-  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 1, 'liste, toplam ve sorumlular aynı olgu okumasından gelir; yinelenen çağrı yeniden çalışmaz');
+  const factReads = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts');
+  assert.equal(factReads.filter((entry) => !entry.params.taskIds).length, 1, 'liste ve toplam aynı olgu okumasından gelir; yinelenen çağrı yeniden çalışmaz');
+  assert.equal(factReads.length, 2, 'sorumlu izdüşümü yalnızca dönen sayfanın görevleri için bir kez okunur');
+  assert.equal(factReads[1].params.withAssignees, 1);
+  assert.ok(factReads[1].params.taskIds.split(',').length <= 20);
   const oversize = await callRotaTools(stack, AYSE, [['rota_task_search', JSON.stringify({ text: 'a', filler: 'x'.repeat(9000) })]]);
   assert.equal(oversize.results[0].error.code, 'INVALID_ARGUMENTS');
   assert.deepEqual(oversize.results[0].error.details, ['$:tooLarge']);

@@ -27,6 +27,7 @@ import {
   DUE_MONTH_DAYS,
   DUE_SOON_DAYS,
   filtersOpenOnly,
+  foldText,
   hoursCoverage,
   isDueWithin,
   isOverdue,
@@ -112,6 +113,9 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
   const facts = result.facts.filter((fact) => matchesTaskFilters(fact, filters, {
     today: call.today, assignees: result.assignees, sicil: call.sicil
   }));
+  // Toplamlar sonuçta listelenmeyen görevlere de dayanır: sayılan nüfus son yetki
+  // denetiminde yeniden doğrulanmak üzere (modele gitmeden) kaydedilir.
+  call.notePopulation?.(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
   return { facts, projects: projectIndex(result.projects), assignees: result.assignees };
 }
 
@@ -171,21 +175,39 @@ const taskSearch = {
     const sort = args.sort || (filters.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc');
     const limit = args.limit ?? 20;
     const { scope } = await call.authorization();
-    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
+    // Sorumlu izdüşümü bütün nüfus için değil, yalnızca dönen sayfa için okunur.
+    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters);
     const sorted = sortFacts(facts, sort, call.today);
     // Sıralı kimlikler nüfus ve sıra kaymasını yakalar; sorumlu izdüşümü yalnız sayfaya uygulanır.
     const anchor = sorted.map((fact) => fact.id);
     const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null, anchor });
-    const pageAssignees = assignees;
     const pageFacts = page;
+    const pageAssignees = filters.assignee === 'person' || !pageFacts.length ? assignees
+      : (await call.sql((executor) => readTaskFacts(executor, scope, {
+        taskIds: pageFacts.map((fact) => fact.id), withAssignees: true, maxRows: pageFacts.length
+      }))).assignees;
     const pageProjects = projects;
     const exactTotal = sorted.length;
     const stableNextCursor = nextCursor;
     const descriptor = searchedScope(scope, filters.projectId);
+    // Metinle ad çözümü: tek kesin başlık eşleşmesi (ya da tek sonuç) görevi
+    // çözer; aksi hâlde adaylar kullanıcıya sorulmadan ayrıntıya açılmaz.
+    const needle = filters.text ? foldText(filters.text).trim() : '';
+    const exactFacts = needle ? sorted.filter((fact) => foldText(fact.title).trim() === needle) : [];
+    const resolvedFact = !needle ? null : (exactFacts.length === 1 ? exactFacts[0] : (sorted.length === 1 ? sorted[0] : null));
+    const titleResolution = !needle ? null : (resolvedFact ? 'unique' : (sorted.length ? 'ambiguous' : 'none'));
     return {
       data: {
         ...(filters.projectId ? { project: projectRef(projects.get(filters.projectId), filters.projectId) } : {}),
-        tasks: pageFacts.map((fact) => taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today })),
+        tasks: pageFacts.map((fact) => ({
+          ...taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today }),
+          ...(needle ? { exactTitleMatch: foldText(fact.title).trim() === needle } : {})
+        })),
+        ...(titleResolution ? {
+          titleResolution,
+          ...(resolvedFact ? { resolvedTask: { taskId: resolvedFact.id, title: dataText(resolvedFact.title, 160) } } : {}),
+          ...(titleResolution === 'ambiguous' ? { guidance: 'Arama metni tek bir görevi belirlemiyor. Ayrıntı gerekiyorsa kullanıcıya hangi görevi kastettiğini sorun; tahmin etmeyin.' } : {})
+        } : {}),
         sort,
         filters
       },
@@ -241,6 +263,8 @@ const taskDetail = {
     const detail = await call.sql((executor) => readTaskDetail(executor, scope, args.taskId));
     if (!detail.fact) throw notFound();
     const { fact, row } = detail;
+    // Açıklama yalnızca istendiğinde modele gider; kısaltma bilgisi de yalnızca o zaman taşınır.
+    const descriptionClipped = Boolean(row.DescriptionClipped) && (args.textFields || []).includes('description');
     const access = projectAccess(scope, fact.projectId)
       || (scope.isAdmin ? { accessLevel: fact.accessLevel, readGrant: false, reasons: [] } : null);
     const creatorVisible = row.VisibleCreatedBySicil != null;
@@ -251,7 +275,7 @@ const taskDetail = {
       title: dataText(fact.title, 300),
       ...(fact.keyword ? { keyword: dataText(fact.keyword, 80) } : {}),
       description: dataText(row.Description, 1600),
-      ...(row.DescriptionClipped ? { descriptionClipped: true } : {}),
+      ...(descriptionClipped ? { descriptionClipped: true } : {}),
       project: projectRef({ projectId: fact.projectId, name: dataText(row.ProjectName, 160), code: row.ProjectCode ? dataText(row.ProjectCode, 60) : null }),
       wbsPath: detail.wbsChain.map((node) => dataText(node.Name, 120)),
       ...(wbsPathTruncated ? { wbsPathTruncated: true, wbsPathIssue } : {}),
@@ -300,8 +324,8 @@ const taskDetail = {
         ]
       },
       scope: describeTaskScope(access ? [access] : []),
-      complete: !wbsPathTruncated && !row.DescriptionClipped,
-      truncated: wbsPathTruncated || Boolean(row.DescriptionClipped),
+      complete: !wbsPathTruncated && !descriptionClipped,
+      truncated: wbsPathTruncated || descriptionClipped,
       returnedCount: 1,
       totalCount: 1,
       nextCursor: null,

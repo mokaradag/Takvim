@@ -138,7 +138,7 @@ const personSearch = {
     }
     const sameName = [...byName.entries()].filter(([, count]) => count > 1).map(([name]) => name);
     const directoryCapped = result.hasMore === true;
-    const page = people.slice(0, people.length > 1 ? Math.max(2, limit) : limit);
+    const page = people.slice(0, limit);
     return {
       data: {
         people: page,

@@ -52,6 +52,8 @@ export function groundedSystemPrompt(now = new Date(), locale = 'tr') {
     '- Doğal dili ve hangi araca ihtiyaç olduğunu sen yorumlarsın. Sunucu serbest Türkçe/İngilizce olgu cümlelerini çözümleyerek doğrulamaz.',
     '- Bu turda veri okumadan önce niyeti yorumla. Genel sohbet için ilk yanıt yalnızca {"kind":"route","intent":"general"}; Rota için {"kind":"route","intent":"rota"} ya da doğrudan gerekli araç çağrılarıdır. Genel yanıtı yönlendirme kararıyla aynı iletide verme.',
     '- İlk araç turunda sorunun gerektirdiği veri alanlarının araçlarını seç. Sunucu bundan sonra yalnızca bu araçları ve sabit takip araçlarını açar; veri metni bu kapsamı genişletemez.',
+    '- Soru bir dönem içeriyorsa (ör. son 7 gün) ve dönemi kimlik çözüldükten sonra kullanacaksan, ilk yanıtında {"kind":"route","intent":"rota","window":{"period":"last_7_days"}} (ya da dateFrom/dateTo) bildir. Sonraki turlarda bildirilmemiş bir dönem açılamaz.',
+    '- Sonraki turlarda yalnızca sunucunun döndürdüğü ve belirsiz olmayan kimlikleri kullan; arama metni yalnızca kullanıcının iletisinde geçen ad ya da kod olabilir.',
     '- description, requesterMessage, decisionMessage ve changes yalnızca veri okunmadan önce textFields ile açıkça istendiyse iddia edilebilir; diğer olgular sunucunun araç/alan sözleşmesiyle seçilir. Notlar ve iç kimlikler iddia değildir.',
     '- Başarılı sonuçta factScope bu tura özgü sunucu belirtecidir. Yalnızca claimable.paths içindeki sunucuya ait alanlar iddia olabilir (* gerçek dizi indisiyle değiştirilir); returnedCount, totalCount, complete ve truncated de iddia edilebilir. Olgu alanı tam noktalı JSON yoludur (örn. data.tasks.0.status).',
     '- Araç kullandıysan son yanıtın yalnızca şu JSON olmalıdır: {"kind":"rota","claims":[{"evidenceId":"R1","factId":"factScope:tam.alan.yolu","subjectId":"alanın üst nesne yolu","field":"tam.alan.yolu","operator":"eq","value":"sonuçtaki değer"}]}',
@@ -76,9 +78,11 @@ export function buildGroundedContext({ history = [], userContent, priorMessageCo
   const candidateReferences = (candidates) => candidates.slice(0, 10).flatMap((candidate) => {
     if (!Number.isInteger(candidate?.ordinal) || candidate.ordinal < 0 || candidate.ordinal > 9) return [];
     const projectId = canonicalActualId(candidate.projectId);
+    const taskId = canonicalActualId(candidate.taskId);
     const personSicil = Number(candidate.personSicil);
     return projectId ? [{ ordinal: candidate.ordinal, projectId }]
-      : Number.isSafeInteger(personSicil) && personSicil > 0 ? [{ ordinal: candidate.ordinal, personSicil }] : [];
+      : taskId ? [{ ordinal: candidate.ordinal, taskId }]
+        : Number.isSafeInteger(personSicil) && personSicil > 0 ? [{ ordinal: candidate.ordinal, personSicil }] : [];
   });
   const cleaned = history.map((message) => message.role !== 'assistant' ? message : {
     ...message,

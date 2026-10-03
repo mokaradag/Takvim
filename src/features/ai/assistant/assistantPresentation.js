@@ -30,8 +30,15 @@ export function rotaDataAvailability(readiness, mode) {
   return { available: false, message: `${messages[data.reason] || messages.PROFILE_UNAVAILABLE} Genel sohbet kullanılabilir.` };
 }
 
+/**
+ * İsteğe yazılacak kaynak. Özellik kapalıyken kaynak gönderilmez (`null`;
+ * özellik kapalı sohbet yolu aynen çalışır). Seçili Rota kaynağı, veri yolu hazır olmasa da
+ * Rota olarak kalır; sunucu sabit `unavailable` sonucunu verir. Genel sohbet
+ * yalnızca kullanıcı açıkça seçtiğinde gönderilir.
+ */
 export function effectiveAssistantSource(readiness, mode, source) {
-  return source === 'rota' && rotaDataAvailability(readiness, mode).available ? 'rota' : 'general';
+  if (readiness?.rotaData?.enabled !== true) return null;
+  return source === 'general' ? 'general' : 'rota';
 }
 
 const CLIENT_FAILURES = Object.freeze({

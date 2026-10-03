@@ -1,5 +1,4 @@
 import 'server-only';
-import { readProjectSearch } from './rotaToolStore.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { accessReasonLabel, describeTaskScope, isCompleteTaskView, projectAccess, SCOPE_KINDS } from './rotaScope.js';
@@ -93,7 +92,8 @@ export function taskItem(fact, { projects, assignees = null, today, withProject 
   if (fact.milestone) item.milestone = true;
   if (isOverdue(fact, today)) item.overdueDays = overdueDays(fact, today);
   if (assignees) Object.assign(item, assigneeView(fact, assignees));
-  item.access = fact.accessLevel === 'FULL' ? 'FULL' : 'VISIBLE';
+  // Kanonik erişim düzeyi (FULL/READ/PARTIAL): kanıt yazıcısı bunu yerelleştirir.
+  item.access = fact.accessLevel === 'FULL' ? 'FULL' : (projects?.get(fact.projectId)?.readGrant ? 'READ' : 'PARTIAL');
   return item;
 }
 
@@ -105,16 +105,14 @@ export function fullAccessRequired() {
   return new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE);
 }
 
-/** Proje görünür değilse var olmayan projeyle aynı sonuç. */
-export async function requireVisibleProject(scope, projectId, call) {
-  let access = projectAccess(scope, projectId);
-  if (!access && scope.isAdmin && call) {
-    const result = await call.sql((executor) => readProjectSearch(executor, scope, { projectId, text: '', limit: 1 }));
-    if (result.rows.some((row) => canonicalActualId(row.ProjectId) === projectId)) {
-      access = Object.freeze({ projectId, accessLevel: 'FULL', readGrant: false, ownScoped: false, reasons: ['SYSTEM_ADMIN'] });
-      scope.projects.set(projectId, access);
-    }
-  }
+/**
+ * Proje görünür değilse var olmayan projeyle aynı sonuç. Kapsam, yüklendiği
+ * anda parmak izi alınmış değişmez bir görüntüdür: sistem yöneticisinin kapsamı
+ * da bütün etkin projeleri içerir, burada genişletilmez (son yetki denetimi
+ * aynı kapsamı yeniden kurabilmelidir).
+ */
+export async function requireVisibleProject(scope, projectId) {
+  const access = projectAccess(scope, projectId);
   if (!access) throw notFound();
   return access;
 }

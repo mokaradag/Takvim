@@ -17,7 +17,7 @@ import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.j
 import { isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope } from '../tools/toolScope.js';
-import { parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
+import { parseTurnRoute, parseTurnWindow, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { createAiDeadline } from '../aiDeadline.js';
 
 /**
@@ -66,13 +66,16 @@ function safeToolCallsForTranscript(toolCalls, toolMessages) {
   });
 }
 
+/** Proje kimliğiyle daraltılabilen araçlar: ad çözümünden sonra erişilebilir (kapsam sınırı yine uygulanır). */
+const PROJECT_SCOPED_FOLLOW_UPS = Object.freeze(['rota_activity_search', 'rota_recurrence_inspect', 'rota_workload_summary', 'rota_schedule_requests', 'rota_assignment_requests']);
+
 const TOOL_FOLLOW_UPS = Object.freeze({
   rota_task_search: ['rota_task_detail', 'rota_task_analytics', 'rota_project_search'],
-  rota_project_search: ['rota_project_detail', 'rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_wbs_inspect', 'rota_calendar_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_data_quality'],
+  rota_project_search: ['rota_project_detail', 'rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_wbs_inspect', 'rota_calendar_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_data_quality', ...PROJECT_SCOPED_FOLLOW_UPS],
   rota_person_search: ['rota_workload_summary', 'rota_task_search', 'rota_task_analytics'],
   rota_task_detail: ['rota_task_search', 'rota_task_analytics', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_activity_search'],
   rota_task_analytics: ['rota_task_search', 'rota_task_detail', 'rota_project_search', 'rota_project_detail'],
-  rota_project_detail: ['rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_wbs_inspect', 'rota_calendar_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_data_quality'],
+  rota_project_detail: ['rota_task_search', 'rota_task_detail', 'rota_task_analytics', 'rota_wbs_inspect', 'rota_calendar_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_data_quality', ...PROJECT_SCOPED_FOLLOW_UPS],
   rota_wbs_inspect: ['rota_task_search', 'rota_task_analytics', 'rota_project_detail'],
   rota_notifications: ['rota_schedule_requests', 'rota_assignment_requests', 'rota_task_detail'],
   rota_portfolio_summary: ['rota_project_search', 'rota_project_detail', 'rota_task_analytics', 'rota_wbs_inspect'],
@@ -122,17 +125,43 @@ function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFail
   if (evidenceIds.length) {
     if (response?.kind === 'clarification' && Object.keys(response).length === 2 && Array.isArray(response.claims)) {
       const ambiguousIds = new Set(evidencePayloads.filter((item) => {
-        try { return JSON.parse(item.payload).data?.ambiguous === true; } catch { return false; }
+        try {
+          const data = JSON.parse(item.payload).data;
+          return data?.ambiguous === true || data?.titleResolution === 'ambiguous';
+        } catch { return false; }
       }).map((item) => item.id));
       if (!response.claims.every((claim) => claim && typeof claim.field === 'string' && ambiguousIds.has(claim.evidenceId)
-        && (claim.field.startsWith('data.matches.') || claim.field.startsWith('data.people.')))) {
+        && ['data.matches.', 'data.people.', 'data.tasks.'].some((prefix) => claim.field.startsWith(prefix)))) {
         return { ok: false, issues: [{ code: 'CLARIFICATION_CANDIDATES_REQUIRED' }] };
       }
-      const verdict = analyzeGroundedAnswer(JSON.stringify({ ...response, kind: 'rota' }), { evidenceIds, evidencePayloads, locale });
+      // Adaylar sunucu kuralıyla korunur: aynı belirsiz sonuçtan en az iki
+      // FARKLI aday gerekir ve her aday tek bir numaralı satırdır; kaydedilen
+      // sıra (ordinal) kullanıcının gördüğü numarayla aynıdır.
+      const candidateOf = (claim) => ({ evidenceId: claim.evidenceId, index: Number(claim.field.split('.')[2]) });
+      const candidates = [];
+      for (const claim of response.claims) {
+        const candidate = candidateOf(claim);
+        if (!candidates.some((other) => other.evidenceId === candidate.evidenceId && other.index === candidate.index)) candidates.push(candidate);
+      }
+      if (candidates.length < 2 || new Set(candidates.map((candidate) => candidate.evidenceId)).size !== 1
+        || candidates.some((candidate) => !Number.isInteger(candidate.index) || candidate.index < 0)) {
+        return { ok: false, issues: [{ code: 'CLARIFICATION_CANDIDATES_REQUIRED' }] };
+      }
+      const rows = [];
+      const citedIds = [];
+      for (const [ordinal, candidate] of candidates.entries()) {
+        const claims = response.claims.filter((claim) => {
+          const other = candidateOf(claim);
+          return other.evidenceId === candidate.evidenceId && other.index === candidate.index;
+        });
+        const verdict = analyzeGroundedAnswer(JSON.stringify({ kind: 'rota', claims }), { evidenceIds, evidencePayloads, locale });
+        if (!verdict.ok) return verdict;
+        for (const id of verdict.citedIds) if (!citedIds.includes(id)) citedIds.push(id);
+        const parts = verdict.normalized.split('\n').map((line) => line.replace(/^- /, ''));
+        rows.push(`${ordinal + 1}. ${parts.join(' ')}`);
+      }
       const question = locale === 'en' ? 'Which candidate did you mean?' : 'Hangi adayı kastediyorsunuz?';
-      const candidateReferences = response.claims.map((claim) => ({ evidenceId: claim.evidenceId, index: Number(claim.field.split('.')[2]) }));
-      const candidates = candidateReferences.filter((candidate, index) => candidateReferences.findIndex((other) => other.evidenceId === candidate.evidenceId && other.index === candidate.index) === index);
-      return { ...verdict, kind: 'clarification', candidates, normalized: `${verdict.normalized || ''}\n\n${question}` };
+      return { ok: true, issues: [], citedIds, kind: 'clarification', candidates, normalized: `${rows.join('\n')}\n\n${question}` };
     }
     return { kind: 'grounded', ...analyzeGroundedAnswer(text, { evidenceIds, evidencePayloads, locale }) };
   }
@@ -140,7 +169,7 @@ function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFail
     return { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] };
   }
   if (!toolsAttempted && [TURN_ROUTES.GENERAL, TURN_ROUTES.UNDECIDED].includes(route) && response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
-    return { ok: true, normalized: locale === 'en' ? 'Select General chat for a general explanation. Rota data answers require current evidence.' : 'Genel açıklama için Genel sohbet seçeneğini seçin. Rota verisi yanıtları güncel kanıt gerektirir.', kind: 'clarification', citedIds: [], issues: [] };
+    return { ok: true, normalized: locale === 'en' ? 'Select General chat for a general explanation. Rota data answers require current evidence.' : 'Genel açıklama için Genel sohbet seçeneğini seçin. Rota verisi yanıtları güncel kanıt gerektirir.', kind: 'general_redirect', citedIds: [], issues: [] };
   }
   return { normalized: text, kind: 'direct', ok: false, citedIds: [], issues: [{ code: route === TURN_ROUTES.ROTA ? 'ROTA_EVIDENCE_REQUIRED' : 'ANSWER_INTENT_REQUIRED' }] };
 }
@@ -150,14 +179,19 @@ export async function runGroundedTurn(session, {
   catalog,
   context,
   limits = TOOL_LIMITS,
+  allowedTextFields = [],
   onStatus = null,
   onText
 }) {
   const ledger = createEvidenceLedger();
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
   let permittedTools = null;
-  const containment = createToolScope({ today: context.today });
   let route = TURN_ROUTES.UNDECIDED;
+  const userMessages = messages.filter((message) => message.role === 'user');
+  const currentUser = userMessages.at(-1);
+  const locale = replyLocale(currentUser?.content);
+  // Kullanıcının bu turdaki iletisi, sonraki arama metni için güvenilir niyettir.
+  const containment = createToolScope({ today: context.today, userText: String(currentUser?.content || ''), allowedTextFields });
   const executor = createToolExecutor({
     resolveTool: (name) => !permittedTools || permittedTools.has(name) ? getRotaTool(name) : null,
     context,
@@ -168,9 +202,9 @@ export async function runGroundedTurn(session, {
     onProgress: ({ topic }) => status(ASSISTANT_STREAM_PHASES.TOOLS, { topic })
   });
   const transcript = [...messages];
-  const userMessages = messages.filter((message) => message.role === 'user');
-  const currentUser = userMessages.at(-1);
-  const locale = replyLocale(currentUser?.content);
+  if (!allowedTextFields.length) {
+    appendServerInstruction(transcript, 'Bu turda kullanıcı kayıtlı serbest metni (açıklama, talep/karar iletisi, değişiklik metni) açmadı: textFields kullanma; bu metinler gerekiyorsa kullanıcıya "Notları ve iletileri dahil et" seçeneğini önerebilirsin.');
+  }
   let toolRounds = 0;
   let modelRounds = 0;
   let toolsAttempted = false;
@@ -203,7 +237,10 @@ export async function runGroundedTurn(session, {
       result.text = '';
       result.toolCalls = [];
     }
-    const declaredRoute = parseTurnRoute(parseEvidenceResponse(result.text));
+    const declaration = parseEvidenceResponse(result.text);
+    const declaredRoute = parseTurnRoute(declaration);
+    // Veri okunmadan önce bildirilen dönem güvenilir niyettir (ilk araç turundan önce).
+    if (!toolsAttempted && declaredRoute === TURN_ROUTES.ROTA) containment.declare(parseTurnWindow(declaration));
     if (route === TURN_ROUTES.UNDECIDED && declaredRoute && !result.toolCalls.length) {
       route = declaredRoute;
       appendServerInstruction(transcript, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
@@ -220,9 +257,12 @@ export async function runGroundedTurn(session, {
         if (body?.ok === false && typeof body.error?.code === 'string') toolFailureCodes.add(body.error.code);
       }
       containment.establish(result.toolCalls, toolMessages);
-      if (!permittedTools && toolMessages.some((message) => toolMessageBody(message)?.ok === true)) {
+      if (toolMessages.some((message) => toolMessageBody(message)?.ok === true)) {
+        // Her başarılı turun takip araçları eklenir: çok adımlı çözüm (kişi →
+        // görev → ayrıntı) mümkündür; bağımsız değişkenler kapsam sınırına bağlı kalır.
         const boundedCalls = result.toolCalls.slice(0, limits.maxCallsPerRound);
-        permittedTools = toolsForInitialCalls(boundedCalls, catalog, toolMessages.slice(0, boundedCalls.length));
+        const next = toolsForInitialCalls(boundedCalls, catalog, toolMessages.slice(0, boundedCalls.length));
+        permittedTools = new Set([...(permittedTools || []), ...next]);
       }
       transcript.push({ role: 'assistant', content: result.text || '', toolCalls: safeToolCallsForTranscript(result.toolCalls, toolMessages) });
       transcript.push(...toolMessages);
@@ -265,7 +305,9 @@ export async function runGroundedTurn(session, {
       recordGroundedAnswer({ outcome, rounds: modelRounds, evidence: cited.length, repaired, disclosed: disclosure.disclosed });
       return {
         text: finalText,
-        finishReason: ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : result.finishReason || 'stop',
+        // Doğrulanmış yanıtın bitişi sunucu kararıdır; sağlayıcının son turdaki nedeni (ör. tool_calls) taşınmaz.
+        finishReason: outcome === 'general_redirect' ? 'clarification'
+          : ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : 'stop',
         outcome,
         evidence: cited,
         evidenceRows: ledger.persistable(verdict.citedIds, { clarification: verdict.kind === 'clarification', candidates: verdict.candidates }),

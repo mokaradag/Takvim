@@ -63,7 +63,7 @@ function createState() {
     // Rota verisi araçları: yalnızca araç adı, sonuç sınıfı ve süre (içerik YOK).
     tools: { calls: 0, byOutcome: {}, byTool: {}, latencyMs: [], lastFailure: null },
     // Kanıta dayalı yanıtların sonucu: grounded (kanıtlı), direct (araçsız), failed (doğrulanamadı).
-    grounding: { grounded: 0, direct: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, rounds: [], evidence: [] },
+    grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, rounds: [], evidence: [] },
     retries: 0,
     lastSuccessAt: null,
     // Hizmet hatası (sağlayıcı öncesi de olabilir: rehber, anahtar tablosu, iç
@@ -419,7 +419,7 @@ export function aiTelemetrySnapshot() {
     },
     grounding: {
       grounded: current.grounding.grounded,
-      direct: current.grounding.direct,
+      general_redirect: current.grounding.general_redirect,
       clarification: current.grounding.clarification,
       not_found: current.grounding.not_found,
       unavailable: current.grounding.unavailable,

@@ -2,8 +2,20 @@ const TEXT_FIELDS = Object.freeze(['description', 'requesterMessage', 'decisionM
 
 export const EVIDENCE_TEXT_FIELDS = TEXT_FIELDS;
 
+/**
+ * Hareket kaydının serbest metin alanları (başlık, etiket, açıklama, yineleme
+ * kuralı): eski/yeni değerleri saklanan serbest metindir ve yalnızca kullanıcı
+ * değişiklik metnini (`changes`) açıkça istediğinde modele gider.
+ */
+const FREE_TEXT_CHANGE_FIELDS = Object.freeze(['task', 'keyword', 'description', 'recurrenceRule']);
+
+export function changeEntryVisible(item, textFields) {
+  if (TEXT_FIELDS.includes(item?.field) && !textFields.includes(item.field)) return false;
+  return !FREE_TEXT_CHANGE_FIELDS.includes(item?.field) || textFields.includes('changes');
+}
+
 export function projectEvidenceData(value, textFields = []) {
-  if (Array.isArray(value)) return value.filter((item) => !TEXT_FIELDS.includes(item?.field) || textFields.includes(item.field))
+  if (Array.isArray(value)) return value.filter((item) => changeEntryVisible(item, textFields))
     .map((item) => projectEvidenceData(item, textFields));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value)
@@ -15,14 +27,14 @@ const ENVELOPE_FIELDS = new Set(['returnedCount', 'totalCount', 'complete', 'tru
 
 const record = (path, fields) => fields.split(' ').map((field) => `${path}.${field}`);
 const TOTALS = 'total todo inProgress done open overdue dueToday dueNext7Days openWithoutTargetFinish doneWithoutActualFinish milestonesOpen completionRatePercent';
-const TASK = 'title keyword status statusLabel priority priorityLabel milestone progressPercent targetFinish plannedStart plannedFinish actualStart actualFinish overdue overdueDays createdAt updatedAt access';
-const PROJECT = 'name code source sourceType lead type calendar dataDate tagCount wbsNodeCount dependencyCount baselineCount';
-const ACCESS = 'level label completeTaskView dependenciesAndBaselines';
+const TASK = 'title keyword status priority milestone progressPercent targetFinish plannedStart plannedFinish actualStart actualFinish overdue overdueDays createdAt updatedAt access';
+const PROJECT = 'name code sourceType lead type calendar dataDate tagCount wbsNodeCount dependencyCount baselineCount';
+const ACCESS = 'level completeTaskView dependenciesAndBaselines';
 const DATE = 'plannedStart plannedFinish plannedDurationDays targetFinish calendarDate actualStart actualFinish remainingDurationDays';
 const SERIES = 'title project rule ruleDescription visibleOccurrences open done overdue upcomingCount nextTruncated completionDatesComplete';
-const seriesPaths = (path) => [`${path}.lastCompleted`, ...record(path, SERIES), ...record(`${path}.next.*`, 'occurrenceDate targetFinish statusLabel'), ...record(`${path}.lastCompleted`, 'occurrenceDate actualFinish')];
+const seriesPaths = (path) => [`${path}.lastCompleted`, ...record(path, SERIES), ...record(`${path}.next.*`, 'occurrenceDate targetFinish status'), ...record(`${path}.lastCompleted`, 'occurrenceDate actualFinish')];
 const itemPaths = (path) => [...record(path, TASK), ...record(`${path}.project`, PROJECT), ...record(`${path}.assignees.*`, 'name')];
-const workflowPaths = (path) => [...record(path, 'status statusLabel requester decisionOwner requestedAssignee requestedAssigneeOrganization suggestedAssignee requesterMessage decisionMessage decidedBy createdAt decidedAt yourRole awaitingYourDecision actionRequiredFromYou mode modeLabel targetFinish'), ...record(`${path}.task`, 'title available'), ...record(`${path}.project`, 'name code')];
+const workflowPaths = (path) => [...record(path, 'status requester decisionOwner requestedAssignee requestedAssigneeOrganization suggestedAssignee requesterMessage decisionMessage decidedBy createdAt decidedAt yourRole awaitingYourDecision actionRequiredFromYou mode targetFinish'), ...record(`${path}.task`, 'title available'), ...record(`${path}.project`, 'name code')];
 
 const PATHS = Object.freeze({
   rota_task_search: [...record('project', PROJECT), ...itemPaths('tasks.*')],
@@ -34,15 +46,15 @@ const PATHS = Object.freeze({
   rota_wbs_inspect: [...record('project', PROJECT), 'nodeCount', ...record('tasksWithoutWbs', 'tasks done overdue'), ...record('nodes.*', 'name code depth childCount directTasks subtreeTasks subtreeOpen subtreeOverdue')],
   rota_person_search: [...record('people.*', 'name jobTitle'), ...record('people.*.organization', 'directorate department unit'), 'ambiguous'],
   rota_workload_summary: ['openTaskCount', 'unassignedOpenTasks', ...record('people.*', 'name openTasks inProgress overdue dueNext7Days plannedHoursOnAssignedTasks tasksWithPlannedHours')],
-  rota_baseline_compare: ['baseline',...record('baseline', 'name createdAt isPrimary taskCount'), ...record('availableBaselines.*', 'name createdAt isPrimary taskCount'), 'availableBaselinesTruncated', ...record('counts', 'snapshotTasks compared finishSlipped finishEarlier finishUnchanged missingDates removedSinceBaseline addedSinceBaseline startSlipped missingTasks'), ...record('finishVariance', 'averageDays maxSlipDays maxEarlierDays'), ...record('mostSlipped.*', 'title status statusLabel baselineFinish plannedFinish varianceDays targetFinish')],
-  rota_dependency_inspect: [...record('task', TASK), ...['predecessors.*', 'successors.*'].flatMap((path) => [...record(path, `${TASK} type typeLabel`), ...record(`${path}.lag`, 'value unit')]), ...record('coverage', 'taskCount dependencyCount tasksWithPredecessor tasksWithSuccessor tasksWithoutAnyDependency withPositiveLag withNegativeLag'), ...record('coverage.byType', 'FS SS FF SF'), ...record('mostConnected.*', 'title relationCount')],
+  rota_baseline_compare: ['baseline',...record('baseline', 'name createdAt isPrimary taskCount'), ...record('availableBaselines.*', 'name createdAt isPrimary taskCount'), 'availableBaselinesTruncated', ...record('counts', 'snapshotTasks compared finishSlipped finishEarlier finishUnchanged missingDates removedSinceBaseline addedSinceBaseline startSlipped missingTasks'), ...record('finishVariance', 'averageDays maxSlipDays maxEarlierDays'), ...record('mostSlipped.*', 'title status baselineFinish plannedFinish varianceDays targetFinish')],
+  rota_dependency_inspect: [...record('task', TASK), ...['predecessors.*', 'successors.*'].flatMap((path) => [...record(path, `${TASK} type`), ...record(`${path}.lag`, 'value unit')]), ...record('coverage', 'taskCount dependencyCount tasksWithPredecessor tasksWithSuccessor tasksWithoutAnyDependency withPositiveLag withNegativeLag'), ...record('coverage.byType', 'FS SS FF SF'), ...record('mostConnected.*', 'title relationCount')],
   rota_recurrence_inspect: ['task.title', 'recurring', 'visibleEntryCount', ...seriesPaths('series'), ...seriesPaths('series.*')],
   rota_calendar_inspect: [...record('calendar', 'name source timeZone'), 'calendar.workingWeekdays.*', ...record('range', 'from to calendarDays'), 'workingDayCount', ...record('holidays.*', 'date name short')],
-  rota_activity_search: [...record('range', 'from to'), ...record('summary', 'events tasks people completedTasks'), ...record('items.*', 'occurredAt actor kind kindLabel'), ...record('items.*.task', 'title available'), ...record('items.*.project', 'name code'), 'items.*.changes.*', ...record('items.*.structuredChanges.*', 'before after')],
+  rota_activity_search: [...record('range', 'from to'), ...record('summary', 'events tasks people completedTasks'), ...record('items.*', 'occurredAt actor kind'), ...record('items.*.task', 'title available'), ...record('items.*.project', 'name code'), 'items.*.changes.*', ...record('items.*.structuredChanges.*', 'before after')],
   rota_schedule_requests: [...record('counts', 'awaitingYourDecision sent history'), ...workflowPaths('items.*'), ...['plannedStart', 'plannedFinish', 'targetFinish'].flatMap((field) => record(`items.*.proposedChanges.${field}`, 'from to'))],
   rota_assignment_requests: [...record('counts', 'actionRequired sent history'), ...workflowPaths('items.*'), ...record('items.*.you', 'requester requestedAssignee canDecide')],
-  rota_notifications: ['unreadCount', 'actionRequiredCount', ...['scheduleRequests', 'assignmentCoordination', 'taskEvents'].flatMap((path) => [...record(path, 'unread awaitingYourDecision actionRequired'), ...record(`${path}.latest.*`, 'title project statusLabel actionRequired unread at requestedAssignee label by taskCount')])],
-  rota_outlook_status: ['activeSubscriptions', 'byStateComplete', ...record('byState', 'failed suspended pending delivered'), ...record('items.*', 'state stateLabel attempts calendarDate deliveredCalendarDate lastDeliveredAt'), ...record('items.*.task', 'title project'), ...record('items.*.failure', 'code message')],
+  rota_notifications: ['unreadCount', 'actionRequiredCount', ...['scheduleRequests', 'assignmentCoordination', 'taskEvents'].flatMap((path) => [...record(path, 'unread awaitingYourDecision actionRequired'), ...record(`${path}.latest.*`, 'title project status actionRequired unread at requestedAssignee label by taskCount')])],
+  rota_outlook_status: ['activeSubscriptions', 'byStateComplete', ...record('byState', 'failed suspended pending delivered'), ...record('items.*', 'state attempts calendarDate deliveredCalendarDate lastDeliveredAt'), ...record('items.*.task', 'title project'), ...record('items.*.failure', 'code message')],
   rota_data_quality: ['openTaskCount', 'cleanOpenTaskCount', ...record('checks.*', 'label count'), ...record('checks.*.examples.*', 'title project'), 'completedWithoutActualFinish.count', ...record('completedWithoutActualFinish.examples.*', 'title project')]
 });
 
@@ -59,6 +71,7 @@ export function claimableField(envelope, path, canonicalFields, changeField = nu
   const leaf = parts.findLast((part) => !/^\d+$/.test(part));
   const textField = TEXT_FIELDS.includes(leaf) ? leaf : (TEXT_FIELDS.includes(changeField) ? changeField : null);
   if (textField && !envelope.claimable?.textFields?.includes(textField)) return false;
+  if (FREE_TEXT_CHANGE_FIELDS.includes(changeField) && !envelope.claimable?.textFields?.includes('changes')) return false;
   return canonicalFields.has(leaf);
 }
 

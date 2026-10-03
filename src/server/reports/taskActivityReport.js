@@ -30,7 +30,24 @@ export function normalizeActivityQuery(input = {}, actor, now) {
 
 const COMPLETED_STATUSES_SQL = Object.entries(PERSISTED_TASK_STATUSES).filter(([, status]) => status === 'done').map(([alias]) => `'${alias}'`).join(', ');
 
+const ACTIVITY_DETAIL_APPLY = `CROSS APPLY (SELECT TOP (100) s.*, detail.BeforeJson, detail.AfterJson FROM #TaskActivityScope s
+    JOIN dbo.MR_AuditLog detail ON detail.AuditId = s.AuditId
+    WHERE s.ActionGroup = g.ActionGroup AND s.EntityId = g.EntityId AND s.ActorSicil = g.ActorSicil
+      AND (s.ProjectId = g.ProjectId OR (s.ProjectId IS NULL AND g.ProjectId IS NULL)) ORDER BY s.AuditId) e`;
+
+const EVIDENCE_ACTIVITY_DETAIL_APPLY = `CROSS APPLY (SELECT TOP (@activityDetailLimit) s.*, LEFT(detail.BeforeJson, 8192) AS BeforeJson, LEFT(detail.AfterJson, 8192) AS AfterJson,
+      CASE WHEN DATALENGTH(detail.BeforeJson) > 16384 OR DATALENGTH(detail.AfterJson) > 16384 THEN 1 ELSE 0 END AS DetailJsonClipped
+    FROM (
+      SELECT scoped.*, ROW_NUMBER() OVER (ORDER BY scoped.AuditId) AS DetailFirst, ROW_NUMBER() OVER (ORDER BY scoped.AuditId DESC) AS DetailLast
+      FROM #TaskActivityScope scoped
+      WHERE scoped.ActionGroup = g.ActionGroup AND scoped.EntityId = g.EntityId AND scoped.ActorSicil = g.ActorSicil
+        AND (scoped.ProjectId = g.ProjectId OR (scoped.ProjectId IS NULL AND g.ProjectId IS NULL))
+    ) s
+    JOIN dbo.MR_AuditLog detail ON detail.AuditId = s.AuditId
+    WHERE s.DetailFirst = 1 OR s.DetailLast = 1 ORDER BY s.AuditId) e`;
+
 export const TASK_ACTIVITY_SQL = `
+  DROP TABLE IF EXISTS #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
   SELECT a.AuditId, a.OccurredAt, a.ActorSicil, a.ActorDisplayName, a.ActionCode, a.EntityId, a.ProjectId,
     COALESCE(CONVERT(varchar(36), a.CorrelationId), CONCAT('audit:', a.AuditId)) AS ActionGroup,
     t.Title AS CurrentTitle, t.TaskId AS CurrentTaskId, p.ProjectName, p.ProjectCode,
@@ -98,10 +115,7 @@ export const TASK_ACTIVITY_SQL = `
     OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
   SELECT g.LastAuditId AS GroupId, g.OccurredAt AS GroupOccurredAt, g.Completed, g.Deleted, g.Created, g.EventCount, e.*
   FROM #TaskActivityPage g
-  CROSS APPLY (SELECT TOP (100) s.*, detail.BeforeJson, detail.AfterJson FROM #TaskActivityScope s
-    JOIN dbo.MR_AuditLog detail ON detail.AuditId = s.AuditId
-    WHERE s.ActionGroup = g.ActionGroup AND s.EntityId = g.EntityId AND s.ActorSicil = g.ActorSicil
-      AND (s.ProjectId = g.ProjectId OR (s.ProjectId IS NULL AND g.ProjectId IS NULL)) ORDER BY s.AuditId) e
+  ${ACTIVITY_DETAIL_APPLY}
   ORDER BY g.OccurredAt DESC, g.LastAuditId DESC, e.AuditId;
   DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
 `;
@@ -141,14 +155,25 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
       AND (@kind = '' OR @kind = ${groupKind})`;
     statement = statement.replace('SELECT a.AuditId', 'SELECT TOP (@activityProbeRows) a.AuditId')
       .replace("AND (@taskIdText IS NULL OR a.EntityId = @taskIdText)", `AND (@taskIdText IS NULL OR a.EntityId = @taskIdText) ${prefilter}`)
-      .replace('SELECT DISTINCT ActorSicil', "IF (SELECT COUNT(*) FROM #TaskActivityScope) >= @activityProbeRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\n  SELECT DISTINCT ActorSicil");
+      .replace('SELECT DISTINCT ActorSicil', `IF (SELECT COUNT(*) FROM #TaskActivityScope) >= @activityProbeRows
+  BEGIN
+    DROP TABLE #TaskActivityScope;
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  END
+  SELECT DISTINCT ActorSicil`);
   }
   if (evidenceSnapshotLimit != null) {
     request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
     request.input('activityDetailLimit', sql.Int, 2);
-    statement = statement.replace('SELECT TOP (100) s.*, detail.BeforeJson, detail.AfterJson', 'SELECT TOP (@activityDetailLimit) s.*, LEFT(detail.BeforeJson, 8192) AS BeforeJson, LEFT(detail.AfterJson, 8192) AS AfterJson, CASE WHEN DATALENGTH(detail.BeforeJson) > 16384 OR DATALENGTH(detail.AfterJson) > 16384 THEN 1 ELSE 0 END AS DetailJsonClipped')
-      .replace('ORDER BY s.AuditId) e', 'ORDER BY s.AuditId DESC) e');
-    statement = statement.replace('DECLARE @lastPage int', "IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\n  DECLARE @lastPage int");
+    // Grubun İLK ve SON denetim kaydı kronolojik sırayla okunur: önceki değer
+    // gerçek başlangıçtan, sonraki değer gerçek sondan gelir.
+    statement = statement.replace(ACTIVITY_DETAIL_APPLY, EVIDENCE_ACTIVITY_DETAIL_APPLY);
+    statement = statement.replace('DECLARE @lastPage int', `IF @total > @evidenceSnapshotLimit
+  BEGIN
+    DROP TABLE #TaskActivityGroups, #TaskActivityScope;
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  END
+  DECLARE @lastPage int`);
   }
   const result = await request.query(statement);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];
@@ -170,7 +195,15 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   }
   const items = [...groups.entries()].map(([id, rows]) => {
     const last = rows[rows.length - 1];
-    const change = taskActivityChanges(rows, people, { includeStructuredChanges });
+    // Ara kayıtlar okunmadıysa alan değişiklikleri kesin olarak kurulamaz: yalnızca
+    // grubun kesin özeti (oluşturma/silme/tamamlama) ve kısaltma notu verilir.
+    const omitted = evidenceSnapshotLimit != null && Number(last.EventCount) > rows.length;
+    const computed = taskActivityChanges(rows, people, { includeStructuredChanges });
+    const change = omitted
+      ? { ...computed, ...(includeStructuredChanges ? { structuredChanges: [] } : {}), changes: [
+        ...(last.Created ? ['Yeni görev oluşturuldu'] : []), ...(last.Deleted ? ['Görev silindi'] : []), ...(last.Completed ? ['Tamamlandı'] : []),
+        `${Number(last.EventCount)} değişiklik kaydı; alan ayrıntıları kısaltıldı`] }
+      : computed;
     return { id, occurredAt: new Date(last.GroupOccurredAt).toISOString(), actorId: String(last.ActorSicil),
       actorName: last.ActorDisplayName || last.CurrentActorName || `Çalışan ${last.ActorSicil}`,
       projectId: canonicalActualId(last.ProjectId), projectName: change.projectName || last.ProjectName || 'Geçmiş proje',

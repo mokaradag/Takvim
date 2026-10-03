@@ -290,6 +290,7 @@ export async function streamAssistantTurnRequest({
   turnId,
   message = null,
   source = null,
+  includeText = false,
   mode,
   signal = null,
   onEvent = null,
@@ -331,7 +332,7 @@ export async function streamAssistantTurnRequest({
       method: 'POST',
       cache: 'no-store',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ conversationId, turnId, message, mode, ...(source == null ? {} : { source }), ...(expectedSequence == null ? {} : { expectedSequence }) }),
+      body: JSON.stringify({ conversationId, turnId, message, mode, ...(source == null ? {} : { source }), ...(includeText === true ? { includeText: true } : {}), ...(expectedSequence == null ? {} : { expectedSequence }) }),
       signal: controller.signal
     });
     arm();

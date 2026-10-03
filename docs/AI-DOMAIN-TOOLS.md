@@ -278,10 +278,11 @@ sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcıs
 
 | Durum | Kural |
 | --- | --- |
-| Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general"}` / `rota` bildirir veya ilk araçları seçer |
+| Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general"}` / `rota` bildirir veya ilk araçları seçer. Rota bildirimi isteğe bağlı `window` (`period`/`dateFrom`/`dateTo`) taşıyabilir; kimlik çözümünden sonraki hareket/takvim penceresi yalnızca bu bildirilen ya da varsayılan pencere içinde kalabilir |
 | Genel önerisi | Modelin ayrı rota ya da doğrudan `general` önerisi veri kipinde kanıt denetimini kapatmaz. Serbest metin gösterilmez; sunucu Genel sohbet seçimini isteyen güvenli açıklama verir. Kullanıcının `source: general` seçimi ayrı, veri okumayan akış ve `general` bitişidir. |
 | Rota | Araç çağrısı yönlendirmeyi `rota` yapar; geçerli iddialar sunucuda çizilir |
-| Aday seçimi | Belirsiz aramaya bağlı doğrulanmış aday iddiaları + `kind: clarification`; soruyu sunucu ekler |
+| Aday seçimi | Aynı belirsiz arama sonucundan (proje, kişi ya da başlıkla görev çözümü) en az **iki farklı** adaya bağlı doğrulanmış iddialar + `kind: clarification`. Sunucu her adayı tek numaralı satırda çizer; kaydedilen sıra numarası kullanıcının gördüğü numaradır ve soruyu sunucu ekler |
+| Genel sohbete yönlendirme | Modelin `general` önerisi `general_redirect` sonucu olarak ayrı sayılır (bitiş `clarification`); aday seçimi sayacına karışmaz |
 | Bulunamadı | Hiç başarılı kanıt yok ve son araç kümesinin hataları yalnızca `NOT_FOUND` ise `kind: not_found` / güvenli eski ileti; sabit, varlık/yetki ayrımı yapmayan yanıt ve `not_found` bitişi |
 | Veri hizmeti kullanılamıyor | Kullanılabilir kanıt yokken `kind: unavailable`; sabit hizmet iletisi, ayrı sonuç sayacı |
 | Gerçek doğrulama hatası | Tek düzeltme de geçmezse `grounding_failed`; kanıt kaydedilmez |
@@ -300,8 +301,12 @@ etmez. Rota verisini edinme, kapsam ve son olgu doğrulaması sunucuya aittir.
 `claimableEvidence` her araç için tam kanonik yol şablonlarını belirler;
 bilinmeyen veya yanlış konumdaki aynı adlı alan iddia değildir. Son yanıtta
 seçilen yollar yalnızca yürüyüşü daraltır, izin listesi oluşturmaz. Açıklama,
-talep/karar iletisi ve hareket metni ancak veri görülmeden `textFields` ile
-seçildiyse modele verilir ve çizilebilir; seçilmemiş alanlar yürütücüde
+talep/karar iletisi ve hareket metni yalnızca kullanıcı aynı turda
+**"Notları ve iletileri dahil et"** seçeneğini açtıysa (`includeText: true`)
+ve model veri görülmeden bu kümeden `textFields` seçtiyse modele verilir ve
+çizilebilir; model kullanıcı seçimi olmadan serbest metni açamaz (ilk turda da
+`UNSUPPORTED_SCOPE`). Hareketlerdeki başlık, etiket, açıklama ve yineleme
+kuralı önce/sonra değerleri de `changes` seçimine bağlıdır; seçilmemiş alanlar yürütücüde
 kanıt kaydı ve model tüketiminden **önce** çıkarılır. Hareketlerde açıklama
 önce/sonra değerleri de aynı seçime bağlıdır. Belirlenimci `ruleDescription`
 kullanıcı metni değildir; normal bir kanonik olgudur. Veri sonradan bu
@@ -657,7 +662,8 @@ turu sonlandırır.
   yönergeye bağlı değildir: katalog sunucudadır, kimlik ve yetki bağımsız
   değişkenle değiştirilemez, atıflar sunucuda doğrulanır.
 - Önceki kanıtlı yanıtlar model geçmişinde sabit yeniden sorgulama notuyla değiştirilir. Güncel turun yönlendirmesi yeni karardır.
-- İlk başarılı araç kümesinin seçimi takip kataloğunu, süzgeçlerini ve güvenilir varlık kimliklerini sınırlar. Görev ayrıntısı başka görev/proje sorgusuna genişleyemez; yeni serbest arama metni veya metin izdüşümü veri tarafından açılamaz. Başarısız ilk küme kataloğu daraltmaz. Belirsiz adaylar kullanıcı seçimi gerektirir. Sunucu serbest model cümlesini onaylamaz; yetkili olgunun kayıt/alan/değer bağını doğrular ve kaçışlayarak çizer.
+- İlk başarılı araç kümesinin seçimi takip kataloğunu, süzgeçlerini ve güvenilir varlık kimliklerini sınırlar; sonraki her başarılı küme kendi sabit takip araçlarını ekler (ör. kişi → görev listesi → görev ayrıntısı). Görev ayrıntısı başka görev/proje sorgusuna genişleyemez; yeni arama metni yalnızca kullanıcının bu turdaki iletisinde geçiyorsa kullanılabilir, metin izdüşümü veri tarafından açılamaz. Aynı aracın takibi en geniş kök değerleri (`visible`, `all`, `includeEmpty: true`) daraltabilir. Başarısız ilk küme kataloğu daraltmaz. Belirsiz adaylar kullanıcı seçimi gerektirir; belirsizlik yalnızca o aramanın adaylarını bağlar, aynı turdaki ilgisiz çözümlenmiş varlıkları engellemez. Tek kesin proje/görev adı eşleşmesi yalnızca o kaydı kimlik yapar; bulanık alternatifler takip kimliği olmaz. Proje kırılımlı toplu analizin grup kimlikleri sunucuya ait ayrıntı kökleridir.
+- Toplu kanıtlar (görev araması ve analizinin toplamları, iş yükü, veri kalitesi) son yetki denetiminde yalnızca yükte görünen görevlerle değil, saydıkları bütün görev nüfusuyla yeniden doğrulanır; sayılan bir görev yetkili nüfustan çıktıysa kanıt düşer. Kimlikler analiz sınırı büyüklüğünde parçalarla okunur. Sunucu serbest model cümlesini onaylamaz; yetkili olgunun kayıt/alan/değer bağını doğrular ve kaçışlayarak çizer.
 
 ---
 
@@ -804,6 +810,8 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 | `test/ai-evidence-boundaries.test.mjs` | Yönlendirme, aday seçimi, yeniden deneme, varlık/metin sınırı, yetki iptali, null/hassasiyet, canlı imleçler, gizli sayı, kısaltma ve tam sınırlar |
 | `test/ai-provider-tool-calls.test.mjs` | Tel biçimi, parçalı çağrı birleştirme, sınırlar, bozuk/yarım çağrı, JSON yanıtı; tek kira, döküm doğrulaması, yetenek uyuşmazlığı, SQL işlemi |
 | `test/ai-assistant-evidence-ui.test.mjs` | Çözücü (`revise`, konu, yetkili metin, künye doğrulaması), denetleyici, atıf işareti, kanıt paneli, sunum |
+| `test/ai-grounding-hardening.test.mjs` | Kapsam sınırının güvenilir niyet kaynakları (kullanıcı iletisi, veri öncesi dönem bildirimi, açık serbest metin seçimi), aday belirsizliği ve tek kesin eşleşme, çok adımlı takip, toplu kanıtın nüfus doğrulaması, yönetici kanıtı, olgu niteleyicileri, etkinlik ilk/son kaydı, geçici tablo temizliği, geçici hazırlık hatası |
+| `test/ai-scope-and-bounds-regressions.test.mjs` | Sonraki başarılı araçların kendi nüfusunu dondurması, ölçek koruyan iş yükü toplamı, WBS özyineleme sınırı, sayfalama kayması, kaçışlı atıflar, kaynak seçimi |
 | `test/ai-architecture-contract.test.mjs` | Genel SQL aracı yok, araç SQL'i sabit ve salt okunur, kimlik alanı yok, tek SQL sahibi, 0018 |
 
 Yerel/CI doğrulaması: tüm Node sınamaları `--test-concurrency=1` ile,

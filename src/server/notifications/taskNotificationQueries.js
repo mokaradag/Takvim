@@ -67,6 +67,7 @@ export const TASK_NOTIFICATION_INBOX_SQL = `
 `;
 
 export const TASK_NOTIFICATION_EVIDENCE_INBOX_SQL = `
+  DROP TABLE IF EXISTS #TaskNotificationEvidence;
   SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS}
   INTO #TaskNotificationEvidence ${SOURCE}
   WHERE ${OWNED} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE}

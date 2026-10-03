@@ -362,6 +362,33 @@ test('metin de çağrı da taşımayan model turu geçersiz yanıttır', async (
   );
 });
 
+test('a round that stops empty at the token limit returns to the caller for the length repair path', async (t) => {
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'answer', text: '', chunks: [], finishReason: 'length' });
+  const { gateway } = gatewayFor(t, { provider });
+  const result = await gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({ messages: TRANSCRIPT.slice(0, 2), tools: TOOLS }) });
+  assert.equal(result.finishReason, 'length');
+  assert.equal(result.text, '');
+  assert.deepEqual(result.toolCalls, []);
+});
+
+test('an async event observer rejection is contained and never becomes an unhandled rejection', async (t) => {
+  const unhandled = [];
+  const listener = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', listener);
+  t.after(() => process.off('unhandledRejection', listener));
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'answer', text: 'Yanıt' });
+  const { gateway } = gatewayFor(t, { provider });
+  const result = await gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({
+    messages: TRANSCRIPT.slice(0, 2), tools: TOOLS,
+    onEvent: async (event) => { if (event.type === 'generating') throw new Error('stream closed'); return true; }
+  }) });
+  assert.equal(result.text, 'Yanıt');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(unhandled, []);
+});
+
 test('araç oturumu açık bir SQL işlemi içinde başlatılamaz', async (t) => {
   const { provider } = createAiStack(t);
   await assert.rejects(

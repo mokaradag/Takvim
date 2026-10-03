@@ -72,7 +72,7 @@ export function taskActivityRecordsets(db, params) {
     ActorCount: new Set(grouped.map((g) => g.events[0].ActorSicil)).size,
     CompletedCount: new Set(grouped.filter((g) => g.Completed).map((g) => g.events[0].EntityId)).size };
   return [actors, projectOptions, [summary], grouped.slice(Page * params.pageSize, (Page + 1) * params.pageSize)
-    .flatMap(({ events, ...group }) => (params.activityDetailLimit ? events.slice(-params.activityDetailLimit) : events.slice(0, 100)).map((row) => ({ ...row, ...group, ...(params.activityDetailLimit ? {
+    .flatMap(({ events, ...group }) => (params.activityDetailLimit ? (events.length > 2 ? [events[0], events.at(-1)] : events) : events.slice(0, 100)).map((row) => ({ ...row, ...group, ...(params.activityDetailLimit ? {
       BeforeJson: row.BeforeJson?.slice(0, 8192), AfterJson: row.AfterJson?.slice(0, 8192),
       DetailJsonClipped: (row.BeforeJson?.length || 0) > 8192 || (row.AfterJson?.length || 0) > 8192
     } : {}) })))];

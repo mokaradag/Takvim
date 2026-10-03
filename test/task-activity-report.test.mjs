@@ -76,7 +76,7 @@ test('alan farkları Türkçe iş diline çevrilir; tek kaydetmedeki tekrarlar n
   assert.equal(taskActivityChanges([event(3, { BeforeJson: '{broken', AfterJson: '{}' })]).changes[0], 'Görev güncellendi');
 });
 
-test('yapılandırılmış hareket gerçek durum geçişini görünüm etiketi aynı olsa da korur', () => {
+test('aynı kanonik duruma geçiş yapılandırılmış değişiklik üretmez', () => {
   const transition = event(4, {
     BeforeJson: JSON.stringify({ Title: 'Radar testleri', Status: 'blocked' }),
     AfterJson: JSON.stringify({ Title: 'Radar testleri', Status: 'in_progress' })

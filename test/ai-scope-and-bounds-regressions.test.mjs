@@ -64,14 +64,16 @@ test('escaped citations remain literal and unescaped citations still tokenize', 
   assert.equal(parseInline('\\\\【R1】').some((token) => token.type === 'cite'), true);
 });
 
-test('unavailable Rota modes select general chat and expose a localized reason', () => {
+test('unavailable Rota modes keep the selected Rota source and expose a localized reason', () => {
   const ready = { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: false }] } };
   assert.equal(effectiveAssistantSource(ready, 'standard', 'rota'), 'rota');
-  assert.equal(effectiveAssistantSource(ready, 'deep', 'rota'), 'general');
+  assert.equal(effectiveAssistantSource(ready, 'deep', 'rota'), 'rota', 'the server returns the fixed unavailable outcome instead of an ungrounded answer');
   assert.equal(effectiveAssistantSource(ready, 'standard', 'general'), 'general');
+  assert.equal(effectiveAssistantSource({ rotaData: { enabled: false } }, 'standard', 'rota'), null, 'feature off sends no source');
+  assert.equal(effectiveAssistantSource(null, 'standard', 'rota'), null);
   for (const reason of ['EVIDENCE_SCHEMA_MISSING', 'EVIDENCE_SCHEMA_UNKNOWN', 'PROFILE_UNAVAILABLE']) {
     const unavailable = { rotaData: { ...ready.rotaData, available: false, reason } };
-    assert.equal(effectiveAssistantSource(unavailable, 'standard', 'rota'), 'general');
+    assert.equal(effectiveAssistantSource(unavailable, 'standard', 'rota'), 'rota');
     assert.match(rotaDataAvailability(unavailable, 'standard').message, /Genel sohbet/);
     assert.ok(!rotaDataAvailability(unavailable, 'standard').message.includes(reason));
   }

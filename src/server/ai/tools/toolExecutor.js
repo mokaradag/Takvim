@@ -84,6 +84,7 @@ export function createToolExecutor({
     const remaining = Math.min(tool.timeoutMs, phaseRemainingMs());
     if (remaining < 250) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const deadline = createAiDeadline({ timeoutMs: remaining, parentSignal: signal, now: clock });
+    const population = [];
     try {
       const scoped = Object.freeze({
         sicil: context.sicil,
@@ -92,11 +93,13 @@ export function createToolExecutor({
         signal: deadline.signal,
         authorization: () => context.authorization(deadline.signal),
         sql: (work) => context.sql(deadline.signal, work),
-        snapshot: (key, cursor, load) => context.snapshot(key, cursor, load)
+        snapshot: (key, cursor, load) => context.snapshot(key, cursor, load),
+        notePopulation: (references) => { for (const reference of references) population.push(reference); }
       });
       await context.authorization?.(deadline.signal);
-      const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped)), deadline.signal);
-      return { outcome, cacheKey, args };
+      const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
+        (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
+      return { outcome, cacheKey, args, population };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
@@ -209,7 +212,8 @@ export function createToolExecutor({
             counts: { returned: shrunk.returnedCount, total: shrunk.totalCount },
             highlights: shrunk.truncated ? [] : (result.outcome.evidence?.highlights || []),
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
-            scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk) ?? null
+            scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk) ?? null,
+            populationReferences: result.population
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);

@@ -108,6 +108,8 @@ function initialState() {
     failure: null,
     mode: ASSISTANT_MODES.STANDARD,
     source: 'rota',
+    // Kayıtlı serbest metin (açıklama, ileti, değişiklik metni) yalnızca kullanıcı açıkça isterse okunur.
+    includeText: false,
     view: 'chat',
     list: emptyList(),
     active: null,
@@ -532,6 +534,7 @@ export function createAssistantController({
       content,
       mode: state.mode,
       source: effectiveAssistantSource(state.readiness, state.mode, state.source),
+      includeText: state.includeText === true,
       controller: new AbortController(),
       text: '',
       phase: 'sending',
@@ -566,6 +569,7 @@ export function createAssistantController({
       message: content,
       mode: run.mode,
       ...(run.source === 'general' ? { source: run.source } : {}),
+      ...(run.source === 'rota' && run.includeText ? { includeText: true } : {}),
       expectedSequence: active.messageCount || 0,
       signal: run.controller.signal,
       onEvent: (event) => onRunEvent(run, event)
@@ -633,6 +637,10 @@ export function createAssistantController({
   function setSource(source) {
     if (!['rota', 'general'].includes(source)) return;
     update((current) => ({ ...current, source }));
+  }
+
+  function setIncludeText(includeText) {
+    update((current) => ({ ...current, includeText: includeText === true }));
   }
 
   function setMode(mode) {
@@ -1015,6 +1023,7 @@ export function createAssistantController({
     stop,
     setMode,
     setSource,
+    setIncludeText,
     setView,
     newConversation,
     openConversation,

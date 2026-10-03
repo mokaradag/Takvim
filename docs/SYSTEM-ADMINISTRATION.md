@@ -740,8 +740,14 @@ Yönetici konsolu kanıt içeriği göstermez. Göç uygulanmadan
 yapay zekâ bileşeni 0018'in eksik olduğunu uyarır. Geri alma betiği tabloyu
 konuşma tablolarından önce düşürür. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md` §13.
 
-Aşama 3 işletiminde `not_found`, aday seçimi ve hizmet kullanılamıyor sonucu
-gerçek `grounding_failed` hatasından ayrı ölçülür. Tamponlanan model JSON'u
+Aşama 3 işletiminde `not_found`, aday seçimi, genel sohbete yönlendirme
+(`general_redirect`) ve hizmet kullanılamıyor sonucu gerçek `grounding_failed`
+hatasından ayrı ölçülür. Rota verisi seçiliyken hazırlık eksikse istek
+`unavailable` yanıtını alır; genel sohbete yalnızca kullanıcı açıkça geçer.
+Hazırlık yoklamasının geçici hatası (kapı dolu, SQL zaman aşımı) tur
+kaydedilmeden yinelenebilir hata olarak döner. Çalışma zamanı anahtar
+okumaları da kendi sınırlı SQL kapısından (en fazla iki eşzamanlı sorgu)
+geçer. Tamponlanan model JSON'u
 istemciye verilmiş metin değildir; kesilme sağlıkta yarım teslim sayılmaz.
 Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süresi `TIMEOUT`
 olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları

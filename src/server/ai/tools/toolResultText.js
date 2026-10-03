@@ -22,10 +22,15 @@ function containsClipped(value, clipped) {
   return value && typeof value === 'object' && Object.values(value).some((item) => containsClipped(item, clipped));
 }
 
-export async function trackResultText(work) {
+/**
+ * Aracın ürettiği metinlerden kısaltılanları izler. `project`, modele gidecek
+ * izdüşümdür: yalnızca izdüşümden SONRA kalan kısaltılmış metin sonucu eksik
+ * yapar (seçilmeyen serbest metin, kısaltılmış olsa da iz bırakmaz).
+ */
+export async function trackResultText(work, project = (data) => data) {
   const clipped = new Set();
   const outcome = await clipping.run(clipped, work);
-  if (clipped.size && containsClipped(outcome.data, clipped)) {
+  if (clipped.size && containsClipped(project(outcome.data), clipped)) {
     return { ...outcome, data: { ...outcome.data, textClipped: true }, complete: false, truncated: true };
   }
   return outcome;

@@ -256,8 +256,11 @@ test('authorization row budgets fail closed without affecting ordinary authoriza
   const context = createToolTurnContext({ sicil: AYSE, limits: { ...TOOL_LIMITS, maxAuthorizationRows: 2 } });
   await assert.rejects(context.revalidateAuthorization(new AbortController().signal), { code: 'RESULT_TOO_LARGE' });
   const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
+  const before = stack.db.statements.length;
   const ordinary = await loadAuthorizationContext();
   assert.ok(ordinary.effective.access.size > 0);
-  const sql = stack.db.statements.at(-1).sql;
-  assert.doesNotMatch(sql, /authorizationMaxRows|EmployeeSicil;|authorizedTasks/);
+  // Olağan yükleyicinin çalıştırdığı BÜTÜN ifadeler denetlenir, yalnızca sonuncusu değil.
+  const statements = stack.db.statements.slice(before);
+  assert.ok(statements.length > 0);
+  for (const { sql } of statements) assert.doesNotMatch(sql, /authorizationMaxRows|EmployeeSicil;|authorizedTasks/);
 });

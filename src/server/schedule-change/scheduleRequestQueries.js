@@ -45,6 +45,7 @@ export async function readScheduleInbox(executor, actor, { evidenceSnapshotLimit
     request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
   }
   const evidenceStatement = evidenceSnapshotLimit == null ? null : `
+    DROP TABLE IF EXISTS #ScheduleInboxEvidence;
     SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS},
       CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending
     INTO #ScheduleInboxEvidence ${SOURCE}
@@ -113,6 +114,7 @@ export async function readSchedulePage(executor, actor, input = {}, { evidenceSn
   const tabFilter = `(@tab = 'all' OR (@tab = 'pending' AND ${ACTIONABLE})
     OR (@tab = 'sent' AND r.RequesterSicil = @sicil) OR (@tab = 'history' AND (r.Status <> 'PENDING' OR t.TaskId IS NULL OR p.IsActive = 0)))`;
   const evidenceStatement = evidenceSnapshotLimit == null ? null : `
+    DROP TABLE IF EXISTS #ScheduleEvidenceSnapshot;
     SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS},
       CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending,
       CASE WHEN r.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
@@ -120,7 +122,12 @@ export async function readSchedulePage(executor, actor, input = {}, { evidenceSn
     INTO #ScheduleEvidenceSnapshot ${SOURCE} WHERE ${filters} AND ${tabFilter}
     ORDER BY ${ORDER};
     DECLARE @total int = (SELECT COUNT(*) FROM #ScheduleEvidenceSnapshot);
-    IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    IF @total > @evidenceSnapshotLimit
+    BEGIN
+      -- Paylaşılan havuz oturumunda geçici tablo kalmaz.
+      DROP TABLE #ScheduleEvidenceSnapshot;
+      THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    END
     SELECT @total AS Total, SUM(IsPending) AS PendingCount, SUM(IsSent) AS SentCount, SUM(IsHistory) AS HistoryCount
     FROM #ScheduleEvidenceSnapshot;
     SELECT @total AS Total, 0 AS Page;

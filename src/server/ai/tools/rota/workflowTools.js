@@ -1,4 +1,5 @@
 import 'server-only';
+import { changeEntryVisible } from '../../../../domain/ai/claimableEvidence.js';
 import { COORDINATION_MODES, COORDINATION_STATUS_LABELS, COORDINATION_STATUSES } from '../../../../domain/assignment/assignmentCoordination.js';
 import { TASK_NOTIFICATION_KINDS } from '../../../../domain/notifications/notificationInbox.js';
 import { SCHEDULE_STATUS_LABELS } from '../../../../features/notifications/notificationCenterItems.js';
@@ -98,7 +99,9 @@ const activitySearch = {
       message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.'
     });
     if (key.projectId) await requireVisibleProject(scope, key.projectId, call);
-    const report = await call.snapshot(JSON.stringify(['rota_activity_search', key]), args.cursor, () => call.sql((executor) => readTaskActivityReport(executor, auth, {
+    const includeChangeText = args.textFields?.includes('changes') === true;
+    // Önbellek değeri metin izdüşümüne bağlıdır (ad çözümü); anahtar da öyle.
+    const report = await call.snapshot(JSON.stringify(['rota_activity_search', key, { includeChangeText }]), args.cursor, () => call.sql((executor) => readTaskActivityReport(executor, auth, {
       period: ACTIVITY_PERIODS[period],
       from: key.dateFrom,
       to: key.dateTo || key.dateFrom,
@@ -109,10 +112,13 @@ const activitySearch = {
       kind: key.kind || '',
       page,
       pageSize
-    }, call.now, { includeStructuredChanges: true, includeChangeText: args.textFields?.includes('changes') === true, maxEvidencePeople: TOOL_LIMITS.maxActivityAssignees, analyzedActivityLimit: TOOL_LIMITS.maxAnalyzedActivities, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+    }, call.now, { includeStructuredChanges: true, includeChangeText, maxEvidencePeople: TOOL_LIMITS.maxActivityAssignees, analyzedActivityLimit: TOOL_LIMITS.maxAnalyzedActivities, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+    const textFields = args.textFields || [];
     const items = report.items.slice(page * pageSize, (page + 1) * pageSize).map((item) => {
       const access = item.projectId ? projectAccess(scope, item.projectId) : null;
       const hideAssigneeNames = !scope.isAdmin && !isCompleteTaskView(access);
+      // Serbest metin alanlarının değişiklikleri istenmediyse sayılmaz ve sınırı tüketmez.
+      const structured = (item.structuredChanges || []).filter((change) => changeEntryVisible(change, textFields));
       return {
         occurredAt: item.occurredAt,
         actor: dataText(item.actorName, 120),
@@ -125,12 +131,12 @@ const activitySearch = {
         },
         project: { name: dataText(item.projectName, 160), ...(item.projectCode ? { code: dataText(item.projectCode, 60) } : {}) },
         ...clippedLines(item.changes, 6, { hideAssigneeNames }),
-        structuredChanges: (item.structuredChanges || []).slice(0, 6).map((change) => ({
+        structuredChanges: structured.slice(0, 6).map((change) => ({
           field: change.field,
           before: typeof change.before === 'string' ? dataText(change.before, 500) : change.before,
           after: typeof change.after === 'string' ? dataText(change.after, 500) : change.after
         })),
-        ...(item.detailsLimited || (item.structuredChanges || []).length > 6 ? { detailsLimited: true } : {})
+        ...(item.detailsLimited || structured.length > 6 ? { detailsLimited: true } : {})
       };
     });
     const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
@@ -160,6 +166,19 @@ const activitySearch = {
 /* ── rota_schedule_requests ───────────────────────────────── */
 
 const SCHEDULE_STATUSES = Object.freeze(['PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'STALE']);
+
+/** Talep sayımlarının nüfusunu belirleyen süzgeçler (sekme dahil); kanıt olgusunun niteleyicisidir. */
+function workflowFilters(key) {
+  return {
+    tab: key.tab,
+    ...(key.status ? { workflowStatus: key.status } : {}),
+    ...(key.projectId ? { requestProjectId: key.projectId } : {}),
+    ...(key.taskId ? { requestTaskId: key.taskId } : {}),
+    ...(key.dateFrom ? { dateFrom: key.dateFrom } : {}),
+    ...(key.dateTo ? { dateTo: key.dateTo } : {}),
+    ...(key.text ? { text: key.text } : {})
+  };
+}
 
 function dateChanges(request) {
   const changes = {};
@@ -227,7 +246,7 @@ const scheduleRequests = {
     });
     const pageState = pageWindow('rota_schedule_requests', key, page, pageSize, result.total);
     return {
-      data: { countsScope: 'selected-tab', counts: { awaitingYourDecision: result.counts.pending, sent: result.counts.sent, history: result.counts.history }, tab: key.tab, items },
+      data: { countsScope: 'selected-tab', counts: { awaitingYourDecision: result.counts.pending, sent: result.counts.sent, history: result.counts.history }, tab: key.tab, filters: workflowFilters(key), items },
       scope: participantScope('Yalnızca talep eden ya da karar sahibi olduğunuz talepler.'),
       complete: pageState.complete,
       truncated: pageState.truncated,
@@ -310,6 +329,7 @@ const assignmentRequests = {
       data: {
         countsScope: 'selected-tab', counts: { actionRequired: result.counts.pending, sent: result.counts.sent, history: result.counts.history },
         tab: key.tab,
+        filters: workflowFilters(key),
         items,
         note: 'Talep edilen sorumlu onaylanana kadar görevin sorumlusu değildir; iş yükü ve raporlar yalnızca gerçek sorumluyu sayar.'
       },
