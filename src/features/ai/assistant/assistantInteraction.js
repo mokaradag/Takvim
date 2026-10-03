@@ -3,6 +3,7 @@
  * izleyen kaydırma, yerleşim kipi ve panoya kopyalama. Kurallar tarayıcı
  * olmadan sınanır; bileşenler yalnızca uygular.
  */
+import { ASSISTANT_AVAILABILITY_META } from '../../../domain/ai/assistantContract.js';
 
 /**
  * Dar ekranda panel tam ekran bir sayfa (kipli iletişim kutusu) olur. Aynı
@@ -12,6 +13,16 @@ export const ASSISTANT_SHEET_QUERY = '(max-width: 760px)';
 
 /** Kullanıcı en alta bu kadar yakınsa yeni metin izlenir (piksel, ölçekli çerçevede). */
 export const ASSISTANT_FOLLOW_THRESHOLD_PX = 48;
+
+/**
+ * Sunucu sayfayla birlikte Rota AI'ın kapalı olduğunu bildirdiyse yardımcı
+ * kabukta hiç gösterilmez. İşaret yoksa düğme görünür; erişim kararı yine
+ * uçlarındır.
+ */
+export function assistantEnabledInDocument(doc = globalThis.document) {
+  const meta = doc?.querySelector?.(`meta[name="${ASSISTANT_AVAILABILITY_META}"]`);
+  return meta?.getAttribute?.('content') !== 'disabled';
+}
 
 /**
  * Yazma alanında basılan tuşun anlamı: `send`, `blocked` (gönderim şu an

@@ -499,6 +499,22 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   `chat.general`, `chat.reasoning`) gösterir. İşlem ölçümleri `ai.provider.stream`, `ai.stream.first_token`,
   `ai.stream.provider_start` ve `ai.api.assistant.*` adlarıyla yazılır; olağan
   API gecikme özetine karışmaz. Hiçbiri soru, yanıt ya da başlık taşımaz.
+- `MERGEN_ROTA_AI_TOOLS_ENABLED=true` iken aynı ayrıntı **Rota verisi
+  araçlarını** da gösterir: özelliğin ve kanıt tablosunun (0018) durumu, araç
+  çağrı sayısı ve P95 gecikmesi, araç hata sınıfları (ör. `NOT_FOUND 2 ·
+  TIMEOUT 1`), kanıtlı / genel / aday seçimi / bulunamadı / hizmet kullanılamıyor / doğrulanamayan / düzeltilen yanıt sayıları,
+  *Standart → Derin düşünme devri* (devir sayısı, nedene ve sonuca göre),
+  *Görünür çıktısız model yanıtı* sayısı ve araç SQL kapısının doluluğu. Devir
+  ve boş yanıt ayrıntıları (istenen kip, kullanılan modeller, neden, kanıtın
+  yeniden kullanımı, sonuç; bitiş nedeni, belirteç sayıları ve süreler)
+  `ai.grounded.escalation` ve `ai.provider.empty_completion` işletim olaylarında
+  içeriksiz olarak yazılır. `BUSY` de araç hizmeti sağlık uyarısına katılır. Bileşen şu durumlarda uyarır: araç kayıt defteri
+  geçersiz, 0018 kurulmamış (veri kaynağı unavailable verir), araç yetenekli
+  profiller (`chat.tools`, `chat.tools.reasoning`) kullanılamıyor ya da son
+  beş dakikada bir araç hizmet hatası (`TIMEOUT`, `DATABASE_UNAVAILABLE`,
+  `INTERNAL`) oluştu. Araç ölçümleri `ai.tool.call` adıyla yazılır; yalnızca
+  araç adı, sonuç sınıfı, süre ve sonuç boyutu taşır — bağımsız değişken,
+  sonuç içeriği, soru, yanıt ya da SQL yazılmaz. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md`.
 
 **Aşama 2 gerçek TEST kabulü (29.09.2026):** Rota AI'nin gerçek `/bilge`
 yolu üzerinden akış, durdurma/yeniden deneme, profil dağılımı, konuşma
@@ -710,6 +726,51 @@ Yönetici konsolunda konuşma içeriği gösterilmez ve yöneticinin kullanıcı
 konuşmalarına erişen bir ucu yoktur. Geri alma betiği iki tabloyu da düşürür.
 Ayrıntı: `docs/AI-PLATFORM.md` §18.
 
+### 0018 · Rota AI kanıt kaydı
+
+`0017` uygulandıktan **sonra** çalıştırılır:
+
+```
+database/MR_Upgrade_0018_Ai_Message_Evidence.sql
+```
+
+| Tablo | İçerik | Anahtar / dizin |
+| --- | --- | --- |
+| `MR_AiMessageEvidence` | Kanıta dayalı yanıtın atıf yaptığı kanıtlar (`R1`, `R2` …): tarayıcıya giden güvenli künye ve modele verilen güvenli sonuç zarfı | PK `(MessageId, Ordinal)`; iletiye FK **ON DELETE CASCADE**; sıra 1–16; `ISJSON` kısıtları |
+
+Betik yinelenebilir ve veriye dokunmaz; SQL, anahtar, ham sağlayıcı akışı ya da
+düşünce zinciri saklanmaz. Kayıtlar yanıt iletisi ve konuşmayla birlikte silinir.
+Yönetici konsolu kanıt içeriği göstermez. Göç uygulanmadan
+`MERGEN_ROTA_AI_TOOLS_ENABLED=true` açılırsa veri kaynağı `unavailable` verir; kullanıcı Genel sohbet seçebilir ve
+yapay zekâ bileşeni 0018'in eksik olduğunu uyarır. Geri alma betiği tabloyu
+konuşma tablolarından önce düşürür. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md` §13.
+
+Aşama 3 işletiminde `not_found`, aday seçimi, genel sohbete yönlendirme
+(`general_redirect`) ve hizmet kullanılamıyor sonucu gerçek `grounding_failed`
+hatasından ayrı ölçülür. Rota verisi seçiliyken hazırlık eksikse istek
+`unavailable` yanıtını alır; genel sohbete yalnızca kullanıcı açıkça geçer.
+Hazırlık yoklamasının geçici hatası (kapı dolu, SQL zaman aşımı) tur
+kaydedilmeden yinelenebilir hata olarak döner. Çalışma zamanı anahtar
+okumaları da kendi sınırlı SQL kapısından (en fazla iki eşzamanlı sorgu)
+geçer. Tamponlanan model JSON'u
+istemciye verilmiş metin değildir; kesilme sağlıkta yarım teslim sayılmaz.
+Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süresi `TIMEOUT`
+olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları
+4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir.
+
+Elle kabul, FULL/READ/kısmi kullanıcılarla veri sonrası yetki iptalini,
+konuşma yeniden açma/tekrar ve oluşturucu hakkı iptalini, gizli tekrar/kişi
+sayılarının değişmezliğini, aday seçimini ve kısa aday takibini, kullanıcının
+Genel sohbet seçimini, kesik çıktının kısa JSON ile onarılmasını ve canlı
+sayfalamayı kapsamalıdır. Görev/baz plan 20 000, sorumluluk ilişkisi 200 000,
+süzülmüş ham hareket 20 000, iş akışı/bildirim anlık görüntüsü 1000 kayıtla
+sınırlıdır. Hareket başına en yeni 2 ayrıntı, JSON başına 8192 karakter ve
+isteğe bağlı kişi çözümünde 2000 Sicil okunur; AI yetki kümeleri 200 000
+satırla sınırlıdır. Taşan bildirim geçmişinde sayaç null kalır; tam
+sınır kabul edilir. SQL ikizi sınamaları gerçek SQL Server sorgu planı
+kabulünün yerine geçmez. Bayrak kapalı normal Rota yollarında bu anlık
+görüntü/epoch/iddia maliyetleri çalışmaz.
+
 ---
 
 ## 15. Yapılandırma
@@ -793,6 +854,7 @@ Yönetim konsolu üretimde yeni bir yük kaynağı olmamalıdır:
 - `docs/DATABASE-SCHEMA.md` — tablo ve dizin künyesi
 - `docs/DURABLE-PERSISTENCE.md` — kalıcılaştırma sınırları
 - `docs/AI-PLATFORM.md` — yapay zekâ altyapısı, sağlık bileşeni ve bağlantı testi
+- `docs/AI-DOMAIN-TOOLS.md` — Rota AI alan araçları, kanıt kaydı (0018) ve araç gözlemi
 
 ### İnceleme sonrası doğruluk güvenceleri
 

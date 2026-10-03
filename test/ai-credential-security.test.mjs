@@ -1125,3 +1125,22 @@ test('şifreli kaydı bozulmuş anahtar okunabilir ve doğrulanmış gösterilme
   assert.equal(probe.body.error.code, 'AI_KEY_INVALID');
   assert.equal(provider.calls.length, 0);
 });
+
+test('runtime key reads of admitted AI requests share the bounded preflight SQL gate', async (t) => {
+  const { db } = createAiStack(t);
+  const { readAiConfig } = await import('../src/server/ai/aiConfig.js');
+  const config = readAiConfig();
+  assert.equal(config.personalKeysSupported, true);
+  let release;
+  db.queryBarrier = { match: (sql) => sql.includes('MR_AiUserCredentials'), entered: 0, released: new Promise((resolve) => { release = resolve; }) };
+  t.after(() => { db.queryBarrier = null; release(); });
+  const pending = [SICIL_A, SICIL_B, SICIL_A, SICIL_B].map((sicil) => credentialService.resolveAiCredential({ sicil, config }).catch((error) => error));
+  await waitFor(() => db.queryBarrier.entered === 2);
+  for (let round = 0; round < 20; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(db.queryBarrier.entered, 2, 'at most two runtime key reads hold shared pool connections');
+  assert.deepEqual(credentialService.aiSqlGateStatusForTests().directory, { active: 2, queued: 2, users: 2 });
+  db.queryBarrier = null;
+  release();
+  await Promise.all(pending);
+  assert.deepEqual(credentialService.aiSqlGateStatusForTests().directory, { active: 0, queued: 0, users: 0 });
+});

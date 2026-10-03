@@ -1,4 +1,5 @@
 import 'server-only';
+import { PERSISTED_TASK_STATUSES } from '../../domain/constants/index.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ACCESS_REASONS } from '../authorization/authorization.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
@@ -19,23 +20,44 @@ export function normalizeActivityQuery(input = {}, actor, now) {
   if (input.projectId && !projectId) invalid('Proje filtresi geçersiz.');
   const person = input.person ? Number(input.person) : null;
   if (person != null && (!Number.isInteger(person) || person < 1 || person > 2147483647)) invalid('Kişi filtresi geçersiz.');
+  const taskId = input.taskId ? canonicalActualId(input.taskId) : null;
+  if (input.taskId && !taskId) invalid('Görev filtresi geçersiz.');
   const kind = input.kind || '';
   if (!['', 'created', 'updated', 'completed', 'deleted'].includes(kind)) invalid('Hareket türü geçersiz.');
-  return { ...range, scope, page, pageSize, projectId, person, kind,
+  return { ...range, scope, page, pageSize, projectId, taskId, person, kind,
     ...Object.fromEntries(['directorate', 'department', 'unit'].map((field) => [field, String(input[field] || '').slice(0, 1000)])) };
 }
 
+const COMPLETED_STATUSES_SQL = Object.entries(PERSISTED_TASK_STATUSES).filter(([, status]) => status === 'done').map(([alias]) => `'${alias}'`).join(', ');
+
+const ACTIVITY_DETAIL_APPLY = `CROSS APPLY (SELECT TOP (100) s.*, detail.BeforeJson, detail.AfterJson FROM #TaskActivityScope s
+    JOIN dbo.MR_AuditLog detail ON detail.AuditId = s.AuditId
+    WHERE s.ActionGroup = g.ActionGroup AND s.EntityId = g.EntityId AND s.ActorSicil = g.ActorSicil
+      AND (s.ProjectId = g.ProjectId OR (s.ProjectId IS NULL AND g.ProjectId IS NULL)) ORDER BY s.AuditId) e`;
+
+const EVIDENCE_ACTIVITY_DETAIL_APPLY = `CROSS APPLY (SELECT TOP (@activityDetailLimit) s.*, LEFT(detail.BeforeJson, 8192) AS BeforeJson, LEFT(detail.AfterJson, 8192) AS AfterJson,
+      CASE WHEN DATALENGTH(detail.BeforeJson) > 16384 OR DATALENGTH(detail.AfterJson) > 16384 THEN 1 ELSE 0 END AS DetailJsonClipped
+    FROM (
+      SELECT scoped.*, ROW_NUMBER() OVER (ORDER BY scoped.AuditId) AS DetailFirst, ROW_NUMBER() OVER (ORDER BY scoped.AuditId DESC) AS DetailLast
+      FROM #TaskActivityScope scoped
+      WHERE scoped.ActionGroup = g.ActionGroup AND scoped.EntityId = g.EntityId AND scoped.ActorSicil = g.ActorSicil
+        AND (scoped.ProjectId = g.ProjectId OR (scoped.ProjectId IS NULL AND g.ProjectId IS NULL))
+    ) s
+    JOIN dbo.MR_AuditLog detail ON detail.AuditId = s.AuditId
+    WHERE s.DetailFirst = 1 OR s.DetailLast = 1 ORDER BY s.AuditId) e`;
+
 export const TASK_ACTIVITY_SQL = `
+  DROP TABLE IF EXISTS #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
   SELECT a.AuditId, a.OccurredAt, a.ActorSicil, a.ActorDisplayName, a.ActionCode, a.EntityId, a.ProjectId,
     COALESCE(CONVERT(varchar(36), a.CorrelationId), CONCAT('audit:', a.AuditId)) AS ActionGroup,
     t.Title AS CurrentTitle, t.TaskId AS CurrentTaskId, p.ProjectName, p.ProjectCode,
     pd.DisplayName AS CurrentActorName, pd.Directorate, pd.Department, pd.Unit,
     CASE WHEN a.ActionCode = 'DELETE' THEN 'deleted' WHEN a.ActionCode = 'CREATE' THEN 'created'
-      WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) IN ('done', 'completed')
-        AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') NOT IN ('done', 'completed')
+      WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_STATUSES_SQL})
+        AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_STATUSES_SQL})
       THEN 'completed' ELSE 'updated' END AS Kind,
-    CASE WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) IN ('done', 'completed')
-      AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') NOT IN ('done', 'completed') THEN 1 ELSE 0 END AS CompletionEvent
+    CASE WHEN COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_STATUSES_SQL})
+      AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status'), '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_STATUSES_SQL}) THEN 1 ELSE 0 END AS CompletionEvent
   INTO #TaskActivityScope
   FROM dbo.MR_AuditLog a
   LEFT JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
@@ -48,6 +70,8 @@ export const TASK_ACTIVITY_SQL = `
   ) deleted
   WHERE a.EntityType = 'TASK' AND a.ActionCode IN ('CREATE', 'UPDATE', 'DELETE')
     AND a.OccurredAt >= @startUtc AND a.OccurredAt < @endUtc
+    AND (@projectId IS NULL OR a.ProjectId = @projectId)
+    AND (@taskIdText IS NULL OR a.EntityId IN (@taskIdText, UPPER(@taskIdText)))
     AND (@scope = 'visible' OR (@scope = 'mine' AND a.ActorSicil = @sicil)
       OR (@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil))))
@@ -90,15 +114,12 @@ export const TASK_ACTIVITY_SQL = `
     OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
   SELECT g.LastAuditId AS GroupId, g.OccurredAt AS GroupOccurredAt, g.Completed, g.Deleted, g.Created, g.EventCount, e.*
   FROM #TaskActivityPage g
-  CROSS APPLY (SELECT TOP (100) s.*, detail.BeforeJson, detail.AfterJson FROM #TaskActivityScope s
-    JOIN dbo.MR_AuditLog detail ON detail.AuditId = s.AuditId
-    WHERE s.ActionGroup = g.ActionGroup AND s.EntityId = g.EntityId AND s.ActorSicil = g.ActorSicil
-      AND (s.ProjectId = g.ProjectId OR (s.ProjectId IS NULL AND g.ProjectId IS NULL)) ORDER BY s.AuditId) e
+  ${ACTIVITY_DETAIL_APPLY}
   ORDER BY g.OccurredAt DESC, g.LastAuditId DESC, e.AuditId;
   DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
 `;
 
-export async function readTaskActivityReport(executor, actor, input = {}, now) {
+export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false, evidenceSnapshotLimit = null, analyzedActivityLimit = null, includeChangeText = true, maxEvidencePeople = null } = {}) {
   const query = normalizeActivityQuery(input, actor, now);
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
@@ -108,13 +129,58 @@ export async function readTaskActivityReport(executor, actor, input = {}, now) {
   request.input('visibleProjects', sql.NVarChar(sql.MAX), [...visibleProjects].join(','));
   request.input('partialTasks', sql.NVarChar(sql.MAX), [...actor.effective.partialTaskIds].join(','));
   for (const key of ['startUtc', 'endUtc']) request.input(key, sql.DateTime2, query[key]);
-  for (const key of ['page', 'pageSize', 'person']) request.input(key, sql.Int, query[key]);
+  for (const key of ['page', 'pageSize', 'person']) request.input(key, sql.Int, key === 'pageSize' && evidenceSnapshotLimit != null ? evidenceSnapshotLimit + 1 : key === 'page' && evidenceSnapshotLimit != null ? 0 : query[key]);
   request.input('projectId', sql.UniqueIdentifier, query.projectId);
+  request.input('taskIdText', sql.NVarChar(36), query.taskId);
   for (const key of ['scope', 'kind', 'directorate', 'department', 'unit']) request.input(key, sql.NVarChar(1000), query[key]);
-  const result = await request.query(TASK_ACTIVITY_SQL);
+  let statement = TASK_ACTIVITY_SQL;
+  if (analyzedActivityLimit != null) {
+    request.input('activityProbeRows', sql.Int, analyzedActivityLimit + 1);
+    const groupCompletion = `(COALESCE(JSON_VALUE(related.AfterJson, '$.Status'), JSON_VALUE(related.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_STATUSES_SQL})
+      AND COALESCE(JSON_VALUE(related.BeforeJson, '$.Status'), JSON_VALUE(related.BeforeJson, '$.status'), '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_STATUSES_SQL}))`;
+    const relatedEvent = (condition) => `EXISTS (SELECT 1 FROM dbo.MR_AuditLog related
+      WHERE related.EntityType = 'TASK' AND related.EntityId = a.EntityId AND related.ActorSicil = a.ActorSicil
+        AND (related.ProjectId = a.ProjectId OR (related.ProjectId IS NULL AND a.ProjectId IS NULL))
+        AND related.OccurredAt >= @startUtc AND related.OccurredAt < @endUtc
+        AND ((a.CorrelationId IS NOT NULL AND related.CorrelationId = a.CorrelationId) OR related.AuditId = a.AuditId)
+        AND ${condition})`;
+    const groupKind = `CASE WHEN ${relatedEvent("related.ActionCode = 'DELETE'")} THEN 'deleted'
+      WHEN ${relatedEvent("related.ActionCode = 'CREATE'")} THEN 'created'
+      WHEN ${relatedEvent(groupCompletion)} THEN 'completed' ELSE 'updated' END`;
+    const prefilter = `AND (@person IS NULL OR a.ActorSicil = @person)
+      AND (@directorate = '' OR COALESCE(NULLIF(LTRIM(RTRIM(pd.Directorate)), ''), '__unassigned__') = @directorate)
+      AND (@department = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(pd.Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(pd.Department))) = @department)
+      AND (@unit = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(pd.Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(pd.Department)), CHAR(31), LTRIM(RTRIM(pd.Unit))) = @unit)
+      AND (@kind = '' OR @kind = ${groupKind})`;
+    statement = statement.replace('SELECT a.AuditId', 'SELECT TOP (@activityProbeRows) a.AuditId')
+      .replace('AND (@taskIdText IS NULL OR a.EntityId IN (@taskIdText, UPPER(@taskIdText)))', `AND (@taskIdText IS NULL OR a.EntityId IN (@taskIdText, UPPER(@taskIdText))) ${prefilter}`)
+      .replace('SELECT DISTINCT ActorSicil', `IF (SELECT COUNT(*) FROM #TaskActivityScope) >= @activityProbeRows
+  BEGIN
+    DROP TABLE #TaskActivityScope;
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  END
+  SELECT DISTINCT ActorSicil`);
+  }
+  if (evidenceSnapshotLimit != null) {
+    request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+    request.input('activityDetailLimit', sql.Int, 2);
+    // Grubun İLK ve SON denetim kaydı kronolojik sırayla okunur: önceki değer
+    // gerçek başlangıçtan, sonraki değer gerçek sondan gelir.
+    statement = statement.replace(ACTIVITY_DETAIL_APPLY, EVIDENCE_ACTIVITY_DETAIL_APPLY)
+      // Kanıt nüfusu görevin GÜNCEL projesiyle yeniden doğrulanır.
+      .replace('t.TaskId AS CurrentTaskId,', 't.TaskId AS CurrentTaskId, t.ProjectId AS CurrentProjectId,');
+    statement = statement.replace('DECLARE @lastPage int', `IF @total > @evidenceSnapshotLimit
+  BEGIN
+    DROP TABLE #TaskActivityGroups, #TaskActivityScope;
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  END
+  DECLARE @lastPage int`);
+  }
+  const result = await request.query(statement);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];
   const people = new Map();
-  const ids = auditAssigneeIds(events);
+  const ids = includeChangeText ? auditAssigneeIds(events) : [];
+  if (maxEvidencePeople != null && ids.length > maxEvidencePeople) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   if (ids.length) {
     const names = executor.request();
     names.input('activityAssignees', sql.NVarChar(sql.MAX), ids.join(','));
@@ -130,13 +196,22 @@ export async function readTaskActivityReport(executor, actor, input = {}, now) {
   }
   const items = [...groups.entries()].map(([id, rows]) => {
     const last = rows[rows.length - 1];
-    const change = taskActivityChanges(rows, people);
+    // Ara kayıtlar okunmadıysa alan değişiklikleri kesin olarak kurulamaz: yalnızca
+    // grubun kesin özeti (oluşturma/silme/tamamlama) ve kısaltma notu verilir.
+    const omitted = evidenceSnapshotLimit != null && Number(last.EventCount) > rows.length;
+    const computed = taskActivityChanges(rows, people, { includeStructuredChanges });
+    const change = omitted
+      ? { ...computed, ...(includeStructuredChanges ? { structuredChanges: [] } : {}), changes: [
+        ...(last.Created ? ['Yeni görev oluşturuldu'] : []), ...(last.Deleted ? ['Görev silindi'] : []), ...(last.Completed ? ['Tamamlandı'] : []),
+        `${Number(last.EventCount)} değişiklik kaydı; alan ayrıntıları kısaltıldı`] }
+      : computed;
     return { id, occurredAt: new Date(last.GroupOccurredAt).toISOString(), actorId: String(last.ActorSicil),
       actorName: last.ActorDisplayName || last.CurrentActorName || `Çalışan ${last.ActorSicil}`,
       projectId: canonicalActualId(last.ProjectId), projectName: change.projectName || last.ProjectName || 'Geçmiş proje',
       projectCode: change.projectCode || last.ProjectCode || '', taskId: canonicalActualId(last.EntityId),
       taskTitle: change.title || last.CurrentTitle || 'Geçmiş görev', taskAvailable: Boolean(last.CurrentTaskId),
-      changes: change.changes, detailsLimited: Number(last.EventCount) > rows.length, kind: last.Deleted ? 'deleted' : last.Created ? 'created' : last.Completed ? 'completed' : 'updated' };
+      ...(last.CurrentProjectId !== undefined ? { currentProjectId: canonicalActualId(last.CurrentProjectId) } : {}),
+      changes: change.changes, ...(includeStructuredChanges ? { structuredChanges: change.structuredChanges } : {}), detailsLimited: Number(last.EventCount) > rows.length || rows.some((row) => row.DetailJsonClipped), kind: last.Deleted ? 'deleted' : last.Created ? 'created' : last.Completed ? 'completed' : 'updated' };
   });
   const summary = counts[0] || {};
   return { items, total: Number(summary.Total || 0), page: Number(summary.Page || 0), pageSize: query.pageSize,

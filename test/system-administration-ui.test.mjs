@@ -29,7 +29,7 @@ const {
 const { SYSTEM_ADMIN_TABS, systemAdminPanelId, systemAdminTabId } = await import('../src/features/system-admin/systemAdminTabs.js');
 const { SystemAdministrationView } = await import('../src/features/system-admin/SystemAdministrationView.jsx');
 const { SystemHealthStrip } = await import('../src/features/system-admin/SystemHealthStrip.jsx');
-const { SystemOverviewTab } = await import('../src/features/system-admin/tabs/SystemOverviewTab.jsx');
+const { RotaDataDrawerFields, SystemOverviewTab } = await import('../src/features/system-admin/tabs/SystemOverviewTab.jsx');
 const { SystemQueuesTab } = await import('../src/features/system-admin/tabs/SystemQueuesTab.jsx');
 const { SystemIntegrationsTab } = await import('../src/features/system-admin/tabs/SystemIntegrationsTab.jsx');
 const { SystemEventsTab } = await import('../src/features/system-admin/tabs/SystemEventsTab.jsx');
@@ -320,6 +320,21 @@ test('genel durum dikkat gerektirenleri, bileşenleri ve göstergeleri çizer', 
   // işlem anı da bilinmiyor olarak yazılır.
   assert.match(serialized, /sysadmin-component-unknown/);
   assert.match(serialized, /Son başarı: .{0,4}bilinmiyor/);
+});
+
+test('Rota verisi ayrıntısı Derin düşünme devirlerini ve görünür çıktısız yanıtları yalnızca sayı olarak gösterir', () => {
+  const telemetry = {
+    tools: { calls: 4, latency: { p95Ms: 120 }, byOutcome: { OK: 4 } },
+    grounding: { grounded: 3, escalations: { total: 2, byReason: { VERIFICATION_FAILED: 1, EMPTY_COMPLETION: 1 }, byOutcome: { grounded: 1, error: 1 } } },
+    emptyCompletions: 2
+  };
+  const view = mountComponent(RotaDataDrawerFields, { rotaData: { enabled: true, evidenceSchema: { ready: true } }, telemetry });
+  const text = JSON.stringify(view.output);
+  assert.match(text, /Standart → Derin düşünme devri/);
+  assert.match(text, /2 devir · Neden: Doğrulanamayan 1 · Boş yanıt 1 · Sonuç: Kanıtlı 1 · Hata 1/);
+  assert.match(text, /Görünür çıktısız model yanıtı/);
+  const quiet = JSON.stringify(mountComponent(RotaDataDrawerFields, { rotaData: { enabled: true }, telemetry: {} }).output);
+  assert.match(quiet, /0 devir/);
 });
 
 test('sorun yokken genel durum sessiz kalır', (t) => {

@@ -120,7 +120,7 @@ test('konuşmaya eklenen tur önceki TAMAMLANMIŞ çiftleri bağlam olarak alır
   const messages = provider.calls[1].messages;
   assert.deepEqual(messages.map((message) => message.role), ['system', 'user', 'assistant', 'user']);
   assert.deepEqual(messages.slice(1).map((message) => message.content), ['İlk soru', 'Merhaba, bağlantı çalışıyor.', 'İkinci soru']);
-  assert.match(messages[0].content, /Rota AI/);
+  assert.match(messages[0].content, /"Bilgin"sin/);
   assert.match(messages[0].content, /erişimin YOK/);
   assert.deepEqual(db.aiConversationMessages.map((row) => [row.Sequence, row.Role]), [[1, 'user'], [2, 'assistant'], [3, 'user'], [4, 'assistant']]);
   const loaded = await loadAssistantConversation(conversationId);
@@ -678,7 +678,11 @@ test('kayıtlı yanıt araması salt okunurdur: kilit almaz ve işlem açmaz', a
   db.aiConversationLog.statements.length = 0;
   const replay = await sendTurn({ conversationId, turnId, message: 'Soru' });
   assert.equal(terminal(replay).data.replayed, true);
-  assert.deepEqual(db.aiConversationLog.statements.map((entry) => entry.params.readOnly), [true], 'yeniden oynatma yalnızca salt okunur aramayla yanıtlanır');
+  const statements = db.aiConversationLog.statements;
+  assert.equal(statements[0].params.readOnly, true, 'yanıt araması salt okunur hazırlanır');
+  assert.equal(statements.length, 2, 'yeniden oynatma yalnızca yanıt ve kanıt okumalarını yapar');
+  assert.match(statements[1].sql, /MR_AiMessageEvidence/);
+  assert.doesNotMatch(statements[1].sql, /\b(?:INSERT|UPDATE|DELETE)\b|UPDLOCK|HOLDLOCK/i);
 });
 
 test('başlık her satırdaki başlık ve alıntı işaretini atar', () => {

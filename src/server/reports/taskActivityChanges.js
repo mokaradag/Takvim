@@ -1,4 +1,4 @@
-import { PRIORITIES, normalizePriorityId } from '../../domain/constants/index.js';
+import { PRIORITIES, normalizePriorityId, normalizeTaskStatus } from '../../domain/constants/index.js';
 
 const FIELDS = [
   ['Title', 'task', 'Görev adı'], ['Description', 'description', 'Notlar'], ['Keyword', 'keyword', 'Etiket'],
@@ -9,7 +9,7 @@ const FIELDS = [
   ['RemainingDurationDays', 'remainingDurationDays', 'Kalan süre'], ['IsMilestone', 'milestone', 'Kilometre taşı'],
   ['RecurrenceRule', 'recurrenceRule', 'Yineleme']
 ];
-const STATUS = { planned: 'Yapılacak', 'not-started': 'Yapılacak', todo: 'Yapılacak', in_progress: 'Devam ediyor', 'in-progress': 'Devam ediyor', blocked: 'Devam ediyor', done: 'Tamamlandı', completed: 'Tamamlandı', cancelled: 'Tamamlandı' };
+const STATUS_LABELS = { todo: 'Yapılacak', in_progress: 'Devam ediyor', done: 'Tamamlandı' };
 function snapshot(value) {
   if (!value) return {};
   try { const result = typeof value === 'string' ? JSON.parse(value) : value; return result && !Array.isArray(result) && typeof result === 'object' ? result : {}; }
@@ -24,7 +24,7 @@ function field(data, column, name) {
 }
 function display(value, column) {
   if (value == null || value === '') return '—';
-  if (column === 'Status') return STATUS[value] || 'Belirtilmemiş';
+  if (column === 'Status') return STATUS_LABELS[normalizeTaskStatus(value)];
   if (column === 'Priority') return PRIORITIES[normalizePriorityId(value)].label;
   if (column === 'Progress') return `%${Number(value)}`;
   if (column.endsWith('Start') || column.endsWith('Finish')) {
@@ -37,11 +37,20 @@ function display(value, column) {
 }
 function normalized(value, column) {
   if (column === 'Priority') return normalizePriorityId(value);
-  if (column === 'Status') return STATUS[value] || String(value ?? '');
+  if (column === 'Status') return normalizeTaskStatus(value);
   if (column.endsWith('Start') || column.endsWith('Finish')) return value ? String(value).slice(0, 10) : '';
   return String(value ?? '');
 }
-export function taskActivityChanges(events, people = new Map()) {
+function canonicalChangeValue(value, column) {
+  if (value == null || value === '') return null;
+  if (column === 'Status') return normalizeTaskStatus(value);
+  if (column === 'Priority') return normalizePriorityId(value);
+  if (column === 'IsMilestone') return Boolean(value);
+  if (['Progress', 'PlannedDurationDays', 'RemainingDurationDays'].includes(column)) return Number.isFinite(Number(value)) ? Number(value) : null;
+  if (column.endsWith('Start') || column.endsWith('Finish')) return String(value).slice(0, 10);
+  return String(value).slice(0, 500);
+}
+export function taskActivityChanges(events, people = new Map(), { includeStructuredChanges = false } = {}) {
   const changes = new Map();
   let created = false, deleted = false, completed = false;
   let title = '', projectName = '', projectCode = '';
@@ -54,14 +63,14 @@ export function taskActivityChanges(events, people = new Map()) {
     projectCode = current.ProjectCode || current.projectCode || projectCode || before.ProjectCode || '';
     created ||= event.ActionCode === 'CREATE'; deleted ||= event.ActionCode === 'DELETE';
     const oldStatus = field(before, 'Status', 'status'), newStatus = field(after, 'Status', 'status');
-    completed ||= ['done', 'completed'].includes(newStatus) && !['done', 'completed'].includes(oldStatus);
+    completed ||= normalizeTaskStatus(newStatus) === 'done' && normalizeTaskStatus(oldStatus) !== 'done';
     if (event.ActionCode !== 'UPDATE') continue;
     for (const [column, name, label] of FIELDS) {
       const oldValue = field(before, column, name), newValue = field(after, column, name);
       if (newValue === undefined || oldValue === undefined) continue;
       const existing = changes.get(column);
       const startValue = existing ? existing.before : oldValue;
-      changes.set(column, { column, label, before: startValue, after: newValue });
+      changes.set(column, { column, name, label, before: startValue, after: newValue });
     }
     if (Array.isArray(before.assigneeIds) && Array.isArray(after.assigneeIds)) {
       const oldIds = new Set(before.assigneeIds.map(String)), newIds = new Set(after.assigneeIds.map(String));
@@ -72,11 +81,15 @@ export function taskActivityChanges(events, people = new Map()) {
     }
   }
   const lines = [];
+  const structuredChanges = [];
   if (created) lines.push('Yeni görev oluşturuldu');
   if (deleted) lines.push('Görev silindi');
   if (completed) lines.push('Tamamlandı');
   for (const change of changes.values()) {
+    const before = canonicalChangeValue(change.before, change.column);
+    const after = canonicalChangeValue(change.after, change.column);
     if (normalized(change.before, change.column) === normalized(change.after, change.column)) continue;
+    if (includeStructuredChanges && before !== after) structuredChanges.push({ field: change.name, before, after });
     if (change.column === 'RecurrenceRule') lines.push('Yineleme düzeni değiştirildi');
     else lines.push(`${change.label}: ${display(change.before, change.column)} → ${display(change.after, change.column)}`);
   }
@@ -85,6 +98,7 @@ export function taskActivityChanges(events, people = new Map()) {
     lines.push(`Sorumlu ${change.after ? 'eklendi' : 'çıkarıldı'}: ${people.get(id) || `Çalışan ${id}`}`);
   }
   return { title, projectName, projectCode, changes: lines.length ? lines : ['Görev güncellendi'],
+    ...(includeStructuredChanges ? { structuredChanges } : {}),
     kind: deleted ? 'deleted' : created ? 'created' : completed ? 'completed' : 'updated' };
 }
 export function auditAssigneeIds(events) {

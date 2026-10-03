@@ -1,4 +1,5 @@
 import 'server-only';
+import { CURRENT_TASK_DISCLOSURE_SQL } from '../authorization/disclosureScope.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { NOTIFICATION_SOURCES } from '../../domain/notifications/notificationInbox.js';
 import { sql } from '../db/pool.js';
@@ -65,12 +66,35 @@ export const TASK_NOTIFICATION_INBOX_SQL = `
   ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
 `;
 
-export function mapTaskNotificationInbox(countRows, itemRows) {
+/**
+ * Yapay zekâ zil okuması: okunmamış sayaç yalnızca okunmamış nüfusu sınırlı
+ * yoklar; okunmuş ama kaldırılmamış geçmiş onu bilinmez yapmaz. Sayılan
+ * bildirimlerin görevleri son yetki denetimi için döner.
+ */
+export const TASK_NOTIFICATION_EVIDENCE_INBOX_SQL = `
+  DROP TABLE IF EXISTS #TaskNotificationUnreadProbe;
+  SELECT TOP (@evidenceSnapshotLimit + 1) n.TaskId, t.ProjectId AS CurrentProjectId
+  INTO #TaskNotificationUnreadProbe ${SOURCE}
+  WHERE ${OWNED} AND ${UNREAD} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE};
+  DECLARE @taskEventUnreadProbe int = (SELECT COUNT(*) FROM #TaskNotificationUnreadProbe);
+  SELECT CASE WHEN @taskEventUnreadProbe > @evidenceSnapshotLimit THEN NULL ELSE @taskEventUnreadProbe END AS UnreadCount;
+  SELECT TOP (@limit) ${FIELDS} ${SOURCE}
+  WHERE ${OWNED} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE}
+  ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
+  SELECT TaskId, CurrentProjectId, CAST(1 AS bit) AS CountsUnread, CAST(0 AS bit) AS CountsPending
+  FROM #TaskNotificationUnreadProbe WHERE @taskEventUnreadProbe <= @evidenceSnapshotLimit;
+  DROP TABLE #TaskNotificationUnreadProbe;
+`;
+
+export function mapTaskNotificationInbox(countRows, itemRows, populationRows = null) {
   const counts = countRows?.[0] || {};
+  const evidence = Array.isArray(populationRows);
   return {
     items: (itemRows || []).map(mapTaskNotification),
-    unreadCount: Number(counts.UnreadCount || 0),
-    pendingCount: 0
+    unreadCount: evidence && counts.UnreadCount == null ? null : Number(counts.UnreadCount || 0),
+    pendingCount: 0,
+    ...(evidence ? { population: populationRows.map((row) => ({ taskId: canonicalActualId(row.TaskId), projectId: canonicalActualId(row.CurrentProjectId),
+      unread: true, pending: false })).filter((row) => row.taskId) } : {})
   };
 }
 

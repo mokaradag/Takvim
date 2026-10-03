@@ -24,7 +24,8 @@ const NAMES = Object.freeze({
   MAX_ACTIVE_PER_USER: 'MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER',
   MAX_QUEUED_PER_USER: 'MERGEN_ROTA_AI_MAX_QUEUED_PER_USER',
   QUEUE_TIMEOUT_MS: 'MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS',
-  REQUEST_TIMEOUT_MS: 'MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS'
+  REQUEST_TIMEOUT_MS: 'MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS',
+  TOOLS_ENABLED: 'MERGEN_ROTA_AI_TOOLS_ENABLED'
 });
 
 export const AI_CONFIG_NAMES = NAMES;
@@ -166,7 +167,9 @@ function disabledConfig(issues) {
       maxQueuedPerUser: INTEGER_SETTINGS[NAMES.MAX_QUEUED_PER_USER].fallback
     }),
     queueTimeoutMs: INTEGER_SETTINGS[NAMES.QUEUE_TIMEOUT_MS].fallback,
-    requestTimeoutMs: INTEGER_SETTINGS[NAMES.REQUEST_TIMEOUT_MS].fallback
+    requestTimeoutMs: INTEGER_SETTINGS[NAMES.REQUEST_TIMEOUT_MS].fallback,
+    toolsEnabled: false,
+    toolsFlagInvalid: false
   });
 }
 
@@ -190,6 +193,11 @@ export function parseAiConfig(env = process.env) {
   if (limits.maxQueuedPerUser > limits.maxQueued) issues.push(NAMES.MAX_QUEUED_PER_USER);
   const queueTimeoutMs = parseInteger(env, NAMES.QUEUE_TIMEOUT_MS, issues);
   const requestTimeoutMs = parseInteger(env, NAMES.REQUEST_TIMEOUT_MS, issues);
+  // Rota verisi araçları ayrı bir açık onaydır: 0018 göçü uygulanmadan açılmamalıdır.
+  // Geçersiz değer araçları kapatır; genel sohbet yapılandırmasını bozmaz.
+  const toolIssues = [];
+  const toolsEnabled = parseBoolean(env, NAMES.TOOLS_ENABLED, false, toolIssues);
+  const toolsFlagInvalid = toolIssues.length > 0;
   if (!text(env, NAMES.DEFAULT_API_KEY) && !text(env, NAMES.MASTER_KEY)) issues.push(NO_CREDENTIAL_SOURCE);
   const uniqueIssues = Object.freeze([...new Set(issues)]);
 
@@ -206,7 +214,9 @@ export function parseAiConfig(env = process.env) {
     insecureHttpAllowed: allowInsecureHttp,
     limits,
     queueTimeoutMs,
-    requestTimeoutMs
+    requestTimeoutMs,
+    toolsEnabled,
+    toolsFlagInvalid
   });
 }
 
@@ -256,7 +266,8 @@ export function aiConfigurationSummary(config) {
     registrySource: config.registryPath ? 'file' : 'default',
     limits: { ...config.limits },
     queueTimeoutMs: config.queueTimeoutMs,
-    requestTimeoutMs: config.requestTimeoutMs
+    requestTimeoutMs: config.requestTimeoutMs,
+    toolsEnabled: Boolean(config.toolsEnabled)
   };
 }
 

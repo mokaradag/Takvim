@@ -4,10 +4,12 @@ import {
   ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_STREAM_EVENTS,
   ASSISTANT_STREAM_PHASES,
+  ASSISTANT_TOOL_TOPICS,
   isAssistantId,
   isAssistantMode
 } from '../../../domain/ai/assistantContract.js';
 import { createEventStreamParser } from '../../../domain/ai/eventStreamParser.js';
+import { normalizeEvidenceList } from '../../../domain/ai/evidenceContract.js';
 import { publicRotaPath } from '../../../lib/publicPath.js';
 import { requestJson } from '../../shared/jsonRequest.js';
 
@@ -98,12 +100,20 @@ export function listAssistantConversationsRequest({ cursor = null, ...options } 
     && (response.scanCursor == null || typeof response.scanCursor === 'string'));
 }
 
-export function loadAssistantConversationRequest(conversationId, options = {}) {
-  return expectPayload(
+export async function loadAssistantConversationRequest(conversationId, options = {}) {
+  const response = await expectPayload(
     requestJson(`${BASE}/conversations/${encodeURIComponent(conversationId)}`, { method: 'GET' }, options),
     (response) => isConversation(response.conversation) && sameId(response.conversation.id, conversationId)
       && Array.isArray(response.messages) && response.messages.every(isStoredMessage)
   );
+  if (!response.ok) return response;
+  // Kanıt özetleri akıştaki gibi yalnızca doğrulanmış güvenli künye olarak taşınır.
+  return {
+    ...response,
+    messages: response.messages.map((message) => (message.evidence == null
+      ? message
+      : { ...message, evidence: normalizeEvidenceList(message.evidence) }))
+  };
 }
 
 export function deleteAssistantConversationRequest(conversationId, options = {}) {
@@ -142,12 +152,20 @@ function interpret({ event, data }) {
     case ASSISTANT_STREAM_EVENTS.STATUS:
       if (typeof payload.phase !== 'string') throw new AssistantProtocolError('MALFORMED_EVENT');
       if (!KNOWN_PHASES.has(payload.phase)) return null;
+      // Konu yalnızca bilinen veri alanlarından biri olabilir; başka değer gösterilmez.
+      if (payload.topic != null && !ASSISTANT_TOOL_TOPICS.includes(payload.topic)) delete payload.topic;
+      break;
+    case ASSISTANT_STREAM_EVENTS.REVISE:
       break;
     case ASSISTANT_STREAM_EVENTS.DELTA:
       if (typeof payload.text !== 'string') throw new AssistantProtocolError('MALFORMED_EVENT');
       break;
     case ASSISTANT_STREAM_EVENTS.DONE:
       if (!isConversation(payload.conversation) || (!isMessage(payload.assistantMessage) || payload.assistantMessage.role !== 'assistant')) throw new AssistantProtocolError('MALFORMED_EVENT');
+      // Kanıt özetleri yalnızca doğrulanmış güvenli künye olarak taşınır.
+      if (payload.assistantMessage.evidence != null) {
+        payload.assistantMessage.evidence = normalizeEvidenceList(payload.assistantMessage.evidence);
+      }
       break;
     default:
       if (typeof payload.code !== 'string' || typeof payload.message !== 'string') throw new AssistantProtocolError('MALFORMED_EVENT');
@@ -190,7 +208,9 @@ export function createAssistantStreamDecoder({
     }
     if (!Number.isSafeInteger(assistantMessage.length) || assistantMessage.length < 0) throw new AssistantProtocolError('MALFORMED_EVENT');
     if (reconciled === true && (typeof assistantMessage.content !== 'string' || assistantMessage.content.length > maxAnswerChars)) throw new AssistantProtocolError('MALFORMED_EVENT');
-    const answer = reconciled === true ? assistantMessage.content : state.answer.trim();
+    if (assistantMessage.content != null && (typeof assistantMessage.content !== 'string' || assistantMessage.content.length > maxAnswerChars)) throw new AssistantProtocolError('MALFORMED_EVENT');
+    // Sunucu yanıtın kayıtlı metnini de gönderdiyse (kanıta dayalı yol) o metin esastır.
+    const answer = typeof assistantMessage.content === 'string' ? assistantMessage.content : state.answer.trim();
     if (assistantMessage.length !== answer.length) throw new AssistantProtocolError('ANSWER_LENGTH_MISMATCH');
   }
 
@@ -213,6 +233,11 @@ export function createAssistantStreamDecoder({
       state.answerChars += event.data.text.length;
       if (state.answerChars > maxAnswerChars) throw new AssistantProtocolError('ANSWER_TOO_LARGE');
       state.answer += event.data.text;
+    }
+    // Gösterilen taslak geçersiz: sonraki metin yanıtın yeni başlangıcıdır.
+    if (event.type === ASSISTANT_STREAM_EVENTS.REVISE) {
+      state.answer = '';
+      state.answerChars = 0;
     }
     if (event.type === ASSISTANT_STREAM_EVENTS.DONE) checkDone(event.data);
     if (terminal) state.terminal = event;
@@ -264,6 +289,8 @@ export async function streamAssistantTurnRequest({
   conversationId = null,
   turnId,
   message = null,
+  source = null,
+  includeText = false,
   mode,
   signal = null,
   onEvent = null,
@@ -305,7 +332,7 @@ export async function streamAssistantTurnRequest({
       method: 'POST',
       cache: 'no-store',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ conversationId, turnId, message, mode, ...(expectedSequence == null ? {} : { expectedSequence }) }),
+      body: JSON.stringify({ conversationId, turnId, message, mode, ...(source == null ? {} : { source }), ...(includeText === true ? { includeText: true } : {}), ...(expectedSequence == null ? {} : { expectedSequence }) }),
       signal: controller.signal
     });
     arm();
@@ -364,6 +391,7 @@ export async function streamAssistantTurnRequest({
       arm();
       for (const event of decoder.push(decode(step.value, { stream: true }))) {
         if (event.type === ASSISTANT_STREAM_EVENTS.DELTA && event.data.text) partial = true;
+        if (event.type === ASSISTANT_STREAM_EVENTS.REVISE) partial = false;
         onEvent?.(event);
       }
     }

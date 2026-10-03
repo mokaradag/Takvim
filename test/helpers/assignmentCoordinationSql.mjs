@@ -228,11 +228,19 @@ function taskNotificationRow(db, row) {
 
 /* ── Koordinasyon okumaları ─────────────────────────────────── */
 
+function disclosureAllowed(db, row, params) {
+  if (params.disclosureAdmin == null) return true;
+  const task = taskOf(db, row.TaskId);
+  if (!task || !projectOf(db, task.ProjectId)?.IsActive) return false;
+  return params.disclosureAdmin === 1 || String(params.disclosureProjects || '').split(',').some((id) => sameGuid(id, task.ProjectId))
+    || String(params.disclosureTasks || '').split(',').some((id) => sameGuid(id, task.TaskId));
+}
+
 function coordinationInbox(db, params) {
   const sicil = Number(params.sicil);
   const limit = Number(params.limit || 8);
   const owned = db.taskAssignmentCoordinations
-    .filter((row) => isParticipant(db, row, params) && taskAvailable(db, row));
+    .filter((row) => isParticipant(db, row, params) && taskAvailable(db, row) && disclosureAllowed(db, row, params));
   const counts = {
     UnreadCount: owned.filter((row) => isUnread(db, row, sicil) && isVisible(db, row, params)).length,
     PendingCount: owned.filter((row) => actionable(db, row, params)).length
@@ -242,7 +250,14 @@ function coordinationInbox(db, params) {
     .sort(coordinationOrder(db, params))
     .slice(0, limit)
     .map((row) => coordinationRow(db, row, params));
-  return [[counts], items];
+  if (params.evidenceSnapshotLimit == null) return [[counts], items];
+  // Kanıt kipi: her sayaç kendi nüfusunu ayrı ve sınırlı yoklar; sayılan görevler döner.
+  const bound = params.evidenceSnapshotLimit;
+  const unread = owned.filter((row) => isUnread(db, row, sicil) && isVisible(db, row, params)).slice(0, bound + 1);
+  const pending = owned.filter((row) => actionable(db, row, params)).slice(0, bound + 1);
+  const counted = (list, flags) => (list.length > bound ? [] : list.map((row) => ({ TaskId: row.TaskId, CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null, ...flags })));
+  return [[{ UnreadCount: unread.length > bound ? null : unread.length, PendingCount: pending.length > bound ? null : pending.length }], items,
+    [...counted(unread, { CountsUnread: 1, CountsPending: 0 }), ...counted(pending, { CountsUnread: 0, CountsPending: 1 })]];
 }
 
 function taskNotificationInbox(db, params) {
@@ -251,22 +266,36 @@ function taskNotificationInbox(db, params) {
   const owned = db.taskNotifications
     .filter((row) => Number(row.RecipientSicil) === sicil)
     .map((row) => taskNotificationRow(db, row))
-    .filter((row) => row.TaskAvailable === 1);
+    .filter((row) => row.TaskAvailable === 1 && disclosureAllowed(db, row, params));
   const counts = { UnreadCount: owned.filter((row) => row.IsUnread === 1 && !row.DismissedAt).length };
   const items = owned
     .filter((row) => !row.DismissedAt)
     .sort((left, right) => (Date.parse(right.OccurredAt) || 0) - (Date.parse(left.OccurredAt) || 0))
     .slice(0, limit);
-  return [[counts], items];
+  if (params.evidenceSnapshotLimit == null) return [[counts], items];
+  const bound = params.evidenceSnapshotLimit;
+  const unread = owned.filter((row) => row.IsUnread === 1 && !row.DismissedAt).slice(0, bound + 1);
+  return [[{ UnreadCount: unread.length > bound ? null : unread.length }], items,
+    unread.length > bound ? [] : unread.map((row) => ({ TaskId: row.TaskId, CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null, CountsUnread: 1, CountsPending: 0 }))];
 }
 
-function coordinationPage(db, params) {
+function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   const sicil = Number(params.sicil);
   const pageSize = Number(params.pageSize || 25);
   const requestedPage = Number(params.page || 0);
+  const pageParticipant = (row) => isParticipant(db, row, params)
+    || (decisionAuthorityScope && ['PENDING', 'APPROVED'].includes(row.Status) && taskAvailable(db, row) && decisionAuthority(db, row, params));
+  const pageActionable = (row) => {
+    if (!taskAvailable(db, row)) return false;
+    if (row.Status === 'PENDING') {
+      return decisionAuthorityScope ? decisionAuthority(db, row, params) : notificationDecisionAuthority(db, row, params);
+    }
+    return row.Status === 'CANCELLATION_REQUESTED' && Number(row.RequesterSicil) === sicil;
+  };
+  const pageRow = (row) => ({ ...coordinationRow(db, row, params), IsActionable: pageActionable(row) ? 1 : 0 });
   const matches = db.taskAssignmentCoordinations.filter((row) => {
-    if (!isParticipant(db, row, params)) return false;
-    const view = coordinationRow(db, row, params);
+    if (!pageParticipant(row) || !disclosureAllowed(db, row, params)) return false;
+    const view = pageRow(row);
     if (params.projectId && !sameGuid(recordProjectId(db, row), params.projectId)) return false;
     if (params.taskId && !sameGuid(row.TaskId, params.taskId)) return false;
     if (params.status && row.Status !== params.status) return false;
@@ -278,8 +307,11 @@ function coordinationPage(db, params) {
       || String(row.RequestedAssigneeSicil) === String(params.assignee))) return false;
     if (params.organization && !contains(row.AssigneeOrgSnapshot, params.organization)) return false;
     if (params.search) {
-      const haystack = [view.TaskTitle, view.ProjectName, view.ProjectCode, view.RequesterName,
-        view.AssigneeName, row.RequesterMessage].filter(Boolean).join(' ');
+      const haystack = (params.evidenceSnapshotLimit == null
+        ? [view.TaskTitle, view.ProjectName, view.ProjectCode, view.RequesterName, view.AssigneeName, row.RequesterMessage]
+        : [view.TaskTitle, view.ProjectName, view.ProjectCode, view.RequesterName, view.AssigneeName, view.SuggestedAssigneeName,
+          view.DecisionByName, params.searchRequesterMessage ? row.RequesterMessage : '', params.searchDecisionMessage ? row.DecisionMessage : ''])
+        .filter(Boolean).join(' ');
       if (!contains(haystack, params.search)) return false;
     }
     return true;
@@ -287,23 +319,36 @@ function coordinationPage(db, params) {
   const history = (row) => !['PENDING', 'CANCELLATION_REQUESTED'].includes(row.Status) || !taskAvailable(db, row);
   const counts = {
     Total: matches.length,
-    PendingCount: matches.filter((row) => actionable(db, row, params)).length,
+    PendingCount: matches.filter(pageActionable).length,
     SentCount: matches.filter((row) => Number(row.RequesterSicil) === sicil).length,
     HistoryCount: matches.filter(history).length
   };
   const tab = params.tab || 'all';
   const tabbed = matches.filter((row) => {
     if (tab === 'all') return true;
-    if (tab === 'pending') return actionable(db, row, params);
+    if (tab === 'pending') return pageActionable(row);
     if (tab === 'sent') return Number(row.RequesterSicil) === sicil;
     return history(row);
   });
+  if (params.evidenceSnapshotLimit != null && tabbed.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
+  if (params.evidenceSnapshotLimit != null) {
+    counts.PendingCount = tabbed.filter(pageActionable).length;
+    counts.SentCount = tabbed.filter((row) => Number(row.RequesterSicil) === sicil).length;
+    counts.HistoryCount = tabbed.filter(history).length;
+  }
   const lastPage = tabbed.length === 0 ? 0 : Math.floor((tabbed.length - 1) / pageSize);
   const page = Math.min(requestedPage, lastPage);
   const items = tabbed
-    .sort(coordinationOrder(db, params))
+    .sort((left, right) => {
+      const rank = Number(!pageActionable(left)) - Number(!pageActionable(right));
+      if (rank) return rank;
+      const leftAt = Date.parse(left.DecidedAt || left.CreatedAt) || 0;
+      const rightAt = Date.parse(right.DecidedAt || right.CreatedAt) || 0;
+      if (leftAt !== rightAt) return rightAt - leftAt;
+      return String(right.CoordinationId).localeCompare(String(left.CoordinationId));
+    })
     .slice(page * pageSize, page * pageSize + pageSize)
-    .map((row) => coordinationRow(db, row, params));
+    .map((row) => (params.evidenceSnapshotLimit == null ? pageRow(row) : { ...pageRow(row), CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null }));
   return [[counts], [{ Total: tabbed.length, Page: page }], items];
 }
 
@@ -919,7 +964,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
     if (sqlText.includes('FROM dbo.MR_TaskNotifications n')) {
       return [...coordinationInbox(db, params), ...taskNotificationInbox(db, params)];
     }
-    if (sqlText.includes('DECLARE @safePage')) return coordinationPage(db, params);
+    if (sqlText.includes('DECLARE @safePage') || sqlText.includes('#CoordinationEvidenceSnapshot')) return coordinationPage(db, params, { decisionAuthorityScope: sqlText.includes('rota-ai-decision-authority') });
     if (sqlText.includes('SELECT TOP (1)')) {
       const row = db.taskAssignmentCoordinations.find((entry) =>
         sameGuid(entry.CoordinationId, params.coordinationId)

@@ -1,10 +1,12 @@
 import 'server-only';
+import { bindDisclosureScope, DISCLOSURE_SCOPE_CLEANUP_SQL, DISCLOSURE_SCOPE_SETUP_SQL } from '../authorization/disclosureScope.js';
 import {
   NOTIFICATION_PREVIEW_LIMIT,
   NOTIFICATION_SOURCES
 } from '../../domain/notifications/notificationInbox.js';
 import {
   COORDINATION_INBOX_SQL,
+  COORDINATION_EVIDENCE_INBOX_SQL,
   bindCoordinationScope,
   mapCoordinationInbox,
   updateCoordinationNotifications
@@ -15,6 +17,7 @@ import { ServerPersistenceError } from '../errors.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import {
   TASK_NOTIFICATION_INBOX_SQL,
+  TASK_NOTIFICATION_EVIDENCE_INBOX_SQL,
   mapTaskNotificationInbox,
   updateTaskNotifications
 } from './taskNotificationQueries.js';
@@ -26,17 +29,25 @@ import {
  * görüntüye eklenen maliyet bir sorgudur ve iki kaynak da en fazla sekiz satır
  * ile iki sayaç taşır. Geçmişin tamamı hiçbir zaman anlık görüntüye girmez.
  */
-export async function readNotificationInbox(executor, actor) {
+export async function readNotificationInbox(executor, actor, { evidenceSnapshotLimit = null } = {}) {
   const request = bindCoordinationScope(executor.request(), actor);
   request.input('limit', sql.Int, NOTIFICATION_PREVIEW_LIMIT);
-  const result = await request.query(`${COORDINATION_INBOX_SQL}\n${TASK_NOTIFICATION_INBOX_SQL}`);
+  if (evidenceSnapshotLimit != null) {
+    bindDisclosureScope(request, actor);
+    request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+  }
+  const evidence = evidenceSnapshotLimit != null;
+  const result = await request.query(evidence
+    ? `${DISCLOSURE_SCOPE_SETUP_SQL}\n${COORDINATION_EVIDENCE_INBOX_SQL}\n${TASK_NOTIFICATION_EVIDENCE_INBOX_SQL}\n${DISCLOSURE_SCOPE_CLEANUP_SQL}`
+    : `${COORDINATION_INBOX_SQL}\n${TASK_NOTIFICATION_INBOX_SQL}`);
   const sets = result.recordsets || [];
-  const coordination = mapCoordinationInbox(sets[0], sets[1], actor.sicil);
-  const taskEvents = mapTaskNotificationInbox(sets[2], sets[3]);
+  // Kanıt kipinde her kaynak sayaç, önizleme ve sayılan görev nüfusu döndürür.
+  const coordination = evidence ? mapCoordinationInbox(sets[0], sets[1], actor.sicil, sets[2] || []) : mapCoordinationInbox(sets[0], sets[1], actor.sicil);
+  const taskEvents = evidence ? mapTaskNotificationInbox(sets[3], sets[4], sets[5] || []) : mapTaskNotificationInbox(sets[2], sets[3]);
   return {
     coordination,
     taskEvents,
-    unreadCount: coordination.unreadCount + taskEvents.unreadCount,
+    unreadCount: coordination.unreadCount == null || taskEvents.unreadCount == null ? null : coordination.unreadCount + taskEvents.unreadCount,
     pendingCount: coordination.pendingCount
   };
 }

@@ -10,6 +10,12 @@ import './styles/simple-mode.css';
 import './styles/experience.css';
 import { TWEAKS_BOOTSTRAP_SCRIPT } from '../lib/tweaksBootstrap.js';
 import { APP_FAVICON_DATA_URI, APP_FAVICON_PNG_DATA_URI } from '../lib/appFavicon.js';
+import { ASSISTANT_AVAILABILITY_META } from '../domain/ai/assistantContract.js';
+import { readAiConfig } from '../server/ai/aiConfig.js';
+
+// Rota AI açık/kapalı bilgisi çalışma anındaki ortamdan okunur; sayfa derleme
+// anındaki değerle donmaz.
+export const dynamic = 'force-dynamic';
 
 export const metadata = {
   title: 'MERGEN Rota — Görev Yönetimi',
@@ -28,6 +34,7 @@ export default function RootLayout({ children }) {
         {/* SVG desteği olmayan istemciler ve iOS ana ekranı raster yedeği kullanır. */}
         <link rel="alternate icon" type="image/png" href={FALLBACK_ICON} />
         <link rel="apple-touch-icon" href={FALLBACK_ICON} />
+        <meta name={ASSISTANT_AVAILABILITY_META} content={readAiConfig().enabled ? 'enabled' : 'disabled'} />
       </head>
       <body className="theme-dark">
         {/* Erişilebilirlik ve hareket tercihleri, uygulama paketi çalışmadan

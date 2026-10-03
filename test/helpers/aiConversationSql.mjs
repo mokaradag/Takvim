@@ -141,7 +141,10 @@ function remove(db, params, sicil, known) {
     if (conversation) {
       db.aiConversationHooks?.beforeDelete?.(conversation);
       db.aiConversations = db.aiConversations.filter((row) => row !== conversation);
+      const removed = new Set(db.aiConversationMessages.filter((row) => sameGuid(row.ConversationId, conversation.ConversationId)).map((row) => guid(row.MessageId)));
       db.aiConversationMessages = db.aiConversationMessages.filter((row) => !sameGuid(row.ConversationId, conversation.ConversationId));
+      // Kanıtlar iletiyle birlikte silinir (0018 · ON DELETE CASCADE).
+      db.aiMessageEvidence = (db.aiMessageEvidence || []).filter((row) => !removed.has(guid(row.MessageId)));
       deleted = 1;
     }
   }
@@ -265,6 +268,136 @@ function append(db, params, sicil) {
   ];
 }
 
+function missingEvidenceSchemaError() {
+  const error = new Error("Invalid object name 'dbo.MR_AiMessageEvidence'.");
+  error.number = 208;
+  return error;
+}
+
+function evidenceConstraint(name) {
+  const error = new Error(`The INSERT statement conflicted with the CHECK constraint "${name}".`);
+  error.number = 547;
+  return error;
+}
+
+function isJson(text) {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 0018 kısıtlarıyla kanıt satırları (bkz. MR_Upgrade_0018_Ai_Message_Evidence.sql). */
+function insertEvidence(db, messageId, rows) {
+  for (const row of rows) {
+    if (!Number.isInteger(row.ordinal) || row.ordinal < 1 || row.ordinal > 16) throw evidenceConstraint('CK_MR_AiMessageEvidence_Ordinal');
+    if (!/^rota_/.test(String(row.toolName || ''))) throw evidenceConstraint('CK_MR_AiMessageEvidence_ToolName');
+    if (!isJson(row.summaryJson) || String(row.summaryJson).length > 4000) throw evidenceConstraint('CK_MR_AiMessageEvidence_SummaryJson');
+    if (!isJson(row.evidenceJson) || String(row.evidenceJson).length * 2 > 65536) throw evidenceConstraint('CK_MR_AiMessageEvidence_EvidenceJson');
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/.test(String(row.generatedAt || ''))) throw new Error('Conversion failed when converting date and/or time from character string.');
+    if (db.aiMessageEvidence.some((existing) => sameGuid(existing.MessageId, messageId) && existing.Ordinal === row.ordinal)) {
+      const error = new Error("Violation of PRIMARY KEY constraint 'PK_MR_AiMessageEvidence'.");
+      error.number = 2627;
+      throw error;
+    }
+    db.aiMessageEvidence.push({
+      MessageId: guid(messageId),
+      Ordinal: row.ordinal,
+      ToolName: row.toolName,
+      EvidenceType: row.evidenceType,
+      Label: row.label,
+      EntityType: row.entityType ?? null,
+      EntityId: row.entityId ?? null,
+      GeneratedAt: `${row.generatedAt}Z`,
+      IsComplete: row.isComplete ? 1 : 0,
+      IsTruncated: row.isTruncated ? 1 : 0,
+      SummaryJson: row.summaryJson,
+      EvidenceJson: row.evidenceJson
+    });
+  }
+}
+
+function evidenceRowsFor(db, messageIds) {
+  const wanted = new Set(messageIds.map(guid));
+  return (db.aiMessageEvidence || [])
+    .filter((row) => wanted.has(guid(row.MessageId)))
+    .map((row) => {
+      const evidence = JSON.parse(row.EvidenceJson || '{}');
+      return { MessageId: row.MessageId, Ordinal: row.Ordinal, ToolName: row.ToolName, SummaryJson: row.SummaryJson,
+        AuthorizationEpoch: evidence.authorizationEpoch ?? null,
+        ScopedAuthorization: JSON.stringify(evidence.scopedAuthorization ?? null),
+        AuthorizationPopulation: JSON.stringify(evidence.authorizationPopulation ?? null),
+        AuthorizationReferences: JSON.stringify(evidence.authorizationReferences ?? null),
+        LegacyEvidenceJson: evidence.authorizationReferences || evidence.authorizationPopulation ? null : row.EvidenceJson,
+        ClarificationContext: JSON.stringify(evidence.clarificationContext ?? null) };
+    });
+}
+
+function appendGrounded(db, params, sicil) {
+  db.aiConversationHooks?.beforeAppend?.(params);
+  if (db.aiEvidenceSchemaMissing) throw missingEvidenceSchemaError();
+  if (!knownSicil(db, sicil)) return [[{ KnownSicil: 0, AnswerPersisted: 0, AnswerInserted: 0 }]];
+  const conversation = ownedConversation(db, sicil, params.conversationId);
+  const question = conversation && messagesOf(db, conversation.ConversationId)
+    .find((row) => sameGuid(row.MessageId, params.replyToMessageId) && row.Role === 'user');
+  const answered = db.aiConversationMessages.some((row) => sameGuid(row.ReplyToMessageId, params.replyToMessageId));
+  let inserted = 0;
+  if (conversation && question && !answered) {
+    const messages = messagesOf(db, conversation.ConversationId);
+    const at = now();
+    const message = {
+      MessageId: guid(params.messageId),
+      ConversationId: conversation.ConversationId,
+      Sequence: (messages.length ? messages[messages.length - 1].Sequence : 0) + 1,
+      Role: 'assistant',
+      Content: params.content,
+      ClientTurnId: null,
+      ReplyToMessageId: guid(params.replyToMessageId),
+      Mode: params.mode ?? null,
+      FinishReason: params.finishReason ?? null,
+      ContextTrimmed: Boolean(params.contextTrimmed),
+      ContextOmittedMessages: Math.max(0, Number(params.contextOmittedMessages) || 0),
+      CreatedAt: at
+    };
+    // Tek toplu iş: kanıt kısıtı ihlal edilirse yanıt da yazılmaz (XACT_ABORT).
+    const evidenceRows = JSON.parse(params.evidence || '[]');
+    const snapshot = db.aiMessageEvidence.length;
+    insertMessage(db, message);
+    try {
+      insertEvidence(db, message.MessageId, evidenceRows.slice(0, 16));
+    } catch (error) {
+      db.aiConversationMessages = db.aiConversationMessages.filter((row) => row !== message);
+      db.aiMessageEvidence.length = snapshot;
+      throw error;
+    }
+    conversation.MessageCount += 1;
+    conversation.UpdatedAt = at;
+    inserted = 1;
+  }
+  const written = conversation && db.aiConversationMessages.find((row) => row.Role === 'assistant' && sameGuid(row.ReplyToMessageId, params.replyToMessageId) && sameGuid(row.ConversationId, params.conversationId));
+  return [
+    [{ KnownSicil: 1, AnswerPersisted: written ? 1 : 0, AnswerInserted: inserted }],
+    conversation ? [conversationRow(conversation)] : [],
+    written ? [messageRow(written)] : [],
+    written ? evidenceRowsFor(db, [written.MessageId]).sort((left, right) => left.Ordinal - right.Ordinal) : []
+  ];
+}
+
+function evidence(db, params, sicil, known) {
+  const ready = !db.aiEvidenceSchemaMissing;
+  if (!known || !ready) return [[{ KnownSicil: known ? 1 : 0, EvidenceReady: ready ? 1 : 0 }]];
+  const conversation = ownedConversation(db, sicil, params.conversationId);
+  const messages = conversation ? messagesOf(db, conversation.ConversationId) : [];
+  const ids = messages.filter((row) => !params.messageId || sameGuid(row.MessageId, params.messageId)).map((row) => row.MessageId);
+  const order = new Map(messages.map((row) => [guid(row.MessageId), row.Sequence]));
+  const rows = evidenceRowsFor(db, ids)
+    .sort((left, right) => order.get(guid(left.MessageId)) - order.get(guid(right.MessageId)) || left.Ordinal - right.Ordinal)
+    .slice(0, Number(params.maxEvidence));
+  return [[{ KnownSicil: 1, EvidenceReady: 1 }], rows];
+}
+
 export function runAiConversationQuery(db, sqlText, params) {
   if (!sqlText.includes('MR_AiConversation')) return null;
   if (db.aiConversationSchemaMissing) throw missingSchemaError();
@@ -272,7 +405,9 @@ export function runAiConversationQuery(db, sqlText, params) {
   const sicil = Number(params.sicil);
   const known = knownSicil(db, sicil);
   if (sqlText.includes('AS PrepareOutcome')) return prepare(db, params, sicil, known);
+  if (sqlText.includes('AS AnswerInserted')) return appendGrounded(db, params, sicil);
   if (sqlText.includes('AS AnswerPersisted')) return append(db, params, sicil);
+  if (sqlText.includes('AS EvidenceReady')) return evidence(db, params, sicil, known);
   if (sqlText.includes('DELETE c FROM dbo.MR_AiConversations c')) return remove(db, params, sicil, known);
   if (sqlText.includes('TOP (@maxMessages)')) return load(db, params, sicil, known);
   if (sqlText.includes('ORDER BY c.CreatedAt DESC, c.ConversationId DESC')) return list(db, params, sicil, known);

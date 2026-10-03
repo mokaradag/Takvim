@@ -1,3 +1,4 @@
+import { taskCompletionRate } from '../../scheduling/metrics/taskCompletionRate.js';
 import { getStatus } from '../../scheduling/metrics/index.js';
 import { today } from '../../scheduling/dates/index.js';
 
@@ -82,6 +83,6 @@ export function selectStatusDistribution(tasks, referenceDate = today()) {
   return {
     total,
     segments,
-    completionRate: total ? Math.round((done / total) * 100) : 0
+    completionRate: taskCompletionRate(done, total)
   };
 }

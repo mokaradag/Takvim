@@ -1,8 +1,12 @@
 import 'server-only';
 import { sql } from '../../db/pool.js';
+import { normalizeEvidenceSummary } from '../../../domain/ai/evidenceContract.js';
+import { decodeAuthorizationPopulation, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
 import {
   AI_CONVERSATION_APPEND_ANSWER_SQL,
+  AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL,
   AI_CONVERSATION_DELETE_SQL,
+  AI_CONVERSATION_EVIDENCE_SQL,
   AI_CONVERSATION_LIST_BEFORE_SQL,
   AI_CONVERSATION_SCAN_SQL,
   AI_CONVERSATION_LIST_SQL,
@@ -60,6 +64,45 @@ export function noteConversationSchema(ready) {
 
 export function resetConversationSchemaForTests() {
   delete globalThis[SCHEMA_STATE_KEY];
+  delete globalThis[EVIDENCE_SCHEMA_STATE_KEY];
+}
+
+/* ── Kanıt kaydı (0018) ─────────────────────────────────────── */
+
+const EVIDENCE_SCHEMA_STATE_KEY = Symbol.for('mergen-rota.ai-evidence-schema');
+const EVIDENCE_TABLE = 'MR_AiMessageEvidence';
+
+/** 0018'in son gözlemi: `ready` null ise henüz denetlenmedi. */
+export function evidenceSchemaState() {
+  return { ...(globalThis[EVIDENCE_SCHEMA_STATE_KEY] || { ready: null, observedAt: null }) };
+}
+
+export function noteEvidenceSchema(ready, at = new Date()) {
+  globalThis[EVIDENCE_SCHEMA_STATE_KEY] = { ready: Boolean(ready), observedAt: at.toISOString() };
+}
+
+/** Kanıt tablosunun yokluğu (0018 geri alınmış ya da yarım uygulanmış kurulum). */
+export function isMissingEvidenceSchema(error) {
+  const candidates = [error, error?.originalError, error?.originalError?.info, error?.cause, ...(error?.precedingErrors || [])];
+  return candidates.some((entry) => entry && (Number(entry.number) === MISSING_TABLE_NUMBER || /Invalid object name/i.test(String(entry.message || '')))
+    && String(entry.message || '').includes(EVIDENCE_TABLE));
+}
+
+function evidenceByMessage(rows = []) {
+  const byMessage = new Map();
+  for (const row of rows) {
+    let summary = null;
+    try {
+      summary = normalizeEvidenceSummary(JSON.parse(String(row.SummaryJson || 'null')));
+    } catch {
+      summary = null;
+    }
+    if (!summary) continue;
+    const messageId = idOrNull(row.MessageId);
+    if (!byMessage.has(messageId)) byMessage.set(messageId, []);
+    byMessage.get(messageId).push(summary);
+  }
+  return byMessage;
 }
 
 function isoOrNull(value) {
@@ -207,5 +250,100 @@ export async function appendConversationAnswer(executor, sicil, {
     persisted: Boolean(state?.AnswerPersisted),
     conversation: conversationRow(conversations[0]),
     message: messageRow(messages[0])
+  };
+}
+
+/**
+ * Konuşmadaki yanıtların kanıt özetleri. 0018 yoksa `ready: false` ve boş
+ * eşleme döner. Kanıt yükü yalnızca sunucuda güncel varlık yetkisini
+ * doğrulamak için okunur; tarayıcıya yalnızca güvenli özet gider.
+ */
+export async function loadConversationEvidence(executor, sicil, { conversationId, messageId = null, maxEvidence }) {
+  const request = sicilRequest(executor, sicil);
+  request.input('conversationId', sql.UniqueIdentifier, conversationId);
+  request.input('messageId', sql.UniqueIdentifier, messageId);
+  request.input('maxEvidence', sql.Int, maxEvidence);
+  let result;
+  try {
+    result = await request.query(AI_CONVERSATION_EVIDENCE_SQL);
+  } catch (error) {
+    if (!isMissingEvidenceSchema(error)) throw error;
+    return { knownSicil: true, ready: false, byMessage: new Map() };
+  }
+  const [[state] = [], rows = []] = recordsetsOf(result);
+  const epochsByMessage = new Map();
+  const clarificationByMessage = new Map();
+  const authorizationByMessage = new Map();
+  for (const row of rows) {
+    const id = idOrNull(row.MessageId);
+    if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
+    epochsByMessage.get(id).push(row.AuthorizationEpoch ?? null);
+    if (!authorizationByMessage.has(id)) authorizationByMessage.set(id, []);
+    let authorizationEpoch = row.AuthorizationEpoch ?? null;
+    let scopedAuthorization = null;
+    let taskReferences = null;
+    let unverifiable = false;
+    try {
+      scopedAuthorization = JSON.parse(row.ScopedAuthorization || 'null');
+      const population = JSON.parse(row.AuthorizationPopulation || 'null');
+      if (population) {
+        taskReferences = decodeAuthorizationPopulation(population);
+        unverifiable = taskReferences == null;
+      } else {
+        taskReferences = JSON.parse(row.AuthorizationReferences || 'null');
+        // Nüfus işaretinden önceki kayıt yalnızca yükündeki görevleri taşır.
+        unverifiable = !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
+      }
+    } catch { authorizationEpoch = null; }
+    authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.LegacyEvidenceJson || '{}',
+      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable });
+    try {
+      const candidates = JSON.parse(row.ClarificationContext || 'null');
+      if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));
+    } catch { /* Geçersiz açıklama durumu kullanılmaz. */ }
+  }
+  return {
+    knownSicil: Boolean(state?.KnownSicil),
+    ready: Boolean(state?.EvidenceReady),
+    epochsByMessage,
+    authorizationByMessage,
+    clarificationByMessage,
+    byMessage: evidenceByMessage(rows)
+  };
+}
+
+/**
+ * Kanıta dayalı yanıtı ve atıf yaptığı kanıtları tek işlemde yazar. Kanıtlar
+ * yalnızca yanıt bu çağrıda eklendiyse yazılır; `evidence` yazılan (ya da
+ * tura önceden yazılmış yanıtın) kanıt özetleridir.
+ */
+export async function appendGroundedConversationAnswer(executor, sicil, {
+  conversationId, messageId, replyToMessageId, content, mode, finishReason, contextTrimmed, contextOmittedMessages, evidence = []
+}) {
+  const request = sicilRequest(executor, sicil);
+  request.input('conversationId', sql.UniqueIdentifier, conversationId);
+  request.input('messageId', sql.UniqueIdentifier, messageId);
+  request.input('replyToMessageId', sql.UniqueIdentifier, replyToMessageId);
+  request.input('content', sql.NVarChar(sql.MAX), content);
+  request.input('mode', sql.VarChar(10), mode);
+  request.input('finishReason', sql.VarChar(40), finishReason);
+  request.input('contextTrimmed', sql.Bit, Boolean(contextTrimmed));
+  request.input('contextOmittedMessages', sql.Int, Math.max(0, Number(contextOmittedMessages) || 0));
+  request.input('evidence', sql.NVarChar(sql.MAX), JSON.stringify(evidence.map((row) => ({
+    ...row,
+    // datetime2 dönüşümü saat dilimi işaretsiz ISO 8601 bekler; değer zaten UTC'dir.
+    generatedAt: String(row.generatedAt).replace(/Z$/, '')
+  }))));
+  const [[state] = [], conversations = [], messages = [], evidenceRows = []] = recordsetsOf(
+    await request.query(AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL)
+  );
+  const message = messageRow(messages[0]);
+  return {
+    knownSicil: Boolean(state?.KnownSicil),
+    persisted: Boolean(state?.AnswerPersisted),
+    inserted: Boolean(state?.AnswerInserted),
+    conversation: conversationRow(conversations[0]),
+    message,
+    evidence: message ? (evidenceByMessage(evidenceRows).get(message.id) || []) : []
   };
 }

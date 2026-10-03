@@ -34,6 +34,7 @@ export function mapRequest(row, actorSicil) {
     unread: row.IsUnread == null ? true : Boolean(row.IsUnread),
     taskAvailable: row.TaskAvailable == null ? true : Boolean(row.TaskAvailable),
     isDecisionOwner: Number(row.DecisionOwnerSicil) === Number(actorSicil),
-    isRequester: Number(row.RequesterSicil) === Number(actorSicil)
+    isRequester: Number(row.RequesterSicil) === Number(actorSicil),
+    ...(row.CurrentProjectId !== undefined ? { currentProjectId: canonicalActualId(row.CurrentProjectId) } : {})
   };
 }

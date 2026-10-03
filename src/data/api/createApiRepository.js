@@ -1,3 +1,4 @@
+import { PERSISTED_TASK_STATUSES } from '../../domain/constants/index.js';
 import { extractActualId, isActualId } from '../../domain/identity/actualId.js';
 import { AppRepositoryError, REPOSITORY_ERROR_CODES } from '../contracts/appRepository.js';
 import {
@@ -12,15 +13,7 @@ const CODE_BY_STATUS = {
   503: REPOSITORY_ERROR_CODES.DATABASE_UNAVAILABLE
 };
 const STATUS_TO_SQL = Object.freeze({ todo: 'planned', in_progress: 'in-progress', done: 'done' });
-const STATUS_FROM_SQL = Object.freeze({
-  planned: 'todo',
-  'not-started': 'todo',
-  'in-progress': 'in_progress',
-  blocked: 'in_progress',
-  done: 'done',
-  completed: 'done',
-  cancelled: 'done'
-});
+
 
 export function toActualUuid(value) {
   if (value == null || value === '') return null;
@@ -62,7 +55,7 @@ function toOptionalPersistenceStatus(value) {
 }
 
 export function fromPersistenceStatus(value) {
-  return STATUS_FROM_SQL[value] || value;
+  return PERSISTED_TASK_STATUSES[value] || value;
 }
 
 function normalizeDelete(entry, label) {

@@ -27,6 +27,7 @@ import {
 import { createNewTask } from '../src/state/appState.js';
 
 const { checkAssistantConversationSchema } = await import('../src/server/ai/assistant/assistantService.js');
+const { evidenceSchemaState } = await import('../src/server/ai/assistant/conversationStore.js');
 const { aiRuntimeLoad, getAiGateway, resetAiRuntimeForTests, setAiProviderForTests } = await import('../src/server/ai/aiRuntime.js');
 const { resetAiConfigCacheForTests } = await import('../src/server/ai/aiConfig.js');
 const { resetAiModelRegistryForTests } = await import('../src/server/ai/modelRegistryLoader.js');
@@ -421,6 +422,31 @@ test('Entegrasyonlar kartı yapay zekâ sağlayıcısını listeler; bağlantı 
   assert.equal(timedOut.result.ok, false);
   assert.equal(timedOut.result.code, 'PROBE_TIMEOUT');
   assert.equal(provider.calls.at(-1).aborted, true);
+});
+
+
+test('araçlar açıkken bağlantı testi 0018 kanıt şeması durumunu yeniler', async (t) => {
+  const { db } = createAiStack(t, {
+    env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' },
+    seed: { aiEvidenceSchemaMissing: true }
+  });
+  adminReset(t);
+  assert.equal(evidenceSchemaState().ready, null);
+  const tested = await postIntegrationTest('ai-provider');
+  assert.equal(tested.result.ok, false);
+  assert.equal(tested.result.code, 'EVIDENCE_SCHEMA_MISSING');
+  assert.equal(evidenceSchemaState().ready, false);
+
+  db.aiEvidenceSchemaMissing = false;
+  const installed = await postIntegrationTest('ai-provider');
+  assert.equal(installed.result.ok, true);
+  assert.equal(evidenceSchemaState().ready, true, 'bağlantı testi taze eksik önbelleğini atlar');
+
+  db.aiEvidenceSchemaMissing = true;
+  const removed = await postIntegrationTest('ai-provider');
+  assert.equal(removed.result.ok, false);
+  assert.equal(removed.result.code, 'EVIDENCE_SCHEMA_MISSING');
+  assert.equal(evidenceSchemaState().ready, false, 'bağlantı testi taze hazır önbelleğini atlar');
 });
 
 /* ── Sağlık doğruluğu ve bağlantı testi ───────────────────── */
@@ -1098,8 +1124,45 @@ test('geçici tur kapasitesi hatası beş dakikalık uyarı penceresini uzatmaz'
     recordAssistantTurn({ code, details: { scope: 'global', saturation: 'model' } });
     assert.equal(aiHealthComponent().state, HEALTH_STATES.WARNING);
     const later = aiHealthComponent({ now: Date.now() + 6 * 60 * 1000 });
-    assert.doesNotMatch(later.message, /Son Rota AI turu tamamlanamadı|Kapasite doldu|Kapasite yetersiz/);
+    assert.doesNotMatch(later.message, /Son Bilgin turu tamamlanamadı|Kapasite doldu|Kapasite yetersiz/);
   }
   recordAssistantTurn({ code: 'DATABASE_UNAVAILABLE', serviceFailure: true });
-  assert.match(aiHealthComponent({ now: Date.now() + 6 * 60 * 1000 }).message, /Son Rota AI turu tamamlanamadı/);
+  assert.match(aiHealthComponent({ now: Date.now() + 6 * 60 * 1000 }).message, /Son Bilgin turu tamamlanamadı/);
+});
+
+test('yapay zekâ SQL kapılarının toplam yeri ortak havuzda olağan Rota için ayrılan bağlantıyı korur', async () => {
+  const { aiSqlGateBudget, createAiSqlGate, AI_SQL_CONNECTION_BUDGET, AI_SQL_POOL_SIZE } = await import('../src/server/ai/aiSqlGate.js');
+  await import('../src/server/ai/aiCredentialService.js');
+  await import('../src/server/ai/tools/toolSqlGate.js');
+  const { getSqlServerConfig } = await import('../src/server/db/config.js');
+  const budget = aiSqlGateBudget();
+  assert.deepEqual(Object.keys(budget.gates).sort(), ['conversation', 'credential', 'directory', 'domain-tools']);
+  assert.ok(budget.total <= AI_SQL_CONNECTION_BUDGET, JSON.stringify(budget));
+  assert.ok(AI_SQL_CONNECTION_BUDGET < AI_SQL_POOL_SIZE);
+  const previous = { server: process.env.MERGEN_ROTA_DB_SERVER, database: process.env.MERGEN_ROTA_DB_DATABASE };
+  process.env.MERGEN_ROTA_DB_SERVER = previous.server || 'localhost';
+  process.env.MERGEN_ROTA_DB_DATABASE = previous.database || 'MergenRota';
+  try {
+    assert.equal(getSqlServerConfig().pool.max, AI_SQL_POOL_SIZE, 'bütçe gerçek havuz boyutuyla aynıdır');
+  } finally {
+    if (previous.server === undefined) delete process.env.MERGEN_ROTA_DB_SERVER; else process.env.MERGEN_ROTA_DB_SERVER = previous.server;
+    if (previous.database === undefined) delete process.env.MERGEN_ROTA_DB_DATABASE; else process.env.MERGEN_ROTA_DB_DATABASE = previous.database;
+  }
+  assert.throws(() => createAiSqlGate({ name: 'extra', slots: AI_SQL_CONNECTION_BUDGET - budget.total + 1, queue: 1, perUserActive: 1, perUserQueued: 1, saturation: 'extra' }),
+    /bütçesini aşıyor/);
+  assert.equal(aiSqlGateBudget().gates.extra, undefined);
+});
+
+test('yapay zekâ kapalıyken olağan anlık görüntü ve görev kaydı yapay zekâya özgü SQL çalıştırmaz', async (t) => {
+  const stack = await createActualStack(corporateSeed());
+  t.after(() => stack.dispose());
+  const before = stack.db.statements.length;
+  await stack.reload({ refreshMode: 'manual' });
+  const created = await createTask(stack);
+  assert.equal(created.ok, true, created.error?.message);
+  const statements = stack.db.statements.slice(before).map((entry) => entry.sql);
+  assert.ok(statements.length > 0);
+  for (const statement of statements) {
+    assert.doesNotMatch(statement, /MR_Ai|rota-ai-tool|#AiDisclosure|evidenceSnapshotLimit/, statement.slice(0, 120));
+  }
 });
