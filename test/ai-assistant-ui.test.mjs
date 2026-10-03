@@ -18,7 +18,7 @@ import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 registerServerOnlyShim();
 
 const { useRotaAssistant, RotaAssistantLauncher, RotaAssistantPanel } = await import('../src/features/ai/assistant/RotaAssistant.jsx');
-const { AssistantComposer } = await import('../src/features/ai/assistant/AssistantComposer.jsx');
+const { AssistantComposer, DEEP_MODE_HELP, INCLUDE_TEXT_HELP } = await import('../src/features/ai/assistant/AssistantComposer.jsx');
 const { AssistantThread, AssistantTurn } = await import('../src/features/ai/assistant/AssistantThread.jsx');
 const { AssistantConversationList } = await import('../src/features/ai/assistant/AssistantConversationList.jsx');
 const { AssistantMarkdown, renderBlock, renderInline } = await import('../src/features/ai/assistant/AssistantMarkdown.jsx');
@@ -64,7 +64,8 @@ test('controller keeps a selected Rota source when Rota data or the mode is unav
 test('composer disables unavailable Rota data and displays the readiness explanation', () => {
   const view = mountComponent(AssistantComposer, composerProps({ dataEnabled: true, dataAvailable: false,
     dataUnavailableMessage: 'Rota verisi hazırlığı tamamlanmamış. Genel sohbet kullanılabilir.', source: 'general' }).props);
-  const option = findElement(view.output, (node) => node.type === 'option' && node.props.value === 'rota');
+  const sourceGroup = findElement(view.output, (node) => typeof node.type === 'function' && node.props?.label === 'Yanıt kaynağı');
+  const option = findElement(mountComponent(sourceGroup.type, sourceGroup.props).output, (node) => node.props?.['data-value'] === 'rota');
   assert.equal(option.props.disabled, true);
   const status = findElement(view.output, (node) => node.props?.role === 'status');
   assert.match(status.props.children, /Genel sohbet/);
@@ -390,7 +391,7 @@ test('kayıtlı konuşma yalnız tamamlanmış yanıta kaydedilen bağlam uyarı
 test('hata görünümü kategorileri ayırır; kapasite yoğunluğu çökme gibi değil geçici uyarı olarak anlatılır', () => {
   const view = presentation.assistantFailureView;
   assert.deepEqual([view({ code: 'AI_BUSY' }).tone, view({ code: 'AI_BUSY' }).retryable], ['warn', true]);
-  assert.equal(view({ code: 'AI_QUEUE_TIMEOUT' }).title, 'Rota AI şu anda yoğun');
+  assert.equal(view({ code: 'AI_QUEUE_TIMEOUT' }).title, 'Bilgin şu anda yoğun');
   assert.deepEqual([view({ code: 'AI_KEY_MISSING' }).action, view({ code: 'AI_KEY_MISSING' }).retryable], ['settings', false]);
   assert.equal(view({ code: 'AI_KEY_INVALID', credentialSource: 'personal' }).title, 'Kişisel anahtar kabul edilmedi');
   assert.equal(view({ code: 'AI_KEY_INVALID', credentialSource: 'personal' }).action, 'settings');
@@ -424,7 +425,7 @@ test('hata görünümü kategorileri ayırır; kapasite yoğunluğu çökme gibi
 test('hazırlık, evre, bitiş nedeni, sayaç ve göreli zaman metinleri', () => {
   assert.equal(presentation.readinessNotice(READINESS), null);
   assert.equal(presentation.readinessNotice({ available: false, reason: 'AI_KEY_MISSING' }).action, 'settings');
-  assert.equal(presentation.readinessNotice({ available: false, reason: 'BİLİNMEYEN' }).title, 'Rota AI yapılandırılmadı');
+  assert.equal(presentation.readinessNotice({ available: false, reason: 'BİLİNMEYEN' }).title, 'Bilgin yapılandırılmadı');
   assert.equal(presentation.generationPhaseLabel('sending', 'standard'), 'Gönderiliyor…');
   assert.equal(presentation.generationPhaseLabel('generating', 'deep'), 'Yanıt oluşturuluyor…');
   assert.equal(presentation.generationPhaseLabel('thinking', 'standard'), 'Derin düşünülüyor…');
@@ -661,7 +662,7 @@ test('gönderim yalnızca konuşma, tur, ileti ve kipi taşır; model adı, prof
   probe.render();
   const turn = probe.output.assistant.controller.getState().active.turns[0];
   assert.equal(turn.answer.status, 'failed');
-  assert.equal(turn.answer.error.title, 'Rota AI şu anda yoğun');
+  assert.equal(turn.answer.error.title, 'Bilgin şu anda yoğun');
 });
 
 test('başlatıcı açıklığı ve arka planda süren yanıtı erişilebilir biçimde bildirir', () => {
@@ -747,13 +748,84 @@ test('yazma alanı: Enter gönderir, Shift+Enter ve IME göndermez; boş ileti g
   assert.equal(findElement(long.output, (node) => node.type === 'textarea').props['aria-invalid'], true);
   assert.match(textOf(long.output), /en fazla 8\.000 karakter/);
   assert.equal(findElement(long.output, (node) => node.props?.type === 'submit').props.disabled, true);
-  const modeSwitch = findElement(view.output, (node) => typeof node.type === 'function' && node.type.name === 'ModeSwitch');
-  const group = mountComponent(modeSwitch.type, modeSwitch.props).output;
-  assert.equal(group.props.role, 'radiogroup', 'kip seçimi erişilebilir bir radyo grubudur');
-  const radios = group.props.children;
-  assert.deepEqual(radios.map((radio) => [radio.props.role, radio.props['aria-checked'], radio.props.tabIndex]), [['radio', true, 0], ['radio', false, -1]]);
-  const single = mountComponent(modeSwitch.type, { ...modeSwitch.props, modes: [READINESS.modes[0], { ...READINESS.modes[1], available: false }] }).output;
+  const modes = [];
+  const modeToggle = findElement(mountComponent(AssistantComposer, { ...props, onModeChange: (value) => modes.push(value) }).output,
+    (node) => typeof node.type === 'function' && node.type.name === 'ModeToggle');
+  const chip = mountComponent(modeToggle.type, modeToggle.props).output;
+  const deep = mountComponent(chip.type, chip.props).output;
+  assert.equal(deep.props.role, 'switch', 'Derin düşünme erişilebilir bir anahtardır; Standart varsayılandır');
+  assert.equal(deep.props['aria-checked'], false);
+  assert.equal(textOf(findElement(deep, (node) => node.props?.className === 'rota-assistant-toggle-label')), 'Derin düşünme');
+  assert.equal(findElement(deep, (node) => node.props?.className === 'rota-assistant-toggle-short').props['aria-hidden'], 'true');
+  assert.equal(deep.props.title, DEEP_MODE_HELP);
+  deep.props.onClick();
+  const on = mountComponent(chip.type, mountComponent(modeToggle.type, { ...modeToggle.props, mode: 'deep' }).output.props).output;
+  assert.equal(on.props['aria-checked'], true);
+  on.props.onClick();
+  assert.deepEqual(modes, ['deep', 'standard']);
+  const single = mountComponent(modeToggle.type, { ...modeToggle.props, modes: [READINESS.modes[0], { ...READINESS.modes[1], available: false }] }).output;
   assert.equal(single, null, 'tek kip varsa seçim gösterilmez');
+});
+
+test('yanıt kaynağı bölümlü radyo grubudur; serbest metin onayı kısa, açıklamalı bir anahtardır', () => {
+  const sources = [];
+  const consents = [];
+  const base = composerProps({ dataEnabled: true, source: 'rota', onSourceChange: (value) => sources.push(value), onIncludeTextChange: (value) => consents.push(value) }).props;
+  const segmentsOf = (output) => {
+    const element = findElement(output, (node) => typeof node.type === 'function' && node.type.name === 'SegmentedChoice' && node.props.label === 'Yanıt kaynağı');
+    return element && mountComponent(element.type, element.props).output;
+  };
+  const view = mountComponent(AssistantComposer, base);
+  assert.equal(findElement(view.output, (node) => node.type === 'select'), null, 'yerel açılır liste kullanılmaz');
+  const group = segmentsOf(view.output);
+  assert.equal(group.props.role, 'radiogroup');
+  assert.deepEqual(group.props.children.map((radio) => [textOf(radio), radio.props['aria-checked'], radio.props.tabIndex, radio.props.disabled]),
+    [['Rota verisi', true, 0, false], ['Genel sohbet', false, -1, false]]);
+  group.props.children[0].props.onClick();
+  group.props.children[1].props.onClick();
+  assert.deepEqual(sources, ['general'], 'seçili kaynağa yeniden basmak bir değişiklik değildir');
+
+  // Onay anahtarı aynı satırdaki kısa bir haptır; tam ad ekran okuyucuda kalır, kısa etiket yalnızca süstür.
+  const textToggleOf = (output) => {
+    const element = findElement(output, (node) => typeof node.type === 'function' && node.type.name === 'ToggleChip' && node.props.label === 'Notlar ve iletiler');
+    return element && mountComponent(element.type, element.props).output;
+  };
+  const toggle = textToggleOf(view.output);
+  assert.equal(toggle.props.role, 'switch');
+  assert.equal(textOf(findElement(toggle, (node) => node.props?.className === 'rota-assistant-toggle-label')), 'Notlar ve iletiler');
+  assert.equal(findElement(toggle, (node) => node.props?.className === 'rota-assistant-toggle-short').props['aria-hidden'], 'true');
+  assert.equal(toggle.props['aria-checked'], false);
+  assert.equal(toggle.props.title, INCLUDE_TEXT_HELP);
+  const help = findElement(view.output, (node) => node.props?.id === toggle.props['aria-describedby']);
+  assert.equal(textOf(help), INCLUDE_TEXT_HELP, 'açıklama ekran okuyucuya da bağlıdır');
+  toggle.props.onClick();
+  assert.deepEqual(consents, [true]);
+  const on = mountComponent(AssistantComposer, { ...base, includeText: true });
+  textToggleOf(on.output).props.onClick();
+  assert.deepEqual(consents, [true, false]);
+
+  const general = mountComponent(AssistantComposer, { ...base, source: 'general' });
+  assert.equal(textToggleOf(general.output), null, 'genel sohbette Rota metni onayı yoktur');
+  const unavailable = segmentsOf(mountComponent(AssistantComposer, { ...base, dataAvailable: false, dataUnavailableMessage: 'Rota verisi kullanılamıyor.' }).output);
+  assert.deepEqual(unavailable.props.children.map((radio) => [radio.props.disabled, radio.props.tabIndex]), [[true, -1], [false, 0]],
+    'kullanılamayan seçili kaynak varken grup sekmeyle yine erişilebilir');
+  const busy = mountComponent(AssistantComposer, { ...base, generating: true });
+  assert.equal(segmentsOf(busy.output).props.children.every((radio) => radio.props.disabled), true);
+  assert.equal(textToggleOf(busy.output).props.disabled, true);
+  // Kaynak, onay, kip ve Gönder tek araç çubuğundadır.
+  const toolbar = findElement(view.output, (node) => node.props?.className === 'rota-assistant-toolbar');
+  const kinds = React.Children.toArray(toolbar.props.children).map((child) => child.type?.name || child.props?.className);
+  assert.deepEqual(kinds, ['SegmentedChoice', 'ToggleChip', 'rota-assistant-composer-counter', 'ModeToggle', 'rota-assistant-composer-action']);
+});
+
+test('gönder ve Durdur aynı sabit yuvada yer değiştirir', () => {
+  const slotOf = (generating) => findElement(mountComponent(AssistantComposer, composerProps({ generating }).props).output,
+    (node) => node.props?.className === 'rota-assistant-composer-action');
+  assert.equal(slotOf(false).props.children.props.type, 'submit');
+  assert.equal(slotOf(false).props.children.props['aria-label'], 'Gönder');
+  const stop = slotOf(true).props.children;
+  assert.equal(stop.props.className, 'rota-assistant-stop');
+  assert.equal(textOf(stop), 'Durdur', 'simgeli Durdur düğmesinin erişilebilir adı vardır');
 });
 
 test('yanıt sürerken gönder yerine Durdur görünür; Enter gönderim yapmaz ve açıklama gösterir', () => {
@@ -853,7 +925,7 @@ test('panel başlığındaki eylemler etiketlidir; geçmiş görünümü düğme
   const { controller } = await readyController();
   const assistant = { controller, state: controller.getState(), open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
   const panel = mountComponent(RotaAssistantPanel, { assistant, onOpenSettings() {} });
-  for (const label of ['Geçmiş konuşmalar', 'Yeni konuşma', 'Rota AI’yi kapat']) {
+  for (const label of ['Geçmiş konuşmalar', 'Yeni konuşma', 'Bilgin’i kapat']) {
     assert.ok(findElement(panel.output, (node) => node.type === 'button' && node.props['aria-label'] === label), label);
   }
   findElement(panel.output, (node) => node.props?.['aria-label'] === 'Geçmiş konuşmalar').props.onClick();
@@ -2477,4 +2549,37 @@ test('kayıt yapan kipli pencerenin Escape olayı masaüstü yardımcısını ka
     trap.unmount(); panel.unmount(); controller.dispose();
     globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer;
   }
+});
+
+test('free-text opt-in belongs to one turn: sending consumes it, and context changes reset it', async () => {
+  const rotaData = { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: true }] };
+  const { controller, api, state } = await readyController({ api: fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { ...READINESS, rotaData } }) }) });
+  controller.setIncludeText(true);
+  assert.equal(state().includeText, true);
+  assert.equal(controller.send('Rapor görevinin notunu göster').ok, true);
+  assert.equal(api.turns[0].input.includeText, true, 'the consenting turn carries the opt-in');
+  assert.equal(state().includeText, false, 'the opt-in is consumed when the turn is sent');
+  const [first] = api.turns;
+  first.emit('accepted', acceptedData(CONVERSATION_A, first, 'Rapor görevinin notunu göster'));
+  first.resolve(doneResult(CONVERSATION_A));
+  await drain();
+  assert.equal(controller.send('Peki terminleri?').ok, true);
+  assert.equal(api.turns[1].input.includeText, undefined, 'the next turn does not inherit the opt-in');
+  api.turns[1].resolve({ ok: false, code: 'NETWORK', retryable: true });
+  await drain();
+  assert.equal(controller.retry(api.turns[1].input.turnId).ok, true);
+  assert.equal(api.turns[2].input.includeText, undefined, 'a retry needs a fresh opt-in');
+  api.turns[2].resolve(doneResult(CONVERSATION_A));
+  await drain();
+  for (const change of [() => controller.newConversation(), () => controller.openConversation(CONVERSATION_B), () => controller.setSource('general')]) {
+    controller.setSource('rota');
+    controller.setIncludeText(true);
+    await change();
+    await drain();
+    assert.equal(state().includeText, false);
+  }
+  controller.setSource('rota');
+  controller.setIncludeText(true);
+  controller.setSource('rota');
+  assert.equal(state().includeText, true, 'selecting the same source keeps the current choice');
 });

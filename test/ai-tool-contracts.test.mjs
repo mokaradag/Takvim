@@ -405,7 +405,7 @@ test('short codes, prefix collisions and sibling records cannot exchange metrics
     assert.equal(verify(current, { ...a, factId: b.factId }).ok, false);
     assert.equal(verify(current, { ...b, subjectId: a.subjectId }).ok, false);
   }
-  assert.match(verify(wbsContext, claimFor(wbsContext.envelope, 'data.nodes.0.subtreeOverdue')).normalized, /“1”/);
+  assert.match(verify(wbsContext, claimFor(wbsContext.envelope, 'data.nodes.0.subtreeOverdue')).normalized, /\*\*1\*\*/);
 });
 
 test('dates and durations retain their canonical fields even when another field has the requested value', () => {
@@ -438,7 +438,7 @@ test('typed values preserve null, false, zero and locale-independent numeric ide
   }
   const claim = claimFor(context.envelope, 'data.task.hours.planned');
   assert.match(verify({ ...context, locale: 'tr' }, claim).normalized, /1,234/);
-  assert.match(verify({ ...context, locale: 'en' }, claim).normalized, /1\\.234/);
+  assert.match(verify({ ...context, locale: 'en' }, claim).normalized, /\*\*1\.234 hours\*\*/);
 });
 
 test('aggregate totals, row totals, returned counts and activity before/after remain distinct', () => {

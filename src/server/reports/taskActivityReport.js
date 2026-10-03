@@ -71,7 +71,7 @@ export const TASK_ACTIVITY_SQL = `
   WHERE a.EntityType = 'TASK' AND a.ActionCode IN ('CREATE', 'UPDATE', 'DELETE')
     AND a.OccurredAt >= @startUtc AND a.OccurredAt < @endUtc
     AND (@projectId IS NULL OR a.ProjectId = @projectId)
-    AND (@taskIdText IS NULL OR a.EntityId = @taskIdText)
+    AND (@taskIdText IS NULL OR a.EntityId IN (@taskIdText, UPPER(@taskIdText)))
     AND (@scope = 'visible' OR (@scope = 'mine' AND a.ActorSicil = @sicil)
       OR (@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil))))
@@ -98,7 +98,6 @@ export const TASK_ACTIVITY_SQL = `
     MAX(CASE WHEN Kind = 'created' THEN 1 ELSE 0 END) AS Created
   INTO #TaskActivityGroups FROM #TaskActivityScope
   WHERE (@person IS NULL OR ActorSicil = @person) AND (@projectId IS NULL OR ProjectId = @projectId)
-    AND (@taskIdText IS NULL OR EntityId = @taskIdText)
     AND (@directorate = '' OR COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__') = @directorate)
     AND (@department = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(Department))) = @department)
     AND (@unit = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(Department)), CHAR(31), LTRIM(RTRIM(Unit))) = @unit)
@@ -154,7 +153,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
       AND (@unit = '' OR CONCAT(COALESCE(NULLIF(LTRIM(RTRIM(pd.Directorate)), ''), '__unassigned__'), CHAR(31), LTRIM(RTRIM(pd.Department)), CHAR(31), LTRIM(RTRIM(pd.Unit))) = @unit)
       AND (@kind = '' OR @kind = ${groupKind})`;
     statement = statement.replace('SELECT a.AuditId', 'SELECT TOP (@activityProbeRows) a.AuditId')
-      .replace("AND (@taskIdText IS NULL OR a.EntityId = @taskIdText)", `AND (@taskIdText IS NULL OR a.EntityId = @taskIdText) ${prefilter}`)
+      .replace('AND (@taskIdText IS NULL OR a.EntityId IN (@taskIdText, UPPER(@taskIdText)))', `AND (@taskIdText IS NULL OR a.EntityId IN (@taskIdText, UPPER(@taskIdText))) ${prefilter}`)
       .replace('SELECT DISTINCT ActorSicil', `IF (SELECT COUNT(*) FROM #TaskActivityScope) >= @activityProbeRows
   BEGIN
     DROP TABLE #TaskActivityScope;
@@ -167,7 +166,9 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
     request.input('activityDetailLimit', sql.Int, 2);
     // Grubun İLK ve SON denetim kaydı kronolojik sırayla okunur: önceki değer
     // gerçek başlangıçtan, sonraki değer gerçek sondan gelir.
-    statement = statement.replace(ACTIVITY_DETAIL_APPLY, EVIDENCE_ACTIVITY_DETAIL_APPLY);
+    statement = statement.replace(ACTIVITY_DETAIL_APPLY, EVIDENCE_ACTIVITY_DETAIL_APPLY)
+      // Kanıt nüfusu görevin GÜNCEL projesiyle yeniden doğrulanır.
+      .replace('t.TaskId AS CurrentTaskId,', 't.TaskId AS CurrentTaskId, t.ProjectId AS CurrentProjectId,');
     statement = statement.replace('DECLARE @lastPage int', `IF @total > @evidenceSnapshotLimit
   BEGIN
     DROP TABLE #TaskActivityGroups, #TaskActivityScope;
@@ -209,6 +210,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
       projectId: canonicalActualId(last.ProjectId), projectName: change.projectName || last.ProjectName || 'Geçmiş proje',
       projectCode: change.projectCode || last.ProjectCode || '', taskId: canonicalActualId(last.EntityId),
       taskTitle: change.title || last.CurrentTitle || 'Geçmiş görev', taskAvailable: Boolean(last.CurrentTaskId),
+      ...(last.CurrentProjectId !== undefined ? { currentProjectId: canonicalActualId(last.CurrentProjectId) } : {}),
       changes: change.changes, ...(includeStructuredChanges ? { structuredChanges: change.structuredChanges } : {}), detailsLimited: Number(last.EventCount) > rows.length || rows.some((row) => row.DetailJsonClipped), kind: last.Deleted ? 'deleted' : last.Created ? 'created' : last.Completed ? 'completed' : 'updated' };
   });
   const summary = counts[0] || {};

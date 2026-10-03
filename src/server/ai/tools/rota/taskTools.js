@@ -1,4 +1,6 @@
 import 'server-only';
+import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
+import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
@@ -190,12 +192,23 @@ const taskSearch = {
     const exactTotal = sorted.length;
     const stableNextCursor = nextCursor;
     const descriptor = searchedScope(scope, filters.projectId);
-    // Metinle ad çözümü: tek kesin başlık eşleşmesi (ya da tek sonuç) görevi
-    // çözer; aksi hâlde adaylar kullanıcıya sorulmadan ayrıntıya açılmaz.
+    // Metinle ad çözümü: yalnızca TEK KESİN başlık eşleşmesi görevi çözer. Tek
+    // kısmi eşleşme ya da birden çok aday kimlik değildir; sunucu, sayfa
+    // sınırından bağımsız olarak sınırlı aday kümesini kullanıcıya sorulmak üzere taşır.
     const needle = filters.text ? foldText(filters.text).trim() : '';
     const exactFacts = needle ? sorted.filter((fact) => foldText(fact.title).trim() === needle) : [];
-    const resolvedFact = !needle ? null : (exactFacts.length === 1 ? exactFacts[0] : (sorted.length === 1 ? sorted[0] : null));
-    const titleResolution = !needle ? null : (resolvedFact ? 'unique' : (sorted.length ? 'ambiguous' : 'none'));
+    const resolvedFact = exactFacts.length === 1 ? exactFacts[0] : null;
+    const titleResolution = !needle ? null : resolvedFact ? 'unique'
+      : exactFacts.length > 1 || sorted.length > 1 ? 'ambiguous' : sorted.length === 1 ? 'partial' : 'none';
+    const candidatePool = titleResolution === 'ambiguous' ? (exactFacts.length > 1 ? exactFacts : sorted) : titleResolution === 'partial' ? sorted : [];
+    const candidates = candidatePool.slice(0, CLARIFICATION_LIMITS.maxCandidates).map((fact) => ({
+      taskId: fact.id,
+      title: dataText(fact.title, 160),
+      project: projectRef(projects.get(fact.projectId), fact.projectId),
+      status: fact.status,
+      statusLabel: statusLabelOf(fact.status),
+      ...(fact.targetFinish ? { targetFinish: fact.targetFinish } : {})
+    }));
     return {
       data: {
         ...(filters.projectId ? { project: projectRef(projects.get(filters.projectId), filters.projectId) } : {}),
@@ -206,7 +219,9 @@ const taskSearch = {
         ...(titleResolution ? {
           titleResolution,
           ...(resolvedFact ? { resolvedTask: { taskId: resolvedFact.id, title: dataText(resolvedFact.title, 160) } } : {}),
-          ...(titleResolution === 'ambiguous' ? { guidance: 'Arama metni tek bir görevi belirlemiyor. Ayrıntı gerekiyorsa kullanıcıya hangi görevi kastettiğini sorun; tahmin etmeyin.' } : {})
+          ...(candidates.length ? { candidates, ...(candidatePool.length > candidates.length ? { candidatesTruncated: true } : {}) } : {}),
+          ...(titleResolution === 'ambiguous' ? { guidance: 'Arama metni tek bir görevi belirlemiyor. Ayrıntı gerekiyorsa {"kind":"clarification","evidence":"<kanıt>"} ile kullanıcıya sorun; adayları sunucu gösterir. Tahmin etmeyin.' } : {}),
+          ...(titleResolution === 'partial' ? { guidance: 'Arama metni yalnızca bir görevin adına kısmen uyuyor; görev kesin olarak belirlenmedi. Ayrıntısı gerekiyorsa {"kind":"clarification","evidence":"<kanıt>"} ile kullanıcıdan onay isteyin.' } : {})
         } : {}),
         sort,
         filters
@@ -436,11 +451,9 @@ const taskAnalytics = {
         hours: hoursCoverage(facts),
         ...(groups ? { groupBy, groups, groupCount } : {}),
         definitions: {
-          overdue: 'Tamamlanmamış ve termini (targetFinish) bugünden önce olan görev.',
-          dueNext7Days: 'Tamamlanmamış ve termini bugün dahil 7 takvim günü içinde olan görev.',
-          completionRatePercent: 'Tamamlanan görev / toplam görev.',
+          ...METRIC_DEFINITIONS.taskTotals,
           today: call.today,
-          ...(groupBy === 'assignee' ? { assignee: 'Yalnızca kimliği görünür sorumlular gruplandırılır; bir görev her görünür sorumlusunda ayrı sayılabilir.' } : {})
+          ...(groupBy === 'assignee' ? { assignee: METRIC_DEFINITIONS.assigneeGrouping } : {})
         }
       },
       scope: descriptor,

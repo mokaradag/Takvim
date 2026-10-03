@@ -19,7 +19,9 @@ import {
   participantScope,
   PERSON_SICIL_PROPERTY,
   requireVisibleProject,
-  searchedScope
+  searchedScope,
+  visibleProjectName,
+  visibleTaskTitle
 } from './rotaToolSupport.js';
 import { isCompleteTaskView, projectAccess } from './rotaScope.js';
 import { decodeCursor, encodeCursor } from './taskFacts.js';
@@ -113,6 +115,9 @@ const activitySearch = {
       page,
       pageSize
     }, call.now, { includeStructuredChanges: true, includeChangeText, maxEvidencePeople: TOOL_LIMITS.maxActivityAssignees, analyzedActivityLimit: TOOL_LIMITS.maxAnalyzedActivities, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+    // Özet sayılar anlık görüntünün bütün hareketlerine dayanır: güncel görevlerin nüfusu kaydedilir.
+    call.notePopulation?.(report.items.filter((item) => item.taskAvailable && item.currentProjectId)
+      .map((item) => ({ taskId: item.taskId, projectId: item.currentProjectId })));
     const textFields = args.textFields || [];
     const items = report.items.slice(page * pageSize, (page + 1) * pageSize).map((item) => {
       const access = item.projectId ? projectAccess(scope, item.projectId) : null;
@@ -141,8 +146,11 @@ const activitySearch = {
     });
     const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
     const detailsLimited = items.some((item) => item.detailsLimited || Number(item.moreChanges || 0) > 0);
+    const selector = await workflowSelector(call, scope, key);
     return {
       data: {
+        // Özet sayılar dönem, kapsam ve seçicilere bağlıdır; hepsi olgunun niteleyicisidir.
+        filters: { dateFrom: report.range.from, dateTo: report.range.to, activityScope: key.scope, ...(key.kind ? { activityKind: key.kind } : {}), ...selector },
         range: report.range,
         scope: report.scope,
         summary: { events: report.total, tasks: report.summary.tasks, people: report.summary.people, completedTasks: report.summary.completed },
@@ -156,24 +164,53 @@ const activitySearch = {
       nextCursor: pageState.nextCursor,
       evidence: {
         label: `Hareket geçmişi · ${report.total} hareket`,
-        entity: key.taskId ? { type: 'task', id: key.taskId, name: items[0]?.task.title || null } : (key.projectId ? { type: 'project', id: key.projectId, name: null } : null),
+        entity: key.taskId ? { type: 'task', id: key.taskId, name: selector.task || null } : (key.projectId ? { type: 'project', id: key.projectId, name: selector.project || null } : null),
         highlights: [`${report.range.from} – ${report.range.to}`, `Görev: ${report.summary.tasks}`, `Kişi: ${report.summary.people}`]
       }
     };
   }
 };
 
+/**
+ * İleti metni yalnızca kullanıcının bu turda açtığı ve modelin veri okunmadan
+ * seçtiği alanlarda aranır: görünmeyen metin arama yoluyla da yoklanamaz.
+ */
+function messageSearchFor(args) {
+  const fields = args.textFields || [];
+  return { requester: fields.includes('requesterMessage'), decision: fields.includes('decisionMessage') };
+}
+
+/** Talep sayaçlarının dayandığı görevler (anlık görüntünün tamamı, güncel projeyle). */
+function workflowPopulation(items) {
+  return items.filter((item) => item.taskAvailable && item.taskId).map((item) => ({ taskId: item.taskId, projectId: item.currentProjectId ?? null }));
+}
+
 /* ── rota_schedule_requests ───────────────────────────────── */
 
 const SCHEDULE_STATUSES = Object.freeze(['PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'STALE']);
 
+/**
+ * Proje, görev ve kişi seçicilerinin kullanıcıya gösterilen adları. Kimlikler
+ * olgu metnine yazılmaz; ad okunamazsa seçici "seçilen" olarak belirtilir.
+ */
+async function workflowSelector(call, scope, key) {
+  const [project, task] = await Promise.all([
+    key.projectId ? visibleProjectName(call, scope, key.projectId) : null,
+    key.taskId ? visibleTaskTitle(call, scope, key.taskId) : null
+  ]);
+  return {
+    ...(key.projectId ? { projectId: key.projectId, project: project || 'Seçilen proje' } : {}),
+    ...(key.taskId ? { taskId: key.taskId, task: task || 'Seçilen görev' } : {}),
+    ...(key.personSicil != null ? { personSicil: key.personSicil } : {})
+  };
+}
+
 /** Talep sayımlarının nüfusunu belirleyen süzgeçler (sekme dahil); kanıt olgusunun niteleyicisidir. */
-function workflowFilters(key) {
+function workflowFilters(key, selector) {
   return {
     tab: key.tab,
     ...(key.status ? { workflowStatus: key.status } : {}),
-    ...(key.projectId ? { requestProjectId: key.projectId } : {}),
-    ...(key.taskId ? { requestTaskId: key.taskId } : {}),
+    ...selector,
     ...(key.dateFrom ? { dateFrom: key.dateFrom } : {}),
     ...(key.dateTo ? { dateTo: key.dateTo } : {}),
     ...(key.text ? { text: key.text } : {})
@@ -221,10 +258,12 @@ const scheduleRequests = {
       dateFrom: args.dateFrom || null, dateTo: args.dateTo || null, text: args.text || '', pageSize };
     const page = pageOf('rota_schedule_requests', key, args.cursor, pageSize);
     const { auth } = await call.authorization();
-    const result = await call.snapshot(JSON.stringify(['rota_schedule_requests', key]), args.cursor, () => call.sql((executor) => readSchedulePage(executor, auth, {
+    const messageSearch = messageSearchFor(args);
+    const result = await call.snapshot(JSON.stringify(['rota_schedule_requests', key, messageSearch]), args.cursor, () => call.sql((executor) => readSchedulePage(executor, auth, {
       tab: key.tab, status: key.status, projectId: key.projectId, taskId: key.taskId, from: key.dateFrom, to: key.dateTo,
       search: key.text, page: 0, pageSize
-    }, { evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+    }, { evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset, messageSearch })));
+    call.notePopulation?.(workflowPopulation(result.items));
     const items = result.items.slice(page * pageSize, (page + 1) * pageSize).map((request) => {
       const awaiting = request.status === 'PENDING' && request.isDecisionOwner && request.taskAvailable;
       return {
@@ -245,8 +284,10 @@ const scheduleRequests = {
       };
     });
     const pageState = pageWindow('rota_schedule_requests', key, page, pageSize, result.total);
+    const { scope } = await call.authorization();
+    const selector = await workflowSelector(call, scope, key);
     return {
-      data: { countsScope: 'selected-tab', counts: { awaitingYourDecision: result.counts.pending, sent: result.counts.sent, history: result.counts.history }, tab: key.tab, filters: workflowFilters(key), items },
+      data: { countsScope: 'selected-tab', counts: { awaitingYourDecision: result.counts.pending, sent: result.counts.sent, history: result.counts.history }, tab: key.tab, filters: workflowFilters(key, selector), items },
       scope: participantScope('Yalnızca talep eden ya da karar sahibi olduğunuz talepler.'),
       complete: pageState.complete,
       truncated: pageState.truncated,
@@ -293,16 +334,18 @@ const assignmentRequests = {
       dateFrom: args.dateFrom || null, dateTo: args.dateTo || null, text: args.text || '', pageSize };
     const page = pageOf('rota_assignment_requests', key, args.cursor, pageSize);
     const { auth } = await call.authorization();
+    const messageSearch = messageSearchFor(args);
     let result;
     try {
-      result = await call.snapshot(JSON.stringify(['rota_assignment_requests', key]), args.cursor, () => call.sql((executor) => readCoordinationPage(executor, auth, {
+      result = await call.snapshot(JSON.stringify(['rota_assignment_requests', key, messageSearch]), args.cursor, () => call.sql((executor) => readCoordinationPage(executor, auth, {
         tab: key.tab, status: key.status, projectId: key.projectId, taskId: key.taskId, from: key.dateFrom, to: key.dateTo,
         search: key.text, page, pageSize
-      }, { decisionAuthority: true, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset })));
+      }, { decisionAuthority: true, evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset, messageSearch })));
     } catch (error) {
       if (isMissingNotificationInboxSchema(error)) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED, { message: 'Atama koordinasyonu bu kurulumda etkin değil.' });
       throw error;
     }
+    call.notePopulation?.(workflowPopulation(result.items));
     const items = result.items.slice(page * pageSize, (page + 1) * pageSize).map((record) => ({
       coordinationId: record.id,
       mode: record.mode,
@@ -325,11 +368,13 @@ const assignmentRequests = {
       ...(record.decidedAt ? { decidedAt: record.decidedAt } : {})
     }));
     const pageState = pageWindow('rota_assignment_requests', key, page, pageSize, result.total);
+    const { scope } = await call.authorization();
+    const selector = await workflowSelector(call, scope, key);
     return {
       data: {
         countsScope: 'selected-tab', counts: { actionRequired: result.counts.pending, sent: result.counts.sent, history: result.counts.history },
         tab: key.tab,
-        filters: workflowFilters(key),
+        filters: workflowFilters(key, selector),
         items,
         note: 'Talep edilen sorumlu onaylanana kadar görevin sorumlusu değildir; iş yükü ve raporlar yalnızca gerçek sorumluyu sayar.'
       },
@@ -375,11 +420,16 @@ const notifications = {
       }
       return [scheduleInbox, combined];
     });
+    // Sayaçlar önizlemede listelenmeyen kayıtlara da dayanır: sayılan bütün görevler kaydedilir.
+    call.notePopulation?.([...(schedule.population || []), ...(inbox?.coordination.population || []), ...(inbox?.taskEvents.population || [])]
+      .map(({ taskId, projectId }) => ({ taskId, projectId })));
     const scheduleItems = schedule.items.map((request) => ({
       source: 'schedule-request',
       ...(request.taskAvailable ? { taskId: request.taskId } : {}),
       title: dataText(request.taskTitle, 160),
       project: dataText(request.projectName, 160),
+      // Kanonik durum iddia edilebilir; gösterim etiketi sunucuda yerelleştirilir.
+      status: request.status,
       statusLabel: SCHEDULE_STATUS_LABELS[request.status] || request.status,
       actionRequired: request.status === 'PENDING' && request.isDecisionOwner && request.taskAvailable,
       unread: request.unread,
@@ -390,6 +440,7 @@ const notifications = {
       ...(record.taskAvailable ? { taskId: record.taskId } : {}),
       title: dataText(record.taskTitle, 160),
       project: dataText(record.projectName, 160),
+      status: record.status,
       statusLabel: COORDINATION_STATUS_LABELS[record.status] || record.status,
       requestedAssignee: dataText(record.assigneeName, 120),
       actionRequired: record.actionable,

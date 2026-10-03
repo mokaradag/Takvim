@@ -296,7 +296,7 @@ ana makine/şema bilgisini iletmemesiydi; `Host`, `X-Forwarded-Host` ve
 
 ### Rota AI (Aşama 2)
 
-Üst çubuktaki **Rota AI** düğmesi (ya da Ctrl K → *Rota AI'ye sor*) uygulamanın her yerinden açılan yardımcı paneli getirir. Yanıtlar kurum içi modelden sunucu üzerinden tarayıcıya **akarak** gelir; **Durdur**, yeniden deneme, *Standart* ve *Derin düşünme* kipleri, kopyalama ve güvenli biçimli (Markdown) yanıt desteklenir. Konuşmalar Sicil'e aittir ve kalıcıdır (`MR_AiConversations`, `MR_AiConversationMessages`, göç `0017`); başka bir kullanıcı ne listeleyebilir ne açabilir. Rota AI bu aşamada Rota verisine erişmez ve işlem yapmaz; Demo Kipinde istek göndermez. Her istek Aşama 1'in aynı ağ geçidi, anahtar, kapasite ve süre sınırı kurallarıyla yürür. Ters vekilde akışın ara belleğe alınmaması ve özgün ana makine/şemanın iletilmesi gerekir (`docs/NGINX-ROTA-PREFIX.md`). Mimari, akış protokolü, kalıcılık, iptal ve yeniden deneme kuralları ile elle kabul listesi: `docs/AI-PLATFORM.md` §18.
+Üst çubuktaki **Bilgin** düğmesi (ya da Ctrl K → *Bilgin’e sor*) uygulamanın her yerinden açılan yardımcı paneli getirir; yardımcının arayüzdeki adı Bilgin'dir, yapılandırma ve kod adları (`MERGEN_ROTA_AI_*`, Rota AI) değişmez. `MERGEN_ROTA_AI_ENABLED` açık değilse düğme, panel ve komut paleti girdisi hiç gösterilmez (değer her sayfa isteğinde sunucu ortamından okunur; `next start` ile çalışan sunucuda `.env.local` değişikliği yeniden başlatmayla geçerli olur). Yanıtlar kurum içi modelden sunucu üzerinden tarayıcıya **akarak** gelir; **Durdur**, yeniden deneme, *Standart* ve *Derin düşünme* kipleri, kopyalama ve güvenli biçimli (Markdown) yanıt desteklenir. Konuşmalar Sicil'e aittir ve kalıcıdır (`MR_AiConversations`, `MR_AiConversationMessages`, göç `0017`); başka bir kullanıcı ne listeleyebilir ne açabilir. Rota AI bu aşamada Rota verisine erişmez ve işlem yapmaz; Demo Kipinde istek göndermez. Her istek Aşama 1'in aynı ağ geçidi, anahtar, kapasite ve süre sınırı kurallarıyla yürür. Ters vekilde akışın ara belleğe alınmaması ve özgün ana makine/şemanın iletilmesi gerekir (`docs/NGINX-ROTA-PREFIX.md`). Mimari, akış protokolü, kalıcılık, iptal ve yeniden deneme kuralları ile elle kabul listesi: `docs/AI-PLATFORM.md` §18.
 
 **Aşama 2 gerçek TEST ortamı kabulü (29.09.2026):** PR #92 birleştirildikten sonra
 Rota AI, gerçek TEST ortamında kullanıcı kabul sınamalarından geçti. Gerçek
@@ -319,9 +319,13 @@ projeler, iş dağılım ağacı, iş yükü, hareketler, talepler, bildirimler,
 bağımlılıklar, tekrar serileri, takvim, Outlook durumu ve plan veri kalitesi
 hakkındaki soruları sunucunun **19 salt okunur alan aracıyla**, kullanıcının
 kendi yetkisi içinde yanıtlar. Genel bir SQL aracı yoktur; model SQL üretemez,
-kimlik ya da yetki bilgisi veremez. Rota verisine dayanan her ifade `【R1】`
-biçiminde kanıta atıf yapar ve sunucu atıfları belirlenimci olarak doğrular;
-doğrulanamayan yanıt yerine sabit güvenli ileti gösterilir. Yanıtın altında
+kimlik ya da yetki bilgisi veremez. Model yalnızca kanıttaki olguları seçer;
+değerleri sunucu kendi yetkili verisinden okur, doğrular ve paragraf, liste ya
+da tablo olarak çizer; Rota verisine dayanan her ifade `【R1】` biçiminde kanıta
+atıf yapar. Standart kipte kurtarılabilir bir model hatası aynı kanıtla bir kez
+*Derin düşünme*ye devredilir; doğrulanamayan yanıt yerine sabit güvenli ileti
+gösterilir. Kayıtlı açıklama ve ileti metinleri yalnızca kullanıcı o iletide
+**Notlar ve iletiler** anahtarını açtıysa okunur. Yanıtın altında
 "N Rota kaynağı · Veri zamanı" paneli bulunur; atıf yapılan kanıtlar yanıtla
 birlikte kaydedilir (`MR_AiMessageEvidence`, göç `0018`). Kısmi yetkide sayılar
 yalnızca görülebilen kayıtları kapsar ve yanıt bunu belirtir. Kaynak seçimi **Rota verisi** (varsayılan) ve **Genel sohbet** olarak açıktır;

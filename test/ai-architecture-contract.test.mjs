@@ -148,12 +148,20 @@ test('olağan Rota akışı yapay zekâ alt sistemine bağımlı değildir', () 
   // (anlık görüntü, kayıt, görev, rapor) yapay zekâya bağlanmaz. Telemetri turu
   // yalnızca yük ölçümünü örnekler.
   assert.deepEqual(importers.sort(), [
+    'src/app/layout.js',
     'src/components/shell/AppShell.jsx',
     'src/features/settings/SettingsView.jsx',
     'src/server/observability/healthProbes.js',
     'src/server/observability/integrationsService.js',
     'src/server/observability/telemetryWorker.js'
   ]);
+  // Kök yerleşim yalnızca açık/kapalı bilgisini sayfaya yazar; başka yapılandırma değeri taşımaz.
+  const layoutAiImports = importsOf(path.join(ROOT, 'src/app/layout.js')).filter(({ target }) => target && isAiPath(target));
+  assert.deepEqual(layoutAiImports.map(({ clause, target }) => `${clause.replace(/\s+/g, ' ')} ← ${target}`), [
+    '{ ASSISTANT_AVAILABILITY_META } ← src/domain/ai/assistantContract.js',
+    '{ readAiConfig } ← src/server/ai/aiConfig.js'
+  ]);
+  assert.deepEqual([...code(read('src/app/layout.js')).matchAll(/readAiConfig\(\)[.\w]*/g)].map((match) => match[0]), ['readAiConfig().enabled']);
   // Kabuk yardımcıyı YALNIZCA bileşen sınırından bağlar (istemci, denetleyici ya da sunucu modülü değil).
   const shellAiImports = importsOf(path.join(ROOT, 'src/components/shell/AppShell.jsx')).filter(({ target }) => target && isAiPath(target));
   assert.deepEqual(shellAiImports.map(({ target }) => target), ['src/features/ai/assistant/RotaAssistant.jsx']);
@@ -639,6 +647,17 @@ test('yardımcı panel katman sözleşmesine bağlıdır ve ölçekli görünüm
   const { ASSISTANT_SHEET_QUERY } = await import('../src/features/ai/assistant/assistantInteraction.js');
   assert.ok(css.includes(`@media ${ASSISTANT_SHEET_QUERY} {`), 'dar ekran sorgusu bileşenle ortaktır');
   assert.match(read('src/app/layout.js'), /^import '\.\/styles\/assistant\.css';$/m);
+  // Kanıtlı yanıtlar için genişlik: masaüstünde 460–600 px, geniş ekranda en fazla 680 px; çalışma alanına en az 96 px kalır.
+  assert.match(css, /--assistant-w: min\(600px, max\(460px, calc\(var\(--app-viewport-w, 100vw\) \* \.42\)\)\);/);
+  assert.match(css, /@media \(min-width: 1600px\) \{\s*\.rota-assistant \{ --assistant-w: min\(680px, /);
+  assert.match(css, /width: min\(var\(--assistant-w\), calc\(var\(--app-viewport-w, 100vw\) - 96px\)\);/);
+  // Gönder ve Durdur aynı boyutta, aynı sabit yuvadadır: değişim öteki denetimleri kaydırmaz.
+  assert.match(css, /\.rota-assistant-composer-action \{ flex: 0 0 32px; display: inline-grid; width: 32px; height: 32px; \}/);
+  assert.match(css, /\.rota-assistant-send,\n\.rota-assistant-stop \{[^}]*width: 100%;[^}]*height: 100%;/);
+  // Araç çubuğu tek satırdır ve sarmaz; dar kutuda etiketler kapsayıcı sorgusuyla kısalır.
+  assert.match(css, /\.rota-assistant-toolbar \{ display: flex; align-items: center; gap: 6px; min-width: 0;/);
+  assert.doesNotMatch(css, /\.rota-assistant-(?:toolbar|composer-box|composer) \{[^}]*flex-wrap/);
+  assert.match(css, /container: rota-composer \/ inline-size;/);
   // Panelin üst konumu üst çubuğun yüksekliğidir.
   const topbarHeight = read('src/app/styles/shell.css').match(/\.topbar \{\s*height: (\d+px);/)[1];
   assert.match(css, new RegExp(`--assistant-top: ${topbarHeight};`));

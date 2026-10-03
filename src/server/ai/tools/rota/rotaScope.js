@@ -19,8 +19,10 @@ import { ACCESS_REASONS } from '../../../authorization/authorization.js';
  *    kapsamındaki çalışanın sorumlu olduğu görevler.
  *
  * Proje belirteci `<kimlik>:<F|P><READ 0|1><kendi görev kapsamı 0|1>`
- * biçimindedir; sistem yöneticisinde liste boştur ve SQL `@isAdmin` ile bütün
- * etkin projeleri FULL kabul eder.
+ * biçimindedir; sistem yöneticisinde SQL belirteç listesi boştur ve SQL
+ * `@isAdmin` ile bütün etkin projeleri FULL kabul eder. Kapsamın proje kümesi
+ * (`projects`) ise yöneticide de bütün etkin projeleri içerir: proje kapıları
+ * ve yetki dönemi bu kümeye dayanır.
  */
 
 export const SCOPE_KINDS = Object.freeze({
@@ -66,6 +68,15 @@ export function buildRotaScope(auth) {
   for (const [rawId, entry] of auth?.effective?.access || []) {
     const projectId = canonicalActualId(rawId);
     if (projectId) projects.set(projectId, projectEntry(projectId, entry));
+  }
+  // Yöneticinin etkin proje kümesi proje kapılarının ve yetki döneminin parçasıdır.
+  if (isAdmin) {
+    for (const rawId of auth?.effective?.fullProjectIds || []) {
+      const projectId = canonicalActualId(rawId);
+      if (projectId && !projects.has(projectId)) {
+        projects.set(projectId, projectEntry(projectId, { accessLevel: 'FULL', reasons: [ACCESS_REASONS.SYSTEM_ADMIN] }));
+      }
+    }
   }
   const tokens = [];
   if (!isAdmin) {

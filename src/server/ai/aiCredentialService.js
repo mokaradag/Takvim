@@ -129,13 +129,14 @@ async function requireDirectoryMember(executor, sicil) {
 
 /**
  * Sohbet ve doğrulama istekleri kapasite kirasından ÖNCE rehber üyeliğini
- * denetler. Bu denetim uygulamanın ortak SQL havuzunu kullandığı için
- * eşzamanlılığı sınırlıdır: en fazla iki sorgu aynı anda çalışır, sıra 64 ile
- * sınırlıdır ve dolunca istek beklemeden `AI_BUSY` alır. Tek bir Sicil aynı
- * anda bir sorgu çalıştırır ve sırada en fazla sekiz isteği bekler: sırayı tek
- * başına doldurup ötekileri geri çevirtemez. Böylece bir yapay zekâ isteği
- * yığını, kapasite denetimine ulaşmadan olağan anlık görüntü ve kayıt
- * işlerinin SQL bağlantılarını tüketemez.
+ * denetler; kabul edilen isteğin çalışma zamanı anahtar okuması, doğrulama
+ * sonucunun yazımı ve şema yoklaması da AYNI ön denetim kapısından geçer
+ * (iç içe değil, sırayla). Bu işler uygulamanın ortak SQL havuzunu kullandığı
+ * için eşzamanlılığı sınırlıdır: en fazla iki sorgu aynı anda çalışır, sıra 64
+ * ile sınırlıdır ve dolunca istek beklemeden `AI_BUSY` alır. Tek bir Sicil aynı
+ * anda bir sorgu çalıştırır ve sırada en fazla sekiz isteği bekler. Böylece
+ * bir yapay zekâ isteği yığını olağan anlık görüntü ve kayıt işlerinin SQL
+ * bağlantılarını tüketemez; kapıların toplamı ortak bütçeyi aşamaz (bkz. aiSqlGate).
  */
 const directoryGate = createAiSqlGate({
   name: 'directory',
@@ -160,22 +161,8 @@ const credentialGate = createAiSqlGate({
   saturation: 'credential'
 });
 
-/**
- * Çalışma zamanı anahtar okuması (her sohbet/araç isteğinde), doğrulama
- * sonucunun yazımı ve şema yoklaması da ortak havuza kendi sınırlı kapısından
- * gider: kabul edilen yapay zekâ istekleri aynı anda en fazla iki anahtar
- * sorgusu çalıştırır; yavaş bir veritabanında olağan Rota trafiğinin
- * bağlantılarını tüketemez. Ayarlar kartının kapısından ayrıdır: kart
- * işlemleri sohbet isteklerinin önünü tıkamaz.
- */
-const runtimeCredentialGate = createAiSqlGate({
-  name: 'credential-runtime',
-  slots: 2,
-  queue: 64,
-  perUserActive: 1,
-  perUserQueued: 8,
-  saturation: 'credential'
-});
+/** Çalışma zamanı anahtar işleri ön denetim kapısını paylaşır: ayrı bir bağlantı bütçesi açmaz. */
+const runtimeCredentialGate = directoryGate;
 
 /**
  * Kapıdan geçen SQL işi. Havuz kapıya girmeden (yer tutmadan ve sinyali
@@ -202,12 +189,11 @@ export async function assertAiDirectoryMember(sicil, { signal = null } = {}) {
 export function resetAiDirectoryGateForTests() {
   directoryGate.resetForTests();
   credentialGate.resetForTests();
-  runtimeCredentialGate.resetForTests();
 }
 
 /** Yalnızca testler: kapıların doluluğu (etkin, sıradaki, kullanıcı sayısı). */
 export function aiSqlGateStatusForTests() {
-  return { directory: directoryGate.status(), credential: credentialGate.status(), runtimeCredential: runtimeCredentialGate.status() };
+  return { directory: directoryGate.status(), credential: credentialGate.status() };
 }
 
 /* ── Durum künyesi ───────────────────────────────────────────── */

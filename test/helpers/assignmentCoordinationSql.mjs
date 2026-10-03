@@ -250,10 +250,14 @@ function coordinationInbox(db, params) {
     .sort(coordinationOrder(db, params))
     .slice(0, limit)
     .map((row) => coordinationRow(db, row, params));
-  if (params.evidenceSnapshotLimit != null && owned.filter((row) => isVisible(db, row, params)).length > params.evidenceSnapshotLimit) {
-    counts.UnreadCount = null; counts.PendingCount = null; counts.CountsComplete = 0;
-  }
-  return [[counts], items];
+  if (params.evidenceSnapshotLimit == null) return [[counts], items];
+  // Kanıt kipi: her sayaç kendi nüfusunu ayrı ve sınırlı yoklar; sayılan görevler döner.
+  const bound = params.evidenceSnapshotLimit;
+  const unread = owned.filter((row) => isUnread(db, row, sicil) && isVisible(db, row, params)).slice(0, bound + 1);
+  const pending = owned.filter((row) => actionable(db, row, params)).slice(0, bound + 1);
+  const counted = (list, flags) => (list.length > bound ? [] : list.map((row) => ({ TaskId: row.TaskId, CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null, ...flags })));
+  return [[{ UnreadCount: unread.length > bound ? null : unread.length, PendingCount: pending.length > bound ? null : pending.length }], items,
+    [...counted(unread, { CountsUnread: 1, CountsPending: 0 }), ...counted(pending, { CountsUnread: 0, CountsPending: 1 })]];
 }
 
 function taskNotificationInbox(db, params) {
@@ -268,10 +272,11 @@ function taskNotificationInbox(db, params) {
     .filter((row) => !row.DismissedAt)
     .sort((left, right) => (Date.parse(right.OccurredAt) || 0) - (Date.parse(left.OccurredAt) || 0))
     .slice(0, limit);
-  if (params.evidenceSnapshotLimit != null && owned.filter((row) => !row.DismissedAt).length > params.evidenceSnapshotLimit) {
-    counts.UnreadCount = null; counts.CountsComplete = 0;
-  }
-  return [[counts], items];
+  if (params.evidenceSnapshotLimit == null) return [[counts], items];
+  const bound = params.evidenceSnapshotLimit;
+  const unread = owned.filter((row) => row.IsUnread === 1 && !row.DismissedAt).slice(0, bound + 1);
+  return [[{ UnreadCount: unread.length > bound ? null : unread.length }], items,
+    unread.length > bound ? [] : unread.map((row) => ({ TaskId: row.TaskId, CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null, CountsUnread: 1, CountsPending: 0 }))];
 }
 
 function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
@@ -302,8 +307,11 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
       || String(row.RequestedAssigneeSicil) === String(params.assignee))) return false;
     if (params.organization && !contains(row.AssigneeOrgSnapshot, params.organization)) return false;
     if (params.search) {
-      const haystack = [view.TaskTitle, view.ProjectName, view.ProjectCode, view.RequesterName,
-        view.AssigneeName, row.RequesterMessage].filter(Boolean).join(' ');
+      const haystack = (params.evidenceSnapshotLimit == null
+        ? [view.TaskTitle, view.ProjectName, view.ProjectCode, view.RequesterName, view.AssigneeName, row.RequesterMessage]
+        : [view.TaskTitle, view.ProjectName, view.ProjectCode, view.RequesterName, view.AssigneeName, view.SuggestedAssigneeName,
+          view.DecisionByName, params.searchRequesterMessage ? row.RequesterMessage : '', params.searchDecisionMessage ? row.DecisionMessage : ''])
+        .filter(Boolean).join(' ');
       if (!contains(haystack, params.search)) return false;
     }
     return true;
@@ -340,7 +348,7 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
       return String(right.CoordinationId).localeCompare(String(left.CoordinationId));
     })
     .slice(page * pageSize, page * pageSize + pageSize)
-    .map(pageRow);
+    .map((row) => (params.evidenceSnapshotLimit == null ? pageRow(row) : { ...pageRow(row), CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null }));
   return [[counts], [{ Total: tabbed.length, Page: page }], items];
 }
 

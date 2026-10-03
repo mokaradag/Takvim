@@ -510,7 +510,7 @@ export default function AppShell() {
           onNavigate={navigate}
           onOpenTask={openTask}
           onSetTheme={(theme) => setTweak('theme', theme)}
-          onOpenAssistant={async () => { await closeTask(); assistant.openPanel(); }}
+          onOpenAssistant={assistant.enabled ? async () => { await closeTask(); assistant.openPanel(); } : null}
           tasks={tasks}
         />
       )}

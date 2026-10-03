@@ -1126,7 +1126,7 @@ test('şifreli kaydı bozulmuş anahtar okunabilir ve doğrulanmış gösterilme
   assert.equal(provider.calls.length, 0);
 });
 
-test('runtime key reads of admitted AI requests pass through their own bounded SQL gate', async (t) => {
+test('runtime key reads of admitted AI requests share the bounded preflight SQL gate', async (t) => {
   const { db } = createAiStack(t);
   const { readAiConfig } = await import('../src/server/ai/aiConfig.js');
   const config = readAiConfig();
@@ -1138,9 +1138,9 @@ test('runtime key reads of admitted AI requests pass through their own bounded S
   await waitFor(() => db.queryBarrier.entered === 2);
   for (let round = 0; round < 20; round += 1) await new Promise((resolve) => setImmediate(resolve));
   assert.equal(db.queryBarrier.entered, 2, 'at most two runtime key reads hold shared pool connections');
-  assert.deepEqual(credentialService.aiSqlGateStatusForTests().runtimeCredential, { active: 2, queued: 2, users: 2 });
+  assert.deepEqual(credentialService.aiSqlGateStatusForTests().directory, { active: 2, queued: 2, users: 2 });
   db.queryBarrier = null;
   release();
   await Promise.all(pending);
-  assert.deepEqual(credentialService.aiSqlGateStatusForTests().runtimeCredential, { active: 0, queued: 0, users: 0 });
+  assert.deepEqual(credentialService.aiSqlGateStatusForTests().directory, { active: 0, queued: 0, users: 0 });
 });

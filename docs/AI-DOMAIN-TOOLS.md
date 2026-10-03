@@ -192,6 +192,20 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
   grup, "diğer" kovası) sızmaz. Sonuç `scope.kind = authorized-task-subset`
   taşır; kısmi kapsamlı kanıta atıf yapan her yanıta sunucu sabit kapsam
   notunu ekler (§6.4).
+- **Sistem yöneticisi.** Yönetici bayrağı taşıyan kullanıcının etkin erişimi,
+  yetki bağlamındaki her etkin proje için `FULL` ve `SYSTEM_ADMIN` gerekçesidir;
+  araç kapsamı (`buildRotaScope`), proje künyesi ve kanıtın son yetki denetimi
+  aynı türetilmiş erişimi kullanır.
+- **Toplu nüfus.** Sayı, oran, dağılım ve grup gibi toplu olgular yalnızca
+  onları oluşturan görevlerin **tamamı** kullanıcının güncel yetkisiyle
+  görülebiliyorsa açıklanır. Araç saydığı görev nüfusunu kanıta bağlar; son
+  çizimden önce ve kayıtlı yanıt yeniden açılırken yalnızca yükte listelenen
+  satırlar değil, nüfusun tamamı analiz sınırı büyüklüğündeki parçalarla (en
+  fazla 8 parça; fazlası `RESULT_TOO_LARGE` ve yanıt `unavailable`) yeniden
+  doğrulanır. Nüfus kalıcı kanıtta proje başına sıkıştırılmış görev
+  kimlikleriyle saklanır; 32 000 karakterlik kayda sığmazsa kanıt kalıcı olarak
+  "doğrulanamaz" işaretlenir: bu turda doğrulanan yanıt gösterilir, sonraki
+  açılışlarda metin sabit bir açıklamayla gizlenir.
 
 ---
 
@@ -253,7 +267,25 @@ satır sayısı yeniden hesaplanır, imleç kapatılır ve eski vurgular kaldır
 Doğal dildeki soruyu yorumlamak, araç seçmek ve ilgili alanları seçmek modelin
 işidir. Güvenlik katmanı Türkçe/İngilizce cümleleri, olumsuzlukları veya tarih
 ifadelerini anlamaya çalışmaz. Model kanıtlı yanıtı serbest düzyazı yerine
-kapalı bir JSON sözleşmesiyle verir:
+kapalı bir JSON sözleşmesiyle, yalnızca **olgu seçerek** verir:
+
+```json
+{"kind":"rota","facts":["R1:data.visibleTasks.total","R1:data.tasks.*.title"],"layout":"auto"}
+```
+
+Her başvuru `R<n>:` önekiyle bu turdaki bir kanıta ve onun `claimable`
+sözleşmesindeki kanonik yola bağlanır; `*` bir dizideki bütün satırları seçer
+(yürüyüş sınırı içinde). Model değer, kimlik, özne ya da cümle kopyalamaz:
+değeri, türü, özneyi, birimi, süzgeci, tanımı ve veri zamanını sunucu kendi
+yetkili kanıt yükünden okur. Sözleşmede olmayan, başka turun ya da uydurulmuş
+bir başvuru doğrulanmaz ve yanıt çizilmez. `layout` (`auto`, `prose`, `list`,
+`table`) yalnızca sunumu seçer. Bu biçim, daha az yetenekli bir araç modelinin
+sık sorulara (sayı, liste, proje özeti, iş yükü) düzeltme turu gerektirmeden
+doğrulanmış yanıt verebilmesi için modelden istenen işi azaltır; doğrulama
+zayıflamaz.
+
+Eski yapılandırılmış iddia biçimi uyumluluk için kabul edilir ve aynı birebir
+eşitlik kurallarıyla doğrulanır:
 
 ```json
 {"kind":"rota","claims":[{"evidenceId":"R1","factId":"0123456789abcdef_R1:data.task.status","subjectId":"data.task","field":"data.task.status","operator":"eq","value":"in_progress"}]}
@@ -269,9 +301,19 @@ değerin birebir eşitliğini denetler. Yalnızca `eq` desteklenir; `null`, say�
 boole ve metin birbirine dönüştürülmez. Başka kaydın aynı değeri, termin yerine
 başlangıç tarihi veya planlanan süre yerine kalan süre kanıt sayılamaz.
 
-Doğrulanmış olguların Türkçe/İngilizce alan etiketi, değeri ve `【R1】` atfı
-sunucuda çizilir. Serbest model önsözü/sonucu veya başlık bulmaya dayalı bir
-nitel iddia gösterilmez. Veri metnindeki Markdown, bağlantı, denetim ve atıf
+**Doğrulanmış anlatım.** Seçilen olgular sunucuya ait şablonlarla Türkçe ya da
+İngilizce metne çevrilir: özet sorular paragraf olur ("**Radar Modernizasyonu**
+projesinde toplam **8** görev bulunuyor. Bunların **6**'sı açık, **2**'si
+tamamlanmış ve **2**'si gecikmiş; tamamlanma oranı **%25**."), açıkça liste
+istenen ya da doğası gereği listelenen satırlar madde listesi, en az üç
+satırlı karşılaştırmalar (üç sütun ya da iki sayısal sütun) ve açık tablo
+istekleri tablo olur; sayı sütunları sağa yaslanır. Önemli değerler kalın,
+sunucunun kapsam notu eğik yazılır ve arayüzde yanıttan ikincil görünür; atıf
+ilgili cümleye ya da kaynak satırına bağlı kalır. Sayılar kendi nüfusunu tanımlayan niteleyicilerle
+(proje, kişi, dönem, süzgeç; kimlik değil ad) yazılır, sınırı aşan sayı kesin
+sayı gibi sunulmaz. Şablon yalnızca seçilen olguları yerleştirir; olgular
+arasında ilişki ya da neden-sonuç kurmaz ve emoji kullanmaz. Serbest model
+önsözü/sonucu veya başlık bulmaya dayalı bir nitel iddia gösterilmez. Veri metnindeki Markdown, bağlantı, denetim ve atıf
 işaretleri nötrlenir. Atıf yardımcıları kayıtlı yanıtların ortak sunum
 sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcısı değildir.
 İkinci bir model güvenlik hakemi olarak kullanılmaz.
@@ -281,11 +323,11 @@ sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcıs
 | Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general"}` / `rota` bildirir veya ilk araçları seçer. Rota bildirimi isteğe bağlı `window` (`period`/`dateFrom`/`dateTo`) taşıyabilir; kimlik çözümünden sonraki hareket/takvim penceresi yalnızca bu bildirilen ya da varsayılan pencere içinde kalabilir |
 | Genel önerisi | Modelin ayrı rota ya da doğrudan `general` önerisi veri kipinde kanıt denetimini kapatmaz. Serbest metin gösterilmez; sunucu Genel sohbet seçimini isteyen güvenli açıklama verir. Kullanıcının `source: general` seçimi ayrı, veri okumayan akış ve `general` bitişidir. |
 | Rota | Araç çağrısı yönlendirmeyi `rota` yapar; geçerli iddialar sunucuda çizilir |
-| Aday seçimi | Aynı belirsiz arama sonucundan (proje, kişi ya da başlıkla görev çözümü) en az **iki farklı** adaya bağlı doğrulanmış iddialar + `kind: clarification`. Sunucu her adayı tek numaralı satırda çizer; kaydedilen sıra numarası kullanıcının gördüğü numaradır ve soruyu sunucu ekler |
+| Aday seçimi | Kimlik yalnızca kesin eşleşmedir: tek Sicil ya da tam ad / tam başlık. Belirsiz ya da yalnızca kısmi bir arama (proje, kişi, başlıkla görev) sunucunun tuttuğu en fazla 10 adayı döndürür. Model yalnızca `{"kind":"clarification","evidence":"R1"}` bildirir; adayların tamamını, sırasını ve soruyu sunucu çizer ve aday kimliklerini yanıtla birlikte (`clarificationContext`) saklar. Sonraki turda kullanıcının "2", "#2", "ikincisi", "sonuncusu" gibi seçimi sunucuda o adayın kimliğine bağlanır; seçilmeyen adaylar o turda kimlik olamaz, ad eşleşmesi yetki kanıtı değildir |
 | Genel sohbete yönlendirme | Modelin `general` önerisi `general_redirect` sonucu olarak ayrı sayılır (bitiş `clarification`); aday seçimi sayacına karışmaz |
 | Bulunamadı | Hiç başarılı kanıt yok ve son araç kümesinin hataları yalnızca `NOT_FOUND` ise `kind: not_found` / güvenli eski ileti; sabit, varlık/yetki ayrımı yapmayan yanıt ve `not_found` bitişi |
 | Veri hizmeti kullanılamıyor | Kullanılabilir kanıt yokken `kind: unavailable`; sabit hizmet iletisi, ayrı sonuç sayacı |
-| Gerçek doğrulama hatası | Tek düzeltme de geçmezse `grounding_failed`; kanıt kaydedilmez |
+| Gerçek doğrulama hatası | Tek düzeltme de geçmezse ve devir (§7.1) yoksa ya da o da doğrulanamazsa `grounding_failed`; kanıt kaydedilmez |
 | İptal | Ağ geçidi/istemci sinyali turu keser; yarım protokol veya yanıt kaydedilmez |
 | Sağlayıcı çıktısı kesildi | `finish_reason=length` tek ortak düzeltme bütçesinden kısa (en fazla 8 iddia), tam JSON ister; kesik JSON geçmişe eklenmez |
 
@@ -302,10 +344,12 @@ etmez. Rota verisini edinme, kapsam ve son olgu doğrulaması sunucuya aittir.
 bilinmeyen veya yanlış konumdaki aynı adlı alan iddia değildir. Son yanıtta
 seçilen yollar yalnızca yürüyüşü daraltır, izin listesi oluşturmaz. Açıklama,
 talep/karar iletisi ve hareket metni yalnızca kullanıcı aynı turda
-**"Notları ve iletileri dahil et"** seçeneğini açtıysa (`includeText: true`)
-ve model veri görülmeden bu kümeden `textFields` seçtiyse modele verilir ve
-çizilebilir; model kullanıcı seçimi olmadan serbest metni açamaz (ilk turda da
-`UNSUPPORTED_SCOPE`). Hareketlerdeki başlık, etiket, açıklama ve yineleme
+**"Notlar ve iletiler"** anahtarını açtıysa (`includeText: true`) ve model veri
+görülmeden bu kümeden `textFields` seçtiyse modele verilir ve çizilebilir;
+model kullanıcı seçimi olmadan serbest metni açamaz (ilk turda da
+`UNSUPPORTED_SCOPE`). Onay yalnızca o iletiye aittir: gönderimle, kaynak
+değişince, yeni ya da başka bir konuşmaya geçince kapanır; sonraki ileti ve
+yeniden deneme yeni onay ister. Hareketlerdeki başlık, etiket, açıklama ve yineleme
 kuralı önce/sonra değerleri de `changes` seçimine bağlıdır; seçilmemiş alanlar yürütücüde
 kanıt kaydı ve model tüketiminden **önce** çıkarılır. Hareketlerde açıklama
 önce/sonra değerleri de aynı seçime bağlıdır. Belirlenimci `ruleDescription`
@@ -356,6 +400,28 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
 3. En fazla **4 araç turu**; sonra araçlar kapatılır (`toolChoice: none`),
    modele sınır notu verilir ve yanıt eldeki kanıtla yazılır.
 4. Son yanıt doğrulanır (§6.3); gerekirse bir düzeltme.
+5. **Standart → Derin düşünme devri.** Kullanıcı Standart kipi seçtiyse ve
+   `chat.tools.reasoning` profili kuruluysa, kurtarılabilir bir model/protokol
+   hatası (düzeltmeden sonra da doğrulanamayan yanıt, uzunluk sınırında kalan
+   çıktı ya da `EMPTY_COMPLETION`) kullanıcıya hiçbir şey gösterilmeden **bir
+   kez** Derin düşünme araç profiline devredilir. Devir AYNI kanıt defterini,
+   kapsam sınırını, araç izinlerini ve tur sayaçlarını sürdürür; Standart'ın
+   düzeltme notları devredilmez. Kanıt varsa araçlar kapalıdır (yalnızca son
+   yanıt yazılır, araç SQL'i yeniden çalışmaz); kanıt yoksa kalan araç turu
+   bütçesi içinde araç çağrılabilir. Doğrulama aynıdır. Kanıtsız biten tur
+   `NOT_FOUND`, `UNSUPPORTED_SCOPE`, `UNSUPPORTED` ya da SQL/uygulama hatasıyla
+   (`TIMEOUT`, `BUSY`, `DATABASE_UNAVAILABLE`, `INTERNAL`) bittiyse, tur iptal
+   edildiyse ya da yetki/veri hizmeti kullanılamıyorsa devir yapılmaz. Derin
+   düşünme oturumu bir yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse
+   Standart sonucu (güvenli ileti ya da özgün hata) kullanılır; iptal, kimlik
+   ve veri hataları turu bitirir. Kullanıcı her
+   durumda tek yanıt görür; yanıtın kaydedilen kipi istenen kiptir. Genel
+   sohbete düşülmez.
+6. **Boş yanıt.** Derin düşünmede (ya da devrin mümkün olmadığı Standart turda)
+   görünür metin ve araç çağrısı taşımayan model turu, oturumda en az 15 sn
+   kaldıysa aynı oturumda **bir kez** yeniden istenir; yine boşsa tur
+   `AI_PROVIDER_RESPONSE_INVALID` / `EMPTY_COMPLETION` ile biter. Bu sonuç
+   kaydedilmez ve kullanıcı için yeniden denenebilir olarak bildirilir.
 
 ### 7.2 Akış protokolü (sürüm 1, geriye uyumlu eklemeler)
 
@@ -384,6 +450,25 @@ Aşama 2 yolu gerçek zamanlı akışını korur.
   "Kısaltılmış sonuç", "20 / 45 kayıt gösterildi" notları ve öne çıkan değerler.
 - Doğrulanamayan yanıtta kopyalama düğmesi yoktur; açıklayıcı not gösterilir.
 - Kayıtlı konuşma açıldığında kanıt künyeleri de yüklenir.
+- Yardımcının arayüzdeki adı **Bilgin**'dir; yapılandırma ve kod adları
+  (`MERGEN_ROTA_AI_*`, Rota AI) değişmez.
+- Panel masaüstünde görünüm alanının yaklaşık %42'sidir (460–600 px; 1600 px ve
+  üstünde en fazla 680 px) ve çalışma alanına her durumda en az 96 px bırakır;
+  760 px ve altında tam ekran sayfadır.
+- Yazma alanı tek yüzeydir: ileti ve altında TEK satırlık araç çubuğu.
+  Çubukta **Yanıt kaynağı** (`Rota verisi` / `Genel sohbet` bölümlü radyo
+  grubu), **Notlar ve iletiler** anahtarı, **Derin düşünme** anahtarı
+  (kapalıyken Standart kip) ve Gönder/Durdur vardır; anahtarlar
+  `role="switch"` taşır, açıklamaları ipucu ve ekran okuyucu metnidir. Çubuk
+  sarmaz: kutu daraldıkça anahtar etiketleri önce kısalır (`Notlar`, `Derin`),
+  sonra simgeye iner; erişilebilir adlar değişmez. Gönder ile Durdur aynı
+  boyutta ve aynı sabit yuvada yer değiştirir; yanıt başlayınca ya da bir
+  anahtar açılınca öteki denetimler kaymaz.
+- `MERGEN_ROTA_AI_ENABLED` açık değilse sayfa bunu bildirir (`<meta
+  name="mergen-rota-ai" content="disabled">`, her istekte ortamdan okunur) ve
+  üst çubuktaki Bilgin düğmesi, panel ve komut paletindeki "Bilgin’e sor"
+  girdisi hiç gösterilmez. Uçların kendi `AI_DISABLED` denetimi bunun yerine
+  geçmez.
 
 ---
 
@@ -412,8 +497,12 @@ Aşama 2 yolu gerçek zamanlı akışını korur.
 | İş akışı tur anlık görüntüsü / imleç ötelemesi | 1000 |
 
 - **Araç SQL kapısı:** 1 eşzamanlı sorgu, sıra 32; Sicil başına 1 etkin + 6
-  bekleyen. Böylece 10 bağlantılı ortak havuzda olağan Rota trafiği için en az
-  bir bağlantı ayrılmış kalır. Yer, sürücüdeki sorgu GERÇEKTEN bittiğinde
+  bekleyen. Yapay zekâ SQL kapıları (rehber ve çalışma anı kimlik bilgisi okuması
+  2, kişisel anahtar 2, konuşma 4, araç 1) toplam 9 bağlantılık bütçeye kayıtlıdır
+  (`aiSqlGate`: havuz 10, olağan Rota için ayrılan 1); bütçeyi aşan kapı
+  tanımı başlangıçta hata verir. Böylece 10 bağlantılı ortak havuzda olağan
+  Rota trafiği için en az bir bağlantı ayrılmış kalır; yapay zekâ kapalıyken
+  yapay zekâ SQL'i çalışmaz. Yer, sürücüdeki sorgu GERÇEKTEN bittiğinde
   bırakılır; iptal edilen tur yer tutmaya devam etmez, bırakılmış sorgular sınırı aşamaz.
 - Liste döndüren sabit SQL'ler `TOP (@maxRows)` ile istenen sınırın bir fazlasını
   okur; fazladan satır kısaltma olarak bildirilir (`truncated`).
@@ -492,8 +581,8 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `text` (zorunlu), `limit` (1–10).
 - **Yetki:** Yalnızca görmeye yetkili ETKİN projeler.
 - **Kaynak:** `AI_TOOL_PROJECT_SEARCH_SQL` (tam eşleşme önce).
-- **Çıktı:** `matches[]` (kimlik, ad, kod, kaynak etiketi ve kanonik `sourceType: corporate/manual`, erişim, lider, tam eşleşme), `ambiguous`, `guidance`.
-- **Tamlık:** Tek tam eşleşme yoksa `ambiguous = true`; model tahmin etmez, sorar.
+- **Çıktı:** `matches[]` (kimlik, ad, kod, kaynak etiketi ve kanonik `sourceType: corporate/manual`, erişim, lider, tam eşleşme), `resolution` (`unique`, `partial`, `ambiguous`, `none`), tek kesin eşleşmede `resolvedProject`, belirsiz/kısmi aramada en fazla 10 `candidates`, `ambiguous`, `guidance`.
+- **Tamlık:** Yalnızca tek tam ad/kod eşleşmesi projeyi çözer; bulanık tek sonuç `partial` olur ve kimlik sayılmaz. Model tahmin etmez; sunucu adayları çizerek sorar (§6.3).
 - **Örnek sorular:** "RDR kodlu proje hangisi?"
 
 ### 10.5 `rota_project_detail` — proje künyesi ve erişim nedeni
@@ -538,7 +627,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `text` (zorunlu), `limit` (1–25).
 - **Yetki:** Rota'nın var olan sınırlı kurumsal personel araması (en az 2 karakter, en fazla 25 satır, oturum başına hız sınırı); ad eşleşmesi kimlik ya da yetki kanıtı değildir.
 - **Kaynak:** `searchCorporateDirectory`.
-- **Çıktı:** `people[]` (Sicil, ad, unvan, birim), `ambiguous`, `sameNameCount`, `guidance`.
+- **Çıktı:** `people[]` (Sicil, ad, unvan, birim), `resolution`, tek kesin Sicil ya da tam ad eşleşmesinde `resolvedPerson`, belirsiz/kısmi aramada en fazla 10 `candidates`, `ambiguous`, `sameNameCount`, `guidance`. Sınırlı dizin sonucunun son satırındaki tek kesin eşleşme, aynı adlı bir sonraki satırı dışarıda bırakmış olabileceğinden çözüm sayılmaz.
 - **Örnek sorular:** "Ali Veli'nin görevleri?" (iki "Ali Veli" varsa model birimini sorar).
 
 ### 10.10 `rota_activity_search` — hareket geçmişi
@@ -662,7 +751,7 @@ turu sonlandırır.
   yönergeye bağlı değildir: katalog sunucudadır, kimlik ve yetki bağımsız
   değişkenle değiştirilemez, atıflar sunucuda doğrulanır.
 - Önceki kanıtlı yanıtlar model geçmişinde sabit yeniden sorgulama notuyla değiştirilir. Güncel turun yönlendirmesi yeni karardır.
-- İlk başarılı araç kümesinin seçimi takip kataloğunu, süzgeçlerini ve güvenilir varlık kimliklerini sınırlar; sonraki her başarılı küme kendi sabit takip araçlarını ekler (ör. kişi → görev listesi → görev ayrıntısı). Görev ayrıntısı başka görev/proje sorgusuna genişleyemez; yeni arama metni yalnızca kullanıcının bu turdaki iletisinde geçiyorsa kullanılabilir, metin izdüşümü veri tarafından açılamaz. Aynı aracın takibi en geniş kök değerleri (`visible`, `all`, `includeEmpty: true`) daraltabilir. Başarısız ilk küme kataloğu daraltmaz. Belirsiz adaylar kullanıcı seçimi gerektirir; belirsizlik yalnızca o aramanın adaylarını bağlar, aynı turdaki ilgisiz çözümlenmiş varlıkları engellemez. Tek kesin proje/görev adı eşleşmesi yalnızca o kaydı kimlik yapar; bulanık alternatifler takip kimliği olmaz. Proje kırılımlı toplu analizin grup kimlikleri sunucuya ait ayrıntı kökleridir.
+- İlk başarılı araç kümesinin seçimi takip kataloğunu, süzgeçlerini ve güvenilir varlık kimliklerini sınırlar; sonraki her başarılı küme kendi sabit takip araçlarını ekler (ör. kişi → görev listesi → görev ayrıntısı). Görev ayrıntısı başka görev/proje sorgusuna genişleyemez; arama metni ilk araç turunda da yalnızca kullanıcının bu turdaki iletisinde (açıklama yanıtında önceki sorusunda) geçiyorsa kullanılabilir (büyük/küçük harf, aksan ve noktalama katlanarak karşılaştırılır), metin izdüşümü veri tarafından açılamaz. Aynı aracın takibi en geniş kök değerleri (`visible`, `all`, `includeEmpty: true`) daraltabilir. Başarısız ilk küme kataloğu daraltmaz. Belirsiz adaylar kullanıcı seçimi gerektirir; belirsizlik yalnızca o aramanın adaylarını bağlar, aynı turdaki ilgisiz çözümlenmiş varlıkları engellemez. Tek kesin proje/görev adı eşleşmesi yalnızca o kaydı kimlik yapar; bulanık alternatifler takip kimliği olmaz. Proje kırılımlı toplu analizin grup kimlikleri sunucuya ait ayrıntı kökleridir.
 - Toplu kanıtlar (görev araması ve analizinin toplamları, iş yükü, veri kalitesi) son yetki denetiminde yalnızca yükte görünen görevlerle değil, saydıkları bütün görev nüfusuyla yeniden doğrulanır; sayılan bir görev yetkili nüfustan çıktıysa kanıt düşer. Kimlikler analiz sınırı büyüklüğünde parçalarla okunur. Sunucu serbest model cümlesini onaylamaz; yetkili olgunun kayıt/alan/değer bağını doğrular ve kaçışlayarak çizer.
 
 ---
@@ -711,6 +800,17 @@ bağımsız değişken, sonuç içeriği, SQL ya da anahtar kaydedilmez.
   ve son gecikme/boyut (en fazla 40 araç), gecikme yüzdelikleri, son hizmet
   hatası (araç adı + kod).
 - `grounding`: kanıtlı, genel, aday seçimi, bulunamadı, hizmet kullanılamıyor, doğrulanamayan, düzeltilen ve kapsam notu eklenen yanıt sayıları; tur ve kanıt sayısı yüzdelikleri. `NOT_FOUND` doğrulama hatası değildir. Tamponlanan model protokolü istemciye teslim edilmiş metin sayılmaz.
+- `grounding.escalations`: Standart → Derin düşünme devri sayısı, nedene
+  (`VERIFICATION_FAILED`, `LENGTH`, `EMPTY_COMPLETION`) ve son sonuca göre.
+  Her devir `ai.grounded.escalation` bilgi olayı yazar: istenen kip, kullanılan
+  modeller (sağlayıcının bildirdiği, yoksa yapılandırılan), neden, kanıtın
+  yeniden kullanılıp kullanılmadığı ve sonuç.
+- `emptyCompletions`: görünür çıktı üretmeden biten model çağrıları. Her biri
+  `ai.provider.empty_completion` uyarı olayı yazar: profil, model, bitiş nedeni,
+  sağlayıcının bildirdiği girdi / akıl yürütme / tamamlama / görünür belirteç
+  sayıları (bildirilmeyen `null`), araç çağrısı, akıl yürütme ve metin gelip
+  gelmediği, ilk olaya kadar geçen süre ve toplam sağlayıcı süresi. İstem, araç
+  verisi ya da model metni yazılmaz.
 - İşletim olayı yalnızca beklenmeyen araç hatasında (`AI_TOOL_INTERNAL_ERROR`,
   yalnızca araç adıyla) yazılır.
 
@@ -812,7 +912,16 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 | `test/ai-assistant-evidence-ui.test.mjs` | Çözücü (`revise`, konu, yetkili metin, künye doğrulaması), denetleyici, atıf işareti, kanıt paneli, sunum |
 | `test/ai-grounding-hardening.test.mjs` | Kapsam sınırının güvenilir niyet kaynakları (kullanıcı iletisi, veri öncesi dönem bildirimi, açık serbest metin seçimi), aday belirsizliği ve tek kesin eşleşme, çok adımlı takip, toplu kanıtın nüfus doğrulaması, yönetici kanıtı, olgu niteleyicileri, etkinlik ilk/son kaydı, geçici tablo temizliği, geçici hazırlık hatası |
 | `test/ai-scope-and-bounds-regressions.test.mjs` | Sonraki başarılı araçların kendi nüfusunu dondurması, ölçek koruyan iş yükü toplamı, WBS özyineleme sınırı, sayfalama kayması, kaçışlı atıflar, kaynak seçimi |
-| `test/ai-architecture-contract.test.mjs` | Genel SQL aracı yok, araç SQL'i sabit ve salt okunur, kimlik alanı yok, tek SQL sahibi, 0018 |
+| `test/ai-architecture-contract.test.mjs` | Genel SQL aracı yok, araç SQL'i sabit ve salt okunur, kimlik alanı yok, tek SQL sahibi, 0018, panel genişliği ve Gönder/Durdur yuvası, kök yerleşimin yalnızca açık/kapalı bilgisini yazması |
+| `test/ai-aggregate-population.test.mjs` | Toplu kanıtın tam görev nüfusu: listelenmeyen ama sayılan görevler, tarih/atama talebi, hareket, Outlook, tekrar, baz plan, bağımlılık ve WBS toplamları; son doğrulama, yeniden açılış ve sınıra sığmayan nüfusun "doğrulanamaz" işareti |
+| `test/ai-system-admin-scope.test.mjs` | Yöneticinin proje başına kanonik FULL erişimi, proje kapıları ve yetki dönemi; etkin olmayan/var olmayan projenin yetkisiz projeyle aynı yanıtı |
+| `test/ai-clarification-binding.test.mjs` | Kesin eşleşme / kısmi ve belirsiz aday; sunucunun çizdiği adaylar ve "2", "ikincisi", "evet" seçiminin kayıtlı kimliğe bağlanması |
+| `test/ai-fact-selection-narrative.test.mjs` | Olgu seçimi protokolü, uydurma/başka tur başvurularının reddi, eski iddia biçimi, paragraf/liste/tablo anlatımı, Türkçe iyelik ekleri ve daha zayıf bir araç modelinin sık sorulara düzeltmesiz yanıtı |
+| `test/ai-free-text-consent.test.mjs` | İleti başına serbest metin onayı: kapalıyken arama, model girdisi, olgu ve sayım dışı; açıkken yine veri |
+| `test/ai-tool-containment.test.mjs` | İlk turda da kullanıcı iletisinden gelen arama metni, normalize takip karşılaştırması, meşru daraltma ve ilgisiz genişlemenin reddi |
+| `test/ai-evidence-selectors.test.mjs` | Sayıların proje/kişi/görev/dönem seçicileriyle çizilmesi, kimlik yerine ad, birim ve tekrar tamlığı |
+| `test/ai-grounded-escalation.test.mjs` | Standart → Derin düşünme devri (doğrulanamayan yanıt, boş yanıt), kanıtın ve araç SQL'inin yeniden kullanımı, tek görünür yanıt, `NOT_FOUND`/kapsam/SQL hatasında ve Derin kipte devir olmaması, Derin oturum hatasında Standart sonucu, iptal, boş yanıtın tek yeniden denemesi ve içeriksiz tanısı |
+| `test/ai-assistant-availability.test.mjs` | `MERGEN_ROTA_AI_ENABLED` kapalıyken başlatıcının, panelin ve komut paleti girdisinin gösterilmemesi; işaretin her istekte ortamdan okunması ve yapılandırma değeri taşımaması |
 
 Yerel/CI doğrulaması: tüm Node sınamaları `--test-concurrency=1` ile,
 `npm run lint` ve `npm run build`. CI Node 24.14.0 kullanır; Node 22

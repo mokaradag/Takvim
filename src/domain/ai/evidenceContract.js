@@ -219,8 +219,9 @@ export function groundingRepairInstruction(issues = []) {
   return [
     'SUNUCU DOĞRULAMASI: Önceki taslak kullanıcıya gösterilmedi.',
     `Sözleşme hataları: ${codes.join(', ')}`,
-    'Güncel Rota verisi gerekiyorsa uygun aracı çağır. Kanıt varsa yalnızca yapılandırılmış yanıt üret:',
-    '{"kind":"rota","claims":[{"evidenceId":"R1","factId":"araçtaki kimlik","subjectId":"araçtaki kimlik","field":"araçtaki alan","operator":"eq","value":"araçtaki türü korunmuş değer"}]}',
+    'Güncel Rota verisi gerekiyorsa uygun aracı çağır. Kanıt varsa yalnızca olgu seçimi üret (değer ya da cümle yazma):',
+    '{"kind":"rota","facts":["R1:data.tam.alan.yolu","R1:totalCount"]}',
+    'Alan yolu sonuçtaki tam noktalı yoldur ve claimable.paths içinde olmalıdır; listenin bütün satırları için indis yerine * yaz. Ad kesin çözülmediyse {"kind":"clarification","evidence":"R1"} yaz.',
     'Genel niyet önerisi {"kind":"general","text":"yanıt"} olabilir; veri kipinde sunucu yalnızca Genel sohbet seçimi açıklamasını gösterir. Serbest olgu metni, başlık veya ek alan yazma. Kanıt alınamadıysa {"kind":"unavailable"} yaz.'
   ].join('\n');
 }

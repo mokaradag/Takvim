@@ -252,7 +252,7 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
       for (let index = 0; index < (behavior.reasoning ?? 0); index += 1) feed.reasoning();
       for (const chunk of chunks) feed.text(chunk);
       if (behavior.type === 'interrupt') feed.fail(streamInterrupted());
-      else feed.done({ finishReason: behavior.finishReason ?? 'stop', model: behavior.model === undefined ? input.model : behavior.model });
+      else feed.done({ finishReason: behavior.finishReason ?? 'stop', model: behavior.model === undefined ? input.model : behavior.model, usage: behavior.usage ?? null });
     } else {
       return Promise.reject(new Error(`Tanınmayan sahte akış davranışı: ${behavior.type}`));
     }

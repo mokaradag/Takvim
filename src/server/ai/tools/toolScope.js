@@ -4,27 +4,34 @@ import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool } from './toolRegistry.js';
 import { addDays, foldText, normalizeTaskFilters } from './rota/taskFacts.js';
 import { businessDate } from '../../../domain/calendar/businessDate.js';
+import { clarificationReferences } from '../../../domain/ai/clarification.js';
 
 /**
  * Bir turun KAPSAM SINIRI (containment).
  *
  * İlk başarılı araç turu, model henüz hiçbir araç sonucu görmeden seçildiği
- * için güvenilir niyettir. Sonraki turlarda araç sonucu metni kapsamı
- * genişletemez:
+ * için güvenilir niyettir; yine de serbest arama metni ilk turda da yalnızca
+ * kullanıcının iletisinde geçen metin olabilir. Sonraki turlarda araç sonucu
+ * metni kapsamı genişletemez:
  *
  *  - Aynı aracın sonraki çağrısı ilk normalize nüfusun içinde kalır
  *    (daraltma, sayfalama serbesttir).
- *  - Başka aracın ilk çağrısı yalnızca sunucunun döndürdüğü ve belirsiz
- *    OLMAYAN kimliklere (görev, proje, WBS, baz plan, kişi) bağlanabilir;
- *    belirsiz aramanın adayları kullanıcıya sorulmadan kimlik olamaz.
- *  - Serbest arama metni yalnızca kullanıcının bu turdaki iletisinde geçiyorsa
- *    ya da veri okunmadan önce bildirildiyse kullanılabilir.
+ *  - Başka aracın ilk çağrısı yalnızca sunucunun KANITLADIĞI kimliklere
+ *    (görev, proje, WBS, baz plan, kişi) bağlanabilir: tek kesin ad
+ *    eşleşmesi kimliktir; kısmi ya da belirsiz aramanın adayları kullanıcıya
+ *    sorulmadan kimlik olamaz.
+ *  - Önceki turdaki açıklamanın adayları, sunucunun kullanıcının numaralı
+ *    seçimine bağladığı aday dışında bu turda kimlik olarak kullanılamaz.
  *  - Varsayılanı en dar olmayan nüfus bağımsız değişkenleri (hareket ve takvim
  *    tarih penceresi) başka aracın ilk çağrısında varsayılan pencerede ya da
  *    veri okunmadan önce bildirilen pencerede kalır.
+ *
+ * Karşılaştırmalar normalize değerlerle yapılır (kimlikler kanonik, metin
+ * harf/aksan duyarsız, varsayılanlar açık değerleriyle eşit).
  */
 
 const IDENTITIES = Object.freeze({ taskId: 'tasks', templateTaskId: 'tasks', projectId: 'projects', wbsId: 'wbs', baselineId: 'baselines', sicil: 'people', personSicil: 'people' });
+const IDENTITY_ARGUMENTS = Object.freeze({ taskId: 'tasks', projectId: 'projects', wbsId: 'wbs', baselineId: 'baselines', personSicil: 'people' });
 const TASK_POPULATION_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 /** Kimliksiz geniş nüfustan aynı görünür görev nüfusuna geçişler. */
 const BROAD_FOLLOW_UPS = Object.freeze({
@@ -34,6 +41,13 @@ const BROAD_FOLLOW_UPS = Object.freeze({
 /** Kök değeri bu olduğunda alan en geniş nüfustur; daha dar her değer içerilir. */
 const WIDEST = Object.freeze({ scope: 'visible', includeEmpty: true, tab: 'all', source: 'all', assignee: 'any' });
 const WINDOW_TOOLS = new Set(['rota_activity_search', 'rota_calendar_inspect']);
+/** Nüfusu değiştirmeyen gösterim bağımsız değişkenleri. */
+const PRESENTATION_KEYS = new Set(['cursor', 'limit', 'textFields', 'sort', 'depth']);
+
+/** Kapsam metni karşılaştırması: harf, aksan, noktasız ı ve noktalama duyarsız. */
+export function containmentText(value) {
+  return foldText(value).replace(/ı/g, 'i').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
 
 function populationArguments(name, args, today) {
   if (TASK_POPULATION_TOOLS.has(name)) return normalizeTaskFilters(args);
@@ -52,10 +66,15 @@ function populationArguments(name, args, today) {
   return args;
 }
 
-function contains(root, args) {
-  if ((root.text ?? null) !== (args.text ?? null)) return false;
+function sameText(left, right) {
+  if (left == null || right == null) return left == null && right == null;
+  return containmentText(left) === containmentText(right);
+}
+
+function contains(root, args, { textTrusted }) {
+  if (!sameText(root.text ?? null, args.text ?? null) && !(args.text != null && textTrusted(args.text))) return false;
   for (const [key, value] of Object.entries(root)) {
-    if (['cursor', 'limit', 'textFields', 'sort'].includes(key)) continue;
+    if (PRESENTATION_KEYS.has(key) || key === 'text') continue;
     if (value == null || (Array.isArray(value) && !value.length) || (key === 'createdByMe' && value === false)) continue;
     const next = args[key];
     if (key === 'dateFrom' || key === 'targetFrom') { if (!next || next < value) return false; }
@@ -73,25 +92,26 @@ function windowTrusted(name, normalized, windows, today) {
   return [...defaults, ...windows].some((window) => normalized.dateFrom >= window.dateFrom && normalized.dateTo <= window.dateTo);
 }
 
-/** Sonuçtaki kimlikler; belirsiz aramanın adayları ayrı tutulur. */
+/** Sonuçtaki kimlikler; kısmi ve belirsiz aramanın adayları ayrı tutulur. */
 function resultIdentities(name, data) {
   const resolved = [];
   const candidates = [];
   if (!data || typeof data !== 'object') return { resolved, candidates };
   const rest = { ...data };
   if (name === 'rota_project_search' && Array.isArray(data.matches)) {
-    delete rest.matches;
-    const exact = data.matches.filter((match) => match.exactMatch === true);
-    const unique = !data.ambiguous && (data.matches.length === 1 || exact.length === 1);
-    for (const match of data.matches) (unique && (data.matches.length === 1 || match.exactMatch === true) ? resolved : candidates).push(match);
+    for (const key of ['matches', 'candidates', 'resolvedProject']) delete rest[key];
+    candidates.push(...data.matches, ...(Array.isArray(data.candidates) ? data.candidates : []));
+    // Yalnızca tek kesin ad/kod eşleşmesi kimliktir; tek kısmi sonuç değildir.
+    const exact = data.resolvedProject ? [data.resolvedProject] : data.matches.filter((match) => match.exactMatch === true);
+    if (data.ambiguous !== true && exact.length === 1 && exact[0]?.projectId) resolved.push({ projectId: exact[0].projectId });
   } else if (name === 'rota_person_search' && Array.isArray(data.people)) {
-    delete rest.people;
-    (data.ambiguous === true ? candidates : resolved).push(...data.people);
+    for (const key of ['people', 'candidates', 'resolvedPerson']) delete rest[key];
+    candidates.push(...data.people, ...(Array.isArray(data.candidates) ? data.candidates : []));
+    // Kimlik Sicil'dir: yalnızca sunucunun kesin Sicil/ad eşleşmesi olarak çözdüğü kişi.
+    if (data.resolution === 'unique' && Number.isSafeInteger(data.resolvedPerson?.sicil)) resolved.push({ personSicil: data.resolvedPerson.sicil });
   } else if (name === 'rota_task_search' && Array.isArray(data.tasks) && data.titleResolution) {
-    // Metinle ad çözümünde yalnızca sunucunun kanıtladığı tek görev kimlik olur.
-    delete rest.tasks;
-    delete rest.resolvedTask;
-    candidates.push(...data.tasks);
+    for (const key of ['tasks', 'candidates', 'resolvedTask']) delete rest[key];
+    candidates.push(...data.tasks, ...(Array.isArray(data.candidates) ? data.candidates : []));
     if (data.titleResolution === 'unique' && data.resolvedTask) resolved.push({ taskId: data.resolvedTask.taskId });
   } else if (data.ambiguous === true) {
     candidates.push(data);
@@ -108,7 +128,19 @@ function resultIdentities(name, data) {
   return { resolved, candidates };
 }
 
-export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null } = {}) {
+function referenceIdentity(reference) {
+  if (reference.projectId) return ['projects', reference.projectId];
+  if (reference.taskId) return ['tasks', reference.taskId];
+  return ['people', String(reference.personSicil)];
+}
+
+/**
+ * @param {object} options
+ * @param {string} [options.userText] Kullanıcının bu turdaki iletisi (ve açıklama yanıtında önceki sorusu).
+ * @param {{ candidates: object[], selected: object|null }|null} [options.clarification]
+ *   Önceki turun açıklama adayları ve sunucunun kullanıcının seçimine bağladığı aday.
+ */
+export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null, clarification = null } = {}) {
   const ids = { tasks: new Set(), projects: new Set(), wbs: new Set(), baselines: new Set(), people: new Set() };
   const roots = new Map();
   let established = false;
@@ -118,7 +150,15 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
   const textFields = new Set();
   const trustedTexts = new Set();
   const trustedWindows = [];
-  const userNeedle = foldText(userText);
+  const userNeedle = containmentText(userText);
+  // Önceki açıklamanın adayları: yalnızca bağlanan seçim kimliktir.
+  const reserved = new Set(clarificationReferences(clarification?.candidates).map((reference) => referenceIdentity(reference).join(':')));
+  const bound = clarification?.selected ? clarificationReferences([clarification.selected])[0] || null : null;
+  if (bound) {
+    const [population, id] = referenceIdentity(bound);
+    ids[population].add(id);
+    if (population === 'projects') projectScope = true;
+  }
 
   function capture(value) {
     if (!value || typeof value !== 'object') return;
@@ -130,7 +170,7 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
   }
 
   function textTrusted(text) {
-    const needle = foldText(text).trim();
+    const needle = containmentText(text);
     return Boolean(needle) && (trustedTexts.has(needle) || userNeedle.includes(needle));
   }
 
@@ -164,13 +204,13 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         roots.set(call.name, [...(roots.get(call.name) || []), normalized]);
         if (initialRound) {
           for (const field of args.textFields || []) textFields.add(field);
-          if (typeof args.text === 'string') trustedTexts.add(foldText(args.text).trim());
+          if (typeof args.text === 'string' && textTrusted(args.text)) trustedTexts.add(containmentText(args.text));
           if (WINDOW_TOOLS.has(call.name)) trustedWindows.push({ dateFrom: normalized.dateFrom, dateTo: normalized.dateTo });
           if (call.name === 'rota_portfolio_summary') broadProjects = true;
           if (args.projectId || ['rota_project_search', 'rota_portfolio_summary'].includes(call.name)) projectScope = true;
           if (!args.projectId && !args.taskId && !args.personSicil && !args.wbsId) broadRoots.add(call.name);
         }
-        // Belirsiz aramanın adayları kimlik olarak yakalanmaz; kullanıcıya sorulur.
+        // Belirsiz ya da kısmi aramanın adayları kimlik olarak yakalanmaz; kullanıcıya sorulur.
         const { resolved } = resultIdentities(call.name, body.data);
         capture(args);
         resolved.forEach(capture);
@@ -185,7 +225,15 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
       if (allowedTextFields && (args.textFields || []).some((field) => !allowedTextFields.includes(field))) {
         throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, { details: ['$.textFields:not-authorized'] });
       }
-      if (!established) return;
+      // Önceki açıklamanın seçilmemiş adayı, bu turda sunucunun kanıtlamadığı bir kimliktir.
+      for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
+        if (args[key] != null && reserved.has(`${population}:${args[key]}`) && !ids[population].has(String(args[key]))) fail();
+      }
+      if (!established) {
+        // İlk turda da arama metni kullanıcının bu turdaki iletisinden gelmelidir.
+        if (args.text != null && !textTrusted(args.text)) fail();
+        return;
+      }
       if ((args.textFields || []).some((field) => !textFields.has(field))) fail();
       const normalized = populationArguments(name, args, today);
       const sameRoot = roots.get(name);
@@ -194,10 +242,10 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
       const taskPopulation = relatedTaskRoots.length > 0;
       if (!sameRoot && args.projectId && !projectScope) fail();
       if (sameRoot || taskPopulation) {
-        const matches = (sameRoot || relatedTaskRoots).some((root) => contains(root, normalized));
+        const matches = (sameRoot || relatedTaskRoots).some((root) => contains(root, normalized, { textTrusted }));
         if (!matches) fail();
       }
-      for (const [key, population] of Object.entries({ taskId: 'tasks', projectId: 'projects', wbsId: 'wbs', baselineId: 'baselines', personSicil: 'people' })) {
+      for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
         if (args[key] != null && !ids[population].has(String(args[key]))) fail();
       }
       if (!sameRoot && !taskPopulation && args.text != null && !textTrusted(args.text)) fail();

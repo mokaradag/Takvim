@@ -1,4 +1,6 @@
 import 'server-only';
+import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
+import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { taskCompletionRate } from '../../../../scheduling/metrics/taskCompletionRate.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
@@ -45,11 +47,9 @@ const projectSearch = {
   async handler(args, call) {
     const limit = args.limit ?? 5;
     const { scope } = await call.authorization();
-    const result = await call.sql((executor) => readProjectSearch(executor, scope, { text: args.text, limit: Math.max(2, limit) }));
-    const uniqueExact = result.exactCount === 1;
-    const ambiguous = !uniqueExact && result.total > 1;
-    // Belirsizlik için en az iki satır yoklanır; dönen liste `limit` sınırına uyar.
-    const matches = result.rows.slice(0, limit).map((row) => {
+    // Aday kümesi sayfa sınırından bağımsızdır: belirsizlikte en fazla on aday yoklanır.
+    const result = await call.sql((executor) => readProjectSearch(executor, scope, { text: args.text, limit: Math.max(CLARIFICATION_LIMITS.maxCandidates, limit) }));
+    const rows = result.rows.map((row) => {
       const access = accessExplanation({ ...scopeAccess(row), reasons: scope.projects.get(canonicalActualId(row.ProjectId))?.reasons || [] });
       return {
         projectId: canonicalActualId(row.ProjectId),
@@ -63,13 +63,26 @@ const projectSearch = {
         exactMatch: Number(row.MatchRank) === 0
       };
     });
+    // Yalnızca TEK KESİN ad/kod eşleşmesi projeyi çözer; tek kısmi eşleşme onay gerektirir.
+    const resolution = result.exactCount === 1 ? 'unique' : result.exactCount > 1 || result.total > 1 ? 'ambiguous' : result.total === 1 ? 'partial' : 'none';
+    const resolved = resolution === 'unique' ? rows.find((row) => row.exactMatch) || null : null;
+    const pool = resolution === 'ambiguous' && result.exactCount > 1 ? rows.filter((row) => row.exactMatch) : ['ambiguous', 'partial'].includes(resolution) ? rows : [];
+    const candidates = pool.slice(0, CLARIFICATION_LIMITS.maxCandidates)
+      .map(({ projectId, name, code, source, access }) => ({ projectId, name, ...(code ? { code } : {}), source, access: { level: access.level, label: access.label } }));
+    const candidateTotal = resolution === 'ambiguous' && result.exactCount > 1 ? result.exactCount : result.total;
+    const matches = rows.slice(0, limit);
+    const ambiguous = resolution === 'ambiguous';
     return {
       data: {
         matches,
         ambiguous,
+        resolution,
+        ...(resolved ? { resolvedProject: { projectId: resolved.projectId, name: resolved.name, ...(resolved.code ? { code: resolved.code } : {}) } } : {}),
+        ...(candidates.length ? { candidates, ...(candidateTotal > candidates.length ? { candidatesTruncated: true } : {}) } : {}),
         guidance: ambiguous
-          ? 'Birden çok proje eşleşti. Kullanıcıya adayları sunup hangisini kastettiğini sorun; tahmin etmeyin.'
-          : (result.total === 0 ? 'Görüntüleme yetkiniz olan projeler arasında eşleşme yok.' : null)
+          ? 'Birden çok proje eşleşti. {"kind":"clarification","evidence":"<kanıt>"} ile kullanıcıya sorun; adayları sunucu gösterir. Tahmin etmeyin.'
+          : resolution === 'partial' ? 'Arama metni yalnızca bir projenin adına kısmen uyuyor; proje kesin olarak belirlenmedi. Proje kapsamında araç gerekiyorsa {"kind":"clarification","evidence":"<kanıt>"} ile onay isteyin.'
+            : (result.total === 0 ? 'Görüntüleme yetkiniz olan projeler arasında eşleşme yok.' : null)
       },
       scope: { kind: 'complete-projects', completeProjectView: true, note: 'Arama yalnızca görüntüleme yetkiniz olan projeleri kapsar.' },
       complete: result.total <= matches.length,
@@ -107,10 +120,7 @@ function taskTotals(row) {
   };
 }
 
-const TOTAL_DEFINITIONS = Object.freeze({
-  overdue: 'Tamamlanmamış ve termini (targetFinish) bugünden önce olan görev.',
-  dueNext7Days: 'Tamamlanmamış ve termini bugün dahil 7 takvim günü içinde olan görev.'
-});
+
 
 /* ── rota_project_detail ──────────────────────────────────── */
 
@@ -133,6 +143,8 @@ const projectDetail = {
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
     const detail = await call.sql((executor) => readProjectDetail(executor, scope, { projectId: args.projectId, today: call.today, soonEnd }));
     if (!detail.project) throw notFound();
+    // Görünür görev toplamları bütün sayılan görevlere dayanır: son yetki denetimi için nüfus kaydedilir.
+    call.notePopulation?.(detail.population);
     const row = detail.project;
     const explanation = accessExplanation(access);
     const totals = taskTotals(detail.totals);
@@ -140,6 +152,8 @@ const projectDetail = {
     const name = dataText(row.ProjectName, 160);
     const tagsTruncated = detail.tags.length > 20;
     const tags = detail.tags.slice(0, 20).map((tag) => dataText(tag, 60));
+    const overLimit = { DependencyCount: 'dependencyCount', BaselineCount: 'baselineCount', WbsNodeCount: 'wbsNodeCount', TagCount: 'tagCount' };
+    const countsOverLimit = detail.countsOverLimit.map((column) => overLimit[column]);
     return {
       data: {
         project: {
@@ -153,17 +167,18 @@ const projectDetail = {
           calendar: row.CalendarName ? dataText(row.CalendarName, 120) : null,
           dataDate: sqlDay(row.DataDate),
           tags,
-          tagCount: detail.tags.length,
+          tagCount: countsOverLimit.includes('tagCount') ? null : detail.tags.length,
           wbsNodeCount: row.WbsNodeCount == null ? null : Number(row.WbsNodeCount),
           dependencyCount: row.DependencyCount == null ? null : Number(row.DependencyCount),
-          baselineCount: row.BaselineCount == null ? null : Number(row.BaselineCount)
+          baselineCount: row.BaselineCount == null ? null : Number(row.BaselineCount),
+          ...(countsOverLimit.length ? { countsOverLimit } : {})
         },
         access: explanation,
         visibleTasks: totals,
-        definitions: { ...TOTAL_DEFINITIONS, today: call.today }
+        definitions: { overdue: METRIC_DEFINITIONS.taskTotals.overdue, dueNext7Days: METRIC_DEFINITIONS.taskTotals.dueNext7Days, today: call.today }
       },
       scope: descriptor,
-      complete: !tagsTruncated,
+      complete: !tagsTruncated && !countsOverLimit.length,
       truncated: tagsTruncated,
       returnedCount: 1,
       totalCount: 1,
@@ -209,7 +224,8 @@ const portfolioSummary = {
     const source = args.source || 'all';
     const { scope } = await call.authorization();
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
-    const rows = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
+    const { rows, population } = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
+    call.notePopulation?.(population);
     const filteredRows = rows
       .filter((row) => source === 'all' || (source === 'corporate') === (row.SourceType === 'CORPORATE'))
       .filter((row) => args.includeEmpty !== false || taskTotals(row).total > 0);
@@ -242,7 +258,7 @@ const portfolioSummary = {
         sort,
         // Nüfusu belirleyen seçiciler toplamların anlamının parçasıdır.
         filters: { source, includeEmpty: args.includeEmpty !== false },
-        definitions: { ...TOTAL_DEFINITIONS, today: call.today, completeTaskView: 'false ise projede yalnızca yetkili görevleriniz sayılmıştır.' }
+        definitions: { overdue: METRIC_DEFINITIONS.taskTotals.overdue, dueNext7Days: METRIC_DEFINITIONS.taskTotals.dueNext7Days, today: call.today, completeTaskView: METRIC_DEFINITIONS.completeTaskView }
       },
       scope: descriptor,
       complete: page.length === projects.length,
@@ -288,6 +304,7 @@ const wbsInspect = {
       projectId: args.projectId, wbsId: args.wbsId ?? null, today: call.today, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+    call.notePopulation?.(result.population);
     const nodes = new Map();
     for (const row of result.nodes) {
       const id = canonicalActualId(row.WbsId);

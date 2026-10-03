@@ -502,8 +502,13 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
 - `MERGEN_ROTA_AI_TOOLS_ENABLED=true` iken aynı ayrıntı **Rota verisi
   araçlarını** da gösterir: özelliğin ve kanıt tablosunun (0018) durumu, araç
   çağrı sayısı ve P95 gecikmesi, araç hata sınıfları (ör. `NOT_FOUND 2 ·
-  TIMEOUT 1`), kanıtlı / genel / aday seçimi / bulunamadı / hizmet kullanılamıyor / doğrulanamayan / düzeltilen yanıt sayıları ve
-  araç SQL kapısının doluluğu. `BUSY` de araç hizmeti sağlık uyarısına katılır. Bileşen şu durumlarda uyarır: araç kayıt defteri
+  TIMEOUT 1`), kanıtlı / genel / aday seçimi / bulunamadı / hizmet kullanılamıyor / doğrulanamayan / düzeltilen yanıt sayıları,
+  *Standart → Derin düşünme devri* (devir sayısı, nedene ve sonuca göre),
+  *Görünür çıktısız model yanıtı* sayısı ve araç SQL kapısının doluluğu. Devir
+  ve boş yanıt ayrıntıları (istenen kip, kullanılan modeller, neden, kanıtın
+  yeniden kullanımı, sonuç; bitiş nedeni, belirteç sayıları ve süreler)
+  `ai.grounded.escalation` ve `ai.provider.empty_completion` işletim olaylarında
+  içeriksiz olarak yazılır. `BUSY` de araç hizmeti sağlık uyarısına katılır. Bileşen şu durumlarda uyarır: araç kayıt defteri
   geçersiz, 0018 kurulmamış (veri kaynağı unavailable verir), araç yetenekli
   profiller (`chat.tools`, `chat.tools.reasoning`) kullanılamıyor ya da son
   beş dakikada bir araç hizmet hatası (`TIMEOUT`, `DATABASE_UNAVAILABLE`,

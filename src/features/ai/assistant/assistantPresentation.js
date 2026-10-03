@@ -88,7 +88,7 @@ export function assistantFailureView(result, now = Date.now()) {
     case AI_ERROR_CODES.AI_QUEUE_TIMEOUT:
       return {
         tone: 'warn',
-        title: 'Rota AI şu anda yoğun',
+        title: 'Bilgin şu anda yoğun',
         message: 'Çok sayıda istek aynı anda işleniyor. Birkaç saniye sonra yeniden deneyin.',
         retryable: true,
         action: null
@@ -106,7 +106,7 @@ export function assistantFailureView(result, now = Date.now()) {
       return {
         tone: 'warn',
         title: 'API anahtarı gerekli',
-        message: 'Rota AI için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
+        message: 'Bilgin için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
         retryable: false,
         credential: true,
         action: 'settings'
@@ -141,7 +141,7 @@ export function assistantFailureView(result, now = Date.now()) {
         tone: 'fail',
         title: 'Yanıt üretilemedi',
         message: result?.reason === 'EMPTY_COMPLETION'
-          ? 'Model görünür bir yanıt üretmeden durdu. Soruyu daraltıp yeniden deneyin.'
+          ? 'Model görünür bir yanıt üretmeden durdu. Yeniden deneyebilir ya da soruyu daraltabilirsiniz.'
           : 'Yapay zekâ hizmetinden geçersiz bir yanıt alındı.',
         // Katalog bu kodu yinelenemez sayar; sunucunun sınıflandırması korunur.
         retryable: result?.retryable === true,
@@ -159,7 +159,7 @@ export function assistantFailureView(result, now = Date.now()) {
       };
     case AI_ERROR_CODES.AI_DISABLED:
     case AI_ERROR_CODES.AI_CONFIGURATION_ERROR:
-      return { tone: 'warn', title: 'Rota AI kullanılamıyor', message: serverMessage(result, aiErrorMessage(code)), retryable: false, action: null };
+      return { tone: 'warn', title: 'Bilgin kullanılamıyor', message: serverMessage(result, aiErrorMessage(code)), retryable: false, action: null };
     case 'CONFLICT':
       return {
         tone: 'warn',
@@ -197,17 +197,17 @@ export function isSessionFailure(result) {
 }
 
 const READINESS_MESSAGES = Object.freeze({
-  AI_DISABLED: { tone: 'muted', title: 'Rota AI kapalı', message: 'Yapay zekâ özellikleri bu kurulumda kapalı.', action: null },
+  AI_DISABLED: { tone: 'muted', title: 'Bilgin kapalı', message: 'Yapay zekâ özellikleri bu kurulumda kapalı.', action: null },
   AI_CONFIGURATION_ERROR: {
     tone: 'warn',
-    title: 'Rota AI yapılandırılmadı',
+    title: 'Bilgin yapılandırılmadı',
     message: 'Yapay zekâ hizmeti henüz yapılandırılmadı ya da yapılandırması eksik. Sistem yöneticinize başvurun.',
     action: null
   },
   AI_KEY_MISSING: {
     tone: 'warn',
     title: 'API anahtarı gerekli',
-    message: 'Rota AI için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
+    message: 'Bilgin için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
     action: 'settings'
   },
   AI_KEY_UNREADABLE: {
@@ -218,7 +218,7 @@ const READINESS_MESSAGES = Object.freeze({
   },
   PROFILE_UNAVAILABLE: {
     tone: 'warn',
-    title: 'Rota AI kullanılamıyor',
+    title: 'Bilgin kullanılamıyor',
     message: 'Sohbet yeteneği bu kurulumda yapılandırılmamış. Sistem yöneticinize başvurun.',
     action: null
   }
@@ -233,8 +233,8 @@ export function readinessNotice(readiness) {
 /** Demo Kipinde gösterilen açıklama; hiçbir istek gönderilmez. */
 export const DEMO_NOTICE = Object.freeze({
   tone: 'muted',
-  title: 'Rota AI Gerçek Sistem\'de kullanılabilir',
-  message: 'Demo Kipinde yapay zekâ isteği gönderilmez ve konuşma kaydedilmez. Rota AI, kurumsal oturumla Gerçek Sistem verisinde çalışır.'
+  title: 'Bilgin Gerçek Sistem\'de kullanılabilir',
+  message: 'Demo Kipinde yapay zekâ isteği gönderilmez ve konuşma kaydedilmez. Bilgin, kurumsal oturumla Gerçek Sistem verisinde çalışır.'
 });
 
 /** Rota verisi okunurken gösterilen konu metni; araç adı ya da bağımsız değişken gösterilmez. */

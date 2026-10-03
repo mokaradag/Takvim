@@ -19,8 +19,9 @@ import { boundedExecutor } from '../../observability/boundedExecution.js';
 import { readAiConfig, requireAiAvailable } from '../aiConfig.js';
 import { assertAiDirectoryMember, loadAiCredentialStatus } from '../aiCredentialService.js';
 import { abortableDelay, AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS, createAiDeadline, raceWithAbort } from '../aiDeadline.js';
-import { AiError } from '../aiErrors.js';
+import { AiError, isAiError } from '../aiErrors.js';
 import { getAiGateway } from '../aiRuntime.js';
+import { recordGroundedEscalation } from '../aiTelemetry.js';
 import { createAiSqlGate } from '../aiSqlGate.js';
 import { loadAiModelRegistry } from '../modelRegistryLoader.js';
 import { createToolTurnContext } from '../tools/toolContext.js';
@@ -45,6 +46,7 @@ import {
 import { buildGroundedContext } from './groundedPrompt.js';
 import { runGroundedTurn } from './groundedAnswer.js';
 import { EVIDENCE_TEXT_FIELDS } from '../../../domain/ai/claimableEvidence.js';
+import { clarificationReferences, selectedCandidateOrdinal } from '../../../domain/ai/clarification.js';
 
 /**
  * Rota AI sohbet hizmeti — özellik ile `aiGateway` arasındaki sunucu sınırı.
@@ -159,7 +161,7 @@ function conversationTimeout() {
 
 function conversationSchemaMissing() {
   return new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, {
-    message: 'Rota AI konuşma geçmişi için veritabanı güncellemesi (0017) uygulanmamış. Sistem yöneticinize başvurun.',
+    message: 'Bilgin konuşma geçmişi için veritabanı güncellemesi (0017) uygulanmamış. Sistem yöneticinize başvurun.',
     details: { reason: 'CONVERSATION_SCHEMA_MISSING' }
   });
 }
@@ -475,6 +477,10 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     const evidence = await loadEvidenceFor(sicil, signal, target);
     // Kimlikler parçalar hâlinde doğrulanır (bkz. revalidateEvidence): uzun bir
     // konuşmanın bütün yanıtları tek bir sınır aşımıyla gizlenmez.
+    // Nüfusu kalıcı kayda sığmayan yanıt güncel yetkiyle doğrulanamaz; bu durum
+    // yalnızca kayıtlı künyeden türetilir, güncel yetki hakkında bilgi vermez.
+    evidence.unverifiable = new Set([...(evidence.authorizationByMessage || new Map())]
+      .filter(([, entries]) => entries.some((entry) => entry.unverifiable)).map(([id]) => id));
     if (revalidate && evidence.byMessage.size) {
       const context = createToolTurnContext({ sicil });
       const deadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
@@ -506,9 +512,14 @@ function citedWithoutKnownEvidence(message, evidence) {
   return /【R[1-9]\d?】/.test(String(message.content || ''));
 }
 
+const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
+
 function discloseSavedMessages(messages, evidence) {
   return messages.map((message) => {
     if (message.role !== 'assistant') return message;
+    if (evidence?.unverifiable?.has(message.id)) {
+      return { ...message, content: UNVERIFIABLE_SAVED_ANSWER_TEXT, evidence: [], finishReason: 'unavailable' };
+    }
     const saved = evidence?.byMessage?.get(message.id);
     if (saved?.length) return { ...message, evidence: saved };
     if (evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence)) {
@@ -519,6 +530,21 @@ function discloseSavedMessages(messages, evidence) {
     }
     return message;
   });
+}
+
+/**
+ * Önceki tur hâlâ yetkili bir açıklamayla bittiyse adaylar ve kullanıcının
+ * numaralı seçimi. Seçim sunucuda kayıtlı aday kimliğine bağlanır; model
+ * sırayı kimliğe çevirmez. Seçim değilse adaylar bu turda kimlik olamaz.
+ */
+function pendingClarification(history, content) {
+  const last = history.at(-1);
+  if (last?.role !== 'assistant' || last.finishReason !== 'clarification') return null;
+  const candidates = clarificationReferences(last.clarificationContext);
+  if (!candidates.length) return null;
+  const ordinal = selectedCandidateOrdinal(content, candidates.length);
+  const question = history.at(-2)?.role === 'user' ? String(history.at(-2).content || '') : '';
+  return { candidates, selected: ordinal == null ? null : candidates.find((candidate) => candidate.ordinal === ordinal) || null, question };
 }
 
 const FALLBACK_GROUNDED_HISTORY_TEXT = '[Önceki Rota verisi yanıtı güncel kanıt olmadığı için bu tur bağlamına alınmadı.]';
@@ -721,14 +747,19 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       priorMessageCount: Math.max(0, prepared.turn.sequence - 1)
     };
     const context = useTools ? buildGroundedContext(contextInput) : buildAssistantContext(contextInput);
+    const clarification = useTools ? pendingClarification(history, prepared.turn.content) : null;
     return {
       sicil,
       claim,
       mode: prepared.answer?.mode || input.mode,
       profile: prepared.answer ? assistantProfileForMode(prepared.answer.mode) : (useTools ? assistantToolProfileForMode(input.mode) : profile),
       grounded: useTools,
+      // Standart kipteki kurtarılabilir model hatası Derin düşünme araç profiline devredilebilir.
+      escalationProfile: useTools && input.mode === ASSISTANT_MODES.STANDARD && toolRouteAvailable(registry, ASSISTANT_MODES.DEEP)
+        ? assistantToolProfileForMode(ASSISTANT_MODES.DEEP) : null,
       general: input.source === 'general',
       allowedTextFields: input.includeText ? [...EVIDENCE_TEXT_FIELDS] : [],
+      clarification,
       dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
@@ -814,9 +845,33 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
 
 function evidenceSchemaMissing() {
   return new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, {
-    message: 'Rota AI kanıt kaydı için veritabanı güncellemesi (0018) uygulanmamış. Sistem yöneticinize başvurun.',
+    message: 'Bilgin kanıt kaydı için veritabanı güncellemesi (0018) uygulanmamış. Sistem yöneticinize başvurun.',
     details: { reason: 'EVIDENCE_SCHEMA_MISSING' }
   });
+}
+
+/**
+ * Standart kipte doğrulanamayan, uzunluk sınırında kalan ya da boş dönen turu
+ * Derin düşünme araç profiliyle, AYNI kanıt defteri ve kapsamla BİR kez
+ * sonlandırır. İptal, kimlik ve veri hataları yukarı taşınır; Derin düşünme
+ * oturumu yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse Standart sonucu
+ * (güvenli ileti ya da özgün hata) kullanılır. Genel sohbete düşülmez.
+ */
+async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
+  const telemetry = (outcome, models = []) => recordGroundedEscalation({
+    requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, outcome
+  });
+  let result;
+  try {
+    result = await runIn(turn.escalationProfile, { resume: request.resume });
+  } catch (error) {
+    // Yalnızca yapay zekâ hizmetinin hatası Standart sonucuna döner; iptal, kimlik ve veri hataları turu bitirir.
+    if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) throw error;
+    telemetry('error');
+    return request.fallback(onText);
+  }
+  telemetry(result.outcome, result.models);
+  return result;
 }
 
 /**
@@ -826,21 +881,25 @@ function evidenceSchemaMissing() {
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
 async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText }) {
-  const grounded = await getAiGateway().runToolSession({
-    profile: turn.profile,
+  const options = {
+    messages: turn.modelMessages,
+    catalog: toolCatalogForModel(),
+    context: createToolTurnContext({ sicil: turn.sicil }),
+    allowedTextFields: turn.allowedTextFields || [],
+    clarification: turn.clarification || null,
+    onStatus,
+    onText
+  };
+  const runIn = (profile, extra) => getAiGateway().runToolSession({
+    profile,
     signal,
     run: (session) => {
       if (Number(session.sicil) !== Number(turn.sicil)) throw unknownSicil();
-      return runGroundedTurn(session, {
-        messages: turn.modelMessages,
-        catalog: toolCatalogForModel(),
-        context: createToolTurnContext({ sicil: turn.sicil }),
-        allowedTextFields: turn.allowedTextFields || [],
-        onStatus,
-        onText
-      });
+      return runGroundedTurn(session, { ...options, ...extra });
     }
   });
+  let grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
+  if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText, runIn });
   const messageId = randomUUID();
   let stored;
   try {
@@ -869,7 +928,10 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
   const evidence = await optionalEvidence(turn.sicil, signal, {
     conversationId: turn.conversation.id, messageId: stored.message.id
   });
-  const answer = evidence?.unavailable && stored.message.id === messageId
+  // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
+  // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
+  const own = stored.message.id === messageId;
+  const answer = own && (evidence?.unavailable || evidence?.unverifiable?.has(messageId))
     ? { ...stored.message, evidence: grounded.evidence }
     : discloseSavedMessages([stored.message], evidence)[0];
   return {

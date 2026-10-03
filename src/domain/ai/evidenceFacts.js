@@ -141,7 +141,11 @@ const LABELS = Object.freeze({
   at: ['Zaman', 'Time'],
   deliveredCalendarDate: ['Son gönderilen takvim tarihi', 'Last delivered calendar date'],
   lastDeliveredAt: ['Son gönderim zamanı', 'Last delivery time'],
-  message: ['Hizmet iletisi', 'Service message']
+  message: ['Hizmet iletisi', 'Service message'],
+  today: ['Bugün', 'Today'],
+  assignee: ['Sorumlu gruplaması', 'Assignee grouping'],
+  comparisonBasis: ['Karşılaştırma esası', 'Comparison basis'],
+  definitions: ['Tanım', 'Definition']
 });
 const CANONICAL_FIELDS = new Set(Object.keys(LABELS).filter((key) => !['note', 'guidance', 'field'].includes(key)));
 
@@ -155,13 +159,21 @@ function subjectName(value, inherited) {
     .find((item) => typeof item === 'string' && item.trim()) || inherited;
 }
 
+/** Alan deseni (dizi indisi yerine `*` olabilir) verilen yolu kapsıyor mu? */
+export function fieldPatternCovers(pattern, path, { exact = true } = {}) {
+  const expected = String(pattern).split('.');
+  const actual = String(path).split('.');
+  if (exact ? expected.length !== actual.length : actual.length > expected.length) return false;
+  return actual.every((part, index) => expected[index] === part || (expected[index] === '*' && /^\d+$/.test(part)));
+}
+
 export function createEvidenceFacts(envelope, { prefix, subject = 'Rota', fields = null } = {}) {
   if (typeof prefix !== 'string' || !/^[a-f0-9]{16}_R\d+$/.test(prefix)) return [];
   const facts = [];
   const selected = fields ? [...new Set(fields)].filter((field) => typeof field === 'string') : null;
   const visit = (value, path, name, depth, changeField = null) => {
     if (depth > FACT_LIMITS.maxDepth || facts.length >= FACT_LIMITS.maxFacts) return;
-    if (selected && !selected.some((field) => field === path || field.startsWith(`${path}.`))) return;
+    if (selected && !selected.some((field) => fieldPatternCovers(field, path, { exact: false }))) return;
     if (scalar(value)) {
       if (!claimableField(envelope, path, CANONICAL_FIELDS, changeField)) return;
       facts.push({ semantic: evidenceSemantic(envelope, path, value, factLabel(path)), factId: `${prefix}:${path}`, subjectId: path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : 'result',
@@ -195,6 +207,16 @@ export function escapedFactText(value) {
 }
 
 export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
+  const { value, qualifiers } = factPresentation(fact, locale);
+  return `- “${escapedFactText(fact.subject)}”${qualifiers ? ` (${escapedFactText(qualifiers)})` : ''} · ${fact.changeField ? factLabel(fact.changeField, locale) + ' / ' : ''}${factLabel(fact.field, locale)}: ${escapedFactText(value)}. 【${evidenceId}】`;
+}
+
+/**
+ * Olgunun kullanıcıya gösterilen değeri (kanonik değerin yerelleştirilmiş adı,
+ * birimi ve sekme kapsamıyla) ve sayımın nüfusunu belirleyen süzgeç
+ * niteleyicileri. Metin kaçışsızdır; yazıcı kaçışı kendisi uygular.
+ */
+export function factPresentation(fact, locale = 'tr') {
   const leaf = fact.field.split('.').filter((part) => !/^\d+$/.test(part)).at(-1);
   const values = {
     status: { todo: ['Yapılacak', 'To do'], in_progress: ['Devam ediyor', 'In progress'], done: ['Tamamlandı', 'Done'] },
@@ -226,11 +248,16 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
     : { ...scheduleStatuses, ...coordinationStatuses, PENDING: ['Bekliyor', 'Pending'] };
   Object.assign(values.status, workflowStatuses);
   const semanticLeaf = fact.changeField || (leaf === 'key' ? fact.semantic?.groupBy : leaf);
-  const enumValues = semanticLeaf === 'source' && !fact.field.startsWith('data.calendar.') ? null : values[semanticLeaf] || (semanticLeaf === 'access' ? values.level : null);
+  // Gecikme birimi tablosu yalnızca bağımlılık gecikmesine uygulanır; kişinin birimi (organizasyon) serbest addır.
+  const lagUnit = semanticLeaf === 'unit' && fact.field.split('.').includes('lag');
+  const enumValues = (semanticLeaf === 'source' && !fact.field.startsWith('data.calendar.')) || (semanticLeaf === 'unit' && !lagUnit)
+    ? null : values[semanticLeaf] || (semanticLeaf === 'access' ? values.level : null);
   let value = fact.value;
   if (value === null) value = fact.semantic?.nullMeaning === 'undefined-cycle'
     ? (locale === 'en' ? 'Undefined because of a WBS cycle' : 'WBS döngüsü nedeniyle tanımsız')
-    : (locale === 'en' ? 'Not specified' : 'Belirtilmemiş');
+    : fact.semantic?.nullMeaning === 'over-limit'
+      ? (locale === 'en' ? 'Not exact: exceeds the analysis limit' : 'Kesin değil: analiz sınırını aşıyor')
+      : (locale === 'en' ? 'Not specified' : 'Belirtilmemiş');
   else if (enumValues && leaf !== 'key') value = enumValues[value]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Unknown value' : 'Bilinmeyen değer');
   else if (fact.semantic?.displayValue != null) value = fact.semantic.displayValue;
   else if (typeof value === 'boolean') value = value ? (locale === 'en' ? 'Yes' : 'Evet') : (locale === 'en' ? 'No' : 'Hayır');
@@ -244,7 +271,9 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
   // Sayımın nüfusunu belirleyen her süzgeç niteleyici olarak yazılır: farklı
   // süzgeçlerle elde edilen eşit sayılar ayırt edilebilir kalır.
   // Görev süzgecindeki proje, olgunun öznesinde (proje adı) zaten görünür; talep süzgecinin kimlikleri ayrıca yazılır.
-  const filterNames = { text: ['Arama metni', 'Search text'], requestProjectId: ['Proje kimliği', 'Project ID'], requestTaskId: ['Görev kimliği', 'Task ID'],
+  // Seçiciler kimlikle değil adla yazılır (proje, görev, kişi); kimlik anahtarları niteleyici değildir.
+  const filterNames = { text: ['Arama metni', 'Search text'], project: ['Proje', 'Project'], task: ['Görev', 'Task'], person: ['Kişi', 'Person'],
+    activityScope: ['Kapsam', 'Scope'], activityKind: ['Hareket türü', 'Event kind'],
     wbsId: ['İş dağılımı düğümü', 'WBS node'], tab: ['Sekme', 'Tab'], workflowStatus: ['Talep durumu', 'Request status'],
     source: ['Proje kaynağı', 'Project source'], includeEmpty: ['Görünür görevi olmayan projeler', 'Projects without visible tasks'],
     statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
@@ -261,7 +290,10 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
     if (value == null || value === '' || value === 'any' || (Array.isArray(value) && !value.length)) return null;
     switch (key) {
       case 'text': return `"${String(value)}"`;
-      case 'requestProjectId': case 'requestTaskId': case 'wbsId': case 'personSicil': return String(value);
+      case 'project': case 'task': case 'person': case 'wbsId': return String(value);
+      case 'personSicil': return fact.semantic?.filters?.person ? null : String(value);
+      case 'activityScope': return { visible: ['Görebildiğiniz görevler', 'Your visible tasks'], mine: ['Yalnızca sizin hareketleriniz', 'Only your actions'], team: ['Yönetim kapsamınız', 'Your management scope'] }[value]?.[language] || null;
+      case 'activityKind': return values.kind[value]?.[language] || null;
       case 'tab': return tabValues[value]?.[language] || null;
       case 'workflowStatus': return workflowStatuses[value]?.[language] || null;
       case 'source': return value === 'all' ? null : values.sourceType[value]?.[language] || null;
@@ -270,12 +302,13 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
       default: return (Array.isArray(value) ? value : [value]).map(filterValue).filter(Boolean).join(', ') || null;
     }
   };
-  const qualifiers = Object.entries(fact.semantic?.filters || {}).filter(([key]) => filterNames[key])
-    .map(([key, value]) => [filterNames[key][language], qualifierValue(key, value)])
-    .filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`).join('; ');
+  const qualifierParts = Object.entries(fact.semantic?.filters || {}).filter(([key]) => filterNames[key])
+    .map(([key, value]) => ({ key, label: filterNames[key][language], value: qualifierValue(key, value) }))
+    .filter((part) => part.value);
+  const qualifiers = qualifierParts.map((part) => `${part.label}: ${part.value}`).join('; ');
   if (fact.semantic?.countScope === 'selected-tab' && fact.field.startsWith('data.counts.')) value = `${value} (${locale === 'en' ? 'selected tab' : 'seçilen sekme'})`;
   const units = { hours: ['saat', 'hours'], tasks: ['görev', 'tasks'], 'unspecified-currency': ['para birimi belirtilmemiş', 'currency unspecified'],
     day: ['gün', 'days'], week: ['hafta', 'weeks'], month: ['ay', 'months'], hour: ['saat', 'hours'], unknown: ['birimi bilinmiyor', 'unit unknown'], 'unknown-lag': ['birimi bilinmiyor', 'unit unknown'] };
   if (fact.value != null && units[fact.semantic?.unit]) value = `${value} ${units[fact.semantic.unit][language]}`;
-  return `- “${escapedFactText(fact.subject)}”${qualifiers ? ` (${escapedFactText(qualifiers)})` : ''} · ${fact.changeField ? factLabel(fact.changeField, locale) + ' / ' : ''}${factLabel(fact.field, locale)}: ${escapedFactText(value)}. 【${evidenceId}】`;
+  return { value: String(value), qualifiers, qualifierParts };
 }

@@ -120,7 +120,7 @@ test('konuşmaya eklenen tur önceki TAMAMLANMIŞ çiftleri bağlam olarak alır
   const messages = provider.calls[1].messages;
   assert.deepEqual(messages.map((message) => message.role), ['system', 'user', 'assistant', 'user']);
   assert.deepEqual(messages.slice(1).map((message) => message.content), ['İlk soru', 'Merhaba, bağlantı çalışıyor.', 'İkinci soru']);
-  assert.match(messages[0].content, /Rota AI/);
+  assert.match(messages[0].content, /"Bilgin"sin/);
   assert.match(messages[0].content, /erişimin YOK/);
   assert.deepEqual(db.aiConversationMessages.map((row) => [row.Sequence, row.Role]), [[1, 'user'], [2, 'assistant'], [3, 'user'], [4, 'assistant']]);
   const loaded = await loadAssistantConversation(conversationId);

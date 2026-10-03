@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
-import { ADMIN, AYSE, NOW, PROJECTS, TASKS, WBS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { ADMIN, ALI_1, ALI_2, AYSE, NOW, PROJECTS, TASKS, WBS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -158,10 +158,14 @@ test('the turn endpoint only accepts a boolean free-text choice and forwards it 
     } });
   const refused = await sendTurn({ turnId: randomUUID(), message: 'Rapor görevinin notu ne?' });
   assert.equal(refused.status, 200);
+  // Sağlayıcı ikizindeki doğrulama hatası akışta hata olayı olur; tur tamamlanmalı ve veri açılmamalıdır.
+  const done = refused.events.find((event) => event.event === 'done');
+  assert.ok(done, 'the turn must complete; a provider-side assertion failure surfaces as an error event');
+  assert.equal(done.data.assistantMessage.finishReason, 'unavailable');
 });
 
 test('successful later rounds open their own follow-ups (person → task list → task detail)', async (t) => {
-  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ayşe' }), (input) => {
+  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ayşe Yılmaz' }), (input) => {
     const person = results(input)[0].data.people[0];
     return calls('rota_task_search', { personSicil: person.sicil }, 'list');
   }, (input) => {
@@ -170,17 +174,49 @@ test('successful later rounds open their own follow-ups (person → task list �
   }, (input) => {
     assert.equal(results(input).at(-1).ok, true);
     return reply(evidenceReply(claimFor(results(input).at(-1), 'data.task.status')));
-  }], { user: 'Ayşe\'nin ilk görevinin durumu?' });
+  }], { user: 'Ayşe Yılmaz\'ın ilk görevinin durumu?' });
   assert.equal(result.outcome, 'grounded');
 });
 
+test('a lone partial person match is a candidate, not a Sicil identity for follow-ups', async (t) => {
+  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ayşe' }), (input) => {
+    const found = results(input)[0];
+    assert.equal(found.data.resolution, 'partial');
+    assert.equal(found.data.resolvedPerson, undefined);
+    assert.equal(found.data.candidates.length, 1);
+    return calls('rota_task_search', { personSicil: found.data.people[0].sicil }, 'list');
+  }, (input) => {
+    assert.equal(results(input).at(-1).error.code, 'UNSUPPORTED_SCOPE');
+    return reply(JSON.stringify({ kind: 'clarification', evidence: 'R1' }));
+  }], { user: 'Ayşe\'nin görevleri' });
+  assert.equal(result.outcome, 'clarification');
+  assert.match(result.text, /^1\. \*\*Ayşe Yılmaz\*\*/);
+  assert.match(result.text, /Onaylamak için \*\*1\*\* yazın/);
+  assert.deepEqual(JSON.parse(result.evidenceRows[0].evidenceJson).clarificationContext, [{ ordinal: 0, personSicil: AYSE }]);
+});
+
 test('a resolved project name reaches project-scoped activity, workload and request tools', async (t) => {
-  const { result } = await turn(t, [calls('rota_project_search', { text: 'Radar' }), (input) => {
+  const { result } = await turn(t, [calls('rota_project_search', { text: 'Radar Modernizasyonu' }), (input) => {
     assert.ok(['rota_activity_search', 'rota_workload_summary', 'rota_schedule_requests', 'rota_assignment_requests', 'rota_recurrence_inspect']
       .every((name) => input.tools.some((tool) => tool.name === name)));
-    return calls('rota_workload_summary', { projectId: results(input)[0].data.matches[0].projectId }, 'load');
-  }, (input) => reply(evidenceReply(claimFor(results(input).at(-1), 'data.openTaskCount')))], { user: 'Radar projesinin iş yükü' });
+    assert.equal(results(input)[0].data.resolution, 'unique');
+    return calls('rota_workload_summary', { projectId: results(input)[0].data.resolvedProject.projectId }, 'load');
+  }, (input) => reply(evidenceReply(claimFor(results(input).at(-1), 'data.openTaskCount')))], { user: 'Radar Modernizasyonu projesinin iş yükü' });
   assert.equal(result.outcome, 'grounded');
+});
+
+test('a lone partial project match cannot open project-scoped follow-ups without confirmation', async (t) => {
+  const { result } = await turn(t, [calls('rota_project_search', { text: 'Radar' }), (input) => {
+    const found = results(input)[0];
+    assert.equal(found.data.resolution, 'partial');
+    assert.equal(found.data.ambiguous, false);
+    return calls('rota_project_detail', { projectId: found.data.matches[0].projectId }, 'detail');
+  }, (input) => {
+    assert.equal(results(input).at(-1).error.code, 'UNSUPPORTED_SCOPE');
+    return reply('{"kind":"clarification"}');
+  }], { user: 'Radar projesinin durumu' });
+  assert.equal(result.outcome, 'clarification');
+  assert.match(result.text, /^1\. \*\*Radar Modernizasyonu\*\* \(RDR\)/);
 });
 
 /* ── Sonuç ve telemetri ────────────────────────────────────── */
@@ -205,22 +241,30 @@ test('general-chat redirects are counted separately from candidate clarification
   assert.equal(after.clarification - before.clarification, 0);
 });
 
-test('a clarification needs two distinct candidates and renders one numbered row per candidate', async (t) => {
-  const single = await turn(t, [calls('rota_person_search', { text: 'Ali' }), (input) => {
+test('a clarification always presents the server-held candidate set; the model cannot drop alternatives', async (t) => {
+  const named = await turn(t, [calls('rota_person_search', { text: 'Ali' }), (input) => {
     const found = results(input)[0];
     return reply(JSON.stringify({ kind: 'clarification', claims: [claimFor(found, 'data.people.0.name'), claimFor(found, 'data.people.0.jobTitle')] }));
-  }, (input) => reply(JSON.stringify({ kind: 'clarification', claims: [claimFor(results(input)[0], 'data.people.0.name')] }))]);
-  assert.equal(single.result.outcome, 'failed');
+  }], { user: 'Ali’nin iş yükü' });
+  assert.equal(named.result.outcome, 'clarification');
+  const rows = named.result.text.split('\n').filter((line) => /^\d+\. /.test(line));
+  assert.equal(rows.length, 2, 'every candidate is shown even when the model named one');
+  assert.match(rows[0], /Uzman · K1 \/ Kalite \/ Üretim/);
+  assert.match(rows[1], /Mühendis · T2 \/ Tasarım \/ Planlama/);
+  const context = JSON.parse(named.result.evidenceRows[0].evidenceJson).clarificationContext;
+  assert.deepEqual(context, [{ ordinal: 0, personSicil: ALI_1 }, { ordinal: 1, personSicil: ALI_2 }]);
 
-  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ali' }), (input) => {
-    const found = results(input)[0];
-    return reply(JSON.stringify({ kind: 'clarification', claims: [claimFor(found, 'data.people.0.name'), claimFor(found, 'data.people.0.jobTitle'), claimFor(found, 'data.people.1.name')] }));
-  }]);
-  assert.equal(result.outcome, 'clarification');
-  const rows = result.text.split('\n').filter((line) => /^\d+\. /.test(line));
-  assert.equal(rows.length, 2, 'one visible row per candidate');
-  const context = JSON.parse(result.evidenceRows[0].evidenceJson).clarificationContext;
-  assert.deepEqual(context.map((item) => item.ordinal), [0, 1]);
+  const bare = await turn(t, [calls('rota_person_search', { text: 'Ali' }), reply('{"kind":"clarification"}')], { user: 'Ali’nin iş yükü' });
+  assert.equal(bare.result.outcome, 'clarification');
+  assert.equal(bare.result.text.split('\n').filter((line) => /^\d+\. /.test(line)).length, 2);
+
+  const forged = await turn(t, [calls('rota_person_search', { text: 'Ali' }), reply('{"kind":"clarification","evidence":"R1","candidates":[0]}'),
+    reply('{"kind":"clarification","evidence":"R9"}')], { user: 'Ali’nin iş yükü' });
+  assert.equal(forged.result.outcome, 'failed');
+
+  const unique = await turn(t, [calls('rota_project_search', { text: 'Radar Modernizasyonu' }), reply('{"kind":"clarification","evidence":"R1"}'),
+    reply('{"kind":"clarification"}')], { user: 'Radar Modernizasyonu' });
+  assert.equal(unique.result.outcome, 'failed', 'a uniquely resolved search has nothing to clarify');
 });
 
 /* ── Toplu kanıt ve yetki ──────────────────────────────────── */
@@ -369,13 +413,22 @@ test('activity snapshots are keyed by their text projection', async (t) => {
   assert.match(results[1].data.items[0].changes.join(' '), /Zeynep Kaya/);
 });
 
-test('project detail fails closed instead of publishing the dependency sentinel as a count', async (t) => {
+test('project detail never publishes a capped dependency count as exact: the metric is unknown, the rest stays exact', async (t) => {
   const seed = rotaToolSeed();
   seed.taskDependencies = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({ ProjectId: PROJECTS.FULL,
     TaskId: TASKS.DUE_SOON, PredecessorTaskId: TASKS.OVERDUE, DependencyType: 'FS', LagDays: index }));
   const stack = createAiStack(t, { sicil: AYSE, seed });
-  const { result } = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.FULL });
-  assert.equal(result.error.code, 'RESULT_TOO_LARGE');
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.project.dependencyCount, null);
+  assert.deepEqual(result.data.project.countsOverLimit, ['dependencyCount']);
+  assert.equal(result.data.project.wbsNodeCount, 3);
+  assert.equal(result.complete, false);
+  const { analyzeGroundedAnswer } = await import('../src/domain/ai/evidenceVerification.js');
+  const verdict = analyzeGroundedAnswer(JSON.stringify({ kind: 'rota', facts: ['R1:data.project.dependencyCount', 'R1:data.project.wbsNodeCount'] }),
+    { evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads() });
+  assert.match(verdict.normalized, /Kesin değil: analiz sınırını aşıyor/);
+  assert.doesNotMatch(verdict.normalized, new RegExp(String(TOOL_LIMITS.maxAnalyzedTasks).replace(/(\d)(?=(\d{3})+$)/g, '$1.?')));
 });
 
 /* ── SQL ve sağlık ─────────────────────────────────────────── */
@@ -389,8 +442,24 @@ test('evidence temp tables are dropped before creation and before every bounded-
     const text = await import('node:fs/promises').then((fs) => fs.readFile(new URL(`../${file}`, import.meta.url), 'utf8'));
     for (const match of text.matchAll(/BEGIN\s+(?:--[^\n]*\n\s*)?DROP TABLE ([^;]+);\s+THROW 51001/g)) assert.ok(match[1].includes('#'), file);
     assert.doesNotMatch(text, /THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\s*(?:SELECT|DECLARE @lastPage)[\s\S]{0,40}#(?:Coordination|Schedule)EvidenceSnapshot/);
-    assert.ok(/BEGIN[\s\S]{0,120}DROP TABLE[\s\S]{0,60}THROW 51001/.test(text), file);
+    assert.ok(/BEGIN[\s\S]{0,120}DROP TABLE[^;]+;\s+THROW 51001/.test(text), file);
   }));
+});
+
+test('every Rota tool bounded-result THROW first drops all temp tables the batch creates', async () => {
+  const queries = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  let total = 0;
+  for (const [name, text] of Object.entries(queries)) {
+    const created = new Set([...text.matchAll(/(?:CREATE TABLE|INTO) (#\w+)/g)].map((match) => match[1]));
+    const guarded = [...text.matchAll(/BEGIN\s+DROP TABLE IF EXISTS ([^;]+);\s+THROW 51001/g)];
+    assert.equal(guarded.length, (text.match(/THROW 51001/g) || []).length, `${name}: every THROW cleans up first`);
+    for (const [, list] of guarded) {
+      const dropped = new Set(list.split(',').map((table) => table.trim()));
+      for (const table of created) assert.ok(dropped.has(table), `${name}: ${table} is dropped before THROW`);
+    }
+    total += guarded.length;
+  }
+  assert.ok(total > 0);
 });
 
 test('an invalid tools flag does not hide a more severe AI health warning', (t) => {
@@ -435,4 +504,17 @@ test('a transient evidence-schema probe failure is retryable and never saves an 
   const retry = await sendTurn({ turnId, message: 'Radar projesinde kaç görev var?' });
   const done = retry.events.find((event) => event.event === 'done').data;
   assert.notEqual(done.assistantMessage.finishReason, 'unavailable');
+});
+
+test('authorization id lists are materialized once into keyed temp tables before any membership check', async () => {
+  const queries = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  for (const [name, text] of Object.entries(queries)) {
+    const splits = (text.match(/STRING_SPLIT\(@scopeTasks/g) || []).length;
+    assert.equal(splits, (text.match(/INSERT #AiScopeTaskIds\(TaskId\)/g) || []).length, `${name}: @scopeTasks is split only to stage #AiScopeTaskIds`);
+    assert.doesNotMatch(text, /EXISTS\s*\(\s*SELECT 1 FROM STRING_SPLIT\(@(?:scope|disclosure)/, `${name}: no per-row split of an authorization list`);
+  }
+  assert.match(queries.AI_TOOL_OUTLOOK_SQL, /SELECT 1 FROM #AiScopeTaskIds permitted WHERE permitted\.TaskId = t\.TaskId/);
+  const { CURRENT_TASK_DISCLOSURE_SQL, DISCLOSURE_SCOPE_SETUP_SQL } = await import('../src/server/authorization/disclosureScope.js');
+  assert.doesNotMatch(CURRENT_TASK_DISCLOSURE_SQL, /STRING_SPLIT/);
+  assert.match(DISCLOSURE_SCOPE_SETUP_SQL, /CREATE TABLE #AiDisclosureTasks\(TaskId uniqueidentifier NOT NULL PRIMARY KEY\)/);
 });

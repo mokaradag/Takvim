@@ -557,6 +557,8 @@ export function createAssistantController({
         }];
       return {
         ...current,
+        // Serbest metin onayı yalnızca bu turundur: gönderimle tüketilir, sonraki tur güvenli varsayılana döner.
+        includeText: false,
         running: setRunning(current, run.key, { token: run.token, turnKey: turnId, phase: 'sending' }),
         reconciling: { ...current.reconciling, [run.key]: undefined },
         active: { ...current.active, turns, recoveredDraft: null, notice: null },
@@ -636,7 +638,7 @@ export function createAssistantController({
 
   function setSource(source) {
     if (!['rota', 'general'].includes(source)) return;
-    update((current) => ({ ...current, source }));
+    update((current) => ({ ...current, source, includeText: current.source === source ? current.includeText : false }));
   }
 
   function setIncludeText(includeText) {
@@ -667,7 +669,7 @@ export function createAssistantController({
   function newConversation() {
     if (awaitingAcceptance()) return false;
     cancelViewLoad();
-    update((current) => ({ ...current, view: 'chat', active: draft() }));
+    update((current) => ({ ...current, view: 'chat', includeText: false, active: draft() }));
     return true;
   }
 
@@ -695,6 +697,7 @@ export function createAssistantController({
     update((current) => ({
       ...current,
       view: 'chat',
+      includeText: false,
       active: { key: conversationId, viewKey, id: conversationId, title: known?.title || ASSISTANT_DEFAULT_TITLE, loading: true, failure: null, turns: [] }
     }));
     const load = trackLoad();

@@ -75,6 +75,18 @@ function reportedModel(value) {
 }
 
 /**
+ * Akıl yürütme belirteci sayısı (`completion_tokens_details.reasoning_tokens`
+ * ya da `reasoning_tokens`). Sağlayıcıya özgü ve isteğe bağlıdır: yoksa ya da
+ * geçersizse yalnızca tanıda görünmez, yanıtı geçersiz kılmaz.
+ */
+export function reportedReasoningTokens(usage) {
+  if (!isPlainObject(usage)) return null;
+  const details = isPlainObject(usage.completion_tokens_details) ? usage.completion_tokens_details : null;
+  const value = details?.reasoning_tokens ?? usage.reasoning_tokens;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/**
  * Yanıtın seçeneği: `index === 0` olan giriş. Dizin bildirmeyen uyumlu ağ
  * geçitleri için yalnızca İLK giriş dizinsizse o kullanılır; açıkça sıfırdan
  * farklı dizin taşıyan seçenek asıl yanıt sayılmaz.
@@ -259,10 +271,12 @@ function interpretChunk(payload, state) {
   }
   if (payload.usage != null) {
     if (!isPlainObject(payload.usage)) throw invalid('STREAM_EVENT_MALFORMED');
+    const reasoningTokens = reportedReasoningTokens(payload.usage);
     state.usage = {
       promptTokens: tokenCount(payload.usage.prompt_tokens),
       completionTokens: tokenCount(payload.usage.completion_tokens),
-      totalTokens: tokenCount(payload.usage.total_tokens)
+      totalTokens: tokenCount(payload.usage.total_tokens),
+      ...(reasoningTokens != null ? { reasoningTokens } : {})
     };
   }
   if (payload.choices == null) return { content: null, reasoning: false };

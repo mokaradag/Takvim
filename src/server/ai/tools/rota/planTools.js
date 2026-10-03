@@ -1,4 +1,5 @@
 import 'server-only';
+import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { countWorkingDays } from '../../../../scheduling/calendars/index.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
@@ -27,6 +28,8 @@ import {
   statusLabelOf,
   taskStatus
 } from './taskFacts.js';
+
+const factPopulation = (facts) => facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId }));
 
 /** Görünür tek görevin olgusu; görünmüyorsa "bulunamadı". */
 async function visibleTask(call, scope, taskId) {
@@ -64,6 +67,8 @@ const baselineCompare = {
     }));
     if (!result.projectFull) throw fullAccessRequired();
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+    // Karşılaştırma ve eklenen görev sayıları projenin güncel bütün görevlerine dayanır.
+    call.notePopulation?.(result.population);
     const baselines = result.baselines.map((row) => ({
       baselineId: canonicalActualId(row.BaselineId),
       name: dataText(row.Name, 120),
@@ -124,12 +129,7 @@ const baselineCompare = {
           maxEarlierDays: Math.max(0, ...variances.map((item) => -item.varianceDays))
         } : null,
         mostSlipped: slipped,
-        definitions: {
-          varianceDays: 'Güncel planlanan bitiş − baz plandaki planlanan bitiş (takvim günü). Pozitif değer kayma (gecikme) demektir.',
-          removedSinceBaseline: 'Baz planda kaydı olup artık projede bulunmayan (silinmiş ya da taşınmış) görev.',
-          addedSinceBaseline: 'Baz plan alındıktan sonra projeye eklenen görev.',
-          note: 'Termin (targetFinish) baz planda tutulmaz; karşılaştırma planlanan tarihler üzerindedir.'
-        }
+        definitions: METRIC_DEFINITIONS.baseline
       },
       scope: describeTaskScope(project ? [project] : []),
       complete: slipped.length === counts.finishSlipped && !result.baselinesTruncated,
@@ -192,6 +192,7 @@ const dependencyInspect = {
       projectId, focusTaskId: focus?.id ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+    if (!focus) call.notePopulation?.(result.population);
     const tasks = new Map(result.tasks.map((row) => [canonicalActualId(row.TaskId), row]));
     const relation = (row, otherId) => {
       const other = tasks.get(otherId);
@@ -345,6 +346,7 @@ const recurrenceInspect = {
         projectId: fact.projectId, seriesId, maxRows: TOOL_LIMITS.maxAnalyzedTasks
       }));
       if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      call.notePopulation?.(factPopulation(result.facts));
       const template = result.facts.find((item) => item.id === seriesId && item.recurrenceRule) || null;
       const occurrences = result.facts.filter((item) => item.recurrenceParentId === seriesId);
       const access = projectAccess(scope, fact.projectId);
@@ -361,8 +363,9 @@ const recurrenceInspect = {
           notes: ['Sayılar yalnızca görünür yinelemeler üzerindedir. Son tamamlanan, gerçek bitişi bilinen kayıtlardan seçilir; tarih yoksa null kalır.']
         },
         scope: describeTaskScope(access ? [access] : []),
+        // Eksik gerçek bitiş tarihi satır eksiltmez: sonuç kısaltılmış değildir, yalnızca tamlığı belirtilir.
         complete: !summary.nextTruncated && summary.completionDatesComplete,
-        truncated: summary.nextTruncated || !summary.completionDatesComplete,
+        truncated: summary.nextTruncated,
         returnedCount: 1,
         totalCount: 1,
         nextCursor: null,
@@ -378,6 +381,7 @@ const recurrenceInspect = {
       projectId: args.projectId ?? null, recurringOnly: true, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+    call.notePopulation?.(factPopulation(result.facts));
     const projects = projectIndex(result.projects);
     const series = new Map();
     // Yinelemeler yalnızca şablonları GÖRÜNÜRSE bir seri altında toplanır: gizli
@@ -404,14 +408,15 @@ const recurrenceInspect = {
       };
     }).sort((left, right) => right.open - left.open || left.title.localeCompare(right.title, 'tr'));
     const page = list.slice(0, limit);
-    const previewTruncated = page.some((item) => item.nextTruncated || !item.completionDatesComplete);
+    const previewTruncated = page.some((item) => item.nextTruncated);
+    const datesIncomplete = page.some((item) => !item.completionDatesComplete);
     const descriptor = args.projectId
       ? describeTaskScope([projectAccess(scope, args.projectId)])
       : describeTaskScope(scope.isAdmin ? [] : [...scope.projects.values()]);
     return {
       data: { visibleEntryCount: list.length, series: page, notes: ['Sayılar yalnızca görünür görevler üzerindedir.'] },
       scope: descriptor,
-      complete: page.length === list.length && !previewTruncated,
+      complete: page.length === list.length && !previewTruncated && !datesIncomplete,
       truncated: page.length < list.length || previewTruncated,
       returnedCount: page.length,
       totalCount: list.length,
@@ -477,6 +482,8 @@ const calendarInspect = {
           workingWeekdays: calendar.workingDays.map((day) => WEEKDAY_NAMES[day]).filter(Boolean)
         },
         range: { from, to, calendarDays: daysBetween(from, to) + 1 },
+        // İş günü sayısı tarih penceresine bağlıdır: pencere her olgunun niteleyicisidir.
+        filters: { dateFrom: from, dateTo: to },
         workingDayCount,
         holidays,
         notes: ['İş günü sayısı iki ucu da içerir; hafta sonu ve takvimdeki tatiller sayılmaz.']

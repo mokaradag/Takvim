@@ -1,4 +1,5 @@
 import 'server-only';
+import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
 import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
@@ -29,7 +30,7 @@ const workloadSummary = {
     const limit = args.limit ?? 10;
     const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil });
     const { scope } = await call.authorization();
-    const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
+    const { facts, assignees, projects } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const people = new Map();
     const hoursByPerson = new Map();
     let unassigned = 0;
@@ -70,8 +71,16 @@ const workloadSummary = {
       || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr') || left.sicil - right.sicil);
     const page = ordered.slice(0, limit);
     const descriptor = searchedScope(scope, filters.projectId);
+    // Sayıların nüfusunu belirleyen seçiciler olgunun niteleyicisidir (proje ve kişi adıyla).
+    const projectName = filters.projectId ? projects.get(filters.projectId)?.name || null : null;
+    const personName = args.personSicil != null
+      ? [...assignees.values()].flat().find((person) => person.sicil === args.personSicil && person.name)?.name || null : null;
     return {
       data: {
+        filters: {
+          ...(filters.projectId ? { projectId: filters.projectId, ...(projectName ? { project: projectName } : {}) } : {}),
+          ...(args.personSicil != null ? { personSicil: args.personSicil, ...(personName ? { person: dataText(personName, 120) } : {}) } : {})
+        },
         openTaskCount: facts.length,
         people: page,
         unassignedOpenTasks: unassigned,
@@ -89,7 +98,7 @@ const workloadSummary = {
       nextCursor: null,
       evidence: {
         label: `İş yükü dağılımı · ${ordered.length} kişi`,
-        entity: args.projectId ? { type: 'project', id: args.projectId, name: null } : null,
+        entity: args.projectId ? { type: 'project', id: args.projectId, name: projectName } : null,
         highlights: page.slice(0, 3).map((person) => `${person.name}: ${person.openTasks} açık`)
       }
     };
@@ -139,14 +148,31 @@ const personSearch = {
     const sameName = [...byName.entries()].filter(([, count]) => count > 1).map(([name]) => name);
     const directoryCapped = result.hasMore === true;
     const page = people.slice(0, limit);
+    // Kimlik Sicil'dir: yalnızca tek kesin Sicil ya da tam ad eşleşmesi kişiyi
+    // çözer. Sınırlı dizin sonucunun son satırındaki tek kesin eşleşme, aynı adlı
+    // bir sonraki satırı dışarıda bırakmış olabileceğinden çözüm sayılmaz.
+    const query = String(args.text).trim();
+    const sicilQuery = /^\d{1,9}$/.test(query) ? Number(query) : null;
+    const needle = foldText(query).trim();
+    const exactIndexes = people.flatMap((person, index) => ((sicilQuery != null && person.sicil === sicilQuery) || foldText(person.name).trim() === needle ? [index] : []));
+    const uniqueExact = exactIndexes.length === 1 && !(directoryCapped && exactIndexes[0] === people.length - 1);
+    const resolution = uniqueExact ? 'unique' : exactIndexes.length > 1 || people.length > 1 || directoryCapped ? (people.length ? 'ambiguous' : 'none')
+      : people.length === 1 ? 'partial' : 'none';
+    const pool = resolution === 'ambiguous' && exactIndexes.length > 1 ? exactIndexes.map((index) => people[index]) : ['ambiguous', 'partial'].includes(resolution) ? people : [];
+    const candidates = pool.slice(0, CLARIFICATION_LIMITS.maxCandidates);
+    const resolved = uniqueExact ? people[exactIndexes[0]] : null;
     return {
       data: {
         people: page,
-        ambiguous: people.length > 1,
+        ambiguous: resolution === 'ambiguous',
+        resolution,
+        ...(resolved ? { resolvedPerson: { sicil: resolved.sicil, name: resolved.name } } : {}),
+        ...(candidates.length ? { candidates, ...(pool.length > candidates.length || directoryCapped ? { candidatesTruncated: true } : {}) } : {}),
         sameNameCount: sameName.length,
-        guidance: people.length > 1
-          ? 'Birden çok kişi eşleşti. Kişiyi Sicil ile ayırın; aynı adlı kişilerde kullanıcıya birimini sorun.'
-          : (people.length === 0 ? 'Eşleşen kişi bulunamadı.' : null)
+        guidance: resolution === 'ambiguous'
+          ? 'Birden çok kişi eşleşti. Kişi yalnızca Sicil ile ayrılır; {"kind":"clarification","evidence":"<kanıt>"} ile kullanıcıya sorun, adayları sunucu gösterir.'
+          : resolution === 'partial' ? 'Arama metni yalnızca bir kişinin adına kısmen uyuyor; kişi kesin olarak belirlenmedi. Kişiye özel araç gerekiyorsa {"kind":"clarification","evidence":"<kanıt>"} ile onay isteyin.'
+            : (people.length === 0 ? 'Eşleşen kişi bulunamadı.' : null)
       },
       scope: { kind: 'directory', completeProjectView: false, note: `Dizin araması en fazla ${result.limit} satır döndürür.` },
       complete: !directoryCapped && page.length === people.length,

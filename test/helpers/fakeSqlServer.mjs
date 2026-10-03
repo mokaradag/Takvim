@@ -476,6 +476,7 @@ function scheduleRequestRows(db, sicil, requestId = null) {
         ProjectName: project?.ProjectName ?? entry.ProjectNameSnapshot ?? '',
         ProjectCode: project?.ProjectCode ?? entry.ProjectCodeSnapshot ?? '',
         TaskAvailable: Boolean(task && project?.IsActive),
+        LiveProjectId: task?.ProjectId ?? null,
         IsUnread: !sameVersion(db.scheduleNotifications.find((n) => sameGuid(n.RequestId, entry.RequestId) && n.Sicil === sicil)?.ReadVersion, entry.RowVersion),
         RequesterName: requester?.DisplayName ?? null,
         DecisionOwnerName: owner?.DisplayName ?? null
@@ -1408,8 +1409,17 @@ function runQuery(db, statement, params, { database }) {
     const rows = scheduleRequestRows(db, params.sicil).filter((r) => r.TaskAvailable && disclosureAllowed(db, r, params));
     const actionable = (r) => r.Status === 'PENDING' && r.DecisionOwnerSicil === params.sicil;
     const visible = rows.filter((r) => actionable(r) || !sameVersion(db.scheduleNotifications.find((n) => sameGuid(n.RequestId, r.RequestId) && n.Sicil === params.sicil)?.DismissedVersion, r.RowVersion));
-    const complete = params.evidenceSnapshotLimit == null || visible.length <= params.evidenceSnapshotLimit;
-    return result([[{ CountsComplete: complete ? 1 : 0, UnreadCount: complete ? visible.filter((r) => r.IsUnread).length : null, PendingCount: complete ? rows.filter(actionable).length : null }], visible.slice(0, params.limit)]);
+    if (params.evidenceSnapshotLimit == null) {
+      return result([[{ UnreadCount: visible.filter((r) => r.IsUnread).length, PendingCount: rows.filter(actionable).length }], visible.slice(0, params.limit)]);
+    }
+    // Her sayaç kendi nüfusunu ayrı ve sınırlı yoklar (gerçek sorgudaki TOP (@evidenceSnapshotLimit + 1)).
+    const limit = params.evidenceSnapshotLimit;
+    const unread = visible.filter((r) => r.IsUnread).slice(0, limit + 1);
+    const pending = rows.filter(actionable).slice(0, limit + 1);
+    const counted = (list, flags) => (list.length > limit ? [] : list.map((r) => ({ TaskId: r.TaskId, CurrentProjectId: r.LiveProjectId, ...flags })));
+    return result([[{ UnreadCount: unread.length > limit ? null : unread.length, PendingCount: pending.length > limit ? null : pending.length }],
+      visible.slice(0, params.limit).map((r) => ({ ...r, IsPending: actionable(r) ? 1 : 0 })),
+      [...counted(unread, { CountsUnread: 1, CountsPending: 0 }), ...counted(pending, { CountsUnread: 0, CountsPending: 1 })]]);
   }
   if (sqlText.includes('DECLARE @safePage') || sqlText.includes('#ScheduleEvidenceSnapshot')) {
     throwIfScheduleChangeSchemaMissing(db);
@@ -1418,7 +1428,10 @@ function runQuery(db, statement, params, { database }) {
       && (!params.taskId || sameGuid(r.TaskId, params.taskId)) && (!params.status || r.Status === params.status)
       && (!params.from || isoDate(r.CreatedAt) >= params.from) && (!params.to || isoDate(r.CreatedAt) <= params.to)
       && (!params.requester || contains(r.RequesterName, params.requester) || String(r.RequesterSicil) === params.requester)
-      && (!params.search || contains([r.TaskTitle, r.ProjectName, r.ProjectCode, r.RequesterName, r.RequesterMessage].join(' '), params.search)));
+      && (!params.search || contains((params.evidenceSnapshotLimit == null
+        ? [r.TaskTitle, r.ProjectName, r.ProjectCode, r.RequesterName, r.RequesterMessage]
+        : [r.TaskTitle, r.ProjectName, r.ProjectCode, r.RequesterName, r.DecisionOwnerName,
+          params.searchRequesterMessage ? r.RequesterMessage : '', params.searchDecisionMessage ? r.DecisionMessage : '']).join(' '), params.search)));
     const pending = rows.filter((r) => r.Status === 'PENDING' && r.DecisionOwnerSicil === params.sicil && r.TaskAvailable);
     const sent = rows.filter((r) => r.RequesterSicil === params.sicil);
     const history = rows.filter((r) => r.Status !== 'PENDING' || !r.TaskAvailable);
@@ -1426,7 +1439,8 @@ function runQuery(db, statement, params, { database }) {
     if (params.evidenceSnapshotLimit != null && filtered.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
     const page = Math.min(params.page, Math.max(0, Math.ceil(filtered.length / params.pageSize) - 1));
     return result([[{ Total: rows.length, PendingCount: params.evidenceSnapshotLimit == null ? pending.length : filtered.filter((r) => pending.includes(r)).length, SentCount: params.evidenceSnapshotLimit == null ? sent.length : filtered.filter((r) => sent.includes(r)).length, HistoryCount: params.evidenceSnapshotLimit == null ? history.length : filtered.filter((r) => history.includes(r)).length }],
-      [{ Total: filtered.length, Page: page }], filtered.slice(page * params.pageSize, (page + 1) * params.pageSize)]);
+      [{ Total: filtered.length, Page: page }], filtered.slice(page * params.pageSize, (page + 1) * params.pageSize)
+        .map((r) => (params.evidenceSnapshotLimit == null ? r : { ...r, CurrentProjectId: r.LiveProjectId }))]);
   }
   if (sqlText.includes('FROM dbo.MR_TaskScheduleChangeRequests r WITH (UPDLOCK, HOLDLOCK)')
     && sqlText.includes('t.RowVersion AS TaskRowVersion')) {

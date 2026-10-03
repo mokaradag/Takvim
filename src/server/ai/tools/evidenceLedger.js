@@ -1,6 +1,6 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
-import { evidenceTaskReferences } from './evidenceAuthorization.js';
+import { encodeAuthorizationPopulation, evidenceTaskReferences, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -19,6 +19,8 @@ import {
 
 const MAX_EVIDENCE_TEXT_CHARS = 32 * 1024;
 const MAX_SUMMARY_JSON_CHARS = 4000;
+/** 0018 kısıtı: `DATALENGTH(EvidenceJson) <= 65536` bayt (nvarchar, UTF-16 kod birimi başına 2 bayt). */
+const MAX_EVIDENCE_JSON_CHARS = 32000;
 
 function highlightPairs(highlights = []) {
   return highlights
@@ -29,6 +31,28 @@ function highlightPairs(highlights = []) {
         ? { label: item.slice(0, separator), value: item.slice(separator + 2) }
         : { label: 'Ayrıntı', value: item };
     });
+}
+
+/**
+ * Kalıcı kanıt: güvenli sonuç zarfı ve yeniden açılışta güncel yetkiyle
+ * doğrulanacak TAM görev nüfusu. Sınırlı kayda önce nüfus sığdırılır (gerekirse
+ * yeniden üretilebilirlik verisi bırakılır); nüfus da sığmazsa kanıt kalıcı
+ * olarak "doğrulanamaz" işaretlenir ve yeniden açılışta gösterilmez.
+ */
+function persistedEvidenceJson(entry, payload, clarificationContext) {
+  const authorization = {
+    authorizationEpoch: entry.authorizationEpoch,
+    ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {})
+  };
+  const clarification = clarificationContext ? { clarificationContext } : {};
+  const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
+  const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
+  if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;
+  const { data: _omitted, ...envelope } = payload;
+  const compact = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: population, ...clarification });
+  if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
+  return JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization,
+    authorizationPopulation: unverifiableAuthorizationPopulation(), ...clarification });
 }
 
 export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceOrdinal } = {}) {
@@ -60,13 +84,11 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       entry.payload = payload.length <= MAX_EVIDENCE_TEXT_CHARS
         ? payload
         : JSON.stringify({ evidenceId: id, payloadOmitted: 'size' });
-      // Son yetki denetimi, toplamın dayandığı bütün görevleri (yalnızca yükte
-      // görünenleri değil) yeniden doğrular. Nüfus yalnızca bellekte tutulur.
-      if (entry.population) {
-        const references = new Map(evidenceTaskReferences(JSON.parse(entry.payload)).map((row) => [row.taskId, row]));
-        for (const row of entry.population) if (!references.has(row.taskId)) references.set(row.taskId, row);
-        entry.taskReferences = [...references.values()];
-      }
+      // Son yetki denetimi ve kalıcı kayıt, toplamın dayandığı bütün görevleri
+      // (yalnızca yükte görünenleri değil) taşır.
+      const references = new Map(evidenceTaskReferences(JSON.parse(payload)).map((row) => [row.taskId, row]));
+      for (const row of entry.population || []) if (!references.has(row.taskId) || !references.get(row.taskId).projectId) references.set(row.taskId, row);
+      entry.taskReferences = [...references.values()];
     },
     invalidateAuthorization(epoch, validate = null) {
       for (const entry of entries) if (validate ? !validate(entry) : entry.authorizationEpoch !== epoch) entry.valid = false;
@@ -96,8 +118,12 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       const wanted = ids ? new Set(ids) : null;
       return entries.filter((entry) => entry.valid && (!wanted || wanted.has(entry.id))).map((entry) => entry.summary);
     },
-    /** Kalıcılık satırları (0018): yalnızca atfedilen kanıtlar. */
-    persistable(ids, { clarification = false, candidates = null } = {}) {
+    /**
+     * Kalıcılık satırları (0018): yalnızca atfedilen kanıtlar. Açıklama
+     * yanıtında sunucunun aday kimlikleri (sıra → proje/görev/Sicil) ilgili
+     * kanıtla birlikte saklanır; sonraki turdaki numaralı seçim bunlara bağlanır.
+     */
+    persistable(ids, { clarification = null } = {}) {
       const wanted = new Set(ids);
       return entries
         .filter((entry) => entry.valid && wanted.has(entry.id) && entry.payload)
@@ -105,16 +131,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
         .map((entry) => {
           const summaryJson = JSON.stringify(entry.summary);
           const payload = JSON.parse(entry.payload);
-          const sourceCandidates = payload.data?.matches || payload.data?.people || payload.data?.tasks || [];
-          const selection = candidates ? candidates.map((item, ordinal) => ({ ...item, ordinal })).filter((item) => item.evidenceId === entry.id)
-            : sourceCandidates.map((_, index) => ({ index, ordinal: index }));
-          const clarificationContext = clarification ? selection.slice(0, 10).map(({ index, ordinal }) => {
-            const item = sourceCandidates[index];
-            if (!item) return null;
-            return { ordinal,
-              ...(item.projectId ? { projectId: item.projectId } : {}), ...(item.sicil ? { personSicil: item.sicil } : {}),
-              ...(item.taskId && !item.projectId ? { taskId: item.taskId } : {}) };
-          }).filter(Boolean) : null;
+          const clarificationContext = clarification?.evidenceId === entry.id ? clarification.references : null;
           return {
             ordinal: evidenceOrdinal(entry.id),
             toolName: entry.tool,
@@ -128,9 +145,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
             summaryJson: summaryJson.length <= MAX_SUMMARY_JSON_CHARS
               ? summaryJson
               : JSON.stringify({ ...entry.summary, highlights: [] }),
-            evidenceJson: JSON.stringify({ ...payload, authorizationEpoch: entry.authorizationEpoch,
-              authorizationReferences: evidenceTaskReferences(payload),
-              ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {}), ...(clarificationContext ? { clarificationContext } : {}) })
+            evidenceJson: persistedEvidenceJson(entry, payload, clarificationContext)
           };
         });
     }

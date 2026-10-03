@@ -136,7 +136,7 @@ test('a transient post-persist check preserves this turn, while reopen fails clo
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   stack.db.aiConversationHooks = { beforeAppend() {
-    stack.db.aiToolFailure = { 'task-facts': Object.assign(new Error('temporary read failure'), { code: 'DATABASE_UNAVAILABLE' }) };
+    stack.db.aiToolFailure = { 'task-visibility': Object.assign(new Error('temporary read failure'), { code: 'DATABASE_UNAVAILABLE' }) };
   } };
   const response = await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' });
   const saved = done(response);

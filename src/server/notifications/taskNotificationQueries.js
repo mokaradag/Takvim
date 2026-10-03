@@ -66,24 +66,35 @@ export const TASK_NOTIFICATION_INBOX_SQL = `
   ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
 `;
 
+/**
+ * Yapay zekâ zil okuması: okunmamış sayaç yalnızca okunmamış nüfusu sınırlı
+ * yoklar; okunmuş ama kaldırılmamış geçmiş onu bilinmez yapmaz. Sayılan
+ * bildirimlerin görevleri son yetki denetimi için döner.
+ */
 export const TASK_NOTIFICATION_EVIDENCE_INBOX_SQL = `
-  DROP TABLE IF EXISTS #TaskNotificationEvidence;
-  SELECT TOP (@evidenceSnapshotLimit + 1) ${FIELDS}
-  INTO #TaskNotificationEvidence ${SOURCE}
+  DROP TABLE IF EXISTS #TaskNotificationUnreadProbe;
+  SELECT TOP (@evidenceSnapshotLimit + 1) n.TaskId, t.ProjectId AS CurrentProjectId
+  INTO #TaskNotificationUnreadProbe ${SOURCE}
+  WHERE ${OWNED} AND ${UNREAD} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE};
+  DECLARE @taskEventUnreadProbe int = (SELECT COUNT(*) FROM #TaskNotificationUnreadProbe);
+  SELECT CASE WHEN @taskEventUnreadProbe > @evidenceSnapshotLimit THEN NULL ELSE @taskEventUnreadProbe END AS UnreadCount;
+  SELECT TOP (@limit) ${FIELDS} ${SOURCE}
   WHERE ${OWNED} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE}
   ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
-  SELECT CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN NULL ELSE SUM(IsUnread) END AS UnreadCount,
-    CASE WHEN COUNT(*) > @evidenceSnapshotLimit THEN 0 ELSE 1 END AS CountsComplete FROM #TaskNotificationEvidence;
-  SELECT TOP (@limit) * FROM #TaskNotificationEvidence ORDER BY OccurredAt DESC, NotificationId DESC;
-  DROP TABLE #TaskNotificationEvidence;
+  SELECT TaskId, CurrentProjectId, CAST(1 AS bit) AS CountsUnread, CAST(0 AS bit) AS CountsPending
+  FROM #TaskNotificationUnreadProbe WHERE @taskEventUnreadProbe <= @evidenceSnapshotLimit;
+  DROP TABLE #TaskNotificationUnreadProbe;
 `;
 
-export function mapTaskNotificationInbox(countRows, itemRows) {
+export function mapTaskNotificationInbox(countRows, itemRows, populationRows = null) {
   const counts = countRows?.[0] || {};
+  const evidence = Array.isArray(populationRows);
   return {
     items: (itemRows || []).map(mapTaskNotification),
-    unreadCount: counts.CountsComplete === 0 ? null : Number(counts.UnreadCount || 0),
-    pendingCount: 0
+    unreadCount: evidence && counts.UnreadCount == null ? null : Number(counts.UnreadCount || 0),
+    pendingCount: 0,
+    ...(evidence ? { population: populationRows.map((row) => ({ taskId: canonicalActualId(row.TaskId), projectId: canonicalActualId(row.CurrentProjectId),
+      unread: true, pending: false })).filter((row) => row.taskId) } : {})
   };
 }
 

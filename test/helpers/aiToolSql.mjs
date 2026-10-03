@@ -230,6 +230,11 @@ function taskFacts(db, params) {
   return [facts, projects, params.withAssignees ? assigneeRows(db, scope, facts) : []];
 }
 
+function taskVisibility(db, params) {
+  const scope = scopeOf(db, params);
+  return [[...scope.visible.values()].map(({ task }) => ({ TaskId: upper(task.TaskId), ProjectId: upper(task.ProjectId) }))];
+}
+
 function taskDetail(db, params) {
   const scope = scopeOf(db, params);
   const entry = [...scope.visible.values()][0];
@@ -295,6 +300,11 @@ function projectSearch(db, params) {
   return [[{ Total: matches.length, ExactCount: matches.filter((row) => row.MatchRank === 0).length }], matches.slice(0, Number(params.limit)).map((row) => ({ ...row, LeadName: row.LeadSicil == null ? null : personName(db, row.LeadSicil) }))];
 }
 
+/** Toplamın dayandığı görünür görev nüfusu (`#AiTasks`). */
+function populationRows(entries) {
+  return entries.map(({ task }) => ({ TaskId: upper(task.TaskId), ProjectId: upper(task.ProjectId) }));
+}
+
 function aggregate(tasks, params) {
   const today = day(params.today);
   const soonEnd = day(params.soonEnd);
@@ -324,13 +334,13 @@ function portfolio(db, params) {
       LeadSicil: project.LeadSicil, CalendarId: project.CalendarId, ...access, ...aggregate(tasks, params)
     };
   });
-  return [rows];
+  return [rows, populationRows([...scope.visible.values()])];
 }
 
 function projectDetail(db, params) {
   const scope = scopeOf(db, params);
   const access = scope.projects.get(upper(params.projectId));
-  if (!access) return [[], [], [aggregate([], params)]];
+  if (!access) return [[], [], [aggregate([], params)], []];
   const project = projectRow(db, params.projectId);
   const calendar = db.calendars.find((row) => same(row.CalendarId, project.CalendarId) && row.IsActive)
     || db.calendars.find((row) => row.IsDefault && row.IsActive);
@@ -348,14 +358,15 @@ function projectDetail(db, params) {
         : null
     }],
     db.projectTags.filter((tag) => same(tag.ProjectId, project.ProjectId)).map((tag) => ({ TagName: tag.TagName })),
-    [aggregate(tasks, params)]
+    [aggregate(tasks, params)],
+    populationRows([...scope.visible.values()])
   ];
 }
 
 function wbs(db, params) {
   const scope = scopeOf(db, params);
   const access = scope.projects.get(upper(params.projectId));
-  if (!access) return [[], [], []];
+  if (!access) return [[], [], [], []];
   const catalog = access.AccessLevel === 'FULL' || access.HasReadGrant || access.IsTaskScoped;
   const required = new Set();
   if (!catalog) {
@@ -382,13 +393,14 @@ function wbs(db, params) {
     else if (day(task.TargetFinish) && day(task.TargetFinish) < day(params.today)) entry.OverdueCount += 1;
   }
   const project = projectRow(db, params.projectId);
-  return [nodes, [...counts.values()], [{ ProjectId: project.ProjectId, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, ...access }]];
+  const counted = [...scope.visible.values()].filter(({ task }) => same(task.ProjectId, params.projectId) && (!focused || focused.has(upper(task.WbsId))));
+  return [nodes, [...counts.values()], [{ ProjectId: project.ProjectId, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, ...access }], populationRows(counted)];
 }
 
 function dependencies(db, params) {
   const scope = scopeOf(db, params);
   const access = scope.projects.get(upper(params.projectId));
-  if (!access || access.AccessLevel !== 'FULL') return [[], [], [{ TaskCount: 0, OpenCount: 0 }]];
+  if (!access || access.AccessLevel !== 'FULL') return [[], [], [{ TaskCount: 0, OpenCount: 0 }], []];
   const focus = params.focusTaskId ? upper(params.focusTaskId) : null;
   const rows = db.taskDependencies
     .filter((dep) => same(dep.ProjectId, params.projectId) && (!focus || same(dep.TaskId, focus) || same(dep.PredecessorTaskId, focus)))
@@ -402,7 +414,8 @@ function dependencies(db, params) {
       TaskId: task.TaskId, Title: task.Title, Status: task.Status, PlannedStart: task.PlannedStart, PlannedFinish: task.PlannedFinish,
       TargetFinish: task.TargetFinish, IsMilestone: task.IsMilestone
     })),
-    [{ TaskCount: projectTasks.length, OpenCount: projectTasks.filter((task) => canonicalStatus(task.Status) !== 'done').length }]
+    [{ TaskCount: projectTasks.length, OpenCount: projectTasks.filter((task) => canonicalStatus(task.Status) !== 'done').length }],
+    focus ? [] : populationRows([...scope.visible.values()])
   ];
 }
 
@@ -434,7 +447,8 @@ function baseline(db, params) {
       SnapshotCount: (() => { const count = db.taskBaselineSnapshots.filter((snapshot) => same(snapshot.BaselineId, row.BaselineId)).length; return count >= Number(params.analysisMaxRows) ? null : count; })() })),
     [{ ProjectFull: full ? 1 : 0, SelectedBaselineId: selected?.BaselineId ?? null, BaselineTotal: ordered.length }],
     snapshots,
-    [{ AddedSinceBaseline: added }]
+    [{ AddedSinceBaseline: added }],
+    selected ? populationRows([...scope.visible.values()]) : []
   ];
 }
 
@@ -463,7 +477,7 @@ function outlook(db, params) {
     const task = scope.visible.get(upper(row.TaskId)).task;
     const project = projectRow(db, task.ProjectId);
     return {
-      TaskId: row.TaskId, Title: task.Title, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, TargetFinish: task.TargetFinish,
+      TaskId: row.TaskId, ProjectId: task.ProjectId, Title: task.Title, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, TargetFinish: task.TargetFinish,
       PlannedFinish: task.PlannedFinish, Status: task.Status, PendingMethod: row.PendingMethod, DeliveredSequence: row.DeliveredSequence,
       DeliveredMethod: row.DeliveredMethod, DeliveredDate: row.DeliveredDate, LastDeliveredAt: row.LastDeliveredAt ?? null,
       LastFailureCode: row.LastFailureCode ?? null, AttemptCount: row.AttemptCount, CompletionSuspended: row.CompletionSuspended, UpdatedAt: null
@@ -475,6 +489,7 @@ function outlook(db, params) {
 
 const HANDLERS = Object.freeze({
   'task-facts': taskFacts,
+  'task-visibility': taskVisibility,
   'task-detail': taskDetail,
   'project-search': projectSearch,
   portfolio,

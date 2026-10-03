@@ -10,7 +10,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
 import { authorizationFingerprint, evidenceTaskReferences, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
-import { readTaskFacts } from './rota/rotaToolStore.js';
+import { readVisibleTasks } from './rota/rotaToolStore.js';
 
 /**
  * Bir Rota AI turunun araç bağlamı.
@@ -105,7 +105,8 @@ export function createToolTurnContext({
   }
 
   async function revalidateEvidence(entries, signal) {
-    const eligible = entries.filter(isEvidenceAuthorized);
+    // Nüfusu kalıcı kayda sığmayan kanıt güncel yetkiyle doğrulanamaz.
+    const eligible = entries.filter((entry) => !entry.unverifiable && isEvidenceAuthorized(entry));
     const references = new Map(eligible.map((entry) => [entry.id, entry.taskReferences || evidenceTaskReferences(JSON.parse(entry.payload || '{}'))]));
     const taskIds = [...new Set([...references.values()].flat().map((row) => row.taskId))];
     // Görev kimlikleri analiz sınırı büyüklüğünde parçalarla okunur: uzun bir
@@ -115,9 +116,8 @@ export function createToolTurnContext({
     const current = new Map();
     for (let start = 0; start < taskIds.length; start += chunkSize) {
       const chunk = taskIds.slice(start, start + chunkSize);
-      const result = await withSql(signal, (executor) => readTaskFacts(executor, state.current.scope, { taskIds: chunk, maxRows: chunk.length }), { authorizationOnly: true });
-      if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
-      for (const fact of result.facts) current.set(fact.id, fact.projectId);
+      const visible = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk), { authorizationOnly: true });
+      for (const [taskId, projectId] of visible) current.set(taskId, projectId);
     }
     return new Set(eligible.filter((entry) => references.get(entry.id).every(({ taskId, projectId }) =>
       current.has(taskId) && (!projectId || current.get(taskId) === projectId))).map((entry) => entry.id));

@@ -63,7 +63,10 @@ function createState() {
     // Rota verisi araçları: yalnızca araç adı, sonuç sınıfı ve süre (içerik YOK).
     tools: { calls: 0, byOutcome: {}, byTool: {}, latencyMs: [], lastFailure: null },
     // Kanıta dayalı yanıtların sonucu: grounded (kanıtlı), direct (araçsız), failed (doğrulanamadı).
-    grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, rounds: [], evidence: [] },
+    grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, rounds: [], evidence: [],
+      escalations: { total: 0, byReason: {}, byOutcome: {} } },
+    // Görünür çıktı üretmeden biten model çağrıları (tanı günlüğe yazılır).
+    emptyCompletions: 0,
     retries: 0,
     lastSuccessAt: null,
     // Hizmet hatası (sağlayıcı öncesi de olabilir: rehber, anahtar tablosu, iç
@@ -427,8 +430,14 @@ export function aiTelemetrySnapshot() {
       repaired: current.grounding.repaired,
       disclosed: current.grounding.disclosed,
       rounds: countPercentiles(current.grounding.rounds),
-      evidence: countPercentiles(current.grounding.evidence)
+      evidence: countPercentiles(current.grounding.evidence),
+      escalations: {
+        total: current.grounding.escalations.total,
+        byReason: { ...current.grounding.escalations.byReason },
+        byOutcome: { ...current.grounding.escalations.byOutcome }
+      }
     },
+    emptyCompletions: current.emptyCompletions,
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
     requestSequence: current.requestSequence,
@@ -470,7 +479,7 @@ export function recordAssistantTurn({ code = null, source = null, details = null
     safely(() => logEvent({
       severity: [AI_ERROR_CODES.AI_CONFIGURATION_ERROR, AI_ERROR_CODES.AI_INTERNAL_ERROR, 'DATABASE_UNAVAILABLE'].includes(outcome.code)
         ? EVENT_SEVERITIES.ERROR : EVENT_SEVERITIES.WARNING, component: COMPONENTS.AI,
-      operation: 'ai.assistant.turn', code: outcome.code, message: 'Rota AI turu tamamlanamadı.'
+      operation: 'ai.assistant.turn', code: outcome.code, message: 'Bilgin turu tamamlanamadı.'
     }));
   }
 }
@@ -508,11 +517,82 @@ export function recordAiToolCall({ tool, code = null, durationMs = 0, resultByte
       component: COMPONENTS.AI,
       operation: 'ai.tool.call',
       code: 'AI_TOOL_INTERNAL_ERROR',
-      message: 'Rota AI aracı beklenmeyen bir hatayla sonuçlandı.',
+      message: 'Bilgin aracı beklenmeyen bir hatayla sonuçlandı.',
       durationMs,
       context: { tool: /^rota_[a-z_]{3,60}$/.test(String(tool)) ? String(tool) : 'unknown' }
     }));
   }
+}
+
+const SAFE_MODEL = /^[A-Za-z0-9._:/@+-]{1,120}$/;
+const safeModel = (value) => (SAFE_MODEL.test(String(value ?? '')) ? String(value) : null);
+const safeCount = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null);
+const millis = (value) => (Number.isFinite(value) && value >= 0 ? Math.round(value) : null);
+
+/**
+ * Görünür çıktı üretmeden biten model çağrısı. Yalnızca bitiş nedeni, belirteç
+ * sayıları, süreler ve hangi olay türlerinin geldiği yazılır; istem, araç
+ * verisi ya da model metni yazılmaz.
+ */
+export function recordEmptyCompletion({ profile, model = null, diagnostics = {} }) {
+  safely(() => { state().emptyCompletions += 1; });
+  safely(() => logEvent({
+    severity: EVENT_SEVERITIES.WARNING,
+    component: COMPONENTS.AI,
+    operation: 'ai.provider.empty_completion',
+    code: 'AI_EMPTY_COMPLETION',
+    message: 'Model görünür bir yanıt üretmeden durdu.',
+    durationMs: millis(diagnostics.providerMs),
+    context: {
+      profile: isKnownAiProfile(profile) ? profile : null,
+      model: safeModel(model),
+      finishReason: typeof diagnostics.finishReason === 'string' ? diagnostics.finishReason.slice(0, 40) : null,
+      usage: {
+        input: safeCount(diagnostics.usage?.input),
+        reasoning: safeCount(diagnostics.usage?.reasoning),
+        completion: safeCount(diagnostics.usage?.completion),
+        visible: safeCount(diagnostics.usage?.visible)
+      },
+      toolCalls: diagnostics.toolCalls === true,
+      firstEventMs: millis(diagnostics.firstEventMs),
+      providerMs: millis(diagnostics.providerMs),
+      reasoningReceived: diagnostics.reasoningReceived === true,
+      textReceived: diagnostics.textReceived === true
+    }
+  }));
+}
+
+const ESCALATION_REASONS = new Set(['VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION']);
+const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
+
+/**
+ * Standart kipteki kanıta dayalı turun Derin düşünme ile sonlandırılması:
+ * istenen kip, kullanılan modeller, neden, kanıtın yeniden kullanılıp
+ * kullanılmadığı ve son sonuç (içerik taşımaz).
+ */
+export function recordGroundedEscalation({ requestedMode, models = [], reason, toolsReused = false, outcome }) {
+  const safeReason = ESCALATION_REASONS.has(reason) ? reason : 'OTHER';
+  const safeOutcome = ESCALATION_OUTCOMES.has(outcome) ? outcome : 'other';
+  safely(() => {
+    const current = state().grounding.escalations;
+    current.total += 1;
+    current.byReason[safeReason] = (current.byReason[safeReason] || 0) + 1;
+    current.byOutcome[safeOutcome] = (current.byOutcome[safeOutcome] || 0) + 1;
+  });
+  safely(() => logEvent({
+    severity: EVENT_SEVERITIES.INFO,
+    component: COMPONENTS.AI,
+    operation: 'ai.grounded.escalation',
+    code: 'AI_GROUNDED_ESCALATION',
+    message: 'Standart kipteki Rota verisi yanıtı Derin düşünme ile sonlandırıldı.',
+    context: {
+      requestedMode: ['standard', 'deep'].includes(requestedMode) ? requestedMode : null,
+      models: [...new Set(models.map(safeModel).filter(Boolean))].slice(0, 4),
+      reason: safeReason,
+      toolsReused: toolsReused === true,
+      outcome: safeOutcome
+    }
+  }));
 }
 
 /** Kanıta dayalı yanıtın sonucu (içerik taşımaz). */

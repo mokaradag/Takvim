@@ -792,7 +792,7 @@ olur). Değerler hiçbir tanı çıktısına taşınmaz.
 
 | Değişken | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `MERGEN_ROTA_AI_ENABLED` | `false` | Özelliği açar. Geçersiz değer (ör. `tru`) kapalı sayılır ama bilinçli kapatmadan ayrılır: Sistem Yönetimi yapılandırma hatası gösterir, istekler `AI_CONFIGURATION_ERROR` alır |
+| `MERGEN_ROTA_AI_ENABLED` | `false` | Özelliği açar. Geçersiz değer (ör. `tru`) kapalı sayılır ama bilinçli kapatmadan ayrılır: Sistem Yönetimi yapılandırma hatası gösterir, istekler `AI_CONFIGURATION_ERROR` alır. Açık değilken (boş, `false` ya da geçersiz) üst çubuktaki Rota AI düğmesi, yardımcı paneli ve komut paletindeki "Rota AI’ye sor" girdisi gösterilmez; değer her sayfa isteğinde sunucu ortamından okunur (`next start` ile çalışan sunucuda `.env.local` değişikliği yeniden başlatmayla geçerli olur) |
 | `MERGEN_ROTA_AI_BASE_URL` | — | OpenAI uyumlu ağ geçidinin taban adresi (genellikle `/v1` ile biter). HTTPS zorunlu; düz HTTP yalnız geri döngü adresinde ya da açık onayla. Adreste kullanıcı bilgisi, sorgu ya da parça bulunamaz |
 | `MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP` | `false` | Düz HTTP'ye açık onay; üretimde kapalı kalmalıdır |
 | `MERGEN_ROTA_AI_DEFAULT_API_KEY` | boş | Kurumsal anahtar; yalnızca kişisel anahtarı olmayanlar için. Kişisel anahtarla aynı biçim kuralından geçer; yalnızca bütünüyle `<…>` yer tutucu olan değer reddedilir |
@@ -1043,8 +1043,9 @@ Bilinçli olarak **yapılmayanlar**:
 
 ## 18. Rota AI: akışlı sohbet (Aşama 2)
 
-Rota AI, uygulama kabuğundaki genel yardımcıdır: üst çubuktaki **Rota AI**
-düğmesiyle (ya da Ctrl K → *Rota AI'ye sor*) açılır, kullanıcıyı çalıştığı
+Rota AI, uygulama kabuğundaki genel yardımcıdır; arayüzdeki adı **Bilgin**'dir
+(yapılandırma ve kod adları `MERGEN_ROTA_AI_*` ve Rota AI olarak kalır). Üst
+çubuktaki **Bilgin** düğmesiyle (ya da Ctrl K → *Bilgin’e sor*) açılır, kullanıcıyı çalıştığı
 sayfadan ayırmaz. Yanıt, sağlayıcı ürettikçe tarayıcıya akar. Bu aşamada Rota
 verisine (görev, proje, kişi, takvim) **erişmez**; genel sorularda, yazım,
 özetleme ve açıklama işlerinde yardımcı olur.
@@ -1171,7 +1172,14 @@ seçtirmez. `chat.tools` bu aşamada kullanılmaz.
 `reasoning_content`/`reasoning` alanları ve yanıtın başındaki
 `<think>…</think>` bloğu görünür metne girmez; yalnızca `status: thinking`
 evresi bildirilir. Görünür metin üretmeden biten yanıt
-`AI_PROVIDER_RESPONSE_INVALID` (`EMPTY_COMPLETION`) olur.
+`AI_PROVIDER_RESPONSE_INVALID` (`EMPTY_COMPLETION`) olur; yanıt kaydedilmediği
+için kullanıcıya yeniden denenebilir olarak bildirilir. Her boş yanıt içeriksiz
+bir tanı olayı yazar (`ai.provider.empty_completion`: bitiş nedeni, sağlayıcının
+bildirdiği girdi/akıl yürütme/görünür belirteç sayıları, akıl yürütme ve metin
+gelip gelmediği, ilk olaya kadar ve toplam süre). Sağlayıcı
+`completion_tokens_details.reasoning_tokens` ya da `reasoning_tokens`
+bildirirse bu sayı kullanıma (`usage.reasoningTokens`) eklenir; bildirmezse
+yoktur.
 
 ### 18.5 Sunucuya ait yönerge ve sınırlı bağlam
 
@@ -1329,7 +1337,7 @@ P50/P95 özetini (`latency.firstToken`, `latency.streamGeneration`) ve akış
 sonuç sayaçlarını (`streams`: tamamlanan, durdurulan, süre aşımı, yarıda kalan,
 başlamadan başarısız) taşır; Sistem Yönetimi → Genel Durum → Yapay zekâ
 hizmeti ayrıntısında *İlk metin P95*, *Sağlayıcı akış sonuçları* ve profil başına istek
-sayısı (*Profil dağılımı*) olarak görünür. *Rota AI tur sonuçları* (`assistantTurns`)
+sayısı (*Profil dağılımı*) olarak görünür. *Bilgin tur sonuçları* (`assistantTurns`)
 yanıtın kaydedilmesini de kapsar; HTTP 200 sonrasındaki kalıcılık hataları başarısız
 tur olarak kaydedilir ve sağlık görünümünde bildirilir. Her tur sonucu sayılır;
 ancak yalnızca HİZMET hatası (kurumsal anahtarın reddi, sağlayıcı/kalıcılık
@@ -1374,9 +1382,15 @@ güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
 
 ### 18.12 Arayüz
 
+- **Görünürlük:** `MERGEN_ROTA_AI_ENABLED` açık değilse kök yerleşim bunu
+  sayfaya yazar (`<meta name="mergen-rota-ai" content="disabled">`) ve kabuk
+  Bilgin düğmesini, paneli ve komut paleti girdisini hiç göstermez. İşaret
+  yalnızca açık/kapalı bilgisini taşır; uçların kendi denetimi yerinde kalır.
 - **Yerleşim:** masaüstünde üst çubuğun altında, sağa yaslı, **kipsiz**
   yardımcı panel (`role="complementary"`, odak tuzağı yok; Esc kapatır ve
-  odak Rota AI düğmesine döner). Katmanı `--z-assistant`'tır: kabuğun ve
+  odak Bilgin düğmesine döner). Genişlik görünüm alanının yaklaşık %42'sidir
+  (460–600 px; 1600 px ve üstünde en fazla 680 px) ve çalışma alanına en az
+  96 px kalır. Katmanı `--z-assistant`'tır: kabuğun ve
   yapışkan şeritlerin üstünde; açılır paneller, görev çekmecesi, komut paleti ve
   kipli pencereler onun üstündedir (`docs/UI-STYLING-ARCHITECTURE.md` §9). Dar
   ekranda (≤ 760 px) tam ekran, kipli bir sayfa olur (`role="dialog"`, odak
@@ -1386,12 +1400,18 @@ güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
   sunucudan okunur. Tarayıcı deposuna (`localStorage`, `sessionStorage`)
   hiçbir şey yazılmaz.
 - **Demo Kipi:** panel açılır ama hiçbir istek gönderilmez, konuşma saklanmaz,
-  yapılandırma durumu okunmaz; Rota AI'nin Gerçek Sistem'de kullanılabildiği
+  yapılandırma durumu okunmaz; Bilgin'in Gerçek Sistem'de kullanılabildiği
   açıklanır.
 - **Yazma alanı:** çok satırlı; Enter gönderir, Shift+Enter satır ekler, giriş
   yöntemi (IME) birleştirmesi gönderim sayılmaz; boş ileti ve 8.000 karakteri
   aşan ileti gönderilmez; çift gönderim engellenir. Yanıt sürerken gönder
-  düğmesinin yerini Durdur alır.
+  düğmesinin yerini aynı boyuttaki Durdur aynı sabit yuvada alır; öteki
+  denetimler kaymaz. İleti kutusu ile denetimler tek yüzeydir ve denetimler
+  TEK satırdır: Rota verisi araçları açıksa yanıt kaynağı (`Rota verisi` /
+  `Genel sohbet`, bölümlü radyo grubu) ve yalnızca o ileti için serbest metin
+  onayı (`Notlar ve iletiler` anahtarı); sağda **Derin düşünme** anahtarı
+  (kapalıyken Standart kip) ile Gönder/Durdur. Satır sarmaz; kutu daraldıkça
+  anahtar etiketleri önce kısalır, sonra simgeye iner.
 - **Güvenli biçim:** yanıt `assistantMarkdown.js` ile veri ağacına çözülür ve
   yalnızca React öğeleriyle çizilir (`dangerouslySetInnerHTML` yok). Paragraf,
   liste, vurgu, satır içi kod, kod bloğu, tablo ve bağlantı desteklenir; model
@@ -1466,7 +1486,7 @@ node test/helpers/fakeOpenAiCompatibleServer.mjs --serve --port 8099 --delay-ms 
 **A. Temel konuşma**
 
 1. Gerçek Sistem kipine geçin.
-2. Üst çubuktan **Rota AI**'yi açın.
+2. Üst çubuktan **Bilgin**'i açın.
 3. Yeni bir konuşma başlatın (başlıktaki *Yeni konuşma*).
 4. Basit bir Türkçe soru gönderin.
 5. Metnin, yanıtın tamamı bitmeden parça parça göründüğünü doğrulayın.
@@ -1543,7 +1563,7 @@ yanıt verdiğini doğrulayın.
 **H. Kapasite** (TEST sınırlarını geçici olarak küçültün)
 
 Kullanıcı başına etkin sınırı, küresel etkin sınırı, sıra sınırını, sıra süre
-aşımını ve `AI_BUSY`'yi deneyin. Arayüzün *Rota AI şu anda yoğun* uyarısıyla,
+aşımını ve `AI_BUSY`'yi deneyin. Arayüzün *Bilgin şu anda yoğun* uyarısıyla,
 çökmeden davrandığını doğrulayın.
 
 **I. Sağlayıcı hataları**
@@ -1656,11 +1676,17 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   yeniden okunur ve sabit SQL görünürlüğü anlık görüntüyle aynı kurallarla
   hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz. Kanıt görev başına kimlik görünürlüğünü de temsil eden kalıcı yetki epoch’una bağlıdır; sonraki küme ve son çizim öncesi okuma değişen erişimde eski kanıtı geçersiz yapar. Bu uygulama denetimi atomik SQL/model/teslim işlemi değildir.
 - **Kanıt:** başarılı sonuçlar `R1`, `R2` … ve tur için rastgele olgu öneki
-  taşır. Model doğal dili yorumlar, türlü JSON iddiaları seçer. Sunucu kayıt
-  yolu/alan/değer eşitliğini kendi yetkili yükünde denetler ve etiket/değer ile
-  `【R1】` atfını çizer; düzyazı regexleri veya ikinci bir model hakem değildir.
-  Uydurma/değiştirilmiş iddia bir kez düzeltilir, yine olmazsa sabit güvenli
-  ileti kaydedilir (`grounding_failed`). Modelin `general/rota` önerisi kanıt sınırını kapatamaz. `source: rota` varsayılanında yalnızca doğrulanmış olgular/güvenli son iletiler; kullanıcı `source: general` seçtiğinde veri okumayan genel akış kullanılır. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir ve seçilmemiş alanlar model/kanıt kaydından önce çıkarılır. Gecikme/saat/para birimleri ve null/tamlık anlamları sunucuda çizilir.
+  taşır. Model doğal dili yorumlar ve kanıttaki olguları seçer
+  (`{"kind":"rota","facts":["R1:data.…"]}`; eski türlü iddia biçimi de kabul
+  edilir). Değer, özne, birim ve süzgeç sunucunun kendi yetkili yükünden okunur;
+  seçilen olgular sunucuya ait şablonlarla paragraf, liste ya da tabloya
+  çevrilir ve `【R1】` atfı eklenir. Düzyazı regexleri veya ikinci bir model
+  hakem değildir. Uydurma/değiştirilmiş başvuru bir kez düzeltilir; Standart
+  kipte, Derin düşünme araç profili kuruluysa kurtarılabilir model hatası aynı
+  kanıtla bir kez Derin düşünmeye devredilir; yine olmazsa sabit güvenli ileti
+  kaydedilir (`grounding_failed`). Kimlik yalnızca kesin eşleşmedir; belirsiz
+  adayları sunucu çizer ve kullanıcının numaralı seçimini kayıtlı kimliğe
+  bağlar. Modelin `general/rota` önerisi kanıt sınırını kapatamaz. `source: rota` varsayılanında yalnızca doğrulanmış olgular/güvenli son iletiler; kullanıcı `source: general` seçtiğinde veri okumayan genel akış kullanılır. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir ve seçilmemiş alanlar model/kanıt kaydından önce çıkarılır. Gecikme/saat/para birimleri ve null/tamlık anlamları sunucuda çizilir.
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
   kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
@@ -1674,9 +1700,10 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   Açma, tekrar ve uzlaştırmada güncel epoch kontrol edilir; uyuşmayan/eski
   kanıtın metni ve özetleri açıklanmaz. Aday seçimi yalnızca yetkili minimal
   yapılandırılmış referanslarla sonraki tura taşınır.
-- **Gözlem:** araç çağrıları ve kanıtlı yanıt sonuçları içeriksiz ölçülür;
-  sağlık bileşeni kayıt defteri, 0018, araç profilleri ve araç hizmet
-  hatalarında uyarır.
+- **Gözlem:** araç çağrıları, kanıtlı yanıt sonuçları, Standart → Derin düşünme
+  devirleri (neden, modeller, kanıtın yeniden kullanımı, sonuç) ve boş yanıt
+  tanıları içeriksiz ölçülür; sağlık bileşeni kayıt defteri, 0018, araç
+  profilleri ve araç hizmet hatalarında uyarır.
 - **Dağıtım:** 0018 → model kaydında `chat.tools` / `chat.tools.reasoning` →
   bayrak kapalıyken yayın → `MERGEN_ROTA_AI_TOOLS_ENABLED=true` → Sistem
   Yönetimi denetimi → elle kabul. Geri alma: yalnız Aşama 3 özelliği geri

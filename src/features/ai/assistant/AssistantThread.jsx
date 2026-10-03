@@ -162,7 +162,7 @@ export function AssistantTurn({ turn, phase = null, topic = null, canRetry = fal
         )}
       </div>
       <div className={`rota-assistant-answer is-${status}`} aria-busy={active || undefined}>
-        <span className="sr-only">Rota AI: </span>
+        <span className="sr-only">Bilgin: </span>
         {status === 'waiting' && (
           <p className="rota-assistant-phase">
             <span className="rota-assistant-pulse" aria-hidden="true" />

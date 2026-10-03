@@ -261,11 +261,13 @@ const EVIDENCE_READY = `
 export const AI_CONVERSATION_EVIDENCE_SQL = `${KNOWN_SICIL}${EVIDENCE_READY}
   SELECT @knownSicil AS KnownSicil, @evidenceReady AS EvidenceReady;
   IF @knownSicil = 1 AND @evidenceReady = 1
-    SELECT TOP (@maxEvidence) e.MessageId, e.Ordinal, e.SummaryJson,
+    SELECT TOP (@maxEvidence) e.MessageId, e.Ordinal, e.ToolName, e.SummaryJson,
       JSON_VALUE(e.EvidenceJson, '$.authorizationEpoch') AS AuthorizationEpoch,
       JSON_QUERY(e.EvidenceJson, '$.scopedAuthorization') AS ScopedAuthorization,
+      JSON_QUERY(e.EvidenceJson, '$.authorizationPopulation') AS AuthorizationPopulation,
       JSON_QUERY(e.EvidenceJson, '$.authorizationReferences') AS AuthorizationReferences,
-      CASE WHEN JSON_QUERY(e.EvidenceJson, '$.authorizationReferences') IS NULL THEN e.EvidenceJson END AS LegacyEvidenceJson,
+      CASE WHEN JSON_QUERY(e.EvidenceJson, '$.authorizationReferences') IS NULL
+        AND JSON_QUERY(e.EvidenceJson, '$.authorizationPopulation') IS NULL THEN e.EvidenceJson END AS LegacyEvidenceJson,
       JSON_QUERY(e.EvidenceJson, '$.clarificationContext') AS ClarificationContext
     FROM dbo.MR_AiMessageEvidence e
     JOIN dbo.MR_AiConversationMessages m ON m.MessageId = e.MessageId

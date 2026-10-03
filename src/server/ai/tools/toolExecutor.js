@@ -83,7 +83,7 @@ export function createToolExecutor({
     pending.set(cacheKey, index);
     const remaining = Math.min(tool.timeoutMs, phaseRemainingMs());
     if (remaining < 250) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
-    const deadline = createAiDeadline({ timeoutMs: remaining, parentSignal: signal, now: clock });
+    const deadline = createAiDeadline({ timeoutMs: remaining, parentSignal: typeof signal === 'function' ? signal() : signal, now: clock });
     const population = [];
     try {
       const scoped = Object.freeze({
@@ -210,7 +210,8 @@ export function createToolExecutor({
             truncated: shrunk.truncated,
             partial: shrunk.scope?.kind === 'authorized-task-subset',
             counts: { returned: shrunk.returnedCount, total: shrunk.totalCount },
-            highlights: shrunk.truncated ? [] : (result.outcome.evidence?.highlights || []),
+            // Öne çıkanlar yalnızca boyut sınırı satır attığında düşer; sayfalı ya da metni kısaltılmış sonuç onları korur.
+            highlights: shrunk.data?.sizeNote ? [] : (result.outcome.evidence?.highlights || []),
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
             scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk) ?? null,
             populationReferences: result.population

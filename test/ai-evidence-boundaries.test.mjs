@@ -115,7 +115,7 @@ test('ambiguous person search can end in server-rendered clarification', async (
     assert.equal(found.data.ambiguous, true);
     const answer = JSON.parse(evidenceReply(claimFor(found, 'data.people.0.name'), claimFor(found, 'data.people.1.name')));
     return reply(JSON.stringify({ ...answer, kind: 'clarification' }));
-  }]);
+  }], { user: 'Ali’nin iş yükünü göster' });
   assert.equal(result.outcome, 'clarification');
   assert.match(result.text, /Hangi adayı/);
   assert.equal(result.evidenceRows.length, 1);
@@ -123,7 +123,8 @@ test('ambiguous person search can end in server-rendered clarification', async (
 
 test('malformed clarification claims use bounded repair rather than throwing', async (t) => {
   const { result } = await turn(t, [calls('rota_person_search', { text: 'Ali' }), reply('{"kind":"clarification","claims":[null]}'), (input) =>
-    reply(JSON.stringify({ ...JSON.parse(evidenceReply(claimFor(results(input)[0], 'data.people.0.name'), claimFor(results(input)[0], 'data.people.1.name'))), kind: 'clarification' }))]);
+    reply(JSON.stringify({ ...JSON.parse(evidenceReply(claimFor(results(input)[0], 'data.people.0.name'), claimFor(results(input)[0], 'data.people.1.name'))), kind: 'clarification' }))],
+  { user: 'Ali’nin iş yükünü göster' });
   assert.equal(result.outcome, 'clarification');
   assert.equal(result.repaired, true);
 });

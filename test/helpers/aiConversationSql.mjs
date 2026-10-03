@@ -323,12 +323,16 @@ function evidenceRowsFor(db, messageIds) {
   const wanted = new Set(messageIds.map(guid));
   return (db.aiMessageEvidence || [])
     .filter((row) => wanted.has(guid(row.MessageId)))
-    .map((row) => ({ MessageId: row.MessageId, Ordinal: row.Ordinal, SummaryJson: row.SummaryJson,
-      AuthorizationEpoch: JSON.parse(row.EvidenceJson || '{}').authorizationEpoch ?? null,
-      ScopedAuthorization: JSON.stringify(JSON.parse(row.EvidenceJson || '{}').scopedAuthorization ?? null),
-      AuthorizationReferences: JSON.stringify(JSON.parse(row.EvidenceJson || '{}').authorizationReferences ?? null),
-      LegacyEvidenceJson: JSON.parse(row.EvidenceJson || '{}').authorizationReferences ? null : row.EvidenceJson,
-      ClarificationContext: JSON.stringify(JSON.parse(row.EvidenceJson || '{}').clarificationContext ?? null) }));
+    .map((row) => {
+      const evidence = JSON.parse(row.EvidenceJson || '{}');
+      return { MessageId: row.MessageId, Ordinal: row.Ordinal, ToolName: row.ToolName, SummaryJson: row.SummaryJson,
+        AuthorizationEpoch: evidence.authorizationEpoch ?? null,
+        ScopedAuthorization: JSON.stringify(evidence.scopedAuthorization ?? null),
+        AuthorizationPopulation: JSON.stringify(evidence.authorizationPopulation ?? null),
+        AuthorizationReferences: JSON.stringify(evidence.authorizationReferences ?? null),
+        LegacyEvidenceJson: evidence.authorizationReferences || evidence.authorizationPopulation ? null : row.EvidenceJson,
+        ClarificationContext: JSON.stringify(evidence.clarificationContext ?? null) };
+    });
 }
 
 function appendGrounded(db, params, sicil) {

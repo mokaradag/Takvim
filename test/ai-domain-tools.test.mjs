@@ -19,6 +19,7 @@ const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
 const { createToolExecutor } = await import('../src/server/ai/tools/toolExecutor.js');
 const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
+const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 
 function stackFor(t, overrides = {}, sicil = AYSE) {
   return createAiStack(t, { sicil, seed: rotaToolSeed(overrides) });
@@ -760,11 +761,11 @@ test('kanıt defteri modele verilen güvenli sonucu saklar; veri içindeki talim
   assert.equal(row.entityId, TASKS.LITERAL);
   const persisted = JSON.parse(row.evidenceJson);
   assert.match(persisted.authorizationEpoch, /^[a-f0-9]{64}$/);
-  assert.deepEqual(persisted.authorizationReferences, [{ taskId: TASKS.LITERAL, projectId: PROJECTS.FULL }]);
+  assert.deepEqual(decodeAuthorizationPopulation(persisted.authorizationPopulation), [{ taskId: TASKS.LITERAL, projectId: PROJECTS.FULL }]);
   assert.equal(persisted.scopedAuthorization.version, 1);
   assert.match(persisted.scopedAuthorization.epoch, /^[a-f0-9]{64}$/);
   delete persisted.authorizationEpoch;
-  delete persisted.authorizationReferences;
+  delete persisted.authorizationPopulation;
   delete persisted.scopedAuthorization;
   assert.deepEqual(persisted, result);
   assert.doesNotMatch(row.evidenceJson + row.summaryJson, /@scope|#AiScope|STRING_SPLIT|isAdmin|scopeProjects/);

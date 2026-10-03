@@ -7,7 +7,8 @@ import {
   createLeadingThinkFilter,
   finalizeToolCalls,
   primaryChoice,
-  readChatCompletionStream
+  readChatCompletionStream,
+  reportedReasoningTokens
 } from './openAiCompatibleStream.js';
 
 export { streamInterrupted } from './openAiCompatibleStream.js';
@@ -175,6 +176,7 @@ export function parseChatCompletion(payload) {
   if (message.role !== 'assistant') throw invalidResponse('INVALID_ROLE');
   if (message.content != null && typeof message.content !== 'string') throw invalidResponse('INVALID_CONTENT');
   assertCompletionMetadata(payload, choice, 'COMPLETION_METADATA_INVALID');
+  const reasoningTokens = reportedReasoningTokens(payload.usage);
   return {
     text: message.content ?? '',
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason.slice(0, 40) : null,
@@ -183,7 +185,8 @@ export function parseChatCompletion(payload) {
     usage: {
       promptTokens: tokenCount(payload.usage?.prompt_tokens),
       completionTokens: tokenCount(payload.usage?.completion_tokens),
-      totalTokens: tokenCount(payload.usage?.total_tokens)
+      totalTokens: tokenCount(payload.usage?.total_tokens),
+      ...(reasoningTokens != null ? { reasoningTokens } : {})
     }
   };
 }

@@ -31,6 +31,7 @@ export function taskActivityRecordsets(db, params) {
       const before = json(row.BeforeJson), after = json(row.AfterJson);
       const completed = ['done', 'completed', 'cancelled'].includes(after.Status || after.status) && !['done', 'completed', 'cancelled'].includes(before.Status || before.status);
       return [{ ...row, ActionGroup: row.CorrelationId || `audit:${row.AuditId}`, CurrentTaskId: task?.TaskId,
+        ...(params.evidenceSnapshotLimit != null ? { CurrentProjectId: task?.ProjectId ?? null } : {}),
         CurrentTitle: task?.Title, ProjectName: project?.ProjectName, ProjectCode: project?.ProjectCode,
         CurrentActorName: person?.DisplayName, Directorate: person?.Directorate, Department: person?.Department, Unit: person?.Unit,
         Kind: row.ActionCode === 'DELETE' ? 'deleted' : row.ActionCode === 'CREATE' ? 'created' : completed ? 'completed' : 'updated', Completed: completed }];

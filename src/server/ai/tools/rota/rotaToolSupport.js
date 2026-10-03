@@ -2,6 +2,7 @@ import 'server-only';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { accessReasonLabel, describeTaskScope, isCompleteTaskView, projectAccess, SCOPE_KINDS } from './rotaScope.js';
+import { readProjectSearch, readTaskFacts } from './rotaToolStore.js';
 import {
   assigneeView,
   isOverdue,
@@ -172,3 +173,19 @@ export const PERSON_SICIL_PROPERTY = {
   maximum: 2147483647,
   description: 'Kişi süzgeci: rota_person_search ile bulunan Sicil. Kimlik doğrulaması değildir; yalnızca süzgeçtir.'
 };
+
+/**
+ * Seçicinin kullanıcıya gösterilen adı: kanıt olgusu kimlikle değil adla
+ * nitelenir. Yalnızca görünür proje/görev adı okunur; görünmüyorsa `null`.
+ */
+export async function visibleProjectName(call, scope, projectId) {
+  if (!projectId) return null;
+  const result = await call.sql((executor) => readProjectSearch(executor, scope, { text: '', limit: 1, projectId }));
+  return result.rows[0] ? dataText(result.rows[0].ProjectName, 160) : null;
+}
+
+export async function visibleTaskTitle(call, scope, taskId) {
+  if (!taskId) return null;
+  const result = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [taskId], maxRows: 1 }));
+  return result.facts[0] ? dataText(result.facts[0].title, 160) : null;
+}

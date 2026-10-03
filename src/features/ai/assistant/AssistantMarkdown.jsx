@@ -75,11 +75,17 @@ export function renderInline(nodes = [], keyPrefix = 'i', evidenceIds = null) {
   });
 }
 
+/** Yalnızca eğik yazıdan oluşan paragraf (kapsam ya da eksiklik notu) yanıttan ikincil görünür. */
+function isNote(children = []) {
+  const meaningful = children.filter((node) => !(node.type === 'text' && !String(node.value || '').trim()));
+  return meaningful.length === 1 && meaningful[0].type === 'em';
+}
+
 /** Blok düğümü → React öğesi. */
 export function renderBlock(block, key = 'b', evidenceIds = null) {
   switch (block.type) {
     case 'paragraph':
-      return <p key={key}>{renderInline(block.children, key, evidenceIds)}</p>;
+      return <p key={key} className={isNote(block.children) ? 'assistant-md-note' : undefined}>{renderInline(block.children, key, evidenceIds)}</p>;
     case 'heading': {
       const Tag = HEADING_TAGS[block.level] || 'h5';
       return <Tag key={key} className="assistant-md-heading">{renderInline(block.children, key, evidenceIds)}</Tag>;

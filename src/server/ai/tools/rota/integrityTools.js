@@ -67,15 +67,28 @@ const outlookStatus = {
     });
     const counts = items.reduce((sum, item) => ({ ...sum, [item.state]: (sum[item.state] || 0) + 1 }), {});
     const page = items.slice(0, limit);
+    // Sayılar sayfada listelenmeyen abonelikleri de kapsar: nüfusun tamamı kaydedilir.
+    const population = result.subscriptions.map((row) => ({ taskId: canonicalActualId(row.TaskId), projectId: canonicalActualId(row.ProjectId) }));
     // Görünür ama aboneliği olmayan görev geçerli bir sonuçtur (sıfır abonelik);
-    // "bulunamadı" yalnızca görev görünür değilse verilir.
-    if (args.taskId && !items.length) {
-      const visible = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [args.taskId], maxRows: 1 }));
-      if (!visible.facts.length) throw notFound();
+    // "bulunamadı" yalnızca görev görünür değilse verilir. Görev süzgecindeki
+    // sayılar o görevin olgusudur, hesap geneli değildir.
+    let requestedTask = null;
+    if (args.taskId) {
+      if (items.length) requestedTask = { taskId: items[0].task.taskId, title: items[0].task.title };
+      else {
+        const visible = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [args.taskId], maxRows: 1 }));
+        const fact = visible.facts[0];
+        if (!fact) throw notFound();
+        requestedTask = { taskId: fact.id, title: dataText(fact.title, 160) };
+        population.push({ taskId: fact.id, projectId: fact.projectId });
+      }
     }
+    call.notePopulation?.(population);
     const distributionComplete = !result.truncated;
     return {
       data: {
+        // Görev süzgecindeki sayılar o görevin olgusudur; seçici olgunun niteleyicisi olarak taşınır.
+        ...(requestedTask ? { task: requestedTask, filters: { taskId: requestedTask.taskId, task: requestedTask.title } } : {}),
         activeSubscriptions: result.truncated ? null : items.length,
         byState: distributionComplete ? counts : null,
         byStateComplete: distributionComplete,
@@ -90,8 +103,8 @@ const outlookStatus = {
       totalCount: distributionComplete ? items.length : null,
       nextCursor: null,
       evidence: {
-        label: 'Outlook teslim durumu',
-        entity: { type: 'user', id: 'me', name: 'Outlook abonelikleriniz' },
+        label: requestedTask ? `Outlook teslim durumu · ${dataText(requestedTask.title, 60)}` : 'Outlook teslim durumu',
+        entity: requestedTask ? { type: 'task', id: requestedTask.taskId, name: dataText(requestedTask.title, 120) } : { type: 'user', id: 'me', name: 'Outlook abonelikleriniz' },
         highlights: !distributionComplete
           ? ['Durum dağılımı: sınır dışı abonelikler nedeniyle gösterilmedi']
           : Object.entries(counts).slice(0, 4).map(([state, count]) => `${deliveryLabel(state)}: ${count}`)
@@ -152,8 +165,10 @@ const dataQuality = {
     const doneWithoutActual = facts.filter((fact) => fact.status === 'done' && !fact.actualFinish);
     const examplesTruncated = checks.some((check) => check.examples.length < check.count) || doneWithoutActual.length > examplesPerCheck;
     const descriptor = searchedScope(scope, filters.projectId);
+    const projectName = filters.projectId ? projects.get(filters.projectId)?.name || null : null;
     return {
       data: {
+        filters: filters.projectId ? { projectId: filters.projectId, ...(projectName ? { project: projectName } : {}) } : {},
         openTaskCount: open.length,
         cleanOpenTaskCount: open.length - flagged.size,
         checks,
@@ -175,7 +190,7 @@ const dataQuality = {
       nextCursor: null,
       evidence: {
         label: `Plan veri kalitesi · ${open.length} açık görev`,
-        entity: args.projectId ? { type: 'project', id: args.projectId, name: null } : null,
+        entity: args.projectId ? { type: 'project', id: args.projectId, name: projectName } : null,
         highlights: checks.filter((check) => check.count > 0).slice(0, 4).map((check) => `${check.label}: ${check.count}`)
       }
     };

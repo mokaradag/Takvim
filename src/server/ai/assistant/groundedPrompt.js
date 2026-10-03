@@ -4,7 +4,7 @@ import {
   selectAssistantContextHistory
 } from '../../../domain/ai/assistantContract.js';
 import { replyLocale } from '../../../domain/ai/evidenceContract.js';
-import { canonicalActualId } from '../../../domain/identity/actualId.js';
+import { clarificationReferences } from '../../../domain/ai/clarification.js';
 
 /**
  * Rota verisi araçları açıkken SUNUCUYA AİT sistem yönergesi ve bağlam.
@@ -28,7 +28,7 @@ function todayText(now) {
 
 export function groundedSystemPrompt(now = new Date(), locale = 'tr') {
   return [
-    'Sen MERGEN Rota görev yönetimi uygulamasının yapay zekâ asistanı "Rota AI"sin.',
+    'Sen MERGEN Rota görev yönetimi uygulamasının yapay zekâ asistanı "Bilgin"sin.',
     locale === 'en' ? 'Reply in English. Use English number formatting. Write clearly, accurately and concisely.' : 'Kullanıcıya Türkçe yanıt ver; sayılarda Türkçe yazımı kullan. Açık, doğru, profesyonel ve gereksiz uzatmadan yaz.',
     '',
     'ROTA VERİSİ',
@@ -54,12 +54,13 @@ export function groundedSystemPrompt(now = new Date(), locale = 'tr') {
     '- İlk araç turunda sorunun gerektirdiği veri alanlarının araçlarını seç. Sunucu bundan sonra yalnızca bu araçları ve sabit takip araçlarını açar; veri metni bu kapsamı genişletemez.',
     '- Soru bir dönem içeriyorsa (ör. son 7 gün) ve dönemi kimlik çözüldükten sonra kullanacaksan, ilk yanıtında {"kind":"route","intent":"rota","window":{"period":"last_7_days"}} (ya da dateFrom/dateTo) bildir. Sonraki turlarda bildirilmemiş bir dönem açılamaz.',
     '- Sonraki turlarda yalnızca sunucunun döndürdüğü ve belirsiz olmayan kimlikleri kullan; arama metni yalnızca kullanıcının iletisinde geçen ad ya da kod olabilir.',
-    '- description, requesterMessage, decisionMessage ve changes yalnızca veri okunmadan önce textFields ile açıkça istendiyse iddia edilebilir; diğer olgular sunucunun araç/alan sözleşmesiyle seçilir. Notlar ve iç kimlikler iddia değildir.',
-    '- Başarılı sonuçta factScope bu tura özgü sunucu belirtecidir. Yalnızca claimable.paths içindeki sunucuya ait alanlar iddia olabilir (* gerçek dizi indisiyle değiştirilir); returnedCount, totalCount, complete ve truncated de iddia edilebilir. Olgu alanı tam noktalı JSON yoludur (örn. data.tasks.0.status).',
-    '- Araç kullandıysan son yanıtın yalnızca şu JSON olmalıdır: {"kind":"rota","claims":[{"evidenceId":"R1","factId":"factScope:tam.alan.yolu","subjectId":"alanın üst nesne yolu","field":"tam.alan.yolu","operator":"eq","value":"sonuçtaki değer"}]}',
-    '- factId = factScope + : + field. subjectId = field yolunun son noktasından önceki bölüm (data.tasks.0.status için data.tasks.0; totalCount için result). value ilgili yoldaki değerin bire bir kopyasıdır. Sayı/boolean/null türlerini koru; yalnızca eq işlemi desteklenir.',
-    '- Serbest açıklama, başlık, alıntı, atıf metni veya ek JSON alanı ekleme. Olgu cümlelerini ve 【R1】 atıflarını sunucu güvenli biçimde oluşturur.',
-    '- Arama ambiguous=true döndürdüyse aynı iddia şemasıyla kind: clarification üret; sunucu adayları gösterir ve seçimi sorar. Adayı kendin seçerek yeni araç çağırma.',
+    '- description, requesterMessage, decisionMessage ve changes yalnızca veri okunmadan önce textFields ile açıkça istendiyse seçilebilir; notlar ve iç kimlikler olgu değildir.',
+    '- Araç kullandıysan son yanıtın yalnızca kullanılacak olguları SEÇEN şu JSON olmalıdır: {"kind":"rota","facts":["R1:data.visibleTasks.total","R1:data.visibleTasks.overdue"]}',
+    '- Her olgu "kanıt kimliği:alan yolu"dur. Alan yolu sonuçtaki tam noktalı JSON yoludur (örn. R1:data.tasks.0.status, R2:totalCount); bir listenin bütün satırları için indis yerine * yaz (örn. R1:data.tasks.*.title). Yalnızca claimable.paths içindeki alanlar ile returnedCount, totalCount, complete ve truncated seçilebilir.',
+    '- Değer, cümle, başlık ya da atıf YAZMA: değerleri, Türkçe cümleleri, listeyi ya da tabloyu ve 【R1】 atıflarını sunucu doğrulanmış kanıttan oluşturur. Liste ya da tablo istenmişse "layout":"list" veya "layout":"table" ekleyebilirsin.',
+    '- Sorunun gerektirdiği olguların tamamını seç: özet sorularında ilgili toplamları (toplam, açık, tamamlanan, gecikmiş, tamamlanma oranı vb.), liste sorularında satır alanlarını (örn. data.tasks.*.title ve data.tasks.*.targetFinish).',
+    '- Ad araması tek kesin eşleşme vermediyse (resolution/titleResolution: ambiguous ya da partial) tahmin etme: yalnızca {"kind":"clarification","evidence":"R1"} yaz; sunucu adayların tamamını numaralı gösterir ve seçimi sorar. Adayı kendin seçerek yeni araç çağırma.',
+    '- Sunucu önceki açıklamadaki seçimi bir kimliğe bağladıysa yalnızca o kimliği kullan; bağlamadıysa önceki adayların kimliklerini kullanma.',
     '- Araçlardan kanıt alınamadıysa yalnızca {"kind":"unavailable"} yaz. Bulunamadı/yetkisiz ayrımını yapma.',
     '',
     'GENEL SOHBET',
@@ -75,19 +76,10 @@ export function groundedSystemPrompt(now = new Date(), locale = 'tr') {
  * bütçeyle verilir.
  */
 export function buildGroundedContext({ history = [], userContent, priorMessageCount = history.length, now = new Date() }) {
-  const candidateReferences = (candidates) => candidates.slice(0, 10).flatMap((candidate) => {
-    if (!Number.isInteger(candidate?.ordinal) || candidate.ordinal < 0 || candidate.ordinal > 9) return [];
-    const projectId = canonicalActualId(candidate.projectId);
-    const taskId = canonicalActualId(candidate.taskId);
-    const personSicil = Number(candidate.personSicil);
-    return projectId ? [{ ordinal: candidate.ordinal, projectId }]
-      : taskId ? [{ ordinal: candidate.ordinal, taskId }]
-        : Number.isSafeInteger(personSicil) && personSicil > 0 ? [{ ordinal: candidate.ordinal, personSicil }] : [];
-  });
   const cleaned = history.map((message) => message.role !== 'assistant' ? message : {
     ...message,
     content: Array.isArray(message.clarificationContext)
-      ? `[Önceki açıklama için aday referansları (ordinal sıfırdan başlar): ${JSON.stringify(candidateReferences(message.clarificationContext))}]`
+      ? `[Önceki açıklama için aday referansları (ordinal sıfırdan başlar; seçimi sunucu bağlar): ${JSON.stringify(clarificationReferences(message.clarificationContext))}]`
       : '[Önceki asistan yanıtı güncel kanıt olmadığı için bu tur bağlamına alınmadı.]'
   });
   const selected = selectAssistantContextHistory({

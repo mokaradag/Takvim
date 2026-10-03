@@ -13,7 +13,7 @@ const stackFor = (t) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TO
 
 test('successful later tools freeze their own normalized population', () => {
   const scope = createToolScope();
-  scope.establish([{ name: 'rota_project_search', arguments: '{"text":"Radar"}' }], [{ content: JSON.stringify({ ok: true, data: { matches: [{ projectId: PROJECTS.FULL }] } }) }]);
+  scope.establish([{ name: 'rota_project_search', arguments: '{"text":"Radar"}' }], [{ content: JSON.stringify({ ok: true, data: { matches: [{ projectId: PROJECTS.FULL, exactMatch: true }], resolution: 'unique', resolvedProject: { projectId: PROJECTS.FULL } } }) }]);
   const args = { projectId: PROJECTS.FULL, deadline: 'overdue', status: ['todo'] };
   assert.doesNotThrow(() => scope.validate('rota_task_search', args));
   scope.establish([{ name: 'rota_task_search', arguments: JSON.stringify(args) }], [{ content: '{"ok":true,"data":{}}' }]);
@@ -90,7 +90,7 @@ test('recent tool and turn failures remain visible when evidence schema observat
   recordAiToolCall({ tool: 'rota_task_search', code: 'INTERNAL' });
   assert.match(aiHealthComponent().message, /aracı hizmet hatası/);
   recordAssistantTurn({ code: 'AI_INTERNAL_ERROR', serviceFailure: true });
-  assert.match(aiHealthComponent().message, /Rota AI turu tamamlanamadı/);
+  assert.match(aiHealthComponent().message, /Bilgin turu tamamlanamadı/);
 });
 
 test('claims beyond the first 256 enumerated facts are already verified by selected paths', async (t) => {

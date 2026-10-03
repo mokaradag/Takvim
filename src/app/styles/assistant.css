@@ -1,4 +1,4 @@
-/* MERGEN Rota · Rota AI yardımcı paneli
+/* MERGEN Rota · Bilgin yardımcı paneli (kodda Rota AI)
    ─────────────────────────────────────────────────────────────────────
    Sahip: src/features/ai/assistant/ (RotaAssistant.jsx ve alt bileşenleri).
 
@@ -13,40 +13,71 @@
    UI-STYLING-ARCHITECTURE.md §2.1); renkler yalnızca tema belirteçlerinden
    gelir, iki tema ve yüksek karşıtlık aynı sözleşmeyi kullanır. */
 
-/* ── Üst çubuk düğmesi ─────────────────────────────────────────── */
+/* ── Üst çubuk düğmesi ve Bilgin imi ──────────────────────────── */
+/* İm, degrade yuvarlak içinde parıltıdır; düğme ince degrade kenarlı sakin bir
+   haptır, açıkken degrade dolguya geçer. Renkler tema belirteçlerindendir. */
+.rota-assistant-mark {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--c-purple));
+  color: var(--accent-fg);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--accent-fg) 30%, transparent),
+    0 2px 6px -2px color-mix(in oklab, var(--c-purple) 70%, transparent);
+}
+.rota-assistant-mark.is-sm { width: 20px; height: 20px; }
 .rota-assistant-launcher {
+  --launcher-surface: color-mix(in oklab, var(--bg-elev) 90%, var(--accent));
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 5px 11px 5px 9px;
-  border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--border));
+  gap: 7px;
+  height: 30px;
+  padding: 0 13px 0 3px;
+  border: 1px solid transparent;
   border-radius: var(--r-pill);
-  background: color-mix(in oklab, var(--accent) 9%, var(--bg-elev));
+  background:
+    linear-gradient(var(--launcher-surface), var(--launcher-surface)) padding-box,
+    linear-gradient(120deg, color-mix(in oklab, var(--accent) 80%, transparent),
+      color-mix(in oklab, var(--c-purple) 70%, transparent) 55%,
+      color-mix(in oklab, var(--c-cyan) 60%, transparent)) border-box;
   color: var(--text);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 650;
+  letter-spacing: .01em;
   white-space: nowrap;
-  transition: background-color .15s ease, border-color .15s ease;
+  box-shadow: 0 6px 18px -12px color-mix(in oklab, var(--accent) 85%, transparent);
+  transition: box-shadow .2s ease, transform .2s ease;
 }
-.rota-assistant-launcher svg { color: var(--accent); }
 .rota-assistant-launcher:hover {
-  border-color: color-mix(in oklab, var(--accent) 48%, var(--border));
-  background: color-mix(in oklab, var(--accent) 16%, var(--bg-elev));
+  --launcher-surface: color-mix(in oklab, var(--bg-elev) 80%, var(--accent));
+  box-shadow: 0 8px 22px -10px color-mix(in oklab, var(--accent) 90%, transparent);
+  transform: translateY(-1px);
 }
+.rota-assistant-launcher:active { transform: none; }
 .rota-assistant-launcher:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.rota-assistant-launcher.is-open { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
-.rota-assistant-launcher.is-open svg { color: currentColor; }
+.rota-assistant-launcher.is-open {
+  background: linear-gradient(120deg, var(--accent), var(--c-purple)) border-box;
+  color: var(--accent-fg);
+}
+.rota-assistant-launcher.is-open .rota-assistant-mark {
+  background: color-mix(in oklab, var(--accent-fg) 22%, transparent);
+  box-shadow: none;
+}
+.theme-light .rota-assistant-launcher { --launcher-surface: color-mix(in oklab, var(--bg-elev) 94%, var(--accent)); }
+.theme-light .rota-assistant-launcher:hover { --launcher-surface: color-mix(in oklab, var(--bg-elev) 88%, var(--accent)); }
 .rota-assistant-launcher-dot {
   position: absolute;
   top: -3px;
   right: -3px;
   width: 10px;
   height: 10px;
-  border: 2px solid var(--bg-elev);
+  border: 2px solid var(--chrome-bg);
   border-radius: 50%;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), var(--c-purple));
   animation: rota-assistant-pulse 1.6s ease-in-out infinite;
 }
 
@@ -54,13 +85,16 @@
 .rota-assistant {
   /* Üst çubuğun yüksekliği (shell.css · .topbar). */
   --assistant-top: 56px;
+  /* Kanıtlı yanıtlar için genişlik: görünüm alanının ~%42'si, 460–600 px;
+     çalışma alanına her durumda en az 96 px kalır. */
+  --assistant-w: min(600px, max(460px, calc(var(--app-viewport-w, 100vw) * .42)));
   position: fixed;
   top: var(--assistant-top);
   right: 0;
   z-index: var(--z-assistant);
   display: flex;
   flex-direction: column;
-  width: min(460px, calc(var(--app-viewport-w, 100vw) - 96px));
+  width: min(var(--assistant-w), calc(var(--app-viewport-w, 100vw) - 96px));
   height: calc(var(--app-viewport-h, 100vh) - var(--assistant-top));
   border-left: 1px solid var(--chrome-border);
   background: var(--bg-elev);
@@ -69,7 +103,7 @@
   animation: rota-assistant-in .2s cubic-bezier(.2, .8, .2, 1);
 }
 @media (min-width: 1600px) {
-  .rota-assistant { width: min(540px, calc(var(--app-viewport-w, 100vw) - 96px)); }
+  .rota-assistant { --assistant-w: min(680px, calc(var(--app-viewport-w, 100vw) * .38)); }
 }
 
 .rota-assistant-head {
@@ -85,13 +119,12 @@
 .rota-assistant-heading h2 {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin: 0;
   font-size: 14.5px;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
-.rota-assistant-heading h2 svg { color: var(--accent); }
 .rota-assistant-heading h2:focus { outline: none; }
 .rota-assistant-heading h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 .rota-assistant-subtitle {
@@ -158,9 +191,11 @@
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: 12px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-radius: 13px;
+  background: linear-gradient(135deg, var(--accent), var(--c-purple));
+  color: var(--accent-fg);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--accent-fg) 28%, transparent),
+    0 10px 24px -14px color-mix(in oklab, var(--c-purple) 90%, transparent);
 }
 .rota-assistant-welcome h3 { margin: 4px 0 0; font-size: 16px; letter-spacing: -0.01em; }
 .rota-assistant-welcome p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.6; }
@@ -248,7 +283,7 @@
   overflow-wrap: anywhere;
 }
 .rota-assistant-context-note { color: var(--text-dim); font-size: 11px; text-align: right; }
-.rota-assistant-answer { min-width: 0; color: var(--text); font-size: 13.5px; line-height: 1.62; }
+.rota-assistant-answer { min-width: 0; color: var(--text); font-size: 13.5px; line-height: 1.65; }
 .rota-assistant-phase { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--text-muted); font-size: 12.5px; }
 .rota-assistant-pulse {
   width: 8px;
@@ -287,7 +322,7 @@
 .rota-assistant-mode-badge { padding: 2px 8px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--text); font-size: 10.5px; font-weight: 700; }
 .rota-assistant-finish-note { color: var(--text-dim); font-size: 11px; }
 /* Rota kaynakları: yanıtın dayandığı kanıtlar (katlanabilir, içerik değil künye). */
-.rota-assistant-evidence { margin-top: 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-elev); font-size: 12px; }
+.rota-assistant-evidence { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: color-mix(in oklab, var(--bg-elev-2) 55%, var(--bg-elev)); font-size: 12px; }
 .rota-assistant-evidence > summary {
   display: flex;
   align-items: center;
@@ -352,24 +387,44 @@
 .rota-assistant-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ── Yazma alanı ───────────────────────────────────────────────── */
+/* İleti kutusu ve araç çubuğu tek yüzeydir. Çubuk TEK satırdır ve sarmaz:
+   kutunun genişliği daraldıkça etiketler önce kısalır, sonra simgeye iner
+   (kapsayıcı sorgusu); erişilebilir adlar değişmez. */
 .rota-assistant-composer {
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   padding: 10px 12px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-elev);
 }
-.rota-assistant-input {
-  width: 100%;
-  min-height: 42px;
-  max-height: min(220px, calc(var(--app-viewport-h, 100vh) * 0.3));
-  padding: 10px 12px;
-  overflow-y: auto;
+.rota-assistant-composer-box {
+  --composer-surface: var(--bg-elev-2);
+  --seg-thumb: color-mix(in oklab, var(--text) 14%, var(--composer-surface));
+  --control-h: 30px;
+  container: rota-composer / inline-size;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--bg-input);
+  border-radius: var(--r-xl);
+  background: var(--composer-surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.theme-light .rota-assistant-composer-box { --composer-surface: var(--bg-elev); --seg-thumb: var(--bg-elev); }
+.rota-assistant-composer-box:has(.rota-assistant-input:focus) {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-sm);
+}
+.rota-assistant-composer-box:has(.rota-assistant-input[aria-invalid="true"]) { border-color: var(--status-overdue); }
+.rota-assistant-composer-box.is-disabled { opacity: .7; }
+.rota-assistant-input {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  max-height: min(220px, calc(var(--app-viewport-h, 100vh) * 0.3));
+  padding: 12px 14px 6px;
+  overflow-y: auto;
+  border: 0;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 13.5px;
@@ -378,57 +433,175 @@
   outline: none;
 }
 .rota-assistant-input::placeholder { color: var(--text-dim); }
-.rota-assistant-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.rota-assistant-input[aria-invalid="true"] { border-color: var(--status-overdue); }
-.rota-assistant-composer-bar { display: flex; align-items: center; gap: 8px; min-height: 34px; }
-.rota-assistant-modes { flex: 0 0 auto; }
-.rota-assistant-modes button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.rota-assistant-composer-status {
-  flex: 1 1 auto;
+.rota-assistant-toolbar { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 7px 7px; }
+
+/* Yanıt kaynağı: iz üzerinde yükseltilmiş seçili dilim. */
+.rota-assistant-seg {
+  flex: 0 1 auto;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.35;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--control-h);
+  padding: 2px;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--text) 7%, transparent);
 }
-.rota-assistant-composer-hint.is-warn { color: var(--text); font-weight: 600; }
-.rota-assistant-send {
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-fg);
-}
-.rota-assistant-send:hover:not(:disabled) { background: var(--accent-strong); }
-.rota-assistant-send:disabled { background: var(--bg-elev-2); color: var(--text-dim); cursor: not-allowed; }
-.rota-assistant-stop {
-  flex: 0 0 auto;
+.rota-assistant-seg button {
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
+  height: 100%;
+  padding: 0 11px 0 9px;
+  border: 0;
   border-radius: var(--r-pill);
-  background: var(--bg-elev-2);
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 650;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
 }
-.rota-assistant-stop:hover { background: var(--bg-hover); }
+.rota-assistant-seg button > svg { flex: 0 0 auto; color: var(--text-dim); transition: color .15s ease; }
+.rota-assistant-seg button:hover:not(:disabled):not(.is-active) { color: var(--text); }
+.rota-assistant-seg button.is-active {
+  background: var(--seg-thumb);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .16), inset 0 0 0 1px color-mix(in oklab, var(--text) 9%, transparent);
+}
+.rota-assistant-seg button.is-active > svg { color: var(--accent); }
+.rota-assistant-seg button:disabled { opacity: .45; cursor: not-allowed; }
+.rota-assistant-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Açılıp kapanan seçenekler: kapalıyken sade kenarlı hap, açıkken renkli dolgu. */
+.rota-assistant-toggle {
+  --toggle-tint: var(--accent);
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-h);
+  min-width: var(--control-h);
+  padding: 0 11px 0 9px;
+  border: 1px solid color-mix(in oklab, var(--text) 13%, transparent);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.rota-assistant-toggle.is-deep { --toggle-tint: var(--c-purple); }
+.rota-assistant-toggle > svg { flex: 0 0 auto; color: var(--text-dim); transition: color .15s ease; }
+.rota-assistant-toggle:hover:not(:disabled) { background: color-mix(in oklab, var(--text) 6%, transparent); color: var(--text); }
+.rota-assistant-toggle.is-on {
+  border-color: color-mix(in oklab, var(--toggle-tint) 55%, transparent);
+  background: color-mix(in oklab, var(--toggle-tint) 16%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+.rota-assistant-toggle.is-on:hover:not(:disabled) { background: color-mix(in oklab, var(--toggle-tint) 22%, transparent); }
+.rota-assistant-toggle.is-on > svg { color: var(--toggle-tint); }
+.rota-assistant-toggle:disabled { opacity: .45; cursor: not-allowed; }
+.rota-assistant-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Seçili/açık yazı kalındır; genişliği baştan ayrılır ki durum değişince çubuk kaymasın. */
+.rota-assistant-seg button > span,
+.rota-assistant-toggle-label,
+.rota-assistant-toggle-short { display: inline-grid; }
+.rota-assistant-seg button > span::after,
+.rota-assistant-toggle-label::after,
+.rota-assistant-toggle-short::after {
+  content: attr(data-text);
+  height: 0;
+  overflow: hidden;
+  font-weight: 600;
+  visibility: hidden;
+}
+.rota-assistant-toggle-short { display: none; }
+
+/* Karakter sayacı çubuğun esnek boşluğudur: sağ grubu sağa yaslar, sığmazsa kısalır. */
+.rota-assistant-composer-counter {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Gönder ve Durdur aynı boyutta, aynı sabit yuvadadır: değişim öteki denetimleri kaydırmaz. */
+.rota-assistant-composer-action { flex: 0 0 32px; display: inline-grid; width: 32px; height: 32px; }
+.rota-assistant-send,
+.rota-assistant-stop {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 50%;
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.rota-assistant-send {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--accent-fg) 25%, transparent),
+    0 4px 12px -6px color-mix(in oklab, var(--accent) 85%, transparent);
+}
+.rota-assistant-send:hover:not(:disabled) { background: var(--accent-strong); }
+.rota-assistant-send:disabled {
+  background: color-mix(in oklab, var(--text) 9%, transparent);
+  color: var(--text-dim);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+.rota-assistant-stop { background: var(--text); color: var(--bg-elev); }
+.rota-assistant-stop:hover { background: color-mix(in oklab, var(--text) 80%, var(--bg-elev)); }
 .rota-assistant-send:focus-visible,
 .rota-assistant-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.rota-assistant-composer-hint { margin: 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.4; }
+.rota-assistant-composer-hint:not(:empty) { margin-top: 7px; padding: 0 6px; }
+.rota-assistant-composer-hint.is-warn { color: var(--text); font-weight: 600; }
+.rota-assistant-composer-note { margin: 7px 0 0; padding: 0 6px; color: var(--text-muted); font-size: 11.5px; line-height: 1.4; }
+
+/* Dar kutu: önce kısa etiketler, sonra yalnızca simge (tam ad ekran okuyucuda kalır). */
+@container rota-composer (max-width: 556px) {
+  .rota-assistant-toggle-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .rota-assistant-toggle-short { display: inline-grid; }
+}
+@container rota-composer (max-width: 446px) {
+  .rota-assistant-toggle { padding: 0; }
+  .rota-assistant-toggle-short { display: none; }
+}
+@container rota-composer (max-width: 352px) {
+  .rota-assistant-toolbar { gap: 4px; padding-inline: 5px; }
+  .rota-assistant-seg button { padding: 0 8px; }
+  .rota-assistant-seg button > svg { display: none; }
+}
 
 /* ── Yanıt biçimi (güvenli Markdown) ───────────────────────────── */
 .assistant-md { overflow-wrap: anywhere; }
 .assistant-md > :first-child { margin-top: 0; }
 .assistant-md > :last-child { margin-bottom: 0; }
-.assistant-md p { margin: 0 0 .7em; }
+.assistant-md p { margin: 0 0 .75em; }
+.assistant-md strong { color: var(--text); font-weight: 700; }
+/* Kapsam ve eksiklik notu: yanıta bağlı ama ondan ikincil. */
+.assistant-md .assistant-md-note { color: var(--text-muted); font-size: 12px; line-height: 1.55; }
 .assistant-md .assistant-md-heading { margin: 1em 0 .45em; font-size: 14px; font-weight: 700; line-height: 1.35; }
 .assistant-md h3.assistant-md-heading { font-size: 15px; }
 .assistant-md ul,
@@ -510,7 +683,7 @@
     box-shadow: none;
     animation-name: rota-assistant-sheet-in;
   }
-  .rota-assistant-launcher { width: 30px; justify-content: center; padding: 5px; }
+  .rota-assistant-launcher { width: 30px; justify-content: center; padding: 0; }
   .rota-assistant-launcher-label { display: none; }
   .rota-assistant-user { max-width: 94%; }
 }
@@ -519,11 +692,22 @@
 @media (pointer: coarse) {
   .rota-assistant-head-actions .icon-btn { width: 40px; height: 40px; }
   .rota-assistant-icon-action { width: 38px; height: 38px; }
-  .rota-assistant-send { width: 42px; height: 42px; }
-  .rota-assistant-stop { height: 42px; }
+  .rota-assistant-composer-box { --control-h: 38px; }
+  .rota-assistant-composer-action { flex-basis: 40px; width: 40px; height: 40px; }
   .rota-assistant-history-open { padding: 11px 10px; }
-  .rota-assistant-modes button { padding: 8px 12px; }
   .assistant-md-code-copy { padding: 8px 10px; }
+  /* Dokunmatik denetimler daha büyüktür: telefonda kaynak simgeleri erken iner,
+     en dar ekranda denetimler biraz küçülür; satır yine sarmaz. */
+  @container rota-composer (max-width: 392px) {
+    .rota-assistant-toolbar { gap: 4px; padding-inline: 5px; }
+    .rota-assistant-seg button { padding: 0 8px; }
+    .rota-assistant-seg button > svg { display: none; }
+  }
+  @container rota-composer (max-width: 318px) {
+    .rota-assistant-toolbar { --control-h: 34px; gap: 3px; padding-inline: 4px; }
+    .rota-assistant-composer-action { flex-basis: 34px; width: 34px; height: 34px; }
+    .rota-assistant-seg button { padding: 0 6px; }
+  }
 }
 
 /* ── Yüksek karşıtlık ──────────────────────────────────────────── */
@@ -531,18 +715,29 @@ body.high-contrast .rota-assistant { border-left: 2px solid var(--border-strong)
 body.high-contrast .rota-assistant-user-text,
 body.high-contrast .rota-assistant-notice,
 body.high-contrast .rota-assistant-suggestion,
-body.high-contrast .rota-assistant-input,
+body.high-contrast .rota-assistant-composer-box,
+body.high-contrast .rota-assistant-toggle,
 body.high-contrast .assistant-md-code,
 body.high-contrast .assistant-md-table,
 body.high-contrast .assistant-md-inline-code { border-color: var(--border-strong); }
 body.high-contrast .rota-assistant-evidence { border-color: var(--border-strong); }
+body.high-contrast .rota-assistant-seg { box-shadow: inset 0 0 0 1px var(--border-strong); }
+body.high-contrast .rota-assistant-seg button,
+body.high-contrast .rota-assistant-toggle,
+body.high-contrast .assistant-md .assistant-md-note { color: var(--text); }
+body.high-contrast .rota-assistant-seg button.is-active,
+body.high-contrast .rota-assistant-toggle.is-on { outline: 2px solid var(--text); outline-offset: -2px; }
+body.high-contrast .rota-assistant-launcher:not(.is-open) {
+  background: linear-gradient(var(--bg-elev), var(--bg-elev)) padding-box, linear-gradient(var(--border-strong), var(--border-strong)) border-box;
+}
 body.high-contrast .assistant-md-cite,
 body.high-contrast .rota-assistant-evidence-id { outline: 1px solid var(--border-strong); }
 body.high-contrast .rota-assistant-history-meta,
 body.high-contrast .rota-assistant-context-note,
 body.high-contrast .rota-assistant-partial-note,
 body.high-contrast .rota-assistant-finish-note,
-body.high-contrast .rota-assistant-composer-status { color: var(--text-muted); }
+body.high-contrast .rota-assistant-composer-counter,
+body.high-contrast .rota-assistant-composer-hint { color: var(--text-muted); }
 body.high-contrast .assistant-md a { text-decoration-thickness: 2px; }
 
 /* ── Hareket ───────────────────────────────────────────────────── */

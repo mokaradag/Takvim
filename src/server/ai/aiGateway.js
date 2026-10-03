@@ -20,7 +20,7 @@ import {
   raceWithAbort
 } from './aiDeadline.js';
 import { AiError, isAiError, toAiFailure } from './aiErrors.js';
-import { recordAiRequest, recordAiRetry, recordAiStream, recordAiValidation, recordProviderCall } from './aiTelemetry.js';
+import { recordAiRequest, recordAiRetry, recordAiStream, recordAiValidation, recordEmptyCompletion, recordProviderCall } from './aiTelemetry.js';
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
 import { classifyProviderStatus, createControlApiKey, isConnectFailure, streamInterrupted } from './providers/openAiCompatibleProvider.js';
 import { TOOL_LIMITS } from './tools/toolLimits.js';
@@ -92,6 +92,30 @@ async function untilCancelled(work, signal) {
     if (signal.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
     throw error;
   }
+}
+
+/**
+ * Görünür çıktı üretmeden biten çağrının İÇERİK TAŞIMAYAN tanısı: bitiş nedeni,
+ * bildirilen belirteç sayıları, süreler ve hangi olay türlerinin geldiği.
+ */
+function emptyCompletionDiagnostics({ final, startedAt, at, firstEventAt = null, reasoning = false, textChars = 0, toolCalls = 0 }) {
+  const usage = final?.usage || {};
+  const reasoningCount = usage.reasoningTokens ?? null;
+  const completionCount = usage.completionTokens ?? null;
+  return {
+    finishReason: final?.finishReason ?? null,
+    usage: {
+      input: usage.promptTokens ?? null,
+      reasoning: reasoningCount,
+      completion: completionCount,
+      visible: completionCount != null && reasoningCount != null ? Math.max(0, completionCount - reasoningCount) : null
+    },
+    toolCalls: toolCalls > 0,
+    firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - startedAt),
+    providerMs: Math.max(0, at - startedAt),
+    reasoningReceived: Boolean(reasoning),
+    textReceived: textChars > 0
+  };
 }
 
 function requireRoute(registry, profile, capability) {
@@ -390,6 +414,7 @@ export function createAiGateway({
         source: credential.source,
         healthFailure: healthFailureFor(credential.source),
         invoke: async (attemptSignal) => {
+          const attemptStartedAt = now();
           let completion;
           try {
             completion = await getProvider().chatCompletion({
@@ -405,6 +430,9 @@ export function createAiGateway({
             throw error;
           }
           if (requireText && !String(completion.text ?? '').trim()) {
+            recordEmptyCompletion({ profile: route.profile, model: completion.model ?? route.model, diagnostics: emptyCompletionDiagnostics({
+              final: completion, startedAt: attemptStartedAt, at: now(), textChars: String(completion.text ?? '').length
+            }) });
             throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason: 'EMPTY_COMPLETION' } });
           }
           return completion;
@@ -538,12 +566,14 @@ export function createAiGateway({
       notify(onStatus, { phase: 'generating' });
       const chunks = [];
       let final = null;
+      let firstEventAt = null;
       const iterator = opened.events[Symbol.asyncIterator]();
       try {
         for (;;) {
           const step = await raceWithAbort(() => iterator.next(), deadline.signal);
           if (step.done) break;
           const event = step.value;
+          firstEventAt ??= now();
           if (event.type === 'text') {
             chunks.push(event.text);
             await raceWithAbort(() => onText(event.text), deadline.signal);
@@ -567,6 +597,9 @@ export function createAiGateway({
       if (!final) throw streamInterrupted('STREAM_TRUNCATED');
       const text = chunks.join('').trim();
       if (!text) {
+        recordEmptyCompletion({ profile: route.profile, model: final.model ?? route.model, diagnostics: emptyCompletionDiagnostics({
+          final, startedAt: providerStartedAt, at: now(), firstEventAt, reasoning: progress.reasoning, textChars: chunks.join('').length
+        }) });
         throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
           details: { reason: 'EMPTY_COMPLETION', finishReason: final.finishReason ?? null }
         });
@@ -687,6 +720,9 @@ export function createAiGateway({
 
       const session = Object.freeze({
         sicil,
+        // Yalnızca telemetri: profil ve yapılandırılmış model (anahtar ya da adres değil).
+        profile: route.profile,
+        model: route.model,
         signal: deadline.signal,
         remainingMs: () => deadline.remainingMs(),
         async round({ messages, tools = [], toolChoice = 'auto', onEvent = null }) {
@@ -720,12 +756,14 @@ export function createAiGateway({
             const chunks = [];
             let final = null;
             let thinking = false;
+            let firstEventAt = null;
             const iterator = opened.events[Symbol.asyncIterator]();
             try {
               for (;;) {
                 const step = await raceWithAbort(() => iterator.next(), deadline.signal);
                 if (step.done) break;
                 const event = step.value;
+                firstEventAt ??= now();
                 if (event.type === 'text') {
                   chunks.push(event.text);
                   if (onEvent) {
@@ -749,6 +787,11 @@ export function createAiGateway({
             if (!final) throw streamInterrupted('STREAM_TRUNCATED');
             const text = chunks.join('').trim();
             const toolCalls = Array.isArray(final.toolCalls) ? final.toolCalls : [];
+            if (!text && !toolCalls.length) {
+              recordEmptyCompletion({ profile: route.profile, model: final.model ?? route.model, diagnostics: emptyCompletionDiagnostics({
+                final, startedAt: providerStartedAt, at: now(), firstEventAt, reasoning: thinking, textChars: chunks.join('').length
+              }) });
+            }
             // Uzunluk sınırında boş biten tur (ör. bütçe akıl yürütmeye harcandı)
             // çağırana döner; tur kısa çıktı onarımını kendisi uygular.
             if (!text && !toolCalls.length && final.finishReason !== 'length') {

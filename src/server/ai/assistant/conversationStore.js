@@ -1,6 +1,7 @@
 import 'server-only';
 import { sql } from '../../db/pool.js';
 import { normalizeEvidenceSummary } from '../../../domain/ai/evidenceContract.js';
+import { decodeAuthorizationPopulation, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
 import {
   AI_CONVERSATION_APPEND_ANSWER_SQL,
   AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL,
@@ -281,12 +282,21 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     let authorizationEpoch = row.AuthorizationEpoch ?? null;
     let scopedAuthorization = null;
     let taskReferences = null;
+    let unverifiable = false;
     try {
       scopedAuthorization = JSON.parse(row.ScopedAuthorization || 'null');
-      taskReferences = JSON.parse(row.AuthorizationReferences || 'null');
+      const population = JSON.parse(row.AuthorizationPopulation || 'null');
+      if (population) {
+        taskReferences = decodeAuthorizationPopulation(population);
+        unverifiable = taskReferences == null;
+      } else {
+        taskReferences = JSON.parse(row.AuthorizationReferences || 'null');
+        // Nüfus işaretinden önceki kayıt yalnızca yükündeki görevleri taşır.
+        unverifiable = !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
+      }
     } catch { authorizationEpoch = null; }
     authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.LegacyEvidenceJson || '{}',
-      authorizationEpoch, scopedAuthorization, taskReferences });
+      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable });
     try {
       const candidates = JSON.parse(row.ClarificationContext || 'null');
       if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));

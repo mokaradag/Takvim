@@ -46,6 +46,74 @@ export function authorizationFingerprint(auth, scope, { projectIds = null, taskI
   return digest(auth, scope, { projects, tasks, rights });
 }
 
+/**
+ * Kanıtın yetki nüfusunun kalıcı ve SINIRLI gösterimi: görev kimlikleri proje
+ * başına 16 baytlık ikili değerlerin base64url birleşimi olarak saklanır
+ * (görev başına ~21 karakter). Çözülemeyen ya da biçimi bozuk değer `null`
+ * döner ve kanıt doğrulanamaz sayılır.
+ */
+const POPULATION_VERSION = 1;
+const NO_PROJECT_KEY = '-';
+
+function packIds(ids) {
+  return Buffer.from(ids.map((id) => id.replace(/-/g, '')).join(''), 'hex').toString('base64url');
+}
+
+function unpackIds(packed) {
+  if (typeof packed !== 'string' || !/^[A-Za-z0-9_-]*$/.test(packed)) return null;
+  const bytes = Buffer.from(packed, 'base64url');
+  if (bytes.length % 16 !== 0 || bytes.toString('base64url') !== packed) return null;
+  const ids = [];
+  for (let offset = 0; offset < bytes.length; offset += 16) {
+    const hex = bytes.subarray(offset, offset + 16).toString('hex');
+    ids.push(`${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`);
+  }
+  return ids;
+}
+
+export function encodeAuthorizationPopulation(references = []) {
+  const byProject = new Map();
+  for (const { taskId, projectId } of references) {
+    const id = canonicalActualId(taskId);
+    if (!id) continue;
+    const key = canonicalActualId(projectId) || NO_PROJECT_KEY;
+    if (!byProject.has(key)) byProject.set(key, new Set());
+    byProject.get(key).add(id);
+  }
+  return {
+    v: POPULATION_VERSION,
+    complete: true,
+    tasks: Object.fromEntries([...byProject].sort(([a], [b]) => a.localeCompare(b)).map(([key, ids]) => [key, packIds([...ids].sort())]))
+  };
+}
+
+/** Kalıcı nüfus → `{ taskId, projectId }` dizisi; nüfus eksik ya da bozuksa `null`. */
+export function decodeAuthorizationPopulation(value) {
+  if (!value || typeof value !== 'object' || value.v !== POPULATION_VERSION || value.complete !== true
+    || !value.tasks || typeof value.tasks !== 'object' || Array.isArray(value.tasks)) return null;
+  const references = [];
+  for (const [key, packed] of Object.entries(value.tasks)) {
+    const projectId = key === NO_PROJECT_KEY ? null : canonicalActualId(key);
+    if (key !== NO_PROJECT_KEY && !projectId) return null;
+    const ids = unpackIds(packed);
+    if (!ids) return null;
+    for (const taskId of ids) references.push({ taskId, projectId });
+  }
+  return references;
+}
+
+/**
+ * Sonucu yalnızca yükte listelenen kayıtlara dayanan araçlar: nüfus işareti
+ * taşımayan eski kalıcı kanıtları yükteki başvurularla doğrulanabilir. Diğer
+ * araçların eski kanıtı sayılan nüfusu taşımadığından doğrulanamaz.
+ */
+export const PAYLOAD_POPULATION_TOOLS = Object.freeze(new Set(['rota_task_detail', 'rota_project_search', 'rota_person_search', 'rota_calendar_inspect']));
+
+/** Nüfusu sınırlı kayda sığmayan kanıtın işareti: yeniden açılışta doğrulanamaz. */
+export function unverifiableAuthorizationPopulation() {
+  return { v: POPULATION_VERSION, complete: false };
+}
+
 export function evidenceTaskReferences(envelope) {
   const tasks = new Map();
   const visit = (value, inheritedProject = null) => {

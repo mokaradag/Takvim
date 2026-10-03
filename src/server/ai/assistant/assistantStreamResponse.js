@@ -76,6 +76,8 @@ export function assistantStreamErrorPayload(error, { partial = false } = {}) {
     message = error.message;
     details = error.details || {};
     retryable = isAiErrorCode(code) ? aiErrorDefinition(code).retryable : RETRYABLE_SERVER_CODES.has(code);
+    // Boş yanıt modelin rastlantısal sonucudur; tur kaydedilmediği için soru yeniden sorulabilir.
+    if (code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID && details.reason === 'EMPTY_COMPLETION' && !partial) retryable = true;
   } else {
     // Beklenmeyen hata burada yalnızca güvenli kullanıcı sonucuna çevrilir.
     // İşletim günlüğünü recordAssistantTurn tek kez yazar.

@@ -18,9 +18,20 @@ const PRIORITY_SQL = `CASE LOWER(LTRIM(RTRIM(COALESCE(t.Priority, ''))) COLLATE 
  * işaret yorumu yalnızca test ikizinin sorguyu tanıması içindir.
  */
 
+/**
+ * Sınır aşımı paylaşılan havuz oturumunda geçici tablo bırakmaz: bu modülün
+ * kurduğu bütün geçici tablolar düşürülür, henüz kurulmamış olanlar atlanır.
+ */
+const RESULT_TOO_LARGE = `BEGIN
+    DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiTasks,
+      #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts,
+      #AiProjectMatches, #AiWbsFocus, #AiRequiredWbs, #AiDependencies;
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  END`;
+
 const SCOPE_PROJECTS = `
   SET NOCOUNT ON;
-  DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTasks, #AiTaskFilter, #AiTasks;
+  DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiTasks;
   CREATE TABLE #AiScopeProjects(
     ProjectId uniqueidentifier NOT NULL PRIMARY KEY,
     AccessLevel varchar(10) NOT NULL,
@@ -28,6 +39,8 @@ const SCOPE_PROJECTS = `
     IsTaskScoped bit NOT NULL
   );
   CREATE TABLE #AiScopeTasks(TaskId uniqueidentifier NOT NULL PRIMARY KEY);
+  -- Kişisel kapsam kimlikleri bir kez ve anahtarlı biçimde yazılır; üyelik denetimleri bu tablodan yapılır.
+  CREATE TABLE #AiScopeTaskIds(TaskId uniqueidentifier NOT NULL PRIMARY KEY);
   CREATE TABLE #AiTaskFilter(TaskId uniqueidentifier NOT NULL PRIMARY KEY);
   CREATE TABLE #AiTasks(
     TaskId uniqueidentifier NOT NULL PRIMARY KEY,
@@ -64,7 +77,20 @@ const SCOPE_PROJECTS = `
     WHERE p.IsActive = 1 AND (@projectId IS NULL OR p.ProjectId = @projectId)
       AND (@sourceFilter = 'all' OR (@sourceFilter = 'corporate' AND p.SourceType = 'CORPORATE') OR (@sourceFilter = 'manual' AND COALESCE(p.SourceType, 'MANUAL') <> 'CORPORATE'));
   END
-  IF (SELECT COUNT(*) FROM #AiScopeProjects) >= @analysisMaxRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  IF (SELECT COUNT(*) FROM #AiScopeProjects) >= @analysisMaxRows
+  ${RESULT_TOO_LARGE}
+`;
+
+/**
+ * Kişisel kapsam kimlikleri yalnızca görev okuyan sorgularda, bir kez ve
+ * anahtarlı tabloya yazılır; üyelik denetimleri satır başına yeniden bölmez.
+ */
+const SCOPE_TASK_IDS = `
+  IF NOT EXISTS (SELECT 1 FROM #AiScopeTaskIds)
+    INSERT #AiScopeTaskIds(TaskId)
+    SELECT DISTINCT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value)))
+    FROM STRING_SPLIT(@scopeTasks, ',')
+    WHERE @isAdmin = 0 AND TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) IS NOT NULL;
 `;
 
 /**
@@ -73,18 +99,18 @@ const SCOPE_PROJECTS = `
  * görüntüdeki kimlik görünürlüğü tabanıdır (FULL/READ ya da görevi oluşturan).
  * Görev süzgeci verildiğinde yalnızca o görevler değerlendirilir.
  */
-const visibleTasks = (predicate = '1 = 1') => `
+const visibleTasks = (predicate = '1 = 1') => `${SCOPE_TASK_IDS}
   -- Görev kapsamı yalnızca görev okuyan sorgularda oluşturulur.
   INSERT #AiScopeTasks(TaskId)
   SELECT TOP (@analysisMaxRows) t.TaskId
-  FROM STRING_SPLIT(@scopeTasks, ',') token
-  JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(token.value)))
+  FROM #AiScopeTaskIds token
+  JOIN dbo.MR_Tasks t ON t.TaskId = token.TaskId
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0
   WHERE (${predicate}) AND (@AiTaskFilterActive = 0
     OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = t.TaskId)
     OR EXISTS (SELECT 1 FROM #AiTaskFilter f JOIN dbo.MR_Tasks child ON child.TaskId = f.TaskId WHERE child.RecurrenceParentTaskId = t.TaskId));
   IF (SELECT COUNT(*) FROM #AiScopeTasks) >= @analysisMaxRows
-    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  ${RESULT_TOO_LARGE}
 
   IF @AiTaskFilterActive = 1
     INSERT #AiTasks(TaskId, ProjectId, AccessLevel, IdentityBase)
@@ -100,7 +126,7 @@ const visibleTasks = (predicate = '1 = 1') => `
     JOIN dbo.MR_Tasks t ON t.ProjectId = v.ProjectId
     WHERE (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1) AND (${predicate});
   IF (SELECT COUNT(*) FROM #AiTasks) >= @analysisMaxRows
-    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  ${RESULT_TOO_LARGE}
 
   DECLARE @AiRemainingRows int = @analysisMaxRows - (SELECT COUNT(*) FROM #AiTasks);
   INSERT #AiTasks(TaskId, ProjectId, AccessLevel, IdentityBase)
@@ -110,7 +136,7 @@ const visibleTasks = (predicate = '1 = 1') => `
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0
   WHERE (${predicate}) AND (@AiTaskFilterActive = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f WHERE f.TaskId = t.TaskId));
   IF (SELECT COUNT(*) FROM #AiTasks) >= @analysisMaxRows
-    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  ${RESULT_TOO_LARGE}
 `;
 
 /** Görünebilir sorumluluk ilişkileri sınırlıdır; görev başına tek toplam üretilir. */
@@ -124,7 +150,7 @@ const ASSIGNMENT_FACTS = `
     OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil)
     OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ownAssignment WHERE ownAssignment.TaskId = ta.TaskId AND ownAssignment.Sicil = @sicil);
   IF (SELECT COUNT(*) FROM #AiAssignments) >= @analysisAssignmentRows
-    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  ${RESULT_TOO_LARGE}
   CREATE UNIQUE CLUSTERED INDEX IX_AiAssignments ON #AiAssignments(TaskId, Sicil);
   SELECT DISTINCT pd.Sicil INTO #AiResolvedPeople
   FROM dbo.MR_V_PeopleDirectory pd
@@ -291,7 +317,18 @@ ${ASSIGNMENT_FACTS}
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
   WHERE @projectId IS NOT NULL OR EXISTS (SELECT 1 FROM #AiFacts f WHERE f.ProjectId = v.ProjectId);
 ${ASSIGNEE_ROWS}
-  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Kanıt nüfusunun güncel görünürlüğü: verilen görevlerden kullanıcının ŞU AN
+ * görebildikleri ve güncel projeleri. Yalnızca kimlik döner; son yetki
+ * denetimi ve kayıtlı yanıtın yeniden açılışı için hafif okumadır.
+ */
+export const AI_TOOL_TASK_VISIBILITY_SQL = `/* rota-ai-tool:task-visibility */
+${SCOPE_PROJECTS}
+${visibleTasks()}
+  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Tek görevin ayrıntısı. Görev görünür değilse hiçbir satır dönmez (var olmayan
@@ -357,7 +394,7 @@ ${ASSIGNMENT_FACTS}
   OPTION (MAXRECURSION 50);
 
 ${ASSIGNEE_ROWS}
-  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Yetkili projeler arasında ad ya da kod parçasıyla arama. Sıralama sabittir:
@@ -389,7 +426,7 @@ ${SCOPE_PROJECTS}
   LEFT JOIN dbo.MR_V_PeopleDirectory lead ON lead.Sicil = m.LeadSicil
   ORDER BY m.MatchRank, m.ProjectName, m.ProjectId;
 
-  DROP TABLE #AiProjectMatches, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiProjectMatches, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Proje başına görünür görev toplamları. Sayılar yalnızca görünür görevler
@@ -418,8 +455,9 @@ ${visibleTasks()}
   LEFT JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
   GROUP BY v.ProjectId, p.ProjectName, p.ProjectCode, p.SourceType, p.LeadSicil, p.CalendarId,
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped;
+  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
 
-  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Tek proje künyesi: proje satırı, etiketler, takvim ve lider adı, görünür
@@ -467,8 +505,9 @@ ${visibleTasks()}
     MAX(t.UpdatedAt) AS LastTaskUpdateAt
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId;
+  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
 
-  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * İş dağılım ağacı. Görünürlük anlık görüntüyle aynıdır: FULL, READ ya da
@@ -480,12 +519,13 @@ export const AI_TOOL_WBS_SQL = `/* rota-ai-tool:wbs */
 ${SCOPE_PROJECTS}
   DROP TABLE IF EXISTS #AiWbsFocus;
   CREATE TABLE #AiWbsFocus(WbsId uniqueidentifier PRIMARY KEY);
+${SCOPE_TASK_IDS}
   IF @wbsId IS NOT NULL
   BEGIN
     ;WITH AllowedWbs AS (
       SELECT w.WbsId, w.ParentWbsId, CAST(CONCAT('|', CONVERT(varchar(36), w.WbsId), '|') AS varchar(max)) AS VisitedWbs, 0 AS Depth
-      FROM STRING_SPLIT(@scopeTasks, ',') permitted
-      JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, permitted.value) AND t.ProjectId = @projectId
+      FROM #AiScopeTaskIds permitted
+      JOIN dbo.MR_Tasks t ON t.TaskId = permitted.TaskId AND t.ProjectId = @projectId
       JOIN dbo.MR_WBS w ON w.WbsId = t.WbsId AND w.ProjectId = t.ProjectId
       UNION ALL
       SELECT parent.WbsId, parent.ParentWbsId, CAST(CONCAT(child.VisitedWbs, CONVERT(varchar(36), parent.WbsId), '|') AS varchar(max)), child.Depth + 1
@@ -505,7 +545,8 @@ ${SCOPE_PROJECTS}
       AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR v.IsTaskScoped = 1))
       OR EXISTS (SELECT 1 FROM AllowedWbs permitted WHERE permitted.WbsId = focus.WbsId)
     OPTION (MAXRECURSION 201);
-    IF (SELECT COUNT(*) FROM #AiWbsFocus) >= @analysisMaxRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    IF (SELECT COUNT(*) FROM #AiWbsFocus) >= @analysisMaxRows
+    ${RESULT_TOO_LARGE}
   END
 ${visibleTasks("@wbsId IS NULL OR EXISTS (SELECT 1 FROM #AiWbsFocus focus WHERE focus.WbsId = t.WbsId)")}
   DROP TABLE IF EXISTS #AiRequiredWbs;
@@ -557,8 +598,9 @@ ${visibleTasks("@wbsId IS NULL OR EXISTS (SELECT 1 FROM #AiWbsFocus focus WHERE 
   SELECT p.ProjectId, p.ProjectName, p.ProjectCode, v.AccessLevel, v.HasReadGrant, v.IsTaskScoped
   FROM #AiScopeProjects v JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
   WHERE v.ProjectId = @projectId;
+  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible WHERE visible.ProjectId = @projectId;
 
-  DROP TABLE #AiWbsFocus, #AiRequiredWbs, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiWbsFocus, #AiRequiredWbs, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Bağımlılık ilişkileri — yalnızca FULL projede (anlık görüntüyle aynı).
@@ -594,8 +636,9 @@ ${visibleTasks()}
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'FULL'
   WHERE @focusTaskId IS NULL AND t.ProjectId = @projectId
     AND EXISTS (SELECT 1 FROM #AiTasks visible WHERE visible.TaskId = t.TaskId);
+  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
 
-  DROP TABLE #AiDependencies, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiDependencies, #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Baz plan karşılaştırması — yalnızca FULL projede. Anlık görüntü satırı
@@ -629,7 +672,7 @@ ${SCOPE_PROJECTS}
 
   IF (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present
     FROM dbo.MR_TaskBaselineSnapshots s WHERE s.BaselineId = @selectedBaseline) bounded) >= @analysisMaxRows
-    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  ${RESULT_TOO_LARGE}
   IF @selectedBaseline IS NOT NULL
   BEGIN
 ${visibleTasks()}
@@ -651,15 +694,17 @@ ${visibleTasks()}
       SELECT 1 FROM dbo.MR_TaskBaselineSnapshots s
       WHERE s.BaselineId = @selectedBaseline AND s.TaskId = t.TaskId
     );
+  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
 
   END
   ELSE
   BEGIN
     SELECT CAST(NULL AS uniqueidentifier) AS TaskId WHERE 1 = 0;
     SELECT 0 AS AddedSinceBaseline;
+    SELECT CAST(NULL AS uniqueidentifier) AS TaskId, CAST(NULL AS uniqueidentifier) AS ProjectId WHERE 1 = 0;
   END
 
-  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Çalışma takvimi: projenin etkin takvimi (proje görünür olmalıdır), yoksa
@@ -691,7 +736,7 @@ ${SCOPE_PROJECTS}
   WHERE h.CalendarId = @calendarId AND h.HolidayDate >= @from AND h.HolidayDate <= @to
   ORDER BY h.HolidayDate;
 
-  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Kullanıcının KENDİ Outlook takvim aboneliklerinin Rota'daki teslim durumu.
@@ -700,6 +745,7 @@ ${SCOPE_PROJECTS}
  */
 export const AI_TOOL_OUTLOOK_SQL = `/* rota-ai-tool:outlook */
 ${SCOPE_PROJECTS}
+${SCOPE_TASK_IDS}
   IF @AiTaskFilterActive = 0
     INSERT #AiTaskFilter(TaskId)
     SELECT TOP (@analysisMaxRows) s.TaskId FROM dbo.MR_TaskOutlookSubscriptions s
@@ -707,11 +753,12 @@ ${SCOPE_PROJECTS}
     JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId
     WHERE s.UserSicil = @sicil AND s.IsActive = 1
       AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR EXISTS (
-        SELECT 1 FROM STRING_SPLIT(@scopeTasks, ',') permitted WHERE TRY_CONVERT(uniqueidentifier, permitted.value) = t.TaskId));
-  IF (SELECT COUNT(*) FROM #AiTaskFilter) >= @analysisMaxRows THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+        SELECT 1 FROM #AiScopeTaskIds permitted WHERE permitted.TaskId = t.TaskId));
+  IF (SELECT COUNT(*) FROM #AiTaskFilter) >= @analysisMaxRows
+  ${RESULT_TOO_LARGE}
   SET @AiTaskFilterActive = 1;
 ${visibleTasks()}
-  SELECT TOP (@maxRows) s.TaskId, t.Title, p.ProjectName, p.ProjectCode, t.TargetFinish, t.PlannedFinish, t.Status,
+  SELECT TOP (@maxRows) s.TaskId, t.ProjectId, t.Title, p.ProjectName, p.ProjectCode, t.TargetFinish, t.PlannedFinish, t.Status,
     s.PendingMethod, s.DeliveredSequence, s.DeliveredMethod, s.DeliveredDate, s.LastDeliveredAt,
     s.LastFailureCode, s.AttemptCount, s.CompletionSuspended, s.UpdatedAt
   FROM dbo.MR_TaskOutlookSubscriptions s
@@ -721,4 +768,4 @@ ${visibleTasks()}
   WHERE s.UserSicil = @sicil AND s.IsActive = 1
   ORDER BY COALESCE(t.TargetFinish, t.PlannedFinish), s.TaskId;
 
-  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeProjects;`;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;

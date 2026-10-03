@@ -13,6 +13,13 @@ export const ASSISTANT_STREAM_CONTENT_TYPE = 'text/event-stream';
 export const ASSISTANT_PROTOCOL_HEADER = 'x-mergen-rota-assistant-protocol';
 
 /**
+ * Sayfayla gelen açık/kapalı işareti (`<meta name=... content="enabled|disabled">`).
+ * Yalnızca `MERGEN_ROTA_AI_ENABLED` sonucunu taşır; kapalıyken kabuk yardımcıyı
+ * hiç göstermez. Uçların kendi denetimi bunun yerine geçmez.
+ */
+export const ASSISTANT_AVAILABILITY_META = 'mergen-rota-ai';
+
+/**
  * Akış olayları. `done` ve `error` SONLANDIRICIDIR: her akış bunlardan tam
  * olarak biriyle biter. Akış başladıktan sonra HTTP durumu değişemediği için
  * sonradan oluşan hata `error` olayıyla bildirilir.

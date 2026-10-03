@@ -164,8 +164,10 @@ test('sorgu güvenlik sınırı ve dizin sözleşmesi; ham geçmiş genel anlık
   assert.match(TASK_ACTIVITY_SQL, /es\.EmployeeSicil = a\.ActorSicil/);
   assert.match(TASK_ACTIVITY_SQL, /t\.ProjectId = a\.ProjectId AND EXISTS/);
   assert.match(TASK_ACTIVITY_SQL, /@partialTasks/);
-  assert.match(TASK_ACTIVITY_SQL, /@taskIdText IS NULL OR a\.EntityId = @taskIdText/);
+  // Denetim kaydı kimliği büyük ya da küçük harfle yazılmış olabilir; ikili harmanlamada da eşleşir ve dizin kullanılabilir kalır.
+  assert.match(TASK_ACTIVITY_SQL, /@taskIdText IS NULL OR a\.EntityId IN \(@taskIdText, UPPER\(@taskIdText\)\)/);
   assert.doesNotMatch(TASK_ACTIVITY_SQL, /TRY_CONVERT\(uniqueidentifier, a\.EntityId\) = @taskId/);
+  assert.doesNotMatch(TASK_ACTIVITY_SQL, /EntityId = @taskIdText/);
   assert.match(TASK_ACTIVITY_SQL, /GROUP BY ActionGroup, EntityId, ActorSicil, ProjectId/);
   assert.match(TASK_ACTIVITY_SQL, /OFFSET \(@safePage \* @pageSize\) ROWS FETCH NEXT @pageSize/);
   assert.doesNotMatch(TASK_ACTIVITY_SQL, /CAST\(.*OccurredAt AS date\)|GETUTCDATE|NOLOCK/);
