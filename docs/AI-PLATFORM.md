@@ -341,7 +341,7 @@ değişmez; JSON güncellenir ve Rota yeniden başlatılır.
 24.09.2026 kataloğunda hız gerektiren `chat.fast`, `chat.general` ve
 `chat.tools` profilleri düşünme kipine sahip olmayan
 `Qwen3-Next-80B-A3B-Instruct` modeline; `chat.reasoning`
-`DeepSeek-V4-Flash-0731` modeline; `vision` ise düşünme kipine sahip olmayan
+`DeepSeek-V4.1-Flash` modeline; `vision` ise düşünme kipine sahip olmayan
 `Qwen3-VL-8B-Instruct` modeline bağlıdır. Dört model sunucudan kaldırılacağı
 bildirildiği için hem varsayılan kayıttan hem de operasyonel JSON'dan bilinçli
 olarak çıkarılmıştır: `Qwen3-30B-A3B-Instruct-2507`,
@@ -355,12 +355,12 @@ Kısaltılmış örnek:
   "version": 1,
   "models": [
     { "id": "Qwen3-Next-80B-A3B-Instruct", "provider": "onprem", "capabilities": ["chat", "tools"], "contextTokens": 262144, "enabled": true },
-    { "id": "DeepSeek-V4-Flash-0731", "provider": "onprem", "capabilities": ["chat", "tools", "reasoning"], "contextTokens": 1048576, "enabled": true },
+    { "id": "DeepSeek-V4.1-Flash", "provider": "onprem", "capabilities": ["chat", "tools", "reasoning"], "contextTokens": 524288, "enabled": true },
     { "id": "Qwen3-VL-8B-Instruct", "provider": "onprem", "capabilities": ["chat", "vision"], "contextTokens": 32768, "enabled": true }
   ],
   "profiles": {
     "chat.fast": { "model": "Qwen3-Next-80B-A3B-Instruct", "maxOutputTokens": 512 },
-    "chat.reasoning": { "model": "DeepSeek-V4-Flash-0731", "maxOutputTokens": 2048, "timeoutMs": 180000 },
+    "chat.reasoning": { "model": "DeepSeek-V4.1-Flash", "maxOutputTokens": 2048, "timeoutMs": 180000 },
     "vision": { "model": "Qwen3-VL-8B-Instruct", "maxOutputTokens": 1024 }
   }
 }
