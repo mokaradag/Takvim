@@ -64,13 +64,15 @@ function scopeOf(db, params, { restrictTasks = null } = {}) {
   const sicil = Number(params.sicil);
   const isAdmin = Boolean(params.isAdmin);
   const projectFilter = params.projectId ? upper(params.projectId) : null;
+  const projectFilters = new Set(String(params.projectIds || '').split(',').filter(isGuid).map(upper));
   const taskFilter = String(params.taskIds || '').split(',').map((value) => value.trim()).filter(isGuid).map(upper);
   const filterActive = restrictTasks ? true : String(params.taskIds || '').length > 0;
   const allowedTasks = new Set(restrictTasks ? restrictTasks.map(upper) : taskFilter);
   const projects = new Map();
+  const projectIndex = new Map(db.projects.map((row) => [upper(row.ProjectId), row]));
   const activeProject = (id) => {
-    const project = projectRow(db, id);
-    return project && project.IsActive && (!params.sourceFilter || params.sourceFilter === 'all' || (params.sourceFilter === 'corporate') === (project.SourceType === 'CORPORATE')) && (!projectFilter || same(project.ProjectId, projectFilter)) ? project : null;
+    const project = projectIndex.get(upper(id));
+    return project && project.IsActive && (!params.projectSearchText || charindex(params.projectSearchText, `${project.ProjectCode || ''} ${project.ProjectName}`) > 0) && (!params.sourceFilter || params.sourceFilter === 'all' || (params.sourceFilter === 'corporate') === (project.SourceType === 'CORPORATE')) && (!projectFilter || same(project.ProjectId, projectFilter)) && (!projectFilters.size || projectFilters.has(upper(project.ProjectId))) && (!filterActive || db.tasks.some((task) => same(task.ProjectId, project.ProjectId) && allowedTasks.has(upper(task.TaskId)))) ? project : null;
   };
   if (isAdmin) {
     for (const project of db.projects) {
@@ -139,6 +141,7 @@ function factRow(db, scope, entry) {
     IdentityBase: entry.IdentityBase,
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
     IsOwnAssignee: assignees.some((row) => row.Sicil === scope.sicil) ? 1 : 0,
+    HasAssignee: assignees.length > 0 ? 1 : 0,
     AssigneeCount: assignees.length,
     ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null && (entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil))).length
   };
@@ -213,7 +216,7 @@ function taskFacts(db, params) {
     const assignments = assigneesOf(db, task.TaskId);
     switch (params.assigneeMode) {
       case 'me': return assignments.some((row) => row.Sicil === scope.sicil);
-      case 'unassigned': return !assignments.some((row) => personName(db, row.Sicil) != null && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
+      case 'unassigned': return assignments.length === 0;
       case 'person': return assignments.some((row) => row.Sicil === Number(params.personSicil)
         && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
       default: return true;
@@ -286,7 +289,7 @@ function projectSearch(db, params) {
   const scope = scopeOf(db, params);
   const text = String(params.text || '');
   const matches = [...scope.projects.entries()].map(([id, access]) => ({ project: projectRow(db, id), access }))
-    .filter(({ project }) => (!text && params.projectId) || charindex(text, `${project.ProjectCode || ''} ${project.ProjectName}`) > 0)
+    .filter(({ project }) => (!text && (params.projectId || params.projectIds)) || charindex(text, `${project.ProjectCode || ''} ${project.ProjectName}`) > 0)
     .map(({ project, access }) => {
       const code = String(project.ProjectCode || '');
       const rank = code.toLocaleUpperCase('tr-TR') === text.toLocaleUpperCase('tr-TR') || fold(project.ProjectName) === fold(text) ? 0
@@ -297,7 +300,7 @@ function projectSearch(db, params) {
       };
     })
     .sort((left, right) => left.MatchRank - right.MatchRank || left.ProjectName.localeCompare(right.ProjectName, 'tr') || left.ProjectId.localeCompare(right.ProjectId));
-  return [[{ Total: matches.length, ExactCount: matches.filter((row) => row.MatchRank === 0).length }], matches.slice(0, Number(params.limit)).map((row) => ({ ...row, LeadName: row.LeadSicil == null ? null : personName(db, row.LeadSicil) }))];
+  return [[{ Total: matches.length, ExactCount: matches.filter((row) => row.MatchRank === 0).length }], matches.slice(0, Number(params.limit)).map((row) => ({ ...row, LeadName: row.LeadSicil == null ? null : personName(db, row.LeadSicil) })), matches.map((row) => ({ ProjectId: row.ProjectId }))];
 }
 
 /** Toplamın dayandığı görünür görev nüfusu (`#AiTasks`). */
@@ -495,6 +498,13 @@ const HANDLERS = Object.freeze({
   portfolio,
   'project-detail': projectDetail,
   wbs,
+  'wbs-selector': (db, params) => {
+    const selected = db.wbs.find((node) => same(node.WbsId, params.wbsId) && (!params.projectId || same(node.ProjectId, params.projectId)));
+    if (!selected) return [[]];
+    const [nodes] = wbs(db, { ...params, projectId: selected.ProjectId, maxRows: Number.MAX_SAFE_INTEGER });
+    const node = nodes.find((row) => same(row.WbsId, params.wbsId));
+    return [node ? [{ ...node, ProjectName: projectRow(db, selected.ProjectId).ProjectName }] : []];
+  },
   dependencies,
   baseline,
   calendar,
@@ -507,6 +517,7 @@ export function runAiToolQuery(db, sqlText, params) {
   db.aiToolLog ||= [];
   db.aiToolLog.push({ query: marker[1], params: { ...params } });
   if (db.aiToolFailure?.[marker[1]]) throw db.aiToolFailure[marker[1]];
+  if (marker[1] !== 'wbs-selector' && scopeOf(db, params).projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   // Independently enforce the SQL population budget before computing result sets.
   const boundedTaskQueries = new Set(['task-facts', 'task-detail', 'portfolio', 'project-detail', 'wbs', 'baseline']);
   if (boundedTaskQueries.has(marker[1]) || (marker[1] === 'dependencies' && !params.focusTaskId)) {

@@ -118,6 +118,7 @@ export function factFromRow(row) {
     identityBase: Boolean(row.IdentityBase),
     isCreator: Boolean(row.IsCreator),
     isOwnAssignee: Boolean(row.IsOwnAssignee),
+    hasAssignee: row.HasAssignee == null ? assigneeCount > 0 : Boolean(row.HasAssignee),
     assigneeCount,
     resolvedAssigneeCount
   };
@@ -235,11 +236,17 @@ export function coarseTargetRange(filters, today) {
 export function assigneeMatches(fact, filters, assignees, sicil) {
   switch (filters.assignee) {
     case 'me': return fact.isOwnAssignee;
-    case 'unassigned': return fact.resolvedAssigneeCount === 0;
+    case 'unassigned': return assignmentState(fact) === 'unassigned';
     case 'person': return (assignees.get(fact.id) || []).some((person) => person.identityVisible && person.sicil === filters.personSicil)
       || (filters.personSicil === sicil && fact.isOwnAssignee);
     default: return true;
   }
+}
+
+export function assignmentState(fact) {
+  if (fact.hasAssignee === false || (fact.hasAssignee == null && fact.assigneeCount === 0)) return 'unassigned';
+  if (fact.resolvedAssigneeCount > 0) return 'visible';
+  return fact.identityBase ? 'unresolved' : 'hidden';
 }
 
 export function matchesTaskFilters(fact, filters, { today, assignees = new Map(), sicil = null }) {
@@ -342,7 +349,7 @@ export function assigneesByTask(rows = []) {
     const identityVisible = Boolean(row.IdentityVisible);
     const person = {
       sicil: identityVisible && row.Sicil != null ? Number(row.Sicil) : null,
-      name: row.DisplayName ? String(row.DisplayName).trim() : null,
+      name: row.DisplayName && String(row.DisplayName).trim() !== String(row.Sicil) ? String(row.DisplayName).trim() : null,
       identityVisible,
       resolved: row.Resolved == null ? true : Boolean(row.Resolved)
     };
@@ -360,7 +367,7 @@ export function assigneesByTask(rows = []) {
 export function assigneeView(fact, assignees) {
   const visible = assignees.get(fact.id) || [];
   const people = visible.map((person) => (person.identityVisible
-    ? { name: person.name || String(person.sicil), sicil: person.sicil }
+    ? { name: person.name || 'Seçilen kişi', sicil: person.sicil }
     : { name: person.name, identityHidden: true }));
   return { assignees: people };
 }

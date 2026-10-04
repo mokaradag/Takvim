@@ -6,31 +6,6 @@ import { addDays, foldText, normalizeTaskFilters } from './rota/taskFacts.js';
 import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { clarificationReferences } from '../../../domain/ai/clarification.js';
 
-/**
- * Bir turun KAPSAM SINIRI (containment).
- *
- * İlk başarılı araç turu, model henüz hiçbir araç sonucu görmeden seçildiği
- * için güvenilir niyettir; yine de serbest arama metni ilk turda da yalnızca
- * kullanıcının iletisinde geçen metin olabilir. Sonraki turlarda araç sonucu
- * metni kapsamı genişletemez:
- *
- *  - Aynı aracın sonraki çağrısı ilk normalize nüfusun içinde kalır
- *    (daraltma, sayfalama serbesttir).
- *  - Başka aracın ilk çağrısı yalnızca sunucunun KANITLADIĞI kimliklere
- *    (görev, proje, WBS, baz plan, kişi) bağlanabilir: tek kesin ad
- *    eşleşmesi kimliktir; kısmi ya da belirsiz aramanın adayları kullanıcıya
- *    sorulmadan kimlik olamaz.
- *  - Önceki turdaki açıklamanın adayları, sunucunun kullanıcının numaralı
- *    seçimine bağladığı aday dışında bu turda kimlik olarak kullanılamaz.
- *  - Varsayılanı en dar olmayan nüfus bağımsız değişkenleri (hareket ve takvim
- *    tarih penceresi) başka aracın ilk çağrısında varsayılan pencerede ya da
- *    veri okunmadan önce bildirilen pencerede kalır.
- *
- * Karşılaştırmalar normalize değerlerle yapılır (kimlikler kanonik, metin
- * harf/aksan duyarsız, varsayılanlar açık değerleriyle eşit).
- */
-
-const IDENTITIES = Object.freeze({ taskId: 'tasks', templateTaskId: 'tasks', projectId: 'projects', wbsId: 'wbs', baselineId: 'baselines', sicil: 'people', personSicil: 'people' });
 const IDENTITY_ARGUMENTS = Object.freeze({ taskId: 'tasks', projectId: 'projects', wbsId: 'wbs', baselineId: 'baselines', personSicil: 'people' });
 const TASK_POPULATION_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 /** Kimliksiz geniş nüfustan aynı görünür görev nüfusuna geçişler. */
@@ -72,7 +47,10 @@ function sameText(left, right) {
 }
 
 function contains(root, args, { textTrusted }) {
-  if (!sameText(root.text ?? null, args.text ?? null) && !(args.text != null && textTrusted(args.text))) return false;
+  if (!sameText(root.text ?? null, args.text ?? null)) {
+    if (args.text == null || !textTrusted(args.text)) return false;
+    if (root.text && !(` ${containmentText(args.text)} `).includes(` ${containmentText(root.text)} `)) return false;
+  }
   for (const [key, value] of Object.entries(root)) {
     if (PRESENTATION_KEYS.has(key) || key === 'text') continue;
     if (value == null || (Array.isArray(value) && !value.length) || (key === 'createdByMe' && value === false)) continue;
@@ -93,39 +71,21 @@ function windowTrusted(name, normalized, windows, today) {
 }
 
 /** Sonuçtaki kimlikler; kısmi ve belirsiz aramanın adayları ayrı tutulur. */
-function resultIdentities(name, data) {
-  const resolved = [];
-  const candidates = [];
-  if (!data || typeof data !== 'object') return { resolved, candidates };
-  const rest = { ...data };
-  if (name === 'rota_project_search' && Array.isArray(data.matches)) {
-    for (const key of ['matches', 'candidates', 'resolvedProject']) delete rest[key];
-    candidates.push(...data.matches, ...(Array.isArray(data.candidates) ? data.candidates : []));
-    // Yalnızca tek kesin ad/kod eşleşmesi kimliktir; tek kısmi sonuç değildir.
-    const exact = data.resolvedProject ? [data.resolvedProject] : data.matches.filter((match) => match.exactMatch === true);
-    if (data.ambiguous !== true && exact.length === 1 && exact[0]?.projectId) resolved.push({ projectId: exact[0].projectId });
-  } else if (name === 'rota_person_search' && Array.isArray(data.people)) {
-    for (const key of ['people', 'candidates', 'resolvedPerson']) delete rest[key];
-    candidates.push(...data.people, ...(Array.isArray(data.candidates) ? data.candidates : []));
-    // Kimlik Sicil'dir: yalnızca sunucunun kesin Sicil/ad eşleşmesi olarak çözdüğü kişi.
-    if (data.resolution === 'unique' && Number.isSafeInteger(data.resolvedPerson?.sicil)) resolved.push({ personSicil: data.resolvedPerson.sicil });
-  } else if (name === 'rota_task_search' && Array.isArray(data.tasks) && data.titleResolution) {
-    for (const key of ['tasks', 'candidates', 'resolvedTask']) delete rest[key];
-    candidates.push(...data.tasks, ...(Array.isArray(data.candidates) ? data.candidates : []));
-    if (data.titleResolution === 'unique' && data.resolvedTask) resolved.push({ taskId: data.resolvedTask.taskId });
-  } else if (data.ambiguous === true) {
-    candidates.push(data);
-    return { resolved, candidates };
-  }
-  resolved.push(rest);
-  // Toplu sonuç grupları sunucuya ait kimliklerdir (ör. proje ya da kişi bazında dağılım).
-  if (name === 'rota_task_analytics' && Array.isArray(data.groups)) {
-    if (data.groupBy === 'project') resolved.push(...data.groups.filter((group) => group.key !== 'other').map((group) => ({ projectId: group.key })));
-    if (data.groupBy === 'assignee') {
-      resolved.push(...data.groups.map((group) => /^sicil:(\d+)$/.exec(String(group.key))?.[1]).filter(Boolean).map((sicil) => ({ personSicil: Number(sicil) })));
-    }
-  }
-  return { resolved, candidates };
+function resultIdentities(name, data, userText) {
+  if (!data || typeof data !== 'object') return [];
+  if (name === 'rota_project_search') return data.resolution === 'unique' && data.resolvedProject
+    ? [{ population: 'projects', id: data.resolvedProject.projectId }] : [];
+  if (name === 'rota_person_search') return data.resolution === 'unique' && data.resolvedPerson
+    ? [{ population: 'people', id: data.resolvedPerson.sicil }] : [];
+  if (name === 'rota_task_search' && data.titleResolution) return data.titleResolution === 'unique' && data.resolvedTask
+    ? [{ population: 'tasks', id: data.resolvedTask.taskId }] : [];
+  const taskRows = name === 'rota_task_search' ? data.tasks
+    : name === 'rota_dependency_inspect' ? [...(data.predecessors || []), ...(data.successors || [])]
+      : name === 'rota_recurrence_inspect' ? [data.series, ...(Array.isArray(data.series) ? data.series : [])].flatMap((item) => item?.next || []) : [];
+  const identities = (name === 'rota_task_search' && /\b(ilk|first)\b/.test(containmentText(userText)) ? (taskRows || []).slice(0, 1) : taskRows || []).map((row) => ({ population: 'tasks', id: row.taskId }));
+  if (name === 'rota_wbs_inspect') identities.push(...(data.nodes || []).map((row) => ({ population: 'wbs', id: row.wbsId })));
+  if (name === 'rota_baseline_compare') identities.push(...(data.availableBaselines || []).map((row) => ({ population: 'baselines', id: row.baselineId })));
+  return identities.filter((row) => row.id != null);
 }
 
 function referenceIdentity(reference) {
@@ -160,18 +120,19 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
     if (population === 'projects') projectScope = true;
   }
 
-  function capture(value) {
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) { value.forEach(capture); return; }
-    for (const [key, item] of Object.entries(value)) {
-      if (IDENTITIES[key] && (typeof item === 'string' || typeof item === 'number')) ids[IDENTITIES[key]].add(String(item));
-      else if (item && typeof item === 'object') capture(item);
-    }
-  }
-
   function textTrusted(text) {
     const needle = containmentText(text);
-    return Boolean(needle) && (trustedTexts.has(needle) || userNeedle.includes(needle));
+    return Boolean(needle) && (trustedTexts.has(needle) || (` ${userNeedle} `).includes(` ${needle} `));
+  }
+
+  function identityTrusted(population, id) {
+    if (bound && referenceIdentity(bound).join(':') === `${population}:${id}`) return true;
+    if (population === 'people') {
+      const text = containmentText(userText);
+      return text === String(id) || new RegExp(`(?:^| )sicil(?:i|li)? ${id}(?: |$)|(?:^| )${id} sicil(?:i|li)?(?: |$)`).test(text);
+    }
+    const tokens = String(userText).toLowerCase().match(/(?<![a-z0-9])[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}(?![a-z0-9])/g) || [];
+    return tokens.includes(String(id).toLowerCase());
   }
 
   return Object.freeze({
@@ -211,11 +172,10 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
           if (!args.projectId && !args.taskId && !args.personSicil && !args.wbsId) broadRoots.add(call.name);
         }
         // Belirsiz ya da kısmi aramanın adayları kimlik olarak yakalanmaz; kullanıcıya sorulur.
-        const { resolved } = resultIdentities(call.name, body.data);
-        capture(args);
-        resolved.forEach(capture);
-        // Proje kırılımlı geniş analiz, projeye inmeyi kullanıcının sorusunun parçası yapar.
-        if (call.name === 'rota_task_analytics' && body.data?.groupBy === 'project' && !args.projectId) projectScope = true;
+        for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
+          if (args[key] != null) ids[population].add(String(args[key]));
+        }
+        for (const { population, id } of resultIdentities(call.name, body.data, userText)) ids[population].add(String(id));
       }
       established = true;
     },
@@ -232,6 +192,9 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
       if (!established) {
         // İlk turda da arama metni kullanıcının bu turdaki iletisinden gelmelidir.
         if (args.text != null && !textTrusted(args.text)) fail();
+        for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
+          if (args[key] != null && !identityTrusted(population, args[key])) fail();
+        }
         return;
       }
       if ((args.textFields || []).some((field) => !textFields.has(field))) fail();
@@ -240,20 +203,19 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
       const relatedTaskRoots = TASK_POPULATION_TOOLS.has(name)
         ? [...TASK_POPULATION_TOOLS].flatMap((tool) => roots.get(tool) || []) : [];
       const taskPopulation = relatedTaskRoots.length > 0;
-      if (!sameRoot && args.projectId && !projectScope) fail();
+      if (!sameRoot && args.projectId && !projectScope && !identityTrusted('projects', args.projectId)) fail();
       if (sameRoot || taskPopulation) {
         const matches = (sameRoot || relatedTaskRoots).some((root) => contains(root, normalized, { textTrusted }));
         if (!matches) fail();
       }
       for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
-        if (args[key] != null && !ids[population].has(String(args[key]))) fail();
+        if (args[key] != null && !ids[population].has(String(args[key])) && !identityTrusted(population, args[key])) fail();
       }
       if (!sameRoot && !taskPopulation && args.text != null && !textTrusted(args.text)) fail();
       if (!sameRoot && WINDOW_TOOLS.has(name) && !windowTrusted(name, normalized, trustedWindows, today)) fail();
-      const ownWorkflow = roots.has('rota_notifications') && ['rota_schedule_requests', 'rota_assignment_requests'].includes(name);
       const broadFollowUp = Object.entries(BROAD_FOLLOW_UPS).some(([tool, next]) => broadRoots.has(tool) && next.includes(name));
       const trustedSearch = args.text != null && textTrusted(args.text);
-      if (!sameRoot && !taskPopulation && !args.taskId && !args.projectId && !args.personSicil && !ownWorkflow && !broadFollowUp && !trustedSearch
+      if (!sameRoot && !taskPopulation && !args.taskId && !args.projectId && !args.personSicil && !broadFollowUp && !trustedSearch
         && !(broadProjects && name === 'rota_portfolio_summary')) fail();
     }
   });

@@ -106,13 +106,13 @@ test('a non-numbered reply does not let the model translate a candidate into an 
     return { type: 'tool-calls', calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
   } }, { type: 'script', respond: (call) => {
     assert.equal(toolResults(call)[0].error.code, 'UNSUPPORTED_SCOPE');
-    // Önceki sorudaki ad bu turda da güvenilir arama metnidir.
+    // Ad bu turdaki kullanıcı iletisinde de bulunur.
     return { type: 'tool-calls', calls: [{ name: 'rota_person_search', arguments: { text: 'Ali Veli' } }] };
   } }, { type: 'script', respond: (call) => {
     assert.equal(toolResults(call).at(-1).data.resolution, 'ambiguous');
     return { type: 'answer', text: '{"kind":"clarification"}' };
   } });
-  const second = done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: 'Tasarım birimindeki' }));
+  const second = done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: 'Ali Veli Tasarım birimindeki' }));
   assert.equal(second.assistantMessage.finishReason, 'clarification');
 });
 

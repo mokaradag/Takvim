@@ -2,6 +2,7 @@ import 'server-only';
 import { getSqlPool, sql } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
+import { parseSicil } from '../identity/sicil.js';
 
 /**
  * Kurum dışı personel arama.
@@ -92,7 +93,7 @@ function directoryPerson(row) {
  */
 export async function searchCorporateDirectory(input = {}, executor = null, { rateScope = 'interactive', includeHasMore = false } = {}) {
   const query = normalizeQuery(input.query ?? input.q);
-  if (query.length < MIN_DIRECTORY_QUERY_LENGTH) {
+  if (query.length < MIN_DIRECTORY_QUERY_LENGTH && parseSicil(query) == null) {
     throw new ServerPersistenceError(
       'MUTATION_FAILED',
       `Personel araması için en az ${MIN_DIRECTORY_QUERY_LENGTH} karakter yazılmalıdır.`,
@@ -119,7 +120,7 @@ export async function searchCorporateDirectory(input = {}, executor = null, { ra
     throw new ServerPersistenceError('UNAUTHORIZED', 'Yapılandırılmış Sicil kurumsal personel kaynağında bulunamadı.');
   }
 
-  const numeric = /^\d{1,9}$/.test(query) ? Number(query) : null;
+  const numeric = parseSicil(query);
   const request = pool.request();
   request.input('query', sql.NVarChar(80), query);
   request.input('sicilQuery', sql.Int, numeric);

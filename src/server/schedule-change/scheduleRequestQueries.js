@@ -136,7 +136,7 @@ export async function readSchedulePage(executor, actor, input = {}, { evidenceSn
       requester.DisplayName, ' ', ownerPerson.DisplayName,
       CASE WHEN @searchRequesterMessage = 1 THEN CONCAT(' ', r.RequesterMessage) ELSE '' END,
       CASE WHEN @searchDecisionMessage = 1 THEN CONCAT(' ', r.DecisionMessage) ELSE '' END)`;
-  const filters = `${PARTICIPANT}${evidenceSnapshotLimit == null ? '' : ` AND ${CURRENT_TASK_DISCLOSURE_SQL}`}
+  const filters = `${PARTICIPANT}${evidenceSnapshotLimit == null ? '' : ` AND (${CURRENT_TASK_DISCLOSURE_SQL} OR t.TaskId IS NULL OR p.IsActive = 0)`}
     AND (@projectId IS NULL OR COALESCE(r.ProjectIdSnapshot, t.ProjectId) = @projectId)
     AND (@taskId IS NULL OR r.TaskId = @taskId)
     AND (@status IS NULL OR r.Status = @status)

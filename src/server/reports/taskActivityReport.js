@@ -198,7 +198,8 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
     const last = rows[rows.length - 1];
     // Ara kayıtlar okunmadıysa alan değişiklikleri kesin olarak kurulamaz: yalnızca
     // grubun kesin özeti (oluşturma/silme/tamamlama) ve kısaltma notu verilir.
-    const omitted = evidenceSnapshotLimit != null && Number(last.EventCount) > rows.length;
+    const omitted = evidenceSnapshotLimit != null
+      && (Number(last.EventCount) > rows.length || rows.some((row) => row.DetailJsonClipped));
     const computed = taskActivityChanges(rows, people, { includeStructuredChanges });
     const change = omitted
       ? { ...computed, ...(includeStructuredChanges ? { structuredChanges: [] } : {}), changes: [

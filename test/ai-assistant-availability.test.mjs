@@ -63,23 +63,22 @@ const documentWith = (content) => ({
     ? { getAttribute: (name) => (name === 'content' ? content : null) } : null)
 });
 
-function renderedFlag() {
-  const html = renderToStaticMarkup(layout.default({ children: null }));
-  return html.match(new RegExp(`<meta name="${ASSISTANT_AVAILABILITY_META}" content="([a-z]+)"/?>`))?.[1] ?? null;
-}
+const runtime = await import('../src/app/runtime.js/route.js');
 
-test('root layout reads the Rota AI switch at request time and publishes only enabled or disabled', (t) => {
-  assert.equal(layout.dynamic, 'force-dynamic', 'the flag is not frozen at build time');
-  for (const [value, expected] of [['false', 'disabled'], [null, 'disabled'], ['tru', 'disabled'], ['true', 'enabled'], ['0', 'disabled']]) {
+test('runtime availability changes without dynamic rendering or AI initialization in the root layout', async (t) => {
+  assert.equal(layout.dynamic, undefined);
+  assert.doesNotMatch(read('src/app/layout.js'), /readAiConfig|server\/ai|assistant\.css/);
+  assert.match(read('src/app/layout.js'), /runtime\.js/);
+  for (const [value, expected] of [['false', false], [null, false], ['tru', false], ['true', true], ['0', false]]) {
     withEnv(t, 'MERGEN_ROTA_AI_ENABLED', value);
-    assert.equal(renderedFlag(), expected, String(value));
+    const response = runtime.GET();
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(await response.text(), `globalThis.__MERGEN_ROTA_FEATURES__=Object.freeze({assistant:${expected}});`);
   }
-  withEnv(t, 'MERGEN_ROTA_AI_ENABLED', 'true');
   withEnv(t, 'MERGEN_ROTA_AI_DEFAULT_API_KEY', 'sk-test-0123456789abcdef');
   withEnv(t, 'MERGEN_ROTA_AI_BASE_URL', 'https://ai.example.test/v1');
-  const html = renderToStaticMarkup(layout.default({ children: null }));
-  assert.equal(renderedFlag(), 'enabled');
-  for (const secret of ['sk-test-0123456789abcdef', 'ai.example.test']) assert.equal(html.includes(secret), false, 'no configuration value reaches the page');
+  const body = await runtime.GET().text();
+  for (const secret of ['sk-test-0123456789abcdef', 'ai.example.test']) assert.equal(body.includes(secret), false);
 });
 
 test('the document flag hides the assistant only when the server says disabled', () => {
@@ -87,6 +86,11 @@ test('the document flag hides the assistant only when the server says disabled',
   assert.equal(assistantEnabledInDocument(documentWith('enabled')), true);
   assert.equal(assistantEnabledInDocument(documentWith(null)), true);
   assert.equal(assistantEnabledInDocument({}), true);
+});
+
+test('runtime availability controls the lazily loaded assistant independently of legacy metadata', () => {
+  assert.equal(assistantEnabledInDocument(documentWith('disabled'), { assistant: true }), true);
+  assert.equal(assistantEnabledInDocument(documentWith('enabled'), { assistant: false }), false);
 });
 
 test('with Rota AI disabled the launcher and panel render nothing, cannot be opened and send no request', async (t) => {
@@ -131,6 +135,6 @@ test('with Rota AI enabled the launcher stays in the top bar', (t) => {
 
 test('the command palette offers the assistant only when it is enabled', () => {
   const shell = read('src/components/shell/AppShell.jsx');
-  assert.match(shell, /onOpenAssistant=\{assistant\.enabled \? async \(\) => \{ await closeTask\(\); assistant\.openPanel\(\); \} : null\}/);
+  assert.match(shell, /onOpenAssistant=\{assistantActions\.enabled \? async \(\) => \{ await closeTask\(\); assistantActions\.openPanel\(\); \} : null\}/);
   assert.match(read('src/components/shell/CommandPalette.jsx'), /\.\.\.\(onOpenAssistant \? \[\{ kind: 'cmd', icon: 'Sparkles', label: 'Bilgin’e sor'/);
 });

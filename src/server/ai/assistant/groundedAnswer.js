@@ -236,7 +236,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   const userMessages = messages.filter((message) => message.role === 'user');
   const currentUser = userMessages.at(-1);
   // Kullanıcının bu turdaki iletisi (açıklama yanıtında önceki sorusu da) arama metni için güvenilir niyettir.
-  const userText = [clarification?.question, currentUser?.content].filter(Boolean).join('\n');
+  const userText = [clarification?.selected ? clarification.question : null, currentUser?.content].filter(Boolean).join('\n');
   const turn = {
     catalog,
     context,
@@ -257,6 +257,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     toolsAttempted: false,
     toolFailureCodes: new Set(),
     repaired: false,
+    repairsLeft: limits.maxRepairRounds,
     emptyRetried: false,
     escalated: false,
     models: []
@@ -366,7 +367,6 @@ export async function runGroundedTurn(session, {
   const { ledger, executor, containment, status } = turn;
   ({ catalog, context, limits } = turn);
   const canEscalate = () => escalationAvailable && escalationPermitted(turn);
-  let repairsLeft = limits.maxRepairRounds;
   let allowTools = resume ? ledger.ids().length === 0 : true;
   let lengthExhausted = false;
   for (;;) {
@@ -386,20 +386,20 @@ export async function runGroundedTurn(session, {
       });
     } catch (error) {
       if (!isEmptyCompletion(error) || session.signal?.aborted) throw error;
-      if (canEscalate()) return escalation(turn, 'EMPTY_COMPLETION', { error });
       // Boş yanıt yan etkisizdir: aynı tur, oturumda bir kez ve süre kaldıysa yeniden istenir.
       if (!turn.emptyRetried && (session.remainingMs?.() ?? 0) >= EMPTY_COMPLETION_RETRY_MIN_MS) {
         turn.emptyRetried = true;
         continue;
       }
+      if (canEscalate()) return escalation(turn, 'EMPTY_COMPLETION', { error });
       throw error;
     }
     const reported = result.model || session.model;
     if (reported) turn.models.push(reported);
 
     if (result.finishReason === 'length') {
-      if (repairsLeft > 0) {
-        repairsLeft -= 1;
+      if (turn.repairsLeft > 0) {
+        turn.repairsLeft -= 1;
         turn.repaired = true;
         allowTools = ledger.ids().length === 0;
         instruct(turn, 'Çıktı sağlayıcı sınırında kesildi. Önceki kesik JSON geçersizdir. En fazla 8 iddiayla daha kısa ve tam bir JSON üret; gerekli ise listeyi daralt.', { repair: true });
@@ -492,8 +492,8 @@ export async function runGroundedTurn(session, {
       };
     }
 
-    if (repairsLeft > 0) {
-      repairsLeft -= 1;
+    if (turn.repairsLeft > 0) {
+      turn.repairsLeft -= 1;
       turn.repaired = true;
       instruct(turn, groundingRepairInstruction(verdict.issues), { repair: true });
       // Kanıt varken düzeltme yalnızca yeniden yazımdır; kanıt yoksa model

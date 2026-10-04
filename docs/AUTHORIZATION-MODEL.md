@@ -328,3 +328,14 @@ Rota AI'nin Rota verisini okuyan 19 salt okunur aracı yeni bir yetki modeli kur
 - Talepler, atama koordinasyonu, bildirimler ve Görev Hareketleri araçları ilgili ekranların var olan okuma hizmetlerini aynı yetkiyle çağırır; ekip hareketleri yalnızca yöneticilere açıktır. Hiçbir araç bildirimi okundu işaretlemez ve hiçbir araç yazma yapmaz.
 
 Kalıcı Rota yanıtı için konuşma sahipliği yeterli değildir. Yanıtla saklanan yetki hash’i açma, tekrar ve uzlaştırma sırasında güncel yetkiyle eşleşmelidir; yoksa metin, atıflar ve özetler birlikte varlık/yetki ayrımı yapmayan iletiye döner. Görev görünür kalsa bile oluşturucu hakkının kalkması önceki kimlik kanıtını geçersiz yapar. Güncel yetki okunamazsa açıklama yapılmaz. Talepler/atama/bildirim AI okumaları katılımcılık kuralına ayrıca güncel etkin görev görünürlüğünü uygular; gizli satırlar sayaçlara girmez. Normal okuma yolları bu AI davranışına açık seçenek verilmedikçe değişmez.
+
+AI kanıtlarında görünür atama kimliği ile gerçek atama varlığı ayrıdır. Kimliği
+gizli sorumlu, sorumlusuz görev veya boş grup olarak sayılmaz. Çözülemeyen
+atama ayrı kalite durumudur. Sistem yöneticisi AI okumalarında proje/görev
+listesi yüklemez; etkinlik ve FULL yetki SQL koşullarıyla denetlenir. Kalıcı
+kanıt, sayılan görevlerin ve boş projeler dahil proje nüfusunun güncel yetkisini
+parçalı olarak yeniden doğrular; konuşma genelinde 160 000 görev eşiği yoktur.
+İlk kimlik yalnızca güncel kullanıcı isteği, kesin ad çözümü veya sunucunun
+numaralı açıklama seçiminden gelir; veri metni ve model kimliği yetki değildir.
+Silinmiş/arşivlenmiş görevlerde talepler ve koordinasyon geçmişi gerçek kayıtlı
+katılımcılara açıktır; canlı görev yetkisi bu tarihi katılımın yerine geçmez.

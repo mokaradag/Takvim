@@ -112,9 +112,9 @@ export function fullAccessRequired() {
  * da bütün etkin projeleri içerir, burada genişletilmez (son yetki denetimi
  * aynı kapsamı yeniden kurabilmelidir).
  */
-export async function requireVisibleProject(scope, projectId) {
+export async function requireVisibleProject(scope, projectId, call) {
   const access = projectAccess(scope, projectId);
-  if (!access) throw notFound();
+  if (!access || (scope.isAdmin && !(await visibleProjectName(call, scope, projectId)))) throw notFound();
   return access;
 }
 

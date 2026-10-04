@@ -287,7 +287,9 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
       suggested.DisplayName, ' ', decidedBy.DisplayName,
       CASE WHEN @searchRequesterMessage = 1 THEN CONCAT(' ', c.RequesterMessage) ELSE '' END,
       CASE WHEN @searchDecisionMessage = 1 THEN CONCAT(' ', c.DecisionMessage) ELSE '' END)`;
-  const filters = `${participant}${evidenceSnapshotLimit == null ? '' : ` AND ${CURRENT_TASK_DISCLOSURE_SQL}`}
+  const historicalParticipant = `(c.RequesterSicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients recipient
+    WHERE recipient.CoordinationId = c.CoordinationId AND recipient.Sicil = @sicil))`;
+  const filters = `${participant}${evidenceSnapshotLimit == null ? '' : ` AND (${CURRENT_TASK_DISCLOSURE_SQL} OR (NOT ${TASK_AVAILABLE} AND ${historicalParticipant}))`}
     AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
     AND (@status IS NULL OR c.Status = @status)

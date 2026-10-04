@@ -23,9 +23,9 @@ const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistr
 const stackFor = (t, sicil = ADMIN) => createAiStack(t, { sicil, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed() });
 const ACTIVE = [PROJECTS.FULL, PROJECTS.READ, PROJECTS.PARTIAL, PROJECTS.HIDDEN, PROJECTS.TEAM];
 
-test('system administrator access is materialized per project at derivation time', () => {
+test('system administrator authorization uses a predicate without per-project access entries', () => {
   const effective = deriveEffectiveAccess({ isSystemAdmin: true, fullProjectIds: ACTIVE.map((id) => id.toUpperCase()) });
-  assert.deepEqual([...effective.access.keys()].sort(), [...ACTIVE].sort());
+  assert.equal(effective.access.size, 0);
   for (const entry of effective.access.values()) {
     assert.equal(entry.accessLevel, 'FULL');
     assert.deepEqual(entry.reasons, [ACCESS_REASONS.SYSTEM_ADMIN]);
@@ -34,14 +34,12 @@ test('system administrator access is materialized per project at derivation time
   assert.equal(effective.partialTaskIds.size, 0);
 });
 
-test('the Rota scope of an administrator contains the active project set even from a bare authorization context', () => {
+test('administrator scope does not copy a large project enumeration into its access map', () => {
   const auth = { sicil: ADMIN, isSystemAdmin: true, effective: { access: new Map(), fullProjectIds: new Set(ACTIVE), partialTaskIds: new Set() } };
   const scope = buildRotaScope(auth);
-  assert.deepEqual([...scope.projects.keys()].sort(), [...ACTIVE].sort());
-  assert.ok([...scope.projects.values()].every((entry) => entry.accessLevel === 'FULL' && entry.reasons.includes(ACCESS_REASONS.SYSTEM_ADMIN)));
-  assert.equal(scope.projectTokens, '', 'SQL belirteçleri yöneticide boş kalır; SQL @isAdmin kullanır');
-  const archived = buildRotaScope({ ...auth, effective: { ...auth.effective, fullProjectIds: new Set(ACTIVE.slice(1)) } });
-  assert.notEqual(authorizationFingerprint(auth, scope), authorizationFingerprint(auth, archived), 'arşivlenen proje yöneticinin yetki dönemini değiştirmeli');
+  assert.equal(scope.projects.size, 0);
+  assert.equal(scope.projectTokens, '');
+  assert.equal(scope.scopedTaskIds, '');
 });
 
 const PROJECT_GATED_CALLS = [
@@ -97,7 +95,7 @@ test('administrator project evidence is dropped when the project is archived bef
     return typeof step === 'function' ? step(input) : step;
   } };
   const texts = [];
-  const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: 'Gizli Proje künyesini göster', now: NOW }).messages,
+  const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `Gizli Proje künyesini göster: ${PROJECTS.HIDDEN}`, now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: ADMIN, now: NOW }), allowedTextFields: [], onText: async (text) => texts.push(text) });
   assert.notEqual(result.outcome, 'grounded');
   assert.deepEqual(result.evidenceRows, []);

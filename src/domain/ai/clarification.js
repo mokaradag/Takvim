@@ -53,7 +53,7 @@ const AFFIRMATIVE = new Set(['evet', 'yes', 'dogru', 'aynen', 'tamam', 'ok', 'ok
 const CARDINAL = new Set(['bir', 'iki', 'uc', 'dort', 'bes', 'alti', 'yedi', 'sekiz', 'dokuz', 'on', 'two', 'three', 'both', 'hepsi', 'ikisi', 'tumu', 'all']);
 const FILLER = new Set([
   'aday', 'adayi', 'adaydi', 'secenek', 'secenegi', 'numara', 'numarali', 'no', 'nolu', 'olan', 'olani', 'siradaki',
-  'listedeki', 'lutfen', 'bu', 'su', 'o', 'kisi', 'kisiyi', 'proje', 'projeyi', 'gorev', 'gorevi', 'kayit', 'kaydi',
+  'listedeki', 'lutfen', 'bu', 'su', 'o', 'kisi', 'kisiyi', 'proje', 'projeyi', 'projenin', 'gorev', 'gorevi', 'gorevleri', 'gorevlerini', 'kayit', 'kaydi',
   'kastettim', 'kastediyorum', 'seciyorum', 'sectim', 'sec', 'istiyorum', 'olsun', 'option', 'number', 'the', 'one',
   'please', 'i', 'mean', 'meant', 'pick', 'choose', 'select', 'that'
 ]);
@@ -79,25 +79,20 @@ export function selectedCandidateOrdinal(text, candidateCount) {
   if (!Number.isInteger(count) || count < 1 || count > CLARIFICATION_LIMITS.maxCandidates) return null;
   const raw = String(text ?? '').trim();
   if (!raw || raw.length > CLARIFICATION_LIMITS.maxReplyChars) return null;
-  const marked = new Set();
   const tokens = [];
   for (const part of fold(raw).replace(/['’`]/g, '').split(/\s+/).filter(Boolean)) {
-    const ordinalMark = /^#\d|^\d{1,2}[.)]/.test(part);
     const token = part.replace(/^[#(]+/, '').replace(/[.,;:!?)]+$/, '').replace(/^(\d{1,2})\.(?=\p{L})/u, '$1');
     if (!token) continue;
     tokens.push(token);
-    if (ordinalMark) marked.add(token);
   }
   if (!tokens.length || tokens.length > CLARIFICATION_LIMITS.maxReplyTokens) return null;
   const values = new Set();
-  let bareNumber = false;
   let affirmed = false;
   let other = false;
   for (const token of tokens) {
     const digits = DIGIT_ORDINAL.exec(token);
     if (digits) {
       values.add(Number(digits[1]));
-      if (!digits[2] && !marked.has(token)) bareNumber = true;
       continue;
     }
     const word = ordinalWord(token);
@@ -108,7 +103,7 @@ export function selectedCandidateOrdinal(text, candidateCount) {
     if (!FILLER.has(token)) other = true;
   }
   if (values.size === 0) return affirmed && count === 1 && !other ? 0 : null;
-  if (values.size !== 1 || (bareNumber && other)) return null;
+  if (values.size !== 1 || other) return null;
   const value = [...values][0];
   return value >= 1 && value <= count ? value - 1 : null;
 }

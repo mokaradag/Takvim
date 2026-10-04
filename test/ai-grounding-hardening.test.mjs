@@ -86,7 +86,7 @@ test('an ambiguous lookup does not block unrelated resolved entities, and its ca
 
 test('a unique exact project match authorizes only that project, not the fuzzy alternatives', () => {
   const scope = createToolScope({ today: '2026-09-30' });
-  established(scope, 'rota_project_search', { text: 'Radar' }, { ambiguous: false, matches: [
+  established(scope, 'rota_project_search', { text: 'Radar' }, { resolution: 'unique', resolvedProject: { projectId: PROJECTS.FULL }, ambiguous: false, matches: [
     { projectId: PROJECTS.FULL, exactMatch: true }, { projectId: PROJECTS.READ, exactMatch: false }] });
   assert.doesNotThrow(() => scope.validate('rota_project_detail', { projectId: PROJECTS.FULL }));
   assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.READ }), { code: 'UNSUPPORTED_SCOPE' });
@@ -111,10 +111,10 @@ test('task-name resolution proves a unique task before detail follow-ups', async
   assert.throws(() => resolved.validate('rota_task_detail', { taskId: '20000000-0000-4000-8000-000000000777' }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
-test('server-owned aggregate identities are drill-down roots', () => {
+test('returned aggregate identities cannot manufacture an unrequested drill-down', () => {
   const scope = createToolScope({ today: '2026-09-30' });
   established(scope, 'rota_task_analytics', { groupBy: 'project' }, { groupBy: 'project', groups: [{ key: PROJECTS.FULL, count: 3 }, { key: 'other', count: 1 }] });
-  assert.doesNotThrow(() => scope.validate('rota_project_detail', { projectId: PROJECTS.FULL }));
+  assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.FULL }), { code: 'UNSUPPORTED_SCOPE' });
   assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.HIDDEN }), { code: 'UNSUPPORTED_SCOPE' });
   const quality = createToolScope({ today: '2026-09-30' });
   established(quality, 'rota_data_quality', {}, { checks: [] });
@@ -142,7 +142,7 @@ test('free-text fields require the user\'s explicit choice, even in the first ro
   const scope = createToolScope({ today: '2026-09-30', allowedTextFields: [] });
   assert.throws(() => scope.validate('rota_task_detail', { taskId: TASKS.OVERDUE, textFields: ['description'] }), (error) => error.code === 'UNSUPPORTED_SCOPE'
     && error.details.includes('$.textFields:not-authorized'));
-  const allowed = createToolScope({ today: '2026-09-30', allowedTextFields: ['description'] });
+  const allowed = createToolScope({ today: '2026-09-30', userText: TASKS.OVERDUE, allowedTextFields: ['description'] });
   assert.doesNotThrow(() => allowed.validate('rota_task_detail', { taskId: TASKS.OVERDUE, textFields: ['description'] }));
 });
 
@@ -224,7 +224,7 @@ test('a lone partial project match cannot open project-scoped follow-ups without
 test('a verified answer is stored as a server-terminal stop even after a provider tool_calls finish', async (t) => {
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }), (input) => ({
     text: evidenceReply(claimFor(results(input)[0], 'data.task.status')), toolCalls: [], finishReason: 'tool_calls'
-  })]);
+  })], { user: `Rota verisini incele: ${TASKS.OVERDUE}` });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.finishReason, 'stop');
 });
@@ -274,26 +274,27 @@ test('aggregate evidence is dropped when a counted but unlisted task leaves the 
     // Sayılan görev, kullanıcının göremediği projeye taşınır; projedeki yetki aynı kalır.
     stack.db.tasks.find((task) => task.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
     return reply(evidenceReply(claimFor(results(input)[0], 'data.totals.total')));
-  }, reply('{"kind":"unavailable"}')]);
+  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.notEqual(result.outcome, 'grounded');
   assert.deepEqual(result.evidenceRows, []);
 });
 
 test('admin project evidence survives the final authorization re-read', async (t) => {
   const { result } = await turn(t, [calls('rota_project_detail', { projectId: PROJECTS.FULL }),
-    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.project.name')))], { sicil: ADMIN });
+    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.project.name')))], { user: `Rota verisini incele: ${PROJECTS.FULL}`, sicil: ADMIN });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.evidenceRows.length, 1);
 });
 
-test('archiving a project changes the administrator\'s population-wide epoch', async (t) => {
+test('archiving an administrator project invalidates its evidence without enumerating the project population', async (t) => {
   const stack = stackFor(t, {}, ADMIN);
-  const first = createToolTurnContext({ sicil: ADMIN, now: NOW });
-  await first.authorization(new AbortController().signal);
+  const { ledger, context } = await callRotaTool(stack, ADMIN, 'rota_project_detail', { projectId: PROJECTS.READ });
+  const entries = ledger.authorizationEntries();
+  await context.revalidateAuthorization(new AbortController().signal);
+  assert.equal((await context.revalidateEvidence(entries, new AbortController().signal)).size, 1);
   stack.db.projects.find((project) => project.ProjectId === PROJECTS.READ).IsActive = 0;
-  const second = createToolTurnContext({ sicil: ADMIN, now: NOW });
-  await second.authorization(new AbortController().signal);
-  assert.notEqual(first.authorizationEpoch(), second.authorizationEpoch());
+  await context.revalidateAuthorization(new AbortController().signal);
+  assert.equal((await context.revalidateEvidence(entries, new AbortController().signal)).size, 0);
 });
 
 test('the authorization fingerprint reuses the canonical identity set for repeated checks', () => {
@@ -359,8 +360,10 @@ test('population-defining filters keep equal counts distinguishable', async (t) 
   const wbs = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, wbsId: WBS.FULL_DESIGN });
   const person = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, personSicil: AYSE });
   assert.match(render(text.result), /Arama metni/);
-  assert.match(render(wbs.result), new RegExp(WBS.FULL_DESIGN.slice(0, 8)));
-  assert.match(render(person.result), /Sicil/);
+  assert.match(render(wbs.result), /RDR.*1.*Tasarım/);
+  assert.doesNotMatch(render(wbs.result), new RegExp(WBS.FULL_DESIGN));
+  assert.match(render(person.result), /Ayşe Yılmaz/);
+  assert.doesNotMatch(render(person.result), new RegExp(String(AYSE)));
   const portfolio = await callRotaTool(stack, AYSE, 'rota_portfolio_summary', { source: 'corporate', includeEmpty: false });
   const projectsFact = createEvidenceFacts(portfolio.result, { prefix: portfolio.result.factScope }).find((fact) => fact.field === 'data.totals.projects');
   assert.match(renderEvidenceFact(projectsFact, 'R1'), /Kurumsal.*Hariç/);
@@ -422,6 +425,7 @@ test('project detail never publishes a capped dependency count as exact: the met
   assert.equal(result.ok, true);
   assert.equal(result.data.project.dependencyCount, null);
   assert.deepEqual(result.data.project.countsOverLimit, ['dependencyCount']);
+  assert.equal(result.truncated, true);
   assert.equal(result.data.project.wbsNodeCount, 3);
   assert.equal(result.complete, false);
   const { analyzeGroundedAnswer } = await import('../src/domain/ai/evidenceVerification.js');
@@ -462,14 +466,16 @@ test('every Rota tool bounded-result THROW first drops all temp tables the batch
   assert.ok(total > 0);
 });
 
-test('an invalid tools flag does not hide a more severe AI health warning', (t) => {
+test('an invalid tools flag does not hide a more severe AI health warning', async (t) => {
+  const { loadAiModelRegistry } = await import('../src/server/ai/modelRegistryLoader.js');
+  await loadAiModelRegistry({ path: null });
   const stack = stackFor(t);
   stack.setEnv({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'on' });
   recordProviderCall({ operation: 'ai.provider.chat', latencyMs: 5, code: 'AI_PROVIDER_UNAVAILABLE' });
   const failing = aiHealthComponent({ now: Date.now() });
   assert.match(failing.message, /Son sağlayıcı çağrısı başarısız/);
   recordProviderCall({ operation: 'ai.provider.chat', latencyMs: 5 });
-  assert.match(aiHealthComponent({ now: Date.now() }).message, /etkinleştirme ayarı geçersiz|Model kaydı|profil|tablo/);
+  assert.match(aiHealthComponent({ now: Date.now() }).message, /Rota verisi araçları etkinleştirme ayarı geçersiz; araçlar kapalı, genel sohbet kullanılabilir/);
 });
 
 /* ── Kayıtlı yanıtlar ──────────────────────────────────────── */
@@ -495,13 +501,13 @@ test('a transient evidence-schema probe failure is retryable and never saves an 
   };
   stack.db.queryBarrier.released.catch(() => {});
   const turnId = randomUUID();
-  const first = await sendTurn({ turnId, message: 'Radar projesinde kaç görev var?' });
+  const first = await sendTurn({ turnId, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   assert.equal(first.status, 503);
   assert.equal(stack.db.aiConversationMessages.some((row) => row.Role === 'assistant'), false);
   stack.db.queryBarrier = null;
   stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] },
     { type: 'script', respond: (call) => ({ type: 'answer', text: evidenceReply(claimFor(JSON.parse(call.messages.filter((message) => message.role === 'tool').at(-1).content), 'totalCount')) }) });
-  const retry = await sendTurn({ turnId, message: 'Radar projesinde kaç görev var?' });
+  const retry = await sendTurn({ turnId, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   const done = retry.events.find((event) => event.event === 'done').data;
   assert.notEqual(done.assistantMessage.finishReason, 'unavailable');
 });

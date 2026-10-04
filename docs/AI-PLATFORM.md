@@ -792,7 +792,7 @@ olur). Değerler hiçbir tanı çıktısına taşınmaz.
 
 | Değişken | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `MERGEN_ROTA_AI_ENABLED` | `false` | Özelliği açar. Geçersiz değer (ör. `tru`) kapalı sayılır ama bilinçli kapatmadan ayrılır: Sistem Yönetimi yapılandırma hatası gösterir, istekler `AI_CONFIGURATION_ERROR` alır. Açık değilken (boş, `false` ya da geçersiz) üst çubuktaki Rota AI düğmesi, yardımcı paneli ve komut paletindeki "Rota AI’ye sor" girdisi gösterilmez; değer her sayfa isteğinde sunucu ortamından okunur (`next start` ile çalışan sunucuda `.env.local` değişikliği yeniden başlatmayla geçerli olur) |
+| `MERGEN_ROTA_AI_ENABLED` | `false` | Özelliği açar. Geçersiz değer (ör. `tru`) kapalı sayılır ama bilinçli kapatmadan ayrılır: Sistem Yönetimi yapılandırma hatası gösterir, istekler `AI_CONFIGURATION_ERROR` alır. Açık değilken (boş, `false` ya da geçersiz) üst çubuktaki Rota AI düğmesi, yardımcı paneli ve komut paletindeki "Rota AI’ye sor" girdisi gösterilmez; değer SQL’siz `/runtime.js` isteğinde sunucu ortamından okunur; kök sayfa statik, yardımcı kodu ve stilleri koşullu yüklenir (`next start` ile çalışan sunucuda `.env.local` değişikliği yeniden başlatmayla geçerli olur) |
 | `MERGEN_ROTA_AI_BASE_URL` | — | OpenAI uyumlu ağ geçidinin taban adresi (genellikle `/v1` ile biter). HTTPS zorunlu; düz HTTP yalnız geri döngü adresinde ya da açık onayla. Adreste kullanıcı bilgisi, sorgu ya da parça bulunamaz |
 | `MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP` | `false` | Düz HTTP'ye açık onay; üretimde kapalı kalmalıdır |
 | `MERGEN_ROTA_AI_DEFAULT_API_KEY` | boş | Kurumsal anahtar; yalnızca kişisel anahtarı olmayanlar için. Kişisel anahtarla aynı biçim kuralından geçer; yalnızca bütünüyle `<…>` yer tutucu olan değer reddedilir |
@@ -1382,10 +1382,11 @@ güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
 
 ### 18.12 Arayüz
 
-- **Görünürlük:** `MERGEN_ROTA_AI_ENABLED` açık değilse kök yerleşim bunu
-  sayfaya yazar (`<meta name="mergen-rota-ai" content="disabled">`) ve kabuk
-  Bilgin düğmesini, paneli ve komut paleti girdisini hiç göstermez. İşaret
-  yalnızca açık/kapalı bilgisini taşır; uçların kendi denetimi yerinde kalır.
+- **Görünürlük:** kök yerleşim statik kalır. SQL çalıştırmayan, önbelleksiz
+  `/runtime.js` yalnızca `MERGEN_ROTA_AI_ENABLED` sonucunu taşır. Bayrak
+  kapalıyken kabuk Bilgin modülünü, denetleyicisini ve stillerini yüklemez;
+  düğme, panel ve komut paleti girdisi gösterilmez. Uçların kendi denetimi
+  yerinde kalır.
 - **Yerleşim:** masaüstünde üst çubuğun altında, sağa yaslı, **kipsiz**
   yardımcı panel (`role="complementary"`, odak tuzağı yok; Esc kapatır ve
   odak Bilgin düğmesine döner). Genişlik görünüm alanının yaklaşık %42'sidir
@@ -1679,7 +1680,8 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   taşır. Model doğal dili yorumlar ve kanıttaki olguları seçer
   (`{"kind":"rota","facts":["R1:data.…"]}`; eski türlü iddia biçimi de kabul
   edilir). Değer, özne, birim ve süzgeç sunucunun kendi yetkili yükünden okunur;
-  seçilen olgular sunucuya ait şablonlarla paragraf, liste ya da tabloya
+  seçilen olgular güncel isteğin ölçü/kimlik kısıtlarına da bağlanır; ilgisiz
+  doğru olgu doğrulamayı geçemez. Olgular sunucuya ait şablonlarla paragraf, liste ya da tabloya
   çevrilir ve `【R1】` atfı eklenir. Düzyazı regexleri veya ikinci bir model
   hakem değildir. Uydurma/değiştirilmiş başvuru bir kez düzeltilir; Standart
   kipte, Derin düşünme araç profili kuruluysa kurtarılabilir model hatası aynı

@@ -51,7 +51,7 @@ function persistedEvidenceJson(entry, payload, clarificationContext) {
   const { data: _omitted, ...envelope } = payload;
   const compact = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: population, ...clarification });
   if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
-  return JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization,
+  return JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', authorizationEpoch: entry.authorizationEpoch,
     authorizationPopulation: unverifiableAuthorizationPopulation(), ...clarification });
 }
 

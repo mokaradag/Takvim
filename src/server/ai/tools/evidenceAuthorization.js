@@ -131,10 +131,11 @@ export function evidenceTaskReferences(envelope) {
   return [...tasks].map(([taskId, projectId]) => ({ taskId, projectId }));
 }
 
-export function scopedEvidenceAuthorization(auth, scope, args, envelope) {
+export function scopedEvidenceAuthorization(auth, scope, args, envelope, projectPopulation = []) {
   const taskIds = envelope.tool === 'rota_task_detail' ? evidenceTaskReferences(envelope).map((row) => row.taskId) : null;
   const projectId = args.projectId || (taskIds ? envelope.data?.task?.project?.projectId : null);
-  if (!projectId) return null;
-  const population = { projectIds: [projectId], taskIds };
+  const projectIds = projectId ? [projectId] : [...new Set(projectPopulation.map(canonicalActualId).filter(Boolean))];
+  if (!projectIds.length) return null;
+  const population = { projectIds, taskIds };
   return { version: 1, ...population, epoch: authorizationFingerprint(auth, scope, population) };
 }

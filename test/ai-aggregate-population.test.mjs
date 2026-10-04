@@ -133,7 +133,7 @@ test('a saved aggregate answer is hidden on reopen and replay when a counted, un
   const stack = stackFor(t);
   citeProjectTotal(stack);
   const turnId = randomUUID();
-  const first = done(await sendTurn({ turnId, message: 'Radar projesinde kaç görev var?' }));
+  const first = done(await sendTurn({ turnId, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
   assert.equal(first.assistantMessage.finishReason, 'stop');
   const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
   const population = decodeAuthorizationPopulation(stored.authorizationPopulation);
@@ -146,7 +146,7 @@ test('a saved aggregate answer is hidden on reopen and replay when a counted, un
   assert.equal(hidden.finishReason, 'not_found');
   assert.deepEqual(hidden.evidence, []);
   assert.doesNotMatch(hidden.content, new RegExp(String(FULL_TASKS.length)));
-  const replay = await sendTurn({ turnId, conversationId: first.conversation.id, message: 'Radar projesinde kaç görev var?' });
+  const replay = await sendTurn({ turnId, conversationId: first.conversation.id, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   assert.equal(done(replay).replayed, true);
   assert.deepEqual(done(replay).assistantMessage.evidence, []);
   assert.equal(done(replay).assistantMessage.finishReason, 'not_found');
@@ -160,7 +160,7 @@ test('an aggregate whose population cannot fit the bounded record is shown in-tu
   stack.db.tasks.push(...extra);
   citeProjectTotal(stack);
   const turnId = randomUUID();
-  const response = await sendTurn({ turnId, message: 'Radar projesinde kaç görev var?' });
+  const response = await sendTurn({ turnId, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   const saved = done(response);
   assert.equal(saved.assistantMessage.finishReason, 'stop');
   assert.equal(saved.assistantMessage.content, deltas(response));
@@ -178,7 +178,7 @@ test('an aggregate whose population cannot fit the bounded record is shown in-tu
   assert.deepEqual(reopened.evidence, []);
   assert.doesNotMatch(reopened.content, totalPattern);
   assert.match(reopened.content, /yeniden doğrulanamıyor/);
-  const replay = await sendTurn({ turnId, conversationId: saved.conversation.id, message: 'Radar projesinde kaç görev var?' });
+  const replay = await sendTurn({ turnId, conversationId: saved.conversation.id, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   assert.equal(done(replay).replayed, true);
   assert.doesNotMatch(deltas(replay), totalPattern);
   assert.match(deltas(replay), /yeniden doğrulanamıyor/);
@@ -191,7 +191,7 @@ test('a population that fits only without the reproduction data is persisted com
   const stack = stackFor(t);
   stack.db.tasks.push(...extra);
   citeProjectTotal(stack);
-  const saved = done(await sendTurn({ turnId: randomUUID(), message: 'Radar projesinde kaç görev var?' }));
+  const saved = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
   const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
   assert.equal(decodeAuthorizationPopulation(stored.authorizationPopulation).length, FULL_TASKS.length + extra.length);
   const reopened = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
@@ -204,13 +204,13 @@ test('a population that fits only without the reproduction data is persisted com
 test('legacy aggregate evidence without a recorded population is unverifiable, while payload-bound legacy evidence still verifies', async (t) => {
   const stack = stackFor(t);
   citeProjectTotal(stack);
-  const aggregate = done(await sendTurn({ turnId: randomUUID(), message: 'Radar projesinde kaç görev var?' }));
+  const aggregate = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
   stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
       return { type: 'answer', text: evidenceReply(claimFor(result, 'data.task.title')) };
     } });
-  const detail = done(await sendTurn({ turnId: randomUUID(), message: 'Radar test planı görevini göster' }));
+  const detail = done(await sendTurn({ turnId: randomUUID(), message: `Radar test planı görevini göster: ${TASKS.OVERDUE}` }));
   for (const row of stack.db.aiMessageEvidence) {
     const value = JSON.parse(row.EvidenceJson);
     delete value.authorizationPopulation;
@@ -228,7 +228,7 @@ test('legacy aggregate evidence without a recorded population is unverifiable, w
 test('a malformed persisted population fails closed', async (t) => {
   const stack = stackFor(t);
   citeProjectTotal(stack);
-  const saved = done(await sendTurn({ turnId: randomUUID(), message: 'Radar projesinde kaç görev var?' }));
+  const saved = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
   for (const tampered of [{ v: 1, complete: true, tasks: { [PROJECTS.FULL]: 'AA' } }, { v: 2, complete: true, tasks: {} }, { v: 1, complete: true, tasks: { 'not-a-guid': '' } }]) {
     const row = stack.db.aiMessageEvidence[0];
     row.EvidenceJson = JSON.stringify({ ...JSON.parse(row.EvidenceJson), authorizationPopulation: tampered });

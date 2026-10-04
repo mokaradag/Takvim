@@ -65,10 +65,10 @@ test('list questions render lists, table requests render tables, and summaries s
   const facts = ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish', 'data.tasks.*.overdueDays'];
   const list = await verify(stack, 'rota_task_search', { deadline: 'overdue', assignee: 'me' }, facts, { userText: 'Gecikmiş görevlerimi listele' });
   assert.match(list.verdict.normalized, /^Eşleşen \*\*3\*\* görev bulundu \(ölçüt: /);
-  assert.match(list.verdict.normalized, /^- \*\*Radar test planı\*\* — Termin: \*\*20 Eylül 2026\*\* · Gecikme \(gün\): \*\*10\*\* 【R1】$/m);
+  assert.match(list.verdict.normalized, /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\* — Termin: \*\*20 Eylül 2026\*\* · Gecikme \(gün\): \*\*10\*\* 【R1】$/m);
   const table = await verify(stack, 'rota_task_search', { deadline: 'overdue', assignee: 'me' }, facts, { userText: 'Gecikmiş görevlerimi tablo olarak göster' });
   assert.match(table.verdict.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \|$/m);
-  assert.match(table.verdict.normalized, /^\| Radar test planı \| 20 Eylül 2026 \| 10 \|$/m);
+  assert.match(table.verdict.normalized, /^\| Radar test planı · RDR · Radar Modernizasyonu[^\n]* \| 20 Eylül 2026 \| 10 \|$/m);
   const summary = await verify(stack, 'rota_task_analytics', { deadline: 'overdue', assignee: 'me' }, ['data.totals.total']);
   assert.match(summary.verdict.normalized, /^Görebildiğiniz görevler arasında toplam \*\*3\*\* görev bulunuyor \(ölçüt: .*Gecikmiş.*\)\. 【R1】$/);
 });
@@ -136,9 +136,9 @@ test('legacy structured claims remain verifiable and render through the same nar
  */
 const COMMON_QUESTIONS = [
   ['Kaç gecikmiş görevim var?', ['rota_task_analytics', { deadline: 'overdue', assignee: 'me' }], ['data.totals.total'], /toplam \*\*\d+\*\* görev bulunuyor \(ölçüt: /],
-  ['Gecikmiş görevlerimi listele', ['rota_task_search', { deadline: 'overdue', assignee: 'me' }], ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish'], /^- \*\*Radar test planı\*\*/m],
-  ['Radar Modernizasyonu projesinde kaç görev var?', ['rota_project_detail', { projectId: PROJECTS.FULL }], ['data.visibleTasks.total'], /projesinde toplam \*\*8\*\* görev/],
-  ['Radar Modernizasyonu projesini özetle', ['rota_project_detail', { projectId: PROJECTS.FULL }],
+  ['Gecikmiş görevlerimi listele', ['rota_task_search', { deadline: 'overdue', assignee: 'me' }], ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish'], /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\*/m],
+  [`Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`, ['rota_project_detail', { projectId: PROJECTS.FULL }], ['data.visibleTasks.total'], /projesinde toplam \*\*8\*\* görev/],
+  [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, ['rota_project_detail', { projectId: PROJECTS.FULL }],
     ['data.visibleTasks.total', 'data.visibleTasks.open', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent'], /Bunların \*\*\d+\*\*'s?[ıiuü] açık ve \*\*\d+\*\*'s?[ıiuü] gecikmiş; tamamlanma oranı \*\*%\d+\*\*\. 【R1】$/],
   ['Kimde kaç açık iş var?', ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'], /^- \*\*Ayşe Yılmaz\*\* — Açık görev: \*\*\d+\*\* 【R1】$/m]
 ];

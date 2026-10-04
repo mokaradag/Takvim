@@ -14,7 +14,8 @@ import {
   AI_TOOL_TASK_DETAIL_SQL,
   AI_TOOL_TASK_FACTS_SQL,
   AI_TOOL_TASK_VISIBILITY_SQL,
-  AI_TOOL_WBS_SQL
+  AI_TOOL_WBS_SQL,
+  AI_TOOL_WBS_SELECTOR_SQL
 } from './rotaToolQueries.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { assigneesByTask, factFromRow } from './taskFacts.js';
@@ -35,11 +36,12 @@ function scoped(executor, scope, options) {
   request.query = async (statement) => {
     try { return await query(statement); } catch (error) {
       const number = error?.number ?? error?.originalError?.info?.number;
-      if (number === 51001 || (statement === AI_TOOL_WBS_SQL && number === 530)) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      if (number === 51001 || ([AI_TOOL_WBS_SQL, AI_TOOL_WBS_SELECTOR_SQL].includes(statement) && number === 530)) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       throw error;
     }
   };
   request.input('sourceFilter', sql.VarChar(12), options?.source || 'all');
+  request.input('projectSearchText', sql.NVarChar(120), options?.projectSearchText || '');
   request.input('analysisMaxRows', sql.Int, TOOL_LIMITS.maxAnalyzedTasks + 1);
   request.input('analysisAssignmentRows', sql.Int, TOOL_LIMITS.maxAnalyzedAssignments + 1);
   return request;
@@ -115,12 +117,12 @@ export async function readTaskDetail(executor, scope, taskId) {
   };
 }
 
-export async function readProjectSearch(executor, scope, { text, limit, projectId = null }) {
-  const request = scoped(executor, scope, { projectId });
+export async function readProjectSearch(executor, scope, { text, limit, projectId = null, projectIds = [] }) {
+  const request = scoped(executor, scope, { projectId, projectIds, projectSearchText: text });
   request.input('text', sql.NVarChar(120), text);
   request.input('limit', sql.Int, limit);
-  const [[count] = [], rows = []] = recordsets(await request.query(AI_TOOL_PROJECT_SEARCH_SQL));
-  return { total: Number(count?.Total || 0), exactCount: Number(count?.ExactCount || 0), rows };
+  const [[count] = [], rows = [], population = []] = recordsets(await request.query(AI_TOOL_PROJECT_SEARCH_SQL));
+  return { total: Number(count?.Total || 0), exactCount: Number(count?.ExactCount || 0), rows, projectIds: population.map((row) => canonicalActualId(row.ProjectId)) };
 }
 
 export async function readPortfolio(executor, scope, { today, soonEnd, source = 'all' }) {
@@ -149,6 +151,13 @@ export async function readProjectDetail(executor, scope, { projectId, today, soo
     totals: totals || null,
     population: populationOf(populationRows)
   };
+}
+
+export async function readWbsSelector(executor, scope, { projectId = null, wbsId }) {
+  const request = scoped(executor, scope, { projectId });
+  request.input('wbsId', sql.UniqueIdentifier, wbsId);
+  const [[node] = []] = recordsets(await request.query(AI_TOOL_WBS_SELECTOR_SQL));
+  return node || null;
 }
 
 export async function readWbs(executor, scope, { projectId, wbsId = null, today, maxRows }) {

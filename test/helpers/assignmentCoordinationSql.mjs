@@ -294,7 +294,8 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   };
   const pageRow = (row) => ({ ...coordinationRow(db, row, params), IsActionable: pageActionable(row) ? 1 : 0 });
   const matches = db.taskAssignmentCoordinations.filter((row) => {
-    if (!pageParticipant(row) || !disclosureAllowed(db, row, params)) return false;
+    const historicalParticipant = Number(row.RequesterSicil) === sicil || recipientsOf(db, row.CoordinationId).some((recipient) => Number(recipient.Sicil) === sicil);
+    if (!pageParticipant(row) || !(disclosureAllowed(db, row, params) || (params.evidenceSnapshotLimit != null && !taskAvailable(db, row) && historicalParticipant))) return false;
     const view = pageRow(row);
     if (params.projectId && !sameGuid(recordProjectId(db, row), params.projectId)) return false;
     if (params.taskId && !sameGuid(row.TaskId, params.taskId)) return false;

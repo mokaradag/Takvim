@@ -69,7 +69,7 @@ test('a model-proposed general route returns a safe clarification and never rest
 
 test('short grounded follow-ups can choose fresh evidence without inheriting old evidence IDs', async (t) => {
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }),
-    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')))], { user: 'Peki kim?',
+    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')))], { user: `Peki durumu? ${TASKS.OVERDUE}`,
     history: [{ role: 'user', content: 'Radar görevini göster' }, { role: 'assistant', content: 'Eski yanıt 【R9】' }] });
   assert.equal(result.outcome, 'grounded');
   assert.deepEqual(result.evidence.map((item) => item.id), ['R1']);
@@ -79,7 +79,7 @@ test('failed initial calls leave the catalog available for a correct retry', asy
   const { result } = await turn(t, [calls('rota_search_tasks'), (input) => {
     assert.ok(input.tools.some((tool) => tool.name === 'rota_task_search'));
     return calls('rota_task_search', { projectId: PROJECTS.FULL });
-  }, (input) => reply(evidenceReply(claimFor(results(input).at(-1), 'totalCount')))]);
+  }, (input) => reply(evidenceReply(claimFor(results(input).at(-1), 'totalCount')))], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.equal(result.outcome, 'grounded');
 });
 
@@ -89,7 +89,7 @@ test('a successful NOT_FOUND retry supersedes earlier errors and has its own ter
   const { result } = await turn(t, [() => {
     before = { ...aiTelemetrySnapshot().grounding };
     return calls('rota_task_detail', {});
-  }, calls('rota_task_detail', { taskId: TASKS.HIDDEN }), reply('{"kind":"not_found"}')]);
+  }, calls('rota_task_detail', { taskId: TASKS.HIDDEN }), reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.HIDDEN}` });
   assert.equal(result.outcome, 'not_found');
   assert.equal(result.finishReason, 'not_found');
   assert.deepEqual(result.evidenceRows, []);
@@ -104,7 +104,7 @@ test('a confirmed deletion invalidates formerly successful evidence before final
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }), (_input, stack) => {
     stack.db.tasks = stack.db.tasks.filter((task) => task.TaskId !== TASKS.OVERDUE);
     return calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'removed');
-  }, reply('{"kind":"not_found"}')], { context });
+  }, reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
   assert.equal(result.outcome, 'not_found');
   assert.deepEqual(result.evidenceRows, []);
 });
@@ -135,7 +135,7 @@ test('multiple initial entities preserve each established scope for valid follow
   const { result } = await turn(t, [first, calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'follow'), (input) => {
     assert.equal(results(input).at(-1).ok, true);
     return reply(evidenceReply(claimFor(results(input).at(-1), 'data.task.status')));
-  }]);
+  }], { user: `Görevleri incele ${TASKS.OVERDUE} ${TASKS.DUE_SOON}` });
   assert.equal(result.outcome, 'grounded');
 });
 
@@ -148,7 +148,7 @@ test('prompt injection cannot change an allowed tool to another entity or widen 
     }, (input) => {
       assert.equal(results(input).at(-1).error.code, 'UNSUPPORTED_SCOPE');
       return reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')));
-    }]);
+    }], { user: `Rota verisini incele: ${TASKS.LITERAL}` });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.evidence.length, 1);
 });
@@ -160,14 +160,14 @@ test('free text cannot become a terminal claim unless its projection was selecte
     const claim = { evidenceId: found.evidenceId, factId: `${found.factScope}:data.task.description`, subjectId: 'data.task',
       field: 'data.task.description', operator: 'eq', value: found.data.task.description };
     return reply(evidenceReply(claim));
-  }, (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')))]);
+  }, (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')))], { user: `Rota verisini incele: ${TASKS.LITERAL}` });
   assert.equal(result.outcome, 'grounded');
   assert.doesNotMatch(result.text, /talimatları/);
 });
 
 test('explicit text projection preserves exact equality and safe Markdown escaping', async (t) => {
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL, textFields: ['description'] }),
-    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.description')))], { allowedTextFields: ['description'] });
+    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.description')))], { user: `Rota verisini incele: ${TASKS.LITERAL}`, allowedTextFields: ['description'] });
   assert.equal(result.outcome, 'grounded');
   assert.doesNotMatch(result.text, /【R7】/);
 });
@@ -183,7 +183,7 @@ test('authorization revocation observed in a later round invalidates earlier evi
   }, (input) => {
     assert.equal(results(input).at(-1).error.code, 'NOT_FOUND');
     return reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')));
-  }, reply('{"kind":"not_found"}')], { context });
+  }, reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
   assert.equal(result.outcome, 'not_found');
   assert.deepEqual(result.evidenceRows, []);
   assert.doesNotMatch(result.text, /Radar/);
@@ -196,7 +196,7 @@ test('authorization is checked again before final rendering even without another
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }), (input) => {
     available = false;
     return reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')));
-  }, reply('{"kind":"unavailable"}')], { context });
+  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
   assert.deepEqual(result.evidenceRows, []);
   assert.doesNotMatch(result.text, /Radar/);
 });
@@ -208,14 +208,14 @@ test('removing one employee changes the authorization epoch even while executive
   }, (input, stack) => {
     stack.db.executiveScope = stack.db.executiveScope.filter((entry) => entry.EmployeeSicil !== MEHMET);
     return reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')));
-  }, reply('{"kind":"unavailable"}')]);
+  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}` });
   assert.deepEqual(result.evidenceRows, []);
   assert.equal(result.outcome, 'unavailable');
 });
 
 test('output truncation recovers with fewer claims and never replays partial JSON', async (t) => {
   const { result, inputs } = await turn(t, [calls('rota_task_search', { projectId: PROJECTS.FULL }), reply('{"kind":"rota","claims":[', 'length'),
-    (input) => reply(evidenceReply(claimFor(results(input)[0], 'totalCount')))]);
+    (input) => reply(evidenceReply(claimFor(results(input)[0], 'totalCount')))], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.repaired, true);
   assert.match(inputs[2].messages[0].content, /En fazla 8 iddia/);

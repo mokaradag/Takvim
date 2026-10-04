@@ -17,7 +17,8 @@ import {
   projectIndex,
   referenceScope,
   requireFullProject,
-  requireVisibleProject
+  requireVisibleProject,
+  visibleProjectName
 } from './rotaToolSupport.js';
 import {
   addDays,
@@ -78,7 +79,17 @@ const baselineCompare = {
     }));
     const selectedId = result.selectedBaselineId ? canonicalActualId(result.selectedBaselineId) : null;
     if (args.baselineId && selectedId !== args.baselineId) throw notFound();
+    const projectName = await visibleProjectName(call, scope, args.projectId);
     const selected = baselines.find((baseline) => baseline.baselineId === selectedId) || null;
+    if (!selectedId) {
+      return {
+        data: { filters: { projectId: args.projectId, project: projectName || 'Seçilen proje' }, baseline: null, noBaseline: true,
+          availableBaselines: baselines, availableBaselinesTruncated: result.baselinesTruncated, counts: null, finishVariance: null, mostSlipped: [] },
+        scope: describeTaskScope([projectAccess(scope, args.projectId)]),
+        complete: false, truncated: result.baselinesTruncated, returnedCount: 0, totalCount: null, nextCursor: null,
+        evidence: { label: 'Baz plan karşılaştırması · baz plan yok', entity: { type: 'project', id: args.projectId, name: projectName }, highlights: ['Baz plan yok'] }
+      };
+    }
     const counts = { snapshotTasks: result.snapshots.length, compared: 0, finishSlipped: 0, finishEarlier: 0, finishUnchanged: 0,
       startSlipped: 0, missingDates: 0, removedSinceBaseline: 0, addedSinceBaseline: result.addedSinceBaseline };
     const variances = [];
@@ -119,6 +130,7 @@ const baselineCompare = {
     const project = projectAccess(scope, args.projectId);
     return {
       data: {
+        filters: { projectId: args.projectId, project: projectName || 'Seçilen proje', baselineId: selectedId, baseline: selected?.name || 'Seçilen baz plan' },
         baseline: selected,
         availableBaselines: baselines,
         availableBaselinesTruncated: result.baselinesTruncated,
@@ -139,7 +151,7 @@ const baselineCompare = {
       nextCursor: null,
       evidence: {
         label: selected ? `Baz plan karşılaştırması · ${selected.name}` : 'Baz plan karşılaştırması · baz plan yok',
-        entity: { type: 'project', id: args.projectId, name: null },
+        entity: { type: 'project', id: args.projectId, name: projectName },
         highlights: [`Karşılaştırılan: ${counts.compared}`, `Kayan: ${counts.finishSlipped}`, `Silinen: ${counts.removedSinceBaseline}`]
       }
     };
@@ -251,6 +263,7 @@ const dependencyInspect = {
       if (lag > 0) withLag += 1;
       if (lag < 0) withLead += 1;
     }
+    const projectName = await visibleProjectName(call, scope, projectId);
     const connected = new Set([...withPredecessor, ...withSuccessor]);
     const taskCount = Number(result.totals.TaskCount || 0);
     const mostConnected = [...degree.entries()]
@@ -259,6 +272,7 @@ const dependencyInspect = {
       .map(([taskId, count]) => ({ taskId, title: dataText(tasks.get(taskId)?.Title, 160), relationCount: count }));
     return {
       data: {
+        filters: { projectId, project: projectName || 'Seçilen proje' },
         coverage: {
           taskCount,
           dependencyCount: result.dependencies.length,
@@ -280,7 +294,7 @@ const dependencyInspect = {
       nextCursor: null,
       evidence: {
         label: `Bağımlılık kapsaması · ${result.dependencies.length} ilişki`,
-        entity: { type: 'project', id: projectId, name: null },
+        entity: { type: 'project', id: projectId, name: projectName },
         highlights: [`Görev: ${taskCount}`, `İlişki: ${result.dependencies.length}`, `Bağımsız görev: ${Math.max(0, taskCount - connected.size)}`]
       }
     };
@@ -342,13 +356,14 @@ const recurrenceInspect = {
           evidence: { label: `Tekrar serisi · ${dataText(fact.title, 60)}`, entity: { type: 'task', id: fact.id, name: dataText(fact.title, 120) }, highlights: ['Tekrarlayan görev değil'] }
         };
       }
-      const result = await call.sql((executor) => readTaskFacts(executor, scope, {
+      const parent = seriesId === fact.id ? fact : (await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [seriesId], maxRows: 1 }))).facts[0];
+      const result = parent?.recurrenceRule ? await call.sql((executor) => readTaskFacts(executor, scope, {
         projectId: fact.projectId, seriesId, maxRows: TOOL_LIMITS.maxAnalyzedTasks
-      }));
+      })) : { facts: [fact], truncated: false };
       if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
-      call.notePopulation?.(factPopulation(result.facts));
       const template = result.facts.find((item) => item.id === seriesId && item.recurrenceRule) || null;
-      const occurrences = result.facts.filter((item) => item.recurrenceParentId === seriesId);
+      const occurrences = template ? result.facts.filter((item) => item.recurrenceParentId === seriesId) : [fact];
+      call.notePopulation?.(factPopulation(template ? result.facts : [fact]));
       const access = projectAccess(scope, fact.projectId);
       const summary = seriesSummary(occurrences, call.today);
       const evidenceTask = template || fact;
@@ -377,6 +392,7 @@ const recurrenceInspect = {
       };
     }
     if (args.projectId) await requireVisibleProject(scope, args.projectId, call);
+    const projectName = args.projectId ? await visibleProjectName(call, scope, args.projectId) : null;
     const result = await call.sql((executor) => readTaskFacts(executor, scope, {
       projectId: args.projectId ?? null, recurringOnly: true, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
@@ -414,7 +430,7 @@ const recurrenceInspect = {
       ? describeTaskScope([projectAccess(scope, args.projectId)])
       : describeTaskScope(scope.isAdmin ? [] : [...scope.projects.values()]);
     return {
-      data: { visibleEntryCount: list.length, series: page, notes: ['Sayılar yalnızca görünür görevler üzerindedir.'] },
+      data: { filters: args.projectId ? { projectId: args.projectId, project: projectName || 'Seçilen proje' } : {}, visibleEntryCount: list.length, series: page, notes: ['Sayılar yalnızca görünür görevler üzerindedir.'] },
       scope: descriptor,
       complete: page.length === list.length && !previewTruncated && !datesIncomplete,
       truncated: page.length < list.length || previewTruncated,
@@ -423,7 +439,7 @@ const recurrenceInspect = {
       nextCursor: null,
       evidence: {
         label: `Tekrar kayıtları · ${list.length} görünür kayıt`,
-        entity: args.projectId ? { type: 'project', id: args.projectId, name: null } : null,
+        entity: args.projectId ? { type: 'project', id: args.projectId, name: projectName } : null,
         highlights: page.slice(0, 3).map((item) => item.title)
       }
     };
@@ -472,6 +488,7 @@ const calendarInspect = {
       workingDays,
       holidays: holidays.map((holiday) => ({ date: holiday.date, name: holiday.name, short: holiday.short }))
     };
+    const projectName = args.projectId ? await visibleProjectName(call, scope, args.projectId) : null;
     const workingDayCount = countWorkingDays(from, to, calendar);
     return {
       data: {
@@ -483,7 +500,7 @@ const calendarInspect = {
         },
         range: { from, to, calendarDays: daysBetween(from, to) + 1 },
         // İş günü sayısı tarih penceresine bağlıdır: pencere her olgunun niteleyicisidir.
-        filters: { dateFrom: from, dateTo: to },
+        filters: { dateFrom: from, dateTo: to, ...(args.projectId ? { projectId: args.projectId, project: projectName || 'Seçilen proje' } : {}) },
         workingDayCount,
         holidays,
         notes: ['İş günü sayısı iki ucu da içerir; hafta sonu ve takvimdeki tatiller sayılmaz.']
@@ -496,7 +513,7 @@ const calendarInspect = {
       nextCursor: null,
       evidence: {
         label: `Çalışma takvimi · ${dataText(calendar.name, 60)}`,
-        entity: args.projectId ? { type: 'project', id: args.projectId, name: null } : null,
+        entity: args.projectId ? { type: 'project', id: args.projectId, name: projectName } : null,
         highlights: [`${from} – ${to}`, `İş günü: ${workingDayCount}`, `Tatil: ${holidays.length}`]
       }
     };

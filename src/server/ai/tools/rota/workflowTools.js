@@ -135,7 +135,7 @@ const activitySearch = {
           available: Boolean(item.taskAvailable)
         },
         project: { name: dataText(item.projectName, 160), ...(item.projectCode ? { code: dataText(item.projectCode, 60) } : {}) },
-        ...clippedLines(item.changes, 6, { hideAssigneeNames }),
+        ...(textFields.includes('changes') ? clippedLines(item.changes, 6, { hideAssigneeNames }) : {}),
         structuredChanges: structured.slice(0, 6).map((change) => ({
           field: change.field,
           before: typeof change.before === 'string' ? dataText(change.before, 500) : change.before,

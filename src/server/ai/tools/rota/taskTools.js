@@ -1,11 +1,12 @@
 import 'server-only';
+import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, projectAccess } from './rotaScope.js';
-import { readTaskDetail, readTaskFacts } from './rotaToolStore.js';
+import { readTaskDetail, readTaskFacts, readWbsSelector } from './rotaToolStore.js';
 import {
   accessExplanation,
   CURSOR_PROPERTY,
@@ -22,6 +23,7 @@ import {
   taskItem
 } from './rotaToolSupport.js';
 import {
+  assignmentState,
   assigneeView,
   coarseTargetRange,
   DATE_FIELDS,
@@ -88,6 +90,13 @@ function sqlAssigneeMode(filters) {
 
 /** Yetkili ve kaba süzgeçle daraltılmış görev olguları; sınır aşılırsa "çok büyük". */
 async function loadFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
+  if (filters.wbsId) {
+    const node = await call.sql((executor) => readWbsSelector(executor, scope, { projectId: filters.projectId, wbsId: filters.wbsId }));
+    if (!node) throw notFound();
+    filters.projectId = String(node.ProjectId).toLowerCase();
+    filters.project = dataText(node.ProjectName, 120);
+    filters.wbs = [node.Code, node.Name].filter(Boolean).map((text) => dataText(text, 120)).join(' · ');
+  }
   if (filters.projectId) await requireVisibleProject(scope, filters.projectId, call);
   const range = coarseTargetRange(filters, call.today);
   const result = await call.sql((executor) => readTaskFacts(executor, scope, {
@@ -118,7 +127,15 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
   // Toplamlar sonuçta listelenmeyen görevlere de dayanır: sayılan nüfus son yetki
   // denetiminde yeniden doğrulanmak üzere (modele gitmeden) kaydedilir.
   call.notePopulation?.(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
-  return { facts, projects: projectIndex(result.projects), assignees: result.assignees };
+  const projects = projectIndex(result.projects);
+  if (filters.projectId) filters.project = projects.get(filters.projectId)?.name || filters.project || 'Seçilen proje';
+  if (filters.personSicil != null) {
+    const person = [...result.assignees.values()].flat().find((person) => person.sicil === filters.personSicil);
+    const resolved = person?.name || (await call.sql((executor) => searchCorporateDirectory({ query: String(filters.personSicil) }, executor, { rateScope: 'ai' })))
+      .items.find((person) => person.sicil === filters.personSicil)?.name;
+    filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
+  }
+  return { facts, projects, assignees: result.assignees };
 }
 
 function filterHighlights(filters) {
@@ -317,7 +334,7 @@ const taskDetail = {
       recurrence: recurrenceView(fact, row),
       ...assigneeView(fact, detail.assignees),
       createdBy: creatorVisible
-        ? { name: row.CreatedByName ? dataText(row.CreatedByName, 120) : String(row.VisibleCreatedBySicil), sicil: Number(row.VisibleCreatedBySicil) }
+        ? { name: row.CreatedByName ? dataText(row.CreatedByName, 120) : 'Adı belirtilmemiş kişi', sicil: Number(row.VisibleCreatedBySicil) }
         : null,
       createdAt: fact.createdAt,
       updatedAt: fact.updatedAt,
@@ -364,7 +381,7 @@ function deadlineBucket(fact, today) {
   if (fact.targetFinish === today) return ['due_today', 'Termini bugün'];
   if (isDueWithin(fact, today, DUE_SOON_DAYS)) return ['due_days_1_to_6', 'Termini 1–6 gün sonra'];
   if (isDueWithin(fact, today, DUE_MONTH_DAYS)) return ['due_days_7_to_29', 'Termini 7–29 gün sonra'];
-  return ['later', 'Termini 30 günden sonra'];
+  return ['later', 'Termini 30 gün veya daha sonra'];
 }
 
 function groupKeys(fact, groupBy, { projects, assignees, today }) {
@@ -378,10 +395,10 @@ function groupKeys(fact, groupBy, { projects, assignees, today }) {
     case 'deadline': return [deadlineBucket(fact, today)];
     case 'target_month': return [fact.targetFinish ? [fact.targetFinish.slice(0, 7), fact.targetFinish.slice(0, 7)] : ['none', 'Termini yok']];
     case 'assignee': {
-      if (fact.resolvedAssigneeCount === 0) return [['unassigned', 'Sorumlusuz']];
+      if (assignmentState(fact) === 'unassigned') return [['unassigned', 'Sorumlusuz']];
       const people = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
       if (!people.length) return [];
-      return people.map((person) => [`sicil:${person.sicil}`, person.name || String(person.sicil)]);
+      return people.map((person) => [`sicil:${person.sicil}`, person.name || 'Seçilen kişi']);
     }
     default: return [];
   }

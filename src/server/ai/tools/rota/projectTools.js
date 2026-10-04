@@ -49,6 +49,7 @@ const projectSearch = {
     const { scope } = await call.authorization();
     // Aday kümesi sayfa sınırından bağımsızdır: belirsizlikte en fazla on aday yoklanır.
     const result = await call.sql((executor) => readProjectSearch(executor, scope, { text: args.text, limit: Math.max(CLARIFICATION_LIMITS.maxCandidates, limit) }));
+    call.noteProjects?.(result.projectIds);
     const rows = result.rows.map((row) => {
       const access = accessExplanation({ ...scopeAccess(row), reasons: scope.projects.get(canonicalActualId(row.ProjectId))?.reasons || [] });
       return {
@@ -74,6 +75,7 @@ const projectSearch = {
     const ambiguous = resolution === 'ambiguous';
     return {
       data: {
+        filters: { text: args.text },
         matches,
         ambiguous,
         resolution,
@@ -179,7 +181,7 @@ const projectDetail = {
       },
       scope: descriptor,
       complete: !tagsTruncated && !countsOverLimit.length,
-      truncated: tagsTruncated,
+      truncated: tagsTruncated || countsOverLimit.length > 0,
       returnedCount: 1,
       totalCount: 1,
       nextCursor: null,
@@ -239,6 +241,7 @@ const portfolioSummary = {
     }));
     const compare = PORTFOLIO_SORTS[sort];
     projects.sort((left, right) => compare(left, right) || left.name.localeCompare(right.name, 'tr') || left.projectId.localeCompare(right.projectId));
+    call.noteProjects?.(filteredRows.map((row) => canonicalActualId(row.ProjectId)));
     const totals = projects.reduce((sum, project) => ({
       projects: sum.projects + 1,
       tasks: sum.tasks + project.tasks.total,

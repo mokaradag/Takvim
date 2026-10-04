@@ -6,7 +6,7 @@ import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { readOutlook, readTaskFacts } from './rotaToolStore.js';
 import { currentUserScope, dataText, ID_PROPERTY, LIMIT_PROPERTY, notFound, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
-import { normalizeTaskFilters, sqlDay, sqlInstant } from './taskFacts.js';
+import { assignmentState, normalizeTaskFilters, sqlDay, sqlInstant } from './taskFacts.js';
 
 /* ── rota_outlook_status ──────────────────────────────────── */
 
@@ -121,10 +121,10 @@ function deliveryLabel(state) {
 
 const CHECK_BY_ID = new Map(PLAN_HYGIENE_CHECKS.map((check) => [check.id, check]));
 
-/** Ürünün plan bütünlüğü kuralları (planHealth); sorumlu kuralı dizinde çözülen Sicil sayısıyla uygulanır. */
+/** Gizli kimlik, boş sorumlu kümesi değildir. */
 function missing(checkId, fact) {
   const planTask = { targetFinish: fact.targetFinish, plannedStart: fact.plannedStart, plannedFinish: fact.plannedFinish, wbsId: fact.wbsId };
-  if (checkId === 'assignee') return fact.resolvedAssigneeCount === 0;
+  if (checkId === 'assignee') return assignmentState(fact) === 'unassigned';
   return CHECK_BY_ID.get(checkId).isMissing(planTask, {});
 }
 
@@ -162,6 +162,9 @@ const dataQuality = {
         examples: items.slice(0, examplesPerCheck).map(example)
       };
     });
+    const unresolved = open.filter((fact) => assignmentState(fact) === 'unresolved');
+    unresolved.forEach((fact) => flagged.add(fact.id));
+    checks.push({ id: 'unresolvedAssignee', label: 'Sorumlu kaydı çözülemiyor', explain: 'Atama var, ancak kişi dizininde çözülemiyor.', count: unresolved.length, examples: unresolved.slice(0, examplesPerCheck).map(example) });
     const doneWithoutActual = facts.filter((fact) => fact.status === 'done' && !fact.actualFinish);
     const examplesTruncated = checks.some((check) => check.examples.length < check.count) || doneWithoutActual.length > examplesPerCheck;
     const descriptor = searchedScope(scope, filters.projectId);

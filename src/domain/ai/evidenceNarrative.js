@@ -93,13 +93,13 @@ const capitalize = (text) => (text ? `${text[0].toLocaleUpperCase('tr-TR')}${tex
 const isCount = (fact) => typeof fact.value === 'number';
 const englishTasks = (fact) => (fact.value === 1 ? 'task' : 'tasks');
 
-const dayFact = (value) => (typeof value === 'string' && DAY.test(value) ? { field: 'data.range.from', value, semantic: {} } : null);
+const dayFact = (value) => (typeof value === 'string' && DAY.test(value) ? { field: 'data.range.from', value, semantic: { valueType: 'date' } } : null);
 
 /** Olgunun Markdown'a güvenli gösterim değeri. Sunucunun biçimlediği sayı ve tarihler kaçış gerektirmez. */
 export function narrativeValue(fact, locale = 'tr') {
   const raw = fact.value;
-  if (typeof raw === 'string' && DAY.test(raw) && fact.semantic?.displayValue == null) return formatDay(raw, locale);
-  if (typeof raw === 'string' && INSTANT.test(raw)) return formatInstant(raw, locale);
+  if (fact.semantic?.valueType === 'date' && typeof raw === 'string' && DAY.test(raw) && fact.semantic?.displayValue == null) return formatDay(raw, locale);
+  if (fact.semantic?.valueType === 'instant' && typeof raw === 'string' && INSTANT.test(raw)) return formatInstant(raw, locale);
   const { value } = factPresentation(fact, locale);
   if (typeof raw === 'number' && /Percent$/.test(leafOf(fact.field))) return locale === 'en' ? `${value}%` : `%${value}`;
   return typeof raw === 'number' || typeof raw === 'boolean' || raw === null ? value : escapedFactText(value);
@@ -120,8 +120,8 @@ function qualifierText(entries, locale, { omit = [] } = {}) {
   const owner = entries.find(({ fact }) => fact.semantic?.filters);
   if (!owner) return '';
   const parts = factPresentation(owner.fact, locale).qualifierParts.filter((part) => !omit.includes(part.key));
-  const valueText = (value) => (DAY.test(value) ? formatDay(value, locale) : escapedFactText(value));
-  return parts.length ? ` (${locale === 'en' ? 'criteria' : 'ölçüt'}: ${parts.map((part) => `${part.label}: ${valueText(part.value)}`).join('; ')})` : '';
+  const valueText = (value, key) => ['dateFrom', 'dateTo'].includes(key) && DAY.test(value) ? formatDay(value, locale) : escapedFactText(value);
+  return parts.length ? ` (${locale === 'en' ? 'criteria' : 'ölçüt'}: ${parts.map((part) => `${part.label}: ${valueText(part.value, part.key)}`).join('; ')})` : '';
 }
 
 /* ── Kayıt (özet) paragrafı ───────────────────────────────── */
@@ -180,7 +180,7 @@ function recordSentences(record, locale) {
   const sentences = [];
   const nameEntry = take((rel) => ['title', 'name'].includes(rel))[0];
   const codeEntry = take((rel) => rel === 'code')[0];
-  const subjectText = nameEntry ? narrativeValue(nameEntry.fact, locale) : escapedFactText(record.subject);
+  const subjectText = record.row ? escapedFactText(record.subject) : nameEntry ? narrativeValue(nameEntry.fact, locale) : escapedFactText(record.subject);
   const subject = `${strong(subjectText)}${codeEntry ? ` (${narrativeValue(codeEntry.fact, locale)})` : ''}`;
   const qualifiers = qualifierText(record.entries, locale);
   // Proje adı zaten özne olarak yazıldığında ölçütte yinelenmez.
@@ -210,11 +210,11 @@ function recordSentences(record, locale) {
   const overdue = take((rel, fact) => rel === 'overdueDays' && isCount(fact))[0];
   if (overdue) sentences.push(locale === 'en' ? `It is ${strong(narrativeValue(overdue.fact, locale))} days overdue.` : `Görev ${strong(narrativeValue(overdue.fact, locale))} gündür gecikmiş.`);
 
-  const totals = take((rel) => {
+  const totals = take((rel, fact) => {
     const parts = rel.split('.');
     const key = parts.at(-1);
     const totalKey = TOTAL_KEYS.includes(key) || key === 'total' || key === 'completionRatePercent' || (parts[0] === 'totals' && key === 'tasks');
-    return totalKey && (parts.length === 1 ? record.kind !== 'person' : parts.length === 2 && TOTAL_HEADS.has(parts[0]));
+    return totalKey && (isCount(fact) || fact.value === null) && (parts.length === 1 ? record.kind !== 'person' : parts.length === 2 && TOTAL_HEADS.has(parts[0]));
   }).map(({ rel, fact }) => ({ key: rel.split('.').at(-1), fact }));
   const projectCount = totals.length ? take((rel, fact) => rel === 'totals.projects' && isCount(fact))[0] : null;
   if (totals.length) {
@@ -242,7 +242,7 @@ function recordSentences(record, locale) {
     const window = from && to ? (locale === 'en' ? `Between ${strong(narrativeValue(from, locale))} and ${strong(narrativeValue(to, locale))} there` : `${strong(narrativeValue(from, locale))} – ${strong(narrativeValue(to, locale))} aralığında`) : null;
     if (window) qualified = true;
     sentences.push(window
-      ? (locale === 'en' ? `${window} are ${strong(narrativeValue(days.fact, locale))} working days.` : `${window} ${strong(narrativeValue(days.fact, locale))} çalışma günü bulunuyor.`)
+      ? (locale === 'en' ? `${window} are ${strong(narrativeValue(days.fact, locale))} working days${qualifierText(record.entries, locale, { omit: ['dateFrom', 'dateTo'] })}.` : `${window} ${strong(narrativeValue(days.fact, locale))} çalışma günü bulunuyor${qualifierText(record.entries, locale, { omit: ['dateFrom', 'dateTo'] })}.`)
       : `${capitalize(labelOf(days.fact, locale))}: ${strong(narrativeValue(days.fact, locale))}.`);
   }
   for (const { rel, fact } of take((rel, fact) => ['unreadCount', 'actionRequiredCount'].includes(rel) && isCount(fact))) {
@@ -327,8 +327,11 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
     return labelOf(sample, locale);
   };
   const titleOf = (row) => {
-    const named = row.entries.find(({ rel }) => rel === titleKey) || row.entries.find(({ rel }) => ['title', 'name'].includes(rel));
-    return named ? narrativeValue(named.fact, locale) : escapedFactText(row.subject);
+    const context = row.entries[0]?.fact.semantic?.row;
+    const names = titleKey ? valuesOf(row, titleKey) : [];
+    const project = context?.project ? ` · ${escapedFactText([context.projectCode, context.project].filter(Boolean).join(' · '))}` : '';
+    const organization = context?.organization ? ` · ${escapedFactText(context.organization)}` : '';
+    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${qualifierText(row.entries, locale, { omit: context?.project ? ['project'] : [] })}`;
   };
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.
@@ -452,7 +455,7 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
       if (parts && !/^data\.(task|project)\./.test(parts.collection)) {
         if (!collections.has(parts.collection)) collections.set(parts.collection, new Map());
         const rows = collections.get(parts.collection);
-        if (!rows.has(parts.row)) rows.set(parts.row, { subject: fact.subject, entries: [] });
+        if (!rows.has(parts.row)) rows.set(parts.row, { subject: fact.semantic?.row?.name || fact.subject, entries: [] });
         rows.get(parts.row).entries.push({ rel: parts.rel, fact });
         continue;
       }

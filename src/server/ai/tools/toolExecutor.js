@@ -85,6 +85,7 @@ export function createToolExecutor({
     if (remaining < 250) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const deadline = createAiDeadline({ timeoutMs: remaining, parentSignal: typeof signal === 'function' ? signal() : signal, now: clock });
     const population = [];
+    const projectPopulation = [];
     try {
       const scoped = Object.freeze({
         sicil: context.sicil,
@@ -94,12 +95,13 @@ export function createToolExecutor({
         authorization: () => context.authorization(deadline.signal),
         sql: (work) => context.sql(deadline.signal, work),
         snapshot: (key, cursor, load) => context.snapshot(key, cursor, load),
-        notePopulation: (references) => { for (const reference of references) population.push(reference); }
+        notePopulation: (references) => { for (const reference of references) population.push(reference); },
+        noteProjects: (projectIds) => { projectPopulation.push(...projectIds); }
       });
       await context.authorization?.(deadline.signal);
       const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
         (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
-      return { outcome, cacheKey, args, population };
+      return { outcome, cacheKey, args, population, projectPopulation };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
@@ -124,6 +126,7 @@ export function createToolExecutor({
       returnedCount: outcome.returnedCount ?? null,
       totalCount: outcome.totalCount ?? null,
       nextCursor: outcome.nextCursor ?? null,
+      entity: outcome.evidence?.entity || null,
       subject: outcome.evidence?.entity?.name || outcome.evidence?.label || 'Rota',
       claimable: claimableContract(tool.name, args.textFields || []),
       data: projectEvidenceData(outcome.data, args.textFields || [])
@@ -213,7 +216,7 @@ export function createToolExecutor({
             // Öne çıkanlar yalnızca boyut sınırı satır attığında düşer; sayfalı ya da metni kısaltılmış sonuç onları korur.
             highlights: shrunk.data?.sizeNote ? [] : (result.outcome.evidence?.highlights || []),
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
-            scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk) ?? null,
+            scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk, result.projectPopulation) ?? null,
             populationReferences: result.population
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });

@@ -177,7 +177,9 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
 - Eş sorumluların kimliği anlık görüntüyle aynı kuralla gösterilir: kısmi
   görünümde başkasının kimliği yalnızca kullanıcı görevin kendi sorumlusuysa
   (ya da kişi yönetim kapsamındaysa) açılır; aksi hâlde "kimliği gösterilemeyen
-  sorumlu" olarak sayılır, kişi olarak atfedilmez.
+  sorumlu" olarak temsil edilir, kişi olarak atfedilmez. Atama varlığı ile
+  görünür kişi sayısı ayrıdır: gizli atama hiçbir araçta sorumlusuz sayılmaz.
+  Dizinde çözülemeyen atama ayrı kalite denetimidir.
 - Bağımlılıklar ve baz planlar yalnızca projede **FULL** erişimde açıktır;
   diğer düzeylerde araç `UNSUPPORTED_SCOPE` döner.
 - İş dağılım ağacı: FULL/READ/kendi görev kapsamında katalog; yalnızca yönetim
@@ -193,19 +195,54 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
   taşır; kısmi kapsamlı kanıta atıf yapan her yanıta sunucu sabit kapsam
   notunu ekler (§6.4).
 - **Sistem yöneticisi.** Yönetici bayrağı taşıyan kullanıcının etkin erişimi,
-  yetki bağlamındaki her etkin proje için `FULL` ve `SYSTEM_ADMIN` gerekçesidir;
-  araç kapsamı (`buildRotaScope`), proje künyesi ve kanıtın son yetki denetimi
-  aynı türetilmiş erişimi kullanır.
+  `FULL` ve `SYSTEM_ADMIN` yüklemeden SQL’de etkin proje koşuluyla uygulanır.
+  AI yetki yüklemesi bütün projeleri/görevleri numaralandırmaz; odaklı okuma
+  ve kanıt doğrulaması yalnızca istenen kimlikleri sorgular. Proje adı/kodu
+  araması da proje nüfusu sınırından önce uygulanır.
 - **Toplu nüfus.** Sayı, oran, dağılım ve grup gibi toplu olgular yalnızca
   onları oluşturan görevlerin **tamamı** kullanıcının güncel yetkisiyle
   görülebiliyorsa açıklanır. Araç saydığı görev nüfusunu kanıta bağlar; son
   çizimden önce ve kayıtlı yanıt yeniden açılırken yalnızca yükte listelenen
   satırlar değil, nüfusun tamamı analiz sınırı büyüklüğündeki parçalarla (en
-  fazla 8 parça; fazlası `RESULT_TOO_LARGE` ve yanıt `unavailable`) yeniden
-  doğrulanır. Nüfus kalıcı kanıtta proje başına sıkıştırılmış görev
+  fazla 20 000 görev/SQL deyimi) yeniden doğrulanır. Konuşma genelinde
+  parça sayısı eşiği yoktur; her yanıt bağımsız doğrulanır. Yeniden açılışın
+  toplam süre bütçesi 25 sn, yanıt başına 8 sn’dir; süre/hizmet hatası yalnızca
+  denetlenemeyen yanıtı geçici olarak gizler. Boş projeler dahil sayılan proje
+  nüfusu da güncel etkinlik ve yetki koşullarıyla denetlenir. Nüfus kalıcı kanıtta proje başına sıkıştırılmış görev
   kimlikleriyle saklanır; 32 000 karakterlik kayda sığmazsa kanıt kalıcı olarak
   "doğrulanamaz" işaretlenir: bu turda doğrulanan yanıt gösterilir, sonraki
   açılışlarda metin sabit bir açıklamayla gizlenir.
+
+
+Kimliklerin kaynağı kapsam denetiminin parçasıdır. İlk turdaki proje/görev/WBS/
+baz plan kimliği kullanıcının güncel iletisinde açıkça bulunmalı; Sicil bir
+Sicil seçicisi olarak belirtilmelidir. Adlar yalnızca bu iletideki bütün
+ifadeden yapılan kesin aramayla veya sunucunun numaralı açıklama seçimiyle
+kimliğe dönüşür. Önceki ilgisiz konuşma, modelin ürettiği kimlik, görev
+künyesindeki proje/eş sorumlu ve bildirim metni yeni nüfus açamaz. Sonraki
+arama önceki metni koruyarak daralır; kullanıcıdaki başka bir ifade önceki
+aramayı değiştiremez. Görev listesindeki kimlikler aynı dondurulmuş nüfustaki
+görev ayrıntılarına izin verir, üst projenin bütününü açmaz.
+
+Olgu seçimi yalnızca geçerli yol ve değer kontrolü değildir. Sunucu güncel
+istekten ölçü ve açık kimlik kısıtlarını çıkarır; başka ölçü/varlığın doğru
+olgusu isteği doğrulayamaz. Sayımın birimi (görev/proje/kişi/gün) de korunur;
+alt toplam veya sınırlı önizleme, toplam nüfus sorusunu doğrulayamaz.
+`returnedCount` yalnız döndürülen öğe sayısı açıkça istendiğinde sayımın
+yerine geçer. Tam liste isteği bütün dönen satırları kapsar;
+numara veya kesin adla seçilen satır başka doğru satırla değiştirilemez. Açık özetler ilgili nüfusu özetleyebilir. Tanınmayan
+ölçü isteği güvenli düzeltme/açıklama gerektirir. Satır kimliği ve proje/kişi/
+WBS/baz plan/arama/kaynak/tarih seçicileri modelin alan seçiminden bağımsız
+korunur; Sicil ve UUID grup anahtarları kullanıcıya iddia edilebilir alan
+olarak açılmaz. Tarih biçimi alanın türünden gelir, metnin görünümünden gelmez.
+Baz plan yokken karşılaştırma ölçüleri bilinmiyor (`null`), anlamlı sıfır değil;
+sınır aşan sayımlar `truncated` ve eksik olarak temsil edilir.
+
+Katılımcıların silinmiş/arşivlenmiş göreve ait talep ve koordinasyon geçmişi
+kayıtlı katılım ve künye üzerinden görünür kalır; canlı görev yetkisi üçüncü
+kişinin eski kaydını açamaz. Hareket grubunda tek bir ayrıntı JSON’u bile
+kırpılmışsa yapılandırılmış değişiklikler bütünüyle bırakılır. Seçilmemiş
+serbest değişiklik metni tamlık durumunu değiştirmez.
 
 ---
 
@@ -405,7 +442,7 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
    hatası (düzeltmeden sonra da doğrulanamayan yanıt, uzunluk sınırında kalan
    çıktı ya da `EMPTY_COMPLETION`) kullanıcıya hiçbir şey gösterilmeden **bir
    kez** Derin düşünme araç profiline devredilir. Devir AYNI kanıt defterini,
-   kapsam sınırını, araç izinlerini ve tur sayaçlarını sürdürür; Standart'ın
+   kapsam sınırını, araç izinlerini, tek düzeltme bütçesini ve tur sayaçlarını sürdürür; Standart'ın
    düzeltme notları devredilmez. Kanıt varsa araçlar kapalıdır (yalnızca son
    yanıt yazılır, araç SQL'i yeniden çalışmaz); kanıt yoksa kalan araç turu
    bütçesi içinde araç çağrılabilir. Doğrulama aynıdır. Kanıtsız biten tur
@@ -417,11 +454,12 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
    ve veri hataları turu bitirir. Kullanıcı her
    durumda tek yanıt görür; yanıtın kaydedilen kipi istenen kiptir. Genel
    sohbete düşülmez.
-6. **Boş yanıt.** Derin düşünmede (ya da devrin mümkün olmadığı Standart turda)
-   görünür metin ve araç çağrısı taşımayan model turu, oturumda en az 15 sn
+6. **Boş yanıt.** Standart veya Derin düşünmede görünür metin ve araç çağrısı taşımayan model turu, oturumda en az 15 sn
    kaldıysa aynı oturumda **bir kez** yeniden istenir; yine boşsa tur
-   `AI_PROVIDER_RESPONSE_INVALID` / `EMPTY_COMPLETION` ile biter. Bu sonuç
-   kaydedilmez ve kullanıcı için yeniden denenebilir olarak bildirilir.
+   Standart tur kalan süreyle bir kez Derin düşünmeye devredilebilir; başka
+   boş yanıt `AI_PROVIDER_RESPONSE_INVALID` / `EMPTY_COMPLETION` ile biter. Bu sonuç
+   kaydedilmez ve kullanıcı için yeniden denenebilir olarak bildirilir. Her
+   boş sağlayıcı çağrısı, yeniden deneme olsa da başarısız işlem olarak ölçülür.
 
 ### 7.2 Akış protokolü (sürüm 1, geriye uyumlu eklemeler)
 
@@ -464,37 +502,10 @@ Aşama 2 yolu gerçek zamanlı akışını korur.
   sonra simgeye iner; erişilebilir adlar değişmez. Gönder ile Durdur aynı
   boyutta ve aynı sabit yuvada yer değiştirir; yanıt başlayınca ya da bir
   anahtar açılınca öteki denetimler kaymaz.
-- `MERGEN_ROTA_AI_ENABLED` açık değilse sayfa bunu bildirir (`<meta
-  name="mergen-rota-ai" content="disabled">`, her istekte ortamdan okunur) ve
-  üst çubuktaki Bilgin düğmesi, panel ve komut paletindeki "Bilgin’e sor"
-  girdisi hiç gösterilmez. Uçların kendi `AI_DISABLED` denetimi bunun yerine
-  geçmez.
-
----
-
-## 8. Sınırlar ve başarım
-
-| Sınır (`toolLimits.js`) | Değer |
-| --- | --- |
-| Araç turu | 4 |
-| Tek model yanıtında yürütülen çağrı | 5 (fazlası `LIMIT_EXCEEDED`) |
-| Tur başına toplam çağrı | 12 |
-| Tur içi eşzamanlı çağrı | 1 (aynı model yanıtındaki çağrılar sırayla yürütülür) |
-| Çağrı süre sınırı | 8 sn (kapı beklemesi ve sorgu dâhil) |
-| Tur boyunca araç SQL süresi | 25 sn |
-| Araç turlarının toplam yürütme süresi (model üretimi hariç) | 45 sn |
-| Tek sonuç | 16 KiB (yalnızca araç sözleşmesinin koleksiyonları kısaltılır; sığmazsa `RESULT_TOO_LARGE`) |
-| Tur boyunca sonuçlar | 96 KiB |
-| Bağımsız değişken | 8 KiB |
-| Düzeltme turu | 1 |
-| Analizde okunabilecek yetkili görev | 20 000 (aşarsa `RESULT_TOO_LARGE`: süzgeci daraltın) |
-| Analizde okunabilecek görünür sorumluluk ilişkisi | 200 000 (görev satırı bütçesinden ayrı) |
-| Ham hareket kaydı | 20 000 (kişi/kurumsal yol ve grup türü süzgecinden sonra, gruplamadan önce max+1) |
-| AI yetki satırları | Her proje/görev/kişi sonuç kümesinde 200 000; taşmada açıklama yapılmaz |
-| Hareket ayrıntısı | Grup başına en yeni 2 kayıt; önce/sonra JSON başına 8192 karakter, taşmada eksik sonucu |
-| Hareket metni kişi çözümü | Yalnızca `changes` seçilmişse; en fazla 2000 ayrı Sicil |
-| Bildirim geçmişi sayımı | Kaynak başına 1000 görünür kayıt + 1 taşma yoklaması; taşmada sayı `null` |
-| İş akışı tur anlık görüntüsü / imleç ötelemesi | 1000 |
+- Kök yerleşim statik kalır. `/runtime.js`, yalnızca açık/kapalı bayrağını
+  istek anında SQL’siz ve sağlayıcı hazırlığı okumadan sunar. Bayrak kapalıysa
+  kabuk yardımcı bileşeni, denetleyicisi ve stillerini yüklemez; başlatıcı,
+  panel ve komut girdisi görünmez. AI uçları kendi sunucu kapısını korur.
 
 - **Araç SQL kapısı:** 1 eşzamanlı sorgu, sıra 32; Sicil başına 1 etkin + 6
   bekleyen. Yapay zekâ SQL kapıları (rehber ve çalışma anı kimlik bilgisi okuması
@@ -625,7 +636,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 
 - **Amaç:** Ad ya da Sicil'den kişinin Sicil'ini çözmek (süzgeç için).
 - **Girdiler:** `text` (zorunlu), `limit` (1–25).
-- **Yetki:** Rota'nın var olan sınırlı kurumsal personel araması (en az 2 karakter, en fazla 25 satır, oturum başına hız sınırı); ad eşleşmesi kimlik ya da yetki kanıtı değildir.
+- **Yetki:** Rota'nın var olan sınırlı kurumsal personel araması (ad için en az 2 karakter; geçerli Sicil için 1–10 rakam (1–2147483647), en fazla 25 satır, oturum başına hız sınırı); ad eşleşmesi kimlik ya da yetki kanıtı değildir.
 - **Kaynak:** `searchCorporateDirectory`.
 - **Çıktı:** `people[]` (Sicil, ad, unvan, birim), `resolution`, tek kesin Sicil ya da tam ad eşleşmesinde `resolvedPerson`, belirsiz/kısmi aramada en fazla 10 `candidates`, `ambiguous`, `sameNameCount`, `guidance`. Sınırlı dizin sonucunun son satırındaki tek kesin eşleşme, aynı adlı bir sonraki satırı dışarıda bırakmış olabileceğinden çözüm sayılmaz.
 - **Örnek sorular:** "Ali Veli'nin görevleri?" (iki "Ali Veli" varsa model birimini sorar).
@@ -717,7 +728,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `projectId`, `limit` (denetim başına örnek, 1–5).
 - **Yetki:** Yalnızca görünür görevler; kısmi projede proje bütününü temsil etmez.
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` + `PLAN_HYGIENE_CHECKS` (Pano'daki "Plan bütünlüğü" kartının kuralları; sorumlu kuralı yetkili sorumlu sayısıyla uygulanır).
-- **Çıktı:** açık görevlerde sorumlusuz, terminsiz, planlanan tarihi eksik, iş dağılımına bağlanmamış sayıları ve örnekleri; gerçekleşen bitişi eksik tamamlanan görevler.
+- **Çıktı:** açık görevlerde gerçekten sorumlusuz, dizinde çözülemeyen atamalı, terminsiz, planlanan tarihi eksik, iş dağılımına bağlanmamış sayıları ve örnekleri; gerçekleşen bitişi eksik tamamlanan görevler.
 - **Örnek sorular:** "Planımda eksik veri var mı?"
 
 ---
@@ -1029,9 +1040,10 @@ kullanıcıya ham gösterilmez; bilinmeyen etiketler genel değer olarak çizili
 yalnızca geri düşüşün kökeni `default` olur. WBS döngüsü yalnızca ona bağımlı alt ağaç ölçülerini
 null ve sonucu eksik yapar; bağımsız sağlıklı dal toplamları korunur. Odaklı
 WBS nüfusu yetkili alt ağaçla sınırlandırılır; odak geçişi 201 yinelemede
-güvenle kesilir. Gizli tekrar şablonları açıklanmaz; aynı gizli ebeveyne
-bağlı görünür yinelemeler sunucuda birlikte sayılır, dış kimlik görünür
-yinelemeden seçilir. Gizli şablonun kimliği veya toplam nüfusu açıklanmaz. Kısmi
+güvenle kesilir. Gizli tekrar şablonları açıklanmaz. Proje listesinde her
+görünür yineleme ayrı kayıt olarak sayılır; odaklı görevde yalnızca o
+yineleme sayılır. Gizli ebeveynin varlığı veya iki görevin aynı gizli seriye
+bağlı olması sayıları, nüfusu ya da önizleme sınırını değiştiremez. Kısmi
 hareketlerde gizli sorumlu değişiklikleri tek genel işaretle temsil edilir.
 
 Otomatik sınamalar SQL/sağlayıcı ikizleriyle davranış güvencesi verir; gerçek

@@ -525,7 +525,7 @@ test('tekrar serisi, çalışma takvimi ve plan veri kalitesi ürün kurallarıy
   assert.equal(tooLong.result.error.code, 'INVALID_ARGUMENTS');
   const quality = await callRotaTool(stack, AYSE, 'rota_data_quality', { projectId: PROJECTS.FULL });
   const counts = Object.fromEntries(quality.result.data.checks.map((check) => [check.id, check.count]));
-  assert.deepEqual(counts, { assignee: 1, targetFinish: 1, schedule: 3, wbs: 0 });
+  assert.deepEqual(counts, { assignee: 1, targetFinish: 1, schedule: 3, wbs: 0, unresolvedAssignee: 0 });
   assert.equal(quality.result.data.openTaskCount, 6);
   assert.equal(quality.result.data.completedWithoutActualFinish.count, 0);
 });
@@ -554,23 +554,25 @@ test('gizli tekrar şablonunun kimliği görünür yineleme üzerinden sızmaz',
   assert.equal(JSON.stringify([single.result, detail.result, listing.result, single.ledger.summaries()]).includes(templateId), false);
 });
 
-test('plan kalitesi kurumsal dizinde çözülemeyen sorumlu Sicilini sorumlu saymaz', async (t) => {
+test('plan kalitesi çözülemeyen atamayı gerçekten sorumlusuz görevden ayırır', async (t) => {
   const seed = rotaToolSeed();
   const stack = stackFor(t, {
     taskAssignees: [...seed.taskAssignees, { TaskId: TASKS.UNASSIGNED, Sicil: 919999 }]
   });
   const quality = await callRotaTool(stack, AYSE, 'rota_data_quality', { projectId: PROJECTS.FULL });
   const assignee = quality.result.data.checks.find((check) => check.id === 'assignee');
-  assert.equal(assignee.count, 1);
-  assert.ok(assignee.examples.some((item) => item.taskId === TASKS.UNASSIGNED));
+  assert.equal(assignee.count, 0);
+  const unresolved = quality.result.data.checks.find((check) => check.id === 'unresolvedAssignee');
+  assert.equal(unresolved.count, 1);
+  assert.ok(unresolved.examples.some((item) => item.taskId === TASKS.UNASSIGNED));
   const unassigned = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, assignee: 'unassigned', limit: 50 });
-  assert.ok(unassigned.result.data.tasks.some((item) => item.taskId === TASKS.UNASSIGNED), 'dizinde çözülemeyen Sicil görevi sorumlu saymaz');
+  assert.equal(unassigned.result.data.tasks.some((item) => item.taskId === TASKS.UNASSIGNED), false);
   const workload = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.FULL });
-  assert.equal(workload.result.data.unassignedOpenTasks, 1);
+  assert.equal(workload.result.data.unassignedOpenTasks, 0);
   assert.equal(workload.result.data.people.some((person) => person.sicil === 919999), false);
   const grouped = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee', limit: 25 });
   const unassignedGroup = grouped.result.data.groups.find((group) => group.key === 'unassigned');
-  assert.equal(unassignedGroup?.count, 1);
+  assert.equal(unassignedGroup, undefined);
 });
 
 /* ── İş akışları ve kişisel veriler ───────────────────────── */
@@ -912,7 +914,7 @@ test('a cumulative-budget rejection cannot create an undisclosed ledger entry, i
   assert.deepEqual(exact.ledger.ids(), ['R1']);
 });
 
-test('partial unassigned searches and quality metrics do not depend on hidden assignments', async (t) => {
+test('hidden assignees never become unassigned and additional hidden identities do not affect metrics', async (t) => {
   const stack = stackFor(t);
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({
     sicil: AYSE, isExecutive: true,
@@ -929,18 +931,22 @@ test('partial unassigned searches and quality metrics do not depend on hidden as
   const before = await read();
   stack.db.taskAssignees.push({ TaskId: TASKS.TEAM_VISIBLE, Sicil: MEHMET });
   const after = await read();
+  assert.equal(before[0].totalCount, 1);
+  assert.equal(after[0].totalCount, 0);
+  assert.equal(before[2].data.checks.find((check) => check.id === 'assignee').count, 1);
+  assert.equal(after[2].data.checks.find((check) => check.id === 'assignee').count, 0);
   before.forEach((result, index) => {
     assert.equal(result.ok, true);
     assert.equal(after[index].ok, true);
-    assert.deepEqual(after[index].data, result.data);
-    assert.equal(after[index].totalCount, result.totalCount);
+    assert.ok(!JSON.stringify(after[index].data).includes(String(MEHMET)));
+    assert.equal(after[index].data.checks?.find((check) => check.id === 'unresolvedAssignee').count || 0, 0);
   });
-  assert.equal(after[0].totalCount, 1);
+  assert.equal(after[1].data.totals.total, 0);
   stack.db.taskAssignees = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({ TaskId: TASKS.TEAM_VISIBLE, Sicil: index + 50000 }));
   const hiddenFanout = await read();
   hiddenFanout.forEach((result, index) => {
     assert.equal(result.ok, true);
-    assert.deepEqual(result.data, before[index].data);
+    assert.deepEqual(result.data, after[index].data);
   });
   assert.match(toolQueries.AI_TOOL_TASK_FACTS_SQL, /COUNT\(CASE WHEN permitted.IdentityVisible = 1 THEN resolved.Sicil END\)/);
 });

@@ -85,7 +85,7 @@ const LABELS = Object.freeze({
   unreadCount: ['Okunmamış bildirim', 'Unread notifications'], actionRequiredCount: ['İşlem bekleyen bildirim', 'Notifications requiring action'],
   activeSubscriptions: ['Görünür görev aboneliği', 'Visible task subscriptions'],
   available: ['Kayıt kullanılabilir', 'Record available'], complete: ['Sonuç tam', 'Result complete'], truncated: ['Sonuç kısaltıldı', 'Result truncated'],
-  unassigned: ['Görünür sorumlusu olmayan görev', 'Tasks without a visible assignee'],
+  unassigned: ['Sorumlusuz görev', 'Unassigned tasks'],
   rule: ['Tekrar kuralı', 'Recurrence rule'], recurrenceRule: ['Tekrar kuralı', 'Recurrence rule'],
   state: ['Teslim durumu', 'Delivery state'], attempts: ['Gönderim denemesi', 'Delivery attempts'],
   openTaskCount: ['Açık görev sayısı', 'Open task count'], cleanOpenTaskCount: ['Eksiksiz açık görev', 'Clean open tasks'],
@@ -176,7 +176,7 @@ export function createEvidenceFacts(envelope, { prefix, subject = 'Rota', fields
     if (selected && !selected.some((field) => fieldPatternCovers(field, path, { exact: false }))) return;
     if (scalar(value)) {
       if (!claimableField(envelope, path, CANONICAL_FIELDS, changeField)) return;
-      facts.push({ semantic: evidenceSemantic(envelope, path, value, factLabel(path)), factId: `${prefix}:${path}`, subjectId: path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : 'result',
+      facts.push({ semantic: evidenceSemantic(envelope, path, value, factLabel(path), changeField), factId: `${prefix}:${path}`, subjectId: path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : 'result',
         subject: name, field: path, ...(changeField ? { changeField } : {}), type: value === null ? 'null' : typeof value, value });
     } else if (Array.isArray(value)) {
       value.forEach((item, index) => visit(item, `${path}.${index}`, subjectName(item, name), depth + 1));
@@ -274,15 +274,15 @@ export function factPresentation(fact, locale = 'tr') {
   // Seçiciler kimlikle değil adla yazılır (proje, görev, kişi); kimlik anahtarları niteleyici değildir.
   const filterNames = { text: ['Arama metni', 'Search text'], project: ['Proje', 'Project'], task: ['Görev', 'Task'], person: ['Kişi', 'Person'],
     activityScope: ['Kapsam', 'Scope'], activityKind: ['Hareket türü', 'Event kind'],
-    wbsId: ['İş dağılımı düğümü', 'WBS node'], tab: ['Sekme', 'Tab'], workflowStatus: ['Talep durumu', 'Request status'],
+    wbsId: ['İş dağılımı düğümü', 'WBS node'], wbs: ['İş dağılımı düğümü', 'WBS node'], baseline: ['Baz plan', 'Baseline'], tab: ['Sekme', 'Tab'], workflowStatus: ['Talep durumu', 'Request status'],
     source: ['Proje kaynağı', 'Project source'], includeEmpty: ['Görünür görevi olmayan projeler', 'Projects without visible tasks'],
     statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
     dateField: ['Tarih alanı', 'Date field'], dateFrom: ['İlk tarih', 'First date'], dateTo: ['Son tarih', 'Last date'],
-    assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi (Sicil)', 'Person (Sicil)'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'] };
+    assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi', 'Person'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'] };
   const filterValues = { ...values.status, ...values.priority, overdue: ['Gecikmiş', 'Overdue'],
     due_today: ['Bugün', 'Today'], due_next_7_days: ['Bugün dahil yedi gün', 'Seven days including today'],
     due_next_30_days: ['Bugün dahil otuz gün', 'Thirty days including today'], no_target_finish: ['Terminsiz', 'No deadline'],
-    me: ['Ben', 'Me'], person: ['Seçilen kişi', 'Selected person'], unassigned: ['Görünür sorumlu yok', 'No visible assignee'] };
+    me: ['Ben', 'Me'], person: ['Seçilen kişi', 'Selected person'], unassigned: ['Sorumlusuz', 'Unassigned'] };
   const tabValues = { pending: ['Bekleyen', 'Pending'], sent: ['Gönderilen', 'Sent'], history: ['Geçmiş', 'History'], all: ['Tümü', 'All'] };
   const filterValue = (value) => typeof value === 'boolean' ? (value ? ['Evet', 'Yes'] : ['Hayır', 'No'])[language]
     : filterValues[value]?.[language] || LABELS[value]?.[language] || (/^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? value : null);
@@ -290,8 +290,9 @@ export function factPresentation(fact, locale = 'tr') {
     if (value == null || value === '' || value === 'any' || (Array.isArray(value) && !value.length)) return null;
     switch (key) {
       case 'text': return `"${String(value)}"`;
-      case 'project': case 'task': case 'person': case 'wbsId': return String(value);
-      case 'personSicil': return fact.semantic?.filters?.person ? null : String(value);
+      case 'project': case 'task': case 'person': case 'wbs': case 'baseline': return String(value);
+      case 'wbsId': return fact.semantic?.filters?.wbs ? null : ['Seçilen iş dağılımı düğümü', 'Selected WBS node'][language];
+      case 'personSicil': return fact.semantic?.filters?.person ? null : ['Seçilen kişi', 'Selected person'][language];
       case 'activityScope': return { visible: ['Görebildiğiniz görevler', 'Your visible tasks'], mine: ['Yalnızca sizin hareketleriniz', 'Only your actions'], team: ['Yönetim kapsamınız', 'Your management scope'] }[value]?.[language] || null;
       case 'activityKind': return values.kind[value]?.[language] || null;
       case 'tab': return tabValues[value]?.[language] || null;

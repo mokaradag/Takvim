@@ -1,4 +1,5 @@
 import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
+import { factsMatchUserIntent } from './factIntent.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
 
 /**
@@ -111,6 +112,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   const answer = parseEvidenceResponse(text);
   const selection = resolveEvidenceSelection(answer, { evidenceIds, evidencePayloads });
   if (!selection.ok) return { ok: false, citedIds: [], issues: selection.issues };
+  if (!factsMatchUserIntent(selection.facts, userText, evidencePayloads)) return { ok: false, citedIds: [], issues: [{ code: 'UNRELATED_FACT_SELECTION' }] };
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
   const normalized = renderVerifiedNarrative(selection.facts, { locale, layout: selection.layout, userText });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };

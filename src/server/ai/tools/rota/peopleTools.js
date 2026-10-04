@@ -1,9 +1,10 @@
 import 'server-only';
+import { parseSicil } from '../../../identity/sicil.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
 import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
-import { foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
+import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
 import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
 
 /* ── rota_workload_summary ────────────────────────────────── */
@@ -30,12 +31,12 @@ const workloadSummary = {
     const limit = args.limit ?? 10;
     const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil });
     const { scope } = await call.authorization();
-    const { facts, assignees, projects } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
+    const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const people = new Map();
     const hoursByPerson = new Map();
     let unassigned = 0;
     for (const fact of facts) {
-      if (fact.resolvedAssigneeCount === 0) {
+      if (assignmentState(fact) === 'unassigned') {
         unassigned += 1;
         continue;
       }
@@ -46,7 +47,7 @@ const workloadSummary = {
         if (!people.has(person.sicil)) {
           people.set(person.sicil, {
             sicil: person.sicil,
-            name: dataText(person.name || String(person.sicil), 120),
+            name: dataText(person.name || 'Seçilen kişi', 120),
             openTasks: 0,
             inProgress: 0,
             overdue: 0,
@@ -72,9 +73,8 @@ const workloadSummary = {
     const page = ordered.slice(0, limit);
     const descriptor = searchedScope(scope, filters.projectId);
     // Sayıların nüfusunu belirleyen seçiciler olgunun niteleyicisidir (proje ve kişi adıyla).
-    const projectName = filters.projectId ? projects.get(filters.projectId)?.name || null : null;
-    const personName = args.personSicil != null
-      ? [...assignees.values()].flat().find((person) => person.sicil === args.personSicil && person.name)?.name || null : null;
+    const projectName = filters.project || null;
+    const personName = filters.person || null;
     return {
       data: {
         filters: {
@@ -112,14 +112,14 @@ const personSearch = {
   version: 1,
   topic: 'people',
   evidenceKind: 'people',
-  authorization: 'Rota\'nın mevcut sınırlı kurumsal personel araması (en az 2 karakter, en fazla 25 satır, oturum başına hız sınırı). Kimlik Sicil\'dir; ad eşleşmesi kimlik ya da yetki kanıtı değildir.',
+  authorization: 'Rota\'nın mevcut sınırlı kurumsal personel araması (ad için en az 2 karakter, Sicil için geçerli pozitif SQL int, en fazla 25 satır, oturum başına hız sınırı). Kimlik Sicil\'dir; ad eşleşmesi kimlik ya da yetki kanıtı değildir.',
   description: 'Kişiyi adı ya da Sicil\'i ile kurumsal personel dizininde arar ve Sicil\'ini çözer (görev/iş yükü süzgeçleri için). Aynı adlı birden çok kişi dönebilir: bu durumda tahmin etmeyin, kullanıcıya birimini sorun.',
   parameters: {
     type: 'object',
     additionalProperties: false,
     required: ['text'],
     properties: {
-      text: { type: 'string', minLength: 2, maxLength: 80, description: 'Ad-soyad parçası ya da Sicil.' },
+      text: { type: 'string', minLength: 1, maxLength: 80, description: 'Ad-soyad parçası ya da Sicil.' },
       limit: LIMIT_PROPERTY(25, 10)
     }
   },
@@ -132,7 +132,7 @@ const personSearch = {
     ));
     const people = result.items.map((person) => ({
       sicil: Number(person.sicil),
-      name: dataText(person.name, 120),
+      name: dataText(person.name === String(person.sicil) ? 'Adı belirtilmemiş kişi' : person.name, 120),
       ...(person.jobTitle ? { jobTitle: dataText(person.jobTitle, 120) } : {}),
       organization: {
         directorate: person.organization?.directorate ? dataText(person.organization.directorate, 120) : null,
@@ -152,7 +152,7 @@ const personSearch = {
     // çözer. Sınırlı dizin sonucunun son satırındaki tek kesin eşleşme, aynı adlı
     // bir sonraki satırı dışarıda bırakmış olabileceğinden çözüm sayılmaz.
     const query = String(args.text).trim();
-    const sicilQuery = /^\d{1,9}$/.test(query) ? Number(query) : null;
+    const sicilQuery = parseSicil(query);
     const needle = foldText(query).trim();
     const exactIndexes = people.flatMap((person, index) => ((sicilQuery != null && person.sicil === sicilQuery) || foldText(person.name).trim() === needle ? [index] : []));
     const uniqueExact = exactIndexes.length === 1 && !(directoryCapped && exactIndexes[0] === people.length - 1);
@@ -163,6 +163,7 @@ const personSearch = {
     const resolved = uniqueExact ? people[exactIndexes[0]] : null;
     return {
       data: {
+        filters: { text: args.text },
         people: page,
         ambiguous: resolution === 'ambiguous',
         resolution,

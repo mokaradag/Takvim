@@ -29,7 +29,7 @@ for (const change of ['project-revoked', 'creator-to-assignee', 'full-to-partial
     if (change === 'creator-to-assignee') task.CreatedBySicil = AYSE;
     citeTask(stack, taskId);
     const turnId = randomUUID();
-    const response = await sendTurn({ turnId, message: 'Bu görevin başlığını göster' });
+    const response = await sendTurn({ turnId, message: `Bu görevin başlığını göster: ${taskId}` });
     const saved = done(response);
     assert.equal(saved.assistantMessage.evidence.length, 1);
     assert.match(deltas(response), new RegExp(task.Title));
@@ -50,7 +50,7 @@ for (const change of ['project-revoked', 'creator-to-assignee', 'full-to-partial
     assert.deepEqual(hidden.evidence, []);
     assert.equal(hidden.finishReason, 'not_found');
     const providerCalls = stack.provider.calls.length;
-    const replay = await sendTurn({ turnId, conversationId: saved.conversation.id, message: 'Bu görevin başlığını göster' });
+    const replay = await sendTurn({ turnId, conversationId: saved.conversation.id, message: `Bu görevin başlığını göster: ${taskId}` });
     assert.equal(done(replay).replayed, true);
     assert.equal(deltas(replay), NON_ENUMERATING_FAILURE_TEXT);
     assert.deepEqual(done(replay).assistantMessage.evidence, []);
@@ -61,7 +61,7 @@ for (const change of ['project-revoked', 'creator-to-assignee', 'full-to-partial
 test('legacy evidence without an authorization epoch is never disclosed', async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
-  const response = await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
   for (const row of stack.db.aiMessageEvidence) {
     const value = JSON.parse(row.EvidenceJson);
     delete value.authorizationEpoch;
@@ -74,7 +74,7 @@ test('legacy evidence without an authorization epoch is never disclosed', async 
 test('revoked grounded text never reaches general-chat history even with a ready evidence table', async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
-  const first = done(await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' }));
+  const first = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
   const title = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE).Title;
   stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
   stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
@@ -88,7 +88,7 @@ test('revoked grounded text never reaches general-chat history even with a ready
 test('unrelated project grants do not hide a still-authorized saved task answer', async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
-  const first = done(await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' }));
+  const first = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
   stack.db.projectAccess.push({ ProjectId: PROJECTS.HIDDEN, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
   const loaded = await loadAssistantConversation(first.conversation.id);
   const answer = loaded.body.messages.find((message) => message.role === 'assistant');
@@ -101,7 +101,7 @@ test('moving a cited task outside the current scope hides it on reopen and repla
   stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
   citeTask(stack, TASKS.OVERDUE);
   const turnId = randomUUID();
-  const first = done(await sendTurn({ turnId, message: 'Görevi göster' }));
+  const first = done(await sendTurn({ turnId, message: `Görevi göster: ${TASKS.OVERDUE}` }));
   const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
   const context = createToolTurnContext({ sicil: AYSE });
   const signal = new AbortController().signal;
@@ -112,7 +112,7 @@ test('moving a cited task outside the current scope hides it on reopen and repla
   assert.equal(context.authorizationEpoch(), epoch, 'project move does not change the caller grant epoch');
   const loaded = await loadAssistantConversation(first.conversation.id);
   assert.equal(loaded.body.messages.find((message) => message.role === 'assistant').content, NON_ENUMERATING_FAILURE_TEXT);
-  assert.equal(deltas(await sendTurn({ conversationId: first.conversation.id, turnId, message: 'Görevi göster' })), NON_ENUMERATING_FAILURE_TEXT);
+  assert.equal(deltas(await sendTurn({ conversationId: first.conversation.id, turnId, message: `Görevi göster: ${TASKS.OVERDUE}` })), NON_ENUMERATING_FAILURE_TEXT);
 });
 
 test('a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence', async (t) => {
@@ -126,7 +126,7 @@ test('a task moved across the ACL boundary after reading cannot be rendered or p
       task.ProjectId = PROJECTS.HIDDEN;
       return { type: 'answer', text: evidenceReply(claimFor(result, 'data.task.title')) };
     } }, { type: 'answer', text: '{"kind":"unavailable"}' });
-  const response = await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
   assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
   assert.ok(!deltas(response).includes(title));
   assert.deepEqual(stack.db.aiMessageEvidence, []);
@@ -138,7 +138,7 @@ test('a transient post-persist check preserves this turn, while reopen fails clo
   stack.db.aiConversationHooks = { beforeAppend() {
     stack.db.aiToolFailure = { 'task-visibility': Object.assign(new Error('temporary read failure'), { code: 'DATABASE_UNAVAILABLE' }) };
   } };
-  const response = await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
   const saved = done(response);
   assert.equal(saved.assistantMessage.finishReason, 'stop');
   assert.equal(saved.assistantMessage.content, deltas(response));
@@ -157,7 +157,7 @@ for (const source of ['rota', 'general']) {
   test(`write reconciliation uses the same disclosure gate for the ${source} generation path`, async (t) => {
     const stack = stackFor(t);
     citeTask(stack, TASKS.OVERDUE);
-    const first = done(await sendTurn({ turnId: randomUUID(), message: 'Görevi göster' }));
+    const first = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
     const saved = stack.db.aiConversationMessages.find((row) => row.Role === 'assistant');
     const savedEvidence = structuredClone(stack.db.aiMessageEvidence[0]);
     const competingId = randomUUID();
@@ -171,7 +171,7 @@ for (const source of ['rota', 'general']) {
     } };
     if (source === 'rota') citeTask(stack, TASKS.OVERDUE);
     else stack.provider.enqueue({ type: 'stream', text: 'General explanation.' });
-    const response = await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: 'Tekrar göster', source });
+    const response = await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: `Tekrar göster: ${TASKS.OVERDUE}`, source });
     const answer = done(response).assistantMessage;
     assert.equal(answer.id, competingId);
     assert.equal(answer.content, NON_ENUMERATING_FAILURE_TEXT);

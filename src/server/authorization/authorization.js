@@ -22,19 +22,14 @@ export function deriveEffectiveAccess({ isSystemAdmin, fullProjectIds = [], part
   // etkisizdir (idempotent), bu yüzden ek maliyet getirmez.
   const key = (value) => (value == null ? value : (canonicalActualId(value) ?? String(value)));
   if (isSystemAdmin) {
-    // Sistem yöneticisinin erişimi de proje başına kanoniktir: her etkin proje
-    // FULL erişim kaydıdır; proje kapıları ve yetki dönemi aynı kümeyi görür.
-    for (const projectId of fullProjectIds) {
-      const id = key(projectId);
-      access.set(id, { projectId: id, accessLevel: 'FULL', reasons: [ACCESS_REASONS.SYSTEM_ADMIN] });
-    }
     return {
       isSystemAdmin: true,
       access,
       partialTaskIds: new Set(),
-      fullProjectIds: new Set(access.keys())
+      fullProjectIds: new Set(fullProjectIds.map(key))
     };
   }
+
   for (const projectId of fullProjectIds) {
     const id = key(projectId);
     access.set(id, { projectId: id, accessLevel: 'FULL', reasons: [ACCESS_REASONS.CORPORATE_PROJECT_ROLE] });

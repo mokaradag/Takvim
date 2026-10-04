@@ -19,6 +19,7 @@ import { AYSE, MEHMET, NOW, PROJECTS, rotaToolSeed, TASKS } from './helpers/aiTo
 
 const { GROUNDING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
+const { snapshotOperations } = await import('../src/server/observability/telemetryRegistry.js');
 const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 const { aiRuntimeLoad } = await import('../src/server/ai/aiRuntime.js');
 const { activeAssistantGenerationCountForTests } = await import('../src/server/ai/assistant/assistantGenerations.js');
@@ -30,7 +31,7 @@ const { reportedReasoningTokens } = await import('../src/server/ai/providers/ope
 const STANDARD = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model;
 const DEEP = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model;
 const INVALID = 'Projede 42 gecikmiş görev var.';
-const QUESTION = 'Radar Modernizasyonu projesinde kaç görev var?';
+const QUESTION = `Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`;
 
 const fixedClocks = new WeakSet();
 
@@ -89,7 +90,7 @@ test('an unverifiable Standard answer is finalized once by Deep thinking with th
   }
 });
 
-test('an empty Standard completion is diagnosed without content and finalized by Deep thinking', async (t) => {
+test('an empty Standard completion is diagnosed without content and retried in-session before Deep escalation', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(
@@ -98,12 +99,15 @@ test('an empty Standard completion is diagnosed without content and finalized by
     factAnswer()
   );
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
   assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
   assert.equal(deltas(response).length, 1);
   const snapshot = aiTelemetrySnapshot();
   assert.equal(snapshot.emptyCompletions, 1);
-  assert.deepEqual(snapshot.grounding.escalations.byReason, { EMPTY_COMPLETION: 1 });
+  assert.equal(snapshot.grounding.escalations.total, 0);
+  const providerOperation = snapshotOperations().find((entry) => entry.operation === 'ai.provider.stream');
+  assert.equal(providerOperation.errorCount, 1);
+  assert.equal(providerOperation.topFailureCode, 'AI_PROVIDER_RESPONSE_INVALID');
   const [diagnosis] = logLines(logs, 'ai.provider.empty_completion');
   assert.equal(diagnosis.code, 'AI_EMPTY_COMPLETION');
   assert.equal(diagnosis.context.profile, 'chat.tools');
@@ -141,7 +145,7 @@ test('Deep thinking retries one empty completion inside its own session and neve
 test('a turn that ends without evidence because of NOT_FOUND, scope or SQL failure is not escalated', async (t) => {
   const reject = { type: 'answer', text: '{"kind":"rota","facts":["R9:totalCount"]}' };
   const cases = [
-    { name: 'not found', calls: [{ name: 'rota_outlook_status', arguments: { taskId: TASKS.HIDDEN } }], message: 'Gizli görevin Outlook durumu nedir?', code: 'NOT_FOUND' },
+    { name: 'not found', calls: [{ name: 'rota_outlook_status', arguments: { taskId: TASKS.HIDDEN } }], message: `Gizli görevin Outlook durumu nedir? ${TASKS.HIDDEN}`, code: 'NOT_FOUND' },
     { name: 'scope', calls: [{ name: 'rota_task_search', arguments: { text: 'Başka bir konu' } }], message: 'Radar görevleri', code: 'UNSUPPORTED_SCOPE' },
     { name: 'sql', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }], message: QUESTION, code: 'DATABASE_UNAVAILABLE', failing: 'task-facts' }
   ];

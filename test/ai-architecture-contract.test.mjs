@@ -148,23 +148,15 @@ test('olağan Rota akışı yapay zekâ alt sistemine bağımlı değildir', () 
   // (anlık görüntü, kayıt, görev, rapor) yapay zekâya bağlanmaz. Telemetri turu
   // yalnızca yük ölçümünü örnekler.
   assert.deepEqual(importers.sort(), [
-    'src/app/layout.js',
-    'src/components/shell/AppShell.jsx',
+    'src/components/shell/AssistantShell.jsx',
     'src/features/settings/SettingsView.jsx',
     'src/server/observability/healthProbes.js',
     'src/server/observability/integrationsService.js',
     'src/server/observability/telemetryWorker.js'
   ]);
-  // Kök yerleşim yalnızca açık/kapalı bilgisini sayfaya yazar; başka yapılandırma değeri taşımaz.
-  const layoutAiImports = importsOf(path.join(ROOT, 'src/app/layout.js')).filter(({ target }) => target && isAiPath(target));
-  assert.deepEqual(layoutAiImports.map(({ clause, target }) => `${clause.replace(/\s+/g, ' ')} ← ${target}`), [
-    '{ ASSISTANT_AVAILABILITY_META } ← src/domain/ai/assistantContract.js',
-    '{ readAiConfig } ← src/server/ai/aiConfig.js'
-  ]);
-  assert.deepEqual([...code(read('src/app/layout.js')).matchAll(/readAiConfig\(\)[.\w]*/g)].map((match) => match[0]), ['readAiConfig().enabled']);
-  // Kabuk yardımcıyı YALNIZCA bileşen sınırından bağlar (istemci, denetleyici ya da sunucu modülü değil).
-  const shellAiImports = importsOf(path.join(ROOT, 'src/components/shell/AppShell.jsx')).filter(({ target }) => target && isAiPath(target));
-  assert.deepEqual(shellAiImports.map(({ target }) => target), ['src/features/ai/assistant/RotaAssistant.jsx']);
+  assert.deepEqual(importsOf(path.join(ROOT, 'src/app/layout.js')).filter(({ target }) => target && isAiPath(target)), []);
+  assert.deepEqual(importsOf(path.join(ROOT, 'src/components/shell/AppShell.jsx')).filter(({ target }) => target && isAiPath(target)), []);
+  assert.match(read('src/components/shell/AppShell.jsx'), /assistant\.enabled && <AssistantShell/);
   const worker = code(read('src/server/observability/telemetryWorker.js'));
   assert.deepEqual([...worker.matchAll(/from '\.\.\/ai\/([^']+)'/g)].map((match) => match[1]), ['aiRuntime.js']);
   assert.match(worker, /import \{ sampleAiLoad \} from '\.\.\/ai\/aiRuntime\.js';/);
@@ -176,6 +168,7 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
     'src/server/db/pool.js',
     'src/server/errors.js',
     'src/server/identity/currentUserProvider.js',
+    'src/server/identity/sicil.js',
     'src/server/identity/sameOriginRequest.js',
     'src/server/observability/boundedExecution.js',
     'src/server/observability/structuredLogger.js',
@@ -646,7 +639,7 @@ test('yardımcı panel katman sözleşmesine bağlıdır ve ölçekli görünüm
   assert.doesNotMatch(css, /text-transform:\s*uppercase/);
   const { ASSISTANT_SHEET_QUERY } = await import('../src/features/ai/assistant/assistantInteraction.js');
   assert.ok(css.includes(`@media ${ASSISTANT_SHEET_QUERY} {`), 'dar ekran sorgusu bileşenle ortaktır');
-  assert.match(read('src/app/layout.js'), /^import '\.\/styles\/assistant\.css';$/m);
+  assert.match(read('src/components/shell/AssistantShell.jsx'), /assistant\.css/);
   // Kanıtlı yanıtlar için genişlik: masaüstünde 460–600 px, geniş ekranda en fazla 680 px; çalışma alanına en az 96 px kalır.
   assert.match(css, /--assistant-w: min\(600px, max\(460px, calc\(var\(--app-viewport-w, 100vw\) \* \.42\)\)\);/);
   assert.match(css, /@media \(min-width: 1600px\) \{\s*\.rota-assistant \{ --assistant-w: min\(680px, /);

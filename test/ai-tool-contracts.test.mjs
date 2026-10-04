@@ -300,7 +300,7 @@ test('kapsam belirteçleri Rota yetki bağlamından türetilir; READ ve kişisel
   assert.equal(admin.projectTokens, '');
   assert.equal(admin.scopedTaskIds, '');
   assert.equal(projectAccess(admin, full).accessLevel, 'FULL');
-  assert.equal(projectAccess(admin, '11111111-1111-4111-8111-000000000009'), null);
+  assert.equal(projectAccess(admin, '11111111-1111-4111-8111-000000000009').accessLevel, 'FULL');
 });
 
 test('veri metni talimat ya da kanıt atfı taşıyamaz: işaretler nötrlenir, metin kısaltılır', () => {

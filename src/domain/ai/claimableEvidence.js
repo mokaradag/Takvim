@@ -39,7 +39,7 @@ const workflowPaths = (path) => [...record(path, 'status requester decisionOwner
 const PATHS = Object.freeze({
   rota_task_search: [...record('project', PROJECT), ...itemPaths('tasks.*')],
   rota_task_detail: [...itemPaths('task'), 'task.description', 'task.wbsPath.*', ...record('task.dates', DATE), ...record('task.hours', 'planned actual'), ...record('task.cost', 'budget spent'), ...record('task.access', ACCESS), 'task.access.reasons.*', 'task.createdBy.name', 'task.calendar', 'task.calendarSource', ...record('task.dependencies', 'predecessorCount successorCount'), ...record('task.recurrence', 'rule ruleDescription occurrenceDate')],
-  rota_task_analytics: [...record('definitions', 'overdue dueNext7Days completionRatePercent today assignee'), ...record('totals', TOTALS), ...record('overdueAging.buckets.*', 'label count'), 'overdueAging.worstOverdueDays', 'hours.taskCount', ...['plannedHours', 'actualHours', 'budget', 'spent'].flatMap((field) => record(`hours.${field}`, 'total tasksWithValue tasksWithoutValue')), ...record('groups.*', `key label count ${TOTALS}`), 'groupCount'],
+  rota_task_analytics: [...record('definitions', 'overdue dueNext7Days completionRatePercent today assignee'), ...record('totals', TOTALS), ...record('overdueAging.buckets.*', 'label count'), 'overdueAging.worstOverdueDays', 'hours.taskCount', ...['plannedHours', 'actualHours', 'budget', 'spent'].flatMap((field) => record(`hours.${field}`, 'total tasksWithValue tasksWithoutValue')), ...record('groups.*', `label count ${TOTALS}`), 'groupCount'],
   rota_project_search: [...record('matches.*', PROJECT), ...record('matches.*.access', ACCESS), 'ambiguous'],
   rota_project_detail: [...record('project', PROJECT), 'project.tags.*', ...record('access', ACCESS), 'access.reasons.*', ...record('visibleTasks', TOTALS), ...record('definitions', 'overdue dueNext7Days today')],
   rota_portfolio_summary: [...record('definitions', 'overdue dueNext7Days today completeTaskView'), ...record('totals', 'projects tasks open done overdue dueNext7Days openWithoutTargetFinish projectsWithOverdue'), ...record('projects.*', `${PROJECT} access completeTaskView`), ...record('projects.*.tasks', TOTALS)],
@@ -75,18 +75,61 @@ export function claimableField(envelope, path, canonicalFields, changeField = nu
   return canonicalFields.has(leaf);
 }
 
-export function evidenceSemantic(envelope, path, value, label) {
+const DATE_FIELDS = new Set(['plannedStart', 'plannedFinish', 'targetFinish', 'calendarDate', 'actualStart', 'actualFinish', 'dataDate', 'date', 'from', 'to', 'baselineFinish', 'occurrenceDate', 'deliveredCalendarDate', 'today']);
+const INSTANT_FIELDS = new Set(['occurredAt', 'createdAt', 'updatedAt', 'decidedAt', 'at', 'lastDeliveredAt']);
+
+const RESULT_COUNT_UNITS = Object.freeze({
+  rota_task_search: 'tasks', rota_task_detail: 'tasks', rota_task_analytics: 'tasks',
+  rota_project_search: 'projects', rota_project_detail: 'projects', rota_portfolio_summary: 'projects',
+  rota_person_search: 'people', rota_workload_summary: 'people', rota_wbs_inspect: 'wbs-nodes',
+  rota_baseline_compare: 'tasks', rota_dependency_inspect: 'dependencies', rota_recurrence_inspect: 'recurrence-entries',
+  rota_calendar_inspect: 'holidays', rota_activity_search: 'activity-groups', rota_schedule_requests: 'requests',
+  rota_assignment_requests: 'requests', rota_notifications: 'notifications', rota_outlook_status: 'subscriptions', rota_data_quality: 'checks'
+});
+
+function countUnit(envelope, path, value) {
+  if (typeof value !== 'number' && value !== null) return null;
+  if (['totalCount', 'returnedCount'].includes(path)) return RESULT_COUNT_UNITS[envelope.tool] || null;
+  const leaf = path.split('.').at(-1);
+  if (/Days$|^workingDayCount$/.test(leaf)) return 'days';
+  if (/projects|projectCount/i.test(leaf)) return 'projects';
+  if (/people|personCount|sameNameCount/i.test(leaf)) return 'people';
+  if (/dependencyCount|edgeCount/i.test(leaf)) return 'dependencies';
+  if (/task|overdue|done|todo|inProgress/i.test(leaf) || /^data\.(totals|visibleTasks)\.(total|open)$/.test(path)) return 'tasks';
+  if (leaf === 'count' && /groups|overdueAging/.test(path)) return 'tasks';
+  return null;
+}
+
+function rowContext(envelope, parts) {
+  const index = parts.findIndex((part, position) => position > 1 && /^\d+$/.test(part));
+  if (index < 0 || index === parts.length - 1) return null;
+  const row = parts.slice(1, index + 1).reduce((value, key) => value?.[key], envelope.data);
+  if (!row || typeof row !== 'object') return null;
+  return { path: parts.slice(0, index + 1).join('.'),
+    identity: row.taskId || row.projectId || row.wbsId || row.requestId || row.coordinationId || row.sicil || row.key || null,
+    name: row.title || row.name || row.task?.title || row.person?.name || row.label || null,
+    project: typeof row.project === 'string' ? row.project : row.project?.name || null,
+    projectCode: row.project?.code || null,
+    organization: row.organization ? [row.organization.unit, row.organization.department, row.organization.directorate].filter(Boolean).join(' / ') : null };
+}
+
+export function evidenceSemantic(envelope, path, value, label, changeField = null) {
   const parts = path.split('.');
   const hour = parts.includes('hours') || parts.some((part) => ['plannedHours', 'actualHours', 'plannedHoursOnAssignedTasks'].includes(part));
   const cost = parts.some((part) => ['budget', 'spent'].includes(part));
+  const row = rowContext(envelope, parts);
   const group = parts[1] === 'groups' ? envelope.data?.groups?.[Number(parts[2])] : null;
   return {
     identity: `${envelope.tool}:${parts.map((part) => /^\d+$/.test(part) ? '*' : part).join('.')}`,
+    valueType: DATE_FIELDS.has(changeField || parts.at(-1)) ? 'date' : INSTANT_FIELDS.has(changeField || parts.at(-1)) ? 'instant' : null,
     canonicalPath: path, type: value === null ? 'null' : typeof value, label,
     unit: parts.includes('lag') && parts.at(-1) === 'value' ? (path.split('.').slice(1, -1).reduce((data, key) => data?.[key], envelope.data)?.unit || 'unknown-lag') : ['tasksWithValue', 'tasksWithoutValue', 'taskCount'].includes(parts.at(-1)) ? 'tasks' : cost ? 'unspecified-currency' : hour ? 'hours' : null,
+    countUnit: countUnit(envelope, path, value),
+    entity: envelope.entity || null,
+    row,
     renderable: true,
     displayValue: parts.at(-1) === 'rule' ? parts.slice(1, -1).reduce((data, key) => data?.[key], envelope.data)?.ruleDescription || null : null,
-    filters: envelope.data?.filters || null,
+    filters: row?.project ? { ...(envelope.data?.filters || {}), project: row.project } : envelope.data?.filters || null,
     groupBy: envelope.data?.groupBy || null,
     group: group ? { key: group.key, label: group.label } : null,
     provenance: { tool: envelope.tool, generatedAt: envelope.generatedAt, today: envelope.today },

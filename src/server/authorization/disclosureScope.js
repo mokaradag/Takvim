@@ -29,10 +29,10 @@ export const CURRENT_TASK_DISCLOSURE_SQL = `(t.TaskId IS NOT NULL AND p.IsActive
   OR EXISTS (SELECT 1 FROM #AiDisclosureTasks permitted WHERE permitted.TaskId = t.TaskId)))`;
 
 export function bindDisclosureScope(request, actor) {
-  const projects = [...(actor.effective?.access || [])].filter(([, access]) => access.accessLevel === 'FULL'
+  const projects = actor.isSystemAdmin ? [] : [...(actor.effective?.access || [])].filter(([, access]) => access.accessLevel === 'FULL'
     || access.reasons?.includes(ACCESS_REASONS.MANUAL_GRANT)).map(([id]) => id);
   request.input('disclosureAdmin', sql.Bit, actor.isSystemAdmin ? 1 : 0);
   request.input('disclosureProjects', sql.NVarChar(sql.MAX), projects.join(','));
-  request.input('disclosureTasks', sql.NVarChar(sql.MAX), [...(actor.effective?.partialTaskIds || [])].join(','));
+  request.input('disclosureTasks', sql.NVarChar(sql.MAX), actor.isSystemAdmin ? '' : [...(actor.effective?.partialTaskIds || [])].join(','));
   return request;
 }

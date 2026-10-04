@@ -99,7 +99,7 @@ test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reas
   const source = read('src/server/authorization/loadAuthorizationContext.js');
 
   assert.match(source, /CAST\('SYSTEM_ADMIN' AS varchar\(30\)\) AS Reason/);
-  assert.match(source, /FROM dbo\.MR_Projects p\s+WHERE p\.IsActive = 1\s+AND EXISTS \(/s);
+  assert.match(source, /FROM dbo\.MR_Projects p\s+WHERE p\.IsActive = 1\s+AND @adminPredicateOnly = 0\s+AND EXISTS \(/s);
   assert.match(source, /ur\.Sicil = @sicil AND ur\.RoleCode = 'SYSTEM_ADMIN' AND ur\.IsActive = 1/);
 });
 

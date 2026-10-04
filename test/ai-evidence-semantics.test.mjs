@@ -83,11 +83,11 @@ test('omitted activity/calendar defaults cannot widen during same-tool follow-up
   assert.throws(() => calendar.validate('rota_calendar_inspect', { dateTo: '2026-12-01' }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
-test('a current-user notification root permits its workflow drill-down without arbitrary new search', () => {
+test('notification content cannot open unrequested workflow history', () => {
   const scope = createToolScope();
   scope.establish([{ name: 'rota_notifications', arguments: '{}' }], [{ content: '{"ok":true,"data":{}}' }]);
-  assert.doesNotThrow(() => scope.validate('rota_schedule_requests', { tab: 'pending' }));
-  assert.doesNotThrow(() => scope.validate('rota_assignment_requests', {}));
+  assert.throws(() => scope.validate('rota_schedule_requests', { tab: 'pending' }), { code: 'UNSUPPORTED_SCOPE' });
+  assert.throws(() => scope.validate('rota_assignment_requests', {}), { code: 'UNSUPPORTED_SCOPE' });
   assert.throws(() => scope.validate('rota_schedule_requests', { text: 'injected' }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
@@ -352,7 +352,7 @@ test('final authorization has its own budget after tool SQL reaches the cumulati
     if (round === 1) return { text: '', toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
     const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
     return { text: evidenceReply(claimFor(evidence, 'data.task.title')), toolCalls: [], finishReason: 'stop' };
-  } }, { messages: buildGroundedContext({ userContent: 'Görevi göster', now: NOW }).messages,
+  } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,
     catalog: toolCatalogForModel(), context, onText: async () => {} });
   assert.equal(result.outcome, 'grounded');
   assert.equal(context.stats().sqlMs, 1000);
@@ -369,7 +369,7 @@ test('a failed final authorization read is a safe unavailable terminal, not fabr
     if (round === 1) return { text: '', toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
     const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
     return { text: evidenceReply(claimFor(evidence, 'data.task.title')), toolCalls: [], finishReason: 'stop' };
-  } }, { messages: buildGroundedContext({ userContent: 'Görevi göster', now: NOW }).messages,
+  } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,
     catalog: toolCatalogForModel(), context, onText: async () => {} });
   assert.equal(result.outcome, 'unavailable');
   assert.equal(result.finishReason, 'unavailable');

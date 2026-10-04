@@ -483,14 +483,25 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
       .filter(([, entries]) => entries.some((entry) => entry.unverifiable)).map(([id]) => id));
     if (revalidate && evidence.byMessage.size) {
       const context = createToolTurnContext({ sicil });
-      const deadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
+      const deadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
+      const visible = new Map();
+      evidence.unavailableMessages = new Set();
       try {
         await context.revalidateAuthorization(deadline.signal);
-        const authorized = await context.revalidateEvidence([...evidence.authorizationByMessage.values()].flat(), deadline.signal);
-        evidence.byMessage = new Map([...evidence.byMessage].filter(([id]) => {
+        for (const [id, summaries] of [...evidence.byMessage].reverse()) {
+          if (deadline.signal.aborted) { evidence.unavailableMessages.add(id); continue; }
           const entries = evidence.authorizationByMessage.get(id);
-          return entries?.length && entries.every((entry) => authorized.has(entry.id));
-        }));
+          if (!entries?.length) continue;
+          const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: deadline.signal });
+          try {
+            const authorized = await context.revalidateEvidence(entries, messageDeadline.signal);
+            if (entries.every((entry) => authorized.has(entry.id))) visible.set(id, summaries);
+          } catch (error) {
+            if (error?.code === 'UNAUTHORIZED' || error?.code === AI_ERROR_CODES.AI_CANCELLED || signal?.aborted) throw error;
+            evidence.unavailableMessages.add(id);
+          } finally { messageDeadline.dispose(); }
+        }
+        evidence.byMessage = visible;
       } finally { deadline.dispose(); }
     }
     return evidence;
@@ -523,7 +534,7 @@ function discloseSavedMessages(messages, evidence) {
     const saved = evidence?.byMessage?.get(message.id);
     if (saved?.length) return { ...message, evidence: saved };
     if (evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence)) {
-      if (evidence?.unavailable || evidence?.ready === false) {
+      if (evidence?.unavailable || evidence?.ready === false || evidence?.unavailableMessages?.has(message.id)) {
         return { ...message, content: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', evidence: [], finishReason: 'unavailable' };
       }
       return { ...message, content: 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', evidence: [], finishReason: 'not_found' };
@@ -931,7 +942,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
   // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
   // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
   const own = stored.message.id === messageId;
-  const answer = own && (evidence?.unavailable || evidence?.unverifiable?.has(messageId))
+  const answer = own && (evidence?.unavailable || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId))
     ? { ...stored.message, evidence: grounded.evidence }
     : discloseSavedMessages([stored.message], evidence)[0];
   return {

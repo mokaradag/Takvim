@@ -1327,8 +1327,9 @@ function runQuery(db, statement, params, { database }) {
   // ── Yetkilendirme ve anlık görüntü ─────────────────────────
   if (sqlText.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
     const sets = authorizationRecordsets(db, sicil);
+    if (params.adminPredicateOnly && db.systemAdminSicils.includes(sicil)) { sets[3] = []; sets[4] = []; }
     if (sqlText.includes('ORDER BY EmployeeSicil;')) {
-      sets.push(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil).map(({ EmployeeSicil }) => ({ EmployeeSicil })));
+      sets.push(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && !(params.adminPredicateOnly && db.systemAdminSicils.includes(sicil))).map(({ EmployeeSicil }) => ({ EmployeeSicil })));
     }
     if (params.authorizationMaxRows) for (const index of [3, 4, 5]) if (sets[index]) sets[index] = sets[index].slice(0, params.authorizationMaxRows);
     return result(sets);
@@ -1424,7 +1425,7 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('DECLARE @safePage') || sqlText.includes('#ScheduleEvidenceSnapshot')) {
     throwIfScheduleChangeSchemaMissing(db);
     const contains = (value, query) => String(value || '').toLocaleLowerCase('tr-TR').includes(String(query || '').toLocaleLowerCase('tr-TR'));
-    const rows = scheduleRequestRows(db, params.sicil).filter((r) => disclosureAllowed(db, r, params) && (!params.projectId || sameGuid(r.ProjectId, params.projectId))
+    const rows = scheduleRequestRows(db, params.sicil).filter((r) => (disclosureAllowed(db, r, params) || (params.evidenceSnapshotLimit != null && !r.TaskAvailable)) && (!params.projectId || sameGuid(r.ProjectId, params.projectId))
       && (!params.taskId || sameGuid(r.TaskId, params.taskId)) && (!params.status || r.Status === params.status)
       && (!params.from || isoDate(r.CreatedAt) >= params.from) && (!params.to || isoDate(r.CreatedAt) <= params.to)
       && (!params.requester || contains(r.RequesterName, params.requester) || String(r.RequesterSicil) === params.requester)
