@@ -6,7 +6,6 @@ import {
   analyzeUngroundedAnswer,
   GROUNDING_FAILED_FINISH_REASON,
   groundingFailureText,
-  replyLocale,
   groundingRepairInstruction,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
@@ -18,7 +17,8 @@ import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.j
 import { isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope } from '../tools/toolScope.js';
-import { parseTurnRoute, parseTurnWindow, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
+import { bindRequestEntities, parseRequestDeclaration, requestEvidence, requestRepairHint, requestSummary, requestWindow } from '../tools/requestDeclaration.js';
+import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, parseTurnWindow, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
@@ -26,13 +26,17 @@ import { createAiDeadline } from '../aiDeadline.js';
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
  *
- * 1. Model yanıtı ya da araç çağrısı üretir (araç turu en fazla
- *    `maxToolRounds`; sonrasında araçlar kapatılır ve model eldeki kanıtla
- *    yanıtlar).
- * 2. Araçlar sunucuda, yetkiyle ve sınırlarla çalışır; başarılı sonuçlar
- *    kanıt olur (R1, R2 …).
- * 3. Son iddiaların tur, kayıt, alan ve türlü değeri sunucuda doğrulanır.
- *    İkinci bir dil modeli yargıç olarak kullanılmaz.
+ * 1. Model veri okumadan önce niyetini türlü bir bildirimle verir: Rota
+ *    sorusunda istek (`request`: işlem, ölçüler, varlıklar, koşullar). Sunucu
+ *    kullanıcı cümlesini yorumlamaz; bildirimin yapısını ve güven kaynağını
+ *    doğrular. Geçerli istek olmadan hiçbir araç çalışmaz (bildirim düzeltmesi
+ *    sınırlıdır) ve istek veri okunduktan sonra değişmez.
+ * 2. Model araç çağrısı ya da yanıt üretir (araç turu en fazla `maxToolRounds`;
+ *    sonrasında araçlar kapatılır ve model eldeki kanıtla yanıtlar). Araçlar
+ *    sunucuda, yetkiyle ve sınırlarla çalışır; başarılı sonuçlar kanıt olur (R1, R2 …).
+ * 3. Son seçimin tur, kayıt, alan ve türlü değeri ile bildirilen isteğe uyumu
+ *    (ölçü kapsamı, nüfus, varlık, liste/sıralama bütünlüğü) sunucuda
+ *    belirlenimci doğrulanır. İkinci bir dil modeli yargıç olarak kullanılmaz.
  * 4. Doğrulanamayan yanıt BİR kez düzeltilir; yine doğrulanamazsa kullanıcı
  *    sabit güvenli iletiyi görür (uydurma kanıtlı yanıt hiçbir zaman gösterilmez).
  * 5. Standart kipte kurtarılabilir model hatası (doğrulanamayan yapı, uzunluk
@@ -176,7 +180,17 @@ function analyzeClarification(response, { evidenceIds, evidencePayloads, locale 
   };
 }
 
-function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFailureCodes, route, locale, userText }) {
+/** Kanıt varken düzeltme turunda yeni araç çağrısını gerektirebilen istek hataları. */
+const EVIDENCE_GAP_CODES = new Set(['METRIC_MISSING', 'ENTITY_MISSING', 'ENTITY_UNRESOLVED', 'POPULATION_MISMATCH', 'RANK_MISMATCH']);
+
+/** Bildirilen isteği bu turun kanıtlarıyla doğrular; istek yoksa kanıtlı yanıt kabul edilmez. */
+function analyzeRequested(text, { evidenceIds, evidencePayloads, locale, request, entries, selection, today }) {
+  if (!request) return { ok: false, citedIds: [], issues: [{ code: 'REQUEST_DECLARATION_REQUIRED' }] };
+  const bound = { ...request, entities: bindRequestEntities(request, entries, selection) };
+  return analyzeGroundedAnswer(text, { evidenceIds, evidencePayloads, locale, request: bound, evidence: requestEvidence(request, entries, today) });
+}
+
+function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFailureCodes, route, locale, request, entries, selection, today }) {
   const response = parseEvidenceResponse(text);
   const notFoundOnly = evidenceIds.length === 0 && toolFailureCodes.size > 0 && [...toolFailureCodes].every((code) => code === TOOL_ERROR_CODES.NOT_FOUND);
   if (toolsAttempted && notFoundOnly && (response?.kind === 'not_found' || response?.kind === 'unavailable' || analyzeUngroundedAnswer(text, { allowNotFound: true }).ok)) {
@@ -186,7 +200,7 @@ function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolFail
     if (response?.kind === 'clarification' && response && typeof response === 'object' && !Array.isArray(response)) {
       return analyzeClarification(response, { evidenceIds, evidencePayloads, locale });
     }
-    return { kind: 'grounded', ...analyzeGroundedAnswer(text, { evidenceIds, evidencePayloads, locale, userText }) };
+    return { kind: 'grounded', ...analyzeRequested(text, { evidenceIds, evidencePayloads, locale, request, entries, selection, today }) };
   }
   if (toolsAttempted && response?.kind === 'unavailable' && Object.keys(response).length === 1) {
     return { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] };
@@ -226,6 +240,45 @@ export const EMPTY_COMPLETION_RETRY_MIN_MS = 15000;
 
 const EVIDENCE_READY_NOTE = 'SUNUCU: Bu turun kanıtları hazır. Yeni araç çağırma; yalnızca eldeki kanıtlarla son yanıtı üret.';
 
+/** Veri okunmadan önceki bildirim turları (yalnız bildirim ya da reddedilen araç çağrısı) için sınır. */
+const DECLARATION_ROUNDS = 2;
+
+/** Bildirim hatası ayrıntıları yalnızca şema yoludur; modelin yazdığı metin yönergeye taşınmaz. */
+function declarationRepair(details = []) {
+  const problems = details.map((detail) => String(detail).replace(/[^\w.$[\]:-]/g, '').slice(0, 80)).filter(Boolean).slice(0, 8);
+  return [
+    'SUNUCU DOĞRULAMASI: Araç çağrıları çalıştırılmadı. Rota verisi okunmadan önce geçerli bir istek bildirimi gerekir.',
+    ...(problems.length ? [`Bildirim sorunları: ${problems.join(', ')}`] : []),
+    'Biçim: {"kind":"route","intent":"rota","language":"tr","request":{"operation":"value","metrics":["tasks.overdue"],"entities":[{"type":"project","text":"kullanıcının yazdığı ad"}],"filters":{}}}',
+    'entities[].text ve filters.text kullanıcının iletisinde geçen metin olmalıdır; entities[].id yalnızca kullanıcının yazdığı ya da sunucunun bağladığı kimliktir. Bildirimi araç çağrılarıyla aynı yanıtta verebilirsin.'
+  ].join('\n');
+}
+
+/**
+ * Veri okunmadan önceki bildirimi uygular: dil, türlü istek ve dönem.
+ * Geçersiz Rota isteği önceki kabulü değiştirmez; `{ ok: false, details }` döner.
+ */
+function acceptDeclaration(turn, declaration, route) {
+  const language = parseTurnLanguage(declaration);
+  if (language) turn.locale = language;
+  if (route !== TURN_ROUTES.ROTA) return { ok: true };
+  let request;
+  try {
+    request = parseRequestDeclaration(parseTurnRequest(declaration), {
+      textTrusted: turn.containment.textTrusted,
+      identityTrusted: turn.containment.identityTrusted,
+      today: turn.context.today
+    });
+  } catch (error) {
+    if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
+    return { ok: false, details: error.details || [] };
+  }
+  turn.request = request;
+  turn.containment.declare(parseTurnWindow(declaration) || requestWindow(request));
+  instruct(turn, `SUNUCU: Veri okunmadan bildirilen istek kabul edildi: ${requestSummary(request)}. Son yanıtta bu isteğin her ölçüsünü taşıyan olguları seç; istek veri okunduktan sonra değiştirilemez.`);
+  return { ok: true };
+}
+
 function isEmptyCompletion(error) {
   return error?.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID && error?.details?.reason === 'EMPTY_COMPLETION';
 }
@@ -246,8 +299,10 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     ledger: createEvidenceLedger(),
     permittedTools: null,
     route: TURN_ROUTES.UNDECIDED,
-    locale: replyLocale(clarification?.question ? `${clarification.question} ${currentUser?.content || ''}` : currentUser?.content),
-    userText,
+    // Yanıt dili modelin bildirimidir; bildirilene kadar varsayılan Türkçedir.
+    locale: 'tr',
+    request: null,
+    declarationsLeft: DECLARATION_ROUNDS,
     containment: createToolScope({ today: context.today, userText, allowedTextFields, clarification }),
     // Çalışan döküm ve Derin düşünmeye devredilecek temiz döküm (düzeltme notları olmadan).
     transcript: [...messages],
@@ -331,6 +386,8 @@ async function failTurn(turn, onText) {
 function escalation(turn, reason, { error = null } = {}) {
   turn.escalated = true;
   turn.transcript = [...turn.baseline];
+  // Veri okunmadıysa Derin düşünme kendi bildirimini verebilir.
+  if (!turn.toolsAttempted) turn.declarationsLeft = DECLARATION_ROUNDS;
   if (turn.ledger.ids().length) instruct(turn, EVIDENCE_READY_NOTE);
   return {
     outcome: 'escalate',
@@ -411,12 +468,25 @@ export async function runGroundedTurn(session, {
     }
     const declaration = parseEvidenceResponse(result.text);
     const declaredRoute = parseTurnRoute(declaration);
-    // Veri okunmadan önce bildirilen dönem güvenilir niyettir (ilk araç turundan önce).
-    if (!turn.toolsAttempted && declaredRoute === TURN_ROUTES.ROTA) containment.declare(parseTurnWindow(declaration));
-    if (turn.route === TURN_ROUTES.UNDECIDED && declaredRoute && !result.toolCalls.length) {
+    // Bildirim yalnızca veri okunmadan önce kabul edilir; sonrasında istek değişmez.
+    const declared = !turn.toolsAttempted && declaredRoute ? acceptDeclaration(turn, declaration, declaredRoute) : null;
+    if (declared && !result.toolCalls.length && turn.declarationsLeft > 0) {
+      turn.declarationsLeft -= 1;
       turn.route = declaredRoute;
-      instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
+      if (declared.ok) instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
+      else instruct(turn, declarationRepair(declared.details), { repair: true });
       continue;
+    }
+    if (result.toolCalls.length && canCallTools && (declared ? !declared.ok : !turn.request)) {
+      // Geçerli istek bildirimi olmadan araç çalışmaz: veri okunmadan önce bildirim düzeltilir.
+      if (turn.declarationsLeft > 0) {
+        turn.declarationsLeft -= 1;
+        turn.route = TURN_ROUTES.ROTA;
+        instruct(turn, declarationRepair(declared?.details || ['$.request:required']), { repair: true });
+        continue;
+      }
+      if (canEscalate()) return escalation(turn, 'REQUEST_DECLARATION');
+      return failTurn(turn, onText);
     }
     if (result.toolCalls.length && canCallTools) {
       turn.toolsAttempted = true;
@@ -467,7 +537,10 @@ export async function runGroundedTurn(session, {
       toolFailureCodes: turn.toolFailureCodes,
       route: turn.route,
       locale,
-      userText: turn.userText
+      request: turn.request,
+      entries: ledger.requestEntries(),
+      selection: containment.boundSelection(),
+      today: context.today
     });
     if (verdict.ok) {
       const cited = ledger.summaries(verdict.citedIds);
@@ -495,10 +568,11 @@ export async function runGroundedTurn(session, {
     if (turn.repairsLeft > 0) {
       turn.repairsLeft -= 1;
       turn.repaired = true;
-      instruct(turn, groundingRepairInstruction(verdict.issues), { repair: true });
-      // Kanıt varken düzeltme yalnızca yeniden yazımdır; kanıt yoksa model
-      // gereken aracı çağırabilir (araç turu sınırı sürer).
-      allowTools = ledger.ids().length === 0;
+      const hint = turn.request && verdict.kind === 'grounded' ? requestRepairHint(turn.request, ledger.requestEntries()) : '';
+      instruct(turn, groundingRepairInstruction(verdict.issues, hint), { repair: true });
+      // Kanıt varken düzeltme yeniden seçimdir; kanıt yoksa ya da bildirilen
+      // ölçü/nüfus eldeki kanıtta yoksa model gereken aracı çağırabilir (araç turu sınırı sürer).
+      allowTools = ledger.ids().length === 0 || verdict.issues.some((issue) => EVIDENCE_GAP_CODES.has(issue?.code));
       continue;
     }
 

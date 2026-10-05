@@ -10,10 +10,10 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { ADMIN, AYSE, NOW, PROJECTS, TASKS, WBS, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { ACCESS_REASONS, deriveEffectiveAccess } = await import('../src/server/authorization/authorization.js');
-const { buildRotaScope } = await import('../src/server/ai/tools/rota/rotaScope.js');
+const { buildRotaScope, projectAccess } = await import('../src/server/ai/tools/rota/rotaScope.js');
 const { authorizationFingerprint } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
@@ -26,12 +26,15 @@ const ACTIVE = [PROJECTS.FULL, PROJECTS.READ, PROJECTS.PARTIAL, PROJECTS.HIDDEN,
 test('system administrator authorization uses a predicate without per-project access entries', () => {
   const effective = deriveEffectiveAccess({ isSystemAdmin: true, fullProjectIds: ACTIVE.map((id) => id.toUpperCase()) });
   assert.equal(effective.access.size, 0);
-  for (const entry of effective.access.values()) {
-    assert.equal(entry.accessLevel, 'FULL');
-    assert.deepEqual(entry.reasons, [ACCESS_REASONS.SYSTEM_ADMIN]);
-  }
   assert.deepEqual([...effective.fullProjectIds].sort(), [...ACTIVE].sort());
   assert.equal(effective.partialTaskIds.size, 0);
+  // Proje başına kayıt olmadan da her etkin proje FULL ve sistem yöneticisi nedeniyle açıklanır.
+  const scope = buildRotaScope({ sicil: ADMIN, isSystemAdmin: true, effective });
+  for (const projectId of ACTIVE) {
+    const access = projectAccess(scope, projectId);
+    assert.equal(access.accessLevel, 'FULL');
+    assert.deepEqual(access.reasons, [ACCESS_REASONS.SYSTEM_ADMIN]);
+  }
 });
 
 test('administrator scope does not copy a large project enumeration into its access map', () => {
@@ -81,7 +84,8 @@ test('an archived or nonexistent project is indistinguishable from an unauthoriz
 test('administrator project evidence is dropped when the project is archived before final delivery', async (t) => {
   const stack = stackFor(t);
   const steps = [
-    { text: '', toolCalls: [{ id: 'call', name: 'rota_project_detail', arguments: JSON.stringify({ projectId: PROJECTS.HIDDEN }) }] },
+    { text: declared({ operation: 'value', metrics: ['project.name'], entities: [{ type: 'project', id: PROJECTS.HIDDEN }] }),
+      toolCalls: [{ id: 'call', name: 'rota_project_detail', arguments: JSON.stringify({ projectId: PROJECTS.HIDDEN }) }] },
     (input) => {
       const result = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
       stack.db.projects.find((project) => project.ProjectId === PROJECTS.HIDDEN).IsActive = 0;

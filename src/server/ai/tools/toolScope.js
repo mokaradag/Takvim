@@ -13,6 +13,39 @@ const BROAD_FOLLOW_UPS = Object.freeze({
   rota_data_quality: ['rota_task_search', 'rota_task_analytics'],
   rota_portfolio_summary: ['rota_task_analytics']
 });
+/**
+ * Takip çağrısına açık, sunucunun döndürdüğü görev satırı kimlikleri. Toplu
+ * grup anahtarları ve aday listeleri kimlik değildir.
+ */
+const FOLLOW_UP_TASK_PATHS = Object.freeze({
+  rota_task_search: ['tasks.*.taskId'],
+  rota_dependency_inspect: ['task.taskId', 'predecessors.*.taskId', 'successors.*.taskId'],
+  rota_recurrence_inspect: ['series.templateTaskId', 'series.next.*.taskId', 'series.lastCompleted.taskId',
+    'series.*.templateTaskId', 'series.*.next.*.taskId', 'series.*.lastCompleted.taskId'],
+  rota_activity_search: ['items.*.task.taskId'],
+  rota_schedule_requests: ['items.*.task.taskId'],
+  rota_assignment_requests: ['items.*.task.taskId'],
+  rota_outlook_status: ['task.taskId', 'items.*.task.taskId'],
+  rota_notifications: ['scheduleRequests.latest.*.taskId', 'assignmentCoordination.latest.*.taskId', 'taskEvents.latest.*.taskId']
+});
+
+export function followUpTaskPaths(name) {
+  return FOLLOW_UP_TASK_PATHS[name] || [];
+}
+
+function valuesAt(value, parts) {
+  if (!parts.length) return [value];
+  if (value == null || typeof value !== 'object') return [];
+  const [head, ...rest] = parts;
+  if (head === '*') return Array.isArray(value) ? value.flatMap((item) => valuesAt(item, rest)) : [];
+  return Array.isArray(value) ? [] : valuesAt(value[head], rest);
+}
+
+/** Kimliksiz kök, aracın erişebildiği en geniş nüfus mu? Kaynağa göre daraltılmış portföy değildir. */
+function broadRoot(name, normalized) {
+  if (normalized.projectId || normalized.taskId || normalized.personSicil || normalized.wbsId) return false;
+  return name !== 'rota_portfolio_summary' || normalized.source === 'all';
+}
 /** Kök değeri bu olduğunda alan en geniş nüfustur; daha dar her değer içerilir. */
 const WIDEST = Object.freeze({ scope: 'visible', includeEmpty: true, tab: 'all', source: 'all', assignee: 'any' });
 const WINDOW_TOOLS = new Set(['rota_activity_search', 'rota_calendar_inspect']);
@@ -24,7 +57,7 @@ export function containmentText(value) {
   return foldText(value).replace(/ı/g, 'i').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
-function populationArguments(name, args, today) {
+export function populationArguments(name, args, today) {
   if (TASK_POPULATION_TOOLS.has(name)) return normalizeTaskFilters(args);
   if (name === 'rota_activity_search') {
     const period = args.period || (args.dateFrom ? 'custom' : 'today');
@@ -71,7 +104,7 @@ function windowTrusted(name, normalized, windows, today) {
 }
 
 /** Sonuçtaki kimlikler; kısmi ve belirsiz aramanın adayları ayrı tutulur. */
-function resultIdentities(name, data, userText) {
+function resultIdentities(name, data) {
   if (!data || typeof data !== 'object') return [];
   if (name === 'rota_project_search') return data.resolution === 'unique' && data.resolvedProject
     ? [{ population: 'projects', id: data.resolvedProject.projectId }] : [];
@@ -79,13 +112,11 @@ function resultIdentities(name, data, userText) {
     ? [{ population: 'people', id: data.resolvedPerson.sicil }] : [];
   if (name === 'rota_task_search' && data.titleResolution) return data.titleResolution === 'unique' && data.resolvedTask
     ? [{ population: 'tasks', id: data.resolvedTask.taskId }] : [];
-  const taskRows = name === 'rota_task_search' ? data.tasks
-    : name === 'rota_dependency_inspect' ? [...(data.predecessors || []), ...(data.successors || [])]
-      : name === 'rota_recurrence_inspect' ? [data.series, ...(Array.isArray(data.series) ? data.series : [])].flatMap((item) => item?.next || []) : [];
-  const identities = (name === 'rota_task_search' && /\b(ilk|first)\b/.test(containmentText(userText)) ? (taskRows || []).slice(0, 1) : taskRows || []).map((row) => ({ population: 'tasks', id: row.taskId }));
+  const identities = followUpTaskPaths(name).flatMap((path) => valuesAt(data, path.split('.')))
+    .map((id) => ({ population: 'tasks', id }));
   if (name === 'rota_wbs_inspect') identities.push(...(data.nodes || []).map((row) => ({ population: 'wbs', id: row.wbsId })));
   if (name === 'rota_baseline_compare') identities.push(...(data.availableBaselines || []).map((row) => ({ population: 'baselines', id: row.baselineId })));
-  return identities.filter((row) => row.id != null);
+  return identities.filter((row) => typeof row.id === 'string' || typeof row.id === 'number');
 }
 
 function referenceIdentity(reference) {
@@ -136,6 +167,12 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
   }
 
   return Object.freeze({
+    textTrusted,
+    identityTrusted,
+    /** Önceki açıklamada kullanıcının numarasıyla seçtiği ve sunucunun bağladığı aday. */
+    boundSelection() {
+      return bound ? { ...bound } : null;
+    },
     /**
      * Veri okunmadan önce bildirilen nüfus (ör. dönem). Yalnızca ilk araç
      * turundan önce kabul edilir.
@@ -169,13 +206,13 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
           if (WINDOW_TOOLS.has(call.name)) trustedWindows.push({ dateFrom: normalized.dateFrom, dateTo: normalized.dateTo });
           if (call.name === 'rota_portfolio_summary') broadProjects = true;
           if (args.projectId || ['rota_project_search', 'rota_portfolio_summary'].includes(call.name)) projectScope = true;
-          if (!args.projectId && !args.taskId && !args.personSicil && !args.wbsId) broadRoots.add(call.name);
+          if (broadRoot(call.name, normalized)) broadRoots.add(call.name);
         }
         // Belirsiz ya da kısmi aramanın adayları kimlik olarak yakalanmaz; kullanıcıya sorulur.
         for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
           if (args[key] != null) ids[population].add(String(args[key]));
         }
-        for (const { population, id } of resultIdentities(call.name, body.data, userText)) ids[population].add(String(id));
+        for (const { population, id } of resultIdentities(call.name, body.data)) ids[population].add(String(id));
       }
       established = true;
     },

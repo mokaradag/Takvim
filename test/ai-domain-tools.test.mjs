@@ -622,6 +622,60 @@ test('bildirimler yalnızca okunur: okundu/temizlendi işareti değişmez', asyn
   assert.equal(outsider.result.totalCount, 0, 'katılımcı olmayan talebi göremez');
 });
 
+test('an unreadable notification source keeps composite counters unknown instead of counting it as zero', async (t) => {
+  const stack = stackFor(t, {
+    taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, Status: 'PENDING', CreatedAt: '2026-09-28T08:00:00Z' }]
+  });
+  const missing = Object.assign(new Error("Invalid object name 'dbo.MR_TaskNotifications'."), { number: 208 });
+  const released = Promise.reject(missing);
+  released.catch(() => {});
+  stack.db.queryBarrier = { match: (sql) => sql.includes('#TaskNotificationUnreadProbe'), entered: 0, released };
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_notifications');
+  assert.equal(result.ok, true, JSON.stringify(result.error));
+  assert.equal(stack.db.queryBarrier.entered, 1);
+  assert.equal(result.data.unreadCount, null);
+  assert.equal(result.data.actionRequiredCount, null);
+  assert.equal(result.data.scheduleRequests.awaitingYourDecision, 1, 'the readable source keeps its own exact counter');
+  assert.equal(result.data.assignmentCoordination, null);
+  assert.deepEqual(ledger.summaries()[0].highlights.map((item) => item.value), ['belirlenemedi', 'belirlenemedi']);
+});
+
+test('request count highlights name the selected tab when it narrows the counted population', async (t) => {
+  const stack = stackFor(t, {
+    taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, Status: 'PENDING', CreatedAt: '2026-09-28T08:00:00Z' }],
+    taskAssignmentCoordinations: [{ TaskId: TASKS.LITERAL, RequesterSicil: AYSE, RequestedAssigneeSicil: MEHMET, Mode: 'REQUEST', Status: 'PENDING', CreatedAt: '2026-09-27T08:00:00Z' }]
+  });
+  for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
+    const pending = await callRotaTool(stack, AYSE, tool, { tab: 'pending' });
+    assert.ok(pending.ledger.summaries()[0].highlights.every((item) => item.label.endsWith('(seçili sekmede)')), tool);
+    const all = await callRotaTool(stack, AYSE, tool, { tab: 'all' });
+    assert.ok(all.ledger.summaries()[0].highlights.every((item) => !item.label.includes('seçili sekmede')), tool);
+  }
+  const fs = await import('node:fs/promises');
+  for (const file of ['src/server/schedule-change/scheduleRequestQueries.js', 'src/server/assignment/assignmentCoordinationQueries.js']) {
+    const source = await fs.readFile(new URL(`../${file}`, import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /IF @total > @evidenceSnapshotLimit THROW/, `${file}: the paged branch has no unreachable evidence limit`);
+  }
+});
+
+test('a one-character non-numeric person search is a correctable argument error before any SQL work', async (t) => {
+  const stack = stackFor(t);
+  const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
+  const outcomes = () => ({ ...aiTelemetrySnapshot().tools.byOutcome });
+  const before = outcomes();
+  stack.db.queryBarrier = { match: (sql) => sql.includes('@sicilQuery'), entered: 0, released: Promise.resolve() };
+  const { result } = await callRotaTool(stack, AYSE, 'rota_person_search', { text: 'A' });
+  assert.equal(result.error.code, 'INVALID_ARGUMENTS');
+  assert.deepEqual(result.error.details, ['$.text:minLength']);
+  assert.equal(stack.db.queryBarrier.entered, 0, 'the directory is not queried');
+  const after = outcomes();
+  assert.equal((after.INVALID_ARGUMENTS || 0) - (before.INVALID_ARGUMENTS || 0), 1);
+  assert.equal((after.INTERNAL || 0) - (before.INTERNAL || 0), 0);
+  const sicil = await callRotaTool(stack, AYSE, 'rota_person_search', { text: '7' });
+  assert.equal(sicil.result.ok, true, 'a one-digit Sicil is still a valid query');
+  assert.equal(stack.db.queryBarrier.entered, 1);
+});
+
 test('hareket geçmişi görünür görevlerle sınırlıdır; ekip kapsamı yöneticiye açıktır; görev süzgeci çalışır', async (t) => {
   const at = '2026-09-29T08:00:00.000Z';
   const event = (id, taskId, projectId, actor, after) => ({
@@ -914,41 +968,60 @@ test('a cumulative-budget rejection cannot create an undisclosed ledger entry, i
   assert.deepEqual(exact.ledger.ids(), ['R1']);
 });
 
-test('hidden assignees never become unassigned and additional hidden identities do not affect metrics', async (t) => {
+test('hidden assignments are indistinguishable from absent ones in every filter, group and quality count', async (t) => {
   const stack = stackFor(t);
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({
     sicil: AYSE, isExecutive: true,
     effective: { access: new Map([[PROJECTS.TEAM, { accessLevel: 'PARTIAL', reasons: ['EXECUTIVE_SCOPE'] }]]),
       partialTaskIds: new Set([TASKS.TEAM_VISIBLE]) }
   }) });
-  const executor = createToolExecutor({ context, ledger: createEvidenceLedger(), signal: new AbortController().signal });
   stack.db.taskAssignees = [];
-  const read = async () => (await executor.runRound([
+  const read = async () => (await createToolExecutor({ context, ledger: createEvidenceLedger(), signal: new AbortController().signal }).runRound([
     { id: 'search', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.TEAM, assignee: 'unassigned' }) },
     { id: 'analytics', name: 'rota_task_analytics', arguments: JSON.stringify({ projectId: PROJECTS.TEAM, assignee: 'unassigned' }) },
-    { id: 'quality', name: 'rota_data_quality', arguments: JSON.stringify({ projectId: PROJECTS.TEAM }) }
+    { id: 'quality', name: 'rota_data_quality', arguments: JSON.stringify({ projectId: PROJECTS.TEAM }) },
+    { id: 'grouped', name: 'rota_task_analytics', arguments: JSON.stringify({ projectId: PROJECTS.TEAM, groupBy: 'assignee' }) },
+    { id: 'listed', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.TEAM }) }
   ])).map((message) => JSON.parse(message.content));
-  const before = await read();
+  const absent = await read();
   stack.db.taskAssignees.push({ TaskId: TASKS.TEAM_VISIBLE, Sicil: MEHMET });
-  const after = await read();
-  assert.equal(before[0].totalCount, 1);
-  assert.equal(after[0].totalCount, 0);
-  assert.equal(before[2].data.checks.find((check) => check.id === 'assignee').count, 1);
-  assert.equal(after[2].data.checks.find((check) => check.id === 'assignee').count, 0);
-  before.forEach((result, index) => {
-    assert.equal(result.ok, true);
-    assert.equal(after[index].ok, true);
-    assert.ok(!JSON.stringify(after[index].data).includes(String(MEHMET)));
-    assert.equal(after[index].data.checks?.find((check) => check.id === 'unresolvedAssignee').count || 0, 0);
+  const hidden = await read();
+  absent.forEach((result, index) => {
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(hidden[index].ok, true);
+    assert.deepEqual(hidden[index].data, result.data, `hidden assignment changed ${result.tool}`);
+    assert.deepEqual([hidden[index].totalCount, hidden[index].returnedCount], [result.totalCount, result.returnedCount]);
+    assert.ok(!JSON.stringify(hidden[index].data).includes(String(MEHMET)));
   });
-  assert.equal(after[1].data.totals.total, 0);
+  assert.equal(absent[0].totalCount, 0, 'a partial task without a disclosable assignment is not reported as unassigned');
+  assert.equal(absent[1].data.totals.total, 0);
+  assert.equal(absent[2].data.checks.find((check) => check.id === 'assignee').count, 0);
+  assert.deepEqual(absent[3].data.groups.map((group) => [group.key, group.count]), [['undisclosed', 1]]);
+  assert.equal(absent[4].data.tasks[0].assignment, 'undisclosed');
   stack.db.taskAssignees = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({ TaskId: TASKS.TEAM_VISIBLE, Sicil: index + 50000 }));
   const hiddenFanout = await read();
   hiddenFanout.forEach((result, index) => {
     assert.equal(result.ok, true);
-    assert.deepEqual(result.data, after[index].data);
+    assert.deepEqual(result.data, absent[index].data);
   });
   assert.match(toolQueries.AI_TOOL_TASK_FACTS_SQL, /COUNT\(CASE WHEN permitted.IdentityVisible = 1 THEN resolved.Sicil END\)/);
+  assert.doesNotMatch(toolQueries.AI_TOOL_TASK_FACTS_SQL, /AS HasAssignee/);
+  assert.match(toolQueries.AI_TOOL_TASK_FACTS_SQL, /@assigneeMode = 'unassigned' AND visible\.IdentityBase = 1/);
+});
+
+test('a disclosable assignment keeps its state while undisclosed and unassigned tasks share one neutral bucket', async (t) => {
+  const stack = stackFor(t);
+  const grouped = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee', limit: 25 });
+  assert.equal(grouped.result.ok, true);
+  const keys = grouped.result.data.groups.map((group) => group.key);
+  assert.ok(keys.includes('unassigned'), 'a full-view task without assignment is unassigned');
+  assert.equal(keys.includes('undisclosed'), false, 'every assignment of a full-view task is disclosable');
+  const counted = grouped.result.data.groups.reduce((sum, group) => sum + group.count, 0);
+  assert.ok(counted >= grouped.result.data.totals.total, 'no task disappears from the assignee grouping');
+  const detail = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.UNASSIGNED });
+  assert.equal(detail.result.data.task.assignment, 'unassigned');
+  const assigned = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.OVERDUE });
+  assert.equal(assigned.result.data.task.assignment, 'visible');
 });
 
 test('Outlook hidden membership never affects visible counts, completeness or evidence metadata', async (t) => {
@@ -981,7 +1054,8 @@ test('no baseline returns deterministically without staging an oversized task po
   const sql = toolQueries.AI_TOOL_BASELINE_SQL;
   assert.doesNotMatch(sql, /\bRowCount\b/);
   assert.ok(sql.indexOf('IF @selectedBaseline IS NOT NULL') < sql.indexOf('INSERT #AiScopeTasks'));
-  assert.match(toolQueries.AI_TOOL_PROJECT_SEARCH_SQL, /LEN\(@text\) = 0 AND @projectId IS NOT NULL/);
+  // Kimlik kümesiyle yeniden doğrulama boş metinle çalışır: CHARINDEX('') SQL Server'da 0 döner.
+  assert.match(toolQueries.AI_TOOL_PROJECT_SEARCH_SQL, /LEN\(@text\) = 0 AND \(@projectId IS NOT NULL OR LEN\(@projectIds\) > 0\)/);
 });
 
 test('project source and activity changes expose canonical types alongside display labels', async (t) => {

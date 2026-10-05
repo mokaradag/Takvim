@@ -84,10 +84,6 @@ function numberOrNull(value) {
 export function factFromRow(row) {
   const targetFinish = sqlDay(row.TargetFinish);
   const plannedFinish = sqlDay(row.PlannedFinish);
-  const assigneeCount = Math.max(0, Number(row.AssigneeCount) || 0);
-  const resolvedAssigneeCount = row.ResolvedAssigneeCount == null
-    ? assigneeCount
-    : Math.max(0, Number(row.ResolvedAssigneeCount) || 0);
   return {
     id: canonicalActualId(row.TaskId),
     projectId: canonicalActualId(row.ProjectId),
@@ -118,9 +114,8 @@ export function factFromRow(row) {
     identityBase: Boolean(row.IdentityBase),
     isCreator: Boolean(row.IsCreator),
     isOwnAssignee: Boolean(row.IsOwnAssignee),
-    hasAssignee: row.HasAssignee == null ? assigneeCount > 0 : Boolean(row.HasAssignee),
-    assigneeCount,
-    resolvedAssigneeCount
+    disclosedAssigneeCount: Math.max(0, Number(row.DisclosedAssigneeCount) || 0),
+    resolvedAssigneeCount: Math.max(0, Number(row.ResolvedAssigneeCount) || 0)
   };
 }
 
@@ -243,10 +238,13 @@ export function assigneeMatches(fact, filters, assignees, sicil) {
   }
 }
 
+/**
+ * Sorumluluk durumu yalnızca kullanıcıya açıklanabilen atamalardan türetilir:
+ * gizli atama görevi "sorumlusuz" yapmaz ve varlığı hiçbir sonuca yansımaz.
+ */
 export function assignmentState(fact) {
-  if (fact.hasAssignee === false || (fact.hasAssignee == null && fact.assigneeCount === 0)) return 'unassigned';
-  if (fact.resolvedAssigneeCount > 0) return 'visible';
-  return fact.identityBase ? 'unresolved' : 'hidden';
+  if (fact.disclosedAssigneeCount > 0) return fact.resolvedAssigneeCount > 0 ? 'visible' : 'unresolved';
+  return fact.identityBase ? 'unassigned' : 'undisclosed';
 }
 
 export function matchesTaskFilters(fact, filters, { today, assignees = new Map(), sicil = null }) {
@@ -369,7 +367,7 @@ export function assigneeView(fact, assignees) {
   const people = visible.map((person) => (person.identityVisible
     ? { name: person.name || 'Seçilen kişi', sicil: person.sicil }
     : { name: person.name, identityHidden: true }));
-  return { assignees: people };
+  return { assignees: people, assignment: assignmentState(fact) };
 }
 
 /* ── Toplamlar ─────────────────────────────────────────────── */

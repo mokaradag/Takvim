@@ -16,6 +16,7 @@ import test from 'node:test';
 import { setImmediate as immediate } from 'node:timers/promises';
 import { captureConsole, createAiStack, readSse, sendTurn, turnRequest, turnsRoute } from './helpers/aiStack.mjs';
 import { AYSE, MEHMET, NOW, PROJECTS, rotaToolSeed, TASKS } from './helpers/aiToolFixtures.mjs';
+import { declared } from './helpers/evidenceScenario.mjs';
 
 const { GROUNDING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
@@ -52,7 +53,8 @@ const factAnswer = (onCall = null) => ({ type: 'script', respond: (call) => {
   return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: [`${toolResultsOf(call)[0].evidenceId}:totalCount`] }) };
 } });
 const toolQueries = (stack) => (stack.db.aiToolLog || []).filter((entry) => entry.query === 'task-facts').length;
-const searchFull = { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
+const countFull = { operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }] };
+const searchFull = { type: 'tool-calls', preface: [declared(countFull)], calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
 const logLines = (lines, operation) => lines.filter((line) => line.includes(`"operation":"${operation}"`)).map((line) => JSON.parse(line.slice(line.indexOf('{'))));
 
 async function until(predicate, rounds = 2000) {
@@ -145,20 +147,38 @@ test('Deep thinking retries one empty completion inside its own session and neve
 test('a turn that ends without evidence because of NOT_FOUND, scope or SQL failure is not escalated', async (t) => {
   const reject = { type: 'answer', text: '{"kind":"rota","facts":["R9:totalCount"]}' };
   const cases = [
-    { name: 'not found', calls: [{ name: 'rota_outlook_status', arguments: { taskId: TASKS.HIDDEN } }], message: `Gizli görevin Outlook durumu nedir? ${TASKS.HIDDEN}`, code: 'NOT_FOUND' },
-    { name: 'scope', calls: [{ name: 'rota_task_search', arguments: { text: 'Başka bir konu' } }], message: 'Radar görevleri', code: 'UNSUPPORTED_SCOPE' },
-    { name: 'sql', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }], message: QUESTION, code: 'DATABASE_UNAVAILABLE', failing: 'task-facts' }
+    { name: 'not found', calls: [{ name: 'rota_outlook_status', arguments: { taskId: TASKS.HIDDEN } }], message: `Gizli görevin Outlook durumu nedir? ${TASKS.HIDDEN}`, code: 'NOT_FOUND',
+      request: { operation: 'value', metrics: ['subscriptions.active'], entities: [{ type: 'task', id: TASKS.HIDDEN }] } },
+    { name: 'scope', calls: [{ name: 'rota_task_search', arguments: { text: 'Başka bir konu' } }], message: 'Radar görevleri', code: 'UNSUPPORTED_SCOPE',
+      request: { operation: 'value', metrics: ['tasks.total'], filters: { text: 'Radar' } } },
+    { name: 'sql', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }], message: QUESTION, code: 'DATABASE_UNAVAILABLE', failing: 'task-facts', request: countFull }
   ];
   for (const item of cases) {
     const stack = stackFor(t);
     if (item.failing) stack.db.aiToolFailure = { [item.failing]: Object.assign(new Error('bağlantı yok'), { code: 'ESOCKET' }) };
-    stack.provider.enqueue({ type: 'tool-calls', calls: item.calls }, reject, reject, factAnswer());
+    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(item.request)], calls: item.calls }, reject, reject, factAnswer());
     const response = await sendTurn({ turnId: randomUUID(), message: item.message });
     assert.equal(toolResultsOf(stack.provider.calls[1])[0].error.code, item.code, item.name);
     assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD], `${item.name}: Derin düşünmeye devredilmez`);
     assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
     assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
   }
+});
+
+test('a Standard turn that never declares its request escalates once to Deep thinking before any data is read', async (t) => {
+  const stack = stackFor(t);
+  const undeclared = { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
+  let queriesBeforeDeep = null;
+  stack.provider.enqueue(undeclared, undeclared, undeclared, { type: 'script', respond: () => {
+    queriesBeforeDeep = toolQueries(stack);
+    return searchFull;
+  } }, factAnswer());
+  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP, DEEP]);
+  assert.equal(queriesBeforeDeep, 0, 'bildirimsiz araç çağrıları hiçbir SQL çalıştırmadı');
+  assert.doesNotMatch(stack.provider.calls[3].messages[0].content, /Araç çağrıları çalıştırılmadı/, 'Standart düzeltme notu devredilmez');
+  assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { REQUEST_DECLARATION: 1 }, byOutcome: { grounded: 1 } });
 });
 
 test('Deep mode and installations without a Deep tool profile keep the single bounded repair', async (t) => {

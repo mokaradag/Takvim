@@ -141,8 +141,7 @@ function factRow(db, scope, entry) {
     IdentityBase: entry.IdentityBase,
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
     IsOwnAssignee: assignees.some((row) => row.Sicil === scope.sicil) ? 1 : 0,
-    HasAssignee: assignees.length > 0 ? 1 : 0,
-    AssigneeCount: assignees.length,
+    DisclosedAssigneeCount: assignees.filter((row) => entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)).length,
     ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null && (entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil))).length
   };
 }
@@ -216,7 +215,7 @@ function taskFacts(db, params) {
     const assignments = assigneesOf(db, task.TaskId);
     switch (params.assigneeMode) {
       case 'me': return assignments.some((row) => row.Sicil === scope.sicil);
-      case 'unassigned': return assignments.length === 0;
+      case 'unassigned': return IdentityBase === 1 && assignments.length === 0;
       case 'person': return assignments.some((row) => row.Sicil === Number(params.personSicil)
         && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
       default: return true;

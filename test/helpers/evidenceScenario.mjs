@@ -12,3 +12,11 @@ export function claimFor(envelope, field, changes = {}) {
 export function evidenceReply(...claims) {
   return JSON.stringify({ kind: 'rota', claims });
 }
+
+/**
+ * Veri okunmadan önceki türlü istek bildirimi: modelin araç çağrısıyla aynı
+ * yanıttaki (ya da ayrı) metni. Sunucu cümleyi yorumlamaz; bu bildirimi doğrular.
+ */
+export function declared(request, { language = 'tr', window = null } = {}) {
+  return JSON.stringify({ kind: 'route', intent: 'rota', language, ...(window ? { window } : {}), request });
+}

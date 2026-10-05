@@ -10,7 +10,7 @@ export const METRIC_DEFINITIONS = Object.freeze({
     dueNext7Days: 'Tamamlanmamış ve termini bugün dahil yedi takvim günü içinde olan görev.',
     completionRatePercent: 'Tamamlanan görevlerin bütün görevlere oranı.'
   }),
-  assigneeGrouping: 'Yalnızca kimliği görünür sorumlular gruplanır; birden çok görünür sorumlusu olan görev her sorumluda ayrı sayılır.',
+  assigneeGrouping: 'Yalnızca kimliği görünür sorumlular gruplanır; birden çok görünür sorumlusu olan görev her sorumluda ayrı sayılır. Sorumlu bilgisi açıklanamayan görevler, atama olsun ya da olmasın, tek bir grupta sayılır.',
   completeTaskView: 'Tam görev görünümü yoksa projede yalnızca yetkili olduğunuz görevler sayılmıştır.',
   baseline: Object.freeze({
     varianceDays: 'Güncel planlanan bitiş ile baz plandaki planlanan bitiş arasındaki takvim günü farkı; pozitif değer kaymadır.',

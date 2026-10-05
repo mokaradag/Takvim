@@ -100,8 +100,10 @@ Tarayıcı ── POST /assistant/turns ──► assistantService.prepareAssist
 | `src/server/ai/tools/evidenceLedger.js` | Tur başına kanıt defteri ve kalıcılık satırları |
 | `src/server/ai/tools/rota/*` | 19 aracın işleyicileri, kapsam kuralları, sabit SQL ve tek SQL sahibi depo (`rotaToolStore.js`) |
 | `src/domain/ai/evidenceContract.js` | Sunucu ve tarayıcının ortak kanıt/atıf sözleşmesi (saf) |
-| `src/domain/ai/evidenceIntent.js` | Veri okunmadan seçilen açık tur yönlendirmesi; doğal dil anahtar sözcük sınırı değildir |
-| `src/domain/ai/claimableEvidence.js` | Araç başına kanonik iddia yolları ve anlam/provenans sözleşmesi |
+| `src/domain/ai/evidenceIntent.js` | Veri okunmadan bildirilen yönlendirmenin (dil, türlü istek, dönem) yapısal ayrıştırıcısı; doğal dili yorumlamaz |
+| `src/domain/ai/requestContract.js` | Türlü istek ile seçilen olguların belirlenimci uyumu: ölçü kapsamı, nüfus, varlık, liste ve sıralama bütünlüğü (saf) |
+| `src/server/ai/tools/requestDeclaration.js` | İstek şeması (araçlarla aynı süzgeç sözlüğü ve kapalı ölçü sözlüğü), güven kaynağı denetimi, varlık bağlama ve kanıtın nüfus dizini |
+| `src/domain/ai/claimableEvidence.js` | Araç başına kanonik iddia yolları; her yolun açık ölçüsü, ölçme birimi ve özellik/toplam sınıfı |
 | `src/server/ai/tools/toolScope.js` | İlk başarılı çağrının süzgeçleri, güvenilir varlık kimlikleri ve metin izdüşümüyle takip sınırı |
 | `src/server/ai/tools/toolResultPolicy.js`, `toolResultText.js` | Araç başına sayılabilir koleksiyonlar, kısaltma ve metin tamlığı |
 | `src/domain/ai/evidenceFacts.js`, `evidenceVerification.js` | Türlü alan olguları, kayıt/alan/değer doğrulaması ve sunucuda güvenli yanıt çizimi |
@@ -177,8 +179,15 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
 - Eş sorumluların kimliği anlık görüntüyle aynı kuralla gösterilir: kısmi
   görünümde başkasının kimliği yalnızca kullanıcı görevin kendi sorumlusuysa
   (ya da kişi yönetim kapsamındaysa) açılır; aksi hâlde "kimliği gösterilemeyen
-  sorumlu" olarak temsil edilir, kişi olarak atfedilmez. Atama varlığı ile
-  görünür kişi sayısı ayrıdır: gizli atama hiçbir araçta sorumlusuz sayılmaz.
+  sorumlu" olarak temsil edilir, kişi olarak atfedilmez. Atama durumu
+  yalnızca kullanıcıya açıklanabilen atamalardan türetilir: `visible`
+  (görünür sorumlu), `unresolved` (açıklanabilen ama dizinde çözülemeyen
+  atama), `unassigned` (kimlik tabanı açık — FULL/READ ya da oluşturan —
+  olup hiç ataması olmayan görev) ve `undisclosed` (kimlik tabanı kapalı
+  görevde açıklanabilen atama yok). Kimlik tabanı kapalı görevde gizli atama
+  ile hiç atama olmaması ayırt edilemez: ikisi de nötr `undisclosed`
+  durumundadır. "Sorumlusuz" süzgeci, sorumlu grubu, iş yükü ve kalite
+  sayımları gizli atamanın varlığını ne ekleyerek ne düşürerek yansıtır.
   Dizinde çözülemeyen atama ayrı kalite denetimidir.
 - Bağımlılıklar ve baz planlar yalnızca projede **FULL** erişimde açıktır;
   diğer düzeylerde araç `UNSUPPORTED_SCOPE` döner.
@@ -222,19 +231,71 @@ kimliğe dönüşür. Önceki ilgisiz konuşma, modelin ürettiği kimlik, göre
 künyesindeki proje/eş sorumlu ve bildirim metni yeni nüfus açamaz. Sonraki
 arama önceki metni koruyarak daralır; kullanıcıdaki başka bir ifade önceki
 aramayı değiştiremez. Görev listesindeki kimlikler aynı dondurulmuş nüfustaki
-görev ayrıntılarına izin verir, üst projenin bütününü açmaz.
+görev ayrıntılarına izin verir, üst projenin bütününü açmaz. Takip ayrıntısına
+yalnızca sonucun kayıtlı takip yollarındaki görev kimlikleri açılır (görev
+listesi satırı, bağımlılık, tekrar serisi ve son tamamlanan yineleme, hareket,
+talep, Outlook ve bildirim satırı); toplu grup anahtarları ve aday listeleri
+kimlik değildir. Portföy özeti yalnızca `source: all` iken bütün görünür görev
+nüfusuna geçiş kökü olur; kaynağa göre daraltılmış portföy, kaynak süzgeci
+olmayan görev analitiğini açamaz.
 
-Olgu seçimi yalnızca geçerli yol ve değer kontrolü değildir. Sunucu güncel
-istekten ölçü ve açık kimlik kısıtlarını çıkarır; başka ölçü/varlığın doğru
-olgusu isteği doğrulayamaz. Sayımın birimi (görev/proje/kişi/gün) de korunur;
-alt toplam veya sınırlı önizleme, toplam nüfus sorusunu doğrulayamaz.
-`returnedCount` yalnız döndürülen öğe sayısı açıkça istendiğinde sayımın
-yerine geçer. Tam liste isteği bütün dönen satırları kapsar;
-numara veya kesin adla seçilen satır başka doğru satırla değiştirilemez. Açık özetler ilgili nüfusu özetleyebilir. Tanınmayan
-ölçü isteği güvenli düzeltme/açıklama gerektirir. Satır kimliği ve proje/kişi/
-WBS/baz plan/arama/kaynak/tarih seçicileri modelin alan seçiminden bağımsız
-korunur; Sicil ve UUID grup anahtarları kullanıcıya iddia edilebilir alan
-olarak açılmaz. Tarih biçimi alanın türünden gelir, metnin görünümünden gelmez.
+**Türlü istek sözleşmesi.** Sunucu kullanıcının cümlesinden ölçü, varlık,
+dönem ya da sıralama çıkarmaz. Model veri okumadan önce isteği türlü olarak
+bildirir (ilk araç çağrılarıyla aynı yanıtta ya da ayrı):
+
+```json
+{"kind":"route","intent":"rota","language":"tr","request":{"operation":"value","metrics":["tasks.open"],"entities":[{"type":"project","text":"Radar"}],"filters":{"assignee":"me"}}}
+```
+
+- `operation`: `value` (değerler, toplamlar ya da bir kaydın alanları), `list`
+  (listenin bütün satırları) ya da `rank` (`rank: {metric, order, limit}`;
+  yalnızca sayı ve tarih gibi sıralanabilir ölçüler).
+- `metrics`: `claimableEvidence.js` kayıt defterinin kapalı ölçü sözlüğü. Her
+  iddia edilebilir yolun tek ölçüsü, açık ölçme birimi (`tasks`, `days`,
+  `hours`, `percent`, `date` …) ve özellik/toplam sınıfı vardır; birim alan
+  adından tahmin edilmez. Planlanan/gerçekleşen saat ve tarih, termin/takvim
+  günü/gecikme, ilerleme/tamamlanma oranı ayrı ölçülerdir.
+- `entities`: `project|task|person|wbs|baseline`; `text` kullanıcının
+  iletisinde geçen ifade, `id` kullanıcının yazdığı ya da sunucunun açıklama
+  seçiminde bağladığı kimliktir.
+- `filters`: araç şemalarıyla aynı sözlük (görev durumu, öncelik, termin,
+  tarih alanı/aralığı, `period`, `assignee: me|unassigned`, oluşturan,
+  kilometre taşı, arama metni; talep sekmesi/durumu; portföy kaynağı; hareket
+  kapsamı/türü).
+
+Geçerli bildirim olmadan hiçbir araç çalışmaz; bildirim düzeltmesi en fazla iki
+model turudur, sonrasında Standart kipte Derin düşünme devri ya da sabit
+güvenli ileti gelir. Bildirim veri okunduktan sonra değişmez; bu yüzden araç
+sonucundaki bir yönerge sorunun anlamını değiştiremez. Doğrulama hatası
+modele yalnızca şema yolları ve kayıt defterinden üretilen yol ipuçlarıyla
+bildirilir; modelin ya da verinin metni yönergeye taşınmaz.
+
+Son seçim isteğe belirlenimci olarak bağlanır (`requestContract.js`):
+
+- Bildirilen her ölçü en az bir olguyla temsil edilir (birden çok ölçü tek
+  olguyla karşılanamaz); bildirilmeyen ölçü yanıt olamaz, genel toplam istenen
+  ölçünün yerine geçmez. Ad ve etiket alanları yalnızca bağlamdır.
+- Toplam ve sayımlar bildirilen koşullarla birebir aynı nüfustan gelir. Nüfus,
+  kanıtın yürütülen bağımsız değişkenlerinden sunucuda hesaplanır; aracın
+  ifade edemediği bir koşul uyumsuzluktur. Grup satırı, anahtarı bildirilen
+  koşul ya da varlık olduğunda kabul edilir. Arama metni de bir nüfustur.
+- Adla bildirilen varlık yalnızca bu turdaki tek kesin sunucu çözümüne ya da
+  sunucunun bağladığı açıklama seçimine bağlanır; kısmi ya da belirsiz eşleşme
+  açıklama ister. Araç çağrısındaki her proje/görev/kişi/WBS/baz plan seçicisi
+  bildirilen bir varlık olmalı, her varlık kendi ölçü olgusuyla karşılanmalıdır.
+- Değer isteği çok satırlı koleksiyondan yalnızca bildirilen varlığın satırını
+  ya da bildirilen koşulla adlandırılan grubu seçebilir. Varlığın kendi
+  özelliği (ör. görevin durumu) arama koşulundan bağımsızdır; satırdaki
+  toplamlar (ör. kişinin açık görev sayısı) değildir.
+- `list` her satır koleksiyonunun dönen bütün satırlarını kapsar; satır
+  koleksiyonları kayıt defterinde açıkça tanımlıdır. `rank`, sunucunun kanıt
+  değerlerinden kurduğu sıralamanın başını sınırdaki eşitlerle birlikte seçer;
+  kesilmiş koleksiyonda yalnızca aynı ölçüyle sunucuda sıralanmış ilk sayfa
+  kabul edilir.
+
+Satır kimliği ve proje/kişi/WBS/baz plan/arama/kaynak/tarih seçicileri modelin
+alan seçiminden bağımsız korunur; Sicil ve UUID grup anahtarları kullanıcıya
+iddia edilebilir alan olarak açılmaz. Tarih biçimi alanın türünden gelir, metnin görünümünden gelmez.
 Baz plan yokken karşılaştırma ölçüleri bilinmiyor (`null`), anlamlı sıfır değil;
 sınır aşan sayımlar `truncated` ve eksik olarak temsil edilir.
 
@@ -357,10 +418,10 @@ sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcıs
 
 | Durum | Kural |
 | --- | --- |
-| Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general"}` / `rota` bildirir veya ilk araçları seçer. Rota bildirimi isteğe bağlı `window` (`period`/`dateFrom`/`dateTo`) taşıyabilir; kimlik çözümünden sonraki hareket/takvim penceresi yalnızca bu bildirilen ya da varsayılan pencere içinde kalabilir |
+| Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general","language":"tr"}` ya da türlü istekli `rota` bildirimi verir (ilk araç çağrılarıyla aynı yanıtta olabilir). Bildirimdeki dönem (`filters.period`/`dateFrom`/`dateTo`, eski `window` de kabul edilir) kimlik çözümünden sonraki hareket/takvim penceresinin üst sınırıdır |
 | Genel önerisi | Modelin ayrı rota ya da doğrudan `general` önerisi veri kipinde kanıt denetimini kapatmaz. Serbest metin gösterilmez; sunucu Genel sohbet seçimini isteyen güvenli açıklama verir. Kullanıcının `source: general` seçimi ayrı, veri okumayan akış ve `general` bitişidir. |
-| Rota | Araç çağrısı yönlendirmeyi `rota` yapar; geçerli iddialar sunucuda çizilir |
-| Aday seçimi | Kimlik yalnızca kesin eşleşmedir: tek Sicil ya da tam ad / tam başlık. Belirsiz ya da yalnızca kısmi bir arama (proje, kişi, başlıkla görev) sunucunun tuttuğu en fazla 10 adayı döndürür. Model yalnızca `{"kind":"clarification","evidence":"R1"}` bildirir; adayların tamamını, sırasını ve soruyu sunucu çizer ve aday kimliklerini yanıtla birlikte (`clarificationContext`) saklar. Sonraki turda kullanıcının "2", "#2", "ikincisi", "sonuncusu" gibi seçimi sunucuda o adayın kimliğine bağlanır; seçilmeyen adaylar o turda kimlik olamaz, ad eşleşmesi yetki kanıtı değildir |
+| Rota | Yalnızca kabul edilmiş türlü istekle araç çalışır; bildirimsiz ya da geçersiz bildirimli çağrı yürütülmez, sınırlı bildirim düzeltmesi istenir. Geçerli olgu seçimi isteğe uyduğunda sunucuda çizilir |
+| Aday seçimi | Kimlik yalnızca kesin eşleşmedir: tek Sicil ya da tam ad / tam başlık. Belirsiz ya da yalnızca kısmi bir arama (proje, kişi, başlıkla görev) sunucunun tuttuğu en fazla 10 adayı döndürür. Model yalnızca `{"kind":"clarification","evidence":"R1"}` bildirir; adayların tamamını, sırasını ve soruyu sunucu çizer ve aday kimliklerini yanıtla birlikte (`clarificationContext`) saklar. Sonraki turda yanıtın tamamı tek bir aday numarasıysa ("2", "2.", "#2", "(2)") seçim sunucuda o adayın kimliğine bağlanır. Sözcükle anlatılan seçim ("ikincisi", "evet") sunucuda yorumlanmaz; model yeniden sorar ya da kullanıcının yazdığı adla arar. Seçilmeyen adaylar o turda kimlik olamaz, ad eşleşmesi yetki kanıtı değildir |
 | Genel sohbete yönlendirme | Modelin `general` önerisi `general_redirect` sonucu olarak ayrı sayılır (bitiş `clarification`); aday seçimi sayacına karışmaz |
 | Bulunamadı | Hiç başarılı kanıt yok ve son araç kümesinin hataları yalnızca `NOT_FOUND` ise `kind: not_found` / güvenli eski ileti; sabit, varlık/yetki ayrımı yapmayan yanıt ve `not_found` bitişi |
 | Veri hizmeti kullanılamıyor | Kullanılabilir kanıt yokken `kind: unavailable`; sabit hizmet iletisi, ayrı sonuç sayacı |
@@ -372,10 +433,29 @@ Model her turun niyetini yorumlayabilir; kaynak seçiminin güvenlik sonucunu
 sunucu belirler. Eski asistan düzyazısı güvenilir talimat olarak tekrar
 oynatılmaz; önceki kullanıcı soruları ve güncel yetkiyle doğrulanan minimal
 aday sıra numaraları ve kimlikleri kısa takipler için bağlam sağlar; serbest aday adları/kodları ve birim metinleri modele yeniden verilmez. Aday seçimi metni
-yerine sunucunun yapılandırılmış `clarificationContext` referansları kullanılır. Türkçe/İngilizce ifade veya büyük-küçük
-harf regexleri bu sınırı belirlemez. Doğal dil sınıflandırması modelin
-olasılıksal yorumudur; sunucu her ifadenin doğru sınıflandırılacağını iddia
-etmez. Rota verisini edinme, kapsam ve son olgu doğrulaması sunucuya aittir.
+yerine sunucunun yapılandırılmış `clarificationContext` referansları kullanılır.
+
+**Aşama 3 / Aşama 4 sınırı.** Aşama 3, Türkçe ya da İngilizce kullanıcı
+niyetini yorumlamak için regex ya da anahtar sözcük tabanlı doğal dil işleme
+kullanmaz. Doğal dildeki anlamsal çıkarım Aşama 4'te geliştirilecektir. Aşama
+3'ün belirlenimci mantığı güvenilir yapısal doğrulama, yetki, kanıt
+bütünlüğü, ölçü hesabı, sınırlar ve benzeri nesnel değişmezlerle sınırlıdır.
+
+> Phase 3 does not use regex/keyword NLP to interpret Turkish or English user
+> intent. Natural-language semantic reasoning will be improved in Phase 4.
+> Phase 3 deterministic logic is limited to trusted structural validation,
+> authorization, evidence integrity, metric computation, bounds and other
+> objective invariants.
+
+Sorunun türlü isteğe çevrilmesi modelin olasılıksal yorumudur; sunucu her
+ifadenin doğru çevrileceğini iddia etmez. Sunucunun güvencesi şudur: istek
+veri okunmadan, yalnızca kullanıcının yazdığı metin ve kimliklerle bildirilir;
+yanıt bu isteğe, yetkiye ve kanıta belirlenimci olarak bağlıdır; sayıların
+nüfusu (proje, kişi, süzgeç, dönem) yanıtta niteleyici olarak görünür. Rota
+verisini edinme, kapsam ve son olgu doğrulaması sunucuya aittir. Kimlik
+kökeninde kullanılan yapısal biçimler (UUID, "sicil N" seçicisi, aday
+numarası) niyet yorumu değil, kullanıcının açıkça yazdığı kimliğin
+tanınmasıdır.
 
 `claimableEvidence` her araç için tam kanonik yol şablonlarını belirler;
 bilinmeyen veya yanlış konumdaki aynı adlı alan iddia değildir. Son yanıtta
@@ -921,12 +1001,13 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 | `test/ai-evidence-boundaries.test.mjs` | Yönlendirme, aday seçimi, yeniden deneme, varlık/metin sınırı, yetki iptali, null/hassasiyet, canlı imleçler, gizli sayı, kısaltma ve tam sınırlar |
 | `test/ai-provider-tool-calls.test.mjs` | Tel biçimi, parçalı çağrı birleştirme, sınırlar, bozuk/yarım çağrı, JSON yanıtı; tek kira, döküm doğrulaması, yetenek uyuşmazlığı, SQL işlemi |
 | `test/ai-assistant-evidence-ui.test.mjs` | Çözücü (`revise`, konu, yetkili metin, künye doğrulaması), denetleyici, atıf işareti, kanıt paneli, sunum |
-| `test/ai-grounding-hardening.test.mjs` | Kapsam sınırının güvenilir niyet kaynakları (kullanıcı iletisi, veri öncesi dönem bildirimi, açık serbest metin seçimi), aday belirsizliği ve tek kesin eşleşme, çok adımlı takip, toplu kanıtın nüfus doğrulaması, yönetici kanıtı, olgu niteleyicileri, etkinlik ilk/son kaydı, geçici tablo temizliği, geçici hazırlık hatası |
+| `test/ai-grounding-hardening.test.mjs` | Kapsam sınırının güvenilir kaynakları (kullanıcı iletisi, veri öncesi türlü istek ve dönem bildirimi, açık serbest metin seçimi), aday belirsizliği ve tek kesin eşleşme, çok adımlı takip, takip kimliği yolları, toplu kanıtın nüfus doğrulaması, yönetici kanıtı, olgu niteleyicileri, etkinlik ilk/son kaydı, geçici tablo temizliği, geçici hazırlık hatası |
+| `test/ai-request-contract.test.mjs` | Türlü istek sözleşmesi: kapalı şema ve güven kaynağı, bildirimsiz çağrının SQL çalıştırmaması ve sınırlı reddi, veri okunduktan sonra değişmeyen istek, veri metniyle yönlendirilememe; birleşik ölçü/koşul, sahiplik/öncelik/tarih nüfusu, ayrı ölçüler (planlanan/gerçekleşen, termin/takvim günü, ilerleme/tamamlanma oranı), varlık kapsaması, ad çözümü, sıralama ve sınırdaki eşitlik, liste bütünlüğü, satır özelliği/toplamı, iş akışı ve bildirim sayaçları; kayıt defteri tutarlılığı |
 | `test/ai-scope-and-bounds-regressions.test.mjs` | Sonraki başarılı araçların kendi nüfusunu dondurması, ölçek koruyan iş yükü toplamı, WBS özyineleme sınırı, sayfalama kayması, kaçışlı atıflar, kaynak seçimi |
 | `test/ai-architecture-contract.test.mjs` | Genel SQL aracı yok, araç SQL'i sabit ve salt okunur, kimlik alanı yok, tek SQL sahibi, 0018, panel genişliği ve Gönder/Durdur yuvası, kök yerleşimin yalnızca açık/kapalı bilgisini yazması |
 | `test/ai-aggregate-population.test.mjs` | Toplu kanıtın tam görev nüfusu: listelenmeyen ama sayılan görevler, tarih/atama talebi, hareket, Outlook, tekrar, baz plan, bağımlılık ve WBS toplamları; son doğrulama, yeniden açılış ve sınıra sığmayan nüfusun "doğrulanamaz" işareti |
 | `test/ai-system-admin-scope.test.mjs` | Yöneticinin proje başına kanonik FULL erişimi, proje kapıları ve yetki dönemi; etkin olmayan/var olmayan projenin yetkisiz projeyle aynı yanıtı |
-| `test/ai-clarification-binding.test.mjs` | Kesin eşleşme / kısmi ve belirsiz aday; sunucunun çizdiği adaylar ve "2", "ikincisi", "evet" seçiminin kayıtlı kimliğe bağlanması |
+| `test/ai-clarification-binding.test.mjs` | Kesin eşleşme / kısmi ve belirsiz aday; sunucunun çizdiği adaylar; yalnızca aday numarasının ("2", "#2") kayıtlı kimliğe bağlanması, sözcükle anlatılan seçimin yorumlanmaması |
 | `test/ai-fact-selection-narrative.test.mjs` | Olgu seçimi protokolü, uydurma/başka tur başvurularının reddi, eski iddia biçimi, paragraf/liste/tablo anlatımı, Türkçe iyelik ekleri ve daha zayıf bir araç modelinin sık sorulara düzeltmesiz yanıtı |
 | `test/ai-free-text-consent.test.mjs` | İleti başına serbest metin onayı: kapalıyken arama, model girdisi, olgu ve sayım dışı; açıkken yine veri |
 | `test/ai-tool-containment.test.mjs` | İlk turda da kullanıcı iletisinden gelen arama metni, normalize takip karşılaştırması, meşru daraltma ve ilgisiz genişlemenin reddi |
@@ -956,10 +1037,11 @@ gerçek veritabanında elle kabul kapsamındadır.
 
 ### Yanıt dili ve araç amaç sınırı
 
-Kanıta dayalı yol Türkçe ve İngilizce yanıtları destekler. Sunucu soru dilinden
-(ve açık Türkçe/İngilizce isteğinden) yanıt dilini seçer; türlü değerlerin çizimi,
-kapsam notu ve doğrulanamayan yanıt metni aynı dil sözleşmesini kullanır.
-Diğer dillerdeki sorular Türkçe yanıtlanır.
+Kanıta dayalı yol Türkçe ve İngilizce yanıtları destekler. Yanıt dilini model
+veri okunmadan önceki bildirimde `language: "tr" | "en"` olarak verir; sunucu
+dili sözcük listesiyle tahmin etmez. Türlü değerlerin çizimi, kapsam notu ve
+doğrulanamayan yanıt metni aynı dil sözleşmesini kullanır. Dil bildirilmezse
+ya da soru başka bir dildeyse yanıt Türkçedir.
 
 İlk başarılı araç kümesinden sonra katalog ve varlık/süzgeç sınırı sunucuya
 aittir. Başarısız başlangıç daha doğru araca geçmeyi engellemez. Model üretimi

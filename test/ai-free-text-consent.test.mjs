@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, LEAD, MEHMET, TASKS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { declared } from './helpers/evidenceScenario.mjs';
 
 const { analyzeGroundedAnswer } = await import('../src/domain/ai/evidenceVerification.js');
 
@@ -46,7 +47,8 @@ for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
 
 test('a turn without the opt-in cannot request protected text, and the next turn does not inherit an earlier opt-in', async (t) => {
   const stack = stackFor(t);
-  const askDescription = () => stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] },
+  const request = declared({ operation: 'value', metrics: ['task.description'], entities: [{ type: 'task', id: TASKS.LITERAL }] });
+  const askDescription = () => stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] },
     { type: 'script', respond: (call) => {
       const [detail] = toolResults(call);
       return detail.ok

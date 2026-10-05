@@ -184,8 +184,10 @@ export async function visibleProjectName(call, scope, projectId) {
   return result.rows[0] ? dataText(result.rows[0].ProjectName, 160) : null;
 }
 
-export async function visibleTaskTitle(call, scope, taskId) {
+/** Görünür görevin adı ve güncel projesi; görünmüyorsa `null`. */
+export async function visibleTaskReference(call, scope, taskId) {
   if (!taskId) return null;
   const result = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [taskId], maxRows: 1 }));
-  return result.facts[0] ? dataText(result.facts[0].title, 160) : null;
+  const fact = result.facts[0];
+  return fact ? { title: dataText(fact.title, 160), projectId: fact.projectId } : null;
 }

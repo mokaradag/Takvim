@@ -1,5 +1,5 @@
 import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
-import { factsMatchUserIntent } from './factIntent.js';
+import { verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
 
 /**
@@ -11,6 +11,10 @@ import { renderVerifiedNarrative } from './evidenceNarrative.js';
  * köken sunucunun kendi kanıt kaydından okunur; model değer yazmaz, bu yüzden
  * olgu uyduramaz. Önceki iddia biçimi (`claims`: kanıt, olgu, özne, alan,
  * işlem ve değerin birebir kopyası) de aynı doğrulamayla kabul edilir.
+ *
+ * Seçimin soruyla uyumu kullanıcı cümlesinden çıkarılmaz: sunucu turu,
+ * modelin veri okumadan bildirdiği türlü isteği (`request`) ve kanıtın
+ * sunucuda hesaplanan nüfusunu (`evidence`) verir; uyum bunlarla denetlenir.
  */
 
 const FACT_REFERENCE = /^(R[1-9]\d?):((?:data(?:\.(?:[A-Za-z][A-Za-z0-9]*|\d+|\*))+)|returnedCount|totalCount|complete|truncated)$/;
@@ -108,13 +112,20 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
   return { ok: true, facts: selected, layout: 'auto', issues: [] };
 }
 
-export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads = [], locale = 'tr', userText = '' } = {}) {
+/**
+ * `request` verildiğinde seçim bildirilen isteğe uymalıdır (bkz.
+ * requestContract.js); sunucu turu isteği her zaman verir.
+ */
+export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads = [], locale = 'tr', request = null, evidence = new Map() } = {}) {
   const answer = parseEvidenceResponse(text);
   const selection = resolveEvidenceSelection(answer, { evidenceIds, evidencePayloads });
   if (!selection.ok) return { ok: false, citedIds: [], issues: selection.issues };
-  if (!factsMatchUserIntent(selection.facts, userText, evidencePayloads)) return { ok: false, citedIds: [], issues: [{ code: 'UNRELATED_FACT_SELECTION' }] };
+  if (request) {
+    const verdict = verifyRequestedFacts(request, selection.facts, evidence);
+    if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
+  }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
-  const normalized = renderVerifiedNarrative(selection.facts, { locale, layout: selection.layout, userText });
+  const normalized = renderVerifiedNarrative(selection.facts, { locale, layout: selection.layout, operation: request?.operation || null });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   return { ok: true, normalized, citedIds, facts: selection.facts, issues: [] };
 }

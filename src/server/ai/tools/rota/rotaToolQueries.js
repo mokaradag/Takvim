@@ -165,8 +165,9 @@ const ASSIGNMENT_FACTS = `
   SELECT DISTINCT pd.Sicil INTO #AiResolvedPeople
   FROM dbo.MR_V_PeopleDirectory pd
   JOIN (SELECT DISTINCT Sicil FROM #AiAssignments) assigned ON assigned.Sicil = pd.Sicil;
-  SELECT a.TaskId, COUNT(*) AS AssigneeCount,
+  SELECT a.TaskId,
     MAX(CASE WHEN a.Sicil = @sicil THEN 1 ELSE 0 END) AS IsOwnAssignee,
+    COUNT(CASE WHEN permitted.IdentityVisible = 1 THEN 1 END) AS DisclosedAssigneeCount,
     COUNT(CASE WHEN permitted.IdentityVisible = 1 THEN resolved.Sicil END) AS ResolvedAssigneeCount
   INTO #AiAssignmentFacts
   FROM #AiAssignments a
@@ -225,8 +226,7 @@ const TASK_FACT_COLUMNS = `
     t.CreatedAt, t.UpdatedAt, visible.AccessLevel, visible.IdentityBase,
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
     CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
-    CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees assigned WHERE assigned.TaskId = t.TaskId) THEN 1 ELSE 0 END AS bit) AS HasAssignee,
-    COALESCE(assignment.AssigneeCount, 0) AS AssigneeCount,
+    COALESCE(assignment.DisclosedAssigneeCount, 0) AS DisclosedAssigneeCount,
     COALESCE(assignment.ResolvedAssigneeCount, 0) AS ResolvedAssigneeCount`;
 
 /**
@@ -235,7 +235,8 @@ const TASK_FACT_COLUMNS = `
  * İnce süzgeçler, sıralama, sayfalama ve toplamlar sunucu kodunda belirlenimci
  * olarak hesaplanır. `@maxRows` sınırı aşılırsa araç "sonuç çok büyük" döner.
  * Kişi süzgeci yalnızca kimliği kullanıcıya AÇIK sorumluluklarla eşleşir:
- * gizli eş sorumlu süzgeç yoluyla da ortaya çıkarılamaz.
+ * gizli eş sorumlu süzgeç yoluyla da ortaya çıkarılamaz. "Sorumlusuz" yalnızca
+ * bütün atamaları açıklanabilen (kimlik tabanı açık) görevde verilir.
  */
 const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
     AND (@seriesId IS NULL OR t.TaskId = @seriesId OR t.RecurrenceParentTaskId = @seriesId)
@@ -291,8 +292,8 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
         WHERE person.TaskId = t.TaskId AND person.Sicil = @personSicil AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1
           OR t.CreatedBySicil = @sicil OR person.Sicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
             WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil))))
-      OR (@assigneeMode = 'unassigned' AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person
-        WHERE person.TaskId = t.TaskId)))`;
+      OR (@assigneeMode = 'unassigned' AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR t.CreatedBySicil = @sicil)
+        AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person WHERE person.TaskId = t.TaskId)))`;
 
 export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
 ${SCOPE_PROJECTS}
@@ -308,7 +309,7 @@ ${ASSIGNMENT_FACTS}
   WHERE ${TASK_ROW_FILTER}
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND COALESCE(assignment.IsOwnAssignee, 0) = 1)
-      OR (@assigneeMode = 'unassigned' AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees assigned WHERE assigned.TaskId = t.TaskId))
+      OR (@assigneeMode = 'unassigned' AND visible.IdentityBase = 1 AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees assigned WHERE assigned.TaskId = t.TaskId))
       OR (@assigneeMode = 'person' AND EXISTS (
         SELECT 1 FROM dbo.MR_TaskAssignees person
         WHERE person.TaskId = t.TaskId AND person.Sicil = @personSicil
@@ -423,7 +424,7 @@ ${SCOPE_PROJECTS}
   INTO #AiProjectMatches
   FROM #AiScopeProjects v
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
-  WHERE (LEN(@text) = 0 AND @projectId IS NOT NULL)
+  WHERE (LEN(@text) = 0 AND (@projectId IS NOT NULL OR LEN(@projectIds) > 0))
     OR CHARINDEX(@text, CONCAT(COALESCE(p.ProjectCode, N''), N' ', p.ProjectName) COLLATE Turkish_100_CI_AI) > 0;
 
   SELECT COUNT(*) AS Total, COUNT(CASE WHEN MatchRank = 0 THEN 1 END) AS ExactCount FROM #AiProjectMatches;

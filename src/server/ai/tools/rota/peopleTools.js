@@ -1,7 +1,8 @@
 import 'server-only';
 import { parseSicil } from '../../../identity/sicil.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
-import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
+import { MIN_DIRECTORY_QUERY_LENGTH, searchCorporateDirectory } from '../../../directory/directorySearch.js';
+import { invalidArguments } from '../toolErrors.js';
 import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
 import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
@@ -125,6 +126,10 @@ const personSearch = {
   },
   async handler(args, call) {
     const limit = args.limit ?? 10;
+    const query = String(args.text).trim();
+    const sicilQuery = parseSicil(query);
+    // Dizin kuralı SQL kapısından önce uygulanır: model düzeltebileceği bir bağımsız değişken hatası alır.
+    if (query.length < MIN_DIRECTORY_QUERY_LENGTH && sicilQuery == null) throw invalidArguments(['$.text:minLength']);
     const result = await call.sql((executor) => searchCorporateDirectory(
       { query: args.text },
       executor,
@@ -151,8 +156,6 @@ const personSearch = {
     // Kimlik Sicil'dir: yalnızca tek kesin Sicil ya da tam ad eşleşmesi kişiyi
     // çözer. Sınırlı dizin sonucunun son satırındaki tek kesin eşleşme, aynı adlı
     // bir sonraki satırı dışarıda bırakmış olabileceğinden çözüm sayılmaz.
-    const query = String(args.text).trim();
-    const sicilQuery = parseSicil(query);
     const needle = foldText(query).trim();
     const exactIndexes = people.flatMap((person, index) => ((sicilQuery != null && person.sicil === sicilQuery) || foldText(person.name).trim() === needle ? [index] : []));
     const uniqueExact = exactIndexes.length === 1 && !(directoryCapped && exactIndexes[0] === people.length - 1);

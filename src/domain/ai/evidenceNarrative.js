@@ -412,13 +412,10 @@ export function renderClarification({ evidenceId, candidates, truncated = false,
   return `${rows.join('\n')}\n\n${question}${more}`;
 }
 
-/** Yanıt düzeni: model önerisi ya da kullanıcının açık isteği; yoksa olguların biçimi belirler. */
-function layoutFrom(requested, userText) {
+/** Yanıt düzeni: modelin yapılandırılmış seçimi ya da bildirilen istek türü; yoksa olguların biçimi belirler. */
+function layoutFrom(requested, operation) {
   if (['prose', 'list', 'table'].includes(requested)) return requested;
-  const text = String(userText || '').toLocaleLowerCase('tr-TR');
-  if (/tablo|\btable\b|karşılaştır|\bcompare/u.test(text)) return 'table';
-  if (/listele|\bliste|\blist\b|hangileri/u.test(text)) return 'list';
-  return 'auto';
+  return operation === 'list' ? 'list' : 'auto';
 }
 
 /** Kaydın varlık kökü: görev ayrıntısında `data.task`, proje künyesinde `data.project` ve eşlikçileri. */
@@ -435,8 +432,8 @@ function recordRelative(tool, field) {
  * Doğrulanmış olgu seçimini Markdown anlatıma dönüştürür.
  * @param {{ evidenceId: string, fact: object }[]} items Sunucunun doğruladığı olgular (seçim sırasıyla).
  */
-export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', userText = '' } = {}) {
-  const chosenLayout = layoutFrom(layout, userText);
+export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null } = {}) {
+  const chosenLayout = layoutFrom(layout, operation);
   const byEvidence = new Map();
   for (const item of items) {
     if (!byEvidence.has(item.evidenceId)) byEvidence.set(item.evidenceId, []);

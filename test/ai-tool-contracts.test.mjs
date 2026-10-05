@@ -162,7 +162,7 @@ function fact(overrides = {}) {
     plannedStart: null, plannedFinish: null, targetFinish: null, calendarDate: null, actualStart: null, actualFinish: null,
     progress: null, plannedHours: null, actualHours: null, budget: null, spent: null, recurrenceRule: null, recurrenceParentId: null,
     recurrenceOccurrenceDate: null, createdAt: null, updatedAt: null, accessLevel: 'FULL', identityBase: true, isCreator: false,
-    isOwnAssignee: false, assigneeCount: 0, ...overrides
+    isOwnAssignee: false, disclosedAssigneeCount: 0, ...overrides
   };
 }
 
@@ -176,7 +176,7 @@ test('durum, öncelik ve tarih alanları ürünün kanonik kurallarıyla okunur;
   const row = facts.factFromRow({
     TaskId: TASK_ID.toUpperCase(), ProjectId: '11111111-1111-4111-8111-111111111111', Title: 'X', Status: 'in-progress', Priority: 'normal',
     TargetFinish: null, PlannedFinish: new Date('2026-10-05T00:00:00Z'), PlannedHours: 0, ActualHours: null,
-    AssigneeCount: 2, ResolvedAssigneeCount: 1, AccessLevel: 'FULL'
+    DisclosedAssigneeCount: 2, ResolvedAssigneeCount: 1, AccessLevel: 'FULL'
   });
   assert.equal(row.id, TASK_ID);
   assert.equal(row.status, 'in_progress');
@@ -184,7 +184,7 @@ test('durum, öncelik ve tarih alanları ürünün kanonik kurallarıyla okunur;
   assert.equal(row.calendarDate, '2026-10-05', 'termin yoksa planlanan bitiş takvim günüdür');
   assert.equal(row.plannedHours, 0);
   assert.equal(row.actualHours, null, 'NULL sıfır sayılmaz');
-  assert.equal(row.assigneeCount, 2);
+  assert.equal(row.disclosedAssigneeCount, 2);
   assert.equal(row.resolvedAssigneeCount, 1);
 });
 

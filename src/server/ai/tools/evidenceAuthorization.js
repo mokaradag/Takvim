@@ -114,26 +114,34 @@ export function unverifiableAuthorizationPopulation() {
   return { v: POPULATION_VERSION, complete: false };
 }
 
+/**
+ * Kanıt yükündeki canlı görev başvuruları. Kök `filters` seçicinin kökenidir,
+ * nüfus değildir: görünür seçiciyi araç kendisi kaydeder; silinmiş ya da
+ * arşivlenmiş görevin tarihsel seçicisi canlı görev olarak doğrulanmaz.
+ */
 export function evidenceTaskReferences(envelope) {
   const tasks = new Map();
-  const visit = (value, inheritedProject = null) => {
+  const visit = (value, inheritedProject = null, root = false) => {
     if (!value || typeof value !== 'object') return;
     if (Array.isArray(value)) { value.forEach((item) => visit(item, inheritedProject)); return; }
     const projectId = canonicalActualId(value.projectId || value.project?.projectId) || inheritedProject;
     for (const [key, item] of Object.entries(value)) {
+      if (root && key === 'filters') continue;
       if (['taskId', 'seriesTaskId', 'templateTaskId'].includes(key)) {
         const id = canonicalActualId(item);
         if (id) tasks.set(id, projectId || tasks.get(id) || null);
       } else if (item && typeof item === 'object') visit(item, projectId);
     }
   };
-  visit(envelope?.data);
+  visit(envelope?.data, null, true);
   return [...tasks].map(([taskId, projectId]) => ({ taskId, projectId }));
 }
 
 export function scopedEvidenceAuthorization(auth, scope, args, envelope, projectPopulation = []) {
   const taskIds = envelope.tool === 'rota_task_detail' ? evidenceTaskReferences(envelope).map((row) => row.taskId) : null;
-  const projectId = args.projectId || (taskIds ? envelope.data?.task?.project?.projectId : null);
+  // Katılımcı geçmişinde proje seçicisi yetki değildir; görünür seçiciyi araç kaydeder.
+  const selector = envelope.scope?.kind === 'participant' ? null : args.projectId;
+  const projectId = selector || (taskIds ? envelope.data?.task?.project?.projectId : null);
   const projectIds = projectId ? [projectId] : [...new Set(projectPopulation.map(canonicalActualId).filter(Boolean))];
   if (!projectIds.length) return null;
   const population = { projectIds, taskIds };

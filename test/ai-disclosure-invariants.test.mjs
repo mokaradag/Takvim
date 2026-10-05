@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, LEAD, MEHMET, PROJECTS, TASKS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { NON_ENUMERATING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
@@ -13,8 +13,10 @@ const done = (response) => response.events.find((event) => event.event === 'done
 const deltas = (response) => response.events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('');
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 
+const taskTitle = (taskId) => declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: taskId }] });
+
 function citeTask(stack, taskId, field = 'data.task.title') {
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_detail', arguments: { taskId } }] },
+  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(taskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
       return { type: 'answer', text: evidenceReply(claimFor(result, field)) };
@@ -120,7 +122,7 @@ test('a task moved across the ACL boundary after reading cannot be rendered or p
   stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
   const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
   const title = task.Title;
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
+  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
       task.ProjectId = PROJECTS.HIDDEN;
@@ -182,7 +184,8 @@ for (const source of ['rota', 'general']) {
 
 test('clarification preserves only authorized structured candidates for the next turn', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_person_search', arguments: { text: 'Ali' } }] },
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali' }] })],
+    calls: [{ name: 'rota_person_search', arguments: { text: 'Ali' } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
       return { type: 'answer', text: JSON.stringify({ ...JSON.parse(evidenceReply(claimFor(result, 'data.people.0.name'), claimFor(result, 'data.people.1.name'))), kind: 'clarification' }) };
@@ -196,12 +199,12 @@ test('clarification preserves only authorized structured candidates for the next
     assert.match(prior, /"personSicil":/);
     assert.doesNotMatch(prior, /Ali Veli|organization|name|code/);
     assert.doesNotMatch(prior, /【R1】/);
-    return { type: 'tool-calls', calls: [{ name: 'rota_workload_summary', arguments: {} }] };
+    return { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'] })], calls: [{ name: 'rota_workload_summary', arguments: {} }] };
   } }, { type: 'script', respond: (call) => {
     const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
     return { type: 'answer', text: evidenceReply(claimFor(result, 'data.openTaskCount')) };
   } });
-  assert.equal(done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: 'İlki' })).assistantMessage.finishReason, 'stop');
+  assert.equal(done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: '1' })).assistantMessage.finishReason, 'stop');
 });
 
 test('legacy clarification labels cannot inject instructions into the next turn', async () => {

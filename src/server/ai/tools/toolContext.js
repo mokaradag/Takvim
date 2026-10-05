@@ -110,7 +110,7 @@ export function createToolTurnContext({
       if (signal.aborted) throw signal.reason;
       const payload = JSON.parse(entry.payload || '{}');
       const references = entry.taskReferences || evidenceTaskReferences(payload);
-      const projectIds = [...new Set([...(entry.scopedAuthorization?.projectIds || []), payload.data?.filters?.projectId,
+      const projectIds = [...new Set([...(entry.scopedAuthorization?.projectIds || []),
         payload.entity?.type === 'project' ? payload.entity.id : null].filter(Boolean))];
       let valid = true;
       for (let start = 0; start < projectIds.length; start += limits.maxAnalyzedTasks) {

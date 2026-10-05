@@ -1677,18 +1677,25 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   yeniden okunur ve sabit SQL görünürlüğü anlık görüntüyle aynı kurallarla
   hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz. Kanıt görev başına kimlik görünürlüğünü de temsil eden kalıcı yetki epoch’una bağlıdır; sonraki küme ve son çizim öncesi okuma değişen erişimde eski kanıtı geçersiz yapar. Bu uygulama denetimi atomik SQL/model/teslim işlemi değildir.
 - **Kanıt:** başarılı sonuçlar `R1`, `R2` … ve tur için rastgele olgu öneki
-  taşır. Model doğal dili yorumlar ve kanıttaki olguları seçer
-  (`{"kind":"rota","facts":["R1:data.…"]}`; eski türlü iddia biçimi de kabul
-  edilir). Değer, özne, birim ve süzgeç sunucunun kendi yetkili yükünden okunur;
-  seçilen olgular güncel isteğin ölçü/kimlik kısıtlarına da bağlanır; ilgisiz
-  doğru olgu doğrulamayı geçemez. Olgular sunucuya ait şablonlarla paragraf, liste ya da tabloya
+  taşır. Model doğal dili yorumlar, veri okumadan önce isteği türlü olarak
+  bildirir (`{"kind":"route","intent":"rota","language":"tr","request":{"operation":…,"metrics":[…],"entities":[…],"filters":{…}}}`)
+  ve kanıttaki olguları seçer (`{"kind":"rota","facts":["R1:data.…"]}`; eski
+  türlü iddia biçimi de kabul edilir). Geçerli istek olmadan araç çalışmaz;
+  istek veri okunduktan sonra değişmez. Değer, özne, birim ve süzgeç sunucunun
+  kendi yetkili yükünden okunur; seçilen olgular bildirilen isteğin ölçü,
+  nüfus, varlık, liste ve sıralama koşullarına belirlenimci olarak bağlanır;
+  ilgisiz doğru olgu doğrulamayı geçemez. Aşama 3, Türkçe ya da İngilizce
+  kullanıcı niyetini regex ya da anahtar sözcükle yorumlamaz; doğal dildeki
+  anlamsal çıkarım Aşama 4'te geliştirilecektir. Aşama 3'ün belirlenimci
+  mantığı güvenilir yapısal doğrulama, yetki, kanıt bütünlüğü, ölçü hesabı,
+  sınırlar ve benzeri nesnel değişmezlerle sınırlıdır. Olgular sunucuya ait şablonlarla paragraf, liste ya da tabloya
   çevrilir ve `【R1】` atfı eklenir. Düzyazı regexleri veya ikinci bir model
   hakem değildir. Uydurma/değiştirilmiş başvuru bir kez düzeltilir; Standart
   kipte, Derin düşünme araç profili kuruluysa kurtarılabilir model hatası aynı
   kanıtla bir kez Derin düşünmeye devredilir; yine olmazsa sabit güvenli ileti
   kaydedilir (`grounding_failed`). Kimlik yalnızca kesin eşleşmedir; belirsiz
-  adayları sunucu çizer ve kullanıcının numaralı seçimini kayıtlı kimliğe
-  bağlar. Modelin `general/rota` önerisi kanıt sınırını kapatamaz. `source: rota` varsayılanında yalnızca doğrulanmış olgular/güvenli son iletiler; kullanıcı `source: general` seçtiğinde veri okumayan genel akış kullanılır. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir ve seçilmemiş alanlar model/kanıt kaydından önce çıkarılır. Gecikme/saat/para birimleri ve null/tamlık anlamları sunucuda çizilir.
+  adayları sunucu çizer ve yanıtın tamamı bir aday numarasıysa seçimi kayıtlı
+  kimliğe bağlar; sözcükle anlatılan seçimi yorumlamaz. Modelin `general/rota` önerisi kanıt sınırını kapatamaz. `source: rota` varsayılanında yalnızca doğrulanmış olgular/güvenli son iletiler; kullanıcı `source: general` seçtiğinde veri okumayan genel akış kullanılır. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir ve seçilmemiş alanlar model/kanıt kaydından önce çıkarılır. Gecikme/saat/para birimleri ve null/tamlık anlamları sunucuda çizilir.
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
   kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre

@@ -217,7 +217,8 @@ export function createToolExecutor({
             highlights: shrunk.data?.sizeNote ? [] : (result.outcome.evidence?.highlights || []),
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
             scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk, result.projectPopulation) ?? null,
-            populationReferences: result.population
+            populationReferences: result.population,
+            args: result.args
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);

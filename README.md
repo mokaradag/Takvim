@@ -319,7 +319,11 @@ projeler, iş dağılım ağacı, iş yükü, hareketler, talepler, bildirimler,
 bağımlılıklar, tekrar serileri, takvim, Outlook durumu ve plan veri kalitesi
 hakkındaki soruları sunucunun **19 salt okunur alan aracıyla**, kullanıcının
 kendi yetkisi içinde yanıtlar. Genel bir SQL aracı yoktur; model SQL üretemez,
-kimlik ya da yetki bilgisi veremez. Model yalnızca kanıttaki olguları seçer;
+kimlik ya da yetki bilgisi veremez. Model veri okumadan önce sorunun türlü
+isteğini (işlem, ölçüler, varlıklar, koşullar) bildirir; sunucu Türkçe ya da
+İngilizce cümleyi anahtar sözcükle yorumlamaz, yanıtı bu isteğe ve kanıta
+belirlenimci olarak bağlar (doğal dil anlamsal çıkarımı Aşama 4'ün işidir).
+Model yalnızca kanıttaki olguları seçer;
 değerleri sunucu kendi yetkili verisinden okur, doğrular ve paragraf, liste ya
 da tablo olarak çizer; Rota verisine dayanan her ifade `【R1】` biçiminde kanıta
 atıf yapar. Standart kipte kurtarılabilir bir model hatası aynı kanıtla bir kez

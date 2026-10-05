@@ -741,16 +741,18 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     claim.bindConversation(prepared.conversation.id);
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
-    if (useTools && history.some((message) => message.role === 'assistant')) {
-      const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id });
-      history = fallbackAssistantHistory(history, priorEvidence);
-      history = history.map((message) => message.role === 'assistant' && priorEvidence?.byMessage?.has(message.id) && message.finishReason === 'clarification'
-        ? { ...message, clarificationContext: priorEvidence.clarificationByMessage?.get(message.id) } : message);
-    }
-    if (!useTools && history.some((message) => message.role === 'assistant')) {
-      // Genel yol yalnızca hangi yanıtların kanıta dayandığını (dönemleri) kullanır; yetki yeniden doğrulanmaz.
+    if (history.some((message) => message.role === 'assistant')) {
+      // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
       history = fallbackAssistantHistory(history, priorEvidence);
+      const last = history.at(-1);
+      if (useTools && last?.role === 'assistant' && last.finishReason === 'clarification') {
+        // Aday kimlikleri yalnızca son açıklama için ve güncel yetkiyle açılır.
+        const current = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id, messageId: last.id });
+        if (current?.byMessage?.has(last.id)) {
+          history = [...history.slice(0, -1), { ...last, clarificationContext: current.clarificationByMessage?.get(last.id) }];
+        }
+      }
     }
     const contextInput = {
       history,

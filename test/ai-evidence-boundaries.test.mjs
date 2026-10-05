@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { ADMIN, ALI_1, AYSE, BASELINE_ID, CALENDAR_ID, MEHMET, NOW, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
@@ -18,7 +18,11 @@ const { analyzeGroundedAnswer } = await import('../src/domain/ai/evidenceVerific
 const { AI_TOOL_TASK_FACTS_SQL, AI_TOOL_TASK_DETAIL_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
 const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 
-const calls = (name, args = {}, id = 'call') => ({ text: '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
+/** Model turu: araç çağrısı; ilk turda veri okunmadan önceki türlü istek bildirimiyle. */
+const calls = (name, args = {}, id = 'call', request = null) => ({ text: request ? declared(request) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
+const taskStatus = (...ids) => ({ operation: 'value', metrics: ['task.status'], entities: ids.map((id) => ({ type: 'task', id })) });
+const projectCount = (id) => ({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id }] });
+const aliWorkload = { operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali' }] };
 const reply = (text, finishReason = 'stop') => ({ text, toolCalls: [], finishReason });
 const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
 
@@ -40,7 +44,7 @@ async function turn(t, steps, { user = 'Rota verisini incele', context = null, h
 }
 
 test('data intent is selected before data and never uses Turkish casing or keyword matching', async (t) => {
-  const { result, inputs } = await turn(t, [reply('{"kind":"route","intent":"rota"}'), calls('rota_workload_summary'),
+  const { result, inputs } = await turn(t, [reply(declared({ operation: 'value', metrics: ['tasks.open'] })), calls('rota_workload_summary'),
     (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.openTaskCount')))], { user: 'İŞ YÜKÜM NASIL?' });
   assert.equal(result.outcome, 'grounded');
   assert.equal(inputs[0].messages.some((message) => message.role === 'tool'), false);
@@ -68,7 +72,7 @@ test('a model-proposed general route returns a safe clarification and never rest
 });
 
 test('short grounded follow-ups can choose fresh evidence without inheriting old evidence IDs', async (t) => {
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }),
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', taskStatus(TASKS.OVERDUE)),
     (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')))], { user: `Peki durumu? ${TASKS.OVERDUE}`,
     history: [{ role: 'user', content: 'Radar görevini göster' }, { role: 'assistant', content: 'Eski yanıt 【R9】' }] });
   assert.equal(result.outcome, 'grounded');
@@ -76,7 +80,7 @@ test('short grounded follow-ups can choose fresh evidence without inheriting old
 });
 
 test('failed initial calls leave the catalog available for a correct retry', async (t) => {
-  const { result } = await turn(t, [calls('rota_search_tasks'), (input) => {
+  const { result } = await turn(t, [calls('rota_search_tasks', {}, 'call', projectCount(PROJECTS.FULL)), (input) => {
     assert.ok(input.tools.some((tool) => tool.name === 'rota_task_search'));
     return calls('rota_task_search', { projectId: PROJECTS.FULL });
   }, (input) => reply(evidenceReply(claimFor(results(input).at(-1), 'totalCount')))], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
@@ -88,7 +92,7 @@ test('a successful NOT_FOUND retry supersedes earlier errors and has its own ter
   let before = null;
   const { result } = await turn(t, [() => {
     before = { ...aiTelemetrySnapshot().grounding };
-    return calls('rota_task_detail', {});
+    return calls('rota_task_detail', {}, 'call', taskStatus(TASKS.HIDDEN));
   }, calls('rota_task_detail', { taskId: TASKS.HIDDEN }), reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.HIDDEN}` });
   assert.equal(result.outcome, 'not_found');
   assert.equal(result.finishReason, 'not_found');
@@ -101,7 +105,7 @@ test('a successful NOT_FOUND retry supersedes earlier errors and has its own ter
 test('a confirmed deletion invalidates formerly successful evidence before final rendering', async (t) => {
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({ sicil: AYSE,
     effective: { access: new Map([[PROJECTS.FULL, { accessLevel: 'FULL', reasons: [] }]]), partialTaskIds: new Set() } }) });
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }), (_input, stack) => {
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', taskStatus(TASKS.OVERDUE)), (_input, stack) => {
     stack.db.tasks = stack.db.tasks.filter((task) => task.TaskId !== TASKS.OVERDUE);
     return calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'removed');
   }, reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
@@ -110,7 +114,7 @@ test('a confirmed deletion invalidates formerly successful evidence before final
 });
 
 test('ambiguous person search can end in server-rendered clarification', async (t) => {
-  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ali' }), (input) => {
+  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ali' }, 'call', aliWorkload), (input) => {
     const found = results(input)[0];
     assert.equal(found.data.ambiguous, true);
     const answer = JSON.parse(evidenceReply(claimFor(found, 'data.people.0.name'), claimFor(found, 'data.people.1.name')));
@@ -122,7 +126,7 @@ test('ambiguous person search can end in server-rendered clarification', async (
 });
 
 test('malformed clarification claims use bounded repair rather than throwing', async (t) => {
-  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ali' }), reply('{"kind":"clarification","claims":[null]}'), (input) =>
+  const { result } = await turn(t, [calls('rota_person_search', { text: 'Ali' }, 'call', aliWorkload), reply('{"kind":"clarification","claims":[null]}'), (input) =>
     reply(JSON.stringify({ ...JSON.parse(evidenceReply(claimFor(results(input)[0], 'data.people.0.name'), claimFor(results(input)[0], 'data.people.1.name'))), kind: 'clarification' }))],
   { user: 'Ali’nin iş yükünü göster' });
   assert.equal(result.outcome, 'clarification');
@@ -130,17 +134,18 @@ test('malformed clarification claims use bounded repair rather than throwing', a
 });
 
 test('multiple initial entities preserve each established scope for valid follow-ups', async (t) => {
-  const first = calls('rota_task_detail', { taskId: TASKS.OVERDUE });
+  const first = calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', taskStatus(TASKS.OVERDUE, TASKS.DUE_SOON));
   first.toolCalls.push({ id: 'other', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.DUE_SOON }) });
   const { result } = await turn(t, [first, calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'follow'), (input) => {
     assert.equal(results(input).at(-1).ok, true);
-    return reply(evidenceReply(claimFor(results(input).at(-1), 'data.task.status')));
+    // Bildirilen her varlık kendi olgusuyla karşılanır.
+    return reply(evidenceReply(claimFor(results(input).at(-1), 'data.task.status'), claimFor(results(input)[1], 'data.task.status')));
   }], { user: `Görevleri incele ${TASKS.OVERDUE} ${TASKS.DUE_SOON}` });
   assert.equal(result.outcome, 'grounded');
 });
 
 test('prompt injection cannot change an allowed tool to another entity or widen a task into its project', async (t) => {
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL }),
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL }, 'call', taskStatus(TASKS.LITERAL)),
     calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'other'),
     (input) => {
       assert.equal(results(input).at(-1).error.code, 'UNSUPPORTED_SCOPE');
@@ -154,7 +159,7 @@ test('prompt injection cannot change an allowed tool to another entity or widen 
 });
 
 test('free text cannot become a terminal claim unless its projection was selected before reading data', async (t) => {
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL }), (input) => {
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL }, 'call', taskStatus(TASKS.LITERAL)), (input) => {
     const found = results(input)[0];
     assert.equal(createEvidenceFacts(found, { prefix: found.factScope }).some((fact) => fact.field === 'data.task.description'), false);
     const claim = { evidenceId: found.evidenceId, factId: `${found.factScope}:data.task.description`, subjectId: 'data.task',
@@ -166,7 +171,8 @@ test('free text cannot become a terminal claim unless its projection was selecte
 });
 
 test('explicit text projection preserves exact equality and safe Markdown escaping', async (t) => {
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL, textFields: ['description'] }),
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL, textFields: ['description'] }, 'call',
+    { operation: 'value', metrics: ['task.description'], entities: [{ type: 'task', id: TASKS.LITERAL }] }),
     (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.description')))], { user: `Rota verisini incele: ${TASKS.LITERAL}`, allowedTextFields: ['description'] });
   assert.equal(result.outcome, 'grounded');
   assert.doesNotMatch(result.text, /【R7】/);
@@ -177,7 +183,7 @@ test('authorization revocation observed in a later round invalidates earlier evi
   const auth = () => ({ sicil: AYSE, isSystemAdmin: false, isExecutive: false,
     effective: { access: available ? new Map([[PROJECTS.FULL, { accessLevel: 'FULL', reasons: ['MANUAL_GRANT'] }]]) : new Map(), partialTaskIds: new Set() } });
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => auth() });
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }), () => {
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', taskStatus(TASKS.OVERDUE)), () => {
     available = false;
     return calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'revoked');
   }, (input) => {
@@ -193,7 +199,7 @@ test('authorization is checked again before final rendering even without another
   let available = true;
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({ sicil: AYSE,
     effective: { access: available ? new Map([[PROJECTS.FULL, { accessLevel: 'FULL', reasons: [] }]]) : new Map(), partialTaskIds: new Set() } }) });
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }), (input) => {
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', taskStatus(TASKS.OVERDUE)), (input) => {
     available = false;
     return reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')));
   }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
@@ -204,7 +210,7 @@ test('authorization is checked again before final rendering even without another
 test('removing one employee changes the authorization epoch even while executive status remains true', async (t) => {
   const { result } = await turn(t, [(_input, stack) => {
     stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: MEHMET });
-    return calls('rota_task_detail', { taskId: TASKS.OVERDUE });
+    return calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', taskStatus(TASKS.OVERDUE));
   }, (input, stack) => {
     stack.db.executiveScope = stack.db.executiveScope.filter((entry) => entry.EmployeeSicil !== MEHMET);
     return reply(evidenceReply(claimFor(results(input)[0], 'data.task.status')));
@@ -214,7 +220,7 @@ test('removing one employee changes the authorization epoch even while executive
 });
 
 test('output truncation recovers with fewer claims and never replays partial JSON', async (t) => {
-  const { result, inputs } = await turn(t, [calls('rota_task_search', { projectId: PROJECTS.FULL }), reply('{"kind":"rota","claims":[', 'length'),
+  const { result, inputs } = await turn(t, [calls('rota_task_search', { projectId: PROJECTS.FULL }, 'call', projectCount(PROJECTS.FULL)), reply('{"kind":"rota","claims":[', 'length'),
     (input) => reply(evidenceReply(claimFor(results(input)[0], 'totalCount')))], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.repaired, true);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { ADMIN, AYSE, MEHMET, NOW, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { createToolScope } = await import('../src/server/ai/tools/toolScope.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
@@ -52,7 +52,8 @@ test('global analytics/search follow-ups preserve the canonical task population 
   }
   stackFor(t);
   const steps = [
-    { text: '', toolCalls: [{ id: 'count', name: 'rota_task_analytics', arguments: '{"deadline":"overdue"}' }] },
+    { text: declared({ operation: 'list', metrics: ['tasks.total', 'task.title'], filters: { deadline: 'overdue' } }),
+      toolCalls: [{ id: 'count', name: 'rota_task_analytics', arguments: '{"deadline":"overdue"}' }] },
     { text: '', toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] }
   ];
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
@@ -60,7 +61,7 @@ test('global analytics/search follow-ups preserve the canonical task population 
     const results = input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
     assert.ok(results.every((item) => item.ok), JSON.stringify(results));
     assert.equal(results[0].data.totals.total, results[1].totalCount);
-    return { text: evidenceReply(claimFor(results[0], 'data.totals.total'), claimFor(results[1], 'data.tasks.0.title')), toolCalls: [], finishReason: 'stop' };
+    return { text: JSON.stringify({ kind: 'rota', facts: [`${results[0].evidenceId}:data.totals.total`, `${results[1].evidenceId}:data.tasks.*.title`] }), toolCalls: [], finishReason: 'stop' };
   } }, { messages: buildGroundedContext({ userContent: 'Kaç gecikmiş görevim var ve hangileri?', now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {} });
   assert.equal(result.outcome, 'grounded');
@@ -349,7 +350,10 @@ test('final authorization has its own budget after tool SQL reaches the cumulati
   let round = 0;
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
     round += 1;
-    if (round === 1) return { text: '', toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
+    if (round === 1) {
+      return { text: declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
+        toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
+    }
     const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
     return { text: evidenceReply(claimFor(evidence, 'data.task.title')), toolCalls: [], finishReason: 'stop' };
   } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,
@@ -366,7 +370,10 @@ test('a failed final authorization read is a safe unavailable terminal, not fabr
   let round = 0;
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
     round += 1;
-    if (round === 1) return { text: '', toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
+    if (round === 1) {
+      return { text: declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
+        toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
+    }
     const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
     return { text: evidenceReply(claimFor(evidence, 'data.task.title')), toolCalls: [], finishReason: 'stop' };
   } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,

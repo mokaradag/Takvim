@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, LEAD, MEHMET, PARTIAL_OTHERS, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
@@ -122,7 +122,8 @@ test('moving a counted but unlisted task out of scope drops the aggregate at fin
 });
 
 function citeProjectTotal(stack, projectId = PROJECTS.FULL) {
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_project_detail', arguments: { projectId } }] },
+  const request = declared({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: projectId }] });
+  stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_project_detail', arguments: { projectId } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
       return { type: 'answer', text: evidenceReply(claimFor(result, 'data.visibleTasks.total')) };
@@ -205,7 +206,8 @@ test('legacy aggregate evidence without a recorded population is unverifiable, w
   const stack = stackFor(t);
   citeProjectTotal(stack);
   const aggregate = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }] },
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: TASKS.OVERDUE }] })],
+    calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
       return { type: 'answer', text: evidenceReply(claimFor(result, 'data.task.title')) };

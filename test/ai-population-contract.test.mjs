@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { ADMIN, AYSE, MEHMET, NOW, PROJECTS, TASKS, WBS, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { verifyRequested } from './helpers/requestScenario.mjs';
 
 const { createToolScope } = await import('../src/server/ai/tools/toolScope.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
@@ -13,9 +14,10 @@ const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 const stackFor = (t, seed = {}, sicil = AYSE) => createAiStack(t, { sicil, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 const signal = () => new AbortController().signal;
 const establish = (scope, name, args, data) => scope.establish([{ name, arguments: JSON.stringify(args) }], [{ content: JSON.stringify({ ok: true, data }) }]);
-const verify = (ledger, fields, userText) => analyzeGroundedAnswer(JSON.stringify({ kind: 'rota', facts: fields.map((field) => `R1:${field}`) }), {
-  evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads(), userText
+const verify = (ledger, fields) => analyzeGroundedAnswer(JSON.stringify({ kind: 'rota', facts: fields.map((field) => `R1:${field}`) }), {
+  evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads()
 });
+const inProject = (metrics, projectId = PROJECTS.FULL, extra = {}) => ({ operation: 'value', metrics, entities: [{ type: 'project', id: projectId }], ...extra });
 
 test('first-round identities require current user intent, including numeric selector provenance', () => {
   const scope = createToolScope({ userText: 'Radar projesindeki 30 günlük işleri göster' });
@@ -44,9 +46,11 @@ test('follow-up text must be a complete user phrase and must narrow the frozen s
   assert.throws(() => scope.validate('rota_task_search', { text: 'Kargo' }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
-for (const text of ['not the second one', 'ikinci değil', 'ikincisi olmasın', '2 değil', 'not #2', 'hayır ikinci', 'second except']) {
-  test(`negated or ambiguous clarification is never a selection: ${text}`, () => assert.equal(selectedCandidateOrdinal(text, 3), null));
-}
+test('a negated, ambiguous or worded clarification reply is never a selection', () => {
+  for (const text of ['not the second one', 'ikinci değil', 'ikincisi olmasın', '2 değil', 'not #2', 'hayır ikinci', 'second except']) {
+    assert.equal(selectedCandidateOrdinal(text, 3), null, text);
+  }
+});
 
 test('saved evidence beyond 160000 tasks uses bounded batches and revocation affects only its own record', async () => {
   const projectId = PROJECTS.FULL;
@@ -107,14 +111,20 @@ for (const [tool, args, field] of [
   });
 }
 
-test('true but unrelated metrics or entities cannot satisfy verification', async (t) => {
+test('true but unrelated metrics or entities cannot satisfy the declared request', async (t) => {
   const { ledger } = await callRotaTool(stackFor(t), AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL });
-  assert.equal(verify(ledger, ['data.totals.done'], `Kaç görev var? ${PROJECTS.FULL}`).ok, false);
-  assert.equal(verify(ledger, ['data.totals.total'], `Kaç görev var? ${PROJECTS.FULL}`).ok, true);
-  assert.equal(verify(ledger, ['data.totals.done'], `Kaç gecikmiş görev var? ${PROJECTS.FULL}`).ok, false);
-  assert.equal(verify(ledger, ['data.totals.total'], `Kaç gecikmiş görev var? ${PROJECTS.FULL}`).ok, false);
-  assert.equal(verify(ledger, ['data.totals.overdue'], `Kaç gecikmiş görev var? ${PROJECTS.FULL}`).ok, true);
-  assert.equal(verify(ledger, ['data.totals.overdue'], `Kaç gecikmiş görev var? ${PROJECTS.READ}`).ok, false);
+  const issue = (fields, request) => verifyRequested(ledger, fields, request).issues[0]?.code ?? null;
+  assert.equal(issue(['data.totals.done'], inProject(['tasks.total'])), 'UNDECLARED_METRIC');
+  assert.equal(issue(['data.totals.total'], inProject(['tasks.total'])), null);
+  assert.equal(issue(['data.totals.done'], inProject(['tasks.overdue'])), 'UNDECLARED_METRIC');
+  assert.equal(issue(['data.totals.total'], inProject(['tasks.overdue'])), 'UNDECLARED_METRIC', 'genel toplam istenen ölçünün yerine geçmez');
+  assert.equal(issue(['data.totals.overdue'], inProject(['tasks.overdue'])), null);
+  assert.equal(issue(['data.totals.overdue'], inProject(['tasks.overdue'], PROJECTS.READ)), 'ENTITY_MISMATCH');
+  // Birden çok ölçü tek olguyla karşılanamaz.
+  assert.equal(issue(['data.totals.overdue'], inProject(['tasks.overdue', 'tasks.open'])), 'METRIC_MISSING');
+  assert.equal(issue(['data.totals.overdue', 'data.totals.open'], inProject(['tasks.overdue', 'tasks.open'])), null);
+  // Bildirilen koşulu taşımayan kanıt, koşullu ölçünün yanıtı olamaz.
+  assert.equal(issue(['data.totals.total'], inProject(['tasks.total'], PROJECTS.FULL, { filters: { status: ['done'] } })), 'POPULATION_MISMATCH');
 });
 
 test('source-filtered portfolio evidence excludes other sources from saved authorization', async (t) => {
@@ -156,6 +166,56 @@ for (const unavailable of ['deleted', 'archived']) {
     });
   }
 }
+
+for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
+  test(`${tool} keeps unavailable selectors as provenance but revalidates a visible selector as a live record`, async (t) => {
+    const record = { TaskId: TASKS.OVERDUE, RequesterSicil: AYSE, RequestedAssigneeSicil: MEHMET, DecisionOwnerSicil: AYSE,
+      Mode: 'REQUEST', Status: 'REJECTED', TaskTitleSnapshot: 'Tarihi görev', ProjectIdSnapshot: PROJECTS.FULL, ProjectNameSnapshot: 'Tarihi proje', CreatedAt: '2026-09-29T10:00:00Z' };
+    const stack = stackFor(t, { taskScheduleChangeRequests: [record], taskAssignmentCoordinations: [record] });
+    stack.db.tasks = stack.db.tasks.filter((task) => task.TaskId !== TASKS.OVERDUE);
+    const deleted = await callRotaTool(stack, AYSE, tool, { tab: 'history', taskId: TASKS.OVERDUE });
+    assert.equal(deleted.result.ok, true, JSON.stringify(deleted.result.error));
+    assert.equal(deleted.result.totalCount, 1);
+    const [historical] = deleted.ledger.authorizationEntries();
+    assert.equal(historical.taskReferences.some((row) => row.taskId === TASKS.OVERDUE), false, 'a deleted selector is not a live task');
+    await deleted.context.revalidateAuthorization(signal());
+    assert.equal((await deleted.context.revalidateEvidence([historical], signal())).size, 1);
+
+    stack.db.projects.find((project) => project.ProjectId === PROJECTS.FULL).IsActive = 0;
+    const archived = await callRotaTool(stack, AYSE, tool, { tab: 'history', projectId: PROJECTS.FULL });
+    assert.equal(archived.result.ok, true, JSON.stringify(archived.result.error));
+    const [archivedEntry] = archived.ledger.authorizationEntries();
+    assert.equal(archivedEntry.scopedAuthorization?.projectIds?.includes(PROJECTS.FULL) ?? false, false, 'an archived selector is not a live project');
+    await archived.context.revalidateAuthorization(signal());
+    assert.equal((await archived.context.revalidateEvidence([archivedEntry], signal())).size, 1);
+  });
+
+  test(`${tool} revalidates a currently visible selected task even when no request matches`, async (t) => {
+    const stack = stackFor(t);
+    const selected = await callRotaTool(stack, AYSE, tool, { tab: 'pending', taskId: TASKS.UNASSIGNED });
+    assert.equal(selected.result.ok, true, JSON.stringify(selected.result.error));
+    assert.equal(selected.result.totalCount, 0);
+    const [entry] = selected.ledger.authorizationEntries();
+    assert.ok(entry.taskReferences.some((row) => row.taskId === TASKS.UNASSIGNED && row.projectId === PROJECTS.FULL));
+    stack.db.tasks.find((task) => task.TaskId === TASKS.UNASSIGNED).ProjectId = PROJECTS.HIDDEN;
+    await selected.context.revalidateAuthorization(signal());
+    assert.equal((await selected.context.revalidateEvidence([entry], signal())).size, 0);
+  });
+}
+
+test('saved project evidence revalidates by project identities alone', async (t) => {
+  const stack = stackFor(t);
+  const { ledger, context } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { wbsId: WBS.FULL_DESIGN });
+  const [entry] = ledger.authorizationEntries();
+  assert.deepEqual(entry.scopedAuthorization.projectIds, [PROJECTS.FULL], 'a WBS-only selector binds its resolved project');
+  await context.revalidateAuthorization(signal());
+  assert.equal((await context.revalidateEvidence([entry], signal())).size, 1);
+  const search = stack.db.aiToolLog.filter((row) => row.query === 'project-search').at(-1);
+  assert.deepEqual([search.params.text, search.params.projectIds, search.params.projectId], ['', PROJECTS.FULL, null]);
+  stack.db.projects.find((project) => project.ProjectId === PROJECTS.FULL).IsActive = 0;
+  await context.revalidateAuthorization(signal());
+  assert.equal((await context.revalidateEvidence([entry], signal())).size, 0);
+});
 
 const activity = (id, before, after) => ({ AuditId: id, OccurredAt: '2026-09-29T10:00:00Z', ActorSicil: AYSE, CorrelationId: '65000000-0000-4000-8000-000000000001', ActionCode: 'UPDATE',
   EntityType: 'TASK', EntityId: TASKS.OVERDUE, ProjectId: PROJECTS.FULL, BeforeJson: JSON.stringify(before), AfterJson: JSON.stringify(after) });
@@ -223,14 +283,21 @@ for (const tool of ['rota_task_search', 'rota_task_analytics']) {
   });
 }
 
-test('terminal selection cannot replace a requested list, ordinal or named row with another true row', async (t) => {
+test('terminal selection cannot replace a requested list, rank or named row with another true row', async (t) => {
   const { ledger } = await callRotaTool(stackFor(t), AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc' });
-  const payload = JSON.parse(ledger.payloads()[0].payload);
-  const name = payload.data.tasks[0].title;
-  assert.equal(verify(ledger, ['data.tasks.1.title'], `İlk görevi göster ${PROJECTS.FULL}`).ok, false);
-  assert.equal(verify(ledger, ['data.tasks.1.title'], `${name} görevini göster ${PROJECTS.FULL}`).ok, false);
-  assert.equal(verify(ledger, ['data.tasks.0.title'], `Görevleri listele ${PROJECTS.FULL}`).ok, false);
-  assert.equal(verify(ledger, ['data.tasks.*.title'], `Görevleri listele ${PROJECTS.FULL}`).ok, true);
+  const rows = JSON.parse(ledger.payloads()[0].payload).data.tasks;
+  const issue = (fields, request) => verifyRequested(ledger, fields, request).issues[0]?.code ?? null;
+  const dated = rows.map((row, index) => ({ index, date: row.targetFinish })).filter((row) => row.date).sort((left, right) => left.date.localeCompare(right.date));
+  assert.ok(dated.length >= 2 && dated[0].date < dated[1].date);
+  const earliest = inProject(['task.targetFinish'], PROJECTS.FULL, { operation: 'rank', rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 } });
+  assert.equal(issue([`data.tasks.${dated[1].index}.targetFinish`], earliest), 'RANK_MISMATCH');
+  assert.equal(issue([`data.tasks.${dated[0].index}.title`, `data.tasks.${dated[0].index}.targetFinish`], earliest), null);
+  const named = inProject(['task.status'], PROJECTS.FULL, { entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'task', id: rows[0].taskId }] });
+  assert.equal(issue(['data.tasks.1.status'], named), 'ENTITY_MISSING');
+  assert.equal(issue(['data.tasks.0.status'], named), null);
+  const list = inProject(['task.title'], PROJECTS.FULL, { operation: 'list' });
+  assert.equal(issue(['data.tasks.0.title'], list), 'LIST_INCOMPLETE');
+  assert.equal(issue(['data.tasks.*.title'], list), null);
 });
 
 test('exactly thirty days belongs to the thirty-or-more deadline group and internal keys are not claimable', async (t) => {
@@ -270,13 +337,22 @@ test('administrator name search applies its selector before the project material
   assert.equal(wbs.result.data.totals.total, 1);
 });
 
-test('population totals cannot substitute a different counting unit or a capped preview', async (t) => {
+test('population totals cannot substitute a different counting unit, a search population or a capped preview', async (t) => {
   const stack = stackFor(t);
   const projects = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Radar' });
-  assert.equal(verify(projects.ledger, ['totalCount'], 'Radar kaç görev var?').ok, false);
-  assert.equal(verify(projects.ledger, ['totalCount'], 'Radar kaç proje var?').ok, true);
+  const issue = (ledger, fields, request) => verifyRequested(ledger, fields, request).issues[0]?.code ?? null;
+  assert.equal(issue(projects.ledger, ['totalCount'], { operation: 'value', metrics: ['tasks.total'] }), 'UNDECLARED_METRIC');
+  assert.equal(issue(projects.ledger, ['totalCount'], { operation: 'value', metrics: ['projects.total'] }), 'POPULATION_MISMATCH', 'ad araması bütün projelerin sayısı değildir');
+  assert.equal(issue(projects.ledger, ['totalCount'], { operation: 'value', metrics: ['projects.total'], entities: [{ type: 'project', text: 'Radar' }] }), 'ENTITY_UNRESOLVED', 'kısmi eşleşme kimlik değildir');
+  const exact = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Radar Modernizasyonu' });
+  assert.equal(issue(exact.ledger, ['totalCount'], { operation: 'value', metrics: ['projects.total'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }), 'POPULATION_MISMATCH',
+    'ad çözümünün araması da bir nüfustur; toplamı bütün projelerin sayısı olamaz');
+  assert.equal(issue(exact.ledger, ['data.matches.0.sourceType'], { operation: 'value', metrics: ['project.sourceType'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }), null,
+    'çözülen varlığın kendi satırı değer isteğini karşılar');
+  assert.equal(issue(projects.ledger, ['totalCount'], { operation: 'value', metrics: ['projects.total'], filters: { text: 'Radar' } }), null);
   const tasks = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, limit: 1 });
-  assert.equal(verify(tasks.ledger, ['returnedCount'], `Kaç görev var? ${PROJECTS.FULL}`).ok, false);
-  assert.equal(verify(tasks.ledger, ['returnedCount'], `Kaç görev döndürüldü? ${PROJECTS.FULL}`).ok, true);
-  assert.equal(verify(tasks.ledger, ['totalCount', 'returnedCount'], `Kaç görev var? ${PROJECTS.FULL}`).ok, true);
+  assert.equal(issue(tasks.ledger, ['returnedCount'], inProject(['tasks.total'])), 'UNDECLARED_METRIC');
+  assert.equal(issue(tasks.ledger, ['returnedCount'], inProject(['records.returned'])), null);
+  assert.equal(issue(tasks.ledger, ['totalCount', 'returnedCount'], inProject(['tasks.total'])), 'UNDECLARED_METRIC');
+  assert.equal(issue(tasks.ledger, ['totalCount', 'returnedCount'], inProject(['tasks.total', 'records.returned'])), null);
 });

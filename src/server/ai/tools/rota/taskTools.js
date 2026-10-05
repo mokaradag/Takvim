@@ -97,7 +97,10 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
     filters.project = dataText(node.ProjectName, 120);
     filters.wbs = [node.Code, node.Name].filter(Boolean).map((text) => dataText(text, 120)).join(' · ');
   }
-  if (filters.projectId) await requireVisibleProject(scope, filters.projectId, call);
+  if (filters.projectId) {
+    await requireVisibleProject(scope, filters.projectId, call);
+    call.noteProjects?.([filters.projectId]);
+  }
   const range = coarseTargetRange(filters, call.today);
   const result = await call.sql((executor) => readTaskFacts(executor, scope, {
     projectId: filters.projectId,
@@ -373,6 +376,12 @@ const taskDetail = {
 /* ── rota_task_analytics ──────────────────────────────────── */
 
 const GROUP_BY = Object.freeze(['status', 'priority', 'project', 'assignee', 'deadline', 'target_month']);
+/** Görünür kişiye bağlanamayan görevlerin grupları; gizli ve olmayan atama aynı gruptadır. */
+const ASSIGNMENT_GROUPS = Object.freeze({
+  unassigned: ['unassigned', 'Sorumlusuz'],
+  unresolved: ['unresolved', 'Sorumlu kaydı çözülemiyor'],
+  undisclosed: ['undisclosed', 'Sorumlu bilgisi gösterilemiyor']
+});
 
 function deadlineBucket(fact, today) {
   if (fact.status === 'done') return ['done', 'Tamamlandı'];
@@ -395,10 +404,11 @@ function groupKeys(fact, groupBy, { projects, assignees, today }) {
     case 'deadline': return [deadlineBucket(fact, today)];
     case 'target_month': return [fact.targetFinish ? [fact.targetFinish.slice(0, 7), fact.targetFinish.slice(0, 7)] : ['none', 'Termini yok']];
     case 'assignee': {
-      if (assignmentState(fact) === 'unassigned') return [['unassigned', 'Sorumlusuz']];
-      const people = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
-      if (!people.length) return [];
-      return people.map((person) => [`sicil:${person.sicil}`, person.name || 'Seçilen kişi']);
+      const state = assignmentState(fact);
+      const people = state === 'visible'
+        ? (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null) : [];
+      if (people.length) return people.map((person) => [`sicil:${person.sicil}`, person.name || 'Seçilen kişi']);
+      return [ASSIGNMENT_GROUPS[state] || ASSIGNMENT_GROUPS.undisclosed];
     }
     default: return [];
   }

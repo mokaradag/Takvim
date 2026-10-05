@@ -3,13 +3,15 @@
  *
  * Tek kesin eşleşme kimliktir; tek kısmi ya da birden çok eşleşme aday olarak
  * kalır. Açıklamadaki adaylar sunucuda tutulur ve kullanıcının numaralı yanıtı
- * ("2", "ikincisi", "evet") modele bırakılmadan kayıtlı kimliğe bağlanır.
+ * ("2") modele bırakılmadan kayıtlı kimliğe bağlanır. Sözcükle anlatılan seçim
+ * sunucuda yorumlanmaz.
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, sendTurn } from './helpers/aiStack.mjs';
 import { ALI_1, ALI_2, AYSE, PROJECTS, TASKS, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { declared } from './helpers/evidenceScenario.mjs';
 
 const { selectedCandidateOrdinal, clarificationReferences } = await import('../src/domain/ai/clarification.js');
 
@@ -24,18 +26,15 @@ function stackFor(t) {
   return createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed });
 }
 
-test('numbered replies select a candidate deterministically; anything else is not a selection', () => {
-  const selections = {
-    2: 1, '2.': 1, '#2': 1, '2’yi': 1, "2'si": 1, ikincisi: 1, 'İkinci': 1, 'ikinciyi seçiyorum': 1, 'ikinci projenin görevleri': 1,
-    ilki: 0, 'ilk aday': 0, birincisi: 0, '1 numaralı aday': 0, 'üçüncüsü': 2, ucuncu: 2, sonuncusu: 2, 'the second one': 1, 'option 3': 2
-  };
+test('only a reply that is exactly one offered choice number selects a candidate; words are never interpreted', () => {
+  const selections = { 2: 1, '2.': 1, '#2': 1, '(2)': 1, ' 3 ': 2, '1': 0 };
   for (const [reply, expected] of Object.entries(selections)) assert.equal(selectedCandidateOrdinal(reply, 3), expected, reply);
-  for (const reply of ['4', 'dördüncü', '0', '2 görevim var mı?', 'ilk iki', 'ikisi de', '1 ve 2', 'ikinci değil birinci', 'Kalite birimindeki',
-    'evet', '', 'x'.repeat(200), 'hepsi']) {
+  for (const reply of ['4', '0', '12', 'ikincisi', 'ilki', 'sonuncusu', 'the second one', 'option 3', '2’yi', '2 görevim var mı?', '1 ve 2',
+    'ikinci değil', 'not #2', '2 değil', 'evet', '', 'x'.repeat(200)]) {
     assert.equal(selectedCandidateOrdinal(reply, 3), null, reply);
   }
-  assert.equal(selectedCandidateOrdinal('evet', 1), 0);
-  assert.equal(selectedCandidateOrdinal('Evet, o', 1), 0);
+  assert.equal(selectedCandidateOrdinal('evet', 1), null, 'onay da numarayla verilir');
+  assert.equal(selectedCandidateOrdinal('1', 1), 0);
   assert.equal(selectedCandidateOrdinal('2', 11), null, 'en fazla on aday');
   assert.deepEqual(clarificationReferences([{ ordinal: 1, personSicil: '910005', name: 'INJECT' }, { ordinal: 1, projectId: PROJECTS.FULL }, { ordinal: 12, taskId: TASKS.OVERDUE }, { ordinal: 0, projectId: 'x' }]),
     [{ ordinal: 1, personSicil: 910005 }]);
@@ -68,15 +67,17 @@ test('exact identity resolution: Sicil and full name resolve a person, a partial
   assert.equal(loneTask.result.data.resolvedTask, undefined);
 });
 
+const aliWorkload = { operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali Veli' }] };
+
 async function askAboutAli(stack) {
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_person_search', arguments: { text: 'Ali Veli' } }] },
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared(aliWorkload)], calls: [{ name: 'rota_person_search', arguments: { text: 'Ali Veli' } }] },
     { type: 'answer', text: '{"kind":"clarification","evidence":"R1"}' });
   const first = done(await sendTurn({ turnId: randomUUID(), message: 'Ali Veli’nin iş yükünü göster' }));
   assert.equal(first.assistantMessage.finishReason, 'clarification');
   return first;
 }
 
-for (const reply of ['2', 'ikincisi']) {
+for (const reply of ['2', '#2']) {
   test(`the reply "${reply}" binds the stored second candidate's Sicil before any identity-dependent tool runs`, async (t) => {
     const stack = stackFor(t);
     const first = await askAboutAli(stack);
@@ -86,7 +87,8 @@ for (const reply of ['2', 'ikincisi']) {
     assert.deepEqual(stored, [{ ordinal: 0, personSicil: ALI_1 }, { ordinal: 1, personSicil: ALI_2 }]);
     stack.provider.enqueue({ type: 'script', respond: (call) => {
       assert.match(call.messages[0].content, new RegExp(`SUNUCU SEÇİMİ: Kullanıcı önceki açıklamadaki 2\\. adayı seçti; sunucu bu seçimi personSicil=${ALI_2}`));
-      return { type: 'tool-calls', calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_1 } }, { name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
+      // Adla bildirilen kişi, bu turda başka çözüm yoksa sunucunun bağladığı seçime bağlanır.
+      return { type: 'tool-calls', preface: [declared(aliWorkload)], calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_1 } }, { name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
     } }, { type: 'script', respond: (call) => {
       const [wrong, bound] = toolResults(call);
       assert.equal(wrong.error.code, 'UNSUPPORTED_SCOPE', 'the other stored candidate is not an identity in this turn');
@@ -103,7 +105,7 @@ test('a non-numbered reply does not let the model translate a candidate into an 
   const first = await askAboutAli(stack);
   stack.provider.enqueue({ type: 'script', respond: (call) => {
     assert.match(call.messages[0].content, /Kullanıcının yanıtı önceki açıklamadaki adaylardan birini numarasıyla seçmiyor/);
-    return { type: 'tool-calls', calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
+    return { type: 'tool-calls', preface: [declared(aliWorkload)], calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
   } }, { type: 'script', respond: (call) => {
     assert.equal(toolResults(call)[0].error.code, 'UNSUPPORTED_SCOPE');
     // Ad bu turdaki kullanıcı iletisinde de bulunur.
@@ -116,9 +118,10 @@ test('a non-numbered reply does not let the model translate a candidate into an 
   assert.equal(second.assistantMessage.finishReason, 'clarification');
 });
 
-test('a single partial match asks for confirmation and "evet" binds that project', async (t) => {
+test('a single partial match asks for confirmation and the reply "1" binds that project', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_project_search', arguments: { text: 'Radar' } }] }, { type: 'script', respond: (call) => {
+  const radar = declared({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar' }] });
+  stack.provider.enqueue({ type: 'tool-calls', preface: [radar], calls: [{ name: 'rota_project_search', arguments: { text: 'Radar' } }] }, { type: 'script', respond: (call) => {
     assert.equal(toolResults(call)[0].data.resolution, 'partial');
     return { type: 'tool-calls', calls: [{ name: 'rota_project_detail', arguments: { projectId: PROJECTS.FULL } }] };
   } }, { type: 'script', respond: (call) => {
@@ -128,19 +131,20 @@ test('a single partial match asks for confirmation and "evet" binds that project
   const first = done(await sendTurn({ turnId: randomUUID(), message: 'Radar projesinin durumu nedir?' }));
   assert.equal(first.assistantMessage.finishReason, 'clarification');
   assert.match(first.assistantMessage.content, /Bunu mu kastettiniz\? Onaylamak için \*\*1\*\* yazın\./);
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_project_detail', arguments: { projectId: PROJECTS.FULL } }] }, { type: 'script', respond: (call) => {
+  stack.provider.enqueue({ type: 'tool-calls', preface: [radar], calls: [{ name: 'rota_project_detail', arguments: { projectId: PROJECTS.FULL } }] }, { type: 'script', respond: (call) => {
     const detail = toolResults(call)[0];
     assert.equal(detail.ok, true);
     return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.name', 'R1:data.visibleTasks.total'] }) };
   } });
-  const second = await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: 'Evet' });
+  const second = await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: '1' });
   assert.equal(done(second).assistantMessage.finishReason, 'stop');
   assert.match(deltas(second), /\*\*Radar Modernizasyonu\*\*/);
 });
 
 test('a numbered task selection binds the task identity for detail and Outlook follow-ups', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { text: 'Radar test', limit: 1 } }] },
+  const outlook = declared({ operation: 'value', metrics: ['subscriptions.active'], entities: [{ type: 'task', text: 'Radar test' }] });
+  stack.provider.enqueue({ type: 'tool-calls', preface: [outlook], calls: [{ name: 'rota_task_search', arguments: { text: 'Radar test', limit: 1 } }] },
     { type: 'answer', text: '{"kind":"clarification","evidence":"R1"}' });
   const first = done(await sendTurn({ turnId: randomUUID(), message: 'Radar test görevi Outlook’a eklendi mi?' }));
   const rows = first.assistantMessage.content.split('\n').filter((line) => /^\d+\. /.test(line));
@@ -148,7 +152,7 @@ test('a numbered task selection binds the task identity for detail and Outlook f
   const context = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson).clarificationContext;
   const chosen = context.find((item) => item.ordinal === 0).taskId;
   const other = context.find((item) => item.ordinal === 1).taskId;
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_outlook_status', arguments: { taskId: other } }, { name: 'rota_outlook_status', arguments: { taskId: chosen } }] },
+  stack.provider.enqueue({ type: 'tool-calls', preface: [outlook], calls: [{ name: 'rota_outlook_status', arguments: { taskId: other } }, { name: 'rota_outlook_status', arguments: { taskId: chosen } }] },
     { type: 'script', respond: (call) => {
       const [blocked, allowed] = toolResults(call);
       assert.equal(blocked.error.code, 'UNSUPPORTED_SCOPE');
@@ -161,7 +165,8 @@ test('a numbered task selection binds the task identity for detail and Outlook f
 
 test('task-name resolution reaches Outlook status in a later round', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { text: 'Anten kalibrasyonu' } }] }, { type: 'script', respond: (call) => {
+  const request = declared({ operation: 'value', metrics: ['subscription.state'], entities: [{ type: 'task', text: 'Anten kalibrasyonu' }] });
+  stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_search', arguments: { text: 'Anten kalibrasyonu' } }] }, { type: 'script', respond: (call) => {
     assert.ok(call.tools.some((tool) => tool.name === 'rota_outlook_status'));
     const [found] = toolResults(call);
     assert.equal(found.data.titleResolution, 'unique');

@@ -182,7 +182,8 @@ const dataQuality = {
         },
         notes: [
           'Denetimler yalnızca tamamlanmamış görevlere uygulanır (son madde hariç).',
-          'Sorumlu denetimi atanmış Sicil’in kurumsal personel dizininde çözülebilmesini arar; çözülemeyen eski referanslar sorumlu sayılmaz.'
+          'Sorumlu denetimi atanmış Sicil’in kurumsal personel dizininde çözülebilmesini arar; çözülemeyen eski referanslar sorumlu sayılmaz.',
+          'Sorumlu bilgisi size açıklanamayan görevler sorumlu denetimlerinde değerlendirilmez.'
         ]
       },
       scope: descriptor,

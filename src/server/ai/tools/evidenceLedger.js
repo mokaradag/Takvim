@@ -62,14 +62,16 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
   return Object.freeze({
     factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null }) {
       if (entries.length >= Math.min(maxEntries, EVIDENCE_LIMITS.maxEvidencePerAnswer)) return null;
       const id = evidenceIdFor(entries.length + 1);
       const summary = normalizeEvidenceSummary({
         id, kind, label, entity, generatedAt, complete, truncated, partial, counts, highlights: highlightPairs(highlights)
       });
       if (!summary) return null;
+      // Yürütülen bağımsız değişkenler yalnızca sunucuda kalır: kanıtın nüfusu bunlardan hesaplanır.
       entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
+        args: Object.freeze({ ...(args || {}) }),
         population: Array.isArray(populationReferences) && populationReferences.length ? populationReferences : null });
       return id;
     },
@@ -112,6 +114,14 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       return entries
         .filter((entry) => entry.valid && (!wanted || wanted.has(entry.id)) && entry.payload)
         .map((entry) => ({ id: entry.id, payload: entry.payload }));
+    },
+    /** İstek doğrulaması için geçerli kayıtlar: araç, yürütülen bağımsız değişkenler ve çözümlenmiş yük. */
+    requestEntries() {
+      return entries.filter((entry) => entry.valid && entry.payload).map((entry) => {
+        let payload = null;
+        try { payload = JSON.parse(entry.payload); } catch { /* Bozuk yük kanıt değildir. */ }
+        return { id: entry.id, tool: entry.tool, args: entry.args, payload };
+      });
     },
     /** Verilen kimliklerin özetleri, kanıt sırasına göre. */
     summaries(ids = null) {

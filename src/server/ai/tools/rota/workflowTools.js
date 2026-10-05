@@ -21,7 +21,7 @@ import {
   requireVisibleProject,
   searchedScope,
   visibleProjectName,
-  visibleTaskTitle
+  visibleTaskReference
 } from './rotaToolSupport.js';
 import { isCompleteTaskView, projectAccess } from './rotaScope.js';
 import { decodeCursor, encodeCursor } from './taskFacts.js';
@@ -192,15 +192,19 @@ const SCHEDULE_STATUSES = Object.freeze(['PENDING', 'ACCEPTED', 'REJECTED', 'CAN
 /**
  * Proje, görev ve kişi seçicilerinin kullanıcıya gösterilen adları. Kimlikler
  * olgu metnine yazılmaz; ad okunamazsa seçici "seçilen" olarak belirtilir.
+ * Görünür seçici canlı nüfusa kaydedilir; görünmeyen seçici yalnızca tarihsel
+ * kökendir ve son yetki denetiminde canlı kayıt sayılmaz.
  */
 async function workflowSelector(call, scope, key) {
   const [project, task] = await Promise.all([
     key.projectId ? visibleProjectName(call, scope, key.projectId) : null,
-    key.taskId ? visibleTaskTitle(call, scope, key.taskId) : null
+    key.taskId ? visibleTaskReference(call, scope, key.taskId) : null
   ]);
+  if (project) call.noteProjects?.([key.projectId]);
+  if (task) call.notePopulation?.([{ taskId: key.taskId, projectId: task.projectId }]);
   return {
     ...(key.projectId ? { projectId: key.projectId, project: project || 'Seçilen proje' } : {}),
-    ...(key.taskId ? { taskId: key.taskId, task: task || 'Seçilen görev' } : {}),
+    ...(key.taskId ? { taskId: key.taskId, task: task?.title || 'Seçilen görev' } : {}),
     ...(key.personSicil != null ? { personSicil: key.personSicil } : {})
   };
 }
@@ -215,6 +219,11 @@ function workflowFilters(key, selector) {
     ...(key.dateTo ? { dateTo: key.dateTo } : {}),
     ...(key.text ? { text: key.text } : {})
   };
+}
+
+/** Sekme süzgeci sayaçları da daraltır: tüm sekmeler dışında vurgu bunu söyler. */
+function countHighlight(label, count, tab) {
+  return `${label}${tab === 'all' ? '' : ' (seçili sekmede)'}: ${count}`;
 }
 
 function dateChanges(request) {
@@ -297,7 +306,7 @@ const scheduleRequests = {
       evidence: {
         label: `Tarih değişikliği talepleri · ${result.total} talep`,
         entity: null,
-        highlights: [`Kararınızı bekleyen: ${result.counts.pending}`, `Gönderdiğiniz: ${result.counts.sent}`]
+        highlights: [countHighlight('Kararınızı bekleyen', result.counts.pending, key.tab), countHighlight('Gönderdiğiniz', result.counts.sent, key.tab)]
       }
     };
   }
@@ -387,7 +396,7 @@ const assignmentRequests = {
       evidence: {
         label: `Atama koordinasyonu · ${result.total} kayıt`,
         entity: null,
-        highlights: [`İşlem bekleyen: ${result.counts.pending}`, `Gönderdiğiniz: ${result.counts.sent}`]
+        highlights: [countHighlight('İşlem bekleyen', result.counts.pending, key.tab), countHighlight('Gönderdiğiniz', result.counts.sent, key.tab)]
       }
     };
   }
@@ -457,8 +466,9 @@ const notifications = {
       unread: event.unread,
       at: event.occurredAt
     }));
-    const unread = schedule.unreadCount == null || (inbox && inbox.unreadCount == null) ? null : schedule.unreadCount + (inbox?.unreadCount || 0);
-    const actionRequired = schedule.pendingCount == null || (inbox && inbox.pendingCount == null) ? null : schedule.pendingCount + (inbox?.pendingCount || 0);
+    // Okunamayan kaynak sıfır sayılmaz: bileşik sayaç yalnızca bütün kaynaklar okunduysa kesindir.
+    const unread = !inbox || schedule.unreadCount == null || inbox.unreadCount == null ? null : schedule.unreadCount + inbox.unreadCount;
+    const actionRequired = !inbox || schedule.pendingCount == null || inbox.pendingCount == null ? null : schedule.pendingCount + inbox.pendingCount;
     return {
       data: {
         unreadCount: unread,

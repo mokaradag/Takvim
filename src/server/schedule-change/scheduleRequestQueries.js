@@ -177,7 +177,6 @@ export async function readSchedulePage(executor, actor, input = {}, { evidenceSn
       COUNT(CASE WHEN (r.Status <> 'PENDING' OR t.TaskId IS NULL OR p.IsActive = 0) THEN 1 END) AS HistoryCount
     ${SOURCE} WHERE ${filters};
     DECLARE @total int = (SELECT COUNT(*) ${SOURCE} WHERE ${filters} AND ${tabFilter});
-    ${evidenceSnapshotLimit == null ? '' : "IF @total > @evidenceSnapshotLimit THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;"}
     DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
     DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
     SELECT @total AS Total, @safePage AS Page;

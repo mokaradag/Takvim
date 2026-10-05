@@ -86,6 +86,7 @@ const LABELS = Object.freeze({
   activeSubscriptions: ['Görünür görev aboneliği', 'Visible task subscriptions'],
   available: ['Kayıt kullanılabilir', 'Record available'], complete: ['Sonuç tam', 'Result complete'], truncated: ['Sonuç kısaltıldı', 'Result truncated'],
   unassigned: ['Sorumlusuz görev', 'Unassigned tasks'],
+  assignment: ['Sorumluluk durumu', 'Assignment'],
   rule: ['Tekrar kuralı', 'Recurrence rule'], recurrenceRule: ['Tekrar kuralı', 'Recurrence rule'],
   state: ['Teslim durumu', 'Delivery state'], attempts: ['Gönderim denemesi', 'Delivery attempts'],
   openTaskCount: ['Açık görev sayısı', 'Open task count'], cleanOpenTaskCount: ['Eksiksiz açık görev', 'Clean open tasks'],
@@ -228,6 +229,8 @@ export function factPresentation(fact, locale = 'tr') {
     state: { failed: ['Başarısız', 'Failed'], suspended: ['Bekletiliyor', 'Suspended'], pending: ['Bekliyor', 'Pending'], delivered: ['Etkin', 'Delivered'] },
     unit: { day: ['Gün', 'Days'], week: ['Hafta', 'Weeks'], month: ['Ay', 'Months'], hour: ['Saat', 'Hours'], unknown: ['Bilinmeyen birim', 'Unknown unit'] },
     level: { FULL: ['Tam erişim', 'Full access'], PARTIAL: ['Kısmi erişim', 'Partial access'], READ: ['Okuma erişimi', 'Read access'] },
+    assignment: { visible: ['Görünür sorumlusu var', 'Has a visible assignee'], unassigned: ['Sorumlusuz', 'Unassigned'],
+      unresolved: ['Sorumlu kaydı çözülemiyor', 'Assignee record unresolved'], undisclosed: ['Sorumlu bilgisi gösterilemiyor', 'Assignee not disclosed'] },
     yourRole: { requester: ['Talep eden', 'Requester'], 'decision-owner': ['Karar sahibi', 'Decision owner'], 'requester-and-decision-owner': ['Talep eden ve karar sahibi', 'Requester and decision owner'] },
     reasons: { SYSTEM_ADMIN: ['Sistem yöneticisi', 'System administrator'], CORPORATE_PROJECT_ROLE: ['Kurumsal proje rolü', 'Corporate project role'], MANUAL_OWNER: ['Manuel proje sahibi', 'Manual project owner'], MANUAL_PROJECT_LEAD: ['Proje lideri', 'Project lead'], MANUAL_GRANT: ['Proje erişim hibesi', 'Project access grant'], EXECUTIVE_SCOPE: ['Yönetim kapsamındaki çalışanın görevi', 'Task of an employee in management scope'], ASSIGNEE: ['Görev sorumlusu', 'Task assignee'], TASK_CREATOR: ['Görevi oluşturan', 'Task creator'], OTHER: ['Diğer', 'Other'] }
 

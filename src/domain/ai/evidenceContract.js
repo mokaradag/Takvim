@@ -54,20 +54,11 @@ export const GROUNDING_FAILURE_TEXT = 'Rota verilerine ilişkin yanıt doğrulan
 /** Kısmi kapsamlı kanıta dayanan her yanıta sunucunun eklediği not. */
 export const SCOPE_DISCLOSURE_TEXT = '_Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._';
 
-/** Yanıtın doğrulanamadığını söyleyen bitiş nedeni (kalıcı iletide saklanır). */
-export function replyLocale(text) {
-  const source = String(text || '');
-  if (/(?:in English|İngilizce|English please)/iu.test(source)) return 'en';
-  if (/(?:in Turkish|Türkçe)/iu.test(source)) return 'tr';
-  if (/(?:^|[^\p{L}])(?:görev|kaç|termin|sorumlu|toplam|saat|bugün|yarın|gecikmiş|bunu|peki)\p{L}*/iu.test(source)) return 'tr';
-  if (/\b(?:the|what|how|show|find|list|task|project|today|tomorrow|hours|total|status|please|English)\b/i.test(source)) return 'en';
-  return 'tr';
-}
-
 export function groundingFailureText(locale = 'tr') {
   return locale === 'en' ? 'The answer about Rota data could not be verified. Please try a narrower question.' : GROUNDING_FAILURE_TEXT;
 }
 
+/** Yanıtın doğrulanamadığını söyleyen bitiş nedeni (kalıcı iletide saklanır). */
 export const GROUNDING_FAILED_FINISH_REASON = 'grounding_failed';
 
 const CITATION = /【R([1-9]\d?)】/g;
@@ -203,7 +194,7 @@ export function containsCitationMarker(text) {
   return /【|\[\s*R\d+/i.test(String(text ?? ''));
 }
 
-export function withScopeDisclosure(text, citedEvidence = [], locale = replyLocale(text)) {
+export function withScopeDisclosure(text, citedEvidence = [], locale = 'tr') {
   const notes = [];
   if (citedEvidence.some((item) => item?.partial === true)) notes.push(locale === 'en'
     ? '_Note: This answer covers only records you are authorized to view and may not reflect the entire projects._'
@@ -214,14 +205,22 @@ export function withScopeDisclosure(text, citedEvidence = [], locale = replyLoca
   return { text: notes.length ? `${String(text).trimEnd()}\n\n${notes.join('\n\n')}` : text, disclosed: notes.length > 0 };
 }
 
-export function groundingRepairInstruction(issues = []) {
+/**
+ * Doğrulanamayan taslağın düzeltme yönergesi. Yalnızca sunucunun kendi hata
+ * kodlarını ve kayıt defterinden üretilen yol ipuçlarını taşır; kanıt metni ya
+ * da modelin yazdığı ayrıntı yönergeye girmez.
+ */
+export function groundingRepairInstruction(issues = [], hint = '') {
   const codes = [...new Set(issues.map((issue) => issue?.code).filter(Boolean))].slice(0, 6);
   return [
     'SUNUCU DOĞRULAMASI: Önceki taslak kullanıcıya gösterilmedi.',
     `Sözleşme hataları: ${codes.join(', ')}`,
-    'Güncel Rota verisi gerekiyorsa uygun aracı çağır. Kanıt varsa yalnızca olgu seçimi üret (değer ya da cümle yazma):',
+    'Kanıt varsa yalnızca olgu seçimi üret (değer ya da cümle yazma):',
     '{"kind":"rota","facts":["R1:data.tam.alan.yolu","R1:totalCount"]}',
     'Alan yolu sonuçtaki tam noktalı yoldur ve claimable.paths içinde olmalıdır; listenin bütün satırları için indis yerine * yaz. Ad kesin çözülmediyse {"kind":"clarification","evidence":"R1"} yaz.',
+    'Seçim, veri okunmadan bildirilen isteğe uymalıdır: bildirilen her ölçü (metrics) temsil edilir, bildirilmeyen ölçü yanıt olamaz, olgunun nüfusu bildirilen koşullar ve varlıklarla aynıdır; list bütün satırları, rank sıralamanın başını seçer. İstek artık değiştirilemez.',
+    ...(hint ? [`Bildirilen ölçülerin bu turun kanıtlarındaki yolları:\n${hint}`] : []),
+    'Gereken ölçü ya da nüfus eldeki kanıtlarda yoksa ve araç turu kaldıysa uygun aracı çağır.',
     'Genel niyet önerisi {"kind":"general","text":"yanıt"} olabilir; veri kipinde sunucu yalnızca Genel sohbet seçimi açıklamasını gösterir. Serbest olgu metni, başlık veya ek alan yazma. Kanıt alınamadıysa {"kind":"unavailable"} yaz.'
   ].join('\n');
 }

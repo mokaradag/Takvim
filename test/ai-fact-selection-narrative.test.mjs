@@ -10,7 +10,8 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, PROJECTS, TASKS, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { verifyRequested } from './helpers/requestScenario.mjs';
 
 const { analyzeGroundedAnswer } = await import('../src/domain/ai/evidenceVerification.js');
 const { turkishPossessiveSuffix, renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarrative.js');
@@ -60,17 +61,23 @@ test('every number and name in the narrative comes from the selected verified fa
   assert.match(shown, /^\| --- \| ---: \| ---: \|$/m, 'count columns are right-aligned');
 });
 
-test('list questions render lists, table requests render tables, and summaries stay prose', async (t) => {
+test('list requests render lists, a table layout renders a table, and value requests stay prose', async (t) => {
   const stack = stackFor(t);
   const facts = ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish', 'data.tasks.*.overdueDays'];
-  const list = await verify(stack, 'rota_task_search', { deadline: 'overdue', assignee: 'me' }, facts, { userText: 'Gecikmiş görevlerimi listele' });
-  assert.match(list.verdict.normalized, /^Eşleşen \*\*3\*\* görev bulundu \(ölçüt: /);
-  assert.match(list.verdict.normalized, /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\* — Termin: \*\*20 Eylül 2026\*\* · Gecikme \(gün\): \*\*10\*\* 【R1】$/m);
-  const table = await verify(stack, 'rota_task_search', { deadline: 'overdue', assignee: 'me' }, facts, { userText: 'Gecikmiş görevlerimi tablo olarak göster' });
-  assert.match(table.verdict.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \|$/m);
-  assert.match(table.verdict.normalized, /^\| Radar test planı · RDR · Radar Modernizasyonu[^\n]* \| 20 Eylül 2026 \| 10 \|$/m);
-  const summary = await verify(stack, 'rota_task_analytics', { deadline: 'overdue', assignee: 'me' }, ['data.totals.total']);
-  assert.match(summary.verdict.normalized, /^Görebildiğiniz görevler arasında toplam \*\*3\*\* görev bulunuyor \(ölçüt: .*Gecikmiş.*\)\. 【R1】$/);
+  const overdueMine = { filters: { deadline: 'overdue', assignee: 'me' } };
+  const listRequest = { operation: 'list', metrics: ['tasks.total', 'task.targetFinish', 'task.overdueDays'], ...overdueMine };
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
+  // Düzen kullanıcı cümlesinden çıkarılmaz: bildirilen işlem ya da modelin düzen seçimi belirler.
+  const list = verifyRequested(ledger, facts, listRequest);
+  assert.equal(list.ok, true, JSON.stringify(list.issues));
+  assert.match(list.normalized, /^Eşleşen \*\*3\*\* görev bulundu \(ölçüt: /);
+  assert.match(list.normalized, /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\* — Termin: \*\*20 Eylül 2026\*\* · Gecikme \(gün\): \*\*10\*\* 【R1】$/m);
+  const table = verifyRequested(ledger, facts, listRequest, { layout: 'table' });
+  assert.match(table.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \|$/m);
+  assert.match(table.normalized, /^\| Radar test planı · RDR · Radar Modernizasyonu[^\n]* \| 20 Eylül 2026 \| 10 \|$/m);
+  const analytics = await callRotaTool(stack, AYSE, 'rota_task_analytics', { deadline: 'overdue', assignee: 'me' });
+  const summary = verifyRequested(analytics.ledger, ['data.totals.total'], { operation: 'value', metrics: ['tasks.total'], ...overdueMine });
+  assert.match(summary.normalized, /^Görebildiğiniz görevler arasında toplam \*\*3\*\* görev bulunuyor \(ölçüt: .*Gecikmiş.*\)\. 【R1】$/);
 });
 
 test('null, incomplete and unit semantics stay visible in the narrative', async (t) => {
@@ -134,19 +141,26 @@ test('legacy structured claims remain verifiable and render through the same nar
  * Daha zayıf bir araç modeli: alan yollarını bilir ama değer, kimlik ya da
  * özne kopyalamaz; yalnızca olguları seçer.
  */
+const OVERDUE_MINE = Object.freeze({ deadline: 'overdue', assignee: 'me' });
+const FULL_PROJECT = Object.freeze([{ type: 'project', id: PROJECTS.FULL }]);
 const COMMON_QUESTIONS = [
-  ['Kaç gecikmiş görevim var?', ['rota_task_analytics', { deadline: 'overdue', assignee: 'me' }], ['data.totals.total'], /toplam \*\*\d+\*\* görev bulunuyor \(ölçüt: /],
-  ['Gecikmiş görevlerimi listele', ['rota_task_search', { deadline: 'overdue', assignee: 'me' }], ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish'], /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\*/m],
-  [`Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`, ['rota_project_detail', { projectId: PROJECTS.FULL }], ['data.visibleTasks.total'], /projesinde toplam \*\*8\*\* görev/],
-  [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, ['rota_project_detail', { projectId: PROJECTS.FULL }],
+  ['Kaç gecikmiş görevim var?', { operation: 'value', metrics: ['tasks.total'], filters: OVERDUE_MINE }, ['rota_task_analytics', OVERDUE_MINE], ['data.totals.total'],
+    /toplam \*\*\d+\*\* görev bulunuyor \(ölçüt: /],
+  ['Gecikmiş görevlerimi listele', { operation: 'list', metrics: ['tasks.total', 'task.targetFinish'], filters: OVERDUE_MINE }, ['rota_task_search', OVERDUE_MINE],
+    ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish'], /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\*/m],
+  [`Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total'], entities: FULL_PROJECT },
+    ['rota_project_detail', { projectId: PROJECTS.FULL }], ['data.visibleTasks.total'], /projesinde toplam \*\*8\*\* görev/],
+  [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.overdue', 'tasks.completionRatePercent'], entities: FULL_PROJECT },
+    ['rota_project_detail', { projectId: PROJECTS.FULL }],
     ['data.visibleTasks.total', 'data.visibleTasks.open', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent'], /Bunların \*\*\d+\*\*'s?[ıiuü] açık ve \*\*\d+\*\*'s?[ıiuü] gecikmiş; tamamlanma oranı \*\*%\d+\*\*\. 【R1】$/],
-  ['Kimde kaç açık iş var?', ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'], /^- \*\*Ayşe Yılmaz\*\* — Açık görev: \*\*\d+\*\* 【R1】$/m]
+  ['Kimde kaç açık iş var?', { operation: 'list', metrics: ['tasks.open'] }, ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'],
+    /^- \*\*Ayşe Yılmaz\*\* — Açık görev: \*\*\d+\*\* 【R1】$/m]
 ];
 
-for (const [question, [tool, args], facts, expected] of COMMON_QUESTIONS) {
+for (const [question, request, [tool, args], facts, expected] of COMMON_QUESTIONS) {
   test(`a less capable tool model answers "${question}" by selecting facts only`, async (t) => {
     const stack = stackFor(t);
-    stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: tool, arguments: args }] }, { type: 'script', respond: (call) => {
+    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: tool, arguments: args }] }, { type: 'script', respond: (call) => {
       const [result] = toolResults(call);
       assert.equal(result.ok, true);
       return { type: 'answer', text: select(...facts.map((fact) => `${result.evidenceId}:${fact}`)) };
