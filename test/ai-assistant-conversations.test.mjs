@@ -306,6 +306,35 @@ test('konuşmada aynı anda tek yanıt üretilir; ikinci tur süren üretim bite
   assert.equal(terminal(after).event, 'done');
 });
 
+test('terk edilen turun yeniden gönderimi süren üretimi durdurup devralır; konuşma kilitli kalmaz', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const { conversationId } = await startConversation('İlk');
+  const turnId = randomUUID();
+  provider.enqueue({ type: 'deferred-stream' });
+  // İstemcisi yanıtı göremeden vazgeçen tur (bağlantı koptu ya da süre doldu).
+  const abandoned = sseReader(await turnsRoute.POST(turnRequest({ conversationId, turnId, message: 'Uzun soru', mode: 'standard' })));
+  assert.equal((await abandoned.next()).event, 'accepted');
+  await provider.waitForActive(1);
+  // Tekillik korunur: BAŞKA bir tur hâlâ reddedilir.
+  const other = await sendTurn({ conversationId, turnId: randomUUID(), message: 'Araya giren' });
+  assert.equal(other.status, 409);
+  assert.equal(other.body.error.details.reason, 'GENERATION_IN_PROGRESS');
+  // AYNI tur yeniden istendiğinde terk edilen üretim durdurulur ve yanıt üretilir.
+  provider.enqueue({ type: 'stream', text: 'Devralan yanıt' });
+  const retried = await sendTurn({ conversationId, turnId, message: null });
+  assert.equal(terminal(retried).event, 'done', retried.text);
+  assert.equal(answerText(retried), 'Devralan yanıt');
+  assert.equal((await abandoned.rest()).at(-1).event, 'error', 'terk edilen akış iptal edilir');
+  assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'assistant' && row.Content === 'Devralan yanıt').length, 1,
+    'tur başına tek yanıt yazılır');
+  assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'user').length, 2);
+  await until(() => activeAssistantGenerationCountForTests() === 0);
+  // Kilit açıldığı için konuşma yeni turu kabul eder.
+  provider.enqueue({ type: 'stream', text: 'Sonraki yanıt' });
+  const next = await sendTurn({ conversationId, turnId: randomUUID(), message: 'Sonraki soru' });
+  assert.equal(terminal(next).event, 'done');
+});
+
 /* ── Liste, sıralama ve başlıklar ─────────────────────────── */
 
 test('liste son etkinliğe göre sıralıdır, sayfalıdır ve sayfalar örtüşmez; yeni ileti konuşmayı başa taşır', async (t) => {

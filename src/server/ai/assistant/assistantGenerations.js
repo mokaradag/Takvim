@@ -9,6 +9,12 @@ import { ServerPersistenceError } from '../../errors.js';
  * konuşmalar ve farklı kullanıcılar Phase 1 kapasite sınırları içinde birlikte
  * yürür.
  *
+ * AYNI turun yeniden gönderimi istisnadır: istemci o turu terk ettiğini
+ * (bağlantı koptu, süre doldu) yeniden isteyerek gösterir. Terk edilen üretim
+ * durdurulur ve hak yeni isteğe geçer; böylece yanıtı görülemeyen bir tur
+ * konuşmayı süresiz kilitlemez. Tekillik korunur: her an tek üretim etkindir ve
+ * yanıt satırı zaten tur başına tekil yazılır.
+ *
  * Anahtarlar Sicil içerir: başka bir kullanıcının konuşma kimliğini bilen
  * çağıran, o konuşmada üretim sürüp sürmediğini (ve konuşmanın varlığını) bu
  * kayıttan öğrenemez. Her kaydın kendi iptal sinyali vardır; konuşma silinirken
@@ -37,6 +43,16 @@ function generationInProgress() {
   );
 }
 
+/** Aynı turun terk edilmiş üretimi: durdurulur ve bütün anahtarları bırakılır. */
+function releaseAbandoned(current, key, turnId) {
+  const owner = current.get(key);
+  if (!owner || owner.turnId !== turnId) return;
+  owner.controller.abort();
+  for (const ownerKey of owner.keys) {
+    if (current.get(ownerKey) === owner) current.delete(ownerKey);
+  }
+}
+
 /**
  * Üretim hakkını alır. Yeni konuşmanın ilk turu henüz konuşma kimliği
  * taşımadığı için tur kimliğiyle alınır; konuşma açılınca `bindConversation`
@@ -45,17 +61,18 @@ function generationInProgress() {
 export function claimAssistantGeneration({ sicil, conversationId = null, turnId }) {
   const current = registry();
   const firstKey = conversationId ? conversationKey(sicil, conversationId) : turnKey(sicil, turnId);
+  releaseAbandoned(current, firstKey, turnId);
   if (current.has(firstKey)) throw generationInProgress();
   const controller = new AbortController();
-  const entry = { controller, keys: [firstKey] };
+  const entry = { controller, turnId, keys: [firstKey] };
   current.set(firstKey, entry);
   return {
     signal: controller.signal,
     bindConversation(id) {
       const key = conversationKey(sicil, id);
-      const owner = current.get(key);
-      if (owner === entry) return;
-      if (owner) throw generationInProgress();
+      if (current.get(key) === entry) return;
+      releaseAbandoned(current, key, turnId);
+      if (current.has(key)) throw generationInProgress();
       current.set(key, entry);
       entry.keys.push(key);
     },

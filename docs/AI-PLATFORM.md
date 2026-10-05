@@ -1204,13 +1204,20 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
 
 ### 18.6 Tek üretim, iptal ve yeniden deneme
 
-- **Konuşmada tek üretim.** Aynı konuşmada ikinci tur, süren üretim bitmeden
+- **Konuşmada tek üretim.** Aynı konuşmada BAŞKA bir tur, süren üretim bitmeden
   `CONFLICT` (`GENERATION_IN_PROGRESS`) alır; arayüz yanıt sürerken taslak
   yazdırır ama göndertmez (Durdur ya da tamamlanmayı bekler). Kayıt süreç
   başınadır ve anahtarları Sicil içerir. Bu nedenle §18.14 tek süreç şartı
   zorunludur. Tur başına veritabanı tekilliği farklı turların eşzamanlı
   üretimini engellemez. Farklı konuşmalar ve farklı
   kullanıcılar Aşama 1 kapasite sınırları içinde birlikte yürür.
+- **Terk edilen turun devralınması.** AYNI turun yeniden gönderimi istisnadır:
+  istemci o turu terk ettiğini (bağlantı koptu, istemci süre sınırı doldu)
+  yeniden isteyerek gösterir. Terk edilen üretim durdurulur ve hak yeni isteğe
+  geçer. Böylece yanıtı görülemeyen bir tur konuşmayı, üretim kendi süre
+  sınırına ulaşana kadar kilitlemez; kullanıcı "Yeniden dene" döngüsüne
+  sıkışmaz. Tekillik korunur (her an tek üretim etkindir) ve yanıt satırı
+  `ReplyToMessageId` tekilliğiyle tur başına bir kez yazılır.
 - **Durdur.** Tarayıcı isteği keser → `request.signal` → akış iptali →
   ağ geçidinin süre sınırı sinyali → sağlayıcı bağlantısı kapanır. Kapasite
   kirası ve üretim hakkı tam bir kez bırakılır, yarım yanıt YAZILMAZ; kullanıcı
