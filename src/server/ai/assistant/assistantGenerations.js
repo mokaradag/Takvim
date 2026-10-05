@@ -1,5 +1,6 @@
 import 'server-only';
 import { ServerPersistenceError } from '../../errors.js';
+import { raceWithAbort } from '../aiDeadline.js';
 
 /**
  * Konuşma başına TEK etkin yanıt üretimi (süreç içi).
@@ -9,11 +10,8 @@ import { ServerPersistenceError } from '../../errors.js';
  * konuşmalar ve farklı kullanıcılar Phase 1 kapasite sınırları içinde birlikte
  * yürür.
  *
- * AYNI turun yeniden gönderimi istisnadır: istemci o turu terk ettiğini
- * (bağlantı koptu, süre doldu) yeniden isteyerek gösterir. Terk edilen üretim
- * durdurulur ve hak yeni isteğe geçer; böylece yanıtı görülemeyen bir tur
- * konuşmayı süresiz kilitlemez. Tekillik korunur: her an tek üretim etkindir ve
- * yanıt satırı zaten tur başına tekil yazılır.
+ * Aynı turun geçerli yeniden gönderimi etkin üretimin ve yazımın bitmesini
+ * bekler. Yeniden gönderim tek başına iptal yetkisi vermez.
  *
  * Anahtarlar Sicil içerir: başka bir kullanıcının konuşma kimliğini bilen
  * çağıran, o konuşmada üretim sürüp sürmediğini (ve konuşmanın varlığını) bu
@@ -43,35 +41,39 @@ function generationInProgress() {
   );
 }
 
-/** Aynı turun terk edilmiş üretimi: durdurulur ve bütün anahtarları bırakılır. */
-function releaseAbandoned(current, key, turnId) {
-  const owner = current.get(key);
-  if (!owner || owner.turnId !== turnId) return;
-  owner.controller.abort();
-  for (const ownerKey of owner.keys) {
-    if (current.get(ownerKey) === owner) current.delete(ownerKey);
-  }
-}
-
 /**
  * Üretim hakkını alır. Yeni konuşmanın ilk turu henüz konuşma kimliği
  * taşımadığı için tur kimliğiyle alınır; konuşma açılınca `bindConversation`
  * ile konuşmaya da bağlanır. Hak her yolda `release()` ile bırakılmalıdır.
  */
-export function claimAssistantGeneration({ sicil, conversationId = null, turnId }) {
+export async function claimAssistantGeneration({ sicil, conversationId = null, turnId, content = null, signal }) {
   const current = registry();
-  const firstKey = conversationId ? conversationKey(sicil, conversationId) : turnKey(sicil, turnId);
-  releaseAbandoned(current, firstKey, turnId);
-  if (current.has(firstKey)) throw generationInProgress();
+  const keys = [turnKey(sicil, turnId), ...(conversationId ? [conversationKey(sicil, conversationId)] : [])];
+  for (;;) {
+    const owner = keys.map((key) => current.get(key)).find(Boolean);
+    if (!owner) break;
+    if (owner.turnId !== turnId) throw generationInProgress();
+    if ((content != null && content !== owner.content) || (conversationId && owner.conversationId && conversationId !== owner.conversationId)) throw new ServerPersistenceError('CONFLICT',
+      'Bu ileti kimliği farklı bir içerikle kullanılmış. Sayfayı yenileyip yeniden gönderin.', { details: { reason: 'TURN_ID_REUSED' } });
+    await raceWithAbort(() => owner.finished, signal);
+    if (!conversationId && owner.conversationId) {
+      conversationId = owner.conversationId;
+      keys.push(conversationKey(sicil, conversationId));
+    }
+  }
+  if (signal.aborted) throw signal.reason;
   const controller = new AbortController();
-  const entry = { controller, turnId, keys: [firstKey] };
-  current.set(firstKey, entry);
+  let finish;
+  const finished = new Promise((resolve) => { finish = resolve; });
+  const entry = { controller, turnId, content, conversationId, keys, finished };
+  for (const key of keys) current.set(key, entry);
   return {
+    conversationId,
     signal: controller.signal,
     bindConversation(id) {
+      entry.conversationId = id;
       const key = conversationKey(sicil, id);
       if (current.get(key) === entry) return;
-      releaseAbandoned(current, key, turnId);
       if (current.has(key)) throw generationInProgress();
       current.set(key, entry);
       entry.keys.push(key);
@@ -80,6 +82,7 @@ export function claimAssistantGeneration({ sicil, conversationId = null, turnId 
       for (const key of entry.keys) {
         if (current.get(key) === entry) current.delete(key);
       }
+      finish();
     }
   };
 }

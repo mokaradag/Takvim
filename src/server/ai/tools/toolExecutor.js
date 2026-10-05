@@ -126,6 +126,7 @@ export function createToolExecutor({
       returnedCount: outcome.returnedCount ?? null,
       totalCount: outcome.totalCount ?? null,
       nextCursor: outcome.nextCursor ?? null,
+      ...(outcome.rankingBoundary ? { rankingBoundary: outcome.rankingBoundary } : {}),
       entity: outcome.evidence?.entity || null,
       subject: outcome.evidence?.entity?.name || outcome.evidence?.label || 'Rota',
       claimable: claimableContract(tool.name, args.textFields || []),

@@ -682,8 +682,9 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   await verifyDirectoryMember(sicil, signal);
   const body = await withinDeadline(TURN_BODY_TIMEOUT_MS, signal, (scoped) => readBody(scoped), () => invalidRequest('BODY_TIMEOUT'));
   const input = parseTurnInput(body);
+  let conversationId = input.conversationId;
   const prepareWith = (executor, readOnly) => prepareConversationTurn(executor, sicil, {
-    conversationId: input.conversationId,
+    conversationId,
     newConversationId: randomUUID(),
     userMessageId: randomUUID(),
     turnId: input.turnId,
@@ -701,6 +702,10 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   // Kayıtlı yanıt için yapılandırma ya da üretim hakkı gerekmez.
   const existing = await prepare(true);
   if (!existing.knownSicil) throw unknownSicil();
+  if (existing.outcome === 'EXISTING') {
+    const failure = outcomeFailure(existing, input);
+    if (failure) throw failure;
+  }
   if (existing.answer) {
     const failure = outcomeFailure(existing, input);
     if (failure) throw failure;
@@ -732,8 +737,11 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   // Şema yoklamasının geçici hatası (kapı dolu, SQL zaman aşımı) tur kaydedilmeden
   // yinelenebilir hata olarak döner; kalıcı bir "unavailable" yanıtı yazılmaz.
   const grounded = input.source !== 'general' && await groundedTurnAvailable({ config, registry, mode: input.mode, sicil, signal });
-  const claim = claimAssistantGeneration({ sicil, conversationId: input.conversationId, turnId: input.turnId });
+  const claim = await withinDeadline(config.requestTimeoutMs, signal, (scoped) => claimAssistantGeneration({
+    sicil, conversationId: input.conversationId, turnId: input.turnId, content: input.message ?? existing.turn?.content, signal: scoped
+  }), () => conflict('GENERATION_IN_PROGRESS', 'Bu konuşmada bir yanıt hâlâ üretiliyor. Tamamlanmasını bekleyip yeniden deneyin.'));
   try {
+    conversationId = claim.conversationId;
     const prepared = await prepare(false);
     if (!prepared.knownSicil) throw unknownSicil();
     const failure = outcomeFailure(prepared, input);

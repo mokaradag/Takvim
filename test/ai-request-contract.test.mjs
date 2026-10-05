@@ -266,7 +266,7 @@ test('ranked answers are the top rows by the declared metric, including ties at 
   assert.equal(issue(verifyRequested(ledger, [`data.projects.${other}.tasks.overdue`], { operation: 'value', metrics: ['tasks.overdue'] })), 'ROW_SELECTION_UNBOUND');
 });
 
-test('a truncated server-sorted first page proves the rank boundary when the requested top-N covers it', async (t) => {
+test('a server-sorted first page needs a proven cutoff even when top-N covers the page', async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_portfolio_summary', { limit: 2 }], ['rota_portfolio_summary', {}]]);
   const page = JSON.parse(ledger.payloads()[0].payload);
@@ -274,8 +274,8 @@ test('a truncated server-sorted first page proves the rank boundary when the req
   assert.equal(page.truncated, true);
   assert.equal(page.data.projects.length, 2);
   const rank = (limit) => ({ operation: 'rank', metrics: ['tasks.overdue'], rank: { metric: 'tasks.overdue', order: 'desc', limit } });
-  // İstenen ilk iki satır sayfanın tamamıdır: sınır tanığı olarak üçüncü satır beklenemez.
-  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.*.tasks.overdue'], rank(2))), null);
+  // İkinci ve üçüncü projeler eşittir; yalnız ilk sayfa bütün eşitleri kanıtlamaz.
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.*.tasks.overdue'], rank(2))), 'RANK_MISMATCH');
   // Sayfanın yalnızca başı istendiyse sınırdaki eşitlik sayfada görünmelidir.
   const [first, second] = page.data.projects.map((row) => row.tasks.overdue);
   assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.0.tasks.overdue'], rank(1))), first === second ? 'RANK_MISMATCH' : null);
@@ -291,8 +291,8 @@ test('a rank request verifies from an empty population and still needs rows when
   assert.equal(JSON.parse(ledger.payloads()[0].payload).data.tasks.length, 0);
   const worst = { operation: 'rank', metrics: ['task.overdueDays'], rank: { metric: 'task.overdueDays', order: 'desc', limit: 5 },
     entities: [{ type: 'project', id: PROJECTS.FULL }], filters: { text: 'Böyle bir görev yok' } };
-  assert.equal(issue(verifyRequested(ledger, ['R1:totalCount'], { ...worst, metrics: ['tasks.total'], rank: { metric: 'tasks.total', order: 'desc', limit: 5 } })), null,
-    'boş ve satırsız koleksiyon sıralamanın geçerli yanıtıdır');
+  assert.equal(issue(verifyRequested(ledger, ['R1:totalCount'], { ...worst, metrics: ['tasks.total'], rank: { metric: 'tasks.total', order: 'desc', limit: 5 } })), 'RANK_MISMATCH',
+    'toplam sayım satırları sıralayabilen bir ölçü değildir');
   assert.equal(issue(verifyRequested(ledger, ['R2:totalCount'], { ...worst, metrics: ['tasks.total'], rank: { metric: 'tasks.total', order: 'desc', limit: 5 }, filters: {} })), 'RANK_MISMATCH',
     'satır varken sıralama satırlarla kanıtlanır');
   // Boş nüfus izni bildirilen ölçüyü atlamaz: satır alanı olan sıralama ölçüsü eşleşen kayıt sayısıyla karşılanamaz.
@@ -386,4 +386,123 @@ test('server-sorted ranks use orderable metrics only', () => {
   for (const metric of ['task.overdueDays', 'task.targetFinish', 'task.updatedAt', 'tasks.overdue', 'tasks.open', 'tasks.dueNext7Days', 'task.varianceDays']) {
     assert.equal(rankableMeasure(METRICS[metric]), true, metric);
   }
+});
+
+function reshape(ledger, id, change) {
+  const payload = ledger.requestEntries().find((entry) => entry.id === id).payload;
+  change(payload);
+  ledger.attachPayload(id, JSON.stringify(payload));
+}
+
+test('every selected collection and row binds every declared metric, including absent fields', async (t) => {
+  const { ledger } = await callRotaTools(stackFor(t), AYSE, [['rota_portfolio_summary', {}], ['rota_workload_summary', {}], ['rota_task_search', {}]]);
+  const list = { operation: 'list', metrics: ['tasks.open'] };
+  const projects = ['R1:data.projects.*.name', 'R1:data.projects.*.tasks.open'];
+  assert.equal(issue(verifyRequested(ledger, [...projects, 'R2:data.people.*.name'], list)), 'METRIC_MISSING');
+  assert.equal(issue(verifyRequested(ledger, [...projects, 'R3:data.tasks.*.title'], list)), 'METRIC_MISSING');
+  const both = [...projects, 'R2:data.people.*.name', 'R2:data.people.*.openTasks'];
+  assert.equal(issue(verifyRequested(ledger, both, list)), null);
+  reshape(ledger, 'R2', (payload) => { delete payload.data.people[0].openTasks; });
+  assert.equal(issue(verifyRequested(ledger, both, list)), 'METRIC_MISSING');
+  const composite = { operation: 'list', metrics: ['tasks.open', 'tasks.overdue'] };
+  assert.equal(issue(verifyRequested(ledger, [...projects, 'R1:data.projects.*.tasks.overdue'], composite)), null);
+  reshape(ledger, 'R1', (payload) => { delete payload.data.projects[1].tasks.overdue; });
+  assert.equal(issue(verifyRequested(ledger, [...projects, 'R1:data.projects.*.tasks.overdue', 'R1:data.totals.overdue'], composite)), 'METRIC_MISSING');
+});
+
+test('detail and scalar evidence cannot prove a row population, including empty or missing arrays', async (t) => {
+  const { ledger } = await callRotaTools(stackFor(t), AYSE, [['rota_project_detail', { projectId: PROJECTS.FULL }], ['rota_portfolio_summary', {}]]);
+  const rank = { operation: 'rank', metrics: ['tasks.overdue'], entities: [{ type: 'project', id: PROJECTS.FULL }], rank: { metric: 'tasks.overdue', order: 'desc', limit: 2 } };
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.visibleTasks.overdue'], rank)), 'RANK_MISMATCH');
+  const broad = { ...rank, entities: [] };
+  reshape(ledger, 'R2', (payload) => { payload.data.projects = []; payload.data.totals.overdue = 0; payload.totalCount = 0; payload.returnedCount = 0; });
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.totals.overdue'], broad)), null);
+  reshape(ledger, 'R2', (payload) => { delete payload.data.projects; });
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.totals.overdue'], broad)), 'RANK_MISMATCH');
+});
+
+test('page-sized ranks need a matching source cutoff; ties, wrong direction and shrink invalidate it', async (t) => {
+  const { ledger } = await callRotaTool(stackFor(t), AYSE, 'rota_portfolio_summary', { limit: 1 });
+  const rank = { operation: 'rank', metrics: ['tasks.overdue'], rank: { metric: 'tasks.overdue', order: 'desc', limit: 1 } };
+  const fields = ['data.projects.*.name', 'data.projects.*.tasks.overdue'];
+  assert.equal(issue(verifyRequested(ledger, fields, rank)), null);
+  assert.equal(issue(verifyRequested(ledger, fields, { ...rank, rank: { ...rank.rank, limit: 2 } })), 'RANK_MISMATCH',
+    'kesilmiş tek satır iki sıralı satır isteğini karşılamaz');
+  const original = ledger.requestEntries()[0].payload;
+  for (const change of [
+    (payload) => { payload.rankingBoundary.nextValue = payload.data.projects[0].tasks.overdue; },
+    (payload) => { delete payload.rankingBoundary; },
+    (payload) => { payload.rankingBoundary.metric = 'tasks.open'; },
+    (payload) => { payload.rankingBoundary.order = 'asc'; },
+    (payload) => { payload.rankingBoundary.returnedCount += 1; }
+  ]) {
+    ledger.attachPayload('R1', JSON.stringify(original));
+    reshape(ledger, 'R1', change);
+    assert.equal(issue(verifyRequested(ledger, fields, rank)), 'RANK_MISMATCH');
+  }
+  const { fitToolResult } = await import('../src/server/ai/tools/toolResultPolicy.js');
+  const large = structuredClone(original);
+  large.data.projects[0].name = 'x'.repeat(4000);
+  const shrunk = JSON.parse(fitToolResult(large, Buffer.byteLength(JSON.stringify(original)) + 128, 'scope'));
+  assert.equal(shrunk.rankingBoundary, undefined);
+  assert.equal(shrunk.complete, false);
+});
+
+test('rankable rows exclude missing values and require deterministic metric order', async (t) => {
+  const { ledger } = await callRotaTool(stackFor(t), AYSE, 'rota_task_search', { sort: 'overdue_days_desc' });
+  const payload = ledger.requestEntries()[0].payload;
+  const valued = payload.data.tasks.flatMap((row, index) => row.overdueDays == null ? [] : [index]);
+  assert.ok(valued.length > 1 && valued.length < payload.data.tasks.length);
+  const rank = { operation: 'rank', metrics: ['task.overdueDays'], rank: { metric: 'task.overdueDays', order: 'desc', limit: REQUEST_LIMITS.maxRankLimit } };
+  const refs = valued.map((index) => `data.tasks.${index}.overdueDays`);
+  assert.equal(issue(verifyRequested(ledger, refs, rank)), null);
+  assert.equal(issue(verifyRequested(ledger, [...refs].reverse(), rank)), 'RANK_MISMATCH');
+  const page = await callRotaTool(stackFor(t), AYSE, 'rota_task_search', { sort: 'overdue_days_desc', limit: 1 });
+  assert.equal(page.result.rankingBoundary.collection, 'tasks');
+  const top = { ...rank, rank: { ...rank.rank, limit: 1 } };
+  const boundary = page.result.rankingBoundary.nextValue;
+  assert.equal(issue(verifyRequested(page.ledger, ['data.tasks.0.overdueDays'], top)),
+    boundary === page.result.data.tasks[0].overdueDays ? 'RANK_MISMATCH' : null);
+});
+
+test('exhausted repair or tool budgets cannot be reopened by an evidence-gap escalation', async (t) => {
+  const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+  for (const budget of [{ maxRepairRounds: 0 }, { maxToolRounds: 1 }, { maxTotalCalls: 1 }]) {
+    stackFor(t);
+    const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+    const limits = { ...TOOL_LIMITS, ...budget };
+    const request = { operation: 'value', metrics: ['tasks.total', 'tasks.open'] };
+    const choices = [];
+    let rounds = 0;
+    const session = { signal: new AbortController().signal, round: async (input) => {
+      choices.push(input.toolChoice);
+      rounds += 1;
+      if (rounds === 1) return { text: declared(request), toolCalls: [call('rota_task_search')], finishReason: 'tool_calls' };
+      if (rounds === 3 && input.toolChoice === 'auto') return { text: '', toolCalls: [call('rota_task_analytics')], finishReason: 'tool_calls' };
+      return reply(facts('R1:totalCount'));
+    } };
+    const initial = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: 'Görev sayısı ve açık görev sayısı', now: NOW }).messages,
+      catalog: toolCatalogForModel(), context, limits, onText: async () => {}, escalation: true });
+    assert.equal(initial.outcome, 'escalate');
+    const before = initial.resume.executor.stats();
+    const toolRoundsBefore = initial.resume.toolRounds;
+    const result = await runGroundedTurn(session, { resume: initial.resume, onText: async () => {} });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(choices.at(-1), 'none');
+    assert.equal(result.stats.attempted, before.attempted);
+    assert.equal(result.stats.toolRounds, toolRoundsBefore);
+    assert.equal(result.stats.attempted <= limits.maxTotalCalls + 1, true);
+    assert.equal(rounds <= 5, true);
+  }
+});
+
+test('a final cursor page is not an exhaustive population even when complete marks the end', async (t) => {
+  const stack = stackFor(t);
+  const first = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1 });
+  const last = await callRotaTool(stack, AYSE, 'rota_task_search', { cursor: first.result.nextCursor, limit: 50 });
+  assert.equal(last.result.complete, true);
+  assert.equal(last.result.returnedCount < last.result.totalCount, true);
+  assert.equal(issue(verifyRequested(last.ledger, ['data.tasks.*.title'], { operation: 'list', metrics: ['task.title'] })), 'LIST_INCOMPLETE');
+  const request = { operation: 'rank', metrics: ['task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc', limit: REQUEST_LIMITS.maxRankLimit } };
+  assert.equal(issue(verifyRequested(last.ledger, ['data.tasks.*.targetFinish'], request)), 'RANK_MISMATCH');
 });

@@ -291,3 +291,61 @@ test('provider usage keeps reasoning token counts only when reported, and empty 
   assert.equal(assistantStreamErrorPayload(empty, { partial: true }).retryable, false);
   assert.equal(assistantStreamErrorPayload(new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'MISSING_CHOICE' } })).retryable, false);
 });
+
+test('a missing declared metric is obtained by bounded Standard repair before tool-disabled escalation', async (t) => {
+  const stack = stackFor(t);
+  const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'] };
+  const both = () => ({ type: 'script', respond: (call) => {
+    const tools = toolResultsOf(call);
+    return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:totalCount', `${tools.at(-1).evidenceId}:data.totals.open`] }) };
+  } });
+  stack.provider.enqueue(
+    { ...searchFull, preface: [declared(request)] }, factAnswer(),
+    { type: 'script', respond: (call) => {
+      assert.equal(call.model, STANDARD);
+      assert.equal(call.toolChoice, 'auto');
+      assert.ok(call.tools.some((tool) => tool.name === 'rota_task_analytics'));
+      return { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }] };
+    } }, both()
+  );
+  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, STANDARD]);
+  assert.deepEqual(doneOf(response).assistantMessage.evidence.map((item) => item.id), ['R1', 'R2']);
+  assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
+});
+
+test('repair followed by Deep finalization shares its exhausted repair and tool budgets', async (t) => {
+  const stack = stackFor(t);
+  const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'] };
+  stack.provider.enqueue({ ...searchFull, preface: [declared(request)] }, factAnswer(),
+    { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }] },
+    { type: 'answer', text: INVALID },
+    { type: 'script', respond: (call) => {
+      assert.equal(call.toolChoice, 'none');
+      assert.equal(toolResultsOf(call).length, 2);
+      return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:totalCount', 'R2:data.totals.open'] }) };
+    } });
+  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, STANDARD, DEEP]);
+  assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 1);
+});
+
+test('unauthorized or unavailable evidence repair fails closed after the shared single repair', async (t) => {
+  for (const scenario of ['scope', 'sql']) {
+    const stack = stackFor(t);
+    const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'] };
+    stack.provider.enqueue({ ...searchFull, preface: [declared(request)] }, factAnswer(),
+      { type: 'script', respond: () => {
+        if (scenario === 'sql') stack.db.aiToolFailure = { 'task-facts': Object.assign(new Error('bağlantı yok'), { code: 'ESOCKET' }) };
+        return { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: scenario === 'scope' ? PROJECTS.HIDDEN : PROJECTS.FULL } }] };
+      } }, factAnswer(), factAnswer());
+    const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+    assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
+    assert.equal(stack.provider.calls.length, 5);
+    assert.equal(stack.provider.calls.at(-1).toolChoice, 'none');
+    assert.equal(toolResultsOf(stack.provider.calls[3]).at(-1).ok, false);
+    assert.deepEqual(doneOf(response).assistantMessage.evidence, []);
+  }
+});

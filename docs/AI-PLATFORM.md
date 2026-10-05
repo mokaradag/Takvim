@@ -1211,13 +1211,12 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
   zorunludur. Tur başına veritabanı tekilliği farklı turların eşzamanlı
   üretimini engellemez. Farklı konuşmalar ve farklı
   kullanıcılar Aşama 1 kapasite sınırları içinde birlikte yürür.
-- **Terk edilen turun devralınması.** AYNI turun yeniden gönderimi istisnadır:
-  istemci o turu terk ettiğini (bağlantı koptu, istemci süre sınırı doldu)
-  yeniden isteyerek gösterir. Terk edilen üretim durdurulur ve hak yeni isteğe
-  geçer. Böylece yanıtı görülemeyen bir tur konuşmayı, üretim kendi süre
-  sınırına ulaşana kadar kilitlemez; kullanıcı "Yeniden dene" döngüsüne
-  sıkışmaz. Tekillik korunur (her an tek üretim etkindir) ve yanıt satırı
-  `ReplyToMessageId` tekilliğiyle tur başına bir kez yazılır.
+- **Aynı turun yinelenmesi.** Yeniden gönderim tek başına etkin üretimi
+  iptal etmez. İçerik uyuşmazlığı `TURN_ID_REUSED` alır. Geçerli yineleme
+  üretim hakkının yazım sonrasında bırakılmasını, istek süre sınırı ve kendi
+  iptal sinyali içinde bekler; kayıtlı yanıtı oynatır. İlk tur konuşma kimliği
+  olmadan yinelense de aynı konuşmaya bağlanır. Gerçek iptalden sonra yanıtsız
+  tur yeniden üretilebilir; tek kullanıcı iletisi ve tek yanıt korunur.
 - **Durdur.** Tarayıcı isteği keser → `request.signal` → akış iptali →
   ağ geçidinin süre sınırı sinyali → sağlayıcı bağlantısı kapanır. Kapasite
   kirası ve üretim hakkı tam bir kez bırakılır, yarım yanıt YAZILMAZ; kullanıcı

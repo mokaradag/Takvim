@@ -105,37 +105,50 @@ function rankMatches(request, source, collection, selected) {
   const rows = valueAt(source.envelope, collection.collection);
   const field = Array.isArray(rows) ? rankField(source.tool, collection.canonical, request.rank.metric, rows) : null;
   if (!field) return false;
-  const limit = Math.min(request.rank.limit || 1, rows.length);
   const direction = request.rank.order === 'asc' ? 1 : -1;
   const value = (row) => fieldValue(row, field);
   const ranked = rows.map((row, index) => ({ index, value: value(row) }))
+    .filter((item) => item.value != null)
     .sort((left, right) => {
-      if (left.value == null || right.value == null) return (left.value == null) - (right.value == null) || left.index - right.index;
       return (left.value < right.value ? -1 : left.value > right.value ? 1 : 0) * direction || left.index - right.index;
     });
-  if (!ranked.length || ranked[limit - 1]?.value == null) return false;
+  const limit = Math.min(request.rank.limit || 1, ranked.length);
+  if (!limit) return false;
   const boundary = ranked[limit - 1].value;
-  const expected = new Set(ranked.filter((item, position) => position < limit || item.value === boundary).map((item) => item.index));
+  const order = ranked.filter((item, position) => position < limit || item.value === boundary).map((item) => item.index);
+  const expected = new Set(order);
   if (expected.size !== selected.size || [...expected].some((index) => !selected.has(index))) return false;
-  if (source.envelope.complete === true && source.envelope.truncated !== true) return true;
+  if ([...selected].some((index, position) => index !== order[position])) return false;
+  if (source.envelope.complete === true && source.envelope.truncated !== true && source.firstPage === true) return true;
   // Kesilmiş koleksiyon: sunucu aynı ölçüyle sıralamışsa ilk sayfa bütün nüfusun başıdır.
   const sorted = source.sortedBy?.metric === request.rank.metric && source.sortedBy?.order === request.rank.order && source.firstPage === true;
   if (!sorted) return false;
-  // İstenen ilk N dönen sayfanın tamamıysa sayfanın kendisi sıralamanın başıdır;
-  // daha kısa bir N'de sınırdaki eşitlik sayfada görünmelidir.
-  if (limit >= rows.length) return true;
-  return rows.length > expected.size && value(rows[expected.size]) !== boundary;
+  const beyond = ranked[expected.size];
+  if (beyond) return true;
+  const proof = source.envelope.rankingBoundary;
+  return proof?.collection === collection.canonical && proof.metric === request.rank.metric
+    && proof.order === request.rank.order && proof.returnedCount === rows.length
+    && (proof.nextValue === null || (ranked.length >= (request.rank.limit || 1) && typeof proof.nextValue === typeof boundary
+      && (proof.nextValue < boundary ? -1 : proof.nextValue > boundary ? 1 : 0) * direction > 0));
 }
 
 /**
  * Atfedilen her kanıt TAM ve satırsız mı? Yalnızca böyle bir kanıt boş nüfusu
  * kanıtlar; kısaltılmış ya da sayfalanmış boş sonuç nüfusun boş olduğunu göstermez.
  */
-function emptyRowEvidence(facts, evidence) {
-  return [...new Set(facts.map(({ evidenceId }) => evidenceId))].every((evidenceId) => {
+function emptyRowEvidence(request, facts, evidence) {
+  const ids = [...new Set(facts.map(({ evidenceId }) => evidenceId))];
+  return ids.length > 0 && ids.every((evidenceId) => {
     const source = evidence.get(evidenceId);
+    const compatible = rowCollections(source.tool).filter((collection) =>
+      request.metrics.every((metric) => rowMetricFields(source.tool, collection, metric).length > 0));
     return source.envelope?.complete === true && source.envelope?.truncated !== true
-      && rowCollections(source.tool).every((collection) => !(valueAt(source.envelope, `data.${collection}`) || []).length);
+      && source.firstPage === true
+      && source.envelope.totalCount === 0
+      && compatible.length > 0 && compatible.every((collection) => {
+        const rows = valueAt(source.envelope, `data.${collection}`);
+        return Array.isArray(rows) && rows.length === 0;
+      });
   });
 }
 
@@ -148,8 +161,8 @@ function rowMetricComplete(entry, metric) {
   const rows = valueAt(entry.source.envelope, entry.row.collection) || [];
   return [...entry.indexes].every((index) => {
     const row = rows[index];
-    if (!row || !fields.some((field) => fieldValue(row, field) !== undefined)) return true;
-    return entry.metrics.get(index)?.has(metric) === true;
+    return row && fields.some((field) => fieldValue(row, field) !== undefined)
+      && entry.metrics.get(index)?.has(metric) === true;
   });
 }
 
@@ -232,21 +245,23 @@ export function verifyRequestedFacts(request, facts, evidence) {
     // Bütün satırların istendiği liste yalnızca TAM bir sonuçtan kurulur: boyut
     // sınırında kısaltılan zarf, elinde kalan satırların tamamı seçilse de bütün değildir.
     if (request.operation === 'list'
-      && (!complete || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true)) return fail('LIST_INCOMPLETE');
+      && (!complete || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true || entry.source.firstPage !== true)) return fail('LIST_INCOMPLETE');
     if (request.operation === 'value' && !entry.bound && size !== 1) return fail('ROW_SELECTION_UNBOUND');
   }
   // Liste ve sıralama satırların yanıtıdır: satırların taşıyabildiği istenen ölçü
   // her satırda bulunmalıdır; genel bir toplam satırların değerinin yerine geçmez.
   if (['list', 'rank'].includes(request.operation)) {
-    for (const metric of metrics) {
-      const carriers = rowGroups.filter((entry) => rowMetricFields(entry.source.tool, entry.row.canonical, metric).length > 0);
-      if (carriers.length && !carriers.some((entry) => rowMetricComplete(entry, metric))) return fail('METRIC_MISSING');
+    const rowMetrics = [...metrics].filter((metric) => rowGroups.some((entry) =>
+      rowMetricFields(entry.source.tool, entry.row.canonical, metric).length > 0));
+    if (rowGroups.length && !rowMetrics.length) return fail('METRIC_MISSING');
+    for (const metric of rowMetrics) {
+      if (rowGroups.some((entry) => !rowMetricComplete(entry, metric))) return fail('METRIC_MISSING');
     }
   }
-  if (request.operation === 'list' && !rowGroups.length && !emptyRowEvidence(facts, evidence)) return fail('LIST_ROWS_REQUIRED');
+  if (request.operation === 'list' && !rowGroups.length && !emptyRowEvidence(request, facts, evidence)) return fail('LIST_ROWS_REQUIRED');
   if (request.operation === 'rank') {
     // Satırsız kanıt yalnızca nüfus boşken sıralamanın yanıtıdır.
-    if (!rowGroups.length) return emptyRowEvidence(facts, evidence) ? { ok: true, issues: [] } : fail('RANK_MISMATCH');
+    if (!rowGroups.length) return emptyRowEvidence(request, facts, evidence) ? { ok: true, issues: [] } : fail('RANK_MISMATCH');
     if (rowGroups.length !== 1) return fail('RANK_MISMATCH');
     const [entry] = rowGroups;
     if (!rankMatches(request, entry.source, entry.row, entry.indexes)) return fail('RANK_MISMATCH');

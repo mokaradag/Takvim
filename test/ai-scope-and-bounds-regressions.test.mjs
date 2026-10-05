@@ -117,3 +117,28 @@ test('Outlook fixture defaults are active and exercise visible subscriptions', a
   assert.equal(result.totalCount, 2);
   assert.deepEqual(result.data.items.map((row) => row.task.taskId).sort(), [TASKS.OVERDUE, TASKS.DUE_SOON].sort());
 });
+
+test('only emitted portfolio IDs are trusted and detail calls still revalidate current authorization', async (t) => {
+  stackFor(t);
+  const { createToolExecutor } = await import('../src/server/ai/tools/toolExecutor.js');
+  const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
+  let available = true;
+  const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({ sicil: AYSE,
+    effective: { access: available ? new Map([[PROJECTS.FULL, { accessLevel: 'FULL', reasons: [] }], [PROJECTS.READ, { accessLevel: 'FULL', reasons: [] }]]) : new Map(), partialTaskIds: new Set() } }) });
+  const scope = createToolScope({ userText: 'Hangi projede en çok gecikme var; ayrıntısını göster' });
+  const executor = createToolExecutor({ context, ledger: createEvidenceLedger(), signal: new AbortController().signal, validateCall: scope.validate });
+  const call = (name, args) => ({ id: name, name, arguments: JSON.stringify(args) });
+  const portfolioCall = call('rota_portfolio_summary', { limit: 1 });
+  const messages = await executor.runRound([portfolioCall]);
+  const result = JSON.parse(messages[0].content);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.projects[0].projectId, PROJECTS.FULL);
+  scope.establish([portfolioCall], messages);
+  const detail = async (id) => JSON.parse((await executor.runRound([call('rota_project_detail', { projectId: id })]))[0].content);
+  assert.equal((await detail(PROJECTS.FULL)).ok, true);
+  for (const id of [PROJECTS.HIDDEN, PROJECTS.READ, '12345678-1234-4123-8123-123456789012']) {
+    assert.equal((await detail(id)).error.code, 'UNSUPPORTED_SCOPE');
+  }
+  available = false;
+  assert.equal((await detail(PROJECTS.FULL)).error.code, 'NOT_FOUND');
+});

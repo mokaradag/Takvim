@@ -287,15 +287,22 @@ Son seçim isteğe belirlenimci olarak bağlanır (`requestContract.js`):
   ya da bildirilen koşulla adlandırılan grubu seçebilir. Varlığın kendi
   özelliği (ör. görevin durumu) arama koşulundan bağımsızdır; satırdaki
   toplamlar (ör. kişinin açık görev sayısı) değildir.
-- `list` her satır koleksiyonunun bütün satırlarını kapsar ve yalnızca TAM
-  (`complete`, kısaltılmamış) bir sonuçtan kurulur; satır koleksiyonları kayıt
-  defterinde açıkça tanımlıdır. `rank`, sunucunun kanıt değerlerinden kurduğu
-  sıralamanın başını sınırdaki eşitlerle birlikte seçer; kesilmiş koleksiyonda
-  yalnızca aynı ölçüyle sunucuda sıralanmış ilk sayfa kabul edilir ve istenen
-  ilk N sayfanın tamamını kapsamıyorsa sınırdaki eşitlik sayfada görünmelidir.
-  `list` ve `rank` isteğinde, satırların taşıyabildiği her istenen ölçü seçilen
-  satırların kendisinde bulunmalıdır; genel bir toplam satırların değerinin
-  yerine geçmez. Satırsız ve tam bir kanıt boş nüfusun geçerli yanıtıdır.
+- `list` her seçilen satır koleksiyonunun bütün satırlarını kapsar ve yalnızca
+  TAM (`complete`, kısaltılmamış, ilk sayfadan başlayan) bir sonuçtan kurulur. Her seçilen satır,
+  bildirilen bütün satır ölçülerini kendi kayıt yolunda taşımalıdır; başka koleksiyon
+  ya da genel toplam eksik satır ölçüsünün yerine geçmez. Aynı nüfusun ayrıca
+  bildirilen toplamı satır ölçüsü yerine geçmeden bağlamsal olarak korunur.
+- `rank` kayıt defterindeki uyumlu satır nüfusunun ölçülü satırlarını,
+  belirlenimci sırayla ve sınırdaki bütün eşitleriyle seçer. Kesilmiş ilk sayfa
+  aynı ölçüyle sunucuda sıralanmalıdır. Sınırdan sonraki farklı değer sayfada
+  görünür ya da `rankingBoundary` sunucunun aynı yetkili nüfustaki sonraki
+  değerini kanıtlar. N sayfa boyutuna eşitken de bu kanıt gerekir; eşitlik
+  varsa daha geniş yetkili sonuç gerekir. Boyut kısaltması sınır kanıtını siler.
+  Ayrıntı/toplam kanıtı satır nüfusu değildir; boş nüfus için uyumlu gerçek
+  boş dizi ve sıfır kaynak sayımı gerekir.
+- Eksik ölçü, nüfus, liste ya da sıralama kanıtı mevcut tek düzeltme ve araç
+  bütçesi içinde önce tamamlanır. Standart → Derin devri bu bütçeleri sıfırlamaz;
+  kanıtı yeterli yanıtın biçim düzeltmesi araçsız devredilebilir.
 
 Satır kimliği ve proje/kişi/WBS/baz plan/arama/kaynak/tarih seçicileri modelin
 alan seçiminden bağımsız korunur; Sicil ve UUID grup anahtarları kullanıcıya

@@ -43,6 +43,7 @@ export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = nu
     current.complete = false;
     current.truncated = true;
     current.nextCursor = null;
+    delete current.rankingBoundary;
     current.data.sizeNote = 'Sonuç boyut sınırı nedeniyle kısaltıldı; daha dar bir süzgeçle yeniden sorgulayın.';
     const primary = (policy.rows || []).flatMap((path) => collections(current.data, path.split('.')));
     if (primary.length) current.returnedCount = primary.reduce((count, list) => count + list.length, 0);

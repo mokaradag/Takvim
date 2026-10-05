@@ -42,8 +42,8 @@ import { createAiDeadline } from '../aiDeadline.js';
  * 5. Standart kipte kurtarılabilir model hatası (doğrulanamayan yapı, uzunluk
  *    sınırı, boş yanıt) Derin düşünme kuruluysa aynı kanıt defteriyle ona BİR
  *    kez devredilir; doğrulama aynıdır, kullanıcı tek yanıt görür. Devir
- *    mümkünken tek düzeltme bütçesi Standart modelde harcanmaz: aynı sorunu
- *    aynı modele yeniden sordurmak yerine devredilen tur onu kullanır.
+ *    öncesinde eksik kanıt mevcut araç/düzeltme bütçesiyle tamamlanır; yalnızca
+ *    yanıt biçimi sorunu araçsız devredilebilir.
  *
  * Yapılandırılmış son karar doğrulanmadan hiçbir model metni gösterilmez.
  */
@@ -183,7 +183,7 @@ function analyzeClarification(response, { evidenceIds, evidencePayloads, locale 
 }
 
 /** Kanıt varken düzeltme turunda yeni araç çağrısını gerektirebilen istek hataları. */
-const EVIDENCE_GAP_CODES = new Set(['METRIC_MISSING', 'ENTITY_MISSING', 'ENTITY_UNRESOLVED', 'POPULATION_MISMATCH', 'RANK_MISMATCH']);
+const EVIDENCE_GAP_CODES = new Set(['METRIC_MISSING', 'ENTITY_MISSING', 'ENTITY_UNRESOLVED', 'POPULATION_MISMATCH', 'RANK_MISMATCH', 'LIST_INCOMPLETE', 'LIST_ROWS_REQUIRED']);
 
 /** Bildirilen isteği bu turun kanıtlarıyla doğrular; istek yoksa kanıtlı yanıt kabul edilmez. */
 function analyzeRequested(text, { evidenceIds, evidencePayloads, locale, request, entries, selection, today }) {
@@ -569,16 +569,16 @@ export async function runGroundedTurn(session, {
     }
 
     if (turn.repairsLeft > 0) {
-      // Standart model sözleşmeyi karşılayamadıysa tek düzeltme bütçesi aynı modelde
-      // harcanmaz: aynı kanıtla sınırlı sorun doğrudan Derin düşünmeye devredilir.
-      if (!turn.repaired && canEscalate()) return escalation(turn, 'VERIFICATION_FAILED');
+      const evidenceGap = verdict.issues.some((issue) => EVIDENCE_GAP_CODES.has(issue?.code));
+      // Eksik kanıt önce mevcut araç bütçesiyle tamamlanır.
+      if (!turn.repaired && !evidenceGap && canEscalate()) return escalation(turn, 'VERIFICATION_FAILED');
       turn.repairsLeft -= 1;
       turn.repaired = true;
       const hint = turn.request && verdict.kind === 'grounded' ? requestRepairHint(turn.request, ledger.requestEntries()) : '';
       instruct(turn, groundingRepairInstruction(verdict.issues, hint), { repair: true });
       // Kanıt varken düzeltme yeniden seçimdir; kanıt yoksa ya da bildirilen
       // ölçü/nüfus eldeki kanıtta yoksa model gereken aracı çağırabilir (araç turu sınırı sürer).
-      allowTools = ledger.ids().length === 0 || verdict.issues.some((issue) => EVIDENCE_GAP_CODES.has(issue?.code));
+      allowTools = ledger.ids().length === 0 || evidenceGap;
       continue;
     }
 

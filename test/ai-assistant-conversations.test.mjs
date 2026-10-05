@@ -306,33 +306,55 @@ test('konuşmada aynı anda tek yanıt üretilir; ikinci tur süren üretim bite
   assert.equal(terminal(after).event, 'done');
 });
 
-test('terk edilen turun yeniden gönderimi süren üretimi durdurup devralır; konuşma kilitli kalmaz', async (t) => {
+test('aynı etkin turun geçerli yinelemesi üretimi ve yazımı bekler; çelişen içerik üretimi durdurmaz', async (t) => {
   const { db, provider } = createAiStack(t);
   const { conversationId } = await startConversation('İlk');
   const turnId = randomUUID();
   provider.enqueue({ type: 'deferred-stream' });
-  // İstemcisi yanıtı göremeden vazgeçen tur (bağlantı koptu ya da süre doldu).
-  const abandoned = sseReader(await turnsRoute.POST(turnRequest({ conversationId, turnId, message: 'Uzun soru', mode: 'standard' })));
-  assert.equal((await abandoned.next()).event, 'accepted');
+  const running = sseReader(await turnsRoute.POST(turnRequest({ conversationId, turnId, message: 'Uzun soru', mode: 'standard' })));
+  assert.equal((await running.next()).event, 'accepted');
   await provider.waitForActive(1);
-  // Tekillik korunur: BAŞKA bir tur hâlâ reddedilir.
-  const other = await sendTurn({ conversationId, turnId: randomUUID(), message: 'Araya giren' });
-  assert.equal(other.status, 409);
-  assert.equal(other.body.error.details.reason, 'GENERATION_IN_PROGRESS');
-  // AYNI tur yeniden istendiğinde terk edilen üretim durdurulur ve yanıt üretilir.
-  provider.enqueue({ type: 'stream', text: 'Devralan yanıt' });
-  const retried = await sendTurn({ conversationId, turnId, message: null });
-  assert.equal(terminal(retried).event, 'done', retried.text);
-  assert.equal(answerText(retried), 'Devralan yanıt');
-  assert.equal((await abandoned.rest()).at(-1).event, 'error', 'terk edilen akış iptal edilir');
-  assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'assistant' && row.Content === 'Devralan yanıt').length, 1,
-    'tur başına tek yanıt yazılır');
+  const conflict = await sendTurn({ conversationId, turnId, message: 'Çelişen soru' });
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.body.error.details.reason, 'TURN_ID_REUSED');
+  assert.equal(provider.calls[1].aborted, false);
+  const pending = [sendTurn({ conversationId, turnId, message: null }), sendTurn({ conversationId, turnId, message: 'Uzun soru' })];
+  await until(() => db.aiConversationLog.statements.length > 0);
+  provider.calls[1].emit('Korunan yanıt');
+  provider.calls[1].complete();
+  assert.equal((await running.rest()).at(-1).event, 'done');
+  for (const retried of await Promise.all(pending)) {
+    assert.equal(terminal(retried).event, 'done', retried.text);
+    assert.equal(terminal(retried).data.replayed, true);
+    assert.equal(answerText(retried), 'Korunan yanıt');
+  }
+  assert.equal(provider.calls.length, 2);
+  assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'assistant' && row.Content === 'Korunan yanıt').length, 1);
   assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'user').length, 2);
   await until(() => activeAssistantGenerationCountForTests() === 0);
-  // Kilit açıldığı için konuşma yeni turu kabul eder.
-  provider.enqueue({ type: 'stream', text: 'Sonraki yanıt' });
-  const next = await sendTurn({ conversationId, turnId: randomUUID(), message: 'Sonraki soru' });
-  assert.equal(terminal(next).event, 'done');
+});
+
+test('ilk turun eşzamanlı çelişen yinelemesi ve bekleyenin iptali etkin üretime dokunmaz', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const turnId = randomUUID();
+  provider.enqueue({ type: 'deferred-stream' });
+  const running = sseReader(await turnsRoute.POST(turnRequest({ turnId, message: 'İlk soru', mode: 'standard' })));
+  const first = await running.next();
+  assert.equal(first.event, 'accepted');
+  await provider.waitForActive(1);
+  const conflict = await sendTurn({ turnId, message: 'Başka soru' });
+  assert.equal(conflict.body.error.details.reason, 'TURN_ID_REUSED');
+  const client = new AbortController();
+  const waiting = turnsRoute.POST(turnRequest({ conversationId: first.data.conversation.id, turnId, message: null, mode: 'standard' }, { signal: client.signal }));
+  await new Promise((resolve) => setImmediate(resolve));
+  client.abort();
+  assert.equal((await waiting).status, 499);
+  assert.equal(provider.calls[0].aborted, false);
+  provider.calls[0].emit('Tam yanıt');
+  provider.calls[0].complete();
+  assert.equal((await running.rest()).at(-1).event, 'done');
+  assert.equal(db.aiConversationMessages.length, 2);
+  assert.equal(provider.calls.length, 1);
 });
 
 /* ── Liste, sıralama ve başlıklar ─────────────────────────── */
@@ -868,4 +890,28 @@ test('gecikmiş yanıt yazımı yarışı kazanırsa kayıtlı metin başarıyla
   assert.equal(done.data.assistantMessage.id, saved.MessageId.toLowerCase());
   assert.equal(done.data.assistantMessage.content, saved.Content);
   assert.equal(db.aiConversationMessages.length, 2);
+});
+
+test('üretim hakkı SQL öncesi çelişen isteği reddeder ve geçerli yinelemeyi yazım bitene kadar bekletir', async (t) => {
+  createAiStack(t);
+  const { claimAssistantGeneration } = await import('../src/server/ai/assistant/assistantGenerations.js');
+  const turnId = randomUUID();
+  const signal = new AbortController().signal;
+  const owner = await claimAssistantGeneration({ sicil: SICIL_A, turnId, content: 'Soru', signal });
+  owner.bindConversation(randomUUID());
+  await assert.rejects(claimAssistantGeneration({ sicil: SICIL_A, turnId, content: 'Başka soru', signal }),
+    (error) => error.details.reason === 'TURN_ID_REUSED');
+  assert.equal(owner.signal.aborted, false);
+  let acquired = false;
+  const waiting = claimAssistantGeneration({ sicil: SICIL_A, turnId, content: 'Soru', signal }).then((claim) => { acquired = true; return claim; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(acquired, false, 'etkin yazım bırakılmadan ikinci sahip oluşmaz');
+  assert.equal(activeAssistantGenerationCountForTests(), 1);
+  owner.release();
+  const retry = await waiting;
+  assert.equal(acquired, true);
+  assert.equal(activeAssistantGenerationCountForTests(), 1);
+  assert.ok(retry.conversationId);
+  retry.release();
+  assert.equal(activeAssistantGenerationCountForTests(), 0);
 });

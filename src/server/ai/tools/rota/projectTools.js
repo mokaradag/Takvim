@@ -256,7 +256,12 @@ const portfolioSummary = {
     }), { projects: 0, tasks: 0, open: 0, done: 0, overdue: 0, dueNext7Days: 0, openWithoutTargetFinish: 0, projectsWithOverdue: 0 });
     const descriptor = describeTaskScope(filteredRows.map(scopeAccess));
     const page = projects.slice(0, limit);
+    const rankField = { overdue_desc: 'overdue', open_desc: 'open', due_soon_desc: 'dueNext7Days' }[sort];
     return {
+      ...(rankField && projects.length > page.length ? { rankingBoundary: {
+        collection: 'projects', metric: `tasks.${rankField}`, order: 'desc', returnedCount: page.length,
+        nextValue: projects[page.length].tasks[rankField]
+      } } : {}),
       data: {
         totals,
         projects: page,
