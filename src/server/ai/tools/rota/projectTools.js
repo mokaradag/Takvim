@@ -69,7 +69,9 @@ const projectSearch = {
     const resolved = resolution === 'unique' ? rows.find((row) => row.exactMatch) || null : null;
     const pool = resolution === 'ambiguous' && result.exactCount > 1 ? rows.filter((row) => row.exactMatch) : ['ambiguous', 'partial'].includes(resolution) ? rows : [];
     const candidates = pool.slice(0, CLARIFICATION_LIMITS.maxCandidates)
-      .map(({ projectId, name, code, source, access }) => ({ projectId, name, ...(code ? { code } : {}), source, access: { level: access.level, label: access.label } }));
+      .map(({ projectId, name, code, sourceType, source, access }) => ({
+        projectId, name, ...(code ? { code } : {}), sourceType, source, access: { level: access.level, label: access.label }
+      }));
     const candidateTotal = resolution === 'ambiguous' && result.exactCount > 1 ? result.exactCount : result.total;
     const matches = rows.slice(0, limit);
     const ambiguous = resolution === 'ambiguous';

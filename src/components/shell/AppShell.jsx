@@ -1,7 +1,7 @@
 'use client';
 import { SIMPLE_LANDING_VIEW, SIMPLE_NAV_IDS, navigationItems } from './navigation.js';
 import { ScheduleRequestsView } from '../../features/schedule-change/ScheduleRequestsView.jsx';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Icons } from '../icons';
 import { Heptagon } from '../ui';
@@ -152,6 +152,11 @@ export default function AppShell() {
   const signOutState = useSignOut();
   const [assistant] = useState(() => ({ enabled: globalThis.__MERGEN_ROTA_FEATURES__?.assistant === true }));
   const [assistantActions, setAssistantActions] = useState({ enabled: false });
+  // Komut paletinin öğe listesi bu geri çağrının kimliğine bakar; her çizimde yenisi üretilmez.
+  const openAssistantPanel = useCallback(async () => {
+    await closeTask();
+    assistantActions.openPanel?.();
+  }, [closeTask, assistantActions]);
   const simpleMode = t.appMode === 'simple';
   const [sidebarPreference, setSidebarPreference] = useState(readSidebarPreference);
   const [sidebarKeyboardOpen, setSidebarKeyboardOpen] = useState(false);
@@ -510,7 +515,7 @@ export default function AppShell() {
           onNavigate={navigate}
           onOpenTask={openTask}
           onSetTheme={(theme) => setTweak('theme', theme)}
-          onOpenAssistant={assistantActions.enabled ? async () => { await closeTask(); assistantActions.openPanel(); } : null}
+          onOpenAssistant={assistantActions.enabled ? openAssistantPanel : null}
           tasks={tasks}
         />
       )}

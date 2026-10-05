@@ -868,6 +868,22 @@ test('yanıt eylemleri yalnızca uygun durumda görünür: kopyalama tamamlanmı
   const keyMissing = presentation.assistantFailureView({ code: 'AI_KEY_MISSING' });
   assert.equal(find({ turn: turn('failed', { error: keyMissing }), canRetry: true }, notice).props.retryable, false,
     'yeniden denemenin işe yaramayacağı hata için düğme gösterilmez');
+  // Yanıtsız son tur yeni ileti göndermeyi kapatır: kullanıcı yalnızca yeniden denemeye mahkûm kalmaz.
+  const noticeActions = (failureCode) => {
+    const actions = [];
+    const element = find({ turn: turn('failed', { error: presentation.assistantFailureView({ code: failureCode }) }), canRetry: true }, notice);
+    const rendered = mountComponent(element.type, { ...element.props, onAction: (action) => actions.push(action) }).output;
+    return { actions, rendered };
+  };
+  for (const code of ['AI_TIMEOUT', 'STREAM_STALLED', 'REQUEST_TIMEOUT', 'NETWORK']) {
+    const { actions, rendered } = noticeActions(code);
+    const escape = findElement(rendered, (item) => item.type === 'button' && textOf(item).includes('Yeni konuşma başlat'));
+    assert.ok(escape, code);
+    escape.props.onClick();
+    assert.deepEqual(actions, ['new-conversation'], code);
+  }
+  // Kendi yönlendirmesi olan hata kendi eylemini korur.
+  assert.ok(findElement(noticeActions('AI_KEY_MISSING').rendered, (item) => item.type === 'button' && textOf(item).includes('Ayarlar’ı aç')));
   assert.ok(find({ turn: turn('unanswered', { content: '' }), canRetry: true }, notice));
   const checkingFailure = presentation.assistantFailureView({ code: 'STREAM_INTERRUPTED' });
   const checking = mountComponent(AssistantTurn, {

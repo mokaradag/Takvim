@@ -1087,4 +1087,12 @@ test('AI completion rates share product rounding and empty-set semantics', async
   assert.equal(project.result.data.visibleTasks.completionRatePercent, product.compRate);
   const empty = await callRotaTool(stack, AYSE, 'rota_task_analytics', { text: 'No matching title' });
   assert.equal(empty.result.data.totals.completionRatePercent, selectTaskStats([]).compRate);
+  // %100 bütün görevlerin, %0 hiçbir görevin tamamlanmasıdır: yuvarlama açık görevi gizleyemez.
+  const { taskCompletionRate } = await import('../src/scheduling/metrics/taskCompletionRate.js');
+  assert.equal(taskCompletionRate(399, 400), 99);
+  assert.equal(taskCompletionRate(1, 300), 1);
+  assert.equal(taskCompletionRate(400, 400), 100);
+  assert.equal(taskCompletionRate(0, 300), 0);
+  assert.equal(taskCompletionRate(0, 0), 0);
+  assert.equal(taskCompletionRate(2, 3), 67);
 });

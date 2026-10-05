@@ -59,7 +59,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, on
     }
     return all;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, tasks, navItems]);
+  }, [q, tasks, navItems, onOpenAssistant]);
 
   // Sayaç RENDER İÇİNDE değil, işlemeden sonra güncellenir: render saf kalır
   // (React yarıda kesilen bir render'ı atabilir ya da yeniden oynatabilir).

@@ -95,3 +95,13 @@ test('legitimate drill-downs are open while unrelated expansion stays closed', (
     assert.throws(() => scope.validate(name, args), { code: 'UNSUPPORTED_SCOPE' }, name);
   }
 });
+
+test('a project the portfolio itself returned is a trusted identity for the next detail call', () => {
+  const scope = createToolScope({ today: '2026-09-30', userText: 'Hangi projede en çok gecikme var, ayrıntısını göster' });
+  established(scope, 'rota_portfolio_summary', {}, { projects: [{ projectId: PROJECTS.FULL, tasks: { overdue: 3 } }, { projectId: PROJECTS.READ, tasks: { overdue: 1 } }] });
+  for (const [name, args] of [['rota_project_detail', { projectId: PROJECTS.FULL }], ['rota_task_analytics', { projectId: PROJECTS.READ }]]) {
+    assert.doesNotThrow(() => scope.validate(name, args), name);
+  }
+  // Portföyde dönmeyen proje kimliği hâlâ kullanıcının yazdığı kimlik olmalıdır.
+  assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.HIDDEN }), { code: 'UNSUPPORTED_SCOPE' });
+});

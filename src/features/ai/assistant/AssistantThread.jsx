@@ -88,11 +88,10 @@ function AnswerNotice({ failure, retryable, onRetry, onAction }) {
               <Icons.Refresh size={12} aria-hidden="true" /> {remaining > 0 ? `${remaining} sn sonra yeniden dene` : 'Yeniden dene'}
             </button>
           )}
-          {failure.action && (
-            <button type="button" className="btn ghost sm" onClick={() => onAction(failure.action)}>
-              {FAILURE_ACTION_LABELS[failure.action]}
-            </button>
-          )}
+          {/* Yanıtlanmamış son tur yeni ileti göndermeyi kapatır; kullanıcıya her zaman bir çıkış yolu kalır. */}
+          <button type="button" className="btn ghost sm" onClick={() => onAction(failure.action || 'new-conversation')}>
+            {FAILURE_ACTION_LABELS[failure.action || 'new-conversation']}
+          </button>
         </div>
       )}
     </div>

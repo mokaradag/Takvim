@@ -380,15 +380,21 @@ function envelopeSentences(facts, { tool, locale }) {
 
 function candidateLine(candidate, locale) {
   const text = (value) => (typeof value === 'string' && value.trim() ? escapedFactText(value.trim()) : null);
+  // Etiketler Türkçe üretilir; İngilizce anlatımda kanonik değer yerel tablodan yazılır.
+  const localized = (field, value, fallback) => (locale === 'en' && typeof value === 'string' && value.trim()
+    ? factPresentation({ field, value }, locale).value : fallback);
   if (candidate.taskId) {
     const project = [text(candidate.project?.name), candidate.project?.code ? `(${text(candidate.project.code)})` : null].filter(Boolean).join(' ');
-    const status = text(candidate.statusLabel);
+    const status = text(localized('status', candidate.status, candidate.statusLabel));
     const due = typeof candidate.targetFinish === 'string' && DAY.test(candidate.targetFinish) ? `${locale === 'en' ? 'deadline' : 'termin'} ${formatDay(candidate.targetFinish, locale)}` : null;
     return [strong(text(candidate.title) || '—'), [project, status, due].filter(Boolean).join(' · ')];
   }
   if (candidate.projectId) {
     const name = `${strong(text(candidate.name) || '—')}${candidate.code ? ` (${text(candidate.code)})` : ''}`;
-    return [name, [text(candidate.source), text(candidate.access?.label)].filter(Boolean).join(' · ')];
+    return [name, [
+      text(localized('sourceType', candidate.sourceType, candidate.source)),
+      text(localized('level', candidate.access?.level, candidate.access?.label))
+    ].filter(Boolean).join(' · ')];
   }
   const organization = [candidate.organization?.unit, candidate.organization?.department, candidate.organization?.directorate].map(text).filter(Boolean).join(' / ');
   return [strong(text(candidate.name) || '—'), [text(candidate.jobTitle), organization].filter(Boolean).join(' · ')];

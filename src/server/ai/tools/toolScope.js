@@ -114,6 +114,8 @@ function resultIdentities(name, data) {
     ? [{ population: 'tasks', id: data.resolvedTask.taskId }] : [];
   const identities = followUpTaskPaths(name).flatMap((path) => valuesAt(data, path.split('.')))
     .map((id) => ({ population: 'tasks', id }));
+  // Portföyün döndürdüğü projeler sunucunun yetkiyle ürettiği satırlardır; takip çağrısı kapsamı genişletmez.
+  if (name === 'rota_portfolio_summary') identities.push(...(data.projects || []).map((row) => ({ population: 'projects', id: row.projectId })));
   if (name === 'rota_wbs_inspect') identities.push(...(data.nodes || []).map((row) => ({ population: 'wbs', id: row.wbsId })));
   if (name === 'rota_baseline_compare') identities.push(...(data.availableBaselines || []).map((row) => ({ population: 'baselines', id: row.baselineId })));
   return identities.filter((row) => typeof row.id === 'string' || typeof row.id === 'number');

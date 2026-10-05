@@ -41,7 +41,9 @@ import { createAiDeadline } from '../aiDeadline.js';
  *    sabit güvenli iletiyi görür (uydurma kanıtlı yanıt hiçbir zaman gösterilmez).
  * 5. Standart kipte kurtarılabilir model hatası (doğrulanamayan yapı, uzunluk
  *    sınırı, boş yanıt) Derin düşünme kuruluysa aynı kanıt defteriyle ona BİR
- *    kez devredilir; doğrulama aynıdır, kullanıcı tek yanıt görür.
+ *    kez devredilir; doğrulama aynıdır, kullanıcı tek yanıt görür. Devir
+ *    mümkünken tek düzeltme bütçesi Standart modelde harcanmaz: aynı sorunu
+ *    aynı modele yeniden sordurmak yerine devredilen tur onu kullanır.
  *
  * Yapılandırılmış son karar doğrulanmadan hiçbir model metni gösterilmez.
  */
@@ -477,7 +479,8 @@ export async function runGroundedTurn(session, {
       else instruct(turn, declarationRepair(declared.details), { repair: true });
       continue;
     }
-    if (result.toolCalls.length && canCallTools && (declared ? !declared.ok : !turn.request)) {
+    // Araç turu her durumda geçerli bir istek ister: genel yönlendirme bildiren yanıtın araç çağrısı da çalışmaz.
+    if (result.toolCalls.length && canCallTools && ((declared && !declared.ok) || !turn.request)) {
       // Geçerli istek bildirimi olmadan araç çalışmaz: veri okunmadan önce bildirim düzeltilir.
       if (turn.declarationsLeft > 0) {
         turn.declarationsLeft -= 1;
@@ -566,6 +569,9 @@ export async function runGroundedTurn(session, {
     }
 
     if (turn.repairsLeft > 0) {
+      // Standart model sözleşmeyi karşılayamadıysa tek düzeltme bütçesi aynı modelde
+      // harcanmaz: aynı kanıtla sınırlı sorun doğrudan Derin düşünmeye devredilir.
+      if (!turn.repaired && canEscalate()) return escalation(turn, 'VERIFICATION_FAILED');
       turn.repairsLeft -= 1;
       turn.repaired = true;
       const hint = turn.request && verdict.kind === 'grounded' ? requestRepairHint(turn.request, ledger.requestEntries()) : '';

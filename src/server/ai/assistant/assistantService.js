@@ -866,9 +866,9 @@ function evidenceSchemaMissing() {
 /**
  * Standart kipte doğrulanamayan, uzunluk sınırında kalan ya da boş dönen turu
  * Derin düşünme araç profiliyle, AYNI kanıt defteri ve kapsamla BİR kez
- * sonlandırır. İptal, kimlik ve veri hataları yukarı taşınır; Derin düşünme
- * oturumu yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse Standart sonucu
- * (güvenli ileti ya da özgün hata) kullanılır. Genel sohbete düşülmez.
+ * sonlandırır. İptal, kimlik, veri ve süre aşımı hataları yukarı taşınır; Derin
+ * düşünme oturumu başka bir yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse
+ * Standart sonucu (güvenli ileti ya da özgün hata) kullanılır. Genel sohbete düşülmez.
  */
 async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   const telemetry = (outcome, models = []) => recordGroundedEscalation({
@@ -880,7 +880,10 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   } catch (error) {
     // Yalnızca yapay zekâ hizmetinin hatası Standart sonucuna döner; iptal, kimlik ve veri hataları turu bitirir.
     if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) throw error;
-    telemetry('error');
+    const timedOut = error.code === AI_ERROR_CODES.AI_TIMEOUT;
+    telemetry(timedOut ? 'timeout' : 'error');
+    // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez.
+    if (timedOut) throw error;
     return request.fallback(onText);
   }
   telemetry(result.outcome, result.models);

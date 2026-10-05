@@ -14,7 +14,7 @@ import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mj
 import { verifyRequested } from './helpers/requestScenario.mjs';
 
 const { analyzeGroundedAnswer } = await import('../src/domain/ai/evidenceVerification.js');
-const { turkishPossessiveSuffix, renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarrative.js');
+const { turkishPossessiveSuffix, renderClarification, renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarrative.js');
 const { SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
@@ -172,3 +172,20 @@ for (const [question, request, [tool, args], facts, expected] of COMMON_QUESTION
     assert.equal(stack.provider.calls.length, 2, 'no repair round was needed');
   });
 }
+
+test('English clarification lines render canonical candidate values in English, Turkish keeps its labels', async (t) => {
+  const { result } = await callRotaTool(stackFor(t), AYSE, 'rota_project_search', { text: 'Proje' });
+  const candidates = result.data.candidates;
+  assert.ok(candidates.length >= 2, 'fikstürde birden çok aday vardır');
+  assert.ok(candidates.every((candidate) => typeof candidate.sourceType === 'string' && typeof candidate.access?.level === 'string'),
+    'aday kanonik kaynak türünü ve erişim düzeyini taşır');
+  const english = renderClarification({ evidenceId: 'R1', candidates, locale: 'en' });
+  assert.doesNotMatch(english, /Kurumsal|Manuel|Tam erişim|Kısmi erişim|Okuma erişimi/);
+  assert.match(english, /Corporate|Manual/);
+  assert.match(english, /Full access|Partial access|Read access/);
+  const turkish = renderClarification({ evidenceId: 'R1', candidates, locale: 'tr' });
+  assert.match(turkish, /Kurumsal|Manuel/);
+  const task = [{ taskId: TASKS.OVERDUE, title: 'Radar test planı', status: 'todo', statusLabel: 'Yapılacak', targetFinish: '2026-09-01' }];
+  assert.match(renderClarification({ evidenceId: 'R1', candidates: task, locale: 'en' }), /To do/);
+  assert.match(renderClarification({ evidenceId: 'R1', candidates: task, locale: 'tr' }), /Yapılacak/);
+});

@@ -287,11 +287,15 @@ Son seçim isteğe belirlenimci olarak bağlanır (`requestContract.js`):
   ya da bildirilen koşulla adlandırılan grubu seçebilir. Varlığın kendi
   özelliği (ör. görevin durumu) arama koşulundan bağımsızdır; satırdaki
   toplamlar (ör. kişinin açık görev sayısı) değildir.
-- `list` her satır koleksiyonunun dönen bütün satırlarını kapsar; satır
-  koleksiyonları kayıt defterinde açıkça tanımlıdır. `rank`, sunucunun kanıt
-  değerlerinden kurduğu sıralamanın başını sınırdaki eşitlerle birlikte seçer;
-  kesilmiş koleksiyonda yalnızca aynı ölçüyle sunucuda sıralanmış ilk sayfa
-  kabul edilir.
+- `list` her satır koleksiyonunun bütün satırlarını kapsar ve yalnızca TAM
+  (`complete`, kısaltılmamış) bir sonuçtan kurulur; satır koleksiyonları kayıt
+  defterinde açıkça tanımlıdır. `rank`, sunucunun kanıt değerlerinden kurduğu
+  sıralamanın başını sınırdaki eşitlerle birlikte seçer; kesilmiş koleksiyonda
+  yalnızca aynı ölçüyle sunucuda sıralanmış ilk sayfa kabul edilir ve istenen
+  ilk N sayfanın tamamını kapsamıyorsa sınırdaki eşitlik sayfada görünmelidir.
+  `list` ve `rank` isteğinde, satırların taşıyabildiği her istenen ölçü seçilen
+  satırların kendisinde bulunmalıdır; genel bir toplam satırların değerinin
+  yerine geçmez. Satırsız ve tam bir kanıt boş nüfusun geçerli yanıtıdır.
 
 Satır kimliği ve proje/kişi/WBS/baz plan/arama/kaynak/tarih seçicileri modelin
 alan seçiminden bağımsız korunur; Sicil ve UUID grup anahtarları kullanıcıya
@@ -519,19 +523,24 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
 4. Son yanıt doğrulanır (§6.3); gerekirse bir düzeltme.
 5. **Standart → Derin düşünme devri.** Kullanıcı Standart kipi seçtiyse ve
    `chat.tools.reasoning` profili kuruluysa, kurtarılabilir bir model/protokol
-   hatası (düzeltmeden sonra da doğrulanamayan yanıt, uzunluk sınırında kalan
-   çıktı ya da `EMPTY_COMPLETION`) kullanıcıya hiçbir şey gösterilmeden **bir
-   kez** Derin düşünme araç profiline devredilir. Devir AYNI kanıt defterini,
-   kapsam sınırını, araç izinlerini, tek düzeltme bütçesini ve tur sayaçlarını sürdürür; Standart'ın
-   düzeltme notları devredilmez. Kanıt varsa araçlar kapalıdır (yalnızca son
+   hatası (doğrulanamayan yanıt, uzunluk sınırında kalan çıktı ya da
+   `EMPTY_COMPLETION`) kullanıcıya hiçbir şey gösterilmeden **bir kez** Derin
+   düşünme araç profiline devredilir. Devir mümkünken tek düzeltme bütçesi
+   Standart modelde harcanmaz: aynı sorun aynı modele yeniden sorulmaz, devir
+   hemen yapılır ve düzeltmeyi devredilen tur kullanır. Devir AYNI kanıt
+   defterini, kapsam sınırını, araç izinlerini, tek düzeltme bütçesini ve tur
+   sayaçlarını sürdürür; Standart'ın düzeltme notları devredilmez. Devir
+   kurulamıyorsa (Derin kip, profil yok ya da devri engelleyen araç hatası) tek
+   düzeltme Standart turda kullanılır. Kanıt varsa araçlar kapalıdır (yalnızca son
    yanıt yazılır, araç SQL'i yeniden çalışmaz); kanıt yoksa kalan araç turu
    bütçesi içinde araç çağrılabilir. Doğrulama aynıdır. Kanıtsız biten tur
    `NOT_FOUND`, `UNSUPPORTED_SCOPE`, `UNSUPPORTED` ya da SQL/uygulama hatasıyla
    (`TIMEOUT`, `BUSY`, `DATABASE_UNAVAILABLE`, `INTERNAL`) bittiyse, tur iptal
    edildiyse ya da yetki/veri hizmeti kullanılamıyorsa devir yapılmaz. Derin
-   düşünme oturumu bir yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse
-   Standart sonucu (güvenli ileti ya da özgün hata) kullanılır; iptal, kimlik
-   ve veri hataları turu bitirir. Kullanıcı her
+   düşünme oturumu başka bir yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse
+   Standart sonucu (güvenli ileti ya da özgün hata) kullanılır; iptal, kimlik,
+   veri ve **süre aşımı** hataları turu bitirir (süre aşımı doğrulama hatası
+   olarak gösterilmez; kullanıcı yeniden denenebilir `AI_TIMEOUT` alır). Kullanıcı her
    durumda tek yanıt görür; yanıtın kaydedilen kipi istenen kiptir. Genel
    sohbete düşülmez.
 6. **Boş yanıt.** Standart veya Derin düşünmede görünür metin ve araç çağrısı taşımayan model turu, oturumda en az 15 sn
@@ -892,7 +901,10 @@ bağımsız değişken, sonuç içeriği, SQL ya da anahtar kaydedilmez.
   hatası (araç adı + kod).
 - `grounding`: kanıtlı, genel, aday seçimi, bulunamadı, hizmet kullanılamıyor, doğrulanamayan, düzeltilen ve kapsam notu eklenen yanıt sayıları; tur ve kanıt sayısı yüzdelikleri. `NOT_FOUND` doğrulama hatası değildir. Tamponlanan model protokolü istemciye teslim edilmiş metin sayılmaz.
 - `grounding.escalations`: Standart → Derin düşünme devri sayısı, nedene
-  (`VERIFICATION_FAILED`, `LENGTH`, `EMPTY_COMPLETION`) ve son sonuca göre.
+  (`VERIFICATION_FAILED`, `LENGTH`, `EMPTY_COMPLETION`, `REQUEST_DECLARATION`)
+  ve son sonuca göre. Sonuç devredilen turun kendi sonucudur: doğrulanan yanıt
+  (`grounded`, `clarification` …), `failed` (devirde de doğrulanamadı),
+  `timeout` (sağlayıcı süre sınırı) ya da `error` (başka hizmet hatası).
   Her devir `ai.grounded.escalation` bilgi olayı yazar: istenen kip, kullanılan
   modeller (sağlayıcının bildirdiği, yoksa yapılandırılan), neden, kanıtın
   yeniden kullanılıp kullanılmadığı ve sonuç.

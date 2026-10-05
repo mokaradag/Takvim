@@ -285,13 +285,13 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   );
   const response = await sendTurn({ turnId: randomUUID(), message: `Kaç gecikmiş görev var? ${PROJECTS.FULL}` });
   assert.equal(response.status, 200);
-  // Tek düzeltme bütçesi Derin düşünmeye geçerken yenilenmez.
+  // Tek düzeltme bütçesi Standart modelde harcanmaz ve devirde yenilenmez: devredilen tur onu kullanır.
   assert.equal(stack.provider.calls.length, 4);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL]);
-  assert.deepEqual(stack.provider.calls.slice(3).map((call) => call.toolChoice), ['none'], 'devirde araçlar yeniden çalışmaz');
-  assert.doesNotMatch(stack.provider.calls[3].messages[0].content, /SUNUCU DOĞRULAMASI/, 'Standart düzeltme notu devredilmez');
-  assert.match(stack.provider.calls[3].messages[0].content, /kanıtları hazır/);
-  const repair = stack.provider.calls[2];
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL, DEEP_TOOL_MODEL]);
+  assert.deepEqual(stack.provider.calls.slice(2).map((call) => call.toolChoice), ['none', 'none'], 'devirde araçlar yeniden çalışmaz');
+  assert.doesNotMatch(stack.provider.calls[2].messages[0].content, /SUNUCU DOĞRULAMASI/, 'Standart taslağının reddi devredilmez');
+  assert.match(stack.provider.calls[2].messages[0].content, /kanıtları hazır/);
+  const repair = stack.provider.calls[3];
   assert.equal(repair.toolChoice, 'none', 'kanıt varken düzeltme yalnızca yeniden yazımdır');
   assert.equal(repair.messages[0].role, 'system');
   assert.match(repair.messages[0].content, /SUNUCU DOĞRULAMASI/);
@@ -315,7 +315,7 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   assert.deepEqual(grounding.escalations, { total: 1, byReason: { VERIFICATION_FAILED: 1 }, byOutcome: { failed: 1 } });
 });
 
-test('düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir ve atfedilen kanıt kaydedilir', async (t) => {
+test('devir başarılı olursa yalnızca doğrulanmış yanıt gösterilir ve atfedilen kanıt kaydedilir', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(
     { type: 'tool-calls', preface: [declared(countRequest({ projectId: PROJECTS.FULL }, ['tasks.overdue']))], calls: [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }] },
@@ -334,8 +334,10 @@ test('düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir v
   assert.equal(response.text.includes('42 gecikmiş'), false);
   assert.deepEqual(done.assistantMessage.evidence.map((item) => [item.id, item.kind]), [['R1', 'task-analytics']]);
   assert.equal(stack.db.aiMessageEvidence.length, 1);
-  assert.equal(aiTelemetrySnapshot().grounding.repaired, 1);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL]);
+  assert.equal(aiTelemetrySnapshot().grounding.repaired, 0, 'Standart modelden aynı yanıt yeniden istenmez');
   assert.equal(aiTelemetrySnapshot().grounding.grounded, 1);
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { VERIFICATION_FAILED: 1 }, byOutcome: { grounded: 1 } });
 });
 
 test('kısmi kapsam: sunucu kapsam notunu model metninden bağımsız olarak her zaman ekler', async (t) => {
@@ -476,10 +478,11 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   assert.ok(stack.provider.calls[1].tools.some((tool) => tool.name === 'rota_task_detail'),
     'veri alınmayan ilk tur kataloğu daraltmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
-  // Kanıt olmadan "12 görev" yazılamaz: düzeltme istenir, dürüst yanıt kaydedilir.
-  const repairSystem = stack.provider.calls[2].messages.find((message) => message.role === 'system');
-  assert.ok(repairSystem);
-  assert.match(repairSystem.content, /Kanıt alınamadıysa/);
+  // Kanıt olmadan "12 görev" yazılamaz: taslak gösterilmeden devredilir, dürüst yanıt kaydedilir.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL]);
+  assert.equal(stack.provider.calls[2].messages.some((message) => String(message.content || '').includes('12 görev')), false,
+    'reddedilen taslak devredilen döküme girmez');
+  assert.equal(response.text.includes('12 görev'), false);
   const done = doneOf(response);
   assert.equal(done.assistantMessage.content, 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.');
   assert.equal(done.assistantMessage.finishReason, 'unavailable');

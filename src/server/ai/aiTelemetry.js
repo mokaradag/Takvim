@@ -563,7 +563,7 @@ export function recordEmptyCompletion({ profile, model = null, diagnostics = {} 
 }
 
 const ESCALATION_REASONS = new Set(['VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION']);
-const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
+const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'timeout', 'error']);
 
 /**
  * Standart kipteki kanıta dayalı turun Derin düşünme ile sonlandırılması:

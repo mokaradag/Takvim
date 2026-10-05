@@ -22,7 +22,7 @@ const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistr
 const { requestSchema } = await import('../src/server/ai/tools/requestDeclaration.js');
 const { GROUNDING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { METRICS, claimableContract, metricEntry, rowCollections } = await import('../src/domain/ai/claimableEvidence.js');
-const { rankableMeasure } = await import('../src/domain/ai/requestContract.js');
+const { rankableMeasure, REQUEST_LIMITS } = await import('../src/domain/ai/requestContract.js');
 
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
@@ -101,6 +101,19 @@ test('tool calls without an accepted request never run SQL and the refusal is bo
     assert.equal(input.messages.some((message) => message.role === 'tool'), false);
     assert.match(input.messages[0].content, /Araç çağrıları çalıştırılmadı/);
   }
+});
+
+test('a general-route declaration in the same response does not open the tool round either', async (t) => {
+  const general = { text: JSON.stringify({ kind: 'route', intent: 'general', language: 'tr' }), toolCalls: [call('rota_task_search', { projectId: PROJECTS.FULL })] };
+  const { result, stack, inputs } = await turn(t, [
+    general,
+    { text: declared(inProject(['tasks.total'])), toolCalls: [call('rota_task_analytics', { projectId: PROJECTS.FULL })] },
+    (input) => reply(facts(`${results(input)[0].evidenceId}:data.totals.total`))
+  ], { user: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
+  assert.equal(inputs[1].messages.some((message) => message.role === 'tool'), false, 'istek bildirilmeden araç çalışmaz');
+  assert.match(inputs[1].messages[0].content, /Araç çağrıları çalıştırılmadı/);
+  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 1, 'yalnızca bildirimli tur SQL çalıştırdı');
+  assert.equal(result.outcome, 'grounded');
 });
 
 test('an untrusted declaration refuses the same response’s tool calls and reports only schema paths', async (t) => {
@@ -253,6 +266,39 @@ test('ranked answers are the top rows by the declared metric, including ties at 
   assert.equal(issue(verifyRequested(ledger, [`data.projects.${other}.tasks.overdue`], { operation: 'value', metrics: ['tasks.overdue'] })), 'ROW_SELECTION_UNBOUND');
 });
 
+test('a truncated server-sorted first page proves the rank boundary when the requested top-N covers it', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTools(stack, AYSE, [['rota_portfolio_summary', { limit: 2 }], ['rota_portfolio_summary', {}]]);
+  const page = JSON.parse(ledger.payloads()[0].payload);
+  assert.equal(page.complete, false, 'fikstürde ilk sayfa bütün portföyü kapsamaz');
+  assert.equal(page.truncated, true);
+  assert.equal(page.data.projects.length, 2);
+  const rank = (limit) => ({ operation: 'rank', metrics: ['tasks.overdue'], rank: { metric: 'tasks.overdue', order: 'desc', limit } });
+  // İstenen ilk iki satır sayfanın tamamıdır: sınır tanığı olarak üçüncü satır beklenemez.
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.*.tasks.overdue'], rank(2))), null);
+  // Sayfanın yalnızca başı istendiyse sınırdaki eşitlik sayfada görünmelidir.
+  const [first, second] = page.data.projects.map((row) => row.tasks.overdue);
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.0.tasks.overdue'], rank(1))), first === second ? 'RANK_MISMATCH' : null);
+  // Kesilmemiş kanıt bütün nüfusu gördüğü için sayfa boyutundan bağımsız doğrulanır.
+  assert.equal(JSON.parse(ledger.payloads()[1].payload).complete, true);
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.projects.*.tasks.overdue'], rank(REQUEST_LIMITS.maxRankLimit))), null);
+});
+
+test('a rank request verifies from an empty population and still needs rows when the population is not empty', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTools(stack, AYSE, [['rota_task_search', { projectId: PROJECTS.FULL, text: 'Böyle bir görev yok' }],
+    ['rota_task_search', { projectId: PROJECTS.FULL }]]);
+  assert.equal(JSON.parse(ledger.payloads()[0].payload).data.tasks.length, 0);
+  const worst = { operation: 'rank', metrics: ['task.overdueDays'], rank: { metric: 'task.overdueDays', order: 'desc', limit: 5 },
+    entities: [{ type: 'project', id: PROJECTS.FULL }], filters: { text: 'Böyle bir görev yok' } };
+  assert.equal(issue(verifyRequested(ledger, ['R1:totalCount'], { ...worst, metrics: ['tasks.total'], rank: { metric: 'tasks.total', order: 'desc', limit: 5 } })), null,
+    'boş ve satırsız koleksiyon sıralamanın geçerli yanıtıdır');
+  assert.equal(issue(verifyRequested(ledger, ['R2:totalCount'], { ...worst, metrics: ['tasks.total'], rank: { metric: 'tasks.total', order: 'desc', limit: 5 }, filters: {} })), 'RANK_MISMATCH',
+    'satır varken sıralama satırlarla kanıtlanır');
+  // Boş nüfus izni bildirilen ölçüyü atlamaz: satır alanı olan sıralama ölçüsü eşleşen kayıt sayısıyla karşılanamaz.
+  assert.equal(issue(verifyRequested(ledger, ['R1:totalCount'], worst)), 'UNDECLARED_METRIC');
+});
+
 test('list answers include every returned row of every claimable row collection', async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_portfolio_summary', {}], ['rota_workload_summary', {}]]);
@@ -260,6 +306,21 @@ test('list answers include every returned row of every claimable row collection'
   assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.*.name', 'R1:data.projects.*.tasks.open'], { operation: 'list', metrics: ['tasks.open'] })), null);
   assert.equal(issue(verifyRequested(ledger, ['R1:data.totals.open'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_ROWS_REQUIRED');
   assert.equal(issue(verifyRequested(ledger, ['R2:data.people.1.openTasks'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_INCOMPLETE');
+  // Genel toplam, listelenen satırların değerinin yerine geçmez.
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.totals.open', 'R1:data.projects.*.name'], { operation: 'list', metrics: ['tasks.open'] })), 'METRIC_MISSING');
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.*.tasks.overdue', 'R1:data.projects.0.tasks.open'],
+    { operation: 'list', metrics: ['tasks.open', 'tasks.overdue'] })), 'METRIC_MISSING', 'tek satırdaki doğru ölçü bütün listeyi karşılamaz');
+});
+
+test('an exhaustive list needs a complete source envelope, not merely every retained row', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTools(stack, AYSE, [['rota_portfolio_summary', { limit: 2 }], ['rota_portfolio_summary', {}]]);
+  const list = { operation: 'list', metrics: ['tasks.open'] };
+  const fields = ['data.projects.*.name', 'data.projects.*.tasks.open'];
+  assert.equal(JSON.parse(ledger.payloads()[0].payload).complete, false);
+  assert.equal(issue(verifyRequested(ledger, fields.map((field) => `R1:${field}`), list)), 'LIST_INCOMPLETE',
+    'kısaltılmış zarfın elinde kalan bütün satırları bütün nüfus değildir');
+  assert.equal(issue(verifyRequested(ledger, fields.map((field) => `R2:${field}`), list)), null);
 });
 
 test('a named row answers with its own properties, but aggregates in that row still need the declared population', async (t) => {

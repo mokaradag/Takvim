@@ -8,8 +8,9 @@ import { claimableContract, metricEntry, rowCollections } from './claimableEvide
  * yapılandırılmış bildirimidir (`operation`, `metrics`, `entities`, `filters`,
  * `rank`). Burada yalnızca nesnel değişmezler denetlenir: istenen her ölçü
  * temsil edilir; istenmeyen ölçü yanıt olamaz; olgunun nüfusu bildirilen
- * koşullarla ve sunucunun bağladığı varlıklarla birebir aynıdır; liste bütün
- * satırları, sıralama sıralamanın başını kapsar. Doğal dil anlamının daha iyi
+ * koşullarla ve sunucunun bağladığı varlıklarla birebir aynıdır; liste TAM bir
+ * sonucun bütün satırlarını, sıralama sıralamanın başını kapsar ve istenen ölçü
+ * listelenen satırların kendisinde bulunur. Doğal dil anlamının daha iyi
  * çıkarımı Aşama 4'ün işidir.
  */
 
@@ -80,13 +81,17 @@ function groupScope(fact) {
 
 const fieldValue = (row, field) => field.split('.').reduce((value, key) => value?.[key], row);
 
+/** Koleksiyonun satırlarında bir ölçüyü taşıyan kanonik alanlar. */
+function rowMetricFields(tool, collection, metric) {
+  const prefix = `${collection}.*.`;
+  return claimableContract(tool).paths
+    .filter((path) => path.startsWith(prefix) && !path.slice(prefix.length).includes('*') && metricEntry(tool, path)?.metric === metric)
+    .map((path) => path.slice(prefix.length));
+}
+
 /** Satır sıralamasının ölçü alanı: koleksiyonda o ölçüyü taşıyan ve satırlarda bulunan tek kanonik yol. */
 function rankField(tool, collection, metric, rows) {
-  const prefix = `${collection}.*.`;
-  const fields = claimableContract(tool).paths
-    .filter((path) => path.startsWith(prefix) && !path.slice(prefix.length).includes('*') && metricEntry(tool, path)?.metric === metric)
-    .map((path) => path.slice(prefix.length))
-    .filter((field) => rows.some((row) => fieldValue(row, field) !== undefined));
+  const fields = rowMetricFields(tool, collection, metric).filter((field) => rows.some((row) => fieldValue(row, field) !== undefined));
   return fields.length === 1 ? fields[0] : null;
 }
 
@@ -113,9 +118,39 @@ function rankMatches(request, source, collection, selected) {
   const expected = new Set(ranked.filter((item, position) => position < limit || item.value === boundary).map((item) => item.index));
   if (expected.size !== selected.size || [...expected].some((index) => !selected.has(index))) return false;
   if (source.envelope.complete === true && source.envelope.truncated !== true) return true;
-  // Kesilmiş koleksiyon: sunucu aynı ölçüyle sıralamışsa ilk sayfa bütün nüfusun başıdır; sınırdaki eşitlik görünmelidir.
+  // Kesilmiş koleksiyon: sunucu aynı ölçüyle sıralamışsa ilk sayfa bütün nüfusun başıdır.
   const sorted = source.sortedBy?.metric === request.rank.metric && source.sortedBy?.order === request.rank.order && source.firstPage === true;
-  return sorted && rows.length > expected.size && value(rows[expected.size]) !== boundary;
+  if (!sorted) return false;
+  // İstenen ilk N dönen sayfanın tamamıysa sayfanın kendisi sıralamanın başıdır;
+  // daha kısa bir N'de sınırdaki eşitlik sayfada görünmelidir.
+  if (limit >= rows.length) return true;
+  return rows.length > expected.size && value(rows[expected.size]) !== boundary;
+}
+
+/**
+ * Atfedilen her kanıt TAM ve satırsız mı? Yalnızca böyle bir kanıt boş nüfusu
+ * kanıtlar; kısaltılmış ya da sayfalanmış boş sonuç nüfusun boş olduğunu göstermez.
+ */
+function emptyRowEvidence(facts, evidence) {
+  return [...new Set(facts.map(({ evidenceId }) => evidenceId))].every((evidenceId) => {
+    const source = evidence.get(evidenceId);
+    return source.envelope?.complete === true && source.envelope?.truncated !== true
+      && rowCollections(source.tool).every((collection) => !(valueAt(source.envelope, `data.${collection}`) || []).length);
+  });
+}
+
+/**
+ * Seçilen satırların her biri, taşıyabildiği istenen ölçünün olgusunu da taşıyor mu?
+ * Kanıtta o ölçünün değeri bulunmayan satır ölçüyü taşımaz.
+ */
+function rowMetricComplete(entry, metric) {
+  const fields = rowMetricFields(entry.source.tool, entry.row.canonical, metric);
+  const rows = valueAt(entry.source.envelope, entry.row.collection) || [];
+  return [...entry.indexes].every((index) => {
+    const row = rows[index];
+    if (!row || !fields.some((field) => fieldValue(row, field) !== undefined)) return true;
+    return entry.metrics.get(index)?.has(metric) === true;
+  });
 }
 
 function entityKey(type, id) {
@@ -174,9 +209,10 @@ export function verifyRequestedFacts(request, facts, evidence) {
     }
     if (row) {
       const key = `${evidenceId}|${row.collection}`;
-      if (!collections.has(key)) collections.set(key, { source, row, indexes: new Set(), bound: true });
+      if (!collections.has(key)) collections.set(key, { source, row, indexes: new Set(), metrics: new Map(), bound: true });
       const entry = collections.get(key);
       entry.indexes.add(row.index);
+      if (substantive) entry.metrics.set(row.index, (entry.metrics.get(row.index) || new Set()).add(semantic.metric));
       if (row.kind === 'row' && request.operation === 'value') {
         const grouped = group && group.facets !== null && (Object.keys(group.facets).length > 0 || group.selectors.length > 0);
         if (!named && !grouped) entry.bound = false;
@@ -193,17 +229,24 @@ export function verifyRequestedFacts(request, facts, evidence) {
     // Çok değerli alan her istekte bütündür; satırların tamlığı istek türüne bağlıdır.
     if (entry.row.kind === 'list' && !complete) return fail('PARTIAL_VALUE_LIST');
     if (entry.row.kind !== 'row') continue;
-    if (request.operation === 'list' && !complete) return fail('LIST_INCOMPLETE');
+    // Bütün satırların istendiği liste yalnızca TAM bir sonuçtan kurulur: boyut
+    // sınırında kısaltılan zarf, elinde kalan satırların tamamı seçilse de bütün değildir.
+    if (request.operation === 'list'
+      && (!complete || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true)) return fail('LIST_INCOMPLETE');
     if (request.operation === 'value' && !entry.bound && size !== 1) return fail('ROW_SELECTION_UNBOUND');
   }
-  if (request.operation === 'list' && !rowGroups.length) {
-    const cited = new Set(facts.map(({ evidenceId }) => evidenceId));
-    for (const evidenceId of cited) {
-      const source = evidence.get(evidenceId);
-      if (rowCollections(source.tool).some((collection) => (valueAt(source.envelope, `data.${collection}`) || []).length > 0)) return fail('LIST_ROWS_REQUIRED');
+  // Liste ve sıralama satırların yanıtıdır: satırların taşıyabildiği istenen ölçü
+  // her satırda bulunmalıdır; genel bir toplam satırların değerinin yerine geçmez.
+  if (['list', 'rank'].includes(request.operation)) {
+    for (const metric of metrics) {
+      const carriers = rowGroups.filter((entry) => rowMetricFields(entry.source.tool, entry.row.canonical, metric).length > 0);
+      if (carriers.length && !carriers.some((entry) => rowMetricComplete(entry, metric))) return fail('METRIC_MISSING');
     }
   }
+  if (request.operation === 'list' && !rowGroups.length && !emptyRowEvidence(facts, evidence)) return fail('LIST_ROWS_REQUIRED');
   if (request.operation === 'rank') {
+    // Satırsız kanıt yalnızca nüfus boşken sıralamanın yanıtıdır.
+    if (!rowGroups.length) return emptyRowEvidence(facts, evidence) ? { ok: true, issues: [] } : fail('RANK_MISMATCH');
     if (rowGroups.length !== 1) return fail('RANK_MISMATCH');
     const [entry] = rowGroups;
     if (!rankMatches(request, entry.source, entry.row, entry.indexes)) return fail('RANK_MISMATCH');

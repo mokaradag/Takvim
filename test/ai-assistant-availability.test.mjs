@@ -135,6 +135,11 @@ test('with Rota AI enabled the launcher stays in the top bar', (t) => {
 
 test('the command palette offers the assistant only when it is enabled', () => {
   const shell = read('src/components/shell/AppShell.jsx');
-  assert.match(shell, /onOpenAssistant=\{assistantActions\.enabled \? async \(\) => \{ await closeTask\(\); assistantActions\.openPanel\(\); \} : null\}/);
-  assert.match(read('src/components/shell/CommandPalette.jsx'), /\.\.\.\(onOpenAssistant \? \[\{ kind: 'cmd', icon: 'Sparkles', label: 'Bilgin’e sor'/);
+  assert.match(shell, /onOpenAssistant=\{assistantActions\.enabled \? openAssistantPanel : null\}/);
+  // Geç yüklenen asistan bağlandığında komut listesi yeniden kurulmalıdır: geri çağrı
+  // her çizimde değişmeyecek biçimde saklanır ve listenin bağımlılığıdır.
+  assert.match(shell, /const openAssistantPanel = useCallback\(async \(\) => \{\s*await closeTask\(\);\s*assistantActions\.openPanel\?\.\(\);\s*\}, \[closeTask, assistantActions\]\);/);
+  const palette = read('src/components/shell/CommandPalette.jsx');
+  assert.match(palette, /\.\.\.\(onOpenAssistant \? \[\{ kind: 'cmd', icon: 'Sparkles', label: 'Bilgin’e sor'/);
+  assert.match(palette, /\}, \[q, tasks, navItems, onOpenAssistant\]\);/);
 });

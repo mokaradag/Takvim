@@ -69,8 +69,11 @@ test('an unverifiable Standard answer is finalized once by Deep thinking with th
   stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, factAnswer(() => { queriesBeforeDeep = toolQueries(stack); }));
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.equal(response.status, 200);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP]);
-  assert.equal(stack.provider.calls[3].toolChoice, 'none', 'kanıt varken Derin düşünme yalnızca yanıtı yazar');
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP, DEEP]);
+  assert.equal(stack.provider.calls[2].toolChoice, 'none', 'kanıt varken Derin düşünme yalnızca yanıtı yazar');
+  // Tek düzeltme bütçesi Standart modelde harcanmaz: aynı sorunu devredilen tur düzeltir.
+  assert.doesNotMatch(stack.provider.calls[2].messages[0].content, /SUNUCU DOĞRULAMASI/);
+  assert.match(stack.provider.calls[3].messages[0].content, /SUNUCU DOĞRULAMASI/);
   assert.ok(queriesBeforeDeep > 0);
   assert.equal(toolQueries(stack), queriesBeforeDeep, 'araç SQL’i Derin düşünmede yeniden çalışmaz');
   const done = doneOf(response);
@@ -90,6 +93,36 @@ test('an unverifiable Standard answer is finalized once by Deep thinking with th
   for (const secret of [QUESTION, INVALID, 'Radar Modernizasyonu', String(AYSE)]) {
     assert.equal(logs.some((line) => line.includes(secret)), false, `günlük içerik taşımaz: ${secret}`);
   }
+});
+
+test('a verified Standard answer keeps the whole turn in Standard and spends no repair', async (t) => {
+  const stack = stackFor(t);
+  stack.provider.enqueue(searchFull, factAnswer());
+  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD]);
+  assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
+  const { grounding } = aiTelemetrySnapshot();
+  assert.equal(grounding.escalations.total, 0);
+  assert.equal(grounding.repaired, 0);
+  assert.equal(grounding.grounded, 1);
+});
+
+test('a Deep escalation that times out ends as a bounded timeout, not as a verification failure', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'status', status: 504 });
+  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP]);
+  const [failure] = eventsOf(response, 'error');
+  assert.equal(failure.data.code, 'AI_TIMEOUT');
+  assert.equal(failure.data.retryable, true, 'süresi dolan tur kullanıcı tarafından yeniden denenebilir');
+  assert.deepEqual(deltas(response), [], 'ne uydurma yanıt ne de doğrulama iletisi gösterilir');
+  assert.deepEqual(stack.db.aiConversationMessages.map((row) => row.Role), ['user'], 'süresi dolan tur yazılmaz');
+  assert.equal(stack.db.aiMessageEvidence.length, 0);
+  const { grounding } = aiTelemetrySnapshot();
+  assert.deepEqual(grounding.escalations, { total: 1, byReason: { VERIFICATION_FAILED: 1 }, byOutcome: { timeout: 1 } });
+  assert.equal(grounding.failed, 0, 'sağlayıcı süre aşımı doğrulama hatası sayılmaz');
+  assert.equal(logLines(logs, 'ai.grounded.escalation')[0].context.outcome, 'timeout');
 });
 
 test('an empty Standard completion is diagnosed without content and retried in-session before Deep escalation', async (t) => {
@@ -207,7 +240,7 @@ test('a Deep session that cannot run falls back to the Standard result instead o
   const stack = stackFor(t);
   stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, { type: 'status', status: 503 });
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP, DEEP]);
   assert.deepEqual(deltas(response), [GROUNDING_FAILURE_TEXT]);
   assert.equal(doneOf(response).assistantMessage.finishReason, 'grounding_failed');
   assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { VERIFICATION_FAILED: 1 }, byOutcome: { error: 1 } });

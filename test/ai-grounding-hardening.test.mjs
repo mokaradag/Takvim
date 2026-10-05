@@ -503,9 +503,12 @@ test('evidence temp tables are dropped before creation and before every bounded-
   const sources = ['src/server/assignment/assignmentCoordinationQueries.js', 'src/server/schedule-change/scheduleRequestQueries.js', 'src/server/reports/taskActivityReport.js'];
   return Promise.all(sources.map(async (file) => {
     const text = await import('node:fs/promises').then((fs) => fs.readFile(new URL(`../${file}`, import.meta.url), 'utf8'));
-    for (const match of text.matchAll(/BEGIN\s+(?:--[^\n]*\n\s*)?DROP TABLE ([^;]+);\s+THROW 51001/g)) assert.ok(match[1].includes('#'), file);
+    const guarded = [...text.matchAll(/BEGIN\s+(?:--[^\n]*\n\s*)?DROP TABLE ([^;]+);\s+THROW 51001/g)];
+    for (const match of guarded) assert.ok(match[1].includes('#'), file);
     assert.doesNotMatch(text, /THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;\s*(?:SELECT|DECLARE @lastPage)[\s\S]{0,40}#(?:Coordination|Schedule)EvidenceSnapshot/);
-    assert.ok(/BEGIN[\s\S]{0,120}DROP TABLE[^;]+;\s+THROW 51001/.test(text), file);
+    assert.ok(guarded.length > 0, file);
+    // Tek korunan yer yetmez: dosyadaki HER THROW önce geçici tabloları bırakmalıdır.
+    assert.equal(guarded.length, (text.match(/THROW 51001/g) || []).length, `${file}: every THROW cleans up first`);
   }));
 });
 

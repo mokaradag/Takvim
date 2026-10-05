@@ -324,8 +324,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       close({ restoreFocus: false });
       onOpenSettings?.();
     } else if (action === 'new-conversation') {
-      // Kapanmış/dolmuş konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
-      const carry = Boolean(!active.id || active.closed || held || capacityFull);
+      // Kapanmış/dolmuş, yanıtsız son turla kilitlenmiş konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
+      const carry = Boolean(!active.id || active.closed || held || capacityFull || retryKey);
       const carried = carry ? [held?.text, draft].filter(Boolean).join('\n\n') : '';
       const sourceKey = draftKey;
       if (controller.newConversation() === false) return;
