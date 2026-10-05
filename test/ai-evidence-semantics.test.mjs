@@ -239,6 +239,39 @@ test('independent WBS branches keep valid totals while cycles render undefined m
   assert.match(renderEvidenceFact(undefinedMetric, 'R1'), /döngüsü nedeniyle tanımsız/);
 });
 
+test('unknown recurrence dates and absent baselines do not claim records were omitted', async (t) => {
+  const stack = stackFor(t, { baselines: [] });
+  stack.db.tasks.find((row) => row.TaskId === TASKS.OCCURRENCE_DONE).ActualFinish = null;
+  const recurrence = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { taskId: TASKS.SERIES });
+  const baseline = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.FULL });
+  for (const read of [recurrence, baseline]) {
+    assert.equal(read.result.complete, false);
+    assert.equal(read.result.truncated, false);
+    for (const locale of ['tr', 'en']) {
+      assert.deepEqual(withScopeDisclosure('Yanıt 【R1】', [read.result], locale), { text: 'Yanıt 【R1】', disclosed: false });
+    }
+  }
+});
+
+test('omission disclosure follows truncation while authorization disclosure remains independent', () => {
+  for (const locale of ['tr', 'en']) {
+    const omitted = locale === 'tr' ? /kayıtlar veya ayrıntılar sonuçta yer almıyor/ : /records or details were omitted/;
+    const authorized = locale === 'tr' ? /yetki/ : /authorized/;
+    for (const complete of [true, false, undefined]) {
+      const result = withScopeDisclosure('Yanıt 【R1】', [{ complete, truncated: true }], locale);
+      assert.equal(result.disclosed, true);
+      assert.match(result.text, omitted);
+    }
+    const partial = withScopeDisclosure('Yanıt 【R1】', [{ partial: true, complete: false, truncated: false }], locale);
+    assert.equal(partial.disclosed, true);
+    assert.match(partial.text, authorized);
+    assert.doesNotMatch(partial.text, omitted);
+    const mixed = withScopeDisclosure('Yanıt 【R1】', [{ complete: false, truncated: false }, { partial: true, truncated: true }], locale);
+    assert.match(mixed.text, authorized);
+    assert.match(mixed.text, omitted);
+  }
+});
+
 test('incomplete evidence always has a server-owned disclosure and canonical enums never render raw', () => {
   const disclosure = withScopeDisclosure('Yanıt 【R1】', [{ id: 'R1', partial: false, complete: false, truncated: true }]);
   assert.match(disclosure.text, /eksiktir/);

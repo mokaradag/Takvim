@@ -199,7 +199,7 @@ export function withScopeDisclosure(text, citedEvidence = [], locale = 'tr') {
   if (citedEvidence.some((item) => item?.partial === true)) notes.push(locale === 'en'
     ? '_Note: This answer covers only records you are authorized to view and may not reflect the entire projects._'
     : SCOPE_DISCLOSURE_TEXT);
-  if (citedEvidence.some((item) => item?.complete === false || item?.truncated === true)) notes.push(locale === 'en'
+  if (citedEvidence.some((item) => item?.truncated === true)) notes.push(locale === 'en'
     ? '_Note: Some records or details were omitted; this evidence is incomplete._'
     : '_Not: Bazı kayıtlar veya ayrıntılar sonuçta yer almıyor; bu kanıt eksiktir._');
   return { text: notes.length ? `${String(text).trimEnd()}\n\n${notes.join('\n\n')}` : text, disclosed: notes.length > 0 };

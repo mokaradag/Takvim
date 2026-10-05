@@ -322,6 +322,22 @@ test('genel durum dikkat gerektirenleri, bileşenleri ve göstergeleri çizer', 
   assert.match(serialized, /Son başarı: .{0,4}bilinmiyor/);
 });
 
+test('Rota data drawer translates request-declaration, timeout and fallback telemetry values', async (t) => {
+  const { recordGroundedEscalation, aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  recordGroundedEscalation({ requestedMode: 'standard', reason: 'REQUEST_DECLARATION', outcome: 'timeout' });
+  recordGroundedEscalation({ requestedMode: 'standard', reason: 'unknown reason', outcome: 'unknown outcome' });
+  const telemetry = aiTelemetrySnapshot();
+  assert.deepEqual(telemetry.grounding.escalations.byReason, { REQUEST_DECLARATION: 1, OTHER: 1 });
+  assert.deepEqual(telemetry.grounding.escalations.byOutcome, { timeout: 1, other: 1 });
+  const view = mountComponent(RotaDataDrawerFields, { rotaData: { enabled: true }, telemetry });
+  const text = JSON.stringify(view.output);
+  assert.match(text, /2 devir · Neden: İstek bildirimi 1 · Diğer 1 · Sonuç: Süre aşımı 1 · Diğer 1/);
+  assert.doesNotMatch(text, /REQUEST_DECLARATION|OTHER|timeout|other|unknown reason|unknown outcome/);
+  view.unmount();
+});
+
 test('Rota verisi ayrıntısı Derin düşünme devirlerini ve görünür çıktısız yanıtları yalnızca sayı olarak gösterir', () => {
   const telemetry = {
     tools: { calls: 4, latency: { p95Ms: 120 }, byOutcome: { OK: 4 } },

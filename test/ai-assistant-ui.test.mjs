@@ -61,6 +61,50 @@ test('controller keeps a selected Rota source when Rota data or the mode is unav
   }
 });
 
+test('welcome suggestion clicks select general chat only when enabled Rota data is unavailable', async (t) => {
+  const previousFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => callback();
+  t.after(() => { globalThis.requestAnimationFrame = previousFrame; });
+  for (const { rotaData, mode = 'standard', source = 'rota', expectedSource } of [
+    { rotaData: { enabled: true, available: false, reason: 'EVIDENCE_SCHEMA_MISSING' }, expectedSource: 'general' },
+    { rotaData: { enabled: true, available: false, reason: 'EVIDENCE_SCHEMA_UNKNOWN' }, expectedSource: 'general' },
+    { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: false }] }, mode: 'deep', expectedSource: 'general' },
+    { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, expectedSource: 'rota' },
+    { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, source: 'general', expectedSource: 'general' },
+    { rotaData: { enabled: false }, expectedSource: undefined }
+  ]) {
+    const api = fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { ...READINESS, rotaData } }) });
+    const { controller, state } = await readyController({ api });
+    controller.setMode(mode);
+    controller.setSource(source);
+    const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+    const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
+    assert.equal(state().source, source, 'readiness alone does not change the selected source');
+    composer().props.onChange('Elle yazılan taslak');
+    panel.render();
+    assert.equal(state().source, source, 'typing does not change the selected source');
+    let focused = 0;
+    composer().props.inputRef.current = { focus() { focused += 1; } };
+    const welcome = findElement(panel.output, (node) => node.type?.name === 'Welcome');
+    const suggestions = mountComponent(welcome.type, welcome.props);
+    const button = findElement(suggestions.output, (node) => node.props?.className === 'rota-assistant-suggestion');
+    assert.ok(button);
+    button.props.onClick();
+    panel.render();
+    assert.equal(state().source, expectedSource || source);
+    assert.equal(composer().props.value, textOf(button));
+    assert.equal(focused, 1);
+    assert.equal(api.turns.length, 0, 'the suggestion remains a draft until submitted');
+    assert.equal(composer().props.onSubmit(composer().props.value).ok, true);
+    assert.equal(api.turns[0].input.message, textOf(button).trim());
+    assert.equal(api.turns[0].input.source, expectedSource === 'general' ? 'general' : undefined);
+    assert.equal(api.turns[0].input.mode, mode);
+    panel.unmount();
+    suggestions.unmount();
+    controller.dispose();
+  }
+});
+
 test('composer disables unavailable Rota data and displays the readiness explanation', () => {
   const view = mountComponent(AssistantComposer, composerProps({ dataEnabled: true, dataAvailable: false,
     dataUnavailableMessage: 'Rota verisi hazırlığı tamamlanmamış. Genel sohbet kullanılabilir.', source: 'general' }).props);

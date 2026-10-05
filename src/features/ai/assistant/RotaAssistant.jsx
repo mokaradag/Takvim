@@ -439,6 +439,9 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           mode={state.mode}
           recent={recent}
           onSuggest={(text) => {
+            if (state.readiness?.rotaData?.enabled === true && !rotaData.available) {
+              controller.setSource('general');
+            }
             setDraft(text);
             focusInput();
           }}

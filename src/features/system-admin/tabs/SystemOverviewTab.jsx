@@ -69,9 +69,9 @@ function AiDrawerFields({ detail }) {
   );
 }
 
-const ESCALATION_REASON_LABELS = Object.freeze({ VERIFICATION_FAILED: 'Doğrulanamayan', LENGTH: 'Uzunluk sınırı', EMPTY_COMPLETION: 'Boş yanıt' });
+const ESCALATION_REASON_LABELS = Object.freeze({ VERIFICATION_FAILED: 'Doğrulanamayan', LENGTH: 'Uzunluk sınırı', EMPTY_COMPLETION: 'Boş yanıt', REQUEST_DECLARATION: 'İstek bildirimi', OTHER: 'Diğer' });
 const ESCALATION_OUTCOME_LABELS = Object.freeze({
-  grounded: 'Kanıtlı', clarification: 'Açıklama', not_found: 'Bulunamadı', unavailable: 'Kullanılamıyor', general_redirect: 'Yönlendirme', failed: 'Doğrulanamayan', error: 'Hata'
+  grounded: 'Kanıtlı', clarification: 'Açıklama', not_found: 'Bulunamadı', unavailable: 'Kullanılamıyor', general_redirect: 'Yönlendirme', failed: 'Doğrulanamayan', error: 'Hata', timeout: 'Süre aşımı', other: 'Diğer'
 });
 const countList = (entries, labels) => entries.map(([key, count]) => `${labels[key] || key} ${count}`).join(' · ');
 
