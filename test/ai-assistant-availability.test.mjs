@@ -7,6 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { registerHooks } from 'node:module';
 import test from 'node:test';
 import { setImmediate as immediate } from 'node:timers/promises';
@@ -41,6 +42,9 @@ const layout = await import(LAYOUT);
 const { useRotaAssistant, RotaAssistantLauncher, RotaAssistantPanel } = await import('../src/features/ai/assistant/RotaAssistant.jsx');
 const { assistantEnabledInDocument } = await import('../src/features/ai/assistant/assistantInteraction.js');
 const { ASSISTANT_AVAILABILITY_META } = await import('../src/domain/ai/assistantContract.js');
+const { readRuntimeFeatures, RUNTIME_FEATURES_COOKIE } = await import('../src/lib/runtimeFeatures.js');
+const { middleware } = await import('../src/middleware.js');
+const { NextRequest } = await import('next/server.js');
 const { DataModeContext } = await import('../src/components/shell/DataModeContext.jsx');
 
 const read = (relativePath) => readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
@@ -65,12 +69,19 @@ const documentWith = (content) => ({
 
 const runtime = await import('../src/app/runtime.js/route.js');
 
-test('runtime availability changes without dynamic rendering or AI initialization in the root layout', async (t) => {
+test('runtime availability changes without a global probe, dynamic page rendering or AI initialization', async (t) => {
   assert.equal(layout.dynamic, undefined);
   assert.doesNotMatch(read('src/app/layout.js'), /readAiConfig|server\/ai|assistant\.css/);
-  assert.match(read('src/app/layout.js'), /runtime\.js/);
+  const html = renderToStaticMarkup(layout.default({ children: 'Rota' }));
+  assert.doesNotMatch(html, /runtime\.js|assistant\.(?:js|css)/);
+  assert.doesNotMatch(read('src/middleware.js'), /server\/ai|readAiConfig|sql|fetch\(/);
+  assert.match(read('src/components/shell/AppShell.jsx'), /readRuntimeFeatures\(\)\?\.assistant === true/);
   for (const [value, expected] of [['false', false], [null, false], ['tru', false], ['true', true], ['0', false]]) {
     withEnv(t, 'MERGEN_ROTA_AI_ENABLED', value);
+    const flag = middleware(new NextRequest('https://rota.example.test/'));
+    assert.equal(flag.cookies.get(RUNTIME_FEATURES_COOKIE)?.value, expected ? 'enabled' : 'disabled');
+    assert.equal(flag.cookies.get(RUNTIME_FEATURES_COOKIE)?.secure, true);
+    assert.equal(flag.headers.get('x-middleware-next'), '1');
     const response = runtime.GET();
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal(await response.text(), `globalThis.__MERGEN_ROTA_FEATURES__=Object.freeze({assistant:${expected}});`);
@@ -79,6 +90,63 @@ test('runtime availability changes without dynamic rendering or AI initializatio
   withEnv(t, 'MERGEN_ROTA_AI_BASE_URL', 'https://ai.example.test/v1');
   const body = await runtime.GET().text();
   for (const secret of ['sk-test-0123456789abcdef', 'ai.example.test']) assert.equal(body.includes(secret), false);
+});
+
+test('the document response supplies the public flag without requests and excludes APIs and assets', (t) => {
+  withEnv(t, 'MERGEN_ROTA_AI_ENABLED', 'true');
+  const flag = middleware(new NextRequest('http://rota.example.test/'));
+  const cookie = flag.cookies.get(RUNTIME_FEATURES_COOKIE);
+  assert.equal(cookie.path, '/');
+  assert.equal(cookie.httpOnly, undefined);
+  assert.equal(cookie.secure, false);
+  for (const pathname of ['/api/mergen-rota/snapshot', '/_next/static/chunks/page.js', '/runtime.js', '/auth/callback']) {
+    assert.equal(middleware(new NextRequest(`http://rota.example.test${pathname}`)).headers.get('set-cookie'), null);
+  }
+  for (const [value, enabled] of [['enabled', true], ['disabled', false]]) {
+    const doc = { ...documentWith(enabled ? 'disabled' : 'enabled'), cookie: `other=x; ${RUNTIME_FEATURES_COOKIE}=${value}` };
+    assert.deepEqual(readRuntimeFeatures(doc), { assistant: enabled });
+    assert.equal(assistantEnabledInDocument(doc), enabled);
+  }
+  for (const cookie of ['', `${RUNTIME_FEATURES_COOKIE}=true`, `other-${RUNTIME_FEATURES_COOKIE}=enabled`]) {
+    assert.equal(readRuntimeFeatures({ cookie }), null);
+  }
+});
+
+test('a disabled response flag prevents assistant activation without legacy metadata or a runtime request', async (t) => {
+  withDocument(t, { cookie: `${RUNTIME_FEATURES_COOKIE}=disabled` });
+  const previous = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => { calls.push(url); throw new Error('unexpected fetch'); };
+  t.after(() => { globalThis.fetch = previous; });
+  const probe = mountComponent(() => useRotaAssistant(), {});
+  probe.output.openPanel();
+  probe.render();
+  await immediate();
+  assert.equal(probe.output.enabled, false);
+  assert.equal(probe.output.open, false);
+  assert.deepEqual(calls, []);
+  probe.unmount();
+});
+
+test('the flag works through proxy-stripped and direct prefixed roots without sharing another deployment cookie', () => {
+  for (const prefix of ['/rota', '/bilge', '/apps/rota']) {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import { NextRequest } from 'next/server.js';
+      import { middleware } from './src/middleware.js';
+      import { RUNTIME_FEATURES_COOKIE, readRuntimeFeatures } from './src/lib/runtimeFeatures.js';
+      const prefix = process.env.NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH;
+      assert.equal(RUNTIME_FEATURES_COOKIE, 'mergen-rota-ai' + encodeURIComponent(prefix));
+      for (const path of ['/', prefix, prefix + '/']) {
+        const response = middleware(new NextRequest('http://rota.example.test' + path));
+        const cookie = response.cookies.get(RUNTIME_FEATURES_COOKIE);
+        assert.equal(cookie.value, 'enabled');
+        assert.deepEqual(readRuntimeFeatures({ cookie: 'mergen-rota-ai=disabled; ' + cookie.name + '=' + cookie.value }), { assistant: true });
+      }
+      assert.equal(middleware(new NextRequest('http://rota.example.test' + prefix + '/api/mergen-rota/snapshot')).headers.get('set-cookie'), null);
+    `], { cwd: fileURLToPath(new URL('../', import.meta.url)), env: { ...process.env, NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH: prefix, MERGEN_ROTA_AI_ENABLED: 'true' }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  }
 });
 
 test('the document flag hides the assistant only when the server says disabled', () => {

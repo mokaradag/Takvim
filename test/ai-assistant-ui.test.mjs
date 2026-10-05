@@ -811,6 +811,27 @@ test('yazma alanı: Enter gönderir, Shift+Enter ve IME göndermez; boş ileti g
   assert.equal(single, null, 'tek kip varsa seçim gösterilmez');
 });
 
+test('composer locks both modes during generation and unlocks them after completion or cancellation', () => {
+  for (const mode of ['standard', 'deep']) {
+    const changes = [];
+    const view = mountComponent(AssistantComposer, composerProps({ mode, generating: true, onModeChange: (value) => changes.push(value) }).props);
+    const button = () => {
+      const toggle = findElement(view.output, (node) => node.type?.name === 'ModeToggle');
+      const chip = mountComponent(toggle.type, toggle.props).output;
+      return mountComponent(chip.type, chip.props).output;
+    };
+    assert.equal(button().props.disabled, true);
+    assert.equal(button().props['aria-checked'], mode === 'deep');
+    view.render(composerProps({ mode, generating: false, onModeChange: (value) => changes.push(value) }).props);
+    assert.equal(button().props.disabled, false);
+    button().props.onClick();
+    assert.deepEqual(changes, [mode === 'deep' ? 'standard' : 'deep']);
+    view.render(composerProps({ mode, disabled: true, generating: false }).props);
+    assert.equal(button().props.disabled, true);
+    view.unmount();
+  }
+});
+
 test('yanıt kaynağı bölümlü radyo grubudur; serbest metin onayı kısa, açıklamalı bir anahtardır', () => {
   const sources = [];
   const consents = [];

@@ -9,8 +9,6 @@ import './styles/simple-mode.css';
 import './styles/experience.css';
 import { TWEAKS_BOOTSTRAP_SCRIPT } from '../lib/tweaksBootstrap.js';
 import { APP_FAVICON_DATA_URI, APP_FAVICON_PNG_DATA_URI } from '../lib/appFavicon.js';
-import Script from 'next/script.js';
-import { publicRotaPath } from '../lib/publicPath.js';
 
 export const metadata = {
   title: 'MERGEN Rota — Görev Yönetimi',
@@ -29,7 +27,6 @@ export default function RootLayout({ children }) {
         {/* SVG desteği olmayan istemciler ve iOS ana ekranı raster yedeği kullanır. */}
         <link rel="alternate icon" type="image/png" href={FALLBACK_ICON} />
         <link rel="apple-touch-icon" href={FALLBACK_ICON} />
-        <Script src={publicRotaPath('/runtime.js')} strategy="beforeInteractive" />
       </head>
       <body className="theme-dark">
         {/* Erişilebilirlik ve hareket tercihleri, uygulama paketi çalışmadan

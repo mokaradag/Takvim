@@ -4,6 +4,7 @@
  * olmadan sınanır; bileşenler yalnızca uygular.
  */
 import { ASSISTANT_AVAILABILITY_META } from '../../../domain/ai/assistantContract.js';
+import { readRuntimeFeatures } from '../../../lib/runtimeFeatures.js';
 
 /**
  * Dar ekranda panel tam ekran bir sayfa (kipli iletişim kutusu) olur. Aynı
@@ -19,7 +20,7 @@ export const ASSISTANT_FOLLOW_THRESHOLD_PX = 48;
  * kabukta hiç gösterilmez. İşaret yoksa düğme görünür; erişim kararı yine
  * uçlarındır.
  */
-export function assistantEnabledInDocument(doc = globalThis.document, features = globalThis.__MERGEN_ROTA_FEATURES__) {
+export function assistantEnabledInDocument(doc = globalThis.document, features = readRuntimeFeatures(doc) || globalThis.__MERGEN_ROTA_FEATURES__) {
   if (typeof features?.assistant === 'boolean') return features.assistant;
   const meta = doc?.querySelector?.(`meta[name="${ASSISTANT_AVAILABILITY_META}"]`);
   return meta?.getAttribute?.('content') !== 'disabled';

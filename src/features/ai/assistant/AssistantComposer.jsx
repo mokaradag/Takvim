@@ -249,7 +249,7 @@ export function AssistantComposer({
           <span id={counterId} className="rota-assistant-composer-counter">
             {counter && !overLimit ? counter : <span className="sr-only">Enter gönderir, Shift+Enter yeni satır ekler.</span>}
           </span>
-          <ModeToggle mode={mode} modes={modes} onChange={onModeChange} disabled={disabled} helpId={modeHelpId} />
+          <ModeToggle mode={mode} modes={modes} onChange={onModeChange} disabled={disabled || generating} helpId={modeHelpId} />
           {/* Gönder ile Durdur aynı boyutta ve aynı sabit yuvada yer değiştirir; öteki denetimler kaymaz. */}
           <span className="rota-assistant-composer-action">
             {generating ? (

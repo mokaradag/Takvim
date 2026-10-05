@@ -78,7 +78,8 @@ export function evidenceSchemaState() {
 }
 
 export function noteEvidenceSchema(ready, at = new Date()) {
-  globalThis[EVIDENCE_SCHEMA_STATE_KEY] = { ready: Boolean(ready), observedAt: at.toISOString() };
+  globalThis[EVIDENCE_SCHEMA_STATE_KEY] = { ready: Boolean(ready), observedAt: at.toISOString(),
+    everReady: Boolean(ready) || evidenceSchemaState().everReady === true };
 }
 
 /** Kanıt tablosunun yokluğu (0018 geri alınmış ya da yarım uygulanmış kurulum). */

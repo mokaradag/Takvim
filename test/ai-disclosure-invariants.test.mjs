@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
+import { aiRequest, conversationRoute, createAiStack, loadAssistantConversation, readJson, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, LEAD, MEHMET, PROJECTS, TASKS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { NON_ENUMERATING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+const { getSqlPool } = await import('../src/server/db/pool.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
 const deltas = (response) => response.events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('');
@@ -22,6 +23,153 @@ function citeTask(stack, taskId, field = 'data.task.title') {
       return { type: 'answer', text: evidenceReply(claimFor(result, field)) };
     } });
 }
+
+function failEvidenceReads(t, pool, code) {
+  const request = pool.request.bind(pool);
+  t.mock.method(pool, 'request', () => {
+    const value = request();
+    const query = value.query.bind(value);
+    value.query = async (sql) => {
+      if (sql.includes('AS EvidenceReady')) throw Object.assign(new Error('evidence read unavailable'), { code });
+      return query(sql);
+    };
+    return value;
+  });
+}
+
+for (const failure of ['missing', 'AI_BUSY', 'DATABASE_UNAVAILABLE']) {
+  for (const finishReason of ['stop', 'length']) {
+    test(`tool-free literal citations survive ${failure} on reopen, replay and history (${finishReason})`, async (t) => {
+      const stack = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' }, seed: { aiEvidenceSchemaMissing: failure === 'missing' } });
+      const text = 'Etiket örneği: 【R1】 ve 【R12】.';
+      stack.provider.enqueue({ type: 'stream', text, finishReason });
+      const turnId = randomUUID();
+      const input = { turnId, message: 'Bu etiketleri yaz' };
+      const first = done(await sendTurn(input));
+      if (failure !== 'missing') failEvidenceReads(t, await getSqlPool(), failure);
+      const opened = await loadAssistantConversation(first.conversation.id);
+      assert.equal(opened.status, 200);
+      const answer = opened.body.messages.find((message) => message.role === 'assistant');
+      assert.equal(answer.content, text);
+      assert.equal(answer.finishReason, finishReason);
+      const calls = stack.provider.calls.length;
+      const replay = await sendTurn({ ...input, conversationId: first.conversation.id });
+      assert.equal(done(replay).replayed, true);
+      assert.equal(deltas(replay), text);
+      assert.equal(stack.provider.calls.length, calls);
+      stack.provider.enqueue({ type: 'stream', text: 'Yeni yanıt.' });
+      await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: 'Etiket örneğini hatırla' });
+      assert.equal(stack.provider.calls.at(-1).messages.find((message) => message.role === 'assistant').content, text);
+      assert.equal((stack.db.aiToolLog || []).length, 0);
+    });
+  }
+}
+
+test('disabling tools still hides recorded grounded answers on evidence-read failure and revoked access', async (t) => {
+  const stack = stackFor(t);
+  citeTask(stack, TASKS.OVERDUE);
+  const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
+  const saved = done(await sendTurn(input));
+  process.env.MERGEN_ROTA_AI_TOOLS_ENABLED = 'false';
+  failEvidenceReads(t, await getSqlPool(), 'DATABASE_UNAVAILABLE');
+  const hidden = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'unavailable');
+  assert.deepEqual(hidden.evidence, []);
+  const replay = await sendTurn({ ...input, conversationId: saved.conversation.id });
+  assert.equal(done(replay).assistantMessage.finishReason, 'unavailable');
+  stack.provider.enqueue({ type: 'stream', text: 'Genel açıklama.' });
+  await sendTurn({ conversationId: saved.conversation.id, turnId: randomUUID(), message: 'Açıkla' });
+  assert.ok(stack.provider.calls.at(-1).messages.filter((message) => message.role === 'assistant').every((message) => !message.content.includes('【R1】')));
+  t.mock.restoreAll();
+  stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+  const revoked = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(revoked.finishReason, 'not_found');
+  assert.equal(revoked.content, NON_ENUMERATING_FAILURE_TEXT);
+});
+
+test('previously available evidence remains protected across repeated missing-schema reads with tools disabled', async (t) => {
+  const stack = stackFor(t);
+  citeTask(stack, TASKS.OVERDUE);
+  const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
+  const saved = done(await sendTurn(input));
+  stack.setEnv({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' });
+  stack.db.aiEvidenceSchemaMissing = true;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const answer = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.deepEqual(answer.evidence, []);
+  }
+  assert.equal(done(await sendTurn({ ...input, conversationId: saved.conversation.id })).assistantMessage.finishReason, 'unavailable');
+  stack.provider.enqueue({ type: 'stream', text: 'Genel açıklama.' });
+  await sendTurn({ conversationId: saved.conversation.id, turnId: randomUUID(), message: 'Açıkla' });
+  assert.ok(stack.provider.calls.at(-1).messages.filter((message) => message.role === 'assistant').every((message) => !message.content.includes('【R1】')));
+});
+
+for (const cause of ['cumulative', 'message', 'caller']) {
+  test(`saved-evidence ${cause} cancellation keeps disclosure closed and releases the SQL gate`, async (t) => {
+    const stack = stackFor(t);
+    citeTask(stack, TASKS.OVERDUE);
+    const saved = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
+    stack.provider.enqueue({ type: 'stream', text: 'Genel açıklama.' });
+    await sendTurn({ conversationId: saved.conversation.id, turnId: randomUUID(), source: 'general', message: 'Genel soru' });
+    let release;
+    const barrier = { entered: 0, match: (sql) => sql.startsWith('/* rota-ai-tool:task-visibility */'), released: new Promise((resolve) => { release = resolve; }) };
+    stack.db.queryBarrier = barrier;
+    t.after(() => release());
+    const timers = [];
+    const schedule = globalThis.setTimeout;
+    const clear = globalThis.clearTimeout;
+    t.mock.method(globalThis, 'clearTimeout', (timer) => {
+      const saved = timers.find((entry) => entry.timer === timer);
+      if (saved) saved.active = false;
+      return clear(timer);
+    });
+    t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+      const timer = schedule(callback, ms, ...args);
+      timers.push({ timer, ms, active: true, expire() { clearTimeout(timer); callback(...args); } });
+      return timer;
+    });
+    const caller = new AbortController();
+    const opened = conversationRoute.GET(aiRequest(`/assistant/conversations/${saved.conversation.id}`, { signal: caller.signal }),
+      { params: { conversationId: saved.conversation.id } }).then(readJson);
+    for (let i = 0; i < 400 && barrier.entered === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(barrier.entered, 1);
+    if (cause === 'caller') caller.abort();
+    else if (cause === 'cumulative') timers.find((timer) => timer.ms === TOOL_LIMITS.maxCumulativeSqlMs).expire();
+    else timers.find((timer) => timer.active && timer.ms === TOOL_LIMITS.callTimeoutMs).expire();
+    const result = await opened;
+    if (cause === 'caller') {
+      assert.equal(result.status, 499);
+      assert.equal(result.body.error.code, 'AI_CANCELLED');
+    } else {
+      assert.equal(result.status, 200);
+      const answers = result.body.messages.filter((message) => message.role === 'assistant');
+      assert.equal(answers[0].finishReason, 'unavailable');
+      assert.deepEqual(answers[0].evidence, []);
+      assert.equal(answers[1].content, 'Genel açıklama.');
+    }
+    const { toolSqlGateStatus } = await import('../src/server/ai/tools/toolSqlGate.js');
+    assert.equal(toolSqlGateStatus().active, 1, 'the unfinished driver query retains its slot');
+    release();
+    for (let i = 0; i < 400 && toolSqlGateStatus().active; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(toolSqlGateStatus().active, 0);
+    delete stack.db.queryBarrier;
+    const recovered = await loadAssistantConversation(saved.conversation.id);
+    assert.equal(recovered.body.messages.find((message) => message.role === 'assistant').content, saved.assistantMessage.content);
+  });
+}
+
+test('authorization errors during saved-evidence validation still propagate', async (t) => {
+  const stack = stackFor(t);
+  citeTask(stack, TASKS.OVERDUE);
+  const saved = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
+  const { ServerPersistenceError } = await import('../src/server/errors.js');
+  stack.db.aiToolFailure = { 'task-visibility': new ServerPersistenceError('UNAUTHORIZED', 'Yetki yok.') };
+  const response = await loadAssistantConversation(saved.conversation.id);
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'UNAUTHORIZED');
+});
 
 for (const change of ['project-revoked', 'creator-to-assignee', 'full-to-partial', 'management-revoked']) {
   test(`saved answers, summaries and idempotent replay revalidate disclosure after ${change}`, async (t) => {

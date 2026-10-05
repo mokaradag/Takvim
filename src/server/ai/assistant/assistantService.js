@@ -497,7 +497,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
             const authorized = await context.revalidateEvidence(entries, messageDeadline.signal);
             if (entries.every((entry) => authorized.has(entry.id))) visible.set(id, summaries);
           } catch (error) {
-            if (error?.code === 'UNAUTHORIZED' || error?.code === AI_ERROR_CODES.AI_CANCELLED || signal?.aborted) throw error;
+            if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
             evidence.unavailableMessages.add(id);
           } finally { messageDeadline.dispose(); }
         }
@@ -506,7 +506,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     }
     return evidence;
   } catch (error) {
-    if (error?.code === 'UNAUTHORIZED' || error?.code === AI_ERROR_CODES.AI_CANCELLED || signal?.aborted) throw error;
+    if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
     return { unavailable: true };
   }
 }
@@ -519,6 +519,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
  */
 function citedWithoutKnownEvidence(message, evidence) {
   if (message.finishReason === 'general') return false;
+  if (!readAiConfig().toolsEnabled && evidence?.ready !== true && evidenceSchemaState().everReady !== true) return false;
   if (!(evidence?.unavailable || evidence?.ready === false || !evidence?.epochsByMessage)) return false;
   return /【R[1-9]\d?】/.test(String(message.content || ''));
 }
