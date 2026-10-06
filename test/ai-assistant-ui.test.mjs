@@ -61,7 +61,7 @@ test('controller keeps a selected Rota source when Rota data or the mode is unav
   }
 });
 
-test('welcome suggestion clicks select the source of the displayed suggestions', async (t) => {
+test('welcome suggestions preserve explicit general chat and draft the suggested text', async (t) => {
   const previousFrame = globalThis.requestAnimationFrame;
   globalThis.requestAnimationFrame = (callback) => callback();
   t.after(() => { globalThis.requestAnimationFrame = previousFrame; });
@@ -70,7 +70,7 @@ test('welcome suggestion clicks select the source of the displayed suggestions',
     { rotaData: { enabled: true, available: false, reason: 'EVIDENCE_SCHEMA_UNKNOWN' }, expectedSource: 'general' },
     { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: false }] }, mode: 'deep', expectedSource: 'general' },
     { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, expectedSource: 'rota' },
-    { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, source: 'general', expectedSource: 'rota' },
+    { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, source: 'general', expectedSource: 'general' },
     { rotaData: { enabled: false }, expectedSource: undefined }
   ]) {
     const api = fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { ...READINESS, rotaData } }) });

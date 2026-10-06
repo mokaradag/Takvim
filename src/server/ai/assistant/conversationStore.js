@@ -129,6 +129,7 @@ function conversationRow(row) {
 
 function messageRow(row) {
   if (!row) return null;
+  const general = ['general_stop', 'general_end_turn', 'general_eos', 'general_stop_sequence', 'general_length', 'general_content_filter'].includes(row.FinishReason);
   return {
     id: idOrNull(row.MessageId),
     sequence: Number(row.Sequence),
@@ -137,7 +138,8 @@ function messageRow(row) {
     turnId: idOrNull(row.ClientTurnId),
     replyToId: idOrNull(row.ReplyToMessageId),
     mode: row.Mode || null,
-    finishReason: row.FinishReason || null,
+    finishReason: general ? row.FinishReason.slice('general_'.length) : row.FinishReason || null,
+    ...(general ? { source: 'general' } : {}),
     contextTrimmed: row.ContextTrimmed == null ? null : Boolean(row.ContextTrimmed),
     contextOmittedMessages: row.ContextOmittedMessages == null ? null : Number(row.ContextOmittedMessages),
     createdAt: isoOrNull(row.CreatedAt)

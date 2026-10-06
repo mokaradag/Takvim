@@ -209,6 +209,78 @@ test('a prompt-injected tool result cannot redirect the declared request to anot
 
 /* ── Seçilen olguların istekle uyumu ──────────────────────── */
 
+test('workload and baseline previews carry cutoff proof without accepting omitted ties', async (t) => {
+  const stack = stackFor(t);
+  stack.db.taskBaselineSnapshots.find((row) => row.TaskId === TASKS.DUE_SOON).PlannedFinish = '2026-09-29';
+  for (const [tool, args, collection, field, metric, entities] of [
+    ['rota_workload_summary', { limit: 1 }, 'people', 'openTasks', 'tasks.open', []],
+    ['rota_baseline_compare', { projectId: PROJECTS.FULL, limit: 1 }, 'mostSlipped', 'varianceDays', 'task.varianceDays', [{ type: 'project', id: PROJECTS.FULL }]]
+  ]) {
+    const { result, ledger } = await callRotaTool(stack, AYSE, tool, args);
+    assert.equal(result.ok, true);
+    assert.equal(result.truncated, true);
+    assert.equal(result.rankingBoundary.collection, collection);
+    assert.equal(result.rankingBoundary.returnedCount, 1);
+    assert.ok(result.rankingBoundary.nextValue < result.data[collection][0][field]);
+    const request = { operation: 'rank', metrics: [metric], entities, rank: { metric, order: 'desc', limit: 1 } };
+    const fields = [`data.${collection}.0.${field}`];
+    assert.equal(issue(verifyRequested(ledger, fields, request)), null);
+    assert.equal(issue(verifyRequested(ledger, fields, { ...request, rank: { ...request.rank, limit: 2 } })), 'RANK_MISMATCH');
+    reshape(ledger, 'R1', (payload) => { payload.rankingBoundary.nextValue = payload.data[collection][0][field]; });
+    assert.equal(issue(verifyRequested(ledger, fields, request)), 'RANK_MISMATCH');
+  }
+});
+
+test('the five-task dependency preview cannot prove a complete list or omit rank ties', async (t) => {
+  const ids = Array.from({ length: 7 }, (_, index) => `20000000-0000-4000-8000-${String(700 + index).padStart(12, '0')}`);
+  const stack = stackFor(t, {
+    tasks: ids.map((TaskId) => ({ TaskId, ProjectId: PROJECTS.FULL, Title: TaskId, Status: 'planned', Priority: 'medium' })),
+    taskDependencies: ids.map((TaskId, index) => ({ ProjectId: PROJECTS.FULL, TaskId,
+      PredecessorTaskId: ids[(index + 1) % ids.length], DependencyType: 'FS', LagDays: 0 }))
+  });
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.mostConnected.length, 5);
+  assert.equal(result.complete, false);
+  assert.equal(result.truncated, true);
+  assert.equal(result.rankingBoundary.nextValue, 2);
+  for (const [order, limit] of [['desc', 1], ['desc', 10], ['asc', 1]]) {
+    const request = { operation: 'rank', metrics: ['dependencies.relationCount'], entities: [{ type: 'project', id: PROJECTS.FULL }],
+      rank: { metric: 'dependencies.relationCount', order, limit } };
+    assert.equal(issue(verifyRequested(ledger, ['data.mostConnected.*.relationCount'], request)), 'RANK_MISMATCH');
+  }
+});
+
+test('nested occurrence properties bind the selected occurrence without requiring its sibling', async (t) => {
+  const stack = stackFor(t);
+  const occurrence = stack.db.tasks.find((row) => row.TaskId === TASKS.OCCURRENCE_OPEN);
+  stack.db.tasks.push({ ...occurrence, TaskId: '20000000-0000-4000-8000-000000000799', RecurrenceOccurrenceDate: '2026-10-12' });
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.series[0].next.length, 2);
+  const request = { operation: 'value', metrics: ['recurrence.occurrenceDate'],
+    entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'task', id: TASKS.OCCURRENCE_OPEN }] };
+  assert.equal(issue(verifyRequested(ledger, ['data.series.0.next.0.occurrenceDate'], request)), null);
+  assert.equal(issue(verifyRequested(ledger, ['data.series.0.next.1.occurrenceDate'], request)), 'ENTITY_MISSING');
+  assert.equal(issue(verifyRequested(ledger, ['data.series.0.next.*.occurrenceDate'], request)), 'ROW_SELECTION_UNBOUND');
+});
+
+test('complete Outlook distributions prove zero for each absent state', async (t) => {
+  const stack = stackFor(t, { taskOutlookSubscriptions: [] });
+  for (const delivered of [false, true]) {
+    if (delivered) stack.db.taskOutlookSubscriptions.push({ TaskId: TASKS.OVERDUE, ProjectId: PROJECTS.FULL,
+      UserSicil: AYSE, CalendarUid: 'uid', DeliveredSequence: 1, DeliveredMethod: 'REQUEST' });
+    const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_outlook_status');
+    assert.equal(result.data.byStateComplete, true);
+    assert.deepEqual(result.data.byState, { failed: 0, suspended: 0, pending: 0, delivered: delivered ? 1 : 0 });
+    for (const state of ['failed', 'suspended', 'pending']) {
+      const verdict = verifyRequested(ledger, [`data.byState.${state}`], { operation: 'value', metrics: [`subscriptions.${state}`] });
+      assert.equal(issue(verdict), null);
+      assert.match(verdict.normalized, /0/);
+    }
+  }
+});
+
 test('composite intents bind every metric and population facet conjunctively', async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_workload_summary', {}], ['rota_task_analytics', { assignee: 'unassigned' }]]);

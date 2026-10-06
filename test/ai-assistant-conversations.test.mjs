@@ -306,6 +306,42 @@ test('konuşmada aynı anda tek yanıt üretilir; ikinci tur süren üretim bite
   assert.equal(terminal(after).event, 'done');
 });
 
+for (const budget of [90000, 1000]) {
+  test(`same-turn claim waits at most ${Math.min(budget, 30000)}ms without aborting its owner`, async (t) => {
+    const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: String(budget) } });
+    const turnId = randomUUID();
+    provider.enqueue({ type: 'deferred-stream' });
+    const running = sseReader(await turnsRoute.POST(turnRequest({ turnId, message: 'Uzun soru', mode: 'standard' })));
+    const first = await running.next();
+    await provider.waitForActive(1);
+    const timers = [];
+    const schedule = globalThis.setTimeout;
+    t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+      const timer = schedule(callback, ms, ...args);
+      timers.push({ ms, expire() { clearTimeout(timer); callback(...args); } });
+      return timer;
+    });
+    const waiting = sendTurn({ conversationId: first.data.conversation.id, turnId, message: null });
+    await until(() => timers.some((timer) => timer.ms === Math.min(budget, 30000)));
+    const deadline = timers.findLast((timer) => timer.ms === Math.min(budget, 30000));
+    assert.ok(deadline.ms < 45000);
+    deadline.expire();
+    const conflict = await waiting;
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.body.error.details.reason, 'GENERATION_IN_PROGRESS');
+    assert.equal(provider.calls[0].aborted, false);
+    assert.equal(activeAssistantGenerationCountForTests(), 1);
+    provider.calls[0].emit('Korunan yanıt');
+    provider.calls[0].complete();
+    assert.equal((await running.rest()).at(-1).event, 'done');
+    const replay = await sendTurn({ conversationId: first.data.conversation.id, turnId, message: null });
+    assert.equal(terminal(replay).data.replayed, true);
+    assert.equal(provider.calls.length, 1);
+    assert.equal(db.aiConversationMessages.filter((row) => row.Role === 'assistant').length, 1);
+    await until(() => activeAssistantGenerationCountForTests() === 0);
+  });
+}
+
 test('aynı etkin turun geçerli yinelemesi üretimi ve yazımı bekler; çelişen içerik üretimi durdurmaz', async (t) => {
   const { db, provider } = createAiStack(t);
   const { conversationId } = await startConversation('İlk');

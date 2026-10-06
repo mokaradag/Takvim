@@ -77,6 +77,9 @@ const workloadSummary = {
     const projectName = filters.project || null;
     const personName = filters.person || null;
     return {
+      ...(page.length < ordered.length ? { rankingBoundary: {
+        collection: 'people', metric: 'tasks.open', order: 'desc', returnedCount: page.length, nextValue: ordered[page.length].openTasks
+      } } : {}),
       data: {
         filters: {
           ...(filters.projectId ? { projectId: filters.projectId, ...(projectName ? { project: projectName } : {}) } : {}),

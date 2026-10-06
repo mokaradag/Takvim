@@ -63,7 +63,7 @@ import { SidebarUserPanel } from './SidebarUserPanel';
 import { readSidebarPreference, writeSidebarPreference } from './sidebarPreference.js';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useSignOut } from './useSignOut.js';
-import { readRuntimeFeatures } from '../../lib/runtimeFeatures.js';
+import { assistantEnabledInDocument } from '../../lib/runtimeFeatures.js';
 
 // Temel Kip, Kapsamlı Kip ile aynı Gantt görünümünü paylaşır: hızlı görev
 // tanımı yapan kullanıcı da planı zaman çizelgesinde görebilmelidir.
@@ -151,7 +151,7 @@ export default function AppShell() {
   usePresenceHeartbeat(String(session?.dataMode || '').toLowerCase() === 'actual');
   const { openTask, closeTask } = useTaskActions();
   const signOutState = useSignOut();
-  const [assistant] = useState(() => ({ enabled: readRuntimeFeatures()?.assistant === true }));
+  const [assistant] = useState(() => ({ enabled: assistantEnabledInDocument() }));
   const [assistantActions, setAssistantActions] = useState({ enabled: false });
   // Komut paletinin öğe listesi bu geri çağrının kimliğine bakar; her çizimde yenisi üretilmez.
   const openAssistantPanel = useCallback(async () => {

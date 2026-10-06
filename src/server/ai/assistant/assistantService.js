@@ -518,8 +518,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
  * dönemleri belirleyicidir.
  */
 function citedWithoutKnownEvidence(message, evidence) {
-  if (message.finishReason === 'general') return false;
-  if (!readAiConfig().toolsEnabled && evidence?.ready !== true && evidenceSchemaState().everReady !== true) return false;
+  if (message.finishReason === 'general' || message.source === 'general') return false;
   if (!(evidence?.unavailable || evidence?.ready === false || !evidence?.epochsByMessage)) return false;
   return /【R[1-9]\d?】/.test(String(message.content || ''));
 }
@@ -738,7 +737,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   // Şema yoklamasının geçici hatası (kapı dolu, SQL zaman aşımı) tur kaydedilmeden
   // yinelenebilir hata olarak döner; kalıcı bir "unavailable" yanıtı yazılmaz.
   const grounded = input.source !== 'general' && await groundedTurnAvailable({ config, registry, mode: input.mode, sicil, signal });
-  const claim = await withinDeadline(config.requestTimeoutMs, signal, (scoped) => claimAssistantGeneration({
+  const claim = await withinDeadline(Math.min(config.requestTimeoutMs, 30000), signal, (scoped) => claimAssistantGeneration({
     sicil, conversationId: input.conversationId, turnId: input.turnId, content: input.message ?? existing.turn?.content, signal: scoped
   }), () => conflict('GENERATION_IN_PROGRESS', 'Bu konuşmada bir yanıt hâlâ üretiliyor. Tamamlanmasını bekleyip yeniden deneyin.'));
   try {
@@ -844,7 +843,8 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
     replyToMessageId: turn.userMessage.id,
     content: result.text,
     mode: turn.mode,
-    finishReason: result.finishReason,
+    finishReason: !turn.dataUnavailable && ['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter'].includes(result.finishReason)
+      ? `general_${result.finishReason}` : result.finishReason,
     contextTrimmed: turn.context.trimmed,
     contextOmittedMessages: turn.context.omittedMessages
   }));

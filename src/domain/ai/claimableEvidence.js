@@ -261,7 +261,7 @@ const ROW_COLLECTIONS = Object.freeze({
   rota_task_search: ['tasks'], rota_task_detail: [], rota_task_analytics: ['overdueAging.buckets', 'groups'],
   rota_project_search: ['matches'], rota_project_detail: [], rota_portfolio_summary: ['projects'], rota_wbs_inspect: ['nodes'],
   rota_person_search: ['people'], rota_workload_summary: ['people'], rota_baseline_compare: ['availableBaselines', 'mostSlipped'],
-  rota_dependency_inspect: ['predecessors', 'successors', 'mostConnected'], rota_recurrence_inspect: ['series', 'series.next'],
+  rota_dependency_inspect: ['predecessors', 'successors', 'mostConnected'], rota_recurrence_inspect: ['series', 'series.next', 'series.*.next'],
   rota_calendar_inspect: ['holidays'], rota_activity_search: ['items'], rota_schedule_requests: ['items'], rota_assignment_requests: ['items'],
   rota_notifications: ['scheduleRequests.latest', 'assignmentCoordination.latest', 'taskEvents.latest'], rota_outlook_status: ['items'],
   rota_data_quality: ['checks', 'completedWithoutActualFinish.examples']

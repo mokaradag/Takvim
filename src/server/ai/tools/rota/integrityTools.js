@@ -65,7 +65,7 @@ const outlookStatus = {
         ...(Number(row.AttemptCount) > 0 ? { attempts: Number(row.AttemptCount) } : {})
       };
     });
-    const counts = items.reduce((sum, item) => ({ ...sum, [item.state]: (sum[item.state] || 0) + 1 }), {});
+    const counts = items.reduce((sum, item) => ({ ...sum, [item.state]: sum[item.state] + 1 }), { failed: 0, suspended: 0, pending: 0, delivered: 0 });
     const page = items.slice(0, limit);
     // Sayılar sayfada listelenmeyen abonelikleri de kapsar: nüfusun tamamı kaydedilir.
     const population = result.subscriptions.map((row) => ({ taskId: canonicalActualId(row.TaskId), projectId: canonicalActualId(row.ProjectId) }));

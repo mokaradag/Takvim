@@ -9,6 +9,7 @@ const { NON_ENUMERATING_FAILURE_TEXT } = await import('../src/domain/ai/evidence
 const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
 const { getSqlPool } = await import('../src/server/db/pool.js');
+const { resetConversationSchemaForTests } = await import('../src/server/ai/assistant/conversationStore.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
 const deltas = (response) => response.events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('');
@@ -38,7 +39,7 @@ function failEvidenceReads(t, pool, code) {
 }
 
 for (const failure of ['missing', 'AI_BUSY', 'DATABASE_UNAVAILABLE']) {
-  for (const finishReason of ['stop', 'length']) {
+  for (const finishReason of ['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter']) {
     test(`tool-free literal citations survive ${failure} on reopen, replay and history (${finishReason})`, async (t) => {
       const stack = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' }, seed: { aiEvidenceSchemaMissing: failure === 'missing' } });
       const text = 'Etiket örneği: 【R1】 ve 【R12】.';
@@ -46,6 +47,7 @@ for (const failure of ['missing', 'AI_BUSY', 'DATABASE_UNAVAILABLE']) {
       const turnId = randomUUID();
       const input = { turnId, message: 'Bu etiketleri yaz' };
       const first = done(await sendTurn(input));
+      resetConversationSchemaForTests();
       if (failure !== 'missing') failEvidenceReads(t, await getSqlPool(), failure);
       const opened = await loadAssistantConversation(first.conversation.id);
       assert.equal(opened.status, 200);
@@ -70,7 +72,7 @@ test('disabling tools still hides recorded grounded answers on evidence-read fai
   citeTask(stack, TASKS.OVERDUE);
   const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
   const saved = done(await sendTurn(input));
-  process.env.MERGEN_ROTA_AI_TOOLS_ENABLED = 'false';
+  stack.setEnv({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' });
   failEvidenceReads(t, await getSqlPool(), 'DATABASE_UNAVAILABLE');
   const hidden = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
   assert.equal(hidden.finishReason, 'unavailable');
@@ -95,6 +97,7 @@ test('previously available evidence remains protected across repeated missing-sc
   const saved = done(await sendTurn(input));
   stack.setEnv({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' });
   stack.db.aiEvidenceSchemaMissing = true;
+  resetConversationSchemaForTests();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const answer = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
     assert.equal(answer.finishReason, 'unavailable');

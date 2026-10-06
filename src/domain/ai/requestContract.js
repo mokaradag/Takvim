@@ -1,4 +1,5 @@
-import { claimableContract, metricEntry, rowCollections } from './claimableEvidence.js';
+import { claimableContract, METRICS, metricEntry, rowCollections } from './claimableEvidence.js';
+import { scaledDecimal } from '../numbers/fixedDecimal.js';
 
 /**
  * Rota AI istek sözleşmesi — modelin veri okumadan bildirdiği türlü istek ile
@@ -43,7 +44,7 @@ function factCollections(tool, field) {
   if (parts[0] !== 'data') return [];
   return parts.flatMap((part, index) => {
     if (index <= 1 || !/^\d+$/.test(part)) return [];
-    const canonical = parts.slice(1, index).join('.');
+    const canonical = parts.slice(1, index).map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
     return [{
       kind: rowCollections(tool).includes(canonical) ? 'row' : 'list',
       canonical,
@@ -111,7 +112,8 @@ function rankedIndexes(request, source, collection, selected) {
   const field = Array.isArray(rows) ? rankField(source.tool, collection.canonical, request.rank.metric, rows) : null;
   if (!field) return null;
   const direction = request.rank.order === 'asc' ? 1 : -1;
-  const value = (row) => fieldValue(row, field);
+  const rankValue = (value) => METRICS[request.rank.metric] === 'hours' ? scaledDecimal(value, 2) : value;
+  const value = (row) => rankValue(fieldValue(row, field));
   const ranked = rows.map((row, index) => ({ index, value: value(row) }))
     .filter((item) => item.value != null)
     .sort((left, right) => {
@@ -130,10 +132,11 @@ function rankedIndexes(request, source, collection, selected) {
   const beyond = ranked[expected.size];
   if (beyond) return order;
   const proof = source.envelope.rankingBoundary;
+  const nextValue = rankValue(proof?.nextValue);
   return proof?.collection === collection.canonical && proof.metric === request.rank.metric
     && proof.order === request.rank.order && proof.returnedCount === rows.length
-    && (proof.nextValue === null || (ranked.length >= (request.rank.limit || 1) && typeof proof.nextValue === typeof boundary
-      && (proof.nextValue < boundary ? -1 : proof.nextValue > boundary ? 1 : 0) * direction > 0)) ? order : null;
+    && (proof.nextValue === null || (ranked.length >= (request.rank.limit || 1) && nextValue != null && typeof nextValue === typeof boundary
+      && (nextValue < boundary ? -1 : nextValue > boundary ? 1 : 0) * direction > 0)) ? order : null;
 }
 
 /**
@@ -199,7 +202,7 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const substantive = metrics.has(semantic.metric);
     if (!substantive && !semantic.context) return fail('UNDECLARED_METRIC');
     const factRows = factCollections(source.tool, fact.field);
-    const row = factRows[0] || null;
+    const row = factRows.findLast((row) => row.kind === 'row') || factRows[0] || null;
     const rowObject = row ? valueAt(source.envelope, row.path) : null;
     const rowEntities = rowObject && typeof rowObject === 'object'
       ? Object.entries(ENTITY_ID_FIELDS).filter(([, field]) => rowObject[field] != null).map(([type, field]) => entityKey(type, rowObject[field])) : [];
@@ -252,7 +255,9 @@ export function verifyRequestedFacts(request, facts, evidence) {
     // sınırında kısaltılan zarf, elinde kalan satırların tamamı seçilse de bütün değildir.
     if (request.operation === 'list'
       && (!complete || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true || entry.source.firstPage !== true)) return fail('LIST_INCOMPLETE');
-    if (request.operation === 'value' && !entry.bound && size !== 1) return fail('ROW_SELECTION_UNBOUND');
+    if (request.operation === 'value' && !entry.bound
+      && (size !== 1 || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true
+        || entry.source.firstPage !== true)) return fail('ROW_SELECTION_UNBOUND');
   }
   // Liste ve sıralama satırların yanıtıdır: satırların taşıyabildiği istenen ölçü
   // her satırda bulunmalıdır; genel bir toplam satırların değerinin yerine geçmez.

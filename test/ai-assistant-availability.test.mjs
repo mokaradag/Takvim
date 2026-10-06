@@ -75,7 +75,7 @@ test('runtime availability changes without a global probe, dynamic page renderin
   const html = renderToStaticMarkup(layout.default({ children: 'Rota' }));
   assert.doesNotMatch(html, /runtime\.js|assistant\.(?:js|css)/);
   assert.doesNotMatch(read('src/middleware.js'), /server\/ai|readAiConfig|sql|fetch\(/);
-  assert.match(read('src/components/shell/AppShell.jsx'), /readRuntimeFeatures\(\)\?\.assistant === true/);
+  assert.match(read('src/components/shell/AppShell.jsx'), /enabled: assistantEnabledInDocument\(\)/);
   for (const [value, expected] of [['false', false], [null, false], ['tru', false], ['true', true], ['0', false]]) {
     withEnv(t, 'MERGEN_ROTA_AI_ENABLED', value);
     const flag = middleware(new NextRequest('https://rota.example.test/'));

@@ -8,3 +8,9 @@ export function readRuntimeFeatures(doc = globalThis.document) {
   if (value === 'enabled' || value === 'disabled') return { assistant: value === 'enabled' };
   return null;
 }
+
+export function assistantEnabledInDocument(doc = globalThis.document, features = readRuntimeFeatures(doc) || globalThis.__MERGEN_ROTA_FEATURES__) {
+  if (typeof features?.assistant === 'boolean') return features.assistant;
+  const meta = doc?.querySelector?.('meta[name="mergen-rota-ai"]');
+  return meta?.getAttribute?.('content') !== 'disabled';
+}

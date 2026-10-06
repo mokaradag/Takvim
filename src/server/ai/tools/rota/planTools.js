@@ -123,12 +123,16 @@ const baselineCompare = {
       });
     }
     const total = variances.reduce((sum, item) => sum + item.varianceDays, 0);
-    const slipped = variances.filter((item) => item.varianceDays > 0)
-      .sort((left, right) => right.varianceDays - left.varianceDays || left.title.localeCompare(right.title, 'tr'))
-      .slice(0, limit)
+    const orderedSlipped = variances.filter((item) => item.varianceDays > 0)
+      .sort((left, right) => right.varianceDays - left.varianceDays || left.title.localeCompare(right.title, 'tr'));
+    const slipped = orderedSlipped.slice(0, limit)
       .map((item) => ({ ...item, statusLabel: statusLabelOf(item.status) }));
     const project = projectAccess(scope, args.projectId);
     return {
+      ...(slipped.length < orderedSlipped.length ? { rankingBoundary: {
+        collection: 'mostSlipped', metric: 'task.varianceDays', order: 'desc', returnedCount: slipped.length,
+        nextValue: orderedSlipped[slipped.length].varianceDays
+      } } : {}),
       data: {
         filters: { projectId: args.projectId, project: projectName || 'Seçilen proje', baselineId: selectedId, baseline: selected?.name || 'Seçilen baz plan' },
         baseline: selected,
@@ -266,11 +270,15 @@ const dependencyInspect = {
     const projectName = await visibleProjectName(call, scope, projectId);
     const connected = new Set([...withPredecessor, ...withSuccessor]);
     const taskCount = Number(result.totals.TaskCount || 0);
-    const mostConnected = [...degree.entries()]
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-      .slice(0, 5)
+    const orderedConnections = [...degree.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+    const mostConnected = orderedConnections.slice(0, 5)
       .map(([taskId, count]) => ({ taskId, title: dataText(tasks.get(taskId)?.Title, 160), relationCount: count }));
     return {
+      ...(mostConnected.length < orderedConnections.length ? { rankingBoundary: {
+        collection: 'mostConnected', metric: 'dependencies.relationCount', order: 'desc', returnedCount: mostConnected.length,
+        nextValue: orderedConnections[mostConnected.length][1]
+      } } : {}),
       data: {
         filters: { projectId, project: projectName || 'Seçilen proje' },
         coverage: {
@@ -287,8 +295,8 @@ const dependencyInspect = {
         notes
       },
       scope: describeTaskScope([projectAccess(scope, projectId)]),
-      complete: true,
-      truncated: false,
+      complete: mostConnected.length === orderedConnections.length,
+      truncated: mostConnected.length < orderedConnections.length,
       returnedCount: result.dependencies.length,
       totalCount: result.dependencies.length,
       nextCursor: null,

@@ -441,8 +441,6 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           onSuggest={(text) => {
             if (state.readiness?.rotaData?.enabled === true && !rotaData.available) {
               controller.setSource('general');
-            } else if (rotaData.available && state.source === 'general') {
-              controller.setSource('rota');
             }
             setDraft(text);
             focusInput();

@@ -266,7 +266,8 @@ function sortedBy(tool, args) {
   const pair = tool === 'rota_task_search' ? TASK_SORT_RANKS[args.sort || (args.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc')]
     : tool === 'rota_portfolio_summary' ? PORTFOLIO_SORT_RANKS[args.sort || 'overdue_desc']
       : tool === 'rota_workload_summary' ? ['tasks.open', 'desc']
-        : tool === 'rota_baseline_compare' ? ['task.varianceDays', 'desc'] : null;
+        : tool === 'rota_baseline_compare' ? ['task.varianceDays', 'desc']
+          : tool === 'rota_dependency_inspect' ? ['dependencies.relationCount', 'desc'] : null;
   return pair ? { metric: pair[0], order: pair[1] } : null;
 }
 
