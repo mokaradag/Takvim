@@ -242,7 +242,8 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
       const relatedTaskRoots = TASK_POPULATION_TOOLS.has(name)
         ? [...TASK_POPULATION_TOOLS].flatMap((tool) => roots.get(tool) || []) : [];
       const taskPopulation = relatedTaskRoots.length > 0;
-      if (!sameRoot && args.projectId && !projectScope && !identityTrusted('projects', args.projectId)) fail();
+      if (!sameRoot && args.projectId && !projectScope && !ids.projects.has(String(args.projectId))
+        && !identityTrusted('projects', args.projectId)) fail();
       if (sameRoot || taskPopulation) {
         const matches = (sameRoot || relatedTaskRoots).some((root) => contains(root, normalized, { textTrusted }));
         if (!matches) fail();

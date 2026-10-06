@@ -289,6 +289,30 @@ test('AI atama talepleri bildirim kapsamından bağımsız canlı karar yetkisin
   assert.equal(result.data.items[0].actionRequiredFromYou, true);
 });
 
+test('coordination counts disclose the task boundary without exposing decision-only tasks', async (t) => {
+  const stack = stackFor(t, {
+    executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType: 'UNIT' }],
+    taskAssignmentCoordinations: [TASKS.TEAM_VISIBLE, TASKS.TEAM_HIDDEN].map((TaskId, index) => ({
+      CoordinationId: `60000000-0000-4000-8000-00000000000${index + 1}`,
+      TaskId, RequesterSicil: MEHMET, RequestedAssigneeSicil: ZEYNEP, Mode: 'REQUEST', Status: 'PENDING',
+      CreatedAt: '2026-09-29T10:00:00.000Z'
+    }))
+  });
+  const { result: page } = await callRotaTool(stack, AYSE, 'rota_assignment_requests', { tab: 'pending' });
+  assert.equal(page.ok, true);
+  assert.equal(page.totalCount, 1);
+  assert.equal(page.data.counts.actionRequired, 1);
+  assert.deepEqual(page.data.items.map((row) => row.task.taskId), [TASKS.TEAM_VISIBLE]);
+  const { result: notifications } = await callRotaTool(stack, AYSE, 'rota_notifications');
+  assert.equal(notifications.ok, true);
+  assert.equal(notifications.data.assignmentCoordination.actionRequired, 1);
+  for (const result of [page, notifications]) {
+    assert.ok(result.scope.note.includes('görev görüntüleme kapsamınıza'));
+    assert.ok(result.scope.note.includes('geçmiş katılımınız'));
+    assert.equal(JSON.stringify(result.data).includes(TASKS.TEAM_HIDDEN), false);
+  }
+});
+
 /* ── SQL güvenliği ────────────────────────────────────────── */
 
 test('tanınmayan araç denemeleri toplam çağrı sınırını tüketir', async (t) => {

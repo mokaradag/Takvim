@@ -61,7 +61,7 @@ test('controller keeps a selected Rota source when Rota data or the mode is unav
   }
 });
 
-test('welcome suggestion clicks select general chat only when enabled Rota data is unavailable', async (t) => {
+test('welcome suggestion clicks select the source of the displayed suggestions', async (t) => {
   const previousFrame = globalThis.requestAnimationFrame;
   globalThis.requestAnimationFrame = (callback) => callback();
   t.after(() => { globalThis.requestAnimationFrame = previousFrame; });
@@ -70,13 +70,15 @@ test('welcome suggestion clicks select general chat only when enabled Rota data 
     { rotaData: { enabled: true, available: false, reason: 'EVIDENCE_SCHEMA_UNKNOWN' }, expectedSource: 'general' },
     { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: false }] }, mode: 'deep', expectedSource: 'general' },
     { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, expectedSource: 'rota' },
-    { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, source: 'general', expectedSource: 'general' },
+    { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }] }, source: 'general', expectedSource: 'rota' },
     { rotaData: { enabled: false }, expectedSource: undefined }
   ]) {
     const api = fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { ...READINESS, rotaData } }) });
     const { controller, state } = await readyController({ api });
     controller.setMode(mode);
     controller.setSource(source);
+    controller.newConversation();
+    assert.equal(state().source, source);
     const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} } });
     const composer = () => findElement(panel.output, (node) => node.type === AssistantComposer);
     assert.equal(state().source, source, 'readiness alone does not change the selected source');

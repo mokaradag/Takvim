@@ -1,5 +1,5 @@
 import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
-import { verifyRequestedFacts } from './requestContract.js';
+import { factRow, verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
 
 /**
@@ -123,6 +123,15 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   if (request) {
     const verdict = verifyRequestedFacts(request, selection.facts, evidence);
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
+    if (verdict.rankOrder) {
+      const { evidenceId, collection, indexes } = verdict.rankOrder;
+      const positions = new Map(indexes.map((index, position) => [index, position]));
+      const rowOf = (item) => item.evidenceId === evidenceId ? factRow(evidence.get(evidenceId).tool, item.fact.field) : null;
+      const ranked = selection.facts.filter((item) => rowOf(item)?.collection === collection)
+        .sort((left, right) => positions.get(rowOf(left).index) - positions.get(rowOf(right).index));
+      let offset = 0;
+      selection.facts = selection.facts.map((item) => rowOf(item)?.collection === collection ? ranked[offset++] : item);
+    }
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
   const normalized = renderVerifiedNarrative(selection.facts, { locale, layout: selection.layout, operation: request?.operation || null });

@@ -26,6 +26,8 @@ import {
 import { isCompleteTaskView, projectAccess } from './rotaScope.js';
 import { decodeCursor, encodeCursor } from './taskFacts.js';
 
+const COORDINATION_SCOPE_NOTE = 'Etkin görevi olan atama kayıtları görev görüntüleme kapsamınıza uymalıdır; etkin görevi olmayan atama kayıtları yalnızca geçmiş katılımınız varsa gösterilir.';
+
 /**
  * İş akışı araçları Rota'nın VAR OLAN okuma hizmetlerini kullanır: yetki
  * (katılımcı kuralı, canlı karar yetkisi, görünür görev kuralı) bu hizmetlerin
@@ -387,7 +389,7 @@ const assignmentRequests = {
         items,
         note: 'Talep edilen sorumlu onaylanana kadar görevin sorumlusu değildir; iş yükü ve raporlar yalnızca gerçek sorumluyu sayar.'
       },
-      scope: participantScope('Yalnızca katılımcısı olduğunuz ya da güncel karar yetkiniz bulunan kayıtlar.'),
+      scope: participantScope(`Yalnızca katılımcısı olduğunuz ya da güncel karar yetkiniz bulunan kayıtlar. ${COORDINATION_SCOPE_NOTE}`),
       complete: pageState.complete,
       truncated: pageState.truncated,
       returnedCount: items.length,
@@ -478,7 +480,7 @@ const notifications = {
         taskEvents: inbox ? { unread: inbox.taskEvents.unreadCount, latest: eventItems } : null,
         note: 'Bu okuma bildirimleri okundu olarak işaretlemez. Liste zil önizlemesidir (kaynak başına en yeni kayıtlar).'
       },
-      scope: currentUserScope('Yalnızca sizin bildirimleriniz.'),
+      scope: currentUserScope(`Yalnızca sizin bildirimleriniz. ${COORDINATION_SCOPE_NOTE}`),
       complete: false,
       truncated: true,
       returnedCount: scheduleItems.length + coordinationItems.length + eventItems.length,

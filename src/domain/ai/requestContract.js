@@ -35,18 +35,23 @@ const sortedJson = (value) => JSON.stringify(Object.keys(value).sort().map((key)
  * Kaydın çok değerli alanı satır değildir; `list` döner.
  */
 export function factRow(tool, field) {
+  return factCollections(tool, field)[0] || null;
+}
+
+function factCollections(tool, field) {
   const parts = String(field).split('.');
-  if (parts[0] !== 'data') return null;
-  const index = parts.findIndex((part, position) => position > 1 && /^\d+$/.test(part));
-  if (index < 0 || index === parts.length - 1) return null;
-  const canonical = parts.slice(1, index).join('.');
-  return {
-    kind: rowCollections(tool).includes(canonical) ? 'row' : 'list',
-    canonical,
-    collection: parts.slice(0, index).join('.'),
-    index: Number(parts[index]),
-    path: parts.slice(0, index + 1).join('.')
-  };
+  if (parts[0] !== 'data') return [];
+  return parts.flatMap((part, index) => {
+    if (index <= 1 || !/^\d+$/.test(part)) return [];
+    const canonical = parts.slice(1, index).join('.');
+    return [{
+      kind: rowCollections(tool).includes(canonical) ? 'row' : 'list',
+      canonical,
+      collection: parts.slice(0, index).join('.'),
+      index: Number(part),
+      path: parts.slice(0, index + 1).join('.')
+    }];
+  });
 }
 
 function valueAt(envelope, path) {
@@ -101,10 +106,10 @@ function rankField(tool, collection, metric, rows) {
  * kanıttaki değerlerden kendisi kurar; kesilmiş koleksiyonda yalnızca aynı
  * ölçüyle sunucuda sıralanmış ilk sayfa kabul edilir.
  */
-function rankMatches(request, source, collection, selected) {
+function rankedIndexes(request, source, collection, selected) {
   const rows = valueAt(source.envelope, collection.collection);
   const field = Array.isArray(rows) ? rankField(source.tool, collection.canonical, request.rank.metric, rows) : null;
-  if (!field) return false;
+  if (!field) return null;
   const direction = request.rank.order === 'asc' ? 1 : -1;
   const value = (row) => fieldValue(row, field);
   const ranked = rows.map((row, index) => ({ index, value: value(row) }))
@@ -113,23 +118,22 @@ function rankMatches(request, source, collection, selected) {
       return (left.value < right.value ? -1 : left.value > right.value ? 1 : 0) * direction || left.index - right.index;
     });
   const limit = Math.min(request.rank.limit || 1, ranked.length);
-  if (!limit) return false;
+  if (!limit) return null;
   const boundary = ranked[limit - 1].value;
   const order = ranked.filter((item, position) => position < limit || item.value === boundary).map((item) => item.index);
   const expected = new Set(order);
-  if (expected.size !== selected.size || [...expected].some((index) => !selected.has(index))) return false;
-  if ([...selected].some((index, position) => index !== order[position])) return false;
-  if (source.envelope.complete === true && source.envelope.truncated !== true && source.firstPage === true) return true;
+  if (expected.size !== selected.size || [...expected].some((index) => !selected.has(index))) return null;
+  if (source.envelope.complete === true && source.envelope.truncated !== true && source.firstPage === true) return order;
   // Kesilmiş koleksiyon: sunucu aynı ölçüyle sıralamışsa ilk sayfa bütün nüfusun başıdır.
   const sorted = source.sortedBy?.metric === request.rank.metric && source.sortedBy?.order === request.rank.order && source.firstPage === true;
-  if (!sorted) return false;
+  if (!sorted) return null;
   const beyond = ranked[expected.size];
-  if (beyond) return true;
+  if (beyond) return order;
   const proof = source.envelope.rankingBoundary;
   return proof?.collection === collection.canonical && proof.metric === request.rank.metric
     && proof.order === request.rank.order && proof.returnedCount === rows.length
     && (proof.nextValue === null || (ranked.length >= (request.rank.limit || 1) && typeof proof.nextValue === typeof boundary
-      && (proof.nextValue < boundary ? -1 : proof.nextValue > boundary ? 1 : 0) * direction > 0));
+      && (proof.nextValue < boundary ? -1 : proof.nextValue > boundary ? 1 : 0) * direction > 0)) ? order : null;
 }
 
 /**
@@ -194,14 +198,16 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const semantic = fact.semantic || {};
     const substantive = metrics.has(semantic.metric);
     if (!substantive && !semantic.context) return fail('UNDECLARED_METRIC');
-    const row = factRow(source.tool, fact.field);
+    const factRows = factCollections(source.tool, fact.field);
+    const row = factRows[0] || null;
     const rowObject = row ? valueAt(source.envelope, row.path) : null;
     const rowEntities = rowObject && typeof rowObject === 'object'
       ? Object.entries(ENTITY_ID_FIELDS).filter(([, field]) => rowObject[field] != null).map(([type, field]) => entityKey(type, rowObject[field])) : [];
     const named = row?.kind === 'row' && rowEntities.some((entity) => boundKeys.has(entity));
     // Değer isteğinde bağlı varlığın kendi özelliği (adlandırılan satır ya da
     // seçicinin kaydı) nüfus koşulundan bağımsızdır; toplamlar ve sayımlar değildir.
-    const ownProperty = request.operation === 'value' && semantic.property === true && (named || (!row && source.selectors.length > 0));
+    const ownProperty = request.operation === 'value' && semantic.property === true
+      && (named || ((!row || row.path === fact.field) && source.selectors.length > 0));
     const group = request.operation === 'value' && row?.kind === 'row' && !named ? groupScope(fact) : null;
     const selectors = [...source.selectors, ...(group?.selectors || [])];
     if (selectors.some(({ type, id }) => !boundKeys.has(entityKey(type, id)))) return fail('ENTITY_MISMATCH');
@@ -220,9 +226,9 @@ export function verifyRequestedFacts(request, facts, evidence) {
       }
       rowEntities.forEach((key) => referenced.add(key));
     }
-    if (row) {
+    for (const row of factRows) {
       const key = `${evidenceId}|${row.collection}`;
-      if (!collections.has(key)) collections.set(key, { source, row, indexes: new Set(), metrics: new Map(), bound: true });
+      if (!collections.has(key)) collections.set(key, { evidenceId, source, row, indexes: new Set(), metrics: new Map(), bound: true });
       const entry = collections.get(key);
       entry.indexes.add(row.index);
       if (substantive) entry.metrics.set(row.index, (entry.metrics.get(row.index) || new Set()).add(semantic.metric));
@@ -264,7 +270,9 @@ export function verifyRequestedFacts(request, facts, evidence) {
     if (!rowGroups.length) return emptyRowEvidence(request, facts, evidence) ? { ok: true, issues: [] } : fail('RANK_MISMATCH');
     if (rowGroups.length !== 1) return fail('RANK_MISMATCH');
     const [entry] = rowGroups;
-    if (!rankMatches(request, entry.source, entry.row, entry.indexes)) return fail('RANK_MISMATCH');
+    const indexes = rankedIndexes(request, entry.source, entry.row, entry.indexes);
+    if (!indexes) return fail('RANK_MISMATCH');
+    return { ok: true, issues: [], rankOrder: { evidenceId: entry.evidenceId, collection: entry.row.collection, indexes } };
   }
   return { ok: true, issues: [] };
 }

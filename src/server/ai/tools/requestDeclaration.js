@@ -131,11 +131,12 @@ export function requestWindow(request) {
   return dateFrom ? { dateFrom, ...(dateTo ? { dateTo } : {}) } : null;
 }
 
-/** Modele ve döküme yazılan kanonik özet. */
+/** Sistem özetine yalnızca türlü değerler girer; serbest metin taşınmaz. */
 export function requestSummary(request) {
+  const filters = Object.fromEntries(Object.entries(request.filters).filter(([key]) => key !== 'text'));
   return JSON.stringify({ operation: request.operation, metrics: request.metrics, ...(request.rank ? { rank: request.rank } : {}),
-    ...(request.entities.length ? { entities: request.entities.map(({ type, id, text }) => (id ? { type, id } : { type, text })) } : {}),
-    ...(Object.keys(request.filters).length ? { filters: request.filters } : {}) });
+    ...(request.entities.length ? { entities: request.entities.map(({ type, id }) => (id ? { type, id } : { type })) } : {}),
+    ...(Object.keys(filters).length ? { filters } : {}) });
 }
 
 /* ── Varlık bağlama ───────────────────────────────────────── */

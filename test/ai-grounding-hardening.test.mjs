@@ -93,6 +93,24 @@ test('a unique exact project match authorizes only that project, not the fuzzy a
   assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.READ }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
+test('a later project resolution opens only server-proven project follow-ups', () => {
+  for (const resolution of ['unique', 'partial', 'ambiguous', 'failed']) {
+    const scope = createToolScope({ userText: 'Radar test planı' });
+    established(scope, 'rota_task_search', { text: 'Radar test planı' }, { tasks: [] });
+    assert.doesNotThrow(() => scope.validate('rota_project_search', { text: 'Radar' }));
+    const data = { resolution, resolvedProject: { projectId: PROJECTS.FULL }, matches: [{ projectId: PROJECTS.READ }] };
+    if (resolution === 'failed') scope.establish([{ name: 'rota_project_search', arguments: '{"text":"Radar"}' }], [{ content: '{"ok":false}' }]);
+    else established(scope, 'rota_project_search', { text: 'Radar' }, data);
+    for (const name of ['rota_project_detail', 'rota_wbs_inspect', 'rota_workload_summary']) {
+      if (resolution === 'unique') assert.doesNotThrow(() => scope.validate(name, { projectId: PROJECTS.FULL }));
+      else assert.throws(() => scope.validate(name, { projectId: PROJECTS.FULL }), { code: 'UNSUPPORTED_SCOPE' });
+      for (const projectId of [PROJECTS.READ, PROJECTS.HIDDEN]) assert.throws(() => scope.validate(name, { projectId }), { code: 'UNSUPPORTED_SCOPE' });
+    }
+    assert.throws(() => scope.validate('rota_project_search', { text: 'Başka' }), { code: 'UNSUPPORTED_SCOPE' });
+    assert.throws(() => scope.validate('rota_task_search', {}), { code: 'UNSUPPORTED_SCOPE' });
+  }
+});
+
 test('task-name resolution proves a unique task before detail follow-ups', async (t) => {
   const stack = stackFor(t, { tasks: [...rotaToolSeed().tasks, { TaskId: '20000000-0000-4000-8000-000000000777', ProjectId: PROJECTS.FULL,
     Title: 'Radar test planı ikinci', Status: 'planned', Priority: 'medium' }] });
