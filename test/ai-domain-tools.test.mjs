@@ -608,7 +608,7 @@ test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim
   assert.equal(result.data.activeSubscriptions, 2);
   assert.equal(Object.hasOwn(result.data, 'subscriptionsForTasksNoLongerVisible'), false);
   assert.deepEqual([result.returnedCount, result.totalCount, result.complete], [2, 2, true], 'toplam ve dağılım yalnızca güncel görünür aboneliklerdir');
-  assert.deepEqual(result.data.byState, { delivered: 1, failed: 1 });
+  assert.deepEqual(result.data.byState, { delivered: 1, failed: 1, pending: 0, suspended: 0 });
   assert.equal(result.data.byStateComplete, true);
   assert.equal(result.truncated, false);
   const states = Object.fromEntries(result.data.items.map((item) => [item.task.taskId, item.state]));

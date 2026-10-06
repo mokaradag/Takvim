@@ -269,10 +269,11 @@ test('complete Outlook distributions prove zero for each absent state', async (t
   const stack = stackFor(t, { taskOutlookSubscriptions: [] });
   for (const delivered of [false, true]) {
     if (delivered) stack.db.taskOutlookSubscriptions.push({ TaskId: TASKS.OVERDUE, ProjectId: PROJECTS.FULL,
-      UserSicil: AYSE, CalendarUid: 'uid', DeliveredSequence: 1, DeliveredMethod: 'REQUEST' });
+      UserSicil: AYSE, CalendarUid: 'uid', IsActive: true, DeliveredSequence: 1, DeliveredMethod: 'REQUEST' });
     const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_outlook_status');
     assert.equal(result.data.byStateComplete, true);
     assert.deepEqual(result.data.byState, { failed: 0, suspended: 0, pending: 0, delivered: delivered ? 1 : 0 });
+    assert.deepEqual([result.data.activeSubscriptions, result.returnedCount, result.totalCount], Array(3).fill(delivered ? 1 : 0));
     for (const state of ['failed', 'suspended', 'pending']) {
       const verdict = verifyRequested(ledger, [`data.byState.${state}`], { operation: 'value', metrics: [`subscriptions.${state}`] });
       assert.equal(issue(verdict), null);
@@ -477,14 +478,18 @@ test('every claimable path has exactly one registered metric and measure, and ev
 });
 
 test('row collections are declared for every repeated record, and multi-value fields are not rows', () => {
-  // Satırın içindeki tekrarlar (ör. bir görevin sorumluları) o satırın parçasıdır; yalnızca ilk düzey sınanır.
-  const multiValue = new Set(['rota_task_detail:task.assignees', 'rota_task_detail:task.wbsPath', 'rota_task_detail:task.access.reasons',
-    'rota_project_detail:project.tags', 'rota_project_detail:access.reasons', 'rota_calendar_inspect:calendar.workingWeekdays']);
+  // İç içe satırlar da sınanır; kaydın çok değerli alanları ayrı tutulur.
+  const multiValue = new Set(['rota_task_search:tasks.*.assignees', 'rota_task_detail:task.assignees',
+    'rota_task_detail:task.wbsPath', 'rota_task_detail:task.access.reasons', 'rota_project_detail:project.tags',
+    'rota_project_detail:access.reasons', 'rota_calendar_inspect:calendar.workingWeekdays',
+    'rota_activity_search:items.*.changes', 'rota_activity_search:items.*.structuredChanges', 'rota_data_quality:checks.*.examples']);
   for (const tool of toolCatalogForModel().map((item) => item.name)) {
     const repeated = new Set();
     for (const path of claimableContract(tool).paths) {
       const parts = path.split('.');
-      if (parts.includes('*')) repeated.add(parts.slice(0, parts.indexOf('*')).join('.'));
+      parts.forEach((part, index) => {
+        if (part === '*') repeated.add(parts.slice(0, index).join('.'));
+      });
     }
     for (const collection of repeated) {
       const declaredRows = rowCollections(tool).includes(collection);

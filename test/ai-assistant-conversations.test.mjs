@@ -101,13 +101,17 @@ test('ilk tur güvenilir Sicil adına konuşma açar; kullanıcı iletisi ve tam
   assert.equal(conversation.MessageCount, 2);
   const [question, answer] = db.aiConversationMessages;
   assert.deepEqual([question.Sequence, question.Role, question.Content, question.ClientTurnId.toLowerCase()], [1, 'user', 'Bir toplantı gündemi hazırlar mısın?', turnId]);
-  assert.deepEqual([answer.Sequence, answer.Role, answer.Content, answer.Mode, answer.FinishReason], [2, 'assistant', 'Merhaba, bağlantı çalışıyor.', 'standard', 'stop']);
+  assert.deepEqual([answer.Sequence, answer.Role, answer.Content, answer.Mode, answer.FinishReason], [2, 'assistant', 'Merhaba, bağlantı çalışıyor.', 'standard', 'general_stop']);
   assert.equal(answer.ContextTrimmed, false);
   assert.equal(answer.ContextOmittedMessages, 0);
   assert.equal(answer.ReplyToMessageId, question.MessageId);
   const done = terminal(result).data;
   assert.equal(done.assistantMessage.id, answer.MessageId.toLowerCase());
+  assert.equal(done.assistantMessage.finishReason, 'stop');
   assert.equal(done.conversation.messageCount, 2);
+  const loaded = await loadAssistantConversation(conversationId);
+  assert.equal(loaded.status, 200);
+  assert.deepEqual([loaded.body.messages[1].source, loaded.body.messages[1].finishReason], ['general', 'stop']);
   assert.equal(provider.calls.length, 1);
 });
 
