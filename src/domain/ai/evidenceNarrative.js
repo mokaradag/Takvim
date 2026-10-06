@@ -111,6 +111,11 @@ function joinList(parts, locale) {
 }
 
 function labelOf(fact, locale) {
+  const parts = fact.field.split('.');
+  if (parts.at(-3) === 'proposedChanges' && ['from', 'to'].includes(parts.at(-1))) {
+    const prefix = parts.at(-1) === 'from' ? ['Önceki', 'Original'] : ['Önerilen', 'Proposed'];
+    return `${prefix[language(locale)]} ${factLabel(parts.at(-2), locale).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
+  }
   const label = factLabel(fact.field, locale).split(' / ').at(-1);
   return fact.changeField ? `${factLabel(fact.changeField, locale)} / ${label}` : label;
 }

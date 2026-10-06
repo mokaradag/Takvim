@@ -412,7 +412,7 @@ function dependencies(db, params) {
   const projectTasks = db.tasks.filter((task) => same(task.ProjectId, params.projectId));
   return [
     rows,
-    projectTasks.filter((task) => involved.has(upper(task.TaskId))).map((task) => ({
+    projectTasks.filter((task) => focus ? involved.has(upper(task.TaskId)) : scope.visible.has(upper(task.TaskId))).map((task) => ({
       TaskId: task.TaskId, Title: task.Title, Status: task.Status, PlannedStart: task.PlannedStart, PlannedFinish: task.PlannedFinish,
       TargetFinish: task.TargetFinish, IsMilestone: task.IsMilestone
     })),

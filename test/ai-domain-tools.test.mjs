@@ -481,7 +481,7 @@ test('baz plan karşılaştırması belirlenimci sapma verir; silinmiş görevin
     snapshotTasks: 4, compared: 3, finishSlipped: 1, finishEarlier: 1, finishUnchanged: 1,
     startSlipped: 0, missingDates: 0, removedSinceBaseline: 1, addedSinceBaseline: 5
   });
-  assert.deepEqual(result.data.mostSlipped.map((item) => [item.taskId, item.varianceDays]), [[TASKS.OVERDUE, 5]]);
+  assert.deepEqual(result.data.mostSlipped.map((item) => [item.taskId, item.varianceDays]), [[TASKS.OVERDUE, 5], [TASKS.DUE_SOON, 0], [TASKS.DONE, -3]]);
   assert.deepEqual(result.data.finishVariance, { averageDays: 0.7, maxSlipDays: 5, maxEarlierDays: 3 });
   const read = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.READ });
   assert.equal(read.result.error.code, 'UNSUPPORTED_SCOPE');

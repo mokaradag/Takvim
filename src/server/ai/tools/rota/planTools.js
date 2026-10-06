@@ -48,7 +48,7 @@ const baselineCompare = {
   topic: 'baseline',
   evidenceKind: 'baseline',
   authorization: 'Baz planlar yalnızca projede FULL erişimi olan kullanıcılara açıktır (anlık görüntüyle aynı).',
-  description: 'Projenin baz planı (referans plan) ile güncel planı karşılaştırır: kayan, öne alınan ve değişmeyen görev sayıları, planlanan bitiş sapması (takvim günü) ve en çok kayan görevler. Silinmiş görevlerin baz plan kaydı korunur ve ayrıca sayılır.',
+  description: 'Projenin baz planı (referans plan) ile güncel planı karşılaştırır: kayan, öne alınan ve değişmeyen görev sayıları, planlanan bitiş sapması (takvim günü) ve sapmaya göre azalan görev önizlemesi (sıfır ve negatif sapmalar dahil). Silinmiş görevlerin baz plan kaydı korunur ve ayrıca sayılır.',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -123,7 +123,7 @@ const baselineCompare = {
       });
     }
     const total = variances.reduce((sum, item) => sum + item.varianceDays, 0);
-    const orderedSlipped = variances.filter((item) => item.varianceDays > 0)
+    const orderedSlipped = variances
       .sort((left, right) => right.varianceDays - left.varianceDays || left.title.localeCompare(right.title, 'tr'));
     const slipped = orderedSlipped.slice(0, limit)
       .map((item) => ({ ...item, statusLabel: statusLabelOf(item.status) }));
@@ -148,10 +148,10 @@ const baselineCompare = {
         definitions: METRIC_DEFINITIONS.baseline
       },
       scope: describeTaskScope(project ? [project] : []),
-      complete: slipped.length === counts.finishSlipped && !result.baselinesTruncated,
-      truncated: slipped.length < counts.finishSlipped || result.baselinesTruncated,
+      complete: slipped.length === variances.length && !result.baselinesTruncated,
+      truncated: slipped.length < variances.length || result.baselinesTruncated,
       returnedCount: slipped.length,
-      totalCount: counts.finishSlipped,
+      totalCount: variances.length,
       nextCursor: null,
       evidence: {
         label: selected ? `Baz plan karşılaştırması · ${selected.name}` : 'Baz plan karşılaştırması · baz plan yok',
@@ -251,7 +251,7 @@ const dependencyInspect = {
     }
     const withPredecessor = new Set();
     const withSuccessor = new Set();
-    const degree = new Map();
+    const degree = new Map([...tasks.keys()].map((taskId) => [taskId, 0]));
     const byType = { FS: 0, SS: 0, FF: 0, SF: 0 };
     let withLag = 0;
     let withLead = 0;
@@ -354,6 +354,7 @@ const recurrenceInspect = {
     const { scope } = await call.authorization();
     if (args.taskId) {
       const { fact } = await visibleTask(call, scope, args.taskId);
+      if (args.projectId && args.projectId !== fact.projectId) throw notFound();
       const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId;
       if (!seriesId) {
         const access = projectAccess(scope, fact.projectId);

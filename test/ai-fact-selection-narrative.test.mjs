@@ -20,6 +20,30 @@ const { SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContrac
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
 const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
+
+test('nested proposed schedule dates retain their field and direction in prose and tables', async (t) => {
+  const stack = stackFor(t, { taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE,
+    RequesterSicil: AYSE, DecisionOwnerSicil: AYSE, Status: 'PENDING',
+    OriginalPlannedStart: '2026-09-01', ProposedPlannedStart: '2026-09-10',
+    OriginalPlannedFinish: '2026-09-15', ProposedPlannedFinish: '2026-10-05',
+    OriginalTargetFinish: '2026-09-20', ProposedTargetFinish: '2026-10-10' }] });
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { taskId: TASKS.OVERDUE });
+  const fields = ['plannedStart', 'plannedFinish', 'targetFinish'].flatMap((field) =>
+    ['from', 'to'].map((direction) => `data.items.0.proposedChanges.${field}.${direction}`));
+  const request = { operation: 'value', metrics: ['request.proposedPlannedStart', 'request.proposedPlannedFinish', 'request.proposedTargetFinish'],
+    entities: [{ type: 'task', id: TASKS.OVERDUE }] };
+  for (const locale of ['tr', 'en']) for (const layout of ['prose', 'list', 'table']) {
+    const verdict = verifyRequested(ledger, fields, request, { locale, layout });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    const names = locale === 'tr' ? ['planlanan başlangıç', 'planlanan bitiş', 'termin'] : ['planned start', 'planned finish', 'deadline'];
+    for (const name of names) for (const prefix of locale === 'tr' ? ['Önceki', 'Önerilen'] : ['Original', 'Proposed']) {
+      assert.ok(verdict.normalized.includes(`${prefix} ${name}`), verdict.normalized);
+    }
+    assert.ok(verdict.normalized.includes(locale === 'tr' ? '10 Eylül 2026' : '10 September 2026'));
+    assert.ok(verdict.normalized.includes(locale === 'tr' ? '10 Ekim 2026' : '10 October 2026'));
+    assert.doesNotMatch(verdict.normalized, /(?:^|[;|])\s*(?:Bitiş|To)\s*:/m);
+  }
+});
 const select = (...facts) => JSON.stringify({ kind: 'rota', facts });
 
 async function verify(stack, name, args, facts, options = {}) {

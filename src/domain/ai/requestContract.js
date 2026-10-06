@@ -206,6 +206,8 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const rowObject = row ? valueAt(source.envelope, row.path) : null;
     const rowEntities = rowObject && typeof rowObject === 'object'
       ? Object.entries(ENTITY_ID_FIELDS).filter(([, field]) => rowObject[field] != null).map(([type, field]) => entityKey(type, rowObject[field])) : [];
+    const conflictingRow = rowEntities.some((key) => !boundKeys.has(key)
+      && entities.some((entity) => key.startsWith(`${entity.type}:`)));
     const named = row?.kind === 'row' && rowEntities.some((entity) => boundKeys.has(entity));
     // Değer isteğinde bağlı varlığın kendi özelliği (adlandırılan satır ya da
     // seçicinin kaydı) nüfus koşulundan bağımsızdır; toplamlar ve sayımlar değildir.
@@ -223,9 +225,15 @@ export function verifyRequestedFacts(request, facts, evidence) {
       }
       represented.add(semantic.metric);
       // Varlık yalnızca ölçü taşıyan olguyla karşılanır; ad ya da etiket bağlamı yetmez.
-      for (const { type, id } of selectors) referenced.add(entityKey(type, id));
+      const propertyType = semantic.property ? semantic.metric?.split('.')[0] : null;
+      const propertyId = rowObject?.[ENTITY_ID_FIELDS[propertyType]];
+      const reference = ({ type, id }) => {
+        const key = entityKey(type, id);
+        if (propertyId == null || type !== propertyType || key === entityKey(type, propertyId)) referenced.add(key);
+      };
+      for (const selector of selectors) reference(selector);
       if (source.envelope?.entity?.id && REQUEST_ENTITY_TYPES.includes(source.envelope.entity.type)) {
-        referenced.add(entityKey(source.envelope.entity.type, source.envelope.entity.id));
+        reference(source.envelope.entity);
       }
       rowEntities.forEach((key) => referenced.add(key));
     }
@@ -234,6 +242,7 @@ export function verifyRequestedFacts(request, facts, evidence) {
       if (!collections.has(key)) collections.set(key, { evidenceId, source, row, indexes: new Set(), metrics: new Map(), bound: true });
       const entry = collections.get(key);
       entry.indexes.add(row.index);
+      if (substantive && conflictingRow) entry.conflicting = true;
       if (substantive) entry.metrics.set(row.index, (entry.metrics.get(row.index) || new Set()).add(semantic.metric));
       if (row.kind === 'row' && request.operation === 'value') {
         const grouped = group && group.facets !== null && (Object.keys(group.facets).length > 0 || group.selectors.length > 0);
@@ -255,9 +264,9 @@ export function verifyRequestedFacts(request, facts, evidence) {
     // sınırında kısaltılan zarf, elinde kalan satırların tamamı seçilse de bütün değildir.
     if (request.operation === 'list'
       && (!complete || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true || entry.source.firstPage !== true)) return fail('LIST_INCOMPLETE');
-    if (request.operation === 'value' && !entry.bound
+    if (request.operation === 'value' && (entry.conflicting || (!entry.bound
       && (size !== 1 || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true
-        || entry.source.firstPage !== true)) return fail('ROW_SELECTION_UNBOUND');
+        || entry.source.firstPage !== true)))) return fail('ROW_SELECTION_UNBOUND');
   }
   // Liste ve sıralama satırların yanıtıdır: satırların taşıyabildiği istenen ölçü
   // her satırda bulunmalıdır; genel bir toplam satırların değerinin yerine geçmez.

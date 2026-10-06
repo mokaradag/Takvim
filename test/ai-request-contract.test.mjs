@@ -209,6 +209,112 @@ test('a prompt-injected tool result cannot redirect the declared request to anot
 
 /* ── Seçilen olguların istekle uyumu ──────────────────────── */
 
+test('recurrence task selectors reject conflicting projects before creating evidence', async (t) => {
+  const stack = stackFor(t);
+  for (const taskId of [TASKS.SERIES, TASKS.OCCURRENCE_OPEN, TASKS.OVERDUE]) {
+    const rejected = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { taskId, projectId: PROJECTS.READ });
+    assert.equal(rejected.result.error?.code, 'NOT_FOUND');
+    assert.deepEqual(rejected.ledger.ids(), []);
+    const matching = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { taskId, projectId: PROJECTS.FULL });
+    assert.equal(matching.result.ok, true);
+  }
+});
+
+test('proposed schedule metrics require replacement dates rather than original dates', async (t) => {
+  const stack = stackFor(t, { taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE,
+    RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, Status: 'PENDING',
+    OriginalPlannedStart: '2026-09-01', ProposedPlannedStart: '2026-09-10',
+    OriginalPlannedFinish: '2026-09-15', ProposedPlannedFinish: '2026-10-05',
+    OriginalTargetFinish: '2026-09-20', ProposedTargetFinish: '2026-10-10' }] });
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { taskId: TASKS.OVERDUE });
+  for (const field of ['plannedStart', 'plannedFinish', 'targetFinish']) {
+    const metric = `request.proposed${field[0].toUpperCase()}${field.slice(1)}`;
+    const request = { operation: 'value', metrics: [metric], entities: [{ type: 'task', id: TASKS.OVERDUE }] };
+    const prefix = `data.items.0.proposedChanges.${field}`;
+    assert.equal(issue(verifyRequested(ledger, [`${prefix}.from`], request)), 'METRIC_MISSING');
+    assert.equal(issue(verifyRequested(ledger, [`${prefix}.to`], request)), null);
+    assert.equal(issue(verifyRequested(ledger, [`${prefix}.from`, `${prefix}.to`], request)), null);
+  }
+});
+
+test('a singleton related task cannot supply the focus task status', async (t) => {
+  const seed = { taskDependencies: [{ ProjectId: PROJECTS.FULL, TaskId: TASKS.DONE,
+    PredecessorTaskId: TASKS.OVERDUE, DependencyType: 'FS', LagDays: 0 }] };
+  const request = { operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', id: TASKS.OVERDUE }] };
+  const { ledger } = await callRotaTool(stackFor(t, seed), AYSE, 'rota_dependency_inspect', { taskId: TASKS.OVERDUE });
+  assert.equal(issue(verifyRequested(ledger, ['data.successors.0.status'], request)), 'ENTITY_MISSING');
+  assert.equal(issue(verifyRequested(ledger, ['data.task.status'], request)), null);
+  assert.equal(issue(verifyRequested(ledger, ['data.successors.0.status'], {
+    ...request, entities: [...request.entities, { type: 'task', id: TASKS.DONE }]
+  })), 'ENTITY_MISSING');
+  assert.equal(issue(verifyRequested(ledger, ['data.task.status', 'data.successors.0.status'], {
+    ...request, entities: [...request.entities, { type: 'task', id: TASKS.DONE }]
+  })), null);
+  const { result } = await turn(t, [
+    { text: declared(request), toolCalls: [call('rota_dependency_inspect', { taskId: TASKS.OVERDUE })] },
+    reply(facts('R1:data.successors.0.status')),
+    reply(facts('R1:data.task.status'))
+  ], { seed, user: `${TASKS.OVERDUE} durumu nedir?` });
+  assert.equal(result.outcome, 'grounded');
+  assert.equal(result.repaired, true);
+  assert.match(result.text, /Yapılacak/);
+  assert.doesNotMatch(result.text, /Tamamlandı/);
+});
+
+test('dependency lag evidence requires magnitude and preserves the stored unit', async (t) => {
+  const stack = stackFor(t, { taskDependencies: [{ ProjectId: PROJECTS.FULL, TaskId: TASKS.DUE_SOON,
+    PredecessorTaskId: TASKS.OVERDUE, DependencyType: 'FS', LagDays: 10, LagValue: 2, LagUnit: 'week' }] });
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
+  const request = { operation: 'value', metrics: ['dependency.lag'],
+    entities: [{ type: 'task', id: TASKS.DUE_SOON }, { type: 'task', id: TASKS.OVERDUE }] };
+  const prefix = 'data.predecessors.0.lag';
+  assert.equal(issue(verifyRequested(ledger, [`${prefix}.unit`], request)), 'METRIC_MISSING');
+  for (const locale of ['tr', 'en']) {
+    for (const fields of [[`${prefix}.value`], [`${prefix}.value`, `${prefix}.unit`]]) {
+      const verdict = verifyRequested(ledger, fields, request, { locale });
+      assert.equal(issue(verdict), null);
+      assert.match(verdict.normalized, locale === 'tr' ? /2 hafta/ : /2 weeks/);
+    }
+  }
+});
+
+test('baseline ranks preserve negative, zero and positive comparable variances', async (t) => {
+  const stack = stackFor(t);
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.FULL });
+  assert.deepEqual(result.data.mostSlipped.map((row) => row.varianceDays), [5, 0, -3]);
+  assert.equal(result.totalCount, result.data.counts.compared);
+  for (const [order, limit, indexes] of [['asc', 1, [2]], ['desc', 1, [0]], ['desc', 3, [0, 1, 2]]]) {
+    const request = inProject(['task.varianceDays'], { operation: 'rank', rank: { metric: 'task.varianceDays', order, limit } });
+    assert.equal(issue(verifyRequested(ledger, indexes.map((index) => `data.mostSlipped.${index}.varianceDays`), request)), null);
+    if (order === 'asc' || limit === 3) assert.equal(issue(verifyRequested(ledger, ['data.mostSlipped.0.varianceDays'], request)), 'RANK_MISMATCH');
+  }
+  const preview = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.FULL, limit: 1 });
+  assert.equal(preview.result.complete, false);
+  assert.equal(preview.result.rankingBoundary.nextValue, 0);
+  const asc = inProject(['task.varianceDays'], { operation: 'rank', rank: { metric: 'task.varianceDays', order: 'asc', limit: 1 } });
+  assert.equal(issue(verifyRequested(preview.ledger, ['data.mostSlipped.0.varianceDays'], asc)), 'RANK_MISMATCH');
+});
+
+test('dependency ranks include independent tasks and reject minima omitted by the preview', async (t) => {
+  for (const taskCount of [4, 8]) {
+    const tasks = rotaToolSeed().tasks.filter((row) => row.ProjectId === PROJECTS.FULL).slice(0, taskCount);
+    const stack = stackFor(t, { tasks, taskDependencies: [{ ProjectId: PROJECTS.FULL, TaskId: TASKS.DUE_SOON,
+      PredecessorTaskId: TASKS.OVERDUE, DependencyType: 'FS', LagDays: 0 }] });
+    const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId: PROJECTS.FULL });
+    assert.equal(result.data.coverage.tasksWithoutAnyDependency, taskCount - 2);
+    assert.equal(result.data.mostConnected.length, Math.min(taskCount, 5));
+    const request = inProject(['dependencies.relationCount'], { operation: 'rank',
+      rank: { metric: 'dependencies.relationCount', order: 'asc', limit: 1 } });
+    assert.equal(issue(verifyRequested(ledger, ['data.mostConnected.0.relationCount', 'data.mostConnected.1.relationCount'], request)), 'RANK_MISMATCH');
+    const zeroFields = result.data.mostConnected.flatMap((row, index) => row.relationCount === 0 ? [`data.mostConnected.${index}.relationCount`] : []);
+    const verdict = verifyRequested(ledger, zeroFields, request);
+    assert.equal(issue(verdict), taskCount === 4 ? null : 'RANK_MISMATCH');
+    assert.equal(issue(verifyRequested(ledger, ['data.mostConnected.0.relationCount', 'data.mostConnected.1.relationCount'], {
+      ...request, rank: { ...request.rank, order: 'desc' }
+    })), null);
+  }
+});
+
 test('workload and baseline previews carry cutoff proof without accepting omitted ties', async (t) => {
   const stack = stackFor(t);
   stack.db.taskBaselineSnapshots.find((row) => row.TaskId === TASKS.DUE_SOON).PlannedFinish = '2026-09-29';

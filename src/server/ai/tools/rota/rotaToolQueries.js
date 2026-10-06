@@ -661,7 +661,8 @@ ${visibleTasks()}
   FROM dbo.MR_Tasks t
   JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'FULL'
   WHERE t.ProjectId = @projectId
-    AND (t.TaskId = @focusTaskId OR EXISTS (
+    AND ((@focusTaskId IS NULL AND EXISTS (SELECT 1 FROM #AiTasks visible WHERE visible.TaskId = t.TaskId))
+      OR t.TaskId = @focusTaskId OR EXISTS (
       SELECT 1 FROM #AiDependencies d WHERE d.TaskId = t.TaskId OR d.PredecessorTaskId = t.TaskId));
 
   SELECT COUNT(*) AS TaskCount,
