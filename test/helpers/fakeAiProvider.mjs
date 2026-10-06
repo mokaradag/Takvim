@@ -252,7 +252,7 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
       for (let index = 0; index < (behavior.reasoning ?? 0); index += 1) feed.reasoning();
       for (const chunk of chunks) feed.text(chunk);
       if (behavior.type === 'interrupt') feed.fail(streamInterrupted());
-      else feed.done({ finishReason: behavior.finishReason ?? 'stop', model: behavior.model === undefined ? input.model : behavior.model });
+      else feed.done({ finishReason: behavior.finishReason ?? 'stop', model: behavior.model === undefined ? input.model : behavior.model, usage: behavior.usage ?? null });
     } else {
       return Promise.reject(new Error(`Tanınmayan sahte akış davranışı: ${behavior.type}`));
     }
@@ -302,6 +302,81 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     }
   }
 
+  /**
+   * Araçlı model turu (`streamToolCompletion`). Davranışlar:
+   *  - `{ type: 'tool-calls', calls: [{ name, arguments, id? }], preface?: [metin parçaları] }`
+   *  - `{ type: 'answer', text, chunks? }` (ya da `reply` / `stream`)
+   *  - `{ type: 'script', respond: (call) => davranış }` — isteğin iletilerine
+   *    (araç sonuçları, kanıt kimlikleri) bakarak yanıt kuran senaryo
+   *  - `status`, `network`, `stall`, `deferred-stream`, `interrupt` akışlı sohbetle aynı.
+   */
+  function openToolStream(behavior, call, input) {
+    const resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
+    call.behavior = resolved.type;
+    if (resolved.type === 'tool-calls') {
+      const feed = createFeed(input.signal, call, { ignoreAbort: resolved.ignoreAbort });
+      for (const chunk of resolved.preface ?? []) feed.text(chunk);
+      const toolCalls = resolved.calls.map((entry, index) => ({
+        id: entry.id ?? `call_${call.index}_${index + 1}`,
+        name: entry.name,
+        arguments: typeof entry.arguments === 'string' ? entry.arguments : JSON.stringify(entry.arguments ?? {}),
+        oversize: Boolean(entry.oversize)
+      }));
+      for (let index = 0; index < toolCalls.length; index += 1) feed.push({ event: { type: 'tool_call_started' } });
+      feed.push({ event: { type: 'done', finishReason: 'tool_calls', model: input.model, usage: null, toolCalls } });
+      feed.push({ end: true });
+      return Promise.resolve({ events: feed.iterate() });
+    }
+    const normalized = resolved.type === 'answer' ? { ...resolved, type: 'stream' } : resolved;
+    return openStream(normalized, call, input);
+  }
+
+  async function executeToolStream(input) {
+    const behavior = queue.shift() || { type: 'reply' };
+    const call = {
+      kind: 'tools',
+      index: calls.length + 1,
+      model: input.model ?? null,
+      apiKey: input.apiKey ?? null,
+      control: false,
+      baseUrl: input.baseUrl,
+      messages: input.messages ?? null,
+      tools: input.tools ?? [],
+      toolChoice: input.toolChoice ?? null,
+      maxOutputTokens: input.maxOutputTokens ?? null,
+      signal: input.signal ?? null,
+      aborted: false,
+      settled: false,
+      streamClosed: false,
+      emitted: []
+    };
+    calls.push(call);
+    active.add(call);
+    peakActive = Math.max(peakActive, active.size);
+    notify();
+    const settle = () => {
+      if (call.settled) return;
+      call.settled = true;
+      active.delete(call);
+      notify();
+    };
+    try {
+      const opened = await openToolStream(behavior, call, input);
+      return {
+        events: (async function* tracked() {
+          try {
+            yield* opened.events;
+          } finally {
+            settle();
+          }
+        })()
+      };
+    } catch (error) {
+      settle();
+      throw error;
+    }
+  }
+
   return {
     calls,
     get activeCount() { return active.size; },
@@ -322,6 +397,9 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     },
     streamChatCompletion(input) {
       return executeStream(input);
+    },
+    streamToolCompletion(input) {
+      return executeToolStream(input);
     },
     listModels(input) {
       return execute('models', input);

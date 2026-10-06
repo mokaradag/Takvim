@@ -3,6 +3,7 @@
  * izleyen kaydırma, yerleşim kipi ve panoya kopyalama. Kurallar tarayıcı
  * olmadan sınanır; bileşenler yalnızca uygular.
  */
+export { assistantEnabledInDocument } from '../../../lib/runtimeFeatures.js';
 
 /**
  * Dar ekranda panel tam ekran bir sayfa (kipli iletişim kutusu) olur. Aynı

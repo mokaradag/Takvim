@@ -30,11 +30,13 @@ function personFromRow(row) {
   };
 }
 
-export async function loadAuthorizationContext(executor = null) {
+export async function loadAuthorizationContext(executor = null, { includeScopeIdentities = false, maxScopeRows = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
   const pool = executor || await getSqlPool();
   const request = pool.request();
   request.input('sicil', sql.Int, sicil);
+  if (maxScopeRows != null) request.input('authorizationMaxRows', sql.Int, maxScopeRows + 1);
+  request.input('adminPredicateOnly', sql.Bit, includeScopeIdentities ? 1 : 0);
   const result = await request.query(`
     SELECT TOP (1) Sicil, DisplayName, Username, JobTitle, Team, Sector, Directorate, Department, Unit
     FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil;
@@ -48,11 +50,12 @@ export async function loadAuthorizationContext(executor = null) {
       SELECT 1 FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil
     ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsExecutive;
 
+    ${maxScopeRows != null ? 'SELECT TOP (@authorizationMaxRows) * FROM (' : includeScopeIdentities ? 'SELECT * FROM (' : ''}
     SELECT p.ProjectId, CAST('FULL' AS varchar(20)) AS AccessLevel,
       CAST('SYSTEM_ADMIN' AS varchar(30)) AS Reason
     FROM dbo.MR_Projects p
     WHERE p.IsActive = 1
-      AND EXISTS (
+      AND @adminPredicateOnly = 0 AND EXISTS (
         SELECT 1
         FROM dbo.MR_UserRoles ur
         WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1
@@ -73,25 +76,35 @@ export async function loadAuthorizationContext(executor = null) {
       CASE WHEN pa.GrantSource = 'OWNER' THEN 'MANUAL_OWNER' ELSE 'MANUAL_GRANT' END
     FROM dbo.MR_ProjectAccess pa
     JOIN dbo.MR_Projects p ON p.ProjectId = pa.ProjectId
-    WHERE p.IsActive = 1 AND pa.Sicil = @sicil AND pa.IsActive = 1 AND pa.AccessLevel IN ('FULL', 'READ');
+    WHERE p.IsActive = 1 AND pa.Sicil = @sicil AND pa.IsActive = 1 AND pa.AccessLevel IN ('FULL', 'READ')
+    ${maxScopeRows != null || includeScopeIdentities ? ') authorizedProjects' : ''}
+    ${includeScopeIdentities ? `WHERE NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1)` : ''};
 
+    ${maxScopeRows != null ? 'SELECT TOP (@authorizationMaxRows) * FROM (' : ''}
     SELECT DISTINCT t.ProjectId, t.TaskId,
       CASE WHEN ta.Sicil = @sicil THEN 'ASSIGNEE' ELSE 'EXECUTIVE_SCOPE' END AS Reason
     FROM dbo.MR_Tasks t
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = t.TaskId
-    WHERE ta.Sicil = @sicil
+    WHERE (@adminPredicateOnly = 0 OR NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1))
+      AND (ta.Sicil = @sicil
        OR EXISTS (
           SELECT 1 FROM dbo.MR_V_ExecutiveScope es
           WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-       )
+       ))
     UNION
     SELECT t.ProjectId, t.TaskId, CAST('TASK_CREATOR' AS varchar(30)) AS Reason
     FROM dbo.MR_Tasks t
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
-    WHERE t.CreatedBySicil = @sicil;
+    WHERE t.CreatedBySicil = @sicil
+      AND (@adminPredicateOnly = 0 OR NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1))
+    ${maxScopeRows != null ? ') authorizedTasks' : ''};
+    ${includeScopeIdentities ? `SELECT DISTINCT ${maxScopeRows != null ? 'TOP (@authorizationMaxRows)' : ''} EmployeeSicil FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil AND NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1) ORDER BY EmployeeSicil;` : ''}
   `);
 
+  if (maxScopeRows != null && [3, 4, 5].some((index) => (result.recordsets[index]?.length || 0) > maxScopeRows)) {
+    throw new ServerPersistenceError('AI_SCOPE_LIMIT_EXCEEDED', 'Yetki kapsamı analiz sınırını aşıyor.');
+  }
   const personRow = result.recordsets[0]?.[0];
   if (!personRow) throw new ServerPersistenceError('UNAUTHORIZED', 'Yapılandırılmış Sicil kurumsal personel kaynağında bulunamadı.');
   const isSystemAdmin = Boolean(result.recordsets[1]?.[0]?.IsSystemAdmin);
@@ -123,7 +136,7 @@ export async function loadAuthorizationContext(executor = null) {
     if (!fullReasonsByProject.has(projectId)) fullReasonsByProject.set(projectId, new Set());
     fullReasonsByProject.get(projectId).add(row.Reason);
   }
-  for (const [projectId, reasons] of fullReasonsByProject) {
+  for (const [projectId, reasons] of isSystemAdmin ? [] : fullReasonsByProject) {
     effective.access.set(projectId, {
       projectId,
       accessLevel: 'FULL',
@@ -142,6 +155,10 @@ export async function loadAuthorizationContext(executor = null) {
     // CN43N projesi altında görev tanımlayabilir (bkz. authorization.js ·
     // hasTaskAssignmentScope). Görev görünürlüğü bundan etkilenmez.
     canAssignAllCorporateProjects: hasTaskAssignmentScope({ isSystemAdmin, isExecutive }),
-    effective
+    effective,
+    ...(includeScopeIdentities ? {
+      scopeIdentities: (result.recordsets[5] || []).map((row) => Number(row.EmployeeSicil)),
+      scopeTaskRights: partialRows.map(({ projectId, taskId, reason }) => ({ projectId, taskId, reason }))
+    } : {})
   };
 }

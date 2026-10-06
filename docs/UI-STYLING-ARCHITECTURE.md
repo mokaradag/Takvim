@@ -14,7 +14,7 @@ Current root sequence:
 4. `src/app/styles/dashboard.css` — Dashboard/Özet structural layout and status-donut presentation.
 5. `src/app/styles/features.css` — Gantt, WBS and Task Detail feature layout contracts.
 6. `src/app/styles/system-admin.css` — Sistem Yönetimi console: health strip, tabs, section cards, metric tiles, charts and detail drawer.
-7. `src/app/styles/assistant.css` — Rota AI: top-bar launcher, assistant panel/sheet, thread, composer and the safe Markdown answer presentation.
+7. `src/app/styles/assistant.css` — Rota AI (shown to users as "Bilgin"): top-bar launcher and brand mark, assistant panel/sheet, thread, the single-row composer and the safe Markdown answer presentation.
 8. `src/app/styles/simple-mode.css` — Temel Kip quick-entry and calendar-tab presentation.
 9. `src/app/styles/experience.css` — mode chooser, settings-mode cards and help/onboarding surfaces.
 

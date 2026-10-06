@@ -1,8 +1,10 @@
 import 'server-only';
 import { AI_CREDENTIAL_SOURCES } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_CAPABILITIES, AI_PROFILES, resolveModelProfile } from '../../domain/ai/aiModelRegistry.js';
-import { checkAssistantConversationSchema } from './assistant/assistantService.js';
-import { conversationSchemaState } from './assistant/conversationStore.js';
+import { checkAssistantConversationSchema, checkAssistantEvidenceSchema } from './assistant/assistantService.js';
+import { conversationSchemaState, evidenceSchemaState } from './assistant/conversationStore.js';
+import { toolRegistryProblems } from './tools/toolRegistry.js';
+import { toolSqlGateStatus } from './tools/toolSqlGate.js';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
 import { HEALTH_STATES } from '../../domain/observability/healthModel.js';
 import { AI_CONFIG_NAMES, aiConfigurationSummary, readAiConfig } from './aiConfig.js';
@@ -73,6 +75,30 @@ function assistantProfilesAvailable(registry) {
   return assistantRoutes(registry).length > 0;
 }
 
+function toolRoutes(registry) {
+  return [AI_PROFILES.CHAT_TOOLS, AI_PROFILES.CHAT_TOOLS_REASONING]
+    .map((profile) => resolveModelProfile(registry, profile))
+    .filter((resolved) => resolved.ok
+      && resolved.route.capabilities.includes(AI_CAPABILITIES.CHAT)
+      && resolved.route.capabilities.includes(AI_CAPABILITIES.TOOLS))
+    .map((resolved) => resolved.route);
+}
+
+/** Rota verisi araçlarının durumu (yalnızca özellik açıkken ayrıntı taşır). */
+const TOOL_SERVICE_FAILURES = new Set(['BUSY', 'TIMEOUT', 'DATABASE_UNAVAILABLE', 'INTERNAL']);
+
+function rotaDataView(config, registry) {
+  if (!config.toolsEnabled) return { enabled: false, flagInvalid: Boolean(config.toolsFlagInvalid) };
+  const toolProfiles = toolRoutes(registry).length;
+  return {
+    enabled: true,
+    toolProfiles,
+    registryValid: toolRegistryProblems().length === 0,
+    evidenceSchema: evidenceSchemaState(),
+    toolGate: toolSqlGateStatus()
+  };
+}
+
 /** Bileşen durumu + güvenli ayrıntı; `state`, `message`, `detail`, `lastSuccessAt` döner. */
 export function aiHealthComponent({ now = Date.now() } = {}) {
   const config = readAiConfig();
@@ -95,7 +121,8 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
     telemetry,
     conversationSchema,
     assistantProfiles: assistantProfilesAvailable(cachedAiModelRegistry()),
-    credentialSchema: { ready: credentialSchema.ready, observedAt: credentialSchema.observedAt }
+    credentialSchema: { ready: credentialSchema.ready, observedAt: credentialSchema.observedAt },
+    rotaData: rotaDataView(config, cachedAiModelRegistry())
   };
   const loadText = `Etkin ${load.active}/${load.limits.maxActive}, sırada ${load.queued}/${load.limits.maxQueued}.`;
   // Sağlayıcıya ERİŞİM (reddedilen çağrı dâhil) başarılı işlem değildir:
@@ -175,11 +202,39 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (!probeRoute.ok) {
     return warning(`Hızlı sohbet profili (chat.fast) kullanılamıyor (${probeRoute.reason}); bağlantı sınaması çalışmaz. ${loadText}`);
   }
-  if (!detail.assistantProfiles) return warning(`Rota AI sohbet profilleri (chat.general / chat.reasoning) kullanılamıyor. ${loadText}`);
-  if (conversationSchema.ready === false) return warning(`Rota AI konuşma tabloları (0017) doğrulanamadı. ${loadText}`);
+  if (!detail.assistantProfiles) return warning(`Bilgin sohbet profilleri (chat.general / chat.reasoning) kullanılamıyor. ${loadText}`);
+  if (conversationSchema.ready === false) return warning(`Bilgin konuşma tabloları (0017) doğrulanamadı. ${loadText}`);
   const turnFailure = telemetry.assistantTurns?.lastFailure;
   if (turnFailure && !CAPACITY_CODES.has(turnFailure.code) && now - epoch(turnFailure.at) <= CONTACT_FRESHNESS_MS) {
-    return warning(`Son Rota AI turu tamamlanamadı (${turnFailure.code}). ${loadText}`);
+    return warning(`Son Bilgin turu tamamlanamadı (${turnFailure.code}). ${loadText}`);
+  }
+  // Geçersiz araç bayrağı yalnızca genel yapay zekâ denetimleri temizken
+  // gösterilir: daha ağır bir arıza ("genel sohbet kullanılabilir" iddiasıyla)
+  // gizlenmez.
+  if (config.toolsFlagInvalid) {
+    return warning(`Rota verisi araçları etkinleştirme ayarı geçersiz; araçlar kapalı, genel sohbet kullanılabilir. ${loadText}`);
+  }
+  // Rota verisi araçları açıkken araç yolu kullanılamıyorsa Rota AI genel
+  // sohbete düşer; yönetici bunu sağlık görünümünde görür.
+  if (detail.rotaData.enabled) {
+    if (!detail.rotaData.registryValid) return warning(`Rota verisi araç kayıt defteri geçersiz; Bilgin yalnızca genel sohbetle çalışıyor. ${loadText}`);
+    if (detail.rotaData.evidenceSchema.ready === false) {
+      return warning(`Rota verisi araçları açık ancak kanıt tablosu (0018) kurulmamış; Bilgin yalnızca genel sohbetle çalışıyor. ${loadText}`);
+    }
+    if (!detail.rotaData.toolProfiles) {
+      return warning(`Rota verisi araçları açık ancak araç yetenekli profiller (chat.tools / chat.tools.reasoning) kullanılamıyor. ${loadText}`);
+    }
+    const toolFailure = telemetry.tools?.lastFailure;
+    if (toolFailure && TOOL_SERVICE_FAILURES.has(toolFailure.code) && now - epoch(toolFailure.at) <= BUSY_ATTENTION_WINDOW_MS) {
+      return warning(`Son Rota verisi aracı hizmet hatasıyla sonuçlandı (${toolFailure.code}). ${loadText}`);
+    }
+    const evidenceObservedAt = epoch(detail.rotaData.evidenceSchema.observedAt);
+    const evidenceFresh = evidenceObservedAt != null && now - evidenceObservedAt <= SCHEMA_FRESHNESS_MS;
+    if (detail.rotaData.evidenceSchema.ready !== true || !evidenceFresh) {
+      return unknown(detail.rotaData.evidenceSchema.ready === true
+        ? `Rota verisi kanıt tablosu (0018) yakın zamanda doğrulanmadı; bağlantıyı sınayın. ${loadText}`
+        : `Rota verisi kanıt tablosu (0018) henüz doğrulanmadı; bağlantıyı sınayın. ${loadText}`);
+    }
   }
   // Tablonun kurulu olduğu gözlemi de kalıcı değildir: tablo sonradan
   // kaldırılabilir ya da yetkisi alınabilir. Eski bir olumlu gözlem kanıt sayılmaz.
@@ -194,7 +249,7 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
   if (contactAt != null && now - contactAt <= CONTACT_FRESHNESS_MS) {
     const conversationObservedAt = epoch(conversationSchema.observedAt);
     if (conversationSchema.ready !== true || conversationObservedAt == null || now - conversationObservedAt > SCHEMA_FRESHNESS_MS) {
-      return unknown(`Rota AI konuşma tabloları (0017) yakın zamanda doğrulanmadı; bağlantıyı sınayın. ${loadText}`);
+      return unknown(`Bilgin konuşma tabloları (0017) yakın zamanda doğrulanmadı; bağlantıyı sınayın. ${loadText}`);
     }
     return { state: HEALTH_STATES.HEALTHY, message: `Sağlayıcı yanıt veriyor. ${loadText}`, detail, lastSuccessAt };
   }
@@ -263,7 +318,7 @@ async function verifySetup(config, deadline, models) {
   }
   const routes = assistantRoutes(registry);
   if (!routes.length) {
-    return { code: 'ASSISTANT_PROFILE_UNAVAILABLE', message: 'Uca ulaşıldı ancak Rota AI sohbet profilleri kullanılamıyor.' };
+    return { code: 'ASSISTANT_PROFILE_UNAVAILABLE', message: 'Uca ulaşıldı ancak Bilgin sohbet profilleri kullanılamıyor.' };
   }
   // Uç model listesini verdiyse kullanılabilir tüm Rota AI kiplerinin modeli listede olmalıdır:
   // yalnızca chat.fast modelini sunan uç "sağlıklı" görünüp her Rota AI turunda düşmez.
@@ -272,14 +327,39 @@ async function verifySetup(config, deadline, models) {
     return {
       code: 'ASSISTANT_MODEL_MISSING',
       modelMissing: true,
-      message: `Uca ulaşıldı ancak Rota AI sohbet profillerinin modeli (${missing}) uçtaki model listesinde yok.`
+      message: `Uca ulaşıldı ancak Bilgin sohbet profillerinin modeli (${missing}) uçtaki model listesinde yok.`
     };
+  }
+  if (config.toolsEnabled) {
+    const routesWithTools = toolRoutes(registry);
+    if (!routesWithTools.length) {
+      return { code: 'TOOL_PROFILE_UNAVAILABLE', message: 'Uca ulaşıldı ancak Rota verisi araç profilleri kullanılamıyor.' };
+    }
+    if (models && !routesWithTools.every((route) => models.includes(route.model))) {
+      const missing = [...new Set(routesWithTools.filter((route) => !models.includes(route.model)).map((route) => route.model))].join(', ');
+      return {
+        code: 'TOOL_MODEL_MISSING',
+        modelMissing: true,
+        message: `Uca ulaşıldı ancak Rota verisi araç profillerinin modeli (${missing}) uçtaki model listesinde yok.`
+      };
+    }
   }
   try {
     await raceWithAbort(() => checkAssistantConversationSchema({ signal: deadline.signal }), deadline.signal);
   } catch {
     if (deadline.failure()) throw deadline.failure();
-    return { code: 'CONVERSATION_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak Rota AI konuşma tabloları (0017) doğrulanamadı.' };
+    return { code: 'CONVERSATION_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak Bilgin konuşma tabloları (0017) doğrulanamadı.' };
+  }
+  if (config.toolsEnabled) {
+    try {
+      const ready = await raceWithAbort(() => checkAssistantEvidenceSchema({ signal: deadline.signal }), deadline.signal);
+      if (!ready) {
+        return { code: 'EVIDENCE_SCHEMA_MISSING', message: 'Uca ulaşıldı ancak Bilgin kanıt tablosu (0018) kurulmamış.' };
+      }
+    } catch {
+      if (deadline.failure()) throw deadline.failure();
+      return { code: 'EVIDENCE_SCHEMA_UNVERIFIED', message: 'Uca ulaşıldı ancak Bilgin kanıt tablosu (0018) doğrulanamadı.' };
+    }
   }
   // Kişisel anahtar saklama açıksa tablo, kurumsal anahtar tanımlı olsa da doğrulanır.
   if (!config.personalKeysSupported) return null;

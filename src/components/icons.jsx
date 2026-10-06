@@ -88,6 +88,9 @@ export const Icons = {
   Stop: (p) => <Icon {...p} d='<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/>' />,
   History: (p) => <Icon {...p} d='<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/><path d="M12 7.5V12l3 2"/>' />,
   MessagePlus: (p) => <Icon {...p} d='<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/>' />,
+  Message: (p) => <Icon {...p} d='<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 8.5h8M8 12h5"/>' />,
+  Notes: (p) => <Icon {...p} d='<path d="M14.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>' />,
+  Lightbulb: (p) => <Icon {...p} d='<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2v.5h5V16c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>' />,
 
   // Ortak `Icon` üzerinden çizilir: dekoratif kullanımda verilen `aria-hidden`
   // gibi nitelikler SVG'ye ulaşır.

@@ -1,4 +1,5 @@
 import 'server-only';
+import { bindDisclosureScope, CURRENT_TASK_DISCLOSURE_SQL, DISCLOSURE_SCOPE_CLEANUP_SQL, DISCLOSURE_SCOPE_SETUP_SQL } from '../authorization/disclosureScope.js';
 import { canonicalActualId, extractActualId } from '../../domain/identity/actualId.js';
 import { COORDINATION_STATUSES } from '../../domain/assignment/assignmentCoordination.js';
 import { NOTIFICATION_PREVIEW_LIMIT } from '../../domain/notifications/notificationInbox.js';
@@ -86,10 +87,13 @@ const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
 const ACTIONABLE = `(${TASK_AVAILABLE} AND (
   (c.Status = 'PENDING' AND ${NOTIFICATION_DECISION_AUTHORITY})
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
+const DECISION_ACTIONABLE = `(${TASK_AVAILABLE} AND (
+  (c.Status = 'PENDING' AND ${DECISION_AUTHORITY})
+  OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
 const UNREAD = '(n.ReadVersion IS NULL OR n.ReadVersion <> c.RowVersion)';
 const VISIBLE = `(${ACTIONABLE} OR n.DismissedVersion IS NULL OR n.DismissedVersion <> c.RowVersion)`;
-const FIELDS = `c.*, ${IS_MANAGER} AS IsManager,
-  CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsActionable,
+const fieldsFor = (actionable) => `c.*, ${IS_MANAGER} AS IsManager,
+  CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsActionable,
   COALESCE(c.TaskTitleSnapshot, t.Title) AS TaskTitle,
   COALESCE(c.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
   COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
@@ -100,8 +104,10 @@ const FIELDS = `c.*, ${IS_MANAGER} AS IsManager,
   decidedBy.DisplayName AS DecisionByName,
   CASE WHEN ${UNREAD} THEN 1 ELSE 0 END AS IsUnread,
   CASE WHEN ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS TaskAvailable`;
-const ORDER = `CASE WHEN ${ACTIONABLE} THEN 0 ELSE 1 END,
+const orderFor = (actionable) => `CASE WHEN ${actionable} THEN 0 ELSE 1 END,
   COALESCE(c.DecidedAt, c.CreatedAt) DESC, c.CoordinationId DESC`;
+const FIELDS = fieldsFor(ACTIONABLE);
+const ORDER = orderFor(ACTIONABLE);
 
 /**
  * Okuma yüzeyinin AKTÖR kapsamı.
@@ -142,13 +148,49 @@ export const COORDINATION_INBOX_SQL = `
   WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE} AND ${VISIBLE} ORDER BY ${ORDER};
 `;
 
-export function mapCoordinationInbox(countRows, itemRows, actorSicil) {
+/**
+ * Yapay zekâ zil okuması: her sayaç kendi nüfusunu ayrı ve sınırlı yoklar
+ * (okunmuş ama kaldırılmamış eski kayıtlar güncel sayıları bilinmez yapmaz);
+ * sayılan kayıtların görevleri son yetki denetimi için döner. Açıklama kapsamı
+ * tabloları çağıranın birleşik deyiminde kurulur.
+ */
+export const COORDINATION_EVIDENCE_INBOX_SQL = `
+  DROP TABLE IF EXISTS #CoordinationUnreadProbe, #CoordinationPendingProbe;
+  SELECT TOP (@evidenceSnapshotLimit + 1) c.TaskId, t.ProjectId AS CurrentProjectId
+  INTO #CoordinationUnreadProbe ${COUNT_SOURCE}
+  WHERE ${PARTICIPANT} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE} AND ${UNREAD};
+  SELECT TOP (@evidenceSnapshotLimit + 1) c.TaskId, t.ProjectId AS CurrentProjectId
+  INTO #CoordinationPendingProbe ${COUNT_SOURCE}
+  WHERE ${PARTICIPANT} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${ACTIONABLE};
+  DECLARE @coordinationUnreadProbe int = (SELECT COUNT(*) FROM #CoordinationUnreadProbe);
+  DECLARE @coordinationPendingProbe int = (SELECT COUNT(*) FROM #CoordinationPendingProbe);
+  SELECT CASE WHEN @coordinationUnreadProbe > @evidenceSnapshotLimit THEN NULL ELSE @coordinationUnreadProbe END AS UnreadCount,
+    CASE WHEN @coordinationPendingProbe > @evidenceSnapshotLimit THEN NULL ELSE @coordinationPendingProbe END AS PendingCount;
+  SELECT TOP (@limit) ${FIELDS} ${SOURCE}
+  WHERE ${PARTICIPANT} AND ${CURRENT_TASK_DISCLOSURE_SQL} AND ${VISIBLE} ORDER BY ${ORDER};
+  SELECT TaskId, CurrentProjectId, CAST(1 AS bit) AS CountsUnread, CAST(0 AS bit) AS CountsPending
+  FROM #CoordinationUnreadProbe WHERE @coordinationUnreadProbe <= @evidenceSnapshotLimit
+  UNION ALL
+  SELECT TaskId, CurrentProjectId, CAST(0 AS bit), CAST(1 AS bit)
+  FROM #CoordinationPendingProbe WHERE @coordinationPendingProbe <= @evidenceSnapshotLimit;
+  DROP TABLE #CoordinationUnreadProbe, #CoordinationPendingProbe;
+`;
+
+export function mapCoordinationInbox(countRows, itemRows, actorSicil, populationRows = null) {
   const counts = countRows?.[0] || {};
+  const evidence = Array.isArray(populationRows);
   return {
     items: (itemRows || []).map((row) => mapCoordination(row, actorSicil)),
-    unreadCount: Number(counts.UnreadCount || 0),
-    pendingCount: Number(counts.PendingCount || 0)
+    unreadCount: evidence && counts.UnreadCount == null ? null : Number(counts.UnreadCount || 0),
+    pendingCount: evidence && counts.PendingCount == null ? null : Number(counts.PendingCount || 0),
+    ...(evidence ? { population: countedTaskPopulation(populationRows) } : {})
   };
+}
+
+/** Kanıt sayaçlarının dayandığı görevler (güncel proje kimliğiyle). */
+export function countedTaskPopulation(rows = []) {
+  return rows.map((row) => ({ taskId: canonicalActualId(row.TaskId), projectId: canonicalActualId(row.CurrentProjectId),
+    unread: Boolean(row.CountsUnread), pending: Boolean(row.CountsPending) })).filter((row) => row.taskId);
 }
 
 export async function readCoordinationInbox(executor, actor) {
@@ -203,14 +245,21 @@ export function normalizeCoordinationQuery(input = {}) {
   return query;
 }
 
-export async function readCoordinationPage(executor, actor, input = {}) {
+export async function readCoordinationPage(executor, actor, input = {}, { decisionAuthority = false, evidenceSnapshotLimit = null, messageSearch = {} } = {}) {
   const query = normalizeCoordinationQuery(input);
+  const participant = decisionAuthority
+    ? `(${PARTICIPANT} OR (${DECISION_AUTHORITY} AND c.Status IN ('PENDING','APPROVED') AND ${TASK_AVAILABLE}))`
+    : PARTICIPANT;
+  const actionable = decisionAuthority ? DECISION_ACTIONABLE : ACTIONABLE;
+  const fields = fieldsFor(actionable);
+  const order = orderFor(actionable);
   const fromUtc = query.from ? activityDateRange({ period: 'custom', from: query.from, to: query.from }).startUtc : null;
   const toUtc = query.to ? activityDateRange({ period: 'custom', from: query.to, to: query.to }).endUtc : null;
   const request = bindCoordinationScope(executor.request(), actor);
   request.input('tab', sql.VarChar(10), query.tab);
-  request.input('pageSize', sql.Int, query.pageSize);
-  request.input('page', sql.Int, query.page);
+  request.input('pageSize', sql.Int, evidenceSnapshotLimit == null ? query.pageSize : evidenceSnapshotLimit + 1);
+  if (evidenceSnapshotLimit != null) request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
+  request.input('page', sql.Int, evidenceSnapshotLimit == null ? query.page : 0);
   request.input('search', sql.NVarChar(200), query.search);
   request.input('requester', sql.NVarChar(100), query.requester);
   request.input('assignee', sql.NVarChar(100), query.assignee);
@@ -221,7 +270,26 @@ export async function readCoordinationPage(executor, actor, input = {}) {
   request.input('fromUtc', sql.DateTime2, fromUtc);
   request.input('toUtc', sql.DateTime2, toUtc);
 
-  const filters = `${PARTICIPANT}
+  if (evidenceSnapshotLimit != null) {
+    bindDisclosureScope(request, actor);
+    // Yapay zekâ okumasında iletiler yalnızca kullanıcının bu turda açtığı alanlarda aranır.
+    request.input('searchRequesterMessage', sql.Bit, messageSearch.requester === true ? 1 : 0);
+    request.input('searchDecisionMessage', sql.Bit, messageSearch.decision === true ? 1 : 0);
+  }
+  const searchCorpus = evidenceSnapshotLimit == null
+    ? `CONCAT(COALESCE(c.TaskTitleSnapshot, t.Title), ' ',
+      COALESCE(c.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(c.ProjectCodeSnapshot, p.ProjectCode), ' ',
+      requester.DisplayName, ' ', COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot), ' ',
+      c.RequesterMessage)`
+    : `CONCAT(COALESCE(c.TaskTitleSnapshot, t.Title), ' ',
+      COALESCE(c.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(c.ProjectCodeSnapshot, p.ProjectCode), ' ',
+      requester.DisplayName, ' ', COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot), ' ',
+      suggested.DisplayName, ' ', decidedBy.DisplayName,
+      CASE WHEN @searchRequesterMessage = 1 THEN CONCAT(' ', c.RequesterMessage) ELSE '' END,
+      CASE WHEN @searchDecisionMessage = 1 THEN CONCAT(' ', c.DecisionMessage) ELSE '' END)`;
+  const historicalParticipant = `(c.RequesterSicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients recipient
+    WHERE recipient.CoordinationId = c.CoordinationId AND recipient.Sicil = @sicil))`;
+  const filters = `${participant}${evidenceSnapshotLimit == null ? '' : ` AND (${CURRENT_TASK_DISCLOSURE_SQL} OR (NOT ${TASK_AVAILABLE} AND ${historicalParticipant}))`}
     AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
     AND (@status IS NULL OR c.Status = @status)
@@ -232,18 +300,40 @@ export async function readCoordinationPage(executor, actor, input = {}) {
     AND (@assignee = '' OR CHARINDEX(@assignee, COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot, '') COLLATE Turkish_100_CI_AI) > 0
       OR CONVERT(varchar(20), c.RequestedAssigneeSicil) = @assignee)
     AND (@organization = '' OR CHARINDEX(@organization, COALESCE(c.AssigneeOrgSnapshot, '') COLLATE Turkish_100_CI_AI) > 0)
-    AND (@search = '' OR CHARINDEX(@search, CONCAT(COALESCE(c.TaskTitleSnapshot, t.Title), ' ',
-      COALESCE(c.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(c.ProjectCodeSnapshot, p.ProjectCode), ' ',
-      requester.DisplayName, ' ', COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot), ' ',
-      c.RequesterMessage) COLLATE Turkish_100_CI_AI) > 0)`;
-  const tabFilter = `(@tab = 'all' OR (@tab = 'pending' AND ${ACTIONABLE})
+    AND (@search = '' OR CHARINDEX(@search, ${searchCorpus} COLLATE Turkish_100_CI_AI) > 0)`;
+  const tabFilter = `(@tab = 'all' OR (@tab = 'pending' AND ${actionable})
     OR (@tab = 'sent' AND c.RequesterSicil = @sicil)
     OR (@tab = 'history' AND (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})))`;
 
-  const result = await request.query(`
+  const evidenceStatement = evidenceSnapshotLimit == null ? null : `
+    ${decisionAuthority ? '/* rota-ai-decision-authority */' : ''}
+    ${DISCLOSURE_SCOPE_SETUP_SQL}
+    DROP TABLE IF EXISTS #CoordinationEvidenceSnapshot;
+    SELECT TOP (@evidenceSnapshotLimit + 1) ${fields}, t.ProjectId AS CurrentProjectId,
+      CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsPending,
+      CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
+      CASE WHEN c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS IsHistory
+    INTO #CoordinationEvidenceSnapshot ${SOURCE} WHERE ${filters} AND ${tabFilter}
+    ORDER BY ${order};
+    DECLARE @total int = (SELECT COUNT(*) FROM #CoordinationEvidenceSnapshot);
+    IF @total > @evidenceSnapshotLimit
+    BEGIN
+      -- Paylaşılan havuz oturumunda geçici tablo kalmaz.
+      DROP TABLE #CoordinationEvidenceSnapshot, #AiDisclosureProjects, #AiDisclosureTasks;
+      THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+    END
+    SELECT @total AS Total, SUM(IsPending) AS PendingCount, SUM(IsSent) AS SentCount, SUM(IsHistory) AS HistoryCount
+    FROM #CoordinationEvidenceSnapshot;
+    SELECT @total AS Total, 0 AS Page;
+    SELECT * FROM #CoordinationEvidenceSnapshot ORDER BY IsPending DESC, COALESCE(DecidedAt, CreatedAt) DESC, CoordinationId DESC;
+    DROP TABLE #CoordinationEvidenceSnapshot;
+    ${DISCLOSURE_SCOPE_CLEANUP_SQL}
+  `;
+  const result = await request.query(evidenceStatement || `
+    ${decisionAuthority ? '/* rota-ai-decision-authority */' : ''}
     WITH coordination_page_counts AS (
       SELECT
-        CASE WHEN ${ACTIONABLE} THEN 1 ELSE 0 END AS IsPending,
+        CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsPending,
         CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
         CASE WHEN (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})
           THEN 1 ELSE 0 END AS IsHistory
@@ -259,8 +349,8 @@ export async function readCoordinationPage(executor, actor, input = {}) {
     DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
     DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
     SELECT @total AS Total, @safePage AS Page;
-    SELECT ${FIELDS} ${SOURCE} WHERE ${filters} AND ${tabFilter}
-    ORDER BY ${ORDER} OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+    SELECT ${fields} ${SOURCE} WHERE ${filters} AND ${tabFilter}
+    ORDER BY ${order} OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
   `);
   const counts = result.recordsets?.[0]?.[0] || {};
   const pagination = result.recordsets?.[1]?.[0] || {};

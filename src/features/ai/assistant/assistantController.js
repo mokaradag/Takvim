@@ -4,10 +4,11 @@ import {
   ASSISTANT_LIMITS,
   ASSISTANT_MODES,
   ASSISTANT_STREAM_EVENTS,
+  ASSISTANT_STREAM_PHASES,
   normalizeAssistantMessage
 } from '../../../domain/ai/assistantContract.js';
 import * as assistantApi from './assistantClient.js';
-import { assistantFailureView, isSessionFailure } from './assistantPresentation.js';
+import { assistantFailureView, effectiveAssistantSource, isSessionFailure } from './assistantPresentation.js';
 
 /**
  * Rota AI'nin durum makinesi — React'ten bağımsız, saf JavaScript.
@@ -106,6 +107,9 @@ function initialState() {
     refreshing: false,
     failure: null,
     mode: ASSISTANT_MODES.STANDARD,
+    source: 'rota',
+    // Kayıtlı serbest metin (açıklama, ileti, değişiklik metni) yalnızca kullanıcı açıkça isterse okunur.
+    includeText: false,
     view: 'chat',
     list: emptyList(),
     active: null,
@@ -141,6 +145,7 @@ export function turnsFromMessages(messages = []) {
           mode: message.mode || null,
           finishReason: message.finishReason || null,
           createdAt: message.createdAt,
+          evidence: Array.isArray(message.evidence) ? message.evidence : null,
           error: null
         };
         turn.contextTrimmed = Boolean(message.contextTrimmed);
@@ -256,12 +261,12 @@ export function createAssistantController({
     }, flushIntervalMs);
   }
 
-  function setPhase(run, phase) {
+  function setPhase(run, phase, topic = null) {
     run.phase = phase;
     update((current) => ({
       ...current,
       running: current.running[run.key]?.token === run.token
-        ? { ...current.running, [run.key]: { ...current.running[run.key], phase } }
+        ? { ...current.running, [run.key]: { ...current.running[run.key], phase, topic } }
         : current.running,
       active: patchTurn(current, run, (turn) => ({ ...turn, answer: { ...turn.answer, status: phase === 'streaming' ? 'streaming' : 'waiting' } }))
     }));
@@ -284,6 +289,21 @@ export function createAssistantController({
   }
 
   function onRunEvent(run, event) {
+    if (alive(run) && event.type === ASSISTANT_STREAM_EVENTS.REVISE) {
+      // Gösterilen taslak geçersiz (araç çağrısına dönüştü ya da doğrulanamadı):
+      // metin kaldırılır, sonraki evre ve metin yeni yanıtın başlangıcıdır.
+      run.text = '';
+      if (run.stopping) {
+        run.stoppedText = '';
+        flushText(run);
+        return;
+      }
+      run.cancelFlush?.();
+      run.cancelFlush = null;
+      setPhase(run, ASSISTANT_STREAM_PHASES.GENERATING);
+      flushText(run);
+      return;
+    }
     if (!alive(run) || (run.stopping && event.type !== ASSISTANT_STREAM_EVENTS.ACCEPTED && event.type !== ASSISTANT_STREAM_EVENTS.DELTA)) return;
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
@@ -305,7 +325,7 @@ export function createAssistantController({
       }));
       if (!run.stopping) setPhase(run, 'accepted');
     } else if (event.type === ASSISTANT_STREAM_EVENTS.STATUS) {
-      if (run.phase !== 'streaming') setPhase(run, event.data.phase);
+      if (run.phase !== 'streaming') setPhase(run, event.data.phase, event.data.topic || null);
     } else if (event.type === ASSISTANT_STREAM_EVENTS.DELTA) {
       run.text += event.data.text;
       if (run.stopping) return;
@@ -337,11 +357,13 @@ export function createAssistantController({
           user: { ...turn.user, pending: false },
           answer: {
             id: assistantMessage.id,
-            content: result.done.reconciled === true ? assistantMessage.content : text.trim(),
+            // Sunucunun kayıtlı metni (uzlaştırma ya da kanıta dayalı yanıt) esastır.
+            content: typeof assistantMessage.content === 'string' ? assistantMessage.content : text.trim(),
             status: 'complete',
             mode: assistantMessage.mode || run.mode,
             finishReason: assistantMessage.finishReason || null,
             createdAt: assistantMessage.createdAt,
+            evidence: Array.isArray(assistantMessage.evidence) ? assistantMessage.evidence : null,
             error: null
           }
         })),
@@ -481,6 +503,7 @@ export function createAssistantController({
               mode: answer.mode || run.mode,
               finishReason: answer.finishReason || null,
               createdAt: answer.createdAt,
+              evidence: Array.isArray(answer.evidence) ? answer.evidence : null,
               error: null
             }
           } : turn))
@@ -510,6 +533,8 @@ export function createAssistantController({
       previousAnswer: existing?.answer?.content ? existing.answer : null,
       content,
       mode: state.mode,
+      source: effectiveAssistantSource(state.readiness, state.mode, state.source),
+      includeText: state.includeText === true,
       controller: new AbortController(),
       text: '',
       phase: 'sending',
@@ -532,6 +557,8 @@ export function createAssistantController({
         }];
       return {
         ...current,
+        // Serbest metin onayı yalnızca bu turundur: gönderimle tüketilir, sonraki tur güvenli varsayılana döner.
+        includeText: false,
         running: setRunning(current, run.key, { token: run.token, turnKey: turnId, phase: 'sending' }),
         reconciling: { ...current.reconciling, [run.key]: undefined },
         active: { ...current.active, turns, recoveredDraft: null, notice: null },
@@ -543,6 +570,8 @@ export function createAssistantController({
       turnId,
       message: content,
       mode: run.mode,
+      ...(run.source === 'general' ? { source: run.source } : {}),
+      ...(run.source === 'rota' && run.includeText ? { includeText: true } : {}),
       expectedSequence: active.messageCount || 0,
       signal: run.controller.signal,
       onEvent: (event) => onRunEvent(run, event)
@@ -607,6 +636,15 @@ export function createAssistantController({
     return true;
   }
 
+  function setSource(source) {
+    if (!['rota', 'general'].includes(source)) return;
+    update((current) => ({ ...current, source, includeText: current.source === source ? current.includeText : false }));
+  }
+
+  function setIncludeText(includeText) {
+    update((current) => ({ ...current, includeText: includeText === true }));
+  }
+
   function setMode(mode) {
     const available = state.readiness?.modes?.find((item) => item.id === mode)?.available;
     if (!available) return false;
@@ -631,7 +669,7 @@ export function createAssistantController({
   function newConversation() {
     if (awaitingAcceptance()) return false;
     cancelViewLoad();
-    update((current) => ({ ...current, view: 'chat', active: draft() }));
+    update((current) => ({ ...current, view: 'chat', includeText: false, active: draft() }));
     return true;
   }
 
@@ -659,6 +697,7 @@ export function createAssistantController({
     update((current) => ({
       ...current,
       view: 'chat',
+      includeText: false,
       active: { key: conversationId, viewKey, id: conversationId, title: known?.title || ASSISTANT_DEFAULT_TITLE, loading: true, failure: null, turns: [] }
     }));
     const load = trackLoad();
@@ -986,6 +1025,8 @@ export function createAssistantController({
     retry,
     stop,
     setMode,
+    setSource,
+    setIncludeText,
     setView,
     newConversation,
     openConversation,

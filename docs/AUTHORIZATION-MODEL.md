@@ -310,3 +310,32 @@ Ekip raporu, yetkili görev/proje kümesi ile `ActorSicil` üzerinden mevcut yö
 ### Self recurrence
 
 `canManageRecurrence` is separate from `canManageStructure`. An authoritative sole assignee who can already create tasks in that project may configure their own task’s recurrence. Hidden/co-assignees deny that narrow permission; all identity checks use Sicil. The SQL transaction checks the full authoritative assignment set, parent/project/WBS/calendar scope, occurrence count and duplicate identity. Existing series rules become immutable after occurrences exist. Client visibility never substitutes for server authorization.
+
+### Rota AI alan araçları (Aşama 3)
+
+Rota AI'nin Rota verisini okuyan 19 salt okunur aracı yeni bir yetki modeli kurmaz; bu belgedeki kuralları yeniden kullanır ([ayrıntı](AI-DOMAIN-TOOLS.md)):
+
+- Kimlik yalnızca oturumun güvenilir Sicil'idir. Araç şemaları kimlik, rol ya da yetki alanı (`sicil`, `currentUserSicil`, `actorSicil`, `isAdmin`, `accessLevel` …) ve SQL parçası taşıyamaz; kayıt defteri böyle bir aracı yüklemez. Kişi süzgeci Sicil'dir ve yalnızca süzgeçtir; ad eşleşmesi hiçbir koşulda kimlik ya da yetki kanıtı sayılmaz.
+- Yetki bağlamı `loadAuthorizationContext` ile her araç kümesinde (model yanıtı başına) yeniden okunur; sabit SQL görünür görev kümesini yetki süzgeçli anlık görüntüyle **aynı** iki daldan kurar (FULL/READ projelerin bütün görevleri + kalan kısmi projelerin yalnızca kişisel kapsamdaki görevleri). Sistem yöneticisi bütün etkin projeleri görür: türetilmiş etkin erişimde her etkin proje `FULL` ve `SYSTEM_ADMIN` gerekçesiyle yer alır; araç kapsamı, proje künyesi ve kanıtın yetki parmak izi bu aynı erişimi kullanır, etkin olmayan ya da var olmayan proje yetkisiz projeyle aynı yanıtı alır. AI için isteğe bağlı kişi kapsamı üyelikleri aynı okumaya eklenir; normal yetki yüklemesi ek SQL çalıştırmaz. Sunucu içi epoch proje/görev/kişi kapsamına ve görev başına oluşturucu/sorumlu/yönetim hakkına bağlıdır. Yeni odaklı kanıtlar ilgili nüfusun parmak izini kullanır; global toplamlar ve eski kanıtlar tam epoch denetimini korur. Son çizim, açma ve tekrar öncesinde atfedilen görevlerin güncel görünürlüğü ve proje üyeliği de sınırlı toplu okumayla doğrulanır; epoch'un değişmemesi bu kontrolü atlatmaz. Model üretimi ile yetki denetimi atomik değildir.
+- Eş sorumlu kimliği, oluşturan künyesi ve iş dağılım kataloğu anlık görüntüdeki kurallarla gösterilir; gizli eş sorumlu kişi olarak sayılmaz ve Sicil'i hiçbir alana çıkmaz. Bağımlılıklar ve baz planlar yalnızca FULL erişimde açıktır.
+- Kısmi kapsam kısmi kalır: toplamlar ve gruplar yalnızca görünür görevler üzerindedir, gizli görevin sayısı ya da varlığı sızmaz; kısmi kapsamlı kanıta atıf yapan her yanıta sunucu kapsam notunu ekler.
+- Toplu bir olgu (sayı, oran, dağılım, grup, "yok" sonucu) yalnızca ona katkı veren **bütün** görevler güncel yetkiyle hâlâ görülebiliyorsa açıklanır. Araç saydığı görev nüfusunu kanıta bağlar; son çizimde, açmada ve tekrarda yüklü satırlar değil nüfusun tamamı sınırlı parçalarla yeniden doğrulanır. Nüfus kalıcı kayda sığmazsa kayıtlı yanıt sonraki açılışlarda doğrulanamaz sayılır ve gösterilmez.
+- Kişi ve proje/görev adı eşleşmesi kimlik değildir: yalnızca tek kesin eşleşme (tek Sicil ya da tam ad/başlık) bir kaydı çözer. Belirsiz ya da kısmi eşleşmenin adaylarını sunucu tutar ve çizer; kullanıcının numaralı seçimi sunucuda kayıtlı aday kimliğine bağlanır, seçilmeyen aday o turda kimlik olamaz.
+- Açıklama, talep/karar iletisi ve değişiklik metni gibi serbest metin yalnızca kullanıcı o iletide **Notlar ve iletiler** onayını verdiyse okunur; onay sonraki iletiye taşınmaz. Sorumlusuzluk süzgeci yalnızca kimliği görünür sorumluları sayar; gizli atama eklemek sonucu değiştirmez.
+- Outlook araç çıktısı görünmeyen aboneliklerin sayısını veya varlık işaretini taşımaz; görünür toplam/dağılım ve tamlık gizli nüfustan etkilenmez. Belirli görev için görünmeyen, olmayan ve aboneliği olmayan kayıt aynı `NOT_FOUND` sonucunu alır.
+- Doğal dil ve alan seçimi modeldedir; yetkili araç yükü, bu tura ait olgu öneki, kayıt yolu, kanonik alan ve türlü değerin eşitliği sunucuda doğrulanır. Serbest model düzyazısı kanıt sayılmaz. Modelin yönlendirme önerisi kanıt zorunluluğunu kapatamaz; veri okumayan Genel sohbet yolunu kullanıcı seçer; eski olgular yeni kanıt yerine geçmez. İlk başarılı araç kümesi güvenilir varlık/süzgeç sınırını kurar; sonraki veri bu sınırı veya metin izdüşümünü genişletemez. Kanonik iddia yolları sunucu sözleşmesidir, modelin seçimi izin listesi değildir.
+- Görünmeyen kayıt, var olmayan kayıtla aynı yanıtı alır (`NOT_FOUND`); bu meşru bitiş doğrulama hatası sayılmaz. Gizli tekrar şablonları açıklanmaz; ortak ebeveyn yalnızca görünür yinelemelerin iç gruplamasında kullanılır; kısmi hareketlerde gizli sorumlu değişimleri tek genel işaret olarak gösterilir.
+- Talepler, atama koordinasyonu, bildirimler ve Görev Hareketleri araçları ilgili ekranların var olan okuma hizmetlerini aynı yetkiyle çağırır; ekip hareketleri yalnızca yöneticilere açıktır. Hiçbir araç bildirimi okundu işaretlemez ve hiçbir araç yazma yapmaz.
+
+Kalıcı Rota yanıtı için konuşma sahipliği yeterli değildir. Yanıtla saklanan yetki hash’i açma, tekrar ve uzlaştırma sırasında güncel yetkiyle eşleşmelidir; yoksa metin, atıflar ve özetler birlikte varlık/yetki ayrımı yapmayan iletiye döner. Görev görünür kalsa bile oluşturucu hakkının kalkması önceki kimlik kanıtını geçersiz yapar. Güncel yetki okunamazsa açıklama yapılmaz. Talepler/atama/bildirim AI okumaları katılımcılık kuralına ayrıca güncel etkin görev görünürlüğünü uygular; gizli satırlar sayaçlara girmez. Normal okuma yolları bu AI davranışına açık seçenek verilmedikçe değişmez.
+
+AI kanıtlarında görünür atama kimliği ile gerçek atama varlığı ayrıdır. Kimliği
+gizli sorumlu, sorumlusuz görev veya boş grup olarak sayılmaz. Çözülemeyen
+atama ayrı kalite durumudur. Sistem yöneticisi AI okumalarında proje/görev
+listesi yüklemez; etkinlik ve FULL yetki SQL koşullarıyla denetlenir. Kalıcı
+kanıt, sayılan görevlerin ve boş projeler dahil proje nüfusunun güncel yetkisini
+parçalı olarak yeniden doğrular; konuşma genelinde 160 000 görev eşiği yoktur.
+İlk kimlik yalnızca güncel kullanıcı isteği, kesin ad çözümü veya sunucunun
+numaralı açıklama seçiminden gelir; veri metni ve model kimliği yetki değildir.
+Silinmiş/arşivlenmiş görevlerde talepler ve koordinasyon geçmişi gerçek kayıtlı
+katılımcılara açıktır; canlı görev yetkisi bu tarihi katılımın yerine geçmez.

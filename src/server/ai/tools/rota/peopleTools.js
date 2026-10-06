@@ -1,0 +1,199 @@
+import 'server-only';
+import { parseSicil } from '../../../identity/sicil.js';
+import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
+import { MIN_DIRECTORY_QUERY_LENGTH, searchCorporateDirectory } from '../../../directory/directorySearch.js';
+import { invalidArguments } from '../toolErrors.js';
+import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
+import { loadFilteredFacts } from './taskTools.js';
+import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
+import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
+
+/* ── rota_workload_summary ────────────────────────────────── */
+
+const WORKLOAD_NOTE = 'Rota kişi kapasitesi ya da çalışma saati müsaitliği tutmaz: bu sayılar görev dağılımıdır, aşırı yük ya da verimlilik değerlendirmesi değildir.';
+
+const workloadSummary = {
+  name: 'rota_workload_summary',
+  version: 1,
+  topic: 'workload',
+  evidenceKind: 'workload',
+  authorization: 'Yalnızca görünür AÇIK görevler; kişiye atıf yalnızca kimliği kullanıcıya açık sorumluluklarla yapılır (gizli eş sorumlular kişi olarak sayılmaz).',
+  description: 'Açık görevlerin kişilere dağılımı: kişi başına açık, devam eden, gecikmiş ve 7 gün içinde terminli görev sayısı ile atandığı görevlerin planlanan saat toplamı. Bu saat task düzeyindedir, kişi-saat tahsisi değildir. "Kimde kaç iş var", "en yoğun kişi kim" gibi sorularda kullanın. Kapasite ya da aşırı yük yargısı üretmez.',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      projectId: ID_PROPERTY('Yalnızca bu proje.'),
+      personSicil: PERSON_SICIL_PROPERTY,
+      limit: LIMIT_PROPERTY(25, 10)
+    }
+  },
+  async handler(args, call) {
+    const limit = args.limit ?? 10;
+    const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil });
+    const { scope } = await call.authorization();
+    const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
+    const people = new Map();
+    const hoursByPerson = new Map();
+    let unassigned = 0;
+    for (const fact of facts) {
+      if (assignmentState(fact) === 'unassigned') {
+        unassigned += 1;
+        continue;
+      }
+      const visible = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
+      if (!visible.length) continue;
+      for (const person of visible) {
+        if (args.personSicil != null && person.sicil !== args.personSicil) continue;
+        if (!people.has(person.sicil)) {
+          people.set(person.sicil, {
+            sicil: person.sicil,
+            name: dataText(person.name || 'Seçilen kişi', 120),
+            openTasks: 0,
+            inProgress: 0,
+            overdue: 0,
+            dueNext7Days: 0,
+            plannedHoursOnAssignedTasks: null,
+            tasksWithPlannedHours: 0
+          });
+        }
+        const entry = people.get(person.sicil);
+        entry.openTasks += 1;
+        if (fact.status === 'in_progress') entry.inProgress += 1;
+        if (isOverdue(fact, call.today)) entry.overdue += 1;
+        if (isDueWithin(fact, call.today, DUE_SOON_DAYS)) entry.dueNext7Days += 1;
+        if (fact.plannedHours != null) {
+          hoursByPerson.set(person.sicil, (hoursByPerson.get(person.sicil) ?? 0n) + scaledDecimal(fact.plannedHours, 2));
+          entry.tasksWithPlannedHours += 1;
+        }
+      }
+    }
+    for (const [sicil, hours] of hoursByPerson) people.get(sicil).plannedHoursOnAssignedTasks = decimalFromScaled(hours, 2);
+    const ordered = [...people.values()].sort((left, right) => right.openTasks - left.openTasks
+      || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr') || left.sicil - right.sicil);
+    const page = ordered.slice(0, limit);
+    const descriptor = searchedScope(scope, filters.projectId);
+    // Sayıların nüfusunu belirleyen seçiciler olgunun niteleyicisidir (proje ve kişi adıyla).
+    const projectName = filters.project || null;
+    const personName = filters.person || null;
+    return {
+      ...(page.length < ordered.length ? { rankingBoundary: {
+        collection: 'people', metric: 'tasks.open', order: 'desc', returnedCount: page.length, nextValue: ordered[page.length].openTasks
+      } } : {}),
+      data: {
+        filters: {
+          ...(filters.projectId ? { projectId: filters.projectId, ...(projectName ? { project: projectName } : {}) } : {}),
+          ...(args.personSicil != null ? { personSicil: args.personSicil, ...(personName ? { person: dataText(personName, 120) } : {}) } : {})
+        },
+        openTaskCount: facts.length,
+        people: page,
+        unassignedOpenTasks: unassigned,
+        notes: [
+          WORKLOAD_NOTE,
+          'Birden çok sorumlusu olan görev her sorumluda ayrı sayılır.',
+          'plannedHoursOnAssignedTasks, kişinin atandığı görevlerin task düzeyindeki planlanan saat toplamıdır; kişi-saat tahsisi değildir. Yalnızca değeri girilmiş görevler (tasksWithPlannedHours) toplanır; boş değer sıfır sayılmaz.'
+        ]
+      },
+      scope: descriptor,
+      complete: page.length === ordered.length,
+      truncated: page.length < ordered.length,
+      returnedCount: page.length,
+      totalCount: ordered.length,
+      nextCursor: null,
+      evidence: {
+        label: `İş yükü dağılımı · ${ordered.length} kişi`,
+        entity: args.projectId ? { type: 'project', id: args.projectId, name: projectName } : null,
+        highlights: page.slice(0, 3).map((person) => `${person.name}: ${person.openTasks} açık`)
+      }
+    };
+  }
+};
+
+/* ── rota_person_search ───────────────────────────────────── */
+
+const personSearch = {
+  name: 'rota_person_search',
+  version: 1,
+  topic: 'people',
+  evidenceKind: 'people',
+  authorization: 'Rota\'nın mevcut sınırlı kurumsal personel araması (ad için en az 2 karakter, Sicil için geçerli pozitif SQL int, en fazla 25 satır, oturum başına hız sınırı). Kimlik Sicil\'dir; ad eşleşmesi kimlik ya da yetki kanıtı değildir.',
+  description: 'Kişiyi adı ya da Sicil\'i ile kurumsal personel dizininde arar ve Sicil\'ini çözer (görev/iş yükü süzgeçleri için). Aynı adlı birden çok kişi dönebilir: bu durumda tahmin etmeyin, kullanıcıya birimini sorun.',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['text'],
+    properties: {
+      text: { type: 'string', minLength: 1, maxLength: 80, description: 'Ad-soyad parçası ya da Sicil.' },
+      limit: LIMIT_PROPERTY(25, 10)
+    }
+  },
+  async handler(args, call) {
+    const limit = args.limit ?? 10;
+    const query = String(args.text).trim();
+    const sicilQuery = parseSicil(query);
+    // Dizin kuralı SQL kapısından önce uygulanır: model düzeltebileceği bir bağımsız değişken hatası alır.
+    if (query.length < MIN_DIRECTORY_QUERY_LENGTH && sicilQuery == null) throw invalidArguments(['$.text:minLength']);
+    const result = await call.sql((executor) => searchCorporateDirectory(
+      { query: args.text },
+      executor,
+      { rateScope: 'ai', includeHasMore: true }
+    ));
+    const people = result.items.map((person) => ({
+      sicil: Number(person.sicil),
+      name: dataText(person.name === String(person.sicil) ? 'Adı belirtilmemiş kişi' : person.name, 120),
+      ...(person.jobTitle ? { jobTitle: dataText(person.jobTitle, 120) } : {}),
+      organization: {
+        directorate: person.organization?.directorate ? dataText(person.organization.directorate, 120) : null,
+        department: person.organization?.department ? dataText(person.organization.department, 120) : null,
+        unit: person.organization?.unit ? dataText(person.organization.unit, 120) : null
+      }
+    }));
+    const byName = new Map();
+    for (const person of people) {
+      const key = foldText(person.name);
+      byName.set(key, (byName.get(key) || 0) + 1);
+    }
+    const sameName = [...byName.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+    const directoryCapped = result.hasMore === true;
+    const page = people.slice(0, limit);
+    // Kimlik Sicil'dir: yalnızca tek kesin Sicil ya da tam ad eşleşmesi kişiyi
+    // çözer. Sınırlı dizin sonucunun son satırındaki tek kesin eşleşme, aynı adlı
+    // bir sonraki satırı dışarıda bırakmış olabileceğinden çözüm sayılmaz.
+    const needle = foldText(query).trim();
+    const exactIndexes = people.flatMap((person, index) => ((sicilQuery != null && person.sicil === sicilQuery) || foldText(person.name).trim() === needle ? [index] : []));
+    const uniqueExact = exactIndexes.length === 1 && !(directoryCapped && exactIndexes[0] === people.length - 1);
+    const resolution = uniqueExact ? 'unique' : exactIndexes.length > 1 || people.length > 1 || directoryCapped ? (people.length ? 'ambiguous' : 'none')
+      : people.length === 1 ? 'partial' : 'none';
+    const pool = resolution === 'ambiguous' && exactIndexes.length > 1 ? exactIndexes.map((index) => people[index]) : ['ambiguous', 'partial'].includes(resolution) ? people : [];
+    const candidates = pool.slice(0, CLARIFICATION_LIMITS.maxCandidates);
+    const resolved = uniqueExact ? people[exactIndexes[0]] : null;
+    return {
+      data: {
+        filters: { text: args.text },
+        people: page,
+        ambiguous: resolution === 'ambiguous',
+        resolution,
+        ...(resolved ? { resolvedPerson: { sicil: resolved.sicil, name: resolved.name } } : {}),
+        ...(candidates.length ? { candidates, ...(pool.length > candidates.length || directoryCapped ? { candidatesTruncated: true } : {}) } : {}),
+        sameNameCount: sameName.length,
+        guidance: resolution === 'ambiguous'
+          ? 'Birden çok kişi eşleşti. Kişi yalnızca Sicil ile ayrılır; {"kind":"clarification","evidence":"<kanıt>"} ile kullanıcıya sorun, adayları sunucu gösterir.'
+          : resolution === 'partial' ? 'Arama metni yalnızca bir kişinin adına kısmen uyuyor; kişi kesin olarak belirlenmedi. Kişiye özel araç gerekiyorsa {"kind":"clarification","evidence":"<kanıt>"} ile onay isteyin.'
+            : (people.length === 0 ? 'Eşleşen kişi bulunamadı.' : null)
+      },
+      scope: { kind: 'directory', completeProjectView: false, note: `Dizin araması en fazla ${result.limit} satır döndürür.` },
+      complete: !directoryCapped && page.length === people.length,
+      truncated: directoryCapped || page.length < people.length,
+      returnedCount: page.length,
+      totalCount: directoryCapped ? null : people.length,
+      nextCursor: null,
+      evidence: {
+        label: directoryCapped ? `Personel araması · en az ${people.length} kişi` : `Personel araması · ${people.length} kişi`,
+        entity: null,
+        highlights: page.slice(0, 3).map((person) => person.name)
+      }
+    };
+  }
+};
+
+export const PEOPLE_TOOLS = Object.freeze([workloadSummary, personSearch]);

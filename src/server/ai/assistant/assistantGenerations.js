@@ -1,5 +1,6 @@
 import 'server-only';
 import { ServerPersistenceError } from '../../errors.js';
+import { raceWithAbort } from '../aiDeadline.js';
 
 /**
  * Konuşma başına TEK etkin yanıt üretimi (süreç içi).
@@ -8,6 +9,9 @@ import { ServerPersistenceError } from '../../errors.js';
  * başlatılamaz: iki denetimsiz üretim aynı geçmişe karşı yarışmaz. Farklı
  * konuşmalar ve farklı kullanıcılar Phase 1 kapasite sınırları içinde birlikte
  * yürür.
+ *
+ * Aynı turun geçerli yeniden gönderimi etkin üretimin ve yazımın bitmesini
+ * bekler. Yeniden gönderim tek başına iptal yetkisi vermez.
  *
  * Anahtarlar Sicil içerir: başka bir kullanıcının konuşma kimliğini bilen
  * çağıran, o konuşmada üretim sürüp sürmediğini (ve konuşmanın varlığını) bu
@@ -42,20 +46,35 @@ function generationInProgress() {
  * taşımadığı için tur kimliğiyle alınır; konuşma açılınca `bindConversation`
  * ile konuşmaya da bağlanır. Hak her yolda `release()` ile bırakılmalıdır.
  */
-export function claimAssistantGeneration({ sicil, conversationId = null, turnId }) {
+export async function claimAssistantGeneration({ sicil, conversationId = null, turnId, content = null, signal }) {
   const current = registry();
-  const firstKey = conversationId ? conversationKey(sicil, conversationId) : turnKey(sicil, turnId);
-  if (current.has(firstKey)) throw generationInProgress();
+  const keys = [turnKey(sicil, turnId), ...(conversationId ? [conversationKey(sicil, conversationId)] : [])];
+  for (;;) {
+    const owner = keys.map((key) => current.get(key)).find(Boolean);
+    if (!owner) break;
+    if (owner.turnId !== turnId) throw generationInProgress();
+    if ((content != null && content !== owner.content) || (conversationId && owner.conversationId && conversationId !== owner.conversationId)) throw new ServerPersistenceError('CONFLICT',
+      'Bu ileti kimliği farklı bir içerikle kullanılmış. Sayfayı yenileyip yeniden gönderin.', { details: { reason: 'TURN_ID_REUSED' } });
+    await raceWithAbort(() => owner.finished, signal);
+    if (!conversationId && owner.conversationId) {
+      conversationId = owner.conversationId;
+      keys.push(conversationKey(sicil, conversationId));
+    }
+  }
+  if (signal.aborted) throw signal.reason;
   const controller = new AbortController();
-  const entry = { controller, keys: [firstKey] };
-  current.set(firstKey, entry);
+  let finish;
+  const finished = new Promise((resolve) => { finish = resolve; });
+  const entry = { controller, turnId, content, conversationId, keys, finished };
+  for (const key of keys) current.set(key, entry);
   return {
+    conversationId,
     signal: controller.signal,
     bindConversation(id) {
+      entry.conversationId = id;
       const key = conversationKey(sicil, id);
-      const owner = current.get(key);
-      if (owner === entry) return;
-      if (owner) throw generationInProgress();
+      if (current.get(key) === entry) return;
+      if (current.has(key)) throw generationInProgress();
       current.set(key, entry);
       entry.keys.push(key);
     },
@@ -63,6 +82,7 @@ export function claimAssistantGeneration({ sicil, conversationId = null, turnId 
       for (const key of entry.keys) {
         if (current.get(key) === entry) current.delete(key);
       }
+      finish();
     }
   };
 }

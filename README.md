@@ -163,7 +163,7 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 ## Veritabanı kurulumu
 
 1. Hedef veritabanının yedeğini alın.
-2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql`, `database/MR_Upgrade_0014_Task_Creator_Index.sql`, `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql`, `database/MR_Upgrade_0016_Ai_User_Credentials.sql` ve `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
+2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql`, `database/MR_Upgrade_0014_Task_Creator_Index.sql`, `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql`, `database/MR_Upgrade_0016_Ai_User_Credentials.sql`, `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` ve `database/MR_Upgrade_0018_Ai_Message_Evidence.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
 3. `.env.example` içindeki server-only SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
 4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
 5. Outlook teslimatı, elle/otomatik hatırlatma veya atama e-postası (**Sorumlulara e-posta bildirimi gönder**) kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/TASK-REMINDERS.md`, `docs/OUTLOOK-CALENDAR.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
@@ -296,7 +296,7 @@ ana makine/şema bilgisini iletmemesiydi; `Host`, `X-Forwarded-Host` ve
 
 ### Rota AI (Aşama 2)
 
-Üst çubuktaki **Rota AI** düğmesi (ya da Ctrl K → *Rota AI'ye sor*) uygulamanın her yerinden açılan yardımcı paneli getirir. Yanıtlar kurum içi modelden sunucu üzerinden tarayıcıya **akarak** gelir; **Durdur**, yeniden deneme, *Standart* ve *Derin düşünme* kipleri, kopyalama ve güvenli biçimli (Markdown) yanıt desteklenir. Konuşmalar Sicil'e aittir ve kalıcıdır (`MR_AiConversations`, `MR_AiConversationMessages`, göç `0017`); başka bir kullanıcı ne listeleyebilir ne açabilir. Rota AI bu aşamada Rota verisine erişmez ve işlem yapmaz; Demo Kipinde istek göndermez. Her istek Aşama 1'in aynı ağ geçidi, anahtar, kapasite ve süre sınırı kurallarıyla yürür. Ters vekilde akışın ara belleğe alınmaması ve özgün ana makine/şemanın iletilmesi gerekir (`docs/NGINX-ROTA-PREFIX.md`). Mimari, akış protokolü, kalıcılık, iptal ve yeniden deneme kuralları ile elle kabul listesi: `docs/AI-PLATFORM.md` §18.
+Üst çubuktaki **Bilgin** düğmesi (ya da Ctrl K → *Bilgin’e sor*) uygulamanın her yerinden açılan yardımcı paneli getirir; yardımcının arayüzdeki adı Bilgin'dir, yapılandırma ve kod adları (`MERGEN_ROTA_AI_*`, Rota AI) değişmez. `MERGEN_ROTA_AI_ENABLED` açık değilse düğme, panel ve komut paleti girdisi hiç gösterilmez (değer her sayfa isteğinde sunucu ortamından okunur; `next start` ile çalışan sunucuda `.env.local` değişikliği yeniden başlatmayla geçerli olur). Yanıtlar kurum içi modelden sunucu üzerinden tarayıcıya **akarak** gelir; **Durdur**, yeniden deneme, *Standart* ve *Derin düşünme* kipleri, kopyalama ve güvenli biçimli (Markdown) yanıt desteklenir. Konuşmalar Sicil'e aittir ve kalıcıdır (`MR_AiConversations`, `MR_AiConversationMessages`, göç `0017`); başka bir kullanıcı ne listeleyebilir ne açabilir. Rota AI bu aşamada Rota verisine erişmez ve işlem yapmaz; Demo Kipinde istek göndermez. Her istek Aşama 1'in aynı ağ geçidi, anahtar, kapasite ve süre sınırı kurallarıyla yürür. Ters vekilde akışın ara belleğe alınmaması ve özgün ana makine/şemanın iletilmesi gerekir (`docs/NGINX-ROTA-PREFIX.md`). Mimari, akış protokolü, kalıcılık, iptal ve yeniden deneme kuralları ile elle kabul listesi: `docs/AI-PLATFORM.md` §18.
 
 **Aşama 2 gerçek TEST ortamı kabulü (29.09.2026):** PR #92 birleştirildikten sonra
 Rota AI, gerçek TEST ortamında kullanıcı kabul sınamalarından geçti. Gerçek
@@ -311,6 +311,41 @@ telemetriye sızmadığı da kabul kapsamında doğrulandı. Kullanıcı kabulü
 yanıtların hızlı, arayüzün temiz ve kararlı çalıştığı gözlendi. Aşama 2 bu
 kabul ile dondurulmuş temel kabul edilir; Aşama 3 çalışmaları bu tabanın üzerine
 eklemeli ilerlemelidir.
+
+### Rota AI: kanıta dayalı Rota verisi (Aşama 3)
+
+`MERGEN_ROTA_AI_TOOLS_ENABLED=true` (varsayılan `false`) iken Rota AI görevler,
+projeler, iş dağılım ağacı, iş yükü, hareketler, talepler, bildirimler, baz plan,
+bağımlılıklar, tekrar serileri, takvim, Outlook durumu ve plan veri kalitesi
+hakkındaki soruları sunucunun **19 salt okunur alan aracıyla**, kullanıcının
+kendi yetkisi içinde yanıtlar. Genel bir SQL aracı yoktur; model SQL üretemez,
+kimlik ya da yetki bilgisi veremez. Model veri okumadan önce sorunun türlü
+isteğini (işlem, ölçüler, varlıklar, koşullar) bildirir; sunucu Türkçe ya da
+İngilizce cümleyi anahtar sözcükle yorumlamaz, yanıtı bu isteğe ve kanıta
+belirlenimci olarak bağlar (doğal dil anlamsal çıkarımı Aşama 4'ün işidir).
+Model yalnızca kanıttaki olguları seçer;
+değerleri sunucu kendi yetkili verisinden okur, doğrular ve paragraf, liste ya
+da tablo olarak çizer; Rota verisine dayanan her ifade `【R1】` biçiminde kanıta
+atıf yapar. Standart kipte kurtarılabilir bir model hatası aynı kanıtla bir kez
+*Derin düşünme*ye devredilir; doğrulanamayan yanıt yerine sabit güvenli ileti
+gösterilir. Kayıtlı açıklama ve ileti metinleri yalnızca kullanıcı o iletide
+**Notlar ve iletiler** anahtarını açtıysa okunur. Yanıtın altında
+"N Rota kaynağı · Veri zamanı" paneli bulunur; atıf yapılan kanıtlar yanıtla
+birlikte kaydedilir (`MR_AiMessageEvidence`, göç `0018`). Kısmi yetkide sayılar
+yalnızca görülebilen kayıtları kapsar ve yanıt bunu belirtir. Kaynak seçimi **Rota verisi** (varsayılan) ve **Genel sohbet** olarak açıktır;
+modelin genel niyet önerisi kanıt denetimini kapatamaz. Veri hizmeti hazır
+değilse sabit kullanılamıyor yanıtı gösterilir; Genel sohbet kullanıcı seçimiyle
+veri okumayan akışı açar. Kalıcı yanıt/kanıt açma ve tekrar sırasında güncel
+yetkiyle doğrulanır; kaldırılmış yetkinin metni ve kaynakları gösterilmez.
+Özellik kapalıyken Rota AI Aşama 2 gibi genel sohbetle çalışır. Araç
+kataloğu, yetki, kanıt sözleşmesi, sınırlar, belirlenimci tanımlar, dağıtım
+sırası ve elle kabul listesi: `docs/AI-DOMAIN-TOOLS.md`.
+
+Araç yolu veri öncesi açık tur yönlendirmesi, güvenilir varlık/süzgeç sınırı ve
+sunucuya ait kanonik iddia sözleşmesi kullanır. Kanıt yetki epoch’una bağlıdır;
+son çizimden önce erişim yeniden okunur. Aday seçimi, bulunamadı ve hizmet
+kullanılamıyor meşru ayrı sonuçlardır. Araç profilleri varsayılan 4096 / 8192
+çıktı tokenı kullanır; dağıtılan dış model kaydı da güncellenmelidir.
 
 ## Kurum dışı görev atama ve Atama Koordinasyonu
 
@@ -532,6 +567,7 @@ kullanılır; kişi dizini ve yetki kapsamı genişletilmez.
 Canonical Task; güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`) ve gerçekleşen tarihleri (`actualStart`, `actualFinish`) ayrı tutar. `remainingDurationDays` gelecekteki ilerleme duyarlı planlama için nullable uyumluluk alanı olarak korunur; mevcut arayüz ve planlama motoru bu alanı kullanmaz. Project `dataDate` taşır. Baseline verisi ayrı immutable `Baseline` ve `TaskBaselineSnapshot` kayıtlarıdır; normal Task/WBS değişiklikleri eski baseline'ları değiştirmez.
 
 CPM erken/geç tarihler, float, kritik bayraklar, WBS rollup'ları ve Dashboard aggregate'ları SQL'e yazılmaz. Bunlar yalnızca tam Project ağı için türetilir.
+
 
 ### Çalışma günü hesapları SONLANIR
 

@@ -2,6 +2,7 @@ import 'server-only';
 import { getSqlPool, sql } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
+import { parseSicil } from '../identity/sicil.js';
 
 /**
  * Kurum dışı personel arama.
@@ -40,14 +41,15 @@ function rateBuckets() {
  * Bellekte tutulur ve sınırlıdır: yalnızca penceresi açık Siciller saklanır,
  * her çağrıda süresi geçmiş kayıtlar düşer. Telemetri satırı üretmez.
  */
-function assertSearchRate(sicil, now = Date.now()) {
+function assertSearchRate(sicil, now = Date.now(), scope = 'interactive') {
   const buckets = rateBuckets();
+  const bucketKey = `${scope}:${sicil}`;
   for (const [key, bucket] of buckets) {
     if (now - bucket.startedAt >= RATE_WINDOW_MS) buckets.delete(key);
   }
-  const current = buckets.get(sicil);
+  const current = buckets.get(bucketKey);
   if (!current) {
-    buckets.set(sicil, { startedAt: now, count: 1 });
+    buckets.set(bucketKey, { startedAt: now, count: 1 });
     return;
   }
   current.count += 1;
@@ -89,9 +91,9 @@ function directoryPerson(row) {
  * kalan satırlar ad eşleşmesidir. Arama Türkçe harf duyarsız harmanlamayla
  * yapılır ve `MR_V_PeopleDirectory` dizininden okunur.
  */
-export async function searchCorporateDirectory(input = {}, executor = null) {
+export async function searchCorporateDirectory(input = {}, executor = null, { rateScope = 'interactive', includeHasMore = false } = {}) {
   const query = normalizeQuery(input.query ?? input.q);
-  if (query.length < MIN_DIRECTORY_QUERY_LENGTH) {
+  if (query.length < MIN_DIRECTORY_QUERY_LENGTH && parseSicil(query) == null) {
     throw new ServerPersistenceError(
       'MUTATION_FAILED',
       `Personel araması için en az ${MIN_DIRECTORY_QUERY_LENGTH} karakter yazılmalıdır.`,
@@ -102,7 +104,7 @@ export async function searchCorporateDirectory(input = {}, executor = null) {
   // Bu uç yalnızca güvenilir Sicil'e ihtiyaç duyar; tam proje/görev yetki
   // bağlamını yüklemek her tuş aramasında gereksiz ve pahalıdır.
   const sicil = await getTrustedCurrentSicil();
-  assertSearchRate(sicil);
+  assertSearchRate(sicil, Date.now(), rateScope === 'ai' ? 'ai' : 'interactive');
   const pool = executor || await getSqlPool();
 
   // Tam yetki bağlamının koruduğu kimlik değişmezini ucuz bir varlık sorgusuyla
@@ -118,11 +120,12 @@ export async function searchCorporateDirectory(input = {}, executor = null) {
     throw new ServerPersistenceError('UNAUTHORIZED', 'Yapılandırılmış Sicil kurumsal personel kaynağında bulunamadı.');
   }
 
-  const numeric = /^\d{1,9}$/.test(query) ? Number(query) : null;
+  const numeric = parseSicil(query);
   const request = pool.request();
   request.input('query', sql.NVarChar(80), query);
   request.input('sicilQuery', sql.Int, numeric);
-  request.input('limit', sql.Int, DIRECTORY_SEARCH_LIMIT);
+  const fetchLimit = includeHasMore ? DIRECTORY_SEARCH_LIMIT + 1 : DIRECTORY_SEARCH_LIMIT;
+  request.input('limit', sql.Int, fetchLimit);
   const result = await request.query(`
     SELECT TOP (@limit) pd.Sicil, pd.DisplayName, pd.JobTitle,
       pd.Directorate, pd.Department, pd.Unit,
@@ -133,9 +136,12 @@ export async function searchCorporateDirectory(input = {}, executor = null) {
     ORDER BY MatchRank, pd.DisplayName, pd.Sicil;
   `);
 
+  const rows = result.recordset || [];
+  const hasMore = includeHasMore && rows.length > DIRECTORY_SEARCH_LIMIT;
   return {
     query,
     limit: DIRECTORY_SEARCH_LIMIT,
-    items: (result.recordset || []).map(directoryPerson)
+    items: rows.slice(0, DIRECTORY_SEARCH_LIMIT).map(directoryPerson),
+    ...(includeHasMore ? { hasMore } : {})
   };
 }

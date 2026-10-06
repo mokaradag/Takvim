@@ -3,7 +3,8 @@ import { AI_ERROR_CODES, aiErrorDefinition, isAiErrorCode } from '../../../domai
 import {
   ASSISTANT_PROTOCOL_HEADER,
   ASSISTANT_PROTOCOL_VERSION,
-  ASSISTANT_STREAM_EVENTS
+  ASSISTANT_STREAM_EVENTS,
+  ASSISTANT_TOOL_TOPICS
 } from '../../../domain/ai/assistantContract.js';
 import { ServerPersistenceError } from '../../errors.js';
 import { recordAssistantTurn } from '../aiTelemetry.js';
@@ -14,10 +15,12 @@ import { generateAssistantAnswer } from './assistantService.js';
  *
  * Biçim Server-Sent Events'tir ve `fetch` ile okunur (POST gövdesi gerektiği
  * için `EventSource` kullanılmaz). Olaylar: `accepted` (istek kabul edildi,
- * kullanıcı iletisi kaydedildi), `status` (gerçek evre geçişi), `delta` (görünür
- * yanıt metni), `done` (yanıt tamamlandı VE kaydedildi) ya da `error`. Her akış
- * tam olarak bir sonlandırıcı olayla biter. Sağlayıcının tel biçimi, model adı,
- * anahtar, adres ve akıl yürütme metni hiçbir olayda bulunmaz.
+ * kullanıcı iletisi kaydedildi), `status` (gerçek evre geçişi; Rota verisi
+ * okunurken yalnızca veri alanı konusu), `delta` (görünür yanıt metni), `revise`
+ * (o ana kadar gösterilen taslak geçersiz; kanıta dayalı yol), `done` (yanıt
+ * tamamlandı VE kaydedildi) ya da `error`. Her akış tam olarak bir sonlandırıcı
+ * olayla biter. Sağlayıcının tel biçimi, model adı, anahtar, adres, araç adı,
+ * araç bağımsız değişkeni, SQL ve akıl yürütme metni hiçbir olayda bulunmaz.
  *
  * Geri basınç: kuyruk doluysa (yavaş istemci) sonraki metin parçası kuyrukta
  * yer açılana kadar bekletilir; bu bekleme ağ geçidinin süre sınırına bağlıdır.
@@ -52,7 +55,9 @@ function messageView(message, { includeContent = true } = {}) {
     mode: message.mode,
     finishReason: message.finishReason,
     createdAt: message.createdAt,
-    length: message.content.length
+    length: message.content.length,
+    // Kanıta dayalı yanıtın kanıt özetleri (yalnızca güvenli künye; bkz. evidenceContract).
+    ...(Array.isArray(message.evidence) ? { evidence: message.evidence } : {})
   };
   return includeContent ? { ...view, content: message.content } : view;
 }
@@ -71,6 +76,8 @@ export function assistantStreamErrorPayload(error, { partial = false } = {}) {
     message = error.message;
     details = error.details || {};
     retryable = isAiErrorCode(code) ? aiErrorDefinition(code).retryable : RETRYABLE_SERVER_CODES.has(code);
+    // Boş yanıt modelin rastlantısal sonucudur; tur kaydedilmediği için soru yeniden sorulabilir.
+    if (code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID && details.reason === 'EMPTY_COMPLETION' && !partial) retryable = true;
   } else {
     // Beklenmeyen hata burada yalnızca güvenli kullanıcı sonucuna çevrilir.
     // İşletim günlüğünü recordAssistantTurn tek kez yazar.
@@ -97,7 +104,9 @@ function acceptedPayload(turn) {
     userMessage: messageView(turn.userMessage),
     mode: turn.mode,
     replay: Boolean(turn.replay),
-    context: turn.context
+    context: turn.context,
+    // Tur yetkili Rota verisi araçlarıyla yanıtlanıyor (kanıta dayalı yol).
+    ...(turn.grounded ? { rotaData: true } : {})
   };
 }
 
@@ -171,15 +180,22 @@ export function assistantStreamResponse(turn, {
       }
       const result = await generate(turn, {
         signal: generationSignal,
-        onStatus: (status) => send(ASSISTANT_STREAM_EVENTS.STATUS, { phase: status.phase }),
+        onStatus: (status) => send(ASSISTANT_STREAM_EVENTS.STATUS, {
+          phase: status.phase,
+          ...(ASSISTANT_TOOL_TOPICS.includes(status.topic) ? { topic: status.topic } : {})
+        }),
         onText: async (text) => {
           // Yanıt yalnızca metin gerçekten kuyruğa girdiyse "kısmi" sayılır.
           if (await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text })) textSent = true;
+        },
+        // Gösterilen taslak geçersizleşti (araç çağrısına dönüştü ya da doğrulanamadı).
+        onRevise: () => {
+          if (send(ASSISTANT_STREAM_EVENTS.REVISE, {})) textSent = false;
         }
       });
       send(ASSISTANT_STREAM_EVENTS.DONE, {
         conversation: result.conversation,
-        assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true }),
+        assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true || result.contentAuthoritative === true }),
         ...(result.reconciled ? { reconciled: true } : {}),
         replayed: false
       });

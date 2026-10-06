@@ -4,6 +4,16 @@ export const TASK_STATUSES = Object.freeze({
   DONE: 'done'
 });
 
+export const PERSISTED_TASK_STATUSES = Object.freeze({
+  planned: 'todo', 'not-started': 'todo', todo: 'todo',
+  'in-progress': 'in_progress', in_progress: 'in_progress', blocked: 'in_progress',
+  done: 'done', completed: 'done', cancelled: 'done'
+});
+
+export function normalizeTaskStatus(value) {
+  return Object.hasOwn(PERSISTED_TASK_STATUSES, value) ? PERSISTED_TASK_STATUSES[value] : 'todo';
+}
+
 export const TASK_STATUS_FILTER_OPTIONS = Object.freeze([
   Object.freeze({ value: 'todo', label: 'Yapılacak' }),
   Object.freeze({ value: 'in_progress', label: 'Devam ediyor' }),

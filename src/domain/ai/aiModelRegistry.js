@@ -23,6 +23,7 @@ export const AI_PROFILES = Object.freeze({
   CHAT_GENERAL: 'chat.general',
   CHAT_REASONING: 'chat.reasoning',
   CHAT_TOOLS: 'chat.tools',
+  CHAT_TOOLS_REASONING: 'chat.tools.reasoning',
   VISION: 'vision',
   EMBEDDING: 'embedding',
   RERANK: 'rerank',
@@ -40,6 +41,10 @@ const PROFILE_DEFINITIONS = Object.freeze({
   [AI_PROFILES.CHAT_GENERAL]: { label: 'Genel sohbet', requires: [AI_CAPABILITIES.CHAT] },
   [AI_PROFILES.CHAT_REASONING]: { label: 'Akıl yürütme', requires: [AI_CAPABILITIES.CHAT, AI_CAPABILITIES.REASONING] },
   [AI_PROFILES.CHAT_TOOLS]: { label: 'Araç kullanımı', requires: [AI_CAPABILITIES.CHAT, AI_CAPABILITIES.TOOLS] },
+  [AI_PROFILES.CHAT_TOOLS_REASONING]: {
+    label: 'Araç kullanımı (akıl yürütme)',
+    requires: [AI_CAPABILITIES.CHAT, AI_CAPABILITIES.TOOLS, AI_CAPABILITIES.REASONING]
+  },
   [AI_PROFILES.VISION]: { label: 'Görsel anlama', requires: [AI_CAPABILITIES.CHAT, AI_CAPABILITIES.VISION] },
   [AI_PROFILES.EMBEDDING]: { label: 'Anlamsal gösterim', requires: [AI_CAPABILITIES.EMBEDDING] },
   [AI_PROFILES.RERANK]: { label: 'Yeniden sıralama', requires: [AI_CAPABILITIES.RERANK] },

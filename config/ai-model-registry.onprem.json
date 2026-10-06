@@ -12,14 +12,14 @@
       "enabled": true
     },
     {
-      "id": "DeepSeek-V4-Flash-0731",
+      "id": "DeepSeek-V4.1-Flash",
       "provider": "onprem",
       "capabilities": [
         "chat",
         "tools",
         "reasoning"
       ],
-      "contextTokens": 1048576,
+      "contextTokens": 524288,
       "maxConcurrency": null,
       "enabled": true
     },
@@ -200,13 +200,18 @@
       "maxOutputTokens": 1024
     },
     "chat.reasoning": {
-      "model": "DeepSeek-V4-Flash-0731",
+      "model": "DeepSeek-V4.1-Flash",
       "maxOutputTokens": 2048,
       "timeoutMs": 180000
     },
     "chat.tools": {
       "model": "Qwen3-Next-80B-A3B-Instruct",
-      "maxOutputTokens": 1024
+      "maxOutputTokens": 4096
+    },
+    "chat.tools.reasoning": {
+      "model": "DeepSeek-V4.1-Flash",
+      "maxOutputTokens": 8192,
+      "timeoutMs": 180000
     },
     "vision": {
       "model": "Qwen3-VL-8B-Instruct",

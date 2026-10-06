@@ -3,6 +3,7 @@ import { runObservabilityQuery } from './observabilitySql.mjs';
 import { runAssignmentCoordinationQuery } from './assignmentCoordinationSql.mjs';
 import { runAiCredentialQuery } from './aiCredentialSql.mjs';
 import { runAiConversationQuery } from './aiConversationSql.mjs';
+import { runAiToolQuery } from './aiToolSql.mjs';
 import { serialize, deserialize } from 'node:v8';
 /**
  * MERGEN Rota · uçtan uca testler için bellek içi SQL Server ikizi.
@@ -255,6 +256,9 @@ export function createFakeDatabase(seed = {}) {
     aiConversations: seed.aiConversations || [],
     aiConversationMessages: seed.aiConversationMessages || [],
     aiConversationSchemaMissing: seed.aiConversationSchemaMissing === true,
+    // Rota AI yanıt kanıtları (0018); yoksa kanıt yolu kapalıdır.
+    aiMessageEvidence: seed.aiMessageEvidence || [],
+    aiEvidenceSchemaMissing: seed.aiEvidenceSchemaMissing === true,
     people: seed.people || [],
     systemAdminSicils: seed.systemAdminSicils || [],
     corporateProjects: seed.corporateProjects || (seed.projects || []).filter((row) => row.SourceType === 'CORPORATE').map((row) => ({
@@ -447,6 +451,14 @@ function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedA
   });
 }
 
+function disclosureAllowed(db, row, params) {
+  if (params.disclosureAdmin == null) return true;
+  const task = taskById(db, row.TaskId);
+  if (!task || !projectById(db, task.ProjectId)?.IsActive) return false;
+  return params.disclosureAdmin === 1 || String(params.disclosureProjects || '').split(',').some((id) => sameGuid(id, task.ProjectId))
+    || String(params.disclosureTasks || '').split(',').some((id) => sameGuid(id, task.TaskId));
+}
+
 function scheduleRequestRows(db, sicil, requestId = null) {
   const rows = db.taskScheduleChangeRequests
     .filter((entry) => (!requestId || sameGuid(entry.RequestId, requestId))
@@ -464,6 +476,7 @@ function scheduleRequestRows(db, sicil, requestId = null) {
         ProjectName: project?.ProjectName ?? entry.ProjectNameSnapshot ?? '',
         ProjectCode: project?.ProjectCode ?? entry.ProjectCodeSnapshot ?? '',
         TaskAvailable: Boolean(task && project?.IsActive),
+        LiveProjectId: task?.ProjectId ?? null,
         IsUnread: !sameVersion(db.scheduleNotifications.find((n) => sameGuid(n.RequestId, entry.RequestId) && n.Sicil === sicil)?.ReadVersion, entry.RowVersion),
         RequesterName: requester?.DisplayName ?? null,
         DecisionOwnerName: owner?.DisplayName ?? null
@@ -665,11 +678,12 @@ function authorizationRecordsets(db, sicil) {
     });
   }
 
+  // Gerçek sorguyla aynı neden: kendi ataması ASSIGNEE, astın ataması EXECUTIVE_SCOPE.
   const partialTasks = db.taskAssignees
     .filter((entry) => entry.Sicil === sicil || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil))
     .map((entry) => {
       const task = taskById(db, entry.TaskId);
-      return task ? { ProjectId: task.ProjectId, TaskId: task.TaskId, Reason: 'ASSIGNEE' } : null;
+      return task ? { ProjectId: task.ProjectId, TaskId: task.TaskId, Reason: entry.Sicil === sicil ? 'ASSIGNEE' : 'EXECUTIVE_SCOPE' } : null;
     })
     .filter(Boolean);
 
@@ -1236,6 +1250,10 @@ function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
 
+  // Rota AI alan araçlarının sabit SQL metinleri ayrı bir modülde karşılanır.
+  const aiTool = runAiToolQuery(db, sqlText, params);
+  if (aiTool) return result(aiTool);
+
   // Gözlemlenebilirlik yüzeyi (telemetri toplamları, işletim olayları,
   // uyarılar ve sağlık yoklamaları) ayrı bir modülde karşılanır.
   const observability = runObservabilityQuery(db, sqlText, params);
@@ -1308,7 +1326,13 @@ function runQuery(db, statement, params, { database }) {
 
   // ── Yetkilendirme ve anlık görüntü ─────────────────────────
   if (sqlText.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
-    return result(authorizationRecordsets(db, sicil));
+    const sets = authorizationRecordsets(db, sicil);
+    if (params.adminPredicateOnly && db.systemAdminSicils.includes(sicil)) { sets[3] = []; sets[4] = []; }
+    if (sqlText.includes('ORDER BY EmployeeSicil;')) {
+      sets.push(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && !(params.adminPredicateOnly && db.systemAdminSicils.includes(sicil))).map(({ EmployeeSicil }) => ({ EmployeeSicil })));
+    }
+    if (params.authorizationMaxRows) for (const index of [3, 4, 5]) if (sets[index]) sets[index] = sets[index].slice(0, params.authorizationMaxRows);
+    return result(sets);
   }
   if (sqlText.includes('CREATE TABLE #VisibleProjects')) {
     const rows = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
@@ -1321,7 +1345,7 @@ function runQuery(db, statement, params, { database }) {
     // On üçüncü küme SQL içi aşama süreleridir; yalnızca milisaniye taşır.
     return result([...rows, [{ ScopeMs: 0, TaskScopeMs: 0, DirectoryMs: 0, ResultSetsMs: 0 }]]);
   }
-  if (sqlText.includes("THROW 51001")) {
+  if (sqlText.includes("THROW 51001") && params.evidenceSnapshotLimit == null) {
     const before = new Map(db.projects.map((row) => [row.ProjectId, JSON.stringify(row)]));
     synchronizeCorporateProjects(db, params.actorSicil);
     return result([db.projects.filter((row) => before.has(row.ProjectId) && before.get(row.ProjectId) !== JSON.stringify(row)).map((row) => ({ ProjectId: row.ProjectId }))]);
@@ -1383,26 +1407,41 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('AS UnreadCount')) {
     throwIfScheduleChangeSchemaMissing(db);
-    const rows = scheduleRequestRows(db, params.sicil).filter((r) => r.TaskAvailable);
+    const rows = scheduleRequestRows(db, params.sicil).filter((r) => r.TaskAvailable && disclosureAllowed(db, r, params));
     const actionable = (r) => r.Status === 'PENDING' && r.DecisionOwnerSicil === params.sicil;
     const visible = rows.filter((r) => actionable(r) || !sameVersion(db.scheduleNotifications.find((n) => sameGuid(n.RequestId, r.RequestId) && n.Sicil === params.sicil)?.DismissedVersion, r.RowVersion));
-    return result([[{ UnreadCount: visible.filter((r) => r.IsUnread).length, PendingCount: rows.filter(actionable).length }], visible.slice(0, params.limit)]);
+    if (params.evidenceSnapshotLimit == null) {
+      return result([[{ UnreadCount: visible.filter((r) => r.IsUnread).length, PendingCount: rows.filter(actionable).length }], visible.slice(0, params.limit)]);
+    }
+    // Her sayaç kendi nüfusunu ayrı ve sınırlı yoklar (gerçek sorgudaki TOP (@evidenceSnapshotLimit + 1)).
+    const limit = params.evidenceSnapshotLimit;
+    const unread = visible.filter((r) => r.IsUnread).slice(0, limit + 1);
+    const pending = rows.filter(actionable).slice(0, limit + 1);
+    const counted = (list, flags) => (list.length > limit ? [] : list.map((r) => ({ TaskId: r.TaskId, CurrentProjectId: r.LiveProjectId, ...flags })));
+    return result([[{ UnreadCount: unread.length > limit ? null : unread.length, PendingCount: pending.length > limit ? null : pending.length }],
+      visible.slice(0, params.limit).map((r) => ({ ...r, IsPending: actionable(r) ? 1 : 0 })),
+      [...counted(unread, { CountsUnread: 1, CountsPending: 0 }), ...counted(pending, { CountsUnread: 0, CountsPending: 1 })]]);
   }
-  if (sqlText.includes('DECLARE @safePage')) {
+  if (sqlText.includes('DECLARE @safePage') || sqlText.includes('#ScheduleEvidenceSnapshot')) {
     throwIfScheduleChangeSchemaMissing(db);
     const contains = (value, query) => String(value || '').toLocaleLowerCase('tr-TR').includes(String(query || '').toLocaleLowerCase('tr-TR'));
-    const rows = scheduleRequestRows(db, params.sicil).filter((r) => (!params.projectId || sameGuid(r.ProjectId, params.projectId))
+    const rows = scheduleRequestRows(db, params.sicil).filter((r) => (disclosureAllowed(db, r, params) || (params.evidenceSnapshotLimit != null && !r.TaskAvailable)) && (!params.projectId || sameGuid(r.ProjectId, params.projectId))
       && (!params.taskId || sameGuid(r.TaskId, params.taskId)) && (!params.status || r.Status === params.status)
       && (!params.from || isoDate(r.CreatedAt) >= params.from) && (!params.to || isoDate(r.CreatedAt) <= params.to)
       && (!params.requester || contains(r.RequesterName, params.requester) || String(r.RequesterSicil) === params.requester)
-      && (!params.search || contains([r.TaskTitle, r.ProjectName, r.ProjectCode, r.RequesterName, r.RequesterMessage].join(' '), params.search)));
+      && (!params.search || contains((params.evidenceSnapshotLimit == null
+        ? [r.TaskTitle, r.ProjectName, r.ProjectCode, r.RequesterName, r.RequesterMessage]
+        : [r.TaskTitle, r.ProjectName, r.ProjectCode, r.RequesterName, r.DecisionOwnerName,
+          params.searchRequesterMessage ? r.RequesterMessage : '', params.searchDecisionMessage ? r.DecisionMessage : '']).join(' '), params.search)));
     const pending = rows.filter((r) => r.Status === 'PENDING' && r.DecisionOwnerSicil === params.sicil && r.TaskAvailable);
     const sent = rows.filter((r) => r.RequesterSicil === params.sicil);
     const history = rows.filter((r) => r.Status !== 'PENDING' || !r.TaskAvailable);
     const filtered = { pending, sent, history, all: rows }[params.tab];
+    if (params.evidenceSnapshotLimit != null && filtered.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
     const page = Math.min(params.page, Math.max(0, Math.ceil(filtered.length / params.pageSize) - 1));
-    return result([[{ Total: rows.length, PendingCount: pending.length, SentCount: sent.length, HistoryCount: history.length }],
-      [{ Total: filtered.length, Page: page }], filtered.slice(page * params.pageSize, (page + 1) * params.pageSize)]);
+    return result([[{ Total: rows.length, PendingCount: params.evidenceSnapshotLimit == null ? pending.length : filtered.filter((r) => pending.includes(r)).length, SentCount: params.evidenceSnapshotLimit == null ? sent.length : filtered.filter((r) => sent.includes(r)).length, HistoryCount: params.evidenceSnapshotLimit == null ? history.length : filtered.filter((r) => history.includes(r)).length }],
+      [{ Total: filtered.length, Page: page }], filtered.slice(page * params.pageSize, (page + 1) * params.pageSize)
+        .map((r) => (params.evidenceSnapshotLimit == null ? r : { ...r, CurrentProjectId: r.LiveProjectId }))]);
   }
   if (sqlText.includes('FROM dbo.MR_TaskScheduleChangeRequests r WITH (UPDLOCK, HOLDLOCK)')
     && sqlText.includes('t.RowVersion AS TaskRowVersion')) {

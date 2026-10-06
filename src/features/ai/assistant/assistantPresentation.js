@@ -1,6 +1,7 @@
 import { AI_CREDENTIAL_SOURCES } from '../../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES, aiErrorMessage, isAiErrorCode } from '../../../domain/ai/aiErrorCatalog.js';
 import { ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js';
+import { EVIDENCE_KINDS, GROUNDING_FAILED_FINISH_REASON } from '../../../domain/ai/evidenceContract.js';
 
 /**
  * Rota AI'nin saf sunum kuralları: hata ve durum metinleri, tonları, yeniden
@@ -13,6 +14,32 @@ import { ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js
  */
 
 const GENERIC_FAILURE = 'Yanıt alınamadı. Yeniden deneyebilirsiniz.';
+
+export function rotaDataAvailability(readiness, mode) {
+  const data = readiness?.rotaData;
+  if (!data?.enabled) return { available: false, message: null };
+  if (data.available === true && data.modes?.some((item) => item.id === mode && item.available === true)) {
+    return { available: true, message: null };
+  }
+  const messages = {
+    EVIDENCE_SCHEMA_MISSING: 'Rota verisi için gerekli hazırlık tamamlanmamış.',
+    EVIDENCE_SCHEMA_UNKNOWN: 'Rota verisine erişim şu anda doğrulanamıyor.',
+    PROFILE_UNAVAILABLE: 'Bu yanıt kipinde Rota verisi kullanılamıyor.',
+    TOOL_REGISTRY_INVALID: 'Rota verisi hizmeti şu anda kullanılamıyor.'
+  };
+  return { available: false, message: `${messages[data.reason] || messages.PROFILE_UNAVAILABLE} Genel sohbet kullanılabilir.` };
+}
+
+/**
+ * İsteğe yazılacak kaynak. Özellik kapalıyken kaynak gönderilmez (`null`;
+ * özellik kapalı sohbet yolu aynen çalışır). Seçili Rota kaynağı, veri yolu hazır olmasa da
+ * Rota olarak kalır; sunucu sabit `unavailable` sonucunu verir. Genel sohbet
+ * yalnızca kullanıcı açıkça seçtiğinde gönderilir.
+ */
+export function effectiveAssistantSource(readiness, mode, source) {
+  if (readiness?.rotaData?.enabled !== true) return null;
+  return source === 'general' ? 'general' : 'rota';
+}
 
 const CLIENT_FAILURES = Object.freeze({
   REQUEST_CANCELLED: { tone: 'muted', title: 'Yanıt durduruldu', message: 'Yanıtı durdurdunuz. İsterseniz yeniden deneyebilirsiniz.' },
@@ -61,7 +88,7 @@ export function assistantFailureView(result, now = Date.now()) {
     case AI_ERROR_CODES.AI_QUEUE_TIMEOUT:
       return {
         tone: 'warn',
-        title: 'Rota AI şu anda yoğun',
+        title: 'Bilgin şu anda yoğun',
         message: 'Çok sayıda istek aynı anda işleniyor. Birkaç saniye sonra yeniden deneyin.',
         retryable: true,
         action: null
@@ -79,7 +106,7 @@ export function assistantFailureView(result, now = Date.now()) {
       return {
         tone: 'warn',
         title: 'API anahtarı gerekli',
-        message: 'Rota AI için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
+        message: 'Bilgin için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
         retryable: false,
         credential: true,
         action: 'settings'
@@ -114,7 +141,7 @@ export function assistantFailureView(result, now = Date.now()) {
         tone: 'fail',
         title: 'Yanıt üretilemedi',
         message: result?.reason === 'EMPTY_COMPLETION'
-          ? 'Model görünür bir yanıt üretmeden durdu. Soruyu daraltıp yeniden deneyin.'
+          ? 'Model görünür bir yanıt üretmeden durdu. Yeniden deneyebilir ya da soruyu daraltabilirsiniz.'
           : 'Yapay zekâ hizmetinden geçersiz bir yanıt alındı.',
         // Katalog bu kodu yinelenemez sayar; sunucunun sınıflandırması korunur.
         retryable: result?.retryable === true,
@@ -132,7 +159,7 @@ export function assistantFailureView(result, now = Date.now()) {
       };
     case AI_ERROR_CODES.AI_DISABLED:
     case AI_ERROR_CODES.AI_CONFIGURATION_ERROR:
-      return { tone: 'warn', title: 'Rota AI kullanılamıyor', message: serverMessage(result, aiErrorMessage(code)), retryable: false, action: null };
+      return { tone: 'warn', title: 'Bilgin kullanılamıyor', message: serverMessage(result, aiErrorMessage(code)), retryable: false, action: null };
     case 'CONFLICT':
       return {
         tone: 'warn',
@@ -170,17 +197,17 @@ export function isSessionFailure(result) {
 }
 
 const READINESS_MESSAGES = Object.freeze({
-  AI_DISABLED: { tone: 'muted', title: 'Rota AI kapalı', message: 'Yapay zekâ özellikleri bu kurulumda kapalı.', action: null },
+  AI_DISABLED: { tone: 'muted', title: 'Bilgin kapalı', message: 'Yapay zekâ özellikleri bu kurulumda kapalı.', action: null },
   AI_CONFIGURATION_ERROR: {
     tone: 'warn',
-    title: 'Rota AI yapılandırılmadı',
+    title: 'Bilgin yapılandırılmadı',
     message: 'Yapay zekâ hizmeti henüz yapılandırılmadı ya da yapılandırması eksik. Sistem yöneticinize başvurun.',
     action: null
   },
   AI_KEY_MISSING: {
     tone: 'warn',
     title: 'API anahtarı gerekli',
-    message: 'Rota AI için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
+    message: 'Bilgin için kullanılabilir bir API anahtarı yok. Ayarlar → Yapay zekâ erişimi bölümünden kişisel anahtarınızı ekleyebilirsiniz.',
     action: 'settings'
   },
   AI_KEY_UNREADABLE: {
@@ -191,7 +218,7 @@ const READINESS_MESSAGES = Object.freeze({
   },
   PROFILE_UNAVAILABLE: {
     tone: 'warn',
-    title: 'Rota AI kullanılamıyor',
+    title: 'Bilgin kullanılamıyor',
     message: 'Sohbet yeteneği bu kurulumda yapılandırılmamış. Sistem yöneticinize başvurun.',
     action: null
   }
@@ -206,12 +233,31 @@ export function readinessNotice(readiness) {
 /** Demo Kipinde gösterilen açıklama; hiçbir istek gönderilmez. */
 export const DEMO_NOTICE = Object.freeze({
   tone: 'muted',
-  title: 'Rota AI Gerçek Sistem\'de kullanılabilir',
-  message: 'Demo Kipinde yapay zekâ isteği gönderilmez ve konuşma kaydedilmez. Rota AI, kurumsal oturumla Gerçek Sistem verisinde çalışır.'
+  title: 'Bilgin Gerçek Sistem\'de kullanılabilir',
+  message: 'Demo Kipinde yapay zekâ isteği gönderilmez ve konuşma kaydedilmez. Bilgin, kurumsal oturumla Gerçek Sistem verisinde çalışır.'
+});
+
+/** Rota verisi okunurken gösterilen konu metni; araç adı ya da bağımsız değişken gösterilmez. */
+const TOOL_TOPIC_LABELS = Object.freeze({
+  tasks: 'Görevler inceleniyor…',
+  projects: 'Proje bilgileri okunuyor…',
+  portfolio: 'Portföy özeti hazırlanıyor…',
+  wbs: 'İş dağılım yapısı inceleniyor…',
+  workload: 'İş yükü dağılımı hesaplanıyor…',
+  people: 'Personel aranıyor…',
+  activity: 'Hareket geçmişi okunuyor…',
+  requests: 'Talepler inceleniyor…',
+  notifications: 'Bildirimler okunuyor…',
+  baseline: 'Baz plan karşılaştırılıyor…',
+  dependencies: 'Bağımlılıklar inceleniyor…',
+  recurrence: 'Tekrar serileri inceleniyor…',
+  calendar: 'Çalışma takvimi okunuyor…',
+  outlook: 'Outlook durumu okunuyor…',
+  quality: 'Plan veri kalitesi denetleniyor…'
 });
 
 /** Üretim evresinin kısa metni; metin akmaya başlayınca gösterilmez. */
-export function generationPhaseLabel(phase) {
+export function generationPhaseLabel(phase, topic = null) {
   switch (phase) {
     case 'sending':
       return 'Gönderiliyor…';
@@ -222,9 +268,50 @@ export function generationPhaseLabel(phase) {
     // Akıl yürütme yalnızca sağlayıcı bildirdiğinde (`thinking`) gösterilir; kip bunu uydurmaz.
     case ASSISTANT_STREAM_PHASES.GENERATING:
       return 'Yanıt oluşturuluyor…';
+    case ASSISTANT_STREAM_PHASES.TOOLS:
+      return TOOL_TOPIC_LABELS[topic] || 'Rota verisi okunuyor…';
+    case ASSISTANT_STREAM_PHASES.VERIFYING:
+      return 'Yanıt kaynaklarla doğrulanıyor…';
     default:
       return null;
   }
+}
+
+/* ── Kanıtlar ────────────────────────────────────────────────── */
+
+/** "3 Rota kaynağı" gibi kısa özet; kanıt yoksa `null`. */
+export function evidenceSummaryLabel(evidence) {
+  const count = Array.isArray(evidence) ? evidence.length : 0;
+  if (!count) return null;
+  return `${count} Rota kaynağı`;
+}
+
+export function evidenceKindLabel(kind) {
+  return EVIDENCE_KINDS[kind] || 'Rota kaynağı';
+}
+
+/** Kanıtın veri zamanı (Türkiye saati): "Veri zamanı: 29 Eyl 2026 11:12". */
+export function evidenceTimeLabel(generatedAt) {
+  const at = generatedAt ? new Date(generatedAt) : null;
+  if (!at || Number.isNaN(at.getTime())) return null;
+  const text = at.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return `Veri zamanı: ${text}`;
+}
+
+/** Kanıtın kapsam ve tamlık notları (kısmi erişim, kısaltma). */
+export function evidenceNotes(item) {
+  const notes = [];
+  if (item?.partial) notes.push('Yalnızca yetkili kayıtlar');
+  if (item?.truncated) notes.push('Kısaltılmış sonuç');
+  if (item?.counts?.total != null && item?.counts?.returned != null && item.counts.total > item.counts.returned) {
+    notes.push(`${item.counts.returned} / ${item.counts.total} kayıt gösterildi`);
+  }
+  return notes;
+}
+
+/** Yanıt kanıtla doğrulanamadığında sunucunun kaydettiği güvenli ileti mi? */
+export function isGroundingFailure(finishReason) {
+  return finishReason === GROUNDING_FAILED_FINISH_REASON;
 }
 
 /** Olağan bitiş nedenleri; bunların dışındaki her neden yanıtın eksik olabileceğini söyler. */
@@ -232,7 +319,8 @@ const COMPLETE_FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequen
 
 /** Yanıtın bitiş nedeni kullanıcıya not olarak gösterilmeli mi? */
 export function finishReasonNote(finishReason) {
-  if (!finishReason || COMPLETE_FINISH_REASONS.has(finishReason)) return null;
+  if (!finishReason || COMPLETE_FINISH_REASONS.has(finishReason) || ['not_found', 'clarification', 'unavailable', 'general'].includes(finishReason)) return null;
+  if (finishReason === GROUNDING_FAILED_FINISH_REASON) return 'Yanıt Rota verisiyle doğrulanamadığı için gösterilmedi; soruyu daha dar kapsamda yeniden sorabilirsiniz.';
   if (finishReason === 'length') return 'Yanıt uzunluk sınırına ulaştığı için sonu eksik olabilir.';
   if (finishReason === 'content_filter') return 'Yanıt içerik süzgeci nedeniyle durduruldu; sonu eksik olabilir.';
   return 'Yanıt olağan dışı bir nedenle sonlandı; sonu eksik olabilir.';

@@ -13,11 +13,11 @@ import { AssistantComposer } from './AssistantComposer.jsx';
 import { AssistantConversationList } from './AssistantConversationList.jsx';
 import { AssistantThread, FAILURE_ACTION_LABELS } from './AssistantThread.jsx';
 import { createAssistantController, retryableTurnKey } from './assistantController.js';
-import { ASSISTANT_SHEET_QUERY } from './assistantInteraction.js';
-import { assistantFailureView, DEMO_NOTICE, readinessNotice } from './assistantPresentation.js';
+import { ASSISTANT_SHEET_QUERY, assistantEnabledInDocument } from './assistantInteraction.js';
+import { assistantFailureView, DEMO_NOTICE, effectiveAssistantSource, readinessNotice, rotaDataAvailability } from './assistantPresentation.js';
 
 /**
- * Rota AI — uygulama kabuğundaki genel yardımcı.
+ * Bilgin (kod ve yapılandırmada Rota AI) — uygulama kabuğundaki genel yardımcı.
  *
  * Masaüstünde üst çubuğun altında, sağa yaslı ve KİPSİZ bir yardımcı paneldir
  * (`--z-assistant` katmanı): kullanıcı Rota'da çalışmayı sürdürür, odak
@@ -43,6 +43,11 @@ const SUGGESTIONS = Object.freeze([
   'Bu metni daha resmî ve kısa bir dille yeniden yaz: ',
   'Bir Excel formülünün nasıl çalıştığını adım adım açıkla.'
 ]);
+const DATA_SUGGESTIONS = Object.freeze([
+  'Kaç gecikmiş görevim var ve hangileri?',
+  'Projelerimdeki açık görevleri özetle.',
+  'Bugün görevlerimde neler değişti?'
+]);
 
 /**
  * Yardımcının kabuk düzeyindeki durumu: denetleyici ve panel açıklığı. Veri
@@ -56,6 +61,7 @@ const SUGGESTIONS = Object.freeze([
 export function useRotaAssistant() {
   const { dataMode } = useDataMode();
   const actual = dataMode === DATA_MODES.ACTUAL;
+  const [enabled] = useState(() => assistantEnabledInDocument());
   const [controller] = useState(() => createAssistantController());
   const [open, setOpen] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
@@ -82,18 +88,19 @@ export function useRotaAssistant() {
   }, [open, actual, controller]);
 
   const openPanel = useCallback(() => {
+    if (!enabled) return;
     setOpen(true);
     setFocusRequest((value) => value + 1);
-  }, []);
-  const toggle = useCallback(() => setOpen((value) => !value), []);
+  }, [enabled]);
+  const toggle = useCallback(() => { if (enabled) setOpen((value) => !value); }, [enabled]);
   const close = useCallback(({ restoreFocus = true } = {}) => {
     setOpen(false);
     if (restoreFocus) (globalThis.requestAnimationFrame || setTimeout)(() => launcherRef.current?.focus?.());
   }, []);
 
   return useMemo(() => ({
-    controller, open, actual, focusRequest, launcherRef, openPanel, toggle, close
-  }), [controller, open, actual, focusRequest, openPanel, toggle, close]);
+    controller, enabled, open, actual, focusRequest, launcherRef, openPanel, toggle, close
+  }), [controller, enabled, open, actual, focusRequest, openPanel, toggle, close]);
 }
 
 const hasRunningGeneration = (state) => Object.keys(state.running).length > 0;
@@ -103,12 +110,18 @@ export function useAssistantState(controller) {
   return useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
 }
 
+/** Bilgin'in imi: degrade yuvarlak içinde parıltı (düğme, panel başlığı). */
+function AssistantMark({ size = 13, className = '' }) {
+  return <span className={`rota-assistant-mark ${className}`} aria-hidden="true"><Icons.Sparkles size={size} /></span>;
+}
+
 /** Üst çubuktaki düğme; panel kapalıyken süren yanıtı küçük bir işaretle gösterir. */
 export function RotaAssistantLauncher({ assistant }) {
   const { controller, open, toggle, launcherRef } = assistant;
   // Yalnızca "yanıt sürüyor mu" değiştiğinde yeniden çizilir (her parçada değil).
   const readGenerating = () => hasRunningGeneration(controller.getState());
   const generating = useSyncExternalStore(controller.subscribe, readGenerating, readGenerating);
+  if (assistant.enabled === false) return null;
   return (
     <button
       ref={launcherRef}
@@ -117,10 +130,10 @@ export function RotaAssistantLauncher({ assistant }) {
       aria-expanded={open}
       aria-controls={open ? ROTA_ASSISTANT_PANEL_ID : undefined}
       onClick={toggle}
-      title="Rota AI"
+      title="Bilgin"
     >
-      <Icons.Sparkles size={15} aria-hidden="true" />
-      <span className="rota-assistant-launcher-label">Rota AI</span>
+      <AssistantMark />
+      <span className="rota-assistant-launcher-label">Bilgin</span>
       {generating && !open && (
         <>
           <span className="rota-assistant-launcher-dot" aria-hidden="true" />
@@ -190,19 +203,22 @@ function Notice({ notice, onAction, children = null }) {
   );
 }
 
-function Welcome({ readiness, onSuggest, recent }) {
+function Welcome({ readiness, mode, onSuggest, recent }) {
   const notice = readinessNotice(readiness);
+  const dataAvailable = rotaDataAvailability(readiness, mode).available;
   return (
     <div className="rota-assistant-welcome">
       <div className="rota-assistant-welcome-mark" aria-hidden="true"><Icons.Sparkles size={20} /></div>
       <h3>Size nasıl yardımcı olabilirim?</h3>
       <p>
-        Rota AI genel sorularınızda, yazım, özetleme ve açıklama işlerinde yardımcı olur.
-        Şu an Rota’daki görev, proje ve ekip verilerinize erişimi yoktur; bu bilgileri sorunuzda siz paylaşabilirsiniz.
+        Bilgin genel sorularınızda, yazım, özetleme ve açıklama işlerinde yardımcı olur.
+        {dataAvailable
+          ? ' Rota verisi seçeneğiyle görüntüleme yetkiniz olan görev, proje ve ekip verilerini kullanabilir.'
+          : ' Şu an Rota’daki görev, proje ve ekip verilerinize erişimi yoktur; bu bilgileri sorunuzda siz paylaşabilirsiniz.'}
       </p>
       {!notice && (
         <div className="rota-assistant-suggestions" role="group" aria-label="Örnek sorular">
-          {SUGGESTIONS.map((text) => (
+          {(dataAvailable ? DATA_SUGGESTIONS : SUGGESTIONS).map((text) => (
             <button key={text} type="button" className="rota-assistant-suggestion" onClick={() => onSuggest(text)}>{text}</button>
           ))}
         </div>
@@ -290,6 +306,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const available = ready && !state.refreshing && Boolean(readiness?.available);
   const running = state.running[active.key] || null;
   const generating = Boolean(running);
+  const rotaData = rotaDataAvailability(readiness, state.mode);
   const historyView = ready && state.view === 'history';
   const canCompose = ready && Boolean(readiness?.available) && !historyView && !active.failure;
   const retryKey = available && !generating && !active.loading && !active.closed
@@ -307,8 +324,8 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       close({ restoreFocus: false });
       onOpenSettings?.();
     } else if (action === 'new-conversation') {
-      // Kapanmış/dolmuş konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
-      const carry = Boolean(!active.id || active.closed || held || capacityFull);
+      // Kapanmış/dolmuş, yanıtsız son turla kilitlenmiş konuşmanın ya da geri alınmayı bekleyen iletinin metni taşınır.
+      const carry = Boolean(!active.id || active.closed || held || capacityFull || retryKey);
       const carried = carry ? [held?.text, draft].filter(Boolean).join('\n\n') : '';
       const sourceKey = draftKey;
       if (controller.newConversation() === false) return;
@@ -370,7 +387,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   if (!actual) {
     body = <div className="rota-assistant-scroll"><Notice notice={DEMO_NOTICE} onAction={runAction} /></div>;
   } else if (state.status === 'idle' || state.status === 'loading') {
-    body = <p className="rota-assistant-state"><Spinner size={14} /> Rota AI hazırlanıyor…</p>;
+    body = <p className="rota-assistant-state"><Spinner size={14} /> Bilgin hazırlanıyor…</p>;
   } else if (state.status === 'error') {
     body = (
       <div className="rota-assistant-scroll">
@@ -419,8 +436,12 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         {notice && <Notice notice={notice} onAction={runAction} />}
         <Welcome
           readiness={readiness}
+          mode={state.mode}
           recent={recent}
           onSuggest={(text) => {
+            if (state.readiness?.rotaData?.enabled === true && !rotaData.available) {
+              controller.setSource('general');
+            }
             setDraft(text);
             focusInput();
           }}
@@ -433,6 +454,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
         conversationKey={active.key}
         turns={active.turns}
         phase={running?.phase || null}
+        topic={running?.topic || null}
         retryKey={retryKey}
         reconciling={Boolean(state.reconciling[active.key])}
         reducedMotion={reducedMotion}
@@ -459,7 +481,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       <header className="rota-assistant-head">
         <div className="rota-assistant-heading">
           <h2 id={titleId} ref={headingRef} tabIndex={-1}>
-            <Icons.Sparkles size={15} aria-hidden="true" /> Rota AI
+            <AssistantMark size={12} className="is-sm" /> Bilgin
           </h2>
           {actual && <p className="rota-assistant-subtitle" title={title}>{title}</p>}
         </div>
@@ -487,7 +509,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
               <Icons.MessagePlus size={15} aria-hidden="true" />
             </button>
           )}
-          <button type="button" className="icon-btn" aria-label="Rota AI’yi kapat" title="Kapat (Esc)" onClick={() => close()}>
+          <button type="button" className="icon-btn" aria-label="Bilgin’i kapat" title="Kapat (Esc)" onClick={() => close()}>
             <Icons.Close size={15} aria-hidden="true" />
           </button>
         </div>
@@ -528,6 +550,13 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
           mode={state.mode}
           modes={readiness?.modes || []}
           onModeChange={(mode) => controller.setMode(mode)}
+          source={effectiveAssistantSource(readiness, state.mode, state.source) || 'rota'}
+          dataEnabled={state.readiness?.rotaData?.enabled === true}
+          dataAvailable={rotaData.available}
+          dataUnavailableMessage={rotaData.message}
+          onSourceChange={(source) => controller.setSource(source)}
+          includeText={state.includeText === true}
+          onIncludeTextChange={(value) => controller.setIncludeText(value)}
           maxChars={readiness?.limits?.maxMessageChars || controller.limits.maxMessageChars}
           inputRef={inputRef}
         />

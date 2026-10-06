@@ -1,0 +1,163 @@
+import 'server-only';
+import { randomBytes } from 'node:crypto';
+import { encodeAuthorizationPopulation, evidenceTaskReferences, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
+import {
+  EVIDENCE_LIMITS,
+  evidenceIdFor,
+  evidenceOrdinal,
+  normalizeEvidenceSummary
+} from '../../../domain/ai/evidenceContract.js';
+
+/**
+ * Bir turun kanıt defteri.
+ *
+ * Yalnızca BAŞARILI araç sonuçları kanıt olur ve turda sırayla R1, R2…
+ * kimliği alır. Kayıt, modele verilen güvenli görünümün kendisidir (araç
+ * sonucu JSON'u); SQL, yetki ayrıntısı, anahtar ya da ham sağlayıcı akışı
+ * içermez. Yanıtta atfedilen kanıtlar yanıtla aynı işlemde kalıcılaştırılır.
+ */
+
+const MAX_EVIDENCE_TEXT_CHARS = 32 * 1024;
+const MAX_SUMMARY_JSON_CHARS = 4000;
+/** 0018 kısıtı: `DATALENGTH(EvidenceJson) <= 65536` bayt (nvarchar, UTF-16 kod birimi başına 2 bayt). */
+const MAX_EVIDENCE_JSON_CHARS = 32000;
+
+function highlightPairs(highlights = []) {
+  return highlights
+    .filter((item) => typeof item === 'string' && item.trim())
+    .map((item) => {
+      const separator = item.indexOf(': ');
+      return separator > 0
+        ? { label: item.slice(0, separator), value: item.slice(separator + 2) }
+        : { label: 'Ayrıntı', value: item };
+    });
+}
+
+/**
+ * Kalıcı kanıt: güvenli sonuç zarfı ve yeniden açılışta güncel yetkiyle
+ * doğrulanacak TAM görev nüfusu. Sınırlı kayda önce nüfus sığdırılır (gerekirse
+ * yeniden üretilebilirlik verisi bırakılır); nüfus da sığmazsa kanıt kalıcı
+ * olarak "doğrulanamaz" işaretlenir ve yeniden açılışta gösterilmez.
+ */
+function persistedEvidenceJson(entry, payload, clarificationContext) {
+  const authorization = {
+    authorizationEpoch: entry.authorizationEpoch,
+    ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {})
+  };
+  const clarification = clarificationContext ? { clarificationContext } : {};
+  const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
+  const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
+  if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;
+  const { data: _omitted, ...envelope } = payload;
+  const compact = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: population, ...clarification });
+  if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
+  return JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', authorizationEpoch: entry.authorizationEpoch,
+    authorizationPopulation: unverifiableAuthorizationPopulation(), ...clarification });
+}
+
+export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceOrdinal } = {}) {
+  const entries = [];
+  const turnKey = randomBytes(8).toString('hex');
+
+  return Object.freeze({
+    factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
+    /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null }) {
+      if (entries.length >= Math.min(maxEntries, EVIDENCE_LIMITS.maxEvidencePerAnswer)) return null;
+      const id = evidenceIdFor(entries.length + 1);
+      const summary = normalizeEvidenceSummary({
+        id, kind, label, entity, generatedAt, complete, truncated, partial, counts, highlights: highlightPairs(highlights)
+      });
+      if (!summary) return null;
+      // Yürütülen bağımsız değişkenler yalnızca sunucuda kalır: kanıtın nüfusu bunlardan hesaplanır.
+      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
+        args: Object.freeze({ ...(args || {}) }),
+        population: Array.isArray(populationReferences) && populationReferences.length ? populationReferences : null });
+      return id;
+    },
+    /**
+     * Modele verilen sonuç metni (kimliği içerir) kayda bağlanır. Sınırı aşan
+     * metin kesilmez (kesik JSON geçersiz olurdu); yerine geçerli bir not saklanır.
+     */
+    attachPayload(id, text) {
+      const entry = entries.find((item) => item.id === id);
+      if (!entry) return;
+      const payload = String(text);
+      entry.payload = payload.length <= MAX_EVIDENCE_TEXT_CHARS
+        ? payload
+        : JSON.stringify({ evidenceId: id, payloadOmitted: 'size' });
+      // Son yetki denetimi ve kalıcı kayıt, toplamın dayandığı bütün görevleri
+      // (yalnızca yükte görünenleri değil) taşır.
+      const references = new Map(evidenceTaskReferences(JSON.parse(payload)).map((row) => [row.taskId, row]));
+      for (const row of entry.population || []) if (!references.has(row.taskId) || !references.get(row.taskId).projectId) references.set(row.taskId, row);
+      entry.taskReferences = [...references.values()];
+    },
+    invalidateAuthorization(epoch, validate = null) {
+      for (const entry of entries) if (validate ? !validate(entry) : entry.authorizationEpoch !== epoch) entry.valid = false;
+    },
+    authorizationEntries() { return entries.filter((entry) => entry.valid && entry.payload); },
+    retainAuthorized(ids) {
+      for (const entry of entries) if (!ids.has(entry.id)) entry.valid = false;
+    },
+    ids() {
+      return entries.filter((entry) => entry.valid).map((entry) => entry.id);
+    },
+    size() {
+      return entries.length;
+    },
+    has(id) {
+      return entries.some((entry) => entry.id === id && entry.valid);
+    },
+    /** Belirlenimci yanıt doğrulaması için modele verilen güvenli yükler. */
+    payloads(ids = null) {
+      const wanted = ids ? new Set(ids) : null;
+      return entries
+        .filter((entry) => entry.valid && (!wanted || wanted.has(entry.id)) && entry.payload)
+        .map((entry) => ({ id: entry.id, payload: entry.payload }));
+    },
+    /** İstek doğrulaması için geçerli kayıtlar: araç, yürütülen bağımsız değişkenler ve çözümlenmiş yük. */
+    requestEntries() {
+      return entries.filter((entry) => entry.valid && entry.payload).map((entry) => {
+        let payload = null;
+        try { payload = JSON.parse(entry.payload); } catch { /* Bozuk yük kanıt değildir. */ }
+        return { id: entry.id, tool: entry.tool, args: entry.args, payload };
+      });
+    },
+    /** Verilen kimliklerin özetleri, kanıt sırasına göre. */
+    summaries(ids = null) {
+      const wanted = ids ? new Set(ids) : null;
+      return entries.filter((entry) => entry.valid && (!wanted || wanted.has(entry.id))).map((entry) => entry.summary);
+    },
+    /**
+     * Kalıcılık satırları (0018): yalnızca atfedilen kanıtlar. Açıklama
+     * yanıtında sunucunun aday kimlikleri (sıra → proje/görev/Sicil) ilgili
+     * kanıtla birlikte saklanır; sonraki turdaki numaralı seçim bunlara bağlanır.
+     */
+    persistable(ids, { clarification = null } = {}) {
+      const wanted = new Set(ids);
+      return entries
+        .filter((entry) => entry.valid && wanted.has(entry.id) && entry.payload)
+        .slice(0, EVIDENCE_LIMITS.maxEvidencePerAnswer)
+        .map((entry) => {
+          const summaryJson = JSON.stringify(entry.summary);
+          const payload = JSON.parse(entry.payload);
+          const clarificationContext = clarification?.evidenceId === entry.id ? clarification.references : null;
+          return {
+            ordinal: evidenceOrdinal(entry.id),
+            toolName: entry.tool,
+            evidenceType: entry.kind,
+            label: entry.summary.label,
+            entityType: entry.summary.entity?.type ?? null,
+            entityId: entry.summary.entity?.id ?? null,
+            generatedAt: entry.summary.generatedAt,
+            isComplete: entry.summary.complete,
+            isTruncated: entry.summary.truncated,
+            summaryJson: summaryJson.length <= MAX_SUMMARY_JSON_CHARS
+              ? summaryJson
+              : JSON.stringify({ ...entry.summary, highlights: [] }),
+            evidenceJson: persistedEvidenceJson(entry, payload, clarificationContext)
+          };
+        });
+    }
+  });
+}

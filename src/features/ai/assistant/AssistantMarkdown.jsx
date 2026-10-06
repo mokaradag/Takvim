@@ -40,7 +40,7 @@ function CodeBlock({ language, text }) {
 }
 
 /** Satır içi düğümler → React öğeleri. */
-export function renderInline(nodes = [], keyPrefix = 'i') {
+export function renderInline(nodes = [], keyPrefix = 'i', evidenceIds = null) {
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`;
     switch (node.type) {
@@ -51,47 +51,57 @@ export function renderInline(nodes = [], keyPrefix = 'i') {
       case 'code':
         return <code key={key} className="assistant-md-inline-code">{node.value}</code>;
       case 'strong':
-        return <strong key={key}>{renderInline(node.children, key)}</strong>;
+        return <strong key={key}>{renderInline(node.children, key, evidenceIds)}</strong>;
       case 'em':
-        return <em key={key}>{renderInline(node.children, key)}</em>;
+        return <em key={key}>{renderInline(node.children, key, evidenceIds)}</em>;
       case 'del':
-        return <del key={key}>{renderInline(node.children, key)}</del>;
+        return <del key={key}>{renderInline(node.children, key, evidenceIds)}</del>;
       case 'link':
         return (
           <a key={key} href={node.href} target="_blank" rel="noopener noreferrer nofollow" referrerPolicy="no-referrer" title={node.href}>
             {node.image ? 'Görsel: ' : null}
-            {renderInline(node.children, key)}
+            {renderInline(node.children, key, evidenceIds)}
           </a>
         );
       case 'group':
-        return <span key={key}>{renderInline(node.children, key)}</span>;
+        return <span key={key}>{renderInline(node.children, key, evidenceIds)}</span>;
+      case 'cite':
+        // Yalnızca sunucunun bu yanıta bağladığı kanıt kimliği kaynak rozeti olur.
+        if (!evidenceIds?.has(node.id)) return `【${node.id}】`;
+        return <sup key={key} className="assistant-md-cite" title={`Kaynak ${node.id}`} aria-label={`Kaynak ${node.id}`}>{node.id}</sup>;
       default:
         return null;
     }
   });
 }
 
+/** Yalnızca eğik yazıdan oluşan paragraf (kapsam ya da eksiklik notu) yanıttan ikincil görünür. */
+function isNote(children = []) {
+  const meaningful = children.filter((node) => !(node.type === 'text' && !String(node.value || '').trim()));
+  return meaningful.length === 1 && meaningful[0].type === 'em';
+}
+
 /** Blok düğümü → React öğesi. */
-export function renderBlock(block, key = 'b') {
+export function renderBlock(block, key = 'b', evidenceIds = null) {
   switch (block.type) {
     case 'paragraph':
-      return <p key={key}>{renderInline(block.children, key)}</p>;
+      return <p key={key} className={isNote(block.children) ? 'assistant-md-note' : undefined}>{renderInline(block.children, key, evidenceIds)}</p>;
     case 'heading': {
       const Tag = HEADING_TAGS[block.level] || 'h5';
-      return <Tag key={key} className="assistant-md-heading">{renderInline(block.children, key)}</Tag>;
+      return <Tag key={key} className="assistant-md-heading">{renderInline(block.children, key, evidenceIds)}</Tag>;
     }
     case 'code':
       return <CodeBlock key={key} language={block.language} text={block.text} />;
     case 'rule':
       return <hr key={key} />;
     case 'quote':
-      return <blockquote key={key}>{block.children.map((child, index) => renderBlock(child, `${key}-${index}`))}</blockquote>;
+      return <blockquote key={key}>{block.children.map((child, index) => renderBlock(child, `${key}-${index}`, evidenceIds))}</blockquote>;
     case 'list': {
       const Tag = block.ordered ? 'ol' : 'ul';
       return (
         <Tag key={key} className={`assistant-md-list${block.tight ? ' is-tight' : ''}`} start={block.ordered && block.start !== 1 ? block.start : undefined}>
           {block.items.map((item, index) => (
-            <li key={`${key}-${index}`}>{item.map((child, childIndex) => renderBlock(child, `${key}-${index}-${childIndex}`))}</li>
+            <li key={`${key}-${index}`}>{item.map((child, childIndex) => renderBlock(child, `${key}-${index}-${childIndex}`, evidenceIds))}</li>
           ))}
         </Tag>
       );
@@ -103,7 +113,7 @@ export function renderBlock(block, key = 'b') {
             <thead>
               <tr>
                 {block.header.map((cell, index) => (
-                  <th key={index} scope="col" className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-h${index}`)}</th>
+                  <th key={index} scope="col" className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-h${index}`, evidenceIds)}</th>
                 ))}
               </tr>
             </thead>
@@ -111,7 +121,7 @@ export function renderBlock(block, key = 'b') {
               {block.rows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
                   {row.map((cell, index) => (
-                    <td key={index} className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-${rowIndex}-${index}`)}</td>
+                    <td key={index} className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-${rowIndex}-${index}`, evidenceIds)}</td>
                   ))}
                 </tr>
               ))}
@@ -130,18 +140,24 @@ export function renderBlock(block, key = 'b') {
  * blokları sabit kalır.
  */
 const MarkdownBlock = memo(
-  function MarkdownBlock({ block, blockKey }) {
-    return renderBlock(block, blockKey);
+  function MarkdownBlock({ block, blockKey, evidenceIds }) {
+    return renderBlock(block, blockKey, evidenceIds);
   },
-  (previous, next) => previous.blockKey === next.blockKey && previous.block.source === next.block.source
+  (previous, next) => previous.blockKey === next.blockKey
+    && previous.block.source === next.block.source
+    && previous.evidenceIds === next.evidenceIds
 );
 
-export function AssistantMarkdown({ text }) {
+export function AssistantMarkdown({ text, evidence = null }) {
   const parse = useMemo(() => createAssistantMarkdownParser(), []);
   const blocks = useMemo(() => parse(text), [parse, text]);
+  const evidenceIds = useMemo(
+    () => new Set((Array.isArray(evidence) ? evidence : []).map((item) => item?.id).filter(Boolean)),
+    [evidence]
+  );
   return (
     <div className="assistant-md">
-      {blocks.map((block, index) => <MarkdownBlock key={index} blockKey={`b${index}`} block={block} />)}
+      {blocks.map((block, index) => <MarkdownBlock key={index} blockKey={`b${index}`} block={block} evidenceIds={evidenceIds} />)}
     </div>
   );
 }

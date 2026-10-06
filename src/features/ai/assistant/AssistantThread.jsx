@@ -5,7 +5,15 @@ import { Icons } from '../../../components/icons';
 import { ASSISTANT_MODES, assistantModeLabel } from '../../../domain/ai/assistantContract.js';
 import { AssistantMarkdown } from './AssistantMarkdown.jsx';
 import { copyTextToClipboard, followState } from './assistantInteraction.js';
-import { finishReasonNote, generationPhaseLabel } from './assistantPresentation.js';
+import {
+  evidenceKindLabel,
+  evidenceNotes,
+  evidenceSummaryLabel,
+  evidenceTimeLabel,
+  finishReasonNote,
+  generationPhaseLabel,
+  isGroundingFailure
+} from './assistantPresentation.js';
 
 /**
  * Konuşma akışı: kullanıcı iletileri ve Rota AI yanıtları.
@@ -80,19 +88,62 @@ function AnswerNotice({ failure, retryable, onRetry, onAction }) {
               <Icons.Refresh size={12} aria-hidden="true" /> {remaining > 0 ? `${remaining} sn sonra yeniden dene` : 'Yeniden dene'}
             </button>
           )}
-          {failure.action && (
-            <button type="button" className="btn ghost sm" onClick={() => onAction(failure.action)}>
-              {FAILURE_ACTION_LABELS[failure.action]}
-            </button>
-          )}
+          {/* Yanıtlanmamış son tur yeni ileti göndermeyi kapatır; kullanıcıya her zaman bir çıkış yolu kalır. */}
+          <button type="button" className="btn ghost sm" onClick={() => onAction(failure.action || 'new-conversation')}>
+            {FAILURE_ACTION_LABELS[failure.action || 'new-conversation']}
+          </button>
         </div>
       )}
     </div>
   );
 }
 
+/**
+ * Yanıtın dayandığı Rota kaynakları. Her kaynak yanıttaki atıfla (R1, R2 …)
+ * eşleşir; yalnızca güvenli künye gösterilir: tür, etiket, veri zamanı,
+ * kapsam/kısaltma notu ve birkaç öne çıkan değer. Kayıt içeriği, sorgu ya da
+ * araç adı gösterilmez.
+ */
+function AnswerEvidence({ evidence }) {
+  const latest = evidence.map((item) => item.generatedAt).filter(Boolean).sort().pop();
+  return (
+    <details className="rota-assistant-evidence">
+      <summary>
+        <Icons.Database size={12} aria-hidden="true" />
+        <span>{evidenceSummaryLabel(evidence)}</span>
+        {latest && <small>{evidenceTimeLabel(latest)}</small>}
+      </summary>
+      <ul className="rota-assistant-evidence-list">
+        {evidence.map((item) => {
+          const notes = evidenceNotes(item);
+          return (
+            <li key={item.id} className="rota-assistant-evidence-item">
+              <span className="rota-assistant-evidence-id" aria-hidden="true">{item.id}</span>
+              <div className="rota-assistant-evidence-body">
+                <strong><span className="sr-only">{`Kaynak ${item.id}: `}</span>{item.label}</strong>
+                <small>{[evidenceKindLabel(item.kind), evidenceTimeLabel(item.generatedAt)].filter(Boolean).join(' · ')}</small>
+                {notes.length > 0 && <small className="rota-assistant-evidence-note">{notes.join(' · ')}</small>}
+                {item.highlights?.length > 0 && (
+                  <dl className="rota-assistant-evidence-highlights">
+                    {item.highlights.map((highlight, index) => (
+                      <div key={`${item.id}-${index}`}>
+                        <dt>{highlight.label}</dt>
+                        <dd>{highlight.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
 /** Tek tur: kullanıcı iletisi ve yanıtın o anki durumu. */
-export function AssistantTurn({ turn, phase = null, canRetry = false, reconciling = false, onRetry, onAction }) {
+export function AssistantTurn({ turn, phase = null, topic = null, canRetry = false, reconciling = false, onRetry, onAction }) {
   const { user, answer } = turn;
   const status = answer?.status || 'waiting';
   const active = status === 'waiting' || status === 'streaming';
@@ -110,14 +161,14 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, reconcilin
         )}
       </div>
       <div className={`rota-assistant-answer is-${status}`} aria-busy={active || undefined}>
-        <span className="sr-only">Rota AI: </span>
+        <span className="sr-only">Bilgin: </span>
         {status === 'waiting' && (
           <p className="rota-assistant-phase">
             <span className="rota-assistant-pulse" aria-hidden="true" />
-            {generationPhaseLabel(phase || 'sending') || 'Yanıt bekleniyor…'}
+            {generationPhaseLabel(phase || 'sending', topic) || 'Yanıt bekleniyor…'}
           </p>
         )}
-        {hasText && <AssistantMarkdown text={answer.content} />}
+        {hasText && <AssistantMarkdown text={answer.content} evidence={answer.evidence} />}
         {(reconciling || (hasText && (status === 'stopped' || status === 'interrupted' || status === 'failed'))) && (
           <p className="rota-assistant-partial-note">
             {reconciling
@@ -125,9 +176,11 @@ export function AssistantTurn({ turn, phase = null, canRetry = false, reconcilin
               : 'Yanıtın bu bölümü tamamlanmadı.'}
           </p>
         )}
+        {status === 'complete' && answer.evidence?.length > 0 && <AnswerEvidence evidence={answer.evidence} />}
         {status === 'complete' && (
           <div className="rota-assistant-answer-meta">
-            <CopyAnswerButton source={answer.content} />
+            {!isGroundingFailure(answer.finishReason) && <CopyAnswerButton source={answer.content} />}
+            {answer.finishReason === 'general' && <span className="rota-assistant-mode-badge">Genel sohbet · Rota verisi okunmadı</span>}
             {deep && <span className="rota-assistant-mode-badge">{assistantModeLabel(ASSISTANT_MODES.DEEP)}</span>}
             {note && <small className="rota-assistant-finish-note">{note}</small>}
           </div>
@@ -155,7 +208,7 @@ function scrollToEnd(node, smooth = false) {
  * Konuşma akışı. `conversationKey` değişince (konuşma değişimi) ve yeni tur
  * eklenince en alta gidilir; akan metin yalnızca izleme sürerken kaydırır.
  */
-export function AssistantThread({ conversationKey, turns, phase = null, retryKey = null, reconciling = false, onRetry, onAction, reducedMotion = false, children = null }) {
+export function AssistantThread({ conversationKey, turns, phase = null, topic = null, retryKey = null, reconciling = false, onRetry, onAction, reducedMotion = false, children = null }) {
   const scrollRef = useRef(null);
   const followingRef = useRef(true);
   const lastTopRef = useRef(0);
@@ -197,6 +250,7 @@ export function AssistantThread({ conversationKey, turns, phase = null, retryKey
             key={turn.key}
             turn={turn}
             phase={turn === last ? phase : null}
+            topic={turn === last ? topic : null}
             canRetry={retryKey === turn.key}
             reconciling={turn === last && reconciling}
             onRetry={onRetry}

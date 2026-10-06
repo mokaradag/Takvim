@@ -29,6 +29,7 @@ export function deriveEffectiveAccess({ isSystemAdmin, fullProjectIds = [], part
       fullProjectIds: new Set(fullProjectIds.map(key))
     };
   }
+
   for (const projectId of fullProjectIds) {
     const id = key(projectId);
     access.set(id, { projectId: id, accessLevel: 'FULL', reasons: [ACCESS_REASONS.CORPORATE_PROJECT_ROLE] });

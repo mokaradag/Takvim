@@ -72,7 +72,8 @@ export function mapCoordination(row, actorSicil) {
       : Boolean(row.IsActionable),
     allowedDecisions: taskAvailable
       ? allowedCoordinationDecisions(status, { isManager, isRequester })
-      : []
+      : [],
+    ...(row.CurrentProjectId !== undefined ? { currentProjectId: canonicalActualId(row.CurrentProjectId) } : {})
   };
 }
 

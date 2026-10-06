@@ -1,7 +1,8 @@
 'use client';
 import { SIMPLE_LANDING_VIEW, SIMPLE_NAV_IDS, navigationItems } from './navigation.js';
 import { ScheduleRequestsView } from '../../features/schedule-change/ScheduleRequestsView.jsx';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Icons } from '../icons';
 import { Heptagon } from '../ui';
 import { InfoButton } from '../ui-extras';
@@ -22,7 +23,6 @@ import { SettingsView } from '../../features/settings/SettingsView';
 import { SimpleModePanel } from '../../features/simple/SimpleModePanel';
 import { TaskDetailOverlay } from '../../features/task-detail/TaskDetailOverlay';
 import { ScheduleRequestCenter } from '../../features/schedule-change/ScheduleRequestCenter.jsx';
-import { RotaAssistantLauncher, RotaAssistantPanel, useRotaAssistant } from '../../features/ai/assistant/RotaAssistant.jsx';
 import {
   useAllPeople,
   useAllProjects,
@@ -63,6 +63,7 @@ import { SidebarUserPanel } from './SidebarUserPanel';
 import { readSidebarPreference, writeSidebarPreference } from './sidebarPreference.js';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useSignOut } from './useSignOut.js';
+import { assistantEnabledInDocument } from '../../lib/runtimeFeatures.js';
 
 // Temel Kip, Kapsamlı Kip ile aynı Gantt görünümünü paylaşır: hızlı görev
 // tanımı yapan kullanıcı da planı zaman çizelgesinde görebilmelidir.
@@ -122,6 +123,8 @@ function SimpleCalendarTabs({ active, onChange }) {
   );
 }
 
+const AssistantShell = dynamic(() => import('./AssistantShell.jsx'), { ssr: false });
+
 export default function AppShell() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   useApplyTweaks(t);
@@ -148,9 +151,13 @@ export default function AppShell() {
   usePresenceHeartbeat(String(session?.dataMode || '').toLowerCase() === 'actual');
   const { openTask, closeTask } = useTaskActions();
   const signOutState = useSignOut();
-  // Rota AI kabukla birlikte yaşar: panel kapanıp açılınca konuşma ve süren
-  // yanıt korunur; veri kipi değişince kabukla birlikte yeniden kurulur.
-  const assistant = useRotaAssistant();
+  const [assistant] = useState(() => ({ enabled: assistantEnabledInDocument() }));
+  const [assistantActions, setAssistantActions] = useState({ enabled: false });
+  // Komut paletinin öğe listesi bu geri çağrının kimliğine bakar; her çizimde yenisi üretilmez.
+  const openAssistantPanel = useCallback(async () => {
+    await closeTask();
+    assistantActions.openPanel?.();
+  }, [closeTask, assistantActions]);
   const simpleMode = t.appMode === 'simple';
   const [sidebarPreference, setSidebarPreference] = useState(readSidebarPreference);
   const [sidebarKeyboardOpen, setSidebarKeyboardOpen] = useState(false);
@@ -467,7 +474,7 @@ export default function AppShell() {
           )}
           <div className="topbar-spacer" />
           <div className="topbar-actions">
-            <RotaAssistantLauncher assistant={assistant} />
+            {assistant.enabled && <AssistantShell onChange={setAssistantActions} onOpenSettings={() => navigate('ayarlar')} />}
             <ScheduleRequestCenter onNavigate={navigate} />
             <DataRefreshControl />
             {exportVisible && (
@@ -502,7 +509,6 @@ export default function AppShell() {
       </div>
 
       <TaskDetailOverlay simple={simpleMode} />
-      <RotaAssistantPanel assistant={assistant} onOpenSettings={() => navigate('ayarlar')} />
       {cmdOpen && (
         <CommandPalette
           navItems={visibleNavItems}
@@ -510,7 +516,7 @@ export default function AppShell() {
           onNavigate={navigate}
           onOpenTask={openTask}
           onSetTheme={(theme) => setTweak('theme', theme)}
-          onOpenAssistant={async () => { await closeTask(); assistant.openPanel(); }}
+          onOpenAssistant={assistantActions.enabled ? openAssistantPanel : null}
           tasks={tasks}
         />
       )}

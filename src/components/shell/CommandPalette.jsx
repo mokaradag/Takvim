@@ -42,7 +42,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, on
     }));
     const themes = [
       // Paleti kapatmak odağı açana geri verir; panel odağı yazma alanına kendisi taşır.
-      ...(onOpenAssistant ? [{ kind: 'cmd', icon: 'Sparkles', label: 'Rota AI’ye sor', sub: 'Yardımcı paneli aç', action: () => { onClose(); onOpenAssistant(); } }] : []),
+      ...(onOpenAssistant ? [{ kind: 'cmd', icon: 'Sparkles', label: 'Bilgin’e sor', sub: 'Yardımcı paneli aç', action: () => { onClose(); onOpenAssistant(); } }] : []),
       { kind: 'cmd', icon: 'Sun', label: 'Tema: Açık', action: () => { onSetTheme('light'); onClose(); } },
       { kind: 'cmd', icon: 'Moon', label: 'Tema: Koyu', action: () => { onSetTheme('dark'); onClose(); } }
     ];
@@ -59,7 +59,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, on
     }
     return all;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, tasks, navItems]);
+  }, [q, tasks, navItems, onOpenAssistant]);
 
   // Sayaç RENDER İÇİNDE değil, işlemeden sonra güncellenir: render saf kalır
   // (React yarıda kesilen bir render'ı atabilir ya da yeniden oynatabilir).
