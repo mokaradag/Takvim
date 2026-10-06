@@ -9,7 +9,7 @@ import {
   groundingRepairInstruction,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
-import { recordGroundedAnswer } from '../aiTelemetry.js';
+import { recordGroundedAnswer, recordGroundedTurn } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool } from '../tools/toolRegistry.js';
@@ -17,7 +17,7 @@ import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.j
 import { isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope } from '../tools/toolScope.js';
-import { bindRequestEntities, parseRequestDeclaration, requestEvidence, requestRepairHint, requestSummary, requestWindow } from '../tools/requestDeclaration.js';
+import { bindRequestEntities, parseRequestDeclaration, requestEvidence, requestRepairHint, requestSelections, requestSummary, requestWindow } from '../tools/requestDeclaration.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, parseTurnWindow, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
@@ -37,6 +37,9 @@ import { createAiDeadline } from '../aiDeadline.js';
  * 3. Son seçimin tur, kayıt, alan ve türlü değeri ile bildirilen isteğe uyumu
  *    (ölçü kapsamı, nüfus, varlık, liste/sıralama bütünlüğü) sunucuda
  *    belirlenimci doğrulanır. İkinci bir dil modeli yargıç olarak kullanılmaz.
+ *    Her araç turundan sonra sunucu, bildirilen isteğin kayıt defterindeki
+ *    ölçü yollarından türettiği seçimi aynı doğrulamadan geçirir; geçerse
+ *    güncel yetki yeniden doğrulanır ve modele ayrıca seçim turu yaptırılmaz.
  * 4. Doğrulanamayan yanıt BİR kez düzeltilir; yine doğrulanamazsa kullanıcı
  *    sabit güvenli iletiyi görür (uydurma kanıtlı yanıt hiçbir zaman gösterilmez).
  * 5. Standart kipte kurtarılabilir model hatası (doğrulanamayan yapı, uzunluk
@@ -317,7 +320,9 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     repairsLeft: limits.maxRepairRounds,
     emptyRetried: false,
     escalated: false,
-    models: []
+    models: [],
+    // İçeriksiz tur izi: tur amaçları, süreler, belirteç sayıları ve sayaçlar.
+    trace: { startedAt: Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
   };
   turn.executor = createToolExecutor({
     resolveTool: (name) => !turn.permittedTools || turn.permittedTools.has(name) ? getRotaTool(name) : null,
@@ -360,11 +365,147 @@ function stats(turn) {
   return { modelRounds: turn.modelRounds, toolRounds: turn.toolRounds, ...turn.executor.stats(), ...turn.context.stats() };
 }
 
+const MAX_TRACED_ROUNDS = 16;
+
+/** Model turunun amacı (içeriksiz): bildirim/plan, araç, takip, seçim ya da düzeltme. */
+function roundPurpose(turn, canCallTools) {
+  if (turn.trace.pending) return turn.trace.pending;
+  if (!turn.ledger.ids().length) return turn.request ? 'tools' : 'plan';
+  return canCallTools ? 'follow-up' : 'select';
+}
+
+function traceRound(turn, { purpose, startedAt, result = null, error = null }) {
+  if (turn.trace.rounds.length >= MAX_TRACED_ROUNDS) return;
+  const usage = result?.usage || {};
+  turn.trace.rounds.push({
+    purpose,
+    profile: turn.session.profile,
+    model: result?.model || turn.session.model,
+    durationMs: result?.durationMs ?? Date.now() - startedAt,
+    firstEventMs: result?.firstEventMs ?? null,
+    budget: turn.session.maxOutputTokens ?? null,
+    finishReason: error ? String(error.code || 'error') : result.finishReason,
+    toolCalls: result?.toolCalls?.length || 0,
+    input: usage.promptTokens ?? null,
+    completion: usage.completionTokens ?? null,
+    reasoning: usage.reasoningTokens ?? null
+  });
+}
+
+function traceTurn(turn, outcome, { selectedBy = null, code = null } = {}) {
+  if (turn.trace.recorded) return;
+  turn.trace.recorded = true;
+  recordGroundedTurn({
+    outcome, code, selectedBy, escalated: turn.escalated, durationMs: Date.now() - turn.trace.startedAt,
+    modelRounds: turn.modelRounds, toolRounds: turn.toolRounds, declarations: turn.trace.declarations, repairs: turn.trace.repairs,
+    revalidationMs: turn.trace.revalidationMs, verificationMs: turn.trace.verificationMs, rounds: turn.trace.rounds,
+    ...turn.executor.stats(), ...turn.context.stats()
+  });
+}
+
+function unavailableVerdict(locale) {
+  return { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] };
+}
+
+/** Doğrulayıcının girdisi: bu turun GEÇERLİ kanıtı, bildirilen istek ve sunucunun bağladığı seçim. */
+function verdictInput(turn) {
+  return {
+    evidenceIds: turn.ledger.ids(),
+    evidencePayloads: turn.ledger.payloads(),
+    toolsAttempted: turn.toolsAttempted,
+    toolFailureCodes: turn.toolFailureCodes,
+    route: turn.route,
+    locale: turn.locale,
+    request: turn.request,
+    entries: turn.ledger.requestEntries(),
+    selection: turn.containment.boundSelection(),
+    today: turn.context.today
+  };
+}
+
+/**
+ * Çizimden hemen önce güncel yetki ve kanıt yeniden doğrulanır. Yetki ya da
+ * kanıt okunamazsa bütün kanıt geçersizdir ve `true` (kullanılamıyor) döner.
+ */
+async function revalidate(turn) {
+  const { ledger, context, limits, session } = turn;
+  if (!ledger.ids().length || !context.authorizationEpoch) return false;
+  const startedAt = Date.now();
+  let unavailable = false;
+  const validationDeadline = createAiDeadline({ timeoutMs: limits.callTimeoutMs, parentSignal: session.signal });
+  try {
+    context.beginRound();
+    try {
+      await (context.revalidateAuthorization || context.authorization)(validationDeadline.signal);
+      if (context.revalidateEvidence) ledger.retainAuthorized(await context.revalidateEvidence(ledger.authorizationEntries(), validationDeadline.signal));
+    } catch (error) {
+      if (isTurnFatal(error) || session.signal?.aborted) throw error;
+      unavailable = true;
+      ledger.invalidateAuthorization(null);
+    }
+    ledger.invalidateAuthorization(context.authorizationEpoch(), context.isEvidenceAuthorized);
+  } finally {
+    validationDeadline.dispose();
+    turn.trace.revalidationMs += Date.now() - startedAt;
+  }
+  return unavailable;
+}
+
+/** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
+async function finish(turn, verdict, onText, selectedBy = 'model') {
+  const { ledger, locale } = turn;
+  const cited = ledger.summaries(verdict.citedIds);
+  const disclosure = ['grounded', 'clarification'].includes(verdict.kind) ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
+  const finalText = ['grounded', 'clarification'].includes(verdict.kind) ? disclosure.text : verdict.normalized;
+  await onText(finalText);
+  const outcome = verdict.kind;
+  recordGroundedAnswer({ outcome, rounds: turn.modelRounds, evidence: cited.length, repaired: turn.repaired, disclosed: disclosure.disclosed });
+  traceTurn(turn, outcome, { selectedBy: outcome === 'grounded' ? selectedBy : null });
+  return {
+    text: finalText,
+    // Doğrulanmış yanıtın bitişi sunucu kararıdır; sağlayıcının son turdaki nedeni (ör. tool_calls) taşınmaz.
+    finishReason: outcome === 'general_redirect' ? 'clarification'
+      : ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : 'stop',
+    outcome,
+    evidence: cited,
+    evidenceRows: ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null }),
+    streamedLive: false,
+    repaired: turn.repaired,
+    disclosed: disclosure.disclosed,
+    models: [...turn.models],
+    stats: stats(turn)
+  };
+}
+
+/**
+ * Araç turundan sonra sunucunun istekten türettiği seçim. Adaylar modelin
+ * seçimiyle AYNI doğrulamadan geçer; yalnızca tek aday geçerse güncel yetki ve
+ * kanıt yeniden okunur ve seçim yeniden doğrulanır. Aday yoksa ya da birden
+ * çok aday geçerse (hangi satırların kastedildiği belirsiz) tur model seçimine
+ * döner; yetki okunamazsa sonuç "kullanılamıyor"dur.
+ */
+async function serverSelection(turn) {
+  if (!turn.request || !turn.ledger.ids().length) return null;
+  const startedAt = Date.now();
+  const input = verdictInput(turn);
+  const verified = requestSelections(turn.request, input.entries, input.selection).filter((candidate) => analyze(candidate, input).ok);
+  turn.trace.verificationMs += Date.now() - startedAt;
+  if (verified.length !== 1) return null;
+  const [selected] = verified;
+  turn.status(ASSISTANT_STREAM_PHASES.VERIFYING);
+  if (await revalidate(turn)) return unavailableVerdict(turn.locale);
+  const checkedAt = Date.now();
+  const verdict = analyze(selected, verdictInput(turn));
+  turn.trace.verificationMs += Date.now() - checkedAt;
+  return verdict.ok ? verdict : null;
+}
+
 /** Doğrulanamayan turun sabit güvenli yanıtı. */
 async function failTurn(turn, onText) {
   const failureText = groundingFailureText(turn.locale);
   await onText(failureText);
   recordGroundedAnswer({ outcome: 'failed', rounds: turn.modelRounds, evidence: 0, repaired: turn.repaired });
+  traceTurn(turn, 'failed');
   return {
     text: failureText,
     finishReason: GROUNDING_FAILED_FINISH_REASON,
@@ -423,15 +564,26 @@ export async function runGroundedTurn(session, {
 }) {
   const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, onStatus });
   turn.session = session;
-  const { ledger, executor, containment, status } = turn;
-  ({ catalog, context, limits } = turn);
+  try {
+    return await continueTurn(turn, { escalationAvailable, onText, resumed: Boolean(resume) });
+  } catch (error) {
+    traceTurn(turn, 'error', { code: typeof error?.code === 'string' ? error.code : null });
+    throw error;
+  }
+}
+
+async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
+  const { ledger, executor, containment, status, catalog, limits, session } = turn;
   const canEscalate = () => escalationAvailable && escalationPermitted(turn);
-  let allowTools = resume ? ledger.ids().length === 0 : true;
+  let allowTools = resumed ? ledger.ids().length === 0 : true;
   let lengthExhausted = false;
   for (;;) {
     const canCallTools = allowTools && turn.toolRounds < limits.maxToolRounds;
     turn.modelRounds += 1;
     boundTranscript(turn.transcript);
+    const purpose = roundPurpose(turn, canCallTools);
+    turn.trace.pending = null;
+    const startedAt = Date.now();
     let result;
     try {
       result = await session.round({
@@ -444,15 +596,18 @@ export async function runGroundedTurn(session, {
         }
       });
     } catch (error) {
+      traceRound(turn, { purpose, startedAt, error });
       if (!isEmptyCompletion(error) || session.signal?.aborted) throw error;
       // Boş yanıt yan etkisizdir: aynı tur, oturumda bir kez ve süre kaldıysa yeniden istenir.
       if (!turn.emptyRetried && (session.remainingMs?.() ?? 0) >= EMPTY_COMPLETION_RETRY_MIN_MS) {
         turn.emptyRetried = true;
+        turn.trace.pending = 'retry';
         continue;
       }
       if (canEscalate()) return escalation(turn, 'EMPTY_COMPLETION', { error });
       throw error;
     }
+    traceRound(turn, { purpose, startedAt, result });
     const reported = result.model || session.model;
     if (reported) turn.models.push(reported);
 
@@ -460,6 +615,8 @@ export async function runGroundedTurn(session, {
       if (turn.repairsLeft > 0) {
         turn.repairsLeft -= 1;
         turn.repaired = true;
+        turn.trace.repairs += 1;
+        turn.trace.pending = 'repair';
         allowTools = ledger.ids().length === 0;
         instruct(turn, 'Çıktı sağlayıcı sınırında kesildi. Önceki kesik JSON geçersizdir. En fazla 8 iddiayla daha kısa ve tam bir JSON üret; gerekli ise listeyi daralt.', { repair: true });
         continue;
@@ -472,19 +629,25 @@ export async function runGroundedTurn(session, {
     const declaredRoute = parseTurnRoute(declaration);
     // Bildirim yalnızca veri okunmadan önce kabul edilir; sonrasında istek değişmez.
     const declared = !turn.toolsAttempted && declaredRoute ? acceptDeclaration(turn, declaration, declaredRoute) : null;
+    if (declared) turn.trace.declarations += 1;
     if (declared && !result.toolCalls.length && turn.declarationsLeft > 0) {
       turn.declarationsLeft -= 1;
       turn.route = declaredRoute;
       if (declared.ok) instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
-      else instruct(turn, declarationRepair(declared.details), { repair: true });
+      else {
+        turn.trace.pending = 'declaration';
+        instruct(turn, declarationRepair(declared.details), { repair: true });
+      }
       continue;
     }
     // Araç turu her durumda geçerli bir istek ister: genel yönlendirme bildiren yanıtın araç çağrısı da çalışmaz.
     if (result.toolCalls.length && canCallTools && ((declared && !declared.ok) || !turn.request)) {
       // Geçerli istek bildirimi olmadan araç çalışmaz: veri okunmadan önce bildirim düzeltilir.
+      if (!declared) turn.trace.declarations += 1;
       if (turn.declarationsLeft > 0) {
         turn.declarationsLeft -= 1;
         turn.route = TURN_ROUTES.ROTA;
+        turn.trace.pending = 'declaration';
         instruct(turn, declarationRepair(declared?.details || ['$.request:required']), { repair: true });
         continue;
       }
@@ -511,62 +674,19 @@ export async function runGroundedTurn(session, {
       }
       record(turn, { role: 'assistant', content: result.text || '', toolCalls: safeToolCallsForTranscript(result.toolCalls, toolMessages) }, ...toolMessages);
       if (turn.toolRounds >= limits.maxToolRounds) instruct(turn, roundLimitNote());
+      // Bildirilen istek kanıttaki olguları belirliyorsa ayrı bir model seçim turu gerekmez.
+      const settled = await serverSelection(turn);
+      if (settled) return finish(turn, settled, onText, 'server');
       continue;
     }
 
-    let authorizationUnavailable = false;
-    if (ledger.ids().length && context.authorizationEpoch) {
-      const validationDeadline = createAiDeadline({ timeoutMs: limits.callTimeoutMs, parentSignal: session.signal });
-      try {
-        context.beginRound();
-        try {
-          await (context.revalidateAuthorization || context.authorization)(validationDeadline.signal);
-          if (context.revalidateEvidence) ledger.retainAuthorized(await context.revalidateEvidence(ledger.authorizationEntries(), validationDeadline.signal));
-        } catch (error) {
-          if (isTurnFatal(error) || session.signal?.aborted) throw error;
-          authorizationUnavailable = true;
-          ledger.invalidateAuthorization(null);
-        }
-        ledger.invalidateAuthorization(context.authorizationEpoch(), context.isEvidenceAuthorized);
-      } finally { validationDeadline.dispose(); }
-    }
+    const authorizationUnavailable = await revalidate(turn);
     const text = String(result.text || '').trim();
     status(ASSISTANT_STREAM_PHASES.VERIFYING);
-    const { locale } = turn;
-    const verdict = authorizationUnavailable ? { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] } : analyze(text, {
-      evidenceIds: ledger.ids(),
-      evidencePayloads: ledger.payloads(),
-      toolsAttempted: turn.toolsAttempted,
-      toolFailureCodes: turn.toolFailureCodes,
-      route: turn.route,
-      locale,
-      request: turn.request,
-      entries: ledger.requestEntries(),
-      selection: containment.boundSelection(),
-      today: context.today
-    });
-    if (verdict.ok) {
-      const cited = ledger.summaries(verdict.citedIds);
-      const disclosure = ['grounded', 'clarification'].includes(verdict.kind) ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
-      const finalText = ['grounded', 'clarification'].includes(verdict.kind) ? disclosure.text : verdict.normalized;
-      await onText(finalText);
-      const outcome = verdict.kind;
-      recordGroundedAnswer({ outcome, rounds: turn.modelRounds, evidence: cited.length, repaired: turn.repaired, disclosed: disclosure.disclosed });
-      return {
-        text: finalText,
-        // Doğrulanmış yanıtın bitişi sunucu kararıdır; sağlayıcının son turdaki nedeni (ör. tool_calls) taşınmaz.
-        finishReason: outcome === 'general_redirect' ? 'clarification'
-          : ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : 'stop',
-        outcome,
-        evidence: cited,
-        evidenceRows: ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null }),
-        streamedLive: false,
-        repaired: turn.repaired,
-        disclosed: disclosure.disclosed,
-        models: [...turn.models],
-        stats: stats(turn)
-      };
-    }
+    const verifyStartedAt = Date.now();
+    const verdict = authorizationUnavailable ? unavailableVerdict(turn.locale) : analyze(text, verdictInput(turn));
+    turn.trace.verificationMs += Date.now() - verifyStartedAt;
+    if (verdict.ok) return finish(turn, verdict, onText);
 
     if (turn.repairsLeft > 0) {
       const evidenceGap = verdict.issues.some((issue) => EVIDENCE_GAP_CODES.has(issue?.code));
@@ -574,6 +694,8 @@ export async function runGroundedTurn(session, {
       if (!turn.repaired && !evidenceGap && canEscalate()) return escalation(turn, 'VERIFICATION_FAILED');
       turn.repairsLeft -= 1;
       turn.repaired = true;
+      turn.trace.repairs += 1;
+      turn.trace.pending = 'repair';
       const hint = turn.request && verdict.kind === 'grounded' ? requestRepairHint(turn.request, ledger.requestEntries()) : '';
       instruct(turn, groundingRepairInstruction(verdict.issues, hint), { repair: true });
       // Kanıt varken düzeltme yeniden seçimdir; kanıt yoksa ya da bildirilen

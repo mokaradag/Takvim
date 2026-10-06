@@ -55,6 +55,16 @@ const factAnswer = (onCall = null) => ({ type: 'script', respond: (call) => {
 const toolQueries = (stack) => (stack.db.aiToolLog || []).filter((entry) => entry.query === 'task-facts').length;
 const countFull = { operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }] };
 const searchFull = { type: 'tool-calls', preface: [declared(countFull)], calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
+/** Adla çözülen görevin satırdaki durumu: sunucu seçim türetmez, olguyu model seçer (devir bu yolda sınanır). */
+const NAMED = 'Radar test planı';
+const NAMED_QUESTION = `${NAMED} görevinin durumu nedir?`;
+const NAMED_ANSWER = /görevinin durumu \*\*Yapılacak\*\*/;
+const statusNamed = { operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: NAMED }] };
+const searchNamed = { type: 'tool-calls', preface: [declared(statusNamed)], calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] };
+const statusAnswer = (onCall = null) => ({ type: 'script', respond: (call) => {
+  onCall?.(call);
+  return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: [`${toolResultsOf(call)[0].evidenceId}:data.tasks.0.status`] }) };
+} });
 const logLines = (lines, operation) => lines.filter((line) => line.includes(`"operation":"${operation}"`)).map((line) => JSON.parse(line.slice(line.indexOf('{'))));
 
 async function until(predicate, rounds = 2000) {
@@ -66,8 +76,8 @@ test('an unverifiable Standard answer is finalized once by Deep thinking with th
   const stack = stackFor(t);
   const logs = captureConsole(t);
   let queriesBeforeDeep = null;
-  stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, factAnswer(() => { queriesBeforeDeep = toolQueries(stack); }));
-  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  stack.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, statusAnswer(() => { queriesBeforeDeep = toolQueries(stack); }));
+  const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.equal(response.status, 200);
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP, DEEP]);
   assert.equal(stack.provider.calls[2].toolChoice, 'none', 'kanıt varken Derin düşünme yalnızca yanıtı yazar');
@@ -79,7 +89,7 @@ test('an unverifiable Standard answer is finalized once by Deep thinking with th
   const done = doneOf(response);
   assert.equal(deltas(response).length, 1, 'kullanıcı tek yanıt görür');
   assert.equal(deltas(response)[0], done.assistantMessage.content);
-  assert.match(done.assistantMessage.content, /\*\*8\*\*/);
+  assert.match(done.assistantMessage.content, NAMED_ANSWER);
   assert.equal(done.assistantMessage.finishReason, 'stop');
   assert.equal(done.assistantMessage.mode, 'standard', 'istenen kip korunur');
   assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R1']);
@@ -90,28 +100,35 @@ test('an unverifiable Standard answer is finalized once by Deep thinking with th
   assert.equal(grounding.failed, 0);
   const [event] = logLines(logs, 'ai.grounded.escalation');
   assert.deepEqual(event.context, { requestedMode: 'standard', models: [STANDARD, DEEP], reason: 'VERIFICATION_FAILED', toolsReused: true, outcome: 'grounded' });
-  for (const secret of [QUESTION, INVALID, 'Radar Modernizasyonu', String(AYSE)]) {
+  for (const secret of [NAMED_QUESTION, NAMED, INVALID, 'Radar Modernizasyonu', String(AYSE)]) {
     assert.equal(logs.some((line) => line.includes(secret)), false, `günlük içerik taşımaz: ${secret}`);
   }
 });
 
 test('a verified Standard answer keeps the whole turn in Standard and spends no repair', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue(searchFull, factAnswer());
+  // İstek kanıttaki olguyu belirliyorsa sunucu seçer: ikinci model turu yoktur.
+  stack.provider.enqueue(searchFull);
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD]);
   assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
+  // Seçimi model yaptığında da tur Standart kipte kalır.
+  stack.provider.enqueue(searchNamed, statusAnswer());
+  const named = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
+  assert.deepEqual(stack.provider.calls.slice(1).map((call) => call.model), [STANDARD, STANDARD]);
+  assert.match(doneOf(named).assistantMessage.content, NAMED_ANSWER);
   const { grounding } = aiTelemetrySnapshot();
   assert.equal(grounding.escalations.total, 0);
   assert.equal(grounding.repaired, 0);
-  assert.equal(grounding.grounded, 1);
+  assert.equal(grounding.grounded, 2);
+  assert.equal(grounding.serverSelected, 1);
 });
 
 test('a Deep escalation that times out ends as a bounded timeout, not as a verification failure', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'status', status: 504 });
-  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  stack.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'status', status: 504 });
+  const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP]);
   const [failure] = eventsOf(response, 'error');
   assert.equal(failure.data.code, 'AI_TIMEOUT');
@@ -129,13 +146,13 @@ test('an empty Standard completion is diagnosed without content and retried in-s
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(
-    searchFull,
+    searchNamed,
     { type: 'answer', text: '', chunks: [], reasoning: 3, usage: { promptTokens: 900, completionTokens: 512, totalTokens: 1412, reasoningTokens: 512 } },
-    factAnswer()
+    statusAnswer()
   );
-  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
-  assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
+  assert.match(doneOf(response).assistantMessage.content, NAMED_ANSWER);
   assert.equal(deltas(response).length, 1);
   const snapshot = aiTelemetrySnapshot();
   assert.equal(snapshot.emptyCompletions, 1);
@@ -154,20 +171,20 @@ test('an empty Standard completion is diagnosed without content and retried in-s
   assert.equal(diagnosis.context.textReceived, false);
   assert.equal(typeof diagnosis.context.firstEventMs, 'number');
   assert.equal(typeof diagnosis.context.providerMs, 'number');
-  assert.equal(JSON.stringify(diagnosis).includes(QUESTION), false);
+  assert.equal(JSON.stringify(diagnosis).includes(NAMED_QUESTION), false);
 });
 
 test('Deep thinking retries one empty completion inside its own session and never loops', async (t) => {
   const recovered = stackFor(t);
-  recovered.provider.enqueue(searchFull, { type: 'answer', text: '', chunks: [] }, factAnswer());
-  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' });
+  recovered.provider.enqueue(searchNamed, { type: 'answer', text: '', chunks: [] }, statusAnswer());
+  const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'deep' });
   assert.deepEqual(recovered.provider.calls.map((call) => call.model), [DEEP, DEEP, DEEP]);
-  assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
+  assert.match(doneOf(response).assistantMessage.content, NAMED_ANSWER);
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 
   const exhausted = stackFor(t);
-  exhausted.provider.enqueue(searchFull, { type: 'answer', text: '', chunks: [] }, { type: 'answer', text: '', chunks: [] }, factAnswer());
-  const failed = await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' });
+  exhausted.provider.enqueue(searchNamed, { type: 'answer', text: '', chunks: [] }, { type: 'answer', text: '', chunks: [] }, statusAnswer());
+  const failed = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'deep' });
   assert.equal(exhausted.provider.calls.length, 3, 'araç turu + boş yanıt + tek yeniden deneme');
   const [error] = eventsOf(failed, 'error');
   assert.equal(error.data.code, 'AI_PROVIDER_RESPONSE_INVALID');
@@ -205,9 +222,10 @@ test('a Standard turn that never declares its request escalates once to Deep thi
   stack.provider.enqueue(undeclared, undeclared, undeclared, { type: 'script', respond: () => {
     queriesBeforeDeep = toolQueries(stack);
     return searchFull;
-  } }, factAnswer());
+  } });
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP, DEEP]);
+  // Derin düşünmenin bildirim ve araç turundan sonra olguyu sunucu seçer.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP]);
   assert.equal(queriesBeforeDeep, 0, 'bildirimsiz araç çağrıları hiçbir SQL çalıştırmadı');
   assert.doesNotMatch(stack.provider.calls[3].messages[0].content, /Araç çağrıları çalıştırılmadı/, 'Standart düzeltme notu devredilmez');
   assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
@@ -216,8 +234,8 @@ test('a Standard turn that never declares its request escalates once to Deep thi
 
 test('Deep mode and installations without a Deep tool profile keep the single bounded repair', async (t) => {
   const deep = stackFor(t);
-  deep.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, factAnswer());
-  const deepResponse = await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' });
+  deep.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, statusAnswer());
+  const deepResponse = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'deep' });
   assert.equal(deep.provider.calls.length, 3);
   assert.equal(doneOf(deepResponse).assistantMessage.content, GROUNDING_FAILURE_TEXT);
 
@@ -229,8 +247,8 @@ test('Deep mode and installations without a Deep tool profile keep the single bo
     profiles: { ...DEFAULT_AI_MODEL_REGISTRY.profiles, 'chat.tools.reasoning': { ...DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'], enabled: false } }
   }), 'utf8');
   const standardOnly = stackFor(t, { env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
-  standardOnly.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, factAnswer());
-  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  standardOnly.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, statusAnswer());
+  const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.deepEqual(standardOnly.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
   assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
@@ -238,8 +256,8 @@ test('Deep mode and installations without a Deep tool profile keep the single bo
 
 test('a Deep session that cannot run falls back to the Standard result instead of a second answer', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, { type: 'status', status: 503 });
-  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  stack.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, { type: 'status', status: 503 });
+  const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP, DEEP]);
   assert.deepEqual(deltas(response), [GROUNDING_FAILURE_TEXT]);
   assert.equal(doneOf(response).assistantMessage.finishReason, 'grounding_failed');
@@ -248,11 +266,11 @@ test('a Deep session that cannot run falls back to the Standard result instead o
 
 test('an identity change before the Deep finalization ends the turn instead of falling back', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'script', respond: () => {
+  stack.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'script', respond: () => {
     stack.useSicil(MEHMET);
     return { type: 'answer', text: INVALID };
-  } }, factAnswer());
-  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  } }, statusAnswer());
+  const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.equal(stack.provider.calls.length, 3, 'Derin düşünme modeli çağrılmaz');
   assert.equal(eventsOf(response, 'error').length, 1);
   assert.deepEqual(deltas(response), [], 'Standart güvenli iletisi de gösterilmez');
@@ -262,9 +280,9 @@ test('an identity change before the Deep finalization ends the turn instead of f
 
 test('cancelling during the Deep finalization writes nothing and does not fall back', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue(searchFull, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, { type: 'stall' });
+  stack.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, { type: 'stall' });
   const controller = new AbortController();
-  const response = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: QUESTION, mode: 'standard', conversationId: null }, { signal: controller.signal }));
+  const response = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'standard', conversationId: null }, { signal: controller.signal }));
   const reading = readSse(response).catch(() => null);
   await until(() => stack.provider.calls.length === 4 && stack.provider.calls[3].model === DEEP);
   controller.abort();
@@ -295,10 +313,6 @@ test('provider usage keeps reasoning token counts only when reported, and empty 
 test('a missing declared metric is obtained by bounded Standard repair before tool-disabled escalation', async (t) => {
   const stack = stackFor(t);
   const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'] };
-  const both = () => ({ type: 'script', respond: (call) => {
-    const tools = toolResultsOf(call);
-    return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:totalCount', `${tools.at(-1).evidenceId}:data.totals.open`] }) };
-  } });
   stack.provider.enqueue(
     { ...searchFull, preface: [declared(request)] }, factAnswer(),
     { type: 'script', respond: (call) => {
@@ -306,25 +320,28 @@ test('a missing declared metric is obtained by bounded Standard repair before to
       assert.equal(call.toolChoice, 'auto');
       assert.ok(call.tools.some((tool) => tool.name === 'rota_task_analytics'));
       return { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }] };
-    } }, both()
+    } }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, STANDARD]);
-  assert.deepEqual(doneOf(response).assistantMessage.evidence.map((item) => item.id), ['R1', 'R2']);
+  // Düzeltmenin araç turu bildirilen bütün ölçüleri taşır: olguyu sunucu seçer.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
+  assert.deepEqual(doneOf(response).assistantMessage.evidence.map((item) => item.id), ['R2']);
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
 test('repair followed by Deep finalization shares its exhausted repair and tool budgets', async (t) => {
   const stack = stackFor(t);
-  const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'] };
-  stack.provider.enqueue({ ...searchFull, preface: [declared(request)] }, factAnswer(),
+  // Yanıt iki kanıtın olgularını birlikte ister: seçimi model yapar.
+  const request = { ...countFull, metrics: ['project.code', 'tasks.open'] };
+  stack.provider.enqueue({ ...searchFull, preface: [declared(request)] },
+    { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.code'] }) },
     { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }] },
     { type: 'answer', text: INVALID },
     { type: 'script', respond: (call) => {
       assert.equal(call.toolChoice, 'none');
       assert.equal(toolResultsOf(call).length, 2);
-      return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:totalCount', 'R2:data.totals.open'] }) };
+      return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.code', 'R2:data.totals.open'] }) };
     } });
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');

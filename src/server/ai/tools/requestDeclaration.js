@@ -1,6 +1,6 @@
 import 'server-only';
-import { METRICS, metricPaths } from '../../../domain/ai/claimableEvidence.js';
-import { rankableMeasure, REQUEST_ENTITY_TYPES, REQUEST_LIMITS, REQUEST_OPERATIONS } from '../../../domain/ai/requestContract.js';
+import { claimableContract, METRICS, metricEntry, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
+import { rankableMeasure, rankedRowIndexes, REQUEST_ENTITY_TYPES, REQUEST_LIMITS, REQUEST_OPERATIONS } from '../../../domain/ai/requestContract.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { parseSicil } from '../../identity/sicil.js';
 import { addDays, normalizeTaskFilters } from './rota/taskFacts.js';
@@ -303,4 +303,105 @@ export function requestRepairHint(request, entries) {
     lines.push(`${metric} → ${paths.length ? paths.slice(0, 4).join(', ') : 'bu turun kanıtlarında yok'}`);
   }
   return lines.slice(0, REQUEST_LIMITS.maxMetrics).join('\n');
+}
+
+/* ── İstekten türetilen olgu seçimi ───────────────────────── */
+
+const valueOf = (payload, path) => (path.startsWith('data.')
+  ? path.split('.').slice(1).reduce((value, key) => value?.[key], payload?.data) : payload?.[path]);
+
+/** Göreli yol (`*` dizinin her öğesi) değerde dolu mu? */
+function present(value, parts) {
+  if (!parts.length) return value !== undefined;
+  const [head, ...rest] = parts;
+  if (head === '*') return Array.isArray(value) && value.some((item) => present(item, rest));
+  return value != null && typeof value === 'object' && present(value[head], rest);
+}
+
+const parentOf = (path) => (path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : '');
+
+/**
+ * Ölçünün satır dışı taşıyıcıları: kayıt defteri sırasıyla ilk dolu yol ve aynı
+ * nesnedeki aynı ölçülü kardeşleri (ör. bağımlılık türü dağılımının her türü).
+ */
+function scalarCarriers(entry, metric) {
+  const paths = metricPaths(entry.tool, metric).filter((path) => !path.includes('*') && valueOf(entry.payload, path) !== undefined);
+  return paths.filter((path) => parentOf(path) === parentOf(paths[0]));
+}
+
+/** Satır koleksiyonunda ölçüyü taşıyan dolu alanlar (satıra göreli yol) ve satırı adlandıran bağlam alanı. */
+function rowFields(tool, collection, metrics, rows) {
+  const prefix = `${collection}.*.`;
+  const filled = (rel) => rows.some((row) => present(row, rel.split('.')));
+  const paths = claimableContract(tool).paths.filter((path) => path.startsWith(prefix));
+  const carriers = new Map(metrics.map((metric) => [metric, paths.filter((path) => metricEntry(tool, path)?.metric === metric)
+    .map((path) => path.slice(prefix.length)).filter((rel) => !rows.length || filled(rel))]));
+  const naming = paths.map((path) => path.slice(prefix.length))
+    .find((rel) => !rel.includes('.') && metricEntry(tool, `${prefix}${rel}`)?.context && filled(rel)) || null;
+  return { carriers, naming };
+}
+
+/**
+ * Bir satır koleksiyonundan liste ya da sıralama seçimi: satırlarda taşınan
+ * ölçüler satır alanlarıyla, taşınmayanlar kaydın tekil taşıyıcısıyla seçilir.
+ */
+function rowSelection(request, entry, collection) {
+  const rows = valueOf(entry.payload, `data.${collection}`);
+  if (!Array.isArray(rows)) return null;
+  const { carriers, naming } = rowFields(entry.tool, collection, request.metrics, rows);
+  const carried = request.metrics.filter((metric) => carriers.get(metric).length);
+  if (!carried.length) return null;
+  let indexes = ['*'];
+  if (request.operation === 'rank') {
+    if (!carriers.get(request.rank.metric)?.length) return null;
+    indexes = rankedRowIndexes(request, entry.tool, entry.payload, collection);
+    if (!indexes?.length) return null;
+  }
+  const facts = [];
+  for (const metric of request.metrics) {
+    if (carried.includes(metric)) continue;
+    const paths = scalarCarriers(entry, metric);
+    if (!paths.length) return null;
+    facts.push(...paths.map((path) => `${entry.id}:${path}`));
+  }
+  // Boş koleksiyonun satır alanı seçilemez; boş nüfus kanıtın tekil olgularıyla doğrulanır.
+  if (!rows.length) return facts.length ? facts : null;
+  const relatives = [...new Set([naming, ...carried.map((metric) => carriers.get(metric)[0])].filter(Boolean))];
+  for (const index of indexes) for (const rel of relatives) facts.push(`${entry.id}:data.${collection}.${index}.${rel}`);
+  return facts;
+}
+
+/**
+ * Bildirilen istekten sunucunun türettiği olgu seçimi adayları (en yeni kanıt
+ * önce). Yalnızca kayıt defterindeki ölçü yollarından kurulur; kullanıcı
+ * cümlesi yorumlanmaz. Adaylar ÖNERİDİR: her biri modelin seçimiyle aynı
+ * doğrulayıcıdan (`analyzeGroundedAnswer` + `verifyRequestedFacts`) geçer;
+ * yalnızca TEK aday geçerse kullanılır, aksi hâlde seçimi model yapar.
+ */
+export function requestSelections(request, entries, selection = null) {
+  const usable = entries.filter((entry) => entry.payload?.ok === true && entry.payload.data && typeof entry.payload.data === 'object').reverse();
+  const candidates = [];
+  if (request.operation === 'value') {
+    for (const entry of usable) {
+      const paths = request.metrics.map((metric) => scalarCarriers(entry, metric));
+      if (paths.every((list) => list.length)) candidates.push(paths.flat().map((path) => `${entry.id}:${path}`));
+    }
+    // Birden çok varlık: yalnızca bağlı bir varlığı seçen kanıtların olguları birlikte önerilir.
+    if (request.entities.length > 1) {
+      const bound = new Set(bindRequestEntities(request, entries, selection).filter((entity) => entity.bound)
+        .map((entity) => `${entity.type}:${String(entity.bound).toLowerCase()}`));
+      const named = (entry) => [...selectorsOf(entry.args || {}), ...(entry.payload.entity?.id ? [entry.payload.entity] : [])]
+        .some(({ type, id }) => bound.has(`${type}:${String(id).toLowerCase()}`));
+      const all = usable.filter(named).flatMap((entry) => request.metrics.flatMap((metric) => scalarCarriers(entry, metric)).map((path) => `${entry.id}:${path}`));
+      if (all.length) candidates.push(all);
+    }
+  } else {
+    for (const entry of usable) {
+      for (const collection of rowCollections(entry.tool).filter((name) => !name.includes('*'))) {
+        const facts = rowSelection(request, entry, collection);
+        if (facts?.length) candidates.push(facts);
+      }
+    }
+  }
+  return [...new Set(candidates.map((facts) => JSON.stringify({ kind: 'rota', facts: [...new Set(facts)] })))];
 }

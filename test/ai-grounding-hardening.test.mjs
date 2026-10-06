@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
 import { ADMIN, ALI_1, ALI_2, AYSE, NOW, PROJECTS, TASKS, WBS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared } from './helpers/evidenceScenario.mjs';
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
@@ -240,7 +240,10 @@ test('successful later rounds open their own follow-ups (person → task list �
     entities: [{ type: 'person', text: 'Ayşe Yılmaz' }] };
   const { result } = await turn(t, [calls('rota_person_search', { text: 'Ayşe Yılmaz' }, 'call', earliest), (input) => {
     const person = results(input)[0].data.people[0];
-    return calls('rota_task_search', { personSicil: person.sicil }, 'list');
+    // İki eşdeğer liste sayfası aynı sıralamayı karşılar: seçim belirsizdir, model ayrıntıya ilerler.
+    const list = calls('rota_task_search', { personSicil: person.sicil }, 'list');
+    list.toolCalls.push({ id: 'page', name: 'rota_task_search', arguments: JSON.stringify({ personSicil: person.sicil, limit: 5 }) });
+    return list;
   }, (input) => {
     assert.ok(input.tools.some((tool) => tool.name === 'rota_task_detail'));
     return calls('rota_task_detail', { taskId: results(input).at(-1).data.tasks[0].taskId }, 'detail');
@@ -276,8 +279,9 @@ test('a resolved project name reaches project-scoped activity, workload and requ
       .every((name) => input.tools.some((tool) => tool.name === name)));
     assert.equal(results(input)[0].data.resolution, 'unique');
     return calls('rota_workload_summary', { projectId: results(input)[0].data.resolvedProject.projectId }, 'load');
-  }, (input) => reply(evidenceReply(claimFor(results(input).at(-1), 'data.openTaskCount')))], { user: 'Radar Modernizasyonu projesinin iş yükü' });
+  }], { user: 'Radar Modernizasyonu projesinin iş yükü' });
   assert.equal(result.outcome, 'grounded');
+  assert.deepEqual(result.evidence.map((item) => item.id), ['R2']);
 });
 
 test('a lone partial project match cannot open project-scoped follow-ups without confirmation', async (t) => {
@@ -297,8 +301,11 @@ test('a lone partial project match cannot open project-scoped follow-ups without
 /* ── Sonuç ve telemetri ────────────────────────────────────── */
 
 test('a verified answer is stored as a server-terminal stop even after a provider tool_calls finish', async (t) => {
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', { operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', id: TASKS.OVERDUE }] }), (input) => ({
-    text: evidenceReply(claimFor(results(input)[0], 'data.task.status')), toolCalls: [], finishReason: 'tool_calls'
+  // İş dağılım yolu (çok değerli) istendiği için olguları model seçer.
+  const request = { operation: 'value', metrics: ['task.status', 'task.wbsPath'], entities: [{ type: 'task', id: TASKS.OVERDUE }] };
+  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', request), (input) => ({
+    text: JSON.stringify({ kind: 'rota', facts: [`${results(input)[0].evidenceId}:data.task.status`, `${results(input)[0].evidenceId}:data.task.wbsPath.*`] }),
+    toolCalls: [], finishReason: 'tool_calls'
   })], { user: `Rota verisini incele: ${TASKS.OVERDUE}` });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.finishReason, 'stop');
@@ -346,19 +353,35 @@ test('a clarification always presents the server-held candidate set; the model c
 
 /* ── Toplu kanıt ve yetki ──────────────────────────────────── */
 
-test('aggregate evidence is dropped when a counted but unlisted task leaves the authorized population', async (t) => {
-  const { result } = await turn(t, [calls('rota_task_analytics', { projectId: PROJECTS.FULL }, 'call', { operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }] }), (input, stack) => {
-    // Sayılan görev, kullanıcının göremediği projeye taşınır; projedeki yetki aynı kalır.
+test('aggregate evidence is dropped when a counted but unlisted task leaves the authorized population (server selection)', async (t) => {
+  const { result } = await turn(t, [(_input, stack) => {
+    // Sayılan görev, son görünürlük denetimi sırasında kullanıcının göremediği projeye taşınır; projedeki yetki aynı kalır.
+    stack.db.queryBarrier = { match: (sql) => {
+      if (sql.includes('rota-ai-tool:task-visibility')) stack.db.tasks.find((task) => task.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
+      return false;
+    } };
+    return calls('rota_task_analytics', { projectId: PROJECTS.FULL }, 'call', { operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }] });
+  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
+  assert.notEqual(result.outcome, 'grounded');
+  assert.deepEqual(result.evidenceRows, []);
+});
+
+test('aggregate evidence is dropped when a counted but unlisted task leaves the authorized population (model selection)', async (t) => {
+  // Yanıt iki kanıtın olgularını birlikte ister: seçimi model yapar.
+  const request = { operation: 'value', metrics: ['tasks.open', 'project.code'], entities: [{ type: 'project', id: PROJECTS.FULL }] };
+  const first = calls('rota_task_analytics', { projectId: PROJECTS.FULL }, 'call', request);
+  first.toolCalls.push({ id: 'search', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.FULL }) });
+  const { result } = await turn(t, [first, (input, stack) => {
     stack.db.tasks.find((task) => task.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
-    return reply(evidenceReply(claimFor(results(input)[0], 'data.totals.total')));
+    return reply(JSON.stringify({ kind: 'rota', facts: [`${results(input)[0].evidenceId}:data.totals.open`, `${results(input)[1].evidenceId}:data.project.code`] }));
   }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.notEqual(result.outcome, 'grounded');
   assert.deepEqual(result.evidenceRows, []);
 });
 
 test('admin project evidence survives the final authorization re-read', async (t) => {
-  const { result } = await turn(t, [calls('rota_project_detail', { projectId: PROJECTS.FULL }, 'call', { operation: 'value', metrics: ['project.name'], entities: [{ type: 'project', id: PROJECTS.FULL }] }),
-    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.project.name')))], { user: `Rota verisini incele: ${PROJECTS.FULL}`, sicil: ADMIN });
+  const { result } = await turn(t, [calls('rota_project_detail', { projectId: PROJECTS.FULL }, 'call', { operation: 'value', metrics: ['project.name'], entities: [{ type: 'project', id: PROJECTS.FULL }] })],
+    { user: `Rota verisini incele: ${PROJECTS.FULL}`, sicil: ADMIN });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.evidenceRows.length, 1);
 });
@@ -586,11 +609,10 @@ test('a transient evidence-schema probe failure is retryable and never saves an 
   assert.equal(stack.db.aiConversationMessages.some((row) => row.Role === 'assistant'), false);
   stack.db.queryBarrier = null;
   stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }] })],
-    calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] },
-    { type: 'script', respond: (call) => ({ type: 'answer', text: evidenceReply(claimFor(JSON.parse(call.messages.filter((message) => message.role === 'tool').at(-1).content), 'totalCount')) }) });
+    calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] });
   const retry = await sendTurn({ turnId, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   const done = retry.events.find((event) => event.event === 'done').data;
-  assert.notEqual(done.assistantMessage.finishReason, 'unavailable');
+  assert.equal(done.assistantMessage.finishReason, 'stop');
 });
 
 test('authorization id lists are materialized once into keyed temp tables before any membership check', async () => {

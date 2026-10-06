@@ -63,7 +63,7 @@ function createState() {
     // Rota verisi araçları: yalnızca araç adı, sonuç sınıfı ve süre (içerik YOK).
     tools: { calls: 0, byOutcome: {}, byTool: {}, latencyMs: [], lastFailure: null },
     // Kanıta dayalı yanıtların sonucu: grounded (kanıtlı), direct (araçsız), failed (doğrulanamadı).
-    grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, rounds: [], evidence: [],
+    grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, serverSelected: 0, rounds: [], evidence: [],
       escalations: { total: 0, byReason: {}, byOutcome: {} } },
     // Görünür çıktı üretmeden biten model çağrıları (tanı günlüğe yazılır).
     emptyCompletions: 0,
@@ -429,6 +429,7 @@ export function aiTelemetrySnapshot() {
       failed: current.grounding.failed,
       repaired: current.grounding.repaired,
       disclosed: current.grounding.disclosed,
+      serverSelected: current.grounding.serverSelected,
       rounds: countPercentiles(current.grounding.rounds),
       evidence: countPercentiles(current.grounding.evidence),
       escalations: {
@@ -605,4 +606,59 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
     pushSample(current.rounds, rounds);
     pushSample(current.evidence, evidence);
   });
+}
+
+const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
+const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry']);
+const SAFE_CODE = /^[A-Za-z][A-Za-z0-9_.:-]{0,59}$/;
+
+/**
+ * Kanıta dayalı turun İÇERİKSİZ izi: her model turunun amacı, profili/modeli,
+ * süresi, ilk olaya kadar geçen süre, çıktı sınırı, bitiş nedeni, çağrı sayısı ve
+ * sağlayıcının bildirdiği belirteç sayıları; tur düzeyinde bildirim/düzeltme,
+ * araç, SQL, yeniden doğrulama ve doğrulama süreleri, devir ve sonuç. Soru,
+ * yanıt, araç bağımsız değişkeni ya da kanıt içeriği yazılmaz.
+ */
+export function recordGroundedTurn(trace = {}) {
+  const outcome = TURN_OUTCOMES.has(trace.outcome) ? trace.outcome : 'error';
+  safely(() => { if (trace.selectedBy === 'server') state().grounding.serverSelected += 1; });
+  safely(() => logEvent({
+    severity: EVENT_SEVERITIES.INFO,
+    component: COMPONENTS.AI,
+    operation: 'ai.grounded.turn',
+    code: 'AI_GROUNDED_TURN',
+    message: 'Rota verisi turu tamamlandı.',
+    durationMs: millis(trace.durationMs),
+    context: {
+      outcome,
+      code: SAFE_CODE.test(String(trace.code ?? '')) ? trace.code : null,
+      selectedBy: ['server', 'model'].includes(trace.selectedBy) ? trace.selectedBy : null,
+      escalated: trace.escalated === true,
+      modelRounds: safeCount(trace.modelRounds),
+      toolRounds: safeCount(trace.toolRounds),
+      toolCalls: safeCount(trace.calls),
+      toolFailures: safeCount(trace.failures),
+      resultBytes: safeCount(trace.resultBytes),
+      declarations: safeCount(trace.declarations),
+      repairs: safeCount(trace.repairs),
+      sqlMs: millis(trace.sqlMs),
+      sqlQueries: safeCount(trace.queries),
+      scopeLoads: safeCount(trace.authorizationLoads),
+      revalidationMs: millis(trace.revalidationMs),
+      verificationMs: millis(trace.verificationMs),
+      rounds: (Array.isArray(trace.rounds) ? trace.rounds : []).slice(0, 16).map((round) => ({
+        purpose: ROUND_PURPOSES.has(round?.purpose) ? round.purpose : null,
+        profile: isKnownAiProfile(round?.profile) ? round.profile : null,
+        model: safeModel(round?.model),
+        ms: millis(round?.durationMs),
+        firstEventMs: millis(round?.firstEventMs),
+        budget: safeCount(round?.budget),
+        finish: SAFE_CODE.test(String(round?.finishReason ?? '')) ? round.finishReason : null,
+        calls: safeCount(round?.toolCalls),
+        input: safeCount(round?.input),
+        completion: safeCount(round?.completion),
+        reasoning: safeCount(round?.reasoning)
+      }))
+    }
+  }));
 }

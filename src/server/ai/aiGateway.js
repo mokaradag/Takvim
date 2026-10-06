@@ -720,9 +720,10 @@ export function createAiGateway({
 
       const session = Object.freeze({
         sicil,
-        // Yalnızca telemetri: profil ve yapılandırılmış model (anahtar ya da adres değil).
+        // Yalnızca telemetri: profil, yapılandırılmış model ve çıktı sınırı (anahtar ya da adres değil).
         profile: route.profile,
         model: route.model,
+        maxOutputTokens: outputLimit,
         signal: deadline.signal,
         remainingMs: () => deadline.remainingMs(),
         async round({ messages, tools = [], toolChoice = 'auto', onEvent = null }) {
@@ -805,7 +806,8 @@ export function createAiGateway({
             }
             recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - providerStartedAt, source: credential.source });
             progress.recorded = true;
-            return { text, toolCalls, finishReason: final.finishReason ?? null, model: final.model ?? null, usage: final.usage ?? null };
+            return { text, toolCalls, finishReason: final.finishReason ?? null, model: final.model ?? null, usage: final.usage ?? null,
+              durationMs: Math.max(0, now() - providerStartedAt), firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - providerStartedAt) };
           } finally {
             unlinkRound();
             roundScope.abort();

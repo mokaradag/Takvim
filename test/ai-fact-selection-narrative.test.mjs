@@ -18,7 +18,6 @@ const { turkishPossessiveSuffix, renderClarification, renderVerifiedNarrative } 
 const { SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
-const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 
 test('nested proposed schedule dates retain their field and direction in prose and tables', async (t) => {
@@ -182,18 +181,19 @@ const COMMON_QUESTIONS = [
 ];
 
 for (const [question, request, [tool, args], facts, expected] of COMMON_QUESTIONS) {
-  test(`a less capable tool model answers "${question}" by selecting facts only`, async (t) => {
+  test(`"${question}" is answered from the declared request in one model round, and a model selecting facts only verifies the same`, async (t) => {
     const stack = stackFor(t);
-    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: tool, arguments: args }] }, { type: 'script', respond: (call) => {
-      const [result] = toolResults(call);
-      assert.equal(result.ok, true);
-      return { type: 'answer', text: select(...facts.map((fact) => `${result.evidenceId}:${fact}`)) };
-    } });
+    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: tool, arguments: args }] });
     const response = await sendTurn({ turnId: randomUUID(), message: question });
     const answer = done(response).assistantMessage;
     assert.equal(answer.finishReason, 'stop');
     assert.match(answer.content.replace(`\n\n${SCOPE_DISCLOSURE_TEXT}`, ''), expected);
-    assert.equal(stack.provider.calls.length, 2, 'no repair round was needed');
+    assert.equal(stack.provider.calls.length, 1, 'the server selects the declared facts: no selection or repair round');
+    // Sunucu seçemeseydi daha zayıf bir modelin yalnızca olgu seçen yanıtı da aynı doğrulamadan geçerdi.
+    const { ledger } = await callRotaTool(stack, AYSE, tool, args);
+    const modelSelection = verifyRequested(ledger, facts, request);
+    assert.equal(modelSelection.ok, true, JSON.stringify(modelSelection.issues));
+    assert.match(modelSelection.normalized, expected);
   });
 }
 

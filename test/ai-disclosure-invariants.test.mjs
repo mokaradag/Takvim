@@ -17,12 +17,9 @@ const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN
 
 const taskTitle = (taskId) => declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: taskId }] });
 
-function citeTask(stack, taskId, field = 'data.task.title') {
-  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(taskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId } }] },
-    { type: 'script', respond: (call) => {
-      const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-      return { type: 'answer', text: evidenceReply(claimFor(result, field)) };
-    } });
+/** Görev ayrıntısı turu; bildirilen başlığı sunucu kanıttan seçip atıflı yazar. */
+function citeTask(stack, taskId) {
+  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(taskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId } }] });
 }
 
 function failEvidenceReads(t, pool, code) {
@@ -268,22 +265,36 @@ test('moving a cited task outside the current scope hides it on reopen and repla
   assert.equal(deltas(await sendTurn({ conversationId: first.conversation.id, turnId, message: `Görevi göster: ${TASKS.OVERDUE}` })), NON_ENUMERATING_FAILURE_TEXT);
 });
 
-test('a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence', async (t) => {
-  const stack = stackFor(t);
-  stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
-  const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
-  const title = task.Title;
-  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
-    { type: 'script', respond: (call) => {
-      const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-      task.ProjectId = PROJECTS.HIDDEN;
-      return { type: 'answer', text: evidenceReply(claimFor(result, 'data.task.title')) };
-    } }, { type: 'answer', text: '{"kind":"unavailable"}' });
-  const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
-  assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
-  assert.ok(!deltas(response).includes(title));
-  assert.deepEqual(stack.db.aiMessageEvidence, []);
-});
+for (const path of ['server', 'model']) {
+  test(`a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence (${path} selection)`, async (t) => {
+    const stack = stackFor(t);
+    stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
+    const title = task.Title;
+    if (path === 'server') {
+      // Sunucu seçiminde okuma ile çizim arasında model turu yoktur: görev son görünürlük denetimi sırasında taşınır.
+      stack.db.queryBarrier = { match: (sql) => {
+        if (sql.includes('rota-ai-tool:task-visibility')) task.ProjectId = PROJECTS.HIDDEN;
+        return false;
+      } };
+      stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
+        { type: 'answer', text: '{"kind":"unavailable"}' });
+    } else {
+      // İş dağılım yolu (çok değerli) seçimini model yapar: görev model turu sırasında taşınır.
+      const request = declared({ operation: 'value', metrics: ['task.title', 'task.wbsPath'], entities: [{ type: 'task', id: task.TaskId }] });
+      stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
+        { type: 'script', respond: () => {
+          task.ProjectId = PROJECTS.HIDDEN;
+          return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.wbsPath.*'] }) };
+        } }, { type: 'answer', text: '{"kind":"unavailable"}' });
+    }
+    const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
+    assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
+    assert.ok(!deltas(response).includes(title));
+    assert.deepEqual(stack.db.aiMessageEvidence, []);
+    assert.equal(stack.provider.calls.length, path === 'server' ? 2 : 3);
+  });
+}
 
 test('a transient post-persist check preserves this turn, while reopen fails closed as unavailable', async (t) => {
   const stack = stackFor(t);
@@ -351,9 +362,6 @@ test('clarification preserves only authorized structured candidates for the next
     assert.doesNotMatch(prior, /Ali Veli|organization|name|code/);
     assert.doesNotMatch(prior, /【R1】/);
     return { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'] })], calls: [{ name: 'rota_workload_summary', arguments: {} }] };
-  } }, { type: 'script', respond: (call) => {
-    const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-    return { type: 'answer', text: evidenceReply(claimFor(result, 'data.openTaskCount')) };
   } });
   assert.equal(done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: '1' })).assistantMessage.finishReason, 'stop');
 });

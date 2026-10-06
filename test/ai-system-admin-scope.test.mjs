@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { ADMIN, AYSE, NOW, PROJECTS, TASKS, WBS, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { declared } from './helpers/evidenceScenario.mjs';
 
 const { ACCESS_REASONS, deriveEffectiveAccess } = await import('../src/server/authorization/authorization.js');
 const { buildRotaScope, projectAccess } = await import('../src/server/ai/tools/rota/rotaScope.js');
@@ -19,6 +19,7 @@ const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAns
 const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
+const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
 
 const stackFor = (t, sicil = ADMIN) => createAiStack(t, { sicil, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed() });
 const ACTIVE = [PROJECTS.FULL, PROJECTS.READ, PROJECTS.PARTIAL, PROJECTS.HIDDEN, PROJECTS.TEAM];
@@ -81,30 +82,42 @@ test('an archived or nonexistent project is indistinguishable from an unauthoriz
   assert.equal(new Set([...envelopes, JSON.stringify({ ...unauthorized.result, tool: null })]).size, 1);
 });
 
-test('administrator project evidence is dropped when the project is archived before final delivery', async (t) => {
-  const stack = stackFor(t);
-  const steps = [
-    { text: declared({ operation: 'value', metrics: ['project.name'], entities: [{ type: 'project', id: PROJECTS.HIDDEN }] }),
-      toolCalls: [{ id: 'call', name: 'rota_project_detail', arguments: JSON.stringify({ projectId: PROJECTS.HIDDEN }) }] },
-    (input) => {
-      const result = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
-      stack.db.projects.find((project) => project.ProjectId === PROJECTS.HIDDEN).IsActive = 0;
-      return { text: evidenceReply(claimFor(result, 'data.project.name')), toolCalls: [], finishReason: 'stop' };
-    },
-    { text: '{"kind":"unavailable"}', toolCalls: [], finishReason: 'stop' }
-  ];
-  const session = { signal: new AbortController().signal, round: async (input) => {
-    const step = steps.shift();
-    assert.ok(step, 'Beklenmeyen ek model turu');
-    return typeof step === 'function' ? step(input) : step;
-  } };
-  const texts = [];
-  const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `Gizli Proje künyesini göster: ${PROJECTS.HIDDEN}`, now: NOW }).messages,
-    catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: ADMIN, now: NOW }), allowedTextFields: [], onText: async (text) => texts.push(text) });
-  assert.notEqual(result.outcome, 'grounded');
-  assert.deepEqual(result.evidenceRows, []);
-  assert.ok(!texts.join('').includes('Gizli Proje'));
-});
+for (const path of ['server', 'model']) {
+  test(`administrator project evidence is dropped when the project is archived before final delivery (${path} selection)`, async (t) => {
+    const stack = stackFor(t);
+    const archive = () => { stack.db.projects.find((project) => project.ProjectId === PROJECTS.HIDDEN).IsActive = 0; };
+    // Erişim nedenleri (çok değerli) istenirse olguları model seçer; aksi hâlde sunucu seçer.
+    const metrics = path === 'server' ? ['project.name'] : ['project.name', 'project.accessReasons'];
+    const steps = [
+      { text: declared({ operation: 'value', metrics, entities: [{ type: 'project', id: PROJECTS.HIDDEN }] }),
+        toolCalls: [{ id: 'call', name: 'rota_project_detail', arguments: JSON.stringify({ projectId: PROJECTS.HIDDEN }) }] },
+      ...(path === 'model' ? [() => {
+        archive();
+        return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.name', 'R1:data.access.reasons.*'] }), toolCalls: [], finishReason: 'stop' };
+      }] : []),
+      { text: '{"kind":"unavailable"}', toolCalls: [], finishReason: 'stop' }
+    ];
+    const session = { signal: new AbortController().signal, round: async (input) => {
+      const step = steps.shift();
+      assert.ok(step, 'Beklenmeyen ek model turu');
+      return typeof step === 'function' ? step(input) : step;
+    } };
+    let loads = 0;
+    // Sunucu seçiminde model turu yoktur: proje son yetki okumasından hemen önce arşivlenir.
+    const loadAuthorization = (executor, options) => {
+      loads += 1;
+      if (path === 'server' && loads === 2) archive();
+      return loadAuthorizationContext(executor, options);
+    };
+    const texts = [];
+    const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `Gizli Proje künyesini göster: ${PROJECTS.HIDDEN}`, now: NOW }).messages,
+      catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: ADMIN, now: NOW, loadAuthorization }), allowedTextFields: [], onText: async (text) => texts.push(text) });
+    assert.notEqual(result.outcome, 'grounded');
+    assert.deepEqual(result.evidenceRows, []);
+    assert.ok(!texts.join('').includes('Gizli Proje'));
+    assert.equal(steps.length, 0);
+  });
+}
 
 test('an administrator sees every active task without per-task grants', async (t) => {
   const stack = stackFor(t);

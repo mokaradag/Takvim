@@ -241,7 +241,8 @@ olmayan görev analitiğini açamaz.
 
 **Türlü istek sözleşmesi.** Sunucu kullanıcının cümlesinden ölçü, varlık,
 dönem ya da sıralama çıkarmaz. Model veri okumadan önce isteği türlü olarak
-bildirir (ilk araç çağrılarıyla aynı yanıtta ya da ayrı):
+bildirir (ilk araç çağrılarıyla aynı yanıtta; ayrı bildirim de kabul edilir ama
+bir model turu daha harcar):
 
 ```json
 {"kind":"route","intent":"rota","language":"tr","request":{"operation":"value","metrics":["tasks.open"],"entities":[{"type":"project","text":"Radar"}],"filters":{"assignee":"me"}}}
@@ -262,6 +263,14 @@ bildirir (ilk araç çağrılarıyla aynı yanıtta ya da ayrı):
   tarih alanı/aralığı, `period`, `assignee: me|unassigned`, oluşturan,
   kilometre taşı, arama metni; talep sekmesi/durumu; portföy kaynağı; hareket
   kapsamı/türü).
+- Bir koşula uyan kayıtların sayısı o nüfusun toplamıdır (`tasks.total` ve
+  koşul `filters` içinde); `tasks.overdue` ve `tasks.open` proje, kişi ya da
+  portföy nüfusunun kırılımıdır, görev satırı alanı değildir. Sayı ile kayıtlar
+  birlikte istenirse `list` ve en az bir satır alanı bildirilir. İstem bu
+  kalıbı tek örnekle gösterir:
+  `{"operation":"list","metrics":["tasks.total","task.targetFinish"],"filters":{"deadline":"overdue","assignee":"me"}}`
+  ve `rota_task_search {"deadline":"overdue","assignee":"me"}`. Bu, modele
+  verilen yönergedir; sunucu cümleyi yorumlamaz, yalnızca bildirimi doğrular.
 
 Geçerli bildirim olmadan hiçbir araç çalışmaz; bildirim düzeltmesi en fazla iki
 model turudur, sonrasında Standart kipte Derin düşünme devri ya da sabit
@@ -292,6 +301,10 @@ Son seçim isteğe belirlenimci olarak bağlanır (`requestContract.js`):
   bildirilen bütün satır ölçülerini kendi kayıt yolunda taşımalıdır; başka koleksiyon
   ya da genel toplam eksik satır ölçüsünün yerine geçmez. Aynı nüfusun ayrıca
   bildirilen toplamı satır ölçüsü yerine geçmeden bağlamsal olarak korunur.
+  Nüfus boşsa (TAM, kısaltılmamış, ilk sayfa ve sıfır kaynak sayımı) bildirilen
+  satır ölçüsü o kanıtın boş koleksiyonuyla karşılanır; yine de nüfusun
+  bildirilen sayımı seçilmelidir. `complete` gibi bağlam olgusu, satır alanı
+  bildirilmeyen liste ya da sayfalanmış/kısaltılmış boş sonuç boşluğu kanıtlamaz.
 - `rank` kayıt defterindeki uyumlu satır nüfusunun ölçülü satırlarını,
   belirlenimci sırayla ve sınırdaki bütün eşitleriyle seçer. Kesilmiş ilk sayfa
   aynı ölçüyle sunucuda sıralanmalıdır. Sınırdan sonraki farklı değer sayfada
@@ -429,9 +442,9 @@ sözleşmesini korur; kanıtlı sonucun doğrulanması bir düzyazı tarayıcıs
 
 | Durum | Kural |
 | --- | --- |
-| Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general","language":"tr"}` ya da türlü istekli `rota` bildirimi verir (ilk araç çağrılarıyla aynı yanıtta olabilir). Bildirimdeki dönem (`filters.period`/`dateFrom`/`dateTo`, eski `window` de kabul edilir) kimlik çözümünden sonraki hareket/takvim penceresinin üst sınırıdır |
+| Başlangıç | `undecided`; model veri okumadan `{"kind":"route","intent":"general","language":"tr"}` ya da türlü istekli `rota` bildirimi verir (ilk araç çağrılarıyla aynı yanıtta; ayrı bildirim kabul edilir ama bir model turu daha harcar). Bildirimdeki dönem (`filters.period`/`dateFrom`/`dateTo`, eski `window` de kabul edilir) kimlik çözümünden sonraki hareket/takvim penceresinin üst sınırıdır |
 | Genel önerisi | Modelin ayrı rota ya da doğrudan `general` önerisi veri kipinde kanıt denetimini kapatmaz. Serbest metin gösterilmez; sunucu Genel sohbet seçimini isteyen güvenli açıklama verir. Kullanıcının `source: general` seçimi ayrı, veri okumayan akış ve `general` bitişidir. |
-| Rota | Yalnızca kabul edilmiş türlü istekle araç çalışır; bildirimsiz ya da geçersiz bildirimli çağrı yürütülmez, sınırlı bildirim düzeltmesi istenir. Geçerli olgu seçimi isteğe uyduğunda sunucuda çizilir |
+| Rota | Yalnızca kabul edilmiş türlü istekle araç çalışır; bildirimsiz ya da geçersiz bildirimli çağrı yürütülmez, sınırlı bildirim düzeltmesi istenir. Geçerli olgu seçimi isteğe uyduğunda sunucuda çizilir; istek kanıttaki olguları tek anlamlı belirliyorsa seçimi sunucu yapar (§7.1) |
 | Aday seçimi | Kimlik yalnızca kesin eşleşmedir: tek Sicil ya da tam ad / tam başlık. Belirsiz ya da yalnızca kısmi bir arama (proje, kişi, başlıkla görev) sunucunun tuttuğu en fazla 10 adayı döndürür. Model yalnızca `{"kind":"clarification","evidence":"R1"}` bildirir; adayların tamamını, sırasını ve soruyu sunucu çizer ve aday kimliklerini yanıtla birlikte (`clarificationContext`) saklar. Sonraki turda yanıtın tamamı tek bir aday numarasıysa ("2", "2.", "#2", "(2)") seçim sunucuda o adayın kimliğine bağlanır. Sözcükle anlatılan seçim ("ikincisi", "evet") sunucuda yorumlanmaz; model yeniden sorar ya da kullanıcının yazdığı adla arar. Seçilmeyen adaylar o turda kimlik olamaz, ad eşleşmesi yetki kanıtı değildir |
 | Genel sohbete yönlendirme | Modelin `general` önerisi `general_redirect` sonucu olarak ayrı sayılır (bitiş `clarification`); aday seçimi sayacına karışmaz |
 | Bulunamadı | Hiç başarılı kanıt yok ve son araç kümesinin hataları yalnızca `NOT_FOUND` ise `kind: not_found` / güvenli eski ileti; sabit, varlık/yetki ayrımı yapmayan yanıt ve `not_found` bitişi |
@@ -525,10 +538,24 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
 1. Model yanıt ya da araç çağrısı üretir (`toolChoice: auto`).
 2. Çağrılar sunucuda sınırlarla yürütülür; her çağrı kimliği için tam bir araç
    iletisi eklenir.
-3. En fazla **4 araç turu**; sonra araçlar kapatılır (`toolChoice: none`),
+3. **Sunucu seçimi.** Her araç turundan sonra sunucu, bildirilen istekten ve
+   `claimableEvidence` kayıt defterindeki ölçü yollarından olgu seçimi adayları
+   türetir: değer isteğinde ölçünün tekil taşıyıcısı; liste ve sıralamada satır
+   koleksiyonu, satırı adlandıran bağlam alanı ve istenen satır ölçüsü (sıralamada
+   sunucunun kanıttaki değerlerle kurduğu baştaki satırlar), satırda taşınmayan
+   ölçü için kaydın tekil taşıyıcısı. Kullanıcı cümlesi bu türetmeye girmez.
+   Adaylar modelin seçimiyle AYNI doğrulayıcıdan (`analyzeGroundedAnswer` +
+   `verifyRequestedFacts`) geçer. Yalnızca TEK aday geçerse güncel yetki ve
+   atıflı görevlerin görünürlüğü yeniden okunur, seçim yeniden doğrulanır ve
+   yanıt ayrı bir model seçim turu olmadan çizilir; kapsam notu, kanıt kaydı ve
+   kayıttan sonraki açıklama denetimi aynıdır. Aday yoksa, birden çok aday
+   geçerse (hangi kaydın kastedildiği belirsiz) ya da yeniden doğrulama seçimi
+   düşürürse tur olağan biçimde sürer: model takip aracı çağırır ya da olguları
+   seçer.
+4. En fazla **4 araç turu**; sonra araçlar kapatılır (`toolChoice: none`),
    modele sınır notu verilir ve yanıt eldeki kanıtla yazılır.
-4. Son yanıt doğrulanır (§6.3); gerekirse bir düzeltme.
-5. **Standart → Derin düşünme devri.** Kullanıcı Standart kipi seçtiyse ve
+5. Son yanıt doğrulanır (§6.3); gerekirse bir düzeltme.
+6. **Standart → Derin düşünme devri.** Kullanıcı Standart kipi seçtiyse ve
    `chat.tools.reasoning` profili kuruluysa, kurtarılabilir bir model/protokol
    hatası (doğrulanamayan yanıt, uzunluk sınırında kalan çıktı ya da
    `EMPTY_COMPLETION`) kullanıcıya hiçbir şey gösterilmeden **bir kez** Derin
@@ -550,7 +577,7 @@ kayıt içeriği taşımaz; tarayıcı da aynı doğrulamadan geçirir (bozuk ö
    olarak gösterilmez; kullanıcı yeniden denenebilir `AI_TIMEOUT` alır). Kullanıcı her
    durumda tek yanıt görür; yanıtın kaydedilen kipi istenen kiptir. Genel
    sohbete düşülmez.
-6. **Boş yanıt.** Standart veya Derin düşünmede görünür metin ve araç çağrısı taşımayan model turu, oturumda en az 15 sn
+7. **Boş yanıt.** Standart veya Derin düşünmede görünür metin ve araç çağrısı taşımayan model turu, oturumda en az 15 sn
    kaldıysa aynı oturumda **bir kez** yeniden istenir; yine boşsa tur
    Standart tur kalan süreyle bir kez Derin düşünmeye devredilebilir; başka
    boş yanıt `AI_PROVIDER_RESPONSE_INVALID` / `EMPTY_COMPLETION` ile biter. Bu sonuç
@@ -906,7 +933,16 @@ bağımsız değişken, sonuç içeriği, SQL ya da anahtar kaydedilmez.
 - `tools`: çağrı sayısı, sonuç sınıfına göre sayılar, araç başına çağrı/hata
   ve son gecikme/boyut (en fazla 40 araç), gecikme yüzdelikleri, son hizmet
   hatası (araç adı + kod).
-- `grounding`: kanıtlı, genel, aday seçimi, bulunamadı, hizmet kullanılamıyor, doğrulanamayan, düzeltilen ve kapsam notu eklenen yanıt sayıları; tur ve kanıt sayısı yüzdelikleri. `NOT_FOUND` doğrulama hatası değildir. Tamponlanan model protokolü istemciye teslim edilmiş metin sayılmaz.
+- `grounding`: kanıtlı, genel, aday seçimi, bulunamadı, hizmet kullanılamıyor, doğrulanamayan, düzeltilen ve kapsam notu eklenen yanıt sayıları; tur ve kanıt sayısı yüzdelikleri. `NOT_FOUND` doğrulama hatası değildir. Tamponlanan model protokolü istemciye teslim edilmiş metin sayılmaz. `grounding.serverSelected`, olguları sunucunun istekten seçtiği (ayrı model seçim turu olmayan) kanıtlı yanıtları sayar.
+- Her kanıta dayalı tur `ai.grounded.turn` bilgi olayı yazar: sonuç ve güvenli
+  hata kodu, seçimi kimin yaptığı (`server` / `model`), devir, model ve araç
+  turu, araç çağrısı/hatası, sonuç baytı, bildirim ve düzeltme sayısı, SQL
+  süresi/sorgu sayısı, yetki yüklemesi, yeniden doğrulama ve doğrulama süreleri;
+  her model turu için (en fazla 16) amaç (`plan`, `tools`, `follow-up`,
+  `select`, `repair`, `declaration`, `retry`), profil, model, süre, ilk olaya
+  kadar geçen süre, çıktı sınırı, bitiş nedeni, çağrı sayısı ve sağlayıcının
+  bildirdiği girdi/tamamlama/akıl yürütme belirteçleri. Soru, yanıt, bağımsız
+  değişken, kanıt içeriği, Sicil ya da anahtar yazılmaz.
 - `grounding.escalations`: Standart → Derin düşünme devri sayısı, nedene
   (`VERIFICATION_FAILED`, `LENGTH`, `EMPTY_COMPLETION`, `REQUEST_DECLARATION`)
   ve son sonuca göre. Sonuç devredilen turun kendi sonucudur: doğrulanan yanıt
@@ -993,6 +1029,10 @@ geri alma betiği kanıtı iletilerden önce düşürür.
       varlığı doğrulanmaz.
 - [ ] İki aynı adlı kişi için model birimini sorar, tahmin etmez.
 - [ ] Gecikmiş görev sayısı Pano ile aynı; Türkiye gece yarısı sınırında doğru.
+- [ ] “Kaç gecikmiş görevim var ve hangileri?” Standart ve Derin kipte sayı ve
+      satırlarla yanıtlanır; `ai.grounded.turn` olayında çoğunlukla
+      `modelRounds: 1`, `selectedBy: "server"` görülür. Gecikmiş görevi olmayan
+      kullanıcı “Eşleşen 0 görev” yanıtı alır.
 - [ ] FULL olmayan projede baz plan/bağımlılık sorgusu veri döndürmez;
       doğrulanamayan yanıt sabit güvenli iletiyle sonuçlanır.
 - [ ] "Bildirimlerim" sorusundan sonra zildeki okunmamış sayısı değişmez.
@@ -1027,7 +1067,8 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 | `test/ai-aggregate-population.test.mjs` | Toplu kanıtın tam görev nüfusu: listelenmeyen ama sayılan görevler, tarih/atama talebi, hareket, Outlook, tekrar, baz plan, bağımlılık ve WBS toplamları; son doğrulama, yeniden açılış ve sınıra sığmayan nüfusun "doğrulanamaz" işareti |
 | `test/ai-system-admin-scope.test.mjs` | Yöneticinin proje başına kanonik FULL erişimi, proje kapıları ve yetki dönemi; etkin olmayan/var olmayan projenin yetkisiz projeyle aynı yanıtı |
 | `test/ai-clarification-binding.test.mjs` | Kesin eşleşme / kısmi ve belirsiz aday; sunucunun çizdiği adaylar; yalnızca aday numarasının ("2", "#2") kayıtlı kimliğe bağlanması, sözcükle anlatılan seçimin yorumlanmaması |
-| `test/ai-fact-selection-narrative.test.mjs` | Olgu seçimi protokolü, uydurma/başka tur başvurularının reddi, eski iddia biçimi, paragraf/liste/tablo anlatımı, Türkçe iyelik ekleri ve daha zayıf bir araç modelinin sık sorulara düzeltmesiz yanıtı |
+| `test/ai-fact-selection-narrative.test.mjs` | Olgu seçimi protokolü, uydurma/başka tur başvurularının reddi, eski iddia biçimi, paragraf/liste/tablo anlatımı, Türkçe iyelik ekleri; sık soruların tek model turunda sunucu seçimiyle yanıtı ve yalnızca olgu seçen modelin aynı doğrulamadan geçmesi |
+| `test/ai-grounded-round-budget.test.mjs` | Tur bütçesi: istemdeki örnek bildirimle “Kaç gecikmiş görevim var ve hangileri?” sorusunun Standart ve Derin kipte tek model turu, profil çıktı sınırı, düzeltme/devir olmaması, çizimden önce ve kayıttan sonra görünürlük okuması, kapsam notu, içeriksiz tur izi; ayrı/eksik bildirimin tek ek turu; boş nüfusun sayımla doğrulanması ve sınırları; birden çok doğrulanan seçimde seçimin modele kalması |
 | `test/ai-free-text-consent.test.mjs` | İleti başına serbest metin onayı: kapalıyken arama, model girdisi, olgu ve sayım dışı; açıkken yine veri |
 | `test/ai-tool-containment.test.mjs` | İlk turda da kullanıcı iletisinden gelen arama metni, normalize takip karşılaştırması, meşru daraltma ve ilgisiz genişlemenin reddi |
 | `test/ai-evidence-selectors.test.mjs` | Sayıların proje/kişi/görev/dönem seçicileriyle çizilmesi, kimlik yerine ad, birim ve tekrar tamlığı |
@@ -1067,7 +1108,104 @@ aittir. Başarısız başlangıç daha doğru araca geçmeyi engellemez. Model �
 45 saniyelik araç yürütme bütçesine katılmaz; bütün model turları ağ geçidinin
 oturum süresine tabidir. Varsayılan araç profilleri `chat.tools` için 4096,
 `chat.tools.reasoning` için 8192 çıktı tokenıdır; dış model kaydının sınırı
-aşılmaz. Kesilme kısa JSON ile yalnızca bir kez onarılır.
+aşılmaz. Bunlar tur başına üst sınırdır, hedef değildir (gerekçe: “Tur bütçesi
+ve sunucu seçimi”). Kesilme kısa JSON ile yalnızca bir kez onarılır.
+
+### Tur bütçesi ve sunucu seçimi
+
+**Sorun.** Rota verisi + Derin düşünmede “Kaç gecikmiş görevim var ve
+hangileri?” gibi basit bir soru uzun süre “Derin düşünüyor” evresinde kalıyor,
+ardından akış kesilip “Yanıtın sonucu kontrol ediliyor” uzlaştırmasına
+düşüyor ya da doğrulama hatasıyla bitiyordu.
+
+**Kök nedenler** (Git geçmişi ve SQL/sağlayıcı ikizleriyle tur ölçümü):
+
+1. *Ayrı olgu seçimi turu.* Her veri sorusu, araç çağrısı turundan sonra
+   yalnızca olgu seçen ikinci bir model turu harcıyordu. Derin profilde bu tur
+   da 8192 tokenlık bütçeyle, istem ve araç sonucu bağlamıyla yeniden akıl
+   yürütür. DeepSeek-V4.1-Flash geçişindeki (29308a3) protokol de iki turluydu;
+   geçişten sonra istem ve araç şemaları büyüdü (aynı sorunun toplam yükü
+   50,2 KB → 61,7 KB) ve sözleşme sıkılaştı (2–4). Model geçişi tek başına neden
+   değildir: aynı tur yapısı Standart profilde de vardır ve çıktı sınırları
+   geçişten önce yükseltilmişti.
+2. *Zorunlu bildirimin ayrı turu.* Geçişten sonra eklenen veri öncesi türlü
+   bildirim, istem “ya da ayrı” dediği için ayrı bir yanıtta gelebiliyor ya da
+   hiç gelmeyip bildirim düzeltmesi gerektiriyordu: üç model turu.
+3. *Boş nüfusun reddi.* Gecikmiş görevi olmayan kullanıcıda kanonik liste
+   isteği (`tasks.total` + satır alanı) `LIST_ROWS_REQUIRED` ile reddediliyordu:
+   boş koleksiyon, bildirilen BÜTÜN ölçüleri satır alanı olarak taşımadıkça
+   uyumlu sayılmıyordu. Tur düzeltme ve Derin devriyle uzayıp
+   `grounding_failed` ile bitiyordu.
+4. *Karşılanamayan doğal bildirim.* Model süzülmüş nüfusun sayısı için
+   `tasks.overdue` bildirebiliyordu; bu ölçü görev satırı alanı olmadığından
+   liste isteği karşılanamaz ve düzeltme/devir turlarından sonra doğrulanamaz.
+5. Bütün model turları tek oturum süresini paylaşır (Derin profil 180 sn +
+   45 sn araç evresi). Fazladan her Derin tur bu sınıra yaklaştırır; süre
+   aşımında akış hatayla biter ve istemci kayıtlı sonucu uzlaştırır.
+
+**Değişiklikler.** Sunucu seçimi (§7.1 adım 3); boş nüfusta satır ölçüsünün
+boşluğu kanıtlayan kanıtla karşılanması (§5, `list` kuralı); istemde bildirimin
+ilk araç çağrılarıyla aynı yanıtta istenmesi ve süzülmüş nüfus sayımının tek
+örnekle gösterilmesi (istem 10,6 KB → 11,2 KB); içeriksiz tur izi (§14).
+Doğrulayıcı, yetki, araç sınırları ve çıktı bütçeleri gevşetilmedi.
+
+**Standart ve Derin sorumlulukları.** Model (Standart ya da Derin) doğal dili
+yorumlar, türlü isteği bildirir ve araçları seçer; olguları yalnızca sunucu
+istekten tek anlamlı türetemediğinde seçer. Sunucu yetkiyi, kanıt
+bütünlüğünü, ölçü hesabını, istek uyumunu ve anlatımı belirlenimci yürütür.
+Derin düşünme kullanıcının seçtiği kip ya da Standart'taki kurtarılabilir model
+hatasının tek devridir. “Kolay soru” için anahtar sözcük ya da regex tabanlı bir
+sınıflandırıcı yoktur; hızlı yol yalnızca modelin türlü bildirimine ve kanıta
+bağlıdır.
+
+**Çıktı bütçeleri.** 4096 / 8192 değişmedi. Turu kısaltan, tur sayısının
+azalmasıdır. Bu çalışmada canlı modelin gerçek belirteç kullanımı ölçülemediği
+için sınırlar keyfi olarak düşürülmedi: düşük sınır akıl yürüten modelde
+`length` kesilmesine ve tam bir düzeltme turuna yol açabilir. Ayar için
+`ai.grounded.turn` her turun sınırını, bitiş nedenini ve sağlayıcı bildirirse
+belirteç sayılarını yazar.
+
+**Ölçülen tur yapısı.** Betikli model; gerçek tur ucu, ağ geçidi oturumu, araç
+yürütücüsü, doğrulayıcı ve SQL ikizi. Değerler model turu sayısıdır (Derin kipte
+her tur 8192 tokenlık sınırla çalışır); duvar saati değildir.
+
+| Senaryo | Önce (Derin / Standart) | Sonra (Derin / Standart) |
+| --- | --- | --- |
+| Gecikmiş sayı + liste, bildirim çağrıyla birlikte | 2 / 2 | 1 / 1 |
+| Aynı, ayrı bildirim | 3 / 3 | 2 / 2 |
+| Aynı, bildirimsiz ilk çağrı | 3 / 3 | 2 / 2 |
+| Aynı, boş nüfus | 3 / 4, `grounding_failed` | 1 / 1, “Eşleşen **0** görev” |
+| Aynı, `tasks.overdue` ile bildirilen liste | 3 / 4, `grounding_failed` | değişmedi (istem yönergesiyle önlenir) |
+| Basit sayı / basit liste | 2 / 2 | 1 / 1 |
+| Ad çözümü + proje özeti (iki araç turu) | 3 / 3 | 2 / 2 |
+| Portföy sıralaması | 3 / 3 | 1 / 1 |
+
+İlk senaryoda sağlayıcıya giden toplam yük 61,7 KB'tan 37,5 KB'a iner; araç SQL
+çağrıları ve son yetki okumaları değişmez. Başarılı senaryoların yanıt metinleri
+önceki sürümle aynıdır. Sıralama senaryosunda bildirilen sıralama ilk portföy
+kanıtıyla karşılandığı için betikteki ikinci araç turu yapılmaz; yanıt, önceki
+sürümde modelin seçtiği olgularla aynıdır.
+
+**Korunan güvenceler.** Yetki ve kapsam, çizimden önceki güncel yetki /
+görünürlük okuması ve kayıttan sonraki açıklama denetimi, gizli sayı ve kısmi
+kapsam notu, kanıt bütünlüğü (aynı doğrulayıcı, yalnızca atıflı kanıt kaydı),
+belirlenimci ölçü anlamları, veri okunduktan sonra değişmeyen türlü istek,
+araç turu/çağrı sınırları, istem enjeksiyonu savunması, Sicil yalıtımı, salt
+okunur araçlar, iptal ve eşzamanlılık korumaları ve olağan Rota yollarının
+yalıtımı değişmedi. Sunucu yalnızca modelin de seçebileceği, aynı doğrulamadan
+geçen ve tek anlamlı bir seçimi kullanır; belirsizlikte seçimi modele bırakır.
+
+**Kabul.** Bildirim araç çağrısıyla birlikte geldiğinde “Kaç gecikmiş görevim
+var ve hangileri?” Standart ve Derin kipte tek model turuyla yanıtlanır
+(`ai.grounded.turn`: `modelRounds: 1`, `selectedBy: "server"`); boş nüfusta
+sayım yanıtı verilir. `test/ai-grounded-round-budget.test.mjs` bu yapıyı,
+yeniden doğrulamayı ve izin içeriksizliğini sınar.
+
+**İşletim.** Belirteç sayıları yalnızca sağlayıcı akışta kullanım bildirirse
+izde görünür, yoksa `null` kalır. Tur süresi (`ms`) ve ilk olaya kadar geçen
+süre (`firstEventMs`) sağlayıcı akışınındır; SQL süresi ayrıca `sqlMs`'tir.
+Canlı ortamda önce/sonra duvar saati ölçülmedi; dağıtımdan sonra
+`ai.grounded.turn` olaylarıyla karşılaştırılmalıdır.
 
 Görev ve baz plan nüfusu 20.001, görünür sorumluluk ilişkileri 200.001, ham
 hareketler 20.001 satırla taşma yoklaması yapar: tam sınır kabul edilir,

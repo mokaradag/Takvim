@@ -756,7 +756,9 @@ geçer. Tamponlanan model JSON'u
 istemciye verilmiş metin değildir; kesilme sağlıkta yarım teslim sayılmaz.
 Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süresi `TIMEOUT`
 olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları
-4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir.
+4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir. Her Rota
+verisi turunun model/araç turu sayısı, seçimi kimin yaptığı, tur başına süre,
+çıktı sınırı ve bitiş nedeni içeriksiz `ai.grounded.turn` olayında izlenir.
 
 Elle kabul, FULL/READ/kısmi kullanıcılarla veri sonrası yetki iptalini,
 konuşma yeniden açma/tekrar ve oluşturucu hakkı iptalini, gizli tekrar/kişi
