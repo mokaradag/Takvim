@@ -547,7 +547,7 @@ export function recordEmptyCompletion({ profile, model = null, diagnostics = {} 
     context: {
       profile: isKnownAiProfile(profile) ? profile : null,
       model: safeModel(model),
-      finishReason: typeof diagnostics.finishReason === 'string' ? diagnostics.finishReason.slice(0, 40) : null,
+      finishReason: safeFinishReason(diagnostics.finishReason),
       usage: {
         input: safeCount(diagnostics.usage?.input),
         reasoning: safeCount(diagnostics.usage?.reasoning),
@@ -563,7 +563,7 @@ export function recordEmptyCompletion({ profile, model = null, diagnostics = {} 
   }));
 }
 
-const ESCALATION_REASONS = new Set(['VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION']);
+const ESCALATION_REASONS = new Set(['SYNTHESIS_REQUIRED', 'VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION']);
 const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'timeout', 'error']);
 
 /**
@@ -610,7 +610,8 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
 
 const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
 const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry']);
-const SAFE_CODE = /^[A-Za-z][A-Za-z0-9_.:-]{0,59}$/;
+const FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter', 'tool_calls', 'function_call', 'error']);
+export const safeFinishReason = (value) => FINISH_REASONS.has(value) ? value : null;
 
 /**
  * Kanıta dayalı turun İÇERİKSİZ izi: her model turunun amacı, profili/modeli,
@@ -631,7 +632,7 @@ export function recordGroundedTurn(trace = {}) {
     durationMs: millis(trace.durationMs),
     context: {
       outcome,
-      code: SAFE_CODE.test(String(trace.code ?? '')) ? trace.code : null,
+      code: isAiErrorCode(trace.code) ? trace.code : null,
       selectedBy: ['server', 'model'].includes(trace.selectedBy) ? trace.selectedBy : null,
       escalated: trace.escalated === true,
       modelRounds: safeCount(trace.modelRounds),
@@ -653,7 +654,7 @@ export function recordGroundedTurn(trace = {}) {
         ms: millis(round?.durationMs),
         firstEventMs: millis(round?.firstEventMs),
         budget: safeCount(round?.budget),
-        finish: SAFE_CODE.test(String(round?.finishReason ?? '')) ? round.finishReason : null,
+        finish: safeFinishReason(round?.finishReason),
         calls: safeCount(round?.toolCalls),
         input: safeCount(round?.input),
         completion: safeCount(round?.completion),

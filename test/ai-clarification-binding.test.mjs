@@ -68,7 +68,7 @@ test('exact identity resolution: Sicil and full name resolve a person, a partial
   assert.equal(loneTask.result.data.resolvedTask, undefined);
 });
 
-const aliWorkload = { operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali Veli' }] };
+const aliWorkload = { operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' }, fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }], entities: [{ type: 'person', text: 'Ali Veli' }] };
 
 async function askAboutAli(stack) {
   stack.provider.enqueue({ type: 'tool-calls', preface: [declared(aliWorkload)], calls: [{ name: 'rota_person_search', arguments: { text: 'Ali Veli' } }] },
@@ -119,7 +119,7 @@ test('a non-numbered reply does not let the model translate a candidate into an 
 
 test('a single partial match asks for confirmation and the reply "1" binds that project', async (t) => {
   const stack = stackFor(t);
-  const radar = declared({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar' }] });
+  const radar = declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar' }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [radar], calls: [{ name: 'rota_project_search', arguments: { text: 'Radar' } }] }, { type: 'script', respond: (call) => {
     assert.equal(toolResults(call)[0].data.resolution, 'partial');
     return { type: 'tool-calls', calls: [{ name: 'rota_project_detail', arguments: { projectId: PROJECTS.FULL } }] };
@@ -139,7 +139,7 @@ test('a single partial match asks for confirmation and the reply "1" binds that 
 
 test('a numbered task selection binds the task identity for detail and Outlook follow-ups', async (t) => {
   const stack = stackFor(t);
-  const outlook = declared({ operation: 'value', metrics: ['subscriptions.active'], entities: [{ type: 'task', text: 'Radar test' }] });
+  const outlook = declared({ operation: 'value', metrics: ['subscriptions.active'], population: { tool: 'rota_outlook_status' }, fields: [{ metric: 'subscriptions.active', tool: 'rota_outlook_status', path: 'data.activeSubscriptions' }], entities: [{ type: 'task', text: 'Radar test' }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [outlook], calls: [{ name: 'rota_task_search', arguments: { text: 'Radar test', limit: 1 } }] },
     { type: 'answer', text: '{"kind":"clarification","evidence":"R1"}' });
   const first = done(await sendTurn({ turnId: randomUUID(), message: 'Radar test görevi Outlook’a eklendi mi?' }));

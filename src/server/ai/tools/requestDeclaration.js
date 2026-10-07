@@ -1,12 +1,14 @@
 import 'server-only';
 import { claimableContract, METRICS, metricEntry, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { rankableMeasure, rankedRowIndexes, REQUEST_ENTITY_TYPES, REQUEST_LIMITS, REQUEST_OPERATIONS } from '../../../domain/ai/requestContract.js';
+import { concreteCollections, provesEmptyCollection, rankableMeasure, rankedRowIndexes, REQUEST_ENTITY_TYPES, REQUEST_LIMITS, REQUEST_OPERATIONS } from '../../../domain/ai/requestContract.js';
+import { createEvidenceFacts, fieldPatternCovers } from '../../../domain/ai/evidenceFacts.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { parseSicil } from '../../identity/sicil.js';
 import { addDays, normalizeTaskFilters } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments } from './toolErrors.js';
-import { getRotaTool } from './toolRegistry.js';
+import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
+import { TOOL_LIMITS } from './toolLimits.js';
 import { containmentText, populationArguments } from './toolScope.js';
 
 /**
@@ -38,6 +40,23 @@ export function requestSchema() {
     properties: {
       operation: { type: 'string', enum: [...REQUEST_OPERATIONS] },
       metrics: { type: 'array', minItems: 1, maxItems: REQUEST_LIMITS.maxMetrics, uniqueItems: true, items: metric },
+      layout: { type: 'string', enum: ['auto', 'list', 'table'] },
+      reasoning: { type: 'string', enum: ['deterministic', 'synthesis'] },
+      population: {
+        type: 'object', additionalProperties: false, required: ['tool'],
+        properties: {
+          tool: { type: 'string', enum: toolCatalogForModel().map((tool) => tool.name) },
+          collection: { type: 'string', maxLength: 80 },
+          groupBy: getRotaTool('rota_task_analytics').parameters.properties.groupBy,
+          depth: { type: 'integer', minimum: 1, maximum: 4 },
+          textFields: { type: 'array', maxItems: 4, uniqueItems: true, items: { type: 'string', enum: ['description', 'requesterMessage', 'decisionMessage', 'changes'] } },
+          sort: { type: 'string', enum: [...new Set(toolCatalogForModel().flatMap((tool) => tool.parameters.properties.sort?.enum || []))] }
+        }
+      },
+      fields: { type: 'array', maxItems: 20, uniqueItems: true, items: { type: 'object', additionalProperties: false, required: ['metric', 'tool', 'path'],
+        properties: { metric, tool: { type: 'string', enum: toolCatalogForModel().map((tool) => tool.name) }, path: { type: 'string', maxLength: 120 } } } },
+      bindings: { type: 'array', maxItems: 20, uniqueItems: true, items: { type: 'object', additionalProperties: false, required: ['metric', 'entity'],
+        properties: { metric, entity: { type: 'integer', minimum: 0, maximum: REQUEST_LIMITS.maxEntities - 1 } } } },
       rank: {
         type: 'object', additionalProperties: false, required: ['metric', 'order'],
         properties: { metric, order: { type: 'string', enum: ['desc', 'asc'] }, limit: { type: 'integer', minimum: 1, maximum: REQUEST_LIMITS.maxRankLimit } }
@@ -84,6 +103,16 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   if (raw == null) throw invalidArguments(['$.request:required']);
   const value = parseToolArguments(requestSchema(), JSON.stringify(raw));
   const problems = [];
+  if (value.population) {
+    const tool = getRotaTool(value.population.tool);
+    if (value.population.collection && !rowCollections(tool.name).includes(value.population.collection)) problems.push('$.population.collection:unknown');
+    if (value.population.sort && !tool.parameters.properties.sort?.enum?.includes(value.population.sort)) problems.push('$.population.sort:unsupported');
+    if (value.operation !== 'value' && !value.population.collection) problems.push('$.population.collection:required');
+    if (value.population.groupBy && tool.name !== 'rota_task_analytics') problems.push('$.population.groupBy:unsupported');
+    if (value.population.depth && tool.name !== 'rota_wbs_inspect') problems.push('$.population.depth:unsupported');
+  }
+  for (const field of value.fields || []) if (!value.metrics.includes(field.metric) || !metricPaths(field.tool, field.metric).includes(field.path)) problems.push('$.fields:unknown');
+  for (const binding of value.bindings || []) if (!value.metrics.includes(binding.metric) || !value.entities?.[binding.entity]) problems.push('$.bindings:unknown');
   if ((value.operation === 'rank') !== Boolean(value.rank)) problems.push('$.rank:operation');
   if (value.rank && !value.metrics.includes(value.rank.metric)) problems.push('$.rank.metric:undeclared');
   if (value.rank && !rankableMeasure(METRICS[value.rank.metric])) problems.push('$.rank.metric:unordered');
@@ -111,7 +140,43 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   }
   if (problems.length) throw invalidArguments(problems);
   return Object.freeze({ operation: value.operation, metrics: Object.freeze([...value.metrics]), rank: value.rank ? Object.freeze({ ...value.rank }) : null,
-    entities: Object.freeze(entities), filters: Object.freeze(filters) });
+    entities: Object.freeze(entities), filters: Object.freeze(filters), layout: value.layout || 'auto', reasoning: value.reasoning || 'deterministic',
+    population: value.population ? Object.freeze({ ...value.population }) : null, fields: Object.freeze(value.fields || []), bindings: Object.freeze(value.bindings || []) });
+}
+
+/** Bildirim ve ilk araç planı tek yerel çağrının bağımsız değişkenleridir. */
+export function typedPlanningTool(catalog) {
+  return { name: 'rota_plan', description: 'Veri okumadan türlü Rota isteğini ve ilk salt okunur araç planını bildir. Asistan metni gerekmez.',
+    parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language', 'calls'], properties: {
+      intent: { type: 'string', enum: ['rota', 'general'] }, language: { type: 'string', enum: ['tr', 'en'] },
+      request: { ...requestSchema(), required: [...requestSchema().required, 'population', 'layout'] },
+      calls: { type: 'array', maxItems: TOOL_LIMITS.maxCallsPerRound, items: { oneOf: catalog.map((tool) => ({
+        type: 'object', additionalProperties: false, required: ['name', 'arguments'], properties: {
+          name: { type: 'string', enum: [tool.name], description: tool.description }, arguments: tool.parameters
+        }
+      })) } }
+    } } };
+}
+
+export function unpackTypedPlan(result, catalog) {
+  if (result.toolCalls.length !== 1 || result.toolCalls[0].oversize) throw invalidArguments(['$.plan:single']);
+  const call = result.toolCalls[0];
+  if (Buffer.byteLength(call.arguments || '', 'utf8') > TOOL_LIMITS.maxArgumentBytes) throw invalidArguments(['$.plan:tooLarge']);
+  let plan;
+  try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan) || Object.keys(plan).some((key) => !['intent', 'language', 'request', 'calls'].includes(key))
+    || !['rota', 'general'].includes(plan.intent) || !['tr', 'en'].includes(plan.language) || !Array.isArray(plan.calls)
+    || plan.calls.length > TOOL_LIMITS.maxCallsPerRound) throw invalidArguments(['$.plan:shape']);
+  if (plan.intent === 'rota' && (!plan.request?.population || !plan.request?.layout || !plan.calls.length)) throw invalidArguments(['$.request:planRequired']);
+  if (plan.intent === 'general' && (plan.calls.length || plan.request)) throw invalidArguments(['$.plan:general']);
+  const toolCalls = plan.calls.map((item, index) => {
+    const tool = catalog.find((tool) => tool.name === item?.name);
+    if (!tool || Object.keys(item).some((key) => !['name', 'arguments'].includes(key)) || !item.arguments || typeof item.arguments !== 'object'
+      || Array.isArray(item.arguments)) throw invalidArguments(['$.calls:shape']);
+    const args = parseToolArguments(tool.parameters, JSON.stringify(item.arguments));
+    return { id: `${call.id}_${index}`, name: item.name, arguments: JSON.stringify(args) };
+  });
+  return { ...result, text: JSON.stringify({ kind: 'route', intent: plan.intent, language: plan.language, ...(plan.request ? { request: plan.request } : {}) }), toolCalls };
 }
 
 /** Modele verilen kapalı ölçü sözlüğü: kimlikler öneklerine göre gruplanır. */
@@ -135,6 +200,11 @@ export function requestWindow(request) {
 export function requestSummary(request) {
   const filters = Object.fromEntries(Object.entries(request.filters).filter(([key]) => key !== 'text'));
   return JSON.stringify({ operation: request.operation, metrics: request.metrics, ...(request.rank ? { rank: request.rank } : {}),
+    ...(request.population ? { population: request.population } : {}),
+    ...(request.layout !== 'auto' ? { layout: request.layout } : {}),
+    ...(request.reasoning !== 'deterministic' ? { reasoning: request.reasoning } : {}),
+    ...(request.fields.length ? { fields: request.fields } : {}),
+    ...(request.bindings.length ? { bindings: request.bindings } : {}),
     ...(request.entities.length ? { entities: request.entities.map(({ type, id }) => (id ? { type, id } : { type })) } : {}),
     ...(Object.keys(filters).length ? { filters } : {}) });
 }
@@ -278,18 +348,28 @@ function sortedBy(tool, args) {
 export function requestEvidence(request, entries, today) {
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const index = new Map();
-  for (const { id, tool, args = {}, payload } of entries) {
+  for (const [ordinal, { id, tool, args = {}, payload }] of entries.entries()) {
     const family = FAMILIES[tool] || null;
     const keys = family ? FAMILY_KEYS[family] : [];
     index.set(id, {
       tool,
+      ordinal,
+      snapshotDimensions: compact({ groupBy: args.groupBy, depth: args.depth, textFields: args.textFields ? [...args.textFields].sort() : null }),
+      facts: payload?.data ? createEvidenceFacts(payload, { prefix: payload.factScope || id }) : [],
       envelope: payload,
       facets: canonicalFacets(family, args, today),
       declared: canonicalFacets(family, declaredValues(family, request.filters), today),
       unsupported: active.filter((key) => !keys.includes(key)),
       selectors: selectorsOf(args),
       sortedBy: sortedBy(tool, args),
-      firstPage: !args.cursor
+      firstPage: !args.cursor,
+      populationMatch: !request.population || request.population.tool === tool,
+      collection: request.population?.tool === tool ? request.population.collection || null : null,
+      dimensionsMatch: request.population?.tool !== tool ||
+        ((!request.population.groupBy || request.population.groupBy === args.groupBy) && (!request.population.depth || request.population.depth === (args.depth || 2))
+        && (!request.population.textFields || JSON.stringify([...request.population.textFields].sort()) === JSON.stringify([...(args.textFields || [])].sort()))),
+      sortMatch: !request.population?.sort || request.population.tool !== tool || request.population.sort === (args.sort ||
+        (tool === 'rota_task_search' ? args.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc' : tool === 'rota_portfolio_summary' ? 'overdue_desc' : null))
     });
   }
   return index;
@@ -307,101 +387,147 @@ export function requestRepairHint(request, entries) {
 
 /* ── İstekten türetilen olgu seçimi ───────────────────────── */
 
-const valueOf = (payload, path) => (path.startsWith('data.')
-  ? path.split('.').slice(1).reduce((value, key) => value?.[key], payload?.data) : payload?.[path]);
+const scalar = (value) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
+const canonicalField = (field) => field.split('.').map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
+const factPool = (entry) => createEvidenceFacts(entry.payload, { prefix: entry.payload.factScope || entry.id });
+const declaredFields = (request, tool, metric) => (request.fields || []).filter((field) => field.tool === tool && field.metric === metric).map((field) => field.path);
+const ROW_TOTALS = Object.freeze({
+  rota_task_search: { tasks: 'tasks.total' }, rota_project_search: { matches: 'projects.total' }, rota_person_search: { people: 'people.total' },
+  rota_portfolio_summary: { projects: 'projects.total' }, rota_wbs_inspect: { nodes: 'wbs.nodes' },
+  rota_task_analytics: { groups: 'tasks.groupCount' }, rota_workload_summary: { people: 'people.total' },
+  rota_baseline_compare: { mostSlipped: 'baseline.compared' }, rota_activity_search: { items: 'activity.events' },
+  rota_schedule_requests: { items: 'requests.total' }, rota_assignment_requests: { items: 'requests.total' },
+  rota_calendar_inspect: { holidays: 'calendar.holidays' }, rota_outlook_status: { items: 'subscriptions.active' }
+});
 
-/** Göreli yol (`*` dizinin her öğesi) değerde dolu mu? */
-function present(value, parts) {
-  if (!parts.length) return value !== undefined;
-  const [head, ...rest] = parts;
-  if (head === '*') return Array.isArray(value) && value.some((item) => present(item, rest));
-  return value != null && typeof value === 'object' && present(value[head], rest);
+/** Muhakeme başlamadan önce bildirilen ölçülerin kanıtı bulunmalıdır. */
+export function requestEvidenceReady(request, entries, today) {
+  const evidence = [...requestEvidence(request, entries, today).values()];
+  return request.metrics.every((metric) => evidence.some((entry) => (entry.populationMatch !== false || declaredFields(request, entry.tool, metric).length > 0) && entry.dimensionsMatch !== false
+    && entry.facts.some((fact) => fact.semantic?.metric === metric && (!(request.fields || []).some((field) => field.metric === metric)
+      || declaredFields(request, entry.tool, metric).some((path) => fieldPatternCovers(path, fact.field))))));
 }
 
-const parentOf = (path) => (path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : '');
-
-/**
- * Ölçünün satır dışı taşıyıcıları: kayıt defteri sırasıyla ilk dolu yol ve aynı
- * nesnedeki aynı ölçülü kardeşleri (ör. bağımlılık türü dağılımının her türü).
- */
-function scalarCarriers(entry, metric) {
-  const paths = metricPaths(entry.tool, metric).filter((path) => !path.includes('*') && valueOf(entry.payload, path) !== undefined);
-  return paths.filter((path) => parentOf(path) === parentOf(paths[0]));
+function metricCarriers(request, entry, metric, { collection = null, bound = [] } = {}) {
+  const declared = declaredFields(request, entry.tool, metric);
+  if (request.fields.some((field) => field.metric === metric) && !declared.length) return [];
+  const registry = metricPaths(entry.tool, metric);
+  const paths = declared.length ? declared : registry;
+  const pool = factPool(entry).filter((fact) => fact.semantic?.metric === metric && scalar(fact.value));
+  const filled = paths.filter((path) => pool.some((fact) => fieldPatternCovers(path, fact.field)));
+  if (!declared.length && registry.length > 1) return null;
+  return filled.flatMap((path) => {
+    if (collection) return path.startsWith(`data.${collection}.*.`) ? [path] : [];
+    const rows = rowCollections(entry.tool).filter((row) => path.startsWith(`data.${row}.*.`));
+    if (!rows.length) return [path];
+    const matches = pool.filter((fact) => fieldPatternCovers(path, fact.field));
+    if (!matches.every((fact) => fact.semantic?.property)) return [];
+    return matches.filter((fact) => bound.some((entity) => {
+      const type = fact.semantic.metric.split('.')[0];
+      const field = { project: 'projectId', task: 'taskId', person: 'sicil', wbs: 'wbsId', baseline: 'baselineId' }[type];
+      const parts = fact.field.split('.');
+      const index = parts.findIndex((part) => /^\d+$/.test(part));
+      const row = parts.slice(1, index + 1).reduce((value, key) => value?.[key], entry.payload.data);
+      return entity.type === type && String(row?.[field]).toLowerCase() === String(entity.bound).toLowerCase();
+    })).map((fact) => fact.field);
+  });
 }
 
-/** Satır koleksiyonunda ölçüyü taşıyan dolu alanlar (satıra göreli yol) ve satırı adlandıran bağlam alanı. */
-function rowFields(tool, collection, metrics, rows) {
-  const prefix = `${collection}.*.`;
-  const filled = (rel) => rows.some((row) => present(row, rel.split('.')));
-  const paths = claimableContract(tool).paths.filter((path) => path.startsWith(prefix));
-  const carriers = new Map(metrics.map((metric) => [metric, paths.filter((path) => metricEntry(tool, path)?.metric === metric)
-    .map((path) => path.slice(prefix.length)).filter((rel) => !rows.length || filled(rel))]));
-  const naming = paths.map((path) => path.slice(prefix.length))
-    .find((rel) => !rel.includes('.') && metricEntry(tool, `${prefix}${rel}`)?.context && filled(rel)) || null;
-  return { carriers, naming };
+function eligiblePopulation(request, entry) {
+  if (entry.payload.complete !== true || entry.payload.truncated === true || entry.args?.cursor) return false;
+  if (entry.tool === 'rota_task_analytics' && entry.args?.groupBy && request.population?.groupBy !== entry.args.groupBy) return false;
+  if (entry.tool === 'rota_wbs_inspect' && request.operation !== 'value' && !request.population?.depth) return false;
+  if (['rota_schedule_requests', 'rota_assignment_requests'].includes(entry.tool) && request.filters.text && !request.population?.textFields) return false;
+  return true;
 }
 
-/**
- * Bir satır koleksiyonundan liste ya da sıralama seçimi: satırlarda taşınan
- * ölçüler satır alanlarıyla, taşınmayanlar kaydın tekil taşıyıcısıyla seçilir.
- */
-function rowSelection(request, entry, collection) {
-  const rows = valueOf(entry.payload, `data.${collection}`);
-  if (!Array.isArray(rows)) return null;
-  const { carriers, naming } = rowFields(entry.tool, collection, request.metrics, rows);
-  const carried = request.metrics.filter((metric) => carriers.get(metric).length);
-  if (!carried.length) return null;
-  let indexes = ['*'];
-  if (request.operation === 'rank') {
-    if (!carriers.get(request.rank.metric)?.length) return null;
-    indexes = rankedRowIndexes(request, entry.tool, entry.payload, collection);
-    if (!indexes?.length) return null;
-  }
+function rowSelection(request, entry, canonical, bound, entries) {
+  const concrete = concreteCollections(entry.payload, canonical);
+  if (!concrete.length) return provesEmptyCollection({ tool: entry.tool, envelope: entry.payload, firstPage: !entry.args?.cursor }, canonical) ? [`${entry.id}:complete`] : null;
+  const prefix = `data.${canonical}.*.`;
+  const declared = (request.fields || []).filter((field) => field.tool === entry.tool);
+  const fields = [];
   const facts = [];
   for (const metric of request.metrics) {
-    if (carried.includes(metric)) continue;
-    const paths = scalarCarriers(entry, metric);
-    if (!paths.length) return null;
-    facts.push(...paths.map((path) => `${entry.id}:${path}`));
+    const paths = metricPaths(entry.tool, metric);
+    const rowPaths = paths.filter((path) => path.startsWith(prefix));
+    const scalarPaths = paths.filter((path) => !path.startsWith(prefix));
+    const selected = declared.filter((field) => field.metric === metric).map((field) => field.path);
+    if (rowPaths.length && (!selected.length && (rowPaths.length > 1 || scalarPaths.some((path) => factPool(entry).some((fact) => fieldPatternCovers(path, fact.field)))))) return null;
+    if (rowPaths.length) fields.push(...(selected.length ? selected.filter((path) => path.startsWith(prefix)) : rowPaths));
+    if (!rowPaths.length || selected.some((path) => !path.startsWith(prefix))) {
+      const sources = entries.flatMap((source) => {
+        const carriers = metricCarriers(request, source, metric, { bound });
+        const own = carriers?.every((path) => metricEntry(source.tool, path.startsWith('data.') ? canonicalField(path).slice(5) : path)?.property);
+        const explicit = declaredFields(request, source.tool, metric).length > 0;
+        if (source.id !== entry.id && (!bound.length || (!own && !explicit))) return [];
+        return carriers?.length ? [{ source, carriers }] : [];
+      });
+      if (sources.length !== 1) return null;
+      // Satır sayımı yalnızca aynı koleksiyonun toplamıyla birleşir.
+      const [{ source, carriers }] = sources;
+      const own = carriers.every((path) => metricEntry(source.tool, path.startsWith('data.') ? canonicalField(path).slice(5) : path)?.property);
+      if (!own && (source.id !== entry.id || ROW_TOTALS[entry.tool]?.[canonical] !== metric)) return null;
+      facts.push(...carriers.map((path) => `${source.id}:${path}`));
+    }
   }
-  // Boş koleksiyonun satır alanı seçilemez; boş nüfus kanıtın tekil olgularıyla doğrulanır.
-  if (!rows.length) return facts.length ? facts : null;
-  const relatives = [...new Set([naming, ...carried.map((metric) => carriers.get(metric)[0])].filter(Boolean))];
-  for (const index of indexes) for (const rel of relatives) facts.push(`${entry.id}:data.${collection}.${index}.${rel}`);
+  if (!fields.length) return null;
+  if (concrete.every(({ rows }) => rows.length === 0)) {
+    if (!provesEmptyCollection({ tool: entry.tool, envelope: entry.payload, firstPage: !entry.args?.cursor }, canonical)) return null;
+    return facts.length ? facts : [`${entry.id}:complete`];
+  }
+  for (const item of concrete) {
+    let indexes = request.operation === 'rank' ? rankedRowIndexes(request, entry.tool, entry.payload, canonical, item.collection.slice(5)) : item.rows.map((_, index) => index);
+    if (!indexes?.length) return null;
+    if (indexes.length === item.rows.length) indexes = ['*'];
+    const naming = claimableContract(entry.tool).paths.find((path) => path.startsWith(`${canonical}.*.`)
+      && !path.slice(canonical.length + 3).includes('.') && metricEntry(entry.tool, path)?.context);
+    const relatives = [...new Set([naming ? `data.${naming}` : null, ...fields].filter(Boolean).map((path) => path.slice(prefix.length)))];
+    for (const index of indexes) for (const rel of relatives) facts.push(`${entry.id}:${item.collection}.${index}.${rel}`);
+  }
   return facts;
 }
 
-/**
- * Bildirilen istekten sunucunun türettiği olgu seçimi adayları (en yeni kanıt
- * önce). Yalnızca kayıt defterindeki ölçü yollarından kurulur; kullanıcı
- * cümlesi yorumlanmaz. Adaylar ÖNERİDİR: her biri modelin seçimiyle aynı
- * doğrulayıcıdan (`analyzeGroundedAnswer` + `verifyRequestedFacts`) geçer;
- * yalnızca TEK aday geçerse kullanılır, aksi hâlde seçimi model yapar.
- */
+/** Tek anlamlı, tam ve çakışmayan kanıt; belirsizlikte seçimi model yapar. */
 export function requestSelections(request, entries, selection = null) {
-  const usable = entries.filter((entry) => entry.payload?.ok === true && entry.payload.data && typeof entry.payload.data === 'object').reverse();
+  if (request.reasoning === 'synthesis' || !request.population) return [];
+  const usable = entries.filter((entry) => entry.payload?.ok === true && entry.payload.data && eligiblePopulation(request, entry));
+  const bound = bindRequestEntities(request, entries, selection);
+  if (bound.some((entity) => !entity.bound)) return [];
+  if (bound.length > 1 && request.metrics.length > 1 && !request.bindings?.length) return [];
   const candidates = [];
   if (request.operation === 'value') {
-    for (const entry of usable) {
-      const paths = request.metrics.map((metric) => scalarCarriers(entry, metric));
-      if (paths.every((list) => list.length)) candidates.push(paths.flat().map((path) => `${entry.id}:${path}`));
-    }
-    // Birden çok varlık: yalnızca bağlı bir varlığı seçen kanıtların olguları birlikte önerilir.
-    if (request.entities.length > 1) {
-      const bound = new Set(bindRequestEntities(request, entries, selection).filter((entity) => entity.bound)
-        .map((entity) => `${entity.type}:${String(entity.bound).toLowerCase()}`));
-      const named = (entry) => [...selectorsOf(entry.args || {}), ...(entry.payload.entity?.id ? [entry.payload.entity] : [])]
-        .some(({ type, id }) => bound.has(`${type}:${String(id).toLowerCase()}`));
-      const all = usable.filter(named).flatMap((entry) => request.metrics.flatMap((metric) => scalarCarriers(entry, metric)).map((path) => `${entry.id}:${path}`));
-      if (all.length) candidates.push(all);
-    }
-  } else {
-    for (const entry of usable) {
-      for (const collection of rowCollections(entry.tool).filter((name) => !name.includes('*'))) {
-        const facts = rowSelection(request, entry, collection);
-        if (facts?.length) candidates.push(facts);
+    const composite = [];
+    for (const metric of request.metrics) {
+      const sources = usable.flatMap((entry) => {
+        if (request.population && request.population.tool !== entry.tool && !declaredFields(request, entry.tool, metric).length
+          && !metricPaths(entry.tool, metric).every((path) => metricEntry(entry.tool, path.startsWith('data.') ? path.slice(5) : path)?.property)) return [];
+        if (!request.population && !metricPaths(entry.tool, metric).every((path) => {
+          const key = path.startsWith('data.') ? path.slice(5) : path;
+          return metricEntry(entry.tool, key)?.property && bound.length;
+        })) return [];
+        const carriers = metricCarriers(request, entry, metric, { bound });
+        return carriers?.length ? [{ entry, carriers }] : [];
+      });
+      if (!sources.length) return [];
+      if (sources.length > 1) {
+        if (bound.length < 2) return [];
+        const keys = sources.map(({ entry }) => JSON.stringify(selectorsOf(entry.args || {})));
+        if (new Set(keys).size !== sources.length || keys.some((key) => key === '[]')) return [];
       }
+      composite.push(...sources.flatMap(({ entry, carriers }) => carriers.map((path) => `${entry.id}:${path}`)));
+    }
+    candidates.push(composite);
+  } else {
+    if (!request.population?.collection) return [];
+    for (const entry of usable) {
+      if (entry.tool !== request.population.tool) continue;
+      if (entry.tool === 'rota_task_analytics' && request.population.collection === 'groups' && !request.population.groupBy) continue;
+      if (entry.tool === 'rota_wbs_inspect' && !request.population.depth) continue;
+      if (getRotaTool(entry.tool).parameters.properties.sort && !request.population.sort && request.operation === 'list') continue;
+      const facts = rowSelection(request, entry, request.population.collection, bound, usable);
+      if (facts?.length) candidates.push(facts);
     }
   }
-  return [...new Set(candidates.map((facts) => JSON.stringify({ kind: 'rota', facts: [...new Set(facts)] })))];
+  return [...new Set(candidates.map((facts) => JSON.stringify({ kind: 'rota', facts: [...new Set(facts)], layout: request.layout || 'auto' })))];
 }

@@ -42,7 +42,7 @@ test('the first round may search only text from the current user message', () =>
 test('an invented first-round search is refused end to end and the model must stay within the question', async (t) => {
   createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const steps = [
-    { text: declared({ operation: 'value', metrics: ['tasks.total'], filters: { text: 'radar test planı' } }),
+    { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }),
       toolCalls: [{ id: 'a', name: 'rota_task_search', arguments: '{"text":"Gizli görev"}' }] },
     (input) => {
       assert.equal(results(input)[0].error.code, 'UNSUPPORTED_SCOPE');

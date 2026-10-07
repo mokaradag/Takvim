@@ -167,16 +167,16 @@ test('legacy structured claims remain verifiable and render through the same nar
 const OVERDUE_MINE = Object.freeze({ deadline: 'overdue', assignee: 'me' });
 const FULL_PROJECT = Object.freeze([{ type: 'project', id: PROJECTS.FULL }]);
 const COMMON_QUESTIONS = [
-  ['Kaç gecikmiş görevim var?', { operation: 'value', metrics: ['tasks.total'], filters: OVERDUE_MINE }, ['rota_task_analytics', OVERDUE_MINE], ['data.totals.total'],
+  ['Kaç gecikmiş görevim var?', { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, fields: [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' }], filters: OVERDUE_MINE }, ['rota_task_analytics', OVERDUE_MINE], ['data.totals.total'],
     /toplam \*\*\d+\*\* görev bulunuyor \(ölçüt: /],
-  ['Gecikmiş görevlerimi listele', { operation: 'list', metrics: ['tasks.total', 'task.targetFinish'], filters: OVERDUE_MINE }, ['rota_task_search', OVERDUE_MINE],
+  ['Gecikmiş görevlerimi listele', { operation: 'list', metrics: ['tasks.total', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' }, filters: OVERDUE_MINE }, ['rota_task_search', OVERDUE_MINE],
     ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish'], /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\*/m],
-  [`Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total'], entities: FULL_PROJECT },
+  [`Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_project_detail' }, entities: FULL_PROJECT },
     ['rota_project_detail', { projectId: PROJECTS.FULL }], ['data.visibleTasks.total'], /projesinde toplam \*\*8\*\* görev/],
-  [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.overdue', 'tasks.completionRatePercent'], entities: FULL_PROJECT },
+  [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.overdue', 'tasks.completionRatePercent'], population: { tool: 'rota_project_detail' }, entities: FULL_PROJECT },
     ['rota_project_detail', { projectId: PROJECTS.FULL }],
     ['data.visibleTasks.total', 'data.visibleTasks.open', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent'], /Bunların \*\*\d+\*\*'s?[ıiuü] açık ve \*\*\d+\*\*'s?[ıiuü] gecikmiş; tamamlanma oranı \*\*%\d+\*\*\. 【R1】$/],
-  ['Kimde kaç açık iş var?', { operation: 'list', metrics: ['tasks.open'] }, ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'],
+  ['Kimde kaç açık iş var?', { operation: 'list', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary', collection: 'people' }, fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.people.*.openTasks' }] }, ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'],
     /^- \*\*Ayşe Yılmaz\*\* — Açık görev: \*\*\d+\*\* 【R1】$/m]
 ];
 

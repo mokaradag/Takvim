@@ -41,7 +41,6 @@ const { rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js')
 
 const TOOLS_ON = Object.freeze({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' });
 const STANDARD_TOOL_MODEL = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model;
-const DEEP_TOOL_MODEL = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model;
 
 const fixedClocks = new WeakSet();
 
@@ -88,7 +87,7 @@ async function tempRegistry(t, document) {
 
 /** Proje kimliğiyle daraltılmış görev sayısı isteği. */
 function countRequest(args = {}, metrics = ['tasks.total']) {
-  return { operation: 'value', metrics, ...(args.projectId ? { entities: [{ type: 'project', id: args.projectId }] } : {}) };
+  return { operation: 'value', metrics, population: { tool: 'rota_task_search' }, ...(args.projectId ? { entities: [{ type: 'project', id: args.projectId }] } : {}) };
 }
 
 /** Görev aramasını çağıran tek model turu; bildirilen sayıyı sunucu kanıttan seçip atıflı yazar. */
@@ -217,7 +216,8 @@ test('atıflı yanıt: araç sonucu kanıt olur, yanıt doğrulanıp tek parça 
   assert.equal(first.kind, 'tools');
   assert.equal(first.model, STANDARD_TOOL_MODEL);
   assert.equal(first.toolChoice, 'auto');
-  assert.deepEqual(first.tools.map((tool) => tool.name).sort(), rotaToolNames().sort());
+  assert.deepEqual(first.tools.map((tool) => tool.name), ['rota_plan']);
+  assert.deepEqual(first.tools[0].parameters.properties.calls.items.oneOf.map((tool) => tool.properties.name.enum[0]).sort(), rotaToolNames().sort());
   assert.equal(first.tools.some((tool) => /sql|execute|update|delete|create/i.test(tool.name)), false);
   assert.match(first.messages[0].content, /KAYNAK GÖSTERME/);
   assert.equal(first.messages.at(-1).content, `Radar projesinde kaç görev var? ${PROJECTS.FULL}`);
@@ -274,12 +274,12 @@ test('atıflı yanıt: araç sonucu kanıt olur, yanıt doğrulanıp tek parça 
   assert.equal(aiTelemetrySnapshot().grounding.serverSelected, 1);
 });
 
-test('derin kip araç yetenekli akıl yürütme profilini kullanır', async (t) => {
+test('derin kip basit sayımı ucuz araç planlayıcısıyla tamamlar', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.FULL }));
   const response = await sendTurn({ turnId: randomUUID(), message: `Radar görevleri ${PROJECTS.FULL}`, mode: 'deep' });
   assert.equal(response.status, 200);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [DEEP_TOOL_MODEL]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL]);
   assert.equal(doneOf(response).assistantMessage.mode, 'deep');
 });
 
@@ -289,19 +289,13 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   stack.provider.enqueue(
     searchNamed,
     { type: 'answer', text: invented },
-    { type: 'answer', text: invented },
-    { type: 'answer', text: invented },
     { type: 'answer', text: invented }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.equal(response.status, 200);
-  // Tek düzeltme bütçesi Standart modelde harcanmaz ve devirde yenilenmez: devredilen tur onu kullanır.
-  assert.equal(stack.provider.calls.length, 4);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL, DEEP_TOOL_MODEL]);
-  assert.deepEqual(stack.provider.calls.slice(2).map((call) => call.toolChoice), ['none', 'none'], 'devirde araçlar yeniden çalışmaz');
-  assert.doesNotMatch(stack.provider.calls[2].messages[0].content, /SUNUCU DOĞRULAMASI/, 'Standart taslağının reddi devredilmez');
-  assert.match(stack.provider.calls[2].messages[0].content, /kanıtları hazır/);
-  const repair = stack.provider.calls[3];
+  assert.equal(stack.provider.calls.length, 3);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL]);
+  const repair = stack.provider.calls[2];
   assert.equal(repair.toolChoice, 'none', 'kanıt varken düzeltme yalnızca yeniden yazımdır');
   assert.equal(repair.messages[0].role, 'system');
   assert.match(repair.messages[0].content, /SUNUCU DOĞRULAMASI/);
@@ -322,10 +316,10 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   assert.equal(grounding.failed, 1);
   assert.equal(grounding.repaired, 1);
   assert.equal(grounding.grounded, 0);
-  assert.deepEqual(grounding.escalations, { total: 1, byReason: { VERIFICATION_FAILED: 1 }, byOutcome: { failed: 1 } });
+  assert.deepEqual(grounding.escalations, { total: 0, byReason: {}, byOutcome: {} });
 });
 
-test('devir başarılı olursa yalnızca doğrulanmış yanıt gösterilir ve atfedilen kanıt kaydedilir', async (t) => {
+test('Standart düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir ve atfedilen kanıt kaydedilir', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(
     searchNamed,
@@ -345,10 +339,10 @@ test('devir başarılı olursa yalnızca doğrulanmış yanıt gösterilir ve at
   assert.equal(response.text.includes('42 gecikmiş'), false);
   assert.deepEqual(done.assistantMessage.evidence.map((item) => [item.id, item.kind]), [['R1', 'task-list']]);
   assert.equal(stack.db.aiMessageEvidence.length, 1);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL]);
-  assert.equal(aiTelemetrySnapshot().grounding.repaired, 0, 'Standart modelden aynı yanıt yeniden istenmez');
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL]);
+  assert.equal(aiTelemetrySnapshot().grounding.repaired, 1, 'protokol düzeltmesi Standart kipte kalır');
   assert.equal(aiTelemetrySnapshot().grounding.grounded, 1);
-  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { VERIFICATION_FAILED: 1 }, byOutcome: { grounded: 1 } });
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 0, byReason: {}, byOutcome: {} });
 });
 
 test('kısmi kapsam: sunucu kapsam notunu model metninden bağımsız olarak her zaman ekler', async (t) => {
@@ -426,7 +420,7 @@ test('genel sohbete düşüş önceki kanıta dayalı Rota yanıtını model ba�
 test('araç ön sözü ve iç protokol hiçbir zaman kullanıcıya gösterilmez; bildirimsiz araç çağrısı çalışmaz', async (t) => {
   const stack = groundedStack(t);
   const preface = 'Elbette, bunun için önce Rota verisindeki portföy özetine bakmam gerekiyor; birkaç saniye sürebilir. '.repeat(2);
-  const declaration = declared({ operation: 'value', metrics: ['projects.total'] });
+  const declaration = declared({ operation: 'value', metrics: ['projects.total'], population: { tool: 'rota_portfolio_summary' }, fields: [{ metric: 'projects.total', tool: 'rota_portfolio_summary', path: 'data.totals.projects' }] });
   stack.provider.enqueue(
     { type: 'tool-calls', preface: [preface], calls: [{ name: 'rota_portfolio_summary', arguments: {} }] },
     { type: 'tool-calls', preface: [declaration], calls: [{ name: 'rota_portfolio_summary', arguments: {} }] }
@@ -482,8 +476,8 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   assert.ok(stack.provider.calls[1].tools.some((tool) => tool.name === 'rota_task_detail'),
     'veri alınmayan ilk tur kataloğu daraltmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
-  // Kanıt olmadan "12 görev" yazılamaz: taslak gösterilmeden devredilir, dürüst yanıt kaydedilir.
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL]);
+  // Kanıtsız taslak gösterilmez; protokol düzeltmesi Standart kipte kalır.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL]);
   assert.equal(stack.provider.calls[2].messages.some((message) => String(message.content || '').includes('12 görev')), false,
     'reddedilen taslak devredilen döküme girmez');
   assert.equal(response.text.includes('12 görev'), false);
@@ -601,7 +595,7 @@ test('kanıtlı geçmişte uzun ve tanınmayan takip ifadesi genel niyetle kanı
 test('soru sözcüklerinden bağımsız arama sonucu ayrıntı ve analiz araçlarını açık tutar', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(
-    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] })], calls: [{ name: 'rota_project_search', arguments: { text: 'Radar Modernizasyonu' } }] },
+    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] })], calls: [{ name: 'rota_project_search', arguments: { text: 'Radar Modernizasyonu' } }] },
     { type: 'script', respond: (call) => {
       assert.ok(call.tools.some((tool) => tool.name === 'rota_project_detail'));
       assert.ok(call.tools.some((tool) => tool.name === 'rota_task_analytics'));
@@ -757,7 +751,7 @@ test('a maximal four-round tool transcript stays within gateway limits and retai
     }
     // İki ayrı arama aynı isteği karşılar: seçim belirsizdir, tur son model turuna kadar sürer.
     return round <= 4 ? { text: round === 1 ? declared(countRequest()) : '', toolCalls: Array.from({ length: 16 }, (_, index) => ({ id: `c_${round}_${index}`, name: 'rota_task_search', arguments: index === 1 ? '{"limit":1}' : '{}' })) }
-      : { text: evidenceReply(claimFor(JSON.parse(input.messages.find((message) => message.role === 'tool').content), 'totalCount')), toolCalls: [], finishReason: 'stop' };
+      : { text: evidenceReply(claimFor(input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).findLast((result) => result.ok === true), 'totalCount')), toolCalls: [], finishReason: 'stop' };
   } };
   const messages = [{ role: 'system', content: 'Trusted system instruction' }, ...Array.from({ length: 100 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `History ${index}` })), { role: 'user', content: currentRequest }];
   const result = await runGroundedTurn(session, { messages, catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE }), onText: async () => {} });

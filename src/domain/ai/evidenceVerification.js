@@ -121,6 +121,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   const selection = resolveEvidenceSelection(answer, { evidenceIds, evidencePayloads });
   if (!selection.ok) return { ok: false, citedIds: [], issues: selection.issues };
   if (request) {
+    if (request.layout && request.layout !== 'auto' && selection.layout !== request.layout) return { ok: false, citedIds: [], issues: [{ code: 'LAYOUT_MISMATCH' }] };
     const verdict = verifyRequestedFacts(request, selection.facts, evidence);
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
     if (verdict.rankOrder) {

@@ -46,7 +46,8 @@ function gatewayFor(t, {
   credential = { source: 'personal', apiKey: PERSONAL_KEY_A },
   registry = REGISTRY,
   sicils = null,
-  random = () => 0
+  random = () => 0,
+  now = Date.now
 } = {}) {
   resetAiTelemetryForTests();
   resetTelemetryRegistryForTests();
@@ -71,7 +72,8 @@ function gatewayFor(t, {
     resolveCredential: async () => credential,
     currentSicil: async () => (queue ? queue.shift() : SICIL_A),
     verifySicil: async () => {},
-    random
+    random,
+    now
   });
   const received = [];
   const statuses = [];
@@ -427,4 +429,23 @@ test('sağlayıcı done olayından sonra iptal biten yanıtı kaybettirmez', asy
   assert.equal(result.text, 'Tam yanıt');
   assert.equal(reads, 2);
   assert.equal(admission.status().active, 0);
+});
+
+test('tool round measurements include failed connection attempts before the successful stream', async (t) => {
+  let clock = 0;
+  const fake = createFakeAiProvider();
+  fake.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: {} }] });
+  let attempts = 0;
+  const provider = { ...fake, streamToolCompletion(input) {
+    clock += attempts++ === 0 ? 5000 : 2000;
+    return fake.streamToolCompletion(input);
+  } };
+  const { gateway } = gatewayFor(t, { provider, now: () => clock });
+  const result = await gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({ messages: MESSAGES,
+    tools: [{ name: 'rota_task_search', description: 'Read tasks', parameters: { type: 'object', properties: {} } }], toolChoice: 'auto' }) });
+  assert.equal(result.durationMs, 7000);
+  assert.equal(result.firstEventMs, 7000);
+  assert.equal(fake.calls.length, 2);
+  assert.equal(fake.pendingCount, 0);
+  assert.equal(aiTelemetrySnapshot().retries, 1);
 });

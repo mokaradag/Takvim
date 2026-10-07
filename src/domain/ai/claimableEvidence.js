@@ -220,7 +220,7 @@ const TOTAL_COUNT = Object.freeze({
   rota_task_search: TOTALS.total, rota_task_detail: TOTALS.total, rota_task_analytics: TOTALS.total, rota_data_quality: TOTALS.total,
   rota_project_search: m('projects.total', 'projects'), rota_project_detail: m('projects.total', 'projects'), rota_portfolio_summary: m('projects.total', 'projects'),
   rota_person_search: m('people.total', 'people'), rota_workload_summary: m('people.total', 'people'), rota_wbs_inspect: m('wbs.nodes', 'wbs-nodes'),
-  rota_baseline_compare: m('baseline.finishSlipped', 'tasks'), rota_dependency_inspect: m('dependencies.total', 'dependencies'),
+  rota_baseline_compare: m('baseline.compared', 'tasks'), rota_dependency_inspect: m('dependencies.total', 'dependencies'),
   rota_recurrence_inspect: m('recurrence.entries', 'series'), rota_calendar_inspect: m('calendar.holidays', 'holidays'),
   rota_activity_search: m('activity.events', 'events'), rota_schedule_requests: m('requests.total', 'requests'),
   rota_assignment_requests: m('requests.total', 'requests'), rota_notifications: m('notifications.total', 'notifications'),
@@ -295,7 +295,9 @@ const CHANGE_INSTANT_FIELDS = new Set(['createdAt', 'updatedAt']);
 const DISPLAY_UNITS = Object.freeze({ hours: 'hours', 'currency-unspecified': 'unspecified-currency' });
 
 function rowContext(envelope, parts) {
-  const index = parts.findIndex((part, position) => position > 1 && /^\d+$/.test(part));
+  const indexes = parts.map((part, position) => position > 1 && /^\d+$/.test(part) ? position : -1).filter((position) => position >= 0);
+  const index = indexes.findLast((position) => rowCollections(envelope.tool).includes(parts.slice(1, position).map((part) => /^\d+$/.test(part) ? '*' : part).join('.')))
+    ?? indexes[0] ?? -1;
   if (index < 0 || index === parts.length - 1) return null;
   const row = parts.slice(1, index + 1).reduce((value, key) => value?.[key], envelope.data);
   if (!row || typeof row !== 'object') return null;

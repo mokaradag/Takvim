@@ -123,7 +123,7 @@ test('moving a counted but unlisted task out of scope drops the aggregate at fin
 
 /** Proje künyesi turu; bildirilen görünür görev toplamını sunucu kanıttan seçip atıflı yazar. */
 function citeProjectTotal(stack, projectId = PROJECTS.FULL) {
-  const request = declared({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: projectId }] });
+  const request = declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', id: projectId }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_project_detail', arguments: { projectId } }] });
 }
 
@@ -203,7 +203,7 @@ test('legacy aggregate evidence without a recorded population is unverifiable, w
   const stack = stackFor(t);
   citeProjectTotal(stack);
   const aggregate = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
-  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: TASKS.OVERDUE }] })],
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] })],
     calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }] });
   const detail = done(await sendTurn({ turnId: randomUUID(), message: `Radar test planı görevini göster: ${TASKS.OVERDUE}` }));
   for (const row of stack.db.aiMessageEvidence) {

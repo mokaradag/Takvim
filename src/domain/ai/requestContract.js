@@ -30,13 +30,16 @@ export function rankableMeasure(measure) {
 const ENTITY_ID_FIELDS = Object.freeze({ project: 'projectId', task: 'taskId', person: 'sicil', wbs: 'wbsId', baseline: 'baselineId' });
 
 const sortedJson = (value) => JSON.stringify(Object.keys(value).sort().map((key) => [key, value[key]]));
+const canonicalPath = (field) => field.split('.').map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
+const TASK_COUNT_TOOLS = new Set(['rota_task_search', 'rota_task_analytics', 'rota_project_detail', 'rota_task_detail']);
 
 /**
- * Olgunun kayıt satırı: kayıt defterindeki satır koleksiyonunun ilk düzeyi.
+ * Olgunun kayıt satırı: kayıt defterindeki en içteki satır koleksiyonu.
  * Kaydın çok değerli alanı satır değildir; `list` döner.
  */
 export function factRow(tool, field) {
-  return factCollections(tool, field)[0] || null;
+  const rows = factCollections(tool, field);
+  return rows.findLast((row) => row.kind === 'row') || rows[0] || null;
 }
 
 function factCollections(tool, field) {
@@ -86,12 +89,18 @@ function groupScope(fact) {
 }
 
 const fieldValue = (row, field) => field.split('.').reduce((value, key) => value?.[key], row);
+function pathValues(value, parts) {
+  if (!parts.length) return value === undefined ? [] : [value];
+  const [head, ...rest] = parts;
+  if (head === '*') return Array.isArray(value) ? value.flatMap((item) => pathValues(item, rest)) : [];
+  return value && typeof value === 'object' ? pathValues(value[head], rest) : [];
+}
 
 /** Koleksiyonun satırlarında bir ölçüyü taşıyan kanonik alanlar. */
 function rowMetricFields(tool, collection, metric) {
   const prefix = `${collection}.*.`;
   return claimableContract(tool).paths
-    .filter((path) => path.startsWith(prefix) && !path.slice(prefix.length).includes('*') && metricEntry(tool, path)?.metric === metric)
+    .filter((path) => path.startsWith(prefix) && metricEntry(tool, path)?.metric === metric)
     .map((path) => path.slice(prefix.length));
 }
 
@@ -122,8 +131,8 @@ function rankPlan(request, source, collection) {
 }
 
 /** Sıralama isteğinin bu kanıtta beklenen satır indisleri; seçim yine `verifyRequestedFacts` ile doğrulanır. */
-export function rankedRowIndexes(request, tool, envelope, canonical) {
-  return rankPlan(request, { tool, envelope }, { canonical, collection: `data.${canonical}` })?.order || null;
+export function rankedRowIndexes(request, tool, envelope, canonical, concrete = canonical) {
+  return rankPlan(request, { tool, envelope }, { canonical, collection: `data.${concrete}` })?.order || null;
 }
 
 /**
@@ -152,16 +161,40 @@ function rankedIndexes(request, source, collection, selected) {
       && (nextValue < boundary ? -1 : nextValue > boundary ? 1 : 0) * direction > 0)) ? order : null;
 }
 
-/** Kanıt TAM, kısaltılmamış, ilk sayfa ve sıfır toplamlı mı? Yalnızca böyle bir kanıt nüfusun boş olduğunu kanıtlar. */
-function provesEmptyPopulation(source) {
-  return source.envelope?.complete === true && source.envelope?.truncated !== true
-    && source.firstPage === true && source.envelope.totalCount === 0;
+/** Kanonik koleksiyonun bütün somut satır kümeleri. */
+export function concreteCollections(envelope, canonical) {
+  const found = [];
+  function visit(value, parts, path, parent = null) {
+    if (!parts.length) { if (Array.isArray(value)) found.push({ canonical, collection: path, rows: value, parent }); return; }
+    const [head, ...tail] = parts;
+    if (head === '*') {
+      if (Array.isArray(value)) value.forEach((item, index) => visit(item, tail, `${path}.${index}`, item));
+    } else if (value && typeof value === 'object') visit(value[head], tail, `${path}.${head}`, value);
+  }
+  visit(envelope.data, canonical.split('.'), 'data');
+  return found;
 }
 
-/** Kanıtın satır koleksiyonu dizi olarak var ve boş mu? */
-function emptyCollection(source, collection) {
-  const rows = valueAt(source.envelope, `data.${collection}`);
-  return Array.isArray(rows) && rows.length === 0;
+export function provesEmptyCollection(source, canonical) {
+  const envelope = source.envelope;
+  if (envelope?.complete !== true || envelope.truncated === true || source.firstPage !== true) return false;
+  const collections = concreteCollections(envelope, canonical);
+  if (!collections.length) return source.tool === 'rota_recurrence_inspect' && canonical === 'series.*.next'
+    && Array.isArray(envelope.data?.series) && envelope.data.series.length === 0 && envelope.totalCount === 0;
+  if (collections.some(({ rows }) => rows.length !== 0)) return false;
+  if (source.tool === 'rota_recurrence_inspect' && canonical.endsWith('.next')) {
+    return collections.every(({ parent }) => parent?.upcomingCount === 0 && parent.nextTruncated === false);
+  }
+  if (source.tool === 'rota_dependency_inspect' && ['predecessors', 'successors'].includes(canonical)) return true;
+  if (source.tool === 'rota_baseline_compare' && canonical === 'availableBaselines') return envelope.data?.availableBaselinesTruncated === false;
+  if (source.tool === 'rota_task_analytics' && canonical === 'groups') return envelope.data?.groupBy != null && envelope.data.groupCount === 0;
+  const counted = {
+    rota_task_search: 'tasks', rota_project_search: 'matches', rota_person_search: 'people', rota_portfolio_summary: 'projects',
+    rota_workload_summary: 'people', rota_wbs_inspect: 'nodes', rota_baseline_compare: 'mostSlipped', rota_dependency_inspect: 'mostConnected',
+    rota_recurrence_inspect: 'series', rota_calendar_inspect: 'holidays', rota_activity_search: 'items',
+    rota_schedule_requests: 'items', rota_assignment_requests: 'items', rota_outlook_status: 'items'
+  };
+  return counted[source.tool] === canonical && envelope.totalCount === 0;
 }
 
 /**
@@ -170,13 +203,19 @@ function emptyCollection(source, collection) {
  * Liste/sıralama satırlarının taşıyacağı her koleksiyon (istenen bir satır
  * ölçüsünü taşıyan) boş olmalıdır.
  */
-function emptyRowEvidence(request, facts, evidence) {
+function emptyRowSources(request, facts, evidence) {
   const ids = [...new Set(facts.map(({ evidenceId }) => evidenceId))];
-  return ids.length > 0 && ids.every((evidenceId) => {
+  return ids.flatMap((evidenceId) => {
     const source = evidence.get(evidenceId);
-    const compatible = rowCollections(source.tool).filter((collection) =>
-      request.metrics.some((metric) => rowMetricFields(source.tool, collection, metric).length > 0));
-    return provesEmptyPopulation(source) && compatible.length > 0 && compatible.every((collection) => emptyCollection(source, collection));
+    if (!source || source.populationMatch === false || source.dimensionsMatch === false || source.sortMatch === false || source.unsupported.length
+      || sortedJson(source.facets) !== sortedJson(source.declared)) return [];
+    const active = rowCollections(source.tool).filter((collection) => concreteCollections(source.envelope, collection).length > 0
+      || (source.tool === 'rota_recurrence_inspect' && collection === 'series.*.next' && source.envelope.data?.series?.length === 0));
+    const rowMetrics = request.metrics.filter((metric) => active.some((collection) => rowMetricFields(source.tool, collection, metric).length > 0));
+    const compatible = active.filter((collection) => (!source.collection || collection === source.collection)
+      && rowMetrics.length && rowMetrics.every((metric) => rowMetricFields(source.tool, collection, metric).length > 0));
+    if (!compatible.length || compatible.some((collection) => !provesEmptyCollection(source, collection))) return [];
+    return [{ source, metrics: rowMetrics }];
   });
 }
 
@@ -184,17 +223,8 @@ function emptyRowEvidence(request, facts, evidence) {
  * Boş nüfusta satır ölçüleri: istekle aynı nüfusu taşıyan ve boşluğu kanıtlayan
  * kanıtın boş satır koleksiyonundaki ölçü, satır olmadığı için boşta karşılanır.
  */
-function vacuousRowMetrics(request, sources) {
-  const vacuous = new Set();
-  for (const source of sources) {
-    if (!provesEmptyPopulation(source)) continue;
-    for (const metric of request.metrics) {
-      if (rowCollections(source.tool).some((collection) => rowMetricFields(source.tool, collection, metric).length > 0 && emptyCollection(source, collection))) {
-        vacuous.add(metric);
-      }
-    }
-  }
-  return vacuous;
+function vacuousRowMetrics(sources) {
+  return new Set(sources.flatMap(({ metrics }) => metrics));
 }
 
 /**
@@ -206,7 +236,7 @@ function rowMetricComplete(entry, metric) {
   const rows = valueAt(entry.source.envelope, entry.row.collection) || [];
   return [...entry.indexes].every((index) => {
     const row = rows[index];
-    return row && fields.some((field) => fieldValue(row, field) !== undefined)
+    return row && fields.some((field) => pathValues(row, field.split('.')).length > 0)
       && entry.metrics.get(index)?.has(metric) === true;
   });
 }
@@ -233,7 +263,7 @@ export function verifyRequestedFacts(request, facts, evidence) {
   const represented = new Set();
   const referenced = new Set();
   const collections = new Map();
-  const substantiveSources = new Set();
+  const metricEntities = new Map();
   for (const { evidenceId, fact } of facts) {
     const source = evidence.get(evidenceId);
     if (!source) return fail('UNKNOWN_FACT_REFERENCE');
@@ -250,12 +280,18 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const named = row?.kind === 'row' && rowEntities.some((entity) => boundKeys.has(entity));
     // Değer isteğinde bağlı varlığın kendi özelliği (adlandırılan satır ya da
     // seçicinin kaydı) nüfus koşulundan bağımsızdır; toplamlar ve sayımlar değildir.
-    const ownProperty = request.operation === 'value' && semantic.property === true
+    const ownProperty = semantic.property === true && (request.operation === 'value' || !row)
       && (named || ((!row || row.path === fact.field) && source.selectors.length > 0));
     const group = request.operation === 'value' && row?.kind === 'row' && !named ? groupScope(fact) : null;
     const selectors = [...source.selectors, ...(group?.selectors || [])];
     if (selectors.some(({ type, id }) => !boundKeys.has(entityKey(type, id)))) return fail('ENTITY_MISMATCH');
     if (substantive) {
+      const fieldBindings = (request.fields || []).filter((item) => item.metric === semantic.metric);
+      const explicitlySourced = fieldBindings.some((item) => item.tool === source.tool);
+      if (!ownProperty && ((source.populationMatch === false && !explicitlySourced) || source.dimensionsMatch === false || source.sortMatch === false)) return fail('POPULATION_MISMATCH');
+      if (source.collection && row?.kind === 'row' && row.canonical !== source.collection) return fail('POPULATION_MISMATCH');
+      const canonicalField = fact.field.startsWith('data.') ? fact.field.split('.').slice(1).map((part) => /^\d+$/.test(part) ? '*' : part).join('.') : fact.field;
+      if (fieldBindings.length && !fieldBindings.some((item) => item.tool === source.tool && item.path === (fact.field.startsWith('data.') ? `data.${canonicalField}` : canonicalField))) return fail('POPULATION_MISMATCH');
       if (!ownProperty) {
         if (group && group.facets === null) return fail('POPULATION_MISMATCH');
         const effective = { ...source.facets, ...(group?.facets || {}) };
@@ -263,21 +299,47 @@ export function verifyRequestedFacts(request, facts, evidence) {
         if (sortedJson(effective) !== sortedJson(source.declared)) return fail('POPULATION_MISMATCH');
       }
       represented.add(semantic.metric);
-      substantiveSources.add(source);
-      // Varlık yalnızca ölçü taşıyan olguyla karşılanır; ad ya da etiket bağlamı yetmez.
-      const propertyType = semantic.property ? semantic.metric?.split('.')[0] : null;
+      const scope = sortedJson(source.facets) + sortedJson(Object.fromEntries(source.selectors.map(({ type, id }) => [type, id]))) + sortedJson(source.snapshotDimensions || {});
+      const propertyType = semantic.property && (request.operation === 'value' || ownProperty) ? semantic.metric?.split('.')[0] : null;
       const propertyId = rowObject?.[ENTITY_ID_FIELDS[propertyType]];
+      const propertyEntity = propertyId != null ? entityKey(propertyType, propertyId) : source.selectors.find((item) => item.type === propertyType)
+        ? entityKey(propertyType, source.selectors.find((item) => item.type === propertyType).id) : null;
+      for (const newer of evidence.values()) {
+        if (newer.ordinal <= source.ordinal || (newer.unsupported.length && !ownProperty)) continue;
+        const sameScope = scope === sortedJson(newer.facets) + sortedJson(Object.fromEntries(newer.selectors.map(({ type, id }) => [type, id]))) + sortedJson(newer.snapshotDimensions || {});
+        if ((newer.facts || []).some((item) => {
+          if (item.semantic?.metric !== semantic.metric) return false;
+          const newRow = factCollections(newer.tool, item.field).findLast((row) => row.kind === 'row');
+          const sameCarrier = source.tool === newer.tool ? canonicalPath(fact.field) === canonicalPath(item.field)
+            : ownProperty ? fact.field.split('.').at(-1) === item.field.split('.').at(-1)
+              : !row && !newRow && semantic.metric.startsWith('tasks.') && TASK_COUNT_TOOLS.has(source.tool) && TASK_COUNT_TOOLS.has(newer.tool);
+          if (!sameCarrier) return false;
+          if (!ownProperty || !propertyEntity) return sameScope;
+          const newObject = newRow ? valueAt(newer.envelope, newRow.path) : null;
+          const id = newObject?.[ENTITY_ID_FIELDS[propertyType]];
+          return id != null ? entityKey(propertyType, id) === propertyEntity
+            : !newRow && newer.selectors.some(({ type, id }) => entityKey(type, id) === propertyEntity);
+        })) return fail('STALE_EVIDENCE');
+      }
+      // Varlık yalnızca ölçü taşıyan olguyla karşılanır; ad ya da etiket bağlamı yetmez.
       const reference = ({ type, id }) => {
         const key = entityKey(type, id);
-        if (propertyId == null || type !== propertyType || key === entityKey(type, propertyId)) referenced.add(key);
+        if (propertyId == null || type !== propertyType || key === entityKey(type, propertyId)) {
+          referenced.add(key);
+          if (!propertyType || !REQUEST_ENTITY_TYPES.includes(propertyType) || type === propertyType) {
+            if (!metricEntities.has(semantic.metric)) metricEntities.set(semantic.metric, new Set());
+            metricEntities.get(semantic.metric).add(key);
+          }
+        }
       };
       for (const selector of selectors) reference(selector);
       if (source.envelope?.entity?.id && REQUEST_ENTITY_TYPES.includes(source.envelope.entity.type)) {
         reference(source.envelope.entity);
       }
-      rowEntities.forEach((key) => referenced.add(key));
+      rowEntities.forEach((key) => reference({ type: key.split(':')[0], id: key.slice(key.indexOf(':') + 1) }));
     }
     for (const row of factRows) {
+      if (source.collection && row.kind === 'row' && row.canonical !== source.collection) continue;
       const key = `${evidenceId}|${row.collection}`;
       if (!collections.has(key)) collections.set(key, { evidenceId, source, row, indexes: new Set(), metrics: new Map(), bound: true });
       const entry = collections.get(key);
@@ -290,10 +352,23 @@ export function verifyRequestedFacts(request, facts, evidence) {
       }
     }
   }
-  const vacuous = ['list', 'rank'].includes(request.operation) ? vacuousRowMetrics(request, substantiveSources) : new Set();
+  const rowGroups = [...collections.values()].filter((entry) => entry.row.kind === 'row');
+  const empty = ['list', 'rank'].includes(request.operation) && !rowGroups.length ? emptyRowSources(request, facts, evidence) : [];
+  const vacuous = vacuousRowMetrics(empty);
+  for (const { source } of empty) for (const selector of source.selectors) if (boundKeys.has(entityKey(selector.type, selector.id))) referenced.add(entityKey(selector.type, selector.id));
   if ([...metrics].some((metric) => !represented.has(metric) && !vacuous.has(metric))) return fail('METRIC_MISSING');
   if ([...boundKeys].some((key) => !referenced.has(key))) return fail('ENTITY_MISSING');
-  const rowGroups = [...collections.values()].filter((entry) => entry.row.kind === 'row');
+  if (entities.length > 1 && metrics.size > 1) {
+    if (!request.bindings?.length || request.metrics.some((metric) => !request.bindings.some((binding) => binding.metric === metric))) return fail('ENTITY_METRIC_AMBIGUOUS');
+    for (const binding of request.bindings) {
+      const entity = entities[binding.entity];
+      if (!metricEntities.get(binding.metric)?.has(entityKey(entity.type, entity.bound))) return fail('ENTITY_MISSING');
+    }
+    for (const [metric, keys] of metricEntities) for (const key of keys) {
+      if (boundKeys.has(key) && !request.bindings.some((binding) => binding.metric === metric
+        && entityKey(entities[binding.entity].type, entities[binding.entity].bound) === key)) return fail('ENTITY_MISMATCH');
+    }
+  }
   for (const entry of collections.values()) {
     const rows = valueAt(entry.source.envelope, entry.row.collection);
     const size = Array.isArray(rows) ? rows.length : 0;
@@ -319,10 +394,10 @@ export function verifyRequestedFacts(request, facts, evidence) {
       if (rowGroups.some((entry) => !rowMetricComplete(entry, metric))) return fail('METRIC_MISSING');
     }
   }
-  if (request.operation === 'list' && !rowGroups.length && !emptyRowEvidence(request, facts, evidence)) return fail('LIST_ROWS_REQUIRED');
+  if (request.operation === 'list' && !rowGroups.length && !empty.length) return fail('LIST_ROWS_REQUIRED');
   if (request.operation === 'rank') {
     // Satırsız kanıt yalnızca nüfus boşken sıralamanın yanıtıdır.
-    if (!rowGroups.length) return emptyRowEvidence(request, facts, evidence) ? { ok: true, issues: [] } : fail('RANK_MISMATCH');
+    if (!rowGroups.length) return empty.length ? { ok: true, issues: [] } : fail('RANK_MISMATCH');
     if (rowGroups.length !== 1) return fail('RANK_MISMATCH');
     const [entry] = rowGroups;
     const indexes = rankedIndexes(request, entry.source, entry.row, entry.indexes);

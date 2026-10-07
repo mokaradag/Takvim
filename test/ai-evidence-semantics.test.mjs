@@ -61,7 +61,7 @@ test('global analytics/search follow-ups preserve the canonical task population 
     const results = input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
     assert.ok(results.every((item) => item.ok), JSON.stringify(results));
     assert.equal(results[0].data.totals.total, results[1].totalCount);
-    return { text: JSON.stringify({ kind: 'rota', facts: [`${results[0].evidenceId}:data.totals.total`, `${results[1].evidenceId}:data.tasks.*.title`] }), toolCalls: [], finishReason: 'stop' };
+    return { text: JSON.stringify({ kind: 'rota', facts: [`${results[1].evidenceId}:totalCount`, `${results[1].evidenceId}:data.tasks.*.title`] }), toolCalls: [], finishReason: 'stop' };
   } }, { messages: buildGroundedContext({ userContent: 'Kaç gecikmiş görevim var ve hangileri?', now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {} });
   assert.equal(result.outcome, 'grounded');
@@ -384,7 +384,7 @@ test('final authorization has its own budget after tool SQL reaches the cumulati
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
     round += 1;
     if (round === 1) {
-      return { text: declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
+      return { text: declared({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
         toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
     }
     const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
@@ -417,7 +417,7 @@ for (const path of ['server', 'model']) {
     assert.equal(result.finishReason, 'unavailable');
     assert.deepEqual(result.evidenceRows, []);
     // Son yetki okuması çizimden hemen önce yapılır: sunucu seçiminde araç turunun ardından.
-    assert.equal(round, path === 'server' ? 1 : 2);
+    assert.equal(round, 1, 'yetki okunamıyorsa kanıt ikinci kez sağlayıcıya gönderilmez');
     assert.doesNotMatch(result.text, /SQL|Radar/);
   });
 }

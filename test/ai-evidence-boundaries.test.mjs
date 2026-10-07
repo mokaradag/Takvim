@@ -20,11 +20,12 @@ const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 
 /** Model turu: araç çağrısı; ilk turda veri okunmadan önceki türlü istek bildirimiyle. */
 const calls = (name, args = {}, id = 'call', request = null) => ({ text: request ? declared(request) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
-const taskStatus = (...ids) => ({ operation: 'value', metrics: ['task.status'], entities: ids.map((id) => ({ type: 'task', id })) });
+const taskStatus = (...ids) => ({ operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: ids.map((id) => ({ type: 'task', id })) });
 /** Çok değerli sorumlu alanı sunucu seçimine girmez: olguları model seçer ve tur sonraki model turlarına sürer. */
-const statusAndAssignees = (...ids) => ({ operation: 'value', metrics: ['task.status', 'task.assignees'], entities: ids.map((id) => ({ type: 'task', id })) });
+const statusAndAssignees = (...ids) => ({ operation: 'value', metrics: ['task.status', 'task.assignees'], entities: ids.map((id) => ({ type: 'task', id })),
+  bindings: ids.length > 1 ? ['task.status', 'task.assignees'].flatMap((metric) => ids.map((_, entity) => ({ metric, entity }))) : [] });
 const statusFacts = (...ids) => reply(JSON.stringify({ kind: 'rota', facts: ids.flatMap((id) => [`${id}:data.task.status`, `${id}:data.task.assignees.*.name`]) }));
-const projectCount = (id) => ({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id }] });
+const projectCount = (id) => ({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, entities: [{ type: 'project', id }] });
 const aliWorkload = { operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali' }] };
 const reply = (text, finishReason = 'stop') => ({ text, toolCalls: [], finishReason });
 const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
@@ -47,7 +48,8 @@ async function turn(t, steps, { user = 'Rota verisini incele', context = null, h
 }
 
 test('data intent is selected before data and never uses Turkish casing or keyword matching', async (t) => {
-  const { result, inputs } = await turn(t, [reply(declared({ operation: 'value', metrics: ['tasks.open'] })), calls('rota_workload_summary')], { user: 'İŞ YÜKÜM NASIL?' });
+  const { result, inputs } = await turn(t, [reply(declared({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
+    fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] })), calls('rota_workload_summary')], { user: 'İŞ YÜKÜM NASIL?' });
   assert.equal(result.outcome, 'grounded');
   assert.equal(inputs[0].messages.some((message) => message.role === 'tool'), false);
   // Bildirilen sayıyı sunucu kanıttan seçer: seçim için ayrı model turu yoktur.
@@ -111,8 +113,8 @@ test('a confirmed deletion invalidates formerly successful evidence before final
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', statusAndAssignees(TASKS.OVERDUE)), (_input, stack) => {
     stack.db.tasks = stack.db.tasks.filter((task) => task.TaskId !== TASKS.OVERDUE);
     return calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'removed');
-  }, reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
-  assert.equal(result.outcome, 'not_found');
+  }], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
+  assert.equal(result.outcome, 'unavailable');
   assert.deepEqual(result.evidenceRows, []);
 });
 
@@ -206,7 +208,7 @@ test('authorization is checked again before final rendering even without another
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', statusAndAssignees(TASKS.OVERDUE)), (input) => {
     available = false;
     return statusFacts(results(input)[0].evidenceId);
-  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
+  }], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
   assert.deepEqual(result.evidenceRows, []);
   assert.doesNotMatch(result.text, /Radar/);
 });
@@ -218,7 +220,7 @@ test('removing one employee changes the authorization epoch even while executive
   }, (input, stack) => {
     stack.db.executiveScope = stack.db.executiveScope.filter((entry) => entry.EmployeeSicil !== MEHMET);
     return statusFacts(results(input)[0].evidenceId);
-  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}` });
+  }], { user: `Rota verisini incele: ${TASKS.OVERDUE}` });
   assert.deepEqual(result.evidenceRows, []);
   assert.equal(result.outcome, 'unavailable');
 });

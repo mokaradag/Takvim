@@ -760,6 +760,13 @@ olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları
 verisi turunun model/araç turu sayısı, seçimi kimin yaptığı, tur başına süre,
 çıktı sınırı ve bitiş nedeni içeriksiz `ai.grounded.turn` olayında izlenir.
 
+Derin UI kipinde de mekanik Rota planı `chat.tools` kullanır; gerçek
+muhakeme veri sonrasında `chat.tools.reasoning` kullanabilir. Sıradan asistan
+metni boş olan yerel `rota_plan` çağrısı geçerlidir. Bildirim/JSON hatası ya da
+boş tamamlanma Derin devri değildir. Tur izi güvenilir model adını ve kapalı
+bitiş nedenini kaydeder; son sonucu görünür çıktıdan önceki kayıttan sonraki
+güncel erişim denetimi belirler.
+
 Elle kabul, FULL/READ/kısmi kullanıcılarla veri sonrası yetki iptalini,
 konuşma yeniden açma/tekrar ve oluşturucu hakkı iptalini, gizli tekrar/kişi
 sayılarının değişmezliğini, aday seçimini ve kısa aday takibini, kullanıcının

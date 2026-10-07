@@ -249,7 +249,9 @@ test('successful later rounds open their own follow-ups (person → task list �
     return calls('rota_task_detail', { taskId: results(input).at(-1).data.tasks[0].taskId }, 'detail');
   }, (input) => {
     assert.equal(results(input).at(-1).ok, true);
-    const list = results(input).find((item) => item.tool === 'rota_task_search');
+    return calls('rota_task_search', { personSicil: AYSE }, 'current');
+  }, (input) => {
+    const list = results(input).findLast((item) => item.tool === 'rota_task_search');
     return reply(JSON.stringify({ kind: 'rota', facts: [`${list.evidenceId}:data.tasks.0.title`, `${list.evidenceId}:data.tasks.0.targetFinish`, `${list.evidenceId}:data.tasks.0.status`] }));
   }], { user: 'Ayşe Yılmaz\'ın ilk görevinin durumu?' });
   assert.equal(result.outcome, 'grounded');
@@ -274,7 +276,7 @@ test('a lone partial person match is a candidate, not a Sicil identity for follo
 
 test('a resolved project name reaches project-scoped activity, workload and request tools', async (t) => {
   const { result } = await turn(t, [calls('rota_project_search', { text: 'Radar Modernizasyonu' }, 'call',
-    { operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }), (input) => {
+    { operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' }, fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }), (input) => {
     assert.ok(['rota_activity_search', 'rota_workload_summary', 'rota_schedule_requests', 'rota_assignment_requests', 'rota_recurrence_inspect']
       .every((name) => input.tools.some((tool) => tool.name === name)));
     assert.equal(results(input)[0].data.resolution, 'unique');
@@ -361,7 +363,7 @@ test('aggregate evidence is dropped when a counted but unlisted task leaves the 
       return false;
     } };
     return calls('rota_task_analytics', { projectId: PROJECTS.FULL }, 'call', { operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }] });
-  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
+  }], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.notEqual(result.outcome, 'grounded');
   assert.deepEqual(result.evidenceRows, []);
 });
@@ -374,13 +376,13 @@ test('aggregate evidence is dropped when a counted but unlisted task leaves the 
   const { result } = await turn(t, [first, (input, stack) => {
     stack.db.tasks.find((task) => task.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
     return reply(JSON.stringify({ kind: 'rota', facts: [`${results(input)[0].evidenceId}:data.totals.open`, `${results(input)[1].evidenceId}:data.project.code`] }));
-  }, reply('{"kind":"unavailable"}')], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
+  }], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.notEqual(result.outcome, 'grounded');
   assert.deepEqual(result.evidenceRows, []);
 });
 
 test('admin project evidence survives the final authorization re-read', async (t) => {
-  const { result } = await turn(t, [calls('rota_project_detail', { projectId: PROJECTS.FULL }, 'call', { operation: 'value', metrics: ['project.name'], entities: [{ type: 'project', id: PROJECTS.FULL }] })],
+  const { result } = await turn(t, [calls('rota_project_detail', { projectId: PROJECTS.FULL }, 'call', { operation: 'value', metrics: ['project.name'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', id: PROJECTS.FULL }] })],
     { user: `Rota verisini incele: ${PROJECTS.FULL}`, sicil: ADMIN });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.evidenceRows.length, 1);
@@ -608,7 +610,7 @@ test('a transient evidence-schema probe failure is retryable and never saves an 
   assert.equal(first.status, 503);
   assert.equal(stack.db.aiConversationMessages.some((row) => row.Role === 'assistant'), false);
   stack.db.queryBarrier = null;
-  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }] })],
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, entities: [{ type: 'project', id: PROJECTS.FULL }] })],
     calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] });
   const retry = await sendTurn({ turnId, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   const done = retry.events.find((event) => event.event === 'done').data;

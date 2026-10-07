@@ -275,7 +275,7 @@ export async function checkAssistantEvidenceSchema({ signal = null } = {}) {
 
 /** Rota verisi araçları bu kurulumda ve bu kipte kullanılabilir mi? */
 async function groundedTurnAvailable({ config, registry, mode, sicil, signal }) {
-  if (!config.toolsEnabled || !toolRouteAvailable(registry, mode) || toolRegistryProblems().length) return false;
+  if (!config.toolsEnabled || !toolRouteAvailable(registry, mode) || !toolRouteAvailable(registry, ASSISTANT_MODES.STANDARD) || toolRegistryProblems().length) return false;
   return evidenceSchemaReady(sicil, signal);
 }
 
@@ -775,8 +775,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       mode: prepared.answer?.mode || input.mode,
       profile: prepared.answer ? assistantProfileForMode(prepared.answer.mode) : (useTools ? assistantToolProfileForMode(input.mode) : profile),
       grounded: useTools,
-      // Standart kipteki kurtarılabilir model hatası Derin düşünme araç profiline devredilebilir.
-      escalationProfile: useTools && input.mode === ASSISTANT_MODES.STANDARD && toolRouteAvailable(registry, ASSISTANT_MODES.DEEP)
+      // Gerekli veri toplandıktan sonra bildirilen muhakeme ihtiyacı Derin profile devredilir.
+      escalationProfile: useTools && toolRouteAvailable(registry, ASSISTANT_MODES.DEEP)
         ? assistantToolProfileForMode(ASSISTANT_MODES.DEEP) : null,
       general: input.source === 'general',
       allowedTextFields: input.includeText ? [...EVIDENCE_TEXT_FIELDS] : [],
@@ -872,13 +872,7 @@ function evidenceSchemaMissing() {
   });
 }
 
-/**
- * Standart kipte doğrulanamayan, uzunluk sınırında kalan ya da boş dönen turu
- * Derin düşünme araç profiliyle, AYNI kanıt defteri ve kapsamla BİR kez
- * sonlandırır. İptal, kimlik, veri ve süre aşımı hataları yukarı taşınır; Derin
- * düşünme oturumu başka bir yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse
- * Standart sonucu (güvenli ileti ya da özgün hata) kullanılır. Genel sohbete düşülmez.
- */
+/** Veri sonrası muhakeme devri; iptal, kimlik ve süre aşımı yukarı taşınır. */
 async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   const telemetry = (outcome, models = []) => recordGroundedEscalation({
     requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, outcome
@@ -888,11 +882,15 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
     result = await runIn(turn.escalationProfile, { resume: request.resume });
   } catch (error) {
     // Yalnızca yapay zekâ hizmetinin hatası Standart sonucuna döner; iptal, kimlik ve veri hataları turu bitirir.
-    if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) throw error;
+    if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) {
+      telemetry('error');
+      request.traceError?.(error);
+      throw error;
+    }
     const timedOut = error.code === AI_ERROR_CODES.AI_TIMEOUT;
     telemetry(timedOut ? 'timeout' : 'error');
     // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez.
-    if (timedOut) throw error;
+    if (timedOut) { request.traceError?.(error); throw error; }
     return request.fallback(onText);
   }
   telemetry(result.outcome, result.models);
@@ -913,7 +911,8 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
     onStatus,
-    onText
+    onText: async () => {},
+    deferDisclosure: true
   };
   const runIn = (profile, extra) => getAiGateway().runToolSession({
     profile,
@@ -923,8 +922,8 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
       return runGroundedTurn(session, { ...options, ...extra });
     }
   });
-  let grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
-  if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText, runIn });
+  let grounded = await runIn(assistantToolProfileForMode('standard'), { escalation: Boolean(turn.escalationProfile) });
+  if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText: options.onText, runIn });
   const messageId = randomUUID();
   let stored;
   try {
@@ -956,9 +955,13 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
   // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
   // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
   const own = stored.message.id === messageId;
-  const answer = own && (evidence?.unavailable || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId))
+  const liveAuthorized = own && evidence?.unverifiable?.has(messageId) && await grounded.guardDisclosure?.(signal);
+  const answer = liveAuthorized
     ? { ...stored.message, evidence: grounded.evidence }
     : discloseSavedMessages([stored.message], evidence)[0];
+  const deliveredOutcome = answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
+  grounded.completeDisclosure?.(deliveredOutcome);
+  await onText(answer.content);
   return {
     conversation: stored.conversation,
     answer: { ...answer, evidence: answer.evidence || [] },

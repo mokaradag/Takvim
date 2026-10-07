@@ -89,13 +89,12 @@ for (const path of ['server', 'model']) {
     // Erişim nedenleri (çok değerli) istenirse olguları model seçer; aksi hâlde sunucu seçer.
     const metrics = path === 'server' ? ['project.name'] : ['project.name', 'project.accessReasons'];
     const steps = [
-      { text: declared({ operation: 'value', metrics, entities: [{ type: 'project', id: PROJECTS.HIDDEN }] }),
+      { text: declared({ operation: 'value', metrics, ...(path === 'server' ? { population: { tool: 'rota_project_detail' } } : {}), entities: [{ type: 'project', id: PROJECTS.HIDDEN }] }),
         toolCalls: [{ id: 'call', name: 'rota_project_detail', arguments: JSON.stringify({ projectId: PROJECTS.HIDDEN }) }] },
       ...(path === 'model' ? [() => {
         archive();
         return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.name', 'R1:data.access.reasons.*'] }), toolCalls: [], finishReason: 'stop' };
-      }] : []),
-      { text: '{"kind":"unavailable"}', toolCalls: [], finishReason: 'stop' }
+      }] : [])
     ];
     const session = { signal: new AbortController().signal, round: async (input) => {
       const step = steps.shift();

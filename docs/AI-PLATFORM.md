@@ -1674,6 +1674,16 @@ temeli gevşetmeden eklemelidir.
 
 Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
 
+Rota verisinde her iki UI kipinin mekanik planı ucuz `chat.tools` profilinde
+`rota_plan` yerel çağrısıyla doğrulanır; sıradan asistan metni gerekmez.
+Türlü araç/koleksiyon ve semantik boyutlar bağlıysa sunucu olguları aynı
+doğrulayıcıyla seçer. Belirsizlik Standart seçimine, gerçek `synthesis`
+ihtiyacı veri sonrası Derin muhakemeye gider. Bildirim, serileştirme, boş
+tamamlanma veya hızlı aday bulunmaması Derin devri değildir. Her sağlayıcı
+takibinden önce güncel erişim doğrulanır; iptal edilen araç yükü tekrar
+gönderilmez. Görünür kanıtlı metin kayıttan sonraki açıklama denetimi geçince
+gönderilir ve tur telemetrisi bu son kararı kaydeder.
+
 - **Kapsam:** 19 salt okunur araç — görev arama/ayrıntı/toplamlar, proje
   çözümü/künyesi, portföy, iş dağılım ağacı, iş yükü, kişi çözümü, hareket
   geçmişi, tarih değişikliği talepleri, atama koordinasyonu, bildirimler, baz
@@ -1696,9 +1706,9 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   mantığı güvenilir yapısal doğrulama, yetki, kanıt bütünlüğü, ölçü hesabı,
   sınırlar ve benzeri nesnel değişmezlerle sınırlıdır. Olgular sunucuya ait şablonlarla paragraf, liste ya da tabloya
   çevrilir ve `【R1】` atfı eklenir. Düzyazı regexleri veya ikinci bir model
-  hakem değildir. Uydurma/değiştirilmiş başvuru bir kez düzeltilir; Standart
-  kipte, Derin düşünme araç profili kuruluysa kurtarılabilir model hatası aynı
-  kanıtla bir kez Derin düşünmeye devredilir; yine olmazsa sabit güvenli ileti
+  hakem değildir. Uydurma/değiştirilmiş başvuru bir kez düzeltilir; gerçek
+  `synthesis` ihtiyacında kurulu Derin düşünme profili aynı kanıtla bir kez
+  kullanılabilir; yine olmazsa sabit güvenli ileti
   kaydedilir (`grounding_failed`). Kimlik yalnızca kesin eşleşmedir; belirsiz
   adayları sunucu çizer ve yanıtın tamamı bir aday numarasıysa seçimi kayıtlı
   kimliğe bağlar; sözcükle anlatılan seçimi yorumlamaz. Modelin `general/rota` önerisi kanıt sınırını kapatamaz. `source: rota` varsayılanında yalnızca doğrulanmış olgular/güvenli son iletiler; kullanıcı `source: general` seçtiğinde veri okumayan genel akış kullanılır. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir ve seçilmemiş alanlar model/kanıt kaydından önce çıkarılır. Gecikme/saat/para birimleri ve null/tamlık anlamları sunucuda çizilir.
