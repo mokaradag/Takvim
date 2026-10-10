@@ -1,4 +1,6 @@
 import 'server-only';
+import { randomUUID } from 'node:crypto';
+import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { claimableContract, METRICS, metricEntry, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { concreteCollections, provesEmptyCollection, rankableMeasure, rankedRowIndexes, REQUEST_ENTITY_TYPES, REQUEST_LIMITS, REQUEST_OPERATIONS } from '../../../domain/ai/requestContract.js';
 import { createEvidenceFacts, fieldPatternCovers } from '../../../domain/ai/evidenceFacts.js';
@@ -46,7 +48,8 @@ export function requestSchema() {
         type: 'object', additionalProperties: false, required: ['tool'],
         properties: {
           tool: { type: 'string', enum: toolCatalogForModel().map((tool) => tool.name) },
-          collection: { type: 'string', maxLength: 80 },
+          collection: { type: 'string', maxLength: 80, description: `Yalnızca list/rank: aracın satır koleksiyonu (${toolCatalogForModel()
+            .filter((tool) => rowCollections(tool.name).length).map((tool) => `${tool.name}=${rowCollections(tool.name).join('|')}`).join(', ')}). value isteğinde verilmez.` },
           groupBy: getRotaTool('rota_task_analytics').parameters.properties.groupBy,
           depth: { type: 'integer', minimum: 1, maximum: 4 },
           textFields: { type: 'array', maxItems: 4, uniqueItems: true, items: { type: 'string', enum: ['description', 'requesterMessage', 'decisionMessage', 'changes'] } },
@@ -88,6 +91,17 @@ export function requestSchema() {
   return schema;
 }
 
+const propertyMetrics = new Map();
+
+/** Ölçü bağlı varlığın özelliği olarak (nüfus aracından bağımsız) herhangi bir araçtan gelebilir mi? */
+function propertyMetric(metric) {
+  if (!propertyMetrics.has(metric)) {
+    propertyMetrics.set(metric, toolCatalogForModel().some((tool) => metricPaths(tool.name, metric)
+      .some((path) => metricEntry(tool.name, path.startsWith('data.') ? path.slice(5) : path)?.property)));
+  }
+  return propertyMetrics.get(metric);
+}
+
 function periodWindow(period, today) {
   if (period === 'yesterday') return { dateFrom: addDays(today, -1), dateTo: addDays(today, -1) };
   if (period === 'last_7_days') return { dateFrom: addDays(today, -6), dateTo: today };
@@ -103,13 +117,27 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   if (raw == null) throw invalidArguments(['$.request:required']);
   const value = parseToolArguments(requestSchema(), JSON.stringify(raw));
   const problems = [];
+  // Düzeltme ipuçları yalnızca kayıt defterinden türetilir (araç adı şemayla doğrulanmıştır).
+  const hints = [];
   if (value.population) {
     const tool = getRotaTool(value.population.tool);
-    if (value.population.collection && !rowCollections(tool.name).includes(value.population.collection)) problems.push('$.population.collection:unknown');
-    if (value.population.sort && !tool.parameters.properties.sort?.enum?.includes(value.population.sort)) problems.push('$.population.sort:unsupported');
+    const collections = rowCollections(tool.name);
+    const sorts = tool.parameters.properties.sort?.enum || [];
+    if (value.population.collection && !collections.includes(value.population.collection)) problems.push('$.population.collection:unknown');
+    if (value.population.sort && !sorts.includes(value.population.sort)) problems.push('$.population.sort:unsupported');
     if (value.operation !== 'value' && !value.population.collection) problems.push('$.population.collection:required');
     if (value.population.groupBy && tool.name !== 'rota_task_analytics') problems.push('$.population.groupBy:unsupported');
     if (value.population.depth && tool.name !== 'rota_wbs_inspect') problems.push('$.population.depth:unsupported');
+    if (problems.some((problem) => problem.startsWith('$.population.collection'))) {
+      hints.push(`population.collection (${tool.name}): ${collections.join('|') || '-'}${value.operation === 'value' ? '; value isteğinde gerekmez' : ''}`);
+    }
+    if (problems.includes('$.population.sort:unsupported')) hints.push(`population.sort (${tool.name}): ${sorts.join('|') || '-'}`);
+    // Doğrulayıcı toplam ölçüyü yalnızca nüfus aracından ya da fields kaynağından kabul eder: taşınamayan ölçü veri okunmadan reddedilir.
+    value.metrics.forEach((metric, index) => {
+      if (metricPaths(tool.name, metric).length || (value.fields || []).some((field) => field.metric === metric) || propertyMetric(metric)) return;
+      problems.push(`$.metrics[${index}]:population`);
+      hints.push(`${metric}: ${tool.name} taşımaz; taşıyan araçlar ${toolCatalogForModel().filter((item) => metricPaths(item.name, metric).length).map((item) => item.name).join('|') || '-'}`);
+    });
   }
   for (const field of value.fields || []) if (!value.metrics.includes(field.metric) || !metricPaths(field.tool, field.metric).includes(field.path)) problems.push('$.fields:unknown');
   for (const binding of value.bindings || []) if (!value.metrics.includes(binding.metric) || !value.entities?.[binding.entity]) problems.push('$.bindings:unknown');
@@ -138,45 +166,112 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   } catch (error) {
     problems.push(...(error.details || ['$.filters:invalid']).map((detail) => detail.replace(/^\$\./, '$.filters.')));
   }
-  if (problems.length) throw invalidArguments(problems);
+  if (problems.length) throw Object.assign(invalidArguments(problems), { hints });
   return Object.freeze({ operation: value.operation, metrics: Object.freeze([...value.metrics]), rank: value.rank ? Object.freeze({ ...value.rank }) : null,
     entities: Object.freeze(entities), filters: Object.freeze(filters), layout: value.layout || 'auto', reasoning: value.reasoning || 'deterministic',
     population: value.population ? Object.freeze({ ...value.population }) : null, fields: Object.freeze(value.fields || []), bindings: Object.freeze(value.bindings || []) });
 }
 
-/** Bildirim ve ilk araç planı tek yerel çağrının bağımsız değişkenleridir. */
+/**
+ * Bildirim ve ilk araç planı tek yerel çağrının bağımsız değişkenleridir. Araç
+ * şemaları planda yinelenmez: araçlar aynı turda ayrıca sunulur ve plan
+ * çağrıları ya `calls` içinde ya da aynı yanıtta doğrudan taşıyabilir.
+ */
 export function typedPlanningTool(catalog) {
-  return { name: 'rota_plan', description: 'Veri okumadan türlü Rota isteğini ve ilk salt okunur araç planını bildir. Asistan metni gerekmez.',
-    parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language', 'calls'], properties: {
+  return { name: 'rota_plan', description: 'Veri okumadan türlü Rota isteğini ve ilk salt okunur araç planını bildir. Araçları calls içinde ya da aynı yanıtta doğrudan çağır; asistan metni gerekmez.',
+    parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
       intent: { type: 'string', enum: ['rota', 'general'] }, language: { type: 'string', enum: ['tr', 'en'] },
       request: { ...requestSchema(), required: [...requestSchema().required, 'population', 'layout'] },
-      calls: { type: 'array', maxItems: TOOL_LIMITS.maxCallsPerRound, items: { oneOf: catalog.map((tool) => ({
+      calls: { type: 'array', maxItems: TOOL_LIMITS.maxCallsPerRound, items: {
         type: 'object', additionalProperties: false, required: ['name', 'arguments'], properties: {
-          name: { type: 'string', enum: [tool.name], description: tool.description }, arguments: tool.parameters
+          name: { type: 'string', enum: catalog.map((tool) => tool.name) },
+          arguments: { type: 'object', description: 'Aynı adlı aracın parametre şemasına uyan bağımsız değişkenler.' }
         }
-      })) } }
+      } }
     } } };
 }
 
+function planCallKey(call, catalog) {
+  const tool = catalog.find((item) => item.name === call.name);
+  try { return `${call.name}:${JSON.stringify(parseToolArguments(tool.parameters, call.arguments))}`; } catch { return `${call.name}:${call.arguments}`; }
+}
+
+/** Plan ve yanındaki doğrudan çağrılar birlikte doğrulanır; geçerli planın dışındaki hiçbir çağrı çalışmaz. */
 export function unpackTypedPlan(result, catalog) {
-  if (result.toolCalls.length !== 1 || result.toolCalls[0].oversize) throw invalidArguments(['$.plan:single']);
-  const call = result.toolCalls[0];
+  const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
+  if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
+  const [call] = plans;
   if (Buffer.byteLength(call.arguments || '', 'utf8') > TOOL_LIMITS.maxArgumentBytes) throw invalidArguments(['$.plan:tooLarge']);
   let plan;
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
+  const calls = plan?.calls ?? [];
   if (!plan || typeof plan !== 'object' || Array.isArray(plan) || Object.keys(plan).some((key) => !['intent', 'language', 'request', 'calls'].includes(key))
-    || !['rota', 'general'].includes(plan.intent) || !['tr', 'en'].includes(plan.language) || !Array.isArray(plan.calls)
-    || plan.calls.length > TOOL_LIMITS.maxCallsPerRound) throw invalidArguments(['$.plan:shape']);
-  if (plan.intent === 'rota' && (!plan.request?.population || !plan.request?.layout || !plan.calls.length)) throw invalidArguments(['$.request:planRequired']);
-  if (plan.intent === 'general' && (plan.calls.length || plan.request)) throw invalidArguments(['$.plan:general']);
-  const toolCalls = plan.calls.map((item, index) => {
+    || !['rota', 'general'].includes(plan.intent) || !['tr', 'en'].includes(plan.language) || !Array.isArray(calls)) throw invalidArguments(['$.plan:shape']);
+  const direct = result.toolCalls.filter((item) => item !== call);
+  if (direct.some((item) => !catalog.some((tool) => tool.name === item.name))) throw invalidArguments(['$.calls:shape']);
+  if (calls.length + direct.length > TOOL_LIMITS.maxCallsPerRound) throw invalidArguments(['$.calls:maxItems']);
+  // Eksik layout auto, eksik population sunucu seçimi yerine model seçimidir (eski bildirimle aynı); içerik sorunları birlikte bildirilir.
+  if (plan.intent === 'rota' && !plan.request) throw invalidArguments(['$.request:required']);
+  if (plan.intent === 'rota' && !calls.length && !direct.length) throw invalidArguments(['$.calls:required']);
+  if (plan.intent === 'general' && (calls.length || plan.request || direct.length)) throw invalidArguments(['$.plan:general']);
+  const planned = calls.map((item, index) => {
     const tool = catalog.find((tool) => tool.name === item?.name);
     if (!tool || Object.keys(item).some((key) => !['name', 'arguments'].includes(key)) || !item.arguments || typeof item.arguments !== 'object'
-      || Array.isArray(item.arguments)) throw invalidArguments(['$.calls:shape']);
-    const args = parseToolArguments(tool.parameters, JSON.stringify(item.arguments));
+      || Array.isArray(item.arguments)) throw invalidArguments([`$.calls[${index}]:shape`]);
+    let args;
+    try { args = parseToolArguments(tool.parameters, JSON.stringify(item.arguments)); }
+    catch (error) { throw invalidArguments((error.details || ['$:invalid']).map((detail) => `$.calls[${index}].${tool.name}${String(detail).slice(1)}`)); }
     return { id: `${call.id}_${index}`, name: item.name, arguments: JSON.stringify(args) };
   });
+  // Aynı çağrı plan içinde ve doğrudan yinelenirse bir kez çalışır.
+  const seen = new Set();
+  const toolCalls = [...planned, ...direct].filter((item) => {
+    const key = planCallKey(item, catalog);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return { ...result, text: JSON.stringify({ kind: 'route', intent: plan.intent, language: plan.language, ...(plan.request ? { request: plan.request } : {}) }), toolCalls };
+}
+
+/**
+ * Yerel çağrı yerine asistan metni olarak dönen plan: tek JSON nesnesi
+ * (`{"name":"rota_plan","arguments":{…}}`, planın kendisi ya da `calls` taşıyan
+ * yönlendirme bildirimi; isteğe bağlı tek `<tool_call>` zarfı). Metin
+ * yorumlanmaz; plan yerel çağrıyla aynı doğrulamadan geçer.
+ */
+export function textPlanCall(text) {
+  const value = parseEvidenceResponse(String(text ?? '').trim().replace(/^<tool_call>\s*([\s\S]*?)\s*<\/tool_call>$/, '$1'));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  let args = null;
+  if (value.name === 'rota_plan' && Object.keys(value).every((key) => ['name', 'arguments'].includes(key))) {
+    try { args = typeof value.arguments === 'string' ? JSON.parse(value.arguments) : value.arguments; } catch { args = null; }
+  } else if (Array.isArray(value.calls) && (value.kind === undefined || value.kind === 'route')) {
+    const { kind: _kind, ...plan } = value;
+    args = plan;
+  }
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
+  return { id: `plan_${randomUUID().replace(/-/g, '').slice(0, 16)}`, name: 'rota_plan', arguments: JSON.stringify(args), oversize: false };
+}
+
+/** Bildirim sorunlarının beklenen biçimi; yalnızca şemadan türetilir, modelin değeri yansıtılmaz. */
+export function declarationHints(problems) {
+  const hints = [];
+  for (const problem of problems) {
+    const path = String(problem).split(':')[0];
+    const parts = path.replace(/^\$\.?/, '').split('.').filter(Boolean);
+    const tool = /^calls\[\d+\]$/.test(parts[0] || '') ? getRotaTool(parts[1]) : null;
+    let node = tool ? tool.parameters : requestSchema();
+    for (const part of parts.slice(tool ? 2 : parts[0] === 'request' ? 1 : 0)) {
+      node = node?.properties?.[part.replace(/\[\d+\]$/, '')];
+      if (/\[\d+\]$/.test(part)) node = node?.items;
+    }
+    const leaf = node?.type === 'array' ? node.items : node;
+    if (!node?.type || node.type === 'object' || (node.type === 'string' && !node.enum)) continue;
+    const values = !leaf?.enum ? '' : leaf.enum.length <= 12 ? ` ${leaf.enum.join('|')}` : ' (izinli değerlerden biri)';
+    hints.push(`${path.slice(2)}: ${node.type === 'array' ? `${leaf?.type} dizisi` : node.type}${values}`);
+  }
+  return [...new Set(hints)].slice(0, 6);
 }
 
 /** Modele verilen kapalı ölçü sözlüğü: kimlikler öneklerine göre gruplanır. */
@@ -433,8 +528,12 @@ function metricCarriers(request, entry, metric, { collection = null, bound = [] 
   });
 }
 
+/** Değer isteğinde sayfalı satır koleksiyonunun satır dışı kesin toplamı (ör. totalCount) sayfa tamlığına bağlı değildir. */
+const pagedOnly = (request, entry) => request.operation === 'value' && entry.payload.complete !== true && rowCollections(entry.tool).length > 0;
+const rowCarrier = (tool, path) => rowCollections(tool).some((row) => path.startsWith(`data.${row}.`));
+
 function eligiblePopulation(request, entry) {
-  if (entry.payload.complete !== true || entry.payload.truncated === true || entry.args?.cursor) return false;
+  if ((entry.payload.complete !== true && !pagedOnly(request, entry)) || entry.payload.truncated === true || entry.args?.cursor) return false;
   if (entry.tool === 'rota_task_analytics' && entry.args?.groupBy && request.population?.groupBy !== entry.args.groupBy) return false;
   if (entry.tool === 'rota_wbs_inspect' && request.operation !== 'value' && !request.population?.depth) return false;
   if (['rota_schedule_requests', 'rota_assignment_requests'].includes(entry.tool) && request.filters.text && !request.population?.textFields) return false;
@@ -507,6 +606,7 @@ export function requestSelections(request, entries, selection = null) {
           return metricEntry(entry.tool, key)?.property && bound.length;
         })) return [];
         const carriers = metricCarriers(request, entry, metric, { bound });
+        if (pagedOnly(request, entry) && carriers?.some((path) => rowCarrier(entry.tool, path))) return [];
         return carriers?.length ? [{ entry, carriers }] : [];
       });
       if (!sources.length) return [];

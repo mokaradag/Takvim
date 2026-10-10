@@ -173,7 +173,7 @@ test('Deep thinking retries one empty completion inside its own session and neve
   const recovered = stackFor(t);
   recovered.provider.enqueue(searchNamed, { type: 'answer', text: '', chunks: [] }, statusAnswer());
   const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'deep' });
-  assert.deepEqual(recovered.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
+  assert.deepEqual(recovered.provider.calls.map((call) => call.model), [DEEP, DEEP, DEEP], 'Derin kip bütün tur boyunca Derin profilde kalır');
   assert.match(doneOf(response).assistantMessage.content, NAMED_ANSWER);
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 
@@ -181,6 +181,7 @@ test('Deep thinking retries one empty completion inside its own session and neve
   exhausted.provider.enqueue(searchNamed, { type: 'answer', text: '', chunks: [] }, { type: 'answer', text: '', chunks: [] });
   const failed = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'deep' });
   assert.equal(exhausted.provider.calls.length, 3, 'araç turu + boş yanıt + tek yeniden deneme');
+  assert.ok(exhausted.provider.calls.every((call) => call.model === DEEP), 'Derin kip kendine devretmez');
   const [error] = eventsOf(failed, 'error');
   assert.equal(error.data.code, 'AI_PROVIDER_RESPONSE_INVALID');
   assert.equal(error.data.reason, 'EMPTY_COMPLETION');
@@ -210,15 +211,16 @@ test('a turn that ends without evidence because of NOT_FOUND, scope or SQL failu
   }
 });
 
-test('a missing declaration fails within the cheap planning budget without SQL or Deep escalation', async (t) => {
+test('a missing declaration exhausts the cheap planning budget without SQL, then gets one Deep fallback', async (t) => {
   const stack = stackFor(t);
   const undeclared = { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
-  stack.provider.enqueue(undeclared, undeclared, undeclared);
+  stack.provider.enqueue(undeclared, undeclared, undeclared, undeclared, undeclared, undeclared);
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
-  assert.equal(toolQueries(stack), 0);
+  // Standart: iki bildirim düzeltmesi; Derin: kendi iki düzeltmesi. Tur hiçbir koşulda tekrar Standart'a dönmez.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP, DEEP, DEEP]);
+  assert.equal(toolQueries(stack), 0, 'geçerli istek olmadan hiçbir kipte SQL çalışmaz');
   assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
-  assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { REQUEST_DECLARATION: 1 }, byOutcome: { failed: 1 } });
   assert.equal(stack.provider.pendingCount, 0);
 });
 

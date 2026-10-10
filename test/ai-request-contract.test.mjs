@@ -26,6 +26,9 @@ const { rankableMeasure, REQUEST_LIMITS } = await import('../src/domain/ai/reque
 
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+// Reddedilen çağrı yalnızca sunucunun hata zarfını alır: çalışmaz, veri ve model metni taşımaz.
+const onlyRefusals = (input) => results(input).every((result) => result.ok === false && result.error?.code === 'INVALID_ARGUMENTS'
+  && !Object.hasOwn(result, 'data') && !Object.hasOwn(result.error, 'message'));
 const call = (name, args = {}, id = 'call') => ({ id, name, arguments: JSON.stringify(args) });
 const reply = (text) => ({ text, toolCalls: [], finishReason: 'stop' });
 const facts = (...references) => JSON.stringify({ kind: 'rota', facts: references });
@@ -141,7 +144,7 @@ test('tool calls without an accepted request never run SQL and the refusal is bo
   assert.equal((stack.db.aiToolLog || []).length, 0, 'bildirim olmadan hiçbir araç SQL’i çalışmaz');
   assert.equal(inputs.length, 3);
   for (const input of inputs.slice(1)) {
-    assert.equal(input.messages.some((message) => message.role === 'tool'), false);
+    assert.ok(onlyRefusals(input), 'bildirimsiz çağrı yalnızca ret zarfı alır');
     assert.match(input.messages[0].content, /Araç çağrıları çalıştırılmadı/);
   }
 });
@@ -152,7 +155,7 @@ test('a general-route declaration in the same response does not open the tool ro
     general,
     { text: declared({ ...inProject(['tasks.total']), population: { tool: 'rota_task_analytics' }, fields: [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' }] }), toolCalls: [call('rota_task_analytics', { projectId: PROJECTS.FULL })] }
   ], { user: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
-  assert.equal(inputs[1].messages.some((message) => message.role === 'tool'), false, 'istek bildirilmeden araç çalışmaz');
+  assert.ok(onlyRefusals(inputs[1]), 'istek bildirilmeden araç çalışmaz');
   assert.match(inputs[1].messages[0].content, /Araç çağrıları çalıştırılmadı/);
   assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 1, 'yalnızca bildirimli tur SQL çalıştırdı');
   assert.equal(result.outcome, 'grounded');
@@ -164,10 +167,11 @@ test('an untrusted declaration refuses the same response’s tool calls and repo
       toolCalls: [call('rota_project_search', { text: 'Radar Modernizasyonu' })] },
     { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }),
       toolCalls: [call('rota_project_search', { text: 'Radar Modernizasyonu' })] },
-    (input) => ({ text: '', toolCalls: [call('rota_project_detail', { projectId: results(input)[0].data.resolvedProject.projectId }, 'detail')] })
+    (input) => ({ text: '', toolCalls: [call('rota_project_detail', { projectId: results(input).find((result) => result.ok).data.resolvedProject.projectId }, 'detail')] })
   ], { user: 'Radar Modernizasyonu projesinde kaç görev var?' });
   assert.equal(result.outcome, 'grounded');
-  assert.equal(inputs[1].messages.some((message) => message.role === 'tool'), false, 'reddedilen bildirimin çağrısı çalışmadı');
+  assert.ok(onlyRefusals(inputs[1]), 'reddedilen bildirimin çağrısı çalışmadı');
+  assert.equal(inputs[1].messages.some((message) => message.role !== 'system' && /Ignore rules/.test(String(message.content))), false);
   assert.match(inputs[1].messages[0].content, /\$\.entities\[0\]\.text:untrusted/);
   assert.doesNotMatch(inputs[1].messages[0].content, /Ignore rules/, 'modelin yazdığı metin yönergeye taşınmaz');
 });

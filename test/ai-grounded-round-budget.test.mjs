@@ -22,6 +22,9 @@ const { groundedSystemPrompt } = await import('../src/server/ai/assistant/ground
 const { SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 
 const PLANNING_PROFILE = 'chat.tools';
+// Seçilen kipin araç profili planlar: Derin düşünme Standart modele indirgenmez.
+const MODE_PROFILES = { standard: 'chat.tools', deep: 'chat.tools.reasoning' };
+const { rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
 const QUESTION = 'Kaç gecikmiş görevim var ve hangileri?';
 // İstemdeki örnek bildirim ve araç çağrısı: model bunu izler, sunucu tek turda yanıtlar.
 const example = groundedSystemPrompt(new Date(NOW)).match(/örn\. (\{.*\}) ve rota_task_search (\{.*?\})\./);
@@ -47,7 +50,7 @@ for (const mode of ['standard', 'deep']) {
   test(`"${QUESTION}" ends in one ${mode} model round: the server selects the declared facts and keeps every check`, async (t) => {
     const stack = stackFor(t);
     const logs = captureConsole(t);
-    const profile = DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE];
+    const profile = DEFAULT_AI_MODEL_REGISTRY.profiles[MODE_PROFILES[mode]];
     stack.provider.enqueue(nativePlan());
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode })).assistantMessage;
     assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[profile.model, profile.maxOutputTokens]],
@@ -69,8 +72,9 @@ for (const mode of ['standard', 'deep']) {
       toolRounds: counters.toolRounds, toolCalls: counters.toolCalls, declarations: counters.declarations, repairs: counters.repairs },
     { outcome: 'grounded', selectedBy: 'server', escalated: false, modelRounds: 1, toolRounds: 1, toolCalls: 1, declarations: 1, repairs: 0 });
     assert.deepEqual(rounds.map(({ purpose, profile: name, model, budget, finish, calls }) => ({ purpose, name, model, budget, finish, calls })),
-      [{ purpose: 'plan', name: PLANNING_PROFILE, model: profile.model, budget: profile.maxOutputTokens, finish: 'tool_calls', calls: 1 }]);
-    assert.deepEqual(stack.provider.calls[0].tools.map((tool) => tool.name), ['rota_plan']);
+      [{ purpose: 'plan', name: MODE_PROFILES[mode], model: profile.model, budget: profile.maxOutputTokens, finish: 'tool_calls', calls: 1 }]);
+    assert.equal(stack.provider.calls[0].tools[0].name, 'rota_plan');
+    assert.deepEqual(stack.provider.calls[0].tools.slice(1).map((tool) => tool.name).sort(), rotaToolNames().sort());
     assert.ok(stack.provider.calls[0].tools[0].parameters.properties.request.required.includes('population'));
     assert.ok(stack.provider.calls[0].tools[0].parameters.properties.request.required.includes('layout'));
     assert.equal(stack.provider.calls[0].emitted.some((event) => event.type === 'text'), false, 'yerel çağrı asistan metni olmadan çalışır');
@@ -148,7 +152,7 @@ test('a newer complete snapshot supersedes duplicate older rows without another 
 });
 
 for (const mode of ['standard', 'deep']) {
-  test(`a simple ongoing count stays on the cheap planner in ${mode} mode`, async (t) => {
+  test(`a simple ongoing count is planned once by the ${mode} tool profile and answered by the server`, async (t) => {
     const stack = stackFor(t);
     const logs = captureConsole(t);
     stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE).Status = 'in-progress';
@@ -160,24 +164,31 @@ for (const mode of ['standard', 'deep']) {
     assert.equal(answer.mode, mode);
     assert.match(answer.content, /\*\*1\*\*/);
     assert.equal(stack.provider.calls.length, 1);
-    assert.equal(stack.provider.calls[0].model, DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model);
+    assert.equal(stack.provider.calls[0].model, DEFAULT_AI_MODEL_REGISTRY.profiles[MODE_PROFILES[mode]].model);
     const [trace] = turnTraces(logs);
     assert.deepEqual([trace.context.selectedBy, trace.context.escalated, trace.context.toolCalls], ['server', false, 1]);
+    assert.deepEqual(trace.context.rounds.map((round) => round.profile), [MODE_PROFILES[mode]]);
     drained(stack.provider);
   });
 }
 
-test('repeated native data calls without a request never execute SQL or enter Deep', async (t) => {
+test('repeated native data calls without a request never execute SQL; one Deep fallback recovers with a valid plan', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  stack.provider.enqueue(searchOverdue([]), searchOverdue([]), searchOverdue([]));
+  let sqlBeforeDeep = null;
+  stack.provider.enqueue(searchOverdue([]), searchOverdue([]), searchOverdue([]),
+    { type: 'script', respond: () => { sqlBeforeDeep = (stack.db.aiToolLog || []).length; return nativePlan(); } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
-  assert.equal(answer.finishReason, 'grounding_failed');
-  assert.equal(stack.provider.calls.length, 3);
-  assert.equal((stack.db.aiToolLog || []).length, 0);
-  assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model));
+  assert.equal(answer.finishReason, 'stop');
+  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.equal(sqlBeforeDeep, 0, 'bildirimsiz çağrılar SQL çalıştırmaz');
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [...Array(3).fill(DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model),
+    DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model]);
   const [trace] = turnTraces(logs);
-  assert.deepEqual([trace.context.declarations, trace.context.escalated, trace.context.toolCalls], [0, false, 0]);
+  assert.deepEqual([trace.context.escalated, trace.context.toolCalls, trace.context.selectedBy], [true, 1, 'server']);
+  assert.deepEqual(trace.context.rounds.map((round) => [round.purpose, round.profile]), [['tools', 'chat.tools'], ['declaration', 'chat.tools'],
+    ['declaration', 'chat.tools'], ['plan', 'chat.tools.reasoning']]);
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { REQUEST_DECLARATION: 1 }, byOutcome: { grounded: 1 } });
   drained(stack.provider);
 });
 
@@ -190,7 +201,7 @@ test('an empty completion keeps timing and usage, retries once cheaply, then use
   stack.provider.enqueue(emptyRound, nativePlan());
   assert.equal(doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage.finishReason, 'stop');
   assert.equal(stack.provider.calls.length, 2);
-  assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model));
+  assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model));
   const [trace] = turnTraces(logs);
   const [empty, retry] = trace.context.rounds;
   assert.deepEqual([empty.input, empty.completion, empty.reasoning, empty.finish], [100, 200, 200, 'stop']);
@@ -201,18 +212,19 @@ test('an empty completion keeps timing and usage, retries once cheaply, then use
   drained(stack.provider);
 });
 
-test('two empty completions fail in a bounded session without a Deep escalation storm', async (t) => {
+test('two empty completions get exactly one Deep fallback and then fail without an escalation storm', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  stack.provider.enqueue(emptyRound, emptyRound);
+  stack.provider.enqueue(emptyRound, emptyRound, emptyRound);
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.equal(response.events.find((event) => event.event === 'error')?.data.code, 'AI_PROVIDER_RESPONSE_INVALID');
-  assert.equal(stack.provider.calls.length, 2);
-  assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model));
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model,
+    DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model, DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model]);
   assert.deepEqual(stack.db.aiMessageEvidence, []);
   const [trace] = turnTraces(logs);
-  assert.deepEqual([trace.context.outcome, trace.context.modelRounds, trace.context.escalated], ['error', 2, false]);
+  assert.deepEqual([trace.context.outcome, trace.context.modelRounds, trace.context.escalated], ['error', 3, true]);
   assert.ok(trace.context.rounds.every((round) => round.reasoning === 200));
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { EMPTY_COMPLETION: 1 }, byOutcome: { error: 1 } });
   drained(stack.provider);
 });
 
