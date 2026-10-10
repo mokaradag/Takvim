@@ -430,7 +430,7 @@ export function createAiGateway({
             throw error;
           }
           if (requireText && !String(completion.text ?? '').trim()) {
-            recordEmptyCompletion({ profile: route.profile, model: completion.model ?? route.model, diagnostics: emptyCompletionDiagnostics({
+            recordEmptyCompletion({ profile: route.profile, model: route.model, diagnostics: emptyCompletionDiagnostics({
               final: completion, startedAt: attemptStartedAt, at: now(), textChars: String(completion.text ?? '').length
             }) });
             throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason: 'EMPTY_COMPLETION' } });
@@ -597,7 +597,7 @@ export function createAiGateway({
       if (!final) throw streamInterrupted('STREAM_TRUNCATED');
       const text = chunks.join('').trim();
       if (!text) {
-        recordEmptyCompletion({ profile: route.profile, model: final.model ?? route.model, diagnostics: emptyCompletionDiagnostics({
+        recordEmptyCompletion({ profile: route.profile, model: route.model, diagnostics: emptyCompletionDiagnostics({
           final, startedAt: providerStartedAt, at: now(), firstEventAt, reasoning: progress.reasoning, textChars: chunks.join('').length
         }) });
         throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
@@ -720,9 +720,10 @@ export function createAiGateway({
 
       const session = Object.freeze({
         sicil,
-        // Yalnızca telemetri: profil ve yapılandırılmış model (anahtar ya da adres değil).
+        // Yalnızca telemetri: profil, yapılandırılmış model ve çıktı sınırı (anahtar ya da adres değil).
         profile: route.profile,
         model: route.model,
+        maxOutputTokens: outputLimit,
         signal: deadline.signal,
         remainingMs: () => deadline.remainingMs(),
         async round({ messages, tools = [], toolChoice = 'auto', onEvent = null }) {
@@ -733,6 +734,7 @@ export function createAiGateway({
           const roundScope = new AbortController();
           const unlinkRound = linkAbort(providerScope.signal, roundScope);
           progress.rounds += 1;
+          const roundStartedAt = now();
           try {
             const { opened, startedAt: providerStartedAt } = await connectStream({
               deadline,
@@ -788,7 +790,7 @@ export function createAiGateway({
             const text = chunks.join('').trim();
             const toolCalls = Array.isArray(final.toolCalls) ? final.toolCalls : [];
             if (!text && !toolCalls.length) {
-              recordEmptyCompletion({ profile: route.profile, model: final.model ?? route.model, diagnostics: emptyCompletionDiagnostics({
+              recordEmptyCompletion({ profile: route.profile, model: route.model, diagnostics: emptyCompletionDiagnostics({
                 final, startedAt: providerStartedAt, at: now(), firstEventAt, reasoning: thinking, textChars: chunks.join('').length
               }) });
             }
@@ -796,8 +798,10 @@ export function createAiGateway({
             // çağırana döner; tur kısa çıktı onarımını kendisi uygular.
             if (!text && !toolCalls.length && final.finishReason !== 'length') {
               const empty = new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
-                details: { reason: 'EMPTY_COMPLETION', finishReason: final.finishReason ?? null }
+                details: { reason: 'EMPTY_COMPLETION' }
               });
+              empty.roundMeasurements = { usage: final.usage ?? null, finishReason: final.finishReason ?? null,
+                durationMs: Math.max(0, now() - roundStartedAt), firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - roundStartedAt) };
               recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - providerStartedAt,
                 code: empty.code, healthFailure: healthFailure(empty), source: credential.source });
               progress.recorded = true;
@@ -805,7 +809,8 @@ export function createAiGateway({
             }
             recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - providerStartedAt, source: credential.source });
             progress.recorded = true;
-            return { text, toolCalls, finishReason: final.finishReason ?? null, model: final.model ?? null, usage: final.usage ?? null };
+            return { text, toolCalls, finishReason: final.finishReason ?? null, model: route.model, usage: final.usage ?? null,
+              durationMs: Math.max(0, now() - roundStartedAt), firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - roundStartedAt) };
           } finally {
             unlinkRound();
             roundScope.abort();

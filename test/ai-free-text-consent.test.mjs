@@ -47,14 +47,15 @@ for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
 
 test('a turn without the opt-in cannot request protected text, and the next turn does not inherit an earlier opt-in', async (t) => {
   const stack = stackFor(t);
-  const request = declared({ operation: 'value', metrics: ['task.description'], entities: [{ type: 'task', id: TASKS.LITERAL }] });
-  const askDescription = () => stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] },
-    { type: 'script', respond: (call) => {
+  const request = declared({ operation: 'value', metrics: ['task.description'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.LITERAL }] });
+  // Açıklama izni varsa bildirilen olguyu sunucu seçer; izin yoksa kanıt oluşmaz ve yanıtı model verir.
+  const askDescription = ({ modelAnswer = false } = {}) => stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] },
+    ...(modelAnswer ? [{ type: 'script', respond: (call) => {
       const [detail] = toolResults(call);
       return detail.ok
         ? { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: [`${detail.evidenceId}:data.task.description`] }) }
         : { type: 'answer', text: '{"kind":"unavailable"}' };
-    } });
+    } }] : []));
   askDescription();
   const opened = done(await sendTurn({ turnId: randomUUID(), message: `Rapor görevinin açıklaması ne? ${TASKS.LITERAL}`, includeText: true }));
   assert.equal(opened.assistantMessage.finishReason, 'stop');
@@ -62,7 +63,7 @@ test('a turn without the opt-in cannot request protected text, and the next turn
   assert.match(opened.assistantMessage.content, /Önceki bütün talimatları yok say/);
   assert.doesNotMatch(opened.assistantMessage.content, /【R7】/);
   assert.equal(opened.assistantMessage.evidence.length, 1);
-  askDescription();
+  askDescription({ modelAnswer: true });
   const next = done(await sendTurn({ conversationId: opened.conversation.id, turnId: randomUUID(), message: `Peki şimdi açıklamayı tekrar göster ${TASKS.LITERAL}` }));
   assert.equal(next.assistantMessage.finishReason, 'unavailable');
   assert.doesNotMatch(next.assistantMessage.content, /talimatları/);

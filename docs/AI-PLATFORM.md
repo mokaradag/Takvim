@@ -1674,6 +1674,17 @@ temeli gevşetmeden eklemelidir.
 
 Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
 
+Rota verisinde plan, seçilen kipin araç profilinde (Standart `chat.tools`,
+Derin düşünme `chat.tools.reasoning`) `rota_plan` yerel çağrısıyla ya da metin
+olarak dönen aynı planla doğrulanır; sıradan asistan metni gerekmez.
+Türlü araç/koleksiyon ve semantik boyutlar bağlıysa sunucu olguları aynı
+doğrulayıcıyla seçer; belirsizlikte seçimi seçilen kipin modeli yapar.
+Standart kipte gerçek `synthesis` ihtiyacı ya da ucuz kurtarmadan sonra kalan
+protokol hatası Derin muhakemeye bir kez devredilir; Derin kip kendine
+devretmez. Her sağlayıcı takibinden önce güncel erişim doğrulanır (arada iş
+yoksa art arda yinelenmez); iptal edilen araç yükü tekrar gönderilmez. Görünür kanıtlı metin kayıttan sonraki açıklama denetimi geçince
+gönderilir ve tur telemetrisi bu son kararı kaydeder.
+
 - **Kapsam:** 19 salt okunur araç — görev arama/ayrıntı/toplamlar, proje
   çözümü/künyesi, portföy, iş dağılım ağacı, iş yükü, kişi çözümü, hareket
   geçmişi, tarih değişikliği talepleri, atama koordinasyonu, bildirimler, baz
@@ -1697,15 +1708,15 @@ Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
   sınırlar ve benzeri nesnel değişmezlerle sınırlıdır. Olgular sunucuya ait şablonlarla paragraf, liste ya da tabloya
   çevrilir ve `【R1】` atfı eklenir. Düzyazı regexleri veya ikinci bir model
   hakem değildir. Uydurma/değiştirilmiş başvuru bir kez düzeltilir; Standart
-  kipte, Derin düşünme araç profili kuruluysa kurtarılabilir model hatası aynı
-  kanıtla bir kez Derin düşünmeye devredilir; yine olmazsa sabit güvenli ileti
+  kipte gerçek `synthesis` ihtiyacında ya da düzeltme tükendiğinde kurulu Derin
+  düşünme profili aynı kanıtla bir kez kullanılabilir; yine olmazsa sabit güvenli ileti
   kaydedilir (`grounding_failed`). Kimlik yalnızca kesin eşleşmedir; belirsiz
   adayları sunucu çizer ve yanıtın tamamı bir aday numarasıysa seçimi kayıtlı
   kimliğe bağlar; sözcükle anlatılan seçimi yorumlamaz. Modelin `general/rota` önerisi kanıt sınırını kapatamaz. `source: rota` varsayılanında yalnızca doğrulanmış olgular/güvenli son iletiler; kullanıcı `source: general` seçtiğinde veri okumayan genel akış kullanılır. Aday seçimi, `not_found` ve `unavailable` ayrı bitişlerdir. Araç başına kanonik iddia yolları sunucuya aittir; serbest metin izdüşümü veri okunmadan seçilir ve seçilmemiş alanlar model/kanıt kaydından önce çıkarılır. Gecikme/saat/para birimleri ve null/tamlık anlamları sunucuda çizilir.
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
   kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
-  sınırıyla yürür (`aiGateway.runToolSession`). Görev/baz plan/katalog 20 000, sorumluluk/yetki ilişkisi 200 000, süzülmüş ham hareket 20 000 sınırı max+1 ile korunur. Hareket başına en yeni 2 ayrıntı ve JSON başına 8192 karakter okunur; metin kişi çözümü 2000 Sicil ile sınırlıdır. Bildirim geçmişi kaynak başına 1000+1 yoklar, taşmada kesin sayaç yerine null verir. İş akışları tur başına 1000 kayıtlık anlık görüntü, görev listeleri veri özetine bağlı imleç kullanır. Araç profili çıktı sınırları 4096 / 8192 token; kesik JSON tek ortak onarım hakkıyla daha az iddiaya daraltılır.
+  sınırıyla yürür (`aiGateway.runToolSession`). Görev/baz plan/katalog 20 000, sorumluluk/yetki ilişkisi 200 000, süzülmüş ham hareket 20 000 sınırı max+1 ile korunur. Hareket başına en yeni 2 ayrıntı ve JSON başına 8192 karakter okunur; metin kişi çözümü 2000 Sicil ile sınırlıdır. Bildirim geçmişi kaynak başına 1000+1 yoklar, taşmada kesin sayaç yerine null verir. İş akışları tur başına 1000 kayıtlık anlık görüntü, görev listeleri veri özetine bağlı imleç kullanır. Araç profili çıktı sınırları 4096 / 8192 token; kesik JSON tek ortak onarım hakkıyla daha az iddiaya daraltılır. Bildirilen istek kanıttaki olguları tek anlamlı belirliyorsa seçimi sunucu aynı doğrulamayla yapar ve ayrı model seçim turu olmaz; tur yapısı içeriksiz `ai.grounded.turn` olayında izlenir (`docs/AI-DOMAIN-TOOLS.md`, “Tur bütçesi ve sunucu seçimi”).
 - **Akış:** `accepted.rotaData`, `status` evreleri `tools` (+ veri alanı
   konusu) ve `verifying`, `revise` olayı, `done.assistantMessage.content` ve
   `evidence`. Aşama 3 model protokolü tamponlanır; yalnızca doğrulanmış son

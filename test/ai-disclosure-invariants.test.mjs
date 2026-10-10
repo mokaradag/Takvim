@@ -15,14 +15,11 @@ const done = (response) => response.events.find((event) => event.event === 'done
 const deltas = (response) => response.events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('');
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 
-const taskTitle = (taskId) => declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: taskId }] });
+const taskTitle = (taskId) => declared({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: taskId }] });
 
-function citeTask(stack, taskId, field = 'data.task.title') {
-  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(taskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId } }] },
-    { type: 'script', respond: (call) => {
-      const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-      return { type: 'answer', text: evidenceReply(claimFor(result, field)) };
-    } });
+/** Görev ayrıntısı turu; bildirilen başlığı sunucu kanıttan seçip atıflı yazar. */
+function citeTask(stack, taskId) {
+  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(taskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId } }] });
 }
 
 function failEvidenceReads(t, pool, code) {
@@ -268,24 +265,38 @@ test('moving a cited task outside the current scope hides it on reopen and repla
   assert.equal(deltas(await sendTurn({ conversationId: first.conversation.id, turnId, message: `Görevi göster: ${TASKS.OVERDUE}` })), NON_ENUMERATING_FAILURE_TEXT);
 });
 
-test('a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence', async (t) => {
-  const stack = stackFor(t);
-  stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
-  const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
-  const title = task.Title;
-  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
-    { type: 'script', respond: (call) => {
-      const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-      task.ProjectId = PROJECTS.HIDDEN;
-      return { type: 'answer', text: evidenceReply(claimFor(result, 'data.task.title')) };
-    } }, { type: 'answer', text: '{"kind":"unavailable"}' });
-  const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
-  assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
-  assert.ok(!deltas(response).includes(title));
-  assert.deepEqual(stack.db.aiMessageEvidence, []);
-});
+for (const path of ['server', 'model']) {
+  test(`a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence (${path} selection)`, async (t) => {
+    const stack = stackFor(t);
+    stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
+    const title = task.Title;
+    if (path === 'server') {
+      // Sunucu seçiminde okuma ile çizim arasında model turu yoktur: görev son görünürlük denetimi sırasında taşınır.
+      stack.db.queryBarrier = { match: (sql) => {
+        if (sql.includes('rota-ai-tool:task-visibility')) task.ProjectId = PROJECTS.HIDDEN;
+        return false;
+      } };
+      stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] });
+    } else {
+      // Proje adı/kodu belirsizliğinde seçim modelindir; görev seçim turunda taşınır.
+      const request = declared({ operation: 'value', metrics: ['task.title', 'task.project'], entities: [{ type: 'task', id: task.TaskId }] });
+      stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
+        { type: 'script', respond: () => {
+          task.ProjectId = PROJECTS.HIDDEN;
+          return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }) };
+        } });
+    }
+    const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
+    assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
+    assert.ok(!deltas(response).includes(title));
+    assert.deepEqual(stack.db.aiMessageEvidence, []);
+    assert.equal(stack.provider.calls.length, path === 'server' ? 1 : 2, 'yetki iptalinden sonra sağlayıcı çağrılmaz');
+    assert.equal(stack.provider.pendingCount, 0);
+  });
+}
 
-test('a transient post-persist check preserves this turn, while reopen fails closed as unavailable', async (t) => {
+test('a transient post-persist check fails closed before streaming and can recover on reopen', async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   stack.db.aiConversationHooks = { beforeAppend() {
@@ -293,9 +304,10 @@ test('a transient post-persist check preserves this turn, while reopen fails clo
   } };
   const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
   const saved = done(response);
-  assert.equal(saved.assistantMessage.finishReason, 'stop');
+  assert.equal(saved.assistantMessage.finishReason, 'unavailable');
   assert.equal(saved.assistantMessage.content, deltas(response));
-  assert.equal(saved.assistantMessage.evidence.length, 1);
+  assert.equal(saved.assistantMessage.evidence.length, 0);
+  assert.equal(deltas(response).includes('Radar test planı'), false);
   const busy = await loadAssistantConversation(saved.conversation.id);
   const hidden = busy.body.messages.find((message) => message.role === 'assistant');
   assert.equal(hidden.finishReason, 'unavailable');
@@ -303,7 +315,7 @@ test('a transient post-persist check preserves this turn, while reopen fails clo
   assert.deepEqual(hidden.evidence, []);
   delete stack.db.aiToolFailure;
   const recovered = await loadAssistantConversation(saved.conversation.id);
-  assert.equal(recovered.body.messages.find((message) => message.role === 'assistant').content, saved.assistantMessage.content);
+  assert.match(recovered.body.messages.find((message) => message.role === 'assistant').content, /Radar test planı/);
 });
 
 for (const source of ['rota', 'general']) {
@@ -350,10 +362,7 @@ test('clarification preserves only authorized structured candidates for the next
     assert.match(prior, /"personSicil":/);
     assert.doesNotMatch(prior, /Ali Veli|organization|name|code/);
     assert.doesNotMatch(prior, /【R1】/);
-    return { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'] })], calls: [{ name: 'rota_workload_summary', arguments: {} }] };
-  } }, { type: 'script', respond: (call) => {
-    const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-    return { type: 'answer', text: evidenceReply(claimFor(result, 'data.openTaskCount')) };
+    return { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' }, fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] })], calls: [{ name: 'rota_workload_summary', arguments: {} }] };
   } });
   assert.equal(done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: '1' })).assistantMessage.finishReason, 'stop');
 });

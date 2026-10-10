@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { AYSE, NOW, PROJECTS, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { declared } from './helpers/evidenceScenario.mjs';
 
 const { createToolScope, containmentText } = await import('../src/server/ai/tools/toolScope.js');
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -42,13 +42,12 @@ test('the first round may search only text from the current user message', () =>
 test('an invented first-round search is refused end to end and the model must stay within the question', async (t) => {
   createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const steps = [
-    { text: declared({ operation: 'value', metrics: ['tasks.total'], filters: { text: 'radar test planı' } }),
+    { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }),
       toolCalls: [{ id: 'a', name: 'rota_task_search', arguments: '{"text":"Gizli görev"}' }] },
     (input) => {
       assert.equal(results(input)[0].error.code, 'UNSUPPORTED_SCOPE');
       return { text: '', toolCalls: [{ id: 'b', name: 'rota_task_search', arguments: '{"text":"radar test planı"}' }] };
-    },
-    (input) => ({ text: evidenceReply(claimFor(results(input).at(-1), 'totalCount')), toolCalls: [], finishReason: 'stop' })
+    }
   ];
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
     const step = steps.shift();

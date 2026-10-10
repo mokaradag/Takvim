@@ -28,7 +28,9 @@ function exactKeys(value, keys, optional = []) {
 
 export function parseEvidenceResponse(text) {
   if (typeof text !== 'string' || text.length > FACT_LIMITS.maxAnswerChars) return null;
-  try { return JSON.parse(text); } catch { return null; }
+  // Tek JSON değeri tek kod çiti içinde de gelebilir; çit dışında metin kabul edilmez.
+  const body = text.trim().replace(/^```(?:json)?[ \t]*\n([\s\S]*?)\n?```$/, '$1');
+  try { return JSON.parse(body); } catch { return null; }
 }
 
 /** Bu turun geçerli kanıt yükleri: kimlik → zarf. */
@@ -121,6 +123,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   const selection = resolveEvidenceSelection(answer, { evidenceIds, evidencePayloads });
   if (!selection.ok) return { ok: false, citedIds: [], issues: selection.issues };
   if (request) {
+    if (request.layout && request.layout !== 'auto' && selection.layout !== request.layout) return { ok: false, citedIds: [], issues: [{ code: 'LAYOUT_MISMATCH' }] };
     const verdict = verifyRequestedFacts(request, selection.facts, evidence);
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
     if (verdict.rankOrder) {

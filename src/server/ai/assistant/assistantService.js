@@ -775,7 +775,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       mode: prepared.answer?.mode || input.mode,
       profile: prepared.answer ? assistantProfileForMode(prepared.answer.mode) : (useTools ? assistantToolProfileForMode(input.mode) : profile),
       grounded: useTools,
-      // Standart kipteki kurtarılabilir model hatası Derin düşünme araç profiline devredilebilir.
+      // Yalnızca Standart kip Derin profile BİR kez devredebilir; Derin kip kendine devretmez.
       escalationProfile: useTools && input.mode === ASSISTANT_MODES.STANDARD && toolRouteAvailable(registry, ASSISTANT_MODES.DEEP)
         ? assistantToolProfileForMode(ASSISTANT_MODES.DEEP) : null,
       general: input.source === 'general',
@@ -872,13 +872,7 @@ function evidenceSchemaMissing() {
   });
 }
 
-/**
- * Standart kipte doğrulanamayan, uzunluk sınırında kalan ya da boş dönen turu
- * Derin düşünme araç profiliyle, AYNI kanıt defteri ve kapsamla BİR kez
- * sonlandırır. İptal, kimlik, veri ve süre aşımı hataları yukarı taşınır; Derin
- * düşünme oturumu başka bir yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse
- * Standart sonucu (güvenli ileti ya da özgün hata) kullanılır. Genel sohbete düşülmez.
- */
+/** Veri sonrası muhakeme devri; iptal, kimlik ve süre aşımı yukarı taşınır. */
 async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   const telemetry = (outcome, models = []) => recordGroundedEscalation({
     requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, outcome
@@ -888,11 +882,15 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
     result = await runIn(turn.escalationProfile, { resume: request.resume });
   } catch (error) {
     // Yalnızca yapay zekâ hizmetinin hatası Standart sonucuna döner; iptal, kimlik ve veri hataları turu bitirir.
-    if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) throw error;
+    if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) {
+      telemetry('error');
+      request.traceError?.(error);
+      throw error;
+    }
     const timedOut = error.code === AI_ERROR_CODES.AI_TIMEOUT;
     telemetry(timedOut ? 'timeout' : 'error');
     // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez.
-    if (timedOut) throw error;
+    if (timedOut) { request.traceError?.(error); throw error; }
     return request.fallback(onText);
   }
   telemetry(result.outcome, result.models);
@@ -913,7 +911,8 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
     onStatus,
-    onText
+    onText: async () => {},
+    deferDisclosure: true
   };
   const runIn = (profile, extra) => getAiGateway().runToolSession({
     profile,
@@ -923,42 +922,57 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
       return runGroundedTurn(session, { ...options, ...extra });
     }
   });
+  // Seçilen kipin araç profili turu yürütür: Derin düşünme Standart profile indirgenmez.
   let grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
-  if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText, runIn });
+  if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText: options.onText, runIn });
   const messageId = randomUUID();
   let stored;
+  let answer;
   try {
-    stored = await persistAnswer(turn, (executor) => appendGroundedConversationAnswer(executor, turn.sicil, {
-      conversationId: turn.conversation.id,
-      messageId,
-      replyToMessageId: turn.userMessage.id,
-      content: grounded.text,
-      mode: turn.mode,
-      finishReason: grounded.finishReason,
-      contextTrimmed: turn.context.trimmed,
-      contextOmittedMessages: turn.context.omittedMessages,
-      evidence: grounded.evidenceRows
-    }));
-  } catch (error) {
-    if (isMissingEvidenceSchema(error)) {
-      noteEvidenceSchema(false);
-      throw evidenceSchemaMissing();
+    try {
+      stored = await persistAnswer(turn, (executor) => appendGroundedConversationAnswer(executor, turn.sicil, {
+        conversationId: turn.conversation.id,
+        messageId,
+        replyToMessageId: turn.userMessage.id,
+        content: grounded.text,
+        mode: turn.mode,
+        finishReason: grounded.finishReason,
+        contextTrimmed: turn.context.trimmed,
+        contextOmittedMessages: turn.context.omittedMessages,
+        evidence: grounded.evidenceRows
+      }));
+    } catch (error) {
+      if (isMissingEvidenceSchema(error)) {
+        noteEvidenceSchema(false);
+        throw evidenceSchemaMissing();
+      }
+      throw error;
     }
+    if (!stored.knownSicil) throw unknownSicil();
+    if (!stored.persisted || !stored.message) {
+      throw conversationNotFound('ANSWER_NOT_PERSISTED');
+    }
+    const evidence = await optionalEvidence(turn.sicil, signal, {
+      conversationId: turn.conversation.id, messageId: stored.message.id
+    });
+    // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
+    // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
+    const own = stored.message.id === messageId;
+    const liveAuthorized = own && evidence?.unverifiable?.has(messageId) && await grounded.guardDisclosure?.(signal);
+    answer = liveAuthorized
+      ? { ...stored.message, evidence: grounded.evidence }
+      : discloseSavedMessages([stored.message], evidence)[0];
+    // Gösterilen yanıt turun kendi yanıtıysa özgün sonuç (ör. general_redirect) korunur.
+    const replaced = !own || answer.content !== grounded.text || answer.finishReason !== grounded.finishReason;
+    const deliveredOutcome = !replaced ? grounded.outcome
+      : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
+    grounded.completeDisclosure?.(deliveredOutcome);
+    await onText(answer.content);
+  } catch (error) {
+    // Kayıt ya da açıklama hatası da turun tek son izini bırakır.
+    grounded.completeDisclosure?.('error', error?.code);
     throw error;
   }
-  if (!stored.knownSicil) throw unknownSicil();
-  if (!stored.persisted || !stored.message) {
-    throw conversationNotFound('ANSWER_NOT_PERSISTED');
-  }
-  const evidence = await optionalEvidence(turn.sicil, signal, {
-    conversationId: turn.conversation.id, messageId: stored.message.id
-  });
-  // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
-  // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
-  const own = stored.message.id === messageId;
-  const answer = own && (evidence?.unavailable || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId))
-    ? { ...stored.message, evidence: grounded.evidence }
-    : discloseSavedMessages([stored.message], evidence)[0];
   return {
     conversation: stored.conversation,
     answer: { ...answer, evidence: answer.evidence || [] },
